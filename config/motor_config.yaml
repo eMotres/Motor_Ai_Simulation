@@ -1,0 +1,64 @@
+# Electric Motor Configuration
+# Default parameters for BLDC/PMSM motor
+
+# Motor geometry [mm]
+geometry:
+  # Stator
+  stator_diameter: 200                 # outer diameter of stator
+  stator_outer_radius: stator_diameter/2 # outer radius of stator
+  slot_height: 16                    # stator slot height
+  core_thickness: 3.8                   # stator core thickness
+  num_seg: 6                    # Number of segments in stator
+  num_slots_per_segment: 6          # Number of slots per segment
+  num_poles_per_segment: 7          # Number of poles per segment
+  num_slots: num_seg*num_slots_per_segment                  # Number of stator slots
+  num_poles: num_seg*num_poles_per_segment                   # Number of magnetic poles
+  angle_slot: 360/num_slots              # angle between slots (deg)
+  angle_poles: 360/num_poles              # angle between poles (deg)
+  stator_width: 30                  # stator width
+  air_gap: 0.65                   # air gap
+  tooth_width: 8.6                 # tooth width at the stator outer radius
+  insulation_thickness: 0.15         # insulation thickness between stator core and slot
+  wire_width: 4                   # width of the wire in the slot
+  wire_height: 0.6                   # height of the wire in the slot
+  wire_spacing_x: 0.1                  # spacing between wires in the slot
+  wire_spacing_y: 0.13                  # spacing between wires in the slot
+  num_wires_per_slot: 15              # number of wires per slot
+  slot_width: wire_width + 2*wire_spacing_x + 2*insulation_thickness  # slot width at the stator outer radius
+
+  # Rotor
+  rotor_outer_radius: stator_outer_radius - core_thickness-slot_height-air_gap     # 28mm rotor diameter
+  magnet_height: 13.8              #  magnet height
+  rotor_house_height: 1.2          # rotor housing thickness
+  rotor_inner_radius: rotor_outer_radius - magnet_height - rotor_house_height       #  shaft hole
+
+
+# Mesh generation parameters
+mesh:
+  n_radial: 10                   # Number of radial divisions
+  n_angular: 64                  # Number of angular divisions
+  n_angular_slots: 8             # Angular divisions per slot
+
+# Material assignments
+materials:
+  stator_core: m27_silicon_steel
+  slot: copper
+  air_gap: air
+  rotor_core: m27_silicon_steel
+  magnet: ndfeb_n42
+  shaft: carbon_steel
+
+# Custom materials (optional)
+custom_materials: {}
+  # Example:
+  # custom_material_1:
+  #   name: "Custom Steel"
+  #   mu_r: 3000
+  #   sigma: 1.5e6
+  #   B_sat: 1.9
+
+# Simulation parameters (for future use)
+simulation:
+  max_current: 10.0              # Maximum phase current [A]
+  frequency: 50.0                # Electrical frequency [Hz]
+  rpm: 2000                      # Rotation speed [RPM]

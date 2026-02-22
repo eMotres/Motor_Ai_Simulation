@@ -1,335 +1,209 @@
-import React from 'react';
-import { useForm, Controller } from 'react-hook-form';
-import { zodResolver } from '@hookform/resolvers/zod';
-import { z } from 'zod';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   TextField,
-  Slider,
   Typography,
   Box,
   Divider,
   InputAdornment,
+  CircularProgress,
+  Alert,
+  Button,
+  IconButton,
+  Tooltip,
+  Snackbar,
 } from '@mui/material';
+import RefreshIcon from '@mui/icons-material/Refresh';
 import { useMotorStore } from '../../stores/motorStore';
 
-const geometrySchema = z.object({
-  stator_diameter: z.number().min(10).max(1000),
-  slot_height: z.number().min(1).max(100),
-  core_thickness: z.number().min(0.5).max(50),
-  num_seg: z.number().int().min(1).max(24),
-  num_slots_per_segment: z.number().int().min(1).max(12),
-  num_poles_per_segment: z.number().int().min(1).max(12),
-  stator_width: z.number().min(5).max(500),
-  air_gap: z.number().min(0.1).max(10),
-  tooth_width: z.number().min(0.5).max(20),
-  magnet_height: z.number().min(1).max(50),
-  rotor_house_height: z.number().min(0.5).max(20),
-});
-
-type GeometryFormData = z.infer<typeof geometrySchema>;
-
+/**
+ * Dynamic Geometry Form
+ * 
+ * This form is dynamically generated from the parameter schema
+ * fetched from the Python API. The schema is defined in 
+ * config/motor_config.yaml, making it the single source of truth.
+ * 
+ * To add a new parameter:
+ * 1. Add it to motor_config.yaml geometry section
+ * 2. Add metadata to geometry_schema section
+ * 3. The form will automatically show the new parameter
+ */
 const GeometryForm: React.FC = () => {
-  const { geometry, updateGeometry } = useMotorStore();
+  const { 
+    geometry, 
+    parameterSchema, 
+    parameterGroups, 
+    isLoading, 
+    error,
+    connectedToApi,
+    fetchSchemaFromApi,
+    fetchGeometryFromApi,
+    updateGeometryViaApi,
+    updateGeometry,
+  } = useMotorStore();
   
-  const { control, watch } = useForm<GeometryFormData>({
-    resolver: zodResolver(geometrySchema),
-    defaultValues: {
-      stator_diameter: geometry.stator_diameter,
-      slot_height: geometry.slot_height,
-      core_thickness: geometry.core_thickness,
-      num_seg: geometry.num_seg,
-      num_slots_per_segment: geometry.num_slots_per_segment,
-      num_poles_per_segment: geometry.num_poles_per_segment,
-      stator_width: geometry.stator_width,
-      air_gap: geometry.air_gap,
-      tooth_width: geometry.tooth_width,
-      magnet_height: geometry.magnet_height,
-      rotor_house_height: geometry.rotor_house_height,
-    },
-  });
+  // Debounce timer ref
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   
-  // Watch for changes and update store
-  React.useEffect(() => {
-    const subscription = watch((value) => {
-      updateGeometry(value as Partial<GeometryFormData>);
-    });
-    return () => subscription.unsubscribe();
-  }, [watch, updateGeometry]);
+  // Reload state
+  const [isReloading, setIsReloading] = useState(false);
+  const [showReloadSuccess, setShowReloadSuccess] = useState(false);
+  
+  // Fetch schema and geometry on mount
+  useEffect(() => {
+    if (connectedToApi) {
+      fetchSchemaFromApi();
+      fetchGeometryFromApi();
+    }
+  }, [connectedToApi, fetchSchemaFromApi, fetchGeometryFromApi]);
+  
+  // Handle reload schema from API
+  const handleReloadSchema = async () => {
+    setIsReloading(true);
+    try {
+      await fetchSchemaFromApi();
+      await fetchGeometryFromApi();
+      setShowReloadSuccess(true);
+    } finally {
+      setIsReloading(false);
+    }
+  };
+  
+  // Debounced update function
+  const debouncedUpdate = useCallback((name: string, value: number) => {
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+    }
+    
+    debounceTimerRef.current = setTimeout(() => {
+      const params = { [name]: value };
+      if (connectedToApi) {
+        // Send changes to Python API
+        updateGeometryViaApi(params);
+      } else {
+        // Local update only
+        updateGeometry(params);
+      }
+    }, 300); // 300ms debounce
+  }, [connectedToApi, updateGeometryViaApi, updateGeometry]);
+  
+  // Handle field change
+  const handleChange = (name: string, type: 'float' | 'int') => (
+    event: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const value = type === 'int' 
+      ? parseInt(event.target.value, 10) 
+      : parseFloat(event.target.value);
+    
+    if (!isNaN(value)) {
+      debouncedUpdate(name, value);
+    }
+  };
+  
+  // Cleanup debounce timer
+  useEffect(() => {
+    return () => {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+      }
+    };
+  }, []);
+  
+  // Show loading state
+  if (isLoading && parameterSchema.length === 0) {
+    return (
+      <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
+        <CircularProgress />
+      </Box>
+    );
+  }
+  
+  // Show error state
+  if (error) {
+    return (
+      <Alert severity="error" sx={{ m: 2 }}>
+        {error}
+      </Alert>
+    );
+  }
+  
+  // Show message if not connected to API
+  if (!connectedToApi) {
+    return (
+      <Alert severity="warning" sx={{ m: 2 }}>
+        Not connected to API. Start the Python server to edit geometry parameters.
+      </Alert>
+    );
+  }
+  
+  // Group parameters by group
+  const groupedParams = parameterGroups.map(group => ({
+    ...group,
+    parameters: parameterSchema.filter(p => p.group === group.id),
+  }));
   
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-      {/* Stator Section */}
-      <Box>
-        <Typography variant="subtitle2" color="primary" sx={{ mb: 2 }}>
-          Stator Parameters
+      {/* Reload Schema Button */}
+      <Box sx={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 1 }}>
+        <Typography variant="caption" color="text.secondary">
+          {parameterSchema.length} parameters loaded
         </Typography>
-        
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-          <Controller
-            name="stator_diameter"
-            control={control}
-            render={({ field }) => (
-              <TextField
-                {...field}
-                label="Stator Diameter"
-                type="number"
-                size="small"
-                InputProps={{
-                  endAdornment: <InputAdornment position="end">mm</InputAdornment>,
-                }}
-                onChange={(e) => field.onChange(parseFloat(e.target.value))}
-              />
-            )}
-          />
-          
-          <Controller
-            name="slot_height"
-            control={control}
-            render={({ field }) => (
-              <TextField
-                {...field}
-                label="Slot Height"
-                type="number"
-                size="small"
-                InputProps={{
-                  endAdornment: <InputAdornment position="end">mm</InputAdornment>,
-                }}
-                onChange={(e) => field.onChange(parseFloat(e.target.value))}
-              />
-            )}
-          />
-          
-          <Controller
-            name="core_thickness"
-            control={control}
-            render={({ field }) => (
-              <TextField
-                {...field}
-                label="Core Thickness"
-                type="number"
-                size="small"
-                InputProps={{
-                  endAdornment: <InputAdornment position="end">mm</InputAdornment>,
-                }}
-                onChange={(e) => field.onChange(parseFloat(e.target.value))}
-              />
-            )}
-          />
-          
-          <Controller
-            name="stator_width"
-            control={control}
-            render={({ field }) => (
-              <TextField
-                {...field}
-                label="Stator Width (Axial)"
-                type="number"
-                size="small"
-                InputProps={{
-                  endAdornment: <InputAdornment position="end">mm</InputAdornment>,
-                }}
-                onChange={(e) => field.onChange(parseFloat(e.target.value))}
-              />
-            )}
-          />
-        </Box>
+        <Tooltip title="Reload schema from API (after editing motor_config.yaml)">
+          <IconButton 
+            size="small" 
+            onClick={handleReloadSchema}
+            disabled={isReloading || !connectedToApi}
+            color="primary"
+          >
+            {isReloading ? <CircularProgress size={20} /> : <RefreshIcon />}
+          </IconButton>
+        </Tooltip>
       </Box>
       
-      <Divider />
-      
-      {/* Segmentation Section */}
-      <Box>
-        <Typography variant="subtitle2" color="primary" sx={{ mb: 2 }}>
-          Segmentation
-        </Typography>
-        
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-          <Controller
-            name="num_seg"
-            control={control}
-            render={({ field }) => (
-              <Box>
-                <Typography variant="caption" color="text.secondary">
-                  Number of Segments: {field.value}
-                </Typography>
-                <Slider
-                  value={field.value}
-                  onChange={(_, value) => field.onChange(value)}
-                  min={1}
-                  max={24}
-                  step={1}
-                  marks
-                  valueLabelDisplay="auto"
+      {groupedParams.map((group, groupIndex) => (
+        <React.Fragment key={group.id}>
+          <Box>
+            <Typography variant="subtitle2" color="primary" sx={{ mb: 2 }}>
+              {group.label}
+            </Typography>
+            
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              {group.parameters.map(param => (
+                <TextField
+                  key={param.name}
+                  label={param.label}
+                  type="number"
+                  size="small"
+                  value={geometry[param.name] ?? 0}
+                  onChange={handleChange(param.name, param.type as 'float' | 'int')}
+                  inputProps={{
+                    min: param.min,
+                    max: param.max,
+                    step: param.step,
+                  }}
+                  InputProps={{
+                    endAdornment: param.unit ? (
+                      <InputAdornment position="end">{param.unit}</InputAdornment>
+                    ) : undefined,
+                  }}
+                  helperText={param.description}
+                  disabled={isLoading}
                 />
-              </Box>
-            )}
-          />
+              ))}
+            </Box>
+          </Box>
           
-          <Controller
-            name="num_slots_per_segment"
-            control={control}
-            render={({ field }) => (
-              <Box>
-                <Typography variant="caption" color="text.secondary">
-                  Slots per Segment: {field.value}
-                </Typography>
-                <Slider
-                  value={field.value}
-                  onChange={(_, value) => field.onChange(value)}
-                  min={1}
-                  max={12}
-                  step={1}
-                  marks
-                  valueLabelDisplay="auto"
-                />
-              </Box>
-            )}
-          />
-          
-          <Controller
-            name="num_poles_per_segment"
-            control={control}
-            render={({ field }) => (
-              <Box>
-                <Typography variant="caption" color="text.secondary">
-                  Poles per Segment: {field.value}
-                </Typography>
-                <Slider
-                  value={field.value}
-                  onChange={(_, value) => field.onChange(value)}
-                  min={1}
-                  max={12}
-                  step={1}
-                  marks
-                  valueLabelDisplay="auto"
-                />
-              </Box>
-            )}
-          />
-          
-          <Typography variant="caption" color="text.secondary">
-            Total Slots: {geometry.num_slots} | Total Poles: {geometry.num_poles}
-          </Typography>
-        </Box>
-      </Box>
+          {groupIndex < groupedParams.length - 1 && <Divider />}
+        </React.Fragment>
+      ))}
       
-      <Divider />
-      
-      {/* Air Gap & Tooth */}
-      <Box>
-        <Typography variant="subtitle2" color="primary" sx={{ mb: 2 }}>
-          Air Gap & Tooth
-        </Typography>
-        
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-          <Controller
-            name="air_gap"
-            control={control}
-            render={({ field }) => (
-              <TextField
-                {...field}
-                label="Air Gap"
-                type="number"
-                size="small"
-                InputProps={{
-                  endAdornment: <InputAdornment position="end">mm</InputAdornment>,
-                }}
-                onChange={(e) => field.onChange(parseFloat(e.target.value))}
-              />
-            )}
-          />
-          
-          <Controller
-            name="tooth_width"
-            control={control}
-            render={({ field }) => (
-              <TextField
-                {...field}
-                label="Tooth Width"
-                type="number"
-                size="small"
-                InputProps={{
-                  endAdornment: <InputAdornment position="end">mm</InputAdornment>,
-                }}
-                onChange={(e) => field.onChange(parseFloat(e.target.value))}
-              />
-            )}
-          />
-        </Box>
-      </Box>
-      
-      <Divider />
-      
-      {/* Rotor Section */}
-      <Box>
-        <Typography variant="subtitle2" color="primary" sx={{ mb: 2 }}>
-          Rotor Parameters
-        </Typography>
-        
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-          <Controller
-            name="magnet_height"
-            control={control}
-            render={({ field }) => (
-              <TextField
-                {...field}
-                label="Magnet Height"
-                type="number"
-                size="small"
-                InputProps={{
-                  endAdornment: <InputAdornment position="end">mm</InputAdornment>,
-                }}
-                onChange={(e) => field.onChange(parseFloat(e.target.value))}
-              />
-            )}
-          />
-          
-          <Controller
-            name="rotor_house_height"
-            control={control}
-            render={({ field }) => (
-              <TextField
-                {...field}
-                label="Rotor Housing Thickness"
-                type="number"
-                size="small"
-                InputProps={{
-                  endAdornment: <InputAdornment position="end">mm</InputAdornment>,
-                }}
-                onChange={(e) => field.onChange(parseFloat(e.target.value))}
-              />
-            )}
-          />
-        </Box>
-      </Box>
-      
-      {/* Computed Values */}
-      <Divider />
-      <Box>
-        <Typography variant="subtitle2" color="primary" sx={{ mb: 2 }}>
-          Computed Values
-        </Typography>
-        <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1 }}>
-          <Typography variant="caption" color="text.secondary">
-            Stator Outer R: {geometry.stator_outer_radius?.toFixed(1)} mm
-          </Typography>
-          <Typography variant="caption" color="text.secondary">
-            Stator Inner R: {geometry.stator_inner_radius?.toFixed(1)} mm
-          </Typography>
-          <Typography variant="caption" color="text.secondary">
-            Rotor Outer R: {geometry.rotor_outer_radius?.toFixed(1)} mm
-          </Typography>
-          <Typography variant="caption" color="text.secondary">
-            Rotor Inner R: {geometry.rotor_inner_radius?.toFixed(1)} mm
-          </Typography>
-          <Typography variant="caption" color="text.secondary">
-            Slot Angle: {geometry.angle_slot?.toFixed(2)}°
-          </Typography>
-          <Typography variant="caption" color="text.secondary">
-            Pole Angle: {geometry.angle_pole?.toFixed(2)}°
-          </Typography>
-        </Box>
-      </Box>
+      {/* Success notification */}
+      <Snackbar
+        open={showReloadSuccess}
+        autoHideDuration={3000}
+        onClose={() => setShowReloadSuccess(false)}
+        message="Schema reloaded from API"
+      />
     </Box>
   );
 };

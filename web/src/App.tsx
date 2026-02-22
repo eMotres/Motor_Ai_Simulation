@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import {
   ThemeProvider,
   createTheme,
@@ -13,6 +13,10 @@ import {
   IconButton,
   Tooltip,
   useMediaQuery,
+  Chip,
+  CircularProgress,
+  ToggleButtonGroup,
+  ToggleButton,
 } from '@mui/material';
 import {
   Menu as MenuIcon,
@@ -22,6 +26,14 @@ import {
   GridOn as GridOnIcon,
   ThreeDRotation as ThreeDRotationIcon,
   Refresh as RefreshIcon,
+  CloudSync as CloudSyncIcon,
+  CloudOff as CloudOffIcon,
+  ViewInAr as ViewInArIcon,
+  Build as BuildIcon,
+  Square as SquareIcon,
+  BubbleChart as BubbleChartIcon,
+  Layers as LayersIcon,
+  DeleteSweep as DeleteSweepIcon,
 } from '@mui/icons-material';
 import MotorScene from './components/viewer3d/MotorScene';
 import GeometryForm from './components/parameters/GeometryForm';
@@ -66,7 +78,12 @@ const drawerWidth = 320;
 function App() {
   const isMobile = useMediaQuery('(max-width:768px)');
   const { sidebarOpen, activeTab, toggleSidebar, setActiveTab, showGrid, showAxes, autoRotate, toggleGrid, toggleAxes, toggleAutoRotate } = useUIStore();
-  const { resetToDefaults } = useMotorStore();
+  const { resetToDefaults, fetchGeometryFromApi, connectedToApi, isLoading, viewMode, setViewMode, geometry, runPipeline, stlMeshes, clearStlCache } = useMotorStore();
+  
+  // Fetch geometry from Python API on mount
+  useEffect(() => {
+    fetchGeometryFromApi();
+  }, [fetchGeometryFromApi]);
   
   const renderTabContent = () => {
     switch (activeTab) {
@@ -112,6 +129,26 @@ function App() {
               Motor AI Simulator
             </Typography>
             
+            {/* API Connection Status */}
+            {isLoading && <CircularProgress size={24} sx={{ mr: 2 }} />}
+            {connectedToApi ? (
+              <Chip
+                icon={<CloudSyncIcon />}
+                label="Connected to API"
+                color="success"
+                size="small"
+                sx={{ mr: 2 }}
+              />
+            ) : (
+              <Chip
+                icon={<CloudOffIcon />}
+                label="Local Mode"
+                color="warning"
+                size="small"
+                sx={{ mr: 2 }}
+              />
+            )}
+            
             {/* View Controls */}
             <Box sx={{ display: 'flex', gap: 0.5 }}>
               <Tooltip title={showGrid ? 'Hide Grid' : 'Show Grid'}>
@@ -138,6 +175,57 @@ function App() {
                   onClick={toggleAutoRotate}
                 >
                   <AutoFixHighIcon />
+                </IconButton>
+              </Tooltip>
+              
+              {/* View Mode Selector */}
+              <ToggleButtonGroup
+                value={viewMode}
+                exclusive
+                onChange={(_, newMode) => newMode && setViewMode(newMode)}
+                size="small"
+                sx={{ ml: 1, mr: 1 }}
+              >
+                <ToggleButton value="solid" sx={{ px: 1.5 }}>
+                  <Tooltip title="Solid Mesh">
+                    <SquareIcon fontSize="small" />
+                  </Tooltip>
+                </ToggleButton>
+                <ToggleButton value="pointcloud" sx={{ px: 1.5 }}>
+                  <Tooltip title="Point Cloud (Modulus)">
+                    <BubbleChartIcon fontSize="small" />
+                  </Tooltip>
+                </ToggleButton>
+                <ToggleButton value="stl" sx={{ px: 1.5 }}>
+                  <Tooltip title="STL (CadQuery)">
+                    <ViewInArIcon fontSize="small" />
+                  </Tooltip>
+                </ToggleButton>
+                <ToggleButton value="hybrid" sx={{ px: 1.5 }}>
+                  <Tooltip title="Hybrid (All)">
+                    <LayersIcon fontSize="small" />
+                  </Tooltip>
+                </ToggleButton>
+              </ToggleButtonGroup>
+              
+              <Tooltip title="Generate STL from CadQuery">
+                <IconButton 
+                  color={viewMode === 'stl' ? 'secondary' : 'default'} 
+                  onClick={() => runPipeline(geometry)}
+                >
+                  <BuildIcon />
+                </IconButton>
+              </Tooltip>
+              
+              <Tooltip title="Clear Cache & Rebuild (force regeneration)">
+                <IconButton 
+                  color="default" 
+                  onClick={async () => {
+                    await clearStlCache();
+                    runPipeline(geometry);
+                  }}
+                >
+                  <DeleteSweepIcon />
                 </IconButton>
               </Tooltip>
               

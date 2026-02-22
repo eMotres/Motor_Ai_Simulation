@@ -4,8 +4,9 @@ This module provides:
 1. MeshBuilder - Create triangular meshes from geometry regions
 2. MotorMeshGenerator - Generate meshes with material properties
 
-The mesh generator takes geometry regions from MotorGeometry2D and creates
-triangular meshes suitable for FEM simulation.
+The mesh generator creates triangular meshes suitable for FEM simulation.
+This is a legacy module - for PINN training, use MotorGeometry2D with
+NVIDIA Modulus CSG primitives instead.
 
 Units:
 - All linear dimensions are in millimeters [mm]
@@ -25,7 +26,6 @@ from motor_ai_sim.geometry.motor_material import (
 )
 from motor_ai_sim.geometry.motor_geometry import (
     MotorGeometryParams,
-    MotorGeometry2D,
     GeometryRegion,
 )
 
@@ -335,9 +335,12 @@ class MotorMeshGenerator:
     """Generate motor mesh with material properties.
 
     This class:
-    1. Gets geometry regions from MotorGeometry2D
+    1. Creates geometry regions from MotorGeometryParams
     2. Creates meshes using MeshBuilder
     3. Assigns materials to each region
+
+    This is a legacy class for FEM-style mesh generation.
+    For PINN training, use MotorGeometry2D with NVIDIA Modulus CSG primitives.
 
     Example:
         >>> params = MotorGeometryParams(num_slots=12, num_poles=4)
@@ -361,7 +364,6 @@ class MotorMeshGenerator:
             device: Torch device for tensor creation
         """
         self.params = params
-        self.geometry = MotorGeometry2D(params)
         self.mesh_builder = MeshBuilder(device)
         self.device = torch.device(device) if isinstance(device, str) else device
 
@@ -369,6 +371,101 @@ class MotorMeshGenerator:
         self.material_assignments = {**DEFAULT_MATERIAL_ASSIGNMENTS}
         if material_assignments:
             self.material_assignments.update(material_assignments)
+
+    def _get_regions(self) -> Dict[str, GeometryRegion]:
+        """Create geometry regions from parameters.
+
+        This is an internal method that creates GeometryRegion objects
+        directly from MotorGeometryParams without requiring Modulus.
+
+        Returns:
+            Dictionary mapping region names to GeometryRegion objects
+        """
+        regions = {}
+        params = self.params
+
+        # 1. Stator core (annulus)
+        regions["stator_core"] = GeometryRegion(
+            name="stator_core",
+            region_type="annulus",
+            r_inner=params.stator_slot_radius,
+            r_outer=params.stator_outer_radius,
+        )
+
+        # 2. Stator slots (sectors)
+        for i in range(params.num_slots):
+            regions[f"slot_{i}"] = self._get_slot_region(i)
+
+        # 3. Air gap (annulus)
+        regions["air_gap"] = GeometryRegion(
+            name="air_gap",
+            region_type="annulus",
+            r_inner=params.rotor_outer_radius,
+            r_outer=params.stator_inner_radius,
+        )
+
+        # 4. Rotor core (annulus)
+        regions["rotor_core"] = GeometryRegion(
+            name="rotor_core",
+            region_type="annulus",
+            r_inner=params.shaft_radius,
+            r_outer=params.rotor_core_radius,
+        )
+
+        # 5. Permanent magnets (sectors)
+        for i in range(params.num_poles):
+            regions[f"magnet_{i}"] = self._get_magnet_region(i)
+
+        # 6. Shaft (disk)
+        regions["shaft"] = GeometryRegion(
+            name="shaft",
+            region_type="disk",
+            r_inner=0.0,
+            r_outer=params.shaft_radius,
+        )
+
+        return regions
+
+    def _get_slot_region(self, slot_idx: int) -> GeometryRegion:
+        """Get geometry region for a stator slot."""
+        theta_center = slot_idx * self.params.slot_pitch
+        half_width_rad = MotorGeometryParams.deg_to_rad(self.params.angle_slot) / 2
+        theta_start = theta_center - half_width_rad
+        theta_end = theta_center + half_width_rad
+
+        return GeometryRegion(
+            name=f"slot_{slot_idx}",
+            region_type="sector",
+            r_inner=self.params.stator_inner_radius,
+            r_outer=self.params.stator_slot_radius,
+            theta_start=theta_start,
+            theta_end=theta_end,
+        )
+
+    def _get_magnet_region(self, pole_idx: int) -> GeometryRegion:
+        """Get geometry region for a permanent magnet."""
+        theta_center = pole_idx * self.params.pole_pitch
+        half_width_rad = MotorGeometryParams.deg_to_rad(self.params.angle_pole) / 2
+        theta_start = theta_center - half_width_rad
+        theta_end = theta_center + half_width_rad
+
+        # Magnetization direction (alternating)
+        sign = 1.0 if pole_idx % 2 == 0 else -1.0
+        magnetization_dir = sign * np.array([
+            np.cos(theta_center),
+            np.sin(theta_center),
+        ])
+
+        return GeometryRegion(
+            name=f"magnet_{pole_idx}",
+            region_type="sector",
+            r_inner=self.params.rotor_core_radius,
+            r_outer=self.params.rotor_outer_radius,
+            theta_start=theta_start,
+            theta_end=theta_end,
+            magnetization_dir=magnetization_dir,
+            pole_index=pole_idx,
+        )
 
     def generate(
         self,
@@ -386,8 +483,11 @@ class MotorMeshGenerator:
         Returns:
             Dictionary mapping region names to mesh data with materials
         """
-        # Step 1: Get geometry regions
-        regions = self.geometry.get_regions()
+        # Step 1: Get geometry regions (suppress deprecation warning)
+        import warnings
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=DeprecationWarning)
+            regions = self._get_regions()
 
         # Step 2: Create meshes from regions
         meshes = self.mesh_builder.mesh_all_regions(

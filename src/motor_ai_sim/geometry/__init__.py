@@ -2,13 +2,26 @@
 
 This module provides:
 - Material definitions and registry
-- Parametric motor geometry parameters and regions
-- Mesh generation from geometry regions
+- Parametric motor geometry parameters and Modulus CSG geometries
+- Mesh generation from geometry regions (legacy)
 
 Architecture:
-1. motor_geometry.py - Defines geometry parameters and regions (NO meshing)
+1. motor_geometry.py - Defines geometry parameters and Modulus CSG geometries
 2. motor_material.py - Defines magnetic materials
-3. motor_mesh.py - Creates triangular meshes from geometry regions
+3. motor_mesh.py - Creates triangular meshes (legacy, for backward compatibility)
+
+New API (recommended):
+    from motor_ai_sim.geometry import MotorGeometryParams, MotorGeometry2D
+    
+    params = MotorGeometryParams.from_yaml("config/motor_config.yaml")
+    geometry = MotorGeometry2D(params)
+    geometries = geometry.get_modulus_geometries()
+    
+    # Sample points for PINN training
+    stator_points = geometries['stator_core'].sample_interior(1000)
+
+Legacy API (deprecated):
+    regions = geometry.get_regions()  # Returns GeometryRegion objects
 """
 
 from motor_ai_sim.geometry.motor_material import (
@@ -19,7 +32,8 @@ from motor_ai_sim.geometry.motor_material import (
 from motor_ai_sim.geometry.motor_geometry import (
     MotorGeometryParams,
     MotorGeometry2D,
-    GeometryRegion,
+    GeometryRegion,  # Deprecated, kept for backward compatibility
+    HAS_MODULUS,  # Flag indicating if Modulus is available
 )
 from motor_ai_sim.geometry.motor_mesh import (
     MeshBuilder,
@@ -33,11 +47,12 @@ __all__ = [
     "MagneticMaterial",
     "MaterialRegistry",
     "get_material_id",
-    # Geometry parameters and regions
+    # Geometry parameters and Modulus CSG geometries
     "MotorGeometryParams",
     "MotorGeometry2D",
-    "GeometryRegion",
-    # Mesh generation
+    "GeometryRegion",  # Deprecated
+    "HAS_MODULUS",
+    # Mesh generation (legacy)
     "MeshBuilder",
     "MotorMeshGenerator",
     "MaterialAssignment",

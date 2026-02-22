@@ -113,32 +113,12 @@ def get_geometry_params(config_path: Optional[Union[str, Path]] = None,
     """
     from motor_ai_sim.geometry.motor_geometry import MotorGeometryParams
 
-    config = get_config(config_path, reload)
-    geometry = config.get('geometry', config)
+    # Clear config cache if reload is requested
+    if reload:
+        clear_config_cache()
 
-    # All parameters synchronized with motor_config.yaml
-    return MotorGeometryParams(
-        # Stator parameters
-        stator_diameter=float(geometry.get('stator_diameter', 200.0)),
-        slot_height=float(geometry.get('slot_height', 16.0)),
-        core_thickness=float(geometry.get('core_thickness', 3.8)),
-        num_seg=int(geometry.get('num_seg', 6)),
-        num_slots_per_segment=int(geometry.get('num_slots_per_segment', 6)),
-        num_poles_per_segment=int(geometry.get('num_poles_per_segment', 7)),
-        stator_width=float(geometry.get('stator_width', 30.0)),
-        air_gap=float(geometry.get('air_gap', 0.65)),
-        # Slot details
-        tooth_width=float(geometry.get('tooth_width', 8.6)),
-        insulation_thickness=float(geometry.get('insulation_thickness', 0.15)),
-        wire_width=float(geometry.get('wire_width', 4.0)),
-        wire_height=float(geometry.get('wire_height', 0.6)),
-        wire_spacing_x=float(geometry.get('wire_spacing_x', 0.1)),
-        wire_spacing_y=float(geometry.get('wire_spacing_y', 0.13)),
-        num_wires_per_slot=int(geometry.get('num_wires_per_slot', 15)),
-        # Rotor parameters
-        magnet_height=float(geometry.get('magnet_height', 13.8)),
-        rotor_house_height=float(geometry.get('rotor_house_height', 1.2)),
-    )
+    # Use dynamic loading from YAML - all parameters come from motor_config.yaml
+    return MotorGeometryParams.from_yaml(config_path)
 
 
 def get_mesh_params(config_path: Optional[Union[str, Path]] = None,

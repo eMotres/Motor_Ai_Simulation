@@ -1,0 +1,17 @@
+# Motor AI Simulation - Core Rules for Kilo
+
+## 1. File Protection (Read-Only)
+- **STRICT PROHIBITION**: Never modify the file `src/motor_ai_sim/cadquery_geometry.py`. 
+- This file contains critical geometry definitions for electromagnetic simulations. Any unauthorized change can break the SDF (Signed Distance Function) generation for NVIDIA Modulus.
+- You may read this file to understand parameters, but if you want to suggest changes, create a new file named `geometry_proposal.py` and explain the improvements in the chat.
+
+## 2. Geometry Validation Protocol
+Before running any simulation or export for NVIDIA Modulus, you MUST verify the following:
+- **Intersections**: Check that coils do not overlap with stator teeth.
+- **Orientation**: Ensure that all slots and coils are aligned radially using the local coordinate system of the `polarArray`.
+- **Parameters**: Validate that `wire_width + insulation_thickness` does not exceed the physical slot width.
+- **Units**: Ensure all dimensions are consistent (mm).
+
+## 3. NVIDIA Modulus Integration
+- When exporting geometry, ensure the output is a valid manifold (watertight) STL or STEP file.
+- Verify that each component (stator, rotor, coils) has a unique name for correct domain assignment in the physics-informed neural network (PINN).

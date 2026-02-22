@@ -1194,8 +1194,9 @@ def validate_ai_geometry(n_points: int = 50000):
         )
     
     try:
-        # Find latest cached geometry
-        cache = GeometryCache()
+        # Find latest cached geometry - use CadQueryCache same as generate
+        from motor_ai_sim.cadquery_geometry import CadQueryCache
+        cache = CadQueryCache()
         cache_dir = cache.cache_dir
         
         if not cache_dir.exists():

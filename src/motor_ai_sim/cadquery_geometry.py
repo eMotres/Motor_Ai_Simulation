@@ -198,7 +198,6 @@ class CadQueryMotor:
     
     def _create_stator(self, cq) -> Any:
         """Create stator with radial slots using polarArray."""
-        import math
         p = self.parameters
         
         outer_r = p['stator_outer_radius']
@@ -222,14 +221,11 @@ class CadQueryMotor:
             .circle(inner_r)
             .extrude(width)
             .faces(">Z").workplane().tag("stator_top") 
-            .polarArray(inner_r-core_h, 0, 360, num_slots)
+            .polarArray(outer_r  -core_h, 0, 360, num_slots)
             .move(tooth_width / 2, 0)
-            .rect(width, -height)
-            .cutThruAll()
-            .faces(">Z").workplane().tag("stator_top") 
-            .polarArray(inner_r-core_h, 0, 360, num_slots)
-            .move(-tooth_width / 2, 0)
-            .rect(-width, -height)
+            .rect(width, -height, centered=(False, False))
+            .move(-tooth_width, 0)
+            .rect(-width, -height, centered=(False, False))
             .cutThruAll()
         )
  
@@ -298,27 +294,30 @@ class CadQueryMotor:
         """Create coils wound in stator slots."""
         p = self.parameters
         
-        num_slots = int(p['num_slots'])
-        slot_height = p['slot_height']
-        wire_width = p['wire_width']
-        inner_r = p['stator_inner_radius']
+        outer_r = p['stator_outer_radius']
+        core_h = p['core_thickness']
         width = p['stator_width']
+        num_slots = int(p['num_slots'])
+        tooth_width = p['tooth_width']
+        core_h = p['core_thickness']
+        wire_w = p['wire_width']
+        ins_w = p['insulation_thickness']
+        wire_d_x = p['wire_spacing_x']
+        slot_h = p['slot_height']
+        slot_hs = p['slot_hs']
+        width = wire_w
+        height = slot_h*(1-slot_hs)
         
-        coils = []
-        slot_angle = 360.0 / num_slots
-        
-        for i in range(num_slots):
-            angle = i * slot_angle
-            coil_r = inner_r + slot_height / 2
-            
-            coil = (
-                cq.Workplane("XY")
-                .polarArray(coil_r, angle, 0, 1)
-                .rect(wire_width * 3, wire_width * 2)
-                .extrude(width * 0.9)
-            )
-            coils.append(coil)
-            
+        # Create basic stator ring
+        coils = (
+            cq.Workplane("XY")
+            .polarArray(outer_r  -core_h, 0, 360, num_slots)
+            .move(tooth_width / 2 + ins_w + wire_d_x/2, 0)
+            .rect(width, -height, centered=(False, False))
+            .move(-tooth_width - ins_w*2 - wire_d_x, 0)
+            .rect(-width, -height, centered=(False, False))
+            .extrude(width)
+        )
         return coils
     
     def export_stl(self, output_dir: str, tolerance: float = 0.1) -> Dict[str, str]:

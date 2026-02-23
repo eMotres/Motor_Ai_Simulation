@@ -72,8 +72,9 @@ class CadQueryMotor:
             
         if 'stator_inner_radius' in api_params:
             mapped['stator_inner_radius'] = api_params['stator_inner_radius']
-        elif 'rotor_outer_radius' in api_params and 'air_gap' in api_params:
-            mapped['stator_inner_radius'] = api_params['rotor_outer_radius'] + api_params.get('air_gap', 2.0)
+        elif 'stator_outer_radius' in mapped:
+            # Calculate stator_inner_radius as 70% of outer radius
+            mapped['stator_inner_radius'] = mapped['stator_outer_radius'] * 0.7
             
         if 'core_thickness' in api_params:
             mapped['stator_width'] = api_params['core_thickness']
@@ -88,23 +89,40 @@ class CadQueryMotor:
             
         if 'num_slots' in api_params:
             mapped['num_slots'] = int(api_params['num_slots'])
+        elif 'num_slots_per_segment' in api_params and 'num_seg' in api_params:
+            # num_slots = num_slots_per_segment * num_seg
+            mapped['num_slots'] = int(api_params['num_slots_per_segment'] * api_params['num_seg'])
+        
+        # Map num_seg to num_poles
+        if 'num_seg' in api_params:
+            mapped['num_poles'] = int(api_params['num_seg'])
+        elif 'num_poles_per_segment' in api_params and 'num_seg' in api_params:
+            mapped['num_poles'] = int(api_params['num_poles_per_segment'] * api_params['num_seg'])
         
         # Rotor parameters
         if 'rotor_outer_radius' in api_params:
             mapped['rotor_outer_radius'] = api_params['rotor_outer_radius']
+        elif 'stator_inner_radius' in mapped:
+            air_gap = api_params.get('air_gap', 2.0)
+            mapped['rotor_outer_radius'] = mapped['stator_inner_radius'] - air_gap
+        elif 'stator_outer_radius' in mapped:
+            air_gap = api_params.get('air_gap', 2.0)
+            mapped['rotor_outer_radius'] = mapped['stator_outer_radius'] * 0.68 - air_gap
+            
         if 'rotor_inner_radius' in api_params:
             mapped['rotor_inner_radius'] = api_params['rotor_inner_radius']
+        elif 'rotor_outer_radius' in mapped:
+            mapped['rotor_inner_radius'] = mapped['rotor_outer_radius'] * 0.3
         else:
-            mapped['rotor_inner_radius'] = api_params.get('stator_outer_radius', 100) * 0.15
+            mapped['rotor_inner_radius'] = 20.0  # Default fallback
             
         if 'magnet_height' in api_params:
             mapped['magnet_height'] = api_params['magnet_height']
         if 'magnet_width' in api_params:
             mapped['magnet_width'] = api_params['magnet_width']
-        else:
-            # Calculate from number of poles
-            num_poles = int(api_params.get('num_poles', 12))
-            mapped['magnet_width'] = 360.0 / num_poles * 0.7
+        elif 'num_poles' in mapped:
+            # Calculate from number of poles (use mapped value, not api_params)
+            mapped['magnet_width'] = 360.0 / mapped['num_poles'] * 0.7
         
         # Shaft radius (from rotor_inner_radius or use default)
         if 'shaft_radius' in api_params:
@@ -150,6 +168,7 @@ class CadQueryMotor:
             'wire_spacing_x': 0.5,
             'wire_spacing_y': 0.5,
             'insulation_thickness': 0.3,
+            'slot_hs': 0.2,  # slot opening height ratio
         }
     
     def set_parameters(self, params: Dict) -> None:
@@ -197,38 +216,75 @@ class CadQueryMotor:
         return self.parts
     
     def _create_stator(self, cq) -> Any:
-        """Create stator with radial slots using polarArray."""
+        """Create stator with radial slots/teeth."""
+        import math
         p = self.parameters
-        
+
         outer_r = p['stator_outer_radius']
         inner_r = p['stator_inner_radius']
         core_h = p['core_thickness']
-        width = p['stator_width']
+        slot_height = p['slot_height']
+        stator_w = p['stator_width']
         num_slots = int(p['num_slots'])
         tooth_width = p['tooth_width']
-        core_h = p['core_thickness']
         wire_w = p['wire_width']
         ins_w = p['insulation_thickness']
         wire_d_x = p['wire_spacing_x']
-        width = wire_w + ins_w*2 + wire_d_x
-        height = inner_r
+        slot_w = wire_w + ins_w*2 + wire_d_x
+        slot_h = slot_height + core_h # Use slot_height directly for cut depth
+        #tooth_width_deg = p.get('tooth_width', 20)  # degrees
+        slot_x = tooth_width / 2
+        slot_y = outer_r - core_h
+        half_slots = num_slots // 2
 
+        slot_angle = 360.0 / half_slots #tooth_width_rad = math.radians(tooth_width_deg)
         
-        # Create basic stator ring
+        # Create stator as a solid ring first
         stator = (
             cq.Workplane("XY")
             .circle(outer_r)
             .circle(inner_r)
-            .extrude(width)
-            .faces(">Z").workplane().tag("stator_top") 
-            .polarArray(outer_r  -core_h, 0, 360, num_slots)
-            .move(tooth_width / 2, 0)
-            .rect(width, -height, centered=(False, False))
-            .move(-tooth_width, 0)
-            .rect(-width, -height, centered=(False, False))
-            .cutThruAll()
+            .extrude(stator_w)
         )
- 
+        
+        # Create slot cutouts using rotate/translate approach instead of polarArray
+        # This is more reliable in CadQuery 2.x
+        for i in range(half_slots):
+            angle = i * slot_angle
+            
+            # Position the cut at the correct angle
+            # Use rotate workplane instead of polarArray
+            #slot_r = inner_r + slot_height / 2
+            #slot_depth = slot_height
+            #slot_width = tooth_width_deg * 0.8  # degrees
+            
+            # Create a rectangular cutout using centered rect for proper shape
+            # Create positive side slot (centered at slot_x + slot_w/2)
+            slot = (
+                cq.Workplane("XY")
+                .rect(slot_w, -slot_h, centered=(False, False))
+                .extrude(stator_w + 1)
+            )
+            # Translate to correct position
+            slot = slot.translate((slot_x, slot_y, 0))
+            
+            # Create negative side slot
+            slot_neg = (
+                cq.Workplane("XY")
+                .rect(-slot_w, -slot_h, centered=(False, False))
+                .extrude(stator_w + 1)
+            )
+            # Translate to correct position
+            slot_neg = slot_neg.translate((-slot_x, slot_y, 0))
+            
+            # Rotate both slots to position
+            slot = slot.rotate((0, 0, 0), (0, 0, 1), angle)
+            slot_neg = slot_neg.rotate((0, 0, 0), (0, 0, 1), angle)
+                       
+            # Cut both slots from stator
+            stator = stator.cut(slot)
+            stator = stator.cut(slot_neg)
+        
         return stator
     
     def _create_rotor(self, cq) -> Any:
@@ -280,44 +336,54 @@ class CadQueryMotor:
             angle = i * pole_angle
             magnet_r = rotor_outer_r - magnet_height / 2
             
+            # Create magnet at origin then rotate/translate
             magnet = (
                 cq.Workplane("XY")
-                .polarArray(magnet_r, angle, 0, 1)
                 .rect(magnet_height, magnet_width)
                 .extrude(width)
             )
+            # Position at correct radius and angle
+            magnet = magnet.translate((magnet_r, 0, 0))
+            magnet = magnet.rotate((0, 0, 0), (0, 0, 1), angle)
             magnets.append(magnet)
             
         return magnets
     
     def _create_coils(self, cq) -> List[Any]:
-        """Create coils wound in stator slots."""
+        """Create coils wound in stator slots - individual coils for each slot."""
+        import math
         p = self.parameters
         
-        outer_r = p['stator_outer_radius']
-        core_h = p['core_thickness']
-        width = p['stator_width']
-        num_slots = int(p['num_slots'])
-        tooth_width = p['tooth_width']
-        core_h = p['core_thickness']
-        wire_w = p['wire_width']
-        ins_w = p['insulation_thickness']
-        wire_d_x = p['wire_spacing_x']
-        slot_h = p['slot_height']
-        slot_hs = p['slot_hs']
-        width = wire_w
-        height = slot_h*(1-slot_hs)
+        stator_inner_radius = p.get('stator_inner_radius', 70)
+        stator_width = p.get('stator_width', 30)
+        slot_height = p.get('slot_height', 10)
+        num_slots = int(p.get('num_slots', 12))
         
-        # Create basic stator ring
-        coils = (
-            cq.Workplane("XY")
-            .polarArray(outer_r  -core_h, 0, 360, num_slots)
-            .move(tooth_width / 2 + ins_w + wire_d_x/2, 0)
-            .rect(width, -height, centered=(False, False))
-            .move(-tooth_width - ins_w*2 - wire_d_x, 0)
-            .rect(-width, -height, centered=(False, False))
-            .extrude(width)
-        )
+        # Calculate coil parameters
+        coil_r = stator_inner_radius - slot_height / 2
+        coil_size = slot_height * 0.5
+        coil_width = stator_width * 0.8
+        
+        # Create individual coils for each slot
+        coils = []
+        slot_angle = 360.0 / num_slots
+        
+        for i in range(num_slots):
+            angle = i * slot_angle
+            
+            # Create coil using rotate/translate approach
+            coil = (
+                cq.Workplane("XY")
+                .rect(coil_size, coil_size)
+                .extrude(coil_width)
+            )
+            
+            # Translate to position and rotate
+            coil = coil.translate((coil_r, 0, 0))
+            coil = coil.rotate((0, 0, 0), (0, 0, 1), angle)
+            
+            coils.append(coil)
+        
         return coils
     
     def export_stl(self, output_dir: str, tolerance: float = 0.1) -> Dict[str, str]:

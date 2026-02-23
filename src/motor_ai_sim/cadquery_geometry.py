@@ -77,9 +77,8 @@ class CadQueryMotor:
             mapped['stator_inner_radius'] = mapped['stator_outer_radius'] * 0.7
             
         if 'core_thickness' in api_params:
-            mapped['stator_width'] = api_params['core_thickness']
             mapped['core_thickness'] = api_params['core_thickness']
-        elif 'stator_width' in api_params:
+        if 'stator_width' in api_params:
             mapped['stator_width'] = api_params['stator_width']
             
         if 'slot_height' in api_params:

@@ -138,6 +138,14 @@ class CadQueryMotor:
             mapped['wire_width'] = api_params['wire_width']
         if 'wire_height' in api_params:
             mapped['wire_height'] = api_params['wire_height']
+        if 'wire_spacing_x' in api_params:
+            mapped['wire_spacing_x'] = api_params['wire_spacing_x']
+        if 'wire_spacing_y' in api_params:
+            mapped['wire_spacing_y'] = api_params['wire_spacing_y']
+        if 'insulation_thickness' in api_params:
+            mapped['insulation_thickness'] = api_params['insulation_thickness']
+        if 'slot_hs' in api_params:
+            mapped['slot_hs'] = api_params['slot_hs']
         
         # Number of poles
         if 'num_poles' in api_params:
@@ -231,7 +239,6 @@ class CadQueryMotor:
         wire_d_x = p['wire_spacing_x']
         slot_w = wire_w + ins_w*2 + wire_d_x
         slot_h = slot_height + core_h # Use slot_height directly for cut depth
-        #tooth_width_deg = p.get('tooth_width', 20)  # degrees
         slot_x = tooth_width / 2
         slot_y = outer_r - core_h
         half_slots = num_slots // 2
@@ -250,15 +257,7 @@ class CadQueryMotor:
         # This is more reliable in CadQuery 2.x
         for i in range(half_slots):
             angle = i * slot_angle
-            
-            # Position the cut at the correct angle
-            # Use rotate workplane instead of polarArray
-            #slot_r = inner_r + slot_height / 2
-            #slot_depth = slot_height
-            #slot_width = tooth_width_deg * 0.8  # degrees
-            
-            # Create a rectangular cutout using centered rect for proper shape
-            # Create positive side slot (centered at slot_x + slot_w/2)
+            # Create positive side slot 
             slot = (
                 cq.Workplane("XY")
                 .rect(slot_w, -slot_h, centered=(False, False))
@@ -353,32 +352,41 @@ class CadQueryMotor:
         import math
         p = self.parameters
         
-        stator_inner_radius = p.get('stator_inner_radius', 70)
-        stator_width = p.get('stator_width', 30)
-        slot_height = p.get('slot_height', 10)
-        num_slots = int(p.get('num_slots', 12))
-        
-        # Calculate coil parameters
-        coil_r = stator_inner_radius - slot_height / 2
-        coil_size = slot_height * 0.5
-        coil_width = stator_width * 0.8
+        outer_r = p['stator_outer_radius']
+        inner_r = p['stator_inner_radius']
+        core_h = p['core_thickness']
+        slot_hs = p['slot_hs']
+        slot_height = p['slot_height']
+        stator_w = p['stator_width']
+        num_slots = int(p['num_slots'])
+        tooth_width = p['tooth_width']
+        wire_w = p['wire_width']
+        ins_w = p['insulation_thickness']
+        wire_d_y = p['wire_spacing_y']
+        wire_d_x = p['wire_spacing_x']
+        coil_w = wire_w
+        coil_h = slot_height * (1 - slot_hs) - ins_w *2 - wire_d_y # Use slot_height directly for cut depth
+        coil_x = tooth_width / 2 + ins_w + wire_d_x / 2
+        coil_y = outer_r - core_h -ins_w -wire_d_y / 2 
+        half_slots = num_slots // 2
+
+        slot_angle = 360.0 / half_slots #tooth_width_rad = math.radians(tooth_width_deg)
         
         # Create individual coils for each slot
         coils = []
-        slot_angle = 360.0 / num_slots
         
-        for i in range(num_slots):
+        for i in range(half_slots):
             angle = i * slot_angle
             
             # Create coil using rotate/translate approach
             coil = (
                 cq.Workplane("XY")
-                .rect(coil_size, coil_size)
-                .extrude(coil_width)
+                .rect(coil_w, -coil_h, centered=(False, False))
+                .extrude(stator_w )
             )
             
             # Translate to position and rotate
-            coil = coil.translate((coil_r, 0, 0))
+            coil = coil.translate((coil_x, coil_y, 0))
             coil = coil.rotate((0, 0, 0), (0, 0, 1), angle)
             
             coils.append(coil)

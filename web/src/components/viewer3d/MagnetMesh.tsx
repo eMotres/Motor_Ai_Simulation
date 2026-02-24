@@ -4,7 +4,7 @@ import { useMotorStore, useUIStore } from '../../stores/motorStore';
 
 const MagnetMesh: React.FC = () => {
   const { geometry } = useMotorStore();
-  const { showWireframe } = useUIStore();
+  const { showWireframe, envIntensity } = useUIStore();
   
   const magnetGeometries = useMemo(() => {
     const numPoles = geometry.num_poles!;
@@ -60,8 +60,9 @@ const MagnetMesh: React.FC = () => {
         >
           <meshStandardMaterial
             color={magnet.color}
-            metalness={0.3}
-            roughness={0.5}
+            metalness={0.8}
+            roughness={0.4}
+            envMapIntensity={envIntensity * 1.5}
             wireframe={showWireframe}
           />
         </mesh>

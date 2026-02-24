@@ -2,9 +2,17 @@ import React, { useMemo } from 'react';
 import * as THREE from 'three';
 import { useMotorStore, useUIStore } from '../../stores/motorStore';
 
-const RotorMesh: React.FC = () => {
+interface RotorMeshProps {
+  materialProps?: {
+    color: string;
+    metalness: number;
+    roughness: number;
+  };
+}
+
+const RotorMesh: React.FC<RotorMeshProps> = ({ materialProps }) => {
   const { geometry } = useMotorStore();
-  const { showWireframe } = useUIStore();
+  const { showWireframe, envIntensity } = useUIStore();
   
   const rotorGeometry = useMemo(() => {
     const shape = new THREE.Shape();
@@ -38,9 +46,10 @@ const RotorMesh: React.FC = () => {
       receiveShadow
     >
       <meshStandardMaterial
-        color="#374151"
-        metalness={0.8}
-        roughness={0.3}
+        color={materialProps?.color || '#7f8c8d'}
+        metalness={materialProps?.metalness ?? 0.9}
+        roughness={materialProps?.roughness ?? 0.3}
+        envMapIntensity={envIntensity * 1.5}
         wireframe={showWireframe}
       />
     </mesh>

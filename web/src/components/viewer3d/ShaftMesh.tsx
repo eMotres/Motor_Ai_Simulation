@@ -4,7 +4,7 @@ import { useMotorStore, useUIStore } from '../../stores/motorStore';
 
 const ShaftMesh: React.FC = () => {
   const { geometry: motorGeometry } = useMotorStore();
-  const { showWireframe } = useUIStore();
+  const { showWireframe, envIntensity } = useUIStore();
   
   const shaftGeometry = useMemo(() => {
     const radius = motorGeometry.rotor_inner_radius!;
@@ -31,9 +31,10 @@ const ShaftMesh: React.FC = () => {
       receiveShadow
     >
       <meshStandardMaterial
-        color="#6b7280"
-        metalness={0.9}
-        roughness={0.2}
+        color="#505050"
+        metalness={0.95}
+        roughness={0.25}
+        envMapIntensity={envIntensity * 1.5}
         wireframe={showWireframe}
       />
     </mesh>

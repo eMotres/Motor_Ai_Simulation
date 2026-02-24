@@ -37,6 +37,7 @@ import {
 } from '@mui/icons-material';
 import MotorScene from './components/viewer3d/MotorScene';
 import GeometryForm from './components/parameters/GeometryForm';
+import MaterialControls from './components/parameters/MaterialControls';
 import { useMotorStore, useUIStore } from './stores/motorStore';
 
 const darkTheme = createTheme({
@@ -84,6 +85,8 @@ function App() {
   useEffect(() => {
     fetchGeometryFromApi();
   }, [fetchGeometryFromApi]);
+  
+  // Note: Removed the useEffect that forced STL mode - users can now freely switch between view modes
   
   const renderTabContent = () => {
     switch (activeTab) {
@@ -237,6 +240,9 @@ function App() {
             </Box>
           </Toolbar>
         </AppBar>
+        
+        {/* Material Controls - Top Bar */}
+        <MaterialControls />
         
         {/* Sidebar */}
         <Drawer

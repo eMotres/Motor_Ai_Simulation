@@ -2,9 +2,17 @@ import React, { useMemo } from 'react';
 import * as THREE from 'three';
 import { useMotorStore, useUIStore } from '../../stores/motorStore';
 
-const StatorMesh: React.FC = () => {
+interface StatorMeshProps {
+  materialProps?: {
+    color: string;
+    metalness: number;
+    roughness: number;
+  };
+}
+
+const StatorMesh: React.FC<StatorMeshProps> = ({ materialProps }) => {
   const { geometry } = useMotorStore();
-  const { showWireframe } = useUIStore();
+  const { showWireframe, envIntensity } = useUIStore();
   
   const statorGeometry = useMemo(() => {
     const shape = new THREE.Shape();
@@ -84,9 +92,10 @@ const StatorMesh: React.FC = () => {
       position={[0, 0, 0]}
     >
       <meshStandardMaterial
-        color="#4a5568"
-        metalness={0.8}
-        roughness={0.3}
+        color={materialProps?.color || '#7f8c8d'}
+        metalness={materialProps?.metalness ?? 0.9}
+        roughness={materialProps?.roughness ?? 0.3}
+        envMapIntensity={envIntensity * 1.5}
         wireframe={showWireframe}
       />
     </mesh>

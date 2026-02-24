@@ -241,9 +241,8 @@ class CadQueryMotor:
         slot_h = slot_height + core_h # Use slot_height directly for cut depth
         slot_x = tooth_width / 2
         slot_y = outer_r - core_h
-        half_slots = num_slots // 2
-
-        slot_angle = 360.0 / half_slots #tooth_width_rad = math.radians(tooth_width_deg)
+        
+        slot_angle = 360.0 / num_slots  # Fixed: use num_slots, not half_slots
         
         # Create stator as a solid ring first
         stator = (
@@ -255,30 +254,26 @@ class CadQueryMotor:
         
         # Create slot cutouts using rotate/translate approach instead of polarArray
         # This is more reliable in CadQuery 2.x
-        for i in range(half_slots):
+        for i in range(num_slots):
             angle = i * slot_angle
             # Create positive side slot 
             slot = (
                 cq.Workplane("XY")
                 .rect(slot_w, -slot_h, centered=(False, False))
                 .extrude(stator_w + 1)
+                .translate((slot_x, slot_y, 0))
+                .rotate((0, 0, 0), (0, 0, 1), angle)
             )
-            # Translate to correct position
-            slot = slot.translate((slot_x, slot_y, 0))
             
             # Create negative side slot
             slot_neg = (
                 cq.Workplane("XY")
                 .rect(-slot_w, -slot_h, centered=(False, False))
                 .extrude(stator_w + 1)
+                .translate((-slot_x, slot_y, 0))
+                .rotate((0, 0, 0), (0, 0, 1), angle)
             )
-            # Translate to correct position
-            slot_neg = slot_neg.translate((-slot_x, slot_y, 0))
-            
-            # Rotate both slots to position
-            slot = slot.rotate((0, 0, 0), (0, 0, 1), angle)
-            slot_neg = slot_neg.rotate((0, 0, 0), (0, 0, 1), angle)
-                       
+                                  
             # Cut both slots from stator
             stator = stator.cut(slot)
             stator = stator.cut(slot_neg)
@@ -378,17 +373,26 @@ class CadQueryMotor:
         for i in range(half_slots):
             angle = i * slot_angle
             
-            # Create coil using rotate/translate approach
+            # Create roght coils 
             coil = (
                 cq.Workplane("XY")
                 .rect(coil_w, -coil_h, centered=(False, False))
                 .extrude(stator_w )
+                .translate((coil_x, coil_y, 0))
+                .rotate((0, 0, 0), (0, 0, 1), angle)
             )
-            
-            # Translate to position and rotate
-            coil = coil.translate((coil_x, coil_y, 0))
-            coil = coil.rotate((0, 0, 0), (0, 0, 1), angle)
-            
+             
+            coils.append(coil)
+
+            # Create left coils
+            coil = (
+                cq.Workplane("XY")
+                .rect(-coil_w, -coil_h, centered=(False, False))
+                .extrude(stator_w )
+                .translate((-coil_x, coil_y, 0))
+                .rotate((0, 0, 0), (0, 0, 1), angle)
+            )
+           
             coils.append(coil)
         
         return coils

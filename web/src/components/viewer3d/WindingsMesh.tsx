@@ -2,9 +2,17 @@ import React, { useMemo } from 'react';
 import * as THREE from 'three';
 import { useMotorStore, useUIStore } from '../../stores/motorStore';
 
-const WindingsMesh: React.FC = () => {
+interface WindingsMeshProps {
+  materialProps?: {
+    color: string;
+    metalness: number;
+    roughness: number;
+  };
+}
+
+const WindingsMesh: React.FC<WindingsMeshProps> = ({ materialProps }) => {
   const { geometry } = useMotorStore();
-  const { showWireframe } = useUIStore();
+  const { showWireframe, envIntensity } = useUIStore();
   
   const windingGeometries = useMemo(() => {
     const numSlots = geometry.num_slots!;
@@ -76,9 +84,10 @@ const WindingsMesh: React.FC = () => {
           receiveShadow
         >
           <meshStandardMaterial
-            color="#b45309"
-            metalness={0.9}
-            roughness={0.2}
+            color={materialProps?.color || '#b87333'}
+            metalness={materialProps?.metalness ?? 0.8}
+            roughness={materialProps?.roughness ?? 0.4}
+            envMapIntensity={envIntensity * 1.2}
             wireframe={showWireframe}
           />
         </mesh>

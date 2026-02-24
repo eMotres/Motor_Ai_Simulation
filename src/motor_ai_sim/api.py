@@ -222,6 +222,12 @@ def update_geometry(update: GeometryUpdateModel):
     Only provided parameters will be updated; others remain unchanged.
     """
     try:
+        # Clear the cache before updating parameters to ensure fresh geometry on next pipeline run
+        from motor_ai_sim.cadquery_geometry import CadQueryCache
+        cache = CadQueryCache()
+        cache.clear_all()
+        print("Cache cleared due to geometry update")
+        
         params = update_current_geometry(**update.model_dump())
         return params_to_dict(params)
     except ValueError as e:
@@ -1075,6 +1081,12 @@ def generate_geometry_pipeline(params: Dict):
         
         # 2. Compute parameter hash for caching (AFTER setting params)
         param_hash = motor.get_parameter_hash()
+        
+        # Debug: Print actual parameters being used
+        print(f"DEBUG: Motor parameters hash: {param_hash}")
+        print(f"DEBUG: num_seg in motor: {motor.parameters.get('num_seg', 'NOT SET')}")
+        print(f"DEBUG: num_poles in motor: {motor.parameters.get('num_poles', 'NOT SET')}")
+        print(f"DEBUG: num_slots in motor: {motor.parameters.get('num_slots', 'NOT SET')}")
         
         # 3. Check cache
         cache = CadQueryCache()

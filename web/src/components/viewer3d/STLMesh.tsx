@@ -1,5 +1,7 @@
 import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
+import { LineSegments } from 'three';
+import { useUIStore } from '../../stores/motorStore';
 
 interface STLMeshProps {
   vertices: number[];
@@ -9,6 +11,35 @@ interface STLMeshProps {
   position?: [number, number, number];
   rotation?: [number, number, number];
   scale?: [number, number, number];
+  showEdges?: boolean;
+  materialType?: 'stator' | 'coil' | 'magnet' | 'rotor' | 'shaft';
+}
+
+// PBR Material configurations for Fusion 360 style - base colors only, metalness/roughness from UI
+const PBR_MATERIALS = {
+  stator: {
+    color: '#7f8c8d',
+  },
+  coil: {
+    color: '#b87333',
+  },
+  magnet: {
+    color: '#4a90d9',
+  },
+  rotor: {
+    color: '#7f8c8d',
+  },
+  shaft: {
+    color: '#505050',
+  },
+  default: {
+    color: '#4a90d9',
+  },
+};
+
+function getMaterialColor(materialType?: string): string {
+  if (!materialType) return PBR_MATERIALS.default.color;
+  return PBR_MATERIALS[materialType as keyof typeof PBR_MATERIALS]?.color || PBR_MATERIALS.default.color;
 }
 
 export function STLMesh({
@@ -19,16 +50,21 @@ export function STLMesh({
   position = [0, 0, 0],
   rotation = [0, 0, 0],
   scale = [1, 1, 1],
+  showEdges = true,
+  materialType,
 }: STLMeshProps) {
+  const { metalness, roughness, envIntensity } = useUIStore();
   const meshRef = useRef<THREE.Mesh>(null);
+  const edgesRef = useRef<THREE.LineSegments>(null);
+  
+  // Get base color from material type
+  const baseColor = materialType ? getMaterialColor(materialType) : color;
 
   useEffect(() => {
     if (!vertices.length || !faces.length) {
       console.warn('STLMesh: Empty vertices or faces', { vertices: vertices.length, faces: faces.length });
       return;
     }
-
-    console.log('STLMesh: Creating geometry with', vertices.length, 'vertices,', faces.length, 'faces');
 
     // Convert flat arrays to Three.js geometry
     const geometry = new THREE.BufferGeometry();
@@ -53,53 +89,56 @@ export function STLMesh({
       meshRef.current.geometry = geometry;
     }
 
-  }, [vertices, faces]);
+    // Create edge geometry for outlines
+    if (showEdges && edgesRef.current) {
+      const edgeGeometry = new THREE.EdgesGeometry(geometry, 15); // 15 degree threshold for sharp edges
+      edgesRef.current.geometry.dispose();
+      edgesRef.current.geometry = edgeGeometry;
+    }
+
+  }, [vertices, faces, showEdges]);
 
   return (
-    <mesh
-      ref={meshRef}
-      position={position}
-      rotation={rotation}
-      scale={scale}
-    >
-      <bufferGeometry />
-      <meshStandardMaterial
-        color={color}
-        transparent={opacity < 1}
-        opacity={opacity}
-        side={THREE.DoubleSide}
-        metalness={0.3}
-        roughness={0.7}
-      />
-    </mesh>
+    <group position={position} rotation={rotation} scale={scale}>
+      <mesh ref={meshRef}>
+        <bufferGeometry />
+        <meshStandardMaterial
+          color={baseColor}
+          transparent={opacity < 1}
+          opacity={opacity}
+          side={THREE.DoubleSide}
+          metalness={metalness}
+          roughness={roughness}
+          envMapIntensity={envIntensity * 1.5}
+        />
+      </mesh>
+      
+      {/* Edge outlines for CAD look - solid dark grey lines */}
+      {showEdges && (
+        <lineSegments ref={edgesRef}>
+          <lineBasicMaterial color={0x333333} linewidth={1} />
+        </lineSegments>
+      )}
+    </group>
   );
 }
 
 // Component to render multiple STL meshes
 interface STLCollectionProps {
   meshes: Record<string, { vertices: number[]; faces: number[] }>;
+  showEdges?: boolean;
 }
 
-const MATERIAL_COLORS: Record<string, string> = {
-  stator_core: '#708090',    // Slate gray (steel)
-  rotor_core: '#708090',     // Slate gray (steel)
-  shaft: '#505050',          // Dark gray (steel)
-  magnet: '#ff4444',        // Red (permanent magnet)
-  coil: '#b87333',          // Copper color
-  air_gap: '#87ceeb',       // Light blue (air)
-  default: '#4a90d9',       // Default blue
-};
-
-function getColorForMesh(name: string): string {
-  if (name.startsWith('magnet')) return MATERIAL_COLORS.magnet;
-  if (name.startsWith('coil')) return MATERIAL_COLORS.coil;
-  if (name.startsWith('stator')) return MATERIAL_COLORS.stator_core;
-  if (name.startsWith('rotor')) return MATERIAL_COLORS.rotor_core;
-  if (name.startsWith('shaft')) return MATERIAL_COLORS.shaft;
-  return MATERIAL_COLORS.default;
+function getMaterialTypeFromName(name: string): 'stator' | 'coil' | 'magnet' | 'rotor' | 'shaft' | undefined {
+  if (name.startsWith('stator')) return 'stator';
+  if (name.startsWith('coil')) return 'coil';
+  if (name.startsWith('magnet')) return 'magnet';
+  if (name.startsWith('rotor')) return 'rotor';
+  if (name.startsWith('shaft')) return 'shaft';
+  return undefined;
 }
 
-export function STLCollection({ meshes }: STLCollectionProps) {
+export function STLCollection({ meshes, showEdges = true }: STLCollectionProps) {
   const meshNames = Object.keys(meshes);
   console.log('STLCollection: Rendering', meshNames.length, 'meshes:', meshNames.slice(0, 5));
   
@@ -115,7 +154,8 @@ export function STLCollection({ meshes }: STLCollectionProps) {
           key={name}
           vertices={mesh.vertices}
           faces={mesh.faces}
-          color={getColorForMesh(name)}
+          materialType={getMaterialTypeFromName(name)}
+          showEdges={showEdges}
         />
       ))}
     </group>

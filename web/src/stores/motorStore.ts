@@ -80,7 +80,7 @@ export const useMotorStore = create<MotorState>()(
       isLoading: false,
       error: null,
       connectedToApi: false,
-      viewMode: 'solid',
+      viewMode: 'stl',
       pointCloudData: null,
       
       // Pipeline state
@@ -422,6 +422,7 @@ export const useMotorStore = create<MotorState>()(
         geometry: state.geometry,
         materials: state.materials,
         meshSettings: state.meshSettings,
+        viewMode: state.viewMode,
       }),
     }
   )
@@ -436,12 +437,26 @@ interface UIState {
   showGrid: boolean;
   autoRotate: boolean;
   
+  // Material controls - single values for all parts
+  metalness: number;
+  roughness: number;
+  envIntensity: number;
+  
+  // Camera mode
+  cameraMode: 'perspective' | 'orthographic';
+  
   toggleSidebar: () => void;
   setActiveTab: (tab: 'geometry' | 'materials' | 'mesh' | 'simulation') => void;
   toggleWireframe: () => void;
   toggleAxes: () => void;
   toggleGrid: () => void;
   toggleAutoRotate: () => void;
+  updateMaterialSettings: (settings: Partial<{
+    metalness: number;
+    roughness: number;
+    envIntensity: number;
+  }>) => void;
+  setCameraMode: (mode: 'perspective' | 'orthographic') => void;
 }
 
 export const useUIStore = create<UIState>()(
@@ -454,12 +469,22 @@ export const useUIStore = create<UIState>()(
       showGrid: true,
       autoRotate: false,
       
+      // Material controls - single values for all parts
+      metalness: 0.5,
+      roughness: 0.5,
+      envIntensity: 0.5,
+      
+      // Camera mode - default to orthographic for CAD-like view
+      cameraMode: 'orthographic',
+      
       toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
       setActiveTab: (tab) => set({ activeTab: tab }),
       toggleWireframe: () => set((state) => ({ showWireframe: !state.showWireframe })),
       toggleAxes: () => set((state) => ({ showAxes: !state.showAxes })),
       toggleGrid: () => set((state) => ({ showGrid: !state.showGrid })),
       toggleAutoRotate: () => set((state) => ({ autoRotate: !state.autoRotate })),
+      updateMaterialSettings: (settings) => set((state) => ({ ...state, ...settings })),
+      setCameraMode: (mode) => set({ cameraMode: mode }),
     }),
     {
       name: 'motor-ui-storage',

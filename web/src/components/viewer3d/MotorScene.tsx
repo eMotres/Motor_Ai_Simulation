@@ -1,6 +1,8 @@
-import React, { Suspense, useRef, useEffect, useCallback } from 'react';
+import React, { Suspense, useRef, useEffect } from 'react';
 import { Canvas, useThree, useFrame } from '@react-three/fiber';
-import { OrbitControls, PerspectiveCamera, Environment, Grid } from '@react-three/drei';
+import { OrbitControls, PerspectiveCamera, OrthographicCamera, Environment, Grid } from '@react-three/drei';
+import { EffectComposer, SSAO, Bloom } from '@react-three/postprocessing';
+import { BlendFunction } from 'postprocessing';
 import { useUIStore, useMotorStore } from '../../stores/motorStore';
 import * as THREE from 'three';
 import Viewcube from './Viewcube';
@@ -13,14 +15,56 @@ import { ApiStatorMesh, ApiRotorMesh, ApiShaftMesh, ApiMagnetsMesh, ApiCoilsMesh
 import PointCloudMesh from './PointCloudMesh';
 import { STLCollection } from './STLMesh';
 
+// Camera that auto-adjusts to viewport aspect ratio
+const AdaptiveCamera: React.FC = () => {
+  const { cameraMode } = useUIStore();
+  const { size } = useThree();
+  
+  const aspect = size.width / size.height;
+  
+  if (cameraMode === 'perspective') {
+    return <PerspectiveCamera makeDefault position={[0, 0, 250]} fov={50} />;
+  }
+  
+  // For orthographic, calculate frustum based on a reference size and aspect ratio
+  const frustumSize = 300;
+  return (
+    <OrthographicCamera 
+      makeDefault 
+      position={[0, 0, 250]} 
+      zoom={1}
+      near={0.1}
+      far={5000}
+      left={-frustumSize * aspect}
+      right={frustumSize * aspect}
+      top={frustumSize}
+      bottom={-frustumSize}
+    />
+  );
+};
+
 // Component to sync camera with viewcube
 const CameraSync: React.FC<{ controlsRef: React.RefObject<any> }> = ({ controlsRef }) => {
   const { camera } = useThree();
   
-  useFrame(() => {
-    // Dispatch camera orientation to viewcube
+  // Initial sync when camera is ready
+  useEffect(() => {
+    // Apply 180° Y rotation offset to align with ViewCube coordinate system
+    const offset = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
+    const adjustedQuat = camera.quaternion.clone().multiply(offset);
+    
     window.dispatchEvent(new CustomEvent('mainCameraChange', {
-      detail: { quaternion: camera.quaternion.clone() }
+      detail: { quaternion: adjustedQuat }
+    }));
+  }, [camera]);
+  
+  useFrame(() => {
+    // Apply 180° Y rotation offset to align with ViewCube coordinate system
+    const offset = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
+    const adjustedQuat = camera.quaternion.clone().multiply(offset);
+    
+    window.dispatchEvent(new CustomEvent('mainCameraChange', {
+      detail: { quaternion: adjustedQuat }
     }));
   });
   
@@ -38,9 +82,9 @@ const ViewcubeNavigation: React.FC<{ controlsRef: React.RefObject<any> }> = ({ c
     const handleNavigate = (e: CustomEvent) => {
       const { position, name } = e.detail;
       
-      // Calculate new camera position - look at origin
+      // Use fixed distance for standard views
+      const distance = 250;
       const direction = position.clone().normalize();
-      const distance = camera.position.length();
       const newPosition = direction.multiplyScalar(distance);
       
       // Animate camera to new position
@@ -92,13 +136,15 @@ const ViewcubeNavigation: React.FC<{ controlsRef: React.RefObject<any> }> = ({ c
 };
 
 const MotorScene: React.FC = () => {
-  const { showGrid, showAxes, autoRotate } = useUIStore();
+  const { showGrid, showAxes, autoRotate, envIntensity } = useUIStore();
   const controlsRef = useRef<any>(null);
   
   return (
     <>
       <Canvas shadows className="motor-canvas">
-        <PerspectiveCamera makeDefault position={[200, 200, 200]} fov={50} />
+        {/* Adaptive camera that switches between Perspective and Orthographic */}
+        <AdaptiveCamera />
+        
         <OrbitControls 
           ref={controlsRef}
           autoRotate={autoRotate}
@@ -118,7 +164,24 @@ const MotorScene: React.FC = () => {
       <directionalLight position={[-100, 50, -100]} intensity={0.5} />
       
       {/* Environment for reflections */}
-      <Environment preset="studio" />
+      <Environment preset="studio" background={false} environmentIntensity={envIntensity} />
+      
+      {/* Post-processing effects for Fusion 360 look */}
+      <EffectComposer>
+        <SSAO
+          blendFunction={BlendFunction.MULTIPLY}
+          samples={31}
+          radius={5}
+          intensity={30}
+          luminanceInfluence={0.1}
+          color={new THREE.Color('black')}
+        />
+        <Bloom
+          intensity={0.2}
+          luminanceThreshold={0.9}
+          luminanceSmoothing={0.9}
+        />
+      </EffectComposer>
       
       {/* Grid */}
       {showGrid && (
@@ -157,13 +220,28 @@ const MotorScene: React.FC = () => {
 };
 
 const MotorComponents: React.FC = () => {
-  const { connectedToApi, viewMode, stlMeshes } = useMotorStore();
+  const { viewMode, stlMeshes, connectedToApi } = useMotorStore();
+  const { metalness, roughness } = useUIStore();
   
   // Show point cloud when in pointcloud or hybrid mode
   const showPointCloud = viewMode === 'pointcloud' || viewMode === 'hybrid';
   
   // Show STL when in stl mode
   const showSTL = viewMode === 'stl' && Object.keys(stlMeshes).length > 0;
+  
+  // Material props for stator components
+  const statorMaterialProps = {
+    color: '#7f8c8d',
+    metalness: metalness,
+    roughness: roughness,
+  };
+  
+  // Material props for coil components
+  const coilMaterialProps = {
+    color: '#b87333',
+    metalness: metalness,
+    roughness: roughness,
+  };
   
   // Use API meshes when connected, otherwise use local meshes
   if (connectedToApi) {
@@ -175,11 +253,11 @@ const MotorComponents: React.FC = () => {
         {/* Solid mesh (show in solid or hybrid mode) */}
         {(viewMode === 'solid' || viewMode === 'hybrid') && (
           <>
-            <ApiStatorMesh />
-            <ApiRotorMesh />
+            <ApiStatorMesh materialProps={statorMaterialProps} />
+            <ApiRotorMesh materialProps={statorMaterialProps} />
             <ApiShaftMesh />
             <ApiMagnetsMesh />
-            <ApiCoilsMesh />
+            <ApiCoilsMesh materialProps={coilMaterialProps} />
           </>
         )}
         
@@ -197,11 +275,11 @@ const MotorComponents: React.FC = () => {
       {/* Solid mesh (show in solid or hybrid mode) */}
       {(viewMode === 'solid' || viewMode === 'hybrid') && (
         <>
-          <StatorMesh />
-          <RotorMesh />
+          <StatorMesh materialProps={statorMaterialProps} />
+          <RotorMesh materialProps={statorMaterialProps} />
           <ShaftMesh />
           <MagnetMesh />
-          <WindingsMesh />
+          <WindingsMesh materialProps={coilMaterialProps} />
         </>
       )}
       

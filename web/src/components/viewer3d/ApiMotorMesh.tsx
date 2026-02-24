@@ -1,6 +1,6 @@
 import React, { useMemo, useEffect, useState } from 'react';
 import * as THREE from 'three';
-import { useMotorStore } from '../../stores/motorStore';
+import { useMotorStore, useUIStore } from '../../stores/motorStore';
 
 // Use port 8013 for API
 const API_BASE_URL = 'http://localhost:8013';
@@ -29,11 +29,18 @@ interface CoilsMeshData {
   num_slots?: number;
 }
 
+interface MaterialProps {
+  color: string;
+  metalness: number;
+  roughness: number;
+}
+
 /**
  * Stator mesh that renders geometry from Python API
  */
-export const ApiStatorMesh: React.FC = () => {
+export const ApiStatorMesh: React.FC<{ materialProps?: MaterialProps }> = ({ materialProps }) => {
   const { geometry, connectedToApi } = useMotorStore();
+  const { envIntensity } = useUIStore();
   const [meshData, setMeshData] = useState<MeshData | null>(null);
   
   useEffect(() => {
@@ -56,7 +63,12 @@ export const ApiStatorMesh: React.FC = () => {
   
   return (
     <mesh geometry={statorGeometry} castShadow receiveShadow>
-      <meshStandardMaterial color="#4a5568" metalness={0.8} roughness={0.3} />
+      <meshStandardMaterial 
+        color={materialProps?.color || '#7f8c8d'}
+        metalness={materialProps?.metalness ?? 0.9}
+        roughness={materialProps?.roughness ?? 0.3}
+        envMapIntensity={envIntensity * 1.5} 
+      />
     </mesh>
   );
 };
@@ -64,8 +76,9 @@ export const ApiStatorMesh: React.FC = () => {
 /**
  * Rotor mesh that renders geometry from Python API
  */
-export const ApiRotorMesh: React.FC = () => {
+export const ApiRotorMesh: React.FC<{ materialProps?: MaterialProps }> = ({ materialProps }) => {
   const { geometry, connectedToApi } = useMotorStore();
+  const { envIntensity } = useUIStore();
   const [meshData, setMeshData] = useState<MeshData | null>(null);
   
   useEffect(() => {
@@ -86,7 +99,12 @@ export const ApiRotorMesh: React.FC = () => {
   
   return (
     <mesh geometry={rotorGeometry} castShadow receiveShadow>
-      <meshStandardMaterial color="#3b82f6" metalness={0.7} roughness={0.4} />
+      <meshStandardMaterial 
+        color={materialProps?.color || '#7f8c8d'}
+        metalness={materialProps?.metalness ?? 0.9}
+        roughness={materialProps?.roughness ?? 0.3}
+        envMapIntensity={envIntensity * 1.5} 
+      />
     </mesh>
   );
 };
@@ -96,6 +114,7 @@ export const ApiRotorMesh: React.FC = () => {
  */
 export const ApiShaftMesh: React.FC = () => {
   const { geometry, connectedToApi } = useMotorStore();
+  const { envIntensity } = useUIStore();
   const [meshData, setMeshData] = useState<MeshData | null>(null);
   
   useEffect(() => {
@@ -116,7 +135,7 @@ export const ApiShaftMesh: React.FC = () => {
   
   return (
     <mesh geometry={shaftGeometry} castShadow receiveShadow>
-      <meshStandardMaterial color="#6b7280" metalness={0.9} roughness={0.2} />
+      <meshStandardMaterial color="#505050" metalness={0.95} roughness={0.25} envMapIntensity={envIntensity * 1.5} />
     </mesh>
   );
 };
@@ -126,6 +145,7 @@ export const ApiShaftMesh: React.FC = () => {
  */
 export const ApiMagnetsMesh: React.FC = () => {
   const { geometry, connectedToApi } = useMotorStore();
+  const { envIntensity } = useUIStore();
   const [meshData, setMeshData] = useState<MagnetsMeshData | null>(null);
   
   useEffect(() => {
@@ -158,8 +178,9 @@ export const ApiMagnetsMesh: React.FC = () => {
         <mesh key={poleIndex} geometry={geo} castShadow receiveShadow>
           <meshStandardMaterial 
             color={direction === 'outward' ? '#ef4444' : '#3b82f6'}
-            metalness={0.6} 
-            roughness={0.5} 
+            metalness={0.8} 
+            roughness={0.4}
+            envMapIntensity={envIntensity * 1.5}
           />
         </mesh>
       ))}
@@ -170,8 +191,9 @@ export const ApiMagnetsMesh: React.FC = () => {
 /**
  * Coils/Windings mesh that renders geometry from Python API
  */
-export const ApiCoilsMesh: React.FC = () => {
+export const ApiCoilsMesh: React.FC<{ materialProps?: MaterialProps }> = ({ materialProps }) => {
   const { geometry, connectedToApi } = useMotorStore();
+  const { envIntensity } = useUIStore();
   const [meshData, setMeshData] = useState<CoilsMeshData | null>(null);
   
   useEffect(() => {
@@ -204,9 +226,10 @@ export const ApiCoilsMesh: React.FC = () => {
       {coilGeometries.map(({ geometry: geo, slotIndex, phase }) => (
         <mesh key={`coil-${slotIndex}`} geometry={geo} castShadow receiveShadow>
           <meshStandardMaterial 
-            color={phaseColors[phase] || '#b45309'}
-            metalness={0.9} 
-            roughness={0.2} 
+            color={materialProps?.color || phaseColors[phase] || '#b87333'}
+            metalness={materialProps?.metalness ?? 0.8}
+            roughness={materialProps?.roughness ?? 0.4}
+            envMapIntensity={envIntensity * 1.5}
           />
         </mesh>
       ))}
@@ -400,7 +423,7 @@ function createApiCylinderGeometry(data: MeshData): THREE.BufferGeometry {
     data.stator_width,
     32
   );
-  geometry.rotateX(Math.PI / 2);
+  // No rotation - cylinder default axis is Y which is correct for motor shaft
   return geometry;
 }
 
@@ -427,14 +450,16 @@ function createApiMagnetGeometry(vertices: number[] | number[][]): THREE.BufferG
 // Fallback functions for local geometry
 
 function createLocalStatorGeometry(geometry: any): THREE.BufferGeometry {
-  const shape = new THREE.Shape();
-  const outerR = geometry.stator_outer_radius!;
-  const innerR = geometry.stator_inner_radius!;
-  const numSlots = geometry.num_slots!;
-  const slotHeight = geometry.slot_height;
-  const slotWidth = geometry.slot_width || geometry.tooth_width * 0.8;
+  // Handle API geometry parameters (stator_diameter, etc.)
+  const outerR = (geometry.stator_outer_radius) || 
+                 (geometry.stator_diameter ? geometry.stator_diameter / 2 : 100);
+  const innerR = (geometry.stator_inner_radius) || 
+                (outerR - (geometry.core_thickness || 20) - (geometry.slot_height || 16));
+  const numSlots = geometry.num_slots || 36;
+  const slotHeight = geometry.slot_height || 16;
+  const slotWidth = geometry.slot_width || geometry.tooth_width * 0.8 || 4.5;
   
-  shape.absarc(0, 0, outerR, 0, Math.PI * 2, false);
+  const shape = new THREE.Shape();
   
   const innerHole = new THREE.Path();
   const slotAngle = (2 * Math.PI) / numSlots;
@@ -469,76 +494,82 @@ function createLocalStatorGeometry(geometry: any): THREE.BufferGeometry {
   
   shape.holes.push(innerHole);
   
-  const extrudeSettings = { depth: geometry.stator_width, bevelEnabled: false };
+  const extrudeSettings = { depth: (geometry.core_thickness || 20), bevelEnabled: false };
   const extruded = new THREE.ExtrudeGeometry(shape, extrudeSettings);
-  extruded.translate(0, 0, -geometry.stator_width / 2);
+  extruded.translate(0, 0, -(geometry.core_thickness || 20) / 2);
   
   return extruded;
 }
 
 function createLocalRotorGeometry(geometry: any): THREE.BufferGeometry {
-  const shape = new THREE.Shape();
-  const outerR = geometry.rotor_outer_radius! - geometry.magnet_height;
-  const innerR = geometry.shaft_radius!;
+  // Handle API geometry parameters
+  const outerR = (geometry.rotor_outer_radius) || 
+                 (geometry.stator_inner_radius) ||
+                 ((geometry.stator_diameter ? geometry.stator_diameter / 2 : 100) - (geometry.core_thickness || 20) - (geometry.slot_height || 16));
+  const innerR = (geometry.shaft_radius) || 20;
+  const coreThickness = geometry.core_thickness || 20;
   
+  const shape = new THREE.Shape();
   shape.absarc(0, 0, outerR, 0, Math.PI * 2, false);
   
   const hole = new THREE.Path();
   hole.absarc(0, 0, innerR, 0, Math.PI * 2, true);
   shape.holes.push(hole);
   
-  const extrudeSettings = { depth: geometry.stator_width, bevelEnabled: false };
+  const extrudeSettings = { depth: coreThickness, bevelEnabled: false };
   const extruded = new THREE.ExtrudeGeometry(shape, extrudeSettings);
-  extruded.translate(0, 0, -geometry.stator_width / 2);
+  extruded.translate(0, 0, -coreThickness / 2);
   
   return extruded;
 }
 
 function createLocalShaftGeometry(geometry: any): THREE.BufferGeometry {
-  const geometry_ = new THREE.CylinderGeometry(
-    geometry.shaft_radius!,
-    geometry.shaft_radius!,
-    geometry.stator_width,
-    32
-  );
-  geometry_.rotateX(Math.PI / 2);
-  return geometry_;
+  // Handle API geometry parameters
+  const radius = (geometry.shaft_radius) || 
+                (geometry.rotor_inner_radius) || 20;
+  const length = geometry.core_thickness || 50;
+  
+  const geo = new THREE.CylinderGeometry(radius, radius, length, 32);
+  // No rotation - cylinder default axis is Y which is correct for motor shaft
+  return geo;
 }
 
 function createLocalMagnetsGeometry(geometry: any): { geometry: THREE.BufferGeometry; poleIndex: number; direction: string }[] {
-  const innerR = geometry.rotor_outer_radius! - geometry.magnet_height;
-  const outerR = geometry.rotor_outer_radius!;
-  const numPoles = geometry.num_poles!;
-  const poleAngle = (2 * Math.PI) / numPoles;
+  // Handle API geometry parameters
+  const rotorOuterR = (geometry.rotor_outer_radius) || 
+                     ((geometry.stator_diameter ? geometry.stator_diameter / 2 : 100) - (geometry.core_thickness || 20) - (geometry.slot_height || 16) - (geometry.air_gap || 2));
+  const magnetHeight = geometry.magnet_height || 5;
+  const innerR = rotorOuterR - magnetHeight;
+  const numPoles = geometry.num_poles || 8;
   
-  const geometries: { geometry: THREE.BufferGeometry; poleIndex: number; direction: string }[] = [];
+  const magnets: { geometry: THREE.BufferGeometry; poleIndex: number; direction: string }[] = [];
   
   for (let i = 0; i < numPoles; i++) {
-    const centerAngle = i * poleAngle;
-    const halfAngle = poleAngle * 0.4;
+    const angle = (i * 2 * Math.PI) / numPoles;
+    const poleAngle = (2 * Math.PI) / numPoles;
     
-    const shape = new THREE.Shape();
+    // Create a simple magnet as a box
+    const width = (2 * Math.PI * innerR) / numPoles * 0.8;
+    const magnetGeo = new THREE.BoxGeometry(width, magnetHeight, geometry.core_thickness || 20);
     
-    // Outer arc
-    shape.absarc(0, 0, outerR, centerAngle - halfAngle, centerAngle + halfAngle, false);
+    // Position and rotate the magnet
+    magnetGeo.translate(
+      Math.cos(angle + poleAngle / 2) * (innerR + magnetHeight / 2),
+      Math.sin(angle + poleAngle / 2) * (innerR + magnetHeight / 2),
+      0
+    );
     
-    // Inner arc (reverse)
-    const hole = new THREE.Path();
-    hole.absarc(0, 0, innerR, centerAngle + halfAngle, centerAngle - halfAngle, true);
-    shape.holes.push(hole);
+    // Rotate around Z axis
+    magnetGeo.rotateZ(angle + poleAngle / 2);
     
-    const extrudeSettings = { depth: geometry.stator_width, bevelEnabled: false };
-    const extruded = new THREE.ExtrudeGeometry(shape, extrudeSettings);
-    extruded.translate(0, 0, -geometry.stator_width / 2);
-    
-    geometries.push({
-      geometry: extruded,
+    magnets.push({
+      geometry: magnetGeo,
       poleIndex: i,
-      direction: i % 2 === 0 ? 'outward' : 'inward',
+      direction: i % 2 === 0 ? 'outward' : 'inward'
     });
   }
   
-  return geometries;
+  return magnets;
 }
 
 export default ApiStatorMesh;

@@ -41,10 +41,6 @@ geometry:
   magnet_fill_radius: 1.6              # magnet fillet radius 
   magnet_up_gap: 0.5                   # magnet cut up gap
   magnet_down_height: 2                # magnet down height 
-
-  # Shaft
-  shaft_diameter: 30                   # shaft diameterm
-
   
 
 # ============================================
@@ -60,10 +56,7 @@ derived_params:
   angle_slot: "360 / num_slots"
   angle_pole: "360 / num_poles"
   slot_width: "wire_width + 2 * wire_spacing_x + 2 * insulation_thickness"
-  slot_pitch: "2 * 3.14159 / num_slots"
-  pole_pitch: "2 * 3.14159 / num_poles"
   shaft_inner_radius: "rotor_inner_radius - shaft_height"              # shaft inner radius
-  shaft_radius: "shaft_diameter / 2"
 
 # ============================================
 # PARAMETER SCHEMA (metadata for UI generation)

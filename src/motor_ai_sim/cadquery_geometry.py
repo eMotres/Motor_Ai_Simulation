@@ -252,8 +252,9 @@ class CadQueryMotor:
         slot_h = slot_height + core_h # Use slot_height directly for cut depth
         slot_x = tooth_width / 2
         slot_y = outer_r - core_h
+        half_slots = num_slots // 2
         
-        slot_angle = 360.0 / num_slots  # Fixed: use num_slots, not half_slots
+        slot_angle = 360.0 / half_slots  # Fixed: use num_slots, not half_slots
         
         # Create stator as a solid ring first
         stator = (
@@ -265,7 +266,7 @@ class CadQueryMotor:
         
         # Create slot cutouts using rotate/translate approach instead of polarArray
         # This is more reliable in CadQuery 2.x
-        for i in range(num_slots):
+        for i in range(half_slots):
             angle = i * slot_angle
             # Create positive side slot 
             slot = (
@@ -311,30 +312,33 @@ class CadQueryMotor:
     def _create_magnets(self, cq) -> List[Any]:
         """Create rotor magnets."""
         p = self.parameters
-        rotor_iner_r = p['rotor_iner_radius']
+        rotor_inner_r = p['rotor_inner_radius']
         rotor_outer_r = p['rotor_outer_radius']
         num_poles = int(p['num_poles'])
         width = p['stator_width']
 
         mag_h = p['magnet_height']                  # magnet height
-        rotor_house_h = p['rotor_house_height']              # rotor housing thickness
-        shaft_h = p['shaft_height']                      # shaft height (radial length)
-        mag_fill_down = p['magnet_fill_down']                # down fill ratio of the magnet 
-        mag_fill_up = p['magnet_fill_up']                 # up fill ratio of the magnet 
-        mag_fill_radius = p['magnet_fill_radius']              # magnet fillet radius 
-        mag_up_gap = p['magnet_up_gap']                   # magnet cut up gap
-        mag_down_h = p['magnet_down_height']                # magnet down height 
+        rotor_house_h = p.get('rotor_house_height', 2.0)     # rotor housing thickness
+        mag_fill_down = p.get('magnet_fill_down', 0.8)       # down fill ratio of the magnet 
+        mag_fill_up = p.get('magnet_fill_up', 0.8)           # up fill ratio of the magnet 
+        mag_fill_radius = p.get('magnet_fill_radius', 1.0)   # magnet fillet radius 
+        mag_up_gap = p.get('magnet_up_gap', 1.0)             # magnet cut up gap
+        mag_down_h = p.get('magnet_down_height', 5.0)        # magnet down height 
         pole_angle = 360.0 / num_poles
-        magnet_r = rotor_iner_r + rotor_house_h
+        magnet_r = rotor_inner_r + rotor_house_h
         
         magnets = []
         
-        p1 = (magnet_r*sin(pole_angle*mag_fill_down/2), magnet_r*cos(pole_angle*mag_fill_down/2))      
-        p2 = ((magnet_r + mag_down_h)*sin(pole_angle*mag_fill_down/2), (magnet_r + mag_down_h)*cos(pole_angle*mag_fill_down/2))      
-        p3 = ((rotor_outer_r - mag_up_gap)*sin(pole_angle*mag_fill_up/2), (rotor_outer_r - mag_up_gap)*cos(pole_angle*mag_fill_up/2))    
-        p4 = (-(rotor_outer_r - mag_up_gap)*sin(pole_angle*mag_fill_up/2), (rotor_outer_r - mag_up_gap)*cos(pole_angle*mag_fill_up/2))           
-        p5 = (-(magnet_r + mag_down_h)*sin(pole_angle*mag_fill_down/2), (magnet_r + mag_down_h)*cos(pole_angle*mag_fill_down/2))       
-        p6 = (-magnet_r*sin(pole_angle*mag_fill_down/2), magnet_r*cos(pole_angle*mag_fill_down/2))      
+        # Calculate angles in radians for math functions
+        angle_down = radians(pole_angle * mag_fill_down / 2)
+        angle_up = radians(pole_angle * mag_fill_up / 2)
+        
+        p1 = (magnet_r * sin(angle_down), magnet_r * cos(angle_down))      
+        p2 = ((magnet_r + mag_down_h) * sin(angle_down), (magnet_r + mag_down_h) * cos(angle_down))      
+        p3 = ((rotor_outer_r - mag_up_gap) * sin(angle_up), (rotor_outer_r - mag_up_gap) * cos(angle_up))    
+        p4 = (-(rotor_outer_r - mag_up_gap) * sin(angle_up), (rotor_outer_r - mag_up_gap) * cos(angle_up))           
+        p5 = (-(magnet_r + mag_down_h) * sin(angle_down), (magnet_r + mag_down_h) * cos(angle_down))       
+        p6 = (-magnet_r * sin(angle_down), magnet_r * cos(angle_down))      
         
         for i in range(num_poles):
             angle = i * pole_angle
@@ -416,7 +420,7 @@ class CadQueryMotor:
     
         coils = [] # Renamed from final_coils
     
-        for i in range(1):
+        for i in range(half_slots):
             angle = i * slot_angle
             wires = [] # Renamed from slot_wires
         
@@ -437,7 +441,7 @@ class CadQueryMotor:
                     (-right_x, current_y ),          
                     (-right_x - wire_w, current_y ),   
                     (-right_x - wire_w, current_y - wire_h),            
-                    (right_x, current_y - wire_h)                    
+                    (-right_x, current_y - wire_h)                    
                 ]
             
                 # Create 3D geometry via extrusion along Z axis
@@ -449,14 +453,14 @@ class CadQueryMotor:
                 wires.append(right_wire.rotate((0,0,0), (0,0,1), angle))
                 wires.append(left_wire.rotate((0,0,0), (0,0,1), angle))
             
-        # Combine all wires in the current slot into a single object for UI performance
+        # Instead of slow O(N^2) boolean union, create a Compound for fast export
             if wires:
-                combined_slot_stack = wires[0]
-                for w in wires[1:]:
-                    if w is not None:
-                        combined_slot_stack = combined_slot_stack.union(w)
-                coils.append(combined_slot_stack)
-            
+                valid_wires = [w for w in wires if w is not None]
+                if valid_wires:
+                    # Use Compound to group wires without expensive boolean operations
+                    compound = cq.Compound.makeCompound([w.val() for w in valid_wires])
+                    coils.append(compound)
+        
         return coils    
     
     def export_stl(self, output_dir: str, tolerance: float = 0.1) -> Dict[str, str]:

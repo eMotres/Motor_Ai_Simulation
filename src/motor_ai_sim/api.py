@@ -367,31 +367,20 @@ def get_geometry_mesh():
     """Get mesh data for web visualization.
     
     Returns vertices and faces for each motor component.
-    This allows the web to render the exact geometry from motor_geometry.py.
+    Uses the real CadQuery geometry engine to generate accurate mesh data.
     """
     try:
+        from motor_ai_sim.cadquery_geometry import CadQueryMotor
+        
         params = get_current_geometry()
         
-        # Generate mesh data for each component
-        meshes = {}
+        # Create CadQuery motor and build geometry
+        motor = CadQueryMotor()
+        motor.set_parameters(params.to_dict())
+        motor.build_all()
         
-        # 1. Stator Core (annulus with slots)
-        meshes['stator_core'] = _generate_stator_mesh(params)
-        
-        # 2. Rotor Core (annulus)
-        meshes['rotor_core'] = _generate_rotor_mesh(params)
-        
-        # 3. Shaft (cylinder)
-        meshes['shaft'] = _generate_shaft_mesh(params)
-        
-        # 4. Magnets
-        meshes['magnets'] = _generate_magnets_mesh(params)
-        
-        # 5. Coils/Windings (copper in slots)
-        meshes['coils'] = _generate_coils_mesh(params)
-        
-        # 6. Air gap (for reference)
-        meshes['air_gap'] = _generate_airgap_mesh(params)
+        # Get real mesh data from CadQuery
+        meshes = motor.get_all_mesh_data()
         
         return meshes
     except Exception as e:

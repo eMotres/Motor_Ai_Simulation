@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Dict, Optional
 
 import numpy as np
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -900,93 +900,132 @@ def _generate_magnets_mesh(params: MotorGeometryParams) -> Dict:
 
 
 def _generate_coils_mesh(params: MotorGeometryParams) -> Dict:
-    """Generate coils/windings mesh with proper triangulation."""
-    import numpy as np
+    """Generate coils/windings mesh from CadQuery geometry.
     
-    insulation = params.insulation_thickness
-    coil_width = params.slot_width - 2 * insulation
-    coil_height = params.slot_height - insulation
-    
-    outer_r = params.stator_outer_radius - params.core_thickness - insulation
-    inner_r = outer_r - coil_height
-    
-    num_slots = params.num_slots
-    stator_width = params.stator_width
-    
-    all_vertices = []
-    all_faces = []
-    
-    slot_angle = 2 * np.pi / num_slots
-    n_arc = 4
-    
-    for i in range(num_slots):
-        center_angle = i * slot_angle
-        half_angular_width = (coil_width / 2) / params.stator_outer_radius
+    Uses the high-fidelity hairpin winding geometry from CadQueryMotor.
+    """
+    try:
+        from motor_ai_sim.cadquery_geometry import CadQueryMotor
+        import tempfile
+        import os
+        import trimesh
         
-        vertices = []
-        faces = []
+        # Create CadQuery motor and generate coils
+        motor = CadQueryMotor()
+        motor.set_parameters(params.__dict__)
+        motor.build_all()
         
-        # Outer arc bottom
-        for j in range(n_arc):
-            angle = center_angle - half_angular_width + 2 * half_angular_width * j / (n_arc - 1)
-            vertices.append([outer_r * np.cos(angle), outer_r * np.sin(angle), -stator_width/2])
+        # Get the coils part
+        if 'coils' in motor.parts and motor.parts['coils'] is not None:
+            with tempfile.NamedTemporaryFile(suffix='.stl', delete=False) as tmp:
+                tmp_path = tmp.name
+            
+            try:
+                from cadquery import exporters
+                exporters.export(motor.parts['coils'], tmp_path, exportType='STL', tolerance=0.1)
+                mesh = trimesh.load_mesh(tmp_path)
+                
+                return {
+                    'vertices': mesh.vertices.tolist(),
+                    'faces': mesh.faces.tolist(),
+                }
+            finally:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
         
-        # Outer arc top
-        outer_top_start = len(vertices)
-        for j in range(n_arc):
-            angle = center_angle - half_angular_width + 2 * half_angular_width * j / (n_arc - 1)
-            vertices.append([outer_r * np.cos(angle), outer_r * np.sin(angle), stator_width/2])
+        # Fallback: return empty mesh
+        return {
+            'vertices': [],
+            'faces': [],
+        }
+    except Exception as e:
+        # If CadQuery fails, fall back to simple wedge geometry
+        import numpy as np
         
-        # Inner arc bottom
-        inner_bottom_start = len(vertices)
-        for j in range(n_arc):
-            angle = center_angle + half_angular_width - 2 * half_angular_width * j / (n_arc - 1)
-            vertices.append([inner_r * np.cos(angle), inner_r * np.sin(angle), -stator_width/2])
+        insulation = params.insulation_thickness
+        coil_width = params.slot_width - 2 * insulation
+        coil_height = params.slot_height - insulation
         
-        # Inner arc top
-        inner_top_start = len(vertices)
-        for j in range(n_arc):
-            angle = center_angle + half_angular_width - 2 * half_angular_width * j / (n_arc - 1)
-            vertices.append([inner_r * np.cos(angle), inner_r * np.sin(angle), stator_width/2])
+        outer_r = params.stator_outer_radius - params.core_thickness - insulation
+        inner_r = outer_r - coil_height
         
-        # Side faces - outer
-        for j in range(n_arc - 1):
-            faces.append([j, outer_top_start + j, outer_top_start + j + 1])
-            faces.append([j, outer_top_start + j + 1, j + 1])
+        num_slots = params.num_slots
+        stator_width = params.stator_width
         
-        # Side faces - inner
-        for j in range(n_arc - 1):
-            idx = inner_bottom_start + j
-            faces.append([idx, idx + 1, inner_top_start + j + 1])
-            faces.append([idx, inner_top_start + j + 1, inner_top_start + j])
+        all_vertices = []
+        all_faces = []
         
-        # End caps - bottom
-        center_bottom = len(vertices)
-        vertices.append([(inner_r + outer_r)/2 * np.cos(center_angle - half_angular_width), 
-                        (inner_r + outer_r)/2 * np.sin(center_angle - half_angular_width), 
-                        -stator_width/2])
-        for j in range(n_arc - 1):
-            faces.append([center_bottom, j, j + 1])
+        slot_angle = 2 * np.pi / num_slots
+        n_arc = 4
         
-        # End caps - top
-        center_top = len(vertices)
-        vertices.append([(inner_r + outer_r)/2 * np.cos(center_angle - half_angular_width), 
-                        (inner_r + outer_r)/2 * np.sin(center_angle - half_angular_width), 
-                        stator_width/2])
-        for j in range(n_arc - 1):
-            faces.append([center_top, outer_top_start + j + 1, outer_top_start + j])
+        for i in range(num_slots):
+            center_angle = i * slot_angle
+            half_angular_width = (coil_width / 2) / params.stator_outer_radius
+            
+            vertices = []
+            faces = []
+            
+            # Outer arc bottom
+            for j in range(n_arc):
+                angle = center_angle - half_angular_width + 2 * half_angular_width * j / (n_arc - 1)
+                vertices.append([outer_r * np.cos(angle), outer_r * np.sin(angle), -stator_width/2])
+            
+            # Outer arc top
+            outer_top_start = len(vertices)
+            for j in range(n_arc):
+                angle = center_angle - half_angular_width + 2 * half_angular_width * j / (n_arc - 1)
+                vertices.append([outer_r * np.cos(angle), outer_r * np.sin(angle), stator_width/2])
+            
+            # Inner arc bottom
+            inner_bottom_start = len(vertices)
+            for j in range(n_arc):
+                angle = center_angle + half_angular_width - 2 * half_angular_width * j / (n_arc - 1)
+                vertices.append([inner_r * np.cos(angle), inner_r * np.sin(angle), -stator_width/2])
+            
+            # Inner arc top
+            inner_top_start = len(vertices)
+            for j in range(n_arc):
+                angle = center_angle + half_angular_width - 2 * half_angular_width * j / (n_arc - 1)
+                vertices.append([inner_r * np.cos(angle), inner_r * np.sin(angle), stator_width/2])
+            
+            # Side faces - outer
+            for j in range(n_arc - 1):
+                faces.append([j, outer_top_start + j, outer_top_start + j + 1])
+                faces.append([j, outer_top_start + j + 1, j + 1])
+            
+            # Side faces - inner
+            for j in range(n_arc - 1):
+                idx = inner_bottom_start + j
+                faces.append([idx, idx + 1, inner_top_start + j + 1])
+                faces.append([idx, inner_top_start + j + 1, inner_top_start + j])
+            
+            # End caps - bottom
+            center_bottom = len(vertices)
+            vertices.append([(inner_r + outer_r)/2 * np.cos(center_angle - half_angular_width), 
+                            (inner_r + outer_r)/2 * np.sin(center_angle - half_angular_width), 
+                            -stator_width/2])
+            for j in range(n_arc - 1):
+                faces.append([center_bottom, j, j + 1])
+            
+            # End caps - top
+            center_top = len(vertices)
+            vertices.append([(inner_r + outer_r)/2 * np.cos(center_angle - half_angular_width), 
+                            (inner_r + outer_r)/2 * np.sin(center_angle - half_angular_width), 
+                            stator_width/2])
+            for j in range(n_arc - 1):
+                faces.append([center_top, outer_top_start + j + 1, outer_top_start + j])
+            
+            # Offset and add to all
+            offset = len(all_vertices)
+            for v in vertices:
+                all_vertices.append(v)
+            for f in faces:
+                all_faces.append([f[0] + offset, f[1] + offset, f[2] + offset])
         
-        # Offset and add to all
-        offset = len(all_vertices)
-        for v in vertices:
-            all_vertices.append(v)
-        for f in faces:
-            all_faces.append([f[0] + offset, f[1] + offset, f[2] + offset])
-    
-    return {
-        "vertices": all_vertices,
-        "faces": all_faces,
-    }
+        return {
+            'vertices': all_vertices,
+            'faces': all_faces,
+        }
 
 
 def _generate_airgap_mesh(params: MotorGeometryParams) -> Dict:
@@ -1049,7 +1088,7 @@ def clear_pipeline_cache():
 
 
 @app.post("/api/pipeline/generate")
-def generate_geometry_pipeline(params: Dict):
+def generate_geometry_pipeline(params: Dict = Body(default={})):
     """Run the full pipeline: UI params → CadQuery → STL → Modulus SDF.
     
     This is the main orchestrator endpoint that:

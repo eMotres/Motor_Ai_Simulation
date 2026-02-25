@@ -27,12 +27,25 @@ geometry:
   wire_height: 0.6                     # height of the wire in the slot
   wire_spacing_x: 0.1                  # spacing between wires in x direction
   wire_spacing_y: 0.13                 # spacing between wires in y direction
-  num_wires_per_slot: 15               # number of wires per slot
+  num_wires_per_slot: 10               # number of wires per slot
   slot_hs: 0.2                         # slot opening height
+  # Winding
+  winding_type: "PMSM"                 # winding type
 
   # Rotor
   magnet_height: 13.8                  # magnet height
   rotor_house_height: 1.2              # rotor housing thickness
+  shaft_height: 3                      # shaft height (radial length)
+  magnet_fill_down: 0.9                # down fill ratio of the magnet 
+  magnet_fill_up: 0.46                 # up fill ratio of the magnet 
+  magnet_fill_radius: 1.6              # magnet fillet radius 
+  magnet_up_gap: 0.5                   # magnet cut up gap
+  magnet_down_height: 2                # magnet down height 
+
+  # Shaft
+  shaft_diameter: 30                   # shaft diameterm
+
+  
 
 # ============================================
 # DERIVED PARAMETERS (computed from geometry)
@@ -49,6 +62,8 @@ derived_params:
   slot_width: "wire_width + 2 * wire_spacing_x + 2 * insulation_thickness"
   slot_pitch: "2 * 3.14159 / num_slots"
   pole_pitch: "2 * 3.14159 / num_poles"
+  shaft_inner_radius: "rotor_inner_radius - shaft_height"              # shaft inner radius
+  shaft_radius: "shaft_diameter / 2"
 
 # ============================================
 # PARAMETER SCHEMA (metadata for UI generation)
@@ -236,6 +251,84 @@ geometry_schema:
     group: "rotor"
     description: "Thickness of rotor housing"
 
+  shaft_height:
+    label: "Shaft Height"
+    unit: "mm"
+    type: "float"
+    min: 0.5
+    max: 5
+    step: 0.5
+    group: "shaft"
+    description: "Height of the shaft"
+
+  magnet_fill_down:
+    label: "Magnet Fill Down"
+    unit: ""
+    type: "float"
+    min: 0.1
+    max: 1.0
+    step: 0.01
+    group: "rotor"
+    description: "Down fill ratio of the magnet"
+
+  magnet_fill_up:
+    label: "Magnet Fill Up"
+    unit: ""
+    type: "float"
+    min: 0.1
+    max: 1.0
+    step: 0.01
+    group: "rotor"
+    description: "Up fill ratio of the magnet"
+
+  magnet_fill_radius:
+    label: "Magnet Fillet Radius"
+    unit: "mm"
+    type: "float"
+    min: 0.1
+    max: 5
+    step: 0.1
+    group: "rotor"
+    description: "Magnet fillet radius"
+
+  magnet_up_gap:
+    label: "Magnet Up Gap"
+    unit: "mm"
+    type: "float"
+    min: 0.1
+    max: 2
+    step: 0.1
+    group: "rotor"
+    description: "Magnet cut up gap"
+
+  magnet_down_height:
+    label: "Magnet Down Height"
+    unit: "mm"
+    type: "float"
+    min: 0.5
+    max: 10
+    step: 0.1
+    group: "rotor"
+    description: "Magnet down height"
+
+  shaft_diameter:
+    label: "Shaft Diameter"
+    unit: "mm"
+    type: "float"
+    min: 5
+    max: 100
+    step: 1
+    group: "shaft"
+    description: "Shaft diameter"
+
+  winding_type:
+    label: "Winding Type"
+    unit: ""
+    type: "string"
+    options: ["PMSM", "BLDC", "SRM"]
+    group: "winding"
+    description: "Type of winding configuration"
+
 # ============================================
 # GROUP DEFINITIONS (for UI organization)
 # ============================================
@@ -255,6 +348,9 @@ parameter_groups:
   rotor:
     label: "Rotor Parameters"
     order: 5
+  shaft:
+    label: "Shaft"
+    order: 6
 
 # ============================================
 # MESH GENERATION PARAMETERS

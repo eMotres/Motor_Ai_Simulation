@@ -86,7 +86,16 @@ class MotorGeometryParams:
         """
         # Store all geometry parameters as attributes (dynamic!)
         for key, value in geometry_config.items():
-            setattr(self, key, float(value) if value is not None else 0.0)
+            # Only convert numeric values to float; keep strings as-is
+            if isinstance(value, bool):
+                setattr(self, key, value)
+            elif isinstance(value, (int, float)):
+                setattr(self, key, float(value) if value is not None else 0.0)
+            elif isinstance(value, str):
+                # Keep string values as-is (e.g., winding_type: "PMSM")
+                setattr(self, key, value)
+            else:
+                setattr(self, key, value)
         
         # Store derived parameter formulas
         self._derived_formulas = derived_config or {}
@@ -387,59 +396,63 @@ class MotorGeometry2D:
 
         return all_slots
 
-    def _create_coils(self) -> "csg.CSGObject":
-        """Create combined coil/winding geometry using CSG.
-
-        Creates copper coils that fill the slots. Each slot contains windings
-        that are slightly smaller than the slot to account for insulation.
-
-        Returns:
-            Combined CSG object representing all coils/windings
-        """
-        # Coil dimensions are slightly smaller than slot to account for insulation
-        insulation = self.params.insulation_thickness
-        coil_width = self.params.slot_width - 2 * insulation
-        coil_height = self.params.slot_height - insulation  # insulation at bottom only
-
-        # Create a single coil as a rectangle (slightly smaller than slot)
-        # Position similar to slots but with insulation offset
-        single_coil_r = Rectangle(
-            point_1=(
-                self.params.tooth_width + insulation,
-                self.params.stator_outer_radius - self.params.core_thickness - insulation
-            ),
-            point_2=(
-                self.params.tooth_width + insulation + coil_width,
-                self.params.stator_outer_radius - self.params.core_thickness - coil_height - insulation
-            )
+    def _create_coils(self, cq) -> List[Any]:
+        """Create robust concentrated coils wound around stator teeth."""
+        p = self.parameters
+        
+        outer_r = p['stator_outer_radius']
+        inner_r = p['stator_inner_radius']
+        core_h = p['core_thickness']
+        stator_w = p['stator_width']
+        num_slots = int(p['num_slots'])
+        tooth_width = p['tooth_width']
+        wire_w = p['wire_width']
+        ins_w = p['insulation_thickness']
+        
+        # Tooth dimensions along the Y-axis
+        tooth_base_y = outer_r - core_h
+        tooth_tip_y = inner_r
+        tooth_length = tooth_base_y - tooth_tip_y
+        
+        # Coil dimensions
+        # Leave a 1.0 mm gap at the tip and base to avoid overlapping with rotor/back-iron
+        coil_len_y = tooth_length - 2.0 
+        coil_center_y = tooth_tip_y + 1.0 + coil_len_y / 2.0
+        
+        # X and Z dimensions (outer bounds of the coil)
+        outer_x = tooth_width + 2 * wire_w
+        outer_z = stator_w + 2 * wire_w + 4.0 # Overhang extending past stator width
+        
+        # Inner hole dimensions (slightly larger than tooth + insulation)
+        inner_x = tooth_width + 2 * ins_w + 0.2
+        inner_z = stator_w + 2 * ins_w + 0.2
+        
+        coils = []
+        slot_angle = 360.0 / num_slots
+        
+        # Create the base coil centered at origin (hollow rectangular block)
+        base_coil = (
+            cq.Workplane("XY")
+            .box(outer_x, coil_len_y, outer_z)
+            .cut(cq.Workplane("XY").box(inner_x, coil_len_y + 5.0, inner_z))
         )
-        single_coil_l = Rectangle(
-            point_1=(
-                -self.params.tooth_width - insulation - coil_width,
-                self.params.stator_outer_radius - self.params.core_thickness - insulation
-            ),
-            point_2=(
-                -self.params.tooth_width - insulation,
-                self.params.stator_outer_radius - self.params.core_thickness - coil_height - insulation
-            )
-        )
-
-        # Repeat the coils around the center for all slots
-        all_coils = single_coil_r.repeat(
-            n=self.params.num_slots,
-            angle=self.params.angle_slot,
-            center=(0.0, 0.0),
-            mode="rotate"
-        )
-        all_coils = all_coils + single_coil_l.repeat(
-            n=self.params.num_slots,
-            angle=self.params.angle_slot,
-            center=(0.0, 0.0),
-            mode="rotate"
-        )
-
-        return all_coils
-
+        
+        # Fillet the outer edges to simulate a wound wire bundle
+        try:
+            base_coil = base_coil.edges("|Y").fillet(wire_w * 0.8)
+        except:
+            pass # Ignore if filleting fails due to geometry constraints
+            
+        # Move the coil to the position of the first tooth
+        base_coil = base_coil.translate((0, coil_center_y, 0))
+        
+        # Clone and rotate for each slot
+        for i in range(num_slots):
+            angle = i * slot_angle
+            coil = base_coil.rotate((0, 0, 0), (0, 0, 1), angle)
+            coils.append(coil)
+            
+        return coils
     def _create_magnets(self) -> "csg.CSGObject":
         """Create combined magnet geometry using CSG.
 

@@ -16,7 +16,8 @@ import json
 import hashlib
 from pathlib import Path
 from typing import Dict, Optional, List, Tuple, Any
-import math
+from math import sin, cos, radians
+#import math
 
 # CadQuery imports - try to import lazily
 HAS_CADQUERY = False
@@ -169,13 +170,15 @@ class CadQueryMotor:
             'magnet_width': 8.0,
             'magnet_height': 5.0,
             'shaft_radius': 15.0,
+            'shaft_inner_radius': 5.0,  # inner hole radius for shaft
             'air_gap': 2.0,
-            'wire_width': 2.0,
-            'wire_height': 1.5,
-            'wire_spacing_x': 0.5,
-            'wire_spacing_y': 0.5,
-            'insulation_thickness': 0.3,
+            'wire_width': 4.0,
+            'wire_height': 0.6,
+            'wire_spacing_x': 0.1,
+            'wire_spacing_y': 0.13,
+            'insulation_thickness': 0.15,
             'slot_hs': 0.2,  # slot opening height ratio
+            'num_wires_per_slot': 10,  # number of wires stacked vertically
         }
     
     def set_parameters(self, params: Dict) -> None:
@@ -196,32 +199,40 @@ class CadQueryMotor:
         return hashlib.sha256(param_str.encode()).hexdigest()[:16]
     
     def build_all(self) -> Dict:
-        """Build all motor components."""
+        """
+        Build all components. 
+        Rotor has cavities, magnets are separate, and coils are separate per slot.
+        """
         if not _import_cadquery():
-            raise RuntimeError("CadQuery is not available")
+            raise RuntimeError("CadQuery not found")
         
         import cadquery as cq
-        from cadquery import exporters
         
-        p = self.parameters
-        
-        # Create stator
+        # 1. Stator and Shaft
         self.parts['stator_core'] = self._create_stator(cq)
-        self.parts['rotor_core'] = self._create_rotor(cq)
         self.parts['shaft'] = self._create_shaft(cq)
         
-        # Create magnets
-        magnets = self._create_magnets(cq)
-        for i, magnet in enumerate(magnets):
-            self.parts[f'magnet_{i}'] = magnet
-            
-        # Create coils
-        coils = self._create_coils(cq)
-        for i, coil in enumerate(coils):
-            self.parts[f'coil_{i}'] = coil
+        # 2. Magnets and Rotor Core with Cavities
+        magnets_list = self._create_magnets(cq)
+        rotor_solid = self._create_rotor(cq)
+        
+        for i, magnet in enumerate(magnets_list):
+            if magnet is not None:
+                rotor_solid = rotor_solid.cut(magnet) # Cut hole in rotor
+                self.parts[f'magnet_{i}'] = magnet    # Keep magnet separate
+        
+        self.parts['rotor_core'] = rotor_solid
+        
+        # 3. Individual Coils (one object per slot)
+        try:
+            coils_list = self._create_coils(cq)
+            for i, coil_stack in enumerate(coils_list):
+                self.parts[f'coil_{i}'] = coil_stack
+        except Exception as e:
+            print(f"Failed to build coils: {e}")
             
         return self.parts
-    
+        
     def _create_stator(self, cq) -> Any:
         """Create stator with radial slots/teeth."""
         import math
@@ -279,7 +290,68 @@ class CadQueryMotor:
             stator = stator.cut(slot_neg)
         
         return stator
+        
+    def _create_shaft(self, cq) -> Any:
+        """Create motor shaft."""
+        p = self.parameters
+        
+        shaft_r = p['rotor_inner_radius']
+        shaft_in = p['shaft_inner_radius']
+        length = p['stator_width'] 
+        
+        shaft = (
+            cq.Workplane("XY")
+            .circle(shaft_r)
+            .circle(shaft_in)
+            .extrude(length)
+        )
+        
+        return shaft
     
+    def _create_magnets(self, cq) -> List[Any]:
+        """Create rotor magnets."""
+        p = self.parameters
+        rotor_iner_r = p['rotor_iner_radius']
+        rotor_outer_r = p['rotor_outer_radius']
+        num_poles = int(p['num_poles'])
+        width = p['stator_width']
+
+        mag_h = p['magnet_height']                  # magnet height
+        rotor_house_h = p['rotor_house_height']              # rotor housing thickness
+        shaft_h = p['shaft_height']                      # shaft height (radial length)
+        mag_fill_down = p['magnet_fill_down']                # down fill ratio of the magnet 
+        mag_fill_up = p['magnet_fill_up']                 # up fill ratio of the magnet 
+        mag_fill_radius = p['magnet_fill_radius']              # magnet fillet radius 
+        mag_up_gap = p['magnet_up_gap']                   # magnet cut up gap
+        mag_down_h = p['magnet_down_height']                # magnet down height 
+        pole_angle = 360.0 / num_poles
+        magnet_r = rotor_iner_r + rotor_house_h
+        
+        magnets = []
+        
+        p1 = (magnet_r*sin(pole_angle*mag_fill_down/2), magnet_r*cos(pole_angle*mag_fill_down/2))      
+        p2 = ((magnet_r + mag_down_h)*sin(pole_angle*mag_fill_down/2), (magnet_r + mag_down_h)*cos(pole_angle*mag_fill_down/2))      
+        p3 = ((rotor_outer_r - mag_up_gap)*sin(pole_angle*mag_fill_up/2), (rotor_outer_r - mag_up_gap)*cos(pole_angle*mag_fill_up/2))    
+        p4 = (-(rotor_outer_r - mag_up_gap)*sin(pole_angle*mag_fill_up/2), (rotor_outer_r - mag_up_gap)*cos(pole_angle*mag_fill_up/2))           
+        p5 = (-(magnet_r + mag_down_h)*sin(pole_angle*mag_fill_down/2), (magnet_r + mag_down_h)*cos(pole_angle*mag_fill_down/2))       
+        p6 = (-magnet_r*sin(pole_angle*mag_fill_down/2), magnet_r*cos(pole_angle*mag_fill_down/2))      
+        
+        for i in range(num_poles):
+            angle = i * pole_angle
+            
+            # Create magnet at origin then rotate/translate
+            magnet = (
+                cq.Workplane("XY")
+                .polyline([p1, p2, p3, p4, p5, p6])
+                .close()        
+                .extrude(width)
+                #.translate((magnet_r, 0, 0))
+                .rotate((0, 0, 0), (0, 0, 1), angle)
+            )
+
+            magnets.append(magnet)
+            
+        return magnets
     def _create_rotor(self, cq) -> Any:
         """Create rotor hub."""
         p = self.parameters
@@ -296,106 +368,96 @@ class CadQueryMotor:
         )
         
         return rotor
-    
-    def _create_shaft(self, cq) -> Any:
-        """Create motor shaft."""
-        p = self.parameters
-        
-        shaft_r = p['shaft_radius']
-        length = p['stator_width'] * 1.2
-        
-        shaft = (
-            cq.Workplane("XY")
-            .circle(shaft_r)
-            .extrude(length)
-        )
-        
-        return shaft
-    
-    def _create_magnets(self, cq) -> List[Any]:
-        """Create rotor magnets."""
-        p = self.parameters
-        
-        rotor_outer_r = p['rotor_outer_radius']
-        magnet_width = p['magnet_width']
-        magnet_height = p['magnet_height']
-        num_poles = int(p['num_poles'])
-        width = p['stator_width']
-        
-        magnets = []
-        pole_angle = 360.0 / num_poles
-        
-        for i in range(num_poles):
-            angle = i * pole_angle
-            magnet_r = rotor_outer_r - magnet_height / 2
-            
-            # Create magnet at origin then rotate/translate
-            magnet = (
-                cq.Workplane("XY")
-                .rect(magnet_height, magnet_width)
-                .extrude(width)
-            )
-            # Position at correct radius and angle
-            magnet = magnet.translate((magnet_r, 0, 0))
-            magnet = magnet.rotate((0, 0, 0), (0, 0, 1), angle)
-            magnets.append(magnet)
-            
-        return magnets
-    
+   
     def _create_coils(self, cq) -> List[Any]:
-        """Create coils wound in stator slots - individual coils for each slot."""
+        """Create hairpin coils wound in stator slots - high-fidelity spiral windings.
+        
+        Hairpin winding structure:
+        - Straight legs passing through stator slots
+        - Crown (U-turn) on FRONT side connecting the two legs
+        - Leads (S-bend exit) on BACK side for connection to next layer
+        """
         import math
         p = self.parameters
         
+        # Core parameters
         outer_r = p['stator_outer_radius']
         inner_r = p['stator_inner_radius']
         core_h = p['core_thickness']
-        slot_hs = p['slot_hs']
-        slot_height = p['slot_height']
         stator_w = p['stator_width']
         num_slots = int(p['num_slots'])
         tooth_width = p['tooth_width']
-        wire_w = p['wire_width']
-        ins_w = p['insulation_thickness']
-        wire_d_y = p['wire_spacing_y']
-        wire_d_x = p['wire_spacing_x']
-        coil_w = wire_w
-        coil_h = slot_height * (1 - slot_hs) - ins_w *2 - wire_d_y # Use slot_height directly for cut depth
-        coil_x = tooth_width / 2 + ins_w + wire_d_x / 2
-        coil_y = outer_r - core_h -ins_w -wire_d_y / 2 
+        
+        # Wire parameters
+        wire_w = p['wire_width']         # 4.0 mm
+        wire_h = p['wire_height']        # 0.6 mm
+        wire_d_x = p['wire_spacing_x']     # 0.1 mm
+        wire_d_y = p['wire_spacing_y']     # 0.13 mm
+        ins_w  = p['insulation_thickness'] 
+        num_wires = int(p['num_wires_per_slot']) 
+        
+        # Calculate slot dimensions
         half_slots = num_slots // 2
-
-        slot_angle = 360.0 / half_slots #tooth_width_rad = math.radians(tooth_width_deg)
+        slot_angle = 360.0 / half_slots
+        slot_radial_depth = outer_r - inner_r
+        available_width = tooth_width - 2 * ins_w
         
-        # Create individual coils for each slot
-        coils = []
+        # Crown and S-bend parameters
+        crown_radius = wire_w * 1.5
+        sbend_height = wire_h * 2
+        sbend_offset = wire_w * 0.8
         
-        for i in range(half_slots):
+    # Top starting position (X is the vertical axis in the slot)
+    # Calculation: Start from inner radius + insulation + full height of the stack
+        top_y = outer_r - core_h - ins_w - wire_d_y/2
+    
+    # Horizontal Y positions for the two columns (centered around Y=0)
+        right_x = tooth_width / 2 + ins_w + wire_d_x/2
+    
+        coils = [] # Renamed from final_coils
+    
+        for i in range(1):
             angle = i * slot_angle
-            
-            # Create roght coils 
-            coil = (
-                cq.Workplane("XY")
-                .rect(coil_w, -coil_h, centered=(False, False))
-                .extrude(stator_w )
-                .translate((coil_x, coil_y, 0))
-                .rotate((0, 0, 0), (0, 0, 1), angle)
-            )
-             
-            coils.append(coil)
-
-            # Create left coils
-            coil = (
-                cq.Workplane("XY")
-                .rect(-coil_w, -coil_h, centered=(False, False))
-                .extrude(stator_w )
-                .translate((-coil_x, coil_y, 0))
-                .rotate((0, 0, 0), (0, 0, 1), angle)
-            )
-           
-            coils.append(coil)
+            wires = [] # Renamed from slot_wires
         
-        return coils
+            for step_y in range(num_wires):
+            # Calculate current Y position for this layer (stacking DOWNWARDS)
+                current_y = top_y - step_y *(wire_h+wire_d_y) 
+            
+                # Define Right Wire Polygon coordinates
+                right_pts = [
+                    (right_x, current_y ),          
+                    (right_x + wire_w, current_y ),   
+                    (right_x + wire_w, current_y - wire_h),            
+                    (right_x, current_y - wire_h)                    
+                ]
+            
+                # Define Left Wire Polygon coordinates
+                left_pts = [
+                    (-right_x, current_y ),          
+                    (-right_x - wire_w, current_y ),   
+                    (-right_x - wire_w, current_y - wire_h),            
+                    (right_x, current_y - wire_h)                    
+                ]
+            
+                # Create 3D geometry via extrusion along Z axis
+                # .translate centers the coil along the motor length
+                right_wire = (cq.Workplane("XY").polyline(right_pts).close().extrude(stator_w))
+                left_wire = (cq.Workplane("XY").polyline(left_pts).close().extrude(stator_w))
+            
+                # Rotate and store individual wires
+                wires.append(right_wire.rotate((0,0,0), (0,0,1), angle))
+                wires.append(left_wire.rotate((0,0,0), (0,0,1), angle))
+            
+        # Combine all wires in the current slot into a single object for UI performance
+            if wires:
+                combined_slot_stack = wires[0]
+                for w in wires[1:]:
+                    if w is not None:
+                        combined_slot_stack = combined_slot_stack.union(w)
+                coils.append(combined_slot_stack)
+            
+        return coils    
     
     def export_stl(self, output_dir: str, tolerance: float = 0.1) -> Dict[str, str]:
         """Export all components to STL files."""

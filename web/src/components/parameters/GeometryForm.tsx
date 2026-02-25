@@ -11,6 +11,10 @@ import {
   IconButton,
   Tooltip,
   Snackbar,
+  Select,
+  MenuItem,
+  FormControl,
+  InputLabel,
 } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { useMotorStore } from '../../stores/motorStore';
@@ -69,7 +73,7 @@ const GeometryForm: React.FC = () => {
   };
   
   // Debounced update function
-  const debouncedUpdate = useCallback((name: string, value: number) => {
+  const debouncedUpdate = useCallback((name: string, value: number | string) => {
     if (debounceTimerRef.current) {
       clearTimeout(debounceTimerRef.current);
     }
@@ -86,8 +90,8 @@ const GeometryForm: React.FC = () => {
     }, 300); // 300ms debounce
   }, [connectedToApi, updateGeometryViaApi, updateGeometry]);
   
-  // Handle field change
-  const handleChange = (name: string, type: 'float' | 'int') => (
+  // Handle field change for numeric types
+  const handleNumberChange = (name: string, type: 'float' | 'int') => (
     event: React.ChangeEvent<HTMLInputElement>
   ) => {
     const value = type === 'int' 
@@ -97,6 +101,14 @@ const GeometryForm: React.FC = () => {
     if (!isNaN(value)) {
       debouncedUpdate(name, value);
     }
+  };
+
+  // Handle field change for string types with options
+  const handleStringChange = (name: string) => (
+    event: React.ChangeEvent<{ value: unknown }>
+  ) => {
+    const value = event.target.value as string;
+    debouncedUpdate(name, value);
   };
   
   // Cleanup debounce timer
@@ -169,26 +181,46 @@ const GeometryForm: React.FC = () => {
             
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
               {group.parameters.map(param => (
-                <TextField
-                  key={param.name}
-                  label={param.label}
-                  type="number"
-                  size="small"
-                  value={geometry[param.name] ?? 0}
-                  onChange={handleChange(param.name, param.type as 'float' | 'int')}
-                  inputProps={{
-                    min: param.min,
-                    max: param.max,
-                    step: param.step,
-                  }}
-                  InputProps={{
-                    endAdornment: param.unit ? (
-                      <InputAdornment position="end">{param.unit}</InputAdornment>
-                    ) : undefined,
-                  }}
-                  helperText={param.description}
-                  disabled={isLoading}
-                />
+                param.options && param.options.length > 0 ? (
+                  // Render Select for string types with predefined options
+                  <FormControl key={param.name} size="small" fullWidth>
+                    <InputLabel>{param.label}</InputLabel>
+                    <Select
+                      value={geometry[param.name] ?? param.options[0]}
+                      label={param.label}
+                      onChange={handleStringChange(param.name)}
+                      disabled={isLoading}
+                    >
+                      {param.options.map((option) => (
+                        <MenuItem key={option} value={option}>
+                          {option}
+                        </MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+                ) : (
+                  // Render TextField for numeric types
+                  <TextField
+                    key={param.name}
+                    label={param.label}
+                    type="number"
+                    size="small"
+                    value={geometry[param.name] ?? 0}
+                    onChange={handleNumberChange(param.name, param.type as 'float' | 'int')}
+                    inputProps={{
+                      min: param.min,
+                      max: param.max,
+                      step: param.step,
+                    }}
+                    InputProps={{
+                      endAdornment: param.unit ? (
+                        <InputAdornment position="end">{param.unit}</InputAdornment>
+                      ) : undefined,
+                    }}
+                    helperText={param.description}
+                    disabled={isLoading}
+                  />
+                )
               ))}
             </Box>
           </Box>

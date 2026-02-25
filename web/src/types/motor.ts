@@ -5,12 +5,13 @@ export interface ParameterSchema {
   name: string;
   label: string;
   unit: string;
-  type: 'float' | 'int';
-  min: number;
-  max: number;
-  step: number;
+  type: 'float' | 'int' | 'string';
+  min?: number;
+  max?: number;
+  step?: number;
   group: string;
   description: string;
+  options?: string[]; // For string type with predefined choices
 }
 
 /**
@@ -33,8 +34,9 @@ export interface GeometrySchemaResponse {
 /**
  * Motor geometry parameters (dynamic, from API)
  * Using Record for flexibility - actual parameters defined in YAML
+ * Supports both numeric and string values
  */
-export type MotorGeometryParams = Record<string, number>;
+export type MotorGeometryParams = Record<string, number | string>;
 
 /**
  * Material assignment for motor regions

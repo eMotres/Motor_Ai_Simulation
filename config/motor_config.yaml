@@ -117,7 +117,7 @@ geometry_schema:
     min: 4
     max: 50
     step: 0.1
-    group: slot
+    group: stator
     description: Tooth width at the stator outer radius
   tooth2_width:
     label: Tooth2 Width
@@ -126,7 +126,7 @@ geometry_schema:
     min: 1
     max: 50
     step: 0.2
-    group: slot
+    group: stator
     description: Tooth width at out side of the coils
   cut_width:
     label: Cut Width
@@ -135,7 +135,7 @@ geometry_schema:
     min: 1
     max: 50
     step: 0.2
-    group: slot
+    group: stator
     description: The thickness of the jumper between air and gap
   insulation_thickness:
     label: Insulation Thickness
@@ -144,7 +144,7 @@ geometry_schema:
     min: 0.05
     max: 1
     step: 0.05
-    group: slot
+    group: stator
     description: Insulation between stator core and slot
   wire_width:
     label: Wire Width
@@ -198,7 +198,7 @@ geometry_schema:
     min: 0.01
     max: 1
     step: 0.01
-    group: slot
+    group: stator
     description: Height of the slot opening
   magnet_height:
     label: Magnet Height
@@ -297,18 +297,15 @@ parameter_groups:
   segmentation:
     label: Segmentation
     order: 2
-  slot:
-    label: Slot Details
-    order: 3
   winding:
     label: Winding
-    order: 4
+    order: 3
   rotor:
     label: Rotor Parameters
-    order: 5
+    order: 4
   shaft:
     label: Shaft
-    order: 6
+    order: 5
 mesh:
   n_radial: 10
   n_angular: 64

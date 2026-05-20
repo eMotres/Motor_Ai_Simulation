@@ -237,13 +237,13 @@ function App() {
           </Toolbar>
         </AppBar>
         
-        {/* Material Controls - Top Bar */}
-        <MaterialControls />
+        {/* Material Controls - Top Bar (hidden in Sweep mode — not relevant there) */}
+        {!isSweepMode && <MaterialControls />}
         
-        {/* Sidebar */}
+        {/* Sidebar — hidden in Sweep mode (sweep has its own full-width layout) */}
         <Drawer
           variant={isMobile ? 'temporary' : 'persistent'}
-          open={sidebarOpen}
+          open={sidebarOpen && !isSweepMode}
           sx={{
             width: sidebarOpen ? drawerWidth : 0,
             flexShrink: 0,
@@ -289,7 +289,7 @@ function App() {
           component="main"
           sx={{
             flexGrow: 1,
-            marginLeft: sidebarOpen && !isMobile ? 0 : `-${drawerWidth}px`,
+            marginLeft: sidebarOpen && !isMobile && !isSweepMode ? 0 : `-${drawerWidth}px`,
             transition: (theme) => theme.transitions.create('margin', {
               easing: theme.transitions.easing.sharp,
               duration: theme.transitions.duration.leavingScreen,

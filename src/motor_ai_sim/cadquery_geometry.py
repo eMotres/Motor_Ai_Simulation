@@ -104,8 +104,8 @@ class CadQueryMotor:
         if 'rotor_inner_radius' in mapped and 'shaft_height' in mapped:
             mapped['shaft_radius'] = mapped['rotor_inner_radius'] - mapped['shaft_height']
         
-        if 'rotor_inner_radius' in mapped:
-            mapped['shaft_inner_radius'] = 5.0  # Default inner hole in shaft
+        if 'rotor_inner_radius' in mapped and 'shaft_height' in mapped:
+            mapped['shaft_inner_radius'] = mapped['rotor_inner_radius'] - mapped['shaft_height']
         
         # Ensure magnet parameters exist
         for key in ['magnet_fill_down', 'magnet_fill_up', 'magnet_fill_radius', 'magnet_up_gap', 'magnet_down_height']:
@@ -201,7 +201,7 @@ class CadQueryMotor:
         ins_w = p['insulation_thickness']
         wire_d_x = p['wire_spacing_x']
         slot_w = wire_w + ins_w*2 + wire_d_x
-        slot_h = slot_height + core_h # Use slot_height directly for cut depth
+        slot_h = slot_height  # Cut depth equals slot height only (core_h is back iron, not cut)
         slot_x = tooth_width / 2
         slot_y = outer_r - core_h
         half_slots = num_slots // 2
@@ -283,8 +283,8 @@ class CadQueryMotor:
         
         # Print magnet parameters for debugging
         print(f"[DEBUG] _create_magnets: mag_fill_down={mag_fill_down}, pole_angle={pole_angle}, num_poles={num_poles}")
-        print(f"[DEBUG] _create_magnets: rotor_inner_r={rotor_inner_r}, magnet_r={magnet_r}")
         magnet_r = rotor_inner_r + rotor_house_h
+        print(f"[DEBUG] _create_magnets: rotor_inner_r={rotor_inner_r}, magnet_r={magnet_r}")
         
         magnets = []
         

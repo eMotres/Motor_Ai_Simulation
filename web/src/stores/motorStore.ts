@@ -180,15 +180,18 @@ export const useMotorStore = create<MotorState>()(
             throw new Error(`HTTP error! status: ${response.status}`);
           }
           const data = await response.json();
-          set({ 
-            geometry: data as MotorGeometryParams, 
+          const viewMode = get().viewMode;
+          set({
+            geometry: data as MotorGeometryParams,
             isLoading: false,
             connectedToApi: true,
+            // Show indicator while the initial mesh fetch is running
+            isGeometryUpdating: viewMode === 'solid' || viewMode === 'hybrid',
           });
         } catch (error) {
           console.error('Failed to fetch geometry from API:', error);
-          set({ 
-            isLoading: false, 
+          set({
+            isLoading: false,
             error: error instanceof Error ? error.message : 'Failed to fetch geometry',
             connectedToApi: false,
           });

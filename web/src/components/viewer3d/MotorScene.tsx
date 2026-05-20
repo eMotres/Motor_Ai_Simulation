@@ -133,23 +133,27 @@ const ViewcubeNavigation: React.FC<{ controlsRef: React.RefObject<any> }> = ({ c
   return null;
 };
 
-// Fits camera to motor once — waits until the OrthographicCamera is the active
-// default (checked in useFrame, not useEffect, because makeDefault takes one frame).
+// Fits camera to motor once on first load.
+// Tracks which camera instance was fitted — if AdaptiveCamera replaces the camera,
+// the zoom is re-applied to the new instance.
 const FitCameraOnLoad: React.FC<{ controlsRef: React.RefObject<any> }> = ({ controlsRef }) => {
   const { camera, size } = useThree();
   const { geometry, connectedToApi } = useMotorStore();
-  const fitted = useRef(false);
+  const { cameraMode } = useUIStore();
+  const fittedCamera = useRef<THREE.Camera | null>(null);
 
   useFrame(() => {
-    if (fitted.current || !connectedToApi) return;
+    if (!connectedToApi) return;
+    if (fittedCamera.current === camera) return; // already fitted this exact camera instance
 
     const outerR: number =
       (geometry as any).stator_outer_radius ||
       ((geometry as any).stator_diameter ? (geometry as any).stator_diameter / 2 : 0);
     if (!outerR || outerR <= 0) return;
 
-    if ((camera as any).isOrthographicCamera) {
-      fitted.current = true;
+    if (cameraMode === 'orthographic') {
+      if (!(camera as any).isOrthographicCamera) return; // wait for ortho camera to register
+      fittedCamera.current = camera;
       const frustumSize = 300;
       const aspect = size.width / size.height;
       const padding = 1.15;
@@ -159,19 +163,17 @@ const FitCameraOnLoad: React.FC<{ controlsRef: React.RefObject<any> }> = ({ cont
       );
       (camera as THREE.OrthographicCamera).zoom = zoom;
       camera.updateProjectionMatrix();
-      if (controlsRef.current) {
-        controlsRef.current.target.set(0, 0, 0);
-        controlsRef.current.update();
-      }
-    } else if ((camera as any).isPerspectiveCamera) {
-      fitted.current = true;
+    } else {
+      if (!(camera as any).isPerspectiveCamera) return;
+      fittedCamera.current = camera;
       const fov = ((camera as THREE.PerspectiveCamera).fov * Math.PI) / 180;
       camera.position.setZ((outerR * 1.15) / Math.tan(fov / 2));
       camera.lookAt(0, 0, 0);
-      if (controlsRef.current) {
-        controlsRef.current.target.set(0, 0, 0);
-        controlsRef.current.update();
-      }
+    }
+
+    if (controlsRef.current) {
+      controlsRef.current.target.set(0, 0, 0);
+      controlsRef.current.update();
     }
   });
 

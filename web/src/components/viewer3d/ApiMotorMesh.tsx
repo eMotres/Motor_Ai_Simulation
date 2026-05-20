@@ -26,10 +26,9 @@ let inflightRequest: Promise<AllMeshData> | null = null;
 let inflightGeometryKey = '';
 
 function useMotorMesh() {
-  const { geometry, connectedToApi } = useMotorStore();
+  const { geometry, connectedToApi, setGeometryUpdating } = useMotorStore();
   const [data, setData] = useState<AllMeshData | null>(null);
 
-  // Use a stable key based on relevant geometry fields to know when to refetch
   const geometryKey = JSON.stringify(geometry);
 
   useEffect(() => {
@@ -41,10 +40,10 @@ function useMotorMesh() {
     const cached = meshCache.get(geometryKey);
     if (cached) {
       setData(cached);
+      setGeometryUpdating(false);
       return;
     }
 
-    // Reuse in-flight request if same geometry
     if (!inflightRequest || inflightGeometryKey !== geometryKey) {
       inflightGeometryKey = geometryKey;
       inflightRequest = fetch(`${API_BASE_URL}/api/geometry/mesh`)
@@ -54,7 +53,6 @@ function useMotorMesh() {
         })
         .then(result => {
           meshCache.set(geometryKey, result);
-          // Keep cache small — only last 3 geometry configs
           if (meshCache.size > 3) {
             meshCache.delete(meshCache.keys().next().value!);
           }
@@ -70,7 +68,10 @@ function useMotorMesh() {
     }
 
     inflightRequest.then(result => {
-      if (result) setData(result);
+      if (result) {
+        setData(result);
+        setGeometryUpdating(false);
+      }
     });
   }, [connectedToApi, geometryKey]);
 
@@ -113,14 +114,15 @@ function buildGeometry(data: ComponentMeshData): THREE.BufferGeometry {
 // ─── API mesh components ─────────────────────────────────────────────────────
 
 export const ApiStatorMesh: React.FC<{ materialProps?: MaterialProps }> = ({ materialProps }) => {
-  const { geometry } = useMotorStore();
   const { envIntensity } = useUIStore();
   const meshData = useMotorMesh();
 
   const geo = useMemo(() => {
     if (meshData?.stator_core) return buildGeometry(meshData.stator_core);
-    return createLocalStatorGeometry(geometry);
-  }, [meshData, geometry]);
+    return null;
+  }, [meshData]);
+
+  if (!geo) return null;
 
   return (
     <mesh geometry={geo} castShadow receiveShadow>
@@ -135,14 +137,15 @@ export const ApiStatorMesh: React.FC<{ materialProps?: MaterialProps }> = ({ mat
 };
 
 export const ApiRotorMesh: React.FC<{ materialProps?: MaterialProps }> = ({ materialProps }) => {
-  const { geometry } = useMotorStore();
   const { envIntensity } = useUIStore();
   const meshData = useMotorMesh();
 
   const geo = useMemo(() => {
     if (meshData?.rotor_core) return buildGeometry(meshData.rotor_core);
-    return createLocalRotorGeometry(geometry);
-  }, [meshData, geometry]);
+    return null;
+  }, [meshData]);
+
+  if (!geo) return null;
 
   return (
     <mesh geometry={geo} castShadow receiveShadow>
@@ -157,14 +160,15 @@ export const ApiRotorMesh: React.FC<{ materialProps?: MaterialProps }> = ({ mate
 };
 
 export const ApiShaftMesh: React.FC = () => {
-  const { geometry } = useMotorStore();
   const { envIntensity } = useUIStore();
   const meshData = useMotorMesh();
 
   const geo = useMemo(() => {
     if (meshData?.shaft) return buildGeometry(meshData.shaft);
-    return createLocalShaftGeometry(geometry);
-  }, [meshData, geometry]);
+    return null;
+  }, [meshData]);
+
+  if (!geo) return null;
 
   return (
     <mesh geometry={geo} castShadow receiveShadow>
@@ -174,25 +178,26 @@ export const ApiShaftMesh: React.FC = () => {
 };
 
 export const ApiMagnetsMesh: React.FC = () => {
-  const { geometry } = useMotorStore();
   const { envIntensity } = useUIStore();
   const meshData = useMotorMesh();
 
   const magnetEntries = useMemo(() => {
-    if (!meshData) return createLocalMagnetsGeometry(geometry);
+    if (!meshData) return null;
 
     const keys = Object.keys(meshData)
       .filter(k => k.startsWith('magnet_'))
       .sort((a, b) => parseInt(a.split('_')[1]) - parseInt(b.split('_')[1]));
 
-    if (keys.length === 0) return createLocalMagnetsGeometry(geometry);
+    if (keys.length === 0) return null;
 
     return keys.map((key, i) => ({
       geometry: buildGeometry(meshData[key]),
       poleIndex: i,
       direction: i % 2 === 0 ? 'outward' : 'inward',
     }));
-  }, [meshData, geometry]);
+  }, [meshData]);
+
+  if (!magnetEntries) return null;
 
   return (
     <group>

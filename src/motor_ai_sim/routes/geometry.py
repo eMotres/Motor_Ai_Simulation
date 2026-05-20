@@ -1,9 +1,11 @@
-from typing import Optional
+from pathlib import Path
+from typing import Any, Optional
 
+import yaml
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
-from motor_ai_sim.config import get_config
+from motor_ai_sim.config import get_config, clear_config_cache, DEFAULT_CONFIG_PATH
 from motor_ai_sim.geometry.motor_geometry import HAS_MODULUS
 from motor_ai_sim.services.geometry_service import (
     generate_synthetic_pointcloud,
@@ -17,30 +19,20 @@ router = APIRouter(prefix="/api/geometry")
 
 
 class GeometryUpdateModel(BaseModel):
-    stator_diameter: Optional[float] = None
-    slot_height: Optional[float] = None
-    core_thickness: Optional[float] = None
-    num_seg: Optional[int] = None
-    num_slots_per_segment: Optional[int] = None
-    num_poles_per_segment: Optional[int] = None
-    stator_width: Optional[float] = None
-    air_gap: Optional[float] = None
-    tooth_width: Optional[float] = None
-    insulation_thickness: Optional[float] = None
-    wire_width: Optional[float] = None
-    wire_height: Optional[float] = None
-    wire_spacing_x: Optional[float] = None
-    wire_spacing_y: Optional[float] = None
-    num_wires_per_slot: Optional[int] = None
-    slot_hs: Optional[float] = None
-    magnet_height: Optional[float] = None
-    rotor_house_height: Optional[float] = None
-    shaft_height: Optional[float] = None
-    magnet_fill_down: Optional[float] = None
-    magnet_fill_up: Optional[float] = None
-    magnet_fill_radius: Optional[float] = None
-    magnet_up_gap: Optional[float] = None
-    magnet_down_height: Optional[float] = None
+    model_config = ConfigDict(extra="allow")
+
+
+class AddParameterRequest(BaseModel):
+    name: str
+    label: str
+    unit: str = ""
+    type: str = "float"
+    group: str = "custom"
+    min: float = 0.0
+    max: float = 1000.0
+    step: float = 0.1
+    default_value: float = 0.0
+    description: str = ""
 
 
 @router.get("")
@@ -57,9 +49,103 @@ def update_geometry(update: GeometryUpdateModel):
         from motor_ai_sim.cadquery_geometry import CadQueryCache
         CadQueryCache().clear_all()
         params = update_current_geometry(**update.model_dump())
+
+        # Persist changes to YAML so they survive server restarts
+        config_path = Path(DEFAULT_CONFIG_PATH)
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = yaml.safe_load(f)
+        geometry_section = config.setdefault("geometry", {})
+        for key, value in update.model_dump().items():
+            if value is not None and key in geometry_section:
+                geometry_section[key] = value
+        with open(config_path, "w", encoding="utf-8") as f:
+            yaml.dump(config, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+
         return params_to_dict(params)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/parameter")
+def add_parameter(req: AddParameterRequest):
+    """Add a new parameter to motor_config.yaml and reload the schema."""
+    try:
+        config_path = Path(DEFAULT_CONFIG_PATH)
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = yaml.safe_load(f)
+
+        name = req.name.strip().lower().replace(" ", "_").replace("-", "_")
+
+        # Add to geometry section with default value
+        value = int(req.default_value) if req.type == "int" else float(req.default_value)
+        config.setdefault("geometry", {})[name] = value
+
+        # Add to geometry_schema section
+        config.setdefault("geometry_schema", {})[name] = {
+            "label": req.label,
+            "unit": req.unit,
+            "type": req.type,
+            "min": int(req.min) if req.type == "int" else float(req.min),
+            "max": int(req.max) if req.type == "int" else float(req.max),
+            "step": int(req.step) if req.type == "int" else float(req.step),
+            "group": req.group,
+            "description": req.description,
+        }
+
+        # If group is new, add it to parameter_groups
+        groups = config.setdefault("parameter_groups", {})
+        if req.group not in groups:
+            max_order = max((g.get("order", 0) for g in groups.values()), default=0)
+            groups[req.group] = {
+                "label": req.group.replace("_", " ").title(),
+                "order": max_order + 1,
+            }
+
+        with open(config_path, "w", encoding="utf-8") as f:
+            yaml.dump(config, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+
+        # Reload everything
+        clear_config_cache()
+        from motor_ai_sim.services.geometry_service import _current_geometry
+        import motor_ai_sim.services.geometry_service as gs
+        gs._current_geometry = None
+
+        return {"success": True, "name": name}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/parameter/{name}")
+def delete_parameter(name: str):
+    """Remove a parameter from motor_config.yaml."""
+    try:
+        config_path = Path(DEFAULT_CONFIG_PATH)
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = yaml.safe_load(f)
+
+        removed = False
+        if name in config.get("geometry", {}):
+            del config["geometry"][name]
+            removed = True
+        if name in config.get("geometry_schema", {}):
+            del config["geometry_schema"][name]
+            removed = True
+
+        if not removed:
+            raise HTTPException(status_code=404, detail=f"Parameter '{name}' not found")
+
+        with open(config_path, "w", encoding="utf-8") as f:
+            yaml.dump(config, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+
+        clear_config_cache()
+        import motor_ai_sim.services.geometry_service as gs
+        gs._current_geometry = None
+
+        return {"success": True, "name": name}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

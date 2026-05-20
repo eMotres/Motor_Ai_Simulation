@@ -1,32 +1,22 @@
-# Task for Kilo (Minimax)
+# CRITICAL INSTRUCTION FOR KILO / MINIMAX
 
-**Context:**
-The motor geometry generation using `cadquery` is currently extremely slow. The user wants to speed it up.
-The main bottleneck is in `src/motor_ai_sim/cadquery_geometry.py` inside the `_create_coils(self, cq)` method.
+**Rule 1: NEVER run blocking web servers directly in the terminal.**
+You are running `python src/motor_ai_sim/api.py` or `uvicorn ...` directly. This blocks your terminal forever, causes you to hang on "Running (PID...)", and forces the user to manually click "Continue While Running" or "Kill Command" every single time. This is unacceptable for an autonomous agent.
 
-Currently, it uses a boolean union operation in a loop to combine all wire objects:
-```python
-        # Combine all wires in the current slot into a single object for UI performance
-            if wires:
-                combined_slot_stack = wires[0]
-                for w in wires[1:]:
-                    if w is not None:
-                        combined_slot_stack = combined_slot_stack.union(w)
-                coils.append(combined_slot_stack)
-```
-Boolean `union()` is an exponential `O(N^2)` operation in OpenCASCADE and is killing the CPU performance.
+**How you MUST run the server:**
+Instead of typing `python src/motor_ai_sim/api.py`, you must ALWAYS launch it as a detached background process.
+On Windows (PowerShell), you must use exactly this command:
+`Start-Process -NoNewWindow python -ArgumentList "src/motor_ai_sim/api.py"`
 
-**Your Goal:**
-1. Open `src/motor_ai_sim/cadquery_geometry.py`.
-2. Find the `_create_coils` method.
-3. Remove the heavy `.union(w)` loop.
-4. Instead of unioning, combine the individual wire objects into a **CadQuery Assembly or Compound** (or just append them as a list of independent solids if the exporter supports it) so no boolean math is performed.
-   - *Hint:* You can use `cq.Compound.makeCompound([w.val() for w in wires if w is not None])` or simply return the flattened list of all individual wire solid objects.
-5. Save the file and ensure the geometry generation now completes in < 1 second.
+This command will immediately return control to your terminal (exit code 0), while the server runs silently in the background. You will never hang again.
 
-**CRITICAL INSTRUCTION FOR KILO (Server Execution):**
-When you need to start the FastAPI server (e.g., `uvicorn`), **do not use blocking commands** like `python src/motor_ai_sim/api.py`.
-Instead, use background execution depending on the OS:
-- On Windows (PowerShell): `Start-Process -NoNewWindow python -ArgumentList "src/motor_ai_sim/api.py"`
-- Or simply run it normally and immediately click/use **"Continue While Running"** in your interface so you don't hang waiting for the server to exit!
-Do not wait for the server command to finish; proceed immediately to your next validation steps.
+**If you need to restart the server:**
+Before starting a new one, kill the old one using:
+`taskkill /F /IM python.exe /T`
+(Note: this will kill all python processes, which is fine for this dev environment).
+
+**Your Immediate Task:**
+1. You just hung again. The user had to click a button for you.
+2. Remember the above rule forever for this workspace.
+3. Now, proceed to implement the `.edges("%Z and >Y").fillet(mag_fill_radius)` logic on the magnet geometry as requested in the previous prompt.
+4. After saving the file, just do the file save! Do NOT try to restart the server again, because the user or I (OpenClaw) are already running it in the background for you. Just say "Done!" after you edit `cadquery_geometry.py`.

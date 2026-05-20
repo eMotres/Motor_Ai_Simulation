@@ -1,4 +1,4 @@
-import React, { Suspense, useRef, useEffect } from 'react';
+import React, { Suspense, useRef, useEffect, useState } from 'react';
 import { Canvas, useThree, useFrame } from '@react-three/fiber';
 import { OrbitControls, PerspectiveCamera, OrthographicCamera, Environment, Grid } from '@react-three/drei';
 import { EffectComposer, Bloom } from '@react-three/postprocessing';
@@ -28,10 +28,9 @@ const AdaptiveCamera: React.FC = () => {
   // For orthographic, calculate frustum based on a reference size and aspect ratio
   const frustumSize = 300;
   return (
-    <OrthographicCamera 
-      makeDefault 
-      position={[0, 0, 250]} 
-      zoom={1}
+    <OrthographicCamera
+      makeDefault
+      position={[0, 0, 250]}
       near={0.1}
       far={5000}
       left={-frustumSize * aspect}
@@ -134,6 +133,51 @@ const ViewcubeNavigation: React.FC<{ controlsRef: React.RefObject<any> }> = ({ c
   return null;
 };
 
+// Fits camera to motor once — waits until the OrthographicCamera is the active
+// default (checked in useFrame, not useEffect, because makeDefault takes one frame).
+const FitCameraOnLoad: React.FC<{ controlsRef: React.RefObject<any> }> = ({ controlsRef }) => {
+  const { camera, size } = useThree();
+  const { geometry, connectedToApi } = useMotorStore();
+  const fitted = useRef(false);
+
+  useFrame(() => {
+    if (fitted.current || !connectedToApi) return;
+
+    const outerR: number =
+      (geometry as any).stator_outer_radius ||
+      ((geometry as any).stator_diameter ? (geometry as any).stator_diameter / 2 : 0);
+    if (!outerR || outerR <= 0) return;
+
+    if ((camera as any).isOrthographicCamera) {
+      fitted.current = true;
+      const frustumSize = 300;
+      const aspect = size.width / size.height;
+      const padding = 1.15;
+      const zoom = Math.min(
+        frustumSize / (outerR * padding),
+        (frustumSize * aspect) / (outerR * padding),
+      );
+      (camera as THREE.OrthographicCamera).zoom = zoom;
+      camera.updateProjectionMatrix();
+      if (controlsRef.current) {
+        controlsRef.current.target.set(0, 0, 0);
+        controlsRef.current.update();
+      }
+    } else if ((camera as any).isPerspectiveCamera) {
+      fitted.current = true;
+      const fov = ((camera as THREE.PerspectiveCamera).fov * Math.PI) / 180;
+      camera.position.setZ((outerR * 1.15) / Math.tan(fov / 2));
+      camera.lookAt(0, 0, 0);
+      if (controlsRef.current) {
+        controlsRef.current.target.set(0, 0, 0);
+        controlsRef.current.update();
+      }
+    }
+  });
+
+  return null;
+};
+
 const MotorScene: React.FC = () => {
   const { showGrid, showAxes, envIntensity } = useUIStore();
   const controlsRef = useRef<any>(null);
@@ -193,7 +237,7 @@ const MotorScene: React.FC = () => {
       
       {/* Motor components */}
         <Suspense fallback={null}>
-          <MotorComponents />
+          <MotorComponents controlsRef={controlsRef} />
         </Suspense>
         
         {/* Camera synchronization */}
@@ -207,7 +251,7 @@ const MotorScene: React.FC = () => {
   );
 };
 
-const MotorComponents: React.FC = () => {
+const MotorComponents: React.FC<{ controlsRef: React.RefObject<any> }> = ({ controlsRef }) => {
   const { viewMode, stlMeshes, connectedToApi } = useMotorStore();
   const { metalness, roughness } = useUIStore();
   
@@ -235,6 +279,7 @@ const MotorComponents: React.FC = () => {
   if (connectedToApi) {
     return (
       <group>
+        <FitCameraOnLoad controlsRef={controlsRef} />
         {/* STL meshes from Fusion 360 / Modulus pipeline */}
         {showSTL && <STLCollection meshes={stlMeshes} />}
         

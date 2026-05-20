@@ -1,48 +1,24 @@
-import React, { useEffect, useCallback } from 'react';
+import React, { useEffect, useCallback, useState } from 'react';
 import {
   Box,
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableRow,
-  TextField,
-  ToggleButton,
-  ToggleButtonGroup,
   Typography,
-  Chip,
-  Divider,
+  TextField,
+  IconButton,
   Tooltip,
+  Divider,
+  Chip,
+  Button,
 } from '@mui/material';
+import ShowChartIcon from '@mui/icons-material/ShowChart';
+import CloseIcon     from '@mui/icons-material/Close';
+import RefreshIcon   from '@mui/icons-material/Refresh';
+import AddIcon       from '@mui/icons-material/Add';
 import { useMotorStore } from '../../stores/motorStore';
 import type { VariationMode } from '../../types/motor';
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-const MODE_COLOR: Record<VariationMode, 'default' | 'primary' | 'success'> = {
-  fixed: 'default',
-  sweep: 'primary',
-  optimize: 'success',
-};
-
-function fmtVal(v: number | string, step?: number): string {
-  if (typeof v === 'string') return v;
-  const decimals = step && step < 1 ? 2 : step && step < 0.1 ? 3 : 1;
-  return v.toFixed(decimals);
-}
-
-const numFieldSx = {
-  width: 68,
-  '& .MuiInputBase-input': { px: '6px', py: '3px', fontSize: 12 },
-  '& .MuiOutlinedInput-root': { borderRadius: '4px' },
-};
-
-const hdrCell = { py: 0.5, px: 0.75, fontSize: 11, color: 'text.disabled', borderBottom: '1px solid', borderColor: 'divider', whiteSpace: 'nowrap' as const };
-const dataCell = { py: 0.25, px: 0.75, borderBottom: 'none' };
-
-// ─── Component ───────────────────────────────────────────────────────────────
+import AddParameterDialog from '../parameters/AddParameterDialog';
 
 const ParameterVariationTable: React.FC = () => {
+  const [dialogOpen, setDialogOpen] = useState(false);
   const {
     parameterSchema,
     parameterGroups,
@@ -53,14 +29,12 @@ const ParameterVariationTable: React.FC = () => {
     updateGeometry,
     connectedToApi,
     initVariationsFromSchema,
+    fetchSchemaFromApi,
   } = useMotorStore();
 
   useEffect(() => {
     if (parameterSchema.length > 0) initVariationsFromSchema();
   }, [parameterSchema.length]);
-
-  const sweepCount   = Object.values(sweepConfig.variations).filter(v => v.mode === 'sweep').length;
-  const optimizeCount = Object.values(sweepConfig.variations).filter(v => v.mode === 'optimize').length;
 
   const handleValueChange = useCallback((name: string, raw: string, type: 'float' | 'int') => {
     const v = type === 'int' ? parseInt(raw, 10) : parseFloat(raw);
@@ -69,6 +43,23 @@ const ParameterVariationTable: React.FC = () => {
     else updateGeometry({ [name]: v });
   }, [connectedToApi, updateGeometryViaApi, updateGeometry]);
 
+  const toggleSweep = useCallback((name: string) => {
+    const variation = sweepConfig.variations[name];
+    const isActive = variation?.mode !== 'fixed' && variation?.mode !== undefined;
+    if (isActive) {
+      updateVariation(name, { mode: 'fixed' });
+    } else {
+      const cur = Number(geometry[name] ?? 0);
+      const schema = parameterSchema.find(p => p.name === name);
+      updateVariation(name, {
+        mode: 'sweep',
+        min:  variation?.min  ?? schema?.min  ?? Math.max(0, cur * 0.5),
+        max:  variation?.max  ?? schema?.max  ?? cur * 1.5,
+        step: variation?.step ?? schema?.step ?? Math.max(0.01, Math.abs(cur) * 0.1),
+      });
+    }
+  }, [sweepConfig, geometry, parameterSchema, updateVariation]);
+
   const groups = parameterGroups
     .map(g => ({
       ...g,
@@ -76,134 +67,116 @@ const ParameterVariationTable: React.FC = () => {
     }))
     .filter(g => g.params.length > 0);
 
+  const fieldSx = {
+    width: 100,
+    '& .MuiInputBase-input': { px: '8px', py: '4px', fontSize: 13 },
+  };
+
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
-      {/* Summary */}
-      <Box sx={{ display: 'flex', gap: 1, mb: 0.5 }}>
-        <Chip size="small" label={`${sweepCount} sweep`}    color="primary" variant={sweepCount   > 0 ? 'filled' : 'outlined'} />
-        <Chip size="small" label={`${optimizeCount} opt`}   color="success" variant={optimizeCount > 0 ? 'filled' : 'outlined'} />
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+
+      {/* Header: param count + add + reload */}
+      <Box sx={{ display: 'flex', alignItems: 'center', mb: 1, px: 0.5, gap: 1 }}>
+        <Chip
+          label={`${parameterSchema.length} parameters`}
+          size="small"
+          variant="outlined"
+          sx={{ fontSize: 10, height: 20 }}
+        />
+        <Box sx={{ flex: 1 }} />
+        <Button
+          size="small"
+          startIcon={<AddIcon sx={{ fontSize: 14 }} />}
+          onClick={() => setDialogOpen(true)}
+          sx={{ fontSize: 11, py: 0.25, px: 1, minHeight: 24 }}
+        >
+          Add
+        </Button>
+        <Tooltip title="Reload schema from API">
+          <IconButton size="small" onClick={fetchSchemaFromApi} sx={{ p: 0.4, opacity: 0.6, '&:hover': { opacity: 1 } }}>
+            <RefreshIcon sx={{ fontSize: 15 }} />
+          </IconButton>
+        </Tooltip>
       </Box>
+
+      <AddParameterDialog open={dialogOpen} onClose={() => setDialogOpen(false)} />
 
       {groups.map((group, gi) => (
         <Box key={group.id}>
-          <Typography variant="caption" color="primary" sx={{ fontWeight: 700, display: 'block', mt: gi > 0 ? 1 : 0, mb: 0.25 }}>
+          {gi > 0 && <Divider sx={{ my: 1 }} />}
+          <Typography
+            variant="caption"
+            color="primary"
+            sx={{ fontWeight: 700, display: 'block', px: 0.5, py: 0.5, textTransform: 'uppercase', fontSize: 10, letterSpacing: 0.5 }}
+          >
             {group.label}
           </Typography>
 
-          <Table size="small" sx={{ tableLayout: 'fixed', width: '100%' }}>
-            <TableHead>
-              <TableRow>
-                <TableCell sx={{ ...hdrCell, width: '28%' }}>Параметр</TableCell>
-                <TableCell sx={{ ...hdrCell, width: 72 }}>Знач.</TableCell>
-                <TableCell sx={{ ...hdrCell, width: 72 }}>Min</TableCell>
-                <TableCell sx={{ ...hdrCell, width: 72 }}>Max</TableCell>
-                <TableCell sx={{ ...hdrCell, width: 72 }}>Шаг</TableCell>
-                <TableCell sx={{ ...hdrCell }}>Режим</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {group.params.map(param => {
-                const variation = sweepConfig.variations[param.name];
-                const mode: VariationMode = variation?.mode ?? 'fixed';
-                const isActive = mode !== 'fixed';
-                const isSweep  = mode === 'sweep';
-                const currentVal = geometry[param.name] ?? 0;
+          {group.params.map(param => {
+            const variation = sweepConfig.variations[param.name];
+            const isActive  = variation?.mode !== 'fixed' && variation?.mode !== undefined;
+            const currentVal = geometry[param.name] ?? 0;
 
-                return (
-                  <TableRow
-                    key={param.name}
-                    sx={{ '&:hover': { bgcolor: 'rgba(255,255,255,0.03)' } }}
+            return (
+              <Box
+                key={param.name}
+                sx={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 1,
+                  px: 0.5,
+                  py: 0.4,
+                  borderRadius: 1,
+                  borderLeft: isActive ? '2px solid #3b82f6' : '2px solid transparent',
+                  bgcolor: isActive ? 'rgba(59,130,246,0.05)' : 'transparent',
+                  '&:hover': { bgcolor: isActive ? 'rgba(59,130,246,0.08)' : 'rgba(255,255,255,0.03)' },
+                }}
+              >
+                {/* Parameter name */}
+                <Box sx={{ flex: 1, minWidth: 0 }}>
+                  <Typography variant="body2" noWrap sx={{ lineHeight: 1.4 }}>
+                    {param.label}
+                    {param.unit && (
+                      <Typography component="span" variant="caption" color="text.disabled" sx={{ ml: 0.5 }}>
+                        ({param.unit})
+                      </Typography>
+                    )}
+                  </Typography>
+                </Box>
+
+                {/* Editable value */}
+                <TextField
+                  size="small"
+                  type="number"
+                  defaultValue={typeof currentVal === 'number'
+                    ? currentVal.toFixed(param.step && param.step < 0.1 ? 3 : param.step && param.step < 1 ? 2 : 1)
+                    : currentVal}
+                  key={`val-${param.name}-${currentVal}`}
+                  onBlur={e => handleValueChange(param.name, e.target.value, param.type as 'float' | 'int')}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter')
+                      handleValueChange(param.name, (e.target as HTMLInputElement).value, param.type as 'float' | 'int');
+                  }}
+                  inputProps={{ step: param.step, min: param.min, max: param.max }}
+                  sx={fieldSx}
+                />
+
+                {/* Add / remove from sweep */}
+                <Tooltip title={isActive ? 'Remove from sweep' : 'Add to sweep'}>
+                  <IconButton
+                    size="small"
+                    color={isActive ? 'primary' : 'default'}
+                    onClick={() => toggleSweep(param.name)}
+                    sx={{ p: 0.4, opacity: isActive ? 1 : 0.35, '&:hover': { opacity: 1 } }}
                   >
-                    {/* Name */}
-                    <TableCell sx={dataCell}>
-                      <Tooltip title={param.description} placement="right" arrow>
-                        <Typography variant="caption" sx={{ lineHeight: 1.4 }}>
-                          {param.label}
-                          {param.unit && (
-                            <Typography component="span" variant="caption" color="text.disabled" sx={{ ml: 0.5 }}>
-                              ({param.unit})
-                            </Typography>
-                          )}
-                        </Typography>
-                      </Tooltip>
-                    </TableCell>
-
-                    {/* Current value — editable, syncs to API */}
-                    <TableCell sx={dataCell}>
-                      <TextField
-                        size="small"
-                        type="number"
-                        defaultValue={fmtVal(currentVal, param.step)}
-                        key={`val-${param.name}-${currentVal}`}
-                        onBlur={e => handleValueChange(param.name, e.target.value, param.type as 'float' | 'int')}
-                        onKeyDown={e => {
-                          if (e.key === 'Enter') handleValueChange(param.name, (e.target as HTMLInputElement).value, param.type as 'float' | 'int');
-                        }}
-                        inputProps={{ step: param.step, min: param.min, max: param.max }}
-                        sx={{ ...numFieldSx, '& .MuiInputBase-input': { ...numFieldSx['& .MuiInputBase-input'], color: isActive ? '#fff' : 'text.secondary' } }}
-                      />
-                    </TableCell>
-
-                    {/* Min */}
-                    <TableCell sx={dataCell}>
-                      <TextField
-                        size="small"
-                        type="number"
-                        disabled={!isActive}
-                        value={variation?.min ?? (param.min ?? '')}
-                        onChange={e => updateVariation(param.name, { min: parseFloat(e.target.value) })}
-                        inputProps={{ step: param.step }}
-                        sx={numFieldSx}
-                      />
-                    </TableCell>
-
-                    {/* Max */}
-                    <TableCell sx={dataCell}>
-                      <TextField
-                        size="small"
-                        type="number"
-                        disabled={!isActive}
-                        value={variation?.max ?? (param.max ?? '')}
-                        onChange={e => updateVariation(param.name, { max: parseFloat(e.target.value) })}
-                        inputProps={{ step: param.step }}
-                        sx={numFieldSx}
-                      />
-                    </TableCell>
-
-                    {/* Step */}
-                    <TableCell sx={dataCell}>
-                      <TextField
-                        size="small"
-                        type="number"
-                        disabled={!isSweep}
-                        value={variation?.step ?? (param.step ?? '')}
-                        onChange={e => updateVariation(param.name, { step: parseFloat(e.target.value) })}
-                        inputProps={{ step: param.step, min: 0 }}
-                        sx={numFieldSx}
-                      />
-                    </TableCell>
-
-                    {/* Mode */}
-                    <TableCell sx={dataCell}>
-                      <ToggleButtonGroup
-                        exclusive
-                        size="small"
-                        value={mode}
-                        onChange={(_, v) => v && updateVariation(param.name, { mode: v as VariationMode })}
-                        sx={{ height: 24 }}
-                      >
-                        <ToggleButton value="fixed"    color={MODE_COLOR.fixed}    sx={{ px: 0.75, py: 0, fontSize: 10, minWidth: 30 }}>Fix</ToggleButton>
-                        <ToggleButton value="sweep"    color={MODE_COLOR.sweep}    sx={{ px: 0.75, py: 0, fontSize: 10, minWidth: 38 }}>Sweep</ToggleButton>
-                        <ToggleButton value="optimize" color={MODE_COLOR.optimize} sx={{ px: 0.75, py: 0, fontSize: 10, minWidth: 30 }}>Opt</ToggleButton>
-                      </ToggleButtonGroup>
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
-
-          {gi < groups.length - 1 && <Divider sx={{ mt: 1 }} />}
+                    {isActive
+                      ? <CloseIcon     sx={{ fontSize: 15 }} />
+                      : <ShowChartIcon sx={{ fontSize: 15 }} />}
+                  </IconButton>
+                </Tooltip>
+              </Box>
+            );
+          })}
         </Box>
       ))}
     </Box>

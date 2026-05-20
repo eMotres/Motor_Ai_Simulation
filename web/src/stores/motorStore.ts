@@ -32,6 +32,7 @@ interface MotorState {
   parameterSchema: ParameterSchema[];
   parameterGroups: ParameterGroup[];
   isLoading: boolean;
+  isGeometryUpdating: boolean;
   error: string | null;
   connectedToApi: boolean;
   viewMode: ViewMode;
@@ -47,6 +48,7 @@ interface MotorState {
   geometryMismatch: boolean;
   
   // Actions
+  setGeometryUpdating: (v: boolean) => void;
   updateGeometry: (params: Partial<MotorGeometryParams>) => void;
   updateMaterials: (materials: Partial<MaterialAssignments>) => void;
   updateMeshSettings: (settings: Partial<MeshSettings>) => void;
@@ -89,6 +91,7 @@ export const useMotorStore = create<MotorState>()(
       parameterSchema: [],
       parameterGroups: [],
       isLoading: false,
+      isGeometryUpdating: false,
       error: null,
       connectedToApi: false,
       viewMode: 'stl',
@@ -109,6 +112,8 @@ export const useMotorStore = create<MotorState>()(
         ],
         rippleThreshold: 0.05,
       },
+
+      setGeometryUpdating: (v) => set({ isGeometryUpdating: v }),
 
       // Local Actions
       updateGeometry: (params) => set((state) => ({
@@ -211,32 +216,38 @@ export const useMotorStore = create<MotorState>()(
       },
       
       updateGeometryViaApi: async (params) => {
-        set({ isLoading: true, error: null });
+        set({ isLoading: true, isGeometryUpdating: true, error: null });
         try {
           const response = await fetch(`${API_BASE_URL}/api/geometry`, {
             method: 'PUT',
-            headers: {
-              'Content-Type': 'application/json',
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(params),
           });
           if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
           }
           const data = await response.json();
-          set({ 
-            geometry: data as MotorGeometryParams, 
+          const viewMode = get().viewMode;
+          set({
+            geometry: data as MotorGeometryParams,
             isLoading: false,
             connectedToApi: true,
+            // In STL mode the mesh won't auto-reload, so clear indicator immediately
+            isGeometryUpdating: viewMode !== 'stl',
           });
+          // STL mode: clear after a short acknowledgement delay
+          if (viewMode === 'stl') {
+            await new Promise(r => setTimeout(r, 600));
+            set({ isGeometryUpdating: false });
+          }
         } catch (error) {
           console.error('Failed to update geometry via API:', error);
-          set({ 
-            isLoading: false, 
+          set({
+            isLoading: false,
+            isGeometryUpdating: false,
             error: error instanceof Error ? error.message : 'Failed to update geometry',
             connectedToApi: false,
           });
-          // Fallback to local update
           get().updateGeometry(params);
         }
       },

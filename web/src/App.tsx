@@ -6,21 +6,17 @@ import {
   AppBar,
   Toolbar,
   Typography,
-  Drawer,
   Box,
   Tabs,
   Tab,
   IconButton,
   Tooltip,
-  useMediaQuery,
   Chip,
   CircularProgress,
   ToggleButtonGroup,
   ToggleButton,
 } from '@mui/material';
 import {
-  Menu as MenuIcon,
-  Settings as SettingsIcon,
   Visibility as VisibilityIcon,
   GridOn as GridOnIcon,
   ThreeDRotation as ThreeDRotationIcon,
@@ -35,7 +31,7 @@ import {
   DeleteSweep as DeleteSweepIcon,
 } from '@mui/icons-material';
 import MotorScene from './components/viewer3d/MotorScene';
-import GeometryForm from './components/parameters/GeometryForm';
+import ParameterVariationTable from './components/sweep/ParameterVariationTable';
 import MaterialControls from './components/parameters/MaterialControls';
 import SweepConfigPanel from './components/sweep/SweepConfigPanel';
 import { useMotorStore, useUIStore } from './stores/motorStore';
@@ -43,272 +39,202 @@ import { useMotorStore, useUIStore } from './stores/motorStore';
 const darkTheme = createTheme({
   palette: {
     mode: 'dark',
-    primary: {
-      main: '#3b82f6',
-    },
-    secondary: {
-      main: '#10b981',
-    },
-    background: {
-      default: '#0f172a',
-      paper: '#1e293b',
-    },
+    primary: { main: '#3b82f6' },
+    secondary: { main: '#10b981' },
+    background: { default: '#0f172a', paper: '#1e293b' },
   },
   typography: {
     fontFamily: '"Inter", "Roboto", "Helvetica", "Arial", sans-serif',
   },
   components: {
-    MuiTextField: {
-      defaultProps: {
-        variant: 'outlined',
-        size: 'small',
-      },
-    },
-    MuiSlider: {
-      styleOverrides: {
-        root: {
-          color: '#3b82f6',
-        },
-      },
-    },
+    MuiTextField: { defaultProps: { variant: 'outlined', size: 'small' } },
+    MuiSlider: { styleOverrides: { root: { color: '#3b82f6' } } },
   },
 });
 
-const drawerWidth = 320;
-
 function App() {
-  const isMobile = useMediaQuery('(max-width:768px)');
-  const { sidebarOpen, activeTab, toggleSidebar, setActiveTab, showGrid, showAxes, toggleGrid, toggleAxes } = useUIStore();
-  const { resetToDefaults, fetchGeometryFromApi, fetchSchemaFromApi, connectedToApi, isLoading, viewMode, setViewMode, geometry, runPipeline, stlMeshes, clearStlCache } = useMotorStore();
+  const { activeTab, setActiveTab, showGrid, showAxes, toggleGrid, toggleAxes } = useUIStore();
+  const {
+    resetToDefaults,
+    fetchGeometryFromApi,
+    fetchSchemaFromApi,
+    connectedToApi,
+    isLoading,
+    isGeometryUpdating,
+    viewMode,
+    setViewMode,
+    geometry,
+    runPipeline,
+    clearStlCache,
+  } = useMotorStore();
 
-  // Fetch geometry + schema from API on mount (schema needed by Sweep tab regardless of active sidebar tab)
   useEffect(() => {
     fetchGeometryFromApi();
     fetchSchemaFromApi();
   }, [fetchGeometryFromApi, fetchSchemaFromApi]);
-  
-  // Note: Removed the useEffect that forced STL mode - users can now freely switch between view modes
-  
-  const renderTabContent = () => {
-    switch (activeTab) {
-      case 'geometry':
-        return <GeometryForm />;
-      case 'materials':
-        return <Typography>Materials configuration coming soon...</Typography>;
-      case 'mesh':
-        return <Typography>Mesh settings coming soon...</Typography>;
-      case 'simulation':
-        return <Typography>Simulation controls coming soon...</Typography>;
-      case 'sweep':
-        return null; // rendered in main content area
-      default:
-        return <GeometryForm />;
-    }
-  };
 
-  const isSweepMode = activeTab === 'sweep';
-  
+  const showViewer = activeTab !== 'sweep';
+
   return (
     <ThemeProvider theme={darkTheme}>
       <CssBaseline />
-      <Box sx={{ display: 'flex', height: '100vh' }}>
-        {/* App Bar */}
+      <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
+
+        {/* ── AppBar ── */}
         <AppBar
-          position="fixed"
-          sx={{
-            zIndex: (theme) => theme.zIndex.drawer + 1,
-            backgroundColor: 'background.paper',
-            borderBottom: '1px solid',
-            borderColor: 'divider',
-          }}
+          position="static"
+          elevation={0}
+          sx={{ backgroundColor: 'background.paper', borderBottom: '1px solid', borderColor: 'divider', flexShrink: 0 }}
         >
-          <Toolbar>
-            <IconButton
-              edge="start"
-              color="inherit"
-              aria-label="menu"
-              onClick={toggleSidebar}
-              sx={{ mr: 2 }}
-            >
-              <MenuIcon />
-            </IconButton>
-            
-            <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
-              Motor AI Simulator
-            </Typography>
-            
-            {/* API Connection Status */}
-            {isLoading && <CircularProgress size={24} sx={{ mr: 2 }} />}
+          <Toolbar variant="dense" sx={{ gap: 1 }}>
+            <Typography variant="h6" sx={{ mr: 1 }}>Motor AI Simulator</Typography>
+
+            {isLoading && <CircularProgress size={18} sx={{ mr: 1 }} />}
             {connectedToApi ? (
-              <Chip
-                icon={<CloudSyncIcon />}
-                label="Connected to API"
-                color="success"
-                size="small"
-                sx={{ mr: 2 }}
-              />
+              <Chip icon={<CloudSyncIcon />} label="Connected" color="success" size="small" />
             ) : (
-              <Chip
-                icon={<CloudOffIcon />}
-                label="Local Mode"
-                color="warning"
-                size="small"
-                sx={{ mr: 2 }}
-              />
+              <Chip icon={<CloudOffIcon />} label="Local Mode" color="warning" size="small" />
             )}
-            
-            {/* View Controls */}
-            <Box sx={{ display: 'flex', gap: 0.5 }}>
-              <Tooltip title={showGrid ? 'Hide Grid' : 'Show Grid'}>
-                <IconButton 
-                  color={showGrid ? 'primary' : 'default'} 
-                  onClick={toggleGrid}
+
+            <Box sx={{ flexGrow: 1 }} />
+
+            {/* 3D view controls — only relevant when viewer is visible */}
+            {showViewer && (
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                <Tooltip title={showGrid ? 'Hide Grid' : 'Show Grid'}>
+                  <IconButton size="small" color={showGrid ? 'primary' : 'default'} onClick={toggleGrid}>
+                    <GridOnIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+                <Tooltip title={showAxes ? 'Hide Axes' : 'Show Axes'}>
+                  <IconButton size="small" color={showAxes ? 'primary' : 'default'} onClick={toggleAxes}>
+                    <ThreeDRotationIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+                <ToggleButtonGroup
+                  value={viewMode}
+                  exclusive
+                  onChange={(_, m) => m && setViewMode(m)}
+                  size="small"
+                  sx={{ mx: 0.5 }}
                 >
-                  <GridOnIcon />
-                </IconButton>
-              </Tooltip>
-              
-              <Tooltip title={showAxes ? 'Hide Axes' : 'Show Axes'}>
-                <IconButton 
-                  color={showAxes ? 'primary' : 'default'} 
-                  onClick={toggleAxes}
-                >
-                  <ThreeDRotationIcon />
-                </IconButton>
-              </Tooltip>
-              
-              {/* View Mode Selector */}
-              <ToggleButtonGroup
-                value={viewMode}
-                exclusive
-                onChange={(_, newMode) => newMode && setViewMode(newMode)}
-                size="small"
-                sx={{ ml: 1, mr: 1 }}
-              >
-                <ToggleButton value="solid" sx={{ px: 1.5 }}>
-                  <Tooltip title="Solid Mesh">
-                    <SquareIcon fontSize="small" />
-                  </Tooltip>
-                </ToggleButton>
-                <ToggleButton value="pointcloud" sx={{ px: 1.5 }}>
-                  <Tooltip title="Point Cloud (Modulus)">
-                    <BubbleChartIcon fontSize="small" />
-                  </Tooltip>
-                </ToggleButton>
-                <ToggleButton value="stl" sx={{ px: 1.5 }}>
-                  <Tooltip title="STL (CadQuery)">
-                    <ViewInArIcon fontSize="small" />
-                  </Tooltip>
-                </ToggleButton>
-                <ToggleButton value="hybrid" sx={{ px: 1.5 }}>
-                  <Tooltip title="Hybrid (All)">
-                    <LayersIcon fontSize="small" />
-                  </Tooltip>
-                </ToggleButton>
-              </ToggleButtonGroup>
-              
-              <Tooltip title="Generate STL from CadQuery">
-                <IconButton 
-                  color={viewMode === 'stl' ? 'secondary' : 'default'} 
-                  onClick={() => runPipeline(geometry)}
-                >
-                  <BuildIcon />
-                </IconButton>
-              </Tooltip>
-              
-              <Tooltip title="Clear Cache & Rebuild (force regeneration)">
-                <IconButton 
-                  color="default" 
-                  onClick={async () => {
-                    await clearStlCache();
-                    runPipeline(geometry);
-                  }}
-                >
-                  <DeleteSweepIcon />
-                </IconButton>
-              </Tooltip>
-              
-              <Tooltip title="Reset to Defaults">
-                <IconButton color="default" onClick={resetToDefaults}>
-                  <RefreshIcon />
-                </IconButton>
-              </Tooltip>
-            </Box>
+                  <ToggleButton value="solid" sx={{ px: 1 }}>
+                    <Tooltip title="Solid Mesh"><SquareIcon fontSize="small" /></Tooltip>
+                  </ToggleButton>
+                  <ToggleButton value="pointcloud" sx={{ px: 1 }}>
+                    <Tooltip title="Point Cloud"><BubbleChartIcon fontSize="small" /></Tooltip>
+                  </ToggleButton>
+                  <ToggleButton value="stl" sx={{ px: 1 }}>
+                    <Tooltip title="STL (CadQuery)"><ViewInArIcon fontSize="small" /></Tooltip>
+                  </ToggleButton>
+                  <ToggleButton value="hybrid" sx={{ px: 1 }}>
+                    <Tooltip title="Hybrid"><LayersIcon fontSize="small" /></Tooltip>
+                  </ToggleButton>
+                </ToggleButtonGroup>
+                <Tooltip title="Generate STL from CadQuery">
+                  <IconButton size="small" onClick={() => runPipeline(geometry)}>
+                    <BuildIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+                <Tooltip title="Clear Cache & Rebuild">
+                  <IconButton size="small" onClick={async () => { await clearStlCache(); runPipeline(geometry); }}>
+                    <DeleteSweepIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+              </Box>
+            )}
+
+            <Tooltip title="Reset to Defaults">
+              <IconButton size="small" onClick={resetToDefaults}>
+                <RefreshIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
           </Toolbar>
         </AppBar>
-        
-        {/* Material Controls - Top Bar (hidden in Sweep mode — not relevant there) */}
-        {!isSweepMode && <MaterialControls />}
-        
-        {/* Sidebar — hidden in Sweep mode (sweep has its own full-width layout) */}
-        <Drawer
-          variant={isMobile ? 'temporary' : 'persistent'}
-          open={sidebarOpen && !isSweepMode}
-          sx={{
-            width: sidebarOpen ? drawerWidth : 0,
-            flexShrink: 0,
-            '& .MuiDrawer-paper': {
-              width: drawerWidth,
-              boxSizing: 'border-box',
-              top: '64px',
-              height: 'calc(100% - 64px)',
-              backgroundColor: 'background.paper',
-              borderRight: '1px solid',
-              borderColor: 'divider',
-            },
-          }}
-        >
-          {/* Tabs */}
+
+        {/* ── Full-width Navigation Tabs ── */}
+        <Box sx={{ bgcolor: 'background.paper', borderBottom: '1px solid', borderColor: 'divider', flexShrink: 0 }}>
           <Tabs
             value={activeTab}
-            onChange={(_, newValue) => setActiveTab(newValue)}
-            variant="scrollable"
-            scrollButtons="auto"
-            sx={{
-              borderBottom: '1px solid',
-              borderColor: 'divider',
-            }}
+            onChange={(_, v) => setActiveTab(v)}
+            variant="fullWidth"
+            sx={{ minHeight: 40 }}
           >
-            <Tab label="Geometry" value="geometry" sx={{ minWidth: 60 }} />
-            <Tab label="Materials" value="materials" sx={{ minWidth: 60 }} />
-            <Tab label="Mesh" value="mesh" sx={{ minWidth: 60 }} />
-            <Tab label="Sim" value="simulation" sx={{ minWidth: 60 }} />
-            <Tab label="Sweep" value="sweep" sx={{ minWidth: 60 }} />
+            <Tab label="Geometry" value="geometry" sx={{ minHeight: 40, fontSize: '0.8rem' }} />
+            <Tab label="Materials" value="materials" sx={{ minHeight: 40, fontSize: '0.8rem' }} />
+            <Tab label="Mesh" value="mesh" sx={{ minHeight: 40, fontSize: '0.8rem' }} />
+            <Tab label="Simulation" value="simulation" sx={{ minHeight: 40, fontSize: '0.8rem' }} />
+            <Tab label="Sweep" value="sweep" sx={{ minHeight: 40, fontSize: '0.8rem' }} />
           </Tabs>
+        </Box>
 
-          {/* Tab Content */}
-          {activeTab !== 'sweep' && (
-            <Box sx={{ p: 2, overflow: 'auto', flex: 1 }}>
-              {renderTabContent()}
+        {/* ── Main Content ── */}
+        <Box sx={{ flex: 1, overflow: 'hidden' }}>
+
+          {/* Geometry: parameter table (left) + 3D viewer (right) */}
+          {activeTab === 'geometry' && (
+            <Box sx={{ display: 'flex', height: '100%' }}>
+              {/* Parameter table */}
+              <Box sx={{
+                width: 300,
+                flexShrink: 0,
+                overflowY: 'auto',
+                borderRight: '1px solid',
+                borderColor: 'divider',
+                p: 1.5,
+              }}>
+                <ParameterVariationTable />
+              </Box>
+              {/* 3D viewer with material controls overlay */}
+              <Box sx={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
+                <MaterialControls />
+                <MotorScene />
+                {isGeometryUpdating && (
+                  <Box sx={{
+                    position: 'absolute',
+                    bottom: 16,
+                    left: '50%',
+                    transform: 'translateX(-50%)',
+                    zIndex: 999,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 1,
+                    bgcolor: 'rgba(0,0,0,0.75)',
+                    backdropFilter: 'blur(4px)',
+                    px: 2,
+                    py: 0.75,
+                    borderRadius: 2,
+                    border: '1px solid rgba(59,130,246,0.4)',
+                  }}>
+                    <CircularProgress size={16} thickness={5} />
+                    <Typography variant="caption" sx={{ color: 'white', fontSize: 12 }}>
+                      Updating geometry...
+                    </Typography>
+                  </Box>
+                )}
+              </Box>
             </Box>
           )}
-        </Drawer>
-        
-        {/* Main Content - 3D Viewer or Sweep Panel */}
-        <Box
-          component="main"
-          sx={{
-            flexGrow: 1,
-            marginLeft: sidebarOpen && !isMobile && !isSweepMode ? 0 : `-${drawerWidth}px`,
-            transition: (theme) => theme.transitions.create('margin', {
-              easing: theme.transitions.easing.sharp,
-              duration: theme.transitions.duration.leavingScreen,
-            }),
-            height: '100vh',
-            display: 'flex',
-            flexDirection: 'column',
-          }}
-        >
-          <Toolbar />
-          <Box sx={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
-            {isSweepMode ? (
-              <Box sx={{ height: '100%', overflow: 'hidden' }}>
-                <SweepConfigPanel />
-              </Box>
-            ) : (
-              <MotorScene />
-            )}
-          </Box>
+
+          {/* Sweep */}
+          {activeTab === 'sweep' && <SweepConfigPanel />}
+
+          {/* Placeholder tabs */}
+          {activeTab === 'materials' && (
+            <Box sx={{ p: 4, color: 'text.secondary' }}>
+              <Typography>Materials configuration coming soon...</Typography>
+            </Box>
+          )}
+          {activeTab === 'mesh' && (
+            <Box sx={{ p: 4, color: 'text.secondary' }}>
+              <Typography>Mesh settings coming soon...</Typography>
+            </Box>
+          )}
+          {activeTab === 'simulation' && (
+            <Box sx={{ p: 4, color: 'text.secondary' }}>
+              <Typography>Simulation controls coming soon...</Typography>
+            </Box>
+          )}
         </Box>
       </Box>
     </ThemeProvider>

@@ -50,6 +50,8 @@ class ModulusBridge:
         self.geometries: Dict[str, Tessellation] = {}
         self.sdf_geometry: Optional[CSGGeometry] = None
         self.mesh_data: Dict[str, dict] = {}
+        # Expose HAS_MODULUS as instance attribute
+        self.HAS_MODULUS = HAS_MODULUS
         
     def load_stl_files(self, stl_dir: str) -> Dict[str, str]:
         """
@@ -201,27 +203,41 @@ class ModulusBridge:
             
             # Sample points on mesh surface
             points = self._sample_mesh_surface(vertices, faces, n_points)
-        elif self.sdf_geometry and HAS_MODULUS:
+        elif self.sdf_geometry is not None and HAS_MODULUS:
             # Use Modulus SDF sampling
             try:
                 sampler = self.sdf_geometry.sample_interior(n_points)
                 points = sampler.cpu().numpy()
-            except:
-                # Fallback to surface sampling
-                points = self.sdf_geometry.sample(n_points).cpu().numpy()
+            except Exception as e:
+                print(f"Warning: SDF interior sampling failed: {e}")
+                try:
+                    # Fallback to surface sampling
+                    points = self.sdf_geometry.sample(n_points).cpu().numpy()
+                except Exception as e2:
+                    print(f"Warning: SDF surface sampling also failed: {e2}")
+                    # Use bounding box fallback
+                    points = self._sample_bounding_box(n_points)
         else:
             # Fallback: sample randomly in bounding box
-            all_vertices = []
-            for mesh_data in self.mesh_data.values():
-                all_vertices.extend(mesh_data['vertices'])
-            
-            vertices = np.array(all_vertices)
-            bounds_min = vertices.min(axis=0)
-            bounds_max = vertices.max(axis=0)
-            
-            points = np.random.uniform(bounds_min, bounds_max, (n_points, 3))
+            points = self._sample_bounding_box(n_points)
         
         print(f"Sampled {len(points)} points" + (f" from {region}" if region else ""))
+        return points
+    
+    def _sample_bounding_box(self, n_points: int) -> np.ndarray:
+        """Sample points uniformly in the bounding box of all meshes."""
+        all_vertices = []
+        for mesh_data in self.mesh_data.values():
+            all_vertices.extend(mesh_data['vertices'])
+        
+        if not all_vertices:
+            raise RuntimeError("No mesh data available for sampling")
+        
+        vertices = np.array(all_vertices)
+        bounds_min = vertices.min(axis=0)
+        bounds_max = vertices.max(axis=0)
+        
+        points = np.random.uniform(bounds_min, bounds_max, (n_points, 3))
         return points
     
     def _sample_mesh_surface(self, vertices: np.ndarray, faces: np.ndarray, 

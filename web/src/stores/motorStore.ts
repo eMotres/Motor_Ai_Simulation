@@ -15,8 +15,7 @@ import {
   defaultMeshSettings,
 } from '../types/motor';
 
-// API base URL (Python FastAPI server)
-const API_BASE_URL = 'http://localhost:8013';
+const API_BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8013';
 
 // View mode for 3D visualization
 type ViewMode = 'solid' | 'pointcloud' | 'hybrid' | 'stl';
@@ -63,6 +62,7 @@ interface MotorState {
   // Pipeline Actions
   fetchPipelineStatus: () => Promise<void>;
   runPipeline: (params: MotorGeometryParams) => Promise<void>;
+  runPipelineStream: (onProgress: (stage: string, progress: number) => void) => Promise<void>;
   clearStlCache: () => Promise<void>;
   loadStlMesh: (component: string) => Promise<void>;
   validateGeometry: () => Promise<void>;
@@ -340,6 +340,48 @@ export const useMotorStore = create<MotorState>()(
         }
       },
       
+      runPipelineStream: (onProgress) =>
+        new Promise((resolve, reject) => {
+          set({ isLoading: true, error: null });
+          const es = new EventSource(`${API_BASE_URL}/api/pipeline/stream`);
+
+          es.onmessage = async (event) => {
+            const data = JSON.parse(event.data);
+            onProgress(data.stage, data.progress);
+
+            if (data.stage === 'complete') {
+              es.close();
+              const components: string[] = data.components ?? [];
+              const stlMeshes: Record<string, { vertices: number[]; faces: number[] }> = {};
+
+              for (const comp of components) {
+                try {
+                  const r = await fetch(`${API_BASE_URL}/api/pipeline/stl/${comp}`);
+                  if (r.ok) {
+                    const m = await r.json();
+                    stlMeshes[comp] = { vertices: m.vertices, faces: m.faces };
+                  }
+                } catch { /* skip failed component */ }
+              }
+
+              set({ stlMeshes, validationData: data.validation, isLoading: false, viewMode: 'stl' });
+              resolve();
+            }
+
+            if (data.stage === 'error') {
+              es.close();
+              set({ isLoading: false, error: data.message ?? 'Pipeline failed' });
+              reject(new Error(data.message));
+            }
+          };
+
+          es.onerror = () => {
+            es.close();
+            set({ isLoading: false, error: 'Pipeline connection lost' });
+            reject(new Error('SSE connection failed'));
+          };
+        }),
+
       clearStlCache: async () => {
         set({ isLoading: true, error: null });
         try {

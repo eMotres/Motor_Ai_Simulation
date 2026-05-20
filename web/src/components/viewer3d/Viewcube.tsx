@@ -56,7 +56,8 @@ function makeTexture(label: string, hovered: boolean, flip: boolean): THREE.Canv
   ctx.stroke();
 
   ctx.fillStyle = hovered ? '#ffffff' : '#1a2a3a';
-  const fontSize = label.length > 5 ? 34 : label.length > 4 ? 40 : 48;
+  // Larger font: BOTTOM(6)=50, FRONT/RIGHT(5)=60, others=72
+  const fontSize = label.length > 5 ? 50 : label.length > 4 ? 60 : 72;
   ctx.font = `bold ${fontSize}px "Segoe UI", Arial, sans-serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
@@ -225,11 +226,11 @@ const Viewcube: React.FC<{ size?: number }> = ({ size = 100 }) => {
         </svg>
       </button>
 
-      {/* 3D ViewCube — orthographic so faces show as perfect squares */}
+      {/* 3D ViewCube — orthographic + true isometric angle like Fusion 360 */}
       <div style={{ width: size, height: size }}>
         <Canvas
           orthographic
-          camera={{ position: [22, 26, 68], zoom: 1.55, near: 0.1, far: 500 }}
+          camera={{ position: [50, 55, 55], zoom: 1.05, near: 0.1, far: 500 }}
           style={{
             background: 'rgba(16, 22, 36, 0.90)',
             borderRadius: 8,

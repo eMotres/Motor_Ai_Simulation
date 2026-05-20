@@ -124,3 +124,27 @@ export function computeDerivedParams(params: MotorGeometryParams): MotorGeometry
   // Just return params - derived params computed by Python API
   return { ...params };
 }
+
+// ─── Sweep / Optimization types ─────────────────────────────────────────────
+
+export type VariationMode = 'fixed' | 'sweep' | 'optimize';
+
+export interface ParameterVariation {
+  mode: VariationMode;
+  min: number;
+  max: number;
+  step: number;
+}
+
+export type VariationConfig = Record<string, ParameterVariation>;
+
+export interface OperatingPoint {
+  current_a: number;
+  rpm: number;
+}
+
+export interface SweepConfig {
+  variations: VariationConfig;
+  operatingPoints: [OperatingPoint, OperatingPoint];
+  rippleThreshold: number;
+}

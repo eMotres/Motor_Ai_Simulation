@@ -37,6 +37,7 @@ import {
 import MotorScene from './components/viewer3d/MotorScene';
 import GeometryForm from './components/parameters/GeometryForm';
 import MaterialControls from './components/parameters/MaterialControls';
+import SweepConfigPanel from './components/sweep/SweepConfigPanel';
 import { useMotorStore, useUIStore } from './stores/motorStore';
 
 const darkTheme = createTheme({
@@ -97,10 +98,14 @@ function App() {
         return <Typography>Mesh settings coming soon...</Typography>;
       case 'simulation':
         return <Typography>Simulation controls coming soon...</Typography>;
+      case 'sweep':
+        return null; // rendered in main content area
       default:
         return <GeometryForm />;
     }
   };
+
+  const isSweepMode = activeTab === 'sweep';
   
   return (
     <ThemeProvider theme={darkTheme}>
@@ -256,25 +261,29 @@ function App() {
           <Tabs
             value={activeTab}
             onChange={(_, newValue) => setActiveTab(newValue)}
-            variant="fullWidth"
+            variant="scrollable"
+            scrollButtons="auto"
             sx={{
               borderBottom: '1px solid',
               borderColor: 'divider',
             }}
           >
-            <Tab label="Geometry" value="geometry" />
-            <Tab label="Materials" value="materials" />
-            <Tab label="Mesh" value="mesh" />
-            <Tab label="Sim" value="simulation" />
+            <Tab label="Geometry" value="geometry" sx={{ minWidth: 60 }} />
+            <Tab label="Materials" value="materials" sx={{ minWidth: 60 }} />
+            <Tab label="Mesh" value="mesh" sx={{ minWidth: 60 }} />
+            <Tab label="Sim" value="simulation" sx={{ minWidth: 60 }} />
+            <Tab label="Sweep" value="sweep" sx={{ minWidth: 60 }} />
           </Tabs>
-          
+
           {/* Tab Content */}
-          <Box sx={{ p: 2, overflow: 'auto', flex: 1 }}>
-            {renderTabContent()}
-          </Box>
+          {activeTab !== 'sweep' && (
+            <Box sx={{ p: 2, overflow: 'auto', flex: 1 }}>
+              {renderTabContent()}
+            </Box>
+          )}
         </Drawer>
         
-        {/* Main Content - 3D Viewer */}
+        {/* Main Content - 3D Viewer or Sweep Panel */}
         <Box
           component="main"
           sx={{
@@ -290,8 +299,14 @@ function App() {
           }}
         >
           <Toolbar />
-          <Box sx={{ flex: 1, position: 'relative' }}>
-            <MotorScene />
+          <Box sx={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
+            {isSweepMode ? (
+              <Box sx={{ height: '100%', overflow: 'hidden' }}>
+                <SweepConfigPanel />
+              </Box>
+            ) : (
+              <MotorScene />
+            )}
           </Box>
         </Box>
       </Box>

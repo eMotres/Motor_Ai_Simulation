@@ -8,6 +8,10 @@ import type {
   ParameterSchema,
   ParameterGroup,
   GeometrySchemaResponse,
+  SweepConfig,
+  VariationConfig,
+  OperatingPoint,
+  ParameterVariation,
 } from '../types/motor';
 import {
   defaultGeometryParams,
@@ -15,7 +19,7 @@ import {
   defaultMeshSettings,
 } from '../types/motor';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8013';
+const API_BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
 
 // View mode for 3D visualization
 type ViewMode = 'solid' | 'pointcloud' | 'hybrid' | 'stl';
@@ -66,6 +70,13 @@ interface MotorState {
   clearStlCache: () => Promise<void>;
   loadStlMesh: (component: string) => Promise<void>;
   validateGeometry: () => Promise<void>;
+
+  // Sweep / Optimization
+  sweepConfig: SweepConfig;
+  updateVariation: (paramName: string, variation: Partial<ParameterVariation>) => void;
+  updateOperatingPoint: (index: 0 | 1, point: Partial<OperatingPoint>) => void;
+  updateRippleThreshold: (threshold: number) => void;
+  initVariationsFromSchema: () => void;
 }
 
 export const useMotorStore = create<MotorState>()(
@@ -88,7 +99,17 @@ export const useMotorStore = create<MotorState>()(
       stlMeshes: {},
       validationData: null,
       geometryMismatch: false,
-      
+
+      // Sweep config initial state
+      sweepConfig: {
+        variations: {},
+        operatingPoints: [
+          { current_a: 10, rpm: 3000 },
+          { current_a: 20, rpm: 3000 },
+        ],
+        rippleThreshold: 0.05,
+      },
+
       // Local Actions
       updateGeometry: (params) => set((state) => ({
         geometry: { ...state.geometry, ...params } as MotorGeometryParams,
@@ -448,13 +469,59 @@ export const useMotorStore = create<MotorState>()(
             }
           }
           
-          set({ 
+          set({
             validationData: data,
             geometryMismatch: mismatch,
           });
         } catch (error) {
           console.error('Failed to validate geometry:', error);
         }
+      },
+
+      // ── Sweep actions ────────────────────────────────────────────────────────
+      updateVariation: (paramName, variation) =>
+        set((state) => ({
+          sweepConfig: {
+            ...state.sweepConfig,
+            variations: {
+              ...state.sweepConfig.variations,
+              [paramName]: {
+                ...state.sweepConfig.variations[paramName],
+                ...variation,
+              },
+            },
+          },
+        })),
+
+      updateOperatingPoint: (index, point) =>
+        set((state) => {
+          const pts: [OperatingPoint, OperatingPoint] = [...state.sweepConfig.operatingPoints] as [OperatingPoint, OperatingPoint];
+          pts[index] = { ...pts[index], ...point };
+          return { sweepConfig: { ...state.sweepConfig, operatingPoints: pts } };
+        }),
+
+      updateRippleThreshold: (threshold) =>
+        set((state) => ({
+          sweepConfig: { ...state.sweepConfig, rippleThreshold: threshold },
+        })),
+
+      initVariationsFromSchema: () => {
+        const { parameterSchema, geometry, sweepConfig } = get();
+        const existing = sweepConfig.variations;
+        const variations: VariationConfig = {};
+        for (const param of parameterSchema) {
+          if (param.type === 'string') continue;
+          const current = Number(geometry[param.name] ?? 0);
+          variations[param.name] = existing[param.name] ?? {
+            mode: 'fixed',
+            min: param.min ?? current * 0.5,
+            max: param.max ?? current * 1.5,
+            step: param.step ?? (current !== 0 ? Math.abs(current) * 0.1 : 1),
+          };
+        }
+        set((state) => ({
+          sweepConfig: { ...state.sweepConfig, variations },
+        }));
       },
     }),
     {
@@ -465,6 +532,7 @@ export const useMotorStore = create<MotorState>()(
         materials: state.materials,
         meshSettings: state.meshSettings,
         viewMode: state.viewMode,
+        sweepConfig: state.sweepConfig,
       }),
     }
   )
@@ -473,7 +541,7 @@ export const useMotorStore = create<MotorState>()(
 // UI State
 interface UIState {
   sidebarOpen: boolean;
-  activeTab: 'geometry' | 'materials' | 'mesh' | 'simulation';
+  activeTab: 'geometry' | 'materials' | 'mesh' | 'simulation' | 'sweep';
   showWireframe: boolean;
   showAxes: boolean;
   showGrid: boolean;
@@ -488,7 +556,7 @@ interface UIState {
   cameraMode: 'perspective' | 'orthographic';
   
   toggleSidebar: () => void;
-  setActiveTab: (tab: 'geometry' | 'materials' | 'mesh' | 'simulation') => void;
+  setActiveTab: (tab: 'geometry' | 'materials' | 'mesh' | 'simulation' | 'sweep') => void;
   toggleWireframe: () => void;
   toggleAxes: () => void;
   toggleGrid: () => void;

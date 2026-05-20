@@ -60,126 +60,78 @@ class CadQueryMotor:
             self.parameters = self._get_hardcoded_defaults()
     
     def _map_api_to_cadquery(self, api_params: Dict) -> Dict:
-        """Map API parameter names to CadQuery parameter names."""
-        # Start with hardcoded defaults to ensure all required params exist
-        mapped = self._get_hardcoded_defaults().copy()
+        """Map API parameter names to CadQuery parameter names.
         
-        # Map API params to CadQuery params (these will override defaults)
-        # Stator parameters
-        if 'stator_diameter' in api_params:
-            mapped['stator_outer_radius'] = api_params['stator_diameter'] / 2
-        elif 'stator_outer_radius' in api_params:
-            mapped['stator_outer_radius'] = api_params['stator_outer_radius']
-            
-        if 'stator_inner_radius' in api_params:
-            mapped['stator_inner_radius'] = api_params['stator_inner_radius']
-        elif 'stator_outer_radius' in mapped:
-            # Calculate stator_inner_radius as 70% of outer radius
-            mapped['stator_inner_radius'] = mapped['stator_outer_radius'] * 0.7
-            
-        if 'core_thickness' in api_params:
-            mapped['core_thickness'] = api_params['core_thickness']
-        if 'stator_width' in api_params:
-            mapped['stator_width'] = api_params['stator_width']
-            
-        if 'slot_height' in api_params:
-            mapped['slot_height'] = api_params['slot_height']
-        if 'tooth_width' in api_params:
-            mapped['tooth_width'] = api_params['tooth_width']
-            
-        if 'num_slots' in api_params:
-            mapped['num_slots'] = int(api_params['num_slots'])
-        elif 'num_slots_per_segment' in api_params and 'num_seg' in api_params:
-            # num_slots = num_slots_per_segment * num_seg
-            mapped['num_slots'] = int(api_params['num_slots_per_segment'] * api_params['num_seg'])
+        Uses derived_params from config/motor_config.yaml to compute values.
+        All parameters should come from config - api_params are overrides.
+        """
+        # Get geometry params from config - this is the single source of truth
+        try:
+            from motor_ai_sim.config import get_geometry_params
+            config_params = get_geometry_params().to_dict()
+        except Exception as e:
+            raise RuntimeError(f"Failed to load config: {e}")
         
-        # Map num_seg to num_poles
-        if 'num_seg' in api_params:
-            mapped['num_poles'] = int(api_params['num_seg'])
-        elif 'num_poles_per_segment' in api_params and 'num_seg' in api_params:
-            mapped['num_poles'] = int(api_params['num_poles_per_segment'] * api_params['num_seg'])
+        # Start with config params as defaults
+        mapped = config_params.copy()
         
-        # Rotor parameters
-        if 'rotor_outer_radius' in api_params:
-            mapped['rotor_outer_radius'] = api_params['rotor_outer_radius']
-        elif 'stator_inner_radius' in mapped:
-            air_gap = api_params.get('air_gap', 2.0)
-            mapped['rotor_outer_radius'] = mapped['stator_inner_radius'] - air_gap
-        elif 'stator_outer_radius' in mapped:
-            air_gap = api_params.get('air_gap', 2.0)
-            mapped['rotor_outer_radius'] = mapped['stator_outer_radius'] * 0.68 - air_gap
-            
-        if 'rotor_inner_radius' in api_params:
-            mapped['rotor_inner_radius'] = api_params['rotor_inner_radius']
-        elif 'rotor_outer_radius' in mapped:
-            mapped['rotor_inner_radius'] = mapped['rotor_outer_radius'] * 0.3
-        else:
-            mapped['rotor_inner_radius'] = 20.0  # Default fallback
-            
-        if 'magnet_height' in api_params:
-            mapped['magnet_height'] = api_params['magnet_height']
-        if 'magnet_width' in api_params:
-            mapped['magnet_width'] = api_params['magnet_width']
-        elif 'num_poles' in mapped:
-            # Calculate from number of poles (use mapped value, not api_params)
-            mapped['magnet_width'] = 360.0 / mapped['num_poles'] * 0.7
+        # Override with any API params that are provided
+        # This allows runtime overrides while keeping config as source of truth
+        for key, value in api_params.items():
+            if value is not None:
+                mapped[key] = value
         
-        # Shaft radius (from rotor_inner_radius or use default)
-        if 'shaft_radius' in api_params:
-            mapped['shaft_radius'] = api_params['shaft_radius']
-        else:
-            mapped['shaft_radius'] = mapped.get('rotor_inner_radius', 20)
+        # Compute derived parameters from config formulas
+        # These formulas are defined in config/motor_config.yaml derived_params
+        if 'stator_diameter' in mapped:
+            mapped['stator_outer_radius'] = mapped['stator_diameter'] / 2
         
-        # Air gap
-        if 'air_gap' in api_params:
-            mapped['air_gap'] = api_params['air_gap']
+        if 'stator_outer_radius' in mapped and 'core_thickness' in mapped and 'slot_height' in mapped:
+            mapped['stator_inner_radius'] = mapped['stator_outer_radius'] - mapped['core_thickness'] - mapped['slot_height']
         
-        # Wire parameters
-        if 'wire_width' in api_params:
-            mapped['wire_width'] = api_params['wire_width']
-        if 'wire_height' in api_params:
-            mapped['wire_height'] = api_params['wire_height']
-        if 'wire_spacing_x' in api_params:
-            mapped['wire_spacing_x'] = api_params['wire_spacing_x']
-        if 'wire_spacing_y' in api_params:
-            mapped['wire_spacing_y'] = api_params['wire_spacing_y']
-        if 'insulation_thickness' in api_params:
-            mapped['insulation_thickness'] = api_params['insulation_thickness']
-        if 'slot_hs' in api_params:
-            mapped['slot_hs'] = api_params['slot_hs']
+        if 'stator_inner_radius' in mapped and 'air_gap' in mapped:
+            mapped['rotor_outer_radius'] = mapped['stator_inner_radius'] - mapped['air_gap']
         
-        # Number of poles
-        if 'num_poles' in api_params:
-            mapped['num_poles'] = int(api_params['num_poles'])
+        if 'rotor_outer_radius' in mapped and 'magnet_height' in mapped and 'rotor_house_height' in mapped:
+            mapped['rotor_inner_radius'] = mapped['rotor_outer_radius'] - mapped['magnet_height'] - mapped['rotor_house_height']
+        
+        if 'num_seg' in mapped and 'num_slots_per_segment' in mapped:
+            mapped['num_slots'] = int(mapped['num_seg'] * mapped['num_slots_per_segment'])
+        
+        if 'num_seg' in mapped and 'num_poles_per_segment' in mapped:
+            mapped['num_poles'] = int(mapped['num_seg'] * mapped['num_poles_per_segment'])
+        
+        if 'rotor_inner_radius' in mapped and 'shaft_height' in mapped:
+            mapped['shaft_radius'] = mapped['rotor_inner_radius'] - mapped['shaft_height']
+        
+        if 'rotor_inner_radius' in mapped:
+            mapped['shaft_inner_radius'] = 5.0  # Default inner hole in shaft
+        
+        # Ensure magnet parameters exist
+        for key in ['magnet_fill_down', 'magnet_fill_up', 'magnet_fill_radius', 'magnet_up_gap', 'magnet_down_height']:
+            if key not in mapped:
+                mapped[key] = config_params.get(key, 0.0)
         
         return mapped
     
     def _get_hardcoded_defaults(self) -> Dict:
-        """Get hardcoded default parameters."""
-        return {
-            'stator_outer_radius': 100.0,
-            'stator_inner_radius': 70.0,
-            'stator_width': 50.0,
-            'core_thickness': 50.0,
-            'slot_height': 10.0,
-            'tooth_width': 5.0,
-            'num_slots': 36,
-            'num_poles': 12,
-            'rotor_outer_radius': 68.0,
-            'rotor_inner_radius': 20.0,
-            'magnet_width': 8.0,
-            'magnet_height': 5.0,
-            'shaft_radius': 15.0,
-            'shaft_inner_radius': 5.0,  # inner hole radius for shaft
-            'air_gap': 2.0,
-            'wire_width': 4.0,
-            'wire_height': 0.6,
-            'wire_spacing_x': 0.1,
-            'wire_spacing_y': 0.13,
-            'insulation_thickness': 0.15,
-            'slot_hs': 0.2,  # slot opening height ratio
-            'num_wires_per_slot': 10,  # number of wires stacked vertically
-        }
+        """Get default parameters from config/motor_config.yaml.
+        
+        This method loads all parameters from the config file, ensuring
+        a single source of truth for all motor parameters.
+        """
+        try:
+            from motor_ai_sim.config import get_geometry_params
+            params = get_geometry_params()
+            # Map API params to CadQuery internal parameters
+            return self._map_api_to_cadquery(params.to_dict())
+        except Exception as e:
+            print(f"Warning: Could not load config: {e}")
+            # Fallback - but this should never happen if config is valid
+            raise RuntimeError(
+                "Failed to load config/motor_config.yaml. "
+                "All parameters must be defined in the config file."
+            )
     
     def set_parameters(self, params: Dict) -> None:
         """Set motor geometry parameters (updates defaults from config)."""
@@ -298,7 +250,10 @@ class CadQueryMotor:
         
         shaft_r = p['rotor_inner_radius']
         shaft_in = p['shaft_inner_radius']
-        length = p['stator_width'] 
+        length = p['stator_width']
+        
+        # Print shaft parameters for debugging
+        print(f"[DEBUG] _create_shaft: shaft_r={shaft_r}, shaft_in={shaft_in}")
         
         shaft = (
             cq.Workplane("XY")
@@ -318,13 +273,17 @@ class CadQueryMotor:
         width = p['stator_width']
 
         mag_h = p['magnet_height']                  # magnet height
-        rotor_house_h = p.get('rotor_house_height', 2.0)     # rotor housing thickness
-        mag_fill_down = p.get('magnet_fill_down', 0.8)       # down fill ratio of the magnet 
-        mag_fill_up = p.get('magnet_fill_up', 0.8)           # up fill ratio of the magnet 
-        mag_fill_radius = p.get('magnet_fill_radius', 1.0)   # magnet fillet radius 
-        mag_up_gap = p.get('magnet_up_gap', 1.0)             # magnet cut up gap
-        mag_down_h = p.get('magnet_down_height', 5.0)        # magnet down height 
+        rotor_house_h = p['rotor_house_height']     # rotor housing thickness
+        mag_fill_down = p['magnet_fill_down']       # down fill ratio of the magnet 
+        mag_fill_up = p['magnet_fill_up']           # up fill ratio of the magnet 
+        mag_fill_r = p['magnet_fill_radius']   # magnet fillet radius 
+        mag_up_gap = p['magnet_up_gap']             # magnet cut up gap
+        mag_down_h = p['magnet_down_height']        # magnet down height 
         pole_angle = 360.0 / num_poles
+        
+        # Print magnet parameters for debugging
+        print(f"[DEBUG] _create_magnets: mag_fill_down={mag_fill_down}, pole_angle={pole_angle}, num_poles={num_poles}")
+        print(f"[DEBUG] _create_magnets: rotor_inner_r={rotor_inner_r}, magnet_r={magnet_r}")
         magnet_r = rotor_inner_r + rotor_house_h
         
         magnets = []
@@ -349,9 +308,15 @@ class CadQueryMotor:
                 .polyline([p1, p2, p3, p4, p5, p6])
                 .close()        
                 .extrude(width)
-                #.translate((magnet_r, 0, 0))
-                .rotate((0, 0, 0), (0, 0, 1), angle)
             )
+            
+            # Apply fillet to all edges that can be filleted
+            # This rounds all sharp edges on the magnet
+            # CadQuery will only apply to edges that can accept the fillet radius
+            #magnet = magnet.fillet(mag_fill_r)
+            
+            # Rotate to final position
+            magnet = magnet.rotate((0, 0, 0), (0, 0, 1), angle)
 
             magnets.append(magnet)
             
@@ -361,13 +326,13 @@ class CadQueryMotor:
         p = self.parameters
         
         rotor_outer_r = p['rotor_outer_radius']
-        shaft_r = p['shaft_radius']
+        rotor_inner_r = p['rotor_inner_radius']
         width = p['stator_width']
         
         rotor = (
             cq.Workplane("XY")
             .circle(rotor_outer_r)
-            .circle(shaft_r)
+            .circle(rotor_inner_r)
             .extrude(width)
         )
         

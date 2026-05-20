@@ -2,8 +2,7 @@ import React, { useMemo, useEffect, useState } from 'react';
 import * as THREE from 'three';
 import { useMotorStore, useUIStore } from '../../stores/motorStore';
 
-// Use port 8013 for API
-const API_BASE_URL = 'http://localhost:8013';
+const API_BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8013';
 
 interface MeshData {
   vertices: number[] | number[][];

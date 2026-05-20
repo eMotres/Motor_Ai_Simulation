@@ -54,6 +54,27 @@ const darkTheme = createTheme({
 
 function App() {
   const { activeTab, setActiveTab, showGrid, showAxes, toggleGrid, toggleAxes } = useUIStore();
+  const [panelWidth, setPanelWidth] = React.useState(300);
+  const isDragging = React.useRef(false);
+
+  const onDividerMouseDown = React.useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    isDragging.current = true;
+    const startX = e.clientX;
+    const startW = panelWidth;
+    const onMove = (me: MouseEvent) => {
+      if (!isDragging.current) return;
+      const next = Math.max(160, Math.min(520, startW + me.clientX - startX));
+      setPanelWidth(next);
+    };
+    const onUp = () => {
+      isDragging.current = false;
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }, [panelWidth]);
   const {
     resetToDefaults,
     fetchGeometryFromApi,
@@ -176,15 +197,28 @@ function App() {
             <Box sx={{ display: 'flex', height: '100%' }}>
               {/* Parameter table */}
               <Box sx={{
-                width: 300,
+                width: panelWidth,
                 flexShrink: 0,
                 overflowY: 'auto',
-                borderRight: '1px solid',
-                borderColor: 'divider',
                 p: 1.5,
               }}>
                 <ParameterVariationTable />
               </Box>
+
+              {/* Draggable divider */}
+              <Box
+                onMouseDown={onDividerMouseDown}
+                sx={{
+                  width: 5,
+                  flexShrink: 0,
+                  cursor: 'col-resize',
+                  bgcolor: 'divider',
+                  transition: 'background-color 0.15s',
+                  '&:hover': { bgcolor: 'primary.main' },
+                  userSelect: 'none',
+                }}
+              />
+
               {/* 3D viewer with material controls overlay */}
               <Box sx={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
                 <MaterialControls />

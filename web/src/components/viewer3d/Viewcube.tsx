@@ -189,7 +189,7 @@ const CubeScene: React.FC = () => {
 
 // ─── Wrapper ──────────────────────────────────────────────────────────────────
 
-const Viewcube: React.FC<{ size?: number }> = ({ size = 100 }) => {
+const Viewcube: React.FC<{ size?: number }> = ({ size = 200 }) => {
   const [hovHome, setHovHome] = useState(false);
 
   const handleHome = useCallback(() => {

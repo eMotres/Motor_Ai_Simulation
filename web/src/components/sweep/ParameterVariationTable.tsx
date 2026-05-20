@@ -68,8 +68,8 @@ const ParameterVariationTable: React.FC = () => {
     .filter(g => g.params.length > 0);
 
   const fieldSx = {
-    width: 100,
-    '& .MuiInputBase-input': { px: '8px', py: '4px', fontSize: 13 },
+    width: 52,
+    '& .MuiInputBase-input': { px: '4px', py: '4px', fontSize: 12 },
   };
 
   return (

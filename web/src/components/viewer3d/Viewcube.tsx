@@ -230,7 +230,7 @@ const Viewcube: React.FC<{ size?: number }> = ({ size = 100 }) => {
       <div style={{ width: size, height: size }}>
         <Canvas
           orthographic
-          camera={{ position: [18, 28, 72], zoom: 1.1, near: 0.1, far: 500 }}
+          camera={{ position: [0, 0, 100], zoom: 1.05, near: 0.1, far: 500 }}
           style={{
             background: 'rgba(16, 22, 36, 0.90)',
             borderRadius: 8,

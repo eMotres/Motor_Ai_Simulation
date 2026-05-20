@@ -79,12 +79,13 @@ const drawerWidth = 320;
 function App() {
   const isMobile = useMediaQuery('(max-width:768px)');
   const { sidebarOpen, activeTab, toggleSidebar, setActiveTab, showGrid, showAxes, toggleGrid, toggleAxes } = useUIStore();
-  const { resetToDefaults, fetchGeometryFromApi, connectedToApi, isLoading, viewMode, setViewMode, geometry, runPipeline, stlMeshes, clearStlCache } = useMotorStore();
-  
-  // Fetch geometry from Python API on mount
+  const { resetToDefaults, fetchGeometryFromApi, fetchSchemaFromApi, connectedToApi, isLoading, viewMode, setViewMode, geometry, runPipeline, stlMeshes, clearStlCache } = useMotorStore();
+
+  // Fetch geometry + schema from API on mount (schema needed by Sweep tab regardless of active sidebar tab)
   useEffect(() => {
     fetchGeometryFromApi();
-  }, [fetchGeometryFromApi]);
+    fetchSchemaFromApi();
+  }, [fetchGeometryFromApi, fetchSchemaFromApi]);
   
   // Note: Removed the useEffect that forced STL mode - users can now freely switch between view modes
   

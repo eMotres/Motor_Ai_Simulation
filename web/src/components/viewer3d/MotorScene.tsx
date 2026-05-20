@@ -15,28 +15,43 @@ import PointCloudMesh from './PointCloudMesh';
 import { STLCollection } from './STLMesh';
 
 // Camera that auto-adjusts to viewport aspect ratio
+const FRUSTUM = 300;
+
 const AdaptiveCamera: React.FC = () => {
   const { cameraMode } = useUIStore();
-  const { size } = useThree();
-  
-  const aspect = size.width / size.height;
-  
+  const { camera, size } = useThree();
+
+  // Guard: avoid NaN on first render before canvas is measured
+  const aspect = size.width > 0 && size.height > 0 ? size.width / size.height : 1;
+
+  // Imperatively update frustum whenever canvas size changes — this fixes
+  // the case where the initial JSX render fires before R3F has measured the
+  // canvas, leaving the camera with a stale (wrong) aspect ratio.
+  useEffect(() => {
+    if (cameraMode !== 'orthographic') return;
+    const cam = camera as THREE.OrthographicCamera;
+    if (!cam.isOrthographicCamera) return;
+    cam.left   = -FRUSTUM * aspect;
+    cam.right  =  FRUSTUM * aspect;
+    cam.top    =  FRUSTUM;
+    cam.bottom = -FRUSTUM;
+    cam.updateProjectionMatrix();
+  }, [camera, aspect, cameraMode]);
+
   if (cameraMode === 'perspective') {
     return <PerspectiveCamera makeDefault position={[0, 0, 250]} fov={50} />;
   }
-  
-  // For orthographic, calculate frustum based on a reference size and aspect ratio
-  const frustumSize = 300;
+
   return (
     <OrthographicCamera
       makeDefault
       position={[0, 0, 250]}
       near={0.1}
       far={5000}
-      left={-frustumSize * aspect}
-      right={frustumSize * aspect}
-      top={frustumSize}
-      bottom={-frustumSize}
+      left={-FRUSTUM * aspect}
+      right={ FRUSTUM * aspect}
+      top={   FRUSTUM}
+      bottom={-FRUSTUM}
     />
   );
 };

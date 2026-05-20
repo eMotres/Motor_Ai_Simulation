@@ -17,8 +17,11 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Three.js canvas */
+/* Three.js canvas — must be absolute so R3F measures correct CSS size */
 .motor-canvas {
+  position: absolute !important;
+  top: 0 !important;
+  left: 0 !important;
   width: 100% !important;
   height: 100% !important;
 }

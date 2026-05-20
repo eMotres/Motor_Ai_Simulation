@@ -4,7 +4,6 @@ import {
   Typography,
   Box,
   Divider,
-  InputAdornment,
   CircularProgress,
   Alert,
   Button,
@@ -202,7 +201,7 @@ const GeometryForm: React.FC = () => {
                   // Render TextField for numeric types
                   <TextField
                     key={param.name}
-                    label={param.label}
+                    label={param.unit ? `${param.label} (${param.unit})` : param.label}
                     type="number"
                     size="small"
                     value={geometry[param.name] ?? 0}
@@ -212,12 +211,7 @@ const GeometryForm: React.FC = () => {
                       max: param.max,
                       step: param.step,
                     }}
-                    InputProps={{
-                      endAdornment: param.unit ? (
-                        <InputAdornment position="end">{param.unit}</InputAdornment>
-                      ) : undefined,
-                    }}
-                    helperText={param.description}
+                    helperText={param.description || undefined}
                     disabled={isLoading}
                   />
                 )

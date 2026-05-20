@@ -9,7 +9,7 @@ interface ViewDir {
   label: string;
 }
 
-// RIGHT = +X, LEFT = -X (was swapped in older version)
+// RIGHT = +X, LEFT = -X
 const FACES: ViewDir[] = [
   { name: 'front',  position: [ 0,  0,  1], rotation: [0, 0, 0],            label: 'FRONT'  },
   { name: 'back',   position: [ 0,  0, -1], rotation: [0, Math.PI, 0],      label: 'BACK'   },
@@ -17,11 +17,6 @@ const FACES: ViewDir[] = [
   { name: 'bottom', position: [ 0, -1,  0], rotation: [ Math.PI / 2, 0, 0], label: 'BOTTOM' },
   { name: 'right',  position: [ 1,  0,  0], rotation: [0, -Math.PI / 2, 0], label: 'RIGHT'  },
   { name: 'left',   position: [-1,  0,  0], rotation: [0,  Math.PI / 2, 0], label: 'LEFT'   },
-];
-
-const ISO_POSITIONS: [number, number, number][] = [
-  [ 1,  1,  1], [-1,  1,  1],
-  [ 1,  1, -1], [-1,  1, -1],
 ];
 
 function roundRect(
@@ -41,7 +36,7 @@ function roundRect(
   ctx.closePath();
 }
 
-// Fusion 360 style: light face, dark text / blue hover
+// Light faces on dark background — blue highlight on hover
 function makeTexture(label: string, hovered: boolean, flip: boolean): THREE.CanvasTexture {
   const canvas = document.createElement('canvas');
   canvas.width = canvas.height = 256;
@@ -52,19 +47,16 @@ function makeTexture(label: string, hovered: boolean, flip: boolean): THREE.Canv
     ctx.scale(-1, 1);
   }
 
-  // Background: light gray normally, blue on hover
-  ctx.fillStyle = hovered ? '#2563eb' : '#cdd8e3';
+  ctx.fillStyle = hovered ? '#2563eb' : '#c8d8e8';
   ctx.fillRect(0, 0, 256, 256);
 
-  // Subtle inner border
-  ctx.strokeStyle = hovered ? '#1d4ed8' : '#8aa0b4';
+  ctx.strokeStyle = hovered ? '#1d4ed8' : '#7a96b0';
   ctx.lineWidth = 6;
-  roundRect(ctx, 4, 4, 248, 248, 8);
+  roundRect(ctx, 4, 4, 248, 248, 10);
   ctx.stroke();
 
-  // Face text
-  ctx.fillStyle = hovered ? '#ffffff' : '#1e2d3d';
-  const fontSize = label.length > 5 ? 36 : label.length > 4 ? 42 : 50;
+  ctx.fillStyle = hovered ? '#ffffff' : '#1a2a3a';
+  const fontSize = label.length > 5 ? 34 : label.length > 4 ? 40 : 48;
   ctx.font = `bold ${fontSize}px "Segoe UI", Arial, sans-serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
@@ -79,7 +71,7 @@ FACES.forEach((f) => {
   const flip = f.name === 'back';
   FACE_TEX[f.name] = {
     n: makeTexture(f.label, false, flip),
-    h: makeTexture(f.label, true,  flip),
+    h: makeTexture(f.label, true, flip),
   };
 });
 
@@ -110,28 +102,28 @@ const CubeScene: React.FC = () => {
     window.dispatchEvent(new CustomEvent('viewcubeNavigate', { detail: { position: pos, name } }));
   }, []);
 
-  // S = half-size: cube edge = 2*S = 34 units
-  const S = 17;
-  // Arrow total length from corner: must reach past cube face (S) + some extra
-  const AL = S * 2.6; // ~44 units: from -S to -S+AL = -17+44 = 27 (past face at 17)
+  // S = half-size of cube
+  const S = 13;
+  // Arrow length from corner: tips reach -S + AL = -13 + 35 = 22 (past cube face at 13)
+  const AL = S * 2.7;
 
   return (
     <group ref={groupRef}>
-      {/* Cube body: light gray like Fusion 360 */}
+      {/* Cube body */}
       <mesh>
         <boxGeometry args={[S * 2, S * 2, S * 2]} />
-        <meshStandardMaterial color="#b8c8d6" roughness={0.7} metalness={0.0} />
+        <meshStandardMaterial color="#b0c4d8" roughness={0.6} metalness={0.0} />
       </mesh>
 
-      {/* Darker edges for depth */}
+      {/* Edges */}
       <lineSegments>
         <edgesGeometry args={[new THREE.BoxGeometry(S * 2, S * 2, S * 2)]} />
-        <lineBasicMaterial color="#607080" />
+        <lineBasicMaterial color="#4a6070" />
       </lineSegments>
 
       {/* Face label planes */}
       {FACES.map((face) => {
-        const off = S + 0.12;
+        const off = S + 0.1;
         const pos  = new THREE.Vector3(...face.position).multiplyScalar(off);
         const rot  = new THREE.Euler(...face.rotation);
         const isHov = hovered === face.name;
@@ -143,7 +135,7 @@ const CubeScene: React.FC = () => {
               onPointerOver={(e) => { e.stopPropagation(); setHovered(face.name); document.body.style.cursor = 'pointer'; }}
               onPointerOut={() => { setHovered(null); document.body.style.cursor = 'default'; }}
             >
-              <planeGeometry args={[S * 1.92, S * 1.92]} />
+              <planeGeometry args={[S * 1.9, S * 1.9]} />
               <meshStandardMaterial
                 map={isHov ? FACE_TEX[face.name].h : FACE_TEX[face.name].n}
                 transparent
@@ -154,53 +146,38 @@ const CubeScene: React.FC = () => {
         );
       })}
 
-      {/* Corner spheres for isometric views */}
-      {ISO_POSITIONS.map((pos, i) => (
-        <mesh
-          key={`iso-${i}`}
-          position={new THREE.Vector3(...pos).multiplyScalar(S + 4)}
-          onClick={(e) => { e.stopPropagation(); navigate(pos, `iso${i}`); }}
-          onPointerOver={(e) => { e.stopPropagation(); document.body.style.cursor = 'pointer'; }}
-          onPointerOut={() => { document.body.style.cursor = 'default'; }}
-        >
-          <sphereGeometry args={[3, 10, 10]} />
-          <meshStandardMaterial color="#8090a0" roughness={0.5} metalness={0.2} />
-        </mesh>
-      ))}
-
-      {/* Axis arrows from back-bottom-left corner [-S,-S,-S].
-          Length AL ensures tips extend beyond the cube faces. */}
+      {/* Axis arrows from back-bottom-left corner [-S,-S,-S] */}
       <group position={[-S, -S, -S]}>
         {/* X – red */}
         <group rotation={[0, 0, -Math.PI / 2]}>
           <mesh position={[0, AL / 2, 0]}>
-            <cylinderGeometry args={[0.7, 0.7, AL, 8]} />
+            <cylinderGeometry args={[0.6, 0.6, AL, 8]} />
             <meshStandardMaterial color="#e53e3e" roughness={0.4} depthTest={false} />
           </mesh>
-          <mesh position={[0, AL + 3, 0]}>
-            <coneGeometry args={[2, 5.5, 8]} />
+          <mesh position={[0, AL + 2.5, 0]}>
+            <coneGeometry args={[1.8, 5, 8]} />
             <meshStandardMaterial color="#e53e3e" roughness={0.4} depthTest={false} />
           </mesh>
         </group>
 
         {/* Y – green */}
         <mesh position={[0, AL / 2, 0]}>
-          <cylinderGeometry args={[0.7, 0.7, AL, 8]} />
+          <cylinderGeometry args={[0.6, 0.6, AL, 8]} />
           <meshStandardMaterial color="#38a169" roughness={0.4} depthTest={false} />
         </mesh>
-        <mesh position={[0, AL + 3, 0]}>
-          <coneGeometry args={[2, 5.5, 8]} />
+        <mesh position={[0, AL + 2.5, 0]}>
+          <coneGeometry args={[1.8, 5, 8]} />
           <meshStandardMaterial color="#38a169" roughness={0.4} depthTest={false} />
         </mesh>
 
         {/* Z – blue */}
         <group rotation={[Math.PI / 2, 0, 0]}>
           <mesh position={[0, AL / 2, 0]}>
-            <cylinderGeometry args={[0.7, 0.7, AL, 8]} />
+            <cylinderGeometry args={[0.6, 0.6, AL, 8]} />
             <meshStandardMaterial color="#3182ce" roughness={0.4} depthTest={false} />
           </mesh>
-          <mesh position={[0, AL + 3, 0]}>
-            <coneGeometry args={[2, 5.5, 8]} />
+          <mesh position={[0, AL + 2.5, 0]}>
+            <coneGeometry args={[1.8, 5, 8]} />
             <meshStandardMaterial color="#3182ce" roughness={0.4} depthTest={false} />
           </mesh>
         </group>
@@ -211,7 +188,7 @@ const CubeScene: React.FC = () => {
 
 // ─── Wrapper ──────────────────────────────────────────────────────────────────
 
-const Viewcube: React.FC<{ size?: number }> = ({ size = 120 }) => {
+const Viewcube: React.FC<{ size?: number }> = ({ size = 100 }) => {
   const [hovHome, setHovHome] = useState(false);
 
   const handleHome = useCallback(() => {
@@ -222,7 +199,7 @@ const Viewcube: React.FC<{ size?: number }> = ({ size = 120 }) => {
   return (
     <div style={{ position: 'absolute', top: 80, right: 16, zIndex: 100, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
 
-      {/* Home button — house icon, top-left of cube area */}
+      {/* Home button */}
       <button
         onClick={handleHome}
         onMouseEnter={() => setHovHome(true)}
@@ -230,8 +207,8 @@ const Viewcube: React.FC<{ size?: number }> = ({ size = 120 }) => {
         title="Home view"
         style={{
           alignSelf: 'flex-start',
-          background: hovHome ? 'rgba(37,99,235,0.15)' : 'rgba(255,255,255,0.08)',
-          border: `1px solid ${hovHome ? 'rgba(37,99,235,0.5)' : 'rgba(150,170,190,0.35)'}`,
+          background: hovHome ? 'rgba(37,99,235,0.18)' : 'rgba(255,255,255,0.06)',
+          border: `1px solid ${hovHome ? 'rgba(37,99,235,0.5)' : 'rgba(120,160,190,0.3)'}`,
           borderRadius: 5,
           cursor: 'pointer',
           padding: '3px 5px',
@@ -239,9 +216,8 @@ const Viewcube: React.FC<{ size?: number }> = ({ size = 120 }) => {
           alignItems: 'center',
         }}
       >
-        {/* House SVG */}
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
-          stroke={hovHome ? '#60a5fa' : '#8aa8c0'} strokeWidth="2.2"
+          stroke={hovHome ? '#60a5fa' : '#7090a8'} strokeWidth="2.2"
           strokeLinecap="round" strokeLinejoin="round">
           <path d="M3 12L12 3l9 9" />
           <path d="M9 21V12h6v9" />
@@ -249,20 +225,21 @@ const Viewcube: React.FC<{ size?: number }> = ({ size = 120 }) => {
         </svg>
       </button>
 
-      {/* 3D ViewCube canvas */}
+      {/* 3D ViewCube — orthographic so faces show as perfect squares */}
       <div style={{ width: size, height: size }}>
         <Canvas
-          camera={{ position: [22, 26, 68], fov: 46, near: 0.1, far: 500 }}
+          orthographic
+          camera={{ position: [22, 26, 68], zoom: 1.55, near: 0.1, far: 500 }}
           style={{
-            background: 'rgba(240,246,252,0.92)',
-            borderRadius: 10,
-            border: '1px solid rgba(100,130,160,0.4)',
-            boxShadow: '0 2px 12px rgba(0,0,0,0.25)',
+            background: 'rgba(16, 22, 36, 0.90)',
+            borderRadius: 8,
+            border: '1px solid rgba(80,110,140,0.35)',
+            boxShadow: '0 2px 10px rgba(0,0,0,0.45)',
           }}
         >
-          <ambientLight intensity={1.4} />
-          <directionalLight position={[50, 80, 60]} intensity={1.2} />
-          <directionalLight position={[-30, 10, -20]} intensity={0.3} />
+          <ambientLight intensity={1.5} />
+          <directionalLight position={[50, 80, 60]} intensity={1.0} />
+          <directionalLight position={[-30, 10, -20]} intensity={0.25} />
           <CubeScene />
         </Canvas>
       </div>

@@ -104,8 +104,8 @@ const CubeScene: React.FC = () => {
   }, []);
 
   // S = half-size of cube
-  const S = 13;
-  // Arrow length from corner: tips reach -S + AL = -13 + 35 = 22 (past cube face at 13)
+  const S = 26;
+  // Arrow length from corner: tips reach past cube face
   const AL = S * 2.7;
 
   return (
@@ -189,7 +189,7 @@ const CubeScene: React.FC = () => {
 
 // ─── Wrapper ──────────────────────────────────────────────────────────────────
 
-const Viewcube: React.FC<{ size?: number }> = ({ size = 200 }) => {
+const Viewcube: React.FC<{ size?: number }> = ({ size = 100 }) => {
   const [hovHome, setHovHome] = useState(false);
 
   const handleHome = useCallback(() => {
@@ -230,7 +230,7 @@ const Viewcube: React.FC<{ size?: number }> = ({ size = 200 }) => {
       <div style={{ width: size, height: size }}>
         <Canvas
           orthographic
-          camera={{ position: [0, 0, 100], zoom: 1.05, near: 0.1, far: 500 }}
+          camera={{ position: [0, 0, 200], zoom: 1.05, near: 0.1, far: 1000 }}
           style={{
             background: 'rgba(16, 22, 36, 0.90)',
             borderRadius: 8,

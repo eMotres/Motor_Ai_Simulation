@@ -1,8 +1,7 @@
 import React, { Suspense, useRef, useEffect } from 'react';
 import { Canvas, useThree, useFrame } from '@react-three/fiber';
 import { OrbitControls, PerspectiveCamera, OrthographicCamera, Environment, Grid } from '@react-three/drei';
-import { EffectComposer, SSAO, Bloom } from '@react-three/postprocessing';
-import { BlendFunction } from 'postprocessing';
+import { EffectComposer, Bloom } from '@react-three/postprocessing';
 import { useUIStore, useMotorStore } from '../../stores/motorStore';
 import * as THREE from 'three';
 import Viewcube from './Viewcube';
@@ -136,21 +135,18 @@ const ViewcubeNavigation: React.FC<{ controlsRef: React.RefObject<any> }> = ({ c
 };
 
 const MotorScene: React.FC = () => {
-  const { showGrid, showAxes, autoRotate, envIntensity } = useUIStore();
+  const { showGrid, showAxes, envIntensity } = useUIStore();
   const controlsRef = useRef<any>(null);
-  
+
   return (
     <>
       <Canvas shadows className="motor-canvas">
         {/* Adaptive camera that switches between Perspective and Orthographic */}
         <AdaptiveCamera />
-        
-        <OrbitControls 
+
+        <OrbitControls
           ref={controlsRef}
-          autoRotate={autoRotate}
-          autoRotateSpeed={1}
-          enableDamping
-          dampingFactor={0.05}
+          enableDamping={false}
         />
       
       {/* Lighting */}
@@ -167,17 +163,9 @@ const MotorScene: React.FC = () => {
       <Environment preset="studio" background={false} environmentIntensity={envIntensity} />
       
       {/* Post-processing effects for Fusion 360 look */}
-      <EffectComposer>
-        <SSAO
-          blendFunction={BlendFunction.MULTIPLY}
-          samples={31}
-          radius={5}
-          intensity={30}
-          luminanceInfluence={0.1}
-          color={new THREE.Color('black')}
-        />
+      <EffectComposer enableNormalPass>
         <Bloom
-          intensity={0.2}
+          intensity={0.15}
           luminanceThreshold={0.9}
           luminanceSmoothing={0.9}
         />

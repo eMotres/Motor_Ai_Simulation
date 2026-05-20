@@ -22,7 +22,6 @@ import {
   Menu as MenuIcon,
   Settings as SettingsIcon,
   Visibility as VisibilityIcon,
-  AutoFixHigh as AutoFixHighIcon,
   GridOn as GridOnIcon,
   ThreeDRotation as ThreeDRotationIcon,
   Refresh as RefreshIcon,
@@ -78,7 +77,7 @@ const drawerWidth = 320;
 
 function App() {
   const isMobile = useMediaQuery('(max-width:768px)');
-  const { sidebarOpen, activeTab, toggleSidebar, setActiveTab, showGrid, showAxes, autoRotate, toggleGrid, toggleAxes, toggleAutoRotate } = useUIStore();
+  const { sidebarOpen, activeTab, toggleSidebar, setActiveTab, showGrid, showAxes, toggleGrid, toggleAxes } = useUIStore();
   const { resetToDefaults, fetchGeometryFromApi, connectedToApi, isLoading, viewMode, setViewMode, geometry, runPipeline, stlMeshes, clearStlCache } = useMotorStore();
   
   // Fetch geometry from Python API on mount
@@ -169,15 +168,6 @@ function App() {
                   onClick={toggleAxes}
                 >
                   <ThreeDRotationIcon />
-                </IconButton>
-              </Tooltip>
-              
-              <Tooltip title={autoRotate ? 'Stop Rotation' : 'Auto Rotate'}>
-                <IconButton 
-                  color={autoRotate ? 'primary' : 'default'} 
-                  onClick={toggleAutoRotate}
-                >
-                  <AutoFixHighIcon />
                 </IconButton>
               </Tooltip>
               

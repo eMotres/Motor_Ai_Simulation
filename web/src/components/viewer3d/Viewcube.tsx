@@ -15,8 +15,8 @@ const FACES: ViewDir[] = [
   { name: 'back',   position: [ 0,  0, -1], rotation: [0, Math.PI, 0],      label: 'BACK'   },
   { name: 'top',    position: [ 0,  1,  0], rotation: [-Math.PI / 2, 0, 0], label: 'TOP'    },
   { name: 'bottom', position: [ 0, -1,  0], rotation: [ Math.PI / 2, 0, 0], label: 'BOTTOM' },
-  { name: 'right',  position: [ 1,  0,  0], rotation: [0, -Math.PI / 2, 0], label: 'RIGHT'  },
-  { name: 'left',   position: [-1,  0,  0], rotation: [0,  Math.PI / 2, 0], label: 'LEFT'   },
+  { name: 'right',  position: [ 1,  0,  0], rotation: [0,  Math.PI / 2, 0], label: 'RIGHT'  },
+  { name: 'left',   position: [-1,  0,  0], rotation: [0, -Math.PI / 2, 0], label: 'LEFT'   },
 ];
 
 function roundRect(
@@ -230,7 +230,7 @@ const Viewcube: React.FC<{ size?: number }> = ({ size = 100 }) => {
       <div style={{ width: size, height: size }}>
         <Canvas
           orthographic
-          camera={{ position: [50, 55, 55], zoom: 1.05, near: 0.1, far: 500 }}
+          camera={{ position: [18, 28, 72], zoom: 1.1, near: 0.1, far: 500 }}
           style={{
             background: 'rgba(16, 22, 36, 0.90)',
             borderRadius: 8,

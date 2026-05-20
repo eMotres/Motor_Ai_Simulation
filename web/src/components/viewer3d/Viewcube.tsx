@@ -9,23 +9,25 @@ interface ViewDir {
   label: string;
 }
 
-// Fixed: RIGHT = +X, LEFT = -X (was swapped before)
+// RIGHT = +X, LEFT = -X (was swapped in older version)
 const FACES: ViewDir[] = [
-  { name: 'front',  position: [ 0,  0,  1], rotation: [0, 0, 0],             label: 'FRONT'  },
-  { name: 'back',   position: [ 0,  0, -1], rotation: [0, Math.PI, 0],       label: 'BACK'   },
-  { name: 'top',    position: [ 0,  1,  0], rotation: [-Math.PI / 2, 0, 0],  label: 'TOP'    },
-  { name: 'bottom', position: [ 0, -1,  0], rotation: [ Math.PI / 2, 0, 0],  label: 'BOTTOM' },
-  { name: 'right',  position: [ 1,  0,  0], rotation: [0, -Math.PI / 2, 0],  label: 'RIGHT'  },
-  { name: 'left',   position: [-1,  0,  0], rotation: [0,  Math.PI / 2, 0],  label: 'LEFT'   },
+  { name: 'front',  position: [ 0,  0,  1], rotation: [0, 0, 0],            label: 'FRONT'  },
+  { name: 'back',   position: [ 0,  0, -1], rotation: [0, Math.PI, 0],      label: 'BACK'   },
+  { name: 'top',    position: [ 0,  1,  0], rotation: [-Math.PI / 2, 0, 0], label: 'TOP'    },
+  { name: 'bottom', position: [ 0, -1,  0], rotation: [ Math.PI / 2, 0, 0], label: 'BOTTOM' },
+  { name: 'right',  position: [ 1,  0,  0], rotation: [0, -Math.PI / 2, 0], label: 'RIGHT'  },
+  { name: 'left',   position: [-1,  0,  0], rotation: [0,  Math.PI / 2, 0], label: 'LEFT'   },
 ];
 
-// Isometric corner views
 const ISO_POSITIONS: [number, number, number][] = [
   [ 1,  1,  1], [-1,  1,  1],
   [ 1,  1, -1], [-1,  1, -1],
 ];
 
-function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
+function roundRect(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number, h: number, r: number,
+) {
   ctx.beginPath();
   ctx.moveTo(x + r, y);
   ctx.lineTo(x + w - r, y);
@@ -39,6 +41,7 @@ function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: numbe
   ctx.closePath();
 }
 
+// Fusion 360 style: light face, dark text / blue hover
 function makeTexture(label: string, hovered: boolean, flip: boolean): THREE.CanvasTexture {
   const canvas = document.createElement('canvas');
   canvas.width = canvas.height = 256;
@@ -49,49 +52,38 @@ function makeTexture(label: string, hovered: boolean, flip: boolean): THREE.Canv
     ctx.scale(-1, 1);
   }
 
-  // Background
-  ctx.fillStyle = hovered ? '#1d4ed8' : '#1a2744';
+  // Background: light gray normally, blue on hover
+  ctx.fillStyle = hovered ? '#2563eb' : '#cdd8e3';
   ctx.fillRect(0, 0, 256, 256);
 
-  // Rounded border
-  ctx.strokeStyle = hovered ? '#60a5fa' : '#3b4e6a';
-  ctx.lineWidth = 8;
-  roundRect(ctx, 6, 6, 244, 244, 18);
+  // Subtle inner border
+  ctx.strokeStyle = hovered ? '#1d4ed8' : '#8aa0b4';
+  ctx.lineWidth = 6;
+  roundRect(ctx, 4, 4, 248, 248, 8);
   ctx.stroke();
 
-  // Inner subtle separator lines (grid feel)
-  if (!hovered) {
-    ctx.strokeStyle = 'rgba(255,255,255,0.04)';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(0, 128); ctx.lineTo(256, 128);
-    ctx.moveTo(128, 0); ctx.lineTo(128, 256);
-    ctx.stroke();
-  }
-
-  // Text
-  ctx.fillStyle = hovered ? '#ffffff' : '#7fa8cc';
-  const size = label.length > 5 ? 30 : label.length > 4 ? 36 : 42;
-  ctx.font = `bold ${size}px "Segoe UI", "Inter", Arial, sans-serif`;
+  // Face text
+  ctx.fillStyle = hovered ? '#ffffff' : '#1e2d3d';
+  const fontSize = label.length > 5 ? 36 : label.length > 4 ? 42 : 50;
+  ctx.font = `bold ${fontSize}px "Segoe UI", Arial, sans-serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  if (hovered) {
-    ctx.shadowColor = 'rgba(147, 197, 253, 0.7)';
-    ctx.shadowBlur = 14;
-  }
   ctx.fillText(label, 128, 128);
 
   return new THREE.CanvasTexture(canvas);
 }
 
-// Pre-generate textures once (only BACK is mirrored)
+// Pre-generate textures (only BACK needs mirror-flip)
 const FACE_TEX: Record<string, { n: THREE.CanvasTexture; h: THREE.CanvasTexture }> = {};
 FACES.forEach((f) => {
   const flip = f.name === 'back';
-  FACE_TEX[f.name] = { n: makeTexture(f.label, false, flip), h: makeTexture(f.label, true, flip) };
+  FACE_TEX[f.name] = {
+    n: makeTexture(f.label, false, flip),
+    h: makeTexture(f.label, true,  flip),
+  };
 });
 
-// ─── 3D cube scene ────────────────────────────────────────────────────────────
+// ─── Cube + axes scene ────────────────────────────────────────────────────────
 
 const CubeScene: React.FC = () => {
   const groupRef = useRef<THREE.Group>(null);
@@ -118,27 +110,30 @@ const CubeScene: React.FC = () => {
     window.dispatchEvent(new CustomEvent('viewcubeNavigate', { detail: { position: pos, name } }));
   }, []);
 
-  const S = 28; // half-size → cube edge = 56 units
+  // S = half-size: cube edge = 2*S = 34 units
+  const S = 17;
+  // Arrow total length from corner: must reach past cube face (S) + some extra
+  const AL = S * 2.6; // ~44 units: from -S to -S+AL = -17+44 = 27 (past face at 17)
 
   return (
     <group ref={groupRef}>
-      {/* Cube body */}
+      {/* Cube body: light gray like Fusion 360 */}
       <mesh>
         <boxGeometry args={[S * 2, S * 2, S * 2]} />
-        <meshStandardMaterial color="#080f1e" roughness={0.9} metalness={0.1} />
+        <meshStandardMaterial color="#b8c8d6" roughness={0.7} metalness={0.0} />
       </mesh>
 
-      {/* Edge lines */}
+      {/* Darker edges for depth */}
       <lineSegments>
         <edgesGeometry args={[new THREE.BoxGeometry(S * 2, S * 2, S * 2)]} />
-        <lineBasicMaterial color="#2d4060" />
+        <lineBasicMaterial color="#607080" />
       </lineSegments>
 
       {/* Face label planes */}
       {FACES.map((face) => {
-        const off = S + 0.15;
-        const pos = new THREE.Vector3(...face.position).multiplyScalar(off);
-        const rot = new THREE.Euler(...face.rotation);
+        const off = S + 0.12;
+        const pos  = new THREE.Vector3(...face.position).multiplyScalar(off);
+        const rot  = new THREE.Euler(...face.rotation);
         const isHov = hovered === face.name;
 
         return (
@@ -148,7 +143,7 @@ const CubeScene: React.FC = () => {
               onPointerOver={(e) => { e.stopPropagation(); setHovered(face.name); document.body.style.cursor = 'pointer'; }}
               onPointerOut={() => { setHovered(null); document.body.style.cursor = 'default'; }}
             >
-              <planeGeometry args={[S * 1.88, S * 1.88]} />
+              <planeGeometry args={[S * 1.92, S * 1.92]} />
               <meshStandardMaterial
                 map={isHov ? FACE_TEX[face.name].h : FACE_TEX[face.name].n}
                 transparent
@@ -163,60 +158,52 @@ const CubeScene: React.FC = () => {
       {ISO_POSITIONS.map((pos, i) => (
         <mesh
           key={`iso-${i}`}
-          position={new THREE.Vector3(...pos).multiplyScalar(S + 5)}
+          position={new THREE.Vector3(...pos).multiplyScalar(S + 4)}
           onClick={(e) => { e.stopPropagation(); navigate(pos, `iso${i}`); }}
           onPointerOver={(e) => { e.stopPropagation(); document.body.style.cursor = 'pointer'; }}
           onPointerOut={() => { document.body.style.cursor = 'default'; }}
         >
-          <sphereGeometry args={[4, 12, 12]} />
-          <meshStandardMaterial color="#2d4060" roughness={0.4} metalness={0.6} />
+          <sphereGeometry args={[3, 10, 10]} />
+          <meshStandardMaterial color="#8090a0" roughness={0.5} metalness={0.2} />
         </mesh>
       ))}
 
-      {/* Axis arrows from back-bottom-left corner */}
-      <AxisArrows S={S} />
-    </group>
-  );
-};
+      {/* Axis arrows from back-bottom-left corner [-S,-S,-S].
+          Length AL ensures tips extend beyond the cube faces. */}
+      <group position={[-S, -S, -S]}>
+        {/* X – red */}
+        <group rotation={[0, 0, -Math.PI / 2]}>
+          <mesh position={[0, AL / 2, 0]}>
+            <cylinderGeometry args={[0.7, 0.7, AL, 8]} />
+            <meshStandardMaterial color="#e53e3e" roughness={0.4} depthTest={false} />
+          </mesh>
+          <mesh position={[0, AL + 3, 0]}>
+            <coneGeometry args={[2, 5.5, 8]} />
+            <meshStandardMaterial color="#e53e3e" roughness={0.4} depthTest={false} />
+          </mesh>
+        </group>
 
-// ─── Axis arrows ──────────────────────────────────────────────────────────────
+        {/* Y – green */}
+        <mesh position={[0, AL / 2, 0]}>
+          <cylinderGeometry args={[0.7, 0.7, AL, 8]} />
+          <meshStandardMaterial color="#38a169" roughness={0.4} depthTest={false} />
+        </mesh>
+        <mesh position={[0, AL + 3, 0]}>
+          <coneGeometry args={[2, 5.5, 8]} />
+          <meshStandardMaterial color="#38a169" roughness={0.4} depthTest={false} />
+        </mesh>
 
-const AxisArrows: React.FC<{ S: number }> = ({ S }) => {
-  const L = S * 1.35;
-  const R = 0.55;
-
-  return (
-    <group position={[-S, -S, -S]}>
-      {/* X – Red */}
-      <group rotation={[0, 0, -Math.PI / 2]}>
-        <mesh position={[0, L / 2, 0]}>
-          <cylinderGeometry args={[R, R, L, 8]} />
-          <meshStandardMaterial color="#ef4444" roughness={0.4} depthTest={false} />
-        </mesh>
-        <mesh position={[0, L + 3.5, 0]}>
-          <coneGeometry args={[1.8, 6, 8]} />
-          <meshStandardMaterial color="#ef4444" roughness={0.4} depthTest={false} />
-        </mesh>
-      </group>
-      {/* Y – Green */}
-      <mesh position={[0, L / 2, 0]}>
-        <cylinderGeometry args={[R, R, L, 8]} />
-        <meshStandardMaterial color="#22c55e" roughness={0.4} depthTest={false} />
-      </mesh>
-      <mesh position={[0, L + 3.5, 0]}>
-        <coneGeometry args={[1.8, 6, 8]} />
-        <meshStandardMaterial color="#22c55e" roughness={0.4} depthTest={false} />
-      </mesh>
-      {/* Z – Blue */}
-      <group rotation={[Math.PI / 2, 0, 0]}>
-        <mesh position={[0, L / 2, 0]}>
-          <cylinderGeometry args={[R, R, L, 8]} />
-          <meshStandardMaterial color="#3b82f6" roughness={0.4} depthTest={false} />
-        </mesh>
-        <mesh position={[0, L + 3.5, 0]}>
-          <coneGeometry args={[1.8, 6, 8]} />
-          <meshStandardMaterial color="#3b82f6" roughness={0.4} depthTest={false} />
-        </mesh>
+        {/* Z – blue */}
+        <group rotation={[Math.PI / 2, 0, 0]}>
+          <mesh position={[0, AL / 2, 0]}>
+            <cylinderGeometry args={[0.7, 0.7, AL, 8]} />
+            <meshStandardMaterial color="#3182ce" roughness={0.4} depthTest={false} />
+          </mesh>
+          <mesh position={[0, AL + 3, 0]}>
+            <coneGeometry args={[2, 5.5, 8]} />
+            <meshStandardMaterial color="#3182ce" roughness={0.4} depthTest={false} />
+          </mesh>
+        </group>
       </group>
     </group>
   );
@@ -224,60 +211,62 @@ const AxisArrows: React.FC<{ S: number }> = ({ S }) => {
 
 // ─── Wrapper ──────────────────────────────────────────────────────────────────
 
-const Viewcube: React.FC<{ size?: number }> = ({ size = 155 }) => {
+const Viewcube: React.FC<{ size?: number }> = ({ size = 120 }) => {
+  const [hovHome, setHovHome] = useState(false);
+
   const handleHome = useCallback(() => {
     const pos = new THREE.Vector3(0, 0, 200);
     window.dispatchEvent(new CustomEvent('viewcubeNavigate', { detail: { position: pos, name: 'front' } }));
   }, []);
 
   return (
-    <div style={{ position: 'absolute', top: 80, right: 20, zIndex: 100, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5 }}>
+    <div style={{ position: 'absolute', top: 80, right: 16, zIndex: 100, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+
+      {/* Home button — house icon, top-left of cube area */}
+      <button
+        onClick={handleHome}
+        onMouseEnter={() => setHovHome(true)}
+        onMouseLeave={() => setHovHome(false)}
+        title="Home view"
+        style={{
+          alignSelf: 'flex-start',
+          background: hovHome ? 'rgba(37,99,235,0.15)' : 'rgba(255,255,255,0.08)',
+          border: `1px solid ${hovHome ? 'rgba(37,99,235,0.5)' : 'rgba(150,170,190,0.35)'}`,
+          borderRadius: 5,
+          cursor: 'pointer',
+          padding: '3px 5px',
+          display: 'flex',
+          alignItems: 'center',
+        }}
+      >
+        {/* House SVG */}
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+          stroke={hovHome ? '#60a5fa' : '#8aa8c0'} strokeWidth="2.2"
+          strokeLinecap="round" strokeLinejoin="round">
+          <path d="M3 12L12 3l9 9" />
+          <path d="M9 21V12h6v9" />
+          <path d="M5 10v11h14V10" />
+        </svg>
+      </button>
+
+      {/* 3D ViewCube canvas */}
       <div style={{ width: size, height: size }}>
         <Canvas
-          camera={{ position: [28, 32, 88], fov: 42, near: 0.1, far: 1000 }}
+          camera={{ position: [22, 26, 68], fov: 46, near: 0.1, far: 500 }}
           style={{
-            background: 'linear-gradient(145deg, rgba(8,15,30,0.96) 0%, rgba(15,25,50,0.96) 100%)',
-            borderRadius: 14,
-            border: '1px solid rgba(45,64,96,0.8)',
-            boxShadow: '0 8px 32px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.05)',
+            background: 'rgba(240,246,252,0.92)',
+            borderRadius: 10,
+            border: '1px solid rgba(100,130,160,0.4)',
+            boxShadow: '0 2px 12px rgba(0,0,0,0.25)',
           }}
         >
-          <ambientLight intensity={0.9} />
-          <directionalLight position={[60, 90, 60]} intensity={1.6} />
-          <directionalLight position={[-40, 20, -40]} intensity={0.35} />
+          <ambientLight intensity={1.4} />
+          <directionalLight position={[50, 80, 60]} intensity={1.2} />
+          <directionalLight position={[-30, 10, -20]} intensity={0.3} />
           <CubeScene />
         </Canvas>
       </div>
-
-      {/* Home / reset button */}
-      <HomeButton onClick={handleHome} />
     </div>
-  );
-};
-
-const HomeButton: React.FC<{ onClick: () => void }> = ({ onClick }) => {
-  const [hov, setHov] = useState(false);
-  return (
-    <button
-      onClick={onClick}
-      onMouseEnter={() => setHov(true)}
-      onMouseLeave={() => setHov(false)}
-      style={{
-        background: hov ? 'rgba(30,64,100,0.9)' : 'rgba(10,20,40,0.85)',
-        border: `1px solid ${hov ? 'rgba(96,165,250,0.6)' : 'rgba(45,64,96,0.7)'}`,
-        borderRadius: 6,
-        color: hov ? '#93c5fd' : '#6b8cb0',
-        cursor: 'pointer',
-        fontSize: 10,
-        fontWeight: 600,
-        padding: '4px 16px',
-        fontFamily: '"Segoe UI", "Inter", system-ui, sans-serif',
-        letterSpacing: '0.08em',
-        transition: 'all 0.15s ease',
-      }}
-    >
-      HOME
-    </button>
   );
 };
 

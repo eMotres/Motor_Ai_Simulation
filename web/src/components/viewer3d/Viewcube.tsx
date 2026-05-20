@@ -1,362 +1,283 @@
-import React, { useRef, useState, useCallback, useEffect, useMemo } from 'react';
+import React, { useRef, useState, useCallback, useEffect } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
-import { Html } from '@react-three/drei';
 import * as THREE from 'three';
 
-// Standard CAD coordinate system: X-Right, Y-Up, Z-Front (toward viewer)
-interface ViewDirection {
+interface ViewDir {
   name: string;
-  position: [number, number, number];  // Direction vector for camera
-  rotation: [number, number, number];  // Euler rotation for face
+  position: [number, number, number];
+  rotation: [number, number, number];
   label: string;
 }
 
-// Face definitions aligned with CAD standard coordinates
-// X+ = Right, Y+ = Up, Z+ = Front (toward viewer)
-const FACE_VIEWS: ViewDirection[] = [
-  { name: 'front', position: [0, 0, 1], rotation: [0, 0, 0], label: 'FRONT' },     // +Z = camera at +Z looks at -Z
-  { name: 'back', position: [0, 0, -1], rotation: [0, Math.PI, 0], label: 'BACK' },    // -Z = camera at -Z looks at +Z
-  { name: 'top', position: [0, 1, 0], rotation: [-Math.PI / 2, 0, 0], label: 'TOP' },    // +Y = looking down
-  { name: 'bottom', position: [0, -1, 0], rotation: [Math.PI / 2, 0, 0], label: 'BOTTOM' }, // -Y = looking up
-  { name: 'right', position: [-1, 0, 0], rotation: [0, Math.PI / 2, 0], label: 'RIGHT' },  // -X = looking from right
-  { name: 'left', position: [1, 0, 0], rotation: [0, -Math.PI / 2, 0], label: 'LEFT' },   // +X = looking from left
+// Fixed: RIGHT = +X, LEFT = -X (was swapped before)
+const FACES: ViewDir[] = [
+  { name: 'front',  position: [ 0,  0,  1], rotation: [0, 0, 0],             label: 'FRONT'  },
+  { name: 'back',   position: [ 0,  0, -1], rotation: [0, Math.PI, 0],       label: 'BACK'   },
+  { name: 'top',    position: [ 0,  1,  0], rotation: [-Math.PI / 2, 0, 0],  label: 'TOP'    },
+  { name: 'bottom', position: [ 0, -1,  0], rotation: [ Math.PI / 2, 0, 0],  label: 'BOTTOM' },
+  { name: 'right',  position: [ 1,  0,  0], rotation: [0, -Math.PI / 2, 0],  label: 'RIGHT'  },
+  { name: 'left',   position: [-1,  0,  0], rotation: [0,  Math.PI / 2, 0],  label: 'LEFT'   },
 ];
 
-// Pre-generate textures for all faces (normal and hover states)
-function createFaceTextures(): Record<string, { normal: THREE.Texture; hover: THREE.Texture }> {
-  const textures: Record<string, { normal: THREE.Texture; hover: THREE.Texture }> = {};
-  
-  FACE_VIEWS.forEach(view => {
-    // Determine if we need to flip the texture
-    const needsFlip = ['left', 'right', 'back'].includes(view.name);
-    
-    // Normal state - dark background, gray text
-    const normalCanvas = document.createElement('canvas');
-    normalCanvas.width = 256;
-    normalCanvas.height = 256;
-    const normalCtx = normalCanvas.getContext('2d')!;
-    
-    if (needsFlip) {
-      normalCtx.translate(256, 0);
-      normalCtx.scale(-1, 1);
-    }
-    
-    normalCtx.fillStyle = '#1e293b';
-    normalCtx.fillRect(0, 0, 256, 256);
-    normalCtx.strokeStyle = '#475569';
-    normalCtx.lineWidth = 8;
-    normalCtx.strokeRect(4, 4, 248, 248);
-    normalCtx.fillStyle = '#94a3b8';
-    normalCtx.font = 'bold 42px Arial, sans-serif';
-    normalCtx.textAlign = 'center';
-    normalCtx.textBaseline = 'middle';
-    normalCtx.fillText(view.label, 128, 128);
-    
-    // Reset transform for hover
-    normalCtx.setTransform(1, 0, 0, 1, 0, 0);
-    
-    // Hover state - lighter background, white text
-    const hoverCanvas = document.createElement('canvas');
-    hoverCanvas.width = 256;
-    hoverCanvas.height = 256;
-    const hoverCtx = hoverCanvas.getContext('2d')!;
-    
-    if (needsFlip) {
-      hoverCtx.translate(256, 0);
-      hoverCtx.scale(-1, 1);
-    }
-    
-    hoverCtx.fillStyle = '#334155';
-    hoverCtx.fillRect(0, 0, 256, 256);
-    hoverCtx.strokeStyle = '#64748b';
-    hoverCtx.lineWidth = 8;
-    hoverCtx.strokeRect(4, 4, 248, 248);
-    hoverCtx.fillStyle = '#ffffff';
-    hoverCtx.font = 'bold 42px Arial, sans-serif';
-    hoverCtx.textAlign = 'center';
-    hoverCtx.textBaseline = 'middle';
-    hoverCtx.fillText(view.label, 128, 128);
-    
-    textures[view.name] = {
-      normal: new THREE.CanvasTexture(normalCanvas),
-      hover: new THREE.CanvasTexture(hoverCanvas)
-    };
-  });
-  
-  return textures;
+// Isometric corner views
+const ISO_POSITIONS: [number, number, number][] = [
+  [ 1,  1,  1], [-1,  1,  1],
+  [ 1,  1, -1], [-1,  1, -1],
+];
+
+function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
 }
 
-// Pre-generate textures once
-const FACE_TEXTURES = createFaceTextures();
+function makeTexture(label: string, hovered: boolean, flip: boolean): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = 256;
+  const ctx = canvas.getContext('2d')!;
 
-interface ViewcubeSceneProps {
-  onViewChange?: (view: string) => void;
+  if (flip) {
+    ctx.translate(256, 0);
+    ctx.scale(-1, 1);
+  }
+
+  // Background
+  ctx.fillStyle = hovered ? '#1d4ed8' : '#1a2744';
+  ctx.fillRect(0, 0, 256, 256);
+
+  // Rounded border
+  ctx.strokeStyle = hovered ? '#60a5fa' : '#3b4e6a';
+  ctx.lineWidth = 8;
+  roundRect(ctx, 6, 6, 244, 244, 18);
+  ctx.stroke();
+
+  // Inner subtle separator lines (grid feel)
+  if (!hovered) {
+    ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, 128); ctx.lineTo(256, 128);
+    ctx.moveTo(128, 0); ctx.lineTo(128, 256);
+    ctx.stroke();
+  }
+
+  // Text
+  ctx.fillStyle = hovered ? '#ffffff' : '#7fa8cc';
+  const size = label.length > 5 ? 30 : label.length > 4 ? 36 : 42;
+  ctx.font = `bold ${size}px "Segoe UI", "Inter", Arial, sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  if (hovered) {
+    ctx.shadowColor = 'rgba(147, 197, 253, 0.7)';
+    ctx.shadowBlur = 14;
+  }
+  ctx.fillText(label, 128, 128);
+
+  return new THREE.CanvasTexture(canvas);
 }
 
-const ViewcubeScene: React.FC<ViewcubeSceneProps> = ({ onViewChange }) => {
-  const cubeRef = useRef<THREE.Group>(null);
-  const [hoveredFace, setHoveredFace] = useState<string | null>(null);
+// Pre-generate textures once (only BACK is mirrored)
+const FACE_TEX: Record<string, { n: THREE.CanvasTexture; h: THREE.CanvasTexture }> = {};
+FACES.forEach((f) => {
+  const flip = f.name === 'back';
+  FACE_TEX[f.name] = { n: makeTexture(f.label, false, flip), h: makeTexture(f.label, true, flip) };
+});
 
-  // Use identity quaternion - camera at [0, 0, 250] looks at +Z (FRONT)
-  // ViewCube starts with FRONT face visible to match main camera
-  const internalQuat = useRef(new THREE.Quaternion().identity());
+// ─── 3D cube scene ────────────────────────────────────────────────────────────
 
-  useEffect(() => {
-    const handleCameraChange = (e: Event) => {
-      const customEvent = e as CustomEvent;
-      if (customEvent.detail && customEvent.detail.quaternion) {
-        // Apply 180° Y offset and invert to fix rotation direction
-        const offset = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
-        const cameraQuat = customEvent.detail.quaternion.clone();
-        internalQuat.current.copy(cameraQuat).multiply(offset).invert();
-      }
-    };
-    window.addEventListener('mainCameraChange', handleCameraChange);
-    return () => window.removeEventListener('mainCameraChange', handleCameraChange);
-  }, []);
-
-  useFrame(() => {
-    if (cubeRef.current) {
-      cubeRef.current.quaternion.slerp(internalQuat.current, 0.15);
-    }
-  });
-
-  const handleFaceClick = useCallback((view: ViewDirection) => {
-    onViewChange?.(view.name);
-    const distance = 200;
-    const targetPosition = new THREE.Vector3(
-      view.position[0] * distance,
-      view.position[1] * distance,
-      view.position[2] * distance
-    );
-    window.dispatchEvent(new CustomEvent('viewcubeNavigate', {
-      detail: { position: targetPosition, rotation: view.rotation, name: view.name }
-    }));
-  }, [onViewChange]);
-
-  const handlePointerOver = useCallback((faceName: string) => {
-    setHoveredFace(faceName);
-    document.body.style.cursor = 'pointer';
-  }, []);
-
-  const handlePointerOut = useCallback(() => {
-    setHoveredFace(null);
-    document.body.style.cursor = 'default';
-  }, []);
-
-  const cubeSize = 28;
-
-  return (
-    <>
-      {/* Rotating Cube with axes inside */}
-      <group ref={cubeRef}>
-        {/* Main cube body */}
-        <mesh>
-          <boxGeometry args={[cubeSize, cubeSize, cubeSize]} />
-          <meshStandardMaterial 
-            color={hoveredFace ? '#334155' : '#0f172a'}
-            roughness={0.8}
-            metalness={0.1}
-          />
-        </mesh>
-
-        {/* Wireframe edges */}
-        <lineSegments>
-          <edgesGeometry args={[new THREE.BoxGeometry(cubeSize, cubeSize, cubeSize)]} />
-          <lineBasicMaterial color="#475569" />
-        </lineSegments>
-
-        {/* Face buttons with textures */}
-        {FACE_VIEWS.map((view) => {
-          const offset = cubeSize / 2 + 0.1;
-          const pos = new THREE.Vector3(
-            view.position[0] * offset,
-            view.position[1] * offset,
-            view.position[2] * offset
-          );
-          const rot = new THREE.Euler(view.rotation[0], view.rotation[1], view.rotation[2]);
-          const isHovered = hoveredFace === view.name;
-          const texture = isHovered ? FACE_TEXTURES[view.name].hover : FACE_TEXTURES[view.name].normal;
-          
-          return (
-            <group key={view.name} position={pos} rotation={rot}>
-              <mesh
-                onClick={() => handleFaceClick(view)}
-                onPointerOver={() => handlePointerOver(view.name)}
-                onPointerOut={handlePointerOut}
-              >
-                <planeGeometry args={[cubeSize * 0.85, cubeSize * 0.85]} />
-                <meshStandardMaterial
-                  map={texture}
-                  transparent
-                  opacity={1}
-                  side={THREE.DoubleSide}
-                />
-              </mesh>
-            </group>
-          );
-        })}
-
-        {/* XYZ Axis arrows - at back-bottom-left corner, 1.2x cube size */}
-        {/* X Axis (Red) */}
-        <group position={[-cubeSize / 2, -cubeSize / 2, -cubeSize / 2]} rotation={[0, 0, -Math.PI / 2]}>
-          {/* Cylinder is 1.2x cube size (33.6 units), offset by half */}
-          <mesh position={[0, 16.8, 0]}>
-            <cylinderGeometry args={[0.5, 0.5, 33.6, 8]} />
-            <meshStandardMaterial color="#ef4444" roughness={0.5} metalness={0.3} depthTest={false} />
-          </mesh>
-          <mesh position={[0, 37, 0]}>
-            <coneGeometry args={[1.5, 5, 8]} />
-            <meshStandardMaterial color="#ef4444" roughness={0.5} metalness={0.3} depthTest={false} />
-          </mesh>
-          <Html position={[0, 45, 0]} center style={{ pointerEvents: 'none' }}>
-            <div style={{ color: '#ef4444', fontWeight: 'bold', fontSize: '11px', fontFamily: 'Arial', textShadow: '1px 1px 2px black' }}>X</div>
-          </Html>
-        </group>
-
-        {/* Y Axis (Green) */}
-        <group position={[-cubeSize / 2, -cubeSize / 2, -cubeSize / 2]}>
-          <mesh position={[0, 16.8, 0]}>
-            <cylinderGeometry args={[0.5, 0.5, 33.6, 8]} />
-            <meshStandardMaterial color="#22c55e" roughness={0.5} metalness={0.3} depthTest={false} />
-          </mesh>
-          <mesh position={[0, 37, 0]}>
-            <coneGeometry args={[1.5, 5, 8]} />
-            <meshStandardMaterial color="#22c55e" roughness={0.5} metalness={0.3} depthTest={false} />
-          </mesh>
-          <Html position={[0, 45, 0]} center style={{ pointerEvents: 'none' }}>
-            <div style={{ color: '#22c55e', fontWeight: 'bold', fontSize: '11px', fontFamily: 'Arial', textShadow: '1px 1px 2px black' }}>Y</div>
-          </Html>
-        </group>
-
-        {/* Z Axis (Blue) */}
-        <group position={[-cubeSize / 2, -cubeSize / 2, -cubeSize / 2]} rotation={[Math.PI / 2, 0, 0]}>
-          <mesh position={[0, 16.8, 0]}>
-            <cylinderGeometry args={[0.5, 0.5, 33.6, 8]} />
-            <meshStandardMaterial color="#3b82f6" roughness={0.5} metalness={0.3} depthTest={false} />
-          </mesh>
-          <mesh position={[0, 37, 0]}>
-            <coneGeometry args={[1.5, 5, 8]} />
-            <meshStandardMaterial color="#3b82f6" roughness={0.5} metalness={0.3} depthTest={false} />
-          </mesh>
-          <Html position={[0, 45, 0]} center style={{ pointerEvents: 'none' }}>
-            <div style={{ color: '#3b82f6', fontWeight: 'bold', fontSize: '11px', fontFamily: 'Arial', textShadow: '1px 1px 2px black' }}>Z</div>
-          </Html>
-        </group>
-      </group>
-
-      {/* Isometric view buttons - separate group */}
-      <IsometricButtons onFaceClick={handleFaceClick} onPointerOver={handlePointerOver} onPointerOut={handlePointerOut} />
-    </>
-  );
-};
-
-// Isometric view button spheres
-const IsometricButtons: React.FC<{
-  onFaceClick: (view: ViewDirection) => void;
-  onPointerOver: (name: string) => void;
-  onPointerOut: () => void;
-}> = ({ onFaceClick, onPointerOver, onPointerOut }) => {
+const CubeScene: React.FC = () => {
   const groupRef = useRef<THREE.Group>(null);
-  const internalQuat = useRef(new THREE.Quaternion());
+  const targetQ  = useRef(new THREE.Quaternion());
+  const [hovered, setHovered] = useState<string | null>(null);
 
   useEffect(() => {
-    const handleCameraChange = (e: Event) => {
-      const customEvent = e as CustomEvent;
-      if (customEvent.detail && customEvent.detail.quaternion) {
-        // Apply 180° Y offset and invert to fix rotation direction
-        const offset = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
-        const cameraQuat = customEvent.detail.quaternion.clone();
-        internalQuat.current.copy(cameraQuat).multiply(offset).invert();
-      }
+    const onCam = (e: Event) => {
+      const q = (e as CustomEvent).detail?.quaternion as THREE.Quaternion | undefined;
+      if (!q) return;
+      const yFlip = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
+      targetQ.current.copy(q).multiply(yFlip).invert();
     };
-    window.addEventListener('mainCameraChange', handleCameraChange);
-    return () => window.removeEventListener('mainCameraChange', handleCameraChange);
+    window.addEventListener('mainCameraChange', onCam);
+    return () => window.removeEventListener('mainCameraChange', onCam);
   }, []);
 
   useFrame(() => {
-    if (groupRef.current) {
-      groupRef.current.quaternion.slerp(internalQuat.current, 0.15);
-    }
+    groupRef.current?.quaternion.slerp(targetQ.current, 0.12);
   });
 
-  const ISO_VIEWS: ViewDirection[] = [
-    { name: 'iso1', position: [1, 1, 1], rotation: [-0.615, 0.785, 0], label: 'ISO' },
-    { name: 'iso2', position: [-1, 1, 1], rotation: [-0.615, 2.356, 0], label: 'ISO' },
-    { name: 'iso3', position: [1, 1, -1], rotation: [-0.615, -0.785, 0], label: 'ISO' },
-    { name: 'iso4', position: [-1, 1, -1], rotation: [-0.615, -2.356, 0], label: 'ISO' },
-  ];
+  const navigate = useCallback((position: [number, number, number], name: string) => {
+    const pos = new THREE.Vector3(...position).multiplyScalar(200);
+    window.dispatchEvent(new CustomEvent('viewcubeNavigate', { detail: { position: pos, name } }));
+  }, []);
 
-  const cubeSize = 28;
-  const [hoveredIso, setHoveredIso] = useState<string | null>(null);
+  const S = 28; // half-size → cube edge = 56 units
 
   return (
     <group ref={groupRef}>
-      {ISO_VIEWS.map((view) => {
-        const offset = cubeSize / 2 + 14;
-        const pos = new THREE.Vector3(
-          view.position[0] * offset,
-          view.position[1] * offset,
-          view.position[2] * offset
-        );
+      {/* Cube body */}
+      <mesh>
+        <boxGeometry args={[S * 2, S * 2, S * 2]} />
+        <meshStandardMaterial color="#080f1e" roughness={0.9} metalness={0.1} />
+      </mesh>
+
+      {/* Edge lines */}
+      <lineSegments>
+        <edgesGeometry args={[new THREE.BoxGeometry(S * 2, S * 2, S * 2)]} />
+        <lineBasicMaterial color="#2d4060" />
+      </lineSegments>
+
+      {/* Face label planes */}
+      {FACES.map((face) => {
+        const off = S + 0.15;
+        const pos = new THREE.Vector3(...face.position).multiplyScalar(off);
+        const rot = new THREE.Euler(...face.rotation);
+        const isHov = hovered === face.name;
 
         return (
-          <mesh
-            key={view.name}
-            position={pos}
-            onClick={() => onFaceClick(view)}
-            onPointerOver={() => {
-              setHoveredIso(view.name);
-              onPointerOver(view.name);
-            }}
-            onPointerOut={() => {
-              setHoveredIso(null);
-              onPointerOut();
-            }}
-          >
-            <sphereGeometry args={[5, 16, 16]} />
-            <meshStandardMaterial
-              color={hoveredIso === view.name ? '#a855f7' : '#334155'}
-              roughness={0.6}
-              metalness={0.2}
-            />
-          </mesh>
+          <group key={face.name} position={pos} rotation={rot}>
+            <mesh
+              onClick={(e) => { e.stopPropagation(); navigate(face.position, face.name); }}
+              onPointerOver={(e) => { e.stopPropagation(); setHovered(face.name); document.body.style.cursor = 'pointer'; }}
+              onPointerOut={() => { setHovered(null); document.body.style.cursor = 'default'; }}
+            >
+              <planeGeometry args={[S * 1.88, S * 1.88]} />
+              <meshStandardMaterial
+                map={isHov ? FACE_TEX[face.name].h : FACE_TEX[face.name].n}
+                transparent
+                side={THREE.DoubleSide}
+              />
+            </mesh>
+          </group>
         );
       })}
+
+      {/* Corner spheres for isometric views */}
+      {ISO_POSITIONS.map((pos, i) => (
+        <mesh
+          key={`iso-${i}`}
+          position={new THREE.Vector3(...pos).multiplyScalar(S + 5)}
+          onClick={(e) => { e.stopPropagation(); navigate(pos, `iso${i}`); }}
+          onPointerOver={(e) => { e.stopPropagation(); document.body.style.cursor = 'pointer'; }}
+          onPointerOut={() => { document.body.style.cursor = 'default'; }}
+        >
+          <sphereGeometry args={[4, 12, 12]} />
+          <meshStandardMaterial color="#2d4060" roughness={0.4} metalness={0.6} />
+        </mesh>
+      ))}
+
+      {/* Axis arrows from back-bottom-left corner */}
+      <AxisArrows S={S} />
     </group>
   );
 };
 
-interface ViewcubeProps {
-  size?: number;
-  position?: 'top-right' | 'top-left' | 'bottom-right' | 'bottom-left';
-}
+// ─── Axis arrows ──────────────────────────────────────────────────────────────
 
-const Viewcube: React.FC<ViewcubeProps> = ({ size = 140, position = 'top-right' }) => {
-  const positionStyles: Record<string, React.CSSProperties> = {
-    'top-right': { top: 80, right: 20 },
-    'top-left': { top: 80, left: 20 },
-    'bottom-right': { bottom: 20, right: 20 },
-    'bottom-left': { bottom: 20, left: 20 },
-  };
+const AxisArrows: React.FC<{ S: number }> = ({ S }) => {
+  const L = S * 1.35;
+  const R = 0.55;
 
   return (
-    <div style={{ position: 'absolute', ...positionStyles[position], width: size, height: size, zIndex: 100 }}>
-      <Canvas
-        camera={{ position: [0, 0, 80], fov: 45, near: 0.1, far: 1000 }}
-        style={{ 
-          background: 'linear-gradient(135deg, rgba(15, 23, 42, 0.95) 0%, rgba(30, 41, 59, 0.95) 100%)', 
-          borderRadius: '12px', 
-          border: '2px solid #334155',
-          boxShadow: '0 4px 20px rgba(0, 0, 0, 0.4)'
-        }}
-      >
-        <ambientLight intensity={1.2} />
-        <directionalLight position={[50, 50, 50]} intensity={1.5} />
-        <directionalLight position={[-30, 30, -30]} intensity={0.5} />
-        <ViewcubeScene />
-      </Canvas>
+    <group position={[-S, -S, -S]}>
+      {/* X – Red */}
+      <group rotation={[0, 0, -Math.PI / 2]}>
+        <mesh position={[0, L / 2, 0]}>
+          <cylinderGeometry args={[R, R, L, 8]} />
+          <meshStandardMaterial color="#ef4444" roughness={0.4} depthTest={false} />
+        </mesh>
+        <mesh position={[0, L + 3.5, 0]}>
+          <coneGeometry args={[1.8, 6, 8]} />
+          <meshStandardMaterial color="#ef4444" roughness={0.4} depthTest={false} />
+        </mesh>
+      </group>
+      {/* Y – Green */}
+      <mesh position={[0, L / 2, 0]}>
+        <cylinderGeometry args={[R, R, L, 8]} />
+        <meshStandardMaterial color="#22c55e" roughness={0.4} depthTest={false} />
+      </mesh>
+      <mesh position={[0, L + 3.5, 0]}>
+        <coneGeometry args={[1.8, 6, 8]} />
+        <meshStandardMaterial color="#22c55e" roughness={0.4} depthTest={false} />
+      </mesh>
+      {/* Z – Blue */}
+      <group rotation={[Math.PI / 2, 0, 0]}>
+        <mesh position={[0, L / 2, 0]}>
+          <cylinderGeometry args={[R, R, L, 8]} />
+          <meshStandardMaterial color="#3b82f6" roughness={0.4} depthTest={false} />
+        </mesh>
+        <mesh position={[0, L + 3.5, 0]}>
+          <coneGeometry args={[1.8, 6, 8]} />
+          <meshStandardMaterial color="#3b82f6" roughness={0.4} depthTest={false} />
+        </mesh>
+      </group>
+    </group>
+  );
+};
+
+// ─── Wrapper ──────────────────────────────────────────────────────────────────
+
+const Viewcube: React.FC<{ size?: number }> = ({ size = 155 }) => {
+  const handleHome = useCallback(() => {
+    const pos = new THREE.Vector3(0, 0, 200);
+    window.dispatchEvent(new CustomEvent('viewcubeNavigate', { detail: { position: pos, name: 'front' } }));
+  }, []);
+
+  return (
+    <div style={{ position: 'absolute', top: 80, right: 20, zIndex: 100, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5 }}>
+      <div style={{ width: size, height: size }}>
+        <Canvas
+          camera={{ position: [28, 32, 88], fov: 42, near: 0.1, far: 1000 }}
+          style={{
+            background: 'linear-gradient(145deg, rgba(8,15,30,0.96) 0%, rgba(15,25,50,0.96) 100%)',
+            borderRadius: 14,
+            border: '1px solid rgba(45,64,96,0.8)',
+            boxShadow: '0 8px 32px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.05)',
+          }}
+        >
+          <ambientLight intensity={0.9} />
+          <directionalLight position={[60, 90, 60]} intensity={1.6} />
+          <directionalLight position={[-40, 20, -40]} intensity={0.35} />
+          <CubeScene />
+        </Canvas>
+      </div>
+
+      {/* Home / reset button */}
+      <HomeButton onClick={handleHome} />
     </div>
+  );
+};
+
+const HomeButton: React.FC<{ onClick: () => void }> = ({ onClick }) => {
+  const [hov, setHov] = useState(false);
+  return (
+    <button
+      onClick={onClick}
+      onMouseEnter={() => setHov(true)}
+      onMouseLeave={() => setHov(false)}
+      style={{
+        background: hov ? 'rgba(30,64,100,0.9)' : 'rgba(10,20,40,0.85)',
+        border: `1px solid ${hov ? 'rgba(96,165,250,0.6)' : 'rgba(45,64,96,0.7)'}`,
+        borderRadius: 6,
+        color: hov ? '#93c5fd' : '#6b8cb0',
+        cursor: 'pointer',
+        fontSize: 10,
+        fontWeight: 600,
+        padding: '4px 16px',
+        fontFamily: '"Segoe UI", "Inter", system-ui, sans-serif',
+        letterSpacing: '0.08em',
+        transition: 'all 0.15s ease',
+      }}
+    >
+      HOME
+    </button>
   );
 };
 

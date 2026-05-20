@@ -223,7 +223,7 @@ class CadQueryMotor:
             # Create positive side slot 
             slot = (
                 cq.Workplane("XY")
-                .rect(slot_w, -slot_h, centered=(False, False))
+                .rect(slot_w, -slot_h*2, centered=(False, False))
                 .extrude(stator_w + 1)
                 .translate((slot_x, slot_y, 0))
                 .rotate((0, 0, 0), (0, 0, 1), angle)
@@ -232,7 +232,7 @@ class CadQueryMotor:
             # Create negative side slot
             slot_neg = (
                 cq.Workplane("XY")
-                .rect(-slot_w, -slot_h, centered=(False, False))
+                .rect(-slot_w, -slot_h*2, centered=(False, False))
                 .extrude(stator_w + 1)
                 .translate((-slot_x, slot_y, 0))
                 .rotate((0, 0, 0), (0, 0, 1), angle)
@@ -310,10 +310,11 @@ class CadQueryMotor:
                 .extrude(width)
             )
             
-            # Apply fillet to all edges that can be filleted
-            # This rounds all sharp edges on the magnet
-            # CadQuery will only apply to edges that can accept the fillet radius
-            #magnet = magnet.fillet(mag_fill_r)
+            if mag_fill_r > 0:
+                try:
+                    magnet = magnet.edges(">Y and |Z").fillet(mag_fill_r)
+                except Exception as e:
+                    print(f"Warning: Could not apply fillet to magnet: {e}")
             
             # Rotate to final position
             magnet = magnet.rotate((0, 0, 0), (0, 0, 1), angle)
@@ -328,6 +329,15 @@ class CadQueryMotor:
         rotor_outer_r = p['rotor_outer_radius']
         rotor_inner_r = p['rotor_inner_radius']
         width = p['stator_width']
+        num_poles = int(p['num_poles'])
+        magnet_hole = p['rotor_hole']
+        pole_angle = 360.0 / num_poles
+        mag_fill_up = p['magnet_fill_up']
+        mag_h = p['magnet_height']
+        width = p['stator_width']
+
+        mag_angle_up = radians(pole_angle * mag_fill_up*magnet_hole / 2)
+        rec_w = 2*rotor_outer_r * sin(mag_angle_up)
         
         rotor = (
             cq.Workplane("XY")
@@ -335,6 +345,18 @@ class CadQueryMotor:
             .circle(rotor_inner_r)
             .extrude(width)
         )
+
+        for i in range(num_poles):
+            angle = i * pole_angle
+            # Create positive side slot 
+            cut_up = (
+                cq.Workplane("XY")
+                .rect(rec_w, -mag_h, centered=(False, False))
+                .extrude(width + 1)
+                .translate((-rec_w/2, rotor_outer_r, 0))
+                .rotate((0, 0, 0), (0, 0, 1), angle)
+            )
+            rotor = rotor.cut(cut_up)
         
         return rotor
    

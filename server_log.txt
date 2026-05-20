@@ -1,0 +1,24 @@
+Warning: NVIDIA Modulus not available. Using fallback mode.
+[DEBUG] _create_shaft: shaft_r=41.7, shaft_in=38.7
+[DEBUG] _create_magnets: mag_fill_down=0.9, pole_angle=12.857142857142858, num_poles=28
+[DEBUG] _create_magnets: rotor_inner_r=41.7, magnet_r=42.900000000000006
+INFO:     127.0.0.1:50969 - "GET /api/geometry/mesh HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63884 - "PUT /api/geometry HTTP/1.1" 200 OK
+[DEBUG] _create_shaft: shaft_r=41.7, shaft_in=38.7
+[DEBUG] _create_magnets: mag_fill_down=0.9, pole_angle=12.857142857142858, num_poles=28
+[DEBUG] _create_magnets: rotor_inner_r=41.7, magnet_r=42.900000000000006
+INFO:     127.0.0.1:63884 - "GET /api/geometry/mesh HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62402 - "PUT /api/geometry HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58061 - "PUT /api/geometry HTTP/1.1" 200 OK
+[DEBUG] _create_shaft: shaft_r=41.7, shaft_in=38.7
+[DEBUG] _create_magnets: mag_fill_down=0.9, pole_angle=12.857142857142858, num_poles=28
+[DEBUG] _create_magnets: rotor_inner_r=41.7, magnet_r=42.900000000000006
+INFO:     127.0.0.1:58061 - "GET /api/geometry/mesh HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53339 - "PUT /api/geometry HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52107 - "PUT /api/geometry HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52107 - "PUT /api/geometry HTTP/1.1" 200 OK
+[DEBUG] _create_shaft: shaft_r=41.7, shaft_in=38.7
+[DEBUG] _create_magnets: mag_fill_down=0.9, pole_angle=12.857142857142858, num_poles=28
+[DEBUG] _create_magnets: rotor_inner_r=41.7, magnet_r=42.900000000000006
+INFO:     127.0.0.1:52107 - "GET /api/geometry/mesh HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57395 - "PUT /api/geometry HTTP/1.1" 200 OK

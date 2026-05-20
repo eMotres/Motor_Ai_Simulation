@@ -2,7 +2,7 @@ import React, { useMemo, useEffect, useState, useRef } from 'react';
 import * as THREE from 'three';
 import { useMotorStore, useUIStore } from '../../stores/motorStore';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8013';
+const API_BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
 
 interface ComponentMeshData {
   vertices: number[] | number[][];

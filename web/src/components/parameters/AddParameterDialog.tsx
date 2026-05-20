@@ -94,7 +94,7 @@ const AddParameterDialog: React.FC<Props> = ({ open, onClose }) => {
     setError('');
     setLoading(true);
     try {
-      const res = await fetch('http://localhost:8013/api/geometry/parameter', {
+      const res = await fetch('http://localhost:8000/api/geometry/parameter', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

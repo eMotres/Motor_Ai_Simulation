@@ -64,3 +64,13 @@ Thumbs.db
 motor_schematic.png
 motor_cross_section.png
 motor_materials.png
+
+# Generated geometry cache and output
+cadquery_cache/
+geometry_cache/
+stl_output/
+src/cadquery_cache/
+
+# AI tool files
+.claude/
+.kilo/

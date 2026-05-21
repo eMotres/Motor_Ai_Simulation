@@ -186,7 +186,7 @@ class CadQueryMotor:
         return self.parts
         
     def _create_stator(self, cq) -> Any:
-        """Create stator with radial slots/teeth."""
+        """Create stator with radial slots/teeth and slot openings at bore."""
         import math
         p = self.parameters
 
@@ -200,48 +200,72 @@ class CadQueryMotor:
         wire_w = p['wire_width']
         ins_w = p['insulation_thickness']
         wire_d_x = p['wire_spacing_x']
-        slot_w = wire_w + ins_w*2 + wire_d_x
-        slot_h = slot_height  # Cut depth equals slot height only (core_h is back iron, not cut)
-        slot_x = tooth_width / 2
-        slot_y = outer_r - core_h
+        # Slot opening parameters (tooth-tip geometry)
+        slot_hs  = p.get('slot_hs',    0.2)   # slot opening height (tooth-tip gap depth)
+        cut_w    = p.get('cut_width',  3.0)   # slot opening width between tooth tips
+
+        slot_w = wire_w + ins_w * 2 + wire_d_x
+        slot_x = tooth_width / 2          # half-width of tooth → slot starts here
+        slot_y = outer_r - core_h         # top of slot (back-iron boundary)
         half_slots = num_slots // 2
-        
-        slot_angle = 360.0 / half_slots  # Fixed: use num_slots, not half_slots
-        
-        # Create stator as a solid ring first
+
+        slot_angle = 360.0 / half_slots
+
+        # Main slot stops just above the bore (leaves slot_hs tooth-tip layer)
+        main_slot_h = slot_y - (inner_r + slot_hs)  # ≈ slot_height − slot_hs
+
+        # Slot opening is centered on the slot body (mid of [slot_x, slot_x+slot_w])
+        opening_cx = slot_x + slot_w / 2
+
+        # ── Solid ring ────────────────────────────────────────────────────────
         stator = (
             cq.Workplane("XY")
             .circle(outer_r)
             .circle(inner_r)
             .extrude(stator_w)
         )
-        
-        # Create slot cutouts using rotate/translate approach instead of polarArray
-        # This is more reliable in CadQuery 2.x
+
         for i in range(half_slots):
             angle = i * slot_angle
-            # Create positive side slot 
+
+            # ── Main slot cuts (stop at inner_r + slot_hs) ───────────────────
             slot = (
                 cq.Workplane("XY")
-                .rect(slot_w, -slot_h*2, centered=(False, False))
+                .rect(slot_w, -main_slot_h, centered=(False, False))
                 .extrude(stator_w + 1)
                 .translate((slot_x, slot_y, 0))
                 .rotate((0, 0, 0), (0, 0, 1), angle)
             )
-            
-            # Create negative side slot
             slot_neg = (
                 cq.Workplane("XY")
-                .rect(-slot_w, -slot_h*2, centered=(False, False))
+                .rect(-slot_w, -main_slot_h, centered=(False, False))
                 .extrude(stator_w + 1)
                 .translate((-slot_x, slot_y, 0))
                 .rotate((0, 0, 0), (0, 0, 1), angle)
             )
-                                  
-            # Cut both slots from stator
             stator = stator.cut(slot)
             stator = stator.cut(slot_neg)
-        
+
+            # ── Slot openings at bore (tooth-tip notches) ─────────────────────
+            # A thin rect (cut_w × slot_hs) at inner_r, centered on slot axis.
+            # centered=(True, False) so it spans ±cut_w/2 in X, then upward.
+            opening_r = (
+                cq.Workplane("XY")
+                .rect(cut_w, slot_hs, centered=(True, False))
+                .extrude(stator_w + 1)
+                .translate((opening_cx, inner_r, 0))
+                .rotate((0, 0, 0), (0, 0, 1), angle)
+            )
+            opening_l = (
+                cq.Workplane("XY")
+                .rect(cut_w, slot_hs, centered=(True, False))
+                .extrude(stator_w + 1)
+                .translate((-opening_cx, inner_r, 0))
+                .rotate((0, 0, 0), (0, 0, 1), angle)
+            )
+            stator = stator.cut(opening_r)
+            stator = stator.cut(opening_l)
+
         return stator
         
     def _create_shaft(self, cq) -> Any:

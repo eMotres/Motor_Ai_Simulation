@@ -186,36 +186,39 @@ class CadQueryMotor:
         return self.parts
         
     def _create_stator(self, cq) -> Any:
-        """Create stator with radial slots/teeth and slot openings at bore."""
+        """Create stator with full-width inter-tooth slots and slot openings."""
         import math
         p = self.parameters
 
-        outer_r = p['stator_outer_radius']
-        inner_r = p['stator_inner_radius']
-        core_h = p['core_thickness']
+        outer_r    = p['stator_outer_radius']
+        inner_r    = p['stator_inner_radius']
+        core_h     = p['core_thickness']
         slot_height = p['slot_height']
-        stator_w = p['stator_width']
-        num_slots = int(p['num_slots'])
-        tooth_width = p['tooth_width']
-        wire_w = p['wire_width']
-        ins_w = p['insulation_thickness']
-        wire_d_x = p['wire_spacing_x']
-        # Slot opening parameters (tooth-tip geometry)
-        slot_hs  = p.get('slot_hs',    0.2)   # slot opening height (tooth-tip gap depth)
-        cut_w    = p.get('cut_width',  3.0)   # slot opening width between tooth tips
+        stator_w   = p['stator_width']
+        num_slots  = int(p['num_slots'])
+        tooth_width  = p.get('tooth_width',  8.6)
+        tooth2_width = p.get('tooth2_width', 4.0)
+        slot_hs    = p.get('slot_hs',   0.5)   # slot opening height (visible notch)
+        cut_w      = p.get('cut_width', 3.0)   # slot opening width between tooth tips
 
-        slot_w = wire_w + ins_w * 2 + wire_d_x
-        slot_x = tooth_width / 2          # half-width of tooth → slot starts here
-        slot_y = outer_r - core_h         # top of slot (back-iron boundary)
-        half_slots = num_slots // 2
+        # Radii that bound the slot region
+        slot_y = outer_r - core_h   # outer boundary of slot body (start of back-iron)
 
-        slot_angle = 360.0 / half_slots
+        # Angular pitch of one slot (= one tooth + one inter-tooth gap)
+        tooth_pitch_deg = 360.0 / num_slots   # e.g. 15° for 24 slots
 
-        # Main slot stops just above the bore (leaves slot_hs tooth-tip layer)
-        main_slot_h = slot_y - (inner_r + slot_hs)  # ≈ slot_height − slot_hs
+        # Full inter-tooth slot width at the relevant radii
+        # Using chord = 2·r·tan(half_pitch) − tooth_width_at_that_radius
+        half_pitch_rad = math.radians(tooth_pitch_deg / 2)
+        slot_w_outer = 2.0 * slot_y  * math.tan(half_pitch_rad) - tooth_width
+        slot_w_inner = 2.0 * inner_r * math.tan(half_pitch_rad) - tooth2_width
 
-        # Slot opening is centered on the slot body (mid of [slot_x, slot_x+slot_w])
-        opening_cx = slot_x + slot_w / 2
+        # Use the wider of the two for the rectangular cut (slight over-cut at
+        # one end is clipped by the ring boundary → safe).
+        slot_cut_w = max(slot_w_outer, slot_w_inner)
+
+        # Height of the main slot body (stops just above bore)
+        main_slot_h = slot_height - slot_hs
 
         # ── Solid ring ────────────────────────────────────────────────────────
         stator = (
@@ -225,46 +228,32 @@ class CadQueryMotor:
             .extrude(stator_w)
         )
 
-        for i in range(half_slots):
-            angle = i * slot_angle
+        # Each slot is centred at the MIDPOINT between adjacent teeth:
+        # tooth j is at j·tooth_pitch_deg, so slot j starts at (j + 0.5)·tooth_pitch_deg
+        for j in range(num_slots):
+            angle = (j + 0.5) * tooth_pitch_deg   # slot centre angle
 
-            # ── Main slot cuts (stop at inner_r + slot_hs) ───────────────────
+            # ── Main slot body (full inter-tooth width, stops above bore) ─────
+            # rect centred in X, starting at inner_r + slot_hs, going up to slot_y
             slot = (
                 cq.Workplane("XY")
-                .rect(slot_w, -main_slot_h, centered=(False, False))
+                .rect(slot_cut_w, main_slot_h, centered=(True, False))
                 .extrude(stator_w + 1)
-                .translate((slot_x, slot_y, 0))
-                .rotate((0, 0, 0), (0, 0, 1), angle)
-            )
-            slot_neg = (
-                cq.Workplane("XY")
-                .rect(-slot_w, -main_slot_h, centered=(False, False))
-                .extrude(stator_w + 1)
-                .translate((-slot_x, slot_y, 0))
+                .translate((0, inner_r + slot_hs, 0))
                 .rotate((0, 0, 0), (0, 0, 1), angle)
             )
             stator = stator.cut(slot)
-            stator = stator.cut(slot_neg)
 
-            # ── Slot openings at bore (tooth-tip notches) ─────────────────────
-            # A thin rect (cut_w × slot_hs) at inner_r, centered on slot axis.
-            # centered=(True, False) so it spans ±cut_w/2 in X, then upward.
-            opening_r = (
+            # ── Slot opening at bore (tooth-tip notch) ────────────────────────
+            # Narrow rect (cut_w × slot_hs) right at inner_r
+            opening = (
                 cq.Workplane("XY")
                 .rect(cut_w, slot_hs, centered=(True, False))
                 .extrude(stator_w + 1)
-                .translate((opening_cx, inner_r, 0))
+                .translate((0, inner_r, 0))
                 .rotate((0, 0, 0), (0, 0, 1), angle)
             )
-            opening_l = (
-                cq.Workplane("XY")
-                .rect(cut_w, slot_hs, centered=(True, False))
-                .extrude(stator_w + 1)
-                .translate((-opening_cx, inner_r, 0))
-                .rotate((0, 0, 0), (0, 0, 1), angle)
-            )
-            stator = stator.cut(opening_r)
-            stator = stator.cut(opening_l)
+            stator = stator.cut(opening)
 
         return stator
         

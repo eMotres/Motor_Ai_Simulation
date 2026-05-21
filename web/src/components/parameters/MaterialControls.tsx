@@ -62,7 +62,8 @@ const MaterialControls: React.FC = () => {
         zIndex: 1000,
         bgcolor: 'rgba(20, 20, 20, 0.92)',
         borderBottom: '1px solid rgba(255,255,255,0.08)',
-        px: 1.5,
+        pl: '236px',   // clear the 220px ComponentTree panel + 8px offset + gap
+        pr: 1.5,
         py: 0.5,
       }}
     >

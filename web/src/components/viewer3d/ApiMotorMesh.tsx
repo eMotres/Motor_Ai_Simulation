@@ -113,7 +113,7 @@ function buildGeometry(data: ComponentMeshData): THREE.BufferGeometry {
 
 // ─── API mesh components ─────────────────────────────────────────────────────
 
-export const ApiStatorMesh: React.FC<{ materialProps?: MaterialProps }> = ({ materialProps }) => {
+export const ApiStatorMesh: React.FC<{ materialProps?: MaterialProps; visible?: boolean; opacity?: number }> = ({ materialProps, visible = true, opacity = 1 }) => {
   const { envIntensity } = useUIStore();
   const meshData = useMotorMesh();
 
@@ -125,18 +125,20 @@ export const ApiStatorMesh: React.FC<{ materialProps?: MaterialProps }> = ({ mat
   if (!geo) return null;
 
   return (
-    <mesh geometry={geo} castShadow receiveShadow>
+    <mesh geometry={geo} castShadow receiveShadow visible={visible}>
       <meshStandardMaterial
         color={materialProps?.color || '#7f8c8d'}
         metalness={materialProps?.metalness ?? 0.9}
         roughness={materialProps?.roughness ?? 0.3}
         envMapIntensity={envIntensity * 1.5}
+        transparent={opacity < 1}
+        opacity={opacity}
       />
     </mesh>
   );
 };
 
-export const ApiRotorMesh: React.FC<{ materialProps?: MaterialProps }> = ({ materialProps }) => {
+export const ApiRotorMesh: React.FC<{ materialProps?: MaterialProps; visible?: boolean; opacity?: number }> = ({ materialProps, visible = true, opacity = 1 }) => {
   const { envIntensity } = useUIStore();
   const meshData = useMotorMesh();
 
@@ -148,18 +150,20 @@ export const ApiRotorMesh: React.FC<{ materialProps?: MaterialProps }> = ({ mate
   if (!geo) return null;
 
   return (
-    <mesh geometry={geo} castShadow receiveShadow>
+    <mesh geometry={geo} castShadow receiveShadow visible={visible}>
       <meshStandardMaterial
         color={materialProps?.color || '#7f8c8d'}
         metalness={materialProps?.metalness ?? 0.9}
         roughness={materialProps?.roughness ?? 0.3}
         envMapIntensity={envIntensity * 1.5}
+        transparent={opacity < 1}
+        opacity={opacity}
       />
     </mesh>
   );
 };
 
-export const ApiShaftMesh: React.FC = () => {
+export const ApiShaftMesh: React.FC<{ visible?: boolean; opacity?: number }> = ({ visible = true, opacity = 1 }) => {
   const { envIntensity } = useUIStore();
   const meshData = useMotorMesh();
 
@@ -171,25 +175,26 @@ export const ApiShaftMesh: React.FC = () => {
   if (!geo) return null;
 
   return (
-    <mesh geometry={geo} castShadow receiveShadow>
-      <meshStandardMaterial color="#505050" metalness={0.95} roughness={0.25} envMapIntensity={envIntensity * 1.5} />
+    <mesh geometry={geo} castShadow receiveShadow visible={visible}>
+      <meshStandardMaterial
+        color="#505050" metalness={0.95} roughness={0.25}
+        envMapIntensity={envIntensity * 1.5}
+        transparent={opacity < 1} opacity={opacity}
+      />
     </mesh>
   );
 };
 
-export const ApiMagnetsMesh: React.FC = () => {
+export const ApiMagnetsMesh: React.FC<{ visible?: boolean; opacity?: number }> = ({ visible = true, opacity = 1 }) => {
   const { envIntensity } = useUIStore();
   const meshData = useMotorMesh();
 
   const magnetEntries = useMemo(() => {
     if (!meshData) return null;
-
     const keys = Object.keys(meshData)
       .filter(k => k.startsWith('magnet_'))
       .sort((a, b) => parseInt(a.split('_')[1]) - parseInt(b.split('_')[1]));
-
     if (keys.length === 0) return null;
-
     return keys.map((key, i) => ({
       geometry: buildGeometry(meshData[key]),
       poleIndex: i,
@@ -200,15 +205,15 @@ export const ApiMagnetsMesh: React.FC = () => {
   if (!magnetEntries) return null;
 
   return (
-    <group>
+    <group visible={visible}>
       {magnetEntries.map(({ geometry: geo, poleIndex, direction }) => (
         <mesh key={poleIndex} geometry={geo} castShadow receiveShadow>
           <meshStandardMaterial
             color={direction === 'outward' ? '#ef4444' : '#3b82f6'}
-            metalness={0.7}
-            roughness={0.5}
+            metalness={0.7} roughness={0.5}
             envMapIntensity={envIntensity * 1.5}
             side={THREE.DoubleSide}
+            transparent={opacity < 1} opacity={opacity}
           />
         </mesh>
       ))}
@@ -216,7 +221,7 @@ export const ApiMagnetsMesh: React.FC = () => {
   );
 };
 
-export const ApiCoilsMesh: React.FC<{ materialProps?: MaterialProps }> = ({ materialProps }) => {
+export const ApiCoilsMesh: React.FC<{ materialProps?: MaterialProps; visible?: boolean; opacity?: number }> = ({ materialProps, visible = true, opacity = 1 }) => {
   const { envIntensity } = useUIStore();
   const meshData = useMotorMesh();
 
@@ -224,11 +229,9 @@ export const ApiCoilsMesh: React.FC<{ materialProps?: MaterialProps }> = ({ mate
 
   const coilEntries = useMemo(() => {
     if (!meshData) return [];
-
     const keys = Object.keys(meshData)
       .filter(k => k.startsWith('coil_'))
       .sort((a, b) => parseInt(a.split('_')[1]) - parseInt(b.split('_')[1]));
-
     return keys.map((key, i) => ({
       geometry: buildGeometry(meshData[key]),
       slotIndex: i,
@@ -237,7 +240,7 @@ export const ApiCoilsMesh: React.FC<{ materialProps?: MaterialProps }> = ({ mate
   }, [meshData]);
 
   return (
-    <group>
+    <group visible={visible}>
       {coilEntries.map(({ geometry: geo, slotIndex, phase }) => (
         <mesh key={`coil-${slotIndex}`} geometry={geo} castShadow receiveShadow>
           <meshStandardMaterial
@@ -246,6 +249,7 @@ export const ApiCoilsMesh: React.FC<{ materialProps?: MaterialProps }> = ({ mate
             roughness={materialProps?.roughness ?? 0.5}
             envMapIntensity={envIntensity * 1.5}
             side={THREE.DoubleSide}
+            transparent={opacity < 1} opacity={opacity}
           />
         </mesh>
       ))}

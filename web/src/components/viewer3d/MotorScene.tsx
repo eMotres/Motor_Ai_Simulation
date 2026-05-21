@@ -13,6 +13,7 @@ import WindingsMesh from './WindingsMesh';
 import { ApiStatorMesh, ApiRotorMesh, ApiShaftMesh, ApiMagnetsMesh, ApiCoilsMesh } from './ApiMotorMesh';
 import PointCloudMesh from './PointCloudMesh';
 import { STLCollection } from './STLMesh';
+import ComponentTree from './ComponentTree';
 
 // Camera that auto-adjusts to viewport aspect ratio
 const FRUSTUM = 300;
@@ -264,76 +265,61 @@ const MotorScene: React.FC = () => {
       
       {/* Viewcube overlay */}
       <Viewcube />
+
+      {/* Component tree overlay */}
+      <ComponentTree />
     </>
   );
 };
 
 const MotorComponents: React.FC<{ controlsRef: React.RefObject<any> }> = ({ controlsRef }) => {
   const { viewMode, stlMeshes, connectedToApi } = useMotorStore();
-  const { metalness, roughness } = useUIStore();
-  
-  // Show point cloud when in pointcloud or hybrid mode
+  const { metalness, roughness, componentVisibility, componentOpacity } = useUIStore();
+
   const showPointCloud = viewMode === 'pointcloud' || viewMode === 'hybrid';
-  
-  // Show STL when in stl mode
   const showSTL = viewMode === 'stl' && Object.keys(stlMeshes).length > 0;
-  
-  // Material props for stator components
-  const statorMaterialProps = {
-    color: '#7f8c8d',
-    metalness: metalness,
-    roughness: roughness,
-  };
-  
-  // Material props for coil components
-  const coilMaterialProps = {
-    color: '#b87333',
-    metalness: metalness,
-    roughness: roughness,
-  };
-  
-  // Use API meshes when connected, otherwise use local meshes
+
+  const statorMaterialProps = { color: '#7f8c8d', metalness, roughness };
+  const coilMaterialProps   = { color: '#b87333', metalness, roughness };
+
+  const vis = componentVisibility;
+  const opa = componentOpacity;
+
   if (connectedToApi) {
     return (
       <group>
         <FitCameraOnLoad controlsRef={controlsRef} />
-        {/* STL meshes from Fusion 360 / Modulus pipeline */}
         {showSTL && <STLCollection meshes={stlMeshes} />}
-        
-        {/* Solid mesh (show in solid or hybrid mode) */}
+
         {(viewMode === 'solid' || viewMode === 'hybrid') && (
           <>
-            <ApiStatorMesh materialProps={statorMaterialProps} />
-            <ApiRotorMesh materialProps={statorMaterialProps} />
-            <ApiShaftMesh />
-            <ApiMagnetsMesh />
-            <ApiCoilsMesh materialProps={coilMaterialProps} />
+            <ApiStatorMesh materialProps={statorMaterialProps} visible={vis.stator}  opacity={opa.stator} />
+            <ApiRotorMesh  materialProps={statorMaterialProps} visible={vis.rotor}   opacity={opa.rotor} />
+            <ApiShaftMesh                                      visible={vis.shaft}   opacity={opa.shaft} />
+            <ApiMagnetsMesh                                    visible={vis.magnets} opacity={opa.magnets} />
+            <ApiCoilsMesh  materialProps={coilMaterialProps}   visible={vis.coils}   opacity={opa.coils} />
           </>
         )}
-        
-        {/* Point cloud (show in pointcloud or hybrid mode) */}
+
         {showPointCloud && <PointCloudMesh />}
       </group>
     );
   }
-  
+
   return (
     <group>
-      {/* STL meshes from Fusion 360 / Modulus pipeline */}
       {showSTL && <STLCollection meshes={stlMeshes} />}
-      
-      {/* Solid mesh (show in solid or hybrid mode) */}
+
       {(viewMode === 'solid' || viewMode === 'hybrid') && (
         <>
-          <StatorMesh materialProps={statorMaterialProps} />
-          <RotorMesh materialProps={statorMaterialProps} />
+          <StatorMesh  materialProps={statorMaterialProps} />
+          <RotorMesh   materialProps={statorMaterialProps} />
           <ShaftMesh />
           <MagnetMesh />
           <WindingsMesh materialProps={coilMaterialProps} />
         </>
       )}
-      
-      {/* Point cloud (show in pointcloud or hybrid mode) */}
+
       {showPointCloud && <PointCloudMesh />}
     </group>
   );

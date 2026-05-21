@@ -552,6 +552,9 @@ export const useMotorStore = create<MotorState>()(
   )
 );
 
+// Component visibility keys
+export type CompKey = 'stator' | 'rotor' | 'magnets' | 'coils' | 'shaft';
+
 // UI State
 interface UIState {
   sidebarOpen: boolean;
@@ -560,15 +563,19 @@ interface UIState {
   showAxes: boolean;
   showGrid: boolean;
   autoRotate: boolean;
-  
+
   // Material controls - single values for all parts
   metalness: number;
   roughness: number;
   envIntensity: number;
-  
+
   // Camera mode
   cameraMode: 'perspective' | 'orthographic';
-  
+
+  // Component tree: visibility & opacity per component
+  componentVisibility: Record<CompKey, boolean>;
+  componentOpacity: Record<CompKey, number>;
+
   toggleSidebar: () => void;
   setActiveTab: (tab: 'geometry' | 'materials' | 'mesh' | 'simulation' | 'sweep') => void;
   toggleWireframe: () => void;
@@ -581,6 +588,10 @@ interface UIState {
     envIntensity: number;
   }>) => void;
   setCameraMode: (mode: 'perspective' | 'orthographic') => void;
+  toggleComponentVisibility: (key: CompKey) => void;
+  setComponentOpacity: (key: CompKey, opacity: number) => void;
+  isolateComponent: (key: CompKey) => void;
+  showAllComponents: () => void;
 }
 
 export const useUIStore = create<UIState>()(
@@ -592,15 +603,19 @@ export const useUIStore = create<UIState>()(
       showAxes: true,
       showGrid: true,
       autoRotate: false,
-      
-      // Material controls - single values for all parts
+
+      // Material controls
       metalness: 0.5,
       roughness: 0.5,
       envIntensity: 0.5,
-      
-      // Camera mode - default to orthographic for CAD-like view
+
+      // Camera mode
       cameraMode: 'orthographic',
-      
+
+      // Component tree defaults
+      componentVisibility: { stator: true, rotor: true, magnets: true, coils: true, shaft: true },
+      componentOpacity:    { stator: 1,    rotor: 1,    magnets: 1,    coils: 1,    shaft: 1    },
+
       toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
       setActiveTab: (tab) => set({ activeTab: tab }),
       toggleWireframe: () => set((state) => ({ showWireframe: !state.showWireframe })),
@@ -609,6 +624,20 @@ export const useUIStore = create<UIState>()(
       toggleAutoRotate: () => set((state) => ({ autoRotate: !state.autoRotate })),
       updateMaterialSettings: (settings) => set((state) => ({ ...state, ...settings })),
       setCameraMode: (mode) => set({ cameraMode: mode }),
+
+      toggleComponentVisibility: (key) =>
+        set((s) => ({ componentVisibility: { ...s.componentVisibility, [key]: !s.componentVisibility[key] } })),
+
+      setComponentOpacity: (key, opacity) =>
+        set((s) => ({ componentOpacity: { ...s.componentOpacity, [key]: opacity } })),
+
+      isolateComponent: (key) =>
+        set({
+          componentVisibility: { stator: false, rotor: false, magnets: false, coils: false, shaft: false, [key]: true },
+        }),
+
+      showAllComponents: () =>
+        set({ componentVisibility: { stator: true, rotor: true, magnets: true, coils: true, shaft: true } }),
     }),
     {
       name: 'motor-ui-storage',

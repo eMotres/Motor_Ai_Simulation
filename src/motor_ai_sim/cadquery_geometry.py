@@ -186,64 +186,62 @@ class CadQueryMotor:
         return self.parts
         
     def _create_stator(self, cq) -> Any:
-        """Create stator with trapezoidal slots: narrow at bore, wide at back-iron."""
+        """Create stator with radial slots/teeth."""
         import math
         p = self.parameters
 
-        outer_r      = p['stator_outer_radius']
-        inner_r      = p['stator_inner_radius']
-        core_h       = p['core_thickness']
-        stator_w     = p['stator_width']
-        num_slots    = int(p['num_slots'])
-        tooth_width  = p.get('tooth_width',  8.6)
-        tooth2_width = p.get('tooth2_width', 4.0)
-        cut_w        = p.get('cut_width',    3.0)   # slot opening width at bore
-
-        # Back-iron boundary (top of slot)
+        outer_r = p['stator_outer_radius']
+        inner_r = p['stator_inner_radius']
+        core_h = p['core_thickness']
+        slot_height = p['slot_height']
+        stator_w = p['stator_width']
+        num_slots = int(p['num_slots'])
+        tooth_width = p['tooth_width']
+        wire_w = p['wire_width']
+        ins_w = p['insulation_thickness']
+        wire_d_x = p['wire_spacing_x']
+        slot_w = wire_w + ins_w*2 + wire_d_x
+        slot_h = slot_height  # Cut depth equals slot height only (core_h is back iron, not cut)
+        slot_x = tooth_width / 2
         slot_y = outer_r - core_h
-
-        # Angular pitch per slot
-        tooth_pitch_deg = 360.0 / num_slots          # e.g. 15° for 24 slots
-        half_pitch_rad  = math.radians(tooth_pitch_deg / 2)
-
-        # Full slot width at each radius using chord formula
-        slot_w_outer = 2.0 * slot_y  * math.tan(half_pitch_rad) - tooth_width
-        slot_w_inner = 2.0 * inner_r * math.tan(half_pitch_rad) - tooth2_width
-
-        # ── Solid ring ────────────────────────────────────────────────────────
+        half_slots = num_slots // 2
+        
+        slot_angle = 360.0 / half_slots  # Fixed: use num_slots, not half_slots
+        
+        # Create stator as a solid ring first
         stator = (
             cq.Workplane("XY")
             .circle(outer_r)
             .circle(inner_r)
             .extrude(stator_w)
         )
-
-        # Each slot is centred midway between two adjacent teeth
-        for j in range(num_slots):
-            angle = (j + 0.5) * tooth_pitch_deg
-
-            # Trapezoidal slot polygon (local coords, Y = radial outward):
-            #   bottom edge (bore side): width = cut_w,       at y = inner_r
-            #   top edge (back-iron):    width = slot_w_outer, at y = slot_y
-            hw_bot = cut_w        / 2.0
-            hw_top = slot_w_outer / 2.0
-
-            pts = [
-                (-hw_bot, inner_r),
-                ( hw_bot, inner_r),
-                ( hw_top, slot_y),
-                (-hw_top, slot_y),
-            ]
-
+        
+        # Create slot cutouts using rotate/translate approach instead of polarArray
+        # This is more reliable in CadQuery 2.x
+        for i in range(half_slots):
+            angle = i * slot_angle
+            # Create positive side slot 
             slot = (
                 cq.Workplane("XY")
-                .polyline(pts)
-                .close()
+                .rect(slot_w, -slot_h*2, centered=(False, False))
                 .extrude(stator_w + 1)
+                .translate((slot_x, slot_y, 0))
                 .rotate((0, 0, 0), (0, 0, 1), angle)
             )
+            
+            # Create negative side slot
+            slot_neg = (
+                cq.Workplane("XY")
+                .rect(-slot_w, -slot_h*2, centered=(False, False))
+                .extrude(stator_w + 1)
+                .translate((-slot_x, slot_y, 0))
+                .rotate((0, 0, 0), (0, 0, 1), angle)
+            )
+                                  
+            # Cut both slots from stator
             stator = stator.cut(slot)
-
+            stator = stator.cut(slot_neg)
+        
         return stator
         
     def _create_shaft(self, cq) -> Any:

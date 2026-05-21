@@ -33,6 +33,7 @@ import {
 import MotorScene from './components/viewer3d/MotorScene';
 import ParameterVariationTable from './components/sweep/ParameterVariationTable';
 import MaterialControls from './components/parameters/MaterialControls';
+import MaterialsPanel from './components/parameters/MaterialsPanel';
 import SweepConfigPanel from './components/sweep/SweepConfigPanel';
 import { useMotorStore, useUIStore } from './stores/motorStore';
 
@@ -253,10 +254,60 @@ function App() {
           {/* Sweep */}
           {activeTab === 'sweep' && <SweepConfigPanel />}
 
-          {/* Placeholder tabs */}
+          {/* Materials: properties panel (left) + same 3D viewer (right) */}
           {activeTab === 'materials' && (
-            <Box sx={{ p: 4, color: 'text.secondary' }}>
-              <Typography>Materials configuration coming soon...</Typography>
+            <Box sx={{ display: 'flex', height: '100%' }}>
+              {/* Materials panel */}
+              <Box sx={{
+                width: panelWidth,
+                flexShrink: 0,
+                overflowY: 'auto',
+              }}>
+                <MaterialsPanel />
+              </Box>
+
+              {/* Draggable divider */}
+              <Box
+                onMouseDown={onDividerMouseDown}
+                sx={{
+                  width: 5,
+                  flexShrink: 0,
+                  cursor: 'col-resize',
+                  bgcolor: 'divider',
+                  transition: 'background-color 0.15s',
+                  '&:hover': { bgcolor: 'primary.main' },
+                  userSelect: 'none',
+                }}
+              />
+
+              {/* 3D viewer — same as geometry tab */}
+              <Box sx={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
+                <MaterialControls />
+                <MotorScene />
+                {isGeometryUpdating && (
+                  <Box sx={{
+                    position: 'absolute',
+                    bottom: 16,
+                    left: '50%',
+                    transform: 'translateX(-50%)',
+                    zIndex: 999,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 1,
+                    bgcolor: 'rgba(0,0,0,0.75)',
+                    backdropFilter: 'blur(4px)',
+                    px: 2,
+                    py: 0.75,
+                    borderRadius: 2,
+                    border: '1px solid rgba(59,130,246,0.4)',
+                  }}>
+                    <CircularProgress size={16} thickness={5} />
+                    <Typography variant="caption" sx={{ color: 'white', fontSize: 12 }}>
+                      Updating geometry...
+                    </Typography>
+                  </Box>
+                )}
+              </Box>
             </Box>
           )}
           {activeTab === 'mesh' && (

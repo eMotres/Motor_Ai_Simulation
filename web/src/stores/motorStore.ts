@@ -21,6 +21,78 @@ import {
 
 const API_BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
 
+// ─── Material config types ────────────────────────────────────────────────────
+
+export interface SteelMaterial {
+  preset: string;
+  name: string;
+  mu_r: number;
+  sigma: number;
+  B_sat: number;
+  density: number;
+  lamination_mm: number;
+}
+
+export interface MagnetMaterial {
+  preset: string;
+  name: string;
+  Br: number;
+  Hc: number;
+  mu_rec: number;
+  density: number;
+  max_temp_c: number;
+}
+
+export interface WindingMaterial {
+  preset: string;
+  name: string;
+  sigma: number;
+  fill_factor: number;
+  density: number;
+  alpha: number;
+}
+
+export interface ShaftMaterial {
+  preset: string;
+  name: string;
+  density: number;
+  yield_strength_mpa: number;
+  tensile_mpa: number;
+}
+
+export interface MaterialConfig {
+  stator:   SteelMaterial;
+  rotor:    SteelMaterial;
+  magnets:  MagnetMaterial;
+  windings: WindingMaterial;
+  shaft:    ShaftMaterial;
+}
+
+export type ComponentMaterialKey = keyof MaterialConfig;
+
+const defaultMaterialConfig: MaterialConfig = {
+  stator: {
+    preset: 'm27_silicon_steel', name: 'M27 Silicon Steel',
+    mu_r: 4000, sigma: 2.5e6, B_sat: 1.70, density: 7700, lamination_mm: 0.457,
+  },
+  rotor: {
+    preset: 'm27_silicon_steel', name: 'M27 Silicon Steel',
+    mu_r: 4000, sigma: 2.5e6, B_sat: 1.70, density: 7700, lamination_mm: 0.457,
+  },
+  magnets: {
+    preset: 'ndfeb_n42', name: 'NdFeB N42',
+    Br: 1.28, Hc: 979, mu_rec: 1.05, density: 7500, max_temp_c: 150,
+  },
+  windings: {
+    preset: 'copper', name: 'Copper',
+    sigma: 5.96e7, fill_factor: 0.55, density: 8960, alpha: 0.00393,
+  },
+  shaft: {
+    preset: 'carbon_steel_1045', name: 'Carbon Steel 1045',
+    density: 7850, yield_strength_mpa: 530, tensile_mpa: 625,
+  },
+};
+
 // View mode for 3D visualization
 type ViewMode = 'solid' | 'pointcloud' | 'hybrid' | 'stl';
 
@@ -28,6 +100,7 @@ interface MotorState {
   // State
   geometry: MotorGeometryParams;
   materials: MaterialAssignments;
+  materialConfig: MaterialConfig;
   meshSettings: MeshSettings;
   parameterSchema: ParameterSchema[];
   parameterGroups: ParameterGroup[];
@@ -50,6 +123,7 @@ interface MotorState {
   // Actions
   setGeometryUpdating: (v: boolean) => void;
   updateGeometry: (params: Partial<MotorGeometryParams>) => void;
+  updateComponentMaterial: (comp: ComponentMaterialKey, patch: Record<string, number | string>) => void;
   updateMaterials: (materials: Partial<MaterialAssignments>) => void;
   updateMeshSettings: (settings: Partial<MeshSettings>) => void;
   setViewMode: (mode: ViewMode) => void;
@@ -87,6 +161,7 @@ export const useMotorStore = create<MotorState>()(
       // Initial state
       geometry: { ...defaultGeometryParams },
       materials: defaultMaterialAssignments,
+      materialConfig: defaultMaterialConfig,
       meshSettings: defaultMeshSettings,
       parameterSchema: [],
       parameterGroups: [],
@@ -114,6 +189,14 @@ export const useMotorStore = create<MotorState>()(
       },
 
       setGeometryUpdating: (v) => set({ isGeometryUpdating: v }),
+
+      updateComponentMaterial: (comp, patch) =>
+        set((state) => ({
+          materialConfig: {
+            ...state.materialConfig,
+            [comp]: { ...state.materialConfig[comp], ...patch },
+          },
+        })),
 
       // Local Actions
       updateGeometry: (params) => set((state) => ({
@@ -544,6 +627,7 @@ export const useMotorStore = create<MotorState>()(
       partialize: (state) => ({
         geometry: state.geometry,
         materials: state.materials,
+        materialConfig: state.materialConfig,
         meshSettings: state.meshSettings,
         viewMode: state.viewMode,
         sweepConfig: state.sweepConfig,

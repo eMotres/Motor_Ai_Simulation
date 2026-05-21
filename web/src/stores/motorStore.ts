@@ -572,9 +572,12 @@ interface UIState {
   // Camera mode
   cameraMode: 'perspective' | 'orthographic';
 
-  // Component tree: visibility & opacity per component
+  // Component tree: group-level visibility
   componentVisibility: Record<CompKey, boolean>;
-  componentOpacity: Record<CompKey, number>;
+
+  // Individual item visibility (missing key = visible)
+  coilVisibility: Record<number, boolean>;
+  magnetVisibility: Record<number, boolean>;
 
   toggleSidebar: () => void;
   setActiveTab: (tab: 'geometry' | 'materials' | 'mesh' | 'simulation' | 'sweep') => void;
@@ -589,7 +592,8 @@ interface UIState {
   }>) => void;
   setCameraMode: (mode: 'perspective' | 'orthographic') => void;
   toggleComponentVisibility: (key: CompKey) => void;
-  setComponentOpacity: (key: CompKey, opacity: number) => void;
+  toggleCoilVisibility: (index: number) => void;
+  toggleMagnetVisibility: (index: number) => void;
   isolateComponent: (key: CompKey) => void;
   showAllComponents: () => void;
 }
@@ -614,7 +618,8 @@ export const useUIStore = create<UIState>()(
 
       // Component tree defaults
       componentVisibility: { stator: true, rotor: true, magnets: true, coils: true, shaft: true },
-      componentOpacity:    { stator: 1,    rotor: 1,    magnets: 1,    coils: 1,    shaft: 1    },
+      coilVisibility: {},
+      magnetVisibility: {},
 
       toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
       setActiveTab: (tab) => set({ activeTab: tab }),
@@ -628,16 +633,25 @@ export const useUIStore = create<UIState>()(
       toggleComponentVisibility: (key) =>
         set((s) => ({ componentVisibility: { ...s.componentVisibility, [key]: !s.componentVisibility[key] } })),
 
-      setComponentOpacity: (key, opacity) =>
-        set((s) => ({ componentOpacity: { ...s.componentOpacity, [key]: opacity } })),
+      toggleCoilVisibility: (index) =>
+        set((s) => ({ coilVisibility: { ...s.coilVisibility, [index]: !(s.coilVisibility[index] ?? true) } })),
+
+      toggleMagnetVisibility: (index) =>
+        set((s) => ({ magnetVisibility: { ...s.magnetVisibility, [index]: !(s.magnetVisibility[index] ?? true) } })),
 
       isolateComponent: (key) =>
         set({
           componentVisibility: { stator: false, rotor: false, magnets: false, coils: false, shaft: false, [key]: true },
+          coilVisibility: {},
+          magnetVisibility: {},
         }),
 
       showAllComponents: () =>
-        set({ componentVisibility: { stator: true, rotor: true, magnets: true, coils: true, shaft: true } }),
+        set({
+          componentVisibility: { stator: true, rotor: true, magnets: true, coils: true, shaft: true },
+          coilVisibility: {},
+          magnetVisibility: {},
+        }),
     }),
     {
       name: 'motor-ui-storage',

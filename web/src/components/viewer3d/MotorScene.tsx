@@ -274,7 +274,7 @@ const MotorScene: React.FC = () => {
 
 const MotorComponents: React.FC<{ controlsRef: React.RefObject<any> }> = ({ controlsRef }) => {
   const { viewMode, stlMeshes, connectedToApi } = useMotorStore();
-  const { metalness, roughness, componentVisibility, componentOpacity } = useUIStore();
+  const { metalness, roughness, componentVisibility } = useUIStore();
 
   const showPointCloud = viewMode === 'pointcloud' || viewMode === 'hybrid';
   const showSTL = viewMode === 'stl' && Object.keys(stlMeshes).length > 0;
@@ -283,7 +283,6 @@ const MotorComponents: React.FC<{ controlsRef: React.RefObject<any> }> = ({ cont
   const coilMaterialProps   = { color: '#b87333', metalness, roughness };
 
   const vis = componentVisibility;
-  const opa = componentOpacity;
 
   if (connectedToApi) {
     return (
@@ -293,11 +292,11 @@ const MotorComponents: React.FC<{ controlsRef: React.RefObject<any> }> = ({ cont
 
         {(viewMode === 'solid' || viewMode === 'hybrid') && (
           <>
-            <ApiStatorMesh materialProps={statorMaterialProps} visible={vis.stator}  opacity={opa.stator} />
-            <ApiRotorMesh  materialProps={statorMaterialProps} visible={vis.rotor}   opacity={opa.rotor} />
-            <ApiShaftMesh                                      visible={vis.shaft}   opacity={opa.shaft} />
-            <ApiMagnetsMesh                                    visible={vis.magnets} opacity={opa.magnets} />
-            <ApiCoilsMesh  materialProps={coilMaterialProps}   visible={vis.coils}   opacity={opa.coils} />
+            <ApiStatorMesh materialProps={statorMaterialProps} visible={vis.stator} />
+            <ApiRotorMesh  materialProps={statorMaterialProps} visible={vis.rotor} />
+            <ApiShaftMesh                                      visible={vis.shaft} />
+            <ApiMagnetsMesh                                    visible={vis.magnets} />
+            <ApiCoilsMesh  materialProps={coilMaterialProps}   visible={vis.coils} />
           </>
         )}
 

@@ -20,12 +20,13 @@ interface MaterialProps {
 // ─── Shared fetch hook ───────────────────────────────────────────────────────
 // All mesh components call this — only ONE network request is made per geometry
 // change (subsequent calls within the same render cycle reuse the in-flight promise).
+// Exported so ComponentTree can read coil/magnet counts without extra fetches.
 
 const meshCache = new Map<string, AllMeshData>();
 let inflightRequest: Promise<AllMeshData> | null = null;
 let inflightGeometryKey = '';
 
-function useMotorMesh() {
+export function useMotorMesh() {
   const { geometry, connectedToApi, setGeometryUpdating } = useMotorStore();
   const [data, setData] = useState<AllMeshData | null>(null);
 
@@ -113,7 +114,7 @@ function buildGeometry(data: ComponentMeshData): THREE.BufferGeometry {
 
 // ─── API mesh components ─────────────────────────────────────────────────────
 
-export const ApiStatorMesh: React.FC<{ materialProps?: MaterialProps; visible?: boolean; opacity?: number }> = ({ materialProps, visible = true, opacity = 1 }) => {
+export const ApiStatorMesh: React.FC<{ materialProps?: MaterialProps; visible?: boolean }> = ({ materialProps, visible = true }) => {
   const { envIntensity } = useUIStore();
   const meshData = useMotorMesh();
 
@@ -131,14 +132,12 @@ export const ApiStatorMesh: React.FC<{ materialProps?: MaterialProps; visible?: 
         metalness={materialProps?.metalness ?? 0.9}
         roughness={materialProps?.roughness ?? 0.3}
         envMapIntensity={envIntensity * 1.5}
-        transparent={opacity < 1}
-        opacity={opacity}
       />
     </mesh>
   );
 };
 
-export const ApiRotorMesh: React.FC<{ materialProps?: MaterialProps; visible?: boolean; opacity?: number }> = ({ materialProps, visible = true, opacity = 1 }) => {
+export const ApiRotorMesh: React.FC<{ materialProps?: MaterialProps; visible?: boolean }> = ({ materialProps, visible = true }) => {
   const { envIntensity } = useUIStore();
   const meshData = useMotorMesh();
 
@@ -156,14 +155,12 @@ export const ApiRotorMesh: React.FC<{ materialProps?: MaterialProps; visible?: b
         metalness={materialProps?.metalness ?? 0.9}
         roughness={materialProps?.roughness ?? 0.3}
         envMapIntensity={envIntensity * 1.5}
-        transparent={opacity < 1}
-        opacity={opacity}
       />
     </mesh>
   );
 };
 
-export const ApiShaftMesh: React.FC<{ visible?: boolean; opacity?: number }> = ({ visible = true, opacity = 1 }) => {
+export const ApiShaftMesh: React.FC<{ visible?: boolean }> = ({ visible = true }) => {
   const { envIntensity } = useUIStore();
   const meshData = useMotorMesh();
 
@@ -179,14 +176,14 @@ export const ApiShaftMesh: React.FC<{ visible?: boolean; opacity?: number }> = (
       <meshStandardMaterial
         color="#505050" metalness={0.95} roughness={0.25}
         envMapIntensity={envIntensity * 1.5}
-        transparent={opacity < 1} opacity={opacity}
       />
     </mesh>
   );
 };
 
-export const ApiMagnetsMesh: React.FC<{ visible?: boolean; opacity?: number }> = ({ visible = true, opacity = 1 }) => {
+export const ApiMagnetsMesh: React.FC<{ visible?: boolean }> = ({ visible = true }) => {
   const { envIntensity } = useUIStore();
+  const { magnetVisibility } = useUIStore();
   const meshData = useMotorMesh();
 
   const magnetEntries = useMemo(() => {
@@ -207,13 +204,13 @@ export const ApiMagnetsMesh: React.FC<{ visible?: boolean; opacity?: number }> =
   return (
     <group visible={visible}>
       {magnetEntries.map(({ geometry: geo, poleIndex, direction }) => (
-        <mesh key={poleIndex} geometry={geo} castShadow receiveShadow>
+        <mesh key={poleIndex} geometry={geo} castShadow receiveShadow
+          visible={magnetVisibility[poleIndex] ?? true}>
           <meshStandardMaterial
             color={direction === 'outward' ? '#ef4444' : '#3b82f6'}
             metalness={0.7} roughness={0.5}
             envMapIntensity={envIntensity * 1.5}
             side={THREE.DoubleSide}
-            transparent={opacity < 1} opacity={opacity}
           />
         </mesh>
       ))}
@@ -221,8 +218,9 @@ export const ApiMagnetsMesh: React.FC<{ visible?: boolean; opacity?: number }> =
   );
 };
 
-export const ApiCoilsMesh: React.FC<{ materialProps?: MaterialProps; visible?: boolean; opacity?: number }> = ({ materialProps, visible = true, opacity = 1 }) => {
+export const ApiCoilsMesh: React.FC<{ materialProps?: MaterialProps; visible?: boolean }> = ({ materialProps, visible = true }) => {
   const { envIntensity } = useUIStore();
+  const { coilVisibility } = useUIStore();
   const meshData = useMotorMesh();
 
   const phaseColors = ['#b87333', '#c2410c', '#a16207'];
@@ -242,14 +240,14 @@ export const ApiCoilsMesh: React.FC<{ materialProps?: MaterialProps; visible?: b
   return (
     <group visible={visible}>
       {coilEntries.map(({ geometry: geo, slotIndex, phase }) => (
-        <mesh key={`coil-${slotIndex}`} geometry={geo} castShadow receiveShadow>
+        <mesh key={`coil-${slotIndex}`} geometry={geo} castShadow receiveShadow
+          visible={coilVisibility[slotIndex] ?? true}>
           <meshStandardMaterial
             color={materialProps?.color || phaseColors[phase]}
             metalness={materialProps?.metalness ?? 0.6}
             roughness={materialProps?.roughness ?? 0.5}
             envMapIntensity={envIntensity * 1.5}
             side={THREE.DoubleSide}
-            transparent={opacity < 1} opacity={opacity}
           />
         </mesh>
       ))}

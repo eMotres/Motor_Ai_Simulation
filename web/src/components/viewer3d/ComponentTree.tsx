@@ -1,15 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useUIStore, type CompKey } from '../../stores/motorStore';
-
-// ─── Component definitions ────────────────────────────────────────────────────
-
-const COMPONENTS: { key: CompKey; label: string; color: string }[] = [
-  { key: 'stator',  label: 'Stator Core', color: '#7f8c8d' },
-  { key: 'rotor',   label: 'Rotor Core',  color: '#5d6d7e' },
-  { key: 'magnets', label: 'Magnets',     color: '#ef4444' },
-  { key: 'coils',   label: 'Coils',       color: '#b87333' },
-  { key: 'shaft',   label: 'Shaft',       color: '#374151' },
-];
+import { useMotorMesh } from './ApiMotorMesh';
 
 // ─── Icons ───────────────────────────────────────────────────────────────────
 
@@ -38,22 +29,254 @@ const MotorIcon = () => (
   </svg>
 );
 
+// ─── Shared row styles ────────────────────────────────────────────────────────
+
+const rowStyle = (hovered: boolean, indent: number = 0): React.CSSProperties => ({
+  display: 'flex',
+  alignItems: 'center',
+  padding: `3px ${8}px 3px ${10 + indent}px`,
+  gap: 5,
+  background: hovered ? 'rgba(30,58,138,0.18)' : 'transparent',
+  transition: 'background 0.1s',
+  cursor: 'default',
+});
+
+// ─── Simple leaf row (Stator, Rotor, Shaft) ───────────────────────────────────
+
+interface LeafRowProps {
+  label: string;
+  color: string;
+  visible: boolean;
+  isLast: boolean;
+  indent?: number;
+  onToggle: () => void;
+  onIsolate?: () => void;
+}
+
+const LeafRow: React.FC<LeafRowProps> = ({ label, color, visible, isLast, indent = 0, onToggle, onIsolate }) => {
+  const [hovered, setHovered] = useState(false);
+
+  return (
+    <div
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={rowStyle(hovered, indent)}
+    >
+      <span style={{ color: '#1e293b', fontSize: 10, flexShrink: 0 }}>
+        {isLast ? '└' : '├'}
+      </span>
+
+      <button
+        onClick={onToggle}
+        title={visible ? 'Hide' : 'Show'}
+        style={{
+          background: 'none', border: 'none', cursor: 'pointer', padding: 0,
+          display: 'flex', alignItems: 'center', flexShrink: 0,
+          color: visible ? '#64748b' : '#1e293b',
+          transition: 'color 0.15s',
+        }}
+      >
+        {visible ? <EyeOn /> : <EyeOff />}
+      </button>
+
+      <div style={{
+        width: 8, height: 8, borderRadius: 2,
+        background: color,
+        opacity: visible ? 1 : 0.25,
+        flexShrink: 0,
+        transition: 'opacity 0.15s',
+      }} />
+
+      <span style={{
+        flex: 1,
+        color: visible ? '#cbd5e1' : '#334155',
+        transition: 'color 0.15s',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap',
+        fontSize: 11,
+      }}>
+        {label}
+      </span>
+
+      {onIsolate && (
+        <button
+          onClick={onIsolate}
+          title="Isolate"
+          style={{
+            background: 'none', border: 'none', cursor: 'pointer',
+            padding: '0 2px', flexShrink: 0,
+            color: '#3b82f6',
+            fontSize: 9, lineHeight: 1,
+            opacity: hovered ? 0.8 : 0,
+            transition: 'opacity 0.15s',
+          }}
+        >
+          ◎
+        </button>
+      )}
+    </div>
+  );
+};
+
+// ─── Expandable group row ─────────────────────────────────────────────────────
+
+interface GroupRowProps {
+  label: string;
+  color: string;
+  groupVisible: boolean;
+  expanded: boolean;
+  isLast: boolean;
+  childCount: number;
+  hiddenChildCount: number;
+  onToggleGroup: () => void;
+  onToggleExpand: () => void;
+  onIsolate: () => void;
+  children: React.ReactNode;
+}
+
+const GroupRow: React.FC<GroupRowProps> = ({
+  label, color, groupVisible, expanded, isLast,
+  hiddenChildCount, onToggleGroup, onToggleExpand, onIsolate, children,
+}) => {
+  const [hovered, setHovered] = useState(false);
+
+  return (
+    <>
+      <div
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        style={rowStyle(hovered)}
+      >
+        {/* Tree connector */}
+        <span style={{ color: '#1e293b', fontSize: 10, flexShrink: 0 }}>
+          {isLast ? '└' : '├'}
+        </span>
+
+        {/* Expand / collapse arrow */}
+        <button
+          onClick={onToggleExpand}
+          title={expanded ? 'Collapse' : 'Expand'}
+          style={{
+            background: 'none', border: 'none', cursor: 'pointer', padding: 0,
+            color: '#475569', fontSize: 8, lineHeight: 1, flexShrink: 0,
+            display: 'flex', alignItems: 'center',
+          }}
+        >
+          {expanded ? '▼' : '▶'}
+        </button>
+
+        {/* Eye toggle (group-level) */}
+        <button
+          onClick={onToggleGroup}
+          title={groupVisible ? 'Hide all' : 'Show all'}
+          style={{
+            background: 'none', border: 'none', cursor: 'pointer', padding: 0,
+            display: 'flex', alignItems: 'center', flexShrink: 0,
+            color: groupVisible ? '#64748b' : '#1e293b',
+            transition: 'color 0.15s',
+          }}
+        >
+          {groupVisible ? <EyeOn /> : <EyeOff />}
+        </button>
+
+        {/* Color dot */}
+        <div style={{
+          width: 8, height: 8, borderRadius: 2,
+          background: color,
+          opacity: groupVisible ? 1 : 0.25,
+          flexShrink: 0,
+          transition: 'opacity 0.15s',
+        }} />
+
+        {/* Label + hidden-count badge */}
+        <span style={{
+          flex: 1,
+          color: groupVisible ? '#cbd5e1' : '#334155',
+          transition: 'color 0.15s',
+          fontSize: 11,
+          display: 'flex', alignItems: 'center', gap: 4,
+        }}>
+          {label}
+          {groupVisible && hiddenChildCount > 0 && (
+            <span style={{
+              fontSize: 8, color: '#475569',
+              background: 'rgba(71,85,105,0.25)',
+              borderRadius: 3, padding: '0 3px',
+            }}>
+              {hiddenChildCount} hidden
+            </span>
+          )}
+        </span>
+
+        {/* Isolate */}
+        <button
+          onClick={onIsolate}
+          title="Isolate"
+          style={{
+            background: 'none', border: 'none', cursor: 'pointer',
+            padding: '0 2px', flexShrink: 0,
+            color: '#3b82f6', fontSize: 9, lineHeight: 1,
+            opacity: hovered ? 0.8 : 0,
+            transition: 'opacity 0.15s',
+          }}
+        >
+          ◎
+        </button>
+      </div>
+
+      {/* Children */}
+      {expanded && groupVisible && (
+        <div style={{ paddingLeft: 8 }}>
+          {children}
+        </div>
+      )}
+    </>
+  );
+};
+
 // ─── ComponentTree ────────────────────────────────────────────────────────────
 
 const ComponentTree: React.FC = () => {
   const [collapsed, setCollapsed] = useState(false);
-  const [hoveredKey, setHoveredKey] = useState<CompKey | null>(null);
+  const [windingsExpanded, setWindingsExpanded] = useState(false);
+  const [magnetsExpanded, setMagnetsExpanded] = useState(false);
 
   const {
     componentVisibility,
-    componentOpacity,
+    coilVisibility,
+    magnetVisibility,
     toggleComponentVisibility,
-    setComponentOpacity,
+    toggleCoilVisibility,
+    toggleMagnetVisibility,
     isolateComponent,
     showAllComponents,
   } = useUIStore();
 
-  const allVisible = COMPONENTS.every(c => componentVisibility[c.key]);
+  // Read mesh data to know how many coils / magnets exist
+  const meshData = useMotorMesh();
+
+  const coilCount = useMemo(() => {
+    if (!meshData) return 0;
+    return Object.keys(meshData).filter(k => k.startsWith('coil_')).length;
+  }, [meshData]);
+
+  const magnetCount = useMemo(() => {
+    if (!meshData) return 0;
+    return Object.keys(meshData).filter(k => k.startsWith('magnet_')).length;
+  }, [meshData]);
+
+  const hiddenCoils   = Object.values(coilVisibility).filter(v => !v).length;
+  const hiddenMagnets = Object.values(magnetVisibility).filter(v => !v).length;
+
+  const allVisible =
+    componentVisibility.stator &&
+    componentVisibility.rotor &&
+    componentVisibility.magnets &&
+    componentVisibility.coils &&
+    componentVisibility.shaft &&
+    hiddenCoils === 0 &&
+    hiddenMagnets === 0;
 
   return (
     <div
@@ -62,7 +285,7 @@ const ComponentTree: React.FC = () => {
         top: 48,
         left: 8,
         zIndex: 1100,
-        width: 230,
+        width: 220,
         background: 'rgba(10, 17, 30, 0.88)',
         backdropFilter: 'blur(8px)',
         border: '1px solid rgba(51, 65, 85, 0.6)',
@@ -111,104 +334,97 @@ const ComponentTree: React.FC = () => {
 
       {/* ── Rows ── */}
       {!collapsed && (
-        <div style={{ padding: '3px 0 4px' }}>
-          {COMPONENTS.map((comp, i) => {
-            const visible  = componentVisibility[comp.key];
-            const opacity  = componentOpacity[comp.key];
-            const isLast   = i === COMPONENTS.length - 1;
-            const hovered  = hoveredKey === comp.key;
+        <div style={{ padding: '3px 0 4px', maxHeight: 'calc(100vh - 120px)', overflowY: 'auto' }}>
 
-            return (
-              <div
-                key={comp.key}
-                onMouseEnter={() => setHoveredKey(comp.key)}
-                onMouseLeave={() => setHoveredKey(null)}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  padding: '3px 8px 3px 10px',
-                  gap: 5,
-                  background: hovered ? 'rgba(30,58,138,0.18)' : 'transparent',
-                  transition: 'background 0.1s',
-                }}
-              >
-                {/* Tree connector */}
-                <span style={{ color: '#1e293b', fontSize: 10, flexShrink: 0 }}>
-                  {isLast ? '└' : '├'}
-                </span>
+          {/* Stator Core */}
+          <LeafRow
+            label="Stator Core"
+            color="#7f8c8d"
+            visible={componentVisibility.stator}
+            isLast={false}
+            onToggle={() => toggleComponentVisibility('stator')}
+            onIsolate={() => isolateComponent('stator')}
+          />
 
-                {/* Eye toggle */}
-                <button
-                  onClick={() => toggleComponentVisibility(comp.key)}
-                  title={visible ? 'Hide' : 'Show'}
-                  style={{
-                    background: 'none', border: 'none', cursor: 'pointer', padding: 0,
-                    display: 'flex', alignItems: 'center', flexShrink: 0,
-                    color: visible ? '#64748b' : '#1e293b',
-                    transition: 'color 0.15s',
-                  }}
-                >
-                  {visible ? <EyeOn /> : <EyeOff />}
-                </button>
+          {/* Rotor Core */}
+          <LeafRow
+            label="Rotor Core"
+            color="#5d6d7e"
+            visible={componentVisibility.rotor}
+            isLast={false}
+            onToggle={() => toggleComponentVisibility('rotor')}
+            onIsolate={() => isolateComponent('rotor')}
+          />
 
-                {/* Color dot */}
-                <div style={{
-                  width: 8, height: 8, borderRadius: 2,
-                  background: comp.color,
-                  opacity: visible ? 1 : 0.25,
-                  flexShrink: 0,
-                  transition: 'opacity 0.15s',
-                }} />
-
-                {/* Label */}
-                <span style={{
-                  flex: 1,
-                  color: visible ? '#cbd5e1' : '#334155',
-                  transition: 'color 0.15s',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                }}>
-                  {comp.label}
-                </span>
-
-                {/* Isolate button — visible on hover */}
-                <button
-                  onClick={() => isolateComponent(comp.key)}
-                  title="Isolate (hide all others)"
-                  style={{
-                    background: 'none', border: 'none', cursor: 'pointer',
-                    padding: '0 2px', flexShrink: 0,
-                    color: '#3b82f6',
-                    fontSize: 9, lineHeight: 1,
-                    opacity: hovered ? 0.8 : 0,
-                    transition: 'opacity 0.15s',
-                  }}
-                >
-                  ◎
-                </button>
-
-                {/* Opacity slider */}
-                <input
-                  type="range"
-                  min={0} max={1} step={0.05}
-                  value={opacity}
-                  onChange={e => setComponentOpacity(comp.key, parseFloat(e.target.value))}
-                  title={`Opacity: ${Math.round(opacity * 100)}%`}
-                  style={{
-                    width: 50, height: 2, flexShrink: 0,
-                    cursor: 'pointer', accentColor: '#3b82f6',
-                    opacity: visible ? 1 : 0.3,
-                  }}
+          {/* Windings (expandable) */}
+          <GroupRow
+            label="Windings"
+            color="#b87333"
+            groupVisible={componentVisibility.coils}
+            expanded={windingsExpanded}
+            isLast={false}
+            childCount={coilCount}
+            hiddenChildCount={hiddenCoils}
+            onToggleGroup={() => toggleComponentVisibility('coils')}
+            onToggleExpand={() => setWindingsExpanded(e => !e)}
+            onIsolate={() => isolateComponent('coils')}
+          >
+            {Array.from({ length: coilCount }, (_, i) => {
+              const vis = coilVisibility[i] ?? true;
+              return (
+                <LeafRow
+                  key={i}
+                  label={`Coil ${i + 1}`}
+                  color="#b87333"
+                  visible={vis}
+                  isLast={i === coilCount - 1}
+                  indent={8}
+                  onToggle={() => toggleCoilVisibility(i)}
                 />
+              );
+            })}
+          </GroupRow>
 
-                {/* Opacity % */}
-                <span style={{ width: 24, textAlign: 'right', color: '#475569', fontSize: 10, flexShrink: 0 }}>
-                  {Math.round(opacity * 100)}%
-                </span>
-              </div>
-            );
-          })}
+          {/* Magnets (expandable) */}
+          <GroupRow
+            label="Magnets"
+            color="#ef4444"
+            groupVisible={componentVisibility.magnets}
+            expanded={magnetsExpanded}
+            isLast={false}
+            childCount={magnetCount}
+            hiddenChildCount={hiddenMagnets}
+            onToggleGroup={() => toggleComponentVisibility('magnets')}
+            onToggleExpand={() => setMagnetsExpanded(e => !e)}
+            onIsolate={() => isolateComponent('magnets')}
+          >
+            {Array.from({ length: magnetCount }, (_, i) => {
+              const vis = magnetVisibility[i] ?? true;
+              const isNorth = i % 2 === 0;
+              return (
+                <LeafRow
+                  key={i}
+                  label={`Magnet ${i + 1}${isNorth ? ' N' : ' S'}`}
+                  color={isNorth ? '#ef4444' : '#3b82f6'}
+                  visible={vis}
+                  isLast={i === magnetCount - 1}
+                  indent={8}
+                  onToggle={() => toggleMagnetVisibility(i)}
+                />
+              );
+            })}
+          </GroupRow>
+
+          {/* Shaft */}
+          <LeafRow
+            label="Shaft"
+            color="#374151"
+            visible={componentVisibility.shaft}
+            isLast={true}
+            onToggle={() => toggleComponentVisibility('shaft')}
+            onIsolate={() => isolateComponent('shaft')}
+          />
+
         </div>
       )}
     </div>

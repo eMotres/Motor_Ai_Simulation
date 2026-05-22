@@ -186,104 +186,92 @@ class CadQueryMotor:
         return self.parts
         
     def _create_stator(self, cq) -> Any:
-        """Create stator with radial slots/teeth."""
-        import math
-        p = self.parameters
+        """Create stator with radial slots/teeth using 2D profile + extrude (fast)."""
+        import time as _time
+        from cadquery import Wire, Face, Vector, Solid as CQSolid
 
+        p = self.parameters
         outer_r = p['stator_outer_radius']
         inner_r = p['stator_inner_radius']
-        core_h = p['core_thickness']
+        core_h  = p['core_thickness']
         slot_height = p['slot_height']
-        stator_w = p['stator_width']
-        num_slots = int(p['num_slots'])
-        tooth_width = p['tooth_width']
+        stator_w    = p['stator_width']
+        num_slots   = int(p['num_slots'])
+        tooth_width  = p['tooth_width']
         tooth2_width = p['tooth2_width']
-        cut_width = p['cut_width']
-        wire_w = p['wire_width']
-        ins_w = p['insulation_thickness']
+        cut_width    = p['cut_width']
+        wire_w  = p['wire_width']
+        ins_w   = p['insulation_thickness']
         wire_d_x = p['wire_spacing_x']
-        slot_w = wire_w + ins_w*2 + wire_d_x
-        slot_h = slot_height  # Cut depth equals slot height only (core_h is back iron, not cut)
-        slot_x = tooth_width / 2
-        slot_y = outer_r - core_h
+
+        slot_w    = wire_w + ins_w*2 + wire_d_x
+        slot_x    = tooth_width / 2
+        slot_y    = outer_r - core_h
         half_slots = num_slots // 2
-        
-        slot_angle = 360.0 / half_slots  # Fixed: use num_slots, not half_slots
-        
-        # Create stator as a solid ring first
-        stator = (
-            cq.Workplane("XY")
-            .circle(outer_r)
-            .circle(inner_r)
-            .extrude(stator_w)
-        )
+        slot_angle = 360.0 / half_slots          # degrees between slot-pairs
 
-        # ── Build one compound cutter, then do a single .cut() ──────────────
-        # One boolean operation is vastly faster than 70+ sequential ones.
-        cut_x = tooth_width/2 + ins_w*2 + wire_w + wire_d_x*2 + tooth2_width
-        fill_r = ((inner_r + cut_width) * sin(radians(slot_angle/2)) - cut_x) / (1 - sin(radians(slot_angle/2)))
-        rr = inner_r + cut_width + fill_r
-        ext = outer_r * 2
-        p1 = (cut_x, ext)
-        p2 = (cut_x, rr * cos(radians(slot_angle/2)))
-        p3 = (cut_x + fill_r, rr * cos(radians(slot_angle/2)))
-        p4 = (ext * tan(radians(slot_angle/2)), ext)
+        cut_x  = tooth_width/2 + ins_w*2 + wire_w + wire_d_x*2 + tooth2_width
+        fill_r = ((inner_r + cut_width) * sin(radians(slot_angle/2)) - cut_x) / \
+                 (1 - sin(radians(slot_angle/2)))
+        rr   = inner_r + cut_width + fill_r
+        ext  = outer_r * 2                       # large enough to extend past outer_r
+        q1   = (cut_x,         ext)
+        q2   = (cut_x,         rr * cos(radians(slot_angle/2)))
+        q3   = (cut_x + fill_r, rr * cos(radians(slot_angle/2)))
+        q4   = (ext * tan(radians(slot_angle/2)), ext)
 
-        cutters = []
+        def _rot(x, y, a_rad):
+            ca, sa = cos(a_rad), sin(a_rad)
+            return x*ca - y*sa, x*sa + y*ca
+
+        def _poly_wire(pts):
+            verts = [Vector(x, y, 0) for x, y in pts]
+            return Wire.makePolygon(verts, close=True)
+
+        t0 = _time.time()
+
+        # ── outer boundary (CCW) ────────────────────────────────────────────
+        outer_wire = Wire.makeCircle(outer_r, Vector(0, 0, 0), Vector(0, 0, 1))
+
+        holes = []
+        # ── inner circle hole ───────────────────────────────────────────────
+        holes.append(Wire.makeCircle(inner_r, Vector(0, 0, 0), Vector(0, 0, 1)))
+
         for i in range(half_slots):
-            angle = i * slot_angle
-            # Trapezoid wedge (positive X)
-            cutters.append(
-                cq.Workplane("XY")
-                .moveTo(p1[0], p1[1]).lineTo(p2[0], p2[1])
-                .lineTo(p3[0], p3[1]).lineTo(p4[0], p4[1])
-                .close().extrude(stator_w + 1)
-                .rotate((0, 0, 0), (0, 0, 1), angle)
-            )
-            # Trapezoid wedge (negative X mirror)
-            cutters.append(
-                cq.Workplane("XY")
-                .moveTo(-p1[0], p1[1]).lineTo(-p2[0], p2[1])
-                .lineTo(-p3[0], p3[1]).lineTo(-p4[0], p4[1])
-                .close().extrude(stator_w + 1)
-                .rotate((0, 0, 0), (0, 0, 1), angle)
-            )
-            # Fillet cylinder at p3 (positive X)
-            cutters.append(
-                cq.Workplane("XY").circle(fill_r).extrude(stator_w + 1)
-                .translate((p3[0], p3[1], 0))
-                .rotate((0, 0, 0), (0, 0, 1), angle)
-            )
-            # Fillet cylinder at p3 (negative X)
-            cutters.append(
-                cq.Workplane("XY").circle(fill_r).extrude(stator_w + 1)
-                .translate((-p3[0], p3[1], 0))
-                .rotate((0, 0, 0), (0, 0, 1), angle)
-            )
-            # Slot (positive X)
-            cutters.append(
-                cq.Workplane("XY")
-                .rect(slot_w, -slot_h*2, centered=(False, False))
-                .extrude(stator_w + 1)
-                .translate((slot_x, slot_y, 0))
-                .rotate((0, 0, 0), (0, 0, 1), angle)
-            )
-            # Slot (negative X)
-            cutters.append(
-                cq.Workplane("XY")
-                .rect(-slot_w, -slot_h*2, centered=(False, False))
-                .extrude(stator_w + 1)
-                .translate((-slot_x, slot_y, 0))
-                .rotate((0, 0, 0), (0, 0, 1), angle)
-            )
+            a = radians(i * slot_angle)
 
-        # Union all cutters into one solid, then cut once
-        tool = cutters[0]
-        for c in cutters[1:]:
-            tool = tool.union(c)
-        stator = stator.cut(tool)
+            # Slot +X
+            sp = [(slot_x,        slot_y),
+                  (slot_x+slot_w, slot_y),
+                  (slot_x+slot_w, slot_y - slot_height*2),
+                  (slot_x,        slot_y - slot_height*2)]
+            holes.append(_poly_wire([_rot(x, y, a) for x, y in sp]))
 
-        return stator
+            # Slot -X (mirror)
+            sn = [(-slot_x,        slot_y),
+                  (-slot_x-slot_w,  slot_y),
+                  (-slot_x-slot_w,  slot_y - slot_height*2),
+                  (-slot_x,         slot_y - slot_height*2)]
+            holes.append(_poly_wire([_rot(x, y, a) for x, y in sn]))
+
+            # Cut_up trapezoid +X
+            holes.append(_poly_wire([_rot(x, y, a) for x, y in [q1, q2, q3, q4]]))
+
+            # Cut_up trapezoid -X (mirror)
+            holes.append(_poly_wire([_rot(-x, y, a) for x, y in [q1, q2, q3, q4]]))
+
+            # Fillet circle +X (at rotated q3)
+            cx, cy = _rot(q3[0],  q3[1], a)
+            holes.append(Wire.makeCircle(fill_r, Vector(cx, cy, 0), Vector(0, 0, 1)))
+
+            # Fillet circle -X (at rotated -q3)
+            cx, cy = _rot(-q3[0], q3[1], a)
+            holes.append(Wire.makeCircle(fill_r, Vector(cx, cy, 0), Vector(0, 0, 1)))
+
+        face  = Face.makeFromWires(outer_wire, holes)
+        solid = CQSolid.extrudeLinear(face, Vector(0, 0, stator_w))
+        print(f"[stator 2D] {_time.time()-t0:.2f}s")
+        return cq.Workplane("XY").add(solid)
         
     def _create_shaft(self, cq) -> Any:
         """Create motor shaft."""

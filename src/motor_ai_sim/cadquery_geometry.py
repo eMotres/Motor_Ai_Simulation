@@ -16,7 +16,7 @@ import json
 import hashlib
 from pathlib import Path
 from typing import Dict, Optional, List, Tuple, Any
-from math import sin, cos, radians, tan
+from math import sin, cos, radians, tan, sqrt, atan2, pi
 #import math
 
 # CadQuery imports - try to import lazily
@@ -214,11 +214,32 @@ class CadQueryMotor:
         fill_r = ((inner_r + cut_width) * sin(radians(slot_angle/2)) - cut_x) / \
                  (1 - sin(radians(slot_angle/2)))
         rr   = inner_r + cut_width + fill_r
-        ext  = outer_r * 2                       # large enough to extend past outer_r
-        q1   = (cut_x,         ext)
-        q2   = (cut_x,         rr * cos(radians(slot_angle/2)))
-        q3   = (cut_x + fill_r, rr * cos(radians(slot_angle/2)))
-        q4   = (ext * tan(radians(slot_angle/2)), ext)
+        theta_half = radians(slot_angle / 2)
+
+        q2   = (cut_x,          rr * cos(theta_half))
+        q3   = (cut_x + fill_r, rr * cos(theta_half))   # fillet centre
+        # Clip top corners to outer circle — hole stays fully inside outer boundary
+        q1   = (cut_x,                     sqrt(max(0.0, outer_r**2 - cut_x**2)))
+        q4   = (outer_r * sin(theta_half), outer_r * cos(theta_half))
+
+        # Fillet arc embedded in the cut_up polygon.
+        # Arc sweeps CCW from q2 (angle 180° from q3) to the diagonal tangent
+        # point (angle 180° + (90°−θ) = 270°−θ from q3), radius fill_r.
+        arc_sweep   = pi/2 - theta_half          # radians, always positive
+        n_arc_segs  = 5                          # segments for the arc
+        _arc_start  = pi                         # 180° = direction from q3 to q2
+        _arc_pts_px = []                         # +X arc points (local coords)
+        for k in range(n_arc_segs + 1):
+            ang = _arc_start + arc_sweep * k / n_arc_segs   # CCW from 180°→255°
+            _arc_pts_px.append((q3[0] + fill_r * cos(ang),
+                                q3[1] + fill_r * sin(ang)))
+        # Lower tangent on diagonal: q3 − fill_r*(sin θ, cos θ)
+        _diag_tangent_px = (q3[0] - fill_r * sin(theta_half),
+                            q3[1] - fill_r * cos(theta_half))
+        # Full cut_up+fillet polygon (+X, local): q1 → arc → diag_tangent → q4
+        _cutup_px = [q1] + _arc_pts_px + [q4]
+        # Mirror for -X: negate x (arc direction reverses, OCCT normalises winding)
+        _cutup_nx = [(-x, y) for x, y in _cutup_px]
 
         def _rot(x, y, a_rad):
             ca, sa = cos(a_rad), sin(a_rad)
@@ -240,33 +261,26 @@ class CadQueryMotor:
         for i in range(half_slots):
             a = radians(i * slot_angle)
 
-            # Slot +X
+            # Slot +X  (bottom clamped to inner_r so it never overlaps the inner hole)
+            slot_bot = inner_r
             sp = [(slot_x,        slot_y),
                   (slot_x+slot_w, slot_y),
-                  (slot_x+slot_w, slot_y - slot_height*2),
-                  (slot_x,        slot_y - slot_height*2)]
+                  (slot_x+slot_w, slot_bot),
+                  (slot_x,        slot_bot)]
             holes.append(_poly_wire([_rot(x, y, a) for x, y in sp]))
 
             # Slot -X (mirror)
             sn = [(-slot_x,        slot_y),
                   (-slot_x-slot_w,  slot_y),
-                  (-slot_x-slot_w,  slot_y - slot_height*2),
-                  (-slot_x,         slot_y - slot_height*2)]
+                  (-slot_x-slot_w,  slot_bot),
+                  (-slot_x,         slot_bot)]
             holes.append(_poly_wire([_rot(x, y, a) for x, y in sn]))
 
-            # Cut_up trapezoid +X
-            holes.append(_poly_wire([_rot(x, y, a) for x, y in [q1, q2, q3, q4]]))
+            # Cut_up + embedded fillet arc +X
+            holes.append(_poly_wire([_rot(x, y, a) for x, y in _cutup_px]))
 
-            # Cut_up trapezoid -X (mirror)
-            holes.append(_poly_wire([_rot(-x, y, a) for x, y in [q1, q2, q3, q4]]))
-
-            # Fillet circle +X (at rotated q3)
-            cx, cy = _rot(q3[0],  q3[1], a)
-            holes.append(Wire.makeCircle(fill_r, Vector(cx, cy, 0), Vector(0, 0, 1)))
-
-            # Fillet circle -X (at rotated -q3)
-            cx, cy = _rot(-q3[0], q3[1], a)
-            holes.append(Wire.makeCircle(fill_r, Vector(cx, cy, 0), Vector(0, 0, 1)))
+            # Cut_up + embedded fillet arc -X (mirror)
+            holes.append(_poly_wire([_rot(x, y, a) for x, y in _cutup_nx]))
 
         face  = Face.makeFromWires(outer_wire, holes)
         solid = CQSolid.extrudeLinear(face, Vector(0, 0, stator_w))

@@ -48,6 +48,7 @@ def update_geometry(update: GeometryUpdateModel):
     try:
         from motor_ai_sim.cadquery_geometry import CadQueryCache
         CadQueryCache().clear_all()
+        _mesh_cache["hash"] = None
         params = update_current_geometry(**update.model_dump())
 
         # Persist changes to YAML so they survive server restarts
@@ -208,15 +209,28 @@ def get_geometry_schema():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+_mesh_cache: dict = {"hash": None, "data": None}
+
 @router.get("/mesh")
 def get_geometry_mesh():
     try:
         from motor_ai_sim.cadquery_geometry import CadQueryMotor
+        import hashlib, json
         params = get_current_geometry()
+        params_dict = params.to_dict()
+        params_hash = hashlib.md5(json.dumps(params_dict, sort_keys=True).encode()).hexdigest()
+
+        if _mesh_cache["hash"] == params_hash and _mesh_cache["data"] is not None:
+            return _mesh_cache["data"]
+
         motor = CadQueryMotor()
-        motor.set_parameters(params.to_dict())
+        motor.set_parameters(params_dict)
         motor.build_all()
-        return motor.get_all_mesh_data()
+        data = motor.get_all_mesh_data()
+
+        _mesh_cache["hash"] = params_hash
+        _mesh_cache["data"] = data
+        return data
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

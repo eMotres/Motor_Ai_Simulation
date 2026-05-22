@@ -16,7 +16,7 @@ import json
 import hashlib
 from pathlib import Path
 from typing import Dict, Optional, List, Tuple, Any
-from math import sin, cos, radians
+from math import sin, cos, radians, tan
 #import math
 
 # CadQuery imports - try to import lazily
@@ -197,6 +197,8 @@ class CadQueryMotor:
         stator_w = p['stator_width']
         num_slots = int(p['num_slots'])
         tooth_width = p['tooth_width']
+        tooth2_width = p['tooth2_width']
+        cut_width = p['cut_width']
         wire_w = p['wire_width']
         ins_w = p['insulation_thickness']
         wire_d_x = p['wire_spacing_x']
@@ -215,33 +217,72 @@ class CadQueryMotor:
             .circle(inner_r)
             .extrude(stator_w)
         )
-        
-        # Create slot cutouts using rotate/translate approach instead of polarArray
-        # This is more reliable in CadQuery 2.x
+
+        # ── Build one compound cutter, then do a single .cut() ──────────────
+        # One boolean operation is vastly faster than 70+ sequential ones.
+        cut_x = tooth_width/2 + ins_w*2 + wire_w + wire_d_x*2 + tooth2_width
+        fill_r = ((inner_r + cut_width) * sin(radians(slot_angle/2)) - cut_x) / (1 - sin(radians(slot_angle/2)))
+        rr = inner_r + cut_width + fill_r
+        ext = outer_r * 2
+        p1 = (cut_x, ext)
+        p2 = (cut_x, rr * cos(radians(slot_angle/2)))
+        p3 = (cut_x + fill_r, rr * cos(radians(slot_angle/2)))
+        p4 = (ext * tan(radians(slot_angle/2)), ext)
+
+        cutters = []
         for i in range(half_slots):
             angle = i * slot_angle
-            # Create positive side slot 
-            slot = (
+            # Trapezoid wedge (positive X)
+            cutters.append(
+                cq.Workplane("XY")
+                .moveTo(p1[0], p1[1]).lineTo(p2[0], p2[1])
+                .lineTo(p3[0], p3[1]).lineTo(p4[0], p4[1])
+                .close().extrude(stator_w + 1)
+                .rotate((0, 0, 0), (0, 0, 1), angle)
+            )
+            # Trapezoid wedge (negative X mirror)
+            cutters.append(
+                cq.Workplane("XY")
+                .moveTo(-p1[0], p1[1]).lineTo(-p2[0], p2[1])
+                .lineTo(-p3[0], p3[1]).lineTo(-p4[0], p4[1])
+                .close().extrude(stator_w + 1)
+                .rotate((0, 0, 0), (0, 0, 1), angle)
+            )
+            # Fillet cylinder at p3 (positive X)
+            cutters.append(
+                cq.Workplane("XY").circle(fill_r).extrude(stator_w + 1)
+                .translate((p3[0], p3[1], 0))
+                .rotate((0, 0, 0), (0, 0, 1), angle)
+            )
+            # Fillet cylinder at p3 (negative X)
+            cutters.append(
+                cq.Workplane("XY").circle(fill_r).extrude(stator_w + 1)
+                .translate((-p3[0], p3[1], 0))
+                .rotate((0, 0, 0), (0, 0, 1), angle)
+            )
+            # Slot (positive X)
+            cutters.append(
                 cq.Workplane("XY")
                 .rect(slot_w, -slot_h*2, centered=(False, False))
                 .extrude(stator_w + 1)
                 .translate((slot_x, slot_y, 0))
                 .rotate((0, 0, 0), (0, 0, 1), angle)
             )
-            
-            # Create negative side slot
-            slot_neg = (
+            # Slot (negative X)
+            cutters.append(
                 cq.Workplane("XY")
                 .rect(-slot_w, -slot_h*2, centered=(False, False))
                 .extrude(stator_w + 1)
                 .translate((-slot_x, slot_y, 0))
                 .rotate((0, 0, 0), (0, 0, 1), angle)
             )
-                                  
-            # Cut both slots from stator
-            stator = stator.cut(slot)
-            stator = stator.cut(slot_neg)
-        
+
+        # Union all cutters into one solid, then cut once
+        tool = cutters[0]
+        for c in cutters[1:]:
+            tool = tool.union(c)
+        stator = stator.cut(tool)
+
         return stator
         
     def _create_shaft(self, cq) -> Any:

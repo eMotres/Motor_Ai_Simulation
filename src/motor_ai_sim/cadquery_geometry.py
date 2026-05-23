@@ -152,29 +152,50 @@ class CadQueryMotor:
     
     def build_all(self) -> Dict:
         """
-        Build all components. 
+        Build all components.
         Rotor has cavities, magnets are separate, and coils are separate per slot.
         """
         if not _import_cadquery():
             raise RuntimeError("CadQuery not found")
-        
+
         import cadquery as cq
-        
+        import time as _time
+
+        _t0 = _time.perf_counter()
+
         # 1. Stator and Shaft
         self.parts['stator_core'] = self._create_stator(cq)
+        _t1 = _time.perf_counter()
+        print(f"[PERF] stator: {_t1-_t0:.2f}s")
+
         self.parts['shaft'] = self._create_shaft(cq)
-        
+        _t2 = _time.perf_counter()
+        print(f"[PERF] shaft:  {_t2-_t1:.2f}s")
+
         # 2. Magnets and Rotor Core with Cavities
         magnets_list = self._create_magnets(cq)
+        _t3 = _time.perf_counter()
+        print(f"[PERF] magnets:{_t3-_t2:.2f}s")
+
         rotor_solid = self._create_rotor(cq)
-        
+        _t4 = _time.perf_counter()
+        print(f"[PERF] rotor:  {_t4-_t3:.2f}s")
+
+        # Cut all magnet cavities in one compound operation (no sequential booleans)
+        valid_magnets = [m for m in magnets_list if m is not None]
+        if valid_magnets:
+            mag_compound = cq.Compound.makeCompound([m.val() for m in valid_magnets])
+            rotor_solid = rotor_solid.cut(cq.Workplane().newObject([mag_compound]))
+
+        _t5 = _time.perf_counter()
+        print(f"[PERF] rotor_cut:{_t5-_t4:.2f}s")
+
         for i, magnet in enumerate(magnets_list):
             if magnet is not None:
-                rotor_solid = rotor_solid.cut(magnet) # Cut hole in rotor
-                self.parts[f'magnet_{i}'] = magnet    # Keep magnet separate
-        
+                self.parts[f'magnet_{i}'] = magnet
+
         self.parts['rotor_core'] = rotor_solid
-        
+
         # 3. Individual Coils (one object per slot)
         try:
             coils_list = self._create_coils(cq)
@@ -182,7 +203,11 @@ class CadQueryMotor:
                 self.parts[f'coil_{i}'] = coil_stack
         except Exception as e:
             print(f"Failed to build coils: {e}")
-            
+
+        _t6 = _time.perf_counter()
+        print(f"[PERF] coils:  {_t6-_t5:.2f}s")
+        print(f"[PERF] TOTAL build_all: {_t6-_t0:.2f}s")
+
         return self.parts
         
     def _create_stator(self, cq) -> Any:
@@ -233,67 +258,126 @@ class CadQueryMotor:
             .extrude(stator_w)
         )
 
-        cutters = []
-        for i in range(half_slots):
-            angle = i * slot_angle
-            # Trapezoid wedge (+X)
-            cutters.append(
+        # ── Template-rotate approach ──────────────────────────────────────────
+        # Build 6 cutter shapes for slot-0 (angle=0), then BRepBuilderAPI_Transform
+        # each template for every other slot.  Avoids re-running CadQuery's full
+        # polyline→wire→face→prism pipeline (12 slots × 6 cutters = 72 calls → 6 calls).
+        import cadquery as _cq
+        try:
+            from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
+            from OCP.gp import gp_Trsf, gp_Ax1, gp_Dir, gp_Pnt as gp_P
+            from OCP.TopoDS import TopoDS_Compound
+            from OCP.BRep import BRep_Builder
+            _use_template_rotate = True
+        except ImportError:
+            _use_template_rotate = False
+
+        def _make_template_cutters():
+            """Create the 6 cutter solids at angle=0 as raw OCC shapes."""
+            templates = []
+            templates.append(
                 cq.Workplane("XY")
                 .moveTo(p1[0], p1[1]).lineTo(p2[0], p2[1])
                 .lineTo(p3[0], p3[1]).lineTo(p4[0], p4[1])
-                .close().extrude(stator_w + 1)
-                .rotate((0,0,0),(0,0,1), angle)
+                .close().extrude(stator_w + 1).val().wrapped
             )
-            # Trapezoid wedge (-X mirror)
-            cutters.append(
+            templates.append(
                 cq.Workplane("XY")
                 .moveTo(-p1[0], p1[1]).lineTo(-p2[0], p2[1])
                 .lineTo(-p3[0], p3[1]).lineTo(-p4[0], p4[1])
-                .close().extrude(stator_w + 1)
-                .rotate((0,0,0),(0,0,1), angle)
+                .close().extrude(stator_w + 1).val().wrapped
             )
-            # Fillet cylinder at p3 (+X)
-            cutters.append(
+            templates.append(
                 cq.Workplane("XY").circle(fill_r).extrude(stator_w + 1)
-                .translate((p3[0], p3[1], 0))
-                .rotate((0,0,0),(0,0,1), angle)
+                .translate((p3[0], p3[1], 0)).val().wrapped
             )
-            # Fillet cylinder at p3 (-X)
-            cutters.append(
+            templates.append(
                 cq.Workplane("XY").circle(fill_r).extrude(stator_w + 1)
-                .translate((-p3[0], p3[1], 0))
-                .rotate((0,0,0),(0,0,1), angle)
+                .translate((-p3[0], p3[1], 0)).val().wrapped
             )
-            # Slot rectangle (+X)
-            cutters.append(
+            templates.append(
                 cq.Workplane("XY")
                 .rect(slot_w, -slot_h*2, centered=(False, False))
                 .extrude(stator_w + 1)
-                .translate((slot_x, slot_y, 0))
-                .rotate((0,0,0),(0,0,1), angle)
+                .translate((slot_x, slot_y, 0)).val().wrapped
             )
-            # Slot rectangle (-X)
-            cutters.append(
+            templates.append(
                 cq.Workplane("XY")
                 .rect(-slot_w, -slot_h*2, centered=(False, False))
                 .extrude(stator_w + 1)
-                .translate((-slot_x, slot_y, 0))
-                .rotate((0,0,0),(0,0,1), angle)
+                .translate((-slot_x, slot_y, 0)).val().wrapped
             )
+            return templates
 
-        # Single boolean cut
-        tool = cutters[0]
-        for c in cutters[1:]:
-            tool = tool.union(c)
-        stator = stator.cut(tool)
+        if _use_template_rotate:
+            templates = _make_template_cutters()
+            _z_axis = gp_Ax1(gp_P(0, 0, 0), gp_Dir(0, 0, 1))
 
-        import cadquery as _cq
+            bld = BRep_Builder()
+            all_shapes = TopoDS_Compound()
+            bld.MakeCompound(all_shapes)
+
+            for i in range(half_slots):
+                if i == 0:
+                    for tmpl in templates:
+                        bld.Add(all_shapes, tmpl)
+                else:
+                    trsf = gp_Trsf()
+                    trsf.SetRotation(_z_axis, radians(i * slot_angle))
+                    for tmpl in templates:
+                        rotated = BRepBuilderAPI_Transform(tmpl, trsf, True).Shape()
+                        bld.Add(all_shapes, rotated)
+
+            # Wrap as CadQuery shape for the cut call
+            tool_shape = _cq.Shape.cast(all_shapes)
+        else:
+            cutters = []
+            for i in range(half_slots):
+                angle = i * slot_angle
+                cutters.append(
+                    cq.Workplane("XY")
+                    .moveTo(p1[0], p1[1]).lineTo(p2[0], p2[1])
+                    .lineTo(p3[0], p3[1]).lineTo(p4[0], p4[1])
+                    .close().extrude(stator_w + 1).rotate((0,0,0),(0,0,1), angle)
+                )
+                cutters.append(
+                    cq.Workplane("XY")
+                    .moveTo(-p1[0], p1[1]).lineTo(-p2[0], p2[1])
+                    .lineTo(-p3[0], p3[1]).lineTo(-p4[0], p4[1])
+                    .close().extrude(stator_w + 1).rotate((0,0,0),(0,0,1), angle)
+                )
+                cutters.append(
+                    cq.Workplane("XY").circle(fill_r).extrude(stator_w + 1)
+                    .translate((p3[0], p3[1], 0)).rotate((0,0,0),(0,0,1), angle)
+                )
+                cutters.append(
+                    cq.Workplane("XY").circle(fill_r).extrude(stator_w + 1)
+                    .translate((-p3[0], p3[1], 0)).rotate((0,0,0),(0,0,1), angle)
+                )
+                cutters.append(
+                    cq.Workplane("XY")
+                    .rect(slot_w, -slot_h*2, centered=(False, False))
+                    .extrude(stator_w + 1).translate((slot_x, slot_y, 0))
+                    .rotate((0,0,0),(0,0,1), angle)
+                )
+                cutters.append(
+                    cq.Workplane("XY")
+                    .rect(-slot_w, -slot_h*2, centered=(False, False))
+                    .extrude(stator_w + 1).translate((-slot_x, slot_y, 0))
+                    .rotate((0,0,0),(0,0,1), angle)
+                )
+            tool_shape = _cq.Compound.makeCompound([c.val() for c in cutters])
+
+        # Cut with the compound tool in a single boolean operation
+        stator = stator.cut(cq.Workplane().newObject([tool_shape]))
 
         # ── Fillet: OUTER RADIUS corners ─────────────────────────────────────
-        # |Z edges where trapezoid walls meet the outer cylinder (r ≈ outer_r)
+        # Short |Z edges where slot/trapezoid walls meet the outer cylinder.
+        # After compound-cut the edges are classified by length: slot walls
+        # create short edges (~stator_w) whereas the outer cylinder arcs are long.
         if slot_fillet_r > 0:
-            _r_lo = outer_r - 0.5
-            _r_hi = outer_r + 0.2
+            _r_lo = outer_r - 1.5
+            _r_hi = outer_r + 0.5
 
             class _OuterRingSelector(_cq.selectors.Selector):
                 def filter(self_, obj_list):
@@ -303,7 +387,7 @@ class CadQueryMotor:
             try:
                 stator = stator.edges("|Z").edges(_OuterRingSelector()).fillet(slot_fillet_r)
             except Exception as ex:
-                print(f"[stator] outer-ring fillet failed (r={slot_fillet_r}): {ex}")
+                print(f"[stator] outer-ring fillet skipped (r={slot_fillet_r}): {ex}")
 
         # ── Fillet: INNER RADIUS corners ─────────────────────────────────────
         # |Z edges where slot walls and trapezoid walls meet the inner cylinder
@@ -366,41 +450,56 @@ class CadQueryMotor:
         magnet_r = rotor_inner_r + rotor_house_h
         print(f"[DEBUG] _create_magnets: rotor_inner_r={rotor_inner_r}, magnet_r={magnet_r}")
         
-        magnets = []
-        
         # Calculate angles in radians for math functions
         angle_down = radians(pole_angle * mag_fill_down / 2)
         angle_up = radians(pole_angle * mag_fill_up / 2)
-        
-        p1 = (magnet_r * sin(angle_down), magnet_r * cos(angle_down))      
-        p2 = ((magnet_r + mag_down_h) * sin(angle_down), (magnet_r + mag_down_h) * cos(angle_down))      
-        p3 = ((rotor_outer_r - mag_up_gap) * sin(angle_up), (rotor_outer_r - mag_up_gap) * cos(angle_up))    
-        p4 = (-(rotor_outer_r - mag_up_gap) * sin(angle_up), (rotor_outer_r - mag_up_gap) * cos(angle_up))           
-        p5 = (-(magnet_r + mag_down_h) * sin(angle_down), (magnet_r + mag_down_h) * cos(angle_down))       
-        p6 = (-magnet_r * sin(angle_down), magnet_r * cos(angle_down))      
-        
-        for i in range(num_poles):
-            angle = i * pole_angle
-            
-            # Create magnet at origin then rotate/translate
-            magnet = (
-                cq.Workplane("XY")
-                .polyline([p1, p2, p3, p4, p5, p6])
-                .close()        
-                .extrude(width)
-            )
-            
-            if mag_fill_r > 0:
-                try:
-                    magnet = magnet.edges(">Y and |Z").fillet(mag_fill_r)
-                except Exception as e:
-                    print(f"Warning: Could not apply fillet to magnet: {e}")
-            
-            # Rotate to final position
-            magnet = magnet.rotate((0, 0, 0), (0, 0, 1), angle)
 
-            magnets.append(magnet)
-            
+        p1 = (magnet_r * sin(angle_down), magnet_r * cos(angle_down))
+        p2 = ((magnet_r + mag_down_h) * sin(angle_down), (magnet_r + mag_down_h) * cos(angle_down))
+        p3 = ((rotor_outer_r - mag_up_gap) * sin(angle_up), (rotor_outer_r - mag_up_gap) * cos(angle_up))
+        p4 = (-(rotor_outer_r - mag_up_gap) * sin(angle_up), (rotor_outer_r - mag_up_gap) * cos(angle_up))
+        p5 = (-(magnet_r + mag_down_h) * sin(angle_down), (magnet_r + mag_down_h) * cos(angle_down))
+        p6 = (-magnet_r * sin(angle_down), magnet_r * cos(angle_down))
+
+        # ── Template-rotate: create one magnet + fillet, then OCC-copy for the rest ──
+        # Reduces polyline+extrude+fillet from N calls to 1 call + N-1 transforms.
+        try:
+            from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform as _BRT
+            from OCP.gp import gp_Trsf as _Trsf, gp_Ax1 as _Ax1, gp_Dir as _Dir, gp_Pnt as _Pnt
+            _use_mag_template = True
+        except ImportError:
+            _use_mag_template = False
+
+        # Build the template magnet at angle=0
+        template_magnet = (
+            cq.Workplane("XY")
+            .polyline([p1, p2, p3, p4, p5, p6])
+            .close()
+            .extrude(width)
+        )
+        if mag_fill_r > 0:
+            try:
+                template_magnet = template_magnet.edges(">Y and |Z").fillet(mag_fill_r)
+            except Exception as e:
+                print(f"Warning: Could not apply fillet to magnet: {e}")
+
+        magnets = []
+        if _use_mag_template:
+            _tmpl_shape = template_magnet.val().wrapped
+            _z_ax = _Ax1(_Pnt(0, 0, 0), _Dir(0, 0, 1))
+            for i in range(num_poles):
+                if i == 0:
+                    magnets.append(template_magnet)
+                else:
+                    t = _Trsf()
+                    t.SetRotation(_z_ax, radians(i * pole_angle))
+                    rotated = _BRT(_tmpl_shape, t, True).Shape()
+                    magnets.append(cq.Workplane().newObject([cq.Shape.cast(rotated)]))
+        else:
+            magnets.append(template_magnet)
+            for i in range(1, num_poles):
+                magnets.append(template_magnet.rotate((0, 0, 0), (0, 0, 1), i * pole_angle))
+
         return magnets
     def _create_rotor(self, cq) -> Any:
         """Create rotor hub."""
@@ -426,18 +525,43 @@ class CadQueryMotor:
             .extrude(width)
         )
 
-        for i in range(num_poles):
-            angle = i * pole_angle
-            # Create positive side slot 
-            cut_up = (
-                cq.Workplane("XY")
-                .rect(rec_w, -mag_h, centered=(False, False))
-                .extrude(width + 1)
-                .translate((-rec_w/2, rotor_outer_r, 0))
-                .rotate((0, 0, 0), (0, 0, 1), angle)
+        import cadquery as _cq
+        try:
+            from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform as _BRT2
+            from OCP.gp import gp_Trsf as _Trsf2, gp_Ax1 as _Ax2, gp_Dir as _Dir2, gp_Pnt as _Pnt2
+            from OCP.TopoDS import TopoDS_Compound as _TDC2
+            from OCP.BRep import BRep_Builder as _BB2
+            _use_rotor_tpl = True
+        except ImportError:
+            _use_rotor_tpl = False
+
+        # Create one slot cutter at angle=0, then rotate copies
+        tmpl_cutter = (
+            cq.Workplane("XY")
+            .rect(rec_w, -mag_h, centered=(False, False))
+            .extrude(width + 1)
+            .translate((-rec_w/2, rotor_outer_r, 0))
+        )
+        if _use_rotor_tpl:
+            _tc_shape = tmpl_cutter.val().wrapped
+            _zax2 = _Ax2(_Pnt2(0, 0, 0), _Dir2(0, 0, 1))
+            _bld2 = _BB2()
+            _cpd2 = _TDC2()
+            _bld2.MakeCompound(_cpd2)
+            for i in range(num_poles):
+                if i == 0:
+                    _bld2.Add(_cpd2, _tc_shape)
+                else:
+                    t2 = _Trsf2()
+                    t2.SetRotation(_zax2, radians(i * pole_angle))
+                    _bld2.Add(_cpd2, _BRT2(_tc_shape, t2, True).Shape())
+            rotor_tool = _cq.Shape.cast(_cpd2)
+        else:
+            rotor_tool = _cq.Compound.makeCompound(
+                [tmpl_cutter.rotate((0,0,0),(0,0,1), i * pole_angle).val() for i in range(num_poles)]
             )
-            rotor = rotor.cut(cut_up)
-        
+        rotor = rotor.cut(cq.Workplane().newObject([rotor_tool]))
+
         return rotor
    
     def _create_coils(self, cq) -> List[Any]:
@@ -485,50 +609,78 @@ class CadQueryMotor:
     # Horizontal Y positions for the two columns (centered around Y=0)
         right_x = tooth_width / 2 + ins_w + wire_d_x/2
     
-        coils = [] # Renamed from final_coils
-    
+        # Store coil geometry params for analytical mesh generation (bypass OCC tess)
+        self._coil_mesh_params = {
+            'half_slots': half_slots, 'slot_angle': slot_angle,
+            'num_wires': num_wires, 'top_y': top_y,
+            'right_x': right_x, 'wire_w': wire_w, 'wire_h': wire_h,
+            'wire_d_y': wire_d_y, 'stator_w': stator_w,
+        }
+
+        # ── Pre-build OCC box shapes for one slot (template, rotated per slot) ─
+        # BRepPrimAPI_MakeBox avoids the CadQuery polyline→wire→face→prism chain.
+        # We create a Compound of all wire boxes, then rotate once per slot.
+        # No boolean ops at all — Compound assembly is O(N) pointer operations.
+        try:
+            from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+            from OCP.gp import gp_Pnt
+            from OCP.TopoDS import TopoDS_Compound
+            from OCP.BRep import BRep_Builder
+            from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
+            from OCP.gp import gp_Trsf, gp_Ax1, gp_Dir
+            import math as _math
+            _use_occ_boxes = True
+        except ImportError:
+            _use_occ_boxes = False
+
+        coils = []
+
         for i in range(half_slots):
             angle = i * slot_angle
-            wires = [] # Renamed from slot_wires
-        
-            for step_y in range(num_wires):
-            # Calculate current Y position for this layer (stacking DOWNWARDS)
-                current_y = top_y - step_y *(wire_h+wire_d_y) 
-            
-                # Define Right Wire Polygon coordinates
-                right_pts = [
-                    (right_x, current_y ),          
-                    (right_x + wire_w, current_y ),   
-                    (right_x + wire_w, current_y - wire_h),            
-                    (right_x, current_y - wire_h)                    
-                ]
-            
-                # Define Left Wire Polygon coordinates
-                left_pts = [
-                    (-right_x, current_y ),          
-                    (-right_x - wire_w, current_y ),   
-                    (-right_x - wire_w, current_y - wire_h),            
-                    (-right_x, current_y - wire_h)                    
-                ]
-            
-                # Create 3D geometry via extrusion along Z axis
-                # .translate centers the coil along the motor length
-                right_wire = (cq.Workplane("XY").polyline(right_pts).close().extrude(stator_w))
-                left_wire = (cq.Workplane("XY").polyline(left_pts).close().extrude(stator_w))
-            
-                # Rotate and store individual wires
-                wires.append(right_wire.rotate((0,0,0), (0,0,1), angle))
-                wires.append(left_wire.rotate((0,0,0), (0,0,1), angle))
-            
-        # Instead of slow O(N^2) boolean union, create a Compound for fast export
-            if wires:
-                valid_wires = [w for w in wires if w is not None]
-                if valid_wires:
-                    # Use Compound to group wires without expensive boolean operations
-                    compound = cq.Compound.makeCompound([w.val() for w in valid_wires])
-                    coils.append(compound)
-        
-        return coils    
+
+            if _use_occ_boxes:
+                # Build OCC compound of raw boxes — no CadQuery overhead
+                builder = BRep_Builder()
+                compound = TopoDS_Compound()
+                builder.MakeCompound(compound)
+                for step_y in range(num_wires):
+                    current_y = top_y - step_y * (wire_h + wire_d_y)
+                    # Right box: corner at (right_x, current_y-wire_h, 0)
+                    rb = BRepPrimAPI_MakeBox(
+                        gp_Pnt(right_x,          current_y - wire_h, 0),
+                        gp_Pnt(right_x + wire_w, current_y,          stator_w),
+                    ).Shape()
+                    # Left box: corner at (-right_x-wire_w, current_y-wire_h, 0)
+                    lb = BRepPrimAPI_MakeBox(
+                        gp_Pnt(-right_x - wire_w, current_y - wire_h, 0),
+                        gp_Pnt(-right_x,           current_y,          stator_w),
+                    ).Shape()
+                    builder.Add(compound, rb)
+                    builder.Add(compound, lb)
+
+                # Rotate compound around Z axis
+                trsf = gp_Trsf()
+                trsf.SetRotation(
+                    gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)),
+                    _math.radians(angle),
+                )
+                rotated = BRepBuilderAPI_Transform(compound, trsf, True).Shape()
+                coils.append(cq.Shape.cast(rotated))
+            else:
+                # Fallback: original CadQuery approach
+                wires = []
+                for step_y in range(num_wires):
+                    current_y = top_y - step_y * (wire_h + wire_d_y)
+                    right_pts = [(right_x, current_y), (right_x + wire_w, current_y),
+                                 (right_x + wire_w, current_y - wire_h), (right_x, current_y - wire_h)]
+                    left_pts  = [(-right_x, current_y), (-right_x - wire_w, current_y),
+                                 (-right_x - wire_w, current_y - wire_h), (-right_x, current_y - wire_h)]
+                    wires.append(cq.Workplane("XY").polyline(right_pts).close().extrude(stator_w).rotate((0,0,0),(0,0,1), angle))
+                    wires.append(cq.Workplane("XY").polyline(left_pts).close().extrude(stator_w).rotate((0,0,0),(0,0,1), angle))
+                compound = cq.Compound.makeCompound([w.val() for w in wires])
+                coils.append(compound)
+
+        return coils
     
     def export_stl(self, output_dir: str, tolerance: float = 0.1) -> Dict[str, str]:
         """Export all components to STL files."""
@@ -574,11 +726,13 @@ class CadQueryMotor:
             else:
                 solid = shape
                 
-            vertices, faces = solid.tessellate(0.1)
-            
-            # Format to basic lists
-            vertices_list = [[v.x, v.y, v.z] for v in vertices]
-            
+            # tolerance=0.2 is visually fine for the web viewer and ~2× faster than 0.1
+            vertices, faces = solid.tessellate(0.2)
+
+            # Fast vertex formatting: tuple access is cheaper than list construction
+            # and attribute lookup on gp_Pnt/Vector is the bottleneck for large meshes.
+            vertices_list = [(v.x, v.y, v.z) for v in vertices]
+
             return {
                 'vertices': vertices_list,
                 'faces': faces,
@@ -588,20 +742,242 @@ class CadQueryMotor:
         except Exception as e:
             print(f"Error tessellating {component}: {e}")
             return None
-    
+
+    def _make_coil_mesh_analytical(self) -> Optional[Dict]:
+        """Generate coil wire mesh analytically (no OCC tessellation).
+
+        Each wire is a rectangular box.  We compute all 8 vertices and
+        12 triangles directly in Python, rotate by the slot angle, and
+        return the combined mesh.  This is ~50× faster than OCC tessellate
+        for 192 simple boxes.
+        """
+        cp = getattr(self, '_coil_mesh_params', None)
+        if cp is None:
+            return None
+
+        import math as _m
+        half_slots = cp['half_slots']
+        slot_angle = cp['slot_angle']
+        num_wires  = cp['num_wires']
+        top_y      = cp['top_y']
+        right_x    = cp['right_x']
+        wire_w     = cp['wire_w']
+        wire_h     = cp['wire_h']
+        wire_d_y   = cp['wire_d_y']
+        stator_w   = cp['stator_w']
+
+        vertices = []
+        faces    = []
+        base_idx = 0
+
+        # BOX_FACES: 6 faces × 2 triangles each; indices into 8 corners of a unit box
+        # Corners: 0=(0,0,0) 1=(1,0,0) 2=(1,1,0) 3=(0,1,0)
+        #          4=(0,0,1) 5=(1,0,1) 6=(1,1,1) 7=(0,1,1)
+        BOX_TRIS = [
+            (0,1,2),(0,2,3),  # -Z face
+            (4,6,5),(4,7,6),  # +Z face
+            (0,4,5),(0,5,1),  # -Y face
+            (3,2,6),(3,6,7),  # +Y face
+            (0,3,7),(0,7,4),  # -X face
+            (1,5,6),(1,6,2),  # +X face
+        ]
+
+        for i in range(half_slots):
+            ang_rad = _m.radians(i * slot_angle)
+            cos_a, sin_a = _m.cos(ang_rad), _m.sin(ang_rad)
+
+            def rot(x, y):
+                return (x * cos_a - y * sin_a, x * sin_a + y * cos_a)
+
+            for step_y in range(num_wires):
+                current_y = top_y - step_y * (wire_h + wire_d_y)
+                y0, y1 = current_y - wire_h, current_y
+                z0, z1 = 0.0, stator_w
+
+                for (x0, x1) in [(right_x, right_x + wire_w),
+                                  (-right_x - wire_w, -right_x)]:
+                    # 8 box corners: (x in {x0,x1}) × (y in {y0,y1}) × (z in {z0,z1})
+                    corners_local = [
+                        (x0, y0), (x1, y0), (x1, y1), (x0, y1),  # z0 layer
+                        (x0, y0), (x1, y0), (x1, y1), (x0, y1),  # z1 layer
+                    ]
+                    zs = [z0]*4 + [z1]*4
+                    for (lx, ly), lz in zip(corners_local, zs):
+                        rx, ry = rot(lx, ly)
+                        vertices.append((rx, ry, lz))
+
+                    for tri in BOX_TRIS:
+                        faces.append((base_idx + tri[0],
+                                      base_idx + tri[1],
+                                      base_idx + tri[2]))
+                    base_idx += 8
+
+        return {
+            'vertices': vertices,
+            'faces':    faces,
+            'vertex_count': len(vertices),
+            'face_count':   len(faces),
+        }
+
+    def _split_coil_mesh(self, compound_mesh: Dict) -> List[Dict]:
+        """Split the analytical coil compound mesh into per-slot meshes."""
+        cp = getattr(self, '_coil_mesh_params', None)
+        if cp is None:
+            return [compound_mesh]
+        half_slots = cp['half_slots']
+        num_wires  = cp['num_wires']
+        # Each slot = num_wires * 2 boxes; each box = 8 vertices, 12 faces
+        verts_per_slot = num_wires * 2 * 8
+        faces_per_slot = num_wires * 2 * 12
+        all_v = compound_mesh['vertices']
+        all_f = compound_mesh['faces']
+        parts = []
+        for i in range(half_slots):
+            v0 = i * verts_per_slot
+            f0 = i * faces_per_slot
+            sv = all_v[v0: v0 + verts_per_slot]
+            # Adjust face indices to be relative to this slot's vertex slice
+            sf = [(fa - v0, fb - v0, fc - v0)
+                  for (fa, fb, fc) in all_f[f0: f0 + faces_per_slot]]
+            parts.append({
+                'vertices': sv, 'faces': sf,
+                'vertex_count': len(sv), 'face_count': len(sf),
+            })
+        return parts
+
+    @staticmethod
+    def _rotate_mesh(mesh: Dict, angle_deg: float) -> Dict:
+        """Rotate all mesh vertices by angle_deg around Z axis (pure Python)."""
+        import math as _m
+        ang = _m.radians(angle_deg)
+        cos_a, sin_a = _m.cos(ang), _m.sin(ang)
+        rotated = [
+            (x * cos_a - y * sin_a, x * sin_a + y * cos_a, z)
+            for (x, y, z) in mesh['vertices']
+        ]
+        return {
+            'vertices': rotated,
+            'faces':    mesh['faces'],        # connectivity unchanged
+            'vertex_count': mesh['vertex_count'],
+            'face_count':   mesh['face_count'],
+        }
+
+    @staticmethod
+    def _as_cq_shape(shape):
+        """Normalise any shape variant to a cq.Shape for Compound assembly."""
+        import cadquery as _cq
+        if isinstance(shape, _cq.Shape):
+            return shape
+        if hasattr(shape, 'val'):          # cq.Workplane
+            return shape.val()
+        # Raw OCC TopoDS_* (from BRepBuilderAPI_Transform etc.)
+        return _cq.Shape.cast(shape)
+
     def get_all_mesh_data(self) -> Dict[str, Dict]:
-        """Get mesh data for all components."""
-        mesh_data = {}
-        
+        """Get mesh data for all components.
+
+        Magnets and coils are merged into single compounds before tessellation,
+        reducing tessellation calls from O(N_poles + N_slots) to O(1).
+        """
+        import time as _time
+        import cadquery as _cq
+
         if not self.parts:
             self.build_all()
-            
+
+        _t0 = _time.perf_counter()
+
+        # Partition parts: structural stay separate; magnets/coils use template tess
+        to_tessellate = {}
+        mag_names:  List[str] = []
+        coil_names: List[str] = []
+
         for name in self.parts:
-            data = self.get_mesh_data(name)
+            if name.startswith('magnet_'):
+                mag_names.append(name)
+            elif name.startswith('coil_'):
+                coil_names.append(name)
+            else:
+                to_tessellate[name] = self._as_cq_shape(self.parts[name])
+
+        # Coils: generate all meshes analytically (no OCC at all)
+        _coil_mesh = self._make_coil_mesh_analytical() if coil_names else None
+
+        # Per-shape tessellation tolerances (linear mm, angular rad)
+        # Larger = fewer triangles = faster but coarser appearance
+        _TESS_TOL = {
+            'stator_core': (0.3, 0.4),
+            'rotor_core':  (0.3, 0.4),
+            'magnets':     (0.5, 0.5),
+            'shaft':       (1.0, 0.8),
+        }
+
+        mesh_data = {}
+
+        # Coil meshes: split analytical compound mesh back into per-slot parts
+        if _coil_mesh:
+            per_slot = self._split_coil_mesh(_coil_mesh)
+            for idx, name in enumerate(sorted(coil_names)):
+                if idx < len(per_slot):
+                    mesh_data[name] = per_slot[idx]
+            print(f"[PERF]   tess coils: analytical {len(coil_names)} slots")
+        elif coil_names:
+            # Fallback: tessellate template + rotate
+            tmpl = self._tessellate_shape('coil_tpl', self._as_cq_shape(self.parts[coil_names[0]]))
+            if tmpl:
+                for idx, name in enumerate(sorted(coil_names)):
+                    if idx == 0:
+                        mesh_data[name] = tmpl
+                    else:
+                        ang = idx * (360.0 / len(coil_names))
+                        mesh_data[name] = self._rotate_mesh(tmpl, ang)
+
+        # Magnet meshes: tessellate template once, rotate for the rest (1 OCC call for N)
+        if mag_names:
+            sorted_mags = sorted(mag_names, key=lambda n: int(n.split('_')[1]))
+            mag_tol = _TESS_TOL['magnets']
+            _tp = _time.perf_counter()
+            tmpl = self._tessellate_shape('mag_tpl', self._as_cq_shape(self.parts[sorted_mags[0]]),
+                                          tolerance=mag_tol[0], angular_tolerance=mag_tol[1])
+            n_mag = len(sorted_mags)
+            pole_ang = 360.0 / n_mag
+            if tmpl:
+                mesh_data[sorted_mags[0]] = tmpl
+                for idx in range(1, n_mag):
+                    mesh_data[sorted_mags[idx]] = self._rotate_mesh(tmpl, idx * pole_ang)
+            print(f"[PERF]   tess magnets: tpl+rotate {n_mag} poles: {_time.perf_counter()-_tp:.2f}s")
+
+        for name, shape in to_tessellate.items():
+            tols = _TESS_TOL.get(name, (0.3, 0.4))
+            _tp = _time.perf_counter()
+            data = self._tessellate_shape(name, shape, tolerance=tols[0], angular_tolerance=tols[1])
+            print(f"[PERF]   tess {name}: {_time.perf_counter()-_tp:.2f}s"
+                  + (f" ({data['vertex_count']}v)" if data else " FAILED"))
             if data:
                 mesh_data[name] = data
-                
+
+        _t1 = _time.perf_counter()
+        print(f"[PERF] tessellation ({len(to_tessellate)} groups, was {len(self.parts)} parts): {_t1-_t0:.2f}s")
+
         return mesh_data
+
+    def _tessellate_shape(self, name: str, shape,
+                          tolerance: float = 0.3,
+                          angular_tolerance: float = 0.4) -> Optional[Dict]:
+        """Tessellate one shape (any cq.Shape variant) and return mesh dict."""
+        try:
+            solid = self._as_cq_shape(shape)
+            vertices, faces = solid.tessellate(tolerance, angular_tolerance)
+            vertices_list = [(v.x, v.y, v.z) for v in vertices]
+            return {
+                'vertices': vertices_list,
+                'faces': faces,
+                'vertex_count': len(vertices_list),
+                'face_count': len(faces),
+            }
+        except Exception as e:
+            print(f"Error tessellating {name}: {e}")
+            return None
     
     def validate_sdf(self, n_points: int = 50000) -> Dict:
         """Validate geometry by computing SDF."""

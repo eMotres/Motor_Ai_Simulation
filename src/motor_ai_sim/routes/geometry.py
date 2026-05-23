@@ -212,11 +212,21 @@ def get_geometry_schema():
 def get_geometry_mesh():
     try:
         from motor_ai_sim.cadquery_geometry import CadQueryMotor
+        from motor_ai_sim.services.geometry_service import get_cached_mesh, store_mesh_cache
+
+        # Return cached mesh if params haven't changed
+        cached = get_cached_mesh()
+        if cached is not None:
+            print("[PERF] mesh: cache hit — returning instantly")
+            return cached
+
         params = get_current_geometry()
         motor = CadQueryMotor()
         motor.set_parameters(params.to_dict())
         motor.build_all()
-        return motor.get_all_mesh_data()
+        mesh_data = motor.get_all_mesh_data()
+        store_mesh_cache(mesh_data)
+        return mesh_data
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

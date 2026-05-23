@@ -8,7 +8,7 @@ geometry:
   stator_width: 30
   air_gap: 0.5
   tooth_width: 8.6
-  tooth2_width: 4
+  tooth2_width: 4.5
   cut_width: 3
   insulation_thickness: 0.15
   wire_width: 4
@@ -26,6 +26,8 @@ geometry:
   magnet_up_gap: 0.5
   rotor_hole: 0.6
   magnet_down_height: 2
+  stator_fillet_r: 2.5
+  stator_fillet_r1: 0.9
 derived_params:
   stator_outer_radius: stator_diameter / 2
   stator_inner_radius: stator_outer_radius - core_thickness - slot_height
@@ -281,6 +283,24 @@ geometry_schema:
     step: 0.1
     group: rotor
     description: Magnet down height
+  stator_fillet_r:
+    label: Outer Corner Fillet
+    unit: mm
+    type: float
+    min: 0
+    max: 5
+    step: 0.1
+    group: stator
+    description: Fillet radius on outer-ring corners of stator (at outer radius)
+  stator_fillet_r1:
+    label: Inner Corner Fillet
+    unit: mm
+    type: float
+    min: 0
+    max: 2
+    step: 0.1
+    group: stator
+    description: Fillet radius on inner-ring corners of stator (at inner radius)
   shaft_diameter:
     label: Shaft Diameter
     unit: mm

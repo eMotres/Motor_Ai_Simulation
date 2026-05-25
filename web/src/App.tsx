@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ThemeProvider,
   createTheme,
@@ -53,6 +53,79 @@ const darkTheme = createTheme({
   },
 });
 
+// ─── Geometry build timer ───────────────────────────────────────────────────
+const indicatorBoxSx = {
+  position: 'absolute' as const,
+  bottom: 16,
+  left: '50%',
+  transform: 'translateX(-50%)',
+  zIndex: 999,
+  display: 'flex',
+  alignItems: 'center',
+  gap: 1,
+  bgcolor: 'rgba(0,0,0,0.75)',
+  backdropFilter: 'blur(4px)',
+  px: 2,
+  py: 0.75,
+  borderRadius: 2,
+  border: '1px solid rgba(59,130,246,0.4)',
+};
+
+const GeometryBuildTimer: React.FC = () => {
+  const isGeometryUpdating = useMotorStore(s => s.isGeometryUpdating);
+  const [elapsed, setElapsed] = useState(0);
+  const [lastBuildTime, setLastBuildTime] = useState<number | null>(null);
+  const [showResult, setShowResult] = useState(false);
+  const startRef = useRef<number | null>(null);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const hideRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (isGeometryUpdating) {
+      startRef.current = Date.now();
+      setElapsed(0);
+      setShowResult(false);
+      if (hideRef.current) clearTimeout(hideRef.current);
+      intervalRef.current = setInterval(() => {
+        setElapsed(Date.now() - (startRef.current ?? Date.now()));
+      }, 100);
+    } else {
+      if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
+      if (startRef.current !== null) {
+        const total = Date.now() - startRef.current;
+        startRef.current = null;
+        setLastBuildTime(total);
+        setShowResult(true);
+        hideRef.current = setTimeout(() => setShowResult(false), 5000);
+      }
+    }
+    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
+  }, [isGeometryUpdating]);
+
+  if (isGeometryUpdating) {
+    return (
+      <Box sx={indicatorBoxSx}>
+        <CircularProgress size={16} thickness={5} />
+        <Typography variant="caption" sx={{ color: 'white', fontSize: 12 }}>
+          Building… {(elapsed / 1000).toFixed(1)}s
+        </Typography>
+      </Box>
+    );
+  }
+
+  if (showResult && lastBuildTime !== null) {
+    return (
+      <Box sx={{ ...indicatorBoxSx, border: '1px solid rgba(74,222,128,0.4)' }}>
+        <Typography variant="caption" sx={{ color: '#4ade80', fontSize: 12 }}>
+          ✓ Geometry: {(lastBuildTime / 1000).toFixed(1)}s
+        </Typography>
+      </Box>
+    );
+  }
+
+  return null;
+};
+
 function App() {
   const { activeTab, setActiveTab, showGrid, showAxes, toggleGrid, toggleAxes } = useUIStore();
   const [panelWidth, setPanelWidth] = React.useState(300);
@@ -82,7 +155,6 @@ function App() {
     fetchSchemaFromApi,
     connectedToApi,
     isLoading,
-    isGeometryUpdating,
     viewMode,
     setViewMode,
     geometry,
@@ -224,29 +296,7 @@ function App() {
               <Box sx={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
                 <MaterialControls />
                 <MotorScene />
-                {isGeometryUpdating && (
-                  <Box sx={{
-                    position: 'absolute',
-                    bottom: 16,
-                    left: '50%',
-                    transform: 'translateX(-50%)',
-                    zIndex: 999,
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 1,
-                    bgcolor: 'rgba(0,0,0,0.75)',
-                    backdropFilter: 'blur(4px)',
-                    px: 2,
-                    py: 0.75,
-                    borderRadius: 2,
-                    border: '1px solid rgba(59,130,246,0.4)',
-                  }}>
-                    <CircularProgress size={16} thickness={5} />
-                    <Typography variant="caption" sx={{ color: 'white', fontSize: 12 }}>
-                      Updating geometry...
-                    </Typography>
-                  </Box>
-                )}
+                <GeometryBuildTimer />
               </Box>
             </Box>
           )}
@@ -284,29 +334,7 @@ function App() {
               <Box sx={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
                 <MaterialControls />
                 <MotorScene />
-                {isGeometryUpdating && (
-                  <Box sx={{
-                    position: 'absolute',
-                    bottom: 16,
-                    left: '50%',
-                    transform: 'translateX(-50%)',
-                    zIndex: 999,
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 1,
-                    bgcolor: 'rgba(0,0,0,0.75)',
-                    backdropFilter: 'blur(4px)',
-                    px: 2,
-                    py: 0.75,
-                    borderRadius: 2,
-                    border: '1px solid rgba(59,130,246,0.4)',
-                  }}>
-                    <CircularProgress size={16} thickness={5} />
-                    <Typography variant="caption" sx={{ color: 'white', fontSize: 12 }}>
-                      Updating geometry...
-                    </Typography>
-                  </Box>
-                )}
+                <GeometryBuildTimer />
               </Box>
             </Box>
           )}

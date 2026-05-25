@@ -169,7 +169,7 @@ export const useMotorStore = create<MotorState>()(
       isGeometryUpdating: false,
       error: null,
       connectedToApi: false,
-      viewMode: 'stl',
+      viewMode: 'solid',
       pointCloudData: null,
       
       // Pipeline state
@@ -629,7 +629,6 @@ export const useMotorStore = create<MotorState>()(
         materials: state.materials,
         materialConfig: state.materialConfig,
         meshSettings: state.meshSettings,
-        viewMode: state.viewMode,
         sweepConfig: state.sweepConfig,
       }),
     }

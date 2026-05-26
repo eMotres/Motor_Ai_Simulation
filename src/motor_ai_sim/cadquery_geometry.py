@@ -603,6 +603,258 @@ class CadQueryMotor:
                 
         return mesh_data
     
+    def get_2d_mesh_data(self) -> Dict[str, Dict]:
+        """
+        Build flat 2D cross-section meshes for all motor components.
+        All triangles lie in the z=0 plane; each component gets a tiny
+        z-offset (0…5 mm) so Three.js depth-sorts them correctly.
+        No CadQuery / OCCT required – pure shapely + earcut.
+        """
+        from math import pi, sin, cos, tan, radians, sqrt
+        try:
+            from shapely.geometry import Polygon as SPoly, MultiPolygon as SMPoly
+            from shapely.ops import unary_union
+            import numpy as np
+            import mapbox_earcut as earcut
+        except ImportError as exc:
+            print(f"[2d] missing dependency: {exc}")
+            return {}
+
+        p = self.parameters
+
+        # ── radii ──────────────────────────────────────────────────────────
+        outer_r   = p['stator_outer_radius']
+        inner_r   = p['stator_inner_radius']       # stator bore / air-gap inner
+        rotor_or  = p['rotor_outer_radius']
+        rotor_ir  = p['rotor_inner_radius']
+        shaft_r   = p['shaft_inner_radius']
+
+        # ── slot / tooth params ────────────────────────────────────────────
+        num_slots   = int(p['num_slots'])
+        core_h      = p['core_thickness']
+        tooth_w     = p['tooth_width']
+        tooth2_w    = p.get('tooth2_width', 4.5)
+        cut_w       = p.get('cut_width', 2.0)
+        wire_w      = p['wire_width']
+        ins_w       = p['insulation_thickness']
+        wire_dx     = p['wire_spacing_x']
+        wire_dy     = p['wire_spacing_y']
+        wire_h      = p['wire_height']
+        num_wires   = int(p['num_wires_per_slot'])
+
+        # ── magnet params ──────────────────────────────────────────────────
+        num_poles   = int(p['num_poles'])
+        mag_h       = p['magnet_height']
+        rotor_hh    = p['rotor_house_height']
+        mag_fd      = p['magnet_fill_down']
+        mag_fu      = p['magnet_fill_up']
+        mag_up_gap  = p['magnet_up_gap']
+        mag_down_h  = p['magnet_down_height']
+        mag_fill_r  = p['magnet_fill_radius']
+        magnet_r    = rotor_ir + rotor_hh
+
+        # ── rotor pocket params ────────────────────────────────────────────
+        magnet_hole = p['rotor_hole']
+
+        # helper: circle polygon
+        def _circle(r: float, n: int = 256) -> list:
+            return [(r * cos(2*pi*i/n), r * sin(2*pi*i/n)) for i in range(n)]
+
+        # helper: rotate 2-D point
+        def _rot(x, y, a_rad):
+            c, s = cos(a_rad), sin(a_rad)
+            return x*c - y*s, x*s + y*c
+
+        # helper: triangulate a shapely (Multi)Polygon → dict
+        def _tri(poly, z: float) -> Optional[Dict]:
+            if poly is None or poly.is_empty:
+                return None
+            if not poly.is_valid:
+                poly = poly.buffer(0)
+            if poly.is_empty:
+                return None
+            geoms = list(poly.geoms) if isinstance(poly, SMPoly) else [poly]
+            all_verts: list = []
+            all_faces: list = []
+            base = 0
+            for g in geoms:
+                ext = np.array(g.exterior.coords[:-1], dtype=np.float64)
+                holes_raw = [np.array(h.coords[:-1], dtype=np.float64)
+                             for h in g.interiors]
+                verts = np.vstack([ext] + holes_raw) if holes_raw else ext
+                # earcut needs cumulative end-indices, not lengths
+                lengths = [len(ext)] + [len(h) for h in holes_raw]
+                rings_u32 = np.cumsum(lengths, dtype=np.uint32)
+                tris  = earcut.triangulate_float64(verts.astype(np.float64), rings_u32)
+                if tris is None or len(tris) == 0:
+                    continue
+                tris = np.asarray(tris, dtype=np.int64).reshape(-1, 3)
+                # flip winding so normals point +Z
+                tris = tris[:, ::-1]
+                all_verts.append(verts)
+                all_faces.append(tris + base)
+                base += len(verts)
+            if not all_verts:
+                return None
+            V = np.vstack(all_verts)
+            F = np.vstack(all_faces)
+            V3 = np.column_stack([V, np.full(len(V), z)])
+            return {
+                'vertices':     V3.tolist(),
+                'faces':        F.tolist(),
+                'vertex_count': len(V3),
+                'face_count':   len(F),
+            }
+
+        result: Dict[str, Dict] = {}
+
+        # ── 1. SHAFT (filled disk) z=0 ──────────────────────────────────
+        shaft_poly = SPoly(_circle(shaft_r))
+        r = _tri(shaft_poly, z=0.0)
+        if r: result['shaft'] = r
+
+        # ── 2. ROTOR CORE (ring with magnet pockets) z=1 ───────────────
+        half_slots   = num_slots // 2
+        slot_angle_r = 2*pi / half_slots
+        pole_angle_r = 2*pi / num_poles
+        mag_angle_up = pole_angle_r * mag_fu * magnet_hole / 2
+        rec_w  = 2 * rotor_or * sin(mag_angle_up)
+        half_w = rec_w / 2
+        top_y_r = sqrt(max(0.0, rotor_or**2 - half_w**2))
+        bot_y_r = rotor_or - mag_h
+
+        rotor_outer_pts = _circle(rotor_or)
+        rotor_inner_pts = _circle(rotor_ir)
+        rotor_holes = [rotor_inner_pts]
+        slot_local_r = [(-half_w, top_y_r), (half_w, top_y_r),
+                        (half_w, bot_y_r),  (-half_w, bot_y_r)]
+        for i in range(num_poles):
+            a = i * pole_angle_r
+            rotor_holes.append([_rot(x, y, a) for x, y in slot_local_r])
+
+        rotor_poly = SPoly(rotor_outer_pts, rotor_holes)
+        if not rotor_poly.is_valid:
+            rotor_poly = rotor_poly.buffer(0)
+        r = _tri(rotor_poly, z=1.0)
+        if r: result['rotor_core'] = r
+
+        # ── 3. MAGNETS (trapezoids) z=2 ────────────────────────────────
+        angle_down = pole_angle_r * mag_fd / 2
+        angle_up_m = pole_angle_r * mag_fu / 2
+        mp1 = ( magnet_r * sin(angle_down),                  magnet_r * cos(angle_down))
+        mp2 = ((magnet_r + mag_down_h) * sin(angle_down),   (magnet_r + mag_down_h) * cos(angle_down))
+        mp3 = ((rotor_or - mag_up_gap) * sin(angle_up_m),   (rotor_or - mag_up_gap) * cos(angle_up_m))
+        mp4 = (-(rotor_or - mag_up_gap) * sin(angle_up_m),  (rotor_or - mag_up_gap) * cos(angle_up_m))
+        mp5 = (-(magnet_r + mag_down_h) * sin(angle_down),  (magnet_r + mag_down_h) * cos(angle_down))
+        mp6 = (-magnet_r * sin(angle_down),                  magnet_r * cos(angle_down))
+        mag_local = [mp1, mp2, mp3, mp4, mp5, mp6]
+
+        for i in range(num_poles):
+            a   = i * pole_angle_r
+            pts = [_rot(x, y, a) for x, y in mag_local]
+            poly = SPoly(pts)
+            if mag_fill_r > 0:
+                try:
+                    poly = poly.buffer(mag_fill_r, join_style=1).buffer(-mag_fill_r, join_style=1)
+                except Exception:
+                    pass
+            if not poly.is_valid:
+                poly = poly.buffer(0)
+            r = _tri(poly, z=2.0)
+            if r: result[f'magnet_{i}'] = r
+
+        # ── 4. STATOR CORE (ring with slot cutouts) z=1 ────────────────
+        slot_angle_deg = 360.0 / half_slots
+        cut_x  = tooth_w/2 + ins_w*2 + wire_w + wire_dx*2 + tooth2_w
+        fill_r = ((inner_r + cut_w) * sin(radians(slot_angle_deg/2)) - cut_x) \
+                 / (1 - sin(radians(slot_angle_deg/2)))
+        rr  = inner_r + cut_w + fill_r
+        ext = outer_r * 2
+
+        p1s = (cut_x,  ext)
+        p2s = (cut_x,  rr * cos(radians(slot_angle_deg/2)))
+        p3s = (cut_x + fill_r, rr * cos(radians(slot_angle_deg/2)))
+        p4s = (ext * tan(radians(slot_angle_deg/2)), ext)
+
+        # base ring
+        stator_poly = SPoly(_circle(outer_r), [_circle(inner_r)])
+
+        cutters = []
+        for i in range(half_slots):
+            a = i * radians(slot_angle_deg)
+            # +X trapezoid
+            cutters.append(SPoly([_rot(*p1s, a), _rot(*p2s, a),
+                                   _rot(*p3s, a), _rot(*p4s, a)]))
+            # -X trapezoid
+            mp1n = (-p1s[0], p1s[1]); mp2n = (-p2s[0], p2s[1])
+            mp3n = (-p3s[0], p3s[1]); mp4n = (-p4s[0], p4s[1])
+            cutters.append(SPoly([_rot(*mp1n, a), _rot(*mp2n, a),
+                                   _rot(*mp3n, a), _rot(*mp4n, a)]))
+            # +X fillet circle
+            cx, cy = _rot(p3s[0], p3s[1], a)
+            cutters.append(SPoly(_circle(fill_r, 64)).buffer(0)
+                           .difference(SPoly(_circle(fill_r, 64)).buffer(0))  # no-op; use translate
+                           )
+            # rebuild fillet circles properly
+            cutters[-1] = SPoly([(cx + fill_r*cos(t), cy + fill_r*sin(t))
+                                  for t in [2*pi*k/64 for k in range(64)]])
+            # -X fillet circle
+            cxn, cyn = _rot(-p3s[0], p3s[1], a)
+            cutters.append(SPoly([(cxn + fill_r*cos(t), cyn + fill_r*sin(t))
+                                   for t in [2*pi*k/64 for k in range(64)]]))
+            # slot rectangles
+            slot_w  = wire_w + ins_w*2 + wire_dx
+            slot_h  = p['slot_height']
+            slot_x  = tooth_w / 2
+            slot_y  = outer_r - core_h
+            # +X rect
+            rx0, ry0 = slot_x, slot_y
+            rect_pts_p = [(rx0, ry0), (rx0 + slot_w, ry0),
+                          (rx0 + slot_w, ry0 - slot_h*2), (rx0, ry0 - slot_h*2)]
+            cutters.append(SPoly([_rot(*pt, a) for pt in rect_pts_p]))
+            # -X rect
+            rect_pts_n = [(-rx0, ry0), (-rx0 - slot_w, ry0),
+                          (-rx0 - slot_w, ry0 - slot_h*2), (-rx0, ry0 - slot_h*2)]
+            cutters.append(SPoly([_rot(*pt, a) for pt in rect_pts_n]))
+
+        tool = unary_union(cutters)
+        stator_poly = stator_poly.difference(tool)
+        if not stator_poly.is_valid:
+            stator_poly = stator_poly.buffer(0)
+        r = _tri(stator_poly, z=1.0)
+        if r: result['stator_core'] = r
+
+        # ── 5. COILS (rectangles in slots) z=3 ─────────────────────────
+        right_x = tooth_w / 2 + ins_w + wire_dx/2
+        slot_y  = outer_r - core_h
+        top_y_c = slot_y - ins_w - wire_dy/2
+
+        for i in range(half_slots):
+            a = i * radians(slot_angle_deg)
+            for step in range(num_wires):
+                cy = top_y_c - step * (wire_h + wire_dy)
+                for side, sx in ((1, right_x), (-1, -(right_x + wire_w))):
+                    pts_local = [(sx, cy), (sx + wire_w, cy),
+                                 (sx + wire_w, cy - wire_h), (sx, cy - wire_h)]
+                    pts = [_rot(*pt, a) for pt in pts_local]
+                    poly = SPoly(pts)
+                    r = _tri(poly, z=3.0)
+                    if r:
+                        key = f'coil_{i}'
+                        if key not in result:
+                            result[key] = r
+                        else:
+                            # merge into existing coil entry
+                            result[key]['vertices'] += r['vertices']
+                            result[key]['faces']    += [
+                                [f + result[key]['vertex_count'] for f in face]
+                                for face in r['faces']
+                            ]
+                            result[key]['vertex_count'] += r['vertex_count']
+                            result[key]['face_count']   += r['face_count']
+
+        return result
+
     def validate_sdf(self, n_points: int = 50000) -> Dict:
         """Validate geometry by computing SDF."""
         mesh_data = self.get_all_mesh_data()

@@ -674,6 +674,8 @@ interface UIState {
     envIntensity: number;
   }>) => void;
   setCameraMode: (mode: 'perspective' | 'orthographic') => void;
+  view2d: boolean;
+  toggleView2d: () => void;
   toggleComponentVisibility: (key: CompKey) => void;
   toggleCoilVisibility: (index: number) => void;
   toggleMagnetVisibility: (index: number) => void;
@@ -698,6 +700,7 @@ export const useUIStore = create<UIState>()(
 
       // Camera mode
       cameraMode: 'orthographic',
+      view2d: false,
 
       // Component tree defaults
       componentVisibility: { stator: true, rotor: true, magnets: true, coils: true, shaft: true },
@@ -712,6 +715,7 @@ export const useUIStore = create<UIState>()(
       toggleAutoRotate: () => set((state) => ({ autoRotate: !state.autoRotate })),
       updateMaterialSettings: (settings) => set((state) => ({ ...state, ...settings })),
       setCameraMode: (mode) => set({ cameraMode: mode }),
+      toggleView2d: () => set((s) => ({ view2d: !s.view2d })),
 
       toggleComponentVisibility: (key) =>
         set((s) => ({ componentVisibility: { ...s.componentVisibility, [key]: !s.componentVisibility[key] } })),

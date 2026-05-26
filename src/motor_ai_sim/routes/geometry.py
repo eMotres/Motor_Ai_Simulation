@@ -209,7 +209,8 @@ def get_geometry_schema():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-_mesh_cache: dict = {"hash": None, "data": None}
+_mesh_cache: dict    = {"hash": None, "data": None}
+_mesh2d_cache: dict = {"hash": None, "data": None}
 
 @router.get("/mesh")
 def get_geometry_mesh():
@@ -233,6 +234,31 @@ def get_geometry_mesh():
         return data
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/mesh2d")
+def get_geometry_mesh2d():
+    """Return flat 2-D cross-section meshes for all motor components (shapely+earcut, no CadQuery)."""
+    try:
+        from motor_ai_sim.cadquery_geometry import CadQueryMotor
+        import hashlib, json
+        params = get_current_geometry()
+        params_dict = params.to_dict()
+        params_hash = hashlib.md5(json.dumps(params_dict, sort_keys=True).encode()).hexdigest()
+
+        if _mesh2d_cache["hash"] == params_hash and _mesh2d_cache["data"] is not None:
+            return _mesh2d_cache["data"]
+
+        motor = CadQueryMotor()
+        motor.set_parameters(params_dict)
+        data = motor.get_2d_mesh_data()
+
+        _mesh2d_cache["hash"] = params_hash
+        _mesh2d_cache["data"] = data
+        return data
+    except Exception as e:
+        import traceback
+        raise HTTPException(status_code=500, detail=f"{e}\n{traceback.format_exc()}")
 
 
 @router.get("/pointcloud")

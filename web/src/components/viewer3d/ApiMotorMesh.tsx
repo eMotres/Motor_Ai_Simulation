@@ -255,6 +255,114 @@ export const ApiCoilsMesh: React.FC<{ materialProps?: MaterialProps; visible?: b
   );
 };
 
+// ─── 2D flat mesh hook + component ───────────────────────────────────────────
+
+const mesh2dCache = new Map<string, AllMeshData>();
+let inflightRequest2d: Promise<AllMeshData> | null = null;
+let inflightGeometryKey2d = '';
+
+export function useMotorMesh2d() {
+  const { geometry, connectedToApi } = useMotorStore();
+  const [data, setData] = useState<AllMeshData | null>(null);
+  const geometryKey = JSON.stringify(geometry);
+
+  useEffect(() => {
+    if (!connectedToApi) { setData(null); return; }
+    const cached = mesh2dCache.get(geometryKey);
+    if (cached) { setData(cached); return; }
+
+    if (!inflightRequest2d || inflightGeometryKey2d !== geometryKey) {
+      inflightGeometryKey2d = geometryKey;
+      inflightRequest2d = fetch(`${API_BASE_URL}/api/geometry/mesh2d`)
+        .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json() as Promise<AllMeshData>; })
+        .then(result => { mesh2dCache.set(geometryKey, result); return result; })
+        .catch(err => { console.error('Failed to fetch 2d mesh:', err); return null as unknown as AllMeshData; })
+        .finally(() => { inflightRequest2d = null; });
+    }
+    inflightRequest2d.then(result => { if (result) setData(result); });
+  }, [connectedToApi, geometryKey]);
+
+  return data;
+}
+
+// Colors per component type
+const COLORS_2D: Record<string, string> = {
+  shaft:       '#2d2d2d',
+  rotor_core:  '#3a3a3a',
+  stator_core: '#8a9ba8',
+};
+const getMagnetColor2d = (index: number) => index % 2 === 0 ? '#ef4444' : '#3b82f6';
+const getCoilColor2d   = (index: number) => ['#c97b2a', '#b55c1a', '#9a6010'][index % 3];
+
+export const ApiMotor2dFlat: React.FC = () => {
+  const { componentVisibility, magnetVisibility, coilVisibility } = useUIStore();
+  const meshData = useMotorMesh2d();
+
+  const geometries = useMemo(() => {
+    if (!meshData) return null;
+    const out: Record<string, THREE.BufferGeometry> = {};
+    for (const [key, data] of Object.entries(meshData)) {
+      out[key] = buildGeometry(data);
+    }
+    return out;
+  }, [meshData]);
+
+  if (!geometries) return null;
+
+  return (
+    <group>
+      {/* shaft */}
+      {geometries.shaft && componentVisibility.shaft && (
+        <mesh geometry={geometries.shaft}>
+          <meshStandardMaterial color={COLORS_2D.shaft} metalness={0} roughness={1} side={THREE.DoubleSide} />
+        </mesh>
+      )}
+
+      {/* rotor_core */}
+      {geometries.rotor_core && componentVisibility.rotor && (
+        <mesh geometry={geometries.rotor_core}>
+          <meshStandardMaterial color={COLORS_2D.rotor_core} metalness={0} roughness={1} side={THREE.DoubleSide} />
+        </mesh>
+      )}
+
+      {/* magnets */}
+      {componentVisibility.magnets && Object.entries(geometries)
+        .filter(([k]) => k.startsWith('magnet_'))
+        .sort(([a], [b]) => parseInt(a.split('_')[1]) - parseInt(b.split('_')[1]))
+        .map(([key, geo]) => {
+          const idx = parseInt(key.split('_')[1]);
+          return (
+            <mesh key={key} geometry={geo} visible={magnetVisibility[idx] ?? true}>
+              <meshStandardMaterial color={getMagnetColor2d(idx)} metalness={0} roughness={1} side={THREE.DoubleSide} />
+            </mesh>
+          );
+        })
+      }
+
+      {/* stator_core */}
+      {geometries.stator_core && componentVisibility.stator && (
+        <mesh geometry={geometries.stator_core}>
+          <meshStandardMaterial color={COLORS_2D.stator_core} metalness={0} roughness={1} side={THREE.DoubleSide} />
+        </mesh>
+      )}
+
+      {/* coils */}
+      {componentVisibility.coils && Object.entries(geometries)
+        .filter(([k]) => k.startsWith('coil_'))
+        .sort(([a], [b]) => parseInt(a.split('_')[1]) - parseInt(b.split('_')[1]))
+        .map(([key, geo]) => {
+          const idx = parseInt(key.split('_')[1]);
+          return (
+            <mesh key={key} geometry={geo} visible={coilVisibility[idx] ?? true}>
+              <meshStandardMaterial color={getCoilColor2d(idx)} metalness={0} roughness={1} side={THREE.DoubleSide} />
+            </mesh>
+          );
+        })
+      }
+    </group>
+  );
+};
+
 // ─── Local fallback geometry (used when API is unavailable) ──────────────────
 
 function createLocalStatorGeometry(geometry: any): THREE.BufferGeometry {

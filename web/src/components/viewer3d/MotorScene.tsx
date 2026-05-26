@@ -10,7 +10,7 @@ import RotorMesh from './RotorMesh';
 import ShaftMesh from './ShaftMesh';
 import MagnetMesh from './MagnetMesh';
 import WindingsMesh from './WindingsMesh';
-import { ApiStatorMesh, ApiRotorMesh, ApiShaftMesh, ApiMagnetsMesh, ApiCoilsMesh } from './ApiMotorMesh';
+import { ApiStatorMesh, ApiRotorMesh, ApiShaftMesh, ApiMagnetsMesh, ApiCoilsMesh, ApiMotor2dFlat } from './ApiMotorMesh';
 import PointCloudMesh from './PointCloudMesh';
 import { STLCollection } from './STLMesh';
 import ComponentTree from './ComponentTree';
@@ -196,6 +196,26 @@ const FitCameraOnLoad: React.FC<{ controlsRef: React.RefObject<any> }> = ({ cont
   return null;
 };
 
+// ─── 2D / 3D toggle button ────────────────────────────────────────────────────
+const View2dToggle: React.FC = () => {
+  const { view2d, toggleView2d } = useUIStore();
+  return (
+    <button
+      onClick={toggleView2d}
+      title={view2d ? 'Switch to 3D view' : 'Switch to 2D flat view'}
+      style={{
+        position: 'absolute', bottom: 12, right: 12, zIndex: 20,
+        padding: '4px 12px', borderRadius: 6, border: '1px solid #4b5563',
+        background: view2d ? '#3b82f6' : '#1f2937',
+        color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer',
+        letterSpacing: 1,
+      }}
+    >
+      {view2d ? '3D' : '2D'}
+    </button>
+  );
+};
+
 const MotorScene: React.FC = () => {
   const { showGrid, showAxes, envIntensity } = useUIStore();
   const controlsRef = useRef<any>(null);
@@ -268,13 +288,16 @@ const MotorScene: React.FC = () => {
 
       {/* Component tree overlay */}
       <ComponentTree />
+
+      {/* 2D / 3D toggle */}
+      <View2dToggle />
     </>
   );
 };
 
 const MotorComponents: React.FC<{ controlsRef: React.RefObject<any> }> = ({ controlsRef }) => {
   const { viewMode, stlMeshes, connectedToApi } = useMotorStore();
-  const { metalness, roughness, componentVisibility } = useUIStore();
+  const { metalness, roughness, componentVisibility, view2d } = useUIStore();
 
   const showPointCloud = viewMode === 'pointcloud' || viewMode === 'hybrid';
   const showSTL = viewMode === 'stl' && Object.keys(stlMeshes).length > 0;
@@ -290,7 +313,11 @@ const MotorComponents: React.FC<{ controlsRef: React.RefObject<any> }> = ({ cont
         <FitCameraOnLoad controlsRef={controlsRef} />
         {showSTL && <STLCollection meshes={stlMeshes} />}
 
-        {(viewMode === 'solid' || viewMode === 'hybrid') && (
+        {/* 2D flat cross-section mode */}
+        {view2d && <ApiMotor2dFlat />}
+
+        {/* 3D solid mode */}
+        {!view2d && (viewMode === 'solid' || viewMode === 'hybrid') && (
           <>
             <ApiStatorMesh materialProps={statorMaterialProps} visible={vis.stator} />
             <ApiRotorMesh  materialProps={statorMaterialProps} visible={vis.rotor} />

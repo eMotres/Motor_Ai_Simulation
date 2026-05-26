@@ -734,6 +734,56 @@ class CadQueryMotor:
         mp6 = (-magnet_r * sin(angle_down),                  magnet_r * cos(angle_down))
         mag_local = [mp1, mp2, mp3, mp4, mp5, mp6]
 
+        # ── Helper: round ONE convex polygon corner with an arc ───────────
+        # Used to fillet exactly the outer (top) corners of the magnet,
+        # matching 3D: magnet.edges(">Y and |Z").fillet(mag_fill_r)
+        import math as _m
+        def _corner_arc(pts_list, idx, r, n=16):
+            """Replace corner at index idx with a circular arc of radius r."""
+            nl = len(pts_list)
+            pp = pts_list[(idx-1) % nl]
+            pc = pts_list[idx]
+            pn = pts_list[(idx+1) % nl]
+            def _u(ax, ay):
+                l = _m.hypot(ax, ay)
+                return (ax/l, ay/l) if l > 1e-12 else (1.0, 0.0)
+            u1 = _u(pp[0]-pc[0], pp[1]-pc[1])
+            u2 = _u(pn[0]-pc[0], pn[1]-pc[1])
+            e1 = _m.hypot(pp[0]-pc[0], pp[1]-pc[1])
+            e2 = _m.hypot(pn[0]-pc[0], pn[1]-pc[1])
+            r  = min(r, e1*0.49, e2*0.49)
+            t1 = (pc[0]+r*u1[0], pc[1]+r*u1[1])
+            t2 = (pc[0]+r*u2[0], pc[1]+r*u2[1])
+            dot = max(-1.0, min(1.0, u1[0]*u2[0]+u1[1]*u2[1]))
+            half = _m.acos(dot) / 2
+            if _m.sin(half) < 1e-10:
+                return [pc]
+            d  = r / _m.sin(half)
+            bx, by = _u(u1[0]+u2[0], u1[1]+u2[1])
+            cx, cy = pc[0]+d*bx, pc[1]+d*by
+            a1 = _m.atan2(t1[1]-cy, t1[0]-cx)
+            a2 = _m.atan2(t2[1]-cy, t2[0]-cx)
+            cross = (t1[0]-cx)*(t2[1]-cy) - (t1[1]-cy)*(t2[0]-cx)
+            da = a2 - a1
+            if cross >= 0:
+                if da < 0: da += 2*_m.pi
+            else:
+                if da > 0: da -= 2*_m.pi
+            return [(cx+r*_m.cos(a1+da*k/n), cy+r*_m.sin(a1+da*k/n))
+                    for k in range(n+1)]
+
+        # Pre-build rounded magnet outline (corners 2 & 3 = mp3, mp4 = outer top).
+        # Rotation applied later → rounding in local coords is preserved.
+        if mag_fill_r > 0:
+            mag_fillet: list = []
+            for _j in range(len(mag_local)):
+                if _j in (2, 3):
+                    mag_fillet.extend(_corner_arc(mag_local, _j, mag_fill_r))
+                else:
+                    mag_fillet.append(mag_local[_j])
+        else:
+            mag_fillet = mag_local
+
         # ── 1. SHAFT (hollow ring: shaft_inner_radius → rotor_inner_radius) ──
         shaft_outer_r = rotor_ir          # outer edge of shaft tube
         shaft_inner_r = shaft_r           # inner bore of shaft
@@ -746,11 +796,11 @@ class CadQueryMotor:
         # ── 2. ROTOR CORE — ring with trapezoid pockets matching magnets ─
         rotor_outer_pts = _circle(rotor_or)
         rotor_inner_pts = _circle(rotor_ir)
-        # holes: inner circle + one trapezoid per pole (same shape as magnet)
+        # holes: inner circle + one pocket per pole (same rounded shape as magnet)
         rotor_holes = [rotor_inner_pts]
         for i in range(num_poles):
             a = i * pole_angle_r
-            rotor_holes.append([_rot(x, y, a) for x, y in mag_local])
+            rotor_holes.append([_rot(x, y, a) for x, y in mag_fillet])
 
         rotor_poly = SPoly(rotor_outer_pts, rotor_holes)
         if not rotor_poly.is_valid:
@@ -758,18 +808,11 @@ class CadQueryMotor:
         r = _tri(rotor_poly, z=Z_ROTOR)
         if r: result['rotor_core'] = r
 
-        # ── 3. MAGNETS (same trapezoid, sitting in pockets) ────────────
+        # ── 3. MAGNETS (rounded outline, sitting in matching pockets) ────
         for i in range(num_poles):
             a   = i * pole_angle_r
-            pts = [_rot(x, y, a) for x, y in mag_local]
+            pts = [_rot(x, y, a) for x, y in mag_fillet]
             poly = SPoly(pts)
-            if mag_fill_r > 0:
-                try:
-                    # Opening (erode → dilate) rounds the convex outer corners of the magnet
-                    # matching 3D: magnet.edges(">Y and |Z").fillet(mag_fill_r)
-                    poly = poly.buffer(-mag_fill_r).buffer(mag_fill_r)
-                except Exception:
-                    pass
             if not poly.is_valid:
                 poly = poly.buffer(0)
             r = _tri(poly, z=Z_MAG)

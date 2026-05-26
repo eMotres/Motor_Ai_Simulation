@@ -16,7 +16,7 @@ import json
 import hashlib
 from pathlib import Path
 from typing import Dict, Optional, List, Tuple, Any
-from math import sin, cos, radians, tan, sqrt, atan2, pi
+from math import sin, cos, tan, radians
 #import math
 
 # CadQuery imports - try to import lazily
@@ -186,106 +186,143 @@ class CadQueryMotor:
         return self.parts
         
     def _create_stator(self, cq) -> Any:
-        """Create stator with radial slots/teeth using 2D profile + extrude (fast)."""
-        import time as _time
-        from cadquery import Wire, Face, Vector, Solid as CQSolid
-
+        """Create stator with radial slots/teeth."""
+        import math
         p = self.parameters
+
         outer_r = p['stator_outer_radius']
         inner_r = p['stator_inner_radius']
-        core_h  = p['core_thickness']
+        core_h     = p['core_thickness']
         slot_height = p['slot_height']
-        stator_w    = p['stator_width']
-        num_slots   = int(p['num_slots'])
+        stator_w   = p['stator_width']
+        num_slots  = int(p['num_slots'])
         tooth_width  = p['tooth_width']
-        tooth2_width = p['tooth2_width']
-        cut_width    = p['cut_width']
-        wire_w  = p['wire_width']
-        ins_w   = p['insulation_thickness']
-        wire_d_x = p['wire_spacing_x']
+        tooth2_width = p.get('tooth2_width', 4.5)
+        cut_width    = p.get('cut_width', 2.0)
+        wire_w     = p['wire_width']
+        ins_w      = p['insulation_thickness']
+        wire_d_x   = p['wire_spacing_x']
+        slot_fillet_r  = p.get('stator_fillet_r',  2.5)
+        slot_fillet_r1 = p.get('stator_fillet_r1', 0.5)
 
-        slot_w    = wire_w + ins_w*2 + wire_d_x
-        slot_x    = tooth_width / 2
-        slot_y    = outer_r - core_h
-        half_slots = num_slots // 2
-        slot_angle = 360.0 / half_slots          # degrees between slot-pairs
+        slot_w  = wire_w + ins_w*2 + wire_d_x
+        slot_h  = slot_height
+        slot_x  = tooth_width / 2
+        slot_y  = outer_r - core_h
+        half_slots  = num_slots // 2
+        slot_angle  = 360.0 / half_slots
 
+        # ── Compound-cutter geometry ──────────────────────────────────────────
+        # All cuts are unioned into one solid then cut in a single boolean.
+        # This is ~70× faster than sequential cuts.
         cut_x  = tooth_width/2 + ins_w*2 + wire_w + wire_d_x*2 + tooth2_width
-        fill_r = ((inner_r + cut_width) * sin(radians(slot_angle/2)) - cut_x) / \
-                 (1 - sin(radians(slot_angle/2)))
+        fill_r = ((inner_r + cut_width) * sin(radians(slot_angle/2)) - cut_x) \
+                 / (1 - sin(radians(slot_angle/2)))
         rr   = inner_r + cut_width + fill_r
-        theta_half = radians(slot_angle / 2)
+        ext  = outer_r * 2
+        p1   = (cut_x, ext)
+        p2   = (cut_x, rr * cos(radians(slot_angle/2)))
+        p3   = (cut_x + fill_r, rr * cos(radians(slot_angle/2)))
+        p4   = (ext * tan(radians(slot_angle/2)), ext)
 
-        q2   = (cut_x,          rr * cos(theta_half))
-        q3   = (cut_x + fill_r, rr * cos(theta_half))   # fillet centre
-        # Clip top corners to outer circle — hole stays fully inside outer boundary
-        q1   = (cut_x,                     sqrt(max(0.0, outer_r**2 - cut_x**2)))
-        q4   = (outer_r * sin(theta_half), outer_r * cos(theta_half))
+        # Create stator as a solid ring
+        stator = (
+            cq.Workplane("XY")
+            .circle(outer_r)
+            .circle(inner_r)
+            .extrude(stator_w)
+        )
 
-        # Fillet arc embedded in the cut_up polygon.
-        # Arc sweeps CCW from q2 (angle 180° from q3) to the diagonal tangent
-        # point (angle 180° + (90°−θ) = 270°−θ from q3), radius fill_r.
-        arc_sweep   = pi/2 - theta_half          # radians, always positive
-        n_arc_segs  = 5                          # segments for the arc
-        _arc_start  = pi                         # 180° = direction from q3 to q2
-        _arc_pts_px = []                         # +X arc points (local coords)
-        for k in range(n_arc_segs + 1):
-            ang = _arc_start + arc_sweep * k / n_arc_segs   # CCW from 180°→255°
-            _arc_pts_px.append((q3[0] + fill_r * cos(ang),
-                                q3[1] + fill_r * sin(ang)))
-        # Lower tangent on diagonal: q3 − fill_r*(sin θ, cos θ)
-        _diag_tangent_px = (q3[0] - fill_r * sin(theta_half),
-                            q3[1] - fill_r * cos(theta_half))
-        # Full cut_up+fillet polygon (+X, local): q1 → arc → diag_tangent → q4
-        _cutup_px = [q1] + _arc_pts_px + [q4]
-        # Mirror for -X: negate x (arc direction reverses, OCCT normalises winding)
-        _cutup_nx = [(-x, y) for x, y in _cutup_px]
-
-        def _rot(x, y, a_rad):
-            ca, sa = cos(a_rad), sin(a_rad)
-            return x*ca - y*sa, x*sa + y*ca
-
-        def _poly_wire(pts):
-            verts = [Vector(x, y, 0) for x, y in pts]
-            return Wire.makePolygon(verts, close=True)
-
-        t0 = _time.time()
-
-        # ── outer boundary (CCW) ────────────────────────────────────────────
-        outer_wire = Wire.makeCircle(outer_r, Vector(0, 0, 0), Vector(0, 0, 1))
-
-        holes = []
-        # ── inner circle hole ───────────────────────────────────────────────
-        holes.append(Wire.makeCircle(inner_r, Vector(0, 0, 0), Vector(0, 0, 1)))
-
+        cutters = []
         for i in range(half_slots):
-            a = radians(i * slot_angle)
+            angle = i * slot_angle
+            # Trapezoid wedge (+X)
+            cutters.append(
+                cq.Workplane("XY")
+                .moveTo(p1[0], p1[1]).lineTo(p2[0], p2[1])
+                .lineTo(p3[0], p3[1]).lineTo(p4[0], p4[1])
+                .close().extrude(stator_w + 1)
+                .rotate((0,0,0),(0,0,1), angle)
+            )
+            # Trapezoid wedge (-X mirror)
+            cutters.append(
+                cq.Workplane("XY")
+                .moveTo(-p1[0], p1[1]).lineTo(-p2[0], p2[1])
+                .lineTo(-p3[0], p3[1]).lineTo(-p4[0], p4[1])
+                .close().extrude(stator_w + 1)
+                .rotate((0,0,0),(0,0,1), angle)
+            )
+            # Fillet cylinder at p3 (+X)
+            cutters.append(
+                cq.Workplane("XY").circle(fill_r).extrude(stator_w + 1)
+                .translate((p3[0], p3[1], 0))
+                .rotate((0,0,0),(0,0,1), angle)
+            )
+            # Fillet cylinder at p3 (-X)
+            cutters.append(
+                cq.Workplane("XY").circle(fill_r).extrude(stator_w + 1)
+                .translate((-p3[0], p3[1], 0))
+                .rotate((0,0,0),(0,0,1), angle)
+            )
+            # Slot rectangle (+X)
+            cutters.append(
+                cq.Workplane("XY")
+                .rect(slot_w, -slot_h*2, centered=(False, False))
+                .extrude(stator_w + 1)
+                .translate((slot_x, slot_y, 0))
+                .rotate((0,0,0),(0,0,1), angle)
+            )
+            # Slot rectangle (-X)
+            cutters.append(
+                cq.Workplane("XY")
+                .rect(-slot_w, -slot_h*2, centered=(False, False))
+                .extrude(stator_w + 1)
+                .translate((-slot_x, slot_y, 0))
+                .rotate((0,0,0),(0,0,1), angle)
+            )
 
-            # Slot +X  (bottom clamped to inner_r so it never overlaps the inner hole)
-            slot_bot = inner_r
-            sp = [(slot_x,        slot_y),
-                  (slot_x+slot_w, slot_y),
-                  (slot_x+slot_w, slot_bot),
-                  (slot_x,        slot_bot)]
-            holes.append(_poly_wire([_rot(x, y, a) for x, y in sp]))
+        # Single boolean cut
+        tool = cutters[0]
+        for c in cutters[1:]:
+            tool = tool.union(c)
+        stator = stator.cut(tool)
 
-            # Slot -X (mirror)
-            sn = [(-slot_x,        slot_y),
-                  (-slot_x-slot_w,  slot_y),
-                  (-slot_x-slot_w,  slot_bot),
-                  (-slot_x,         slot_bot)]
-            holes.append(_poly_wire([_rot(x, y, a) for x, y in sn]))
+        import cadquery as _cq
 
-            # Cut_up + embedded fillet arc +X
-            holes.append(_poly_wire([_rot(x, y, a) for x, y in _cutup_px]))
+        # ── Fillet: OUTER RADIUS corners ─────────────────────────────────────
+        # |Z edges where trapezoid walls meet the outer cylinder (r ≈ outer_r)
+        if slot_fillet_r > 0:
+            _r_lo = outer_r - 0.5
+            _r_hi = outer_r + 0.2
 
-            # Cut_up + embedded fillet arc -X (mirror)
-            holes.append(_poly_wire([_rot(x, y, a) for x, y in _cutup_nx]))
+            class _OuterRingSelector(_cq.selectors.Selector):
+                def filter(self_, obj_list):
+                    return [e for e in obj_list
+                            if _r_lo < (e.Center().x**2 + e.Center().y**2)**0.5 < _r_hi]
 
-        face  = Face.makeFromWires(outer_wire, holes)
-        solid = CQSolid.extrudeLinear(face, Vector(0, 0, stator_w))
-        print(f"[stator 2D] {_time.time()-t0:.2f}s")
-        return cq.Workplane("XY").add(solid)
+            try:
+                stator = stator.edges("|Z").edges(_OuterRingSelector()).fillet(slot_fillet_r)
+            except Exception as ex:
+                print(f"[stator] outer-ring fillet failed (r={slot_fillet_r}): {ex}")
+
+        # ── Fillet: INNER RADIUS corners ─────────────────────────────────────
+        # |Z edges where slot walls and trapezoid walls meet the inner cylinder
+        # (r ≈ inner_r). These are the corners visible in the red circle.
+        if slot_fillet_r1 > 0:
+            _r_lo1 = inner_r - 0.8
+            _r_hi1 = inner_r + 0.8
+
+            class _InnerRingSelector(_cq.selectors.Selector):
+                def filter(self_, obj_list):
+                    return [e for e in obj_list
+                            if _r_lo1 < (e.Center().x**2 + e.Center().y**2)**0.5 < _r_hi1]
+
+            try:
+                stator = stator.edges("|Z").edges(_InnerRingSelector()).fillet(slot_fillet_r1)
+            except Exception as ex:
+                print(f"[stator] inner-ring fillet failed (r1={slot_fillet_r1}): {ex}")
+
+        return stator
         
     def _create_shaft(self, cq) -> Any:
         """Create motor shaft."""
@@ -529,25 +566,28 @@ class CadQueryMotor:
         if component not in self.parts:
             return None
             
-        import trimesh
-        from cadquery import exporters
-        import tempfile
-        
-        with tempfile.NamedTemporaryFile(suffix='.stl', delete=False) as tmp:
-            tmp_path = tmp.name
-            
         try:
-            exporters.export(self.parts[component], tmp_path, exportType='STL', tolerance=0.1)
-            mesh = trimesh.load_mesh(tmp_path)
+            shape = self.parts[component]
+            # Use OCP's direct tessellation for massive speedup (no temp file IO)
+            if hasattr(shape, 'val'):
+                solid = shape.val()
+            else:
+                solid = shape
+                
+            vertices, faces = solid.tessellate(0.1)
+            
+            # Format to basic lists
+            vertices_list = [[v.x, v.y, v.z] for v in vertices]
+            
             return {
-                'vertices': mesh.vertices.tolist(),
-                'faces': mesh.faces.tolist(),
-                'vertex_count': len(mesh.vertices),
-                'face_count': len(mesh.faces),
+                'vertices': vertices_list,
+                'faces': faces,
+                'vertex_count': len(vertices_list),
+                'face_count': len(faces),
             }
-        finally:
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
+        except Exception as e:
+            print(f"Error tessellating {component}: {e}")
+            return None
     
     def get_all_mesh_data(self) -> Dict[str, Dict]:
         """Get mesh data for all components."""

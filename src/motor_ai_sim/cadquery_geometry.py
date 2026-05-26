@@ -708,39 +708,20 @@ class CadQueryMotor:
 
         result: Dict[str, Dict] = {}
 
-        # ── 1. SHAFT (filled disk) z=0 ──────────────────────────────────
-        shaft_poly = SPoly(_circle(shaft_r))
-        r = _tri(shaft_poly, z=0.0)
-        if r: result['shaft'] = r
+        # Z-offsets: tiny (0.1 mm steps) so all layers look coplanar from
+        # front/top but never z-fight each other.
+        Z_SHAFT  = 0.0
+        Z_ROTOR  = 0.1
+        Z_MAG    = 0.2   # magnets sit on top of rotor surface
+        Z_STATOR = 0.1   # same level as rotor (non-overlapping regions)
+        Z_COIL   = 0.2   # coils sit in stator slots (non-overlapping with magnets)
 
-        # ── 2. ROTOR CORE (ring with magnet pockets) z=1 ───────────────
+        # Magnet trapezoid shape (local, pointing +Y at pole angle=0)
         half_slots   = num_slots // 2
         slot_angle_r = 2*pi / half_slots
         pole_angle_r = 2*pi / num_poles
-        mag_angle_up = pole_angle_r * mag_fu * magnet_hole / 2
-        rec_w  = 2 * rotor_or * sin(mag_angle_up)
-        half_w = rec_w / 2
-        top_y_r = sqrt(max(0.0, rotor_or**2 - half_w**2))
-        bot_y_r = rotor_or - mag_h
-
-        rotor_outer_pts = _circle(rotor_or)
-        rotor_inner_pts = _circle(rotor_ir)
-        rotor_holes = [rotor_inner_pts]
-        slot_local_r = [(-half_w, top_y_r), (half_w, top_y_r),
-                        (half_w, bot_y_r),  (-half_w, bot_y_r)]
-        for i in range(num_poles):
-            a = i * pole_angle_r
-            rotor_holes.append([_rot(x, y, a) for x, y in slot_local_r])
-
-        rotor_poly = SPoly(rotor_outer_pts, rotor_holes)
-        if not rotor_poly.is_valid:
-            rotor_poly = rotor_poly.buffer(0)
-        r = _tri(rotor_poly, z=1.0)
-        if r: result['rotor_core'] = r
-
-        # ── 3. MAGNETS (trapezoids) z=2 ────────────────────────────────
-        angle_down = pole_angle_r * mag_fd / 2
-        angle_up_m = pole_angle_r * mag_fu / 2
+        angle_down   = pole_angle_r * mag_fd / 2
+        angle_up_m   = pole_angle_r * mag_fu / 2
         mp1 = ( magnet_r * sin(angle_down),                  magnet_r * cos(angle_down))
         mp2 = ((magnet_r + mag_down_h) * sin(angle_down),   (magnet_r + mag_down_h) * cos(angle_down))
         mp3 = ((rotor_or - mag_up_gap) * sin(angle_up_m),   (rotor_or - mag_up_gap) * cos(angle_up_m))
@@ -749,6 +730,27 @@ class CadQueryMotor:
         mp6 = (-magnet_r * sin(angle_down),                  magnet_r * cos(angle_down))
         mag_local = [mp1, mp2, mp3, mp4, mp5, mp6]
 
+        # ── 1. SHAFT (filled disk) ──────────────────────────────────────
+        shaft_poly = SPoly(_circle(shaft_r))
+        r = _tri(shaft_poly, z=Z_SHAFT)
+        if r: result['shaft'] = r
+
+        # ── 2. ROTOR CORE — ring with trapezoid pockets matching magnets ─
+        rotor_outer_pts = _circle(rotor_or)
+        rotor_inner_pts = _circle(rotor_ir)
+        # holes: inner circle + one trapezoid per pole (same shape as magnet)
+        rotor_holes = [rotor_inner_pts]
+        for i in range(num_poles):
+            a = i * pole_angle_r
+            rotor_holes.append([_rot(x, y, a) for x, y in mag_local])
+
+        rotor_poly = SPoly(rotor_outer_pts, rotor_holes)
+        if not rotor_poly.is_valid:
+            rotor_poly = rotor_poly.buffer(0)
+        r = _tri(rotor_poly, z=Z_ROTOR)
+        if r: result['rotor_core'] = r
+
+        # ── 3. MAGNETS (same trapezoid, sitting in pockets) ────────────
         for i in range(num_poles):
             a   = i * pole_angle_r
             pts = [_rot(x, y, a) for x, y in mag_local]
@@ -760,7 +762,7 @@ class CadQueryMotor:
                     pass
             if not poly.is_valid:
                 poly = poly.buffer(0)
-            r = _tri(poly, z=2.0)
+            r = _tri(poly, z=Z_MAG)
             if r: result[f'magnet_{i}'] = r
 
         # ── 4. STATOR CORE (ring with slot cutouts) z=1 ────────────────
@@ -821,10 +823,10 @@ class CadQueryMotor:
         stator_poly = stator_poly.difference(tool)
         if not stator_poly.is_valid:
             stator_poly = stator_poly.buffer(0)
-        r = _tri(stator_poly, z=1.0)
+        r = _tri(stator_poly, z=Z_STATOR)
         if r: result['stator_core'] = r
 
-        # ── 5. COILS (rectangles in slots) z=3 ─────────────────────────
+        # ── 5. COILS (rectangles in slots) ─────────────────────────────
         right_x = tooth_w / 2 + ins_w + wire_dx/2
         slot_y  = outer_r - core_h
         top_y_c = slot_y - ins_w - wire_dy/2
@@ -838,7 +840,7 @@ class CadQueryMotor:
                                  (sx + wire_w, cy - wire_h), (sx, cy - wire_h)]
                     pts = [_rot(*pt, a) for pt in pts_local]
                     poly = SPoly(pts)
-                    r = _tri(poly, z=3.0)
+                    r = _tri(poly, z=Z_COIL)
                     if r:
                         key = f'coil_{i}'
                         if key not in result:

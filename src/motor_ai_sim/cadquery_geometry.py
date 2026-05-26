@@ -653,6 +653,10 @@ class CadQueryMotor:
         mag_fill_r  = p['magnet_fill_radius']
         magnet_r    = rotor_ir + rotor_hh
 
+        # ── stator fillet params (from 3D geometry) ────────────────────────
+        slot_fillet_r  = p.get('stator_fillet_r',  2.5)   # outer-ring corners
+        slot_fillet_r1 = p.get('stator_fillet_r1', 0.9)   # inner-ring corners
+
         # ── rotor pocket params ────────────────────────────────────────────
         magnet_hole = p['rotor_hole']
 
@@ -761,7 +765,9 @@ class CadQueryMotor:
             poly = SPoly(pts)
             if mag_fill_r > 0:
                 try:
-                    poly = poly.buffer(mag_fill_r, join_style=1).buffer(-mag_fill_r, join_style=1)
+                    # Opening (erode → dilate) rounds the convex outer corners of the magnet
+                    # matching 3D: magnet.edges(">Y and |Z").fillet(mag_fill_r)
+                    poly = poly.buffer(-mag_fill_r).buffer(mag_fill_r)
                 except Exception:
                     pass
             if not poly.is_valid:
@@ -772,8 +778,9 @@ class CadQueryMotor:
         # ── 4. STATOR CORE (ring with slot cutouts) z=1 ────────────────
         slot_angle_deg = 360.0 / half_slots
         cut_x  = tooth_w/2 + ins_w*2 + wire_w + wire_dx*2 + tooth2_w
-        fill_r = ((inner_r + cut_w) * sin(radians(slot_angle_deg/2)) - cut_x) \
-                 / (1 - sin(radians(slot_angle_deg/2)))
+        _fill_r_raw = ((inner_r + cut_w) * sin(radians(slot_angle_deg/2)) - cut_x) \
+                      / (1 - sin(radians(slot_angle_deg/2)))
+        fill_r = max(_fill_r_raw, 0.0)   # cap at 0 — negative = no room for slot-bottom fillet
         rr  = inner_r + cut_w + fill_r
         ext = outer_r * 2
 
@@ -785,48 +792,78 @@ class CadQueryMotor:
         # base ring
         stator_poly = SPoly(_circle(outer_r), [_circle(inner_r)])
 
-        cutters = []
+        # Split cutters into two groups so we can apply the outer fillet
+        # BEFORE the fill_r circles (which are small and collapse during buffer).
+        shape_cutters  = []   # trapezoids + slot rects  → subtracted first
+        circle_cutters = []   # slot-bottom fillet circles → subtracted after outer fillet
+
+        slot_w  = wire_w + ins_w*2 + wire_dx
+        slot_h  = p['slot_height']
+        slot_x  = tooth_w / 2
+        slot_y  = outer_r - core_h
+
         for i in range(half_slots):
             a = i * radians(slot_angle_deg)
             # +X trapezoid
-            cutters.append(SPoly([_rot(*p1s, a), _rot(*p2s, a),
-                                   _rot(*p3s, a), _rot(*p4s, a)]))
+            shape_cutters.append(SPoly([_rot(*p1s, a), _rot(*p2s, a),
+                                        _rot(*p3s, a), _rot(*p4s, a)]))
             # -X trapezoid
             mp1n = (-p1s[0], p1s[1]); mp2n = (-p2s[0], p2s[1])
             mp3n = (-p3s[0], p3s[1]); mp4n = (-p4s[0], p4s[1])
-            cutters.append(SPoly([_rot(*mp1n, a), _rot(*mp2n, a),
-                                   _rot(*mp3n, a), _rot(*mp4n, a)]))
-            # +X fillet circle
-            cx, cy = _rot(p3s[0], p3s[1], a)
-            cutters.append(SPoly(_circle(fill_r, 64)).buffer(0)
-                           .difference(SPoly(_circle(fill_r, 64)).buffer(0))  # no-op; use translate
-                           )
-            # rebuild fillet circles properly
-            cutters[-1] = SPoly([(cx + fill_r*cos(t), cy + fill_r*sin(t))
-                                  for t in [2*pi*k/64 for k in range(64)]])
-            # -X fillet circle
-            cxn, cyn = _rot(-p3s[0], p3s[1], a)
-            cutters.append(SPoly([(cxn + fill_r*cos(t), cyn + fill_r*sin(t))
-                                   for t in [2*pi*k/64 for k in range(64)]]))
+            shape_cutters.append(SPoly([_rot(*mp1n, a), _rot(*mp2n, a),
+                                        _rot(*mp3n, a), _rot(*mp4n, a)]))
             # slot rectangles
-            slot_w  = wire_w + ins_w*2 + wire_dx
-            slot_h  = p['slot_height']
-            slot_x  = tooth_w / 2
-            slot_y  = outer_r - core_h
-            # +X rect
             rx0, ry0 = slot_x, slot_y
             rect_pts_p = [(rx0, ry0), (rx0 + slot_w, ry0),
                           (rx0 + slot_w, ry0 - slot_h*2), (rx0, ry0 - slot_h*2)]
-            cutters.append(SPoly([_rot(*pt, a) for pt in rect_pts_p]))
-            # -X rect
+            shape_cutters.append(SPoly([_rot(*pt, a) for pt in rect_pts_p]))
             rect_pts_n = [(-rx0, ry0), (-rx0 - slot_w, ry0),
                           (-rx0 - slot_w, ry0 - slot_h*2), (-rx0, ry0 - slot_h*2)]
-            cutters.append(SPoly([_rot(*pt, a) for pt in rect_pts_n]))
+            shape_cutters.append(SPoly([_rot(*pt, a) for pt in rect_pts_n]))
+            # slot-bottom fillet circles (kept separate for safe two-pass subtraction)
+            if fill_r > 0:
+                cx, cy = _rot(p3s[0], p3s[1], a)
+                circle_cutters.append(SPoly([(cx  + fill_r*cos(2*pi*k/64),
+                                              cy  + fill_r*sin(2*pi*k/64)) for k in range(64)]))
+                cxn, cyn = _rot(-p3s[0], p3s[1], a)
+                circle_cutters.append(SPoly([(cxn + fill_r*cos(2*pi*k/64),
+                                              cyn + fill_r*sin(2*pi*k/64)) for k in range(64)]))
 
-        tool = unary_union(cutters)
-        stator_poly = stator_poly.difference(tool)
+        # Pass 1: subtract trapezoids + rectangles only
+        stator_poly = stator_poly.difference(unary_union(shape_cutters))
         if not stator_poly.is_valid:
             stator_poly = stator_poly.buffer(0)
+
+        # ── Stator outer-ring fillets (at outer_r) ────────────────────────
+        # Opening (erode → dilate) rounds the convex tooth-tip corners at outer_r,
+        # approximating 3D: stator.edges("|Z").edges(outer_ring).fillet(stator_fillet_r).
+        # NOTE: we use opening (not closing) here because closing shrinks the fill_r
+        # circular holes below shapely's degeneracy threshold and creates artifacts.
+        if slot_fillet_r > 0:
+            try:
+                stator_poly = stator_poly.buffer(-slot_fillet_r).buffer(slot_fillet_r)
+                if not stator_poly.is_valid:
+                    stator_poly = stator_poly.buffer(0)
+            except Exception:
+                pass
+
+        # Pass 2: now subtract the fill_r circles (slot-bottom arcs)
+        if circle_cutters:
+            stator_poly = stator_poly.difference(unary_union(circle_cutters))
+            if not stator_poly.is_valid:
+                stator_poly = stator_poly.buffer(0)
+
+        # ── Stator inner-ring fillets (at inner_r, slot base corners) ─────
+        # Closing: rounds concave corners where slot walls meet the inner bore,
+        # matching 3D: stator.edges("|Z").edges(inner_ring).fillet(stator_fillet_r1)
+        if slot_fillet_r1 > 0:
+            try:
+                stator_poly = stator_poly.buffer(slot_fillet_r1).buffer(-slot_fillet_r1)
+                if not stator_poly.is_valid:
+                    stator_poly = stator_poly.buffer(0)
+            except Exception:
+                pass
+
         r = _tri(stator_poly, z=Z_STATOR)
         if r: result['stator_core'] = r
 

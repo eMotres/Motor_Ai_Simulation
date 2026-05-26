@@ -49,6 +49,7 @@ def update_geometry(update: GeometryUpdateModel):
         from motor_ai_sim.cadquery_geometry import CadQueryCache
         CadQueryCache().clear_all()
         _mesh_cache["hash"] = None
+        _mesh2d_cache["hash"] = None
         params = update_current_geometry(**update.model_dump())
 
         # Persist changes to YAML so they survive server restarts

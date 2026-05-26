@@ -730,8 +730,12 @@ class CadQueryMotor:
         mp6 = (-magnet_r * sin(angle_down),                  magnet_r * cos(angle_down))
         mag_local = [mp1, mp2, mp3, mp4, mp5, mp6]
 
-        # ── 1. SHAFT (filled disk) ──────────────────────────────────────
-        shaft_poly = SPoly(_circle(shaft_r))
+        # ── 1. SHAFT (hollow ring: shaft_inner_radius → rotor_inner_radius) ──
+        shaft_outer_r = rotor_ir          # outer edge of shaft tube
+        shaft_inner_r = shaft_r           # inner bore of shaft
+        shaft_poly = SPoly(_circle(shaft_outer_r), [_circle(shaft_inner_r)])
+        if not shaft_poly.is_valid:
+            shaft_poly = shaft_poly.buffer(0)
         r = _tri(shaft_poly, z=Z_SHAFT)
         if r: result['shaft'] = r
 

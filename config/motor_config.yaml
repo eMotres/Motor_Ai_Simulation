@@ -22,7 +22,7 @@ geometry:
   shaft_height: 3
   magnet_fill_down: 0.9
   magnet_fill_up: 0.46
-  magnet_fill_radius: 1.5
+  magnet_fill_radius: 2
   magnet_up_gap: 0.5
   rotor_hole: 0.6
   magnet_down_height: 2

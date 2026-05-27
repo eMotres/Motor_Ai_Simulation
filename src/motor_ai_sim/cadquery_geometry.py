@@ -16,7 +16,7 @@ import json
 import hashlib
 from pathlib import Path
 from typing import Dict, Optional, List, Tuple, Any
-from math import sin, cos, tan, radians, pi, acos, atan2
+from math import sin, cos, tan, radians, degrees, pi, acos, atan2
 #import math
 
 # CadQuery imports - try to import lazily
@@ -894,6 +894,54 @@ class CadQueryMotor:
             stator_poly = parts[0] if len(parts) == 1 else SMPoly(parts)
         if not stator_poly.is_valid:
             stator_poly = stator_poly.buffer(0)
+
+        # ── Stator corner rounding (matches 3D _OuterRingSelector / _InnerRingSelector) ──
+        # Apply _fillet_corner only to vertices near outer_r (concave slot-wall corners)
+        # and near inner_r (convex tooth-tip corners), matching the 3D fillet selectors.
+        fillet_r  = p.get('stator_fillet_r',  2.5)
+        fillet_r1 = p.get('stator_fillet_r1', 0.9)
+
+        def _fillet_coords(coords, target_r, r_tol, fillet_radius, min_angle_deg=20.0):
+            """Round only SHARP corners near target_r in a coordinate ring."""
+            n = len(coords)
+            new_coords = []
+            for i in range(n):
+                p_prev   = coords[(i - 1) % n]
+                p_corner = coords[i]
+                p_next   = coords[(i + 1) % n]
+                rc = (p_corner[0]**2 + p_corner[1]**2) ** 0.5
+                if abs(rc - target_r) < r_tol:
+                    dA = np.array(p_prev) - np.array(p_corner); la = np.linalg.norm(dA)
+                    dB = np.array(p_next) - np.array(p_corner); lb = np.linalg.norm(dB)
+                    if la > 1e-9 and lb > 1e-9:
+                        cos_t = float(np.clip(np.dot(dA/la, dB/lb), -1.0, 1.0))
+                        angle_deg = degrees(acos(cos_t))
+                        if angle_deg < (180.0 - min_angle_deg):
+                            arc = _fillet_corner(p_prev, p_corner, p_next, fillet_radius)
+                            new_coords.extend(arc)
+                            continue
+                new_coords.append(p_corner)
+            return new_coords
+
+        def _fillet_ring_corners(poly, target_r, r_tol, fillet_radius, min_angle_deg=20.0):
+            """Round sharp corners near target_r on BOTH exterior and interior rings."""
+            if not hasattr(poly, 'exterior'):
+                return poly
+            new_ext  = _fillet_coords(list(poly.exterior.coords[:-1]),
+                                      target_r, r_tol, fillet_radius, min_angle_deg)
+            new_ints = [_fillet_coords(list(h.coords[:-1]),
+                                       target_r, r_tol, fillet_radius, min_angle_deg)
+                        for h in poly.interiors]
+            result = SPoly(new_ext, new_ints)
+            if not result.is_valid:
+                result = result.buffer(0)
+            return result
+
+        if fillet_r > 0 and hasattr(stator_poly, 'exterior'):
+            stator_poly = _fillet_ring_corners(stator_poly, outer_r, 1.5, fillet_r)
+        if fillet_r1 > 0 and hasattr(stator_poly, 'exterior'):
+            stator_poly = _fillet_ring_corners(stator_poly, inner_r, 1.0, fillet_r1)
+
         r = _tri(stator_poly, z=Z_STATOR)
         if r: result['stator_core'] = r
 

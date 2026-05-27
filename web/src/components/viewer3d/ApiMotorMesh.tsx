@@ -285,14 +285,15 @@ export function useMotorMesh2d() {
   return data;
 }
 
-// Colors per component type
+// Colors per component type — kept in sync with 3D material defaults above
+// (shaft=#505050, stator/rotor fallback=#7f8c8d, magnets/coils identical)
 const COLORS_2D: Record<string, string> = {
-  shaft:       '#2d2d2d',
-  rotor_core:  '#3a3a3a',
-  stator_core: '#8a9ba8',
+  shaft:       '#505050',  // matches ApiShaftMesh hardcoded color
+  rotor_core:  '#7f8c8d',  // matches ApiRotorMesh fallback
+  stator_core: '#7f8c8d',  // matches ApiStatorMesh fallback
 };
 const getMagnetColor2d = (index: number) => index % 2 === 0 ? '#ef4444' : '#3b82f6';
-const getCoilColor2d   = (index: number) => ['#c97b2a', '#b55c1a', '#9a6010'][index % 3];
+const getCoilColor2d   = (index: number) => ['#b87333', '#c2410c', '#a16207'][index % 3];
 
 export const ApiMotor2dFlat: React.FC = () => {
   const { componentVisibility, magnetVisibility, coilVisibility } = useUIStore();

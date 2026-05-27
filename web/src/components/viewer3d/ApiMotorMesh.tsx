@@ -255,6 +255,105 @@ export const ApiCoilsMesh: React.FC<{ materialProps?: MaterialProps; visible?: b
   );
 };
 
+// ─── Extruded mesh hook (2D + server-side extrusion, no CadQuery) ────────────
+
+const meshExtrudedCache = new Map<string, AllMeshData>();
+let inflightRequestExt: Promise<AllMeshData> | null = null;
+let inflightGeometryKeyExt = '';
+
+export function useMotorMeshExtruded() {
+  const { geometry, connectedToApi, setGeometryUpdating } = useMotorStore();
+  const [data, setData] = useState<AllMeshData | null>(null);
+  const geometryKey = JSON.stringify(geometry);
+
+  useEffect(() => {
+    if (!connectedToApi) { setData(null); return; }
+    const cached = meshExtrudedCache.get(geometryKey);
+    if (cached) { setData(cached); setGeometryUpdating(false); return; }
+
+    if (!inflightRequestExt || inflightGeometryKeyExt !== geometryKey) {
+      inflightGeometryKeyExt = geometryKey;
+      inflightRequestExt = fetch(`${API_BASE_URL}/api/geometry/mesh_extruded`)
+        .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json() as Promise<AllMeshData>; })
+        .then(result => {
+          // strip _timing metadata before caching
+          const { _timing: _, ...meshOnly } = result as any;
+          meshExtrudedCache.set(geometryKey, meshOnly);
+          return meshOnly as AllMeshData;
+        })
+        .catch(err => { console.error('Failed to fetch extruded mesh:', err); return null as unknown as AllMeshData; })
+        .finally(() => { inflightRequestExt = null; });
+    }
+    inflightRequestExt.then(result => {
+      if (result) { setData(result); setGeometryUpdating(false); }
+    });
+  }, [connectedToApi, geometryKey]);
+
+  return data;
+}
+
+/** 3D extruded motor — same colours as the 3D CadQuery view, rendered solid. */
+export const ApiMotorExtruded: React.FC = () => {
+  const { componentVisibility, magnetVisibility, coilVisibility } = useUIStore();
+  const meshData = useMotorMeshExtruded();
+
+  const geometries = useMemo(() => {
+    if (!meshData) return null;
+    const out: Record<string, THREE.BufferGeometry> = {};
+    for (const [key, data] of Object.entries(meshData)) {
+      if (!(data as any).vertices) continue;
+      out[key] = buildGeometry(data);
+    }
+    return out;
+  }, [meshData]);
+
+  if (!geometries) return null;
+
+  return (
+    <group>
+      {geometries.shaft && componentVisibility.shaft && (
+        <mesh geometry={geometries.shaft}>
+          <meshStandardMaterial color="#505050" metalness={0.9} roughness={0.3} />
+        </mesh>
+      )}
+      {geometries.rotor_core && componentVisibility.rotor && (
+        <mesh geometry={geometries.rotor_core}>
+          <meshStandardMaterial color="#7f8c8d" metalness={0.9} roughness={0.3} />
+        </mesh>
+      )}
+      {geometries.stator_core && componentVisibility.stator && (
+        <mesh geometry={geometries.stator_core}>
+          <meshStandardMaterial color="#7f8c8d" metalness={0.9} roughness={0.3} />
+        </mesh>
+      )}
+      {componentVisibility.magnets && Object.entries(geometries)
+        .filter(([k]) => k.startsWith('magnet_'))
+        .sort(([a], [b]) => parseInt(a.split('_')[1]) - parseInt(b.split('_')[1]))
+        .map(([key, geo]) => {
+          const idx = parseInt(key.split('_')[1]);
+          return (
+            <mesh key={key} geometry={geo} visible={magnetVisibility[idx] ?? true}>
+              <meshStandardMaterial color={idx % 2 === 0 ? '#ef4444' : '#3b82f6'} metalness={0.6} roughness={0.3} />
+            </mesh>
+          );
+        })
+      }
+      {componentVisibility.coils && Object.entries(geometries)
+        .filter(([k]) => k.startsWith('coil_'))
+        .sort(([a], [b]) => parseInt(a.split('_')[1]) - parseInt(b.split('_')[1]))
+        .map(([key, geo]) => {
+          const idx = parseInt(key.split('_')[1]);
+          return (
+            <mesh key={key} geometry={geo} visible={coilVisibility[idx] ?? true}>
+              <meshStandardMaterial color="#b87333" metalness={0.4} roughness={0.5} />
+            </mesh>
+          );
+        })
+      }
+    </group>
+  );
+};
+
 // ─── 2D flat mesh hook + component ───────────────────────────────────────────
 
 const mesh2dCache = new Map<string, AllMeshData>();

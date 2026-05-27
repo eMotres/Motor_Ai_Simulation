@@ -976,6 +976,103 @@ class CadQueryMotor:
 
         return result
 
+    def get_extruded_mesh_data(self, depth: float = None) -> Dict[str, Dict]:
+        """
+        Extrude flat 2D cross-section meshes into 3D solid meshes.
+
+        Takes the output of get_2d_mesh_data() and for each component:
+          1. Duplicates vertices at z=0 (top) and z=-depth (bottom)
+          2. Keeps top faces with original winding
+          3. Adds bottom faces with reversed winding
+          4. Finds boundary edges and builds side-wall quads
+
+        No CadQuery / OCCT required — pure NumPy.
+
+        Parameters
+        ----------
+        depth : float, optional
+            Axial extrusion depth in mm.  Defaults to motor_length parameter
+            or 30 mm if not set.
+
+        Returns
+        -------
+        Dict mapping component name → same mesh dict format as get_2d_mesh_data /
+        get_all_mesh_data, with z spanning [0, -depth].
+        """
+        import numpy as np
+
+        if depth is None:
+            depth = float(self.parameters.get('motor_length', 30.0))
+
+        flat = self.get_2d_mesh_data()
+        extruded: Dict[str, Dict] = {}
+
+        for name, comp in flat.items():
+            verts_2d = np.array(comp['vertices'], dtype=float)  # (N, 3) z≈0
+            faces_2d = np.array(comp['faces'],    dtype=int)    # (M, 3)
+            N = len(verts_2d)
+
+            # ── top & bottom vertices ────────────────────────────────────────
+            top_v    = verts_2d.copy()
+            top_v[:, 2] = 0.0
+            bot_v    = verts_2d.copy()
+            bot_v[:, 2] = -depth
+
+            vertices = np.vstack([top_v, bot_v])  # (2N, 3)
+
+            # ── top faces (original winding) ─────────────────────────────────
+            top_f = faces_2d.copy()
+
+            # ── bottom faces (reversed winding so normals point down) ────────
+            bot_f = faces_2d[:, ::-1] + N
+
+            # ── side walls (vectorised) ──────────────────────────────────────
+            # Build directed edge array: for each face [a,b,c] → edges a→b, b→c, c→a
+            M = len(faces_2d)
+            # directed_edges shape (3M, 2): each row is [from, to]
+            directed = np.concatenate([
+                faces_2d[:, [0, 1]],
+                faces_2d[:, [1, 2]],
+                faces_2d[:, [2, 0]],
+            ], axis=0)  # (3M, 2)
+
+            # Canonical (sorted) edge for counting duplicates
+            canonical = np.sort(directed, axis=1)  # (3M, 2)
+            # Encode as a single int64 for fast uniqueness check (N < 2**31)
+            MAX_IDX = N + 1
+            codes   = canonical[:, 0].astype(np.int64) * MAX_IDX + canonical[:, 1].astype(np.int64)
+            unique_codes, counts = np.unique(codes, return_counts=True)
+            boundary_codes = unique_codes[counts == 1]
+            boundary_set   = set(boundary_codes.tolist())
+
+            # Among directed edges, keep those whose canonical code is a boundary
+            dir_codes  = directed[:, 0].astype(np.int64) * MAX_IDX + directed[:, 1].astype(np.int64)
+            can_codes  = np.sort(directed, axis=1)
+            can_codes2 = can_codes[:, 0].astype(np.int64) * MAX_IDX + can_codes[:, 1].astype(np.int64)
+            mask       = np.isin(can_codes2, list(boundary_set))
+            boundary_directed = directed[mask]  # each row [a, b] in correct CCW winding
+
+            if len(boundary_directed):
+                a_col = boundary_directed[:, 0]
+                b_col = boundary_directed[:, 1]
+                # two triangles per boundary edge: (a, b, b+N) and (a, b+N, a+N)
+                tri1 = np.stack([a_col,        b_col,        b_col + N], axis=1)
+                tri2 = np.stack([a_col,        b_col + N,    a_col + N], axis=1)
+                side_f = np.vstack([tri1, tri2])
+            else:
+                side_f = np.empty((0, 3), dtype=int)
+
+            all_faces = np.vstack([top_f, bot_f, side_f])
+
+            extruded[name] = {
+                'vertices':     vertices.tolist(),
+                'faces':        all_faces.tolist(),
+                'vertex_count': len(vertices),
+                'face_count':   len(all_faces),
+            }
+
+        return extruded
+
     def validate_sdf(self, n_points: int = 50000) -> Dict:
         """Validate geometry by computing SDF."""
         mesh_data = self.get_all_mesh_data()

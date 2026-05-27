@@ -10,7 +10,7 @@ import RotorMesh from './RotorMesh';
 import ShaftMesh from './ShaftMesh';
 import MagnetMesh from './MagnetMesh';
 import WindingsMesh from './WindingsMesh';
-import { ApiStatorMesh, ApiRotorMesh, ApiShaftMesh, ApiMagnetsMesh, ApiCoilsMesh, ApiMotor2dFlat } from './ApiMotorMesh';
+import { ApiStatorMesh, ApiRotorMesh, ApiShaftMesh, ApiMagnetsMesh, ApiCoilsMesh, ApiMotor2dFlat, ApiMotorExtruded } from './ApiMotorMesh';
 import PointCloudMesh from './PointCloudMesh';
 import { STLCollection } from './STLMesh';
 import ComponentTree from './ComponentTree';
@@ -196,22 +196,38 @@ const FitCameraOnLoad: React.FC<{ controlsRef: React.RefObject<any> }> = ({ cont
   return null;
 };
 
-// ─── 2D / 3D toggle button ────────────────────────────────────────────────────
+// ─── Render-mode cycle button: 3D → EXT → 2D → 3D ───────────────────────────
+const RENDER_MODE_LABELS: Record<string, string> = {
+  '3d':       '3D',
+  'extruded': 'EXT',
+  '2d':       '2D',
+};
+const RENDER_MODE_TITLES: Record<string, string> = {
+  '3d':       'CadQuery 3D — click for Extruded 2D',
+  'extruded': 'Extruded 2D (fast) — click for 2D flat',
+  '2d':       '2D flat cross-section — click for CadQuery 3D',
+};
+const RENDER_MODE_BG: Record<string, string> = {
+  '3d':       '#1f2937',
+  'extruded': '#7c3aed',
+  '2d':       '#3b82f6',
+};
+
 const View2dToggle: React.FC = () => {
-  const { view2d, toggleView2d } = useUIStore();
+  const { renderMode, cycleRenderMode } = useUIStore();
   return (
     <button
-      onClick={toggleView2d}
-      title={view2d ? 'Switch to 3D view' : 'Switch to 2D flat view'}
+      onClick={cycleRenderMode}
+      title={RENDER_MODE_TITLES[renderMode] ?? ''}
       style={{
         position: 'absolute', bottom: 12, right: 12, zIndex: 20,
         padding: '4px 12px', borderRadius: 6, border: '1px solid #4b5563',
-        background: view2d ? '#3b82f6' : '#1f2937',
+        background: RENDER_MODE_BG[renderMode] ?? '#1f2937',
         color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer',
         letterSpacing: 1,
       }}
     >
-      {view2d ? '3D' : '2D'}
+      {RENDER_MODE_LABELS[renderMode] ?? '3D'}
     </button>
   );
 };
@@ -297,7 +313,7 @@ const MotorScene: React.FC = () => {
 
 const MotorComponents: React.FC<{ controlsRef: React.RefObject<any> }> = ({ controlsRef }) => {
   const { viewMode, stlMeshes, connectedToApi } = useMotorStore();
-  const { metalness, roughness, componentVisibility, view2d } = useUIStore();
+  const { metalness, roughness, componentVisibility, view2d, renderMode } = useUIStore();
 
   const showPointCloud = viewMode === 'pointcloud' || viewMode === 'hybrid';
   const showSTL = viewMode === 'stl' && Object.keys(stlMeshes).length > 0;
@@ -314,10 +330,13 @@ const MotorComponents: React.FC<{ controlsRef: React.RefObject<any> }> = ({ cont
         {showSTL && <STLCollection meshes={stlMeshes} />}
 
         {/* 2D flat cross-section mode */}
-        {view2d && <ApiMotor2dFlat />}
+        {renderMode === '2d' && <ApiMotor2dFlat />}
 
-        {/* 3D solid mode */}
-        {!view2d && (viewMode === 'solid' || viewMode === 'hybrid') && (
+        {/* Extruded 2D mode — fast Shapely+NumPy, no CadQuery */}
+        {renderMode === 'extruded' && <ApiMotorExtruded />}
+
+        {/* 3D solid mode (CadQuery) */}
+        {renderMode === '3d' && (viewMode === 'solid' || viewMode === 'hybrid') && (
           <>
             <ApiStatorMesh materialProps={statorMaterialProps} visible={vis.stator} />
             <ApiRotorMesh  materialProps={statorMaterialProps} visible={vis.rotor} />

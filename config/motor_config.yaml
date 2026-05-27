@@ -28,6 +28,7 @@ geometry:
   magnet_down_height: 2
   stator_fillet_r: 2.5
   stator_fillet_r1: 0.9
+  motor_length: 30
 derived_params:
   stator_outer_radius: stator_diameter / 2
   stator_inner_radius: stator_outer_radius - core_thickness - slot_height
@@ -301,6 +302,15 @@ geometry_schema:
     step: 0.1
     group: stator
     description: Fillet radius on inner-ring corners of stator (at inner radius)
+  motor_length:
+    label: Motor Length
+    unit: mm
+    type: float
+    min: 5
+    max: 500
+    step: 1
+    group: stator
+    description: Axial length of the motor (used for 2D extrusion)
   shaft_diameter:
     label: Shaft Diameter
     unit: mm

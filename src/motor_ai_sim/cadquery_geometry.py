@@ -781,6 +781,17 @@ class CadQueryMotor:
             except Exception:
                 return SPoly(pts)
 
+        # Rectangular cut above each magnet — matches 3D _create_rotor cut_up:
+        #   rect(rec_w, -mag_h).translate((-rec_w/2, rotor_outer_r)).rotate(angle)
+        mag_angle_up_hole = pole_angle_r * mag_fu * magnet_hole / 2  # radians
+        rec_w = 2 * rotor_or * sin(mag_angle_up_hole)
+        rect_local = [
+            (-rec_w / 2, rotor_or),
+            ( rec_w / 2, rotor_or),
+            ( rec_w / 2, rotor_or - mag_h),
+            (-rec_w / 2, rotor_or - mag_h),
+        ]
+
         rotor_outer_pts = _circle(rotor_or)
         rotor_inner_pts = _circle(rotor_ir)
         rotor_holes   = [rotor_inner_pts]
@@ -792,7 +803,21 @@ class CadQueryMotor:
             mp  = _build_mag_poly(pts, mag_fill_r)
             if not mp.is_valid:
                 mp = mp.buffer(0)
-            rotor_holes.append(list(mp.exterior.coords[:-1]))
+
+            # Union magnet pocket with the rectangular cut (creates the notch
+            # visible between the magnet top and the stator air-gap).
+            rect_pts = [_rot(x, y, a) for x, y in rect_local]
+            rect_poly = SPoly(rect_pts)
+            if not rect_poly.is_valid:
+                rect_poly = rect_poly.buffer(0)
+            hole = mp.union(rect_poly)
+            if not hole.is_valid:
+                hole = hole.buffer(0)
+            # Use exterior of the merged hole (should be a single polygon)
+            hole_coords = (list(hole.exterior.coords[:-1])
+                           if isinstance(hole, SPoly)
+                           else list(mp.exterior.coords[:-1]))
+            rotor_holes.append(hole_coords)
             mag_rot_polys.append(mp)
 
         rotor_poly = SPoly(rotor_outer_pts, rotor_holes)

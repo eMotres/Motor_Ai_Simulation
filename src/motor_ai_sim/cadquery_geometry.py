@@ -739,14 +739,41 @@ class CadQueryMotor:
         r = _tri(shaft_poly, z=Z_SHAFT)
         if r: result['shaft'] = r
 
-        # ── 2. ROTOR CORE — ring with trapezoid pockets matching magnets ─
+        # ── 2+3. MAGNETS + ROTOR CORE ─────────────────────────────────────
+        # Compute rounded magnet shape once in local coords using Shapely
+        # OPENING (buffer(-r).buffer(+r)) — the 2D equivalent of CadQuery fillet.
+        # The same rounded shape is used for BOTH the rotor pocket holes and the
+        # magnet polygons so the two always align perfectly (no dark gap at corners).
+        if mag_fill_r > 0:
+            _local_mag = SPoly(mag_local)
+            if not _local_mag.is_valid:
+                _local_mag = _local_mag.buffer(0)
+            try:
+                _rounded_local = (_local_mag
+                                  .buffer(-mag_fill_r, resolution=32)
+                                  .buffer( mag_fill_r, resolution=32))
+                if (_rounded_local.is_empty or not _rounded_local.is_valid
+                        or not isinstance(_rounded_local, SPoly)):
+                    _rounded_local = _local_mag
+            except Exception:
+                _rounded_local = _local_mag
+        else:
+            _rounded_local = SPoly(mag_local)
+
         rotor_outer_pts = _circle(rotor_or)
         rotor_inner_pts = _circle(rotor_ir)
-        # holes: inner circle + one trapezoid per pole (same shape as magnet)
-        rotor_holes = [rotor_inner_pts]
+        rotor_holes  = [rotor_inner_pts]
+        mag_rot_polys: list = []
+
         for i in range(num_poles):
-            a = i * pole_angle_r
-            rotor_holes.append([_rot(x, y, a) for x, y in mag_local])
+            a        = i * pole_angle_r
+            ext_loc  = list(_rounded_local.exterior.coords[:-1])
+            rot_pts  = [_rot(x, y, a) for x, y in ext_loc]
+            mp       = SPoly(rot_pts)
+            if not mp.is_valid:
+                mp = mp.buffer(0)
+            rotor_holes.append(list(mp.exterior.coords[:-1]))
+            mag_rot_polys.append(mp)
 
         rotor_poly = SPoly(rotor_outer_pts, rotor_holes)
         if not rotor_poly.is_valid:
@@ -754,47 +781,7 @@ class CadQueryMotor:
         r = _tri(rotor_poly, z=Z_ROTOR)
         if r: result['rotor_core'] = r
 
-        # ── 3. MAGNETS (same trapezoid, sitting in pockets) ────────────
-        # Helper: round a single polygon corner with arc of radius r.
-        # Matches CadQuery edges(">Y and |Z").fillet() — only top corners.
-        def _round_corner(p_prev, p_corner, p_next, r, n_arc=12):
-            V  = np.array(p_corner, float)
-            dA = np.array(p_prev,   float) - V;  dA /= np.linalg.norm(dA)
-            dB = np.array(p_next,   float) - V;  dB /= np.linalg.norm(dB)
-            cos_t    = float(np.clip(np.dot(dA, dB), -1.0, 1.0))
-            half_ang = acos(-cos_t) / 2           # interior half-angle
-            tan_len  = r * cos(half_ang) / sin(half_ang)
-            T1 = V + tan_len * dA
-            T2 = V + tan_len * dB
-            bis    = dA + dB;  bis /= np.linalg.norm(bis)
-            center = V + (r / sin(half_ang)) * bis
-            a1 = atan2(T1[1] - center[1], T1[0] - center[0])
-            a2 = atan2(T2[1] - center[1], T2[0] - center[0])
-            da = a2 - a1
-            if da >  pi: da -= 2 * pi
-            elif da < -pi: da += 2 * pi
-            return [(float(center[0] + r * cos(a1 + da * k / n_arc)),
-                     float(center[1] + r * sin(a1 + da * k / n_arc)))
-                    for k in range(n_arc + 1)]
-
-        for i in range(num_poles):
-            a   = i * pole_angle_r
-            pts = [_rot(x, y, a) for x, y in mag_local]
-            if mag_fill_r > 0:
-                try:
-                    # Round only the two top corners (indices 2=mp3, 3=mp4) —
-                    # matches CadQuery edges(">Y and |Z").fillet(mag_fill_r)
-                    new_pts = (pts[:2]
-                               + _round_corner(pts[1], pts[2], pts[3], mag_fill_r)
-                               + _round_corner(pts[2], pts[3], pts[4], mag_fill_r)
-                               + pts[4:])
-                    poly = SPoly(new_pts)
-                except Exception:
-                    poly = SPoly(pts)
-            else:
-                poly = SPoly(pts)
-            if not poly.is_valid:
-                poly = poly.buffer(0)
+        for i, poly in enumerate(mag_rot_polys):
             r = _tri(poly, z=Z_MAG)
             if r: result[f'magnet_{i}'] = r
 

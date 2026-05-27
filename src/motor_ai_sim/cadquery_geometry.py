@@ -16,7 +16,7 @@ import json
 import hashlib
 from pathlib import Path
 from typing import Dict, Optional, List, Tuple, Any
-from math import sin, cos, tan, radians, pi
+from math import sin, cos, tan, radians, pi, acos, atan2
 #import math
 
 # CadQuery imports - try to import lazily
@@ -755,15 +755,44 @@ class CadQueryMotor:
         if r: result['rotor_core'] = r
 
         # ── 3. MAGNETS (same trapezoid, sitting in pockets) ────────────
+        # Helper: round a single polygon corner with arc of radius r.
+        # Matches CadQuery edges(">Y and |Z").fillet() — only top corners.
+        def _round_corner(p_prev, p_corner, p_next, r, n_arc=12):
+            V  = np.array(p_corner, float)
+            dA = np.array(p_prev,   float) - V;  dA /= np.linalg.norm(dA)
+            dB = np.array(p_next,   float) - V;  dB /= np.linalg.norm(dB)
+            cos_t    = float(np.clip(np.dot(dA, dB), -1.0, 1.0))
+            half_ang = acos(-cos_t) / 2           # interior half-angle
+            tan_len  = r * cos(half_ang) / sin(half_ang)
+            T1 = V + tan_len * dA
+            T2 = V + tan_len * dB
+            bis    = dA + dB;  bis /= np.linalg.norm(bis)
+            center = V + (r / sin(half_ang)) * bis
+            a1 = atan2(T1[1] - center[1], T1[0] - center[0])
+            a2 = atan2(T2[1] - center[1], T2[0] - center[0])
+            da = a2 - a1
+            if da >  pi: da -= 2 * pi
+            elif da < -pi: da += 2 * pi
+            return [(float(center[0] + r * cos(a1 + da * k / n_arc)),
+                     float(center[1] + r * sin(a1 + da * k / n_arc)))
+                    for k in range(n_arc + 1)]
+
         for i in range(num_poles):
             a   = i * pole_angle_r
             pts = [_rot(x, y, a) for x, y in mag_local]
-            poly = SPoly(pts)
             if mag_fill_r > 0:
                 try:
-                    poly = poly.buffer(mag_fill_r, join_style=1).buffer(-mag_fill_r, join_style=1)
+                    # Round only the two top corners (indices 2=mp3, 3=mp4) —
+                    # matches CadQuery edges(">Y and |Z").fillet(mag_fill_r)
+                    new_pts = (pts[:2]
+                               + _round_corner(pts[1], pts[2], pts[3], mag_fill_r)
+                               + _round_corner(pts[2], pts[3], pts[4], mag_fill_r)
+                               + pts[4:])
+                    poly = SPoly(new_pts)
                 except Exception:
-                    pass
+                    poly = SPoly(pts)
+            else:
+                poly = SPoly(pts)
             if not poly.is_valid:
                 poly = poly.buffer(0)
             r = _tri(poly, z=Z_MAG)

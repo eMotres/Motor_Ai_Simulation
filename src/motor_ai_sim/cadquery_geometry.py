@@ -740,36 +740,56 @@ class CadQueryMotor:
         if r: result['shaft'] = r
 
         # ── 2+3. MAGNETS + ROTOR CORE ─────────────────────────────────────
-        # Compute rounded magnet shape once in local coords using Shapely
-        # OPENING (buffer(-r).buffer(+r)) — the 2D equivalent of CadQuery fillet.
-        # The same rounded shape is used for BOTH the rotor pocket holes and the
-        # magnet polygons so the two always align perfectly (no dark gap at corners).
-        if mag_fill_r > 0:
-            _local_mag = SPoly(mag_local)
-            if not _local_mag.is_valid:
-                _local_mag = _local_mag.buffer(0)
+        # Round ONLY the two top corners (mp3/mp4, outer/air-gap edge) to match
+        # CadQuery's edges(">Y and |Z").fillet(mag_fill_r).
+        # The same rounded polygon is used for BOTH the rotor pocket holes and
+        # the magnet so there is no dark gap at the corners.
+
+        def _fillet_corner(p_prev, p_corner, p_next, r, n_arc=16):
+            """Arc points (T1→T2 inclusive) for filleting one convex corner."""
+            V  = np.array(p_corner, float)
+            dA = np.array(p_prev,  float) - V;  dA /= np.linalg.norm(dA)
+            dB = np.array(p_next,  float) - V;  dB /= np.linalg.norm(dB)
+            cos_t  = float(np.clip(np.dot(dA, dB), -1.0, 1.0))
+            half_a = acos(cos_t) / 2            # correct interior half-angle φ/2
+            if sin(half_a) < 1e-9:              # ~180° corner → no fillet
+                return [tuple(p_corner)]
+            tan_len = r / tan(half_a)
+            bis     = dA + dB;  bis /= np.linalg.norm(bis)
+            center  = V + (r / sin(half_a)) * bis
+            T1      = V + tan_len * dA
+            T2      = V + tan_len * dB
+            a1 = atan2(T1[1] - center[1], T1[0] - center[0])
+            a2 = atan2(T2[1] - center[1], T2[0] - center[0])
+            da = a2 - a1
+            if da >  pi: da -= 2 * pi
+            elif da < -pi: da += 2 * pi
+            return [(float(center[0] + r * cos(a1 + da * k / n_arc)),
+                     float(center[1] + r * sin(a1 + da * k / n_arc)))
+                    for k in range(n_arc + 1)]
+
+        def _build_mag_poly(pts, fillet_r):
+            """Hexagon with only the two top corners (indices 2,3) filleted."""
+            if fillet_r <= 0:
+                return SPoly(pts)
             try:
-                _rounded_local = (_local_mag
-                                  .buffer(-mag_fill_r, resolution=32)
-                                  .buffer( mag_fill_r, resolution=32))
-                if (_rounded_local.is_empty or not _rounded_local.is_valid
-                        or not isinstance(_rounded_local, SPoly)):
-                    _rounded_local = _local_mag
+                new_pts = (pts[:2]
+                           + _fillet_corner(pts[1], pts[2], pts[3], fillet_r)
+                           + _fillet_corner(pts[2], pts[3], pts[4], fillet_r)
+                           + pts[4:])
+                return SPoly(new_pts)
             except Exception:
-                _rounded_local = _local_mag
-        else:
-            _rounded_local = SPoly(mag_local)
+                return SPoly(pts)
 
         rotor_outer_pts = _circle(rotor_or)
         rotor_inner_pts = _circle(rotor_ir)
-        rotor_holes  = [rotor_inner_pts]
-        mag_rot_polys: list = []
+        rotor_holes   = [rotor_inner_pts]
+        mag_rot_polys = []
 
         for i in range(num_poles):
-            a        = i * pole_angle_r
-            ext_loc  = list(_rounded_local.exterior.coords[:-1])
-            rot_pts  = [_rot(x, y, a) for x, y in ext_loc]
-            mp       = SPoly(rot_pts)
+            a   = i * pole_angle_r
+            pts = [_rot(x, y, a) for x, y in mag_local]
+            mp  = _build_mag_poly(pts, mag_fill_r)
             if not mp.is_valid:
                 mp = mp.buffer(0)
             rotor_holes.append(list(mp.exterior.coords[:-1]))

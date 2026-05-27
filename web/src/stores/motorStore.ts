@@ -674,8 +674,8 @@ interface UIState {
     envIntensity: number;
   }>) => void;
   setCameraMode: (mode: 'perspective' | 'orthographic') => void;
-  renderMode: '3d' | 'extruded' | '2d';
-  cycleRenderMode: () => void;
+  renderMode: 'extruded' | '2d';
+  toggleRenderMode: () => void;
   /** @deprecated use renderMode === '2d' */
   view2d: boolean;
   toggleComponentVisibility: (key: CompKey) => void;
@@ -721,7 +721,7 @@ export const useUIStore = create<UIState>()(
 
       // Camera mode
       cameraMode: 'orthographic',
-      renderMode: '3d' as '3d' | 'extruded' | '2d',
+      renderMode: 'extruded' as 'extruded' | '2d',
       view2d: false,
 
       // Component tree defaults
@@ -737,12 +737,12 @@ export const useUIStore = create<UIState>()(
       toggleAutoRotate: () => set((state) => ({ autoRotate: !state.autoRotate })),
       updateMaterialSettings: (settings) => set((state) => ({ ...state, ...settings })),
       setCameraMode: (mode) => set({ cameraMode: mode }),
-      cycleRenderMode: () => set((s) => {
-        const next = s.renderMode === '3d' ? 'extruded' : s.renderMode === 'extruded' ? '2d' : '3d';
+      toggleRenderMode: () => set((s) => {
+        const next = s.renderMode === 'extruded' ? '2d' : 'extruded';
         return { renderMode: next, view2d: next === '2d' };
       }),
       toggleView2d: () => set((s) => {
-        const next = s.renderMode === '2d' ? '3d' : '2d';
+        const next = s.renderMode === '2d' ? 'extruded' : '2d';
         return { renderMode: next, view2d: next === '2d' };
       }),
 

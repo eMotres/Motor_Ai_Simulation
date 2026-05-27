@@ -7,8 +7,8 @@ geometry:
   num_poles_per_segment: 7
   stator_width: 30
   air_gap: 0.5
-  tooth_width: 8.6
-  tooth2_width: 4.5
+  tooth_width: 9
+  tooth2_width: 4
   cut_width: 3
   insulation_thickness: 0.15
   wire_width: 4

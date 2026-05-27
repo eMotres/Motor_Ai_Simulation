@@ -2,7 +2,7 @@ import React, { Suspense, useRef, useEffect } from 'react';
 import { Canvas, useThree, useFrame } from '@react-three/fiber';
 import { OrbitControls, PerspectiveCamera, OrthographicCamera, Environment, Grid } from '@react-three/drei';
 import { EffectComposer, Bloom } from '@react-three/postprocessing';
-import { useUIStore, useMotorStore } from '../../stores/motorStore';
+import { useUIStore, useMotorStore, useBuildTimingStore } from '../../stores/motorStore';
 import * as THREE from 'three';
 import Viewcube from './Viewcube';
 import StatorMesh from './StatorMesh';
@@ -213,22 +213,42 @@ const RENDER_MODE_BG: Record<string, string> = {
   '2d':       '#3b82f6',
 };
 
+const fmt = (s: number | null) => s == null ? '…' : s < 1 ? `${(s * 1000).toFixed(0)}ms` : `${s.toFixed(1)}s`;
+
 const View2dToggle: React.FC = () => {
   const { renderMode, cycleRenderMode } = useUIStore();
+  const { mesh3d_s, mesh_ext_s, mesh2d_s } = useBuildTimingStore();
+
+  const timingLabel: Record<string, string> = {
+    '3d':       `CadQuery: ${fmt(mesh3d_s)}`,
+    'extruded': `EXT: ${fmt(mesh_ext_s)}`,
+    '2d':       `2D: ${fmt(mesh2d_s)}`,
+  };
+
   return (
-    <button
-      onClick={cycleRenderMode}
-      title={RENDER_MODE_TITLES[renderMode] ?? ''}
-      style={{
-        position: 'absolute', bottom: 12, right: 12, zIndex: 20,
-        padding: '4px 12px', borderRadius: 6, border: '1px solid #4b5563',
-        background: RENDER_MODE_BG[renderMode] ?? '#1f2937',
-        color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer',
-        letterSpacing: 1,
-      }}
-    >
-      {RENDER_MODE_LABELS[renderMode] ?? '3D'}
-    </button>
+    <div style={{ position: 'absolute', bottom: 12, right: 12, zIndex: 20, display: 'flex', alignItems: 'center', gap: 6 }}>
+      {/* timing chip */}
+      <span style={{
+        fontSize: 11, color: '#9ca3af', background: '#111827',
+        border: '1px solid #374151', borderRadius: 4,
+        padding: '2px 7px', fontFamily: 'monospace',
+      }}>
+        {timingLabel[renderMode] ?? ''}
+      </span>
+      {/* mode button */}
+      <button
+        onClick={cycleRenderMode}
+        title={RENDER_MODE_TITLES[renderMode] ?? ''}
+        style={{
+          padding: '4px 12px', borderRadius: 6, border: '1px solid #4b5563',
+          background: RENDER_MODE_BG[renderMode] ?? '#1f2937',
+          color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer',
+          letterSpacing: 1,
+        }}
+      >
+        {RENDER_MODE_LABELS[renderMode] ?? '3D'}
+      </button>
+    </div>
   );
 };
 

@@ -1,6 +1,6 @@
 import React, { useMemo, useEffect, useState, useRef } from 'react';
 import * as THREE from 'three';
-import { useMotorStore, useUIStore } from '../../stores/motorStore';
+import { useMotorStore, useUIStore, useBuildTimingStore } from '../../stores/motorStore';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
 
@@ -28,6 +28,7 @@ let inflightGeometryKey = '';
 
 export function useMotorMesh() {
   const { geometry, connectedToApi, setGeometryUpdating } = useMotorStore();
+  const { setMesh3dTime } = useBuildTimingStore();
   const [data, setData] = useState<AllMeshData | null>(null);
 
   const geometryKey = JSON.stringify(geometry);
@@ -47,12 +48,14 @@ export function useMotorMesh() {
 
     if (!inflightRequest || inflightGeometryKey !== geometryKey) {
       inflightGeometryKey = geometryKey;
+      const t0 = performance.now();
       inflightRequest = fetch(`${API_BASE_URL}/api/geometry/mesh`)
         .then(res => {
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           return res.json() as Promise<AllMeshData>;
         })
         .then(result => {
+          setMesh3dTime(parseFloat(((performance.now() - t0) / 1000).toFixed(2)));
           meshCache.set(geometryKey, result);
           if (meshCache.size > 3) {
             meshCache.delete(meshCache.keys().next().value!);
@@ -263,6 +266,7 @@ let inflightGeometryKeyExt = '';
 
 export function useMotorMeshExtruded() {
   const { geometry, connectedToApi, setGeometryUpdating } = useMotorStore();
+  const { setMeshExtTime, setMesh2dTime } = useBuildTimingStore();
   const [data, setData] = useState<AllMeshData | null>(null);
   const geometryKey = JSON.stringify(geometry);
 
@@ -276,7 +280,10 @@ export function useMotorMeshExtruded() {
       inflightRequestExt = fetch(`${API_BASE_URL}/api/geometry/mesh_extruded`)
         .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json() as Promise<AllMeshData>; })
         .then(result => {
-          // strip _timing metadata before caching
+          // extract timing then strip from mesh data
+          const timing = (result as any)._timing;
+          if (timing?.extruded_s != null) setMeshExtTime(timing.extruded_s);
+          if (timing?.mesh2d_s   != null) setMesh2dTime(timing.mesh2d_s);
           const { _timing: _, ...meshOnly } = result as any;
           meshExtrudedCache.set(geometryKey, meshOnly);
           return meshOnly as AllMeshData;

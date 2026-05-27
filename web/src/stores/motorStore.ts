@@ -685,6 +685,25 @@ interface UIState {
   showAllComponents: () => void;
 }
 
+// ─── Build timing store (not persisted) ──────────────────────────────────────
+interface BuildTimingState {
+  mesh3d_s:      number | null;
+  mesh_ext_s:    number | null;
+  mesh2d_s:      number | null;
+  setMesh3dTime:   (s: number) => void;
+  setMeshExtTime:  (s: number) => void;
+  setMesh2dTime:   (s: number) => void;
+}
+
+export const useBuildTimingStore = create<BuildTimingState>()((set) => ({
+  mesh3d_s:   null,
+  mesh_ext_s: null,
+  mesh2d_s:   null,
+  setMesh3dTime:  (s) => set({ mesh3d_s: s }),
+  setMeshExtTime: (s) => set({ mesh_ext_s: s }),
+  setMesh2dTime:  (s) => set({ mesh2d_s: s }),
+}));
+
 export const useUIStore = create<UIState>()(
   persist(
     (set) => ({

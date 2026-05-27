@@ -16,7 +16,7 @@ import json
 import hashlib
 from pathlib import Path
 from typing import Dict, Optional, List, Tuple, Any
-from math import sin, cos, tan, radians
+from math import sin, cos, tan, radians, pi
 #import math
 
 # CadQuery imports - try to import lazily
@@ -788,15 +788,27 @@ class CadQueryMotor:
         cutters = []
         for i in range(half_slots):
             a = i * radians(slot_angle_deg)
-            # +X trapezoid (flat bottom — no fill_r circles to avoid
-            # Shapely MultiPolygon fragmentation / dark-hole artefacts)
-            cutters.append(SPoly([_rot(*p1s, a), _rot(*p2s, a),
-                                   _rot(*p3s, a), _rot(*p4s, a)]))
-            # -X trapezoid
+            # +X trapezoid pre-merged with fill_r fillet circle at p3s
+            # (circle overlaps trap → clean Polygon union, no tangency issues)
+            trap_p = SPoly([_rot(*p1s, a), _rot(*p2s, a),
+                             _rot(*p3s, a), _rot(*p4s, a)])
+            cx, cy = _rot(p3s[0], p3s[1], a)
+            circ_p = SPoly([(cx + fill_r * cos(2*pi*k/64),
+                              cy + fill_r * sin(2*pi*k/64)) for k in range(64)])
+            m_p = trap_p.union(circ_p)
+            cutters.append(m_p if m_p.is_valid else m_p.buffer(0))
+
+            # -X trapezoid pre-merged with fill_r fillet circle
             mp1n = (-p1s[0], p1s[1]); mp2n = (-p2s[0], p2s[1])
             mp3n = (-p3s[0], p3s[1]); mp4n = (-p4s[0], p4s[1])
-            cutters.append(SPoly([_rot(*mp1n, a), _rot(*mp2n, a),
-                                   _rot(*mp3n, a), _rot(*mp4n, a)]))
+            trap_n = SPoly([_rot(*mp1n, a), _rot(*mp2n, a),
+                             _rot(*mp3n, a), _rot(*mp4n, a)])
+            cxn, cyn = _rot(-p3s[0], p3s[1], a)
+            circ_n = SPoly([(cxn + fill_r * cos(2*pi*k/64),
+                              cyn + fill_r * sin(2*pi*k/64)) for k in range(64)])
+            m_n = trap_n.union(circ_n)
+            cutters.append(m_n if m_n.is_valid else m_n.buffer(0))
+
             # slot rectangles
             slot_w  = wire_w + ins_w*2 + wire_dx
             slot_h  = p['slot_height']
@@ -814,6 +826,11 @@ class CadQueryMotor:
 
         tool = unary_union(cutters)
         stator_poly = stator_poly.difference(tool)
+        # Filter any zero-area ghost fragments produced by Shapely difference
+        # when tool boundaries are tangent to the stator ring boundary
+        if isinstance(stator_poly, SMPoly):
+            parts = [g for g in stator_poly.geoms if g.area > 0.1]
+            stator_poly = parts[0] if len(parts) == 1 else SMPoly(parts)
         if not stator_poly.is_valid:
             stator_poly = stator_poly.buffer(0)
         r = _tri(stator_poly, z=Z_STATOR)

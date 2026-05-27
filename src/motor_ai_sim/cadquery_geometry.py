@@ -788,7 +788,8 @@ class CadQueryMotor:
         cutters = []
         for i in range(half_slots):
             a = i * radians(slot_angle_deg)
-            # +X trapezoid
+            # +X trapezoid (flat bottom — no fill_r circles to avoid
+            # Shapely MultiPolygon fragmentation / dark-hole artefacts)
             cutters.append(SPoly([_rot(*p1s, a), _rot(*p2s, a),
                                    _rot(*p3s, a), _rot(*p4s, a)]))
             # -X trapezoid
@@ -796,18 +797,6 @@ class CadQueryMotor:
             mp3n = (-p3s[0], p3s[1]); mp4n = (-p4s[0], p4s[1])
             cutters.append(SPoly([_rot(*mp1n, a), _rot(*mp2n, a),
                                    _rot(*mp3n, a), _rot(*mp4n, a)]))
-            # +X fillet circle
-            cx, cy = _rot(p3s[0], p3s[1], a)
-            cutters.append(SPoly(_circle(fill_r, 64)).buffer(0)
-                           .difference(SPoly(_circle(fill_r, 64)).buffer(0))  # no-op; use translate
-                           )
-            # rebuild fillet circles properly
-            cutters[-1] = SPoly([(cx + fill_r*cos(t), cy + fill_r*sin(t))
-                                  for t in [2*pi*k/64 for k in range(64)]])
-            # -X fillet circle
-            cxn, cyn = _rot(-p3s[0], p3s[1], a)
-            cutters.append(SPoly([(cxn + fill_r*cos(t), cyn + fill_r*sin(t))
-                                   for t in [2*pi*k/64 for k in range(64)]]))
             # slot rectangles
             slot_w  = wire_w + ins_w*2 + wire_dx
             slot_h  = p['slot_height']

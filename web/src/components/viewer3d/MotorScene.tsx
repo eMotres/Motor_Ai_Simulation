@@ -199,9 +199,9 @@ const View2dToggle: React.FC = () => {
   const { mesh_ext_s, mesh2d_s } = useBuildTimingStore();
 
   const is2d = renderMode === '2d';
-  const timingText = is2d ? `2D: ${fmt(mesh2d_s)}` : `EXT: ${fmt(mesh_ext_s)}`;
+  const timingText = is2d ? `2D: ${fmt(mesh2d_s)}` : `3D: ${fmt(mesh_ext_s)}`;
   const btnBg      = is2d ? '#3b82f6' : '#7c3aed';
-  const btnLabel   = is2d ? '2D' : 'EXT';
+  const btnLabel   = is2d ? '2D' : '3D';
   const btnTitle   = is2d
     ? '2D flat cross-section (for simulation) — click for Extruded 3D'
     : 'Extruded 3D (fast, no CadQuery) — click for 2D flat';

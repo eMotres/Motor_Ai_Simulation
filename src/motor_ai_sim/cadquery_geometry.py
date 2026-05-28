@@ -1055,9 +1055,12 @@ class CadQueryMotor:
             if len(boundary_directed):
                 a_col = boundary_directed[:, 0]
                 b_col = boundary_directed[:, 1]
-                # two triangles per boundary edge: (a, b, b+N) and (a, b+N, a+N)
-                tri1 = np.stack([a_col,        b_col,        b_col + N], axis=1)
-                tri2 = np.stack([a_col,        b_col + N,    a_col + N], axis=1)
+                # For a CCW-wound boundary edge a→b (solid to the left), the outward
+                # normal of the side-wall quad must point to the RIGHT of a→b.
+                # Cross-product analysis shows (a, b+N, b) and (a, a+N, b+N) give
+                # normals = depth*(dy, -dx, 0) which is 90° CW from (dx,dy) = outward.
+                tri1 = np.stack([a_col,        b_col + N,    b_col      ], axis=1)
+                tri2 = np.stack([a_col,        a_col + N,    b_col + N  ], axis=1)
                 side_f = np.vstack([tri1, tri2])
             else:
                 side_f = np.empty((0, 3), dtype=int)

@@ -320,17 +320,17 @@ export const ApiMotorExtruded: React.FC = () => {
     <group>
       {geometries.shaft && componentVisibility.shaft && (
         <mesh geometry={geometries.shaft}>
-          <meshStandardMaterial color="#505050" metalness={0.9} roughness={0.3} />
+          <meshStandardMaterial color="#505050" metalness={0.9} roughness={0.3} side={THREE.DoubleSide} />
         </mesh>
       )}
       {geometries.rotor_core && componentVisibility.rotor && (
         <mesh geometry={geometries.rotor_core}>
-          <meshStandardMaterial color="#7f8c8d" metalness={0.9} roughness={0.3} />
+          <meshStandardMaterial color="#7f8c8d" metalness={0.9} roughness={0.3} side={THREE.DoubleSide} />
         </mesh>
       )}
       {geometries.stator_core && componentVisibility.stator && (
         <mesh geometry={geometries.stator_core}>
-          <meshStandardMaterial color="#7f8c8d" metalness={0.9} roughness={0.3} />
+          <meshStandardMaterial color="#7f8c8d" metalness={0.9} roughness={0.3} side={THREE.DoubleSide} />
         </mesh>
       )}
       {componentVisibility.magnets && Object.entries(geometries)
@@ -340,7 +340,7 @@ export const ApiMotorExtruded: React.FC = () => {
           const idx = parseInt(key.split('_')[1]);
           return (
             <mesh key={key} geometry={geo} visible={magnetVisibility[idx] ?? true}>
-              <meshStandardMaterial color={idx % 2 === 0 ? '#ef4444' : '#3b82f6'} metalness={0.6} roughness={0.3} />
+              <meshStandardMaterial color={idx % 2 === 0 ? '#ef4444' : '#3b82f6'} metalness={0.6} roughness={0.3} side={THREE.DoubleSide} />
             </mesh>
           );
         })
@@ -352,7 +352,7 @@ export const ApiMotorExtruded: React.FC = () => {
           const idx = parseInt(key.split('_')[1]);
           return (
             <mesh key={key} geometry={geo} visible={coilVisibility[idx] ?? true}>
-              <meshStandardMaterial color="#b87333" metalness={0.4} roughness={0.5} />
+              <meshStandardMaterial color="#b87333" metalness={0.4} roughness={0.5} side={THREE.DoubleSide} />
             </mesh>
           );
         })

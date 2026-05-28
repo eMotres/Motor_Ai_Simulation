@@ -268,8 +268,9 @@ export const useMotorStore = create<MotorState>()(
             geometry: data as MotorGeometryParams,
             isLoading: false,
             connectedToApi: true,
-            // Show indicator while the initial mesh fetch is running
-            isGeometryUpdating: viewMode === 'solid' || viewMode === 'hybrid',
+            // GET-only: geometry не перестраивается, таймер не нужен.
+            // isGeometryUpdating устанавливается только через updateGeometryViaApi (PUT).
+            isGeometryUpdating: false,
           });
         } catch (error) {
           console.error('Failed to fetch geometry from API:', error);

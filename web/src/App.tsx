@@ -40,6 +40,7 @@ import { useMaterialsLibrary } from './components/materials/useMaterialsLibrary'
 import type { SelectedMaterial } from './components/materials/useMaterialsLibrary';
 import { useMotorStore, useUIStore } from './stores/motorStore';
 import SimulationPanel from './components/simulation/SimulationPanel';
+import MeshPanel from './components/mesh/MeshPanel';
 
 const darkTheme = createTheme({
   palette: {
@@ -357,11 +358,7 @@ function App() {
               </Box>
             </Box>
           )}
-          {activeTab === 'mesh' && (
-            <Box sx={{ p: 4, color: 'text.secondary' }}>
-              <Typography>Mesh settings coming soon...</Typography>
-            </Box>
-          )}
+          {activeTab === 'mesh' && <MeshPanel />}
           {activeTab === 'simulation' && <SimulationPanel />}
         </Box>
       </Box>

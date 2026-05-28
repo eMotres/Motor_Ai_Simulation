@@ -10,6 +10,8 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from typing import Optional
+
 from pydantic import BaseModel
 
 from motor_ai_sim.config import get_config, get_material_assignments, clear_config_cache
@@ -248,6 +250,66 @@ def get_full_config():
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+class MeshConfigPatch(BaseModel):
+    n_radial:       Optional[int]   = None
+    n_angular:      Optional[int]   = None
+    n_angular_slots: Optional[int]  = None
+
+
+@app.get("/api/mesh/config")
+def get_mesh_config():
+    """Return current mesh collocation-point config."""
+    cfg = get_config()
+    m = cfg.get("mesh", {})
+    return {
+        "n_radial":        m.get("n_radial", 10),
+        "n_angular":       m.get("n_angular", 64),
+        "n_angular_slots": m.get("n_angular_slots", 8),
+    }
+
+
+@app.patch("/api/mesh/config")
+def update_mesh_config(patch: MeshConfigPatch):
+    """Update mesh parameters in motor_config.yaml."""
+    import re
+    updates = {k: v for k, v in patch.model_dump().items() if v is not None}
+    if not updates:
+        raise HTTPException(status_code=400, detail="No fields to update")
+
+    content = _CONFIG_PATH.read_text(encoding="utf-8")
+    lines   = content.splitlines(keepends=True)
+    in_mesh = False
+    result  = []
+    replaced = set()
+
+    for line in lines:
+        if re.match(r'^mesh\s*:', line):
+            in_mesh = True
+        elif in_mesh and re.match(r'^\S', line):
+            in_mesh = False
+
+        if in_mesh:
+            for key, val in updates.items():
+                m = re.match(rf'^(\s+{re.escape(key)}\s*:\s*)(.*)$', line)
+                if m:
+                    line = m.group(1) + str(val) + '\n'
+                    replaced.add(key)
+                    break
+
+        result.append(line)
+
+    missing = set(updates) - replaced
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Keys not found in mesh: block: {missing}"
+        )
+
+    _CONFIG_PATH.write_text(''.join(result), encoding="utf-8")
+    clear_config_cache()
+    return {"status": "ok", "updated": updates}
 
 
 def main():

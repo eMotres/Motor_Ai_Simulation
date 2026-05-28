@@ -36,7 +36,7 @@ import MaterialControls from './components/parameters/MaterialControls';
 import SweepConfigPanel from './components/sweep/SweepConfigPanel';
 import MaterialsLibraryTree from './components/materials/MaterialsLibraryTree';
 import MaterialDetailView from './components/materials/MaterialDetailView';
-import MotorAssignmentPanel from './components/materials/MotorAssignmentPanel';
+import MotorCrossSection from './components/materials/MotorCrossSection';
 import { useMaterialsLibrary } from './components/materials/useMaterialsLibrary';
 import type { SelectedMaterial } from './components/materials/useMaterialsLibrary';
 import { useMotorAssignments } from './components/materials/useMotorAssignments';
@@ -312,56 +312,53 @@ function App() {
           {/* Sweep */}
           {activeTab === 'sweep' && <SweepConfigPanel />}
 
-          {/* Materials: library tree | properties+charts | motor assignment */}
+          {/* Materials: left half (tree + detail) | right half (real geometry + assign) */}
           {activeTab === 'materials' && (
             <Box sx={{ display: 'flex', height: '100%' }}>
 
-              {/* Left: material tree */}
-              <Box sx={{
-                width: panelWidth,
-                flexShrink: 0,
-                overflowY: 'auto',
-                borderRight: '1px solid',
-                borderColor: 'divider',
-              }}>
-                <MaterialsLibraryTree
-                  library={matLibrary}
-                  loading={matLoading}
-                  error={matError}
-                  selected={selectedMaterial}
-                  onSelect={setSelectedMaterial}
-                />
-              </Box>
+              {/* ── LEFT HALF: tree + material properties ── */}
+              <Box sx={{ width: '50%', display: 'flex', borderRight: '1px solid', borderColor: 'divider', overflow: 'hidden' }}>
 
-              {/* Draggable divider */}
-              <Box
-                onMouseDown={onDividerMouseDown}
-                sx={{
-                  width: 5,
+                {/* Material library tree */}
+                <Box sx={{
+                  width: panelWidth,
                   flexShrink: 0,
-                  cursor: 'col-resize',
-                  bgcolor: 'divider',
-                  transition: 'background-color 0.15s',
-                  '&:hover': { bgcolor: 'primary.main' },
-                  userSelect: 'none',
-                }}
-              />
+                  overflowY: 'auto',
+                  borderRight: '1px solid',
+                  borderColor: 'divider',
+                }}>
+                  <MaterialsLibraryTree
+                    library={matLibrary}
+                    loading={matLoading}
+                    error={matError}
+                    selected={selectedMaterial}
+                    onSelect={setSelectedMaterial}
+                  />
+                </Box>
 
-              {/* Centre: material properties + charts */}
-              <Box sx={{ flex: 1, overflow: 'hidden', bgcolor: '#0a1120', borderRight: '1px solid', borderColor: 'divider' }}>
-                <MaterialDetailView
-                  library={matLibrary}
-                  selected={selectedMaterial}
+                {/* Draggable divider */}
+                <Box
+                  onMouseDown={onDividerMouseDown}
+                  sx={{
+                    width: 5, flexShrink: 0, cursor: 'col-resize',
+                    bgcolor: 'divider', transition: 'background-color 0.15s',
+                    '&:hover': { bgcolor: 'primary.main' },
+                    userSelect: 'none',
+                  }}
                 />
+
+                {/* Material detail: properties + charts */}
+                <Box sx={{ flex: 1, overflow: 'hidden', bgcolor: '#0a1120' }}>
+                  <MaterialDetailView library={matLibrary} selected={selectedMaterial} />
+                </Box>
               </Box>
 
-              {/* Right: motor diagram + material assignment */}
-              <Box sx={{ width: 320, flexShrink: 0, overflow: 'hidden', bgcolor: '#080f1a' }}>
-                <MotorAssignmentPanel
+              {/* ── RIGHT HALF: real motor geometry + assignment ── */}
+              <Box sx={{ width: '50%', overflow: 'hidden', bgcolor: '#060d17' }}>
+                <MotorCrossSection
                   library={matLibrary}
                   selected={selectedMaterial}
                   assignments={assignments}
-                  loadingAssignments={assignLoading}
                   saving={assignSaving}
                   onAssign={assign}
                 />

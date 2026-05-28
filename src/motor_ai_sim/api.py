@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from motor_ai_sim.config import get_config, get_material_assignments, clear_config_cache
 from motor_ai_sim.routes.geometry import router as geometry_router
 from motor_ai_sim.routes.pipeline import router as pipeline_router
+from motor_ai_sim.routes.simulation import router as simulation_router
 from motor_ai_sim.services.geometry_service import get_current_geometry, params_to_dict
 from motor_ai_sim import materials as mat_lib
 
@@ -41,6 +42,7 @@ app.add_middleware(
 
 app.include_router(geometry_router)
 app.include_router(pipeline_router)
+app.include_router(simulation_router)
 
 
 @app.get("/")
@@ -56,6 +58,10 @@ def root():
             "/api/materials/library/{category}",
             "/api/materials/library/{category}/{name}",
             "/api/config",
+            "/api/simulation/status",
+            "/api/simulation/run",
+            "/api/simulation/result/{job_id}",
+            "/api/simulation/config",
         ],
     }
 

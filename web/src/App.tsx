@@ -39,6 +39,7 @@ import MaterialDetailView from './components/materials/MaterialDetailView';
 import { useMaterialsLibrary } from './components/materials/useMaterialsLibrary';
 import type { SelectedMaterial } from './components/materials/useMaterialsLibrary';
 import { useMotorStore, useUIStore } from './stores/motorStore';
+import SimulationPanel from './components/simulation/SimulationPanel';
 
 const darkTheme = createTheme({
   palette: {
@@ -361,11 +362,7 @@ function App() {
               <Typography>Mesh settings coming soon...</Typography>
             </Box>
           )}
-          {activeTab === 'simulation' && (
-            <Box sx={{ p: 4, color: 'text.secondary' }}>
-              <Typography>Simulation controls coming soon...</Typography>
-            </Box>
-          )}
+          {activeTab === 'simulation' && <SimulationPanel />}
         </Box>
       </Box>
     </ThemeProvider>

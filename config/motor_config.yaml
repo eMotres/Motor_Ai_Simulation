@@ -334,19 +334,19 @@ parameter_groups:
     label: Rotor Parameters
     order: 4
   shaft:
-    label: Shaft
+    label: Shaft Parameters
     order: 5
 mesh:
   n_radial: 10
   n_angular: 64
   n_angular_slots: 8
 materials:
-  stator_core: m27_silicon_steel
+  stator_core: 20SW1200
   slot: copper
   air_gap: air
-  rotor_core: m27_silicon_steel
-  magnet: ndfeb_n42
-  shaft: carbon_steel
+  rotor_core: 20SW1200
+  magnet: F45SH_120C
+  shaft: Aluminium_6061
 custom_materials: {}
 simulation:
   max_current: 10.0

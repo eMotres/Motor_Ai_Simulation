@@ -684,6 +684,10 @@ interface UIState {
   toggleMagnetVisibility: (index: number) => void;
   isolateComponent: (key: CompKey) => void;
   showAllComponents: () => void;
+
+  // Part selection (Fusion360-style)
+  selectedPart: CompKey | null;
+  setSelectedPart: (key: CompKey | null) => void;
 }
 
 // ─── Build timing store (not persisted) ──────────────────────────────────────
@@ -729,6 +733,9 @@ export const useUIStore = create<UIState>()(
       componentVisibility: { stator: true, rotor: true, magnets: true, coils: true, shaft: true },
       coilVisibility: {},
       magnetVisibility: {},
+
+      selectedPart: null,
+      setSelectedPart: (key) => set({ selectedPart: key }),
 
       toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
       setActiveTab: (tab) => set({ activeTab: tab }),

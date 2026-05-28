@@ -9,6 +9,7 @@ import { ApiMotor2dFlat, ApiMotorExtruded } from './ApiMotorMesh';
 import PointCloudMesh from './PointCloudMesh';
 import { STLCollection } from './STLMesh';
 import ComponentTree from './ComponentTree';
+import MaterialBar from './MaterialBar';
 
 // Camera that auto-adjusts to viewport aspect ratio
 const FRUSTUM = 300;
@@ -231,12 +232,12 @@ const View2dToggle: React.FC = () => {
 };
 
 const MotorScene: React.FC = () => {
-  const { showGrid, showAxes, envIntensity } = useUIStore();
+  const { showGrid, showAxes, envIntensity, setSelectedPart } = useUIStore();
   const controlsRef = useRef<any>(null);
 
   return (
     <>
-      <Canvas shadows className="motor-canvas">
+      <Canvas shadows className="motor-canvas" onPointerMissed={() => setSelectedPart(null)}>
         {/* Adaptive camera that switches between Perspective and Orthographic */}
         <AdaptiveCamera />
 
@@ -305,6 +306,9 @@ const MotorScene: React.FC = () => {
 
       {/* 2D / 3D toggle */}
       <View2dToggle />
+
+      {/* Material assignment bar — shows when a part is selected */}
+      <MaterialBar />
     </>
   );
 };

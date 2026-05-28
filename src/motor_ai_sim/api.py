@@ -82,6 +82,30 @@ def get_materials():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _set_material_in_yaml(content: str, part: str, material: str):
+    """Replace `part: <value>` only inside the `materials:` top-level block.
+    Returns (new_content, replaced_bool).
+    """
+    lines = content.splitlines(keepends=True)
+    in_materials = False
+    replaced = False
+    result = []
+    for line in lines:
+        if re.match(r'^materials\s*:', line):
+            in_materials = True
+        elif in_materials and re.match(r'^\S', line):
+            in_materials = False  # exited the block
+
+        if in_materials and not replaced:
+            m = re.match(rf'^(\s+{re.escape(part)}\s*:\s*)(.*)$', line)
+            if m:
+                line = m.group(1) + material + '\n'
+                replaced = True
+
+        result.append(line)
+    return ''.join(result), replaced
+
+
 @app.patch("/api/materials")
 def update_material(assignment: MaterialAssignment):
     """Assign a library material to a motor part, saved to motor_config.yaml."""
@@ -92,11 +116,9 @@ def update_material(assignment: MaterialAssignment):
         )
     try:
         content = _CONFIG_PATH.read_text(encoding="utf-8")
-        # Replace the specific key under the materials: block
-        pattern = rf'^(\s+{re.escape(assignment.part)}:\s*).*$'
-        new_content = re.sub(pattern, rf'\g<1>{assignment.material}', content, flags=re.MULTILINE)
-        if new_content == content:
-            raise ValueError(f"Key '{assignment.part}' not found in config")
+        new_content, replaced = _set_material_in_yaml(content, assignment.part, assignment.material)
+        if not replaced:
+            raise ValueError(f"Key '{assignment.part}' not found under materials: in config")
         _CONFIG_PATH.write_text(new_content, encoding="utf-8")
         clear_config_cache()
         return {"status": "ok", "assignments": get_material_assignments(reload=True)}

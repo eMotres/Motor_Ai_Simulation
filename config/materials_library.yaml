@@ -1231,38 +1231,45 @@ conductor:
     # Temperature-dependent conductivity: σ(T) = σ₀ / (1 + 0.0043·(T − 20))
     thermal_alpha: 0.0043  # 1/°C
 
-  Aluminium_rect:
-    description: "Aluminium — rectangular Litz wire (general, rect alloy)"
+  Aluminium:
+    description: "Aluminium — rectangular Litz wire (general alloy)"
     sigma: 37700000
     density: 2800
-    thermal_conductivity: 400
-    specific_heat: 385
+    thermal_conductivity: 205
+    specific_heat: 900
     permeability: 0.999991
     wire_type: rectangular
-    thermal_alpha: 0.0039
-
-  Aluminium_67pct:
-    description: "Aluminium conductor, 67 % fill factor"
-    sigma: 25520000
-    density: 2800
-    thermal_conductivity: 400
-    specific_heat: 385
-    permeability: 0.999991
-    wire_type: rectangular
-    wire_w_mm: 4.57
-    wire_h_mm: 1.10
-    num_strands: 10
     thermal_alpha: 0.0039
 
   Aluminium_1060:
     description: "Aluminium alloy 1060 — rectangular Litz wire"
     sigma: 35700000
-    density: 2800
-    thermal_conductivity: 400
-    specific_heat: 385
+    density: 2700
+    thermal_conductivity: 234
+    specific_heat: 900
     permeability: 0.999991
     wire_type: rectangular
     wire_w_mm: 4.40
     wire_h_mm: 1.20
     num_strands: 10
+    thermal_alpha: 0.0039
+
+  Aluminium_6061:
+    description: "Aluminium alloy 6061-T6 — general structural / motor shaft"
+    sigma: 25800000    # S/m at 20 °C  (conductivity ~43 % IACS)
+    density: 2700      # kg/m³
+    thermal_conductivity: 167   # W/(m·K)
+    specific_heat: 896          # J/(kg·K)
+    permeability: 0.999991
+    wire_type: rectangular
+    thermal_alpha: 0.0039
+
+  Aluminium_7075:
+    description: "Aluminium alloy 7075-T6 — high-strength structural / motor shaft"
+    sigma: 19200000    # S/m at 20 °C  (conductivity ~32 % IACS)
+    density: 2810      # kg/m³
+    thermal_conductivity: 130   # W/(m·K)
+    specific_heat: 870          # J/(kg·K)
+    permeability: 0.999991
+    wire_type: rectangular
     thermal_alpha: 0.0039

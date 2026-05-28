@@ -301,7 +301,7 @@ export function useMotorMeshExtruded() {
 
 /** 3D extruded motor — same colours as the 3D CadQuery view, rendered solid. */
 export const ApiMotorExtruded: React.FC = () => {
-  const { componentVisibility, magnetVisibility, coilVisibility, metalness, roughness, envIntensity } = useUIStore();
+  const { componentVisibility, magnetVisibility, coilVisibility, metalness, roughness, envIntensity, selectedPart, setSelectedPart } = useUIStore();
   const meshData = useMotorMeshExtruded();
 
   const geometries = useMemo(() => {
@@ -316,21 +316,29 @@ export const ApiMotorExtruded: React.FC = () => {
 
   if (!geometries) return null;
 
+  const sel = (part: string) => selectedPart === part;
+  const click = (part: string) => (e: any) => { e.stopPropagation(); setSelectedPart(sel(part) ? null : part as any); };
+  const emissive = (part: string, color: string) => sel(part) ? color : '#000000';
+  const emissiveIntensity = (part: string) => sel(part) ? 0.5 : 0;
+
   return (
     <group>
       {geometries.shaft && componentVisibility.shaft && (
-        <mesh geometry={geometries.shaft}>
-          <meshStandardMaterial color="#505050" metalness={metalness} roughness={roughness} envMapIntensity={envIntensity * 1.5} side={THREE.DoubleSide} />
+        <mesh geometry={geometries.shaft} onClick={click('shaft')}>
+          <meshStandardMaterial color="#505050" metalness={metalness} roughness={roughness} envMapIntensity={envIntensity * 1.5} side={THREE.DoubleSide}
+            emissive={emissive('shaft', '#64748b')} emissiveIntensity={emissiveIntensity('shaft')} />
         </mesh>
       )}
       {geometries.rotor_core && componentVisibility.rotor && (
-        <mesh geometry={geometries.rotor_core}>
-          <meshStandardMaterial color="#7f8c8d" metalness={metalness} roughness={roughness} envMapIntensity={envIntensity * 1.5} side={THREE.DoubleSide} />
+        <mesh geometry={geometries.rotor_core} onClick={click('rotor')}>
+          <meshStandardMaterial color="#7f8c8d" metalness={metalness} roughness={roughness} envMapIntensity={envIntensity * 1.5} side={THREE.DoubleSide}
+            emissive={emissive('rotor', '#3b82f6')} emissiveIntensity={emissiveIntensity('rotor')} />
         </mesh>
       )}
       {geometries.stator_core && componentVisibility.stator && (
-        <mesh geometry={geometries.stator_core}>
-          <meshStandardMaterial color="#7f8c8d" metalness={metalness} roughness={roughness} envMapIntensity={envIntensity * 1.5} side={THREE.DoubleSide} />
+        <mesh geometry={geometries.stator_core} onClick={click('stator')}>
+          <meshStandardMaterial color="#7f8c8d" metalness={metalness} roughness={roughness} envMapIntensity={envIntensity * 1.5} side={THREE.DoubleSide}
+            emissive={emissive('stator', '#3b82f6')} emissiveIntensity={emissiveIntensity('stator')} />
         </mesh>
       )}
       {componentVisibility.magnets && Object.entries(geometries)
@@ -339,8 +347,9 @@ export const ApiMotorExtruded: React.FC = () => {
         .map(([key, geo]) => {
           const idx = parseInt(key.split('_')[1]);
           return (
-            <mesh key={key} geometry={geo} visible={magnetVisibility[idx] ?? true}>
-              <meshStandardMaterial color={idx % 2 === 0 ? '#ef4444' : '#3b82f6'} metalness={metalness * 0.7} roughness={roughness} envMapIntensity={envIntensity * 1.5} side={THREE.DoubleSide} />
+            <mesh key={key} geometry={geo} visible={magnetVisibility[idx] ?? true} onClick={click('magnets')}>
+              <meshStandardMaterial color={idx % 2 === 0 ? '#ef4444' : '#3b82f6'} metalness={metalness * 0.7} roughness={roughness} envMapIntensity={envIntensity * 1.5} side={THREE.DoubleSide}
+                emissive={emissive('magnets', '#ef4444')} emissiveIntensity={emissiveIntensity('magnets')} />
             </mesh>
           );
         })
@@ -351,8 +360,9 @@ export const ApiMotorExtruded: React.FC = () => {
         .map(([key, geo]) => {
           const idx = parseInt(key.split('_')[1]);
           return (
-            <mesh key={key} geometry={geo} visible={coilVisibility[idx] ?? true}>
-              <meshStandardMaterial color="#b87333" metalness={metalness * 0.6} roughness={roughness} envMapIntensity={envIntensity * 1.5} side={THREE.DoubleSide} />
+            <mesh key={key} geometry={geo} visible={coilVisibility[idx] ?? true} onClick={click('coils')}>
+              <meshStandardMaterial color="#b87333" metalness={metalness * 0.6} roughness={roughness} envMapIntensity={envIntensity * 1.5} side={THREE.DoubleSide}
+                emissive={emissive('coils', '#f59e0b')} emissiveIntensity={emissiveIntensity('coils')} />
             </mesh>
           );
         })
@@ -402,7 +412,7 @@ const getMagnetColor2d = (index: number) => index % 2 === 0 ? '#ef4444' : '#3b82
 const getCoilColor2d   = (index: number) => ['#b87333', '#c2410c', '#a16207'][index % 3];
 
 export const ApiMotor2dFlat: React.FC = () => {
-  const { componentVisibility, magnetVisibility, coilVisibility } = useUIStore();
+  const { componentVisibility, magnetVisibility, coilVisibility, selectedPart, setSelectedPart } = useUIStore();
   const meshData = useMotorMesh2d();
 
   const geometries = useMemo(() => {
@@ -416,19 +426,26 @@ export const ApiMotor2dFlat: React.FC = () => {
 
   if (!geometries) return null;
 
+  const sel = (part: string) => selectedPart === part;
+  const click = (part: string) => (e: any) => { e.stopPropagation(); setSelectedPart(sel(part) ? null : part as any); };
+  const emissive = (part: string, color: string) => sel(part) ? color : '#000000';
+  const eI = (part: string) => sel(part) ? 0.6 : 0;
+
   return (
     <group>
       {/* shaft */}
       {geometries.shaft && componentVisibility.shaft && (
-        <mesh geometry={geometries.shaft}>
-          <meshStandardMaterial color={COLORS_2D.shaft} metalness={0} roughness={1} side={THREE.DoubleSide} />
+        <mesh geometry={geometries.shaft} onClick={click('shaft')}>
+          <meshStandardMaterial color={COLORS_2D.shaft} metalness={0} roughness={1} side={THREE.DoubleSide}
+            emissive={emissive('shaft', '#64748b')} emissiveIntensity={eI('shaft')} />
         </mesh>
       )}
 
       {/* rotor_core */}
       {geometries.rotor_core && componentVisibility.rotor && (
-        <mesh geometry={geometries.rotor_core}>
-          <meshStandardMaterial color={COLORS_2D.rotor_core} metalness={0} roughness={1} side={THREE.DoubleSide} />
+        <mesh geometry={geometries.rotor_core} onClick={click('rotor')}>
+          <meshStandardMaterial color={COLORS_2D.rotor_core} metalness={0} roughness={1} side={THREE.DoubleSide}
+            emissive={emissive('rotor', '#3b82f6')} emissiveIntensity={eI('rotor')} />
         </mesh>
       )}
 
@@ -439,8 +456,9 @@ export const ApiMotor2dFlat: React.FC = () => {
         .map(([key, geo]) => {
           const idx = parseInt(key.split('_')[1]);
           return (
-            <mesh key={key} geometry={geo} visible={magnetVisibility[idx] ?? true}>
-              <meshStandardMaterial color={getMagnetColor2d(idx)} metalness={0} roughness={1} side={THREE.DoubleSide} />
+            <mesh key={key} geometry={geo} visible={magnetVisibility[idx] ?? true} onClick={click('magnets')}>
+              <meshStandardMaterial color={getMagnetColor2d(idx)} metalness={0} roughness={1} side={THREE.DoubleSide}
+                emissive={emissive('magnets', '#ef4444')} emissiveIntensity={eI('magnets')} />
             </mesh>
           );
         })
@@ -448,8 +466,9 @@ export const ApiMotor2dFlat: React.FC = () => {
 
       {/* stator_core */}
       {geometries.stator_core && componentVisibility.stator && (
-        <mesh geometry={geometries.stator_core}>
-          <meshStandardMaterial color={COLORS_2D.stator_core} metalness={0} roughness={1} side={THREE.DoubleSide} />
+        <mesh geometry={geometries.stator_core} onClick={click('stator')}>
+          <meshStandardMaterial color={COLORS_2D.stator_core} metalness={0} roughness={1} side={THREE.DoubleSide}
+            emissive={emissive('stator', '#3b82f6')} emissiveIntensity={eI('stator')} />
         </mesh>
       )}
 
@@ -460,8 +479,9 @@ export const ApiMotor2dFlat: React.FC = () => {
         .map(([key, geo]) => {
           const idx = parseInt(key.split('_')[1]);
           return (
-            <mesh key={key} geometry={geo} visible={coilVisibility[idx] ?? true}>
-              <meshStandardMaterial color={getCoilColor2d(idx)} metalness={0} roughness={1} side={THREE.DoubleSide} />
+            <mesh key={key} geometry={geo} visible={coilVisibility[idx] ?? true} onClick={click('coils')}>
+              <meshStandardMaterial color={getCoilColor2d(idx)} metalness={0} roughness={1} side={THREE.DoubleSide}
+                emissive={emissive('coils', '#f59e0b')} emissiveIntensity={eI('coils')} />
             </mesh>
           );
         })

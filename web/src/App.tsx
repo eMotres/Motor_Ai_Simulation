@@ -36,10 +36,8 @@ import MaterialControls from './components/parameters/MaterialControls';
 import SweepConfigPanel from './components/sweep/SweepConfigPanel';
 import MaterialsLibraryTree from './components/materials/MaterialsLibraryTree';
 import MaterialDetailView from './components/materials/MaterialDetailView';
-import MotorCrossSection from './components/materials/MotorCrossSection';
 import { useMaterialsLibrary } from './components/materials/useMaterialsLibrary';
 import type { SelectedMaterial } from './components/materials/useMaterialsLibrary';
-import { useMotorAssignments } from './components/materials/useMotorAssignments';
 import { useMotorStore, useUIStore } from './stores/motorStore';
 
 const darkTheme = createTheme({
@@ -136,7 +134,6 @@ function App() {
   const [panelWidth, setPanelWidth] = React.useState(300);
   const [selectedMaterial, setSelectedMaterial] = useState<SelectedMaterial | null>(null);
   const { library: matLibrary, loading: matLoading, error: matError } = useMaterialsLibrary();
-  const { assignments, loading: assignLoading, saving: assignSaving, assign } = useMotorAssignments();
   const isDragging = React.useRef(false);
 
   const onDividerMouseDown = React.useCallback((e: React.MouseEvent) => {
@@ -353,15 +350,9 @@ function App() {
                 </Box>
               </Box>
 
-              {/* ── RIGHT HALF: real motor geometry + assignment ── */}
-              <Box sx={{ width: '50%', overflow: 'hidden', bgcolor: '#060d17' }}>
-                <MotorCrossSection
-                  library={matLibrary}
-                  selected={selectedMaterial}
-                  assignments={assignments}
-                  saving={assignSaving}
-                  onAssign={assign}
-                />
+              {/* ── RIGHT HALF: real 3D motor (click to select & assign) ── */}
+              <Box sx={{ width: '50%', overflow: 'hidden', position: 'relative', bgcolor: '#060d17' }}>
+                <MotorScene />
               </Box>
             </Box>
           )}

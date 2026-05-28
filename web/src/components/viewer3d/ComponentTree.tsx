@@ -31,14 +31,17 @@ const MotorIcon = () => (
 
 // ─── Shared row styles ────────────────────────────────────────────────────────
 
-const rowStyle = (hovered: boolean, indent: number = 0): React.CSSProperties => ({
+const rowStyle = (hovered: boolean, selected: boolean, indent: number = 0): React.CSSProperties => ({
   display: 'flex',
   alignItems: 'center',
   padding: `3px ${8}px 3px ${10 + indent}px`,
   gap: 5,
-  background: hovered ? 'rgba(30,58,138,0.18)' : 'transparent',
+  background: selected
+    ? 'rgba(59,130,246,0.22)'
+    : hovered ? 'rgba(30,58,138,0.18)' : 'transparent',
+  borderLeft: selected ? '2px solid #3b82f6' : '2px solid transparent',
   transition: 'background 0.1s',
-  cursor: 'default',
+  cursor: 'pointer',
 });
 
 // ─── Simple leaf row (Stator, Rotor, Shaft) ───────────────────────────────────
@@ -49,25 +52,28 @@ interface LeafRowProps {
   visible: boolean;
   isLast: boolean;
   indent?: number;
+  selected?: boolean;
   onToggle: () => void;
+  onSelect?: () => void;
   onIsolate?: () => void;
 }
 
-const LeafRow: React.FC<LeafRowProps> = ({ label, color, visible, isLast, indent = 0, onToggle, onIsolate }) => {
+const LeafRow: React.FC<LeafRowProps> = ({ label, color, visible, isLast, indent = 0, selected = false, onToggle, onSelect, onIsolate }) => {
   const [hovered, setHovered] = useState(false);
 
   return (
     <div
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
-      style={rowStyle(hovered, indent)}
+      onClick={onSelect}
+      style={rowStyle(hovered, selected, indent)}
     >
       <span style={{ color: '#1e293b', fontSize: 10, flexShrink: 0 }}>
         {isLast ? '└' : '├'}
       </span>
 
       <button
-        onClick={onToggle}
+        onClick={e => { e.stopPropagation(); onToggle(); }}
         title={visible ? 'Hide' : 'Show'}
         style={{
           background: 'none', border: 'none', cursor: 'pointer', padding: 0,
@@ -129,15 +135,17 @@ interface GroupRowProps {
   isLast: boolean;
   childCount: number;
   hiddenChildCount: number;
+  selected?: boolean;
   onToggleGroup: () => void;
   onToggleExpand: () => void;
+  onSelect?: () => void;
   onIsolate: () => void;
   children: React.ReactNode;
 }
 
 const GroupRow: React.FC<GroupRowProps> = ({
   label, color, groupVisible, expanded, isLast,
-  hiddenChildCount, onToggleGroup, onToggleExpand, onIsolate, children,
+  hiddenChildCount, selected = false, onToggleGroup, onToggleExpand, onSelect, onIsolate, children,
 }) => {
   const [hovered, setHovered] = useState(false);
 
@@ -146,7 +154,8 @@ const GroupRow: React.FC<GroupRowProps> = ({
       <div
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
-        style={rowStyle(hovered)}
+        onClick={onSelect}
+        style={rowStyle(hovered, selected)}
       >
         {/* Tree connector */}
         <span style={{ color: '#1e293b', fontSize: 10, flexShrink: 0 }}>
@@ -155,7 +164,7 @@ const GroupRow: React.FC<GroupRowProps> = ({
 
         {/* Expand / collapse arrow */}
         <button
-          onClick={onToggleExpand}
+          onClick={e => { e.stopPropagation(); onToggleExpand(); }}
           title={expanded ? 'Collapse' : 'Expand'}
           style={{
             background: 'none', border: 'none', cursor: 'pointer', padding: 0,
@@ -168,7 +177,7 @@ const GroupRow: React.FC<GroupRowProps> = ({
 
         {/* Eye toggle (group-level) */}
         <button
-          onClick={onToggleGroup}
+          onClick={e => { e.stopPropagation(); onToggleGroup(); }}
           title={groupVisible ? 'Hide all' : 'Show all'}
           style={{
             background: 'none', border: 'none', cursor: 'pointer', padding: 0,
@@ -251,7 +260,11 @@ const ComponentTree: React.FC = () => {
     toggleMagnetVisibility,
     isolateComponent,
     showAllComponents,
+    selectedPart,
+    setSelectedPart,
   } = useUIStore();
+
+  const selectPart = (key: CompKey) => () => setSelectedPart(selectedPart === key ? null : key);
 
   // Read mesh data to know how many coils / magnets exist
   const meshData = useMotorMesh();
@@ -342,7 +355,9 @@ const ComponentTree: React.FC = () => {
             color="#7f8c8d"
             visible={componentVisibility.stator}
             isLast={false}
+            selected={selectedPart === 'stator'}
             onToggle={() => toggleComponentVisibility('stator')}
+            onSelect={selectPart('stator')}
             onIsolate={() => isolateComponent('stator')}
           />
 
@@ -352,7 +367,9 @@ const ComponentTree: React.FC = () => {
             color="#5d6d7e"
             visible={componentVisibility.rotor}
             isLast={false}
+            selected={selectedPart === 'rotor'}
             onToggle={() => toggleComponentVisibility('rotor')}
+            onSelect={selectPart('rotor')}
             onIsolate={() => isolateComponent('rotor')}
           />
 
@@ -365,8 +382,10 @@ const ComponentTree: React.FC = () => {
             isLast={false}
             childCount={coilCount}
             hiddenChildCount={hiddenCoils}
+            selected={selectedPart === 'coils'}
             onToggleGroup={() => toggleComponentVisibility('coils')}
             onToggleExpand={() => setWindingsExpanded(e => !e)}
+            onSelect={selectPart('coils')}
             onIsolate={() => isolateComponent('coils')}
           >
             {Array.from({ length: coilCount }, (_, i) => {
@@ -394,8 +413,10 @@ const ComponentTree: React.FC = () => {
             isLast={false}
             childCount={magnetCount}
             hiddenChildCount={hiddenMagnets}
+            selected={selectedPart === 'magnets'}
             onToggleGroup={() => toggleComponentVisibility('magnets')}
             onToggleExpand={() => setMagnetsExpanded(e => !e)}
+            onSelect={selectPart('magnets')}
             onIsolate={() => isolateComponent('magnets')}
           >
             {Array.from({ length: magnetCount }, (_, i) => {
@@ -421,7 +442,9 @@ const ComponentTree: React.FC = () => {
             color="#374151"
             visible={componentVisibility.shaft}
             isLast={true}
+            selected={selectedPart === 'shaft'}
             onToggle={() => toggleComponentVisibility('shaft')}
+            onSelect={selectPart('shaft')}
             onIsolate={() => isolateComponent('shaft')}
           />
 

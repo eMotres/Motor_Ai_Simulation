@@ -24,7 +24,7 @@ const CATEGORIES: {
 }[] = [
   { key: 'steel',     label: 'Lamination Steel', color: '#64748b', icon: <LayersIcon sx={{ fontSize: 14 }} />, chip: 'EM' },
   { key: 'magnet',    label: 'Magnets',           color: '#ef4444', icon: <MagnetIcon sx={{ fontSize: 14 }} />, chip: 'PM' },
-  { key: 'conductor', label: 'Conductors',        color: '#f59e0b', icon: <CableIcon  sx={{ fontSize: 14 }} /> },
+  { key: 'conductor', label: 'Metal',              color: '#f59e0b', icon: <CableIcon  sx={{ fontSize: 14 }} /> },
 ];
 
 // Short human-friendly label from database key

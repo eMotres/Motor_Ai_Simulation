@@ -84,9 +84,10 @@ const BHChart: React.FC<{ points: [number, number][]; xLabel: string; yLabel: st
 }) => {
   const data = points.map(([x, y]) => ({ x, y }));
 
-  const xMax = Math.max(...data.map(d => d.x));
-  const xUnit = xMax > 500_000 ? 'MA/m' : xMax > 500 ? 'kA/m' : 'A/m';
-  const xScale = xMax > 500_000 ? 1e6 : xMax > 500 ? 1e3 : 1;
+  // Use absolute max to correctly determine units for negative-H demagnetisation curves
+  const xAbsMax = Math.max(...data.map(d => Math.abs(d.x)));
+  const xUnit = xAbsMax > 500_000 ? 'MA/m' : xAbsMax > 500 ? 'kA/m' : 'A/m';
+  const xScale = xAbsMax > 500_000 ? 1e6 : xAbsMax > 500 ? 1e3 : 1;
   const scaledData = data.map(d => ({ x: +(d.x / xScale).toFixed(4), y: d.y }));
 
   const formattedXLabel = `${xLabel} [${xUnit}]`;

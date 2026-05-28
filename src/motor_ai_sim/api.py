@@ -90,8 +90,9 @@ def get_materials_library():
                 "core_loss_kh": m.core_loss_kh,
                 "core_loss_kc": m.core_loss_kc,
                 "core_loss_ke": m.core_loss_ke,
-                "core_loss_unit": m.core_loss_unit,
+                "core_loss_curve_unit": m.core_loss_curve_unit,
                 "bh_curve": m.bh_curve,
+                "core_loss_curves": m.core_loss_curves,
             }
 
         # Magnets

@@ -23,6 +23,8 @@ from motor_ai_sim.config import (
     clear_config_cache,
 )
 
+from motor_ai_sim import materials
+
 __all__ = [
     # Geometry
     "MotorGeometryParams",
@@ -37,4 +39,6 @@ __all__ = [
     "get_material_assignments",
     "get_simulation_params",
     "clear_config_cache",
+    # Materials library
+    "materials",
 ]

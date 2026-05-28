@@ -5,10 +5,14 @@ Usage:
     python -m motor_ai_sim.api
 """
 
+import re
+from pathlib import Path
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
-from motor_ai_sim.config import get_config, get_material_assignments
+from motor_ai_sim.config import get_config, get_material_assignments, clear_config_cache
 from motor_ai_sim.routes.geometry import router as geometry_router
 from motor_ai_sim.routes.pipeline import router as pipeline_router
 from motor_ai_sim.services.geometry_service import get_current_geometry, params_to_dict
@@ -61,10 +65,43 @@ def health_check():
     return {"status": "healthy"}
 
 
+_ASSIGNABLE_PARTS = {'stator_core', 'slot', 'rotor_core', 'magnet', 'shaft'}
+_CONFIG_PATH = Path(__file__).parent.parent.parent / "config" / "motor_config.yaml"
+
+
+class MaterialAssignment(BaseModel):
+    part: str
+    material: str
+
+
 @app.get("/api/materials")
 def get_materials():
     try:
         return get_material_assignments()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.patch("/api/materials")
+def update_material(assignment: MaterialAssignment):
+    """Assign a library material to a motor part, saved to motor_config.yaml."""
+    if assignment.part not in _ASSIGNABLE_PARTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown part '{assignment.part}'. Valid: {sorted(_ASSIGNABLE_PARTS)}"
+        )
+    try:
+        content = _CONFIG_PATH.read_text(encoding="utf-8")
+        # Replace the specific key under the materials: block
+        pattern = rf'^(\s+{re.escape(assignment.part)}:\s*).*$'
+        new_content = re.sub(pattern, rf'\g<1>{assignment.material}', content, flags=re.MULTILINE)
+        if new_content == content:
+            raise ValueError(f"Key '{assignment.part}' not found in config")
+        _CONFIG_PATH.write_text(new_content, encoding="utf-8")
+        clear_config_cache()
+        return {"status": "ok", "assignments": get_material_assignments(reload=True)}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

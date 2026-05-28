@@ -67,7 +67,7 @@ export function useMaterialsLibrary() {
 
   useEffect(() => {
     setLoading(true);
-    fetch('http://localhost:8000/api/materials/library')
+    fetch('http://localhost:8000/api/materials/library', { cache: 'no-store' })
       .then(r => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json();

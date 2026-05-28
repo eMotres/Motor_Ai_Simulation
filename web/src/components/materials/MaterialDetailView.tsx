@@ -137,7 +137,10 @@ const CoreLossChart: React.FC<{
   curves: Record<string, [number, number][]>;
   unit: string;
 }> = ({ curves, unit }) => {
-  const freqs = Object.keys(curves);
+  // Sort frequencies numerically: "50Hz" → 50, "1000Hz" → 1000, etc.
+  const freqs = Object.keys(curves).sort(
+    (a, b) => parseInt(a, 10) - parseInt(b, 10)
+  );
 
   // Build unified dataset: each point is { B: number, [freq]: number }
   const dataset = useMemo(() => {
@@ -176,7 +179,18 @@ const CoreLossChart: React.FC<{
           formatter={(v: number, name: string) => [`${v.toFixed(3)} ${unit === 'w_per_kg' ? 'W/kg' : 'W/m³'}`, name]}
           labelFormatter={(b: number) => `B = ${b.toFixed(3)} T`}
         />
-        <Legend wrapperStyle={{ fontSize: 10, paddingTop: 4 }} />
+        <Legend
+          content={() => (
+            <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: '6px 12px', paddingTop: 6 }}>
+              {freqs.map((freq, i) => (
+                <span key={freq} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, color: '#94a3b8' }}>
+                  <span style={{ display: 'inline-block', width: 16, height: 2, borderRadius: 1, backgroundColor: FREQ_COLORS[i % FREQ_COLORS.length] }} />
+                  {freq}
+                </span>
+              ))}
+            </div>
+          )}
+        />
         {freqs.map((freq, i) => (
           <Line
             key={freq}

@@ -156,9 +156,11 @@ class ConductorMaterial:
 
 def _parse_steel(name: str, raw: dict) -> SteelMaterial:
     bh = [tuple(p) for p in raw.get("bh_curve", [])]
-    cls_curves = {}
-    for freq_key, pts in raw.get("core_loss_curves", {}).items():
-        cls_curves[freq_key] = [tuple(p) for p in pts]
+    # Sort frequencies numerically ("50Hz" → 50, "1000Hz" → 1000, …)
+    # so JSON response preserves ascending order for the frontend.
+    raw_curves = raw.get("core_loss_curves", {})
+    sorted_freq_keys = sorted(raw_curves.keys(), key=lambda k: int(k.replace("Hz", "")))
+    cls_curves = {k: [tuple(p) for p in raw_curves[k]] for k in sorted_freq_keys}
 
     return SteelMaterial(
         name=name,

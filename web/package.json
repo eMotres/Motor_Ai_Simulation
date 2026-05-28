@@ -22,6 +22,7 @@
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-hook-form": "^7.71.1",
+    "recharts": "^3.8.1",
     "three": "^0.183.0",
     "zod": "^4.3.6",
     "zustand": "^5.0.11"

@@ -33,8 +33,11 @@ import {
 import MotorScene from './components/viewer3d/MotorScene';
 import ParameterVariationTable from './components/sweep/ParameterVariationTable';
 import MaterialControls from './components/parameters/MaterialControls';
-import MaterialsPanel from './components/parameters/MaterialsPanel';
 import SweepConfigPanel from './components/sweep/SweepConfigPanel';
+import MaterialsLibraryTree from './components/materials/MaterialsLibraryTree';
+import MaterialDetailView from './components/materials/MaterialDetailView';
+import { useMaterialsLibrary } from './components/materials/useMaterialsLibrary';
+import type { SelectedMaterial } from './components/materials/useMaterialsLibrary';
 import { useMotorStore, useUIStore } from './stores/motorStore';
 
 const darkTheme = createTheme({
@@ -129,6 +132,8 @@ const GeometryBuildTimer: React.FC = () => {
 function App() {
   const { activeTab, setActiveTab, showGrid, showAxes, toggleGrid, toggleAxes } = useUIStore();
   const [panelWidth, setPanelWidth] = React.useState(300);
+  const [selectedMaterial, setSelectedMaterial] = useState<SelectedMaterial | null>(null);
+  const { library: matLibrary, loading: matLoading, error: matError } = useMaterialsLibrary();
   const isDragging = React.useRef(false);
 
   const onDividerMouseDown = React.useCallback((e: React.MouseEvent) => {
@@ -304,16 +309,24 @@ function App() {
           {/* Sweep */}
           {activeTab === 'sweep' && <SweepConfigPanel />}
 
-          {/* Materials: properties panel (left) + same 3D viewer (right) */}
+          {/* Materials: library tree (left) + detail view (right) */}
           {activeTab === 'materials' && (
             <Box sx={{ display: 'flex', height: '100%' }}>
-              {/* Materials panel */}
+              {/* Left: material tree */}
               <Box sx={{
                 width: panelWidth,
                 flexShrink: 0,
                 overflowY: 'auto',
+                borderRight: '1px solid',
+                borderColor: 'divider',
               }}>
-                <MaterialsPanel />
+                <MaterialsLibraryTree
+                  library={matLibrary}
+                  loading={matLoading}
+                  error={matError}
+                  selected={selectedMaterial}
+                  onSelect={setSelectedMaterial}
+                />
               </Box>
 
               {/* Draggable divider */}
@@ -330,11 +343,12 @@ function App() {
                 }}
               />
 
-              {/* 3D viewer — same as geometry tab */}
-              <Box sx={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
-                <MaterialControls />
-                <MotorScene />
-                <GeometryBuildTimer />
+              {/* Right: material detail + charts */}
+              <Box sx={{ flex: 1, overflow: 'hidden', bgcolor: '#0a1120' }}>
+                <MaterialDetailView
+                  library={matLibrary}
+                  selected={selectedMaterial}
+                />
               </Box>
             </Box>
           )}

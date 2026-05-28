@@ -209,13 +209,15 @@ def get_geometry_schema():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-_mesh_cache: dict = {"hash": None, "data": None}
+_mesh_cache: dict           = {"hash": None, "data": None, "build_time_s": None}
+_mesh2d_cache: dict         = {"hash": None, "data": None, "build_time_s": None}
+_mesh_extruded_cache: dict  = {"hash": None, "data": None, "build_time_s": None}
 
 @router.get("/mesh")
 def get_geometry_mesh():
     try:
         from motor_ai_sim.cadquery_geometry import CadQueryMotor
-        import hashlib, json
+        import hashlib, json, time
         params = get_current_geometry()
         params_dict = params.to_dict()
         params_hash = hashlib.md5(json.dumps(params_dict, sort_keys=True).encode()).hexdigest()
@@ -225,14 +227,89 @@ def get_geometry_mesh():
 
         motor = CadQueryMotor()
         motor.set_parameters(params_dict)
+        t0 = time.perf_counter()
         motor.build_all()
         data = motor.get_all_mesh_data()
+        build_time = time.perf_counter() - t0
 
         _mesh_cache["hash"] = params_hash
         _mesh_cache["data"] = data
+        _mesh_cache["build_time_s"] = round(build_time, 3)
         return data
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/mesh2d")
+def get_geometry_mesh2d():
+    """Return flat 2-D cross-section meshes for all motor components (shapely+earcut, no CadQuery)."""
+    try:
+        from motor_ai_sim.cadquery_geometry import CadQueryMotor
+        import hashlib, json, time
+        params = get_current_geometry()
+        params_dict = params.to_dict()
+        params_hash = hashlib.md5(json.dumps(params_dict, sort_keys=True).encode()).hexdigest()
+
+        if _mesh2d_cache["hash"] == params_hash and _mesh2d_cache["data"] is not None:
+            return _mesh2d_cache["data"]
+
+        motor = CadQueryMotor()
+        motor.set_parameters(params_dict)
+        t0 = time.perf_counter()
+        data = motor.get_2d_mesh_data()
+        build_time = time.perf_counter() - t0
+
+        _mesh2d_cache["hash"] = params_hash
+        _mesh2d_cache["data"] = data
+        _mesh2d_cache["build_time_s"] = round(build_time, 3)
+        return data
+    except Exception as e:
+        import traceback
+        raise HTTPException(status_code=500, detail=f"{e}\n{traceback.format_exc()}")
+
+
+@router.get("/mesh_extruded")
+def get_geometry_mesh_extruded(depth: Optional[float] = None):
+    """
+    Return 3-D meshes built by extruding 2-D Shapely cross-sections (no CadQuery).
+
+    Query param ``depth`` overrides the motor_length config parameter.
+    Response includes ``_timing`` metadata with build times for both this
+    endpoint and the cached CadQuery 3D build (if available).
+    """
+    try:
+        from motor_ai_sim.cadquery_geometry import CadQueryMotor
+        import hashlib, json, time
+        params = get_current_geometry()
+        params_dict = params.to_dict()
+        cache_key = hashlib.md5(
+            json.dumps({**params_dict, "_depth": depth}, sort_keys=True).encode()
+        ).hexdigest()
+
+        if _mesh_extruded_cache["hash"] == cache_key and _mesh_extruded_cache["data"] is not None:
+            return _mesh_extruded_cache["data"]
+
+        motor = CadQueryMotor()
+        motor.set_parameters(params_dict)
+
+        t0 = time.perf_counter()
+        data = motor.get_extruded_mesh_data(depth=depth)
+        build_time = round(time.perf_counter() - t0, 3)
+
+        # attach timing metadata (not a mesh component — prefixed with _)
+        data["_timing"] = {
+            "extruded_s":  build_time,
+            "cadquery_3d_s": _mesh_cache.get("build_time_s"),   # None if never built
+            "mesh2d_s":    _mesh2d_cache.get("build_time_s"),
+        }
+
+        _mesh_extruded_cache["hash"] = cache_key
+        _mesh_extruded_cache["data"] = data
+        _mesh_extruded_cache["build_time_s"] = build_time
+        return data
+    except Exception as e:
+        import traceback
+        raise HTTPException(status_code=500, detail=f"{e}\n{traceback.format_exc()}")
 
 
 @router.get("/pointcloud")

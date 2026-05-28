@@ -674,12 +674,35 @@ interface UIState {
     envIntensity: number;
   }>) => void;
   setCameraMode: (mode: 'perspective' | 'orthographic') => void;
+  renderMode: 'extruded' | '2d';
+  toggleRenderMode: () => void;
+  /** @deprecated use renderMode === '2d' */
+  view2d: boolean;
   toggleComponentVisibility: (key: CompKey) => void;
   toggleCoilVisibility: (index: number) => void;
   toggleMagnetVisibility: (index: number) => void;
   isolateComponent: (key: CompKey) => void;
   showAllComponents: () => void;
 }
+
+// ─── Build timing store (not persisted) ──────────────────────────────────────
+interface BuildTimingState {
+  mesh3d_s:      number | null;
+  mesh_ext_s:    number | null;
+  mesh2d_s:      number | null;
+  setMesh3dTime:   (s: number) => void;
+  setMeshExtTime:  (s: number) => void;
+  setMesh2dTime:   (s: number) => void;
+}
+
+export const useBuildTimingStore = create<BuildTimingState>()((set) => ({
+  mesh3d_s:   null,
+  mesh_ext_s: null,
+  mesh2d_s:   null,
+  setMesh3dTime:  (s) => set({ mesh3d_s: s }),
+  setMeshExtTime: (s) => set({ mesh_ext_s: s }),
+  setMesh2dTime:  (s) => set({ mesh2d_s: s }),
+}));
 
 export const useUIStore = create<UIState>()(
   persist(
@@ -698,6 +721,8 @@ export const useUIStore = create<UIState>()(
 
       // Camera mode
       cameraMode: 'orthographic',
+      renderMode: 'extruded' as 'extruded' | '2d',
+      view2d: false,
 
       // Component tree defaults
       componentVisibility: { stator: true, rotor: true, magnets: true, coils: true, shaft: true },
@@ -712,6 +737,14 @@ export const useUIStore = create<UIState>()(
       toggleAutoRotate: () => set((state) => ({ autoRotate: !state.autoRotate })),
       updateMaterialSettings: (settings) => set((state) => ({ ...state, ...settings })),
       setCameraMode: (mode) => set({ cameraMode: mode }),
+      toggleRenderMode: () => set((s) => {
+        const next = s.renderMode === 'extruded' ? '2d' : 'extruded';
+        return { renderMode: next, view2d: next === '2d' };
+      }),
+      toggleView2d: () => set((s) => {
+        const next = s.renderMode === '2d' ? 'extruded' : '2d';
+        return { renderMode: next, view2d: next === '2d' };
+      }),
 
       toggleComponentVisibility: (key) =>
         set((s) => ({ componentVisibility: { ...s.componentVisibility, [key]: !s.componentVisibility[key] } })),

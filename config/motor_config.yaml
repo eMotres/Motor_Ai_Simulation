@@ -7,7 +7,7 @@ geometry:
   num_poles_per_segment: 7
   stator_width: 30
   air_gap: 0.5
-  tooth_width: 8.6
+  tooth_width: 9
   tooth2_width: 4
   cut_width: 3
   insulation_thickness: 0.15
@@ -22,10 +22,13 @@ geometry:
   shaft_height: 3
   magnet_fill_down: 0.9
   magnet_fill_up: 0.46
-  magnet_fill_radius: 1.5
+  magnet_fill_radius: 2
   magnet_up_gap: 0.5
   rotor_hole: 0.6
   magnet_down_height: 2
+  stator_fillet_r: 2.5
+  stator_fillet_r1: 0.9
+  motor_length: 30
 derived_params:
   stator_outer_radius: stator_diameter / 2
   stator_inner_radius: stator_outer_radius - core_thickness - slot_height
@@ -281,6 +284,33 @@ geometry_schema:
     step: 0.1
     group: rotor
     description: Magnet down height
+  stator_fillet_r:
+    label: Outer Corner Fillet
+    unit: mm
+    type: float
+    min: 0
+    max: 5
+    step: 0.1
+    group: stator
+    description: Fillet radius on outer-ring corners of stator (at outer radius)
+  stator_fillet_r1:
+    label: Inner Corner Fillet
+    unit: mm
+    type: float
+    min: 0
+    max: 2
+    step: 0.1
+    group: stator
+    description: Fillet radius on inner-ring corners of stator (at inner radius)
+  motor_length:
+    label: Motor Length
+    unit: mm
+    type: float
+    min: 5
+    max: 500
+    step: 1
+    group: stator
+    description: Axial length of the motor (used for 2D extrusion)
   shaft_diameter:
     label: Shaft Diameter
     unit: mm

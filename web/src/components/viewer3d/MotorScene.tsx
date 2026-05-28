@@ -2,15 +2,10 @@ import React, { Suspense, useRef, useEffect } from 'react';
 import { Canvas, useThree, useFrame } from '@react-three/fiber';
 import { OrbitControls, PerspectiveCamera, OrthographicCamera, Environment, Grid } from '@react-three/drei';
 import { EffectComposer, Bloom } from '@react-three/postprocessing';
-import { useUIStore, useMotorStore } from '../../stores/motorStore';
+import { useUIStore, useMotorStore, useBuildTimingStore } from '../../stores/motorStore';
 import * as THREE from 'three';
 import Viewcube from './Viewcube';
-import StatorMesh from './StatorMesh';
-import RotorMesh from './RotorMesh';
-import ShaftMesh from './ShaftMesh';
-import MagnetMesh from './MagnetMesh';
-import WindingsMesh from './WindingsMesh';
-import { ApiStatorMesh, ApiRotorMesh, ApiShaftMesh, ApiMagnetsMesh, ApiCoilsMesh } from './ApiMotorMesh';
+import { ApiMotor2dFlat, ApiMotorExtruded } from './ApiMotorMesh';
 import PointCloudMesh from './PointCloudMesh';
 import { STLCollection } from './STLMesh';
 import ComponentTree from './ComponentTree';
@@ -196,6 +191,45 @@ const FitCameraOnLoad: React.FC<{ controlsRef: React.RefObject<any> }> = ({ cont
   return null;
 };
 
+// ─── EXT ↔ 2D toggle button ──────────────────────────────────────────────────
+const fmt = (s: number | null) => s == null ? '…' : s < 1 ? `${(s * 1000).toFixed(0)}ms` : `${s.toFixed(1)}s`;
+
+const View2dToggle: React.FC = () => {
+  const { renderMode, toggleRenderMode } = useUIStore();
+  const { mesh_ext_s, mesh2d_s } = useBuildTimingStore();
+
+  const is2d = renderMode === '2d';
+  const timingText = is2d ? `2D: ${fmt(mesh2d_s)}` : `3D: ${fmt(mesh_ext_s)}`;
+  const btnBg      = is2d ? '#3b82f6' : '#7c3aed';
+  const btnLabel   = is2d ? '2D' : '3D';
+  const btnTitle   = is2d
+    ? '2D flat cross-section (for simulation) — click for Extruded 3D'
+    : 'Extruded 3D (fast, no CadQuery) — click for 2D flat';
+
+  return (
+    <div style={{ position: 'absolute', bottom: 12, right: 12, zIndex: 20, display: 'flex', alignItems: 'center', gap: 6 }}>
+      <span style={{
+        fontSize: 11, color: '#9ca3af', background: '#111827',
+        border: '1px solid #374151', borderRadius: 4,
+        padding: '2px 7px', fontFamily: 'monospace',
+      }}>
+        {timingText}
+      </span>
+      <button
+        onClick={toggleRenderMode}
+        title={btnTitle}
+        style={{
+          padding: '4px 12px', borderRadius: 6, border: '1px solid #4b5563',
+          background: btnBg, color: '#fff', fontWeight: 700,
+          fontSize: 13, cursor: 'pointer', letterSpacing: 1,
+        }}
+      >
+        {btnLabel}
+      </button>
+    </div>
+  );
+};
+
 const MotorScene: React.FC = () => {
   const { showGrid, showAxes, envIntensity } = useUIStore();
   const controlsRef = useRef<any>(null);
@@ -268,54 +302,32 @@ const MotorScene: React.FC = () => {
 
       {/* Component tree overlay */}
       <ComponentTree />
+
+      {/* 2D / 3D toggle */}
+      <View2dToggle />
     </>
   );
 };
 
 const MotorComponents: React.FC<{ controlsRef: React.RefObject<any> }> = ({ controlsRef }) => {
   const { viewMode, stlMeshes, connectedToApi } = useMotorStore();
-  const { metalness, roughness, componentVisibility } = useUIStore();
+  const { renderMode } = useUIStore();
 
   const showPointCloud = viewMode === 'pointcloud' || viewMode === 'hybrid';
   const showSTL = viewMode === 'stl' && Object.keys(stlMeshes).length > 0;
 
-  const statorMaterialProps = { color: '#7f8c8d', metalness, roughness };
-  const coilMaterialProps   = { color: '#b87333', metalness, roughness };
-
-  const vis = componentVisibility;
-
-  if (connectedToApi) {
-    return (
-      <group>
-        <FitCameraOnLoad controlsRef={controlsRef} />
-        {showSTL && <STLCollection meshes={stlMeshes} />}
-
-        {(viewMode === 'solid' || viewMode === 'hybrid') && (
-          <>
-            <ApiStatorMesh materialProps={statorMaterialProps} visible={vis.stator} />
-            <ApiRotorMesh  materialProps={statorMaterialProps} visible={vis.rotor} />
-            <ApiShaftMesh                                      visible={vis.shaft} />
-            <ApiMagnetsMesh                                    visible={vis.magnets} />
-            <ApiCoilsMesh  materialProps={coilMaterialProps}   visible={vis.coils} />
-          </>
-        )}
-
-        {showPointCloud && <PointCloudMesh />}
-      </group>
-    );
-  }
-
   return (
     <group>
+      <FitCameraOnLoad controlsRef={controlsRef} />
       {showSTL && <STLCollection meshes={stlMeshes} />}
 
-      {(viewMode === 'solid' || viewMode === 'hybrid') && (
+      {connectedToApi && (
         <>
-          <StatorMesh  materialProps={statorMaterialProps} />
-          <RotorMesh   materialProps={statorMaterialProps} />
-          <ShaftMesh />
-          <MagnetMesh />
-          <WindingsMesh materialProps={coilMaterialProps} />
+          {/* 2D flat cross-section — for simulation/FEM */}
+          {renderMode === '2d' && <ApiMotor2dFlat />}
+
+          {/* Extruded 3D — fast Shapely+NumPy, no CadQuery */}
+          {renderMode === 'extruded' && <ApiMotorExtruded />}
         </>
       )}
 

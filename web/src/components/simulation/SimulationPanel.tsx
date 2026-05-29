@@ -18,7 +18,9 @@ import CheckCircleIcon  from '@mui/icons-material/CheckCircle';
 import ErrorIcon        from '@mui/icons-material/Error';
 import BoltIcon         from '@mui/icons-material/Bolt';
 
-const API = 'http://localhost:8000';
+// NOTE: using port 8001 (new backend with loss calculations)
+// Change back to 8000 after restarting the main backend
+const API = 'http://localhost:8001';
 
 // ── types ─────────────────────────────────────────────────────────────────────
 interface SimStatus {
@@ -44,6 +46,22 @@ interface JobStatus {
     output_dir: string;
     status?: string;
     modulus_available?: boolean;
+    // Copper losses (always available)
+    P_cu_total_W?: number;
+    R_phase_ohm?: number;
+    R_coil_ohm?: number;
+    L_turn_mm?: number;
+    I_coil_rms_A?: number;
+    // Iron / magnet losses (require PINN)
+    P_fe_stator_W?: number | null;
+    P_fe_rotor_W?: number | null;
+    P_mag_eddy_W?: number | null;
+    // Power & efficiency
+    P_mech_W?: number | null;
+    P_input_W?: number | null;
+    P_loss_total_W?: number;
+    efficiency_pct?: number | null;
+    note?: string;
   };
   error?: string;
   elapsed_s?: number;
@@ -553,24 +571,71 @@ const SimulationPanel: React.FC = () => {
         {/* Results */}
         {job?.result && (
           <Paper sx={{ bgcolor: '#0a1628', border: '1px solid #1e293b', p: 2, borderRadius: 2 }}>
-            <Typography sx={{ fontSize: 11, fontWeight: 700, color: '#475569',
-              textTransform: 'uppercase', letterSpacing: 1, mb: 1.5 }}>
-              Results
-            </Typography>
-
             {job.result.status === 'dry_run' && (
-              <Alert severity="info" sx={{ fontSize: 11, mb: 1.5 }}>
-                Dry-run mode — install NVIDIA Modulus to get real results.
-                Geometry domains and PDEs are assembled correctly.
+              <Alert severity="info" sx={{ fontSize: 10, mb: 1.5, py: 0.5,
+                '& .MuiAlert-message': { py: 0 } }}>
+                Dry-run: copper losses computed. Install NVIDIA Modulus for torque, iron &amp; magnet losses, η.
               </Alert>
             )}
 
-            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.2 }}>
-              <Row label="Torque"          value={job.result.torque_Nm.toFixed(4)}  unit="N·m" highlight={job.result.torque_Nm !== 0}/>
-              <Row label="B max"           value={job.result.B_max_T.toFixed(4)}    unit="T"/>
-              <Row label="B mean"          value={job.result.B_mean_T.toFixed(4)}   unit="T"/>
-              <Row label="Training steps"  value={job.result.training_steps.toString()}/>
-              <Row label="Output dir"      value={job.result.output_dir}/>
+            {/* ── Efficiency banner ── */}
+            {job.result.efficiency_pct != null && (
+              <Box sx={{ textAlign: 'center', py: 1.5, mb: 1.5,
+                bgcolor: '#0a2010', borderRadius: 1, border: '1px solid #14532d' }}>
+                <Typography sx={{ fontSize: 28, fontWeight: 800,
+                  color: job.result.efficiency_pct > 90 ? '#4ade80' : '#fbbf24' }}>
+                  {job.result.efficiency_pct.toFixed(1)} %
+                </Typography>
+                <Typography sx={{ fontSize: 10, color: '#16a34a' }}>efficiency η</Typography>
+              </Box>
+            )}
+
+            {/* ── Power balance ── */}
+            <Typography sx={{ fontSize: 9, fontWeight: 700, color: '#3b82f6',
+              textTransform: 'uppercase', letterSpacing: 1, mb: 0.75 }}>
+              Power Balance
+            </Typography>
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25, mb: 1.5 }}>
+              <Row label="Torque"    value={job.result.torque_Nm.toFixed(4)} unit="N·m"
+                   highlight={job.result.torque_Nm !== 0}/>
+              <Row label="P mech"   value={job.result.P_mech_W != null ? job.result.P_mech_W.toFixed(0) : '—'} unit="W"
+                   highlight={(job.result.P_mech_W ?? 0) > 0}/>
+              <Row label="P input"  value={job.result.P_input_W != null ? job.result.P_input_W.toFixed(0) : '—'} unit="W"/>
+            </Box>
+
+            {/* ── Losses breakdown ── */}
+            <Typography sx={{ fontSize: 9, fontWeight: 700, color: '#ef4444',
+              textTransform: 'uppercase', letterSpacing: 1, mb: 0.75 }}>
+              Losses
+            </Typography>
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25, mb: 1.5 }}>
+              <Row label="Cu (winding)"   value={job.result.P_cu_total_W != null ? job.result.P_cu_total_W.toFixed(1) : '—'} unit="W"/>
+              <Row label="Fe stator"      value={job.result.P_fe_stator_W != null ? job.result.P_fe_stator_W.toFixed(1) : '— (need Modulus)'} unit={job.result.P_fe_stator_W != null ? 'W' : ''}/>
+              <Row label="Fe rotor"       value={job.result.P_fe_rotor_W  != null ? job.result.P_fe_rotor_W.toFixed(1)  : '— (need Modulus)'} unit={job.result.P_fe_rotor_W  != null ? 'W' : ''}/>
+              <Row label="Mag eddy"       value={job.result.P_mag_eddy_W  != null ? job.result.P_mag_eddy_W.toFixed(1)  : '— (need Modulus)'} unit={job.result.P_mag_eddy_W  != null ? 'W' : ''}/>
+              <Row label="Total losses"   value={job.result.P_loss_total_W != null ? job.result.P_loss_total_W.toFixed(1) : '—'} unit="W"/>
+            </Box>
+
+            {/* ── Winding params ── */}
+            <Typography sx={{ fontSize: 9, fontWeight: 700, color: '#475569',
+              textTransform: 'uppercase', letterSpacing: 1, mb: 0.75 }}>
+              Winding (computed)
+            </Typography>
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25, mb: 1.5 }}>
+              <Row label="R phase"    value={job.result.R_phase_ohm != null ? (job.result.R_phase_ohm * 1000).toFixed(2) : '—'} unit="mΩ"/>
+              <Row label="L turn"     value={job.result.L_turn_mm != null ? job.result.L_turn_mm.toFixed(1) : '—'} unit="mm"/>
+              <Row label="I coil rms" value={job.result.I_coil_rms_A != null ? job.result.I_coil_rms_A.toFixed(1) : '—'} unit="A"/>
+            </Box>
+
+            {/* ── Field ── */}
+            <Typography sx={{ fontSize: 9, fontWeight: 700, color: '#475569',
+              textTransform: 'uppercase', letterSpacing: 1, mb: 0.75 }}>
+              Magnetic Field
+            </Typography>
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25 }}>
+              <Row label="B max"  value={job.result.B_max_T.toFixed(4)}  unit="T"/>
+              <Row label="B mean" value={job.result.B_mean_T.toFixed(4)} unit="T"/>
+              <Row label="Steps"  value={job.result.training_steps.toString()}/>
             </Box>
 
             <Divider sx={{ borderColor: '#1e293b', my: 1.5 }}/>

@@ -360,3 +360,6 @@ simulation:
   max_current: 85.0         # phase RMS current [Arms]
   frequency: 921.67         # electrical freq = rpm * pole_pairs / 60 = 3950*14/60
   rpm: 3950
+  phase_offset_deg: 0.0     # γ — current angle offset vs rotor d-axis [deg]
+                            # 0 = d-axis current (field weakening reference)
+                            # 90 = q-axis current (max torque for SPMSM)

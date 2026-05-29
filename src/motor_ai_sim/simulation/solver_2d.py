@@ -93,10 +93,12 @@ class SimConfig:
     """Runtime parameters for the 2-D magnetostatics PINN."""
 
     # Operating point (read from motor_config.yaml by default)
-    I_peak: float = 10.0          # Peak phase current [A]
-    frequency_hz: float = 50.0    # Electrical frequency [Hz]
-    rpm: float = 2000.0           # Rotor speed [rpm]
-    rotor_angle_deg: float = 0.0  # Fixed rotor position for static solve [°]
+    I_peak: float = 10.0           # Peak coil current [A]  = I_phase_peak / n_parallel
+    frequency_hz: float = 50.0     # Electrical frequency [Hz]
+    rpm: float = 2000.0            # Rotor speed [rpm]
+    rotor_angle_deg: float = 0.0   # Fixed rotor position for static solve [°]
+    phase_offset_deg: float = 0.0  # γ — current angle offset vs rotor d-axis [°]
+                                   #   0° = d-axis (field on), 90° = q-axis (max torque SPMSM)
 
     # Network architecture
     layer_size: int = 128          # Neurons per hidden layer
@@ -138,6 +140,7 @@ class SimConfig:
             I_peak=sim.get("max_current", 10.0),
             frequency_hz=sim.get("frequency", 50.0),
             rpm=sim.get("rpm", 2000.0),
+            phase_offset_deg=sim.get("phase_offset_deg", 0.0),
             Br_magnet=Br,
         )
 
@@ -203,14 +206,34 @@ class MagnetostaticsSolver2D:
         shaft_pde  = Magnetostatics2D(mu_r=cfg.mu_r_shaft,  J_z=0.0)
         nodes += shaft_pde.make_nodes()
 
-        # Winding (J_z from peak current, simplified 3-phase)
-        J_pos, J_neg = winding_current_density(
-            I_peak=cfg.I_peak,
-            n_turns=gp.num_slots // 3,      # one phase per third of slots
-            slot_area_m2=1e-4,              # ~1 cm² per slot (typical)
-        )
-        slot_pos_pde = Magnetostatics2D(mu_r=1.0, J_z=J_pos)
-        nodes += slot_pos_pde.make_nodes()
+        # Winding — 3-phase currents at static rotor angle + phase offset γ
+        # θ_elec = rotor_angle_deg * pole_pairs + phase_offset_deg
+        import math as _math
+        pole_pairs  = gp.num_poles // 2
+        theta_elec  = _math.radians(cfg.rotor_angle_deg * pole_pairs + cfg.phase_offset_deg)
+        I_A =  cfg.I_peak * _math.cos(theta_elec)          # phase A peak current
+        I_B =  cfg.I_peak * _math.cos(theta_elec - 2*_math.pi/3)   # phase B
+        I_C =  cfg.I_peak * _math.cos(theta_elec + 2*_math.pi/3)   # phase C
+        log.info("Phase currents: I_A=%.1f  I_B=%.1f  I_C=%.1f  A  (θ_elec=%.1f°)",
+                 I_A, I_B, I_C, _math.degrees(theta_elec))
+
+        slot_area_m2 = (gp.slot_area_m2 if hasattr(gp, 'slot_area_m2')
+                        else 1e-4)  # fallback ~1 cm²
+        n_wires = getattr(gp, 'num_wires_per_slot', gp.num_slots // 3)
+
+        J_A_pos = n_wires * I_A / slot_area_m2
+        J_A_neg = -J_A_pos
+        J_B_pos = n_wires * I_B / slot_area_m2
+        J_C_pos = n_wires * I_C / slot_area_m2
+
+        slot_A_pos_pde = Magnetostatics2D(mu_r=1.0, J_z=J_A_pos)
+        nodes += slot_A_pos_pde.make_nodes()
+        slot_A_neg_pde = Magnetostatics2D(mu_r=1.0, J_z=J_A_neg)
+        nodes += slot_A_neg_pde.make_nodes()
+        slot_B_pde = Magnetostatics2D(mu_r=1.0, J_z=J_B_pos)
+        nodes += slot_B_pde.make_nodes()
+        slot_C_pde = Magnetostatics2D(mu_r=1.0, J_z=J_C_pos)
+        nodes += slot_C_pde.make_nodes()
 
         # Permanent magnet (radial M, simplified: Mx=1, My=0 for first pole)
         pm_pde = PermanentMagnet2D(Br=cfg.Br_magnet, Mx=1.0, My=0.0)

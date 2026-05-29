@@ -33,19 +33,21 @@ _jobs: Dict[str, Dict] = {}
 
 class SimRunRequest(BaseModel):
     """Parameters for a single simulation run."""
-    max_current: float   = Field(default=10.0, description="Peak phase current [A]")
-    frequency:   float   = Field(default=50.0, description="Electrical frequency [Hz]")
-    rpm:         float   = Field(default=2000.0, description="Rotor speed [rpm]")
-    rotor_angle: float   = Field(default=0.0,  description="Static rotor angle [deg]")
-    max_steps:   int     = Field(default=10_000, ge=100, le=200_000,
-                                  description="PINN training steps")
-    device:      str     = Field(default="cpu", description="'cuda' or 'cpu'")
+    max_current:      float = Field(default=10.0,  description="Peak coil current [A]")
+    frequency:        float = Field(default=50.0,  description="Electrical frequency [Hz]")
+    rpm:              float = Field(default=2000.0, description="Rotor speed [rpm]")
+    rotor_angle:      float = Field(default=0.0,   description="Static rotor angle [deg]")
+    phase_offset_deg: float = Field(default=0.0,   description="γ — current angle offset vs d-axis [deg]")
+    max_steps:        int   = Field(default=10_000, ge=100, le=200_000,
+                                    description="PINN training steps")
+    device:           str   = Field(default="cpu", description="'cuda' or 'cpu'")
 
 
 class SimConfigPatch(BaseModel):
-    max_current: Optional[float] = None
-    frequency:   Optional[float] = None
-    rpm:         Optional[float] = None
+    max_current:      Optional[float] = None
+    frequency:        Optional[float] = None
+    rpm:              Optional[float] = None
+    phase_offset_deg: Optional[float] = None
 
 
 class JobStatus(BaseModel):
@@ -74,10 +76,11 @@ def simulation_status():
     return {
         "modulus_available": HAS_MODULUS,
         "operating_point": {
-            "max_current":  cfg.I_peak,
-            "frequency_hz": cfg.frequency_hz,
-            "rpm":          cfg.rpm,
-            "Br_magnet_T":  cfg.Br_magnet,
+            "max_current":      cfg.I_peak,
+            "frequency_hz":     cfg.frequency_hz,
+            "rpm":              cfg.rpm,
+            "Br_magnet_T":      cfg.Br_magnet,
+            "phase_offset_deg": cfg.phase_offset_deg,
         },
         "solver": "2D Magnetostatics PINN (Modulus Sym)" if HAS_MODULUS
                   else "Modulus not installed — dry-run mode",
@@ -125,12 +128,13 @@ def _run_job(job_id: str, req: SimRunRequest) -> None:
     try:
         sim_cfg = SimConfig.from_motor_config()
         # Override with request values
-        sim_cfg.I_peak       = req.max_current
-        sim_cfg.frequency_hz = req.frequency
-        sim_cfg.rpm          = req.rpm
-        sim_cfg.rotor_angle_deg = req.rotor_angle
-        sim_cfg.max_steps    = req.max_steps
-        sim_cfg.device       = req.device
+        sim_cfg.I_peak            = req.max_current
+        sim_cfg.frequency_hz      = req.frequency
+        sim_cfg.rpm               = req.rpm
+        sim_cfg.rotor_angle_deg   = req.rotor_angle
+        sim_cfg.phase_offset_deg  = req.phase_offset_deg
+        sim_cfg.max_steps         = req.max_steps
+        sim_cfg.device            = req.device
 
         geo_params = params_from_config()
         solver = MagnetostaticsSolver2D(sim_cfg, geo_params)

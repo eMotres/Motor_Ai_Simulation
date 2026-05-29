@@ -100,17 +100,25 @@ const SimulationPanel: React.FC = () => {
   const coggingPeriod_deg = 360 / lcm(numSlots, numPoles);
 
   // ── form state (current = I_phase_rms) ───────────────────────────────────
-  const [current,    setCurrent]    = useState(85.0);
-  const [frequency,  setFrequency]  = useState(921.67);
-  const [rpm,        setRpm]        = useState(3950.0);
-  const [rotorAngle, setRotorAngle] = useState(0.0);
-  const [maxSteps,   setMaxSteps]   = useState(10000);
-  const [device,     setDevice]     = useState<'cpu' | 'cuda'>('cpu');
+  const [current,       setCurrent]       = useState(85.0);
+  const [frequency,     setFrequency]     = useState(921.67);
+  const [rpm,           setRpm]           = useState(3950.0);
+  const [rotorAngle,    setRotorAngle]    = useState(0.0);
+  const [phaseOffset,   setPhaseOffset]   = useState(0.0);   // γ [deg]
+  const [maxSteps,      setMaxSteps]      = useState(10000);
+  const [device,        setDevice]        = useState<'cpu' | 'cuda'>('cpu');
 
   // ── derived winding values ────────────────────────────────────────────────
   const I_coil_rms  = current / connDef.nP;                  // Arms per coil
   const I_coil_peak = I_coil_rms * Math.sqrt(2);             // A peak per coil
   const ampTurns    = nWiresPerSlot * I_coil_rms;            // A·turns per slot
+
+  // ── derived phase currents (for display) ─────────────────────────────────
+  const thetaElec_deg = rotorAngle * polePairs + phaseOffset;
+  const thetaElec_rad = thetaElec_deg * Math.PI / 180;
+  const I_A = I_coil_peak * Math.cos(thetaElec_rad);
+  const I_B = I_coil_peak * Math.cos(thetaElec_rad - 2 * Math.PI / 3);
+  const I_C = I_coil_peak * Math.cos(thetaElec_rad + 2 * Math.PI / 3);
 
   // ── job state ─────────────────────────────────────────────────────────────
   const [jobId,   setJobId]   = useState<string | null>(null);
@@ -171,12 +179,13 @@ const SimulationPanel: React.FC = () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          max_current:  parseFloat(I_coil_peak.toFixed(2)),  // peak A per coil
-          frequency:    frequency,
-          rpm:          rpm,
-          rotor_angle:  rotorAngle,
-          max_steps:    maxSteps,
-          device:       device,
+          max_current:      parseFloat(I_coil_peak.toFixed(2)),  // peak A per coil
+          frequency:        frequency,
+          rpm:              rpm,
+          rotor_angle:      rotorAngle,
+          phase_offset_deg: phaseOffset,
+          max_steps:        maxSteps,
+          device:           device,
         }),
       });
       const d: JobStatus = await r.json();
@@ -319,6 +328,50 @@ const SimulationPanel: React.FC = () => {
               disabled={isRunning}
               FormHelperTextProps={{ sx: { fontSize: 10, color: '#475569', mx: 0 } }}
             />
+
+            {/* Phase offset γ */}
+            <TextField
+              label="Phase Offset γ (°)"
+              type="number" size="small" fullWidth
+              value={phaseOffset}
+              onChange={e => setPhaseOffset(+e.target.value)}
+              inputProps={{ step: 5, min: -180, max: 180 }}
+              helperText="0°=d-axis  90°=q-axis (max torque SPMSM)"
+              disabled={isRunning}
+              FormHelperTextProps={{ sx: { fontSize: 10, color: '#475569', mx: 0 } }}
+            />
+
+            {/* Instantaneous phase currents */}
+            <Box sx={{ bgcolor: '#0a1628', borderRadius: 1, p: 1,
+              border: '1px solid #1e293b' }}>
+              <Typography sx={{ fontSize: 9, color: '#475569', textTransform: 'uppercase',
+                letterSpacing: '0.08em', mb: 0.5 }}>
+                Slot currents at θ={rotorAngle}° + γ={phaseOffset}° (peak)
+              </Typography>
+              {[
+                { ph: 'A', val: I_A, color: '#f87171' },
+                { ph: 'B', val: I_B, color: '#4ade80' },
+                { ph: 'C', val: I_C, color: '#60a5fa' },
+              ].map(r => (
+                <Box key={r.ph} sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 0.2 }}>
+                  <Typography sx={{ fontSize: 10, color: r.color, fontWeight: 700, width: 16 }}>
+                    {r.ph}
+                  </Typography>
+                  {/* bar */}
+                  <Box sx={{ flex: 1, height: 6, bgcolor: '#1e293b', borderRadius: 1, overflow: 'hidden' }}>
+                    <Box sx={{
+                      height: '100%', borderRadius: 1,
+                      width: `${Math.abs(r.val) / I_coil_peak * 100}%`,
+                      bgcolor: r.val >= 0 ? r.color : '#475569',
+                      ml: r.val < 0 ? `${(1 - Math.abs(r.val) / I_coil_peak) * 100}%` : 0,
+                    }}/>
+                  </Box>
+                  <Typography sx={{ fontSize: 10, color: '#94a3b8', fontVariantNumeric: 'tabular-nums', width: 52, textAlign: 'right' }}>
+                    {r.val >= 0 ? '+' : ''}{r.val.toFixed(1)} A
+                  </Typography>
+                </Box>
+              ))}
+            </Box>
           </Box>
         </Box>
 

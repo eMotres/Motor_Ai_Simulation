@@ -67,10 +67,25 @@ const Row: React.FC<{ label: string; value: string; unit?: string; highlight?: b
 // ─────────────────────────────────────────────────────────────────────────────
 // Main component
 // ─────────────────────────────────────────────────────────────────────────────
+// ── helpers ───────────────────────────────────────────────────────────────────
+function gcd(a: number, b: number): number { return b === 0 ? a : gcd(b, a % b); }
+function lcm(a: number, b: number): number { return (a * b) / gcd(a, b); }
+
 const SimulationPanel: React.FC = () => {
   // ── server status ─────────────────────────────────────────────────────────
   const [srvStatus, setSrvStatus] = useState<SimStatus | null>(null);
   const [srvErr, setSrvErr]       = useState<string | null>(null);
+
+  // ── geometry (for period calculation) ────────────────────────────────────
+  const [numPoles, setNumPoles] = useState<number>(28);
+  const [numSlots, setNumSlots] = useState<number>(24);
+
+  // ── derived periodicity ───────────────────────────────────────────────────
+  // Electrical period = one pole pair in mechanical degrees
+  const polePairs      = Math.round(numPoles / 2);
+  const elecPeriod_deg = 360 / polePairs;                         // e.g. 25.71°
+  // Cogging period = smallest repeating unit of T(θ)
+  const coggingPeriod_deg = 360 / lcm(numSlots, numPoles);        // e.g. 2.14°
 
   // ── form state ────────────────────────────────────────────────────────────
   const [current,     setCurrent]     = useState(10.0);
@@ -86,7 +101,7 @@ const SimulationPanel: React.FC = () => {
   const [polling,  setPolling]  = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // ── load server status ────────────────────────────────────────────────────
+  // ── load server status + geometry ─────────────────────────────────────────
   useEffect(() => {
     fetch(`${API}/api/simulation/status`)
       .then(r => r.json())
@@ -99,6 +114,14 @@ const SimulationPanel: React.FC = () => {
         }
       })
       .catch(e => setSrvErr(String(e)));
+
+    fetch(`${API}/api/geometry/summary`)
+      .then(r => r.json())
+      .then(d => {
+        if (d.num_poles) setNumPoles(d.num_poles);
+        if (d.num_slots) setNumSlots(d.num_slots);
+      })
+      .catch(() => {});
   }, []);
 
   // ── polling ───────────────────────────────────────────────────────────────
@@ -206,9 +229,20 @@ const SimulationPanel: React.FC = () => {
             <TextField label="Speed (rpm)" type="number" size="small" fullWidth
               value={rpm} onChange={e => setRpm(+e.target.value)}
               inputProps={{ step: 100, min: 0 }} disabled={isRunning}/>
-            <TextField label="Rotor Angle (°)" type="number" size="small" fullWidth
-              value={rotorAngle} onChange={e => setRotorAngle(+e.target.value)}
-              inputProps={{ step: 1, min: 0, max: 360 }} disabled={isRunning}/>
+            <TextField
+              label={`Rotor Angle (°)  — period: ${elecPeriod_deg.toFixed(2)}°`}
+              type="number" size="small" fullWidth
+              value={rotorAngle}
+              onChange={e => {
+                const v = +e.target.value;
+                // wrap into [0, elecPeriod_deg)
+                setRotorAngle(parseFloat((((v % elecPeriod_deg) + elecPeriod_deg) % elecPeriod_deg).toFixed(3)));
+              }}
+              inputProps={{ step: parseFloat((elecPeriod_deg / 12).toFixed(2)), min: 0, max: elecPeriod_deg }}
+              helperText={`0 … ${elecPeriod_deg.toFixed(2)}° = 360°/${polePairs} pole pairs`}
+              disabled={isRunning}
+              FormHelperTextProps={{ sx: { fontSize: 10, color: '#475569', mx: 0 } }}
+            />
           </Box>
         </Box>
 
@@ -285,6 +319,36 @@ const SimulationPanel: React.FC = () => {
               B_y = −∂A_z/∂x
             </Box>
           </Box>
+
+          <Divider sx={{ borderColor: '#1e293b', my: 1.5 }}/>
+
+          {/* Periodicity info */}
+          <Typography sx={{ fontSize: 11, fontWeight: 700, color: '#3b82f6', mb: 1,
+            textTransform: 'uppercase', letterSpacing: 1 }}>
+            Rotor Periodicity
+          </Typography>
+          <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1, mb: 1.5 }}>
+            {[
+              { label: 'Pole pairs',       value: polePairs.toString(),                    sub: `${numPoles} poles / 2` },
+              { label: 'Electrical period', value: `${elecPeriod_deg.toFixed(2)}°`,        sub: `360° / ${polePairs}` },
+              { label: 'Cogging period',    value: `${coggingPeriod_deg.toFixed(3)}°`,     sub: `360° / LCM(${numSlots},${numPoles})` },
+              { label: 'Cogging per elec', value: Math.round(elecPeriod_deg / coggingPeriod_deg).toString(), sub: 'samples for full curve' },
+            ].map(item => (
+              <Box key={item.label} sx={{ bgcolor: '#0f1e35', borderRadius: 1, p: 1,
+                border: '1px solid #1e293b' }}>
+                <Typography sx={{ fontSize: 9, color: '#475569', textTransform: 'uppercase',
+                  letterSpacing: '0.08em' }}>{item.label}</Typography>
+                <Typography sx={{ fontSize: 14, fontWeight: 700, color: '#93c5fd',
+                  fontVariantNumeric: 'tabular-nums' }}>{item.value}</Typography>
+                <Typography sx={{ fontSize: 9, color: '#334155' }}>{item.sub}</Typography>
+              </Box>
+            ))}
+          </Box>
+          <Alert severity="info" sx={{ fontSize: 10, py: 0.5, mb: 1.5,
+            '& .MuiAlert-message': { py: 0 } }}>
+            Full T(θ) curve needs {Math.round(elecPeriod_deg / coggingPeriod_deg)} points × one simulation each,
+            or one parametric PINN with θ as input.
+          </Alert>
 
           <Divider sx={{ borderColor: '#1e293b', my: 1.5 }}/>
 

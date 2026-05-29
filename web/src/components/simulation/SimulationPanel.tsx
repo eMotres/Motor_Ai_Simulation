@@ -71,34 +71,51 @@ const Row: React.FC<{ label: string; value: string; unit?: string; highlight?: b
 function gcd(a: number, b: number): number { return b === 0 ? a : gcd(b, a % b); }
 function lcm(a: number, b: number): number { return (a * b) / gcd(a, b); }
 
+// ── winding connection definitions ───────────────────────────────────────────
+type ConnectionKey = '4S' | '2P2S' | '4P';
+const CONNECTIONS: { key: ConnectionKey; label: string; nP: number; nS: number; desc: string }[] = [
+  { key: '4S',   label: '4S',   nP: 1, nS: 4, desc: '4 series — max voltage' },
+  { key: '2P2S', label: '2P·2S', nP: 2, nS: 2, desc: '2 parallel × 2 series' },
+  { key: '4P',   label: '4P',   nP: 4, nS: 1, desc: '4 parallel — max current' },
+];
+
 const SimulationPanel: React.FC = () => {
   // ── server status ─────────────────────────────────────────────────────────
   const [srvStatus, setSrvStatus] = useState<SimStatus | null>(null);
   const [srvErr, setSrvErr]       = useState<string | null>(null);
 
-  // ── geometry (for period calculation) ────────────────────────────────────
-  const [numPoles, setNumPoles] = useState<number>(28);
-  const [numSlots, setNumSlots] = useState<number>(24);
+  // ── geometry (for period + winding calc) ─────────────────────────────────
+  const [numPoles,      setNumPoles]      = useState<number>(28);
+  const [numSlots,      setNumSlots]      = useState<number>(24);
+  const [nWiresPerSlot, setNWiresPerSlot] = useState<number>(14);
+  const [nCoilsPerPhase, setNCoilsPerPhase] = useState<number>(4);
+
+  // ── winding connection ────────────────────────────────────────────────────
+  const [connection, setConnection] = useState<ConnectionKey>('2P2S');
+  const connDef = CONNECTIONS.find(c => c.key === connection)!;
 
   // ── derived periodicity ───────────────────────────────────────────────────
-  // Electrical period = one pole pair in mechanical degrees
-  const polePairs      = Math.round(numPoles / 2);
-  const elecPeriod_deg = 360 / polePairs;                         // e.g. 25.71°
-  // Cogging period = smallest repeating unit of T(θ)
-  const coggingPeriod_deg = 360 / lcm(numSlots, numPoles);        // e.g. 2.14°
+  const polePairs         = Math.round(numPoles / 2);
+  const elecPeriod_deg    = 360 / polePairs;
+  const coggingPeriod_deg = 360 / lcm(numSlots, numPoles);
 
-  // ── form state ────────────────────────────────────────────────────────────
-  const [current,     setCurrent]     = useState(10.0);
-  const [frequency,   setFrequency]   = useState(50.0);
-  const [rpm,         setRpm]         = useState(2000.0);
-  const [rotorAngle,  setRotorAngle]  = useState(0.0);
-  const [maxSteps,    setMaxSteps]    = useState(10000);
-  const [device,      setDevice]      = useState<'cpu' | 'cuda'>('cpu');
+  // ── form state (current = I_phase_rms) ───────────────────────────────────
+  const [current,    setCurrent]    = useState(85.0);
+  const [frequency,  setFrequency]  = useState(921.67);
+  const [rpm,        setRpm]        = useState(3950.0);
+  const [rotorAngle, setRotorAngle] = useState(0.0);
+  const [maxSteps,   setMaxSteps]   = useState(10000);
+  const [device,     setDevice]     = useState<'cpu' | 'cuda'>('cpu');
+
+  // ── derived winding values ────────────────────────────────────────────────
+  const I_coil_rms  = current / connDef.nP;                  // Arms per coil
+  const I_coil_peak = I_coil_rms * Math.sqrt(2);             // A peak per coil
+  const ampTurns    = nWiresPerSlot * I_coil_rms;            // A·turns per slot
 
   // ── job state ─────────────────────────────────────────────────────────────
-  const [jobId,    setJobId]    = useState<string | null>(null);
-  const [job,      setJob]      = useState<JobStatus | null>(null);
-  const [polling,  setPolling]  = useState(false);
+  const [jobId,   setJobId]   = useState<string | null>(null);
+  const [job,     setJob]     = useState<JobStatus | null>(null);
+  const [polling, setPolling] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // ── load server status + geometry ─────────────────────────────────────────
@@ -108,18 +125,21 @@ const SimulationPanel: React.FC = () => {
       .then(d => {
         setSrvStatus(d);
         if (d.operating_point) {
-          setCurrent(d.operating_point.max_current ?? 10);
-          setFrequency(d.operating_point.frequency_hz ?? 50);
-          setRpm(d.operating_point.rpm ?? 2000);
+          setCurrent(d.operating_point.max_current ?? 85);
+          setFrequency(d.operating_point.frequency_hz ?? 921.67);
+          setRpm(d.operating_point.rpm ?? 3950);
         }
       })
       .catch(e => setSrvErr(String(e)));
 
-    fetch(`${API}/api/geometry/summary`)
+    // Get geometry for periodicity + winding
+    fetch(`${API}/api/config`)
       .then(r => r.json())
       .then(d => {
-        if (d.num_poles) setNumPoles(d.num_poles);
-        if (d.num_slots) setNumSlots(d.num_slots);
+        const g = d.geometry ?? {};
+        if (g.num_poles)        setNumPoles(g.num_poles);
+        if (g.num_slots)        setNumSlots(g.num_slots);
+        if (g.num_wires_per_slot) setNWiresPerSlot(g.num_wires_per_slot);
       })
       .catch(() => {});
   }, []);
@@ -151,7 +171,7 @@ const SimulationPanel: React.FC = () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          max_current:  current,
+          max_current:  parseFloat(I_coil_peak.toFixed(2)),  // peak A per coil
           frequency:    frequency,
           rpm:          rpm,
           rotor_angle:  rotorAngle,
@@ -212,6 +232,60 @@ const SimulationPanel: React.FC = () => {
 
         <Divider sx={{ borderColor: '#1e293b' }}/>
 
+        {/* Winding connection */}
+        <Box>
+          <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, color: '#475569',
+            letterSpacing: '0.1em', textTransform: 'uppercase', mb: 1 }}>
+            Winding Connection
+          </Typography>
+          <Typography sx={{ fontSize: 10, color: '#334155', mb: 1.2 }}>
+            {nCoilsPerPhase} coils/phase · {nWiresPerSlot} wires/slot
+          </Typography>
+
+          {/* Connection buttons */}
+          <Box sx={{ display: 'flex', gap: 0.75, mb: 1.5 }}>
+            {CONNECTIONS.map(c => (
+              <Tooltip key={c.key} title={c.desc} placement="top">
+                <Button
+                  size="small"
+                  variant={connection === c.key ? 'contained' : 'outlined'}
+                  onClick={() => setConnection(c.key)}
+                  disabled={isRunning}
+                  sx={{ flex: 1, fontSize: 11, fontWeight: 700, py: 0.5,
+                    textTransform: 'none',
+                    ...(connection === c.key ? {} : { color: '#64748b', borderColor: '#334155' })
+                  }}
+                >
+                  {c.label}
+                </Button>
+              </Tooltip>
+            ))}
+          </Box>
+
+          {/* Derived values */}
+          <Box sx={{ bgcolor: '#0a1628', borderRadius: 1, p: 1.2,
+            border: '1px solid #1e293b', display: 'flex', flexDirection: 'column', gap: 0.4 }}>
+            {[
+              { label: 'Parallel branches',  value: `${connDef.nP}` },
+              { label: 'Series coils/branch', value: `${connDef.nS}` },
+              { label: 'I coil (RMS)',        value: `${I_coil_rms.toFixed(1)} A` },
+              { label: 'I coil (peak) →sim',  value: `${I_coil_peak.toFixed(1)} A`, hi: true },
+              { label: 'A·turns / slot',      value: `${ampTurns.toFixed(0)} At` },
+            ].map(row => (
+              <Box key={row.label} sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                <Typography sx={{ fontSize: 10, color: '#475569' }}>{row.label}</Typography>
+                <Typography sx={{ fontSize: 11, fontWeight: 600,
+                  color: (row as any).hi ? '#4ade80' : '#94a3b8',
+                  fontVariantNumeric: 'tabular-nums' }}>
+                  {row.value}
+                </Typography>
+              </Box>
+            ))}
+          </Box>
+        </Box>
+
+        <Divider sx={{ borderColor: '#1e293b' }}/>
+
         {/* Operating point */}
         <Box>
           <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, color: '#475569',
@@ -220,9 +294,11 @@ const SimulationPanel: React.FC = () => {
           </Typography>
 
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-            <TextField label="Peak Current (A)" type="number" size="small" fullWidth
+            <TextField label="I phase RMS (Arms)" type="number" size="small" fullWidth
               value={current} onChange={e => setCurrent(+e.target.value)}
-              inputProps={{ step: 1, min: 0, max: 500 }} disabled={isRunning}/>
+              inputProps={{ step: 5, min: 0, max: 500 }} disabled={isRunning}
+              helperText={`I coil peak = ${I_coil_peak.toFixed(1)} A → sent to solver`}
+              FormHelperTextProps={{ sx: { fontSize: 10, color: '#3b82f6', mx: 0 } }}/>
             <TextField label="Frequency (Hz)" type="number" size="small" fullWidth
               value={frequency} onChange={e => setFrequency(+e.target.value)}
               inputProps={{ step: 10, min: 1, max: 2000 }} disabled={isRunning}/>

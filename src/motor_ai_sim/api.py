@@ -252,6 +252,110 @@ def get_full_config():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── Winding connection ────────────────────────────────────────────────────────
+
+_VALID_CONNECTIONS = {"4S", "2P2S", "4P"}
+
+class WindingConfigPatch(BaseModel):
+    connection:       Optional[str] = None  # "4S" | "2P2S" | "4P"
+    n_coils_per_phase: Optional[int] = None
+
+
+@app.get("/api/winding/config")
+def get_winding_config():
+    """Return current winding connection config."""
+    cfg = get_config()
+    w = cfg.get("winding", {})
+    n_parallel = w.get("n_parallel", 1)
+    n_series   = w.get("n_series", 4)
+    n_coils    = w.get("n_coils_per_phase", 4)
+    # Derived: I_coil = I_phase / n_parallel
+    sim        = cfg.get("simulation", {})
+    I_phase    = sim.get("max_current", 85.0)
+    geo        = cfg.get("geometry", {})
+    n_wires    = geo.get("num_wires_per_slot", 14)
+    I_coil     = I_phase / n_parallel
+    amp_turns  = n_wires * I_coil
+    return {
+        "connection":         w.get("connection", "2P2S"),
+        "n_coils_per_phase":  n_coils,
+        "n_parallel":         n_parallel,
+        "n_series":           n_series,
+        "I_phase_Arms":       I_phase,
+        "I_coil_Arms":        round(I_coil, 2),
+        "amp_turns_per_slot": round(amp_turns, 1),
+    }
+
+
+def _parse_connection(conn: str):
+    """Parse '2P2S' → (n_parallel=2, n_series=2)."""
+    import re as _re
+    m = _re.match(r'^(\d+)P(\d+)S$', conn)
+    if m:
+        return int(m.group(1)), int(m.group(2))
+    if conn == "4S":
+        return 1, 4
+    if conn == "4P":
+        return 4, 1
+    raise ValueError(f"Unknown connection '{conn}'")
+
+
+@app.patch("/api/winding/config")
+def update_winding_config(patch: WindingConfigPatch):
+    """Update winding connection in motor_config.yaml."""
+    updates: dict = {}
+    if patch.connection is not None:
+        if patch.connection not in _VALID_CONNECTIONS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid connection '{patch.connection}'. Valid: {sorted(_VALID_CONNECTIONS)}"
+            )
+        n_par, n_ser = _parse_connection(patch.connection)
+        updates["connection"] = f'"{patch.connection}"'
+        updates["n_parallel"]  = str(n_par)
+        updates["n_series"]    = str(n_ser)
+    if patch.n_coils_per_phase is not None:
+        updates["n_coils_per_phase"] = str(patch.n_coils_per_phase)
+
+    if not updates:
+        raise HTTPException(status_code=400, detail="No fields to update")
+
+    content = _CONFIG_PATH.read_text(encoding="utf-8")
+    lines   = content.splitlines(keepends=True)
+    in_winding = False
+    result     = []
+    replaced   = set()
+
+    for line in lines:
+        if re.match(r'^winding\s*:', line):
+            in_winding = True
+        elif in_winding and re.match(r'^\S', line):
+            in_winding = False
+
+        if in_winding:
+            for key, val in updates.items():
+                m = re.match(rf'^(\s+{re.escape(key)}\s*:\s*)(.*)$', line)
+                if m:
+                    line = m.group(1) + val + '\n'
+                    replaced.add(key)
+                    break
+
+        result.append(line)
+
+    missing = set(updates) - replaced
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Keys not found in winding: block: {missing}"
+        )
+
+    _CONFIG_PATH.write_text(''.join(result), encoding="utf-8")
+    clear_config_cache()
+    return {"status": "ok", "updated": {k: v.strip('"') for k, v in updates.items()}}
+
+
+# ── Mesh ──────────────────────────────────────────────────────────────────────
+
 class MeshConfigPatch(BaseModel):
     n_radial:       Optional[int]   = None
     n_angular:      Optional[int]   = None

@@ -1,34 +1,34 @@
 geometry:
-  stator_diameter: 150
+  stator_diameter: 150.0
   slot_height: 14
-  core_thickness: 3.8
+  core_thickness: 4.2
   num_seg: 4
   num_slots_per_segment: 6
   num_poles_per_segment: 7
-  stator_width: 30
+  stator_width: 35
   air_gap: 0.5
-  tooth_width: 9
-  tooth2_width: 4
-  cut_width: 3
+  tooth_width: 9.2
+  tooth2_width: 5.5
+  cut_width: 6
   insulation_thickness: 0.15
-  wire_width: 4
-  wire_height: 1
+  wire_width: 5
+  wire_height: 0.6
   wire_spacing_x: 0.1
   wire_spacing_y: 0.13
-  num_wires_per_slot: 8
+  num_wires_per_slot: 14
   slot_hs: 0.2
-  magnet_height: 13.8
+  magnet_height: 16
   rotor_house_height: 1.2
   shaft_height: 3
   magnet_fill_down: 0.9
-  magnet_fill_up: 0.46
-  magnet_fill_radius: 2
-  magnet_up_gap: 0.5
+  magnet_fill_up: 0.44
+  magnet_fill_radius: 2.5
+  magnet_up_gap: 2
   rotor_hole: 0.6
-  magnet_down_height: 2
-  stator_fillet_r: 2.5
-  stator_fillet_r1: 0.9
-  motor_length: 30
+  magnet_down_height: 1.8
+  stator_fillet_r: 3.5
+  stator_fillet_r1: 1.2
+  motor_length: 35
 derived_params:
   stator_outer_radius: stator_diameter / 2
   stator_inner_radius: stator_outer_radius - core_thickness - slot_height
@@ -337,9 +337,9 @@ parameter_groups:
     label: Shaft Parameters
     order: 5
 mesh:
-  n_radial: 10
-  n_angular: 64
-  n_angular_slots: 8
+  n_radial: 11
+  n_angular: 104
+  n_angular_slots: 20
 materials:
   stator_core: 20SW1200
   slot: copper
@@ -348,7 +348,15 @@ materials:
   magnet: F45SH_120C
   shaft: Aluminium_6061
 custom_materials: {}
+winding:
+  n_coils_per_phase: 4      # total coils per phase (24 slots / 3 phases / 2 sides = 4)
+  connection: "2P2S"        # 2 parallel x 2 series — first simulation
+  n_parallel: 2             # parallel branches per phase
+  n_series: 2               # series coils per branch
+  # I_coil = I_phase / n_parallel  →  85 / 2 = 42.5 Arms per branch
+  # Amp-turns per slot = n_wires_per_slot * I_coil = 14 * 42.5 = 595 A·turns
+
 simulation:
-  max_current: 10.0
-  frequency: 50.0
-  rpm: 2000
+  max_current: 85.0         # phase RMS current [Arms]
+  frequency: 921.67         # electrical freq = rpm * pole_pairs / 60 = 3950*14/60
+  rpm: 3950

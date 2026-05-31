@@ -662,21 +662,11 @@ const SimulationPanel: React.FC = () => {
           </Box>
         )}
 
-        {/* ── Waveform charts — always visible ── */}
-        <SimulationCharts
-          elecPeriod_deg={elecPeriod_deg}
-          coggingPeriod_deg={coggingPeriod_deg}
-          polePairs={polePairs}
-          I_coil_peak={I_coil_peak}
-          nParallel={connDef.nP}
-          phaseOffset_deg={phaseOffset}
-          R_phase={job?.result?.R_phase_ohm ?? 0.0132}
-          rpm={rpm}
-          frequency_hz={frequency}
-          L_phase_est_H={0.0002}
-        />
+        {/* Analytical SimulationCharts (currents / voltages / losses) removed —
+            the FEM transient panel inside PhysicsDashboard below shows all
+            three waveforms computed from the actual mesh solve. */}
 
-        {/* ── Physics dashboard — analytical + Ansys-comparable ── */}
+        {/* ── Physics dashboard — analytical + FEM-comparable ── */}
         <PhysicsDashboard
           rotorAngle_deg={rotorAngle}
           gamma_deg={phaseOffset}

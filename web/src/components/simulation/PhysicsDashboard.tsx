@@ -678,16 +678,10 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
         </Box>
       </Paper>
 
-      {/* ── Loss Waveforms — 60 points over electrical period ── */}
-      <Paper sx={CHART_STYLE}>
-        <LossWaveformChart
-          gamma_deg={gamma_deg}
-          n_points={60}
-          pinnLosses={pinnLosses}
-        />
-      </Paper>
+      {/* Analytical loss waveform removed — TransientCharts above already
+          shows the FEM-computed losses vs time. */}
 
-      {/* ── Magnet segmentation guidance ── */}
+{/* ── Magnet segmentation guidance ── */}
       <Paper sx={{ ...CHART_STYLE, borderColor: '#7c3aed' }}>
         <SectionLabel title="Magnet Eddy — Segmentation Impact"
           note="classical formula P ~ d²"

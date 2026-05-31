@@ -2033,12 +2033,14 @@ def fem_solve_for_sim(
             elif phase == 'B': psi_B += psi_slot
             elif phase == 'C': psi_C += psi_slot
         # ⟨A_z⟩ has units Wb/m; multiply by L_stack (m) → Wb per turn;
-        # multiply by N_turns/slot → phase flux linkage (Wb).
+        # multiply by N_turns/slot → phase flux linkage (Wb).  Sector
+        # multiplier is NOT applied here — see /fem_transient which
+        # post-processes ψ_A into a balanced 3-phase set by ±120° time
+        # shift, which folds in the sector replication implicitly.
         scale = p.stack_length * float(n_wires)
-        sym = (n_sectors if n_sectors > 1 else 1)
-        psi_A *= scale * sym
-        psi_B *= scale * sym
-        psi_C *= scale * sym
+        psi_A *= scale
+        psi_B *= scale
+        psi_C *= scale
 
     # ── Losses ────────────────────────────────────────────────────────────
     # Steinmetz-style iron loss density:  P/V  =  k_iron · f^α · B^β   [W/m³]

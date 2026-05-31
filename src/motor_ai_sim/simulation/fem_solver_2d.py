@@ -1149,12 +1149,33 @@ def _apply_anti_periodic(K, f, masters: np.ndarray, slaves: np.ndarray,
     return K_red, f_red, T
 
 
+def _saturated_mu_r(mu_r_init: float, B_mag: float, B_sat: float = 1.8,
+                     mu_r_min: float = 5.0) -> float:
+    """Effective μ_r as a function of |B| — Fröhlich-style smooth saturation.
+
+    Below B_sat the material behaves linearly (μ_r ≈ mu_r_init).  Above B_sat,
+    μ_r decays steeply toward μ_r_min so the iron can no longer act as a
+    flux short-circuit.  μ_r_min ≈ 5 is the post-saturation tangential
+    permeability of typical electrical steel (M19, M270-35A etc) — once the
+    domains are aligned, the iron behaves nearly like air.
+    """
+    if B_mag <= B_sat:
+        return mu_r_init
+    # Steeper roll-off: μ_r → μ_r_init · (B_sat/B_mag)^k.  k=3 collapses the
+    # apparent permeability fast enough that B in the back-iron doesn't
+    # exceed ~2 T even at the deeply-saturated steady state.
+    ratio = (B_sat / max(B_mag, 1e-9)) ** 3
+    mu_eff = mu_r_init * ratio + mu_r_min * (1 - ratio)
+    return max(mu_eff, mu_r_min)
+
+
 def solve_magnetostatics(
     mesh,
     cell_tags: np.ndarray,
     materials: Dict[int, FEMMaterial],
     n_sectors: int = 1,
     pole_pairs_per_sector_is_half_integer: bool = True,
+    nonlinear_iterations: int = 8,
 ) -> np.ndarray:
     """Linear 2-D magnetostatics solve.
 
@@ -1196,46 +1217,98 @@ def solve_magnetostatics(
     t0 = _t.time()
     n = basis.N
     from scipy.sparse import csr_matrix
-    K_total = csr_matrix((n, n))
-    f_total = np.zeros(n)
 
-    # Unique cell tags actually present in the mesh
+    # Pre-compute the per-tag stiffness factors so the Picard iteration can
+    # cheaply re-scale them when μ_r is updated.
     unique_tags = np.unique(cell_tags)
+    tag_K: Dict[int, "csr_matrix"] = {}
+    tag_mat: Dict[int, FEMMaterial] = {}
+    tag_cells: Dict[int, np.ndarray] = {}
+
+    f_const = np.zeros(n)    # constant source: J_z + M-induced
     for tag in unique_tags:
         mat = materials.get(int(tag))
         if mat is None:
             continue
-        cells_mask = (cell_tags == tag)
-        cells_idx  = np.where(cells_mask)[0]
+        cells_idx = np.where(cell_tags == tag)[0]
         if cells_idx.size == 0:
             continue
         sub_basis = Basis(mesh, ElementTriP1(), elements=cells_idx)
-
-        nu = 1.0 / (MU0 * mat.mu_r)
-        K_dom = asm(stiffness, sub_basis) * nu
-        K_total = K_total + K_dom
-
+        tag_K[int(tag)]    = asm(stiffness, sub_basis)
+        tag_mat[int(tag)]  = mat
+        tag_cells[int(tag)] = cells_idx
         if mat.J_z != 0.0:
-            f_total += asm(rhs_unit, sub_basis) * mat.J_z
+            f_const += asm(rhs_unit, sub_basis) * mat.J_z
         if mat.Mx != 0.0:
-            f_total += asm(rhs_dvdy, sub_basis) * mat.Mx
+            f_const += asm(rhs_dvdy, sub_basis) * mat.Mx
         if mat.My != 0.0:
-            f_total -= asm(rhs_dvdx, sub_basis) * mat.My
+            f_const -= asm(rhs_dvdx, sub_basis) * mat.My
 
-    # Dirichlet A_z = 0 on outer boundary nodes
+    # Iron-domain tags that should saturate.  Magnets, air etc keep their
+    # linear μ_r through the iteration.
+    SATURABLE_TAGS = {DOM_STATOR, DOM_ROTOR, DOM_SHAFT}
+    mu_r_eff: Dict[int, float] = {tag: tag_mat[tag].mu_r for tag in tag_mat}
+
+    def _assemble_K() -> "csr_matrix":
+        K = csr_matrix((n, n))
+        for tag, K_dom in tag_K.items():
+            K = K + K_dom * (1.0 / (MU0 * mu_r_eff[tag]))
+        return K
+
+    f_total = f_const                                       # for compatibility
+
+    # ── Picard iteration for iron saturation ─────────────────────────────
+    # Linear iron (μ_r=5000 everywhere) lets the rotor back-iron act as a
+    # short-circuit and absorb all the magnet flux instead of pushing it
+    # through the air gap into the stator.  Real iron saturates at ~1.8 T,
+    # so we iterate: solve linearly → check mean |B| in each iron domain →
+    # roll μ_r down for over-saturated domains → resolve.  3–4 iterations
+    # converge to a self-consistent saturated picture.
+    A = np.zeros(n)
     outer_nodes = _outer_boundary_nodes(mesh)
-    K_csr = K_total.tocsr()
+
+    for it in range(max(1, nonlinear_iterations)):
+        K_csr = _assemble_K().tocsr()
+        A = _solve_with_bc(K_csr, f_const, outer_nodes, mesh, n_sectors,
+                            pole_pairs_per_sector_is_half_integer)
+        # Compute |B| per triangle, then mean |B| in each saturable domain.
+        Bx_tri, By_tri = _per_triangle_B(mesh, A)
+        Bmag_tri = np.sqrt(Bx_tri ** 2 + By_tri ** 2)
+        changed = False
+        for tag in SATURABLE_TAGS:
+            if tag not in tag_cells:
+                continue
+            idx = tag_cells[tag]
+            B_p95 = float(np.percentile(Bmag_tri[idx], 90)) if idx.size else 0.0
+            mu_r_init = tag_mat[tag].mu_r
+            new_mu = _saturated_mu_r(mu_r_init, B_p95)
+            # Smooth update (avoids oscillation)
+            new_mu = 0.5 * (mu_r_eff[tag] + new_mu)
+            if abs(new_mu - mu_r_eff[tag]) / max(mu_r_eff[tag], 1.0) > 0.02:
+                changed = True
+            log.info("FEM iter %d: tag=%d B_p90=%.2fT μ_r %.0f→%.0f",
+                     it, tag, B_p95, mu_r_eff[tag], new_mu)
+            mu_r_eff[tag] = new_mu
+        if not changed:
+            break
+    log.info("FEM solve: %d nodes, %d triangles, %d Picard iters, %.2fs",
+             basis.N, mesh.t.shape[1], it + 1, _t.time() - t0)
+    return A
+
+
+def _solve_with_bc(K_csr, f, outer_nodes, mesh, n_sectors,
+                    pole_pairs_per_sector_is_half_integer):
+    """Apply Dirichlet outer BC + optional anti-periodic sector BC, then solve.
+    Returns the nodal A_z vector at FULL mesh resolution."""
+    from skfem import condense, solve
 
     # ── Anti-periodic master-slave BC on the radial cuts (sector mode) ──
     if n_sectors > 1:
         masters, slaves = _pair_sector_cut_nodes(mesh, n_sectors)
         if masters.size:
             sign = -1.0 if pole_pairs_per_sector_is_half_integer else +1.0
-            # Eliminate slave dofs from the system.
-            K_csr, f_red, T = _apply_anti_periodic(K_csr, f_total,
+            K_red, f_red, T = _apply_anti_periodic(K_csr, f,
                                                      masters, slaves, sign)
-            # Project Dirichlet outer-boundary indices into reduced space.
-            # Drop any outer node that BECAME a slave (it disappears from K_red).
             n_full = mesh.p.shape[1]
             is_slave = np.zeros(n_full, dtype=bool); is_slave[slaves] = True
             free_ids = np.where(~is_slave)[0]
@@ -1243,16 +1316,11 @@ def solve_magnetostatics(
             full2red[free_ids] = np.arange(free_ids.size)
             outer_red = full2red[outer_nodes]
             outer_red = outer_red[outer_red >= 0]
-            A_red = solve(*condense(K_csr, f_red, D=outer_red))
-            A = (T @ A_red).A if hasattr(T @ A_red, 'A') else np.asarray(T @ A_red).ravel()
-            log.info("FEM solve (anti-periodic, %d master/slave pairs): %d red nodes, %d tris, %.2fs",
-                     masters.size, A_red.size, mesh.t.shape[1], _t.time() - t0)
-            return A
+            A_red = solve(*condense(K_red, f_red, D=outer_red))
+            return (T @ A_red).A.ravel() if hasattr(T @ A_red, 'A') \
+                else np.asarray(T @ A_red).ravel()
 
-    A = solve(*condense(K_csr, f_total, D=outer_nodes))
-    log.info("FEM solve: %d nodes, %d triangles, %.2fs",
-             basis.N, mesh.t.shape[1], _t.time() - t0)
-    return A
+    return solve(*condense(K_csr, f, D=outer_nodes))
 
 
 def _outer_boundary_nodes(mesh) -> np.ndarray:
@@ -1358,22 +1426,16 @@ def build_materials(
         DOM_MAG_S:  FEMMaterial("mag_S", mu_r=1.05),
     }
 
-    # ── Per-magnet tangential magnetization (SPOKE-type) ─────────────────
-    # Every magnet's M is parallel to its OWN bottom edge — equivalently,
-    # M is the LOCAL TANGENT direction at the magnet's angular position on
-    # the rotor.  We pick the CCW tangent uniformly so that adjacent N/S
-    # poles drive flux INTO the iron tooth between them, producing the
-    # classic SPOKE-PM flux-concentration pattern (high |B| in the rotor
-    # iron between magnets, alternating virtual N/S at each tooth).
+    # ── Per-magnet tangential magnetization (SPOKE-PM topology) ──────────
+    # M is tangent to the rotor at each magnet's angular position; sign
+    # alternates per pole.  The iron tooth between adjacent magnets
+    # becomes a virtual pole — flux concentrates there and exits radially
+    # into the air gap, then closes through the STATOR YOKE.
     #
-    # Convention:
+    # Convention (CCW tangent):
     #   tangent_CCW(centroid) = (-c_y, +c_x) / |centroid|     in WORLD frame
     #   N magnet (pol = +1):  M = +M_mag · tangent_CCW
-    #   S magnet (pol = -1):  M = -M_mag · tangent_CCW = +M_mag · tangent_CW
-    #
-    # This guarantees identical |M| across all magnets and a strictly
-    # alternating pattern — i.e. exactly what the user requested:
-    # «магнитизация всех магнитов должна быть одинакова и чередоваться».
+    #   S magnet (pol = -1):  M = −M_mag · tangent_CCW
     for i, (mp, polarity) in enumerate(polys.get("magnets", [])):
         if mp is None or mp.is_empty:
             continue
@@ -1382,8 +1444,7 @@ def build_materials(
             cr = math.hypot(cx, cy)
             if cr < 1e-9:
                 continue
-            # Counter-clockwise tangent at the magnet's angular position
-            tx, ty = -cy / cr, cx / cr
+            tx, ty = -cy / cr, cx / cr     # CCW tangent
         except Exception:
             continue
         sign = +1.0 if polarity > 0 else -1.0

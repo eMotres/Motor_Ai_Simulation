@@ -67,6 +67,10 @@ class FEMMaterial:
     J_z:   float = 0.0   # [A/m²]  external current density
     Mx:    float = 0.0   # [A/m]   magnetization x-component
     My:    float = 0.0   # [A/m]   magnetization y-component
+    # Optional measured B-H curve (list of (H_A_per_m, B_T) pairs).
+    # When set, the non-linear Picard iteration uses it to derive μ_r(|B|)
+    # at each iteration instead of the analytic Fröhlich roll-off.
+    bh_curve: Optional[List[Tuple[float, float]]] = None
 
 
 @dataclass
@@ -1149,24 +1153,42 @@ def _apply_anti_periodic(K, f, masters: np.ndarray, slaves: np.ndarray,
     return K_red, f_red, T
 
 
-def _saturated_mu_r(mu_r_init: float, B_mag: float, B_sat: float = 1.8,
-                     mu_r_min: float = 5.0) -> float:
-    """Effective μ_r as a function of |B| — Fröhlich-style smooth saturation.
+def _mu_r_from_bh(bh_curve: List[Tuple[float, float]], B_mag: float
+                   ) -> float:
+    """Effective μ_r at flux density |B| read from a measured B-H curve.
 
-    Below B_sat the material behaves linearly (μ_r ≈ mu_r_init).  Above B_sat,
-    μ_r decays steeply toward μ_r_min so the iron can no longer act as a
-    flux short-circuit.  μ_r_min ≈ 5 is the post-saturation tangential
-    permeability of typical electrical steel (M19, M270-35A etc) — once the
-    domains are aligned, the iron behaves nearly like air.
+    The curve is a list of (H [A/m], B [T]) sample pairs sorted by H.  We
+    invert it by linear interpolation in B to find H(B), then μ_r = B / (μ₀·H).
+
+    Beyond the last tabulated point the curve is extrapolated with the
+    incremental slope dB/dH ≈ μ₀ (deep saturation), so the iron behaves
+    asymptotically like air.  Below the first point the initial slope is
+    used.
     """
-    if B_mag <= B_sat:
-        return mu_r_init
-    # Steeper roll-off: μ_r → μ_r_init · (B_sat/B_mag)^k.  k=3 collapses the
-    # apparent permeability fast enough that B in the back-iron doesn't
-    # exceed ~2 T even at the deeply-saturated steady state.
-    ratio = (B_sat / max(B_mag, 1e-9)) ** 3
-    mu_eff = mu_r_init * ratio + mu_r_min * (1 - ratio)
-    return max(mu_eff, mu_r_min)
+    if not bh_curve or len(bh_curve) < 2 or B_mag <= 1e-12:
+        return 1.0
+    # Curve is monotonically increasing in B as H increases.
+    bs = [pt[1] for pt in bh_curve]
+    hs = [pt[0] for pt in bh_curve]
+    if B_mag <= bs[0]:
+        H = hs[0] + (hs[1] - hs[0]) * (B_mag - bs[0]) / max(bs[1] - bs[0], 1e-12)
+    elif B_mag >= bs[-1]:
+        # Extrapolate above the last sample with the differential μ₀ slope.
+        H = hs[-1] + (B_mag - bs[-1]) / MU0
+    else:
+        # Binary search for the segment
+        lo, hi = 0, len(bs) - 1
+        while hi - lo > 1:
+            mid = (lo + hi) // 2
+            if bs[mid] < B_mag:
+                lo = mid
+            else:
+                hi = mid
+        f = (B_mag - bs[lo]) / max(bs[hi] - bs[lo], 1e-12)
+        H = hs[lo] + f * (hs[hi] - hs[lo])
+    if H <= 1e-9:
+        return 1.0e6                              # virtually infinite μ_r
+    return B_mag / (MU0 * H)
 
 
 def solve_magnetostatics(
@@ -1279,15 +1301,24 @@ def solve_magnetostatics(
             if tag not in tag_cells:
                 continue
             idx = tag_cells[tag]
-            B_p95 = float(np.percentile(Bmag_tri[idx], 90)) if idx.size else 0.0
-            mu_r_init = tag_mat[tag].mu_r
-            new_mu = _saturated_mu_r(mu_r_init, B_p95)
-            # Smooth update (avoids oscillation)
-            new_mu = 0.5 * (mu_r_eff[tag] + new_mu)
+            B_p90 = float(np.percentile(Bmag_tri[idx], 90)) if idx.size else 0.0
+            mat_t = tag_mat[tag]
+            # Prefer the measured B-H curve if the assigned material has one;
+            # otherwise fall back to the analytic Fröhlich roll-off.
+            if mat_t.bh_curve and len(mat_t.bh_curve) >= 2:
+                new_mu = _mu_r_from_bh(mat_t.bh_curve, B_p90)
+                src = "BH"
+            else:
+                # Last-resort fallback (rare — only when no material assigned)
+                from math import inf as _inf
+                ratio = (1.8 / max(B_p90, 1e-9)) ** 3 if B_p90 > 1.8 else 1.0
+                new_mu = mat_t.mu_r * ratio + 5.0 * (1 - ratio)
+                src = "Fröhlich"
+            new_mu = 0.5 * (mu_r_eff[tag] + new_mu)          # damped
             if abs(new_mu - mu_r_eff[tag]) / max(mu_r_eff[tag], 1.0) > 0.02:
                 changed = True
-            log.info("FEM iter %d: tag=%d B_p90=%.2fT μ_r %.0f→%.0f",
-                     it, tag, B_p95, mu_r_eff[tag], new_mu)
+            log.info("FEM iter %d: tag=%d B_p90=%.2fT μ_r %.0f→%.0f (%s)",
+                     it, tag, B_p90, mu_r_eff[tag], new_mu, src)
             mu_r_eff[tag] = new_mu
         if not changed:
             break
@@ -1412,18 +1443,58 @@ def build_materials(
     # Tangential M magnitude (alternating per pole)
     M_mag = Br / MU0
 
+    # ── Resolve material assignments from motor_config.yaml ─────────────
+    # Each motor part may be linked to a library material (with a BH curve);
+    # if not, we keep the analytic μ_r above.
+    try:
+        from motor_ai_sim.config import get_material_assignments
+        from motor_ai_sim import materials as mat_lib
+        assignments = get_material_assignments() or {}
+    except Exception:
+        assignments = {}
+
+    def _bh_for(part_key: str, category: str = "steel"):
+        name = assignments.get(part_key)
+        if not name:
+            return None
+        try:
+            m = mat_lib.get_material(category, name)
+            bh = getattr(m, "bh_curve", None)
+            if bh and len(bh) >= 2:
+                return [(float(h), float(b)) for (h, b) in bh]
+        except Exception as e:
+            log.warning("Materials lookup '%s/%s' failed: %s", category, name, e)
+        return None
+
+    bh_stator = _bh_for("stator_core", "steel")
+    bh_rotor  = _bh_for("rotor_core",  "steel")
+    bh_shaft  = _bh_for("shaft",       "steel")           # often Al → returns None
+    # Magnet recoil μ_r and Br from the linked magnet (if any).
+    mag_name = assignments.get("magnet")
+    if mag_name:
+        try:
+            mat_mag = mat_lib.get_material("magnet", mag_name)
+            Br      = float(getattr(mat_mag, "Br",     Br))
+            mu_rec  = float(getattr(mat_mag, "mu_rec", 1.05))
+            M_mag   = Br / MU0
+        except Exception as e:
+            log.warning("Magnet material '%s' lookup failed: %s", mag_name, e)
+            mu_rec = 1.05
+    else:
+        mu_rec = 1.05
+
     mats: Dict[int, FEMMaterial] = {
         DOM_AIR:    FEMMaterial("air",    mu_r=1.0),
         DOM_AIRGAP: FEMMaterial("airgap", mu_r=1.0),
-        DOM_BAND:   FEMMaterial("band",   mu_r=1.0),    # motion-band air slip
-        DOM_OUTER:  FEMMaterial("outer",  mu_r=1.0),    # far-field air ring
-        DOM_STATOR: FEMMaterial("stator", mu_r=mu_r_steel),
-        DOM_ROTOR:  FEMMaterial("rotor",  mu_r=mu_r_steel),
-        DOM_SHAFT:  FEMMaterial("shaft",  mu_r=1000.0),
-        DOM_COIL:   FEMMaterial("coil",   mu_r=1.0),    # visualisation only
-        # Generic visualisation tags — never carry M (per-magnet tags below do).
-        DOM_MAG_N:  FEMMaterial("mag_N", mu_r=1.05),
-        DOM_MAG_S:  FEMMaterial("mag_S", mu_r=1.05),
+        DOM_BAND:   FEMMaterial("band",   mu_r=1.0),
+        DOM_OUTER:  FEMMaterial("outer",  mu_r=1.0),
+        DOM_STATOR: FEMMaterial("stator", mu_r=mu_r_steel, bh_curve=bh_stator),
+        DOM_ROTOR:  FEMMaterial("rotor",  mu_r=mu_r_steel, bh_curve=bh_rotor),
+        DOM_SHAFT:  FEMMaterial("shaft",  mu_r=(1000.0 if bh_shaft is None else mu_r_steel),
+                                          bh_curve=bh_shaft),
+        DOM_COIL:   FEMMaterial("coil",   mu_r=1.0),
+        DOM_MAG_N:  FEMMaterial("mag_N",  mu_r=mu_rec),
+        DOM_MAG_S:  FEMMaterial("mag_S",  mu_r=mu_rec),
     }
 
     # ── Per-magnet tangential magnetization (SPOKE-PM topology) ──────────

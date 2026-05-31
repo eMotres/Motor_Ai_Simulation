@@ -55,6 +55,15 @@ interface FemPayload {
   A_z_min:       number;
   A_z_max:       number;
   B_mag_max:     number;
+
+  demag_report?: Array<{
+    tag: number;
+    magnet_index: number;
+    H_min_kA_per_m: number;
+    H_knee_kA_per_m: number;
+    knee_proximity: number;
+    demagnetised: boolean;
+  }>;
 }
 
 // ── colour maps ───────────────────────────────────────────────────────────
@@ -641,6 +650,28 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
           cuts so it concentrates near them.  Switch <b>Symmetry = Full</b>
           in the Mesh tab to see the physically-correct field.
         </Typography>
+      )}
+      {payload && payload.demag_report && payload.demag_report.length > 0 && (
+        <Box sx={{ mt: 0.5, p: 0.75, border: '1px solid', borderRadius: 1,
+          borderColor: payload.demag_report.some(r => r.demagnetised)
+            ? '#dc2626' : '#fbbf24',
+          bgcolor: '#0f0a05' }}>
+          <Typography sx={{ fontSize: 10, fontWeight: 700,
+            color: payload.demag_report.some(r => r.demagnetised)
+              ? '#fca5a5' : '#fde68a', mb: 0.5 }}>
+            {payload.demag_report.some(r => r.demagnetised)
+              ? '⛔ MAGNET DEMAGNETISATION'
+              : '⚠ Magnets approaching demag knee'}
+          </Typography>
+          {payload.demag_report.map((r, i) => (
+            <Typography key={i} sx={{ fontSize: 9, color: '#fcd34d',
+              fontFamily: 'monospace' }}>
+              mag[{r.magnet_index}]: H_min = {r.H_min_kA_per_m} kA/m
+              (knee {r.H_knee_kA_per_m} kA/m, {(r.knee_proximity*100).toFixed(0)}%)
+              {r.demagnetised && '  → IRREVERSIBLE LOSS'}
+            </Typography>
+          ))}
+        </Box>
       )}
     </Paper>
   );

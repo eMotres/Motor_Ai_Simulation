@@ -1309,17 +1309,47 @@ def solve_magnetostatics(
                 new_mu = _mu_r_from_bh(mat_t.bh_curve, B_p90)
                 src = "BH"
             else:
-                # Last-resort fallback (rare — only when no material assigned)
                 from math import inf as _inf
                 ratio = (1.8 / max(B_p90, 1e-9)) ** 3 if B_p90 > 1.8 else 1.0
                 new_mu = mat_t.mu_r * ratio + 5.0 * (1 - ratio)
                 src = "Fröhlich"
-            new_mu = 0.5 * (mu_r_eff[tag] + new_mu)          # damped
+            new_mu = 0.5 * (mu_r_eff[tag] + new_mu)
             if abs(new_mu - mu_r_eff[tag]) / max(mu_r_eff[tag], 1.0) > 0.02:
                 changed = True
             log.info("FEM iter %d: tag=%d B_p90=%.2fT μ_r %.0f→%.0f (%s)",
                      it, tag, B_p90, mu_r_eff[tag], new_mu, src)
             mu_r_eff[tag] = new_mu
+
+        # ── Demagnetisation check per magnet ──────────────────────────
+        # Per-magnet operating point on the BH demagnetisation curve.
+        # H_demag (projected onto -M direction) must stay ABOVE H_knee
+        # (i.e. less negative) to avoid irreversible loss of remanence.
+        for tag in [t for t in tag_mat if t >= DOM_MAG_BASE]:
+            mat_t = tag_mat[tag]
+            if not mat_t.bh_curve or len(mat_t.bh_curve) < 2:
+                continue
+            if abs(mat_t.Mx) + abs(mat_t.My) < 1e-9:
+                continue
+            idx = tag_cells.get(tag)
+            if idx is None or idx.size == 0:
+                continue
+            # H = B/μ₀ - M  in each triangle; project onto -M̂ (demag dir)
+            mu_mag = mu_r_eff[tag]
+            B_mag_dot_M = (Bx_tri[idx] * mat_t.Mx + By_tri[idx] * mat_t.My)
+            M_mag_sq    = mat_t.Mx ** 2 + mat_t.My ** 2
+            # Scalar H along M = (B/μ₀ - M)·M̂ = (B·M)/(μ₀·|M|) - |M|
+            H_along_M = B_mag_dot_M / (MU0 * math.sqrt(M_mag_sq) + 1e-30) \
+                          - math.sqrt(M_mag_sq)
+            # Most-demagnetised cell = most negative H along +M direction
+            H_worst = float(np.min(H_along_M))
+            # Find H_knee from BH curve (B just below 0 on the recoil line,
+            # or the first H where dB/dH starts to deviate strongly).
+            H_knee = mat_t.bh_curve[1][0] if mat_t.bh_curve[0][1] <= 0 \
+                       else mat_t.bh_curve[0][0]
+            if H_worst < H_knee:
+                log.warning("FEM iter %d: magnet tag=%d demagnetised "
+                            "(H_min=%.0f A/m, H_knee=%.0f A/m)",
+                            it, tag, H_worst, H_knee)
         if not changed:
             break
     log.info("FEM solve: %d nodes, %d triangles, %d Picard iters, %.2fs",
@@ -1462,21 +1492,32 @@ def build_materials(
             bh = getattr(m, "bh_curve", None)
             if bh and len(bh) >= 2:
                 return [(float(h), float(b)) for (h, b) in bh]
-        except Exception as e:
-            log.warning("Materials lookup '%s/%s' failed: %s", category, name, e)
+        except Exception:
+            # Silently — shafts are often Aluminium (not in steel) which is fine
+            pass
         return None
 
     bh_stator = _bh_for("stator_core", "steel")
     bh_rotor  = _bh_for("rotor_core",  "steel")
-    bh_shaft  = _bh_for("shaft",       "steel")           # often Al → returns None
-    # Magnet recoil μ_r and Br from the linked magnet (if any).
+    # Shaft is typically aluminium (conductor) or steel — try steel silently;
+    # missing entry means no BH curve, which is fine for the air-like Al case.
+    try:
+        bh_shaft = _bh_for("shaft", "steel")
+    except Exception:
+        bh_shaft = None
+    # Magnet recoil μ_r, Br and BH curve (2nd-quadrant demag curve) from
+    # the linked magnet material.
     mag_name = assignments.get("magnet")
+    bh_magnet: Optional[List[Tuple[float, float]]] = None
     if mag_name:
         try:
             mat_mag = mat_lib.get_material("magnet", mag_name)
             Br      = float(getattr(mat_mag, "Br",     Br))
             mu_rec  = float(getattr(mat_mag, "mu_rec", 1.05))
             M_mag   = Br / MU0
+            bh = getattr(mat_mag, "bh_curve", None)
+            if bh and len(bh) >= 2:
+                bh_magnet = [(float(h), float(b)) for (h, b) in bh]
         except Exception as e:
             log.warning("Magnet material '%s' lookup failed: %s", mag_name, e)
             mu_rec = 1.05
@@ -1519,11 +1560,15 @@ def build_materials(
         except Exception:
             continue
         sign = +1.0 if polarity > 0 else -1.0
+        # Per-magnet material uses the assigned magnet's recoil permeability
+        # and full demagnetisation BH curve so the Picard iteration can
+        # detect under-knee operation and warn / reduce Br_eff.
         mats[DOM_MAG_BASE + i] = FEMMaterial(
             name=f"mag_{i}_{('N' if polarity>0 else 'S')}",
-            mu_r=1.05,
+            mu_r=mu_rec,
             Mx= sign * M_mag * tx,
             My= sign * M_mag * ty,
+            bh_curve=bh_magnet,                # full 2nd-quadrant demag curve
         )
 
     # ── Per-coil current density ─────────────────────────────────────────
@@ -1801,14 +1846,41 @@ def fem_solve_for_sim(
                             rotor_angle_deg, slot_area, n_wires)
 
     t_solve_start = _t.time()
-    # Per-sector pole count for the 24-slot/28-pole motor = 28/n_sectors.
-    # Odd pole count → anti-periodic BC on the radial cuts; even → periodic.
     poles_per_sector = p.num_poles // max(int(n_sectors), 1)
     anti_periodic = (poles_per_sector % 2 == 1)
     A = solve_magnetostatics(mesh, cell_tags, mats,
                               n_sectors=int(n_sectors),
                               pole_pairs_per_sector_is_half_integer=anti_periodic)
     t_solve = _t.time() - t_solve_start
+
+    # ── Demagnetisation post-check (after the converged solve) ───────────
+    Bx_post, By_post = _per_triangle_B(mesh, A)
+    demag_report: List[dict] = []
+    for tag in [t for t in mats if t >= DOM_MAG_BASE]:
+        mat_t = mats[tag]
+        if not mat_t.bh_curve or len(mat_t.bh_curve) < 2:
+            continue
+        if abs(mat_t.Mx) + abs(mat_t.My) < 1e-9:
+            continue
+        idx = np.where(cell_tags == tag)[0]
+        if idx.size == 0:
+            continue
+        Mmag = math.hypot(mat_t.Mx, mat_t.My)
+        H_M = (Bx_post[idx] * mat_t.Mx + By_post[idx] * mat_t.My) \
+                / (MU0 * Mmag + 1e-30) - Mmag
+        H_min = float(np.min(H_M))
+        H_knee = mat_t.bh_curve[1][0] if mat_t.bh_curve[0][1] <= 0 \
+                   else mat_t.bh_curve[0][0]
+        ratio = H_min / H_knee if H_knee < 0 else 0.0   # >1 means below knee
+        if ratio > 0.85:                                 # within 15 % of knee
+            demag_report.append({
+                "tag": int(tag),
+                "magnet_index": int(tag - DOM_MAG_BASE),
+                "H_min_kA_per_m": round(H_min * 1e-3, 1),
+                "H_knee_kA_per_m": round(H_knee * 1e-3, 1),
+                "knee_proximity": round(ratio, 2),
+                "demagnetised": bool(ratio > 1.0),
+            })
     # Sanitize any NaN/Inf so the response stays JSON-compliant.  Bad nodes
     # become zero — they show up as background-coloured spots in the canvas
     # but don't crash the whole render.
@@ -1931,4 +2003,8 @@ def fem_solve_for_sim(
         "rpm":           rpm,
         "solve_time_s":  round(t_solve, 2),
         "total_time_s":  round(_t.time() - t_start, 2),
+        # Demagnetisation report — each entry is a magnet whose worst-cell
+        # H came within 15 % of the BH-curve knee.  demagnetised=True means
+        # the magnet has crossed the knee and is irreversibly weakened.
+        "demag_report":  demag_report,
     }

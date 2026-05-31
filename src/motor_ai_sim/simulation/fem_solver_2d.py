@@ -40,12 +40,19 @@ DOM_AIR     = 0
 DOM_STATOR  = 1
 DOM_COIL    = 2
 DOM_AIRGAP  = 3
-DOM_MAG_N   = 4   # N pole
+DOM_MAG_N   = 4   # N pole (generic, used for visualisation tag)
 DOM_ROTOR   = 5
 DOM_SHAFT   = 6
 DOM_BAND    = 7   # motion / slip band inside the air gap (transient solver)
 DOM_OUTER   = 8   # outer air ring (far-field boundary, beyond stator OD)
-DOM_MAG_S   = 44  # S pole
+DOM_MAG_S   = 44  # S pole (generic, used for visualisation tag)
+
+# Per-magnet domain IDs are allocated in [DOM_MAG_BASE, DOM_MAG_BASE + N_MAG).
+# Each magnet gets its own tag so the FEM source term can apply that magnet's
+# specific tangential M direction (M ∥ that magnet's bottom edge in the world
+# frame, with polarity ±).  The high IDs stay clear of the small fixed-domain
+# range above.
+DOM_MAG_BASE = 100
 
 
 @dataclass
@@ -729,9 +736,11 @@ def build_mesh_from_polygons(polys: dict,
             domain_surfaces.append((surf, DOM_AIRGAP))
         for surf in _shapely_to_occ(polys.get("airgap_band")):
             domain_surfaces.append((surf, DOM_BAND))
-        for mag_poly, polarity in polys.get("magnets", []):
+        # Each magnet gets a UNIQUE domain id (DOM_MAG_BASE + i).  Polarity
+        # is recovered by the materials builder via polys["magnets"][i][1].
+        for i, (mag_poly, _polarity) in enumerate(polys.get("magnets", [])):
             for surf in _shapely_to_occ(mag_poly):
-                domain_surfaces.append((surf, DOM_MAG_N if polarity > 0 else DOM_MAG_S))
+                domain_surfaces.append((surf, DOM_MAG_BASE + i))
         for coil_poly in polys.get("coils", []):
             for surf in _shapely_to_occ(coil_poly):
                 domain_surfaces.append((surf, DOM_COIL))
@@ -862,8 +871,7 @@ def build_mesh_from_polygons(polys: dict,
         # OCC tolerance boundaries).
         specificity = {
             DOM_COIL:    9,
-            DOM_MAG_N:   8,
-            DOM_MAG_S:   8,
+            # DOM_MAG_BASE..DOM_MAG_BASE+N_MAG handled separately below
             DOM_BAND:    7,
             DOM_AIRGAP:  6,
             DOM_SHAFT:   5,
@@ -872,6 +880,10 @@ def build_mesh_from_polygons(polys: dict,
             DOM_AIR:     2,
             DOM_OUTER:   1,   # outer ring loses to everything else
         }
+        def _spec(dom_id: int) -> int:
+            if dom_id >= DOM_MAG_BASE:
+                return 8     # any per-magnet tag — beats every bulk material
+            return specificity.get(dom_id, 0)
 
         # Map each output fragment tag → set of source domain ids (via out_map)
         frag_to_doms: Dict[int, List[int]] = {}
@@ -890,7 +902,7 @@ def build_mesh_from_polygons(polys: dict,
                 continue
             sources = frag_to_doms.get(int(tag), [])
             if sources:
-                dom_id = max(sources, key=lambda d: specificity.get(d, 0))
+                dom_id = max(sources, key=_spec)
             else:
                 # Fallback: centroid-based radial classifier (rare path)
                 try:
@@ -1222,11 +1234,54 @@ def build_materials(
         DOM_ROTOR:  FEMMaterial("rotor",  mu_r=mu_r_steel),
         DOM_SHAFT:  FEMMaterial("shaft",  mu_r=1000.0),
         DOM_COIL:   FEMMaterial("coil",   mu_r=1.0, J_z=J_avg),
-        # Both magnet domains carry the tangential magnetization; the sign flips
-        # via Mx/My computed downstream per-magnet (we'll override below).
-        DOM_MAG_N:  FEMMaterial("mag_N", mu_r=1.05, Mx=0.0, My=M_mag),  # tangent at φ=0
-        DOM_MAG_S:  FEMMaterial("mag_S", mu_r=1.05, Mx=0.0, My=-M_mag),
+        # Generic visualisation tags — never carry M (per-magnet tags below do).
+        DOM_MAG_N:  FEMMaterial("mag_N", mu_r=1.05),
+        DOM_MAG_S:  FEMMaterial("mag_S", mu_r=1.05),
     }
+
+    # ── Per-magnet tangential magnetization ──────────────────────────────
+    # Each magnet's M is parallel to ITS OWN bottom edge (the edge nearest
+    # the rotor centre).  Polarity ±1 alternates per pole.  This matches
+    # the user-supplied reference where every pole has M aligned with the
+    # local bottom-edge tangent.
+    for i, (mp, polarity) in enumerate(polys.get("magnets", [])):
+        if mp is None or mp.is_empty:
+            continue
+        try:
+            # Identify the magnet's bottom edge = the edge whose two
+            # vertices have the smallest mean radius (closest to rotor centre).
+            coords = list(mp.exterior.coords)[:-1]
+            n = len(coords)
+            best_edge = (0, 1)
+            best_r    = float("inf")
+            for k in range(n):
+                x0, y0 = coords[k]
+                x1, y1 = coords[(k + 1) % n]
+                r_mid = 0.5 * (math.hypot(x0, y0) + math.hypot(x1, y1))
+                if r_mid < best_r:
+                    best_r = r_mid
+                    best_edge = (k, (k + 1) % n)
+            x0, y0 = coords[best_edge[0]]
+            x1, y1 = coords[best_edge[1]]
+            ex, ey = x1 - x0, y1 - y0
+            elen = math.hypot(ex, ey)
+            if elen < 1e-9:
+                # degenerate edge — fallback to radial direction
+                cx, cy = mp.centroid.x, mp.centroid.y
+                cr = math.hypot(cx, cy)
+                if cr < 1e-9: continue
+                tx, ty = -cy / cr, cx / cr     # tangent direction
+            else:
+                tx, ty = ex / elen, ey / elen   # unit tangent of bottom edge
+        except Exception:
+            continue
+        sign = +1.0 if polarity > 0 else -1.0
+        mats[DOM_MAG_BASE + i] = FEMMaterial(
+            name=f"mag_{i}_{('N' if polarity>0 else 'S')}",
+            mu_r=1.05,
+            Mx= sign * M_mag * tx,
+            My= sign * M_mag * ty,
+        )
     return mats
 
 
@@ -1449,11 +1504,17 @@ def fem_solve_for_sim(
         n_sectors=n_sectors,
         geo_cfg=motor.parameters,
     )
-    cell_tags = cell_tags.astype(np.int8)
+    # int16 — per-magnet tags reach DOM_MAG_BASE + 27 = 127, well within int16
+    # but right at the edge of int8.  Stay in int16 to be safe.
+    cell_tags = cell_tags.astype(np.int16)
 
     slot_area = p.slot_width_m * p.slot_height_m * p.fill_factor
-    mats = build_materials(I_ph, d.winding_layout, polys, rotor_angle_deg,
-                            slot_area, n_wires)
+    # build_mesh_from_polygons attached the FINAL (post-clip + air-injected)
+    # polys to classify_fn.  Per-magnet material indices must match the
+    # mesh's per-magnet tags, so we build materials from that same dict.
+    polys_meshed = getattr(classify_fn, "polys", polys)
+    mats = build_materials(I_ph, d.winding_layout, polys_meshed,
+                            rotor_angle_deg, slot_area, n_wires)
 
     t_solve_start = _t.time()
     A = solve_magnetostatics(mesh, cell_tags, mats)
@@ -1512,8 +1573,10 @@ def fem_solve_for_sim(
 
     P_fe_stator = _domain_iron_loss(DOM_STATOR, k_iron_W_kg_1T_50Hz, rho_steel)
     P_fe_rotor  = _domain_iron_loss(DOM_ROTOR,  k_iron_W_kg_1T_50Hz, rho_steel)
-    P_mag_eddy  = _domain_iron_loss(DOM_MAG_N,  0.3, rho_magnet) \
-                + _domain_iron_loss(DOM_MAG_S,  0.3, rho_magnet)
+    # Magnet eddy loss summed across every per-magnet tag (DOM_MAG_BASE..)
+    P_mag_eddy = 0.0
+    for i, _ in enumerate(polys_meshed.get("magnets", [])):
+        P_mag_eddy += _domain_iron_loss(DOM_MAG_BASE + i, 0.3, rho_magnet)
 
     mult = n_sectors if n_sectors > 1 else 1
     P_fe_total = (P_fe_stator + P_fe_rotor) * mult
@@ -1531,6 +1594,17 @@ def fem_solve_for_sim(
     # ── Outlines (for the renderer; matches /mesh/build2d format) ─────────
     polys_for_outlines = getattr(classify_fn, "polys", polys)
 
+    # Remap per-magnet tags (DOM_MAG_BASE + i) back to the visualisation
+    # ids DOM_MAG_N / DOM_MAG_S the frontend already knows how to colour.
+    polarities = [pol for _mp, pol in polys_meshed.get("magnets", [])]
+    cell_tags_vis = cell_tags.copy()
+    mask = cell_tags_vis >= DOM_MAG_BASE
+    if np.any(mask):
+        idx = (cell_tags_vis[mask] - DOM_MAG_BASE).astype(int)
+        cell_tags_vis[mask] = np.array(
+            [DOM_MAG_N if (j < len(polarities) and polarities[j] > 0) else DOM_MAG_S
+             for j in idx], dtype=cell_tags_vis.dtype)
+
     return {
         "ok": True,
         "rotor_angle_deg": rotor_angle_deg,
@@ -1541,7 +1615,7 @@ def fem_solve_for_sim(
         "n_triangles":     int(mesh.t.shape[1]),
         "vertices":        mesh.p.T.tolist(),       # metres
         "triangles":       mesh.t.T.tolist(),
-        "domain_per_tri":  cell_tags.tolist(),
+        "domain_per_tri":  cell_tags_vis.tolist(),
         "A_z_per_node":    A.tolist(),               # Wb/m
         "Bmag_per_tri":    Bmag_tri.tolist(),
         "extent": [

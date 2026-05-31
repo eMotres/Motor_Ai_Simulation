@@ -920,6 +920,21 @@ async def build_fem_mesh_2d(
     # are now the authoritative source.
     cell_tags = cell_tags_from_build.astype(_np.int16)
 
+    # Each magnet now has its OWN domain id (DOM_MAG_BASE + i).  Collapse
+    # them back to DOM_MAG_N (4) / DOM_MAG_S (44) so the visualiser, which
+    # only knows those two ids, still colours them correctly.
+    from motor_ai_sim.simulation.fem_solver_2d import (
+        DOM_MAG_BASE as _MAG0, DOM_MAG_N as _MAGN, DOM_MAG_S as _MAGS,
+    )
+    polys_meshed = getattr(classify_fn, "polys", polys)
+    polarities = [pol for _mp, pol in polys_meshed.get("magnets", [])]
+    mask = cell_tags >= _MAG0
+    if _np.any(mask):
+        idx = (cell_tags[mask] - _MAG0).astype(int)
+        cell_tags[mask] = _np.array(
+            [_MAGN if (j < len(polarities) and polarities[j] > 0) else _MAGS
+             for j in idx], dtype=cell_tags.dtype)
+
     # mesh.p is (2, n_nodes); mesh.t is (3, n_tri)
     vertices = mesh.p.T.tolist()           # n_nodes × 2
     triangles = mesh.t.T.tolist()           # n_tri × 3

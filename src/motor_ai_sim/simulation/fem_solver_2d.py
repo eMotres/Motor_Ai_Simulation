@@ -1756,7 +1756,16 @@ def fem_solve_for_sim(
     n_parallel   = wind.get("n_parallel", 2)
     n_wires      = int(geo.get("num_wires_per_slot", 14))
     I_coil_peak  = I_phase_rms / n_parallel * math.sqrt(2)
-    theta_e      = math.radians(rotor_angle_deg * pole_pairs + gamma_deg + 90.0)
+    # d-axis convention for SPOKE-PM:
+    #   The effective N pole of the rotor sits at the CENTRE OF THE IRON
+    #   TOOTH between two adjacent magnets — half a pole pitch (= 90° elec)
+    #   offset from the magnet centre.  Empirical gamma sweep with the
+    #   actual mesh + nonlinear iron model shows that γ = 0 gives max
+    #   positive torque when the shift is +270° elec (equivalently −90°
+    #   elec):  the q-axis sits at +90° elec from this rotated d-axis.
+    SPOKE_PM_DAXIS_SHIFT_DEG = 270.0
+    theta_e      = math.radians(rotor_angle_deg * pole_pairs
+                                 + gamma_deg + SPOKE_PM_DAXIS_SHIFT_DEG)
     I_ph = {
         'A': I_coil_peak * math.cos(theta_e),
         'B': I_coil_peak * math.cos(theta_e - 2 * math.pi / 3),

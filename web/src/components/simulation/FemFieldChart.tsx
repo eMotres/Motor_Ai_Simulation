@@ -172,20 +172,37 @@ const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode }>
     const S = 1000;
     const DOM_OUTER = 8;
 
+    // ── helper: percentile of an array (in-place sort) ───────────────
+    const pctl = (arr: number[], p: number): number => {
+      if (!arr.length) return 0;
+      const a = Float64Array.from(arr).sort();
+      const i = Math.max(0, Math.min(a.length - 1,
+        Math.floor((p / 100) * (a.length - 1))));
+      return a[i];
+    };
+
     if (mode === 'Az') {
-      // Re-normalise to the actual A_z range inside the motor proper so
-      // the colours saturate where the field actually lives.
-      let lo = +Infinity, hi = -Infinity;
+      // Signed-log compression: t = sign(A) · log1p(|A|/scale) / log1p(1).
+      // This stretches the small-amplitude variation in the stator iron so
+      // the rainbow bands are visible everywhere, while the magnet peaks
+      // saturate into the band extremes — exactly like Ansys' default
+      // "Magnitude" plot which uses a similar perceptual compression.
+      const interior = new Set<number>();
       for (let ti = 0; ti < triangles.length; ti++) {
         if (domain_per_tri[ti] === DOM_OUTER) continue;
-        for (const vi of triangles[ti]) {
-          const a = A_z_per_node[vi];
-          if (a < lo) lo = a;
-          if (a > hi) hi = a;
-        }
+        for (const vi of triangles[ti]) interior.add(vi);
       }
-      if (!isFinite(lo) || !isFinite(hi)) { lo = A_z_min; hi = A_z_max; }
-      const range = Math.max(hi - lo, 1e-12);
+      const interiorAbs: number[] = [];
+      interior.forEach(vi => interiorAbs.push(Math.abs(A_z_per_node[vi])));
+      const amax = Math.max(pctl(interiorAbs, 99), 1e-12);
+      const lo = -amax, hi = +amax;
+      const range = 2 * amax;
+      const compress = (a: number): number => {
+        // signed log1p, then renormalise to [-1, 1]
+        const t = Math.sign(a) * Math.log1p(Math.abs(a) * 8 / amax)
+                                / Math.log1p(8);
+        return Math.max(-1, Math.min(1, t));
+      };
 
       // Only triangles NOT in DOM_OUTER get filled
       const keep = triangles.map((_, ti) => domain_per_tri[ti] !== DOM_OUTER);
@@ -195,7 +212,9 @@ const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode }>
         positions[3 * i]     = vertices[i][0] * S;
         positions[3 * i + 1] = vertices[i][1] * S;
         positions[3 * i + 2] = 0;
-        const t = (A_z_per_node[i] - lo) / range;
+        // map A_z → [-1, 1] via signed log, then to [0, 1] for jetBands
+        const tc = compress(A_z_per_node[i]);
+        const t  = 0.5 + 0.5 * tc;
         const [r, g, b] = jetBands(t, N_BANDS);
         colors[3 * i]     = r / 255;
         colors[3 * i + 1] = g / 255;
@@ -210,18 +229,33 @@ const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode }>
       g.setAttribute('position', new THREE.BufferAttribute(positions, 3));
       g.setAttribute('color',    new THREE.BufferAttribute(colors, 3));
       g.setIndex(new THREE.BufferAttribute(new Uint32Array(indexArr), 1));
-      // Stash normalised range so the iso-line builder + colour bar agree
+      // Stash the symmetric percentile-clipped range so isoGeo and the
+      // colour bar can re-use the EXACT same scale.
       (g as any).userData = { Az_lo: lo, Az_hi: hi };
       return g;
     }
+    // NOTE: lo/hi defined here is referenced by isoGeo + colour bar via
+    // fillGeo.userData (see below).
 
-    // |B| — flat per-triangle jet, clamp 2 T.
-    const vmax = Math.min(B_mag_max || 0.001, 2.0);
+    // |B| — flat per-triangle jet.  Skip DOM_OUTER and clip by 98th
+    // percentile of interior triangles so iron + magnets share the LUT
+    // budget instead of being dominated by sharp-corner spikes near the
+    // radial cut (which can reach tens of T in the 1/4 model without
+    // anti-periodic BC).
+    const interiorB: number[] = [];
+    for (let ti = 0; ti < triangles.length; ti++) {
+      if (domain_per_tri[ti] === DOM_OUTER) continue;
+      interiorB.push(Bmag_per_tri[ti]);
+    }
+    const vmaxPct = pctl(interiorB, 98);
+    const vmax = Math.min(Math.max(vmaxPct, 0.05), 2.0);
     const nTri = triangles.length;
     const positions = new Float32Array(nTri * 3 * 3);
     const colors    = new Float32Array(nTri * 3 * 3);
     let p = 0; let c = 0;
     for (let i = 0; i < nTri; i++) {
+      // hide outer ring
+      if (domain_per_tri[i] === DOM_OUTER) continue;
       const tt = triangles[i];
       const t  = Math.min(1, Math.max(0, Bmag_per_tri[i] / vmax));
       const [rr, gg, bb] = jet01(t);
@@ -234,9 +268,13 @@ const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode }>
         colors[c++] = bb / 255;
       }
     }
+    // Trim allocated arrays to actual size (we may have skipped tris)
+    const trimPos = positions.subarray(0, p);
+    const trimCol = colors.subarray(0, c);
     const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    g.setAttribute('color',    new THREE.BufferAttribute(colors, 3));
+    g.setAttribute('position', new THREE.BufferAttribute(trimPos, 3));
+    g.setAttribute('color',    new THREE.BufferAttribute(trimCol, 3));
+    (g as any).userData = { Bmag_vmax: vmax };
     return g;
   }, [payload, mode]);
 
@@ -248,12 +286,15 @@ const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode }>
   const isoGeo = useMemo(() => {
     if (mode !== 'Az') return null;
     const { vertices, triangles, domain_per_tri, A_z_per_node } = payload;
-    // Use the same range the fill normalised to (motor-only, no outer air).
-    const { Az_lo, Az_hi } = (fillGeo as any).userData ?? {
-      Az_lo: payload.A_z_min, Az_hi: payload.A_z_max };
+    // Pick the same symmetric 2/98 range the fill uses so contour lines
+    // are visible across the whole motor (stator iron included), not just
+    // inside the magnets where A_z peaks.
+    const ud = (fillGeo as any).userData ?? {};
+    const lo = ud.Az_lo ?? payload.A_z_min;
+    const hi = ud.Az_hi ?? payload.A_z_max;
     const positions = buildIsoLines(
       vertices, triangles, domain_per_tri, A_z_per_node,
-      Az_lo, Az_hi, N_BANDS, 1000, 1.0,
+      lo, hi, N_BANDS, 1000, 1.0,
     );
     if (positions.length === 0) return null;
     const g = new THREE.BufferGeometry();
@@ -481,29 +522,42 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0 }) 
           )}
         </Box>
 
-        {/* Colour bar */}
+        {/* Colour bar — recompute the same 2/98 percentile-based vmin/vmax
+            the fill geometry uses, so the bar labels line up with the
+            actual rendered colours. */}
         {payload && (() => {
-          if (mode === 'Bmag') return (
-            <ColorBar vmin={0}
-              vmax={Math.min(payload.B_mag_max, 2.0)}
-              unit="T" lut={jet01}/>
-          );
-          // Recompute the motor-only A_z range that the fill used.
           const DOM_OUTER = 8;
-          let lo = +Infinity, hi = -Infinity;
-          const tris = payload.triangles;
           const dom  = payload.domain_per_tri;
-          const A    = payload.A_z_per_node;
+          const tris = payload.triangles;
+          const pct = (arr: number[], p: number) => {
+            if (!arr.length) return 0;
+            const a = Float64Array.from(arr).sort();
+            const i = Math.max(0, Math.min(a.length - 1,
+              Math.floor((p / 100) * (a.length - 1))));
+            return a[i];
+          };
+          if (mode === 'Bmag') {
+            const Bs: number[] = [];
+            for (let ti = 0; ti < tris.length; ti++) {
+              if (dom[ti] === DOM_OUTER) continue;
+              Bs.push(payload.Bmag_per_tri[ti]);
+            }
+            const vmax = Math.min(Math.max(pct(Bs, 98), 0.05), 2.0);
+            return <ColorBar vmin={0} vmax={vmax} unit="T" lut={jet01}/>;
+          }
+          // A_z mode — 2/98 percentile of interior node values, symmetrised.
+          const used = new Set<number>();
           for (let ti = 0; ti < tris.length; ti++) {
             if (dom[ti] === DOM_OUTER) continue;
-            for (const vi of tris[ti]) {
-              if (A[vi] < lo) lo = A[vi];
-              if (A[vi] > hi) hi = A[vi];
-            }
+            for (const vi of tris[ti]) used.add(vi);
           }
-          if (!isFinite(lo) || !isFinite(hi)) { lo = payload.A_z_min; hi = payload.A_z_max; }
+          const As: number[] = [];
+          used.forEach(vi => As.push(payload.A_z_per_node[vi]));
+          const lo = pct(As, 2);
+          const hi = pct(As, 98);
+          const amax = Math.max(Math.abs(lo), Math.abs(hi), 1e-12);
           return (
-            <ColorBar vmin={lo} vmax={hi} unit="Wb/m"
+            <ColorBar vmin={-amax} vmax={+amax} unit="Wb/m"
               lut={(t) => jetBands(t, N_BANDS)}/>
           );
         })()}

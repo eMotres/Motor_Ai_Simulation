@@ -1235,27 +1235,38 @@ class CadQueryMotor:
             stator_poly = _fillet_ring_corners_2d(stator_poly, inner_r, 1.0, fillet_r1)
 
         # ── Coils (winding rectangles in slots) ──────────────────────────────
+        # The cadquery iteration places wires on BOTH sides of each central
+        # tooth (positive-x = "right slot", negative-x = "left slot"), so
+        # we emit TWO separate polygons per iteration — one per physical
+        # slot — labelled with the matching winding-layout slot index.
+        # This makes per-coil J_z assignment straightforward downstream.
         right_x  = tooth_w/2 + ins_w + wire_dx/2
         slot_y_c = outer_r - core_h
         top_y_c  = slot_y_c - ins_w - wire_dy/2
         coil_polys = []
         for i in range(half_slots):
             a = i * radians(slot_angle_deg)
-            pts_list = []
+            wires_pos: list = []
+            wires_neg: list = []
             for step in range(num_wires):
                 cy = top_y_c - step*(wire_h + wire_dy)
-                for side, sx in ((1, right_x), (-1, -(right_x+wire_w))):
-                    local = [(sx,cy),(sx+wire_w,cy),(sx+wire_w,cy-wire_h),(sx,cy-wire_h)]
-                    pts_list.extend([_rot(*pt, a) for pt in local])
-            if pts_list:
-                # Union all wires in this coil slot (each wire is 4 pts)
-                wire_polys = []
-                for j in range(0, len(pts_list), 4):
-                    wp = SPoly(pts_list[j:j+4])
-                    if wp.is_valid and wp.area > 0:
-                        wire_polys.append(wp)
-                if wire_polys:
-                    coil_polys.append(unary_union(wire_polys))
+                # right (positive x) side
+                local_p = [(right_x, cy), (right_x + wire_w, cy),
+                            (right_x + wire_w, cy - wire_h), (right_x, cy - wire_h)]
+                wp_p = SPoly([_rot(*pt, a) for pt in local_p])
+                if wp_p.is_valid and wp_p.area > 0:
+                    wires_pos.append(wp_p)
+                # left (negative x) side
+                sx_n = -(right_x + wire_w)
+                local_n = [(sx_n, cy), (sx_n + wire_w, cy),
+                            (sx_n + wire_w, cy - wire_h), (sx_n, cy - wire_h)]
+                wp_n = SPoly([_rot(*pt, a) for pt in local_n])
+                if wp_n.is_valid and wp_n.area > 0:
+                    wires_neg.append(wp_n)
+            if wires_pos:
+                coil_polys.append(unary_union(wires_pos))   # +x slot
+            if wires_neg:
+                coil_polys.append(unary_union(wires_neg))   # -x slot
 
         return {
             'stator':   stator_poly,      # Shapely Polygon in mm

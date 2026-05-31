@@ -924,11 +924,17 @@ async def build_fem_mesh_2d(
     # them back to DOM_MAG_N (4) / DOM_MAG_S (44) so the visualiser, which
     # only knows those two ids, still colours them correctly.
     from motor_ai_sim.simulation.fem_solver_2d import (
-        DOM_MAG_BASE as _MAG0, DOM_MAG_N as _MAGN, DOM_MAG_S as _MAGS,
+        DOM_MAG_BASE as _MAG0, DOM_COIL_BASE as _COIL0,
+        DOM_MAG_N as _MAGN, DOM_MAG_S as _MAGS, DOM_COIL as _COIL,
     )
     polys_meshed = getattr(classify_fn, "polys", polys)
     polarities = [pol for _mp, pol in polys_meshed.get("magnets", [])]
-    mask = cell_tags >= _MAG0
+    # Per-coil ids → DOM_COIL
+    mask_coil = cell_tags >= _COIL0
+    if _np.any(mask_coil):
+        cell_tags[mask_coil] = _COIL
+    # Per-magnet ids → DOM_MAG_N / DOM_MAG_S
+    mask = (cell_tags >= _MAG0) & (cell_tags < _COIL0)
     if _np.any(mask):
         idx = (cell_tags[mask] - _MAG0).astype(int)
         cell_tags[mask] = _np.array(

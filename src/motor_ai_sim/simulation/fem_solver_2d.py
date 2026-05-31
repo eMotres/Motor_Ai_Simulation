@@ -52,7 +52,12 @@ DOM_MAG_S   = 44  # S pole (generic, used for visualisation tag)
 # specific tangential M direction (M ∥ that magnet's bottom edge in the world
 # frame, with polarity ±).  The high IDs stay clear of the small fixed-domain
 # range above.
-DOM_MAG_BASE = 100
+DOM_MAG_BASE  = 100
+# Per-coil ids — each physical slot gets its own tag so the FEM assembly
+# applies the correct (phase, direction) current density.  Without this
+# every coil shared the same averaged J_z, which is ZERO for a balanced
+# three-phase load → stator currents had no effect on the field.
+DOM_COIL_BASE = 200
 
 
 @dataclass
@@ -741,9 +746,11 @@ def build_mesh_from_polygons(polys: dict,
         for i, (mag_poly, _polarity) in enumerate(polys.get("magnets", [])):
             for surf in _shapely_to_occ(mag_poly):
                 domain_surfaces.append((surf, DOM_MAG_BASE + i))
-        for coil_poly in polys.get("coils", []):
+        # Each coil polygon gets a UNIQUE per-slot id (DOM_COIL_BASE + i),
+        # so build_materials can assign the right (phase, sign) current.
+        for i, coil_poly in enumerate(polys.get("coils", [])):
             for surf in _shapely_to_occ(coil_poly):
-                domain_surfaces.append((surf, DOM_COIL))
+                domain_surfaces.append((surf, DOM_COIL_BASE + i))
 
         occ.synchronize()
 
@@ -881,6 +888,8 @@ def build_mesh_from_polygons(polys: dict,
             DOM_OUTER:   1,   # outer ring loses to everything else
         }
         def _spec(dom_id: int) -> int:
+            if dom_id >= DOM_COIL_BASE:
+                return 10    # any per-coil tag — highest specificity
             if dom_id >= DOM_MAG_BASE:
                 return 8     # any per-magnet tag — beats every bulk material
             return specificity.get(dom_id, 0)
@@ -1327,20 +1336,11 @@ def build_materials(
 ) -> Dict[int, FEMMaterial]:
     """Build the per-domain material map for the FEM solve.
 
-    Coils share a single domain id (DOM_COIL) — but each magnet pair (DOM_MAG_N /
-    DOM_MAG_S) has only ±polarity.  In practice the assembly is per-triangle, so
-    we treat slots/coils and magnets uniformly with whichever cell tag falls on
-    their triangles; J_z and M are averaged per pole.
+    Each magnet (DOM_MAG_BASE+i) and each coil (DOM_COIL_BASE+i) gets its
+    own material entry with the polygon-specific source term.  Bulk
+    materials (air, iron, etc.) share fixed ids.
     """
-    # Average J_z over all slots (used as the coil region's representative source)
-    # NOTE: a better implementation would tag each slot with its own id and apply
-    # the per-slot current.  For phase-1 validation the average is sufficient.
     n_slot = len(winding_layout)
-    total_J = 0.0
-    for ph, direction in winding_layout:
-        total_J += direction * I_ph[ph] * n_wires / slot_area_m2
-    J_avg = total_J / max(n_slot, 1)
-
     # Tangential M magnitude (alternating per pole)
     M_mag = Br / MU0
 
@@ -1352,7 +1352,7 @@ def build_materials(
         DOM_STATOR: FEMMaterial("stator", mu_r=mu_r_steel),
         DOM_ROTOR:  FEMMaterial("rotor",  mu_r=mu_r_steel),
         DOM_SHAFT:  FEMMaterial("shaft",  mu_r=1000.0),
-        DOM_COIL:   FEMMaterial("coil",   mu_r=1.0, J_z=J_avg),
+        DOM_COIL:   FEMMaterial("coil",   mu_r=1.0),    # visualisation only
         # Generic visualisation tags — never carry M (per-magnet tags below do).
         DOM_MAG_N:  FEMMaterial("mag_N", mu_r=1.05),
         DOM_MAG_S:  FEMMaterial("mag_S", mu_r=1.05),
@@ -1401,6 +1401,33 @@ def build_materials(
             Mx= sign * M_mag * tx,
             My= sign * M_mag * ty,
         )
+
+    # ── Per-coil current density ─────────────────────────────────────────
+    # cadquery_geometry now emits 24 coil polygons (one per slot, alternating
+    # +x / -x side of each tooth).  We look up the slot's (phase, direction)
+    # from winding_layout via centroid angle so the indexing is robust to
+    # any clipping / re-ordering done downstream.
+    coil_list = polys.get("coils", [])
+    if coil_list and n_slot > 0:
+        slot_pitch_deg = 360.0 / n_slot
+        for i, cp in enumerate(coil_list):
+            if cp is None or cp.is_empty:
+                continue
+            try:
+                cx, cy = cp.centroid.x, cp.centroid.y
+            except Exception:
+                continue
+            ang = math.degrees(math.atan2(cy, cx))
+            if ang < 0: ang += 360.0
+            # Closest slot index, half-pitch offsets snap cleanly to integer.
+            slot_idx = int(ang / slot_pitch_deg + 0.5) % n_slot
+            phase, direction = winding_layout[slot_idx]
+            # J_z = direction · I_phase_peak · n_wires_per_slot / slot_area
+            J_z = float(direction) * I_ph[phase] * n_wires / max(slot_area_m2, 1e-12)
+            mats[DOM_COIL_BASE + i] = FEMMaterial(
+                name=f"coil_{i}_slot{slot_idx}_{phase}{'+' if direction>0 else '-'}",
+                mu_r=1.0, J_z=J_z,
+            )
     return mats
 
 
@@ -1719,11 +1746,15 @@ def fem_solve_for_sim(
     # ── Outlines (for the renderer; matches /mesh/build2d format) ─────────
     polys_for_outlines = getattr(classify_fn, "polys", polys)
 
-    # Remap per-magnet tags (DOM_MAG_BASE + i) back to the visualisation
-    # ids DOM_MAG_N / DOM_MAG_S the frontend already knows how to colour.
+    # Remap per-magnet + per-coil tags back to the visualisation ids
+    # (DOM_MAG_N / DOM_MAG_S / DOM_COIL) that the frontend already knows
+    # how to colour.
     polarities = [pol for _mp, pol in polys_meshed.get("magnets", [])]
     cell_tags_vis = cell_tags.copy()
-    mask = cell_tags_vis >= DOM_MAG_BASE
+    mask_coil = cell_tags_vis >= DOM_COIL_BASE
+    if np.any(mask_coil):
+        cell_tags_vis[mask_coil] = DOM_COIL
+    mask = (cell_tags_vis >= DOM_MAG_BASE) & (cell_tags_vis < DOM_COIL_BASE)
     if np.any(mask):
         idx = (cell_tags_vis[mask] - DOM_MAG_BASE).astype(int)
         cell_tags_vis[mask] = np.array(

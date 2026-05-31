@@ -1051,10 +1051,101 @@ def _read_cell_tags_by_dom(mesh_io) -> np.ndarray:
 # 2.  Assemble + solve the linear magnetostatics problem
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _pair_sector_cut_nodes(mesh, n_sectors: int, tol_m: float = 1e-5
+                             ) -> Tuple[np.ndarray, np.ndarray]:
+    """Pair nodes on the two radial cut lines of a sector model.
+
+    Returns (master_ids, slave_ids) — nodes on cut θ=0 paired by radius
+    with nodes on cut θ = 2π/n_sectors.  Both arrays have the same length
+    and same index ordering.  Origin (r=0) is skipped from both sides.
+    """
+    p = mesh.p
+    x, y = p[0], p[1]
+    r = np.sqrt(x ** 2 + y ** 2)
+
+    # Cut 1 = +X axis (θ=0):  y ≈ 0, x ≥ 0
+    cut1 = np.where((np.abs(y) < tol_m) & (x > tol_m) & (r > tol_m))[0]
+
+    # Cut 2 = rotated +X by 2π/n_sectors
+    a = 2.0 * math.pi / n_sectors
+    ca, sa = math.cos(a), math.sin(a)
+    # Distance from line θ=a (line through origin with direction (ca, sa)):
+    # signed distance = x·sin(a) − y·cos(a)
+    dist2 = np.abs(x * sa - y * ca)
+    # Only the half-line in the +direction of (ca, sa)
+    half2 = (x * ca + y * sa) > tol_m
+    cut2 = np.where((dist2 < tol_m) & half2 & (r > tol_m))[0]
+
+    if cut1.size == 0 or cut2.size == 0:
+        return np.array([], dtype=int), np.array([], dtype=int)
+
+    # Pair by NEAREST radius (handles unequal node counts after fragment).
+    r1 = r[cut1]
+    r2 = r[cut2]
+    order1 = np.argsort(r1)
+    order2 = np.argsort(r2)
+    cut1_s = cut1[order1]
+    cut2_s = cut2[order2]
+    r1_s   = r1[order1]
+    r2_s   = r2[order2]
+
+    # Greedy: walk both sorted lists, pair items whose radii match within tol.
+    masters, slaves = [], []
+    i = j = 0
+    while i < len(cut1_s) and j < len(cut2_s):
+        dr = r1_s[i] - r2_s[j]
+        if abs(dr) < tol_m * 100:    # 1 mm radial tolerance for matching
+            masters.append(int(cut1_s[i]))
+            slaves.append(int(cut2_s[j]))
+            i += 1; j += 1
+        elif dr < 0:
+            i += 1
+        else:
+            j += 1
+    return np.array(masters, dtype=int), np.array(slaves, dtype=int)
+
+
+def _apply_anti_periodic(K, f, masters: np.ndarray, slaves: np.ndarray,
+                          sign: float = -1.0):
+    """Eliminate slave DoFs via A_slave = sign · A_master.
+
+    Builds elimination matrix T (n × n_red) so that A_full = T · A_red:
+      - T[i, k] = 1 for any free or master node i mapped to reduced index k
+      - T[s, master_red_idx] = sign for each slave node s
+    Returns (K_red, f_red, T) ready for the normal solve + back-projection.
+    """
+    from scipy.sparse import csr_matrix, lil_matrix, eye as sp_eye
+
+    n = K.shape[0]
+    is_slave = np.zeros(n, dtype=bool)
+    is_slave[slaves] = True
+    free_ids = np.where(~is_slave)[0]              # everything that survives
+    n_red = free_ids.size
+
+    # Map full → reduced index for the surviving nodes
+    full2red = -np.ones(n, dtype=int)
+    full2red[free_ids] = np.arange(n_red)
+
+    # Build T (n × n_red).  Start with identity on the free rows.
+    T = lil_matrix((n, n_red), dtype=float)
+    for k, fi in enumerate(free_ids):
+        T[fi, k] = 1.0
+    # Slave rows pick up sign·master entry
+    for m, s in zip(masters, slaves):
+        T[s, full2red[m]] = sign
+    T = T.tocsr()
+
+    K_red = T.T @ K @ T
+    f_red = T.T @ f
+    return K_red, f_red, T
+
+
 def solve_magnetostatics(
     mesh,
     cell_tags: np.ndarray,
     materials: Dict[int, FEMMaterial],
+    n_sectors: int = 1,
+    pole_pairs_per_sector_is_half_integer: bool = True,
 ) -> np.ndarray:
     """Linear 2-D magnetostatics solve.
 
@@ -1062,8 +1153,11 @@ def solve_magnetostatics(
 
     Equation:   ∫ ν ∇A_z·∇v  dΩ  =  ∫ J_z v dΩ  +  ∫ (Mx ∂v/∂y − My ∂v/∂x) dΩ
 
-    Strategy: assemble one bilinear/linear form per material (piecewise-constant
-    ν, J, M) and sum them.  Avoids the scikit-fem per-cell interpolation pitfall.
+    When `n_sectors > 1`, anti-periodic master-slave boundary conditions are
+    enforced on the two radial cuts of the sector:
+        A_z(r, θ=0) = -A_z(r, θ=2π/n_sectors)
+    The sign flips because each sector covers an ODD number of poles for
+    the 24-slot / 28-pole motor (7 poles per quarter = 3.5 pole pairs).
     """
     import time as _t
     from skfem import (
@@ -1121,7 +1215,32 @@ def solve_magnetostatics(
 
     # Dirichlet A_z = 0 on outer boundary nodes
     outer_nodes = _outer_boundary_nodes(mesh)
-    A = solve(*condense(K_total.tocsr(), f_total, D=outer_nodes))
+    K_csr = K_total.tocsr()
+
+    # ── Anti-periodic master-slave BC on the radial cuts (sector mode) ──
+    if n_sectors > 1:
+        masters, slaves = _pair_sector_cut_nodes(mesh, n_sectors)
+        if masters.size:
+            sign = -1.0 if pole_pairs_per_sector_is_half_integer else +1.0
+            # Eliminate slave dofs from the system.
+            K_csr, f_red, T = _apply_anti_periodic(K_csr, f_total,
+                                                     masters, slaves, sign)
+            # Project Dirichlet outer-boundary indices into reduced space.
+            # Drop any outer node that BECAME a slave (it disappears from K_red).
+            n_full = mesh.p.shape[1]
+            is_slave = np.zeros(n_full, dtype=bool); is_slave[slaves] = True
+            free_ids = np.where(~is_slave)[0]
+            full2red = -np.ones(n_full, dtype=int)
+            full2red[free_ids] = np.arange(free_ids.size)
+            outer_red = full2red[outer_nodes]
+            outer_red = outer_red[outer_red >= 0]
+            A_red = solve(*condense(K_csr, f_red, D=outer_red))
+            A = (T @ A_red).A if hasattr(T @ A_red, 'A') else np.asarray(T @ A_red).ravel()
+            log.info("FEM solve (anti-periodic, %d master/slave pairs): %d red nodes, %d tris, %.2fs",
+                     masters.size, A_red.size, mesh.t.shape[1], _t.time() - t0)
+            return A
+
+    A = solve(*condense(K_csr, f_total, D=outer_nodes))
     log.info("FEM solve: %d nodes, %d triangles, %.2fs",
              basis.N, mesh.t.shape[1], _t.time() - t0)
     return A
@@ -1517,7 +1636,13 @@ def fem_solve_for_sim(
                             rotor_angle_deg, slot_area, n_wires)
 
     t_solve_start = _t.time()
-    A = solve_magnetostatics(mesh, cell_tags, mats)
+    # Per-sector pole count for the 24-slot/28-pole motor = 28/n_sectors.
+    # Odd pole count → anti-periodic BC on the radial cuts; even → periodic.
+    poles_per_sector = p.num_poles // max(int(n_sectors), 1)
+    anti_periodic = (poles_per_sector % 2 == 1)
+    A = solve_magnetostatics(mesh, cell_tags, mats,
+                              n_sectors=int(n_sectors),
+                              pole_pairs_per_sector_is_half_integer=anti_periodic)
     t_solve = _t.time() - t_solve_start
     # Sanitize any NaN/Inf so the response stays JSON-compliant.  Bad nodes
     # become zero — they show up as background-coloured spots in the canvas

@@ -256,23 +256,32 @@ const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode }>
     // band.  Using a physically-motivated cap keeps the iron variation
     // visible — same trick Ansys applies via the "Auto-fit colour scale"
     // toggle.
+    // Build the |B| distribution from interior triangles only (skip the
+    // far-field DOM_OUTER ring).  vmax = 95-percentile capped at 1.8 T
+    // matches the iron saturation knee — wide enough that air-gap +
+    // stator teeth + yoke each get their own colour band, narrow enough
+    // that sharp-corner spikes from the missing anti-periodic BC don't
+    // dominate the LUT.
     const interiorB: number[] = [];
     for (let ti = 0; ti < triangles.length; ti++) {
       if (domain_per_tri[ti] === DOM_OUTER) continue;
       interiorB.push(Bmag_per_tri[ti]);
     }
-    const vmaxPct = pctl(interiorB, 75);
+    const vmaxPct = pctl(interiorB, 95);
     const vmax = Math.min(Math.max(vmaxPct, 0.05), 1.8);
     const nTri = triangles.length;
     const positions = new Float32Array(nTri * 3 * 3);
     const colors    = new Float32Array(nTri * 3 * 3);
     let p = 0; let c = 0;
+    // 11 discrete bands like the Ansys reference image — easier to read
+    // contour structure than a continuous gradient.
+    const N_B_BANDS = 11;
     for (let i = 0; i < nTri; i++) {
       // hide outer ring
       if (domain_per_tri[i] === DOM_OUTER) continue;
       const tt = triangles[i];
       const t  = Math.min(1, Math.max(0, Bmag_per_tri[i] / vmax));
-      const [rr, gg, bb] = jet01(t);
+      const [rr, gg, bb] = jetBands(t, N_B_BANDS);
       for (const vi of tt) {
         positions[p++] = vertices[vi][0] * S;
         positions[p++] = vertices[vi][1] * S;
@@ -558,8 +567,9 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0 }) 
               if (dom[ti] === DOM_OUTER) continue;
               Bs.push(payload.Bmag_per_tri[ti]);
             }
-            const vmax = Math.min(Math.max(pct(Bs, 75), 0.05), 1.8);
-            return <ColorBar vmin={0} vmax={vmax} unit="T" lut={jet01}/>;
+            const vmax = Math.min(Math.max(pct(Bs, 95), 0.05), 1.8);
+            return <ColorBar vmin={0} vmax={vmax} unit="T"
+              lut={(t) => jetBands(t, 11)}/>;
           }
           // A_z mode — 2/98 percentile of interior node values, symmetrised.
           const used = new Set<number>();
@@ -624,6 +634,15 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0 }) 
         cuts isn't yet enforced — torque and field shape in the sector are
         approximate; copper loss is exact.
       </Typography>
+      {payload && payload.n_sectors > 1 && (
+        <Typography sx={{ fontSize: 10, color: '#fbbf24', mt: 0.5,
+          fontWeight: 600 }}>
+          ⚠ Sector mode (1/{payload.n_sectors}) without anti-periodic BC can
+          produce an "air-gap barrier" look — flux can't cross the radial
+          cuts so it concentrates near them.  Switch <b>Symmetry = Full</b>
+          in the Mesh tab to see the physically-correct field.
+        </Typography>
+      )}
     </Paper>
   );
 };

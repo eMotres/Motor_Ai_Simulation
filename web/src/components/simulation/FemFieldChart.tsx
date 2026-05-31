@@ -26,45 +26,8 @@ import * as THREE from 'three';
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
 // ── types ─────────────────────────────────────────────────────────────────
-interface FemPayload {
-  n_vertices:    number;
-  n_triangles:   number;
-  vertices:      [number, number][];                  // metres
-  triangles:     [number, number, number][];
-  domain_per_tri: number[];
-  A_z_per_node:  number[];                            // Wb/m
-  Bmag_per_tri:  number[];
-  extent:        [number, number, number, number];
-  outlines:      { domain: number; loops: [number, number][][] }[];
-
-  T_em_Nm:       number;
-  P_cu_W:        number;
-  P_fe_W:        number;
-  P_mag_eddy_W:  number;
-  P_loss_total_W:number;
-  P_mech_W:      number;
-  efficiency:    number;
-  freq_Hz:       number;
-  rpm:           number;
-
-  n_sectors:     number;
-  symmetry_mult: number;
-  solve_time_s:  number;
-  total_time_s:  number;
-
-  A_z_min:       number;
-  A_z_max:       number;
-  B_mag_max:     number;
-
-  demag_report?: Array<{
-    tag: number;
-    magnet_index: number;
-    H_min_kA_per_m: number;
-    H_knee_kA_per_m: number;
-    knee_proximity: number;
-    demagnetised: boolean;
-  }>;
-}
+import type { FemPayload } from './fem-types';
+export type { FemPayload } from './fem-types';
 
 // ── colour maps ───────────────────────────────────────────────────────────
 // Viridis — sequential, no near-white midpoint, reads cleanly on dark canvas.
@@ -446,10 +409,11 @@ interface Props {
   gamma_deg?: number;
   rotor_angle_deg?: number;
   I_phase_rms?: number;
+  onPayload?: (p: FemPayload) => void;
 }
 
 const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
-                                          I_phase_rms }) => {
+                                          I_phase_rms, onPayload }) => {
   const [payload, setPayload] = useState<FemPayload | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [error,   setError]   = useState<string | null>(null);
@@ -478,7 +442,10 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
         if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
         return r.json();
       })
-      .then((d: FemPayload) => { setPayload(d); setLoading(false); })
+      .then((d: FemPayload) => {
+        setPayload(d); setLoading(false);
+        if (onPayload) onPayload(d);
+      })
       .catch(e => { setError(String(e)); setLoading(false); });
   };
 

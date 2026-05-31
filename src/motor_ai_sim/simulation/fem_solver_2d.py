@@ -1153,6 +1153,41 @@ def _apply_anti_periodic(K, f, masters: np.ndarray, slaves: np.ndarray,
     return K_red, f_red, T
 
 
+def _build_magnet_bh_curve_payload(mats: Dict[int, "FEMMaterial"]) -> List[dict]:
+    """Pull the assigned magnet's BH curve from any per-magnet material entry
+    (they all share the same curve) for plotting on the frontend."""
+    for tag in sorted(mats):
+        if tag < DOM_MAG_BASE:
+            continue
+        mat = mats[tag]
+        if mat.bh_curve and len(mat.bh_curve) >= 2:
+            return [{"H_kA_per_m": round(h * 1e-3, 1), "B_T": round(b, 4)}
+                    for (h, b) in mat.bh_curve]
+    return []
+
+
+def _b_from_bh_at_H(bh_curve: List[Tuple[float, float]], H: float) -> float:
+    """Interpolate B at given H from a BH curve sorted by H ascending."""
+    if not bh_curve:
+        return 0.0
+    hs = [pt[0] for pt in bh_curve]
+    bs = [pt[1] for pt in bh_curve]
+    if H <= hs[0]:
+        # Linear extrapolation in H (negative side)
+        slope = (bs[1] - bs[0]) / max(hs[1] - hs[0], 1e-12)
+        return bs[0] + slope * (H - hs[0])
+    if H >= hs[-1]:
+        slope = (bs[-1] - bs[-2]) / max(hs[-1] - hs[-2], 1e-12)
+        return bs[-1] + slope * (H - hs[-1])
+    lo, hi = 0, len(hs) - 1
+    while hi - lo > 1:
+        mid = (lo + hi) // 2
+        if hs[mid] < H: lo = mid
+        else:           hi = mid
+    f = (H - hs[lo]) / max(hs[hi] - hs[lo], 1e-12)
+    return bs[lo] + f * (bs[hi] - bs[lo])
+
+
 def _mu_r_from_bh(bh_curve: List[Tuple[float, float]], B_mag: float
                    ) -> float:
     """Effective μ_r at flux density |B| read from a measured B-H curve.
@@ -1247,7 +1282,12 @@ def solve_magnetostatics(
     tag_mat: Dict[int, FEMMaterial] = {}
     tag_cells: Dict[int, np.ndarray] = {}
 
-    f_const = np.zeros(n)    # constant source: J_z + M-induced
+    # Pre-assemble per-tag CURRENT and MAGNETISATION source vectors so the
+    # Picard loop can re-scale each magnet's contribution when its Br_eff
+    # drops due to demagnetisation, without re-running asm() every step.
+    f_current = np.zeros(n)                  # J_z contribution (independent of M)
+    tag_fMx: Dict[int, np.ndarray] = {}      # per-magnet ∫ ∂v/∂y dΩ
+    tag_fMy: Dict[int, np.ndarray] = {}      # per-magnet ∫ ∂v/∂x dΩ
     for tag in unique_tags:
         mat = materials.get(int(tag))
         if mat is None:
@@ -1260,22 +1300,36 @@ def solve_magnetostatics(
         tag_mat[int(tag)]  = mat
         tag_cells[int(tag)] = cells_idx
         if mat.J_z != 0.0:
-            f_const += asm(rhs_unit, sub_basis) * mat.J_z
-        if mat.Mx != 0.0:
-            f_const += asm(rhs_dvdy, sub_basis) * mat.Mx
-        if mat.My != 0.0:
-            f_const -= asm(rhs_dvdx, sub_basis) * mat.My
+            f_current += asm(rhs_unit, sub_basis) * mat.J_z
+        if abs(mat.Mx) > 0:
+            tag_fMx[int(tag)] = asm(rhs_dvdy, sub_basis)
+        if abs(mat.My) > 0:
+            tag_fMy[int(tag)] = asm(rhs_dvdx, sub_basis)
 
-    # Iron-domain tags that should saturate.  Magnets, air etc keep their
-    # linear μ_r through the iteration.
     SATURABLE_TAGS = {DOM_STATOR, DOM_ROTOR, DOM_SHAFT}
     mu_r_eff: Dict[int, float] = {tag: tag_mat[tag].mu_r for tag in tag_mat}
+    # Br factor — starts at 1.0 (full strength) per magnet; the demag
+    # iteration drops it below 1.0 when the operating point crosses the knee.
+    br_factor: Dict[int, float] = {
+        tag: 1.0 for tag in tag_mat if tag >= DOM_MAG_BASE}
 
     def _assemble_K() -> "csr_matrix":
         K = csr_matrix((n, n))
         for tag, K_dom in tag_K.items():
             K = K + K_dom * (1.0 / (MU0 * mu_r_eff[tag]))
         return K
+
+    def _assemble_f() -> np.ndarray:
+        f = f_current.copy()
+        for tag, fMx in tag_fMx.items():
+            scale = br_factor.get(tag, 1.0)
+            f += fMx * (tag_mat[tag].Mx * scale)
+        for tag, fMy in tag_fMy.items():
+            scale = br_factor.get(tag, 1.0)
+            f -= fMy * (tag_mat[tag].My * scale)
+        return f
+
+    f_const = _assemble_f()              # initial source, also referenced below
 
     f_total = f_const                                       # for compatibility
 
@@ -1291,7 +1345,8 @@ def solve_magnetostatics(
 
     for it in range(max(1, nonlinear_iterations)):
         K_csr = _assemble_K().tocsr()
-        A = _solve_with_bc(K_csr, f_const, outer_nodes, mesh, n_sectors,
+        f_iter = _assemble_f()           # picks up updated br_factor
+        A = _solve_with_bc(K_csr, f_iter, outer_nodes, mesh, n_sectors,
                             pole_pairs_per_sector_is_half_integer)
         # Compute |B| per triangle, then mean |B| in each saturable domain.
         Bx_tri, By_tri = _per_triangle_B(mesh, A)
@@ -1320,36 +1375,44 @@ def solve_magnetostatics(
                      it, tag, B_p90, mu_r_eff[tag], new_mu, src)
             mu_r_eff[tag] = new_mu
 
-        # ── Demagnetisation check per magnet ──────────────────────────
-        # Per-magnet operating point on the BH demagnetisation curve.
-        # H_demag (projected onto -M direction) must stay ABOVE H_knee
-        # (i.e. less negative) to avoid irreversible loss of remanence.
+        # ── Self-consistent demagnetisation update ────────────────────
+        # When a magnet's operating point falls BELOW its BH-curve knee,
+        # the effective Br drops to the value defined by the recoil line
+        # passing through the operating point.  We reduce br_factor so
+        # the next iteration's source term reflects the lost magnetisation
+        # — and the reported torque/losses include the demag penalty.
         for tag in [t for t in tag_mat if t >= DOM_MAG_BASE]:
             mat_t = tag_mat[tag]
             if not mat_t.bh_curve or len(mat_t.bh_curve) < 2:
                 continue
-            if abs(mat_t.Mx) + abs(mat_t.My) < 1e-9:
+            Mmag = math.hypot(mat_t.Mx, mat_t.My)
+            if Mmag < 1e-9:
                 continue
             idx = tag_cells.get(tag)
             if idx is None or idx.size == 0:
                 continue
-            # H = B/μ₀ - M  in each triangle; project onto -M̂ (demag dir)
-            mu_mag = mu_r_eff[tag]
-            B_mag_dot_M = (Bx_tri[idx] * mat_t.Mx + By_tri[idx] * mat_t.My)
-            M_mag_sq    = mat_t.Mx ** 2 + mat_t.My ** 2
-            # Scalar H along M = (B/μ₀ - M)·M̂ = (B·M)/(μ₀·|M|) - |M|
-            H_along_M = B_mag_dot_M / (MU0 * math.sqrt(M_mag_sq) + 1e-30) \
-                          - math.sqrt(M_mag_sq)
-            # Most-demagnetised cell = most negative H along +M direction
+            # Per-cell H projected onto +M̂  (along magnetisation direction).
+            B_dot_M = (Bx_tri[idx] * mat_t.Mx + By_tri[idx] * mat_t.My)
+            H_along_M = B_dot_M / (MU0 * Mmag) - Mmag * br_factor[tag]
             H_worst = float(np.min(H_along_M))
-            # Find H_knee from BH curve (B just below 0 on the recoil line,
-            # or the first H where dB/dH starts to deviate strongly).
             H_knee = mat_t.bh_curve[1][0] if mat_t.bh_curve[0][1] <= 0 \
                        else mat_t.bh_curve[0][0]
             if H_worst < H_knee:
-                log.warning("FEM iter %d: magnet tag=%d demagnetised "
-                            "(H_min=%.0f A/m, H_knee=%.0f A/m)",
-                            it, tag, H_worst, H_knee)
+                # On the BH curve at H_worst, B is below the recoil line
+                # → effective Br must drop.  New Br = B_op - μ_rec·μ₀·H_op
+                # where (H_op, B_op) is read from the measured curve.
+                B_op = _b_from_bh_at_H(mat_t.bh_curve, H_worst)
+                Br_new = B_op - mat_t.mu_r * MU0 * H_worst
+                Br_orig = Mmag * MU0      # current full-strength Br
+                ratio = max(0.0, min(1.0, Br_new / max(Br_orig, 1e-12)))
+                new_factor = 0.5 * (br_factor[tag] + ratio)   # damped
+                if abs(new_factor - br_factor[tag]) > 0.01:
+                    changed = True
+                log.warning("FEM iter %d: magnet tag=%d demag — "
+                             "H_min=%.0f A/m, H_knee=%.0f A/m, Br_factor %.3f→%.3f",
+                             it, tag, H_worst, H_knee,
+                             br_factor[tag], new_factor)
+                br_factor[tag] = new_factor
         if not changed:
             break
     log.info("FEM solve: %d nodes, %d triangles, %d Picard iters, %.2fs",
@@ -1856,23 +1919,39 @@ def fem_solve_for_sim(
     # ── Demagnetisation post-check (after the converged solve) ───────────
     Bx_post, By_post = _per_triangle_B(mesh, A)
     demag_report: List[dict] = []
-    for tag in [t for t in mats if t >= DOM_MAG_BASE]:
+    # Per-magnet operating point: (H_op, B_op) along the magnetisation
+    # direction in the cell with the strongest demagnetising field.  All
+    # magnets reported (not just near-knee) so the frontend can plot every
+    # point on the BH chart.
+    magnet_op_points: List[dict] = []
+    for tag in sorted([t for t in mats if t >= DOM_MAG_BASE]):
         mat_t = mats[tag]
-        if not mat_t.bh_curve or len(mat_t.bh_curve) < 2:
-            continue
         if abs(mat_t.Mx) + abs(mat_t.My) < 1e-9:
             continue
         idx = np.where(cell_tags == tag)[0]
         if idx.size == 0:
             continue
         Mmag = math.hypot(mat_t.Mx, mat_t.My)
+        # H projected on +M̂, accounting for the iteration's br_factor.
         H_M = (Bx_post[idx] * mat_t.Mx + By_post[idx] * mat_t.My) \
                 / (MU0 * Mmag + 1e-30) - Mmag
+        # B projected on +M̂
+        B_M = (Bx_post[idx] * mat_t.Mx + By_post[idx] * mat_t.My) / Mmag
         H_min = float(np.min(H_M))
+        H_mean = float(np.mean(H_M))
+        B_at_min = float(B_M[int(np.argmin(H_M))])
+        magnet_op_points.append({
+            "magnet_index": int(tag - DOM_MAG_BASE),
+            "H_op_kA_per_m":  round(H_min  * 1e-3, 1),
+            "H_mean_kA_per_m": round(H_mean * 1e-3, 1),
+            "B_op_T":         round(B_at_min, 4),
+        })
+        if not mat_t.bh_curve or len(mat_t.bh_curve) < 2:
+            continue
         H_knee = mat_t.bh_curve[1][0] if mat_t.bh_curve[0][1] <= 0 \
                    else mat_t.bh_curve[0][0]
-        ratio = H_min / H_knee if H_knee < 0 else 0.0   # >1 means below knee
-        if ratio > 0.85:                                 # within 15 % of knee
+        ratio = H_min / H_knee if H_knee < 0 else 0.0
+        if ratio > 0.85:
             demag_report.append({
                 "tag": int(tag),
                 "magnet_index": int(tag - DOM_MAG_BASE),
@@ -2006,5 +2085,10 @@ def fem_solve_for_sim(
         # Demagnetisation report — each entry is a magnet whose worst-cell
         # H came within 15 % of the BH-curve knee.  demagnetised=True means
         # the magnet has crossed the knee and is irreversibly weakened.
-        "demag_report":  demag_report,
+        "demag_report":      demag_report,
+        # Full BH curve + every magnet's operating point — used by the
+        # frontend BH chart to visualise where each magnet sits on the
+        # demagnetisation curve.
+        "bh_curve_magnet":   _build_magnet_bh_curve_payload(mats),
+        "magnet_op_points":  magnet_op_points,
     }

@@ -75,14 +75,21 @@ function viridis01(t: number): [number, number, number] {
     pts[i][2] + f * (pts[i + 1][2] - pts[i][2]),
   ];
 }
-// Classic Ansys-style rainbow for |B| heatmaps.
+// Classic Ansys-style rainbow LUT (blue → cyan → green → yellow → red).
 function jet01(t: number): [number, number, number] {
   const x = Math.max(0, Math.min(1, t));
-  // Standard jet-style piecewise linear
   const r = Math.max(0, Math.min(1, 1.5 - Math.abs(4 * x - 3))) * 255;
   const g = Math.max(0, Math.min(1, 1.5 - Math.abs(4 * x - 2))) * 255;
   const b = Math.max(0, Math.min(1, 1.5 - Math.abs(4 * x - 1))) * 255;
   return [r, g, b];
+}
+
+// Discrete-banded rainbow — quantize t into N levels so the fill renders
+// as Ansys-style colour patches instead of a smooth gradient.
+function jetBands(t: number, n: number = 20): [number, number, number] {
+  // Quantise to band centres so the colour matches the iso-line at the band edge.
+  const tq = (Math.floor(t * n) + 0.5) / n;
+  return jet01(tq);
 }
 
 // ── helpers: read mesh params persisted by MeshPanel ──────────────────────
@@ -96,15 +103,82 @@ function readMeshSetting<T>(key: string, def: T): T {
 // ── R3F mesh component ────────────────────────────────────────────────────
 type FieldMode = 'Az' | 'Bmag';
 
+const N_BANDS = 20;           // # of discrete colour bands / iso-A levels
+
+/** Extract iso-A_z contour line segments via per-triangle linear
+ *  interpolation (marching-segments on tri's).
+ *  For each iso level L, find triangles where A_min ≤ L ≤ A_max, then
+ *  locate the two edges that L crosses and emit one line segment between
+ *  the two intersection points.  Output is a flat positions array
+ *  (XYZ pairs per segment) plus per-vertex RGB matching the band colour. */
+function buildIsoLines(
+  vertices: [number, number][],
+  triangles: [number, number, number][],
+  A_z_per_node: number[],
+  A_min: number,
+  A_max: number,
+  nLevels: number,
+  S: number,        // metres → mm
+  z: number,        // depth for visibility
+): { positions: Float32Array; colors: Float32Array } {
+  const range = Math.max(A_max - A_min, 1e-12);
+  const pos: number[] = [];
+  const col: number[] = [];
+  for (let k = 1; k < nLevels; k++) {
+    const t  = k / nLevels;
+    const L  = A_min + t * range;
+    const [cr, cg, cb] = jet01(t);
+    const r = cr / 255, g = cg / 255, b = cb / 255;
+    for (let ti = 0; ti < triangles.length; ti++) {
+      const [a, b1, c] = triangles[ti];
+      const Aa = A_z_per_node[a];
+      const Ab = A_z_per_node[b1];
+      const Ac = A_z_per_node[c];
+      const lo = Math.min(Aa, Ab, Ac);
+      const hi = Math.max(Aa, Ab, Ac);
+      if (L < lo || L > hi) continue;
+      // Find the two edges where the value crosses L
+      const ix: [number, number][] = [];
+      const ed: [[number, number, number], [number, number, number]] = [
+        [a, b1, Aa - L],
+        [b1, c, Ab - L],
+        [c, a, Ac - L],
+      ] as any;
+      for (let e = 0; e < 3; e++) {
+        const [i0, i1] = [ed[e][0] as number, ed[e][1] as number];
+        const f0 = A_z_per_node[i0] - L;
+        const f1 = A_z_per_node[i1] - L;
+        if (f0 * f1 > 0 || (f0 === 0 && f1 === 0)) continue;
+        const denom = (f0 - f1);
+        const u = denom === 0 ? 0.5 : f0 / denom;
+        const x = vertices[i0][0] + u * (vertices[i1][0] - vertices[i0][0]);
+        const y = vertices[i0][1] + u * (vertices[i1][1] - vertices[i0][1]);
+        ix.push([x, y]);
+        if (ix.length === 2) break;
+      }
+      if (ix.length === 2) {
+        pos.push(ix[0][0] * S, ix[0][1] * S, z,
+                 ix[1][0] * S, ix[1][1] * S, z);
+        col.push(r, g, b, r, g, b);
+      }
+    }
+  }
+  return {
+    positions: new Float32Array(pos),
+    colors:    new Float32Array(col),
+  };
+}
+
 const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode }>
   = ({ payload, mode }) => {
-  const geo = useMemo(() => {
+  // Fill geometry — per-vertex Ansys-style banded rainbow for A_z, or
+  // per-triangle flat jet for |B|.
+  const fillGeo = useMemo(() => {
     const { vertices, triangles, A_z_per_node, A_z_min, A_z_max,
             Bmag_per_tri, B_mag_max } = payload;
-    const S = 1000;          // m → mm
+    const S = 1000;
 
     if (mode === 'Az') {
-      // Per-vertex smooth interpolation of A_z via viridis on [A_z_min, A_z_max].
       const range = Math.max(A_z_max - A_z_min, 1e-12);
       const positions = new Float32Array(vertices.length * 3);
       const colors    = new Float32Array(vertices.length * 3);
@@ -113,7 +187,7 @@ const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode }>
         positions[3 * i + 1] = vertices[i][1] * S;
         positions[3 * i + 2] = 0;
         const t = (A_z_per_node[i] - A_z_min) / range;
-        const [r, g, b] = viridis01(t);
+        const [r, g, b] = jetBands(t, N_BANDS);
         colors[3 * i]     = r / 255;
         colors[3 * i + 1] = g / 255;
         colors[3 * i + 2] = b / 255;
@@ -131,11 +205,10 @@ const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode }>
       return g;
     }
 
-    // mode === 'Bmag' — flat per-triangle colour via jet, clipped at 2 T
-    // (steel saturation typical scale; values above show fully saturated).
+    // |B| — flat per-triangle jet, clamp 2 T.
     const vmax = Math.min(B_mag_max || 0.001, 2.0);
     const nTri = triangles.length;
-    const positions = new Float32Array(nTri * 3 * 3);    // 3 verts per tri
+    const positions = new Float32Array(nTri * 3 * 3);
     const colors    = new Float32Array(nTri * 3 * 3);
     let p = 0; let c = 0;
     for (let i = 0; i < nTri; i++) {
@@ -151,6 +224,22 @@ const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode }>
         colors[c++] = bb / 255;
       }
     }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    g.setAttribute('color',    new THREE.BufferAttribute(colors, 3));
+    return g;
+  }, [payload, mode]);
+
+  // Iso-A contour lines (only in A_z mode) — gives the classic Ansys
+  // "flux line" pattern on top of the filled bands.
+  const isoGeo = useMemo(() => {
+    if (mode !== 'Az') return null;
+    const { vertices, triangles, A_z_per_node, A_z_min, A_z_max } = payload;
+    const { positions, colors } = buildIsoLines(
+      vertices, triangles, A_z_per_node,
+      A_z_min, A_z_max, N_BANDS, 1000, 0.5,
+    );
+    if (positions.length === 0) return null;
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     g.setAttribute('color',    new THREE.BufferAttribute(colors, 3));
@@ -179,11 +268,16 @@ const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode }>
 
   return (
     <group>
-      <mesh geometry={geo}>
+      <mesh geometry={fillGeo}>
         <meshBasicMaterial vertexColors side={THREE.DoubleSide}/>
       </mesh>
+      {isoGeo && (
+        <lineSegments geometry={isoGeo}>
+          <lineBasicMaterial vertexColors linewidth={1}/>
+        </lineSegments>
+      )}
       <lineSegments geometry={outGeo}>
-        <lineBasicMaterial color={0x0f172a} transparent opacity={0.5}/>
+        <lineBasicMaterial color={0x0f172a} transparent opacity={0.55}/>
       </lineSegments>
     </group>
   );
@@ -375,9 +469,10 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0 }) 
         {/* Colour bar */}
         {payload && (
           mode === 'Az'
-            ? <ColorBar vmin={payload.A_z_min * 1000}
-                         vmax={payload.A_z_max * 1000}
-                         unit="mWb/m" lut={viridis01}/>
+            ? <ColorBar vmin={payload.A_z_min}
+                         vmax={payload.A_z_max}
+                         unit="Wb/m"
+                         lut={(t) => jetBands(t, N_BANDS)}/>
             : <ColorBar vmin={0}
                          vmax={Math.min(payload.B_mag_max, 2.0)}
                          unit="T" lut={jet01}/>

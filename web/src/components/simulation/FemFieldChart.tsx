@@ -106,30 +106,29 @@ type FieldMode = 'Az' | 'Bmag';
 const N_BANDS = 20;           // # of discrete colour bands / iso-A levels
 
 /** Extract iso-A_z contour line segments via per-triangle linear
- *  interpolation (marching-segments on tri's).
+ *  interpolation (marching-segments on tris).
  *  For each iso level L, find triangles where A_min ≤ L ≤ A_max, then
- *  locate the two edges that L crosses and emit one line segment between
- *  the two intersection points.  Output is a flat positions array
- *  (XYZ pairs per segment) plus per-vertex RGB matching the band colour. */
+ *  locate the two edges that L crosses and emit one line segment.
+ *  Returns just positions — colour is applied uniformly at draw time. */
 function buildIsoLines(
   vertices: [number, number][],
   triangles: [number, number, number][],
+  domain_per_tri: number[],
   A_z_per_node: number[],
   A_min: number,
   A_max: number,
   nLevels: number,
   S: number,        // metres → mm
   z: number,        // depth for visibility
-): { positions: Float32Array; colors: Float32Array } {
+): Float32Array {
+  const DOM_OUTER = 8;
   const range = Math.max(A_max - A_min, 1e-12);
   const pos: number[] = [];
-  const col: number[] = [];
   for (let k = 1; k < nLevels; k++) {
     const t  = k / nLevels;
     const L  = A_min + t * range;
-    const [cr, cg, cb] = jet01(t);
-    const r = cr / 255, g = cg / 255, b = cb / 255;
     for (let ti = 0; ti < triangles.length; ti++) {
+      if (domain_per_tri[ti] === DOM_OUTER) continue;
       const [a, b1, c] = triangles[ti];
       const Aa = A_z_per_node[a];
       const Ab = A_z_per_node[b1];
@@ -137,15 +136,10 @@ function buildIsoLines(
       const lo = Math.min(Aa, Ab, Ac);
       const hi = Math.max(Aa, Ab, Ac);
       if (L < lo || L > hi) continue;
-      // Find the two edges where the value crosses L
       const ix: [number, number][] = [];
-      const ed: [[number, number, number], [number, number, number]] = [
-        [a, b1, Aa - L],
-        [b1, c, Ab - L],
-        [c, a, Ac - L],
-      ] as any;
+      const ed: number[][] = [[a, b1], [b1, c], [c, a]];
       for (let e = 0; e < 3; e++) {
-        const [i0, i1] = [ed[e][0] as number, ed[e][1] as number];
+        const i0 = ed[e][0], i1 = ed[e][1];
         const f0 = A_z_per_node[i0] - L;
         const f1 = A_z_per_node[i1] - L;
         if (f0 * f1 > 0 || (f0 === 0 && f1 === 0)) continue;
@@ -159,49 +153,65 @@ function buildIsoLines(
       if (ix.length === 2) {
         pos.push(ix[0][0] * S, ix[0][1] * S, z,
                  ix[1][0] * S, ix[1][1] * S, z);
-        col.push(r, g, b, r, g, b);
       }
     }
   }
-  return {
-    positions: new Float32Array(pos),
-    colors:    new Float32Array(col),
-  };
+  return new Float32Array(pos);
 }
 
 const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode }>
   = ({ payload, mode }) => {
   // Fill geometry — per-vertex Ansys-style banded rainbow for A_z, or
-  // per-triangle flat jet for |B|.
+  // per-triangle flat jet for |B|.  We SKIP DOM_OUTER (8) triangles so
+  // the outer far-field air ring (visible only for the BC) doesn't eat
+  // most of the canvas with a uniform near-zero band.
   const fillGeo = useMemo(() => {
-    const { vertices, triangles, A_z_per_node, A_z_min, A_z_max,
+    const { vertices, triangles, domain_per_tri,
+            A_z_per_node, A_z_min, A_z_max,
             Bmag_per_tri, B_mag_max } = payload;
     const S = 1000;
+    const DOM_OUTER = 8;
 
     if (mode === 'Az') {
-      const range = Math.max(A_z_max - A_z_min, 1e-12);
+      // Re-normalise to the actual A_z range inside the motor proper so
+      // the colours saturate where the field actually lives.
+      let lo = +Infinity, hi = -Infinity;
+      for (let ti = 0; ti < triangles.length; ti++) {
+        if (domain_per_tri[ti] === DOM_OUTER) continue;
+        for (const vi of triangles[ti]) {
+          const a = A_z_per_node[vi];
+          if (a < lo) lo = a;
+          if (a > hi) hi = a;
+        }
+      }
+      if (!isFinite(lo) || !isFinite(hi)) { lo = A_z_min; hi = A_z_max; }
+      const range = Math.max(hi - lo, 1e-12);
+
+      // Only triangles NOT in DOM_OUTER get filled
+      const keep = triangles.map((_, ti) => domain_per_tri[ti] !== DOM_OUTER);
       const positions = new Float32Array(vertices.length * 3);
       const colors    = new Float32Array(vertices.length * 3);
       for (let i = 0; i < vertices.length; i++) {
         positions[3 * i]     = vertices[i][0] * S;
         positions[3 * i + 1] = vertices[i][1] * S;
         positions[3 * i + 2] = 0;
-        const t = (A_z_per_node[i] - A_z_min) / range;
+        const t = (A_z_per_node[i] - lo) / range;
         const [r, g, b] = jetBands(t, N_BANDS);
         colors[3 * i]     = r / 255;
         colors[3 * i + 1] = g / 255;
         colors[3 * i + 2] = b / 255;
       }
-      const indices = new Uint32Array(triangles.length * 3);
+      const indexArr: number[] = [];
       for (let i = 0; i < triangles.length; i++) {
-        indices[3 * i]     = triangles[i][0];
-        indices[3 * i + 1] = triangles[i][1];
-        indices[3 * i + 2] = triangles[i][2];
+        if (!keep[i]) continue;
+        indexArr.push(triangles[i][0], triangles[i][1], triangles[i][2]);
       }
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', new THREE.BufferAttribute(positions, 3));
       g.setAttribute('color',    new THREE.BufferAttribute(colors, 3));
-      g.setIndex(new THREE.BufferAttribute(indices, 1));
+      g.setIndex(new THREE.BufferAttribute(new Uint32Array(indexArr), 1));
+      // Stash normalised range so the iso-line builder + colour bar agree
+      (g as any).userData = { Az_lo: lo, Az_hi: hi };
       return g;
     }
 
@@ -230,21 +240,26 @@ const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode }>
     return g;
   }, [payload, mode]);
 
-  // Iso-A contour lines (only in A_z mode) — gives the classic Ansys
-  // "flux line" pattern on top of the filled bands.
+  // Iso-A contour lines (only in A_z mode) — drawn as crisp DARK lines on
+  // top of the rainbow fill, like the "flux lines" in FEMM / FEMAG.  We
+  // emit them at finer level than the colour bands (N_BANDS × 3) so the
+  // line pattern is dense enough to read everywhere — even in regions
+  // where A_z varies slowly (outer air, stator iron).
   const isoGeo = useMemo(() => {
     if (mode !== 'Az') return null;
-    const { vertices, triangles, A_z_per_node, A_z_min, A_z_max } = payload;
-    const { positions, colors } = buildIsoLines(
-      vertices, triangles, A_z_per_node,
-      A_z_min, A_z_max, N_BANDS, 1000, 0.5,
+    const { vertices, triangles, domain_per_tri, A_z_per_node } = payload;
+    // Use the same range the fill normalised to (motor-only, no outer air).
+    const { Az_lo, Az_hi } = (fillGeo as any).userData ?? {
+      Az_lo: payload.A_z_min, Az_hi: payload.A_z_max };
+    const positions = buildIsoLines(
+      vertices, triangles, domain_per_tri, A_z_per_node,
+      Az_lo, Az_hi, N_BANDS, 1000, 1.0,
     );
     if (positions.length === 0) return null;
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    g.setAttribute('color',    new THREE.BufferAttribute(colors, 3));
     return g;
-  }, [payload, mode]);
+  }, [payload, mode, fillGeo]);
 
   // Outlines for crisp boundaries on top of the field
   const outGeo = useMemo(() => {
@@ -273,7 +288,7 @@ const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode }>
       </mesh>
       {isoGeo && (
         <lineSegments geometry={isoGeo}>
-          <lineBasicMaterial vertexColors linewidth={1}/>
+          <lineBasicMaterial color={0x0b1220} transparent opacity={0.85}/>
         </lineSegments>
       )}
       <lineSegments geometry={outGeo}>
@@ -467,16 +482,31 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0 }) 
         </Box>
 
         {/* Colour bar */}
-        {payload && (
-          mode === 'Az'
-            ? <ColorBar vmin={payload.A_z_min}
-                         vmax={payload.A_z_max}
-                         unit="Wb/m"
-                         lut={(t) => jetBands(t, N_BANDS)}/>
-            : <ColorBar vmin={0}
-                         vmax={Math.min(payload.B_mag_max, 2.0)}
-                         unit="T" lut={jet01}/>
-        )}
+        {payload && (() => {
+          if (mode === 'Bmag') return (
+            <ColorBar vmin={0}
+              vmax={Math.min(payload.B_mag_max, 2.0)}
+              unit="T" lut={jet01}/>
+          );
+          // Recompute the motor-only A_z range that the fill used.
+          const DOM_OUTER = 8;
+          let lo = +Infinity, hi = -Infinity;
+          const tris = payload.triangles;
+          const dom  = payload.domain_per_tri;
+          const A    = payload.A_z_per_node;
+          for (let ti = 0; ti < tris.length; ti++) {
+            if (dom[ti] === DOM_OUTER) continue;
+            for (const vi of tris[ti]) {
+              if (A[vi] < lo) lo = A[vi];
+              if (A[vi] > hi) hi = A[vi];
+            }
+          }
+          if (!isFinite(lo) || !isFinite(hi)) { lo = payload.A_z_min; hi = payload.A_z_max; }
+          return (
+            <ColorBar vmin={lo} vmax={hi} unit="Wb/m"
+              lut={(t) => jetBands(t, N_BANDS)}/>
+          );
+        })()}
 
         {/* Stats sidebar */}
         {payload && (

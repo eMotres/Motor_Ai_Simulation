@@ -17,10 +17,12 @@ import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import CheckCircleIcon  from '@mui/icons-material/CheckCircle';
 import ErrorIcon        from '@mui/icons-material/Error';
 import BoltIcon         from '@mui/icons-material/Bolt';
+import SimulationCharts from './SimulationCharts';
+import PhysicsDashboard from './PhysicsDashboard';
 
 // NOTE: using port 8001 (new backend with loss calculations)
 // Change back to 8000 after restarting the main backend
-const API = 'http://localhost:8001';
+const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
 
 // ── types ─────────────────────────────────────────────────────────────────────
 interface SimStatus {
@@ -132,7 +134,8 @@ const SimulationPanel: React.FC = () => {
   const ampTurns    = nWiresPerSlot * I_coil_rms;            // A·turns per slot
 
   // ── derived phase currents (for display) ─────────────────────────────────
-  const thetaElec_deg = rotorAngle * polePairs + phaseOffset;
+  // γ=0 ⇒ q-axis (max torque) — add +π/2 so the cos→ phase A peaks at q-axis
+  const thetaElec_deg = rotorAngle * polePairs + phaseOffset + 90;
   const thetaElec_rad = thetaElec_deg * Math.PI / 180;
   const I_A = I_coil_peak * Math.cos(thetaElec_rad);
   const I_B = I_coil_peak * Math.cos(thetaElec_rad - 2 * Math.PI / 3);
@@ -354,7 +357,7 @@ const SimulationPanel: React.FC = () => {
               value={phaseOffset}
               onChange={e => setPhaseOffset(+e.target.value)}
               inputProps={{ step: 5, min: -180, max: 180 }}
-              helperText="0°=d-axis  90°=q-axis (max torque SPMSM)"
+              helperText="0°=q-axis (max torque)  ±90°=d-axis (field weakening)"
               disabled={isRunning}
               FormHelperTextProps={{ sx: { fontSize: 10, color: '#475569', mx: 0 } }}
             />
@@ -647,9 +650,9 @@ const SimulationPanel: React.FC = () => {
           </Paper>
         )}
 
-        {/* No job yet */}
+        {/* No job yet — show bolt icon */}
         {!job && (
-          <Box sx={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', py: 4 }}>
             <Box sx={{ textAlign: 'center', color: '#1e3a5f' }}>
               <BoltIcon sx={{ fontSize: 48, mb: 1 }}/>
               <Typography sx={{ fontSize: 13, color: '#334155' }}>
@@ -658,6 +661,28 @@ const SimulationPanel: React.FC = () => {
             </Box>
           </Box>
         )}
+
+        {/* ── Waveform charts — always visible ── */}
+        <SimulationCharts
+          elecPeriod_deg={elecPeriod_deg}
+          coggingPeriod_deg={coggingPeriod_deg}
+          polePairs={polePairs}
+          I_coil_peak={I_coil_peak}
+          nParallel={connDef.nP}
+          phaseOffset_deg={phaseOffset}
+          R_phase={job?.result?.R_phase_ohm ?? 0.0132}
+          rpm={rpm}
+          frequency_hz={frequency}
+          L_phase_est_H={0.0002}
+        />
+
+        {/* ── Physics dashboard — analytical + Ansys-comparable ── */}
+        <PhysicsDashboard
+          rotorAngle_deg={rotorAngle}
+          gamma_deg={phaseOffset}
+          pinnLosses={job?.result ?? null}
+        />
+
       </Box>
     </Box>
   );

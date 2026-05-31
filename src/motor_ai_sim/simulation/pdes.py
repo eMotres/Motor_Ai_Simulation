@@ -38,10 +38,14 @@ try:
     HAS_MODULUS = True
 except ImportError:
     try:
-        from physicsnemo.eq.pde import PDE          # newer package name
+        from physicsnemo.sym.eq.pde import PDE      # physicsnemo-sym package
         HAS_MODULUS = True
     except ImportError:
-        HAS_MODULUS = False
+        try:
+            from physicsnemo.eq.pde import PDE      # legacy path
+            HAS_MODULUS = True
+        except ImportError:
+            HAS_MODULUS = False
 
         class PDE:                                   # minimal stub for offline dev
             """Stub PDE base used when Modulus is not installed."""
@@ -187,4 +191,76 @@ class PermanentMagnet2D(PDE):
             "magnetostatics_pm": (
                 nu_mag * (diff(A_z, x, 2) + diff(A_z, y, 2)) - source
             ),
+        }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4.  Frequency-domain AC magnetostatics  (eddy currents)
+# ─────────────────────────────────────────────────────────────────────────────
+class MagnetostaticsAC2D(PDE):
+    """Frequency-domain 2-D magnetostatics with eddy-current back-reaction.
+
+    The governing equation at angular frequency ω = 2πf is:
+
+        ∇(ν ∇A_z) − jωσ A_z = −J_source            (complex)
+
+    Split into real / imaginary parts  (A_z = Ar + j·Ai):
+
+        Re:  ν·ΔAr + ω·σ·Ai = −Jr                   (4a)
+        Im:  ν·ΔAi − ω·σ·Ar = −Ji                   (4b)
+
+    The PINN network outputs two fields: Ar(x,y), Ai(x,y).
+
+    Physical interpretation:
+        - σ=0 (air, laminated steel): decoupled Poisson for Ar, Ai
+        - σ>0 (copper conductors, NdFeB magnets): eddy coupling
+          → captures skin effect, proximity effect, and magnet eddy losses
+
+    From the solution:
+        J_eddy  = −jωσ A_z  →  |J_eddy|² / σ = ω²σ (Ar²+Ai²)
+        P_eddy  = (ω²σ/2) · stack_length · ∫|A_z|² dA   [W]
+        |B|_rms = (1/√2) · |∇A_z|_peak
+
+    Parameters
+    ----------
+    mu_r  : float  relative permeability
+    sigma : float  electrical conductivity  [S/m]
+    omega : float  angular frequency = 2πf  [rad/s]
+    Jr    : float  real part of imposed current density  [A/m²]
+    Ji    : float  imaginary part (= 0 for in-phase source)
+    """
+
+    name = "MagnetostaticsAC2D"
+
+    def __init__(
+        self,
+        mu_r:  float = 1.0,
+        sigma: float = 0.0,
+        omega: float = 0.0,
+        Jr:    float = 0.0,
+        Ji:    float = 0.0,
+    ):
+        x  = Symbol("x")
+        y  = Symbol("y")
+        Ar = Function("Ar")(x, y)
+        Ai = Function("Ai")(x, y)
+
+        nu = 1.0 / (MU_0 * mu_r)
+
+        # (4a) ν·ΔAr + ωσ·Ai + Jr = 0
+        eq_real = (
+            nu * (diff(Ar, x, 2) + diff(Ar, y, 2))
+            + Number(omega * sigma) * Ai
+            + Number(Jr)
+        )
+        # (4b) ν·ΔAi − ωσ·Ar + Ji = 0
+        eq_imag = (
+            nu * (diff(Ai, x, 2) + diff(Ai, y, 2))
+            - Number(omega * sigma) * Ar
+            + Number(Ji)
+        )
+
+        self.equations = {
+            "magnetostatics_ac_real": eq_real,
+            "magnetostatics_ac_imag": eq_imag,
         }

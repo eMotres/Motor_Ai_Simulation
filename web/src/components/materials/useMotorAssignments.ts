@@ -12,7 +12,7 @@ export interface MotorAssignments {
   shaft: string;
 }
 
-const API = 'http://localhost:8000/api/materials';
+const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8000') + '/api/materials';
 
 export function useMotorAssignments() {
   const [assignments, setAssignments] = useState<MotorAssignments | null>(null);

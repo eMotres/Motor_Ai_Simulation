@@ -1,19 +1,55 @@
 /**
- * Mesh tab — collocation-point settings for the 2D PINN solver.
+ * Mesh tab — FEM triangle mesh viewer + PINN collocation settings.
  *
  * Left  : parameter sliders (n_radial, n_angular, n_angular_slots)
- *         + point-count summary table
- * Right : live SVG preview of the polar sampling grid
- *         (scaled to current geometry from /api/config)
+ *         + mesh density slider for the FEM mesh
+ * Right : either the live SVG collocation preview OR the real FEM triangle
+ *         mesh fetched from /api/simulation/mesh/build2d, drawn on canvas
+ *         with one color per domain.
  */
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert, Box, Button, Chip, CircularProgress, Divider,
-  Paper, Slider, Tooltip, Typography,
+  Paper, Slider, Tooltip, Typography, ToggleButton, ToggleButtonGroup,
 } from '@mui/material';
 import SaveIcon from '@mui/icons-material/Save';
+import RefreshIcon from '@mui/icons-material/Refresh';
+import FemMeshViewer3D from './FemMeshViewer3D';
 
-const API = 'http://localhost:8000';
+const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
+
+// ── FEM mesh types ────────────────────────────────────────────────────────────
+interface FemMesh {
+  n_vertices: number;
+  n_triangles: number;
+  vertices: [number, number][];   // metres
+  triangles: [number, number, number][];
+  domain_per_tri: number[];
+  domain_counts: Record<string, number>;
+  extent: [number, number, number, number];
+  mesh_size_mm: number;
+  note: string;
+}
+
+// Domain id → color (matches the field map convention)
+const DOMAIN_RGBA: Record<number, [number, number, number, number]> = {
+  0:  [80,  90,  110, 200],   // air            slate-ish
+  1:  [72,  85,  99,  240],   // stator         slate
+  2:  [251, 191, 36,  240],   // coil           amber
+  3:  [56,  189, 248, 200],   // air gap        sky
+  4:  [59,  130, 246, 240],   // magnet N       blue
+  5:  [55,  68,  82,  230],   // rotor          dark slate
+  6:  [180, 180, 190, 210],   // shaft          grey
+  7:  [115, 217, 204, 230],   // band           teal
+  8:  [56,  102, 140, 200],   // outer air      deep blue
+  44: [239, 68,  68,  240],   // magnet S       red
+};
+const DOMAIN_NAMES: Record<number, string> = {
+  0: 'Air',     1: 'Stator',  2: 'Winding',  3: 'Air gap',
+  4: 'Magnet N', 5: 'Rotor',  6: 'Shaft',
+  7: 'Band',    8: 'Outer air',
+  44: 'Magnet S',
+};
 
 // ── types ─────────────────────────────────────────────────────────────────────
 interface MeshCfg {
@@ -55,6 +91,99 @@ function estimatePoints(cfg: MeshCfg): Record<string, number> {
     shaft:       Math.round(ring * 0.3),
   };
 }
+
+// ── FEM mesh canvas preview ──────────────────────────────────────────────────
+interface FemMeshCanvasProps {
+  mesh: FemMesh | null;
+  loading: boolean;
+  size?: number;
+  fillDomains?: boolean;   // fill triangles with domain color
+  showEdges?: boolean;     // draw triangle edges
+}
+
+const FemMeshCanvas: React.FC<FemMeshCanvasProps> = ({
+  mesh, loading, size = 520, fillDomains = true, showEdges = true,
+}) => {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    const c = canvasRef.current;
+    if (!c) return;
+    const ctx = c.getContext('2d');
+    if (!ctx) return;
+    c.width = size;
+    c.height = size;
+
+    // Background
+    ctx.fillStyle = '#060d17';
+    ctx.fillRect(0, 0, size, size);
+
+    if (!mesh || mesh.n_triangles === 0) return;
+
+    const [xMin, xMax, yMin, yMax] = mesh.extent;
+    const span = Math.max(xMax - xMin, yMax - yMin) * 1.05;
+    const cx = (xMin + xMax) / 2;
+    const cy = (yMin + yMax) / 2;
+    const scale = size / span;
+    const m2px = (x: number) => (x - cx) * scale + size / 2;
+    const m2py = (y: number) => size / 2 - (y - cy) * scale;
+
+    const v = mesh.vertices;
+    const tris = mesh.triangles;
+    const doms = mesh.domain_per_tri;
+
+    // Fill pass
+    if (fillDomains) {
+      for (let i = 0; i < tris.length; i++) {
+        const [a, b, c2] = tris[i];
+        const rgba = DOMAIN_RGBA[doms[i]] ?? [40, 40, 50, 255];
+        ctx.fillStyle = `rgba(${rgba[0]},${rgba[1]},${rgba[2]},${rgba[3] / 255})`;
+        ctx.beginPath();
+        ctx.moveTo(m2px(v[a][0]), m2py(v[a][1]));
+        ctx.lineTo(m2px(v[b][0]), m2py(v[b][1]));
+        ctx.lineTo(m2px(v[c2][0]), m2py(v[c2][1]));
+        ctx.closePath();
+        ctx.fill();
+      }
+    }
+
+    // Edges pass — light, single colour
+    if (showEdges) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+      ctx.lineWidth = 0.4;
+      ctx.beginPath();
+      for (let i = 0; i < tris.length; i++) {
+        const [a, b, c2] = tris[i];
+        const ax = m2px(v[a][0]), ay = m2py(v[a][1]);
+        const bx = m2px(v[b][0]), by = m2py(v[b][1]);
+        const cx2 = m2px(v[c2][0]), cy2 = m2py(v[c2][1]);
+        ctx.moveTo(ax, ay); ctx.lineTo(bx, by);
+        ctx.moveTo(bx, by); ctx.lineTo(cx2, cy2);
+        ctx.moveTo(cx2, cy2); ctx.lineTo(ax, ay);
+      }
+      ctx.stroke();
+    }
+  }, [mesh, size, fillDomains, showEdges]);
+
+  return (
+    <Box sx={{ position: 'relative', display: 'flex', justifyContent: 'center',
+      alignItems: 'center' }}>
+      {loading && (
+        <Box sx={{ position: 'absolute', inset: 0, display: 'flex',
+          alignItems: 'center', justifyContent: 'center',
+          bgcolor: 'rgba(6,13,23,0.65)', borderRadius: 2, zIndex: 2 }}>
+          <CircularProgress size={32} sx={{ color: '#3b82f6' }}/>
+        </Box>
+      )}
+      <canvas
+        ref={canvasRef}
+        width={size}
+        height={size}
+        style={{ borderRadius: 12, border: '1px solid #1e293b', display: 'block' }}
+      />
+    </Box>
+  );
+};
 
 // ── SVG collocation preview ──────────────────────────────────────────────────
 const SVG_SIZE = 420;
@@ -151,6 +280,52 @@ const MeshPanel: React.FC = () => {
   const [saved,   setSaved]   = useState(false);
   const [error,   setError]   = useState<string | null>(null);
 
+  // ── FEM mesh state ─────────────────────────────────────────────────────────
+  const [view,        setView]        = useState<'fem' | 'pinn'>('fem');
+  const [meshSizeMm,  setMeshSizeMm]  = useState<number>(4.0);
+  const [minSizeMm,   setMinSizeMm]   = useState<number>(0.3);
+  const [surfaceDev,  setSurfaceDev]  = useState<number>(0.005);   // mm
+  const [normalDev,   setNormalDev]   = useState<number>(6.0);     // deg
+  const [aspectRatio, setAspectRatio] = useState<number>(10.0);
+  const [rotorAngle,  setRotorAngle]  = useState<number>(0.0);
+  // ── Solver-domain extensions (Ansys-style) ───────────────────────────────
+  const [outerAirFactor, setOuterAirFactor] = useState<number>(1.3);   // 1.0 = off; 1.3 = +30%
+  const [motionBand,     setMotionBand]     = useState<boolean>(true);
+  const [bandThickness,  setBandThickness]  = useState<number>(0.4);   // mm
+  const [nSectors,       setNSectors]       = useState<number>(1);     // 1 = full; 4 = 1/4
+  const [showEdges,    setShowEdges]    = useState<boolean>(true);
+  const [showOutlines, setShowOutlines] = useState<boolean>(true);
+  const [fillDomains,  setFillDomains]  = useState<boolean>(true);
+  const [femMesh,     setFemMesh]     = useState<FemMesh | null>(null);
+  const [femLoading,  setFemLoading]  = useState<boolean>(false);
+  const [femError,    setFemError]    = useState<string | null>(null);
+
+  const fetchFemMesh = useCallback(() => {
+    setFemLoading(true);
+    setFemError(null);
+    const qs = new URLSearchParams({
+      mesh_size_mm:        meshSizeMm.toString(),
+      min_size_mm:         minSizeMm.toString(),
+      surface_deviation:   surfaceDev.toString(),
+      normal_deviation:    normalDev.toString(),
+      aspect_ratio:        aspectRatio.toString(),
+      rotor_angle_deg:     rotorAngle.toString(),
+      outer_air_factor:    outerAirFactor.toString(),
+      motion_band:         motionBand ? 'true' : 'false',
+      band_thickness_mm:   bandThickness.toString(),
+      n_sectors:           nSectors.toString(),
+    }).toString();
+    const url = `${API}/api/simulation/mesh/build2d?${qs}`;
+    fetch(url)
+      .then(async r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
+        return r.json();
+      })
+      .then((d: FemMesh) => { setFemMesh(d); setFemLoading(false); })
+      .catch(e => { setFemError(String(e)); setFemLoading(false); });
+  }, [meshSizeMm, minSizeMm, surfaceDev, normalDev, aspectRatio, rotorAngle,
+      outerAirFactor, motionBand, bandThickness, nSectors]);
+
   // Load current config + geometry on mount
   useEffect(() => {
     fetch(`${API}/api/mesh/config`)
@@ -162,6 +337,10 @@ const MeshPanel: React.FC = () => {
       .then(r => r.json())
       .then(d => setGeo(d))
       .catch(() => {});
+
+    // Auto-build the initial FEM mesh
+    fetchFemMesh();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const totalPoints = useMemo(() => {
@@ -200,6 +379,318 @@ const MeshPanel: React.FC = () => {
         display: 'flex', flexDirection: 'column', gap: 2,
       }}>
 
+        {/* ── View toggle ── */}
+        <Box>
+          <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, color: '#475569',
+            letterSpacing: '0.1em', textTransform: 'uppercase', mb: 0.75 }}>
+            View
+          </Typography>
+          <ToggleButtonGroup
+            value={view} exclusive size="small"
+            onChange={(_, v) => v && setView(v as 'fem' | 'pinn')}
+            sx={{ width: '100%',
+              '& .MuiToggleButton-root': { flex: 1, py: 0.5, fontSize: 11,
+                color: '#64748b', borderColor: '#1e293b', textTransform: 'none',
+                '&.Mui-selected': { color: '#e2e8f0', bgcolor: '#1e3a5f',
+                  borderColor: '#3b82f6' } } }}>
+            <ToggleButton value="fem">FEM mesh (real)</ToggleButton>
+            <ToggleButton value="pinn">PINN collocation</ToggleButton>
+          </ToggleButtonGroup>
+        </Box>
+
+        <Divider sx={{ borderColor: '#1e293b' }}/>
+
+        {view === 'fem' && (
+          <>
+            <Box>
+              <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, color: '#475569',
+                letterSpacing: '0.1em', textTransform: 'uppercase', mb: 0.5 }}>
+                FEM Triangle Mesh
+              </Typography>
+              <Typography sx={{ fontSize: 11, color: '#334155' }}>
+                Conforming mesh of the real CadQuery cross-section (gmsh OCC).
+                Used by the scikit-fem 2-D magnetostatics solver.
+              </Typography>
+            </Box>
+
+            {/* mesh_size_mm */}
+            <Box>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>
+                  Max element size
+                  <Tooltip title="Triangle edge length in open regions (mesh_size_mm)" placement="right">
+                    <span style={{ color: '#475569', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
+                  </Tooltip>
+                </Typography>
+                <Chip label={`${meshSizeMm.toFixed(1)} mm`} size="small"
+                  sx={{ fontSize: 11, height: 20, bgcolor: '#1e3a5f', color: '#93c5fd' }}/>
+              </Box>
+              <Slider
+                value={meshSizeMm} min={1.5} max={8} step={0.5}
+                onChange={(_, v) => setMeshSizeMm(v as number)}
+                sx={{ color: '#3b82f6' }}
+              />
+            </Box>
+
+            {/* min_size_mm */}
+            <Box>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>
+                  Min element size
+                  <Tooltip title="Lower bound on triangle size at fillets / thin features" placement="right">
+                    <span style={{ color: '#475569', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
+                  </Tooltip>
+                </Typography>
+                <Chip label={`${minSizeMm.toFixed(2)} mm`} size="small"
+                  sx={{ fontSize: 11, height: 20, bgcolor: '#1e293b', color: '#94a3b8' }}/>
+              </Box>
+              <Slider
+                value={minSizeMm} min={0.1} max={2.0} step={0.05}
+                onChange={(_, v) => setMinSizeMm(v as number)}
+                sx={{ color: '#3b82f6' }}
+              />
+            </Box>
+
+            {/* surface deviation */}
+            <Box>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>
+                  Surface deviation
+                  <Tooltip title="Ansys equivalent — chord error tolerance for the boundary polygon (Shapely simplify)" placement="right">
+                    <span style={{ color: '#475569', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
+                  </Tooltip>
+                </Typography>
+                <Chip label={`${surfaceDev.toFixed(3)} mm`} size="small"
+                  sx={{ fontSize: 11, height: 20, bgcolor: '#1e293b', color: '#94a3b8' }}/>
+              </Box>
+              <Slider
+                value={surfaceDev} min={0.001} max={0.05} step={0.001}
+                onChange={(_, v) => setSurfaceDev(v as number)}
+                sx={{ color: '#3b82f6' }}
+              />
+            </Box>
+
+            {/* normal deviation */}
+            <Box>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>
+                  Normal deviation
+                  <Tooltip title="Ansys equivalent — max angle between two consecutive boundary segments. Lower = smoother fillets" placement="right">
+                    <span style={{ color: '#475569', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
+                  </Tooltip>
+                </Typography>
+                <Chip label={`${normalDev.toFixed(1)}°`} size="small"
+                  sx={{ fontSize: 11, height: 20, bgcolor: '#1e293b', color: '#94a3b8' }}/>
+              </Box>
+              <Slider
+                value={normalDev} min={1.0} max={20.0} step={0.5}
+                onChange={(_, v) => setNormalDev(v as number)}
+                sx={{ color: '#3b82f6' }}
+              />
+            </Box>
+
+            {/* aspect ratio */}
+            <Box>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>
+                  Aspect ratio max
+                  <Tooltip title="Maximum triangle aspect ratio (long-edge / short-edge)" placement="right">
+                    <span style={{ color: '#475569', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
+                  </Tooltip>
+                </Typography>
+                <Chip label={`${aspectRatio.toFixed(0)}`} size="small"
+                  sx={{ fontSize: 11, height: 20, bgcolor: '#1e293b', color: '#94a3b8' }}/>
+              </Box>
+              <Slider
+                value={aspectRatio} min={2} max={30} step={1}
+                onChange={(_, v) => setAspectRatio(v as number)}
+                sx={{ color: '#3b82f6' }}
+              />
+            </Box>
+
+            {/* rotor angle */}
+            <Box>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>Rotor angle</Typography>
+                <Chip label={`${rotorAngle.toFixed(1)}°`} size="small"
+                  sx={{ fontSize: 11, height: 20, bgcolor: '#1e293b', color: '#94a3b8' }}/>
+              </Box>
+              <Slider
+                value={rotorAngle} min={0} max={25.71} step={0.5}
+                onChange={(_, v) => setRotorAngle(v as number)}
+                sx={{ color: '#3b82f6' }}
+              />
+              <Typography sx={{ fontSize: 9, color: '#334155' }}>
+                0…25.71° mech = one electrical period
+              </Typography>
+            </Box>
+
+            <Divider sx={{ borderColor: '#1e293b' }}/>
+
+            {/* ── Solver-domain section (Ansys-style) ────────────────────── */}
+            <Box>
+              <Typography sx={{ fontSize: '0.62rem', fontWeight: 700, color: '#475569',
+                letterSpacing: '0.08em', textTransform: 'uppercase', mb: 0.5 }}>
+                Solver Domain
+              </Typography>
+            </Box>
+
+            {/* Outer air ring factor */}
+            <Box>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>
+                  Outer air ring
+                  <Tooltip title="Extend mesh beyond stator OD so the Dirichlet A=0 far-field BC is applied on air, not iron. 1.0 = off; 1.3 ≈ Ansys Region Padding 30%." placement="right">
+                    <span style={{ color: '#475569', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
+                  </Tooltip>
+                </Typography>
+                <Chip label={outerAirFactor <= 1.001 ? 'off'
+                  : `×${outerAirFactor.toFixed(2)}`} size="small"
+                  sx={{ fontSize: 11, height: 20,
+                    bgcolor: outerAirFactor > 1.001 ? '#1e3a5f' : '#1e293b',
+                    color: outerAirFactor > 1.001 ? '#93c5fd' : '#94a3b8' }}/>
+              </Box>
+              <Slider
+                value={outerAirFactor} min={1.0} max={2.0} step={0.05}
+                onChange={(_, v) => setOuterAirFactor(v as number)}
+                sx={{ color: '#3b82f6' }}
+              />
+            </Box>
+
+            {/* Motion band */}
+            <Box>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>
+                  Motion band
+                  <Tooltip title="Thin slip-surface ring inside the air gap. Transient solver re-meshes only this band as the rotor sweeps; rotor-side air rotates rigidly with the rotor." placement="right">
+                    <span style={{ color: '#475569', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
+                  </Tooltip>
+                </Typography>
+                <ToggleButtonGroup
+                  value={motionBand ? 'on' : 'off'} exclusive size="small"
+                  onChange={(_, v) => v && setMotionBand(v === 'on')}
+                  sx={{ '& .MuiToggleButton-root': { py: 0.1, px: 1,
+                    fontSize: 10, color: '#64748b', borderColor: '#1e293b',
+                    textTransform: 'none',
+                    '&.Mui-selected': { color: '#e2e8f0', bgcolor: '#1e3a5f',
+                      borderColor: '#3b82f6' } } }}>
+                  <ToggleButton value="off">Off</ToggleButton>
+                  <ToggleButton value="on">On</ToggleButton>
+                </ToggleButtonGroup>
+              </Box>
+              {motionBand && (
+                <>
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between',
+                    mb: 0.5, mt: 0.5 }}>
+                    <Typography sx={{ fontSize: 11, color: '#64748b' }}>
+                      Band thickness
+                    </Typography>
+                    <Chip label={`${bandThickness.toFixed(2)} mm`} size="small"
+                      sx={{ fontSize: 10, height: 18, bgcolor: '#1e293b', color: '#94a3b8' }}/>
+                  </Box>
+                  <Slider
+                    value={bandThickness} min={0.1} max={1.0} step={0.05}
+                    onChange={(_, v) => setBandThickness(v as number)}
+                    sx={{ color: '#3b82f6' }}
+                  />
+                </>
+              )}
+            </Box>
+
+            {/* Symmetry sectors */}
+            <Box>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>
+                  Symmetry
+                  <Tooltip title="Split motor into N equal wedges. 24 slots + 28 poles → GCD = 4 → 1/4 model (6 slots + 7 poles per sector). Anti-periodic BC on radial cuts (7 = odd # of poles)." placement="right">
+                    <span style={{ color: '#475569', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
+                  </Tooltip>
+                </Typography>
+              </Box>
+              <ToggleButtonGroup
+                value={nSectors} exclusive size="small" fullWidth
+                onChange={(_, v) => v != null && setNSectors(v as number)}
+                sx={{ width: '100%',
+                  '& .MuiToggleButton-root': { flex: 1, py: 0.3,
+                    fontSize: 11, color: '#64748b', borderColor: '#1e293b',
+                    textTransform: 'none',
+                    '&.Mui-selected': { color: '#e2e8f0', bgcolor: '#1e3a5f',
+                      borderColor: '#3b82f6' } } }}>
+                <ToggleButton value={1}>Full</ToggleButton>
+                <ToggleButton value={2}>1/2</ToggleButton>
+                <ToggleButton value={4}>1/4</ToggleButton>
+              </ToggleButtonGroup>
+              {nSectors > 1 && (
+                <Typography sx={{ fontSize: 9, color: '#334155', mt: 0.5 }}>
+                  {24 / nSectors} slots + {28 / nSectors} poles per sector ·
+                  anti-periodic BC required on radial cuts
+                </Typography>
+              )}
+            </Box>
+
+            {/* Display toggles */}
+            <Box>
+              <Typography sx={{ fontSize: '0.62rem', fontWeight: 700, color: '#475569',
+                letterSpacing: '0.08em', textTransform: 'uppercase', mb: 0.5 }}>
+                Display
+              </Typography>
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+                {[
+                  { label: 'Fill triangles by domain',  val: fillDomains,  set: setFillDomains  },
+                  { label: 'Show CadQuery outlines',    val: showOutlines, set: setShowOutlines },
+                  { label: 'Show triangle edges',       val: showEdges,    set: setShowEdges    },
+                ].map(({ label, val, set }) => (
+                  <Box key={label} onClick={() => set(!val)}
+                    sx={{ display: 'flex', alignItems: 'center', gap: 1, cursor: 'pointer',
+                      p: 0.5, borderRadius: 1,
+                      bgcolor: val ? '#1e293b' : 'transparent',
+                      border: '1px solid', borderColor: val ? '#334155' : 'transparent' }}>
+                    <Box sx={{ width: 12, height: 12, borderRadius: 0.5, flexShrink: 0,
+                      bgcolor: val ? '#3b82f6' : '#1e293b',
+                      border: '1px solid #334155' }}/>
+                    <Typography sx={{ fontSize: 11,
+                      color: val ? '#e2e8f0' : '#475569' }}>{label}</Typography>
+                  </Box>
+                ))}
+              </Box>
+            </Box>
+
+            <Button
+              variant="outlined" fullWidth
+              startIcon={femLoading ? <CircularProgress size={14} color="inherit"/> : <RefreshIcon/>}
+              onClick={fetchFemMesh}
+              disabled={femLoading}
+              sx={{ py: 0.8, fontSize: 11, color: '#3b82f6', borderColor: '#1e3a5f' }}
+            >
+              {femLoading ? 'Building…' : 'Rebuild mesh'}
+            </Button>
+
+            {femError && <Alert severity="error" sx={{ fontSize: 11 }}>{femError}</Alert>}
+
+            {femMesh && (
+              <Box sx={{ bgcolor: '#0a1628', borderRadius: 1, p: 1, border: '1px solid #1e293b' }}>
+                <Typography sx={{ fontSize: 10, color: '#475569', mb: 0.5 }}>Mesh stats</Typography>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <Typography sx={{ fontSize: 11, color: '#94a3b8' }}>vertices</Typography>
+                  <Typography sx={{ fontSize: 11, color: '#e2e8f0', fontVariantNumeric: 'tabular-nums' }}>
+                    {femMesh.n_vertices.toLocaleString()}
+                  </Typography>
+                </Box>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <Typography sx={{ fontSize: 11, color: '#94a3b8' }}>triangles</Typography>
+                  <Typography sx={{ fontSize: 11, color: '#e2e8f0', fontVariantNumeric: 'tabular-nums' }}>
+                    {femMesh.n_triangles.toLocaleString()}
+                  </Typography>
+                </Box>
+              </Box>
+            )}
+
+            <Divider sx={{ borderColor: '#1e293b' }}/>
+          </>
+        )}
+
+        {view === 'pinn' && (
+          <>
         <Box>
           <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, color: '#475569',
             letterSpacing: '0.1em', textTransform: 'uppercase', mb: 0.5 }}>
@@ -314,38 +805,102 @@ const MeshPanel: React.FC = () => {
         </Button>
 
         {error && <Alert severity="error" sx={{ fontSize: 11 }}>{error}</Alert>}
+          </>
+        )}
       </Box>
 
       {/* ── RIGHT: preview ── */}
-      <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', p: 3, gap: 2 }}>
+      <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', p: 3, gap: 2,
+        overflow: 'auto' }}>
 
         <Box>
           <Typography variant="h6" sx={{ color: '#e2e8f0', fontWeight: 700, mb: 0.5 }}>
-            Collocation Sampling Grid
+            {view === 'fem' ? '2-D FEM Triangle Mesh' : 'Collocation Sampling Grid'}
           </Typography>
           <Typography sx={{ fontSize: 12, color: '#475569' }}>
-            Live preview of point distribution used during PINN training.
-            Each coloured ring corresponds to one domain.
+            {view === 'fem'
+              ? 'Conforming triangle mesh of the actual CadQuery cross-section. Each colour = one motor domain.'
+              : 'Live preview of point distribution used during PINN training. Each coloured ring corresponds to one domain.'}
           </Typography>
         </Box>
 
         {/* Legend */}
-        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
-          {DOMAINS.map(d => (
-            <Chip key={d.key} label={d.label} size="small" sx={{
-              fontSize: 10, height: 20,
-              bgcolor: `${d.color}20`, color: d.color,
-              border: `1px solid ${d.color}40`,
-            }}/>
-          ))}
-        </Box>
+        {view === 'fem' && femMesh && (
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
+            {Object.entries(femMesh.domain_counts).map(([name, count]) => {
+              // find rgba from DOMAIN_NAMES → id
+              const id = Number(Object.keys(DOMAIN_NAMES).find(
+                k => DOMAIN_NAMES[Number(k)].toLowerCase() === name.replace('_', ' ').toLowerCase()
+                  || (name === 'magnet_N' && Number(k) === 4)
+                  || (name === 'magnet_S' && Number(k) === 44)
+                  || (name === 'airgap'   && Number(k) === 3)
+                  || (name === 'coil'     && Number(k) === 2)
+              ));
+              const rgba = DOMAIN_RGBA[id] ?? [100, 100, 100, 255];
+              return (
+                <Chip key={name} label={`${DOMAIN_NAMES[id] ?? name} · ${count.toLocaleString()}`}
+                  size="small" sx={{
+                    fontSize: 10, height: 20,
+                    bgcolor: `rgba(${rgba[0]},${rgba[1]},${rgba[2]},0.18)`,
+                    color: `rgb(${rgba[0]},${rgba[1]},${rgba[2]})`,
+                    border: `1px solid rgba(${rgba[0]},${rgba[1]},${rgba[2]},0.5)`,
+                  }}/>
+              );
+            })}
+          </Box>
+        )}
+        {view === 'pinn' && (
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
+            {DOMAINS.map(d => (
+              <Chip key={d.key} label={d.label} size="small" sx={{
+                fontSize: 10, height: 20,
+                bgcolor: `${d.color}20`, color: d.color,
+                border: `1px solid ${d.color}40`,
+              }}/>
+            ))}
+          </Box>
+        )}
 
-        {/* SVG preview */}
+        {/* Preview pane */}
         <Paper sx={{ flex: 1, bgcolor: '#060d17', border: '1px solid #1e293b',
           borderRadius: 2, overflow: 'hidden', display: 'flex',
-          alignItems: 'center', justifyContent: 'center' }}>
-          <CollocationPreview cfg={cfg} geo={geo}/>
+          alignItems: 'center', justifyContent: 'center', minHeight: 540,
+          position: 'relative' }}>
+          {view === 'fem' ? (
+            <>
+              {femLoading && (
+                <Box sx={{ position: 'absolute', inset: 0, display: 'flex',
+                  alignItems: 'center', justifyContent: 'center',
+                  bgcolor: 'rgba(6,13,23,0.65)', zIndex: 5 }}>
+                  <CircularProgress size={32} sx={{ color: '#3b82f6' }}/>
+                </Box>
+              )}
+              <Box sx={{ width: '100%', height: '100%', minHeight: 540 }}>
+                <FemMeshViewer3D payload={femMesh as any}
+                  showFill={fillDomains}
+                  showWire={showEdges}
+                  showOutlines={showOutlines}
+                  showGrid/>
+              </Box>
+              {/* Help text overlay */}
+              <Box sx={{ position: 'absolute', left: 8, bottom: 8, zIndex: 4,
+                bgcolor: 'rgba(10,22,40,0.7)', px: 1, py: 0.5, borderRadius: 1,
+                pointerEvents: 'none' }}>
+                <Typography sx={{ fontSize: 9, color: '#94a3b8' }}>
+                  Drag = orbit · Right-drag / Shift+drag = pan · Wheel = zoom
+                </Typography>
+              </Box>
+            </>
+          ) : (
+            <CollocationPreview cfg={cfg} geo={geo}/>
+          )}
         </Paper>
+
+        {view === 'fem' && femMesh && (
+          <Typography sx={{ fontSize: 10, color: '#475569', textAlign: 'center' }}>
+            {femMesh.note}
+          </Typography>
+        )}
       </Box>
     </Box>
   );

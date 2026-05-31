@@ -1358,40 +1358,32 @@ def build_materials(
         DOM_MAG_S:  FEMMaterial("mag_S", mu_r=1.05),
     }
 
-    # ── Per-magnet tangential magnetization ──────────────────────────────
-    # Each magnet's M is parallel to ITS OWN bottom edge (the edge nearest
-    # the rotor centre).  Polarity ±1 alternates per pole.  This matches
-    # the user-supplied reference where every pole has M aligned with the
-    # local bottom-edge tangent.
+    # ── Per-magnet tangential magnetization (SPOKE-type) ─────────────────
+    # Every magnet's M is parallel to its OWN bottom edge — equivalently,
+    # M is the LOCAL TANGENT direction at the magnet's angular position on
+    # the rotor.  We pick the CCW tangent uniformly so that adjacent N/S
+    # poles drive flux INTO the iron tooth between them, producing the
+    # classic SPOKE-PM flux-concentration pattern (high |B| in the rotor
+    # iron between magnets, alternating virtual N/S at each tooth).
+    #
+    # Convention:
+    #   tangent_CCW(centroid) = (-c_y, +c_x) / |centroid|     in WORLD frame
+    #   N magnet (pol = +1):  M = +M_mag · tangent_CCW
+    #   S magnet (pol = -1):  M = -M_mag · tangent_CCW = +M_mag · tangent_CW
+    #
+    # This guarantees identical |M| across all magnets and a strictly
+    # alternating pattern — i.e. exactly what the user requested:
+    # «магнитизация всех магнитов должна быть одинакова и чередоваться».
     for i, (mp, polarity) in enumerate(polys.get("magnets", [])):
         if mp is None or mp.is_empty:
             continue
         try:
-            # Identify the magnet's bottom edge = the edge whose two
-            # vertices have the smallest mean radius (closest to rotor centre).
-            coords = list(mp.exterior.coords)[:-1]
-            n = len(coords)
-            best_edge = (0, 1)
-            best_r    = float("inf")
-            for k in range(n):
-                x0, y0 = coords[k]
-                x1, y1 = coords[(k + 1) % n]
-                r_mid = 0.5 * (math.hypot(x0, y0) + math.hypot(x1, y1))
-                if r_mid < best_r:
-                    best_r = r_mid
-                    best_edge = (k, (k + 1) % n)
-            x0, y0 = coords[best_edge[0]]
-            x1, y1 = coords[best_edge[1]]
-            ex, ey = x1 - x0, y1 - y0
-            elen = math.hypot(ex, ey)
-            if elen < 1e-9:
-                # degenerate edge — fallback to radial direction
-                cx, cy = mp.centroid.x, mp.centroid.y
-                cr = math.hypot(cx, cy)
-                if cr < 1e-9: continue
-                tx, ty = -cy / cr, cx / cr     # tangent direction
-            else:
-                tx, ty = ex / elen, ey / elen   # unit tangent of bottom edge
+            cx, cy = mp.centroid.x, mp.centroid.y
+            cr = math.hypot(cx, cy)
+            if cr < 1e-9:
+                continue
+            # Counter-clockwise tangent at the magnet's angular position
+            tx, ty = -cy / cr, cx / cr
         except Exception:
             continue
         sign = +1.0 if polarity > 0 else -1.0

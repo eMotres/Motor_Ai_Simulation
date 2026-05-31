@@ -1216,6 +1216,8 @@ def build_materials(
     mats: Dict[int, FEMMaterial] = {
         DOM_AIR:    FEMMaterial("air",    mu_r=1.0),
         DOM_AIRGAP: FEMMaterial("airgap", mu_r=1.0),
+        DOM_BAND:   FEMMaterial("band",   mu_r=1.0),    # motion-band air slip
+        DOM_OUTER:  FEMMaterial("outer",  mu_r=1.0),    # far-field air ring
         DOM_STATOR: FEMMaterial("stator", mu_r=mu_r_steel),
         DOM_ROTOR:  FEMMaterial("rotor",  mu_r=mu_r_steel),
         DOM_SHAFT:  FEMMaterial("shaft",  mu_r=1000.0),
@@ -1309,3 +1311,254 @@ def fem_field2d(
         n_nodes=mesh.p.shape[1],
         solve_time_s=_t.time() - t_start,
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5.  Full FEM pipeline with torque + losses (Simulation tab endpoint)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _per_triangle_B(mesh, A_nodal: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """Compute B = (B_x, B_y) per triangle from P1 nodal A_z.
+    Returns (B_x_per_tri, B_y_per_tri) — both shape (n_tri,).
+
+    For a P1 element with vertices p0, p1, p2 and nodal A values A0, A1, A2:
+        ∇A = Σ_i A_i ∇φ_i
+        where ∇φ_0 = (y1 - y2, x2 - x1) / (2·area)  (and cyclic)
+    Then B_x =  ∂A/∂y, B_y = -∂A/∂x  (2-D out-of-plane A_z convention).
+    """
+    p = mesh.p          # (2, n_nodes)
+    t = mesh.t          # (3, n_tri)
+    x0 = p[0, t[0]]; y0 = p[1, t[0]]
+    x1 = p[0, t[1]]; y1 = p[1, t[1]]
+    x2 = p[0, t[2]]; y2 = p[1, t[2]]
+    A0 = A_nodal[t[0]]
+    A1 = A_nodal[t[1]]
+    A2 = A_nodal[t[2]]
+    two_area = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0)
+    safe = np.where(np.abs(two_area) > 1e-18, two_area, 1e-18)
+    dA_dx = (A0 * (y1 - y2) + A1 * (y2 - y0) + A2 * (y0 - y1)) / safe
+    dA_dy = (A0 * (x2 - x1) + A1 * (x0 - x2) + A2 * (x1 - x0)) / safe
+    return dA_dy, -dA_dx           # B_x, B_y
+
+
+def _triangle_areas(mesh) -> np.ndarray:
+    p = mesh.p; t = mesh.t
+    x0 = p[0, t[0]]; y0 = p[1, t[0]]
+    x1 = p[0, t[1]]; y1 = p[1, t[1]]
+    x2 = p[0, t[2]]; y2 = p[1, t[2]]
+    return 0.5 * np.abs((x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0))
+
+
+def _maxwell_stress_torque(mesh, A_nodal: np.ndarray, r_ag_m: float,
+                            stack_length_m: float,
+                            theta_start: float = 0.0,
+                            theta_end: float   = 2 * math.pi,
+                            n_samples: int     = 720) -> float:
+    """Maxwell stress tensor torque integrated on an air-gap circle arc.
+
+    T = (L / μ₀) · r² · ∫ B_r · B_φ dφ   (over [theta_start, theta_end])
+
+    Samples B at n_samples points on the arc r = r_ag, finds the host
+    triangle for each, evaluates the constant-gradient B.  Returns torque
+    in N·m for the integrated arc — caller multiplies by n_sectors when
+    only a sector is meshed.
+    """
+    from matplotlib.tri import Triangulation
+    tri = Triangulation(mesh.p[0], mesh.p[1], mesh.t.T)
+    finder = tri.get_trifinder()
+
+    phis = np.linspace(theta_start, theta_end, n_samples, endpoint=False)
+    xs = r_ag_m * np.cos(phis)
+    ys = r_ag_m * np.sin(phis)
+    tri_idx = finder(xs, ys)
+
+    Bx_per_tri, By_per_tri = _per_triangle_B(mesh, A_nodal)
+
+    valid = tri_idx >= 0
+    Bx = np.where(valid, Bx_per_tri[np.clip(tri_idx, 0, None)], 0.0)
+    By = np.where(valid, By_per_tri[np.clip(tri_idx, 0, None)], 0.0)
+    # Polar components at each sample point
+    cos_p = np.cos(phis); sin_p = np.sin(phis)
+    B_r   = Bx * cos_p + By * sin_p
+    B_phi = -Bx * sin_p + By * cos_p
+
+    dphi = (theta_end - theta_start) / n_samples
+    return (stack_length_m / MU0) * r_ag_m ** 2 * float(np.sum(B_r * B_phi)) * dphi
+
+
+def fem_solve_for_sim(
+    rotor_angle_deg: float = 0.0,
+    gamma_deg:       float = 0.0,
+    mesh_size_mm:    float = 3.0,
+    min_size_mm:     float = 0.3,
+    outer_air_factor:float = 1.3,
+    motion_band:     bool  = True,
+    band_thickness_mm: float = 0.4,
+    n_sectors:       int   = 4,
+    stator_fillet_mm:float = 0.0,
+) -> dict:
+    """End-to-end FEM solve: build mesh on (possibly clipped) geometry,
+    solve magnetostatics, compute Maxwell-stress torque and Steinmetz iron
+    losses + I²R copper losses, return everything the Simulation tab needs.
+
+    Multiplies INTEGRAL quantities (torque + iron + magnet eddy losses)
+    by n_sectors so the values represent the full motor.  Copper loss is
+    derived from phase currents directly (no mesh integration) so it's
+    already a full-motor number.
+    """
+    import time as _t
+    from motor_ai_sim.cadquery_geometry import CadQueryMotor
+    from motor_ai_sim.simulation.geometry_2d import (
+        params_from_config, MotorDomains2D,
+    )
+    from motor_ai_sim.config import get_config
+
+    t_start = _t.time()
+    cfg  = get_config()
+    sim  = cfg.get("simulation", {})
+    geo  = cfg.get("geometry",   {})
+    wind = cfg.get("winding",    {})
+
+    p = params_from_config()
+    d = MotorDomains2D(p)
+    pole_pairs   = p.num_poles // 2
+    I_phase_rms  = sim.get("max_current", 85.0)
+    n_parallel   = wind.get("n_parallel", 2)
+    n_wires      = int(geo.get("num_wires_per_slot", 14))
+    I_coil_peak  = I_phase_rms / n_parallel * math.sqrt(2)
+    theta_e      = math.radians(rotor_angle_deg * pole_pairs + gamma_deg + 90.0)
+    I_ph = {
+        'A': I_coil_peak * math.cos(theta_e),
+        'B': I_coil_peak * math.cos(theta_e - 2 * math.pi / 3),
+        'C': I_coil_peak * math.cos(theta_e + 2 * math.pi / 3),
+    }
+
+    motor = CadQueryMotor()
+    polys = motor.get_2d_polygons(rotor_angle_deg=rotor_angle_deg)
+    polys = _simplify_polys(polys, tol_mm=0.005,
+                             stator_fillet_mm=stator_fillet_mm)
+
+    log.info("FEM-sim: building mesh (h=%.2f, n_sectors=%d, outer×%.2f, band=%s)",
+             mesh_size_mm, n_sectors, outer_air_factor, motion_band)
+    mesh, cell_tags, classify_fn = build_mesh_from_polygons(
+        polys, rotor_angle_deg, mesh_size_mm,
+        min_size_mm=min_size_mm,
+        outer_air_factor=outer_air_factor,
+        motion_band=motion_band,
+        band_thickness_mm=band_thickness_mm,
+        n_sectors=n_sectors,
+        geo_cfg=motor.parameters,
+    )
+    cell_tags = cell_tags.astype(np.int8)
+
+    slot_area = p.slot_width_m * p.slot_height_m * p.fill_factor
+    mats = build_materials(I_ph, d.winding_layout, polys, rotor_angle_deg,
+                            slot_area, n_wires)
+
+    t_solve_start = _t.time()
+    A = solve_magnetostatics(mesh, cell_tags, mats)
+    t_solve = _t.time() - t_solve_start
+    # Sanitize any NaN/Inf so the response stays JSON-compliant.  Bad nodes
+    # become zero — they show up as background-coloured spots in the canvas
+    # but don't crash the whole render.
+    A = np.nan_to_num(A, nan=0.0, posinf=0.0, neginf=0.0)
+    n_bad = int(np.sum(~np.isfinite(A))) if A.size else 0
+    if n_bad:
+        log.warning("FEM: %d non-finite A values clamped to 0", n_bad)
+
+    # ── Per-triangle B, |B| ───────────────────────────────────────────────
+    Bx_tri, By_tri = _per_triangle_B(mesh, A)
+    Bmag_tri = np.sqrt(Bx_tri ** 2 + By_tri ** 2)
+    Bx_tri = np.nan_to_num(Bx_tri, nan=0.0, posinf=0.0, neginf=0.0)
+    By_tri = np.nan_to_num(By_tri, nan=0.0, posinf=0.0, neginf=0.0)
+    Bmag_tri = np.nan_to_num(Bmag_tri, nan=0.0, posinf=0.0, neginf=0.0)
+    areas    = _triangle_areas(mesh)               # m² for unit stack
+
+    # ── Torque via Maxwell stress on air-gap circle (sector arc × n) ──────
+    r_ag_m = 0.5 * (p.r_rotor_out + p.r_stator_in)      # mid-air-gap
+    theta_end = 2 * math.pi if n_sectors <= 1 else (2 * math.pi / n_sectors)
+    T_sector = _maxwell_stress_torque(
+        mesh, A, r_ag_m, p.stack_length,
+        theta_start=0.0, theta_end=theta_end, n_samples=720,
+    )
+    T_em_Nm = T_sector * (n_sectors if n_sectors > 1 else 1)
+
+    # ── Losses ────────────────────────────────────────────────────────────
+    # Steinmetz-style iron loss density:  P/V  =  k_iron · f^α · B^β   [W/m³]
+    # Copper:  3-phase I²R  with R_phase from config (≈ analytical solver).
+    freq = sim.get("rpm", 3950) / 60 * pole_pairs       # electrical Hz
+
+    # Per-domain mass integration
+    rho_steel  = float(cfg.get("materials", {}).get("M19_29G", {})
+                         .get("density_kg_m3", 7650.0))
+    rho_magnet = float(cfg.get("materials", {}).get("N42", {})
+                         .get("density_kg_m3", 7500.0))
+    # Specific-loss coefficients (W/kg at 1 T, 50 Hz) ≈ analytical solver
+    k_iron_W_kg_1T_50Hz = 1.5
+    alpha_f             = 1.6     # frequency exponent (>1 to penalise harmonics)
+    beta_B              = 2.0     # flux-density exponent
+
+    # Volume per triangle = area × stack_length [m³]
+    vol = areas * p.stack_length
+
+    def _domain_iron_loss(tag: int, k: float, rho: float) -> float:
+        mask = cell_tags == tag
+        if not np.any(mask):
+            return 0.0
+        # ⟨B^β⟩ weighted by volume
+        Bp = Bmag_tri[mask] ** beta_B
+        m  = vol[mask] * rho            # mass per triangle [kg]
+        return k * (freq / 50.0) ** alpha_f * float(np.sum(Bp * m))
+
+    P_fe_stator = _domain_iron_loss(DOM_STATOR, k_iron_W_kg_1T_50Hz, rho_steel)
+    P_fe_rotor  = _domain_iron_loss(DOM_ROTOR,  k_iron_W_kg_1T_50Hz, rho_steel)
+    P_mag_eddy  = _domain_iron_loss(DOM_MAG_N,  0.3, rho_magnet) \
+                + _domain_iron_loss(DOM_MAG_S,  0.3, rho_magnet)
+
+    mult = n_sectors if n_sectors > 1 else 1
+    P_fe_total = (P_fe_stator + P_fe_rotor) * mult
+    P_mag_total = P_mag_eddy * mult
+
+    # Copper loss — phase currents × R_phase  (×3 phases)
+    R_phase = float(wind.get("phase_resistance_ohm", 0.018))
+    P_cu = 3 * I_phase_rms ** 2 * R_phase
+
+    P_loss_total = P_fe_total + P_mag_total + P_cu
+    rpm = sim.get("rpm", 3950)
+    P_mech = T_em_Nm * 2 * math.pi * rpm / 60
+    eff = P_mech / max(P_mech + P_loss_total, 1e-6) if P_mech > 0 else 0.0
+
+    # ── Outlines (for the renderer; matches /mesh/build2d format) ─────────
+    polys_for_outlines = getattr(classify_fn, "polys", polys)
+
+    return {
+        "ok": True,
+        "rotor_angle_deg": rotor_angle_deg,
+        "gamma_deg":       gamma_deg,
+        "n_sectors":       n_sectors,
+        "symmetry_mult":   mult,
+        "n_vertices":      int(mesh.p.shape[1]),
+        "n_triangles":     int(mesh.t.shape[1]),
+        "vertices":        mesh.p.T.tolist(),       # metres
+        "triangles":       mesh.t.T.tolist(),
+        "domain_per_tri":  cell_tags.tolist(),
+        "A_z_per_node":    A.tolist(),               # Wb/m
+        "Bmag_per_tri":    Bmag_tri.tolist(),
+        "extent": [
+            float(mesh.p[0].min()), float(mesh.p[0].max()),
+            float(mesh.p[1].min()), float(mesh.p[1].max()),
+        ],
+        "polys_for_outlines": polys_for_outlines,
+        # ── Physics quantities (with n_sectors multiplier already applied) ──
+        "T_em_Nm":       round(T_em_Nm, 4),
+        "P_cu_W":        round(P_cu, 1),
+        "P_fe_W":        round(P_fe_total, 1),
+        "P_mag_eddy_W":  round(P_mag_total, 1),
+        "P_loss_total_W":round(P_loss_total, 1),
+        "P_mech_W":      round(P_mech, 1),
+        "efficiency":    round(eff, 4),
+        "freq_Hz":       round(freq, 2),
+        "rpm":           rpm,
+        "solve_time_s":  round(t_solve, 2),
+        "total_time_s":  round(_t.time() - t_start, 2),
+    }

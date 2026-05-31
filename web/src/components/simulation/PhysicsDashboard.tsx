@@ -26,6 +26,7 @@ import RefreshIcon     from '@mui/icons-material/Refresh';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import LossWaveformChart from './LossWaveformChart';
 import MotorField2D      from './MotorField2D';
+import FemFieldChart     from './FemFieldChart';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
 
@@ -459,10 +460,8 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, pinnLoss
         </Box>
       </Paper>
 
-      {/* ── 2D Field map ── */}
-      <Paper sx={CHART_STYLE}>
-        <MotorField2D gamma_deg={gamma_deg} />
-      </Paper>
+      {/* ── 2D Field map — REAL scikit-fem solve on the Mesh-tab mesh ── */}
+      <FemFieldChart gamma_deg={gamma_deg} />
 
       {/* ── Chart 1: MMF ── */}
       <Paper sx={CHART_STYLE}>

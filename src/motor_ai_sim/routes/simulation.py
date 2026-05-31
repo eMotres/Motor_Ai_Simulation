@@ -1003,6 +1003,112 @@ async def build_fem_mesh_2d(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 7c. Real FEM solve (scikit-fem) — returns A_z + mesh + torque + losses
+# ─────────────────────────────────────────────────────────────────────────────
+
+_fem_field_cache: Dict[tuple, Dict] = {}
+
+
+@router.get("/physics/fem_field2d")
+async def get_fem_field2d(
+    rotor_angle_deg:     float = 0.0,
+    gamma_deg:           float = 0.0,
+    mesh_size_mm:        float = 4.0,
+    min_size_mm:         float = 0.3,
+    outer_air_factor:    float = 1.3,
+    motion_band:         bool  = True,
+    band_thickness_mm:   float = 0.4,
+    n_sectors:           int   = 4,
+    stator_fillet_mm:    float = 0.0,
+):
+    """Real scikit-fem 2-D magnetostatics solve on the same mesh the Mesh
+    tab renders.
+
+    Returns A_z per node + mesh data so the canvas can colour-fill each
+    triangle by the interpolated potential.  Torque and iron/magnet losses
+    are integrated over the meshed sector and MULTIPLIED by n_sectors so
+    the reported values represent the FULL motor (e.g. 1/4 model with
+    n_sectors=4 → T and P_fe × 4).
+    """
+    import numpy as _np
+
+    key = (
+        round(rotor_angle_deg * 2) / 2,
+        round(gamma_deg, 1),
+        round(mesh_size_mm, 2),
+        round(min_size_mm, 2),
+        round(outer_air_factor, 2),
+        bool(motion_band),
+        round(band_thickness_mm, 2),
+        int(n_sectors),
+        round(stator_fillet_mm, 2),
+    )
+    if key in _fem_field_cache:
+        return _fem_field_cache[key]
+
+    try:
+        from motor_ai_sim.simulation.fem_solver_2d import fem_solve_for_sim
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"FEM solver unavailable: {e}")
+
+    try:
+        result = fem_solve_for_sim(
+            rotor_angle_deg=rotor_angle_deg,
+            gamma_deg=gamma_deg,
+            mesh_size_mm=mesh_size_mm,
+            min_size_mm=min_size_mm,
+            outer_air_factor=outer_air_factor,
+            motion_band=motion_band,
+            band_thickness_mm=band_thickness_mm,
+            n_sectors=int(n_sectors),
+            stator_fillet_mm=stator_fillet_mm,
+        )
+    except Exception as e:
+        log.exception("FEM solve failed")
+        raise HTTPException(status_code=500, detail=f"FEM solve failed: {e}")
+
+    # ── Build outlines payload (same shape as /mesh/build2d) ──────────
+    from shapely.geometry import MultiPolygon as _SMP
+
+    def _poly_outlines_m(poly):
+        if poly is None or poly.is_empty:
+            return []
+        geoms = list(poly.geoms) if isinstance(poly, _SMP) else [poly]
+        rings = []
+        for g in geoms:
+            if g.is_empty or g.area < 1e-6:
+                continue
+            rings.append([[x * 1e-3, y * 1e-3] for x, y in g.exterior.coords])
+            for h in g.interiors:
+                rings.append([[x * 1e-3, y * 1e-3] for x, y in h.coords])
+        return rings
+
+    pfo = result.pop("polys_for_outlines", {}) or {}
+    outlines: List[Dict] = []
+    for k, dom in (("stator", 1), ("rotor", 5), ("shaft", 6),
+                    ("air_gap", 3), ("airgap_band", 7), ("air_outer", 8)):
+        if pfo.get(k) is not None:
+            outlines.append({"domain": dom, "loops": _poly_outlines_m(pfo[k])})
+    for mag_poly, polarity in pfo.get("magnets", []) or []:
+        outlines.append({
+            "domain": 4 if polarity > 0 else 44,
+            "loops": _poly_outlines_m(mag_poly),
+        })
+    for coil_poly in pfo.get("coils", []) or []:
+        outlines.append({"domain": 2, "loops": _poly_outlines_m(coil_poly)})
+    result["outlines"] = outlines
+
+    # A_z numeric stats for the renderer
+    A = _np.asarray(result["A_z_per_node"])
+    result["A_z_min"] = float(A.min())
+    result["A_z_max"] = float(A.max())
+    result["B_mag_max"] = float(_np.asarray(result["Bmag_per_tri"]).max())
+
+    _fem_field_cache[key] = result
+    return result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 8.  Torque sweep  —  Maxwell stress tensor on air-gap circle
 # ─────────────────────────────────────────────────────────────────────────────
 

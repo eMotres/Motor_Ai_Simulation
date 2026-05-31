@@ -1919,11 +1919,11 @@ def fem_solve_for_sim(
     # ── Demagnetisation post-check (after the converged solve) ───────────
     Bx_post, By_post = _per_triangle_B(mesh, A)
     demag_report: List[dict] = []
-    # Per-magnet operating point: (H_op, B_op) along the magnetisation
-    # direction in the cell with the strongest demagnetising field.  All
-    # magnets reported (not just near-knee) so the frontend can plot every
-    # point on the BH chart.
     magnet_op_points: List[dict] = []
+    # PER-TRIANGLE demagnetisation coefficient (0..1) for the field map —
+    # all triangles default to 1.0 (no demag); magnet cells get the actual
+    # ratio of remaining B / Br at their operating point.
+    demag_coef_per_tri = np.ones(mesh.t.shape[1], dtype=np.float32)
     for tag in sorted([t for t in mats if t >= DOM_MAG_BASE]):
         mat_t = mats[tag]
         if abs(mat_t.Mx) + abs(mat_t.My) < 1e-9:
@@ -1950,6 +1950,17 @@ def fem_solve_for_sim(
             continue
         H_knee = mat_t.bh_curve[1][0] if mat_t.bh_curve[0][1] <= 0 \
                    else mat_t.bh_curve[0][0]
+        # Per-cell demag coefficient.  Above the knee (H ≥ H_knee, i.e.
+        # less negative) the magnet operates linearly → DC = 1.  Below
+        # the knee the coefficient drops linearly with H, hitting 0 at
+        # 2·H_knee (a deeply demagnetised cell).
+        for j, c in enumerate(idx):
+            h = H_M[j]
+            if h >= H_knee:
+                dc = 1.0
+            else:
+                dc = 1.0 - (H_knee - h) / abs(H_knee)
+            demag_coef_per_tri[c] = max(0.0, min(1.0, float(dc)))
         ratio = H_min / H_knee if H_knee < 0 else 0.0
         if ratio > 0.85:
             demag_report.append({
@@ -2086,9 +2097,8 @@ def fem_solve_for_sim(
         # H came within 15 % of the BH-curve knee.  demagnetised=True means
         # the magnet has crossed the knee and is irreversibly weakened.
         "demag_report":      demag_report,
-        # Full BH curve + every magnet's operating point — used by the
-        # frontend BH chart to visualise where each magnet sits on the
-        # demagnetisation curve.
-        "bh_curve_magnet":   _build_magnet_bh_curve_payload(mats),
-        "magnet_op_points":  magnet_op_points,
+        # Per-triangle demagnetisation coefficient (0..1).  All non-magnet
+        # cells are 1.0; magnet cells get the actual ratio so the field
+        # map can colour them in an "Ansys Demag-Coef" plot.
+        "demag_coef_per_tri": demag_coef_per_tri.tolist(),
     }

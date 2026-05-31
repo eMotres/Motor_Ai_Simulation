@@ -73,7 +73,7 @@ function readMeshSetting<T>(key: string, def: T): T {
 }
 
 // ── R3F mesh component ────────────────────────────────────────────────────
-type FieldMode = 'Az' | 'Bmag';
+type FieldMode = 'Az' | 'Bmag' | 'Demag';
 
 const N_BANDS = 20;           // # of discrete colour bands / iso-A levels
 
@@ -210,6 +210,40 @@ const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode }>
     }
     // NOTE: lo/hi defined here is referenced by isoGeo + colour bar via
     // fillGeo.userData (see below).
+
+    if (mode === 'Demag') {
+      // Demag-Coef: show ONLY magnet triangles, coloured 0..1 via jet
+      // (Ansys "Demag-Coef" convention — red = 1.0 = safe, blue = 0 =
+      // fully demagnetised).  Non-magnet cells drop out so the magnet
+      // geometry stands alone on the canvas.
+      const dc = (payload as any).demag_coef_per_tri as number[] | undefined;
+      const dom = domain_per_tri;
+      const DOM_MAG_N = 4, DOM_MAG_S = 44;
+      const nTri = triangles.length;
+      const positions = new Float32Array(nTri * 3 * 3);
+      const colors    = new Float32Array(nTri * 3 * 3);
+      let p = 0, c = 0;
+      for (let i = 0; i < nTri; i++) {
+        if (dom[i] !== DOM_MAG_N && dom[i] !== DOM_MAG_S) continue;
+        const tt = triangles[i];
+        const v  = dc ? Math.max(0, Math.min(1, dc[i])) : 1;
+        const [rr, gg, bb] = jetBands(v, 11);   // 11 bands like Ansys
+        for (const vi of tt) {
+          positions[p++] = vertices[vi][0] * S;
+          positions[p++] = vertices[vi][1] * S;
+          positions[p++] = 0;
+          colors[c++] = rr / 255;
+          colors[c++] = gg / 255;
+          colors[c++] = bb / 255;
+        }
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position',
+        new THREE.BufferAttribute(positions.subarray(0, p), 3));
+      g.setAttribute('color',
+        new THREE.BufferAttribute(colors.subarray(0, c), 3));
+      return g;
+    }
 
     // |B| — flat per-triangle jet.  Skip DOM_OUTER and HARD-CLIP vmax to
     // the typical iron saturation (~1.8 T).  Without this cap, the 1/4-
@@ -480,6 +514,7 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
                   borderColor: '#3b82f6' }}}}>
             <ToggleButton value="Az">A<sub>z</sub></ToggleButton>
             <ToggleButton value="Bmag">|B|</ToggleButton>
+            <ToggleButton value="Demag">Demag</ToggleButton>
           </ToggleButtonGroup>
           <Button size="small" startIcon={<RefreshIcon fontSize="small"/>}
             onClick={fetchFem} disabled={loading}
@@ -544,6 +579,10 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
             }
             const vmax = Math.min(Math.max(pct(Bs, 95), 0.05), 1.8);
             return <ColorBar vmin={0} vmax={vmax} unit="T"
+              lut={(t) => jetBands(t, 11)}/>;
+          }
+          if (mode === 'Demag') {
+            return <ColorBar vmin={0} vmax={1} unit="Demag-Coef"
               lut={(t) => jetBands(t, 11)}/>;
           }
           // A_z mode — 2/98 percentile of interior node values, symmetrised.

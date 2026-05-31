@@ -27,7 +27,6 @@ import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import LossWaveformChart from './LossWaveformChart';
 import MotorField2D      from './MotorField2D';
 import FemFieldChart   from './FemFieldChart';
-import BHCurveChart    from './BHCurveChart';
 import type { FemPayload } from './fem-types';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
@@ -132,7 +131,9 @@ function exportCSV(filename: string, rows: Record<string, number | string>[]) {
 
 // ── main component ────────────────────────────────────────────────────────────
 const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_rms, pinnLosses }) => {
-  const [femPayload, setFemPayload] = React.useState<FemPayload | null>(null);
+  // Latest FEM solve payload — kept around so future siblings can reuse it.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [_femPayload, setFemPayload] = React.useState<FemPayload | null>(null);
   const [data, setData]       = useState<PhysicsData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState<string | null>(null);
@@ -467,15 +468,6 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
       {/* ── 2D Field map — REAL scikit-fem solve on the Mesh-tab mesh ── */}
       <FemFieldChart gamma_deg={gamma_deg} I_phase_rms={I_phase_rms}
         onPayload={setFemPayload}/>
-
-      {/* ── BH curve + magnet operating points ── */}
-      {femPayload?.bh_curve_magnet && femPayload.bh_curve_magnet.length > 0 && (
-        <BHCurveChart
-          bh_curve_magnet={femPayload.bh_curve_magnet}
-          magnet_op_points={femPayload.magnet_op_points ?? []}
-          demag_report={femPayload.demag_report ?? []}
-        />
-      )}
 
       {/* ── Chart 1: MMF ── */}
       <Paper sx={CHART_STYLE}>

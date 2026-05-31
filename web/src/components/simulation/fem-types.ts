@@ -39,11 +39,5 @@ export interface FemPayload {
     knee_proximity: number;
     demagnetised: boolean;
   }>;
-  bh_curve_magnet?: Array<{ H_kA_per_m: number; B_T: number }>;
-  magnet_op_points?: Array<{
-    magnet_index: number;
-    H_op_kA_per_m: number;
-    H_mean_kA_per_m: number;
-    B_op_T: number;
-  }>;
+  demag_coef_per_tri?: number[];
 }

@@ -680,6 +680,7 @@ const SimulationPanel: React.FC = () => {
         <PhysicsDashboard
           rotorAngle_deg={rotorAngle}
           gamma_deg={phaseOffset}
+          I_phase_rms={current}
           pinnLosses={job?.result ?? null}
         />
 

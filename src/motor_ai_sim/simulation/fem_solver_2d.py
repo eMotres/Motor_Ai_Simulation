@@ -1589,6 +1589,7 @@ def fem_solve_for_sim(
     band_thickness_mm: float = 0.4,
     n_sectors:       int   = 4,
     stator_fillet_mm:float = 0.0,
+    I_phase_rms:     Optional[float] = None,
 ) -> dict:
     """End-to-end FEM solve: build mesh on (possibly clipped) geometry,
     solve magnetostatics, compute Maxwell-stress torque and Steinmetz iron
@@ -1615,7 +1616,11 @@ def fem_solve_for_sim(
     p = params_from_config()
     d = MotorDomains2D(p)
     pole_pairs   = p.num_poles // 2
-    I_phase_rms  = sim.get("max_current", 85.0)
+    # I_phase_rms = 0 must be honoured (zero-current solve = magnet field only).
+    # `None` means "use whatever the operating-point config says".
+    if I_phase_rms is None:
+        I_phase_rms  = sim.get("max_current", 85.0)
+    I_phase_rms = float(I_phase_rms)
     n_parallel   = wind.get("n_parallel", 2)
     n_wires      = int(geo.get("num_wires_per_slot", 14))
     I_coil_peak  = I_phase_rms / n_parallel * math.sqrt(2)
@@ -1726,7 +1731,9 @@ def fem_solve_for_sim(
     P_fe_total = (P_fe_stator + P_fe_rotor) * mult
     P_mag_total = P_mag_eddy * mult
 
-    # Copper loss — phase currents × R_phase  (×3 phases)
+    # Copper loss — phase currents × R_phase  (×3 phases).  Uses the
+    # I_phase_rms passed in (NOT the config value) so the simulation
+    # actually reflects user-set current changes.
     R_phase = float(wind.get("phase_resistance_ohm", 0.018))
     P_cu = 3 * I_phase_rms ** 2 * R_phase
 

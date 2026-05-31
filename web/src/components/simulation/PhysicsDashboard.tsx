@@ -79,6 +79,7 @@ interface PhysicsData {
 interface Props {
   rotorAngle_deg: number;
   gamma_deg:      number;
+  I_phase_rms?:   number;
   pinnLosses?: {
     P_cu_total_W?: number | null;
     P_fe_stator_W?: number | null;
@@ -128,7 +129,7 @@ function exportCSV(filename: string, rows: Record<string, number | string>[]) {
 }
 
 // ── main component ────────────────────────────────────────────────────────────
-const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, pinnLosses }) => {
+const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_rms, pinnLosses }) => {
   const [data, setData]       = useState<PhysicsData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState<string | null>(null);
@@ -461,7 +462,7 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, pinnLoss
       </Paper>
 
       {/* ── 2D Field map — REAL scikit-fem solve on the Mesh-tab mesh ── */}
-      <FemFieldChart gamma_deg={gamma_deg} />
+      <FemFieldChart gamma_deg={gamma_deg} I_phase_rms={I_phase_rms}/>
 
       {/* ── Chart 1: MMF ── */}
       <Paper sx={CHART_STYLE}>

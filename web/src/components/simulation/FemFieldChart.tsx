@@ -443,9 +443,14 @@ const StatRow: React.FC<{ label: string; value: string; sub?: string }> = ({
 );
 
 // ── main component ────────────────────────────────────────────────────────
-interface Props { gamma_deg?: number; rotor_angle_deg?: number; }
+interface Props {
+  gamma_deg?: number;
+  rotor_angle_deg?: number;
+  I_phase_rms?: number;
+}
 
-const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0 }) => {
+const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
+                                          I_phase_rms }) => {
   const [payload, setPayload] = useState<FemPayload | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [error,   setError]   = useState<string | null>(null);
@@ -454,7 +459,7 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0 }) 
 
   const fetchFem = () => {
     setLoading(true); setError(null);
-    const qs = new URLSearchParams({
+    const params: Record<string, string> = {
       rotor_angle_deg:   String(rotor_angle_deg),
       gamma_deg:         String(gamma_deg),
       mesh_size_mm:      String(readMeshSetting('meshSize',    4.0)),
@@ -464,7 +469,11 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0 }) 
       band_thickness_mm: String(readMeshSetting('bandThickness', 0.4)),
       n_sectors:         String(readMeshSetting('nSectors',    4)),
       stator_fillet_mm:  String(readMeshSetting('statorFillet', 0.0)),
-    }).toString();
+    };
+    if (I_phase_rms !== undefined) {
+      params.I_phase_rms = String(I_phase_rms);
+    }
+    const qs = new URLSearchParams(params).toString();
     fetch(`${API}/api/simulation/physics/fem_field2d?${qs}`)
       .then(async r => {
         if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
@@ -476,7 +485,7 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0 }) 
 
   useEffect(() => { fetchFem();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gamma_deg, rotor_angle_deg]);
+  }, [gamma_deg, rotor_angle_deg, I_phase_rms]);
 
   return (
     <Paper sx={{ bgcolor: '#0b1220', border: '1px solid #1e293b', p: 2,

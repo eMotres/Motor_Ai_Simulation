@@ -1041,6 +1041,7 @@ async def get_fem_field2d(
     band_thickness_mm:   float = 0.4,
     n_sectors:           int   = 4,
     stator_fillet_mm:    float = 0.0,
+    I_phase_rms:         Optional[float] = None,   # None = use config; 0 = zero-current solve
 ):
     """Real scikit-fem 2-D magnetostatics solve on the same mesh the Mesh
     tab renders.
@@ -1063,6 +1064,7 @@ async def get_fem_field2d(
         round(band_thickness_mm, 2),
         int(n_sectors),
         round(stator_fillet_mm, 2),
+        round(I_phase_rms, 2) if I_phase_rms is not None else None,
     )
     if key in _fem_field_cache:
         return _fem_field_cache[key]
@@ -1083,6 +1085,7 @@ async def get_fem_field2d(
             band_thickness_mm=band_thickness_mm,
             n_sectors=int(n_sectors),
             stator_fillet_mm=stator_fillet_mm,
+            I_phase_rms=I_phase_rms,
         )
     except Exception as e:
         log.exception("FEM solve failed")

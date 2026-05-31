@@ -122,23 +122,16 @@ function buildIsoLines(
   z: number,        // depth for visibility
 ): Float32Array {
   const DOM_OUTER = 8;
-  // Symmetric A_max for the level distribution.
-  const amax = Math.max(Math.abs(A_max), Math.abs(A_min), 1e-12);
-  // Levels distributed via INVERSE signed-log so contour lines cluster
-  // around A=0 (where stator iron + airgap live) instead of evenly
-  // spreading across the whole range (which puts almost no lines in the
-  // small-A regions when magnet peaks are 10× larger).
-  const K = Math.log1p(8);
-  const isoLevel = (k: number): number => {
-    const t  = k / nLevels;             // (0, 1)
-    const u  = 2 * t - 1;               // (-1, 1)
-    const s  = Math.sign(u);
-    const inv = (Math.exp(Math.abs(u) * K) - 1) / 8;   // inverse log1p(8x)
-    return s * inv * amax;
-  };
+  // LINEAR distribution of iso-levels — required so the lines have
+  // UNIFORM spacing inside each magnet (where A_z varies linearly with
+  // the local coordinate of constant ∇A_z = constant B).  Log-spaced
+  // levels would cluster lines around A=0, making them look "denser at
+  // the middle of the magnet" — the artefact the user pointed out.
+  const range = Math.max(A_max - A_min, 1e-12);
   const pos: number[] = [];
   for (let k = 1; k < nLevels; k++) {
-    const L  = isoLevel(k);
+    const t  = k / nLevels;
+    const L  = A_min + t * range;
     for (let ti = 0; ti < triangles.length; ti++) {
       if (domain_per_tri[ti] === DOM_OUTER) continue;
       const [a, b1, c] = triangles[ti];
@@ -194,11 +187,10 @@ const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode }>
     };
 
     if (mode === 'Az') {
-      // Signed-log compression: t = sign(A) · log1p(|A|/scale) / log1p(1).
-      // This stretches the small-amplitude variation in the stator iron so
-      // the rainbow bands are visible everywhere, while the magnet peaks
-      // saturate into the band extremes — exactly like Ansys' default
-      // "Magnitude" plot which uses a similar perceptual compression.
+      // LINEAR mapping of A_z → colormap (no compression) so the iso-line
+      // density inside each magnet stays UNIFORM — A_z varies linearly
+      // with position inside a uniformly-magnetised magnet, and the user
+      // expects identical band spacing across the whole magnet body.
       const interior = new Set<number>();
       for (let ti = 0; ti < triangles.length; ti++) {
         if (domain_per_tri[ti] === DOM_OUTER) continue;
@@ -210,10 +202,8 @@ const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode }>
       const lo = -amax, hi = +amax;
       const range = 2 * amax;
       const compress = (a: number): number => {
-        // signed log1p, then renormalise to [-1, 1]
-        const t = Math.sign(a) * Math.log1p(Math.abs(a) * 8 / amax)
-                                / Math.log1p(8);
-        return Math.max(-1, Math.min(1, t));
+        // Linear normalisation A_z → [-1, +1]
+        return Math.max(-1, Math.min(1, a / amax));
       };
 
       // Only triangles NOT in DOM_OUTER get filled

@@ -842,6 +842,10 @@ async def build_fem_mesh_2d(
     motion_band:         bool  = False,   # split air gap with thin DOM_BAND ring
     band_thickness_mm:   float = 0.4,
     n_sectors:           int   = 1,       # 1 = full motor; 4 = 1/4 symmetry
+    stator_fillet_mm:    float = 0.0,     # extra Shapely smoothing; polygons
+                                          # now ship with CadQuery-radius fillets
+                                          # (stator_fillet_r=2.5, _r1=0.9) baked in,
+                                          # so this is OFF by default.
 ):
     """Build a 2-D triangle mesh of the motor cross-section and return it as
     JSON-friendly arrays. Parameters mirror Ansys Maxwell's Curved Surface
@@ -871,6 +875,7 @@ async def build_fem_mesh_2d(
         bool(motion_band),
         round(band_thickness_mm, 2),
         int(n_sectors),
+        round(stator_fillet_mm, 2),
     )
     if key in _fem_mesh_cache:
         return _fem_mesh_cache[key]
@@ -886,7 +891,8 @@ async def build_fem_mesh_2d(
     try:
         motor = CadQueryMotor()
         polys = motor.get_2d_polygons(rotor_angle_deg=rotor_angle_deg)
-        polys = _simplify_polys(polys, tol_mm=surface_deviation)
+        polys = _simplify_polys(polys, tol_mm=surface_deviation,
+                                 stator_fillet_mm=stator_fillet_mm)
         # periodic_coils=False: the disjoint air_background polygon now covers
         # slot air around wires and rotor-pocket air above magnets, so the
         # single gmsh fragment pass produces a clean non-overlapping mesh.

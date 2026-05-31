@@ -77,14 +77,54 @@ class FEMResult:
 # 1.  Build a triangle mesh from CadQuery Shapely polygons (using gmsh)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _simplify_polys(polys: dict, tol_mm: float = 0.005) -> dict:
+def _fillet_polygon(poly, r_convex: float = 0.6, r_concave: float = 0.6):
+    """Round sharp corners of a Shapely (Multi)Polygon with two buffer passes.
+
+    Algorithm:
+      1.  poly.buffer(+r_convex, join_style=round).buffer(-r_convex, join_style=round)
+          → rounds the CONVEX corners of the exterior (and concave corners of
+          interiors, which are convex from inside the iron).
+      2.  poly.buffer(-r_concave, join_style=round).buffer(+r_concave, join_style=round)
+          → rounds the CONCAVE corners of the exterior (slot-mouth inside
+          corners, the ones the user circled in red).
+
+    Equivalent to a Minkowski-sum + erosion pipeline that produces visually
+    indistinguishable fillets up to the chord tolerance.
+    """
+    try:
+        # join_style 1 = round (Shapely 2.x; some versions use the
+        # enum JOIN_STYLE.round = 1).  Cap style is irrelevant for closed
+        # polygons.
+        p1 = poly.buffer(+r_convex,  join_style=1, mitre_limit=4).buffer(
+                          -r_convex, join_style=1, mitre_limit=4)
+        p2 = p1.buffer(  -r_concave, join_style=1, mitre_limit=4).buffer(
+                         +r_concave, join_style=1, mitre_limit=4)
+        if p2.is_valid and not p2.is_empty:
+            return p2
+    except Exception as e:
+        log.warning("_fillet_polygon failed (%s) — keeping original", e)
+    return poly
+
+
+def _simplify_polys(polys: dict, tol_mm: float = 0.005,
+                     stator_fillet_mm: float = 0.8) -> dict:
     """Drop near-collinear vertices below chord tolerance `tol_mm`.
 
     Default 0.005 mm matches Ansys Maxwell's "Surface Deviation = 0.01 mm"
     — small enough that every fillet arc point (chord deviation ~0.01-0.05
     mm depending on radius) survives the cleanup. Long straight runs still
     collapse to two endpoints, so the mesh density is driven entirely by
-    point clustering on curved boundaries."""
+    point clustering on curved boundaries.
+
+    Parameters
+    ----------
+    stator_fillet_mm : float, default 0.8
+        Round all sharp corners on the stator polygon with this radius
+        (a Shapely buffer-out/in pipeline).  The CadQuery slot cutter only
+        rounds ONE corner per slot pair; this post-pass adds fillets at the
+        other slot-mouth corners (top-of-wedge + slot-bottom) so the mesh
+        boundary matches the physical iron lamination.
+    """
     out = dict(polys)
     for k in ("stator", "rotor", "shaft", "air_gap"):
         if polys.get(k) is not None:
@@ -92,6 +132,11 @@ def _simplify_polys(polys: dict, tol_mm: float = 0.005) -> dict:
                 out[k] = polys[k].simplify(tol_mm, preserve_topology=True)
             except Exception:
                 out[k] = polys[k]
+    # ── Round all sharp slot-mouth corners on the stator ──
+    if out.get("stator") is not None and stator_fillet_mm > 0:
+        out["stator"] = _fillet_polygon(out["stator"],
+                                         r_convex=stator_fillet_mm,
+                                         r_concave=stator_fillet_mm)
     out["magnets"] = [
         ((m.simplify(tol_mm, preserve_topology=True) if m is not None else m), p)
         for m, p in polys.get("magnets", [])

@@ -1184,6 +1184,56 @@ class CadQueryMotor:
             stator_poly = parts[0] if len(parts)==1 else SMPoly(parts)
         if not stator_poly.is_valid: stator_poly = stator_poly.buffer(0)
 
+        # ── Stator slot-corner fillets — same radii as 3D CadQuery + Geometry tab ──
+        # The 3D model applies `.fillet(stator_fillet_r)` to outer-ring edges and
+        # `.fillet(stator_fillet_r1)` to inner-ring edges via _OuterRingSelector /
+        # _InnerRingSelector.  We mirror that on the 2-D polygon here so the
+        # Mesh tab (which only sees this dict) renders the SAME corners.
+        import numpy as _np
+        from math import acos as _acos, degrees as _degrees
+
+        def _fillet_coords_2d(coords, target_r, r_tol, fr, min_angle_deg=20.0):
+            n = len(coords)
+            new_coords = []
+            for i in range(n):
+                p_prev   = coords[(i - 1) % n]
+                p_corner = coords[i]
+                p_next   = coords[(i + 1) % n]
+                rc = (p_corner[0]**2 + p_corner[1]**2) ** 0.5
+                if abs(rc - target_r) < r_tol:
+                    dA = _np.array(p_prev) - _np.array(p_corner)
+                    dB = _np.array(p_next) - _np.array(p_corner)
+                    la = _np.linalg.norm(dA); lb = _np.linalg.norm(dB)
+                    if la > 1e-9 and lb > 1e-9:
+                        cos_t = float(_np.clip(_np.dot(dA/la, dB/lb), -1.0, 1.0))
+                        angle_deg = _degrees(_acos(cos_t))
+                        if angle_deg < (180.0 - min_angle_deg):
+                            arc = _fillet_corner(p_prev, p_corner, p_next, fr)
+                            new_coords.extend(arc)
+                            continue
+                new_coords.append(p_corner)
+            return new_coords
+
+        def _fillet_ring_corners_2d(poly, target_r, r_tol, fr, min_angle_deg=20.0):
+            if not hasattr(poly, 'exterior'):
+                return poly
+            new_ext  = _fillet_coords_2d(list(poly.exterior.coords[:-1]),
+                                          target_r, r_tol, fr, min_angle_deg)
+            new_ints = [_fillet_coords_2d(list(h.coords[:-1]),
+                                           target_r, r_tol, fr, min_angle_deg)
+                        for h in poly.interiors]
+            result = SPoly(new_ext, new_ints)
+            if not result.is_valid:
+                result = result.buffer(0)
+            return result
+
+        fillet_r  = p.get('stator_fillet_r',  2.5)
+        fillet_r1 = p.get('stator_fillet_r1', 0.9)
+        if fillet_r > 0 and hasattr(stator_poly, 'exterior'):
+            stator_poly = _fillet_ring_corners_2d(stator_poly, outer_r, 1.5, fillet_r)
+        if fillet_r1 > 0 and hasattr(stator_poly, 'exterior'):
+            stator_poly = _fillet_ring_corners_2d(stator_poly, inner_r, 1.0, fillet_r1)
+
         # ── Coils (winding rectangles in slots) ──────────────────────────────
         right_x  = tooth_w/2 + ins_w + wire_dx/2
         slot_y_c = outer_r - core_h

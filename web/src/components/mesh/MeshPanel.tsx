@@ -282,17 +282,37 @@ const MeshPanel: React.FC = () => {
 
   // ── FEM mesh state ─────────────────────────────────────────────────────────
   const [view,        setView]        = useState<'fem' | 'pinn'>('fem');
-  const [meshSizeMm,  setMeshSizeMm]  = useState<number>(4.0);
-  const [minSizeMm,   setMinSizeMm]   = useState<number>(0.3);
-  const [surfaceDev,  setSurfaceDev]  = useState<number>(0.005);   // mm
-  const [normalDev,   setNormalDev]   = useState<number>(6.0);     // deg
-  const [aspectRatio, setAspectRatio] = useState<number>(10.0);
-  const [rotorAngle,  setRotorAngle]  = useState<number>(0.0);
+  // ── Persisted mesh settings (survive tab switches) ──────────────────────
+  // Hook: each setting reads its initial value from localStorage and writes
+  // back on every change.  Default symmetry is 1/4 per user request.
+  const usePersisted = <T,>(key: string, def: T) => {
+    const [v, setV] = useState<T>(() => {
+      try {
+        const raw = localStorage.getItem(`mesh.${key}`);
+        return raw == null ? def : (JSON.parse(raw) as T);
+      } catch { return def; }
+    });
+    useEffect(() => {
+      try { localStorage.setItem(`mesh.${key}`, JSON.stringify(v)); } catch {}
+    }, [key, v]);
+    return [v, setV] as const;
+  };
+
+  const [meshSizeMm,  setMeshSizeMm]  = usePersisted<number>('meshSize',   4.0);
+  const [minSizeMm,   setMinSizeMm]   = usePersisted<number>('minSize',    0.3);
+  const [surfaceDev,  setSurfaceDev]  = usePersisted<number>('surfaceDev', 0.005);
+  const [normalDev,   setNormalDev]   = usePersisted<number>('normalDev',  6.0);
+  const [aspectRatio, setAspectRatio] = usePersisted<number>('aspect',     10.0);
+  const [rotorAngle,  setRotorAngle]  = usePersisted<number>('rotorAngle', 0.0);
   // ── Solver-domain extensions (Ansys-style) ───────────────────────────────
-  const [outerAirFactor, setOuterAirFactor] = useState<number>(1.3);   // 1.0 = off; 1.3 = +30%
-  const [motionBand,     setMotionBand]     = useState<boolean>(true);
-  const [bandThickness,  setBandThickness]  = useState<number>(0.4);   // mm
-  const [nSectors,       setNSectors]       = useState<number>(1);     // 1 = full; 4 = 1/4
+  const [outerAirFactor, setOuterAirFactor] = usePersisted<number>('outerAir', 1.3);
+  const [motionBand,     setMotionBand]     = usePersisted<boolean>('motionBand', true);
+  const [bandThickness,  setBandThickness]  = usePersisted<number>('bandThickness', 0.4);
+  const [nSectors,       setNSectors]       = usePersisted<number>('nSectors', 4);   // 1/4 by default
+  // Polygons now ship with CadQuery-radius fillets baked in (stator_fillet_r=2.5,
+  // _r1=0.9); the extra Shapely smoothing slider is OFF by default so the Mesh
+  // tab matches the Geometry tab exactly.
+  const [statorFillet,   setStatorFillet]   = usePersisted<number>('statorFillet', 0.0);
   const [showEdges,    setShowEdges]    = useState<boolean>(true);
   const [showOutlines, setShowOutlines] = useState<boolean>(true);
   const [fillDomains,  setFillDomains]  = useState<boolean>(true);
@@ -314,6 +334,7 @@ const MeshPanel: React.FC = () => {
       motion_band:         motionBand ? 'true' : 'false',
       band_thickness_mm:   bandThickness.toString(),
       n_sectors:           nSectors.toString(),
+      stator_fillet_mm:    statorFillet.toString(),
     }).toString();
     const url = `${API}/api/simulation/mesh/build2d?${qs}`;
     fetch(url)
@@ -324,7 +345,7 @@ const MeshPanel: React.FC = () => {
       .then((d: FemMesh) => { setFemMesh(d); setFemLoading(false); })
       .catch(e => { setFemError(String(e)); setFemLoading(false); });
   }, [meshSizeMm, minSizeMm, surfaceDev, normalDev, aspectRatio, rotorAngle,
-      outerAirFactor, motionBand, bandThickness, nSectors]);
+      outerAirFactor, motionBand, bandThickness, nSectors, statorFillet]);
 
   // Load current config + geometry on mount
   useEffect(() => {
@@ -504,6 +525,28 @@ const MeshPanel: React.FC = () => {
               <Slider
                 value={aspectRatio} min={2} max={30} step={1}
                 onChange={(_, v) => setAspectRatio(v as number)}
+                sx={{ color: '#3b82f6' }}
+              />
+            </Box>
+
+            {/* stator fillet radius */}
+            <Box>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>
+                  Extra fillet smoothing
+                  <Tooltip title="Polygons already ship with CadQuery-radius fillets baked in (outer-ring=2.5 mm, inner-ring=0.9 mm — same as Geometry tab). This slider adds EXTRA Shapely buffer-smoothing on top. Leave at 0 to match Geometry exactly." placement="right">
+                    <span style={{ color: '#475569', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
+                  </Tooltip>
+                </Typography>
+                <Chip label={statorFillet > 0 ? `+${statorFillet.toFixed(2)} mm` : 'native'}
+                  size="small"
+                  sx={{ fontSize: 11, height: 20,
+                    bgcolor: statorFillet > 0 ? '#1e3a5f' : '#1e293b',
+                    color: statorFillet > 0 ? '#93c5fd' : '#94a3b8' }}/>
+              </Box>
+              <Slider
+                value={statorFillet} min={0} max={2.0} step={0.05}
+                onChange={(_, v) => setStatorFillet(v as number)}
                 sx={{ color: '#3b82f6' }}
               />
             </Box>

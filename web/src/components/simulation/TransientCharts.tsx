@@ -60,7 +60,7 @@ const TOOLTIP = {
 const GRID = { stroke: '#1e293b', strokeDasharray: '2 4' };
 
 const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85 }) => {
-  const [steps, setSteps] = useState<number>(60);
+  const [steps, setSteps] = useState<number>(30);          // faster default
   const [data,  setData]  = useState<TransientPayload | null>(null);
   const [busy,  setBusy]  = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
@@ -89,8 +89,11 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85 }) =
       .catch(e => { setError(String(e)); setBusy(false); });
   };
 
-  // Don't auto-run — transient is expensive (N solves × 0.4s)
-  useEffect(() => {}, []);
+  // Auto-run on mount + when operating-point inputs change.  30 steps
+  // ≈ 12 seconds at the default mesh density.
+  useEffect(() => { run();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gamma_deg, I_phase_rms]);
 
   // Build chart-friendly row arrays
   const rows = React.useMemo(() => {

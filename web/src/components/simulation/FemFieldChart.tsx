@@ -122,11 +122,23 @@ function buildIsoLines(
   z: number,        // depth for visibility
 ): Float32Array {
   const DOM_OUTER = 8;
-  const range = Math.max(A_max - A_min, 1e-12);
+  // Symmetric A_max for the level distribution.
+  const amax = Math.max(Math.abs(A_max), Math.abs(A_min), 1e-12);
+  // Levels distributed via INVERSE signed-log so contour lines cluster
+  // around A=0 (where stator iron + airgap live) instead of evenly
+  // spreading across the whole range (which puts almost no lines in the
+  // small-A regions when magnet peaks are 10× larger).
+  const K = Math.log1p(8);
+  const isoLevel = (k: number): number => {
+    const t  = k / nLevels;             // (0, 1)
+    const u  = 2 * t - 1;               // (-1, 1)
+    const s  = Math.sign(u);
+    const inv = (Math.exp(Math.abs(u) * K) - 1) / 8;   // inverse log1p(8x)
+    return s * inv * amax;
+  };
   const pos: number[] = [];
   for (let k = 1; k < nLevels; k++) {
-    const t  = k / nLevels;
-    const L  = A_min + t * range;
+    const L  = isoLevel(k);
     for (let ti = 0; ti < triangles.length; ti++) {
       if (domain_per_tri[ti] === DOM_OUTER) continue;
       const [a, b1, c] = triangles[ti];
@@ -237,18 +249,20 @@ const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode }>
     // NOTE: lo/hi defined here is referenced by isoGeo + colour bar via
     // fillGeo.userData (see below).
 
-    // |B| — flat per-triangle jet.  Skip DOM_OUTER and clip by 98th
-    // percentile of interior triangles so iron + magnets share the LUT
-    // budget instead of being dominated by sharp-corner spikes near the
-    // radial cut (which can reach tens of T in the 1/4 model without
-    // anti-periodic BC).
+    // |B| — flat per-triangle jet.  Skip DOM_OUTER and HARD-CLIP vmax to
+    // the typical iron saturation (~1.8 T).  Without this cap, the 1/4-
+    // sector model's sharp-corner spikes (tens of T near the radial cut)
+    // dominate the LUT and squash the whole stator into one dark-blue
+    // band.  Using a physically-motivated cap keeps the iron variation
+    // visible — same trick Ansys applies via the "Auto-fit colour scale"
+    // toggle.
     const interiorB: number[] = [];
     for (let ti = 0; ti < triangles.length; ti++) {
       if (domain_per_tri[ti] === DOM_OUTER) continue;
       interiorB.push(Bmag_per_tri[ti]);
     }
-    const vmaxPct = pctl(interiorB, 98);
-    const vmax = Math.min(Math.max(vmaxPct, 0.05), 2.0);
+    const vmaxPct = pctl(interiorB, 75);
+    const vmax = Math.min(Math.max(vmaxPct, 0.05), 1.8);
     const nTri = triangles.length;
     const positions = new Float32Array(nTri * 3 * 3);
     const colors    = new Float32Array(nTri * 3 * 3);
@@ -292,9 +306,11 @@ const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode }>
     const ud = (fillGeo as any).userData ?? {};
     const lo = ud.Az_lo ?? payload.A_z_min;
     const hi = ud.Az_hi ?? payload.A_z_max;
+    // More iso lines than fill bands — gives a denser FEMM/Ansys-style
+    // flux-line pattern in the iron + airgap regions.
     const positions = buildIsoLines(
       vertices, triangles, domain_per_tri, A_z_per_node,
-      lo, hi, N_BANDS, 1000, 1.0,
+      lo, hi, N_BANDS * 2, 1000, 1.0,
     );
     if (positions.length === 0) return null;
     const g = new THREE.BufferGeometry();
@@ -542,7 +558,7 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0 }) 
               if (dom[ti] === DOM_OUTER) continue;
               Bs.push(payload.Bmag_per_tri[ti]);
             }
-            const vmax = Math.min(Math.max(pct(Bs, 98), 0.05), 2.0);
+            const vmax = Math.min(Math.max(pct(Bs, 75), 0.05), 1.8);
             return <ColorBar vmin={0} vmax={vmax} unit="T" lut={jet01}/>;
           }
           // A_z mode — 2/98 percentile of interior node values, symmetrised.

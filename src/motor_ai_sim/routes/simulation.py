@@ -1234,9 +1234,11 @@ async def get_fem_transient(
             iB = I_peak * _math.cos(theta_e - 2*_math.pi/3)
             iC = I_peak * _math.cos(theta_e + 2*_math.pi/3)
             I_A_series.append(iA); I_B_series.append(iB); I_C_series.append(iC)
-            # Flux linkage via mean A_z over coil regions weighted by winding
-            psis = _flux_linkages_from_solve(r, p_sim.stack_length)
-            psi_A.append(psis[0]); psi_B.append(psis[1]); psi_C.append(psis[2])
+            # Per-phase flux linkages — computed properly inside fem_solve_for_sim
+            # from the per-coil cell tags BEFORE the visualisation remap.
+            psi_A.append(float(r.get("psi_A_Wb", 0.0)))
+            psi_B.append(float(r.get("psi_B_Wb", 0.0)))
+            psi_C.append(float(r.get("psi_C_Wb", 0.0)))
     except Exception as e:
         log.exception("FEM transient failed")
         raise HTTPException(status_code=500, detail=f"FEM transient failed: {e}")
@@ -1288,55 +1290,13 @@ async def get_fem_transient(
         "V_peak":             float(max(max(map(abs, V_A)),
                                          max(map(abs, V_B)),
                                          max(map(abs, V_C)))),
+        "psi_A_Wb":           psi_A,
+        "psi_B_Wb":           psi_B,
+        "psi_C_Wb":           psi_C,
+        "R_phase_ohm":        R_phase,
     }
     _fem_transient_cache[key] = payload
     return payload
-
-
-def _flux_linkages_from_solve(result: dict, stack_length_m: float
-                               ) -> Tuple[float, float, float]:
-    """Approximate phase flux linkages from a single FEM result.
-
-    For each phase, integrate A_z over the coil triangles of that phase
-    weighted by the winding direction (+1 / -1).  Multiply by stack
-    length and the wire count per slot to convert per-turn flux into
-    phase flux linkage.
-
-    Since the FEM result already collapses per-coil ids back to DOM_COIL
-    by the API remap, we approximate using the entire DOM_COIL region —
-    direction information per slot is then folded into the analytical
-    phase current.  This gives the back-EMF SHAPE; absolute amplitude
-    matches the analytical formula at the fundamental.
-
-    For our purposes (UI display), this approximation is sufficient.
-    """
-    import numpy as _np
-    A_z = result.get("A_z_per_node", [])
-    tris = result.get("triangles", [])
-    doms = result.get("domain_per_tri", [])
-    verts = result.get("vertices", [])
-    if not A_z or not tris or not verts:
-        return (0.0, 0.0, 0.0)
-    DOM_COIL = 2
-    a = _np.asarray(A_z)
-    psi = 0.0
-    for ti in range(len(tris)):
-        if doms[ti] != DOM_COIL:
-            continue
-        i0, i1, i2 = tris[ti]
-        # Mean A_z in triangle
-        mean_A = (a[i0] + a[i1] + a[i2]) / 3
-        # Approximate area via cross product
-        x0, y0 = verts[i0]; x1, y1 = verts[i1]; x2, y2 = verts[i2]
-        area = 0.5 * abs((x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0))
-        psi += mean_A * area
-    psi *= stack_length_m
-    # Without per-coil phase tagging here we just return the same value for
-    # A and shifted versions for B and C (placeholder until per-coil A_z
-    # weighting is wired through; the displayed back-EMF will already
-    # capture the rotor-rotation modulation, just not the static phase
-    # split).
-    return (psi, psi, psi)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

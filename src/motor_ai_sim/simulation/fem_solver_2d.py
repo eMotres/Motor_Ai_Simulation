@@ -1996,6 +1996,50 @@ def fem_solve_for_sim(
     )
     T_em_Nm = T_sector * (n_sectors if n_sectors > 1 else 1)
 
+    # ── Per-phase flux linkage ψ_A, ψ_B, ψ_C ─────────────────────────────
+    # ψ_per_slot = N_turns · L_stack · ⟨A_z⟩_slot  (signed by winding dir).
+    # ⟨A_z⟩_slot is the AREA-WEIGHTED mean A_z over the slot's triangles
+    # (linear P1 element, so per-tri mean = nodal mean).  Summing the
+    # signed per-slot contributions over all slots belonging to a phase
+    # gives the phase flux linkage in Wb.  Multiplied by the symmetry
+    # multiplier to recover the full-motor value.
+    psi_A = psi_B = psi_C = 0.0
+    coil_polys_clipped = polys_meshed.get("coils", [])
+    n_slot_layout = len(d.winding_layout)
+    if n_slot_layout > 0 and coil_polys_clipped:
+        slot_pitch_deg_layout = 360.0 / n_slot_layout
+        A_tri_mean = (A[mesh.t[0]] + A[mesh.t[1]] + A[mesh.t[2]]) / 3.0
+        for i, cp in enumerate(coil_polys_clipped):
+            if cp is None or cp.is_empty:
+                continue
+            try:
+                cx, cy = cp.centroid.x, cp.centroid.y
+            except Exception:
+                continue
+            ang = math.degrees(math.atan2(cy, cx))
+            if ang < 0: ang += 360.0
+            slot_idx = int(ang / slot_pitch_deg_layout + 0.5) % n_slot_layout
+            phase, direction = d.winding_layout[slot_idx]
+            tag = DOM_COIL_BASE + i
+            idx = np.where(cell_tags == tag)[0]
+            if idx.size == 0:
+                continue
+            slot_area = float(np.sum(areas[idx]))
+            if slot_area <= 0:
+                continue
+            mean_Az = float(np.sum(A_tri_mean[idx] * areas[idx])) / slot_area
+            psi_slot = direction * mean_Az      # signed Wb/m  per turn
+            if   phase == 'A': psi_A += psi_slot
+            elif phase == 'B': psi_B += psi_slot
+            elif phase == 'C': psi_C += psi_slot
+        # ⟨A_z⟩ has units Wb/m; multiply by L_stack (m) → Wb per turn;
+        # multiply by N_turns/slot → phase flux linkage (Wb).
+        scale = p.stack_length * float(n_wires)
+        sym = (n_sectors if n_sectors > 1 else 1)
+        psi_A *= scale * sym
+        psi_B *= scale * sym
+        psi_C *= scale * sym
+
     # ── Losses ────────────────────────────────────────────────────────────
     # Steinmetz-style iron loss density:  P/V  =  k_iron · f^α · B^β   [W/m³]
     # Copper:  3-phase I²R  with R_phase from config (≈ analytical solver).
@@ -2097,8 +2141,10 @@ def fem_solve_for_sim(
         # H came within 15 % of the BH-curve knee.  demagnetised=True means
         # the magnet has crossed the knee and is irreversibly weakened.
         "demag_report":      demag_report,
-        # Per-triangle demagnetisation coefficient (0..1).  All non-magnet
-        # cells are 1.0; magnet cells get the actual ratio so the field
-        # map can colour them in an "Ansys Demag-Coef" plot.
         "demag_coef_per_tri": demag_coef_per_tri.tolist(),
+        # Per-phase flux linkages [Wb].  Used by the transient endpoint
+        # to derive V_phase(t) = R·I + dψ/dt across the period.
+        "psi_A_Wb":          float(psi_A),
+        "psi_B_Wb":          float(psi_B),
+        "psi_C_Wb":          float(psi_C),
     }

@@ -133,8 +133,67 @@ def _fillet_polygon(poly, r_convex: float = 0.6, r_concave: float = 0.6):
     return poly
 
 
+def _decimate_ring_by_angle(coords: list, min_turn_deg: float) -> list:
+    """Remove vertices whose turn-angle is below `min_turn_deg` (near
+    collinear), guarding against removing two adjacent vertices in the
+    same pass so a fillet arc thins out evenly instead of collapsing.
+
+    This is the polygon equivalent of Ansys "Normal Deviation": a larger
+    angle keeps fewer points per arc → coarser mesh on bends; a smaller
+    angle keeps every arc point → fine mesh on bends.
+    """
+    pts = list(coords)
+    if len(pts) > 1 and pts[0] == pts[-1]:
+        pts = pts[:-1]
+    n = len(pts)
+    if n < 6 or min_turn_deg <= 0.0:
+        return coords
+    keep = [True] * n
+    just_removed = False
+    for i in range(n):
+        if just_removed:                       # never drop adjacent pair
+            just_removed = False
+            continue
+        p0 = pts[(i - 1) % n]; p1 = pts[i]; p2 = pts[(i + 1) % n]
+        ax, ay = p1[0] - p0[0], p1[1] - p0[1]
+        bx, by = p2[0] - p1[0], p2[1] - p1[1]
+        la = math.hypot(ax, ay); lb = math.hypot(bx, by)
+        if la < 1e-12 or lb < 1e-12:
+            continue
+        cos_t = max(-1.0, min(1.0, (ax * bx + ay * by) / (la * lb)))
+        turn = math.degrees(math.acos(cos_t))   # 0° = perfectly straight
+        if turn < min_turn_deg:
+            keep[i] = False
+            just_removed = True
+    new = [pts[i] for i in range(n) if keep[i]]
+    if len(new) < 3:
+        return coords
+    new.append(new[0])
+    return new
+
+
+def _decimate_poly_by_angle(geom, min_turn_deg: float):
+    """Apply _decimate_ring_by_angle to every ring of a (Multi)Polygon."""
+    from shapely.geometry import Polygon as _P, MultiPolygon as _MP
+    if geom is None or geom.is_empty or min_turn_deg <= 0.0:
+        return geom
+    try:
+        def _do(g):
+            ext = _decimate_ring_by_angle(list(g.exterior.coords), min_turn_deg)
+            ints = [_decimate_ring_by_angle(list(h.coords), min_turn_deg)
+                    for h in g.interiors]
+            q = _P(ext, ints)
+            return q if q.is_valid else q.buffer(0)
+        if hasattr(geom, "geoms"):
+            return _MP([_do(g) for g in geom.geoms])
+        return _do(geom)
+    except Exception:
+        return geom
+
+
 def _simplify_polys(polys: dict, tol_mm: float = 0.005,
-                     stator_fillet_mm: float = 0.8) -> dict:
+                     stator_fillet_mm: float = 0.8,
+                     normal_dev_deg: float = 0.0) -> dict:
     """Drop near-collinear vertices below chord tolerance `tol_mm`.
 
     Default 0.005 mm matches Ansys Maxwell's "Surface Deviation = 0.01 mm"
@@ -145,18 +204,29 @@ def _simplify_polys(polys: dict, tol_mm: float = 0.005,
 
     Parameters
     ----------
+    tol_mm : float
+        Chord-error (Surface Deviation) tolerance — distance-based
+        Douglas-Peucker simplification.  Larger → coarser bends.
     stator_fillet_mm : float, default 0.8
         Round all sharp corners on the stator polygon with this radius
         (a Shapely buffer-out/in pipeline).  The CadQuery slot cutter only
         rounds ONE corner per slot pair; this post-pass adds fillets at the
         other slot-mouth corners (top-of-wedge + slot-bottom) so the mesh
         boundary matches the physical iron lamination.
+    normal_dev_deg : float, default 0.0
+        Angle-based (Normal Deviation) decimation threshold in degrees.
+        Vertices whose turn-angle is below this are dropped, thinning out
+        fillet arcs.  0 disables it (keeps all arc points).
     """
+    SIMPLIFY_KEYS = ("stator", "rotor", "shaft", "air_gap",
+                      "in_band", "out_band")
     out = dict(polys)
-    for k in ("stator", "rotor", "shaft", "air_gap"):
+    for k in SIMPLIFY_KEYS:
         if polys.get(k) is not None:
             try:
-                out[k] = polys[k].simplify(tol_mm, preserve_topology=True)
+                g = polys[k].simplify(tol_mm, preserve_topology=True)
+                g = _decimate_poly_by_angle(g, normal_dev_deg)
+                out[k] = g
             except Exception:
                 out[k] = polys[k]
     # ── Round all sharp slot-mouth corners on the stator ──
@@ -165,7 +235,9 @@ def _simplify_polys(polys: dict, tol_mm: float = 0.005,
                                          r_convex=stator_fillet_mm,
                                          r_concave=stator_fillet_mm)
     out["magnets"] = [
-        ((m.simplify(tol_mm, preserve_topology=True) if m is not None else m), p)
+        ((_decimate_poly_by_angle(
+              m.simplify(tol_mm, preserve_topology=True), normal_dev_deg)
+          if m is not None else m), p)
         for m, p in polys.get("magnets", [])
     ]
     out["coils"] = list(polys.get("coils", []))
@@ -401,30 +473,30 @@ def _clip_polys_to_sector(polys: dict, n_sectors: int) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _split_polys_for_sliding_band(polys: dict) -> Tuple[dict, dict]:
-    """Split a polys dict into stator-side and rotor-side halves.
+    """Split a polys dict into stator-side and rotor-side halves using the
+    first-class in_band / out_band air domains from get_2d_polygons.
 
     Sliding-band FEM meshes each half ONCE; the rotor half is then
     rotated rigidly per transient frame, and the master-slave coupling
-    at the band interface (built in SB-4) glues them together.
+    at the slip surface (the shared mid_r circle) glues them together.
 
+    Rotor side  (rigidly rotates with the rotor):
+        shaft, rotor, magnets, in_band
+        in_band = full disk r=0..mid_r MINUS rotor + magnets + shaft —
+        captures the shaft bore, inter-magnet flux-barrier pockets and
+        the inner half of the air gap.
     Stator side (stationary in the lab frame):
-        stator, coils, air_outer, air_background,
-        air_gap_stator_side, airgap_band
-    Rotor side (rigidly rotates with the rotor):
-        shaft, rotor, magnets, air_gap_rotor_side
+        stator, coils, out_band
+        out_band = annulus mid_r..r_outer MINUS stator + coils —
+        captures the outer half of the air gap, the slot-opening air and
+        the outer ambient air up to the far-field boundary r_outer.
 
-    The original polys dict is kept intact — the existing rebuild-per-
-    frame solver still consumes the unioned 'air_gap' key.
+    The two halves meet at the slip surface r=mid_r.  Together with the
+    iron / copper / magnet domains they tile the whole cross-section, so
+    NO background-air or motion-band post-processing is needed.
     """
-    # Everything between rotor_outer_radius and stator_inner_radius —
-    # air_gap_rotor_side + airgap_band + air_gap_stator_side — belongs
-    # to the ROTOR side and rotates with it as a rigid body.  The slip
-    # surface is at stator_inner_radius (the rotor mesh's outer edge,
-    # the stator mesh's inner edge).  Visually this means the entire
-    # air-gap annulus rotates together with the magnets / rotor / shaft.
-    STATOR_KEYS = ("stator", "coils", "air_outer", "air_background")
-    ROTOR_KEYS  = ("shaft", "rotor", "magnets",
-                    "air_gap_rotor_side", "airgap_band", "air_gap_stator_side")
+    STATOR_KEYS = ("stator", "coils", "out_band")
+    ROTOR_KEYS  = ("shaft", "rotor", "magnets", "in_band")
 
     polys_s: dict = {}
     polys_r: dict = {}
@@ -436,12 +508,10 @@ def _split_polys_for_sliding_band(polys: dict) -> Tuple[dict, dict]:
         v = polys.get(k)
         if v is not None:
             polys_r[k] = v
-    # Helpful metadata so downstream code knows the band radii without
-    # re-deriving them.
-    for k in ("r_band_in", "r_band_out"):
-        if polys.get(k) is not None:
-            polys_s[k] = polys[k]
-            polys_r[k] = polys[k]
+    # Carry the slip-surface radius through to both halves.
+    if polys.get("mid_r_mm") is not None:
+        polys_s["mid_r_mm"] = polys["mid_r_mm"]
+        polys_r["mid_r_mm"] = polys["mid_r_mm"]
     return polys_s, polys_r
 
 
@@ -454,6 +524,8 @@ def _build_sliding_band_meshes(
         band_thickness_mm: float,
         n_sectors: int,
         geo_cfg: dict,
+        normal_deviation_deg: float = 6.0,
+        aspect_ratio: float = 10.0,
 ):
     """Build the stator-half and rotor-half meshes for the sliding-band solver.
 
@@ -473,104 +545,19 @@ def _build_sliding_band_meshes(
     """
     polys_s, polys_r = _split_polys_for_sliding_band(polys)
 
-    # Split the full air-gap annulus into TWO conformal halves with the
-    # slip surface at the midline radius.
-    #
-    #   rotor_outer ── in_band ── midline ── out_band ── stator_inner
-    #
-    #   in_band  goes into the ROTOR mesh and rotates with the rotor.
-    #   out_band goes into the STATOR mesh and stays stationary.
-    #
-    # Reconstruct the full air-gap annulus from the three sub-rings
-    # produced by _add_motion_band (we no longer treat the band layer
-    # specially — it is just the central slice of the air-gap).
-    from shapely.ops import unary_union as _uu
-    from shapely.geometry import Point as _Pt
+    # Map the air domains onto the keys the mesh builder recognises:
+    #   rotor half:  in_band  → "air_gap"   (DOM_AIRGAP)
+    #   stator half: out_band → "air_outer" (DOM_OUTER, far-field air)
+    # The far-field Dirichlet boundary lives on out_band's outer edge.
+    # No motion_band / background-air post-processing — in_band and
+    # out_band already tile every air region, so we pass
+    # add_background_air=False to keep the OCC partition clean.
     polys_s_for_mesh = dict(polys_s)
     polys_r_for_mesh = dict(polys_r)
-    air_rings = [polys_r_for_mesh.pop(k) for k in
-                  ("air_gap_rotor_side", "airgap_band", "air_gap_stator_side")
-                  if polys_r_for_mesh.get(k) is not None]
-    # also remove any leftover stator-side air-gap from polys_s
-    for k in ("air_gap_rotor_side", "airgap_band", "air_gap_stator_side"):
-        polys_s_for_mesh.pop(k, None)
-
-    if air_rings:
-        try:
-            full_ag = _uu(air_rings)
-        except Exception as e:
-            log.warning("air-gap union failed: %s; using first sub-ring", e)
-            full_ag = air_rings[0]
-
-        # Derive rotor_outer and stator_inner radii directly from the
-        # reconstructed annulus geometry.  full_ag is a topological
-        # annulus: exterior = stator_inner, interior hole = rotor_outer.
-        try:
-            r_outer = max(math.hypot(x, y) for x, y in full_ag.exterior.coords)
-            r_inner = min(math.hypot(x, y) for x, y in full_ag.exterior.coords)
-            for h in full_ag.interiors:
-                r_inner = min(r_inner, min(math.hypot(x, y) for x, y in h.coords))
-        except Exception:
-            # fall back to band radii saved by _add_motion_band
-            r_band_in  = float(polys.get("r_band_in",  56.35))
-            r_band_out = float(polys.get("r_band_out", 56.75))
-            r_inner = r_band_in - 1.0
-            r_outer = r_band_out + 1.0
-        r_mid = 0.5 * (r_inner + r_outer)
-        mid_disk = _Pt(0, 0).buffer(r_mid, resolution=256)
-
-        # in_band  = annulus rotor_outer..midline (inner half of gap)
-        # out_band = annulus midline..stator_inner (outer half of gap)
-        try:
-            in_band  = full_ag.intersection(mid_disk)
-            out_band = full_ag.difference(mid_disk)
-        except Exception as e:
-            log.warning("midline split of air-gap failed: %s", e)
-            in_band, out_band = full_ag, None
-
-        # 2) From in_band subtract rotor + magnets + shaft (defensive
-        # against spoke-PM magnet tips protruding past rotor_outer).
-        rotor_bodies = []
-        if polys_r_for_mesh.get("rotor") is not None:
-            rotor_bodies.append(polys_r_for_mesh["rotor"])
-        if polys_r_for_mesh.get("shaft") is not None:
-            rotor_bodies.append(polys_r_for_mesh["shaft"])
-        for mp, _pol in polys_r_for_mesh.get("magnets", []) or []:
-            rotor_bodies.append(mp)
-        if rotor_bodies and in_band is not None and not in_band.is_empty:
-            try:
-                pruned = in_band.difference(_uu(rotor_bodies))
-                if pruned is not None and not pruned.is_empty:
-                    in_band = pruned
-            except Exception as e:
-                log.warning("in_band − rotor-bodies failed: %s", e)
-        polys_r_for_mesh["air_gap"] = in_band
-
-        # 3) From out_band subtract stator iron + coils (defensive
-        # against any slot-mouth fillets reaching out into the air gap).
-        stator_bodies = []
-        if polys_s_for_mesh.get("stator") is not None:
-            stator_bodies.append(polys_s_for_mesh["stator"])
-        for cp in polys_s_for_mesh.get("coils", []) or []:
-            stator_bodies.append(cp)
-        if stator_bodies and out_band is not None and not out_band.is_empty:
-            try:
-                pruned = out_band.difference(_uu(stator_bodies))
-                if pruned is not None and not pruned.is_empty:
-                    out_band = pruned
-            except Exception as e:
-                log.warning("out_band − stator-bodies failed: %s", e)
-
-        # out_band ALSO goes into the rotor mesh — both bands rotate
-        # together with the rotor as a single rigid block.  The midline
-        # circle (where in_band meets out_band) becomes an INTERNAL
-        # mesh boundary inside the rotor mesh; gmsh creates conforming
-        # edges along it because the two regions are tagged with
-        # different domains (DOM_AIRGAP for in_band, DOM_BAND for
-        # out_band).  The slip surface against the stator mesh sits at
-        # stator_inner_radius (the rotor mesh's outer edge).
-        if out_band is not None and not out_band.is_empty:
-            polys_r_for_mesh["airgap_band"] = out_band
+    if "in_band" in polys_r_for_mesh:
+        polys_r_for_mesh["air_gap"] = polys_r_for_mesh.pop("in_band")
+    if "out_band" in polys_s_for_mesh:
+        polys_s_for_mesh["air_outer"] = polys_s_for_mesh.pop("out_band")
 
     # Build stator half at the FIXED lab position (rotor_angle_deg ignored
     # for stator-side polygons, which are stationary).  Stator stays
@@ -579,25 +566,29 @@ def _build_sliding_band_meshes(
     mesh_s, tags_s, classify_s = build_mesh_from_polygons(
         polys_s_for_mesh, rotor_angle_deg=0.0,
         mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm,
+        normal_deviation_deg=normal_deviation_deg, aspect_ratio=aspect_ratio,
         outer_air_factor=outer_air_factor,
         motion_band=False, band_thickness_mm=band_thickness_mm,
         n_sectors=n_sectors, geo_cfg=geo_cfg,
+        add_background_air=False,
     )
 
     # Build rotor half with the SAME sector clip as the stator
     # (n_sectors).  The rotor mesh covers ONE sector (1/n_sectors of the
     # disk) at the un-rotated zero position; rigid rotation by
     # rotor_angle_deg slides this wedge inside the stator sector.  The
-    # rotor body + magnets + shaft + (air minus rotor body) all live in
-    # ONE mesh so they rotate together as a single rigid unit per
-    # transient frame.  Past the sector edge the wedge wraps via
-    # anti-periodic BC (handled later by the solver / master-slave pair).
+    # rotor body + magnets + shaft + in_band air all live in ONE mesh so
+    # they rotate together as a single rigid unit per transient frame.
+    # Past the sector edge the wedge wraps via anti-periodic BC (handled
+    # later by the solver / master-slave pair).
     mesh_r, tags_r, classify_r = build_mesh_from_polygons(
         polys_r_for_mesh, rotor_angle_deg=0.0,
         mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm,
+        normal_deviation_deg=normal_deviation_deg, aspect_ratio=aspect_ratio,
         outer_air_factor=outer_air_factor,
         motion_band=False, band_thickness_mm=band_thickness_mm,
         n_sectors=n_sectors, geo_cfg=geo_cfg,
+        add_background_air=False,
     )
 
     # Apply rotor rotation as a rigid body — node coords only, topology
@@ -998,6 +989,7 @@ def build_mesh_from_polygons(polys: dict,
                              motion_band: bool = False,
                              band_thickness_mm: float = 0.4,
                              n_sectors: int = 1,
+                             add_background_air: bool = True,
                              ) -> Tuple["MeshTri", np.ndarray]:
     """Construct a conforming triangle mesh from the CadQuery polygon dict.
 
@@ -1111,8 +1103,13 @@ def build_mesh_from_polygons(polys: dict,
         # 1) Motion band: split air_gap into rotor-side + band + stator-side
         polys = _add_motion_band(polys, motion_band=motion_band,
                                   band_thickness_mm=band_thickness_mm)
-        # 2) Background air + (optional) outer far-field air ring
-        polys = _add_background_air(polys, outer_air_factor=outer_air_factor)
+        # 2) Background air + (optional) outer far-field air ring.
+        #    Skipped for the sliding-band halves: in_band / out_band already
+        #    tile every air region (inner pockets + gap + outer far-field),
+        #    so adding background air on top would double-cover and confuse
+        #    the OCC fragment partition.
+        if add_background_air:
+            polys = _add_background_air(polys, outer_air_factor=outer_air_factor)
         # 3) Symmetry: clip ALL polygons to a 360°/n_sectors wedge
         if n_sectors > 1:
             polys = _clip_polys_to_sector(polys, n_sectors=n_sectors)

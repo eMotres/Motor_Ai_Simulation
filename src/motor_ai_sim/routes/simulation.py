@@ -1035,9 +1035,13 @@ async def build_fem_mesh_2d_sliding_band(
     rotor_angle_deg:   float = 0.0,
     mesh_size_mm:      float = 4.0,
     min_size_mm:       float = 0.3,
+    surface_deviation: float = 0.005,   # Ansys "Surface Deviation" [mm]
+    normal_deviation:  float = 6.0,     # Ansys "Normal Deviation" [deg]
+    aspect_ratio:      float = 10.0,    # Ansys "Aspect Ratio"
     outer_air_factor:  float = 1.3,
     band_thickness_mm: float = 0.4,
     n_sectors:         int   = 4,
+    stator_fillet_mm:  float = 0.0,     # extra Shapely fillet smoothing
 ):
     """Build TWO independent meshes (stator + rotor) and stitch them into
     one renderer-friendly payload for the Mesh tab.  Lets the user
@@ -1056,8 +1060,10 @@ async def build_fem_mesh_2d_sliding_band(
     import numpy as _np
 
     key = (round(rotor_angle_deg, 3), round(mesh_size_mm, 2),
-           round(min_size_mm, 2), round(outer_air_factor, 2),
-           round(band_thickness_mm, 2), int(n_sectors))
+           round(min_size_mm, 2), round(surface_deviation, 4),
+           round(normal_deviation, 1), round(aspect_ratio, 1),
+           round(outer_air_factor, 2), round(band_thickness_mm, 2),
+           int(n_sectors), round(stator_fillet_mm, 2))
     if key in _fem_mesh_sb_cache:
         return _fem_mesh_sb_cache[key]
 
@@ -1073,16 +1079,27 @@ async def build_fem_mesh_2d_sliding_band(
         raise HTTPException(status_code=500, detail=f"sliding-band unavailable: {e}")
 
     motor = CadQueryMotor()
+    # outer_air_factor controls out_band's far-field radius, which is baked
+    # into get_2d_polygons — feed it through the geometry parameters so the
+    # Mesh-tab "Outer air ring" slider actually moves the boundary.
+    try:
+        motor.parameters["outer_air_factor"] = float(outer_air_factor)
+    except Exception:
+        pass
     polys = motor.get_2d_polygons(rotor_angle_deg=0.0)
-    polys = _simplify_polys(polys, tol_mm=0.005)
-    polys = _add_motion_band(polys, motion_band=True,
-                              band_thickness_mm=band_thickness_mm)
+    polys = _simplify_polys(polys, tol_mm=surface_deviation,
+                             stator_fillet_mm=stator_fillet_mm,
+                             normal_dev_deg=normal_deviation)
+    # in_band / out_band now come straight from get_2d_polygons (full inner
+    # air disk + outer air annulus), so the old air-gap-splitting motion
+    # band is no longer needed for the sliding-band path.
 
     try:
         mesh_s, tags_s, classify_s, mesh_r, tags_r, classify_r = \
             _build_sliding_band_meshes(
                 polys, rotor_angle_deg=rotor_angle_deg,
                 mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm,
+                normal_deviation_deg=normal_deviation, aspect_ratio=aspect_ratio,
                 outer_air_factor=outer_air_factor,
                 band_thickness_mm=band_thickness_mm,
                 n_sectors=n_sectors, geo_cfg=motor.parameters,
@@ -1115,11 +1132,13 @@ async def build_fem_mesh_2d_sliding_band(
                        else DOM_MAG_S for j in idx],
             dtype=tags.dtype)
 
-    # Band-interface nodes — used by the renderer to draw the sliding
-    # surface as a distinctive ring overlay.
-    r_band_in = float(polys.get("r_band_in", 56.35)) * 1e-3
-    iface_s = _find_ring_nodes(mesh_s, r_band_in)
-    iface_r = _find_ring_nodes(mesh_r, r_band_in) + n_s_nodes
+    # Slip-surface (mid_r) interface nodes — used by the renderer to draw
+    # the sliding surface as a distinctive ring overlay, and by the solver
+    # for the master-slave coupling.  mid_r is the air-gap midline where
+    # in_band (rotor side) meets out_band (stator side).
+    r_slip = float(polys.get("mid_r_mm", 56.55)) * 1e-3
+    iface_s = _find_ring_nodes(mesh_s, r_slip, tol_m=2e-4)
+    iface_r = _find_ring_nodes(mesh_r, r_slip, tol_m=2e-4) + n_s_nodes
 
     domain_counts: Dict[str, int] = {}
     dom_names = {0: "air", 1: "stator", 2: "coil", 3: "airgap",
@@ -1142,8 +1161,9 @@ async def build_fem_mesh_2d_sliding_band(
         "domain_counts":     domain_counts,
         "band_iface_stator": iface_s.tolist(),
         "band_iface_rotor":  iface_r.tolist(),
-        "r_band_in_m":       r_band_in,
-        "r_band_out_m":      float(polys.get("r_band_out", 56.75)) * 1e-3,
+        "r_band_in_m":       r_slip,
+        "r_band_out_m":      r_slip,
+        "r_slip_m":          r_slip,
         "extent": [
             min(float(mesh_s.p[0].min()), float(mesh_r.p[0].min())),
             max(float(mesh_s.p[0].max()), float(mesh_r.p[0].max())),

@@ -332,13 +332,19 @@ const MeshPanel: React.FC = () => {
       ? `${API}/api/simulation/mesh/build2d_sliding_band`
       : `${API}/api/simulation/mesh/build2d`;
     const qs = new URLSearchParams(slidingBand ? {
-      // Sliding-band endpoint takes a slimmer param set.
+      // Sliding-band endpoint now accepts the full curvature-refinement set
+      // so the Normal/Surface deviation + Aspect ratio + Fillet sliders
+      // control the rotor & stator half meshes too.
       rotor_angle_deg:   rotorAngle.toString(),
       mesh_size_mm:      meshSizeMm.toString(),
       min_size_mm:       minSizeMm.toString(),
+      surface_deviation: surfaceDev.toString(),
+      normal_deviation:  normalDev.toString(),
+      aspect_ratio:      aspectRatio.toString(),
       outer_air_factor:  outerAirFactor.toString(),
       band_thickness_mm: bandThickness.toString(),
       n_sectors:         nSectors.toString(),
+      stator_fillet_mm:  statorFillet.toString(),
     } : {
       mesh_size_mm:        meshSizeMm.toString(),
       min_size_mm:         minSizeMm.toString(),
@@ -500,7 +506,7 @@ const MeshPanel: React.FC = () => {
                   sx={{ fontSize: 11, height: 20, bgcolor: '#1e293b', color: '#94a3b8' }}/>
               </Box>
               <Slider
-                value={surfaceDev} min={0.001} max={0.05} step={0.001}
+                value={surfaceDev} min={0.001} max={0.5} step={0.005}
                 onChange={(_, v) => setSurfaceDev(v as number)}
                 sx={{ color: '#3b82f6' }}
               />

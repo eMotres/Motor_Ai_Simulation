@@ -40,4 +40,6 @@ export interface FemPayload {
     demagnetised: boolean;
   }>;
   demag_coef_per_tri?: number[];
+  // A/m² in each triangle — non-zero only inside coil polygons.
+  J_z_per_tri?:        number[];
 }

@@ -2166,6 +2166,19 @@ def fem_solve_for_sim(
             [DOM_MAG_N if (j < len(polarities) and polarities[j] > 0) else DOM_MAG_S
              for j in idx], dtype=cell_tags_vis.dtype)
 
+    # ── Per-triangle J_z [A/m²] for the field renderer (J mode) ───────────
+    # Each coil cell carries the J_z of its per-coil material entry;
+    # everything else is zero.  Used by FemFieldChart's "J" mode to draw
+    # the Ansys-style red/blue/green current-density map.
+    J_z_per_tri = np.zeros(cell_tags.shape[0], dtype=np.float32)
+    coil_tags = np.where(cell_tags >= DOM_COIL_BASE)[0]
+    if coil_tags.size:
+        for tag in np.unique(cell_tags[coil_tags]):
+            mat_t = mats.get(int(tag))
+            if mat_t is None:
+                continue
+            J_z_per_tri[cell_tags == tag] = float(mat_t.J_z)
+
     return {
         "ok": True,
         "rotor_angle_deg": rotor_angle_deg,
@@ -2179,6 +2192,7 @@ def fem_solve_for_sim(
         "domain_per_tri":  cell_tags_vis.tolist(),
         "A_z_per_node":    A.tolist(),               # Wb/m
         "Bmag_per_tri":    Bmag_tri.tolist(),
+        "J_z_per_tri":     J_z_per_tri.tolist(),     # A/m² — coils only
         "extent": [
             float(mesh.p[0].min()), float(mesh.p[0].max()),
             float(mesh.p[1].min()), float(mesh.p[1].max()),

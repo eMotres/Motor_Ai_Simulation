@@ -1291,6 +1291,7 @@ async def get_fem_transient(
                     "domain_per_tri":   r["domain_per_tri"],
                     "A_z_per_node":     r["A_z_per_node"],
                     "Bmag_per_tri":     r["Bmag_per_tri"],
+                    "J_z_per_tri":      r.get("J_z_per_tri", []),
                     "demag_coef_per_tri": r.get("demag_coef_per_tri", []),
                     "extent":           r["extent"],
                     "n_vertices":       r["n_vertices"],

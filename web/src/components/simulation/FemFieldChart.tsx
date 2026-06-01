@@ -73,7 +73,25 @@ function readMeshSetting<T>(key: string, def: T): T {
 }
 
 // ── R3F mesh component ────────────────────────────────────────────────────
-type FieldMode = 'Az' | 'Bmag' | 'Demag';
+type FieldMode = 'Az' | 'Bmag' | 'J' | 'Demag';
+
+// Diverging blue→green→red colormap for signed J_z (Ansys "J" style:
+// red = +max, blue = −max, green = 0).
+function jetSigned(t: number): [number, number, number] {
+  // t ∈ [-1, +1].  Build 11 stops mirroring the Ansys J legend:
+  //   −1 .. −0.6 blue family,   −0.6 .. −0.2 cyan,   −0.2 .. +0.2 green,
+  //   +0.2 .. +0.6 yellow,      +0.6 .. +1 red.
+  const u = Math.max(-1, Math.min(1, t));
+  if (u <= -0.6) return [0, 0, 255];                // dark blue
+  if (u <= -0.4) return [0, 80, 255];               // blue
+  if (u <= -0.2) return [0, 200, 230];              // cyan
+  if (u <= -0.05) return [80, 230, 80];             // bright green
+  if (u <= +0.05) return [40, 200, 40];             // green (zero)
+  if (u <= +0.2) return [220, 240, 30];             // yellow-green
+  if (u <= +0.4) return [255, 220, 0];              // yellow
+  if (u <= +0.6) return [255, 120, 0];              // orange
+  return [255, 0, 0];                                // red
+}
 
 const N_BANDS = 20;           // # of discrete colour bands / iso-A levels
 
@@ -210,6 +228,53 @@ const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode }>
     }
     // NOTE: lo/hi defined here is referenced by isoGeo + colour bar via
     // fillGeo.userData (see below).
+
+    if (mode === 'J') {
+      // J_z mode — Ansys "J [A/m²]" style.  Coil triangles get a diverging
+      // blue→green→red colormap based on signed J_z, scaled to the 99-pct
+      // absolute value across all coil cells in the current frame.  Iron
+      // / magnet / air cells are not coloured.
+      const jz = payload.J_z_per_tri ?? [];
+      const dom = domain_per_tri;
+      const DOM_COIL = 2;
+      const nTri = triangles.length;
+      let vmaxAbs = 1e-12;
+      const sample: number[] = [];
+      for (let i = 0; i < nTri; i++) {
+        if (dom[i] !== DOM_COIL) continue;
+        if (i < jz.length) sample.push(Math.abs(jz[i]));
+      }
+      if (sample.length) {
+        const sorted = Float64Array.from(sample).sort();
+        const k = Math.floor(0.99 * (sorted.length - 1));
+        vmaxAbs = Math.max(sorted[k], 1e-12);
+      }
+      const positions = new Float32Array(nTri * 3 * 3);
+      const colors    = new Float32Array(nTri * 3 * 3);
+      let p = 0, c = 0;
+      for (let i = 0; i < nTri; i++) {
+        if (dom[i] !== DOM_COIL) continue;
+        const tt = triangles[i];
+        const v  = i < jz.length ? jz[i] : 0;
+        const tNorm = Math.max(-1, Math.min(1, v / vmaxAbs));
+        const [rr, gg, bb] = jetSigned(tNorm);
+        for (const vi of tt) {
+          positions[p++] = vertices[vi][0] * S;
+          positions[p++] = vertices[vi][1] * S;
+          positions[p++] = 0;
+          colors[c++] = rr / 255;
+          colors[c++] = gg / 255;
+          colors[c++] = bb / 255;
+        }
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position',
+        new THREE.BufferAttribute(positions.subarray(0, p), 3));
+      g.setAttribute('color',
+        new THREE.BufferAttribute(colors.subarray(0, c), 3));
+      (g as any).userData = { J_z_vmax: vmaxAbs };
+      return g;
+    }
 
     if (mode === 'Demag') {
       // Demag-Coef: show ONLY magnet triangles, coloured 0..1 via jet
@@ -539,6 +604,7 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
                   borderColor: '#3b82f6' }}}}>
             <ToggleButton value="Az">A<sub>z</sub></ToggleButton>
             <ToggleButton value="Bmag">|B|</ToggleButton>
+            <ToggleButton value="J">J</ToggleButton>
             <ToggleButton value="Demag">Demag</ToggleButton>
           </ToggleButtonGroup>
           {!hideRefresh && (
@@ -611,6 +677,21 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
           if (mode === 'Demag') {
             return <ColorBar vmin={0} vmax={1} unit="Demag-Coef"
               lut={(t) => jetBands(t, 11)}/>;
+          }
+          if (mode === 'J') {
+            // Signed J_z bar — find vmax across coil triangles only.
+            const DOM_COIL = 2;
+            const jz = payload.J_z_per_tri ?? [];
+            const Js: number[] = [];
+            for (let ti = 0; ti < tris.length; ti++) {
+              if (dom[ti] !== DOM_COIL) continue;
+              if (ti < jz.length) Js.push(Math.abs(jz[ti]));
+            }
+            const vmax = pct(Js, 99) || 1;
+            // Display in A/mm² for readability (matches Ansys legend scale).
+            return <ColorBar vmin={-vmax} vmax={+vmax}
+              unit="A/m²"
+              lut={(t) => jetSigned(2 * t - 1)}/>;
           }
           // A_z mode — 2/98 percentile of interior node values, symmetrised.
           const used = new Set<number>();

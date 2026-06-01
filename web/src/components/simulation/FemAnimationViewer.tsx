@@ -38,6 +38,7 @@ interface FrameRaw {
   domain_per_tri:  number[];
   A_z_per_node:    number[];
   Bmag_per_tri:    number[];
+  J_z_per_tri?:    number[];
   demag_coef_per_tri?: number[];
   extent:          [number, number, number, number];
   A_z_min:         number;
@@ -190,6 +191,7 @@ const FemAnimationViewer: React.FC<Props> = ({
       A_z_max:         currentFrame.A_z_max,
       B_mag_max:       currentFrame.B_mag_max,
       demag_coef_per_tri: currentFrame.demag_coef_per_tri,
+      J_z_per_tri:     currentFrame.J_z_per_tri,
     } as FemPayload;
   }, [currentFrame, baseFrame, data]);
 

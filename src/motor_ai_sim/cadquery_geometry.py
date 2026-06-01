@@ -1040,18 +1040,29 @@ class CadQueryMotor:
         fillet_r1   = p.get('stator_fillet_r1', 0.9)
 
         # ── Zero-position alignment ──────────────────────────────────────
-        # At rotor_angle_deg = 0 the FIRST magnet (N pole, i=0) should sit
-        # at half-pole-pitch above the +X axis (math angle ≈ 6.43° for
-        # 28 poles), so the 7 magnets of the 1/4 sector fit FULLY inside
-        # the [0°, 90°] wedge — matching the Geometry-tab reference layout.
-        # Cadquery's native magnet origin is the +Y axis; we shift it by
-        # ZERO_OFFSET = −(90° − half-pole-pitch) ≈ −83.57° mechanically.
-        # This is the quarter-period shift the user asked for.  The
-        # corresponding electrical-angle compensation is folded into
-        # SPOKE_PM_DAXIS_SHIFT_DEG in fem_solver_2d.py so γ = 0 still
-        # gives max torque.
-        _pole_pitch_deg  = 360.0 / num_poles
-        ZERO_OFFSET_DEG  = -(90.0 - _pole_pitch_deg * 0.5)
+        # At rotor_angle_deg = 0 we want the rotor IRON TOOTH (effective
+        # d-axis pole in SPOKE-PM) to align with a STATOR TOOTH on the
+        # +X axis (math angle 0°).  Two coordinated shifts achieve this:
+        #
+        #   • ROTOR  shifted by  ZERO_OFFSET_DEG = −(90° − half_pole_pitch)
+        #            − 90° = −173.57°,  so the rotor tooth between mag[7]
+        #            and mag[8] (originally at math 180°) lands at math 0°.
+        #            Magnets in the 1/4 sector remain FULLY inside the
+        #            wedge, just shifted by one pole pair (polarities flip).
+        #
+        #   • STATOR shifted by  STATOR_GLOBAL_ROT_DEG = −90°, applied
+        #            in the slot-cutter and coil-winding loops below.
+        #            This brings the first stator tooth (originally at +Y
+        #            axis, math 90°) onto the +X axis (math 0°).
+        #
+        # Because BOTH stator and rotor receive the same −90° rotation,
+        # the relative motor configuration is unchanged → physics is
+        # invariant, SPOKE_PM_DAXIS_SHIFT_DEG stays at 200°.  The −90°
+        # rotor pole-pitch parity flip (=7 pole pitches, odd) and the
+        # corresponding −90° stator current-sign flip cancel exactly.
+        _pole_pitch_deg       = 360.0 / num_poles
+        ZERO_OFFSET_DEG       = -(90.0 - _pole_pitch_deg * 0.5) - 90.0
+        STATOR_GLOBAL_ROT_DEG = -90.0
         theta_r = radians(rotor_angle_deg + ZERO_OFFSET_DEG)
 
         def _circle(r, n=256):
@@ -1162,8 +1173,9 @@ class CadQueryMotor:
 
         stator_poly_base = SPoly(_circle(outer_r), [_circle(inner_r)])
         cutters = []
+        _stator_rot_rad = radians(STATOR_GLOBAL_ROT_DEG)
         for i in range(half_slots):
-            a = i * radians(slot_angle_deg)
+            a = i * radians(slot_angle_deg) + _stator_rot_rad
             trap_p = SPoly([_rot(*p1s,a), _rot(*p2s,a), _rot(*p3s,a), _rot(*p4s,a)])
             cx, cy = _rot(p3s[0], p3s[1], a)
             circ_p = SPoly([(cx + fill_r2*cos(2*pi*k/32), cy + fill_r2*sin(2*pi*k/32))
@@ -1258,7 +1270,7 @@ class CadQueryMotor:
         top_y_c  = slot_y_c - ins_w - wire_dy/2
         coil_polys = []
         for i in range(half_slots):
-            a = i * radians(slot_angle_deg)
+            a = i * radians(slot_angle_deg) + _stator_rot_rad
             wires_pos: list = []
             wires_neg: list = []
             for step in range(num_wires):

@@ -1872,14 +1872,18 @@ def fem_solve_for_sim(
     #   γ = 0 lands on the q-axis (max torque).
     #
     # When the rotor geometry zero is shifted by ΔΦ_mech, the electrical
-    # offset must shift by ΔΦ_mech × p (mod 360).  Cadquery now applies
-    # ZERO_OFFSET = −(90° − half-pole-pitch) ≈ −83.57° at rotor_angle=0
-    # (see cadquery_geometry.get_2d_polygons), so the previously calibrated
-    # 270° becomes 180° on paper — but an empirical γ-sweep on the
-    # NEW geometry (n_sectors=4, mesh=4 mm) shows the true peak sits at
-    # γ ≈ +20° elec, so we set the offset to 200° (= 180 + 20) and confirm
-    # γ = 0 lands within 0.5 % of the broad cos-shaped maximum.
-    SPOKE_PM_DAXIS_SHIFT_DEG = 200.0
+    # offset must shift by ΔΦ_mech × p (mod 360).  Cadquery now applies a
+    # combined alignment (rotor + stator −90° together, so the rotor iron
+    # tooth at math 0° aligns with a stator tooth at math 0°).  The rotor
+    # half of the shift flips magnet polarities (−7 pole pitches, odd), but
+    # the stator half does NOT flip current signs (slot_idx is derived
+    # from coil centroid angle, so the (phase, direction) assignment at
+    # each math angle is invariant under stator rotation).  Net effect: a
+    # global torque sign flip that we compensate by adding 180° to SPOKE.
+    # Empirical iterative γ-sweep on the post-shift geometry converges to
+    # SPOKE = 17° so γ = 0 lands on the broad cos-shaped peak (≈ +6.9 N·m
+    # at I_phase_rms = 85 A, 3 successive sweep iterations).
+    SPOKE_PM_DAXIS_SHIFT_DEG = 17.0
     theta_e      = math.radians(rotor_angle_deg * pole_pairs
                                  + gamma_deg + SPOKE_PM_DAXIS_SHIFT_DEG)
     I_ph = {

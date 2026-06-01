@@ -2044,38 +2044,80 @@ def fem_solve_for_sim(
         psi_C *= scale * sym
 
     # ── Losses ────────────────────────────────────────────────────────────
-    # Steinmetz-style iron loss density:  P/V  =  k_iron · f^α · B^β   [W/m³]
-    # Copper:  3-phase I²R  with R_phase from config (≈ analytical solver).
+    # Iron loss: per-cell Bertotti formula using the material's actual
+    # kh / kc / ke coefficients from materials_library.yaml.  The Bertotti
+    # model splits hysteresis, classical eddy and excess losses and
+    # encodes BOTH frequency and B dependence per material grade:
+    #
+    #   P/V  =  k_h · f · B²   +   k_c · f² · B²   +   k_e · f^1.5 · B^1.5
+    #
+    # Lamination stacking_factor (≈0.97) discounts the geometric volume
+    # to account for the inter-laminate insulation thickness.
+    #
+    # Copper: 3-phase I²R from R_phase in config.
     freq = sim.get("rpm", 3950) / 60 * pole_pairs       # electrical Hz
 
-    # Per-domain mass integration
-    rho_steel  = float(cfg.get("materials", {}).get("M19_29G", {})
-                         .get("density_kg_m3", 7650.0))
-    rho_magnet = float(cfg.get("materials", {}).get("N42", {})
-                         .get("density_kg_m3", 7500.0))
-    # Specific-loss coefficients (W/kg at 1 T, 50 Hz) ≈ analytical solver
-    k_iron_W_kg_1T_50Hz = 1.5
-    alpha_f             = 1.6     # frequency exponent (>1 to penalise harmonics)
-    beta_B              = 2.0     # flux-density exponent
+    # Pull material objects directly from the library to get Bertotti
+    # coefficients, density and stacking factor.
+    try:
+        from motor_ai_sim import materials as _mat_lib
+        from motor_ai_sim.config import get_material_assignments as _gma
+        _ma = _gma() or {}
+        _stator_mat = _mat_lib.get_steel(_ma.get("stator_core", "20SW1200"))
+        _rotor_mat  = _mat_lib.get_steel(_ma.get("rotor_core",  "20SW1200"))
+    except Exception as e:
+        log.warning("Steel material lookup failed (%s) — falling back to hardcoded Bertotti", e)
+        _stator_mat = _rotor_mat = None
 
-    # Volume per triangle = area × stack_length [m³]
+    # Per-triangle volumes [m³].  Stacking factor applied at loss step.
     vol = areas * p.stack_length
 
-    def _domain_iron_loss(tag: int, k: float, rho: float) -> float:
+    def _domain_iron_loss_bertotti(tag: int, mat) -> float:
+        """Per-cell Bertotti core loss summed over a domain."""
         mask = cell_tags == tag
-        if not np.any(mask):
+        idx = np.where(mask)[0]
+        if idx.size == 0 or mat is None:
             return 0.0
-        # ⟨B^β⟩ weighted by volume
-        Bp = Bmag_tri[mask] ** beta_B
-        m  = vol[mask] * rho            # mass per triangle [kg]
-        return k * (freq / 50.0) ** alpha_f * float(np.sum(Bp * m))
+        kh = float(getattr(mat, "core_loss_kh", 0.0))
+        kc = float(getattr(mat, "core_loss_kc", 0.0))
+        ke = float(getattr(mat, "core_loss_ke", 0.0))
+        sf = float(getattr(mat, "stacking_factor", 0.97))
+        f  = freq
+        B  = Bmag_tri[idx]
+        # W/m³ per cell
+        p_dens = kh * f * B**2 + kc * f**2 * B**2 + ke * f**1.5 * B**1.5
+        # Apply lamination stacking factor to the geometric volume
+        return float(np.sum(p_dens * vol[idx] * sf))
 
-    P_fe_stator = _domain_iron_loss(DOM_STATOR, k_iron_W_kg_1T_50Hz, rho_steel)
-    P_fe_rotor  = _domain_iron_loss(DOM_ROTOR,  k_iron_W_kg_1T_50Hz, rho_steel)
-    # Magnet eddy loss summed across every per-magnet tag (DOM_MAG_BASE..)
+    P_fe_stator = _domain_iron_loss_bertotti(DOM_STATOR, _stator_mat)
+    P_fe_rotor  = _domain_iron_loss_bertotti(DOM_ROTOR,  _rotor_mat)
+
+    # Magnet eddy: classical conductive solid magnet model.  P/V = σ·ω²·B²·d²/12
+    # (slab approximation in the radial direction).  σ from the magnet
+    # material entry (e.g. F45SH ferrite σ ≈ 5.6 kS/m — very low).
+    try:
+        mag_name = _ma.get("magnet")
+        _magnet_mat = _mat_lib.get_magnet(mag_name) if mag_name else None
+    except Exception:
+        _magnet_mat = None
+    rho_magnet = float(getattr(_magnet_mat, "density", 7500.0)) if _magnet_mat else 7500.0
+    sigma_mag  = float(getattr(_magnet_mat, "sigma",   0.0))    if _magnet_mat else 0.0
+
+    omega_e = 2 * math.pi * freq
+    # Approximate magnet thickness in the demag direction (radial):
+    d_mag_m = float(p.r_rotor_out - (p.r_rotor_in + getattr(p, "rotor_house_height", 0.0012))) \
+              if hasattr(p, "r_rotor_out") else 0.016
+
     P_mag_eddy = 0.0
     for i, _ in enumerate(polys_meshed.get("magnets", [])):
-        P_mag_eddy += _domain_iron_loss(DOM_MAG_BASE + i, 0.3, rho_magnet)
+        tag = DOM_MAG_BASE + i
+        idx = np.where(cell_tags == tag)[0]
+        if idx.size == 0:
+            continue
+        # P/V = σ·ω²·B²·d²/12   (W/m³)
+        B = Bmag_tri[idx]
+        p_dens = sigma_mag * omega_e**2 * B**2 * d_mag_m**2 / 12.0
+        P_mag_eddy += float(np.sum(p_dens * vol[idx]))
 
     mult = n_sectors if n_sectors > 1 else 1
     P_fe_total = (P_fe_stator + P_fe_rotor) * mult

@@ -400,6 +400,22 @@ def _clip_polys_to_sector(polys: dict, n_sectors: int) -> dict:
 # Periodic coil meshing — one wire → all wires → all coils
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _rotate_mesh_points(points: np.ndarray, angle_deg: float,
+                          cx: float = 0.0, cy: float = 0.0) -> np.ndarray:
+    """Rotate a (2, N) array of 2-D points by angle_deg around (cx, cy).
+
+    Used by the sliding-band solver to take the rotor mesh through one
+    time step: the topology (mesh.t) stays the same — only node
+    coordinates update.  This keeps the FEM matrix sparse pattern
+    intact and lets us re-use cached stator + rotor stiffness blocks
+    while only rebuilding the band coupling each step.
+    """
+    c = math.cos(math.radians(angle_deg))
+    s = math.sin(math.radians(angle_deg))
+    R = np.array([[c, -s], [s, c]], dtype=points.dtype)
+    return R @ (points - np.array([[cx], [cy]])) + np.array([[cx], [cy]])
+
+
 def _structured_band_mesh(r_in_mm: float, r_out_mm: float,
                             n_arc: int,
                             theta_start: float = 0.0,

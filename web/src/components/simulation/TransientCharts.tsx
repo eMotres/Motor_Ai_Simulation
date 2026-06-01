@@ -221,6 +221,36 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85 }) =
             </ResponsiveContainer>
           </Box>
 
+          {/* ── Currents ── */}
+          <Box sx={{ height: 220 }}>
+            <Typography sx={{ fontSize: 11, fontWeight: 700, color: '#94a3b8' }}>
+              Phase currents I_A / I_B / I_C
+            </Typography>
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={rows} margin={{ top: 8, right: 10, left: 0, bottom: 16 }}>
+                <CartesianGrid {...GRID}/>
+                <XAxis dataKey="t_ms" tick={AXIS}
+                  label={{ value: 't [ms]', position: 'insideBottom',
+                    offset: -4, style: { fontSize: 10, fill: '#475569' } }}/>
+                <YAxis tick={AXIS}
+                  label={{ value: 'I [A]', angle: -90,
+                    position: 'insideLeft', offset: 12,
+                    style: { fontSize: 10, fill: '#475569' } }}/>
+                <RcTooltip {...TOOLTIP}/>
+                <Legend wrapperStyle={{ fontSize: 10 }}/>
+                <Line type="monotone" dataKey="I_A" stroke="#ef4444"
+                  name="I_A" strokeWidth={2} dot={false}
+                  isAnimationActive={false}/>
+                <Line type="monotone" dataKey="I_B" stroke="#10b981"
+                  name="I_B" strokeWidth={2} dot={false}
+                  isAnimationActive={false}/>
+                <Line type="monotone" dataKey="I_C" stroke="#60a5fa"
+                  name="I_C" strokeWidth={2} dot={false}
+                  isAnimationActive={false}/>
+              </LineChart>
+            </ResponsiveContainer>
+          </Box>
+
           {/* ── Voltages ── */}
           <Box sx={{ height: 220 }}>
             <Typography sx={{ fontSize: 11, fontWeight: 700, color: '#94a3b8' }}>

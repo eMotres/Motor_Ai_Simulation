@@ -228,37 +228,15 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
         </IconButton>
       </Box>
 
-      {/* ── Scalars table ── */}
-      <Paper sx={CHART_STYLE}>
-        <SectionLabel title="Key Scalars" note={`θ_rotor=${rotorAngle_deg}° γ=${gamma_deg}°`}/>
-        <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 0.5 }}>
-          {[
-            ['I_coil_peak', `${sc.I_coil_peak_A} A`],
-            ['I_coil_rms',  `${sc.I_coil_rms_A} A`],
-            ['R_phase',     `${sc.R_phase_mOhm} mΩ`],
-            ['B_total_peak',`${sc.B_total_peak_T} T`],
-            ['B_pm_peak',   `${sc.B_pm_peak_T} T`],
-            ['B_winding_pk',`${sc.B_winding_peak_T} T`],
-            ['MMF_peak',    `${sc.MMF_peak_At} At`],
-            ['air_gap',     `${sc.air_gap_mm} mm`],
-            ['δ_cu',        `${sc.delta_cu_mm} mm`],
-            ['δ_mag',       `${sc.delta_mag_mm} mm`],
-            ['d/δ_cu',      `${sc.d_wire_over_delta} (skin)`],
-            ['regime',      sc.d_wire_over_delta < 1 ? 'classical' : 'skin-effect'],
-          ].map(([k, v]) => (
-            <Box key={k as string} sx={{ display: 'flex', justifyContent: 'space-between',
-              px: 1, py: 0.3, bgcolor: '#060d17', borderRadius: 0.5 }}>
-              <Typography sx={{ fontSize: 10, color: '#64748b' }}>{k}</Typography>
-              <Typography sx={{ fontSize: 10, fontWeight: 600, color: '#e2e8f0' }}>{v}</Typography>
-            </Box>
-          ))}
-        </Box>
-      </Paper>
+      {/* Analytical "Key Scalars" table removed — all key quantities
+          (T_em, P_cu/Fe/eddy, |B|_max, A_z range) come from the FEM
+          solve and are shown in the FemFieldChart sidebar. */}
 
-      {/* ── TORQUE — главная карточка ── */}
+      {/* Analytical TORQUE summary card removed — FemFieldChart sidebar
+          shows the FEM-computed T_em / P_mech / efficiency. */}
       <Paper sx={{ ...CHART_STYLE,
         borderColor: data.torque.T_em_Nm > 0.5 ? '#4ade80' : '#f97316',
-        bgcolor: '#060d17' }}>
+        bgcolor: '#060d17', display: 'none' }}>
         <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 2, flexWrap: 'wrap' }}>
           {/* Main torque value */}
           <Box sx={{ flex: '0 0 auto', textAlign: 'center',
@@ -417,8 +395,9 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
         </Typography>
       </Paper>
 
-      {/* ── CORRECTED LOSS SUMMARY ── */}
-      <Paper sx={CHART_STYLE}>
+      {/* Analytical Loss Budget hidden — FEM transient/field charts above
+          show the real per-domain losses. */}
+      <Paper sx={{ ...CHART_STYLE, display: 'none' }}>
         <SectionLabel title="Loss Budget (corrected model)"
           note="specific-loss [W/kg] + slot harmonics"
           tooltip="Fe: Steinmetz with k calibrated to 20SW1200 datasheet (1.2 W/kg at 50Hz/1T). Magnets: slot harmonic AC B only (fundamental = DC in rotor frame for SPMSM)."/>
@@ -473,8 +452,8 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
       {/* ── Transient: T(t), P(t), V(t) — one FEM solve per time step ── */}
       <TransientCharts gamma_deg={gamma_deg} I_phase_rms={I_phase_rms}/>
 
-      {/* ── Chart 1: MMF ── */}
-      <Paper sx={CHART_STYLE}>
+      {/* Analytical MMF(θ) hidden. */}
+      <Paper sx={{ ...CHART_STYLE, display: 'none' }}>
         <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
           <SectionLabel title="Magnetomotive Force MMF(θ)"
             note="analytical"
@@ -504,8 +483,8 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
         </ResponsiveContainer>
       </Paper>
 
-      {/* ── Chart 2: Air-gap B ── */}
-      <Paper sx={CHART_STYLE}>
+      {/* Analytical B_r(θ) hidden. */}
+      <Paper sx={{ ...CHART_STYLE, display: 'none' }}>
         <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
           <SectionLabel title="Air-Gap Radial Flux Density B_r(θ)"
             note="analytical (linear model)"
@@ -538,8 +517,8 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
         </ResponsiveContainer>
       </Paper>
 
-      {/* ── Chart 3: Harmonic Spectrum ── */}
-      <Paper sx={CHART_STYLE}>
+      {/* Analytical Spatial Harmonics hidden. */}
+      <Paper sx={{ ...CHART_STYLE, display: 'none' }}>
         <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
           <SectionLabel title="Spatial Harmonic Spectrum of B"
             note="FFT of B_total"
@@ -577,8 +556,9 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
         </Typography>
       </Paper>
 
-      {/* ── Chart 4: Slot currents ── */}
-      <Paper sx={CHART_STYLE}>
+      {/* Analytical Slot Current Density hidden — FEM transient I(t) chart
+          replaces it with the actual per-phase currents. */}
+      <Paper sx={{ ...CHART_STYLE, display: 'none' }}>
         <SectionLabel title="Slot Current Density J_z(slot)"
           note="at current rotor angle"
           tooltip="J_z per slot in MA/m². Colour = phase (A/B/C). Sign = direction (+into page, -out). Compare Ansys current density map."/>
@@ -616,8 +596,8 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
         </Box>
       </Paper>
 
-      {/* ── Chart 5: Loss breakdown ── */}
-      <Paper sx={CHART_STYLE}>
+      {/* Analytical Loss Breakdown hidden — FEM losses in TransientCharts. */}
+      <Paper sx={{ ...CHART_STYLE, display: 'none' }}>
         <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
           <SectionLabel title="Loss Breakdown"
             note="analytical estimates vs PINN"
@@ -681,8 +661,8 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
       {/* Analytical loss waveform removed — TransientCharts above already
           shows the FEM-computed losses vs time. */}
 
-{/* ── Magnet segmentation guidance ── */}
-      <Paper sx={{ ...CHART_STYLE, borderColor: '#7c3aed' }}>
+{/* Magnet segmentation guidance hidden. */}
+      <Paper sx={{ ...CHART_STYLE, borderColor: '#7c3aed', display: 'none' }}>
         <SectionLabel title="Magnet Eddy — Segmentation Impact"
           note="classical formula P ~ d²"
           tooltip="Eddy losses scale as d². Segmentation is the key lever. PINN will compute exact from A_z."/>

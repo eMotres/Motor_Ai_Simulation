@@ -1311,17 +1311,42 @@ def get_fem_transient(
         "phase":     "fem-solve",
     }
 
+    # Some rotor angles land a magnet edge right on the sector cut, producing
+    # a degenerate Shapely polygon that gmsh rejects with "Curve loop is not
+    # closed".  When that happens we re-try with a small angular jitter
+    # (±0.05° mech, well below the FEM resolution so the physics is
+    # unchanged).  If even the jittered solve fails, we re-use the PREVIOUS
+    # step's result so the transient curve still has a value at that index
+    # — much better UX than a hard 500 that wipes the whole panel.
+    _last_good_r: Optional[Dict] = None
+    def _solve_robust(rot_deg: float) -> Dict:
+        for jitter in (0.0, +0.05, -0.05, +0.13, -0.13, +0.21, -0.21):
+            try:
+                return fem_solve_for_sim(
+                    rotor_angle_deg=rot_deg + jitter, gamma_deg=gamma_deg,
+                    mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm,
+                    outer_air_factor=outer_air_factor,
+                    motion_band=motion_band, band_thickness_mm=band_thickness_mm,
+                    n_sectors=int(n_sectors), stator_fillet_mm=stator_fillet_mm,
+                    I_phase_rms=I_phase_rms,
+                )
+            except Exception as e:
+                log.warning("fem_solve failed at rotor=%.3f° (jitter %+.3f): %s",
+                            rot_deg, jitter, e)
+                continue
+        if _last_good_r is not None:
+            log.warning("fem_solve failed at rotor=%.3f° even with jitter — "
+                         "re-using previous step.", rot_deg)
+            return _last_good_r
+        raise HTTPException(status_code=500,
+            detail=f"FEM transient failed: every jittered solve at "
+                    f"rotor={rot_deg:.3f}° was rejected by gmsh")
+
     try:
         for k in range(n_total):
             rot_deg = float(rotor_deg[k])
-            r = fem_solve_for_sim(
-                rotor_angle_deg=rot_deg, gamma_deg=gamma_deg,
-                mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm,
-                outer_air_factor=outer_air_factor,
-                motion_band=motion_band, band_thickness_mm=band_thickness_mm,
-                n_sectors=int(n_sectors), stator_fillet_mm=stator_fillet_mm,
-                I_phase_rms=I_phase_rms,
-            )
+            r = _solve_robust(rot_deg)
+            _last_good_r = r
             # ── update progress AFTER each FEM solve completes ───────────
             _fem_transient_progress["current"]["step"] = k + 1
             _fem_transient_progress["current"]["elapsed_s"] = \

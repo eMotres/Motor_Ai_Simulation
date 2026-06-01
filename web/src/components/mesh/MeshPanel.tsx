@@ -316,6 +316,11 @@ const MeshPanel: React.FC = () => {
   const [showEdges,    setShowEdges]    = useState<boolean>(true);
   const [showOutlines, setShowOutlines] = useState<boolean>(true);
   const [fillDomains,  setFillDomains]  = useState<boolean>(true);
+  // Sliding-band TWO-mesh view (feature/sliding-band-fem branch).  When on,
+  // fetches /mesh/build2d_sliding_band which returns the stator and rotor
+  // meshes concatenated — moving the rotor_angle slider rigidly rotates
+  // the rotor half without touching the stator triangulation.
+  const [slidingBand,  setSlidingBand]  = usePersisted<boolean>('slidingBand', false);
   const [femMesh,     setFemMesh]     = useState<FemMesh | null>(null);
   const [femLoading,  setFemLoading]  = useState<boolean>(false);
   const [femError,    setFemError]    = useState<string | null>(null);
@@ -323,7 +328,18 @@ const MeshPanel: React.FC = () => {
   const fetchFemMesh = useCallback(() => {
     setFemLoading(true);
     setFemError(null);
-    const qs = new URLSearchParams({
+    const base = slidingBand
+      ? `${API}/api/simulation/mesh/build2d_sliding_band`
+      : `${API}/api/simulation/mesh/build2d`;
+    const qs = new URLSearchParams(slidingBand ? {
+      // Sliding-band endpoint takes a slimmer param set.
+      rotor_angle_deg:   rotorAngle.toString(),
+      mesh_size_mm:      meshSizeMm.toString(),
+      min_size_mm:       minSizeMm.toString(),
+      outer_air_factor:  outerAirFactor.toString(),
+      band_thickness_mm: bandThickness.toString(),
+      n_sectors:         nSectors.toString(),
+    } : {
       mesh_size_mm:        meshSizeMm.toString(),
       min_size_mm:         minSizeMm.toString(),
       surface_deviation:   surfaceDev.toString(),
@@ -336,15 +352,14 @@ const MeshPanel: React.FC = () => {
       n_sectors:           nSectors.toString(),
       stator_fillet_mm:    statorFillet.toString(),
     }).toString();
-    const url = `${API}/api/simulation/mesh/build2d?${qs}`;
-    fetch(url)
+    fetch(`${base}?${qs}`)
       .then(async r => {
         if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
         return r.json();
       })
       .then((d: FemMesh) => { setFemMesh(d); setFemLoading(false); })
       .catch(e => { setFemError(String(e)); setFemLoading(false); });
-  }, [meshSizeMm, minSizeMm, surfaceDev, normalDev, aspectRatio, rotorAngle,
+  }, [slidingBand, meshSizeMm, minSizeMm, surfaceDev, normalDev, aspectRatio, rotorAngle,
       outerAirFactor, motionBand, bandThickness, nSectors, statorFillet]);
 
   // Load current config + geometry on mount
@@ -637,6 +652,34 @@ const MeshPanel: React.FC = () => {
                     sx={{ color: '#3b82f6' }}
                   />
                 </>
+              )}
+            </Box>
+
+            {/* Sliding-band TWO-mesh view */}
+            <Box>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>
+                  Sliding-band view
+                  <Tooltip title="Build stator and rotor as TWO separate meshes; rigidly rotate the rotor mesh's node coordinates by the rotor angle slider (topology stays the same). The band-interface nodes on each side are paired master-slave for the FEM solve (SB-5d, in progress)." placement="right">
+                    <span style={{ color: '#475569', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
+                  </Tooltip>
+                </Typography>
+                <ToggleButtonGroup
+                  value={slidingBand ? 'on' : 'off'} exclusive size="small"
+                  onChange={(_, v) => v && setSlidingBand(v === 'on')}
+                  sx={{ '& .MuiToggleButton-root': { py: 0.1, px: 1,
+                    fontSize: 10, color: '#64748b', borderColor: '#1e293b',
+                    textTransform: 'none',
+                    '&.Mui-selected': { color: '#a78bfa', bgcolor: '#312e5f',
+                      borderColor: '#8b5cf6' } } }}>
+                  <ToggleButton value="off">Off</ToggleButton>
+                  <ToggleButton value="on">On</ToggleButton>
+                </ToggleButtonGroup>
+              </Box>
+              {slidingBand && (
+                <Typography sx={{ fontSize: 10, color: '#7c3aed', mt: 0.3 }}>
+                  Sweep the <b>Rotor angle</b> slider above — rotor mesh slides as rigid body
+                </Typography>
               )}
             </Box>
 

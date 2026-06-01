@@ -123,23 +123,19 @@ const SimulationPanel: React.FC = () => {
   const [current,       setCurrent]       = useState(85.0);
   const [frequency,     setFrequency]     = useState(921.67);
   const [rpm,           setRpm]           = useState(3950.0);
-  const [rotorAngle,    setRotorAngle]    = useState(0.0);
   const [phaseOffset,   setPhaseOffset]   = useState(0.0);   // γ [deg]
-  const [maxSteps,      setMaxSteps]      = useState(10000);
-  const [device,        setDevice]        = useState<'cpu' | 'cuda'>('cpu');
+  // ── rotor angle / PINN training settings removed ──────────────────────
+  // FEM auto-run now sweeps the rotor through the full electrical period,
+  // and the PINN run button is gone (no Modulus dependency).  Kept as
+  // placeholders so the legacy fetch payload below still type-checks.
+  const rotorAngle = 0;
+  const maxSteps   = 10000;
+  const device: 'cpu' | 'cuda' = 'cpu';
 
   // ── derived winding values ────────────────────────────────────────────────
   const I_coil_rms  = current / connDef.nP;                  // Arms per coil
   const I_coil_peak = I_coil_rms * Math.sqrt(2);             // A peak per coil
   const ampTurns    = nWiresPerSlot * I_coil_rms;            // A·turns per slot
-
-  // ── derived phase currents (for display) ─────────────────────────────────
-  // γ=0 ⇒ q-axis (max torque) — add +π/2 so the cos→ phase A peaks at q-axis
-  const thetaElec_deg = rotorAngle * polePairs + phaseOffset + 90;
-  const thetaElec_rad = thetaElec_deg * Math.PI / 180;
-  const I_A = I_coil_peak * Math.cos(thetaElec_rad);
-  const I_B = I_coil_peak * Math.cos(thetaElec_rad - 2 * Math.PI / 3);
-  const I_C = I_coil_peak * Math.cos(thetaElec_rad + 2 * Math.PI / 3);
 
   // ── job state ─────────────────────────────────────────────────────────────
   const [jobId,   setJobId]   = useState<string | null>(null);
@@ -388,29 +384,26 @@ const SimulationPanel: React.FC = () => {
               inputProps={{ step: 100, min: 0 }} disabled={isRunning}
               helperText={`rpm = f × 60 / ${polePairs}`}
               FormHelperTextProps={{ sx: { fontSize: 10, color: '#475569', mx: 0 } }}/>
-            <TextField
-              label={`Rotor Angle (°)  — period: ${elecPeriod_deg.toFixed(2)}°`}
-              type="number" size="small" fullWidth
-              value={rotorAngle}
-              onChange={e => {
-                const v = +e.target.value;
-                // wrap into [0, elecPeriod_deg)
-                setRotorAngle(parseFloat((((v % elecPeriod_deg) + elecPeriod_deg) % elecPeriod_deg).toFixed(3)));
-              }}
-              inputProps={{ step: parseFloat((elecPeriod_deg / 12).toFixed(2)), min: 0, max: elecPeriod_deg }}
-              helperText={`0 … ${elecPeriod_deg.toFixed(2)}° = 360°/${polePairs} pole pairs`}
-              disabled={isRunning}
-              FormHelperTextProps={{ sx: { fontSize: 10, color: '#475569', mx: 0 } }}
-            />
+            {/* The "Rotor Angle (°)" initial-position field was removed —
+                in the auto-run architecture the Field Animation sweeps the
+                whole 25.71° electrical period itself, so picking a single
+                starting angle adds nothing.  Only the current-vector
+                load-angle γ is user-facing now. */}
 
-            {/* Phase offset γ */}
+            {/* Current-vector angle (γ) — the only operating-point control
+                left.  Convention:  I_total points at (90° + γ) electrical
+                relative to the rotor d-axis.  γ = 0 keeps I purely on the
+                q-axis (max torque); γ < 0 advances the vector for field
+                weakening at high speed; γ > 0 retards (used to flatten
+                cogging-torque ripple in some control schemes). */}
             <TextField
-              label="Phase Offset γ (°)"
+              label="γ — current-vector offset from q-axis (°)"
               type="number" size="small" fullWidth
               value={phaseOffset}
               onChange={e => setPhaseOffset(+e.target.value)}
-              inputProps={{ step: 5, min: -180, max: 180 }}
-              helperText="0°=q-axis (max torque)  ±90°=d-axis (field weakening)"
+              inputProps={{ step: 5, min: -90, max: 90 }}
+              helperText={`I direction = 90° + γ elec from d-axis.  ` +
+                          `γ=0 → q-axis (max torque),  γ=±90 → d-axis (field weakening)`}
               disabled={isRunning}
               FormHelperTextProps={{ sx: { fontSize: 10, color: '#475569', mx: 0 } }}
             />

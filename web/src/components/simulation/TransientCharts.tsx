@@ -56,14 +56,53 @@ const AXIS = { fontSize: 10, fill: '#94a3b8' };
 const TOOLTIP = {
   contentStyle: { background: '#0f172a', border: '1px solid #1e293b',
     fontSize: 11, color: '#cbd5e1' },
+  labelFormatter: (v: number) => `t = ${Number(v).toFixed(3)} ms`,
+  formatter: (v: number) => Number(v).toFixed(3),
 };
 const GRID = { stroke: '#1e293b', strokeDasharray: '2 4' };
+
+// Round the x-axis tick label to 3 decimal places (ms).  Without this
+// recharts displays the raw floating-point time values with full
+// double-precision noise (e.g. "0.07233273056057866").
+const fmtMs = (v: number) => Number(v).toFixed(3);
+
+interface ProgressInfo {
+  running:   boolean;
+  step:      number;
+  total:     number;
+  elapsed_s: number;
+  eta_s:     number;
+  per_step_s?: number;
+  phase:     string;
+}
 
 const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85 }) => {
   const [steps, setSteps] = useState<number>(30);          // faster default
   const [data,  setData]  = useState<TransientPayload | null>(null);
   const [busy,  setBusy]  = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const [progress, setProgress] = useState<ProgressInfo | null>(null);
+
+  // Poll the backend /progress endpoint every 500 ms while a run is in
+  // flight, so we can show "Frame X/N — Ys elapsed — ETA Zs" instead of
+  // an opaque spinning "Running…".
+  useEffect(() => {
+    if (!busy) { setProgress(null); return; }
+    let alive = true;
+    const tick = async () => {
+      if (!alive) return;
+      try {
+        const r = await fetch(`${API}/api/simulation/physics/fem_transient/progress`);
+        if (r.ok) {
+          const p: ProgressInfo = await r.json();
+          if (alive) setProgress(p);
+        }
+      } catch {/* ignore polling errors */}
+    };
+    tick();   // immediate first read
+    const id = window.setInterval(tick, 500);
+    return () => { alive = false; window.clearInterval(id); };
+  }, [busy]);
 
   const run = () => {
     setBusy(true); setError(null);
@@ -146,11 +185,34 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85 }) =
                             : <RefreshIcon fontSize="small"/>}
             disabled={busy} onClick={run}
             sx={{ bgcolor: '#1e3a5f', '&:hover': { bgcolor: '#1e40af' },
-              textTransform: 'none', minWidth: 110 }}>
-            {busy ? 'Running…' : (data ? 'Re-run' : 'Run')}
+              textTransform: 'none', minWidth: 170 }}>
+            {busy && progress && progress.total > 0
+              ? `Frame ${progress.step}/${progress.total}`
+              : (busy ? 'Running…' : (data ? 'Re-run' : 'Run'))}
           </Button>
         </Box>
       </Box>
+
+      {/* Live progress strip — only visible while a transient is running */}
+      {busy && progress && progress.total > 0 && (
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.4,
+          px: 1, py: 0.6, bgcolor: '#060d17', border: '1px solid #1e293b',
+          borderRadius: 1, fontFamily: 'monospace' }}>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between',
+            fontSize: 10, color: '#94a3b8' }}>
+            <span>Solving frame <b>{progress.step}</b> of <b>{progress.total}</b>
+              {progress.per_step_s ? `   ·   ${progress.per_step_s.toFixed(1)} s/frame` : ''}</span>
+            <span>elapsed <b>{progress.elapsed_s.toFixed(1)} s</b>   ·   ETA <b>{progress.eta_s.toFixed(1)} s</b></span>
+          </Box>
+          <Box sx={{ width: '100%', height: 4, bgcolor: '#0f172a',
+            borderRadius: 2, overflow: 'hidden' }}>
+            <Box sx={{
+              width: `${(100 * progress.step / Math.max(1, progress.total)).toFixed(1)}%`,
+              height: '100%', bgcolor: '#3b82f6',
+              transition: 'width 0.4s ease' }}/>
+          </Box>
+        </Box>
+      )}
 
       {error && (
         <Typography sx={{ fontSize: 11, color: '#fca5a5', p: 1,
@@ -177,7 +239,7 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85 }) =
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={rows} margin={{ top: 8, right: 10, left: 0, bottom: 16 }}>
                 <CartesianGrid {...GRID}/>
-                <XAxis dataKey="t_ms" tick={AXIS}
+                <XAxis dataKey="t_ms" tick={AXIS} tickFormatter={fmtMs}
                   label={{ value: 't [ms]', position: 'insideBottom',
                     offset: -4, style: { fontSize: 10, fill: '#475569' } }}/>
                 <YAxis tick={AXIS}
@@ -199,7 +261,7 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85 }) =
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={rows} margin={{ top: 8, right: 10, left: 0, bottom: 16 }}>
                 <CartesianGrid {...GRID}/>
-                <XAxis dataKey="t_ms" tick={AXIS}
+                <XAxis dataKey="t_ms" tick={AXIS} tickFormatter={fmtMs}
                   label={{ value: 't [ms]', position: 'insideBottom',
                     offset: -4, style: { fontSize: 10, fill: '#475569' } }}/>
                 <YAxis tick={AXIS}
@@ -229,7 +291,7 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85 }) =
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={rows} margin={{ top: 8, right: 10, left: 0, bottom: 16 }}>
                 <CartesianGrid {...GRID}/>
-                <XAxis dataKey="t_ms" tick={AXIS}
+                <XAxis dataKey="t_ms" tick={AXIS} tickFormatter={fmtMs}
                   label={{ value: 't [ms]', position: 'insideBottom',
                     offset: -4, style: { fontSize: 10, fill: '#475569' } }}/>
                 <YAxis tick={AXIS}
@@ -259,7 +321,7 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85 }) =
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={rows} margin={{ top: 8, right: 10, left: 0, bottom: 16 }}>
                 <CartesianGrid {...GRID}/>
-                <XAxis dataKey="t_ms" tick={AXIS}
+                <XAxis dataKey="t_ms" tick={AXIS} tickFormatter={fmtMs}
                   label={{ value: 't [ms]', position: 'insideBottom',
                     offset: -4, style: { fontSize: 10, fill: '#475569' } }}/>
                 <YAxis tick={AXIS}

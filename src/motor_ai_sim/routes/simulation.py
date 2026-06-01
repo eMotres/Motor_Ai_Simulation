@@ -1138,9 +1138,48 @@ async def get_fem_field2d(
 
 _fem_transient_cache: Dict[tuple, Dict] = {}
 
+# Shared progress state for the currently-running transient.  Polled by
+# the frontend via /physics/fem_transient/progress so the user sees
+# "Frame X / N — Ys elapsed — ETA Zs" instead of a spinning "Running…".
+_fem_transient_progress: Dict[str, Dict] = {
+    "current": {
+        "running":   False,
+        "step":      0,
+        "total":     0,
+        "elapsed_s": 0.0,
+        "eta_s":     0.0,
+        "ts_start":  0.0,
+        "phase":     "idle",
+    }
+}
+
+
+@router.get("/physics/fem_transient/progress")
+async def get_fem_transient_progress():
+    """Lightweight progress endpoint — frontend polls this every ~500 ms
+    while a transient solve is in flight.  Returns step counter, elapsed
+    wall-time and an ETA estimated from the average seconds-per-step so
+    far."""
+    p = _fem_transient_progress.get("current", {})
+    if p.get("running") and p.get("ts_start", 0) > 0:
+        import time as _t
+        elapsed = _t.time() - p["ts_start"]
+        step    = max(1, int(p.get("step", 0)))
+        total   = max(step, int(p.get("total", 0)))
+        per_step = elapsed / step
+        eta = per_step * max(0, total - step)
+        return {
+            **p,
+            "elapsed_s": round(elapsed, 1),
+            "eta_s":     round(eta, 1),
+            "per_step_s": round(per_step, 2),
+            "frac":      round(step / total, 3),
+        }
+    return p
+
 
 @router.get("/physics/fem_transient")
-async def get_fem_transient(
+def get_fem_transient(
     n_steps_per_period:  int   = 60,   # FEM solves per electrical period
     n_periods:           float = 1.0,  # how many electrical periods to sim
     gamma_deg:           float = 0.0,
@@ -1260,6 +1299,18 @@ async def get_fem_transient(
             out.append({"domain": 2, "loops": _conv(coil_poly)})
         return out
 
+    import time as _time
+    _t_loop_start = _time.time()
+    _fem_transient_progress["current"] = {
+        "running":   True,
+        "step":      0,
+        "total":     n_total,
+        "elapsed_s": 0.0,
+        "eta_s":     0.0,
+        "ts_start":  _t_loop_start,
+        "phase":     "fem-solve",
+    }
+
     try:
         for k in range(n_total):
             rot_deg = float(rotor_deg[k])
@@ -1271,6 +1322,10 @@ async def get_fem_transient(
                 n_sectors=int(n_sectors), stator_fillet_mm=stator_fillet_mm,
                 I_phase_rms=I_phase_rms,
             )
+            # ── update progress AFTER each FEM solve completes ───────────
+            _fem_transient_progress["current"]["step"] = k + 1
+            _fem_transient_progress["current"]["elapsed_s"] = \
+                _time.time() - _t_loop_start
             T_em_series.append(float(r.get("T_em_Nm", 0.0)))
             P_cu_series.append(float(r.get("P_cu_W", 0.0)))
             P_fe_series.append(float(r.get("P_fe_W", 0.0)))
@@ -1347,10 +1402,13 @@ async def get_fem_transient(
         raise HTTPException(status_code=500, detail=f"FEM transient failed: {e}")
 
     # ── Balanced 3-phase ψ via ±120° elec time shift ───────────────────
-    # Pick the phase with the largest peak-to-peak swing in the FEM trace
-    # as the canonical waveform and rebuild the other two by shifting.
-    # Only valid when the simulated window covers (at least) one full
-    # electrical period — true here since n_periods >= 1.
+    # With the corrected half-pitch slot_idx mapping the FEM-derived ψ for
+    # each phase should be intrinsically balanced (same amplitude, 120°
+    # apart).  In 1/4-sector mode some asymmetry can remain because the
+    # six-slot sector doesn't divide cleanly across 3 phases, so we still
+    # PICK the largest-amplitude phase as the canonical reference and
+    # generate the other two by time-shifting.  We also DC-balance so the
+    # back-EMF (= dψ/dt) integrates around zero.
     def _ptp(arr): a = _np.asarray(arr); return float(a.max() - a.min())
     psi_arr = [_np.asarray(psi_A), _np.asarray(psi_B), _np.asarray(psi_C)]
     canon_idx = max(range(3), key=lambda i: _ptp(psi_arr[i]))
@@ -1423,6 +1481,18 @@ async def get_fem_transient(
         payload["frames"] = frames
         payload["n_frames_returned"] = len(frames)
     _fem_transient_cache[key] = payload
+    # Mark the run finished so the progress endpoint stops reporting
+    # "running".  Keep the step count so the final state is visible
+    # for one more poll on the frontend.
+    _fem_transient_progress["current"] = {
+        **_fem_transient_progress["current"],
+        "running": False,
+        "phase":   "done",
+        "step":    n_total,
+        "total":   n_total,
+        "elapsed_s": round(_time.time() - _t_loop_start, 1),
+        "eta_s":   0.0,
+    }
     return payload
 
 

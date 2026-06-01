@@ -2022,6 +2022,16 @@ def fem_solve_for_sim(
     n_slot_layout = len(d.winding_layout)
     if n_slot_layout > 0 and coil_polys_clipped:
         slot_pitch_deg_layout = 360.0 / n_slot_layout
+        # Same half-pitch offset fix as build_materials: slot CENTRES sit
+        # midway between adjacent coil polygons, so the two halves of each
+        # wide tooth land on ADJACENT slot_idx values with OPPOSITE direction
+        # signs.  Without this offset both halves collapse onto the same
+        # slot_idx and inherit the SAME direction → ψ_phase becomes
+        # ⟨A_z_left⟩ + ⟨A_z_right⟩ ≈ 2⟨A_z_tooth⟩ instead of the proper
+        # ⟨A_z_left⟩ − ⟨A_z_right⟩ = flux LINKED by the coil loop, which
+        # over-estimates the back-EMF voltage by 10–50× (user-reported
+        # V_peak ≈ 5 kV vs. expected ≈ 140 V).
+        half_pitch_layout = slot_pitch_deg_layout * 0.5
         A_tri_mean = (A[mesh.t[0]] + A[mesh.t[1]] + A[mesh.t[2]]) / 3.0
         for i, cp in enumerate(coil_polys_clipped):
             if cp is None or cp.is_empty:
@@ -2032,7 +2042,8 @@ def fem_solve_for_sim(
                 continue
             ang = math.degrees(math.atan2(cy, cx))
             if ang < 0: ang += 360.0
-            slot_idx = int(ang / slot_pitch_deg_layout + 0.5) % n_slot_layout
+            slot_idx = int((ang - half_pitch_layout)
+                            / slot_pitch_deg_layout + 0.5) % n_slot_layout
             phase, direction = d.winding_layout[slot_idx]
             tag = DOM_COIL_BASE + i
             idx = np.where(cell_tags == tag)[0]
@@ -2046,16 +2057,22 @@ def fem_solve_for_sim(
             if   phase == 'A': psi_A += psi_slot
             elif phase == 'B': psi_B += psi_slot
             elif phase == 'C': psi_C += psi_slot
-        # ⟨A_z⟩ has units Wb/m; multiply by L_stack (m) → Wb per turn;
-        # multiply by N_turns/slot → per-slot flux linkage.  The sector
-        # multiplier replicates the 2 slots simulated in 1/4-sector mode
-        # into the full motor's 8 slots/phase (derived analytically from
-        # the anti-periodic field replication — see commit message).
-        scale = p.stack_length * float(n_wires)
+        # ⟨A_z⟩ has units Wb/m.  Critical scaling note:
+        #   _clip_polys_to_sector unpacks each slot's MultiPolygon
+        #   (= union of N_wires disjoint wire rectangles) into N_wires
+        #   INDIVIDUAL polygons in `coils`.  The loop above therefore
+        #   already SUMS direction × ⟨A_z⟩ over all N_wires wires per
+        #   slot, so we MUST NOT multiply by N_wires again — that
+        #   would over-count flux linkage by N_wires (= 14 for this
+        #   motor, producing the ~5 kV phase-voltage artefact the user
+        #   pointed out).  Divide by n_parallel to convert the SUMMED
+        #   phase flux linkage into PER-BRANCH ψ, which is what the
+        #   phase-terminal voltage equation uses.
         sym = (n_sectors if n_sectors > 1 else 1)
-        psi_A *= scale * sym
-        psi_B *= scale * sym
-        psi_C *= scale * sym
+        scale = p.stack_length * sym / float(n_parallel)
+        psi_A *= scale
+        psi_B *= scale
+        psi_C *= scale
 
     # ── Losses ────────────────────────────────────────────────────────────
     # Iron loss: per-cell Bertotti formula using the material's actual

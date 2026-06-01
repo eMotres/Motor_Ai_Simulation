@@ -444,17 +444,33 @@ interface Props {
   rotor_angle_deg?: number;
   I_phase_rms?: number;
   onPayload?: (p: FemPayload) => void;
+  /**
+   * If provided, the chart skips its own /fem_field2d fetch and renders the
+   * supplied payload instead.  Used by the FemAnimationViewer to feed
+   * per-step frames into the same rendering pipeline (mesh + iso lines +
+   * |B| / Demag modes all work transparently with frame data).
+   */
+  payloadOverride?: FemPayload | null;
+  /** Optional extra info line under the header (e.g. "Step 5 / 12  ·  rotor 6.4°"). */
+  subHeader?: string;
+  /** Hide the "Re-solve" button — useful when an external playback widget
+   *  is in charge of (re)fetching frames. */
+  hideRefresh?: boolean;
 }
 
 const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
-                                          I_phase_rms, onPayload }) => {
-  const [payload, setPayload] = useState<FemPayload | null>(null);
+                                          I_phase_rms, onPayload,
+                                          payloadOverride, subHeader,
+                                          hideRefresh }) => {
+  const [fetchedPayload, setPayload] = useState<FemPayload | null>(null);
+  const payload = payloadOverride ?? fetchedPayload;   // override wins
   const [loading, setLoading] = useState<boolean>(false);
   const [error,   setError]   = useState<string | null>(null);
   const [mode,    setMode]    = useState<FieldMode>('Az');
   const controlsRef = useRef<any>(null);
 
   const fetchFem = () => {
+    if (payloadOverride) return;   // parent owns the data
     setLoading(true); setError(null);
     const params: Record<string, string> = {
       rotor_angle_deg:   String(rotor_angle_deg),
@@ -483,9 +499,16 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
       .catch(e => { setError(String(e)); setLoading(false); });
   };
 
-  useEffect(() => { fetchFem();
+  useEffect(() => {
+    if (payloadOverride) {
+      // External owner — drop loading flag and forward upstream
+      setLoading(false); setError(null);
+      if (onPayload) onPayload(payloadOverride);
+      return;
+    }
+    fetchFem();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gamma_deg, rotor_angle_deg, I_phase_rms]);
+  }, [gamma_deg, rotor_angle_deg, I_phase_rms, payloadOverride]);
 
   return (
     <Paper sx={{ bgcolor: '#0b1220', border: '1px solid #1e293b', p: 2,
@@ -500,7 +523,9 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
           </Typography>
           <Typography sx={{ fontSize: 10, color: '#475569' }}>
             {payload
-              ? `${payload.n_triangles.toLocaleString()} triangles · solve ${payload.solve_time_s}s · total ${payload.total_time_s}s · ×${payload.symmetry_mult} symmetry mult`
+              ? (subHeader
+                   ? subHeader
+                   : `${payload.n_triangles.toLocaleString()} triangles · solve ${payload.solve_time_s}s · total ${payload.total_time_s}s · ×${payload.symmetry_mult} symmetry mult`)
               : 'Solving…'}
           </Typography>
         </Box>
@@ -516,11 +541,13 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
             <ToggleButton value="Bmag">|B|</ToggleButton>
             <ToggleButton value="Demag">Demag</ToggleButton>
           </ToggleButtonGroup>
-          <Button size="small" startIcon={<RefreshIcon fontSize="small"/>}
-            onClick={fetchFem} disabled={loading}
-            sx={{ color: '#93c5fd', fontSize: 11, textTransform: 'none' }}>
-            Re-solve
-          </Button>
+          {!hideRefresh && (
+            <Button size="small" startIcon={<RefreshIcon fontSize="small"/>}
+              onClick={fetchFem} disabled={loading}
+              sx={{ color: '#93c5fd', fontSize: 11, textTransform: 'none' }}>
+              Re-solve
+            </Button>
+          )}
         </Box>
       </Box>
 

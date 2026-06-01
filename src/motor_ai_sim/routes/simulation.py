@@ -1152,6 +1152,8 @@ async def get_fem_transient(
     band_thickness_mm:   float = 0.4,
     n_sectors:           int   = 4,
     stator_fillet_mm:    float = 0.0,
+    include_frames:      bool  = False,   # ← if true, accumulate per-step field
+    n_frames:            int   = 12,      # ← #frames sampled for the animation
 ):
     """Transient FEM analysis — runs N solves per electrical period and
     returns time-resolved T(t), losses(t) and V_phase(t).
@@ -1160,6 +1162,11 @@ async def get_fem_transient(
     linkage through each phase's coils (numerical integration of A_z
     over the coil triangles, weighted by winding direction).  The
     derivative dψ/dt uses central finite differences in time.
+
+    When include_frames=True, additionally returns ``frames`` — a list of
+    n_frames complete FEM payloads (mesh + A_z + |B| + demag at each rotor
+    position).  Used by the field-animation viewer in the web UI to scrub
+    through one electrical period.
     """
     import numpy as _np
     import math as _math
@@ -1171,6 +1178,7 @@ async def get_fem_transient(
         round(outer_air_factor, 2), bool(motion_band),
         round(band_thickness_mm, 2), int(n_sectors),
         round(stator_fillet_mm, 2),
+        bool(include_frames), int(n_frames),
     )
     if key in _fem_transient_cache:
         return _fem_transient_cache[key]
@@ -1212,6 +1220,46 @@ async def get_fem_transient(
     I_B_series    : List[float] = []
     I_C_series    : List[float] = []
 
+    # When the user requested an animation, we keep N keyframes spread
+    # evenly across the simulated window — index of each frame in the
+    # full step sequence.  The first call also captures the full FEM
+    # payload (mesh, A_z, |B|, demag) so the field-animation viewer can
+    # scrub through the rotor positions client-side.
+    frames: List[Dict] = []
+    if include_frames and n_frames > 0:
+        n_frames = max(2, min(int(n_frames), n_total))
+        frame_idxs = set(int(round(i * (n_total - 1) / (n_frames - 1)))
+                          for i in range(n_frames))
+    else:
+        frame_idxs = set()
+
+    # Shapely → outline list helper (same as /fem_field2d).  Only needed
+    # for the FIRST animation frame; rotor outlines reference each frame's
+    # mesh fill so we don't need a per-frame outline transform.
+    def _polys_to_outlines(pfo):
+        from shapely.geometry import MultiPolygon as _SMP
+        def _conv(poly):
+            if poly is None or poly.is_empty: return []
+            geoms = list(poly.geoms) if isinstance(poly, _SMP) else [poly]
+            rings = []
+            for g in geoms:
+                if g.is_empty or g.area < 1e-6: continue
+                rings.append([[x * 1e-3, y * 1e-3] for x, y in g.exterior.coords])
+                for h in g.interiors:
+                    rings.append([[x * 1e-3, y * 1e-3] for x, y in h.coords])
+            return rings
+        out = []
+        for k, dom in (("stator", 1), ("rotor", 5), ("shaft", 6),
+                        ("air_gap", 3), ("airgap_band", 7), ("air_outer", 8)):
+            if pfo.get(k) is not None:
+                out.append({"domain": dom, "loops": _conv(pfo[k])})
+        for mag_poly, polarity in pfo.get("magnets", []) or []:
+            out.append({"domain": 4 if polarity > 0 else 44,
+                        "loops": _conv(mag_poly)})
+        for coil_poly in pfo.get("coils", []) or []:
+            out.append({"domain": 2, "loops": _conv(coil_poly)})
+        return out
+
     try:
         for k in range(n_total):
             rot_deg = float(rotor_deg[k])
@@ -1227,6 +1275,50 @@ async def get_fem_transient(
             P_cu_series.append(float(r.get("P_cu_W", 0.0)))
             P_fe_series.append(float(r.get("P_fe_W", 0.0)))
             P_eddy_series.append(float(r.get("P_mag_eddy_W", 0.0)))
+            # ── Capture full field for the animation keyframes ───────────
+            if k in frame_idxs:
+                # Strip the bulky polys_for_outlines field on all but the
+                # FIRST frame: stator outlines are identical across the
+                # period and the rotor outline rotates with rotor_angle_deg,
+                # which the viewer applies as a transform.
+                frame = {
+                    "step_idx":         k,
+                    "time_s":           float(t_series[k]),
+                    "rotor_angle_deg":  rot_deg,
+                    "T_em_Nm":          float(r.get("T_em_Nm", 0.0)),
+                    "vertices":         r["vertices"],
+                    "triangles":        r["triangles"],
+                    "domain_per_tri":   r["domain_per_tri"],
+                    "A_z_per_node":     r["A_z_per_node"],
+                    "Bmag_per_tri":     r["Bmag_per_tri"],
+                    "demag_coef_per_tri": r.get("demag_coef_per_tri", []),
+                    "extent":           r["extent"],
+                    "n_vertices":       r["n_vertices"],
+                    "n_triangles":      r["n_triangles"],
+                    "A_z_min":          float(min(r["A_z_per_node"]) if r["A_z_per_node"] else 0),
+                    "A_z_max":          float(max(r["A_z_per_node"]) if r["A_z_per_node"] else 0),
+                    "B_mag_max":        float(max(r["Bmag_per_tri"]) if r["Bmag_per_tri"] else 0),
+                }
+                # Outlines per frame — splits into "static" (stator/coils
+                # baked once on frame[0]) and "rotor-attached" (magnets +
+                # rotor body, sent every frame at their actual rotated
+                # positions so the overlay aligns with the mesh fill).
+                pfo = r.get("polys_for_outlines") or {}
+                if not frames:
+                    # Full first-frame outlines + sym multiplier
+                    frame["outlines"]       = _polys_to_outlines(pfo)
+                    frame["symmetry_mult"]  = r.get("symmetry_mult", 1)
+                    frame["n_sectors"]      = r.get("n_sectors", 1)
+                else:
+                    # Only rotor-attached outlines on later frames — the
+                    # static stator / coil outlines are reused from
+                    # frame[0] in the client.
+                    rotor_pfo = {
+                        "rotor":   pfo.get("rotor"),
+                        "magnets": pfo.get("magnets", []),
+                    }
+                    frame["outlines_rotor"] = _polys_to_outlines(rotor_pfo)
+                frames.append(frame)
             # Reconstruct currents at this time-step (same convention as solver)
             theta_e = (rot_deg * pole_pairs + gamma_deg + 270.0) * _math.pi/180
             I_peak = I_phase_rms / float(wind.get("n_parallel", 2)) * _math.sqrt(2)
@@ -1326,6 +1418,9 @@ async def get_fem_transient(
         "psi_C_Wb":           psi_C,
         "R_phase_ohm":        R_phase,
     }
+    if include_frames:
+        payload["frames"] = frames
+        payload["n_frames_returned"] = len(frames)
     _fem_transient_cache[key] = payload
     return payload
 

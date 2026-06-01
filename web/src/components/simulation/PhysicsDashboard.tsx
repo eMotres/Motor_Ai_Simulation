@@ -26,8 +26,9 @@ import RefreshIcon     from '@mui/icons-material/Refresh';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import LossWaveformChart from './LossWaveformChart';
 import MotorField2D      from './MotorField2D';
-import FemFieldChart   from './FemFieldChart';
-import TransientCharts from './TransientCharts';
+import FemFieldChart       from './FemFieldChart';
+import FemAnimationViewer  from './FemAnimationViewer';
+import TransientCharts     from './TransientCharts';
 import type { FemPayload } from './fem-types';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
@@ -448,6 +449,10 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
       {/* ── 2D Field map — REAL scikit-fem solve on the Mesh-tab mesh ── */}
       <FemFieldChart gamma_deg={gamma_deg} I_phase_rms={I_phase_rms}
         onPayload={setFemPayload}/>
+
+      {/* ── Field animation — scrub through ONE electrical period and
+            watch the rotor physically rotate, fields update with it. ── */}
+      <FemAnimationViewer gamma_deg={gamma_deg} I_phase_rms={I_phase_rms}/>
 
       {/* ── Transient: T(t), P(t), V(t) — one FEM solve per time step ── */}
       <TransientCharts gamma_deg={gamma_deg} I_phase_rms={I_phase_rms}/>

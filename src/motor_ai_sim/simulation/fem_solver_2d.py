@@ -1868,10 +1868,18 @@ def fem_solve_for_sim(
     #   The effective N pole of the rotor sits at the CENTRE OF THE IRON
     #   TOOTH between two adjacent magnets — half a pole pitch (= 90° elec)
     #   offset from the magnet centre.  Empirical gamma sweep with the
-    #   actual mesh + nonlinear iron model shows that γ = 0 gives max
-    #   positive torque when the shift is +270° elec (equivalently −90°
-    #   elec):  the q-axis sits at +90° elec from this rotated d-axis.
-    SPOKE_PM_DAXIS_SHIFT_DEG = 270.0
+    #   actual mesh + nonlinear iron model determines this constant so
+    #   γ = 0 lands on the q-axis (max torque).
+    #
+    # When the rotor geometry zero is shifted by ΔΦ_mech, the electrical
+    # offset must shift by ΔΦ_mech × p (mod 360).  Cadquery now applies
+    # ZERO_OFFSET = −(90° − half-pole-pitch) ≈ −83.57° at rotor_angle=0
+    # (see cadquery_geometry.get_2d_polygons), so the previously calibrated
+    # 270° becomes 180° on paper — but an empirical γ-sweep on the
+    # NEW geometry (n_sectors=4, mesh=4 mm) shows the true peak sits at
+    # γ ≈ +20° elec, so we set the offset to 200° (= 180 + 20) and confirm
+    # γ = 0 lands within 0.5 % of the broad cos-shaped maximum.
+    SPOKE_PM_DAXIS_SHIFT_DEG = 200.0
     theta_e      = math.radians(rotor_angle_deg * pole_pairs
                                  + gamma_deg + SPOKE_PM_DAXIS_SHIFT_DEG)
     I_ph = {

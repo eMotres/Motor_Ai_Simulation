@@ -1039,7 +1039,20 @@ class CadQueryMotor:
         fillet_r    = p.get('stator_fillet_r', 2.5)
         fillet_r1   = p.get('stator_fillet_r1', 0.9)
 
-        theta_r = radians(rotor_angle_deg)
+        # ── Zero-position alignment ──────────────────────────────────────
+        # At rotor_angle_deg = 0 the FIRST magnet (N pole, i=0) should sit
+        # at half-pole-pitch above the +X axis (math angle ≈ 6.43° for
+        # 28 poles), so the 7 magnets of the 1/4 sector fit FULLY inside
+        # the [0°, 90°] wedge — matching the Geometry-tab reference layout.
+        # Cadquery's native magnet origin is the +Y axis; we shift it by
+        # ZERO_OFFSET = −(90° − half-pole-pitch) ≈ −83.57° mechanically.
+        # This is the quarter-period shift the user asked for.  The
+        # corresponding electrical-angle compensation is folded into
+        # SPOKE_PM_DAXIS_SHIFT_DEG in fem_solver_2d.py so γ = 0 still
+        # gives max torque.
+        _pole_pitch_deg  = 360.0 / num_poles
+        ZERO_OFFSET_DEG  = -(90.0 - _pole_pitch_deg * 0.5)
+        theta_r = radians(rotor_angle_deg + ZERO_OFFSET_DEG)
 
         def _circle(r, n=256):
             return [(r*cos(2*pi*i/n), r*sin(2*pi*i/n)) for i in range(n)]

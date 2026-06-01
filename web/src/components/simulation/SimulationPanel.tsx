@@ -397,79 +397,14 @@ const SimulationPanel: React.FC = () => {
               FormHelperTextProps={{ sx: { fontSize: 10, color: '#475569', mx: 0 } }}
             />
 
-            {/* Instantaneous phase currents */}
-            <Box sx={{ bgcolor: '#0a1628', borderRadius: 1, p: 1,
-              border: '1px solid #1e293b' }}>
-              <Typography sx={{ fontSize: 9, color: '#475569', textTransform: 'uppercase',
-                letterSpacing: '0.08em', mb: 0.5 }}>
-                Slot currents at θ={rotorAngle}° + γ={phaseOffset}° (peak)
-              </Typography>
-              {[
-                { ph: 'A', val: I_A, color: '#f87171' },
-                { ph: 'B', val: I_B, color: '#4ade80' },
-                { ph: 'C', val: I_C, color: '#60a5fa' },
-              ].map(r => (
-                <Box key={r.ph} sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 0.2 }}>
-                  <Typography sx={{ fontSize: 10, color: r.color, fontWeight: 700, width: 16 }}>
-                    {r.ph}
-                  </Typography>
-                  {/* bar */}
-                  <Box sx={{ flex: 1, height: 6, bgcolor: '#1e293b', borderRadius: 1, overflow: 'hidden' }}>
-                    <Box sx={{
-                      height: '100%', borderRadius: 1,
-                      width: `${Math.abs(r.val) / I_coil_peak * 100}%`,
-                      bgcolor: r.val >= 0 ? r.color : '#475569',
-                      ml: r.val < 0 ? `${(1 - Math.abs(r.val) / I_coil_peak) * 100}%` : 0,
-                    }}/>
-                  </Box>
-                  <Typography sx={{ fontSize: 10, color: '#94a3b8', fontVariantNumeric: 'tabular-nums', width: 52, textAlign: 'right' }}>
-                    {r.val >= 0 ? '+' : ''}{r.val.toFixed(1)} A
-                  </Typography>
-                </Box>
-              ))}
-            </Box>
+            {/* Slot currents bar / PINN Training settings / RUN SIMULATION
+                button removed.  The Simulation tab now uses real FEM via the
+                Physics Dashboard auto-runs on the right — no PINN training
+                step is needed.  The instantaneous phase currents are still
+                visible inside the Transient I(t) chart with full per-step
+                detail. */}
           </Box>
         </Box>
-
-        <Divider sx={{ borderColor: '#1e293b' }}/>
-
-        {/* PINN training settings */}
-        <Box>
-          <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, color: '#475569',
-            letterSpacing: '0.1em', textTransform: 'uppercase', mb: 1.5 }}>
-            PINN Training
-          </Typography>
-
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-            <TextField label="Training steps" type="number" size="small" fullWidth
-              value={maxSteps} onChange={e => setMaxSteps(+e.target.value)}
-              inputProps={{ step: 1000, min: 100, max: 200000 }} disabled={isRunning}/>
-
-            {/* Device toggle */}
-            <Box sx={{ display: 'flex', gap: 1 }}>
-              {(['cpu', 'cuda'] as const).map(d => (
-                <Button key={d} size="small" variant={device === d ? 'contained' : 'outlined'}
-                  onClick={() => setDevice(d)} disabled={isRunning}
-                  sx={{ flex: 1, fontSize: 11, textTransform: 'uppercase', py: 0.5 }}>
-                  {d}
-                </Button>
-              ))}
-            </Box>
-          </Box>
-        </Box>
-
-        <Divider sx={{ borderColor: '#1e293b' }}/>
-
-        {/* Run button */}
-        <Button
-          variant="contained" color="primary" fullWidth
-          startIcon={isRunning ? <CircularProgress size={14} color="inherit"/> : <PlayArrowIcon/>}
-          onClick={handleRun}
-          disabled={isRunning}
-          sx={{ py: 1.2, fontWeight: 700, letterSpacing: 1 }}
-        >
-          {isRunning ? 'RUNNING…' : 'RUN SIMULATION'}
-        </Button>
 
         {srvErr && (
           <Alert severity="error" sx={{ fontSize: 11 }}>{srvErr}</Alert>
@@ -680,17 +615,10 @@ const SimulationPanel: React.FC = () => {
           </Paper>
         )}
 
-        {/* No job yet — show bolt icon */}
-        {!job && (
-          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', py: 4 }}>
-            <Box sx={{ textAlign: 'center', color: '#1e3a5f' }}>
-              <BoltIcon sx={{ fontSize: 48, mb: 1 }}/>
-              <Typography sx={{ fontSize: 13, color: '#334155' }}>
-                Set operating point and press Run
-              </Typography>
-            </Box>
-          </Box>
-        )}
+        {/* No-job empty state ("Set operating point and press Run") removed
+            — the right panel now goes straight from the operating-point
+            controls to the Physics Dashboard, which auto-runs the FEM
+            transient on mount.  No manual Run button needed. */}
 
         {/* Analytical SimulationCharts (currents / voltages / losses) removed —
             the FEM transient panel inside PhysicsDashboard below shows all

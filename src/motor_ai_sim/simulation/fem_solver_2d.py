@@ -400,6 +400,45 @@ def _clip_polys_to_sector(polys: dict, n_sectors: int) -> dict:
 # Periodic coil meshing — one wire → all wires → all coils
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _split_polys_for_sliding_band(polys: dict) -> Tuple[dict, dict]:
+    """Split a polys dict into stator-side and rotor-side halves.
+
+    Sliding-band FEM meshes each half ONCE; the rotor half is then
+    rotated rigidly per transient frame, and the master-slave coupling
+    at the band interface (built in SB-4) glues them together.
+
+    Stator side (stationary in the lab frame):
+        stator, coils, air_outer, air_background,
+        air_gap_stator_side, airgap_band
+    Rotor side (rigidly rotates with the rotor):
+        shaft, rotor, magnets, air_gap_rotor_side
+
+    The original polys dict is kept intact — the existing rebuild-per-
+    frame solver still consumes the unioned 'air_gap' key.
+    """
+    STATOR_KEYS = ("stator", "coils", "air_outer", "air_background",
+                    "air_gap_stator_side", "airgap_band")
+    ROTOR_KEYS  = ("shaft", "rotor", "magnets", "air_gap_rotor_side")
+
+    polys_s: dict = {}
+    polys_r: dict = {}
+    for k in STATOR_KEYS:
+        v = polys.get(k)
+        if v is not None:
+            polys_s[k] = v
+    for k in ROTOR_KEYS:
+        v = polys.get(k)
+        if v is not None:
+            polys_r[k] = v
+    # Helpful metadata so downstream code knows the band radii without
+    # re-deriving them.
+    for k in ("r_band_in", "r_band_out"):
+        if polys.get(k) is not None:
+            polys_s[k] = polys[k]
+            polys_r[k] = polys[k]
+    return polys_s, polys_r
+
+
 def _band_master_slave_pairing(
         band_node_angles_deg: np.ndarray,
         master_node_angles_deg: np.ndarray,

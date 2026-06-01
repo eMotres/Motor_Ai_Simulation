@@ -26,12 +26,23 @@ from __future__ import annotations
 
 import logging
 import math
+import threading
 from dataclasses import dataclass
 from typing import Dict, List, Tuple, Optional
 
 import numpy as np
 
 log = logging.getLogger(__name__)
+
+# Global lock around gmsh usage.  gmsh exposes a single C library
+# instance per process, so two threads cannot concurrently call
+# initialize()/model.add()/mesh.generate()/finalize() — the second
+# call sees "Gmsh has not been initialized" if it lands between the
+# first thread's init and finalize.  FastAPI runs sync 'def' endpoints
+# (fem_field2d, fem_transient) on the threadpool, and the browser
+# fires 2-4 of them in parallel on Simulation-tab mount, so without
+# a lock the second request crashes the gmsh state.
+_GMSH_LOCK = threading.RLock()
 
 MU0 = 4e-7 * math.pi
 
@@ -406,6 +417,10 @@ def _mesh_single_polygon(poly, mesh_size_mm: float, min_size_mm: float
     """Mesh ONE Shapely polygon via gmsh. Returns (verts (2,N) in mm, tris (3,M))."""
     import gmsh
 
+    # gmsh is process-global and NOT thread-safe — serialise all of it
+    # under a single RLock to avoid 'Gmsh has not been initialized' errors
+    # when the FastAPI threadpool runs two FEM solves in parallel.
+    _GMSH_LOCK.acquire()
     try:
         gmsh.initialize([], interruptible=False)
     except TypeError:
@@ -459,7 +474,11 @@ def _mesh_single_polygon(poly, mesh_size_mm: float, min_size_mm: float
                 c = node_id_to_idx[int(flat[3 * k + 2])]
                 tris.append((a, b, c))
     finally:
-        gmsh.finalize()
+        try:
+            gmsh.finalize()
+        except Exception:
+            pass
+        _GMSH_LOCK.release()
 
     return points.T, np.array(tris, dtype=np.int64).T
 
@@ -625,6 +644,7 @@ def build_mesh_from_polygons(polys: dict,
     from shapely.geometry import Polygon as SPoly, MultiPolygon as SMPoly
 
     # interruptible=False skips signal handler install (only main-thread-safe)
+    _GMSH_LOCK.acquire()
     try:
         gmsh.initialize([], interruptible=False)
     except TypeError:
@@ -986,7 +1006,11 @@ def build_mesh_from_polygons(polys: dict,
             else:
                 cell_tags_list.extend([DOM_AIR] * n_here)
     finally:
-        gmsh.finalize()
+        try:
+            gmsh.finalize()
+        except Exception:
+            pass
+        _GMSH_LOCK.release()
 
     # Convert mm → m
     mesh_io.points = mesh_io.points * 1e-3

@@ -364,12 +364,30 @@ const SimulationPanel: React.FC = () => {
               inputProps={{ step: 5, min: 0, max: 500 }} disabled={isRunning}
               helperText={`I coil peak = ${I_coil_peak.toFixed(1)} A → sent to solver`}
               FormHelperTextProps={{ sx: { fontSize: 10, color: '#3b82f6', mx: 0 } }}/>
+            {/* Frequency ↔ Speed are mutually locked:
+                  f_elec [Hz]  =  rpm × pole_pairs / 60
+                  rpm          =  f_elec × 60 / pole_pairs
+                Editing one immediately recomputes the other. */}
             <TextField label="Frequency (Hz)" type="number" size="small" fullWidth
-              value={frequency} onChange={e => setFrequency(+e.target.value)}
-              inputProps={{ step: 10, min: 1, max: 2000 }} disabled={isRunning}/>
+              value={Number(frequency.toFixed(2))}
+              onChange={e => {
+                const f = +e.target.value;
+                setFrequency(f);
+                setRpm(+(f * 60 / polePairs).toFixed(1));
+              }}
+              inputProps={{ step: 10, min: 1, max: 2000 }} disabled={isRunning}
+              helperText={`f = rpm × ${polePairs} / 60`}
+              FormHelperTextProps={{ sx: { fontSize: 10, color: '#475569', mx: 0 } }}/>
             <TextField label="Speed (rpm)" type="number" size="small" fullWidth
-              value={rpm} onChange={e => setRpm(+e.target.value)}
-              inputProps={{ step: 100, min: 0 }} disabled={isRunning}/>
+              value={Number(rpm.toFixed(0))}
+              onChange={e => {
+                const r = +e.target.value;
+                setRpm(r);
+                setFrequency(+(r * polePairs / 60).toFixed(2));
+              }}
+              inputProps={{ step: 100, min: 0 }} disabled={isRunning}
+              helperText={`rpm = f × 60 / ${polePairs}`}
+              FormHelperTextProps={{ sx: { fontSize: 10, color: '#475569', mx: 0 } }}/>
             <TextField
               label={`Rotor Angle (°)  — period: ${elecPeriod_deg.toFixed(2)}°`}
               type="number" size="small" fullWidth

@@ -163,6 +163,15 @@ class CadQueryMotor:
         # 1. Stator and Shaft
         self.parts['stator_core'] = self._create_stator(cq)
         self.parts['shaft'] = self._create_shaft(cq)
+
+        # 1b. Sliding-band air rings — first-class components with material Air.
+        # in_band  rotates with the rotor (rotor_outer..mid_radius)
+        # out_band stays with the stator (mid_radius..stator_inner)
+        try:
+            self.parts['in_band']  = self._create_in_band(cq)
+            self.parts['out_band'] = self._create_out_band(cq)
+        except Exception as e:
+            print(f"Failed to build in_band / out_band: {e}")
         
         # 2. Magnets and Rotor Core with Cavities
         magnets_list = self._create_magnets(cq)
@@ -327,22 +336,61 @@ class CadQueryMotor:
     def _create_shaft(self, cq) -> Any:
         """Create motor shaft."""
         p = self.parameters
-        
+
         shaft_r = p['rotor_inner_radius']
         shaft_in = p['shaft_inner_radius']
         length = p['stator_width']
-        
+
         # Print shaft parameters for debugging
         print(f"[DEBUG] _create_shaft: shaft_r={shaft_r}, shaft_in={shaft_in}")
-        
+
         shaft = (
             cq.Workplane("XY")
             .circle(shaft_r)
             .circle(shaft_in)
             .extrude(length)
         )
-        
+
         return shaft
+
+    def _create_in_band(self, cq) -> Any:
+        """Inner air domain: full DISK r=0..mid_r minus rotor+magnets+shaft.
+
+        Sliding-band FEM rotates this rigidly with the rotor.  Material
+        is Air; the disk captures every internal air pocket (shaft bore,
+        inter-magnet wedges, inner half of the air gap).
+        """
+        p = self.parameters
+        rotor_or = p['rotor_outer_radius']
+        inner_r  = p['stator_inner_radius']
+        length   = p['stator_width']
+        mid_r    = 0.5 * (rotor_or + inner_r)
+        return (
+            cq.Workplane("XY")
+            .circle(mid_r)
+            .extrude(length)
+        )
+
+    def _create_out_band(self, cq) -> Any:
+        """Outer air domain: ANNULUS mid_r..r_outer minus stator+coils.
+
+        The outer edge (r_outer) is the far-field Dirichlet boundary for
+        the magnetic vector potential A_z.  Stationary in the lab frame.
+        """
+        p = self.parameters
+        outer_r  = p['stator_outer_radius']
+        rotor_or = p['rotor_outer_radius']
+        inner_r  = p['stator_inner_radius']
+        length   = p['stator_width']
+        mid_r    = 0.5 * (rotor_or + inner_r)
+        # Default outer_air_factor=1.3 if not set
+        r_outer  = float(p.get('outer_air_factor', 1.3)) * outer_r
+        return (
+            cq.Workplane("XY")
+            .circle(r_outer)
+            .circle(mid_r)
+            .extrude(length)
+        )
     
     def _create_magnets(self, cq) -> List[Any]:
         """Create rotor magnets."""
@@ -794,9 +842,21 @@ class CadQueryMotor:
 
         rotor_outer_pts = _circle(rotor_or)
         rotor_inner_pts = _circle(rotor_ir)
-        rotor_holes   = [rotor_inner_pts]
-        mag_rot_polys = []
+        # Build the rotor body as a clean annulus first, then subtract
+        # holes via shapely difference.  The previous approach passed
+        # raw hole coordinate lists to SPoly(); when the rect_local
+        # rectangle's top corners landed at r=sqrt((rec_w/2)^2 +
+        # rotor_or^2) > rotor_or (i.e. just outside the rotor disk), the
+        # hole crossed the exterior boundary, produced an invalid
+        # polygon, and buffer(0) repaired it by dropping the bridges
+        # between adjacent magnets.  Doing a proper shapely difference
+        # avoids that.
+        rotor_disk = SPoly(rotor_outer_pts, [rotor_inner_pts])
+        if not rotor_disk.is_valid:
+            rotor_disk = rotor_disk.buffer(0)
 
+        mag_rot_polys = []
+        hole_polys    = []
         for i in range(num_poles):
             a   = i * pole_angle_r
             pts = [_rot(x, y, a) for x, y in mag_local]
@@ -804,23 +864,21 @@ class CadQueryMotor:
             if not mp.is_valid:
                 mp = mp.buffer(0)
 
-            # Union magnet pocket with the rectangular cut (creates the notch
-            # visible between the magnet top and the stator air-gap).
-            rect_pts = [_rot(x, y, a) for x, y in rect_local]
+            rect_pts  = [_rot(x, y, a) for x, y in rect_local]
             rect_poly = SPoly(rect_pts)
             if not rect_poly.is_valid:
                 rect_poly = rect_poly.buffer(0)
+
             hole = mp.union(rect_poly)
             if not hole.is_valid:
                 hole = hole.buffer(0)
-            # Use exterior of the merged hole (should be a single polygon)
-            hole_coords = (list(hole.exterior.coords[:-1])
-                           if isinstance(hole, SPoly)
-                           else list(mp.exterior.coords[:-1]))
-            rotor_holes.append(hole_coords)
+            hole_polys.append(hole)
             mag_rot_polys.append(mp)
 
-        rotor_poly = SPoly(rotor_outer_pts, rotor_holes)
+        # One difference call with the union of all holes — preserves
+        # bridges between adjacent magnets and clips any sliver that
+        # would stick past rotor_or.
+        rotor_poly = rotor_disk.difference(unary_union(hole_polys))
         if not rotor_poly.is_valid:
             rotor_poly = rotor_poly.buffer(0)
         r = _tri(rotor_poly, z=Z_ROTOR)
@@ -974,6 +1032,56 @@ class CadQueryMotor:
                             result[key]['vertex_count'] += r['vertex_count']
                             result[key]['face_count']   += r['face_count']
 
+        # ── 6. SLIDING-BAND AIR DOMAINS ───────────────────────────────────
+        # in_band  = full DISK r=0..mid_r  MINUS rotor + magnets + shaft.
+        #            Captures every air pocket inside the rotor region.
+        # out_band = ANNULUS mid_r..r_outer MINUS stator + coils.
+        #            Outer boundary is where the Dirichlet BC will be set.
+        Z_IN_BAND  = -0.05  # behind everything so they don't occlude
+        Z_OUT_BAND = -0.05
+        mid_r   = 0.5 * (rotor_or + inner_r)
+        r_outer = float(p.get('outer_air_factor', 1.3)) * outer_r
+        try:
+            in_band_poly  = SPoly(_circle(mid_r))
+            out_band_poly = SPoly(_circle(r_outer), [_circle(mid_r)])
+
+            # Subtract rotor solids from in_band.  CRITICAL: subtract the
+            # SAME filleted magnet polygons (mag_rot_polys) that are
+            # rendered and that were used to carve the rotor holes.  An
+            # earlier version subtracted the UNFILLETED hexagon
+            # (mag_local) here, which is larger than the rendered
+            # filleted magnet — that mismatch left a thin uncovered band
+            # between the filleted magnet's rounded top and the
+            # unfilleted hexagon's flat top (inside the cut_up width),
+            # rendering as a black notch above each magnet.  Using
+            # mag_rot_polys keeps in_band's lower boundary exactly on the
+            # magnet's rendered top edge.
+            shaft_solid = SPoly(_circle(rotor_ir), [_circle(shaft_r)])
+            try:
+                in_band_poly = in_band_poly.difference(
+                    unary_union([shaft_solid, rotor_poly] + list(mag_rot_polys)))
+                if not in_band_poly.is_valid:
+                    in_band_poly = in_band_poly.buffer(0)
+            except Exception:
+                pass
+
+            # Subtract stator iron from out_band.  (Coils sit inside slot
+            # cutouts that are already part of the stator's exterior — no
+            # extra cut needed.)
+            try:
+                out_band_poly = out_band_poly.difference(stator_poly)
+                if not out_band_poly.is_valid:
+                    out_band_poly = out_band_poly.buffer(0)
+            except Exception:
+                pass
+
+            r_in  = _tri(in_band_poly,  z=Z_IN_BAND)
+            r_out = _tri(out_band_poly, z=Z_OUT_BAND)
+            if r_in:  result['in_band']  = r_in
+            if r_out: result['out_band'] = r_out
+        except Exception as e:
+            print(f"[2d] Failed to build in_band/out_band: {e}")
+
         return result
 
     def get_2d_polygons(self, rotor_angle_deg: float = 0.0) -> Dict[str, Any]:
@@ -1112,7 +1220,7 @@ class CadQueryMotor:
                       (rec_w/2, rotor_or-mag_h), (-rec_w/2, rotor_or-mag_h)]
 
         mag_polys = []   # (poly, polarity)
-        rotor_holes = [_circle(rotor_ir)]
+        hole_polys = []  # list of shapely (magnet + cut_up) polygons
 
         for i in range(num_poles):
             a   = i * pole_angle_r + theta_r
@@ -1125,17 +1233,21 @@ class CadQueryMotor:
             if not rect_poly.is_valid: rect_poly = rect_poly.buffer(0)
             hole = mp.union(rect_poly)
             if not hole.is_valid: hole = hole.buffer(0)
-            hole_coords = (list(hole.exterior.coords[:-1])
-                           if isinstance(hole, SPoly)
-                           else list(mp.exterior.coords[:-1]))
-            rotor_holes.append(hole_coords)
+            hole_polys.append(hole)
             polarity = +1 if i % 2 == 0 else -1
             mag_polys.append((mp, polarity))
 
-        # Rotor with magnet holes
-        rotor_poly = SPoly(_circle(rotor_or + theta_r*0), rotor_holes)
-        # NOTE: rotor is at fixed angle; only magnets rotate (already done above)
-        rotor_poly = SPoly(_circle(rotor_or), rotor_holes)
+        # Rotor = annulus rotor_or..rotor_ir minus union(all holes).
+        # Using shapely difference avoids the invalid-polygon problem
+        # caused by passing raw hole coords whose top corners lie at
+        # r = sqrt((rec_w/2)^2 + rotor_or^2) > rotor_or — these
+        # apparent-but-tiny excursions outside the rotor disk used to
+        # cross the exterior boundary, invalidate the polygon, and let
+        # buffer(0) silently drop the rotor-iron bridges between
+        # adjacent magnets.
+        rotor_disk = SPoly(_circle(rotor_or), [_circle(rotor_ir)])
+        if not rotor_disk.is_valid: rotor_disk = rotor_disk.buffer(0)
+        rotor_poly = rotor_disk.difference(unary_union(hole_polys))
         if not rotor_poly.is_valid: rotor_poly = rotor_poly.buffer(0)
 
         # Shaft
@@ -1281,12 +1393,57 @@ class CadQueryMotor:
             if wires_neg:
                 coil_polys.append(unary_union(wires_neg))   # -x slot
 
+        # ── Sliding-band air domains: in_band + out_band ──────────────────
+        # in_band  = full DISK r=0..mid_r  MINUS rotor + magnets + shaft.
+        #            Captures every bit of air inside the moving (rotor)
+        #            region — including the shaft bore, inter-magnet pockets,
+        #            and the inner half of the air gap.  Rotates rigidly
+        #            with the rotor in the sliding-band transient solver.
+        #
+        # out_band = ANNULUS mid_r..r_outer MINUS stator + coils.
+        #            r_outer = outer_air_factor × stator_outer_radius is the
+        #            far-field boundary where the Dirichlet BC A_z = 0
+        #            (magnetic potential clamp) will be applied.  Captures
+        #            slot-opening air, outer ambient air and the outer half
+        #            of the air gap — stationary in the lab frame.
+        #
+        # The shared circle r=mid_r is the slip surface.
+        mid_r   = 0.5 * (rotor_or + inner_r)
+        # Outer boundary for the FE domain — pulled in from motor_config
+        # if available; defaults to 1.3× the stator OD.
+        r_outer = float(p.get('outer_air_factor', 1.3)) * outer_r
+
+        in_band_poly  = SPoly(_circle(mid_r))                # full disk to mid_r
+        out_band_poly = SPoly(_circle(r_outer), [_circle(mid_r)])  # annulus mid_r..r_outer
+        if not in_band_poly.is_valid:  in_band_poly  = in_band_poly.buffer(0)
+        if not out_band_poly.is_valid: out_band_poly = out_band_poly.buffer(0)
+
+        # Subtract rotor solids from in_band (shaft + rotor + every magnet).
+        try:
+            rotor_solids = [rotor_poly, shaft_poly] + [mp for mp, _pol in mag_polys]
+            in_band_poly = in_band_poly.difference(unary_union(rotor_solids))
+            if not in_band_poly.is_valid: in_band_poly = in_band_poly.buffer(0)
+        except Exception:
+            pass
+
+        # Subtract stator + coils from out_band.
+        try:
+            stator_solids = [stator_poly] + list(coil_polys)
+            out_band_poly = out_band_poly.difference(unary_union(stator_solids))
+            if not out_band_poly.is_valid: out_band_poly = out_band_poly.buffer(0)
+        except Exception:
+            pass
+
         return {
             'stator':   stator_poly,      # Shapely Polygon in mm
             'magnets':  mag_polys,        # list of (Polygon, polarity)
             'rotor':    rotor_poly,       # Shapely Polygon in mm
             'shaft':    shaft_poly,       # Shapely Polygon in mm
-            'air_gap':  airgap_poly,      # Shapely Polygon in mm
+            'air_gap':  airgap_poly,      # Shapely Polygon in mm — kept for back-compat
+            'in_band':  in_band_poly,     # Air disk r=0..mid_r minus rotor bodies (rotates)
+            'out_band': out_band_poly,    # Air annulus mid_r..r_outer minus stator (stationary)
+            'mid_r_mm': mid_r,            # slip-surface radius (mm)
+            'r_outer_boundary_mm': r_outer,  # outer Dirichlet BC radius (mm)
             'coils':    coil_polys,       # list of Shapely Polygon in mm
         }
 

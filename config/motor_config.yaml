@@ -344,6 +344,8 @@ materials:
   stator_core: 20SW1200
   slot: copper
   air_gap: air
+  in_band: air
+  out_band: air
   rotor_core: 20SW1200
   magnet: F45SH_120C
   shaft: Aluminium_6061

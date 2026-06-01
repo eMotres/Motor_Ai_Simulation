@@ -367,6 +367,23 @@ export const ApiMotorExtruded: React.FC = () => {
           );
         })
       }
+      {/* Sliding-band air rings — translucent so the user can see them as distinct domains */}
+      {geometries.in_band && componentVisibility.in_band && (
+        <mesh geometry={geometries.in_band} onClick={click('in_band')}>
+          <meshStandardMaterial color="#22c55e" transparent opacity={0.32}
+            metalness={0} roughness={1} envMapIntensity={envIntensity * 0.5}
+            side={THREE.DoubleSide}
+            emissive={emissive('in_band', '#22c55e')} emissiveIntensity={emissiveIntensity('in_band')} />
+        </mesh>
+      )}
+      {geometries.out_band && componentVisibility.out_band && (
+        <mesh geometry={geometries.out_band} onClick={click('out_band')}>
+          <meshStandardMaterial color="#a855f7" transparent opacity={0.32}
+            metalness={0} roughness={1} envMapIntensity={envIntensity * 0.5}
+            side={THREE.DoubleSide}
+            emissive={emissive('out_band', '#a855f7')} emissiveIntensity={emissiveIntensity('out_band')} />
+        </mesh>
+      )}
     </group>
   );
 };
@@ -486,6 +503,20 @@ export const ApiMotor2dFlat: React.FC = () => {
           );
         })
       }
+
+      {/* Sliding-band: in_band (green) and out_band (purple) — translucent overlays */}
+      {geometries.in_band && componentVisibility.in_band && (
+        <mesh geometry={geometries.in_band} onClick={click('in_band')}>
+          <meshStandardMaterial color="#22c55e" transparent opacity={0.35} side={THREE.DoubleSide}
+            emissive={emissive('in_band', '#22c55e')} emissiveIntensity={eI('in_band')} />
+        </mesh>
+      )}
+      {geometries.out_band && componentVisibility.out_band && (
+        <mesh geometry={geometries.out_band} onClick={click('out_band')}>
+          <meshStandardMaterial color="#a855f7" transparent opacity={0.35} side={THREE.DoubleSide}
+            emissive={emissive('out_band', '#a855f7')} emissiveIntensity={eI('out_band')} />
+        </mesh>
+      )}
     </group>
   );
 };

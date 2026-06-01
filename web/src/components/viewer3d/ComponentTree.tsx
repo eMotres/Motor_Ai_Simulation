@@ -441,11 +441,35 @@ const ComponentTree: React.FC = () => {
             label="Shaft"
             color="#374151"
             visible={componentVisibility.shaft}
-            isLast={true}
+            isLast={false}
             selected={selectedPart === 'shaft'}
             onToggle={() => toggleComponentVisibility('shaft')}
             onSelect={selectPart('shaft')}
             onIsolate={() => isolateComponent('shaft')}
+          />
+
+          {/* Sliding-band: in_band (rotor-side air ring) */}
+          <LeafRow
+            label="In Band (rotating air)"
+            color="#22c55e"
+            visible={componentVisibility.in_band}
+            isLast={false}
+            selected={selectedPart === 'in_band'}
+            onToggle={() => toggleComponentVisibility('in_band')}
+            onSelect={selectPart('in_band')}
+            onIsolate={() => isolateComponent('in_band')}
+          />
+
+          {/* Sliding-band: out_band (stator-side air ring) */}
+          <LeafRow
+            label="Out Band (static air)"
+            color="#a855f7"
+            visible={componentVisibility.out_band}
+            isLast={true}
+            selected={selectedPart === 'out_band'}
+            onToggle={() => toggleComponentVisibility('out_band')}
+            onSelect={selectPart('out_band')}
+            onIsolate={() => isolateComponent('out_band')}
           />
 
         </div>

@@ -83,7 +83,7 @@ class JobStatus(BaseModel):
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.get("/status")
-def simulation_status():
+async def simulation_status():
     """Return Modulus availability and current config."""
     try:
         from motor_ai_sim.simulation.solver_2d import HAS_MODULUS

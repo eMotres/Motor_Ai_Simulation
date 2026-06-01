@@ -467,10 +467,21 @@ def _build_sliding_band_meshes(
     """
     polys_s, polys_r = _split_polys_for_sliding_band(polys)
 
+    # build_mesh_from_polygons only recognises the canonical 'air_gap'
+    # key, so rename each half's air-gap ring back into 'air_gap' for
+    # the gmsh pass.  (The original 'air_gap' union is left untouched on
+    # the parent polys dict — only the per-half copies are renamed.)
+    polys_s_for_mesh = dict(polys_s)
+    if "air_gap_stator_side" in polys_s_for_mesh:
+        polys_s_for_mesh["air_gap"] = polys_s_for_mesh.pop("air_gap_stator_side")
+    polys_r_for_mesh = dict(polys_r)
+    if "air_gap_rotor_side" in polys_r_for_mesh:
+        polys_r_for_mesh["air_gap"] = polys_r_for_mesh.pop("air_gap_rotor_side")
+
     # Build stator half at the FIXED lab position (rotor_angle_deg ignored
     # for stator-side polygons, which are stationary).
     mesh_s, tags_s, classify_s = build_mesh_from_polygons(
-        polys_s, rotor_angle_deg=0.0,
+        polys_s_for_mesh, rotor_angle_deg=0.0,
         mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm,
         outer_air_factor=outer_air_factor,
         motion_band=False, band_thickness_mm=band_thickness_mm,
@@ -481,7 +492,7 @@ def _build_sliding_band_meshes(
     # rotor_angle_deg = 0; the polys_r polygons are already at the
     # ZERO_OFFSET-shifted but un-rotated positions).
     mesh_r, tags_r, classify_r = build_mesh_from_polygons(
-        polys_r, rotor_angle_deg=0.0,
+        polys_r_for_mesh, rotor_angle_deg=0.0,
         mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm,
         outer_air_factor=outer_air_factor,
         motion_band=False, band_thickness_mm=band_thickness_mm,
@@ -496,6 +507,20 @@ def _build_sliding_band_meshes(
                                mesh_r.t)
 
     return mesh_s, tags_s, classify_s, mesh_r, tags_r, classify_r
+
+
+def _find_ring_nodes(mesh, r_target_m: float, tol_m: float = 1e-5
+                      ) -> np.ndarray:
+    """Return indices of mesh nodes that lie within `tol_m` of radius
+    r_target_m (in metres).  Used by sliding-band to extract the band-
+    interface nodes that need master-slave coupling.
+
+    The mesh.p array is in METRES (skfem convention), so r_target_m
+    should also be in metres.
+    """
+    r = np.hypot(mesh.p[0], mesh.p[1])
+    idx = np.where(np.abs(r - r_target_m) < tol_m)[0]
+    return idx
 
 
 def _band_master_slave_pairing(

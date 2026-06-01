@@ -400,6 +400,73 @@ def _clip_polys_to_sector(polys: dict, n_sectors: int) -> dict:
 # Periodic coil meshing — one wire → all wires → all coils
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _band_master_slave_pairing(
+        band_node_angles_deg: np.ndarray,
+        master_node_angles_deg: np.ndarray,
+        rotor_angle_deg: float = 0.0,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Build the linear-interpolation master-slave map for one side of
+    the sliding band.
+
+    Parameters
+    ----------
+    band_node_angles_deg :
+        Angular positions (in DEGREES, mod 360) of the band-side nodes
+        that will be constrained.
+    master_node_angles_deg :
+        Angular positions of the OTHER mesh's interface nodes — these
+        are the masters whose A_z values drive the band slaves.
+        Must be SORTED in ascending order (we wrap with mod 360).
+    rotor_angle_deg :
+        Δθ applied to the master ring before pairing.  When this is the
+        rotor↔band edge: pass the current rotor_angle so that the
+        rotor's outer-edge nodes are seen at their CURRENT lab angle.
+        When this is the stator↔band edge: pass 0.
+
+    Returns
+    -------
+    master_j        : (n_band,) index into master_node_angles_deg of the
+                       LEFT neighbour for each band node
+    master_jp1      : (n_band,) index of the RIGHT neighbour (wraps)
+    weights         : (n_band,) interpolation weight α so that
+                       A_z[band_i] = (1-α) · A_z[master_j] + α · A_z[master_jp1]
+
+    Notes
+    -----
+    • angle wrapping is handled in [0, 360°) — pairing across the 0/360
+      seam uses the standard modulo trick.
+    • when band and master node counts AND positions match exactly
+      (degenerate case at rotor_angle = 0 with identical n_arc), α
+      degenerates to 0 and every band node snaps to a unique master.
+    """
+    band   = np.mod(np.asarray(band_node_angles_deg,   dtype=float), 360.0)
+    master = np.mod(np.asarray(master_node_angles_deg, dtype=float) + rotor_angle_deg, 360.0)
+    n_m = master.size
+    # Sort master once + ALSO carry the original index so we can map
+    # back into the master_node_angles array after np.searchsorted.
+    sort_order = np.argsort(master)
+    master_sorted = master[sort_order]
+    # For each band angle, find which segment of the sorted master ring
+    # it falls in (we use np.searchsorted with side='right' so equal-
+    # angle ties prefer the LEFT master, matching the (1-α) convention).
+    pos = np.searchsorted(master_sorted, band, side='right') - 1
+    # Wrap: if band lies in the gap that crosses 0°/360°, pos == -1 → use
+    # the LAST master as the left neighbour.
+    pos[pos < 0] = n_m - 1
+    j_left  = sort_order[pos]
+    j_right = sort_order[(pos + 1) % n_m]
+    # Interpolation weight α along the arc from left → right master
+    a_l = master_sorted[pos]
+    a_r = master_sorted[(pos + 1) % n_m]
+    # Compute the angular gap from left → band and left → right, both
+    # taken in the CCW direction (i.e. the positive arc length mod 360).
+    d_lb = (band - a_l) % 360.0
+    d_lr = (a_r  - a_l) % 360.0
+    # Guard against zero-length segments (both masters at same angle)
+    alpha = np.where(d_lr > 1e-9, d_lb / d_lr, 0.0)
+    return j_left, j_right, alpha
+
+
 def _rotate_mesh_points(points: np.ndarray, angle_deg: float,
                           cx: float = 0.0, cy: float = 0.0) -> np.ndarray:
     """Rotate a (2, N) array of 2-D points by angle_deg around (cx, cy).

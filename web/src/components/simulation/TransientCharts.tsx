@@ -165,6 +165,7 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
       T_em:  data.T_em_Nm[i],
       P_cu:  data.P_cu_W[i],
       P_fe:  data.P_fe_W[i],
+      P_mag: data.P_mag_eddy_W[i],
       P_tot: data.P_loss_total_W[i],
       I_A:   data.I_A[i], I_B: data.I_B[i], I_C: data.I_C[i],
       V_A:   data.V_A[i], V_B: data.V_B[i], V_C: data.V_C[i],
@@ -281,7 +282,7 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
           {/* ── Losses ── */}
           <Box sx={{ height: 220 }}>
             <Typography sx={{ fontSize: 11, fontWeight: 700, color: '#94a3b8' }}>
-              Losses (Cu / Fe / total)
+              Losses (Cu / Fe / Mag / total)
             </Typography>
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={rows} margin={{ top: 8, right: 10, left: 0, bottom: 16 }}>
@@ -302,6 +303,11 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
                   isAnimationActive={false}/>
                 <Line type="monotone" dataKey="P_fe" stroke="#f87171"
                   name="P_Fe" strokeWidth={2}
+                  dot={{ r: 3, strokeWidth: 0 }}
+                  activeDot={{ r: 5 }}
+                  isAnimationActive={false}/>
+                <Line type="monotone" dataKey="P_mag" stroke="#a78bfa"
+                  name="P_Mag" strokeWidth={2}
                   dot={{ r: 3, strokeWidth: 0 }}
                   activeDot={{ r: 5 }}
                   isAnimationActive={false}/>

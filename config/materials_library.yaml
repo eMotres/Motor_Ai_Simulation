@@ -1202,7 +1202,13 @@ magnet:
     Br: 1.190          # T
     Hc: 648541         # A/m
     mu_rec: 1.460      # Br / (mu0 * Hc)
-    sigma: 5555.6      # S/m  (conductivity / 100 — reduced eddy losses)
+    # Sintered ferrite is essentially an insulator — typical bulk
+    # conductivity 1e-6 … 1e-4 S/m.  Previous value (5555.6 S/m) was
+    # NdFeB-like and produced ~500 W of phantom magnet-eddy losses at
+    # this operating point, which dominated the loss budget and made
+    # efficiency artificially low.  Pick a representative ferrite value
+    # so the eddy term stays in the µW range it physically belongs in.
+    sigma: 1.0e-4      # S/m  — sintered ferrite (insulator)
     density: 7500
     thermal_conductivity: 7.6
     specific_heat: 460

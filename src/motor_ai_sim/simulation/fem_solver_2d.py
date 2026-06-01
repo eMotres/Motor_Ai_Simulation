@@ -439,6 +439,65 @@ def _split_polys_for_sliding_band(polys: dict) -> Tuple[dict, dict]:
     return polys_s, polys_r
 
 
+def _build_sliding_band_meshes(
+        polys: dict,
+        rotor_angle_deg: float,
+        mesh_size_mm: float,
+        min_size_mm: float,
+        outer_air_factor: float,
+        band_thickness_mm: float,
+        n_sectors: int,
+        geo_cfg: dict,
+):
+    """Build the stator-half and rotor-half meshes for the sliding-band solver.
+
+    Strategy:
+      1) Split the polys dict into stator + rotor halves (SB-5a).
+      2) Build each half as an independent gmsh mesh (single gmsh call
+         per half — uses the existing build_mesh_from_polygons path).
+      3) Rotate the ROTOR half's node coordinates by rotor_angle_deg as
+         a rigid body — the rotor mesh's topology (cells) stays the
+         same across all transient frames.
+
+    Returns
+    -------
+    (mesh_s, tags_s, classify_s, mesh_r, tags_r, classify_r) where
+    mesh_* are skfem MeshTri objects, tags_* are per-cell domain ids,
+    classify_* are the helper returned by build_mesh_from_polygons.
+    """
+    polys_s, polys_r = _split_polys_for_sliding_band(polys)
+
+    # Build stator half at the FIXED lab position (rotor_angle_deg ignored
+    # for stator-side polygons, which are stationary).
+    mesh_s, tags_s, classify_s = build_mesh_from_polygons(
+        polys_s, rotor_angle_deg=0.0,
+        mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm,
+        outer_air_factor=outer_air_factor,
+        motion_band=False, band_thickness_mm=band_thickness_mm,
+        n_sectors=n_sectors, geo_cfg=geo_cfg,
+    )
+
+    # Build rotor half at the rotor's NATIVE frame (= cadquery output for
+    # rotor_angle_deg = 0; the polys_r polygons are already at the
+    # ZERO_OFFSET-shifted but un-rotated positions).
+    mesh_r, tags_r, classify_r = build_mesh_from_polygons(
+        polys_r, rotor_angle_deg=0.0,
+        mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm,
+        outer_air_factor=outer_air_factor,
+        motion_band=False, band_thickness_mm=band_thickness_mm,
+        n_sectors=n_sectors, geo_cfg=geo_cfg,
+    )
+
+    # Apply rotor rotation as a rigid body — node coords only, topology
+    # unchanged.  This is the heart of sliding-band: every frame just
+    # transforms the rotor mesh's points instead of remeshing.
+    if abs(rotor_angle_deg) > 1e-9:
+        mesh_r = type(mesh_r)(_rotate_mesh_points(mesh_r.p, rotor_angle_deg),
+                               mesh_r.t)
+
+    return mesh_s, tags_s, classify_s, mesh_r, tags_r, classify_r
+
+
 def _band_master_slave_pairing(
         band_node_angles_deg: np.ndarray,
         master_node_angles_deg: np.ndarray,

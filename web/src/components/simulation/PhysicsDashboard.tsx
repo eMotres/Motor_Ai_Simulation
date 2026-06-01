@@ -340,8 +340,8 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
         )}
       </Paper>
 
-      {/* ── MASS TABLE ── */}
-      <Paper sx={CHART_STYLE}>
+      {/* ── MASS TABLE (hidden — duplicates the SummaryTable card on top) ── */}
+      <Paper sx={{ ...CHART_STYLE, display: 'none' }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5 }}>
           <Typography sx={{ fontSize: 11, fontWeight: 700, color: '#3b82f6',
             textTransform: 'uppercase', letterSpacing: '0.08em' }}>Component Masses</Typography>

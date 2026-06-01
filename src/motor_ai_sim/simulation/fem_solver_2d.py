@@ -1642,6 +1642,19 @@ def build_materials(
     coil_list = polys.get("coils", [])
     if coil_list and n_slot > 0:
         slot_pitch_deg = 360.0 / n_slot
+        # The cadquery layout places TWO coil polygons per wide tooth — one
+        # on either side of the tooth (e.g. at math 83.64° and 96.36° for
+        # the tooth at math 90°).  Slot CENTRES sit at the half-pitch
+        # offset (math 7.5°, 22.5°, 37.5°, …) so the two halves map to
+        # ADJACENT slot indices: 5 and 6 for the example above.  Those two
+        # neighbouring slot_idx values carry OPPOSITE direction signs in
+        # the winding layout — which gives the go / return current pattern
+        # of the concentrated coil (one side red = +J, the other blue = −J,
+        # matching the Ansys reference).  Rounding to slot_pitch directly
+        # (without the half-pitch offset) collapses both halves onto the
+        # SAME slot_idx and forces them to carry the same sign — that's
+        # the bug the user spotted in the field render.
+        half_pitch_deg = slot_pitch_deg * 0.5
         for i, cp in enumerate(coil_list):
             if cp is None or cp.is_empty:
                 continue
@@ -1651,8 +1664,7 @@ def build_materials(
                 continue
             ang = math.degrees(math.atan2(cy, cx))
             if ang < 0: ang += 360.0
-            # Closest slot index, half-pitch offsets snap cleanly to integer.
-            slot_idx = int(ang / slot_pitch_deg + 0.5) % n_slot
+            slot_idx = int((ang - half_pitch_deg) / slot_pitch_deg + 0.5) % n_slot
             phase, direction = winding_layout[slot_idx]
             # J_z = direction · I_phase_peak · n_wires_per_slot / slot_area
             J_z = float(direction) * I_ph[phase] * n_wires / max(slot_area_m2, 1e-12)
@@ -1867,23 +1879,13 @@ def fem_solve_for_sim(
     # d-axis convention for SPOKE-PM:
     #   The effective N pole of the rotor sits at the CENTRE OF THE IRON
     #   TOOTH between two adjacent magnets — half a pole pitch (= 90° elec)
-    #   offset from the magnet centre.  Empirical gamma sweep with the
-    #   actual mesh + nonlinear iron model determines this constant so
-    #   γ = 0 lands on the q-axis (max torque).
-    #
-    # When the rotor geometry zero is shifted by ΔΦ_mech, the electrical
-    # offset must shift by ΔΦ_mech × p (mod 360).  Cadquery now applies a
-    # combined alignment (rotor + stator −90° together, so the rotor iron
-    # tooth at math 0° aligns with a stator tooth at math 0°).  The rotor
-    # half of the shift flips magnet polarities (−7 pole pitches, odd), but
-    # the stator half does NOT flip current signs (slot_idx is derived
-    # from coil centroid angle, so the (phase, direction) assignment at
-    # each math angle is invariant under stator rotation).  Net effect: a
-    # global torque sign flip that we compensate by adding 180° to SPOKE.
-    # Empirical iterative γ-sweep on the post-shift geometry converges to
-    # SPOKE = 17° so γ = 0 lands on the broad cos-shaped peak (≈ +6.9 N·m
-    # at I_phase_rms = 85 A, 3 successive sweep iterations).
-    SPOKE_PM_DAXIS_SHIFT_DEG = 17.0
+    #   offset from the magnet centre.  Empirical γ-sweep with the actual
+    #   mesh + nonlinear iron + corrected (half-pitch) slot_idx mapping
+    #   determines this constant so γ = 0 lands on the q-axis (max torque).
+    # Geometry: rotor d-axis tooth at math 90° (+Y axis), aligned with the
+    #   first stator tooth (also at math 90°), exactly as in the Ansys
+    #   reference image.
+    SPOKE_PM_DAXIS_SHIFT_DEG = 285.0
     theta_e      = math.radians(rotor_angle_deg * pole_pairs
                                  + gamma_deg + SPOKE_PM_DAXIS_SHIFT_DEG)
     I_ph = {

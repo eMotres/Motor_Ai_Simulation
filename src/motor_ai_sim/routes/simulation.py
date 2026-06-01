@@ -1354,8 +1354,6 @@ def get_fem_transient(
             T_em_series.append(float(r.get("T_em_Nm", 0.0)))
             P_cu_series.append(float(r.get("P_cu_W", 0.0)))
             P_fe_series.append(float(r.get("P_fe_W", 0.0)))
-            # Slot-ripple slab eddy loss — solver computes it per-frame
-            # from local B² inside each magnet polygon (gauge-stable).
             P_eddy_series.append(float(r.get("P_mag_eddy_W", 0.0)))
             # ── Capture full field for the animation keyframes ───────────
             if k in frame_idxs:
@@ -1475,10 +1473,11 @@ def get_fem_transient(
     # cells appear at each frame's rotated coordinates).  We central-
     # difference per magnet, square, multiply by σ × magnet-volume, then
     # sum across magnets × n_sectors to get the full-motor P_mag_eddy(t).
-    # (Magnet-eddy post-processing removed — see comment in
-    # fem_solver_2d.fem_solve_for_sim re: gauge issues with A_z under
-    # fixed-lab-frame sector clipping.  Per-snapshot solver uses the
-    # slot-ripple slab model on local B², which IS gauge-stable.)
+    # (Magnet eddy comes per-frame from the solver — slot-ripple slab
+    # model on local B with η = 0.03, calibrated for FSCW SPMSM.  See
+    # fem_solver_2d.fem_solve_for_sim for the physics + sliding-band
+    # limitation that prevents a fully ab-initio calc in the current
+    # rebuild-per-frame pipeline.)
 
     P_total_series = [c + f + e for c, f, e
                        in zip(P_cu_series, P_fe_series, P_eddy_series)]

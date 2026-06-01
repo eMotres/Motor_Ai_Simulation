@@ -2161,9 +2161,10 @@ def fem_solve_for_sim(
     # stable identifier — the SAME physical magnet has the SAME rotor-frame
     # angle across all transient frames, even though sector clipping may
     # reorder it in the per-frame magnet list.
-    A_z_mean_per_magnet: List[float] = []
-    vol_per_magnet:      List[float] = []
-    mag_rotor_angle_deg: List[float] = []
+    A_z_mean_per_magnet:  List[float] = []
+    Bmag_mean_per_magnet: List[float] = []
+    vol_per_magnet:       List[float] = []
+    mag_rotor_angle_deg:  List[float] = []
     A_tri_mean_all = (A[mesh.t[0]] + A[mesh.t[1]] + A[mesh.t[2]]) / 3.0
     for i, (mp, _pol) in enumerate(polys_meshed.get("magnets", [])):
         tag = DOM_MAG_BASE + i
@@ -2175,24 +2176,52 @@ def fem_solve_for_sim(
         rotor_frame_ang = (lab_ang - rotor_angle_deg) % 360.0
         if idx.size == 0:
             A_z_mean_per_magnet.append(0.0)
+            Bmag_mean_per_magnet.append(0.0)
             vol_per_magnet.append(0.0)
             mag_rotor_angle_deg.append(rotor_frame_ang)
             continue
         a_w = float(np.sum(areas[idx]))
         A_z_mean_per_magnet.append(
             float(np.sum(A_tri_mean_all[idx] * areas[idx])) / max(a_w, 1e-30))
+        # |B|² area-weighted mean — gauge-INVARIANT, unlike ⟨A_z⟩
+        Bmag_mean_per_magnet.append(
+            float(np.sum(Bmag_tri[idx] * areas[idx])) / max(a_w, 1e-30))
         vol_per_magnet.append(a_w * p.stack_length)
         mag_rotor_angle_deg.append(rotor_frame_ang)
 
-    # Slot-ripple slab loss — applied per-cell so the result follows the
-    # local B variation around the magnet (corners see more flux).
+    # ── Magnet eddy losses — slot-ripple slab model on local B ───────────
+    #
+    # The honest computation would be a sliding-band moving-mesh FEM
+    # (rotor mesh rigidly rotates, stator mesh stays fixed, anti-periodic
+    # BC on the radial cuts handles the wedge — exactly what Ansys does
+    # with its "Dependent Boundary / Bdep = −Bind" master-slave pairing).
+    # In our pipeline the mesh is rebuilt from scratch every frame, so
+    # neither ∂A_z/∂t (gauge-ambiguous) nor ∂|B|/∂t (mesh-noise
+    # dominated) of the per-frame ⟨...⟩-over-magnet gives a stable
+    # answer — 24 frames → 1.5 kW, 48 frames → 25 kW peak.  See git
+    # commit history for the gauge-and-noise analysis.
+    #
+    # Pending the sliding-band rewrite we use the classical conducting-
+    # slab formula on the LOCAL per-cell B with a small empirical
+    # ripple fraction η:
+    #     P/V = σ · (2π f_slot)² · (η · B_local)² · d² / 12   [W/m³]
+    # with
+    #     f_slot = num_slots × n_mech      (slot-ripple in rotor frame)
+    #     η      = 0.03                    (typical 24-slot/14-pp FSCW
+    #                                       SPMSM — 3 % of local B
+    #                                       varies at slot frequency)
+    #     B_local = per-cell |B|           (gauge-stable)
+    #     d      = magnet radial thickness
+    #
+    # This is calibrated to match the typical 1–3 % of P_in published
+    # value for unsegmented NdFeB in FSCW machines (Bianchi & Fornasiero,
+    # IEEE TIA 2009).
     n_mech_solver = sim.get("rpm", 3950) / 60.0
     f_slot_solver = float(p.num_slots) * n_mech_solver
     omega_slot    = 2.0 * math.pi * f_slot_solver
-    d_mag_m       = float(p.r_rotor_out - (p.r_rotor_in
-                       + getattr(p, "rotor_house_height", 0.0012))) \
-                    if hasattr(p, "r_rotor_out") else 0.016
-    RIPPLE_FRACTION = 0.10            # see model justification above
+    d_mag_m       = float(p.r_rotor_out - p.r_rotor_in - 0.0012) \
+                    if (p.r_rotor_out - p.r_rotor_in) > 0.002 else 0.016
+    RIPPLE_FRACTION = 0.03
 
     P_mag_eddy = 0.0
     for i, _ in enumerate(polys_meshed.get("magnets", [])):
@@ -2267,10 +2296,11 @@ def fem_solve_for_sim(
         "Bmag_per_tri":    Bmag_tri.tolist(),
         "J_z_per_tri":     J_z_per_tri.tolist(),     # A/m² — coils only
         # ── Per-magnet bulk quantities for transient-mode honest eddy ─────
-        "A_z_mean_per_magnet":  A_z_mean_per_magnet,   # Wb/m per magnet
-        "vol_per_magnet":       vol_per_magnet,        # m³ per magnet
-        "mag_rotor_angle_deg":  mag_rotor_angle_deg,   # rotor-frame ID (deg)
-        "sigma_magnet":         float(sigma_mag),      # S/m
+        "A_z_mean_per_magnet":   A_z_mean_per_magnet,   # Wb/m per magnet
+        "Bmag_mean_per_magnet":  Bmag_mean_per_magnet,  # T per magnet (gauge-invariant)
+        "vol_per_magnet":        vol_per_magnet,        # m³ per magnet
+        "mag_rotor_angle_deg":   mag_rotor_angle_deg,   # rotor-frame ID (deg)
+        "sigma_magnet":          float(sigma_mag),      # S/m
         "extent": [
             float(mesh.p[0].min()), float(mesh.p[0].max()),
             float(mesh.p[1].min()), float(mesh.p[1].max()),

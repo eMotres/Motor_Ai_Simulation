@@ -76,10 +76,11 @@ interface Props {
   gamma_deg?:    number;
   I_phase_rms?:  number;
   n_frames?:     number;        // animation keyframes (default 12)
+  onPayload?:    (p: FemPayload) => void;   // forwarded from inner viewer
 }
 
 const FemAnimationViewer: React.FC<Props> = ({
-  gamma_deg = 0, I_phase_rms = 85, n_frames = 12,
+  gamma_deg = 0, I_phase_rms = 85, n_frames: n_frames_default = 12, onPayload,
 }) => {
   const [data,    setData]    = useState<TransientFramePayload | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
@@ -87,6 +88,7 @@ const FemAnimationViewer: React.FC<Props> = ({
   const [idx,     setIdx]     = useState<number>(0);
   const [playing, setPlaying] = useState<boolean>(false);
   const [fps,     setFps]     = useState<number>(8);
+  const [n_frames, setNFrames] = useState<number>(n_frames_default);
 
   // ── fetch ──────────────────────────────────────────────────────────────
   const runAnimation = () => {
@@ -129,6 +131,12 @@ const FemAnimationViewer: React.FC<Props> = ({
     }, periodMs);
     return () => window.clearInterval(tick);
   }, [playing, data, fps]);
+
+  // ── auto-run on first mount + whenever γ / I changes ───────────────────
+  useEffect(() => {
+    runAnimation();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gamma_deg, I_phase_rms]);
 
   // ── build a FemPayload-shaped object for FemFieldChart ─────────────────
   const currentFrame = data?.frames[idx];
@@ -230,7 +238,21 @@ const FemAnimationViewer: React.FC<Props> = ({
         </Typography>
       )}
 
-      {/* Field map (delegated to FemFieldChart with payloadOverride) */}
+      {/* Field map (delegated to FemFieldChart with payloadOverride).  The
+          loader runs ~22 s for 4 frames, ~90 s for 12 — until then we show
+          a spinner so the layout doesn't jump when the data arrives. */}
+      {!payloadForChart && loading && (
+        <Box sx={{ display: 'flex', alignItems: 'center',
+          justifyContent: 'center', minHeight: 460,
+          border: '1px solid #0f172a', bgcolor: '#060d17' }}>
+          <Box sx={{ textAlign: 'center' }}>
+            <CircularProgress size={40}/>
+            <Typography sx={{ mt: 1, fontSize: 12, color: '#475569' }}>
+              Solving FEM for {n_frames} keyframes…
+            </Typography>
+          </Box>
+        </Box>
+      )}
       {payloadForChart && (
         <FemFieldChart
           gamma_deg={gamma_deg}
@@ -239,6 +261,7 @@ const FemAnimationViewer: React.FC<Props> = ({
           payloadOverride={payloadForChart}
           subHeader={subHdr}
           hideRefresh
+          onPayload={onPayload}
         />
       )}
 

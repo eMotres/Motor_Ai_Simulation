@@ -671,19 +671,10 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
 
       <Typography sx={{ fontSize: 9, color: '#334155', mt: 0.5 }}>
         Same mesh + Solver-Domain settings as the Mesh tab (read from
-        localStorage). With Symmetry &gt; 1, anti-periodic BC on the radial
-        cuts isn't yet enforced — torque and field shape in the sector are
-        approximate; copper loss is exact.
+        localStorage). Sector mode uses anti-periodic Dirichlet BC on the
+        radial cuts so torque, |B| and flux linkages are physically correct
+        and multiplied by n_sectors to represent the full motor.
       </Typography>
-      {payload && payload.n_sectors > 1 && (
-        <Typography sx={{ fontSize: 10, color: '#fbbf24', mt: 0.5,
-          fontWeight: 600 }}>
-          ⚠ Sector mode (1/{payload.n_sectors}) without anti-periodic BC can
-          produce an "air-gap barrier" look — flux can't cross the radial
-          cuts so it concentrates near them.  Switch <b>Symmetry = Full</b>
-          in the Mesh tab to see the physically-correct field.
-        </Typography>
-      )}
       {payload && payload.demag_report && payload.demag_report.length > 0 && (
         <Box sx={{ mt: 0.5, p: 0.75, border: '1px solid', borderRadius: 1,
           borderColor: payload.demag_report.some(r => r.demagnetised)

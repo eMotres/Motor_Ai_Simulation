@@ -446,13 +446,12 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
         </Box>
       </Paper>
 
-      {/* ── 2D Field map — REAL scikit-fem solve on the Mesh-tab mesh ── */}
-      <FemFieldChart gamma_deg={gamma_deg} I_phase_rms={I_phase_rms}
+      {/* ── Field viewer / animation — one widget covers both the static
+            initial snapshot (frame[0] at rotor_angle = 0) AND the full
+            playback across one electrical period.  Slider lets you scrub
+            through the rotor positions; play button auto-advances. ── */}
+      <FemAnimationViewer gamma_deg={gamma_deg} I_phase_rms={I_phase_rms}
         onPayload={setFemPayload}/>
-
-      {/* ── Field animation — scrub through ONE electrical period and
-            watch the rotor physically rotate, fields update with it. ── */}
-      <FemAnimationViewer gamma_deg={gamma_deg} I_phase_rms={I_phase_rms}/>
 
       {/* ── Transient: T(t), P(t), V(t) — one FEM solve per time step ── */}
       <TransientCharts gamma_deg={gamma_deg} I_phase_rms={I_phase_rms}/>

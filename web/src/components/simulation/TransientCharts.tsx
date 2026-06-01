@@ -81,7 +81,11 @@ interface ProgressInfo {
 }
 
 const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onSummary }) => {
-  const [steps, setSteps] = useState<number>(30);          // faster default
+  // 12 steps matches the animation viewer's default n_frames, so they
+  // hit the same cache key — second auto-fetch returns instantly
+  // instead of doing another 12 × ~5 s FEM solves in serial with the
+  // first one (gmsh process-global lock).
+  const [steps, setSteps] = useState<number>(12);
   const [data,  setData]  = useState<TransientPayload | null>(null);
   const [busy,  setBusy]  = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);

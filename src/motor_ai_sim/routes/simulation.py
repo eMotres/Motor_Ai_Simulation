@@ -1024,6 +1024,142 @@ async def build_fem_mesh_2d(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 7b'.  Sliding-band TWO-mesh view  (feature/sliding-band-fem branch)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_fem_mesh_sb_cache: Dict[tuple, Dict] = {}
+
+
+@router.get("/mesh/build2d_sliding_band")
+async def build_fem_mesh_2d_sliding_band(
+    rotor_angle_deg:   float = 0.0,
+    mesh_size_mm:      float = 4.0,
+    min_size_mm:       float = 0.3,
+    outer_air_factor:  float = 1.3,
+    band_thickness_mm: float = 0.4,
+    n_sectors:         int   = 4,
+):
+    """Build TWO independent meshes (stator + rotor) and stitch them into
+    one renderer-friendly payload for the Mesh tab.  Lets the user
+    visually verify that the rotor mesh REALLY rotates as a rigid body
+    by sweeping `rotor_angle_deg` — the stator mesh and the band stay
+    put; the rotor + magnets sweep through the wedge.
+
+    Each half is meshed with the existing build_mesh_from_polygons; the
+    rotor mesh's points are then transformed via _rotate_mesh_points.
+    Returns the same JSON shape as /mesh/build2d so the existing Mesh
+    viewer can render it without any frontend changes — only difference
+    is the cell-tag colouring naturally splits into 'stator part' and
+    'rotor part' because they came from independent gmsh runs.
+    """
+    import math as _math
+    import numpy as _np
+
+    key = (round(rotor_angle_deg, 3), round(mesh_size_mm, 2),
+           round(min_size_mm, 2), round(outer_air_factor, 2),
+           round(band_thickness_mm, 2), int(n_sectors))
+    if key in _fem_mesh_sb_cache:
+        return _fem_mesh_sb_cache[key]
+
+    try:
+        from motor_ai_sim.cadquery_geometry import CadQueryMotor
+        from motor_ai_sim.simulation.fem_solver_2d import (
+            _simplify_polys, _add_motion_band,
+            _build_sliding_band_meshes, _find_ring_nodes,
+            DOM_MAG_BASE, DOM_COIL_BASE,
+            DOM_MAG_N, DOM_MAG_S, DOM_COIL,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"sliding-band unavailable: {e}")
+
+    motor = CadQueryMotor()
+    polys = motor.get_2d_polygons(rotor_angle_deg=0.0)
+    polys = _simplify_polys(polys, tol_mm=0.005)
+    polys = _add_motion_band(polys, motion_band=True,
+                              band_thickness_mm=band_thickness_mm)
+
+    try:
+        mesh_s, tags_s, classify_s, mesh_r, tags_r, classify_r = \
+            _build_sliding_band_meshes(
+                polys, rotor_angle_deg=rotor_angle_deg,
+                mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm,
+                outer_air_factor=outer_air_factor,
+                band_thickness_mm=band_thickness_mm,
+                n_sectors=n_sectors, geo_cfg=motor.parameters,
+            )
+    except Exception as e:
+        log.exception("sliding-band mesh build failed")
+        raise HTTPException(status_code=500, detail=f"sliding-band mesh failed: {e}")
+
+    # Concatenate into one renderer payload — rotor triangles get their
+    # node indices offset by n_stator_nodes, and we re-map per-cell domain
+    # ids to the visualisation palette (DOM_MAG_N / S, DOM_COIL).
+    n_s_nodes = mesh_s.p.shape[1]
+    verts = _np.hstack([mesh_s.p, mesh_r.p]).T.tolist()
+    tris  = _np.hstack([mesh_s.t, mesh_r.t + n_s_nodes]).T.tolist()
+    tags  = _np.concatenate([tags_s, tags_r]).astype(_np.int16)
+
+    polys_s_meshed = getattr(classify_s, "polys", {})
+    polys_r_meshed = getattr(classify_r, "polys", {})
+    polarities = ([pol for _mp, pol in polys_s_meshed.get("magnets", [])]
+                  + [pol for _mp, pol in polys_r_meshed.get("magnets", [])])
+    # Magnet tags → N/S, coil tags → DOM_COIL
+    mask_coil = tags >= DOM_COIL_BASE
+    if _np.any(mask_coil):
+        tags[mask_coil] = DOM_COIL
+    mask = (tags >= DOM_MAG_BASE) & (tags < DOM_COIL_BASE)
+    if _np.any(mask):
+        idx = (tags[mask] - DOM_MAG_BASE).astype(int)
+        tags[mask] = _np.array(
+            [DOM_MAG_N if (j < len(polarities) and polarities[j] > 0)
+                       else DOM_MAG_S for j in idx],
+            dtype=tags.dtype)
+
+    # Band-interface nodes — used by the renderer to draw the sliding
+    # surface as a distinctive ring overlay.
+    r_band_in = float(polys.get("r_band_in", 56.35)) * 1e-3
+    iface_s = _find_ring_nodes(mesh_s, r_band_in)
+    iface_r = _find_ring_nodes(mesh_r, r_band_in) + n_s_nodes
+
+    domain_counts: Dict[str, int] = {}
+    dom_names = {0: "air", 1: "stator", 2: "coil", 3: "airgap",
+                 4: "magnet_N", 5: "rotor", 6: "shaft",
+                 7: "band", 8: "outer_air", 44: "magnet_S"}
+    for d, c in zip(*_np.unique(tags, return_counts=True)):
+        domain_counts[dom_names.get(int(d), f"d{d}")] = int(c)
+
+    payload = {
+        "rotor_angle_deg":   rotor_angle_deg,
+        "n_stator_nodes":    int(n_s_nodes),
+        "n_rotor_nodes":     int(mesh_r.p.shape[1]),
+        "n_stator_tris":     int(mesh_s.t.shape[1]),
+        "n_rotor_tris":      int(mesh_r.t.shape[1]),
+        "n_vertices":        len(verts),
+        "n_triangles":       len(tris),
+        "vertices":          verts,
+        "triangles":         tris,
+        "domain_per_tri":    tags.tolist(),
+        "domain_counts":     domain_counts,
+        "band_iface_stator": iface_s.tolist(),
+        "band_iface_rotor":  iface_r.tolist(),
+        "r_band_in_m":       r_band_in,
+        "r_band_out_m":      float(polys.get("r_band_out", 56.75)) * 1e-3,
+        "extent": [
+            min(float(mesh_s.p[0].min()), float(mesh_r.p[0].min())),
+            max(float(mesh_s.p[0].max()), float(mesh_r.p[0].max())),
+            min(float(mesh_s.p[1].min()), float(mesh_r.p[1].min())),
+            max(float(mesh_s.p[1].max()), float(mesh_r.p[1].max())),
+        ],
+        "note": ("Sliding-band TWO-mesh view (feature/sliding-band-fem).  "
+                  "Rotor mesh node coordinates are obtained by rigidly "
+                  "rotating the rotor_angle=0 mesh by rotor_angle_deg — "
+                  "topology unchanged."),
+    }
+    _fem_mesh_sb_cache[key] = payload
+    return payload
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 7c. Real FEM solve (scikit-fem) — returns A_z + mesh + torque + losses
 # ─────────────────────────────────────────────────────────────────────────────
 

@@ -109,18 +109,29 @@ const FemAnimationViewer: React.FC<Props> = ({
       include_frames:     'true',
       n_frames:           String(n_frames),
     };
-    fetch(`${API}/api/simulation/physics/fem_transient?${new URLSearchParams(params)}`)
-      .then(async r => {
+    // Auto-retry against transient backend hiccups (uvicorn supervisor
+    // sometimes respawns the worker mid-request during a heavy FEM solve).
+    const attempt = async (i = 0): Promise<void> => {
+      try {
+        const r = await fetch(`${API}/api/simulation/physics/fem_transient?${new URLSearchParams(params)}`);
         if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
-        return r.json();
-      })
-      .then((d: TransientFramePayload) => {
+        const d: TransientFramePayload = await r.json();
         if (!d.frames || d.frames.length === 0) {
           throw new Error('No frames in response');
         }
-        setData(d); setIdx(0); setLoading(false);
-      })
-      .catch(e => { setError(String(e)); setLoading(false); });
+        setData(d); setIdx(0); setLoading(false); setError(null);
+      } catch (e: any) {
+        const msg = String(e);
+        const isNetwork = /Failed to fetch|NetworkError|TypeError/i.test(msg);
+        if (isNetwork && i < 4) {
+          setError(`Backend hiccup — retrying (attempt ${i+2}/5)…`);
+          setTimeout(() => attempt(i+1), 2000);
+        } else {
+          setError(msg); setLoading(false);
+        }
+      }
+    };
+    attempt();
   };
 
   // ── playback animation ─────────────────────────────────────────────────

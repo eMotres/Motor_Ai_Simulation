@@ -123,16 +123,31 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
       n_sectors:          String(readMeshSetting('nSectors',    4)),
       stator_fillet_mm:   String(readMeshSetting('statorFillet', 0.0)),
     }).toString();
-    fetch(`${API}/api/simulation/physics/fem_transient?${qs}`)
-      .then(async r => {
+    // Helper: fetch with auto-retry against transient connection drops.
+    // The uvicorn supervisor sometimes respawns the worker mid-request when
+    // a heavy FEM solve crashes the LLVM JIT; without a retry the user sees
+    // a permanent "Failed to fetch" until they click Re-run manually.
+    const attempt = async (i = 0): Promise<void> => {
+      try {
+        const r = await fetch(`${API}/api/simulation/physics/fem_transient?${qs}`);
         if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
-        return r.json();
-      })
-      .then((d: TransientPayload) => {
+        const d: TransientPayload = await r.json();
         setData(d); setBusy(false);
+        setError(null);
         if (d.summary && onSummary) onSummary(d.summary);
-      })
-      .catch(e => { setError(String(e)); setBusy(false); });
+      } catch (e: any) {
+        const msg = String(e);
+        const isNetwork = /Failed to fetch|NetworkError|TypeError/i.test(msg);
+        if (isNetwork && i < 4) {
+          // wait 2 s for the supervisor to bring uvicorn back up, then retry
+          setError(`Backend hiccup — retrying (attempt ${i+2}/5)…`);
+          setTimeout(() => attempt(i+1), 2000);
+        } else {
+          setError(msg); setBusy(false);
+        }
+      }
+    };
+    attempt();
   };
 
   // Auto-run on mount + when operating-point inputs change.  30 steps

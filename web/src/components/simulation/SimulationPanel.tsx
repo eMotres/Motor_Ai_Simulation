@@ -262,6 +262,41 @@ const SimulationPanel: React.FC = () => {
 
         <Divider sx={{ borderColor: '#1e293b' }}/>
 
+        {/* Rotor periodicity (moved from right panel) */}
+        <Box>
+          <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, color: '#475569',
+            letterSpacing: '0.1em', textTransform: 'uppercase', mb: 1 }}>
+            Rotor Periodicity
+          </Typography>
+          <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0.6 }}>
+            {[
+              { label: 'Pole pairs',        value: polePairs.toString(),                                       sub: `${numPoles} poles / 2` },
+              { label: 'Electrical period', value: `${elecPeriod_deg.toFixed(2)}°`,                            sub: `360° / ${polePairs}` },
+              { label: 'Cogging period',    value: `${coggingPeriod_deg.toFixed(3)}°`,                         sub: `360° / LCM(${numSlots},${numPoles})` },
+              { label: 'Cogging / elec',    value: Math.round(elecPeriod_deg / coggingPeriod_deg).toString(),  sub: 'samples' },
+            ].map(item => (
+              <Box key={item.label} sx={{ bgcolor: '#0a1628', borderRadius: 1,
+                px: 0.8, py: 0.6, border: '1px solid #1e293b' }}>
+                <Typography sx={{ fontSize: 8.5, color: '#475569',
+                  textTransform: 'uppercase', letterSpacing: '0.06em',
+                  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {item.label}
+                </Typography>
+                <Typography sx={{ fontSize: 12, fontWeight: 700, color: '#93c5fd',
+                  fontVariantNumeric: 'tabular-nums', lineHeight: 1.1 }}>
+                  {item.value}
+                </Typography>
+                <Typography sx={{ fontSize: 8.5, color: '#334155',
+                  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {item.sub}
+                </Typography>
+              </Box>
+            ))}
+          </Box>
+        </Box>
+
+        <Divider sx={{ borderColor: '#1e293b' }}/>
+
         {/* Winding connection */}
         <Box>
           <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, color: '#475569',
@@ -444,19 +479,14 @@ const SimulationPanel: React.FC = () => {
       {/* ── RIGHT: results ── */}
       <Box sx={{ flex: 1, overflowY: 'auto', p: 3, display: 'flex', flexDirection: 'column', gap: 3 }}>
 
-        {/* Header */}
-        <Box>
-          <Typography variant="h6" sx={{ color: '#e2e8f0', fontWeight: 700, mb: 0.5 }}>
-            2D Magnetostatics
-          </Typography>
-          <Typography sx={{ fontSize: 12, color: '#475569' }}>
-            Physics-Informed Neural Network · NVIDIA Modulus Sym ·
-            ∇·(ν ∇A<sub>z</sub>) = −J
-          </Typography>
-        </Box>
-
-        {/* Physics overview card */}
-        <Paper sx={{ bgcolor: '#0a1628', border: '1px solid #1e293b', p: 2, borderRadius: 2 }}>
+        {/* Header + Physics overview card removed by user request.
+            • The "2D Magnetostatics / Governing equation / Rotor
+              periodicity / Domains" block is dropped entirely.
+            • Rotor-periodicity info now lives in the LEFT control
+              panel, in a compact 2×2 grid right under the Solver
+              badge.  See <Box>{Rotor Periodicity}</Box> above. */}
+        <Paper sx={{ bgcolor: '#0a1628', border: '1px solid #1e293b', p: 2,
+          borderRadius: 2, display: 'none' }}>
           <Typography sx={{ fontSize: 11, fontWeight: 700, color: '#3b82f6', mb: 1.5,
             textTransform: 'uppercase', letterSpacing: 1 }}>
             Governing Equation

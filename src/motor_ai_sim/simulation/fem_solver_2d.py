@@ -308,16 +308,28 @@ def _add_motion_band(polys: dict, motion_band: bool, band_thickness_mm: float = 
                _Pt(0, 0).buffer(r_band_in,  resolution=256))
         if band.is_empty:
             return polys
-        # Slice air_gap into three rings
+        # Slice air_gap into THREE separate rings.  Previously we unioned
+        # the rotor-side + stator-side back into a single 'air_gap'
+        # polygon (so gmsh would treat them as one DoF region); for the
+        # sliding-band solver they MUST be separate so we can rotate the
+        # rotor-side as a rigid body without disturbing the stator-side
+        # discretisation.
         out = dict(polys)
         out["airgap_band"] = band
-        # Rotor-side: airgap ∩ (r ≤ band_in)  — actually airgap.difference(disk(r_band_in)→out)
         inner_band_disk = _Pt(0, 0).buffer(r_band_in, resolution=256)
         outer_band_disk = _Pt(0, 0).buffer(r_band_out, resolution=256)
-        # rotor side = airgap ∩ disk(r_band_in)
-        rotor_side  = airgap.intersection(inner_band_disk)
-        stator_side = airgap.difference(outer_band_disk)
-        out["air_gap"] = rotor_side.union(stator_side) if (not rotor_side.is_empty and not stator_side.is_empty) else rotor_side if not rotor_side.is_empty else stator_side
+        rotor_side  = airgap.intersection(inner_band_disk)   # ring rotor_out → band_in
+        stator_side = airgap.difference(outer_band_disk)     # ring band_out → stator_in
+        out["air_gap"]            = rotor_side.union(stator_side) \
+            if (not rotor_side.is_empty and not stator_side.is_empty) \
+            else (rotor_side if not rotor_side.is_empty else stator_side)
+        # Separate refs the sliding-band path consumes (kept ADDITIONALLY
+        # to 'air_gap' so the existing rebuild-per-frame solver still
+        # works exactly as before — no behaviour change on main yet).
+        out["air_gap_rotor_side"]  = rotor_side
+        out["air_gap_stator_side"] = stator_side
+        out["r_band_in"]           = r_band_in
+        out["r_band_out"]          = r_band_out
         return out
     except Exception as e:
         log.warning("motion band construction failed: %s", e)

@@ -400,6 +400,59 @@ def _clip_polys_to_sector(polys: dict, n_sectors: int) -> dict:
 # Periodic coil meshing — one wire → all wires → all coils
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _structured_band_mesh(r_in_mm: float, r_out_mm: float,
+                            n_arc: int,
+                            theta_start: float = 0.0,
+                            theta_end:   float = 2 * math.pi,
+                          ) -> Tuple[np.ndarray, np.ndarray,
+                                     np.ndarray, np.ndarray]:
+    """Structured triangular mesh of the thin annulus  r_in ≤ r ≤ r_out.
+
+    Returns
+    -------
+    verts          : (2, 2·n_arc)   inner ring nodes first, then outer ring
+    tris           : (3, 2·(n_arc-1))
+    inner_ring_idx : (n_arc,) node indices on the inner circle (r = r_in)
+    outer_ring_idx : (n_arc,) node indices on the outer circle (r = r_out)
+
+    The sliding-band master-slave constraint links inner_ring_idx (which
+    moves with the rotor) to the rotor mesh's outer boundary, and
+    outer_ring_idx (stationary) to the stator mesh's inner boundary.
+    Per transient time step the rotor mesh node coordinates are updated
+    via a rigid rotation; the band topology stays untouched, so the
+    master-slave pairing only needs to be re-evaluated at the band's
+    interfaces — not the whole problem.
+
+    `n_arc` is the number of vertices along the arc; the band sweep is
+    `theta_end − theta_start` in radians (full circle by default; pass a
+    sector arc for symmetry-reduced runs).
+    """
+    n = max(8, int(n_arc))
+    thetas = np.linspace(theta_start, theta_end, n)
+    # Inner ring vertices first (indices 0..n-1), outer ring next (n..2n-1).
+    inner_x = r_in_mm  * np.cos(thetas)
+    inner_y = r_in_mm  * np.sin(thetas)
+    outer_x = r_out_mm * np.cos(thetas)
+    outer_y = r_out_mm * np.sin(thetas)
+    verts = np.column_stack([
+        np.concatenate([inner_x, outer_x]),
+        np.concatenate([inner_y, outer_y]),
+    ]).T
+    # Triangulate each quad (i, i+1, n+i+1, n+i) into two triangles.
+    tris: List[List[int]] = []
+    for i in range(n - 1):
+        a, b = i,     i + 1
+        c, d = n + i, n + i + 1
+        # alternating diagonal for nicer aspect ratio
+        if i % 2 == 0:
+            tris.append([a, b, d]); tris.append([a, d, c])
+        else:
+            tris.append([a, b, c]); tris.append([b, d, c])
+    inner_ring_idx = np.arange(0, n)
+    outer_ring_idx = np.arange(n, 2 * n)
+    return verts, np.array(tris, dtype=np.int64).T, inner_ring_idx, outer_ring_idx
+
+
 def _structured_rect_mesh(w_mm: float, h_mm: float, target_mm: float
                           ) -> Tuple[np.ndarray, np.ndarray]:
     """Structured triangular mesh of (0,0)→(w,h). Returns (verts (2,N), tris (3,M))."""

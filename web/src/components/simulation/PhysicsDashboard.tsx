@@ -29,6 +29,8 @@ import MotorField2D      from './MotorField2D';
 import FemFieldChart       from './FemFieldChart';
 import FemAnimationViewer  from './FemAnimationViewer';
 import TransientCharts     from './TransientCharts';
+import SummaryTable        from './SummaryTable';
+import type { TransientSummary } from './SummaryTable';
 import type { FemPayload } from './fem-types';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
@@ -136,6 +138,9 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
   // Latest FEM solve payload — kept around so future siblings can reuse it.
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [_femPayload, setFemPayload] = React.useState<FemPayload | null>(null);
+  // Most recent transient-run summary — drives the top-of-tab overview card.
+  const [transientSummary, setTransientSummary] =
+    React.useState<TransientSummary | null>(null);
   const [data, setData]       = useState<PhysicsData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState<string | null>(null);
@@ -221,13 +226,15 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
         <Typography variant="h6" sx={{ color: '#e2e8f0', fontWeight: 700 }}>
           Physics Dashboard
         </Typography>
-        <Chip label="analytical" size="small" sx={{ fontSize: 10, bgcolor: '#1e3a5f', color: '#93c5fd' }}/>
-        <Chip label="Ansys-comparable" size="small" sx={{ fontSize: 10, bgcolor: '#1a2e1a', color: '#4ade80' }}/>
+        <Chip label="real FEM" size="small" sx={{ fontSize: 10, bgcolor: '#1a2e1a', color: '#4ade80' }}/>
         <Box sx={{ flex: 1 }}/>
         <IconButton size="small" onClick={fetchData} sx={{ color: '#475569' }}>
           <RefreshIcon fontSize="small"/>
         </IconButton>
       </Box>
+
+      {/* ── Top-of-tab summary card — populated by TransientCharts ── */}
+      <SummaryTable summary={transientSummary}/>
 
       {/* Analytical "Key Scalars" table removed — all key quantities
           (T_em, P_cu/Fe/eddy, |B|_max, A_z range) come from the FEM
@@ -454,7 +461,8 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
         onPayload={setFemPayload}/>
 
       {/* ── Transient: T(t), P(t), V(t) — one FEM solve per time step ── */}
-      <TransientCharts gamma_deg={gamma_deg} I_phase_rms={I_phase_rms}/>
+      <TransientCharts gamma_deg={gamma_deg} I_phase_rms={I_phase_rms}
+        onSummary={setTransientSummary}/>
 
       {/* Analytical MMF(θ) hidden. */}
       <Paper sx={{ ...CHART_STYLE, display: 'none' }}>

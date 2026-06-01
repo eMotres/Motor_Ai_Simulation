@@ -17,6 +17,8 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
+import type { TransientSummary } from './SummaryTable';
+
 interface TransientPayload {
   n_steps: number;
   n_steps_per_period: number;
@@ -38,11 +40,13 @@ interface TransientPayload {
   I_A: number[]; I_B: number[]; I_C: number[];
   V_A: number[]; V_B: number[]; V_C: number[];
   V_peak: number;
+  summary?: TransientSummary;
 }
 
 interface Props {
   gamma_deg?: number;
   I_phase_rms?: number;
+  onSummary?: (s: TransientSummary) => void;
 }
 
 function readMeshSetting<T>(key: string, def: T): T {
@@ -76,7 +80,7 @@ interface ProgressInfo {
   phase:     string;
 }
 
-const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85 }) => {
+const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onSummary }) => {
   const [steps, setSteps] = useState<number>(30);          // faster default
   const [data,  setData]  = useState<TransientPayload | null>(null);
   const [busy,  setBusy]  = useState<boolean>(false);
@@ -124,7 +128,10 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85 }) =
         if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
         return r.json();
       })
-      .then((d: TransientPayload) => { setData(d); setBusy(false); })
+      .then((d: TransientPayload) => {
+        setData(d); setBusy(false);
+        if (d.summary && onSummary) onSummary(d.summary);
+      })
       .catch(e => { setError(String(e)); setBusy(false); });
   };
 

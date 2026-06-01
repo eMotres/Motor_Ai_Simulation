@@ -1477,6 +1477,66 @@ def get_fem_transient(
         "psi_C_Wb":           psi_C,
         "R_phase_ohm":        R_phase,
     }
+
+    # ── Summary block: masses, loss breakdown, KV, specific torque/power ──
+    geo_cfg = cfg.get("geometry", {})
+    masses  = _compute_masses(p_sim, geo_cfg)
+    m_total = masses["total_active_kg"]
+
+    P_cu_avg  = float(_np.mean(P_cu_series))
+    P_fe_avg  = float(_np.mean(P_fe_series))
+    P_mag_avg = float(_np.mean(P_eddy_series))
+    T_avg     = float(_np.mean(T_em_series))
+    P_mech    = T_avg * 2 * _math.pi * rpm / 60
+
+    V_peak = float(max(max(map(abs, V_A)),
+                         max(map(abs, V_B)),
+                         max(map(abs, V_C))))
+    V_phase_rms_estim = V_peak / _math.sqrt(2)
+    V_line_peak       = V_peak * _math.sqrt(3)
+    V_line_rms        = V_line_peak / _math.sqrt(2)
+    # KV constant — motor velocity constant in rpm/V.  Use V_phase_RMS as
+    # the standard convention (matches ω·ψ_pm/√2 at no-load).  Guard
+    # against zero voltage (e.g. open-circuit run with I=0).
+    KV_rpm_per_V_phase = (rpm / V_phase_rms_estim) if V_phase_rms_estim > 1.0 else 0.0
+    KV_rpm_per_V_line  = (rpm / V_line_rms)        if V_line_rms       > 1.0 else 0.0
+
+    P_loss_avg = P_cu_avg + P_fe_avg + P_mag_avg
+    eff_avg    = P_mech / max(P_mech + P_loss_avg, 1.0) if P_mech > 0 else 0.0
+
+    payload["summary"] = {
+        # Operating point
+        "rpm":              rpm,
+        "I_phase_rms_A":    round(float(I_phase_rms), 2),
+        "gamma_deg":        round(float(gamma_deg), 2),
+        # Mechanics
+        "T_em_avg_Nm":      round(T_avg, 3),
+        "T_ripple_pct":     round(float((max(T_em_series) - min(T_em_series))
+                                          / max(abs(T_avg), 0.01) * 100), 1),
+        "P_mech_W":         round(P_mech, 1),
+        # Voltage / current
+        "V_phase_peak_V":   round(V_peak, 1),
+        "V_phase_rms_V":    round(V_phase_rms_estim, 1),
+        "V_line_peak_V":    round(V_line_peak, 1),
+        "V_line_rms_V":     round(V_line_rms, 1),
+        "KV_rpm_per_V_phase": round(KV_rpm_per_V_phase, 2),
+        "KV_rpm_per_V_line":  round(KV_rpm_per_V_line, 2),
+        # Losses split by physical loss family
+        # (core = laminated iron, stranded = wound copper, solid = bulk
+        # conductors like magnets and shaft eddies)
+        "P_loss_total_W":     round(P_loss_avg, 1),
+        "P_core_W":           round(P_fe_avg, 1),       # lamination
+        "P_stranded_W":       round(P_cu_avg, 1),       # copper
+        "P_solid_W":          round(P_mag_avg, 1),      # magnets + shaft
+        "efficiency":         round(eff_avg, 4),
+        # Mass + specific performance
+        "mass_total_kg":      round(m_total, 3),
+        "mass_components":    masses["components"],
+        "torque_per_mass_Nm_kg":  round(T_avg / max(m_total, 1e-6), 3),
+        "power_per_mass_W_kg":    round(P_mech / max(m_total, 1e-6), 1),
+        "loss_density_W_kg":      round(P_loss_avg / max(m_total, 1e-6), 1),
+    }
+
     if include_frames:
         payload["frames"] = frames
         payload["n_frames_returned"] = len(frames)

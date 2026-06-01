@@ -1196,19 +1196,20 @@ magnet:
       - [0,         1.300]
 
   F45SH_120C:
-    description: "Ferrite magnet F45SH — operating point 120 °C"
+    description: "Sintered NdFeB magnet, F45SH grade — operating point 120 °C"
     grade: F45SH
     temperature_c: 120
-    Br: 1.190          # T
-    Hc: 648541         # A/m
+    Br: 1.190          # T   — NdFeB-class remanence
+    Hc: 648541         # A/m — NdFeB-class coercivity
     mu_rec: 1.460      # Br / (mu0 * Hc)
-    # Sintered ferrite is essentially an insulator — typical bulk
-    # conductivity 1e-6 … 1e-4 S/m.  Previous value (5555.6 S/m) was
-    # NdFeB-like and produced ~500 W of phantom magnet-eddy losses at
-    # this operating point, which dominated the loss budget and made
-    # efficiency artificially low.  Pick a representative ferrite value
-    # so the eddy term stays in the µW range it physically belongs in.
-    sigma: 1.0e-4      # S/m  — sintered ferrite (insulator)
+    # NdFeB is a metallic alloy (Nd-Fe-B), so eddy-current losses are
+    # significant — σ ≈ 625 kS/m at 20 °C, dropping a few percent at
+    # 120 °C (thermal phonon scattering).  Use the standard reference
+    # 6.25e5 S/m so the σ·ω²·B²·d²/12 slab model produces realistic
+    # eddy losses at electrical frequency (≈ 50 … 500 W at 1–2 kHz
+    # for typical SPMSM geometries; magnets can be segmented later
+    # to bring it down).
+    sigma: 6.25e5      # S/m  — sintered NdFeB at ~120 °C
     density: 7500
     thermal_conductivity: 7.6
     specific_heat: 460

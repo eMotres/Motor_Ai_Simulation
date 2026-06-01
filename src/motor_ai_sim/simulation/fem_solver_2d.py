@@ -2123,9 +2123,30 @@ def fem_solve_for_sim(
     P_fe_stator = _domain_iron_loss_bertotti(DOM_STATOR, _stator_mat)
     P_fe_rotor  = _domain_iron_loss_bertotti(DOM_ROTOR,  _rotor_mat)
 
-    # Magnet eddy: classical conductive solid magnet model.  P/V = σ·ω²·B²·d²/12
-    # (slab approximation in the radial direction).  σ from the magnet
-    # material entry (e.g. F45SH ferrite σ ≈ 5.6 kS/m — very low).
+    # ── Magnet eddy losses — slot-ripple slab model ──────────────────────
+    # In a SYNCHRONOUS machine the fundamental armature reaction rotates
+    # with the rotor, so in the magnet's frame it is DC — no eddy loss.
+    # The dominant AC field a magnet sees is the SLOT RIPPLE, at frequency
+    #     f_slot = num_slots × n_mech     [Hz]
+    # whose amplitude inside the magnet is a few percent of the local B.
+    # The classical conducting-slab result for losses is
+    #     P/V = σ · (2π f_slot)² · (η·B)² · d² / 12      [W/m³]
+    # with η ≈ 0.10 the empirical "ripple fraction" for unsegmented
+    # rotors in concentrated-winding machines (Bianchi & Fornasiero,
+    # IEEE TIA 2009).  Segmenting axially reduces this by N_seg²
+    # (out of scope for this 2-D solver).
+    #
+    # Naively plugging the FULL B and electrical f into the slab formula
+    # (as a static FEM might suggest) over-estimates the loss by ~3-4
+    # orders of magnitude — see the rotor-frame argument above.
+    #
+    # An exact "finite-difference of A_z over transient frames" turns
+    # out to be poisoned by gauge / sector-clipping noise (A_z FLIPS sign
+    # by anti-periodicity once per pole pitch even though B stays the
+    # same), so for a robust unattended answer we use the slot-ripple
+    # slab model.  Per-snapshot A_z mean / per-magnet volume / σ are
+    # still surfaced in the response for downstream tooling that does a
+    # gauge-aware finite difference (e.g. a full-motor moving-band run).
     try:
         mag_name = _ma.get("magnet")
         _magnet_mat = _mat_lib.get_magnet(mag_name) if mag_name else None
@@ -2134,10 +2155,44 @@ def fem_solve_for_sim(
     rho_magnet = float(getattr(_magnet_mat, "density", 7500.0)) if _magnet_mat else 7500.0
     sigma_mag  = float(getattr(_magnet_mat, "sigma",   0.0))    if _magnet_mat else 0.0
 
-    omega_e = 2 * math.pi * freq
-    # Approximate magnet thickness in the demag direction (radial):
-    d_mag_m = float(p.r_rotor_out - (p.r_rotor_in + getattr(p, "rotor_house_height", 0.0012))) \
-              if hasattr(p, "r_rotor_out") else 0.016
+    # Per-magnet mean A_z, volume, and ROTOR-FRAME centroid angle for the
+    # downstream time-differentiation in /fem_transient.  The rotor-frame
+    # angle (= lab centroid angle minus the current rotor_angle_deg) is a
+    # stable identifier — the SAME physical magnet has the SAME rotor-frame
+    # angle across all transient frames, even though sector clipping may
+    # reorder it in the per-frame magnet list.
+    A_z_mean_per_magnet: List[float] = []
+    vol_per_magnet:      List[float] = []
+    mag_rotor_angle_deg: List[float] = []
+    A_tri_mean_all = (A[mesh.t[0]] + A[mesh.t[1]] + A[mesh.t[2]]) / 3.0
+    for i, (mp, _pol) in enumerate(polys_meshed.get("magnets", [])):
+        tag = DOM_MAG_BASE + i
+        idx = np.where(cell_tags == tag)[0]
+        try:
+            lab_ang = math.degrees(math.atan2(mp.centroid.y, mp.centroid.x))
+        except Exception:
+            lab_ang = 0.0
+        rotor_frame_ang = (lab_ang - rotor_angle_deg) % 360.0
+        if idx.size == 0:
+            A_z_mean_per_magnet.append(0.0)
+            vol_per_magnet.append(0.0)
+            mag_rotor_angle_deg.append(rotor_frame_ang)
+            continue
+        a_w = float(np.sum(areas[idx]))
+        A_z_mean_per_magnet.append(
+            float(np.sum(A_tri_mean_all[idx] * areas[idx])) / max(a_w, 1e-30))
+        vol_per_magnet.append(a_w * p.stack_length)
+        mag_rotor_angle_deg.append(rotor_frame_ang)
+
+    # Slot-ripple slab loss — applied per-cell so the result follows the
+    # local B variation around the magnet (corners see more flux).
+    n_mech_solver = sim.get("rpm", 3950) / 60.0
+    f_slot_solver = float(p.num_slots) * n_mech_solver
+    omega_slot    = 2.0 * math.pi * f_slot_solver
+    d_mag_m       = float(p.r_rotor_out - (p.r_rotor_in
+                       + getattr(p, "rotor_house_height", 0.0012))) \
+                    if hasattr(p, "r_rotor_out") else 0.016
+    RIPPLE_FRACTION = 0.10            # see model justification above
 
     P_mag_eddy = 0.0
     for i, _ in enumerate(polys_meshed.get("magnets", [])):
@@ -2145,9 +2200,10 @@ def fem_solve_for_sim(
         idx = np.where(cell_tags == tag)[0]
         if idx.size == 0:
             continue
-        # P/V = σ·ω²·B²·d²/12   (W/m³)
-        B = Bmag_tri[idx]
-        p_dens = sigma_mag * omega_e**2 * B**2 * d_mag_m**2 / 12.0
+        B_cells = Bmag_tri[idx]
+        p_dens = (sigma_mag * omega_slot**2
+                  * (RIPPLE_FRACTION * B_cells) ** 2
+                  * d_mag_m ** 2 / 12.0)
         P_mag_eddy += float(np.sum(p_dens * vol[idx]))
 
     mult = n_sectors if n_sectors > 1 else 1
@@ -2210,6 +2266,11 @@ def fem_solve_for_sim(
         "A_z_per_node":    A.tolist(),               # Wb/m
         "Bmag_per_tri":    Bmag_tri.tolist(),
         "J_z_per_tri":     J_z_per_tri.tolist(),     # A/m² — coils only
+        # ── Per-magnet bulk quantities for transient-mode honest eddy ─────
+        "A_z_mean_per_magnet":  A_z_mean_per_magnet,   # Wb/m per magnet
+        "vol_per_magnet":       vol_per_magnet,        # m³ per magnet
+        "mag_rotor_angle_deg":  mag_rotor_angle_deg,   # rotor-frame ID (deg)
+        "sigma_magnet":         float(sigma_mag),      # S/m
         "extent": [
             float(mesh.p[0].min()), float(mesh.p[0].max()),
             float(mesh.p[1].min()), float(mesh.p[1].max()),

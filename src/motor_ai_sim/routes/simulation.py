@@ -1354,6 +1354,8 @@ def get_fem_transient(
             T_em_series.append(float(r.get("T_em_Nm", 0.0)))
             P_cu_series.append(float(r.get("P_cu_W", 0.0)))
             P_fe_series.append(float(r.get("P_fe_W", 0.0)))
+            # Slot-ripple slab eddy loss — solver computes it per-frame
+            # from local B² inside each magnet polygon (gauge-stable).
             P_eddy_series.append(float(r.get("P_mag_eddy_W", 0.0)))
             # ── Capture full field for the animation keyframes ───────────
             if k in frame_idxs:
@@ -1465,6 +1467,18 @@ def get_fem_transient(
     V_A = [R_phase * iA + e for iA, e in zip(I_A_series, dpsiA_dt)]
     V_B = [R_phase * iB + e for iB, e in zip(I_B_series, dpsiB_dt)]
     V_C = [R_phase * iC + e for iC, e in zip(I_C_series, dpsiC_dt)]
+
+    # ── Honest magnet eddy loss via J = -σ · ∂A_z/∂t ──────────────────────
+    # Each frame's mean A_z over a magnet's cells is the rotor-frame A_z of
+    # that magnet at time t_k (because the FEM rebuilds the mesh with the
+    # magnet at its rotated lab position, so the same physical magnet's
+    # cells appear at each frame's rotated coordinates).  We central-
+    # difference per magnet, square, multiply by σ × magnet-volume, then
+    # sum across magnets × n_sectors to get the full-motor P_mag_eddy(t).
+    # (Magnet-eddy post-processing removed — see comment in
+    # fem_solver_2d.fem_solve_for_sim re: gauge issues with A_z under
+    # fixed-lab-frame sector clipping.  Per-snapshot solver uses the
+    # slot-ripple slab model on local B², which IS gauge-stable.)
 
     P_total_series = [c + f + e for c, f, e
                        in zip(P_cu_series, P_fe_series, P_eddy_series)]

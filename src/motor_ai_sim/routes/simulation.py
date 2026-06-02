@@ -1294,6 +1294,12 @@ async def get_fem_field2d(
 
 _fem_transient_cache: Dict[tuple, Dict] = {}
 
+# Serializes transient computes so concurrent identical requests (the
+# animation viewer + transient charts both fire on Simulation-tab mount)
+# don't each spawn a worker pool and storm the CPU.
+import threading as _threading
+_fem_transient_lock = _threading.Lock()
+
 # Scalar keys a non-keyframe step needs — returning only these from a
 # worker process slashes the pickle payload (no mesh / A_z arrays).
 _TRANSIENT_SCALAR_KEYS = (
@@ -1497,6 +1503,20 @@ def get_fem_transient(
         return out
 
     import time as _time
+    import os as _os
+    import concurrent.futures as _cf
+
+    # Serialize transient computes: the animation viewer and the transient
+    # charts both hit this endpoint on mount with identical params, so
+    # without a guard they would each spawn a worker pool and double the
+    # CPU storm.  Acquire BEFORE touching the shared progress state so the
+    # waiting caller doesn't clobber the running one's progress; once it
+    # wakes it falls straight through to the freshly-populated cache.
+    _fem_transient_lock.acquire()
+    if key in _fem_transient_cache:
+        _fem_transient_lock.release()
+        return _fem_transient_cache[key]
+
     _t_loop_start = _time.time()
     _fem_transient_progress["current"] = {
         "running":   True,
@@ -1512,8 +1532,6 @@ def get_fem_transient(
     # Each rotor angle is independent and per-frame gmsh meshing dominates
     # (~11 s of ~15 s); fan the frames out across processes so the box's
     # many cores actually get used (the in-process _GMSH_LOCK can't).
-    import os as _os
-    import concurrent.futures as _cf
     _solve_kw = dict(
         gamma_deg=gamma_deg, mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm,
         outer_air_factor=outer_air_factor, motion_band=motion_band,
@@ -1523,8 +1541,12 @@ def get_fem_transient(
     _tasks = [(k, float(rotor_deg[k]), _solve_kw, (k in frame_idxs))
               for k in range(n_total)]
     results: List[Optional[Dict]] = [None] * n_total
-    # Leave a few cores free for the OS + uvicorn; cap at the frame count.
-    n_workers = min(n_total, max(1, (_os.cpu_count() or 4) - 4))
+    # Cap workers WELL below the core count.  Each worker is a full gmsh
+    # process that pegs a core; using all cores starved the uvicorn event
+    # loop so /progress polling timed out and the browser showed
+    # "Failed to fetch" / a frozen UI.  ~1/4 of the cores keeps the box
+    # responsive even if the animation + transient solves overlap.
+    n_workers = min(n_total, max(2, (_os.cpu_count() or 8) // 4))
     try:
         with _cf.ProcessPoolExecutor(max_workers=n_workers) as _ex:
             _futs = [_ex.submit(_transient_frame_worker, t) for t in _tasks]
@@ -1541,12 +1563,14 @@ def get_fem_transient(
                     (_el / max(_done, 1)) * (n_total - _done)
     except Exception as e:
         log.exception("parallel FEM transient failed")
+        _fem_transient_lock.release()
         raise HTTPException(status_code=500, detail=f"FEM transient failed: {e}")
 
     # Backfill any frame whose every jittered solve failed with the nearest
     # successful neighbour so the series stays continuous.
     _first_good = next((r for r in results if r is not None), None)
     if _first_good is None:
+        _fem_transient_lock.release()
         raise HTTPException(status_code=500,
                             detail="FEM transient: every frame failed to mesh/solve")
     _lastg = _first_good
@@ -1635,6 +1659,7 @@ def get_fem_transient(
         # placeholder — will be overwritten below after the loop
     except Exception as e:
         log.exception("FEM transient failed")
+        _fem_transient_lock.release()
         raise HTTPException(status_code=500, detail=f"FEM transient failed: {e}")
 
     # ── Balanced 3-phase ψ via ±120° elec time shift ───────────────────
@@ -1802,6 +1827,7 @@ def get_fem_transient(
         "elapsed_s": round(_time.time() - _t_loop_start, 1),
         "eta_s":   0.0,
     }
+    _fem_transient_lock.release()
     return payload
 
 

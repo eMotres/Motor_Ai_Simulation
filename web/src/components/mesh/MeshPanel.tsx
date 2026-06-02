@@ -310,10 +310,10 @@ const MeshPanel: React.FC = () => {
   const [motionBand,     setMotionBand]     = usePersisted<boolean>('motionBand', true);
   const [bandThickness,  setBandThickness]  = usePersisted<number>('bandThickness', 0.4);
   const [nSectors,       setNSectors]       = usePersisted<number>('nSectors', 4);   // 1/4 by default
-  // Polygons now ship with CadQuery-radius fillets baked in (stator_fillet_r=2.5,
-  // _r1=0.9); the extra Shapely smoothing slider is OFF by default so the Mesh
-  // tab matches the Geometry tab exactly.
-  const [statorFillet,   setStatorFillet]   = usePersisted<number>('statorFillet', 0.0);
+  // NOTE: the old "Extra fillet smoothing" control was removed — it applied a
+  // Shapely buffer on top of the CadQuery fillets, deforming the Mesh geometry
+  // away from the Geometry tab.  The Mesh now always uses the native geometry
+  // (stator_fillet_mm = 0), identical to the Geometry tab.
   const [showEdges,    setShowEdges]    = useState<boolean>(true);
   const [showOutlines, setShowOutlines] = useState<boolean>(true);
   const [fillDomains,  setFillDomains]  = useState<boolean>(true);
@@ -345,7 +345,7 @@ const MeshPanel: React.FC = () => {
       outer_air_factor:  outerAirFactor.toString(),
       band_thickness_mm: bandThickness.toString(),
       n_sectors:         nSectors.toString(),
-      stator_fillet_mm:  statorFillet.toString(),
+      stator_fillet_mm:  '0',          // native geometry — no extra smoothing
     } : {
       mesh_size_mm:        meshSizeMm.toString(),
       min_size_mm:         minSizeMm.toString(),
@@ -357,7 +357,7 @@ const MeshPanel: React.FC = () => {
       motion_band:         motionBand ? 'true' : 'false',
       band_thickness_mm:   bandThickness.toString(),
       n_sectors:           nSectors.toString(),
-      stator_fillet_mm:    statorFillet.toString(),
+      stator_fillet_mm:    '0',          // native geometry — no extra smoothing
     }).toString();
     fetch(`${base}?${qs}`)
       .then(async r => {
@@ -367,7 +367,7 @@ const MeshPanel: React.FC = () => {
       .then((d: FemMesh) => { setFemMesh(d); setFemLoading(false); })
       .catch(e => { setFemError(String(e)); setFemLoading(false); });
   }, [slidingBand, meshSizeMm, minSizeMm, surfaceDev, normalDev, aspectRatio, rotorAngle,
-      outerAirFactor, motionBand, bandThickness, nSectors, statorFillet]);
+      outerAirFactor, motionBand, bandThickness, nSectors]);
 
   // Load current config + geometry on mount
   useEffect(() => {
@@ -547,28 +547,6 @@ const MeshPanel: React.FC = () => {
               <Slider
                 value={aspectRatio} min={2} max={30} step={1}
                 onChange={(_, v) => setAspectRatio(v as number)}
-                sx={{ color: '#3b82f6' }}
-              />
-            </Box>
-
-            {/* stator fillet radius */}
-            <Box>
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-                <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>
-                  Extra fillet smoothing
-                  <Tooltip title="Polygons already ship with CadQuery-radius fillets baked in (outer-ring=2.5 mm, inner-ring=0.9 mm — same as Geometry tab). This slider adds EXTRA Shapely buffer-smoothing on top. Leave at 0 to match Geometry exactly." placement="right">
-                    <span style={{ color: '#475569', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
-                  </Tooltip>
-                </Typography>
-                <Chip label={statorFillet > 0 ? `+${statorFillet.toFixed(2)} mm` : 'native'}
-                  size="small"
-                  sx={{ fontSize: 11, height: 20,
-                    bgcolor: statorFillet > 0 ? '#1e3a5f' : '#1e293b',
-                    color: statorFillet > 0 ? '#93c5fd' : '#94a3b8' }}/>
-              </Box>
-              <Slider
-                value={statorFillet} min={0} max={2.0} step={0.05}
-                onChange={(_, v) => setStatorFillet(v as number)}
                 sx={{ color: '#3b82f6' }}
               />
             </Box>

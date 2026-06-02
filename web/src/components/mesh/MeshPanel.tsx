@@ -301,7 +301,10 @@ const MeshPanel: React.FC = () => {
 
   const [meshSizeMm,  setMeshSizeMm]  = usePersisted<number>('meshSize',   4.0);
   const [minSizeMm,   setMinSizeMm]   = usePersisted<number>('minSize',    0.3);
-  const [surfaceDev,  setSurfaceDev]  = usePersisted<number>('surfaceDev', 0.005);
+  // 'Surface deviation' control removed: any value >0.01 mm Douglas-Peucker-
+  // flattened the rounded rotor-tooth / fillet arcs into straight chords, so
+  // the Mesh no longer matched the real geometry. The Mesh now always uses the
+  // real geometry (tol 0.005 mm, sent below); density is set by Max/Min size.
   const [normalDev,   setNormalDev]   = usePersisted<number>('normalDev',  6.0);
   const [aspectRatio, setAspectRatio] = usePersisted<number>('aspect',     10.0);
   const [rotorAngle,  setRotorAngle]  = usePersisted<number>('rotorAngle', 0.0);
@@ -339,7 +342,7 @@ const MeshPanel: React.FC = () => {
       rotor_angle_deg:   rotorAngle.toString(),
       mesh_size_mm:      meshSizeMm.toString(),
       min_size_mm:       minSizeMm.toString(),
-      surface_deviation: surfaceDev.toString(),
+      surface_deviation: '0.005',     // real geometry — no flattening
       normal_deviation:  normalDev.toString(),
       aspect_ratio:      aspectRatio.toString(),
       outer_air_factor:  outerAirFactor.toString(),
@@ -349,7 +352,7 @@ const MeshPanel: React.FC = () => {
     } : {
       mesh_size_mm:        meshSizeMm.toString(),
       min_size_mm:         minSizeMm.toString(),
-      surface_deviation:   surfaceDev.toString(),
+      surface_deviation:   '0.005',   // real geometry — no flattening
       normal_deviation:    normalDev.toString(),
       aspect_ratio:        aspectRatio.toString(),
       rotor_angle_deg:     rotorAngle.toString(),
@@ -366,7 +369,7 @@ const MeshPanel: React.FC = () => {
       })
       .then((d: FemMesh) => { setFemMesh(d); setFemLoading(false); })
       .catch(e => { setFemError(String(e)); setFemLoading(false); });
-  }, [slidingBand, meshSizeMm, minSizeMm, surfaceDev, normalDev, aspectRatio, rotorAngle,
+  }, [slidingBand, meshSizeMm, minSizeMm, normalDev, aspectRatio, rotorAngle,
       outerAirFactor, motionBand, bandThickness, nSectors]);
 
   // Load current config + geometry on mount
@@ -490,25 +493,6 @@ const MeshPanel: React.FC = () => {
               <Slider
                 value={minSizeMm} min={0.1} max={2.0} step={0.05}
                 onChange={(_, v) => setMinSizeMm(v as number)}
-                sx={{ color: '#3b82f6' }}
-              />
-            </Box>
-
-            {/* surface deviation */}
-            <Box>
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-                <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>
-                  Surface deviation
-                  <Tooltip title="Ansys equivalent — chord error tolerance for the boundary polygon (Shapely simplify)" placement="right">
-                    <span style={{ color: '#475569', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
-                  </Tooltip>
-                </Typography>
-                <Chip label={`${surfaceDev.toFixed(3)} mm`} size="small"
-                  sx={{ fontSize: 11, height: 20, bgcolor: '#1e293b', color: '#94a3b8' }}/>
-              </Box>
-              <Slider
-                value={surfaceDev} min={0.001} max={0.5} step={0.005}
-                onChange={(_, v) => setSurfaceDev(v as number)}
                 sx={{ color: '#3b82f6' }}
               />
             </Box>

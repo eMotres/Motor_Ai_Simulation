@@ -891,7 +891,13 @@ async def build_fem_mesh_2d(
     try:
         motor = CadQueryMotor()
         polys = motor.get_2d_polygons(rotor_angle_deg=rotor_angle_deg)
-        polys = _simplify_polys(polys, tol_mm=surface_deviation,
+        # Cap the simplify tolerance hard: a large surface_deviation
+        # Douglas-Peucker-flattens the rounded rotor-tooth / fillet ARCS into
+        # straight chords (the "straight tooth" mismatch vs the Geometry tab).
+        # 0.01 mm is visually lossless, so the Mesh always shows the REAL
+        # geometry — identical to the Geometry tab and to the solver (which
+        # already uses 0.005).
+        polys = _simplify_polys(polys, tol_mm=min(float(surface_deviation), 0.01),
                                  stator_fillet_mm=stator_fillet_mm)
         # periodic_coils=False: the disjoint air_background polygon now covers
         # slot air around wires and rotor-pocket air above magnets, so the

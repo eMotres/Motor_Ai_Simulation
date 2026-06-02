@@ -2482,6 +2482,14 @@ def fem_transient_sliding_band(
     from motor_ai_sim.config import get_config
 
     t0 = _t.time()
+    # A coarse bulk mesh (e.g. 4 mm) makes the per-domain 90th-percentile
+    # saturation jump between frames and occasionally produces a degenerate
+    # gap slice → a single torque-spike frame (e.g. 36 N·m amid ~24) that
+    # inflates ripple to ~75 %.  The sliding-band promise is a SMOOTH T(t),
+    # so clamp the bulk element size for this path; the air-gap is refined
+    # separately by the MathEval size field regardless of this value.
+    _req_mesh = float(mesh_size_mm)
+    mesh_size_mm = min(_req_mesh, 3.0)
     cfg = get_config(); sim = cfg.get("simulation", {})
     geo = cfg.get("geometry", {}); wind = cfg.get("winding", {})
     p = params_from_config(); dom = MotorDomains2D(p)

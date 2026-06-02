@@ -1,5 +1,5 @@
 """Probe SB transient ripple vs mesh size / steps / gamma to see if ripple is
-numerical (mesh-driven) or physical (cogging)."""
+numerical (mesh-driven) or physical (cogging).  Also prints loss series."""
 import os, time
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
@@ -19,16 +19,18 @@ def run(mesh, steps, gamma):
     T = d.get("T_em_Nm", [])
     Tavg = d.get("T_avg_Nm", 0.0)
     rip = d.get("T_ripple_pct", 0.0)
+    pfe = (d.get("P_fe_W") or [0])[0]
+    pmag = (d.get("P_mag_eddy_W") or [0])[0]
+    pcu = (d.get("P_cu_W") or [0])[0]
     dt = time.time() - t0
     Tr = [round(x, 1) for x in T]
     print(f"mesh={mesh} steps={steps} gamma={gamma:+.0f} | "
-          f"T_avg={Tavg:6.2f}  ripple={rip:5.1f}%  ({dt:4.1f}s)")
+          f"T_avg={Tavg:6.2f}  ripple={rip:5.1f}%  "
+          f"P_cu={pcu:6.0f} P_fe={pfe:7.1f} P_mag={pmag:6.1f}  ({dt:4.1f}s)")
     print(f"    T(t)={Tr}")
     return d
 
 if __name__ == "__main__":
-    print("=== SB ripple probe ===")
-    run(4.0, 12, -10)
+    print("=== SB ripple + loss probe ===")
     run(3.0, 12, -10)
     run(3.0, 24, -10)
-    run(2.5, 24, -10)

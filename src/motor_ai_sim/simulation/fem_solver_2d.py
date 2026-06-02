@@ -49,7 +49,11 @@ MU0 = 4e-7 * math.pi
 # Number of equally-spaced nodes on the sliding-band slip circle (r = mid_r).
 # Shared by in_band (exterior) and out_band (hole) so the two half-meshes get
 # IDENTICAL matching nodes there.  Multiple of 14 (pole pairs) so the rotor
-# step aligns to whole nodes for n_steps ∈ {12,24,36,72,...} (1008 = 14·72).
+# step aligns to whole nodes for n_steps ∈ {12,24,36,72,...}.
+# 1008 = 14·72 → 252 nodes per 90° sector ≈ 0.46 mm tangential spacing on the
+# slip ring.  This count drives the angular resolution of the rotor-rotation
+# merge, so lowering it raises torque ripple — keep it high.  The VISUAL band
+# width is controlled by the radial air-gap size field, not this.
 _N_SLIP = 1008
 
 # Domain ids (must match _DOMAIN_ID in the API rasterisation for consistency)
@@ -1441,8 +1445,18 @@ def build_mesh_from_polygons(polys: dict,
                 # again).  The OLD problem was the 4 mm transition that spread
                 # semi-fine mesh deep into the rotor/ring; the SHORT ramp below
                 # keeps the surrounding iron and the rotating ring coarse.
-                _half = _gap * 1.5                 # gap + tooth tips (torque needs them)
-                _trans = max(0.4, _gap * 3.0)      # medium ramp (was 4 mm) → ring much tighter
+                # Two knobs, decoupled:
+                #   _half  = half-width of the UNIFORMLY-fine core (the visually
+                #            "dense" strip).  Shrink it to the gap so only the
+                #            air-gap itself is densely meshed.
+                #   _trans = length of the GRADUAL ramp back to the global size.
+                #            Keep it gentle — a short/steep ramp makes high
+                #            aspect-ratio elements at the gap edge and the
+                #            average torque sags (~8 %).  A gentle ramp keeps the
+                #            gap-edge element quality (and the torque) while the
+                #            triangles still coarsen quickly away from the gap.
+                _half = _gap * 0.6                 # dense core ≈ the gap (±0.3 mm)
+                _trans = _gap * 3.0                # gentle ramp (keeps torque)
                 _formula = (f"min({float(mesh_size_mm)}, {_ag_h}+"
                             f"({float(mesh_size_mm)}-{_ag_h})*"
                             f"max(0,(fabs(sqrt(x*x+y*y)-{_r_ag})-{_half})/{_trans}))")
@@ -2596,6 +2610,47 @@ def fem_transient_sliding_band(
         direction = 1.0 if nm.endswith("+") else -1.0
         if ph in "ABC":
             coil_info.append((idx, areas_s[idx], direction, ph))
+
+    # ── Loss bookkeeping — iron Bertotti + magnet eddy from the ACTUAL B(t) ──
+    # The sliding-band run gives a clean B(t) per element over a full electrical
+    # period, so instead of the remesh path's single-snapshot Bertotti we use
+    # the genuine time-derivative of the field:
+    #   • classical eddy  ∝ ⟨(dB/dt)²⟩  (frequency-correct for ALL harmonics —
+    #     slot ripple included — because faster flux ⇒ larger dB/dt ⇒ ∝ f²)
+    #   • hysteresis      ∝ f·B_ac²     (B_ac = AC excursion, so a DC-biased
+    #     rotor tooth contributes only its ripple, not its standing flux)
+    #   • magnet eddy     = σ·d²/12·⟨(dB/dt)²⟩  (honest slab loss, no empirical
+    #     ripple-fraction fudge)
+    # The 20SW1200 Bertotti coefficients (kh,kc,ke) are fitted to the measured
+    # loss-vs-frequency curves, so this IS the frequency-dependent loss model.
+    from motor_ai_sim import materials as _mat_lib
+    from motor_ai_sim.config import get_material_assignments as _gma
+    _ma = _gma() or {}
+    try:
+        _steel_s = _mat_lib.get_steel(_ma.get("stator_core", "20SW1200"))
+        _steel_r = _mat_lib.get_steel(_ma.get("rotor_core",  "20SW1200"))
+    except Exception:
+        _steel_s = _steel_r = None
+    try:
+        _magnet_mat = _mat_lib.get_magnet(_ma.get("magnet")) if _ma.get("magnet") else None
+    except Exception:
+        _magnet_mat = None
+    _sigma_mag = float(getattr(_magnet_mat, "sigma", 0.0)) if _magnet_mat else 0.0
+    _d_mag_m = (float(p.r_rotor_out - p.r_rotor_in - 0.0012)
+                if (p.r_rotor_out - p.r_rotor_in) > 0.002 else 0.016)
+    areas_r = _triangle_areas(half["r"]["mesh"])
+    _iron_s_idx = np.asarray(half["s"]["cells"].get(int(DOM_STATOR), np.array([], int)), int)
+    _iron_r_idx = np.asarray(half["r"]["cells"].get(int(DOM_ROTOR),  np.array([], int)), int)
+    _mag_parts = []
+    for _tag, _idx in half["r"]["cells"].items():
+        _m = matr0.get(int(_tag))
+        if _m is not None and (abs(_m.Mx) + abs(_m.My)) > 0:
+            _mag_parts.append(np.asarray(_idx, int))
+    _mag_idx = np.concatenate(_mag_parts) if _mag_parts else np.array([], int)
+    # Per-frame B histories for the loss elements only (keeps memory small).
+    _hist_sx = []; _hist_sy = []; _hist_rx = []; _hist_ry = []
+    _hist_mx = []; _hist_my = []
+
     SAT = {DOM_STATOR, DOM_ROTOR, DOM_SHAFT}
     # Per-tag base μ_r (air=1, coil=1, magnet=μ_rec, iron=μ_steel) + BH curves
     # for the saturable iron tags only.
@@ -2659,6 +2714,12 @@ def fem_transient_sliding_band(
                     idx = h["cells"][tag]
                     Bp90 = float(np.percentile(Bm[idx], 90)) if idx.size else 0.0
                     mu[hn][tag] = 0.5 * mu[hn][tag] + 0.5 * _mu_r_from_bh(curve, Bp90)
+        # capture the converged per-element B for the loss integrals
+        _Bxs, _Bys = _per_triangle_B(half["s"]["mesh"], A[:nsn])
+        _Bxr, _Byr = _per_triangle_B(half["r"]["mesh"], A[nsn:])
+        _hist_sx.append(_Bxs[_iron_s_idx]); _hist_sy.append(_Bys[_iron_s_idx])
+        _hist_rx.append(_Bxr[_iron_r_idx]); _hist_ry.append(_Byr[_iron_r_idx])
+        _hist_mx.append(_Bxr[_mag_idx]);    _hist_my.append(_Byr[_mag_idx])
         # torque (Arkkio over the gap)
         Tq = _arkkio_torque(mesh_all, A, p.r_rotor_out, p.r_stator_in,
                             p.stack_length) * NS
@@ -2690,12 +2751,59 @@ def fem_transient_sliding_band(
             if T_series and abs(Tavg) > 1e-9 else 0.0)
     Vpk = float(max(max(map(abs, VA)), max(map(abs, VB)), max(map(abs, VC)))) if VA else 0.0
     P_cu = 3.0 * R_phase * float(I_phase_rms) ** 2
-    log.info("SB transient: %d frames, %d slip nodes, %.1fs",
-             n_total, Nring, _t.time() - t0)
-    # Loss series (Fe + magnet eddy not yet computed on the SB path → 0).
+
+    # ── Losses from the captured B(t) (cycle-averaged → constant series) ──────
+    _two_pi2 = 2.0 * math.pi ** 2
+
+    def _ac_dbdt(hx, hy):
+        """Per-element AC peak² (½·peak-to-peak per component) and mean (dB/dt)²
+        over the periodic cycle."""
+        if not hx or np.asarray(hx[0]).size == 0:
+            return np.array([]), np.array([])
+        X = np.asarray(hx); Y = np.asarray(hy)          # (n_total, n_elem)
+        Bac2 = (((X.max(0) - X.min(0)) * 0.5) ** 2
+                + ((Y.max(0) - Y.min(0)) * 0.5) ** 2)
+        if X.shape[0] >= 3:
+            dX = (np.roll(X, -1, 0) - np.roll(X, 1, 0)) / (2.0 * dt)
+            dY = (np.roll(Y, -1, 0) - np.roll(Y, 1, 0)) / (2.0 * dt)
+            dbdt2 = np.mean(dX ** 2 + dY ** 2, axis=0)
+        else:
+            dbdt2 = np.zeros(X.shape[1])
+        return Bac2, dbdt2
+
+    def _iron_P(hx, hy, idx, areas_half, mat):
+        if mat is None or idx.size == 0:
+            return 0.0
+        Bac2, dbdt2 = _ac_dbdt(hx, hy)
+        if Bac2.size == 0:
+            return 0.0
+        kh = float(getattr(mat, "core_loss_kh", 0.0))
+        kc = float(getattr(mat, "core_loss_kc", 0.0))
+        ke = float(getattr(mat, "core_loss_ke", 0.0))
+        sf = float(getattr(mat, "stacking_factor", 0.95))
+        vol = areas_half[idx] * p.stack_length
+        p_dens = (kh * f_elec * Bac2                      # hysteresis  ∝ f·B_ac²
+                  + (kc / _two_pi2) * dbdt2               # classical   ∝ ⟨(dB/dt)²⟩
+                  + ke * f_elec ** 1.5
+                    * np.power(np.maximum(Bac2, 0.0), 0.75))   # excess
+        return float(np.sum(p_dens * vol * sf))
+
+    P_fe_avg = (_iron_P(_hist_sx, _hist_sy, _iron_s_idx, areas_s, _steel_s)
+                + _iron_P(_hist_rx, _hist_ry, _iron_r_idx, areas_r, _steel_r)) * NS
+
+    P_mag_avg = 0.0
+    if _sigma_mag > 0.0 and _mag_idx.size:
+        _, dbdt2_m = _ac_dbdt(_hist_mx, _hist_my)
+        if dbdt2_m.size:
+            vol_m = areas_r[_mag_idx] * p.stack_length
+            p_dens_m = _sigma_mag * (_d_mag_m ** 2 / 12.0) * dbdt2_m
+            P_mag_avg = float(np.sum(p_dens_m * vol_m)) * NS
+
+    log.info("SB transient: %d frames, %d slip nodes, P_fe=%.1f P_mag=%.1f, %.1fs",
+             n_total, Nring, P_fe_avg, P_mag_avg, _t.time() - t0)
     P_cu_series = [P_cu] * n_total
-    P_fe_series = [0.0] * n_total
-    P_mag_series = [0.0] * n_total
+    P_fe_series = [P_fe_avg] * n_total
+    P_mag_series = [P_mag_avg] * n_total
     P_tot_series = [c + f + e for c, f, e in zip(P_cu_series, P_fe_series, P_mag_series)]
     P_mech_avg = float(Tavg * 2.0 * math.pi * rpm / 60.0)
     return {

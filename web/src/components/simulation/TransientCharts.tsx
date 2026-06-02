@@ -126,6 +126,13 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
       band_thickness_mm:  String(readMeshSetting('bandThickness', 0.4)),
       n_sectors:          String(readMeshSetting('nSectors',    4)),
       stator_fillet_mm:   String(readMeshSetting('statorFillet', 0.0)),
+      // Request the SAME include_frames/n_frames as the FemAnimationViewer
+      // so both panels hit the exact same backend cache key and the heavy
+      // FEM sweep runs ONCE instead of twice (the lock would otherwise
+      // serialise two separate computes → 2× wall-clock).  The extra
+      // frames payload is ignored here.
+      include_frames:     'true',
+      n_frames:           String(steps),
     }).toString();
     // Helper: fetch with auto-retry against transient connection drops.
     // The uvicorn supervisor sometimes respawns the worker mid-request when

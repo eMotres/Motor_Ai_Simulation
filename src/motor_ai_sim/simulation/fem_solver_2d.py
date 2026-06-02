@@ -46,6 +46,12 @@ _GMSH_LOCK = threading.RLock()
 
 MU0 = 4e-7 * math.pi
 
+# Number of equally-spaced nodes on the sliding-band slip circle (r = mid_r).
+# Shared by in_band (exterior) and out_band (hole) so the two half-meshes get
+# IDENTICAL matching nodes there.  Multiple of 14 (pole pairs) so the rotor
+# step aligns to whole nodes for n_steps ∈ {12,24,36,72,...} (1008 = 14·72).
+_N_SLIP = 1008
+
 # Domain ids (must match _DOMAIN_ID in the API rasterisation for consistency)
 DOM_AIR     = 0
 DOM_STATOR  = 1
@@ -265,14 +271,23 @@ def _simplify_polys(polys: dict, tol_mm: float = 0.005,
             if out.get("rotor") is not None: rotor_solids.append(out["rotor"])
             if out.get("shaft") is not None: rotor_solids.append(out["shaft"])
             rotor_solids += [m for m, _p in out["magnets"] if m is not None]
-            in_band = _Pt(0, 0).buffer(mid_r, resolution=256)
+            # Build the mid_r slip circle from ONE explicit equally-spaced point
+            # ring shared by BOTH in_band (exterior) and out_band (hole), so the
+            # sliding-band transfinite mesh gets identical, matching nodes there
+            # (rotor & stator differences don't touch mid_r, so it stays intact).
+            from shapely.geometry import Polygon as _SPoly2
+            _N = _N_SLIP
+            mid_ring = [(mid_r * math.cos(2*math.pi*i/_N),
+                         mid_r * math.sin(2*math.pi*i/_N)) for i in range(_N)]
+            rout_ring = [(r_outer * math.cos(2*math.pi*i/_N),
+                          r_outer * math.sin(2*math.pi*i/_N)) for i in range(_N)]
+            in_band = _SPoly2(mid_ring)
             if rotor_solids:
                 in_band = in_band.difference(_uu(rotor_solids))
             if not in_band.is_valid: in_band = in_band.buffer(0)
             out["in_band"] = in_band
 
-            out_band = _Pt(0, 0).buffer(r_outer, resolution=256).difference(
-                       _Pt(0, 0).buffer(mid_r, resolution=256))
+            out_band = _SPoly2(rout_ring, [mid_ring])
             if out.get("stator") is not None:
                 out_band = out_band.difference(out["stator"])
             if not out_band.is_valid: out_band = out_band.buffer(0)
@@ -583,6 +598,15 @@ def _build_sliding_band_meshes(
     """
     polys_s, polys_r = _split_polys_for_sliding_band(polys)
 
+    # Slip-ring radius (mm) — force BOTH halves to keep an identical,
+    # equally-spaced node ring there (transfinite) so they merge by node
+    # identity when the rotor is rotated by an integer node step.
+    _slip_r = polys.get("mid_r_mm")
+    if _slip_r is None and geo_cfg:
+        _ro = float(geo_cfg.get("rotor_outer_radius", 0.0))
+        _si = float(geo_cfg.get("stator_inner_radius", 0.0))
+        _slip_r = 0.5 * (_ro + _si) if (_ro > 0 and _si > _ro) else None
+
     # Map the air domains onto the keys the mesh builder recognises:
     #   rotor half:  in_band  → "air_gap"   (DOM_AIRGAP)
     #   stator half: out_band → "air_outer" (DOM_OUTER, far-field air)
@@ -608,7 +632,7 @@ def _build_sliding_band_meshes(
         outer_air_factor=outer_air_factor,
         motion_band=False, band_thickness_mm=band_thickness_mm,
         n_sectors=n_sectors, geo_cfg=geo_cfg,
-        add_background_air=False,
+        add_background_air=False, slip_transfinite_r=_slip_r,
     )
 
     # Build rotor half with the SAME sector clip as the stator
@@ -626,7 +650,7 @@ def _build_sliding_band_meshes(
         outer_air_factor=outer_air_factor,
         motion_band=False, band_thickness_mm=band_thickness_mm,
         n_sectors=n_sectors, geo_cfg=geo_cfg,
-        add_background_air=False,
+        add_background_air=False, slip_transfinite_r=_slip_r,
     )
 
     # Apply rotor rotation as a rigid body — node coords only, topology
@@ -1028,6 +1052,7 @@ def build_mesh_from_polygons(polys: dict,
                              band_thickness_mm: float = 0.4,
                              n_sectors: int = 1,
                              add_background_air: bool = True,
+                             slip_transfinite_r: Optional[float] = None,
                              ) -> Tuple["MeshTri", np.ndarray]:
     """Construct a conforming triangle mesh from the CadQuery polygon dict.
 
@@ -1429,6 +1454,31 @@ def build_mesh_from_polygons(polys: dict,
                 gmsh.option.setNumber("Mesh.MeshSizeExtendFromBoundary", 0)
         except Exception as _e:
             log.warning("air-gap size field skipped: %s", _e)
+
+        # ── Sliding-band slip ring: force the mid_r boundary to keep EXACTLY
+        # its polygon vertices (transfinite, 2 nodes/edge) so both half-meshes
+        # share an identical, equally-spaced node ring at r = slip_transfinite_r.
+        # Matching nodes let the two halves MERGE by node identity (a shared
+        # DOF) when the rotor is rotated by an integer node step — no
+        # interpolation, no flux-coupling error.
+        if slip_transfinite_r is not None:
+            try:
+                _rs = float(slip_transfinite_r)
+                _n_ring = 0
+                for (_d, _ct) in gmsh.model.getEntities(1):
+                    _bp = gmsh.model.getBoundary([(1, _ct)], oriented=False,
+                                                 combined=False)
+                    _rr = []
+                    for (_pd, _pt) in _bp:
+                        _xyz = gmsh.model.getValue(0, _pt, [])
+                        _rr.append(math.hypot(_xyz[0], _xyz[1]))
+                    if _rr and all(abs(_r - _rs) < 1e-3 for _r in _rr):
+                        gmsh.model.mesh.setTransfiniteCurve(_ct, 2)
+                        _n_ring += 1
+                log.info("slip ring: %d transfinite edges at r=%.3f mm",
+                         _n_ring, _rs)
+            except Exception as _e:
+                log.warning("slip transfinite skipped: %s", _e)
 
         gmsh.model.mesh.generate(2)
 

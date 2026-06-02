@@ -1294,6 +1294,47 @@ async def get_fem_field2d(
 
 _fem_transient_cache: Dict[tuple, Dict] = {}
 
+# Scalar keys a non-keyframe step needs — returning only these from a
+# worker process slashes the pickle payload (no mesh / A_z arrays).
+_TRANSIENT_SCALAR_KEYS = (
+    "T_em_Nm", "P_cu_W", "P_fe_W", "P_mag_eddy_W",
+    "psi_A_Wb", "psi_B_Wb", "psi_C_Wb", "symmetry_mult", "n_sectors",
+)
+
+
+def _transient_frame_worker(task):
+    """Picklable worker: solve ONE rotor angle in a SEPARATE process.
+
+    Per-frame gmsh meshing dominates the cost (~11 s of ~15 s) and the
+    in-process _GMSH_LOCK serialises gmsh calls within a process, so the
+    only way to use the box's many cores is to fan the frames out across
+    processes.  Each worker has its own gmsh state — no shared lock.
+
+    task = (k, rot_deg, solve_kwargs, want_full)
+    Returns (k, result_dict_or_None).  Non-keyframes are slimmed to the
+    scalar series keys to keep the pickled payload tiny.
+    """
+    k, rot_deg, kw, want_full = task
+    try:
+        import logging as _lg
+        _lg.disable(_lg.WARNING)
+    except Exception:
+        pass
+    from motor_ai_sim.simulation.fem_solver_2d import fem_solve_for_sim
+    # A magnet edge landing exactly on the sector cut makes gmsh reject the
+    # mesh; a sub-FEM-resolution angular jitter dodges it without changing
+    # the physics.
+    for jitter in (0.0, +0.05, -0.05, +0.13, -0.13, +0.21, -0.21):
+        try:
+            r = fem_solve_for_sim(rotor_angle_deg=rot_deg + jitter, **kw)
+            if want_full:
+                return (k, r)
+            return (k, {key: r.get(key) for key in _TRANSIENT_SCALAR_KEYS})
+        except Exception:
+            continue
+    return (k, None)
+
+
 # Shared progress state for the currently-running transient.  Polled by
 # the frontend via /physics/fem_transient/progress so the user sees
 # "Frame X / N — Ys elapsed — ETA Zs" instead of a spinning "Running…".
@@ -1467,52 +1508,66 @@ def get_fem_transient(
         "phase":     "fem-solve",
     }
 
-    # Some rotor angles land a magnet edge right on the sector cut, producing
-    # a degenerate Shapely polygon that gmsh rejects with "Curve loop is not
-    # closed".  When that happens we re-try with a small angular jitter
-    # (±0.05° mech, well below the FEM resolution so the physics is
-    # unchanged).  If even the jittered solve fails, we re-use the PREVIOUS
-    # step's result so the transient curve still has a value at that index
-    # — much better UX than a hard 500 that wipes the whole panel.
-    _last_good_r: Optional[Dict] = None
-    def _solve_robust(rot_deg: float) -> Dict:
-        for jitter in (0.0, +0.05, -0.05, +0.13, -0.13, +0.21, -0.21):
-            try:
-                return fem_solve_for_sim(
-                    rotor_angle_deg=rot_deg + jitter, gamma_deg=gamma_deg,
-                    mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm,
-                    outer_air_factor=outer_air_factor,
-                    motion_band=motion_band, band_thickness_mm=band_thickness_mm,
-                    n_sectors=int(n_sectors), stator_fillet_mm=stator_fillet_mm,
-                    I_phase_rms=I_phase_rms,
-                )
-            except Exception as e:
-                log.warning("fem_solve failed at rotor=%.3f° (jitter %+.3f): %s",
-                            rot_deg, jitter, e)
-                continue
-        if _last_good_r is not None:
-            log.warning("fem_solve failed at rotor=%.3f° even with jitter — "
-                         "re-using previous step.", rot_deg)
-            return _last_good_r
+    # ── Parallel frame solve across processes ───────────────────────────
+    # Each rotor angle is independent and per-frame gmsh meshing dominates
+    # (~11 s of ~15 s); fan the frames out across processes so the box's
+    # many cores actually get used (the in-process _GMSH_LOCK can't).
+    import os as _os
+    import concurrent.futures as _cf
+    _solve_kw = dict(
+        gamma_deg=gamma_deg, mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm,
+        outer_air_factor=outer_air_factor, motion_band=motion_band,
+        band_thickness_mm=band_thickness_mm, n_sectors=int(n_sectors),
+        stator_fillet_mm=stator_fillet_mm, I_phase_rms=I_phase_rms,
+    )
+    _tasks = [(k, float(rotor_deg[k]), _solve_kw, (k in frame_idxs))
+              for k in range(n_total)]
+    results: List[Optional[Dict]] = [None] * n_total
+    # Leave a few cores free for the OS + uvicorn; cap at the frame count.
+    n_workers = min(n_total, max(1, (_os.cpu_count() or 4) - 4))
+    try:
+        with _cf.ProcessPoolExecutor(max_workers=n_workers) as _ex:
+            _futs = [_ex.submit(_transient_frame_worker, t) for t in _tasks]
+            _done = 0
+            for _fut in _cf.as_completed(_futs):
+                _kk, _rr = _fut.result()
+                results[_kk] = _rr
+                _done += 1
+                _el = _time.time() - _t_loop_start
+                _fem_transient_progress["current"]["step"] = _done
+                _fem_transient_progress["current"]["elapsed_s"] = _el
+                _fem_transient_progress["current"]["per_step_s"] = _el / max(_done, 1)
+                _fem_transient_progress["current"]["eta_s"] = \
+                    (_el / max(_done, 1)) * (n_total - _done)
+    except Exception as e:
+        log.exception("parallel FEM transient failed")
+        raise HTTPException(status_code=500, detail=f"FEM transient failed: {e}")
+
+    # Backfill any frame whose every jittered solve failed with the nearest
+    # successful neighbour so the series stays continuous.
+    _first_good = next((r for r in results if r is not None), None)
+    if _first_good is None:
         raise HTTPException(status_code=500,
-            detail=f"FEM transient failed: every jittered solve at "
-                    f"rotor={rot_deg:.3f}° was rejected by gmsh")
+                            detail="FEM transient: every frame failed to mesh/solve")
+    _lastg = _first_good
+    for _i in range(n_total):
+        if results[_i] is None:
+            results[_i] = _lastg
+        else:
+            _lastg = results[_i]
 
     try:
         for k in range(n_total):
             rot_deg = float(rotor_deg[k])
-            r = _solve_robust(rot_deg)
-            _last_good_r = r
-            # ── update progress AFTER each FEM solve completes ───────────
-            _fem_transient_progress["current"]["step"] = k + 1
-            _fem_transient_progress["current"]["elapsed_s"] = \
-                _time.time() - _t_loop_start
+            r = results[k]
             T_em_series.append(float(r.get("T_em_Nm", 0.0)))
             P_cu_series.append(float(r.get("P_cu_W", 0.0)))
             P_fe_series.append(float(r.get("P_fe_W", 0.0)))
             P_eddy_series.append(float(r.get("P_mag_eddy_W", 0.0)))
             # ── Capture full field for the animation keyframes ───────────
-            if k in frame_idxs:
+            # Guard against a backfilled (slim, scalar-only) result landing
+            # on a keyframe index — skip the frame rather than KeyError.
+            if k in frame_idxs and r.get("vertices") is not None:
                 # Strip the bulky polys_for_outlines field on all but the
                 # FIRST frame: stator outlines are identical across the
                 # period and the rotor outline rotates with rotor_angle_deg,

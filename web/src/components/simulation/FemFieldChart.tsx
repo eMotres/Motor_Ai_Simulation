@@ -20,7 +20,7 @@ import {
 } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { Canvas, useThree } from '@react-three/fiber';
-import { OrbitControls, OrthographicCamera } from '@react-three/drei';
+import { OrbitControls, OrthographicCamera, GizmoHelper, GizmoViewcube } from '@react-three/drei';
 import * as THREE from 'three';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
@@ -644,8 +644,14 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
               <FitView payload={payload} controlsRef={controlsRef}/>
               <ambientLight intensity={1}/>
               <FieldMesh payload={payload} mode={mode}/>
-              <OrbitControls ref={controlsRef} enableDamping={false}
+              <OrbitControls makeDefault ref={controlsRef} enableDamping={false}
                 enableRotate enablePan enableZoom zoomSpeed={1.2}/>
+              {/* Orientation cube (top-right), same as the Geometry view */}
+              <GizmoHelper alignment="top-right" margin={[48, 48]}>
+                <GizmoViewcube
+                  color="#1e293b" textColor="#cbd5e1" strokeColor="#3b82f6"
+                  hoverColor="#2563eb"/>
+              </GizmoHelper>
             </Canvas>
           )}
         </Box>

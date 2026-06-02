@@ -1398,9 +1398,10 @@ def build_mesh_from_polygons(polys: dict,
         #  (c) a RADIAL AIR-GAP field (below) — the global size (≈4 mm) is 8×
         #      the 0.5 mm gap, so without this the gap had <1 element across it
         #      and the Maxwell-stress torque was grossly under-resolved and
-        #      mesh-dependent (23→37 N·m).  Force ~3 element layers across the
-        #      gap + a smooth ramp into the adjacent tooth tips / rotor surface,
-        #      exactly where the torque-producing flux lives (Ansys does the same).
+        #      mesh-dependent (23→37 N·m).  Force ~3 element layers ACROSS THE
+        #      GAP ONLY, with a quick ramp back to the global size just outside
+        #      it — so the rotor/stator iron and the rotating ring stay coarse
+        #      and only the gap itself is fine (Ansys does the same).
         try:
             _gc = geo_cfg or {}
             _r_ro = float(_gc.get("rotor_outer_radius", 0.0))
@@ -1409,8 +1410,14 @@ def build_mesh_from_polygons(polys: dict,
                 _r_ag = 0.5 * (_r_ro + _r_si)
                 _gap  = _r_si - _r_ro
                 _ag_h = max(0.06, min(min_size_mm, _gap / 3.0))   # ~3 layers in gap
-                _half = _gap * 1.5                                # full-fine half-width
-                _trans = max(1.0, float(mesh_size_mm))            # ramp distance
+                # Fine core = the gap + a thin sliver of the tooth tips on each
+                # side (the tooth-tip field sets the gap B, so the torque needs
+                # it — pure gap-only refinement makes the torque mesh-dependent
+                # again).  The OLD problem was the 4 mm transition that spread
+                # semi-fine mesh deep into the rotor/ring; the SHORT ramp below
+                # keeps the surrounding iron and the rotating ring coarse.
+                _half = _gap * 1.5                 # gap + tooth tips (torque needs them)
+                _trans = max(0.4, _gap * 3.0)      # medium ramp (was 4 mm) → ring much tighter
                 _formula = (f"min({float(mesh_size_mm)}, {_ag_h}+"
                             f"({float(mesh_size_mm)}-{_ag_h})*"
                             f"max(0,(fabs(sqrt(x*x+y*y)-{_r_ag})-{_half})/{_trans}))")

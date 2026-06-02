@@ -1605,6 +1605,7 @@ def get_fem_transient(
     n_frames:            int   = 12,      # ← #frames sampled for the animation
     run_id:              str   = "",      # ← Stop-button cancellation token
     fresh:               bool  = False,   # ← "Start fresh" wipes the frame cache
+    sliding_band:        bool  = False,   # ← mesh-once sliding band (smooth T, clean V)
 ):
     """Transient FEM analysis — runs N solves per electrical period and
     returns time-resolved T(t), losses(t) and V_phase(t).
@@ -1621,6 +1622,32 @@ def get_fem_transient(
     """
     import numpy as _np
     import math as _math
+
+    # ── Sliding-band path: mesh once + rotate rotor → smooth T(t), clean V(t).
+    # Bypasses the parallel remesh-per-frame machinery entirely.
+    if sliding_band:
+        _sb_key = ("sb", int(n_steps_per_period), round(n_periods, 2),
+                   round(gamma_deg, 1), round(I_phase_rms, 1),
+                   round(mesh_size_mm, 2), round(min_size_mm, 2),
+                   round(outer_air_factor, 2), int(n_sectors),
+                   round(stator_fillet_mm, 2))
+        if not fresh and _sb_key in _fem_transient_cache:
+            return _fem_transient_cache[_sb_key]
+        try:
+            from motor_ai_sim.simulation.fem_solver_2d import fem_transient_sliding_band
+            _sbres = fem_transient_sliding_band(
+                n_steps_per_period=int(n_steps_per_period), n_periods=float(n_periods),
+                gamma_deg=float(gamma_deg), I_phase_rms=float(I_phase_rms),
+                mesh_size_mm=float(mesh_size_mm), min_size_mm=float(min_size_mm),
+                outer_air_factor=float(outer_air_factor),
+                n_sectors=int(n_sectors) if int(n_sectors) > 1 else 4,
+                stator_fillet_mm=float(stator_fillet_mm))
+            _fem_transient_cache[_sb_key] = _sbres
+            return _sbres
+        except Exception as _e:
+            log.exception("sliding-band transient failed")
+            raise HTTPException(status_code=500,
+                                detail=f"sliding-band transient failed: {_e}")
 
     key = (
         int(n_steps_per_period), round(n_periods, 2),

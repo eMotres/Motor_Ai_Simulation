@@ -2019,6 +2019,26 @@ def build_materials(
             pass
         return None
 
+    def _mu_r_for(part_key: str, default: float = 1.0) -> float:
+        """Resolve a part's relative permeability from its linked material,
+        searching all library categories.  A non-magnetic material (e.g.
+        Aluminium_6061, whose mu_r is None) returns 1.0 — NOT the old 1000
+        steel default that turned the aluminium shaft into a spurious flux
+        path (it showed ~2.4 T; aluminium is non-magnetic, μ_r≈1)."""
+        name = assignments.get(part_key)
+        if not name:
+            return default
+        for cat in ("steel", "metal", "conductor", "magnet", "other", "custom"):
+            try:
+                m = mat_lib.get_material(cat, name)
+            except Exception:
+                continue
+            mu = getattr(m, "mu_r", None)
+            if mu is not None and float(mu) > 1.0:
+                return float(mu)
+            return 1.0          # found, but non-magnetic
+        return default
+
     bh_stator = _bh_for("stator_core", "steel")
     bh_rotor  = _bh_for("rotor_core",  "steel")
     # Shaft is typically aluminium (conductor) or steel — try steel silently;
@@ -2027,6 +2047,9 @@ def build_materials(
         bh_shaft = _bh_for("shaft", "steel")
     except Exception:
         bh_shaft = None
+    # μ_r for the shaft: a measured steel BH curve → mu_r_steel; otherwise the
+    # linked material's own μ_r (Aluminium → 1.0), never a hard-coded 1000.
+    shaft_mu_r = mu_r_steel if bh_shaft is not None else _mu_r_for("shaft", 1.0)
     # Magnet recoil μ_r, Br and BH curve (2nd-quadrant demag curve) from
     # the linked magnet material.
     mag_name = assignments.get("magnet")
@@ -2053,8 +2076,7 @@ def build_materials(
         DOM_OUTER:  FEMMaterial("outer",  mu_r=1.0),
         DOM_STATOR: FEMMaterial("stator", mu_r=mu_r_steel, bh_curve=bh_stator),
         DOM_ROTOR:  FEMMaterial("rotor",  mu_r=mu_r_steel, bh_curve=bh_rotor),
-        DOM_SHAFT:  FEMMaterial("shaft",  mu_r=(1000.0 if bh_shaft is None else mu_r_steel),
-                                          bh_curve=bh_shaft),
+        DOM_SHAFT:  FEMMaterial("shaft",  mu_r=shaft_mu_r, bh_curve=bh_shaft),
         DOM_COIL:   FEMMaterial("coil",   mu_r=1.0),
         DOM_MAG_N:  FEMMaterial("mag_N",  mu_r=mu_rec),
         DOM_MAG_S:  FEMMaterial("mag_S",  mu_r=mu_rec),

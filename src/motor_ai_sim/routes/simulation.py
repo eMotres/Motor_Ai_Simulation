@@ -1306,6 +1306,23 @@ _fem_frame_cache: Dict[tuple, Dict] = {}
 import threading as _threading
 _fem_transient_lock = _threading.Lock()
 
+
+def clear_simulation_caches() -> None:
+    """Drop every cached 2-D polygon / mesh / field / transient result.
+
+    Called whenever the motor GEOMETRY changes (PUT /api/geometry) so the
+    Mesh tab and the Simulation field/transient re-derive everything from
+    the new cross-section instead of serving stale, old-geometry results.
+    Keys on these caches intentionally omit the geometry parameters (the
+    geometry is treated as a global), so they must be flushed explicitly.
+    """
+    for _c in (_motor_geom_cache, _fem_mesh_cache, _fem_mesh_sb_cache,
+               _fem_field_cache, _fem_transient_cache, _fem_frame_cache):
+        try:
+            _c.clear()
+        except Exception:
+            pass
+
 # Scalar keys a non-keyframe step needs — returning only these from a
 # worker process slashes the pickle payload (no mesh / A_z arrays).
 _TRANSIENT_SCALAR_KEYS = (

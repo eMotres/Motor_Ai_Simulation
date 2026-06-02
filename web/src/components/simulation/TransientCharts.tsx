@@ -310,7 +310,8 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
                 <RcTooltip {...TOOLTIP}/>
                 <Line type="monotone" dataKey="T_em" stroke="#34d399"
                   strokeWidth={2}
-                  dot={{ r: 3, strokeWidth: 0 }}
+                  dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
+                    r={3} fill={d.stroke} stroke="none"/>}
                   activeDot={{ r: 5 }}
                   isAnimationActive={false}/>
               </LineChart>
@@ -336,22 +337,26 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
                 <Legend wrapperStyle={{ fontSize: 10 }}/>
                 <Line type="monotone" dataKey="P_cu" stroke="#fbbf24"
                   name="P_Cu" strokeWidth={2}
-                  dot={{ r: 3, strokeWidth: 0 }}
+                  dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
+                    r={3} fill={d.stroke} stroke="none"/>}
                   activeDot={{ r: 5 }}
                   isAnimationActive={false}/>
                 <Line type="monotone" dataKey="P_fe" stroke="#f87171"
                   name="P_Fe" strokeWidth={2}
-                  dot={{ r: 3, strokeWidth: 0 }}
+                  dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
+                    r={3} fill={d.stroke} stroke="none"/>}
                   activeDot={{ r: 5 }}
                   isAnimationActive={false}/>
                 <Line type="monotone" dataKey="P_mag" stroke="#a78bfa"
                   name="P_Mag" strokeWidth={2}
-                  dot={{ r: 3, strokeWidth: 0 }}
+                  dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
+                    r={3} fill={d.stroke} stroke="none"/>}
                   activeDot={{ r: 5 }}
                   isAnimationActive={false}/>
                 <Line type="monotone" dataKey="P_tot" stroke="#cbd5e1"
                   name="P_total" strokeWidth={2}
-                  dot={{ r: 3, strokeWidth: 0 }}
+                  dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
+                    r={3} fill={d.stroke} stroke="none"/>}
                   activeDot={{ r: 5 }}
                   isAnimationActive={false}/>
               </LineChart>
@@ -377,17 +382,20 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
                 <Legend wrapperStyle={{ fontSize: 10 }}/>
                 <Line type="monotone" dataKey="I_A" stroke="#ef4444"
                   name="I_A" strokeWidth={2}
-                  dot={{ r: 3, strokeWidth: 0 }}
+                  dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
+                    r={3} fill={d.stroke} stroke="none"/>}
                   activeDot={{ r: 5 }}
                   isAnimationActive={false}/>
                 <Line type="monotone" dataKey="I_B" stroke="#10b981"
                   name="I_B" strokeWidth={2}
-                  dot={{ r: 3, strokeWidth: 0 }}
+                  dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
+                    r={3} fill={d.stroke} stroke="none"/>}
                   activeDot={{ r: 5 }}
                   isAnimationActive={false}/>
                 <Line type="monotone" dataKey="I_C" stroke="#60a5fa"
                   name="I_C" strokeWidth={2}
-                  dot={{ r: 3, strokeWidth: 0 }}
+                  dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
+                    r={3} fill={d.stroke} stroke="none"/>}
                   activeDot={{ r: 5 }}
                   isAnimationActive={false}/>
               </LineChart>
@@ -413,17 +421,20 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
                 <Legend wrapperStyle={{ fontSize: 10 }}/>
                 <Line type="monotone" dataKey="V_A" stroke="#ef4444"
                   name="V_A" strokeWidth={2}
-                  dot={{ r: 3, strokeWidth: 0 }}
+                  dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
+                    r={3} fill={d.stroke} stroke="none"/>}
                   activeDot={{ r: 5 }}
                   isAnimationActive={false}/>
                 <Line type="monotone" dataKey="V_B" stroke="#10b981"
                   name="V_B" strokeWidth={2}
-                  dot={{ r: 3, strokeWidth: 0 }}
+                  dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
+                    r={3} fill={d.stroke} stroke="none"/>}
                   activeDot={{ r: 5 }}
                   isAnimationActive={false}/>
                 <Line type="monotone" dataKey="V_C" stroke="#60a5fa"
                   name="V_C" strokeWidth={2}
-                  dot={{ r: 3, strokeWidth: 0 }}
+                  dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
+                    r={3} fill={d.stroke} stroke="none"/>}
                   activeDot={{ r: 5 }}
                   isAnimationActive={false}/>
               </LineChart>

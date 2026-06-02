@@ -2424,6 +2424,281 @@ def _arkkio_torque(mesh, A_nodal: np.ndarray, r_in_m: float, r_out_m: float,
     return (stack_length_m / (MU0 * (r_out_m - r_in_m))) * float(np.sum(integrand))
 
 
+class _SignedUF:
+    """Signed union-find for combining anti-periodic + slip master-slave
+    constraints.  union(a,b,s) means dof_a == s·dof_b; find returns (root, sign)."""
+    __slots__ = ("par", "sgn")
+
+    def __init__(self, n):
+        self.par = list(range(n)); self.sgn = [1] * n
+
+    def find(self, x):
+        p = self.par[x]
+        if p == x:
+            return x, 1
+        r, s = self.find(p)
+        self.par[x] = r; self.sgn[x] *= s
+        return r, self.sgn[x]
+
+    def union(self, a, b, sign):
+        ra, sa = self.find(a); rb, sb = self.find(b)
+        if ra == rb:
+            return
+        self.par[ra] = rb; self.sgn[ra] = sign * sa * sb
+
+
+def fem_transient_sliding_band(
+    n_steps_per_period: int = 12,
+    n_periods: float = 1.0,
+    gamma_deg: float = 0.0,
+    I_phase_rms: float = 85.0,
+    mesh_size_mm: float = 3.0,
+    min_size_mm: float = 0.3,
+    outer_air_factor: float = 1.3,
+    n_sectors: int = 4,
+    stator_fillet_mm: float = 0.0,
+    nonlinear_iterations: int = 14,
+) -> dict:
+    """Sliding-band transient: mesh the stator + rotor halves ONCE, then sweep
+    the rotor by shifting the slip-ring node pairing (no remeshing) so the
+    mesh topology is IDENTICAL every frame.  That removes the per-frame
+    remesh noise → smooth T(t) and clean back-EMF V(t) = R·I + dψ/dt.
+
+    Fixed-mesh formulation: both halves stay in the [0, 360/n_sectors] wedge;
+    the rotor rotation θ = m·slip_spacing is encoded ONLY in the slip pairing
+    (shift by m nodes, sign −1 on every wrap past the sector edge — anti-
+    periodic).  A signed union-find merges the slip pairing with the radial-cut
+    anti-periodic BC.  Iron saturation via per-domain Picard.
+
+    Returns the same dict shape as the parallel transient endpoint expects.
+    """
+    import time as _t
+    from skfem import (Basis, ElementTriP1, BilinearForm, LinearForm, asm,
+                       condense, solve as _sksolve, MeshTri)
+    from skfem.helpers import dot as _dot, grad as _grad
+    from scipy.sparse import csr_matrix as _csr, coo_matrix as _coo, block_diag as _bd
+    from motor_ai_sim.cadquery_geometry import CadQueryMotor
+    from motor_ai_sim.simulation.geometry_2d import params_from_config, MotorDomains2D
+    from motor_ai_sim.config import get_config
+
+    t0 = _t.time()
+    cfg = get_config(); sim = cfg.get("simulation", {})
+    geo = cfg.get("geometry", {}); wind = cfg.get("winding", {})
+    p = params_from_config(); dom = MotorDomains2D(p)
+    NS = int(n_sectors) if n_sectors and n_sectors > 1 else 4
+    sector_deg = 360.0 / NS
+    pole_pairs = p.num_poles // 2
+    n_parallel = wind.get("n_parallel", 2)
+    n_wires = int(geo.get("num_wires_per_slot", 14))
+    R_phase = float(wind.get("phase_resistance_ohm", 0.018))
+    rpm = float(sim.get("rpm", 3950)); f_elec = float(sim.get("frequency", 921.67))
+    slot_area_m2 = p.slot_width_m * p.slot_height_m * p.fill_factor
+    mid = 0.5 * (p.r_rotor_out + p.r_stator_in)
+
+    def _currents(rotor_angle_deg):
+        Ipk = float(I_phase_rms) / n_parallel * math.sqrt(2)
+        te = math.radians(rotor_angle_deg * pole_pairs + gamma_deg + 285.0)
+        return {'A': Ipk * math.cos(te),
+                'B': Ipk * math.cos(te - 2 * math.pi / 3),
+                'C': Ipk * math.cos(te + 2 * math.pi / 3)}
+
+    # ── Build the two halves ONCE ────────────────────────────────────────
+    motor = CadQueryMotor()
+    polys = motor.get_2d_polygons(rotor_angle_deg=0.0)
+    polys = _simplify_polys(polys, tol_mm=0.005, stator_fillet_mm=stator_fillet_mm)
+    ms, ts, cs, mr, tr, cr = _build_sliding_band_meshes(
+        polys, 0.0, mesh_size_mm, min_size_mm=min_size_mm,
+        outer_air_factor=outer_air_factor, band_thickness_mm=0.4,
+        n_sectors=NS, geo_cfg=motor.parameters,
+        normal_deviation_deg=8.0, aspect_ratio=10.0)
+    Ps, Tts = ms.p.copy(), ms.t.copy(); Pr, Ttr = mr.p.copy(), mr.t.copy()
+    nsn = Ps.shape[1]
+    Pall = np.hstack([Ps, Pr]); Tall = np.hstack([Tts, Ttr + nsn])
+    n = Pall.shape[1]
+    mesh_all = MeshTri(Pall, Tall)
+
+    def _ring(P):
+        r = np.hypot(P[0], P[1]); idx = np.where(np.abs(r - mid) < 1e-6)[0]
+        ang = np.degrees(np.arctan2(P[1, idx], P[0, idx])) % 360.0
+        o = np.argsort(ang); return idx[o]
+    sring = _ring(Ps); rring = _ring(Pr)
+    Nring = min(sring.size, rring.size)
+    sring = sring[:Nring]; rring = rring[:Nring]
+    spacing = sector_deg / (Nring - 1)
+
+    # Constant radial-cut anti-periodic pairs on the combined mesh.
+    Mn, Sn = _pair_sector_cut_nodes(mesh_all, NS)
+
+    # Forms
+    @BilinearForm
+    def _stiff(u, v, w): return _dot(_grad(u), _grad(v))
+    @LinearForm
+    def _f1(v, w): return 1.0 * v
+    @LinearForm
+    def _fdy(v, w): return _grad(v)[1]
+    @LinearForm
+    def _fdx(v, w): return _grad(v)[0]
+
+    # ── Pre-assemble per-tag stiffness K0 + constant magnet source ───────
+    matr0 = build_materials(_currents(0.0), dom.winding_layout,
+                            getattr(cr, "polys", polys), 0.0, slot_area_m2, n_wires)
+    # unit-current stator sources (per phase), magnet source is in rotor half
+    half = {}
+    for name, (P, T, tags, mats) in (
+        ("s", (Ps, Tts, ts, None)), ("r", (Pr, Ttr, tr, matr0))):
+        mesh = MeshTri(P, T); b = Basis(mesh, ElementTriP1()); nh = b.N
+        K0 = {}; cells = {}; mu0 = {}
+        for tag in np.unique(tags):
+            idx = np.where(tags == tag)[0]; cells[int(tag)] = idx
+            sb = Basis(mesh, ElementTriP1(), elements=idx)
+            K0[int(tag)] = asm(_stiff, sb)
+        half[name] = dict(mesh=mesh, b=b, n=nh, K0=K0, cells=cells)
+    # magnet source (rotor half, constant — magnets fixed at angle 0)
+    f_mag = np.zeros(half["r"]["n"])
+    for tag, idx in half["r"]["cells"].items():
+        m = matr0.get(int(tag))
+        if m is None or (abs(m.Mx) + abs(m.My)) <= 0:
+            continue
+        sb = Basis(half["r"]["mesh"], ElementTriP1(), elements=idx)
+        f_mag += asm(_fdy, sb) * m.Mx - asm(_fdx, sb) * m.My
+    # per-phase unit-current stator source vectors
+    f_coil = {'A': np.zeros(half["s"]["n"]), 'B': np.zeros(half["s"]["n"]),
+              'C': np.zeros(half["s"]["n"])}
+    coil_info = []   # (idx, areas, dir, phase) for ψ
+    areas_s = _triangle_areas(half["s"]["mesh"])
+    for ph in ('A', 'B', 'C'):
+        Iunit = {'A': 0.0, 'B': 0.0, 'C': 0.0}; Iunit[ph] = 1.0
+        mats_u = build_materials(Iunit, dom.winding_layout,
+                                 getattr(cs, "polys", polys), 0.0, slot_area_m2, n_wires)
+        for tag, idx in half["s"]["cells"].items():
+            mu = mats_u.get(int(tag))
+            if mu is None or mu.J_z == 0.0:
+                continue
+            sb = Basis(half["s"]["mesh"], ElementTriP1(), elements=idx)
+            f_coil[ph] += asm(_f1, sb) * mu.J_z
+    # ψ coil map (phase, dir) per coil tag — from a full-current material build
+    mats_full = build_materials(_currents(0.0), dom.winding_layout,
+                                getattr(cs, "polys", polys), 0.0, slot_area_m2, n_wires)
+    for tag, idx in half["s"]["cells"].items():
+        nm = (mats_full.get(int(tag)) or FEMMaterial("x")).name
+        if not nm.startswith("coil_"):
+            continue
+        # name = "coil_<i>_slot<j>_<phase><+|->"  → phase is the char before +/-
+        ph = nm[-2] if nm[-1] in "+-" else nm[-1]
+        direction = 1.0 if nm.endswith("+") else -1.0
+        if ph in "ABC":
+            coil_info.append((idx, areas_s[idx], direction, ph))
+    SAT = {DOM_STATOR, DOM_ROTOR, DOM_SHAFT}
+    # Per-tag base μ_r (air=1, coil=1, magnet=μ_rec, iron=μ_steel) + BH curves
+    # for the saturable iron tags only.
+    mu0 = {"s": {}, "r": {}}
+    sat_bh = {"s": {}, "r": {}}
+    for hn, md in (("s", mats_full), ("r", matr0)):
+        for tag in half[hn]["cells"]:
+            m = md.get(int(tag))
+            mu0[hn][int(tag)] = max(float(m.mu_r), 1.0) if m else 1.0
+            if (tag in SAT) and m and m.bh_curve and len(m.bh_curve) >= 2:
+                sat_bh[hn][int(tag)] = m.bh_curve
+
+    r_all = np.hypot(Pall[0], Pall[1])
+    outer_nodes = np.where(r_all >= r_all.max() - 5e-4)[0]
+
+    # ── Frame loop ───────────────────────────────────────────────────────
+    n_total = max(1, int(round(n_steps_per_period * n_periods)))
+    period_mech = 360.0 / pole_pairs                      # one electrical period [deg mech]
+    T_series = []; psiA = []; psiB = []; psiC = []
+    IA = []; IB = []; IC = []; tt = []
+    dt = (1.0 / max(f_elec, 1e-9)) * n_periods / n_total
+    for k in range(n_total):
+        theta = (k / n_total) * period_mech * n_periods
+        m_shift = int(round(theta / spacing))
+        theta_eff = m_shift * spacing
+        Ist = _currents(theta_eff)
+        f_cur_s = (Ist['A'] * f_coil['A'] + Ist['B'] * f_coil['B']
+                   + Ist['C'] * f_coil['C'])
+        f = np.concatenate([f_cur_s, f_mag])
+        # signed union-find: anti-periodic + slip-shift merge
+        suf = _SignedUF(n)
+        for a, b in zip(Mn, Sn):
+            suf.union(int(b), int(a), -1)
+        for kk in range(Nring):
+            j = kk + m_shift; sg = 1
+            while j > Nring - 1: j -= (Nring - 1); sg = -sg
+            while j < 0:         j += (Nring - 1); sg = -sg
+            suf.union(int(rring[kk] + nsn), int(sring[j]), sg)
+        roots = [suf.find(i) for i in range(n)]
+        rid = np.array([r for r, _ in roots]); rsg = np.array([s for _, s in roots], float)
+        uniq, inv = np.unique(rid, return_inverse=True)
+        Pro = _coo((rsg, (np.arange(n), inv)), shape=(n, uniq.size)).tocsr()
+        outer_red = np.unique(inv[outer_nodes])
+        mu = {"s": dict(mu0["s"]), "r": dict(mu0["r"])}
+        A = np.zeros(n)
+        for it in range(nonlinear_iterations):
+            blocks = []
+            for hn in ("s", "r"):
+                h = half[hn]; K = _csr((h["n"], h["n"]))
+                for tag, Kd in h["K0"].items():
+                    K = K + Kd * (1.0 / (MU0 * max(mu[hn].get(tag, 1.0), 1.0)))
+                blocks.append(K)
+            K = _bd(blocks).tocsr()
+            A = Pro @ _sksolve(*condense((Pro.T @ K @ Pro).tocsr(),
+                                          Pro.T @ f, D=outer_red))
+            for hn, off in (("s", 0), ("r", nsn)):
+                h = half[hn]
+                Bx, By = _per_triangle_B(h["mesh"], A[off:off + h["n"]])
+                Bm = np.sqrt(Bx ** 2 + By ** 2)
+                for tag, curve in sat_bh[hn].items():
+                    idx = h["cells"][tag]
+                    Bp90 = float(np.percentile(Bm[idx], 90)) if idx.size else 0.0
+                    mu[hn][tag] = 0.5 * mu[hn][tag] + 0.5 * _mu_r_from_bh(curve, Bp90)
+        # torque (Arkkio over the gap)
+        Tq = _arkkio_torque(mesh_all, A, p.r_rotor_out, p.r_stator_in,
+                            p.stack_length) * NS
+        # flux linkage (stator half)
+        As = A[:nsn]; A_tri = (As[Tts[0]] + As[Tts[1]] + As[Tts[2]]) / 3.0
+        pa = pb = pc = 0.0
+        for idx, ar, direction, ph in coil_info:
+            sa = float(np.sum(ar))
+            if sa <= 0: continue
+            mAz = float(np.sum(A_tri[idx] * ar)) / sa
+            val = direction * mAz
+            if ph == 'A': pa += val
+            elif ph == 'B': pb += val
+            else: pc += val
+        sc = p.stack_length * NS / float(n_parallel)
+        T_series.append(float(Tq))
+        psiA.append(pa * sc); psiB.append(pb * sc); psiC.append(pc * sc)
+        IA.append(Ist['A']); IB.append(Ist['B']); IC.append(Ist['C'])
+        tt.append(k * dt)
+    # voltage V = R·I + dψ/dt (central diff, periodic)
+    def _ddt(x):
+        nn = len(x)
+        return [(x[(i + 1) % nn] - x[(i - 1) % nn]) / (2 * dt) for i in range(nn)]
+    VA = [R_phase * i + e for i, e in zip(IA, _ddt(psiA))]
+    VB = [R_phase * i + e for i, e in zip(IB, _ddt(psiB))]
+    VC = [R_phase * i + e for i, e in zip(IC, _ddt(psiC))]
+    Tavg = float(np.mean(T_series)) if T_series else 0.0
+    Trip = (100.0 * (max(T_series) - min(T_series)) / abs(Tavg)
+            if T_series and abs(Tavg) > 1e-9 else 0.0)
+    Vpk = float(max(max(map(abs, VA)), max(map(abs, VB)), max(map(abs, VC)))) if VA else 0.0
+    P_cu = 3.0 * R_phase * float(I_phase_rms) ** 2
+    log.info("SB transient: %d frames, %d slip nodes, %.1fs",
+             n_total, Nring, _t.time() - t0)
+    return {
+        "method": "sliding_band",
+        "n_steps": n_total, "n_steps_per_period": int(n_steps_per_period),
+        "n_periods": float(n_periods), "rpm": rpm, "f_elec_Hz": f_elec,
+        "dt_s": dt, "time_s": tt,
+        "T_em_Nm": T_series, "T_avg_Nm": Tavg, "T_ripple_pct": Trip,
+        "psi_A_Wb": psiA, "psi_B_Wb": psiB, "psi_C_Wb": psiC,
+        "V_A": VA, "V_B": VB, "V_C": VC, "V_peak": Vpk,
+        "I_A": IA, "I_B": IB, "I_C": IC,
+        "P_cu_W": [P_cu] * n_total, "P_fe_W": [0.0] * n_total,
+        "P_mag_eddy_W": [0.0] * n_total,
+        "R_phase_ohm": R_phase, "n_slip_nodes": int(Nring),
+    }
+
+
 def fem_solve_for_sim(
     rotor_angle_deg: float = 0.0,
     gamma_deg:       float = 0.0,

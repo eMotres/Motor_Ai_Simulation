@@ -1642,6 +1642,53 @@ def get_fem_transient(
                 outer_air_factor=float(outer_air_factor),
                 n_sectors=int(n_sectors) if int(n_sectors) > 1 else 4,
                 stator_fillet_mm=float(stator_fillet_mm))
+            # ── Summary block (masses, loss split, KV, efficiency, specific
+            # torque/power) so the Simulation values table renders — same shape
+            # as the remesh path produces.
+            try:
+                from motor_ai_sim.simulation.geometry_2d import params_from_config as _pfc
+                from motor_ai_sim.config import get_config as _gc
+                _p = _pfc(); _geo_cfg = _gc().get("geometry", {})
+                _masses = _compute_masses(_p, _geo_cfg)
+                _m_tot = float(_masses["total_active_kg"])
+                _rpm = float(_sbres.get("rpm", 3950.0))
+                _Tavg = float(_sbres.get("T_avg_Nm", 0.0))
+                _Pmech = float(_sbres.get("P_mech_avg_W",
+                                          _Tavg * 2 * _math.pi * _rpm / 60))
+                _Pcu = float((_sbres.get("P_cu_W") or [0])[0])
+                _Pfe = float((_sbres.get("P_fe_W") or [0])[0])
+                _Pmag = float((_sbres.get("P_mag_eddy_W") or [0])[0])
+                _Vpk = float(_sbres.get("V_peak", 0.0))
+                _Vrms = _Vpk / _math.sqrt(2)
+                _Vlpk = _Vpk * _math.sqrt(3); _Vlrms = _Vlpk / _math.sqrt(2)
+                _ploss = _Pcu + _Pfe + _Pmag
+                _eff = _Pmech / max(_Pmech + _ploss, 1.0) if _Pmech > 0 else 0.0
+                _sbres["summary"] = {
+                    "rpm": _rpm,
+                    "I_phase_rms_A": round(float(I_phase_rms), 2),
+                    "gamma_deg": round(float(gamma_deg), 2),
+                    "T_em_avg_Nm": round(_Tavg, 3),
+                    "T_ripple_pct": round(float(_sbres.get("T_ripple_pct", 0.0)), 1),
+                    "P_mech_W": round(_Pmech, 1),
+                    "V_phase_peak_V": round(_Vpk, 1),
+                    "V_phase_rms_V": round(_Vrms, 1),
+                    "V_line_peak_V": round(_Vlpk, 1),
+                    "V_line_rms_V": round(_Vlrms, 1),
+                    "KV_rpm_per_V_phase": round(_rpm / _Vrms, 2) if _Vrms > 1 else 0.0,
+                    "KV_rpm_per_V_line":  round(_rpm / _Vlrms, 2) if _Vlrms > 1 else 0.0,
+                    "P_loss_total_W": round(_ploss, 1),
+                    "P_core_W":     round(_Pfe, 1),     # laminated iron
+                    "P_stranded_W": round(_Pcu, 1),     # copper
+                    "P_solid_W":    round(_Pmag, 1),    # magnet eddy
+                    "efficiency":   round(_eff, 4),
+                    "mass_total_kg": round(_m_tot, 3),
+                    "mass_components": _masses["components"],
+                    "torque_per_mass_Nm_kg": round(_Tavg / max(_m_tot, 1e-6), 3),
+                    "power_per_mass_W_kg":   round(_Pmech / max(_m_tot, 1e-6), 1),
+                    "loss_density_W_kg":     round(_ploss / max(_m_tot, 1e-6), 1),
+                }
+            except Exception as _se:
+                log.warning("SB summary build failed: %s", _se)
             _fem_transient_cache[_sb_key] = _sbres
             return _sbres
         except Exception as _e:

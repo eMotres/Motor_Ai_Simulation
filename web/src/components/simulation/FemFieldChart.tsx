@@ -548,7 +548,7 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
       motion_band:       String(readMeshSetting('motionBand',  true)),
       band_thickness_mm: String(readMeshSetting('bandThickness', 0.4)),
       n_sectors:         String(readMeshSetting('nSectors',    4)),
-      stator_fillet_mm:  String(readMeshSetting('statorFillet', 0.0)),
+      stator_fillet_mm:  '0',   // native geometry — extra smoothing removed
     };
     if (I_phase_rms !== undefined) {
       params.I_phase_rms = String(I_phase_rms);

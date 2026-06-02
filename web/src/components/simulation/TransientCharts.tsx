@@ -151,7 +151,7 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
       motion_band:        String(readMeshSetting('motionBand',  true)),
       band_thickness_mm:  String(readMeshSetting('bandThickness', 0.4)),
       n_sectors:          String(readMeshSetting('nSectors',    4)),
-      stator_fillet_mm:   String(readMeshSetting('statorFillet', 0.0)),
+      stator_fillet_mm:   '0',   // native geometry — extra smoothing removed
       // Request the SAME include_frames/n_frames as the FemAnimationViewer
       // so both panels hit the exact same backend cache key and the heavy
       // FEM sweep runs ONCE instead of twice (the lock would otherwise

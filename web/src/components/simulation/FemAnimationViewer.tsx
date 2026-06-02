@@ -127,7 +127,7 @@ const FemAnimationViewer: React.FC<Props> = ({
       motion_band:        String(readMeshSetting('motionBand',  true)),
       band_thickness_mm:  String(readMeshSetting('bandThickness', 0.4)),
       n_sectors:          String(readMeshSetting('nSectors',    4)),
-      stator_fillet_mm:   String(readMeshSetting('statorFillet', 0.0)),
+      stator_fillet_mm:   '0',   // native geometry — extra smoothing removed
       include_frames:     'true',
       n_frames:           String(n_frames),
       run_id:             String(runNonce),

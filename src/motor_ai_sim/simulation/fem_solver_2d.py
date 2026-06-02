@@ -2692,17 +2692,26 @@ def fem_transient_sliding_band(
     P_cu = 3.0 * R_phase * float(I_phase_rms) ** 2
     log.info("SB transient: %d frames, %d slip nodes, %.1fs",
              n_total, Nring, _t.time() - t0)
+    # Loss series (Fe + magnet eddy not yet computed on the SB path → 0).
+    P_cu_series = [P_cu] * n_total
+    P_fe_series = [0.0] * n_total
+    P_mag_series = [0.0] * n_total
+    P_tot_series = [c + f + e for c, f, e in zip(P_cu_series, P_fe_series, P_mag_series)]
+    P_mech_avg = float(Tavg * 2.0 * math.pi * rpm / 60.0)
     return {
         "method": "sliding_band",
         "n_steps": n_total, "n_steps_per_period": int(n_steps_per_period),
         "n_periods": float(n_periods), "rpm": rpm, "f_elec_Hz": f_elec,
-        "dt_s": dt, "time_s": tt,
+        "dt_s": dt, "T_period_s": (1.0 / f_elec if f_elec > 1e-9 else 0.0),
+        "time_s": tt, "rotor_angle_deg": [
+            (k / n_total) * period_mech * n_periods for k in range(n_total)],
         "T_em_Nm": T_series, "T_avg_Nm": Tavg, "T_ripple_pct": Trip,
         "psi_A_Wb": psiA, "psi_B_Wb": psiB, "psi_C_Wb": psiC,
         "V_A": VA, "V_B": VB, "V_C": VC, "V_peak": Vpk,
         "I_A": IA, "I_B": IB, "I_C": IC,
-        "P_cu_W": [P_cu] * n_total, "P_fe_W": [0.0] * n_total,
-        "P_mag_eddy_W": [0.0] * n_total,
+        "P_cu_W": P_cu_series, "P_fe_W": P_fe_series,
+        "P_mag_eddy_W": P_mag_series, "P_loss_total_W": P_tot_series,
+        "P_mech_avg_W": P_mech_avg,
         "R_phase_ohm": R_phase, "n_slip_nodes": int(Nring),
     }
 

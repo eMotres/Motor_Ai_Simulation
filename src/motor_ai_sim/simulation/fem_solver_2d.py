@@ -218,8 +218,12 @@ def _simplify_polys(polys: dict, tol_mm: float = 0.005,
         Vertices whose turn-angle is below this are dropped, thinning out
         fillet arcs.  0 disables it (keeps all arc points).
     """
-    SIMPLIFY_KEYS = ("stator", "rotor", "shaft", "air_gap",
-                      "in_band", "out_band")
+    # NOTE: deliberately do NOT simplify in_band / out_band here — they are
+    # recomputed below from the FINAL (simplified + filleted) solids so
+    # their shared boundaries match exactly.  Simplifying them independently
+    # offset their edges from the rotor / stator edges and OCC fragment
+    # turned the gaps into degenerate sliver "fan" triangles.
+    SIMPLIFY_KEYS = ("stator", "rotor", "shaft", "air_gap")
     out = dict(polys)
     for k in SIMPLIFY_KEYS:
         if polys.get(k) is not None:
@@ -241,6 +245,40 @@ def _simplify_polys(polys: dict, tol_mm: float = 0.005,
         for m, p in polys.get("magnets", [])
     ]
     out["coils"] = list(polys.get("coils", []))
+
+    # ── Rebuild in_band / out_band from the FINAL solids ──────────────────
+    # in_band  = disk(mid_r)            − (rotor ∪ shaft ∪ magnets)
+    # out_band = annulus(mid_r..r_out)  − stator
+    # Sharing the exact simplified+filleted solid boundaries means OCC
+    # fragment produces conforming edges with NO sliver triangles.
+    if polys.get("in_band") is not None or polys.get("out_band") is not None:
+        try:
+            from shapely.geometry import Point as _Pt
+            from shapely.ops import unary_union as _uu
+            mid_r   = float(polys.get("mid_r_mm", 56.55))
+            r_outer = float(polys.get("r_outer_boundary_mm",
+                                      1.3 * max(math.hypot(x, y)
+                                                for x, y in (out["stator"].exterior.coords
+                                                if hasattr(out["stator"], "exterior")
+                                                else out["stator"].geoms[0].exterior.coords))))
+            rotor_solids = []
+            if out.get("rotor") is not None: rotor_solids.append(out["rotor"])
+            if out.get("shaft") is not None: rotor_solids.append(out["shaft"])
+            rotor_solids += [m for m, _p in out["magnets"] if m is not None]
+            in_band = _Pt(0, 0).buffer(mid_r, resolution=256)
+            if rotor_solids:
+                in_band = in_band.difference(_uu(rotor_solids))
+            if not in_band.is_valid: in_band = in_band.buffer(0)
+            out["in_band"] = in_band
+
+            out_band = _Pt(0, 0).buffer(r_outer, resolution=256).difference(
+                       _Pt(0, 0).buffer(mid_r, resolution=256))
+            if out.get("stator") is not None:
+                out_band = out_band.difference(out["stator"])
+            if not out_band.is_valid: out_band = out_band.buffer(0)
+            out["out_band"] = out_band
+        except Exception as e:
+            log.warning("in/out band rebuild after simplify failed: %s", e)
     return out
 
 
@@ -1100,16 +1138,25 @@ def build_mesh_from_polygons(polys: dict,
                     log.warning("addPlaneSurface failed: %s", e)
             return tags
 
-        # 1) Motion band: split air_gap into rotor-side + band + stator-side
-        polys = _add_motion_band(polys, motion_band=motion_band,
-                                  band_thickness_mm=band_thickness_mm)
-        # 2) Background air + (optional) outer far-field air ring.
-        #    Skipped for the sliding-band halves: in_band / out_band already
-        #    tile every air region (inner pockets + gap + outer far-field),
-        #    so adding background air on top would double-cover and confuse
-        #    the OCC fragment partition.
-        if add_background_air:
-            polys = _add_background_air(polys, outer_air_factor=outer_air_factor)
+        # 1) Air domains.  Prefer the first-class in_band / out_band air
+        #    domains from get_2d_polygons — they tile EVERY air region
+        #    cleanly (inner pockets + full gap + outer far-field) so the
+        #    whole motor uses ONE geometry in the Mesh tab and the
+        #    Simulation field view.  The legacy motion-band path split the
+        #    air gap with a 0.4 mm sliver ring that gmsh meshed into
+        #    degenerate fan triangles ("trash") — avoided entirely here.
+        if polys.get("in_band") is not None and polys.get("out_band") is not None:
+            polys = dict(polys)
+            polys["air_gap"]   = polys.pop("in_band")    # full inner air → DOM_AIRGAP
+            polys["air_outer"] = polys.pop("out_band")   # outer air to far-field → DOM_OUTER
+            polys.pop("airgap_band", None)
+            polys.pop("air_background", None)
+        else:
+            # Legacy path (no in/out bands available).
+            polys = _add_motion_band(polys, motion_band=motion_band,
+                                      band_thickness_mm=band_thickness_mm)
+            if add_background_air:
+                polys = _add_background_air(polys, outer_air_factor=outer_air_factor)
         # 3) Symmetry: clip ALL polygons to a 360°/n_sectors wedge
         if n_sectors > 1:
             polys = _clip_polys_to_sector(polys, n_sectors=n_sectors)

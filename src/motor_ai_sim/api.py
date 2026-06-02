@@ -47,6 +47,23 @@ app.include_router(pipeline_router)
 app.include_router(simulation_router)
 
 
+@app.on_event("startup")
+def _warm_fem_pool_on_startup() -> None:
+    """Spin up the persistent FEM worker pool in the background at server
+    start so its ~5 s-per-worker cold-import (gmsh + scikit-fem) is paid
+    while the server boots, not on the user's first 'Run Simulation'."""
+    import threading
+
+    def _bg():
+        try:
+            from motor_ai_sim.routes.simulation import warm_fem_pool
+            warm_fem_pool()
+        except Exception:
+            pass
+
+    threading.Thread(target=_bg, daemon=True).start()
+
+
 @app.get("/")
 def root():
     return {

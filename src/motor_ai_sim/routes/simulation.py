@@ -1364,6 +1364,90 @@ def _transient_frame_worker(task):
     return (k, None)
 
 
+# ── Persistent, pre-warmed worker pool ──────────────────────────────────
+# On Windows every ProcessPoolExecutor worker is spawned (not forked) and
+# pays the full ~5 s cold-import of gmsh + scikit-fem + motor_ai_sim before
+# it can solve a single frame.  Re-creating the pool per request therefore
+# burned ~5-10 s of pure startup on EVERY transient run.  Keep ONE pool
+# alive for the process lifetime and warm each worker once via initializer,
+# so the import cost is paid a single time and amortised across all runs.
+import concurrent.futures as _cf  # noqa: E402  (kept local to this section)
+import os as _os  # noqa: E402
+
+_fem_pool: "Optional[_cf.ProcessPoolExecutor]" = None
+_fem_pool_lock = _threading.Lock()
+
+
+def _fem_pool_workers() -> int:
+    """Worker count: ~1/4 of the cores (min 2).  Each worker pegs a core
+    while meshing; leaving most cores free keeps the uvicorn event loop
+    responsive so /progress polling never times out (a full-core pool
+    previously starved it and froze the UI)."""
+    return max(2, (_os.cpu_count() or 8) // 4)
+
+
+def _fem_worker_init():
+    """Runs ONCE per worker when the pool starts a process.  Forces the
+    heavy imports up-front so the first real frame each worker handles no
+    longer pays the ~5 s cold-import."""
+    try:
+        import logging as _lg
+        _lg.disable(_lg.WARNING)
+    except Exception:
+        pass
+    try:
+        # Touch the solver module so gmsh / skfem / numpy are imported and
+        # cached inside this worker before any frame arrives.
+        from motor_ai_sim.simulation.fem_solver_2d import fem_solve_for_sim  # noqa: F401
+    except Exception:
+        pass
+
+
+def get_fem_pool() -> "_cf.ProcessPoolExecutor":
+    """Lazily create (and reuse) the shared warm worker pool.  Rebuilds it
+    if a previous pool was broken (e.g. a worker crashed)."""
+    global _fem_pool
+    with _fem_pool_lock:
+        if _fem_pool is None:
+            _fem_pool = _cf.ProcessPoolExecutor(
+                max_workers=_fem_pool_workers(),
+                initializer=_fem_worker_init,
+            )
+        return _fem_pool
+
+
+def _reset_fem_pool() -> None:
+    """Drop the shared pool (next call to get_fem_pool rebuilds it).  Used
+    after a BrokenProcessPool so one crashed worker doesn't wedge every
+    subsequent transient run."""
+    global _fem_pool
+    with _fem_pool_lock:
+        _p, _fem_pool = _fem_pool, None
+    if _p is not None:
+        try:
+            _p.shutdown(wait=False, cancel_futures=True)
+        except Exception:
+            pass
+
+
+def warm_fem_pool() -> None:
+    """Kick the pool into existence and run a no-op on every worker so the
+    cold-import is paid in the background at server startup, not on the
+    user's first Run.  Safe to call repeatedly."""
+    try:
+        pool = get_fem_pool()
+        for _ in range(_fem_pool_workers() * 2):
+            pool.submit(_fem_worker_warmup)
+    except Exception:
+        pass
+
+
+def _fem_worker_warmup(_=None):
+    """Trivial task whose only purpose is to occupy a worker so its
+    initializer (heavy imports) runs."""
+    return True
+
+
 # Cooperative cancel keyed by run-id.  The "Stop" button POSTs the id of
 # the run it wants stopped; the parallel solve loop (and any duplicate
 # request waiting on the lock) checks whether ITS run-id was cancelled and
@@ -1627,14 +1711,28 @@ def get_fem_transient(
     # loop so /progress polling timed out and the browser showed
     # "Failed to fetch" / a frozen UI.  ~1/4 of the cores keeps the box
     # responsive even if the animation + transient solves overlap.
-    n_workers = min(max(1, len(_todo)), max(2, (_os.cpu_count() or 8) // 4))
     _was_cancelled = False
     try:
         _done = _n_cached
         _fem_transient_progress["current"]["step"] = _done
         if _todo:
-            with _cf.ProcessPoolExecutor(max_workers=n_workers) as _ex:
-                _futs = [_ex.submit(_transient_frame_worker, t) for t in _todo]
+            # Reuse the PERSISTENT warm pool (workers already imported gmsh +
+            # skfem once via the initializer) instead of paying ~5 s of
+            # cold-import per worker on every run.
+            try:
+                _ex = get_fem_pool()
+                _fut_to_task = {
+                    _ex.submit(_transient_frame_worker, t): t for t in _todo
+                }
+            except _cf.process.BrokenProcessPool:
+                # A worker died — rebuild the pool and retry once.
+                _reset_fem_pool()
+                _ex = get_fem_pool()
+                _fut_to_task = {
+                    _ex.submit(_transient_frame_worker, t): t for t in _todo
+                }
+            _futs = list(_fut_to_task.keys())
+            try:
                 for _fut in _cf.as_completed(_futs):
                     _kk, _rr = _fut.result()
                     results[_kk] = _rr
@@ -1649,13 +1747,19 @@ def get_fem_transient(
                     _fem_transient_progress["current"]["per_step_s"] = _el / _solved
                     _fem_transient_progress["current"]["eta_s"] = \
                         (_el / _solved) * (n_total - _done)
-                    # Cooperative cancel: the Stop button flagged THIS run —
-                    # tear the pool down (cancel queued frames; running ones
-                    # finish their current frame) and bail.
+                    # Cooperative cancel: the Stop button flagged THIS run.
+                    # The pool is SHARED across runs, so don't shut it down —
+                    # just cancel the queued (not-yet-started) frames and stop
+                    # collecting.  Already-running workers finish their current
+                    # frame and return to the pool idle for the next run.
                     if _cancelled():
                         _was_cancelled = True
-                        _ex.shutdown(wait=False, cancel_futures=True)
+                        for _pf in _futs:
+                            _pf.cancel()
                         break
+            except _cf.process.BrokenProcessPool as _bpp:
+                _reset_fem_pool()
+                raise _bpp
     except Exception as e:
         log.exception("parallel FEM transient failed")
         _fem_transient_lock.release()

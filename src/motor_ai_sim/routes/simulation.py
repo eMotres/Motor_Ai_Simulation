@@ -967,9 +967,23 @@ async def build_fem_mesh_2d(
     def _poly_outlines_m(poly):
         if poly is None or poly.is_empty:
             return []
-        geoms = list(poly.geoms) if isinstance(poly, _SMP) else [poly]
+        # Flatten ANY geometry to its polygon parts.  A large surface_deviation
+        # can simplify a thin polygon into a GeometryCollection (polygons +
+        # stray LineStrings); the 1-D bits have no `.exterior` and would 500
+        # the whole mesh build here in the outline assembly.
+        def _polys_only(gm):
+            if gm is None or gm.is_empty:
+                return []
+            if gm.geom_type == "Polygon":
+                return [gm]
+            if hasattr(gm, "geoms"):       # Multi* / GeometryCollection
+                out = []
+                for sub in gm.geoms:
+                    out.extend(_polys_only(sub))
+                return out
+            return []
         rings = []
-        for g in geoms:
+        for g in _polys_only(poly):
             if g.is_empty or g.area < 1e-6:
                 continue
             rings.append([[x * 1e-3, y * 1e-3] for x, y in g.exterior.coords])
@@ -1253,9 +1267,23 @@ async def get_fem_field2d(
     def _poly_outlines_m(poly):
         if poly is None or poly.is_empty:
             return []
-        geoms = list(poly.geoms) if isinstance(poly, _SMP) else [poly]
+        # Flatten ANY geometry to its polygon parts.  A large surface_deviation
+        # can simplify a thin polygon into a GeometryCollection (polygons +
+        # stray LineStrings); the 1-D bits have no `.exterior` and would 500
+        # the whole mesh build here in the outline assembly.
+        def _polys_only(gm):
+            if gm is None or gm.is_empty:
+                return []
+            if gm.geom_type == "Polygon":
+                return [gm]
+            if hasattr(gm, "geoms"):       # Multi* / GeometryCollection
+                out = []
+                for sub in gm.geoms:
+                    out.extend(_polys_only(sub))
+                return out
+            return []
         rings = []
-        for g in geoms:
+        for g in _polys_only(poly):
             if g.is_empty or g.area < 1e-6:
                 continue
             rings.append([[x * 1e-3, y * 1e-3] for x, y in g.exterior.coords])

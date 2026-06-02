@@ -1092,7 +1092,23 @@ def build_mesh_from_polygons(polys: dict,
             Returns the list of OCC surface tags created."""
             if geom is None or geom.is_empty:
                 return []
-            geoms = list(geom.geoms) if isinstance(geom, SMPoly) else [geom]
+            # A too-aggressive simplify / buffer can degenerate a thin
+            # polygon into a GeometryCollection (polygons + stray
+            # LineStrings/Points).  Flatten ANY geometry down to its polygon
+            # parts only — the leftover 1-D bits are not surfaces and have no
+            # `.exterior` (the crash that blanked the Mesh view).
+            def _polys_only(gm) -> List:
+                if gm is None or gm.is_empty:
+                    return []
+                if gm.geom_type == "Polygon":
+                    return [gm]
+                if hasattr(gm, "geoms"):  # Multi* / GeometryCollection
+                    out: List = []
+                    for sub in gm.geoms:
+                        out.extend(_polys_only(sub))
+                    return out
+                return []  # LineString / Point → not a surface
+            geoms = _polys_only(geom)
             tags: List[int] = []
             for g in geoms:
                 if g.is_empty or g.area < 1e-6:
@@ -1227,11 +1243,14 @@ def build_mesh_from_polygons(polys: dict,
         # Radial bounds (mm — same units as polygon coords). Handles both
         # single Polygon and MultiPolygon (after sector clip).
         def _iter_geoms(g):
+            # Polygon parts only — a GeometryCollection from an aggressive
+            # simplify can hold LineStrings/Points that have no `.exterior`.
             if g is None or g.is_empty:
                 return []
-            if hasattr(g, "geoms"):  # Multi*
-                return [sub for sub in g.geoms if not sub.is_empty]
-            return [g]
+            if hasattr(g, "geoms"):  # Multi* / GeometryCollection
+                return [sub for sub in g.geoms
+                        if not sub.is_empty and sub.geom_type == "Polygon"]
+            return [g] if g.geom_type == "Polygon" else []
 
         def _all_ext_r(g):
             return [_m.hypot(x, y) for sub in _iter_geoms(g)

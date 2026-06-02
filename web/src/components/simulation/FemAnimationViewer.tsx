@@ -81,11 +81,13 @@ interface Props {
   // Ticks when the user presses "Run Simulation"; the animation only
   // (re)solves on that signal, never on raw gamma/current edits.
   runNonce?:     number;
+  // "Start fresh" → backend discards cached frames before recomputing.
+  fresh?:        boolean;
 }
 
 const FemAnimationViewer: React.FC<Props> = ({
   gamma_deg = 0, I_phase_rms = 85, n_frames: n_frames_default = 12, onPayload,
-  runNonce = 0,
+  runNonce = 0, fresh = false,
 }) => {
   const [data,    setData]    = useState<TransientFramePayload | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
@@ -94,10 +96,26 @@ const FemAnimationViewer: React.FC<Props> = ({
   const [playing, setPlaying] = useState<boolean>(false);
   const [fps,     setFps]     = useState<number>(8);
   const [n_frames, setNFrames] = useState<number>(n_frames_default);
+  const abortRef = useRef<AbortController | null>(null);
+
+  // "Stop Simulation" (left panel) → abort the in-flight animation fetch
+  // and ask the backend to cancel THIS run_id.
+  useEffect(() => {
+    const onStop = () => {
+      abortRef.current?.abort();
+      fetch(`${API}/api/simulation/physics/fem_transient/cancel?run_id=${runNonce}`,
+        { method: 'POST' }).catch(() => {});
+      setLoading(false);
+    };
+    window.addEventListener('sim:stop', onStop);
+    return () => window.removeEventListener('sim:stop', onStop);
+  }, [runNonce]);
 
   // ── fetch ──────────────────────────────────────────────────────────────
   const runAnimation = () => {
     setLoading(true); setError(null); setData(null);
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
     const params: Record<string, string> = {
       n_steps_per_period: String(n_frames),
       n_periods:          '1.0',
@@ -112,12 +130,15 @@ const FemAnimationViewer: React.FC<Props> = ({
       stator_fillet_mm:   String(readMeshSetting('statorFillet', 0.0)),
       include_frames:     'true',
       n_frames:           String(n_frames),
+      run_id:             String(runNonce),
+      fresh:              String(fresh),
     };
     // Auto-retry against transient backend hiccups (uvicorn supervisor
     // sometimes respawns the worker mid-request during a heavy FEM solve).
     const attempt = async (i = 0): Promise<void> => {
       try {
-        const r = await fetch(`${API}/api/simulation/physics/fem_transient?${new URLSearchParams(params)}`);
+        const r = await fetch(`${API}/api/simulation/physics/fem_transient?${new URLSearchParams(params)}`,
+          { signal: ctrl.signal });
         if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
         const d: TransientFramePayload = await r.json();
         if (!d.frames || d.frames.length === 0) {
@@ -126,6 +147,7 @@ const FemAnimationViewer: React.FC<Props> = ({
         setData(d); setIdx(0); setLoading(false); setError(null);
       } catch (e: any) {
         const msg = String(e);
+        if (ctrl.signal.aborted || /abort/i.test(msg)) { setLoading(false); return; }
         const isNetwork = /Failed to fetch|NetworkError|TypeError/i.test(msg);
         if (isNetwork && i < 4) {
           setError(`Backend hiccup — retrying (attempt ${i+2}/5)…`);

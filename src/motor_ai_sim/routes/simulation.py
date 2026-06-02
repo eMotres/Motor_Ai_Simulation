@@ -1294,6 +1294,12 @@ async def get_fem_field2d(
 
 _fem_transient_cache: Dict[tuple, Dict] = {}
 
+# Per-FRAME cache keyed by (frame_param_key, k).  Lets a transient that
+# was Stopped mid-way be resumed: a re-run with the same params reuses
+# every frame already solved and only computes the missing ones.  The
+# "Start fresh" path clears the entries for that param set first.
+_fem_frame_cache: Dict[tuple, Dict] = {}
+
 # Serializes transient computes so concurrent identical requests (the
 # animation viewer + transient charts both fire on Simulation-tab mount)
 # don't each spawn a worker pool and storm the CPU.
@@ -1341,6 +1347,12 @@ def _transient_frame_worker(task):
     return (k, None)
 
 
+# Cooperative cancel keyed by run-id.  The "Stop" button POSTs the id of
+# the run it wants stopped; the parallel solve loop (and any duplicate
+# request waiting on the lock) checks whether ITS run-id was cancelled and
+# bails.  Keying by id means cancelling one run never aborts the next one.
+_fem_transient_cancelled_run: Dict[str, Optional[str]] = {"id": None}
+
 # Shared progress state for the currently-running transient.  Polled by
 # the frontend via /physics/fem_transient/progress so the user sees
 # "Frame X / N — Ys elapsed — ETA Zs" instead of a spinning "Running…".
@@ -1381,6 +1393,20 @@ async def get_fem_transient_progress():
     return p
 
 
+@router.post("/physics/fem_transient/cancel")
+async def cancel_fem_transient(run_id: str = ""):
+    """Request the transient with this run_id to stop.  The solve loop
+    checks after each completed frame, tears the worker pool down
+    (cancelling pending frames) and raises 499.  A duplicate request for
+    the same run_id waiting on the lock bails immediately."""
+    # Cancel a SPECIFIC run only.  A new Run uses a fresh run_id (the
+    # incrementing runNonce) so it never matches a previously-cancelled
+    # id — no risk of a stale cancel killing the next solve.
+    if run_id:
+        _fem_transient_cancelled_run["id"] = run_id
+    return {"cancelled": bool(run_id), "run_id": run_id}
+
+
 @router.get("/physics/fem_transient")
 def get_fem_transient(
     n_steps_per_period:  int   = 60,   # FEM solves per electrical period
@@ -1396,6 +1422,8 @@ def get_fem_transient(
     stator_fillet_mm:    float = 0.0,
     include_frames:      bool  = False,   # ← if true, accumulate per-step field
     n_frames:            int   = 12,      # ← #frames sampled for the animation
+    run_id:              str   = "",      # ← Stop-button cancellation token
+    fresh:               bool  = False,   # ← "Start fresh" wipes the frame cache
 ):
     """Transient FEM analysis — runs N solves per electrical period and
     returns time-resolved T(t), losses(t) and V_phase(t).
@@ -1422,6 +1450,25 @@ def get_fem_transient(
         round(stator_fillet_mm, 2),
         bool(include_frames), int(n_frames),
     )
+
+    # Per-frame cache key (omits include_frames/n_frames — a single frame's
+    # physics is identical whichever caller asked for it).  Used to resume
+    # a Stopped run.
+    _frame_pkey = (
+        int(n_steps_per_period), round(n_periods, 2),
+        round(gamma_deg, 1), round(I_phase_rms, 1),
+        round(mesh_size_mm, 2), round(min_size_mm, 2),
+        round(outer_air_factor, 2), bool(motion_band),
+        round(band_thickness_mm, 2), int(n_sectors),
+        round(stator_fillet_mm, 2),
+    )
+    if fresh:
+        # "Start fresh" → drop the cached full run AND every cached frame
+        # for this param set, so the whole period is recomputed.
+        _fem_transient_cache.pop(key, None)
+        for _ck in [c for c in _fem_frame_cache if c[0] == _frame_pkey]:
+            _fem_frame_cache.pop(_ck, None)
+
     if key in _fem_transient_cache:
         return _fem_transient_cache[key]
 
@@ -1512,10 +1559,19 @@ def get_fem_transient(
     # CPU storm.  Acquire BEFORE touching the shared progress state so the
     # waiting caller doesn't clobber the running one's progress; once it
     # wakes it falls straight through to the freshly-populated cache.
+    def _cancelled() -> bool:
+        return bool(run_id) and _fem_transient_cancelled_run.get("id") == run_id
+
     _fem_transient_lock.acquire()
     if key in _fem_transient_cache:
         _fem_transient_lock.release()
         return _fem_transient_cache[key]
+    # A duplicate request (animation + transient share a run_id) that was
+    # waiting on the lock while its twin got cancelled must NOT start a
+    # fresh solve — bail immediately.
+    if _cancelled():
+        _fem_transient_lock.release()
+        raise HTTPException(status_code=499, detail="FEM transient cancelled by user")
 
     _t_loop_start = _time.time()
     _fem_transient_progress["current"] = {
@@ -1538,33 +1594,63 @@ def get_fem_transient(
         band_thickness_mm=band_thickness_mm, n_sectors=int(n_sectors),
         stator_fillet_mm=stator_fillet_mm, I_phase_rms=I_phase_rms,
     )
-    _tasks = [(k, float(rotor_deg[k]), _solve_kw, (k in frame_idxs))
-              for k in range(n_total)]
     results: List[Optional[Dict]] = [None] * n_total
+    # Resume support: fill in any frames already cached from a prior
+    # (Stopped) run, and only submit the missing ones.
+    _todo = []
+    for k in range(n_total):
+        cached = _fem_frame_cache.get((_frame_pkey, k))
+        if cached is not None:
+            results[k] = cached
+        else:
+            _todo.append((k, float(rotor_deg[k]), _solve_kw, (k in frame_idxs)))
+    _n_cached = n_total - len(_todo)
     # Cap workers WELL below the core count.  Each worker is a full gmsh
     # process that pegs a core; using all cores starved the uvicorn event
     # loop so /progress polling timed out and the browser showed
     # "Failed to fetch" / a frozen UI.  ~1/4 of the cores keeps the box
     # responsive even if the animation + transient solves overlap.
-    n_workers = min(n_total, max(2, (_os.cpu_count() or 8) // 4))
+    n_workers = min(max(1, len(_todo)), max(2, (_os.cpu_count() or 8) // 4))
+    _was_cancelled = False
     try:
-        with _cf.ProcessPoolExecutor(max_workers=n_workers) as _ex:
-            _futs = [_ex.submit(_transient_frame_worker, t) for t in _tasks]
-            _done = 0
-            for _fut in _cf.as_completed(_futs):
-                _kk, _rr = _fut.result()
-                results[_kk] = _rr
-                _done += 1
-                _el = _time.time() - _t_loop_start
-                _fem_transient_progress["current"]["step"] = _done
-                _fem_transient_progress["current"]["elapsed_s"] = _el
-                _fem_transient_progress["current"]["per_step_s"] = _el / max(_done, 1)
-                _fem_transient_progress["current"]["eta_s"] = \
-                    (_el / max(_done, 1)) * (n_total - _done)
+        _done = _n_cached
+        _fem_transient_progress["current"]["step"] = _done
+        if _todo:
+            with _cf.ProcessPoolExecutor(max_workers=n_workers) as _ex:
+                _futs = [_ex.submit(_transient_frame_worker, t) for t in _todo]
+                for _fut in _cf.as_completed(_futs):
+                    _kk, _rr = _fut.result()
+                    results[_kk] = _rr
+                    # Stash the completed frame so a later resume reuses it.
+                    if _rr is not None:
+                        _fem_frame_cache[(_frame_pkey, _kk)] = _rr
+                    _done += 1
+                    _el = _time.time() - _t_loop_start
+                    _solved = max(1, _done - _n_cached)
+                    _fem_transient_progress["current"]["step"] = _done
+                    _fem_transient_progress["current"]["elapsed_s"] = _el
+                    _fem_transient_progress["current"]["per_step_s"] = _el / _solved
+                    _fem_transient_progress["current"]["eta_s"] = \
+                        (_el / _solved) * (n_total - _done)
+                    # Cooperative cancel: the Stop button flagged THIS run —
+                    # tear the pool down (cancel queued frames; running ones
+                    # finish their current frame) and bail.
+                    if _cancelled():
+                        _was_cancelled = True
+                        _ex.shutdown(wait=False, cancel_futures=True)
+                        break
     except Exception as e:
         log.exception("parallel FEM transient failed")
         _fem_transient_lock.release()
         raise HTTPException(status_code=500, detail=f"FEM transient failed: {e}")
+
+    if _was_cancelled:
+        _fem_transient_progress["current"] = {
+            **_fem_transient_progress["current"],
+            "running": False, "phase": "cancelled",
+        }
+        _fem_transient_lock.release()
+        raise HTTPException(status_code=499, detail="FEM transient cancelled by user")
 
     # Backfill any frame whose every jittered solve failed with the nearest
     # successful neighbour so the series stays continuous.

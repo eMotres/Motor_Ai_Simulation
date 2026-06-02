@@ -5,7 +5,7 @@
  * (default 60), the same mesh and solver settings as the rest of the
  * Simulation tab.  Plots T(t), P_cu/P_fe/P_total(t) and V_A/B/C(t).
  */
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Box, Paper, Typography, Tooltip,
 } from '@mui/material';
@@ -53,6 +53,8 @@ interface Props {
   onBusyChange?: (busy: boolean) => void;
   // Steps per electrical period — now lives in the left panel.
   steps?: number;
+  // "Start fresh" → backend discards cached frames before recomputing.
+  fresh?: boolean;
 }
 
 function readMeshSetting<T>(key: string, def: T): T {
@@ -86,7 +88,7 @@ interface ProgressInfo {
   phase:     string;
 }
 
-const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onSummary, runNonce = 0, onBusyChange, steps = 12 }) => {
+const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onSummary, runNonce = 0, onBusyChange, steps = 12, fresh = false }) => {
   // `steps` (n_steps_per_period) is controlled from the left panel and
   // matches the animation viewer's n_frames so both hit the same backend
   // cache key (one solve, not two).
@@ -116,8 +118,28 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
     return () => { alive = false; window.clearInterval(id); };
   }, [busy]);
 
+  const abortRef = useRef<AbortController | null>(null);
+
+  // "Stop Simulation" (left panel) dispatches a window event — abort the
+  // in-flight fetch and tell the backend to cancel THIS run_id (so its
+  // animation twin sharing the run_id is cancelled too, but the next run
+  // isn't).
+  useEffect(() => {
+    const onStop = () => {
+      abortRef.current?.abort();
+      fetch(`${API}/api/simulation/physics/fem_transient/cancel?run_id=${runNonce}`,
+        { method: 'POST' }).catch(() => {});
+      setBusy(false);
+      setError('Cancelled.');
+    };
+    window.addEventListener('sim:stop', onStop);
+    return () => window.removeEventListener('sim:stop', onStop);
+  }, [runNonce]);
+
   const run = () => {
     setBusy(true); setError(null);
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
     const qs = new URLSearchParams({
       n_steps_per_period: String(steps),
       n_periods:          '1',
@@ -137,6 +159,8 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
       // frames payload is ignored here.
       include_frames:     'true',
       n_frames:           String(steps),
+      run_id:             String(runNonce),
+      fresh:              String(fresh),
     }).toString();
     // Helper: fetch with auto-retry against transient connection drops.
     // The uvicorn supervisor sometimes respawns the worker mid-request when
@@ -144,7 +168,8 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
     // a permanent "Failed to fetch" until they click Re-run manually.
     const attempt = async (i = 0): Promise<void> => {
       try {
-        const r = await fetch(`${API}/api/simulation/physics/fem_transient?${qs}`);
+        const r = await fetch(`${API}/api/simulation/physics/fem_transient?${qs}`,
+          { signal: ctrl.signal });
         if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
         const d: TransientPayload = await r.json();
         setData(d); setBusy(false);
@@ -152,6 +177,8 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
         if (d.summary && onSummary) onSummary(d.summary);
       } catch (e: any) {
         const msg = String(e);
+        // User pressed Stop → don't retry, don't surface as an error.
+        if (ctrl.signal.aborted || /abort/i.test(msg)) { setBusy(false); return; }
         const isNetwork = /Failed to fetch|NetworkError|TypeError/i.test(msg);
         if (isNetwork && i < 4) {
           // wait 2 s for the supervisor to bring uvicorn back up, then retry

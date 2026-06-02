@@ -1377,19 +1377,62 @@ import os as _os  # noqa: E402
 _fem_pool: "Optional[_cf.ProcessPoolExecutor]" = None
 _fem_pool_lock = _threading.Lock()
 
+# numpy/OpenBLAS, gmsh/OpenMP and friends each default to spawning ONE thread
+# PER LOGICAL CORE.  With a process pool that is catastrophic: N worker
+# processes × 24 BLAS threads each = hundreds of threads fighting over the
+# cores, so adding workers barely helped (and an unpinned 24-worker pool
+# crashed outright).  Pin every numeric backend to a single thread so the
+# process pool — not the libraries — owns the parallelism: N processes → N
+# cores, clean linear scaling.
+_THREAD_ENV_KEYS = (
+    "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
+    "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "BLIS_NUM_THREADS",
+)
+
+
+def _pin_single_thread_env() -> None:
+    """Force every numeric backend to 1 thread in THIS process's env.  Set
+    in the parent right before the pool is created so spawned workers inherit
+    it before they import numpy/gmsh (OpenBLAS reads the var at import time).
+    The parent's own already-loaded BLAS is unaffected."""
+    for k in _THREAD_ENV_KEYS:
+        _os.environ.setdefault(k, "1")
+
 
 def _fem_pool_workers() -> int:
-    """Worker count: ~1/4 of the cores (min 2).  Each worker pegs a core
-    while meshing; leaving most cores free keeps the uvicorn event loop
-    responsive so /progress polling never times out (a full-core pool
-    previously starved it and froze the UI)."""
-    return max(2, (_os.cpu_count() or 8) // 4)
+    """Number of worker processes.
+
+    The box reports 24 *logical* CPUs but only 12 *physical* cores (Hyper-
+    Threading).  FEM meshing is CPU/cache/memory-bandwidth bound, so the
+    hyper-threads add no real throughput — measured scaling peaks at the
+    physical-core count and *regresses* past it (18-22 workers were slower
+    than 12, and 24 unpinned crashed).  Default to the physical-core count
+    (≈ logical/2).  Override with the FEM_POOL_WORKERS env var to experiment.
+    """
+    env = _os.environ.get("FEM_POOL_WORKERS")
+    if env:
+        try:
+            return max(1, int(env))
+        except ValueError:
+            pass
+    logical = _os.cpu_count() or 8
+    # Assume SMT/Hyper-Threading on an even, >4-core box → physical ≈ logical/2.
+    physical = logical // 2 if logical > 4 else logical
+    return max(2, physical)
 
 
 def _fem_worker_init():
-    """Runs ONCE per worker when the pool starts a process.  Forces the
+    """Runs ONCE per worker when the pool starts a process.  Pins numeric
+    threads (belt-and-suspenders alongside the inherited env) and forces the
     heavy imports up-front so the first real frame each worker handles no
     longer pays the ~5 s cold-import."""
+    try:
+        import os as _o
+        for _k in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
+                   "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "BLIS_NUM_THREADS"):
+            _o.environ.setdefault(_k, "1")
+    except Exception:
+        pass
     try:
         import logging as _lg
         _lg.disable(_lg.WARNING)
@@ -1409,6 +1452,9 @@ def get_fem_pool() -> "_cf.ProcessPoolExecutor":
     global _fem_pool
     with _fem_pool_lock:
         if _fem_pool is None:
+            # Pin threads in the parent env BEFORE spawning so every worker
+            # inherits single-thread numeric backends from process start.
+            _pin_single_thread_env()
             _fem_pool = _cf.ProcessPoolExecutor(
                 max_workers=_fem_pool_workers(),
                 initializer=_fem_worker_init,

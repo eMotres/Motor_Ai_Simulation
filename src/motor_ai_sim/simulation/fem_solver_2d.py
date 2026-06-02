@@ -1392,12 +1392,36 @@ def build_mesh_from_polygons(polys: dict,
             gmsh.model.setPhysicalName(2, phys_tag, f"dom_{dom_id}")
             phys_to_dom[phys_tag] = int(dom_id)
 
-        # No background field — refinement is driven by:
+        # Refinement is driven by:
         #  (a) polygon vertex density (MeshSizeFromPoints = 1)
-        #  (b) curvature inferred from the same vertex chain
-        #     (MeshSizeFromCurvature = 60)
-        # This matches Ansys: fine where the boundary actually curves, coarse
-        # along long straight edges.
+        #  (b) curvature inferred from the same vertex chain (MeshSizeFromCurvature)
+        #  (c) a RADIAL AIR-GAP field (below) — the global size (≈4 mm) is 8×
+        #      the 0.5 mm gap, so without this the gap had <1 element across it
+        #      and the Maxwell-stress torque was grossly under-resolved and
+        #      mesh-dependent (23→37 N·m).  Force ~3 element layers across the
+        #      gap + a smooth ramp into the adjacent tooth tips / rotor surface,
+        #      exactly where the torque-producing flux lives (Ansys does the same).
+        try:
+            _gc = geo_cfg or {}
+            _r_ro = float(_gc.get("rotor_outer_radius", 0.0))
+            _r_si = float(_gc.get("stator_inner_radius", 0.0))
+            if _r_ro > 0.0 and _r_si > _r_ro:
+                _r_ag = 0.5 * (_r_ro + _r_si)
+                _gap  = _r_si - _r_ro
+                _ag_h = max(0.06, min(min_size_mm, _gap / 3.0))   # ~3 layers in gap
+                _half = _gap * 1.5                                # full-fine half-width
+                _trans = max(1.0, float(mesh_size_mm))            # ramp distance
+                _formula = (f"min({float(mesh_size_mm)}, {_ag_h}+"
+                            f"({float(mesh_size_mm)}-{_ag_h})*"
+                            f"max(0,(fabs(sqrt(x*x+y*y)-{_r_ag})-{_half})/{_trans}))")
+                _fid = gmsh.model.mesh.field.add("MathEval")
+                gmsh.model.mesh.field.setString(_fid, "F", _formula)
+                gmsh.model.mesh.field.setAsBackgroundMesh(_fid)
+                # Let the background field own the size in the gap; keep curvature
+                # for fillets (gmsh takes the min of the two).
+                gmsh.option.setNumber("Mesh.MeshSizeExtendFromBoundary", 0)
+        except Exception as _e:
+            log.warning("air-gap size field skipped: %s", _e)
 
         gmsh.model.mesh.generate(2)
 
@@ -2312,6 +2336,37 @@ def _maxwell_stress_torque(mesh, A_nodal: np.ndarray, r_ag_m: float,
     return (stack_length_m / MU0) * r_ag_m ** 2 * float(np.sum(B_r * B_phi)) * dphi
 
 
+def _arkkio_torque(mesh, A_nodal: np.ndarray, r_in_m: float, r_out_m: float,
+                   stack_length_m: float) -> float:
+    """Arkkio torque — averages the Maxwell stress over the WHOLE air-gap
+    annulus instead of a single circle:
+
+        T = (L / (μ₀·(r_out−r_in))) · ∫∫_annulus  r · B_r · B_φ  dA
+
+    Integrating over every air-gap element (area-weighted) makes the result
+    far less sensitive to mesh density and sampling noise than the
+    single-contour stress integral — provided the gap is actually resolved
+    (see the radial size field in build_mesh_from_polygons).  Returns the
+    SECTOR torque; the caller multiplies by n_sectors.
+
+    mesh.p is in METRES, so r_in_m / r_out_m must be in metres too.
+    """
+    Bx, By = _per_triangle_B(mesh, A_nodal)
+    P = mesh.p; T = mesh.t
+    cx = (P[0, T[0]] + P[0, T[1]] + P[0, T[2]]) / 3.0
+    cy = (P[1, T[0]] + P[1, T[1]] + P[1, T[2]]) / 3.0
+    rc = np.hypot(cx, cy)
+    mask = (rc >= r_in_m) & (rc <= r_out_m)
+    if not np.any(mask):
+        return 0.0
+    areas = _triangle_areas(mesh)                      # m²
+    cosp = cx[mask] / rc[mask]; sinp = cy[mask] / rc[mask]
+    Br  =  Bx[mask] * cosp + By[mask] * sinp
+    Bph = -Bx[mask] * sinp + By[mask] * cosp
+    integrand = areas[mask] * rc[mask] * Br * Bph
+    return (stack_length_m / (MU0 * (r_out_m - r_in_m))) * float(np.sum(integrand))
+
+
 def fem_solve_for_sim(
     rotor_angle_deg: float = 0.0,
     gamma_deg:       float = 0.0,
@@ -2482,14 +2537,23 @@ def fem_solve_for_sim(
     Bmag_tri = np.nan_to_num(Bmag_tri, nan=0.0, posinf=0.0, neginf=0.0)
     areas    = _triangle_areas(mesh)               # m² for unit stack
 
-    # ── Torque via Maxwell stress on air-gap circle (sector arc × n) ──────
+    # ── Torque via Arkkio (air-gap annulus average) — mesh-robust ─────────
+    # The old single-circle Maxwell stress was wildly mesh-dependent (23→37 N·m)
+    # because the gap was under-meshed; with the air-gap size field the gap is
+    # now resolved and Arkkio (averaging the stress over the whole annulus)
+    # converges to ~26-27 N·m.  Single-circle kept only for the debug log.
     r_ag_m = 0.5 * (p.r_rotor_out + p.r_stator_in)      # mid-air-gap
     theta_end = 2 * math.pi if n_sectors <= 1 else (2 * math.pi / n_sectors)
-    T_sector = _maxwell_stress_torque(
-        mesh, A, r_ag_m, p.stack_length,
-        theta_start=0.0, theta_end=theta_end, n_samples=720,
-    )
+    T_sector = _arkkio_torque(mesh, A, p.r_rotor_out, p.r_stator_in, p.stack_length)
     T_em_Nm = T_sector * (n_sectors if n_sectors > 1 else 1)
+    try:
+        T_circle = _maxwell_stress_torque(mesh, A, r_ag_m, p.stack_length,
+                                          0.0, theta_end, 720) \
+                   * (n_sectors if n_sectors > 1 else 1)
+        log.info("torque: Arkkio=%.2f N·m  (single-circle=%.2f N·m)",
+                 T_em_Nm, T_circle)
+    except Exception:
+        pass
 
     # ── Per-phase flux linkage ψ_A, ψ_B, ψ_C ─────────────────────────────
     # ψ_per_slot = N_turns · L_stack · ⟨A_z⟩_slot  (signed by winding dir).

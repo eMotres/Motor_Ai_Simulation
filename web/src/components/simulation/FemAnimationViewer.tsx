@@ -78,10 +78,14 @@ interface Props {
   I_phase_rms?:  number;
   n_frames?:     number;        // animation keyframes (default 12)
   onPayload?:    (p: FemPayload) => void;   // forwarded from inner viewer
+  // Ticks when the user presses "Run Simulation"; the animation only
+  // (re)solves on that signal, never on raw gamma/current edits.
+  runNonce?:     number;
 }
 
 const FemAnimationViewer: React.FC<Props> = ({
   gamma_deg = 0, I_phase_rms = 85, n_frames: n_frames_default = 12, onPayload,
+  runNonce = 0,
 }) => {
   const [data,    setData]    = useState<TransientFramePayload | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
@@ -144,11 +148,18 @@ const FemAnimationViewer: React.FC<Props> = ({
     return () => window.clearInterval(tick);
   }, [playing, data, fps]);
 
-  // ── auto-run on first mount + whenever γ / I changes ───────────────────
+  // Keep the keyframe count synced with the left-panel "Steps" field so
+  // the animation and the transient charts hit the same backend cache key
+  // (one FEM sweep, not two).
+  useEffect(() => { setNFrames(n_frames_default); }, [n_frames_default]);
+
+  // ── run ONLY when "Run Simulation" is pressed (runNonce ticks) ─────────
+  // runNonce starts at 0 → nothing happens on mount; the user sets the
+  // operating point + mesh settings first, then launches one solve.
   useEffect(() => {
-    runAnimation();
+    if (runNonce > 0) runAnimation();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gamma_deg, I_phase_rms]);
+  }, [runNonce]);
 
   // ── build a FemPayload-shaped object for FemFieldChart ─────────────────
   const currentFrame = data?.frames[idx];

@@ -93,6 +93,14 @@ interface Props {
     torque_Nm?: number;
     B_max_T?: number;
   } | null;
+  // Ticks on each "Run Simulation" press; forwarded to the FEM panels
+  // which only (re)solve on that signal.
+  runNonce?:      number;
+  onBusyChange?:  (busy: boolean) => void;
+  // Steps per electrical period (set in the left panel).  Drives both the
+  // transient n_steps_per_period and the animation n_frames so they share
+  // one backend cache key.
+  steps?:         number;
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -134,7 +142,7 @@ function exportCSV(filename: string, rows: Record<string, number | string>[]) {
 }
 
 // ── main component ────────────────────────────────────────────────────────────
-const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_rms, pinnLosses }) => {
+const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_rms, pinnLosses, runNonce = 0, onBusyChange, steps = 12 }) => {
   // Latest FEM solve payload — kept around so future siblings can reuse it.
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [_femPayload, setFemPayload] = React.useState<FemPayload | null>(null);
@@ -458,10 +466,11 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
             playback across one electrical period.  Slider lets you scrub
             through the rotor positions; play button auto-advances. ── */}
       <FemAnimationViewer gamma_deg={gamma_deg} I_phase_rms={I_phase_rms}
-        onPayload={setFemPayload}/>
+        n_frames={steps} runNonce={runNonce} onPayload={setFemPayload}/>
 
       {/* ── Transient: T(t), P(t), V(t) — one FEM solve per time step ── */}
       <TransientCharts gamma_deg={gamma_deg} I_phase_rms={I_phase_rms}
+        steps={steps} runNonce={runNonce} onBusyChange={onBusyChange}
         onSummary={setTransientSummary}/>
 
       {/* Analytical MMF(θ) hidden. */}

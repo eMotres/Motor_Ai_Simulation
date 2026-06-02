@@ -124,6 +124,17 @@ const SimulationPanel: React.FC = () => {
   const [frequency,     setFrequency]     = useState(921.67);
   const [rpm,           setRpm]           = useState(3950.0);
   const [phaseOffset,   setPhaseOffset]   = useState(0.0);   // γ [deg]
+
+  // ── Run-Simulation gating ──────────────────────────────────────────────
+  // The FEM transient + field animation only (re)compute when runNonce
+  // ticks, i.e. when the user presses "Run Simulation".  This lets them
+  // change several parameters (γ, current, mesh settings) and launch ONE
+  // solve instead of re-running on every keystroke.
+  const [runNonce, setRunNonce] = useState(0);
+  const [simBusy,  setSimBusy]  = useState(false);
+  // Steps per electrical period (transient time resolution).  Was a
+  // slider in the right panel; now a typeable field here.
+  const [steps,    setSteps]    = useState(12);
   // ── rotor angle / PINN training settings removed ──────────────────────
   // FEM auto-run now sweeps the rotor through the full electrical period,
   // and the PINN run button is gone (no Modulus dependency).  Kept as
@@ -420,6 +431,49 @@ const SimulationPanel: React.FC = () => {
         {srvErr && (
           <Alert severity="error" sx={{ fontSize: 11 }}>{srvErr}</Alert>
         )}
+
+        {/* ── Run Simulation — launches ONE FEM solve with the current
+              operating point + mesh settings.  Pinned at the bottom of the
+              left panel so the user can edit several fields, then run. ── */}
+        <Box sx={{ mt: 'auto', pt: 1 }}>
+          <TextField
+            label="Steps per electrical period"
+            type="number" size="small" fullWidth
+            value={steps}
+            onChange={e => {
+              const v = Math.round(+e.target.value);
+              if (!Number.isNaN(v)) setSteps(Math.max(6, Math.min(180, v)));
+            }}
+            inputProps={{ step: 6, min: 6, max: 180 }}
+            disabled={simBusy}
+            helperText="Transient time resolution (6–180). More = finer T(t)/V(t), slower."
+            FormHelperTextProps={{ sx: { fontSize: 10, color: '#475569', mx: 0 } }}
+            sx={{ mb: 1.25 }}
+          />
+          <Button
+            fullWidth
+            variant="contained"
+            disabled={simBusy}
+            onClick={() => setRunNonce(n => n + 1)}
+            startIcon={simBusy
+              ? <CircularProgress size={16} sx={{ color: '#fff' }} />
+              : <PlayArrowIcon />}
+            sx={{
+              py: 1.2, fontWeight: 700, fontSize: 13, letterSpacing: 0.5,
+              textTransform: 'none', borderRadius: 2,
+              bgcolor: simBusy ? '#1e3a5f' : '#2563eb',
+              '&:hover': { bgcolor: '#1d4ed8' },
+              boxShadow: '0 2px 12px rgba(37,99,235,0.4)',
+            }}
+          >
+            {simBusy ? 'Running FEM…' : (runNonce === 0 ? 'Run Simulation' : 'Re-run Simulation')}
+          </Button>
+          <Typography sx={{ fontSize: 10, color: '#475569', textAlign: 'center', mt: 0.75 }}>
+            {simBusy
+              ? 'Solving the transient — see progress on the right'
+              : 'Edit γ / current / mesh settings, then launch one solve'}
+          </Typography>
+        </Box>
       </Box>
 
       {/* ── RIGHT: results ── */}
@@ -641,6 +695,9 @@ const SimulationPanel: React.FC = () => {
           gamma_deg={phaseOffset}
           I_phase_rms={current}
           pinnLosses={job?.result ?? null}
+          runNonce={runNonce}
+          onBusyChange={setSimBusy}
+          steps={steps}
         />
 
       </Box>

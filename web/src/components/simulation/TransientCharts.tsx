@@ -7,13 +7,12 @@
  */
 import React, { useEffect, useState } from 'react';
 import {
-  Box, Paper, Typography, CircularProgress, Button, Slider, Tooltip,
+  Box, Paper, Typography, Tooltip,
 } from '@mui/material';
 import {
   ResponsiveContainer, LineChart, Line, XAxis, YAxis,
   CartesianGrid, Tooltip as RcTooltip, Legend,
 } from 'recharts';
-import RefreshIcon from '@mui/icons-material/Refresh';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
@@ -47,6 +46,13 @@ interface Props {
   gamma_deg?: number;
   I_phase_rms?: number;
   onSummary?: (s: TransientSummary) => void;
+  // Incremented by the "Run Simulation" button.  The transient only
+  // (re)computes when this changes — never on raw gamma/current edits —
+  // so the user can tweak several parameters and launch one solve.
+  runNonce?: number;
+  onBusyChange?: (busy: boolean) => void;
+  // Steps per electrical period — now lives in the left panel.
+  steps?: number;
 }
 
 function readMeshSetting<T>(key: string, def: T): T {
@@ -80,12 +86,10 @@ interface ProgressInfo {
   phase:     string;
 }
 
-const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onSummary }) => {
-  // 12 steps matches the animation viewer's default n_frames, so they
-  // hit the same cache key — second auto-fetch returns instantly
-  // instead of doing another 12 × ~5 s FEM solves in serial with the
-  // first one (gmsh process-global lock).
-  const [steps, setSteps] = useState<number>(12);
+const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onSummary, runNonce = 0, onBusyChange, steps = 12 }) => {
+  // `steps` (n_steps_per_period) is controlled from the left panel and
+  // matches the animation viewer's n_frames so both hit the same backend
+  // cache key (one solve, not two).
   const [data,  setData]  = useState<TransientPayload | null>(null);
   const [busy,  setBusy]  = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
@@ -161,11 +165,19 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
     attempt();
   };
 
-  // Auto-run on mount + when operating-point inputs change.  30 steps
-  // ≈ 12 seconds at the default mesh density.
-  useEffect(() => { run();
+  // Run ONLY when the user presses "Run Simulation" (runNonce ticks).
+  // The fetch reads the CURRENT gamma / I / mesh-settings at click time,
+  // so several edits batch into one solve.  runNonce starts at 0 → no
+  // auto-run on mount.
+  useEffect(() => {
+    if (runNonce > 0) run();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gamma_deg, I_phase_rms]);
+  }, [runNonce]);
+
+  // Report busy state up to the Run button.
+  useEffect(() => { onBusyChange?.(busy);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [busy]);
 
   // Build chart-friendly row arrays
   const rows = React.useMemo(() => {
@@ -204,27 +216,14 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
             </Typography>
           )}
         </Box>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5,
-          minWidth: 320 }}>
-          <Box sx={{ flex: 1 }}>
-            <Typography sx={{ fontSize: 10, color: '#94a3b8' }}>
-              Steps per electrical period: <b>{steps}</b>
-            </Typography>
-            <Slider value={steps} min={12} max={180} step={6}
-              onChange={(_, v) => setSteps(v as number)}
-              sx={{ color: '#3b82f6' }}/>
-          </Box>
-          <Button size="small" variant="contained"
-            startIcon={busy ? <CircularProgress size={14} sx={{ color: '#fff' }}/>
-                            : <RefreshIcon fontSize="small"/>}
-            disabled={busy} onClick={run}
-            sx={{ bgcolor: '#1e3a5f', '&:hover': { bgcolor: '#1e40af' },
-              textTransform: 'none', minWidth: 170 }}>
-            {busy && progress && progress.total > 0
-              ? `Frame ${progress.step}/${progress.total}`
-              : (busy ? 'Running…' : (data ? 'Re-run' : 'Run'))}
-          </Button>
-        </Box>
+        {/* Steps/period + Run moved to the left panel's "Run Simulation".
+            Just show the live frame counter here while solving. */}
+        {busy && progress && progress.total > 0 && (
+          <Typography sx={{ fontSize: 11, color: '#60a5fa', fontWeight: 600,
+            whiteSpace: 'nowrap' }}>
+            Frame {progress.step}/{progress.total}
+          </Typography>
+        )}
       </Box>
 
       {/* Live progress strip — only visible while a transient is running */}
@@ -258,8 +257,9 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
       {!data && !busy && !error && (
         <Typography sx={{ fontSize: 11, color: '#64748b', textAlign: 'center',
           p: 3, border: '1px dashed #1e293b', borderRadius: 1 }}>
-          Press <b>Run</b> to launch a transient FEM sweep over one electrical period.<br/>
-          Estimated time: {(steps * 0.4).toFixed(0)} seconds at the current mesh density.
+          Press <b>Run Simulation</b> (left panel) to launch a transient FEM
+          sweep over one electrical period.<br/>
+          {steps} steps/period.
         </Typography>
       )}
 

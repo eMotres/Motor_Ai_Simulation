@@ -20,7 +20,9 @@ import {
 } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { Canvas, useThree } from '@react-three/fiber';
-import { OrbitControls, OrthographicCamera, GizmoHelper, GizmoViewcube } from '@react-three/drei';
+import { OrbitControls, OrthographicCamera } from '@react-three/drei';
+import Viewcube from '../viewer3d/Viewcube';
+import { ViewcubeNavigation, CameraSync } from '../viewer3d/MotorScene';
 import * as THREE from 'three';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
@@ -644,16 +646,15 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
               <FitView payload={payload} controlsRef={controlsRef}/>
               <ambientLight intensity={1}/>
               <FieldMesh payload={payload} mode={mode}/>
-              <OrbitControls makeDefault ref={controlsRef} enableDamping={false}
+              <OrbitControls ref={controlsRef} enableDamping={false}
                 enableRotate enablePan enableZoom zoomSpeed={1.2}/>
-              {/* Orientation cube (top-right), same as the Geometry view */}
-              <GizmoHelper alignment="top-right" margin={[48, 48]}>
-                <GizmoViewcube
-                  color="#1e293b" textColor="#cbd5e1" strokeColor="#3b82f6"
-                  hoverColor="#2563eb"/>
-              </GizmoHelper>
+              {/* Drive + follow the overlay Viewcube (same as Geometry). */}
+              <CameraSync controlsRef={controlsRef}/>
+              <ViewcubeNavigation controlsRef={controlsRef}/>
             </Canvas>
           )}
+          {/* Orientation cube + XYZ axes — same component as Geometry */}
+          {payload && <Viewcube/>}
         </Box>
 
         {/* Colour bar — recompute the same 2/98 percentile-based vmin/vmax

@@ -15,6 +15,7 @@ import {
 import SaveIcon from '@mui/icons-material/Save';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import FemMeshViewer3D from './FemMeshViewer3D';
+import Viewcube from '../viewer3d/Viewcube';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
 
@@ -974,6 +975,8 @@ const MeshPanel: React.FC = () => {
                   showOutlines={showOutlines}
                   showGrid/>
               </Box>
+              {/* Orientation cube + XYZ axes — same component as Geometry */}
+              <Viewcube/>
               {/* Help text overlay */}
               <Box sx={{ position: 'absolute', left: 8, bottom: 8, zIndex: 4,
                 bgcolor: 'rgba(10,22,40,0.7)', px: 1, py: 0.5, borderRadius: 1,

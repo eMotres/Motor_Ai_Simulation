@@ -9,7 +9,8 @@
  */
 import React, { useEffect, useMemo, useRef } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
-import { OrbitControls, OrthographicCamera, Grid, GizmoHelper, GizmoViewcube } from '@react-three/drei';
+import { OrbitControls, OrthographicCamera, Grid } from '@react-three/drei';
+import { ViewcubeNavigation, CameraSync } from '../viewer3d/MotorScene';
 import * as THREE from 'three';
 
 export interface FemMeshPayload {
@@ -284,7 +285,6 @@ const FemMeshViewer3D: React.FC<ViewerProps> = ({
         showWire={showWire} showOutlines={showOutlines}/>
 
       <OrbitControls
-        makeDefault
         ref={controlsRef}
         enableDamping={false}
         enableRotate
@@ -292,12 +292,11 @@ const FemMeshViewer3D: React.FC<ViewerProps> = ({
         enableZoom
         zoomSpeed={1.2}
       />
-      {/* Orientation cube (top-right), same as the Geometry view */}
-      <GizmoHelper alignment="top-right" margin={[48, 48]}>
-        <GizmoViewcube
-          color="#1e293b" textColor="#cbd5e1" strokeColor="#3b82f6"
-          hoverColor="#2563eb"/>
-      </GizmoHelper>
+      {/* Drive + follow the shared overlay Viewcube (same as Geometry):
+          CameraSync streams this camera's orientation to the cube;
+          ViewcubeNavigation reorients this camera when a face is clicked. */}
+      <CameraSync controlsRef={controlsRef}/>
+      <ViewcubeNavigation controlsRef={controlsRef}/>
     </Canvas>
   );
 };

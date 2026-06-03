@@ -2521,13 +2521,10 @@ def end_winding_factor_geom(p, geo_cfg) -> float:
         return 1.0
     r_mid = p.r_stator_in + p.slot_height_m * 0.5
     tau = 2.0 * math.pi * r_mid / max(p.num_slots, 1)        # slot pitch
-    q = p.num_slots / (3.0 * max(p.num_poles, 1))            # slots/pole/phase
-    if q < 0.75:                                            # concentrated tooth coil
-        tooth_w = max(tau - p.slot_width_m, 0.3 * tau)      # tooth the coil wraps
-        L_end = (math.pi / 2.0) * tooth_w                   # half-loop over the tooth
-    else:                                                   # distributed winding
-        L_end = math.pi * tau / 2.0 + p.slot_height_m
-    return 1.0 + (2.0 * L_end) / L
+    tooth_w = max(tau - p.slot_width_m, 0.3 * tau)           # tooth the coil wraps
+    # k_end = (π·tooth_width/2 + L_stack) / L_stack  — the tooth-coil end-turn
+    # (half-loop over the tooth) added to the active stack length.
+    return (math.pi * tooth_w / 2.0 + L) / L
 
 
 def copper_loss_W(p, geo_cfg, I_phase_rms, n_parallel,

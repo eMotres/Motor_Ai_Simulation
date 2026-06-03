@@ -139,7 +139,10 @@ const SimulationPanel: React.FC = () => {
   const [rpm,           setRpm]           = usePersisted('rpm',       3950.0);
   const [phaseOffset,   setPhaseOffset]   = usePersisted('gamma',     0.0);   // γ [deg]
   const [coilTemp,      setCoilTemp]      = usePersisted('coilTemp',  120.0); // °C
-  const [endWinding,    setEndWinding]    = usePersisted('endWinding', 0.0);  // 0 = auto
+  const [endWinding,    setEndWinding]    = usePersisted('endWinding', 0.0);  // k_end (editable)
+  // Last geometry-derived k_end we seeded the cell with — lets us re-seed on a
+  // geometry change without clobbering a manual override on an unchanged geom.
+  const [endWindingGeo, setEndWindingGeo] = usePersisted('endWindingGeo', 0.0);
 
   // ── Run-Simulation gating ──────────────────────────────────────────────
   // The FEM transient + field animation only (re)compute when runNonce
@@ -214,6 +217,15 @@ const SimulationPanel: React.FC = () => {
         if (g.num_poles)        setNumPoles(g.num_poles);
         if (g.num_slots)        setNumSlots(g.num_slots);
         if (g.num_wires_per_slot) setNWiresPerSlot(g.num_wires_per_slot);
+        // End-winding factor k_end = (π·tooth_w/2 + L)/L, derived from the
+        // CURRENT geometry.  Re-seed the (editable) cell whenever the geometry-
+        // derived value CHANGES — like the other geometry-derived parameters —
+        // but leave a manual override untouched if the geometry is the same.
+        const kAuto = Number(d.end_winding_factor);
+        if (Number.isFinite(kAuto) && kAuto > 0 && kAuto !== endWindingGeo) {
+          setEndWinding(+kAuto.toFixed(2));
+          setEndWindingGeo(kAuto);
+        }
       })
       .catch(() => {});
   }, []);
@@ -472,13 +484,14 @@ const SimulationPanel: React.FC = () => {
               FormHelperTextProps={{ sx: { fontSize: 10, color: '#475569', mx: 0 } }}
             />
             <TextField
-              label="End-winding factor (0 = auto from geometry)"
+              label="End-winding factor k_end (editable)"
               type="number" size="small" fullWidth
               value={endWinding}
               onChange={e => setEndWinding(+e.target.value)}
-              inputProps={{ step: 0.1, min: 0, max: 6 }}
-              helperText={`k_end = (active + end-turn)/active length.  0 → ` +
-                          `estimate ≈ 1 + 2·L_endturn/L_stack from geometry`}
+              inputProps={{ step: 0.05, min: 0, max: 6 }}
+              helperText={`k_end = (π·tooth_w/2 + L_stack)/L_stack` +
+                          ` = ${endWindingGeo ? endWindingGeo.toFixed(3) : '—'}` +
+                          ` from geometry · auto-recomputed on geometry change`}
               disabled={isRunning}
               FormHelperTextProps={{ sx: { fontSize: 10, color: '#475569', mx: 0 } }}
             />

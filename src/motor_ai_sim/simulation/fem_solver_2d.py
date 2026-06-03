@@ -56,6 +56,23 @@ MU0 = 4e-7 * math.pi
 # width is controlled by the radial air-gap size field, not this.
 _N_SLIP = 1008
 
+
+def _snap_steps_to_nodes(n_steps: int, nodes_per_period: int) -> int:
+    """Snap the requested steps/period to the nearest DIVISOR of the slip-ring
+    node count per electrical period, so the rotor advances a whole number of
+    nodes each time step (uniform → strictly PERIODIC torque, not the chaotic
+    jitter from round(θ/spacing) landing between nodes).
+
+    Keeping the slip-node count FIXED (instead of scaling it with n_steps) means
+    the mesh — and therefore the torque magnitude — does NOT drift with the time
+    resolution.  Effective resolution is capped at nodes_per_period."""
+    ns = max(int(n_steps), 1)
+    if nodes_per_period % ns == 0:
+        return ns
+    divs = [d for d in range(1, nodes_per_period + 1) if nodes_per_period % d == 0]
+    # nearest divisor; on a tie prefer the finer (larger) one
+    return min(divs, key=lambda d: (abs(d - ns), -d))
+
 # Domain ids (must match _DOMAIN_ID in the API rasterisation for consistency)
 DOM_AIR     = 0
 DOM_STATOR  = 1
@@ -203,7 +220,8 @@ def _decimate_poly_by_angle(geom, min_turn_deg: float):
 
 def _simplify_polys(polys: dict, tol_mm: float = 0.005,
                      stator_fillet_mm: float = 0.8,
-                     normal_dev_deg: float = 0.0) -> dict:
+                     normal_dev_deg: float = 0.0,
+                     n_slip: Optional[int] = None) -> dict:
     """Drop near-collinear vertices below chord tolerance `tol_mm`.
 
     Default 0.005 mm matches Ansys Maxwell's "Surface Deviation = 0.01 mm"
@@ -280,7 +298,7 @@ def _simplify_polys(polys: dict, tol_mm: float = 0.005,
             # sliding-band transfinite mesh gets identical, matching nodes there
             # (rotor & stator differences don't touch mid_r, so it stays intact).
             from shapely.geometry import Polygon as _SPoly2
-            _N = _N_SLIP
+            _N = int(n_slip) if n_slip and n_slip > 0 else _N_SLIP
             mid_ring = [(mid_r * math.cos(2*math.pi*i/_N),
                          mid_r * math.sin(2*math.pi*i/_N)) for i in range(_N)]
             rout_ring = [(r_outer * math.cos(2*math.pi*i/_N),
@@ -2597,6 +2615,17 @@ def fem_transient_sliding_band(
                 'B': Ipk * math.cos(te - 2 * math.pi / 3),
                 'C': Ipk * math.cos(te + 2 * math.pi / 3)}
 
+    # ── Snap steps/period so the rotor lands on whole slip nodes ──────────
+    # The slip ring has _N_SLIP/pole_pairs nodes per electrical period; for a
+    # uniform (periodic, non-chaotic) rotor advance, n_steps must divide that.
+    _nodes_per_period = _N_SLIP // pole_pairs
+    _req_steps = int(n_steps_per_period)
+    n_steps_per_period = _snap_steps_to_nodes(_req_steps, _nodes_per_period)
+    if n_steps_per_period != _req_steps:
+        log.info("SB: snapped steps/period %d → %d (divisor of %d slip nodes/"
+                 "period → whole-node rotor steps, periodic torque)",
+                 _req_steps, n_steps_per_period, _nodes_per_period)
+
     # ── Build the two halves ONCE ────────────────────────────────────────
     motor = CadQueryMotor()
     polys = motor.get_2d_polygons(rotor_angle_deg=0.0)
@@ -2792,8 +2821,9 @@ def fem_transient_sliding_band(
         uniq, inv = np.unique(rid, return_inverse=True)
         Pro = _coo((rsg, (np.arange(n), inv)), shape=(n, uniq.size)).tocsr()
         outer_red = np.unique(inv[outer_nodes])
-        # reset the per-element iron reluctivity to the unsaturated base each
-        # frame so the Picard sweep starts from a consistent state
+        # Reset the per-element iron reluctivity to the unsaturated base each
+        # frame so the saturation solution is a pure function of rotor position
+        # (no history dependence) → the torque ripple is strictly PERIODIC.
         for hn in ("s", "r"):
             for tag in sb_sat[hn]:
                 nu_el[hn][tag][:] = 1.0 / (MU0 * max(mu0[hn].get(tag, 1.0), 1.0))

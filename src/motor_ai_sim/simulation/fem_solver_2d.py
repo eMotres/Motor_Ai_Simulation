@@ -2589,7 +2589,13 @@ def fem_transient_sliding_band(
     # so clamp the bulk element size for this path; the air-gap is refined
     # separately by the MathEval size field regardless of this value.
     _req_mesh = float(mesh_size_mm)
-    mesh_size_mm = min(_req_mesh, 3.0)
+    # Clamp the iron mesh to 2 mm / 0.2 mm: a finer, more rotationally-
+    # consistent iron mesh cuts the absolute parasitic (non-6·k) torque ripple
+    # from the unstructured-mesh asymmetry by ~36 % (1.6→1.0 N·m, verified at
+    # 24 & 72 steps) and is closer to mesh-converged.  A ~1 N·m floor remains
+    # (sector anti-periodic formulation / physical FSCW sub-harmonics).
+    mesh_size_mm = min(_req_mesh, 2.0)
+    min_size_mm = min(float(min_size_mm), 0.2)
     cfg = get_config(); sim = cfg.get("simulation", {})
     geo = cfg.get("geometry", {}); wind = cfg.get("winding", {})
     p = params_from_config(); dom = MotorDomains2D(p)

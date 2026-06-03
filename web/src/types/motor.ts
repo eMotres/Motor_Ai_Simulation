@@ -153,6 +153,7 @@ export interface SweepConfig {
 export interface OptDesignPoint {
   feasible: boolean;
   eligible?: boolean;
+  fem?: boolean;
   reason?: string;
   T_em_Nm: number;
   efficiency: number;

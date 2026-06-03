@@ -7,7 +7,7 @@
 import React from 'react';
 import {
   Box, Typography, Table, TableBody, TableCell, TableHead, TableRow,
-  Button, Chip, Tooltip,
+  Button, Chip, Tooltip, TextField, CircularProgress,
 } from '@mui/material';
 import {
   ScatterChart, Scatter, XAxis, YAxis, ZAxis, CartesianGrid,
@@ -28,6 +28,7 @@ const ParetoTooltip: React.FC<any> = ({ active, payload }) => {
   const ov = Object.entries(d.overrides || {}).filter(([k]) => !OPERATING_KEYS.has(k));
   return (
     <Box sx={{ bgcolor: '#0f172a', border: '1px solid #1e293b', p: 1, fontSize: 11, color: '#cbd5e1', borderRadius: 1 }}>
+      {d.fem && <div style={{ color: '#22c55e', fontWeight: 700 }}>● FEM transient</div>}
       <div><b>η = {(d.efficiency * 100).toFixed(2)} %</b> · T/mass = {fmt(d.torque_per_mass_Nm_kg)} N·m/kg</div>
       <div>I = {fmt(d.current_a, 0)} A · T = {fmt(d.T_em_Nm)} N·m · mass = {fmt(d.mass_total_kg)} kg</div>
       <div style={{ color: d.eligible ? '#34d399' : '#f87171' }}>
@@ -46,6 +47,12 @@ const ParetoTooltip: React.FC<any> = ({ active, payload }) => {
 const ParetoResults: React.FC<{ result: OptimizationResult }> = ({ result }) => {
   const updateGeometryViaApi = useMotorStore(s => s.updateGeometryViaApi);
   const updateOperatingPoint = useMotorStore(s => s.updateOperatingPoint);
+  const refineFront = useMotorStore(s => s.refineFront);
+  const refineRunning = useMotorStore(s => s.refineRunning);
+  const refineProgress = useMotorStore(s => s.refineProgress);
+  const refineResults = useMotorStore(s => s.refineResults);
+  const refineError = useMotorStore(s => s.refineError);
+  const [steps, setSteps] = React.useState(40);
 
   const pts = result.points;
   const frontSet = new Set(result.pareto_indices);
@@ -74,6 +81,11 @@ const ParetoResults: React.FC<{ result: OptimizationResult }> = ({ result }) => 
   const basePt: Pt[] = base?.feasible
     ? [{ x: base.efficiency * 100, y: base.torque_per_mass_Nm_kg, d: base }]
     : [];
+
+  // FEM-refined points (real transient) overlaid on the analytical scatter.
+  const refinedPts: Pt[] = (refineResults || [])
+    .filter(d => d && d.efficiency > 0 && d.torque_per_mass_Nm_kg > 0)
+    .map(d => ({ x: d.efficiency * 100, y: d.torque_per_mass_Nm_kg, d }));
 
   // Segment lines (one per geometry, I1→I2), downsampled.
   const segArr = result.segments ?? [];
@@ -118,6 +130,30 @@ const ParetoResults: React.FC<{ result: OptimizationResult }> = ({ result }) => 
         </Tooltip>
       </Box>
 
+      {/* ── FEM refinement of the front ── */}
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 1.5, flexWrap: 'wrap' }}>
+        <TextField label="steps / period" type="number" size="small" value={steps}
+          onChange={e => setSteps(Math.max(8, Math.min(180, Math.round(+e.target.value) || 40)))}
+          inputProps={{ min: 8, max: 180, style: { fontSize: 12, padding: '4px 8px', width: 56 } }}
+          InputLabelProps={{ sx: { fontSize: 11 } }} />
+        <Button variant="outlined" size="small" color="success"
+          disabled={refineRunning || result.pareto_indices.length === 0}
+          startIcon={refineRunning ? <CircularProgress size={13} color="inherit" /> : undefined}
+          onClick={() => refineFront(steps)} sx={{ textTransform: 'none', fontSize: 12 }}>
+          {refineRunning
+            ? `Refining ${refineProgress?.done ?? 0}/${refineProgress?.total ?? 0}…`
+            : `Refine front with FEM (${result.pareto_indices.length} pts × ${steps} steps)`}
+        </Button>
+        {refinedPts.length > 0 && (
+          <Chip size="small" color="success" variant="outlined"
+            label={`${refinedPts.length} FEM points`} sx={{ height: 18, fontSize: 10 }} />
+        )}
+        <Typography variant="caption" color="text.disabled">
+          ≈1–2 min per point · in-memory (Simulation untouched)
+        </Typography>
+        {refineError && <Typography color="error" variant="caption">{refineError}</Typography>}
+      </Box>
+
       <Box sx={{ height: 340, bgcolor: 'rgba(255,255,255,0.02)', borderRadius: 1, p: 1 }}>
         <ResponsiveContainer width="100%" height="100%">
           <ScatterChart margin={{ top: 8, right: 16, bottom: 24, left: 8 }}>
@@ -146,6 +182,7 @@ const ParetoResults: React.FC<{ result: OptimizationResult }> = ({ result }) => 
             <Scatter name={`ripple > ${result.ripple_max_pct.toFixed(0)}%`} data={filtered} fill="#7f1d1d" fillOpacity={0.45} />
             <Scatter name="eligible" data={cloud} fill="#64748b" fillOpacity={0.65} />
             <Scatter name="Pareto front" data={front} fill="#f59e0b" line={{ stroke: '#f59e0b', strokeWidth: 1 }} shape="circle" />
+            <Scatter name="FEM-refined" data={refinedPts} fill="#22c55e" shape="star" />
             <Scatter name="baseline" data={basePt} fill="#3b82f6" shape="diamond" />
           </ScatterChart>
         </ResponsiveContainer>

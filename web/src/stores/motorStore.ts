@@ -13,6 +13,7 @@ import type {
   OperatingPoint,
   ParameterVariation,
   OptimizationResult,
+  OptDesignPoint,
 } from '../types/motor';
 import {
   defaultGeometryParams,
@@ -160,6 +161,13 @@ interface MotorState {
   optimizationRunning: boolean;
   optimizationError: string | null;
   runOptimization: (nSamples?: number) => Promise<void>;
+
+  // FEM refinement of selected (front) designs
+  refineRunning: boolean;
+  refineProgress: { done: number; total: number } | null;
+  refineResults: OptDesignPoint[] | null;
+  refineError: string | null;
+  refineFront: (stepsPerPeriod?: number) => Promise<void>;
 }
 
 export const useMotorStore = create<MotorState>()(
@@ -185,12 +193,13 @@ export const useMotorStore = create<MotorState>()(
       validationData: null,
       geometryMismatch: false,
 
-      // Sweep config initial state
+      // Sweep config initial state — two operating points ~10 % apart in
+      // current (local load sensitivity), at the rated speed.
       sweepConfig: {
         variations: {},
         operatingPoints: [
-          { current_a: 10, rpm: 3000 },
-          { current_a: 20, rpm: 3000 },
+          { current_a: 80, rpm: 3950 },
+          { current_a: 88, rpm: 3950 },
         ],
         rippleThreshold: 0.05,
       },
@@ -662,9 +671,52 @@ export const useMotorStore = create<MotorState>()(
           });
           if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
           const data: OptimizationResult = await res.json();
-          set({ optimizationResult: data, optimizationRunning: false });
+          set({ optimizationResult: data, optimizationRunning: false, refineResults: null });
         } catch (e: any) {
           set({ optimizationError: String(e?.message ?? e), optimizationRunning: false });
+        }
+      },
+
+      // ── FEM refinement of the Pareto-front designs ──────────────────────────
+      refineRunning: false,
+      refineProgress: null,
+      refineResults: null,
+      refineError: null,
+      refineFront: async (stepsPerPeriod = 40) => {
+        const { optimizationResult } = get();
+        if (!optimizationResult) return;
+        const OPK = new Set(['gamma_deg', 'current_a', 'rpm']);
+        // The front designs (geometry overrides + their operating current).
+        const designs = optimizationResult.pareto_indices.map(i => {
+          const d = optimizationResult.points[i];
+          const overrides: Record<string, number> = {};
+          Object.entries(d.overrides || {}).forEach(([k, v]) => {
+            if (!OPK.has(k)) overrides[k] = v as number;
+          });
+          return { overrides, current_a: d.current_a, rpm: d.rpm || 3950 };
+        });
+        if (!designs.length) return;
+        set({ refineRunning: true, refineError: null, refineResults: null,
+              refineProgress: { done: 0, total: designs.length } });
+        try {
+          const res = await fetch(`${API_BASE_URL}/api/optimization/refine`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ designs, steps_per_period: stepsPerPeriod, coil_temp_c: 120 }),
+          });
+          if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+          // poll progress until done
+          // eslint-disable-next-line no-constant-condition
+          while (true) {
+            await new Promise(r => setTimeout(r, 2000));
+            const pr = await fetch(`${API_BASE_URL}/api/optimization/refine/progress`);
+            const st = await pr.json();
+            set({ refineProgress: { done: st.done, total: st.total },
+                  refineResults: (st.results || []).filter((x: any) => !x.error) });
+            if (!st.running) break;
+          }
+          set({ refineRunning: false });
+        } catch (e: any) {
+          set({ refineError: String(e?.message ?? e), refineRunning: false });
         }
       },
     }),

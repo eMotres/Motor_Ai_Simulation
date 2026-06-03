@@ -2553,6 +2553,32 @@ def copper_loss_W(p, geo_cfg, I_phase_rms, n_parallel,
     return float(P), float(k_end), float(R_phase_eff)
 
 
+def _params_from_geo_dict(g: dict):
+    """Build MotorDomainParams from a geometry dict (mirror of
+    geometry_2d.params_from_config, but from an in-memory dict so a candidate
+    design can be evaluated WITHOUT touching the global config file)."""
+    from motor_ai_sim.simulation.geometry_2d import MotorDomainParams
+    mm = 1e-3
+    r_so = g["stator_diameter"] / 2 * mm
+    r_si = r_so - g["core_thickness"] * mm - g["slot_height"] * mm
+    r_ro = r_si - g["air_gap"] * mm
+    r_ri = r_ro - g["magnet_height"] * mm - g["rotor_house_height"] * mm
+    r_sh = r_ri - g["shaft_height"] * mm
+    num_slots = int(g["num_seg"] * g["num_slots_per_segment"])
+    num_poles = int(g["num_seg"] * g["num_poles_per_segment"])
+    slot_width_m = (g["wire_width"] + 2 * g["wire_spacing_x"]
+                    + 2 * g["insulation_thickness"]) * mm
+    return MotorDomainParams(
+        r_stator_out=r_so, r_stator_in=r_si, r_rotor_out=r_ro, r_rotor_in=r_ri,
+        r_shaft_in=r_sh, r_air_out=r_si, r_air_in=r_ro,
+        num_poles=num_poles, num_slots=num_slots,
+        stack_length=g.get("motor_length", 30) * mm,
+        magnet_fill_fraction=g.get("magnet_fill_down", 0.9),
+        slot_width_m=slot_width_m, slot_height_m=g["slot_height"] * mm,
+        wire_width_m=g["wire_width"] * mm, wire_height_m=g["wire_height"] * mm,
+        num_wires_per_slot=int(g["num_wires_per_slot"]))
+
+
 def fem_transient_sliding_band(
     n_steps_per_period: int = 12,
     n_periods: float = 1.0,
@@ -2566,6 +2592,7 @@ def fem_transient_sliding_band(
     nonlinear_iterations: int = 14,
     coil_temp_c: float = 120.0,
     end_winding_factor: float = 0.0,
+    geo_override: dict = None,
 ) -> dict:
     """Sliding-band transient: mesh the stator + rotor halves ONCE, then sweep
     the rotor by shifting the slip-ring node pairing (no remeshing) so the
@@ -2605,8 +2632,15 @@ def fem_transient_sliding_band(
     mesh_size_mm = min(_req_mesh, 2.0)
     min_size_mm = min(float(min_size_mm), 0.2)
     cfg = get_config(); sim = cfg.get("simulation", {})
-    geo = cfg.get("geometry", {}); wind = cfg.get("winding", {})
-    p = params_from_config(); dom = MotorDomains2D(p)
+    geo = dict(cfg.get("geometry", {})); wind = cfg.get("winding", {})
+    # Candidate-design evaluation (optimization refine): overlay a geometry
+    # override in-memory so the global config / Simulation state is untouched.
+    if geo_override:
+        geo.update({k: v for k, v in geo_override.items()})
+        p = _params_from_geo_dict(geo)
+    else:
+        p = params_from_config()
+    dom = MotorDomains2D(p)
     NS = int(n_sectors) if n_sectors and n_sectors > 1 else 4
     sector_deg = 360.0 / NS
     pole_pairs = p.num_poles // 2
@@ -2642,6 +2676,8 @@ def fem_transient_sliding_band(
 
     # ── Build the two halves ONCE ────────────────────────────────────────
     motor = CadQueryMotor()
+    if geo_override:
+        motor.set_parameters(geo_override)   # in-memory candidate geometry
     polys = motor.get_2d_polygons(rotor_angle_deg=0.0)
     polys = _simplify_polys(polys, tol_mm=0.005, stator_fillet_mm=stator_fillet_mm)
     ms, ts, cs, mr, tr, cr = _build_sliding_band_meshes(

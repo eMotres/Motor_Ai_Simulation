@@ -13,7 +13,9 @@ the Simulation tab.
 from __future__ import annotations
 
 import logging
-from typing import List, Optional
+import math
+import threading
+from typing import List, Optional, Dict, Any
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -23,6 +25,13 @@ from motor_ai_sim.optimization import run_pareto_search
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/optimization", tags=["optimization"])
+
+# ── FEM-refine background state ───────────────────────────────────────────────
+_refine_state: Dict[str, Any] = {
+    "running": False, "done": 0, "total": 0, "results": [],
+    "run_id": "", "error": None, "cancel": False,
+}
+_refine_lock = threading.Lock()
 
 
 class OptVariable(BaseModel):
@@ -105,3 +114,102 @@ def list_optimizable_variables():
                 "group": "operating", "current": float(cfg.get("simulation", {}).get("max_current", 85.0)),
                 "min": 20.0, "max": 120.0})
     return {"variables": out}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FEM refinement — re-evaluate selected designs with the real sliding-band
+# transient (period-averaged T, losses, efficiency, HONEST ripple).  Each design
+# is evaluated in-memory via geo_override, so the global config / Simulation
+# state is never touched.  Runs in a background thread; the UI polls /progress.
+# ─────────────────────────────────────────────────────────────────────────────
+class RefineDesign(BaseModel):
+    overrides: Dict[str, float] = Field(default_factory=dict)  # geometry keys
+    current_a: float = 85.0
+    rpm: float = 3950.0
+
+
+class RefineRequest(BaseModel):
+    designs: List[RefineDesign] = Field(default_factory=list)
+    steps_per_period: int = 40
+    coil_temp_c: float = 120.0
+    run_id: str = ""
+
+
+def _refine_worker(designs: List[Dict[str, Any]], steps: int, coil_temp_c: float,
+                   run_id: str) -> None:
+    """Evaluate each design in an ISOLATED subprocess (the FEM stack can crash
+    the LLVM JIT; a subprocess crash yields a failed design, not a dead API)."""
+    import subprocess, sys, json
+    for i, dz in enumerate(designs):
+        if _refine_state["cancel"]:
+            break
+        ov = {k: float(v) for k, v in (dz.get("overrides") or {}).items()}
+        I = float(dz.get("current_a", 85.0))
+        spec = json.dumps({"overrides": ov, "current_a": I, "steps": int(steps),
+                           "coil_temp_c": float(coil_temp_c)})
+        res: Dict[str, Any]
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-m", "motor_ai_sim.optimization.refine_proc"],
+                input=spec, capture_output=True, text=True, timeout=900)
+            out = proc.stdout or ""
+            marker = out.rfind("@@RESULT@@")
+            if marker >= 0:
+                payload = json.loads(out[marker + len("@@RESULT@@"):])
+                if payload.get("ok"):
+                    res = {**payload["res"], "overrides": ov, "current_a": I,
+                           "fem": True, "feasible": True, "eligible": True}
+                else:
+                    res = {"overrides": ov, "current_a": I, "fem": True,
+                           "feasible": False, "error": payload.get("error", "eval failed")}
+            else:
+                # no result marker → the subprocess crashed (e.g. LLVM JIT)
+                tail = (proc.stderr or "").strip().splitlines()[-1:] or ["subprocess crashed"]
+                res = {"overrides": ov, "current_a": I, "fem": True,
+                       "feasible": False, "error": tail[0][:160]}
+        except subprocess.TimeoutExpired:
+            res = {"overrides": ov, "current_a": I, "fem": True,
+                   "feasible": False, "error": "timeout"}
+        except Exception as e:  # noqa: BLE001
+            log.exception("refine subprocess failed")
+            res = {"overrides": ov, "current_a": I, "fem": True,
+                   "feasible": False, "error": str(e)}
+        with _refine_lock:
+            _refine_state["results"].append(res)
+            _refine_state["done"] = i + 1
+    with _refine_lock:
+        _refine_state["running"] = False
+
+
+@router.post("/refine")
+def refine_designs(req: RefineRequest):
+    """Start a background FEM-transient refinement of up to 60 designs."""
+    with _refine_lock:
+        if _refine_state["running"]:
+            raise HTTPException(status_code=409, detail="a refinement is already running")
+        designs = [d.model_dump() if hasattr(d, "model_dump") else d.dict()
+                   for d in (req.designs or [])][:60]
+        if not designs:
+            raise HTTPException(status_code=400, detail="no designs to refine")
+        _refine_state.update({"running": True, "done": 0, "total": len(designs),
+                              "results": [], "run_id": req.run_id, "error": None,
+                              "cancel": False})
+    steps = max(8, min(int(req.steps_per_period), 180))
+    t = threading.Thread(target=_refine_worker,
+                         args=(designs, steps, float(req.coil_temp_c), req.run_id),
+                         daemon=True)
+    t.start()
+    return {"started": True, "total": len(designs), "steps_per_period": steps}
+
+
+@router.get("/refine/progress")
+def refine_progress():
+    with _refine_lock:
+        return dict(_refine_state)
+
+
+@router.post("/refine/cancel")
+def refine_cancel():
+    with _refine_lock:
+        _refine_state["cancel"] = True
+    return {"cancelled": True}

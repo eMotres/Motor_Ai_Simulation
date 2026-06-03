@@ -393,7 +393,7 @@ def scan_designs(req: ScanRequest):
                 "rpm": float(o.rpm)} for o in (req.operating_points or [])] or \
               [{"gamma_deg": 0.0, "current_a": 85.0, "rpm": 3950.0}]
         steps = max(4, min(int(req.steps_per_period), 180))
-        max_geom = max(1, min(int(req.max_geometries), 80))
+        max_geom = max(1, min(int(req.max_geometries), 400))
         _scan_state.update({"running": True, "done": 0, "total": 0, "result": None,
                             "run_id": req.run_id, "error": None, "cancel": False})
     threading.Thread(target=_scan_worker,

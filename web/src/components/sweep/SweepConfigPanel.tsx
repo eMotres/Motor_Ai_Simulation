@@ -138,11 +138,13 @@ const SweepConfigPanel: React.FC = () => {
   const sweepCount     = sweepEntries.filter(([, v]) => v.mode === 'sweep').length;
   const optimizeCount  = sweepEntries.filter(([, v]) => v.mode === 'optimize').length;
 
+  // Grid size: ∏ (#values per sweep var).  floor(+ε) so an exact 2.0 doesn't
+  // round up to 3 (the old ceil counted 81 combos as 144).
   const estimateRuns = () =>
     Object.values(sweepConfig.variations)
       .filter(v => v.mode === 'sweep')
       .reduce((acc, v) => {
-        const steps = Math.max(1, Math.ceil((v.max - v.min) / Math.max(v.step || 1, 1e-9)) + 1);
+        const steps = Math.max(1, Math.floor((v.max - v.min) / Math.max(v.step || 1, 1e-9) + 1e-9) + 1);
         return acc * steps;
       }, 1);
 
@@ -170,8 +172,8 @@ const SweepConfigPanel: React.FC = () => {
         </Tooltip>
         <Tooltip title="Cap on the number of geometries evaluated (each is a real FEM transient × 2 currents). Sweep grids and optimize spreads are subsampled to this." placement="top">
           <TextField label="max geom" type="number" size="small" value={maxGeom}
-            onChange={e => setMaxGeom(Math.max(1, Math.min(80, Math.round(+e.target.value) || 24)))}
-            inputProps={{ min: 1, max: 80, style: { fontSize: 11, padding: '3px 6px', width: 38 } }}
+            onChange={e => setMaxGeom(Math.max(1, Math.min(400, Math.round(+e.target.value) || 24)))}
+            inputProps={{ min: 1, max: 400, style: { fontSize: 11, padding: '3px 6px', width: 38 } }}
             InputLabelProps={{ sx: { fontSize: 10 } }} />
         </Tooltip>
         <Button

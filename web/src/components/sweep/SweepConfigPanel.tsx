@@ -13,6 +13,7 @@ import {
   Slider,
   ToggleButton,
   ToggleButtonGroup,
+  CircularProgress,
 } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import ShowChartIcon from '@mui/icons-material/ShowChart';
@@ -20,6 +21,7 @@ import CloseIcon     from '@mui/icons-material/Close';
 import TuneIcon      from '@mui/icons-material/Tune';
 import { useMotorStore } from '../../stores/motorStore';
 import type { VariationMode } from '../../types/motor';
+import ParetoResults from './ParetoResults';
 
 // ── Card for one sweep/optimize parameter ─────────────────────────────────────
 
@@ -113,6 +115,10 @@ const SweepConfigPanel: React.FC = () => {
     updateRippleThreshold,
     connectedToApi,
     initVariationsFromSchema,
+    runOptimization,
+    optimizationResult,
+    optimizationRunning,
+    optimizationError,
   } = useMotorStore();
 
   useEffect(() => {
@@ -151,17 +157,21 @@ const SweepConfigPanel: React.FC = () => {
         )}
         <Button
           variant="contained"
-          startIcon={<PlayArrowIcon />}
-          disabled={sweepEntries.length === 0 || !connectedToApi}
+          startIcon={optimizationRunning
+            ? <CircularProgress size={14} color="inherit" />
+            : <PlayArrowIcon />}
+          disabled={sweepEntries.length === 0 || !connectedToApi || optimizationRunning}
           size="small"
           sx={{ flexShrink: 0, ml: 1 }}
+          onClick={() => runOptimization()}
         >
-          Run
+          {optimizationRunning ? 'Optimizing…' : 'Run'}
         </Button>
       </Box>
 
-      {/* ── Body: two columns ── */}
-      <Box sx={{ flex: 1, overflowY: 'auto', p: 3, display: 'flex', gap: 4 }}>
+      {/* ── Body: config (two columns) + results ── */}
+      <Box sx={{ flex: 1, overflowY: 'auto', p: 3 }}>
+       <Box sx={{ display: 'flex', gap: 4 }}>
 
         {/* Left: sweep variable cards */}
         <Box sx={{ flex: 1, minWidth: 0 }}>
@@ -254,7 +264,20 @@ const SweepConfigPanel: React.FC = () => {
               {(sweepConfig.rippleThreshold * 100).toFixed(1)}%
             </Typography>
           </Box>
+          <Typography variant="caption" color="text.disabled" sx={{ display: 'block', mt: 1 }}>
+            Note: ripple is not evaluated by the fast analytical scan — confirm it
+            with a full FEM run in the Simulation tab for a chosen design.
+          </Typography>
         </Box>
+       </Box>
+
+        {/* ── Results: Pareto front ── */}
+        {optimizationError && (
+          <Typography color="error" variant="caption" sx={{ display: 'block', mt: 2 }}>
+            Optimization error: {optimizationError}
+          </Typography>
+        )}
+        {optimizationResult && <ParetoResults result={optimizationResult} />}
       </Box>
     </Box>
   );

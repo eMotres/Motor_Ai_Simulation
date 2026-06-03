@@ -148,3 +148,34 @@ export interface SweepConfig {
   operatingPoints: [OperatingPoint, OperatingPoint];
   rippleThreshold: number;
 }
+
+// ── Design optimization (Pareto search) ───────────────────────────────────────
+export interface OptDesignPoint {
+  feasible: boolean;
+  reason?: string;
+  T_em_Nm: number;
+  efficiency: number;
+  torque_per_mass_Nm_kg: number;
+  power_per_mass_W_kg: number;
+  P_mech_W: number;
+  P_loss_total_W: number;
+  P_cu_W: number;
+  P_fe_W: number;
+  P_mag_W: number;
+  mass_total_kg: number;
+  B_gap_T: number;
+  B_tooth_T: number;
+  B_back_T: number;
+  overrides: Record<string, number>;
+}
+
+export interface OptimizationResult {
+  points: OptDesignPoint[];
+  pareto_indices: number[];
+  baseline: OptDesignPoint;
+  n_total: number;
+  n_feasible: number;
+  variables: { name: string; min: number; max: number }[];
+  objective: string;
+  operating?: { gamma_deg: number; current_a: number; rpm: number };
+}

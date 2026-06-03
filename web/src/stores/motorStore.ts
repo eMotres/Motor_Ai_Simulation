@@ -12,6 +12,7 @@ import type {
   VariationConfig,
   OperatingPoint,
   ParameterVariation,
+  OptimizationResult,
 } from '../types/motor';
 import {
   defaultGeometryParams,
@@ -153,6 +154,12 @@ interface MotorState {
   updateOperatingPoint: (index: 0 | 1, point: Partial<OperatingPoint>) => void;
   updateRippleThreshold: (threshold: number) => void;
   initVariationsFromSchema: () => void;
+
+  // Design optimization (Pareto search)
+  optimizationResult: OptimizationResult | null;
+  optimizationRunning: boolean;
+  optimizationError: string | null;
+  runOptimization: (nSamples?: number) => Promise<void>;
 }
 
 export const useMotorStore = create<MotorState>()(
@@ -620,6 +627,49 @@ export const useMotorStore = create<MotorState>()(
         set((state) => ({
           sweepConfig: { ...state.sweepConfig, variations },
         }));
+      },
+
+      // ── Design optimization ─────────────────────────────────────────────────
+      optimizationResult: null,
+      optimizationRunning: false,
+      optimizationError: null,
+      runOptimization: async (nSamples = 3000) => {
+        const { sweepConfig } = get();
+        // Design variables = geometry params marked sweep/optimize.
+        const variables = Object.entries(sweepConfig.variations)
+          .filter(([, v]) => v.mode !== 'fixed')
+          .map(([name, v]) => ({ name, min: Number(v.min), max: Number(v.max) }));
+
+        // The two operating points define the CURRENT (and RPM) envelope: when
+        // they differ, current/rpm become search variables so the Pareto front
+        // spreads across the efficiency axis (lower current → higher η, lower T).
+        const [op0, op1] = sweepConfig.operatingPoints;
+        const cLo = Math.min(op0.current_a, op1.current_a);
+        const cHi = Math.max(op0.current_a, op1.current_a);
+        const rLo = Math.min(op0.rpm, op1.rpm);
+        const rHi = Math.max(op0.rpm, op1.rpm);
+        if (cHi - cLo > 1e-6) variables.push({ name: 'current_a', min: cLo, max: cHi });
+        if (rHi - rLo > 1e-6) variables.push({ name: 'rpm', min: rLo, max: rHi });
+
+        const operating = {
+          gamma_deg: 0,
+          current_a: op0.current_a,
+          rpm: op0.rpm,
+        };
+
+        set({ optimizationRunning: true, optimizationError: null });
+        try {
+          const res = await fetch(`${API_BASE_URL}/api/optimization/run`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ variables, operating, n_samples: nSamples }),
+          });
+          if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+          const data: OptimizationResult = await res.json();
+          set({ optimizationResult: data, optimizationRunning: false });
+        } catch (e: any) {
+          set({ optimizationError: String(e?.message ?? e), optimizationRunning: false });
+        }
       },
     }),
     {

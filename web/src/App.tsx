@@ -174,6 +174,16 @@ function App() {
     fetchSchemaFromApi();
   }, [fetchGeometryFromApi, fetchSchemaFromApi]);
 
+  // The Simulation panel is kept mounted but hidden via display:none while
+  // another tab is active.  recharts' ResponsiveContainer measures 0×0 inside
+  // a display:none box, so on returning we fire a resize tick to force it to
+  // re-measure from 0 → real width (otherwise charts can come back 0-height).
+  useEffect(() => {
+    if (activeTab !== 'simulation') return;
+    const id = setTimeout(() => window.dispatchEvent(new Event('resize')), 60);
+    return () => clearTimeout(id);
+  }, [activeTab]);
+
   const showViewer = activeTab !== 'sweep';
 
   return (
@@ -359,7 +369,15 @@ function App() {
             </Box>
           )}
           {activeTab === 'mesh' && <MeshPanel />}
-          {activeTab === 'simulation' && <SimulationPanel />}
+          {/* Simulation stays MOUNTED across tab switches (display toggle, not
+              an unmount) so the computed dashboard — T(t), losses, harmonics
+              and the field animation — survives navigating to another tab and
+              back.  Conditionally unmounting wiped the right panel on every
+              tab change.  runNonce starts at 0, so nothing auto-runs while it
+              sits hidden. */}
+          <Box sx={{ height: '100%', display: activeTab === 'simulation' ? 'block' : 'none' }}>
+            <SimulationPanel />
+          </Box>
         </Box>
       </Box>
     </ThemeProvider>

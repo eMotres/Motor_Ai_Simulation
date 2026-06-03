@@ -175,8 +175,8 @@ const ParetoResults: React.FC<{ result: OptimizationResult }> = ({ result }) => 
             {segLines.map((s, i) => (
               <ReferenceLine key={`seg${i}`} ifOverflow="hidden"
                 segment={[{ x: s.x1, y: s.y1 }, { x: s.x2, y: s.y2 }]}
-                stroke={s.elig ? '#64748b' : '#7f1d1d'}
-                strokeOpacity={s.elig ? 0.35 : 0.18} strokeWidth={0.7} />
+                stroke={s.elig ? '#94a3b8' : '#f87171'}
+                strokeOpacity={s.elig ? 0.7 : 0.4} strokeWidth={1.5} />
             ))}
             <RcTooltip content={<ParetoTooltip />} cursor={{ strokeDasharray: '3 3' }} />
             <Legend wrapperStyle={{ fontSize: 10, paddingTop: 6 }} iconSize={9}

@@ -42,13 +42,15 @@ _SCAN_WORKERS = 5            # concurrent FEM subprocesses
 
 
 def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
-                     coil_temp_c: float) -> Dict[str, Any]:
+                     coil_temp_c: float, n_periods: float = 1.0) -> Dict[str, Any]:
     """Evaluate ONE (geometry, current) with the real sliding-band transient in
     an isolated subprocess (FEM/LLVM crash → failed design, not a dead API).
-    Rebuilds the CadQuery geometry + gmsh mesh for the candidate in-memory."""
+    Rebuilds the CadQuery geometry + gmsh mesh for the candidate in-memory.
+    ``steps`` frames over ``n_periods`` of the electrical period."""
     import subprocess, sys, json
     spec = json.dumps({"overrides": overrides, "current_a": current_a,
-                       "steps": int(steps), "coil_temp_c": float(coil_temp_c)})
+                       "steps": int(steps), "coil_temp_c": float(coil_temp_c),
+                       "n_periods": float(n_periods)})
     try:
         proc = subprocess.run(
             [sys.executable, "-m", "motor_ai_sim.optimization.refine_proc"],
@@ -310,9 +312,14 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
             _scan_state.update(total=len(tasks) + 1, done=0)
         points: List[Any] = [None] * len(tasks)
 
+        # Sweep only 1/6 of the electrical period — one cycle of the dominant
+        # 6·k torque ripple — so ``steps`` (~6) frames capture the ripple
+        # amplitude in 6× fewer FEM solves than a full period.
+        _NPER = 1.0 / 6.0
+
         def _do(i_t):
             i, (gi, oi, ov, I) = i_t
-            out = _subprocess_eval(ov, I, steps, coil_temp_c)
+            out = _subprocess_eval(ov, I, steps, coil_temp_c, n_periods=_NPER)
             return i, _point_from_eval(out, ov, I, gi, oi, ripple_max)
 
         with ThreadPoolExecutor(max_workers=_SCAN_WORKERS) as ex:
@@ -345,7 +352,7 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
 
         # baseline = current motor at operating point 0 (real FEM)
         base_out = _subprocess_eval({}, float(operating_points[0].get("current_a", 85.0)),
-                                    steps, coil_temp_c)
+                                    steps, coil_temp_c, n_periods=_NPER)
         baseline = _point_from_eval(base_out, {}, float(operating_points[0].get("current_a", 85.0)),
                                     -1, 0, ripple_max)
         with _scan_lock:

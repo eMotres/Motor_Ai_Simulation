@@ -1660,9 +1660,17 @@ def get_fem_transient(
                 _Tavg = float(_sbres.get("T_avg_Nm", 0.0))
                 _Pmech = float(_sbres.get("P_mech_avg_W",
                                           _Tavg * 2 * _math.pi * _rpm / 60))
-                _Pcu = float((_sbres.get("P_cu_W") or [0])[0])
-                _Pfe = float((_sbres.get("P_fe_W") or [0])[0])
-                _Pmag = float((_sbres.get("P_mag_eddy_W") or [0])[0])
+                # Period-MEAN of each instantaneous loss series — NOT [0].
+                # The iron/magnet series ripple as the teeth pass (mag eddy
+                # swings ~88%); frame 0 sits near the peak, so picking [0]
+                # would overstate the reported average loss.  Copper is DC
+                # (flat) so its mean == [0] anyway.
+                def _mean(_k):
+                    _s = _sbres.get(_k) or [0.0]
+                    return float(_np.mean(_np.asarray(_s, float))) if len(_s) else 0.0
+                _Pcu = _mean("P_cu_W")
+                _Pfe = _mean("P_fe_W")
+                _Pmag = _mean("P_mag_eddy_W")
                 _Vpk = float(_sbres.get("V_peak", 0.0))
                 _Vrms = _Vpk / _math.sqrt(2)
                 _Vlpk = _Vpk * _math.sqrt(3); _Vlrms = _Vlpk / _math.sqrt(2)

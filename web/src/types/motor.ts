@@ -181,6 +181,8 @@ export interface OptimizationResult {
   pareto_indices: number[];
   baseline: OptDesignPoint;
   n_total_points: number;
+  n_built?: number;
+  n_failed?: number;
   n_eligible_points: number;
   n_geometries: number;
   variables: { name: string; min: number; max: number }[];

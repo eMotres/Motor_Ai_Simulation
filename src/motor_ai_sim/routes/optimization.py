@@ -358,9 +358,11 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
         with _scan_lock:
             _scan_state["done"] = len(tasks) + 1
 
+        n_built = sum(1 for p in points if p.get("feasible"))
         result = {
             "points": points, "segments": segments, "pareto_indices": pareto_indices,
             "baseline": baseline, "n_total_points": len(points),
+            "n_built": n_built, "n_failed": len(points) - n_built,
             "n_eligible_points": len(elig), "n_geometries": len(geos),
             "variables": [{"name": v["name"], "min": float(v["min"]), "max": float(v["max"])}
                           for v in variables if v.get("name") not in ("current_a", "rpm")],

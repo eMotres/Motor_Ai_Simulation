@@ -123,7 +123,13 @@ const ParetoResults: React.FC<{ result: OptimizationResult }> = ({ result }) => 
         <Typography variant="overline" sx={{ fontSize: 10, letterSpacing: 1, color: 'text.secondary' }}>
           Pareto Front — Torque density vs Efficiency
         </Typography>
-        <Chip size="small" label={`${result.n_geometries} geometries × ${ops.length} pts`} variant="outlined" sx={{ height: 18, fontSize: 10 }} />
+        <Chip size="small" label={`${result.n_geometries} geom × ${ops.length} A = ${result.n_total_points} pts`} variant="outlined" sx={{ height: 18, fontSize: 10 }} />
+        <Chip size="small" color="info" label={`${result.n_built ?? '?'} built`} variant="outlined" sx={{ height: 18, fontSize: 10 }} />
+        {(result.n_failed ?? 0) > 0 && (
+          <Tooltip title="These candidate geometries couldn't be meshed (CadQuery/gmsh TopologyException for extreme dimensions) — narrow the variable ranges to reduce them." placement="top">
+            <Chip size="small" color="error" variant="outlined" label={`${result.n_failed} failed to build`} sx={{ height: 18, fontSize: 10 }} />
+          </Tooltip>
+        )}
         <Chip size="small" color="success" label={`${result.n_eligible_points} pass ripple ≤ ${result.ripple_max_pct.toFixed(0)}%`} sx={{ height: 18, fontSize: 10 }} />
         <Chip size="small" color="warning" label={`${result.pareto_indices.length} on front`} sx={{ height: 18, fontSize: 10 }} />
         <Tooltip title="Every point is a REAL sliding-band FEM transient — geometry + mesh rebuilt per candidate — at the scan step count. Each geometry → two currents (I1, I2) joined by a load line. Refine the front at a higher step count for accurate ripple." placement="top">

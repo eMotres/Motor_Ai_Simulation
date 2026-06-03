@@ -2649,7 +2649,7 @@ def fem_transient_sliding_band(
     _mag_idx = np.concatenate(_mag_parts) if _mag_parts else np.array([], int)
     # Per-frame B histories for the loss elements only (keeps memory small).
     _hist_sx = []; _hist_sy = []; _hist_rx = []; _hist_ry = []
-    _hist_mx = []; _hist_my = []
+    _hist_mx = []; _hist_my = []; _mshift_hist = []
 
     SAT = {DOM_STATOR, DOM_ROTOR, DOM_SHAFT}
     # Per-tag base μ_r (air=1, coil=1, magnet=μ_rec, iron=μ_steel) + BH curves
@@ -2720,6 +2720,7 @@ def fem_transient_sliding_band(
         _hist_sx.append(_Bxs[_iron_s_idx]); _hist_sy.append(_Bys[_iron_s_idx])
         _hist_rx.append(_Bxr[_iron_r_idx]); _hist_ry.append(_Byr[_iron_r_idx])
         _hist_mx.append(_Bxr[_mag_idx]);    _hist_my.append(_Byr[_mag_idx])
+        _mshift_hist.append(m_shift)
         # torque (Arkkio over the gap)
         Tq = _arkkio_torque(mesh_all, A, p.r_rotor_out, p.r_stator_in,
                             p.stack_length) * NS
@@ -2739,71 +2740,127 @@ def fem_transient_sliding_band(
         psiA.append(pa * sc); psiB.append(pb * sc); psiC.append(pc * sc)
         IA.append(Ist['A']); IB.append(Ist['B']); IC.append(Ist['C'])
         tt.append(k * dt)
-    # voltage V = R·I + dψ/dt (central diff, periodic)
-    def _ddt(x):
-        nn = len(x)
-        return [(x[(i + 1) % nn] - x[(i - 1) % nn]) / (2 * dt) for i in range(nn)]
-    VA = [R_phase * i + e for i, e in zip(IA, _ddt(psiA))]
-    VB = [R_phase * i + e for i, e in zip(IB, _ddt(psiB))]
-    VC = [R_phase * i + e for i, e in zip(IC, _ddt(psiC))]
+    # ── Spectral periodic time-derivative (truncated to K harmonics) ─────────
+    # The rotor advances in DISCRETE slip-node steps, so ψ(t) and B(t) carry a
+    # tiny frame-to-frame quantisation jitter.  A raw finite-difference dψ/dt
+    # amplifies that jitter into a jagged back-EMF (worse at small dt → the 24-
+    # step run looked torn).  Reconstruct the derivative from the LOW harmonics
+    # only: that keeps the genuine fundamental + slot-ripple content but drops
+    # the quantisation noise floor near Nyquist, giving a clean V(t) and a
+    # physically-rippling (not noisy, not flat) loss(t).
+    _two_pi2 = 2.0 * math.pi ** 2
+
+    def _spectral_ddt(x, kmax):
+        x = np.asarray(x, float); N = x.size
+        if N < 4:
+            return np.array([(x[(i + 1) % N] - x[(i - 1) % N]) / (2 * dt)
+                             for i in range(N)])
+        F = np.fft.rfft(x)
+        if kmax + 1 < F.size:
+            F[kmax + 1:] = 0.0
+        return np.fft.irfft(F * (1j * 2 * np.pi * np.fft.rfftfreq(N, d=dt)), n=N)
+
+    # The rotor can only sit on DISCRETE slip nodes (≈ N_slip/4 ≈ 72 positions
+    # per electrical period), so B depends only on the quantised angle m_shift.
+    # When n_steps > that node count the rotor advances <1 node/step and
+    # STUTTERS (m_shift jumps 0,1,1,0,1…); a frame-to-frame dB/dt of that
+    # stutter is meaningless noise.  So differentiate B against the UNIQUE
+    # rotor node-positions (smooth, ~72 pts) and map the result back onto the
+    # time frames — gives a clean dB/dt at any n_steps.
+    _m_arr = np.asarray(_mshift_hist, int)
+    _spacing_rad = math.radians(spacing)
+    _omega_mech = 2.0 * math.pi * rpm / 60.0
+
+    def _angle_ddt_2d(X):
+        N = X.shape[0]
+        if N < 3:
+            return np.zeros_like(X)
+        uniq, first = np.unique(_m_arr, return_index=True)   # sorted unique m
+        if uniq.size < 3:
+            return (np.roll(X, -1, 0) - np.roll(X, 1, 0)) / (2 * dt)
+        Bu = X[first]                                        # (U, E)
+        theta_u = uniq * _spacing_rad                        # (U,)
+        # node-to-node slip-merge noise is high-frequency vs the physical slot
+        # ripple (~1–2 cycles per electrical period); low-pass B(θ) on the node
+        # grid before differentiating so dB/dθ shows ripple, not merge jitter.
+        U = uniq.size
+        if U >= 7:
+            from scipy.signal import savgol_filter as _sg
+            w = min(max(5, (U // 8) * 2 + 1), U if U % 2 == 1 else U - 1)
+            if w >= 5:
+                Bu = _sg(Bu, w, 3, axis=0, mode="interp")
+        dBdt_u = np.gradient(Bu, theta_u, axis=0) * _omega_mech
+        pos = np.searchsorted(uniq, _m_arr)                  # frame → unique idx
+        return dBdt_u[pos]
+
+    def _declip(a):
+        # Safety net: clip any residual single-frame outlier to median±5·MAD.
+        a = np.asarray(a, float)
+        if a.size < 5:
+            return a
+        med = float(np.median(a)); mad = float(np.median(np.abs(a - med)))
+        if mad <= 0:
+            return a
+        return np.clip(a, max(0.0, med - 5 * mad), med + 5 * mad)
+
+    _Kv = max(1, min(5, (n_total // 2) - 1))     # back-EMF: keep it smooth
+
+    # voltage V = R·I + dψ/dt  (spectrally smoothed back-EMF)
+    eA = _spectral_ddt(psiA, _Kv); eB = _spectral_ddt(psiB, _Kv)
+    eC = _spectral_ddt(psiC, _Kv)
+    VA = [R_phase * i + e for i, e in zip(IA, eA.tolist())]
+    VB = [R_phase * i + e for i, e in zip(IB, eB.tolist())]
+    VC = [R_phase * i + e for i, e in zip(IC, eC.tolist())]
     Tavg = float(np.mean(T_series)) if T_series else 0.0
     Trip = (100.0 * (max(T_series) - min(T_series)) / abs(Tavg)
             if T_series and abs(Tavg) > 1e-9 else 0.0)
     Vpk = float(max(max(map(abs, VA)), max(map(abs, VB)), max(map(abs, VC)))) if VA else 0.0
     P_cu = 3.0 * R_phase * float(I_phase_rms) ** 2
 
-    # ── Losses from the captured B(t) (cycle-averaged → constant series) ──────
-    _two_pi2 = 2.0 * math.pi ** 2
-
-    def _ac_dbdt(hx, hy):
-        """Per-element AC peak² (½·peak-to-peak per component) and mean (dB/dt)²
-        over the periodic cycle."""
-        if not hx or np.asarray(hx[0]).size == 0:
-            return np.array([]), np.array([])
-        X = np.asarray(hx); Y = np.asarray(hy)          # (n_total, n_elem)
-        Bac2 = (((X.max(0) - X.min(0)) * 0.5) ** 2
-                + ((Y.max(0) - Y.min(0)) * 0.5) ** 2)
-        if X.shape[0] >= 3:
-            dX = (np.roll(X, -1, 0) - np.roll(X, 1, 0)) / (2.0 * dt)
-            dY = (np.roll(Y, -1, 0) - np.roll(Y, 1, 0)) / (2.0 * dt)
-            dbdt2 = np.mean(dX ** 2 + dY ** 2, axis=0)
-        else:
-            dbdt2 = np.zeros(X.shape[1])
-        return Bac2, dbdt2
-
-    def _iron_P(hx, hy, idx, areas_half, mat):
-        if mat is None or idx.size == 0:
-            return 0.0
-        Bac2, dbdt2 = _ac_dbdt(hx, hy)
-        if Bac2.size == 0:
-            return 0.0
+    # ── Losses from the captured B(t) — PER-FRAME instantaneous series ────────
+    # iron(t)  = hysteresis baseline (per-cycle quantity, flat) + classical
+    #            eddy from the smooth |dB/dt|²(t) → ripples as the teeth pass.
+    # magnet(t)= σ·d²/12·|dB/dt|²(t)  → ripples likewise.
+    def _iron_series(hx, hy, idx, areas_half, mat):
+        if mat is None or idx.size == 0 or not hx or np.asarray(hx[0]).size == 0:
+            return np.zeros(n_total), 0.0
+        X = np.asarray(hx); Y = np.asarray(hy)            # (N, E)
         kh = float(getattr(mat, "core_loss_kh", 0.0))
         kc = float(getattr(mat, "core_loss_kc", 0.0))
         ke = float(getattr(mat, "core_loss_ke", 0.0))
         sf = float(getattr(mat, "stacking_factor", 0.95))
-        vol = areas_half[idx] * p.stack_length
-        p_dens = (kh * f_elec * Bac2                      # hysteresis  ∝ f·B_ac²
-                  + (kc / _two_pi2) * dbdt2               # classical   ∝ ⟨(dB/dt)²⟩
-                  + ke * f_elec ** 1.5
-                    * np.power(np.maximum(Bac2, 0.0), 0.75))   # excess
-        return float(np.sum(p_dens * vol * sf))
+        vol = areas_half[idx] * p.stack_length * sf       # (E,)
+        dX = _angle_ddt_2d(X); dY = _angle_ddt_2d(Y)
+        pcl_t = (kc / _two_pi2) * np.sum((dX ** 2 + dY ** 2) * vol[None, :], axis=1)
+        Bac2 = (((X.max(0) - X.min(0)) * 0.5) ** 2
+                + ((Y.max(0) - Y.min(0)) * 0.5) ** 2)
+        phys = float(np.sum((kh * f_elec * Bac2
+                             + ke * f_elec ** 1.5
+                               * np.power(np.maximum(Bac2, 0.0), 0.75)) * vol))
+        return pcl_t, phys
 
-    P_fe_avg = (_iron_P(_hist_sx, _hist_sy, _iron_s_idx, areas_s, _steel_s)
-                + _iron_P(_hist_rx, _hist_ry, _iron_r_idx, areas_r, _steel_r)) * NS
+    _pcl_s, _ph_s = _iron_series(_hist_sx, _hist_sy, _iron_s_idx, areas_s, _steel_s)
+    _pcl_r, _ph_r = _iron_series(_hist_rx, _hist_ry, _iron_r_idx, areas_r, _steel_r)
+    _P_hyst = (_ph_s + _ph_r) * NS
+    _P_fe_t = _declip((_pcl_s + _pcl_r) * NS + _P_hyst)  # classical ripple + flat hyst
+    P_fe_series = _P_fe_t.tolist()
+    P_fe_avg = float(np.mean(_P_fe_t))
 
-    P_mag_avg = 0.0
-    if _sigma_mag > 0.0 and _mag_idx.size:
-        _, dbdt2_m = _ac_dbdt(_hist_mx, _hist_my)
-        if dbdt2_m.size:
-            vol_m = areas_r[_mag_idx] * p.stack_length
-            p_dens_m = _sigma_mag * (_d_mag_m ** 2 / 12.0) * dbdt2_m
-            P_mag_avg = float(np.sum(p_dens_m * vol_m)) * NS
+    if (_sigma_mag > 0.0 and _mag_idx.size and _hist_mx
+            and np.asarray(_hist_mx[0]).size):
+        Xm = np.asarray(_hist_mx); Ym = np.asarray(_hist_my)
+        dXm = _angle_ddt_2d(Xm); dYm = _angle_ddt_2d(Ym)
+        vol_m = areas_r[_mag_idx] * p.stack_length
+        _P_mag_t = _declip(_sigma_mag * (_d_mag_m ** 2 / 12.0)
+                    * np.sum((dXm ** 2 + dYm ** 2) * vol_m[None, :], axis=1) * NS)
+        P_mag_series = _P_mag_t.tolist()
+        P_mag_avg = float(np.mean(_P_mag_t))
+    else:
+        P_mag_series = [0.0] * n_total; P_mag_avg = 0.0
 
     log.info("SB transient: %d frames, %d slip nodes, P_fe=%.1f P_mag=%.1f, %.1fs",
              n_total, Nring, P_fe_avg, P_mag_avg, _t.time() - t0)
     P_cu_series = [P_cu] * n_total
-    P_fe_series = [P_fe_avg] * n_total
-    P_mag_series = [P_mag_avg] * n_total
     P_tot_series = [c + f + e for c, f, e in zip(P_cu_series, P_fe_series, P_mag_series)]
     P_mech_avg = float(Tavg * 2.0 * math.pi * rpm / 60.0)
     return {

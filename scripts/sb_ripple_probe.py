@@ -1,5 +1,4 @@
-"""Probe SB transient ripple vs mesh size / steps / gamma to see if ripple is
-numerical (mesh-driven) or physical (cogging).  Also prints loss series."""
+"""Probe SB transient: torque ripple, voltage smoothness, loss ripple."""
 import os, time
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
@@ -16,21 +15,15 @@ def run(mesh, steps, gamma):
         outer_air_factor=1.3, n_sectors=4, stator_fillet_mm=0.0,
         nonlinear_iterations=14,
     )
-    T = d.get("T_em_Nm", [])
-    Tavg = d.get("T_avg_Nm", 0.0)
-    rip = d.get("T_ripple_pct", 0.0)
-    pfe = (d.get("P_fe_W") or [0])[0]
-    pmag = (d.get("P_mag_eddy_W") or [0])[0]
-    pcu = (d.get("P_cu_W") or [0])[0]
+    Vpk = d["V_peak"]; fe = d["P_fe_W"]; mg = d["P_mag_eddy_W"]
     dt = time.time() - t0
-    Tr = [round(x, 1) for x in T]
-    print(f"mesh={mesh} steps={steps} gamma={gamma:+.0f} | "
-          f"T_avg={Tavg:6.2f}  ripple={rip:5.1f}%  "
-          f"P_cu={pcu:6.0f} P_fe={pfe:7.1f} P_mag={pmag:6.1f}  ({dt:4.1f}s)")
-    print(f"    T(t)={Tr}")
+    print(f"steps={steps:3d} g={gamma:+.0f} | T={d['T_avg_Nm']:5.1f} rip={d['T_ripple_pct']:4.1f}% "
+          f"| Vpk={Vpk:5.1f} | P_fe[{min(fe):.0f}..{max(fe):.0f}] "
+          f"P_mag[{min(mg):.0f}..{max(mg):.0f}]  ({dt:4.1f}s)")
+    print(f"    P_mag={[round(x) for x in mg]}")
     return d
 
 if __name__ == "__main__":
-    print("=== SB ripple + loss probe ===")
-    run(3.0, 12, -10)
-    run(3.0, 24, -10)
+    print("=== SB voltage + loss ripple probe ===")
+    run(3.0, 24, 0)
+    run(3.0, 100, 0)

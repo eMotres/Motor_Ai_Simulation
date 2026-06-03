@@ -11,7 +11,7 @@ import {
 } from '@mui/material';
 import {
   ResponsiveContainer, LineChart, Line, XAxis, YAxis,
-  CartesianGrid, Tooltip as RcTooltip, Legend,
+  CartesianGrid, Tooltip as RcTooltip, Legend, BarChart, Bar, Cell,
 } from 'recharts';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
@@ -39,6 +39,8 @@ interface TransientPayload {
   I_A: number[]; I_B: number[]; I_C: number[];
   V_A: number[]; V_B: number[]; V_C: number[];
   V_peak: number;
+  T_harm_order?: number[];
+  T_harm_amp?: number[];
   summary?: TransientSummary;
 }
 
@@ -236,6 +238,17 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
     }));
   }, [data]);
 
+  // Torque harmonic spectrum (over one electrical period).  6·k orders are the
+  // physical 3-phase torque ripple; a clean ripple = a few discrete bars, broad
+  // noise = energy in every order.
+  const harmRows = React.useMemo(() => {
+    if (!data?.T_harm_order || !data?.T_harm_amp) return [];
+    return data.T_harm_order.map((n, i) => ({
+      order: n, amp: data.T_harm_amp![i],
+      pct: data.T_avg_Nm ? (100 * data.T_harm_amp![i] / Math.abs(data.T_avg_Nm)) : 0,
+    }));
+  }, [data]);
+
   return (
     <Paper sx={{ bgcolor: '#0b1220', border: '1px solid #1e293b', p: 2,
       display: 'flex', flexDirection: 'column', gap: 1.5 }}>
@@ -331,6 +344,39 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
               </LineChart>
             </ResponsiveContainer>
           </Box>
+
+          {/* ── Torque harmonic spectrum ── */}
+          {harmRows.length > 0 && (
+          <Box sx={{ height: 200 }}>
+            <Typography sx={{ fontSize: 11, fontWeight: 700, color: '#94a3b8' }}>
+              Torque harmonics (order = ×electrical freq)
+              <Tooltip title="FFT of T(t) over one electrical period. A clean PERIODIC ripple shows a few discrete bars — the 6th/12th/18th (3-phase) and slot-cogging orders. Energy spread across every order = broadband (chaotic) noise. Orange = the physical 6·k 3-phase orders." placement="top">
+                <span style={{ color: '#475569', marginLeft: 6, fontSize: 11, cursor: 'help' }}>ⓘ</span>
+              </Tooltip>
+            </Typography>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={harmRows} margin={{ top: 8, right: 10, left: 0, bottom: 16 }}>
+                <CartesianGrid {...GRID}/>
+                <XAxis dataKey="order" tick={AXIS} interval={0}
+                  label={{ value: 'harmonic order (n × f_elec)', position: 'insideBottom',
+                    offset: -4, style: { fontSize: 10, fill: '#475569' } }}/>
+                <YAxis tick={AXIS}
+                  label={{ value: 'amp [N·m]', angle: -90,
+                    position: 'insideLeft', offset: 12,
+                    style: { fontSize: 10, fill: '#475569' } }}/>
+                <RcTooltip {...TOOLTIP}
+                  labelFormatter={(v: number) => `harmonic n = ${v}`}
+                  formatter={(val: number, _n: string, p: any) =>
+                    [`${Number(val).toFixed(2)} N·m  (${p?.payload?.pct?.toFixed(1)} % of T_avg)`, 'amplitude']}/>
+                <Bar dataKey="amp" isAnimationActive={false}>
+                  {harmRows.map((r, i) => (
+                    <Cell key={i} fill={r.order % 6 === 0 ? '#f59e0b' : '#3b82f6'}/>
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </Box>
+          )}
 
           {/* ── Losses ── */}
           <Box sx={{ height: 220 }}>

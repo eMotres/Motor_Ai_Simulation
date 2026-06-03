@@ -2957,6 +2957,21 @@ def fem_transient_sliding_band(
     Vpk = float(max(max(map(abs, VA)), max(map(abs, VB)), max(map(abs, VC)))) if VA else 0.0
     # P_cu already computed physically (ρ(T)·J²·V·k_end) near the top.
 
+    # ── Torque harmonic spectrum over ONE electrical period ──────────────────
+    # The single most telling diagnostic for "is this periodic or chaotic": a
+    # clean ripple shows a few DISCRETE peaks (the cogging / 6·k 3-phase orders);
+    # broadband noise spreads across all orders.  Orders are multiples of the
+    # ELECTRICAL fundamental; amplitude is the single-sided FFT magnitude [N·m].
+    T_harm_order = []; T_harm_amp = []
+    if T_series:
+        _per = max(1, int(round(n_steps_per_period)))
+        _Tp = np.asarray(T_series[:_per], float)
+        if _Tp.size >= 4:
+            _F = np.abs(np.fft.rfft(_Tp - _Tp.mean())) / _Tp.size * 2.0
+            _nh = min(_F.size - 1, 36)
+            T_harm_order = list(range(1, _nh + 1))
+            T_harm_amp = [round(float(_F[k]), 4) for k in range(1, _nh + 1)]
+
     # ── Losses from the captured B(t) — PER-FRAME instantaneous series ────────
     # iron(t)  = hysteresis baseline (per-cycle quantity, flat) + classical
     #            eddy from the smooth |dB/dt|²(t) → ripples as the teeth pass.
@@ -3020,6 +3035,7 @@ def fem_transient_sliding_band(
         "R_phase_ohm": R_phase, "n_slip_nodes": int(Nring),
         "coil_temp_C": float(coil_temp_c),
         "end_winding_factor": float(_k_end_used),
+        "T_harm_order": T_harm_order, "T_harm_amp": T_harm_amp,
     }
 
 

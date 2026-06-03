@@ -2507,15 +2507,26 @@ def end_winding_factor_geom(p, geo_cfg) -> float:
     active from the geometry.  A 2-D solve only resolves the in-slot (active,
     = stack-length) copper; the end-turns that loop outside the iron stack add
     series length the 2-D model can't see.  Per conductor the path length is
-    L_stack + 2·L_endturn, so k_end = 1 + 2·L_endturn/L_stack.  L_endturn uses
-    the same estimate as the copper-mass calc (a half slot-pitch arc + the slot
-    depth), so the loss and the reported copper mass stay consistent."""
+    L_stack + 2·L_endturn, so k_end = 1 + 2·L_endturn/L_stack.
+
+    This machine is a 24-slot / 28-pole FRACTIONAL-SLOT CONCENTRATED winding
+    (q = slots/(phases·poles) = 0.29 < 1) → tooth coils, each wound around ONE
+    tooth.  Its end-turns are SHORT (they just arc over the tooth), so the
+    end-turn per side ≈ a half-loop over the tooth width, NOT the long
+    distributed-winding half-pole-pitch span.  (The old 'π·τ/2 + slot_depth'
+    estimate was a distributed-winding formula → over-counted k_end at 3.3 and
+    the copper loss by ~1.7×.)"""
     L = float(p.stack_length)
     if L <= 0:
         return 1.0
     r_mid = p.r_stator_in + p.slot_height_m * 0.5
-    tau = 2.0 * math.pi * r_mid / max(p.num_slots, 1)
-    L_end = math.pi * tau / 2.0 + p.slot_height_m       # one side [m]
+    tau = 2.0 * math.pi * r_mid / max(p.num_slots, 1)        # slot pitch
+    q = p.num_slots / (3.0 * max(p.num_poles, 1))            # slots/pole/phase
+    if q < 0.75:                                            # concentrated tooth coil
+        tooth_w = max(tau - p.slot_width_m, 0.3 * tau)      # tooth the coil wraps
+        L_end = (math.pi / 2.0) * tooth_w                   # half-loop over the tooth
+    else:                                                   # distributed winding
+        L_end = math.pi * tau / 2.0 + p.slot_height_m
     return 1.0 + (2.0 * L_end) / L
 
 
@@ -2747,8 +2758,16 @@ def fem_transient_sliding_band(
     except Exception:
         _magnet_mat = None
     _sigma_mag = float(getattr(_magnet_mat, "sigma", 0.0)) if _magnet_mat else 0.0
-    _d_mag_m = (float(p.r_rotor_out - p.r_rotor_in - 0.0012)
-                if (p.r_rotor_out - p.r_rotor_in) > 0.002 else 0.016)
+    # Magnet eddy slab dimension d: the AC field the magnet sees is the SLOT
+    # RIPPLE, which varies TANGENTIALLY, so the eddy-current loop is limited by
+    # the magnet's TANGENTIAL WIDTH (pole-pitch × fill) — NOT its radial
+    # thickness.  P_eddy ∝ d², so using the (smaller) tangential width instead
+    # of the 16 mm radial height drops the loss ~3× into the physical range
+    # (the radial-thickness slab over-counted the un-segmented eddy).
+    _r_mag_mid = 0.5 * (p.r_rotor_in + p.r_rotor_out)
+    _mag_frac = float(getattr(p, "magnet_fill_fraction", 0.85) or 0.85)
+    _d_mag_m = max(1e-3, (2.0 * math.pi * _r_mag_mid
+                          / max(p.num_poles, 1)) * _mag_frac)
     areas_r = _triangle_areas(half["r"]["mesh"])
     _iron_s_idx = np.asarray(half["s"]["cells"].get(int(DOM_STATOR), np.array([], int)), int)
     _iron_r_idx = np.asarray(half["r"]["cells"].get(int(DOM_ROTOR),  np.array([], int)), int)

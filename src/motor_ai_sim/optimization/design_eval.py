@@ -303,11 +303,21 @@ def evaluate_design(geo: Dict[str, Any], wind: Dict[str, Any], sim: Dict[str, An
 
     # saturation feasibility (heavily saturated tooth/back = unrealizable design)
     sat_ok = B_tooth_raw < B_SAT and B_back_raw < B_SAT
-    reason = "" if sat_ok else (
-        f"saturated (B_tooth={B_tooth_raw:.2f}, B_back={B_back_raw:.2f} > {B_SAT})")
+    # buildability: the tooth must leave a real slot opening within the slot
+    # pitch, else the CadQuery polygons overlap (TopologyException) and the FEM
+    # refine can't mesh it.  Conservative: tooth ≤ 0.72 · slot pitch at the bore.
+    tooth_fits = tooth_w <= 0.70 * slot_pitch
+    feasible = sat_ok and tooth_fits
+    if not sat_ok:
+        reason = f"saturated (B_tooth={B_tooth_raw:.2f}, B_back={B_back_raw:.2f} > {B_SAT})"
+    elif not tooth_fits:
+        reason = (f"tooth too wide to build ({tooth_w * 1e3:.1f} mm > "
+                  f"{0.70 * slot_pitch * 1e3:.1f} mm slot-pitch limit)")
+    else:
+        reason = ""
 
     return DesignMetrics(
-        feasible=sat_ok, reason=reason,
+        feasible=feasible, reason=reason,
         T_em_Nm=T_em, efficiency=eff,
         torque_per_mass_Nm_kg=(T_em / m_tot if m_tot > 0 else 0.0),
         power_per_mass_W_kg=(P_mech / m_tot if m_tot > 0 else 0.0),

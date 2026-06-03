@@ -126,7 +126,7 @@ const ParetoResults: React.FC<{ result: OptimizationResult }> = ({ result }) => 
         <Chip size="small" label={`${result.n_geometries} geometries × ${ops.length} pts`} variant="outlined" sx={{ height: 18, fontSize: 10 }} />
         <Chip size="small" color="success" label={`${result.n_eligible_points} pass ripple ≤ ${result.ripple_max_pct.toFixed(0)}%`} sx={{ height: 18, fontSize: 10 }} />
         <Chip size="small" color="warning" label={`${result.pareto_indices.length} on front`} sx={{ height: 18, fontSize: 10 }} />
-        <Tooltip title="Each geometry → two points (currents I1, I2) joined by a load-line segment. Analytical cogging-ripple gate; full ripple needs FEM (Simulation). Surrogate calibrated to the validated FEM at baseline." placement="top">
+        <Tooltip title="Every point is a REAL sliding-band FEM transient — geometry + mesh rebuilt per candidate — at the scan step count. Each geometry → two currents (I1, I2) joined by a load line. Refine the front at a higher step count for accurate ripple." placement="top">
           <span style={{ color: '#475569', fontSize: 11, cursor: 'help' }}>ⓘ</span>
         </Tooltip>
       </Box>
@@ -229,8 +229,8 @@ const ParetoResults: React.FC<{ result: OptimizationResult }> = ({ result }) => 
         </Table>
       </Box>
       <Typography variant="caption" color="text.disabled" sx={{ display: 'block', mt: 1 }}>
-        Each thin segment = one geometry's load line (I1→I2). Diamond = baseline. Ripple is a cogging estimate;
-        confirm a chosen design's full ripple in the Simulation tab. <b>Apply</b> writes its geometry + current to the model.
+        Each thin segment = one geometry's load line (I1→I2). Diamond = baseline. Points are real FEM (coarse ripple at
+        a low step count); green stars = the front re-run at a higher step count. <b>Apply</b> writes a design's geometry + current to the model.
       </Typography>
     </Box>
   );

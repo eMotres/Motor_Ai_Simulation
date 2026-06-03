@@ -14,6 +14,7 @@ import {
   ToggleButton,
   ToggleButtonGroup,
   CircularProgress,
+  Tooltip,
 } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import ShowChartIcon from '@mui/icons-material/ShowChart';
@@ -118,8 +119,13 @@ const SweepConfigPanel: React.FC = () => {
     runOptimization,
     optimizationResult,
     optimizationRunning,
+    optimizationProgress,
     optimizationError,
   } = useMotorStore();
+
+  // FEM scan settings: frames/period (low = fast) and the geometry cap.
+  const [scanSteps, setScanSteps] = React.useState(6);
+  const [maxGeom,   setMaxGeom]   = React.useState(24);
 
   useEffect(() => {
     if (parameterSchema.length > 0) initVariationsFromSchema();
@@ -155,6 +161,18 @@ const SweepConfigPanel: React.FC = () => {
         {sweepCount > 0 && (
           <Chip size="small" label={`~${estimateRuns()} variants`} variant="outlined" sx={{ height: 18, fontSize: 10 }} />
         )}
+        <Tooltip title="FEM frames per electrical period for the scan. Low (6) = fast; refine the front at a higher count afterwards." placement="top">
+          <TextField label="FEM steps" type="number" size="small" value={scanSteps}
+            onChange={e => setScanSteps(Math.max(4, Math.min(60, Math.round(+e.target.value) || 6)))}
+            inputProps={{ min: 4, max: 60, style: { fontSize: 11, padding: '3px 6px', width: 38 } }}
+            InputLabelProps={{ sx: { fontSize: 10 } }} sx={{ ml: 1 }} />
+        </Tooltip>
+        <Tooltip title="Cap on the number of geometries evaluated (each is a real FEM transient × 2 currents). Sweep grids and optimize spreads are subsampled to this." placement="top">
+          <TextField label="max geom" type="number" size="small" value={maxGeom}
+            onChange={e => setMaxGeom(Math.max(1, Math.min(80, Math.round(+e.target.value) || 24)))}
+            inputProps={{ min: 1, max: 80, style: { fontSize: 11, padding: '3px 6px', width: 38 } }}
+            InputLabelProps={{ sx: { fontSize: 10 } }} />
+        </Tooltip>
         <Button
           variant="contained"
           startIcon={optimizationRunning
@@ -163,9 +181,11 @@ const SweepConfigPanel: React.FC = () => {
           disabled={sweepEntries.length === 0 || !connectedToApi || optimizationRunning}
           size="small"
           sx={{ flexShrink: 0, ml: 1 }}
-          onClick={() => runOptimization()}
+          onClick={() => runOptimization(scanSteps, maxGeom)}
         >
-          {optimizationRunning ? 'Optimizing…' : 'Run'}
+          {optimizationRunning
+            ? `Scanning ${optimizationProgress?.done ?? 0}/${optimizationProgress?.total ?? 0}…`
+            : 'Run FEM scan'}
         </Button>
       </Box>
 
@@ -257,7 +277,7 @@ const SweepConfigPanel: React.FC = () => {
             <Slider
               value={sweepConfig.rippleThreshold * 100}
               onChange={(_, v) => updateRippleThreshold((v as number) / 100)}
-              min={1} max={30} step={0.5}
+              min={1} max={50} step={0.5}
               sx={{ flex: 1 }}
             />
             <Typography variant="body2" sx={{ minWidth: 42, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
@@ -265,8 +285,8 @@ const SweepConfigPanel: React.FC = () => {
             </Typography>
           </Box>
           <Typography variant="caption" color="text.disabled" sx={{ display: 'block', mt: 1 }}>
-            Note: ripple is not evaluated by the fast analytical scan — confirm it
-            with a full FEM run in the Simulation tab for a chosen design.
+            Ripple is the real FEM value (coarse at a low step count). If nothing
+            passes the gate, the front falls back to all feasible designs.
           </Typography>
         </Box>
        </Box>

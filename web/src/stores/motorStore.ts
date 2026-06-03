@@ -156,11 +156,12 @@ interface MotorState {
   updateRippleThreshold: (threshold: number) => void;
   initVariationsFromSchema: () => void;
 
-  // Design optimization (Pareto search)
+  // Design optimization (FEM Pareto scan)
   optimizationResult: OptimizationResult | null;
   optimizationRunning: boolean;
+  optimizationProgress: { done: number; total: number } | null;
   optimizationError: string | null;
-  runOptimization: (nSamples?: number) => Promise<void>;
+  runOptimization: (stepsPerPeriod?: number, maxGeometries?: number) => Promise<void>;
 
   // FEM refinement of selected (front) designs
   refineRunning: boolean;
@@ -643,38 +644,52 @@ export const useMotorStore = create<MotorState>()(
       // ── Design optimization ─────────────────────────────────────────────────
       optimizationResult: null,
       optimizationRunning: false,
+      optimizationProgress: null,
       optimizationError: null,
-      runOptimization: async (nSamples = 500) => {
+      runOptimization: async (stepsPerPeriod = 6, maxGeometries = 24) => {
         const { sweepConfig } = get();
-        // Design variables = GEOMETRY params marked sweep/optimize (current/rpm
-        // are NOT variables — they are the two operating points below).
+        // Design variables = GEOMETRY params marked sweep/optimize (sweep →
+        // grid, optimize → spread). current/rpm come from the operating points.
         const variables = Object.entries(sweepConfig.variations)
           .filter(([, v]) => v.mode !== 'fixed')
           .map(([name, v]) => ({ name, min: Number(v.min), max: Number(v.max),
                                  mode: v.mode, step: Number(v.step) }));
 
-        // Each geometry is evaluated at BOTH operating points → two Pareto
-        // points joined by a segment (the design's load line from I1 to I2).
+        // Each geometry evaluated at BOTH operating currents → two FEM points
+        // joined by a load-line segment.
         const [op0, op1] = sweepConfig.operatingPoints;
         const operating_points = [
           { gamma_deg: 0, current_a: op0.current_a, rpm: op0.rpm },
           { gamma_deg: 0, current_a: op1.current_a, rpm: op1.rpm },
         ];
-        // Cogging-ripple selection gate (slider is a fraction → percent).
         const ripple_max_pct = sweepConfig.rippleThreshold * 100;
 
-        set({ optimizationRunning: true, optimizationError: null });
+        set({ optimizationRunning: true, optimizationError: null,
+              optimizationProgress: { done: 0, total: 0 }, refineResults: null });
         try {
-          const res = await fetch(`${API_BASE_URL}/api/optimization/run`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+          // Every scan point is a REAL sliding-band transient (geometry + mesh
+          // rebuilt per candidate) at stepsPerPeriod frames — background + poll.
+          const res = await fetch(`${API_BASE_URL}/api/optimization/scan`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              variables, operating_points, ripple_max_pct, n_samples: nSamples,
+              variables, operating_points, ripple_max_pct,
+              steps_per_period: stepsPerPeriod, max_geometries: maxGeometries,
             }),
           });
           if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
-          const data: OptimizationResult = await res.json();
-          set({ optimizationResult: data, optimizationRunning: false, refineResults: null });
+          // eslint-disable-next-line no-constant-condition
+          while (true) {
+            await new Promise(r => setTimeout(r, 2000));
+            const pr = await fetch(`${API_BASE_URL}/api/optimization/scan/progress`);
+            const st = await pr.json();
+            set({ optimizationProgress: { done: st.done, total: st.total } });
+            if (!st.running) {
+              if (st.error) throw new Error(st.error);
+              if (st.result) set({ optimizationResult: st.result as OptimizationResult });
+              break;
+            }
+          }
+          set({ optimizationRunning: false });
         } catch (e: any) {
           set({ optimizationError: String(e?.message ?? e), optimizationRunning: false });
         }

@@ -1780,6 +1780,24 @@ def _mu_r_from_bh(bh_curve: List[Tuple[float, float]], B_mag: float
     return B_mag / (MU0 * H)
 
 
+def _mu_r_from_bh_vec(bh_curve, B_arr):
+    """Vectorised μ_r(|B|) from a (H,B) curve — one value per element.
+
+    H(B) by linear interpolation in B; above the last sample the differential
+    μ₀ slope (deep saturation); μ_r = B/(μ₀·H), clamped to ≥ 1."""
+    B = np.asarray(B_arr, dtype=float)
+    if not bh_curve or len(bh_curve) < 2:
+        return np.ones_like(B)
+    hs = np.array([pt[0] for pt in bh_curve], float)
+    bs = np.array([pt[1] for pt in bh_curve], float)
+    H = np.interp(B, bs, hs)                       # clamps at the ends
+    above = B >= bs[-1]
+    H = np.where(above, hs[-1] + (B - bs[-1]) / MU0, H)
+    H = np.maximum(H, 1e-9)
+    mu = np.where(B <= 1e-12, 1.0, B / (MU0 * H))
+    return np.maximum(mu, 1.0)
+
+
 def solve_magnetostatics(
     mesh,
     cell_tags: np.ndarray,
@@ -2461,6 +2479,54 @@ class _SignedUF:
         self.par[ra] = rb; self.sgn[ra] = sign * sa * sb
 
 
+# Copper electrical properties (annealed Cu, IEC 60028).
+RHO_CU_20 = 1.724e-8     # Ω·m at 20 °C
+ALPHA_CU  = 0.00393      # temperature coefficient [1/°C]
+
+
+def end_winding_factor_geom(p, geo_cfg) -> float:
+    """Estimate the end-winding length factor k_end = (active + end-turn) /
+    active from the geometry.  A 2-D solve only resolves the in-slot (active,
+    = stack-length) copper; the end-turns that loop outside the iron stack add
+    series length the 2-D model can't see.  Per conductor the path length is
+    L_stack + 2·L_endturn, so k_end = 1 + 2·L_endturn/L_stack.  L_endturn uses
+    the same estimate as the copper-mass calc (a half slot-pitch arc + the slot
+    depth), so the loss and the reported copper mass stay consistent."""
+    L = float(p.stack_length)
+    if L <= 0:
+        return 1.0
+    r_mid = p.r_stator_in + p.slot_height_m * 0.5
+    tau = 2.0 * math.pi * r_mid / max(p.num_slots, 1)
+    L_end = math.pi * tau / 2.0 + p.slot_height_m       # one side [m]
+    return 1.0 + (2.0 * L_end) / L
+
+
+def copper_loss_W(p, geo_cfg, I_phase_rms, n_parallel,
+                  coil_temp_c=120.0, end_winding_factor=0.0):
+    """Physical 3-phase copper (stranded) loss = ρ_Cu(T)·J²·V_cu·k_end.
+
+    ρ_Cu(T) rises with coil temperature; J is the conductor current density
+    (branch current / strand area); V_cu is the ACTIVE in-slot copper volume;
+    k_end scales it up for the end-turns the 2-D field never sees.  Returns
+    (P_cu_total_W, k_end_used, R_phase_eff_ohm)."""
+    mm = 1e-3
+    n_wires = float(geo_cfg.get("num_wires_per_slot", 14))
+    wire_area = (float(geo_cfg.get("wire_width", 5.0)) * mm
+                 * float(geo_cfg.get("wire_height", 0.6)) * mm)
+    n_par = max(float(n_parallel), 1.0)
+    if wire_area <= 0 or I_phase_rms <= 0:
+        return 0.0, 1.0, 0.0
+    V_cu_slot = p.num_slots * wire_area * n_wires * float(p.stack_length)
+    k_end = (float(end_winding_factor) if end_winding_factor and end_winding_factor > 0
+             else end_winding_factor_geom(p, geo_cfg))
+    rho = RHO_CU_20 * (1.0 + ALPHA_CU * (float(coil_temp_c) - 20.0))
+    I_coil = float(I_phase_rms) / n_par                 # branch current
+    J = I_coil / wire_area                              # conductor current density
+    P = rho * J * J * V_cu_slot * k_end
+    R_phase_eff = P / (3.0 * float(I_phase_rms) ** 2)
+    return float(P), float(k_end), float(R_phase_eff)
+
+
 def fem_transient_sliding_band(
     n_steps_per_period: int = 12,
     n_periods: float = 1.0,
@@ -2472,6 +2538,8 @@ def fem_transient_sliding_band(
     n_sectors: int = 4,
     stator_fillet_mm: float = 0.0,
     nonlinear_iterations: int = 14,
+    coil_temp_c: float = 120.0,
+    end_winding_factor: float = 0.0,
 ) -> dict:
     """Sliding-band transient: mesh the stator + rotor halves ONCE, then sweep
     the rotor by shifting the slip-ring node pairing (no remeshing) so the
@@ -2487,8 +2555,8 @@ def fem_transient_sliding_band(
     Returns the same dict shape as the parallel transient endpoint expects.
     """
     import time as _t
-    from skfem import (Basis, ElementTriP1, BilinearForm, LinearForm, asm,
-                       condense, solve as _sksolve, MeshTri)
+    from skfem import (Basis, ElementTriP1, ElementTriP0, BilinearForm,
+                       LinearForm, asm, condense, solve as _sksolve, MeshTri)
     from skfem.helpers import dot as _dot, grad as _grad
     from scipy.sparse import csr_matrix as _csr, coo_matrix as _coo, block_diag as _bd
     from motor_ai_sim.cadquery_geometry import CadQueryMotor
@@ -2512,7 +2580,12 @@ def fem_transient_sliding_band(
     pole_pairs = p.num_poles // 2
     n_parallel = wind.get("n_parallel", 2)
     n_wires = int(geo.get("num_wires_per_slot", 14))
-    R_phase = float(wind.get("phase_resistance_ohm", 0.018))
+    # Physical copper loss: ρ_Cu(coil_temp)·J²·V_cu·k_end (end-winding the 2-D
+    # field never sees).  R_phase is derived from it so the R·I voltage drop is
+    # temperature-consistent — no hard-coded resistance.
+    P_cu, _k_end_used, R_phase = copper_loss_W(
+        p, geo, float(I_phase_rms), n_parallel,
+        coil_temp_c=coil_temp_c, end_winding_factor=end_winding_factor)
     rpm = float(sim.get("rpm", 3950)); f_elec = float(sim.get("frequency", 921.67))
     slot_area_m2 = p.slot_width_m * p.slot_height_m * p.fill_factor
     mid = 0.5 * (p.r_rotor_out + p.r_stator_in)
@@ -2554,6 +2627,9 @@ def fem_transient_sliding_band(
     # Forms
     @BilinearForm
     def _stiff(u, v, w): return _dot(_grad(u), _grad(v))
+    @BilinearForm
+    def _stiff_nu(u, v, w):            # per-element reluctivity ν(x)
+        return w["nu"] * _dot(_grad(u), _grad(v))
     @LinearForm
     def _f1(v, w): return 1.0 * v
     @LinearForm
@@ -2663,6 +2739,28 @@ def fem_transient_sliding_band(
             if (tag in SAT) and m and m.bh_curve and len(m.bh_curve) >= 2:
                 sat_bh[hn][int(tag)] = m.bh_curve
 
+    # Per-element saturation: the CONSTANT (non-iron) stiffness is pre-summed
+    # once; the saturable iron tags are re-assembled each Picard iteration with
+    # an element-wise reluctivity ν(x) so every triangle gets its own μ(|B|)
+    # from the B-H curve — no single lumped μ that over- or under-saturates the
+    # whole domain.
+    K_const = {}; sb_sat = {"s": {}, "r": {}}
+    b0_sat = {"s": {}, "r": {}}; nu_el = {"s": {}, "r": {}}
+    for hn in ("s", "r"):
+        h = half[hn]
+        Kc = _csr((h["n"], h["n"]))
+        for tag, Kd in h["K0"].items():
+            if tag in sat_bh[hn]:
+                idx = h["cells"][tag]
+                _sbi = Basis(h["mesh"], ElementTriP1(), elements=idx)
+                sb_sat[hn][tag] = _sbi
+                b0_sat[hn][tag] = _sbi.with_element(ElementTriP0())
+                nu_el[hn][tag] = np.full(
+                    idx.size, 1.0 / (MU0 * max(mu0[hn].get(tag, 1.0), 1.0)))
+            else:
+                Kc = Kc + Kd * (1.0 / (MU0 * max(mu0[hn].get(tag, 1.0), 1.0)))
+        K_const[hn] = Kc.tocsr()
+
     r_all = np.hypot(Pall[0], Pall[1])
     outer_nodes = np.where(r_all >= r_all.max() - 5e-4)[0]
 
@@ -2694,14 +2792,20 @@ def fem_transient_sliding_band(
         uniq, inv = np.unique(rid, return_inverse=True)
         Pro = _coo((rsg, (np.arange(n), inv)), shape=(n, uniq.size)).tocsr()
         outer_red = np.unique(inv[outer_nodes])
-        mu = {"s": dict(mu0["s"]), "r": dict(mu0["r"])}
+        # reset the per-element iron reluctivity to the unsaturated base each
+        # frame so the Picard sweep starts from a consistent state
+        for hn in ("s", "r"):
+            for tag in sb_sat[hn]:
+                nu_el[hn][tag][:] = 1.0 / (MU0 * max(mu0[hn].get(tag, 1.0), 1.0))
         A = np.zeros(n)
         for it in range(nonlinear_iterations):
             blocks = []
             for hn in ("s", "r"):
-                h = half[hn]; K = _csr((h["n"], h["n"]))
-                for tag, Kd in h["K0"].items():
-                    K = K + Kd * (1.0 / (MU0 * max(mu[hn].get(tag, 1.0), 1.0)))
+                h = half[hn]; K = K_const[hn].copy()
+                for tag, _sbi in sb_sat[hn].items():
+                    b0 = b0_sat[hn][tag]; nf = b0.zeros()
+                    nf[h["cells"][tag]] = nu_el[hn][tag]   # P0 dof = global elem id
+                    K = K + asm(_stiff_nu, _sbi, nu=b0.interpolate(nf))
                 blocks.append(K)
             K = _bd(blocks).tocsr()
             A = Pro @ _sksolve(*condense((Pro.T @ K @ Pro).tocsr(),
@@ -2712,8 +2816,14 @@ def fem_transient_sliding_band(
                 Bm = np.sqrt(Bx ** 2 + By ** 2)
                 for tag, curve in sat_bh[hn].items():
                     idx = h["cells"][tag]
-                    Bp90 = float(np.percentile(Bm[idx], 90)) if idx.size else 0.0
-                    mu[hn][tag] = 0.5 * mu[hn][tag] + 0.5 * _mu_r_from_bh(curve, Bp90)
+                    if idx.size == 0:
+                        continue
+                    # PER-ELEMENT reluctivity: each iron triangle gets its own
+                    # μ(|B|) from the B-H curve.  Damped (Picard) update of the
+                    # element-wise ν field used by the saturable-tag assembly.
+                    mu_new = _mu_r_from_bh_vec(curve, Bm[idx])
+                    nu_new = 1.0 / (MU0 * np.maximum(mu_new, 1.0))
+                    nu_el[hn][tag] = 0.5 * nu_el[hn][tag] + 0.5 * nu_new
         # capture the converged per-element B for the loss integrals
         _Bxs, _Bys = _per_triangle_B(half["s"]["mesh"], A[:nsn])
         _Bxr, _Byr = _per_triangle_B(half["r"]["mesh"], A[nsn:])
@@ -2815,7 +2925,7 @@ def fem_transient_sliding_band(
     Trip = (100.0 * (max(T_series) - min(T_series)) / abs(Tavg)
             if T_series and abs(Tavg) > 1e-9 else 0.0)
     Vpk = float(max(max(map(abs, VA)), max(map(abs, VB)), max(map(abs, VC)))) if VA else 0.0
-    P_cu = 3.0 * R_phase * float(I_phase_rms) ** 2
+    # P_cu already computed physically (ρ(T)·J²·V·k_end) near the top.
 
     # ── Losses from the captured B(t) — PER-FRAME instantaneous series ────────
     # iron(t)  = hysteresis baseline (per-cycle quantity, flat) + classical
@@ -2878,6 +2988,8 @@ def fem_transient_sliding_band(
         "P_mag_eddy_W": P_mag_series, "P_loss_total_W": P_tot_series,
         "P_mech_avg_W": P_mech_avg,
         "R_phase_ohm": R_phase, "n_slip_nodes": int(Nring),
+        "coil_temp_C": float(coil_temp_c),
+        "end_winding_factor": float(_k_end_used),
     }
 
 

@@ -138,6 +138,8 @@ const SimulationPanel: React.FC = () => {
   const [frequency,     setFrequency]     = usePersisted('frequency', 921.67);
   const [rpm,           setRpm]           = usePersisted('rpm',       3950.0);
   const [phaseOffset,   setPhaseOffset]   = usePersisted('gamma',     0.0);   // γ [deg]
+  const [coilTemp,      setCoilTemp]      = usePersisted('coilTemp',  120.0); // °C
+  const [endWinding,    setEndWinding]    = usePersisted('endWinding', 0.0);  // 0 = auto
 
   // ── Run-Simulation gating ──────────────────────────────────────────────
   // The FEM transient + field animation only (re)compute when runNonce
@@ -451,6 +453,32 @@ const SimulationPanel: React.FC = () => {
               inputProps={{ step: 5, min: -90, max: 90 }}
               helperText={`I direction = 90° + γ elec from d-axis.  ` +
                           `γ=0 → q-axis (max torque),  γ=±90 → d-axis (field weakening)`}
+              disabled={isRunning}
+              FormHelperTextProps={{ sx: { fontSize: 10, color: '#475569', mx: 0 } }}
+            />
+
+            {/* ── Copper-loss physics: temperature + end-winding ──
+                The 2-D field only sees the in-slot (active) copper.  ρ_Cu rises
+                with coil temperature, and the end-turns that loop outside the
+                stack add series resistance the 2-D model can't see. */}
+            <TextField
+              label="Coil temperature (°C)"
+              type="number" size="small" fullWidth
+              value={coilTemp}
+              onChange={e => setCoilTemp(+e.target.value)}
+              inputProps={{ step: 10, min: -40, max: 220 }}
+              helperText={`ρ_Cu(T): +0.393 %/°C from 20 °C → higher copper loss`}
+              disabled={isRunning}
+              FormHelperTextProps={{ sx: { fontSize: 10, color: '#475569', mx: 0 } }}
+            />
+            <TextField
+              label="End-winding factor (0 = auto from geometry)"
+              type="number" size="small" fullWidth
+              value={endWinding}
+              onChange={e => setEndWinding(+e.target.value)}
+              inputProps={{ step: 0.1, min: 0, max: 6 }}
+              helperText={`k_end = (active + end-turn)/active length.  0 → ` +
+                          `estimate ≈ 1 + 2·L_endturn/L_stack from geometry`}
               disabled={isRunning}
               FormHelperTextProps={{ sx: { fontSize: 10, color: '#475569', mx: 0 } }}
             />

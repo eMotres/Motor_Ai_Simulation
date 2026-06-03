@@ -64,6 +64,13 @@ function readMeshSetting<T>(key: string, def: T): T {
   } catch { return def; }
 }
 
+function readSimSetting<T>(key: string, def: T): T {
+  try {
+    const raw = localStorage.getItem(`sim.${key}`);
+    return raw == null ? def : (JSON.parse(raw) as T);
+  } catch { return def; }
+}
+
 const AXIS = { fontSize: 10, fill: '#94a3b8' };
 const TOOLTIP = {
   contentStyle: { background: '#0f172a', border: '1px solid #1e293b',
@@ -155,6 +162,10 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
       // Sliding-band transient (mesh once, rotate rotor) → smooth T(t) and
       // clean back-EMF V(t). Driven by the Mesh-tab "Sliding-band" toggle.
       sliding_band:       String(readMeshSetting('slidingBand', false)),
+      // Copper-loss physics: coil temperature → ρ_Cu(T); end-winding factor
+      // (0 = auto-estimate from geometry) for the copper the 2-D field misses.
+      coil_temp_c:        String(readSimSetting('coilTemp',   120.0)),
+      end_winding_factor: String(readSimSetting('endWinding',   0.0)),
       // Request the SAME include_frames/n_frames as the FemAnimationViewer
       // so both panels hit the exact same backend cache key and the heavy
       // FEM sweep runs ONCE instead of twice (the lock would otherwise

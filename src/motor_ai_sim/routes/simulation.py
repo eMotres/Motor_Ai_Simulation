@@ -1606,6 +1606,8 @@ def get_fem_transient(
     run_id:              str   = "",      # ← Stop-button cancellation token
     fresh:               bool  = False,   # ← "Start fresh" wipes the frame cache
     sliding_band:        bool  = False,   # ← mesh-once sliding band (smooth T, clean V)
+    coil_temp_c:         float = 120.0,   # ← copper temperature → ρ_Cu(T)
+    end_winding_factor:  float = 0.0,     # ← 0 = auto-estimate from geometry
 ):
     """Transient FEM analysis — runs N solves per electrical period and
     returns time-resolved T(t), losses(t) and V_phase(t).
@@ -1630,7 +1632,8 @@ def get_fem_transient(
                    round(gamma_deg, 1), round(I_phase_rms, 1),
                    round(mesh_size_mm, 2), round(min_size_mm, 2),
                    round(outer_air_factor, 2), int(n_sectors),
-                   round(stator_fillet_mm, 2))
+                   round(stator_fillet_mm, 2),
+                   round(coil_temp_c, 1), round(end_winding_factor, 3))
         if not fresh and _sb_key in _fem_transient_cache:
             return _fem_transient_cache[_sb_key]
         try:
@@ -1641,7 +1644,9 @@ def get_fem_transient(
                 mesh_size_mm=float(mesh_size_mm), min_size_mm=float(min_size_mm),
                 outer_air_factor=float(outer_air_factor),
                 n_sectors=int(n_sectors) if int(n_sectors) > 1 else 4,
-                stator_fillet_mm=float(stator_fillet_mm))
+                stator_fillet_mm=float(stator_fillet_mm),
+                coil_temp_c=float(coil_temp_c),
+                end_winding_factor=float(end_winding_factor))
             # ── Summary block (masses, loss split, KV, efficiency, specific
             # torque/power) so the Simulation values table renders — same shape
             # as the remesh path produces.
@@ -1681,6 +1686,8 @@ def get_fem_transient(
                     "P_stranded_W": round(_Pcu, 1),     # copper
                     "P_solid_W":    round(_Pmag, 1),    # magnet eddy
                     "efficiency":   round(_eff, 4),
+                    "coil_temp_C":  round(float(_sbres.get("coil_temp_C", coil_temp_c)), 1),
+                    "end_winding_factor": round(float(_sbres.get("end_winding_factor", 0.0)), 2),
                     "mass_total_kg": round(_m_tot, 3),
                     "mass_components": _masses["components"],
                     "torque_per_mass_Nm_kg": round(_Tavg / max(_m_tot, 1e-6), 3),

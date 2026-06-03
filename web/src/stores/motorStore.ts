@@ -633,36 +633,32 @@ export const useMotorStore = create<MotorState>()(
       optimizationResult: null,
       optimizationRunning: false,
       optimizationError: null,
-      runOptimization: async (nSamples = 3000) => {
+      runOptimization: async (nSamples = 500) => {
         const { sweepConfig } = get();
-        // Design variables = geometry params marked sweep/optimize.
+        // Design variables = GEOMETRY params marked sweep/optimize (current/rpm
+        // are NOT variables — they are the two operating points below).
         const variables = Object.entries(sweepConfig.variations)
           .filter(([, v]) => v.mode !== 'fixed')
           .map(([name, v]) => ({ name, min: Number(v.min), max: Number(v.max) }));
 
-        // The two operating points define the CURRENT (and RPM) envelope: when
-        // they differ, current/rpm become search variables so the Pareto front
-        // spreads across the efficiency axis (lower current → higher η, lower T).
+        // Each geometry is evaluated at BOTH operating points → two Pareto
+        // points joined by a segment (the design's load line from I1 to I2).
         const [op0, op1] = sweepConfig.operatingPoints;
-        const cLo = Math.min(op0.current_a, op1.current_a);
-        const cHi = Math.max(op0.current_a, op1.current_a);
-        const rLo = Math.min(op0.rpm, op1.rpm);
-        const rHi = Math.max(op0.rpm, op1.rpm);
-        if (cHi - cLo > 1e-6) variables.push({ name: 'current_a', min: cLo, max: cHi });
-        if (rHi - rLo > 1e-6) variables.push({ name: 'rpm', min: rLo, max: rHi });
-
-        const operating = {
-          gamma_deg: 0,
-          current_a: op0.current_a,
-          rpm: op0.rpm,
-        };
+        const operating_points = [
+          { gamma_deg: 0, current_a: op0.current_a, rpm: op0.rpm },
+          { gamma_deg: 0, current_a: op1.current_a, rpm: op1.rpm },
+        ];
+        // Cogging-ripple selection gate (slider is a fraction → percent).
+        const ripple_max_pct = sweepConfig.rippleThreshold * 100;
 
         set({ optimizationRunning: true, optimizationError: null });
         try {
           const res = await fetch(`${API_BASE_URL}/api/optimization/run`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ variables, operating, n_samples: nSamples }),
+            body: JSON.stringify({
+              variables, operating_points, ripple_max_pct, n_samples: nSamples,
+            }),
           });
           if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
           const data: OptimizationResult = await res.json();

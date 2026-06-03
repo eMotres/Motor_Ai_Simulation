@@ -1,8 +1,8 @@
 /**
- * ParetoResults — scatter of all evaluated designs with the non-dominated
- * (Pareto) front highlighted, plus a table of the front designs.  X axis is
- * efficiency, Y axis is torque density (N·m/kg); both are maximized, so the
- * front is the up-right envelope.  The baseline (current motor) is marked.
+ * ParetoResults — for every sampled geometry, two points (at currents I1 & I2)
+ * joined by a segment (the design's load line).  X = efficiency, Y = torque
+ * density (both maximized → the front is the up-right envelope).  Designs whose
+ * cogging ripple exceeds the threshold are excluded from the front (drawn faint).
  */
 import React from 'react';
 import {
@@ -11,28 +11,29 @@ import {
 } from '@mui/material';
 import {
   ScatterChart, Scatter, XAxis, YAxis, ZAxis, CartesianGrid,
-  Tooltip as RcTooltip, ResponsiveContainer, Legend,
+  Tooltip as RcTooltip, ResponsiveContainer, Legend, ReferenceLine,
 } from 'recharts';
 import type { OptimizationResult, OptDesignPoint } from '../../types/motor';
 import { useMotorStore } from '../../stores/motorStore';
 
 const OPERATING_KEYS = new Set(['gamma_deg', 'current_a', 'rpm']);
+const fmt = (v: number, n = 2) => (Number.isFinite(v) ? v.toFixed(n) : '–');
 
 interface Pt { x: number; y: number; d: OptDesignPoint; }
-
-const fmt = (v: number, n = 2) => (Number.isFinite(v) ? v.toFixed(n) : '–');
 
 const ParetoTooltip: React.FC<any> = ({ active, payload }) => {
   if (!active || !payload?.length) return null;
   const d: OptDesignPoint = payload[0].payload.d;
-  const ov = Object.entries(d.overrides || {});
+  if (!d) return null;
+  const ov = Object.entries(d.overrides || {}).filter(([k]) => !OPERATING_KEYS.has(k));
   return (
     <Box sx={{ bgcolor: '#0f172a', border: '1px solid #1e293b', p: 1, fontSize: 11, color: '#cbd5e1', borderRadius: 1 }}>
       <div><b>η = {(d.efficiency * 100).toFixed(2)} %</b> · T/mass = {fmt(d.torque_per_mass_Nm_kg)} N·m/kg</div>
-      <div>T = {fmt(d.T_em_Nm)} N·m · mass = {fmt(d.mass_total_kg)} kg</div>
-      <div style={{ color: '#94a3b8' }}>
-        loss {fmt(d.P_loss_total_W, 0)} W (Cu {fmt(d.P_cu_W, 0)} / Fe {fmt(d.P_fe_W, 0)} / Mg {fmt(d.P_mag_W, 0)})
+      <div>I = {fmt(d.current_a, 0)} A · T = {fmt(d.T_em_Nm)} N·m · mass = {fmt(d.mass_total_kg)} kg</div>
+      <div style={{ color: d.eligible ? '#34d399' : '#f87171' }}>
+        ripple ≈ {fmt(d.T_ripple_pct, 1)} % {d.eligible ? '' : '(over limit)'}
       </div>
+      <div style={{ color: '#94a3b8' }}>loss {fmt(d.P_loss_total_W, 0)} W (Cu {fmt(d.P_cu_W, 0)}/Fe {fmt(d.P_fe_W, 0)}/Mg {fmt(d.P_mag_W, 0)})</div>
       {ov.length > 0 && (
         <div style={{ marginTop: 4, color: '#fbbf24' }}>
           {ov.map(([k, v]) => `${k}=${(v as number).toFixed(2)}`).join('  ')}
@@ -46,56 +47,78 @@ const ParetoResults: React.FC<{ result: OptimizationResult }> = ({ result }) => 
   const updateGeometryViaApi = useMotorStore(s => s.updateGeometryViaApi);
   const updateOperatingPoint = useMotorStore(s => s.updateOperatingPoint);
 
+  const pts = result.points;
   const frontSet = new Set(result.pareto_indices);
-  const cloudAll: Pt[] = [];
-  const front: Pt[] = [];
-  result.points.forEach((d, i) => {
-    if (!d.feasible) return;
-    const pt: Pt = { x: d.efficiency * 100, y: d.torque_per_mass_Nm_kg, d };
-    (frontSet.has(i) ? front : cloudAll).push(pt);
+
+  // Two clouds (both currents, so the axes span the whole space → segments stay
+  // on-chart): eligible (passed the ripple gate) vs filtered (failed it).
+  const eligIdx: number[] = [];
+  const filtIdx: number[] = [];
+  pts.forEach((d, i) => {
+    if (!d.feasible || frontSet.has(i)) return;
+    (d.eligible ? eligIdx : filtIdx).push(i);
   });
-  front.sort((a, b) => a.x - b.x);
-  // Downsample the background cloud — rendering thousands of SVG dots makes the
-  // chart sluggish; ~600 is plenty to show the feasible design space.
-  const MAX_CLOUD = 600;
-  const stride = Math.max(1, Math.ceil(cloudAll.length / MAX_CLOUD));
-  const cloud = stride > 1 ? cloudAll.filter((_, i) => i % stride === 0) : cloudAll;
+  const downsample = (idx: number[], max: number) => {
+    const s = Math.max(1, Math.ceil(idx.length / max));
+    return idx.filter((_, k) => k % s === 0)
+      .map(i => ({ x: pts[i].efficiency * 100, y: pts[i].torque_per_mass_Nm_kg, d: pts[i] }));
+  };
+  const cloud: Pt[] = downsample(eligIdx, 400);       // eligible
+  const filtered: Pt[] = downsample(filtIdx, 400);    // failed ripple gate
+
+  const front: Pt[] = result.pareto_indices
+    .map(i => ({ x: pts[i].efficiency * 100, y: pts[i].torque_per_mass_Nm_kg, d: pts[i] }))
+    .sort((a, b) => a.x - b.x);
+
   const base = result.baseline;
   const basePt: Pt[] = base?.feasible
     ? [{ x: base.efficiency * 100, y: base.torque_per_mass_Nm_kg, d: base }]
     : [];
 
+  // Segment lines (one per geometry, I1→I2), downsampled.
+  const segArr = result.segments ?? [];
+  const MAX_SEG = 150;
+  const sstride = Math.max(1, Math.ceil(segArr.length / MAX_SEG));
+  const segLines = segArr
+    .filter((_, k) => k % sstride === 0)
+    .map(([a, b]) => {
+      const pa = pts[a], pb = pts[b];
+      if (!pa?.feasible || !pb?.feasible) return null;
+      return {
+        x1: pa.efficiency * 100, y1: pa.torque_per_mass_Nm_kg,
+        x2: pb.efficiency * 100, y2: pb.torque_per_mass_Nm_kg,
+        elig: pa.eligible && pb.eligible,
+      };
+    })
+    .filter(Boolean) as { x1: number; y1: number; x2: number; y2: number; elig: boolean }[];
+
   const varNames = result.variables.map(v => v.name);
+  const ops = result.operating_points || [];
 
   const applyDesign = (d: OptDesignPoint) => {
     const geoOverrides: Record<string, number> = {};
     Object.entries(d.overrides || {}).forEach(([k, v]) => {
       if (!OPERATING_KEYS.has(k)) geoOverrides[k] = v as number;
     });
-    if (Object.keys(geoOverrides).length) {
-      updateGeometryViaApi(geoOverrides as any);
-    }
-    // operating overrides → push into operating point 1 so Simulation can use it
-    const op: any = {};
-    if ('current_a' in (d.overrides || {})) op.current_a = d.overrides.current_a;
-    if ('rpm' in (d.overrides || {})) op.rpm = d.overrides.rpm;
-    if (Object.keys(op).length) updateOperatingPoint(0, op);
+    if (Object.keys(geoOverrides).length) updateGeometryViaApi(geoOverrides as any);
+    if (d.current_a) updateOperatingPoint(0, { current_a: d.current_a, rpm: d.rpm });
   };
 
   return (
     <Box sx={{ mt: 3 }}>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1, flexWrap: 'wrap' }}>
         <Typography variant="overline" sx={{ fontSize: 10, letterSpacing: 1, color: 'text.secondary' }}>
           Pareto Front — Torque density vs Efficiency
         </Typography>
-        <Chip size="small" label={`${result.n_feasible}/${result.n_total} feasible`} variant="outlined" sx={{ height: 18, fontSize: 10 }} />
+        <Chip size="small" label={`${result.n_geometries} geometries × ${ops.length} pts`} variant="outlined" sx={{ height: 18, fontSize: 10 }} />
+        <Chip size="small" color="success" label={`${result.n_eligible_points} pass ripple ≤ ${result.ripple_max_pct.toFixed(0)}%`} sx={{ height: 18, fontSize: 10 }} />
         <Chip size="small" color="warning" label={`${result.pareto_indices.length} on front`} sx={{ height: 18, fontSize: 10 }} />
-        <Tooltip title="Analytical surrogate calibrated to the validated sliding-band FEM at the baseline. Use it to narrow the design space; confirm a chosen point in the Simulation tab." placement="top">
+        <Tooltip title="Each geometry → two points (currents I1, I2) joined by a load-line segment. Analytical cogging-ripple gate; full ripple needs FEM (Simulation). Surrogate calibrated to the validated FEM at baseline." placement="top">
           <span style={{ color: '#475569', fontSize: 11, cursor: 'help' }}>ⓘ</span>
         </Tooltip>
       </Box>
 
-      <Box sx={{ height: 320, bgcolor: 'rgba(255,255,255,0.02)', borderRadius: 1, p: 1 }}>
+      <Box sx={{ height: 340, bgcolor: 'rgba(255,255,255,0.02)', borderRadius: 1, p: 1 }}>
         <ResponsiveContainer width="100%" height="100%">
           <ScatterChart margin={{ top: 8, right: 16, bottom: 24, left: 8 }}>
             <CartesianGrid stroke="#1e293b" strokeDasharray="2 4" />
@@ -109,17 +132,25 @@ const ParetoResults: React.FC<{ result: OptimizationResult }> = ({ result }) => 
               tickFormatter={(v: number) => v.toFixed(1)}
               tick={{ fontSize: 10, fill: '#94a3b8' }}
               label={{ value: 'Torque/mass [N·m/kg]', angle: -90, position: 'insideLeft', style: { fontSize: 10, fill: '#64748b' } }} />
-            <ZAxis range={[24, 24]} />
+            <ZAxis range={[22, 22]} />
+            {/* Load-line segments (one per geometry, I1→I2) drawn via recharts'
+                own coordinate mapping. */}
+            {segLines.map((s, i) => (
+              <ReferenceLine key={`seg${i}`} ifOverflow="hidden"
+                segment={[{ x: s.x1, y: s.y1 }, { x: s.x2, y: s.y2 }]}
+                stroke={s.elig ? '#64748b' : '#7f1d1d'}
+                strokeOpacity={s.elig ? 0.35 : 0.18} strokeWidth={0.7} />
+            ))}
             <RcTooltip content={<ParetoTooltip />} cursor={{ strokeDasharray: '3 3' }} />
             <Legend wrapperStyle={{ fontSize: 10 }} />
-            <Scatter name="evaluated" data={cloud} fill="#334155" fillOpacity={0.5} />
+            <Scatter name={`ripple > ${result.ripple_max_pct.toFixed(0)}%`} data={filtered} fill="#7f1d1d" fillOpacity={0.45} />
+            <Scatter name="eligible" data={cloud} fill="#64748b" fillOpacity={0.65} />
             <Scatter name="Pareto front" data={front} fill="#f59e0b" line={{ stroke: '#f59e0b', strokeWidth: 1 }} shape="circle" />
             <Scatter name="baseline" data={basePt} fill="#3b82f6" shape="diamond" />
           </ScatterChart>
         </ResponsiveContainer>
       </Box>
 
-      {/* Front designs table */}
       <Box sx={{ mt: 2, overflowX: 'auto' }}>
         <Table size="small" sx={{ '& td, & th': { fontSize: 11, py: 0.5, borderColor: '#1e293b' } }}>
           <TableHead>
@@ -127,7 +158,9 @@ const ParetoResults: React.FC<{ result: OptimizationResult }> = ({ result }) => 
               <TableCell>η&nbsp;%</TableCell>
               <TableCell align="right">T/mass</TableCell>
               <TableCell align="right">T&nbsp;[N·m]</TableCell>
-              <TableCell align="right">mass&nbsp;[kg]</TableCell>
+              <TableCell align="right">I&nbsp;[A]</TableCell>
+              <TableCell align="right">ripple&nbsp;%</TableCell>
+              <TableCell align="right">mass</TableCell>
               <TableCell align="right">loss&nbsp;[W]</TableCell>
               {varNames.map(n => <TableCell key={n} align="right">{n}</TableCell>)}
               <TableCell />
@@ -139,6 +172,8 @@ const ParetoResults: React.FC<{ result: OptimizationResult }> = ({ result }) => 
                 <TableCell sx={{ color: '#fbbf24', fontWeight: 700 }}>{(p.d.efficiency * 100).toFixed(2)}</TableCell>
                 <TableCell align="right">{fmt(p.d.torque_per_mass_Nm_kg)}</TableCell>
                 <TableCell align="right">{fmt(p.d.T_em_Nm, 1)}</TableCell>
+                <TableCell align="right">{fmt(p.d.current_a, 0)}</TableCell>
+                <TableCell align="right" sx={{ color: '#34d399' }}>{fmt(p.d.T_ripple_pct, 1)}</TableCell>
                 <TableCell align="right">{fmt(p.d.mass_total_kg)}</TableCell>
                 <TableCell align="right">{fmt(p.d.P_loss_total_W, 0)}</TableCell>
                 {varNames.map(n => (
@@ -156,7 +191,8 @@ const ParetoResults: React.FC<{ result: OptimizationResult }> = ({ result }) => 
         </Table>
       </Box>
       <Typography variant="caption" color="text.disabled" sx={{ display: 'block', mt: 1 }}>
-        Diamond = baseline (current motor). <b>Apply</b> writes a front design's geometry to the model — confirm it in the Simulation tab (full FEM).
+        Each thin segment = one geometry's load line (I1→I2). Diamond = baseline. Ripple is a cogging estimate;
+        confirm a chosen design's full ripple in the Simulation tab. <b>Apply</b> writes its geometry + current to the model.
       </Typography>
     </Box>
   );

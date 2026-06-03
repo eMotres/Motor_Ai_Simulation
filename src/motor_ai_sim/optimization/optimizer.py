@@ -1,10 +1,15 @@
-"""Pareto design search over geometry + operating-point variables.
+"""Pareto design search — two operating points per geometry, with ripple filter.
 
-Strategy: Latin-Hypercube sample the variable box, evaluate every candidate with
-the fast in-memory surrogate (``design_eval.evaluate_design``), then extract the
-non-dominated (Pareto) front for the two maximize objectives — torque density
-(N·m/kg) and efficiency.  Because each evaluation is ~0.1 ms, thousands of
-samples finish in a couple of seconds.  Fully deterministic (seeded LHS), and
+For each sampled GEOMETRY the surrogate is evaluated at every operating point
+(typically two currents I1 and I2), producing one Pareto point per (geometry,
+operating-point).  The two points of a geometry are linked by a *segment* so the
+UI can show how that design slides through Pareto space as the load changes.
+
+A cogging/slot-ripple estimate (``T_ripple_pct``) gates the selection: points
+whose ripple exceeds ``ripple_max_pct`` are marked not-eligible and excluded
+from the Pareto front.
+
+Latin-Hypercube sampling over the geometry box; fully deterministic (seeded);
 totally isolated from the FEM/simulation state.
 """
 from __future__ import annotations
@@ -17,7 +22,7 @@ from scipy.stats import qmc
 
 from .design_eval import evaluate_design, DesignMetrics
 
-# Operating-point variable names live in the operating dict, not geometry.
+# These names are operating-point coordinates, not geometry keys.
 _OPERATING_VARS = {"gamma_deg", "current_a", "rpm"}
 
 
@@ -27,11 +32,7 @@ def _objectives(m: DesignMetrics) -> tuple[float, float]:
 
 
 def _pareto_front(points: List[tuple[float, float]]) -> List[int]:
-    """Indices of non-dominated points (both objectives maximized).
-
-    Point i is dominated if some j is >= in both objectives and > in at least
-    one.  O(n²) — fine for a few thousand points.
-    """
+    """Indices of non-dominated points (both objectives maximized)."""
     n = len(points)
     dominated = [False] * n
     for i in range(n):
@@ -48,104 +49,104 @@ def _pareto_front(points: List[tuple[float, float]]) -> List[int]:
     return [i for i in range(n) if not dominated[i]]
 
 
+def _eval(base_geo, wind, sim, geo_over, gamma, current, rpm,
+          coil_temp_c) -> DesignMetrics:
+    geo = copy.deepcopy(base_geo)
+    rec: Dict[str, float] = {}
+    for name, val in geo_over.items():
+        if name == "gamma_deg":
+            gamma = float(val)
+            rec["gamma_deg"] = gamma
+        else:
+            geo[name] = float(val)
+            rec[name] = float(val)
+    return evaluate_design(geo, wind, sim, gamma, current, rpm,
+                           coil_temp_c=coil_temp_c, overrides=rec)
+
+
 def run_pareto_search(
     base_geo: Dict[str, Any],
     wind: Dict[str, Any],
     sim: Dict[str, Any],
     variables: List[Dict[str, Any]],
-    operating: Dict[str, Any],
-    n_samples: int = 2000,
+    operating_points: List[Dict[str, Any]],
+    n_samples: int = 600,
+    ripple_max_pct: float = 100.0,
     coil_temp_c: float = 120.0,
     seed: int = 12345,
 ) -> Dict[str, Any]:
-    """Run the Pareto search.
+    """Run the search.
 
-    Parameters
-    ----------
-    base_geo : full baseline geometry dict (candidate overrides overlay this)
-    wind, sim: winding / simulation config dicts (for n_series/n_parallel, rpm…)
-    variables: [{name, min, max}]  — name is a geometry key OR 'gamma_deg' /
-               'current_a' (operating-point variables)
-    operating: {gamma_deg, current_a, rpm}  fixed operating point; any variable
-               with the same name overrides its fixed value per sample
-    n_samples: LHS sample count
-    seed     : LHS seed (determinism)
+    variables       : [{name,min,max}] — GEOMETRY keys (and optionally gamma_deg).
+                      current_a / rpm come from operating_points, NOT here.
+    operating_points: [{gamma_deg?, current_a, rpm}, ...] (usually two).
+    ripple_max_pct  : designs with T_ripple_pct above this are excluded from the
+                      front (still returned, flagged eligible=False).
     """
-    variables = [v for v in variables if v.get("name")]
-    if not variables:
-        # Nothing to vary → just return the baseline point.
-        base = _eval_one(base_geo, wind, sim, operating, {}, coil_temp_c)
-        return {
-            "points": [base.to_dict()] if base.feasible else [],
-            "pareto_indices": [0] if base.feasible else [],
-            "baseline": base.to_dict(),
-            "n_total": 1, "n_feasible": int(base.feasible),
-            "variables": [], "objective": "pareto_torque_density_vs_efficiency",
-        }
+    # geometry/gamma design variables only
+    gvars = [v for v in variables if v.get("name") and v["name"] not in {"current_a", "rpm"}]
+    ops = operating_points or [{"gamma_deg": 0.0,
+                                "current_a": float(sim.get("max_current", 85.0)),
+                                "rpm": float(sim.get("rpm", 3950.0))}]
 
-    dim = len(variables)
-    lo = np.array([float(v["min"]) for v in variables])
-    hi = np.array([float(v["max"]) for v in variables])
-    sampler = qmc.LatinHypercube(d=dim, seed=int(seed))
-    unit = sampler.random(n=int(n_samples))           # (n, dim) in [0,1]
-    samples = qmc.scale(unit, lo, hi)                 # scaled to bounds
-
-    points_out: List[Dict[str, Any]] = []
+    points: List[Dict[str, Any]] = []
+    segments: List[List[int]] = []
     obj_pairs: List[tuple[float, float]] = []
-    feas_index_map: List[int] = []                    # idx into points_out
+    elig_index_map: List[int] = []
 
-    for row in samples:
-        overrides = {variables[k]["name"]: float(row[k]) for k in range(dim)}
-        m = _eval_one(base_geo, wind, sim, operating, overrides, coil_temp_c)
+    def emit(m: DesignMetrics) -> int:
         d = m.to_dict()
-        points_out.append(d)
-        if m.feasible and m.mass_total_kg > 0 and m.T_em_Nm > 0:
+        eligible = bool(m.feasible and m.mass_total_kg > 0 and m.T_em_Nm > 0
+                        and m.T_ripple_pct <= ripple_max_pct)
+        d["eligible"] = eligible
+        idx = len(points)
+        points.append(d)
+        if eligible:
             obj_pairs.append(_objectives(m))
-            feas_index_map.append(len(points_out) - 1)
+            elig_index_map.append(idx)
+        return idx
 
-    # Pareto front among feasible points, mapped back to points_out indices.
+    if not gvars:
+        # No geometry variation → just the operating points on the baseline.
+        for op in ops:
+            emit(_eval(base_geo, wind, sim, {}, op.get("gamma_deg", 0.0),
+                       op.get("current_a", 85.0), op.get("rpm", 3950.0), coil_temp_c))
+    else:
+        dim = len(gvars)
+        lo = np.array([float(v["min"]) for v in gvars])
+        hi = np.array([float(v["max"]) for v in gvars])
+        n_geom = max(20, int(n_samples))
+        unit = qmc.LatinHypercube(d=dim, seed=int(seed)).random(n=n_geom)
+        samples = qmc.scale(unit, lo, hi)
+        for row in samples:
+            geo_over = {gvars[k]["name"]: float(row[k]) for k in range(dim)}
+            idxs = []
+            for op in ops:
+                m = _eval(base_geo, wind, sim, geo_over,
+                          op.get("gamma_deg", 0.0), op.get("current_a", 85.0),
+                          op.get("rpm", 3950.0), coil_temp_c)
+                idxs.append(emit(m))
+            if len(idxs) == 2:
+                segments.append(idxs)
+
     front_local = _pareto_front(obj_pairs) if obj_pairs else []
-    pareto_indices = [feas_index_map[i] for i in front_local]
-    # sort the front by efficiency for a tidy curve
-    pareto_indices.sort(key=lambda i: points_out[i]["efficiency"])
+    pareto_indices = [elig_index_map[i] for i in front_local]
+    pareto_indices.sort(key=lambda i: points[i]["efficiency"])
 
-    base = _eval_one(base_geo, wind, sim, operating, {}, coil_temp_c)
+    base = _eval(base_geo, wind, sim, {}, ops[0].get("gamma_deg", 0.0),
+                 ops[0].get("current_a", 85.0), ops[0].get("rpm", 3950.0), coil_temp_c)
+
     return {
-        "points": points_out,
+        "points": points,
+        "segments": segments,
         "pareto_indices": pareto_indices,
         "baseline": base.to_dict(),
-        "n_total": len(points_out),
-        "n_feasible": len(feas_index_map),
+        "n_total_points": len(points),
+        "n_eligible_points": len(elig_index_map),
+        "n_geometries": len(segments) if segments else (1 if not gvars else 0),
         "variables": [{"name": v["name"], "min": float(v["min"]),
-                       "max": float(v["max"])} for v in variables],
+                       "max": float(v["max"])} for v in gvars],
+        "operating_points": ops,
+        "ripple_max_pct": float(ripple_max_pct),
         "objective": "pareto_torque_density_vs_efficiency",
     }
-
-
-def _eval_one(base_geo, wind, sim, operating, overrides, coil_temp_c) -> DesignMetrics:
-    """Overlay overrides on baseline geo + operating point, then evaluate."""
-    geo = copy.deepcopy(base_geo)
-    gamma = float(operating.get("gamma_deg", 0.0))
-    current = float(operating.get("current_a", sim.get("max_current", 85.0)))
-    rpm = float(operating.get("rpm", sim.get("rpm", 3950.0)))
-    geo_over: Dict[str, float] = {}
-    for name, val in overrides.items():
-        if name == "gamma_deg":
-            gamma = float(val)
-        elif name == "current_a":
-            current = float(val)
-        elif name == "rpm":
-            rpm = float(val)
-        else:
-            geo[name] = float(val)
-            geo_over[name] = float(val)
-    # record the operating overrides too, so the UI can show them
-    record = dict(geo_over)
-    if "gamma_deg" in overrides:
-        record["gamma_deg"] = gamma
-    if "current_a" in overrides:
-        record["current_a"] = current
-    if "rpm" in overrides:
-        record["rpm"] = rpm
-    return evaluate_design(geo, wind, sim, gamma, current, rpm,
-                           coil_temp_c=coil_temp_c, overrides=record)

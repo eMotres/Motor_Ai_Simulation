@@ -152,6 +152,7 @@ export interface SweepConfig {
 // ── Design optimization (Pareto search) ───────────────────────────────────────
 export interface OptDesignPoint {
   feasible: boolean;
+  eligible?: boolean;
   reason?: string;
   T_em_Nm: number;
   efficiency: number;
@@ -166,16 +167,23 @@ export interface OptDesignPoint {
   B_gap_T: number;
   B_tooth_T: number;
   B_back_T: number;
+  T_cog_Nm: number;
+  T_ripple_pct: number;
+  current_a: number;
+  rpm: number;
   overrides: Record<string, number>;
 }
 
 export interface OptimizationResult {
   points: OptDesignPoint[];
+  segments: [number, number][];          // index pairs (same geometry, I1 & I2)
   pareto_indices: number[];
   baseline: OptDesignPoint;
-  n_total: number;
-  n_feasible: number;
+  n_total_points: number;
+  n_eligible_points: number;
+  n_geometries: number;
   variables: { name: string; min: number; max: number }[];
+  operating_points: { gamma_deg: number; current_a: number; rpm: number }[];
+  ripple_max_pct: number;
   objective: string;
-  operating?: { gamma_deg: number; current_a: number; rpm: number };
 }

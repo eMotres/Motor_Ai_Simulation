@@ -53,6 +53,12 @@ B_SAT     = 2.2           # tooth/back flux density above which a design is reje
 K_TORQUE_CAL = 1.1331     # baseline → 24.87 N·m (validated SB-FEM)
 K_FE_CAL     = 0.5033     # baseline → 185 W iron
 K_MAG_CAL    = 0.0657     # baseline → 84 W magnet eddy
+# Cogging / slot-ripple: an ABSOLUTE cogging torque from geometry (slot opening
+# over air gap × pole-arc deviation), calibrated so the baseline cogging is a
+# realistic ~5 % of rated torque.  This is the GEOMETRY-CONTROLLABLE ripple the
+# surrogate can estimate — the full electromagnetic ripple (load harmonics,
+# saturation, the sector sub-harmonic) still needs the FEM in the Simulation tab.
+K_COG        = 0.107      # baseline T_cog ≈ 1.24 N·m → 5 % of 24.87 N·m
 
 
 @dataclass
@@ -193,6 +199,10 @@ class DesignMetrics:
     B_gap_T: float = 0.0
     B_tooth_T: float = 0.0
     B_back_T: float = 0.0
+    T_cog_Nm: float = 0.0
+    T_ripple_pct: float = 0.0
+    current_a: float = 0.0
+    rpm: float = 0.0
     overrides: Dict[str, float] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -280,6 +290,17 @@ def evaluate_design(geo: Dict[str, Any], wind: Dict[str, Any], sim: Dict[str, An
     eff = P_mech / (P_mech + P_loss) if P_mech > 0 else 0.0
     m_tot = masses["total"]
 
+    # ── Cogging / slot-ripple ────────────────────────────────────────────────
+    # Absolute cogging torque from the slot opening over the air gap (classic
+    # cogging scaling) × a mild pole-arc deviation term.  Ripple % = cogging /
+    # rated torque, so it FALLS as current (torque) rises — that is why a design
+    # makes TWO different ripple points at I1 vs I2.
+    slot_opening = max(slot_pitch - tooth_w, 0.5e-3)
+    cog_index = slot_opening / max(g, 1e-4)
+    arc_factor = 1.0 + 0.5 * abs(p.magnet_fill_fraction - 0.85)
+    T_cog = K_COG * cog_index * arc_factor
+    ripple_pct = (100.0 * T_cog / abs(T_em)) if abs(T_em) > 1e-6 else 999.0
+
     # saturation feasibility (heavily saturated tooth/back = unrealizable design)
     sat_ok = B_tooth_raw < B_SAT and B_back_raw < B_SAT
     reason = "" if sat_ok else (
@@ -293,5 +314,7 @@ def evaluate_design(geo: Dict[str, Any], wind: Dict[str, Any], sim: Dict[str, An
         P_mech_W=P_mech, P_loss_total_W=P_loss,
         P_cu_W=P_cu, P_fe_W=P_fe, P_mag_W=P_mag,
         mass_total_kg=m_tot, B_gap_T=B_g, B_tooth_T=B_tooth_raw, B_back_T=B_back_raw,
+        T_cog_Nm=T_cog, T_ripple_pct=ripple_pct,
+        current_a=float(current_a), rpm=float(rpm),
         overrides=overrides or {},
     )

@@ -39,15 +39,17 @@ class OptOperating(BaseModel):
 
 class OptRequest(BaseModel):
     variables: List[OptVariable] = Field(default_factory=list)
-    operating: OptOperating = Field(default_factory=OptOperating)
-    n_samples: int = 2000
+    # One point per (geometry, operating-point); two points → a Pareto segment.
+    operating_points: List[OptOperating] = Field(default_factory=lambda: [OptOperating()])
+    ripple_max_pct: float = 100.0          # cogging-ripple selection gate [%]
+    n_samples: int = 600                   # number of GEOMETRY samples
     coil_temp_c: float = 120.0
     seed: int = 12345
 
 
 @router.post("/run")
 def run_optimization(req: OptRequest):
-    """Run the Pareto design search and return points + front + baseline."""
+    """Run the Pareto design search and return points + segments + front."""
     try:
         cfg = get_config()
         geo = dict(cfg.get("geometry", {}))
@@ -55,14 +57,16 @@ def run_optimization(req: OptRequest):
         sim = dict(cfg.get("simulation", {}))
         variables = [{"name": v.name, "min": float(v.min), "max": float(v.max)}
                      for v in req.variables]
-        operating = {"gamma_deg": float(req.operating.gamma_deg),
-                     "current_a": float(req.operating.current_a),
-                     "rpm": float(req.operating.rpm)}
-        n = max(50, min(int(req.n_samples), 20000))
+        ops = [{"gamma_deg": float(o.gamma_deg), "current_a": float(o.current_a),
+                "rpm": float(o.rpm)} for o in (req.operating_points or [])]
+        if not ops:
+            ops = [{"gamma_deg": 0.0, "current_a": float(sim.get("max_current", 85.0)),
+                    "rpm": float(sim.get("rpm", 3950.0))}]
+        n = max(20, min(int(req.n_samples), 5000))
         res = run_pareto_search(
-            geo, wind, sim, variables, operating,
-            n_samples=n, coil_temp_c=float(req.coil_temp_c), seed=int(req.seed))
-        res["operating"] = operating
+            geo, wind, sim, variables, ops,
+            n_samples=n, ripple_max_pct=float(req.ripple_max_pct),
+            coil_temp_c=float(req.coil_temp_c), seed=int(req.seed))
         return res
     except Exception as e:  # noqa: BLE001
         log.exception("optimization run failed")

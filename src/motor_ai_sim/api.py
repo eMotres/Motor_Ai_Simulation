@@ -47,6 +47,23 @@ app.include_router(pipeline_router)
 app.include_router(simulation_router)
 
 
+@app.on_event("startup")
+def _warm_fem_pool_on_startup() -> None:
+    """Spin up the persistent FEM worker pool in the background at server
+    start so its ~5 s-per-worker cold-import (gmsh + scikit-fem) is paid
+    while the server boots, not on the user's first 'Run Simulation'."""
+    import threading
+
+    def _bg():
+        try:
+            from motor_ai_sim.routes.simulation import warm_fem_pool
+            warm_fem_pool()
+        except Exception:
+            pass
+
+    threading.Thread(target=_bg, daemon=True).start()
+
+
 @app.get("/")
 def root():
     return {
@@ -234,6 +251,14 @@ def get_full_config():
         config = get_config()
         mesh_cfg = config.get("mesh", {})
         sim_cfg = config.get("simulation", {})
+        # Geometry-derived end-winding factor k_end = (π·tooth_w/2 + L)/L,
+        # recomputed from the CURRENT geometry so the UI cell stays in sync.
+        try:
+            from motor_ai_sim.simulation.geometry_2d import params_from_config as _pfc
+            from motor_ai_sim.simulation.fem_solver_2d import end_winding_factor_geom as _ewf
+            _kend = round(float(_ewf(_pfc(), config.get("geometry", {}))), 3)
+        except Exception:
+            _kend = 0.0
         return {
             "geometry": params_to_dict(get_current_geometry()),
             "materials": get_material_assignments(),
@@ -247,6 +272,7 @@ def get_full_config():
                 "frequency": sim_cfg.get("frequency", 50.0),
                 "rpm": sim_cfg.get("rpm", 2000),
             },
+            "end_winding_factor": _kend,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

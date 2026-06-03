@@ -35,6 +35,10 @@ except ImportError:
 # Default config path - go up from geometry/ to project root
 DEFAULT_CONFIG_PATH = Path(__file__).parent.parent.parent.parent / "config" / "motor_config.yaml"
 
+# mtime-keyed cache for from_yaml(): { resolved_path: (mtime_ns, geo_dict, derived_dict) }
+# Auto-invalidates when the YAML is rewritten (geometry edit bumps mtime).
+_FROM_YAML_CACHE: Dict[str, Any] = {}
+
 # Try to import NVIDIA Modulus 2D primitives
 try:
     from modulus.geometry.primitives_2d import Circle, Rectangle, Polygon
@@ -124,6 +128,24 @@ class MotorGeometryParams:
         if not config_path.exists():
             raise FileNotFoundError(f"Config file not found: {config_path}")
 
+        # Parsing the YAML (OmegaConf load + resolve) costs ~0.13 s and was
+        # being paid on EVERY call — twice per FEM frame.  Cache the parsed
+        # geometry/derived dicts keyed by (path, mtime): a geometry edit
+        # rewrites the YAML (PUT /api/geometry), bumping mtime, which
+        # invalidates the cache automatically.  Deep-copy on the way out so
+        # callers can't mutate the cached dicts.
+        import copy as _copy
+        key = str(config_path.resolve())
+        try:
+            mtime = config_path.stat().st_mtime_ns
+        except OSError:
+            mtime = None
+        cached = _FROM_YAML_CACHE.get(key)
+        if cached is not None and mtime is not None and cached[0] == mtime:
+            geometry_config, derived_config = cached[1], cached[2]
+            return cls(_copy.deepcopy(geometry_config),
+                       _copy.deepcopy(derived_config))
+
         if HAS_OMEGACONF:
             # Use OmegaConf for YAML loading (supports expressions)
             config = OmegaConf.load(config_path)
@@ -140,7 +162,11 @@ class MotorGeometryParams:
             geometry_config = config.get('geometry', {})
             derived_config = config.get('derived_params', {})
 
-        return cls(geometry_config, derived_config)
+        if mtime is not None:
+            _FROM_YAML_CACHE[key] = (mtime, geometry_config, derived_config)
+
+        return cls(_copy.deepcopy(geometry_config),
+                   _copy.deepcopy(derived_config))
     
     def _compute_derived(self) -> None:
         """Compute derived parameters from formulas in config."""

@@ -81,8 +81,8 @@ const SummaryTable: React.FC<Props> = ({ summary, loading }) => {
       <Paper sx={{ bgcolor: '#0b1220', border: '1px solid #1e293b', p: 2,
         textAlign: 'center', fontSize: 11, color: '#64748b' }}>
         {loading
-          ? 'Computing transient FEM — summary will appear when first run completes…'
-          : 'No transient data yet — auto-run will start shortly.'}
+          ? 'Computing transient FEM — summary will appear when the run completes…'
+          : 'No transient data yet — press “Run Simulation” in the left panel.'}
       </Paper>
     );
   }

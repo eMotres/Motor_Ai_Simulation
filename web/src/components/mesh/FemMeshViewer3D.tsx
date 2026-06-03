@@ -10,6 +10,7 @@
 import React, { useEffect, useMemo, useRef } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
 import { OrbitControls, OrthographicCamera, Grid } from '@react-three/drei';
+import { ViewcubeNavigation, CameraSync } from '../viewer3d/MotorScene';
 import * as THREE from 'three';
 
 export interface FemMeshPayload {
@@ -291,6 +292,11 @@ const FemMeshViewer3D: React.FC<ViewerProps> = ({
         enableZoom
         zoomSpeed={1.2}
       />
+      {/* Drive + follow the shared overlay Viewcube (same as Geometry):
+          CameraSync streams this camera's orientation to the cube;
+          ViewcubeNavigation reorients this camera when a face is clicked. */}
+      <CameraSync controlsRef={controlsRef}/>
+      <ViewcubeNavigation controlsRef={controlsRef}/>
     </Canvas>
   );
 };

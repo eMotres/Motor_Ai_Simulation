@@ -637,7 +637,7 @@ export const useMotorStore = create<MotorState>()(
 );
 
 // Component visibility keys
-export type CompKey = 'stator' | 'rotor' | 'magnets' | 'coils' | 'shaft';
+export type CompKey = 'stator' | 'rotor' | 'magnets' | 'coils' | 'shaft' | 'in_band' | 'out_band';
 
 // UI State
 interface UIState {
@@ -730,7 +730,7 @@ export const useUIStore = create<UIState>()(
       view2d: false,
 
       // Component tree defaults
-      componentVisibility: { stator: true, rotor: true, magnets: true, coils: true, shaft: true },
+      componentVisibility: { stator: true, rotor: true, magnets: true, coils: true, shaft: true, in_band: true, out_band: true },
       coilVisibility: {},
       magnetVisibility: {},
 
@@ -765,14 +765,14 @@ export const useUIStore = create<UIState>()(
 
       isolateComponent: (key) =>
         set({
-          componentVisibility: { stator: false, rotor: false, magnets: false, coils: false, shaft: false, [key]: true },
+          componentVisibility: { stator: false, rotor: false, magnets: false, coils: false, shaft: false, in_band: false, out_band: false, [key]: true },
           coilVisibility: {},
           magnetVisibility: {},
         }),
 
       showAllComponents: () =>
         set({
-          componentVisibility: { stator: true, rotor: true, magnets: true, coils: true, shaft: true },
+          componentVisibility: { stator: true, rotor: true, magnets: true, coils: true, shaft: true, in_band: true, out_band: true },
           coilVisibility: {},
           magnetVisibility: {},
         }),

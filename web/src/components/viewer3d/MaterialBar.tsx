@@ -25,11 +25,13 @@ interface PartCfg {
 }
 
 const PART_CFG: Record<CompKey, PartCfg> = {
-  stator:  { assignKey: 'stator_core', label: 'Stator Core', color: '#3b82f6' },
-  rotor:   { assignKey: 'rotor_core',  label: 'Rotor Core',  color: '#2563eb' },
-  magnets: { assignKey: 'magnet',      label: 'Magnets',     color: '#ef4444' },
-  coils:   { assignKey: 'slot',        label: 'Windings',    color: '#f59e0b' },
-  shaft:   { assignKey: 'shaft',       label: 'Shaft',       color: '#64748b' },
+  stator:   { assignKey: 'stator_core', label: 'Stator Core',           color: '#3b82f6' },
+  rotor:    { assignKey: 'rotor_core',  label: 'Rotor Core',            color: '#2563eb' },
+  magnets:  { assignKey: 'magnet',      label: 'Magnets',               color: '#ef4444' },
+  coils:    { assignKey: 'slot',        label: 'Windings',              color: '#f59e0b' },
+  shaft:    { assignKey: 'shaft',       label: 'Shaft',                 color: '#64748b' },
+  in_band:  { assignKey: 'air_gap',     label: 'In Band (rotating)',    color: '#22c55e' },
+  out_band: { assignKey: 'air_gap',     label: 'Out Band (static)',     color: '#a855f7' },
 };
 
 // All categories in display order

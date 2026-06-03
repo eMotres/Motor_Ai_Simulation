@@ -891,7 +891,13 @@ async def build_fem_mesh_2d(
     try:
         motor = CadQueryMotor()
         polys = motor.get_2d_polygons(rotor_angle_deg=rotor_angle_deg)
-        polys = _simplify_polys(polys, tol_mm=surface_deviation,
+        # Cap the simplify tolerance hard: a large surface_deviation
+        # Douglas-Peucker-flattens the rounded rotor-tooth / fillet ARCS into
+        # straight chords (the "straight tooth" mismatch vs the Geometry tab).
+        # 0.01 mm is visually lossless, so the Mesh always shows the REAL
+        # geometry — identical to the Geometry tab and to the solver (which
+        # already uses 0.005).
+        polys = _simplify_polys(polys, tol_mm=min(float(surface_deviation), 0.01),
                                  stator_fillet_mm=stator_fillet_mm)
         # periodic_coils=False: the disjoint air_background polygon now covers
         # slot air around wires and rotor-pocket air above magnets, so the
@@ -967,9 +973,23 @@ async def build_fem_mesh_2d(
     def _poly_outlines_m(poly):
         if poly is None or poly.is_empty:
             return []
-        geoms = list(poly.geoms) if isinstance(poly, _SMP) else [poly]
+        # Flatten ANY geometry to its polygon parts.  A large surface_deviation
+        # can simplify a thin polygon into a GeometryCollection (polygons +
+        # stray LineStrings); the 1-D bits have no `.exterior` and would 500
+        # the whole mesh build here in the outline assembly.
+        def _polys_only(gm):
+            if gm is None or gm.is_empty:
+                return []
+            if gm.geom_type == "Polygon":
+                return [gm]
+            if hasattr(gm, "geoms"):       # Multi* / GeometryCollection
+                out = []
+                for sub in gm.geoms:
+                    out.extend(_polys_only(sub))
+                return out
+            return []
         rings = []
-        for g in geoms:
+        for g in _polys_only(poly):
             if g.is_empty or g.area < 1e-6:
                 continue
             rings.append([[x * 1e-3, y * 1e-3] for x, y in g.exterior.coords])
@@ -1020,6 +1040,162 @@ async def build_fem_mesh_2d(
         "note": "Conforming triangle mesh of the real CadQuery cross-section (gmsh OCC).",
     }
     _fem_mesh_cache[key] = payload
+    return payload
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 7b'.  Sliding-band TWO-mesh view  (feature/sliding-band-fem branch)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_fem_mesh_sb_cache: Dict[tuple, Dict] = {}
+
+
+@router.get("/mesh/build2d_sliding_band")
+async def build_fem_mesh_2d_sliding_band(
+    rotor_angle_deg:   float = 0.0,
+    mesh_size_mm:      float = 4.0,
+    min_size_mm:       float = 0.3,
+    surface_deviation: float = 0.005,   # Ansys "Surface Deviation" [mm]
+    normal_deviation:  float = 6.0,     # Ansys "Normal Deviation" [deg]
+    aspect_ratio:      float = 10.0,    # Ansys "Aspect Ratio"
+    outer_air_factor:  float = 1.3,
+    band_thickness_mm: float = 0.4,
+    n_sectors:         int   = 4,
+    stator_fillet_mm:  float = 0.0,     # extra Shapely fillet smoothing
+):
+    """Build TWO independent meshes (stator + rotor) and stitch them into
+    one renderer-friendly payload for the Mesh tab.  Lets the user
+    visually verify that the rotor mesh REALLY rotates as a rigid body
+    by sweeping `rotor_angle_deg` — the stator mesh and the band stay
+    put; the rotor + magnets sweep through the wedge.
+
+    Each half is meshed with the existing build_mesh_from_polygons; the
+    rotor mesh's points are then transformed via _rotate_mesh_points.
+    Returns the same JSON shape as /mesh/build2d so the existing Mesh
+    viewer can render it without any frontend changes — only difference
+    is the cell-tag colouring naturally splits into 'stator part' and
+    'rotor part' because they came from independent gmsh runs.
+    """
+    import math as _math
+    import numpy as _np
+
+    key = (round(rotor_angle_deg, 3), round(mesh_size_mm, 2),
+           round(min_size_mm, 2), round(surface_deviation, 4),
+           round(normal_deviation, 1), round(aspect_ratio, 1),
+           round(outer_air_factor, 2), round(band_thickness_mm, 2),
+           int(n_sectors), round(stator_fillet_mm, 2))
+    if key in _fem_mesh_sb_cache:
+        return _fem_mesh_sb_cache[key]
+
+    try:
+        from motor_ai_sim.cadquery_geometry import CadQueryMotor
+        from motor_ai_sim.simulation.fem_solver_2d import (
+            _simplify_polys, _add_motion_band,
+            _build_sliding_band_meshes, _find_ring_nodes,
+            DOM_MAG_BASE, DOM_COIL_BASE,
+            DOM_MAG_N, DOM_MAG_S, DOM_COIL,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"sliding-band unavailable: {e}")
+
+    motor = CadQueryMotor()
+    # outer_air_factor controls out_band's far-field radius, which is baked
+    # into get_2d_polygons — feed it through the geometry parameters so the
+    # Mesh-tab "Outer air ring" slider actually moves the boundary.
+    try:
+        motor.parameters["outer_air_factor"] = float(outer_air_factor)
+    except Exception:
+        pass
+    polys = motor.get_2d_polygons(rotor_angle_deg=0.0)
+    polys = _simplify_polys(polys, tol_mm=surface_deviation,
+                             stator_fillet_mm=stator_fillet_mm,
+                             normal_dev_deg=normal_deviation)
+    # in_band / out_band now come straight from get_2d_polygons (full inner
+    # air disk + outer air annulus), so the old air-gap-splitting motion
+    # band is no longer needed for the sliding-band path.
+
+    try:
+        mesh_s, tags_s, classify_s, mesh_r, tags_r, classify_r = \
+            _build_sliding_band_meshes(
+                polys, rotor_angle_deg=rotor_angle_deg,
+                mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm,
+                normal_deviation_deg=normal_deviation, aspect_ratio=aspect_ratio,
+                outer_air_factor=outer_air_factor,
+                band_thickness_mm=band_thickness_mm,
+                n_sectors=n_sectors, geo_cfg=motor.parameters,
+            )
+    except Exception as e:
+        log.exception("sliding-band mesh build failed")
+        raise HTTPException(status_code=500, detail=f"sliding-band mesh failed: {e}")
+
+    # Concatenate into one renderer payload — rotor triangles get their
+    # node indices offset by n_stator_nodes, and we re-map per-cell domain
+    # ids to the visualisation palette (DOM_MAG_N / S, DOM_COIL).
+    n_s_nodes = mesh_s.p.shape[1]
+    verts = _np.hstack([mesh_s.p, mesh_r.p]).T.tolist()
+    tris  = _np.hstack([mesh_s.t, mesh_r.t + n_s_nodes]).T.tolist()
+    tags  = _np.concatenate([tags_s, tags_r]).astype(_np.int16)
+
+    polys_s_meshed = getattr(classify_s, "polys", {})
+    polys_r_meshed = getattr(classify_r, "polys", {})
+    polarities = ([pol for _mp, pol in polys_s_meshed.get("magnets", [])]
+                  + [pol for _mp, pol in polys_r_meshed.get("magnets", [])])
+    # Magnet tags → N/S, coil tags → DOM_COIL
+    mask_coil = tags >= DOM_COIL_BASE
+    if _np.any(mask_coil):
+        tags[mask_coil] = DOM_COIL
+    mask = (tags >= DOM_MAG_BASE) & (tags < DOM_COIL_BASE)
+    if _np.any(mask):
+        idx = (tags[mask] - DOM_MAG_BASE).astype(int)
+        tags[mask] = _np.array(
+            [DOM_MAG_N if (j < len(polarities) and polarities[j] > 0)
+                       else DOM_MAG_S for j in idx],
+            dtype=tags.dtype)
+
+    # Slip-surface (mid_r) interface nodes — used by the renderer to draw
+    # the sliding surface as a distinctive ring overlay, and by the solver
+    # for the master-slave coupling.  mid_r is the air-gap midline where
+    # in_band (rotor side) meets out_band (stator side).
+    r_slip = float(polys.get("mid_r_mm", 56.55)) * 1e-3
+    iface_s = _find_ring_nodes(mesh_s, r_slip, tol_m=2e-4)
+    iface_r = _find_ring_nodes(mesh_r, r_slip, tol_m=2e-4) + n_s_nodes
+
+    domain_counts: Dict[str, int] = {}
+    dom_names = {0: "air", 1: "stator", 2: "coil", 3: "airgap",
+                 4: "magnet_N", 5: "rotor", 6: "shaft",
+                 7: "band", 8: "outer_air", 44: "magnet_S"}
+    for d, c in zip(*_np.unique(tags, return_counts=True)):
+        domain_counts[dom_names.get(int(d), f"d{d}")] = int(c)
+
+    payload = {
+        "rotor_angle_deg":   rotor_angle_deg,
+        "n_stator_nodes":    int(n_s_nodes),
+        "n_rotor_nodes":     int(mesh_r.p.shape[1]),
+        "n_stator_tris":     int(mesh_s.t.shape[1]),
+        "n_rotor_tris":      int(mesh_r.t.shape[1]),
+        "n_vertices":        len(verts),
+        "n_triangles":       len(tris),
+        "vertices":          verts,
+        "triangles":         tris,
+        "domain_per_tri":    tags.tolist(),
+        "domain_counts":     domain_counts,
+        "band_iface_stator": iface_s.tolist(),
+        "band_iface_rotor":  iface_r.tolist(),
+        "r_band_in_m":       r_slip,
+        "r_band_out_m":      r_slip,
+        "r_slip_m":          r_slip,
+        "extent": [
+            min(float(mesh_s.p[0].min()), float(mesh_r.p[0].min())),
+            max(float(mesh_s.p[0].max()), float(mesh_r.p[0].max())),
+            min(float(mesh_s.p[1].min()), float(mesh_r.p[1].min())),
+            max(float(mesh_s.p[1].max()), float(mesh_r.p[1].max())),
+        ],
+        "note": ("Sliding-band TWO-mesh view (feature/sliding-band-fem).  "
+                  "Rotor mesh node coordinates are obtained by rigidly "
+                  "rotating the rotor_angle=0 mesh by rotor_angle_deg — "
+                  "topology unchanged."),
+    }
+    _fem_mesh_sb_cache[key] = payload
     return payload
 
 
@@ -1097,9 +1273,23 @@ async def get_fem_field2d(
     def _poly_outlines_m(poly):
         if poly is None or poly.is_empty:
             return []
-        geoms = list(poly.geoms) if isinstance(poly, _SMP) else [poly]
+        # Flatten ANY geometry to its polygon parts.  A large surface_deviation
+        # can simplify a thin polygon into a GeometryCollection (polygons +
+        # stray LineStrings); the 1-D bits have no `.exterior` and would 500
+        # the whole mesh build here in the outline assembly.
+        def _polys_only(gm):
+            if gm is None or gm.is_empty:
+                return []
+            if gm.geom_type == "Polygon":
+                return [gm]
+            if hasattr(gm, "geoms"):       # Multi* / GeometryCollection
+                out = []
+                for sub in gm.geoms:
+                    out.extend(_polys_only(sub))
+                return out
+            return []
         rings = []
-        for g in geoms:
+        for g in _polys_only(poly):
             if g.is_empty or g.area < 1e-6:
                 continue
             rings.append([[x * 1e-3, y * 1e-3] for x, y in g.exterior.coords])
@@ -1137,6 +1327,212 @@ async def get_fem_field2d(
 # ─────────────────────────────────────────────────────────────────────────────
 
 _fem_transient_cache: Dict[tuple, Dict] = {}
+
+# Per-FRAME cache keyed by (frame_param_key, k).  Lets a transient that
+# was Stopped mid-way be resumed: a re-run with the same params reuses
+# every frame already solved and only computes the missing ones.  The
+# "Start fresh" path clears the entries for that param set first.
+_fem_frame_cache: Dict[tuple, Dict] = {}
+
+# Serializes transient computes so concurrent identical requests (the
+# animation viewer + transient charts both fire on Simulation-tab mount)
+# don't each spawn a worker pool and storm the CPU.
+import threading as _threading
+_fem_transient_lock = _threading.Lock()
+
+
+def clear_simulation_caches() -> None:
+    """Drop every cached 2-D polygon / mesh / field / transient result.
+
+    Called whenever the motor GEOMETRY changes (PUT /api/geometry) so the
+    Mesh tab and the Simulation field/transient re-derive everything from
+    the new cross-section instead of serving stale, old-geometry results.
+    Keys on these caches intentionally omit the geometry parameters (the
+    geometry is treated as a global), so they must be flushed explicitly.
+    """
+    for _c in (_motor_geom_cache, _fem_mesh_cache, _fem_mesh_sb_cache,
+               _fem_field_cache, _fem_transient_cache, _fem_frame_cache):
+        try:
+            _c.clear()
+        except Exception:
+            pass
+
+# Scalar keys a non-keyframe step needs — returning only these from a
+# worker process slashes the pickle payload (no mesh / A_z arrays).
+_TRANSIENT_SCALAR_KEYS = (
+    "T_em_Nm", "P_cu_W", "P_fe_W", "P_mag_eddy_W",
+    "psi_A_Wb", "psi_B_Wb", "psi_C_Wb", "symmetry_mult", "n_sectors",
+)
+
+
+def _transient_frame_worker(task):
+    """Picklable worker: solve ONE rotor angle in a SEPARATE process.
+
+    Per-frame gmsh meshing dominates the cost (~11 s of ~15 s) and the
+    in-process _GMSH_LOCK serialises gmsh calls within a process, so the
+    only way to use the box's many cores is to fan the frames out across
+    processes.  Each worker has its own gmsh state — no shared lock.
+
+    task = (k, rot_deg, solve_kwargs, want_full)
+    Returns (k, result_dict_or_None).  Non-keyframes are slimmed to the
+    scalar series keys to keep the pickled payload tiny.
+    """
+    k, rot_deg, kw, want_full = task
+    try:
+        import logging as _lg
+        _lg.disable(_lg.WARNING)
+    except Exception:
+        pass
+    from motor_ai_sim.simulation.fem_solver_2d import fem_solve_for_sim
+    # A magnet edge landing exactly on the sector cut makes gmsh reject the
+    # mesh; a sub-FEM-resolution angular jitter dodges it without changing
+    # the physics.
+    for jitter in (0.0, +0.05, -0.05, +0.13, -0.13, +0.21, -0.21):
+        try:
+            r = fem_solve_for_sim(rotor_angle_deg=rot_deg + jitter, **kw)
+            if want_full:
+                return (k, r)
+            return (k, {key: r.get(key) for key in _TRANSIENT_SCALAR_KEYS})
+        except Exception:
+            continue
+    return (k, None)
+
+
+# ── Persistent, pre-warmed worker pool ──────────────────────────────────
+# On Windows every ProcessPoolExecutor worker is spawned (not forked) and
+# pays the full ~5 s cold-import of gmsh + scikit-fem + motor_ai_sim before
+# it can solve a single frame.  Re-creating the pool per request therefore
+# burned ~5-10 s of pure startup on EVERY transient run.  Keep ONE pool
+# alive for the process lifetime and warm each worker once via initializer,
+# so the import cost is paid a single time and amortised across all runs.
+import concurrent.futures as _cf  # noqa: E402  (kept local to this section)
+import os as _os  # noqa: E402
+
+_fem_pool: "Optional[_cf.ProcessPoolExecutor]" = None
+_fem_pool_lock = _threading.Lock()
+
+# numpy/OpenBLAS, gmsh/OpenMP and friends each default to spawning ONE thread
+# PER LOGICAL CORE.  With a process pool that is catastrophic: N worker
+# processes × 24 BLAS threads each = hundreds of threads fighting over the
+# cores, so adding workers barely helped (and an unpinned 24-worker pool
+# crashed outright).  Pin every numeric backend to a single thread so the
+# process pool — not the libraries — owns the parallelism: N processes → N
+# cores, clean linear scaling.
+_THREAD_ENV_KEYS = (
+    "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
+    "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "BLIS_NUM_THREADS",
+)
+
+
+def _pin_single_thread_env() -> None:
+    """Force every numeric backend to 1 thread in THIS process's env.  Set
+    in the parent right before the pool is created so spawned workers inherit
+    it before they import numpy/gmsh (OpenBLAS reads the var at import time).
+    The parent's own already-loaded BLAS is unaffected."""
+    for k in _THREAD_ENV_KEYS:
+        _os.environ.setdefault(k, "1")
+
+
+def _fem_pool_workers() -> int:
+    """Number of worker processes.
+
+    The box reports 24 *logical* CPUs but only 12 *physical* cores (Hyper-
+    Threading).  FEM meshing is CPU/cache/memory-bandwidth bound, so the
+    hyper-threads add no real throughput — measured scaling peaks at the
+    physical-core count and *regresses* past it (18-22 workers were slower
+    than 12, and 24 unpinned crashed).  Default to the physical-core count
+    (≈ logical/2).  Override with the FEM_POOL_WORKERS env var to experiment.
+    """
+    env = _os.environ.get("FEM_POOL_WORKERS")
+    if env:
+        try:
+            return max(1, int(env))
+        except ValueError:
+            pass
+    logical = _os.cpu_count() or 8
+    # Assume SMT/Hyper-Threading on an even, >4-core box → physical ≈ logical/2.
+    physical = logical // 2 if logical > 4 else logical
+    return max(2, physical)
+
+
+def _fem_worker_init():
+    """Runs ONCE per worker when the pool starts a process.  Pins numeric
+    threads (belt-and-suspenders alongside the inherited env) and forces the
+    heavy imports up-front so the first real frame each worker handles no
+    longer pays the ~5 s cold-import."""
+    try:
+        import os as _o
+        for _k in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
+                   "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "BLIS_NUM_THREADS"):
+            _o.environ.setdefault(_k, "1")
+    except Exception:
+        pass
+    try:
+        import logging as _lg
+        _lg.disable(_lg.WARNING)
+    except Exception:
+        pass
+    try:
+        # Touch the solver module so gmsh / skfem / numpy are imported and
+        # cached inside this worker before any frame arrives.
+        from motor_ai_sim.simulation.fem_solver_2d import fem_solve_for_sim  # noqa: F401
+    except Exception:
+        pass
+
+
+def get_fem_pool() -> "_cf.ProcessPoolExecutor":
+    """Lazily create (and reuse) the shared warm worker pool.  Rebuilds it
+    if a previous pool was broken (e.g. a worker crashed)."""
+    global _fem_pool
+    with _fem_pool_lock:
+        if _fem_pool is None:
+            # Pin threads in the parent env BEFORE spawning so every worker
+            # inherits single-thread numeric backends from process start.
+            _pin_single_thread_env()
+            _fem_pool = _cf.ProcessPoolExecutor(
+                max_workers=_fem_pool_workers(),
+                initializer=_fem_worker_init,
+            )
+        return _fem_pool
+
+
+def _reset_fem_pool() -> None:
+    """Drop the shared pool (next call to get_fem_pool rebuilds it).  Used
+    after a BrokenProcessPool so one crashed worker doesn't wedge every
+    subsequent transient run."""
+    global _fem_pool
+    with _fem_pool_lock:
+        _p, _fem_pool = _fem_pool, None
+    if _p is not None:
+        try:
+            _p.shutdown(wait=False, cancel_futures=True)
+        except Exception:
+            pass
+
+
+def warm_fem_pool() -> None:
+    """Kick the pool into existence and run a no-op on every worker so the
+    cold-import is paid in the background at server startup, not on the
+    user's first Run.  Safe to call repeatedly."""
+    try:
+        pool = get_fem_pool()
+        for _ in range(_fem_pool_workers() * 2):
+            pool.submit(_fem_worker_warmup)
+    except Exception:
+        pass
+
+
+def _fem_worker_warmup(_=None):
+    """Trivial task whose only purpose is to occupy a worker so its
+    initializer (heavy imports) runs."""
+    return True
+
+
+# Cooperative cancel keyed by run-id.  The "Stop" button POSTs the id of
+# the run it wants stopped; the parallel solve loop (and any duplicate
+# request waiting on the lock) checks whether ITS run-id was cancelled and
+# bails.  Keying by id means cancelling one run never aborts the next one.
+_fem_transient_cancelled_run: Dict[str, Optional[str]] = {"id": None}
 
 # Shared progress state for the currently-running transient.  Polled by
 # the frontend via /physics/fem_transient/progress so the user sees
@@ -1178,6 +1574,20 @@ async def get_fem_transient_progress():
     return p
 
 
+@router.post("/physics/fem_transient/cancel")
+async def cancel_fem_transient(run_id: str = ""):
+    """Request the transient with this run_id to stop.  The solve loop
+    checks after each completed frame, tears the worker pool down
+    (cancelling pending frames) and raises 499.  A duplicate request for
+    the same run_id waiting on the lock bails immediately."""
+    # Cancel a SPECIFIC run only.  A new Run uses a fresh run_id (the
+    # incrementing runNonce) so it never matches a previously-cancelled
+    # id — no risk of a stale cancel killing the next solve.
+    if run_id:
+        _fem_transient_cancelled_run["id"] = run_id
+    return {"cancelled": bool(run_id), "run_id": run_id}
+
+
 @router.get("/physics/fem_transient")
 def get_fem_transient(
     n_steps_per_period:  int   = 60,   # FEM solves per electrical period
@@ -1193,6 +1603,11 @@ def get_fem_transient(
     stator_fillet_mm:    float = 0.0,
     include_frames:      bool  = False,   # ← if true, accumulate per-step field
     n_frames:            int   = 12,      # ← #frames sampled for the animation
+    run_id:              str   = "",      # ← Stop-button cancellation token
+    fresh:               bool  = False,   # ← "Start fresh" wipes the frame cache
+    sliding_band:        bool  = False,   # ← mesh-once sliding band (smooth T, clean V)
+    coil_temp_c:         float = 120.0,   # ← copper temperature → ρ_Cu(T)
+    end_winding_factor:  float = 0.0,     # ← 0 = auto-estimate from geometry
 ):
     """Transient FEM analysis — runs N solves per electrical period and
     returns time-resolved T(t), losses(t) and V_phase(t).
@@ -1210,6 +1625,92 @@ def get_fem_transient(
     import numpy as _np
     import math as _math
 
+    # ── Sliding-band path: mesh once + rotate rotor → smooth T(t), clean V(t).
+    # Bypasses the parallel remesh-per-frame machinery entirely.
+    if sliding_band:
+        _sb_key = ("sb", int(n_steps_per_period), round(n_periods, 2),
+                   round(gamma_deg, 1), round(I_phase_rms, 1),
+                   round(mesh_size_mm, 2), round(min_size_mm, 2),
+                   round(outer_air_factor, 2), int(n_sectors),
+                   round(stator_fillet_mm, 2),
+                   round(coil_temp_c, 1), round(end_winding_factor, 3))
+        if not fresh and _sb_key in _fem_transient_cache:
+            return _fem_transient_cache[_sb_key]
+        try:
+            from motor_ai_sim.simulation.fem_solver_2d import fem_transient_sliding_band
+            _sbres = fem_transient_sliding_band(
+                n_steps_per_period=int(n_steps_per_period), n_periods=float(n_periods),
+                gamma_deg=float(gamma_deg), I_phase_rms=float(I_phase_rms),
+                mesh_size_mm=float(mesh_size_mm), min_size_mm=float(min_size_mm),
+                outer_air_factor=float(outer_air_factor),
+                n_sectors=int(n_sectors) if int(n_sectors) > 1 else 4,
+                stator_fillet_mm=float(stator_fillet_mm),
+                coil_temp_c=float(coil_temp_c),
+                end_winding_factor=float(end_winding_factor))
+            # ── Summary block (masses, loss split, KV, efficiency, specific
+            # torque/power) so the Simulation values table renders — same shape
+            # as the remesh path produces.
+            try:
+                from motor_ai_sim.simulation.geometry_2d import params_from_config as _pfc
+                from motor_ai_sim.config import get_config as _gc
+                _p = _pfc(); _geo_cfg = _gc().get("geometry", {})
+                _masses = _compute_masses(_p, _geo_cfg)
+                _m_tot = float(_masses["total_active_kg"])
+                _rpm = float(_sbres.get("rpm", 3950.0))
+                _Tavg = float(_sbres.get("T_avg_Nm", 0.0))
+                _Pmech = float(_sbres.get("P_mech_avg_W",
+                                          _Tavg * 2 * _math.pi * _rpm / 60))
+                # Period-MEAN of each instantaneous loss series — NOT [0].
+                # The iron/magnet series ripple as the teeth pass (mag eddy
+                # swings ~88%); frame 0 sits near the peak, so picking [0]
+                # would overstate the reported average loss.  Copper is DC
+                # (flat) so its mean == [0] anyway.
+                def _mean(_k):
+                    _s = _sbres.get(_k) or [0.0]
+                    return float(_np.mean(_np.asarray(_s, float))) if len(_s) else 0.0
+                _Pcu = _mean("P_cu_W")
+                _Pfe = _mean("P_fe_W")
+                _Pmag = _mean("P_mag_eddy_W")
+                _Vpk = float(_sbres.get("V_peak", 0.0))
+                _Vrms = _Vpk / _math.sqrt(2)
+                _Vlpk = _Vpk * _math.sqrt(3); _Vlrms = _Vlpk / _math.sqrt(2)
+                _ploss = _Pcu + _Pfe + _Pmag
+                _eff = _Pmech / max(_Pmech + _ploss, 1.0) if _Pmech > 0 else 0.0
+                _sbres["summary"] = {
+                    "rpm": _rpm,
+                    "I_phase_rms_A": round(float(I_phase_rms), 2),
+                    "gamma_deg": round(float(gamma_deg), 2),
+                    "T_em_avg_Nm": round(_Tavg, 3),
+                    "T_ripple_pct": round(float(_sbres.get("T_ripple_pct", 0.0)), 1),
+                    "P_mech_W": round(_Pmech, 1),
+                    "V_phase_peak_V": round(_Vpk, 1),
+                    "V_phase_rms_V": round(_Vrms, 1),
+                    "V_line_peak_V": round(_Vlpk, 1),
+                    "V_line_rms_V": round(_Vlrms, 1),
+                    "KV_rpm_per_V_phase": round(_rpm / _Vrms, 2) if _Vrms > 1 else 0.0,
+                    "KV_rpm_per_V_line":  round(_rpm / _Vlrms, 2) if _Vlrms > 1 else 0.0,
+                    "P_loss_total_W": round(_ploss, 1),
+                    "P_core_W":     round(_Pfe, 1),     # laminated iron
+                    "P_stranded_W": round(_Pcu, 1),     # copper
+                    "P_solid_W":    round(_Pmag, 1),    # magnet eddy
+                    "efficiency":   round(_eff, 4),
+                    "coil_temp_C":  round(float(_sbres.get("coil_temp_C", coil_temp_c)), 1),
+                    "end_winding_factor": round(float(_sbres.get("end_winding_factor", 0.0)), 2),
+                    "mass_total_kg": round(_m_tot, 3),
+                    "mass_components": _masses["components"],
+                    "torque_per_mass_Nm_kg": round(_Tavg / max(_m_tot, 1e-6), 3),
+                    "power_per_mass_W_kg":   round(_Pmech / max(_m_tot, 1e-6), 1),
+                    "loss_density_W_kg":     round(_ploss / max(_m_tot, 1e-6), 1),
+                }
+            except Exception as _se:
+                log.warning("SB summary build failed: %s", _se)
+            _fem_transient_cache[_sb_key] = _sbres
+            return _sbres
+        except Exception as _e:
+            log.exception("sliding-band transient failed")
+            raise HTTPException(status_code=500,
+                                detail=f"sliding-band transient failed: {_e}")
+
     key = (
         int(n_steps_per_period), round(n_periods, 2),
         round(gamma_deg, 1), round(I_phase_rms, 1),
@@ -1219,6 +1720,25 @@ def get_fem_transient(
         round(stator_fillet_mm, 2),
         bool(include_frames), int(n_frames),
     )
+
+    # Per-frame cache key (omits include_frames/n_frames — a single frame's
+    # physics is identical whichever caller asked for it).  Used to resume
+    # a Stopped run.
+    _frame_pkey = (
+        int(n_steps_per_period), round(n_periods, 2),
+        round(gamma_deg, 1), round(I_phase_rms, 1),
+        round(mesh_size_mm, 2), round(min_size_mm, 2),
+        round(outer_air_factor, 2), bool(motion_band),
+        round(band_thickness_mm, 2), int(n_sectors),
+        round(stator_fillet_mm, 2),
+    )
+    if fresh:
+        # "Start fresh" → drop the cached full run AND every cached frame
+        # for this param set, so the whole period is recomputed.
+        _fem_transient_cache.pop(key, None)
+        for _ck in [c for c in _fem_frame_cache if c[0] == _frame_pkey]:
+            _fem_frame_cache.pop(_ck, None)
+
     if key in _fem_transient_cache:
         return _fem_transient_cache[key]
 
@@ -1300,6 +1820,29 @@ def get_fem_transient(
         return out
 
     import time as _time
+    import os as _os
+    import concurrent.futures as _cf
+
+    # Serialize transient computes: the animation viewer and the transient
+    # charts both hit this endpoint on mount with identical params, so
+    # without a guard they would each spawn a worker pool and double the
+    # CPU storm.  Acquire BEFORE touching the shared progress state so the
+    # waiting caller doesn't clobber the running one's progress; once it
+    # wakes it falls straight through to the freshly-populated cache.
+    def _cancelled() -> bool:
+        return bool(run_id) and _fem_transient_cancelled_run.get("id") == run_id
+
+    _fem_transient_lock.acquire()
+    if key in _fem_transient_cache:
+        _fem_transient_lock.release()
+        return _fem_transient_cache[key]
+    # A duplicate request (animation + transient share a run_id) that was
+    # waiting on the lock while its twin got cancelled must NOT start a
+    # fresh solve — bail immediately.
+    if _cancelled():
+        _fem_transient_lock.release()
+        raise HTTPException(status_code=499, detail="FEM transient cancelled by user")
+
     _t_loop_start = _time.time()
     _fem_transient_progress["current"] = {
         "running":   True,
@@ -1311,52 +1854,120 @@ def get_fem_transient(
         "phase":     "fem-solve",
     }
 
-    # Some rotor angles land a magnet edge right on the sector cut, producing
-    # a degenerate Shapely polygon that gmsh rejects with "Curve loop is not
-    # closed".  When that happens we re-try with a small angular jitter
-    # (±0.05° mech, well below the FEM resolution so the physics is
-    # unchanged).  If even the jittered solve fails, we re-use the PREVIOUS
-    # step's result so the transient curve still has a value at that index
-    # — much better UX than a hard 500 that wipes the whole panel.
-    _last_good_r: Optional[Dict] = None
-    def _solve_robust(rot_deg: float) -> Dict:
-        for jitter in (0.0, +0.05, -0.05, +0.13, -0.13, +0.21, -0.21):
+    # ── Parallel frame solve across processes ───────────────────────────
+    # Each rotor angle is independent and per-frame gmsh meshing dominates
+    # (~11 s of ~15 s); fan the frames out across processes so the box's
+    # many cores actually get used (the in-process _GMSH_LOCK can't).
+    _solve_kw = dict(
+        gamma_deg=gamma_deg, mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm,
+        outer_air_factor=outer_air_factor, motion_band=motion_band,
+        band_thickness_mm=band_thickness_mm, n_sectors=int(n_sectors),
+        stator_fillet_mm=stator_fillet_mm, I_phase_rms=I_phase_rms,
+    )
+    results: List[Optional[Dict]] = [None] * n_total
+    # Resume support: fill in any frames already cached from a prior
+    # (Stopped) run, and only submit the missing ones.
+    _todo = []
+    for k in range(n_total):
+        cached = _fem_frame_cache.get((_frame_pkey, k))
+        if cached is not None:
+            results[k] = cached
+        else:
+            _todo.append((k, float(rotor_deg[k]), _solve_kw, (k in frame_idxs)))
+    _n_cached = n_total - len(_todo)
+    # Cap workers WELL below the core count.  Each worker is a full gmsh
+    # process that pegs a core; using all cores starved the uvicorn event
+    # loop so /progress polling timed out and the browser showed
+    # "Failed to fetch" / a frozen UI.  ~1/4 of the cores keeps the box
+    # responsive even if the animation + transient solves overlap.
+    _was_cancelled = False
+    try:
+        _done = _n_cached
+        _fem_transient_progress["current"]["step"] = _done
+        if _todo:
+            # Reuse the PERSISTENT warm pool (workers already imported gmsh +
+            # skfem once via the initializer) instead of paying ~5 s of
+            # cold-import per worker on every run.
             try:
-                return fem_solve_for_sim(
-                    rotor_angle_deg=rot_deg + jitter, gamma_deg=gamma_deg,
-                    mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm,
-                    outer_air_factor=outer_air_factor,
-                    motion_band=motion_band, band_thickness_mm=band_thickness_mm,
-                    n_sectors=int(n_sectors), stator_fillet_mm=stator_fillet_mm,
-                    I_phase_rms=I_phase_rms,
-                )
-            except Exception as e:
-                log.warning("fem_solve failed at rotor=%.3f° (jitter %+.3f): %s",
-                            rot_deg, jitter, e)
-                continue
-        if _last_good_r is not None:
-            log.warning("fem_solve failed at rotor=%.3f° even with jitter — "
-                         "re-using previous step.", rot_deg)
-            return _last_good_r
+                _ex = get_fem_pool()
+                _fut_to_task = {
+                    _ex.submit(_transient_frame_worker, t): t for t in _todo
+                }
+            except _cf.process.BrokenProcessPool:
+                # A worker died — rebuild the pool and retry once.
+                _reset_fem_pool()
+                _ex = get_fem_pool()
+                _fut_to_task = {
+                    _ex.submit(_transient_frame_worker, t): t for t in _todo
+                }
+            _futs = list(_fut_to_task.keys())
+            try:
+                for _fut in _cf.as_completed(_futs):
+                    _kk, _rr = _fut.result()
+                    results[_kk] = _rr
+                    # Stash the completed frame so a later resume reuses it.
+                    if _rr is not None:
+                        _fem_frame_cache[(_frame_pkey, _kk)] = _rr
+                    _done += 1
+                    _el = _time.time() - _t_loop_start
+                    _solved = max(1, _done - _n_cached)
+                    _fem_transient_progress["current"]["step"] = _done
+                    _fem_transient_progress["current"]["elapsed_s"] = _el
+                    _fem_transient_progress["current"]["per_step_s"] = _el / _solved
+                    _fem_transient_progress["current"]["eta_s"] = \
+                        (_el / _solved) * (n_total - _done)
+                    # Cooperative cancel: the Stop button flagged THIS run.
+                    # The pool is SHARED across runs, so don't shut it down —
+                    # just cancel the queued (not-yet-started) frames and stop
+                    # collecting.  Already-running workers finish their current
+                    # frame and return to the pool idle for the next run.
+                    if _cancelled():
+                        _was_cancelled = True
+                        for _pf in _futs:
+                            _pf.cancel()
+                        break
+            except _cf.process.BrokenProcessPool as _bpp:
+                _reset_fem_pool()
+                raise _bpp
+    except Exception as e:
+        log.exception("parallel FEM transient failed")
+        _fem_transient_lock.release()
+        raise HTTPException(status_code=500, detail=f"FEM transient failed: {e}")
+
+    if _was_cancelled:
+        _fem_transient_progress["current"] = {
+            **_fem_transient_progress["current"],
+            "running": False, "phase": "cancelled",
+        }
+        _fem_transient_lock.release()
+        raise HTTPException(status_code=499, detail="FEM transient cancelled by user")
+
+    # Backfill any frame whose every jittered solve failed with the nearest
+    # successful neighbour so the series stays continuous.
+    _first_good = next((r for r in results if r is not None), None)
+    if _first_good is None:
+        _fem_transient_lock.release()
         raise HTTPException(status_code=500,
-            detail=f"FEM transient failed: every jittered solve at "
-                    f"rotor={rot_deg:.3f}° was rejected by gmsh")
+                            detail="FEM transient: every frame failed to mesh/solve")
+    _lastg = _first_good
+    for _i in range(n_total):
+        if results[_i] is None:
+            results[_i] = _lastg
+        else:
+            _lastg = results[_i]
 
     try:
         for k in range(n_total):
             rot_deg = float(rotor_deg[k])
-            r = _solve_robust(rot_deg)
-            _last_good_r = r
-            # ── update progress AFTER each FEM solve completes ───────────
-            _fem_transient_progress["current"]["step"] = k + 1
-            _fem_transient_progress["current"]["elapsed_s"] = \
-                _time.time() - _t_loop_start
+            r = results[k]
             T_em_series.append(float(r.get("T_em_Nm", 0.0)))
             P_cu_series.append(float(r.get("P_cu_W", 0.0)))
             P_fe_series.append(float(r.get("P_fe_W", 0.0)))
             P_eddy_series.append(float(r.get("P_mag_eddy_W", 0.0)))
             # ── Capture full field for the animation keyframes ───────────
-            if k in frame_idxs:
+            # Guard against a backfilled (slim, scalar-only) result landing
+            # on a keyframe index — skip the frame rather than KeyError.
+            if k in frame_idxs and r.get("vertices") is not None:
                 # Strip the bulky polys_for_outlines field on all but the
                 # FIRST frame: stator outlines are identical across the
                 # period and the rotor outline rotates with rotor_angle_deg,
@@ -1424,6 +2035,7 @@ def get_fem_transient(
         # placeholder — will be overwritten below after the loop
     except Exception as e:
         log.exception("FEM transient failed")
+        _fem_transient_lock.release()
         raise HTTPException(status_code=500, detail=f"FEM transient failed: {e}")
 
     # ── Balanced 3-phase ψ via ±120° elec time shift ───────────────────
@@ -1591,6 +2203,7 @@ def get_fem_transient(
         "elapsed_s": round(_time.time() - _t_loop_start, 1),
         "eta_s":   0.0,
     }
+    _fem_transient_lock.release()
     return payload
 
 

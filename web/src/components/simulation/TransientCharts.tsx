@@ -5,15 +5,14 @@
  * (default 60), the same mesh and solver settings as the rest of the
  * Simulation tab.  Plots T(t), P_cu/P_fe/P_total(t) and V_A/B/C(t).
  */
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
-  Box, Paper, Typography, CircularProgress, Button, Slider, Tooltip,
+  Box, Paper, Typography, Tooltip,
 } from '@mui/material';
 import {
   ResponsiveContainer, LineChart, Line, XAxis, YAxis,
-  CartesianGrid, Tooltip as RcTooltip, Legend,
+  CartesianGrid, Tooltip as RcTooltip, Legend, BarChart, Bar, Cell,
 } from 'recharts';
-import RefreshIcon from '@mui/icons-material/Refresh';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
@@ -40,6 +39,8 @@ interface TransientPayload {
   I_A: number[]; I_B: number[]; I_C: number[];
   V_A: number[]; V_B: number[]; V_C: number[];
   V_peak: number;
+  T_harm_order?: number[];
+  T_harm_amp?: number[];
   summary?: TransientSummary;
 }
 
@@ -47,11 +48,27 @@ interface Props {
   gamma_deg?: number;
   I_phase_rms?: number;
   onSummary?: (s: TransientSummary) => void;
+  // Incremented by the "Run Simulation" button.  The transient only
+  // (re)computes when this changes — never on raw gamma/current edits —
+  // so the user can tweak several parameters and launch one solve.
+  runNonce?: number;
+  onBusyChange?: (busy: boolean) => void;
+  // Steps per electrical period — now lives in the left panel.
+  steps?: number;
+  // "Start fresh" → backend discards cached frames before recomputing.
+  fresh?: boolean;
 }
 
 function readMeshSetting<T>(key: string, def: T): T {
   try {
     const raw = localStorage.getItem(`mesh.${key}`);
+    return raw == null ? def : (JSON.parse(raw) as T);
+  } catch { return def; }
+}
+
+function readSimSetting<T>(key: string, def: T): T {
+  try {
+    const raw = localStorage.getItem(`sim.${key}`);
     return raw == null ? def : (JSON.parse(raw) as T);
   } catch { return def; }
 }
@@ -80,12 +97,10 @@ interface ProgressInfo {
   phase:     string;
 }
 
-const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onSummary }) => {
-  // 12 steps matches the animation viewer's default n_frames, so they
-  // hit the same cache key — second auto-fetch returns instantly
-  // instead of doing another 12 × ~5 s FEM solves in serial with the
-  // first one (gmsh process-global lock).
-  const [steps, setSteps] = useState<number>(12);
+const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onSummary, runNonce = 0, onBusyChange, steps = 12, fresh = false }) => {
+  // `steps` (n_steps_per_period) is controlled from the left panel and
+  // matches the animation viewer's n_frames so both hit the same backend
+  // cache key (one solve, not two).
   const [data,  setData]  = useState<TransientPayload | null>(null);
   const [busy,  setBusy]  = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
@@ -112,8 +127,28 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
     return () => { alive = false; window.clearInterval(id); };
   }, [busy]);
 
+  const abortRef = useRef<AbortController | null>(null);
+
+  // "Stop Simulation" (left panel) dispatches a window event — abort the
+  // in-flight fetch and tell the backend to cancel THIS run_id (so its
+  // animation twin sharing the run_id is cancelled too, but the next run
+  // isn't).
+  useEffect(() => {
+    const onStop = () => {
+      abortRef.current?.abort();
+      fetch(`${API}/api/simulation/physics/fem_transient/cancel?run_id=${runNonce}`,
+        { method: 'POST' }).catch(() => {});
+      setBusy(false);
+      setError('Cancelled.');
+    };
+    window.addEventListener('sim:stop', onStop);
+    return () => window.removeEventListener('sim:stop', onStop);
+  }, [runNonce]);
+
   const run = () => {
     setBusy(true); setError(null);
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
     const qs = new URLSearchParams({
       n_steps_per_period: String(steps),
       n_periods:          '1',
@@ -125,7 +160,23 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
       motion_band:        String(readMeshSetting('motionBand',  true)),
       band_thickness_mm:  String(readMeshSetting('bandThickness', 0.4)),
       n_sectors:          String(readMeshSetting('nSectors',    4)),
-      stator_fillet_mm:   String(readMeshSetting('statorFillet', 0.0)),
+      stator_fillet_mm:   '0',   // native geometry — extra smoothing removed
+      // Sliding-band transient (mesh once, rotate rotor) → smooth T(t) and
+      // clean back-EMF V(t). Driven by the Mesh-tab "Sliding-band" toggle.
+      sliding_band:       String(readMeshSetting('slidingBand', false)),
+      // Copper-loss physics: coil temperature → ρ_Cu(T); end-winding factor
+      // (0 = auto-estimate from geometry) for the copper the 2-D field misses.
+      coil_temp_c:        String(readSimSetting('coilTemp',   120.0)),
+      end_winding_factor: String(readSimSetting('endWinding',   0.0)),
+      // Request the SAME include_frames/n_frames as the FemAnimationViewer
+      // so both panels hit the exact same backend cache key and the heavy
+      // FEM sweep runs ONCE instead of twice (the lock would otherwise
+      // serialise two separate computes → 2× wall-clock).  The extra
+      // frames payload is ignored here.
+      include_frames:     'true',
+      n_frames:           String(steps),
+      run_id:             String(runNonce),
+      fresh:              String(fresh),
     }).toString();
     // Helper: fetch with auto-retry against transient connection drops.
     // The uvicorn supervisor sometimes respawns the worker mid-request when
@@ -133,7 +184,8 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
     // a permanent "Failed to fetch" until they click Re-run manually.
     const attempt = async (i = 0): Promise<void> => {
       try {
-        const r = await fetch(`${API}/api/simulation/physics/fem_transient?${qs}`);
+        const r = await fetch(`${API}/api/simulation/physics/fem_transient?${qs}`,
+          { signal: ctrl.signal });
         if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
         const d: TransientPayload = await r.json();
         setData(d); setBusy(false);
@@ -141,6 +193,8 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
         if (d.summary && onSummary) onSummary(d.summary);
       } catch (e: any) {
         const msg = String(e);
+        // User pressed Stop → don't retry, don't surface as an error.
+        if (ctrl.signal.aborted || /abort/i.test(msg)) { setBusy(false); return; }
         const isNetwork = /Failed to fetch|NetworkError|TypeError/i.test(msg);
         if (isNetwork && i < 4) {
           // wait 2 s for the supervisor to bring uvicorn back up, then retry
@@ -154,11 +208,19 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
     attempt();
   };
 
-  // Auto-run on mount + when operating-point inputs change.  30 steps
-  // ≈ 12 seconds at the default mesh density.
-  useEffect(() => { run();
+  // Run ONLY when the user presses "Run Simulation" (runNonce ticks).
+  // The fetch reads the CURRENT gamma / I / mesh-settings at click time,
+  // so several edits batch into one solve.  runNonce starts at 0 → no
+  // auto-run on mount.
+  useEffect(() => {
+    if (runNonce > 0) run();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gamma_deg, I_phase_rms]);
+  }, [runNonce]);
+
+  // Report busy state up to the Run button.
+  useEffect(() => { onBusyChange?.(busy);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [busy]);
 
   // Build chart-friendly row arrays
   const rows = React.useMemo(() => {
@@ -173,6 +235,17 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
       P_tot: data.P_loss_total_W[i],
       I_A:   data.I_A[i], I_B: data.I_B[i], I_C: data.I_C[i],
       V_A:   data.V_A[i], V_B: data.V_B[i], V_C: data.V_C[i],
+    }));
+  }, [data]);
+
+  // Torque harmonic spectrum (over one electrical period).  6·k orders are the
+  // physical 3-phase torque ripple; a clean ripple = a few discrete bars, broad
+  // noise = energy in every order.
+  const harmRows = React.useMemo(() => {
+    if (!data?.T_harm_order || !data?.T_harm_amp) return [];
+    return data.T_harm_order.map((n, i) => ({
+      order: n, amp: data.T_harm_amp![i],
+      pct: data.T_avg_Nm ? (100 * data.T_harm_amp![i] / Math.abs(data.T_avg_Nm)) : 0,
     }));
   }, [data]);
 
@@ -197,27 +270,14 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
             </Typography>
           )}
         </Box>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5,
-          minWidth: 320 }}>
-          <Box sx={{ flex: 1 }}>
-            <Typography sx={{ fontSize: 10, color: '#94a3b8' }}>
-              Steps per electrical period: <b>{steps}</b>
-            </Typography>
-            <Slider value={steps} min={12} max={180} step={6}
-              onChange={(_, v) => setSteps(v as number)}
-              sx={{ color: '#3b82f6' }}/>
-          </Box>
-          <Button size="small" variant="contained"
-            startIcon={busy ? <CircularProgress size={14} sx={{ color: '#fff' }}/>
-                            : <RefreshIcon fontSize="small"/>}
-            disabled={busy} onClick={run}
-            sx={{ bgcolor: '#1e3a5f', '&:hover': { bgcolor: '#1e40af' },
-              textTransform: 'none', minWidth: 170 }}>
-            {busy && progress && progress.total > 0
-              ? `Frame ${progress.step}/${progress.total}`
-              : (busy ? 'Running…' : (data ? 'Re-run' : 'Run'))}
-          </Button>
-        </Box>
+        {/* Steps/period + Run moved to the left panel's "Run Simulation".
+            Just show the live frame counter here while solving. */}
+        {busy && progress && progress.total > 0 && (
+          <Typography sx={{ fontSize: 11, color: '#60a5fa', fontWeight: 600,
+            whiteSpace: 'nowrap' }}>
+            Frame {progress.step}/{progress.total}
+          </Typography>
+        )}
       </Box>
 
       {/* Live progress strip — only visible while a transient is running */}
@@ -251,8 +311,9 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
       {!data && !busy && !error && (
         <Typography sx={{ fontSize: 11, color: '#64748b', textAlign: 'center',
           p: 3, border: '1px dashed #1e293b', borderRadius: 1 }}>
-          Press <b>Run</b> to launch a transient FEM sweep over one electrical period.<br/>
-          Estimated time: {(steps * 0.4).toFixed(0)} seconds at the current mesh density.
+          Press <b>Run Simulation</b> (left panel) to launch a transient FEM
+          sweep over one electrical period.<br/>
+          {steps} steps/period.
         </Typography>
       )}
 
@@ -276,12 +337,46 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
                 <RcTooltip {...TOOLTIP}/>
                 <Line type="monotone" dataKey="T_em" stroke="#34d399"
                   strokeWidth={2}
-                  dot={{ r: 3, strokeWidth: 0 }}
+                  dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
+                    r={3} fill={d.stroke} stroke="none"/>}
                   activeDot={{ r: 5 }}
                   isAnimationActive={false}/>
               </LineChart>
             </ResponsiveContainer>
           </Box>
+
+          {/* ── Torque harmonic spectrum ── */}
+          {harmRows.length > 0 && (
+          <Box sx={{ height: 200 }}>
+            <Typography sx={{ fontSize: 11, fontWeight: 700, color: '#94a3b8' }}>
+              Torque harmonics (order = ×electrical freq)
+              <Tooltip title="FFT of T(t) over one electrical period. A clean PERIODIC ripple shows a few discrete bars — the 6th/12th/18th (3-phase) and slot-cogging orders. Energy spread across every order = broadband (chaotic) noise. Orange = the physical 6·k 3-phase orders." placement="top">
+                <span style={{ color: '#475569', marginLeft: 6, fontSize: 11, cursor: 'help' }}>ⓘ</span>
+              </Tooltip>
+            </Typography>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={harmRows} margin={{ top: 8, right: 10, left: 0, bottom: 16 }}>
+                <CartesianGrid {...GRID}/>
+                <XAxis dataKey="order" tick={AXIS} interval={0}
+                  label={{ value: 'harmonic order (n × f_elec)', position: 'insideBottom',
+                    offset: -4, style: { fontSize: 10, fill: '#475569' } }}/>
+                <YAxis tick={AXIS}
+                  label={{ value: 'amp [N·m]', angle: -90,
+                    position: 'insideLeft', offset: 12,
+                    style: { fontSize: 10, fill: '#475569' } }}/>
+                <RcTooltip {...TOOLTIP}
+                  labelFormatter={(v: number) => `harmonic n = ${v}`}
+                  formatter={(val: number, _n: string, p: any) =>
+                    [`${Number(val).toFixed(2)} N·m  (${p?.payload?.pct?.toFixed(1)} % of T_avg)`, 'amplitude']}/>
+                <Bar dataKey="amp" isAnimationActive={false}>
+                  {harmRows.map((r, i) => (
+                    <Cell key={i} fill={r.order % 6 === 0 ? '#f59e0b' : '#3b82f6'}/>
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </Box>
+          )}
 
           {/* ── Losses ── */}
           <Box sx={{ height: 220 }}>
@@ -302,22 +397,26 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
                 <Legend wrapperStyle={{ fontSize: 10 }}/>
                 <Line type="monotone" dataKey="P_cu" stroke="#fbbf24"
                   name="P_Cu" strokeWidth={2}
-                  dot={{ r: 3, strokeWidth: 0 }}
+                  dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
+                    r={3} fill={d.stroke} stroke="none"/>}
                   activeDot={{ r: 5 }}
                   isAnimationActive={false}/>
                 <Line type="monotone" dataKey="P_fe" stroke="#f87171"
                   name="P_Fe" strokeWidth={2}
-                  dot={{ r: 3, strokeWidth: 0 }}
+                  dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
+                    r={3} fill={d.stroke} stroke="none"/>}
                   activeDot={{ r: 5 }}
                   isAnimationActive={false}/>
                 <Line type="monotone" dataKey="P_mag" stroke="#a78bfa"
                   name="P_Mag" strokeWidth={2}
-                  dot={{ r: 3, strokeWidth: 0 }}
+                  dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
+                    r={3} fill={d.stroke} stroke="none"/>}
                   activeDot={{ r: 5 }}
                   isAnimationActive={false}/>
                 <Line type="monotone" dataKey="P_tot" stroke="#cbd5e1"
                   name="P_total" strokeWidth={2}
-                  dot={{ r: 3, strokeWidth: 0 }}
+                  dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
+                    r={3} fill={d.stroke} stroke="none"/>}
                   activeDot={{ r: 5 }}
                   isAnimationActive={false}/>
               </LineChart>
@@ -343,17 +442,20 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
                 <Legend wrapperStyle={{ fontSize: 10 }}/>
                 <Line type="monotone" dataKey="I_A" stroke="#ef4444"
                   name="I_A" strokeWidth={2}
-                  dot={{ r: 3, strokeWidth: 0 }}
+                  dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
+                    r={3} fill={d.stroke} stroke="none"/>}
                   activeDot={{ r: 5 }}
                   isAnimationActive={false}/>
                 <Line type="monotone" dataKey="I_B" stroke="#10b981"
                   name="I_B" strokeWidth={2}
-                  dot={{ r: 3, strokeWidth: 0 }}
+                  dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
+                    r={3} fill={d.stroke} stroke="none"/>}
                   activeDot={{ r: 5 }}
                   isAnimationActive={false}/>
                 <Line type="monotone" dataKey="I_C" stroke="#60a5fa"
                   name="I_C" strokeWidth={2}
-                  dot={{ r: 3, strokeWidth: 0 }}
+                  dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
+                    r={3} fill={d.stroke} stroke="none"/>}
                   activeDot={{ r: 5 }}
                   isAnimationActive={false}/>
               </LineChart>
@@ -379,17 +481,20 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
                 <Legend wrapperStyle={{ fontSize: 10 }}/>
                 <Line type="monotone" dataKey="V_A" stroke="#ef4444"
                   name="V_A" strokeWidth={2}
-                  dot={{ r: 3, strokeWidth: 0 }}
+                  dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
+                    r={3} fill={d.stroke} stroke="none"/>}
                   activeDot={{ r: 5 }}
                   isAnimationActive={false}/>
                 <Line type="monotone" dataKey="V_B" stroke="#10b981"
                   name="V_B" strokeWidth={2}
-                  dot={{ r: 3, strokeWidth: 0 }}
+                  dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
+                    r={3} fill={d.stroke} stroke="none"/>}
                   activeDot={{ r: 5 }}
                   isAnimationActive={false}/>
                 <Line type="monotone" dataKey="V_C" stroke="#60a5fa"
                   name="V_C" strokeWidth={2}
-                  dot={{ r: 3, strokeWidth: 0 }}
+                  dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
+                    r={3} fill={d.stroke} stroke="none"/>}
                   activeDot={{ r: 5 }}
                   isAnimationActive={false}/>
               </LineChart>

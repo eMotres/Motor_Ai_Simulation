@@ -15,6 +15,7 @@ import {
 import SaveIcon from '@mui/icons-material/Save';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import FemMeshViewer3D from './FemMeshViewer3D';
+import Viewcube from '../viewer3d/Viewcube';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
 
@@ -300,7 +301,10 @@ const MeshPanel: React.FC = () => {
 
   const [meshSizeMm,  setMeshSizeMm]  = usePersisted<number>('meshSize',   4.0);
   const [minSizeMm,   setMinSizeMm]   = usePersisted<number>('minSize',    0.3);
-  const [surfaceDev,  setSurfaceDev]  = usePersisted<number>('surfaceDev', 0.005);
+  // 'Surface deviation' control removed: any value >0.01 mm Douglas-Peucker-
+  // flattened the rounded rotor-tooth / fillet arcs into straight chords, so
+  // the Mesh no longer matched the real geometry. The Mesh now always uses the
+  // real geometry (tol 0.005 mm, sent below); density is set by Max/Min size.
   const [normalDev,   setNormalDev]   = usePersisted<number>('normalDev',  6.0);
   const [aspectRatio, setAspectRatio] = usePersisted<number>('aspect',     10.0);
   const [rotorAngle,  setRotorAngle]  = usePersisted<number>('rotorAngle', 0.0);
@@ -309,13 +313,18 @@ const MeshPanel: React.FC = () => {
   const [motionBand,     setMotionBand]     = usePersisted<boolean>('motionBand', true);
   const [bandThickness,  setBandThickness]  = usePersisted<number>('bandThickness', 0.4);
   const [nSectors,       setNSectors]       = usePersisted<number>('nSectors', 4);   // 1/4 by default
-  // Polygons now ship with CadQuery-radius fillets baked in (stator_fillet_r=2.5,
-  // _r1=0.9); the extra Shapely smoothing slider is OFF by default so the Mesh
-  // tab matches the Geometry tab exactly.
-  const [statorFillet,   setStatorFillet]   = usePersisted<number>('statorFillet', 0.0);
+  // NOTE: the old "Extra fillet smoothing" control was removed — it applied a
+  // Shapely buffer on top of the CadQuery fillets, deforming the Mesh geometry
+  // away from the Geometry tab.  The Mesh now always uses the native geometry
+  // (stator_fillet_mm = 0), identical to the Geometry tab.
   const [showEdges,    setShowEdges]    = useState<boolean>(true);
   const [showOutlines, setShowOutlines] = useState<boolean>(true);
   const [fillDomains,  setFillDomains]  = useState<boolean>(true);
+  // Sliding-band TWO-mesh view (feature/sliding-band-fem branch).  When on,
+  // fetches /mesh/build2d_sliding_band which returns the stator and rotor
+  // meshes concatenated — moving the rotor_angle slider rigidly rotates
+  // the rotor half without touching the stator triangulation.
+  const [slidingBand,  setSlidingBand]  = usePersisted<boolean>('slidingBand', false);
   const [femMesh,     setFemMesh]     = useState<FemMesh | null>(null);
   const [femLoading,  setFemLoading]  = useState<boolean>(false);
   const [femError,    setFemError]    = useState<string | null>(null);
@@ -323,10 +332,27 @@ const MeshPanel: React.FC = () => {
   const fetchFemMesh = useCallback(() => {
     setFemLoading(true);
     setFemError(null);
-    const qs = new URLSearchParams({
+    const base = slidingBand
+      ? `${API}/api/simulation/mesh/build2d_sliding_band`
+      : `${API}/api/simulation/mesh/build2d`;
+    const qs = new URLSearchParams(slidingBand ? {
+      // Sliding-band endpoint now accepts the full curvature-refinement set
+      // so the Normal/Surface deviation + Aspect ratio + Fillet sliders
+      // control the rotor & stator half meshes too.
+      rotor_angle_deg:   rotorAngle.toString(),
+      mesh_size_mm:      meshSizeMm.toString(),
+      min_size_mm:       minSizeMm.toString(),
+      surface_deviation: '0.005',     // real geometry — no flattening
+      normal_deviation:  normalDev.toString(),
+      aspect_ratio:      aspectRatio.toString(),
+      outer_air_factor:  outerAirFactor.toString(),
+      band_thickness_mm: bandThickness.toString(),
+      n_sectors:         nSectors.toString(),
+      stator_fillet_mm:  '0',          // native geometry — no extra smoothing
+    } : {
       mesh_size_mm:        meshSizeMm.toString(),
       min_size_mm:         minSizeMm.toString(),
-      surface_deviation:   surfaceDev.toString(),
+      surface_deviation:   '0.005',   // real geometry — no flattening
       normal_deviation:    normalDev.toString(),
       aspect_ratio:        aspectRatio.toString(),
       rotor_angle_deg:     rotorAngle.toString(),
@@ -334,18 +360,17 @@ const MeshPanel: React.FC = () => {
       motion_band:         motionBand ? 'true' : 'false',
       band_thickness_mm:   bandThickness.toString(),
       n_sectors:           nSectors.toString(),
-      stator_fillet_mm:    statorFillet.toString(),
+      stator_fillet_mm:    '0',          // native geometry — no extra smoothing
     }).toString();
-    const url = `${API}/api/simulation/mesh/build2d?${qs}`;
-    fetch(url)
+    fetch(`${base}?${qs}`)
       .then(async r => {
         if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
         return r.json();
       })
       .then((d: FemMesh) => { setFemMesh(d); setFemLoading(false); })
       .catch(e => { setFemError(String(e)); setFemLoading(false); });
-  }, [meshSizeMm, minSizeMm, surfaceDev, normalDev, aspectRatio, rotorAngle,
-      outerAirFactor, motionBand, bandThickness, nSectors, statorFillet]);
+  }, [slidingBand, meshSizeMm, minSizeMm, normalDev, aspectRatio, rotorAngle,
+      outerAirFactor, motionBand, bandThickness, nSectors]);
 
   // Load current config + geometry on mount
   useEffect(() => {
@@ -472,25 +497,6 @@ const MeshPanel: React.FC = () => {
               />
             </Box>
 
-            {/* surface deviation */}
-            <Box>
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-                <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>
-                  Surface deviation
-                  <Tooltip title="Ansys equivalent — chord error tolerance for the boundary polygon (Shapely simplify)" placement="right">
-                    <span style={{ color: '#475569', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
-                  </Tooltip>
-                </Typography>
-                <Chip label={`${surfaceDev.toFixed(3)} mm`} size="small"
-                  sx={{ fontSize: 11, height: 20, bgcolor: '#1e293b', color: '#94a3b8' }}/>
-              </Box>
-              <Slider
-                value={surfaceDev} min={0.001} max={0.05} step={0.001}
-                onChange={(_, v) => setSurfaceDev(v as number)}
-                sx={{ color: '#3b82f6' }}
-              />
-            </Box>
-
             {/* normal deviation */}
             <Box>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
@@ -525,28 +531,6 @@ const MeshPanel: React.FC = () => {
               <Slider
                 value={aspectRatio} min={2} max={30} step={1}
                 onChange={(_, v) => setAspectRatio(v as number)}
-                sx={{ color: '#3b82f6' }}
-              />
-            </Box>
-
-            {/* stator fillet radius */}
-            <Box>
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-                <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>
-                  Extra fillet smoothing
-                  <Tooltip title="Polygons already ship with CadQuery-radius fillets baked in (outer-ring=2.5 mm, inner-ring=0.9 mm — same as Geometry tab). This slider adds EXTRA Shapely buffer-smoothing on top. Leave at 0 to match Geometry exactly." placement="right">
-                    <span style={{ color: '#475569', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
-                  </Tooltip>
-                </Typography>
-                <Chip label={statorFillet > 0 ? `+${statorFillet.toFixed(2)} mm` : 'native'}
-                  size="small"
-                  sx={{ fontSize: 11, height: 20,
-                    bgcolor: statorFillet > 0 ? '#1e3a5f' : '#1e293b',
-                    color: statorFillet > 0 ? '#93c5fd' : '#94a3b8' }}/>
-              </Box>
-              <Slider
-                value={statorFillet} min={0} max={2.0} step={0.05}
-                onChange={(_, v) => setStatorFillet(v as number)}
                 sx={{ color: '#3b82f6' }}
               />
             </Box>
@@ -637,6 +621,34 @@ const MeshPanel: React.FC = () => {
                     sx={{ color: '#3b82f6' }}
                   />
                 </>
+              )}
+            </Box>
+
+            {/* Sliding-band TWO-mesh view */}
+            <Box>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>
+                  Sliding-band view
+                  <Tooltip title="Build stator and rotor as TWO separate meshes; rigidly rotate the rotor mesh's node coordinates by the rotor angle slider (topology stays the same). The band-interface nodes on each side are paired master-slave for the FEM solve (SB-5d, in progress)." placement="right">
+                    <span style={{ color: '#475569', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
+                  </Tooltip>
+                </Typography>
+                <ToggleButtonGroup
+                  value={slidingBand ? 'on' : 'off'} exclusive size="small"
+                  onChange={(_, v) => v && setSlidingBand(v === 'on')}
+                  sx={{ '& .MuiToggleButton-root': { py: 0.1, px: 1,
+                    fontSize: 10, color: '#64748b', borderColor: '#1e293b',
+                    textTransform: 'none',
+                    '&.Mui-selected': { color: '#a78bfa', bgcolor: '#312e5f',
+                      borderColor: '#8b5cf6' } } }}>
+                  <ToggleButton value="off">Off</ToggleButton>
+                  <ToggleButton value="on">On</ToggleButton>
+                </ToggleButtonGroup>
+              </Box>
+              {slidingBand && (
+                <Typography sx={{ fontSize: 10, color: '#7c3aed', mt: 0.3 }}>
+                  Sweep the <b>Rotor angle</b> slider above — rotor mesh slides as rigid body
+                </Typography>
               )}
             </Box>
 
@@ -925,6 +937,8 @@ const MeshPanel: React.FC = () => {
                   showOutlines={showOutlines}
                   showGrid/>
               </Box>
+              {/* Orientation cube + XYZ axes — same component as Geometry */}
+              <Viewcube/>
               {/* Help text overlay */}
               <Box sx={{ position: 'absolute', left: 8, bottom: 8, zIndex: 4,
                 bgcolor: 'rgba(10,22,40,0.7)', px: 1, py: 0.5, borderRadius: 1,

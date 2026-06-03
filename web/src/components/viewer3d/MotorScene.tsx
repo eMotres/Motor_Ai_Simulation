@@ -54,7 +54,7 @@ const AdaptiveCamera: React.FC = () => {
 };
 
 // Component to sync camera with viewcube
-const CameraSync: React.FC<{ controlsRef: React.RefObject<any> }> = ({ controlsRef }) => {
+export const CameraSync: React.FC<{ controlsRef?: React.RefObject<any> }> = ({ controlsRef }) => {
   const { camera } = useThree();
   
   // Initial sync when camera is ready
@@ -82,7 +82,7 @@ const CameraSync: React.FC<{ controlsRef: React.RefObject<any> }> = ({ controlsR
 };
 
 // Component to handle viewcube navigation events
-const ViewcubeNavigation: React.FC<{ controlsRef: React.RefObject<any> }> = ({ controlsRef }) => {
+export const ViewcubeNavigation: React.FC<{ controlsRef: React.RefObject<any> }> = ({ controlsRef }) => {
   const { camera } = useThree();
   const targetPosition = useRef<THREE.Vector3 | null>(null);
   const isAnimating = useRef(false);

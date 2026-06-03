@@ -9,7 +9,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Box, Typography, TextField, Button, Chip, Divider,
   LinearProgress, Alert, Tooltip, IconButton, Paper,
-  CircularProgress,
+  CircularProgress, Dialog, DialogTitle, DialogContent, DialogActions,
 } from '@mui/material';
 import PlayArrowIcon    from '@mui/icons-material/PlayArrow';
 import StopIcon         from '@mui/icons-material/Stop';
@@ -100,6 +100,20 @@ const CONNECTIONS: { key: ConnectionKey; label: string; nP: number; nS: number; 
 ];
 
 const SimulationPanel: React.FC = () => {
+  // localStorage-backed state so the whole left column survives reloads.
+  const usePersisted = <T,>(key: string, def: T) => {
+    const [v, setV] = useState<T>(() => {
+      try {
+        const raw = localStorage.getItem(`sim.${key}`);
+        return raw == null ? def : (JSON.parse(raw) as T);
+      } catch { return def; }
+    });
+    useEffect(() => {
+      try { localStorage.setItem(`sim.${key}`, JSON.stringify(v)); } catch {}
+    }, [key, v]);
+    return [v, setV] as const;
+  };
+
   // ── server status ─────────────────────────────────────────────────────────
   const [srvStatus, setSrvStatus] = useState<SimStatus | null>(null);
   const [srvErr, setSrvErr]       = useState<string | null>(null);
@@ -111,7 +125,7 @@ const SimulationPanel: React.FC = () => {
   const [nCoilsPerPhase, setNCoilsPerPhase] = useState<number>(4);
 
   // ── winding connection ────────────────────────────────────────────────────
-  const [connection, setConnection] = useState<ConnectionKey>('2P2S');
+  const [connection, setConnection] = usePersisted<ConnectionKey>('connection', '2P2S');
   const connDef = CONNECTIONS.find(c => c.key === connection)!;
 
   // ── derived periodicity ───────────────────────────────────────────────────
@@ -120,10 +134,48 @@ const SimulationPanel: React.FC = () => {
   const coggingPeriod_deg = 360 / lcm(numSlots, numPoles);
 
   // ── form state (current = I_phase_rms) ───────────────────────────────────
-  const [current,       setCurrent]       = useState(85.0);
-  const [frequency,     setFrequency]     = useState(921.67);
-  const [rpm,           setRpm]           = useState(3950.0);
-  const [phaseOffset,   setPhaseOffset]   = useState(0.0);   // γ [deg]
+  const [current,       setCurrent]       = usePersisted('current',   85.0);
+  const [frequency,     setFrequency]     = usePersisted('frequency', 921.67);
+  const [rpm,           setRpm]           = usePersisted('rpm',       3950.0);
+  const [phaseOffset,   setPhaseOffset]   = usePersisted('gamma',     0.0);   // γ [deg]
+  const [coilTemp,      setCoilTemp]      = usePersisted('coilTemp',  120.0); // °C
+  const [endWinding,    setEndWinding]    = usePersisted('endWinding', 0.0);  // k_end (editable)
+  // Last geometry-derived k_end we seeded the cell with — lets us re-seed on a
+  // geometry change without clobbering a manual override on an unchanged geom.
+  const [endWindingGeo, setEndWindingGeo] = usePersisted('endWindingGeo', 0.0);
+
+  // ── Run-Simulation gating ──────────────────────────────────────────────
+  // The FEM transient + field animation only (re)compute when runNonce
+  // ticks, i.e. when the user presses "Run Simulation".  This lets them
+  // change several parameters (γ, current, mesh settings) and launch ONE
+  // solve instead of re-running on every keystroke.
+  const [runNonce, setRunNonce] = useState(0);
+  const [simBusy,  setSimBusy]  = useState(false);
+  // "fresh" tells the backend to discard any frames cached from a Stopped
+  // run and recompute everything; cancelledRun remembers that the last run
+  // was Stopped so the next Run offers Continue / Start-fresh.
+  const [freshRun,     setFreshRun]     = useState(false);
+  const [cancelledRun, setCancelledRun] = useState(false);
+  const [askResume,    setAskResume]    = useState(false);
+  const launchRun = (fresh: boolean) => {
+    setFreshRun(fresh);
+    setCancelledRun(false);
+    setAskResume(false);
+    setRunNonce(n => n + 1);
+  };
+  // Steps per electrical period (transient time resolution).  Persisted.
+  // The text field edits a free string (stepsStr) and only commits a
+  // clamped integer on blur / Enter, so typing "12" over "6" works
+  // naturally instead of producing "62".
+  const [steps,    setSteps]    = usePersisted('steps', 12);
+  const [stepsStr, setStepsStr] = useState(String(steps));
+  useEffect(() => { setStepsStr(String(steps)); }, [steps]);
+  const commitSteps = () => {
+    const v = Math.round(Number(stepsStr));
+    const clamped = Number.isFinite(v) ? Math.max(6, Math.min(180, v)) : steps;
+    setSteps(clamped);
+    setStepsStr(String(clamped));
+  };
   // ── rotor angle / PINN training settings removed ──────────────────────
   // FEM auto-run now sweeps the rotor through the full electrical period,
   // and the PINN run button is gone (no Modulus dependency).  Kept as
@@ -165,6 +217,15 @@ const SimulationPanel: React.FC = () => {
         if (g.num_poles)        setNumPoles(g.num_poles);
         if (g.num_slots)        setNumSlots(g.num_slots);
         if (g.num_wires_per_slot) setNWiresPerSlot(g.num_wires_per_slot);
+        // End-winding factor k_end = (π·tooth_w/2 + L)/L, derived from the
+        // CURRENT geometry.  Re-seed the (editable) cell whenever the geometry-
+        // derived value CHANGES — like the other geometry-derived parameters —
+        // but leave a manual override untouched if the geometry is the same.
+        const kAuto = Number(d.end_winding_factor);
+        if (Number.isFinite(kAuto) && kAuto > 0 && kAuto !== endWindingGeo) {
+          setEndWinding(+kAuto.toFixed(2));
+          setEndWindingGeo(kAuto);
+        }
       })
       .catch(() => {});
   }, []);
@@ -408,6 +469,33 @@ const SimulationPanel: React.FC = () => {
               FormHelperTextProps={{ sx: { fontSize: 10, color: '#475569', mx: 0 } }}
             />
 
+            {/* ── Copper-loss physics: temperature + end-winding ──
+                The 2-D field only sees the in-slot (active) copper.  ρ_Cu rises
+                with coil temperature, and the end-turns that loop outside the
+                stack add series resistance the 2-D model can't see. */}
+            <TextField
+              label="Coil temperature (°C)"
+              type="number" size="small" fullWidth
+              value={coilTemp}
+              onChange={e => setCoilTemp(+e.target.value)}
+              inputProps={{ step: 10, min: -40, max: 220 }}
+              helperText={`ρ_Cu(T): +0.393 %/°C from 20 °C → higher copper loss`}
+              disabled={isRunning}
+              FormHelperTextProps={{ sx: { fontSize: 10, color: '#475569', mx: 0 } }}
+            />
+            <TextField
+              label="End-winding factor k_end (editable)"
+              type="number" size="small" fullWidth
+              value={endWinding}
+              onChange={e => setEndWinding(+e.target.value)}
+              inputProps={{ step: 0.05, min: 0, max: 6 }}
+              helperText={`k_end = (π·tooth_w/2 + L_stack)/L_stack` +
+                          ` = ${endWindingGeo ? endWindingGeo.toFixed(3) : '—'}` +
+                          ` from geometry · auto-recomputed on geometry change`}
+              disabled={isRunning}
+              FormHelperTextProps={{ sx: { fontSize: 10, color: '#475569', mx: 0 } }}
+            />
+
             {/* Slot currents bar / PINN Training settings / RUN SIMULATION
                 button removed.  The Simulation tab now uses real FEM via the
                 Physics Dashboard auto-runs on the right — no PINN training
@@ -420,6 +508,85 @@ const SimulationPanel: React.FC = () => {
         {srvErr && (
           <Alert severity="error" sx={{ fontSize: 11 }}>{srvErr}</Alert>
         )}
+
+        {/* ── Run Simulation — launches ONE FEM solve with the current
+              operating point + mesh settings.  Pinned at the bottom of the
+              left panel so the user can edit several fields, then run. ── */}
+        <Box sx={{ mt: 'auto', pt: 1 }}>
+          <TextField
+            label="Steps per electrical period"
+            type="text" size="small" fullWidth
+            value={stepsStr}
+            onChange={e => setStepsStr(e.target.value.replace(/[^0-9]/g, ''))}
+            onBlur={commitSteps}
+            onKeyDown={e => { if (e.key === 'Enter') { commitSteps(); (e.target as HTMLInputElement).blur(); } }}
+            inputProps={{ inputMode: 'numeric', pattern: '[0-9]*' }}
+            disabled={simBusy}
+            helperText="Transient time resolution (6–180). More = finer T(t)/V(t), slower."
+            FormHelperTextProps={{ sx: { fontSize: 10, color: '#475569', mx: 0 } }}
+            sx={{ mb: 1.25 }}
+          />
+          {simBusy ? (
+            <Button
+              fullWidth
+              variant="contained"
+              onClick={() => { window.dispatchEvent(new CustomEvent('sim:stop')); setCancelledRun(true); }}
+              startIcon={<StopIcon />}
+              sx={{
+                py: 1.2, fontWeight: 700, fontSize: 13, letterSpacing: 0.5,
+                textTransform: 'none', borderRadius: 2,
+                bgcolor: '#dc2626', '&:hover': { bgcolor: '#b91c1c' },
+                boxShadow: '0 2px 12px rgba(220,38,38,0.4)',
+              }}
+            >
+              Stop Simulation
+            </Button>
+          ) : (
+            <Button
+              fullWidth
+              variant="contained"
+              onClick={() => { if (cancelledRun) setAskResume(true); else launchRun(false); }}
+              startIcon={<PlayArrowIcon />}
+              sx={{
+                py: 1.2, fontWeight: 700, fontSize: 13, letterSpacing: 0.5,
+                textTransform: 'none', borderRadius: 2,
+                bgcolor: '#2563eb', '&:hover': { bgcolor: '#1d4ed8' },
+                boxShadow: '0 2px 12px rgba(37,99,235,0.4)',
+              }}
+            >
+              {runNonce === 0 ? 'Run Simulation' : 'Re-run Simulation'}
+            </Button>
+          )}
+          <Typography sx={{ fontSize: 10, color: '#475569', textAlign: 'center', mt: 0.75 }}>
+            {simBusy
+              ? 'Solving the transient — press Stop to cancel'
+              : cancelledRun
+                ? 'Stopped — Run to resume the finished frames or start fresh'
+                : 'Edit γ / current / mesh settings, then launch one solve'}
+          </Typography>
+        </Box>
+
+        {/* ── Resume / fresh dialog (after a Stop) ── */}
+        <Dialog open={askResume} onClose={() => setAskResume(false)}
+          PaperProps={{ sx: { bgcolor: '#0b1220', border: '1px solid #1e293b', borderRadius: 2 } }}>
+          <DialogTitle sx={{ fontSize: 15, color: '#e2e8f0' }}>Resume the stopped run?</DialogTitle>
+          <DialogContent>
+            <Typography sx={{ fontSize: 13, color: '#94a3b8' }}>
+              The previous transient was stopped part-way.  <b>Continue</b> keeps the
+              frames already solved and only computes the missing ones.
+              <b> Start fresh</b> discards them and recomputes the whole period.
+            </Typography>
+          </DialogContent>
+          <DialogActions sx={{ px: 3, pb: 2, gap: 1 }}>
+            <Button onClick={() => launchRun(true)} sx={{ textTransform: 'none', color: '#94a3b8' }}>
+              Start fresh
+            </Button>
+            <Button onClick={() => launchRun(false)} variant="contained"
+              sx={{ textTransform: 'none', bgcolor: '#2563eb', '&:hover': { bgcolor: '#1d4ed8' } }}>
+              Continue
+            </Button>
+          </DialogActions>
+        </Dialog>
       </Box>
 
       {/* ── RIGHT: results ── */}
@@ -641,6 +808,10 @@ const SimulationPanel: React.FC = () => {
           gamma_deg={phaseOffset}
           I_phase_rms={current}
           pinnLosses={job?.result ?? null}
+          runNonce={runNonce}
+          fresh={freshRun}
+          onBusyChange={setSimBusy}
+          steps={steps}
         />
 
       </Box>

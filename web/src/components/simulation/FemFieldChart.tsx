@@ -21,6 +21,8 @@ import {
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { Canvas, useThree } from '@react-three/fiber';
 import { OrbitControls, OrthographicCamera } from '@react-three/drei';
+import Viewcube from '../viewer3d/Viewcube';
+import { ViewcubeNavigation, CameraSync } from '../viewer3d/MotorScene';
 import * as THREE from 'three';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
@@ -546,7 +548,7 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
       motion_band:       String(readMeshSetting('motionBand',  true)),
       band_thickness_mm: String(readMeshSetting('bandThickness', 0.4)),
       n_sectors:         String(readMeshSetting('nSectors',    4)),
-      stator_fillet_mm:  String(readMeshSetting('statorFillet', 0.0)),
+      stator_fillet_mm:  '0',   // native geometry — extra smoothing removed
     };
     if (I_phase_rms !== undefined) {
       params.I_phase_rms = String(I_phase_rms);
@@ -625,7 +627,7 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
       )}
 
       <Box sx={{ display: 'grid',
-        gridTemplateColumns: 'minmax(0, 1fr) auto 200px',
+        gridTemplateColumns: 'minmax(0, 1fr) auto',
         gap: 1, height: 460 }}>
         {/* Canvas */}
         <Box sx={{ position: 'relative', border: '1px solid #0f172a',
@@ -646,8 +648,13 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
               <FieldMesh payload={payload} mode={mode}/>
               <OrbitControls ref={controlsRef} enableDamping={false}
                 enableRotate enablePan enableZoom zoomSpeed={1.2}/>
+              {/* Drive + follow the overlay Viewcube (same as Geometry). */}
+              <CameraSync controlsRef={controlsRef}/>
+              <ViewcubeNavigation controlsRef={controlsRef}/>
             </Canvas>
           )}
+          {/* Orientation cube + XYZ axes — same component as Geometry */}
+          {payload && <Viewcube/>}
         </Box>
 
         {/* Colour bar — recompute the same 2/98 percentile-based vmin/vmax
@@ -710,45 +717,33 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
           );
         })()}
 
-        {/* Stats sidebar */}
-        {payload && (
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.3,
-            p: 1, bgcolor: '#060d17', border: '1px solid #0f172a',
-            borderRadius: 1, fontSize: 11 }}>
-            <Typography sx={{ fontSize: 10, fontWeight: 700, color: '#475569',
-              letterSpacing: '0.08em', textTransform: 'uppercase', mb: 0.5 }}>
-              Physics (full motor)
-            </Typography>
-            <StatRow label="Torque T_em" value={`${payload.T_em_Nm.toFixed(2)} N·m`}
-              sub={`Maxwell stress (×${payload.symmetry_mult})`}/>
-            <StatRow label="Mech power" value={`${(payload.P_mech_W / 1000).toFixed(2)} kW`}
-              sub={`@${payload.rpm} rpm`}/>
-
-            <Typography sx={{ fontSize: 10, fontWeight: 700, color: '#475569',
-              letterSpacing: '0.08em', textTransform: 'uppercase', mt: 1, mb: 0.5 }}>
-              Losses
-            </Typography>
-            <StatRow label="Copper" value={`${payload.P_cu_W.toFixed(0)} W`}
-              sub="I²R (3-phase)"/>
-            <StatRow label="Iron (stator+rotor)" value={`${payload.P_fe_W.toFixed(0)} W`}
-              sub={`Steinmetz @ ${payload.freq_Hz} Hz (×${payload.symmetry_mult})`}/>
-            <StatRow label="Magnet eddy" value={`${payload.P_mag_eddy_W.toFixed(0)} W`}
-              sub={`(×${payload.symmetry_mult})`}/>
-            <StatRow label="Total loss" value={`${(payload.P_loss_total_W / 1000).toFixed(2)} kW`}/>
-            <StatRow label="Efficiency η" value={`${(payload.efficiency * 100).toFixed(1)} %`}/>
-
-            <Typography sx={{ fontSize: 10, fontWeight: 700, color: '#475569',
-              letterSpacing: '0.08em', textTransform: 'uppercase', mt: 1, mb: 0.5 }}>
-              Numerics
-            </Typography>
-            <StatRow label="Mesh vertices" value={payload.n_vertices.toLocaleString()}/>
-            <StatRow label="Mesh triangles" value={payload.n_triangles.toLocaleString()}/>
-            <StatRow label="|B|_max" value={`${payload.B_mag_max.toFixed(2)} T`}/>
-            <StatRow label="A_z range" value={`[${(payload.A_z_min*1000).toFixed(2)}, ${(payload.A_z_max*1000).toFixed(2)}]`}
-              sub="mWb/m"/>
-          </Box>
-        )}
       </Box>
+
+      {/* Solver diagnostics strip — only the mesh/field numerics that are
+          NOT already in the top summary table.  Sits BELOW the full-width
+          field chart as a compact horizontal row. */}
+      {payload && (
+        <Box sx={{ display: 'grid',
+          gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 1, mt: 1 }}>
+          {[
+            { label: 'Mesh vertices',  value: payload.n_vertices.toLocaleString() },
+            { label: 'Mesh triangles', value: payload.n_triangles.toLocaleString() },
+            { label: '|B|_max',        value: `${payload.B_mag_max.toFixed(2)} T` },
+            { label: 'A_z range',      value: `[${(payload.A_z_min*1000).toFixed(2)}, ${(payload.A_z_max*1000).toFixed(2)}] mWb/m` },
+          ].map(s => (
+            <Box key={s.label} sx={{ p: 1, bgcolor: '#060d17',
+              border: '1px solid #0f172a', borderRadius: 1 }}>
+              <Typography sx={{ fontSize: 9, color: '#475569',
+                textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                {s.label}
+              </Typography>
+              <Typography sx={{ fontSize: 13, fontWeight: 700, color: '#cbd5e1' }}>
+                {s.value}
+              </Typography>
+            </Box>
+          ))}
+        </Box>
+      )}
 
       <Typography sx={{ fontSize: 9, color: '#334155', mt: 0.5 }}>
         Same mesh + Solver-Domain settings as the Mesh tab (read from

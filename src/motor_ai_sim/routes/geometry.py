@@ -49,6 +49,14 @@ def update_geometry(update: GeometryUpdateModel):
         from motor_ai_sim.cadquery_geometry import CadQueryCache
         CadQueryCache().clear_all()
         _mesh_cache["hash"] = None
+        # Geometry changed → flush every simulation-side cache (2-D polys,
+        # build2d / sliding-band meshes, field, transient, frame) so the
+        # Mesh tab and Simulation re-solve on the NEW cross-section.
+        try:
+            from motor_ai_sim.routes.simulation import clear_simulation_caches
+            clear_simulation_caches()
+        except Exception:
+            pass
         params = update_current_geometry(**update.model_dump())
 
         # Persist changes to YAML so they survive server restarts

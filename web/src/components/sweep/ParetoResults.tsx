@@ -47,14 +47,19 @@ const ParetoResults: React.FC<{ result: OptimizationResult }> = ({ result }) => 
   const updateOperatingPoint = useMotorStore(s => s.updateOperatingPoint);
 
   const frontSet = new Set(result.pareto_indices);
-  const cloud: Pt[] = [];
+  const cloudAll: Pt[] = [];
   const front: Pt[] = [];
   result.points.forEach((d, i) => {
     if (!d.feasible) return;
     const pt: Pt = { x: d.efficiency * 100, y: d.torque_per_mass_Nm_kg, d };
-    (frontSet.has(i) ? front : cloud).push(pt);
+    (frontSet.has(i) ? front : cloudAll).push(pt);
   });
   front.sort((a, b) => a.x - b.x);
+  // Downsample the background cloud — rendering thousands of SVG dots makes the
+  // chart sluggish; ~600 is plenty to show the feasible design space.
+  const MAX_CLOUD = 600;
+  const stride = Math.max(1, Math.ceil(cloudAll.length / MAX_CLOUD));
+  const cloud = stride > 1 ? cloudAll.filter((_, i) => i % stride === 0) : cloudAll;
   const base = result.baseline;
   const basePt: Pt[] = base?.feasible
     ? [{ x: base.efficiency * 100, y: base.torque_per_mass_Nm_kg, d: base }]

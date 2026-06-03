@@ -65,27 +65,28 @@ const ParetoResults: React.FC<{ result: OptimizationResult }> = ({ result }) => 
     if (!d.feasible || frontSet.has(i)) return;
     (d.eligible ? eligIdx : filtIdx).push(i);
   });
+  // Axes: X = torque density (N·m/kg), Y = efficiency (%).
   const downsample = (idx: number[], max: number) => {
     const s = Math.max(1, Math.ceil(idx.length / max));
     return idx.filter((_, k) => k % s === 0)
-      .map(i => ({ x: pts[i].efficiency * 100, y: pts[i].torque_per_mass_Nm_kg, d: pts[i] }));
+      .map(i => ({ x: pts[i].torque_per_mass_Nm_kg, y: pts[i].efficiency * 100, d: pts[i] }));
   };
   const cloud: Pt[] = downsample(eligIdx, 400);       // eligible
   const filtered: Pt[] = downsample(filtIdx, 400);    // failed ripple gate
 
   const front: Pt[] = result.pareto_indices
-    .map(i => ({ x: pts[i].efficiency * 100, y: pts[i].torque_per_mass_Nm_kg, d: pts[i] }))
+    .map(i => ({ x: pts[i].torque_per_mass_Nm_kg, y: pts[i].efficiency * 100, d: pts[i] }))
     .sort((a, b) => a.x - b.x);
 
   const base = result.baseline;
   const basePt: Pt[] = base?.feasible
-    ? [{ x: base.efficiency * 100, y: base.torque_per_mass_Nm_kg, d: base }]
+    ? [{ x: base.torque_per_mass_Nm_kg, y: base.efficiency * 100, d: base }]
     : [];
 
   // FEM-refined points (real transient) overlaid on the analytical scatter.
   const refinedPts: Pt[] = (refineResults || [])
     .filter(d => d && d.efficiency > 0 && d.torque_per_mass_Nm_kg > 0)
-    .map(d => ({ x: d.efficiency * 100, y: d.torque_per_mass_Nm_kg, d }));
+    .map(d => ({ x: d.torque_per_mass_Nm_kg, y: d.efficiency * 100, d }));
 
   // Segment lines (one per geometry, I1→I2), downsampled.
   const segArr = result.segments ?? [];
@@ -158,16 +159,16 @@ const ParetoResults: React.FC<{ result: OptimizationResult }> = ({ result }) => 
         <ResponsiveContainer width="100%" height="100%">
           <ScatterChart margin={{ top: 8, right: 16, bottom: 24, left: 8 }}>
             <CartesianGrid stroke="#1e293b" strokeDasharray="2 4" />
-            <XAxis type="number" dataKey="x" name="Efficiency" unit="%"
-              domain={['dataMin - 0.3', 'dataMax + 0.3']}
-              tickFormatter={(v: number) => v.toFixed(1)}
-              tick={{ fontSize: 10, fill: '#94a3b8' }}
-              label={{ value: 'Efficiency [%]', position: 'insideBottom', offset: -12, style: { fontSize: 10, fill: '#64748b' } }} />
-            <YAxis type="number" dataKey="y" name="Torque density"
+            <XAxis type="number" dataKey="x" name="Torque density"
               domain={['dataMin - 0.2', 'dataMax + 0.2']}
               tickFormatter={(v: number) => v.toFixed(1)}
               tick={{ fontSize: 10, fill: '#94a3b8' }}
-              label={{ value: 'Torque/mass [N·m/kg]', angle: -90, position: 'insideLeft', style: { fontSize: 10, fill: '#64748b' } }} />
+              label={{ value: 'Torque/mass [N·m/kg]', position: 'insideBottom', offset: -12, style: { fontSize: 10, fill: '#64748b' } }} />
+            <YAxis type="number" dataKey="y" name="Efficiency" unit="%"
+              domain={['dataMin - 0.3', 'dataMax + 0.3']}
+              tickFormatter={(v: number) => v.toFixed(1)}
+              tick={{ fontSize: 10, fill: '#94a3b8' }}
+              label={{ value: 'Efficiency [%]', angle: -90, position: 'insideLeft', style: { fontSize: 10, fill: '#64748b' } }} />
             <ZAxis range={[22, 22]} />
             {/* Load-line segments (one per geometry, I1→I2) drawn via recharts'
                 own coordinate mapping. */}

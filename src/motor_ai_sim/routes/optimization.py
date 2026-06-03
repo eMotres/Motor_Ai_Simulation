@@ -38,6 +38,8 @@ class OptVariable(BaseModel):
     name: str                       # geometry key, or 'gamma_deg' / 'current_a'
     min: float
     max: float
+    mode: str = "optimize"          # 'optimize' = continuous, 'sweep' = grid
+    step: float = 0.0               # grid step (used only for 'sweep')
 
 
 class OptOperating(BaseModel):
@@ -64,7 +66,8 @@ def run_optimization(req: OptRequest):
         geo = dict(cfg.get("geometry", {}))
         wind = dict(cfg.get("winding", {}))
         sim = dict(cfg.get("simulation", {}))
-        variables = [{"name": v.name, "min": float(v.min), "max": float(v.max)}
+        variables = [{"name": v.name, "min": float(v.min), "max": float(v.max),
+                      "mode": v.mode, "step": float(v.step)}
                      for v in req.variables]
         ops = [{"gamma_deg": float(o.gamma_deg), "current_a": float(o.current_a),
                 "rpm": float(o.rpm)} for o in (req.operating_points or [])]

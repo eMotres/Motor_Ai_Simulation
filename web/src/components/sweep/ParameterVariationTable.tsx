@@ -103,12 +103,15 @@ const ParameterVariationTable: React.FC = () => {
     if (isActive) {
       updateVariation(name, { mode: 'fixed' });
     } else {
+      // On first selection, default Min AND Max to the parameter's CURRENT
+      // value — the user then widens the range.  (Schema min/max were far too
+      // wide, e.g. Slot Height 1..100.)
       const cur    = Number(localValues[name] ?? geometry[name] ?? 0);
       const schema = parameterSchema.find(p => p.name === name);
       updateVariation(name, {
         mode: 'sweep',
-        min:  variation?.min  ?? schema?.min  ?? Math.max(0, cur * 0.5),
-        max:  variation?.max  ?? schema?.max  ?? cur * 1.5,
+        min:  cur,
+        max:  cur,
         step: variation?.step ?? schema?.step ?? Math.max(0.01, Math.abs(cur) * 0.1),
       });
     }

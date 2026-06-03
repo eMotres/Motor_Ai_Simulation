@@ -118,8 +118,19 @@ def run_pareto_search(
         n_geom = max(20, int(n_samples))
         unit = qmc.LatinHypercube(d=dim, seed=int(seed)).random(n=n_geom)
         samples = qmc.scale(unit, lo, hi)
+
+        def _snap(val, k):
+            # 'sweep' variables take only discrete grid values (min : step : max);
+            # 'optimize' variables stay continuous.
+            v = gvars[k]
+            if v.get("mode") == "sweep" and float(v.get("step", 0)) > 0:
+                lo_k, st = float(v["min"]), float(v["step"])
+                snapped = lo_k + round((val - lo_k) / st) * st
+                return min(max(snapped, lo_k), float(v["max"]))
+            return val
+
         for row in samples:
-            geo_over = {gvars[k]["name"]: float(row[k]) for k in range(dim)}
+            geo_over = {gvars[k]["name"]: _snap(float(row[k]), k) for k in range(dim)}
             idxs = []
             for op in ops:
                 m = _eval(base_geo, wind, sim, geo_over,

@@ -626,10 +626,12 @@ export const useMotorStore = create<MotorState>()(
         for (const param of parameterSchema) {
           if (param.type === 'string') continue;
           const current = Number(geometry[param.name] ?? 0);
+          // Default a freshly-seen variable's range to its CURRENT value in
+          // both Min and Max (the user widens it after selecting).
           variations[param.name] = existing[param.name] ?? {
             mode: 'fixed',
-            min: param.min ?? current * 0.5,
-            max: param.max ?? current * 1.5,
+            min: current,
+            max: current,
             step: param.step ?? (current !== 0 ? Math.abs(current) * 0.1 : 1),
           };
         }
@@ -648,7 +650,8 @@ export const useMotorStore = create<MotorState>()(
         // are NOT variables — they are the two operating points below).
         const variables = Object.entries(sweepConfig.variations)
           .filter(([, v]) => v.mode !== 'fixed')
-          .map(([name, v]) => ({ name, min: Number(v.min), max: Number(v.max) }));
+          .map(([name, v]) => ({ name, min: Number(v.min), max: Number(v.max),
+                                 mode: v.mode, step: Number(v.step) }));
 
         // Each geometry is evaluated at BOTH operating points → two Pareto
         // points joined by a segment (the design's load line from I1 to I2).

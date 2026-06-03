@@ -98,8 +98,8 @@ const ParetoResults: React.FC<{ result: OptimizationResult }> = ({ result }) => 
       const pa = pts[a], pb = pts[b];
       if (!pa?.feasible || !pb?.feasible) return null;
       return {
-        x1: pa.efficiency * 100, y1: pa.torque_per_mass_Nm_kg,
-        x2: pb.efficiency * 100, y2: pb.torque_per_mass_Nm_kg,
+        x1: pa.torque_per_mass_Nm_kg, y1: pa.efficiency * 100,
+        x2: pb.torque_per_mass_Nm_kg, y2: pb.efficiency * 100,
         elig: pa.eligible && pb.eligible,
       };
     })
@@ -179,11 +179,12 @@ const ParetoResults: React.FC<{ result: OptimizationResult }> = ({ result }) => 
                 strokeOpacity={s.elig ? 0.35 : 0.18} strokeWidth={0.7} />
             ))}
             <RcTooltip content={<ParetoTooltip />} cursor={{ strokeDasharray: '3 3' }} />
-            <Legend wrapperStyle={{ fontSize: 10 }} />
-            <Scatter name={`ripple > ${result.ripple_max_pct.toFixed(0)}%`} data={filtered} fill="#7f1d1d" fillOpacity={0.45} />
+            <Legend wrapperStyle={{ fontSize: 10, paddingTop: 6 }} iconSize={9}
+              formatter={(v: string) => <span style={{ marginRight: 10, color: '#94a3b8' }}>{v}</span>} />
+            <Scatter name="filtered" data={filtered} fill="#7f1d1d" fillOpacity={0.45} />
             <Scatter name="eligible" data={cloud} fill="#64748b" fillOpacity={0.65} />
-            <Scatter name="Pareto front" data={front} fill="#f59e0b" line={{ stroke: '#f59e0b', strokeWidth: 1 }} shape="circle" />
-            <Scatter name="FEM-refined" data={refinedPts} fill="#22c55e" shape="star" />
+            <Scatter name="front" data={front} fill="#f59e0b" line={{ stroke: '#f59e0b', strokeWidth: 1 }} shape="circle" />
+            <Scatter name="refined" data={refinedPts} fill="#22c55e" shape="star" />
             <Scatter name="baseline" data={basePt} fill="#3b82f6" shape="diamond" />
           </ScatterChart>
         </ResponsiveContainer>

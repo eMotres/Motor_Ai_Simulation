@@ -123,8 +123,10 @@ const SweepConfigPanel: React.FC = () => {
     optimizationError,
   } = useMotorStore();
 
-  // FEM scan settings: frames/period (low = fast) and the geometry cap.
-  const [scanSteps, setScanSteps] = React.useState(6);
+  // FEM scan settings: frames/period and the geometry cap.  30 ≈ 5 samples per
+  // 1/6-period (the solver snaps it to 36 = a divisor of the 72 slip nodes) →
+  // resolves the dominant 6·k torque ripple.
+  const [scanSteps, setScanSteps] = React.useState(30);
   const [maxGeom,   setMaxGeom]   = React.useState(24);
 
   useEffect(() => {
@@ -163,7 +165,7 @@ const SweepConfigPanel: React.FC = () => {
         )}
         <Tooltip title="FEM frames per electrical period for the scan. Low (6) = fast; refine the front at a higher count afterwards." placement="top">
           <TextField label="FEM steps" type="number" size="small" value={scanSteps}
-            onChange={e => setScanSteps(Math.max(4, Math.min(60, Math.round(+e.target.value) || 6)))}
+            onChange={e => setScanSteps(Math.max(4, Math.min(60, Math.round(+e.target.value) || 30)))}
             inputProps={{ min: 4, max: 60, style: { fontSize: 11, padding: '3px 6px', width: 38 } }}
             InputLabelProps={{ sx: { fontSize: 10 } }} sx={{ ml: 1 }} />
         </Tooltip>

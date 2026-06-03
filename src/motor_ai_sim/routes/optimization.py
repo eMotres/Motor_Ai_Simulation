@@ -269,19 +269,14 @@ def _enumerate_geometries(variables: List[Dict[str, Any]], max_geom: int,
     total = 1
     for a in axes:
         total *= len(a)
-    rng = np.random.default_rng(int(seed))
-    if total <= max_geom:
-        return [dict(c) for c in itertools.product(*axes)]
-    # Too many combinations to materialize — sample max_geom distinct ones.
-    seen, combos, attempts = set(), [], 0
-    while len(combos) < max_geom and attempts < max_geom * 60:
-        attempts += 1
-        pick = tuple(a[int(rng.integers(len(a)))] for a in axes)
-        key = tuple(pick)
-        if key in seen:
-            continue
-        seen.add(key)
-        combos.append(dict(pick))
+    # Enumerate the EXACT grid (sweep min:step:max × optimize spread), in order,
+    # up to the safety cap — no rounding, no random subsampling, so the user
+    # gets precisely the points their Sweep Variables define.
+    combos: List[Dict[str, float]] = []
+    for c in itertools.product(*axes):
+        combos.append(dict(c))
+        if len(combos) >= max_geom:
+            break
     return combos
 
 

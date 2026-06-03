@@ -148,6 +148,15 @@ const SweepConfigPanel: React.FC = () => {
         return acc * steps;
       }, 1);
 
+  // Default the geometry cap to the FULL design count (sweep grid × optimize
+  // spread) so the scan computes exactly the points the Sweep Variables define —
+  // no subsampling.  The user can still lower the field for a quick subset.
+  useEffect(() => {
+    const full = estimateRuns() * Math.pow(4, optimizeCount);
+    setMaxGeom(Math.max(1, Math.min(400, full)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [JSON.stringify(sweepConfig.variations)]);
+
   return (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
 

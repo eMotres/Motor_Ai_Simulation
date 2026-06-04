@@ -15,6 +15,7 @@ export interface TransientSummary {
   gamma_deg:           number;
   T_em_avg_Nm:         number;
   T_ripple_pct:        number;
+  T_ripple_raw_pct?:   number;
   P_mech_W:            number;
   V_phase_peak_V:      number;
   V_phase_rms_V:       number;
@@ -128,7 +129,13 @@ const SummaryTable: React.FC<Props> = ({ summary, loading }) => {
           tooltip="P_mech / mass_active"/>
         <Cell label="T ripple" value={fmt(s.T_ripple_pct, 1)} unit="%"
           accent={accentRipple}
-          tooltip="(T_max − T_min) / |T_avg| over one electrical period — cogging + load ripple"/>
+          tooltip={`Physical torque ripple (T_max − T_min)/|T_avg| over one electrical period, ` +
+                   `reconstructed from the 6·k electrical orders a balanced 3-phase machine can produce ` +
+                   `(6th/12th ripple + cogging).` +
+                   (s.T_ripple_raw_pct != null
+                     ? `  Raw FEM pk-pk = ${s.T_ripple_raw_pct.toFixed(1)}% — the difference is sliding-band ` +
+                       `stair-step noise (forbidden orders), not real ripple.`
+                     : '')}/>
       </Box>
 
       {/* ── Row 2 — losses ─────────────────────────────────────────────── */}

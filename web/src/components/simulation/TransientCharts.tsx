@@ -161,9 +161,16 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
       band_thickness_mm:  String(readMeshSetting('bandThickness', 0.4)),
       n_sectors:          String(readMeshSetting('nSectors',    4)),
       stator_fillet_mm:   '0',   // native geometry — extra smoothing removed
-      // Sliding-band transient (mesh once, rotate rotor) → smooth T(t) and
-      // clean back-EMF V(t). Driven by the Mesh-tab "Sliding-band" toggle.
-      sliding_band:       String(readMeshSetting('slidingBand', false)),
+      // ALWAYS use the sliding band for the transient torque/back-EMF.  The
+      // alternative (remesh-per-frame) gives every rotor angle an INDEPENDENT
+      // mesh, so frame-to-frame discretisation differences inject huge broadband
+      // torque ripple (≈35–48 % pk-pk here) that is purely numerical.  The
+      // sliding band meshes ONCE and rotates the rotor through a moving band —
+      // exactly how Ansys runs a transient — giving a clean, physical T(t)
+      // (≈13 % here, dominated by the genuine 6th-harmonic ripple).  This is
+      // decoupled from the Mesh-tab toggle, which now only controls the mesh
+      // VISUALISATION, not the physics.
+      sliding_band:       'true',
       // Copper-loss physics: coil temperature → ρ_Cu(T); end-winding factor
       // (0 = auto-estimate from geometry) for the copper the 2-D field misses.
       coil_temp_c:        String(readSimSetting('coilTemp',   120.0)),

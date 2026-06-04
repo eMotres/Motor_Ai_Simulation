@@ -1682,6 +1682,7 @@ def get_fem_transient(
                     "gamma_deg": round(float(gamma_deg), 2),
                     "T_em_avg_Nm": round(_Tavg, 3),
                     "T_ripple_pct": round(float(_sbres.get("T_ripple_pct", 0.0)), 1),
+                    "T_ripple_raw_pct": round(float(_sbres.get("T_ripple_raw_pct", 0.0)), 1),
                     "P_mech_W": round(_Pmech, 1),
                     "V_phase_peak_V": round(_Vpk, 1),
                     "V_phase_rms_V": round(_Vrms, 1),
@@ -2094,6 +2095,15 @@ def get_fem_transient(
     P_total_series = [c + f + e for c, f, e
                        in zip(P_cu_series, P_fe_series, P_eddy_series)]
 
+    # ── Band-limit the torque to the physical 6·k electrical orders ───────────
+    # The remesh-per-frame pipeline meshes every rotor angle INDEPENDENTLY, so
+    # frame-to-frame discretisation differences inject broadband torque ripple at
+    # orders a balanced 3-phase drive cannot produce.  Reconstruct T(t) from its
+    # 6·k content (mean preserved) — same denoising as the sliding-band path.
+    from motor_ai_sim.simulation.fem_solver_2d import band_limit_torque as _blt
+    T_em_series, _Trip_phys, _Trip_raw = _blt(
+        T_em_series, n_steps_per_period, n_periods)
+
     payload = {
         "n_steps":            n_total,
         "n_steps_per_period": int(n_steps_per_period),
@@ -2106,8 +2116,8 @@ def get_fem_transient(
         "time_s":             t_series.tolist(),
         "T_em_Nm":            T_em_series,
         "T_avg_Nm":           float(_np.mean(T_em_series)),
-        "T_ripple_pct":       float((max(T_em_series) - min(T_em_series))
-                                     / max(abs(_np.mean(T_em_series)), 0.01) * 100),
+        "T_ripple_pct":       round(_Trip_phys, 2),
+        "T_ripple_raw_pct":   round(_Trip_raw, 2),
         "P_cu_W":             P_cu_series,
         "P_fe_W":             P_fe_series,
         "P_mag_eddy_W":       P_eddy_series,
@@ -2161,8 +2171,8 @@ def get_fem_transient(
         "gamma_deg":        round(float(gamma_deg), 2),
         # Mechanics
         "T_em_avg_Nm":      round(T_avg, 3),
-        "T_ripple_pct":     round(float((max(T_em_series) - min(T_em_series))
-                                          / max(abs(T_avg), 0.01) * 100), 1),
+        "T_ripple_pct":     round(_Trip_phys, 1),
+        "T_ripple_raw_pct": round(_Trip_raw, 1),
         "P_mech_W":         round(P_mech, 1),
         # Voltage / current
         "V_phase_peak_V":   round(V_peak, 1),

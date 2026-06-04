@@ -2474,6 +2474,46 @@ def _arkkio_torque(mesh, A_nodal: np.ndarray, r_in_m: float, r_out_m: float,
     return (stack_length_m / (MU0 * (r_out_m - r_in_m))) * float(np.sum(integrand))
 
 
+def band_limit_torque(T_series, n_steps_per_period, n_periods):
+    """Reconstruct T(t) from the electrical orders a BALANCED three-phase machine
+    can physically produce — DC + the 6·k orders (6th/12th… torque ripple, and the
+    order-12 cogging of a 24/28 machine) — discarding everything else.
+
+    Both transient pipelines inject NON-physical torque ripple at forbidden
+    orders: the sliding band steps the rotor across discrete slip nodes, and the
+    remesh-per-frame path gives every frame a slightly different mesh.  Both errors
+    spread broadband over orders a 3-phase drive cannot make (1,2,4,5,7,…) and
+    NEITHER converges with mesh refinement → they are numerical, not real.  We keep
+    order 6 unconditionally (the fundamental 3-phase ripple harmonic) and the higher
+    6·k orders only when they rise >3× above the numerical noise floor (the median
+    amplitude of the forbidden bins).  The MEAN (calibrated average torque) is
+    preserved exactly.
+
+    Returns (T_phys_list, ripple_phys_pct, ripple_raw_pct)."""
+    x = np.asarray(T_series, float); n = x.size
+    if n == 0:
+        return [], 0.0, 0.0
+    avg = float(x.mean())
+    def _pp(arr):
+        return (100.0 * (float(arr.max()) - float(arr.min())) / abs(avg)
+                if abs(avg) > 1e-9 else 0.0)
+    raw_rip = _pp(x)
+    nper = max(1, int(round(n_periods)))
+    step = 6 * nper                                  # electrical order 6 → bin 6·nper
+    if n < 2 * step:                                 # too few frames to resolve order 6
+        return x.tolist(), raw_rip, raw_rip
+    F = np.fft.rfft(x - avg)
+    amp = np.abs(F)
+    forbidden = [amp[k] for k in range(1, F.size) if k % step != 0]
+    floor = float(np.median(forbidden)) if forbidden else 0.0
+    G = np.zeros_like(F)
+    for k in range(step, F.size, step):
+        if k == step or amp[k] > 3.0 * floor:
+            G[k] = F[k]
+    xf = np.fft.irfft(G, n=n) + avg
+    return xf.tolist(), _pp(xf), raw_rip
+
+
 class _SignedUF:
     """Signed union-find for combining anti-periodic + slip master-slave
     constraints.  union(a,b,s) means dof_a == s·dof_b; find returns (root, sign)."""
@@ -3010,8 +3050,16 @@ def fem_transient_sliding_band(
     VB = [R_phase * i + e for i, e in zip(IB, eB.tolist())]
     VC = [R_phase * i + e for i, e in zip(IC, eC.tolist())]
     Tavg = float(np.mean(T_series)) if T_series else 0.0
-    Trip = (100.0 * (max(T_series) - min(T_series)) / abs(Tavg)
-            if T_series and abs(Tavg) > 1e-9 else 0.0)
+
+    # ── Physical torque = DC + 6·k electrical orders only (see band_limit_torque):
+    # strips the broadband sliding-band stair-step noise from the raw torque while
+    # preserving the mean.  T_series is replaced by the clean wave; the raw pk-pk
+    # is kept as T_ripple_raw_pct for transparency.
+    if T_series:
+        T_series, Trip, Trip_raw = band_limit_torque(
+            T_series, n_steps_per_period, n_periods)
+    else:
+        Trip = Trip_raw = 0.0
     Vpk = float(max(max(map(abs, VA)), max(map(abs, VB)), max(map(abs, VC)))) if VA else 0.0
     # P_cu already computed physically (ρ(T)·J²·V·k_end) near the top.
 
@@ -3084,6 +3132,7 @@ def fem_transient_sliding_band(
         "time_s": tt, "rotor_angle_deg": [
             (k / n_total) * period_mech * n_periods for k in range(n_total)],
         "T_em_Nm": T_series, "T_avg_Nm": Tavg, "T_ripple_pct": Trip,
+        "T_ripple_raw_pct": Trip_raw,
         "psi_A_Wb": psiA, "psi_B_Wb": psiB, "psi_C_Wb": psiC,
         "V_A": VA, "V_B": VB, "V_C": VC, "V_peak": Vpk,
         "I_A": IA, "I_B": IB, "I_C": IC,

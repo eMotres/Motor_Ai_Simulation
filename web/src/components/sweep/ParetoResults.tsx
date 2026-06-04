@@ -16,12 +16,16 @@ import {
 import type { OptimizationResult, OptDesignPoint } from '../../types/motor';
 import { useMotorStore } from '../../stores/motorStore';
 
-const OPERATING_KEYS = new Set(['gamma_deg', 'current_a', 'rpm']);
+// current_a / rpm are reported on their own line; every other override key is a
+// swept design variable (geometry params AND the load angle γ) → shown below.
+const OPERATING_KEYS = new Set(['current_a', 'rpm']);
 const fmt = (v: number, n = 2) => (Number.isFinite(v) ? v.toFixed(n) : '–');
+
+type VarMeta = Record<string, { label: string; unit: string }>;
 
 interface Pt { x: number; y: number; d: OptDesignPoint; }
 
-const ParetoTooltip: React.FC<any> = ({ active, payload }) => {
+const ParetoTooltip: React.FC<any> = ({ active, payload, varMeta = {} as VarMeta }) => {
   if (!active || !payload?.length) return null;
   const d: OptDesignPoint = payload[0].payload.d;
   if (!d) return null;
@@ -36,17 +40,38 @@ const ParetoTooltip: React.FC<any> = ({ active, payload }) => {
       </div>
       <div style={{ color: '#94a3b8' }}>loss {fmt(d.P_loss_total_W, 0)} W (Cu {fmt(d.P_cu_W, 0)}/Fe {fmt(d.P_fe_W, 0)}/Mg {fmt(d.P_mag_W, 0)})</div>
       {ov.length > 0 && (
-        <div style={{ marginTop: 4, color: '#fbbf24' }}>
-          {ov.map(([k, v]) => `${k}=${(v as number).toFixed(2)}`).join('  ')}
+        <div style={{ marginTop: 5, borderTop: '1px solid #1e293b', paddingTop: 4 }}>
+          <div style={{ color: '#64748b', fontSize: 10, letterSpacing: 0.5 }}>SWEEP VARIABLES</div>
+          {ov.map(([k, v]) => {
+            const m = (varMeta as VarMeta)[k] ?? { label: k, unit: '' };
+            return (
+              <div key={k} style={{ color: '#fbbf24' }}>
+                {m.label} = <b>{(v as number).toFixed(2)}</b>{m.unit ? ` ${m.unit}` : ''}
+              </div>
+            );
+          })}
         </div>
       )}
     </Box>
   );
 };
 
+// Keys that are NOT geometry parameters (so they must not be pushed to the
+// geometry API when applying a design).
+const NON_GEOM_KEYS = new Set(['gamma_deg', 'current_a', 'rpm']);
+
 const ParetoResults: React.FC<{ result: OptimizationResult }> = ({ result }) => {
   const updateGeometryViaApi = useMotorStore(s => s.updateGeometryViaApi);
   const updateOperatingPoint = useMotorStore(s => s.updateOperatingPoint);
+  const parameterSchema = useMotorStore(s => s.parameterSchema);
+
+  // Display label + unit for each swept variable: geometry params from the
+  // schema, plus the load angle γ (not a geometry param, so add it explicitly).
+  const varMeta: VarMeta = React.useMemo(() => {
+    const m: VarMeta = { gamma_deg: { label: 'γ load angle', unit: '°' } };
+    parameterSchema.forEach(p => { m[p.name] = { label: p.label, unit: p.unit }; });
+    return m;
+  }, [parameterSchema]);
   const refineFront = useMotorStore(s => s.refineFront);
   const refineRunning = useMotorStore(s => s.refineRunning);
   const refineProgress = useMotorStore(s => s.refineProgress);
@@ -114,7 +139,7 @@ const ParetoResults: React.FC<{ result: OptimizationResult }> = ({ result }) => 
   const applyDesign = (d: OptDesignPoint) => {
     const geoOverrides: Record<string, number> = {};
     Object.entries(d.overrides || {}).forEach(([k, v]) => {
-      if (!OPERATING_KEYS.has(k)) geoOverrides[k] = v as number;
+      if (!NON_GEOM_KEYS.has(k)) geoOverrides[k] = v as number;
     });
     if (Object.keys(geoOverrides).length) updateGeometryViaApi(geoOverrides as any);
     if (d.current_a) updateOperatingPoint(0, { current_a: d.current_a, rpm: d.rpm });
@@ -198,7 +223,7 @@ const ParetoResults: React.FC<{ result: OptimizationResult }> = ({ result }) => 
                 stroke={s.elig ? '#94a3b8' : '#f87171'}
                 strokeOpacity={s.elig ? 0.7 : 0.4} strokeWidth={1.5} />
             ))}
-            <RcTooltip content={<ParetoTooltip />} cursor={{ strokeDasharray: '3 3' }} />
+            <RcTooltip content={<ParetoTooltip varMeta={varMeta} />} cursor={{ strokeDasharray: '3 3' }} />
             <Legend wrapperStyle={{ fontSize: 10, paddingTop: 6 }} iconSize={9}
               formatter={(v: string) => <span style={{ marginRight: 10, color: '#94a3b8' }}>{v}</span>} />
             <Scatter name="filtered" data={filtered} fill="#7f1d1d" fillOpacity={0.45} />
@@ -221,7 +246,11 @@ const ParetoResults: React.FC<{ result: OptimizationResult }> = ({ result }) => 
               <TableCell align="right">ripple&nbsp;%</TableCell>
               <TableCell align="right">mass</TableCell>
               <TableCell align="right">loss&nbsp;[W]</TableCell>
-              {varNames.map(n => <TableCell key={n} align="right">{n}</TableCell>)}
+              {varNames.map(n => (
+                <TableCell key={n} align="right">
+                  {varMeta[n]?.label ?? n}{varMeta[n]?.unit ? ` [${varMeta[n].unit}]` : ''}
+                </TableCell>
+              ))}
               <TableCell />
             </TableRow>
           </TableHead>

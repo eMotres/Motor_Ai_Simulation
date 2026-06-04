@@ -123,9 +123,9 @@ const SweepConfigPanel: React.FC = () => {
     optimizationError,
   } = useMotorStore();
 
-  // FEM scan settings: frames over 1/6 of the electrical period (one 6·k ripple
-  // cycle — ~6 frames catch the ripple amplitude cheaply) and the geometry cap.
-  const [scanSteps, setScanSteps] = React.useState(6);
+  // FEM scan settings: frames per FULL electrical period (losses need a whole
+  // period; 18 = 3 samples per 6·k ripple cycle) and the geometry cap.
+  const [scanSteps, setScanSteps] = React.useState(18);
   const [maxGeom,   setMaxGeom]   = React.useState(24);
 
   useEffect(() => {
@@ -173,10 +173,10 @@ const SweepConfigPanel: React.FC = () => {
         {sweepCount > 0 && (
           <Chip size="small" label={`~${estimateRuns()} variants`} variant="outlined" sx={{ height: 18, fontSize: 10 }} />
         )}
-        <Tooltip title="FEM frames over 1/6 of the electrical period (one cycle of the dominant 6·k torque ripple). ~6 frames catch the ripple amplitude in 6× fewer solves than a full period. Refine the front over a full period afterwards." placement="top">
-          <TextField label="pts /⅙T" type="number" size="small" value={scanSteps}
-            onChange={e => setScanSteps(Math.max(3, Math.min(12, Math.round(+e.target.value) || 6)))}
-            inputProps={{ min: 3, max: 12, style: { fontSize: 11, padding: '3px 6px', width: 38 } }}
+        <Tooltip title="FEM frames per FULL electrical period. Losses (iron/magnet eddy via dB/dt) need a whole period to be correct. 18 = 3 samples per 6·k ripple cycle; 36 resolves the ripple finely (slower). Snapped to a divisor of 72 slip nodes." placement="top">
+          <TextField label="steps/T" type="number" size="small" value={scanSteps}
+            onChange={e => setScanSteps(Math.max(6, Math.min(72, Math.round(+e.target.value) || 18)))}
+            inputProps={{ min: 6, max: 72, style: { fontSize: 11, padding: '3px 6px', width: 38 } }}
             InputLabelProps={{ sx: { fontSize: 10 } }} sx={{ ml: 1 }} />
         </Tooltip>
         <Tooltip title="Cap on the number of geometries evaluated (each is a real FEM transient × 2 currents). Sweep grids and optimize spreads are subsampled to this." placement="top">

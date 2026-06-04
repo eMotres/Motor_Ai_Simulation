@@ -307,10 +307,11 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
             _scan_state.update(total=len(tasks) + 1, done=0)
         points: List[Any] = [None] * len(tasks)
 
-        # Sweep only 1/6 of the electrical period — one cycle of the dominant
-        # 6·k torque ripple — so ``steps`` (~6) frames capture the ripple
-        # amplitude in 6× fewer FEM solves than a full period.
-        _NPER = 1.0 / 6.0
+        # Sweep a FULL electrical period: the iron/magnet eddy losses are
+        # computed from dB/dt and need the whole period for a correct frequency
+        # content (a 1/6-period window inflated them ~2-5× → wrong efficiency).
+        # ``steps`` frames/period — 18 gives 3 samples per 6·k ripple cycle.
+        _NPER = 1.0
 
         def _do(i_t):
             i, (gi, oi, ov, I) = i_t

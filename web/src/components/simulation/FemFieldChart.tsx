@@ -312,54 +312,56 @@ const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode }>
       return g;
     }
 
-    // |B| — flat per-triangle jet.  Skip DOM_OUTER and HARD-CLIP vmax to
-    // the typical iron saturation (~1.8 T).  Without this cap, the 1/4-
-    // sector model's sharp-corner spikes (tens of T near the radial cut)
-    // dominate the LUT and squash the whole stator into one dark-blue
-    // band.  Using a physically-motivated cap keeps the iron variation
-    // visible — same trick Ansys applies via the "Auto-fit colour scale"
-    // toggle.
-    // Build the |B| distribution from interior triangles only (skip the
-    // far-field DOM_OUTER ring).  vmax = 95-percentile capped at 1.8 T
-    // matches the iron saturation knee — wide enough that air-gap +
-    // stator teeth + yoke each get their own colour band, narrow enough
-    // that sharp-corner spikes from the missing anti-periodic BC don't
-    // dominate the LUT.
+    // |B| — SMOOTH, nodal-averaged jet (like Ansys).  B = ∇A_z is constant per
+    // P1 triangle, so a flat per-triangle fill looks faceted ("scary").  Instead
+    // we average each triangle's |B| onto its 3 nodes (AREA-WEIGHTED) and colour
+    // PER-VERTEX, exactly like the A_z field — Three.js then interpolates the
+    // colour smoothly across every triangle → a continuous gradient, no facets.
+    // vmax = 95-percentile of the interior |B|, hard-capped at 1.8 T (iron
+    // saturation knee) so 1/4-sector sharp-corner spikes don't squash the LUT.
+    const nV = vertices.length;
+    const bSum = new Float64Array(nV);
+    const wSum = new Float64Array(nV);
     const interiorB: number[] = [];
     for (let ti = 0; ti < triangles.length; ti++) {
       if (domain_per_tri[ti] === DOM_OUTER) continue;
-      interiorB.push(Bmag_per_tri[ti]);
+      const [ia, ib, ic] = triangles[ti];
+      const ax = vertices[ia][0], ay = vertices[ia][1];
+      const bx = vertices[ib][0], by = vertices[ib][1];
+      const cx = vertices[ic][0], cy = vertices[ic][1];
+      const area = Math.abs((bx - ax) * (cy - ay) - (cx - ax) * (by - ay)) * 0.5 || 1e-12;
+      const bm = Bmag_per_tri[ti];
+      interiorB.push(bm);
+      bSum[ia] += bm * area; wSum[ia] += area;
+      bSum[ib] += bm * area; wSum[ib] += area;
+      bSum[ic] += bm * area; wSum[ic] += area;
     }
     const vmaxPct = pctl(interiorB, 95);
     const vmax = Math.min(Math.max(vmaxPct, 0.05), 1.8);
-    const nTri = triangles.length;
-    const positions = new Float32Array(nTri * 3 * 3);
-    const colors    = new Float32Array(nTri * 3 * 3);
-    let p = 0; let c = 0;
-    // 11 discrete bands like the Ansys reference image — easier to read
-    // contour structure than a continuous gradient.
-    const N_B_BANDS = 11;
-    for (let i = 0; i < nTri; i++) {
-      // hide outer ring
-      if (domain_per_tri[i] === DOM_OUTER) continue;
-      const tt = triangles[i];
-      const t  = Math.min(1, Math.max(0, Bmag_per_tri[i] / vmax));
-      const [rr, gg, bb] = jetBands(t, N_B_BANDS);
-      for (const vi of tt) {
-        positions[p++] = vertices[vi][0] * S;
-        positions[p++] = vertices[vi][1] * S;
-        positions[p++] = 0;
-        colors[c++] = rr / 255;
-        colors[c++] = gg / 255;
-        colors[c++] = bb / 255;
-      }
+
+    const keep = triangles.map((_, ti) => domain_per_tri[ti] !== DOM_OUTER);
+    const positions = new Float32Array(nV * 3);
+    const colors    = new Float32Array(nV * 3);
+    for (let i = 0; i < nV; i++) {
+      positions[3 * i]     = vertices[i][0] * S;
+      positions[3 * i + 1] = vertices[i][1] * S;
+      positions[3 * i + 2] = 0;
+      const bnode = wSum[i] > 0 ? bSum[i] / wSum[i] : 0;
+      const t = Math.min(1, Math.max(0, bnode / vmax));
+      const [rr, gg, bb] = jet01(t);          // continuous → smooth gradient
+      colors[3 * i]     = rr / 255;
+      colors[3 * i + 1] = gg / 255;
+      colors[3 * i + 2] = bb / 255;
     }
-    // Trim allocated arrays to actual size (we may have skipped tris)
-    const trimPos = positions.subarray(0, p);
-    const trimCol = colors.subarray(0, c);
+    const indexArr: number[] = [];
+    for (let i = 0; i < triangles.length; i++) {
+      if (!keep[i]) continue;
+      indexArr.push(triangles[i][0], triangles[i][1], triangles[i][2]);
+    }
     const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.BufferAttribute(trimPos, 3));
-    g.setAttribute('color',    new THREE.BufferAttribute(trimCol, 3));
+    g.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    g.setAttribute('color',    new THREE.BufferAttribute(colors, 3));
+    g.setIndex(new THREE.BufferAttribute(new Uint32Array(indexArr), 1));
     (g as any).userData = { Bmag_vmax: vmax };
     return g;
   }, [payload, mode]);
@@ -679,7 +681,7 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
             }
             const vmax = Math.min(Math.max(pct(Bs, 95), 0.05), 1.8);
             return <ColorBar vmin={0} vmax={vmax} unit="T"
-              lut={(t) => jetBands(t, 11)}/>;
+              lut={(t) => jet01(t)}/>;
           }
           if (mode === 'Demag') {
             return <ColorBar vmin={0} vmax={1} unit="Demag-Coef"

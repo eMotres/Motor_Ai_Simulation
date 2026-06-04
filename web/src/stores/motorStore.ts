@@ -155,6 +155,7 @@ interface MotorState {
   updateVariation: (paramName: string, variation: Partial<ParameterVariation>) => void;
   updateOperatingPoint: (index: 0 | 1, point: Partial<OperatingPoint>) => void;
   updateRippleThreshold: (threshold: number) => void;
+  updateGammaSweep: (patch: Partial<import('../types/motor').GammaSweep>) => void;
   initVariationsFromSchema: () => void;
 
   // Design optimization (FEM Pareto scan)
@@ -212,6 +213,7 @@ export const useMotorStore = create<MotorState>()(
           { current_a: 88, rpm: 3950 },
         ],
         rippleThreshold: 0.05,
+        gammaSweep: { enabled: false, min: 0, max: 30, step: 5 },
       },
 
       setGeometryUpdating: (v) => set({ isGeometryUpdating: v }),
@@ -629,6 +631,14 @@ export const useMotorStore = create<MotorState>()(
           sweepConfig: { ...state.sweepConfig, rippleThreshold: threshold },
         })),
 
+      updateGammaSweep: (patch) =>
+        set((state) => ({
+          sweepConfig: {
+            ...state.sweepConfig,
+            gammaSweep: { ...(state.sweepConfig.gammaSweep ?? { enabled: false, min: 0, max: 30, step: 5 }), ...patch },
+          },
+        })),
+
       initVariationsFromSchema: () => {
         const { parameterSchema, geometry, sweepConfig } = get();
         const existing = sweepConfig.variations;
@@ -663,6 +673,13 @@ export const useMotorStore = create<MotorState>()(
           .filter(([, v]) => v.mode !== 'fixed')
           .map(([name, v]) => ({ name, min: Number(v.min), max: Number(v.max),
                                  mode: v.mode, step: Number(v.step) }));
+
+        // Load-angle γ as a swept operating variable (its own section).
+        const gs = sweepConfig.gammaSweep;
+        if (gs?.enabled && gs.max > gs.min) {
+          variables.push({ name: 'gamma_deg', min: Number(gs.min), max: Number(gs.max),
+                           mode: 'sweep' as any, step: Number(gs.step) });
+        }
 
         // Each geometry evaluated at BOTH operating currents → two FEM points
         // joined by a load-line segment.

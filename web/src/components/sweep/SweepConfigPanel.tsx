@@ -117,6 +117,7 @@ const SweepConfigPanel: React.FC = () => {
     sweepConfig,
     updateOperatingPoint,
     updateRippleThreshold,
+    updateGammaSweep,
     connectedToApi,
     initVariationsFromSchema,
     runOptimization,
@@ -297,6 +298,34 @@ const SweepConfigPanel: React.FC = () => {
           </Box>
 
           <Divider sx={{ mb: 2.5 }} />
+
+          {/* ── Load-angle γ sweep ── */}
+          <Box sx={{ display: 'flex', alignItems: 'center', mb: 0.5 }}>
+            <Typography variant="overline" color="text.secondary" sx={{ fontSize: 10, letterSpacing: 1, flex: 1 }}>
+              Load angle γ sweep
+            </Typography>
+            <ToggleButtonGroup exclusive size="small"
+              value={sweepConfig.gammaSweep?.enabled ? 'on' : 'off'}
+              onChange={(_, v) => v && updateGammaSweep({ enabled: v === 'on' })}
+              sx={{ height: 22 }}>
+              <ToggleButton value="off" sx={{ px: 1, py: 0, fontSize: 10 }}>off</ToggleButton>
+              <ToggleButton value="on"  color="primary" sx={{ px: 1, py: 0, fontSize: 10 }}>sweep</ToggleButton>
+            </ToggleButtonGroup>
+          </Box>
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
+            Current-vector advance from the q-axis (°). γ=0 → max torque; γ&gt;0 → field weakening. Swept as an extra variable.
+          </Typography>
+          <Box sx={{ display: 'flex', gap: 1, mb: 3, opacity: sweepConfig.gammaSweep?.enabled ? 1 : 0.4 }}>
+            {(['min', 'max', 'step'] as const).map(k => (
+              <TextField key={k} label={k} type="number" size="small"
+                disabled={!sweepConfig.gammaSweep?.enabled}
+                value={sweepConfig.gammaSweep?.[k] ?? 0}
+                onChange={e => updateGammaSweep({ [k]: parseFloat(e.target.value) })}
+                InputProps={{ endAdornment: <InputAdornment position="end">°</InputAdornment> }}
+                inputProps={{ step: k === 'step' ? 1 : 5, style: { fontSize: 12 } }}
+                sx={{ flex: 1 }} />
+            ))}
+          </Box>
 
           <Typography variant="overline" color="text.secondary" sx={{ fontSize: 10, letterSpacing: 1, display: 'block', mb: 0.5 }}>
             Torque Ripple Constraint

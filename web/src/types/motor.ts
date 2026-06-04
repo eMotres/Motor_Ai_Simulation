@@ -143,10 +143,18 @@ export interface OperatingPoint {
   rpm: number;
 }
 
+export interface GammaSweep {
+  enabled: boolean;
+  min: number;
+  max: number;
+  step: number;
+}
+
 export interface SweepConfig {
   variations: VariationConfig;
   operatingPoints: [OperatingPoint, OperatingPoint];
   rippleThreshold: number;
+  gammaSweep?: GammaSweep;
 }
 
 // ── Design optimization (Pareto search) ───────────────────────────────────────

@@ -14,7 +14,8 @@ from typing import Dict, Any
 
 
 def run_one(overrides: Dict[str, float], current_a: float, steps: int,
-            coil_temp_c: float, n_periods: float = 1.0) -> Dict[str, Any]:
+            coil_temp_c: float, n_periods: float = 1.0,
+            gamma_deg: float = 0.0) -> Dict[str, Any]:
     """Run the sliding-band transient for one candidate and return mean
     performance metrics (torque, efficiency, ripple, losses, mass).
 
@@ -37,7 +38,7 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
     nper = max(1e-3, float(n_periods))
     nspp = max(4, int(round(int(steps) / nper)))
     d = fem_transient_sliding_band(
-        n_steps_per_period=nspp, n_periods=nper, gamma_deg=0.0,
+        n_steps_per_period=nspp, n_periods=nper, gamma_deg=float(gamma_deg),
         I_phase_rms=float(current_a), mesh_size_mm=4.0, min_size_mm=0.3,
         n_sectors=4, coil_temp_c=float(coil_temp_c), geo_override=overrides)
 
@@ -64,7 +65,8 @@ if __name__ == "__main__":
     try:
         res = run_one(spec["overrides"], spec["current_a"],
                       spec.get("steps", 40), spec.get("coil_temp_c", 120.0),
-                      n_periods=spec.get("n_periods", 1.0))
+                      n_periods=spec.get("n_periods", 1.0),
+                      gamma_deg=spec.get("gamma_deg", 0.0))
         sys.stdout.write("@@RESULT@@" + json.dumps({"ok": True, "res": res}))
     except Exception as e:  # noqa: BLE001
         sys.stdout.write("@@RESULT@@" + json.dumps({"ok": False, "error": str(e)}))

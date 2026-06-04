@@ -46,15 +46,16 @@ _SCAN_WORKERS = 5            # concurrent FEM subprocesses
 
 
 def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
-                     coil_temp_c: float, n_periods: float = 1.0) -> Dict[str, Any]:
-    """Evaluate ONE (geometry, current) with the real sliding-band transient in
-    an isolated subprocess (FEM/LLVM crash → failed design, not a dead API).
+                     coil_temp_c: float, n_periods: float = 1.0,
+                     gamma_deg: float = 0.0) -> Dict[str, Any]:
+    """Evaluate ONE (geometry, current, γ) with the real sliding-band transient
+    in an isolated subprocess (FEM/LLVM crash → failed design, not a dead API).
     Rebuilds the CadQuery geometry + gmsh mesh for the candidate in-memory.
     ``steps`` frames over ``n_periods`` of the electrical period."""
     import subprocess, sys, json
     spec = json.dumps({"overrides": overrides, "current_a": current_a,
                        "steps": int(steps), "coil_temp_c": float(coil_temp_c),
-                       "n_periods": float(n_periods)})
+                       "n_periods": float(n_periods), "gamma_deg": float(gamma_deg)})
     try:
         proc = subprocess.run(
             [sys.executable, "-m", "motor_ai_sim.optimization.refine_proc"],
@@ -303,10 +304,11 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
     from motor_ai_sim.optimization.optimizer import _pareto_front
     try:
         geos = _enumerate_geometries(variables, int(max_geom), n_opt=4, seed=seed)
-        tasks = []  # (geom_id, op_index, overrides, current)
+        tasks = []  # (geom_id, op_index, overrides, current, op_gamma)
         for gi, ov in enumerate(geos):
             for oi, op in enumerate(operating_points):
-                tasks.append((gi, oi, ov, float(op.get("current_a", 85.0))))
+                tasks.append((gi, oi, ov, float(op.get("current_a", 85.0)),
+                              float(op.get("gamma_deg", 0.0))))
         with _scan_lock:
             _scan_state.update(total=len(tasks) + 1, done=0)
         points: List[Any] = [None] * len(tasks)
@@ -318,8 +320,13 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
         _NPER = 1.0
 
         def _do(i_t):
-            i, (gi, oi, ov, I) = i_t
-            out = _subprocess_eval(ov, I, steps, coil_temp_c, n_periods=_NPER)
+            i, (gi, oi, ov, I, opg) = i_t
+            # γ as a swept variable overrides the operating-point γ; it is NOT a
+            # geometry key, so split it out before building the mesh.
+            g = float(ov.get("gamma_deg", opg))
+            geo_ov = {k: v for k, v in ov.items() if k != "gamma_deg"}
+            out = _subprocess_eval(geo_ov, I, steps, coil_temp_c,
+                                   n_periods=_NPER, gamma_deg=g)
             return i, _point_from_eval(out, ov, I, gi, oi, ripple_max)
 
         # Manual executor so a Stop can cancel the not-yet-started tasks (the

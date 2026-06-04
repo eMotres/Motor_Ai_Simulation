@@ -162,6 +162,7 @@ interface MotorState {
   optimizationProgress: { done: number; total: number } | null;
   optimizationError: string | null;
   runOptimization: (stepsPerPeriod?: number, maxGeometries?: number) => Promise<void>;
+  cancelOptimization: () => Promise<void>;
 
   // FEM refinement of selected (front) designs
   refineRunning: boolean;
@@ -693,6 +694,14 @@ export const useMotorStore = create<MotorState>()(
         } catch (e: any) {
           set({ optimizationError: String(e?.message ?? e), optimizationRunning: false });
         }
+      },
+
+      // Stop the running scan — the backend returns whatever it computed so far,
+      // and the polling loop in runOptimization picks up that partial result.
+      cancelOptimization: async () => {
+        try {
+          await fetch(`${API_BASE_URL}/api/optimization/scan/cancel`, { method: 'POST' });
+        } catch { /* ignore */ }
       },
 
       // ── FEM refinement of the Pareto-front designs ──────────────────────────

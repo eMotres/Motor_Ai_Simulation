@@ -17,6 +17,7 @@ import {
   Tooltip,
 } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import StopIcon      from '@mui/icons-material/Stop';
 import ShowChartIcon from '@mui/icons-material/ShowChart';
 import CloseIcon     from '@mui/icons-material/Close';
 import TuneIcon      from '@mui/icons-material/Tune';
@@ -117,6 +118,7 @@ const SweepConfigPanel: React.FC = () => {
     connectedToApi,
     initVariationsFromSchema,
     runOptimization,
+    cancelOptimization,
     optimizationResult,
     optimizationRunning,
     optimizationProgress,
@@ -185,20 +187,24 @@ const SweepConfigPanel: React.FC = () => {
             inputProps={{ min: 1, max: 400, style: { fontSize: 11, padding: '3px 6px', width: 38 } }}
             InputLabelProps={{ sx: { fontSize: 10 } }} />
         </Tooltip>
-        <Button
-          variant="contained"
-          startIcon={optimizationRunning
-            ? <CircularProgress size={14} color="inherit" />
-            : <PlayArrowIcon />}
-          disabled={sweepEntries.length === 0 || !connectedToApi || optimizationRunning}
-          size="small"
-          sx={{ flexShrink: 0, ml: 1 }}
-          onClick={() => runOptimization(scanSteps, maxGeom)}
-        >
-          {optimizationRunning
-            ? `Scanning ${optimizationProgress?.done ?? 0}/${optimizationProgress?.total ?? 0}…`
-            : 'Run FEM scan'}
-        </Button>
+        {optimizationRunning ? (
+          <Button
+            variant="contained" color="error" startIcon={<StopIcon />}
+            size="small" sx={{ flexShrink: 0, ml: 1 }}
+            onClick={() => cancelOptimization()}
+          >
+            {`Stop ${optimizationProgress?.done ?? 0}/${optimizationProgress?.total ?? 0}`}
+          </Button>
+        ) : (
+          <Button
+            variant="contained" startIcon={<PlayArrowIcon />}
+            disabled={sweepEntries.length === 0 || !connectedToApi}
+            size="small" sx={{ flexShrink: 0, ml: 1 }}
+            onClick={() => runOptimization(scanSteps, maxGeom)}
+          >
+            Run FEM scan
+          </Button>
+        )}
       </Box>
 
       {/* ── Body: config (two columns) + results ── */}

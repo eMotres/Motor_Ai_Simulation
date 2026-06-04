@@ -318,9 +318,13 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
             out = _subprocess_eval(ov, I, steps, coil_temp_c, n_periods=_NPER)
             return i, _point_from_eval(out, ov, I, gi, oi, ripple_max)
 
-        with ThreadPoolExecutor(max_workers=_SCAN_WORKERS) as ex:
-            futs = [ex.submit(_do, it) for it in enumerate(tasks)]
-            done = 0
+        # Manual executor so a Stop can cancel the not-yet-started tasks (the
+        # ~5 already-running subprocesses just finish in the background); the
+        # partial results computed so far are kept and shown.
+        ex = ThreadPoolExecutor(max_workers=_SCAN_WORKERS)
+        futs = [ex.submit(_do, it) for it in enumerate(tasks)]
+        done = 0
+        try:
             for fut in as_completed(futs):
                 if _scan_state["cancel"]:
                     break
@@ -329,6 +333,8 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                 done += 1
                 with _scan_lock:
                     _scan_state["done"] = done
+        finally:
+            ex.shutdown(wait=False, cancel_futures=True)
         points = [p for p in points if p is not None]
 
         # segments: the two operating points of one geometry
@@ -346,11 +352,15 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
         pareto_indices = sorted([pool[i][0] for i in front_local],
                                 key=lambda i: points[i]["torque_per_mass_Nm_kg"])
 
-        # baseline = current motor at operating point 0 (real FEM)
-        base_out = _subprocess_eval({}, float(operating_points[0].get("current_a", 85.0)),
-                                    steps, coil_temp_c, n_periods=_NPER)
-        baseline = _point_from_eval(base_out, {}, float(operating_points[0].get("current_a", 85.0)),
-                                    -1, 0, ripple_max)
+        # baseline = current motor at operating point 0 (real FEM) — skipped on
+        # a Stop so the partial result shows immediately.
+        if _scan_state["cancel"]:
+            baseline = {"feasible": False, "fem": True, "overrides": {}}
+        else:
+            base_out = _subprocess_eval({}, float(operating_points[0].get("current_a", 85.0)),
+                                        steps, coil_temp_c, n_periods=_NPER)
+            baseline = _point_from_eval(base_out, {}, float(operating_points[0].get("current_a", 85.0)),
+                                        -1, 0, ripple_max)
         with _scan_lock:
             _scan_state["done"] = len(tasks) + 1
 

@@ -2476,18 +2476,17 @@ def _arkkio_torque(mesh, A_nodal: np.ndarray, r_in_m: float, r_out_m: float,
 
 def band_limit_torque(T_series, n_steps_per_period, n_periods):
     """Reconstruct T(t) from the electrical orders a BALANCED three-phase machine
-    can physically produce — DC + the 6·k orders (6th/12th… torque ripple, and the
-    order-12 cogging of a 24/28 machine) — discarding everything else.
+    can physically produce — DC + EVERY 6·k order (6, 12, 18, 24, …): the
+    6th/12th… torque ripple and the order-12 cogging of a 24/28 machine — and
+    discard everything else.
 
     Both transient pipelines inject NON-physical torque ripple at forbidden
     orders: the sliding band steps the rotor across discrete slip nodes, and the
     remesh-per-frame path gives every frame a slightly different mesh.  Both errors
     spread broadband over orders a 3-phase drive cannot make (1,2,4,5,7,…) and
-    NEITHER converges with mesh refinement → they are numerical, not real.  We keep
-    order 6 unconditionally (the fundamental 3-phase ripple harmonic) and the higher
-    6·k orders only when they rise >3× above the numerical noise floor (the median
-    amplitude of the forbidden bins).  The MEAN (calibrated average torque) is
-    preserved exactly.
+    NEITHER converges with mesh refinement → they are numerical, not real.  So we
+    simply KEEP THE MULTIPLES OF 6 and drop the rest — no amplitude threshold, no
+    special-casing.  The MEAN (calibrated average torque) is preserved exactly.
 
     Returns (T_phys_list, ripple_phys_pct, ripple_raw_pct)."""
     x = np.asarray(T_series, float); n = x.size
@@ -2503,13 +2502,8 @@ def band_limit_torque(T_series, n_steps_per_period, n_periods):
     if n < 2 * step:                                 # too few frames to resolve order 6
         return x.tolist(), raw_rip, raw_rip
     F = np.fft.rfft(x - avg)
-    amp = np.abs(F)
-    forbidden = [amp[k] for k in range(1, F.size) if k % step != 0]
-    floor = float(np.median(forbidden)) if forbidden else 0.0
     G = np.zeros_like(F)
-    for k in range(step, F.size, step):
-        if k == step or amp[k] > 3.0 * floor:
-            G[k] = F[k]
+    G[step:F.size:step] = F[step:F.size:step]        # keep DC + every 6·k harmonic
     xf = np.fft.irfft(G, n=n) + avg
     return xf.tolist(), _pp(xf), raw_rip
 

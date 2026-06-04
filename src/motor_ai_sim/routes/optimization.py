@@ -12,9 +12,13 @@ the Simulation tab.
 """
 from __future__ import annotations
 
+import json
 import logging
 import math
+import re
 import threading
+from datetime import datetime
+from pathlib import Path
 from typing import List, Optional, Dict, Any
 
 from fastapi import APIRouter, HTTPException
@@ -420,3 +424,80 @@ def scan_cancel():
     with _scan_lock:
         _scan_state["cancel"] = True
     return {"cancelled": True}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SAVED RESULTS — persist a scan result to disk so it survives restarts; list,
+# load and delete them.  Stored as plain JSON files under optimization_saves/.
+# ─────────────────────────────────────────────────────────────────────────────
+_SAVE_DIR = Path(__file__).resolve().parents[3] / "optimization_saves"
+_ID_RE = re.compile(r"^[A-Za-z0-9_]+$")
+
+
+class SaveRequest(BaseModel):
+    name: str = ""
+    result: Dict[str, Any] = Field(default_factory=dict)
+    config: Dict[str, Any] = Field(default_factory=dict)   # variables/operating/steps
+
+
+def _safe(sid: str) -> Path:
+    if not _ID_RE.match(sid or ""):
+        raise HTTPException(status_code=400, detail="bad id")
+    return _SAVE_DIR / f"{sid}.json"
+
+
+@router.post("/saved")
+def save_result(req: SaveRequest):
+    """Persist a scan result to disk; returns its id."""
+    if not req.result:
+        raise HTTPException(status_code=400, detail="no result to save")
+    _SAVE_DIR.mkdir(exist_ok=True)
+    ts = datetime.now()
+    sid = ts.strftime("%Y%m%d_%H%M%S_%f")
+    name = (req.name or "").strip() or f"scan {ts.strftime('%Y-%m-%d %H:%M')}"
+    entry = {"id": sid, "name": name, "created_at": ts.isoformat(timespec="seconds"),
+             "config": req.config, "result": req.result}
+    _safe(sid).write_text(json.dumps(entry), encoding="utf-8")
+    return {"id": sid, "name": name, "created_at": entry["created_at"]}
+
+
+@router.get("/saved")
+def list_saved():
+    """List saved results (metadata only), newest first."""
+    _SAVE_DIR.mkdir(exist_ok=True)
+    out = []
+    for f in sorted(_SAVE_DIR.glob("*.json"), reverse=True):
+        try:
+            d = json.loads(f.read_text(encoding="utf-8"))
+            r = d.get("result", {})
+            cfg = d.get("config", {})
+            out.append({
+                "id": d["id"], "name": d.get("name", d["id"]),
+                "created_at": d.get("created_at", ""),
+                "n_geometries": r.get("n_geometries"),
+                "n_points": r.get("n_total_points"),
+                "n_built": r.get("n_built"),
+                "n_front": len(r.get("pareto_indices", [])),
+                "steps_per_period": cfg.get("steps_per_period") or r.get("steps_per_period"),
+                "variables": [v.get("name") for v in (r.get("variables") or [])],
+            })
+        except Exception:  # noqa: BLE001
+            continue
+    return {"saved": out}
+
+
+@router.get("/saved/{sid}")
+def get_saved(sid: str):
+    """Load a saved result (full data)."""
+    f = _safe(sid)
+    if not f.exists():
+        raise HTTPException(status_code=404, detail="not found")
+    return json.loads(f.read_text(encoding="utf-8"))
+
+
+@router.delete("/saved/{sid}")
+def delete_saved(sid: str):
+    f = _safe(sid)
+    if f.exists():
+        f.unlink()
+    return {"deleted": sid}

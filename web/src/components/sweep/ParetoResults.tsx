@@ -52,7 +52,10 @@ const ParetoResults: React.FC<{ result: OptimizationResult }> = ({ result }) => 
   const refineProgress = useMotorStore(s => s.refineProgress);
   const refineResults = useMotorStore(s => s.refineResults);
   const refineError = useMotorStore(s => s.refineError);
+  const saveCurrentResult = useMotorStore(s => s.saveCurrentResult);
   const [steps, setSteps] = React.useState(40);
+  const [saveName, setSaveName] = React.useState('');
+  const [saved, setSaved] = React.useState(false);
 
   const pts = result.points;
   const frontSet = new Set(result.pareto_indices);
@@ -159,6 +162,17 @@ const ParetoResults: React.FC<{ result: OptimizationResult }> = ({ result }) => 
           ≈1–2 min per point · in-memory (Simulation untouched)
         </Typography>
         {refineError && <Typography color="error" variant="caption">{refineError}</Typography>}
+
+        <Box sx={{ flex: 1 }} />
+        {/* Save this scan result to disk */}
+        <TextField placeholder="name…" size="small" value={saveName}
+          onChange={e => { setSaveName(e.target.value); setSaved(false); }}
+          inputProps={{ style: { fontSize: 11, padding: '4px 8px', width: 110 } }} />
+        <Button variant="contained" size="small" color="info"
+          onClick={async () => { await saveCurrentResult(saveName); setSaved(true); setSaveName(''); }}
+          sx={{ textTransform: 'none', fontSize: 12 }}>
+          {saved ? 'Saved ✓' : 'Save'}
+        </Button>
       </Box>
 
       <Box sx={{ height: 340, bgcolor: 'rgba(255,255,255,0.02)', borderRadius: 1, p: 1 }}>

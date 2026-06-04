@@ -14,6 +14,7 @@ import type {
   ParameterVariation,
   OptimizationResult,
   OptDesignPoint,
+  SavedRunMeta,
 } from '../types/motor';
 import {
   defaultGeometryParams,
@@ -170,6 +171,13 @@ interface MotorState {
   refineResults: OptDesignPoint[] | null;
   refineError: string | null;
   refineFront: (stepsPerPeriod?: number) => Promise<void>;
+
+  // Saved scan results (persisted to disk)
+  savedRuns: SavedRunMeta[];
+  refreshSaved: () => Promise<void>;
+  saveCurrentResult: (name: string) => Promise<void>;
+  loadSaved: (id: string) => Promise<void>;
+  deleteSaved: (id: string) => Promise<void>;
 }
 
 export const useMotorStore = create<MotorState>()(
@@ -701,6 +709,47 @@ export const useMotorStore = create<MotorState>()(
       cancelOptimization: async () => {
         try {
           await fetch(`${API_BASE_URL}/api/optimization/scan/cancel`, { method: 'POST' });
+        } catch { /* ignore */ }
+      },
+
+      // ── Saved scan results (disk) ───────────────────────────────────────────
+      savedRuns: [],
+      refreshSaved: async () => {
+        try {
+          const r = await fetch(`${API_BASE_URL}/api/optimization/saved`);
+          const d = await r.json();
+          set({ savedRuns: d.saved || [] });
+        } catch { /* ignore */ }
+      },
+      saveCurrentResult: async (name: string) => {
+        const { optimizationResult } = get();
+        if (!optimizationResult) return;
+        const config = {
+          steps_per_period: optimizationResult.steps_per_period,
+          operating_points: optimizationResult.operating_points,
+          variables: optimizationResult.variables,
+          ripple_max_pct: optimizationResult.ripple_max_pct,
+        };
+        try {
+          await fetch(`${API_BASE_URL}/api/optimization/saved`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, result: optimizationResult, config }),
+          });
+          await get().refreshSaved();
+        } catch { /* ignore */ }
+      },
+      loadSaved: async (id: string) => {
+        try {
+          const r = await fetch(`${API_BASE_URL}/api/optimization/saved/${id}`);
+          if (!r.ok) return;
+          const d = await r.json();
+          set({ optimizationResult: d.result as OptimizationResult, refineResults: null });
+        } catch { /* ignore */ }
+      },
+      deleteSaved: async (id: string) => {
+        try {
+          await fetch(`${API_BASE_URL}/api/optimization/saved/${id}`, { method: 'DELETE' });
+          await get().refreshSaved();
         } catch { /* ignore */ }
       },
 

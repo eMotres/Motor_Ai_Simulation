@@ -21,9 +21,11 @@ import StopIcon      from '@mui/icons-material/Stop';
 import ShowChartIcon from '@mui/icons-material/ShowChart';
 import CloseIcon     from '@mui/icons-material/Close';
 import TuneIcon      from '@mui/icons-material/Tune';
+import FolderOpenIcon from '@mui/icons-material/FolderOpen';
 import { useMotorStore } from '../../stores/motorStore';
 import type { VariationMode } from '../../types/motor';
 import ParetoResults from './ParetoResults';
+import SavedRunsDialog from './SavedRunsDialog';
 
 // ── Card for one sweep/optimize parameter ─────────────────────────────────────
 
@@ -129,6 +131,10 @@ const SweepConfigPanel: React.FC = () => {
   // period; 18 = 3 samples per 6·k ripple cycle) and the geometry cap.
   const [scanSteps, setScanSteps] = React.useState(18);
   const [maxGeom,   setMaxGeom]   = React.useState(24);
+  const [savedOpen, setSavedOpen] = React.useState(false);
+  const savedRuns = useMotorStore(s => s.savedRuns);
+  const refreshSaved = useMotorStore(s => s.refreshSaved);
+  useEffect(() => { refreshSaved(); }, [refreshSaved]);
 
   useEffect(() => {
     if (parameterSchema.length > 0) initVariationsFromSchema();
@@ -175,6 +181,13 @@ const SweepConfigPanel: React.FC = () => {
         {sweepCount > 0 && (
           <Chip size="small" label={`~${estimateRuns()} variants`} variant="outlined" sx={{ height: 18, fontSize: 10 }} />
         )}
+        <Tooltip title="Saved scan results — load or delete (stored on disk)" placement="top">
+          <Button size="small" variant="outlined" startIcon={<FolderOpenIcon sx={{ fontSize: 14 }} />}
+            onClick={() => setSavedOpen(true)}
+            sx={{ ml: 1, fontSize: 10, py: 0.2, textTransform: 'none', flexShrink: 0 }}>
+            Saved{savedRuns.length ? ` (${savedRuns.length})` : ''}
+          </Button>
+        </Tooltip>
         <Tooltip title="FEM frames per FULL electrical period. Losses (iron/magnet eddy via dB/dt) need a whole period to be correct. 18 = 3 samples per 6·k ripple cycle; 36 resolves the ripple finely (slower). Snapped to a divisor of 72 slip nodes." placement="top">
           <TextField label="steps/T" type="number" size="small" value={scanSteps}
             onChange={e => setScanSteps(Math.max(6, Math.min(72, Math.round(+e.target.value) || 18)))}
@@ -317,6 +330,8 @@ const SweepConfigPanel: React.FC = () => {
         )}
         {optimizationResult && <ParetoResults result={optimizationResult} />}
       </Box>
+
+      <SavedRunsDialog open={savedOpen} onClose={() => setSavedOpen(false)} />
     </Box>
   );
 };

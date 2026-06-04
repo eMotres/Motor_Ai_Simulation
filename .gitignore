@@ -78,3 +78,6 @@ src/cadquery_cache/
 # Local-only
 .scratch/
 logfile_uv*.txt
+
+# Saved optimization scan results (runtime, not source)
+optimization_saves/

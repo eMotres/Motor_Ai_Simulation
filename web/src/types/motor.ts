@@ -175,6 +175,18 @@ export interface OptDesignPoint {
   overrides: Record<string, number>;
 }
 
+export interface SavedRunMeta {
+  id: string;
+  name: string;
+  created_at: string;
+  n_geometries?: number;
+  n_points?: number;
+  n_built?: number;
+  n_front?: number;
+  steps_per_period?: number;
+  variables?: string[];
+}
+
 export interface OptimizationResult {
   points: OptDesignPoint[];
   segments: [number, number][];          // index pairs (same geometry, I1 & I2)

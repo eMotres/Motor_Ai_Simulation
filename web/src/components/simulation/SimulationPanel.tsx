@@ -10,7 +10,10 @@ import {
   Box, Typography, TextField, Button, Chip, Divider,
   LinearProgress, Alert, Tooltip, IconButton, Paper,
   CircularProgress, Dialog, DialogTitle, DialogContent, DialogActions,
+  Checkbox, FormControlLabel,
 } from '@mui/material';
+import ShowChartIcon from '@mui/icons-material/ShowChart';
+import { useMotorStore } from '../../stores/motorStore';
 import PlayArrowIcon    from '@mui/icons-material/PlayArrow';
 import StopIcon         from '@mui/icons-material/Stop';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
@@ -138,6 +141,18 @@ const SimulationPanel: React.FC = () => {
   const [frequency,     setFrequency]     = usePersisted('frequency', 921.67);
   const [rpm,           setRpm]           = usePersisted('rpm',       3950.0);
   const [phaseOffset,   setPhaseOffset]   = usePersisted('gamma',     0.0);   // γ [deg]
+
+  // γ-as-optimization-variable: a checkbox here marks the load angle γ for the
+  // Sweep/Optimize grid (like the chart icon on geometry params).  When checked,
+  // gamma_deg becomes a sweep variation; the user sets its min/max/step on the
+  // Sweep tab card.  γ is an operating variable — it rotates the current vector,
+  // not the mesh — so it never rebuilds geometry.
+  const gammaIsVar    = useMotorStore(s => (s.sweepConfig.variations['gamma_deg']?.mode ?? 'fixed') !== 'fixed');
+  const updateVariation = useMotorStore(s => s.updateVariation);
+  const toggleGammaVar = (on: boolean) =>
+    updateVariation('gamma_deg', on
+      ? { mode: 'sweep', min: phaseOffset, max: phaseOffset + 30, step: 5 }
+      : { mode: 'fixed' });
   const [coilTemp,      setCoilTemp]      = usePersisted('coilTemp',  120.0); // °C
   const [endWinding,    setEndWinding]    = usePersisted('endWinding', 0.0);  // k_end (editable)
   // Last geometry-derived k_end we seeded the cell with — lets us re-seed on a
@@ -468,6 +483,28 @@ const SimulationPanel: React.FC = () => {
               disabled={isRunning}
               FormHelperTextProps={{ sx: { fontSize: 10, color: '#475569', mx: 0 } }}
             />
+            {/* Mark γ as a Sweep/Optimize variable (like the chart icon on a
+                geometry param).  Checked → gamma_deg joins the Sweep grid; set
+                its range on the Sweep tab card. */}
+            <Tooltip title="Add the load angle γ to the Sweep/Optimize grid. Range (min/max/step) is set on the Sweep tab. γ rotates the current vector only — the mesh is unchanged." placement="right">
+              <FormControlLabel
+                sx={{ mt: -0.5, ml: 0.25 }}
+                control={
+                  <Checkbox
+                    size="small"
+                    checked={gammaIsVar}
+                    onChange={e => toggleGammaVar(e.target.checked)}
+                    icon={<ShowChartIcon sx={{ fontSize: 18, color: '#475569' }} />}
+                    checkedIcon={<ShowChartIcon sx={{ fontSize: 18, color: '#60a5fa' }} />}
+                  />
+                }
+                label={
+                  <Typography variant="caption" sx={{ color: gammaIsVar ? '#60a5fa' : '#94a3b8' }}>
+                    Sweep γ (optimization variable)
+                  </Typography>
+                }
+              />
+            </Tooltip>
 
             {/* ── Copper-loss physics: temperature + end-winding ──
                 The 2-D field only sees the in-slot (active) copper.  ρ_Cu rises

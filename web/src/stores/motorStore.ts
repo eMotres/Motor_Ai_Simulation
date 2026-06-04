@@ -155,7 +155,6 @@ interface MotorState {
   updateVariation: (paramName: string, variation: Partial<ParameterVariation>) => void;
   updateOperatingPoint: (index: 0 | 1, point: Partial<OperatingPoint>) => void;
   updateRippleThreshold: (threshold: number) => void;
-  updateGammaSweep: (patch: Partial<import('../types/motor').GammaSweep>) => void;
   initVariationsFromSchema: () => void;
 
   // Design optimization (FEM Pareto scan)
@@ -213,7 +212,6 @@ export const useMotorStore = create<MotorState>()(
           { current_a: 88, rpm: 3950 },
         ],
         rippleThreshold: 0.05,
-        gammaSweep: { enabled: false, min: 0, max: 30, step: 5 },
       },
 
       setGeometryUpdating: (v) => set({ isGeometryUpdating: v }),
@@ -631,14 +629,6 @@ export const useMotorStore = create<MotorState>()(
           sweepConfig: { ...state.sweepConfig, rippleThreshold: threshold },
         })),
 
-      updateGammaSweep: (patch) =>
-        set((state) => ({
-          sweepConfig: {
-            ...state.sweepConfig,
-            gammaSweep: { ...(state.sweepConfig.gammaSweep ?? { enabled: false, min: 0, max: 30, step: 5 }), ...patch },
-          },
-        })),
-
       initVariationsFromSchema: () => {
         const { parameterSchema, geometry, sweepConfig } = get();
         const existing = sweepConfig.variations;
@@ -655,6 +645,9 @@ export const useMotorStore = create<MotorState>()(
             step: param.step ?? (current !== 0 ? Math.abs(current) * 0.1 : 1),
           };
         }
+        // Preserve non-schema variables (e.g. the load angle γ, selected from the
+        // Simulation tab) — they aren't in parameterSchema but must survive re-init.
+        if (existing['gamma_deg']) variations['gamma_deg'] = existing['gamma_deg'];
         set((state) => ({
           sweepConfig: { ...state.sweepConfig, variations },
         }));
@@ -669,17 +662,15 @@ export const useMotorStore = create<MotorState>()(
         const { sweepConfig } = get();
         // Design variables = GEOMETRY params marked sweep/optimize (sweep →
         // grid, optimize → spread). current/rpm come from the operating points.
+        // Design variables = every variation marked sweep/optimize.  This
+        // includes geometry params (selected via the Geometry chart icon) AND
+        // the load angle gamma_deg (selected via the Simulation tab checkbox);
+        // the backend splits gamma_deg out of the geometry override and threads
+        // it to the FEM current vector, so the mesh is unchanged.
         const variables = Object.entries(sweepConfig.variations)
           .filter(([, v]) => v.mode !== 'fixed')
           .map(([name, v]) => ({ name, min: Number(v.min), max: Number(v.max),
                                  mode: v.mode, step: Number(v.step) }));
-
-        // Load-angle γ as a swept operating variable (its own section).
-        const gs = sweepConfig.gammaSweep;
-        if (gs?.enabled && gs.max > gs.min) {
-          variables.push({ name: 'gamma_deg', min: Number(gs.min), max: Number(gs.max),
-                           mode: 'sweep' as any, step: Number(gs.step) });
-        }
 
         // Each geometry evaluated at BOTH operating currents → two FEM points
         // joined by a load-line segment.

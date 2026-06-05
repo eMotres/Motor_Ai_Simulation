@@ -81,3 +81,8 @@ logfile_uv*.txt
 
 # Saved optimization scan results (runtime, not source)
 optimization_saves/
+
+# Modulus PINN transient progress files
+pinn_progress.json
+pinn_result.json
+pinn_run.log

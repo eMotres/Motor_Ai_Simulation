@@ -22,6 +22,7 @@ import ErrorIcon        from '@mui/icons-material/Error';
 import BoltIcon         from '@mui/icons-material/Bolt';
 import SimulationCharts from './SimulationCharts';
 import PhysicsDashboard from './PhysicsDashboard';
+import PinnTrainingPanel from './PinnTrainingPanel';
 
 // NOTE: using port 8001 (new backend with loss calculations)
 // Change back to 8000 after restarting the main backend
@@ -838,6 +839,11 @@ const SimulationPanel: React.FC = () => {
         {/* Analytical SimulationCharts (currents / voltages / losses) removed —
             the FEM transient panel inside PhysicsDashboard below shows all
             three waveforms computed from the actual mesh solve. */}
+
+        {/* ── Modulus PINN training (GPU, runs in WSL) — live vs FEM ── */}
+        <Box sx={{ mb: 2 }}>
+          <PinnTrainingPanel />
+        </Box>
 
         {/* ── Physics dashboard — analytical + FEM-comparable ── */}
         <PhysicsDashboard

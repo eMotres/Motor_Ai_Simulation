@@ -19,6 +19,7 @@ from motor_ai_sim.routes.geometry import router as geometry_router
 from motor_ai_sim.routes.pipeline import router as pipeline_router
 from motor_ai_sim.routes.simulation import router as simulation_router
 from motor_ai_sim.routes.optimization import router as optimization_router
+from motor_ai_sim.routes.pinn import router as pinn_router
 from motor_ai_sim.services.geometry_service import get_current_geometry, params_to_dict
 from motor_ai_sim import materials as mat_lib
 
@@ -47,6 +48,7 @@ app.include_router(geometry_router)
 app.include_router(pipeline_router)
 app.include_router(simulation_router)
 app.include_router(optimization_router)
+app.include_router(pinn_router)
 
 
 @app.on_event("startup")

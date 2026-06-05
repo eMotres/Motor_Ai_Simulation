@@ -44,6 +44,27 @@ def write_progress(d):
     os.replace(tmp, PROGRESS)
 
 
+MAX_COOL_WAIT = 600   # s — give up (abort) rather than ever train a hot GPU
+
+
+def wait_until_cool(done, total, hist):
+    """Block until the GPU is below the resume threshold, writing a 'cooling'
+    progress so the UI shows WHY it's paused.  Returns True if cool enough to
+    proceed, or False to ABORT (never train a hot GPU)."""
+    t = gpu_temp()
+    waited = 0
+    while t >= TEMP_PAUSE_C:
+        write_progress({"running": True, "step": done, "max_steps": total,
+                        "torque_pinn": hist[-1]["torque"] if hist else 0.0,
+                        "torque_fem": TORQUE_FEM,
+                        "b_max": hist[-1].get("b_max", 0.0) if hist else 0.0,
+                        "gpu_temp": t, "cooling": True, "history": hist})
+        if waited >= MAX_COOL_WAIT:
+            return False
+        time.sleep(5); waited += 5; t = gpu_temp()
+    return True
+
+
 def main():
     total = int(sys.argv[1]) if len(sys.argv) > 1 else 3000
     cfg = SimConfig.from_motor_config()
@@ -53,10 +74,6 @@ def main():
     cfg.batch_size_boundary = 512
     gp = params_from_config()
 
-    solver = MagnetostaticsSolver2D(cfg, gp)
-    solver.build()               # assemble domain once
-
-    from physicsnemo.sym.solver import Solver
     hist = []
     t0 = time.time()
     write_progress({"running": True, "step": 0, "max_steps": total, "torque_pinn": 0.0,
@@ -67,19 +84,27 @@ def main():
     except OSError:
         pass
 
+    def abort():
+        write_progress({"running": False, "done": False, "aborted": True,
+                        "reason": f"GPU stayed >= {TEMP_PAUSE_C} C — cool it (fans/undervolt) and retry",
+                        "step": 0, "max_steps": total, "gpu_temp": gpu_temp(),
+                        "torque_pinn": hist[-1]["torque"] if hist else 0.0,
+                        "torque_fem": TORQUE_FEM, "history": hist})
+        print("PINN_ABORT gpu_too_hot", flush=True)
+
+    # don't even BUILD the domain (touches the GPU) while it's hot
+    if not wait_until_cool(0, total, hist):
+        abort(); return
+
+    solver = MagnetostaticsSolver2D(cfg, gp)
+    solver.build()               # assemble domain once
+    from physicsnemo.sym.solver import Solver
+
     done = 0
     while done < total:
-        # ── thermal guard: wait if the GPU is too hot ────────────────────────
-        t = gpu_temp()
-        waited = 0
-        while t >= TEMP_PAUSE_C and waited < 120:
-            write_progress({"running": True, "step": done, "max_steps": total,
-                            "torque_pinn": hist[-1]["torque"] if hist else 0.0,
-                            "torque_fem": TORQUE_FEM, "b_max": hist[-1].get("b_max", 0.0) if hist else 0.0,
-                            "gpu_temp": t, "cooling": True, "history": hist})
-            time.sleep(5); waited += 5; t = gpu_temp()
-            if t <= TEMP_RESUME_C:
-                break
+        # thermal guard — ABORT (never train) if the GPU won't cool below resume
+        if not wait_until_cool(done, total, hist):
+            abort(); return
 
         target = min(done + CHUNK, total)
         cfg.max_steps = target

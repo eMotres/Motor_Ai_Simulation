@@ -6,7 +6,7 @@
  */
 import React from 'react';
 import {
-  Box, Typography, Button, TextField, LinearProgress, Chip, Tooltip,
+  Box, Typography, Button, TextField, LinearProgress, Chip, Tooltip, Alert,
 } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import StopIcon from '@mui/icons-material/Stop';
@@ -99,6 +99,15 @@ const PinnTrainingPanel: React.FC = () => {
             sx={{ height: 20, fontSize: 11, color: '#fff', bgcolor: tempColor }} />
         </Tooltip>
       </Box>
+
+      {(prog?.cooling || (t != null && t >= 82)) && (
+        <Alert severity="warning" sx={{ mb: 1.5, py: 0.25, fontSize: 12 }}>
+          <b>GPU too hot ({t ?? '?'} °C) — training PAUSED by the thermal guard.</b>{' '}
+          It resumes only below ~72 °C. Your GPU idles hot, so cool it first
+          (AC power + max fans, clean vents, Afterburner temp-limit / undervolt),
+          otherwise training can't progress.
+        </Alert>
+      )}
 
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 1.5, flexWrap: 'wrap' }}>
         <TextField label="steps" type="number" size="small" value={steps} disabled={busy}

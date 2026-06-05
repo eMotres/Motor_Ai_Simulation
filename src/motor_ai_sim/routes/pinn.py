@@ -94,4 +94,14 @@ def stop():
                        timeout=10, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception:
         pass
+    # reset the progress file so the UI doesn't show a stale "running" state
+    try:
+        d = json.loads(_PROGRESS.read_text()) if _PROGRESS.exists() else {}
+    except Exception:
+        d = {}
+    d.update({"running": False, "stopped": True})
+    try:
+        _PROGRESS.write_text(json.dumps(d))
+    except OSError:
+        pass
     return {"stopped": True}

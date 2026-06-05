@@ -221,6 +221,8 @@ class MagnetostaticsSolver2D:
             activation_fn=_act_enum(cfg.activation),
         )
         nodes = [net.make_node(name="A_phasor_network")]
+        self._net = net   # keep the arch so postprocess can eval it directly
+                          # (physicsnemo-sym 2.4 dropped solver.get_network_output)
 
         # ── 2. Phase currents at this rotor angle ──────────────────────────
         pole_pairs = gp.num_poles // 2
@@ -426,20 +428,31 @@ class MagnetostaticsSolver2D:
           Iron losses  : Bertotti on |B|_rms from PINN B field
           Torque       : Maxwell stress tensor on air-gap circle
         """
-        try:
-            net_fn = solver.get_network_output
-        except AttributeError:
-            net_fn = None
-
+        import torch
         gp    = self.gp
         omega = 2 * math.pi * self.cfg.frequency_hz
 
+        # physicsnemo-sym 2.4 dropped solver.get_network_output, so evaluate the
+        # trained arch (a torch Module, trained in-place) directly.
+        net = getattr(self, "_net", None)
+        if net is not None:
+            try:
+                _dev = next(net.parameters()).device
+            except StopIteration:
+                _dev = torch.device("cpu")
+            net.eval()
+
         def _eval(x: np.ndarray, y: np.ndarray) -> tuple:
-            """Return (Ar, Ai) arrays evaluated at (x, y) points."""
-            if net_fn is not None:
-                out = net_fn({"x": x.reshape(-1, 1), "y": y.reshape(-1, 1)})
-                return out["Ar"].ravel(), out["Ai"].ravel()
-            return np.zeros_like(x), np.zeros_like(y)
+            """Return (Ar, Ai) arrays evaluated at (x, y) points by calling the
+            trained FullyConnectedArch on (x, y) input tensors."""
+            if net is None:
+                return np.zeros_like(x), np.zeros_like(y)
+            xi = torch.as_tensor(np.asarray(x).reshape(-1, 1), dtype=torch.float32, device=_dev)
+            yi = torch.as_tensor(np.asarray(y).reshape(-1, 1), dtype=torch.float32, device=_dev)
+            with torch.no_grad():
+                out = net({"x": xi, "y": yi})
+            return (out["Ar"].detach().cpu().numpy().reshape(-1),
+                    out["Ai"].detach().cpu().numpy().reshape(-1))
 
         # ── Build evaluation grid ─────────────────────────────────────────
         x_g, y_g = make_polar_grid(gp.r_shaft_in, gp.r_stator_out,

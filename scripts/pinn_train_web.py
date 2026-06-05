@@ -20,10 +20,12 @@ PROGRESS = os.path.join(ROOT, "pinn_progress.json")
 RESULT   = os.path.join(ROOT, "pinn_result.json")
 
 # ── thermal guard ─────────────────────────────────────────────────────────────
-CHUNK        = 150     # steps per burst
-COOLDOWN_S   = 4.0     # always pause between bursts
-TEMP_PAUSE_C = 82      # if GPU hotter than this, wait until it cools
-TEMP_RESUME_C = 72     # resume once back below this
+CHUNK        = 100     # steps per burst (short → guard can act sooner)
+COOLDOWN_S   = 5.0     # always pause between bursts
+# The GPU targets ~87 C (throttles there, undamaged); the laptop froze at ~90 C.
+# So pause a touch under the GPU target, leaving ~5 C margin to the freeze point.
+TEMP_PAUSE_C = 84      # if GPU hotter than this, wait until it cools
+TEMP_RESUME_C = 78     # resume once back below this
 TORQUE_FEM   = 24.87   # FEM baseline for the live comparison
 
 

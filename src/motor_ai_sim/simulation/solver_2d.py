@@ -68,6 +68,7 @@ try:
         PointwiseBoundaryConstraint,
     )
     from modulus.sym.models.fully_connected import FullyConnectedArch
+    from modulus.sym.models.fourier_net import FourierNetArch
     from modulus.sym.node import Node
     from modulus.sym.key import Key
     from modulus.sym.hydra import ModulusConfig
@@ -84,6 +85,7 @@ except ImportError:
         from physicsnemo.sym.dataset import DictPointwiseDataset
         from physicsnemo.sym.loss import PointwiseLossNorm
         from physicsnemo.sym.models.fully_connected import FullyConnectedArch
+        from physicsnemo.sym.models.fourier_net import FourierNetArch
         from physicsnemo.sym.node import Node
         from physicsnemo.sym.key import Key
         from physicsnemo.sym.models.activation import Activation
@@ -213,13 +215,41 @@ class MagnetostaticsSolver2D:
         omega = 2 * math.pi * cfg.frequency_hz   # electrical angular frequency
 
         # ── 1. Network: maps (x, y) → [Ar, Ai] ───────────────────────────
-        net = FullyConnectedArch(
-            input_keys=[Key("x"), Key("y")],
-            output_keys=[Key("Ar"), Key("Ai")],
-            layer_size=cfg.layer_size,
-            nr_layers=cfg.num_layers,
-            activation_fn=_act_enum(cfg.activation),
-        )
+        # NON-DIMENSIONALISE the I/O via Key scale=(mean, std):
+        #   * inputs  x,y are in METRES (±0.075) → tanh sits in its linear
+        #     regime and the MLP can't form the localised slot/magnet features.
+        #     Scaling by R = r_stator_out feeds the net coords in [-1, 1].
+        #   * outputs A_z ~ O(0.01-0.05) Wb/m.  Scaling the raw O(1) net output
+        #     by A0 conditions the BC (A_z=0) vs PDE residual balance.
+        R_scale = gp.r_stator_out
+        A0_scale = 0.05                      # characteristic |A_z| [Wb/m]
+        in_keys  = [Key("x", scale=(0.0, R_scale)),
+                    Key("y", scale=(0.0, R_scale))]
+        out_keys = [Key("Ar", scale=(0.0, A0_scale)),
+                    Key("Ai", scale=(0.0, A0_scale))]
+        # FOURIER FEATURES beat the spectral bias of a plain tanh/SiLU MLP, which
+        # can only learn the lowest harmonic and so completely misses the 24-slot
+        # / 28-pole high-frequency structure.  At normalised radius ~0.8 the 28
+        # poles are angular mode ~14, so we need per-axis frequencies up to ~16.
+        if getattr(cfg, "use_fourier", True):
+            freqs = list(range(0, 17))       # axis frequencies 0..16
+            net = FourierNetArch(
+                input_keys=in_keys,
+                output_keys=out_keys,
+                frequencies=("axis", freqs),
+                frequencies_params=("axis", freqs),
+                layer_size=cfg.layer_size,
+                nr_layers=cfg.num_layers,
+                activation_fn=_act_enum(cfg.activation),
+            )
+        else:
+            net = FullyConnectedArch(
+                input_keys=in_keys,
+                output_keys=out_keys,
+                layer_size=cfg.layer_size,
+                nr_layers=cfg.num_layers,
+                activation_fn=_act_enum(cfg.activation),
+            )
         nodes = [net.make_node(name="A_phasor_network")]
         self._net = net   # keep the arch so postprocess can eval it directly
                           # (physicsnemo-sym 2.4 dropped solver.get_network_output)
@@ -329,6 +359,21 @@ class MagnetostaticsSolver2D:
         # TANGENTIAL magnetization along the magnet bottom edge, alternating
         # with polarity — same model as the analytical Green's-function solver
         # in routes/simulation.py::get_field2d.
+        # Equivalent magnet source.  For a *position-dependent* tangential field
+        # M = polarity·(Br/μ₀)·φ̂(φ) the bound current density is
+        #   J_mag = curl(M)_z = (1/r)·∂(r·M_φ)/∂r = M_φ/r,
+        # a genuine VOLUME source the interior collocation can sample.  This is a
+        # FIRST approximation: the FEM uses a *constant* M-vector per magnet
+        # (curl = 0 inside, source = a surface current on the magnet edges) and
+        # captures it via its weak form ∫(Mx ∂v/∂y − My ∂v/∂x).  A strong-form
+        # PINN can't see a surface delta, so the exact net-current-neutral fix is
+        # a WINDOWED M (smooth M→0 at the magnet edges, turning the surface
+        # current into a thin samplable body layer).  TODO: window for exactness.
+        # The M_φ/r form already injects the 28-pole structure (a harmonic ~14
+        # appears in the air-gap A_z spectrum).
+        from sympy import Symbol as _Sym, sqrt as _sqrt
+        _xs = _Sym("x"); _ys = _Sym("y")
+        _r  = _sqrt(_xs**2 + _ys**2)
         pole_pitch = 2 * math.pi / gp.num_poles
         for mag_name, mag_geo, polarity in self.geo.magnet_domains():
             i = int(mag_name.split("_")[1])
@@ -336,8 +381,10 @@ class MagnetostaticsSolver2D:
             # Tangent (+φ̂) at angle φ_c is (-sin(φ_c), cos(φ_c))
             Mx = polarity * (-math.sin(phi_c))
             My = polarity * (+math.cos(phi_c))
+            M_phi   = polarity * cfg.Br_magnet / MU_0       # |M| [A/m], signed
+            src_r   = M_phi / _r                            # curl(M)_z [A/m²]
             pm_ac_pde = MagnetostaticsAC2D(
-                mu_r=1.05, sigma=gp.sigma_mag, omega=omega, Jr=0.0,
+                mu_r=1.05, sigma=gp.sigma_mag, omega=omega, src_r=src_r,
             )
             nodes += pm_ac_pde.make_nodes()
             _add_pointwise(mag_name, mag_geo, n_pts=500)
@@ -352,6 +399,10 @@ class MagnetostaticsSolver2D:
                 geometry=self.geo["full"],
                 outvar={"Ar": 0, "Ai": 0},
                 batch_size=cfg.batch_size_boundary,
+                # Weight the Dirichlet BC so it's comparable to the now-O(1)
+                # PDE residual.  (At weight 1 it was swamped by the un-scaled PDE;
+                # at 100 with the rescaled PDE it OVER-constrained A→0 everywhere.)
+                lambda_weighting={"Ar": 20.0, "Ai": 20.0},
             ),
             name="bc_outer_dirichlet",
         )

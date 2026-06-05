@@ -102,27 +102,21 @@ def main():
     solver.build()               # assemble domain once
     from physicsnemo.sym.solver import Solver
 
-    done = 0
-    while done < total:
-        # thermal guard — ABORT (never train) if the GPU won't cool below resume
-        if not wait_until_cool(done, total, hist):
-            abort(); return
+    # ── ONE accumulating solve ──────────────────────────────────────────────
+    # Re-creating the Solver per chunk RE-INITIALISES the network (verified: the
+    # torque was bit-identical across chunks), so it never accumulated.  Train in
+    # a single solve over the full step budget instead — the net actually learns.
+    cfg.max_steps = total
+    write_progress({"running": True, "step": 0, "max_steps": total, "torque_pinn": 0.0,
+                    "torque_fem": TORQUE_FEM, "b_max": 0.0, "gpu_temp": gpu_temp(),
+                    "training": True, "history": hist})
+    s = Solver(cfg=solver._make_modulus_cfg(), domain=solver._domain)
+    s.solve()
 
-        target = min(done + CHUNK, total)
-        cfg.max_steps = target
-        s = Solver(cfg=solver._make_modulus_cfg(), domain=solver._domain)
-        s.solve()                                  # resumes from network_dir checkpoint
-        done = target
-
-        res = solver._postprocess(s)
-        tq = float(res.get("torque_Nm") or 0.0)
-        bmax = float(res.get("B_max_T") or 0.0)
-        hist.append({"step": done, "torque": round(tq, 3), "b_max": round(bmax, 3)})
-        write_progress({"running": True, "step": done, "max_steps": total,
-                        "torque_pinn": round(tq, 3), "torque_fem": TORQUE_FEM,
-                        "b_max": round(bmax, 3), "gpu_temp": gpu_temp(),
-                        "sec": round(time.time() - t0), "history": hist})
-        time.sleep(COOLDOWN_S)                      # let the GPU breathe
+    res = solver._postprocess(s)
+    tq = float(res.get("torque_Nm") or 0.0)
+    bmax = float(res.get("B_max_T") or 0.0)
+    hist.append({"step": total, "torque": round(tq, 3), "b_max": round(bmax, 3)})
 
     out = {"torque_Nm": tq, "B_max_T": bmax, "B_mean_T": float(res.get("B_mean_T") or 0.0),
            "P_cu_W": float(res.get("P_cu_total_W") or 0.0),

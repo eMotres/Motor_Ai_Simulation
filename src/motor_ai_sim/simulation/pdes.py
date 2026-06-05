@@ -239,25 +239,46 @@ class MagnetostaticsAC2D(PDE):
         omega: float = 0.0,
         Jr:    float = 0.0,
         Ji:    float = 0.0,
+        src_r=None,
+        src_i=None,
     ):
+        """src_r / src_i : optional SYMPY expressions (in A/m²) giving a
+        spatially-varying source current density.  When given they REPLACE the
+        constant Jr / Ji.  Used for the permanent-magnet equivalent current
+        density  J_mag = curl(M)_z = M_φ/r  (tangential magnetisation), which is
+        a genuine VOLUME source the interior collocation can sample."""
         x  = Symbol("x")
         y  = Symbol("y")
         Ar = Function("Ar")(x, y)
         Ai = Function("Ai")(x, y)
 
-        nu = 1.0 / (MU_0 * mu_r)
+        # Resolve the source term (constant scalar → Number, or symbolic expr).
+        src_real = (MU_0 * src_r) if src_r is not None else Number(MU_0 * Jr)
+        src_imag = (MU_0 * src_i) if src_i is not None else Number(MU_0 * Ji)
 
-        # (4a) ν·ΔAr + ωσ·Ai + Jr = 0
+        # ── NON-DIMENSIONALISED residual ──────────────────────────────────
+        # The raw equation  ν·ΔA + ωσ·Ai + Jr = 0  has  ν = 1/(μ₀μ_r) ≈ 8·10⁵
+        # and source J ~ 10⁶, so its squared residual is ~10¹² while the
+        # Dirichlet BC residual (A_z)² ~ 10⁻⁴.  The optimiser then sees the BC
+        # as ~10¹⁶× smaller and ignores it → the homogeneous (linear) part of
+        # A_z floats free → a degenerate UNIFORM |B| field.  Multiplying the
+        # whole PDE by μ₀ rebalances it: the Laplacian coefficient becomes
+        # 1/μ_r ~ O(1) and the source becomes μ₀·J ~ O(1), comparable to the
+        # BC loss.  Same physics, vastly better-conditioned training.
+        inv_mur   = 1.0 / mu_r
+        mu0_sigma = MU_0 * omega * sigma   # μ₀ωσ
+
+        # (4a) (1/μ_r)·ΔAr + μ₀ωσ·Ai + μ₀·Jr = 0
         eq_real = (
-            nu * (diff(Ar, x, 2) + diff(Ar, y, 2))
-            + Number(omega * sigma) * Ai
-            + Number(Jr)
+            inv_mur * (diff(Ar, x, 2) + diff(Ar, y, 2))
+            + Number(mu0_sigma) * Ai
+            + src_real
         )
-        # (4b) ν·ΔAi − ωσ·Ar + Ji = 0
+        # (4b) (1/μ_r)·ΔAi − μ₀ωσ·Ar + μ₀·Ji = 0
         eq_imag = (
-            nu * (diff(Ai, x, 2) + diff(Ai, y, 2))
-            - Number(omega * sigma) * Ar
-            + Number(Ji)
+            inv_mur * (diff(Ai, x, 2) + diff(Ai, y, 2))
+            - Number(mu0_sigma) * Ar
+            + src_imag
         )
 
         self.equations = {

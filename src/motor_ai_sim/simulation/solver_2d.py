@@ -86,10 +86,21 @@ except ImportError:
         from physicsnemo.sym.models.fully_connected import FullyConnectedArch
         from physicsnemo.sym.node import Node
         from physicsnemo.sym.key import Key
+        from physicsnemo.sym.models.activation import Activation
         HAS_MODULUS = True
     except ImportError:
         HAS_MODULUS = False
         log.warning("NVIDIA Modulus not found — solver will run in dry-run mode.")
+
+
+def _act_enum(name):
+    """physicsnemo-sym 2.4 wants an Activation enum, not a string like 'tanh'
+    (old Modulus Sym accepted strings).  Map our config string → enum; fall back
+    to the raw string if the enum isn't importable (older Modulus)."""
+    try:
+        return getattr(Activation, str(name).upper())
+    except (NameError, AttributeError):
+        return name
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -207,7 +218,7 @@ class MagnetostaticsSolver2D:
             output_keys=[Key("Ar"), Key("Ai")],
             layer_size=cfg.layer_size,
             nr_layers=cfg.num_layers,
-            activation_fn=cfg.activation,
+            activation_fn=_act_enum(cfg.activation),
         )
         nodes = [net.make_node(name="A_phasor_network")]
 
@@ -657,8 +668,10 @@ class MagnetostaticsSolver2D:
             "optimizer": {
                 "_target_": "torch.optim.Adam",
                 "_params_": {
-                    "compute_gradients": "adam",
-                    "apply_gradients":   "adam",
+                    # physicsnemo-sym 2.4 renamed the strategy methods:
+                    # adam → adam_compute_gradients / adam_apply_gradients
+                    "compute_gradients": "adam_compute_gradients",
+                    "apply_gradients":   "adam_apply_gradients",
                 },
                 "lr":     cfg.learning_rate,
                 "betas":  [0.9, 0.999],

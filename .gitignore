@@ -86,3 +86,4 @@ optimization_saves/
 pinn_progress.json
 pinn_result.json
 pinn_run.log
+simulation_output/

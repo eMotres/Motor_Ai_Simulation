@@ -242,7 +242,31 @@ class CadQueryMotor:
             if magnet is not None:
                 rotor_solid = rotor_solid.cut(magnet) # Cut hole in rotor
                 self.parts[f'magnet_{i}'] = magnet    # Keep magnet separate
-        
+
+        # Round the sharp rotor corners in 3D too (rotor_fill_r) so the 3D
+        # viewer matches the 2D physics geometry.  CadQuery's BRep fillet has
+        # NO edge-length clamp (unlike the 2D vertex fillet), so a radius near
+        # the thin bridges (~rotor_house_height ≈ 1.2 mm) fails with
+        # StdFail_NotDone.  Try the requested radius, then shrink until it
+        # succeeds; keep the sharp solid if even the smallest try fails
+        # ("не ломай геометрию" — never return a broken solid).
+        _rfr = float(self.parameters.get('rotor_fill_r', 0.0) or 0.0)
+        if _rfr > 1e-4:
+            _applied = None
+            for _r in (_rfr, _rfr * 0.66, _rfr * 0.5, _rfr * 0.33, _rfr * 0.2):
+                try:
+                    _f = rotor_solid.edges('|Z').fillet(_r)
+                    if _f.val().isValid():
+                        rotor_solid = _f
+                        _applied = _r
+                        break
+                except Exception:
+                    continue
+            if _applied is None:
+                print(f"rotor_fill_r 3D fillet failed at all radii ({_rfr:.2f}mm) -- keeping sharp 3D rotor")
+            elif _applied < _rfr - 1e-6:
+                print(f"rotor_fill_r 3D: {_rfr:.2f}mm too big for the thin bridges, used {_applied:.2f}mm")
+
         self.parts['rotor_core'] = rotor_solid
         
         # 3. Individual Coils (one object per slot)

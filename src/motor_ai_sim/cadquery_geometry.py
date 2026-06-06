@@ -942,6 +942,22 @@ class CadQueryMotor:
         rotor_poly = rotor_disk.difference(unary_union(hole_polys))
         if not rotor_poly.is_valid:
             rotor_poly = rotor_poly.buffer(0)
+        # Round the rotor pole-tip sharp corners (rotor_fill_r) — same guarded
+        # vertex fillet as get_2d_polygons, so the Mesh tab shows the rounded
+        # rotor too.  Keep only if valid, >=85% area, same piece count (else
+        # keep sharp — never break the thin inter-magnet bridges).
+        _rfr = float(self.parameters.get('rotor_fill_r', 0.0) or 0.0)
+        if _rfr > 1e-4:
+            def _npoly(g): return len(g.geoms) if g.geom_type == 'MultiPolygon' else (0 if g.is_empty else 1)
+            try:
+                _f = _round_corners_vertex(rotor_poly, _rfr)
+                if not _f.is_valid: _f = _f.buffer(0)
+                if (_f.is_valid and not _f.is_empty
+                        and _f.area >= 0.85 * rotor_poly.area
+                        and _npoly(_f) == _npoly(rotor_poly)):
+                    rotor_poly = _f
+            except Exception as _e:
+                print(f"rotor_fill_r (mesh) failed ({_e}) -- keeping sharp rotor")
         r = _tri(rotor_poly, z=Z_ROTOR)
         if r: result['rotor_core'] = r
 

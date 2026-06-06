@@ -378,7 +378,11 @@ def main():
                             "b_max": round(float(bmax), 3), "gpu_temp": gpu_temp(),
                             "sector": True, "history": hist})
 
-    # final dump
+    # final dump + save the net so fields can be re-dumped without retraining
+    try:
+        torch.save(net.state_dict(), os.path.join(ROOT, "pinn_net.pt"))
+    except Exception:
+        pass
     dump_field(net, gp, dev)
     tq = sector_torque(net, gp, cfg, dev)
     write_progress({"running": False, "done": True, "step": total, "max_steps": total,
@@ -441,30 +445,67 @@ def sector_torque(net, gp, cfg, dev, n=720):
     return T
 
 
-def dump_field(net, gp, dev, N=240):
+def dump_field(net, gp, dev, N=260):
+    """Comprehensive field dump: A_z+flux lines, |B|, saturation map, B_x, B_y,
+    and the air-gap B_r/B_φ angular profile (the torque-producing components)."""
     import matplotlib; matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    SAT = 1.8                                  # steel knee [T]
     R = gp.r_stator_out
     xs = np.linspace(-R, R, N); X, Y = np.meshgrid(xs, xs)
-    Ar, Ai = eval_full(net, X.ravel(), Y.ravel(), dev)
-    Ar = Ar.reshape(N, N); Ai = Ai.reshape(N, N)
+    Ar, _ = eval_full(net, X.ravel(), Y.ravel(), dev)
+    Ar = Ar.reshape(N, N)
     rr = np.sqrt(X**2 + Y**2); mask = (rr > R) | (rr < gp.r_shaft_in)
     dx = xs[1] - xs[0]
     Bx = np.gradient(Ar, dx, axis=0); By = -np.gradient(Ar, dx, axis=1)
     B = np.sqrt(Bx**2 + By**2)
     mm = lambda a: np.ma.masked_where(mask, a)
-    fig, ax = plt.subplots(1, 3, figsize=(16, 5.2))
-    for a, d, t in ((ax[0], Ar, "A_z REAL [Wb/m]"), (ax[1], Ai, "A_z IMAG"),
-                    (ax[2], B, "|B| [T]")):
-        im = a.contourf(X * 1000, Y * 1000, mm(d), 40, cmap="jet")
-        a.set_title(t); a.set_aspect("equal"); plt.colorbar(im, ax=a, fraction=0.046)
-    for a in ax:
+    iron = ~mask & (((rr >= gp.r_stator_in) & (rr <= R)) | ((rr >= gp.r_shaft_in) & (rr <= gp.r_rotor_out)))
+    frac = 100.0 * (np.sum((B >= SAT) & iron) / max(np.sum(iron), 1))
+
+    fig, ax = plt.subplots(2, 3, figsize=(17, 10.6))
+    # 1 — A_z + flux lines
+    a = ax[0, 0]; im = a.contourf(X * 1000, Y * 1000, mm(Ar), 40, cmap="jet")
+    a.contour(X * 1000, Y * 1000, mm(Ar), 26, colors="k", linewidths=0.3, alpha=0.45)
+    a.set_title("A_z [Wb/m] + flux lines"); plt.colorbar(im, ax=a, fraction=0.046)
+    # 2 — |B|
+    a = ax[0, 1]; im = a.contourf(X * 1000, Y * 1000, mm(B), 40, cmap="jet")
+    a.set_title(f"|B| [T]   (max {mm(B).max():.2f} T)"); plt.colorbar(im, ax=a, fraction=0.046)
+    # 3 — saturation map
+    a = ax[0, 2]
+    a.contourf(X * 1000, Y * 1000, mm(B), 30, cmap="Greys", alpha=0.55)
+    sat = np.ma.masked_where(mask | (B < SAT), B)
+    im = a.contourf(X * 1000, Y * 1000, sat, 16, cmap="autumn")
+    a.set_title(f"Saturation: |B|>{SAT} T in red — {frac:.1f}% of iron\n(PINN is LINEAR μ_r=500 — no BH/saturation)")
+    # 4,5 — B_x, B_y
+    for a, d, t in ((ax[1, 0], Bx, "B_x [T]"), (ax[1, 1], By, "B_y [T]")):
+        vmax = float(np.nanmax(np.abs(mm(d))))
+        im = a.contourf(X * 1000, Y * 1000, mm(d), 40, cmap="RdBu_r", vmin=-vmax, vmax=vmax)
+        a.set_title(t); plt.colorbar(im, ax=a, fraction=0.046)
+    # 6 — air-gap B_r / B_phi vs angle
+    a = ax[1, 2]
+    rg = 0.5 * (gp.r_rotor_out + gp.r_stator_in); th = np.linspace(0, 2 * np.pi, 360, endpoint=False)
+    eps = 1e-4
+    ArA, _ = eval_full(net, (rg + eps) * np.cos(th), (rg + eps) * np.sin(th), dev)
+    ArB, _ = eval_full(net, (rg - eps) * np.cos(th), (rg - eps) * np.sin(th), dev)
+    Ar2, _ = eval_full(net, rg * np.cos(th + 1e-3), rg * np.sin(th + 1e-3), dev)
+    Ar0, _ = eval_full(net, rg * np.cos(th), rg * np.sin(th), dev)
+    B_r = (1.0 / rg) * (Ar2 - Ar0) / 1e-3
+    B_phi = -(ArA - ArB) / (2 * eps)
+    a.plot(np.degrees(th), B_r, lw=1.0, label="B_r (radial)")
+    a.plot(np.degrees(th), B_phi, lw=1.0, label="B_φ (tangential)")
+    a.set_title("Air-gap field vs angle  (∮B_r·B_φ → torque)")
+    a.set_xlabel("φ [deg]"); a.set_ylabel("B [T]"); a.set_xlim(0, 360)
+    a.legend(fontsize=8); a.grid(alpha=0.3)
+
+    for a in (ax[0, 0], ax[0, 1], ax[0, 2], ax[1, 0], ax[1, 1]):
+        a.set_aspect("equal"); a.set_xlabel("x [mm]")
         for rr_ in (gp.r_rotor_out * 1000, gp.r_stator_in * 1000):
-            th = np.linspace(0, 2 * np.pi, 200)
-            a.plot(rr_ * np.cos(th), rr_ * np.sin(th), "k-", lw=0.4, alpha=0.5)
-    plt.suptitle("Sector PINN (90°, anti-periodic) — full disk via symmetry")
-    plt.tight_layout(); plt.savefig(os.path.join(ROOT, "pinn_field.png"), dpi=85)
-    print(f"saved pinn_field.png  |B|max={mm(B).max():.3f}T mean={mm(B).mean():.3f}T", flush=True)
+            tt = np.linspace(0, 2 * np.pi, 200)
+            a.plot(rr_ * np.cos(tt), rr_ * np.sin(tt), "k-", lw=0.4, alpha=0.4)
+    plt.suptitle("Modulus PINN — all fields (90° sector → full disk via anti-periodic symmetry)", fontsize=13)
+    plt.tight_layout(); plt.savefig(os.path.join(ROOT, "pinn_field.png"), dpi=80)
+    print(f"saved pinn_field.png  |B|max={mm(B).max():.3f}T  sat>{SAT}T={frac:.1f}% of iron", flush=True)
 
 
 if __name__ == "__main__":

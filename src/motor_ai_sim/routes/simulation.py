@@ -28,20 +28,48 @@ _jobs: Dict[str, Dict] = {}
 
 # ── Module-level geometry cache (built once per server start) ─────────────────
 _motor_geom_cache: Dict = {}
+_motor_geom_ghash: list = [None]   # hash of the geometry the cache was built for
+
+def _current_geom_hash_and_params():
+    """Return (hash, params_dict) of the LIVE UI-edited geometry.
+
+    Falls back to (None, None) if the geometry service is unavailable, in which
+    case CadQueryMotor() reads config defaults.
+    """
+    import hashlib, json
+    try:
+        from motor_ai_sim.services.geometry_service import get_current_geometry
+        pd = get_current_geometry().to_dict()
+        h = hashlib.md5(json.dumps(pd, sort_keys=True, default=str).encode()).hexdigest()[:12]
+        return h, pd
+    except Exception:
+        return None, None
+
 
 def _get_motor_geom(rotor_angle_deg: float = 0.0):
     """Build (or return cached) CadQueryMotor 2D polygons.
 
-    Stator geometry is angle-independent (cached once).
-    Rotor+magnet geometry is cached per rotor_angle (rounded to 0.5°).
+    Cached per rotor_angle (rounded to 0.5°) AND per geometry hash: the moment
+    ANY geometry parameter changes (e.g. rotor_fill_r) the hash changes and the
+    whole angle cache is dropped, so the next field/torque render rebuilds with
+    the new geometry.  Previously the cache was keyed by angle ONLY and built
+    from config defaults, so radius edits were invisible until a full restart.
     """
     from motor_ai_sim.cadquery_geometry import CadQueryMotor
-    key = round(rotor_angle_deg * 2) / 2   # round to 0.5° steps
+    ghash, params_dict = _current_geom_hash_and_params()
 
+    if _motor_geom_ghash[0] != ghash:
+        _motor_geom_cache.clear()
+        _motor_geom_ghash[0] = ghash
+        log.info("geometry changed (hash=%s) — cleared field/torque poly cache", ghash)
+
+    key = round(rotor_angle_deg * 2) / 2   # round to 0.5° steps
     if key not in _motor_geom_cache:
         m = CadQueryMotor()
+        if params_dict:
+            m.set_parameters(params_dict)       # use LIVE params, not stale config
         _motor_geom_cache[key] = m.get_2d_polygons(rotor_angle_deg=key)
-        log.info("geometry cache miss — built polys for θ=%.1f°", key)
+        log.info("geometry cache miss — built polys for θ=%.1f° (hash=%s)", key, ghash)
 
     return _motor_geom_cache[key]
 
@@ -864,7 +892,12 @@ async def build_fem_mesh_2d(
     import math as _math
     import numpy as _np
 
+    # Include a hash of the LIVE geometry so editing any geometry parameter
+    # (e.g. rotor_fill_r) invalidates the mesh cache and rebuilds — previously
+    # the key had only mesh params, so geometry edits never showed up here.
+    _ghash, _params_dict = _current_geom_hash_and_params()
     key = (
+        _ghash,
         round(rotor_angle_deg * 2) / 2,
         round(mesh_size_mm, 2),
         round(surface_deviation, 4),
@@ -890,6 +923,8 @@ async def build_fem_mesh_2d(
 
     try:
         motor = CadQueryMotor()
+        if _params_dict:
+            motor.set_parameters(_params_dict)   # LIVE params, not stale config
         polys = motor.get_2d_polygons(rotor_angle_deg=rotor_angle_deg)
         # Cap the simplify tolerance hard: a large surface_deviation
         # Douglas-Peucker-flattens the rounded rotor-tooth / fillet ARCS into

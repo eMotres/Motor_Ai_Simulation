@@ -1,62 +1,90 @@
-"""Compare the geometry the Modulus PINN actually samples (MotorDomains2D —
-simple annular sectors + rotated rectangles) against the REAL motor geometry the
-FEM uses (CadQueryMotor.get_2d_polygons — trapezoid magnets, T-teeth, fillets).
+"""Geometry diagnostic: LEFT = the collocation points the PINN now samples INSIDE
+the real polygons (from pinn_geom.json, the same shapes the FEM uses);
+RIGHT = the real FEM polygons filled.  After the geometry-unification they MATCH.
 
-Run on the Windows Python (has shapely + the geometry modules):
-  python _geom_compare.py
+Run on Windows (writes geom_compare.png):  python _geom_compare.py
 """
-import os, sys
+import os, sys, json, math
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.path import Path as MplPath
 
-MM = 1000.0  # PINN domains are in metres; real polys are in mm
+ROOT = os.path.dirname(__file__)
+MM = 1000.0
 
-# ── REAL geometry (CadQuery / Shapely, mm) ───────────────────────────────────
-from motor_ai_sim.cadquery_geometry import CadQueryMotor
-motor = CadQueryMotor()
-polys = motor.get_2d_polygons(rotor_angle_deg=0.0)
+# regenerate the export if missing
+if not os.path.exists(os.path.join(ROOT, "pinn_geom.json")):
+    import subprocess
+    subprocess.run([sys.executable, os.path.join(ROOT, "_export_geom.py")], cwd=ROOT)
 
-# ── PINN geometry (MotorDomains2D, metres) ───────────────────────────────────
-from motor_ai_sim.simulation.geometry_2d import MotorDomains2D, params_from_config
-gp = params_from_config()
-geo = MotorDomains2D(gp)
-
-fig, (axL, axR) = plt.subplots(1, 2, figsize=(18, 9))
-
-
-def scat(ax, dom, n, c, label=None):
-    pts = dom.sample_interior(n)
-    x = np.asarray(pts["x"]).ravel() * MM
-    y = np.asarray(pts["y"]).ravel() * MM
-    ax.scatter(x, y, s=3, c=c, label=label, linewidths=0)
+G = json.load(open(os.path.join(ROOT, "pinn_geom.json")))
+from motor_ai_sim.routes.simulation import _get_motor_geom
+polys = _get_motor_geom(0.0)   # real shapely polys (mm) for the RIGHT panel
 
 
-# LEFT — what the PINN samples
-scat(axL, geo["shaft"],       600, "#777", "shaft")
-scat(axL, geo["rotor_core"],  600, "#444", "rotor iron")
-scat(axL, geo["stator_core"], 1600, "#aaa", "stator iron")
-scat(axL, geo["air_gap"],     300, "#7db", "air gap")
-first_slot = first_magN = first_magS = True
-for name, dom, (ph, dr) in geo.slot_domains():
-    scat(axL, dom, 250, "orange", "slot (coil)" if first_slot else None); first_slot = False
-for name, dom, pol in geo.magnet_domains():
-    if pol > 0:
-        scat(axL, dom, 250, "red",  "magnet N" if first_magN else None); first_magN = False
-    else:
-        scat(axL, dom, 250, "blue", "magnet S" if first_magS else None); first_magS = False
-axL.set_title("MODULUS / PINN geometry  (MotorDomains2D)\nannular-sector magnets + rotated-rectangle slots", fontsize=12)
-axL.legend(loc="upper right", fontsize=8, markerscale=3)
+def rings_paths(rings):
+    return [(MplPath(np.asarray(r["ext"], float)),
+             [MplPath(np.asarray(h, float)) for h in r.get("holes", [])]) for r in rings]
 
 
-# RIGHT — the real geometry the FEM uses
+def sample_in(rings, n, exclude=None):
+    paths = rings_paths(rings)
+    allext = np.vstack([np.asarray(r["ext"], float) for r in rings])
+    lo, hi = allext.min(0), allext.max(0)
+    gx, gy = [], []; have = 0; t = 0
+    while have < n and t < 60:
+        t += 1
+        bx = np.random.uniform(lo[0], hi[0], n * 4); by = np.random.uniform(lo[1], hi[1], n * 4)
+        P = np.column_stack([bx, by]); ins = np.zeros(len(P), bool)
+        for ext, holes in paths:
+            m = ext.contains_points(P)
+            for h in holes:
+                m &= ~h.contains_points(P)
+            ins |= m
+        if exclude:
+            ex = np.zeros(len(P), bool)
+            for ext, holes in exclude:
+                em = ext.contains_points(P)
+                for h in holes:
+                    em &= ~h.contains_points(P)
+                ex |= em
+            ins &= ~ex
+        gx.append(bx[ins]); gy.append(by[ins]); have += int(ins.sum())
+    return np.concatenate(gx)[:n] * MM, np.concatenate(gy)[:n] * MM
+
+
+fig, (axL, axR) = plt.subplots(1, 2, figsize=(13, 6.6), facecolor="#0f172a")
+
+# ── LEFT: PINN collocation sampled INSIDE the real polygons ──
+mag_excl = [p for m in G["magnets"] for p in rings_paths(m["rings"])]
+axL.scatter(*sample_in(G["stator"], 2600), s=3, c="#aaa", label="stator iron", linewidths=0)
+axL.scatter(*sample_in(G["rotor"], 1500, exclude=mag_excl), s=3, c="#555", label="rotor iron", linewidths=0)
+axL.scatter(*sample_in(G["shaft"], 700), s=3, c="#777", label="shaft", linewidths=0)
+axL.scatter(*sample_in(G["air_gap"], 700), s=3, c="#7db", label="air gap", linewidths=0)
+fc = fN = fS = True
+for c in G["coils"]:
+    x, y = sample_in(c["rings"], 130)
+    axL.scatter(x, y, s=4, c="orange", label="coil" if fc else None, linewidths=0); fc = False
+for m in G["magnets"]:
+    x, y = sample_in(m["rings"], 130)
+    col = "#ef4444" if m["polarity"] > 0 else "#3b82f6"
+    lab = ("magnet N" if (m["polarity"] > 0 and fN) else ("magnet S" if (m["polarity"] <= 0 and fS) else None))
+    axL.scatter(x, y, s=4, c=col, label=lab, linewidths=0)
+    if m["polarity"] > 0: fN = False
+    else: fS = False
+axL.set_title("MODULUS / PINN  — now samples the REAL polygons\n(point-in-polygon, from pinn_geom.json)",
+              fontsize=11, color="#4ade80")
+axL.legend(loc="upper right", fontsize=7, markerscale=3, facecolor="#1e293b", labelcolor="#e2e8f0")
+
+
+# ── RIGHT: real FEM polygons (filled) ──
 def fill_poly(ax, poly, **kw):
     if poly is None:
         return
-    geoms = list(getattr(poly, "geoms", [poly]))
-    for g in geoms:
+    for g in list(getattr(poly, "geoms", [poly])):
         if getattr(g, "is_empty", True):
             continue
         try:
@@ -64,47 +92,34 @@ def fill_poly(ax, poly, **kw):
         except Exception:
             continue
         ax.fill(xy[:, 0], xy[:, 1], **kw)
-        for hole in getattr(g, "interiors", []):
-            hxy = np.array(hole.coords)
-            ax.fill(hxy[:, 0], hxy[:, 1], color="white")
+        for h in getattr(g, "interiors", []):
+            ax.fill(*np.array(h.coords).T, color="#0f172a")
 
 
 fill_poly(axR, polys.get("stator"), color="#aaa", label="stator")
-fill_poly(axR, polys.get("rotor"),  color="#444")
-fill_poly(axR, polys.get("shaft"),  color="#777")
-fl_N = fl_S = fl_c = True
+fill_poly(axR, polys.get("rotor"), color="#555")
+fill_poly(axR, polys.get("shaft"), color="#777")
+fN = fS = fc = True
 for mp, pol in polys.get("magnets", []):
-    fill_poly(axR, mp, color="red" if pol > 0 else "blue",
-              label=("magnet N" if (pol > 0 and fl_N) else ("magnet S" if (pol <= 0 and fl_S) else None)))
-    if pol > 0: fl_N = False
-    else:       fl_S = False
+    lab = ("magnet N" if (pol > 0 and fN) else ("magnet S" if (pol <= 0 and fS) else None))
+    fill_poly(axR, mp, color="#ef4444" if pol > 0 else "#3b82f6", label=lab)
+    if pol > 0: fN = False
+    else: fS = False
 for c in polys.get("coils", []):
-    fill_poly(axR, c, color="orange", label="coil" if fl_c else None); fl_c = False
-axR.set_title("REAL / FEM geometry  (CadQueryMotor.get_2d_polygons)\ntrapezoid magnets + T-teeth + fillets", fontsize=12)
-axR.legend(loc="upper right", fontsize=8)
+    fill_poly(axR, c, color="orange", label="coil" if fc else None); fc = False
+axR.set_title("REAL / FEM  (CadQueryMotor.get_2d_polygons)\ntrapezoid spoke magnets + T-teeth + coils",
+              fontsize=11, color="#60a5fa")
+axR.legend(loc="upper right", fontsize=7, facecolor="#1e293b", labelcolor="#e2e8f0")
 
-R = gp.r_stator_out * MM * 1.05
+R = G["meta"]["r_stator_out"] * MM * 1.05
 for ax in (axL, axR):
     ax.set_aspect("equal"); ax.set_xlim(-R, R); ax.set_ylim(-R, R)
-    ax.set_xlabel("x [mm]"); ax.set_ylabel("y [mm]")
-    ax.grid(alpha=0.15)
-
-plt.suptitle("Geometry the Modulus PINN sees  vs  the REAL motor (FEM)", fontsize=14)
-plt.tight_layout()
-out = os.path.join(os.path.dirname(__file__), "geom_compare.png")
-plt.savefig(out, dpi=90)
-print("saved", out)
-
-# ── numeric comparison ───────────────────────────────────────────────────────
-print("\n--- PINN (MotorDomains2D) ---")
-print(f"radii [mm]: shaft_in={gp.r_shaft_in*MM:.2f}  rotor_in={gp.r_rotor_in*MM:.2f} "
-      f"rotor_out={gp.r_rotor_out*MM:.2f}  stator_in={gp.r_stator_in*MM:.2f}  stator_out={gp.r_stator_out*MM:.2f}")
-print(f"slots={gp.num_slots}  poles={gp.num_poles}  magnet_fill={gp.magnet_fill_fraction}")
-print(f"magnet domain radial span: [{gp.r_rotor_in*MM:.2f}, {gp.r_rotor_out*MM:.2f}] mm "
-      f"(thickness {(gp.r_rotor_out-gp.r_rotor_in)*MM:.2f} mm), arc-sector shape")
-print("\n--- REAL (CadQuery) ---")
-print(f"magnets={len(polys.get('magnets', []))}  coils={len(polys.get('coils', []))}")
-for i, (mp, pol) in enumerate(polys.get("magnets", [])[:3]):
-    b = mp.bounds
-    print(f"  magnet[{i}] polarity={pol:+d}  bounds(mm)=({b[0]:.1f},{b[1]:.1f})..({b[2]:.1f},{b[3]:.1f})  area={mp.area:.1f}mm²")
-print("real param keys:", sorted(motor.parameters.keys())[:20])
+    ax.set_facecolor("#0f172a"); ax.tick_params(colors="#94a3b8", labelsize=7)
+    for s in ax.spines.values():
+        s.set_color("#334155")
+    ax.set_xlabel("x [mm]", color="#94a3b8", fontsize=8)
+fig.suptitle("Modulus PINN now samples the SAME geometry the FEM solves — UNIFIED",
+             fontsize=12.5, color="#4ade80")
+fig.tight_layout()
+fig.savefig(os.path.join(ROOT, "geom_compare.png"), dpi=95, facecolor="#0f172a")
+print("saved geom_compare.png")

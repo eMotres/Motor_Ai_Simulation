@@ -22,6 +22,9 @@ import sys, os, json, time, math, subprocess, logging
 logging.basicConfig(level=logging.WARNING)
 import numpy as np
 import torch
+import matplotlib
+matplotlib.use("Agg")
+from matplotlib.path import Path as _MplPath   # numpy point-in-polygon (no shapely)
 
 from physicsnemo.sym.models.fourier_net import FourierNetArch
 from physicsnemo.sym.key import Key
@@ -76,99 +79,143 @@ def sample_wedge_band(n, r_in, r_out):
     return r * np.cos(phi), r * np.sin(phi)
 
 
-def build_sector_points(solver: MagnetostaticsSolver2D, verbose: bool = True):
-    """Return dicts of numpy arrays (x,y, inv_mur, c_sig, s_r) for interior PDE
-    collocation, plus outer-arc BC points and the two anti-periodic cut point
-    sets, all restricted to the 90° sector."""
-    gp  = solver.gp
-    cfg = solver.cfg
-    geo = solver.geo
-    omega = 2 * math.pi * cfg.frequency_hz
+# ── REAL geometry (exported by _export_geom.py → pinn_geom.json, metres) ──────
+_GEOM = None
+_POOL: dict = {}
 
-    # phase currents at this rotor angle (same model as solver_2d.build)
+
+def _load_geom():
+    global _GEOM
+    if _GEOM is None:
+        with open(os.path.join(ROOT, "pinn_geom.json")) as f:
+            _GEOM = json.load(f)
+    return _GEOM
+
+
+def _rings_paths(rings):
+    return [(_MplPath(np.asarray(r["ext"], float)),
+             [_MplPath(np.asarray(h, float)) for h in r.get("holes", [])])
+            for r in rings]
+
+
+def _inside(paths, P):
+    ins = np.zeros(len(P), bool)
+    for ext, holes in paths:
+        m = ext.contains_points(P)
+        for h in holes:
+            m &= ~h.contains_points(P)
+        ins |= m
+    return ins
+
+
+def _sample_in_rings(rings, n, exclude_paths=None):
+    """Rejection-sample n points INSIDE the polygon (ext minus holes), clipped to
+    the 90° sector, optionally excluding other polygons (e.g. magnets ⊂ rotor)."""
+    paths = _rings_paths(rings)
+    allext = np.vstack([np.asarray(r["ext"], float) for r in rings])
+    lo, hi = allext.min(0), allext.max(0)
+    gx, gy = [], []
+    have = 0; tries = 0
+    while have < n and tries < 80:
+        tries += 1
+        bx = np.random.uniform(lo[0], hi[0], n * 4)
+        by = np.random.uniform(lo[1], hi[1], n * 4)
+        P = np.column_stack([bx, by])
+        ins = _inside(paths, P)
+        ph = np.arctan2(by, bx)
+        ins &= (ph >= -1e-9) & (ph <= SECTOR + 1e-9)
+        if exclude_paths:
+            ins &= ~_inside(exclude_paths, P)
+        gx.append(bx[ins]); gy.append(by[ins]); have += int(ins.sum())
+    X = np.concatenate(gx)[:n] if gx else np.zeros(0)
+    Y = np.concatenate(gy)[:n] if gy else np.zeros(0)
+    return X, Y
+
+
+def _in_q1(cx, cy):
+    a = math.degrees(math.atan2(cy, cx))
+    return -1e-6 <= a <= 90.0 + 1e-6
+
+
+def _build_pool(solver):
+    """Sample large per-region pools INSIDE the real FEM polygons (once)."""
+    gp, cfg = solver.gp, solver.cfg
+    G = _load_geom(); meta = G["meta"]
+    omega = 2 * math.pi * cfg.frequency_hz
     pole_pairs = gp.num_poles // 2
     theta_elec = math.radians(cfg.rotor_angle_deg * pole_pairs + cfg.phase_offset_deg)
-    I_phase = {
-        'A': cfg.I_peak * math.cos(theta_elec),
-        'B': cfg.I_peak * math.cos(theta_elec - 2 * math.pi / 3),
-        'C': cfg.I_peak * math.cos(theta_elec + 2 * math.pi / 3),
-    }
-    slot_area = gp.slot_width_m * gp.slot_height_m * gp.fill_factor
+    I_phase = {'A': cfg.I_peak * math.cos(theta_elec),
+               'B': cfg.I_peak * math.cos(theta_elec - 2 * math.pi / 3),
+               'C': cfg.I_peak * math.cos(theta_elec + 2 * math.pi / 3)}
+    mur_fe = min(float(meta["mu_r_fe"]), 500.0)
 
-    xs, ys, inv_mur, c_sig, s_r = [], [], [], [], []
+    Xs, Ys, IM, CS, SR = [], [], [], [], []
 
-    def add(x, y, mur, sigma, src):
-        x = np.asarray(x).reshape(-1); y = np.asarray(y).reshape(-1)
-        m = in_sector(x, y)
-        x, y = x[m], y[m]
-        n = x.size
-        xs.append(x); ys.append(y)
-        inv_mur.append(np.full(n, 1.0 / mur))
-        c_sig.append(np.full(n, MU_0 * omega * sigma))
-        s_r.append(np.full(n, MU_0 * src))      # MU_0·J  (constant per region)
+    def add(X, Y, mur, sigma, src):
+        n = X.size
+        if n == 0:
+            return
+        Xs.append(X); Ys.append(Y)
+        IM.append(np.full(n, 1.0 / mur))
+        CS.append(np.full(n, MU_0 * omega * sigma))
+        SR.append(src if np.ndim(src) else np.full(n, MU_0 * src))
 
-    # ── bulk bands (μ_r by radius) ──
-    # Cap iron μ_r for PINN conditioning.  In a strong-form collocation PINN a
-    # huge μ_r (=5000) makes the iron PDE term (1/μ_r)ΔA ≈ 0 → iron is barely
-    # constrained and the sharp iron/air interface can't be resolved → the field
-    # stalls at low amplitude.  For an UNSATURATED SPM machine the air-gap flux
-    # (hence torque) is set by the magnets + air-gap reluctance and is nearly
-    # insensitive to iron μ_r once μ_r≫1, so μ_r≈500 keeps the physics while
-    # making the problem far better-conditioned.
-    mur_fe = min(float(cfg.mu_r_stator), 500.0)
-    add(*sample_wedge_band(1500, 1e-4,           gp.r_shaft_in), 1.0,    0.0, 0.0)  # shaft bore
-    add(*sample_wedge_band(700,  gp.r_shaft_in,  gp.r_rotor_in), mur_fe, 0.0, 0.0)  # rotor iron
-    add(*sample_wedge_band(900,  gp.r_rotor_in,  gp.r_rotor_out),mur_fe, 0.0, 0.0)  # rotor body between magnets
-    add(*sample_wedge_band(500,  gp.r_rotor_out, gp.r_stator_in),1.0,    0.0, 0.0)  # air gap
-    add(*sample_wedge_band(1500, gp.r_stator_in, gp.r_stator_out),mur_fe,0.0, 0.0)  # stator iron
+    # magnet exclusion paths (so rotor iron doesn't overlap the embedded magnets)
+    mag_excl = []
+    for m in G["magnets"]:
+        mag_excl += _rings_paths(m["rings"])
 
-    # ── slots (6 in sector) → real current density J_z ──
-    n_slot = 0
-    for name, dom, (phase, direction) in geo.slot_domains():
-        phic = float(name.split("_")[1]) * (2 * math.pi / gp.num_slots)
-        if not (0.0 <= phic < SECTOR):
+    add(*_sample_in_rings(G["stator"], 4000), mur_fe, 0.0, 0.0)            # stator iron (slots excluded as holes)
+    add(*_sample_in_rings(G["rotor"], 2500, exclude_paths=mag_excl), mur_fe, 0.0, 0.0)  # rotor iron between magnets
+    add(*_sample_in_rings(G["shaft"], 1200), 1.0, 0.0, 0.0)               # shaft
+    add(*_sample_in_rings(G["air_gap"], 1500), 1.0, 0.0, 0.0)             # air gap
+
+    n_coil = 0
+    for c in G["coils"]:
+        if not _in_q1(c["cx"], c["cy"]):
             continue
-        n_slot += 1
-        pts = dom.sample_interior(500)
-        J_z = direction * I_phase[phase] * gp.num_wires_per_slot / slot_area
-        add(pts["x"], pts["y"], 1.0, gp.sigma_cu, J_z)
+        n_coil += 1
+        X, Y = _sample_in_rings(c["rings"], 1500)
+        J = c["direction"] * I_phase[c["phase"]] * meta["n_wires"] / max(c["area_m2"], 1e-12)
+        add(X, Y, 1.0, gp.sigma_cu, J)
 
-    # ── magnets (7 in sector) → curl(M)=M_φ/r  (src current density, varies 1/r) ──
     n_mag = 0
-    for name, dom, polarity in geo.magnet_domains():
-        i = int(name.split("_")[1])
-        cen = (i + 0.5) * (2 * math.pi / gp.num_poles)
-        if not (0.0 <= cen < SECTOR):
+    for m in G["magnets"]:
+        if not _in_q1(m["cx"], m["cy"]):
             continue
         n_mag += 1
-        pts = dom.sample_interior(500)
-        x = np.asarray(pts["x"]).reshape(-1); y = np.asarray(pts["y"]).reshape(-1)
-        m = in_sector(x, y); x, y = x[m], y[m]
-        r = np.sqrt(x**2 + y**2)
-        Jmag = polarity * (cfg.Br_magnet / MU_0) / r          # curl(M)_z [A/m²]
-        n = x.size
-        xs.append(x); ys.append(y)
-        inv_mur.append(np.full(n, 1.0 / 1.05))
-        c_sig.append(np.full(n, MU_0 * omega * gp.sigma_mag))
-        s_r.append(MU_0 * Jmag)                                # spatially varying
+        X, Y = _sample_in_rings(m["rings"], 1500)
+        r = np.sqrt(X**2 + Y**2)
+        # curl(M)=M_φ/r for tangential M (= FEM's ±M_mag·tangent_CCW direction)
+        Jmag = m["polarity"] * (meta["Br"] / MU_0) / np.maximum(r, 1e-6)
+        add(X, Y, 1.05, gp.sigma_mag, MU_0 * Jmag)
 
-    interior = {
-        "x": np.concatenate(xs), "y": np.concatenate(ys),
-        "inv_mur": np.concatenate(inv_mur), "c_sig": np.concatenate(c_sig),
-        "s_r": np.concatenate(s_r),
-    }
+    _POOL.update(X=np.concatenate(Xs), Y=np.concatenate(Ys),
+                 IM=np.concatenate(IM), CS=np.concatenate(CS), SR=np.concatenate(SR),
+                 n_coil=n_coil, n_mag=n_mag, r_so=meta["r_stator_out"])
 
-    # ── outer-arc Dirichlet BC  A_z = 0  (r = r_stator_out, φ∈[0,90°]) ──
+
+def build_sector_points(solver: MagnetostaticsSolver2D, verbose: bool = True):
+    """Minibatch from the REAL-polygon pools (interior) + fresh BC & anti-periodic
+    cut points.  The pool is built once from pinn_geom.json so the PINN samples the
+    SAME geometry the FEM solves (trapezoid magnets + real coils + T-tooth iron)."""
+    if not _POOL:
+        _build_pool(solver)
+    P = _POOL
+    N = min(9000, P["X"].size)
+    idx = np.random.choice(P["X"].size, N, replace=False)
+    interior = {"x": P["X"][idx], "y": P["Y"][idx], "inv_mur": P["IM"][idx],
+                "c_sig": P["CS"][idx], "s_r": P["SR"][idx]}
+
+    r_so = P["r_so"]
     phb = np.random.uniform(0.0, SECTOR, 400)
-    bc = {"x": gp.r_stator_out * np.cos(phb), "y": gp.r_stator_out * np.sin(phb)}
-
-    # ── anti-periodic cut pairs:  p1 at φ=0 (+x axis),  p2 at φ=90° (+y axis) ──
-    rc = np.sqrt(np.random.uniform((1e-4)**2, gp.r_stator_out**2, 400))
+    bc = {"x": r_so * np.cos(phb), "y": r_so * np.sin(phb)}
+    rc = np.sqrt(np.random.uniform((1e-4)**2, r_so**2, 400))
     cut = {"x1": rc, "y1": np.zeros_like(rc), "x2": np.zeros_like(rc), "y2": rc}
 
     if verbose:
-        print(f"sector points: interior={interior['x'].size}  slots={n_slot}  "
-              f"magnets={n_mag}  bc={bc['x'].size}  cut_pairs={rc.size}", flush=True)
+        print(f"REAL-geom pool: interior={P['X'].size} (batch {N})  "
+              f"coils={P['n_coil']}  magnets={P['n_mag']}  bc={bc['x'].size}", flush=True)
     return interior, bc, cut
 
 

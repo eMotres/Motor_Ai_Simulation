@@ -127,9 +127,19 @@ def start(req: StartReq):
         if p is not None and p.poll() is None:
             raise HTTPException(status_code=409, detail="PINN training already running")
         steps = max(150, min(int(req.steps), 50000))
+        # Export the REAL geometry (Windows/shapely) → pinn_geom.json so the WSL
+        # trainer samples the SAME polygons the FEM solves (trapezoid magnets +
+        # real coils + T-tooth iron), kept current with any geometry change.
+        import sys as _sys
+        try:
+            subprocess.run([_sys.executable, str(_ROOT / "_export_geom.py")],
+                           cwd=str(_ROOT), timeout=120,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
         # Sector trainer: 90° wedge + anti-periodic BC + thermal guard + collocation
-        # resampling.  ~15× faster than the full-domain trainer and dumps the
-        # Modulus field to pinn_field.png (served by /field) at the end.
+        # resampling.  Samples inside the real polygons and dumps the Modulus field
+        # to pinn_field.png (served by /field) at the end.
         cmd = (f"source {_WSL_VENV} && cd {_WSL_PROJ} && "
                f"LD_LIBRARY_PATH=/usr/lib/wsl/lib PYTHONPATH=src "
                f"python scripts/pinn_sector_train.py {steps}")

@@ -137,6 +137,29 @@ def _in_q1(cx, cy):
     return -1e-6 <= a <= 90.0 + 1e-6
 
 
+def _dist_and_normal(P, ext):
+    """For points P (N,2) inside polygon `ext` (M,2 vertices), return distance to
+    the boundary and the INWARD unit normal (gradient of the distance)."""
+    V = np.asarray(ext, float)
+    if not np.allclose(V[0], V[-1]):
+        V = np.vstack([V, V[0]])
+    A, B = V[:-1], V[1:]
+    AB = B - A
+    AB2 = np.maximum((AB ** 2).sum(1), 1e-18)
+    AP = P[:, None, :] - A[None, :, :]
+    t = np.clip((AP * AB[None, :, :]).sum(2) / AB2[None, :], 0.0, 1.0)
+    closest = A[None, :, :] + t[:, :, None] * AB[None, :, :]
+    diff = P[:, None, :] - closest
+    dist = np.sqrt((diff ** 2).sum(2))
+    j = dist.argmin(1)
+    rows = np.arange(len(P))
+    dmin = dist[rows, j]
+    nrm = diff[rows, j]
+    nlen = np.sqrt((nrm ** 2).sum(1))
+    nrm = nrm / np.maximum(nlen[:, None], 1e-18)
+    return dmin, nrm
+
+
 def _build_pool(solver):
     """Sample large per-region pools INSIDE the real FEM polygons (once)."""
     gp, cfg = solver.gp, solver.cfg
@@ -180,15 +203,29 @@ def _build_pool(solver):
         add(X, Y, 1.0, gp.sigma_cu, J)
 
     n_mag = 0
+    M_mag = meta["Br"] / MU_0          # |M| = Br/μ₀  (IDENTICAL to FEM)
     for m in G["magnets"]:
         if not _in_q1(m["cx"], m["cy"]):
             continue
         n_mag += 1
-        X, Y = _sample_in_rings(m["rings"], 1500)
-        r = np.sqrt(X**2 + Y**2)
-        # curl(M)=M_φ/r for tangential M (= FEM's ±M_mag·tangent_CCW direction)
-        Jmag = m["polarity"] * (meta["Br"] / MU_0) / np.maximum(r, 1e-6)
-        add(X, Y, 1.05, gp.sigma_mag, MU_0 * Jmag)
+        X, Y = _sample_in_rings(m["rings"], 2400)
+        # FEM-IDENTICAL magnetisation: CONSTANT vector = ±M_mag·tangent_CCW(centroid)
+        cx, cy = m["cx"], m["cy"]; cr = math.hypot(cx, cy)
+        tx, ty = -cy / cr, cx / cr                       # CCW tangent at centroid
+        sgn = 1.0 if m["polarity"] > 0 else -1.0
+        Mx, My = sgn * M_mag * tx, sgn * M_mag * ty       # same as fem_solver_2d
+        # Constant M ⇒ curl(M)=0 in the interior; the source is the bound SURFACE
+        # current K=M×n on the magnet edges.  Window M→0 at the polygon boundary so
+        # the surface current becomes a thin samplable body layer that is exactly
+        # net-current-neutral (∮ M·dl = 0 ⇒ ∫ curl(MW) dA = 0), reproducing the FEM
+        # weak-form source ∫(Mx ∂v/∂y − My ∂v/∂x).
+        ext = max(m["rings"], key=lambda r: len(r["ext"]))["ext"]
+        d, n = _dist_and_normal(np.column_stack([X, Y]), ext)
+        delta = max(0.30 * float(d.max()), 3e-4)          # window scale
+        Wp = (1.0 / delta) * (1.0 - np.tanh(d / delta) ** 2)   # dW/dd
+        # curl(M·W)_z = My·∂W/∂x − Mx·∂W/∂y = Wp·(My·n_x − Mx·n_y)
+        src_cur = Wp * (My * n[:, 0] - Mx * n[:, 1])      # [A/m²]
+        add(X, Y, 1.05, gp.sigma_mag, MU_0 * src_cur)
 
     _POOL.update(X=np.concatenate(Xs), Y=np.concatenate(Ys),
                  IM=np.concatenate(IM), CS=np.concatenate(CS), SR=np.concatenate(SR),

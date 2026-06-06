@@ -34,6 +34,8 @@ const PinnTrainingPanel: React.FC = () => {
   const [fieldOk, setFieldOk] = React.useState(true);
   const [geomTs, setGeomTs] = React.useState<number>(() => Date.now());
   const [geomOk, setGeomOk] = React.useState(true);
+  const [vsTs, setVsTs] = React.useState<number>(() => Date.now());
+  const [vsOk, setVsOk] = React.useState(true);
   const wasRunning = React.useRef(false);
 
   const poll = React.useCallback(async () => {
@@ -144,6 +146,29 @@ const PinnTrainingPanel: React.FC = () => {
             (<code>pinn_geom.json</code>, exported from <code>get_2d_polygons</code>). <b>Right</b> = the FEM polygons
             filled. They <b>match</b> — same trapezoid spoke magnets, real coils, T-tooth iron. The PINN now solves the
             same motor as the FEM. (Next: fix the magnet <i>source</i> formula, then re-train.)
+          </Typography>
+        </Box>
+      )}
+
+      {/* PINN vs FEM comparison — |B|, air-gap B_r/B_φ, capability table */}
+      {vsOk && (
+        <Box sx={{ mb: 2, border: '1px solid', borderColor: 'divider', borderRadius: 1, p: 1, bgcolor: 'rgba(96,165,250,0.05)' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5, flexWrap: 'wrap' }}>
+            <Typography variant="caption" sx={{ fontWeight: 700, color: '#93c5fd' }}>
+              Modulus PINN vs FEM — fields &amp; capabilities
+            </Typography>
+            <Button size="small" variant="text" sx={{ minWidth: 0, fontSize: 11, py: 0 }}
+              onClick={() => { setVsOk(true); setVsTs(Date.now()); }}>
+              ↻ refresh
+            </Button>
+          </Box>
+          <Box component="img" src={`${API}/api/simulation/pinn/vs_fem?t=${vsTs}`}
+            alt="PINN vs FEM" onError={() => setVsOk(false)}
+            sx={{ width: '100%', display: 'block', borderRadius: 1, border: '1px solid', borderColor: 'divider', bgcolor: '#0f172a' }} />
+          <Typography variant="caption" color="text.disabled" sx={{ display: 'block', mt: 0.5 }}>
+            Same geometry. FEM teeth <b>saturate</b> (~1.8 T, BH curve) and concentrate flux → strong air-gap B_φ →
+            full torque. The PINN is <b>linear</b> (μ_r=500, no BH/saturation/demag/loss) → diffuse |B|~1 T, B_φ ~2×
+            weaker → torque 2.68 vs ≈24.9 N·m. Without the missing physics the PINN can't reproduce the real picture.
           </Typography>
         </Box>
       )}

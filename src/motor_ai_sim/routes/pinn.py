@@ -204,6 +204,20 @@ def geometry(refresh: int = 0):
     raise HTTPException(status_code=404, detail="no geometry image yet — train/render first")
 
 
+_VSFEM_PNG = _ROOT / "pinn_vs_fem.png"
+
+
+@router.get("/vs_fem")
+def vs_fem():
+    """Serve the pre-generated PINN-vs-FEM comparison (|B| both ways, air-gap
+    B_r/B_φ/B_r·B_φ, capability table).  Generated offline by _pinn_vs_fem.py
+    (a real FEM solve + the saved PINN net) — too heavy to render per-request."""
+    if _VSFEM_PNG.exists():
+        return Response(content=_VSFEM_PNG.read_bytes(), media_type="image/png",
+                        headers={"Cache-Control": "no-store"})
+    raise HTTPException(status_code=404, detail="no PINN-vs-FEM image yet")
+
+
 @router.get("/field")
 def field():
     """Serve the Modulus PINN field dump (A_z real/imag + |B|, full disk via the

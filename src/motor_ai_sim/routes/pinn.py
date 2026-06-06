@@ -14,12 +14,14 @@ import threading
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 router = APIRouter(prefix="/api/simulation/pinn", tags=["pinn"])
 
 _ROOT = Path(__file__).resolve().parents[3]          # project root (…/motor_ai_sim)
 _PROGRESS = _ROOT / "pinn_progress.json"
+_FIELD_PNG = _ROOT / "pinn_field.png"               # Modulus field dump (Ar, Ai, |B|)
 # WSL launch context — the venv + project (mounted at /mnt/c) + GPU lib path.
 _WSL_VENV = "~/motor_ai_sim_env/.venv/bin/activate"
 _WSL_PROJ = "/mnt/c/Users/vadim/Projects/motor_ai_sim"
@@ -40,9 +42,12 @@ def start(req: StartReq):
         if p is not None and p.poll() is None:
             raise HTTPException(status_code=409, detail="PINN training already running")
         steps = max(150, min(int(req.steps), 50000))
+        # Sector trainer: 90° wedge + anti-periodic BC + thermal guard + collocation
+        # resampling.  ~15× faster than the full-domain trainer and dumps the
+        # Modulus field to pinn_field.png (served by /field) at the end.
         cmd = (f"source {_WSL_VENV} && cd {_WSL_PROJ} && "
                f"LD_LIBRARY_PATH=/usr/lib/wsl/lib PYTHONPATH=src "
-               f"python scripts/pinn_train_web.py {steps}")
+               f"python scripts/pinn_sector_train.py {steps}")
         try:
             new = subprocess.Popen(["wsl.exe", "bash", "-lc", cmd],
                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -78,6 +83,18 @@ def progress():
     return d
 
 
+@router.get("/field")
+def field():
+    """Serve the Modulus PINN field dump (A_z real/imag + |B|, full disk via the
+    90° anti-periodic symmetry).  Written by the sector trainer at the end of a
+    run.  no-store so the UI always sees the latest dump."""
+    if not _FIELD_PNG.exists():
+        raise HTTPException(status_code=404, detail="no PINN field yet — train first")
+    data = _FIELD_PNG.read_bytes()
+    return Response(content=data, media_type="image/png",
+                    headers={"Cache-Control": "no-store"})
+
+
 @router.post("/stop")
 def stop():
     """Stop training (terminate the WSL subprocess + kill the python in WSL)."""
@@ -90,7 +107,7 @@ def stop():
                 pass
         _proc["p"] = None
     try:
-        subprocess.run(["wsl.exe", "bash", "-lc", "pkill -f pinn_train_web.py"],
+        subprocess.run(["wsl.exe", "bash", "-lc", "pkill -f pinn_sector_train.py"],
                        timeout=10, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception:
         pass

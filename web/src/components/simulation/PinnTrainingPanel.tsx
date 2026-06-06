@@ -30,6 +30,9 @@ const PinnTrainingPanel: React.FC = () => {
   const [prog, setProg] = React.useState<Prog | null>(null);
   const [busy, setBusy] = React.useState(false);
   const pollRef = React.useRef<number | null>(null);
+  const [fieldTs, setFieldTs] = React.useState<number>(() => Date.now()); // cache-bust key
+  const [fieldOk, setFieldOk] = React.useState(true);
+  const wasRunning = React.useRef(false);
 
   const poll = React.useCallback(async () => {
     try {
@@ -70,6 +73,11 @@ const PinnTrainingPanel: React.FC = () => {
   React.useEffect(() => {
     if (prog?.running) { setBusy(true); ensurePoll(); }
   }, [prog?.running, ensurePoll]);
+  // refresh the Modulus field image whenever a run finishes (running → not running)
+  React.useEffect(() => {
+    if (wasRunning.current && !prog?.running) { setFieldTs(Date.now()); setFieldOk(true); }
+    wasRunning.current = !!prog?.running;
+  }, [prog?.running]);
 
   const t = prog?.gpu_temp ?? null;
   const tempColor = t == null ? '#64748b' : t >= 82 ? '#ef4444' : t >= 70 ? '#f59e0b' : '#22c55e';
@@ -178,6 +186,34 @@ const PinnTrainingPanel: React.FC = () => {
         The PINN learns Maxwell's equations directly (no FEM data); the yellow line should climb toward the blue FEM
         target as the residual drops. Trains in cooled chunks; auto-pauses if the GPU exceeds 82 °C.
       </Typography>
+
+      {/* Modulus field dump — A_z (real/imag) + |B|, full disk via 90° anti-periodic symmetry */}
+      {fieldOk && (
+        <Box sx={{ mt: 2 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
+            <Typography variant="caption" sx={{ fontWeight: 700 }}>
+              Modulus PINN field — A_z (real / imag) &amp; |B|
+            </Typography>
+            <Chip size="small" label="neural net" sx={{ height: 18, fontSize: 10, bgcolor: 'rgba(99,102,241,0.25)', color: '#c7d2fe' }} />
+            <Button size="small" variant="text" sx={{ minWidth: 0, fontSize: 11, py: 0 }}
+              onClick={() => { setFieldOk(true); setFieldTs(Date.now()); }}>
+              ↻ refresh
+            </Button>
+          </Box>
+          <Box
+            component="img"
+            src={`${API}/api/simulation/pinn/field?t=${fieldTs}`}
+            alt="Modulus PINN field"
+            onError={() => setFieldOk(false)}
+            sx={{ width: '100%', display: 'block', borderRadius: 1, border: '1px solid', borderColor: 'divider', bgcolor: '#fff' }}
+          />
+          <Typography variant="caption" color="text.disabled" sx={{ display: 'block', mt: 0.5 }}>
+            Direct output of the trained network (90° sector folded to the full disk via the anti-periodic BC).
+            Auto-refreshes when a run finishes. The 28-pole + slot structure is correct; the amplitude (|B|) is still
+            building toward the FEM solution.
+          </Typography>
+        </Box>
+      )}
     </Box>
   );
 };

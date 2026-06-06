@@ -475,7 +475,7 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
             playback across one electrical period.  Slider lets you scrub
             through the rotor positions; play button auto-advances. ── */}
       <FemAnimationViewer gamma_deg={gamma_deg} I_phase_rms={I_phase_rms}
-        n_frames={steps} runNonce={runNonce} fresh={fresh} onPayload={setFemPayload}/>
+        n_frames={Math.min(steps, 24)} runNonce={runNonce} fresh={fresh} onPayload={setFemPayload}/>
 
       {/* ── Transient: T(t), P(t), V(t) — one FEM solve per time step ── */}
       <TransientCharts gamma_deg={gamma_deg} I_phase_rms={I_phase_rms}

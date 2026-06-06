@@ -183,7 +183,7 @@ const SimulationPanel: React.FC = () => {
   // The text field edits a free string (stepsStr) and only commits a
   // clamped integer on blur / Enter, so typing "12" over "6" works
   // naturally instead of producing "62".
-  const [steps,    setSteps]    = usePersisted('steps', 12);
+  const [steps,    setSteps]    = usePersisted('stepsPP', 80);   // transient pts/period (mesh-once sliding band)
   const [stepsStr, setStepsStr] = useState(String(steps));
   useEffect(() => { setStepsStr(String(steps)); }, [steps]);
   const commitSteps = () => {

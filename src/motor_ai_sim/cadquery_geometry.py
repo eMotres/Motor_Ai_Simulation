@@ -38,6 +38,67 @@ def _import_cadquery():
         return False
 
 
+def _round_corners_vertex(poly, r, n_arc=6, ang_min_deg=8.0, ang_max_deg=168.0):
+    """Round the SHARP corners of a Shapely (Multi)Polygon by inserting a tangent
+    arc of radius r at each corner — a true vertex fillet.  Unlike a morphological
+    open/close it does NOT erode or dilate edges, so it can never break thin
+    inter-magnet bridges: the fillet length is clamped to ≤45 % of each adjacent
+    edge, so r auto-reduces on thin features.  Rounds both convex and concave
+    corners.  Returns a (Multi)Polygon (topology preserved)."""
+    import numpy as _np
+    import math as _m
+    from shapely.geometry import Polygon as _SP, MultiPolygon as _SMP
+
+    a_lo, a_hi = _m.radians(ang_min_deg), _m.radians(ang_max_deg)
+
+    def _ring(coords):
+        pts = [_np.asarray(c, float) for c in coords]
+        if len(pts) > 1 and _np.allclose(pts[0], pts[-1]):
+            pts = pts[:-1]
+        n = len(pts)
+        if n < 3:
+            return coords
+        out = []
+        for i in range(n):
+            A, V, B = pts[i - 1], pts[i], pts[(i + 1) % n]
+            dA, dB = A - V, B - V
+            la, lb = float(_np.hypot(*dA)), float(_np.hypot(*dB))
+            if la < 1e-9 or lb < 1e-9:
+                out.append(tuple(V)); continue
+            uA, uB = dA / la, dB / lb
+            ang = _m.acos(max(-1.0, min(1.0, float(_np.dot(uA, uB)))))   # interior angle
+            if ang < a_lo or ang > a_hi:
+                out.append(tuple(V)); continue                          # ~straight → skip
+            half = ang / 2.0
+            tl = min(r / _m.tan(half), 0.45 * la, 0.45 * lb)
+            if tl < 1e-6:
+                out.append(tuple(V)); continue
+            reff = tl * _m.tan(half)
+            Pa, Pb = V + uA * tl, V + uB * tl
+            bis = uA + uB; bl = float(_np.hypot(*bis))
+            if bl < 1e-9:
+                out.append(tuple(V)); continue
+            bis /= bl
+            C = V + bis * (reff / _m.sin(half))                         # arc centre on the bisector
+            a0 = _m.atan2(Pa[1] - C[1], Pa[0] - C[0])
+            a1 = _m.atan2(Pb[1] - C[1], Pb[0] - C[0])
+            d = a1 - a0
+            while d > _m.pi:  d -= 2 * _m.pi
+            while d < -_m.pi: d += 2 * _m.pi
+            out.extend((C[0] + reff * _m.cos(a0 + d * k / n_arc),
+                        C[1] + reff * _m.sin(a0 + d * k / n_arc)) for k in range(n_arc + 1))
+        return out
+
+    def _one(p):
+        q = _SP(_ring(list(p.exterior.coords)),
+                [_ring(list(h.coords)) for h in p.interiors])
+        return q if q.is_valid else q.buffer(0)
+
+    if poly.geom_type == "MultiPolygon":
+        return _SMP([_one(g) for g in poly.geoms])
+    return _one(poly)
+
+
 class CadQueryMotor:
     """Parametric motor geometry engine using CadQuery."""
     
@@ -1249,6 +1310,32 @@ class CadQueryMotor:
         if not rotor_disk.is_valid: rotor_disk = rotor_disk.buffer(0)
         rotor_poly = rotor_disk.difference(unary_union(hole_polys))
         if not rotor_poly.is_valid: rotor_poly = rotor_poly.buffer(0)
+
+        # ── Round the rotor pole-tip sharp corners (rotor_fill_r) ─────────────
+        # Sharp iron corners at the air-gap surface concentrate flux → feed
+        # cogging/ripple + iron loss.  Use a VERTEX fillet (tangent arc per corner)
+        # — it rounds corners WITHOUT eroding edges, so the thin inter-magnet
+        # bridges (rotor_house ~1.2 mm) survive (the fillet auto-clamps to the
+        # local feature size).  GUARDED: keep only if valid, ≥85 % area, same #
+        # pieces — else keep the sharp rotor.  ("не ломай геометрию")
+        _rfr = float(p.get('rotor_fill_r', 0.0) or 0.0)
+        if _rfr > 1e-4:
+            def _npoly(g):
+                return len(g.geoms) if g.geom_type == 'MultiPolygon' else (0 if g.is_empty else 1)
+            try:
+                _f = _round_corners_vertex(rotor_poly, _rfr)
+                if not _f.is_valid:
+                    _f = _f.buffer(0)
+                if (_f.is_valid and not _f.is_empty
+                        and _f.area >= 0.85 * rotor_poly.area
+                        and _npoly(_f) == _npoly(rotor_poly)):
+                    rotor_poly = _f
+                else:
+                    print(f"rotor_fill_r={_rfr:.2f} rejected: valid={_f.is_valid} empty={_f.is_empty} "
+                          f"area={100*_f.area/max(rotor_poly.area,1e-9):.1f}% "
+                          f"pieces {_npoly(rotor_poly)}->{_npoly(_f)} -- keeping sharp rotor")
+            except Exception as _e:
+                print(f"rotor_fill_r failed ({_e}) -- keeping sharp rotor")
 
         # Shaft
         shaft_poly = SPoly(_circle(rotor_ir), [_circle(shaft_r)])

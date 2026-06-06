@@ -28,6 +28,7 @@ geometry:
   magnet_down_height: 1.8
   stator_fillet_r: 3.5
   stator_fillet_r1: 1.2
+  rotor_fill_r: 1.6          # fillet radius [mm] rounding the rotor pole-tip sharp corners at the air gap
   motor_length: 35
 derived_params:
   stator_outer_radius: stator_diameter / 2

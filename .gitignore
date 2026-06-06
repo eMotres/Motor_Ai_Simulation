@@ -87,3 +87,6 @@ pinn_progress.json
 pinn_result.json
 pinn_run.log
 simulation_output/
+fem_profile.log
+pinn_bgrid.npz
+pinn_net.pt

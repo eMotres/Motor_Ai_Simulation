@@ -840,12 +840,8 @@ const SimulationPanel: React.FC = () => {
             the FEM transient panel inside PhysicsDashboard below shows all
             three waveforms computed from the actual mesh solve. */}
 
-        {/* ── Modulus PINN training (GPU, runs in WSL) — live vs FEM ── */}
-        <Box sx={{ mb: 2 }}>
-          <PinnTrainingPanel />
-        </Box>
-
-        {/* ── Physics dashboard — analytical + FEM-comparable ── */}
+        {/* ── Physics dashboard (the standard FEM interface) — FIRST so the
+            FEM results + fields + transient are the prominent view ── */}
         <PhysicsDashboard
           rotorAngle_deg={rotorAngle}
           gamma_deg={phaseOffset}
@@ -856,6 +852,12 @@ const SimulationPanel: React.FC = () => {
           onBusyChange={setSimBusy}
           steps={steps}
         />
+
+        {/* ── Modulus PINN diagnostics (GPU, runs in WSL) — moved BELOW the FEM
+            interface so it doesn't push the FEM dashboard/fields down ── */}
+        <Box sx={{ mt: 3 }}>
+          <PinnTrainingPanel />
+        </Box>
 
       </Box>
     </Box>

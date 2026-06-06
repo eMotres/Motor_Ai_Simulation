@@ -90,6 +90,18 @@ def _round_corners_vertex(poly, r, n_arc=6, ang_min_deg=8.0, ang_max_deg=168.0):
         return out
 
     def _one(p):
+        # Lightly simplify first.  The rotor surface is a 256-gon, so each arc
+        # segment is only ~1.4 mm; the per-corner clamp (≤45 % of the adjacent
+        # edge) would then shrink a 1.6 mm fillet to ~0.6 mm at every pole tip —
+        # which is why the rounding looked barely there.  Collapsing the smooth
+        # arc into ≤0.05 mm-deviation chords (visually lossless) lengthens those
+        # edges so the fillet reaches the requested radius, while the genuine
+        # short edges around the thin bridges stay short (still auto-protected).
+        # preserve_topology keeps the bridges and holes intact.
+        if r > 0:
+            ps = p.simplify(0.05, preserve_topology=True)
+            if ps is not None and not ps.is_empty and ps.is_valid and ps.geom_type == "Polygon":
+                p = ps
         q = _SP(_ring(list(p.exterior.coords)),
                 [_ring(list(h.coords)) for h in p.interiors])
         return q if q.is_valid else q.buffer(0)

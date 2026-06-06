@@ -119,14 +119,14 @@ const PinnTrainingPanel: React.FC = () => {
         </Alert>
       )}
 
-      {/* GEOMETRY DIAGNOSTIC — what the PINN samples vs the real FEM geometry */}
+      {/* GEOMETRY DIAGNOSTIC — PINN now samples the SAME real polygons as the FEM */}
       {geomOk && (
-        <Box sx={{ mb: 2, border: '1px solid', borderColor: 'rgba(239,68,68,0.4)', borderRadius: 1, p: 1, bgcolor: 'rgba(239,68,68,0.06)' }}>
+        <Box sx={{ mb: 2, border: '1px solid', borderColor: 'rgba(34,197,94,0.4)', borderRadius: 1, p: 1, bgcolor: 'rgba(34,197,94,0.06)' }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5, flexWrap: 'wrap' }}>
-            <Typography variant="caption" sx={{ fontWeight: 700, color: '#fca5a5' }}>
-              ⚠ Geometry check — Modulus (PINN) vs FEM
+            <Typography variant="caption" sx={{ fontWeight: 700, color: '#86efac' }}>
+              ✓ Geometry — Modulus (PINN) = FEM (unified)
             </Typography>
-            <Chip size="small" label="must match" sx={{ height: 18, fontSize: 10, bgcolor: 'rgba(239,68,68,0.25)', color: '#fecaca' }} />
+            <Chip size="small" label="real polygons" sx={{ height: 18, fontSize: 10, bgcolor: 'rgba(34,197,94,0.22)', color: '#bbf7d0' }} />
             <Button size="small" variant="text" sx={{ minWidth: 0, fontSize: 11, py: 0 }}
               onClick={() => { setGeomOk(true); setGeomTs(Date.now()); }}>
               ↻ refresh
@@ -137,13 +137,13 @@ const PinnTrainingPanel: React.FC = () => {
             src={`${API}/api/simulation/pinn/geometry?t=${geomTs}`}
             alt="PINN vs FEM geometry"
             onError={() => setGeomOk(false)}
-            sx={{ width: '100%', display: 'block', borderRadius: 1, border: '1px solid', borderColor: 'divider', bgcolor: '#fff' }}
+            sx={{ width: '100%', display: 'block', borderRadius: 1, border: '1px solid', borderColor: 'divider', bgcolor: '#0f172a' }}
           />
           <Typography variant="caption" color="text.disabled" sx={{ display: 'block', mt: 0.5 }}>
-            <b>Left</b> = what the PINN samples (arc-sector magnets + rectangle slots, from <code>MotorDomains2D</code>).
-            <b> Right</b> = the real motor the FEM solves (trapezoid spoke magnets + T-teeth + 24 coils, from{' '}
-            <code>get_2d_polygons</code>). They do <b>not</b> match — the PINN is currently solving a different rotor,
-            so its torque/field can't agree with the FEM until the geometry is unified.
+            <b>Left</b> = the PINN now rejection-samples collocation points <b>inside the real polygons</b>{' '}
+            (<code>pinn_geom.json</code>, exported from <code>get_2d_polygons</code>). <b>Right</b> = the FEM polygons
+            filled. They <b>match</b> — same trapezoid spoke magnets, real coils, T-tooth iron. The PINN now solves the
+            same motor as the FEM. (Next: fix the magnet <i>source</i> formula, then re-train.)
           </Typography>
         </Box>
       )}

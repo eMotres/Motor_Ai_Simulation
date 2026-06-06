@@ -22,6 +22,91 @@ router = APIRouter(prefix="/api/simulation/pinn", tags=["pinn"])
 _ROOT = Path(__file__).resolve().parents[3]          # project root (…/motor_ai_sim)
 _PROGRESS = _ROOT / "pinn_progress.json"
 _FIELD_PNG = _ROOT / "pinn_field.png"               # Modulus field dump (Ar, Ai, |B|)
+
+
+def _render_geometry_compare() -> bytes:
+    """Render the geometry the PINN samples (MotorDomains2D — arc-sector magnets +
+    rectangle slots) next to the REAL FEM geometry (CadQueryMotor polygons —
+    trapezoid spoke magnets + T-teeth + coils).  Returns PNG bytes."""
+    import io
+    import numpy as np
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from motor_ai_sim.routes.simulation import _get_motor_geom   # cached real polys
+    from motor_ai_sim.simulation.geometry_2d import MotorDomains2D, params_from_config
+
+    MM = 1000.0
+    polys = _get_motor_geom(0.0)          # reuse FEM's cached CadQuery polygons
+    gp = params_from_config()
+    geo = MotorDomains2D(gp)
+
+    fig, (axL, axR) = plt.subplots(1, 2, figsize=(13, 6.6), facecolor="#0f172a")
+
+    def scat(ax, dom, n, c, label=None):
+        pts = dom.sample_interior(n)
+        ax.scatter(np.asarray(pts["x"]).ravel() * MM, np.asarray(pts["y"]).ravel() * MM,
+                   s=3, c=c, label=label, linewidths=0)
+
+    scat(axL, geo["shaft"], 500, "#777", "shaft")
+    scat(axL, geo["rotor_core"], 500, "#444", "rotor iron")
+    scat(axL, geo["stator_core"], 1400, "#aaa", "stator iron")
+    scat(axL, geo["air_gap"], 250, "#7db", "air gap")
+    fs = fN = fS = True
+    for _n, dom, _w in geo.slot_domains():
+        scat(axL, dom, 220, "orange", "slot/coil" if fs else None); fs = False
+    for _n, dom, pol in geo.magnet_domains():
+        if pol > 0:
+            scat(axL, dom, 220, "#ef4444", "magnet N" if fN else None); fN = False
+        else:
+            scat(axL, dom, 220, "#3b82f6", "magnet S" if fS else None); fS = False
+    axL.set_title("MODULUS / PINN  (MotorDomains2D)\narc-sector magnets + rectangle slots",
+                  fontsize=11, color="#fbbf24")
+    axL.legend(loc="upper right", fontsize=7, markerscale=3, facecolor="#1e293b", labelcolor="#e2e8f0")
+
+    def fill_poly(ax, poly, **kw):
+        if poly is None:
+            return
+        for g in list(getattr(poly, "geoms", [poly])):
+            if getattr(g, "is_empty", True):
+                continue
+            try:
+                xy = np.array(g.exterior.coords)
+            except Exception:
+                continue
+            ax.fill(xy[:, 0], xy[:, 1], **kw)
+            for hole in getattr(g, "interiors", []):
+                ax.fill(*np.array(hole.coords).T, color="#0f172a")
+
+    fill_poly(axR, polys.get("stator"), color="#aaa", label="stator")
+    fill_poly(axR, polys.get("rotor"), color="#444")
+    fill_poly(axR, polys.get("shaft"), color="#777")
+    fN = fS = fc = True
+    for mp, pol in polys.get("magnets", []):
+        lab = ("magnet N" if (pol > 0 and fN) else ("magnet S" if (pol <= 0 and fS) else None))
+        fill_poly(axR, mp, color="#ef4444" if pol > 0 else "#3b82f6", label=lab)
+        if pol > 0: fN = False
+        else: fS = False
+    for c in polys.get("coils", []):
+        fill_poly(axR, c, color="orange", label="coil" if fc else None); fc = False
+    axR.set_title("REAL / FEM  (CadQueryMotor.get_2d_polygons)\ntrapezoid spoke magnets + T-teeth + coils",
+                  fontsize=11, color="#60a5fa")
+    axR.legend(loc="upper right", fontsize=7, facecolor="#1e293b", labelcolor="#e2e8f0")
+
+    R = gp.r_stator_out * MM * 1.05
+    for ax in (axL, axR):
+        ax.set_aspect("equal"); ax.set_xlim(-R, R); ax.set_ylim(-R, R)
+        ax.set_facecolor("#0f172a"); ax.tick_params(colors="#94a3b8", labelsize=7)
+        for s in ax.spines.values():
+            s.set_color("#334155")
+        ax.set_xlabel("x [mm]", color="#94a3b8", fontsize=8)
+    fig.suptitle("Geometry the Modulus PINN samples  vs  the REAL motor (FEM) — they DON'T match",
+                 fontsize=12.5, color="#f1f5f9")
+    fig.tight_layout()
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=95, facecolor="#0f172a")
+    plt.close(fig)
+    return buf.getvalue()
 # WSL launch context — the venv + project (mounted at /mnt/c) + GPU lib path.
 _WSL_VENV = "~/motor_ai_sim_env/.venv/bin/activate"
 _WSL_PROJ = "/mnt/c/Users/vadim/Projects/motor_ai_sim"
@@ -81,6 +166,32 @@ def progress():
             d["running"] = False
             d["crashed"] = True
     return d
+
+
+_GEOM_PNG = _ROOT / "geom_compare.png"
+_geom_cache: dict = {"png": None}
+
+
+@router.get("/geometry")
+def geometry(refresh: int = 0):
+    """Serve the PINN-vs-FEM geometry comparison PNG.
+
+    Default: serve the pre-generated geom_compare.png from disk (instant).
+    ?refresh=1: regenerate it in a SEPARATE process (matplotlib + CadQuery/OCC
+    are not thread-safe and deadlock the uvicorn worker pool if run in-process),
+    then serve the fresh file."""
+    if refresh:
+        import sys
+        try:
+            subprocess.run([sys.executable, str(_ROOT / "_geom_compare.py")],
+                           cwd=str(_ROOT), timeout=120,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+    if _GEOM_PNG.exists():
+        return Response(content=_GEOM_PNG.read_bytes(), media_type="image/png",
+                        headers={"Cache-Control": "no-store"})
+    raise HTTPException(status_code=404, detail="no geometry image yet — train/render first")
 
 
 @router.get("/field")

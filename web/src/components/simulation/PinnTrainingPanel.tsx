@@ -32,6 +32,8 @@ const PinnTrainingPanel: React.FC = () => {
   const pollRef = React.useRef<number | null>(null);
   const [fieldTs, setFieldTs] = React.useState<number>(() => Date.now()); // cache-bust key
   const [fieldOk, setFieldOk] = React.useState(true);
+  const [geomTs, setGeomTs] = React.useState<number>(() => Date.now());
+  const [geomOk, setGeomOk] = React.useState(true);
   const wasRunning = React.useRef(false);
 
   const poll = React.useCallback(async () => {
@@ -115,6 +117,35 @@ const PinnTrainingPanel: React.FC = () => {
           (AC power + max fans, clean vents, Afterburner temp-limit / undervolt),
           otherwise training can't progress.
         </Alert>
+      )}
+
+      {/* GEOMETRY DIAGNOSTIC — what the PINN samples vs the real FEM geometry */}
+      {geomOk && (
+        <Box sx={{ mb: 2, border: '1px solid', borderColor: 'rgba(239,68,68,0.4)', borderRadius: 1, p: 1, bgcolor: 'rgba(239,68,68,0.06)' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5, flexWrap: 'wrap' }}>
+            <Typography variant="caption" sx={{ fontWeight: 700, color: '#fca5a5' }}>
+              ⚠ Geometry check — Modulus (PINN) vs FEM
+            </Typography>
+            <Chip size="small" label="must match" sx={{ height: 18, fontSize: 10, bgcolor: 'rgba(239,68,68,0.25)', color: '#fecaca' }} />
+            <Button size="small" variant="text" sx={{ minWidth: 0, fontSize: 11, py: 0 }}
+              onClick={() => { setGeomOk(true); setGeomTs(Date.now()); }}>
+              ↻ refresh
+            </Button>
+          </Box>
+          <Box
+            component="img"
+            src={`${API}/api/simulation/pinn/geometry?t=${geomTs}`}
+            alt="PINN vs FEM geometry"
+            onError={() => setGeomOk(false)}
+            sx={{ width: '100%', display: 'block', borderRadius: 1, border: '1px solid', borderColor: 'divider', bgcolor: '#fff' }}
+          />
+          <Typography variant="caption" color="text.disabled" sx={{ display: 'block', mt: 0.5 }}>
+            <b>Left</b> = what the PINN samples (arc-sector magnets + rectangle slots, from <code>MotorDomains2D</code>).
+            <b> Right</b> = the real motor the FEM solves (trapezoid spoke magnets + T-teeth + 24 coils, from{' '}
+            <code>get_2d_polygons</code>). They do <b>not</b> match — the PINN is currently solving a different rotor,
+            so its torque/field can't agree with the FEM until the geometry is unified.
+          </Typography>
+        </Box>
       )}
 
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 1.5, flexWrap: 'wrap' }}>

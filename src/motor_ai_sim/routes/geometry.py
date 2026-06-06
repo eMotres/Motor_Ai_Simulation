@@ -238,6 +238,37 @@ def get_geometry_mesh():
         t0 = time.perf_counter()
         motor.build_all()
         data = motor.get_all_mesh_data()
+
+        # rotor_fill_r: the 3D SOLID rotor cannot take a BRep fillet at the full
+        # radius near the thin bridges (it falls back to a smaller r).  The 2D
+        # physics geometry IS filleted at the requested radius (per-edge clamp),
+        # and get_extruded_mesh_data() extrudes that filleted 2D rotor to 3D for
+        # free — no OCC fillet.  Swap the viewer's rotor_core to that mesh so the
+        # 3D view shows the SAME rounding as the physics.  The extruded mesh is
+        # z∈[-w,0]; the solids are z∈[0,w], so shift z by +w to align.  Guarded:
+        # any failure keeps the (smaller-radius but smooth) solid rotor.
+        try:
+            _rfr = float(params_dict.get('rotor_fill_r', 0.0) or 0.0)
+        except Exception:
+            _rfr = 0.0
+        if _rfr > 1e-4:
+            try:
+                _w = float(params_dict.get('stator_width')
+                           or params_dict.get('motor_length') or 35.0)
+                _rc = motor.get_extruded_mesh_data().get('rotor_core')
+                if _rc and _rc.get('vertices'):
+                    _v = _rc['vertices']
+                    if _v and isinstance(_v[0], (list, tuple)):
+                        _nv = [[float(x), float(y), float(z) + _w] for (x, y, z) in _v]
+                    else:                       # flat [x,y,z,x,y,z,...]
+                        _nv = [float(c) for c in _v]
+                        for _i in range(2, len(_nv), 3):
+                            _nv[_i] += _w
+                    _rc2 = dict(_rc); _rc2['vertices'] = _nv
+                    data['rotor_core'] = _rc2
+            except Exception as _e:
+                print(f"rotor_core extruded-fillet override skipped: {_e}")
+
         build_time = time.perf_counter() - t0
 
         _mesh_cache["hash"] = params_hash

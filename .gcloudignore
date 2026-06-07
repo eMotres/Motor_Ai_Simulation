@@ -1,0 +1,21 @@
+# Keep the Cloud Build context small: only src/ + config/ + Dockerfile + requirements
+.git/
+.gitignore
+web/
+**/node_modules/
+**/__pycache__/
+**/*.pyc
+.venv/
+venv/
+env/
+simulation_output/
+geometry_cache/
+*.log
+_*.py
+_*.json
+_*.txt
+*.png
+DEPLOY.md
+ARCHITECTURE_SECURITY.md
+firebase.json
+.firebaserc

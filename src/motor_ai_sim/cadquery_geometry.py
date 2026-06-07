@@ -38,7 +38,8 @@ def _import_cadquery():
         return False
 
 
-def _round_corners_vertex(poly, r, n_arc=8, ang_min_deg=8.0, ang_max_deg=168.0):
+def _round_corners_vertex(poly, r, n_arc=8, ang_min_deg=8.0, ang_max_deg=168.0,
+                          surface_band=1.5):
     """Round the SHARP corners of a Shapely (Multi)Polygon with a true tangent-arc
     fillet of radius r at EVERY corner — UNIFORMLY.
 
@@ -74,8 +75,16 @@ def _round_corners_vertex(poly, r, n_arc=8, ang_min_deg=8.0, ang_max_deg=168.0):
             l1, l2 = float(_np.hypot(*d1)), float(_np.hypot(*d2))
             ang[i] = _m.pi if (l1 < 1e-12 or l2 < 1e-12) else \
                 _m.acos(max(-1.0, min(1.0, float(_np.dot(d1 / l1, d2 / l2)))))
-        is_corner = (ang >= a_lo) & (ang <= a_hi)        # to be filleted
+        is_corner = (ang >= a_lo) & (ang <= a_hi)        # candidate to be filleted
         bound = ang < a_hi                                # any real turn bounds a run
+
+        # Round ONLY the outer "top row" corners — those within surface_band of the
+        # ring's max radius (from origin).  Those are the pole tips at the air gap;
+        # the deeper rows (shoulders ~2.3 mm in, inner corners) stay SHARP.  The
+        # rotor is centred at origin, so |vertex| is its air-gap distance.
+        radii = _np.array([float(_np.hypot(P[i][0], P[i][1])) for i in range(n)])
+        maxR = float(radii.max()) if n else 0.0
+        at_surface = radii >= (maxR - surface_band) if surface_band else _np.ones(n, bool)
 
         def run(i, step):
             L = 0.0; k = i
@@ -102,7 +111,7 @@ def _round_corners_vertex(poly, r, n_arc=8, ang_min_deg=8.0, ang_max_deg=168.0):
         consumed = _np.zeros(n, bool)
         out = []
         for i in range(n):
-            if not is_corner[i]:
+            if not (is_corner[i] and at_surface[i]):      # skip non-corners + deeper rows
                 if not consumed[i]:
                     out.append(tuple(P[i]))
                 continue

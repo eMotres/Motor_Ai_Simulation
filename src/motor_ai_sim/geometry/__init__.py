@@ -24,23 +24,32 @@ Legacy API (deprecated):
     regions = geometry.get_regions()  # Returns GeometryRegion objects
 """
 
-from motor_ai_sim.geometry.motor_material import (
-    MagneticMaterial,
-    MaterialRegistry,
-    get_material_id,
-)
 from motor_ai_sim.geometry.motor_geometry import (
     MotorGeometryParams,
     MotorGeometry2D,
     GeometryRegion,  # Deprecated, kept for backward compatibility
     HAS_MODULUS,  # Flag indicating if Modulus is available
 )
-from motor_ai_sim.geometry.motor_mesh import (
-    MeshBuilder,
-    MotorMeshGenerator,
-    MaterialAssignment,
-    DEFAULT_MATERIAL_ASSIGNMENTS,
-)
+
+# motor_material / motor_mesh are LEGACY Modulus helpers that import torch.  The
+# FEM backend doesn't use them, and torch isn't installed in the Cloud Run image,
+# so guard the import — the package (and MotorGeometryParams) still loads.
+try:
+    from motor_ai_sim.geometry.motor_material import (
+        MagneticMaterial,
+        MaterialRegistry,
+        get_material_id,
+    )
+    from motor_ai_sim.geometry.motor_mesh import (
+        MeshBuilder,
+        MotorMeshGenerator,
+        MaterialAssignment,
+        DEFAULT_MATERIAL_ASSIGNMENTS,
+    )
+except ImportError:
+    MagneticMaterial = MaterialRegistry = get_material_id = None
+    MeshBuilder = MotorMeshGenerator = MaterialAssignment = None
+    DEFAULT_MATERIAL_ASSIGNMENTS = None
 
 __all__ = [
     # Materials

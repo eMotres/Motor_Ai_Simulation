@@ -38,13 +38,22 @@ def _import_cadquery():
         return False
 
 
-def _round_corners_vertex(poly, r, n_arc=6, ang_min_deg=8.0, ang_max_deg=168.0):
-    """Round the SHARP corners of a Shapely (Multi)Polygon by inserting a tangent
-    arc of radius r at each corner — a true vertex fillet.  Unlike a morphological
-    open/close it does NOT erode or dilate edges, so it can never break thin
-    inter-magnet bridges: the fillet length is clamped to ≤45 % of each adjacent
-    edge, so r auto-reduces on thin features.  Rounds both convex and concave
-    corners.  Returns a (Multi)Polygon (topology preserved)."""
+def _round_corners_vertex(poly, r, n_arc=8, ang_min_deg=8.0, ang_max_deg=168.0):
+    """Round the SHARP corners of a Shapely (Multi)Polygon with a true tangent-arc
+    fillet of radius r at EVERY corner — UNIFORMLY.
+
+    The tangent length needed for radius r is t = r/tan(half-angle).  Earlier this
+    was clamped to 45 % of the single ADJACENT edge, so on the 256-gon rotor
+    surface (≈1.4 mm segments) the radius collapsed to ~0.6 mm, and unevenly
+    (each corner's neighbour segment differs) → the "one tip rounder than the
+    others" artdefact.
+
+    Here t is measured ALONG the boundary across the smooth (sub-corner) arc up to
+    the next REAL corner, and the tangent points are placed on the actual boundary
+    at that arc-distance (so a discretised arc is handled exactly).  t is only
+    capped at 49 % of the run to the next corner so two fillets sharing an edge
+    can't overlap.  Result: every corner with room gets the SAME radius r; only a
+    genuinely tight neck (e.g. a thin bridge) auto-reduces.  Topology preserved."""
     import numpy as _np
     import math as _m
     from shapely.geometry import Polygon as _SP, MultiPolygon as _SMP
@@ -52,34 +61,79 @@ def _round_corners_vertex(poly, r, n_arc=6, ang_min_deg=8.0, ang_max_deg=168.0):
     a_lo, a_hi = _m.radians(ang_min_deg), _m.radians(ang_max_deg)
 
     def _ring(coords):
-        pts = [_np.asarray(c, float) for c in coords]
-        if len(pts) > 1 and _np.allclose(pts[0], pts[-1]):
-            pts = pts[:-1]
-        n = len(pts)
+        P = [_np.asarray(c, float) for c in coords]
+        if len(P) > 1 and _np.allclose(P[0], P[-1]):
+            P = P[:-1]
+        n = len(P)
         if n < 3:
             return coords
+        seg = _np.array([float(_np.hypot(*(P[(i + 1) % n] - P[i]))) for i in range(n)])  # seg[i]=|P[i]→P[i+1]|
+        ang = _np.empty(n)
+        for i in range(n):
+            d1, d2 = P[i - 1] - P[i], P[(i + 1) % n] - P[i]
+            l1, l2 = float(_np.hypot(*d1)), float(_np.hypot(*d2))
+            ang[i] = _m.pi if (l1 < 1e-12 or l2 < 1e-12) else \
+                _m.acos(max(-1.0, min(1.0, float(_np.dot(d1 / l1, d2 / l2)))))
+        is_corner = (ang >= a_lo) & (ang <= a_hi)        # to be filleted
+        bound = ang < a_hi                                # any real turn bounds a run
+
+        def run(i, step):
+            L = 0.0; k = i
+            for _ in range(n):
+                L += seg[k] if step > 0 else seg[(k - 1) % n]
+                k = (k + step) % n
+                if k == i or bound[k]:
+                    break
+            return L
+
+        def walk(i, step, d):
+            """Point on the boundary at arc-distance d from vertex i (direction step)."""
+            k = i; rem = d
+            for _ in range(n + 1):
+                e = k if step > 0 else (k - 1) % n
+                s = seg[e]
+                nxt = (k + 1) % n if step > 0 else (k - 1) % n
+                if s >= rem:
+                    u = P[nxt] - P[k]; ul = float(_np.hypot(*u))
+                    return (P[k] + u / ul * rem) if ul > 1e-12 else P[k].copy()
+                rem -= s; k = nxt
+            return P[k].copy()
+
+        consumed = _np.zeros(n, bool)
         out = []
         for i in range(n):
-            A, V, B = pts[i - 1], pts[i], pts[(i + 1) % n]
-            dA, dB = A - V, B - V
-            la, lb = float(_np.hypot(*dA)), float(_np.hypot(*dB))
+            if not is_corner[i]:
+                if not consumed[i]:
+                    out.append(tuple(P[i]))
+                continue
+            half = ang[i] / 2.0
+            th = _m.tan(half)
+            want = r / th if th > 1e-9 else 1e9
+            t = min(want, 0.49 * run(i, -1), 0.49 * run(i, 1))   # uniform r, capped vs neighbour
+            if t < 1e-6:
+                out.append(tuple(P[i])); continue
+            V = P[i]; reff = t * th
+            Pa, Pb = walk(i, -1, t), walk(i, 1, t)
+            # mark the smooth vertices the fillet swallows on each side
+            for step in (-1, 1):
+                k = i; rem = t
+                for _ in range(n):
+                    e = k if step > 0 else (k - 1) % n
+                    if seg[e] >= rem:
+                        break
+                    rem -= seg[e]; k = (k + step) % n
+                    if k != i:
+                        consumed[k] = True
+            uA = Pa - V; la = float(_np.hypot(*uA))
+            uB = Pb - V; lb = float(_np.hypot(*uB))
             if la < 1e-9 or lb < 1e-9:
                 out.append(tuple(V)); continue
-            uA, uB = dA / la, dB / lb
-            ang = _m.acos(max(-1.0, min(1.0, float(_np.dot(uA, uB)))))   # interior angle
-            if ang < a_lo or ang > a_hi:
-                out.append(tuple(V)); continue                          # ~straight → skip
-            half = ang / 2.0
-            tl = min(r / _m.tan(half), 0.45 * la, 0.45 * lb)
-            if tl < 1e-6:
-                out.append(tuple(V)); continue
-            reff = tl * _m.tan(half)
-            Pa, Pb = V + uA * tl, V + uB * tl
+            uA /= la; uB /= lb
             bis = uA + uB; bl = float(_np.hypot(*bis))
             if bl < 1e-9:
                 out.append(tuple(V)); continue
             bis /= bl
-            C = V + bis * (reff / _m.sin(half))                         # arc centre on the bisector
+            C = V + bis * (reff / _m.sin(half))
             a0 = _m.atan2(Pa[1] - C[1], Pa[0] - C[0])
             a1 = _m.atan2(Pb[1] - C[1], Pb[0] - C[0])
             d = a1 - a0
@@ -90,18 +144,6 @@ def _round_corners_vertex(poly, r, n_arc=6, ang_min_deg=8.0, ang_max_deg=168.0):
         return out
 
     def _one(p):
-        # Lightly simplify first.  The rotor surface is a 256-gon, so each arc
-        # segment is only ~1.4 mm; the per-corner clamp (≤45 % of the adjacent
-        # edge) would then shrink a 1.6 mm fillet to ~0.6 mm at every pole tip —
-        # which is why the rounding looked barely there.  Collapsing the smooth
-        # arc into ≤0.05 mm-deviation chords (visually lossless) lengthens those
-        # edges so the fillet reaches the requested radius, while the genuine
-        # short edges around the thin bridges stay short (still auto-protected).
-        # preserve_topology keeps the bridges and holes intact.
-        if r > 0:
-            ps = p.simplify(0.05, preserve_topology=True)
-            if ps is not None and not ps.is_empty and ps.is_valid and ps.geom_type == "Polygon":
-                p = ps
         q = _SP(_ring(list(p.exterior.coords)),
                 [_ring(list(h.coords)) for h in p.interiors])
         return q if q.is_valid else q.buffer(0)

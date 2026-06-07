@@ -1,0 +1,100 @@
+{
+  "baseline": {
+    "id": "baseline",
+    "name": "Baseline (initial)",
+    "order": 1,
+    "description": "Original 24/28 spoke-PM design as first specified.",
+    "metrics": {
+      "T_avg_Nm": 25.28,
+      "ripple_pct": 17.6,
+      "gamma_deg": 0.0
+    },
+    "geometry": {
+      "stator_diameter": 150.0,
+      "slot_height": 14.0,
+      "core_thickness": 4.2,
+      "num_seg": 4.0,
+      "num_slots_per_segment": 6.0,
+      "num_poles_per_segment": 7.0,
+      "stator_width": 35.0,
+      "air_gap": 0.5,
+      "tooth_width": 9.2,
+      "tooth2_width": 5.5,
+      "cut_width": 6.0,
+      "insulation_thickness": 0.15,
+      "wire_width": 5.0,
+      "wire_height": 0.6,
+      "wire_spacing_x": 0.1,
+      "wire_spacing_y": 0.13,
+      "num_wires_per_slot": 14.0,
+      "slot_hs": 0.2,
+      "magnet_height": 16.0,
+      "rotor_house_height": 1.2,
+      "shaft_height": 3.0,
+      "magnet_fill_down": 0.9,
+      "magnet_fill_up": 0.44,
+      "magnet_fill_radius": 2.5,
+      "magnet_up_gap": 2.0,
+      "rotor_hole": 0.6,
+      "magnet_down_height": 1.8,
+      "stator_fillet_r": 3.5,
+      "stator_fillet_r1": 1.2,
+      "rotor_fill_r": 1.6,
+      "motor_length": 35.0
+    },
+    "simulation": {
+      "max_current": 85.0,
+      "rpm": 3950,
+      "phase_offset_deg": 0.0
+    }
+  },
+  "optimized_low_ripple": {
+    "id": "optimized_low_ripple",
+    "name": "Optimized - low ripple + MTPA",
+    "order": 2,
+    "description": "Pole-arc widened (fill_up 0.44to0.56), softer pole tip (up_gap 2.5), rounded rotor corners (2.0mm), gamma=-15 MTPA. Same magnet. +0.9% torque, -67% ripple.",
+    "metrics": {
+      "T_avg_Nm": 25.5,
+      "ripple_pct": 5.79,
+      "gamma_deg": -15.0
+    },
+    "geometry": {
+      "stator_diameter": 150.0,
+      "slot_height": 14.0,
+      "core_thickness": 4.2,
+      "num_seg": 4.0,
+      "num_slots_per_segment": 6.0,
+      "num_poles_per_segment": 7.0,
+      "stator_width": 35.0,
+      "air_gap": 0.5,
+      "tooth_width": 9.2,
+      "tooth2_width": 5.5,
+      "cut_width": 6.0,
+      "insulation_thickness": 0.15,
+      "wire_width": 5.0,
+      "wire_height": 0.6,
+      "wire_spacing_x": 0.1,
+      "wire_spacing_y": 0.13,
+      "num_wires_per_slot": 14.0,
+      "slot_hs": 0.2,
+      "magnet_height": 16.0,
+      "rotor_house_height": 1.2,
+      "shaft_height": 3.0,
+      "magnet_fill_down": 0.92,
+      "magnet_fill_up": 0.56,
+      "magnet_fill_radius": 2.5,
+      "magnet_up_gap": 2.5,
+      "rotor_hole": 0.6,
+      "magnet_down_height": 1.8,
+      "stator_fillet_r": 3.5,
+      "stator_fillet_r1": 1.2,
+      "rotor_fill_r": 2.0,
+      "motor_length": 35.0
+    },
+    "simulation": {
+      "max_current": 85.0,
+      "rpm": 3950,
+      "phase_offset_deg": -15.0
+    }
+  }
+}

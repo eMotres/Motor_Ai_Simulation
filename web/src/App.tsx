@@ -32,6 +32,7 @@ import {
 } from '@mui/icons-material';
 import MotorScene from './components/viewer3d/MotorScene';
 import ParameterVariationTable from './components/sweep/ParameterVariationTable';
+import MotorGarage from './components/parameters/MotorGarage';
 import MaterialControls from './components/parameters/MaterialControls';
 import SweepConfigPanel from './components/sweep/SweepConfigPanel';
 import MaterialsLibraryTree from './components/materials/MaterialsLibraryTree';
@@ -292,6 +293,7 @@ function App() {
                 overflowY: 'auto',
                 p: 1.5,
               }}>
+                <MotorGarage />
                 <ParameterVariationTable />
               </Box>
 

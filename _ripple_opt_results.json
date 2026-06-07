@@ -1,0 +1,192 @@
+{
+  "baseline": {
+    "Tavg": 25.280880036440767,
+    "ripple": 17.598916906684543
+  },
+  "best_over": {
+    "magnet_fill_up": 0.52,
+    "magnet_up_gap": 2.5,
+    "rotor_fill_r": 2.6
+  },
+  "best": {
+    "Tavg": 24.531227713370527,
+    "ripple": 7.366123580827207
+  },
+  "results": [
+    {
+      "over": {},
+      "Tavg": 25.280880036440767,
+      "ripple": 17.598916906684543,
+      "tag": "baseline"
+    },
+    {
+      "over": {
+        "magnet_fill_up": 0.34
+      },
+      "Tavg": 25.218705242264676,
+      "ripple": 15.55864325195642,
+      "tag": "magnet_fill_up=0.34"
+    },
+    {
+      "over": {
+        "magnet_fill_up": 0.38
+      },
+      "Tavg": 25.797525560040835,
+      "ripple": 17.256773300067184,
+      "tag": "magnet_fill_up=0.38"
+    },
+    {
+      "over": {
+        "magnet_fill_up": 0.42
+      },
+      "Tavg": 25.303208393716236,
+      "ripple": 16.180259681128437,
+      "tag": "magnet_fill_up=0.42"
+    },
+    {
+      "over": {
+        "magnet_fill_up": 0.48
+      },
+      "Tavg": 25.075843810690476,
+      "ripple": 12.812975652193549,
+      "tag": "magnet_fill_up=0.48"
+    },
+    {
+      "over": {
+        "magnet_fill_up": 0.52
+      },
+      "Tavg": 25.44700381566062,
+      "ripple": 11.240562120923208,
+      "tag": "magnet_fill_up=0.52"
+    },
+    {
+      "over": {
+        "magnet_fill_up": 0.52,
+        "magnet_up_gap": 1.0
+      },
+      "Tavg": 26.70981876149206,
+      "ripple": 21.2184065603053,
+      "tag": "magnet_up_gap=1.0"
+    },
+    {
+      "over": {
+        "magnet_fill_up": 0.52,
+        "magnet_up_gap": 1.5
+      },
+      "Tavg": 26.035415218514345,
+      "ripple": 18.319508398291912,
+      "tag": "magnet_up_gap=1.5"
+    },
+    {
+      "over": {
+        "magnet_fill_up": 0.52,
+        "magnet_up_gap": 2.5
+      },
+      "Tavg": 24.43784311503694,
+      "ripple": 8.329597828230611,
+      "tag": "magnet_up_gap=2.5"
+    },
+    {
+      "over": {
+        "magnet_fill_up": 0.52,
+        "magnet_up_gap": 3.0
+      },
+      "Tavg": 23.66531187761148,
+      "ripple": 9.647446011263716,
+      "tag": "magnet_up_gap=3.0"
+    },
+    {
+      "over": {
+        "magnet_fill_up": 0.52,
+        "magnet_up_gap": 2.5,
+        "magnet_fill_down": 0.8
+      },
+      "Tavg": 24.176586249293223,
+      "ripple": 9.037381402379282,
+      "tag": "magnet_fill_down=0.8"
+    },
+    {
+      "over": {
+        "magnet_fill_up": 0.52,
+        "magnet_up_gap": 2.5,
+        "magnet_fill_down": 0.85
+      },
+      "Tavg": 23.84947158567065,
+      "ripple": 11.501197366113928,
+      "tag": "magnet_fill_down=0.85"
+    },
+    {
+      "over": {
+        "magnet_fill_up": 0.52,
+        "magnet_up_gap": 2.5,
+        "magnet_fill_down": 0.95
+      },
+      "Tavg": 24.60078209364427,
+      "ripple": 8.381570650589437,
+      "tag": "magnet_fill_down=0.95"
+    },
+    {
+      "over": {
+        "magnet_fill_up": 0.52,
+        "magnet_up_gap": 2.5,
+        "rotor_fill_r": 0.8
+      },
+      "Tavg": 24.294807193439386,
+      "ripple": 15.3348808881122,
+      "tag": "rotor_fill_r=0.8"
+    },
+    {
+      "over": {
+        "magnet_fill_up": 0.52,
+        "magnet_up_gap": 2.5,
+        "rotor_fill_r": 2.0
+      },
+      "Tavg": 24.38038411747196,
+      "ripple": 7.2754491424321985,
+      "tag": "rotor_fill_r=2.0"
+    },
+    {
+      "over": {
+        "magnet_fill_up": 0.52,
+        "magnet_up_gap": 2.5,
+        "rotor_fill_r": 2.6
+      },
+      "Tavg": 24.531227713370527,
+      "ripple": 7.366123580827207,
+      "tag": "rotor_fill_r=2.6"
+    },
+    {
+      "over": {
+        "magnet_fill_up": 0.52,
+        "magnet_up_gap": 2.5,
+        "rotor_fill_r": 2.6,
+        "tooth2_width": 4.5
+      },
+      "Tavg": 24.269545902930375,
+      "ripple": 9.578046302778782,
+      "tag": "tooth2_width=4.5"
+    },
+    {
+      "over": {
+        "magnet_fill_up": 0.52,
+        "magnet_up_gap": 2.5,
+        "rotor_fill_r": 2.6,
+        "tooth2_width": 5.0
+      },
+      "Tavg": 24.336604875583003,
+      "ripple": 8.468696635726333,
+      "tag": "tooth2_width=5.0"
+    },
+    {
+      "over": {
+        "magnet_fill_up": 0.52,
+        "magnet_up_gap": 2.5,
+        "rotor_fill_r": 2.6,
+        "tooth2_width": 6.0
+      },
+      "Tavg": 24.700092712630052,
+      "ripple": 7.478707094978318,
+      "tag": "tooth2_width=6.0"
+    }
+  ]
+}

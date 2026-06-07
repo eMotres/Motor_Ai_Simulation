@@ -1,0 +1,12 @@
+{
+  "best_over": {
+    "magnet_fill_up": 0.56,
+    "magnet_up_gap": 2.5,
+    "rotor_fill_r": 2.0,
+    "magnet_fill_down": 0.92
+  },
+  "best": {
+    "Tavg": 24.81551616042319,
+    "ripple": 4.71110218525979
+  }
+}

@@ -33,6 +33,7 @@ import {
 import MotorScene from './components/viewer3d/MotorScene';
 import ParameterVariationTable from './components/sweep/ParameterVariationTable';
 import MotorsCatalog from './components/catalog/MotorsCatalog';
+import AuthButton from './components/auth/AuthButton';
 import MaterialControls from './components/parameters/MaterialControls';
 import SweepConfigPanel from './components/sweep/SweepConfigPanel';
 import MaterialsLibraryTree from './components/materials/MaterialsLibraryTree';
@@ -209,6 +210,8 @@ function App() {
             )}
 
             <Box sx={{ flexGrow: 1 }} />
+
+            <AuthButton />
 
             {/* 3D view controls — only relevant when viewer is visible */}
             {showViewer && (

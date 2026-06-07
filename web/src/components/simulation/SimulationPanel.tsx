@@ -22,7 +22,6 @@ import ErrorIcon        from '@mui/icons-material/Error';
 import BoltIcon         from '@mui/icons-material/Bolt';
 import SimulationCharts from './SimulationCharts';
 import PhysicsDashboard from './PhysicsDashboard';
-import PinnTrainingPanel from './PinnTrainingPanel';
 
 // NOTE: using port 8001 (new backend with loss calculations)
 // Change back to 8000 after restarting the main backend
@@ -852,12 +851,6 @@ const SimulationPanel: React.FC = () => {
           onBusyChange={setSimBusy}
           steps={steps}
         />
-
-        {/* ── Modulus PINN diagnostics (GPU, runs in WSL) — moved BELOW the FEM
-            interface so it doesn't push the FEM dashboard/fields down ── */}
-        <Box sx={{ mt: 3 }}>
-          <PinnTrainingPanel />
-        </Box>
 
       </Box>
     </Box>

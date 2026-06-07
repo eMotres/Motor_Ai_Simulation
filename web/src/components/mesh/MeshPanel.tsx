@@ -440,7 +440,6 @@ const MeshPanel: React.FC = () => {
                 '&.Mui-selected': { color: '#e2e8f0', bgcolor: '#1e3a5f',
                   borderColor: '#3b82f6' } } }}>
             <ToggleButton value="fem">FEM mesh (real)</ToggleButton>
-            <ToggleButton value="pinn">PINN collocation</ToggleButton>
           </ToggleButtonGroup>
         </Box>
 

@@ -1,35 +1,35 @@
 geometry:
   stator_diameter: 150.0
-  slot_height: 14
+  slot_height: 14.0
   core_thickness: 4.2
-  num_seg: 4
-  num_slots_per_segment: 6
-  num_poles_per_segment: 7
-  stator_width: 35
+  num_seg: 4.0
+  num_slots_per_segment: 6.0
+  num_poles_per_segment: 7.0
+  stator_width: 35.0
   air_gap: 0.5
   tooth_width: 9.2
   tooth2_width: 5.5
-  cut_width: 6
+  cut_width: 6.0
   insulation_thickness: 0.15
-  wire_width: 5
+  wire_width: 5.0
   wire_height: 0.6
   wire_spacing_x: 0.1
   wire_spacing_y: 0.13
-  num_wires_per_slot: 14
+  num_wires_per_slot: 14.0
   slot_hs: 0.2
-  magnet_height: 16
+  magnet_height: 16.0
   rotor_house_height: 1.2
-  shaft_height: 3
+  shaft_height: 3.0
   magnet_fill_down: 0.9
   magnet_fill_up: 0.44
   magnet_fill_radius: 2.5
-  magnet_up_gap: 2
+  magnet_up_gap: 2.0
   rotor_hole: 0.6
   magnet_down_height: 1.8
   stator_fillet_r: 3.5
   stator_fillet_r1: 1.2
-  rotor_fill_r: 0.8          # fillet radius [mm] rounding EVERY sharp rotor corner at the air gap
-  motor_length: 35
+  rotor_fill_r: 1.6
+  motor_length: 35.0
 derived_params:
   stator_outer_radius: stator_diameter / 2
   stator_inner_radius: stator_outer_radius - core_thickness - slot_height
@@ -361,17 +361,12 @@ materials:
   shaft: Aluminium_6061
 custom_materials: {}
 winding:
-  n_coils_per_phase: 4      # total coils per phase (24 slots / 3 phases / 2 sides = 4)
-  connection: "2P2S"        # 2 parallel x 2 series — first simulation
-  n_parallel: 2             # parallel branches per phase
-  n_series: 2               # series coils per branch
-  # I_coil = I_phase / n_parallel  →  85 / 2 = 42.5 Arms per branch
-  # Amp-turns per slot = n_wires_per_slot * I_coil = 14 * 42.5 = 595 A·turns
-
+  n_coils_per_phase: 4
+  connection: 2P2S
+  n_parallel: 2
+  n_series: 2
 simulation:
-  max_current: 85.0         # phase RMS current [Arms]
-  frequency: 921.67         # electrical freq = rpm * pole_pairs / 60 = 3950*14/60
+  max_current: 85.0
+  frequency: 921.67
   rpm: 3950
-  phase_offset_deg: 0.0     # γ — current angle offset vs rotor d-axis [deg]
-                            # 0 = d-axis current (field weakening reference)
-                            # 90 = q-axis current (max torque for SPMSM)
+  phase_offset_deg: 0.0

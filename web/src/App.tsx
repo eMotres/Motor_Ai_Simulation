@@ -33,6 +33,7 @@ import {
 import MotorScene from './components/viewer3d/MotorScene';
 import ParameterVariationTable from './components/sweep/ParameterVariationTable';
 import MotorGarage from './components/parameters/MotorGarage';
+import MotorsCatalog from './components/catalog/MotorsCatalog';
 import MaterialControls from './components/parameters/MaterialControls';
 import SweepConfigPanel from './components/sweep/SweepConfigPanel';
 import MaterialsLibraryTree from './components/materials/MaterialsLibraryTree';
@@ -185,7 +186,7 @@ function App() {
     return () => clearTimeout(id);
   }, [activeTab]);
 
-  const showViewer = activeTab !== 'sweep';
+  const showViewer = activeTab !== 'sweep' && activeTab !== 'motors';
 
   return (
     <ThemeProvider theme={darkTheme}>
@@ -272,6 +273,7 @@ function App() {
             variant="fullWidth"
             sx={{ minHeight: 40 }}
           >
+            <Tab label="Motors" value="motors" sx={{ minHeight: 40, fontSize: '0.8rem', fontWeight: 700 }} />
             <Tab label="Geometry" value="geometry" sx={{ minHeight: 40, fontSize: '0.8rem' }} />
             <Tab label="Materials" value="materials" sx={{ minHeight: 40, fontSize: '0.8rem' }} />
             <Tab label="Mesh" value="mesh" sx={{ minHeight: 40, fontSize: '0.8rem' }} />
@@ -282,6 +284,9 @@ function App() {
 
         {/* ── Main Content ── */}
         <Box sx={{ flex: 1, overflow: 'hidden' }}>
+
+          {/* Motors catalog (full width) */}
+          {activeTab === 'motors' && <MotorsCatalog />}
 
           {/* Geometry: parameter table (left) + 3D viewer (right) */}
           {activeTab === 'geometry' && (

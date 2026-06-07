@@ -1,0 +1,83 @@
+{
+  "tiers": [
+    {
+      "id": "free",
+      "name": "Free",
+      "price_usd": 0,
+      "highlight": false,
+      "tagline": "Browse & explore",
+      "features": [
+        "Browse the full motor catalog",
+        "Precomputed FEM results (torque, ripple, losses)",
+        "Instant analytical preview when editing params",
+        "Save up to 3 of your own designs"
+      ],
+      "limits": { "live_fem": false, "saves": 3, "optimization": false, "export": false }
+    },
+    {
+      "id": "pro",
+      "name": "Pro",
+      "price_usd": 19,
+      "highlight": true,
+      "tagline": "Design for real",
+      "features": [
+        "Everything in Free",
+        "Live FEM — accurate field + transient on demand",
+        "Unlimited saved designs",
+        "Torque-ripple optimization",
+        "Export CSV / DXF"
+      ],
+      "limits": { "live_fem": true, "saves": -1, "optimization": true, "export": true }
+    },
+    {
+      "id": "team",
+      "name": "Team",
+      "price_usd": 99,
+      "highlight": false,
+      "tagline": "For teams",
+      "features": [
+        "Everything in Pro",
+        "Shared team library",
+        "Batch parameter sweeps",
+        "Priority compute queue",
+        "REST API access"
+      ],
+      "limits": { "live_fem": true, "saves": -1, "optimization": true, "export": true, "api": true }
+    }
+  ],
+  "diameters_mm": [40, 70, 100, 150, 200, 250, 300, 350, 400, 450],
+  "motors": [
+    {
+      "id": "cat_150_baseline",
+      "diameter_mm": 150,
+      "name": "SPM-150 Baseline",
+      "topology": "Spoke-PM SPMSM",
+      "slots": 24,
+      "poles": 28,
+      "rpm": 3950,
+      "current_a": 85,
+      "T_avg_Nm": 25.28,
+      "ripple_pct": 17.6,
+      "gamma_deg": 0,
+      "tier": "free",
+      "description": "24-slot / 28-pole spoke-PM, F45SH magnets — the reference design.",
+      "preset": "baseline"
+    },
+    {
+      "id": "cat_150_opt",
+      "diameter_mm": 150,
+      "name": "SPM-150 Low-Ripple",
+      "topology": "Spoke-PM SPMSM",
+      "slots": 24,
+      "poles": 28,
+      "rpm": 3950,
+      "current_a": 85,
+      "T_avg_Nm": 25.5,
+      "ripple_pct": 5.79,
+      "gamma_deg": -15,
+      "tier": "free",
+      "description": "Optimized: wider pole arc + MTPA. +0.9% torque, -67% ripple, same magnet.",
+      "preset": "optimized_low_ripple"
+    }
+  ]
+}

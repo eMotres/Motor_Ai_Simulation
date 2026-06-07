@@ -289,7 +289,6 @@ export const useMotorStore = create<MotorState>()(
             throw new Error(`HTTP error! status: ${response.status}`);
           }
           const data = await response.json();
-          const viewMode = get().viewMode;
           set({
             geometry: data as MotorGeometryParams,
             isLoading: false,
@@ -733,7 +732,7 @@ export const useMotorStore = create<MotorState>()(
         const { optimizationResult } = get();
         if (!optimizationResult) return;
         const config = {
-          steps_per_period: optimizationResult.steps_per_period,
+          steps_per_period: (optimizationResult as any).steps_per_period,
           operating_points: optimizationResult.operating_points,
           variables: optimizationResult.variables,
           ripple_max_pct: optimizationResult.ripple_max_pct,

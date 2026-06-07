@@ -1,6 +1,5 @@
 import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
-import { LineSegments } from 'three';
 import { useUIStore } from '../../stores/motorStore';
 
 interface STLMeshProps {

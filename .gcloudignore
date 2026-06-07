@@ -11,10 +11,12 @@ env/
 simulation_output/
 geometry_cache/
 *.log
-_*.py
-_*.json
-_*.txt
-*.png
+# root-level diagnostic scripts/artefacts ONLY — anchored so it does NOT match
+# package __init__.py / _*.py modules deep in src/
+/_*.py
+/_*.json
+/_*.txt
+/*.png
 DEPLOY.md
 ARCHITECTURE_SECURITY.md
 firebase.json

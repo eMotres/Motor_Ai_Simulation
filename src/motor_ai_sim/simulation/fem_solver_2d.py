@@ -3287,13 +3287,17 @@ def fem_transient_sliding_band(
     VC = [R_phase * i + e for i, e in zip(IC, eC.tolist())]
     Tavg = float(np.mean(T_series)) if T_series else 0.0
 
-    # ── Physical torque = DC + 6·k electrical orders only (see band_limit_torque):
-    # strips the broadband sliding-band stair-step noise from the raw torque while
-    # preserving the mean.  T_series is replaced by the clean wave; the raw pk-pk
-    # is kept as T_ripple_raw_pct for transparency.
+    # ── TORQUE FILTERING DISABLED (user request) ────────────────────────────
+    # The band_limit_torque() 6·k-harmonic reconstruction is bypassed for now:
+    # T_series is the RAW per-frame Maxwell-stress torque and T_ripple is its raw
+    # peak-to-peak.  (Re-enable by restoring the band_limit_torque() call below.)
+    #     T_series, Trip, Trip_raw = band_limit_torque(
+    #         T_series, n_steps_per_period, n_periods)
     if T_series:
-        T_series, Trip, Trip_raw = band_limit_torque(
-            T_series, n_steps_per_period, n_periods)
+        _xT = np.asarray(T_series, float)
+        _avgT = float(_xT.mean())
+        Trip = Trip_raw = (100.0 * (float(_xT.max()) - float(_xT.min())) / abs(_avgT)
+                           if abs(_avgT) > 1e-9 else 0.0)
     else:
         Trip = Trip_raw = 0.0
     Vpk = float(max(max(map(abs, VA)), max(map(abs, VB)), max(map(abs, VC)))) if VA else 0.0

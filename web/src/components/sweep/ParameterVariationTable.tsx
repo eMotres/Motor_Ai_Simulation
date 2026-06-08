@@ -19,6 +19,101 @@ import { useMotorStore } from '../../stores/motorStore';
 import type { VariationMode } from '../../types/motor';
 import AddParameterDialog from '../parameters/AddParameterDialog';
 
+const numFieldSx = {
+  width: 64,
+  '& .MuiInputBase-input': {
+    px: '4px', py: '4px', fontSize: 12, textAlign: 'right' as const,
+  },
+};
+
+/**
+ * Free-typing numeric cell.
+ *
+ * The old field bound `value={number.toFixed(prec)}` straight to the store and
+ * parsed every keystroke, so each re-render rewrote the text — you could not
+ * type a decimal ("2.6" → snapped to "2.000"), could not clear the box, and the
+ * cursor jumped.  Here the DISPLAYED text is a local draft string: you type
+ * whatever you want, valid numbers are committed live to the local edit buffer
+ * (so Recalculate/Enter still sees them), and the value is normalised + clamped
+ * to [min, max] only on blur / Enter.  Focus selects the text so you can just
+ * start typing your number, like a spreadsheet cell.
+ */
+interface ParamValueFieldProps {
+  value: number;
+  type: 'float' | 'int';
+  step?: number;
+  min?: number;
+  max?: number;
+  dirty: boolean;
+  onCommit: (v: number) => void;   // live local commit (no API call)
+  onEnter: () => void;             // Recalculate
+}
+
+const ParamValueField: React.FC<ParamValueFieldProps> = ({
+  value, type, step, min, max, dirty, onCommit, onEnter,
+}) => {
+  const prec = type === 'int' ? 0
+    : step && step < 0.1 ? 3
+    : step && step < 1   ? 2
+    : 1;
+  const fmt = (v: number) =>
+    Number.isFinite(v) ? (type === 'int' ? String(Math.round(v)) : v.toFixed(prec)) : '';
+
+  const [draft, setDraft]     = useState<string>(fmt(value));
+  const [focused, setFocused] = useState(false);
+
+  // Follow the store value ONLY while not editing — never clobber typing.
+  useEffect(() => {
+    if (!focused) setDraft(fmt(value));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value, focused]);
+
+  const parse = (s: string) => {
+    const raw = s.trim().replace(',', '.');                 // accept comma decimal
+    return type === 'int' ? parseInt(raw, 10) : parseFloat(raw);
+  };
+
+  return (
+    <TextField
+      size="small"
+      value={draft}
+      onChange={(e) => {
+        const s = e.target.value;
+        setDraft(s);                                        // show exactly what is typed
+        const n = parse(s);
+        if (!Number.isNaN(n)) onCommit(n);                  // live-commit valid numbers
+      }}
+      onFocus={(e) => {
+        setFocused(true);
+        const el = e.target;
+        requestAnimationFrame(() => { try { el.select(); } catch { /* noop */ } });
+      }}
+      onBlur={() => {
+        setFocused(false);
+        let n = parse(draft);
+        if (Number.isNaN(n)) { setDraft(fmt(value)); return; }  // blank → revert
+        if (typeof min === 'number' && n < min) n = min;        // clamp
+        if (typeof max === 'number' && n > max) n = max;
+        if (type === 'int') n = Math.round(n);
+        onCommit(n);
+        setDraft(fmt(n));
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') { (e.target as HTMLInputElement).blur(); onEnter(); }
+        else if (e.key === 'Escape') { setDraft(fmt(value)); (e.target as HTMLInputElement).blur(); }
+      }}
+      inputProps={{ inputMode: 'decimal', step, min, max }}
+      sx={{
+        ...numFieldSx,
+        '& .MuiOutlinedInput-root': dirty ? {
+          '& fieldset':        { borderColor: '#f59e0b55' },
+          '&:hover fieldset':  { borderColor: '#f59e0b' },
+        } : {},
+      }}
+    />
+  );
+};
+
 const ParameterVariationTable: React.FC = () => {
   const [dialogOpen, setDialogOpen] = useState(false);
 
@@ -63,16 +158,11 @@ const ParameterVariationTable: React.FC = () => {
   const dirtyCount = dirtyKeys.size;
   const isDirty    = dirtyCount > 0;
 
-  // ── field change → local only ─────────────────────────────────────────
-  const handleValueChange = useCallback((
-    name: string, raw: string, type: 'float' | 'int'
-  ) => {
-    const v = type === 'int' ? parseInt(raw, 10) : parseFloat(raw);
-    if (isNaN(v)) return;
-
+  // ── value committed from a field → local edit buffer only (no API) ──────
+  const commitValue = useCallback((name: string, v: number) => {
     setLocalValues(prev => ({ ...prev, [name]: v }));
     setDirtyKeys(prev => {
-      // Mark dirty only if value actually changed from server value
+      // Mark dirty only if value actually changed from the server value
       const serverVal = geometry[name] as number;
       const next = new Set(prev);
       if (v !== serverVal) next.add(name);
@@ -103,6 +193,9 @@ const ParameterVariationTable: React.FC = () => {
     if (isActive) {
       updateVariation(name, { mode: 'fixed' });
     } else {
+      // Only whitelisted (optimizable) parameters may be ADDED to the sweep.
+      const sch = parameterSchema.find(p => p.name === name);
+      if (sch && sch.optimizable === false) return;
       // On first selection, default Min AND Max to the parameter's CURRENT
       // value — the user then widens the range.  (Schema min/max were far too
       // wide, e.g. Slot Height 1..100.)
@@ -121,16 +214,11 @@ const ParameterVariationTable: React.FC = () => {
     parameterGroups
       .map(g => ({
         ...g,
-        params: parameterSchema.filter(p => p.group === g.id && p.type !== 'string'),
+        params: parameterSchema.filter(p => p.group === g.id && p.type !== 'string' && !p.hidden),
       }))
       .filter(g => g.params.length > 0),
     [parameterGroups, parameterSchema]
   );
-
-  const fieldSx = {
-    width: 52,
-    '& .MuiInputBase-input': { px: '4px', py: '4px', fontSize: 12 },
-  };
 
   const isRunning = isGeometryUpdating;
 
@@ -223,6 +311,9 @@ const ParameterVariationTable: React.FC = () => {
             const displayVal = localVal !== undefined
               ? localVal
               : (geometry[param.name] ?? 0);
+            // Whitelist gate: only optimizable params may be ADDED to the sweep.
+            // An already-active param always keeps its remove (✕) control.
+            const canSweep = isActive || param.optimizable !== false;
 
             return (
               <Box
@@ -268,46 +359,36 @@ const ParameterVariationTable: React.FC = () => {
                   </Typography>
                 </Box>
 
-                {/* Editable value — controlled */}
-                <TextField
-                  size="small"
-                  type="number"
-                  value={typeof displayVal === 'number'
-                    ? displayVal.toFixed(
-                        param.step && param.step < 0.1 ? 3
-                        : param.step && param.step < 1  ? 2
-                        : 1
-                      )
-                    : displayVal}
-                  onChange={e =>
-                    handleValueChange(param.name, e.target.value, param.type as 'float' | 'int')
-                  }
-                  onKeyDown={e => {
-                    if (e.key === 'Enter') handleRecalculate();
-                  }}
-                  inputProps={{ step: param.step, min: param.min, max: param.max }}
-                  sx={{
-                    ...fieldSx,
-                    '& .MuiOutlinedInput-root': dirty ? {
-                      '& fieldset': { borderColor: '#f59e0b55' },
-                      '&:hover fieldset': { borderColor: '#f59e0b' },
-                    } : {},
-                  }}
+                {/* Editable value — free-typing local draft */}
+                <ParamValueField
+                  value={typeof displayVal === 'number' ? displayVal : (Number(displayVal) || 0)}
+                  type={param.type as 'float' | 'int'}
+                  step={param.step}
+                  min={param.min}
+                  max={param.max}
+                  dirty={dirty}
+                  onCommit={(v) => commitValue(param.name, v)}
+                  onEnter={handleRecalculate}
                 />
 
-                {/* Add / remove from sweep */}
-                <Tooltip title={isActive ? 'Remove from sweep' : 'Add to sweep'}>
-                  <IconButton
-                    size="small"
-                    color={isActive ? 'primary' : 'default'}
-                    onClick={() => toggleSweep(param.name)}
-                    sx={{ p: 0.4, opacity: isActive ? 1 : 0.35, '&:hover': { opacity: 1 } }}
-                  >
-                    {isActive
-                      ? <CloseIcon     sx={{ fontSize: 15 }} />
-                      : <ShowChartIcon sx={{ fontSize: 15 }} />}
-                  </IconButton>
-                </Tooltip>
+                {/* Add / remove from sweep — only for whitelisted params */}
+                {canSweep ? (
+                  <Tooltip title={isActive ? 'Remove from sweep' : 'Add to sweep'}>
+                    <IconButton
+                      size="small"
+                      color={isActive ? 'primary' : 'default'}
+                      onClick={() => toggleSweep(param.name)}
+                      sx={{ p: 0.4, opacity: isActive ? 1 : 0.35, '&:hover': { opacity: 1 } }}
+                    >
+                      {isActive
+                        ? <CloseIcon     sx={{ fontSize: 15 }} />
+                        : <ShowChartIcon sx={{ fontSize: 15 }} />}
+                    </IconButton>
+                  </Tooltip>
+                ) : (
+                  // Not optimizable → no sweep toggle, keep row alignment
+                  <Box sx={{ width: 30, height: 30, flexShrink: 0 }} />
+                )}
               </Box>
             );
           })}

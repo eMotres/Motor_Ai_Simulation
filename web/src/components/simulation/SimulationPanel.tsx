@@ -22,6 +22,7 @@ import ErrorIcon        from '@mui/icons-material/Error';
 import BoltIcon         from '@mui/icons-material/Bolt';
 import SimulationCharts from './SimulationCharts';
 import PhysicsDashboard from './PhysicsDashboard';
+import ModelCompare from './ModelCompare';
 
 // NOTE: using port 8001 (new backend with loss calculations)
 // Change back to 8000 after restarting the main backend
@@ -102,7 +103,7 @@ const CONNECTIONS: { key: ConnectionKey; label: string; nP: number; nS: number; 
   { key: '4P',   label: '4P',   nP: 4, nS: 1, desc: '4 parallel — max current' },
 ];
 
-const SimulationPanel: React.FC = () => {
+const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => {
   // localStorage-backed state so the whole left column survives reloads.
   const usePersisted = <T,>(key: string, def: T) => {
     const [v, setV] = useState<T>(() => {
@@ -164,7 +165,11 @@ const SimulationPanel: React.FC = () => {
   // ticks, i.e. when the user presses "Run Simulation".  This lets them
   // change several parameters (γ, current, mesh settings) and launch ONE
   // solve instead of re-running on every keystroke.
-  const [runNonce, setRunNonce] = useState(0);
+  // Persisted so a computed simulation SURVIVES an F5: on reload runNonce is
+  // restored >0, the FEM viewers refetch (a fast backend cache hit) and the
+  // result reappears WITHOUT recomputing. It only changes when the user presses
+  // Run for a new simulation. (Was useState(0) → every reload wiped it.)
+  const [runNonce, setRunNonce] = usePersisted('runNonce', 0);
   const [simBusy,  setSimBusy]  = useState(false);
   // "fresh" tells the backend to discard any frames cached from a Stopped
   // run and recompute everything; cancelledRun remembers that the last run
@@ -176,8 +181,27 @@ const SimulationPanel: React.FC = () => {
     setFreshRun(fresh);
     setCancelledRun(false);
     setAskResume(false);
+    // Persist the operating point to config.yaml on every Run — so it's
+    // permanent across sessions/browsers (same principle as Rebuild mesh).
+    fetch(`${API}/api/simulation/config`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        max_current: current, frequency, rpm, phase_offset_deg: phaseOffset,
+      }),
+    }).catch(() => {});
     setRunNonce(n => n + 1);
   };
+
+  // Auto-run ONCE when the Simulation tab first becomes visible (on the first
+  // open or after an F5). The runNonce===0 guard means it computes exactly one
+  // time per page load — the panel stays mounted, so switching to another tab
+  // and back keeps the result without recomputing. Without this the right pane
+  // is a black void after every reload until you click Run. The backend caches
+  // the transient, so the auto-run is a fast cache hit on subsequent reloads.
+  useEffect(() => {
+    if (active && runNonce === 0 && !simBusy) launchRun(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active]);
   // Steps per electrical period (transient time resolution).  Persisted.
   // The text field edits a free string (stepsStr) and only commits a
   // clamped integer on blur / Enter, so typing "12" over "6" works
@@ -311,12 +335,8 @@ const SimulationPanel: React.FC = () => {
           </Typography>
           {srvStatus ? (
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              {srvStatus.modulus_available
-                ? <Chip icon={<BoltIcon sx={{ fontSize: 13 }}/>} label="NVIDIA Modulus"
-                    size="small" color="success" sx={{ fontSize: 10 }} />
-                : <Chip label="Dry-run (no Modulus)" size="small" color="warning"
-                    sx={{ fontSize: 10 }} />
-              }
+              <Chip icon={<BoltIcon sx={{ fontSize: 13 }}/>} label="2-D FEM"
+                size="small" color="success" sx={{ fontSize: 10 }} />
               <Tooltip title={srvStatus.solver}>
                 <InfoOutlinedIcon sx={{ fontSize: 14, color: '#475569', cursor: 'help' }}/>
               </Tooltip>
@@ -838,6 +858,10 @@ const SimulationPanel: React.FC = () => {
         {/* Analytical SimulationCharts (currents / voltages / losses) removed —
             the FEM transient panel inside PhysicsDashboard below shows all
             three waveforms computed from the actual mesh solve. */}
+
+        {/* ── Model comparison (diagnostics) — runs the three torque models
+            across a γ sweep so the inter-model discrepancy is visible. ── */}
+        <ModelCompare I_phase_rms={current} />
 
         {/* ── Physics dashboard (the standard FEM interface) — FIRST so the
             FEM results + fields + transient are the prominent view ── */}

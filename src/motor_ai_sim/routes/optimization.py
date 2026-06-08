@@ -47,7 +47,8 @@ _SCAN_WORKERS = 5            # concurrent FEM subprocesses
 
 def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
                      coil_temp_c: float, n_periods: float = 1.0,
-                     gamma_deg: float = 0.0) -> Dict[str, Any]:
+                     gamma_deg: float = 0.0, mesh_size_mm: float = 4.0,
+                     min_size_mm: float = 0.3) -> Dict[str, Any]:
     """Evaluate ONE (geometry, current, γ) with the real sliding-band transient
     in an isolated subprocess (FEM/LLVM crash → failed design, not a dead API).
     Rebuilds the CadQuery geometry + gmsh mesh for the candidate in-memory.
@@ -55,7 +56,8 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
     import subprocess, sys, json
     spec = json.dumps({"overrides": overrides, "current_a": current_a,
                        "steps": int(steps), "coil_temp_c": float(coil_temp_c),
-                       "n_periods": float(n_periods), "gamma_deg": float(gamma_deg)})
+                       "n_periods": float(n_periods), "gamma_deg": float(gamma_deg),
+                       "mesh_size_mm": float(mesh_size_mm), "min_size_mm": float(min_size_mm)})
     try:
         proc = subprocess.run(
             [sys.executable, "-m", "motor_ai_sim.optimization.refine_proc"],
@@ -247,6 +249,8 @@ class ScanRequest(BaseModel):
     ripple_max_pct: float = 100.0
     max_geometries: int = 24               # cap on enumerated geometries
     coil_temp_c: float = 120.0
+    mesh_size_mm: float = 4.0              # mesh resolution (set from Mesh tab) — coarser = faster scan
+    min_size_mm: float = 0.3
     seed: int = 12345
     run_id: str = ""
 
@@ -298,7 +302,7 @@ def _point_from_eval(out: Dict[str, Any], ov: Dict[str, float], I: float,
 
 
 def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
-                 max_geom, seed, run_id) -> None:
+                 max_geom, seed, run_id, mesh_size_mm=4.0, min_size_mm=0.3) -> None:
     import numpy as np  # noqa: F401
     from concurrent.futures import ThreadPoolExecutor, as_completed
     from motor_ai_sim.optimization.optimizer import _pareto_front
@@ -326,7 +330,8 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
             g = float(ov.get("gamma_deg", opg))
             geo_ov = {k: v for k, v in ov.items() if k != "gamma_deg"}
             out = _subprocess_eval(geo_ov, I, steps, coil_temp_c,
-                                   n_periods=_NPER, gamma_deg=g)
+                                   n_periods=_NPER, gamma_deg=g,
+                                   mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm)
             return i, _point_from_eval(out, ov, I, gi, oi, ripple_max)
 
         # Manual executor so a Stop can cancel the not-yet-started tasks (the
@@ -369,7 +374,8 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
             baseline = {"feasible": False, "fem": True, "overrides": {}}
         else:
             base_out = _subprocess_eval({}, float(operating_points[0].get("current_a", 85.0)),
-                                        steps, coil_temp_c, n_periods=_NPER)
+                                        steps, coil_temp_c, n_periods=_NPER,
+                                        mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm)
             baseline = _point_from_eval(base_out, {}, float(operating_points[0].get("current_a", 85.0)),
                                         -1, 0, ripple_max)
         with _scan_lock:
@@ -404,20 +410,33 @@ def scan_designs(req: ScanRequest):
     with _scan_lock:
         if _scan_state["running"]:
             raise HTTPException(status_code=409, detail="a scan is already running")
+        # Whitelist gate: only sweep_whitelist params (plus the load-angle
+        # gamma_deg, which is not a geometry knob) may be scanned.  Empty/missing
+        # whitelist → allow all (back-compat).
+        wl = get_config().get("sweep_whitelist", None)
+        allowed = set(wl or [])
         variables = [{"name": v.name, "min": float(v.min), "max": float(v.max),
-                      "mode": v.mode, "step": float(v.step)} for v in req.variables]
+                      "mode": v.mode, "step": float(v.step)} for v in req.variables
+                     if (not allowed) or v.name == "gamma_deg" or v.name in allowed]
+        if req.variables and not variables:
+            raise HTTPException(status_code=400,
+                                detail="no scan variables are in the sweep whitelist")
         ops = [{"gamma_deg": float(o.gamma_deg), "current_a": float(o.current_a),
                 "rpm": float(o.rpm)} for o in (req.operating_points or [])] or \
               [{"gamma_deg": 0.0, "current_a": 85.0, "rpm": 3950.0}]
         steps = max(4, min(int(req.steps_per_period), 180))
         max_geom = max(1, min(int(req.max_geometries), 400))
+        mesh_size = max(1.0, min(float(req.mesh_size_mm), 12.0))
+        min_size  = max(0.1, min(float(req.min_size_mm), 3.0))
         _scan_state.update({"running": True, "done": 0, "total": 0, "result": None,
                             "run_id": req.run_id, "error": None, "cancel": False})
     threading.Thread(target=_scan_worker,
                      args=(variables, ops, steps, float(req.coil_temp_c),
-                           float(req.ripple_max_pct), max_geom, int(req.seed), req.run_id),
+                           float(req.ripple_max_pct), max_geom, int(req.seed), req.run_id,
+                           mesh_size, min_size),
                      daemon=True).start()
-    return {"started": True, "steps_per_period": steps, "max_geometries": max_geom}
+    return {"started": True, "steps_per_period": steps, "max_geometries": max_geom,
+            "mesh_size_mm": mesh_size, "min_size_mm": min_size}
 
 
 @router.get("/scan/progress")
@@ -430,6 +449,323 @@ def scan_progress():
 def scan_cancel():
     with _scan_lock:
         _scan_state["cancel"] = True
+    return {"cancelled": True}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GRADIENT / COORDINATE DESCENT — fixed current+rpm, vary the whitelisted
+# geometry knobs.  At each iteration every variable is perturbed ±step (central
+# finite difference, evaluated in parallel) to estimate ∂cost/∂var; we then step
+# downhill along the normalised gradient with a backtracking line search.
+#
+#   F    = (efficiency/eff0)^w_eff · (torque_per_mass/td0)^w_td   (both maximised)
+#   cost = −F + λ·max(0, ripple − ripple_max)                     (ripple penalty)
+#
+# So while ripple is above target the penalty dominates (descent drives ripple
+# down first); once feasible it rides the constraint boundary while pushing
+# efficiency × torque-density up.  Every evaluation is a real sliding-band FEM
+# transient in an isolated subprocess.
+# ─────────────────────────────────────────────────────────────────────────────
+_descent_state: Dict[str, Any] = {
+    "running": False, "iter": 0, "max_iters": 0, "n_evals": 0,
+    "best": None, "current": None, "history": [], "baseline": None,
+    "run_id": "", "error": None, "cancel": False,
+}
+_descent_lock = threading.Lock()
+
+
+class DescentRequest(BaseModel):
+    variables: List[OptVariable] = Field(default_factory=list)   # names (+optional bounds/step)
+    operating_point: OptOperating = Field(default_factory=OptOperating)
+    ripple_max_pct: float = 5.0
+    w_eff: float = 1.0                # weight on efficiency ratio
+    w_td: float = 1.0                 # weight on torque-density ratio
+    penalty_lambda: float = 1.0       # ripple-violation penalty
+    max_iters: int = 8
+    steps_per_period: int = 24        # FEM frames/period (higher → cleaner ripple gradient)
+    coil_temp_c: float = 120.0
+    mesh_size_mm: float = 4.0
+    min_size_mm: float = 0.3
+    run_id: str = ""
+
+
+def _msum(m: Dict[str, Any]) -> Dict[str, Any]:
+    """Compact metric snapshot for history / progress."""
+    return {
+        "T_em_Nm":         m.get("T_em_Nm"),
+        "efficiency":      m.get("efficiency"),
+        "torque_per_mass": m.get("torque_per_mass_Nm_kg"),
+        "T_ripple_pct":    m.get("T_ripple_pct"),
+        "mass_total_kg":   m.get("mass_total_kg"),
+        "P_loss_total_W":  m.get("P_loss_total_W"),
+        "V_peak":          m.get("V_peak"),
+    }
+
+
+def _pt(out: Dict[str, Any], kind: str):
+    """One evaluated design as a point in objective space (torque-density vs
+    efficiency), for the 2-D projection.  None if the eval failed."""
+    if not out or not out.get("ok"):
+        return None
+    r = out["res"]
+    return {"td": r.get("torque_per_mass_Nm_kg"), "eff": r.get("efficiency"),
+            "ripple": r.get("T_ripple_pct"), "kind": kind}
+
+
+def _descent_cost(m: Dict[str, Any], base: Dict[str, Any],
+                  ripple_max: float, w_eff: float, w_td: float, lam: float):
+    """Scalar cost (lower = better) + the raw figure-of-merit F."""
+    eff  = max(float(m.get("efficiency", 0.0) or 0.0), 1e-6)
+    td   = max(float(m.get("torque_per_mass_Nm_kg", 0.0) or 0.0), 1e-6)
+    rip  = float(m.get("T_ripple_pct", 1e9) or 1e9)
+    eff0 = max(float(base.get("efficiency", 1.0) or 1.0), 1e-6)
+    td0  = max(float(base.get("torque_per_mass_Nm_kg", 1.0) or 1.0), 1e-6)
+    F    = ((eff / eff0) ** w_eff) * ((td / td0) ** w_td)
+    pen  = lam * max(0.0, rip - ripple_max)
+    return (-F + pen), F
+
+
+def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
+                    steps, coil_temp, mesh_size, min_size, max_iters, run_id) -> None:
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    try:
+        cfg = get_config()
+        geo0 = dict(cfg.get("geometry", {}))
+        I   = float(op.get("current_a", 85.0))
+        g   = float(op.get("gamma_deg", 0.0))
+        _spec_by = {v["name"]: v for v in var_specs}
+
+        def _fit(name, val):
+            """Clamp into bounds; round integer-typed variables."""
+            v = _spec_by[name]
+            val = min(v["hi"], max(v["lo"], val))
+            return round(val) if v.get("is_int") else val
+
+        # Start at the current config value for each variable, clamped to bounds.
+        x = {}
+        for v in var_specs:
+            x[v["name"]] = _fit(v["name"], float(geo0.get(v["name"], v["lo"])))
+
+        def evalx(xx):
+            return _subprocess_eval(xx, I, steps, coil_temp, n_periods=1.0,
+                                    gamma_deg=g, mesh_size_mm=mesh_size,
+                                    min_size_mm=min_size)
+
+        n_evals = 0
+        b = evalx(x); n_evals += 1
+        if not b.get("ok"):
+            with _descent_lock:
+                _descent_state.update(error=f"baseline eval failed: {b.get('error')}")
+            return
+        base = b["res"]
+        cost0, F0 = _descent_cost(base, base, ripple_max, w_eff, w_td, lam)
+        best = {"x": dict(x), "metrics": base, "cost": cost0, "F": F0}   # descent iterate
+        # best_seen = the GLOBALLY lowest-cost design over ALL evaluations (not just
+        # accepted iterates) — this is what the ⭐/Apply report, so a great gradient
+        # probe is never thrown away.
+        best_seen = {"x": dict(x), "metrics": base, "cost": cost0, "F": F0}
+
+        def _consider(xx, out):
+            if out and out.get("ok"):
+                c, Fv = _descent_cost(out["res"], base, ripple_max, w_eff, w_td, lam)
+                if c < best_seen["cost"] - 1e-9:
+                    best_seen.update(x=dict(xx), metrics=out["res"], cost=c, F=Fv)
+
+        def _best_state():
+            return {"metrics": _msum(best_seen["metrics"]), "cost": round(best_seen["cost"], 5),
+                    "F": round(best_seen["F"], 5), "x": dict(best_seen["x"])}
+
+        history = [{"iter": 0, **_msum(base), "cost": round(cost0, 5), "F": round(F0, 5),
+                    "x": {k: round(float(v), 4) for k, v in x.items()}}]
+        all_pts = [p for p in [_pt(b, "baseline")] if p]   # every eval → objective-space point
+        with _descent_lock:
+            _descent_state.update(running=True, iter=0, max_iters=max_iters,
+                                  n_evals=n_evals, baseline=_msum(base),
+                                  best=_best_state(),
+                                  current=_msum(base), history=list(history), error=None,
+                                  grad={}, points=list(all_pts),
+                                  variables=[{"name": v["name"], "lo": v["lo"],
+                                              "hi": v["hi"], "step": v["step"]}
+                                             for v in var_specs])
+
+        lr = 3.0                       # step multiplier (in units of each var's step)
+        for it in range(1, int(max_iters) + 1):
+            with _descent_lock:
+                if _descent_state["cancel"]:
+                    break
+
+            # ── central finite-difference gradient (parallel) ───────────────
+            grad: Dict[str, float] = {}
+            futs = {}
+            with ThreadPoolExecutor(max_workers=_SCAN_WORKERS) as ex:
+                for v in var_specs:
+                    for sign in (+1, -1):
+                        xx = dict(best["x"])
+                        xx[v["name"]] = _fit(v["name"], xx[v["name"]] + sign * v["step"])
+                        futs[ex.submit(evalx, xx)] = (v["name"], sign, xx)
+                outs: Dict[Any, Any] = {}
+                for fut in as_completed(futs):
+                    nm, sg, pxx = futs[fut]
+                    out = fut.result()
+                    outs[(nm, sg)] = out
+                    n_evals += 1
+                    _consider(pxx, out)                   # track global best
+            for o in outs.values():                       # log gradient probes
+                p = _pt(o, "grad")
+                if p:
+                    all_pts.append(p)
+            with _descent_lock:
+                _descent_state["n_evals"] = n_evals
+                _descent_state["points"] = list(all_pts[-1200:])
+                _descent_state["best"] = _best_state()
+                if _descent_state["cancel"]:
+                    break
+
+            for v in var_specs:
+                op_p = outs.get((v["name"], +1)); op_m = outs.get((v["name"], -1))
+                if op_p and op_p.get("ok") and op_m and op_m.get("ok"):
+                    c_p, _ = _descent_cost(op_p["res"], base, ripple_max, w_eff, w_td, lam)
+                    c_m, _ = _descent_cost(op_m["res"], base, ripple_max, w_eff, w_td, lam)
+                    grad[v["name"]] = (c_p - c_m) / 2.0
+                else:
+                    grad[v["name"]] = 0.0
+
+            with _descent_lock:
+                _descent_state["grad"] = {k: round(float(gv), 6) for k, gv in grad.items()}
+
+            gmax = max((abs(gv) for gv in grad.values()), default=0.0)
+            if gmax < 1e-9:
+                break                  # flat → converged
+
+            # ── backtracking line search downhill along the unit gradient ───
+            improved = False
+            for trial in range(6):
+                step_mult = lr * (0.5 ** trial)
+                xx = dict(best["x"])
+                for v in var_specs:
+                    d = -grad[v["name"]] / gmax           # normalised component
+                    xx[v["name"]] = _fit(v["name"],
+                                         best["x"][v["name"]] + d * step_mult * v["step"])
+                out = evalx(xx); n_evals += 1
+                _consider(xx, out)                        # track global best
+                _lp = _pt(out, "line")
+                if _lp:
+                    all_pts.append(_lp)
+                with _descent_lock:
+                    _descent_state["n_evals"] = n_evals
+                    _descent_state["points"] = list(all_pts[-1200:])
+                    _descent_state["best"] = _best_state()
+                if out.get("ok"):
+                    c_new, F_new = _descent_cost(out["res"], base, ripple_max, w_eff, w_td, lam)
+                    if c_new < best["cost"] - 1e-6:
+                        best = {"x": xx, "metrics": out["res"], "cost": c_new, "F": F_new}
+                        history.append({"iter": it, **_msum(out["res"]),
+                                        "cost": round(c_new, 5), "F": round(F_new, 5),
+                                        "x": {k: round(float(v), 4) for k, v in xx.items()}})
+                        improved = True
+                        with _descent_lock:
+                            _descent_state.update(
+                                iter=it, n_evals=n_evals, history=list(history),
+                                current=_msum(out["res"]), best=_best_state())
+                        break
+            if not improved:
+                lr *= 0.5
+                with _descent_lock:
+                    _descent_state["iter"] = it
+                if lr < 0.05:
+                    break              # step too small → converged
+
+        with _descent_lock:
+            _descent_state.update(
+                result={"best": {"metrics": _msum(best_seen["metrics"]),
+                                 "cost": round(best_seen["cost"], 5),
+                                 "F": round(best_seen["F"], 5),
+                                 "overrides": {k: round(float(val), 4) for k, val in best_seen["x"].items()}},
+                        "baseline": _msum(base), "history": list(history),
+                        "n_evals": n_evals,
+                        "operating_point": op, "ripple_max_pct": ripple_max,
+                        "weights": {"w_eff": w_eff, "w_td": w_td, "lambda": lam}},
+                best=_best_state())
+    except Exception as e:  # noqa: BLE001
+        log.exception("descent failed")
+        with _descent_lock:
+            _descent_state["error"] = str(e)
+    finally:
+        with _descent_lock:
+            _descent_state["running"] = False
+
+
+@router.post("/descent/start")
+def descent_start(req: DescentRequest):
+    """Start a background gradient/coordinate descent (fixed current+rpm)."""
+    with _descent_lock:
+        if _descent_state["running"]:
+            raise HTTPException(status_code=409, detail="a descent is already running")
+
+    cfg = get_config()
+    schema = cfg.get("geometry_schema", {})
+    wl = cfg.get("sweep_whitelist", None)
+    allowed = set(wl or [])
+
+    # Build per-variable bounds + perturbation step.  Use the request bounds when
+    # a real range is given, else fall back to the schema min/max; step from the
+    # request, else schema step, else 5 % of the range.
+    var_specs: List[Dict[str, Any]] = []
+    for v in req.variables:
+        if allowed and v.name not in allowed:
+            continue
+        meta = schema.get(v.name, {})
+        s_lo = float(meta.get("min", v.min))
+        s_hi = float(meta.get("max", v.max))
+        lo, hi = (float(v.min), float(v.max)) if float(v.max) > float(v.min) else (s_lo, s_hi)
+        if hi <= lo:
+            continue
+        step = float(v.step) if float(v.step) > 0 else float(meta.get("step", 0) or 0)
+        if step <= 0:
+            step = max(1e-4, 0.05 * (hi - lo))
+        is_int = str(meta.get("type", "float")) == "int"
+        if is_int:
+            step = max(1.0, round(step))
+        var_specs.append({"name": v.name, "lo": lo, "hi": hi,
+                          "step": step, "is_int": is_int})
+
+    if not var_specs:
+        raise HTTPException(status_code=400,
+                            detail="no whitelisted variables with a usable range to descend")
+
+    op = {"gamma_deg": float(req.operating_point.gamma_deg),
+          "current_a": float(req.operating_point.current_a),
+          "rpm": float(req.operating_point.rpm)}
+    steps     = max(8, min(int(req.steps_per_period), 180))
+    mesh_size = max(1.0, min(float(req.mesh_size_mm), 12.0))
+    min_size  = max(0.1, min(float(req.min_size_mm), 3.0))
+    max_iters = max(1, min(int(req.max_iters), 40))
+
+    with _descent_lock:
+        _descent_state.update({"running": True, "iter": 0, "max_iters": max_iters,
+                               "n_evals": 0, "best": None, "current": None,
+                               "history": [], "baseline": None, "result": None,
+                               "run_id": req.run_id, "error": None, "cancel": False})
+    threading.Thread(
+        target=_descent_worker,
+        args=(var_specs, op, float(req.ripple_max_pct), float(req.w_eff),
+              float(req.w_td), float(req.penalty_lambda), steps,
+              float(req.coil_temp_c), mesh_size, min_size, max_iters, req.run_id),
+        daemon=True).start()
+    return {"started": True, "n_variables": len(var_specs), "max_iters": max_iters,
+            "variables": [s["name"] for s in var_specs], "steps_per_period": steps}
+
+
+@router.get("/descent/progress")
+def descent_progress():
+    with _descent_lock:
+        return dict(_descent_state)
+
+
+@router.post("/descent/cancel")
+def descent_cancel():
+    with _descent_lock:
+        _descent_state["cancel"] = True
     return {"cancelled": True}
 
 

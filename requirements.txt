@@ -14,3 +14,5 @@ cadquery-ocp==7.8.1.1.post1
 matplotlib==3.10.8
 pyyaml==6.0.3
 trimesh==4.11.2
+# Firebase ID-token verification (tier gating). [crypto] pulls cryptography.
+pyjwt[crypto]==2.10.1

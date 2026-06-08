@@ -70,9 +70,62 @@ def update_geometry(update: GeometryUpdateModel):
         with open(config_path, "w", encoding="utf-8") as f:
             yaml.dump(config, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
 
-        return params_to_dict(params)
+        # Flush the config cache so get_config()-based consumers (the analytical
+        # torque_sweep, params_from_config, winding calc, …) read the NEW
+        # geometry. Without this they keep returning the stale cross-section,
+        # which silently invalidates geometry optimization.
+        try:
+            from motor_ai_sim.config import clear_config_cache
+            clear_config_cache()
+        except Exception:
+            pass
+
+        # ── Enforce geometry feasibility constraints ─────────────────────────
+        # Clamp any knob that now violates a physical constraint (e.g. a winding
+        # that no longer fits the slot) and persist the clamped value, so the
+        # simulation geometry is ALWAYS valid.  Report what was clamped.
+        applied: list = []
+        try:
+            from motor_ai_sim.config import get_config, clear_config_cache
+            from motor_ai_sim.geometry_constraints import clamp as _clamp_geo
+            full_geo = dict(get_config().get("geometry", {}))
+            _clamped, applied = _clamp_geo(full_geo)
+            if applied:
+                fixes = {a["target"]: _clamped[a["target"]] for a in applied}
+                params = update_current_geometry(**fixes)
+                with open(config_path, "r", encoding="utf-8") as f:
+                    config = yaml.safe_load(f)
+                gs = config.setdefault("geometry", {})
+                for k, v in fixes.items():
+                    gs[k] = v
+                with open(config_path, "w", encoding="utf-8") as f:
+                    yaml.dump(config, f, allow_unicode=True,
+                              default_flow_style=False, sort_keys=False)
+                clear_config_cache()
+        except Exception:
+            pass
+
+        result = params_to_dict(params)
+        if applied:
+            result["constraints_applied"] = [
+                {"target": a["target"], "clamped_to": a["clamped_to"],
+                 "bound": a["bound"], "label": a["label"]} for a in applied]
+        return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/constraints")
+def get_geometry_constraints():
+    """Dynamic feasibility bounds (e.g. max wire_height) for the CURRENT geometry
+    so the UI can show the effective limit next to a field."""
+    try:
+        from motor_ai_sim.config import get_config
+        from motor_ai_sim.geometry_constraints import bounds, evaluate
+        geo = dict(get_config().get("geometry", {}))
+        return {"bounds": bounds(geo), "checks": evaluate(geo)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -188,6 +241,11 @@ def get_geometry_schema():
         config = get_config(reload=True)
         schema = config.get("geometry_schema", {})
         groups = config.get("parameter_groups", {})
+        # Only parameters in the whitelist may be used as Sweep/Optimize
+        # variables.  Empty/missing list → all parameters allowed (back-compat).
+        whitelist = config.get("sweep_whitelist", None)
+        allow_all = not whitelist
+        whitelist_set = set(whitelist or [])
 
         parameters = [
             {
@@ -200,6 +258,8 @@ def get_geometry_schema():
                 "step": meta.get("step", 0.1),
                 "group": meta.get("group", "other"),
                 "description": meta.get("description", ""),
+                "optimizable": bool(allow_all or name in whitelist_set),
+                "hidden": bool(meta.get("hidden", False)),
             }
             for name, meta in schema.items()
         ]

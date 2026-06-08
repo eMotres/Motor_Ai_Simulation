@@ -112,16 +112,16 @@ class JobStatus(BaseModel):
 
 @router.get("/status")
 async def simulation_status():
-    """Return Modulus availability and current config."""
+    """Return solver info and the current operating point."""
     try:
-        from motor_ai_sim.simulation.solver_2d import HAS_MODULUS
         from motor_ai_sim.simulation.solver_2d import SimConfig
         cfg = SimConfig.from_motor_config()
     except Exception as e:
         return {"modulus_available": False, "error": str(e)}
 
     return {
-        "modulus_available": HAS_MODULUS,
+        # legacy field kept for the frontend response shape; FEM is the solver now
+        "modulus_available": False,
         "operating_point": {
             "max_current":      cfg.I_peak,
             "frequency_hz":     cfg.frequency_hz,
@@ -129,8 +129,7 @@ async def simulation_status():
             "Br_magnet_T":      cfg.Br_magnet,
             "phase_offset_deg": cfg.phase_offset_deg,
         },
-        "solver": "2D Magnetostatics PINN (Modulus Sym)" if HAS_MODULUS
-                  else "Modulus not installed — dry-run mode",
+        "solver": "2-D magnetostatics FEM (scikit-fem, sliding-band transient)",
     }
 
 
@@ -869,6 +868,7 @@ async def build_fem_mesh_2d(
     outer_air_factor:    float = 1.0,     # 1.0 = no outer ring; 1.3 = +30% radius
     motion_band:         bool  = False,   # split air gap with thin DOM_BAND ring
     band_thickness_mm:   float = 0.4,
+    gap_layers:          float = 3.0,     # element layers across the air gap
     n_sectors:           int   = 1,       # 1 = full motor; 4 = 1/4 symmetry
     stator_fillet_mm:    float = 0.0,     # extra Shapely smoothing; polygons
                                           # now ship with CadQuery-radius fillets
@@ -907,6 +907,7 @@ async def build_fem_mesh_2d(
         round(outer_air_factor, 2),
         bool(motion_band),
         round(band_thickness_mm, 2),
+        round(gap_layers, 2),
         int(n_sectors),
         round(stator_fillet_mm, 2),
     )
@@ -925,6 +926,15 @@ async def build_fem_mesh_2d(
         motor = CadQueryMotor()
         if _params_dict:
             motor.set_parameters(_params_dict)   # LIVE params, not stale config
+        # The out_band far-field radius is baked into get_2d_polygons from
+        # motor.parameters["outer_air_factor"] — without feeding it here the
+        # Mesh-tab "Outer air ring" slider did nothing (same fix as the
+        # sliding-band path below).
+        try:
+            motor.parameters["outer_air_factor"] = float(outer_air_factor)
+            motor.parameters["band_thickness_mm"] = float(band_thickness_mm)
+        except Exception:
+            pass
         polys = motor.get_2d_polygons(rotor_angle_deg=rotor_angle_deg)
         # Cap the simplify tolerance hard: a large surface_deviation
         # Douglas-Peucker-flattens the rounded rotor-tooth / fillet ARCS into
@@ -948,6 +958,7 @@ async def build_fem_mesh_2d(
             outer_air_factor=outer_air_factor,
             motion_band=motion_band,
             band_thickness_mm=band_thickness_mm,
+            gap_layers=gap_layers,
             n_sectors=n_sectors,
         )
     except Exception as e:

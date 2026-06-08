@@ -301,18 +301,19 @@ const MeshPanel: React.FC = () => {
 
   const [meshSizeMm,  setMeshSizeMm]  = usePersisted<number>('meshSize',   4.0);
   const [minSizeMm,   setMinSizeMm]   = usePersisted<number>('minSize',    0.3);
+  // Fillet-arc resolution (Ansys "Normal Deviation"): max angle per fillet
+  // segment. Lower → more segments per rounded corner → smoother fillet + finer
+  // mesh there. Wired to n_arc in the geometry (get_2d_polygons).
+  const [normalDev,   setNormalDev]   = usePersisted<number>('normalDev',  6.0);
   // 'Surface deviation' control removed: any value >0.01 mm Douglas-Peucker-
   // flattened the rounded rotor-tooth / fillet arcs into straight chords, so
   // the Mesh no longer matched the real geometry. The Mesh now always uses the
   // real geometry (tol 0.005 mm, sent below); density is set by Max/Min size.
-  const [normalDev,   setNormalDev]   = usePersisted<number>('normalDev',  6.0);
-  const [aspectRatio, setAspectRatio] = usePersisted<number>('aspect',     10.0);
   const [rotorAngle,  setRotorAngle]  = usePersisted<number>('rotorAngle', 0.0);
   // ── Solver-domain extensions (Ansys-style) ───────────────────────────────
   const [outerAirFactor, setOuterAirFactor] = usePersisted<number>('outerAir', 1.3);
-  const [motionBand,     setMotionBand]     = usePersisted<boolean>('motionBand', true);
-  const [bandThickness,  setBandThickness]  = usePersisted<number>('bandThickness', 0.4);
   const [nSectors,       setNSectors]       = usePersisted<number>('nSectors', 4);   // 1/4 by default
+  const [gapLayers,      setGapLayers]      = usePersisted<number>('gapLayers', 3);  // element layers across the air gap
   // NOTE: the old "Extra fillet smoothing" control was removed — it applied a
   // Shapely buffer on top of the CadQuery fillets, deforming the Mesh geometry
   // away from the Geometry tab.  The Mesh now always uses the native geometry
@@ -336,17 +337,12 @@ const MeshPanel: React.FC = () => {
       ? `${API}/api/simulation/mesh/build2d_sliding_band`
       : `${API}/api/simulation/mesh/build2d`;
     const qs = new URLSearchParams(slidingBand ? {
-      // Sliding-band endpoint now accepts the full curvature-refinement set
-      // so the Normal/Surface deviation + Aspect ratio + Fillet sliders
-      // control the rotor & stator half meshes too.
       rotor_angle_deg:   rotorAngle.toString(),
       mesh_size_mm:      meshSizeMm.toString(),
       min_size_mm:       minSizeMm.toString(),
       surface_deviation: '0.005',     // real geometry — no flattening
       normal_deviation:  normalDev.toString(),
-      aspect_ratio:      aspectRatio.toString(),
       outer_air_factor:  outerAirFactor.toString(),
-      band_thickness_mm: bandThickness.toString(),
       n_sectors:         nSectors.toString(),
       stator_fillet_mm:  '0',          // native geometry — no extra smoothing
     } : {
@@ -354,11 +350,9 @@ const MeshPanel: React.FC = () => {
       min_size_mm:         minSizeMm.toString(),
       surface_deviation:   '0.005',   // real geometry — no flattening
       normal_deviation:    normalDev.toString(),
-      aspect_ratio:        aspectRatio.toString(),
       rotor_angle_deg:     rotorAngle.toString(),
       outer_air_factor:    outerAirFactor.toString(),
-      motion_band:         motionBand ? 'true' : 'false',
-      band_thickness_mm:   bandThickness.toString(),
+      gap_layers:          gapLayers.toString(),
       n_sectors:           nSectors.toString(),
       stator_fillet_mm:    '0',          // native geometry — no extra smoothing
     }).toString();
@@ -369,14 +363,24 @@ const MeshPanel: React.FC = () => {
       })
       .then((d: FemMesh) => { setFemMesh(d); setFemLoading(false); })
       .catch(e => { setFemError(String(e)); setFemLoading(false); });
-  }, [slidingBand, meshSizeMm, minSizeMm, normalDev, aspectRatio, rotorAngle,
-      outerAirFactor, motionBand, bandThickness, nSectors]);
+  }, [slidingBand, meshSizeMm, minSizeMm, normalDev, rotorAngle,
+      outerAirFactor, gapLayers, nSectors]);
 
   // Load current config + geometry on mount
   useEffect(() => {
     fetch(`${API}/api/mesh/config`)
       .then(r => r.json())
-      .then(d => setCfg(d))
+      .then(d => {
+        setCfg(d);
+        // Load the PERSISTED FEM mesh settings (config.yaml) → these win over the
+        // per-browser localStorage so the sliders are identical in every session.
+        if (typeof d.mesh_size_mm     === 'number') setMeshSizeMm(d.mesh_size_mm);
+        if (typeof d.min_size_mm      === 'number') setMinSizeMm(d.min_size_mm);
+        if (typeof d.outer_air_factor === 'number') setOuterAirFactor(d.outer_air_factor);
+        if (typeof d.gap_layers       === 'number') setGapLayers(d.gap_layers);
+        if (typeof d.normal_deviation === 'number') setNormalDev(d.normal_deviation);
+        if (typeof d.n_sectors        === 'number') setNSectors(d.n_sectors);
+      })
       .catch(() => {});
 
     fetch(`${API}/api/geometry/summary`)
@@ -388,6 +392,26 @@ const MeshPanel: React.FC = () => {
     fetchFemMesh();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Persist the Mesh-tab settings to config.yaml — ONLY on the explicit
+  // "Rebuild mesh" click (rebuildMesh below), not on every slider move. This
+  // makes them permanent + reused in all later sessions.
+  const saveMeshConfig = useCallback(() => {
+    fetch(`${API}/api/mesh/config`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        mesh_size_mm: meshSizeMm, min_size_mm: minSizeMm,
+        outer_air_factor: outerAirFactor, gap_layers: gapLayers,
+        normal_deviation: normalDev, n_sectors: nSectors,
+      }),
+    }).catch(() => {});
+  }, [meshSizeMm, minSizeMm, outerAirFactor, gapLayers, normalDev, nSectors]);
+
+  // "Rebuild mesh" button → persist the settings, then rebuild.
+  const rebuildMesh = useCallback(() => {
+    saveMeshConfig();
+    fetchFemMesh();
+  }, [saveMeshConfig, fetchFemMesh]);
 
   const totalPoints = useMemo(() => {
     const pts = estimatePoints(cfg);
@@ -496,12 +520,12 @@ const MeshPanel: React.FC = () => {
               />
             </Box>
 
-            {/* normal deviation */}
+            {/* Normal deviation — fillet-arc resolution (max angle per segment) */}
             <Box>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
                 <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>
                   Normal deviation
-                  <Tooltip title="Ansys equivalent — max angle between two consecutive boundary segments. Lower = smoother fillets" placement="right">
+                  <Tooltip title="Fillet-arc accuracy (Ansys Normal Deviation): max angle per segment of a rounded corner. Lower → more segments per fillet → smoother arc + finer mesh on the fillet. Drives the fillet vertex density (n_arc) in the geometry." placement="right">
                     <span style={{ color: '#475569', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
                   </Tooltip>
                 </Typography>
@@ -509,27 +533,8 @@ const MeshPanel: React.FC = () => {
                   sx={{ fontSize: 11, height: 20, bgcolor: '#1e293b', color: '#94a3b8' }}/>
               </Box>
               <Slider
-                value={normalDev} min={1.0} max={20.0} step={0.5}
+                value={normalDev} min={2.0} max={20.0} step={0.5}
                 onChange={(_, v) => setNormalDev(v as number)}
-                sx={{ color: '#3b82f6' }}
-              />
-            </Box>
-
-            {/* aspect ratio */}
-            <Box>
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-                <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>
-                  Aspect ratio max
-                  <Tooltip title="Maximum triangle aspect ratio (long-edge / short-edge)" placement="right">
-                    <span style={{ color: '#475569', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
-                  </Tooltip>
-                </Typography>
-                <Chip label={`${aspectRatio.toFixed(0)}`} size="small"
-                  sx={{ fontSize: 11, height: 20, bgcolor: '#1e293b', color: '#94a3b8' }}/>
-              </Box>
-              <Slider
-                value={aspectRatio} min={2} max={30} step={1}
-                onChange={(_, v) => setAspectRatio(v as number)}
                 sx={{ color: '#3b82f6' }}
               />
             </Box>
@@ -583,44 +588,23 @@ const MeshPanel: React.FC = () => {
               />
             </Box>
 
-            {/* Motion band */}
+            {/* Air-gap layers — element count across the air gap */}
             <Box>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
                 <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>
-                  Motion band
-                  <Tooltip title="Thin slip-surface ring inside the air gap. Transient solver re-meshes only this band as the rotor sweeps; rotor-side air rotates rigidly with the rotor." placement="right">
+                  Air-gap layers
+                  <Tooltip title="Number of element layers ACROSS the air gap (gap element size = gap / layers). Drives the densest part of the mesh. ≳3 keeps the Maxwell-stress torque mesh-independent; fewer = faster but the torque starts to drift." placement="right">
                     <span style={{ color: '#475569', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
                   </Tooltip>
                 </Typography>
-                <ToggleButtonGroup
-                  value={motionBand ? 'on' : 'off'} exclusive size="small"
-                  onChange={(_, v) => v && setMotionBand(v === 'on')}
-                  sx={{ '& .MuiToggleButton-root': { py: 0.1, px: 1,
-                    fontSize: 10, color: '#64748b', borderColor: '#1e293b',
-                    textTransform: 'none',
-                    '&.Mui-selected': { color: '#e2e8f0', bgcolor: '#1e3a5f',
-                      borderColor: '#3b82f6' } } }}>
-                  <ToggleButton value="off">Off</ToggleButton>
-                  <ToggleButton value="on">On</ToggleButton>
-                </ToggleButtonGroup>
+                <Chip label={`${gapLayers.toFixed(0)}×`} size="small"
+                  sx={{ fontSize: 11, height: 20, bgcolor: '#1e3a5f', color: '#93c5fd' }}/>
               </Box>
-              {motionBand && (
-                <>
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between',
-                    mb: 0.5, mt: 0.5 }}>
-                    <Typography sx={{ fontSize: 11, color: '#64748b' }}>
-                      Band thickness
-                    </Typography>
-                    <Chip label={`${bandThickness.toFixed(2)} mm`} size="small"
-                      sx={{ fontSize: 10, height: 18, bgcolor: '#1e293b', color: '#94a3b8' }}/>
-                  </Box>
-                  <Slider
-                    value={bandThickness} min={0.1} max={1.0} step={0.05}
-                    onChange={(_, v) => setBandThickness(v as number)}
-                    sx={{ color: '#3b82f6' }}
-                  />
-                </>
-              )}
+              <Slider
+                value={gapLayers} min={1} max={8} step={1}
+                marks onChange={(_, v) => setGapLayers(v as number)}
+                sx={{ color: '#06b6d4' }}
+              />
             </Box>
 
             {/* Sliding-band TWO-mesh view */}
@@ -712,7 +696,7 @@ const MeshPanel: React.FC = () => {
             <Button
               variant="outlined" fullWidth
               startIcon={femLoading ? <CircularProgress size={14} color="inherit"/> : <RefreshIcon/>}
-              onClick={fetchFemMesh}
+              onClick={rebuildMesh}
               disabled={femLoading}
               sx={{ py: 0.8, fontSize: 11, color: '#3b82f6', borderColor: '#1e3a5f' }}
             >

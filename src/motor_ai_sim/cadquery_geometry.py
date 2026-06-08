@@ -1280,6 +1280,13 @@ class CadQueryMotor:
         wire_dy     = p['wire_spacing_y']
         wire_h      = p['wire_height']
         num_wires   = int(p['num_wires_per_slot'])
+        # ── Feasibility clamp (see geometry_constraints.py) ───────────────────
+        # The winding must fit the slot, else the coils overflow across the air
+        # gap onto the rotor and the FEM solves an invalid cross-section.
+        #   wire_height ≤ (slot_height − 2·insulation)/num_wires − wire_spacing_y
+        _wh_max = (float(p.get('slot_height', 0.0)) - 2.0 * ins_w) / max(1, num_wires) - wire_dy
+        if _wh_max > 1e-3 and wire_h > _wh_max:
+            wire_h = _wh_max
 
         num_poles   = int(p['num_poles'])
         mag_h       = p['magnet_height']
@@ -1541,12 +1548,24 @@ class CadQueryMotor:
         right_x  = tooth_w/2 + ins_w + wire_dx/2
         slot_y_c = outer_r - core_h
         top_y_c  = slot_y_c - ins_w - wire_dy/2
+        # Wires must stay INSIDE the slot — never cross the stator inner radius
+        # into the air gap / rotor.  Stop stacking once a wire would overflow.
+        # (Without this, a too-large num_wires·wire_height pushed coils across the
+        #  gap onto the rotor → J_z applied in the air gap → invalid FEM.)
+        min_wire_r = inner_r + ins_w
+        n_fit = 0
+        for step in range(num_wires):
+            if top_y_c - step*(wire_h + wire_dy) - wire_h < min_wire_r:
+                break
+            n_fit += 1
+        self._coils_overflow = bool(n_fit < num_wires)
+        self._n_wires_fit = int(n_fit)
         coil_polys = []
         for i in range(half_slots):
             a = i * radians(slot_angle_deg)
             wires_pos: list = []
             wires_neg: list = []
-            for step in range(num_wires):
+            for step in range(n_fit):
                 cy = top_y_c - step*(wire_h + wire_dy)
                 # right (positive x) side
                 local_p = [(right_x, cy), (right_x + wire_w, cy),
@@ -1618,6 +1637,11 @@ class CadQueryMotor:
             'mid_r_mm': mid_r,            # slip-surface radius (mm)
             'r_outer_boundary_mm': r_outer,  # outer Dirichlet BC radius (mm)
             'coils':    coil_polys,       # list of Shapely Polygon in mm
+            # Winding fit: True if the requested num_wires_per_slot did NOT fit in
+            # the slot (stack clamped to n_wires_fit so coils stay out of the gap).
+            'coils_overflow': bool(getattr(self, '_coils_overflow', False)),
+            'n_wires_fit':    int(getattr(self, '_n_wires_fit', num_wires)),
+            'n_wires_requested': int(num_wires),
         }
 
     def get_extruded_mesh_data(self, depth: float = None) -> Dict[str, Dict]:

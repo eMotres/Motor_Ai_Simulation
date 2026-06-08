@@ -43,6 +43,11 @@ _ALLOWED_ORIGINS = [
     "https://aerostator-core-simulation.firebaseapp.com",
 ] + [o.strip() for o in _os.environ.get("ALLOWED_ORIGINS", "").split(",") if o.strip()]
 
+# Tier gate FIRST (inner), CORS LAST (outer) so 401/403 from the gate still
+# carry CORS headers — otherwise the browser shows a CORS error, not the 403.
+from motor_ai_sim.auth import install_tier_gate
+install_tier_gate(app)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_ALLOWED_ORIGINS,
@@ -398,59 +403,54 @@ class MeshConfigPatch(BaseModel):
     n_radial:       Optional[int]   = None
     n_angular:      Optional[int]   = None
     n_angular_slots: Optional[int]  = None
+    # FEM mesh settings (Mesh tab) — persisted so they survive sessions and are
+    # used by every consumer, not just the browser that set them.
+    mesh_size_mm:     Optional[float] = None
+    min_size_mm:      Optional[float] = None
+    outer_air_factor: Optional[float] = None
+    gap_layers:       Optional[float] = None
+    normal_deviation: Optional[float] = None
+    n_sectors:        Optional[int]   = None
 
 
 @app.get("/api/mesh/config")
 def get_mesh_config():
-    """Return current mesh collocation-point config."""
+    """Return mesh config — collocation points + the FEM mesh settings (persisted
+    in motor_config.yaml so the Mesh-tab sliders survive every session)."""
     cfg = get_config()
     m = cfg.get("mesh", {})
     return {
         "n_radial":        m.get("n_radial", 10),
         "n_angular":       m.get("n_angular", 64),
         "n_angular_slots": m.get("n_angular_slots", 8),
+        # FEM mesh settings (Mesh tab) — same defaults as the build2d endpoint
+        "mesh_size_mm":     m.get("mesh_size_mm", 4.0),
+        "min_size_mm":      m.get("min_size_mm", 0.3),
+        "outer_air_factor": m.get("outer_air_factor", 1.3),
+        "gap_layers":       m.get("gap_layers", 3.0),
+        "normal_deviation": m.get("normal_deviation", 6.0),
+        "n_sectors":        m.get("n_sectors", 4),
     }
 
 
 @app.patch("/api/mesh/config")
 def update_mesh_config(patch: MeshConfigPatch):
-    """Update mesh parameters in motor_config.yaml."""
-    import re
+    """Persist mesh parameters into motor_config.yaml (adds keys if missing), so
+    they are permanent and used by every consumer — not just the browser."""
+    import yaml as _yaml
     updates = {k: v for k, v in patch.model_dump().items() if v is not None}
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
-
-    content = _CONFIG_PATH.read_text(encoding="utf-8")
-    lines   = content.splitlines(keepends=True)
-    in_mesh = False
-    result  = []
-    replaced = set()
-
-    for line in lines:
-        if re.match(r'^mesh\s*:', line):
-            in_mesh = True
-        elif in_mesh and re.match(r'^\S', line):
-            in_mesh = False
-
-        if in_mesh:
-            for key, val in updates.items():
-                m = re.match(rf'^(\s+{re.escape(key)}\s*:\s*)(.*)$', line)
-                if m:
-                    line = m.group(1) + str(val) + '\n'
-                    replaced.add(key)
-                    break
-
-        result.append(line)
-
-    missing = set(updates) - replaced
-    if missing:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Keys not found in mesh: block: {missing}"
+    try:
+        config = _yaml.safe_load(_CONFIG_PATH.read_text(encoding="utf-8")) or {}
+        config.setdefault("mesh", {}).update(updates)
+        _CONFIG_PATH.write_text(
+            _yaml.dump(config, allow_unicode=True, default_flow_style=False, sort_keys=False),
+            encoding="utf-8",
         )
-
-    _CONFIG_PATH.write_text(''.join(result), encoding="utf-8")
-    clear_config_cache()
+        clear_config_cache()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"failed to write mesh config: {e}")
     return {"status": "ok", "updated": updates}
 
 

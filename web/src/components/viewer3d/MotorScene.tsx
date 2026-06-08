@@ -90,36 +90,44 @@ export const ViewcubeNavigation: React.FC<{ controlsRef: React.RefObject<any> }>
   
   useEffect(() => {
     const handleNavigate = (e: CustomEvent) => {
-      const { position, name } = e.detail;
-      
-      // Use fixed distance for standard views
+      const { position } = e.detail;
+
+      // Orbit around the CURRENT controls target — i.e. the model centre.
+      // For the full motor that's the origin; for a 1/4 sector the fit set it
+      // to the sector midpoint (cx,cy). Hard-coding (0,0,0) here was what made
+      // a face-click fling the off-centre sector into a corner.
+      const center = controlsRef.current?.target
+        ? controlsRef.current.target.clone()
+        : new THREE.Vector3(0, 0, 0);
+
+      // Use fixed distance for standard views; offset from the model centre.
       const distance = 250;
       const direction = position.clone().normalize();
-      const newPosition = direction.multiplyScalar(distance);
-      
+      const newPosition = center.clone().add(direction.multiplyScalar(distance));
+
       // Animate camera to new position
       isAnimating.current = true;
       targetPosition.current = newPosition;
-      
+
       const startPosition = camera.position.clone();
       const startTime = performance.now();
       const duration = 500; // 500ms animation
-      
+
       const animate = (time: number) => {
         const elapsed = time - startTime;
         const progress = Math.min(elapsed / duration, 1);
-        
+
         // Ease out cubic
         const eased = 1 - Math.pow(1 - progress, 3);
-        
+
         camera.position.lerpVectors(startPosition, newPosition, eased);
-        camera.lookAt(0, 0, 0);
-        
+        camera.lookAt(center);
+
         if (controlsRef.current) {
-          controlsRef.current.target.set(0, 0, 0);
+          controlsRef.current.target.copy(center);
           controlsRef.current.update();
         }
-        
+
         if (progress < 1) {
           animationFrame.current = requestAnimationFrame(animate);
         } else {

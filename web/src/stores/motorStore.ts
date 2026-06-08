@@ -172,6 +172,16 @@ interface MotorState {
   refineError: string | null;
   refineFront: (stepsPerPeriod?: number) => Promise<void>;
 
+  // Gradient / coordinate descent (fixed current+rpm, vary whitelisted vars)
+  descentRunning: boolean;
+  descentState: any | null;           // raw /descent/progress payload
+  descentError: string | null;
+  runDescent: (opts: { rippleMax: number; maxIters: number; wEff: number;
+                       wTd: number; steps: number }) => Promise<void>;
+  cancelDescent: () => Promise<void>;
+  applyDescentBest: () => Promise<void>;
+  loadLastDescent: () => Promise<void>;   // re-hydrate the last run's charts from the backend
+
   // Saved scan results (persisted to disk)
   savedRuns: SavedRunMeta[];
   refreshSaved: () => Promise<void>;
@@ -685,11 +695,17 @@ export const useMotorStore = create<MotorState>()(
         try {
           // Every scan point is a REAL sliding-band transient (geometry + mesh
           // rebuilt per candidate) at stepsPerPeriod frames — background + poll.
+          // Honor the Mesh-tab resolution so tuning it (coarser = fewer
+          // elements) directly speeds up the scan.
+          let mesh_size_mm = 4.0, min_size_mm = 0.3;
+          try { mesh_size_mm = Number(JSON.parse(localStorage.getItem('mesh.meshSize') ?? '4')) || 4.0; } catch { /* default */ }
+          try { min_size_mm  = Number(JSON.parse(localStorage.getItem('mesh.minSize')  ?? '0.3')) || 0.3; } catch { /* default */ }
           const res = await fetch(`${API_BASE_URL}/api/optimization/scan`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               variables, operating_points, ripple_max_pct,
               steps_per_period: stepsPerPeriod, max_geometries: maxGeometries,
+              mesh_size_mm, min_size_mm,
             }),
           });
           if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
@@ -802,6 +818,75 @@ export const useMotorStore = create<MotorState>()(
           set({ refineError: String(e?.message ?? e), refineRunning: false });
         }
       },
+
+      // ── Gradient / coordinate descent ───────────────────────────────────────
+      descentRunning: false,
+      descentState: null,
+      descentError: null,
+      runDescent: async ({ rippleMax, maxIters, wEff, wTd, steps }) => {
+        const { sweepConfig } = get();
+        // Variables = every active (non-fixed) sweep/optimize entry. Bounds and
+        // perturbation step are resolved server-side from the schema; the descent
+        // starts from the current config value of each.
+        const variables = Object.entries(sweepConfig.variations)
+          .filter(([, v]) => v.mode !== 'fixed')
+          .map(([name, v]) => ({ name, min: Number(v.min), max: Number(v.max),
+                                 mode: v.mode, step: Number(v.step) }));
+        // Fixed operating point = Sweep "Point 1" (current + rpm).
+        const op0 = sweepConfig.operatingPoints[0];
+        let mesh_size_mm = 4.0, min_size_mm = 0.3;
+        try { mesh_size_mm = Number(JSON.parse(localStorage.getItem('mesh.meshSize') ?? '4')) || 4.0; } catch { /* default */ }
+        try { min_size_mm  = Number(JSON.parse(localStorage.getItem('mesh.minSize')  ?? '0.3')) || 0.3; } catch { /* default */ }
+
+        set({ descentRunning: true, descentError: null, descentState: null });
+        try {
+          const res = await fetch(`${API_BASE_URL}/api/optimization/descent/start`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              variables,
+              operating_point: { gamma_deg: 0, current_a: op0.current_a, rpm: op0.rpm },
+              ripple_max_pct: rippleMax, w_eff: wEff, w_td: wTd,
+              max_iters: maxIters, steps_per_period: steps,
+              mesh_size_mm, min_size_mm,
+            }),
+          });
+          if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+          // eslint-disable-next-line no-constant-condition
+          while (true) {
+            await new Promise(r => setTimeout(r, 2000));
+            const pr = await fetch(`${API_BASE_URL}/api/optimization/descent/progress`);
+            const st = await pr.json();
+            set({ descentState: st });
+            if (!st.running) { if (st.error) set({ descentError: st.error }); break; }
+          }
+          set({ descentRunning: false });
+        } catch (e: any) {
+          set({ descentError: String(e?.message ?? e), descentRunning: false });
+        }
+      },
+      cancelDescent: async () => {
+        try { await fetch(`${API_BASE_URL}/api/optimization/descent/cancel`, { method: 'POST' }); }
+        catch { /* ignore */ }
+      },
+      applyDescentBest: async () => {
+        const st: any = get().descentState;
+        const overrides = st?.best?.x || st?.result?.best?.overrides;
+        if (!overrides || !Object.keys(overrides).length) return;
+        if (get().connectedToApi) await get().updateGeometryViaApi(overrides);
+        else get().updateGeometry(overrides);
+      },
+      loadLastDescent: async () => {
+        // The backend keeps the last descent in memory — re-hydrate it so the
+        // charts survive a page reload (without re-running the optimization).
+        try {
+          const r = await fetch(`${API_BASE_URL}/api/optimization/descent/progress`);
+          if (!r.ok) return;
+          const st = await r.json();
+          if (st && (((st.history?.length ?? 0) > 0) || ((st.points?.length ?? 0) > 0))) {
+            set({ descentState: st, descentRunning: !!st.running });
+          }
+        } catch { /* ignore */ }
+      },
     }),
     {
       name: 'motor-config-storage',
@@ -889,6 +974,13 @@ export const useBuildTimingStore = create<BuildTimingState>()((set) => ({
   setMeshExtTime: (s) => set({ mesh_ext_s: s }),
   setMesh2dTime:  (s) => set({ mesh2d_s: s }),
 }));
+
+// Dev affordance: expose the motor store so the Sweep/Optimize flow can be
+// driven through the app's OWN actions (same ones the UI buttons call) rather
+// than bypassing the frontend. Dev build only.
+if (typeof window !== 'undefined' && import.meta.env?.DEV) {
+  (window as unknown as { __motorStore?: typeof useMotorStore }).__motorStore = useMotorStore;
+}
 
 export const useUIStore = create<UIState>()(
   persist(

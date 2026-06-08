@@ -1,35 +1,35 @@
 geometry:
-  stator_diameter: 150.0
-  slot_height: 14.0
-  core_thickness: 4.2
-  num_seg: 4.0
-  num_slots_per_segment: 6.0
-  num_poles_per_segment: 7.0
-  stator_width: 35.0
-  air_gap: 0.5
-  tooth_width: 9.2
-  tooth2_width: 5.5
-  cut_width: 6.0
-  insulation_thickness: 0.15
-  wire_width: 5.0
-  wire_height: 0.6
-  wire_spacing_x: 0.1
-  wire_spacing_y: 0.13
-  num_wires_per_slot: 14.0
-  slot_hs: 0.2
-  magnet_height: 16.0
-  rotor_house_height: 1.2
-  shaft_height: 3.0
+  stator_diameter: 200
+  slot_height: 18.67
+  core_thickness: 5.6
+  num_seg: 4
+  num_slots_per_segment: 6
+  num_poles_per_segment: 7
+  stator_width: 45
+  air_gap: 0.667
+  tooth_width: 12.27
+  tooth2_width: 7.33
+  cut_width: 8.0
+  insulation_thickness: 0.2
+  wire_width: 6.67
+  wire_height: 0.8
+  wire_spacing_x: 0.133
+  wire_spacing_y: 0.173
+  num_wires_per_slot: 18
+  slot_hs: 0.267
+  magnet_height: 21.33
+  rotor_house_height: 1.6
+  shaft_height: 4.0
   magnet_fill_down: 0.9
   magnet_fill_up: 0.44
-  magnet_fill_radius: 2.5
-  magnet_up_gap: 2.0
+  magnet_fill_radius: 3.33
+  magnet_up_gap: 2.67
   rotor_hole: 0.6
-  magnet_down_height: 1.8
-  stator_fillet_r: 3.5
-  stator_fillet_r1: 1.2
-  rotor_fill_r: 1.6
-  motor_length: 35.0
+  magnet_down_height: 2.4
+  stator_fillet_r: 4.67
+  stator_fillet_r1: 1.6
+  rotor_fill_r: 2.13
+  motor_length: 45
 derived_params:
   stator_outer_radius: stator_diameter / 2
   stator_inner_radius: stator_outer_radius - core_thickness - slot_height
@@ -174,7 +174,7 @@ geometry_schema:
     type: float
     min: 0.01
     max: 0.2
-    step: 0.01
+    step: 0.1
     group: winding
     description: Spacing between wires in x direction
   wire_spacing_y:
@@ -203,7 +203,10 @@ geometry_schema:
     max: 1
     step: 0.01
     group: stator
-    description: Height of the slot opening
+    description: Distance from the last wire to the air gap. Useful for optimization
+      but yields non-manufacturable fractional wire thicknesses, so hidden from the
+      UI for now (kept in the file; not yet wired into the CadQuery geometry).
+    hidden: true
   magnet_height:
     label: Magnet Height
     unit: mm
@@ -346,10 +349,33 @@ parameter_groups:
   shaft:
     label: Shaft Parameters
     order: 5
+sweep_whitelist:
+- slot_height
+- core_thickness
+- tooth_width
+- tooth2_width
+- cut_width
+- wire_width
+- wire_height
+- num_wires_per_slot
+- magnet_height
+- magnet_fill_up
+- magnet_fill_radius
+- magnet_up_gap
+- magnet_down_height
+- stator_fillet_r
+- stator_fillet_r1
+- rotor_fill_r
 mesh:
   n_radial: 11
   n_angular: 104
   n_angular_slots: 20
+  mesh_size_mm: 4.0
+  outer_air_factor: 1.2
+  gap_layers: 2.0
+  normal_deviation: 4.0
+  min_size_mm: 0.3
+  n_sectors: 4
 materials:
   stator_core: 20SW1200
   slot: copper
@@ -366,7 +392,7 @@ winding:
   n_parallel: 2
   n_series: 2
 simulation:
-  max_current: 85.0
-  frequency: 921.67
-  rpm: 3950
+  max_current: 120.0
+  frequency: 466.67
+  rpm: 2000.0
   phase_offset_deg: 0.0

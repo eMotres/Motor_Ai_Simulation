@@ -19,6 +19,96 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import { useMotorStore } from '../../stores/motorStore';
 
 /**
+ * Free-typing numeric field.
+ *
+ * The previous geometry inputs were controlled `type="number"` fields bound
+ * straight to the store, parsing + debouncing on every keystroke.  Every
+ * commit re-rendered and snapped the visible text back to the parsed number,
+ * so typing a decimal ("12." → 12) or clearing the field to retype was fought
+ * by React.  Here we keep a LOCAL draft string: you type freely (decimals,
+ * comma, empty, intermediate values), and the value is committed to the store
+ * only on Enter or blur — then clamped to [min, max].  Focus selects the text
+ * so you can immediately overwrite it, like a normal spreadsheet cell.
+ */
+interface NumberFieldProps {
+  label: string;
+  value: number;
+  type: 'float' | 'int';
+  min?: number;
+  max?: number;
+  step?: number;
+  helperText?: string;
+  disabled?: boolean;
+  onCommit: (v: number) => void;
+}
+
+const NumberField: React.FC<NumberFieldProps> = ({
+  label, value, type, min, max, step, helperText, disabled, onCommit,
+}) => {
+  const [draft, setDraft] = useState<string>('');
+  const [focused, setFocused] = useState(false);
+
+  const fmt = (v: number) =>
+    v === undefined || v === null || Number.isNaN(v) ? '' : String(v);
+
+  // Resync from the store ONLY while the user is not editing this field, so an
+  // external change (preset applied, optimization result) updates the display
+  // but in-progress typing is never clobbered.
+  useEffect(() => {
+    if (!focused) setDraft(fmt(value));
+  }, [value, focused]);
+
+  const parse = (s: string) => {
+    const raw = s.trim().replace(',', '.');           // accept comma decimal
+    return type === 'int' ? parseInt(raw, 10) : parseFloat(raw);
+  };
+
+  const commit = () => {
+    let n = parse(draft);
+    if (Number.isNaN(n)) { setDraft(fmt(value)); return; }   // revert if blank/garbage
+    if (typeof min === 'number' && n < min) n = min;          // clamp
+    if (typeof max === 'number' && n > max) n = max;
+    if (type === 'int') n = Math.round(n);
+    setDraft(fmt(n));
+    if (n !== value) onCommit(n);
+  };
+
+  const parsed = parse(draft);
+  const invalid = draft.trim() !== '' && (
+    Number.isNaN(parsed) ||
+    (typeof min === 'number' && parsed < min) ||
+    (typeof max === 'number' && parsed > max)
+  );
+
+  return (
+    <TextField
+      label={label}
+      size="small"
+      fullWidth
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onFocus={(e) => { setFocused(true); e.target.select(); }}
+      onBlur={() => { setFocused(false); commit(); }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') { (e.target as HTMLInputElement).blur(); }
+        else if (e.key === 'Escape') {
+          setDraft(fmt(value));
+          (e.target as HTMLInputElement).blur();
+        }
+      }}
+      inputProps={{ inputMode: 'decimal', step }}
+      error={invalid}
+      helperText={
+        invalid
+          ? `Allowed: ${min ?? '−∞'} … ${max ?? '∞'}`
+          : helperText
+      }
+      disabled={disabled}
+    />
+  );
+};
+
+/**
  * Dynamic Geometry Form
  * 
  * This form is dynamically generated from the parameter schema
@@ -89,19 +179,6 @@ const GeometryForm: React.FC = () => {
     }, 300); // 300ms debounce
   }, [connectedToApi, updateGeometryViaApi, updateGeometry]);
   
-  // Handle field change for numeric types
-  const handleNumberChange = (name: string, type: 'float' | 'int') => (
-    event: React.ChangeEvent<HTMLInputElement>
-  ) => {
-    const value = type === 'int' 
-      ? parseInt(event.target.value, 10) 
-      : parseFloat(event.target.value);
-    
-    if (!isNaN(value)) {
-      debouncedUpdate(name, value);
-    }
-  };
-
   // Handle field change for string types with options
   const handleStringChange = (name: string) => (
     event: React.ChangeEvent<{ value: unknown }>
@@ -149,7 +226,7 @@ const GeometryForm: React.FC = () => {
   // Group parameters by group
   const groupedParams = parameterGroups.map(group => ({
     ...group,
-    parameters: parameterSchema.filter(p => p.group === group.id),
+    parameters: parameterSchema.filter(p => p.group === group.id && !p.hidden),
   }));
   
   return (
@@ -198,21 +275,21 @@ const GeometryForm: React.FC = () => {
                     </Select>
                   </FormControl>
                 ) : (
-                  // Render TextField for numeric types
-                  <TextField
+                  // Free-typing numeric field (local draft, commit on Enter/blur)
+                  <NumberField
                     key={param.name}
                     label={param.unit ? `${param.label} (${param.unit})` : param.label}
-                    type="number"
-                    size="small"
-                    value={geometry[param.name] ?? 0}
-                    onChange={handleNumberChange(param.name, param.type as 'float' | 'int')}
-                    inputProps={{
-                      min: param.min,
-                      max: param.max,
-                      step: param.step,
-                    }}
+                    value={(geometry[param.name] ?? 0) as number}
+                    type={param.type as 'float' | 'int'}
+                    min={param.min}
+                    max={param.max}
+                    step={param.step}
                     helperText={param.description || undefined}
                     disabled={isLoading}
+                    onCommit={(v) => {
+                      if (connectedToApi) updateGeometryViaApi({ [param.name]: v });
+                      else updateGeometry({ [param.name]: v });
+                    }}
                   />
                 )
               ))}

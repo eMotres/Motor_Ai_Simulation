@@ -13,9 +13,32 @@ import math
 from typing import Dict, Any
 
 
+def _coil_fit(geo: Dict[str, float]) -> tuple:
+    """How many of the requested wires actually fit in the slot before the stack
+    would cross the stator inner radius into the air gap.  Returns (n_fit,
+    n_requested).  Mirrors the placement in cadquery_geometry.get_2d_polygons."""
+    outer_r = float(geo.get("stator_diameter", 200.0)) / 2.0
+    core_h  = float(geo.get("core_thickness", 5.6))
+    slot_h  = float(geo.get("slot_height", 18.0))
+    ins_w   = float(geo.get("insulation_thickness", 0.2))
+    wire_dy = float(geo.get("wire_spacing_y", 0.13))
+    wire_h  = float(geo.get("wire_height", 0.8))
+    nw      = int(geo.get("num_wires_per_slot", 18))
+    inner_r = outer_r - core_h - slot_h
+    top_y_c = (outer_r - core_h) - ins_w - wire_dy / 2.0
+    min_wire_r = inner_r + ins_w
+    n_fit = 0
+    for step in range(max(0, nw)):
+        if top_y_c - step * (wire_h + wire_dy) - wire_h < min_wire_r:
+            break
+        n_fit += 1
+    return n_fit, nw
+
+
 def run_one(overrides: Dict[str, float], current_a: float, steps: int,
             coil_temp_c: float, n_periods: float = 1.0,
-            gamma_deg: float = 0.0) -> Dict[str, Any]:
+            gamma_deg: float = 0.0, mesh_size_mm: float = 4.0,
+            min_size_mm: float = 0.3) -> Dict[str, Any]:
     """Run the sliding-band transient for one candidate and return mean
     performance metrics (torque, efficiency, ripple, losses, mass).
 
@@ -30,6 +53,24 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
 
     cfg = get_config()
     geo = {**dict(cfg.get("geometry", {})), **overrides}
+
+    # Enforce geometry feasibility (winding fits the slot, …) by CLAMPING the
+    # violating knobs — so the optimizer always evaluates a VALID cross-section
+    # (no coils overflowing the air gap).  Both the mass calc (build_params(geo))
+    # and the FEM build (geo_override) use the same clamped values.
+    from motor_ai_sim.geometry_constraints import clamp as _clamp_geo
+    geo, _applied = _clamp_geo(geo)
+    overrides = dict(overrides)
+    for _a in _applied:
+        overrides[_a["target"]] = geo[_a["target"]]
+
+    # Final safety: if the winding STILL can't fit even after clamping (e.g. an
+    # absurd turn count at minimum wire height), the design is truly infeasible.
+    n_fit, n_req = _coil_fit(geo)
+    if n_fit < n_req:
+        raise ValueError(
+            f"infeasible winding: {n_req} turns cannot fit the slot even clamped")
+
     rpm = float(cfg.get("simulation", {}).get("rpm", 3950.0))
     omega = 2 * math.pi * rpm / 60.0
 
@@ -39,13 +80,17 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
     nspp = max(4, int(round(int(steps) / nper)))
     d = fem_transient_sliding_band(
         n_steps_per_period=nspp, n_periods=nper, gamma_deg=float(gamma_deg),
-        I_phase_rms=float(current_a), mesh_size_mm=4.0, min_size_mm=0.3,
+        I_phase_rms=float(current_a), mesh_size_mm=float(mesh_size_mm),
+        min_size_mm=float(min_size_mm),
         n_sectors=4, coil_temp_c=float(coil_temp_c), geo_override=overrides)
 
     Tavg = float(d["T_avg_Nm"])
     cu = float(np.mean(d["P_cu_W"])); fe = float(np.mean(d["P_fe_W"]))
     mg = float(np.mean(d["P_mag_eddy_W"]))
-    ploss = cu + fe + mg
+    sh = float(np.mean(d.get("P_shaft_eddy_W", [0.0]) or [0.0]))   # solid-steel shaft eddy
+    cu_ac = float(np.mean(d.get("P_cu_ac_W", [0.0]) or [0.0]))     # winding AC eddy/proximity
+    cu_dc = float(d.get("P_cu_dc_W", cu - cu_ac))
+    ploss = cu + fe + mg + sh
     pmech = Tavg * omega
     eff = pmech / (pmech + ploss) if pmech > 0 else 0.0
     mass = float(_masses(build_params(geo), geo)["total"])
@@ -54,7 +99,8 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         "torque_per_mass_Nm_kg": round(Tavg / mass, 4) if mass > 0 else 0.0,
         "T_ripple_pct": round(float(d["T_ripple_pct"]), 2),
         "P_loss_total_W": round(ploss, 1), "P_cu_W": round(cu, 1),
-        "P_fe_W": round(fe, 1), "P_mag_W": round(mg, 1),
+        "P_cu_dc_W": round(cu_dc, 1), "P_cu_ac_W": round(cu_ac, 1),
+        "P_fe_W": round(fe, 1), "P_mag_W": round(mg, 1), "P_shaft_W": round(sh, 1),
         "mass_total_kg": round(mass, 3), "V_peak": round(float(d["V_peak"]), 1),
     }
 
@@ -66,7 +112,9 @@ if __name__ == "__main__":
         res = run_one(spec["overrides"], spec["current_a"],
                       spec.get("steps", 40), spec.get("coil_temp_c", 120.0),
                       n_periods=spec.get("n_periods", 1.0),
-                      gamma_deg=spec.get("gamma_deg", 0.0))
+                      gamma_deg=spec.get("gamma_deg", 0.0),
+                      mesh_size_mm=spec.get("mesh_size_mm", 4.0),
+                      min_size_mm=spec.get("min_size_mm", 0.3))
         sys.stdout.write("@@RESULT@@" + json.dumps({"ok": True, "res": res}))
     except Exception as e:  # noqa: BLE001
         sys.stdout.write("@@RESULT@@" + json.dumps({"ok": False, "error": str(e)}))

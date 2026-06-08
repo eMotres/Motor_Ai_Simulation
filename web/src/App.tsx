@@ -384,7 +384,7 @@ function App() {
               tab change.  runNonce starts at 0, so nothing auto-runs while it
               sits hidden. */}
           <Box sx={{ height: '100%', display: activeTab === 'simulation' ? 'block' : 'none' }}>
-            <SimulationPanel />
+            <SimulationPanel active={activeTab === 'simulation'} />
           </Box>
         </Box>
       </Box>

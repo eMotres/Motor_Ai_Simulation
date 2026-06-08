@@ -5,7 +5,8 @@ import {
 } from '@mui/material';
 import BoltIcon from '@mui/icons-material/Bolt';
 import CheckIcon from '@mui/icons-material/Check';
-import { useMotorStore } from '../../stores/motorStore';
+import { useUIStore } from '../../stores/motorStore';
+import MyDesigns from './MyDesigns';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
@@ -27,7 +28,7 @@ const MotorsCatalog: React.FC = () => {
   const [cat, setCat] = useState<Catalog | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
-  const setActiveTab = useMotorStore((s) => s.setActiveTab);
+  const setActiveTab = useUIStore((s) => s.setActiveTab);
 
   useEffect(() => {
     fetch(`${API}/api/catalog`).then((r) => r.json()).then(setCat)
@@ -56,6 +57,9 @@ const MotorsCatalog: React.FC = () => {
       <Typography sx={{ color: '#94a3b8', mb: 3, fontSize: '0.9rem' }}>
         Ready-made designs by stator diameter. Click <b>Load</b> to open one in the editor.
       </Typography>
+
+      {/* ── User's saved designs ──────────────────────────────────── */}
+      <MyDesigns />
 
       {/* ── Pricing tiers ─────────────────────────────────────────── */}
       <Box sx={{ display: 'flex', gap: 2, mb: 4, flexWrap: 'wrap' }}>

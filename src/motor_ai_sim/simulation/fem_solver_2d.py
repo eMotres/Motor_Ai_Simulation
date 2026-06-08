@@ -1072,6 +1072,7 @@ def build_mesh_from_polygons(polys: dict,
                              outer_air_factor: float = 1.0,
                              motion_band: bool = False,
                              band_thickness_mm: float = 0.4,
+                             gap_layers: float = 3.0,   # element layers across the air gap
                              n_sectors: int = 1,
                              add_background_air: bool = True,
                              slip_transfinite_r: Optional[float] = None,
@@ -1456,7 +1457,15 @@ def build_mesh_from_polygons(polys: dict,
             if _r_ro > 0.0 and _r_si > _r_ro:
                 _r_ag = 0.5 * (_r_ro + _r_si)
                 _gap  = _r_si - _r_ro
-                _ag_h = max(0.06, min(min_size_mm, _gap / 3.0))   # ~3 layers in gap
+                # Air-gap element size = gap / (#layers). Driven by the Mesh-tab
+                # "Air-gap layers" control. Lower → coarser gap (faster, but the
+                # Maxwell-stress torque needs ≳3 layers to stay mesh-independent).
+                _nl   = max(1.0, float(gap_layers))
+                _ag_h = max(0.04, _gap / _nl)
+                # Let the gap be finer than the global Min size so "Air-gap
+                # layers" actually changes the gap density (otherwise N≥~2 is
+                # floored at min_size and 2× vs 3× look identical).
+                gmsh.option.setNumber("Mesh.MeshSizeMin", min(min_size_mm, _ag_h))
                 # Fine core = the gap + a thin sliver of the tooth tips on each
                 # side (the tooth-tip field sets the gap B, so the torque needs
                 # it — pure gap-only refinement makes the torque mesh-dependent
@@ -1475,9 +1484,27 @@ def build_mesh_from_polygons(polys: dict,
                 #            triangles still coarsen quickly away from the gap.
                 _half = _gap * 0.6                 # dense core ≈ the gap (±0.3 mm)
                 _trans = _gap * 3.0                # gentle ramp (keeps torque)
-                _formula = (f"min({float(mesh_size_mm)}, {_ag_h}+"
-                            f"({float(mesh_size_mm)}-{_ag_h})*"
-                            f"max(0,(fabs(sqrt(x*x+y*y)-{_r_ag})-{_half})/{_trans}))")
+                _ms = float(mesh_size_mm)
+                _base = (f"min({_ms}, {_ag_h}+"
+                         f"({_ms}-{_ag_h})*"
+                         f"max(0,(fabs(sqrt(x*x+y*y)-{_r_ag})-{_half})/{_trans}))")
+                # ── Far-field coarsening ─────────────────────────────────────
+                # Beyond the stator OD the air ring only carries the A_z→0
+                # Dirichlet decay — there is no field detail to resolve, so
+                # refining it is wasted work. Let elements grow up to COARSE_FAR×
+                # the global size from the stator OD out to the far boundary.
+                _r_so = float(_gc.get("stator_outer_radius", 0.0))
+                _oaf = float(outer_air_factor)
+                if _r_so > 0.0 and _oaf > 1.001:
+                    _r_far = _r_so * _oaf
+                    _cf = 3.0
+                    _farmult = (f"(1+{_cf - 1.0}*min(1,max(0,"
+                                f"(sqrt(x*x+y*y)-{_r_so})/{max(1e-3, _r_far - _r_so)})))")
+                    _formula = f"({_base})*{_farmult}"
+                    # allow the coarse far elements (MeshSizeMax was = mesh_size)
+                    gmsh.option.setNumber("Mesh.MeshSizeMax", _ms * _cf)
+                else:
+                    _formula = _base
                 _fid = gmsh.model.mesh.field.add("MathEval")
                 gmsh.model.mesh.field.setString(_fid, "F", _formula)
                 gmsh.model.mesh.field.setAsBackgroundMesh(_fid)
@@ -2850,9 +2877,18 @@ def fem_transient_sliding_band(
         if _m is not None and (abs(_m.Mx) + abs(_m.My)) > 0:
             _mag_parts.append(np.asarray(_idx, int))
     _mag_idx = np.concatenate(_mag_parts) if _mag_parts else np.array([], int)
+    # Non-laminated solid conductors that ALSO carry rotating-field eddy losses
+    # (in addition to magnets): the COILS (solid copper bars, stator side) and
+    # the SHAFT (solid steel, rotor side).
+    _coil_parts = [np.asarray(_i, int) for _t, _i in half["s"]["cells"].items()
+                   if int(_t) >= DOM_COIL_BASE or int(_t) == int(DOM_COIL)]
+    _coil_idx = np.concatenate(_coil_parts) if _coil_parts else np.array([], int)
+    _shaft_idx = np.asarray(half["r"]["cells"].get(int(DOM_SHAFT),
+                                                   np.array([], int)), int)
     # Per-frame B histories for the loss elements only (keeps memory small).
     _hist_sx = []; _hist_sy = []; _hist_rx = []; _hist_ry = []
     _hist_mx = []; _hist_my = []; _mshift_hist = []
+    _hist_cx = []; _hist_cy = []; _hist_shx = []; _hist_shy = []
 
     SAT = {DOM_STATOR, DOM_ROTOR, DOM_SHAFT}
     # Per-tag base μ_r (air=1, coil=1, magnet=μ_rec, iron=μ_steel) + BH curves
@@ -2958,6 +2994,10 @@ def fem_transient_sliding_band(
         _hist_sx.append(_Bxs[_iron_s_idx]); _hist_sy.append(_Bys[_iron_s_idx])
         _hist_rx.append(_Bxr[_iron_r_idx]); _hist_ry.append(_Byr[_iron_r_idx])
         _hist_mx.append(_Bxr[_mag_idx]);    _hist_my.append(_Byr[_mag_idx])
+        if _coil_idx.size:
+            _hist_cx.append(_Bxs[_coil_idx]); _hist_cy.append(_Bys[_coil_idx])
+        if _shaft_idx.size:
+            _hist_shx.append(_Bxr[_shaft_idx]); _hist_shy.append(_Byr[_shaft_idx])
         _mshift_hist.append(m_shift)
         # torque (Arkkio over the gap)
         Tq = _arkkio_torque(mesh_all, A, p.r_rotor_out, p.r_stator_in,
@@ -3119,10 +3159,74 @@ def fem_transient_sliding_band(
     else:
         P_mag_series = [0.0] * n_total; P_mag_avg = 0.0
 
-    log.info("SB transient: %d frames, %d slip nodes, P_fe=%.1f P_mag=%.1f, %.1fs",
-             n_total, Nring, P_fe_avg, P_mag_avg, _t.time() - t0)
-    P_cu_series = [P_cu] * n_total
-    P_tot_series = [c + f + e for c, f, e in zip(P_cu_series, P_fe_series, P_mag_series)]
+    # ── AC eddy / proximity losses in the SOLID (non-laminated) conductors ────
+    # Same classical slab loss as the magnets, σ·(d²/12)·⟨(dB/dt)²⟩, applied to
+    # the COILS (solid copper bars) and the SHAFT (solid steel).  d is the
+    # conductor dimension capped at twice the skin depth (for d≫δ the field is
+    # surface-limited, so the d² slab law alone would over-count).
+    def _slab_eddy(hx, hy, idx, areas_half, sigma, d_m):
+        if sigma <= 0.0 or idx.size == 0 or not hx or np.asarray(hx[0]).size == 0:
+            return [0.0] * n_total, 0.0
+        X = np.asarray(hx); Y = np.asarray(hy)
+        dX = _angle_ddt_2d(X); dY = _angle_ddt_2d(Y)
+        vol = areas_half[idx] * p.stack_length
+        Pt = _declip(sigma * (d_m ** 2 / 12.0)
+                     * np.sum((dX ** 2 + dY ** 2) * vol[None, :], axis=1) * NS)
+        return Pt.tolist(), float(np.mean(Pt))
+
+    def _prox_eddy_split(hx, hy, idx, cen, areas_half, sigma, d_for_Br, d_for_Bt):
+        # Proximity loss with the field resolved into RADIAL and TANGENTIAL
+        # components, each paired with the conductor dimension PERPENDICULAR to
+        # it: B_r ↔ tangential width, B_θ (slot leakage) ↔ radial height.  This
+        # avoids the single-d slab over-count (a tall-thin bar barely sees the
+        # tangential slot-leakage field).
+        if sigma <= 0.0 or idx.size == 0 or not hx or np.asarray(hx[0]).size == 0:
+            return [0.0] * n_total, 0.0
+        X = np.asarray(hx); Y = np.asarray(hy)                 # (N, E)
+        r = np.hypot(cen[0], cen[1]); r = np.where(r < 1e-9, 1e-9, r)
+        ux = (cen[0] / r)[None, :]; uy = (cen[1] / r)[None, :]  # r_hat
+        Br = X * ux + Y * uy                                   # radial component
+        Bt = -X * uy + Y * ux                                  # tangential component
+        dBr = _angle_ddt_2d(Br); dBt = _angle_ddt_2d(Bt)
+        vol = areas_half[idx] * p.stack_length
+        Pt = _declip((sigma / 12.0) * np.sum(
+            (d_for_Br ** 2 * dBr ** 2 + d_for_Bt ** 2 * dBt ** 2)
+            * vol[None, :], axis=1) * NS)
+        return Pt.tolist(), float(np.mean(Pt))
+
+    _omega_e = 2.0 * math.pi * max(1e-6, f_elec)
+    # Copper winding bar (SOLID, one strand): proximity loss from the rotating
+    # field, split into radial/tangential and each capped at 2·skin-depth.
+    _rho_cu   = RHO_CU_20 * (1.0 + ALPHA_CU * (float(coil_temp_c) - 20.0))
+    _sigma_cu = 1.0 / _rho_cu
+    _delta_cu = math.sqrt(2.0 * _rho_cu / (_omega_e * MU0))
+    _w_cu = min(float(geo.get("wire_width",  5.0)) * 1e-3, 2.0 * _delta_cu)  # ↔ B_radial
+    _h_cu = min(float(geo.get("wire_height", 0.8)) * 1e-3, 2.0 * _delta_cu)  # ↔ B_tangential
+    _sm = half["s"]["mesh"]
+    _coil_cen = ((_sm.p[:, _sm.t].mean(axis=1))[:, _coil_idx]
+                 if _coil_idx.size else np.zeros((2, 0)))
+    P_cu_ac_series, P_cu_ac_avg = _prox_eddy_split(
+        _hist_cx, _hist_cy, _coil_idx, _coil_cen, areas_s, _sigma_cu, _w_cu, _h_cu)
+    # Solid-steel shaft: high μ → tiny skin depth → small loss (and little flux
+    # reaches this deep).  Computed for completeness.
+    _sigma_shaft = 4.5e6          # carbon-steel conductivity [S/m]
+    _mu_r_shaft  = 200.0
+    _r_shaft     = max(1e-3, float(getattr(p, "r_shaft_out",
+                                           getattr(p, "r_rotor_in", 0.02)) or 0.02))
+    _delta_sh    = math.sqrt(2.0 / (_sigma_shaft * _omega_e * MU0 * _mu_r_shaft))
+    _d_sh_eff    = min(2.0 * _r_shaft, 2.0 * _delta_sh)
+    P_shaft_series, P_shaft_avg = _slab_eddy(
+        _hist_shx, _hist_shy, _shaft_idx, areas_r, _sigma_shaft, _d_sh_eff)
+
+    log.info("SB transient: %d frames, %d slip nodes, P_fe=%.1f P_mag=%.1f "
+             "P_cuDC=%.1f P_cuAC=%.1f P_shaft=%.1f, %.1fs",
+             n_total, Nring, P_fe_avg, P_mag_avg, float(P_cu), P_cu_ac_avg,
+             P_shaft_avg, _t.time() - t0)
+    # Copper total = DC I²R (flat) + AC eddy/proximity (rotor-position dependent).
+    P_cu_dc = float(P_cu)
+    P_cu_series = [P_cu_dc + ac for ac in P_cu_ac_series]
+    P_tot_series = [c + f + m + s for c, f, m, s
+                    in zip(P_cu_series, P_fe_series, P_mag_series, P_shaft_series)]
     P_mech_avg = float(Tavg * 2.0 * math.pi * rpm / 60.0)
     return {
         "method": "sliding_band",
@@ -3138,6 +3242,8 @@ def fem_transient_sliding_band(
         "I_A": IA, "I_B": IB, "I_C": IC,
         "P_cu_W": P_cu_series, "P_fe_W": P_fe_series,
         "P_mag_eddy_W": P_mag_series, "P_loss_total_W": P_tot_series,
+        "P_cu_dc_W": P_cu_dc, "P_cu_ac_W": P_cu_ac_series,
+        "P_shaft_eddy_W": P_shaft_series,
         "P_mech_avg_W": P_mech_avg,
         "R_phase_ohm": R_phase, "n_slip_nodes": int(Nring),
         "coil_temp_C": float(coil_temp_c),

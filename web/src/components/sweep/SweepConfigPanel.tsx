@@ -15,6 +15,10 @@ import {
   ToggleButtonGroup,
   CircularProgress,
   Tooltip,
+  Select,
+  MenuItem,
+  FormControl,
+  InputLabel,
 } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import StopIcon      from '@mui/icons-material/Stop';
@@ -26,6 +30,7 @@ import { useMotorStore } from '../../stores/motorStore';
 import type { VariationMode } from '../../types/motor';
 import ParetoResults from './ParetoResults';
 import SavedRunsDialog from './SavedRunsDialog';
+import DescentPanel from './DescentPanel';
 
 // Non-geometry variables (selected outside the Geometry tab) need their own
 // display label/unit since they are absent from the geometry parameter schema.
@@ -152,6 +157,27 @@ const SweepConfigPanel: React.FC = () => {
   const sweepCount     = sweepEntries.filter(([, v]) => v.mode === 'sweep').length;
   const optimizeCount  = sweepEntries.filter(([, v]) => v.mode === 'optimize').length;
 
+  // ── Add-variable dropdown: make the Sweep tab self-contained (no need to
+  //    hunt chart-icons in the Geometry/Simulation tabs). Adds the chosen param
+  //    as an "optimize" variable with a sensible default range.
+  const DEFAULT_RANGE: Record<string, { min: number; max: number; step: number }> = {
+    gamma_deg: { min: -20, max: 0, step: 5 },
+  };
+  const addVariable = (name: string) => {
+    if (!name) return;
+    const sch = schemaMap[name];
+    const def = DEFAULT_RANGE[name];
+    const min  = def?.min  ?? sch?.min  ?? 0;
+    const max  = def?.max  ?? sch?.max  ?? 1;
+    const step = def?.step ?? sch?.step ?? 0.1;
+    updateVariation(name, { mode: 'optimize', min, max, step });
+  };
+  const activeNames   = new Set(sweepEntries.map(([n]) => n));
+  const availableVars = [
+    ...parameterSchema.filter(p => p.type !== 'string').map(p => p.name),
+    'gamma_deg',
+  ].filter(n => !activeNames.has(n));
+
   // Grid size: ∏ (#values per sweep var).  floor(+ε) so an exact 2.0 doesn't
   // round up to 3 (the old ceil counted 81 combos as 144).
   const estimateRuns = () =>
@@ -235,10 +261,35 @@ const SweepConfigPanel: React.FC = () => {
           <Typography variant="overline" color="text.secondary" sx={{ fontSize: 10, letterSpacing: 1, display: 'block', mb: 1 }}>
             Sweep Variables
           </Typography>
-          <Typography variant="caption" color="text.disabled" sx={{ display: 'block', mb: 2 }}>
-            Select geometry parameters in the <strong>Geometry</strong> tab using the chart icon,
-            or the load angle <strong>γ</strong> in the <strong>Simulation</strong> tab checkbox.
+          <Typography variant="caption" color="text.disabled" sx={{ display: 'block', mb: 1.5 }}>
+            Add a parameter below (or via the chart icon in <strong>Geometry</strong> / the
+            <strong> γ</strong> checkbox in <strong>Simulation</strong>). Each is added as an
+            <strong> Optimize</strong> variable — switch to Sweep or set the range in its card.
           </Typography>
+
+          <FormControl size="small" fullWidth sx={{ mb: 2 }}>
+            <InputLabel sx={{ fontSize: 12 }}>+ Add optimization variable</InputLabel>
+            <Select
+              label="+ Add optimization variable"
+              value=""
+              onChange={(e) => addVariable(e.target.value as string)}
+              MenuProps={{ PaperProps: { sx: { maxHeight: 360 } } }}
+              sx={{ fontSize: 12 }}
+            >
+              {availableVars.length === 0 && (
+                <MenuItem value="" disabled sx={{ fontSize: 12 }}>All variables added</MenuItem>
+              )}
+              {availableVars.map((name) => {
+                const lbl  = schemaMap[name]?.label ?? SPECIAL_VARS[name]?.label ?? name;
+                const unit = schemaMap[name]?.unit  ?? SPECIAL_VARS[name]?.unit;
+                return (
+                  <MenuItem key={name} value={name} sx={{ fontSize: 12 }}>
+                    {lbl}{unit ? ` (${unit})` : ''}
+                  </MenuItem>
+                );
+              })}
+            </Select>
+          </FormControl>
 
           {sweepEntries.length === 0 ? (
             <Box sx={{ textAlign: 'center', py: 5, color: 'text.disabled' }}>
@@ -336,6 +387,9 @@ const SweepConfigPanel: React.FC = () => {
           </Typography>
         )}
         {optimizationResult && <ParetoResults result={optimizationResult} />}
+
+        {/* ── Gradient / coordinate descent ── */}
+        <DescentPanel />
       </Box>
 
       <SavedRunsDialog open={savedOpen} onClose={() => setSavedOpen(false)} />

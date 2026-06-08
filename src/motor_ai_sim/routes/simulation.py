@@ -30,6 +30,38 @@ _jobs: Dict[str, Dict] = {}
 _motor_geom_cache: Dict = {}
 _motor_geom_ghash: list = [None]   # hash of the geometry the cache was built for
 
+_VALID_MESH_COMPONENTS = ("stator", "rotor", "magnet", "coil", "shaft",
+                          "airgap", "outer")
+
+
+def _parse_component_mesh(s: str) -> dict:
+    """Parse the per-component mesh-size JSON ({comp: size_mm}) coming from the
+    UI into a clean {comp: float} dict.  Unknown keys / non-positive sizes are
+    dropped so a stray value can never corrupt the gmsh size field.  Returns {}
+    for an empty / malformed string (→ global size everywhere)."""
+    if not s:
+        return {}
+    import json
+    try:
+        raw = json.loads(s)
+        if not isinstance(raw, dict):
+            return {}
+    except Exception:
+        return {}
+    out = {}
+    for k, v in raw.items():
+        kk = str(k).lower()
+        if kk not in _VALID_MESH_COMPONENTS:
+            continue
+        try:
+            fv = float(v)
+        except (TypeError, ValueError):
+            continue
+        if fv > 0.0:
+            out[kk] = round(fv, 4)
+    return out
+
+
 def _current_geom_hash_and_params():
     """Return (hash, params_dict) of the LIVE UI-edited geometry.
 
@@ -874,6 +906,9 @@ async def build_fem_mesh_2d(
                                           # now ship with CadQuery-radius fillets
                                           # (stator_fillet_r=2.5, _r1=0.9) baked in,
                                           # so this is OFF by default.
+    component_mesh:      str   = "",      # JSON {comp: size_mm} per-part target
+                                          # element size: stator/rotor/magnet/
+                                          # coil/shaft/outer. "" = global size.
 ):
     """Build a 2-D triangle mesh of the motor cross-section and return it as
     JSON-friendly arrays. Parameters mirror Ansys Maxwell's Curved Surface
@@ -896,6 +931,7 @@ async def build_fem_mesh_2d(
     # (e.g. rotor_fill_r) invalidates the mesh cache and rebuilds — previously
     # the key had only mesh params, so geometry edits never showed up here.
     _ghash, _params_dict = _current_geom_hash_and_params()
+    _comp_mesh = _parse_component_mesh(component_mesh)
     key = (
         _ghash,
         round(rotor_angle_deg * 2) / 2,
@@ -910,6 +946,7 @@ async def build_fem_mesh_2d(
         round(gap_layers, 2),
         int(n_sectors),
         round(stator_fillet_mm, 2),
+        tuple(sorted(_comp_mesh.items())),
     )
     if key in _fem_mesh_cache:
         return _fem_mesh_cache[key]
@@ -960,6 +997,7 @@ async def build_fem_mesh_2d(
             band_thickness_mm=band_thickness_mm,
             gap_layers=gap_layers,
             n_sectors=n_sectors,
+            component_mesh_mm=_comp_mesh,
         )
     except Exception as e:
         log.exception("mesh build failed")
@@ -1108,6 +1146,7 @@ async def build_fem_mesh_2d_sliding_band(
     band_thickness_mm: float = 0.4,
     n_sectors:         int   = 4,
     stator_fillet_mm:  float = 0.0,     # extra Shapely fillet smoothing
+    component_mesh:    str   = "",      # JSON {comp: size_mm} per-part mesh size
 ):
     """Build TWO independent meshes (stator + rotor) and stitch them into
     one renderer-friendly payload for the Mesh tab.  Lets the user
@@ -1125,11 +1164,13 @@ async def build_fem_mesh_2d_sliding_band(
     import math as _math
     import numpy as _np
 
+    _comp_mesh = _parse_component_mesh(component_mesh)
     key = (round(rotor_angle_deg, 3), round(mesh_size_mm, 2),
            round(min_size_mm, 2), round(surface_deviation, 4),
            round(normal_deviation, 1), round(aspect_ratio, 1),
            round(outer_air_factor, 2), round(band_thickness_mm, 2),
-           int(n_sectors), round(stator_fillet_mm, 2))
+           int(n_sectors), round(stator_fillet_mm, 2),
+           tuple(sorted(_comp_mesh.items())))
     if key in _fem_mesh_sb_cache:
         return _fem_mesh_sb_cache[key]
 
@@ -1169,6 +1210,7 @@ async def build_fem_mesh_2d_sliding_band(
                 outer_air_factor=outer_air_factor,
                 band_thickness_mm=band_thickness_mm,
                 n_sectors=n_sectors, geo_cfg=motor.parameters,
+                component_mesh_mm=_comp_mesh,
             )
     except Exception as e:
         log.exception("sliding-band mesh build failed")
@@ -1264,6 +1306,7 @@ async def get_fem_field2d(
     n_sectors:           int   = 4,
     stator_fillet_mm:    float = 0.0,
     I_phase_rms:         Optional[float] = None,   # None = use config; 0 = zero-current solve
+    component_mesh:      str   = "",      # JSON {comp: size_mm} per-part mesh size
 ):
     """Real scikit-fem 2-D magnetostatics solve on the same mesh the Mesh
     tab renders.
@@ -1276,6 +1319,7 @@ async def get_fem_field2d(
     """
     import numpy as _np
 
+    _comp_mesh = _parse_component_mesh(component_mesh)
     key = (
         round(rotor_angle_deg * 2) / 2,
         round(gamma_deg, 1),
@@ -1287,6 +1331,7 @@ async def get_fem_field2d(
         int(n_sectors),
         round(stator_fillet_mm, 2),
         round(I_phase_rms, 2) if I_phase_rms is not None else None,
+        tuple(sorted(_comp_mesh.items())),
     )
     if key in _fem_field_cache:
         return _fem_field_cache[key]
@@ -1308,6 +1353,7 @@ async def get_fem_field2d(
             n_sectors=int(n_sectors),
             stator_fillet_mm=stator_fillet_mm,
             I_phase_rms=I_phase_rms,
+            component_mesh_mm=_comp_mesh,
         )
     except Exception as e:
         log.exception("FEM solve failed")
@@ -1654,6 +1700,7 @@ def get_fem_transient(
     sliding_band:        bool  = False,   # ← mesh-once sliding band (smooth T, clean V)
     coil_temp_c:         float = 120.0,   # ← copper temperature → ρ_Cu(T)
     end_winding_factor:  float = 0.0,     # ← 0 = auto-estimate from geometry
+    component_mesh:      str   = "",      # ← JSON {comp: size_mm} per-part mesh size
 ):
     """Transient FEM analysis — runs N solves per electrical period and
     returns time-resolved T(t), losses(t) and V_phase(t).
@@ -1674,12 +1721,14 @@ def get_fem_transient(
     # ── Sliding-band path: mesh once + rotate rotor → smooth T(t), clean V(t).
     # Bypasses the parallel remesh-per-frame machinery entirely.
     if sliding_band:
+        _comp_mesh = _parse_component_mesh(component_mesh)
         _sb_key = ("sb", int(n_steps_per_period), round(n_periods, 2),
                    round(gamma_deg, 1), round(I_phase_rms, 1),
                    round(mesh_size_mm, 2), round(min_size_mm, 2),
                    round(outer_air_factor, 2), int(n_sectors),
                    round(stator_fillet_mm, 2),
-                   round(coil_temp_c, 1), round(end_winding_factor, 3))
+                   round(coil_temp_c, 1), round(end_winding_factor, 3),
+                   tuple(sorted(_comp_mesh.items())))
         if not fresh and _sb_key in _fem_transient_cache:
             return _fem_transient_cache[_sb_key]
         try:
@@ -1692,7 +1741,8 @@ def get_fem_transient(
                 n_sectors=int(n_sectors) if int(n_sectors) > 1 else 4,
                 stator_fillet_mm=float(stator_fillet_mm),
                 coil_temp_c=float(coil_temp_c),
-                end_winding_factor=float(end_winding_factor))
+                end_winding_factor=float(end_winding_factor),
+                component_mesh_mm=_comp_mesh)
             # ── Summary block (masses, loss split, KV, efficiency, specific
             # torque/power) so the Simulation values table renders — same shape
             # as the remesh path produces.

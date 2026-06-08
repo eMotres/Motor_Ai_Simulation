@@ -604,6 +604,7 @@ def _build_sliding_band_meshes(
         geo_cfg: dict,
         normal_deviation_deg: float = 6.0,
         aspect_ratio: float = 10.0,
+        component_mesh_mm: Optional[dict] = None,
 ):
     """Build the stator-half and rotor-half meshes for the sliding-band solver.
 
@@ -658,6 +659,7 @@ def _build_sliding_band_meshes(
         motion_band=False, band_thickness_mm=band_thickness_mm,
         n_sectors=n_sectors, geo_cfg=geo_cfg,
         add_background_air=False, slip_transfinite_r=_slip_r,
+        component_mesh_mm=component_mesh_mm,
     )
 
     # Build rotor half with the SAME sector clip as the stator
@@ -676,6 +678,7 @@ def _build_sliding_band_meshes(
         motion_band=False, band_thickness_mm=band_thickness_mm,
         n_sectors=n_sectors, geo_cfg=geo_cfg,
         add_background_air=False, slip_transfinite_r=_slip_r,
+        component_mesh_mm=component_mesh_mm,
     )
 
     # Apply rotor rotation as a rigid body — node coords only, topology
@@ -1079,6 +1082,7 @@ def build_mesh_from_polygons(polys: dict,
                              n_sectors: int = 1,
                              add_background_air: bool = True,
                              slip_transfinite_r: Optional[float] = None,
+                             component_mesh_mm: Optional[dict] = None,
                              ) -> Tuple["MeshTri", np.ndarray]:
     """Construct a conforming triangle mesh from the CadQuery polygon dict.
 
@@ -1453,6 +1457,9 @@ def build_mesh_from_polygons(polys: dict,
         #      GAP ONLY, with a quick ramp back to the global size just outside
         #      it — so the rotor/stator iron and the rotating ring stay coarse
         #      and only the gap itself is fine (Ansys does the same).
+        # All background size fields (air-gap + per-component) are collected in
+        # _bg_fields and combined with a Min field at the very end.
+        _bg_fields: List[int] = []
         try:
             _gc = geo_cfg or {}
             _r_ro = float(_gc.get("rotor_outer_radius", 0.0))
@@ -1510,12 +1517,68 @@ def build_mesh_from_polygons(polys: dict,
                     _formula = _base
                 _fid = gmsh.model.mesh.field.add("MathEval")
                 gmsh.model.mesh.field.setString(_fid, "F", _formula)
-                gmsh.model.mesh.field.setAsBackgroundMesh(_fid)
+                _bg_fields.append(_fid)
                 # Let the background field own the size in the gap; keep curvature
                 # for fillets (gmsh takes the min of the two).
                 gmsh.option.setNumber("Mesh.MeshSizeExtendFromBoundary", 0)
         except Exception as _e:
             log.warning("air-gap size field skipped: %s", _e)
+
+        # ── Per-component mesh size (study mesh-density effect on results) ────
+        # The UI can request a target element size for each motor PART type.
+        # For each requested component we build one gmsh "Constant" size field
+        # (size VIn inside that component's surfaces, ≈∞ outside) using the
+        # post-fragment surface tags grouped by domain.  Components left unset
+        # keep the global / curvature / air-gap size.  Everything is combined by
+        # a Min field below so the FINEST requested size wins at any point.
+        try:
+            _cm = {str(k): float(v) for k, v in (component_mesh_mm or {}).items()
+                   if v is not None and float(v) > 0.0}
+            if _cm:
+                def _comp_of(_d: int):
+                    if _d >= DOM_COIL_BASE:
+                        return "coil"
+                    if _d >= DOM_MAG_BASE:
+                        return "magnet"
+                    return {DOM_STATOR: "stator", DOM_ROTOR: "rotor",
+                            DOM_SHAFT: "shaft", DOM_AIRGAP: "airgap",
+                            DOM_BAND: "airgap", DOM_AIR: "outer",
+                            DOM_OUTER: "outer"}.get(int(_d))
+                _surf_by_comp: Dict[str, List[int]] = defaultdict(list)
+                for _tag, _dom in frag_surfaces:
+                    _ck = _comp_of(int(_dom))
+                    if _ck is not None:
+                        _surf_by_comp[_ck].append(int(_tag))
+                _applied = []
+                for _ckey, _csize in _cm.items():
+                    _surfs = _surf_by_comp.get(_ckey, [])
+                    if not _surfs:
+                        continue
+                    _cf2 = gmsh.model.mesh.field.add("Constant")
+                    gmsh.model.mesh.field.setNumbers(_cf2, "SurfacesList", _surfs)
+                    gmsh.model.mesh.field.setNumber(_cf2, "VIn", float(_csize))
+                    gmsh.model.mesh.field.setNumber(_cf2, "VOut", 1e22)
+                    _bg_fields.append(_cf2)
+                    _applied.append((_ckey, _csize, len(_surfs)))
+                if _applied:
+                    # lower the floor so a requested fine size isn't clamped up
+                    _smallest = min(s for _, s, _ in _applied)
+                    gmsh.option.setNumber("Mesh.MeshSizeMin",
+                                          min(min_size_mm, _smallest))
+                    gmsh.option.setNumber("Mesh.MeshSizeExtendFromBoundary", 0)
+                    log.info("per-component mesh sizes: %s",
+                             ", ".join(f"{c}={s}mm({n} surf)"
+                                       for c, s, n in _applied))
+        except Exception as _e:
+            log.warning("per-component size fields skipped: %s", _e)
+
+        # ── Combine all background size fields via Min (finest wins) ─────────
+        if len(_bg_fields) == 1:
+            gmsh.model.mesh.field.setAsBackgroundMesh(_bg_fields[0])
+        elif len(_bg_fields) > 1:
+            _minf = gmsh.model.mesh.field.add("Min")
+            gmsh.model.mesh.field.setNumbers(_minf, "FieldsList", _bg_fields)
+            gmsh.model.mesh.field.setAsBackgroundMesh(_minf)
 
         # ── Sliding-band slip ring: force the mid_r boundary to keep EXACTLY
         # its polygon vertices (transfinite, 2 nodes/edge) so both half-meshes
@@ -2667,6 +2730,7 @@ def fem_transient_sliding_band(
     end_winding_factor: float = 0.0,
     geo_override: dict = None,
     eddy: bool = False,          # opt-in: time-coupled σ·∂A/∂t eddy-current solve
+    component_mesh_mm: dict = None,  # per-part target element size {comp: mm}
 ) -> dict:
     """Sliding-band transient: mesh the stator + rotor halves ONCE, then sweep
     the rotor by shifting the slip-ring node pairing (no remeshing) so the
@@ -2764,7 +2828,8 @@ def fem_transient_sliding_band(
         polys, 0.0, mesh_size_mm, min_size_mm=min_size_mm,
         outer_air_factor=outer_air_factor, band_thickness_mm=0.4,
         n_sectors=NS, geo_cfg=motor.parameters,
-        normal_deviation_deg=8.0, aspect_ratio=10.0)
+        normal_deviation_deg=8.0, aspect_ratio=10.0,
+        component_mesh_mm=component_mesh_mm)
     Ps, Tts = ms.p.copy(), ms.t.copy(); Pr, Ttr = mr.p.copy(), mr.t.copy()
     nsn = Ps.shape[1]
     Pall = np.hstack([Ps, Pr]); Tall = np.hstack([Tts, Ttr + nsn])
@@ -3387,6 +3452,7 @@ def fem_solve_for_sim(
     n_sectors:       int   = 4,
     stator_fillet_mm:float = 0.0,
     I_phase_rms:     Optional[float] = None,
+    component_mesh_mm: Optional[dict] = None,
 ) -> dict:
     """End-to-end FEM solve: build mesh on (possibly clipped) geometry,
     solve magnetostatics, compute Maxwell-stress torque and Steinmetz iron
@@ -3454,6 +3520,7 @@ def fem_solve_for_sim(
         band_thickness_mm=band_thickness_mm,
         n_sectors=n_sectors,
         geo_cfg=motor.parameters,
+        component_mesh_mm=component_mesh_mm,
     )
     # int16 — per-magnet tags reach DOM_MAG_BASE + 27 = 127, well within int16
     # but right at the edge of int8.  Stay in int16 to be safe.

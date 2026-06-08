@@ -10,8 +10,19 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert, Box, Button, Chip, CircularProgress, Divider,
-  Paper, Slider, Tooltip, Typography, ToggleButton, ToggleButtonGroup,
+  Paper, Slider, TextField, Tooltip, Typography, ToggleButton, ToggleButtonGroup,
 } from '@mui/material';
+
+// Per-component mesh-size controls (study mesh-density effect on results).
+// Keys MUST match the backend _comp_of() mapping in build_mesh_from_polygons.
+const MESH_COMPONENTS: { key: string; label: string }[] = [
+  { key: 'stator', label: 'Stator iron' },
+  { key: 'rotor',  label: 'Rotor iron' },
+  { key: 'magnet', label: 'Magnets' },
+  { key: 'coil',   label: 'Windings' },
+  { key: 'shaft',  label: 'Shaft' },
+  { key: 'outer',  label: 'Outer air' },
+];
 import SaveIcon from '@mui/icons-material/Save';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import FemMeshViewer3D from './FemMeshViewer3D';
@@ -314,6 +325,21 @@ const MeshPanel: React.FC = () => {
   const [outerAirFactor, setOuterAirFactor] = usePersisted<number>('outerAir', 1.3);
   const [nSectors,       setNSectors]       = usePersisted<number>('nSectors', 4);   // 1/4 by default
   const [gapLayers,      setGapLayers]      = usePersisted<number>('gapLayers', 3);  // element layers across the air gap
+  // ── Per-component mesh size (study mesh-density effect on results) ─────────
+  // {comp: target element size mm}. Empty/0 → use the global size for that part.
+  // Persisted under 'mesh.componentMesh' so the Simulation tab's solve reads the
+  // SAME sizes (see readComponentMesh() in the simulation store).
+  const [componentMesh, setComponentMesh] =
+    usePersisted<Record<string, number>>('componentMesh', {});
+  const setCompSize = (k: string, v: number) =>
+    setComponentMesh(prev => {
+      const next = { ...prev };
+      if (!v || v <= 0) delete next[k]; else next[k] = v;
+      return next;
+    });
+  // Only positive sizes reach the backend; "{}" means global everywhere.
+  const componentMeshJson = JSON.stringify(
+    Object.fromEntries(Object.entries(componentMesh).filter(([, v]) => v > 0)));
   // NOTE: the old "Extra fillet smoothing" control was removed — it applied a
   // Shapely buffer on top of the CadQuery fillets, deforming the Mesh geometry
   // away from the Geometry tab.  The Mesh now always uses the native geometry
@@ -345,6 +371,7 @@ const MeshPanel: React.FC = () => {
       outer_air_factor:  outerAirFactor.toString(),
       n_sectors:         nSectors.toString(),
       stator_fillet_mm:  '0',          // native geometry — no extra smoothing
+      component_mesh:    componentMeshJson,
     } : {
       mesh_size_mm:        meshSizeMm.toString(),
       min_size_mm:         minSizeMm.toString(),
@@ -355,6 +382,7 @@ const MeshPanel: React.FC = () => {
       gap_layers:          gapLayers.toString(),
       n_sectors:           nSectors.toString(),
       stator_fillet_mm:    '0',          // native geometry — no extra smoothing
+      component_mesh:      componentMeshJson,
     }).toString();
     fetch(`${base}?${qs}`)
       .then(async r => {
@@ -364,7 +392,7 @@ const MeshPanel: React.FC = () => {
       .then((d: FemMesh) => { setFemMesh(d); setFemLoading(false); })
       .catch(e => { setFemError(String(e)); setFemLoading(false); });
   }, [slidingBand, meshSizeMm, minSizeMm, normalDev, rotorAngle,
-      outerAirFactor, gapLayers, nSectors]);
+      outerAirFactor, gapLayers, nSectors, componentMeshJson]);
 
   // Load current config + geometry on mount
   useEffect(() => {
@@ -605,6 +633,42 @@ const MeshPanel: React.FC = () => {
                 marks onChange={(_, v) => setGapLayers(v as number)}
                 sx={{ color: '#06b6d4' }}
               />
+            </Box>
+
+            {/* ── Per-component mesh size (mesh-convergence study) ───────── */}
+            <Box>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>
+                  Per-part element size (mm)
+                  <Tooltip title="Target triangle size INSIDE each motor part. Empty = use the global Max size for that part. Set a finer/coarser value per part to study how mesh density changes the simulated torque/losses (mesh-convergence). Applies to both the mesh preview and the Simulation solve." placement="right">
+                    <span style={{ color: '#475569', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
+                  </Tooltip>
+                </Typography>
+                {Object.keys(componentMesh).length > 0 && (
+                  <Chip label="reset" size="small" onClick={() => setComponentMesh({})}
+                    sx={{ fontSize: 10, height: 18, bgcolor: '#3f1d1d', color: '#fca5a5',
+                          cursor: 'pointer' }}/>
+                )}
+              </Box>
+              <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0.6 }}>
+                {MESH_COMPONENTS.map(({ key, label }) => (
+                  <Box key={key} sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                    <Typography sx={{ fontSize: 11, color: '#cbd5e1', flex: 1 }}>
+                      {label}
+                    </Typography>
+                    <TextField
+                      type="number" size="small" placeholder="auto"
+                      value={componentMesh[key] ?? ''}
+                      onChange={e => setCompSize(key, parseFloat(e.target.value))}
+                      inputProps={{ step: 0.1, min: 0, style: {
+                        padding: '2px 6px', fontSize: 11, width: 52,
+                        color: '#e2e8f0', textAlign: 'right' } }}
+                      sx={{ '& .MuiOutlinedInput-root': { bgcolor: '#0f172a',
+                        '& fieldset': { borderColor: '#1e293b' } } }}
+                    />
+                  </Box>
+                ))}
+              </Box>
             </Box>
 
             {/* Sliding-band TWO-mesh view */}

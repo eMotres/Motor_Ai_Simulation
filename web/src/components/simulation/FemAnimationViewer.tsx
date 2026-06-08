@@ -128,6 +128,8 @@ const FemAnimationViewer: React.FC<Props> = ({
       band_thickness_mm:  String(readMeshSetting('bandThickness', 0.4)),
       n_sectors:          String(readMeshSetting('nSectors',    4)),
       stator_fillet_mm:   '0',   // native geometry — extra smoothing removed
+      // Same per-part mesh sizes as TransientCharts → shared backend cache key.
+      component_mesh:     JSON.stringify(readMeshSetting<Record<string, number>>('componentMesh', {})),
       include_frames:     'true',
       n_frames:           String(n_frames),
       run_id:             String(runNonce),

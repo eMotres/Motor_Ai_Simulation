@@ -175,6 +175,9 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
       // (0 = auto-estimate from geometry) for the copper the 2-D field misses.
       coil_temp_c:        String(readSimSetting('coilTemp',   120.0)),
       end_winding_factor: String(readSimSetting('endWinding',   0.0)),
+      // Per-part mesh size from the Mesh tab (same localStorage key) so the
+      // transient torque/losses reflect the user's mesh-convergence settings.
+      component_mesh:     JSON.stringify(readMeshSetting<Record<string, number>>('componentMesh', {})),
       // Request the SAME include_frames/n_frames as the FemAnimationViewer
       // so both panels hit the exact same backend cache key and the heavy
       // FEM sweep runs ONCE instead of twice (the lock would otherwise

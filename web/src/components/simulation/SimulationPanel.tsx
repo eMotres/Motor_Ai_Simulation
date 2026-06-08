@@ -132,6 +132,39 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   const [connection, setConnection] = usePersisted<ConnectionKey>('connection', '2P2S');
   const connDef = CONNECTIONS.find(c => c.key === connection)!;
 
+  // ── winding LAYOUT (per-slot phase + sign = coil currents) ─────────────────
+  const [windCfg, setWindCfg]       = useState<any>(null);     // /api/winding/config
+  const [layoutDraft, setLayoutDraft] = useState<string>('');
+  const [layoutBusy, setLayoutBusy] = useState<boolean>(false);
+  const [layoutMsg, setLayoutMsg]   = useState<string | null>(null);
+
+  const loadWinding = useCallback(() => {
+    fetch(`${API}/api/winding/config`)
+      .then(r => r.json())
+      .then(d => { setWindCfg(d); setLayoutDraft(d.layout || ''); })
+      .catch(() => {});
+  }, []);
+  useEffect(() => { loadWinding(); }, [loadWinding]);
+
+  const applyWinding = useCallback((patch: Record<string, any>) => {
+    setLayoutBusy(true); setLayoutMsg(null);
+    fetch(`${API}/api/winding/config`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    })
+      .then(async r => {
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(j.detail || `HTTP ${r.status}`);
+        return j;
+      })
+      .then(() => { setLayoutMsg('✓ applied — re-run the simulation'); loadWinding(); })
+      .catch(e => setLayoutMsg('✗ ' + String(e.message || e)))
+      .finally(() => setLayoutBusy(false));
+  }, [loadWinding]);
+
+  // Phase → colour for the slot map (A=red, B=green, C=blue); +full, −faded.
+  const PHASE_COLOR: Record<string, string> = { A: '#ef4444', B: '#22c55e', C: '#3b82f6' };
+
   // ── derived periodicity ───────────────────────────────────────────────────
   const polePairs         = Math.round(numPoles / 2);
   const elecPeriod_deg    = 360 / polePairs;
@@ -438,6 +471,68 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 </Typography>
               </Box>
             ))}
+          </Box>
+        </Box>
+
+        <Divider sx={{ borderColor: '#1e293b' }}/>
+
+        {/* ── Coil layout — currents (phase + sign) per slot ── */}
+        <Box>
+          <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, color: '#475569',
+            letterSpacing: '0.1em', textTransform: 'uppercase', mb: 1 }}>
+            Coil Layout — currents per slot
+          </Typography>
+
+          {/* single / double layer */}
+          <Box sx={{ display: 'flex', gap: 0.75, mb: 1 }}>
+            {[1, 2].map(L => (
+              <Button key={L} size="small"
+                variant={(windCfg?.layers ?? 1) === L ? 'contained' : 'outlined'}
+                onClick={() => applyWinding({ layers: L, layout: '' })}
+                disabled={layoutBusy}
+                sx={{ flex: 1, fontSize: 10, py: 0.4, textTransform: 'none',
+                  ...((windCfg?.layers ?? 1) === L ? {} : { color: '#64748b', borderColor: '#334155' }) }}>
+                {L === 1 ? 'Single layer' : 'Double layer'}
+              </Button>
+            ))}
+          </Box>
+
+          {/* phase map: one cell per slot (A=red B=green C=blue, +full −faded) */}
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: '2px', mb: 1 }}>
+            {(windCfg?.layout_slots || []).map(([ph, d]: [string, number], i: number) => (
+              <Tooltip key={i} title={`slot ${i}: ${ph}${d > 0 ? '+' : '−'}`}>
+                <Box sx={{ width: 16, height: 18, borderRadius: '2px',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: 9, fontWeight: 700, color: '#fff',
+                  bgcolor: PHASE_COLOR[ph] || '#64748b',
+                  opacity: d > 0 ? 1 : 0.4,
+                  border: d > 0 ? '1px solid rgba(255,255,255,0.45)' : '1px solid transparent' }}>
+                  {d > 0 ? ph : ph.toLowerCase()}
+                </Box>
+              </Tooltip>
+            ))}
+          </Box>
+
+          {/* editable layout string (paste from winding tool) */}
+          <TextField label="Layout string" size="small" fullWidth multiline minRows={2}
+            value={layoutDraft} onChange={e => setLayoutDraft(e.target.value)}
+            disabled={layoutBusy}
+            inputProps={{ style: { fontSize: 11, fontFamily: 'monospace' } }}
+            helperText={`${windCfg?.num_slots ?? 24} slots · A|a|c|… (UPPER=+, lower=−) · paste from winding tool`}
+            FormHelperTextProps={{ sx: { fontSize: 9, color: '#475569', mx: 0 } }}/>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.75 }}>
+            <Button size="small" variant="contained"
+              onClick={() => applyWinding({ layout: layoutDraft })}
+              disabled={layoutBusy}
+              sx={{ fontSize: 10, py: 0.4, textTransform: 'none' }}>
+              {layoutBusy ? 'Applying…' : 'Apply layout'}
+            </Button>
+            {layoutMsg && (
+              <Typography sx={{ fontSize: 10,
+                color: layoutMsg.startsWith('✓') ? '#4ade80' : '#fca5a5' }}>
+                {layoutMsg}
+              </Typography>
+            )}
           </Box>
         </Box>
 

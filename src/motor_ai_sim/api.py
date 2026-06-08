@@ -302,11 +302,31 @@ _VALID_CONNECTIONS = {"4S", "2P2S", "4P"}
 class WindingConfigPatch(BaseModel):
     connection:       Optional[str] = None  # "4S" | "2P2S" | "4P"
     n_coils_per_phase: Optional[int] = None
+    layers:            Optional[int] = None  # 1 = single-layer, 2 = double-layer
+    layout:            Optional[str] = None  # explicit per-slot "A|a|c|C|…" string
+
+
+def _current_winding_layout():
+    """Return (num_slots, [(phase, dir), …]) for the live config winding."""
+    cfg = get_config()
+    geo = cfg.get("geometry", {})
+    num_slots = int(geo.get("num_slots", 24))
+    num_pp    = int(geo.get("num_poles", 28)) // 2
+    w = cfg.get("winding", {})
+    try:
+        from motor_ai_sim.simulation.geometry_2d import build_winding_layout
+        lay = build_winding_layout(
+            num_slots, num_pp,
+            single_layer=(int(w.get("layers", 1)) == 1),
+            layout_str=(w.get("layout") or None))
+    except Exception:
+        lay = []
+    return num_slots, lay
 
 
 @app.get("/api/winding/config")
 def get_winding_config():
-    """Return current winding connection config."""
+    """Return current winding connection + per-slot layout (phase, direction)."""
     cfg = get_config()
     w = cfg.get("winding", {})
     n_parallel = w.get("n_parallel", 1)
@@ -319,6 +339,9 @@ def get_winding_config():
     n_wires    = geo.get("num_wires_per_slot", 14)
     I_coil     = I_phase / n_parallel
     amp_turns  = n_wires * I_coil
+    num_slots, lay = _current_winding_layout()
+    # compact layout string (UPPER=+, lower=−) for the editor field
+    layout_str = "|".join(p if d > 0 else p.lower() for p, d in lay)
     return {
         "connection":         w.get("connection", "2P2S"),
         "n_coils_per_phase":  n_coils,
@@ -327,6 +350,11 @@ def get_winding_config():
         "I_phase_Arms":       I_phase,
         "I_coil_Arms":        round(I_coil, 2),
         "amp_turns_per_slot": round(amp_turns, 1),
+        "layers":             int(w.get("layers", 1)),
+        "num_slots":          num_slots,
+        "layout":             layout_str,
+        # per-slot [phase, direction] for the visual phase-map
+        "layout_slots":       [[p, d] for p, d in lay],
     }
 
 
@@ -359,6 +387,27 @@ def update_winding_config(patch: WindingConfigPatch):
         updates["n_series"]    = str(n_ser)
     if patch.n_coils_per_phase is not None:
         updates["n_coils_per_phase"] = str(patch.n_coils_per_phase)
+    if patch.layers is not None:
+        if int(patch.layers) not in (1, 2):
+            raise HTTPException(status_code=400, detail="layers must be 1 or 2")
+        updates["layers"] = str(int(patch.layers))
+    if patch.layout is not None:
+        from motor_ai_sim.simulation.geometry_2d import parse_winding_layout
+        ls = patch.layout.strip()
+        if ls == "":
+            updates["layout"] = '""'                     # clear → auto-generate
+        else:
+            parsed = parse_winding_layout(ls)
+            num_slots, _ = _current_winding_layout()
+            bad = sorted({p for p, _ in parsed if p not in ("A", "B", "C")})
+            if bad:
+                raise HTTPException(status_code=400,
+                    detail=f"invalid phase token(s) {bad} — use A/B/C (UPPER=+, lower=−)")
+            if len(parsed) != num_slots:
+                raise HTTPException(status_code=400,
+                    detail=f"layout has {len(parsed)} slots, expected {num_slots}")
+            clean = "|".join(p if d > 0 else p.lower() for p, d in parsed)
+            updates["layout"] = f'"{clean}"'
 
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
@@ -394,6 +443,14 @@ def update_winding_config(patch: WindingConfigPatch):
 
     _CONFIG_PATH.write_text(''.join(result), encoding="utf-8")
     clear_config_cache()
+    # A winding change (connection / layers / layout) alters the field & torque,
+    # so flush the simulation caches (mesh / field / transient) like a geometry edit.
+    if {"connection", "layers", "layout"} & set(updates):
+        try:
+            from motor_ai_sim.routes.simulation import clear_simulation_caches
+            clear_simulation_caches()
+        except Exception:
+            pass
     return {"status": "ok", "updated": {k: v.strip('"') for k, v in updates.items()}}
 
 

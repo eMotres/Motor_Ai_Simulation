@@ -1516,6 +1516,60 @@ def get_fem_eddy_field2d(
     return result
 
 
+_daxis_sweep_cache: Dict[tuple, Dict] = {}
+
+
+@router.get("/physics/daxis_sweep")
+def get_daxis_sweep(
+    lo:           float = -30.0,
+    hi:           float = 30.0,
+    step:         float = 2.0,
+    I_phase_rms:  float = 120.0,
+    rotor_angle_deg: float = 0.0,
+    mesh_size_mm: float = 4.0,
+    n_sectors:    int   = 4,
+):
+    """Sweep the load angle γ over [lo, hi] (step°) and return the magnetostatic
+    torque at each — a 1-parameter optimisation of the d-axis angle.  Returns the
+    full list of (angle, torque) plus the optimum (max-torque angle)."""
+    import numpy as _np
+    _ghash, _ = _current_geom_hash_and_params()
+    key = ("daxis", _ghash, round(lo, 1), round(hi, 1), round(step, 2),
+           round(I_phase_rms, 1), round(rotor_angle_deg, 1),
+           round(mesh_size_mm, 2), int(n_sectors))
+    if key in _daxis_sweep_cache:
+        return _daxis_sweep_cache[key]
+    try:
+        from motor_ai_sim.simulation.fem_solver_2d import fem_solve_for_sim
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"FEM solver unavailable: {e}")
+
+    angles = [round(float(a), 2) for a in
+              _np.arange(float(lo), float(hi) + 1e-6, float(step))]
+    pts: List[Dict] = []
+    for g in angles:
+        try:
+            r = fem_solve_for_sim(
+                rotor_angle_deg=float(rotor_angle_deg), gamma_deg=float(g),
+                mesh_size_mm=float(mesh_size_mm), n_sectors=int(n_sectors),
+                I_phase_rms=float(I_phase_rms))
+            pts.append({"angle": g, "torque": round(float(r["T_em_Nm"]), 3)})
+        except Exception as e:
+            log.warning("daxis_sweep gamma=%s failed: %s", g, e)
+            pts.append({"angle": g, "torque": None})
+
+    valid = [p for p in pts if p["torque"] is not None]
+    best = max(valid, key=lambda p: p["torque"]) if valid else {"angle": None, "torque": None}
+    out = {
+        "points": pts,
+        "optimal_angle": best["angle"],
+        "optimal_torque": best["torque"],
+        "I_phase_rms": I_phase_rms, "lo": lo, "hi": hi, "step": step,
+    }
+    _daxis_sweep_cache[key] = out
+    return out
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 7d. FEM Transient — N steps per electrical period
 # ─────────────────────────────────────────────────────────────────────────────

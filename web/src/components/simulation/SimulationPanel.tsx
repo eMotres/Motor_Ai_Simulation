@@ -176,6 +176,20 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   const [rpm,           setRpm]           = usePersisted('rpm',       3950.0);
   const [phaseOffset,   setPhaseOffset]   = usePersisted('gamma',     0.0);   // γ [deg]
 
+  // ── d-axis angle optimisation (sweep γ ∈ [−30,30], find max torque) ────────
+  // NOTE: must be declared AFTER `current` — its dependency array reads it.
+  const [daxisSweep, setDaxisSweep] = useState<any>(null);
+  const [daxisBusy,  setDaxisBusy]  = useState<boolean>(false);
+  const runDaxisSweep = useCallback(() => {
+    setDaxisBusy(true);
+    fetch(`${API}/api/simulation/physics/daxis_sweep?lo=-30&hi=30&step=2`
+          + `&I_phase_rms=${current}&mesh_size_mm=4`)
+      .then(r => r.json())
+      .then(d => { setDaxisSweep(d); setDaxisBusy(false); })
+      .catch(() => setDaxisBusy(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current]);
+
   // γ-as-optimization-variable: a checkbox here marks the load angle γ for the
   // Sweep/Optimize grid (like the chart icon on geometry params).  When checked,
   // gamma_deg becomes a sweep variation; the user sets its min/max/step on the
@@ -523,6 +537,40 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 color: layoutMsg.startsWith('✓') ? '#4ade80' : '#fca5a5' }}>
                 {layoutMsg}
               </Typography>
+            )}
+          </Box>
+
+          {/* ── d-axis angle optimisation: sweep γ∈[−30,30] step 2, all values ── */}
+          <Box sx={{ mt: 1.5 }}>
+            <Button size="small" variant="outlined" fullWidth
+              onClick={runDaxisSweep} disabled={daxisBusy}
+              sx={{ fontSize: 10, py: 0.4, textTransform: 'none',
+                color: '#93c5fd', borderColor: '#334155' }}>
+              {daxisBusy ? 'Optimizing… (~2 min)' : 'Optimize d-axis angle (−30…30°, step 2)'}
+            </Button>
+            {daxisSweep && (
+              <Box sx={{ mt: 1, bgcolor: '#0a1628', border: '1px solid #1e293b',
+                borderRadius: 1, p: 1 }}>
+                <Typography sx={{ fontSize: 11, color: '#4ade80', fontWeight: 700, mb: 0.5 }}>
+                  Optimal: γ = {daxisSweep.optimal_angle}° → T = {daxisSweep.optimal_torque} N·m
+                </Typography>
+                <Box sx={{ maxHeight: 180, overflowY: 'auto', display: 'grid',
+                  gridTemplateColumns: '1fr 1fr', columnGap: 1, rowGap: '1px' }}>
+                  {(daxisSweep.points || []).map((p: any) => (
+                    <Box key={p.angle} sx={{ display: 'flex', justifyContent: 'space-between',
+                      px: 0.5, borderRadius: '2px',
+                      bgcolor: p.angle === daxisSweep.optimal_angle ? '#14532d' : 'transparent' }}>
+                      <Typography sx={{ fontSize: 10, color: '#64748b',
+                        fontVariantNumeric: 'tabular-nums' }}>γ={p.angle}°</Typography>
+                      <Typography sx={{ fontSize: 10,
+                        color: p.angle === daxisSweep.optimal_angle ? '#4ade80' : '#cbd5e1',
+                        fontVariantNumeric: 'tabular-nums' }}>
+                        {p.torque == null ? '—' : p.torque.toFixed(2)}
+                      </Typography>
+                    </Box>
+                  ))}
+                </Box>
+              </Box>
             )}
           </Box>
         </Box>

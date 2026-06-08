@@ -105,6 +105,9 @@ class FEMMaterial:
     J_z:   float = 0.0   # [A/m²]  external current density
     Mx:    float = 0.0   # [A/m]   magnetization x-component
     My:    float = 0.0   # [A/m]   magnetization y-component
+    sigma: float = 0.0   # [S/m]   electrical conductivity — solid-conductor eddy
+                         #         currents (copper, magnet, shaft).  0 = no eddy
+                         #         (air / laminated iron treated as σ=0).
     # Optional measured B-H curve (list of (H_A_per_m, B_T) pairs).
     # When set, the non-linear Picard iteration uses it to derive μ_r(|B|)
     # at each iteration instead of the analytic Fröhlich roll-off.
@@ -2234,10 +2237,12 @@ def build_materials(
         DOM_OUTER:  FEMMaterial("outer",  mu_r=1.0),
         DOM_STATOR: FEMMaterial("stator", mu_r=mu_r_steel, bh_curve=bh_stator),
         DOM_ROTOR:  FEMMaterial("rotor",  mu_r=mu_r_steel, bh_curve=bh_rotor),
-        DOM_SHAFT:  FEMMaterial("shaft",  mu_r=shaft_mu_r, bh_curve=bh_shaft),
-        DOM_COIL:   FEMMaterial("coil",   mu_r=1.0),
-        DOM_MAG_N:  FEMMaterial("mag_N",  mu_r=mu_rec),
-        DOM_MAG_S:  FEMMaterial("mag_S",  mu_r=mu_rec),
+        # Solid (non-laminated) conductors carry σ for the eddy-current solve.
+        DOM_SHAFT:  FEMMaterial("shaft",  mu_r=shaft_mu_r, bh_curve=bh_shaft,
+                                sigma=SIGMA_SHAFT),
+        DOM_COIL:   FEMMaterial("coil",   mu_r=1.0, sigma=SIGMA_CU_20),
+        DOM_MAG_N:  FEMMaterial("mag_N",  mu_r=mu_rec, sigma=SIGMA_NDFEB),
+        DOM_MAG_S:  FEMMaterial("mag_S",  mu_r=mu_rec, sigma=SIGMA_NDFEB),
     }
 
     # ── Per-magnet tangential magnetization (SPOKE-PM topology) ──────────
@@ -2562,6 +2567,13 @@ class _SignedUF:
 RHO_CU_20 = 1.724e-8     # Ω·m at 20 °C
 ALPHA_CU  = 0.00393      # temperature coefficient [1/°C]
 
+# Conductivities of the SOLID (non-laminated) conductor regions for the
+# eddy-current (magnetodynamic) solver [S/m].  σ=0 ⇒ no eddy (air, laminated
+# iron).  These move the eddy loss INTO the field solve (J = −σ ∂A/∂t).
+SIGMA_CU_20  = 1.0 / RHO_CU_20   # ≈ 5.80e7  (temperature-corrected at use)
+SIGMA_NDFEB  = 6.7e5             # sintered NdFeB
+SIGMA_SHAFT  = 4.5e6             # carbon-steel shaft
+
 
 def end_winding_factor_geom(p, geo_cfg) -> float:
     """Estimate the end-winding length factor k_end = (active + end-turn) /
@@ -2776,6 +2788,9 @@ def fem_transient_sliding_band(
     @BilinearForm
     def _stiff_nu(u, v, w):            # per-element reluctivity ν(x)
         return w["nu"] * _dot(_grad(u), _grad(v))
+    @BilinearForm
+    def _massform(u, v, w):            # ∫ u·v  — for the σ·∂A/∂t eddy term
+        return u * v
     @LinearForm
     def _f1(v, w): return 1.0 * v
     @LinearForm
@@ -2787,16 +2802,32 @@ def fem_transient_sliding_band(
     matr0 = build_materials(_currents(0.0), dom.winding_layout,
                             getattr(cr, "polys", polys), 0.0, slot_area_m2, n_wires)
     # unit-current stator sources (per phase), magnet source is in rotor half
+    # σ per domain tag for the eddy-current mass matrix (temperature-corrected
+    # copper).  Solid conductors only — air / laminated iron stay σ=0.
+    _sig_cu_T = SIGMA_CU_20 / (1.0 + ALPHA_CU * (float(coil_temp_c) - 20.0))
+
+    def _sigma_of_tag(t: int) -> float:
+        t = int(t)
+        if t >= DOM_COIL_BASE or t == DOM_COIL:      return _sig_cu_T
+        if t >= DOM_MAG_BASE or t in (DOM_MAG_N, DOM_MAG_S): return SIGMA_NDFEB
+        if t == DOM_SHAFT:                           return SIGMA_SHAFT
+        return 0.0
+
     half = {}
     for name, (P, T, tags, mats) in (
         ("s", (Ps, Tts, ts, None)), ("r", (Pr, Ttr, tr, matr0))):
         mesh = MeshTri(P, T); b = Basis(mesh, ElementTriP1()); nh = b.N
         K0 = {}; cells = {}; mu0 = {}
+        Msig = _csr((nh, nh))            # σ-weighted mass (eddy term), 0 in air/iron
         for tag in np.unique(tags):
             idx = np.where(tags == tag)[0]; cells[int(tag)] = idx
             sb = Basis(mesh, ElementTriP1(), elements=idx)
             K0[int(tag)] = asm(_stiff, sb)
-        half[name] = dict(mesh=mesh, b=b, n=nh, K0=K0, cells=cells)
+            _sig = _sigma_of_tag(int(tag))
+            if _sig > 0.0:
+                Msig = Msig + asm(_massform, sb) * _sig
+        half[name] = dict(mesh=mesh, b=b, n=nh, K0=K0, cells=cells,
+                          Msig=Msig.tocsr())
     # magnet source (rotor half, constant — magnets fixed at angle 0)
     f_mag = np.zeros(half["r"]["n"])
     for tag, idx in half["r"]["cells"].items():

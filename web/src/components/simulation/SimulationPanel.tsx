@@ -483,19 +483,10 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
             Coil Layout — currents per slot
           </Typography>
 
-          {/* single / double layer */}
-          <Box sx={{ display: 'flex', gap: 0.75, mb: 1 }}>
-            {[1, 2].map(L => (
-              <Button key={L} size="small"
-                variant={(windCfg?.layers ?? 1) === L ? 'contained' : 'outlined'}
-                onClick={() => applyWinding({ layers: L, layout: '' })}
-                disabled={layoutBusy}
-                sx={{ flex: 1, fontSize: 10, py: 0.4, textTransform: 'none',
-                  ...((windCfg?.layers ?? 1) === L ? {} : { color: '#64748b', borderColor: '#334155' }) }}>
-                {L === 1 ? 'Single layer' : 'Double layer'}
-              </Button>
-            ))}
-          </Box>
+          {/* single-layer winding (this machine has no double-layer variant) */}
+          <Typography sx={{ fontSize: 10, color: '#64748b', mb: 1 }}>
+            Single-layer winding · {windCfg?.num_slots ?? 24} slots
+          </Typography>
 
           {/* phase map: one cell per slot (A=red B=green C=blue, +full −faded) */}
           <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: '2px', mb: 1 }}>

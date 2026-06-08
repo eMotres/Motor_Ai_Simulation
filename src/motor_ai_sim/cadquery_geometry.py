@@ -1560,30 +1560,25 @@ class CadQueryMotor:
             n_fit += 1
         self._coils_overflow = bool(n_fit < num_wires)
         self._n_wires_fit = int(n_fit)
+        # PER-WIRE conductors: every single wire is emitted as its OWN polygon
+        # (NOT unioned into a per-slot bar).  The winding is N turns in series,
+        # so each wire is an independent solid conductor carrying the branch
+        # current — this is what lets the eddy-current solver compute the real
+        # per-wire skin + proximity loss instead of one shorted slot bar.
+        # `coil_polys` order = slot-by-slot, +x side then −x side, wire-by-wire;
+        # each entry's centroid still lands in its slot so the (phase, direction)
+        # lookup downstream is unchanged.
         coil_polys = []
         for i in range(half_slots):
             a = i * radians(slot_angle_deg)
-            wires_pos: list = []
-            wires_neg: list = []
-            for step in range(n_fit):
-                cy = top_y_c - step*(wire_h + wire_dy)
-                # right (positive x) side
-                local_p = [(right_x, cy), (right_x + wire_w, cy),
-                            (right_x + wire_w, cy - wire_h), (right_x, cy - wire_h)]
-                wp_p = SPoly([_rot(*pt, a) for pt in local_p])
-                if wp_p.is_valid and wp_p.area > 0:
-                    wires_pos.append(wp_p)
-                # left (negative x) side
-                sx_n = -(right_x + wire_w)
-                local_n = [(sx_n, cy), (sx_n + wire_w, cy),
-                            (sx_n + wire_w, cy - wire_h), (sx_n, cy - wire_h)]
-                wp_n = SPoly([_rot(*pt, a) for pt in local_n])
-                if wp_n.is_valid and wp_n.area > 0:
-                    wires_neg.append(wp_n)
-            if wires_pos:
-                coil_polys.append(unary_union(wires_pos))   # +x slot
-            if wires_neg:
-                coil_polys.append(unary_union(wires_neg))   # -x slot
+            for sx0 in (right_x, -(right_x + wire_w)):     # +x side, then −x side
+                for step in range(n_fit):
+                    cy = top_y_c - step*(wire_h + wire_dy)
+                    local = [(sx0, cy), (sx0 + wire_w, cy),
+                             (sx0 + wire_w, cy - wire_h), (sx0, cy - wire_h)]
+                    wp = SPoly([_rot(*pt, a) for pt in local])
+                    if wp.is_valid and wp.area > 0:
+                        coil_polys.append(wp)              # ONE polygon per wire
 
         # ── Sliding-band air domains: in_band + out_band ──────────────────
         # in_band  = full DISK r=0..mid_r  MINUS rotor + magnets + shaft.

@@ -242,45 +242,81 @@ class SlotDomain(_NumpyDomain):
 # 3.  Winding layout — star-of-slots method (24 slots / 28 poles)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def build_winding_layout(num_slots: int, num_pole_pairs: int) -> List[Tuple[str, int]]:
-    """Return [(phase, direction), ...] for each slot using star-of-slots.
+def _slot_phase_sector(angle: float) -> Tuple[str, int]:
+    """Star-of-slots 60° belt → (phase, sign) for an electrical angle [deg]."""
+    sectors = [
+        ('A', +1, 330, 30),    # wraps around 0°
+        ('C', -1,  30, 90),
+        ('B', +1,  90, 150),
+        ('A', -1, 150, 210),
+        ('C', +1, 210, 270),
+        ('B', -1, 270, 330),
+    ]
+    a = angle % 360.0
+    for ph, sgn, start, end in sectors:
+        if start < end:
+            if start <= a < end:
+                return ph, sgn
+        else:                  # wraps 330→30
+            if a >= start or a < end:
+                return ph, sgn
+    return 'A', +1             # boundary fallback
 
-    Phase ∈ {'A','B','C'}, direction ∈ {+1, −1}.
-    Works for any (num_slots, num_pole_pairs) combination.
+
+def parse_winding_layout(layout_str: str) -> List[Tuple[str, int]]:
+    """Parse an explicit per-slot layout string like 'A|a|c|C|B|b|…' (one token
+    per slot, UPPER=+1, lower=−1) — lets you paste a winding straight from a
+    winding tool (emetor etc.).  Separators: '|', ',' or whitespace."""
+    out: List[Tuple[str, int]] = []
+    for tok in str(layout_str).replace(',', '|').replace(' ', '|').split('|'):
+        t = tok.strip()
+        if not t:
+            continue
+        out.append((t.upper(), +1 if t.isupper() else -1))
+    return out
+
+
+def build_winding_layout(num_slots: int, num_pole_pairs: int,
+                         single_layer: bool = True,
+                         layout_str: str = None) -> List[Tuple[str, int]]:
+    """Return [(phase, direction), ...] for each slot.
+
+    layout_str : if given AND it has exactly num_slots tokens, it is used VERBATIM
+        (paste-from-winding-tool path).  Otherwise the layout is generated:
+
+      single_layer=True  → SINGLE-LAYER concentrated winding: one coil per TWO
+        slots (coils on alternate teeth).  A coil's two sides sit in adjacent
+        slots as (phase,+1),(phase,−1); the phase of coil j comes from the
+        slot-2j star-of-slots phasor.  Phases come in pairs (A A C C B B …) and
+        each coil's sides alternate sign — matches the single-layer winding
+        tools (verified vs emetor for 24s/28p: A a c C B b a A C c b B …).
+
+      single_layer=False → DOUBLE-LAYER: one star-of-slots phasor per slot
+        (++ −− sign groups).
     """
-    phases = ['A', 'B', 'C']
+    if layout_str:
+        parsed = parse_winding_layout(layout_str)
+        if len(parsed) == num_slots:
+            return parsed
+        # wrong length → ignore and auto-generate
+
     alpha_e = num_pole_pairs * 360.0 / num_slots   # electrical angle step [deg]
 
-    layout: List[Tuple[str, int]] = []
-    for k in range(num_slots):
-        angle = (k * alpha_e) % 360.0
-        # Assign to 60° sector:  +A 330-30, -C 30-90, +B 90-150, -A 150-210,
-        #                         +C 210-270, -B 270-330
-        sectors = [
-            ('A', +1, 330, 30),    # wraps around 0°
-            ('C', -1,  30, 90),
-            ('B', +1,  90, 150),
-            ('A', -1, 150, 210),
-            ('C', +1, 210, 270),
-            ('B', -1, 270, 330),
-        ]
-        assigned = None
-        for ph, sgn, start, end in sectors:
-            if start < end:
-                if start <= angle < end:
-                    assigned = (ph, sgn)
-                    break
-            else:  # wraps 330-30
-                if angle >= start or angle < end:
-                    assigned = (ph, sgn)
-                    break
-        if assigned is None:
-            assigned = ('A', +1)   # fallback (boundary edge case)
-        layout.append(assigned)
-    return layout
+    if single_layer:
+        layout: List[Tuple[str, int]] = [('A', 1)] * num_slots
+        for j in range(num_slots // 2):
+            ph, sgn = _slot_phase_sector((2 * j) * alpha_e)
+            layout[2 * j]     = (ph, +sgn)
+            layout[2 * j + 1] = (ph, -sgn)
+        if num_slots % 2:                                  # odd leftover slot
+            layout[-1] = _slot_phase_sector((num_slots - 1) * alpha_e)
+        return layout
+
+    # double-layer (one phasor per slot)
+    return [_slot_phase_sector((k * alpha_e) % 360.0) for k in range(num_slots)]
 
 
-# Cached layout for 24s/28p (14 pole-pairs)
+# Cached layout for 24s/28p (14 pole-pairs) — single-layer
 _WINDING_24S_28P: List[Tuple[str, int]] = build_winding_layout(24, 14)
 
 
@@ -340,8 +376,17 @@ class MotorDomains2D:
         self._set_props("shaft",       sigma=SIGMA_AIR,      mu_r=1.0)
 
         # ── Individual slot (conductor) sub-domains ───────────────────────────
-        self.winding_layout = build_winding_layout(p.num_slots,
-                                                   p.num_poles // 2)
+        # Winding layout from config: layers=1 → single-layer (default), and an
+        # optional explicit `layout` string (paste from a winding tool) wins.
+        try:
+            from motor_ai_sim.config import get_config as _gc
+            _wcfg = (_gc().get("winding", {}) or {})
+        except Exception:
+            _wcfg = {}
+        self.winding_layout = build_winding_layout(
+            p.num_slots, p.num_poles // 2,
+            single_layer=(int(_wcfg.get("layers", 1)) == 1),
+            layout_str=(_wcfg.get("layout") or None))
         slot_pitch = 2 * math.pi / p.num_slots
         # Slot radial extent: from stator inner outward by slot_height
         r_slot_in  = p.r_stator_in

@@ -2803,7 +2803,10 @@ def fem_transient_sliding_band(
 
     def _currents(rotor_angle_deg):
         Ipk = float(I_phase_rms) / n_parallel * math.sqrt(2)
-        te = math.radians(rotor_angle_deg * pole_pairs + gamma_deg + 285.0)
+        # d-axis phase offset so γ=0 lands on the q-axis (max torque).  Calibrated
+        # for the SINGLE-LAYER winding (A a c C B b …): 240° (was 285° for the old
+        # double-layer layout — changing the winding rotated the MMF axis ~45°el).
+        te = math.radians(rotor_angle_deg * pole_pairs + gamma_deg + 240.0)
         return {'A': Ipk * math.cos(te),
                 'B': Ipk * math.cos(te - 2 * math.pi / 3),
                 'C': Ipk * math.cos(te + 2 * math.pi / 3)}
@@ -3521,7 +3524,8 @@ def fem_solve_for_sim(
     # Geometry: rotor d-axis tooth at math 90° (+Y axis), aligned with the
     #   first stator tooth (also at math 90°), exactly as in the Ansys
     #   reference image.
-    SPOKE_PM_DAXIS_SHIFT_DEG = 285.0
+    # 240° calibrated for the SINGLE-LAYER winding (was 285° for double-layer).
+    SPOKE_PM_DAXIS_SHIFT_DEG = 240.0
     theta_e      = math.radians(rotor_angle_deg * pole_pairs
                                  + gamma_deg + SPOKE_PM_DAXIS_SHIFT_DEG)
     I_ph = {

@@ -6,16 +6,16 @@ geometry:
   num_slots_per_segment: 6
   num_poles_per_segment: 7
   stator_width: 45
-  air_gap: 0.667
+  air_gap: 0.65
   tooth_width: 12.27
   tooth2_width: 7.33
   cut_width: 8.0
   insulation_thickness: 0.2
-  wire_width: 6.67
+  wire_width: 6.5
   wire_height: 0.8
   wire_spacing_x: 0.133
-  wire_spacing_y: 0.173
-  num_wires_per_slot: 18
+  wire_spacing_y: 0.1
+  num_wires_per_slot: 15
   slot_hs: 0.267
   magnet_height: 21.33
   rotor_house_height: 1.6
@@ -26,7 +26,7 @@ geometry:
   magnet_up_gap: 2.67
   rotor_hole: 0.6
   magnet_down_height: 2.4
-  stator_fillet_r: 4.67
+  stator_fillet_r: 5
   stator_fillet_r1: 1.6
   rotor_fill_r: 2.13
   motor_length: 45
@@ -391,6 +391,13 @@ winding:
   connection: 2P2S
   n_parallel: 2
   n_series: 2
+  # 1 = single-layer (coil on alternate teeth), 2 = double-layer.
+  layers: 1
+  # Explicit per-slot layout (UPPER=+, lower=-), one token per slot, '|'-sep.
+  # If set + length == num_slots it is used VERBATIM (paste from a winding tool).
+  # Empty → auto-generate from `layers` via star-of-slots.
+  # This is the verified single-layer 24s/28p layout (emetor, kw1=0.966).
+  layout: "A|a|c|C|B|b|a|A|C|c|b|B|A|a|c|C|B|b|a|A|C|c|b|B"
 simulation:
   max_current: 120.0
   frequency: 466.67

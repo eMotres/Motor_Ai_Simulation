@@ -50,12 +50,13 @@ MU0 = 4e-7 * math.pi
 # to (rotor_angle·pole_pairs + γ) so that γ=0 lands on the q-axis (max torque).
 # MUST be identical across every solve path (transient currents, static field,
 # eddy) — otherwise the field/torque would be at a different phase per path.
-# 270° → at the reference position (rotor=0, γ=0) the q-axis current has
-# I_A = cos(270°) = 0 (phase A carries no current — it sits on the d-axis), with
-# positive/motoring torque.  This is the physical d-q convention the figure shows.
-# (NB: the torque PEAK is ~30° el away, at γ≈−30°, i.e. the rotor d-axis is ~30° el
-#  off the phase-A axis in the current geometry — a small magnet/winding offset.)
-DAXIS_SHIFT_DEG = 270.0
+# 90° → the natural d-q convention: at rotor=0, γ=0 the q-axis current has
+# I_A = cos(90°) = 0 (phase A on the d-axis) with POSITIVE/motoring torque.
+# This works now that the magnet polarity is correct (flipped) — before the flip
+# the same I_A=0 point gave braking torque, which forced the non-physical 270°.
+# (NB: the torque PEAK is ~30° el away, at γ≈−30° — the residual rotor d-axis vs
+#  phase-A geometric offset; mechanical alignment is intentionally kept at 0.)
+DAXIS_SHIFT_DEG = 90.0
 
 # Number of equally-spaced nodes on the sliding-band slip circle (r = mid_r).
 # Shared by in_band (exterior) and out_band (hole) so the two half-meshes get

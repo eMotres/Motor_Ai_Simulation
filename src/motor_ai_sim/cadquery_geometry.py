@@ -1392,7 +1392,10 @@ class CadQueryMotor:
             hole = mp.union(rect_poly)
             if not hole.is_valid: hole = hole.buffer(0)
             hole_polys.append(hole)
-            polarity = +1 if i % 2 == 0 else -1
+            # Magnet polarity FLIPPED (N↔S vs the old i%2 convention): the rotor
+            # field then points the right way, so γ=0 gives positive torque with a
+            # SMALL d-axis phase shift (≈0 ± a few deg) instead of ~270°.
+            polarity = -1 if i % 2 == 0 else +1
             mag_polys.append((mp, polarity))
 
         # Rotor = annulus rotor_or..rotor_ir minus union(all holes).

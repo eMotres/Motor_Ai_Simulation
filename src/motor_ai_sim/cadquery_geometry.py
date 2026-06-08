@@ -1313,7 +1313,12 @@ class CadQueryMotor:
         # 1/4 sector all fit INSIDE the wedge with centers at math 6.43°
         # through 83.57°.
         _pole_pitch_deg  = 360.0 / num_poles
-        ZERO_OFFSET_DEG  = -(90.0 - _pole_pitch_deg * 0.5)
+        # d-axis↔phase-A alignment found by 1-parameter torque optimisation
+        # (q-axis at γ=−28.57° el → 28.57/14 = 2.04° mech).  Rotating the rotor
+        # reference by this makes γ=0 land on BOTH I_A=0 (DAXIS_SHIFT_DEG=270)
+        # AND peak torque.  Sign set empirically (γ-sweep peak → 0).
+        _DAXIS_ALIGN_MECH = 2.04
+        ZERO_OFFSET_DEG  = -(90.0 - _pole_pitch_deg * 0.5) + _DAXIS_ALIGN_MECH
         theta_r = radians(rotor_angle_deg + ZERO_OFFSET_DEG)
 
         def _circle(r, n=256):

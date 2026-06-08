@@ -2731,6 +2731,7 @@ def fem_transient_sliding_band(
     geo_override: dict = None,
     eddy: bool = False,          # opt-in: time-coupled σ·∂A/∂t eddy-current solve
     component_mesh_mm: dict = None,  # per-part target element size {comp: mm}
+    return_field: bool = False,  # eddy: also return a last-frame field snapshot
 ) -> dict:
     """Sliding-band transient: mesh the stator + rotor halves ONCE, then sweep
     the rotor by shifting the slip-ring node pairing (no remeshing) so the
@@ -3090,6 +3091,8 @@ def fem_transient_sliding_band(
             sol = _spsolve(Mb, np.concatenate([rf[free], cr]))
             A_red = np.zeros(m); A_red[free] = sol[:free.size]
             return Pro @ A_red, sol[free.size:]      # A , per-coil voltages U_c
+
+    _field_snap = None       # eddy last-frame field snapshot (if return_field)
     for k in range(n_total):
         theta = (k / n_total) * period_mech * n_periods
         m_shift = int(round(theta / spacing))
@@ -3167,6 +3170,23 @@ def fem_transient_sliding_band(
         # capture the converged per-element B for the loss integrals
         _Bxs, _Bys = _per_triangle_B(half["s"]["mesh"], A[:nsn])
         _Bxr, _Byr = _per_triangle_B(half["r"]["mesh"], A[nsn:])
+        if eddy and return_field and k == n_total - 1:
+            # Last-frame field snapshot for visualisation: A_z, per-element B,
+            # and the EDDY current density J = σ(−∂A/∂t + U_c) on the copper
+            # nodes (this is the genuinely-new field the eddy solve produces).
+            _cmask = np.zeros(n, dtype=bool)
+            for _c in _coil_con:
+                _cmask[_c["nodes"]] = True
+            _field_snap = {
+                "P_mm": (mesh_all.p * 1e3).copy(),                 # node coords [mm]
+                "T":    mesh_all.t.copy(),                         # triangles (3,nel)
+                "A":    A.copy(),                                  # nodal A_z [Wb/m]
+                "Bx":   np.concatenate([_Bxs, _Bxr]),              # per-elem B [T]
+                "By":   np.concatenate([_Bys, _Byr]),
+                "Jeddy": (_sig_cu_T * Ffld) * _cmask,              # nodal Cu eddy J [A/m^2]
+                "tags": np.concatenate([np.asarray(ts), np.asarray(tr)]).astype(int),
+                "nsn":  int(nsn),
+            }
         _hist_sx.append(_Bxs[_iron_s_idx]); _hist_sy.append(_Bys[_iron_s_idx])
         _hist_rx.append(_Bxr[_iron_r_idx]); _hist_ry.append(_Byr[_iron_r_idx])
         _hist_mx.append(_Bxr[_mag_idx]);    _hist_my.append(_Byr[_mag_idx])
@@ -3438,6 +3458,7 @@ def fem_transient_sliding_band(
         "coil_temp_C": float(coil_temp_c),
         "end_winding_factor": float(_k_end_used),
         "T_harm_order": T_harm_order, "T_harm_amp": T_harm_amp,
+        "field": _field_snap,
     }
 
 

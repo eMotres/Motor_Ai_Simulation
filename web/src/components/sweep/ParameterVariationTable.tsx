@@ -1,4 +1,4 @@
-import React, { useEffect, useCallback, useState, useMemo } from 'react';
+import React, { useEffect, useCallback, useState, useMemo, useRef } from 'react';
 import {
   Box,
   Typography,
@@ -8,6 +8,7 @@ import {
   Divider,
   Chip,
   Button,
+  Snackbar,
 } from '@mui/material';
 import ShowChartIcon    from '@mui/icons-material/ShowChart';
 import CloseIcon        from '@mui/icons-material/Close';
@@ -138,13 +139,21 @@ const ParameterVariationTable: React.FC = () => {
   // Initialise / sync local values when geometry loads from server
   // Only reset keys that are NOT dirty (i.e. not pending recalc)
   const [dirtyKeys, setDirtyKeys] = useState<Set<string>>(new Set());
+  const [showSaved, setShowSaved] = useState(false);
+
+  // Always-current dirtyKeys for the geometry-sync effect below.  Without this
+  // the effect closed over a STALE dirtyKeys (it isn't in its deps), so a
+  // geometry update that arrived while a field was edited-but-not-yet-saved
+  // could WIPE the pending edit.  The ref always holds the latest set.
+  const dirtyRef = useRef(dirtyKeys);
+  dirtyRef.current = dirtyKeys;
 
   useEffect(() => {
     setLocalValues(prev => {
       const next: Record<string, number> = {};
       Object.entries(geometry).forEach(([k, v]) => {
         // Keep local edit if key is dirty, otherwise follow server
-        next[k] = dirtyKeys.has(k) && prev[k] !== undefined ? prev[k] : (v as number);
+        next[k] = dirtyRef.current.has(k) && prev[k] !== undefined ? prev[k] : (v as number);
       });
       return next;
     });
@@ -179,11 +188,12 @@ const ParameterVariationTable: React.FC = () => {
     dirtyKeys.forEach(k => { pending[k] = localValues[k]; });
 
     if (connectedToApi) {
-      await updateGeometryViaApi(pending);
+      await updateGeometryViaApi(pending);   // PUT → persists to config.yaml + rebuild
     } else {
       updateGeometry(pending);
     }
     setDirtyKeys(new Set());
+    setShowSaved(true);
   }, [isDirty, dirtyKeys, localValues, connectedToApi, updateGeometryViaApi, updateGeometry]);
 
   // ── sweep toggle ──────────────────────────────────────────────────────
@@ -394,6 +404,13 @@ const ParameterVariationTable: React.FC = () => {
           })}
         </Box>
       ))}
+
+      <Snackbar
+        open={showSaved}
+        autoHideDuration={2500}
+        onClose={() => setShowSaved(false)}
+        message="Geometry changes applied & saved to config"
+      />
     </Box>
   );
 };

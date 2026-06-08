@@ -2666,6 +2666,7 @@ def fem_transient_sliding_band(
     coil_temp_c: float = 120.0,
     end_winding_factor: float = 0.0,
     geo_override: dict = None,
+    eddy: bool = False,          # opt-in: time-coupled σ·∂A/∂t eddy-current solve
 ) -> dict:
     """Sliding-band transient: mesh the stator + rotor halves ONCE, then sweep
     the rotor by shifting the slip-ring node pairing (no remeshing) so the
@@ -2964,6 +2965,18 @@ def fem_transient_sliding_band(
     T_series = []; psiA = []; psiB = []; psiC = []
     IA = []; IB = []; IC = []; tt = []
     dt = (1.0 / max(f_elec, 1e-9)) * n_periods / n_total
+    # Eddy-current (magnetodynamic) coupling: backward-Euler adds (Msig/dt) to the
+    # stiffness and (Msig/dt)·A_prev to the RHS.  Msig is 0 outside solid
+    # conductors, so air/iron are unaffected.  A_prev follows the material points
+    # (rotor mesh rotates rigidly), so it IS the previous-step field per DOF.
+    if eddy:
+        # Stage 1: eddy in the ROTOR conductors only (magnets + shaft — floating,
+        # so the bare σ·∂A/∂t term is valid).  The STATOR copper carries an
+        # imposed phase current and needs the solid-conductor + ∫J=I formulation
+        # (Stage 2), so its eddy block is held at zero here.
+        _zero_s = _csr(half["s"]["Msig"].shape)
+        _Minv_dt = _bd([_zero_s, half["r"]["Msig"]]).tocsr() * (1.0 / dt)
+        A_prev = np.zeros(n)
     for k in range(n_total):
         theta = (k / n_total) * period_mech * n_periods
         m_shift = int(round(theta / spacing))
@@ -3003,8 +3016,13 @@ def fem_transient_sliding_band(
                     K = K + asm(_stiff_nu, _sbi, nu=b0.interpolate(nf))
                 blocks.append(K)
             K = _bd(blocks).tocsr()
-            A = Pro @ _sksolve(*condense((Pro.T @ K @ Pro).tocsr(),
-                                          Pro.T @ f, D=outer_red))
+            if eddy:
+                Keff = (K + _Minv_dt).tocsr()
+                rhs = f + _Minv_dt @ A_prev
+            else:
+                Keff = K; rhs = f
+            A = Pro @ _sksolve(*condense((Pro.T @ Keff @ Pro).tocsr(),
+                                          Pro.T @ rhs, D=outer_red))
             for hn, off in (("s", 0), ("r", nsn)):
                 h = half[hn]
                 Bx, By = _per_triangle_B(h["mesh"], A[off:off + h["n"]])
@@ -3019,6 +3037,8 @@ def fem_transient_sliding_band(
                     mu_new = _mu_r_from_bh_vec(curve, Bm[idx])
                     nu_new = 1.0 / (MU0 * np.maximum(mu_new, 1.0))
                     nu_el[hn][tag] = 0.5 * nu_el[hn][tag] + 0.5 * nu_new
+        if eddy:
+            A_prev = A.copy()        # previous-step field for the σ·∂A/∂t term
         # capture the converged per-element B for the loss integrals
         _Bxs, _Bys = _per_triangle_B(half["s"]["mesh"], A[:nsn])
         _Bxr, _Byr = _per_triangle_B(half["r"]["mesh"], A[nsn:])

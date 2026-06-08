@@ -62,6 +62,45 @@ def _parse_component_mesh(s: str) -> dict:
     return out
 
 
+def _outlines_from_polys(pfo: dict) -> list:
+    """Build the renderer's outline payload (domain → polygon loops in METRES)
+    from a polys dict.  Shared by the magnetostatic and eddy field endpoints."""
+    def _polys_only(gm):
+        if gm is None or getattr(gm, "is_empty", True):
+            return []
+        if gm.geom_type == "Polygon":
+            return [gm]
+        if hasattr(gm, "geoms"):       # Multi* / GeometryCollection
+            out = []
+            for sub in gm.geoms:
+                out.extend(_polys_only(sub))
+            return out
+        return []
+
+    def _poly_outlines_m(poly):
+        rings = []
+        for g in _polys_only(poly):
+            if g.is_empty or g.area < 1e-6:
+                continue
+            rings.append([[x * 1e-3, y * 1e-3] for x, y in g.exterior.coords])
+            for h in g.interiors:
+                rings.append([[x * 1e-3, y * 1e-3] for x, y in h.coords])
+        return rings
+
+    pfo = pfo or {}
+    outlines: list = []
+    for k, dom in (("stator", 1), ("rotor", 5), ("shaft", 6),
+                   ("air_gap", 3), ("airgap_band", 7), ("air_outer", 8)):
+        if pfo.get(k) is not None:
+            outlines.append({"domain": dom, "loops": _poly_outlines_m(pfo[k])})
+    for mag_poly, polarity in pfo.get("magnets", []) or []:
+        outlines.append({"domain": 4 if polarity > 0 else 44,
+                         "loops": _poly_outlines_m(mag_poly)})
+    for coil_poly in pfo.get("coils", []) or []:
+        outlines.append({"domain": 2, "loops": _poly_outlines_m(coil_poly)})
+    return outlines
+
+
 def _current_geom_hash_and_params():
     """Return (hash, params_dict) of the LIVE UI-edited geometry.
 
@@ -1360,49 +1399,8 @@ async def get_fem_field2d(
         raise HTTPException(status_code=500, detail=f"FEM solve failed: {e}")
 
     # ── Build outlines payload (same shape as /mesh/build2d) ──────────
-    from shapely.geometry import MultiPolygon as _SMP
-
-    def _poly_outlines_m(poly):
-        if poly is None or poly.is_empty:
-            return []
-        # Flatten ANY geometry to its polygon parts.  A large surface_deviation
-        # can simplify a thin polygon into a GeometryCollection (polygons +
-        # stray LineStrings); the 1-D bits have no `.exterior` and would 500
-        # the whole mesh build here in the outline assembly.
-        def _polys_only(gm):
-            if gm is None or gm.is_empty:
-                return []
-            if gm.geom_type == "Polygon":
-                return [gm]
-            if hasattr(gm, "geoms"):       # Multi* / GeometryCollection
-                out = []
-                for sub in gm.geoms:
-                    out.extend(_polys_only(sub))
-                return out
-            return []
-        rings = []
-        for g in _polys_only(poly):
-            if g.is_empty or g.area < 1e-6:
-                continue
-            rings.append([[x * 1e-3, y * 1e-3] for x, y in g.exterior.coords])
-            for h in g.interiors:
-                rings.append([[x * 1e-3, y * 1e-3] for x, y in h.coords])
-        return rings
-
     pfo = result.pop("polys_for_outlines", {}) or {}
-    outlines: List[Dict] = []
-    for k, dom in (("stator", 1), ("rotor", 5), ("shaft", 6),
-                    ("air_gap", 3), ("airgap_band", 7), ("air_outer", 8)):
-        if pfo.get(k) is not None:
-            outlines.append({"domain": dom, "loops": _poly_outlines_m(pfo[k])})
-    for mag_poly, polarity in pfo.get("magnets", []) or []:
-        outlines.append({
-            "domain": 4 if polarity > 0 else 44,
-            "loops": _poly_outlines_m(mag_poly),
-        })
-    for coil_poly in pfo.get("coils", []) or []:
-        outlines.append({"domain": 2, "loops": _poly_outlines_m(coil_poly)})
-    result["outlines"] = outlines
+    result["outlines"] = _outlines_from_polys(pfo)
 
     # A_z numeric stats for the renderer
     A = _np.asarray(result["A_z_per_node"])
@@ -1410,6 +1408,110 @@ async def get_fem_field2d(
     result["A_z_max"] = float(A.max())
     result["B_mag_max"] = float(_np.asarray(result["Bmag_per_tri"]).max())
 
+    _fem_field_cache[key] = result
+    return result
+
+
+@router.get("/physics/fem_eddy_field2d")
+def get_fem_eddy_field2d(
+    gamma_deg:          float = 0.0,
+    I_phase_rms:        float = 120.0,
+    n_steps_per_period: int   = 12,
+    n_periods:          float = 2.0,
+    mesh_size_mm:       float = 3.0,
+    min_size_mm:        float = 0.3,
+    outer_air_factor:   float = 1.3,
+    n_sectors:          int   = 4,
+    coil_temp_c:        float = 120.0,
+    component_mesh:     str   = "",
+):
+    """Run the time-coupled EDDY-CURRENT solve and return its LAST-frame field —
+    A_z, |B|, and the copper eddy current density J = σ(−∂A/∂t + U_c) — in the
+    SAME payload shape the magnetostatic field renderer consumes, so the existing
+    Az / |B| / J views show the eddy-solve fields.  Slow (~25 s)."""
+    import numpy as _np
+    import math as _math
+    _comp_mesh = _parse_component_mesh(component_mesh)
+    key = ("eddyfld", round(gamma_deg, 1), round(I_phase_rms, 1),
+           int(n_steps_per_period), round(n_periods, 2), round(mesh_size_mm, 2),
+           round(min_size_mm, 2), round(outer_air_factor, 2), int(n_sectors),
+           round(coil_temp_c, 1), tuple(sorted(_comp_mesh.items())))
+    if key in _fem_field_cache:
+        return _fem_field_cache[key]
+    try:
+        from motor_ai_sim.simulation.fem_solver_2d import (
+            fem_transient_sliding_band, _simplify_polys,
+            DOM_MAG_BASE, DOM_COIL_BASE, DOM_MAG_N, DOM_MAG_S, DOM_COIL)
+        from motor_ai_sim.cadquery_geometry import CadQueryMotor
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"eddy solver unavailable: {e}")
+    try:
+        d = fem_transient_sliding_band(
+            n_steps_per_period=int(n_steps_per_period), n_periods=float(n_periods),
+            gamma_deg=float(gamma_deg), I_phase_rms=float(I_phase_rms),
+            mesh_size_mm=float(mesh_size_mm), min_size_mm=float(min_size_mm),
+            outer_air_factor=float(outer_air_factor),
+            n_sectors=int(n_sectors) if int(n_sectors) > 1 else 4,
+            coil_temp_c=float(coil_temp_c), eddy=True, return_field=True,
+            component_mesh_mm=_comp_mesh)
+    except Exception as e:
+        log.exception("eddy field solve failed")
+        raise HTTPException(status_code=500, detail=f"eddy solve failed: {e}")
+    fld = d.get("field")
+    if not fld:
+        raise HTTPException(status_code=500, detail="eddy solve returned no field snapshot")
+
+    P = _np.asarray(fld["P_mm"]) * 1e-3        # nodes → metres
+    T = _np.asarray(fld["T"])                  # (3, ntri)
+    A = _np.asarray(fld["A"])
+    Bx = _np.asarray(fld["Bx"]); By = _np.asarray(fld["By"])
+    Jn = _np.asarray(fld["Jeddy"])             # nodal Cu eddy/total current density
+    tags = _np.asarray(fld["tags"]).astype(int)
+    Bmag = _np.sqrt(Bx ** 2 + By ** 2)
+    Jtri = Jn[T].mean(axis=0)                   # per-element J (nonzero in Cu)
+
+    # Collapse per-wire / per-magnet tags → renderer palette (rotor at angle 0).
+    motor = CadQueryMotor()
+    polys = _simplify_polys(motor.get_2d_polygons(rotor_angle_deg=0.0), tol_mm=0.005)
+    tags_vis = tags.copy()
+    tags_vis[tags >= DOM_COIL_BASE] = DOM_COIL
+    for i, (mp, pol) in enumerate(polys.get("magnets", []) or []):
+        tags_vis[tags == (DOM_MAG_BASE + i)] = (DOM_MAG_N if pol > 0 else DOM_MAG_S)
+
+    def _mean(kk):
+        s = d.get(kk) or [0.0]
+        return float(_np.mean(_np.asarray(s, float))) if len(s) else 0.0
+    nsec = int(n_sectors) if int(n_sectors) > 1 else 4
+    Pcu = float(d.get("P_cu_total_solve_W", 0.0))    # eddy-solve copper (DC+AC)
+    Pfe = _mean("P_fe_W"); Pmag = _mean("P_mag_eddy_W")
+    Tavg = float(d.get("T_avg_Nm", 0.0)); rpm = float(d.get("rpm", 0.0))
+    Pmech = Tavg * 2 * _math.pi * rpm / 60.0
+    ploss = Pcu + Pfe + Pmag
+    eff = Pmech / (Pmech + ploss) if Pmech > 0 else 0.0
+    result = {
+        "ok": True, "eddy": True,
+        "n_vertices": int(P.shape[1]), "n_triangles": int(T.shape[1]),
+        "vertices": P.T.tolist(), "triangles": T.T.tolist(),
+        "domain_per_tri": tags_vis.tolist(),
+        "A_z_per_node": A.tolist(),
+        "Bmag_per_tri": Bmag.tolist(),
+        "J_z_per_tri": Jtri.tolist(),           # eddy current density (A/m²) in Cu
+        "extent": [float(P[0].min()), float(P[0].max()),
+                   float(P[1].min()), float(P[1].max())],
+        "outlines": _outlines_from_polys(polys),
+        "A_z_min": float(A.min()), "A_z_max": float(A.max()),
+        "B_mag_max": float(Bmag.max()),
+        "n_sectors": nsec, "symmetry_mult": nsec,
+        "rpm": rpm, "freq_Hz": round(float(d.get("f_elec_Hz", 0.0)), 2),
+        "T_em_Nm": round(Tavg, 3),
+        "P_cu_W": round(Pcu, 1), "P_fe_W": round(Pfe, 1),
+        "P_mag_eddy_W": round(Pmag, 1), "P_loss_total_W": round(ploss, 1),
+        "P_mech_W": round(Pmech, 1), "efficiency": round(eff, 4),
+        "P_cu_ac_solve_W": round(float(d.get("P_cu_ac_solve_W", 0.0)), 1),
+        "V_peak": round(float(d.get("V_peak", 0.0)), 1),
+        "solve_time_s": round(float(d.get("solve_time_s", 0.0)), 1),
+        "total_time_s": 0.0,
+    }
     _fem_field_cache[key] = result
     return result
 

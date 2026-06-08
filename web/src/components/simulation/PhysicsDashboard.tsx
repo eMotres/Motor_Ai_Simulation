@@ -477,6 +477,12 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
       <FemAnimationViewer gamma_deg={gamma_deg} I_phase_rms={I_phase_rms}
         n_frames={Math.min(steps, 24)} runNonce={runNonce} fresh={fresh} onPayload={setFemPayload}/>
 
+      {/* ── Field inspector: Magnetostatic ↔ Eddy-current solve ──────────
+          Standalone FemFieldChart (fetches its own data, no payloadOverride)
+          with the Magneto/Eddy toggle — switch to "Eddy" to run the σ·∂A/∂t
+          solve and inspect A_z / |B| / J (real current density in the copper). */}
+      <FemFieldChart gamma_deg={gamma_deg} I_phase_rms={I_phase_rms}/>
+
       {/* ── Transient: T(t), P(t), V(t) — one FEM solve per time step ── */}
       <TransientCharts gamma_deg={gamma_deg} I_phase_rms={I_phase_rms}
         steps={steps} runNonce={runNonce} fresh={fresh} onBusyChange={onBusyChange}

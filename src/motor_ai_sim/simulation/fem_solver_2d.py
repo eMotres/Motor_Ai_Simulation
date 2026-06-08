@@ -46,6 +46,13 @@ _GMSH_LOCK = threading.RLock()
 
 MU0 = 4e-7 * math.pi
 
+# Single source of truth for the d-axis phase offset: the electrical angle added
+# to (rotor_angle·pole_pairs + γ) so that γ=0 lands on the q-axis (max torque).
+# MUST be identical across every solve path (transient currents, static field,
+# eddy) — otherwise the field/torque would be at a different phase per path.
+# 240° calibrated for the SINGLE-LAYER winding (was 285° for double-layer).
+DAXIS_SHIFT_DEG = 240.0
+
 # Number of equally-spaced nodes on the sliding-band slip circle (r = mid_r).
 # Shared by in_band (exterior) and out_band (hole) so the two half-meshes get
 # IDENTICAL matching nodes there.  Multiple of 14 (pole pairs) so the rotor
@@ -2415,7 +2422,7 @@ def fem_field2d(
     n_wires      = geo.get("num_wires_per_slot", 14)
     pole_pairs   = p.num_poles // 2
     I_coil_peak  = I_phase_rms / n_parallel * math.sqrt(2)
-    theta_e      = math.radians(rotor_angle_deg * pole_pairs + gamma_deg + 90.0)
+    theta_e      = math.radians(rotor_angle_deg * pole_pairs + gamma_deg + DAXIS_SHIFT_DEG)
     I_ph = {
         'A': I_coil_peak * math.cos(theta_e),
         'B': I_coil_peak * math.cos(theta_e - 2 * math.pi / 3),
@@ -2803,10 +2810,9 @@ def fem_transient_sliding_band(
 
     def _currents(rotor_angle_deg):
         Ipk = float(I_phase_rms) / n_parallel * math.sqrt(2)
-        # d-axis phase offset so γ=0 lands on the q-axis (max torque).  Calibrated
-        # for the SINGLE-LAYER winding (A a c C B b …): 240° (was 285° for the old
-        # double-layer layout — changing the winding rotated the MMF axis ~45°el).
-        te = math.radians(rotor_angle_deg * pole_pairs + gamma_deg + 240.0)
+        # d-axis phase offset so γ=0 = q-axis — shared module constant so the
+        # transient, static and eddy paths all use the SAME phase shift.
+        te = math.radians(rotor_angle_deg * pole_pairs + gamma_deg + DAXIS_SHIFT_DEG)
         return {'A': Ipk * math.cos(te),
                 'B': Ipk * math.cos(te - 2 * math.pi / 3),
                 'C': Ipk * math.cos(te + 2 * math.pi / 3)}
@@ -3524,8 +3530,8 @@ def fem_solve_for_sim(
     # Geometry: rotor d-axis tooth at math 90° (+Y axis), aligned with the
     #   first stator tooth (also at math 90°), exactly as in the Ansys
     #   reference image.
-    # 240° calibrated for the SINGLE-LAYER winding (was 285° for double-layer).
-    SPOKE_PM_DAXIS_SHIFT_DEG = 240.0
+    # Shared module constant so every solve path uses the SAME phase shift.
+    SPOKE_PM_DAXIS_SHIFT_DEG = DAXIS_SHIFT_DEG
     theta_e      = math.radians(rotor_angle_deg * pole_pairs
                                  + gamma_deg + SPOKE_PM_DAXIS_SHIFT_DEG)
     I_ph = {

@@ -17,11 +17,10 @@ import AddIcon          from '@mui/icons-material/Add';
 import PlayArrowIcon    from '@mui/icons-material/PlayArrow';
 import CircularProgress from '@mui/material/CircularProgress';
 import { useMotorStore } from '../../stores/motorStore';
-import type { VariationMode } from '../../types/motor';
 import AddParameterDialog from '../parameters/AddParameterDialog';
 
 const numFieldSx = {
-  width: 64,
+  width: '100%',   // fill the fixed-width value column → values line up vertically
   '& .MuiInputBase-input': {
     px: '4px', py: '4px', fontSize: 12, textAlign: 'right' as const,
   },
@@ -329,9 +328,14 @@ const ParameterVariationTable: React.FC = () => {
               <Box
                 key={param.name}
                 sx={{
-                  display: 'flex',
+                  // Fixed 3-column grid: label | value | action.  The value and
+                  // action columns are a CONSTANT width on every row, so all the
+                  // value boxes line up in one straight vertical column (instead
+                  // of floating with the label length / ✕ presence).
+                  display: 'grid',
+                  gridTemplateColumns: '1fr 60px 28px',
                   alignItems: 'center',
-                  gap: 1,
+                  columnGap: 1,
                   px: 0.5,
                   py: 0.4,
                   borderRadius: 1,
@@ -354,8 +358,8 @@ const ParameterVariationTable: React.FC = () => {
                   },
                 }}
               >
-                {/* Parameter name */}
-                <Box sx={{ flex: 1, minWidth: 0 }}>
+                {/* Parameter name (grid col 1 = 1fr) */}
+                <Box sx={{ minWidth: 0 }}>
                   <Typography variant="body2" noWrap sx={{ lineHeight: 1.4 }}>
                     {param.label}
                     {param.unit && (
@@ -388,7 +392,8 @@ const ParameterVariationTable: React.FC = () => {
                       size="small"
                       color={isActive ? 'primary' : 'default'}
                       onClick={() => toggleSweep(param.name)}
-                      sx={{ p: 0.4, opacity: isActive ? 1 : 0.35, '&:hover': { opacity: 1 } }}
+                      sx={{ p: 0.4, justifySelf: 'center',
+                            opacity: isActive ? 1 : 0.35, '&:hover': { opacity: 1 } }}
                     >
                       {isActive
                         ? <CloseIcon     sx={{ fontSize: 15 }} />
@@ -396,8 +401,8 @@ const ParameterVariationTable: React.FC = () => {
                     </IconButton>
                   </Tooltip>
                 ) : (
-                  // Not optimizable → no sweep toggle, keep row alignment
-                  <Box sx={{ width: 30, height: 30, flexShrink: 0 }} />
+                  // Not optimizable → empty grid cell keeps the value column aligned
+                  <Box />
                 )}
               </Box>
             );

@@ -2865,6 +2865,32 @@ def fem_transient_sliding_band(
         if ph in "ABC":
             coil_info.append((idx, areas_s[idx], direction, ph))
 
+    # ── Stage 2: solid-copper current-constrained eddy data ──────────────────
+    # Each coil is a SOLID bar: J = σ(−∂A/∂t + U_c) with ∫J dA = I_c imposed.
+    # Per coil store: g_c (σ-lumped load, full DOF space), S_c = ∫σ dA, and the
+    # imposed-current coefficient I_c_unit = dir·n_wires·(area/slot_area) so that
+    # I_c = Ist[phase]·I_c_unit exactly matches the magnetostatic ampere-turns.
+    _coil_con = []
+    if eddy:
+        _ones_s = np.ones(half["s"]["n"])
+        _nr0 = half["r"]["n"]
+        for tag, idx in half["s"]["cells"].items():
+            if int(tag) < DOM_COIL_BASE:
+                continue
+            sb = Basis(half["s"]["mesh"], ElementTriP1(), elements=idx)
+            g_s = np.asarray((asm(_massform, sb) * _sig_cu_T) @ _ones_s)
+            nm = (mats_full.get(int(tag)) or FEMMaterial("x")).name
+            ph = nm[-2] if nm.endswith(("+", "-")) else "A"
+            dr = 1.0 if nm.endswith("+") else -1.0
+            area_c = float(areas_s[idx].sum())
+            _coil_con.append({
+                "g": np.concatenate([g_s, np.zeros(_nr0)]),
+                "S": float(g_s.sum()),
+                "Iunit": dr * n_wires * area_c / max(slot_area_m2, 1e-12),
+                "phase": ph,
+                "nodes": np.unique(half["s"]["mesh"].t[:, idx]),   # stator-local node ids
+            })
+
     # ── Loss bookkeeping — iron Bertotti + magnet eddy from the ACTUAL B(t) ──
     # The sliding-band run gives a clean B(t) per element over a full electrical
     # period, so instead of the remesh path's single-snapshot Bertotti we use
@@ -2970,13 +2996,35 @@ def fem_transient_sliding_band(
     # conductors, so air/iron are unaffected.  A_prev follows the material points
     # (rotor mesh rotates rigidly), so it IS the previous-step field per DOF.
     if eddy:
-        # Stage 1: eddy in the ROTOR conductors only (magnets + shaft — floating,
-        # so the bare σ·∂A/∂t term is valid).  The STATOR copper carries an
-        # imposed phase current and needs the solid-conductor + ∫J=I formulation
-        # (Stage 2), so its eddy block is held at zero here.
-        _zero_s = _csr(half["s"]["Msig"].shape)
-        _Minv_dt = _bd([_zero_s, half["r"]["Msig"]]).tocsr() * (1.0 / dt)
+        # Stage 2: eddy in the STATOR COPPER (stationary ⇒ ∂A/∂t is the correct
+        # material derivative on the fixed mesh).  Each coil is a SOLID bar with
+        # imposed current: J = σ(−∂A/∂t + U_c), ∫J dA = I_c — a bordered system
+        # with one voltage DOF U_c per coil.  Rotor (magnets/shaft) is deferred
+        # (needs the moving-conductor convective term), so its eddy block = 0.
+        from scipy.sparse import bmat as _bmat, diags as _diags
+        from scipy.sparse.linalg import spsolve as _spsolve
+        _zero_r = _csr(half["r"]["Msig"].shape)
+        _Minv_dt = _bd([half["s"]["Msig"], _zero_r]).tocsr() * (1.0 / dt)
         A_prev = np.zeros(n)
+        _eddy_P = []          # field-based dissipation ∫σ(∂A/∂t)² per frame [W, sector]
+        _Gfull = _csr(np.column_stack([c["g"] for c in _coil_con])) if _coil_con else _csr((n, 0))
+        _Sdt   = np.array([c["S"] for c in _coil_con]) * dt
+        _Iunit = np.array([c["Iunit"] for c in _coil_con])
+        _phase = [c["phase"] for c in _coil_con]
+
+        def _solve_eddy_constrained(Keff, rhs_field, Pro, outer_red, I_vec, A_prv):
+            m = Pro.shape[1]
+            KK = (Pro.T @ Keff @ Pro).tocsr()
+            Bred = (Pro.T @ _Gfull).tocsr()                 # m × nc
+            rf = np.asarray(Pro.T @ rhs_field).ravel()      # m
+            free = np.setdiff1d(np.arange(m), outer_red)
+            KKff = KK[np.ix_(free, free)].tocsr()
+            Bf = Bred[free, :].tocsr()
+            cr = dt * I_vec - np.asarray(_Gfull.T @ A_prv).ravel()   # nc
+            Mb = _bmat([[KKff, -Bf], [-Bf.T, _diags(_Sdt)]]).tocsr()
+            sol = _spsolve(Mb, np.concatenate([rf[free], cr]))
+            A_red = np.zeros(m); A_red[free] = sol[:free.size]
+            return Pro @ A_red, sol[free.size:]      # A , per-coil voltages U_c
     for k in range(n_total):
         theta = (k / n_total) * period_mech * n_periods
         m_shift = int(round(theta / spacing))
@@ -3018,11 +3066,15 @@ def fem_transient_sliding_band(
             K = _bd(blocks).tocsr()
             if eddy:
                 Keff = (K + _Minv_dt).tocsr()
-                rhs = f + _Minv_dt @ A_prev
+                # Coil current is imposed via the ∫J=I constraint, NOT a source,
+                # so the field RHS carries only the magnets + the eddy history.
+                rhs_field = np.concatenate([np.zeros(nsn), f_mag]) + _Minv_dt @ A_prev
+                I_vec = np.array([Ist[ph] for ph in _phase]) * _Iunit
+                A, U_coils = _solve_eddy_constrained(Keff, rhs_field, Pro,
+                                                     outer_red, I_vec, A_prev)
             else:
-                Keff = K; rhs = f
-            A = Pro @ _sksolve(*condense((Pro.T @ Keff @ Pro).tocsr(),
-                                          Pro.T @ rhs, D=outer_red))
+                A = Pro @ _sksolve(*condense((Pro.T @ K @ Pro).tocsr(),
+                                              Pro.T @ f, D=outer_red))
             for hn, off in (("s", 0), ("r", nsn)):
                 h = half[hn]
                 Bx, By = _per_triangle_B(h["mesh"], A[off:off + h["n"]])
@@ -3038,6 +3090,14 @@ def fem_transient_sliding_band(
                     nu_new = 1.0 / (MU0 * np.maximum(mu_new, 1.0))
                     nu_el[hn][tag] = 0.5 * nu_el[hn][tag] + 0.5 * nu_new
         if eddy:
+            # Total copper Joule loss = ∫σ J²/σ² = ∫σ(−∂A/∂t + U_c)² over the bars.
+            # The applied voltage U_c cancels the large inductive −∂A/∂t, leaving
+            # the real DC + skin/proximity dissipation.
+            Uvec = np.zeros(n)
+            for _ci, _c in enumerate(_coil_con):
+                Uvec[_c["nodes"]] = U_coils[_ci]
+            Ffld = -(A - A_prev) / dt + Uvec
+            _eddy_P.append(float(Ffld @ (_Minv_dt @ Ffld)) * dt)   # ∫σ F² [W, sector]
             A_prev = A.copy()        # previous-step field for the σ·∂A/∂t term
         # capture the converged per-element B for the loss integrals
         _Bxs, _Bys = _per_triangle_B(half["s"]["mesh"], A[:nsn])
@@ -3269,6 +3329,17 @@ def fem_transient_sliding_band(
     P_shaft_series, P_shaft_avg = _slab_eddy(
         _hist_shx, _hist_shy, _shaft_idx, areas_r, _sigma_shaft, _d_sh_eff)
 
+    # ── Field-based rotor eddy loss from the magnetodynamic solve (Stage 1) ──
+    # ∫σ(∂A/∂t)² straight from the eddy field — NO slab/d/cap.  Compare against
+    # the slab estimate above.  Skip the first electrical period (eddy warmup).
+    P_cu_total_solve_W = 0.0; P_cu_ac_solve_W = 0.0
+    if eddy and '_eddy_P' in dir() and len(_eddy_P) > 1:
+        _warm = max(1, len(_eddy_P) // 2)
+        P_cu_total_solve_W = float(np.mean(_eddy_P[_warm:]) * NS)
+        P_cu_ac_solve_W = P_cu_total_solve_W - float(P_cu)    # total − DC I²R
+        log.info("EDDY-SOLVE copper total=%.1f W (DC=%.0f + AC=%.1f) vs slab DC+AC=%.1f W",
+                 P_cu_total_solve_W, float(P_cu), P_cu_ac_solve_W, float(P_cu) + P_cu_ac_avg)
+
     log.info("SB transient: %d frames, %d slip nodes, P_fe=%.1f P_mag=%.1f "
              "P_cuDC=%.1f P_cuAC=%.1f P_shaft=%.1f, %.1fs",
              n_total, Nring, P_fe_avg, P_mag_avg, float(P_cu), P_cu_ac_avg,
@@ -3295,6 +3366,8 @@ def fem_transient_sliding_band(
         "P_mag_eddy_W": P_mag_series, "P_loss_total_W": P_tot_series,
         "P_cu_dc_W": P_cu_dc, "P_cu_ac_W": P_cu_ac_series,
         "P_shaft_eddy_W": P_shaft_series,
+        "P_cu_ac_solve_W": round(P_cu_ac_solve_W, 1),       # field-based copper AC (eddy solve)
+        "P_cu_total_solve_W": round(P_cu_total_solve_W, 1),  # field-based copper total
         "P_mech_avg_W": P_mech_avg,
         "R_phase_ohm": R_phase, "n_slip_nodes": int(Nring),
         "coil_temp_C": float(coil_temp_c),

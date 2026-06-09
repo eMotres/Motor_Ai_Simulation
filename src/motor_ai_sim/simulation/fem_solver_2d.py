@@ -2858,6 +2858,13 @@ def fem_transient_sliding_band(
     NS = int(n_sectors) if n_sectors and n_sectors > 1 else 4
     sector_deg = 360.0 / NS
     pole_pairs = p.num_poles // 2
+    # Sector boundary sign: ANTI-periodic (−1) only when the sector spans an
+    # ODD number of poles (e.g. NS=4 → 7 poles); PERIODIC (+1) for an EVEN pole
+    # count (NS=2 → 14 poles).  Mirrors the static solve's `anti_periodic =
+    # (poles_per_sector % 2 == 1)`.  Hard-coding −1 here corrupted the 1/2-sector
+    # field → 40 %-unbalanced phase-A flux linkage + 70 % torque ripple.
+    _poles_per_sector = p.num_poles // NS
+    _bc_sign = -1 if (_poles_per_sector % 2 == 1) else 1
     n_parallel = wind.get("n_parallel", 2)
     n_wires = int(geo.get("num_wires_per_slot", 14))
     # Physical copper loss: ρ_Cu(coil_temp)·J²·V_cu·k_end (end-winding the 2-D
@@ -3172,14 +3179,16 @@ def fem_transient_sliding_band(
         f_cur_s = (Ist['A'] * f_coil['A'] + Ist['B'] * f_coil['B']
                    + Ist['C'] * f_coil['C'])
         f = np.concatenate([f_cur_s, f_mag])
-        # signed union-find: anti-periodic + slip-shift merge
+        # signed union-find: sector BC (_bc_sign) + slip-shift merge.  Both the
+        # radial-cut pairing AND the slip-ring wrap carry the SAME sector sign:
+        # −1 (anti-periodic) for an odd pole count, +1 (periodic) for even.
         suf = _SignedUF(n)
         for a, b in zip(Mn, Sn):
-            suf.union(int(b), int(a), -1)
+            suf.union(int(b), int(a), _bc_sign)
         for kk in range(Nring):
             j = kk + m_shift; sg = 1
-            while j > Nring - 1: j -= (Nring - 1); sg = -sg
-            while j < 0:         j += (Nring - 1); sg = -sg
+            while j > Nring - 1: j -= (Nring - 1); sg *= _bc_sign
+            while j < 0:         j += (Nring - 1); sg *= _bc_sign
             suf.union(int(rring[kk] + nsn), int(sring[j]), sg)
         roots = [suf.find(i) for i in range(n)]
         rid = np.array([r for r, _ in roots]); rsg = np.array([s for _, s in roots], float)

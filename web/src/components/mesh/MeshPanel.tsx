@@ -421,14 +421,16 @@ const MeshPanel: React.FC = () => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── One-click symmetry switch ───────────────────────────────────────────
-  // Rebuild the mesh IMMEDIATELY when the Full / 1/2 / 1/4 toggle changes, so
-  // it's a direct A/B switch between the full 360° disk and a symmetry sector
-  // (no separate "Rebuild mesh" click). View-only: does not persist to config.
+  // ── One-click symmetry switch (PERSISTENT) ──────────────────────────────
+  // When the Full / 1/2 / 1/4 toggle changes, rebuild AND persist to the
+  // backend config (config.yaml) via rebuildMesh → saveMeshConfig.  This makes
+  // the symmetry choice permanent across reloads/sessions, and — because the
+  // Simulation field view and the charts all read the same `mesh.nSectors`
+  // setting — they automatically use the SAME symmetry as the mesh.
   const symFirstRun = useRef(true);
   useEffect(() => {
     if (symFirstRun.current) { symFirstRun.current = false; return; }
-    fetchFemMesh();
+    rebuildMesh();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nSectors]);
 
@@ -542,8 +544,8 @@ const MeshPanel: React.FC = () => {
                 <ToggleButton value={4}>1/4</ToggleButton>
               </ToggleButtonGroup>
               <Typography sx={{ fontSize: 10, color: '#64748b', mt: 0.5 }}>
-                Rebuilds instantly on click. Full disk ≈ ×11 triangles
-                (overlapping cells — the defect).
+                Saved permanently &amp; used by Simulation + charts. Full disk is
+                stitched from two clean 1/2 sectors (no double mesh).
               </Typography>
             </Box>
 

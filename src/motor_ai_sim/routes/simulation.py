@@ -994,6 +994,7 @@ async def build_fem_mesh_2d(
         from motor_ai_sim.cadquery_geometry import CadQueryMotor
         from motor_ai_sim.simulation.fem_solver_2d import (
             _simplify_polys, build_mesh_from_polygons,
+            _build_full_disk_from_halves,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"FEM solver unavailable: {e}")
@@ -1024,20 +1025,30 @@ async def build_fem_mesh_2d(
         # slot air around wires and rotor-pocket air above magnets, so the
         # single gmsh fragment pass produces a clean non-overlapping mesh.
         # No more template overlay → no more "two meshes stacked" artefacts.
-        mesh, cell_tags_from_build, classify_fn = build_mesh_from_polygons(
-            polys, rotor_angle_deg, mesh_size_mm,
-            min_size_mm=min_size_mm,
-            normal_deviation_deg=normal_deviation,
-            aspect_ratio=aspect_ratio,
-            periodic_coils=False,
-            geo_cfg=motor.parameters,
-            outer_air_factor=outer_air_factor,
-            motion_band=motion_band,
-            band_thickness_mm=band_thickness_mm,
-            gap_layers=gap_layers,
-            n_sectors=n_sectors,
-            component_mesh_mm=_comp_mesh,
-        )
+        if int(n_sectors) == 1:
+            # FULL DISK: OCC can't cleanly mesh the closed 360° (double-meshes
+            # the iron) — stitch it from two clean 1/2 sector meshes instead.
+            mesh, cell_tags_from_build, classify_fn = _build_full_disk_from_halves(
+                polys, rotor_angle_deg, mesh_size_mm, min_size_mm,
+                outer_air_factor, motion_band, band_thickness_mm,
+                motor.parameters, _comp_mesh,
+                normal_deviation_deg=normal_deviation, aspect_ratio=aspect_ratio,
+                gap_layers=gap_layers)
+        else:
+            mesh, cell_tags_from_build, classify_fn = build_mesh_from_polygons(
+                polys, rotor_angle_deg, mesh_size_mm,
+                min_size_mm=min_size_mm,
+                normal_deviation_deg=normal_deviation,
+                aspect_ratio=aspect_ratio,
+                periodic_coils=False,
+                geo_cfg=motor.parameters,
+                outer_air_factor=outer_air_factor,
+                motion_band=motion_band,
+                band_thickness_mm=band_thickness_mm,
+                gap_layers=gap_layers,
+                n_sectors=n_sectors,
+                component_mesh_mm=_comp_mesh,
+            )
     except Exception as e:
         log.exception("mesh build failed")
         raise HTTPException(status_code=500, detail=f"mesh build failed: {e}")

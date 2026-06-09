@@ -1706,6 +1706,17 @@ def build_mesh_from_polygons(polys: dict,
     # gmsh's single fragment pass meshes every region (including the rotor-
     # pocket air above each magnet) without overlap, so no overlay is needed.
 
+    # ── Weld coincident-but-separate nodes ───────────────────────────────
+    # gmsh's OCC boolean fragment can leave DUPLICATE nodes on a curve shared
+    # by two surfaces (e.g. the full mid_r slip circle where in_band meets
+    # out_band on the FULL disk, n_sectors=1).  Those duplicates form a
+    # NON-CONFORMING crack: the FEM treats the two sides as disconnected, so
+    # flux can't cross → the field collapses (~3.5× too weak, only on the full
+    # disk; the sector's radial cuts give gmsh clean arc endpoints → no dupes).
+    # Welding coincident nodes makes the mesh conforming.  No-op when there are
+    # no duplicates (every sector model), so it's safe to always apply.
+    mesh, cell_tags = _weld_coincident_nodes(mesh, cell_tags)
+
     # Attach the (possibly modified) polys dict to the classify_fn so the API
     # can render outlines that match the actual meshed geometry.
     try:
@@ -1714,6 +1725,52 @@ def build_mesh_from_polygons(polys: dict,
         pass
 
     return mesh, cell_tags, _classify
+
+
+def _weld_coincident_nodes(mesh, cell_tags: np.ndarray, tol_m: float = 2e-6):
+    """Merge nodes that share the same (x, y) within tol_m into one node.
+
+    Fixes non-conforming cracks left by gmsh's boolean fragment on shared
+    curves (the full mid_r slip circle on the n_sectors=1 full disk).  tol_m
+    (2 µm) is far below the smallest real node spacing (≳10 µm) and the air gap
+    (0.65 mm), so genuinely distinct nodes are never merged.  Returns the mesh
+    unchanged when there are no duplicates.
+    """
+    from skfem import MeshTri
+    P = mesh.p                                   # (2, n) metres
+    n = P.shape[1]
+    try:
+        from scipy.spatial import cKDTree
+        pairs = cKDTree(P.T).query_pairs(r=tol_m, output_type="ndarray")
+    except Exception:
+        return mesh, cell_tags
+    if len(pairs) == 0:
+        return mesh, cell_tags
+    # Union-find: group all mutually-coincident nodes onto their lowest id.
+    parent = np.arange(n)
+    def _find(a: int) -> int:
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+    for a, b in pairs:
+        ra, rb = _find(int(a)), _find(int(b))
+        if ra != rb:
+            parent[max(ra, rb)] = min(ra, rb)
+    roots = np.array([_find(i) for i in range(n)], dtype=np.int64)
+    uniq_roots, new_id = np.unique(roots, return_inverse=True)
+    new_p = P[:, uniq_roots]                      # representative coords
+    new_t = new_id[mesh.t]                        # remap triangle connectivity
+    # Drop any triangle that collapsed (two node ids equal) — shouldn't happen
+    # for cross-crack dupes, but guard against it so MeshTri stays valid.
+    good = ~((new_t[0] == new_t[1]) | (new_t[1] == new_t[2]) | (new_t[0] == new_t[2]))
+    n_welded = n - uniq_roots.size
+    n_dropped = int((~good).sum())
+    log.info("FEM: welded %d coincident nodes (%d→%d); dropped %d degenerate tris",
+             n_welded, n, uniq_roots.size, n_dropped)
+    mesh2 = MeshTri(doflocs=new_p.astype(np.float64),
+                    t=new_t[:, good].astype(np.int64))
+    return mesh2, cell_tags[good]
 
 
 def _read_cell_tags_by_dom(mesh_io) -> np.ndarray:
@@ -3480,6 +3537,93 @@ def fem_transient_sliding_band(
     }
 
 
+def _build_full_disk_from_halves(polys, rotor_angle_deg, mesh_size_mm,
+                                 min_size_mm, outer_air_factor, motion_band,
+                                 band_thickness_mm, geo_cfg, component_mesh_mm,
+                                 normal_deviation_deg=6.0, aspect_ratio=10.0,
+                                 gap_layers=3.0):
+    """Build a CLEAN full-disk (n_sectors=1) mesh by stitching TWO 1/2 sector
+    meshes (the half is meshed cleanly by OCC; the full 360° is NOT).
+
+    Steps: build the clean half (n_sectors=2) → duplicate it rotated 180° →
+    weld the coincident seam nodes → reclassify every triangle by its centroid
+    against the FULL (un-clipped) polygons.  Result is a manifold (no
+    overlapping/double-meshed iron) full disk that the magnetostatics solver
+    handles as the genuine 360° motor (no periodic BC).
+
+    Returns (MeshTri, cell_tags int16, classify_fn) — same contract as
+    build_mesh_from_polygons.  classify_fn.polys = the full polys so
+    build_materials assigns per-magnet/per-coil materials correctly.
+    """
+    import numpy as _np
+    import scipy.sparse as _sp
+    from scipy.sparse.csgraph import connected_components as _cc
+    from scipy.spatial import cKDTree as _KD
+    import shapely as _sh
+    from skfem import MeshTri as _MT
+
+    # 1) clean half (n_sectors=2 → OCC meshes the open wedge without overlaps)
+    mesh2, _ct2, _cf2 = build_mesh_from_polygons(
+        polys, rotor_angle_deg, mesh_size_mm, min_size_mm=min_size_mm,
+        normal_deviation_deg=normal_deviation_deg, aspect_ratio=aspect_ratio,
+        outer_air_factor=outer_air_factor, motion_band=motion_band,
+        band_thickness_mm=band_thickness_mm, gap_layers=gap_layers, n_sectors=2,
+        geo_cfg=geo_cfg, component_mesh_mm=component_mesh_mm)
+    V = mesh2.p.T; T = mesh2.t.T; N = len(V)
+
+    # 2) stitch: half + 180°-rotated copy, then weld coincident seam nodes
+    Vf = _np.vstack([V, -V])              # 180° rotation = (x,y)->(-x,-y)
+    Tf = _np.vstack([T, T + N]); n2 = len(Vf)
+    pairs = _KD(Vf).query_pairs(r=1e-7)
+    if pairs:
+        ij = _np.array(list(pairs)).T
+        g = _sp.coo_matrix((_np.ones(ij.shape[1]), (ij[0], ij[1])), shape=(n2, n2))
+        _, lab = _cc(g + g.T, directed=False)
+    else:
+        lab = _np.arange(n2)
+    uniq, inv = _np.unique(lab, return_inverse=True)
+    Vw = _np.zeros((len(uniq), 2)); _np.add.at(Vw, inv, Vf)
+    Vw /= _np.bincount(inv)[:, None]
+    Tw = inv[Tf]
+    good = ((Tw[:, 0] != Tw[:, 1]) & (Tw[:, 1] != Tw[:, 2]) & (Tw[:, 0] != Tw[:, 2]))
+    Tw = Tw[good]
+    meshF = _MT(Vw.T, Tw.T.copy())
+
+    # 3) classify each triangle by centroid against the FULL (un-clipped) polys
+    cen = Vw[Tw].mean(axis=1) * 1000.0    # mesh metres → polygon mm
+    rr = _np.hypot(cen[:, 0], cen[:, 1])
+    _gc = geo_cfg or {}
+    r_ro = float(_gc.get("rotor_outer_radius", 0.0))
+    r_si = float(_gc.get("stator_inner_radius", 0.0))
+    ct = _np.full(len(Tw), DOM_AIR, dtype=_np.int32)
+    if r_ro > 0.0 and r_si > r_ro:
+        ct[(rr >= r_ro) & (rr <= r_si)] = DOM_AIRGAP
+    clf = []
+    for i, (mp, _pl) in enumerate(polys.get("magnets", [])):
+        if mp is not None and not mp.is_empty:
+            clf.append((mp, DOM_MAG_BASE + i))
+    for i, cp in enumerate(polys.get("coils", [])):
+        if cp is not None and not cp.is_empty:
+            clf.append((cp, DOM_COIL_BASE + i))
+    for k, dm in (("shaft", DOM_SHAFT), ("rotor", DOM_ROTOR), ("stator", DOM_STATOR)):
+        gg = polys.get(k)
+        if gg is not None and not gg.is_empty:
+            clf.append((gg, dm))
+    # least-specific first so magnets/coils (front of clf) overwrite last → win
+    for gg, tag in reversed(clf):
+        try:
+            ct[_sh.contains_xy(gg, cen[:, 0], cen[:, 1])] = tag
+        except Exception:
+            pass
+
+    class _CF:
+        pass
+    cf = _CF(); cf.polys = polys
+    log.info("FEM-sim: stitched full disk from 2 halves — %d nodes, %d tris",
+             len(Vw), len(Tw))
+    return meshF, ct.astype(_np.int16), cf
+
+
 def fem_solve_for_sim(
     rotor_angle_deg: float = 0.0,
     gamma_deg:       float = 0.0,
@@ -3552,16 +3696,24 @@ def fem_solve_for_sim(
 
     log.info("FEM-sim: building mesh (h=%.2f, n_sectors=%d, outer×%.2f, band=%s)",
              mesh_size_mm, n_sectors, outer_air_factor, motion_band)
-    mesh, cell_tags, classify_fn = build_mesh_from_polygons(
-        polys, rotor_angle_deg, mesh_size_mm,
-        min_size_mm=min_size_mm,
-        outer_air_factor=outer_air_factor,
-        motion_band=motion_band,
-        band_thickness_mm=band_thickness_mm,
-        n_sectors=n_sectors,
-        geo_cfg=motor.parameters,
-        component_mesh_mm=component_mesh_mm,
-    )
+    if int(n_sectors) == 1:
+        # FULL DISK: OCC fragment can't cleanly mesh the closed 360° geometry
+        # (it double-meshes the iron).  Build it from two clean 1/2 sector
+        # meshes stitched together instead.
+        mesh, cell_tags, classify_fn = _build_full_disk_from_halves(
+            polys, rotor_angle_deg, mesh_size_mm, min_size_mm, outer_air_factor,
+            motion_band, band_thickness_mm, motor.parameters, component_mesh_mm)
+    else:
+        mesh, cell_tags, classify_fn = build_mesh_from_polygons(
+            polys, rotor_angle_deg, mesh_size_mm,
+            min_size_mm=min_size_mm,
+            outer_air_factor=outer_air_factor,
+            motion_band=motion_band,
+            band_thickness_mm=band_thickness_mm,
+            n_sectors=n_sectors,
+            geo_cfg=motor.parameters,
+            component_mesh_mm=component_mesh_mm,
+        )
     # int16 — per-magnet tags reach DOM_MAG_BASE + 27 = 127, well within int16
     # but right at the edge of int8.  Stay in int16 to be safe.
     cell_tags = cell_tags.astype(np.int16)

@@ -421,6 +421,17 @@ const MeshPanel: React.FC = () => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ── One-click symmetry switch ───────────────────────────────────────────
+  // Rebuild the mesh IMMEDIATELY when the Full / 1/2 / 1/4 toggle changes, so
+  // it's a direct A/B switch between the full 360° disk and a symmetry sector
+  // (no separate "Rebuild mesh" click). View-only: does not persist to config.
+  const symFirstRun = useRef(true);
+  useEffect(() => {
+    if (symFirstRun.current) { symFirstRun.current = false; return; }
+    fetchFemMesh();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nSectors]);
+
   // Persist the Mesh-tab settings to config.yaml — ONLY on the explicit
   // "Rebuild mesh" click (rebuildMesh below), not on every slider move. This
   // makes them permanent + reused in all later sessions.
@@ -507,6 +518,32 @@ const MeshPanel: React.FC = () => {
               <Typography sx={{ fontSize: 11, color: '#334155' }}>
                 Conforming mesh of the real CadQuery cross-section (gmsh OCC).
                 Used by the scikit-fem 2-D magnetostatics solver.
+              </Typography>
+            </Box>
+
+            {/* ── PROMINENT symmetry switch (top) — full disk vs sector ── */}
+            <Box sx={{ p: 1, borderRadius: 1, bgcolor: '#0f1d33',
+                       border: '1px solid #3b82f6' }}>
+              <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, color: '#93c5fd',
+                letterSpacing: '0.1em', textTransform: 'uppercase', mb: 0.75 }}>
+                Symmetry — switch mesh
+              </Typography>
+              <ToggleButtonGroup
+                value={nSectors} exclusive size="small" fullWidth
+                onChange={(_, v) => v != null && setNSectors(v as number)}
+                sx={{ width: '100%',
+                  '& .MuiToggleButton-root': { flex: 1, py: 0.5, fontSize: 12,
+                    fontWeight: 600, color: '#94a3b8', borderColor: '#1e293b',
+                    textTransform: 'none',
+                    '&.Mui-selected': { color: '#fff', bgcolor: '#2563eb',
+                      borderColor: '#3b82f6' } } }}>
+                <ToggleButton value={1}>Full disk</ToggleButton>
+                <ToggleButton value={2}>1/2</ToggleButton>
+                <ToggleButton value={4}>1/4</ToggleButton>
+              </ToggleButtonGroup>
+              <Typography sx={{ fontSize: 10, color: '#64748b', mt: 0.5 }}>
+                Rebuilds instantly on click. Full disk ≈ ×11 triangles
+                (overlapping cells — the defect).
               </Typography>
             </Box>
 

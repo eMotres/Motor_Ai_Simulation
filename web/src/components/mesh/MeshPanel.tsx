@@ -764,7 +764,8 @@ const MeshPanel: React.FC = () => {
               {nSectors > 1 && (
                 <Typography sx={{ fontSize: 9, color: '#334155', mt: 0.5 }}>
                   {24 / nSectors} slots + {28 / nSectors} poles per sector ·
-                  anti-periodic BC required on radial cuts
+                  {(28 / nSectors) % 2 === 1 ? ' anti-periodic' : ' periodic'} BC on radial
+                  cuts ({28 / nSectors} poles = {(28 / nSectors) % 2 === 1 ? 'odd' : 'even'})
                 </Typography>
               )}
             </Box>

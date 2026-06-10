@@ -104,6 +104,9 @@ interface Props {
   // When true the next run tells the backend to discard cached frames and
   // recompute the whole period ("Start fresh"); false resumes them.
   fresh?:         boolean;
+  // Forwards the latest transient-run summary up to the parent (SimulationPanel)
+  // so it can be snapshotted by the "Save simulation" card.
+  onSummary?:     (s: TransientSummary | null) => void;
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -145,13 +148,15 @@ function exportCSV(filename: string, rows: Record<string, number | string>[]) {
 }
 
 // ── main component ────────────────────────────────────────────────────────────
-const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_rms, pinnLosses, runNonce = 0, onBusyChange, steps = 12, fresh = false }) => {
+const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_rms, pinnLosses, runNonce = 0, onBusyChange, steps = 12, fresh = false, onSummary }) => {
   // Latest FEM solve payload — kept around so future siblings can reuse it.
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [_femPayload, setFemPayload] = React.useState<FemPayload | null>(null);
   // Most recent transient-run summary — drives the top-of-tab overview card.
   const [transientSummary, setTransientSummary] =
     React.useState<TransientSummary | null>(null);
+  // Forward the latest summary to the parent (for the Save-simulation snapshot).
+  React.useEffect(() => { onSummary?.(transientSummary); }, [transientSummary]);  // eslint-disable-line react-hooks/exhaustive-deps
   const [data, setData]       = useState<PhysicsData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState<string | null>(null);

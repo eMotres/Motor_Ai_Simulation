@@ -90,3 +90,6 @@ simulation_output/
 fem_profile.log
 pinn_bgrid.npz
 pinn_net.pt
+
+# user-generated saved-simulation snapshots (Compare tab)
+config/saved_simulations.json

@@ -42,6 +42,7 @@ import { useMaterialsLibrary } from './components/materials/useMaterialsLibrary'
 import type { SelectedMaterial } from './components/materials/useMaterialsLibrary';
 import { useMotorStore, useUIStore } from './stores/motorStore';
 import SimulationPanel from './components/simulation/SimulationPanel';
+import ComparePanel from './components/compare/ComparePanel';
 import MeshPanel from './components/mesh/MeshPanel';
 
 const darkTheme = createTheme({
@@ -186,7 +187,7 @@ function App() {
     return () => clearTimeout(id);
   }, [activeTab]);
 
-  const showViewer = activeTab !== 'sweep' && activeTab !== 'motors';
+  const showViewer = activeTab !== 'sweep' && activeTab !== 'motors' && activeTab !== 'compare';
 
   return (
     <ThemeProvider theme={darkTheme}>
@@ -280,6 +281,7 @@ function App() {
             <Tab label="Materials" value="materials" sx={{ minHeight: 40, fontSize: '0.8rem' }} />
             <Tab label="Mesh" value="mesh" sx={{ minHeight: 40, fontSize: '0.8rem' }} />
             <Tab label="Simulation" value="simulation" sx={{ minHeight: 40, fontSize: '0.8rem' }} />
+            <Tab label="Compare" value="compare" sx={{ minHeight: 40, fontSize: '0.8rem' }} />
             <Tab label="Sweep" value="sweep" sx={{ minHeight: 40, fontSize: '0.8rem' }} />
           </Tabs>
         </Box>
@@ -328,6 +330,9 @@ function App() {
 
           {/* Sweep */}
           {activeTab === 'sweep' && <SweepConfigPanel />}
+
+          {/* Compare — diff saved simulations (geometry / currents / angles / mesh) */}
+          {activeTab === 'compare' && <ComparePanel />}
 
           {/* Materials: left half (tree + detail) | right half (real geometry + assign) */}
           {activeTab === 'materials' && (

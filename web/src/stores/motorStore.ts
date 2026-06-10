@@ -908,7 +908,7 @@ export type CompKey = 'stator' | 'rotor' | 'magnets' | 'coils' | 'shaft' | 'in_b
 // UI State
 interface UIState {
   sidebarOpen: boolean;
-  activeTab: 'motors' | 'geometry' | 'materials' | 'mesh' | 'simulation' | 'sweep';
+  activeTab: 'motors' | 'geometry' | 'materials' | 'mesh' | 'simulation' | 'sweep' | 'compare';
   showWireframe: boolean;
   showAxes: boolean;
   showGrid: boolean;
@@ -930,7 +930,7 @@ interface UIState {
   magnetVisibility: Record<number, boolean>;
 
   toggleSidebar: () => void;
-  setActiveTab: (tab: 'motors' | 'geometry' | 'materials' | 'mesh' | 'simulation' | 'sweep') => void;
+  setActiveTab: (tab: 'motors' | 'geometry' | 'materials' | 'mesh' | 'simulation' | 'sweep' | 'compare') => void;
   toggleWireframe: () => void;
   toggleAxes: () => void;
   toggleGrid: () => void;

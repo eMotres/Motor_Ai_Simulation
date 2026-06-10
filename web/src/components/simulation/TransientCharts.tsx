@@ -333,6 +333,7 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
           <Box sx={{ height: 220 }}>
             <Typography sx={{ fontSize: 11, fontWeight: 700, color: '#94a3b8' }}>
               Torque T_em(t)
+              <span style={{ color: '#475569', fontWeight: 400 }}>  ·  {rows.length} points</span>
             </Typography>
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={rows} margin={{ top: 8, right: 10, left: 0, bottom: 16 }}>
@@ -392,6 +393,7 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
           <Box sx={{ height: 220 }}>
             <Typography sx={{ fontSize: 11, fontWeight: 700, color: '#94a3b8' }}>
               Losses (Cu / Fe / Mag / total)
+              <span style={{ color: '#475569', fontWeight: 400 }}>  ·  {rows.length} points</span>
             </Typography>
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={rows} margin={{ top: 8, right: 10, left: 0, bottom: 16 }}>
@@ -437,6 +439,7 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
           <Box sx={{ height: 220 }}>
             <Typography sx={{ fontSize: 11, fontWeight: 700, color: '#94a3b8' }}>
               Phase currents I_A / I_B / I_C
+              <span style={{ color: '#475569', fontWeight: 400 }}>  ·  {rows.length} points</span>
             </Typography>
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={rows} margin={{ top: 8, right: 10, left: 0, bottom: 16 }}>
@@ -476,6 +479,7 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
           <Box sx={{ height: 220 }}>
             <Typography sx={{ fontSize: 11, fontWeight: 700, color: '#94a3b8' }}>
               Phase voltages V_A / V_B / V_C  (V_peak ≈ {data.V_peak.toFixed(1)} V)
+              <span style={{ color: '#475569', fontWeight: 400 }}>  ·  {rows.length} points</span>
             </Typography>
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={rows} margin={{ top: 8, right: 10, left: 0, bottom: 16 }}>

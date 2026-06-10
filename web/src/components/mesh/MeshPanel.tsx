@@ -377,6 +377,7 @@ const MeshPanel: React.FC = () => {
       surface_deviation: '0.005',     // real geometry — no flattening
       normal_deviation:  normalDev.toString(),
       outer_air_factor:  outerAirFactor.toString(),
+      gap_layers:        gapLayers.toString(),
       n_sectors:         nSectors.toString(),
       stator_fillet_mm:  '0',          // native geometry — no extra smoothing
       component_mesh:    componentMeshJson,

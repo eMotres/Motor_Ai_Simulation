@@ -405,6 +405,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
     I: current, g: phaseOffset, rpm, steps, coilTemp, endWinding, connection,
     fl: fieldLosses,
     ns: readMesh('nSectors', 4), ms: readMesh('meshSize', 4.0), mn: readMesh('minSize', 0.3),
+    gl: readMesh('gapLayers', 3), oa: readMesh('outerAir', 1.3), nd: readMesh('normalDev', 6),
   });
   // Snapshot the run's inputs the moment a run is launched (runNonce ticks).
   useEffect(() => { setRunSig(computeSig()); }, [runNonce]);  // eslint-disable-line react-hooks/exhaustive-deps

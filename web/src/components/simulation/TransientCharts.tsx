@@ -162,6 +162,7 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
       outer_air_factor:   String(readMeshSetting('outerAir',    1.3)),
       motion_band:        String(readMeshSetting('motionBand',  true)),
       band_thickness_mm:  String(readMeshSetting('bandThickness', 0.4)),
+      gap_layers:         String(readMeshSetting('gapLayers',   3)),
       n_sectors:          String(readMeshSetting('nSectors',    4)),
       stator_fillet_mm:   '0',   // native geometry — extra smoothing removed
       // ALWAYS use the sliding band for the transient torque/back-EMF.  The

@@ -616,6 +616,7 @@ def _build_sliding_band_meshes(
         geo_cfg: dict,
         normal_deviation_deg: float = 6.0,
         aspect_ratio: float = 10.0,
+        gap_layers: float = 3.0,            # element layers across the air gap
         component_mesh_mm: Optional[dict] = None,
 ):
     """Build the stator-half and rotor-half meshes for the sliding-band solver.
@@ -669,6 +670,7 @@ def _build_sliding_band_meshes(
         normal_deviation_deg=normal_deviation_deg, aspect_ratio=aspect_ratio,
         outer_air_factor=outer_air_factor,
         motion_band=False, band_thickness_mm=band_thickness_mm,
+        gap_layers=gap_layers,
         n_sectors=n_sectors, geo_cfg=geo_cfg,
         add_background_air=False, slip_transfinite_r=_slip_r,
         component_mesh_mm=component_mesh_mm,
@@ -688,6 +690,7 @@ def _build_sliding_band_meshes(
         normal_deviation_deg=normal_deviation_deg, aspect_ratio=aspect_ratio,
         outer_air_factor=outer_air_factor,
         motion_band=False, band_thickness_mm=band_thickness_mm,
+        gap_layers=gap_layers,
         n_sectors=n_sectors, geo_cfg=geo_cfg,
         add_background_air=False, slip_transfinite_r=_slip_r,
         component_mesh_mm=component_mesh_mm,
@@ -2792,6 +2795,7 @@ def fem_transient_sliding_band(
     mesh_size_mm: float = 3.0,
     min_size_mm: float = 0.3,
     outer_air_factor: float = 1.3,
+    gap_layers: float = 3.0,     # element layers across the air gap (Mesh-tab slider)
     n_sectors: int = 4,
     stator_fillet_mm: float = 0.0,
     nonlinear_iterations: int = 14,
@@ -2826,26 +2830,18 @@ def fem_transient_sliding_band(
     from motor_ai_sim.config import get_config
 
     t0 = _t.time()
-    # A coarse bulk mesh (e.g. 4 mm) makes the per-domain 90th-percentile
-    # saturation jump between frames and occasionally produces a degenerate
-    # gap slice → a single torque-spike frame (e.g. 36 N·m amid ~24) that
-    # inflates ripple to ~75 %.  The sliding-band promise is a SMOOTH T(t),
-    # so clamp the bulk element size for this path; the air-gap is refined
-    # separately by the MathEval size field regardless of this value.
-    _req_mesh = float(mesh_size_mm)
-    # Clamp the iron mesh to 2 mm / 0.2 mm: a finer, more rotationally-
-    # consistent iron mesh cuts the absolute parasitic (non-6·k) torque ripple
-    # from the unstructured-mesh asymmetry by ~36 % (1.6→1.0 N·m, verified at
-    # 24 & 72 steps) and is closer to mesh-converged.  A ~1 N·m floor remains
-    # (sector anti-periodic formulation / physical FSCW sub-harmonics).
-    mesh_size_mm = min(_req_mesh, 2.0)
-    # Air-gap min element size 0.2 → 0.1 mm: the gap is only ~0.5 mm, so a 0.2 mm
-    # floor left it with 1–2 unstructured layers and under-resolved the radial
-    # B-gradient.  A 0.1 mm floor (verified) cuts the RAW torque ripple ~31 → 26 %
-    # while the mean torque stays put (24.87 → 24.98) — i.e. a genuine accuracy
-    # gain, not a calibration shift.  (Step 2 — a structured radial-layered gap —
-    # is the full fix; this is the cheap, safe partial.)
-    min_size_mm = min(float(min_size_mm), 0.1)
+    # Mesh density is driven ENTIRELY by the Mesh-tab sliders now (mesh_size,
+    # min_size, gap_layers, normal_deviation) — no hidden clamp.  Earlier this
+    # path hard-clamped iron to 2 mm and the gap floor to 0.1 mm "for smooth
+    # T(t)", but that silently overrode the sliders (they looked dead).  The
+    # air-gap is resolved by gap_layers (element size = gap/gap_layers, applied
+    # under min_size in build_mesh_from_polygons), so torque accuracy is the
+    # user's choice: finer mesh + more gap layers = smoother T(t), coarser =
+    # faster.  Defaults (mesh 4 mm clamped→… no: now literally 4 mm; gap_layers
+    # 3) reproduce the previous behaviour closely; drag to mesh≈2 mm / gap≈3-4
+    # for the cleanest torque.
+    mesh_size_mm = float(mesh_size_mm)
+    min_size_mm = float(min_size_mm)
     cfg = get_config(); sim = cfg.get("simulation", {})
     geo = dict(cfg.get("geometry", {})); wind = cfg.get("winding", {})
     # Candidate-design evaluation (optimization refine): overlay a geometry
@@ -2909,6 +2905,7 @@ def fem_transient_sliding_band(
         outer_air_factor=outer_air_factor, band_thickness_mm=0.4,
         n_sectors=NS, geo_cfg=motor.parameters,
         normal_deviation_deg=8.0, aspect_ratio=10.0,
+        gap_layers=gap_layers,
         component_mesh_mm=component_mesh_mm)
     Ps, Tts = ms.p.copy(), ms.t.copy(); Pr, Ttr = mr.p.copy(), mr.t.copy()
     nsn = Ps.shape[1]

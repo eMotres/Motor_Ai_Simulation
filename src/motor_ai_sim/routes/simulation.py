@@ -1194,6 +1194,7 @@ async def build_fem_mesh_2d_sliding_band(
     aspect_ratio:      float = 10.0,    # Ansys "Aspect Ratio"
     outer_air_factor:  float = 1.3,
     band_thickness_mm: float = 0.4,
+    gap_layers:        float = 3.0,     # element layers across the air gap
     n_sectors:         int   = 4,
     stator_fillet_mm:  float = 0.0,     # extra Shapely fillet smoothing
     component_mesh:    str   = "",      # JSON {comp: size_mm} per-part mesh size
@@ -1219,7 +1220,7 @@ async def build_fem_mesh_2d_sliding_band(
            round(min_size_mm, 2), round(surface_deviation, 4),
            round(normal_deviation, 1), round(aspect_ratio, 1),
            round(outer_air_factor, 2), round(band_thickness_mm, 2),
-           int(n_sectors), round(stator_fillet_mm, 2),
+           round(gap_layers, 1), int(n_sectors), round(stator_fillet_mm, 2),
            tuple(sorted(_comp_mesh.items())))
     if key in _fem_mesh_sb_cache:
         return _fem_mesh_sb_cache[key]
@@ -1251,22 +1252,18 @@ async def build_fem_mesh_2d_sliding_band(
     # air disk + outer air annulus), so the old air-gap-splitting motion
     # band is no longer needed for the sliding-band path.
 
-    # Apply the SAME clamps the transient SOLVER uses, so the mesh shown here is
-    # byte-for-byte the one that computes T(t)/V(t)/losses — not a coarser
-    # look-alike.  fem_transient_sliding_band clamps the bulk iron element size
-    # to 2 mm (rotationally-consistent torque) and the air-gap floor to 0.1 mm
-    # (resolves the radial B-gradient).  Without this the viewer would draw a
-    # COARSER mesh than what actually solves.
-    _mesh_size_solved = min(float(mesh_size_mm), 2.0)
-    _min_size_solved  = min(float(min_size_mm), 0.1)
+    # Mesh density is driven by the Mesh-tab sliders (mesh_size, min_size,
+    # gap_layers, normal_deviation) — the SAME values the transient solver now
+    # uses (its old hard clamps were removed), so this is byte-for-byte the mesh
+    # that computes T(t)/V(t)/losses.
     try:
         mesh_s, tags_s, classify_s, mesh_r, tags_r, classify_r = \
             _build_sliding_band_meshes(
                 polys, rotor_angle_deg=rotor_angle_deg,
-                mesh_size_mm=_mesh_size_solved, min_size_mm=_min_size_solved,
+                mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm,
                 normal_deviation_deg=normal_deviation, aspect_ratio=aspect_ratio,
                 outer_air_factor=outer_air_factor,
-                band_thickness_mm=band_thickness_mm,
+                band_thickness_mm=band_thickness_mm, gap_layers=gap_layers,
                 n_sectors=n_sectors, geo_cfg=motor.parameters,
                 component_mesh_mm=_comp_mesh,
             )
@@ -1867,6 +1864,7 @@ def get_fem_transient(
     outer_air_factor:    float = 1.3,
     motion_band:         bool  = True,
     band_thickness_mm:   float = 0.4,
+    gap_layers:          float = 3.0,     # ← element layers across the air gap (Mesh slider)
     n_sectors:           int   = 4,
     stator_fillet_mm:    float = 0.0,
     include_frames:      bool  = False,   # ← if true, accumulate per-step field
@@ -1905,7 +1903,7 @@ def get_fem_transient(
                    round(outer_air_factor, 2), int(n_sectors),
                    round(stator_fillet_mm, 2),
                    round(coil_temp_c, 1), round(end_winding_factor, 3),
-                   int(bool(rotor_eddy)),
+                   int(bool(rotor_eddy)), round(gap_layers, 1),
                    tuple(sorted(_comp_mesh.items())))
         if not fresh and _sb_key in _fem_transient_cache:
             return _fem_transient_cache[_sb_key]
@@ -1921,7 +1919,7 @@ def get_fem_transient(
                 n_steps_per_period=int(n_steps_per_period), n_periods=float(n_periods),
                 gamma_deg=float(gamma_deg), I_phase_rms=float(I_phase_rms),
                 mesh_size_mm=float(mesh_size_mm), min_size_mm=float(min_size_mm),
-                outer_air_factor=float(outer_air_factor),
+                outer_air_factor=float(outer_air_factor), gap_layers=float(gap_layers),
                 n_sectors=int(n_sectors) if int(n_sectors) > 1 else 4,
                 stator_fillet_mm=float(stator_fillet_mm),
                 coil_temp_c=float(coil_temp_c),

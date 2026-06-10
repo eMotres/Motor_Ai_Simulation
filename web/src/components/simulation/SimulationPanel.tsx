@@ -262,9 +262,25 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   const [fieldLosses, setFieldLosses] = usePersisted('fieldLosses', true);
   const [stepsStr, setStepsStr] = useState(String(steps));
   useEffect(() => { setStepsStr(String(steps)); }, [steps]);
+  // HARD upper bound: the sliding-band rotor can only sit on slip-ring nodes —
+  // 1008 ring nodes / pole_pairs positions per electrical period (72 for this
+  // 28-pole motor).  The backend silently snaps any request to a DIVISOR of
+  // that (144→72, 100→72, 50→36), which looked like "the step won't change".
+  // Clamp + snap in the UI so what you type is what actually runs.
+  const N_SLIP = 1008;                      // backend slip-ring node count (360°)
+  const stepsMax = Math.max(6, Math.floor(N_SLIP / Math.max(polePairs, 1)));
+  const snapSteps = (v: number) => {
+    if (stepsMax % v === 0) return v;       // already a divisor
+    let best = stepsMax;
+    for (let d = 1; d <= stepsMax; d++)
+      if (stepsMax % d === 0 && (Math.abs(d - v) < Math.abs(best - v)
+          || (Math.abs(d - v) === Math.abs(best - v) && d > best))) best = d;
+    return best;
+  };
   const commitSteps = () => {
     const v = Math.round(Number(stepsStr));
-    const clamped = Number.isFinite(v) ? Math.max(6, Math.min(180, v)) : steps;
+    const clamped = Number.isFinite(v)
+      ? snapSteps(Math.max(6, Math.min(stepsMax, v))) : steps;
     setSteps(clamped);
     setStepsStr(String(clamped));
   };
@@ -793,7 +809,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
             onKeyDown={e => { if (e.key === 'Enter') { commitSteps(); (e.target as HTMLInputElement).blur(); } }}
             inputProps={{ inputMode: 'numeric', pattern: '[0-9]*' }}
             disabled={simBusy}
-            helperText="Transient time resolution (6–180). More = finer T(t)/V(t), slower."
+            helperText={`Transient time resolution. Max ${stepsMax} = slip-ring positions per electrical period (1008/${polePairs}); snapped to a divisor (e.g. 36, 24) so the rotor lands on whole mesh nodes.`}
             FormHelperTextProps={{ sx: { fontSize: 10, color: '#475569', mx: 0 } }}
             sx={{ mb: 1.25 }}
           />

@@ -268,12 +268,28 @@ def _simplify_polys(polys: dict, tol_mm: float = 0.005,
     # turned the gaps into degenerate sliver "fan" triangles.
     SIMPLIFY_KEYS = ("stator", "rotor", "shaft", "air_gap")
     out = dict(polys)
+
+    def _drop_slivers(g, min_area_mm2: float = 1e-2):
+        # CadQuery/shapely boolean noise can leave near-zero-area sliver parts
+        # (e.g. a 4-point ribbon ON the rotor surface).  OCC turns those into
+        # degenerate faces/edges in the air gap → locally shredded mesh.
+        try:
+            from shapely.geometry import MultiPolygon as _MP
+            if hasattr(g, "geoms"):
+                parts = [p for p in g.geoms if p.area >= min_area_mm2]
+                if not parts:
+                    return g
+                return parts[0] if len(parts) == 1 else _MP(parts)
+            return g
+        except Exception:
+            return g
+
     for k in SIMPLIFY_KEYS:
         if polys.get(k) is not None:
             try:
                 g = polys[k].simplify(tol_mm, preserve_topology=True)
                 g = _decimate_poly_by_angle(g, normal_dev_deg)
-                out[k] = g
+                out[k] = _drop_slivers(g)
             except Exception:
                 out[k] = polys[k]
     # ── Round all sharp slot-mouth corners on the stator ──
@@ -653,6 +669,21 @@ def _build_sliding_band_meshes(
         if _v is None or not (_v > 0):
             component_mesh_mm[_part] = _iron_cap
 
+    # Rotational mesh periodicity: pole pitch on the rotor half, slot pitch on
+    # the stator half — identical pockets/teeth get IDENTICAL meshes, killing
+    # the pole-to-pole mesh-asymmetry torque artifact.
+    _slot_period = _pole_period = None
+    try:
+        _ns_ = int(round(float((geo_cfg or {}).get("num_seg", 0))))
+        _sl_ = int(round(float((geo_cfg or {}).get("num_slots_per_segment", 0))))
+        _pl_ = int(round(float((geo_cfg or {}).get("num_poles_per_segment", 0))))
+        if _ns_ > 0 and _sl_ > 0:
+            _slot_period = 360.0 / (_ns_ * _sl_)
+        if _ns_ > 0 and _pl_ > 0:
+            _pole_period = 360.0 / (_ns_ * _pl_)
+    except Exception:
+        pass
+
     # Slip-ring radius (mm) — force BOTH halves to keep an identical,
     # equally-spaced node ring there (transfinite) so they merge by node
     # identity when the rotor is rotated by an integer node step.
@@ -690,6 +721,7 @@ def _build_sliding_band_meshes(
         n_sectors=n_sectors, geo_cfg=geo_cfg,
         add_background_air=False, slip_transfinite_r=_slip_r,
         component_mesh_mm=component_mesh_mm,
+        rotational_period_deg=_slot_period,
     )
 
     # Build rotor half with the SAME sector clip as the stator
@@ -710,6 +742,7 @@ def _build_sliding_band_meshes(
         n_sectors=n_sectors, geo_cfg=geo_cfg,
         add_background_air=False, slip_transfinite_r=_slip_r,
         component_mesh_mm=component_mesh_mm,
+        rotational_period_deg=_pole_period,
     )
 
     # Apply rotor rotation as a rigid body — node coords only, topology
@@ -1114,6 +1147,7 @@ def build_mesh_from_polygons(polys: dict,
                              add_background_air: bool = True,
                              slip_transfinite_r: Optional[float] = None,
                              component_mesh_mm: Optional[dict] = None,
+                             rotational_period_deg: Optional[float] = None,
                              ) -> Tuple["MeshTri", np.ndarray]:
     """Construct a conforming triangle mesh from the CadQuery polygon dict.
 
@@ -1701,6 +1735,91 @@ def build_mesh_from_polygons(polys: dict,
                                 len(_cutA), len(_cutB))
             except Exception as _e:
                 log.warning("sector-cut periodicity skipped: %s", _e)
+
+        # ── Rotational mesh periodicity: identical features → identical mesh ──
+        # Free meshing gives every pole pocket / tooth a slightly DIFFERENT
+        # node pattern; that pole-to-pole asymmetry shows up as parasitic
+        # torque (the N/S half-cogging order, ±2 N·m at I=0).  Group every
+        # 1-D curve by its rotation-canonical signature (period = pole pitch
+        # for the rotor half / slot pitch for the stator half) and force each
+        # group to be meshed as the ROTATED COPY of its first member.  Curves
+        # on the sector cuts (own periodicity) and the slip ring (transfinite)
+        # are excluded; non-matching curves (e.g. a non-periodic iron chain)
+        # simply stay free — no harm.
+        if rotational_period_deg and rotational_period_deg > 0:
+            try:
+                _per = math.radians(float(rotational_period_deg))
+                _tolp = 1e-3            # mm — canonical-coordinate match
+                _phi_cut = (2.0 * math.pi / int(n_sectors)
+                            if n_sectors and int(n_sectors) > 1 else None)
+                _slip_rr = (float(slip_transfinite_r)
+                            if slip_transfinite_r is not None else None)
+                _groups: Dict[tuple, list] = {}
+                for (_d, _ct) in gmsh.model.getEntities(1):
+                    _lo, _hi = gmsh.model.getParametrizationBounds(1, _ct)
+                    _pts = []
+                    for _f in (0.0, 0.5, 1.0):
+                        _tv = _lo[0] + _f * (_hi[0] - _lo[0])
+                        _xyz = gmsh.model.getValue(1, _ct, [_tv])
+                        _pts.append((_xyz[0], _xyz[1]))
+                    if _slip_rr is not None and all(
+                            abs(math.hypot(px, py) - _slip_rr) < 1e-3
+                            for px, py in _pts):
+                        continue                      # transfinite slip ring
+                    if _phi_cut is not None:
+                        def _on_ray(ux, uy):
+                            return all(abs(px*uy - py*ux) <= 1e-4
+                                       and (px*ux + py*uy) >= -1e-4
+                                       for px, py in _pts)
+                        if _on_ray(1.0, 0.0) or _on_ray(math.cos(_phi_cut),
+                                                        math.sin(_phi_cut)):
+                            continue                  # sector-cut curves
+                    _mx, _my = _pts[1]
+                    _th = math.atan2(_my, _mx)
+                    if _th < 0:
+                        _th += 2.0 * math.pi
+                    _kf = _th / _per
+                    _k = int(math.floor(_kf + 1e-9))
+                    if _kf - _k > 1.0 - 1e-6:
+                        _k += 1
+                    _ck, _sk = math.cos(-_k * _per), math.sin(-_k * _per)
+                    _sig = [(round(_ck*px - _sk*py, 3),
+                             round(_sk*px + _ck*py, 3)) for px, py in _pts]
+                    _key = (_sig[1], tuple(sorted((_sig[0], _sig[2]))))
+                    _groups.setdefault(_key, []).append((_k, _ct))
+                _bydk: Dict[int, Tuple[list, list]] = {}
+                _npairs = 0
+                for _members in _groups.values():
+                    if len(_members) < 2:
+                        continue
+                    _members.sort()
+                    _k0, _master = _members[0]
+                    for _k, _ct in _members[1:]:
+                        _dk = _k - _k0
+                        if _dk <= 0:
+                            continue
+                        _sl, _ma = _bydk.setdefault(_dk, ([], []))
+                        _sl.append(_ct); _ma.append(_master)
+                        _npairs += 1
+                _nset = 0
+                for _dk, (_sl, _ma) in sorted(_bydk.items()):
+                    _a = _dk * _per
+                    _ca, _sa = math.cos(_a), math.sin(_a)
+                    _aff = [_ca, -_sa, 0.0, 0.0,
+                            _sa,  _ca, 0.0, 0.0,
+                            0.0,  0.0, 1.0, 0.0,
+                            0.0,  0.0, 0.0, 1.0]
+                    try:
+                        gmsh.model.mesh.setPeriodic(1, _sl, _ma, _aff)
+                        _nset += len(_sl)
+                    except Exception as _pe:
+                        log.warning("rotational periodicity dk=%d failed: %s",
+                                    _dk, _pe)
+                log.info("rotational periodicity: %d/%d curve pairs set "
+                         "(period %.3f deg)", _nset, _npairs,
+                         float(rotational_period_deg))
+            except Exception as _e:
+                log.warning("rotational periodicity skipped: %s", _e)
 
         gmsh.model.mesh.generate(2)
 

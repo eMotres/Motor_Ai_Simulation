@@ -78,6 +78,22 @@
       "tier": "free",
       "description": "Optimized: wider pole arc + MTPA. +0.9% torque, -67% ripple, same magnet.",
       "preset": "optimized_low_ripple"
+    },
+    {
+      "id": "cat_200_working",
+      "diameter_mm": 200,
+      "name": "200 mm",
+      "topology": "Spoke-PM SPMSM",
+      "slots": 24,
+      "poles": 28,
+      "rpm": 2000,
+      "current_a": 150,
+      "T_avg_Nm": 78.7,
+      "ripple_pct": 28.3,
+      "gamma_deg": 0,
+      "tier": "free",
+      "description": "200 mm spoke-PM (24s / 28p), wire 6.5x0.8, 15 wires/slot, magnet 21.33 — the working motor (I=150 A, 466.7 Hz, 2000 rpm).",
+      "preset": "200_mm"
     }
   ]
 }

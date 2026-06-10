@@ -127,8 +127,11 @@ def params_from_config(cfg_path: Path = _CFG_PATH) -> MotorDomainParams:
     r_ri = r_ro - g["magnet_height"] * mm - g["rotor_house_height"] * mm
     r_sh = r_ri - g["shaft_height"] * mm
 
-    num_slots = g["num_seg"] * g["num_slots_per_segment"]
-    num_poles = g["num_seg"] * g["num_poles_per_segment"]
+    # Counts MUST be ints — the config can carry them as floats (the web UI
+    # writes every number as a JS float, YAML round-trips, preset saves), and
+    # range()/modulo on a float raises TypeError and 500s the whole solve.
+    num_slots = int(round(g["num_seg"])) * int(round(g["num_slots_per_segment"]))
+    num_poles = int(round(g["num_seg"])) * int(round(g["num_poles_per_segment"]))
 
     slot_width_m = (
         g["wire_width"] + 2 * g["wire_spacing_x"] + 2 * g["insulation_thickness"]
@@ -150,7 +153,7 @@ def params_from_config(cfg_path: Path = _CFG_PATH) -> MotorDomainParams:
         slot_height_m=g["slot_height"] * mm,
         wire_width_m=g["wire_width"] * mm,
         wire_height_m=g["wire_height"] * mm,
-        num_wires_per_slot=g["num_wires_per_slot"],
+        num_wires_per_slot=int(round(g["num_wires_per_slot"])),
     )
 
 

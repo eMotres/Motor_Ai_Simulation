@@ -258,5 +258,50 @@
       "rpm": 2000.0,
       "phase_offset_deg": 0.0
     }
+  },
+  "200_mm": {
+    "id": "200_mm",
+    "name": "200 mm",
+    "description": "200 mm spoke-PMSM (28 poles / 24 slots) - the working motor: I=150 A, 466.7 Hz, 2000 rpm, wire 6.5x0.8, 15 wires/slot.",
+    "order": 7,
+    "metrics": {},
+    "geometry": {
+      "stator_diameter": 200,
+      "slot_height": 18.67,
+      "core_thickness": 5.6,
+      "num_seg": 4,
+      "num_slots_per_segment": 6,
+      "num_poles_per_segment": 7,
+      "stator_width": 45,
+      "air_gap": 0.65,
+      "tooth_width": 12.27,
+      "tooth2_width": 7.33,
+      "cut_width": 8.0,
+      "insulation_thickness": 0.2,
+      "wire_width": 6.5,
+      "wire_height": 0.8,
+      "wire_spacing_x": 0.133,
+      "wire_spacing_y": 0.1,
+      "num_wires_per_slot": 15,
+      "slot_hs": 0.267,
+      "magnet_height": 21.33,
+      "rotor_house_height": 1.6,
+      "shaft_height": 4.0,
+      "magnet_fill_down": 0.9,
+      "magnet_fill_up": 0.44,
+      "magnet_fill_radius": 3.33,
+      "magnet_up_gap": 2.67,
+      "rotor_hole": 0.6,
+      "magnet_down_height": 2.4,
+      "stator_fillet_r": 5,
+      "stator_fillet_r1": 1.6,
+      "rotor_fill_r": 2.13,
+      "motor_length": 45
+    },
+    "simulation": {
+      "max_current": 150.0,
+      "rpm": 2000.0,
+      "phase_offset_deg": 0.0
+    }
   }
 }

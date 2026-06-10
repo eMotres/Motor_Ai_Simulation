@@ -256,10 +256,10 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // clamped integer on blur / Enter, so typing "12" over "6" works
   // naturally instead of producing "62".
   const [steps,    setSteps]    = usePersisted('stepsPP', 72);   // transient pts/period (matches slip-node grid)
-  // Field-based magnet/shaft eddy losses: J = σ(−∂A/∂t + U) magnetodynamic
-  // solve with per-magnet ∫J=0 and the assigned materials' σ (Ansys-style),
-  // instead of the classical slab d²/12 estimate.  ~+12 % solve time.
-  const [fieldLosses, setFieldLosses] = usePersisted('fieldLosses', true);
+  // Magnet/shaft eddy losses ALWAYS come from the real field solve
+  // (J = σ(−∂A/∂t + U), per-magnet ∫J=0, assigned-material σ — the Ansys way),
+  // never the classical slab d²/12 estimate.  No toggle: real fields only.
+  const fieldLosses = true;
   // Per-element irreversible demagnetisation: a pre-pass sweeps the period at
   // full Br, finds the worst demagnetising field at every magnet element, and
   // de-rates Br along the recoil line (Ansys-style) so the transient torque /
@@ -820,25 +820,6 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
             FormHelperTextProps={{ sx: { fontSize: 10, color: '#475569', mx: 0 } }}
             sx={{ mb: 1.25 }}
           />
-          {/* Field-based eddy losses: σ·∂A/∂t magnetodynamic solve for the
-              magnets + shaft (per-magnet ∫J=0, library σ) — the Ansys way —
-              instead of the classical slab d²/12 estimate.  ~+12 % runtime. */}
-          <Tooltip title="Magnet + shaft eddy losses from the real field solve J = σ(−∂A/∂t + U): per-magnet zero-net-current constraints, σ from the assigned materials. Iron stays Bertotti, with coefficients fitted to the material's MEASURED loss curves. Off = classical slab estimate (faster)." placement="right">
-            <FormControlLabel
-              sx={{ mt: -0.5, mb: 0.75, ml: 0.25 }}
-              control={
-                <Checkbox size="small" checked={fieldLosses}
-                  onChange={e => setFieldLosses(e.target.checked)}
-                  disabled={simBusy}
-                  sx={{ p: 0.5, color: '#475569', '&.Mui-checked': { color: '#60a5fa' } }} />
-              }
-              label={
-                <Typography variant="caption" sx={{ color: fieldLosses ? '#60a5fa' : '#94a3b8' }}>
-                  Field-based magnet/shaft losses (FEM eddy)
-                </Typography>
-              }
-            />
-          </Tooltip>
           {/* Per-element irreversible demagnetisation (Ansys-style).  A pre-pass
               sweeps the period at full Br, finds the worst demag field at every
               magnet element, and de-rates Br on the recoil line → the torque /

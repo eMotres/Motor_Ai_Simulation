@@ -737,22 +737,6 @@ const MeshPanel: React.FC = () => {
               </Box>
             </Box>
 
-            {/* The Mesh tab always renders the REAL transient (sliding-band)
-                solver mesh.  The static single-mesh view was retired. */}
-            <Box sx={{ border: '1px solid', borderColor: '#8b5cf6',
-              borderRadius: 1, p: 1, bgcolor: '#1a1633' }}>
-              <Typography sx={{ fontSize: 11, fontWeight: 700, color: '#a78bfa',
-                letterSpacing: '0.05em', textTransform: 'uppercase', mb: 0.3 }}>
-                Transient solver mesh (sliding-band)
-                <Tooltip title="The ACTUAL mesh the transient solves on — stator and rotor meshed separately, iron clamped to 2 mm, air-gap floor 0.1 mm, plus the 1008-node slip ring in the gap (the dotted chain mid-gap). Rotate the rotor-angle slider to see it slide as a rigid body." placement="right">
-                  <span style={{ color: '#475569', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
-                </Tooltip>
-              </Typography>
-              <Typography sx={{ fontSize: 10, color: '#7c3aed' }}>
-                REAL transient mesh (iron≤2 mm, gap≤0.1 mm, 1008-node slip ring). Sweep Rotor angle → rotor slides rigidly.
-              </Typography>
-            </Box>
-
             {/* Symmetry sectors */}
             <Box>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>

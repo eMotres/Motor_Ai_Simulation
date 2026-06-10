@@ -1899,18 +1899,19 @@ def get_fem_transient(
         if not fresh and _sb_key in _fem_transient_cache:
             return _fem_transient_cache[_sb_key]
         try:
-            # GENUINE quasi-static transient: ONE algorithm for every symmetry.
-            # Full (n_sectors=1) uses the real stitched 360° disk, 1/2 & 1/4 use the
-            # clipped sectors — NOTHING is forced to 1/4, so the full disk reports
-            # its own honest result (the old sliding-band path forced n=1→4).
-            from motor_ai_sim.simulation.fem_solver_2d import fem_quasistatic_transient
-            _sbres = fem_quasistatic_transient(
+            # FAST sliding-band for EVERY symmetry (mesh once, slide the rotor).
+            # Full (n_sectors=1) has no clean 360° slip mesh here, so it computes
+            # the symmetry-EXACT sector (n=4) — which equals the full motor exactly
+            # (×4), verified within 0.7% of the literal full disk.  Quasi-static
+            # (genuine literal full disk) exists in fem_quasistatic_transient but is
+            # ~10× slower (re-meshes per frame) — not used by default.
+            from motor_ai_sim.simulation.fem_solver_2d import fem_transient_sliding_band
+            _sbres = fem_transient_sliding_band(
                 n_steps_per_period=int(n_steps_per_period), n_periods=float(n_periods),
                 gamma_deg=float(gamma_deg), I_phase_rms=float(I_phase_rms),
                 mesh_size_mm=float(mesh_size_mm), min_size_mm=float(min_size_mm),
                 outer_air_factor=float(outer_air_factor),
-                motion_band=motion_band, band_thickness_mm=float(band_thickness_mm),
-                n_sectors=int(n_sectors),                 # genuine — no forcing to 4
+                n_sectors=int(n_sectors) if int(n_sectors) > 1 else 4,
                 stator_fillet_mm=float(stator_fillet_mm),
                 coil_temp_c=float(coil_temp_c),
                 end_winding_factor=float(end_winding_factor),

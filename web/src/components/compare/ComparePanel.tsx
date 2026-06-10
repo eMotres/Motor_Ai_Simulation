@@ -14,7 +14,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   Box, Typography, Button, Checkbox, IconButton, Tooltip, Alert,
-  CircularProgress, TextField,
+  CircularProgress, TextField, Popover, FormControlLabel, Divider,
 } from '@mui/material';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import RefreshIcon       from '@mui/icons-material/Refresh';
@@ -22,6 +22,7 @@ import EditIcon          from '@mui/icons-material/Edit';
 import CheckIcon         from '@mui/icons-material/Check';
 import CloseIcon         from '@mui/icons-material/Close';
 import CompareArrowsIcon from '@mui/icons-material/CompareArrows';
+import ViewColumnIcon    from '@mui/icons-material/ViewColumn';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
 
@@ -70,13 +71,21 @@ const PARAM_META: Record<string, { label: string; unit?: string; d?: number }> =
   core_thickness:     { label: 'Core thick.',   unit: 'mm',  d: 2 },
 };
 
-// columns shown in the TOP library table (operating + main geometry)
+// DEFAULT columns in the TOP library table (operating + main geometry).
+// The user can override which columns are shown via the column-picker; the
+// choice persists in localStorage('compare.libCols').
 const LIB_COLS = [
   'I_phase_rms', 'gamma_deg', 'rpm', 'n_sectors',
   'num_poles', 'num_slots', 'num_wires_per_slot',
   'stator_diameter', 'stator_outer_radius', 'rotor_outer_radius', 'air_gap',
   'magnet_height', 'slot_height', 'slot_width', 'tooth_width', 'motor_length',
 ];
+
+// param groups for the column-picker menu
+const OP_KEYS   = ['I_phase_rms', 'gamma_deg', 'rpm', 'frequency_hz', 'coil_temp_c',
+                   'end_winding_factor', 'connection', 'steps_per_period'];
+const MESH_KEYS = ['n_sectors', 'mesh_size_mm', 'min_size_mm'];
+const orderIdx  = (k: string) => { const i = Object.keys(PARAM_META).indexOf(k); return i === -1 ? 1e9 : i; };
 
 // result columns in the BOTTOM comparison table
 const RESULT_COLS: { key: string; label: string; unit?: string; d?: number;
@@ -132,6 +141,13 @@ const ComparePanel: React.FC = () => {
   const [err,     setErr]     = useState<string | null>(null);
   const [editId,  setEditId]  = useState<string | null>(null);
   const [editName,setEditName]= useState('');
+  // column-picker for the TOP library table (persisted)
+  const [visibleCols, setVisibleCols] = useState<string[]>(() => {
+    try { const r = localStorage.getItem('compare.libCols'); const a = r ? JSON.parse(r) : null;
+      return Array.isArray(a) && a.length ? a : LIB_COLS; } catch { return LIB_COLS; }
+  });
+  useEffect(() => { try { localStorage.setItem('compare.libCols', JSON.stringify(visibleCols)); } catch {} }, [visibleCols]);
+  const [colAnchor, setColAnchor] = useState<HTMLElement | null>(null);
 
   const load = useCallback(() => {
     setLoading(true); setErr(null);
@@ -172,6 +188,21 @@ const ComparePanel: React.FC = () => {
   };
 
   const selected = sims.filter(s => sel.has(s.id));
+
+  // ── column-picker: all keys present in any saved sim (+ the defaults) ─────
+  const availableKeys = (() => {
+    const s = new Set<string>(sims.flatMap(x => Object.keys(x.params || {})));
+    LIB_COLS.forEach(k => s.add(k));
+    return Array.from(s).sort((a, b) => (orderIdx(a) - orderIdx(b)) || a.localeCompare(b));
+  })();
+  const colGroups = [
+    { title: 'Operating', keys: availableKeys.filter(k => OP_KEYS.includes(k)) },
+    { title: 'Mesh',      keys: availableKeys.filter(k => MESH_KEYS.includes(k)) },
+    { title: 'Geometry',  keys: availableKeys.filter(k => !OP_KEYS.includes(k) && !MESH_KEYS.includes(k)) },
+  ];
+  const displayCols = availableKeys.filter(k => visibleCols.includes(k));
+  const toggleCol = (k: string) =>
+    setVisibleCols(prev => prev.includes(k) ? prev.filter(x => x !== k) : [...prev, k]);
 
   // differing input params across the selected runs
   const allParamKeys = Array.from(new Set(selected.flatMap(s => Object.keys(s.params || {}))));
@@ -217,11 +248,47 @@ const ComparePanel: React.FC = () => {
           </Typography>
           <Typography sx={{ fontSize: 11, color: '#64748b' }}>({sims.length}) — tick rows to compare below</Typography>
           <Box sx={{ flex: 1 }} />
+          <Button size="small" variant="outlined" startIcon={<ViewColumnIcon sx={{ fontSize: 16 }} />}
+            onClick={e => setColAnchor(e.currentTarget)}
+            sx={{ fontSize: 11, textTransform: 'none', color: '#94a3b8', borderColor: '#334155',
+              '&:hover': { borderColor: '#3b82f6', color: '#cbd5e1' } }}>
+            Columns ({displayCols.length})
+          </Button>
           <Tooltip title="Reload"><IconButton size="small" onClick={load} sx={{ color: '#64748b' }}><RefreshIcon sx={{ fontSize: 17 }} /></IconButton></Tooltip>
           {sims.length > 0 && (
             <Tooltip title="Delete all"><IconButton size="small" onClick={clearAll} sx={{ color: '#7f1d1d' }}><DeleteOutlineIcon sx={{ fontSize: 17 }} /></IconButton></Tooltip>
           )}
         </Box>
+
+        {/* column-picker popover */}
+        <Popover open={!!colAnchor} anchorEl={colAnchor} onClose={() => setColAnchor(null)}
+          anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+          transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+          PaperProps={{ sx: { bgcolor: '#0b1220', border: '1px solid #1e293b', width: 250, maxHeight: 440 } }}>
+          <Box sx={{ position: 'sticky', top: 0, bgcolor: '#0b1220', zIndex: 1, px: 1.5, pt: 1.25, pb: 0.75,
+            borderBottom: '1px solid #1e293b', display: 'flex', alignItems: 'center', gap: 0.5 }}>
+            <Typography sx={{ fontSize: 11, fontWeight: 700, color: '#cbd5e1', flex: 1 }}>Columns</Typography>
+            <Button size="small" onClick={() => setVisibleCols(availableKeys)} sx={{ fontSize: 10, minWidth: 0, textTransform: 'none', color: '#60a5fa' }}>All</Button>
+            <Button size="small" onClick={() => setVisibleCols([])} sx={{ fontSize: 10, minWidth: 0, textTransform: 'none', color: '#94a3b8' }}>None</Button>
+            <Button size="small" onClick={() => setVisibleCols(LIB_COLS)} sx={{ fontSize: 10, minWidth: 0, textTransform: 'none', color: '#94a3b8' }}>Reset</Button>
+          </Box>
+          <Box sx={{ px: 1.5, py: 1 }}>
+            {colGroups.map(g => g.keys.length === 0 ? null : (
+              <Box key={g.title} sx={{ mb: 1 }}>
+                <Typography sx={{ fontSize: 9, fontWeight: 700, color: '#475569',
+                  textTransform: 'uppercase', letterSpacing: '0.06em', mb: 0.25 }}>{g.title}</Typography>
+                {g.keys.map(k => (
+                  <FormControlLabel key={k} sx={{ display: 'flex', ml: 0, height: 23 }}
+                    control={<Checkbox size="small" checked={visibleCols.includes(k)} onChange={() => toggleCol(k)}
+                      sx={{ p: 0.25, mr: 0.5, color: '#475569', '&.Mui-checked': { color: '#3b82f6' } }} />}
+                    label={<Typography sx={{ fontSize: 11, color: '#cbd5e1' }}>
+                      {paramLabel(k)}{paramUnit(k) ? <Box component="span" sx={{ color: '#475569' }}> ({paramUnit(k)})</Box> : null}
+                    </Typography>} />
+                ))}
+              </Box>
+            ))}
+          </Box>
+        </Popover>
         {err && <Alert severity="error" sx={{ fontSize: 11, mx: 2 }}>{err}</Alert>}
         <Box sx={{ flex: 1, overflow: 'auto', px: 2, pb: 1 }}>
           {loading && <CircularProgress size={18} sx={{ color: '#3b82f6', m: 2 }} />}
@@ -236,7 +303,7 @@ const ComparePanel: React.FC = () => {
               <Box component="thead"><Box component="tr">
                 <Box component="th" sx={{ ...TH, textAlign: 'center', left: 0, zIndex: 3, position: 'sticky' }}>✓</Box>
                 <Box component="th" sx={{ ...TH, textAlign: 'left', left: 36, zIndex: 3 }}>Name</Box>
-                {LIB_COLS.map(k => (
+                {displayCols.map(k => (
                   <Box component="th" key={k} sx={TH}>
                     {paramLabel(k)}{paramUnit(k) ? <Box component="span" sx={{ color: '#334155', fontWeight: 400 }}> {paramUnit(k)}</Box> : null}
                   </Box>
@@ -257,7 +324,7 @@ const ComparePanel: React.FC = () => {
                       bgcolor: sel.has(s.id) ? '#0f2036' : '#060d17', zIndex: 1 }}>
                       <Box sx={{ px: 1.25, py: 0.55 }}><NameCell s={s} /></Box>
                     </Box>
-                    {LIB_COLS.map(k => (
+                    {displayCols.map(k => (
                       <Box component="td" key={k} sx={TD}>{paramFmt(k, s.params?.[k])}</Box>
                     ))}
                     <Box component="td" sx={{ ...TD, textAlign: 'left', color: '#475569', fontSize: 10 }}>{s.created}</Box>

@@ -3642,7 +3642,10 @@ def fem_transient_sliding_band(
     P_cu_total_solve_W = 0.0; P_cu_ac_solve_W = 0.0
     if eddy and '_eddy_P' in dir() and len(_eddy_P) > 1:
         _warm = max(1, len(_eddy_P) // 2)
-        P_cu_total_solve_W = float(np.mean(_eddy_P[_warm:]) * NS)
+        # _eddy_P entries are ∫σF² dA over the 2-D sector mesh [W per metre of
+        # stack] — × stack_length for watts (was missing → reported 22× high,
+        # which is why the UI note called this value "inflated").
+        P_cu_total_solve_W = float(np.mean(_eddy_P[_warm:]) * NS * p.stack_length)
         P_cu_ac_solve_W = P_cu_total_solve_W - float(P_cu)    # total − DC I²R
         log.info("EDDY-SOLVE copper total=%.1f W (DC=%.0f + AC=%.1f) vs slab DC+AC=%.1f W",
                  P_cu_total_solve_W, float(P_cu), P_cu_ac_solve_W, float(P_cu) + P_cu_ac_avg)

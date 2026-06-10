@@ -45,6 +45,7 @@ const PARAM_META: Record<string, { label: string; unit?: string; d?: number }> =
   end_winding_factor: { label: 'k_end',         d: 2 },
   connection:         { label: 'Winding conn.' },
   steps_per_period:   { label: 'Steps/period',  d: 0 },
+  field_losses:       { label: 'Field losses' },
   // mesh
   n_sectors:          { label: 'Symmetry n',    d: 0 },
   mesh_size_mm:       { label: 'Mesh size',     unit: 'mm',  d: 2 },

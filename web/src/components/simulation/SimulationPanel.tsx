@@ -420,6 +420,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
         end_winding_factor: endWinding,
         connection,
         steps_per_period: steps,
+        field_losses: fieldLosses,
         n_sectors: readMesh('nSectors', 4),
         mesh_size_mm: readMesh('meshSize', 4.0),
         min_size_mm: readMesh('minSize', 0.3),

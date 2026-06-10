@@ -241,6 +241,21 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
     setRunNonce(n => n + 1);
   };
 
+  // Persist the operating point to config.yaml on ANY change (debounced), not
+  // only on Run — config wins on mount (so presets / Reset apply), so it must
+  // stay current or a change made without pressing Run would be lost on reload.
+  const simReady = useRef(false);   // gate: persist only AFTER the mount load populated state
+  useEffect(() => {
+    if (!simReady.current) return;   // skip until the operating point is loaded from config
+    const id = setTimeout(() => {
+      fetch(`${API}/api/simulation/config`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ max_current: current, frequency, rpm, phase_offset_deg: phaseOffset }),
+      }).catch(() => {});
+    }, 700);
+    return () => clearTimeout(id);
+  }, [current, frequency, rpm, phaseOffset]);
+
   // Auto-run ONCE when the Simulation tab first becomes visible (on the first
   // open or after an F5). The runNonce===0 guard means it computes exactly one
   // time per page load — the panel stays mounted, so switching to another tab
@@ -319,6 +334,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
           setFrequency(d.operating_point.frequency_hz ?? 921.67);
           setRpm(d.operating_point.rpm ?? 3950);
         }
+        simReady.current = true;     // operating point loaded → debounced saves allowed
       })
       .catch(e => setSrvErr(String(e)));
 

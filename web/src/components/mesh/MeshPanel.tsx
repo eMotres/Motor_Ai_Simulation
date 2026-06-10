@@ -420,6 +420,10 @@ const MeshPanel: React.FC = () => {
   }, [solverMesh, meshSizeMm, minSizeMm, normalDev, rotorAngle,
       outerAirFactor, gapLayers, nSectors, componentMeshJson]);
 
+  // Gate: don't persist mesh settings back to config until the mount config-load
+  // has populated state — otherwise a slow/interrupted load would let the
+  // debounced save write STALE localStorage into config (a clobber).
+  const meshReady = useRef(false);
   // Load current config + geometry on mount
   useEffect(() => {
     fetch(`${API}/api/mesh/config`)
@@ -435,6 +439,7 @@ const MeshPanel: React.FC = () => {
         if (typeof d.gap_layers       === 'number') setGapLayers(Math.min(3, Math.max(1, Math.round(d.gap_layers))));
         if (typeof d.normal_deviation === 'number') setNormalDev(d.normal_deviation);
         if (typeof d.n_sectors        === 'number') setNSectors(d.n_sectors);
+        meshReady.current = true;     // saves allowed only AFTER config is loaded
       })
       .catch(() => {});
 
@@ -480,6 +485,15 @@ const MeshPanel: React.FC = () => {
     saveMeshConfig();
     fetchFemMesh();
   }, [saveMeshConfig, fetchFemMesh]);
+
+  // Persist mesh settings to config.yaml on ANY change (debounced), not just on
+  // the explicit Rebuild click — config wins on mount, so it MUST stay current
+  // or a change made without pressing Rebuild would be lost on reload.
+  useEffect(() => {
+    if (!meshReady.current) return;   // skip until the mount config-load populated state
+    const id = setTimeout(saveMeshConfig, 700);
+    return () => clearTimeout(id);
+  }, [saveMeshConfig]);
 
   const totalPoints = useMemo(() => {
     const pts = estimatePoints(cfg);

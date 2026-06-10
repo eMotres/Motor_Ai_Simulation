@@ -177,13 +177,14 @@ const FemAnimationViewer: React.FC<Props> = ({
   // (one FEM sweep, not two).
   useEffect(() => { setNFrames(n_frames_default); }, [n_frames_default]);
 
-  // ── run ONLY when "Run Simulation" is pressed (runNonce ticks) ─────────
-  // runNonce starts at 0 → nothing happens on mount; the user sets the
-  // operating point + mesh settings first, then launches one solve.
-  useEffect(() => {
-    if (runNonce > 0) runAnimation();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [runNonce]);
+  // ── Field animation is OPT-IN — it does NOT auto-run on "Run Simulation".
+  // Rebuilding the FULL field map per frame is slow (~12 s/frame on the remesh
+  // path), so "Run Simulation" now computes only the fast sliding-band transient
+  // CHARTS at the full "Steps per electrical period".  Click "Run animation"
+  // below to compute the scrubable field video on demand.
+  // (Was: useEffect(() => { if (runNonce > 0) runAnimation(); }, [runNonce]); —
+  //  that made every Run also fire this slow 24-frame remesh, whose progress bar
+  //  read "0/24" and looked like the transient was ignoring the 72-step setting.)
 
   // ── build a FemPayload-shaped object for FemFieldChart ─────────────────
   const currentFrame = data?.frames[idx];

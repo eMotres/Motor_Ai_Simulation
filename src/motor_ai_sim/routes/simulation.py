@@ -1888,6 +1888,7 @@ def get_fem_transient(
     end_winding_factor:  float = 0.0,     # ← 0 = auto-estimate from geometry
     component_mesh:      str   = "",      # ← JSON {comp: size_mm} per-part mesh size
     rotor_eddy:          bool  = True,    # ← field-based magnet/shaft eddy losses
+    demag:               bool  = False,   # ← per-element irreversible demagnetisation (de-rates Br → torque)
 ):
     """Transient FEM analysis — runs N solves per electrical period and
     returns time-resolved T(t), losses(t) and V_phase(t).
@@ -1916,6 +1917,7 @@ def get_fem_transient(
                    round(stator_fillet_mm, 2),
                    round(coil_temp_c, 1), round(end_winding_factor, 3),
                    int(bool(rotor_eddy)), round(gap_layers, 1),
+                   int(bool(demag)),
                    tuple(sorted(_comp_mesh.items())))
         if not fresh and _sb_key in _fem_transient_cache:
             return _fem_transient_cache[_sb_key]
@@ -1945,10 +1947,13 @@ def get_fem_transient(
             # itself must report.  The callback fires at the TOP of each frame
             # with the solver's true (snapped) frame count.
             _est_total = max(1, int(round(float(n_steps_per_period) * float(n_periods))))
+            if demag:
+                _est_total *= 2     # demag adds a pre-pass sweep over the period
             _fem_transient_progress["current"] = {
                 "running": True, "step": 0, "total": _est_total,
                 "elapsed_s": 0.0, "eta_s": 0.0, "ts_start": _t.time(),
-                "phase": "fem-solve (sliding-band)",
+                "phase": ("fem-solve (sliding-band, demag)" if demag
+                          else "fem-solve (sliding-band)"),
             }
             def _sb_progress(_done, _total):
                 _cur = _fem_transient_progress["current"]
@@ -1965,6 +1970,7 @@ def get_fem_transient(
                     coil_temp_c=float(coil_temp_c),
                     end_winding_factor=float(end_winding_factor),
                     rotor_eddy=bool(rotor_eddy),
+                    demag=bool(demag),
                     component_mesh_mm=_comp_mesh,
                     progress_cb=_sb_progress)
             finally:

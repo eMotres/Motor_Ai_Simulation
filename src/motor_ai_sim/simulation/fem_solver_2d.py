@@ -3293,6 +3293,7 @@ def fem_transient_sliding_band(
     # below then runs with the weakened magnets, so the reported torque /
     # back-EMF / losses carry the demag penalty — Ansys-style, per element.
     _demag_coef = None
+    _demag_field = None
     _demag_report = []
     if demag and _mag_idx.size:
         _dm = []
@@ -3389,6 +3390,19 @@ def fem_transient_sliding_band(
         _nst = int(Tts.shape[1])
         _demag_coef = np.ones(int(mesh_all.t.shape[1]))
         _demag_coef[_nst:] = _br_glob
+        # Field-map payload (full stitched mesh + per-element Br factor) so the
+        # UI can render the demagnetisation %-map (% demag = (1 − Br_factor)·100)
+        # in the same FemFieldChart 'Demag' mode used by the static field view.
+        _pmm = mesh_all.p * 1e3
+        _demag_field = {
+            "vertices":           _pmm.T.tolist(),
+            "triangles":          mesh_all.t.T.astype(int).tolist(),
+            "domain_per_tri":     np.concatenate([np.asarray(ts), np.asarray(tr)]).astype(int).tolist(),
+            "demag_coef_per_tri": _demag_coef.tolist(),
+            "mag_domains":        sorted({int(_d["tag"]) for _d in _dm}),  # which tags are magnets
+            "extent": [float(_pmm[0].min()), float(_pmm[0].max()),
+                       float(_pmm[1].min()), float(_pmm[1].max())],
+        }
         log.warning("demag pre-pass: %d/%d magnet elems de-rated, min Br_factor %.3f",
                     int(np.sum(_br_glob < 0.999)), int(_mag_idx.size), float(_br_glob.min()))
 
@@ -3825,6 +3839,7 @@ def fem_transient_sliding_band(
         # per-magnet worst-cell report consumed by the UI panel/% map.
         "demag_coef_per_tri": (_demag_coef.tolist() if _demag_coef is not None else None),
         "demag_report": _demag_report,
+        "demag_field": _demag_field,     # full mesh + per-element Br factor for the %-map
     }
 
 

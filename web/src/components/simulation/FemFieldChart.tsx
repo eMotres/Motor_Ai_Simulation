@@ -279,10 +279,10 @@ const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode }>
     }
 
     if (mode === 'Demag') {
-      // Demag-Coef: show ONLY magnet triangles, coloured 0..1 via jet
-      // (Ansys "Demag-Coef" convention — red = 1.0 = safe, blue = 0 =
-      // fully demagnetised).  Non-magnet cells drop out so the magnet
-      // geometry stands alone on the canvas.
+      // Demag %: show ONLY magnet triangles, coloured by the IRREVERSIBLE
+      // demagnetisation  % = (1 − Br_factor)·100  — blue = 0 % (safe),
+      // red = 100 % (fully demagnetised).  Non-magnet cells drop out so the
+      // magnet geometry stands alone on the canvas.
       const dc = (payload as any).demag_coef_per_tri as number[] | undefined;
       const dom = domain_per_tri;
       const DOM_MAG_N = 4, DOM_MAG_S = 44;
@@ -293,8 +293,8 @@ const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode }>
       for (let i = 0; i < nTri; i++) {
         if (dom[i] !== DOM_MAG_N && dom[i] !== DOM_MAG_S) continue;
         const tt = triangles[i];
-        const v  = dc ? Math.max(0, Math.min(1, dc[i])) : 1;
-        const [rr, gg, bb] = jetBands(v, 11);   // 11 bands like Ansys
+        const coef = dc ? Math.max(0, Math.min(1, dc[i])) : 1;
+        const [rr, gg, bb] = jetBands(1 - coef, 11);   // colour by % lost (red = demagnetised)
         for (const vi of tt) {
           positions[p++] = vertices[vi][0] * S;
           positions[p++] = vertices[vi][1] * S;
@@ -719,7 +719,7 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
               lut={(t) => jet01(t)}/>;
           }
           if (mode === 'Demag') {
-            return <ColorBar vmin={0} vmax={1} unit="Demag-Coef"
+            return <ColorBar vmin={0} vmax={100} unit="Demag %"
               lut={(t) => jetBands(t, 11)}/>;
           }
           if (mode === 'J') {

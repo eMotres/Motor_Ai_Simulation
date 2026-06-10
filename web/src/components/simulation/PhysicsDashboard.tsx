@@ -109,6 +109,8 @@ interface Props {
   onSummary?:     (s: TransientSummary | null) => void;
   // Field-based magnet/shaft eddy losses (vs slab estimate) — see TransientCharts.
   fieldLosses?:   boolean;
+  // Per-element irreversible demagnetisation — de-rates Br → torque/EMF + %-map.
+  demag?:         boolean;
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -150,7 +152,7 @@ function exportCSV(filename: string, rows: Record<string, number | string>[]) {
 }
 
 // ── main component ────────────────────────────────────────────────────────────
-const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_rms, pinnLosses, runNonce = 0, onBusyChange, steps = 12, fresh = false, onSummary, fieldLosses = true }) => {
+const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_rms, pinnLosses, runNonce = 0, onBusyChange, steps = 12, fresh = false, onSummary, fieldLosses = true, demag = false }) => {
   // Latest FEM solve payload — kept around so future siblings can reuse it.
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [_femPayload, setFemPayload] = React.useState<FemPayload | null>(null);
@@ -492,6 +494,7 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
 
       {/* ── Transient: T(t), P(t), V(t) — one FEM solve per time step ── */}
       <TransientCharts gamma_deg={gamma_deg} I_phase_rms={I_phase_rms} fieldLosses={fieldLosses}
+        demag={demag}
         steps={steps} runNonce={runNonce} fresh={fresh} onBusyChange={onBusyChange}
         onSummary={setTransientSummary}/>
 

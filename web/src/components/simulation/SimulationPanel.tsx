@@ -260,6 +260,11 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // solve with per-magnet ∫J=0 and the assigned materials' σ (Ansys-style),
   // instead of the classical slab d²/12 estimate.  ~+12 % solve time.
   const [fieldLosses, setFieldLosses] = usePersisted('fieldLosses', true);
+  // Per-element irreversible demagnetisation: a pre-pass sweeps the period at
+  // full Br, finds the worst demagnetising field at every magnet element, and
+  // de-rates Br along the recoil line (Ansys-style) so the transient torque /
+  // back-EMF reflect the weakened magnets.  Opt-in (adds a pre-pass sweep).
+  const [demag, setDemag] = usePersisted('demag', false);
   const [stepsStr, setStepsStr] = useState(String(steps));
   useEffect(() => { setStepsStr(String(steps)); }, [steps]);
   // HARD upper bound: the sliding-band rotor can only sit on slip-ring nodes —
@@ -403,7 +408,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // displayed result no longer matches the current settings.
   const computeSig = () => JSON.stringify({
     I: current, g: phaseOffset, rpm, steps, coilTemp, endWinding, connection,
-    fl: fieldLosses,
+    fl: fieldLosses, dm: demag,
     ns: readMesh('nSectors', 4), ms: readMesh('meshSize', 4.0), mn: readMesh('minSize', 0.3),
     gl: readMesh('gapLayers', 2), oa: readMesh('outerAir', 1.3), nd: readMesh('normalDev', 6),
   });
@@ -438,6 +443,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
         connection,
         steps_per_period: steps,
         field_losses: fieldLosses,
+        demag,
         n_sectors: readMesh('nSectors', 4),
         mesh_size_mm: readMesh('meshSize', 4.0),
         min_size_mm: readMesh('minSize', 0.3),
@@ -833,6 +839,26 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               }
             />
           </Tooltip>
+          {/* Per-element irreversible demagnetisation (Ansys-style).  A pre-pass
+              sweeps the period at full Br, finds the worst demag field at every
+              magnet element, and de-rates Br on the recoil line → the torque /
+              back-EMF reflect the weakened magnets, plus a Demag-% map. */}
+          <Tooltip title="Account for irreversible magnet demagnetisation. A pre-pass sweeps the whole period at full strength, finds the worst demagnetising field H at EVERY magnet element, and permanently de-rates Br along the recoil line where H crosses the BH-curve knee (per element, like Ansys). The torque and back-EMF then reflect the weakened magnets, and a Demag-% map is produced. Adds a pre-pass sweep (the one-time mesh build dominates, so overhead is modest)." placement="right">
+            <FormControlLabel
+              sx={{ mt: -0.5, mb: 0.75, ml: 0.25 }}
+              control={
+                <Checkbox size="small" checked={demag}
+                  onChange={e => setDemag(e.target.checked)}
+                  disabled={simBusy}
+                  sx={{ p: 0.5, color: '#475569', '&.Mui-checked': { color: '#c084fc' } }} />
+              }
+              label={
+                <Typography variant="caption" sx={{ color: demag ? '#c084fc' : '#94a3b8' }}>
+                  Demagnetisation — de-rate torque (FEM, per element)
+                </Typography>
+              }
+            />
+          </Tooltip>
           {simBusy ? (
             <Button
               fullWidth
@@ -1161,6 +1187,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
           steps={steps}
           onSummary={setLastSummary}
           fieldLosses={fieldLosses}
+          demag={demag}
         />
 
       </Box>

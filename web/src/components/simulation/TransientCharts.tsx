@@ -17,6 +17,7 @@ import {
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
 import type { TransientSummary } from './SummaryTable';
+import DemagMap from './DemagMap';
 
 interface TransientPayload {
   n_steps: number;
@@ -42,6 +43,19 @@ interface TransientPayload {
   T_harm_order?: number[];
   T_harm_amp?: number[];
   summary?: TransientSummary;
+  // Demagnetisation (present only when demag=true): per-magnet worst-cell
+  // report + the full-mesh per-element Br factor for the %-map.
+  demag_report?: Array<{
+    magnet_index: number; H_min_kA_per_m: number; H_knee_kA_per_m: number;
+    knee_proximity: number; demagnetised: boolean; Br_factor: number;
+  }>;
+  demag_field?: {
+    vertices: [number, number][];
+    triangles: [number, number, number][];
+    domain_per_tri: number[];
+    demag_coef_per_tri: number[];
+    extent: [number, number, number, number];
+  } | null;
 }
 
 interface Props {
@@ -60,6 +74,8 @@ interface Props {
   // Field-based magnet/shaft eddy losses (J = σ(−∂A/∂t + U) magnetodynamic
   // solve, per-magnet ∫J=0, library σ) instead of the slab d²/12 estimate.
   fieldLosses?: boolean;
+  // Per-element irreversible demagnetisation — de-rates Br → torque/EMF + %-map.
+  demag?: boolean;
 }
 
 function readMeshSetting<T>(key: string, def: T): T {
@@ -100,7 +116,7 @@ interface ProgressInfo {
   phase:     string;
 }
 
-const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onSummary, runNonce = 0, onBusyChange, steps = 12, fresh = false, fieldLosses = true }) => {
+const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onSummary, runNonce = 0, onBusyChange, steps = 12, fresh = false, fieldLosses = true, demag = false }) => {
   // `steps` (n_steps_per_period) is controlled from the left panel and
   // matches the animation viewer's n_frames so both hit the same backend
   // cache key (one solve, not two).
@@ -178,6 +194,9 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
       // Field-based magnet/shaft eddy losses (Ansys-style σ·∂A/∂t solve with
       // per-magnet ∫J=0 and library σ) vs the classical slab estimate.
       rotor_eddy:         String(fieldLosses),
+      // Per-element irreversible demagnetisation: pre-pass de-rates Br on the
+      // recoil line → torque/back-EMF reflect the weakened magnets + a %-map.
+      demag:              String(demag),
       // Copper-loss physics: coil temperature → ρ_Cu(T); end-winding factor
       // (0 = auto-estimate from geometry) for the copper the 2-D field misses.
       coil_temp_c:        String(readSimSetting('coilTemp',   120.0)),
@@ -521,6 +540,29 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
               </LineChart>
             </ResponsiveContainer>
           </Box>
+
+          {/* ── Demagnetisation: per-magnet report (%) + per-element %-map ── */}
+          {data.demag_report && data.demag_report.length > 0 && (
+            <Box sx={{ p: 1, border: '1px solid',
+              borderColor: data.demag_report.some(r => r.demagnetised) ? '#7f1d1d' : '#78350f',
+              borderRadius: 1, bgcolor: '#160e0e' }}>
+              <Typography sx={{ fontSize: 12, fontWeight: 700, mb: 0.5,
+                color: data.demag_report.some(r => r.demagnetised) ? '#fca5a5' : '#fbbf24' }}>
+                {data.demag_report.some(r => r.demagnetised)
+                  ? '⛔ MAGNET DEMAGNETISATION — torque & back-EMF de-rated'
+                  : '⚠ Magnets approaching demag knee'}
+              </Typography>
+              {data.demag_report.map((r, i) => (
+                <Typography key={i} sx={{ fontSize: 11, fontFamily: 'monospace',
+                  color: r.demagnetised ? '#fca5a5' : '#cbd5e1' }}>
+                  mag[{r.magnet_index}]: H_min = {r.H_min_kA_per_m} kA/m
+                  {' '}(knee {r.H_knee_kA_per_m} kA/m, {(r.knee_proximity * 100).toFixed(0)}%)
+                  {r.demagnetised && `  →  Br ×${r.Br_factor}  (−${((1 - r.Br_factor) * 100).toFixed(0)}%)`}
+                </Typography>
+              ))}
+            </Box>
+          )}
+          {data.demag_field && <DemagMap field={data.demag_field as any} />}
         </>
       )}
     </Paper>

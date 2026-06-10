@@ -324,7 +324,9 @@ const MeshPanel: React.FC = () => {
   // ── Solver-domain extensions (Ansys-style) ───────────────────────────────
   const [outerAirFactor, setOuterAirFactor] = usePersisted<number>('outerAir', 1.3);
   const [nSectors,       setNSectors]       = usePersisted<number>('nSectors', 4);   // 1/4 by default
-  const [gapLayers,      setGapLayers]      = usePersisted<number>('gapLayers', 3);  // element layers across the air gap
+  // Air-gap element rows PER SIDE of the slip midline (1-3, default 2). The
+  // value persists in config.yaml (loaded below, clamped to the new 1-3 range).
+  const [gapLayers,      setGapLayers]      = usePersisted<number>('gapLayers', 2);
   // ── Per-component mesh size (study mesh-density effect on results) ─────────
   // {comp: target element size mm}. Empty/0 → use the global size for that part.
   // Persisted under 'mesh.componentMesh' so the Simulation tab's solve reads the
@@ -414,7 +416,8 @@ const MeshPanel: React.FC = () => {
         if (typeof d.mesh_size_mm     === 'number') setMeshSizeMm(d.mesh_size_mm);
         if (typeof d.min_size_mm      === 'number') setMinSizeMm(d.min_size_mm);
         if (typeof d.outer_air_factor === 'number') setOuterAirFactor(d.outer_air_factor);
-        if (typeof d.gap_layers       === 'number') setGapLayers(d.gap_layers);
+        // gap_layers changed meaning (now per-side, 1-3): clamp legacy values.
+        if (typeof d.gap_layers       === 'number') setGapLayers(Math.min(3, Math.max(1, Math.round(d.gap_layers))));
         if (typeof d.normal_deviation === 'number') setNormalDev(d.normal_deviation);
         if (typeof d.n_sectors        === 'number') setNSectors(d.n_sectors);
       })
@@ -664,20 +667,20 @@ const MeshPanel: React.FC = () => {
               />
             </Box>
 
-            {/* Air-gap layers — element count across the air gap */}
+            {/* Air-gap layers — element rows on EACH side of the slip midline */}
             <Box>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
                 <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>
-                  Air-gap layers
-                  <Tooltip title="Number of element layers ACROSS the air gap (gap element size = gap / layers). Drives the densest part of the mesh. ≳3 keeps the Maxwell-stress torque mesh-independent; fewer = faster but the torque starts to drift." placement="right">
+                  Air-gap layers (per side)
+                  <Tooltip title="Element rows between the rotating slip midline and the iron on EACH side (stator and rotor). The sliding band splits the gap at the midline, so '2' = 2 rows you see between the midline and the stator (and 2 toward the rotor). 2 is the mesh-independent sweet spot for Maxwell-stress torque; 3 is plenty — more adds cost without accuracy." placement="right">
                     <span style={{ color: '#475569', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
                   </Tooltip>
                 </Typography>
-                <Chip label={`${gapLayers.toFixed(0)}×`} size="small"
+                <Chip label={`${gapLayers.toFixed(0)}/side`} size="small"
                   sx={{ fontSize: 11, height: 20, bgcolor: '#1e3a5f', color: '#93c5fd' }}/>
               </Box>
               <Slider
-                value={gapLayers} min={1} max={8} step={1}
+                value={gapLayers} min={1} max={3} step={1}
                 marks onChange={(_, v) => setGapLayers(v as number)}
                 sx={{ color: '#06b6d4' }}
               />

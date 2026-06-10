@@ -1482,11 +1482,15 @@ def build_mesh_from_polygons(polys: dict,
             if _r_ro > 0.0 and _r_si > _r_ro:
                 _r_ag = 0.5 * (_r_ro + _r_si)
                 _gap  = _r_si - _r_ro
-                # Air-gap element size = gap / (#layers). Driven by the Mesh-tab
-                # "Air-gap layers" control. Lower → coarser gap (faster, but the
-                # Maxwell-stress torque needs ≳3 layers to stay mesh-independent).
+                # gap_layers = element layers PER HALF gap (slip-midline → iron).
+                # The sliding-band slip ring bisects the gap, so each side (stator
+                # half-mesh, rotor half-mesh) spans gap/2; element size =
+                # (gap/2)/layers gives exactly `layers` rows on each side — which
+                # is what the user counts in the Mesh view.  ~2 per half is the
+                # mesh-independent sweet spot for Maxwell-stress torque; 3 is
+                # plenty (4+ adds cost without accuracy).
                 _nl   = max(1.0, float(gap_layers))
-                _ag_h = max(0.04, _gap / _nl)
+                _ag_h = max(0.04, (_gap / 2.0) / _nl)
                 # Let the gap be finer than the global Min size so "Air-gap
                 # layers" actually changes the gap density (otherwise N≥~2 is
                 # floored at min_size and 2× vs 3× look identical).

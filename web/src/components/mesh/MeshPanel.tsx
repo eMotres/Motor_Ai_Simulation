@@ -351,7 +351,15 @@ const MeshPanel: React.FC = () => {
   // fetches /mesh/build2d_sliding_band which returns the stator and rotor
   // meshes concatenated — moving the rotor_angle slider rigidly rotates
   // the rotor half without touching the stator triangulation.
-  const [slidingBand,  setSlidingBand]  = usePersisted<boolean>('slidingBand', false);
+  // Which mesh the tab DRAWS:
+  //   true  → the REAL sliding-band solver mesh (stator + rotor meshed
+  //           separately, iron clamped to 2 mm, gap floor 0.1 mm, 1008-node
+  //           slip ring) — exactly what computes T(t)/V(t)/losses.
+  //   false → the single-mesh viewer/static mesh (what the static field +
+  //           torque sweep solve on).
+  // Default = solver mesh, so "Mesh" shows what actually runs.  (New
+  // localStorage key so the default takes effect even for older sessions.)
+  const [solverMesh,  setSolverMesh]  = usePersisted<boolean>('showSolverMesh', true);
   const [femMesh,     setFemMesh]     = useState<FemMesh | null>(null);
   const [femLoading,  setFemLoading]  = useState<boolean>(false);
   const [femError,    setFemError]    = useState<string | null>(null);
@@ -359,10 +367,10 @@ const MeshPanel: React.FC = () => {
   const fetchFemMesh = useCallback(() => {
     setFemLoading(true);
     setFemError(null);
-    const base = slidingBand
+    const base = solverMesh
       ? `${API}/api/simulation/mesh/build2d_sliding_band`
       : `${API}/api/simulation/mesh/build2d`;
-    const qs = new URLSearchParams(slidingBand ? {
+    const qs = new URLSearchParams(solverMesh ? {
       rotor_angle_deg:   rotorAngle.toString(),
       mesh_size_mm:      meshSizeMm.toString(),
       min_size_mm:       minSizeMm.toString(),
@@ -391,7 +399,7 @@ const MeshPanel: React.FC = () => {
       })
       .then((d: FemMesh) => { setFemMesh(d); setFemLoading(false); })
       .catch(e => { setFemError(String(e)); setFemLoading(false); });
-  }, [slidingBand, meshSizeMm, minSizeMm, normalDev, rotorAngle,
+  }, [solverMesh, meshSizeMm, minSizeMm, normalDev, rotorAngle,
       outerAirFactor, gapLayers, nSectors, componentMeshJson]);
 
   // Load current config + geometry on mount
@@ -710,32 +718,35 @@ const MeshPanel: React.FC = () => {
               </Box>
             </Box>
 
-            {/* Sliding-band TWO-mesh view */}
-            <Box>
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-                <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>
-                  Sliding-band view
-                  <Tooltip title="Build stator and rotor as TWO separate meshes; rigidly rotate the rotor mesh's node coordinates by the rotor angle slider (topology stays the same). The band-interface nodes on each side are paired master-slave for the FEM solve (SB-5d, in progress)." placement="right">
-                    <span style={{ color: '#475569', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
-                  </Tooltip>
-                </Typography>
-                <ToggleButtonGroup
-                  value={slidingBand ? 'on' : 'off'} exclusive size="small"
-                  onChange={(_, v) => v && setSlidingBand(v === 'on')}
-                  sx={{ '& .MuiToggleButton-root': { py: 0.1, px: 1,
-                    fontSize: 10, color: '#64748b', borderColor: '#1e293b',
-                    textTransform: 'none',
-                    '&.Mui-selected': { color: '#a78bfa', bgcolor: '#312e5f',
-                      borderColor: '#8b5cf6' } } }}>
-                  <ToggleButton value="off">Off</ToggleButton>
-                  <ToggleButton value="on">On</ToggleButton>
-                </ToggleButtonGroup>
-              </Box>
-              {slidingBand && (
-                <Typography sx={{ fontSize: 10, color: '#7c3aed', mt: 0.3 }}>
-                  Sweep the <b>Rotor angle</b> slider above — rotor mesh slides as rigid body
-                </Typography>
-              )}
+            {/* Which mesh is DRAWN — the real transient solver mesh vs the
+                single-mesh static/viewer mesh.  Prominent, since it changes
+                what "the mesh" means. */}
+            <Box sx={{ border: '1px solid', borderColor: solverMesh ? '#8b5cf6' : '#1e293b',
+              borderRadius: 1, p: 1, bgcolor: solverMesh ? '#1a1633' : 'transparent' }}>
+              <Typography sx={{ fontSize: 11, fontWeight: 700, color: '#a78bfa',
+                letterSpacing: '0.05em', textTransform: 'uppercase', mb: 0.5 }}>
+                Mesh shown
+                <Tooltip title="SOLVER (sliding-band): the ACTUAL mesh the transient solves on — stator and rotor meshed separately, iron clamped to 2 mm, air-gap floor 0.1 mm, plus the 1008-node slip ring in the gap (the dotted chain mid-gap). Rotate the rotor-angle slider to see it slide as a rigid body. STATIC (single): the one-piece mesh the static field/torque-sweep solve on." placement="right">
+                  <span style={{ color: '#475569', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
+                </Tooltip>
+              </Typography>
+              <ToggleButtonGroup
+                value={solverMesh ? 'solver' : 'static'} exclusive size="small" fullWidth
+                onChange={(_, v) => v && setSolverMesh(v === 'solver')}
+                sx={{ width: '100%',
+                  '& .MuiToggleButton-root': { flex: 1, py: 0.3,
+                  fontSize: 10.5, color: '#64748b', borderColor: '#1e293b',
+                  textTransform: 'none',
+                  '&.Mui-selected': { color: '#c4b5fd', bgcolor: '#312e5f',
+                    borderColor: '#8b5cf6' } } }}>
+                <ToggleButton value="solver">Transient solver (sliding-band)</ToggleButton>
+                <ToggleButton value="static">Static (single)</ToggleButton>
+              </ToggleButtonGroup>
+              <Typography sx={{ fontSize: 10, color: solverMesh ? '#7c3aed' : '#475569', mt: 0.4 }}>
+                {solverMesh
+                  ? 'REAL transient mesh (iron≤2 mm, gap≤0.1 mm, 1008-node slip ring). Sweep Rotor angle → rotor slides rigidly.'
+                  : 'Single-piece mesh used by the static field + torque sweep.'}
+              </Typography>
             </Box>
 
             {/* Symmetry sectors */}

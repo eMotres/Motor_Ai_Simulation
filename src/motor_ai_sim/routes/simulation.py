@@ -1251,11 +1251,19 @@ async def build_fem_mesh_2d_sliding_band(
     # air disk + outer air annulus), so the old air-gap-splitting motion
     # band is no longer needed for the sliding-band path.
 
+    # Apply the SAME clamps the transient SOLVER uses, so the mesh shown here is
+    # byte-for-byte the one that computes T(t)/V(t)/losses — not a coarser
+    # look-alike.  fem_transient_sliding_band clamps the bulk iron element size
+    # to 2 mm (rotationally-consistent torque) and the air-gap floor to 0.1 mm
+    # (resolves the radial B-gradient).  Without this the viewer would draw a
+    # COARSER mesh than what actually solves.
+    _mesh_size_solved = min(float(mesh_size_mm), 2.0)
+    _min_size_solved  = min(float(min_size_mm), 0.1)
     try:
         mesh_s, tags_s, classify_s, mesh_r, tags_r, classify_r = \
             _build_sliding_band_meshes(
                 polys, rotor_angle_deg=rotor_angle_deg,
-                mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm,
+                mesh_size_mm=_mesh_size_solved, min_size_mm=_min_size_solved,
                 normal_deviation_deg=normal_deviation, aspect_ratio=aspect_ratio,
                 outer_air_factor=outer_air_factor,
                 band_thickness_mm=band_thickness_mm,

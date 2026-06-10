@@ -373,11 +373,26 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   const [saveName, setSaveName] = useState('');
   const [saveBusy, setSaveBusy] = useState(false);
   const [saveMsg,  setSaveMsg]  = useState<string | null>(null);
+  const [runSig,   setRunSig]   = useState<string | null>(null);
   const readMesh = <T,>(k: string, def: T): T => {
     try { const r = localStorage.getItem(`mesh.${k}`); return r == null ? def : (JSON.parse(r) as T); }
     catch { return def; }
   };
+  // Signature of every input that changes the FEM result.  Re-read each render
+  // (incl. localStorage mesh.* which the Mesh tab edits) so we can tell when the
+  // displayed result no longer matches the current settings.
+  const computeSig = () => JSON.stringify({
+    I: current, g: phaseOffset, rpm, steps, coilTemp, endWinding, connection,
+    ns: readMesh('nSectors', 4), ms: readMesh('meshSize', 4.0), mn: readMesh('minSize', 0.3),
+  });
+  // Snapshot the run's inputs the moment a run is launched (runNonce ticks).
+  useEffect(() => { setRunSig(computeSig()); }, [runNonce]);  // eslint-disable-line react-hooks/exhaustive-deps
+  // The shown summary is STALE if any sim input changed since that run — then
+  // saving would store the NEW params against the OLD result (the "all rows
+  // identical" bug).  Block Save until the user re-runs.
+  const settingsChanged = !!lastSummary && runSig != null && computeSig() !== runSig;
   const saveSimulation = async () => {
+    if (settingsChanged) { setSaveMsg('Settings changed — press Re-run Simulation first'); return; }
     if (!lastSummary) { setSaveMsg('Run a simulation first'); return; }
     setSaveBusy(true); setSaveMsg(null);
     try {
@@ -850,23 +865,25 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
             <Typography sx={{ fontSize: 12, fontWeight: 700, color: '#e2e8f0' }}>
               Save this simulation
             </Typography>
-            <Typography sx={{ fontSize: 10, color: simBusy ? '#fbbf24' : '#64748b' }}>
+            <Typography sx={{ fontSize: 10, color: (simBusy || settingsChanged) ? '#fbbf24' : '#64748b' }}>
               {simBusy
                 ? 'Simulation running — Save enables when it finishes'
-                : lastSummary
-                  ? `T_avg = ${lastSummary.T_em_avg_Nm.toFixed(1)} N·m · ripple = ${lastSummary.T_ripple_pct.toFixed(1)} % · η = ${(lastSummary.efficiency * 100).toFixed(1)} % → snapshot for the Compare tab`
-                  : 'Run a simulation first, then snapshot it for side-by-side comparison'}
+                : settingsChanged
+                  ? '⚠ Settings changed since the last run — press “Re-run Simulation” to update before saving'
+                  : lastSummary
+                    ? `T_avg = ${lastSummary.T_em_avg_Nm.toFixed(1)} N·m · ripple = ${lastSummary.T_ripple_pct.toFixed(1)} % · η = ${(lastSummary.efficiency * 100).toFixed(1)} % → snapshot for the Compare tab`
+                    : 'Run a simulation first, then snapshot it for side-by-side comparison'}
             </Typography>
           </Box>
           <TextField size="small" placeholder="name (e.g. baseline 1/2)"
             value={saveName} onChange={e => setSaveName(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter' && !simBusy) saveSimulation(); }}
-            disabled={simBusy}
+            onKeyDown={e => { if (e.key === 'Enter' && !simBusy && !settingsChanged) saveSimulation(); }}
+            disabled={simBusy || settingsChanged}
             sx={{ width: 220 }} inputProps={{ style: { fontSize: 12 } }} />
           <Button variant="contained" onClick={saveSimulation}
-            disabled={!lastSummary || saveBusy || simBusy} startIcon={<SaveIcon />}
+            disabled={!lastSummary || saveBusy || simBusy || settingsChanged} startIcon={<SaveIcon />}
             sx={{ textTransform: 'none', bgcolor: '#2563eb', '&:hover': { bgcolor: '#1d4ed8' } }}>
-            {saveBusy ? 'Saving…' : simBusy ? 'Running…' : 'Save'}
+            {saveBusy ? 'Saving…' : simBusy ? 'Running…' : settingsChanged ? 'Re-run first' : 'Save'}
           </Button>
           {saveMsg && (
             <Typography sx={{ fontSize: 11, color: saveMsg.startsWith('✓') ? '#4ade80' : '#fca5a5' }}>

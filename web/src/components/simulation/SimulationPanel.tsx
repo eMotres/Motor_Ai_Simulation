@@ -256,6 +256,10 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // clamped integer on blur / Enter, so typing "12" over "6" works
   // naturally instead of producing "62".
   const [steps,    setSteps]    = usePersisted('stepsPP', 72);   // transient pts/period (matches slip-node grid)
+  // Field-based magnet/shaft eddy losses: J = σ(−∂A/∂t + U) magnetodynamic
+  // solve with per-magnet ∫J=0 and the assigned materials' σ (Ansys-style),
+  // instead of the classical slab d²/12 estimate.  ~+12 % solve time.
+  const [fieldLosses, setFieldLosses] = usePersisted('fieldLosses', true);
   const [stepsStr, setStepsStr] = useState(String(steps));
   useEffect(() => { setStepsStr(String(steps)); }, [steps]);
   const commitSteps = () => {
@@ -383,6 +387,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // displayed result no longer matches the current settings.
   const computeSig = () => JSON.stringify({
     I: current, g: phaseOffset, rpm, steps, coilTemp, endWinding, connection,
+    fl: fieldLosses,
     ns: readMesh('nSectors', 4), ms: readMesh('meshSize', 4.0), mn: readMesh('minSize', 0.3),
   });
   // Snapshot the run's inputs the moment a run is launched (runNonce ticks).
@@ -791,6 +796,25 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
             FormHelperTextProps={{ sx: { fontSize: 10, color: '#475569', mx: 0 } }}
             sx={{ mb: 1.25 }}
           />
+          {/* Field-based eddy losses: σ·∂A/∂t magnetodynamic solve for the
+              magnets + shaft (per-magnet ∫J=0, library σ) — the Ansys way —
+              instead of the classical slab d²/12 estimate.  ~+12 % runtime. */}
+          <Tooltip title="Magnet + shaft eddy losses from the real field solve J = σ(−∂A/∂t + U): per-magnet zero-net-current constraints, σ from the assigned materials. Iron stays Bertotti, with coefficients fitted to the material's MEASURED loss curves. Off = classical slab estimate (faster)." placement="right">
+            <FormControlLabel
+              sx={{ mt: -0.5, mb: 0.75, ml: 0.25 }}
+              control={
+                <Checkbox size="small" checked={fieldLosses}
+                  onChange={e => setFieldLosses(e.target.checked)}
+                  disabled={simBusy}
+                  sx={{ p: 0.5, color: '#475569', '&.Mui-checked': { color: '#60a5fa' } }} />
+              }
+              label={
+                <Typography variant="caption" sx={{ color: fieldLosses ? '#60a5fa' : '#94a3b8' }}>
+                  Field-based magnet/shaft losses (FEM eddy)
+                </Typography>
+              }
+            />
+          </Tooltip>
           {simBusy ? (
             <Button
               fullWidth
@@ -1118,6 +1142,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
           onBusyChange={setSimBusy}
           steps={steps}
           onSummary={setLastSummary}
+          fieldLosses={fieldLosses}
         />
 
       </Box>

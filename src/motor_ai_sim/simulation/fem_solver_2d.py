@@ -2799,6 +2799,7 @@ def fem_transient_sliding_band(
     end_winding_factor: float = 0.0,
     geo_override: dict = None,
     eddy: bool = False,          # opt-in: time-coupled σ·∂A/∂t eddy-current solve
+    rotor_eddy: bool = False,    # field-based magnet/shaft eddy losses (stranded coils)
     component_mesh_mm: dict = None,  # per-part target element size {comp: mm}
     return_field: bool = False,  # eddy: also return a last-frame field snapshot
 ) -> dict:
@@ -2951,11 +2952,41 @@ def fem_transient_sliding_band(
     # copper).  Solid conductors only — air / laminated iron stay σ=0.
     _sig_cu_T = SIGMA_CU_20 / (1.0 + ALPHA_CU * (float(coil_temp_c) - 20.0))
 
+    # ── Assigned materials (library) — REAL σ / BH / loss curves ──────────
+    # Fetched BEFORE the σ-mass assembly so the eddy solve uses the σ of the
+    # materials actually assigned in the UI (e.g. an ALUMINIUM shaft is 2.6e7
+    # S/m — 5.7× the hardcoded carbon-steel value).  Falls back to the generic
+    # constants when a lookup fails.
+    from motor_ai_sim import materials as _mat_lib
+    from motor_ai_sim.config import get_material_assignments as _gma
+    _ma = _gma() or {}
+    try:
+        _steel_s = _mat_lib.get_steel(_ma.get("stator_core", "20SW1200"))
+        _steel_r = _mat_lib.get_steel(_ma.get("rotor_core",  "20SW1200"))
+    except Exception:
+        _steel_s = _steel_r = None
+    try:
+        _magnet_mat = _mat_lib.get_magnet(_ma.get("magnet")) if _ma.get("magnet") else None
+    except Exception:
+        _magnet_mat = None
+
+    def _lookup_sigma(name: str) -> float:
+        for _cat in ("conductor", "steel", "magnet"):
+            try:
+                return float(getattr(_mat_lib.get_material(_cat, name), "sigma", 0.0) or 0.0)
+            except Exception:
+                continue
+        return 0.0
+
+    _sigma_mag_lib = (float(getattr(_magnet_mat, "sigma", 0.0) or 0.0)
+                      if _magnet_mat else 0.0) or SIGMA_NDFEB
+    _sigma_shaft_lib = _lookup_sigma(str(_ma.get("shaft", ""))) or SIGMA_SHAFT
+
     def _sigma_of_tag(t: int) -> float:
         t = int(t)
         if t >= DOM_COIL_BASE or t == DOM_COIL:      return _sig_cu_T
-        if t >= DOM_MAG_BASE or t in (DOM_MAG_N, DOM_MAG_S): return SIGMA_NDFEB
-        if t == DOM_SHAFT:                           return SIGMA_SHAFT
+        if t >= DOM_MAG_BASE or t in (DOM_MAG_N, DOM_MAG_S): return _sigma_mag_lib
+        if t == DOM_SHAFT:                           return _sigma_shaft_lib
         return 0.0
 
     half = {}
@@ -3035,6 +3066,74 @@ def fem_transient_sliding_band(
                 "nodes": np.unique(half["s"]["mesh"].t[:, idx]),   # stator-local node ids
             })
 
+    # ── Rotor-eddy stage: FIELD-BASED magnet eddy losses ─────────────────────
+    # The rotor mesh is the rotor's MATERIAL frame (rotation lives in the slip
+    # pairing), so dA/dt at a rotor node IS the material ∂A/∂t — no convective
+    # term.  Each isolated magnet carries J = σ(−∂A/∂t + U_m) with ∫J dA = 0;
+    # U_m is the per-magnet area-mean of ∂A/∂t (uniform σ).  Magnet halves
+    # bisected by the sector cut take U = 0 — their (anti)periodic image
+    # cancels the net axial current by symmetry.
+    #
+    # IMPLEMENTATION: post-processing on the magnetostatic A(t) histories with
+    # the SAME smoothed angle-derivative the B-field losses use.  An in-loop
+    # coupled solve was tried first and rejected: the raw frame-to-frame ∂A/∂t
+    # rides on the slip-ring node-merge jitter, and the σ|∂A/∂t|² integral
+    # AMPLIFIES that noise with the step count (P_mag tripled going 24→72
+    # steps).  _angle_ddt_2d low-pass-filters A(θ) over the unique slip-node
+    # positions before differentiating — physics (slot ripple, 1–2 cycles per
+    # period) passes, merge jitter dies.  The resistance-limited approximation
+    # (no eddy-reaction skin effect) is good for the magnets: skin depth at the
+    # slot-passing frequency ≈ 12 mm vs ~14 mm magnet width, and neglecting the
+    # reaction errs conservative (slightly over-reports the loss).
+    # σ comes from the ASSIGNED magnet material (library), not a constant.
+    _rot_con = []            # bordered ∫J=0 rows — only for the eddy J-VIEW mode
+    _rot_sig_nodes = []      # (nodes_global, σ) per rotor group — J snapshot
+    _mag_groups = []         # per magnet: element triplets/areas for the loss
+    _magnode_glob = np.array([], int)   # global DOF ids of all magnet nodes
+    if rotor_eddy:
+        _ones_r = np.ones(half["r"]["n"])
+        _areas_r_re = _triangle_areas(half["r"]["mesh"])
+        _mag_tags = [int(t) for t in half["r"]["cells"]
+                     if (matr0.get(int(t)) is not None
+                         and (abs(matr0[int(t)].Mx) + abs(matr0[int(t)].My)) > 0)]
+        _mag_area = {t: float(_areas_r_re[half["r"]["cells"][t]].sum())
+                     for t in _mag_tags}
+        _med_area = float(np.median(list(_mag_area.values()))) if _mag_area else 0.0
+        _magnode_loc = (np.unique(np.concatenate(
+            [half["r"]["mesh"].t[:, half["r"]["cells"][t]].ravel()
+             for t in _mag_tags])) if _mag_tags else np.array([], int))
+        _magnode_glob = _magnode_loc + nsn
+        _n_interior = _n_halves = 0
+        for t in _mag_tags:
+            idx = np.asarray(half["r"]["cells"][t], int)
+            tri = half["r"]["mesh"].t[:, idx]                  # (3, E) rotor-local
+            is_half = bool(_med_area > 0 and _mag_area[t] < 0.6 * _med_area)
+            _mag_groups.append({
+                "tri": np.searchsorted(_magnode_loc, tri),     # → magnet-node idx
+                "areas": _areas_r_re[idx].astype(float),
+                "half": is_half,
+            })
+            nds = np.unique(tri)
+            _rot_sig_nodes.append((nds + nsn, _sigma_mag_lib))
+            if is_half:
+                _n_halves += 1               # edge half-magnet → U = 0
+                continue
+            _n_interior += 1
+            # ∫J=0 constraint row — used only by the coupled eddy J-VIEW mode.
+            sb = Basis(half["r"]["mesh"], ElementTriP1(), elements=idx)
+            g_r = np.asarray((asm(_massform, sb) * _sigma_mag_lib) @ _ones_r)
+            _rot_con.append({"g": np.concatenate([np.zeros(nsn), g_r]),
+                             "S": float(g_r.sum()),
+                             "nodes": nds + nsn})
+        _sh_idx = np.asarray(half["r"]["cells"].get(int(DOM_SHAFT),
+                                                    np.array([], int)), int)
+        if _sh_idx.size:
+            _rot_sig_nodes.append((np.unique(half["r"]["mesh"].t[:, _sh_idx]) + nsn,
+                                   _sigma_shaft_lib))
+        log.info("rotor-eddy: %d interior magnets (∫J=0), %d edge halves (U=0) | "
+                 "σ_mag=%.3g σ_shaft=%.3g S/m (library)",
+                 _n_interior, _n_halves, _sigma_mag_lib, _sigma_shaft_lib)
+
     # ── Loss bookkeeping — iron Bertotti + magnet eddy from the ACTUAL B(t) ──
     # The sliding-band run gives a clean B(t) per element over a full electrical
     # period, so instead of the remesh path's single-snapshot Bertotti we use
@@ -3045,20 +3144,10 @@ def fem_transient_sliding_band(
     #     rotor tooth contributes only its ripple, not its standing flux)
     #   • magnet eddy     = σ·d²/12·⟨(dB/dt)²⟩  (honest slab loss, no empirical
     #     ripple-fraction fudge)
-    # The 20SW1200 Bertotti coefficients (kh,kc,ke) are fitted to the measured
-    # loss-vs-frequency curves, so this IS the frequency-dependent loss model.
-    from motor_ai_sim import materials as _mat_lib
-    from motor_ai_sim.config import get_material_assignments as _gma
-    _ma = _gma() or {}
-    try:
-        _steel_s = _mat_lib.get_steel(_ma.get("stator_core", "20SW1200"))
-        _steel_r = _mat_lib.get_steel(_ma.get("rotor_core",  "20SW1200"))
-    except Exception:
-        _steel_s = _steel_r = None
-    try:
-        _magnet_mat = _mat_lib.get_magnet(_ma.get("magnet")) if _ma.get("magnet") else None
-    except Exception:
-        _magnet_mat = None
+    # The Bertotti coefficients (kh,kc,ke) are FITTED to the material's measured
+    # loss-vs-frequency curves at runtime (materials.effective_bertotti), so this
+    # IS the real frequency-dependent loss model.  (Steel/magnet materials were
+    # already fetched above, before the σ-mass assembly.)
     _sigma_mag = float(getattr(_magnet_mat, "sigma", 0.0)) if _magnet_mat else 0.0
     # Magnet eddy slab dimension d: the AC field the magnet sees is the SLOT
     # RIPPLE, which varies TANGENTIALLY, so the eddy-current loop is limited by
@@ -3140,37 +3229,47 @@ def fem_transient_sliding_band(
     # conductors, so air/iron are unaffected.  A_prev follows the material points
     # (rotor mesh rotates rigidly), so it IS the previous-step field per DOF.
     if eddy:
-        # Stage 2: eddy in the STATOR COPPER (stationary ⇒ ∂A/∂t is the correct
-        # material derivative on the fixed mesh).  Each coil is a SOLID bar with
-        # imposed current: J = σ(−∂A/∂t + U_c), ∫J dA = I_c — a bordered system
-        # with one voltage DOF U_c per coil.  Rotor (magnets/shaft) is deferred
-        # (needs the moving-conductor convective term), so its eddy block = 0.
+        # Bordered magnetodynamic system (the coupled eddy J-VIEW mode).
+        #   stator copper → SOLID bars with imposed current (∫J dA = I_c);
+        #   + rotor magnets/shaft σ when rotor_eddy (∫J = 0 per interior
+        #     magnet; shaft + cut halves U = 0 by symmetry) so the J view
+        #     shows the rotor eddy currents too.
+        # The TRANSIENT loss path does NOT use this solve — magnet losses come
+        # from smoothed post-processing (see the rotor-eddy stage above).
         from scipy.sparse import bmat as _bmat, diags as _diags
         from scipy.sparse.linalg import spsolve as _spsolve
-        _zero_r = _csr(half["r"]["Msig"].shape)
-        _Minv_dt = _bd([half["s"]["Msig"], _zero_r]).tocsr() * (1.0 / dt)
+        _Ms_s = half["s"]["Msig"]
+        _Ms_r = half["r"]["Msig"] if rotor_eddy else _csr(half["r"]["Msig"].shape)
+        _Minv_dt = _bd([_Ms_s, _Ms_r]).tocsr() * (1.0 / dt)
         A_prev = np.zeros(n)
         _eddy_P = []          # field-based dissipation ∫σ(∂A/∂t)² per frame [W, sector]
-        _Gfull = _csr(np.column_stack([c["g"] for c in _coil_con])) if _coil_con else _csr((n, 0))
-        _Sdt   = np.array([c["S"] for c in _coil_con]) * dt
+        _cons = _coil_con + (_rot_con if rotor_eddy else [])
+        _Gfull = _csr(np.column_stack([c["g"] for c in _cons])) if _cons else _csr((n, 0))
+        _Sdt   = np.array([c["S"] for c in _cons]) * dt
+        _n_coil_con = len(_coil_con)
         _Iunit = np.array([c["Iunit"] for c in _coil_con])
         _phase = [c["phase"] for c in _coil_con]
 
         def _solve_eddy_constrained(Keff, rhs_field, Pro, outer_red, I_vec, A_prv):
             m = Pro.shape[1]
             KK = (Pro.T @ Keff @ Pro).tocsr()
-            Bred = (Pro.T @ _Gfull).tocsr()                 # m × nc
             rf = np.asarray(Pro.T @ rhs_field).ravel()      # m
             free = np.setdiff1d(np.arange(m), outer_red)
             KKff = KK[np.ix_(free, free)].tocsr()
+            if _Gfull.shape[1] == 0:                  # no conductors constrained
+                sol = _spsolve(KKff, rf[free])
+                A_red = np.zeros(m); A_red[free] = sol
+                return Pro @ A_red, np.zeros(0)
+            Bred = (Pro.T @ _Gfull).tocsr()                 # m × nc
             Bf = Bred[free, :].tocsr()
             cr = dt * I_vec - np.asarray(_Gfull.T @ A_prv).ravel()   # nc
             Mb = _bmat([[KKff, -Bf], [-Bf.T, _diags(_Sdt)]]).tocsr()
             sol = _spsolve(Mb, np.concatenate([rf[free], cr]))
             A_red = np.zeros(m); A_red[free] = sol[:free.size]
-            return Pro @ A_red, sol[free.size:]      # A , per-coil voltages U_c
+            return Pro @ A_red, sol[free.size:]      # A , per-conductor voltages U_c
 
     _field_snap = None       # eddy last-frame field snapshot (if return_field)
+    _hist_Am = []            # per-frame A on magnet nodes (loss post-processing)
     for k in range(n_total):
         theta = (k / n_total) * period_mech * n_periods
         m_shift = int(round(theta / spacing))
@@ -3214,12 +3313,15 @@ def fem_transient_sliding_band(
             K = _bd(blocks).tocsr()
             if eddy:
                 Keff = (K + _Minv_dt).tocsr()
-                # Coil current is imposed via the ∫J=I constraint, NOT a source,
-                # so the field RHS carries only the magnets + the eddy history.
-                rhs_field = np.concatenate([np.zeros(nsn), f_mag]) + _Minv_dt @ A_prev
-                I_vec = np.array([Ist[ph] for ph in _phase]) * _Iunit
-                A, U_coils = _solve_eddy_constrained(Keff, rhs_field, Pro,
-                                                     outer_red, I_vec, A_prev)
+                # Solid-bar coils: current imposed via the ∫J=I constraint,
+                # NOT a source — the RHS carries magnets + eddy history.
+                rhs_field = (np.concatenate([np.zeros(nsn), f_mag])
+                             + _Minv_dt @ A_prev)
+                I_vec = np.concatenate([
+                    np.array([Ist[ph] for ph in _phase]) * _Iunit,
+                    np.zeros(len(_cons) - _n_coil_con)])
+                A, U_cons = _solve_eddy_constrained(Keff, rhs_field, Pro,
+                                                    outer_red, I_vec, A_prev)
             else:
                 A = Pro @ _sksolve(*condense((Pro.T @ K @ Pro).tocsr(),
                                               Pro.T @ f, D=outer_red))
@@ -3238,32 +3340,41 @@ def fem_transient_sliding_band(
                     nu_new = 1.0 / (MU0 * np.maximum(mu_new, 1.0))
                     nu_el[hn][tag] = 0.5 * nu_el[hn][tag] + 0.5 * nu_new
         if eddy:
-            # Total copper Joule loss = ∫σ J²/σ² = ∫σ(−∂A/∂t + U_c)² over the bars.
-            # The applied voltage U_c cancels the large inductive −∂A/∂t, leaving
-            # the real DC + skin/proximity dissipation.
+            # Joule loss = ∫σ J²/σ² = ∫σ(−∂A/∂t + U_c)² over the conductors.
+            # The conductor voltage U_c cancels the large inductive −∂A/∂t,
+            # leaving the real dissipation.  Constrained conductors get their
+            # solved U_c; U=0 conductors (shaft, cut magnet halves) are pure
+            # J = −σ∂A/∂t by symmetry.
             Uvec = np.zeros(n)
-            for _ci, _c in enumerate(_coil_con):
-                Uvec[_c["nodes"]] = U_coils[_ci]
+            for _ci, _c in enumerate(_cons):
+                Uvec[_c["nodes"]] = U_cons[_ci]
             Ffld = -(A - A_prev) / dt + Uvec
             _eddy_P.append(float(Ffld @ (_Minv_dt @ Ffld)) * dt)   # ∫σ F² [W, sector]
             A_prev = A.copy()        # previous-step field for the σ·∂A/∂t term
+        if rotor_eddy and _magnode_glob.size:
+            # Magnet-node A history → smoothed post-processed eddy loss below.
+            _hist_Am.append(A[_magnode_glob].copy())
         # capture the converged per-element B for the loss integrals
         _Bxs, _Bys = _per_triangle_B(half["s"]["mesh"], A[:nsn])
         _Bxr, _Byr = _per_triangle_B(half["r"]["mesh"], A[nsn:])
         if eddy and return_field and k == n_total - 1:
             # Last-frame field snapshot for visualisation: A_z, per-element B,
-            # and the EDDY current density J = σ(−∂A/∂t + U_c) on the copper
-            # nodes (this is the genuinely-new field the eddy solve produces).
-            _cmask = np.zeros(n, dtype=bool)
-            for _c in _coil_con:
-                _cmask[_c["nodes"]] = True
+            # and the EDDY current density J = σ(−∂A/∂t + U_c) on every solid
+            # conductor (copper bars when eddy=True; magnets + shaft when
+            # rotor_eddy=True) — the genuinely-new field the eddy solve produces.
+            _sig_node = np.zeros(n)
+            if eddy:
+                for _c in _coil_con:
+                    _sig_node[_c["nodes"]] = _sig_cu_T
+            for _nds, _sg in _rot_sig_nodes:
+                _sig_node[_nds] = _sg
             _field_snap = {
                 "P_mm": (mesh_all.p * 1e3).copy(),                 # node coords [mm]
                 "T":    mesh_all.t.copy(),                         # triangles (3,nel)
                 "A":    A.copy(),                                  # nodal A_z [Wb/m]
                 "Bx":   np.concatenate([_Bxs, _Bxr]),              # per-elem B [T]
                 "By":   np.concatenate([_Bys, _Byr]),
-                "Jeddy": (_sig_cu_T * Ffld) * _cmask,              # nodal Cu eddy J [A/m^2]
+                "Jeddy": _sig_node * Ffld,                # nodal eddy J [A/m^2]
                 "tags": np.concatenate([np.asarray(ts), np.asarray(tr)]).astype(int),
                 "nsn":  int(nsn),
             }
@@ -3406,9 +3517,10 @@ def fem_transient_sliding_band(
         if mat is None or idx.size == 0 or not hx or np.asarray(hx[0]).size == 0:
             return np.zeros(n_total), 0.0
         X = np.asarray(hx); Y = np.asarray(hy)            # (N, E)
-        kh = float(getattr(mat, "core_loss_kh", 0.0))
-        kc = float(getattr(mat, "core_loss_kc", 0.0))
-        ke = float(getattr(mat, "core_loss_ke", 0.0))
+        # Maxwell-style coefficients: fitted from the material's MEASURED loss
+        # curves when present (relative-error-weighted NNLS over every (f,B)
+        # point), falling back to the YAML kh/kc/ke.  Real curves → real loss.
+        kh, kc, ke = _mat_lib.effective_bertotti(mat)
         sf = float(getattr(mat, "stacking_factor", 0.95))
         vol = areas_half[idx] * p.stack_length * sf       # (E,)
         dX = _angle_ddt_2d(X); dY = _angle_ddt_2d(Y)
@@ -3427,7 +3539,30 @@ def fem_transient_sliding_band(
     P_fe_series = _P_fe_t.tolist()
     P_fe_avg = float(np.mean(_P_fe_t))
 
-    if (_sigma_mag > 0.0 and _mag_idx.size and _hist_mx
+    if rotor_eddy and _hist_Am and _mag_groups:
+        # FIELD-BASED magnet eddy from the A(t) DISTRIBUTION (post-processed):
+        #   J_e = σ(−dA/dt|material + U_m),  U_m = per-magnet area-mean (∫J=0),
+        #   U = 0 for sector-cut halves (symmetry).  dA/dt uses the SAME
+        # smoothed angle-derivative as the B-field losses (_angle_ddt_2d), so
+        # the slip-merge jitter is filtered and the loss CONVERGES with step
+        # count — the raw in-loop derivative tripled going 24→72 steps.
+        # P(t) = Σ_magnets σ Σ_e (dA/dt_e − U_m)²·area_e × stack × NS.
+        _Am = np.asarray(_hist_Am, float)            # (N, n_magnodes)
+        _dAm = _angle_ddt_2d(_Am)                    # smoothed material dA/dt
+        _Pt = np.zeros(n_total)
+        for _mg in _mag_groups:
+            _dA_e = _dAm[:, _mg["tri"]].mean(axis=1)        # (N, E) elem-mean
+            _ar = _mg["areas"]
+            if _mg["half"]:
+                _F = _dA_e                                   # U = 0 (symmetry)
+            else:
+                _w = _ar / max(_ar.sum(), 1e-30)
+                _F = _dA_e - (_dA_e * _w[None, :]).sum(axis=1, keepdims=True)
+            _Pt += _sigma_mag_lib * np.sum(_F ** 2 * _ar[None, :], axis=1)
+        _P_mag_t = _declip(_Pt * p.stack_length * NS)
+        P_mag_series = _P_mag_t.tolist()
+        P_mag_avg = float(np.mean(_P_mag_t))
+    elif (_sigma_mag > 0.0 and _mag_idx.size and _hist_mx
             and np.asarray(_hist_mx[0]).size):
         Xm = np.asarray(_hist_mx); Ym = np.asarray(_hist_my)
         dXm = _angle_ddt_2d(Xm); dYm = _angle_ddt_2d(Ym)
@@ -3489,8 +3624,11 @@ def fem_transient_sliding_band(
         _hist_cx, _hist_cy, _coil_idx, _coil_cen, areas_s, _sigma_cu, _w_cu, _h_cu)
     # Solid-steel shaft: high μ → tiny skin depth → small loss (and little flux
     # reaches this deep).  Computed for completeness.
-    _sigma_shaft = 4.5e6          # carbon-steel conductivity [S/m]
-    _mu_r_shaft  = 200.0
+    # σ from the ASSIGNED shaft material (e.g. aluminium 6061 = 2.58e7 S/m —
+    # the old hardcoded carbon-steel 4.5e6 was 5.7× off); μ_r ≈ 1 for Al, but
+    # keep the steel default when the assigned material is magnetic steel.
+    _sigma_shaft = _sigma_shaft_lib
+    _mu_r_shaft  = 200.0 if _sigma_shaft < 1e7 else 1.0
     _r_shaft     = max(1e-3, float(getattr(p, "r_shaft_out",
                                            getattr(p, "r_rotor_in", 0.02)) or 0.02))
     _delta_sh    = math.sqrt(2.0 / (_sigma_shaft * _omega_e * MU0 * _mu_r_shaft))
@@ -3521,6 +3659,9 @@ def fem_transient_sliding_band(
     P_mech_avg = float(Tavg * 2.0 * math.pi * rpm / 60.0)
     return {
         "method": "sliding_band",
+        # 'field' = magnet/shaft losses from the σ·∂A/∂t magnetodynamic solve
+        # (per-magnet ∫J=0, library σ); 'slab' = classical d²/12 estimate.
+        "loss_model": ("field" if rotor_eddy else "slab"),
         "n_steps": n_total, "n_steps_per_period": int(n_steps_per_period),
         "n_periods": float(n_periods), "rpm": rpm, "f_elec_Hz": f_elec,
         "dt_s": dt, "T_period_s": (1.0 / f_elec if f_elec > 1e-9 else 0.0),
@@ -4058,9 +4199,9 @@ def fem_solve_for_sim(
         idx = np.where(mask)[0]
         if idx.size == 0 or mat is None:
             return 0.0
-        kh = float(getattr(mat, "core_loss_kh", 0.0))
-        kc = float(getattr(mat, "core_loss_kc", 0.0))
-        ke = float(getattr(mat, "core_loss_ke", 0.0))
+        # Maxwell-style: coefficients fitted from the material's MEASURED loss
+        # curves when present (see materials.fit_bertotti_from_curves), else YAML.
+        kh, kc, ke = _mat_lib.effective_bertotti(mat)
         sf = float(getattr(mat, "stacking_factor", 0.97))
         f  = freq
         B  = Bmag_tri[idx]

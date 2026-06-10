@@ -107,6 +107,8 @@ interface Props {
   // Forwards the latest transient-run summary up to the parent (SimulationPanel)
   // so it can be snapshotted by the "Save simulation" card.
   onSummary?:     (s: TransientSummary | null) => void;
+  // Field-based magnet/shaft eddy losses (vs slab estimate) — see TransientCharts.
+  fieldLosses?:   boolean;
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -148,7 +150,7 @@ function exportCSV(filename: string, rows: Record<string, number | string>[]) {
 }
 
 // ── main component ────────────────────────────────────────────────────────────
-const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_rms, pinnLosses, runNonce = 0, onBusyChange, steps = 12, fresh = false, onSummary }) => {
+const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_rms, pinnLosses, runNonce = 0, onBusyChange, steps = 12, fresh = false, onSummary, fieldLosses = true }) => {
   // Latest FEM solve payload — kept around so future siblings can reuse it.
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [_femPayload, setFemPayload] = React.useState<FemPayload | null>(null);
@@ -489,7 +491,7 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
       <FemFieldChart gamma_deg={gamma_deg} I_phase_rms={I_phase_rms}/>
 
       {/* ── Transient: T(t), P(t), V(t) — one FEM solve per time step ── */}
-      <TransientCharts gamma_deg={gamma_deg} I_phase_rms={I_phase_rms}
+      <TransientCharts gamma_deg={gamma_deg} I_phase_rms={I_phase_rms} fieldLosses={fieldLosses}
         steps={steps} runNonce={runNonce} fresh={fresh} onBusyChange={onBusyChange}
         onSummary={setTransientSummary}/>
 

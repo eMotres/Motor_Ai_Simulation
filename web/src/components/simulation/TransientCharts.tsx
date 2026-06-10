@@ -57,6 +57,9 @@ interface Props {
   steps?: number;
   // "Start fresh" → backend discards cached frames before recomputing.
   fresh?: boolean;
+  // Field-based magnet/shaft eddy losses (J = σ(−∂A/∂t + U) magnetodynamic
+  // solve, per-magnet ∫J=0, library σ) instead of the slab d²/12 estimate.
+  fieldLosses?: boolean;
 }
 
 function readMeshSetting<T>(key: string, def: T): T {
@@ -97,7 +100,7 @@ interface ProgressInfo {
   phase:     string;
 }
 
-const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onSummary, runNonce = 0, onBusyChange, steps = 12, fresh = false }) => {
+const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onSummary, runNonce = 0, onBusyChange, steps = 12, fresh = false, fieldLosses = true }) => {
   // `steps` (n_steps_per_period) is controlled from the left panel and
   // matches the animation viewer's n_frames so both hit the same backend
   // cache key (one solve, not two).
@@ -171,6 +174,9 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
       // decoupled from the Mesh-tab toggle, which now only controls the mesh
       // VISUALISATION, not the physics.
       sliding_band:       'true',
+      // Field-based magnet/shaft eddy losses (Ansys-style σ·∂A/∂t solve with
+      // per-magnet ∫J=0 and library σ) vs the classical slab estimate.
+      rotor_eddy:         String(fieldLosses),
       // Copper-loss physics: coil temperature → ρ_Cu(T); end-winding factor
       // (0 = auto-estimate from geometry) for the copper the 2-D field misses.
       coil_temp_c:        String(readSimSetting('coilTemp',   120.0)),

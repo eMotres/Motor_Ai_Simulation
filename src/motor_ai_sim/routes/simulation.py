@@ -1463,7 +1463,8 @@ def get_fem_eddy_field2d(
             mesh_size_mm=float(mesh_size_mm), min_size_mm=float(min_size_mm),
             outer_air_factor=float(outer_air_factor),
             n_sectors=int(n_sectors) if int(n_sectors) > 1 else 4,
-            coil_temp_c=float(coil_temp_c), eddy=True, return_field=True,
+            coil_temp_c=float(coil_temp_c), eddy=True, rotor_eddy=True,
+            return_field=True,
             component_mesh_mm=_comp_mesh)
     except Exception as e:
         log.exception("eddy field solve failed")
@@ -1868,6 +1869,7 @@ def get_fem_transient(
     coil_temp_c:         float = 120.0,   # ← copper temperature → ρ_Cu(T)
     end_winding_factor:  float = 0.0,     # ← 0 = auto-estimate from geometry
     component_mesh:      str   = "",      # ← JSON {comp: size_mm} per-part mesh size
+    rotor_eddy:          bool  = True,    # ← field-based magnet/shaft eddy losses
 ):
     """Transient FEM analysis — runs N solves per electrical period and
     returns time-resolved T(t), losses(t) and V_phase(t).
@@ -1895,6 +1897,7 @@ def get_fem_transient(
                    round(outer_air_factor, 2), int(n_sectors),
                    round(stator_fillet_mm, 2),
                    round(coil_temp_c, 1), round(end_winding_factor, 3),
+                   int(bool(rotor_eddy)),
                    tuple(sorted(_comp_mesh.items())))
         if not fresh and _sb_key in _fem_transient_cache:
             return _fem_transient_cache[_sb_key]
@@ -1915,6 +1918,7 @@ def get_fem_transient(
                 stator_fillet_mm=float(stator_fillet_mm),
                 coil_temp_c=float(coil_temp_c),
                 end_winding_factor=float(end_winding_factor),
+                rotor_eddy=bool(rotor_eddy),
                 component_mesh_mm=_comp_mesh)
             # ── Summary block (masses, loss split, KV, efficiency, specific
             # torque/power) so the Simulation values table renders — same shape

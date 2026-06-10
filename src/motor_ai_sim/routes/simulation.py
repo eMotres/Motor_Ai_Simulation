@@ -1824,17 +1824,29 @@ async def get_fem_transient_progress():
     p = _fem_transient_progress.get("current", {})
     if p.get("running") and p.get("ts_start", 0) > 0:
         import time as _t
-        elapsed = _t.time() - p["ts_start"]
-        step    = max(1, int(p.get("step", 0)))
-        total   = max(step, int(p.get("total", 0)))
-        per_step = elapsed / step
-        eta = per_step * max(0, total - step)
+        elapsed  = _t.time() - p["ts_start"]
+        raw_step = int(p.get("step", 0))
+        total    = max(1, int(p.get("total", 0)))
+        # Before the first frame completes (step 0 — the one-time mesh build
+        # + first solve) there is NO per-frame timing sample yet, so any ETA
+        # is a wild single-sample extrapolation that climbs with elapsed.
+        # Report ETA-unknown (0) instead of a misleading runaway estimate.
+        if raw_step <= 0:
+            return {
+                **p,
+                "elapsed_s":  round(elapsed, 1),
+                "eta_s":      0.0,
+                "per_step_s": 0.0,
+                "frac":       0.0,
+            }
+        per_step = elapsed / raw_step
+        eta = per_step * max(0, total - raw_step)
         return {
             **p,
             "elapsed_s": round(elapsed, 1),
             "eta_s":     round(eta, 1),
             "per_step_s": round(per_step, 2),
-            "frac":      round(step / total, 3),
+            "frac":      round(raw_step / total, 3),
         }
     return p
 
@@ -1907,7 +1919,18 @@ def get_fem_transient(
                    tuple(sorted(_comp_mesh.items())))
         if not fresh and _sb_key in _fem_transient_cache:
             return _fem_transient_cache[_sb_key]
+        # Serialise concurrent identical solves.  A duplicate request (shares the
+        # run_id) or a React dev double-invoke would otherwise run a SECOND full
+        # sliding-band solve in parallel AND clobber the shared progress global
+        # (the "Solving frame 0 / N" flash mid-run).  Acquire BEFORE touching
+        # progress; a twin waiting on the lock wakes straight into the
+        # freshly-populated cache instead of re-solving.
+        _fem_transient_lock.acquire()
         try:
+            # Re-check under the lock: a twin that finished while we waited has
+            # already populated the cache → return its result, don't re-solve.
+            if not fresh and _sb_key in _fem_transient_cache:
+                return _fem_transient_cache[_sb_key]
             # FAST sliding-band for EVERY symmetry (mesh once, slide the rotor).
             # Full (n_sectors=1) has no clean 360° slip mesh here, so it computes
             # the symmetry-EXACT sector (n=4) — which equals the full motor exactly
@@ -1915,17 +1938,37 @@ def get_fem_transient(
             # (genuine literal full disk) exists in fem_quasistatic_transient but is
             # ~10× slower (re-meshes per frame) — not used by default.
             from motor_ai_sim.simulation.fem_solver_2d import fem_transient_sliding_band
-            _sbres = fem_transient_sliding_band(
-                n_steps_per_period=int(n_steps_per_period), n_periods=float(n_periods),
-                gamma_deg=float(gamma_deg), I_phase_rms=float(I_phase_rms),
-                mesh_size_mm=float(mesh_size_mm), min_size_mm=float(min_size_mm),
-                outer_air_factor=float(outer_air_factor), gap_layers=float(gap_layers),
-                n_sectors=int(n_sectors) if int(n_sectors) > 1 else 4,
-                stator_fillet_mm=float(stator_fillet_mm),
-                coil_temp_c=float(coil_temp_c),
-                end_winding_factor=float(end_winding_factor),
-                rotor_eddy=bool(rotor_eddy),
-                component_mesh_mm=_comp_mesh)
+            import time as _t
+            # Per-frame progress so the web UI's "Solving frame X of N" + ETA
+            # advance during a sliding-band run.  The remesh path used to drive
+            # this global; now that the field animation is opt-in, the solve
+            # itself must report.  The callback fires at the TOP of each frame
+            # with the solver's true (snapped) frame count.
+            _est_total = max(1, int(round(float(n_steps_per_period) * float(n_periods))))
+            _fem_transient_progress["current"] = {
+                "running": True, "step": 0, "total": _est_total,
+                "elapsed_s": 0.0, "eta_s": 0.0, "ts_start": _t.time(),
+                "phase": "fem-solve (sliding-band)",
+            }
+            def _sb_progress(_done, _total):
+                _cur = _fem_transient_progress["current"]
+                _cur["step"] = int(_done)
+                _cur["total"] = int(_total)
+            try:
+                _sbres = fem_transient_sliding_band(
+                    n_steps_per_period=int(n_steps_per_period), n_periods=float(n_periods),
+                    gamma_deg=float(gamma_deg), I_phase_rms=float(I_phase_rms),
+                    mesh_size_mm=float(mesh_size_mm), min_size_mm=float(min_size_mm),
+                    outer_air_factor=float(outer_air_factor), gap_layers=float(gap_layers),
+                    n_sectors=int(n_sectors) if int(n_sectors) > 1 else 4,
+                    stator_fillet_mm=float(stator_fillet_mm),
+                    coil_temp_c=float(coil_temp_c),
+                    end_winding_factor=float(end_winding_factor),
+                    rotor_eddy=bool(rotor_eddy),
+                    component_mesh_mm=_comp_mesh,
+                    progress_cb=_sb_progress)
+            finally:
+                _fem_transient_progress["current"]["running"] = False
             # ── Summary block (masses, loss split, KV, efficiency, specific
             # torque/power) so the Simulation values table renders — same shape
             # as the remesh path produces.
@@ -1986,10 +2029,14 @@ def get_fem_transient(
                 log.warning("SB summary build failed: %s", _se)
             _fem_transient_cache[_sb_key] = _sbres
             return _sbres
+        except HTTPException:
+            raise
         except Exception as _e:
             log.exception("sliding-band transient failed")
             raise HTTPException(status_code=500,
                                 detail=f"sliding-band transient failed: {_e}")
+        finally:
+            _fem_transient_lock.release()
 
     key = (
         int(n_steps_per_period), round(n_periods, 2),

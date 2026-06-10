@@ -2808,8 +2808,10 @@ def fem_transient_sliding_band(
     geo_override: dict = None,
     eddy: bool = False,          # opt-in: time-coupled σ·∂A/∂t eddy-current solve
     rotor_eddy: bool = False,    # field-based magnet/shaft eddy losses (stranded coils)
+    demag: bool = False,         # opt-in: per-element irreversible demagnetisation
     component_mesh_mm: dict = None,  # per-part target element size {comp: mm}
     return_field: bool = False,  # eddy: also return a last-frame field snapshot
+    progress_cb=None,            # optional callback(done:int, total:int) per frame
 ) -> dict:
     """Sliding-band transient: mesh the stator + rotor halves ONCE, then sweep
     the rotor by shifting the slip-ring node pairing (no remeshing) so the
@@ -2944,6 +2946,9 @@ def fem_transient_sliding_band(
     def _fdy(v, w): return _grad(v)[1]
     @LinearForm
     def _fdx(v, w): return _grad(v)[0]
+    @LinearForm
+    def _msrc(v, w):            # magnet source with PER-ELEMENT M (P0 fields):
+        return w["mx"] * _grad(v)[1] - w["my"] * _grad(v)[0]   # ∫(Mx·∂v/∂y − My·∂v/∂x)
 
     # ── Pre-assemble per-tag stiffness K0 + constant magnet source ───────
     matr0 = build_materials(_currents(0.0), dom.winding_layout,
@@ -3005,14 +3010,25 @@ def fem_transient_sliding_band(
                 Msig = Msig + asm(_massform, sb) * _sig
         half[name] = dict(mesh=mesh, b=b, n=nh, K0=K0, cells=cells,
                           Msig=Msig.tocsr())
-    # magnet source (rotor half, constant — magnets fixed at angle 0)
-    f_mag = np.zeros(half["r"]["n"])
+    # ── magnet source (rotor half, constant — magnets fixed at angle 0) ──
+    # Built from a PER-ELEMENT magnetisation field (P0) so it can be de-rated
+    # element-by-element by the demag pass below (_br_glob, 1.0 = full Br).
+    # With _br_glob ≡ 1 this is numerically identical to the old per-tag sum.
+    _rb  = Basis(half["r"]["mesh"], ElementTriP1())
+    _rb0 = _rb.with_element(ElementTriP0())     # P0: dof == rotor element id
+    _nt_r = half["r"]["mesh"].t.shape[1]
+    _Mx_glob = np.zeros(_nt_r); _My_glob = np.zeros(_nt_r)
     for tag, idx in half["r"]["cells"].items():
         m = matr0.get(int(tag))
         if m is None or (abs(m.Mx) + abs(m.My)) <= 0:
             continue
-        sb = Basis(half["r"]["mesh"], ElementTriP1(), elements=idx)
-        f_mag += asm(_fdy, sb) * m.Mx - asm(_fdx, sb) * m.My
+        _Mx_glob[idx] = m.Mx; _My_glob[idx] = m.My
+    def _build_fmag(_br):
+        return asm(_msrc, _rb,
+                   mx=_rb0.interpolate(_Mx_glob * _br),
+                   my=_rb0.interpolate(_My_glob * _br))
+    _br_glob = np.ones(_nt_r)        # per-element Br factor (demag de-rating)
+    f_mag = _build_fmag(_br_glob)
     # per-phase unit-current stator source vectors
     f_coil = {'A': np.zeros(half["s"]["n"]), 'B': np.zeros(half["s"]["n"]),
               'C': np.zeros(half["s"]["n"])}
@@ -3269,9 +3285,125 @@ def fem_transient_sliding_band(
             A_red = np.zeros(m); A_red[free] = sol[:free.size]
             return Pro @ A_red, sol[free.size:]      # A , per-conductor voltages U_c
 
+    # ── Demagnetisation pre-pass (opt-in) ────────────────────────────────
+    # Sweep the rotor over the WHOLE period at full Br, tracking the worst
+    # (most negative) demagnetising field H·M̂ at EVERY magnet element.  Any
+    # element whose worst H crosses the material BH-curve knee is de-rated
+    # along the recoil line (irreversible) → _br_glob.  The measurement loop
+    # below then runs with the weakened magnets, so the reported torque /
+    # back-EMF / losses carry the demag penalty — Ansys-style, per element.
+    _demag_coef = None
+    _demag_report = []
+    if demag and _mag_idx.size:
+        _dm = []
+        for _tag, _idx in half["r"]["cells"].items():
+            _m = matr0.get(int(_tag))
+            if _m is None or (abs(_m.Mx) + abs(_m.My)) <= 0:
+                continue
+            _bh = getattr(_m, "bh_curve", None)
+            if not _bh or len(_bh) < 2:
+                continue
+            _Mm = math.hypot(_m.Mx, _m.My)
+            _knee = _bh[1][0] if _bh[0][1] <= 0 else _bh[0][0]
+            _hs = np.array([pt[0] for pt in _bh], float)
+            _bs = np.array([pt[1] for pt in _bh], float)
+            _o = np.argsort(_hs)
+            _dm.append(dict(idx=np.asarray(_idx, int), Mx=_m.Mx, My=_m.My,
+                            Mm=_Mm, knee=float(_knee), mu_r=float(_m.mu_r),
+                            hs=_hs[_o], bs=_bs[_o], Br0=_Mm * MU0, tag=int(_tag)))
+        _Hmin = np.full(_nt_r, np.inf)
+        for k in range(n_total):
+            if progress_cb is not None:
+                try: progress_cb(k, 2 * n_total)
+                except Exception: pass
+            theta = (k / n_total) * period_mech * n_periods
+            m_shift = int(round(theta / spacing))
+            Ist = _currents(m_shift * spacing)
+            f = np.concatenate([(Ist['A'] * f_coil['A'] + Ist['B'] * f_coil['B']
+                                 + Ist['C'] * f_coil['C']), f_mag])
+            suf = _SignedUF(n)
+            for a, b in zip(Mn, Sn):
+                suf.union(int(b), int(a), _bc_sign)
+            for kk in range(Nring):
+                j = kk + m_shift; sg = 1
+                while j > Nring - 1: j -= (Nring - 1); sg *= _bc_sign
+                while j < 0:         j += (Nring - 1); sg *= _bc_sign
+                suf.union(int(rring[kk] + nsn), int(sring[j]), sg)
+            roots = [suf.find(i) for i in range(n)]
+            rid = np.array([r for r, _ in roots]); rsg = np.array([s for _, s in roots], float)
+            uniq, inv = np.unique(rid, return_inverse=True)
+            Pro = _coo((rsg, (np.arange(n), inv)), shape=(n, uniq.size)).tocsr()
+            outer_red = np.unique(inv[outer_nodes])
+            for hn in ("s", "r"):
+                for tag in sb_sat[hn]:
+                    nu_el[hn][tag][:] = 1.0 / (MU0 * max(mu0[hn].get(tag, 1.0), 1.0))
+            A = np.zeros(n)
+            for it in range(nonlinear_iterations):
+                blocks = []
+                for hn in ("s", "r"):
+                    h = half[hn]; K = K_const[hn].copy()
+                    for tag, _sbi in sb_sat[hn].items():
+                        b0 = b0_sat[hn][tag]; nf = b0.zeros()
+                        nf[h["cells"][tag]] = nu_el[hn][tag]
+                        K = K + asm(_stiff_nu, _sbi, nu=b0.interpolate(nf))
+                    blocks.append(K)
+                K = _bd(blocks).tocsr()
+                A = Pro @ _sksolve(*condense((Pro.T @ K @ Pro).tocsr(),
+                                             Pro.T @ f, D=outer_red))
+                for hn, off in (("s", 0), ("r", nsn)):
+                    h = half[hn]
+                    Bx, By = _per_triangle_B(h["mesh"], A[off:off + h["n"]])
+                    Bm = np.sqrt(Bx ** 2 + By ** 2)
+                    for tag, curve in sat_bh[hn].items():
+                        idx = h["cells"][tag]
+                        if idx.size == 0: continue
+                        mu_new = _mu_r_from_bh_vec(curve, Bm[idx])
+                        nu_new = 1.0 / (MU0 * np.maximum(mu_new, 1.0))
+                        nu_el[hn][tag] = 0.5 * nu_el[hn][tag] + 0.5 * nu_new
+            _Bxr, _Byr = _per_triangle_B(half["r"]["mesh"], A[nsn:])
+            for _d in _dm:
+                _ix = _d["idx"]
+                _BdotM = _Bxr[_ix] * _d["Mx"] + _Byr[_ix] * _d["My"]
+                _H = _BdotM / (MU0 * _d["Mm"]) - _d["Mm"]     # full strength
+                _Hmin[_ix] = np.minimum(_Hmin[_ix], _H)
+        for _d in _dm:
+            _ix = _d["idx"]; _H = _Hmin[_ix]
+            _bad = _H < _d["knee"]
+            _wi = int(np.argmin(_H)); _hmin = float(_H[_wi])
+            _prox = _hmin / _d["knee"] if _d["knee"] < 0 else 0.0
+            if np.any(_bad):
+                _Bop = np.interp(_H[_bad], _d["hs"], _d["bs"])
+                _Brn = _Bop - _d["mu_r"] * MU0 * _H[_bad]
+                _ratio = np.clip(_Brn / max(_d["Br0"], 1e-12), 0.0, 1.0)
+                _br_glob[_ix[_bad]] = np.minimum(_br_glob[_ix[_bad]], _ratio)
+            if _prox > 0.85:
+                _demag_report.append({
+                    "magnet_index": int(_d["tag"] - DOM_MAG_BASE),
+                    "H_min_kA_per_m": round(_hmin * 1e-3, 1),
+                    "H_knee_kA_per_m": round(_d["knee"] * 1e-3, 1),
+                    "knee_proximity": round(_prox, 2),
+                    "demagnetised": bool(_prox > 1.0),
+                    "Br_factor": round(float(np.min(_br_glob[_ix])), 3),
+                })
+        f_mag = _build_fmag(_br_glob)     # weakened magnets for the measurement pass
+        _nst = int(Tts.shape[1])
+        _demag_coef = np.ones(int(mesh_all.t.shape[1]))
+        _demag_coef[_nst:] = _br_glob
+        log.warning("demag pre-pass: %d/%d magnet elems de-rated, min Br_factor %.3f",
+                    int(np.sum(_br_glob < 0.999)), int(_mag_idx.size), float(_br_glob.min()))
+
     _field_snap = None       # eddy last-frame field snapshot (if return_field)
     _hist_Am = []            # per-frame A on magnet nodes (loss post-processing)
+    # When the demag pre-pass ran, the measurement pass is the SECOND half of
+    # the work — continue the progress counter so the UI bar doesn't reset.
+    _prog_off = n_total if (demag and _mag_idx.size) else 0
+    _prog_tot = 2 * n_total if (demag and _mag_idx.size) else n_total
     for k in range(n_total):
+        if progress_cb is not None:
+            try:
+                progress_cb(_prog_off + k, _prog_tot)
+            except Exception:
+                pass
         theta = (k / n_total) * period_mech * n_periods
         m_shift = int(round(theta / spacing))
         theta_eff = m_shift * spacing
@@ -3688,6 +3820,11 @@ def fem_transient_sliding_band(
         "end_winding_factor": float(_k_end_used),
         "T_harm_order": T_harm_order, "T_harm_amp": T_harm_amp,
         "field": _field_snap,
+        # Demagnetisation (populated only when demag=True): per-element Br
+        # factor over the FULL stitched mesh (1.0 = full strength), plus the
+        # per-magnet worst-cell report consumed by the UI panel/% map.
+        "demag_coef_per_tri": (_demag_coef.tolist() if _demag_coef is not None else None),
+        "demag_report": _demag_report,
     }
 
 

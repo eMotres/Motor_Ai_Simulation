@@ -333,12 +333,25 @@ const MeshPanel: React.FC = () => {
   // SAME sizes (see readComponentMesh() in the simulation store).
   const [componentMesh, setComponentMesh] =
     usePersisted<Record<string, number>>('componentMesh', {});
-  const setCompSize = (k: string, v: number) =>
+  // Raw text being typed per field.  The numeric store (componentMesh) only
+  // keeps positive values, so a controlled type="number" input ate any sub-1
+  // entry: typing "0.5" fires onChange with "0" first → parses to 0 → key
+  // deleted → field snaps back to empty, making a value like Wire-Width/2
+  // (~0.5 mm) impossible to enter.  Hold the raw string here and commit to
+  // componentMesh only when it parses to > 0; the field shows the draft.
+  const [compDraft, setCompDraft] = useState<Record<string, string>>({});
+  const setCompSize = (k: string, raw: string) => {
+    const clean = raw.replace(/[^0-9.]/g, '');
+    setCompDraft(prev => ({ ...prev, [k]: clean }));
+    const v = parseFloat(clean);
     setComponentMesh(prev => {
       const next = { ...prev };
-      if (!v || v <= 0) delete next[k]; else next[k] = v;
+      if (clean === '' || !isFinite(v) || v <= 0) delete next[k];
+      else next[k] = v;
       return next;
     });
+  };
+  const resetCompSizes = () => { setComponentMesh({}); setCompDraft({}); };
   // Only positive sizes reach the backend; "{}" means global everywhere.
   const componentMeshJson = JSON.stringify(
     Object.fromEntries(Object.entries(componentMesh).filter(([, v]) => v > 0)));
@@ -361,7 +374,9 @@ const MeshPanel: React.FC = () => {
   //           torque sweep solve on).
   // Default = solver mesh, so "Mesh" shows what actually runs.  (New
   // localStorage key so the default takes effect even for older sessions.)
-  const [solverMesh,  setSolverMesh]  = usePersisted<boolean>('showSolverMesh', true);
+  // The Mesh tab always renders the REAL transient (sliding-band) solver mesh.
+  // The static single-mesh view was retired — we work only with the transient.
+  const solverMesh = true;
   const [femMesh,     setFemMesh]     = useState<FemMesh | null>(null);
   const [femLoading,  setFemLoading]  = useState<boolean>(false);
   const [femError,    setFemError]    = useState<string | null>(null);
@@ -696,7 +711,7 @@ const MeshPanel: React.FC = () => {
                   </Tooltip>
                 </Typography>
                 {Object.keys(componentMesh).length > 0 && (
-                  <Chip label="reset" size="small" onClick={() => setComponentMesh({})}
+                  <Chip label="reset" size="small" onClick={resetCompSizes}
                     sx={{ fontSize: 10, height: 18, bgcolor: '#3f1d1d', color: '#fca5a5',
                           cursor: 'pointer' }}/>
                 )}
@@ -708,10 +723,10 @@ const MeshPanel: React.FC = () => {
                       {label}
                     </Typography>
                     <TextField
-                      type="number" size="small" placeholder="auto"
-                      value={componentMesh[key] ?? ''}
-                      onChange={e => setCompSize(key, parseFloat(e.target.value))}
-                      inputProps={{ step: 0.1, min: 0, style: {
+                      type="text" size="small" placeholder="auto"
+                      value={compDraft[key] ?? (componentMesh[key]?.toString() ?? '')}
+                      onChange={e => setCompSize(key, e.target.value)}
+                      inputProps={{ inputMode: 'decimal', style: {
                         padding: '2px 6px', fontSize: 11, width: 52,
                         color: '#e2e8f0', textAlign: 'right' } }}
                       sx={{ '& .MuiOutlinedInput-root': { bgcolor: '#0f172a',
@@ -722,34 +737,19 @@ const MeshPanel: React.FC = () => {
               </Box>
             </Box>
 
-            {/* Which mesh is DRAWN — the real transient solver mesh vs the
-                single-mesh static/viewer mesh.  Prominent, since it changes
-                what "the mesh" means. */}
-            <Box sx={{ border: '1px solid', borderColor: solverMesh ? '#8b5cf6' : '#1e293b',
-              borderRadius: 1, p: 1, bgcolor: solverMesh ? '#1a1633' : 'transparent' }}>
+            {/* The Mesh tab always renders the REAL transient (sliding-band)
+                solver mesh.  The static single-mesh view was retired. */}
+            <Box sx={{ border: '1px solid', borderColor: '#8b5cf6',
+              borderRadius: 1, p: 1, bgcolor: '#1a1633' }}>
               <Typography sx={{ fontSize: 11, fontWeight: 700, color: '#a78bfa',
-                letterSpacing: '0.05em', textTransform: 'uppercase', mb: 0.5 }}>
-                Mesh shown
-                <Tooltip title="SOLVER (sliding-band): the ACTUAL mesh the transient solves on — stator and rotor meshed separately, iron clamped to 2 mm, air-gap floor 0.1 mm, plus the 1008-node slip ring in the gap (the dotted chain mid-gap). Rotate the rotor-angle slider to see it slide as a rigid body. STATIC (single): the one-piece mesh the static field/torque-sweep solve on." placement="right">
+                letterSpacing: '0.05em', textTransform: 'uppercase', mb: 0.3 }}>
+                Transient solver mesh (sliding-band)
+                <Tooltip title="The ACTUAL mesh the transient solves on — stator and rotor meshed separately, iron clamped to 2 mm, air-gap floor 0.1 mm, plus the 1008-node slip ring in the gap (the dotted chain mid-gap). Rotate the rotor-angle slider to see it slide as a rigid body." placement="right">
                   <span style={{ color: '#475569', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
                 </Tooltip>
               </Typography>
-              <ToggleButtonGroup
-                value={solverMesh ? 'solver' : 'static'} exclusive size="small" fullWidth
-                onChange={(_, v) => v && setSolverMesh(v === 'solver')}
-                sx={{ width: '100%',
-                  '& .MuiToggleButton-root': { flex: 1, py: 0.3,
-                  fontSize: 10.5, color: '#64748b', borderColor: '#1e293b',
-                  textTransform: 'none',
-                  '&.Mui-selected': { color: '#c4b5fd', bgcolor: '#312e5f',
-                    borderColor: '#8b5cf6' } } }}>
-                <ToggleButton value="solver">Transient solver (sliding-band)</ToggleButton>
-                <ToggleButton value="static">Static (single)</ToggleButton>
-              </ToggleButtonGroup>
-              <Typography sx={{ fontSize: 10, color: solverMesh ? '#7c3aed' : '#475569', mt: 0.4 }}>
-                {solverMesh
-                  ? 'REAL transient mesh (iron≤2 mm, gap≤0.1 mm, 1008-node slip ring). Sweep Rotor angle → rotor slides rigidly.'
-                  : 'Single-piece mesh used by the static field + torque sweep.'}
+              <Typography sx={{ fontSize: 10, color: '#7c3aed' }}>
+                REAL transient mesh (iron≤2 mm, gap≤0.1 mm, 1008-node slip ring). Sweep Rotor angle → rotor slides rigidly.
               </Typography>
             </Box>
 

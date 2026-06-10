@@ -637,6 +637,22 @@ def _build_sliding_band_meshes(
     """
     polys_s, polys_r = _split_polys_for_sliding_band(polys)
 
+    # ── Iron/magnet quality floor: default the iron + magnet element size to
+    # min(global, 2 mm) unless the user set their own per-part value.  The
+    # transient's torque quality is governed by the iron discretisation —
+    # at a 4 mm global size the teeth get ~2 elements and the per-tooth /
+    # per-pocket mesh asymmetry shows up as parasitic low-order torque
+    # ripple (was 27 N·m pk-pk at I=0 on the 150 mm motor; ~8 with 2 mm
+    # iron).  This restores the original "iron ≤ 2 mm" behaviour as a
+    # VISIBLE per-part default (the Mesh tab renders these same meshes), and
+    # the user can still override any part explicitly in the Mesh tab.
+    component_mesh_mm = dict(component_mesh_mm or {})
+    _iron_cap = min(float(mesh_size_mm), 2.0)
+    for _part in ("stator", "rotor", "magnet"):
+        _v = component_mesh_mm.get(_part)
+        if _v is None or not (_v > 0):
+            component_mesh_mm[_part] = _iron_cap
+
     # Slip-ring radius (mm) — force BOTH halves to keep an identical,
     # equally-spaced node ring there (transfinite) so they merge by node
     # identity when the rotor is rotated by an integer node step.
@@ -1580,10 +1596,19 @@ def build_mesh_from_polygons(polys: dict,
                     _bg_fields.append(_cf2)
                     _applied.append((_ckey, _csize, len(_surfs)))
                 if _applied:
-                    # lower the floor so a requested fine size isn't clamped up
+                    # lower the floor so a requested fine size isn't clamped up.
+                    # NEVER RAISE it: the air-gap field above may have already
+                    # dropped MeshSizeMin below min_size_mm so the gap fits its
+                    # (gap/2)/layers rows — overwriting that with a coarser
+                    # component size clamps the gap up and shreds the layering
+                    # (ragged gap mesh → noisy Arkkio torque, fake low-order
+                    # "cogging" — 96 % ripple on the 150 mm motor).
                     _smallest = min(s for _, s, _ in _applied)
+                    _cur_min = gmsh.option.getNumber("Mesh.MeshSizeMin")
+                    if _cur_min <= 0:
+                        _cur_min = min_size_mm
                     gmsh.option.setNumber("Mesh.MeshSizeMin",
-                                          min(min_size_mm, _smallest))
+                                          min(_cur_min, min_size_mm, _smallest))
                     gmsh.option.setNumber("Mesh.MeshSizeExtendFromBoundary", 0)
                     log.info("per-component mesh sizes: %s",
                              ", ".join(f"{c}={s}mm({n} surf)"
@@ -1623,6 +1648,59 @@ def build_mesh_from_polygons(polys: dict,
                          _n_ring, _rs)
             except Exception as _e:
                 log.warning("slip transfinite skipped: %s", _e)
+
+        # ── Sector-cut periodicity: mesh cut B as the ROTATED COPY of cut A ──
+        # gmsh meshes the two radial cut lines independently, so their node
+        # distributions differ (different counts / positions, mismatch up to
+        # ~0.8 mm).  The (anti-)periodic BC then merges NON-coincident DOFs —
+        # a hard constraint between points up to a millimetre apart — which
+        # injects a systematic field error at the cuts.  As the poles slide
+        # past the cut this error modulates with rotor position → parasitic
+        # low-order (1–4/period) torque ripple, ~25 N·m pk-pk at I=0 on the
+        # 150 mm motor.  setPeriodic forces gmsh to COPY the master-cut mesh
+        # onto the slave cut (rotated) → node-matched cuts, exact BC pairing.
+        if n_sectors and int(n_sectors) > 1:
+            try:
+                _phi = 2.0 * math.pi / int(n_sectors)
+                _cph, _sph = math.cos(_phi), math.sin(_phi)
+                _tolc = 1e-4          # mm — OCC noise ≪ this ≪ any feature
+                def _on_ray(pts, ux, uy):
+                    for (px, py) in pts:
+                        if abs(px * uy - py * ux) > _tolc:   # distance to line
+                            return False
+                        if (px * ux + py * uy) < -_tolc:     # wrong half-line
+                            return False
+                    return True
+                _cutA, _cutB = [], []          # (radial midpoint, curve tag)
+                for (_d, _ct) in gmsh.model.getEntities(1):
+                    _lo, _hi = gmsh.model.getParametrizationBounds(1, _ct)
+                    _pts = []
+                    for _f in (0.0, 0.5, 1.0):
+                        _tv = _lo[0] + _f * (_hi[0] - _lo[0])
+                        _xyz = gmsh.model.getValue(1, _ct, [_tv])
+                        _pts.append((_xyz[0], _xyz[1]))
+                    _rm = math.hypot(_pts[1][0], _pts[1][1])
+                    if _on_ray(_pts, 1.0, 0.0):
+                        _cutA.append((_rm, _ct))
+                    elif _on_ray(_pts, _cph, _sph):
+                        _cutB.append((_rm, _ct))
+                _cutA.sort(); _cutB.sort()
+                if _cutA and len(_cutA) == len(_cutB):
+                    _aff = [_cph, -_sph, 0.0, 0.0,
+                            _sph,  _cph, 0.0, 0.0,
+                            0.0,   0.0,  1.0, 0.0,
+                            0.0,   0.0,  0.0, 1.0]
+                    gmsh.model.mesh.setPeriodic(
+                        1, [t for _, t in _cutB], [t for _, t in _cutA], _aff)
+                    log.info("sector cuts: %d curve pairs set periodic "
+                             "(rot %.1f°) → node-matched cut meshes",
+                             len(_cutA), math.degrees(_phi))
+                else:
+                    log.warning("sector cuts NOT matched (%d vs %d curves) — "
+                                "cut meshes may disagree node-wise",
+                                len(_cutA), len(_cutB))
+            except Exception as _e:
+                log.warning("sector-cut periodicity skipped: %s", _e)
 
         gmsh.model.mesh.generate(2)
 
@@ -3595,13 +3673,22 @@ def fem_transient_sliding_band(
         # node-to-node slip-merge noise is high-frequency vs the physical slot
         # ripple (~1–2 cycles per electrical period); low-pass B(θ) on the node
         # grid before differentiating so dB/dθ shows ripple, not merge jitter.
+        #
+        # PERIODIC handling: the sweep covers whole electrical period(s), so
+        # B(θ) wraps — sample U is sample 0 again (the standard core-loss
+        # assumption; exact for the area-integrated losses).  Non-periodic
+        # edges (savgol mode="interp" + one-sided np.gradient) extrapolated at
+        # both ends and spiked P_fe/P_mag on the FIRST and LAST frames.
         U = uniq.size
         if U >= 7:
             from scipy.signal import savgol_filter as _sg
             w = min(max(5, (U // 8) * 2 + 1), U if U % 2 == 1 else U - 1)
             if w >= 5:
-                Bu = _sg(Bu, w, 3, axis=0, mode="interp")
-        dBdt_u = np.gradient(Bu, theta_u, axis=0) * _omega_mech
+                Bu = _sg(Bu, w, 3, axis=0, mode="wrap")
+        # Periodic central difference on the uniform node grid (no edges).
+        _step = float(theta_u[1] - theta_u[0]) if U > 1 else _spacing_rad
+        dBdt_u = (np.roll(Bu, -1, axis=0) - np.roll(Bu, 1, axis=0)) \
+                 / (2.0 * _step) * _omega_mech
         pos = np.searchsorted(uniq, _m_arr)                  # frame → unique idx
         return dBdt_u[pos]
 

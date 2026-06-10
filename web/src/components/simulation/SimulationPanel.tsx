@@ -850,20 +850,23 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
             <Typography sx={{ fontSize: 12, fontWeight: 700, color: '#e2e8f0' }}>
               Save this simulation
             </Typography>
-            <Typography sx={{ fontSize: 10, color: '#64748b' }}>
-              {lastSummary
-                ? `T_avg = ${lastSummary.T_em_avg_Nm.toFixed(1)} N·m · ripple = ${lastSummary.T_ripple_pct.toFixed(1)} % · η = ${(lastSummary.efficiency * 100).toFixed(1)} % → snapshot for the Compare tab`
-                : 'Run a simulation first, then snapshot it for side-by-side comparison'}
+            <Typography sx={{ fontSize: 10, color: simBusy ? '#fbbf24' : '#64748b' }}>
+              {simBusy
+                ? 'Simulation running — Save enables when it finishes'
+                : lastSummary
+                  ? `T_avg = ${lastSummary.T_em_avg_Nm.toFixed(1)} N·m · ripple = ${lastSummary.T_ripple_pct.toFixed(1)} % · η = ${(lastSummary.efficiency * 100).toFixed(1)} % → snapshot for the Compare tab`
+                  : 'Run a simulation first, then snapshot it for side-by-side comparison'}
             </Typography>
           </Box>
           <TextField size="small" placeholder="name (e.g. baseline 1/2)"
             value={saveName} onChange={e => setSaveName(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter') saveSimulation(); }}
+            onKeyDown={e => { if (e.key === 'Enter' && !simBusy) saveSimulation(); }}
+            disabled={simBusy}
             sx={{ width: 220 }} inputProps={{ style: { fontSize: 12 } }} />
           <Button variant="contained" onClick={saveSimulation}
-            disabled={!lastSummary || saveBusy} startIcon={<SaveIcon />}
+            disabled={!lastSummary || saveBusy || simBusy} startIcon={<SaveIcon />}
             sx={{ textTransform: 'none', bgcolor: '#2563eb', '&:hover': { bgcolor: '#1d4ed8' } }}>
-            {saveBusy ? 'Saving…' : 'Save'}
+            {saveBusy ? 'Saving…' : simBusy ? 'Running…' : 'Save'}
           </Button>
           {saveMsg && (
             <Typography sx={{ fontSize: 11, color: saveMsg.startsWith('✓') ? '#4ade80' : '#fca5a5' }}>

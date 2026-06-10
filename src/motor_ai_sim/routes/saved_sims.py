@@ -53,6 +53,10 @@ class SaveSimRequest(BaseModel):
     results: Dict[str, Any] = Field(default_factory=dict)  # FEM result summary
 
 
+class RenameRequest(BaseModel):
+    name: str
+
+
 @router.get("/saved")
 def list_saved():
     """All saved simulation snapshots (newest first)."""
@@ -75,6 +79,20 @@ def save_sim(req: SaveSimRequest):
         items.insert(0, entry)           # newest first
         _save(items)
     return entry
+
+
+@router.patch("/saved/{sim_id}")
+def rename_sim(sim_id: str, req: RenameRequest):
+    """Rename one saved snapshot."""
+    new_name = (req.name or "untitled").strip()[:80] or "untitled"
+    with _LOCK:
+        items = _load()
+        hit = next((s for s in items if s.get("id") == sim_id), None)
+        if hit is None:
+            raise HTTPException(status_code=404, detail=f"sim '{sim_id}' not found")
+        hit["name"] = new_name
+        _save(items)
+    return {"status": "ok", "id": sim_id, "name": new_name}
 
 
 @router.delete("/saved/{sim_id}")

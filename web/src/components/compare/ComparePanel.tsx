@@ -1,21 +1,26 @@
 /**
- * ComparePanel — "Compare" tab.
+ * ComparePanel — "Compare" tab.  Two stacked (horizontal-split) sections:
  *
- * Lists every saved simulation snapshot (saved from the Simulation tab via the
- * "Save simulation" card).  The user ticks two or more to compare; the table
- * then shows ONLY the input parameters that DIFFER between the selected runs
- * (geometry / currents / angles / mesh), next to the key FEM results.
- * Snapshots can be deleted individually or all at once.
+ *   TOP — Library: every saved snapshot as a ROW, with the main geometry +
+ *         operating parameters as columns, plus inline RENAME and DELETE.
+ *         Tick the rows you want to compare.
+ *   BOTTOM — Comparison: only the SELECTED rows, showing ONLY the input
+ *         parameters that DIFFER between them (mesh / geometry / angle / rpm /
+ *         current) next to the key FEM results.
  *
- * Store: backend JSON at config/saved_simulations.json via /api/sims/saved.
+ * Simulations are ROWS (not columns) so the tables stay readable with many
+ * saved runs.  Store: backend JSON at config/saved_simulations.json.
  */
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-  Box, Typography, Button, Checkbox, IconButton, Paper, Tooltip, Alert,
-  CircularProgress,
+  Box, Typography, Button, Checkbox, IconButton, Tooltip, Alert,
+  CircularProgress, TextField,
 } from '@mui/material';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import RefreshIcon       from '@mui/icons-material/Refresh';
+import EditIcon          from '@mui/icons-material/Edit';
+import CheckIcon         from '@mui/icons-material/Check';
+import CloseIcon         from '@mui/icons-material/Close';
 import CompareArrowsIcon from '@mui/icons-material/CompareArrows';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
@@ -28,51 +33,67 @@ interface SavedSim {
   results: Record<string, any>;
 }
 
-// ── friendly labels + units for INPUT params (fallback = raw key) ───────────
+// ── friendly labels + units for params (fallback = raw key) ─────────────────
 const PARAM_META: Record<string, { label: string; unit?: string; d?: number }> = {
-  I_phase_rms:        { label: 'I phase RMS',     unit: 'A',  d: 1 },
-  gamma_deg:          { label: 'γ (load angle)',  unit: '°',  d: 1 },
-  rpm:                { label: 'Speed',           unit: 'rpm', d: 0 },
-  frequency_hz:       { label: 'Frequency',       unit: 'Hz', d: 1 },
-  n_sectors:          { label: 'Symmetry n_sect', d: 0 },
-  steps_per_period:   { label: 'Steps/period',    d: 0 },
-  coil_temp_c:        { label: 'Coil temp',       unit: '°C', d: 0 },
-  end_winding_factor: { label: 'k_end',           d: 2 },
+  // operating point
+  I_phase_rms:        { label: 'I phase',       unit: 'A',   d: 1 },
+  gamma_deg:          { label: 'γ angle',       unit: '°',   d: 1 },
+  rpm:                { label: 'Speed',         unit: 'rpm', d: 0 },
+  frequency_hz:       { label: 'Frequency',     unit: 'Hz',  d: 1 },
+  coil_temp_c:        { label: 'Coil temp',     unit: '°C',  d: 0 },
+  end_winding_factor: { label: 'k_end',         d: 2 },
   connection:         { label: 'Winding conn.' },
-  mesh_size_mm:       { label: 'Mesh size',       unit: 'mm', d: 2 },
-  min_size_mm:        { label: 'Min mesh size',   unit: 'mm', d: 2 },
-  num_poles:          { label: 'Poles',           d: 0 },
-  num_slots:          { label: 'Slots',           d: 0 },
-  num_wires_per_slot: { label: 'Wires/slot',      d: 0 },
-  stator_od_mm:       { label: 'Stator OD',       unit: 'mm', d: 2 },
-  stator_id_mm:       { label: 'Stator ID',       unit: 'mm', d: 2 },
-  rotor_od_mm:        { label: 'Rotor OD',        unit: 'mm', d: 2 },
-  airgap_mm:          { label: 'Air gap',         unit: 'mm', d: 3 },
-  stack_length_mm:    { label: 'Stack length',    unit: 'mm', d: 2 },
-  magnet_thickness_mm:{ label: 'Magnet thick.',   unit: 'mm', d: 2 },
-  slot_depth_mm:      { label: 'Slot depth',      unit: 'mm', d: 2 },
+  steps_per_period:   { label: 'Steps/period',  d: 0 },
+  // mesh
+  n_sectors:          { label: 'Symmetry n',    d: 0 },
+  mesh_size_mm:       { label: 'Mesh size',     unit: 'mm',  d: 2 },
+  min_size_mm:        { label: 'Min mesh',      unit: 'mm',  d: 2 },
+  // geometry (real config keys)
+  num_poles:          { label: 'Poles',         d: 0 },
+  num_slots:          { label: 'Slots',         d: 0 },
+  num_wires_per_slot: { label: 'Wires/slot',    d: 0 },
+  stator_diameter:    { label: 'Stator Ø',      unit: 'mm',  d: 1 },
+  stator_outer_radius:{ label: 'Stator OR',     unit: 'mm',  d: 2 },
+  stator_inner_radius:{ label: 'Stator IR',     unit: 'mm',  d: 2 },
+  rotor_outer_radius: { label: 'Rotor OR',      unit: 'mm',  d: 2 },
+  rotor_inner_radius: { label: 'Rotor IR',      unit: 'mm',  d: 2 },
+  air_gap:            { label: 'Air gap',       unit: 'mm',  d: 3 },
+  magnet_height:      { label: 'Magnet h',      unit: 'mm',  d: 2 },
+  magnet_down_height: { label: 'Magnet base',   unit: 'mm',  d: 2 },
+  slot_height:        { label: 'Slot height',   unit: 'mm',  d: 2 },
+  slot_width:         { label: 'Slot width',    unit: 'mm',  d: 2 },
+  tooth_width:        { label: 'Tooth width',   unit: 'mm',  d: 2 },
+  tooth2_width:       { label: 'Tooth2 width',  unit: 'mm',  d: 2 },
+  motor_length:       { label: 'Stack length',  unit: 'mm',  d: 1 },
+  stator_width:       { label: 'Stator width',  unit: 'mm',  d: 1 },
+  shaft_height:       { label: 'Shaft h',       unit: 'mm',  d: 2 },
+  core_thickness:     { label: 'Core thick.',   unit: 'mm',  d: 2 },
 };
 
-// ── result rows shown for every selected run (ordered) ──────────────────────
-const RESULT_ROWS: { key: string; label: string; unit?: string; d?: number;
-                     scale?: number; accent?: 'green' | 'blue' | 'amber' }[] = [
-  { key: 'T_em_avg_Nm',          label: 'Torque T_avg',     unit: 'N·m',     d: 2, accent: 'blue' },
-  { key: 'T_ripple_pct',         label: 'Torque ripple',    unit: '%',       d: 1, accent: 'amber' },
-  { key: 'P_mech_W',             label: 'Mech power',       unit: 'kW',      d: 2, scale: 1e-3, accent: 'blue' },
-  { key: 'efficiency',           label: 'Efficiency η',     unit: '%',       d: 2, scale: 100, accent: 'green' },
-  { key: 'P_loss_total_W',       label: 'Total loss',       unit: 'W',       d: 0, accent: 'amber' },
-  { key: 'P_core_W',             label: '· Core (Fe)',      unit: 'W',       d: 0 },
-  { key: 'P_stranded_W',         label: '· Copper',         unit: 'W',       d: 0 },
-  { key: 'P_solid_W',            label: '· Magnet eddy',    unit: 'W',       d: 0 },
-  { key: 'V_phase_peak_V',       label: 'V_phase peak',     unit: 'V',       d: 1 },
-  { key: 'V_line_rms_V',         label: 'V_line RMS',       unit: 'V',       d: 1 },
-  { key: 'KV_rpm_per_V_line',    label: 'KV (line)',        unit: 'rpm/V',   d: 1 },
-  { key: 'mass_total_kg',        label: 'Active mass',      unit: 'kg',      d: 2 },
-  { key: 'torque_per_mass_Nm_kg',label: 'Torque density',   unit: 'N·m/kg',  d: 2 },
-  { key: 'power_per_mass_W_kg',  label: 'Power density',    unit: 'kW/kg',   d: 2, scale: 1e-3 },
+// columns shown in the TOP library table (operating + main geometry)
+const LIB_COLS = [
+  'I_phase_rms', 'gamma_deg', 'rpm', 'n_sectors',
+  'num_poles', 'num_slots', 'num_wires_per_slot',
+  'stator_diameter', 'stator_outer_radius', 'rotor_outer_radius', 'air_gap',
+  'magnet_height', 'slot_height', 'slot_width', 'tooth_width', 'motor_length',
 ];
 
-const ACCENT = { green: '#4ade80', blue: '#60a5fa', amber: '#fbbf24', default: '#e2e8f0' };
+// result columns in the BOTTOM comparison table
+const RESULT_COLS: { key: string; label: string; unit?: string; d?: number;
+                     scale?: number; better?: 'hi' | 'lo' }[] = [
+  { key: 'T_em_avg_Nm',          label: 'T_avg',          unit: 'N·m',    d: 2, better: 'hi' },
+  { key: 'T_ripple_pct',         label: 'Ripple',         unit: '%',      d: 1, better: 'lo' },
+  { key: 'efficiency',           label: 'η',              unit: '%',      d: 2, scale: 100, better: 'hi' },
+  { key: 'P_mech_W',             label: 'P mech',         unit: 'kW',     d: 2, scale: 1e-3, better: 'hi' },
+  { key: 'P_loss_total_W',       label: 'Total loss',     unit: 'W',      d: 0, better: 'lo' },
+  { key: 'P_core_W',             label: 'Fe loss',        unit: 'W',      d: 0, better: 'lo' },
+  { key: 'P_stranded_W',         label: 'Cu loss',        unit: 'W',      d: 0, better: 'lo' },
+  { key: 'P_solid_W',            label: 'Magnet loss',    unit: 'W',      d: 0, better: 'lo' },
+  { key: 'V_phase_peak_V',       label: 'V_ph peak',      unit: 'V',      d: 1 },
+  { key: 'KV_rpm_per_V_line',    label: 'KV line',        unit: 'rpm/V',  d: 1 },
+  { key: 'mass_total_kg',        label: 'Mass',           unit: 'kg',     d: 2, better: 'lo' },
+  { key: 'torque_per_mass_Nm_kg',label: 'T density',      unit: 'N·m/kg', d: 2, better: 'hi' },
+];
 
 function fmtNum(v: any, d = 2, scale = 1): string {
   if (v == null || v === '') return '—';
@@ -80,18 +101,37 @@ function fmtNum(v: any, d = 2, scale = 1): string {
   if (!Number.isFinite(n)) return String(v);
   return (n * scale).toFixed(d);
 }
-
-// equality with float tolerance (params come from clean state but geometry can carry noise)
 function valEq(a: any, b: any): boolean {
   if (typeof a === 'number' && typeof b === 'number') return Math.abs(a - b) < 1e-6;
   return String(a) === String(b);
 }
+const paramLabel = (k: string) => PARAM_META[k]?.label ?? k;
+const paramUnit  = (k: string) => PARAM_META[k]?.unit;
+function paramFmt(k: string, v: any): string {
+  const m = PARAM_META[k];
+  if (typeof v === 'number') return fmtNum(v, m?.d ?? 3);
+  return v == null ? '—' : String(v);
+}
+
+// shared table cell styling
+const TH = {
+  px: 1.25, py: 0.7, fontSize: 10, color: '#64748b', fontWeight: 700,
+  textTransform: 'uppercase', letterSpacing: '0.03em', whiteSpace: 'nowrap',
+  textAlign: 'right', borderBottom: '1px solid #1e293b', bgcolor: '#0b1424',
+  position: 'sticky', top: 0, zIndex: 2,
+} as const;
+const TD = {
+  px: 1.25, py: 0.55, fontSize: 12, whiteSpace: 'nowrap', textAlign: 'right',
+  borderBottom: '1px solid #0f172a', fontFamily: 'monospace', color: '#cbd5e1',
+} as const;
 
 const ComparePanel: React.FC = () => {
   const [sims,    setSims]    = useState<SavedSim[]>([]);
   const [sel,     setSel]     = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
   const [err,     setErr]     = useState<string | null>(null);
+  const [editId,  setEditId]  = useState<string | null>(null);
+  const [editName,setEditName]= useState('');
 
   const load = useCallback(() => {
     setLoading(true); setErr(null);
@@ -100,11 +140,10 @@ const ComparePanel: React.FC = () => {
       .then(d => {
         const list: SavedSim[] = d.sims || [];
         setSims(list);
-        // keep selection valid; default-select up to first 3 on first load
         setSel(prev => {
           const ids = new Set(list.map(s => s.id));
           const kept = new Set([...prev].filter(id => ids.has(id)));
-          if (kept.size === 0 && list.length) list.slice(0, 3).forEach(s => kept.add(s.id));
+          if (kept.size === 0 && list.length) list.slice(0, Math.min(4, list.length)).forEach(s => kept.add(s.id));
           return kept;
         });
       })
@@ -116,221 +155,188 @@ const ComparePanel: React.FC = () => {
   const toggle = (id: string) =>
     setSel(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
-  const del = (id: string) => {
-    fetch(`${API}/api/sims/saved/${id}`, { method: 'DELETE' })
-      .then(() => load())
-      .catch(e => setErr(String(e)));
-  };
+  const del = (id: string) =>
+    fetch(`${API}/api/sims/saved/${id}`, { method: 'DELETE' }).then(load).catch(e => setErr(String(e)));
   const clearAll = () => {
     if (!window.confirm('Delete ALL saved simulations?')) return;
-    fetch(`${API}/api/sims/saved`, { method: 'DELETE' })
-      .then(() => load())
-      .catch(e => setErr(String(e)));
+    fetch(`${API}/api/sims/saved`, { method: 'DELETE' }).then(load).catch(e => setErr(String(e)));
+  };
+  const startRename = (s: SavedSim) => { setEditId(s.id); setEditName(s.name); };
+  const commitRename = () => {
+    if (!editId) return;
+    const id = editId;
+    fetch(`${API}/api/sims/saved/${id}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: editName }),
+    }).then(() => { setEditId(null); load(); }).catch(e => setErr(String(e)));
   };
 
   const selected = sims.filter(s => sel.has(s.id));
 
-  // ── differing input params across the selected runs ──────────────────────
-  const allParamKeys = Array.from(
-    new Set(selected.flatMap(s => Object.keys(s.params || {})))
-  );
+  // differing input params across the selected runs
+  const allParamKeys = Array.from(new Set(selected.flatMap(s => Object.keys(s.params || {}))));
   const diffKeys = allParamKeys.filter(k => {
     const vals = selected.map(s => s.params?.[k]);
     return vals.some(v => !valEq(v, vals[0]));
   }).sort((a, b) => {
-    // known params first (in PARAM_META declaration order), then alpha
-    const ia = Object.keys(PARAM_META).indexOf(a);
-    const ib = Object.keys(PARAM_META).indexOf(b);
+    const ia = Object.keys(PARAM_META).indexOf(a), ib = Object.keys(PARAM_META).indexOf(b);
     if (ia !== -1 || ib !== -1) return (ia === -1 ? 1e9 : ia) - (ib === -1 ? 1e9 : ib);
     return a.localeCompare(b);
   });
 
-  const paramLabel = (k: string) => PARAM_META[k]?.label ?? k;
-  const paramFmt = (k: string, v: any) => {
-    const m = PARAM_META[k];
-    if (typeof v === 'number' && m) return fmtNum(v, m.d ?? 2);
-    if (typeof v === 'number') return fmtNum(v, 3);
-    return v == null ? '—' : String(v);
-  };
+  // per-result best/worst across the selected rows (for highlight)
+  const resExtent: Record<string, { min: number; max: number }> = {};
+  RESULT_COLS.forEach(r => {
+    const nums = selected.map(s => Number(s.results?.[r.key])).filter(Number.isFinite);
+    if (nums.length) resExtent[r.key] = { min: Math.min(...nums), max: Math.max(...nums) };
+  });
 
-  const colW = 150;
+  const NameCell: React.FC<{ s: SavedSim; sticky?: boolean }> = ({ s, sticky }) => (
+    <Box component="td" sx={{ ...TD, textAlign: 'left', color: '#e2e8f0', fontFamily: 'inherit',
+      fontWeight: 600, ...(sticky ? { position: 'sticky', left: 0, bgcolor: '#0a1628', zIndex: 1 } : {}) }}>
+      {editId === s.id ? (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25 }}>
+          <TextField value={editName} onChange={e => setEditName(e.target.value)} size="small" autoFocus
+            onKeyDown={e => { if (e.key === 'Enter') commitRename(); if (e.key === 'Escape') setEditId(null); }}
+            inputProps={{ style: { fontSize: 12, padding: '2px 6px' } }} sx={{ width: 150 }} />
+          <IconButton size="small" onClick={commitRename} sx={{ color: '#4ade80', p: 0.25 }}><CheckIcon sx={{ fontSize: 15 }} /></IconButton>
+          <IconButton size="small" onClick={() => setEditId(null)} sx={{ color: '#64748b', p: 0.25 }}><CloseIcon sx={{ fontSize: 15 }} /></IconButton>
+        </Box>
+      ) : s.name}
+    </Box>
+  );
 
   return (
-    <Box sx={{ height: '100%', display: 'flex', bgcolor: '#060d17', overflow: 'hidden' }}>
-      {/* ── LEFT: saved-sim list ── */}
-      <Box sx={{ width: 300, flexShrink: 0, borderRight: '1px solid #1e293b',
-        p: 2, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 1 }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <Typography sx={{ fontSize: '0.7rem', fontWeight: 700, color: '#475569',
-            letterSpacing: '0.1em', textTransform: 'uppercase' }}>
-            Saved simulations ({sims.length})
+    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', bgcolor: '#060d17', overflow: 'hidden' }}>
+
+      {/* ══ TOP: library of all saved simulations ══ */}
+      <Box sx={{ flex: '1 1 50%', display: 'flex', flexDirection: 'column', minHeight: 0, borderBottom: '2px solid #1e293b' }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 2, py: 1 }}>
+          <Typography sx={{ fontSize: 13, fontWeight: 700, color: '#e2e8f0' }}>
+            Saved simulations
           </Typography>
-          <Box>
-            <Tooltip title="Reload list">
-              <IconButton size="small" onClick={load} sx={{ color: '#64748b' }}>
-                <RefreshIcon sx={{ fontSize: 16 }} />
-              </IconButton>
-            </Tooltip>
-            {sims.length > 0 && (
-              <Tooltip title="Delete all">
-                <IconButton size="small" onClick={clearAll} sx={{ color: '#7f1d1d' }}>
-                  <DeleteOutlineIcon sx={{ fontSize: 16 }} />
-                </IconButton>
-              </Tooltip>
-            )}
-          </Box>
+          <Typography sx={{ fontSize: 11, color: '#64748b' }}>({sims.length}) — tick rows to compare below</Typography>
+          <Box sx={{ flex: 1 }} />
+          <Tooltip title="Reload"><IconButton size="small" onClick={load} sx={{ color: '#64748b' }}><RefreshIcon sx={{ fontSize: 17 }} /></IconButton></Tooltip>
+          {sims.length > 0 && (
+            <Tooltip title="Delete all"><IconButton size="small" onClick={clearAll} sx={{ color: '#7f1d1d' }}><DeleteOutlineIcon sx={{ fontSize: 17 }} /></IconButton></Tooltip>
+          )}
         </Box>
-
-        {err && <Alert severity="error" sx={{ fontSize: 11 }}>{err}</Alert>}
-        {loading && <CircularProgress size={18} sx={{ color: '#3b82f6', alignSelf: 'center', my: 2 }} />}
-
-        {!loading && sims.length === 0 && (
-          <Typography sx={{ fontSize: 11, color: '#64748b', mt: 2 }}>
-            No saved simulations yet. Run a simulation in the <b>Simulation</b> tab,
-            then press <b>Save simulation</b> to snapshot it here for comparison.
-          </Typography>
-        )}
-
-        {sims.map(s => (
-          <Paper key={s.id} onClick={() => toggle(s.id)} sx={{
-            display: 'flex', alignItems: 'center', gap: 0.5, p: 1, cursor: 'pointer',
-            bgcolor: sel.has(s.id) ? '#0f2a4a' : '#0a1628',
-            border: `1px solid ${sel.has(s.id) ? '#3b82f6' : '#1e293b'}`, borderRadius: 1 }}>
-            <Checkbox size="small" checked={sel.has(s.id)} sx={{ p: 0.25,
-              color: '#475569', '&.Mui-checked': { color: '#3b82f6' } }} />
-            <Box sx={{ flex: 1, minWidth: 0 }}>
-              <Typography sx={{ fontSize: 12, fontWeight: 600, color: '#e2e8f0',
-                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                {s.name}
-              </Typography>
-              <Typography sx={{ fontSize: 9, color: '#475569' }}>{s.created}</Typography>
+        {err && <Alert severity="error" sx={{ fontSize: 11, mx: 2 }}>{err}</Alert>}
+        <Box sx={{ flex: 1, overflow: 'auto', px: 2, pb: 1 }}>
+          {loading && <CircularProgress size={18} sx={{ color: '#3b82f6', m: 2 }} />}
+          {!loading && sims.length === 0 && (
+            <Typography sx={{ fontSize: 12, color: '#64748b', m: 2 }}>
+              No saved simulations yet. In the <b>Simulation</b> tab, run a solve and press
+              <b> Save simulation</b> to snapshot it here.
+            </Typography>
+          )}
+          {sims.length > 0 && (
+            <Box component="table" sx={{ borderCollapse: 'collapse', width: '100%' }}>
+              <Box component="thead"><Box component="tr">
+                <Box component="th" sx={{ ...TH, textAlign: 'center', left: 0, zIndex: 3, position: 'sticky' }}>✓</Box>
+                <Box component="th" sx={{ ...TH, textAlign: 'left', left: 36, zIndex: 3 }}>Name</Box>
+                {LIB_COLS.map(k => (
+                  <Box component="th" key={k} sx={TH}>
+                    {paramLabel(k)}{paramUnit(k) ? <Box component="span" sx={{ color: '#334155', fontWeight: 400 }}> {paramUnit(k)}</Box> : null}
+                  </Box>
+                ))}
+                <Box component="th" sx={{ ...TH, textAlign: 'left' }}>Saved</Box>
+                <Box component="th" sx={{ ...TH, textAlign: 'center' }}>Actions</Box>
+              </Box></Box>
+              <Box component="tbody">
+                {sims.map(s => (
+                  <Box component="tr" key={s.id}
+                    sx={{ bgcolor: sel.has(s.id) ? '#0f2036' : 'transparent', '&:hover': { bgcolor: '#0d1b30' } }}>
+                    <Box component="td" sx={{ ...TD, textAlign: 'center', position: 'sticky', left: 0,
+                      bgcolor: sel.has(s.id) ? '#0f2036' : '#060d17', zIndex: 1 }}>
+                      <Checkbox size="small" checked={sel.has(s.id)} onChange={() => toggle(s.id)}
+                        sx={{ p: 0.25, color: '#475569', '&.Mui-checked': { color: '#3b82f6' } }} />
+                    </Box>
+                    <Box component="td" sx={{ ...TD, p: 0, position: 'sticky', left: 36,
+                      bgcolor: sel.has(s.id) ? '#0f2036' : '#060d17', zIndex: 1 }}>
+                      <Box sx={{ px: 1.25, py: 0.55 }}><NameCell s={s} /></Box>
+                    </Box>
+                    {LIB_COLS.map(k => (
+                      <Box component="td" key={k} sx={TD}>{paramFmt(k, s.params?.[k])}</Box>
+                    ))}
+                    <Box component="td" sx={{ ...TD, textAlign: 'left', color: '#475569', fontSize: 10 }}>{s.created}</Box>
+                    <Box component="td" sx={{ ...TD, textAlign: 'center' }}>
+                      <Tooltip title="Rename"><IconButton size="small" onClick={() => startRename(s)} sx={{ color: '#64748b', p: 0.25, '&:hover': { color: '#60a5fa' } }}><EditIcon sx={{ fontSize: 15 }} /></IconButton></Tooltip>
+                      <Tooltip title="Delete"><IconButton size="small" onClick={() => del(s.id)} sx={{ color: '#64748b', p: 0.25, '&:hover': { color: '#f87171' } }}><DeleteOutlineIcon sx={{ fontSize: 15 }} /></IconButton></Tooltip>
+                    </Box>
+                  </Box>
+                ))}
+              </Box>
             </Box>
-            <Tooltip title="Delete">
-              <IconButton size="small" onClick={e => { e.stopPropagation(); del(s.id); }}
-                sx={{ color: '#64748b', '&:hover': { color: '#f87171' } }}>
-                <DeleteOutlineIcon sx={{ fontSize: 15 }} />
-              </IconButton>
-            </Tooltip>
-          </Paper>
-        ))}
+          )}
+        </Box>
       </Box>
 
-      {/* ── RIGHT: comparison table ── */}
-      <Box sx={{ flex: 1, overflow: 'auto', p: 3 }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
-          <CompareArrowsIcon sx={{ color: '#60a5fa' }} />
-          <Typography sx={{ fontSize: 16, fontWeight: 700, color: '#e2e8f0' }}>
-            Compare simulations
-          </Typography>
+      {/* ══ BOTTOM: comparison of selected — only differing params ══ */}
+      <Box sx={{ flex: '1 1 50%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 2, py: 1 }}>
+          <CompareArrowsIcon sx={{ color: '#60a5fa', fontSize: 18 }} />
+          <Typography sx={{ fontSize: 13, fontWeight: 700, color: '#e2e8f0' }}>Comparison</Typography>
           <Typography sx={{ fontSize: 11, color: '#64748b' }}>
-            {selected.length} selected · showing only parameters that differ
+            {selected.length} selected · {diffKeys.length} differing input{diffKeys.length === 1 ? '' : 's'} · green = best / red = worst per result
           </Typography>
         </Box>
-
-        {selected.length < 2 ? (
-          <Alert severity="info" sx={{ fontSize: 12 }}>
-            Select at least two saved simulations on the left to compare them.
-          </Alert>
-        ) : (
-          <Paper sx={{ bgcolor: '#0a1628', border: '1px solid #1e293b', borderRadius: 2,
-            overflow: 'hidden', display: 'inline-block', minWidth: '100%' }}>
-            <Box component="table" sx={{ borderCollapse: 'collapse', width: '100%',
-              '& td, & th': { borderBottom: '1px solid #0f172a', px: 1.5, py: 0.9,
-                textAlign: 'right', fontSize: 12, whiteSpace: 'nowrap' },
-              '& th:first-of-type, & td:first-of-type': { textAlign: 'left',
-                position: 'sticky', left: 0, bgcolor: '#0a1628', zIndex: 1 } }}>
-              {/* header: run names */}
-              <Box component="thead">
-                <Box component="tr">
-                  <Box component="th" sx={{ color: '#475569', fontWeight: 700 }}>Parameter / Result</Box>
-                  {selected.map(s => (
-                    <Box component="th" key={s.id} sx={{ color: '#e2e8f0', fontWeight: 700,
-                      minWidth: colW, maxWidth: colW, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                      {s.name}
-                    </Box>
-                  ))}
-                </Box>
-              </Box>
+        <Box sx={{ flex: 1, overflow: 'auto', px: 2, pb: 2 }}>
+          {selected.length < 2 ? (
+            <Alert severity="info" sx={{ fontSize: 12 }}>Tick at least two rows above to compare them.</Alert>
+          ) : (
+            <Box component="table" sx={{ borderCollapse: 'collapse', width: '100%' }}>
+              <Box component="thead"><Box component="tr">
+                <Box component="th" sx={{ ...TH, textAlign: 'left', left: 0, zIndex: 3, position: 'sticky' }}>Simulation</Box>
+                {diffKeys.map(k => (
+                  <Box component="th" key={k} sx={{ ...TH, color: '#fbbf24' }}>
+                    {paramLabel(k)}{paramUnit(k) ? <Box component="span" sx={{ color: '#334155', fontWeight: 400 }}> {paramUnit(k)}</Box> : null}
+                  </Box>
+                ))}
+                {RESULT_COLS.map(r => (
+                  <Box component="th" key={r.key} sx={{ ...TH, color: '#4ade80' }}>
+                    {r.label}{r.unit ? <Box component="span" sx={{ color: '#334155', fontWeight: 400 }}> {r.unit}</Box> : null}
+                  </Box>
+                ))}
+              </Box></Box>
               <Box component="tbody">
-                {/* ── differing inputs ── */}
-                <Box component="tr">
-                  <Box component="td" {...({ colSpan: selected.length + 1 } as any)}
-                    sx={{ bgcolor: '#0b1730 !important', color: '#60a5fa !important',
-                      fontWeight: 700, fontSize: '10px !important', textTransform: 'uppercase',
-                      letterSpacing: '0.08em', textAlign: 'left !important' }}>
-                    Differing inputs ({diffKeys.length})
-                  </Box>
-                </Box>
-                {diffKeys.length === 0 && (
-                  <Box component="tr">
-                    <Box component="td" sx={{ color: '#64748b' }}>—</Box>
-                    {selected.map(s => (
-                      <Box component="td" key={s.id} sx={{ color: '#475569' }}>identical inputs</Box>
+                {selected.map(s => (
+                  <Box component="tr" key={s.id} sx={{ '&:hover': { bgcolor: '#0d1b30' } }}>
+                    <NameCell s={s} sticky />
+                    {diffKeys.map(k => (
+                      <Box component="td" key={k} sx={{ ...TD, color: '#fbbf24' }}>{paramFmt(k, s.params?.[k])}</Box>
                     ))}
-                  </Box>
-                )}
-                {diffKeys.map(k => {
-                  const u = PARAM_META[k]?.unit;
-                  return (
-                    <Box component="tr" key={k}>
-                      <Box component="td" sx={{ color: '#94a3b8' }}>
-                        {paramLabel(k)}{u ? <span style={{ color: '#475569' }}> ({u})</span> : null}
-                      </Box>
-                      {selected.map(s => (
-                        <Box component="td" key={s.id} sx={{ color: '#fbbf24', fontFamily: 'monospace' }}>
-                          {paramFmt(k, s.params?.[k])}
+                    {RESULT_COLS.map(r => {
+                      const raw = Number(s.results?.[r.key]);
+                      const has = Number.isFinite(raw);
+                      const ext = resExtent[r.key];
+                      let col = '#cbd5e1';
+                      if (has && ext && ext.min !== ext.max && r.better) {
+                        const best = r.better === 'hi' ? ext.max : ext.min;
+                        const worst = r.better === 'hi' ? ext.min : ext.max;
+                        if (Math.abs(raw - best) < 1e-9) col = '#4ade80';
+                        else if (Math.abs(raw - worst) < 1e-9) col = '#f87171';
+                      }
+                      return (
+                        <Box component="td" key={r.key} sx={{ ...TD, color: col,
+                          fontWeight: col !== '#cbd5e1' ? 700 : 400 }}>
+                          {has ? fmtNum(raw, r.d ?? 2, r.scale ?? 1) : '—'}
                         </Box>
-                      ))}
-                    </Box>
-                  );
-                })}
-
-                {/* ── results ── */}
-                <Box component="tr">
-                  <Box component="td" {...({ colSpan: selected.length + 1 } as any)}
-                    sx={{ bgcolor: '#0b1730 !important', color: '#4ade80 !important',
-                      fontWeight: 700, fontSize: '10px !important', textTransform: 'uppercase',
-                      letterSpacing: '0.08em', textAlign: 'left !important' }}>
-                    FEM results
+                      );
+                    })}
                   </Box>
-                </Box>
-                {RESULT_ROWS.map(row => {
-                  // best/worst highlight: find min/max across selected for this metric
-                  const nums = selected.map(s => Number(s.results?.[row.key]))
-                    .filter(n => Number.isFinite(n));
-                  const max = nums.length ? Math.max(...nums) : null;
-                  const min = nums.length ? Math.min(...nums) : null;
-                  return (
-                    <Box component="tr" key={row.key}>
-                      <Box component="td" sx={{ color: '#94a3b8' }}>
-                        {row.label}{row.unit ? <span style={{ color: '#475569' }}> ({row.unit})</span> : null}
-                      </Box>
-                      {selected.map(s => {
-                        const raw = Number(s.results?.[row.key]);
-                        const has = Number.isFinite(raw);
-                        const isMax = has && max != null && Math.abs(raw - max) < 1e-9 && min !== max;
-                        const isMin = has && min != null && Math.abs(raw - min) < 1e-9 && min !== max;
-                        const col = isMax ? ACCENT.green : isMin ? '#f87171'
-                                  : (row.accent ? ACCENT[row.accent] : ACCENT.default);
-                        return (
-                          <Box component="td" key={s.id}
-                            sx={{ color: col, fontFamily: 'monospace',
-                              fontWeight: (isMax || isMin) ? 700 : 400 }}>
-                            {has ? fmtNum(raw, row.d ?? 2, row.scale ?? 1) : '—'}
-                          </Box>
-                        );
-                      })}
-                    </Box>
-                  );
-                })}
+                ))}
+                {diffKeys.length === 0 && (
+                  <Box component="tr"><Box component="td" {...({ colSpan: 1 + RESULT_COLS.length } as any)}
+                    sx={{ ...TD, textAlign: 'left', color: '#64748b' }}>
+                    Selected runs have identical inputs — only the results differ.
+                  </Box></Box>
+                )}
               </Box>
             </Box>
-          </Paper>
-        )}
-        <Typography sx={{ fontSize: 10, color: '#334155', mt: 1.5 }}>
-          Green = highest value in the row, red = lowest (per metric).  Inputs shown
-          are only those that differ between the selected runs.
-        </Typography>
+          )}
+        </Box>
       </Box>
     </Box>
   );

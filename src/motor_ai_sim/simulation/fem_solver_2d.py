@@ -3633,6 +3633,133 @@ def _build_full_disk_from_halves(polys, rotor_angle_deg, mesh_size_mm,
     return meshF, ct.astype(_np.int16), cf
 
 
+def fem_quasistatic_transient(
+    n_steps_per_period: int = 24,
+    n_periods: float = 1.0,
+    gamma_deg: float = 0.0,
+    I_phase_rms: float = 85.0,
+    mesh_size_mm: float = 4.0,
+    min_size_mm: float = 0.3,
+    outer_air_factor: float = 1.3,
+    motion_band: bool = True,
+    band_thickness_mm: float = 0.4,
+    n_sectors: int = 4,
+    stator_fillet_mm: float = 0.0,
+    coil_temp_c: float = 120.0,
+    end_winding_factor: float = 0.0,
+    component_mesh_mm: dict = None,
+) -> dict:
+    """GENUINE quasi-static transient — ONE algorithm for every symmetry.
+
+    Sweeps ``fem_solve_for_sim`` over one electrical period at the REQUESTED
+    symmetry: Full (n_sectors=1) uses the real stitched 360° disk, 1/2 & 1/4 use
+    the clipped sectors with the correct (anti)periodic BC.  NOTHING is forced to
+    1/4 — so the full disk shows its own honest result.  Each frame is a real
+    magnetostatic solve; back-EMF = R·I + dψ/dt (central differences); per-frame
+    losses (Bertotti core + I²R copper + slab magnet eddy) already carry the
+    n_sectors multiplier.  Returns the same dict shape the transient endpoint and
+    summary builder expect (so the frontend is unchanged).
+    """
+    import time as _t
+    import numpy as _np
+    import math as _math
+    from motor_ai_sim.simulation.geometry_2d import params_from_config
+    from motor_ai_sim.config import get_config
+
+    t0 = _t.time()
+    cfg = get_config(); sim = cfg.get("simulation", {}); geo = dict(cfg.get("geometry", {}))
+    wind = cfg.get("winding", {})
+    p = params_from_config()
+    pole_pairs = p.num_poles // 2
+    n_parallel = wind.get("n_parallel", 2)
+    rpm = float(sim.get("rpm", 3950)); f_elec = float(sim.get("frequency", 921.67))
+    n_total = max(2, int(round(n_steps_per_period * n_periods)))
+    period_mech = 360.0 / pole_pairs                       # one electrical period [deg mech]
+    dt = (1.0 / max(f_elec, 1e-9)) * n_periods / n_total
+    Ipk = float(I_phase_rms) / n_parallel * _math.sqrt(2)
+    # Temperature-consistent phase resistance for the R·I voltage drop.
+    _P_cu_dc, _k_end_used, R_phase = copper_loss_W(
+        p, geo, float(I_phase_rms), n_parallel,
+        coil_temp_c=coil_temp_c, end_winding_factor=end_winding_factor)
+
+    T = []; psiA = []; psiB = []; psiC = []
+    Pcu = []; Pfe = []; Pmag = []; IA = []; IB = []; IC = []; tt = []; ang_list = []
+    for k in range(n_total):
+        ang = (k / n_total) * period_mech * n_periods
+        r = fem_solve_for_sim(
+            rotor_angle_deg=float(ang), gamma_deg=float(gamma_deg),
+            mesh_size_mm=float(mesh_size_mm), min_size_mm=float(min_size_mm),
+            outer_air_factor=float(outer_air_factor), motion_band=motion_band,
+            band_thickness_mm=float(band_thickness_mm), n_sectors=int(n_sectors),
+            stator_fillet_mm=float(stator_fillet_mm), I_phase_rms=float(I_phase_rms),
+            component_mesh_mm=component_mesh_mm)
+        T.append(float(r.get("T_em_Nm", 0.0)))
+        psiA.append(float(r.get("psi_A_Wb", 0.0)))
+        psiB.append(float(r.get("psi_B_Wb", 0.0)))
+        psiC.append(float(r.get("psi_C_Wb", 0.0)))
+        Pcu.append(float(r.get("P_cu_W", 0.0)))
+        Pfe.append(float(r.get("P_fe_W", 0.0)))
+        Pmag.append(float(r.get("P_mag_eddy_W", 0.0)))
+        te = _math.radians(ang * pole_pairs + gamma_deg + DAXIS_SHIFT_DEG)
+        IA.append(Ipk * _math.cos(te))
+        IB.append(Ipk * _math.cos(te - 2 * _math.pi / 3))
+        IC.append(Ipk * _math.cos(te + 2 * _math.pi / 3))
+        tt.append(k * dt); ang_list.append(ang)
+        log.info("QS transient: frame %d/%d ang=%.2f T=%.2f", k + 1, n_total, ang, T[-1])
+
+    # Back-EMF e = dψ/dt via a SPECTRAL derivative (keep the fundamental + a few
+    # low harmonics).  Each frame is meshed independently, so ψ(t) carries a tiny
+    # frame-to-frame remesh jitter; a raw finite difference amplifies that into a
+    # spurious V-peak (and differently per symmetry).  Differentiating the low
+    # harmonics of the periodic ψ removes the jitter and gives the genuine,
+    # symmetry-consistent back-EMF.  (Same denoising the sliding-band path used.)
+    _Kv = max(1, min(6, n_total // 2 - 1))
+    def _ddt(arr):
+        a = _np.asarray(arr, float); N = a.size
+        if N < 4:
+            return _np.array([(a[(i + 1) % N] - a[(i - 1) % N]) / (2 * dt) for i in range(N)])
+        Fc = _np.fft.rfft(a)
+        if _Kv + 1 < Fc.size:
+            Fc[_Kv + 1:] = 0.0
+        return _np.fft.irfft(Fc * (1j * 2 * _np.pi * _np.fft.rfftfreq(N, d=dt)), n=N)
+    VA = [R_phase * i + e for i, e in zip(IA, _ddt(psiA).tolist())]
+    VB = [R_phase * i + e for i, e in zip(IB, _ddt(psiB).tolist())]
+    VC = [R_phase * i + e for i, e in zip(IC, _ddt(psiC).tolist())]
+    Vpk = float(max(max(map(abs, VA)), max(map(abs, VB)), max(map(abs, VC)))) if VA else 0.0
+    Ta = _np.asarray(T, float)
+    Tavg = float(Ta.mean()) if Ta.size else 0.0
+    Tpp = float(Ta.max() - Ta.min()) if Ta.size else 0.0
+    Trip = float(100.0 * Tpp / abs(Tavg)) if Tavg else 0.0
+    # torque spectrum (orders = × electrical frequency) for the harmonics bar chart
+    T_harm_order = []; T_harm_amp = []
+    if Ta.size >= 4:
+        F = _np.fft.rfft(Ta - Ta.mean())
+        scale = 2.0 / Ta.size
+        for kk in range(1, len(F)):
+            T_harm_order.append(round(kk / max(n_periods, 1e-9), 2))
+            T_harm_amp.append(float(abs(F[kk]) * scale))
+    Ptot = [c + f + m for c, f, m in zip(Pcu, Pfe, Pmag)]
+    Pmech = float(Tavg * 2.0 * _math.pi * rpm / 60.0)
+    log.info("QS transient DONE: n=%d sectors=%d T_avg=%.2f ripple=%.1f%% V_peak=%.1f (%.1fs)",
+             n_total, int(n_sectors), Tavg, Trip, Vpk, _t.time() - t0)
+    return {
+        "method": "quasistatic",
+        "n_steps": n_total, "n_steps_per_period": int(n_steps_per_period),
+        "n_periods": float(n_periods), "rpm": rpm, "f_elec_Hz": f_elec, "dt_s": dt,
+        "T_period_s": (1.0 / f_elec if f_elec > 1e-9 else 0.0),
+        "time_s": tt, "rotor_angle_deg": ang_list,
+        "T_em_Nm": T, "T_avg_Nm": Tavg, "T_ripple_pct": round(Trip, 2),
+        "T_ripple_raw_pct": round(Trip, 2),
+        "psi_A_Wb": psiA, "psi_B_Wb": psiB, "psi_C_Wb": psiC,
+        "V_A": VA, "V_B": VB, "V_C": VC, "V_peak": Vpk,
+        "I_A": IA, "I_B": IB, "I_C": IC,
+        "P_cu_W": Pcu, "P_fe_W": Pfe, "P_mag_eddy_W": Pmag, "P_loss_total_W": Ptot,
+        "P_mech_avg_W": Pmech, "R_phase_ohm": R_phase, "coil_temp_C": float(coil_temp_c),
+        "end_winding_factor": float(_k_end_used),
+        "T_harm_order": T_harm_order, "T_harm_amp": T_harm_amp, "field": None,
+    }
+
+
 def fem_solve_for_sim(
     rotor_angle_deg: float = 0.0,
     gamma_deg:       float = 0.0,

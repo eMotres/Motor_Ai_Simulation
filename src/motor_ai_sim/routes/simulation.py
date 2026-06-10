@@ -1899,13 +1899,18 @@ def get_fem_transient(
         if not fresh and _sb_key in _fem_transient_cache:
             return _fem_transient_cache[_sb_key]
         try:
-            from motor_ai_sim.simulation.fem_solver_2d import fem_transient_sliding_band
-            _sbres = fem_transient_sliding_band(
+            # GENUINE quasi-static transient: ONE algorithm for every symmetry.
+            # Full (n_sectors=1) uses the real stitched 360° disk, 1/2 & 1/4 use the
+            # clipped sectors — NOTHING is forced to 1/4, so the full disk reports
+            # its own honest result (the old sliding-band path forced n=1→4).
+            from motor_ai_sim.simulation.fem_solver_2d import fem_quasistatic_transient
+            _sbres = fem_quasistatic_transient(
                 n_steps_per_period=int(n_steps_per_period), n_periods=float(n_periods),
                 gamma_deg=float(gamma_deg), I_phase_rms=float(I_phase_rms),
                 mesh_size_mm=float(mesh_size_mm), min_size_mm=float(min_size_mm),
                 outer_air_factor=float(outer_air_factor),
-                n_sectors=int(n_sectors) if int(n_sectors) > 1 else 4,
+                motion_band=motion_band, band_thickness_mm=float(band_thickness_mm),
+                n_sectors=int(n_sectors),                 # genuine — no forcing to 4
                 stator_fillet_mm=float(stator_fillet_mm),
                 coil_temp_c=float(coil_temp_c),
                 end_winding_factor=float(end_winding_factor),

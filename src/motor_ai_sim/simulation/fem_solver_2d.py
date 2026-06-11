@@ -4423,6 +4423,75 @@ def fem_transient_sliding_band(
     P_tot_series = [c + f + m + s for c, f, m, s
                     in zip(P_cu_series, P_fe_series, P_mag_series, P_shaft_series)]
     P_mech_avg = float(Tavg * 2.0 * math.pi * rpm / 60.0)
+
+    # ── Per-element loss DENSITY (W/m³) for the Ansys-style spatial map ──────
+    # Same per-element loss math as the totals above, kept per-element instead
+    # of summed, then each component NORMALISED so its volume-integral equals
+    # the reported (physically-trusted) component loss — the map both shows the
+    # spatial distribution AND integrates back to the sidebar numbers.  Element
+    # order matches the field snapshot: [stator-half | rotor-half].
+    if _field_snap is not None:
+        _nst_e = int(_Bxs.size)
+        _dens = np.zeros(int(_Bxs.size + _Bxr.size))
+
+        def _mean_sq_ddt(hx, hy):                       # time-avg |dB/dt|² per elem
+            dX = _angle_ddt_2d(np.asarray(hx)); dY = _angle_ddt_2d(np.asarray(hy))
+            return np.mean(dX ** 2 + dY ** 2, axis=0)
+
+        def _bac2(hx, hy):                              # (½ peak-peak)² per elem
+            X = np.asarray(hx); Y = np.asarray(hy)
+            return (((X.max(0) - X.min(0)) * 0.5) ** 2
+                    + ((Y.max(0) - Y.min(0)) * 0.5) ** 2)
+
+        def _norm_into(local_idx, shape_e, areas_half, base, P_target_W):
+            if local_idx.size == 0 or shape_e.size == 0 or P_target_W <= 0:
+                return
+            integ = float(np.sum(shape_e * areas_half[local_idx])) * p.stack_length * NS
+            if integ > 1e-30:
+                _dens[base + local_idx] += shape_e * (P_target_W / integ)
+
+        # Iron — stator + rotor share one Bertotti total (P_fe_avg).
+        def _iron_shape(hx, hy, idx, mat):
+            if mat is None or idx.size == 0 or not hx or np.asarray(hx[0]).size == 0:
+                return np.zeros(idx.size)
+            kh, kc, ke = _mat_lib.effective_bertotti(mat)
+            b2 = _bac2(hx, hy)
+            return (kh * f_elec * b2
+                    + ke * f_elec ** 1.5 * np.power(np.maximum(b2, 0.0), 0.75)
+                    + (kc / _two_pi2) * _mean_sq_ddt(hx, hy))
+        _sh_is = _iron_shape(_hist_sx, _hist_sy, _iron_s_idx, _steel_s)
+        _sh_ir = _iron_shape(_hist_rx, _hist_ry, _iron_r_idx, _steel_r)
+        _integ_fe = ((float(np.sum(_sh_is * areas_s[_iron_s_idx])) if _iron_s_idx.size else 0.0)
+                     + (float(np.sum(_sh_ir * areas_r[_iron_r_idx])) if _iron_r_idx.size else 0.0)
+                     ) * p.stack_length * NS
+        if _integ_fe > 1e-30 and P_fe_avg > 0:
+            _kfe = P_fe_avg / _integ_fe
+            if _iron_s_idx.size: _dens[_iron_s_idx] += _sh_is * _kfe
+            if _iron_r_idx.size: _dens[_nst_e + _iron_r_idx] += _sh_ir * _kfe
+
+        # Magnets — slab |dB/dt|² shape, normalised to P_mag_avg.
+        if _mag_idx.size and _hist_mx and np.asarray(_hist_mx[0]).size:
+            _norm_into(_mag_idx, _mean_sq_ddt(_hist_mx, _hist_my),
+                       areas_r, _nst_e, P_mag_avg)
+
+        # Copper — uniform DC ohmic + crowded AC proximity (radial/tangential).
+        if _coil_idx.size:
+            _vol_cu = float(np.sum(areas_s[_coil_idx])) * p.stack_length * NS
+            if _vol_cu > 1e-30 and P_cu_dc > 0:
+                _dens[_coil_idx] += P_cu_dc / _vol_cu
+            if _hist_cx and np.asarray(_hist_cx[0]).size and P_cu_ac_avg > 0:
+                _Xc = np.asarray(_hist_cx); _Yc = np.asarray(_hist_cy)
+                _rc = np.hypot(_coil_cen[0], _coil_cen[1])
+                _rc = np.where(_rc < 1e-9, 1e-9, _rc)
+                _uxc = (_coil_cen[0] / _rc)[None, :]; _uyc = (_coil_cen[1] / _rc)[None, :]
+                _dBrc = _angle_ddt_2d(_Xc * _uxc + _Yc * _uyc)
+                _dBtc = _angle_ddt_2d(-_Xc * _uyc + _Yc * _uxc)
+                _sh_cu = (_sigma_cu / 12.0) * np.mean(
+                    _w_cu ** 2 * _dBrc ** 2 + _h_cu ** 2 * _dBtc ** 2, axis=0)
+                _norm_into(_coil_idx, _sh_cu, areas_s, 0, P_cu_ac_avg)
+
+        _field_snap["loss_dens"] = _dens.tolist()
+
     return {
         "method": "sliding_band",
         # 'field' = magnet/shaft losses from the σ·∂A/∂t magnetodynamic solve

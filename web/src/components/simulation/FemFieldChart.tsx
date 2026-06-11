@@ -75,7 +75,12 @@ function readMeshSetting<T>(key: string, def: T): T {
 }
 
 // ── R3F mesh component ────────────────────────────────────────────────────
-type FieldMode = 'Az' | 'Bmag' | 'J' | 'Demag';
+type FieldMode = 'Az' | 'Bmag' | 'J' | 'Jeddy' | 'Loss' | 'Demag';
+// Modes powered by the (slow) time-coupled eddy-current transient rather than
+// the fast magnetostatic snapshot: J⟳ (real current crowding / proximity) and
+// Loss (Ansys-style W/m³ density map).  Selecting either lazily runs the eddy
+// solve (~25 s) and caches its last-frame field + cycle-averaged loss density.
+const EDDY_MODES = new Set<FieldMode>(['Jeddy', 'Loss']);
 
 // Diverging blue→green→red colormap for signed J_z (Ansys "J" style:
 // red = +max, blue = −max, green = 0).
@@ -156,8 +161,8 @@ function buildIsoLines(
   return new Float32Array(pos);
 }
 
-const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode }>
-  = ({ payload, mode }) => {
+const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode; logLoss: boolean }>
+  = ({ payload, mode, logLoss }) => {
   // Fill geometry — per-vertex Ansys-style banded rainbow for A_z, or
   // per-triangle flat jet for |B|.  We SKIP DOM_OUTER (8) triangles so
   // the outer far-field air ring (visible only for the BC) doesn't eat
@@ -231,11 +236,62 @@ const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode }>
     // NOTE: lo/hi defined here is referenced by isoGeo + colour bar via
     // fillGeo.userData (see below).
 
-    if (mode === 'J') {
+    if (mode === 'Loss') {
+      // Ansys-style "Total Loss" density [W/m³]: a flat per-triangle rainbow
+      // fill over every non-air element, coloured by the cycle-averaged loss
+      // density (iron Bertotti + copper DC+proximity + magnet eddy).  The
+      // density spans orders of magnitude (copper ≫ iron ≫ air-gap), so the
+      // default is a LOG map (logLoss) — every component stays legible; a
+      // linear map matches Ansys's default look but buries the iron.
+      const ld = payload.loss_density_per_tri ?? [];
+      const dom = domain_per_tri;
+      const nTri = triangles.length;
+      const posv: number[] = [];
+      for (let i = 0; i < nTri; i++) {
+        if (dom[i] === DOM_OUTER) continue;
+        const v = i < ld.length ? ld[i] : 0;
+        if (v > 0) posv.push(v);
+      }
+      const vmax = Math.max(pctl(posv, 99.5), 1e-3);
+      const vminPos = Math.max(pctl(posv, 5), vmax * 1e-4);   // log-floor
+      const lgMax = Math.log10(vmax), lgMin = Math.log10(vminPos);
+      const positions = new Float32Array(nTri * 3 * 3);
+      const colors    = new Float32Array(nTri * 3 * 3);
+      let p = 0, c = 0;
+      for (let i = 0; i < nTri; i++) {
+        if (dom[i] === DOM_OUTER) continue;
+        const v = i < ld.length ? ld[i] : 0;
+        let t: number;
+        if (logLoss) {
+          t = v <= 0 ? 0 : (Math.log10(v) - lgMin) / Math.max(lgMax - lgMin, 1e-9);
+        } else {
+          t = v / vmax;
+        }
+        const [rr, gg, bb] = jet01(Math.max(0, Math.min(1, t)));
+        const tt = triangles[i];
+        for (const vi of tt) {
+          positions[p++] = vertices[vi][0] * S;
+          positions[p++] = vertices[vi][1] * S;
+          positions[p++] = 0;
+          colors[c++] = rr / 255; colors[c++] = gg / 255; colors[c++] = bb / 255;
+        }
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position',
+        new THREE.BufferAttribute(positions.subarray(0, p), 3));
+      g.setAttribute('color',
+        new THREE.BufferAttribute(colors.subarray(0, c), 3));
+      (g as any).userData = { loss_vmax: vmax, loss_vmin: vminPos };
+      return g;
+    }
+
+    if (mode === 'J' || mode === 'Jeddy') {
       // J_z mode — Ansys "J [A/m²]" style.  Coil triangles get a diverging
       // blue→green→red colormap based on signed J_z, scaled to the 99-pct
       // absolute value across all coil cells in the current frame.  Iron
-      // / magnet / air cells are not coloured.
+      // / magnet / air cells are not coloured.  In 'Jeddy' (eddy-solve) mode
+      // the J is the REAL current density σ(−∂A/∂t+U) — it crowds towards the
+      // slot opening (proximity effect); the magnetostatic 'J' is uniform.
       const jz = payload.J_z_per_tri ?? [];
       const dom = domain_per_tri;
       const DOM_COIL = 2;
@@ -364,7 +420,7 @@ const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode }>
     g.setIndex(new THREE.BufferAttribute(new Uint32Array(indexArr), 1));
     (g as any).userData = { Bmag_vmax: vmax };
     return g;
-  }, [payload, mode]);
+  }, [payload, mode, logLoss]);
 
   // Iso-A contour lines (only in A_z mode) — drawn as crisp DARK lines on
   // top of the rainbow fill, like the "flux lines" in FEMM / FEMAG.  We
@@ -460,12 +516,21 @@ const FitView: React.FC<{
 
 // ── colour-bar component (vertical) ───────────────────────────────────────
 const ColorBar: React.FC<{
-  vmin: number; vmax: number; unit: string; lut: (t: number) => [number, number, number];
-}> = ({ vmin, vmax, unit, lut }) => {
+  vmin: number; vmax: number; unit: string;
+  lut: (t: number) => [number, number, number];
+  log?: boolean;                     // log-spaced tick labels (fill is still 0..1 LUT)
+  fmt?: (v: number) => string;       // custom number format (e.g. large W/m³)
+}> = ({ vmin, vmax, unit, lut, log = false, fmt }) => {
   const ticks = useMemo(() => {
     const n = 5;
+    if (log && vmin > 0 && vmax > 0) {
+      const a = Math.log10(vmin), b = Math.log10(vmax);
+      return Array.from({ length: n },
+        (_, i) => Math.pow(10, a + (b - a) * (i / (n - 1))));
+    }
     return Array.from({ length: n }, (_, i) => vmin + (vmax - vmin) * (i / (n - 1)));
-  }, [vmin, vmax]);
+  }, [vmin, vmax, log]);
+  const f = fmt ?? ((v: number) => v.toFixed(2));
   const stops = Array.from({ length: 11 }, (_, k) => {
     const [r, g, b] = lut(k / 10);
     return `rgb(${r|0},${g|0},${b|0}) ${(k * 10).toFixed(0)}%`;
@@ -483,7 +548,7 @@ const ColorBar: React.FC<{
         {ticks.map((t, i) => (
           <Typography key={i} sx={{ fontSize: 9, color: '#94a3b8',
             fontFamily: 'monospace', lineHeight: 1 }}>
-            {t.toFixed(2)} {unit}
+            {f(t)} {unit}
           </Typography>
         ))}
       </Box>
@@ -532,10 +597,17 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
                                           payloadOverride, subHeader,
                                           hideRefresh }) => {
   const [fetchedPayload, setPayload] = useState<FemPayload | null>(null);
-  const payload = payloadOverride ?? fetchedPayload;   // override wins
   const [loading, setLoading] = useState<boolean>(false);
   const [error,   setError]   = useState<string | null>(null);
   const [mode,    setMode]    = useState<FieldMode>('Az');
+  // Eddy-solve payload (J⟳ / Loss views) — separate from the fast magnetostatic
+  // one, lazily fetched on first selection and re-fetched when γ / I change.
+  const [eddyPayload, setEddyPayload] = useState<FemPayload | null>(null);
+  const [eddyLoading, setEddyLoading] = useState<boolean>(false);
+  const [eddyErr,     setEddyErr]     = useState<string | null>(null);
+  const [logLoss,     setLogLoss]     = useState<boolean>(true);   // log W/m³ map
+  const isEddy = !payloadOverride && EDDY_MODES.has(mode);
+  const payload = payloadOverride ?? (isEddy ? eddyPayload : fetchedPayload);
   // The static solver always computes a demag map (a check at full Br), but if
   // the user has demag modelling OFF the map (all 0 % at no-load) is just
   // confusing — only offer the Demag view when demag is actually enabled.
@@ -593,14 +665,61 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gamma_deg, rotor_angle_deg, I_phase_rms, payloadOverride]);
 
+  // The eddy solve carries current, so proximity crowding only shows under
+  // load.  At no-load (I=0/undefined) fall back to a representative 120 A so
+  // the J⟳ / Loss views aren't blank — flagged in the note below.
+  const eddyCurrent = (I_phase_rms && I_phase_rms > 0) ? I_phase_rms : 120;
+  const eddySubstituted = !(I_phase_rms && I_phase_rms > 0);
+
+  const fetchEddy = () => {
+    if (payloadOverride) return;
+    setEddyLoading(true); setEddyErr(null);
+    const comp = JSON.stringify(readMeshSetting<Record<string, number>>('componentMesh', {}));
+    const base = `${API}/api/simulation/physics/fem_eddy_field2d`;
+    const qs = new URLSearchParams({
+      gamma_deg:        String(gamma_deg),
+      I_phase_rms:      String(eddyCurrent),
+      mesh_size_mm:     String(readMeshSetting('meshSize', 4.0)),
+      min_size_mm:      String(readMeshSetting('minSize',  0.3)),
+      outer_air_factor: String(readMeshSetting('outerAir', 1.3)),
+      n_sectors:        String(readMeshSetting('nSectors', 4)),
+      component_mesh:   comp,
+    }).toString();
+    fetch(`${base}?${qs}`)
+      .then(async r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
+        return r.json();
+      })
+      .then((d: FemPayload) => { setEddyPayload(d); setEddyLoading(false); })
+      .catch(e => { setEddyErr(String(e)); setEddyLoading(false); });
+  };
+
+  // γ / I changed → the cached eddy solve is stale (rotor angle does NOT
+  // matter — the eddy run sweeps a whole period — so we don't invalidate on it).
+  useEffect(() => {
+    setEddyPayload(null); setEddyErr(null);
+  }, [gamma_deg, I_phase_rms]);
+
+  // Lazily run the (slow) eddy solve the first time a J⟳ / Loss view is shown.
+  useEffect(() => {
+    if (isEddy && !eddyPayload && !eddyLoading && !eddyErr) fetchEddy();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isEddy, eddyPayload, eddyLoading, eddyErr]);
+
   return (
     <Paper sx={{ bgcolor: '#0b1220', border: '1px solid #1e293b', p: 2,
       display: 'flex', flexDirection: 'column', gap: 1 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <Box>
           <Typography sx={{ fontSize: 13, color: '#cbd5e1', fontWeight: 700 }}>
-            Magnetic potential A<sub>z</sub> — real scikit-fem solve
-            <Tooltip title="2-D magnetostatic field at the current rotor angle — the same per-frame field the sliding-band transient sweeps. Torque + losses are ×n_sectors for the full motor." placement="top">
+            {mode === 'Loss'
+              ? <>Loss density — W/m³ (eddy-current transient)</>
+              : mode === 'Jeddy'
+                ? <>Current density J — eddy solve (proximity)</>
+                : <>Magnetic potential A<sub>z</sub> — real scikit-fem solve</>}
+            <Tooltip title={isEddy
+              ? "Time-coupled eddy-current solve over a full electrical period. J⟳ shows the real current density σ(−∂A/∂t+U) crowding toward the slot mouth (proximity effect); Loss is the cycle-averaged dissipation density [W/m³] — iron Bertotti + copper DC+AC + magnet eddy, normalised so the map integrates to the reported component losses."
+              : "2-D magnetostatic field at the current rotor angle — the same per-frame field the sliding-band transient sweeps. Torque + losses are ×n_sectors for the full motor."} placement="top">
               <span style={{ color: '#475569', marginLeft: 6, fontSize: 11, cursor: 'help' }}>ⓘ</span>
             </Tooltip>
           </Typography>
@@ -608,8 +727,8 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
             {payload
               ? (subHeader
                    ? subHeader
-                   : `${payload.n_triangles.toLocaleString()} triangles · ×${payload.symmetry_mult} symmetry · solve ${payload.solve_time_s}s`)
-              : 'Solving…'}
+                   : `${payload.n_triangles.toLocaleString()} triangles · ×${payload.symmetry_mult} symmetry · solve ${payload.solve_time_s}s${isEddy ? ` · eddy @ ${eddyCurrent.toFixed(0)} A` : ''}`)
+              : (isEddy ? 'Running eddy-current transient (~25 s)…' : 'Solving…')}
           </Typography>
         </Box>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -623,11 +742,32 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
             <ToggleButton value="Az">A<sub>z</sub></ToggleButton>
             <ToggleButton value="Bmag">|B|</ToggleButton>
             <ToggleButton value="J">J</ToggleButton>
+            {!payloadOverride && (
+              <ToggleButton value="Jeddy"
+                title="Eddy-solve current density — shows the proximity crowding the uniform 'J' view can't (slow, ~25 s)">
+                J⟳
+              </ToggleButton>
+            )}
+            {!payloadOverride && (
+              <ToggleButton value="Loss"
+                title="Ansys-style loss-density map [W/m³] (slow, ~25 s)">
+                Loss
+              </ToggleButton>
+            )}
             {demagOn && <ToggleButton value="Demag">Demag</ToggleButton>}
           </ToggleButtonGroup>
+          {mode === 'Loss' && (
+            <Button size="small" onClick={() => setLogLoss(v => !v)}
+              title="Toggle log / linear colour scale"
+              sx={{ color: '#93c5fd', fontSize: 10, textTransform: 'none',
+                minWidth: 0, px: 1, border: '1px solid #1e293b' }}>
+              {logLoss ? 'log' : 'lin'}
+            </Button>
+          )}
           {!hideRefresh && (
             <Button size="small" startIcon={<RefreshIcon fontSize="small"/>}
-              onClick={fetchFem} disabled={loading}
+              onClick={isEddy ? fetchEddy : fetchFem}
+              disabled={isEddy ? eddyLoading : loading}
               sx={{ color: '#93c5fd', fontSize: 11, textTransform: 'none' }}>
               Re-solve
             </Button>
@@ -635,10 +775,10 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
         </Box>
       </Box>
 
-      {error && (
+      {(isEddy ? eddyErr : error) && (
         <Typography sx={{ fontSize: 11, color: '#fca5a5', p: 1,
           border: '1px solid #7f1d1d', borderRadius: 1 }}>
-          {error}
+          {isEddy ? eddyErr : error}
         </Typography>
       )}
 
@@ -648,11 +788,16 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
         {/* Canvas */}
         <Box sx={{ position: 'relative', border: '1px solid #0f172a',
           bgcolor: '#060d17', minHeight: 460 }}>
-          {loading && (
-            <Box sx={{ position: 'absolute', inset: 0,
+          {(isEddy ? eddyLoading : loading) && (
+            <Box sx={{ position: 'absolute', inset: 0, flexDirection: 'column',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
-              bgcolor: 'rgba(6,13,23,0.7)', zIndex: 5 }}>
+              bgcolor: 'rgba(6,13,23,0.7)', zIndex: 5, gap: 1 }}>
               <CircularProgress size={32}/>
+              {isEddy && (
+                <Typography sx={{ fontSize: 11, color: '#94a3b8' }}>
+                  Running eddy-current transient (~25 s)…
+                </Typography>
+              )}
             </Box>
           )}
           {payload && (
@@ -661,7 +806,7 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
                 near={0.1} far={5000}/>
               <FitView payload={payload} controlsRef={controlsRef}/>
               <ambientLight intensity={1}/>
-              <FieldMesh payload={payload} mode={mode}/>
+              <FieldMesh payload={payload} mode={mode} logLoss={logLoss}/>
               <OrbitControls ref={controlsRef} enableDamping={false}
                 enableRotate enablePan enableZoom zoomSpeed={1.2}/>
               {/* Drive + follow the overlay Viewcube (same as Geometry). */}
@@ -701,7 +846,25 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
             return <ColorBar vmin={0} vmax={100} unit="Demag %"
               lut={(t) => jetBands(t, 11)}/>;
           }
-          if (mode === 'J') {
+          if (mode === 'Loss') {
+            // Loss-density bar [W/m³] — log or linear to match the fill.
+            const ld = payload.loss_density_per_tri ?? [];
+            const posv: number[] = [];
+            for (let ti = 0; ti < tris.length; ti++) {
+              if (dom[ti] === DOM_OUTER) continue;
+              const v = ti < ld.length ? ld[ti] : 0;
+              if (v > 0) posv.push(v);
+            }
+            const vmax = Math.max(pct(posv, 99.5), 1e-3);
+            const vminPos = Math.max(pct(posv, 5), vmax * 1e-4);
+            const fmtWm3 = (v: number) =>
+              v >= 1e6 ? `${(v / 1e6).toFixed(1)}M`
+              : v >= 1e3 ? `${(v / 1e3).toFixed(0)}k`
+              : v.toFixed(0);
+            return <ColorBar vmin={logLoss ? vminPos : 0} vmax={vmax}
+              unit="W/m³" log={logLoss} fmt={fmtWm3} lut={(t) => jet01(t)}/>;
+          }
+          if (mode === 'J' || mode === 'Jeddy') {
             // Signed J_z bar — find vmax across coil triangles only.
             const DOM_COIL = 2;
             const jz = payload.J_z_per_tri ?? [];
@@ -741,12 +904,20 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
       {payload && (
         <Box sx={{ display: 'grid',
           gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 1, mt: 1 }}>
-          {[
-            { label: 'Mesh vertices',  value: payload.n_vertices.toLocaleString() },
-            { label: 'Mesh triangles', value: payload.n_triangles.toLocaleString() },
-            { label: '|B|_max',        value: `${payload.B_mag_max.toFixed(2)} T` },
-            { label: 'A_z range',      value: `[${(payload.A_z_min*1000).toFixed(2)}, ${(payload.A_z_max*1000).toFixed(2)}] mWb/m` },
-          ].map(s => (
+          {(isEddy
+            ? [
+                { label: 'Copper loss', value: `${(payload.P_cu_W ?? 0).toFixed(0)} W` },
+                { label: 'Iron loss',   value: `${(payload.P_fe_W ?? 0).toFixed(0)} W` },
+                { label: 'Magnet eddy', value: `${(payload.P_mag_eddy_W ?? 0).toFixed(1)} W` },
+                { label: 'Efficiency',  value: `${((payload.efficiency ?? 0) * 100).toFixed(1)} %` },
+              ]
+            : [
+                { label: 'Mesh vertices',  value: payload.n_vertices.toLocaleString() },
+                { label: 'Mesh triangles', value: payload.n_triangles.toLocaleString() },
+                { label: '|B|_max',        value: `${payload.B_mag_max.toFixed(2)} T` },
+                { label: 'A_z range',      value: `[${(payload.A_z_min*1000).toFixed(2)}, ${(payload.A_z_max*1000).toFixed(2)}] mWb/m` },
+              ]
+          ).map(s => (
             <Box key={s.label} sx={{ p: 1, bgcolor: '#060d17',
               border: '1px solid #0f172a', borderRadius: 1 }}>
               <Typography sx={{ fontSize: 9, color: '#475569',
@@ -761,12 +932,21 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
         </Box>
       )}
 
-      <Typography sx={{ fontSize: 9, color: '#334155', mt: 0.5 }}>
-        Same mesh + Solver-Domain settings as the Mesh tab (read from
-        localStorage). Sector mode uses anti-periodic Dirichlet BC on the
-        radial cuts so torque, |B| and flux linkages are physically correct
-        and multiplied by n_sectors to represent the full motor.
-      </Typography>
+      {isEddy ? (
+        <Typography sx={{ fontSize: 9, color: '#64748b', mt: 0.5 }}>
+          {mode === 'Loss'
+            ? `Cycle-averaged loss density [W/m³] from the eddy-current transient — iron Bertotti + copper (DC I²R + AC proximity) + magnet eddy, each normalised so the map integrates to the reported component losses. ${logLoss ? 'Log' : 'Linear'} scale (toggle top-right).`
+            : 'Real current density σ(−∂A/∂t+U) from the eddy solve — current crowds toward the slot opening (proximity). Compare with the uniform magnetostatic "J".'}
+          {eddySubstituted && ' Run carries no load current (I=0); showing 120 A so crowding is visible — set a load current in the simulation for your operating point.'}
+        </Typography>
+      ) : (
+        <Typography sx={{ fontSize: 9, color: '#334155', mt: 0.5 }}>
+          Same mesh + Solver-Domain settings as the Mesh tab (read from
+          localStorage). Sector mode uses anti-periodic Dirichlet BC on the
+          radial cuts so torque, |B| and flux linkages are physically correct
+          and multiplied by n_sectors to represent the full motor.
+        </Typography>
+      )}
       {payload && payload.demag_report && payload.demag_report.length > 0 && (
         <Box sx={{ mt: 0.5, p: 0.75, border: '1px solid', borderRadius: 1,
           borderColor: payload.demag_report.some(r => r.demagnetised)

@@ -1475,6 +1475,8 @@ def get_fem_eddy_field2d(
         from motor_ai_sim.cadquery_geometry import CadQueryMotor
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"eddy solver unavailable: {e}")
+    import time as _time
+    _t0 = _time.time()
     try:
         d = fem_transient_sliding_band(
             n_steps_per_period=int(n_steps_per_period), n_periods=float(n_periods),
@@ -1488,6 +1490,7 @@ def get_fem_eddy_field2d(
     except Exception as e:
         log.exception("eddy field solve failed")
         raise HTTPException(status_code=500, detail=f"eddy solve failed: {e}")
+    _solve_s = round(_time.time() - _t0, 1)
     fld = d.get("field")
     if not fld:
         raise HTTPException(status_code=500, detail="eddy solve returned no field snapshot")
@@ -1500,6 +1503,7 @@ def get_fem_eddy_field2d(
     tags = _np.asarray(fld["tags"]).astype(int)
     Bmag = _np.sqrt(Bx ** 2 + By ** 2)
     Jtri = Jn[T].mean(axis=0)                   # per-element J (nonzero in Cu)
+    Ld = _np.asarray(fld.get("loss_dens") or [], float)   # per-element loss density [W/m³]
 
     # Collapse per-wire / per-magnet tags → renderer palette (rotor at angle 0).
     motor = CadQueryMotor()
@@ -1527,6 +1531,8 @@ def get_fem_eddy_field2d(
         "A_z_per_node": A.tolist(),
         "Bmag_per_tri": Bmag.tolist(),
         "J_z_per_tri": Jtri.tolist(),           # eddy current density (A/m²) in Cu
+        "loss_density_per_tri": Ld.tolist(),    # cycle-avg loss density [W/m³] per element
+        "loss_dens_max": float(Ld.max()) if Ld.size else 0.0,
         "extent": [float(P[0].min()), float(P[0].max()),
                    float(P[1].min()), float(P[1].max())],
         "outlines": _outlines_from_polys(polys),
@@ -1540,8 +1546,8 @@ def get_fem_eddy_field2d(
         "P_mech_W": round(Pmech, 1), "efficiency": round(eff, 4),
         "P_cu_ac_solve_W": round(float(d.get("P_cu_ac_solve_W", 0.0)), 1),
         "V_peak": round(float(d.get("V_peak", 0.0)), 1),
-        "solve_time_s": round(float(d.get("solve_time_s", 0.0)), 1),
-        "total_time_s": 0.0,
+        "solve_time_s": _solve_s,
+        "total_time_s": _solve_s,
     }
     _fem_field_cache[key] = result
     return result

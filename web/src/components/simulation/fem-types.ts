@@ -42,4 +42,13 @@ export interface FemPayload {
   demag_coef_per_tri?: number[];
   // A/m² in each triangle — non-zero only inside coil polygons.
   J_z_per_tri?:        number[];
+  // Cycle-averaged loss density [W/m³] per triangle (eddy solve only) — the
+  // Ansys-style "Total Loss" spatial map.  Non-zero in iron / copper / magnets.
+  loss_density_per_tri?: number[];
+  loss_dens_max?:        number;
+  // True when this payload came from the time-coupled eddy-current solve
+  // (J⟳ / Loss views) rather than the fast magnetostatic snapshot.
+  eddy?:                 boolean;
+  P_cu_ac_solve_W?:      number;
+  V_peak?:               number;
 }

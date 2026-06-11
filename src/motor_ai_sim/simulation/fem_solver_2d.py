@@ -68,6 +68,16 @@ DAXIS_SHIFT_DEG = 90.0
 # width is controlled by the radial air-gap size field, not this.
 _N_SLIP = 1008
 
+# ── Torque-band diagnostic (off by default; set ['on']=True before a solve to
+# collect the per-frame Arkkio torque over radial sub-bands of the gap, to
+# localise where parasitic ripple comes from — e.g. the slip-ring interface).
+_TORQUE_DIAG = {"on": False, "full": [], "rotor": [], "stator": [],
+                "iface": [], "rinner": [], "router": [],
+                # per-frame angular profile of the Arkkio integrand (PHYSICAL
+                # angle bins; rotor-half elements shifted by +θ_eff) — to see
+                # WHERE around the gap the parasitic torque is generated.
+                "ang_bins": 36, "ang_prof": []}
+
 
 def _snap_steps_to_nodes(n_steps: int, nodes_per_period: int) -> int:
     """Snap the requested steps/period to the nearest DIVISOR of the slip-ring
@@ -3009,6 +3019,10 @@ def fem_transient_sliding_band(
     component_mesh_mm: dict = None,  # per-part target element size {comp: mm}
     return_field: bool = False,  # eddy: also return a last-frame field snapshot
     progress_cb=None,            # optional callback(done:int, total:int) per frame
+    rotor_angle0_deg: float = 0.0,   # DIAGNOSTIC: build the rotor PHYSICALLY rotated
+                                     # in CAD (magnets+pockets rotated before meshing);
+                                     # with 1 step this is a true static solve at that
+                                     # angle using the SB machinery minus the sliding.
 ) -> dict:
     """Sliding-band transient: mesh the stator + rotor halves ONCE, then sweep
     the rotor by shifting the slip-ring node pairing (no remeshing) so the
@@ -3112,7 +3126,7 @@ def fem_transient_sliding_band(
     motor = CadQueryMotor()
     if geo_override:
         motor.set_parameters(geo_override)   # in-memory candidate geometry
-    polys = motor.get_2d_polygons(rotor_angle_deg=0.0)
+    polys = motor.get_2d_polygons(rotor_angle_deg=float(rotor_angle0_deg))
     polys = _simplify_polys(polys, tol_mm=0.005, stator_fillet_mm=stator_fillet_mm)
     ms, ts, cs, mr, tr, cr = _build_sliding_band_meshes(
         polys, 0.0, mesh_size_mm, min_size_mm=min_size_mm,
@@ -3744,6 +3758,40 @@ def fem_transient_sliding_band(
         # torque (Arkkio over the gap)
         Tq = _arkkio_torque(mesh_all, A, p.r_rotor_out, p.r_stator_in,
                             p.stack_length) * NS
+        if _TORQUE_DIAG["on"]:
+            _mr = 0.5 * (p.r_rotor_out + p.r_stator_in)
+            _gw = (p.r_stator_in - p.r_rotor_out)
+            _ak = lambda a, b: _arkkio_torque(mesh_all, A, a, b, p.stack_length) * NS
+            _TORQUE_DIAG["full"].append(Tq)
+            _TORQUE_DIAG["rotor"].append(_ak(p.r_rotor_out, _mr))          # whole rotor half
+            _TORQUE_DIAG["stator"].append(_ak(_mr, p.r_stator_in))         # whole stator half
+            _TORQUE_DIAG["iface"].append(_ak(_mr - 0.25 * _gw, _mr + 0.25 * _gw))  # straddles slip ring
+            _TORQUE_DIAG["rinner"].append(_ak(p.r_rotor_out, p.r_rotor_out + 0.3 * _gw))   # rotor surface, far from ring
+            _TORQUE_DIAG["router"].append(_ak(p.r_stator_in - 0.3 * _gw, p.r_stator_in))   # stator surface, far from ring
+            # angular profile of the torque integrand over the gap band
+            _Bx, _By = _per_triangle_B(mesh_all, A)
+            _Pq = mesh_all.p; _Tq2 = mesh_all.t
+            _cx = (_Pq[0, _Tq2[0]] + _Pq[0, _Tq2[1]] + _Pq[0, _Tq2[2]]) / 3.0
+            _cy = (_Pq[1, _Tq2[0]] + _Pq[1, _Tq2[1]] + _Pq[1, _Tq2[2]]) / 3.0
+            _rc = np.hypot(_cx, _cy)
+            _msk = (_rc >= p.r_rotor_out) & (_rc <= p.r_stator_in)
+            _ar = _triangle_areas(mesh_all)
+            _cp = _cx / _rc; _sp = _cy / _rc
+            _Brq = _Bx * _cp + _By * _sp
+            _Bpq = -_Bx * _sp + _By * _cp
+            _itg = (_ar * _rc * _Brq * _Bpq) * (p.stack_length / (MU0 * (p.r_stator_in - p.r_rotor_out))) * NS
+            _phi = np.degrees(np.arctan2(_cy, _cx)) % 360.0
+            _nst_tris = Tts.shape[1]
+            _is_rot = np.arange(_Tq2.shape[1]) >= _nst_tris
+            _phi_phys = np.where(_is_rot, (_phi + theta_eff) % 360.0, _phi)   # theta_eff is in degrees
+            _nb = int(_TORQUE_DIAG["ang_bins"])
+            _prof = np.zeros(_nb)
+            _sec = 360.0 / NS
+            # wrap rotated rotor elements past the sector edge back into the
+            # sector (Br·Bφ is invariant under the anti-periodic map)
+            _bi = np.clip(((_phi_phys[_msk] % _sec) / _sec * _nb).astype(int), 0, _nb - 1)
+            np.add.at(_prof, _bi, _itg[_msk])
+            _TORQUE_DIAG["ang_prof"].append(_prof)
         # flux linkage (stator half)
         As = A[:nsn]; A_tri = (As[Tts[0]] + As[Tts[1]] + As[Tts[2]]) / 3.0
         pa = pb = pc = 0.0

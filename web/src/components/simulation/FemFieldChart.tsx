@@ -536,31 +536,17 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
   const [loading, setLoading] = useState<boolean>(false);
   const [error,   setError]   = useState<string | null>(null);
   const [mode,    setMode]    = useState<FieldMode>('Az');
-  // Solver source: magnetostatic (fast) vs time-coupled eddy-current solve
-  // (slow ~25 s) — the eddy view shows the SAME Az / |B| / J fields but from the
-  // σ·∂A/∂t solve, where J is the real eddy + main current density in the copper.
-  const [eddy,    setEddy]    = useState<boolean>(false);
   const controlsRef = useRef<any>(null);
 
   const fetchFem = () => {
     if (payloadOverride) return;   // parent owns the data
     setLoading(true); setError(null);
     const comp = JSON.stringify(readMeshSetting<Record<string, number>>('componentMesh', {}));
-    const base = eddy
-      ? `${API}/api/simulation/physics/fem_eddy_field2d`
-      : `${API}/api/simulation/physics/fem_field2d`;
-    const params: Record<string, string> = eddy ? {
-      gamma_deg:          String(gamma_deg),
-      I_phase_rms:        String(I_phase_rms ?? 120),
-      n_steps_per_period: '12',
-      n_periods:          '2',
-      mesh_size_mm:       String(readMeshSetting('meshSize', 3.0)),
-      min_size_mm:        String(readMeshSetting('minSize',  0.3)),
-      outer_air_factor:   String(readMeshSetting('outerAir', 1.3)),
-      n_sectors:          String(readMeshSetting('nSectors', 4)),
-      coil_temp_c:        '120',
-      component_mesh:     comp,
-    } : {
+    // Transient-only policy: the separate "Eddy" static solve was retired —
+    // the magnetostatic field view is just the per-frame field the transient
+    // sweeps; losses/torque come from the sliding-band transient.
+    const base = `${API}/api/simulation/physics/fem_field2d`;
+    const params: Record<string, string> = {
       rotor_angle_deg:   String(rotor_angle_deg),
       gamma_deg:         String(gamma_deg),
       mesh_size_mm:      String(readMeshSetting('meshSize',    4.0)),
@@ -572,7 +558,7 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
       stator_fillet_mm:  '0',   // native geometry — extra smoothing removed
       component_mesh:    comp,
     };
-    if (!eddy && I_phase_rms !== undefined) {
+    if (I_phase_rms !== undefined) {
       params.I_phase_rms = String(I_phase_rms);
     }
     const qs = new URLSearchParams(params).toString();
@@ -597,7 +583,7 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
     }
     fetchFem();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gamma_deg, rotor_angle_deg, I_phase_rms, payloadOverride, eddy]);
+  }, [gamma_deg, rotor_angle_deg, I_phase_rms, payloadOverride]);
 
   return (
     <Paper sx={{ bgcolor: '#0b1220', border: '1px solid #1e293b', p: 2,
@@ -605,35 +591,20 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <Box>
           <Typography sx={{ fontSize: 13, color: '#cbd5e1', fontWeight: 700 }}>
-            {eddy
-              ? <>Eddy-current solve — A<sub>z</sub> / |B| / J&nbsp;(σ·∂A/∂t)</>
-              : <>Magnetic potential A<sub>z</sub> — real scikit-fem solve</>}
-            <Tooltip title="Magneto = scikit-fem 2-D magnetostatics. Eddy = time-coupled σ·∂A/∂t sliding-band solve (slow ~25 s): the J view then shows the real current density J = σ(−∂A/∂t + U_c) in the copper (main + eddy/proximity). Torque + losses are ×n_sectors for the full motor." placement="top">
+            Magnetic potential A<sub>z</sub> — real scikit-fem solve
+            <Tooltip title="2-D magnetostatic field at the current rotor angle — the same per-frame field the sliding-band transient sweeps. Torque + losses are ×n_sectors for the full motor." placement="top">
               <span style={{ color: '#475569', marginLeft: 6, fontSize: 11, cursor: 'help' }}>ⓘ</span>
             </Tooltip>
           </Typography>
-          <Typography sx={{ fontSize: 10, color: eddy ? '#d97706' : '#475569' }}>
+          <Typography sx={{ fontSize: 10, color: '#475569' }}>
             {payload
               ? (subHeader
                    ? subHeader
-                   : `${eddy ? 'EDDY solve · ' : ''}${payload.n_triangles.toLocaleString()} triangles · ×${payload.symmetry_mult} symmetry`
-                     + (eddy ? ` · Cu(solve)=${payload.P_cu_W} W (inflated — slab ≈1.4 kW is trustworthy)` : ` · solve ${payload.solve_time_s}s`))
-              : (eddy ? 'Eddy solving (~25 s)…' : 'Solving…')}
+                   : `${payload.n_triangles.toLocaleString()} triangles · ×${payload.symmetry_mult} symmetry · solve ${payload.solve_time_s}s`)
+              : 'Solving…'}
           </Typography>
         </Box>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          {!payloadOverride && (
-            <ToggleButtonGroup value={eddy ? 'eddy' : 'ms'} exclusive size="small"
-              onChange={(_, v) => v && setEddy(v === 'eddy')}
-              sx={{
-                '& .MuiToggleButton-root': { py: 0.2, px: 1, fontSize: 10,
-                  color: '#64748b', borderColor: '#1e293b', textTransform: 'none',
-                  '&.Mui-selected': { color: '#fde68a', bgcolor: '#3a2e12',
-                    borderColor: '#f59e0b' }}}}>
-              <ToggleButton value="ms">Magneto</ToggleButton>
-              <ToggleButton value="eddy">Eddy</ToggleButton>
-            </ToggleButtonGroup>
-          )}
           <ToggleButtonGroup value={mode} exclusive size="small"
             onChange={(_, v) => v && setMode(v as FieldMode)}
             sx={{

@@ -199,6 +199,34 @@ const MeshShape: React.FC<MeshShapeProps> = ({
   );
 };
 
+/** Force the r3f canvas to its container size.  r3f's built-in
+ *  ResizeObserver auto-measure intermittently fails in embedded/dev browsers
+ *  (canvas sticks at the 300×150 HTML default → mesh renders in a tiny black
+ *  corner).  We drive setSize() ourselves from a ResizeObserver on the canvas
+ *  parent, which is reliable everywhere. */
+const ResizeFix: React.FC = () => {
+  const { gl, setSize } = useThree();
+  useEffect(() => {
+    const parent = gl.domElement.parentElement;
+    if (!parent) return;
+    let lw = 0, lh = 0;
+    const apply = () => {
+      const r = parent.getBoundingClientRect();
+      if (r.width > 1 && r.height > 1 &&
+          (Math.abs(r.width - lw) > 1 || Math.abs(r.height - lh) > 1)) {
+        lw = r.width; lh = r.height;
+        setSize(r.width, r.height);
+      }
+    };
+    const ro = new ResizeObserver(apply);
+    ro.observe(parent);
+    apply();
+    const t = setTimeout(apply, 80);   // catch the post-layout settle
+    return () => { ro.disconnect(); clearTimeout(t); };
+  }, [gl, setSize]);
+  return null;
+};
+
 /** Auto-fit the orthographic camera so the mesh fills the view. Resets every
  *  time the payload changes (e.g. user clicks Rebuild). */
 const FitView: React.FC<{
@@ -258,8 +286,18 @@ const FemMeshViewer3D: React.FC<ViewerProps> = ({
   const controlsRef = useRef<any>(null);
   if (!payload || payload.n_triangles === 0) return null;
 
+  // r3f sizes its canvas from a ResizeObserver on its container.  When the
+  // Canvas mounts the same frame the payload arrives (or in a flex box whose
+  // height resolves a tick later), that first measure can come back 0 and the
+  // canvas sticks at the 300×150 HTML default — rendering the mesh in a tiny
+  // top-left patch of an otherwise-black box.  Give r3f a cleanly-sized,
+  // position:relative target and force the canvas to fill it.
   return (
-    <Canvas style={{ background: '#060d17' }}>
+    <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+    <Canvas
+      style={{ width: '100%', height: '100%', display: 'block', background: '#060d17' }}
+      resize={{ debounce: 0 }}>
+      <ResizeFix/>
       <OrthographicCamera makeDefault position={[0, 0, 300]} near={0.1} far={5000}/>
       <FitView payload={payload} controlsRef={controlsRef}/>
       <ambientLight intensity={0.9}/>
@@ -298,6 +336,7 @@ const FemMeshViewer3D: React.FC<ViewerProps> = ({
       <CameraSync controlsRef={controlsRef}/>
       <ViewcubeNavigation controlsRef={controlsRef}/>
     </Canvas>
+    </div>
   );
 };
 

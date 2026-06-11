@@ -1034,7 +1034,11 @@ const MeshPanel: React.FC = () => {
                   <CircularProgress size={32} sx={{ color: '#3b82f6' }}/>
                 </Box>
               )}
-              <Box sx={{ width: '100%', height: '100%', minHeight: 540 }}>
+              {/* position:absolute + inset:0 gives r3f a CONCRETE pixel-sized
+                  parent (the relative Paper) — a height:100% chain against a
+                  flex/align-center parent can resolve to 0 at the moment r3f
+                  measures, leaving the canvas stuck at the 300×150 default. */}
+              <Box sx={{ position: 'absolute', inset: 0 }}>
                 <FemMeshViewer3D payload={femMesh as any}
                   showFill={fillDomains}
                   showWire={showEdges}

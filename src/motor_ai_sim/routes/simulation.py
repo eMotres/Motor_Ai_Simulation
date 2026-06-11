@@ -1520,9 +1520,13 @@ def get_fem_eddy_field2d(
     Pcu = float(d.get("P_cu_total_solve_W", 0.0))    # eddy-solve copper (DC+AC)
     Pfe = _mean("P_fe_W"); Pmag = _mean("P_mag_eddy_W")
     Tavg = float(d.get("T_avg_Nm", 0.0)); rpm = float(d.get("rpm", 0.0))
-    Pmech = Tavg * 2 * _math.pi * rpm / 60.0
     ploss = Pcu + Pfe + Pmag
-    eff = Pmech / (Pmech + ploss) if Pmech > 0 else 0.0
+    # Energy conservation: P_mech = P_elec_in − P_loss (P_elec_in = ⟨Σ v·i⟩ = 0
+    # at no-load → P_mech = −P_loss, not the noisy cogging-mean torque × ω).
+    Pelec = float(d.get("P_elec_in_W", 0.0))
+    Pmech = Pelec - ploss
+    Pairgap = Tavg * 2 * _math.pi * rpm / 60.0
+    eff = (Pmech / Pelec) if (Pmech > 0 and Pelec > 1.0) else 0.0
     result = {
         "ok": True, "eddy": True,
         "n_vertices": int(P.shape[1]), "n_triangles": int(T.shape[1]),
@@ -2022,11 +2026,19 @@ def get_fem_transient(
                 _Pcu = _mean("P_cu_W")
                 _Pfe = _mean("P_fe_W")
                 _Pmag = _mean("P_mag_eddy_W")
+                _Pshaft = _mean("P_shaft_eddy_W")   # solid-shaft eddy (bulk conductor)
                 _Vpk = float(_sbres.get("V_peak", 0.0))
                 _Vrms = _Vpk / _math.sqrt(2)
                 _Vlpk = _Vpk * _math.sqrt(3); _Vlrms = _Vlpk / _math.sqrt(2)
-                _ploss = _Pcu + _Pfe + _Pmag
-                _eff = _Pmech / max(_Pmech + _ploss, 1.0) if _Pmech > 0 else 0.0
+                # Total INCLUDES shaft eddy so the breakdown sums to the same loss
+                # the solver's energy-balanced P_mech subtracts (else the card's
+                # Mech-power ≠ Σ(displayed losses) by the hidden shaft term).
+                _ploss = _Pcu + _Pfe + _Pmag + _Pshaft
+                # Energy conservation: P_mech = P_elec_in − P_loss (the solver now
+                # computes it this way, so at no-load P_mech = −P_loss exactly).
+                # Efficiency = shaft out / electrical in; 0 when not motoring.
+                _Pelec = float(_sbres.get("P_elec_in_W", _Pmech + _ploss))
+                _eff = (_Pmech / _Pelec) if (_Pmech > 0 and _Pelec > 1.0) else 0.0
                 _sbres["summary"] = {
                     "rpm": _rpm,
                     "I_phase_rms_A": round(float(I_phase_rms), 2),
@@ -2042,9 +2054,9 @@ def get_fem_transient(
                     "KV_rpm_per_V_phase": round(_rpm / _Vrms, 2) if _Vrms > 1 else 0.0,
                     "KV_rpm_per_V_line":  round(_rpm / _Vlrms, 2) if _Vlrms > 1 else 0.0,
                     "P_loss_total_W": round(_ploss, 1),
-                    "P_core_W":     round(_Pfe, 1),     # laminated iron
-                    "P_stranded_W": round(_Pcu, 1),     # copper
-                    "P_solid_W":    round(_Pmag, 1),    # magnet eddy
+                    "P_core_W":     round(_Pfe, 1),            # laminated iron
+                    "P_stranded_W": round(_Pcu, 1),            # copper
+                    "P_solid_W":    round(_Pmag + _Pshaft, 1), # magnet + shaft eddy
                     "efficiency":   round(_eff, 4),
                     "coil_temp_C":  round(float(_sbres.get("coil_temp_C", coil_temp_c)), 1),
                     "end_winding_factor": round(float(_sbres.get("end_winding_factor", 0.0)), 2),
@@ -2459,6 +2471,19 @@ def get_fem_transient(
     T_em_series, _Trip_phys, _Trip_raw = _blt(
         T_em_series, n_steps_per_period, n_periods)
 
+    # ── Energy-conserving shaft power (same convention as the sliding-band path)
+    # P_elec_in = ⟨Σ v·i⟩ (0 at no-load), and P_mech = P_elec_in − P_loss so that
+    # at no-load the shaft power equals −P_loss (drive overcomes the losses) —
+    # NOT the numerically-noisy cogging-mean torque × ω.
+    _omega_m = 2 * _math.pi * rpm / 60
+    _Pelec_in = (float(_np.mean(
+        _np.asarray(V_A) * _np.asarray(I_A_series)
+        + _np.asarray(V_B) * _np.asarray(I_B_series)
+        + _np.asarray(V_C) * _np.asarray(I_C_series))) if I_A_series else 0.0)
+    _Ploss_avg = float(_np.mean(P_total_series)) if P_total_series else 0.0
+    _Pmech_shaft = _Pelec_in - _Ploss_avg
+    _Pairgap = float(_np.mean(T_em_series)) * _omega_m
+
     payload = {
         "n_steps":            n_total,
         "n_steps_per_period": int(n_steps_per_period),
@@ -2477,7 +2502,9 @@ def get_fem_transient(
         "P_fe_W":             P_fe_series,
         "P_mag_eddy_W":       P_eddy_series,
         "P_loss_total_W":     P_total_series,
-        "P_mech_avg_W":       float(_np.mean(T_em_series) * 2 * _math.pi * rpm / 60),
+        "P_mech_avg_W":       _Pmech_shaft,        # energy-conserving shaft power
+        "P_elec_in_W":        _Pelec_in,           # ⟨Σ v·i⟩ (0 at no-load)
+        "P_airgap_W":         _Pairgap,            # electromagnetic T_avg·ω
         "I_A":                I_A_series,
         "I_B":                I_B_series,
         "I_C":                I_C_series,
@@ -2502,7 +2529,7 @@ def get_fem_transient(
     P_fe_avg  = float(_np.mean(P_fe_series))
     P_mag_avg = float(_np.mean(P_eddy_series))
     T_avg     = float(_np.mean(T_em_series))
-    P_mech    = T_avg * 2 * _math.pi * rpm / 60
+    P_mech    = _Pmech_shaft          # energy-conserving (P_elec_in − P_loss)
 
     V_peak = float(max(max(map(abs, V_A)),
                          max(map(abs, V_B)),
@@ -2517,7 +2544,9 @@ def get_fem_transient(
     KV_rpm_per_V_line  = (rpm / V_line_rms)        if V_line_rms       > 1.0 else 0.0
 
     P_loss_avg = P_cu_avg + P_fe_avg + P_mag_avg
-    eff_avg    = P_mech / max(P_mech + P_loss_avg, 1.0) if P_mech > 0 else 0.0
+    # Efficiency = shaft out / electrical in (motoring only); 0 at no-load where
+    # P_elec_in = 0 and the shaft merely absorbs the losses (P_mech = −P_loss).
+    eff_avg    = (P_mech / _Pelec_in) if (P_mech > 0 and _Pelec_in > 1.0) else 0.0
 
     payload["summary"] = {
         # Operating point

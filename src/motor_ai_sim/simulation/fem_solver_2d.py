@@ -4422,7 +4422,21 @@ def fem_transient_sliding_band(
     P_cu_series = [P_cu_dc + ac for ac in P_cu_ac_series]
     P_tot_series = [c + f + m + s for c, f, m, s
                     in zip(P_cu_series, P_fe_series, P_mag_series, P_shaft_series)]
-    P_mech_avg = float(Tavg * 2.0 * math.pi * rpm / 60.0)
+    # ── Mechanical/shaft power from GLOBAL energy conservation ───────────────
+    # P_elec_in = ⟨Σ v·i⟩ over the period (EXACTLY 0 at no-load, I=0).  Energy
+    # balance P_in = P_mech + P_loss gives the physically-correct shaft power
+    #     P_mech = P_elec_in − P_loss_total
+    # — at no-load this equals −P_loss (the drive overcomes every loss), and it
+    # never relies on the numerically-noisy cogging-mean torque (T_avg·ω gave a
+    # spurious −620 W at I=0 against 325 W of loss, violating conservation).
+    _omega_m = 2.0 * math.pi * rpm / 60.0
+    P_elec_in = (float(np.mean(np.asarray(VA) * np.asarray(IA)
+                               + np.asarray(VB) * np.asarray(IB)
+                               + np.asarray(VC) * np.asarray(IC)))
+                 if IA else 0.0)
+    P_loss_total_avg = float(np.mean(P_tot_series)) if P_tot_series else 0.0
+    P_airgap_avg = float(Tavg * _omega_m)        # electromagnetic (Arkkio) power
+    P_mech_avg = P_elec_in - P_loss_total_avg     # energy-conserving shaft power
 
     # ── Per-element loss DENSITY (W/m³) for the Ansys-style spatial map ──────
     # Same per-element loss math as the totals above, kept per-element instead
@@ -4513,7 +4527,10 @@ def fem_transient_sliding_band(
         "P_shaft_eddy_W": P_shaft_series,
         "P_cu_ac_solve_W": round(P_cu_ac_solve_W, 1),       # field-based copper AC (eddy solve)
         "P_cu_total_solve_W": round(P_cu_total_solve_W, 1),  # field-based copper total
-        "P_mech_avg_W": P_mech_avg,
+        "P_mech_avg_W": P_mech_avg,                          # energy-conserving shaft power
+        "P_elec_in_W": P_elec_in,                            # ⟨Σ v·i⟩ (0 at no-load)
+        "P_airgap_W": P_airgap_avg,                          # electromagnetic T_avg·ω
+        "P_loss_total_avg_W": P_loss_total_avg,
         "R_phase_ohm": R_phase, "n_slip_nodes": int(Nring),
         "coil_temp_C": float(coil_temp_c),
         "end_winding_factor": float(_k_end_used),

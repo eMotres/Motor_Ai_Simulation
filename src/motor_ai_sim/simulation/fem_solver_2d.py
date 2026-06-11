@@ -68,6 +68,12 @@ DAXIS_SHIFT_DEG = 90.0
 # width is controlled by the radial air-gap size field, not this.
 _N_SLIP = 1008
 
+# Structured slip strips (explicit offset rings at mid±δ).  Tested as a fix for
+# the order-6 sliding artifact: strips came out perfectly regular, but ord6 was
+# UNCHANGED (1.94 vs 1.79) and the per-frame local stress balance got WORSE
+# (frame-0 total −4.2 vs −0.1 N·m) → OFF by default; kept for experiments.
+_SB_STRUCTURED_STRIPS = False
+
 # ── Torque-band diagnostic (off by default; set ['on']=True before a solve to
 # collect the per-frame Arkkio torque over radial sub-bands of the gap, to
 # localise where parasitic ripple comes from — e.g. the slip-ring interface).
@@ -338,23 +344,75 @@ def _simplify_polys(polys: dict, tol_mm: float = 0.005,
             # ring shared by BOTH in_band (exterior) and out_band (hole), so the
             # sliding-band transfinite mesh gets identical, matching nodes there
             # (rotor & stator differences don't touch mid_r, so it stays intact).
-            from shapely.geometry import Polygon as _SPoly2
+            from shapely.geometry import Polygon as _SPoly2, MultiPolygon as _SMulti2
             _N = int(n_slip) if n_slip and n_slip > 0 else _N_SLIP
-            mid_ring = [(mid_r * math.cos(2*math.pi*i/_N),
-                         mid_r * math.sin(2*math.pi*i/_N)) for i in range(_N)]
-            rout_ring = [(r_outer * math.cos(2*math.pi*i/_N),
-                          r_outer * math.sin(2*math.pi*i/_N)) for i in range(_N)]
-            in_band = _SPoly2(mid_ring)
-            if rotor_solids:
-                in_band = in_band.difference(_uu(rotor_solids))
-            if not in_band.is_valid: in_band = in_band.buffer(0)
-            out["in_band"] = in_band
+            def _ring_pts(_r):
+                return [(_r * math.cos(2*math.pi*i/_N),
+                         _r * math.sin(2*math.pi*i/_N)) for i in range(_N)]
+            mid_ring  = _ring_pts(mid_r)
+            rout_ring = _ring_pts(r_outer)
 
-            out_band = _SPoly2(rout_ring, [mid_ring])
+            # ── STRUCTURED slip strips ────────────────────────────────────
+            # Free meshing leaves the band next to the slip ring RAGGED (no
+            # clean node rows) and its frozen irregular pattern beats against
+            # the slip alignment as the rotor slides → parasitic low-order
+            # torque.  Bound a thin annulus strip on EACH side of the slip
+            # ring by explicit offset rings on the SAME angular grid — the
+            # strip then meshes as a regular, pole/slot-agnostic row.
+            _r_ro_est = 0.0
+            for _g in rotor_solids:
+                _xy = (_g.exterior.coords if hasattr(_g, "exterior")
+                       else _g.geoms[0].exterior.coords)
+                _r_ro_est = max(_r_ro_est,
+                                max(math.hypot(x, y) for x, y in _xy))
+            _r_si_est = float("inf")
             if out.get("stator") is not None:
-                out_band = out_band.difference(out["stator"])
-            if not out_band.is_valid: out_band = out_band.buffer(0)
-            out["out_band"] = out_band
+                _sg = (out["stator"].geoms[0] if hasattr(out["stator"], "geoms")
+                       else out["stator"])
+                for _intr in _sg.interiors:
+                    _r_si_est = min(_r_si_est,
+                                    min(math.hypot(x, y) for x, y in _intr.coords))
+            _gap_est = (_r_si_est - _r_ro_est) \
+                if (_r_si_est < float("inf") and _r_ro_est > 0) else 0.0
+            _delta = min(max(0.25 * _gap_est, 0.04), 0.4) if _gap_est > 0.05 else 0.0
+
+            def _parts(_g):
+                return list(_g.geoms) if hasattr(_g, "geoms") else [_g]
+
+            if _SB_STRUCTURED_STRIPS and _delta > 0 \
+                    and (mid_r - _delta) > _r_ro_est + 0.02 \
+                    and (mid_r + _delta) < _r_si_est - 0.02:
+                ring_in  = _ring_pts(mid_r - _delta)
+                ring_out = _ring_pts(mid_r + _delta)
+                strip_r = _SPoly2(mid_ring, [ring_in])     # rotor-side strip
+                inner = _SPoly2(ring_in)
+                if rotor_solids:
+                    inner = inner.difference(_uu(rotor_solids))
+                if not inner.is_valid: inner = inner.buffer(0)
+                out["in_band"] = _SMulti2([strip_r] + _parts(inner))
+
+                strip_s = _SPoly2(ring_out, [mid_ring])    # stator-side strip
+                outer = _SPoly2(rout_ring, [ring_out])
+                if out.get("stator") is not None:
+                    outer = outer.difference(out["stator"])
+                if not outer.is_valid: outer = outer.buffer(0)
+                out["out_band"] = _SMulti2([strip_s] + _parts(outer))
+                # The offset rings must keep EXACTLY their seeded vertices
+                # (transfinite 2/edge) or gmsh re-subdivides them and the
+                # strip alignment is lost.  The mesh builder reads this.
+                out["transfinite_ring_radii_mm"] = [mid_r - _delta, mid_r + _delta]
+            else:
+                in_band = _SPoly2(mid_ring)
+                if rotor_solids:
+                    in_band = in_band.difference(_uu(rotor_solids))
+                if not in_band.is_valid: in_band = in_band.buffer(0)
+                out["in_band"] = in_band
+
+                out_band = _SPoly2(rout_ring, [mid_ring])
+                if out.get("stator") is not None:
+                    out_band = out_band.difference(out["stator"])
+                if not out_band.is_valid: out_band = out_band.buffer(0)
+                out["out_band"] = out_band
         except Exception as e:
             log.warning("in/out band rebuild after simplify failed: %s", e)
     return out
@@ -551,7 +609,24 @@ def _clip_polys_to_sector(polys: dict, n_sectors: int) -> dict:
         if g is None or g.is_empty:
             return g
         try:
-            return g.intersection(wedge)
+            parts = list(g.geoms) if hasattr(g, "geoms") else [g]
+            if len(parts) == 1:
+                return parts[0].intersection(wedge)
+            # Clip TOUCHING parts one by one — a single overlay on the whole
+            # MultiPolygon node-merges the parts and DISSOLVES their shared
+            # boundaries (e.g. the structured slip strips' offset rings),
+            # erasing the explicit ring seeding from the model.
+            clipped = []
+            for p in parts:
+                c = p.intersection(wedge)
+                if c is None or c.is_empty:
+                    continue
+                clipped.extend(list(c.geoms) if hasattr(c, "geoms") else [c])
+            clipped = [c for c in clipped
+                       if c.geom_type == "Polygon" and c.area > 1e-9]
+            if not clipped:
+                return None
+            return clipped[0] if len(clipped) == 1 else _SMPoly(clipped)
         except Exception:
             return g
 
@@ -702,6 +777,8 @@ def _build_sliding_band_meshes(
         _ro = float(geo_cfg.get("rotor_outer_radius", 0.0))
         _si = float(geo_cfg.get("stator_inner_radius", 0.0))
         _slip_r = 0.5 * (_ro + _si) if (_ro > 0 and _si > _ro) else None
+    # Structured-strip offset rings (mid±δ): keep their seeded vertices too.
+    _extra_tf = polys.get("transfinite_ring_radii_mm") or []
 
     # Map the air domains onto the keys the mesh builder recognises:
     #   rotor half:  in_band  → "air_gap"   (DOM_AIRGAP)
@@ -730,6 +807,7 @@ def _build_sliding_band_meshes(
         gap_layers=gap_layers,
         n_sectors=n_sectors, geo_cfg=geo_cfg,
         add_background_air=False, slip_transfinite_r=_slip_r,
+        extra_transfinite_radii=_extra_tf,
         component_mesh_mm=component_mesh_mm,
         rotational_period_deg=_slot_period,
     )
@@ -751,6 +829,7 @@ def _build_sliding_band_meshes(
         gap_layers=gap_layers,
         n_sectors=n_sectors, geo_cfg=geo_cfg,
         add_background_air=False, slip_transfinite_r=_slip_r,
+        extra_transfinite_radii=_extra_tf,
         component_mesh_mm=component_mesh_mm,
         rotational_period_deg=_pole_period,
     )
@@ -1158,6 +1237,7 @@ def build_mesh_from_polygons(polys: dict,
                              slip_transfinite_r: Optional[float] = None,
                              component_mesh_mm: Optional[dict] = None,
                              rotational_period_deg: Optional[float] = None,
+                             extra_transfinite_radii: Optional[List[float]] = None,
                              ) -> Tuple["MeshTri", np.ndarray]:
     """Construct a conforming triangle mesh from the CadQuery polygon dict.
 
@@ -1674,10 +1754,11 @@ def build_mesh_from_polygons(polys: dict,
         # Matching nodes let the two halves MERGE by node identity (a shared
         # DOF) when the rotor is rotated by an integer node step — no
         # interpolation, no flux-coupling error.
-        if slip_transfinite_r is not None:
+        _tf_radii = ([float(slip_transfinite_r)] if slip_transfinite_r is not None else []) \
+                    + [float(r) for r in (extra_transfinite_radii or [])]
+        if _tf_radii:
             try:
-                _rs = float(slip_transfinite_r)
-                _n_ring = 0
+                _counts = [0] * len(_tf_radii)
                 for (_d, _ct) in gmsh.model.getEntities(1):
                     _bp = gmsh.model.getBoundary([(1, _ct)], oriented=False,
                                                  combined=False)
@@ -1685,11 +1766,15 @@ def build_mesh_from_polygons(polys: dict,
                     for (_pd, _pt) in _bp:
                         _xyz = gmsh.model.getValue(0, _pt, [])
                         _rr.append(math.hypot(_xyz[0], _xyz[1]))
-                    if _rr and all(abs(_r - _rs) < 1e-3 for _r in _rr):
-                        gmsh.model.mesh.setTransfiniteCurve(_ct, 2)
-                        _n_ring += 1
-                log.info("slip ring: %d transfinite edges at r=%.3f mm",
-                         _n_ring, _rs)
+                    if not _rr:
+                        continue
+                    for _ri, _rs in enumerate(_tf_radii):
+                        if all(abs(_r - _rs) < 1e-3 for _r in _rr):
+                            gmsh.model.mesh.setTransfiniteCurve(_ct, 2)
+                            _counts[_ri] += 1
+                            break
+                log.info("transfinite rings: " + ", ".join(
+                    f"r={_rs:.3f}mm×{_c}" for _rs, _c in zip(_tf_radii, _counts)))
             except Exception as _e:
                 log.warning("slip transfinite skipped: %s", _e)
 

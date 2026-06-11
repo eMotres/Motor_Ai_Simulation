@@ -162,10 +162,15 @@ def apply_preset(preset_id: str):
                 sim_sec["frequency"] = round(float(sim_sec["rpm"]) * _pp / 60.0, 2)
         except Exception:
             pass
-        _CONFIG_PATH.write_text(
+        # Atomic write (temp + replace) so a concurrent reader never catches the
+        # config file mid-truncate and parses it empty (which would nuke it).
+        import os as _os
+        _tmp = _CONFIG_PATH.with_suffix(".yaml.tmp")
+        _tmp.write_text(
             yaml.dump(config, allow_unicode=True, default_flow_style=False, sort_keys=False),
             encoding="utf-8",
         )
+        _os.replace(_tmp, _CONFIG_PATH)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"failed to write config: {e}")
 

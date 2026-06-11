@@ -26,8 +26,20 @@ const MESH_COMPONENTS: { key: string; label: string }[] = [
 import SaveIcon from '@mui/icons-material/Save';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import FemMeshViewer3D from './FemMeshViewer3D';
+import FemMeshViewer2D from './FemMeshViewer2D';
 import SaveToMotorButton from '../common/SaveToMotorButton';
 import { syncActiveMotor } from '../common/motorSettings';
+
+// WebGL is unavailable in some embedded / sandboxed browser panels
+// ("GL_VENDOR = Disabled, Sandboxed = yes") → the 3-D (WebGL) viewer renders
+// black there.  Detect once and fall back to the Canvas2D viewer so the mesh
+// is always visible.
+const WEBGL_OK = (() => {
+  try {
+    const c = document.createElement('canvas');
+    return !!(c.getContext('webgl2') || c.getContext('webgl'));
+  } catch { return false; }
+})();
 import Viewcube from '../viewer3d/Viewcube';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
@@ -1018,12 +1030,25 @@ const MeshPanel: React.FC = () => {
                   flex/align-center parent can resolve to 0 at the moment r3f
                   measures, leaving the canvas stuck at the 300×150 default. */}
               <Box sx={{ position: 'absolute', inset: 0 }}>
-                <FemMeshViewer3D payload={femMesh as any}
-                  showFill={fillDomains}
-                  showWire={showEdges}
-                  showOutlines={showOutlines}
-                  showGrid/>
+                {WEBGL_OK ? (
+                  <FemMeshViewer3D payload={femMesh as any}
+                    showFill={fillDomains}
+                    showWire={showEdges}
+                    showOutlines={showOutlines}
+                    showGrid/>
+                ) : (
+                  <FemMeshViewer2D payload={femMesh as any} showWire={showEdges}/>
+                )}
               </Box>
+              {!WEBGL_OK && (
+                <Box sx={{ position: 'absolute', top: 8, left: 8, zIndex: 4,
+                  bgcolor: 'rgba(10,22,40,0.8)', px: 1, py: 0.5, borderRadius: 1,
+                  pointerEvents: 'none' }}>
+                  <Typography sx={{ fontSize: 9, color: '#fbbf24' }}>
+                    2D view (WebGL unavailable in this window) · wheel = zoom · drag = pan
+                  </Typography>
+                </Box>
+              )}
               {/* Orientation cube + XYZ axes — same component as Geometry */}
               <Viewcube/>
               {/* Help text overlay */}

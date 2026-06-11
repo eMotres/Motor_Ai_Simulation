@@ -496,18 +496,30 @@ def get_mesh_config():
 def update_mesh_config(patch: MeshConfigPatch):
     """Persist mesh parameters into motor_config.yaml (adds keys if missing), so
     they are permanent and used by every consumer — not just the browser."""
-    import yaml as _yaml
+    import yaml as _yaml, os as _os
     updates = {k: v for k, v in patch.model_dump().items() if v is not None}
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
     try:
         config = _yaml.safe_load(_CONFIG_PATH.read_text(encoding="utf-8")) or {}
+        # GUARD: write_text is not atomic (truncate-then-write), so a concurrent
+        # reader can catch the file mid-write and parse an EMPTY config.  Writing
+        # that back would nuke geometry/simulation/winding (data loss).  Never
+        # persist a config that lost its core sections — bail instead.
+        if "geometry" not in config:
+            raise HTTPException(status_code=503,
+                detail="config read incomplete (concurrent write) — mesh not saved, retry")
         config.setdefault("mesh", {}).update(updates)
-        _CONFIG_PATH.write_text(
+        # Atomic write: temp file + os.replace, so readers never see a partial.
+        _tmp = _CONFIG_PATH.with_suffix(".yaml.tmp")
+        _tmp.write_text(
             _yaml.dump(config, allow_unicode=True, default_flow_style=False, sort_keys=False),
             encoding="utf-8",
         )
+        _os.replace(_tmp, _CONFIG_PATH)
         clear_config_cache()
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"failed to write mesh config: {e}")
     return {"status": "ok", "updated": updates}

@@ -347,7 +347,12 @@ def update_sim_config(patch: SimConfigPatch):
             detail=f"Keys not found in simulation: block: {missing}"
         )
 
-    cfg_path.write_text(''.join(result), encoding="utf-8")
+    # Atomic write (temp + replace) — write_text truncate-then-write leaves a
+    # window where a concurrent reader parses an empty config and clobbers it.
+    import os as _os
+    _tmp = cfg_path.with_suffix(".yaml.tmp")
+    _tmp.write_text(''.join(result), encoding="utf-8")
+    _os.replace(_tmp, cfg_path)
     clear_config_cache()
     return {"status": "ok", "updated": updates}
 

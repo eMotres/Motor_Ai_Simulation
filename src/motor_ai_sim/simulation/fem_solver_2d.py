@@ -4110,6 +4110,10 @@ def fem_transient_sliding_band(
             _nst_tris = Tts.shape[1]
             _is_rot = np.arange(_Tq2.shape[1]) >= _nst_tris
             _phi_phys = np.where(_is_rot, (_phi + theta_eff) % 360.0, _phi)   # theta_eff is in degrees
+            if _TORQUE_DIAG.get("capture_A") is not None:
+                _TORQUE_DIAG["capture_A"].append(
+                    dict(A=A.copy(), m=int(m_shift), Mn=Mn.copy(), Sn=Sn.copy(),
+                         nsn=int(nsn)))
             _nb = int(_TORQUE_DIAG["ang_bins"])
             _prof = np.zeros(_nb)
             _sec = 360.0 / NS

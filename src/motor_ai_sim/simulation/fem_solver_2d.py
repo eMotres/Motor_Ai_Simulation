@@ -74,6 +74,22 @@ _N_SLIP = 1008
 # (frame-0 total −4.2 vs −0.1 N·m) → OFF by default; kept for experiments.
 _SB_STRUCTURED_STRIPS = False
 
+# Moving-band strip half-width as a fraction of the FULL gap (δ = frac·gap).
+# 0.25 → strip spans half the gap (one closed-form row).  Smaller → thinner
+# strip + more free rows per side (better radial resolution of the gap).
+_SB_BAND_DELTA_FRAC = 0.25
+
+# Rotational curve-mesh periodicity (pole->pole / slot->slot setPeriodic) in
+# the SB half-builds — diagnostic gate.
+_SB_ROT_PERIODICITY = True
+
+# True moving band (two uniform rings + closed-form re-stitched strip) vs the
+# legacy merged single ring.  Diagnostic result: ord6 identical in both (the
+# artifact is NOT the coupling); the one-row strip biases frame-local torque
+# (frame0 -2.8 vs -0.1 N*m at I=0), so MERGED stays the default until the
+# two-mesh gap bias is resolved.
+_SB_MOVING_BAND = False
+
 # ── Torque-band diagnostic (off by default; set ['on']=True before a solve to
 # collect the per-frame Arkkio torque over radial sub-bands of the gap, to
 # localise where parasitic ripple comes from — e.g. the slip-ring interface).
@@ -252,7 +268,8 @@ def _decimate_poly_by_angle(geom, min_turn_deg: float):
 def _simplify_polys(polys: dict, tol_mm: float = 0.005,
                      stator_fillet_mm: float = 0.8,
                      normal_dev_deg: float = 0.0,
-                     n_slip: Optional[int] = None) -> dict:
+                     n_slip: Optional[int] = None,
+                     band_mode: str = "merged") -> dict:
     """Drop near-collinear vertices below chord tolerance `tol_mm`.
 
     Default 0.005 mm matches Ansys Maxwell's "Surface Deviation = 0.01 mm"
@@ -374,12 +391,39 @@ def _simplify_polys(polys: dict, tol_mm: float = 0.005,
                                     min(math.hypot(x, y) for x, y in _intr.coords))
             _gap_est = (_r_si_est - _r_ro_est) \
                 if (_r_si_est < float("inf") and _r_ro_est > 0) else 0.0
-            _delta = min(max(0.25 * _gap_est, 0.04), 0.4) if _gap_est > 0.05 else 0.0
+            _delta = min(max(_SB_BAND_DELTA_FRAC * _gap_est, 0.04), 0.4) if _gap_est > 0.05 else 0.0
 
             def _parts(_g):
                 return list(_g.geoms) if hasattr(_g, "geoms") else [_g]
 
-            if _SB_STRUCTURED_STRIPS and _delta > 0 \
+            if band_mode == "moving" and _delta > 0 \
+                    and (mid_r - _delta) > _r_ro_est + 0.02 \
+                    and (mid_r + _delta) < _r_si_est - 0.02:
+                # ── TRUE MOVING BAND geometry ────────────────────────────
+                # The rotor half's air stops at a uniform N-gon ring R1
+                # (r = mid−δ, rotates rigidly with the rotor); the stator
+                # half's air starts at ring R2 (r = mid+δ, stationary).
+                # The annulus R1..R2 belongs to NEITHER mesh — the solver
+                # re-stitches it EVERY frame in closed form between the two
+                # UNIFORM rings, so the m-dependent part of the operator is
+                # pattern-invariant (the node-merge formulation's frozen
+                # irregular fans were the order-6 ripple source).
+                _r1 = mid_r - _delta
+                _r2 = mid_r + _delta
+                in_band = _SPoly2(_ring_pts(_r1))
+                if rotor_solids:
+                    in_band = in_band.difference(_uu(rotor_solids))
+                if not in_band.is_valid: in_band = in_band.buffer(0)
+                out["in_band"] = in_band
+
+                out_band = _SPoly2(rout_ring, [_ring_pts(_r2)])
+                if out.get("stator") is not None:
+                    out_band = out_band.difference(out["stator"])
+                if not out_band.is_valid: out_band = out_band.buffer(0)
+                out["out_band"] = out_band
+                out["band_radii_mm"] = [_r1, _r2]
+                out["transfinite_ring_radii_mm"] = [_r1, _r2]
+            elif _SB_STRUCTURED_STRIPS and _delta > 0 \
                     and (mid_r - _delta) > _r_ro_est + 0.02 \
                     and (mid_r + _delta) < _r_si_est - 0.02:
                 ring_in  = _ring_pts(mid_r - _delta)
@@ -759,6 +803,8 @@ def _build_sliding_band_meshes(
     # the pole-to-pole mesh-asymmetry torque artifact.
     _slot_period = _pole_period = None
     try:
+        if not _SB_ROT_PERIODICITY:
+            raise RuntimeError("rotational periodicity disabled (diagnostic)")
         _ns_ = int(round(float((geo_cfg or {}).get("num_seg", 0))))
         _sl_ = int(round(float((geo_cfg or {}).get("num_slots_per_segment", 0))))
         _pl_ = int(round(float((geo_cfg or {}).get("num_poles_per_segment", 0))))
@@ -3183,7 +3229,11 @@ def fem_transient_sliding_band(
     else:
         p = params_from_config()
     dom = MotorDomains2D(p)
-    NS = int(n_sectors) if n_sectors and n_sectors > 1 else 4
+    # n_sectors == -1: DIAGNOSTIC full ring — no sector cuts at all (the moving
+    # band makes a closed 360° pair of halves feasible: the halves are open
+    # annuli, not the historically OCC-double-meshed full cross-section).
+    _full_ring = (int(n_sectors) == -1)
+    NS = 1 if _full_ring else (int(n_sectors) if n_sectors and n_sectors > 1 else 4)
     sector_deg = 360.0 / NS
     pole_pairs = p.num_poles // 2
     # Sector boundary sign: ANTI-periodic (−1) only when the sector spans an
@@ -3241,7 +3291,8 @@ def fem_transient_sliding_band(
     if geo_override:
         motor.set_parameters(geo_override)   # in-memory candidate geometry
     polys = motor.get_2d_polygons(rotor_angle_deg=float(rotor_angle0_deg))
-    polys = _simplify_polys(polys, tol_mm=0.005, stator_fillet_mm=stator_fillet_mm)
+    polys = _simplify_polys(polys, tol_mm=0.005, stator_fillet_mm=stator_fillet_mm,
+                            band_mode=("moving" if _SB_MOVING_BAND else "merged"))
     ms, ts, cs, mr, tr, cr = _build_sliding_band_meshes(
         polys, 0.0, mesh_size_mm, min_size_mm=min_size_mm,
         outer_air_factor=outer_air_factor, band_thickness_mm=0.4,
@@ -3255,17 +3306,56 @@ def fem_transient_sliding_band(
     n = Pall.shape[1]
     mesh_all = MeshTri(Pall, Tall)
 
-    def _ring(P):
-        r = np.hypot(P[0], P[1]); idx = np.where(np.abs(r - mid) < 1e-6)[0]
+    def _ring(P, r_at):
+        # Select the SEEDED ring nodes only: radius window + snap-to-grid in
+        # angle.  A bare radius window also sweeps in foreign free-mesh nodes
+        # that happen to sit within microns of the ring radius (the stator
+        # free row is only ~0.13 mm thick) — those polluted the pairing.
+        r = np.hypot(P[0], P[1])
+        idx = np.where(np.abs(r - r_at) < 1e-6)[0]
         ang = np.degrees(np.arctan2(P[1, idx], P[0, idx])) % 360.0
-        o = np.argsort(ang); return idx[o]
-    sring = _ring(Ps); rring = _ring(Pr)
+        step = 360.0 / _N_SLIP
+        kg = np.round(ang / step)
+        on_grid = np.abs(ang - kg * step) < (0.05 * step)
+        idx, ang, kg = idx[on_grid], ang[on_grid], kg[on_grid].astype(int) % _N_SLIP
+        # one node per grid slot (keep the angularly-closest if duplicated)
+        if kg.size:
+            order = np.lexsort((np.abs(ang - np.round(ang / step) * step), kg))
+            idx, kg = idx[order], kg[order]
+            keep = np.concatenate([[True], np.diff(kg) != 0])
+            idx, kg = idx[keep], kg[keep]
+            o = np.argsort(kg)
+            idx = idx[o]
+        return idx
+    # MOVING BAND: the halves end at two DIFFERENT uniform rings — rotor at
+    # R1 = mid−δ (rotates rigidly with the rotor mesh), stator at R2 = mid+δ
+    # (stationary).  The annulus between them is re-stitched every frame in
+    # closed form.  Legacy (merged single ring at mid) kept as fallback.
+    _band_radii = polys.get("band_radii_mm")
+    _moving = bool(_band_radii) and len(_band_radii) == 2
+    if _moving:
+        _r1_m = float(_band_radii[0]) * 1e-3   # metres
+        _r2_m = float(_band_radii[1]) * 1e-3
+        rring = _ring(Pr, _r1_m)
+        sring = _ring(Ps, _r2_m)
+    else:
+        rring = _ring(Pr, mid)
+        sring = _ring(Ps, mid)
     Nring = min(sring.size, rring.size)
+    if sring.size != rring.size:
+        log.warning("band ring node counts differ: stator=%d rotor=%d — "
+                    "truncating to %d", sring.size, rring.size, Nring)
     sring = sring[:Nring]; rring = rring[:Nring]
-    spacing = sector_deg / (Nring - 1)
+    if _full_ring:
+        spacing = 360.0 / Nring          # CLOSED ring: N nodes, N intervals
+    else:
+        spacing = sector_deg / (Nring - 1)
 
     # Constant radial-cut anti-periodic pairs on the combined mesh.
-    Mn, Sn = _pair_sector_cut_nodes(mesh_all, NS)
+    if _full_ring:
+        Mn, Sn = np.array([], int), np.array([], int)   # no cuts at all
+    else:
+        Mn, Sn = _pair_sector_cut_nodes(mesh_all, NS)
 
     # Forms
     @BilinearForm
@@ -3571,6 +3661,107 @@ def fem_transient_sliding_band(
     r_all = np.hypot(Pall[0], Pall[1])
     outer_nodes = np.where(r_all >= r_all.max() - 5e-4)[0]
 
+    # ── Moving-band machinery ─────────────────────────────────────────────
+    # The annulus R1..R2 is re-stitched EVERY frame; see _simplify_polys: each
+    # ring is a UNIFORM N-gon, so the stitch pattern is IDENTICAL at every
+    # shift m — two congruent triangle shapes whose local stiffness (air) and
+    # torque vectors are computed ONCE; per frame only the index mapping
+    # (rotor k ↔ stator k+m, anti-periodic sign on wrap) changes.  This
+    # replaces the node-merge slip coupling whose frozen irregular fans
+    # produced the order-6 parasitic cogging.
+    if _moving:
+        _gR1 = rring.astype(int) + nsn          # rotor-ring DOFs (global ids)
+        _gR2 = sring.astype(int)                # stator-ring DOFs
+        _dphi_b = math.radians(spacing)
+
+        def _tri_template(P3):
+            (x1, y1), (x2, y2), (x3, y3) = P3
+            bb = np.array([y2 - y3, y3 - y1, y1 - y2])
+            cc = np.array([x3 - x2, x1 - x3, x2 - x1])
+            area = 0.5 * abs(cc[2] * bb[1] - cc[1] * bb[2])
+            Kl = (np.outer(bb, bb) + np.outer(cc, cc)) / (4.0 * area * MU0)
+            cxl = (x1 + x2 + x3) / 3.0; cyl = (y1 + y2 + y3) / 3.0
+            rcl = math.hypot(cxl, cyl); cp, sp = cxl / rcl, cyl / rcl
+            # B = (∂A/∂y, −∂A/∂x);  Br = u·A,  Bφ = v·A  (template frame —
+            # rotationally invariant, so valid for every quad of the ring)
+            u = ( cc * cp - bb * sp) / (2.0 * area)
+            v = (-cc * sp - bb * cp) / (2.0 * area)
+            return Kl, u, v, area, rcl
+
+        def _pol(r_, a_):
+            return (r_ * math.cos(a_), r_ * math.sin(a_))
+        _Ka, _ua, _va, _ArA, _rcA = _tri_template(
+            [_pol(_r1_m, 0.0), _pol(_r2_m, 0.0), _pol(_r2_m, _dphi_b)])
+        _Kb, _ub, _vb, _ArB, _rcB = _tri_template(
+            [_pol(_r1_m, 0.0), _pol(_r2_m, _dphi_b), _pol(_r1_m, _dphi_b)])
+        if _full_ring:
+            _kk_b  = np.arange(Nring)               # closed: N quads
+            _kk1_b = (np.arange(Nring) + 1) % Nring
+        else:
+            _kk_b  = np.arange(Nring - 1)           # open sector: N−1 quads
+            _kk1_b = _kk_b + 1
+        _ones_b = np.ones(len(_kk_b))
+
+        def _band_idx(m):
+            if _full_ring:
+                j  = (_kk_b + int(m)) % Nring        # periodic, no sign
+                j1 = (_kk_b + int(m) + 1) % Nring
+                return j.astype(int), j1.astype(int), _ones_b, _ones_b
+            j = _kk_b + int(m); j1 = j + 1
+            sj = np.ones(Nring - 1); sj1 = np.ones(Nring - 1)
+            while np.any(j > Nring - 1):
+                w = j > Nring - 1
+                j = np.where(w, j - (Nring - 1), j)
+                sj = np.where(w, sj * _bc_sign, sj)
+            while np.any(j1 > Nring - 1):
+                w = j1 > Nring - 1
+                j1 = np.where(w, j1 - (Nring - 1), j1)
+                sj1 = np.where(w, sj1 * _bc_sign, sj1)
+            return j.astype(int), j1.astype(int), sj, sj1
+
+        def _K_band(m):
+            j, j1, sj, sj1 = _band_idx(m)
+            rows = []; cols = []; data = []
+            for Kl, dofs, sgs in (
+                (_Ka, (_gR1[_kk_b], _gR2[j],  _gR2[j1]),
+                       (_ones_b, sj, sj1)),
+                (_Kb, (_gR1[_kk_b], _gR2[j1], _gR1[_kk1_b]),
+                       (_ones_b, sj1, _ones_b)),
+            ):
+                for pq in range(9):
+                    pp, qq = divmod(pq, 3)
+                    rows.append(dofs[pp]); cols.append(dofs[qq])
+                    data.append(Kl[pp, qq] * sgs[pp] * sgs[qq])
+            return _coo((np.concatenate(data),
+                         (np.concatenate(rows), np.concatenate(cols))),
+                        shape=(n, n)).tocsr()
+
+        def _T_band(m, Avec):
+            j, j1, sj, sj1 = _band_idx(m)
+            Aa = np.vstack([Avec[_gR1[_kk_b]],
+                            Avec[_gR2[j]] * sj, Avec[_gR2[j1]] * sj1])
+            Ab = np.vstack([Avec[_gR1[_kk_b]],
+                            Avec[_gR2[j1]] * sj1, Avec[_gR1[_kk1_b]]])
+            s = (_ArA * _rcA * (_ua @ Aa) * (_va @ Aa)
+                 + _ArB * _rcB * (_ub @ Ab) * (_vb @ Ab))
+            return float(np.sum(s)) * p.stack_length / (
+                MU0 * (p.r_stator_in - p.r_rotor_out))
+
+        # Cut pairing is m-INDEPENDENT now (no slip merge) → constant Pro.
+        _suf0 = _SignedUF(n)
+        for a, b in zip(Mn, Sn):
+            _suf0.union(int(b), int(a), _bc_sign)
+        _roots0 = [_suf0.find(i) for i in range(n)]
+        _rid0 = np.array([r for r, _ in _roots0])
+        _rsg0 = np.array([s for _, s in _roots0], float)
+        _uniq0, _inv0 = np.unique(_rid0, return_inverse=True)
+        Pro_const = _coo((_rsg0, (np.arange(n), _inv0)),
+                         shape=(n, _uniq0.size)).tocsr()
+        outer_red_const = np.unique(_inv0[outer_nodes])
+        log.info("moving band: %d quads (%s), r1=%.3f r2=%.3f mm, Δφ=%.4f°",
+                 len(_kk_b), "full ring" if _full_ring else "sector",
+                 _r1_m * 1e3, _r2_m * 1e3, spacing)
+
     # ── Frame loop ───────────────────────────────────────────────────────
     n_total = max(1, int(round(n_steps_per_period * n_periods)))
     period_mech = 360.0 / pole_pairs                      # one electrical period [deg mech]
@@ -3658,19 +3849,25 @@ def fem_transient_sliding_band(
             Ist = _currents(m_shift * spacing)
             f = np.concatenate([(Ist['A'] * f_coil['A'] + Ist['B'] * f_coil['B']
                                  + Ist['C'] * f_coil['C']), f_mag])
-            suf = _SignedUF(n)
-            for a, b in zip(Mn, Sn):
-                suf.union(int(b), int(a), _bc_sign)
-            for kk in range(Nring):
-                j = kk + m_shift; sg = 1
-                while j > Nring - 1: j -= (Nring - 1); sg *= _bc_sign
-                while j < 0:         j += (Nring - 1); sg *= _bc_sign
-                suf.union(int(rring[kk] + nsn), int(sring[j]), sg)
-            roots = [suf.find(i) for i in range(n)]
-            rid = np.array([r for r, _ in roots]); rsg = np.array([s for _, s in roots], float)
-            uniq, inv = np.unique(rid, return_inverse=True)
-            Pro = _coo((rsg, (np.arange(n), inv)), shape=(n, uniq.size)).tocsr()
-            outer_red = np.unique(inv[outer_nodes])
+            if _moving:
+                Pro = Pro_const
+                outer_red = outer_red_const
+                _Kband_p = _K_band(m_shift)
+            else:
+                suf = _SignedUF(n)
+                for a, b in zip(Mn, Sn):
+                    suf.union(int(b), int(a), _bc_sign)
+                for kk in range(Nring):
+                    j = kk + m_shift; sg = 1
+                    while j > Nring - 1: j -= (Nring - 1); sg *= _bc_sign
+                    while j < 0:         j += (Nring - 1); sg *= _bc_sign
+                    suf.union(int(rring[kk] + nsn), int(sring[j]), sg)
+                roots = [suf.find(i) for i in range(n)]
+                rid = np.array([r for r, _ in roots]); rsg = np.array([s for _, s in roots], float)
+                uniq, inv = np.unique(rid, return_inverse=True)
+                Pro = _coo((rsg, (np.arange(n), inv)), shape=(n, uniq.size)).tocsr()
+                outer_red = np.unique(inv[outer_nodes])
+                _Kband_p = None
             for hn in ("s", "r"):
                 for tag in sb_sat[hn]:
                     nu_el[hn][tag][:] = 1.0 / (MU0 * max(mu0[hn].get(tag, 1.0), 1.0))
@@ -3685,6 +3882,8 @@ def fem_transient_sliding_band(
                         K = K + asm(_stiff_nu, _sbi, nu=b0.interpolate(nf))
                     blocks.append(K)
                 K = _bd(blocks).tocsr()
+                if _Kband_p is not None:
+                    K = (K + _Kband_p).tocsr()
                 A = Pro @ _sksolve(*condense((Pro.T @ K @ Pro).tocsr(),
                                              Pro.T @ f, D=outer_red))
                 for hn, off in (("s", 0), ("r", nsn)):
@@ -3761,22 +3960,29 @@ def fem_transient_sliding_band(
         f_cur_s = (Ist['A'] * f_coil['A'] + Ist['B'] * f_coil['B']
                    + Ist['C'] * f_coil['C'])
         f = np.concatenate([f_cur_s, f_mag])
-        # signed union-find: sector BC (_bc_sign) + slip-shift merge.  Both the
-        # radial-cut pairing AND the slip-ring wrap carry the SAME sector sign:
-        # −1 (anti-periodic) for an odd pole count, +1 (periodic) for even.
-        suf = _SignedUF(n)
-        for a, b in zip(Mn, Sn):
-            suf.union(int(b), int(a), _bc_sign)
-        for kk in range(Nring):
-            j = kk + m_shift; sg = 1
-            while j > Nring - 1: j -= (Nring - 1); sg *= _bc_sign
-            while j < 0:         j += (Nring - 1); sg *= _bc_sign
-            suf.union(int(rring[kk] + nsn), int(sring[j]), sg)
-        roots = [suf.find(i) for i in range(n)]
-        rid = np.array([r for r, _ in roots]); rsg = np.array([s for _, s in roots], float)
-        uniq, inv = np.unique(rid, return_inverse=True)
-        Pro = _coo((rsg, (np.arange(n), inv)), shape=(n, uniq.size)).tocsr()
-        outer_red = np.unique(inv[outer_nodes])
+        if _moving:
+            # Moving band: the rotor↔stator coupling is the closed-form strip
+            # stiffness K_band(m) (added to K below); the only node-pairing
+            # constraints left are the m-INDEPENDENT sector cuts → constant Pro.
+            Pro = Pro_const
+            outer_red = outer_red_const
+            _Kband_f = _K_band(m_shift)
+        else:
+            # legacy: signed union-find merges ring nodes (slip) + cut pairs.
+            suf = _SignedUF(n)
+            for a, b in zip(Mn, Sn):
+                suf.union(int(b), int(a), _bc_sign)
+            for kk in range(Nring):
+                j = kk + m_shift; sg = 1
+                while j > Nring - 1: j -= (Nring - 1); sg *= _bc_sign
+                while j < 0:         j += (Nring - 1); sg *= _bc_sign
+                suf.union(int(rring[kk] + nsn), int(sring[j]), sg)
+            roots = [suf.find(i) for i in range(n)]
+            rid = np.array([r for r, _ in roots]); rsg = np.array([s for _, s in roots], float)
+            uniq, inv = np.unique(rid, return_inverse=True)
+            Pro = _coo((rsg, (np.arange(n), inv)), shape=(n, uniq.size)).tocsr()
+            outer_red = np.unique(inv[outer_nodes])
+            _Kband_f = None
         # Reset the per-element iron reluctivity to the unsaturated base each
         # frame so the saturation solution is a pure function of rotor position
         # (no history dependence) → the torque ripple is strictly PERIODIC.
@@ -3794,6 +4000,8 @@ def fem_transient_sliding_band(
                     K = K + asm(_stiff_nu, _sbi, nu=b0.interpolate(nf))
                 blocks.append(K)
             K = _bd(blocks).tocsr()
+            if _Kband_f is not None:
+                K = (K + _Kband_f).tocsr()   # moving-band strip coupling
             if eddy:
                 Keff = (K + _Minv_dt).tocsr()
                 # Solid-bar coils: current imposed via the ∫J=I constraint,
@@ -3869,9 +4077,13 @@ def fem_transient_sliding_band(
         if _shaft_idx.size:
             _hist_shx.append(_Bxr[_shaft_idx]); _hist_shy.append(_Byr[_shaft_idx])
         _mshift_hist.append(m_shift)
-        # torque (Arkkio over the gap)
-        Tq = _arkkio_torque(mesh_all, A, p.r_rotor_out, p.r_stator_in,
-                            p.stack_length) * NS
+        # torque (Arkkio over the gap; the moving-band strip's contribution is
+        # computed in closed form — its triangles live in no mesh)
+        Tq_sec = _arkkio_torque(mesh_all, A, p.r_rotor_out, p.r_stator_in,
+                                p.stack_length)
+        if _moving:
+            Tq_sec += _T_band(m_shift, A)
+        Tq = Tq_sec * NS
         if _TORQUE_DIAG["on"]:
             _mr = 0.5 * (p.r_rotor_out + p.r_stator_in)
             _gw = (p.r_stator_in - p.r_rotor_out)

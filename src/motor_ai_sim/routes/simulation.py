@@ -1250,13 +1250,16 @@ async def build_fem_mesh_2d_sliding_band(
     except Exception:
         pass
     polys = motor.get_2d_polygons(rotor_angle_deg=0.0)
-    # Full disk (n_sectors<=1) = the TRUE full ring: stitched halves + moving
-    # band — byte-for-byte what the transient solves on.
+    # Full disk (n_sectors<=1) = the TRUE full ring (stitched 2×180° halves).
+    # Use the MERGED band (single shared ring at mid) for DISPLAY: the moving
+    # band's mid±δ split leaves a thin empty annulus the solver fills in closed
+    # form — it has no triangles, so the viewer would draw a black strip across
+    # the air gap.  The viewer only needs a continuous, gap-free mesh.
     _full_ring_view = int(n_sectors) <= 1
     polys = _simplify_polys(polys, tol_mm=surface_deviation,
                              stator_fillet_mm=stator_fillet_mm,
                              normal_dev_deg=normal_deviation,
-                             band_mode=("moving" if _full_ring_view else "merged"))
+                             band_mode="merged")
     # in_band / out_band now come straight from get_2d_polygons (full inner
     # air disk + outer air annulus), so the old air-gap-splitting motion
     # band is no longer needed for the sliding-band path.

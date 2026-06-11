@@ -88,6 +88,16 @@ def apply_preset(preset_id: str):
         sim_sec = config.setdefault("simulation", {})
         for k, v in simulation.items():
             sim_sec[k] = v
+        # Synchronous machine: keep frequency LOCKED to rpm (f = rpm·pp/60).
+        # Presets store rpm but not frequency; leaving a stale frequency from
+        # the previous motor scaled the solver's loss derivatives wrong.
+        try:
+            _pp = int(round(float(geo_sec.get("num_seg", 0)))) \
+                * int(round(float(geo_sec.get("num_poles_per_segment", 0)))) // 2
+            if _pp > 0 and sim_sec.get("rpm"):
+                sim_sec["frequency"] = round(float(sim_sec["rpm"]) * _pp / 60.0, 2)
+        except Exception:
+            pass
         _CONFIG_PATH.write_text(
             yaml.dump(config, allow_unicode=True, default_flow_style=False, sort_keys=False),
             encoding="utf-8",

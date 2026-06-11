@@ -3073,7 +3073,18 @@ def fem_transient_sliding_band(
     P_cu, _k_end_used, R_phase = copper_loss_W(
         p, geo, float(I_phase_rms), n_parallel,
         coil_temp_c=coil_temp_c, end_winding_factor=end_winding_factor)
-    rpm = float(sim.get("rpm", 3950)); f_elec = float(sim.get("frequency", 921.67))
+    # Synchronous machine: rpm and f_elec are LOCKED (f = rpm·pp/60).  The
+    # config can carry a stale pair (preset-apply wrote rpm but not frequency)
+    # — and using the mismatched rpm in ω_mech scaled dB/dt (→ iron/magnet
+    # losses) by the wrong speed (×4 at 3950-vs-2000).  rpm is the master
+    # (it's what presets/UI write); the frequency is DERIVED, never read.
+    rpm = float(sim.get("rpm", 3950))
+    _f_cfg = float(sim.get("frequency", 0.0) or 0.0)
+    f_elec = rpm * (p.num_poles // 2) / 60.0
+    if _f_cfg > 0 and abs(_f_cfg - f_elec) / max(f_elec, 1e-9) > 0.01:
+        log.warning("config frequency=%.2f Hz inconsistent with rpm=%.0f "
+                    "(→ %.2f Hz); using the rpm-derived frequency",
+                    _f_cfg, rpm, f_elec)
     slot_area_m2 = p.slot_width_m * p.slot_height_m * p.fill_factor
     mid = 0.5 * (p.r_rotor_out + p.r_stator_in)
 
@@ -4175,7 +4186,10 @@ def fem_quasistatic_transient(
     p = params_from_config()
     pole_pairs = p.num_poles // 2
     n_parallel = wind.get("n_parallel", 2)
-    rpm = float(sim.get("rpm", 3950)); f_elec = float(sim.get("frequency", 921.67))
+    # rpm is the master; the electrical frequency is DERIVED (see the
+    # sliding-band path for why — stale config pairs scaled losses wrong).
+    rpm = float(sim.get("rpm", 3950))
+    f_elec = rpm * pole_pairs / 60.0
     n_total = max(2, int(round(n_steps_per_period * n_periods)))
     period_mech = 360.0 / pole_pairs                       # one electrical period [deg mech]
     dt = (1.0 / max(f_elec, 1e-9)) * n_periods / n_total

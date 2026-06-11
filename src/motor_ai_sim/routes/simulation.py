@@ -1245,9 +1245,13 @@ async def build_fem_mesh_2d_sliding_band(
     except Exception:
         pass
     polys = motor.get_2d_polygons(rotor_angle_deg=0.0)
+    # Full disk (n_sectors<=1) = the TRUE full ring: stitched halves + moving
+    # band — byte-for-byte what the transient solves on.
+    _full_ring_view = int(n_sectors) <= 1
     polys = _simplify_polys(polys, tol_mm=surface_deviation,
                              stator_fillet_mm=stator_fillet_mm,
-                             normal_dev_deg=normal_deviation)
+                             normal_dev_deg=normal_deviation,
+                             band_mode=("moving" if _full_ring_view else "merged"))
     # in_band / out_band now come straight from get_2d_polygons (full inner
     # air disk + outer air annulus), so the old air-gap-splitting motion
     # band is no longer needed for the sliding-band path.
@@ -1264,8 +1268,10 @@ async def build_fem_mesh_2d_sliding_band(
                 normal_deviation_deg=normal_deviation, aspect_ratio=aspect_ratio,
                 outer_air_factor=outer_air_factor,
                 band_thickness_mm=band_thickness_mm, gap_layers=gap_layers,
-                n_sectors=n_sectors, geo_cfg=motor.parameters,
+                n_sectors=(1 if _full_ring_view else n_sectors),
+                geo_cfg=motor.parameters,
                 component_mesh_mm=_comp_mesh,
+                full_ring=_full_ring_view,
             )
     except Exception as e:
         log.exception("sliding-band mesh build failed")

@@ -536,6 +536,14 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
   const [loading, setLoading] = useState<boolean>(false);
   const [error,   setError]   = useState<string | null>(null);
   const [mode,    setMode]    = useState<FieldMode>('Az');
+  // The static solver always computes a demag map (a check at full Br), but if
+  // the user has demag modelling OFF the map (all 0 % at no-load) is just
+  // confusing — only offer the Demag view when demag is actually enabled.
+  const demagOn = (() => {
+    try { return JSON.parse(localStorage.getItem('sim.demag') || 'false') === true; }
+    catch { return false; }
+  })();
+  useEffect(() => { if (!demagOn && mode === 'Demag') setMode('Az'); }, [demagOn, mode]);
   const controlsRef = useRef<any>(null);
 
   const fetchFem = () => {
@@ -615,7 +623,7 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
             <ToggleButton value="Az">A<sub>z</sub></ToggleButton>
             <ToggleButton value="Bmag">|B|</ToggleButton>
             <ToggleButton value="J">J</ToggleButton>
-            <ToggleButton value="Demag">Demag</ToggleButton>
+            {demagOn && <ToggleButton value="Demag">Demag</ToggleButton>}
           </ToggleButtonGroup>
           {!hideRefresh && (
             <Button size="small" startIcon={<RefreshIcon fontSize="small"/>}

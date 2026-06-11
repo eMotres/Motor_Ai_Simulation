@@ -3549,6 +3549,8 @@ def fem_transient_sliding_band(
     _rot_sig_nodes = []      # (nodes_global, σ) per rotor group — J snapshot
     _mag_groups = []         # per magnet: element triplets/areas for the loss
     _magnode_glob = np.array([], int)   # global DOF ids of all magnet nodes
+    _shaft_group = None                 # field-based shaft eddy group (rotor frame)
+    _shaftnode_glob = np.array([], int) # global DOF ids of the shaft nodes
     if rotor_eddy:
         _ones_r = np.ones(half["r"]["n"])
         _areas_r_re = _triangle_areas(half["r"]["mesh"])
@@ -3587,8 +3589,18 @@ def fem_transient_sliding_band(
         _sh_idx = np.asarray(half["r"]["cells"].get(int(DOM_SHAFT),
                                                     np.array([], int)), int)
         if _sh_idx.size:
-            _rot_sig_nodes.append((np.unique(half["r"]["mesh"].t[:, _sh_idx]) + nsn,
-                                   _sigma_shaft_lib))
+            _sh_tri = half["r"]["mesh"].t[:, _sh_idx]            # (3, E) rotor-local
+            _shaftnode_loc = np.unique(_sh_tri)
+            _shaftnode_glob = _shaftnode_loc + nsn
+            _rot_sig_nodes.append((_shaftnode_glob, _sigma_shaft_lib))
+            # Field-based shaft eddy group (rotor frame, ∫J=0): the shaft co-rotates
+            # with the magnets, so the magnet field is DC in its frame → no loss;
+            # only the AC coil-current / slot-ripple field dissipates.  Same
+            # treatment as the magnets (replaces the lab-frame slab estimate).
+            _shaft_group = {
+                "tri":   np.searchsorted(_shaftnode_loc, _sh_tri),
+                "areas": _areas_r_re[_sh_idx].astype(float),
+            }
         log.info("rotor-eddy: %d interior magnets (∫J=0), %d edge halves (U=0) | "
                  "σ_mag=%.3g σ_shaft=%.3g S/m (library)",
                  _n_interior, _n_halves, _sigma_mag_lib, _sigma_shaft_lib)
@@ -3963,6 +3975,7 @@ def fem_transient_sliding_band(
 
     _field_snap = None       # eddy last-frame field snapshot (if return_field)
     _hist_Am = []            # per-frame A on magnet nodes (loss post-processing)
+    _hist_Ash = []           # per-frame A on shaft nodes (field-based shaft loss)
     # When the demag pre-pass ran, the measurement pass is the SECOND half of
     # the work — continue the progress counter so the UI bar doesn't reset.
     _prog_off = n_total if (demag and _mag_idx.size) else 0
@@ -4065,6 +4078,9 @@ def fem_transient_sliding_band(
         if rotor_eddy and _magnode_glob.size:
             # Magnet-node A history → smoothed post-processed eddy loss below.
             _hist_Am.append(A[_magnode_glob].copy())
+        if rotor_eddy and _shaftnode_glob.size:
+            # Shaft-node A history → field-based (rotor-frame) shaft eddy loss.
+            _hist_Ash.append(A[_shaftnode_glob].copy())
         # capture the converged per-element B for the loss integrals
         _Bxs, _Bys = _per_triangle_B(half["s"]["mesh"], A[:nsn])
         _Bxr, _Byr = _per_triangle_B(half["r"]["mesh"], A[nsn:])
@@ -4410,8 +4426,21 @@ def fem_transient_sliding_band(
                                            getattr(p, "r_rotor_in", 0.02)) or 0.02))
     _delta_sh    = math.sqrt(2.0 / (_sigma_shaft * _omega_e * MU0 * _mu_r_shaft))
     _d_sh_eff    = min(2.0 * _r_shaft, 2.0 * _delta_sh)
-    P_shaft_series, P_shaft_avg = _slab_eddy(
-        _hist_shx, _hist_shy, _shaft_idx, areas_r, _sigma_shaft, _d_sh_eff)
+    # Shaft eddy loss: NEGLIGIBLE in this 2-D model — reported as ~0.
+    # Physics (per Vadim): the shaft co-rotates with the rotor, so the dominant
+    # MAGNET field is DC in its frame → no loss; the stator slot ripple has decayed
+    # to essentially nothing at the shaft radius; the only real loss is the tiny
+    # coil-current (armature-reaction) term, which is 0 at no-load and minimal on
+    # load.  That term is below what this pipeline can resolve: a ¼-sector models
+    # the connected full-ring shaft as a wedge that sees a SPURIOUS order-1 net-flux
+    # swing, and aluminium's huge σ (≈43× the magnet) amplifies both that and the
+    # slip-merge jitter — every numerical estimate came out a different artefact
+    # (lab-frame slab 59 W, field-based 0.2–2 kW), none physical.  So we report the
+    # honest leading-order value, ~0.  (A faithful small number would need a
+    # full-ring mesh + the coupled σ·∂A/∂t eddy solve, which carries the reaction
+    # that damps the aluminium loss — a separate, larger build.)
+    P_shaft_series = [0.0] * n_total
+    P_shaft_avg = 0.0
 
     # ── Field-based rotor eddy loss from the magnetodynamic solve (Stage 1) ──
     # ∫σ(∂A/∂t)² straight from the eddy field — NO slab/d/cap.  Compare against

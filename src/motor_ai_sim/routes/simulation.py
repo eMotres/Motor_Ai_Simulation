@@ -1364,79 +1364,118 @@ _fem_field_cache: Dict[tuple, Dict] = {}
 
 
 @router.get("/physics/fem_field2d")
-async def get_fem_field2d(
+def get_fem_field2d(
     rotor_angle_deg:     float = 0.0,
     gamma_deg:           float = 0.0,
     mesh_size_mm:        float = 4.0,
     min_size_mm:         float = 0.3,
     outer_air_factor:    float = 1.3,
-    motion_band:         bool  = True,
+    motion_band:         bool  = True,    # accepted for URL compat (SB always bands)
     band_thickness_mm:   float = 0.4,
     n_sectors:           int   = 4,
     stator_fillet_mm:    float = 0.0,
-    I_phase_rms:         Optional[float] = None,   # None = use config; 0 = zero-current solve
+    I_phase_rms:         Optional[float] = None,   # None = use config; 0 = zero-current
     component_mesh:      str   = "",      # JSON {comp: size_mm} per-part mesh size
+    demag:               bool  = False,   # show the irreversible-demag %-map
 ):
-    """Real scikit-fem 2-D magnetostatics solve on the same mesh the Mesh
-    tab renders.
-
-    Returns A_z per node + mesh data so the canvas can colour-fill each
-    triangle by the interpolated potential.  Torque and iron/magnet losses
-    are integrated over the meshed sector and MULTIPLIED by n_sectors so
-    the reported values represent the FULL motor (e.g. 1/4 model with
-    n_sectors=4 → T and P_fe × 4).
+    """Field view at ONE rotor angle, computed by the SLIDING-BAND TRANSIENT
+    solver (1 step, rotor PHYSICALLY placed at rotor_angle_deg) — the SAME solver
+    that produces the transient torque/losses.  There is no separate magnetostatic
+    solver any more: the field picture is exactly the per-frame field the transient
+    sweeps, so it is guaranteed consistent with the results.  Slower than the old
+    static solve (it builds the sliding-band mesh); cached per (angle, γ, I, mesh).
     """
     import numpy as _np
+    import time as _time
 
     _comp_mesh = _parse_component_mesh(component_mesh)
     key = (
-        round(rotor_angle_deg * 2) / 2,
-        round(gamma_deg, 1),
-        round(mesh_size_mm, 2),
-        round(min_size_mm, 2),
-        round(outer_air_factor, 2),
-        bool(motion_band),
-        round(band_thickness_mm, 2),
-        int(n_sectors),
-        round(stator_fillet_mm, 2),
+        "sbfield", round(rotor_angle_deg * 2) / 2, round(gamma_deg, 1),
+        round(mesh_size_mm, 2), round(min_size_mm, 2), round(outer_air_factor, 2),
+        int(n_sectors), round(stator_fillet_mm, 2),
         round(I_phase_rms, 2) if I_phase_rms is not None else None,
-        tuple(sorted(_comp_mesh.items())),
+        int(bool(demag)), tuple(sorted(_comp_mesh.items())),
     )
     if key in _fem_field_cache:
         return _fem_field_cache[key]
 
     try:
-        from motor_ai_sim.simulation.fem_solver_2d import fem_solve_for_sim
+        from motor_ai_sim.simulation.fem_solver_2d import (
+            fem_transient_sliding_band, _simplify_polys,
+            DOM_MAG_BASE, DOM_COIL_BASE, DOM_MAG_N, DOM_MAG_S, DOM_COIL)
+        from motor_ai_sim.cadquery_geometry import CadQueryMotor
+        from motor_ai_sim.config import get_config as _gc
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"FEM solver unavailable: {e}")
 
+    if I_phase_rms is None:
+        I_phase_rms = float(_gc().get("simulation", {}).get("max_current", 85.0))
+
+    _t0 = _time.time()
     try:
-        result = fem_solve_for_sim(
-            rotor_angle_deg=rotor_angle_deg,
-            gamma_deg=gamma_deg,
-            mesh_size_mm=mesh_size_mm,
-            min_size_mm=min_size_mm,
-            outer_air_factor=outer_air_factor,
-            motion_band=motion_band,
-            band_thickness_mm=band_thickness_mm,
-            n_sectors=int(n_sectors),
-            stator_fillet_mm=stator_fillet_mm,
-            I_phase_rms=I_phase_rms,
-            component_mesh_mm=_comp_mesh,
-        )
+        # 1 step (rotor pinned at the requested angle) → a true single-angle field
+        # from the sliding-band machinery.  demag needs a short sweep for the
+        # worst-case knee pre-pass, so use a few steps and snapshot the FIRST one.
+        _nsteps = 8 if demag else 1
+        d = fem_transient_sliding_band(
+            n_steps_per_period=_nsteps, n_periods=1.0,
+            gamma_deg=float(gamma_deg), I_phase_rms=float(I_phase_rms),
+            mesh_size_mm=float(mesh_size_mm), min_size_mm=float(min_size_mm),
+            outer_air_factor=float(outer_air_factor),
+            n_sectors=int(n_sectors) if int(n_sectors) > 1 else -1,
+            stator_fillet_mm=float(stator_fillet_mm),
+            eddy=False, rotor_eddy=False, demag=bool(demag),
+            return_field=True, field_first=True,
+            rotor_angle0_deg=float(rotor_angle_deg),
+            component_mesh_mm=_comp_mesh)
     except Exception as e:
-        log.exception("FEM solve failed")
+        log.exception("SB field solve failed")
         raise HTTPException(status_code=500, detail=f"FEM solve failed: {e}")
+    fld = d.get("field")
+    if not fld:
+        raise HTTPException(status_code=500, detail="SB field solve returned no snapshot")
 
-    # ── Build outlines payload (same shape as /mesh/build2d) ──────────
-    pfo = result.pop("polys_for_outlines", {}) or {}
-    result["outlines"] = _outlines_from_polys(pfo)
+    P  = _np.asarray(fld["P_mm"]) * 1e-3
+    T  = _np.asarray(fld["T"])
+    A  = _np.asarray(fld["A"])
+    Bx = _np.asarray(fld["Bx"]); By = _np.asarray(fld["By"])
+    Bmag = _np.sqrt(Bx ** 2 + By ** 2)
+    Jtri = _np.asarray(fld.get("Jtri_src", _np.zeros(T.shape[1])))
+    tags = _np.asarray(fld["tags"]).astype(int)
 
-    # A_z numeric stats for the renderer
-    A = _np.asarray(result["A_z_per_node"])
-    result["A_z_min"] = float(A.min())
-    result["A_z_max"] = float(A.max())
-    result["B_mag_max"] = float(_np.asarray(result["Bmag_per_tri"]).max())
+    # Collapse per-wire / per-magnet tags → renderer palette (rotor at angle).
+    motor = CadQueryMotor()
+    polys = _simplify_polys(
+        motor.get_2d_polygons(rotor_angle_deg=float(rotor_angle_deg)),
+        tol_mm=0.005, stator_fillet_mm=float(stator_fillet_mm))
+    tags_vis = tags.copy()
+    tags_vis[tags >= DOM_COIL_BASE] = DOM_COIL
+    for i, (mp, pol) in enumerate(polys.get("magnets", []) or []):
+        tags_vis[tags == (DOM_MAG_BASE + i)] = (DOM_MAG_N if pol > 0 else DOM_MAG_S)
+
+    nsec = int(n_sectors) if int(n_sectors) > 1 else 4
+    result = {
+        "ok": True,
+        "n_vertices": int(P.shape[1]), "n_triangles": int(T.shape[1]),
+        "vertices": P.T.tolist(), "triangles": T.T.tolist(),
+        "domain_per_tri": tags_vis.tolist(),
+        "A_z_per_node": A.tolist(),
+        "Bmag_per_tri": Bmag.tolist(),
+        "J_z_per_tri": Jtri.tolist(),
+        "extent": [float(P[0].min()), float(P[0].max()),
+                   float(P[1].min()), float(P[1].max())],
+        "outlines": _outlines_from_polys(polys),
+        "A_z_min": float(A.min()), "A_z_max": float(A.max()),
+        "B_mag_max": float(Bmag.max()),
+        "n_sectors": nsec, "symmetry_mult": nsec,
+        "solve_time_s": round(_time.time() - _t0, 1), "total_time_s": 0.0,
+    }
+    # Demag %-map + per-magnet knee report (only when demag modelling is on).
+    _dc = d.get("demag_coef_per_tri")
+    if _dc is not None and len(_dc) == int(T.shape[1]):
+        result["demag_coef_per_tri"] = list(_dc)
+    if d.get("demag_report"):
+        result["demag_report"] = d["demag_report"]
 
     _fem_field_cache[key] = result
     return result

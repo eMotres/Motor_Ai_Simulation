@@ -3185,7 +3185,10 @@ def fem_transient_sliding_band(
     rotor_eddy: bool = False,    # field-based magnet/shaft eddy losses (stranded coils)
     demag: bool = False,         # opt-in: per-element irreversible demagnetisation
     component_mesh_mm: dict = None,  # per-part target element size {comp: mm}
-    return_field: bool = False,  # eddy: also return a last-frame field snapshot
+    return_field: bool = False,  # also return a field snapshot for the viewer
+    field_first: bool = False,   # snapshot the FIRST frame (rotor at angle0) instead
+                                 # of the last — used by the magnetostatic field view
+                                 # so the picture matches the requested rotor angle
     progress_cb=None,            # optional callback(done:int, total:int) per frame
     magnet_scale: float = 1.0,   # scale ALL magnet Br (0 → PMs off = reluctance torque)
     rotor_angle0_deg: float = 0.0,   # DIAGNOSTIC: build the rotor PHYSICALLY rotated
@@ -4065,27 +4068,38 @@ def fem_transient_sliding_band(
         # capture the converged per-element B for the loss integrals
         _Bxs, _Bys = _per_triangle_B(half["s"]["mesh"], A[:nsn])
         _Bxr, _Byr = _per_triangle_B(half["r"]["mesh"], A[nsn:])
-        if eddy and return_field and k == n_total - 1:
-            # Last-frame field snapshot for visualisation: A_z, per-element B,
-            # and the EDDY current density J = σ(−∂A/∂t + U_c) on every solid
-            # conductor (copper bars when eddy=True; magnets + shaft when
-            # rotor_eddy=True) — the genuinely-new field the eddy solve produces.
+        if return_field and ((field_first and k == 0)
+                             or (not field_first and k == n_total - 1)):
+            # Field snapshot for the viewer: A_z, per-element B, and a current
+            # density J.  eddy=True → the EDDY density J = σ(−∂A/∂t + U_c) on the
+            # solid conductors (the genuinely-new field the eddy solve produces).
+            # eddy=False (magnetostatic field view, run at 1 step + rotor_angle0)
+            # → the per-element SOURCE current density so the J view still shows
+            # the applied winding currents at this rotor position.
             _sig_node = np.zeros(n)
             if eddy:
                 for _c in _coil_con:
                     _sig_node[_c["nodes"]] = _sig_cu_T
             for _nds, _sg in _rot_sig_nodes:
                 _sig_node[_nds] = _sg
+            _Jnodal = _sig_node * (Ffld if eddy else 0.0)
             _field_snap = {
                 "P_mm": (mesh_all.p * 1e3).copy(),                 # node coords [mm]
                 "T":    mesh_all.t.copy(),                         # triangles (3,nel)
                 "A":    A.copy(),                                  # nodal A_z [Wb/m]
                 "Bx":   np.concatenate([_Bxs, _Bxr]),              # per-elem B [T]
                 "By":   np.concatenate([_Bys, _Byr]),
-                "Jeddy": _sig_node * Ffld,                # nodal eddy J [A/m^2]
+                "Jeddy": _Jnodal,                          # nodal eddy J [A/m^2]
                 "tags": np.concatenate([np.asarray(ts), np.asarray(tr)]).astype(int),
                 "nsn":  int(nsn),
             }
+            if not eddy:
+                # per-element source current density J_z = dir·I_phase·n_wires/area
+                # (coil elements live in the stator half = first block of the mesh)
+                _Js = np.zeros(_Bxs.size + _Bxr.size)
+                for _ix, _ar, _dir, _ph in coil_info:
+                    _Js[_ix] = _dir * Ist[_ph] * n_wires / max(slot_area_m2, 1e-12)
+                _field_snap["Jtri_src"] = _Js
         _hist_sx.append(_Bxs[_iron_s_idx]); _hist_sy.append(_Bys[_iron_s_idx])
         _hist_rx.append(_Bxr[_iron_r_idx]); _hist_ry.append(_Byr[_iron_r_idx])
         _hist_mx.append(_Bxr[_mag_idx]);    _hist_my.append(_Byr[_mag_idx])

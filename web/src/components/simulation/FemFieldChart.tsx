@@ -637,6 +637,9 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
       n_sectors:         String(readMeshSetting('nSectors',    4)),
       stator_fillet_mm:  '0',   // native geometry — extra smoothing removed
       component_mesh:    comp,
+      // The field view now runs the sliding-band solver for one frame; pass the
+      // demag flag so it computes the irreversible-demag %-map when modelling is on.
+      demag:             String(demagOn),
     };
     if (I_phase_rms !== undefined) {
       params.I_phase_rms = String(I_phase_rms);

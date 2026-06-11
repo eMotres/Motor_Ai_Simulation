@@ -1827,15 +1827,43 @@ def get_fem_pool() -> "_cf.ProcessPoolExecutor":
 def _reset_fem_pool() -> None:
     """Drop the shared pool (next call to get_fem_pool rebuilds it).  Used
     after a BrokenProcessPool so one crashed worker doesn't wedge every
-    subsequent transient run."""
+    subsequent transient run.
+
+    HARD-KILLS the old workers.  On Windows the spawned workers routinely
+    SURVIVE shutdown(wait=False), so every OOM-driven reset used to leak a
+    whole pool's worth of processes — that is how 60+ zombie pythons piled up
+    and starved the box into still more OOM crashes (the "process pool
+    terminated abruptly" the user hit).  Grab the worker handles first, then
+    terminate any that linger so a reset can never accumulate workers."""
     global _fem_pool
     with _fem_pool_lock:
         _p, _fem_pool = _fem_pool, None
-    if _p is not None:
+    if _p is None:
+        return
+    _procs = list(getattr(_p, "_processes", {}).values())
+    try:
+        _p.shutdown(wait=False, cancel_futures=True)
+    except Exception:
+        pass
+    for _w in _procs:
         try:
-            _p.shutdown(wait=False, cancel_futures=True)
+            if _w.is_alive():
+                _w.terminate()
         except Exception:
             pass
+
+
+import atexit as _atexit
+
+
+@_atexit.register
+def _shutdown_fem_pool_atexit() -> None:
+    """Tear the worker pool down on a graceful interpreter exit so workers
+    don't outlive the server (best-effort; a SIGKILL still orphans them)."""
+    try:
+        _reset_fem_pool()
+    except Exception:
+        pass
 
 
 def warm_fem_pool() -> None:

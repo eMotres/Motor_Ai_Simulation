@@ -3757,8 +3757,12 @@ def fem_transient_sliding_band(
                             Avec[_gR2[j1]] * sj1, Avec[_gR1[_kk1_b]]])
             s = (_ArA * _rcA * (_ua @ Aa) * (_va @ Aa)
                  + _ArB * _rcB * (_ub @ Ab) * (_vb @ Ab))
-            return float(np.sum(s)) * p.stack_length / (
-                MU0 * (p.r_stator_in - p.r_rotor_out))
+            # Arkkio over the STRIP alone — normalise by the strip's radial
+            # width (r2−r1).  The strip is the consistently-COUPLED region
+            # (rotor ring ↔ stator ring), so its stress is artifact-free; the
+            # half-mesh gap fields are sheared (rotor at θ=0 vs coupled stator)
+            # and carry a spurious DC torque, so they are NOT used.
+            return float(np.sum(s)) * p.stack_length / (MU0 * (_r2_m - _r1_m))
 
         # Cut pairing is m-INDEPENDENT now (no slip merge) → constant Pro.
         _suf0 = _SignedUF(n)
@@ -4090,18 +4094,22 @@ def fem_transient_sliding_band(
         if _shaft_idx.size:
             _hist_shx.append(_Bxr[_shaft_idx]); _hist_shy.append(_Byr[_shaft_idx])
         _mshift_hist.append(m_shift)
-        # torque (Arkkio over the gap; the moving-band strip's contribution is
-        # computed in closed form — its triangles live in no mesh)
-        Tq_sec = _arkkio_torque(mesh_all, A, p.r_rotor_out, p.r_stator_in,
-                                p.stack_length)
+        # torque: sector → Arkkio over the whole gap.  Moving band → Arkkio over
+        # the coupled STRIP only (the half-mesh gap fields are sheared and carry
+        # a spurious DC torque; the strip is the consistent rotor↔stator join).
         if _moving:
-            Tq_sec += _T_band(m_shift, A)
+            Tq_sec = _T_band(m_shift, A)
+        else:
+            Tq_sec = _arkkio_torque(mesh_all, A, p.r_rotor_out, p.r_stator_in,
+                                    p.stack_length)
         Tq = Tq_sec * NS
         if _TORQUE_DIAG["on"]:
             _mr = 0.5 * (p.r_rotor_out + p.r_stator_in)
             _gw = (p.r_stator_in - p.r_rotor_out)
             _ak = lambda a, b: _arkkio_torque(mesh_all, A, a, b, p.stack_length) * NS
-            _TORQUE_DIAG["full"].append(Tq)
+            _TORQUE_DIAG["full"].append(Tq)                                 # reported torque (strip for moving)
+            _TORQUE_DIAG.setdefault("arkkio_full", []).append(_ak(p.r_rotor_out, p.r_stator_in))  # sheared half-mesh Arkkio
+            _TORQUE_DIAG.setdefault("tband", []).append(_T_band(m_shift, A) * NS if _moving else 0.0)  # strip Arkkio
             _TORQUE_DIAG["rotor"].append(_ak(p.r_rotor_out, _mr))          # whole rotor half
             _TORQUE_DIAG["stator"].append(_ak(_mr, p.r_stator_in))         # whole stator half
             _TORQUE_DIAG["iface"].append(_ak(_mr - 0.25 * _gw, _mr + 0.25 * _gw))  # straddles slip ring

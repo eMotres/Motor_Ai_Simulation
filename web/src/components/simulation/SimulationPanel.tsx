@@ -282,13 +282,17 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // de-rates Br along the recoil line (Ansys-style) so the transient torque /
   // back-EMF reflect the weakened magnets.  Opt-in (adds a pre-pass sweep).
   const [demag, setDemag] = usePersisted('demag', false);
+  // Band-limit the transient torque to the physical 6·k electrical orders
+  // (drops the broadband slip-node noise a balanced 3-phase machine cannot
+  // produce).  ON by default; turn off to inspect the raw per-frame torque.
+  const [torqueFilter, setTorqueFilter] = usePersisted('torqueFilter', true);
   // Auto-save EVERY simulation change into the active motor ("my copy").
   // syncActiveMotor is internally debounced, so firing on each change is fine.
   useEffect(() => {
     if (!simReady.current) return;
     syncActiveMotor();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [current, frequency, rpm, phaseOffset, steps, coilTemp, endWinding, demag, connection]);
+  }, [current, frequency, rpm, phaseOffset, steps, coilTemp, endWinding, demag, torqueFilter, connection]);
   const [stepsStr, setStepsStr] = useState(String(steps));
   useEffect(() => { setStepsStr(String(steps)); }, [steps]);
   // HARD upper bound: the sliding-band rotor can only sit on slip-ring nodes —
@@ -433,7 +437,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // displayed result no longer matches the current settings.
   const computeSig = () => JSON.stringify({
     I: current, g: phaseOffset, rpm, steps, coilTemp, endWinding, connection,
-    fl: fieldLosses, dm: demag,
+    fl: fieldLosses, dm: demag, tf: torqueFilter,
     ns: readMesh('nSectors', 4), ms: readMesh('meshSize', 4.0), mn: readMesh('minSize', 0.3),
     gl: readMesh('gapLayers', 2), oa: readMesh('outerAir', 1.3), nd: readMesh('normalDev', 6),
   });
@@ -469,6 +473,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
         steps_per_period: steps,
         field_losses: fieldLosses,
         demag,
+        torque_filter: torqueFilter,
         n_sectors: readMesh('nSectors', 4),
         mesh_size_mm: readMesh('meshSize', 4.0),
         min_size_mm: readMesh('minSize', 0.3),
@@ -865,6 +870,26 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               }
             />
           </Tooltip>
+          {/* Torque band-limit filter: keep only the physical 6·k electrical
+              orders.  The sliding band steps the rotor across discrete slip
+              nodes, injecting broadband ripple a balanced 3-phase machine
+              cannot produce — ON drops it (mean preserved), OFF shows raw. */}
+          <Tooltip title="Band-limit the torque waveform to the physical 6·k electrical orders (6, 12, 18…). A balanced 3-phase machine can only produce torque ripple at these orders; everything else is numerical slip-node noise that does not converge with mesh refinement. The average torque is preserved exactly. Turn off to inspect the raw per-frame solver torque." placement="right">
+            <FormControlLabel
+              sx={{ mt: -0.5, mb: 0.75, ml: 0.25 }}
+              control={
+                <Checkbox size="small" checked={torqueFilter}
+                  onChange={e => setTorqueFilter(e.target.checked)}
+                  disabled={simBusy}
+                  sx={{ p: 0.5, color: '#475569', '&.Mui-checked': { color: '#34d399' } }} />
+              }
+              label={
+                <Typography variant="caption" sx={{ color: torqueFilter ? '#34d399' : '#94a3b8' }}>
+                  Torque filter — physical 6·k orders only
+                </Typography>
+              }
+            />
+          </Tooltip>
           {simBusy ? (
             <Button
               fullWidth
@@ -1197,6 +1222,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
           onSummary={setLastSummary}
           fieldLosses={fieldLosses}
           demag={demag}
+          torqueFilter={torqueFilter}
         />
 
       </Box>

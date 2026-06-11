@@ -1980,6 +1980,7 @@ def get_fem_transient(
     component_mesh:      str   = "",      # ← JSON {comp: size_mm} per-part mesh size
     rotor_eddy:          bool  = True,    # ← field-based magnet/shaft eddy losses
     demag:               bool  = False,   # ← per-element irreversible demagnetisation (de-rates Br → torque)
+    torque_filter:       bool  = True,    # ← band-limit T(t) to physical 6·k orders (off = raw)
 ):
     """Transient FEM analysis — runs N solves per electrical period and
     returns time-resolved T(t), losses(t) and V_phase(t).
@@ -2008,7 +2009,7 @@ def get_fem_transient(
                    round(stator_fillet_mm, 2),
                    round(coil_temp_c, 1), round(end_winding_factor, 3),
                    int(bool(rotor_eddy)), round(gap_layers, 1),
-                   int(bool(demag)),
+                   int(bool(demag)), int(bool(torque_filter)),
                    tuple(sorted(_comp_mesh.items())))
         if not fresh and _sb_key in _fem_transient_cache:
             return _fem_transient_cache[_sb_key]
@@ -2065,6 +2066,7 @@ def get_fem_transient(
                     end_winding_factor=float(end_winding_factor),
                     rotor_eddy=bool(rotor_eddy),
                     demag=bool(demag),
+                    torque_filter=bool(torque_filter),
                     component_mesh_mm=_comp_mesh,
                     progress_cb=_sb_progress)
             finally:
@@ -2153,7 +2155,7 @@ def get_fem_transient(
         round(outer_air_factor, 2), bool(motion_band),
         round(band_thickness_mm, 2), int(n_sectors),
         round(stator_fillet_mm, 2),
-        bool(include_frames), int(n_frames),
+        bool(include_frames), int(n_frames), bool(torque_filter),
     )
 
     # Per-frame cache key (omits include_frames/n_frames — a single frame's
@@ -2535,8 +2537,15 @@ def get_fem_transient(
     # orders a balanced 3-phase drive cannot produce.  Reconstruct T(t) from its
     # 6·k content (mean preserved) — same denoising as the sliding-band path.
     from motor_ai_sim.simulation.fem_solver_2d import band_limit_torque as _blt
-    T_em_series, _Trip_phys, _Trip_raw = _blt(
-        T_em_series, n_steps_per_period, n_periods)
+    if torque_filter:
+        T_em_series, _Trip_phys, _Trip_raw = _blt(
+            T_em_series, n_steps_per_period, n_periods)
+    else:
+        _arrT = _np.asarray(T_em_series, float)
+        _aT = float(_arrT.mean()) if _arrT.size else 0.0
+        _Trip_phys = _Trip_raw = (
+            100.0 * (float(_arrT.max()) - float(_arrT.min())) / abs(_aT)
+            if _arrT.size and abs(_aT) > 1e-9 else 0.0)
 
     # ── Energy-conserving shaft power (same convention as the sliding-band path)
     # P_elec_in = ⟨Σ v·i⟩ (0 at no-load), and P_mech = P_elec_in − P_loss so that

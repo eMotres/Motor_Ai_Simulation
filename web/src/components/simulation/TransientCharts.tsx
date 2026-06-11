@@ -75,6 +75,8 @@ interface Props {
   // Field-based magnet/shaft eddy losses (J = σ(−∂A/∂t + U) magnetodynamic
   // solve, per-magnet ∫J=0, library σ) instead of the slab d²/12 estimate.
   fieldLosses?: boolean;
+  // Band-limit T(t) to the physical 6·k orders (default ON; off = raw torque).
+  torqueFilter?: boolean;
   // Per-element irreversible demagnetisation — de-rates Br → torque/EMF + %-map.
   demag?: boolean;
 }
@@ -117,7 +119,7 @@ interface ProgressInfo {
   phase:     string;
 }
 
-const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onSummary, runNonce = 0, onBusyChange, steps = 12, fresh = false, fieldLosses = true, demag = false }) => {
+const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onSummary, runNonce = 0, onBusyChange, steps = 12, fresh = false, fieldLosses = true, demag = false, torqueFilter = true }) => {
   // `steps` (n_steps_per_period) is controlled from the left panel and
   // matches the animation viewer's n_frames so both hit the same backend
   // cache key (one solve, not two).
@@ -198,6 +200,8 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
       // Per-element irreversible demagnetisation: pre-pass de-rates Br on the
       // recoil line → torque/back-EMF reflect the weakened magnets + a %-map.
       demag:              String(demag),
+      // Band-limit T(t) to the physical 6·k orders (UI toggle, default ON).
+      torque_filter:      String(torqueFilter),
       // Copper-loss physics: coil temperature → ρ_Cu(T); end-winding factor
       // (0 = auto-estimate from geometry) for the copper the 2-D field misses.
       coil_temp_c:        String(readSimSetting('coilTemp',   120.0)),

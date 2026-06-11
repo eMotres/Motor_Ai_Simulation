@@ -3189,6 +3189,8 @@ def fem_transient_sliding_band(
     field_first: bool = False,   # snapshot the FIRST frame (rotor at angle0) instead
                                  # of the last — used by the magnetostatic field view
                                  # so the picture matches the requested rotor angle
+    torque_filter: bool = True,  # band-limit T(t) to the physical 6·k orders
+                                 # (False = raw per-frame Maxwell-stress torque)
     progress_cb=None,            # optional callback(done:int, total:int) per frame
     magnet_scale: float = 1.0,   # scale ALL magnet Br (0 → PMs off = reluctance torque)
     rotor_angle0_deg: float = 0.0,   # DIAGNOSTIC: build the rotor PHYSICALLY rotated
@@ -4220,7 +4222,28 @@ def fem_transient_sliding_band(
     _spacing_rad = math.radians(spacing)
     _omega_mech = 2.0 * math.pi * rpm / 60.0
 
-    def _angle_ddt_2d(X):
+    def _angle_ddt_2d(X, quasi_period_rad=None):
+        """Smoothed dX/dt on the unique slip-node grid, mapped back to frames.
+
+        Raw node-to-node derivatives amplify slip-merge jitter with the step
+        count, so X(θ) is savgol-low-passed before differentiating.  Two
+        defects were found by a 1-period vs 2-period ground-truth comparison
+        and are handled here:
+        (1) ROTOR-frame histories (magnets, rotor iron) are NOT periodic over
+            the window — the stator slotting sweeps past at the stator-
+            structure period (2 slot pitches: alternating wide/narrow teeth),
+            a non-integer count per electrical period — so a forced periodic
+            wrap put a LEVEL JUMP at the seam that the smoother bent into the
+            neighbours: P_mag humped ~2.5× on the first/last frames.  Fixed by
+            a C0 wrap-detrend (see below) — exact for the derivative, no
+            assumption about the signal's true period, no-op when already
+            periodic (stator-frame histories).
+        (2) the savgol window was set in SAMPLES (U//8), so the physical
+            smoothing width depended on the run length — a 2-period run
+            smoothed the genuine 15° slot ripple away (P_mag halved on
+            identical physics).  Fixed: the width is a constant ANGLE.
+        (quasi_period_rad accepted for compatibility; unused.)
+        """
         N = X.shape[0]
         if N < 3:
             return np.zeros_like(X)
@@ -4229,26 +4252,39 @@ def fem_transient_sliding_band(
             return (np.roll(X, -1, 0) - np.roll(X, 1, 0)) / (2 * dt)
         Bu = X[first]                                        # (U, E)
         theta_u = uniq * _spacing_rad                        # (U,)
-        # node-to-node slip-merge noise is high-frequency vs the physical slot
-        # ripple (~1–2 cycles per electrical period); low-pass B(θ) on the node
-        # grid before differentiating so dB/dθ shows ripple, not merge jitter.
-        #
-        # PERIODIC handling: the sweep covers whole electrical period(s), so
-        # B(θ) wraps — sample U is sample 0 again (the standard core-loss
-        # assumption; exact for the area-integrated losses).  Non-periodic
-        # edges (savgol mode="interp" + one-sided np.gradient) extrapolated at
-        # both ends and spiked P_fe/P_mag on the FIRST and LAST frames.
         U = uniq.size
-        if U >= 7:
+        _W = math.radians(period_mech * n_periods)           # window span
+        if float(theta_u[-1]) >= _W - 1e-9:
+            # degenerate: last node is the periodic image of the first — drop it
+            uniq = uniq[:-1]; Bu = Bu[:-1]; theta_u = theta_u[:-1]; U -= 1
+        # C0 detrend: per column, remove the linear ramp that makes the two
+        # window ends MEET, so the periodic extension has no level jump at the
+        # seam; the ramp's constant slope is added back to the derivative
+        # exactly.  (A harmonic-regression replacement was tried and rejected:
+        # the slot-structure lines sit ~0.86 cycles apart — under the Rayleigh
+        # limit of a 1-period window — so the design matrix is near-singular
+        # and the fit explodes.)
+        _span = float(theta_u[-1] - theta_u[0])
+        if _span > 1e-12:
+            _c = (Bu[-1] - Bu[0])[None, :] / _span           # (1, E) dB/dθ
+            Bu = Bu - _c * (theta_u - theta_u[0])[:, None]
+        else:
+            _c = np.zeros((1, Bu.shape[1]))
+        th_ext = np.concatenate([theta_u - _W, theta_u, theta_u + _W])
+        Bu_ext = np.concatenate([Bu, Bu, Bu], axis=0)
+        # savgol at a FIXED PHYSICAL width (≈1/3 slot pitch) — a window set in
+        # SAMPLES (the old U//8) made the smoothing bandwidth depend on the
+        # run length: a 2-period run smoothed the genuine 15° slot ripple away
+        # (P_mag halved vs the 1-period run on identical physics).
+        _w_ang = math.radians(5.0)                            # smoothing width
+        w = int(round(_w_ang / max(_spacing_rad, 1e-12)))
+        w = max(5, w | 1)                                     # odd, ≥5
+        if U >= 7 and Bu_ext.shape[0] >= w:
             from scipy.signal import savgol_filter as _sg
-            w = min(max(5, (U // 8) * 2 + 1), U if U % 2 == 1 else U - 1)
-            if w >= 5:
-                Bu = _sg(Bu, w, 3, axis=0, mode="wrap")
-        # Periodic central difference on the uniform node grid (no edges).
-        _step = float(theta_u[1] - theta_u[0]) if U > 1 else _spacing_rad
-        dBdt_u = (np.roll(Bu, -1, axis=0) - np.roll(Bu, 1, axis=0)) \
-                 / (2.0 * _step) * _omega_mech
-        pos = np.searchsorted(uniq, _m_arr)                  # frame → unique idx
+            Bu_ext = _sg(Bu_ext, w, 3, axis=0, mode="interp")
+        dBdt_u = ((np.gradient(Bu_ext, th_ext, axis=0)[U:2 * U] + _c)
+                  * _omega_mech)
+        pos = np.clip(np.searchsorted(uniq, _m_arr), 0, U - 1)   # frame → unique idx
         return dBdt_u[pos]
 
     def _declip(a):
@@ -4278,13 +4314,20 @@ def fem_transient_sliding_band(
     # numerical.  Measured at no-load: the real order-6 cogging dominates, but
     # ~41 % of the ripple ENERGY sits in those forbidden orders (raw pk-pk
     # 10.0 → 6·k-only 4.8 N·m).  Keep DC + every 6·k order (real cogging + load
-    # ripple) and drop the rest.  (Previously disabled to inspect the raw torque;
-    # re-enabled — the raw jaggedness is that parasitic slip-node noise, not
-    # physics, and the mesh is already pole-periodic so refining it cannot help.)
-    # The mean (calibrated average torque) is preserved exactly.
-    T_series, Trip, Trip_raw = band_limit_torque(
-        T_series, n_steps_per_period, n_periods)
-    Tavg = float(np.mean(T_series)) if T_series else Tavg
+    # ripple) and drop the rest; the mean is preserved exactly.  torque_filter
+    # (UI toggle, default ON) switches back to the raw per-frame torque for
+    # inspecting the unfiltered solve.
+    if torque_filter:
+        T_series, Trip, Trip_raw = band_limit_torque(
+            T_series, n_steps_per_period, n_periods)
+        Tavg = float(np.mean(T_series)) if T_series else Tavg
+    elif T_series:
+        _xT = np.asarray(T_series, float)
+        _avgT = float(_xT.mean())
+        Trip = Trip_raw = (100.0 * (float(_xT.max()) - float(_xT.min())) / abs(_avgT)
+                           if abs(_avgT) > 1e-9 else 0.0)
+    else:
+        Trip = Trip_raw = 0.0
     Vpk = float(max(max(map(abs, VA)), max(map(abs, VB)), max(map(abs, VC)))) if VA else 0.0
     # P_cu already computed physically (ρ(T)·J²·V·k_end) near the top.
 
@@ -4307,7 +4350,7 @@ def fem_transient_sliding_band(
     # iron(t)  = hysteresis baseline (per-cycle quantity, flat) + classical
     #            eddy from the smooth |dB/dt|²(t) → ripples as the teeth pass.
     # magnet(t)= σ·d²/12·|dB/dt|²(t)  → ripples likewise.
-    def _iron_series(hx, hy, idx, areas_half, mat):
+    def _iron_series(hx, hy, idx, areas_half, mat, qp=None):
         if mat is None or idx.size == 0 or not hx or np.asarray(hx[0]).size == 0:
             return np.zeros(n_total), 0.0
         X = np.asarray(hx); Y = np.asarray(hy)            # (N, E)
@@ -4317,7 +4360,7 @@ def fem_transient_sliding_band(
         kh, kc, ke = _mat_lib.effective_bertotti(mat)
         sf = float(getattr(mat, "stacking_factor", 0.95))
         vol = areas_half[idx] * p.stack_length * sf       # (E,)
-        dX = _angle_ddt_2d(X); dY = _angle_ddt_2d(Y)
+        dX = _angle_ddt_2d(X, qp); dY = _angle_ddt_2d(Y, qp)
         pcl_t = (kc / _two_pi2) * np.sum((dX ** 2 + dY ** 2) * vol[None, :], axis=1)
         Bac2 = (((X.max(0) - X.min(0)) * 0.5) ** 2
                 + ((Y.max(0) - Y.min(0)) * 0.5) ** 2)
@@ -4373,11 +4416,11 @@ def fem_transient_sliding_band(
     # the COILS (solid copper bars) and the SHAFT (solid steel).  d is the
     # conductor dimension capped at twice the skin depth (for d≫δ the field is
     # surface-limited, so the d² slab law alone would over-count).
-    def _slab_eddy(hx, hy, idx, areas_half, sigma, d_m):
+    def _slab_eddy(hx, hy, idx, areas_half, sigma, d_m, qp=None):
         if sigma <= 0.0 or idx.size == 0 or not hx or np.asarray(hx[0]).size == 0:
             return [0.0] * n_total, 0.0
         X = np.asarray(hx); Y = np.asarray(hy)
-        dX = _angle_ddt_2d(X); dY = _angle_ddt_2d(Y)
+        dX = _angle_ddt_2d(X, qp); dY = _angle_ddt_2d(Y, qp)
         vol = areas_half[idx] * p.stack_length
         Pt = _declip(sigma * (d_m ** 2 / 12.0)
                      * np.sum((dX ** 2 + dY ** 2) * vol[None, :], axis=1) * NS)
@@ -4492,8 +4535,9 @@ def fem_transient_sliding_band(
         _nst_e = int(_Bxs.size)
         _dens = np.zeros(int(_Bxs.size + _Bxr.size))
 
-        def _mean_sq_ddt(hx, hy):                       # time-avg |dB/dt|² per elem
-            dX = _angle_ddt_2d(np.asarray(hx)); dY = _angle_ddt_2d(np.asarray(hy))
+        def _mean_sq_ddt(hx, hy, qp=None):              # time-avg |dB/dt|² per elem
+            dX = _angle_ddt_2d(np.asarray(hx), qp)
+            dY = _angle_ddt_2d(np.asarray(hy), qp)
             return np.mean(dX ** 2 + dY ** 2, axis=0)
 
         def _bac2(hx, hy):                              # (½ peak-peak)² per elem
@@ -4509,14 +4553,14 @@ def fem_transient_sliding_band(
                 _dens[base + local_idx] += shape_e * (P_target_W / integ)
 
         # Iron — stator + rotor share one Bertotti total (P_fe_avg).
-        def _iron_shape(hx, hy, idx, mat):
+        def _iron_shape(hx, hy, idx, mat, qp=None):
             if mat is None or idx.size == 0 or not hx or np.asarray(hx[0]).size == 0:
                 return np.zeros(idx.size)
             kh, kc, ke = _mat_lib.effective_bertotti(mat)
             b2 = _bac2(hx, hy)
             return (kh * f_elec * b2
                     + ke * f_elec ** 1.5 * np.power(np.maximum(b2, 0.0), 0.75)
-                    + (kc / _two_pi2) * _mean_sq_ddt(hx, hy))
+                    + (kc / _two_pi2) * _mean_sq_ddt(hx, hy, qp))
         _sh_is = _iron_shape(_hist_sx, _hist_sy, _iron_s_idx, _steel_s)
         _sh_ir = _iron_shape(_hist_rx, _hist_ry, _iron_r_idx, _steel_r)
         _integ_fe = ((float(np.sum(_sh_is * areas_s[_iron_s_idx])) if _iron_s_idx.size else 0.0)

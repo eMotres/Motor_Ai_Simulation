@@ -1965,7 +1965,10 @@ def get_fem_transient(
                     gamma_deg=float(gamma_deg), I_phase_rms=float(I_phase_rms),
                     mesh_size_mm=float(mesh_size_mm), min_size_mm=float(min_size_mm),
                     outer_air_factor=float(outer_air_factor), gap_layers=float(gap_layers),
-                    n_sectors=int(n_sectors) if int(n_sectors) > 1 else 4,
+                    # 'Full disk' in the UI (n_sectors<=1) now runs the TRUE
+                    # full ring (no sector cuts): kills the cut-local field
+                    # error (phase-EMF asymmetry + order-6 parasitic cogging).
+                    n_sectors=int(n_sectors) if int(n_sectors) > 1 else -1,
                     stator_fillet_mm=float(stator_fillet_mm),
                     coil_temp_c=float(coil_temp_c),
                     end_winding_factor=float(end_winding_factor),

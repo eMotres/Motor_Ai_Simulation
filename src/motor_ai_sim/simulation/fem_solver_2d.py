@@ -763,6 +763,7 @@ def _build_sliding_band_meshes(
         aspect_ratio: float = 10.0,
         gap_layers: float = 3.0,            # element layers across the air gap
         component_mesh_mm: Optional[dict] = None,
+        full_ring: bool = False,            # TRUE 360°: stitch 2×180° per half
 ):
     """Build the stator-half and rotor-half meshes for the sliding-band solver.
 
@@ -840,23 +841,40 @@ def _build_sliding_band_meshes(
     if "out_band" in polys_s_for_mesh:
         polys_s_for_mesh["air_outer"] = polys_s_for_mesh.pop("out_band")
 
+    _common_kw = dict(
+        rotor_angle_deg=0.0,
+        mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm,
+        normal_deviation_deg=normal_deviation_deg, aspect_ratio=aspect_ratio,
+        outer_air_factor=outer_air_factor,
+        motion_band=False, band_thickness_mm=band_thickness_mm,
+        gap_layers=gap_layers, geo_cfg=geo_cfg,
+        add_background_air=False, slip_transfinite_r=_slip_r,
+        extra_transfinite_radii=_extra_tf,
+        component_mesh_mm=component_mesh_mm,
+    )
+
+    if full_ring:
+        # TRUE 360°: each half stitched from two clean 180° builds (direct
+        # closed-360 OCC double-meshes → dead field).  No sector cuts exist
+        # anywhere afterwards — the artifact-free configuration.
+        mesh_s, tags_s, classify_s = _stitch_full_half(
+            polys_s_for_mesh, DOM_OUTER,
+            dict(_common_kw, rotational_period_deg=_slot_period))
+        mesh_r, tags_r, classify_r = _stitch_full_half(
+            polys_r_for_mesh, DOM_AIRGAP,
+            dict(_common_kw, rotational_period_deg=_pole_period))
+        if abs(rotor_angle_deg) > 1e-9:
+            mesh_r = type(mesh_r)(_rotate_mesh_points(mesh_r.p, rotor_angle_deg),
+                                   mesh_r.t)
+        return mesh_s, tags_s, classify_s, mesh_r, tags_r, classify_r
+
     # Build stator half at the FIXED lab position (rotor_angle_deg ignored
     # for stator-side polygons, which are stationary).  Stator stays
     # sector-clipped to the requested n_sectors — it never rotates, so
     # the sector wedge accurately represents the symmetry-reduced domain.
     mesh_s, tags_s, classify_s = build_mesh_from_polygons(
-        polys_s_for_mesh, rotor_angle_deg=0.0,
-        mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm,
-        normal_deviation_deg=normal_deviation_deg, aspect_ratio=aspect_ratio,
-        outer_air_factor=outer_air_factor,
-        motion_band=False, band_thickness_mm=band_thickness_mm,
-        gap_layers=gap_layers,
-        n_sectors=n_sectors, geo_cfg=geo_cfg,
-        add_background_air=False, slip_transfinite_r=_slip_r,
-        extra_transfinite_radii=_extra_tf,
-        component_mesh_mm=component_mesh_mm,
-        rotational_period_deg=_slot_period,
-    )
+        polys_s_for_mesh, n_sectors=n_sectors,
+        rotational_period_deg=_slot_period, **_common_kw)
 
     # Build rotor half with the SAME sector clip as the stator
     # (n_sectors).  The rotor mesh covers ONE sector (1/n_sectors of the
@@ -867,18 +885,8 @@ def _build_sliding_band_meshes(
     # Past the sector edge the wedge wraps via anti-periodic BC (handled
     # later by the solver / master-slave pair).
     mesh_r, tags_r, classify_r = build_mesh_from_polygons(
-        polys_r_for_mesh, rotor_angle_deg=0.0,
-        mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm,
-        normal_deviation_deg=normal_deviation_deg, aspect_ratio=aspect_ratio,
-        outer_air_factor=outer_air_factor,
-        motion_band=False, band_thickness_mm=band_thickness_mm,
-        gap_layers=gap_layers,
-        n_sectors=n_sectors, geo_cfg=geo_cfg,
-        add_background_air=False, slip_transfinite_r=_slip_r,
-        extra_transfinite_radii=_extra_tf,
-        component_mesh_mm=component_mesh_mm,
-        rotational_period_deg=_pole_period,
-    )
+        polys_r_for_mesh, n_sectors=n_sectors,
+        rotational_period_deg=_pole_period, **_common_kw)
 
     # Apply rotor rotation as a rigid body — node coords only, topology
     # unchanged.  This is the heart of sliding-band: every frame just
@@ -3292,14 +3300,16 @@ def fem_transient_sliding_band(
         motor.set_parameters(geo_override)   # in-memory candidate geometry
     polys = motor.get_2d_polygons(rotor_angle_deg=float(rotor_angle0_deg))
     polys = _simplify_polys(polys, tol_mm=0.005, stator_fillet_mm=stator_fillet_mm,
-                            band_mode=("moving" if _SB_MOVING_BAND else "merged"))
+                            band_mode=("moving" if (_SB_MOVING_BAND or _full_ring)
+                                       else "merged"))
     ms, ts, cs, mr, tr, cr = _build_sliding_band_meshes(
         polys, 0.0, mesh_size_mm, min_size_mm=min_size_mm,
         outer_air_factor=outer_air_factor, band_thickness_mm=0.4,
         n_sectors=NS, geo_cfg=motor.parameters,
         normal_deviation_deg=8.0, aspect_ratio=10.0,
         gap_layers=gap_layers,
-        component_mesh_mm=component_mesh_mm)
+        component_mesh_mm=component_mesh_mm,
+        full_ring=_full_ring)
     Ps, Tts = ms.p.copy(), ms.t.copy(); Pr, Ttr = mr.p.copy(), mr.t.copy()
     nsn = Ps.shape[1]
     Pall = np.hstack([Ps, Pr]); Tall = np.hstack([Tts, Ttr + nsn])
@@ -4436,6 +4446,74 @@ def fem_transient_sliding_band(
         "demag_report": _demag_report,
         "demag_field": _demag_field,     # full mesh + per-element Br factor for the %-map
     }
+
+
+def _stitch_full_half(polys_half: dict, default_dom: int,
+                      build_kwargs: dict):
+    """Build a FULL-360° sliding-band HALF (rotor disk or stator annulus) by
+    stitching two 180° sector builds — the direct closed-360 OCC build
+    double-meshes / mis-classifies (dead field).  Same trick as the static
+    full disk: clean n_sectors=2 build → mirror by point negation (exact
+    180° rotation) → weld coincident seam nodes → reclassify every triangle
+    by centroid against the FULL half polygons.
+
+    Returns (MeshTri, tags int16, classify_fn with .polys = polys_half)."""
+    import numpy as _np
+    import scipy.sparse as _sp
+    from scipy.sparse.csgraph import connected_components as _cc
+    from scipy.spatial import cKDTree as _KD
+    import shapely as _sh
+    from skfem import MeshTri as _MT
+
+    mesh2, _t2, _c2 = build_mesh_from_polygons(
+        polys_half, n_sectors=2, **build_kwargs)
+    V = mesh2.p.T; T = mesh2.t.T; N = len(V)
+
+    Vf = _np.vstack([V, -V])              # 180° rotation = point negation
+    Tf = _np.vstack([T, T + N]); n2 = len(Vf)
+    pairs = _KD(Vf).query_pairs(r=1e-7)
+    if pairs:
+        ij = _np.array(list(pairs)).T
+        g = _sp.coo_matrix((_np.ones(ij.shape[1]), (ij[0], ij[1])),
+                           shape=(n2, n2))
+        _, lab = _cc(g + g.T, directed=False)
+    else:
+        lab = _np.arange(n2)
+    uniq, inv = _np.unique(lab, return_inverse=True)
+    Vw = _np.zeros((len(uniq), 2)); _np.add.at(Vw, inv, Vf)
+    Vw /= _np.bincount(inv)[:, None]
+    Tw = inv[Tf]
+    good = ((Tw[:, 0] != Tw[:, 1]) & (Tw[:, 1] != Tw[:, 2])
+            & (Tw[:, 0] != Tw[:, 2]))
+    Tw = Tw[good]
+    meshF = _MT(Vw.T, Tw.T.copy())
+
+    cen = Vw[Tw].mean(axis=1) * 1000.0    # metres → polygon mm
+    ct = _np.full(len(Tw), default_dom, dtype=_np.int32)
+    clf = []
+    for i, (mp, _pl) in enumerate(polys_half.get("magnets", []) or []):
+        if mp is not None and not mp.is_empty:
+            clf.append((mp, DOM_MAG_BASE + i))
+    for i, cp in enumerate(polys_half.get("coils", []) or []):
+        if cp is not None and not cp.is_empty:
+            clf.append((cp, DOM_COIL_BASE + i))
+    for k, dm in (("shaft", DOM_SHAFT), ("rotor", DOM_ROTOR),
+                  ("stator", DOM_STATOR)):
+        gg = polys_half.get(k)
+        if gg is not None and not gg.is_empty:
+            clf.append((gg, dm))
+    for gg, tag in reversed(clf):     # solids last → most specific wins
+        try:
+            ct[_sh.contains_xy(gg, cen[:, 0], cen[:, 1])] = tag
+        except Exception:
+            pass
+
+    class _CF:
+        pass
+    cf = _CF(); cf.polys = polys_half
+    log.info("SB full-ring half stitched: %d nodes, %d tris (default dom %d)",
+             len(Vw), len(Tw), default_dom)
+    return meshF, ct.astype(_np.int16), cf
 
 
 def _build_full_disk_from_halves(polys, rotor_angle_deg, mesh_size_mm,

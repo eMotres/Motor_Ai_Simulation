@@ -19,14 +19,24 @@ import { AuthProvider } from './contexts/AuthContext'
     private native: ResizeObserver | null = null;
     private seen = new Map<Element, { w: number; h: number }>();
     private timer: number | null = null;
+    private nativeWorks = false;   // once the native RO fires, it drives — stop polling
     constructor(cb: ResizeObserverCallback) {
       this.cb = cb;
-      try { this.native = Native ? new Native(() => this.poll()) : null; } catch { this.native = null; }
+      try {
+        this.native = Native ? new Native(() => { this.nativeWorks = true; this.poll(); }) : null;
+      } catch { this.native = null; }
     }
     observe(el: Element, opts?: ResizeObserverOptions) {
       this.seen.set(el, { w: -1, h: -1 });
       try { this.native?.observe(el, opts); } catch { /* ignore */ }
-      if (this.timer == null) this.timer = window.setInterval(() => this.poll(), 200);
+      // Poll only until the native RO proves it works (then it self-stops, so a
+      // healthy browser pays zero ongoing cost — identical to native behaviour).
+      if (this.timer == null && !this.nativeWorks) {
+        this.timer = window.setInterval(() => {
+          if (this.nativeWorks) { clearInterval(this.timer!); this.timer = null; return; }
+          this.poll();
+        }, 200);
+      }
       setTimeout(() => this.poll(), 0);
     }
     unobserve(el: Element) {

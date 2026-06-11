@@ -566,32 +566,6 @@ const MeshPanel: React.FC = () => {
               </Typography>
             </Box>
 
-            {/* ── PROMINENT symmetry switch (top) — full disk vs sector ── */}
-            <Box sx={{ p: 1, borderRadius: 1, bgcolor: '#0f1d33',
-                       border: '1px solid #3b82f6' }}>
-              <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, color: '#93c5fd',
-                letterSpacing: '0.1em', textTransform: 'uppercase', mb: 0.75 }}>
-                Symmetry — switch mesh
-              </Typography>
-              <ToggleButtonGroup
-                value={nSectors} exclusive size="small" fullWidth
-                onChange={(_, v) => v != null && setNSectors(v as number)}
-                sx={{ width: '100%',
-                  '& .MuiToggleButton-root': { flex: 1, py: 0.5, fontSize: 12,
-                    fontWeight: 600, color: '#94a3b8', borderColor: '#1e293b',
-                    textTransform: 'none',
-                    '&.Mui-selected': { color: '#fff', bgcolor: '#2563eb',
-                      borderColor: '#3b82f6' } } }}>
-                <ToggleButton value={1}>Full disk</ToggleButton>
-                <ToggleButton value={2}>1/2</ToggleButton>
-                <ToggleButton value={4}>1/4</ToggleButton>
-              </ToggleButtonGroup>
-              <Typography sx={{ fontSize: 10, color: '#64748b', mt: 0.5 }}>
-                Saved permanently &amp; used by Simulation + charts. Full disk is
-                stitched from two clean 1/2 sectors (no double mesh).
-              </Typography>
-            </Box>
-
             {/* mesh_size_mm */}
             <Box>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
@@ -776,11 +750,16 @@ const MeshPanel: React.FC = () => {
                 <ToggleButton value={2}>1/2</ToggleButton>
                 <ToggleButton value={4}>1/4</ToggleButton>
               </ToggleButtonGroup>
-              {nSectors > 1 && (
+              {nSectors > 1 ? (
                 <Typography sx={{ fontSize: 9, color: '#334155', mt: 0.5 }}>
                   {24 / nSectors} slots + {28 / nSectors} poles per sector ·
                   {(28 / nSectors) % 2 === 1 ? ' anti-periodic' : ' periodic'} BC on radial
                   cuts ({28 / nSectors} poles = {(28 / nSectors) % 2 === 1 ? 'odd' : 'even'})
+                </Typography>
+              ) : (
+                <Typography sx={{ fontSize: 9, color: '#334155', mt: 0.5 }}>
+                  Full 360° — stitched from two clean 1/2 sectors (no cuts, no double mesh).
+                  Saved permanently &amp; used by Simulation + charts.
                 </Typography>
               )}
             </Box>

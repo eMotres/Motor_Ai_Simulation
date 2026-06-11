@@ -3187,6 +3187,7 @@ def fem_transient_sliding_band(
     component_mesh_mm: dict = None,  # per-part target element size {comp: mm}
     return_field: bool = False,  # eddy: also return a last-frame field snapshot
     progress_cb=None,            # optional callback(done:int, total:int) per frame
+    magnet_scale: float = 1.0,   # scale ALL magnet Br (0 → PMs off = reluctance torque)
     rotor_angle0_deg: float = 0.0,   # DIAGNOSTIC: build the rotor PHYSICALLY rotated
                                      # in CAD (magnets+pockets rotated before meshing);
                                      # with 1 step this is a true static solve at that
@@ -3463,7 +3464,9 @@ def fem_transient_sliding_band(
         return asm(_msrc, _rb,
                    mx=_rb0.interpolate(_Mx_glob * _br),
                    my=_rb0.interpolate(_My_glob * _br))
-    _br_glob = np.ones(_nt_r)        # per-element Br factor (demag de-rating)
+    # magnet_scale lets the torque decomposition turn the PMs OFF (=0 →
+    # reluctance-only torque) or weaken them, without touching geometry.
+    _br_glob = np.full(_nt_r, float(magnet_scale))   # per-element Br factor (demag de-rating × magnet_scale)
     f_mag = _build_fmag(_br_glob)
     # per-phase unit-current stator source vectors
     f_coil = {'A': np.zeros(half["s"]["n"]), 'B': np.zeros(half["s"]["n"]),

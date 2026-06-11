@@ -1250,15 +1250,12 @@ async def build_fem_mesh_2d_sliding_band(
     except Exception:
         pass
     polys = motor.get_2d_polygons(rotor_angle_deg=0.0)
-    # Full disk (n_sectors<=1) = the TRUE full ring (stitched 2×180° halves).
-    # Use the MERGED band (single shared ring at mid) for DISPLAY: the moving
-    # band's mid±δ split leaves a thin empty annulus the solver fills in closed
-    # form — it has no triangles, so the viewer would draw a black strip across
-    # the air gap.  The viewer only needs a continuous, gap-free mesh.
-    # Reverted to the pre-"full circle" behaviour: the mesh is the symmetry
-    # SECTOR (¼ for 24/28).  "Full" (n_sectors<=1) maps to the ¼ sector, same as
-    # the transient route did before the full-ring rework.
-    _nsec_view = int(n_sectors) if int(n_sectors) > 1 else 4
+    # Symmetry switch honours the label: "Full" (n_sectors<=1) draws the WHOLE
+    # motor (stitched 2×180° halves); ½ and ¼ draw the symmetry sector.  Use the
+    # MERGED band (single shared ring at mid) so the air gap is continuous — the
+    # moving band's mid±δ split has no triangles there and would show as a black
+    # strip in the display.
+    _full_ring_view = int(n_sectors) <= 1
     polys = _simplify_polys(polys, tol_mm=surface_deviation,
                              stator_fillet_mm=stator_fillet_mm,
                              normal_dev_deg=normal_deviation,
@@ -1279,10 +1276,10 @@ async def build_fem_mesh_2d_sliding_band(
                 normal_deviation_deg=normal_deviation, aspect_ratio=aspect_ratio,
                 outer_air_factor=outer_air_factor,
                 band_thickness_mm=band_thickness_mm, gap_layers=gap_layers,
-                n_sectors=_nsec_view,
+                n_sectors=(1 if _full_ring_view else n_sectors),
                 geo_cfg=motor.parameters,
                 component_mesh_mm=_comp_mesh,
-                full_ring=False,
+                full_ring=_full_ring_view,
             )
     except Exception as e:
         log.exception("sliding-band mesh build failed")
@@ -1982,10 +1979,10 @@ def get_fem_transient(
                     gamma_deg=float(gamma_deg), I_phase_rms=float(I_phase_rms),
                     mesh_size_mm=float(mesh_size_mm), min_size_mm=float(min_size_mm),
                     outer_air_factor=float(outer_air_factor), gap_layers=float(gap_layers),
-                    # Reverted: 'Full disk' (n_sectors<=1) → ¼ symmetry sector
-                    # (the stable pre-full-ring behaviour). The full-ring path
-                    # stays in the solver but is no longer the default.
-                    n_sectors=int(n_sectors) if int(n_sectors) > 1 else 4,
+                    # 'Full' (n_sectors<=1) solves the full ring so it matches
+                    # the full-motor mesh shown in the Mesh tab; ¼/½ solve the
+                    # sector.  ¼ remains the default (set in the UI).
+                    n_sectors=int(n_sectors) if int(n_sectors) > 1 else -1,
                     stator_fillet_mm=float(stator_fillet_mm),
                     coil_temp_c=float(coil_temp_c),
                     end_winding_factor=float(end_winding_factor),

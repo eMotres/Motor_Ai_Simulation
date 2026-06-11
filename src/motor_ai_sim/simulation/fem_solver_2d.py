@@ -2219,11 +2219,16 @@ def solve_magnetostatics(
     )
     from skfem.helpers import dot, grad
 
+    from skfem import ElementTriP0
     basis = Basis(mesh, ElementTriP1())
 
     @BilinearForm
     def stiffness(u, v, w):
         return dot(grad(u), grad(v))
+
+    @BilinearForm
+    def stiffness_nu(u, v, w):            # per-element reluctivity ν(x)
+        return w["nu"] * dot(grad(u), grad(v))
 
     @LinearForm
     def rhs_unit(v, w):
@@ -2247,6 +2252,7 @@ def solve_magnetostatics(
     tag_K: Dict[int, "csr_matrix"] = {}
     tag_mat: Dict[int, FEMMaterial] = {}
     tag_cells: Dict[int, np.ndarray] = {}
+    tag_basis: Dict[int, "Basis"] = {}
 
     # Pre-assemble per-tag CURRENT and MAGNETISATION source vectors so the
     # Picard loop can re-scale each magnet's contribution when its Br_eff
@@ -2265,6 +2271,7 @@ def solve_magnetostatics(
         tag_K[int(tag)]    = asm(stiffness, sub_basis)
         tag_mat[int(tag)]  = mat
         tag_cells[int(tag)] = cells_idx
+        tag_basis[int(tag)] = sub_basis
         if mat.J_z != 0.0:
             f_current += asm(rhs_unit, sub_basis) * mat.J_z
         if abs(mat.Mx) > 0:
@@ -2274,6 +2281,22 @@ def solve_magnetostatics(
 
     SATURABLE_TAGS = {DOM_STATOR, DOM_ROTOR, DOM_SHAFT}
     mu_r_eff: Dict[int, float] = {tag: tag_mat[tag].mu_r for tag in tag_mat}
+    # ── PER-ELEMENT saturation state for the iron domains ────────────────
+    # A per-DOMAIN μ from the B p90 NEVER saturates a spoke rotor's bridges
+    # (they are a tiny fraction of the rotor area), so the magnets short
+    # through the unsaturated bridges and the gap field collapses ~10×
+    # (0.11 T instead of ~1 T — the "chaotic iso-lines / dead cogging"
+    # symptom).  Mirror the transient: every iron triangle gets its own
+    # ν(|B|), updated by damped Picard.
+    sat_basis: Dict[int, "Basis"] = {}
+    sat_b0:    Dict[int, "Basis"] = {}
+    nu_el:     Dict[int, np.ndarray] = {}
+    for tag in SATURABLE_TAGS:
+        if tag in tag_cells:
+            sat_basis[tag] = tag_basis[tag]
+            sat_b0[tag] = tag_basis[tag].with_element(ElementTriP0())
+            nu_el[tag] = np.full(tag_cells[tag].size,
+                                 1.0 / (MU0 * max(tag_mat[tag].mu_r, 1.0)))
     # Br factor — starts at 1.0 (full strength) per magnet; the demag
     # iteration drops it below 1.0 when the operating point crosses the knee.
     br_factor: Dict[int, float] = {
@@ -2282,7 +2305,14 @@ def solve_magnetostatics(
     def _assemble_K() -> "csr_matrix":
         K = csr_matrix((n, n))
         for tag, K_dom in tag_K.items():
+            if tag in sat_basis:
+                continue                       # assembled per element below
             K = K + K_dom * (1.0 / (MU0 * mu_r_eff[tag]))
+        for tag, sb in sat_basis.items():
+            b0 = sat_b0[tag]
+            nf = b0.zeros()
+            nf[tag_cells[tag]] = nu_el[tag]    # P0 dof == global element id
+            K = K + asm(stiffness_nu, sb, nu=b0.interpolate(nf))
         return K
 
     def _assemble_f() -> np.ndarray:
@@ -2314,32 +2344,31 @@ def solve_magnetostatics(
         f_iter = _assemble_f()           # picks up updated br_factor
         A = _solve_with_bc(K_csr, f_iter, outer_nodes, mesh, n_sectors,
                             pole_pairs_per_sector_is_half_integer)
-        # Compute |B| per triangle, then mean |B| in each saturable domain.
+        # Per-ELEMENT ν(|B|) update in every saturable (iron) domain — each
+        # triangle saturates on its own, so thin features (spoke bridges)
+        # saturate correctly even though the domain average stays low.
         Bx_tri, By_tri = _per_triangle_B(mesh, A)
         Bmag_tri = np.sqrt(Bx_tri ** 2 + By_tri ** 2)
         changed = False
-        for tag in SATURABLE_TAGS:
-            if tag not in tag_cells:
-                continue
+        for tag, sb in sat_basis.items():
             idx = tag_cells[tag]
-            B_p90 = float(np.percentile(Bmag_tri[idx], 90)) if idx.size else 0.0
+            Bm = Bmag_tri[idx]
             mat_t = tag_mat[tag]
-            # Prefer the measured B-H curve if the assigned material has one;
-            # otherwise fall back to the analytic Fröhlich roll-off.
             if mat_t.bh_curve and len(mat_t.bh_curve) >= 2:
-                new_mu = _mu_r_from_bh(mat_t.bh_curve, B_p90)
-                src = "BH"
+                mu_new = _mu_r_from_bh_vec(mat_t.bh_curve, Bm)
             else:
-                from math import inf as _inf
-                ratio = (1.8 / max(B_p90, 1e-9)) ** 3 if B_p90 > 1.8 else 1.0
-                new_mu = mat_t.mu_r * ratio + 5.0 * (1 - ratio)
-                src = "Fröhlich"
-            new_mu = 0.5 * (mu_r_eff[tag] + new_mu)
-            if abs(new_mu - mu_r_eff[tag]) / max(mu_r_eff[tag], 1.0) > 0.02:
+                ratio = np.where(Bm > 1.8, (1.8 / np.maximum(Bm, 1e-9)) ** 3, 1.0)
+                mu_new = mat_t.mu_r * ratio + 5.0 * (1.0 - ratio)
+            nu_new = 1.0 / (MU0 * np.maximum(mu_new, 1.0))
+            nu_upd = 0.5 * nu_el[tag] + 0.5 * nu_new
+            rel = float(np.max(np.abs(nu_upd - nu_el[tag])
+                               / np.maximum(nu_el[tag], 1e-30)))
+            if rel > 0.02:
                 changed = True
-            log.info("FEM iter %d: tag=%d B_p90=%.2fT μ_r %.0f→%.0f (%s)",
-                     it, tag, B_p90, mu_r_eff[tag], new_mu, src)
-            mu_r_eff[tag] = new_mu
+            nu_el[tag] = nu_upd
+            log.info("FEM iter %d: tag=%d B_max=%.2fT μ_r median %.0f (per-elem)",
+                     it, tag, float(Bm.max()) if Bm.size else 0.0,
+                     float(np.median(1.0 / (MU0 * nu_el[tag]))))
 
         # ── Self-consistent demagnetisation update ────────────────────
         # When a magnet's operating point falls BELOW its BH-curve knee,

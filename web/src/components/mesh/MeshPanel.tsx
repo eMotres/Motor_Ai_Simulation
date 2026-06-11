@@ -26,6 +26,7 @@ const MESH_COMPONENTS: { key: string; label: string }[] = [
 import SaveIcon from '@mui/icons-material/Save';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import FemMeshViewer3D from './FemMeshViewer3D';
+import SaveToMotorButton from '../common/SaveToMotorButton';
 import Viewcube from '../viewer3d/Viewcube';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
@@ -819,6 +820,8 @@ const MeshPanel: React.FC = () => {
             >
               {femLoading ? 'Building…' : 'Rebuild mesh'}
             </Button>
+
+            <SaveToMotorButton kind="mesh" />
 
             {femError && <Alert severity="error" sx={{ fontSize: 11 }}>{femError}</Alert>}
 

@@ -23,6 +23,7 @@ import BoltIcon         from '@mui/icons-material/Bolt';
 import SimulationCharts from './SimulationCharts';
 import PhysicsDashboard from './PhysicsDashboard';
 import ModelCompare from './ModelCompare';
+import SaveToMotorButton from '../common/SaveToMotorButton';
 import SaveIcon from '@mui/icons-material/Save';
 import type { TransientSummary } from './SummaryTable';
 
@@ -894,6 +895,9 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 ? 'Stopped — Run to resume the finished frames or start fresh'
                 : 'Edit γ / current / mesh settings, then launch one solve'}
           </Typography>
+          <Box sx={{ mt: 1 }}>
+            <SaveToMotorButton kind="simulation" disabled={simBusy} />
+          </Box>
         </Box>
 
         {/* ── Resume / fresh dialog (after a Stop) ── */}

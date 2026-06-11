@@ -299,9 +299,17 @@
       "motor_length": 45
     },
     "simulation": {
-      "max_current": 150.0,
+      "max_current": 150,
       "rpm": 2000.0,
-      "phase_offset_deg": 0.0
+      "phase_offset_deg": 0.0,
+      "steps_per_period": 72,
+      "demag": false,
+      "coil_temp_c": 120
+    },
+    "mesh": {
+      "mesh_size_mm": 4.0,
+      "gap_layers": 2,
+      "component_mesh": {}
     }
   }
 }

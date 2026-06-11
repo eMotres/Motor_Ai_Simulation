@@ -668,11 +668,13 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gamma_deg, rotor_angle_deg, I_phase_rms, payloadOverride]);
 
-  // The eddy solve carries current, so proximity crowding only shows under
-  // load.  At no-load (I=0/undefined) fall back to a representative 120 A so
-  // the J⟳ / Loss views aren't blank — flagged in the note below.
-  const eddyCurrent = (I_phase_rms && I_phase_rms > 0) ? I_phase_rms : 120;
-  const eddySubstituted = !(I_phase_rms && I_phase_rms > 0);
+  // Use the ACTUAL operating-point current — no silent substitution (a hidden
+  // fallback to 120 A made the no-load Loss view show full I²R copper loss, which
+  // read as "copper loss at I=0").  At I=0 the map now honestly shows the no-load
+  // losses: iron + magnet eddy + the small copper eddy/proximity the spinning
+  // magnets induce in the windings — there is NO I²R.
+  const eddyCurrent = (I_phase_rms !== undefined && I_phase_rms > 0) ? I_phase_rms : 0;
+  const eddyNoLoad = !(eddyCurrent > 0);
 
   const fetchEddy = () => {
     if (payloadOverride) return;
@@ -940,7 +942,7 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
           {mode === 'Loss'
             ? `Cycle-averaged loss density [W/m³] from the eddy-current transient — iron Bertotti + copper (DC I²R + AC proximity) + magnet eddy, each normalised so the map integrates to the reported component losses. ${logLoss ? 'Log' : 'Linear'} scale (toggle top-right).`
             : 'Real current density σ(−∂A/∂t+U) from the eddy solve — current crowds toward the slot opening (proximity). Compare with the uniform magnetostatic "J".'}
-          {eddySubstituted && ' Run carries no load current (I=0); showing 120 A so crowding is visible — set a load current in the simulation for your operating point.'}
+          {eddyNoLoad && ' No winding current (I=0): the copper loss shown is ONLY eddy/proximity induced by the spinning magnets (concentrated near the slot opening) — there is no I²R. Set a load current to see I²R copper loss and current crowding.'}
         </Typography>
       ) : (
         <Typography sx={{ fontSize: 9, color: '#334155', mt: 0.5 }}>

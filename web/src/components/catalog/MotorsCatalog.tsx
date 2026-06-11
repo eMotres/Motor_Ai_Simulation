@@ -7,7 +7,7 @@ import BoltIcon from '@mui/icons-material/Bolt';
 import CheckIcon from '@mui/icons-material/Check';
 import { useUIStore } from '../../stores/motorStore';
 import MyDesigns from './MyDesigns';
-import { seedSettingsFromPreset } from '../common/motorSettings';
+import { openMotor } from '../common/motorSettings';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
@@ -39,12 +39,11 @@ const MotorsCatalog: React.FC = () => {
   const loadMotor = async (m: Motor) => {
     setBusy(m.id);
     try {
-      // The load returns the full preset (geometry + mesh + simulation); seed
-      // the browser-side mesh/sim settings + mark this motor active BEFORE the
-      // reload so the whole working setup comes back, not just the geometry.
-      const res = await fetch(`${API}/api/catalog/${m.id}/load`, { method: 'POST' })
-        .then(r => r.json()).catch(() => null);
-      if (res?.preset) seedSettingsFromPreset(res.preset, m.name);
+      // Open as YOUR editable copy: a curated template forks into "my_<id>" so
+      // it stays pristine; your own motor opens in place.  Seeds the browser
+      // mesh/sim + marks it the active working motor before the reload.
+      if (m.preset) await openMotor(m.preset, m.name);
+      else await fetch(`${API}/api/catalog/${m.id}/load`, { method: 'POST' });
       setActiveTab('geometry');
       window.location.reload();
     } catch { setBusy(null); }

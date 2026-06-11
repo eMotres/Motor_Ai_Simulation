@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { syncActiveMotor } from '../components/common/motorSettings';
 import type {
   MotorGeometryParams,
   MaterialAssignments,
@@ -362,6 +363,7 @@ export const useMotorStore = create<MotorState>()(
             await new Promise(r => setTimeout(r, 600));
             set({ isGeometryUpdating: false });
           }
+          syncActiveMotor();   // auto-save the geometry edit into "my" motor
         } catch (error) {
           console.error('Failed to update geometry via API:', error);
           set({

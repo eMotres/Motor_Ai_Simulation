@@ -27,6 +27,7 @@ import SaveIcon from '@mui/icons-material/Save';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import FemMeshViewer3D from './FemMeshViewer3D';
 import SaveToMotorButton from '../common/SaveToMotorButton';
+import { syncActiveMotor } from '../common/motorSettings';
 import Viewcube from '../viewer3d/Viewcube';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
@@ -492,7 +493,7 @@ const MeshPanel: React.FC = () => {
   // or a change made without pressing Rebuild would be lost on reload.
   useEffect(() => {
     if (!meshReady.current) return;   // skip until the mount config-load populated state
-    const id = setTimeout(saveMeshConfig, 700);
+    const id = setTimeout(() => { saveMeshConfig(); syncActiveMotor(); }, 700);
     return () => clearTimeout(id);
   }, [saveMeshConfig]);
 
@@ -821,7 +822,7 @@ const MeshPanel: React.FC = () => {
               {femLoading ? 'Building…' : 'Rebuild mesh'}
             </Button>
 
-            <SaveToMotorButton kind="mesh" />
+            <SaveToMotorButton />
 
             {femError && <Alert severity="error" sx={{ fontSize: 11 }}>{femError}</Alert>}
 

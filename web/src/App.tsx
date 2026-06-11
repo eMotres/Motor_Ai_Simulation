@@ -44,6 +44,7 @@ import { useMotorStore, useUIStore } from './stores/motorStore';
 import SimulationPanel from './components/simulation/SimulationPanel';
 import ComparePanel from './components/compare/ComparePanel';
 import MeshPanel from './components/mesh/MeshPanel';
+import { ensureActiveMotor } from './components/common/motorSettings';
 
 const darkTheme = createTheme({
   palette: {
@@ -176,6 +177,11 @@ function App() {
     fetchGeometryFromApi();
     fetchSchemaFromApi();
   }, [fetchGeometryFromApi, fetchSchemaFromApi]);
+
+  // There's always a working motor ("my copy"): a brand-new user with none gets
+  // one created from the current state, so every later edit has somewhere to
+  // auto-save.  A short delay lets the panels seed localStorage first.
+  useEffect(() => { const t = setTimeout(() => { ensureActiveMotor(); }, 1200); return () => clearTimeout(t); }, []);
 
   // The Simulation panel is kept mounted but hidden via display:none while
   // another tab is active.  recharts' ResponsiveContainer measures 0×0 inside

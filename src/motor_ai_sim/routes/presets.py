@@ -20,6 +20,46 @@ router = APIRouter(prefix="/api/presets", tags=["presets"])
 _ROOT = Path(__file__).parent.parent.parent.parent
 _PRESETS_PATH = _ROOT / "config" / "motor_presets.json"
 _CONFIG_PATH = _ROOT / "config" / "motor_config.yaml"
+_CATALOG_PATH = _ROOT / "config" / "motor_catalog.json"
+
+
+def _upsert_catalog_entry(preset_id: str, preset: dict) -> None:
+    """Add/update a Motors-catalog card for this preset so saved motors show
+    up in the Motors tab and can be re-loaded."""
+    try:
+        cat = (json.loads(_CATALOG_PATH.read_text(encoding="utf-8"))
+               if _CATALOG_PATH.exists() else {})
+    except Exception:
+        return
+    geo = preset.get("geometry", {}) or {}
+    sim = preset.get("simulation", {}) or {}
+    met = preset.get("metrics", {}) or {}
+
+    def _i(v):
+        try: return int(round(float(v)))
+        except Exception: return 0
+    dia = _i(geo.get("stator_diameter"))
+    ns = _i(geo.get("num_seg"))
+    slots = ns * _i(geo.get("num_slots_per_segment"))
+    poles = ns * _i(geo.get("num_poles_per_segment"))
+    cid = f"cat_{preset_id}"
+    entry = {
+        "id": cid, "diameter_mm": dia or 0, "name": preset.get("name", preset_id),
+        "topology": "Spoke-PM SPMSM", "slots": slots, "poles": poles,
+        "rpm": sim.get("rpm", 0), "current_a": sim.get("max_current", 0),
+        "T_avg_Nm": met.get("T_avg_Nm", 0), "ripple_pct": met.get("ripple_pct", 0),
+        "gamma_deg": sim.get("phase_offset_deg", 0), "tier": "free",
+        "description": preset.get("description") or f"Your saved motor — {preset.get('name', preset_id)}.",
+        "preset": preset_id, "owner": "user",
+    }
+    cat.setdefault("tiers", []); cat.setdefault("diameters_mm", []); cat.setdefault("motors", [])
+    if dia and dia not in cat["diameters_mm"]:
+        cat["diameters_mm"] = sorted(set([*cat["diameters_mm"], dia]))
+    cat["motors"] = [m for m in cat["motors"] if m.get("id") != cid] + [entry]
+    try:
+        _CATALOG_PATH.write_text(json.dumps(cat, indent=2, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
 
 
 def _load_presets() -> dict:
@@ -59,9 +99,12 @@ class SavePresetRequest(BaseModel):
 
 
 class SettingsPatch(BaseModel):
-    """Update an existing motor's saved mesh and/or simulation settings."""
+    """Update an existing motor's saved geometry / mesh / simulation settings.
+    This is the auto-save: the loaded motor is "my copy" and every edit lands
+    in it (geometry untouched unless explicitly sent)."""
     mesh: Optional[dict] = None
     simulation: Optional[dict] = None
+    geometry: Optional[dict] = None
 
 
 @router.get("")
@@ -184,10 +227,11 @@ def save_current_as_preset(req: SavePresetRequest):
     order = 1 + max([p.get("order", 0) for p in presets.values()] or [0])
     presets[pid] = {
         "id": pid, "name": req.name, "description": req.description,
-        "order": order, "metrics": req.metrics or {},
+        "order": order, "metrics": req.metrics or {}, "owner": "user",
         "geometry": geometry, "simulation": simulation, "mesh": mesh,
     }
     _save_presets(presets)
+    _upsert_catalog_entry(pid, presets[pid])   # show it in the Motors tab
     return {**_summary(presets[pid]), "id": pid}
 
 
@@ -202,15 +246,49 @@ def save_motor_settings(preset_id: str, patch: SettingsPatch):
     p = presets.get(preset_id)
     if not p:
         raise HTTPException(status_code=404, detail=f"motor '{preset_id}' not found")
+    if patch.geometry is not None:
+        p["geometry"] = {**(p.get("geometry") or {}), **patch.geometry}
     if patch.mesh is not None:
         p["mesh"] = {**(p.get("mesh") or {}), **patch.mesh}
     if patch.simulation is not None:
         p["simulation"] = {**(p.get("simulation") or {}), **patch.simulation}
     presets[preset_id] = p
     _save_presets(presets)
+    # keep the Motors-tab card in sync for user motors
+    if p.get("owner") == "user":
+        _upsert_catalog_entry(preset_id, p)
     return {"status": "ok", "id": preset_id,
-            "saved": [k for k in ("mesh", "simulation")
+            "saved": [k for k in ("geometry", "mesh", "simulation")
                       if getattr(patch, k) is not None]}
+
+
+@router.post("/{preset_id}/open")
+def open_motor(preset_id: str):
+    """Open a motor as the user's EDITABLE copy.
+
+    A template (owner != "user", e.g. a curated catalog motor) is forked into
+    "my_<id>" first so the shared template stays pristine and the user's edits
+    auto-save into their own copy.  A user motor opens in place.  Then the copy
+    is applied to config and returned (full) so the loader can seed the browser
+    settings + mark it the active working motor.
+    """
+    import copy as _copy
+    presets = _load_presets()
+    src = presets.get(preset_id)
+    if not src:
+        raise HTTPException(status_code=404, detail=f"motor '{preset_id}' not found")
+    if src.get("owner") == "user":
+        target = preset_id
+    else:
+        target = f"my_{preset_id}"
+        if target not in presets:
+            c = _copy.deepcopy(src)
+            c["id"] = target
+            c["owner"] = "user"
+            c["order"] = 1 + max([p.get("order", 0) for p in presets.values()] or [0])
+            presets[target] = c
+            _save_presets(presets)
+    return apply_preset(target)
 
 
 @router.delete("/{preset_id}")

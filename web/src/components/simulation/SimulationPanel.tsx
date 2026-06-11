@@ -24,6 +24,7 @@ import SimulationCharts from './SimulationCharts';
 import PhysicsDashboard from './PhysicsDashboard';
 import ModelCompare from './ModelCompare';
 import SaveToMotorButton from '../common/SaveToMotorButton';
+import { syncActiveMotor } from '../common/motorSettings';
 import SaveIcon from '@mui/icons-material/Save';
 import type { TransientSummary } from './SummaryTable';
 
@@ -281,6 +282,13 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // de-rates Br along the recoil line (Ansys-style) so the transient torque /
   // back-EMF reflect the weakened magnets.  Opt-in (adds a pre-pass sweep).
   const [demag, setDemag] = usePersisted('demag', false);
+  // Auto-save EVERY simulation change into the active motor ("my copy").
+  // syncActiveMotor is internally debounced, so firing on each change is fine.
+  useEffect(() => {
+    if (!simReady.current) return;
+    syncActiveMotor();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current, frequency, rpm, phaseOffset, steps, coilTemp, endWinding, demag, connection]);
   const [stepsStr, setStepsStr] = useState(String(steps));
   useEffect(() => { setStepsStr(String(steps)); }, [steps]);
   // HARD upper bound: the sliding-band rotor can only sit on slip-ring nodes —
@@ -896,7 +904,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 : 'Edit γ / current / mesh settings, then launch one solve'}
           </Typography>
           <Box sx={{ mt: 1 }}>
-            <SaveToMotorButton kind="simulation" disabled={simBusy} />
+            <SaveToMotorButton disabled={simBusy} />
           </Box>
         </Box>
 

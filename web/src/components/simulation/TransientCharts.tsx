@@ -300,13 +300,23 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
               <span style={{ color: '#475569', marginLeft: 6, fontSize: 11, cursor: 'help' }}>ⓘ</span>
             </Tooltip>
           </Typography>
-          {data && (
-            <Typography sx={{ fontSize: 10, color: '#475569' }}>
-              {data.n_steps_per_period} steps/period · dt = {(data.dt_s*1e6).toFixed(1)} µs ·
-              T_period = {(data.T_period_s*1e3).toFixed(2)} ms ({data.f_elec_Hz.toFixed(1)} Hz electrical) ·
-              T_avg = {data.T_avg_Nm.toFixed(2)} N·m · ripple = {data.T_ripple_pct.toFixed(1)} %
-            </Typography>
-          )}
+          {data && (() => {
+            const tpp = data.T_em_Nm.length
+              ? Math.max(...data.T_em_Nm) - Math.min(...data.T_em_Nm) : 0;
+            // ripple % = pk-pk / |T_avg| is meaningless near no-load (T_avg≈0 →
+            // it blows up to 1000s of %).  There, report the absolute cogging
+            // pk-pk in N·m instead; show the % only when there's real average torque.
+            const loaded = Math.abs(data.T_avg_Nm) >= 1.0;
+            return (
+              <Typography sx={{ fontSize: 10, color: '#475569' }}>
+                {data.n_steps_per_period} steps/period · dt = {(data.dt_s*1e6).toFixed(1)} µs ·
+                T_period = {(data.T_period_s*1e3).toFixed(2)} ms ({data.f_elec_Hz.toFixed(1)} Hz electrical) ·
+                T_avg = {data.T_avg_Nm.toFixed(2)} N·m · {loaded
+                  ? `ripple = ${data.T_ripple_pct.toFixed(1)} %`
+                  : `cogging pk-pk = ${tpp.toFixed(2)} N·m`}
+              </Typography>
+            );
+          })()}
         </Box>
         {/* Steps/period + Run moved to the left panel's "Run Simulation".
             Just show the live frame counter here while solving. */}

@@ -4271,19 +4271,20 @@ def fem_transient_sliding_band(
     VC = [R_phase * i + e for i, e in zip(IC, eC.tolist())]
     Tavg = float(np.mean(T_series)) if T_series else 0.0
 
-    # ── TORQUE FILTERING DISABLED (user request) ────────────────────────────
-    # The band_limit_torque() 6·k-harmonic reconstruction is bypassed for now:
-    # T_series is the RAW per-frame Maxwell-stress torque and T_ripple is its raw
-    # peak-to-peak.  (Re-enable by restoring the band_limit_torque() call below.)
-    #     T_series, Trip, Trip_raw = band_limit_torque(
-    #         T_series, n_steps_per_period, n_periods)
-    if T_series:
-        _xT = np.asarray(T_series, float)
-        _avgT = float(_xT.mean())
-        Trip = Trip_raw = (100.0 * (float(_xT.max()) - float(_xT.min())) / abs(_avgT)
-                           if abs(_avgT) > 1e-9 else 0.0)
-    else:
-        Trip = Trip_raw = 0.0
+    # ── Band-limit the torque to the physical 6·k electrical orders ──────────
+    # The sliding band steps the rotor across DISCRETE slip nodes, injecting
+    # broadband torque ripple at orders a balanced 3-φ machine CANNOT produce
+    # (1,2,3,4,5,7,…) that does NOT converge with mesh refinement → purely
+    # numerical.  Measured at no-load: the real order-6 cogging dominates, but
+    # ~41 % of the ripple ENERGY sits in those forbidden orders (raw pk-pk
+    # 10.0 → 6·k-only 4.8 N·m).  Keep DC + every 6·k order (real cogging + load
+    # ripple) and drop the rest.  (Previously disabled to inspect the raw torque;
+    # re-enabled — the raw jaggedness is that parasitic slip-node noise, not
+    # physics, and the mesh is already pole-periodic so refining it cannot help.)
+    # The mean (calibrated average torque) is preserved exactly.
+    T_series, Trip, Trip_raw = band_limit_torque(
+        T_series, n_steps_per_period, n_periods)
+    Tavg = float(np.mean(T_series)) if T_series else Tavg
     Vpk = float(max(max(map(abs, VA)), max(map(abs, VB)), max(map(abs, VC)))) if VA else 0.0
     # P_cu already computed physically (ρ(T)·J²·V·k_end) near the top.
 

@@ -35,6 +35,7 @@ interface TransientPayload {
   P_cu_W: number[];
   P_fe_W: number[];
   P_mag_eddy_W: number[];
+  P_shaft_eddy_W?: number[];
   P_loss_total_W: number[];
   P_mech_avg_W: number;
   I_A: number[]; I_B: number[]; I_C: number[];
@@ -268,6 +269,7 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
       P_cu:  data.P_cu_W[i],
       P_fe:  data.P_fe_W[i],
       P_mag: data.P_mag_eddy_W[i],
+      P_shaft: (data.P_shaft_eddy_W ?? [])[i] ?? 0,
       P_tot: data.P_loss_total_W[i],
       I_A:   data.I_A[i], I_B: data.I_B[i], I_C: data.I_C[i],
       V_A:   data.V_A[i], V_B: data.V_B[i], V_C: data.V_C[i],
@@ -447,6 +449,12 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
                   isAnimationActive={false}/>
                 <Line type="monotone" dataKey="P_mag" stroke="#a78bfa"
                   name="P_Mag" strokeWidth={2}
+                  dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
+                    r={3} fill={d.stroke} stroke="none"/>}
+                  activeDot={{ r: 5 }}
+                  isAnimationActive={false}/>
+                <Line type="monotone" dataKey="P_shaft" stroke="#4ade80"
+                  name="P_shaft (Al)" strokeWidth={2} strokeDasharray="4 2"
                   dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
                     r={3} fill={d.stroke} stroke="none"/>}
                   activeDot={{ r: 5 }}

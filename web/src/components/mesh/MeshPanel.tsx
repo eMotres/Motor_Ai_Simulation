@@ -485,6 +485,19 @@ const MeshPanel: React.FC = () => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nSectors]);
 
+  // ── Standard / Periodic (pole-copy) switch ──────────────────────────────
+  // Toggling it must REBUILD the displayed mesh immediately, like the symmetry
+  // switch — otherwise the change silently does nothing until the next "Rebuild
+  // mesh" click (the bug the user hit: "no difference").  poleCopy is NOT a
+  // config.yaml field (it lives in localStorage and is read by the field/sim
+  // fetches too), so we just re-fetch the Mesh-tab mesh here.
+  const poleCopyFirstRun = useRef(true);
+  useEffect(() => {
+    if (poleCopyFirstRun.current) { poleCopyFirstRun.current = false; return; }
+    fetchFemMesh();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [poleCopy]);
+
   // Persist the Mesh-tab settings to config.yaml — ONLY on the explicit
   // "Rebuild mesh" click (rebuildMesh below), not on every slider move. This
   // makes them permanent + reused in all later sessions.

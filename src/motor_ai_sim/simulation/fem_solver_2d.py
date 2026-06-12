@@ -1002,12 +1002,45 @@ def _build_sliding_band_meshes(
         # TRUE 360°: each half stitched from two clean 180° builds (direct
         # closed-360 OCC double-meshes → dead field).  No sector cuts exist
         # anywhere afterwards — the artifact-free configuration.
-        mesh_s, tags_s, classify_s = _stitch_full_half(
-            polys_s_for_mesh, DOM_OUTER,
-            dict(_common_kw, rotational_period_deg=_slot_period))
-        mesh_r, tags_r, classify_r = _stitch_full_half(
-            polys_r_for_mesh, DOM_AIRGAP,
-            dict(_common_kw, rotational_period_deg=_pole_period))
+        #
+        # pole_copy on the full ring: mesh ONE slot/pole wedge and rotate-copy
+        # it the full (360/period) times.  The seam weld closes the circle
+        # automatically — the last copy's right edge coincides with the first
+        # copy's left edge — and 24 slots / 28 poles divide 360° exactly, so
+        # the wrap is PERIODIC (the 28-pole magnet polarity (-1)^k matches at
+        # k=0 and k=28, no anti-periodic sign needed like the sector build).
+        # This is literally the "mesh one magnet + one rotor tooth and copy it
+        # around the circle" view — every pocket/tooth is bit-identical.
+        _pc_rotor  = _SB_POLE_COPY_ROTOR  if pole_copy is None else bool(pole_copy)
+        _pc_stator = _SB_POLE_COPY_STATOR if pole_copy is None else bool(pole_copy)
+        mesh_s = tags_s = classify_s = None
+        mesh_r = tags_r = classify_r = None
+        if _pc_stator and _slot_period and _slot_period > 0:
+            _ncs = round(360.0 / _slot_period)
+            if _ncs >= 1 and abs(_ncs * _slot_period - 360.0) < 1e-6:
+                try:
+                    mesh_s, tags_s, classify_s = _replicate_periodic_half(
+                        polys_s_for_mesh, _slot_period, _ncs, _common_kw, "stator")
+                except Exception as _se:
+                    log.warning("full-ring stator slot-copy failed (%s) — stitched build", _se)
+                    mesh_s = None
+        if mesh_s is None:
+            mesh_s, tags_s, classify_s = _stitch_full_half(
+                polys_s_for_mesh, DOM_OUTER,
+                dict(_common_kw, rotational_period_deg=_slot_period))
+        if _pc_rotor and _pole_period and _pole_period > 0:
+            _ncp = round(360.0 / _pole_period)
+            if _ncp >= 1 and abs(_ncp * _pole_period - 360.0) < 1e-6:
+                try:
+                    mesh_r, tags_r, classify_r = _replicate_periodic_half(
+                        polys_r_for_mesh, _pole_period, _ncp, _common_kw, "rotor")
+                except Exception as _re:
+                    log.warning("full-ring rotor pole-copy failed (%s) — stitched build", _re)
+                    mesh_r = None
+        if mesh_r is None:
+            mesh_r, tags_r, classify_r = _stitch_full_half(
+                polys_r_for_mesh, DOM_AIRGAP,
+                dict(_common_kw, rotational_period_deg=_pole_period))
         if abs(rotor_angle_deg) > 1e-9:
             mesh_r = type(mesh_r)(_rotate_mesh_points(mesh_r.p, rotor_angle_deg),
                                    mesh_r.t)

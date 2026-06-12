@@ -1656,6 +1656,57 @@ def get_daxis_sweep(
 
 _fem_transient_cache: Dict[tuple, Dict] = {}
 
+# ── Persist the last sliding-band transient to disk ──────────────────────────
+# So a re-run with the SAME params after a back-end restart is instant instead
+# of recomputing the whole FEM solve.  We keep ONE entry (the latest), keyed by
+# its param tuple, written next to the config and reloaded into the cache on
+# import.  (The web UI also caches the last run in localStorage for display;
+# this covers the "same params, fresh process" path.)
+import json as _json
+import os as _os_t
+
+def _transient_store_path() -> str:
+    try:
+        from motor_ai_sim.config import DEFAULT_CONFIG_PATH as _cp
+        _base = _os_t.path.dirname(str(_cp))
+    except Exception:
+        _base = _os_t.path.join(_os_t.path.dirname(__file__), "..", "..", "..", "config")
+    return _os_t.path.abspath(_os_t.path.join(_base, ".last_transient.json"))
+
+def _json_default(o):
+    if hasattr(o, "tolist"):
+        return o.tolist()
+    if hasattr(o, "item"):
+        return o.item()
+    return float(o)
+
+def _save_last_transient(sb_key: tuple, result: Dict) -> None:
+    try:
+        tmp = _transient_store_path() + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            _json.dump({"key": list(sb_key), "result": result}, fh,
+                       default=_json_default)
+        _os_t.replace(tmp, _transient_store_path())   # atomic
+    except Exception as _e:
+        log.warning("could not persist last transient: %s", _e)
+
+def _load_last_transient_into_cache() -> None:
+    try:
+        p = _transient_store_path()
+        if not _os_t.path.exists(p):
+            return
+        with open(p, encoding="utf-8") as fh:
+            blob = _json.load(fh)
+        def _retuple(x):    # JSON turns tuples into lists — restore for hashing
+            return tuple(_retuple(i) for i in x) if isinstance(x, list) else x
+        _fem_transient_cache[_retuple(blob["key"])] = blob["result"]
+        log.info("restored last transient from %s", p)
+    except Exception as _e:
+        log.warning("could not restore last transient: %s", _e)
+
+
+_load_last_transient_into_cache()   # repopulate the cache at import (startup)
+
 # Per-FRAME cache keyed by (frame_param_key, k).  Lets a transient that
 # was Stopped mid-way be resumed: a re-run with the same params reuses
 # every frame already solved and only computes the missing ones.  The
@@ -2138,6 +2189,7 @@ def get_fem_transient(
             except Exception as _se:
                 log.warning("SB summary build failed: %s", _se)
             _fem_transient_cache[_sb_key] = _sbres
+            _save_last_transient(_sb_key, _sbres)   # survive a back-end restart
             return _sbres
         except HTTPException:
             raise

@@ -119,6 +119,20 @@ interface ProgressInfo {
   phase:     string;
 }
 
+// ── Persist the last transient run so a page/back-end reload SHOWS it instead
+// of recomputing.  runNonce is persisted in localStorage, so the old code re-ran
+// the whole FEM solve on every mount; now we load the cached result and only
+// compute when the user actually presses Run (runNonce increments post-mount).
+const LAST_KEY = 'sim.lastTransient';
+function persistLastTransient(d: TransientPayload) {
+  try { localStorage.setItem(LAST_KEY, JSON.stringify(d)); }
+  catch { /* quota — drop silently, recompute path still works */ }
+}
+function loadLastTransient(): TransientPayload | null {
+  try { const s = localStorage.getItem(LAST_KEY); return s ? JSON.parse(s) : null; }
+  catch { return null; }
+}
+
 const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onSummary, runNonce = 0, onBusyChange, steps = 12, fresh = false, fieldLosses = true, demag = false, torqueFilter = true }) => {
   // `steps` (n_steps_per_period) is controlled from the left panel and
   // matches the animation viewer's n_frames so both hit the same backend
@@ -231,6 +245,7 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
         const d: TransientPayload = await r.json();
         setData(d); setBusy(false);
         setError(null);
+        persistLastTransient(d);            // remember it across reloads
         if (d.summary && onSummary) onSummary(d.summary);
       } catch (e: any) {
         const msg = String(e);
@@ -249,11 +264,21 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
     attempt();
   };
 
-  // Run ONLY when the user presses "Run Simulation" (runNonce ticks).
-  // The fetch reads the CURRENT gamma / I / mesh-settings at click time,
-  // so several edits batch into one solve.  runNonce starts at 0 → no
-  // auto-run on mount.
+  // On MOUNT (page/back-end reload): show the last run from localStorage rather
+  // than recomputing.  After mount, a runNonce CHANGE means the user pressed Run
+  // → recompute (and overwrite the cache).  runNonce is persisted, so without
+  // this guard every reload re-ran the whole FEM solve.
+  const mountedRef = useRef(false);
   useEffect(() => {
+    if (!mountedRef.current) {
+      mountedRef.current = true;
+      const last = loadLastTransient();
+      if (last) {
+        setData(last);
+        if (last.summary && onSummary) onSummary(last.summary);
+      }
+      return;
+    }
     if (runNonce > 0) run();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runNonce]);

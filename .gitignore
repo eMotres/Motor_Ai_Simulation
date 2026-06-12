@@ -93,3 +93,6 @@ pinn_net.pt
 
 # user-generated saved-simulation snapshots (Compare tab)
 config/saved_simulations.json
+
+# runtime: persisted last transient (repopulates cache on restart)
+config/.last_transient.json

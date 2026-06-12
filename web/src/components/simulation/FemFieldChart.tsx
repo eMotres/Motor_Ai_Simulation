@@ -243,24 +243,43 @@ const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode; logLoss: boole
       // density spans orders of magnitude (copper ≫ iron ≫ air-gap), so the
       // default is a LOG map (logLoss) — every component stays legible; a
       // linear map matches Ansys's default look but buries the iron.
+      // SMOOTH, nodal-averaged loss density (like Ansys) — the same per-vertex
+      // gradient trick the |B| view uses.  loss is constant per P1 element, so a
+      // flat per-triangle fill looks faceted; we area-weight each element's loss
+      // onto its 3 nodes and colour PER-VERTEX so Three.js interpolates a smooth
+      // gradient.  (Minor softening across material edges; the part outlines
+      // drawn on top keep the boundaries crisp.)
       const ld = payload.loss_density_per_tri ?? [];
       const dom = domain_per_tri;
       const nTri = triangles.length;
+      const nV = vertices.length;
+      const lSum = new Float64Array(nV);
+      const wSum = new Float64Array(nV);
       const posv: number[] = [];
-      for (let i = 0; i < nTri; i++) {
-        if (dom[i] === DOM_OUTER) continue;
-        const v = i < ld.length ? ld[i] : 0;
+      for (let ti = 0; ti < nTri; ti++) {
+        if (dom[ti] === DOM_OUTER) continue;
+        const v = ti < ld.length ? ld[ti] : 0;
         if (v > 0) posv.push(v);
+        const [ia, ib, ic] = triangles[ti];
+        const ax = vertices[ia][0], ay = vertices[ia][1];
+        const bx = vertices[ib][0], by = vertices[ib][1];
+        const cx = vertices[ic][0], cy = vertices[ic][1];
+        const area = Math.abs((bx - ax) * (cy - ay) - (cx - ax) * (by - ay)) * 0.5 || 1e-12;
+        lSum[ia] += v * area; wSum[ia] += area;
+        lSum[ib] += v * area; wSum[ib] += area;
+        lSum[ic] += v * area; wSum[ic] += area;
       }
       const vmax = Math.max(pctl(posv, 99.5), 1e-3);
       const vminPos = Math.max(pctl(posv, 5), vmax * 1e-4);   // log-floor
       const lgMax = Math.log10(vmax), lgMin = Math.log10(vminPos);
-      const positions = new Float32Array(nTri * 3 * 3);
-      const colors    = new Float32Array(nTri * 3 * 3);
-      let p = 0, c = 0;
-      for (let i = 0; i < nTri; i++) {
-        if (dom[i] === DOM_OUTER) continue;
-        const v = i < ld.length ? ld[i] : 0;
+      const keep = triangles.map((_, ti) => dom[ti] !== DOM_OUTER);
+      const positions = new Float32Array(nV * 3);
+      const colors    = new Float32Array(nV * 3);
+      for (let i = 0; i < nV; i++) {
+        positions[3 * i]     = vertices[i][0] * S;
+        positions[3 * i + 1] = vertices[i][1] * S;
+        positions[3 * i + 2] = 0;
+        const v = wSum[i] > 0 ? lSum[i] / wSum[i] : 0;
         let t: number;
         if (logLoss) {
           t = v <= 0 ? 0 : (Math.log10(v) - lgMin) / Math.max(lgMax - lgMin, 1e-9);
@@ -268,19 +287,19 @@ const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode; logLoss: boole
           t = v / vmax;
         }
         const [rr, gg, bb] = jet01(Math.max(0, Math.min(1, t)));
-        const tt = triangles[i];
-        for (const vi of tt) {
-          positions[p++] = vertices[vi][0] * S;
-          positions[p++] = vertices[vi][1] * S;
-          positions[p++] = 0;
-          colors[c++] = rr / 255; colors[c++] = gg / 255; colors[c++] = bb / 255;
-        }
+        colors[3 * i]     = rr / 255;
+        colors[3 * i + 1] = gg / 255;
+        colors[3 * i + 2] = bb / 255;
+      }
+      const indexArr: number[] = [];
+      for (let i = 0; i < nTri; i++) {
+        if (!keep[i]) continue;
+        indexArr.push(triangles[i][0], triangles[i][1], triangles[i][2]);
       }
       const g = new THREE.BufferGeometry();
-      g.setAttribute('position',
-        new THREE.BufferAttribute(positions.subarray(0, p), 3));
-      g.setAttribute('color',
-        new THREE.BufferAttribute(colors.subarray(0, c), 3));
+      g.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      g.setAttribute('color',    new THREE.BufferAttribute(colors, 3));
+      g.setIndex(new THREE.BufferAttribute(new Uint32Array(indexArr), 1));
       (g as any).userData = { loss_vmax: vmax, loss_vmin: vminPos };
       return g;
     }

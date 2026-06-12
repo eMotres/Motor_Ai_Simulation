@@ -3607,6 +3607,70 @@ def fem_transient_sliding_band(
                  "σ_mag=%.3g σ_shaft=%.3g S/m (library)",
                  _n_interior, _n_halves, _sigma_mag_lib, _sigma_shaft_lib)
 
+    # ── EXACT edge data for the magnet A-histories (pole-shift symmetry) ─────
+    # The loss window spans whole electrical periods, but the ROTOR-frame
+    # signal is NOT periodic over it (the stator structure passes a non-integer
+    # number of times), so any wrap at the window edge is wrong.  The missing
+    # samples beyond the edges exist EXACTLY inside the window: after one
+    # electrical period the whole solution repeats with the rotor advanced two
+    # pole pitches, so  A(node n, t±T) = A(node n∓, t)  where n∓ is the node
+    # rotated ∓2 pole pitches in the (pole-periodic) rotor mesh — a pure node
+    # permutation, no approximation.  Crossing a sector cut multiplies A by the
+    # anti-periodic sign.  Built here once; used to pad the magnet histories so
+    # the loss derivative has REAL data at both window ends.
+    # The pole meshes share IDENTICAL boundaries (setPeriodic) but gmsh meshes
+    # each pole INTERIOR independently (measured node mismatch ≈ 0.9 mm), so a
+    # pure node permutation does not exist.  The identity is continuous though:
+    # the value at the rotated POINT exists in the same solve — so the map is a
+    # P1 barycentric INTERPOLATION matrix over the magnet triangles (the same
+    # accuracy class as the FEM field itself).
+    _pp2 = None                       # (W_fwd, sign_fwd, W_bwd, sign_bwd)
+    if rotor_eddy and _magnode_loc.size:
+        try:
+            from scipy.spatial import Delaunay as _Del, cKDTree as _KD
+            _theta2 = math.radians(2.0 * 360.0 / max(1, p.num_poles))  # 2 pole pitches
+            _Pn = half["r"]["mesh"].p[:, _magnode_loc]    # (2, Nn) node coords [m]
+            _Nn = _Pn.shape[1]
+            _sec_rad = math.radians(sector_deg)
+            _dt2 = _Del(_Pn.T)
+            _kd2 = _KD(_Pn.T)
+
+            def _pole_map(_dir):
+                c, s = math.cos(_dir * _theta2), math.sin(_dir * _theta2)
+                x = c * _Pn[0] - s * _Pn[1]; y = s * _Pn[0] + c * _Pn[1]
+                sg = np.ones(_Nn)
+                if not _full_ring:
+                    ang = np.mod(np.arctan2(y, x), 2.0 * math.pi)
+                    # wrap rotated points back into the wedge; every cut crossing
+                    # flips A by the (anti-)periodic boundary sign.  k and k−NS
+                    # wraps give the same sign because _bc_sign**NS == +1.
+                    for _ in range(int(NS)):
+                        _ov = ang > _sec_rad + 1e-9
+                        if not _ov.any():
+                            break
+                        ang = np.where(_ov, ang - _sec_rad, ang)
+                        sg = np.where(_ov, sg * _bc_sign, sg)
+                    r = np.hypot(x, y)
+                    x = r * np.cos(ang); y = r * np.sin(ang)
+                _tgt = np.column_stack([x, y])
+                _sx = _dt2.find_simplex(_tgt)
+                _out = _sx < 0
+                _d, _near = _kd2.query(_tgt)
+                if _out.any() and float(np.max(_d[_out])) > 0.5 * float(min_size_mm) * 1e-3:
+                    raise ValueError(
+                        f"{int(_out.sum())} targets {float(np.max(_d[_out]))*1e3:.3f} mm "
+                        "outside the magnet hull")
+                return _tgt, sg, _near.astype(int)
+            _tgF, _sgF, _nrF = _pole_map(+1.0)   # n's position one period LATER
+            _tgB, _sgB, _nrB = _pole_map(-1.0)   # … one period EARLIER
+            _pp2 = (_dt2, _tgF, _sgF, _nrF, _tgB, _sgB, _nrB)
+            log.info("magnet-history edge pads: 2-pole-pitch C1 interpolation map OK "
+                     "(%d nodes)", _Nn)
+        except Exception as _pe:
+            log.warning("magnet-history edge pads unavailable (%s) — "
+                        "falling back to C0-detrend edges", _pe)
+            _pp2 = None
+
     # ── Loss bookkeeping — iron Bertotti + magnet eddy from the ACTUAL B(t) ──
     # The sliding-band run gives a clean B(t) per element over a full electrical
     # period, so instead of the remesh path's single-snapshot Bertotti we use
@@ -4222,7 +4286,7 @@ def fem_transient_sliding_band(
     _spacing_rad = math.radians(spacing)
     _omega_mech = 2.0 * math.pi * rpm / 60.0
 
-    def _angle_ddt_2d(X, quasi_period_rad=None):
+    def _angle_ddt_2d(X, quasi_period_rad=None, pre=None, post=None):
         """Smoothed dX/dt on the unique slip-node grid, mapped back to frames.
 
         Raw node-to-node derivatives amplify slip-merge jitter with the step
@@ -4242,6 +4306,10 @@ def fem_transient_sliding_band(
             smoothing width depended on the run length — a 2-period run
             smoothed the genuine 15° slot ripple away (P_mag halved on
             identical physics).  Fixed: the width is a constant ANGLE.
+        When `pre`/`post` are given they are EXACT samples just before/after
+        the window (from the pole-shift symmetry — see the magnet-history pad
+        block); the derivative then uses real data at both ends and needs no
+        wrap assumption at all.
         (quasi_period_rad accepted for compatibility; unused.)
         """
         N = X.shape[0]
@@ -4257,21 +4325,6 @@ def fem_transient_sliding_band(
         if float(theta_u[-1]) >= _W - 1e-9:
             # degenerate: last node is the periodic image of the first — drop it
             uniq = uniq[:-1]; Bu = Bu[:-1]; theta_u = theta_u[:-1]; U -= 1
-        # C0 detrend: per column, remove the linear ramp that makes the two
-        # window ends MEET, so the periodic extension has no level jump at the
-        # seam; the ramp's constant slope is added back to the derivative
-        # exactly.  (A harmonic-regression replacement was tried and rejected:
-        # the slot-structure lines sit ~0.86 cycles apart — under the Rayleigh
-        # limit of a 1-period window — so the design matrix is near-singular
-        # and the fit explodes.)
-        _span = float(theta_u[-1] - theta_u[0])
-        if _span > 1e-12:
-            _c = (Bu[-1] - Bu[0])[None, :] / _span           # (1, E) dB/dθ
-            Bu = Bu - _c * (theta_u - theta_u[0])[:, None]
-        else:
-            _c = np.zeros((1, Bu.shape[1]))
-        th_ext = np.concatenate([theta_u - _W, theta_u, theta_u + _W])
-        Bu_ext = np.concatenate([Bu, Bu, Bu], axis=0)
         # savgol at a FIXED PHYSICAL width (≈1/3 slot pitch) — a window set in
         # SAMPLES (the old U//8) made the smoothing bandwidth depend on the
         # run length: a 2-period run smoothed the genuine 15° slot ripple away
@@ -4279,10 +4332,41 @@ def fem_transient_sliding_band(
         _w_ang = math.radians(5.0)                            # smoothing width
         w = int(round(_w_ang / max(_spacing_rad, 1e-12)))
         w = max(5, w | 1)                                     # odd, ≥5
+        _exact = (pre is not None and post is not None
+                  and U == N and np.array_equal(uniq, _m_arr))
+        if _exact:
+            # EXACT pads: real samples beyond both window ends — no wrap, no
+            # detrend; the seam simply does not exist.
+            _need = w // 2 + 2
+            pre_u = pre[-min(_need, pre.shape[0]):]
+            post_u = post[:min(_need, post.shape[0])]
+            thL = theta_u[0] - _spacing_rad * np.arange(pre_u.shape[0], 0, -1)
+            thR = theta_u[-1] + _spacing_rad * np.arange(1, post_u.shape[0] + 1)
+            th_ext = np.concatenate([thL, theta_u, thR])
+            Bu_ext = np.concatenate([pre_u, Bu, post_u], axis=0)
+            i0 = pre_u.shape[0]
+            _c = np.zeros((1, Bu.shape[1]))
+        else:
+            # C0 detrend: per column, remove the linear ramp that makes the two
+            # window ends MEET, so the periodic extension has no level jump at
+            # the seam; the ramp's constant slope is added back to the
+            # derivative exactly.  (A harmonic-regression replacement was tried
+            # and rejected: the slot-structure lines sit ~0.86 cycles apart —
+            # under the Rayleigh limit of a 1-period window — so the design
+            # matrix is near-singular and the fit explodes.)
+            _span = float(theta_u[-1] - theta_u[0])
+            if _span > 1e-12:
+                _c = (Bu[-1] - Bu[0])[None, :] / _span       # (1, E) dB/dθ
+                Bu = Bu - _c * (theta_u - theta_u[0])[:, None]
+            else:
+                _c = np.zeros((1, Bu.shape[1]))
+            th_ext = np.concatenate([theta_u - _W, theta_u, theta_u + _W])
+            Bu_ext = np.concatenate([Bu, Bu, Bu], axis=0)
+            i0 = U
         if U >= 7 and Bu_ext.shape[0] >= w:
             from scipy.signal import savgol_filter as _sg
             Bu_ext = _sg(Bu_ext, w, 3, axis=0, mode="interp")
-        dBdt_u = ((np.gradient(Bu_ext, th_ext, axis=0)[U:2 * U] + _c)
+        dBdt_u = ((np.gradient(Bu_ext, th_ext, axis=0)[i0:i0 + U] + _c)
                   * _omega_mech)
         pos = np.clip(np.searchsorted(uniq, _m_arr), 0, U - 1)   # frame → unique idx
         return dBdt_u[pos]
@@ -4385,7 +4469,41 @@ def fem_transient_sliding_band(
         # count — the raw in-loop derivative tripled going 24→72 steps.
         # P(t) = Σ_magnets σ Σ_e (dA/dt_e − U_m)²·area_e × stack × NS.
         _Am = np.asarray(_hist_Am, float)            # (N, n_magnodes)
-        _dAm = _angle_ddt_2d(_Am)                    # smoothed material dA/dt
+        # Exact edge pads from the pole-shift symmetry:  A(n, m±M_per) =
+        # A(n∓, m), n∓ = the node 2 pole pitches away (see the _pp2 block).
+        # Requires the electrical period to be an integer number of slip nodes
+        # and frames to map 1:1 onto consecutive nodes — both true for the
+        # standard runs; otherwise the C0-detrend edges are used.
+        _pads = (None, None)
+        _M_per = period_mech / spacing               # slip nodes per elec. period
+        if (_pp2 is not None and abs(_M_per - round(_M_per)) < 1e-6):
+            _Mp = int(round(_M_per))
+            if (_Am.shape[0] >= _Mp and _m_arr.size == _Am.shape[0]
+                    and np.array_equal(_m_arr,
+                                       np.arange(_m_arr[0], _m_arr[0] + _m_arr.size))):
+                _dt2c, _tgF, _sgF, _nrF, _tgB, _sgB, _nrB = _pp2
+                _K = min(24, _Mp - 1)
+
+                def _ct_rows(_rows, _tg, _sg, _nr):
+                    # C1 (Clough–Tocher) interpolation of each frame's A at the
+                    # ±2-pole-pitch image points; nearest-node fallback for
+                    # boundary-rounding stragglers outside the hull.
+                    from scipy.interpolate import CloughTocher2DInterpolator as _CTI
+                    _o = np.empty((_rows.shape[0], _tg.shape[0]))
+                    for _i in range(_rows.shape[0]):
+                        _w = np.asarray(_CTI(_dt2c, _rows[_i])(_tg), float)
+                        _bad = ~np.isfinite(_w)
+                        if _bad.any():
+                            _w[_bad] = _rows[_i][_nr[_bad]]
+                        _o[_i] = _w * _sg
+                    return _o
+                # post (m = m_max+1 … m_max+K): rows N−M_per … N−M_per+K−1,
+                # values at each node's +2-pole-pitch image; pre mirrors it.
+                _post = _ct_rows(_Am[_Am.shape[0] - _Mp:_Am.shape[0] - _Mp + _K],
+                                 _tgF, _sgF, _nrF)
+                _pre = _ct_rows(_Am[_Mp - _K:_Mp], _tgB, _sgB, _nrB)
+                _pads = (_pre, _post)
+        _dAm = _angle_ddt_2d(_Am, pre=_pads[0], post=_pads[1])   # material dA/dt
         _Pt = np.zeros(n_total)
         for _mg in _mag_groups:
             _dA_e = _dAm[:, _mg["tri"]].mean(axis=1)        # (N, E) elem-mean

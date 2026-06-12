@@ -295,20 +295,6 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [busy]);
 
-  // Emit the summary to the parent with the T-ripple that MATCHES the filter
-  // toggle (band-limited vs raw), so the summary cards flip together with the
-  // torque curve — instantly, no re-solve.  Fires on every data change (fetch
-  // or mount-restore) and whenever the toggle changes.
-  useEffect(() => {
-    if (!data?.summary || !onSummary) return;
-    const s = data.summary;
-    const ripPct = torqueFilter
-      ? (s.T_ripple_filt_pct ?? s.T_ripple_pct)
-      : (s.T_ripple_raw_pct ?? s.T_ripple_pct);
-    onSummary({ ...s, T_ripple_pct: ripPct });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, torqueFilter]);
-
   // Build chart-friendly row arrays
   // Torque series shown: band-limited (6·k) when the filter is ON, raw per-
   // frame otherwise.  Both arrays come from the backend, so flipping the
@@ -337,16 +323,45 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
     }));
   }, [data, Tshown]);
 
+  // Ripple % computed from the DISPLAYED curve (pk-pk / |T_avg|), so it
+  // recomputes the instant the 6·k filter is toggled and always matches the
+  // shown torque + spectrum — no dependence on which ripple field the backend
+  // happened to cache.  (Near no-load |T_avg|→0 makes % meaningless; the header
+  // shows the absolute cogging pk-pk there instead.)
+  const ripplePct = React.useMemo(() => {
+    if (!data || !Tshown.length) return 0;
+    const avg = Math.abs(data.T_avg_Nm);
+    if (avg < 1e-9) return 0;
+    return 100 * (Math.max(...Tshown) - Math.min(...Tshown)) / avg;
+  }, [data, Tshown]);
+
+  // Emit the summary to the parent with the T-ripple of the DISPLAYED curve, so
+  // the summary cards flip together with the torque curve + spectrum on toggle —
+  // instantly, no re-solve.  (Declared AFTER ripplePct so its dep array doesn't
+  // hit the temporal-dead-zone.)  Fires on data change + whenever the toggle does.
+  useEffect(() => {
+    if (!data?.summary || !onSummary) return;
+    onSummary({ ...data.summary, T_ripple_pct: ripplePct });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, torqueFilter, ripplePct]);
+
   // Torque harmonic spectrum (over one electrical period).  6·k orders are the
   // physical 3-phase torque ripple; a clean ripple = a few discrete bars, broad
-  // noise = energy in every order.
+  // noise = energy in every order.  When the 6·k filter is ON the spectrum MUST
+  // match the displayed (filtered) torque curve, so the parasitic non-6·k bars
+  // are zeroed out — they visibly disappear, exactly what the filter removes.
+  // Toggle OFF to see the full raw spectrum again.
   const harmRows = React.useMemo(() => {
     if (!data?.T_harm_order || !data?.T_harm_amp) return [];
-    return data.T_harm_order.map((n, i) => ({
-      order: n, amp: data.T_harm_amp![i],
-      pct: data.T_avg_Nm ? (100 * data.T_harm_amp![i] / Math.abs(data.T_avg_Nm)) : 0,
-    }));
-  }, [data]);
+    return data.T_harm_order.map((n, i) => {
+      const raw = data.T_harm_amp![i];
+      const amp = (torqueFilter && n % 6 !== 0) ? 0 : raw;
+      return {
+        order: n, amp,
+        pct: data.T_avg_Nm ? (100 * amp / Math.abs(data.T_avg_Nm)) : 0,
+      };
+    });
+  }, [data, torqueFilter]);
 
   return (
     <Paper sx={{ bgcolor: '#0b1220', border: '1px solid #1e293b', p: 2,
@@ -364,11 +379,9 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
           {data && (() => {
             const tpp = Tshown.length
               ? Math.max(...Tshown) - Math.min(...Tshown) : 0;
-            // Ripple matches the displayed curve: band-limited when the filter
-            // is ON, raw otherwise.  Falls back to the legacy single value.
-            const ripPct = torqueFilter
-              ? (data.T_ripple_filt_pct ?? data.T_ripple_pct)
-              : (data.T_ripple_raw_pct ?? data.T_ripple_pct);
+            // Ripple = pk-pk of the DISPLAYED curve / |T_avg| — recomputed on
+            // every filter toggle so it always matches the shown torque + spectrum.
+            const ripPct = ripplePct;
             // ripple % = pk-pk / |T_avg| is meaningless near no-load (T_avg≈0 →
             // it blows up to 1000s of %).  There, report the absolute cogging
             // pk-pk in N·m instead; show the % only when there's real average torque.

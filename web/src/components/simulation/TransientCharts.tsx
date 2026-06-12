@@ -216,6 +216,8 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
       demag:              String(demag),
       // Band-limit T(t) to the physical 6·k orders (UI toggle, default ON).
       torque_filter:      String(torqueFilter),
+      // Bit-identical pole/slot mesh (Mesh-tab "Periodic" toggle).
+      pole_copy:          String(readMeshSetting('poleCopy', false)),
       // Copper-loss physics: coil temperature → ρ_Cu(T); end-winding factor
       // (0 = auto-estimate from geometry) for the copper the 2-D field misses.
       coil_temp_c:        String(readSimSetting('coilTemp',   120.0)),

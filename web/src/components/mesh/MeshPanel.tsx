@@ -341,6 +341,10 @@ const MeshPanel: React.FC = () => {
   // Air-gap element rows PER SIDE of the slip midline (1-3, default 2). The
   // value persists in config.yaml (loaded below, clamped to the new 1-3 range).
   const [gapLayers,      setGapLayers]      = usePersisted<number>('gapLayers', 2);
+  // Bit-identical pole/slot mesh (template-copy): mesh ONE pole + ONE slot and
+  // rotate-copy them so every pole/slot is identical → no pole-to-pole mesh
+  // variance.  Read by the field & simulation fetches too (mesh.poleCopy).
+  const [poleCopy,       setPoleCopy]       = usePersisted<boolean>('poleCopy', false);
   // ── Per-component mesh size (study mesh-density effect on results) ─────────
   // {comp: target element size mm}. Empty/0 → use the global size for that part.
   // Persisted under 'mesh.componentMesh' so the Simulation tab's solve reads the
@@ -412,6 +416,7 @@ const MeshPanel: React.FC = () => {
       n_sectors:         nSectors.toString(),
       stator_fillet_mm:  '0',          // native geometry — no extra smoothing
       component_mesh:    componentMeshJson,
+      pole_copy:         poleCopy ? 'true' : 'false',
     } : {
       mesh_size_mm:        meshSizeMm.toString(),
       min_size_mm:         minSizeMm.toString(),
@@ -432,7 +437,7 @@ const MeshPanel: React.FC = () => {
       .then((d: FemMesh) => { setFemMesh(d); setFemLoading(false); })
       .catch(e => { setFemError(String(e)); setFemLoading(false); });
   }, [solverMesh, meshSizeMm, minSizeMm, normalDev, rotorAngle,
-      outerAirFactor, gapLayers, nSectors, componentMeshJson]);
+      outerAirFactor, gapLayers, nSectors, componentMeshJson, poleCopy]);
 
   // Gate: don't persist mesh settings back to config until the mount config-load
   // has populated state — otherwise a slow/interrupted load would let the
@@ -772,6 +777,35 @@ const MeshPanel: React.FC = () => {
                 <Typography sx={{ fontSize: 9, color: '#334155', mt: 0.5 }}>
                   Full 360° — stitched from two clean 1/2 sectors (no cuts, no double mesh).
                   Saved permanently &amp; used by Simulation + charts.
+                </Typography>
+              )}
+            </Box>
+
+            {/* Periodic (template-copy) mesh toggle */}
+            <Box sx={{ mt: 1.5 }}>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>
+                  Pole/slot mesh
+                  <Tooltip title="Standard: each pole/slot meshed independently (slightly different node pattern → pole-to-pole mesh variance on the losses). Periodic: mesh ONE pole + ONE slot, rotate-copy them so every pole and slot is BIT-IDENTICAL → that variance is removed. Applies to the Mesh view, field views and Simulation." placement="right">
+                    <span style={{ color: '#475569', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
+                  </Tooltip>
+                </Typography>
+              </Box>
+              <ToggleButtonGroup
+                value={poleCopy ? 'periodic' : 'standard'} exclusive size="small" fullWidth
+                onChange={(_, v) => v != null && setPoleCopy(v === 'periodic')}
+                sx={{ width: '100%',
+                  '& .MuiToggleButton-root': { flex: 1, py: 0.3, fontSize: 11,
+                    color: '#64748b', borderColor: '#1e293b', textTransform: 'none',
+                    '&.Mui-selected': { color: '#e2e8f0', bgcolor: '#1e3a5f',
+                      borderColor: '#3b82f6' } } }}>
+                <ToggleButton value="standard">Standard</ToggleButton>
+                <ToggleButton value="periodic">Periodic (identical poles)</ToggleButton>
+              </ToggleButtonGroup>
+              {poleCopy && (
+                <Typography sx={{ fontSize: 9, color: '#34d399', mt: 0.5 }}>
+                  Every pole + slot is a bit-identical rotated copy → zero pole-to-pole
+                  mesh variance. Also drives the field views &amp; Simulation.
                 </Typography>
               )}
             </Box>

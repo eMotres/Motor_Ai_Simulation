@@ -640,6 +640,9 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
       // The field view now runs the sliding-band solver for one frame; pass the
       // demag flag so it computes the irreversible-demag %-map when modelling is on.
       demag:             String(demagOn),
+      // Bit-identical pole/slot mesh (Mesh-tab toggle) — keep the field view
+      // consistent with the mesh/sim the user is verifying.
+      pole_copy:         String(readMeshSetting('poleCopy', false)),
     };
     if (I_phase_rms !== undefined) {
       params.I_phase_rms = String(I_phase_rms);
@@ -689,6 +692,7 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
       outer_air_factor: String(readMeshSetting('outerAir', 1.3)),
       n_sectors:        String(readMeshSetting('nSectors', 4)),
       component_mesh:   comp,
+      pole_copy:        String(readMeshSetting('poleCopy', false)),
     }).toString();
     fetch(`${base}?${qs}`)
       .then(async r => {

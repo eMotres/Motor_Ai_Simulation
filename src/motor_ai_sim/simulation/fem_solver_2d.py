@@ -908,6 +908,7 @@ def _build_sliding_band_meshes(
         gap_layers: float = 3.0,            # element layers across the air gap
         component_mesh_mm: Optional[dict] = None,
         full_ring: bool = False,            # TRUE 360°: stitch 2×180° per half
+        pole_copy: Optional[bool] = None,   # template-copy poles/slots; None=env default
 ):
     """Build the stator-half and rotor-half meshes for the sliding-band solver.
 
@@ -1016,8 +1017,13 @@ def _build_sliding_band_meshes(
     # for stator-side polygons, which are stationary).  Stator stays
     # sector-clipped to the requested n_sectors — it never rotates, so
     # the sector wedge accurately represents the symmetry-reduced domain.
+    # Per-request override of the env-gated template-copy flags (one toggle
+    # drives both halves when pole_copy is given).
+    _pc_rotor  = _SB_POLE_COPY_ROTOR  if pole_copy is None else bool(pole_copy)
+    _pc_stator = _SB_POLE_COPY_STATOR if pole_copy is None else bool(pole_copy)
+
     mesh_s = tags_s = classify_s = None
-    if (_SB_POLE_COPY_STATOR and _slot_period and _slot_period > 0):
+    if (_pc_stator and _slot_period and _slot_period > 0):
         _ncs = round((360.0 / n_sectors) / _slot_period)
         if _ncs >= 1 and abs(_ncs * _slot_period - 360.0 / n_sectors) < 1e-6:
             try:
@@ -1040,7 +1046,7 @@ def _build_sliding_band_meshes(
     # Past the sector edge the wedge wraps via anti-periodic BC (handled
     # later by the solver / master-slave pair).
     mesh_r = tags_r = classify_r = None
-    if (_SB_POLE_COPY_ROTOR and _pole_period and _pole_period > 0):
+    if (_pc_rotor and _pole_period and _pole_period > 0):
         _ncp = round((360.0 / n_sectors) / _pole_period)
         if _ncp >= 1 and abs(_ncp * _pole_period - 360.0 / n_sectors) < 1e-6:
             try:
@@ -3382,6 +3388,7 @@ def fem_transient_sliding_band(
                                  # so the picture matches the requested rotor angle
     torque_filter: bool = True,  # band-limit T(t) to the physical 6·k orders
                                  # (False = raw per-frame Maxwell-stress torque)
+    pole_copy: Optional[bool] = None,  # bit-identical pole/slot mesh; None=env default
     progress_cb=None,            # optional callback(done:int, total:int) per frame
     magnet_scale: float = 1.0,   # scale ALL magnet Br (0 → PMs off = reluctance torque)
     rotor_angle0_deg: float = 0.0,   # DIAGNOSTIC: build the rotor PHYSICALLY rotated
@@ -3506,7 +3513,7 @@ def fem_transient_sliding_band(
         normal_deviation_deg=8.0, aspect_ratio=10.0,
         gap_layers=gap_layers,
         component_mesh_mm=component_mesh_mm,
-        full_ring=_full_ring)
+        full_ring=_full_ring, pole_copy=pole_copy)
     Ps, Tts = ms.p.copy(), ms.t.copy(); Pr, Ttr = mr.p.copy(), mr.t.copy()
     nsn = Ps.shape[1]
     Pall = np.hstack([Ps, Pr]); Tall = np.hstack([Tts, Ttr + nsn])

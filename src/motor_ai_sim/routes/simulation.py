@@ -1203,6 +1203,7 @@ async def build_fem_mesh_2d_sliding_band(
     n_sectors:         int   = 4,
     stator_fillet_mm:  float = 0.0,     # extra Shapely fillet smoothing
     component_mesh:    str   = "",      # JSON {comp: size_mm} per-part mesh size
+    pole_copy:         bool  = False,   # bit-identical pole/slot template-copy mesh
 ):
     """Build TWO independent meshes (stator + rotor) and stitch them into
     one renderer-friendly payload for the Mesh tab.  Lets the user
@@ -1226,7 +1227,7 @@ async def build_fem_mesh_2d_sliding_band(
            round(normal_deviation, 1), round(aspect_ratio, 1),
            round(outer_air_factor, 2), round(band_thickness_mm, 2),
            round(gap_layers, 1), int(n_sectors), round(stator_fillet_mm, 2),
-           tuple(sorted(_comp_mesh.items())))
+           int(bool(pole_copy)), tuple(sorted(_comp_mesh.items())))
     if key in _fem_mesh_sb_cache:
         return _fem_mesh_sb_cache[key]
 
@@ -1280,6 +1281,7 @@ async def build_fem_mesh_2d_sliding_band(
                 geo_cfg=motor.parameters,
                 component_mesh_mm=_comp_mesh,
                 full_ring=_full_ring_view,
+                pole_copy=bool(pole_copy),
             )
     except Exception as e:
         log.exception("sliding-band mesh build failed")
@@ -1377,6 +1379,7 @@ def get_fem_field2d(
     I_phase_rms:         Optional[float] = None,   # None = use config; 0 = zero-current
     component_mesh:      str   = "",      # JSON {comp: size_mm} per-part mesh size
     demag:               bool  = False,   # show the irreversible-demag %-map
+    pole_copy:           bool  = False,   # bit-identical pole/slot template-copy mesh
 ):
     """Field view at ONE rotor angle, computed by the SLIDING-BAND TRANSIENT
     solver (1 step, rotor PHYSICALLY placed at rotor_angle_deg) — the SAME solver
@@ -1394,7 +1397,7 @@ def get_fem_field2d(
         round(mesh_size_mm, 2), round(min_size_mm, 2), round(outer_air_factor, 2),
         int(n_sectors), round(stator_fillet_mm, 2),
         round(I_phase_rms, 2) if I_phase_rms is not None else None,
-        int(bool(demag)), tuple(sorted(_comp_mesh.items())),
+        int(bool(demag)), int(bool(pole_copy)), tuple(sorted(_comp_mesh.items())),
     )
     if key in _fem_field_cache:
         return _fem_field_cache[key]
@@ -1427,6 +1430,7 @@ def get_fem_field2d(
             eddy=False, rotor_eddy=False, demag=bool(demag),
             return_field=True, field_first=True,
             rotor_angle0_deg=float(rotor_angle_deg),
+            pole_copy=bool(pole_copy),
             component_mesh_mm=_comp_mesh)
     except Exception as e:
         log.exception("SB field solve failed")
@@ -2032,6 +2036,7 @@ def get_fem_transient(
     rotor_eddy:          bool  = True,    # ← field-based magnet/shaft eddy losses
     demag:               bool  = False,   # ← per-element irreversible demagnetisation (de-rates Br → torque)
     torque_filter:       bool  = True,    # ← band-limit T(t) to physical 6·k orders (off = raw)
+    pole_copy:           bool  = False,   # ← bit-identical pole/slot template-copy mesh
 ):
     """Transient FEM analysis — runs N solves per electrical period and
     returns time-resolved T(t), losses(t) and V_phase(t).
@@ -2061,6 +2066,7 @@ def get_fem_transient(
                    round(coil_temp_c, 1), round(end_winding_factor, 3),
                    int(bool(rotor_eddy)), round(gap_layers, 1),
                    int(bool(demag)), int(bool(torque_filter)),
+                   int(bool(pole_copy)),
                    tuple(sorted(_comp_mesh.items())))
         if not fresh and _sb_key in _fem_transient_cache:
             return _fem_transient_cache[_sb_key]
@@ -2118,6 +2124,7 @@ def get_fem_transient(
                     rotor_eddy=bool(rotor_eddy),
                     demag=bool(demag),
                     torque_filter=bool(torque_filter),
+                    pole_copy=bool(pole_copy),
                     component_mesh_mm=_comp_mesh,
                     progress_cb=_sb_progress)
             finally:

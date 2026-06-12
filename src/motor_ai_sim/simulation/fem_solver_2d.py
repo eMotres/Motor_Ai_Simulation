@@ -846,10 +846,14 @@ def _replicate_periodic_half(polys_half, period_deg, n_copies, common_kw, kind):
         for j, ft in enumerate(canon_feat):
             tk[tags1 == ft] = base + k * nfeat + j      # unique per-copy feature id
         allTags.append(tk)
-        for (poly, meta) in canon_polys:
-            pj = _srot(poly, k * period_deg, origin=(0.0, 0.0))
-            meta_k = (meta * ((-1) ** k)) if kind == "rotor" else meta  # spoke polarity
-            feat_polys.append((pj, meta_k))
+        for item in canon_polys:
+            if kind == "rotor":                          # magnets: (poly, polarity)
+                poly, meta = item
+                feat_polys.append((_srot(poly, k * period_deg, origin=(0.0, 0.0)),
+                                   meta * ((-1) ** k)))   # spoke polarity alternates
+            else:                                         # coils: bare polygon;
+                feat_polys.append(_srot(item, k * period_deg, origin=(0.0, 0.0)))
+                                                          # phase comes from the layout
 
     P = np.hstack(allP); T = np.hstack(allT); tags = np.concatenate(allTags)
 
@@ -1012,9 +1016,20 @@ def _build_sliding_band_meshes(
     # for stator-side polygons, which are stationary).  Stator stays
     # sector-clipped to the requested n_sectors — it never rotates, so
     # the sector wedge accurately represents the symmetry-reduced domain.
-    mesh_s, tags_s, classify_s = build_mesh_from_polygons(
-        polys_s_for_mesh, n_sectors=n_sectors,
-        rotational_period_deg=_slot_period, **_common_kw)
+    mesh_s = tags_s = classify_s = None
+    if (_SB_POLE_COPY_STATOR and _slot_period and _slot_period > 0):
+        _ncs = round((360.0 / n_sectors) / _slot_period)
+        if _ncs >= 1 and abs(_ncs * _slot_period - 360.0 / n_sectors) < 1e-6:
+            try:
+                mesh_s, tags_s, classify_s = _replicate_periodic_half(
+                    polys_s_for_mesh, _slot_period, _ncs, _common_kw, "stator")
+            except Exception as _se:
+                log.warning("stator slot-copy failed (%s) — standard sector build", _se)
+                mesh_s = None
+    if mesh_s is None:
+        mesh_s, tags_s, classify_s = build_mesh_from_polygons(
+            polys_s_for_mesh, n_sectors=n_sectors,
+            rotational_period_deg=_slot_period, **_common_kw)
 
     # Build rotor half with the SAME sector clip as the stator
     # (n_sectors).  The rotor mesh covers ONE sector (1/n_sectors of the

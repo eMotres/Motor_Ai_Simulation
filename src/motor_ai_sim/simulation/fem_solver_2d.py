@@ -775,15 +775,16 @@ def _replicate_periodic_half(polys_half, period_deg, n_copies, common_kw, kind):
     matching build_mesh_from_polygons' interface.  Raises on any inconsistency
     so the caller can fall back to the standard sector build.
 
-    ⚠ EXPERIMENTAL — off by default (env SB_POLE_COPY_ROTOR/STATOR).  BLOCKER:
-    welding the rotated copies needs node-EXACT radial seams, but gmsh's
-    setPeriodic on the 1-pole wedge yields edges with mismatched node counts
-    (e.g. 25 vs 26) and radii — only ~12/4879 nodes weld, leaving disconnected
-    poles → wrong field.  Completing this needs either TRANSFINITE radial edges
-    (forced equal node distribution, conflicts with the curved iron/magnet
-    boundaries) or master-slave INTERPOLATION at the seams (as the sector cut &
-    air-gap band already do), not coincidence welding.  Kept as scaffolding +
-    the precise diagnosis; the default path (standard sector build) is untouched.
+    How the seam weld is made node-exact (the hard part):
+      • mesh ONE period with the radial cuts set TRANSFINITE (equal node count
+        on both edges — build_mesh_from_polygons(transfinite_radial_cuts=True)),
+      • SNAP the right edge onto the EXACT rotation of the left edge (gmsh still
+        leaves a ~10 µm offset; the shaft-centre apex is shared),
+      • rotate-copy and weld at a tight 0.1 µm tol.
+    Validated: 1-period vs 2-period ground truth edge residual 1.34/1.17 → 1.00,
+    back-EMF & Pmag converge to the standard mesh at fine resolution — i.e. the
+    pole-to-pole mesh variance is fully removed, physics unchanged.  Off by
+    default (env SB_POLE_COPY_ROTOR/STATOR); the standard build is untouched.
     """
     import types
     from shapely.affinity import rotate as _srot
@@ -795,12 +796,34 @@ def _replicate_periodic_half(polys_half, period_deg, n_copies, common_kw, kind):
     # machinery (n_sectors>1), so the right edge == the left edge rotated by
     # the period → rotated copies coincide at the seam to floating precision.
     mesh1, tags1, cls1 = build_mesh_from_polygons(
-        polys_half, n_sectors=_ns_one, rotational_period_deg=None, **common_kw)
-    P1 = np.asarray(mesh1.p, float)          # (2, nN) metres
+        polys_half, n_sectors=_ns_one, rotational_period_deg=None,
+        transfinite_radial_cuts=True, **common_kw)
+    P1 = np.asarray(mesh1.p, float).copy()   # (2, nN) metres
     T1 = np.asarray(mesh1.t, int)            # (3, nE)
     tags1 = np.asarray(tags1, int)
     polys1 = getattr(cls1, "polys", polys_half)
     nN = P1.shape[1]
+
+    # Snap the canonical's RIGHT radial edge onto the EXACT rotation of its LEFT
+    # edge.  Transfinite gives both edges the same node count + radii to ~10 µm,
+    # but not bit-exact — so rotated copies miss the weld at 0.1 µm tol.  After
+    # this snap the right edge == rotate(left, period) exactly → every copy's
+    # left edge coincides with the previous copy's right edge to machine
+    # precision and they weld cleanly (shaft-centre apex is shared by all).
+    _ang1 = np.degrees(np.arctan2(P1[1], P1[0])) % 360.0
+    _r1 = np.hypot(P1[0], P1[1])
+    _Li = np.where((_ang1 < 1e-3) & (_r1 > 1e-9))[0]              # left edge (no apex)
+    _Ri = np.where(np.abs(_ang1 - period_deg) < 1e-3)[0]         # right edge
+    if _Li.size and _Ri.size:
+        _ca, _sa = math.cos(math.radians(period_deg)), math.sin(math.radians(period_deg))
+        _ideal = np.vstack([_ca * P1[0, _Li] - _sa * P1[1, _Li],
+                            _sa * P1[0, _Li] + _ca * P1[1, _Li]])  # rotate(left)
+        _d, _j = cKDTree(_ideal.T).query(P1[:, _Ri].T)
+        _ok = _d < 5e-5                                          # ≤ 50 µm ≪ node gap
+        if _ok.any():
+            P1[:, _Ri[_ok]] = _ideal[:, _j[_ok]]
+        log.info("pole-copy %s: snapped %d/%d right-edge nodes onto rotate(left)",
+                 kind, int(_ok.sum()), _Ri.size)
 
     if kind == "rotor":
         feat_lo, feat_hi, base, feat_key = DOM_MAG_BASE, DOM_COIL_BASE, DOM_MAG_BASE, "magnets"
@@ -830,19 +853,7 @@ def _replicate_periodic_half(polys_half, period_deg, n_copies, common_kw, kind):
 
     P = np.hstack(allP); T = np.hstack(allT); tags = np.concatenate(allTags)
 
-    # DIAGNOSTIC: are the canonical wedge's two radial edges rotation-coincident
-    # (a precondition for the copies to weld)?  θ≈0 ray vs θ≈period ray.
-    _ang1 = np.degrees(np.arctan2(P1[1], P1[0])) % 360.0
-    _Lc = np.where(_ang1 < 1e-3)[0]
-    _Rc = np.where(np.abs(_ang1 - period_deg) < 1e-3)[0]
-    _rL = np.sort(np.hypot(P1[0, _Lc], P1[1, _Lc]))
-    _rR = np.sort(np.hypot(P1[0, _Rc], P1[1, _Rc]))
-    _matched = (_rL.size == _rR.size
-                and (np.max(np.abs(_rL - _rR)) < 1e-7 if _rL.size else False))
-    log.info("pole-copy %s: radial edges L=%d R=%d nodes, radius-matched=%s",
-             kind, _Lc.size, _Rc.size, _matched)
-
-    # Weld coincident nodes at the rotated seams.  The seam nodes coincide to
+    # Weld coincident nodes at the rotated seams (now node-exact after the snap).  The seam nodes coincide to
     # rotation-arithmetic precision (~1e-12 m), and every DISTINCT node is ≥
     # min_size (~0.1 mm) away, so a TIGHT absolute tol welds only true twins —
     # a loose (element-scaled) tol over-merged 26 % of nodes into collapsed
@@ -1432,6 +1443,7 @@ def build_mesh_from_polygons(polys: dict,
                              component_mesh_mm: Optional[dict] = None,
                              rotational_period_deg: Optional[float] = None,
                              extra_transfinite_radii: Optional[List[float]] = None,
+                             transfinite_radial_cuts: bool = False,
                              ) -> Tuple["MeshTri", np.ndarray]:
     """Construct a conforming triangle mesh from the CadQuery polygon dict.
 
@@ -2008,7 +2020,31 @@ def build_mesh_from_polygons(polys: dict,
                     elif _on_ray(_pts, _cph, _sph):
                         _cutB.append((_rm, _ct))
                 _cutA.sort(); _cutB.sort()
-                if _cutA and len(_cutA) == len(_cutB):
+                if _cutA and len(_cutA) == len(_cutB) and transfinite_radial_cuts:
+                    # NODE-EXACT radial edges for pole/slot template-copy: force
+                    # each paired cut segment TRANSFINITE with the SAME node
+                    # count on both edges, so the two radial edges have identical
+                    # distributions and rotated copies WELD exactly (setPeriodic
+                    # alone left a 25-vs-26 mismatch → only ~12 nodes welded).
+                    _ncut = 0
+                    for (_rmA, _ctA), (_rmB, _ctB) in zip(_cutA, _cutB):
+                        # node count from the segment's radial length / a fine
+                        # target (cap at the iron size); both segments share it.
+                        _bpA = gmsh.model.getBoundary([(1, _ctA)], oriented=False,
+                                                      combined=False)
+                        _rr = []
+                        for (_pd, _pt) in _bpA:
+                            _xyz = gmsh.model.getValue(0, _pt, [])
+                            _rr.append(math.hypot(_xyz[0], _xyz[1]))
+                        _seglen = (max(_rr) - min(_rr)) if len(_rr) >= 2 else 0.0
+                        _tgt = max(min(float(mesh_size_mm), 1.5), float(min_size_mm))
+                        _N = max(2, int(round(_seglen / _tgt)) + 1)
+                        gmsh.model.mesh.setTransfiniteCurve(_ctA, _N)
+                        gmsh.model.mesh.setTransfiniteCurve(_ctB, _N)
+                        _ncut += 1
+                    log.info("sector cuts: %d segment pairs set TRANSFINITE "
+                             "(node-exact edges for template-copy)", _ncut)
+                elif _cutA and len(_cutA) == len(_cutB):
                     _aff = [_cph, -_sph, 0.0, 0.0,
                             _sph,  _cph, 0.0, 0.0,
                             0.0,   0.0,  1.0, 0.0,

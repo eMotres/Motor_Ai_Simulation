@@ -814,6 +814,7 @@ def _replicate_periodic_half(polys_half, period_deg, n_copies, common_kw, kind):
     _r1 = np.hypot(P1[0], P1[1])
     _Li = np.where((_ang1 < 1e-3) & (_r1 > 1e-9))[0]              # left edge (no apex)
     _Ri = np.where(np.abs(_ang1 - period_deg) < 1e-3)[0]         # right edge
+    _nsnap = 0
     if _Li.size and _Ri.size:
         _ca, _sa = math.cos(math.radians(period_deg)), math.sin(math.radians(period_deg))
         _ideal = np.vstack([_ca * P1[0, _Li] - _sa * P1[1, _Li],
@@ -822,8 +823,28 @@ def _replicate_periodic_half(polys_half, period_deg, n_copies, common_kw, kind):
         _ok = _d < 5e-5                                          # ≤ 50 µm ≪ node gap
         if _ok.any():
             P1[:, _Ri[_ok]] = _ideal[:, _j[_ok]]
+        _nsnap = int(_ok.sum())
         log.info("pole-copy %s: snapped %d/%d right-edge nodes onto rotate(left)",
-                 kind, int(_ok.sum()), _Ri.size)
+                 kind, _nsnap, _Ri.size)
+
+    # Weld-quality gate.  Only the SNAPPED seam nodes (right == rotate(left) to
+    # machine precision) weld when the copies are stacked; an un-snapped node
+    # stays at its meshed position and leaves a hairline CRACK at every seam.
+    # This requires the wedge's two radial cuts to carry the SAME node
+    # distribution — true when the two cuts traverse identical geometry (the
+    # rotor pole wedge: 39/39).  It FAILS when OCC splits the two cuts
+    # differently (the stator slot wedge: the right cut lumps yoke+outer-air
+    # into one coarse segment and runs fine along the slot, the left runs
+    # through clean tooth iron — 7/24).  A rank-forced snap would drag seam
+    # nodes >10 mm and invert triangles, so instead we BAIL and let the caller
+    # fall back to the standard (stitched / sector) build, which is crack-free
+    # and high quality — just not a bit-identical copy.  The rotor copy, which
+    # is what actually removes the moving-part loss ripple, is unaffected.
+    if _Li.size != _Ri.size or _nsnap < _Ri.size - 1:
+        raise ValueError(
+            f"{kind} wedge radial cuts not periodic-weldable "
+            f"(left {_Li.size} vs right {_Ri.size} nodes, {_nsnap} aligned) — "
+            f"OCC split the two cuts differently; standard build instead")
 
     if kind == "rotor":
         feat_lo, feat_hi, base, feat_key = DOM_MAG_BASE, DOM_COIL_BASE, DOM_MAG_BASE, "magnets"

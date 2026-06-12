@@ -83,6 +83,15 @@ _SB_BAND_DELTA_FRAC = 0.25
 # the SB half-builds — diagnostic gate.
 _SB_ROT_PERIODICITY = True
 
+# Template-copy each pole (rotor) / slot (stator): mesh ONE period, then rotate-
+# copy + weld it so every period has a BIT-IDENTICAL interior, not just matched
+# boundaries (setPeriodic).  Kills the pole-to-pole mesh-discretisation variance
+# that leaves a ~1.2-1.6x residual on the loss waveform.  Per-half opt-in so the
+# rotor can be validated before the (winding-phase-aware) stator.
+import os as _os_sb
+_SB_POLE_COPY_ROTOR  = _os_sb.environ.get("SB_POLE_COPY_ROTOR",  "0") == "1"
+_SB_POLE_COPY_STATOR = _os_sb.environ.get("SB_POLE_COPY_STATOR", "0") == "1"
+
 # True moving band (two uniform rings + closed-form re-stitched strip) vs the
 # legacy merged single ring.  Diagnostic result: ord6 identical in both (the
 # artifact is NOT the coupling); the one-row strip biases frame-local torque
@@ -750,6 +759,126 @@ def _split_polys_for_sliding_band(polys: dict) -> Tuple[dict, dict]:
     return polys_s, polys_r
 
 
+def _replicate_periodic_half(polys_half, period_deg, n_copies, common_kw, kind):
+    """Mesh ONE pole/slot wedge, then rotate-copy + weld it into ``n_copies``
+    so every period has a BIT-IDENTICAL interior (not just matched boundary
+    curves as setPeriodic gives).  This removes the pole/slot-to-pole mesh-
+    discretisation variance that leaves a residual on the loss waveform.
+
+    ``kind`` ∈ {"rotor","stator"}:
+      • rotor  — one magnet per period; polarity alternates ±1 per pole.
+      • stator — coils per slot; the PHASE/current is NOT geometry-periodic,
+                 it comes from the winding layout via the per-slot tag, so we
+                 only need to renumber DOM_COIL_BASE+i in slot order.
+
+    Returns (skfem MeshTri, per-cell tags, classify-like namespace with .polys)
+    matching build_mesh_from_polygons' interface.  Raises on any inconsistency
+    so the caller can fall back to the standard sector build.
+
+    ⚠ EXPERIMENTAL — off by default (env SB_POLE_COPY_ROTOR/STATOR).  BLOCKER:
+    welding the rotated copies needs node-EXACT radial seams, but gmsh's
+    setPeriodic on the 1-pole wedge yields edges with mismatched node counts
+    (e.g. 25 vs 26) and radii — only ~12/4879 nodes weld, leaving disconnected
+    poles → wrong field.  Completing this needs either TRANSFINITE radial edges
+    (forced equal node distribution, conflicts with the curved iron/magnet
+    boundaries) or master-slave INTERPOLATION at the seams (as the sector cut &
+    air-gap band already do), not coincidence welding.  Kept as scaffolding +
+    the precise diagnosis; the default path (standard sector build) is untouched.
+    """
+    import types
+    from shapely.affinity import rotate as _srot
+    from scipy.spatial import cKDTree
+    from skfem import MeshTri
+
+    _ns_one = int(round(360.0 / period_deg))
+    # Mesh ONE period.  Its two radial cuts are made periodic by the sector
+    # machinery (n_sectors>1), so the right edge == the left edge rotated by
+    # the period → rotated copies coincide at the seam to floating precision.
+    mesh1, tags1, cls1 = build_mesh_from_polygons(
+        polys_half, n_sectors=_ns_one, rotational_period_deg=None, **common_kw)
+    P1 = np.asarray(mesh1.p, float)          # (2, nN) metres
+    T1 = np.asarray(mesh1.t, int)            # (3, nE)
+    tags1 = np.asarray(tags1, int)
+    polys1 = getattr(cls1, "polys", polys_half)
+    nN = P1.shape[1]
+
+    if kind == "rotor":
+        feat_lo, feat_hi, base, feat_key = DOM_MAG_BASE, DOM_COIL_BASE, DOM_MAG_BASE, "magnets"
+    else:
+        feat_lo, feat_hi, base, feat_key = DOM_COIL_BASE, 10**9, DOM_COIL_BASE, "coils"
+    canon_feat = sorted(int(t) for t in np.unique(tags1) if feat_lo <= int(t) < feat_hi)
+    canon_polys = list(polys1.get(feat_key, []))
+    nfeat = len(canon_feat)
+    if nfeat == 0 or len(canon_polys) != nfeat:
+        raise ValueError(f"{kind} period has {nfeat} feature tags but "
+                         f"{len(canon_polys)} {feat_key} polys (straddled cut?)")
+
+    allP, allT, allTags, feat_polys = [], [], [], []
+    for k in range(n_copies):
+        a = math.radians(k * period_deg)
+        c, s = math.cos(a), math.sin(a)
+        allP.append(np.vstack([c * P1[0] - s * P1[1], s * P1[0] + c * P1[1]]))
+        allT.append(T1 + k * nN)
+        tk = tags1.copy()
+        for j, ft in enumerate(canon_feat):
+            tk[tags1 == ft] = base + k * nfeat + j      # unique per-copy feature id
+        allTags.append(tk)
+        for (poly, meta) in canon_polys:
+            pj = _srot(poly, k * period_deg, origin=(0.0, 0.0))
+            meta_k = (meta * ((-1) ** k)) if kind == "rotor" else meta  # spoke polarity
+            feat_polys.append((pj, meta_k))
+
+    P = np.hstack(allP); T = np.hstack(allT); tags = np.concatenate(allTags)
+
+    # DIAGNOSTIC: are the canonical wedge's two radial edges rotation-coincident
+    # (a precondition for the copies to weld)?  θ≈0 ray vs θ≈period ray.
+    _ang1 = np.degrees(np.arctan2(P1[1], P1[0])) % 360.0
+    _Lc = np.where(_ang1 < 1e-3)[0]
+    _Rc = np.where(np.abs(_ang1 - period_deg) < 1e-3)[0]
+    _rL = np.sort(np.hypot(P1[0, _Lc], P1[1, _Lc]))
+    _rR = np.sort(np.hypot(P1[0, _Rc], P1[1, _Rc]))
+    _matched = (_rL.size == _rR.size
+                and (np.max(np.abs(_rL - _rR)) < 1e-7 if _rL.size else False))
+    log.info("pole-copy %s: radial edges L=%d R=%d nodes, radius-matched=%s",
+             kind, _Lc.size, _Rc.size, _matched)
+
+    # Weld coincident nodes at the rotated seams.  The seam nodes coincide to
+    # rotation-arithmetic precision (~1e-12 m), and every DISTINCT node is ≥
+    # min_size (~0.1 mm) away, so a TIGHT absolute tol welds only true twins —
+    # a loose (element-scaled) tol over-merged 26 % of nodes into collapsed
+    # slivers and corrupted the field.
+    _tolw = 1e-7                                  # 0.1 µm
+    pairs = cKDTree(P.T).query_pairs(_tolw, output_type="ndarray")
+    parent = np.arange(P.shape[1])
+    def _find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]; x = parent[x]
+        return x
+    for u, v in pairs:
+        ru, rv = _find(int(u)), _find(int(v))
+        if ru != rv:
+            parent[max(ru, rv)] = min(ru, rv)
+    roots = np.array([_find(i) for i in range(P.shape[1])])
+    uniq, inv = np.unique(roots, return_inverse=True)
+    Pw = P[:, uniq]; Tw = inv[T].astype(np.int64)
+    # Drop any triangle that collapsed during the weld (two corners merged —
+    # happens where many pie-slice copies converge, e.g. a solid-shaft hub).
+    _ar = 0.5 * np.abs(
+        (Pw[0, Tw[1]] - Pw[0, Tw[0]]) * (Pw[1, Tw[2]] - Pw[1, Tw[0]])
+        - (Pw[0, Tw[2]] - Pw[0, Tw[0]]) * (Pw[1, Tw[1]] - Pw[1, Tw[0]]))
+    _degen = ((Tw[0] == Tw[1]) | (Tw[1] == Tw[2]) | (Tw[0] == Tw[2])
+              | (_ar < 1e-12))
+    if _degen.any():
+        log.warning("pole-copy %s: %d/%d collapsed tris at weld (min area %.2e) — "
+                    "dropping", kind, int(_degen.sum()), Tw.shape[1], float(_ar.min()))
+        Tw = Tw[:, ~_degen]; tags = tags[~_degen]
+    mesh = MeshTri(Pw.copy(), Tw)
+    full_polys = dict(polys1); full_polys[feat_key] = feat_polys
+    log.info("pole-copy %s: 1 period (%d nodes, %d feats) × %d → %d nodes, %d tris",
+             kind, nN, nfeat, n_copies, mesh.p.shape[1], mesh.t.shape[1])
+    return mesh, tags, types.SimpleNamespace(polys=full_polys)
+
+
 def _build_sliding_band_meshes(
         polys: dict,
         rotor_angle_deg: float,
@@ -884,9 +1013,20 @@ def _build_sliding_band_meshes(
     # they rotate together as a single rigid unit per transient frame.
     # Past the sector edge the wedge wraps via anti-periodic BC (handled
     # later by the solver / master-slave pair).
-    mesh_r, tags_r, classify_r = build_mesh_from_polygons(
-        polys_r_for_mesh, n_sectors=n_sectors,
-        rotational_period_deg=_pole_period, **_common_kw)
+    mesh_r = tags_r = classify_r = None
+    if (_SB_POLE_COPY_ROTOR and _pole_period and _pole_period > 0):
+        _ncp = round((360.0 / n_sectors) / _pole_period)
+        if _ncp >= 1 and abs(_ncp * _pole_period - 360.0 / n_sectors) < 1e-6:
+            try:
+                mesh_r, tags_r, classify_r = _replicate_periodic_half(
+                    polys_r_for_mesh, _pole_period, _ncp, _common_kw, "rotor")
+            except Exception as _re:
+                log.warning("rotor pole-copy failed (%s) — standard sector build", _re)
+                mesh_r = None
+    if mesh_r is None:
+        mesh_r, tags_r, classify_r = build_mesh_from_polygons(
+            polys_r_for_mesh, n_sectors=n_sectors,
+            rotational_period_deg=_pole_period, **_common_kw)
 
     # Apply rotor rotation as a rigid body — node coords only, topology
     # unchanged.  This is the heart of sliding-band: every frame just

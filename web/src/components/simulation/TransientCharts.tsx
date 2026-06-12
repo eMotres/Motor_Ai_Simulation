@@ -30,8 +30,15 @@ interface TransientPayload {
   time_s: number[];
   rotor_angle_deg: number[];
   T_em_Nm: number[];
+  // Raw per-frame torque + the band-limited (6·k) reconstruction.  Both are
+  // ALWAYS returned so the "Torque filter" toggle flips between them client-
+  // side (instant — band-limiting is post-processing, no re-solve needed).
+  T_em_raw_Nm?: number[];
+  T_em_filt_Nm?: number[];
   T_avg_Nm: number;
   T_ripple_pct: number;
+  T_ripple_raw_pct?: number;
+  T_ripple_filt_pct?: number;
   P_cu_W: number[];
   P_fe_W: number[];
   P_mag_eddy_W: number[];
@@ -248,7 +255,8 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
         setData(d); setBusy(false);
         setError(null);
         persistLastTransient(d);            // remember it across reloads
-        if (d.summary && onSummary) onSummary(d.summary);
+        // summary is emitted by the effect below (so its ripple matches the
+        // current filter toggle, and flips with it without a re-solve).
       } catch (e: any) {
         const msg = String(e);
         // User pressed Stop → don't retry, don't surface as an error.
@@ -275,10 +283,7 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
     if (!mountedRef.current) {
       mountedRef.current = true;
       const last = loadLastTransient();
-      if (last) {
-        setData(last);
-        if (last.summary && onSummary) onSummary(last.summary);
-      }
+      if (last) setData(last);   // summary emitted by the effect below
       return;
     }
     if (runNonce > 0) run();
@@ -290,13 +295,38 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [busy]);
 
+  // Emit the summary to the parent with the T-ripple that MATCHES the filter
+  // toggle (band-limited vs raw), so the summary cards flip together with the
+  // torque curve — instantly, no re-solve.  Fires on every data change (fetch
+  // or mount-restore) and whenever the toggle changes.
+  useEffect(() => {
+    if (!data?.summary || !onSummary) return;
+    const s = data.summary;
+    const ripPct = torqueFilter
+      ? (s.T_ripple_filt_pct ?? s.T_ripple_pct)
+      : (s.T_ripple_raw_pct ?? s.T_ripple_pct);
+    onSummary({ ...s, T_ripple_pct: ripPct });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, torqueFilter]);
+
   // Build chart-friendly row arrays
+  // Torque series shown: band-limited (6·k) when the filter is ON, raw per-
+  // frame otherwise.  Both arrays come from the backend, so flipping the
+  // checkbox switches the curve INSTANTLY — no re-solve.  Falls back to the
+  // legacy single T_em_Nm for cached runs from before this field existed.
+  const Tshown = React.useMemo(() => {
+    if (!data) return [] as number[];
+    const raw  = data.T_em_raw_Nm  ?? data.T_em_Nm;
+    const filt = data.T_em_filt_Nm ?? data.T_em_Nm;
+    return torqueFilter ? filt : raw;
+  }, [data, torqueFilter]);
+
   const rows = React.useMemo(() => {
     if (!data) return [];
     const ms = data.time_s.map(t => t * 1e3);
     return ms.map((t, i) => ({
       t_ms:  t,
-      T_em:  data.T_em_Nm[i],
+      T_em:  Tshown[i],
       P_cu:  data.P_cu_W[i],
       P_fe:  data.P_fe_W[i],
       P_mag: data.P_mag_eddy_W[i],
@@ -305,7 +335,7 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
       I_A:   data.I_A[i], I_B: data.I_B[i], I_C: data.I_C[i],
       V_A:   data.V_A[i], V_B: data.V_B[i], V_C: data.V_C[i],
     }));
-  }, [data]);
+  }, [data, Tshown]);
 
   // Torque harmonic spectrum (over one electrical period).  6·k orders are the
   // physical 3-phase torque ripple; a clean ripple = a few discrete bars, broad
@@ -332,8 +362,13 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
             </Tooltip>
           </Typography>
           {data && (() => {
-            const tpp = data.T_em_Nm.length
-              ? Math.max(...data.T_em_Nm) - Math.min(...data.T_em_Nm) : 0;
+            const tpp = Tshown.length
+              ? Math.max(...Tshown) - Math.min(...Tshown) : 0;
+            // Ripple matches the displayed curve: band-limited when the filter
+            // is ON, raw otherwise.  Falls back to the legacy single value.
+            const ripPct = torqueFilter
+              ? (data.T_ripple_filt_pct ?? data.T_ripple_pct)
+              : (data.T_ripple_raw_pct ?? data.T_ripple_pct);
             // ripple % = pk-pk / |T_avg| is meaningless near no-load (T_avg≈0 →
             // it blows up to 1000s of %).  There, report the absolute cogging
             // pk-pk in N·m instead; show the % only when there's real average torque.
@@ -343,8 +378,10 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
                 {data.n_steps_per_period} steps/period · dt = {(data.dt_s*1e6).toFixed(1)} µs ·
                 T_period = {(data.T_period_s*1e3).toFixed(2)} ms ({data.f_elec_Hz.toFixed(1)} Hz electrical) ·
                 T_avg = {data.T_avg_Nm.toFixed(2)} N·m · {loaded
-                  ? `ripple = ${data.T_ripple_pct.toFixed(1)} %`
+                  ? `ripple = ${ripPct.toFixed(1)} %`
                   : `cogging pk-pk = ${tpp.toFixed(2)} N·m`}
+                {' · '}<span style={{ color: torqueFilter ? '#34d399' : '#fbbf24' }}>
+                  {torqueFilter ? '6·k filtered' : 'raw'}</span>
               </Typography>
             );
           })()}

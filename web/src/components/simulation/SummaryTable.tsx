@@ -16,6 +16,7 @@ export interface TransientSummary {
   T_em_avg_Nm:         number;
   T_ripple_pct:        number;
   T_ripple_raw_pct?:   number;
+  T_ripple_filt_pct?:  number;
   P_mech_W:            number;
   V_phase_peak_V:      number;
   V_phase_rms_V:       number;

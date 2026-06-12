@@ -435,9 +435,12 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // Signature of every input that changes the FEM result.  Re-read each render
   // (incl. localStorage mesh.* which the Mesh tab edits) so we can tell when the
   // displayed result no longer matches the current settings.
+  // NB: torqueFilter is NOT here — band-limiting is a client-side display
+  // toggle (the backend always returns both raw + filtered series), so flipping
+  // it must NOT mark the result stale or require a re-run.
   const computeSig = () => JSON.stringify({
     I: current, g: phaseOffset, rpm, steps, coilTemp, endWinding, connection,
-    fl: fieldLosses, dm: demag, tf: torqueFilter,
+    fl: fieldLosses, dm: demag,
     ns: readMesh('nSectors', 4), ms: readMesh('meshSize', 4.0), mn: readMesh('minSize', 0.3),
     gl: readMesh('gapLayers', 2), oa: readMesh('outerAir', 1.3), nd: readMesh('normalDev', 6),
   });

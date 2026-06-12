@@ -4653,17 +4653,22 @@ def fem_transient_sliding_band(
     # ripple) and drop the rest; the mean is preserved exactly.  torque_filter
     # (UI toggle, default ON) switches back to the raw per-frame torque for
     # inspecting the unfiltered solve.
+    # Always compute BOTH the raw per-frame torque and the band-limited (6·k)
+    # reconstruction, and return both — band-limiting is pure post-processing
+    # (FFT → keep DC + 6·k → inverse), so the UI can toggle between them
+    # INSTANTLY without a 30 s re-solve.  band_limit_torque preserves the mean
+    # exactly, so T_avg is identical for raw and filtered.
+    _T_raw = list(T_series)
+    _T_filt, Trip_filt, Trip_raw = band_limit_torque(
+        T_series, n_steps_per_period, n_periods)
+    # T_em_Nm follows the toggle for back-compat (saved sims + server summary);
+    # the UI uses the explicit T_em_raw_Nm / T_em_filt_Nm fields below to flip
+    # client-side without re-running.
     if torque_filter:
-        T_series, Trip, Trip_raw = band_limit_torque(
-            T_series, n_steps_per_period, n_periods)
-        Tavg = float(np.mean(T_series)) if T_series else Tavg
-    elif T_series:
-        _xT = np.asarray(T_series, float)
-        _avgT = float(_xT.mean())
-        Trip = Trip_raw = (100.0 * (float(_xT.max()) - float(_xT.min())) / abs(_avgT)
-                           if abs(_avgT) > 1e-9 else 0.0)
+        T_series = list(_T_filt); Trip = Trip_filt
     else:
-        Trip = Trip_raw = 0.0
+        T_series = list(_T_raw);  Trip = Trip_raw
+    Tavg = float(np.mean(_T_raw)) if _T_raw else Tavg
     Vpk = float(max(max(map(abs, VA)), max(map(abs, VB)), max(map(abs, VC)))) if VA else 0.0
     # P_cu already computed physically (ρ(T)·J²·V·k_end) near the top.
 
@@ -4672,10 +4677,13 @@ def fem_transient_sliding_band(
     # clean ripple shows a few DISCRETE peaks (the cogging / 6·k 3-phase orders);
     # broadband noise spreads across all orders.  Orders are multiples of the
     # ELECTRICAL fundamental; amplitude is the single-sided FFT magnitude [N·m].
+    # Spectrum is ALWAYS the RAW per-frame torque (not the band-limited series),
+    # so the UI shows every order and the user can SEE which bars the 6·k filter
+    # keeps (orange) vs drops (the broadband slip-node noise).
     T_harm_order = []; T_harm_amp = []
-    if T_series:
+    if _T_raw:
         _per = max(1, int(round(n_steps_per_period)))
-        _Tp = np.asarray(T_series[:_per], float)
+        _Tp = np.asarray(_T_raw[:_per], float)
         if _Tp.size >= 4:
             _F = np.abs(np.fft.rfft(_Tp - _Tp.mean())) / _Tp.size * 2.0
             _nh = min(_F.size - 1, 36)
@@ -4975,7 +4983,10 @@ def fem_transient_sliding_band(
         "time_s": tt, "rotor_angle_deg": [
             (k / n_total) * period_mech * n_periods for k in range(n_total)],
         "T_em_Nm": T_series, "T_avg_Nm": Tavg, "T_ripple_pct": Trip,
-        "T_ripple_raw_pct": Trip_raw,
+        "T_ripple_raw_pct": Trip_raw, "T_ripple_filt_pct": Trip_filt,
+        # Both reconstructions — the UI toggles between them client-side (no
+        # re-solve) when the "Torque filter" checkbox is flipped.
+        "T_em_raw_Nm": _T_raw, "T_em_filt_Nm": _T_filt,
         "psi_A_Wb": psiA, "psi_B_Wb": psiB, "psi_C_Wb": psiC,
         "V_A": VA, "V_B": VB, "V_C": VC, "V_peak": Vpk,
         "I_A": IA, "I_B": IB, "I_C": IC,

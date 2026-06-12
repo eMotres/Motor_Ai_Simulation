@@ -2173,6 +2173,7 @@ def get_fem_transient(
                     "T_em_avg_Nm": round(_Tavg, 3),
                     "T_ripple_pct": round(float(_sbres.get("T_ripple_pct", 0.0)), 1),
                     "T_ripple_raw_pct": round(float(_sbres.get("T_ripple_raw_pct", 0.0)), 1),
+                    "T_ripple_filt_pct": round(float(_sbres.get("T_ripple_filt_pct", 0.0)), 1),
                     "P_mech_W": round(_Pmech, 1),
                     "V_phase_peak_V": round(_Vpk, 1),
                     "V_phase_rms_V": round(_Vrms, 1),

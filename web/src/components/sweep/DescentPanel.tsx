@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import {
   Box, Typography, Button, TextField, Tooltip, Divider, Chip,
   CircularProgress, Table, TableBody, TableCell, TableHead, TableRow,
+  ToggleButton, ToggleButtonGroup,
 } from '@mui/material';
 import TrendingDownIcon from '@mui/icons-material/TrendingDown';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
@@ -47,6 +48,11 @@ const DescentPanel: React.FC = () => {
   const [wTd, setWTd]   = useState(1);
   const [steps, setSteps] = useState(24);
   const [applied, setApplied] = useState(false);
+  // Algorithm: CMA-ES (derivative-free, noise-robust, default) vs the original
+  // finite-difference gradient descent.  Symmetry: full disk (−1, accurate
+  // ripple, default) vs ¼ sector (4, ~3× faster — good for quick debugging).
+  const [algorithm, setAlgorithm] = useState<'cmaes' | 'gradient'>('cmaes');
+  const [nSectors, setNSectors]   = useState<-1 | 4>(-1);
 
   const activeVars = Object.entries(sweepConfig.variations)
     .filter(([, v]) => v.mode !== 'fixed').map(([n]) => n);
@@ -85,7 +91,7 @@ const DescentPanel: React.FC = () => {
 
   const launch = () => {
     setApplied(false);
-    runDescent({ rippleMax, maxIters, wEff, wTd, steps });
+    runDescent({ rippleMax, maxIters, wEff, wTd, steps, algorithm, nSectors });
   };
 
   const row = (label: string, m: any, cost?: number) => (
@@ -108,8 +114,23 @@ const DescentPanel: React.FC = () => {
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', mb: 1 }}>
         <TrendingDownIcon sx={{ fontSize: 18 }} />
         <Typography variant="subtitle2" sx={{ flex: 1, minWidth: 180 }}>
-          Gradient descent — max efficiency × torque/mass
+          {algorithm === 'cmaes' ? 'CMA-ES' : 'Gradient descent'} — max efficiency × torque/mass
         </Typography>
+
+        <Tooltip title="Optimization algorithm. CMA-ES: derivative-free, noise-robust evolution strategy (recommended). Gradient: the original finite-difference descent." placement="top">
+          <ToggleButtonGroup exclusive size="small" value={algorithm}
+            onChange={(_, a) => a && setAlgorithm(a)} sx={{ height: 26 }}>
+            <ToggleButton value="cmaes"    sx={{ px: 1, fontSize: 10 }}>CMA-ES</ToggleButton>
+            <ToggleButton value="gradient" sx={{ px: 1, fontSize: 10 }}>Gradient</ToggleButton>
+          </ToggleButtonGroup>
+        </Tooltip>
+        <Tooltip title="FEM symmetry for every evaluation. Full disk = accurate ripple (recommended). ¼ sector = ~3× faster but over-reports ripple ~2.7× (good for quick algorithm debugging, not final numbers)." placement="top">
+          <ToggleButtonGroup exclusive size="small" value={nSectors}
+            onChange={(_, n) => n != null && setNSectors(n)} sx={{ height: 26 }}>
+            <ToggleButton value={-1} sx={{ px: 1, fontSize: 10 }}>Full</ToggleButton>
+            <ToggleButton value={4}  sx={{ px: 1, fontSize: 10 }}>¼</ToggleButton>
+          </ToggleButtonGroup>
+        </Tooltip>
 
         <Tooltip title="Descent iterations. Each: ±step per variable (gradient) + line search." placement="top">
           <TextField label="iters" type="number" size="small" value={maxIters}

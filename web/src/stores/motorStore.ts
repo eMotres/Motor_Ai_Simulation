@@ -178,7 +178,8 @@ interface MotorState {
   descentState: any | null;           // raw /descent/progress payload
   descentError: string | null;
   runDescent: (opts: { rippleMax: number; maxIters: number; wEff: number;
-                       wTd: number; steps: number }) => Promise<void>;
+                       wTd: number; steps: number;
+                       algorithm: string; nSectors: number }) => Promise<void>;
   cancelDescent: () => Promise<void>;
   applyDescentBest: () => Promise<void>;
   loadLastDescent: () => Promise<void>;   // re-hydrate the last run's charts from the backend
@@ -825,7 +826,7 @@ export const useMotorStore = create<MotorState>()(
       descentRunning: false,
       descentState: null,
       descentError: null,
-      runDescent: async ({ rippleMax, maxIters, wEff, wTd, steps }) => {
+      runDescent: async ({ rippleMax, maxIters, wEff, wTd, steps, algorithm, nSectors }) => {
         const { sweepConfig } = get();
         // Variables = every active (non-fixed) sweep/optimize entry. Bounds and
         // perturbation step are resolved server-side from the schema; the descent
@@ -850,6 +851,7 @@ export const useMotorStore = create<MotorState>()(
               ripple_max_pct: rippleMax, w_eff: wEff, w_td: wTd,
               max_iters: maxIters, steps_per_period: steps,
               mesh_size_mm, min_size_mm,
+              algorithm, n_sectors: nSectors,
             }),
           });
           if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);

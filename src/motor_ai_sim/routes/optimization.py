@@ -48,16 +48,18 @@ _SCAN_WORKERS = 5            # concurrent FEM subprocesses
 def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
                      coil_temp_c: float, n_periods: float = 1.0,
                      gamma_deg: float = 0.0, mesh_size_mm: float = 4.0,
-                     min_size_mm: float = 0.3) -> Dict[str, Any]:
+                     min_size_mm: float = 0.3, n_sectors: int = -1) -> Dict[str, Any]:
     """Evaluate ONE (geometry, current, γ) with the real sliding-band transient
     in an isolated subprocess (FEM/LLVM crash → failed design, not a dead API).
     Rebuilds the CadQuery geometry + gmsh mesh for the candidate in-memory.
-    ``steps`` frames over ``n_periods`` of the electrical period."""
+    ``steps`` frames over ``n_periods`` of the electrical period.  n_sectors=-1
+    = full disk (accurate ripple); 4 = ¼ sector (≈3× faster, for quick debug)."""
     import subprocess, sys, json
     spec = json.dumps({"overrides": overrides, "current_a": current_a,
                        "steps": int(steps), "coil_temp_c": float(coil_temp_c),
                        "n_periods": float(n_periods), "gamma_deg": float(gamma_deg),
-                       "mesh_size_mm": float(mesh_size_mm), "min_size_mm": float(min_size_mm)})
+                       "mesh_size_mm": float(mesh_size_mm), "min_size_mm": float(min_size_mm),
+                       "n_sectors": int(n_sectors)})
     try:
         proc = subprocess.run(
             [sys.executable, "-m", "motor_ai_sim.optimization.refine_proc"],
@@ -486,6 +488,12 @@ class DescentRequest(BaseModel):
     coil_temp_c: float = 120.0
     mesh_size_mm: float = 4.0
     min_size_mm: float = 0.3
+    # 'cmaes' = Covariance-Matrix-Adaptation ES (derivative-free, noise-robust,
+    # default); 'gradient' = the original finite-difference gradient descent.
+    algorithm: str = "cmaes"
+    # FEM symmetry for the evaluation: -1 = full disk (accurate ripple, default);
+    # 4 = ¼ sector (~3× faster, for quick algorithm debugging).
+    n_sectors: int = -1
     run_id: str = ""
 
 
@@ -526,7 +534,8 @@ def _descent_cost(m: Dict[str, Any], base: Dict[str, Any],
 
 
 def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
-                    steps, coil_temp, mesh_size, min_size, max_iters, run_id) -> None:
+                    steps, coil_temp, mesh_size, min_size, max_iters, run_id,
+                    n_sectors=-1) -> None:
     from concurrent.futures import ThreadPoolExecutor, as_completed
     try:
         cfg = get_config()
@@ -549,7 +558,7 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
         def evalx(xx):
             return _subprocess_eval(xx, I, steps, coil_temp, n_periods=1.0,
                                     gamma_deg=g, mesh_size_mm=mesh_size,
-                                    min_size_mm=min_size)
+                                    min_size_mm=min_size, n_sectors=n_sectors)
 
         n_evals = 0
         b = evalx(x); n_evals += 1
@@ -695,9 +704,127 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
             _descent_state["running"] = False
 
 
+def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
+                  steps, coil_temp, mesh_size, min_size, max_iters, run_id,
+                  n_sectors=-1) -> None:
+    """Covariance-Matrix-Adaptation Evolution Strategy — derivative-free,
+    noise-robust geometry search.  Same penalised cost as the gradient descent
+    (−(eff/eff0)^w_eff·(td/td0)^w_td + λ·max(0, ripple−ripple_max)), evaluated on
+    a POPULATION per generation (parallel FEM).  Variables are normalised to
+    [0,1] so their very different physical scales don't bias the search.  Writes
+    the SAME _descent_state the UI already renders (baseline/best/history/points)
+    so the existing charts work unchanged."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    import numpy as np
+    try:
+        import cma
+    except Exception as e:  # noqa: BLE001
+        with _descent_lock:
+            _descent_state.update(error=f"cma package not installed: {e}", running=False)
+        return
+    try:
+        cfg = get_config()
+        geo0 = dict(cfg.get("geometry", {}))
+        I = float(op.get("current_a", 85.0)); g = float(op.get("gamma_deg", 0.0))
+        names = [v["name"] for v in var_specs]
+        lo = np.array([float(v["lo"]) for v in var_specs])
+        hi = np.array([float(v["hi"]) for v in var_specs])
+        span = np.maximum(hi - lo, 1e-9)
+        is_int = [bool(v.get("is_int")) for v in var_specs]
+
+        def to_geom(xn):
+            phys = lo + np.clip(np.asarray(xn, float), 0.0, 1.0) * span
+            return {nm: (float(round(phys[i])) if is_int[i] else float(phys[i]))
+                    for i, nm in enumerate(names)}
+
+        def evalx(d):
+            return _subprocess_eval(d, I, steps, coil_temp, n_periods=1.0,
+                                    gamma_deg=g, mesh_size_mm=mesh_size,
+                                    min_size_mm=min_size, n_sectors=n_sectors)
+
+        x0n = np.clip((np.array([float(geo0.get(nm, lo[i])) for i, nm in enumerate(names)]) - lo) / span, 0.0, 1.0)
+        b = evalx(to_geom(x0n)); n_evals = 1
+        if not b.get("ok"):
+            with _descent_lock:
+                _descent_state.update(error=f"baseline eval failed: {b.get('error')}", running=False)
+            return
+        base = b["res"]
+        cost0, F0 = _descent_cost(base, base, ripple_max, w_eff, w_td, lam)
+        best = {"x": to_geom(x0n), "metrics": base, "cost": cost0, "F": F0}
+
+        def _bstate():
+            return {"metrics": _msum(best["metrics"]), "cost": round(best["cost"], 5),
+                    "F": round(best["F"], 5), "x": dict(best["x"])}
+        def _hrow(it, m, c, F, xd):
+            return {"iter": it, **_msum(m), "cost": round(c, 5), "F": round(F, 5),
+                    "x": {k: round(float(v), 4) for k, v in xd.items()}}
+
+        history = [_hrow(0, base, cost0, F0, best["x"])]
+        all_pts = [p for p in [_pt(b, "baseline")] if p]
+        with _descent_lock:
+            _descent_state.update(running=True, iter=0, max_iters=max_iters, n_evals=n_evals,
+                                  baseline=_msum(base), best=_bstate(), current=_msum(base),
+                                  history=list(history), error=None, grad={}, points=list(all_pts),
+                                  variables=[{"name": v["name"], "lo": v["lo"], "hi": v["hi"],
+                                              "step": v["step"]} for v in var_specs])
+
+        es = cma.CMAEvolutionStrategy(list(x0n), 0.25,
+                                      {"bounds": [0.0, 1.0], "maxiter": int(max_iters),
+                                       "verbose": -9, "seed": 12345})
+        it = 0
+        while not es.stop():
+            with _descent_lock:
+                if _descent_state["cancel"]:
+                    break
+            sols = es.ask()
+            outs = [None] * len(sols)
+            with ThreadPoolExecutor(max_workers=_SCAN_WORKERS) as ex:
+                futs = {ex.submit(evalx, to_geom(s)): i for i, s in enumerate(sols)}
+                for fut in as_completed(futs):
+                    outs[futs[fut]] = fut.result()
+            n_evals += len(sols)
+            costs = []
+            for i, out in enumerate(outs):
+                if out and out.get("ok"):
+                    c, Fv = _descent_cost(out["res"], base, ripple_max, w_eff, w_td, lam)
+                    p = _pt(out, "cmaes")
+                    if p:
+                        all_pts.append(p)
+                    if c < best["cost"] - 1e-9:
+                        best = {"x": to_geom(sols[i]), "metrics": out["res"], "cost": c, "F": Fv}
+                else:
+                    c = 1e6                       # failed eval → repelled
+                costs.append(c)
+            es.tell(sols, costs)
+            it += 1
+            history.append(_hrow(it, best["metrics"], best["cost"], best["F"], best["x"]))
+            with _descent_lock:
+                _descent_state.update(iter=it, n_evals=n_evals, best=_bstate(),
+                                      current=_msum(best["metrics"]), history=list(history),
+                                      points=list(all_pts))
+        with _descent_lock:
+            _descent_state["result"] = {
+                "best": {"x": best["x"],
+                         "overrides": {k: round(float(v), 4) for k, v in best["x"].items()},
+                         "metrics": _msum(best["metrics"]), "cost": round(best["cost"], 5),
+                         "F": round(best["F"], 5)},
+                "baseline": _msum(base), "history": list(history), "n_evals": n_evals,
+                "operating_point": op, "ripple_max_pct": ripple_max,
+                "weights": {"w_eff": w_eff, "w_td": w_td, "lambda": lam},
+                "algorithm": "cmaes"}
+    except Exception as e:  # noqa: BLE001
+        log.exception("CMA-ES failed")
+        with _descent_lock:
+            _descent_state["error"] = str(e)
+    finally:
+        with _descent_lock:
+            _descent_state["running"] = False
+
+
 @router.post("/descent/start")
 def descent_start(req: DescentRequest):
-    """Start a background gradient/coordinate descent (fixed current+rpm)."""
+    """Start a background geometry optimization (fixed current+rpm+γ).
+    algorithm='cmaes' (default) → CMA-ES; 'gradient' → finite-diff descent."""
     with _descent_lock:
         if _descent_state["running"]:
             raise HTTPException(status_code=409, detail="a descent is already running")
@@ -740,6 +867,9 @@ def descent_start(req: DescentRequest):
     mesh_size = max(1.0, min(float(req.mesh_size_mm), 12.0))
     min_size  = max(0.1, min(float(req.min_size_mm), 3.0))
     max_iters = max(1, min(int(req.max_iters), 40))
+    n_sectors = int(req.n_sectors)
+    algo      = (req.algorithm or "cmaes").strip().lower()
+    worker    = _cmaes_worker if algo == "cmaes" else _descent_worker
 
     with _descent_lock:
         _descent_state.update({"running": True, "iter": 0, "max_iters": max_iters,
@@ -747,12 +877,14 @@ def descent_start(req: DescentRequest):
                                "history": [], "baseline": None, "result": None,
                                "run_id": req.run_id, "error": None, "cancel": False})
     threading.Thread(
-        target=_descent_worker,
+        target=worker,
         args=(var_specs, op, float(req.ripple_max_pct), float(req.w_eff),
               float(req.w_td), float(req.penalty_lambda), steps,
-              float(req.coil_temp_c), mesh_size, min_size, max_iters, req.run_id),
+              float(req.coil_temp_c), mesh_size, min_size, max_iters, req.run_id,
+              n_sectors),
         daemon=True).start()
-    return {"started": True, "n_variables": len(var_specs), "max_iters": max_iters,
+    return {"started": True, "algorithm": algo, "n_sectors": n_sectors,
+            "n_variables": len(var_specs), "max_iters": max_iters,
             "variables": [s["name"] for s in var_specs], "steps_per_period": steps}
 
 

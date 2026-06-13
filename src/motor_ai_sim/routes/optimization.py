@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 import re
 import threading
 from datetime import datetime
@@ -42,7 +43,22 @@ _scan_state: Dict[str, Any] = {
     "run_id": "", "error": None, "cancel": False,
 }
 _scan_lock = threading.Lock()
-_SCAN_WORKERS = 5            # concurrent FEM subprocesses
+# Concurrent FEM subprocesses.  Each refine_proc is one process pinned to a
+# single core, so this is effectively "how many cores the optimizer uses".
+# Default to (physical cores − 2): use most of the box but leave ~2 cores for
+# the uvicorn event loop + the descent daemon thread, so /progress polling and
+# the live charts stay responsive.  Override with FEM_SCAN_WORKERS.
+def _scan_worker_count() -> int:
+    env = os.environ.get("FEM_SCAN_WORKERS")
+    if env:
+        try:
+            return max(1, int(env))
+        except ValueError:
+            pass
+    logical = os.cpu_count() or 8
+    physical = logical // 2 if logical > 4 else logical   # SMT/HT → physical ≈ logical/2
+    return max(2, physical - 2)
+_SCAN_WORKERS = _scan_worker_count()   # e.g. 10 on a 12-physical-core box
 
 
 def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,

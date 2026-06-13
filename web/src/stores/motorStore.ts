@@ -219,8 +219,8 @@ export const useMotorStore = create<MotorState>()(
       sweepConfig: {
         variations: {},
         operatingPoints: [
-          { current_a: 80, rpm: 3950 },
-          { current_a: 88, rpm: 3950 },
+          { current_a: 80, rpm: 3950, gamma_deg: 0 },
+          { current_a: 88, rpm: 3950, gamma_deg: 0 },
         ],
         rippleThreshold: 0.05,
       },
@@ -846,7 +846,7 @@ export const useMotorStore = create<MotorState>()(
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               variables,
-              operating_point: { gamma_deg: 0, current_a: op0.current_a, rpm: op0.rpm },
+              operating_point: { gamma_deg: op0.gamma_deg ?? 0, current_a: op0.current_a, rpm: op0.rpm },
               ripple_max_pct: rippleMax, w_eff: wEff, w_td: wTd,
               max_iters: maxIters, steps_per_period: steps,
               mesh_size_mm, min_size_mm,

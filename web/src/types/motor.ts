@@ -143,6 +143,7 @@ export type VariationConfig = Record<string, ParameterVariation>;
 export interface OperatingPoint {
   current_a: number;
   rpm: number;
+  gamma_deg?: number;   // load (current-vector) angle; descent/scan operate at this γ
 }
 
 export interface SweepConfig {

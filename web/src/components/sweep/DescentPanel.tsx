@@ -151,7 +151,7 @@ const DescentPanel: React.FC = () => {
       </Box>
 
       <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
-        Fixed operating point: <strong>{op0.current_a} A @ {op0.rpm} rpm</strong> · variables:{' '}
+        Fixed operating point: <strong>{op0.current_a} A @ {op0.rpm} rpm, γ={op0.gamma_deg ?? 0}°</strong> · variables:{' '}
         <strong>{activeVars.length}</strong> · ripple ≤ <strong>{rippleMax.toFixed(1)}%</strong>{' '}
         (Torque Ripple Constraint slider). Only whitelisted variables are varied.
       </Typography>

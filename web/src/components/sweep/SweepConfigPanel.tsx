@@ -348,6 +348,15 @@ const SweepConfigPanel: React.FC = () => {
                       InputProps={{ endAdornment: <InputAdornment position="end">RPM</InputAdornment> }}
                       inputProps={{ min: 0, step: 100 }}
                     />
+                    <TextField
+                      label="Load angle γ"
+                      size="small"
+                      type="number"
+                      value={sweepConfig.operatingPoints[i].gamma_deg ?? 0}
+                      onChange={e => updateOperatingPoint(i, { gamma_deg: parseFloat(e.target.value) })}
+                      InputProps={{ endAdornment: <InputAdornment position="end">°</InputAdornment> }}
+                      inputProps={{ step: 1 }}
+                    />
                   </Box>
                 </CardContent>
               </Card>

@@ -126,6 +126,26 @@ const DescentPanel: React.FC = () => {
   const [round, setRound]         = useState(0);      // 1-based walk round while auto-walking
   const [walking, setWalking]     = useState(false);  // an auto-walk sequence (≥1 round) is in flight
   const walkCancel = useRef(false);
+  const localRun = useRef(false);   // true while THIS panel is the one running (its runDescent polls)
+
+  // Live mirror: while a run is in progress server-side (even one started in
+  // another tab/browser), poll progress so EVERY open panel shows it live.  Skips
+  // when this panel started the run (its own runDescent already polls).
+  useEffect(() => {
+    if (!connectedToApi) return;
+    let alive = true;
+    let timer: ReturnType<typeof setTimeout>;
+    const tick = async () => {
+      if (!alive) return;
+      if (!localRun.current) await loadLastDescent();
+      if (!alive) return;
+      const running = (useMotorStore.getState().descentState as any)?.running;
+      timer = setTimeout(tick, running ? 1500 : 4000);
+    };
+    timer = setTimeout(tick, 1500);
+    return () => { alive = false; clearTimeout(timer); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connectedToApi]);
 
   const activeVars = Object.entries(sweepConfig.variations)
     .filter(([, v]) => v.mode !== 'fixed').map(([n]) => n);
@@ -181,11 +201,12 @@ const DescentPanel: React.FC = () => {
   const phase = st.phase as string | undefined;
   const mtpaG = st.mtpa_gamma_deg;
   const genText = phase === 'mtpa'     ? 'MTPA γ — поиск угла макс. момента…'
+                : phase === 'baseline' ? 'расчёт опорной точки (baseline)…'
                 : phase === 'starting' ? 'построение сетки…'
                 : descentRunning       ? `поколение ${st.iter ?? 0}/${st.max_iters ?? maxIters}`
                 : 'готово';
   const statusText = ((walking && autoWalk) ? `Раунд ${round}/${maxRounds} · ` : '') + genText;
-  const busyIndeterminate = phase === 'mtpa' || phase === 'starting';
+  const busyIndeterminate = phase === 'mtpa' || phase === 'baseline' || phase === 'starting';
   const genPct = Math.min(100, Math.round(100 * (Number(st.iter) || 0) / Math.max(1, Number(st.max_iters) || maxIters)));
   const gradData = variables
     .map((v: any) => ({ name: v.name, dir: -(grad[v.name] ?? 0) }))
@@ -218,6 +239,7 @@ const DescentPanel: React.FC = () => {
   const launch = async () => {
     setApplied(false);
     walkCancel.current = false;
+    localRun.current = true;
     setWalking(true);
     const cap = autoWalk ? Math.max(1, maxRounds) : 1;
     try {
@@ -233,6 +255,7 @@ const DescentPanel: React.FC = () => {
     } finally {
       setWalking(false);
       setRound(0);
+      localRun.current = false;
     }
   };
 

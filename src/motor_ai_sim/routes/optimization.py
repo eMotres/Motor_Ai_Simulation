@@ -688,16 +688,18 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
             # always lands inside the ±2 % torque band → ONE solve.  Only on a miss
             # do we rescale (T≈linear in I) and solve again, then warm-start the next.
             if target_torque and target_torque > 0:
-                o1 = _eval_at(xx, warm[0])
-                if not o1.get("ok"):
+                probe = warm[0]                      # snapshot ONCE: parallel evals share warm[],
+                o1 = _eval_at(xx, probe)             # so T1 and I2 MUST use the same current, else
+                if not o1.get("ok"):                 # the rescale lands at the wrong torque (race).
                     return o1
                 T1 = float(o1["res"].get("T_em_Nm", 0.0) or 0.0)
                 if T1 <= 1e-6:
                     return o1
                 if abs(T1 - target_torque) <= _torque_tol * target_torque:
-                    return o1                       # already in band → skip 2nd solve
-                I2 = min(400.0, max(2.0, warm[0] * target_torque / T1))
-                warm[0] = I2                         # warm-start the next probe (benign race)
+                    warm[0] = probe                  # this current works → next warm-start
+                    return o1                        # already in band → skip 2nd solve
+                I2 = min(400.0, max(2.0, probe * target_torque / T1))
+                warm[0] = I2                          # warm-start the next probe
                 return _eval_at(xx, I2)
             return _eval_at(xx, I)
 
@@ -713,6 +715,9 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                 with _descent_lock:
                     _descent_state["mtpa_gamma_deg"] = g
 
+        with _descent_lock:
+            _descent_state["phase"] = "baseline"
+        _save_descent_state()
         n_evals = 0
         b = evalx(x); n_evals += 1
         if not b.get("ok"):
@@ -906,15 +911,17 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
             # probe at the last geometry's rated current usually lands in band → one
             # solve; only a miss triggers a rescale + 2nd solve.
             if target_torque and target_torque > 0:
-                o1 = _eval_at(d, warm[0])
+                probe = warm[0]                      # snapshot ONCE (parallel evals share warm[])
+                o1 = _eval_at(d, probe)
                 if not o1.get("ok"):
                     return o1
                 T1 = float(o1["res"].get("T_em_Nm", 0.0) or 0.0)
                 if T1 <= 1e-6:
                     return o1
                 if abs(T1 - target_torque) <= _torque_tol * target_torque:
+                    warm[0] = probe
                     return o1
-                I2 = min(400.0, max(2.0, warm[0] * target_torque / T1))
+                I2 = min(400.0, max(2.0, probe * target_torque / T1))
                 warm[0] = I2
                 return _eval_at(d, I2)
             return _eval_at(d, I)
@@ -931,6 +938,9 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                 g = _gm
                 with _descent_lock:
                     _descent_state["mtpa_gamma_deg"] = g
+        with _descent_lock:
+            _descent_state["phase"] = "baseline"
+        _save_descent_state()
         b = evalx(to_geom(x0n)); n_evals = 1
         if not b.get("ok"):
             with _descent_lock:

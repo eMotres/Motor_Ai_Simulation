@@ -921,7 +921,7 @@ export const useMotorStore = create<MotorState>()(
           const r = await fetch(`${API_BASE_URL}/api/optimization/descent/progress`);
           if (!r.ok) return;
           const st = await r.json();
-          if (st && (((st.history?.length ?? 0) > 0) || ((st.points?.length ?? 0) > 0))) {
+          if (st && (st.running || ((st.history?.length ?? 0) > 0) || ((st.points?.length ?? 0) > 0))) {
             set({ descentState: st, descentRunning: !!st.running });
           }
         } catch { /* ignore */ }

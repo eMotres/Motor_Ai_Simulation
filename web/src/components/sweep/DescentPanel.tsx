@@ -200,12 +200,12 @@ const DescentPanel: React.FC = () => {
   // round is frontend-local.
   const phase = st.phase as string | undefined;
   const mtpaG = st.mtpa_gamma_deg;
-  const genText = phase === 'mtpa'     ? 'MTPA γ — поиск угла макс. момента…'
-                : phase === 'baseline' ? 'расчёт опорной точки (baseline)…'
-                : phase === 'starting' ? 'построение сетки…'
-                : descentRunning       ? `поколение ${st.iter ?? 0}/${st.max_iters ?? maxIters}`
-                : 'готово';
-  const statusText = ((walking && autoWalk) ? `Раунд ${round}/${maxRounds} · ` : '') + genText;
+  const genText = phase === 'mtpa'     ? 'MTPA γ — finding max-torque angle…'
+                : phase === 'baseline' ? 'baseline solve…'
+                : phase === 'starting' ? 'building mesh…'
+                : descentRunning       ? `generation ${st.iter ?? 0}/${st.max_iters ?? maxIters}`
+                : 'done';
+  const statusText = ((walking && autoWalk) ? `Round ${round}/${maxRounds} · ` : '') + genText;
   const busyIndeterminate = phase === 'mtpa' || phase === 'baseline' || phase === 'starting';
   const genPct = Math.min(100, Math.round(100 * (Number(st.iter) || 0) / Math.max(1, Number(st.max_iters) || maxIters)));
   const gradData = variables
@@ -591,24 +591,24 @@ const DescentPanel: React.FC = () => {
           <Typography variant="caption" sx={{ display: 'block', fontWeight: 700, mb: 0.5,
                       color: softPinned.length ? '#f59e0b' : '#22c55e' }}>
             {softPinned.length
-              ? `⚠ ${boundary.length} переменн${boundary.length === 1 ? 'ая' : 'ых'} на границе диапазона`
-              : '✓ упёрлись в физический предел — оптимум найден'}
+              ? `⚠ ${boundary.length} variable${boundary.length === 1 ? '' : 's'} at the range boundary`
+              : '✓ hit the physical limit — optimum found'}
           </Typography>
           {boundary.map((f) => (
             <Typography key={f.name} variant="caption"
               sx={{ display: 'block', fontSize: 10.5, color: 'text.secondary' }}>
               <strong>{f.label}</strong>: {f.value.toFixed(2)} {f.pinned === 'high' ? '↑' : '↓'}{' '}
-              край [{f.min.toFixed(2)} … {f.max.toFixed(2)}]
+              edge [{f.min.toFixed(2)} … {f.max.toFixed(2)}]
               {f.atHard
-                ? <span style={{ color: '#ef4444' }}> · физ. предел</span>
-                : <span style={{ color: '#f59e0b' }}> · можно сдвинуть окно</span>}
+                ? <span style={{ color: '#ef4444' }}> · physical limit</span>
+                : <span style={{ color: '#f59e0b' }}> · can shift window</span>}
             </Typography>
           ))}
           {softPinned.length > 0 && (
             <Button variant="outlined" color="warning" size="small" sx={{ mt: 0.75 }}
               startIcon={<TrendingDownIcon />} disabled={!connectedToApi}
               onClick={continueWalk}>
-              Сдвинуть окно и продолжить ({softPinned.length})
+              Shift window & continue ({softPinned.length})
             </Button>
           )}
         </Box>

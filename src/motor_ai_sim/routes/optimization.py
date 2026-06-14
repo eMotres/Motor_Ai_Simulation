@@ -777,14 +777,14 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                     outs[(nm, sg)] = out
                     n_evals += 1
                     _consider(pxx, out)                   # track global best
-            for o in outs.values():                       # log gradient probes
-                p = _pt(o, "grad")
-                if p:
-                    all_pts.append(p)
+                    p = _pt(out, "grad")                  # publish per-eval (real-time chart)
+                    if p:
+                        all_pts.append(p)
+                    with _descent_lock:
+                        _descent_state["n_evals"] = n_evals
+                        _descent_state["points"] = list(all_pts[-1200:])
+                        _descent_state["best"] = _best_state()
             with _descent_lock:
-                _descent_state["n_evals"] = n_evals
-                _descent_state["points"] = list(all_pts[-1200:])
-                _descent_state["best"] = _best_state()
                 if _descent_state["cancel"]:
                     break
 
@@ -976,30 +976,37 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                     break
             sols = es.ask()
             outs = [None] * len(sols)
+            cost_by_i = {}
             with ThreadPoolExecutor(max_workers=_SCAN_WORKERS) as ex:
                 futs = {ex.submit(evalx, to_geom(s)): i for i, s in enumerate(sols)}
                 for fut in as_completed(futs):
-                    outs[futs[fut]] = fut.result()
-            n_evals += len(sols)
-            costs = []
-            for i, out in enumerate(outs):
-                if out and out.get("ok"):
-                    c, Fv = _descent_cost(out["res"], base, ripple_max, w_eff, w_td, lam, v_peak_limit)
-                    p = _pt(out, "cmaes")
-                    if p:
-                        all_pts.append(p)
-                    if c < best["cost"] - 1e-9:
-                        best = {"x": to_geom(sols[i]), "metrics": out["res"], "cost": c, "F": Fv}
-                else:
-                    c = 1e6                       # failed eval → repelled
-                costs.append(c)
+                    i = futs[fut]
+                    out = fut.result()
+                    outs[i] = out
+                    n_evals += 1
+                    if out and out.get("ok"):
+                        c, Fv = _descent_cost(out["res"], base, ripple_max, w_eff, w_td, lam, v_peak_limit)
+                        cost_by_i[i] = c
+                        p = _pt(out, "cmaes")
+                        if p:
+                            all_pts.append(p)
+                        if c < best["cost"] - 1e-9:
+                            best = {"x": to_geom(sols[i]), "metrics": out["res"], "cost": c, "F": Fv}
+                    else:
+                        cost_by_i[i] = 1e6        # failed eval → repelled
+                    # Publish per-EVAL (not once per generation) so the objective-space
+                    # chart fills in real time as each FEM solve lands.
+                    with _descent_lock:
+                        _descent_state["n_evals"] = n_evals
+                        _descent_state["points"] = list(all_pts)
+                        _descent_state["best"] = _bstate()
+                        _descent_state["current"] = _msum(best["metrics"])
+            costs = [cost_by_i.get(i, 1e6) for i in range(len(sols))]
             es.tell(sols, costs)
             it += 1
             history.append(_hrow(it, best["metrics"], best["cost"], best["F"], best["x"]))
             with _descent_lock:
-                _descent_state.update(iter=it, n_evals=n_evals, best=_bstate(),
-                                      current=_msum(best["metrics"]), history=list(history),
-                                      points=list(all_pts))
+                _descent_state.update(iter=it, history=list(history))
             _save_descent_state()   # checkpoint each generation (survives a mid-run restart)
         with _descent_lock:
             _descent_state["result"] = {
@@ -1085,6 +1092,7 @@ def descent_start(req: DescentRequest):
         _descent_state.update({"running": True, "iter": 0, "max_iters": max_iters,
                                "n_evals": 0, "best": None, "current": None,
                                "history": [], "baseline": None, "result": None, "phase": "starting",
+                               "points": [], "grad": {}, "mtpa_gamma_deg": None,
                                "run_id": req.run_id, "error": None, "cancel": False})
     threading.Thread(
         target=worker,

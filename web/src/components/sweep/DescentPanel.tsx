@@ -85,6 +85,12 @@ const DescentPanel: React.FC = () => {
   // Load-lines (current-sweep overlay) are a disambiguation tool — OFF by default,
   // shown on demand after a run when two candidates are too close to call.
   const [showLoadLines, setShowLoadLines] = useState(false);
+  // Objective-chart Y (efficiency) scaling: Auto re-fits to the meaningful designs
+  // as the run progresses; Manual fixes a range (the low infeasible points are not
+  // informative, so cut them).
+  const [yMode, setYMode] = useState<'auto' | 'manual'>('auto');
+  const [yMin, setYMin] = useState(90);
+  const [yMax, setYMax] = useState(97);
   useEffect(() => {
     fetch('/last_loadline.json').then(r => (r.ok ? r.json() : null))
       .then(d => { if (d && typeof d === 'object' && Object.keys(d).length) setLoadLines(d); })
@@ -227,6 +233,21 @@ const DescentPanel: React.FC = () => {
     .map((h: any) => ({ td: h.torque_per_mass, eff: (h.efficiency ?? 0) * 100, iter: h.iter, z: 2 }));
   const bestPt = best?.torque_per_mass != null
     ? [{ td: best.torque_per_mass, eff: (best.efficiency ?? 0) * 100, z: 6 }] : [];
+
+  // Y (efficiency) axis domain: Manual = fixed [yMin, yMax]; Auto = fit to the
+  // MEANINGFUL designs (descent path + best + feasible), padded — re-zooms as the
+  // run progresses and drops the uninformative low points (clipped via allowDataOverflow).
+  const yDomain: [number | string, number | string] = (() => {
+    if (yMode === 'manual') return [yMin, yMax];
+    const es = [...feasiblePts, ...trajPts, ...bestPt]
+      .map((p: any) => p.eff).filter((e: any) => Number.isFinite(e));
+    if (!es.length) return ['auto', 'auto'];
+    const hi = Math.max(...es);
+    // Cap the downward extent ~6% below the best so the uninformative low designs
+    // (failed / low-η trials) fall off the bottom; tightens further when data is tight.
+    const lo = Math.max(Math.min(...es), hi - 6);
+    return [Math.floor(lo - 0.5), Math.ceil(hi + 0.5)];
+  })();
 
   // Box-walking now runs SERVER-SIDE: with Auto-walk on we hand the backend
   // auto_expand + maxRounds and it re-centers the window + re-runs round after round
@@ -498,14 +519,35 @@ const DescentPanel: React.FC = () => {
               <span style={{ color: '#3b82f6' }}>descent path</span> ·{' '}
               <span style={{ color: '#fbbf24' }}>★ best</span>
             </Typography>
-            {history.length > 0 && loadLineDesigns.some(([, a]) => a.length > 1) && (
-              <Tooltip title="Overlay current-sweep load-lines for the finalist designs — a disambiguation tool for AFTER a run, when two candidates are too close to tell apart from the objective points alone. Each curve sweeps current; the ◆ marks the rated torque. Off by default to keep the chart clean." placement="top">
-                <ToggleButton value="ll" selected={showLoadLines} size="small"
-                  onChange={() => setShowLoadLines(v => !v)} sx={{ px: 1, py: 0, height: 24, fontSize: 10 }}>
-                  Load-lines
-                </ToggleButton>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap' }}>
+              <Tooltip title="Y-axis (efficiency) scaling. Auto = fit to the meaningful designs (descent path + best + feasible) and re-zoom as the run progresses, dropping the uninformative low points. Manual = fix the range below." placement="top">
+                <ToggleButtonGroup exclusive size="small" value={yMode}
+                  onChange={(_, m) => m && setYMode(m)} sx={{ height: 24 }}>
+                  <ToggleButton value="auto"   sx={{ px: 0.8, fontSize: 10 }}>Y: Auto</ToggleButton>
+                  <ToggleButton value="manual" sx={{ px: 0.8, fontSize: 10 }}>Manual</ToggleButton>
+                </ToggleButtonGroup>
               </Tooltip>
-            )}
+              {yMode === 'manual' && (
+                <>
+                  <TextField label="Y min" type="number" size="small" value={yMin}
+                    onChange={e => setYMin(Math.min(yMax - 0.5, +e.target.value || 0))}
+                    sx={{ width: 62 }} inputProps={{ step: 0.5, style: { fontSize: 10, padding: '2px 4px' } }}
+                    InputLabelProps={{ sx: { fontSize: 9 } }} />
+                  <TextField label="Y max" type="number" size="small" value={yMax}
+                    onChange={e => setYMax(Math.max(yMin + 0.5, +e.target.value || 100))}
+                    sx={{ width: 62 }} inputProps={{ step: 0.5, style: { fontSize: 10, padding: '2px 4px' } }}
+                    InputLabelProps={{ sx: { fontSize: 9 } }} />
+                </>
+              )}
+              {history.length > 0 && loadLineDesigns.some(([, a]) => a.length > 1) && (
+                <Tooltip title="Overlay current-sweep load-lines for the finalist designs — a disambiguation tool for AFTER a run, when two candidates are too close to tell apart from the objective points alone. Each curve sweeps current; the ◆ marks the rated torque. Off by default to keep the chart clean." placement="top">
+                  <ToggleButton value="ll" selected={showLoadLines} size="small"
+                    onChange={() => setShowLoadLines(v => !v)} sx={{ px: 1, py: 0, height: 24, fontSize: 10 }}>
+                    Load-lines
+                  </ToggleButton>
+                </Tooltip>
+              )}
+            </Box>
           </Box>
           {showLoadLines && loadLineDesigns.some(([, a]) => a.length > 1) && (
             <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: '12px', mb: 0.5 }}>
@@ -521,7 +563,7 @@ const DescentPanel: React.FC = () => {
                 <CartesianGrid strokeDasharray="3 3" opacity={0.15} />
                 <XAxis type="number" dataKey="td" name="Nm/kg" domain={['auto', 'auto']} tick={{ fontSize: 10 }}
                   label={{ value: 'Torque / mass  (Nm/kg)', position: 'insideBottom', offset: -10, fontSize: 11 }} />
-                <YAxis type="number" dataKey="eff" name="Eff %" domain={['auto', 'auto']} tick={{ fontSize: 10 }} width={48}
+                <YAxis type="number" dataKey="eff" name="Eff %" domain={yDomain} allowDataOverflow tick={{ fontSize: 10 }} width={48}
                   label={{ value: 'Efficiency %', angle: -90, position: 'insideLeft', fontSize: 11 }} />
                 <ZAxis type="number" dataKey="z" range={[10, 150]} />
                 <RTooltip cursor={{ strokeDasharray: '3 3' }}

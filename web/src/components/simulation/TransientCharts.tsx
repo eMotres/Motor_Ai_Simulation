@@ -148,6 +148,9 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
   const [busy,  setBusy]  = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState<ProgressInfo | null>(null);
+  // True when the shown result was RESTORED on open but its params differ from
+  // the current inputs (the backend flagged it stale) — a hint to press Run.
+  const [stale, setStale] = useState<boolean>(false);
 
   // Poll the backend /progress endpoint every 500 ms while a run is in
   // flight, so we can show "Frame X/N — Ys elapsed — ETA Zs" instead of
@@ -188,11 +191,14 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
     return () => window.removeEventListener('sim:stop', onStop);
   }, [runNonce]);
 
-  const run = () => {
+  const run = (restoreOnly = false) => {
     setBusy(true); setError(null);
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     const qs = new URLSearchParams({
+      // restore=true → on open, return the LAST saved transient (stale-flagged if
+      // params differ) instead of recomputing.  Only the Run button omits it.
+      restore:            String(restoreOnly),
       n_steps_per_period: String(steps),
       n_periods:          '1',
       gamma_deg:          String(gamma_deg),
@@ -251,7 +257,11 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
         const r = await fetch(`${API}/api/simulation/physics/fem_transient?${qs}`,
           { signal: ctrl.signal });
         if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
-        const d: TransientPayload = await r.json();
+        const d: TransientPayload & { restored?: boolean; stale?: boolean } = await r.json();
+        // restore=true with nothing ever saved → backend returns {restored:false}.
+        // Leave the panel empty (the "press Run" prompt) — do NOT recompute.
+        if (d.restored === false || !d.time_s) { setBusy(false); setError(null); return; }
+        setStale(!!d.stale);
         setData(d); setBusy(false);
         setError(null);
         persistLastTransient(d);            // remember it across reloads
@@ -283,10 +293,11 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
     if (!mountedRef.current) {
       mountedRef.current = true;
       const last = loadLastTransient();
-      if (last) setData(last);   // summary emitted by the effect below
+      if (last) { setData(last); return; }   // localStorage copy → show it, no compute
+      run(true);   // none locally → ask the backend for its persisted last (restore=true, no compute)
       return;
     }
-    if (runNonce > 0) run();
+    if (runNonce > 0) { setStale(false); run(); }   // user pressed Run → recompute fresh
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runNonce]);
 
@@ -376,6 +387,11 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
               <span style={{ color: '#475569', marginLeft: 6, fontSize: 11, cursor: 'help' }}>ⓘ</span>
             </Tooltip>
           </Typography>
+          {stale && (
+            <Typography sx={{ fontSize: 10, color: '#fbbf24' }}>
+              Showing the last computed run — current inputs differ. Press Run Simulation to recompute.
+            </Typography>
+          )}
           {data && (() => {
             const tpp = Tshown.length
               ? Math.max(...Tshown) - Math.min(...Tshown) : 0;

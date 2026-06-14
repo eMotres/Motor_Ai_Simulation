@@ -171,12 +171,14 @@ function App() {
     geometry,
     runPipeline,
     clearStlCache,
+    loadServerSweepConfig,
   } = useMotorStore();
 
   useEffect(() => {
     fetchGeometryFromApi();
     fetchSchemaFromApi();
-  }, [fetchGeometryFromApi, fetchSchemaFromApi]);
+    loadServerSweepConfig();
+  }, [fetchGeometryFromApi, fetchSchemaFromApi, loadServerSweepConfig]);
 
   // There's always a working motor ("my copy"): a brand-new user with none gets
   // one created from the current state, so every later edit has somewhere to

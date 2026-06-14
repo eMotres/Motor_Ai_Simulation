@@ -22,6 +22,7 @@ from motor_ai_sim.routes.optimization import router as optimization_router
 from motor_ai_sim.routes.presets import router as presets_router
 from motor_ai_sim.routes.catalog import router as catalog_router
 from motor_ai_sim.routes.saved_sims import router as saved_sims_router
+from motor_ai_sim.routes.sweep_config import router as sweep_config_router
 from motor_ai_sim.services.geometry_service import get_current_geometry, params_to_dict
 from motor_ai_sim import materials as mat_lib
 
@@ -64,6 +65,7 @@ app.include_router(optimization_router)
 app.include_router(presets_router)
 app.include_router(catalog_router)
 app.include_router(saved_sims_router)
+app.include_router(sweep_config_router)
 
 
 @app.on_event("startup")

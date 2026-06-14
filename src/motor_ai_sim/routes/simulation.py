@@ -1659,6 +1659,11 @@ def get_daxis_sweep(
 # ─────────────────────────────────────────────────────────────────────────────
 
 _fem_transient_cache: Dict[tuple, Dict] = {}
+# The single most-recent transient (key + result), kept so the web UI can RESTORE
+# the last simulation on open (?restore=true) — showing it stale-flagged instead
+# of recomputing when the requested params don't match.  Updated on every save
+# and repopulated from disk at startup.
+_last_transient_ref: Dict = {"key": None, "result": None}
 
 # ── Persist the last sliding-band transient to disk ──────────────────────────
 # So a re-run with the SAME params after a back-end restart is instant instead
@@ -1691,6 +1696,8 @@ def _save_last_transient(sb_key: tuple, result: Dict) -> None:
             _json.dump({"key": list(sb_key), "result": result}, fh,
                        default=_json_default)
         _os_t.replace(tmp, _transient_store_path())   # atomic
+        _last_transient_ref["key"] = tuple(sb_key)
+        _last_transient_ref["result"] = result
     except Exception as _e:
         log.warning("could not persist last transient: %s", _e)
 
@@ -1703,7 +1710,10 @@ def _load_last_transient_into_cache() -> None:
             blob = _json.load(fh)
         def _retuple(x):    # JSON turns tuples into lists — restore for hashing
             return tuple(_retuple(i) for i in x) if isinstance(x, list) else x
-        _fem_transient_cache[_retuple(blob["key"])] = blob["result"]
+        _key = _retuple(blob["key"])
+        _fem_transient_cache[_key] = blob["result"]
+        _last_transient_ref["key"] = _key
+        _last_transient_ref["result"] = blob["result"]
         log.info("restored last transient from %s", p)
     except Exception as _e:
         log.warning("could not restore last transient: %s", _e)
@@ -2037,6 +2047,7 @@ def get_fem_transient(
     demag:               bool  = False,   # ← per-element irreversible demagnetisation (de-rates Br → torque)
     torque_filter:       bool  = True,    # ← band-limit T(t) to physical 6·k orders (off = raw)
     pole_copy:           bool  = False,   # ← bit-identical pole/slot template-copy mesh
+    restore:             bool  = False,   # ← on open: return the LAST saved transient (stale if params differ) instead of recomputing
 ):
     """Transient FEM analysis — runs N solves per electrical period and
     returns time-resolved T(t), losses(t) and V_phase(t).
@@ -2070,6 +2081,18 @@ def get_fem_transient(
                    tuple(sorted(_comp_mesh.items())))
         if not fresh and _sb_key in _fem_transient_cache:
             return _fem_transient_cache[_sb_key]
+        # RESTORE path (page open / tab switch): NEVER recompute.  Hand back the
+        # last saved transient — flagged stale if its params differ from those
+        # requested — or signal that nothing has ever been computed so the UI can
+        # show "press Run" instead of spinning up a solve.
+        if restore:
+            _ref_res = _last_transient_ref.get("result")
+            if _ref_res is not None:
+                _out = dict(_ref_res)
+                _out["restored"] = True
+                _out["stale"] = (_last_transient_ref.get("key") != _sb_key)
+                return _out
+            return {"restored": False, "stale": False}
         # Serialise concurrent identical solves.  A duplicate request (shares the
         # run_id) or a React dev double-invoke would otherwise run a SECOND full
         # sliding-band solve in parallel AND clobber the shared progress global

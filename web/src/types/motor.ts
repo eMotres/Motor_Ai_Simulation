@@ -150,6 +150,13 @@ export interface SweepConfig {
   variations: VariationConfig;
   operatingPoints: [OperatingPoint, OperatingPoint];
   rippleThreshold: number;
+  // ── Rated-duty constraints (optional) ──────────────────────────────────────
+  /** Rated shaft torque to optimize at (Nm); current is solved per geometry. */
+  ratedTorqueNm?: number;
+  /** Inverter DC-bus voltage (V). */
+  vBusV?: number;
+  /** PWM scheme → usable peak-phase factor: svpwm=1/√3, sine=1/2, sixstep=2/π. */
+  modulation?: 'svpwm' | 'sine' | 'sixstep';
 }
 
 // ── Design optimization (Pareto search) ───────────────────────────────────────

@@ -156,6 +156,7 @@ interface MotorState {
   updateVariation: (paramName: string, variation: Partial<ParameterVariation>) => void;
   updateOperatingPoint: (index: 0 | 1, point: Partial<OperatingPoint>) => void;
   updateRippleThreshold: (threshold: number) => void;
+  updateSweepConstraints: (patch: Partial<SweepConfig>) => void;
   initVariationsFromSchema: () => void;
 
   // Design optimization (FEM Pareto scan)
@@ -179,7 +180,9 @@ interface MotorState {
   descentError: string | null;
   runDescent: (opts: { rippleMax: number; maxIters: number; wEff: number;
                        wTd: number; steps: number;
-                       algorithm: string; nSectors: number }) => Promise<void>;
+                       algorithm: string; nSectors: number;
+                       targetTorque?: number; vPeakLimit?: number;
+                       optimizeGamma?: boolean }) => Promise<void>;
   cancelDescent: () => Promise<void>;
   applyDescentBest: () => Promise<void>;
   loadLastDescent: () => Promise<void>;   // re-hydrate the last run's charts from the backend
@@ -190,7 +193,22 @@ interface MotorState {
   saveCurrentResult: (name: string) => Promise<void>;
   loadSaved: (id: string) => Promise<void>;
   deleteSaved: (id: string) => Promise<void>;
+  /** Hydrate sweepConfig from the backend so the selected variables follow the
+   *  user across browsers; seeds the server if it has none yet but this browser does. */
+  loadServerSweepConfig: () => Promise<void>;
 }
+
+// Sweep-config ↔ backend sync state (see loadServerSweepConfig + the subscription
+// after the store): _sweepHydrating suppresses echoing a server-driven hydrate
+// back to the server; _sweepSaveTimer debounces saves while the user edits.
+let _sweepHydrating = false;
+let _sweepSaveTimer: ReturnType<typeof setTimeout> | undefined;
+// A config counts as "real" only if ≥1 variable is actually selected
+// (mode !== 'fixed').  A fresh browser carries all schema params as 'fixed', so
+// guarding on this prevents an empty/just-loaded browser from seeding or saving
+// an all-'fixed' config that would clobber another browser's real selections.
+const _sweepSelected = (vars?: Record<string, { mode?: string }>) =>
+  vars ? Object.values(vars).filter((v) => v && v.mode && v.mode !== 'fixed').length : 0;
 
 export const useMotorStore = create<MotorState>()(
   persist(
@@ -224,6 +242,9 @@ export const useMotorStore = create<MotorState>()(
           { current_a: 88, rpm: 3950, gamma_deg: 0 },
         ],
         rippleThreshold: 0.05,
+        ratedTorqueNm: 30.5,
+        vBusV: 140,
+        modulation: 'svpwm',
       },
 
       setGeometryUpdating: (v) => set({ isGeometryUpdating: v }),
@@ -641,6 +662,11 @@ export const useMotorStore = create<MotorState>()(
           sweepConfig: { ...state.sweepConfig, rippleThreshold: threshold },
         })),
 
+      updateSweepConstraints: (patch) =>
+        set((state) => ({
+          sweepConfig: { ...state.sweepConfig, ...patch },
+        })),
+
       initVariationsFromSchema: () => {
         const { parameterSchema, geometry, sweepConfig } = get();
         const existing = sweepConfig.variations;
@@ -826,15 +852,21 @@ export const useMotorStore = create<MotorState>()(
       descentRunning: false,
       descentState: null,
       descentError: null,
-      runDescent: async ({ rippleMax, maxIters, wEff, wTd, steps, algorithm, nSectors }) => {
-        const { sweepConfig } = get();
-        // Variables = every active (non-fixed) sweep/optimize entry. Bounds and
-        // perturbation step are resolved server-side from the schema; the descent
-        // starts from the current config value of each.
+      runDescent: async ({ rippleMax, maxIters, wEff, wTd, steps, algorithm, nSectors, targetTorque, vPeakLimit, optimizeGamma }) => {
+        const { sweepConfig, geometry } = get();
+        // Variables = every active (non-fixed) entry.  OPTIMIZE vars search a
+        // SYMMETRIC ± deviation around the CURRENT geometry value (range tracks the
+        // live design, matching the UI's "value ± deviation"); SWEEP keeps its grid.
         const variables = Object.entries(sweepConfig.variations)
           .filter(([, v]) => v.mode !== 'fixed')
-          .map(([name, v]) => ({ name, min: Number(v.min), max: Number(v.max),
-                                 mode: v.mode, step: Number(v.step) }));
+          .map(([name, v]) => {
+            const cur = Number((geometry as Record<string, any>)[name]);
+            const dlt = (Number(v.max) - Number(v.min)) / 2;
+            const sym = v.mode === 'optimize' && Number.isFinite(cur) && dlt > 0;
+            return { name, min: sym ? cur - dlt : Number(v.min),
+                     max: sym ? cur + dlt : Number(v.max),
+                     mode: v.mode, step: Number(v.step) };
+          });
         // Fixed operating point = Sweep "Point 1" (current + rpm).
         const op0 = sweepConfig.operatingPoints[0];
         let mesh_size_mm = 4.0, min_size_mm = 0.3;
@@ -852,6 +884,9 @@ export const useMotorStore = create<MotorState>()(
               max_iters: maxIters, steps_per_period: steps,
               mesh_size_mm, min_size_mm,
               algorithm, n_sectors: nSectors,
+              target_torque_nm: targetTorque ?? 0,
+              v_peak_limit: vPeakLimit ?? 1e9,
+              optimize_gamma: optimizeGamma ?? true,
             }),
           });
           if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
@@ -891,6 +926,46 @@ export const useMotorStore = create<MotorState>()(
           }
         } catch { /* ignore */ }
       },
+      loadServerSweepConfig: async () => {
+        // Server-side sweep config so the selected variables follow the user
+        // across browsers (not trapped in one browser's localStorage).  The
+        // server wins on load; if the server has none yet but THIS browser has a
+        // config, seed the server so it then shows everywhere.
+        try {
+          const r = await fetch(`${API_BASE_URL}/api/sweep/config`);
+          if (!r.ok) return;
+          const { config } = await r.json();
+          const local = get().sweepConfig;
+          const srvVars = config?.variations && typeof config.variations === 'object'
+            ? config.variations : null;
+          if (srvVars && _sweepSelected(srvVars) > 0) {
+            // Server has a real config → it wins (this is what makes it
+            // browser-independent).
+            const ops = Array.isArray(config.operatingPoints) && config.operatingPoints.length === 2
+              ? config.operatingPoints : local.operatingPoints;
+            _sweepHydrating = true;
+            set({ sweepConfig: {
+              ...local,                       // keep any local-only fields
+              variations: srvVars,
+              operatingPoints: ops as [OperatingPoint, OperatingPoint],
+              rippleThreshold: typeof config.rippleThreshold === 'number'
+                ? config.rippleThreshold : local.rippleThreshold,
+              // rated-duty constraints follow the server too (cross-browser)
+              ratedTorqueNm: typeof config.ratedTorqueNm === 'number' ? config.ratedTorqueNm : local.ratedTorqueNm,
+              vBusV: typeof config.vBusV === 'number' ? config.vBusV : local.vBusV,
+              modulation: config.modulation ?? local.modulation,
+            } });
+            _sweepHydrating = false;
+          } else if (_sweepSelected(local.variations) > 0) {
+            // Server has nothing real yet, but THIS browser does → seed it so the
+            // selection then shows in every browser.
+            fetch(`${API_BASE_URL}/api/sweep/config`, {
+              method: 'PUT', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(local),
+            }).catch(() => {});
+          }
+        } catch { /* ignore */ }
+      },
     }),
     {
       name: 'motor-config-storage',
@@ -905,6 +980,29 @@ export const useMotorStore = create<MotorState>()(
     }
   )
 );
+
+// Mirror sweepConfig to the backend on every change (debounced) so the selected
+// variables / operating points / ripple limit follow the user across browsers,
+// not just the one that holds localStorage.  Hydrate is suppressed via the flag
+// so a server-driven load isn't echoed straight back.
+let _prevSweepConfig = useMotorStore.getState().sweepConfig;
+useMotorStore.subscribe((state) => {
+  if (state.sweepConfig === _prevSweepConfig) return;
+  _prevSweepConfig = state.sweepConfig;
+  if (_sweepHydrating) return;
+  // Never persist an all-'fixed' config — that's a fresh/just-loaded browser
+  // (e.g. right after the schema populates every param as 'fixed'), and saving
+  // it would wipe another browser's real selections off the server.
+  if (_sweepSelected(state.sweepConfig.variations) === 0) return;
+  clearTimeout(_sweepSaveTimer);
+  _sweepSaveTimer = setTimeout(() => {
+    fetch(`${API_BASE_URL}/api/sweep/config`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(useMotorStore.getState().sweepConfig),
+    }).catch(() => { /* offline / backend down — localStorage still holds it */ });
+  }, 600);
+});
 
 // Component visibility keys
 export type CompKey = 'stator' | 'rotor' | 'magnets' | 'coils' | 'shaft' | 'in_band' | 'out_band';

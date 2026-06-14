@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Box, Typography, Button, TextField, Tooltip, Divider, Chip,
-  CircularProgress, Table, TableBody, TableCell, TableHead, TableRow,
+  CircularProgress, LinearProgress, Table, TableBody, TableCell, TableHead, TableRow,
   ToggleButton, ToggleButtonGroup,
 } from '@mui/material';
 import TrendingDownIcon from '@mui/icons-material/TrendingDown';
@@ -11,7 +11,7 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip,
   ResponsiveContainer, Legend, BarChart, Bar, Cell, ReferenceLine,
-  ScatterChart, Scatter, ZAxis,
+  ScatterChart, Scatter, ZAxis, LabelList,
 } from 'recharts';
 import { useMotorStore } from '../../stores/motorStore';
 
@@ -30,11 +30,45 @@ import { useMotorStore } from '../../stores/motorStore';
 const fmtPct  = (v?: number) => (v == null ? '—' : `${(v * 100).toFixed(2)}%`);
 const fmtNum  = (v?: number, d = 2) => (v == null ? '—' : v.toFixed(d));
 
+type BoundaryFlag = {
+  name: string; label: string; value: number; min: number; max: number;
+  pinned: 'low' | 'high'; atHard: boolean;
+};
+
+/**
+ * Variables whose optimum landed within MARGIN of a window edge → the true
+ * optimum is probably OUTSIDE the ±deviation window (an "active constraint").
+ * atHard = the window is already at the schema's physical min/max, so it's a real
+ * limit (stop), not just a too-narrow window (soft → re-centerable by box-walking).
+ * Reads only what /descent/progress already returns (best.x + variables).
+ */
+function boundaryFlags(st: any, schema: any[], margin = 0.05): BoundaryFlag[] {
+  const best = st?.best?.x || st?.result?.best?.overrides || {};
+  const vars = st?.variables || st?.result?.variables || [];
+  const meta = new Map((schema || []).map((p: any) => [p.name, p]));
+  const out: BoundaryFlag[] = [];
+  for (const v of vars) {
+    const lo = Number(v.lo ?? v.min), hi = Number(v.hi ?? v.max);
+    const x = Number(best[v.name]);
+    if (!Number.isFinite(x) || !(hi > lo)) continue;
+    const m = margin * (hi - lo);
+    const pinned: 'low' | 'high' | null = x >= hi - m ? 'high' : x <= lo + m ? 'low' : null;
+    if (!pinned) continue;
+    const p: any = meta.get(v.name);
+    const hMin = p?.min, hMax = p?.max;
+    const atHard = (pinned === 'high' && hMax != null && hi >= Number(hMax) - 1e-9)
+                || (pinned === 'low'  && hMin != null && lo <= Number(hMin) + 1e-9);
+    out.push({ name: v.name, label: p?.label || v.name, value: x, min: lo, max: hi, pinned, atHard });
+  }
+  return out;
+}
+
 const DescentPanel: React.FC = () => {
   const {
-    sweepConfig, connectedToApi,
+    sweepConfig, connectedToApi, parameterSchema,
     descentRunning, descentState, descentError,
     runDescent, cancelDescent, applyDescentBest, loadLastDescent,
+    updateSweepConstraints,
   } = useMotorStore();
 
   // Re-hydrate the last run's charts from the backend on mount (survives reload).
@@ -42,6 +76,37 @@ const DescentPanel: React.FC = () => {
     if (!descentState && connectedToApi) loadLastDescent();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connectedToApi]);
+
+  // Load-line comparison (baseline vs optimized across current), served as a
+  // static file from web/public — efficiency vs torque/mass with current stepped
+  // along each curve, so a vertical (same Nm/kg) shows which design is more
+  // efficient at the same load.
+  const [loadLines, setLoadLines] = useState<Record<string, any[]> | null>(null);
+  useEffect(() => {
+    fetch('/last_loadline.json').then(r => (r.ok ? r.json() : null))
+      .then(d => { if (d && typeof d === 'object' && Object.keys(d).length) setLoadLines(d); })
+      .catch(() => {});
+  }, []);
+
+  // Seed the rated-duty constraint defaults once if the persisted config predates
+  // them, so they show + persist (server-side) without needing a manual edit.
+  useEffect(() => {
+    if (sweepConfig.ratedTorqueNm == null || sweepConfig.vBusV == null || sweepConfig.modulation == null) {
+      updateSweepConstraints({
+        ratedTorqueNm: sweepConfig.ratedTorqueNm ?? 30.5,
+        vBusV: sweepConfig.vBusV ?? 140,
+        modulation: sweepConfig.modulation ?? 'svpwm',
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Distinct from the scatter's own colors (green feasible / red infeasible /
+  // blue descent path / yellow best) so the overlaid finalist segments read clearly.
+  const LL_PALETTE = ['#f97316', '#a855f7', '#22d3ee', '#ec4899', '#fb923c', '#c084fc'];
+  const loadLineDesigns: [string, any[]][] = loadLines
+    ? Object.entries(loadLines).filter(([, a]) => Array.isArray(a) && a.length > 0)
+    : [];
 
   const [maxIters, setMaxIters] = useState(10);
   const [wEff, setWEff] = useState(1);
@@ -53,11 +118,42 @@ const DescentPanel: React.FC = () => {
   // ripple, default) vs ¼ sector (4, ~3× faster — good for quick debugging).
   const [algorithm, setAlgorithm] = useState<'cmaes' | 'gradient'>('cmaes');
   const [nSectors, setNSectors]   = useState<-1 | 4>(-1);
+  const [mtpa, setMtpa]           = useState(true);   // optimize γ (MTPA) before the geometry search
+  // Box-walking: keep re-centering the ±deviation window on the optimum until
+  // every variable settles inside its window (or hits a physical limit).
+  const [autoWalk, setAutoWalk]   = useState(false);
+  const [maxRounds, setMaxRounds] = useState(5);
+  const [round, setRound]         = useState(0);      // 1-based walk round while auto-walking
+  const [walking, setWalking]     = useState(false);  // an auto-walk sequence (≥1 round) is in flight
+  const walkCancel = useRef(false);
 
   const activeVars = Object.entries(sweepConfig.variations)
     .filter(([, v]) => v.mode !== 'fixed').map(([n]) => n);
   const rippleMax = sweepConfig.rippleThreshold * 100;
   const op0 = sweepConfig.operatingPoints[0];
+  // Rated-duty constraints → usable peak-phase voltage limit from the DC bus + PWM scheme.
+  const ratedTorque = sweepConfig.ratedTorqueNm ?? 30.5;
+  const vBus = sweepConfig.vBusV ?? 140;
+  const modulation = sweepConfig.modulation ?? 'svpwm';
+  const MOD_FACTOR: Record<string, number> = { svpwm: 1 / Math.sqrt(3), sine: 0.5, sixstep: 2 / Math.PI };
+  const vPeakLimit = vBus > 0 ? vBus * (MOD_FACTOR[modulation] ?? MOD_FACTOR.svpwm) : 1e9;
+  // Rated operating point ON each load line: interpolate where T = rated torque,
+  // so a diamond marks the duty point on every curve.
+  const ratedMarkers = (sweepConfig.ratedTorqueNm && sweepConfig.ratedTorqueNm > 0
+    ? loadLineDesigns.map(([name, arr], i) => {
+        const pts = (arr || []).filter((p: any) => typeof p.T === 'number')
+          .sort((a: any, b: any) => a.T - b.T);
+        for (let j = 0; j < pts.length - 1; j++) {
+          if (pts[j].T <= ratedTorque && ratedTorque <= pts[j + 1].T) {
+            const a = pts[j], b = pts[j + 1], f = (ratedTorque - a.T) / ((b.T - a.T) || 1);
+            return { name, color: LL_PALETTE[i % LL_PALETTE.length], z: 6,
+                     td: a.td + f * (b.td - a.td), eff: a.eff + f * (b.eff - a.eff),
+                     I: Math.round(a.I + f * (b.I - a.I)) };
+          }
+        }
+        return null;
+      }).filter(Boolean) as any[]
+    : []);
 
   const st: any = descentState || {};
   const base = st.baseline;
@@ -70,6 +166,27 @@ const DescentPanel: React.FC = () => {
   // variable, <0 → lowers it.  Visualises what the optimizer is doing right now.
   const grad: Record<string, number> = st.grad || {};
   const variables: any[] = st.variables || [];
+
+  // Boundary-active variables (optimum at a window edge).  Only meaningful for a
+  // finished run.  Soft = re-centerable; hard = window already at the schema's
+  // physical limit → a genuine constraint (the banner offers a one-click continue
+  // for the soft ones; box-walking does it automatically when Auto-walk is on).
+  const boundary = (!descentRunning && !walking && (best || st.result))
+    ? boundaryFlags(st, parameterSchema) : [];
+  const softPinned = boundary.filter((f) => !f.atHard);
+
+  // Live status: what the optimizer is doing right now (so a long run visibly
+  // works).  phase comes from the backend (mtpa γ sweep / optimizing); the walk
+  // round is frontend-local.
+  const phase = st.phase as string | undefined;
+  const mtpaG = st.mtpa_gamma_deg;
+  const genText = phase === 'mtpa'     ? 'MTPA γ — поиск угла макс. момента…'
+                : phase === 'starting' ? 'построение сетки…'
+                : descentRunning       ? `поколение ${st.iter ?? 0}/${st.max_iters ?? maxIters}`
+                : 'готово';
+  const statusText = ((walking && autoWalk) ? `Раунд ${round}/${maxRounds} · ` : '') + genText;
+  const busyIndeterminate = phase === 'mtpa' || phase === 'starting';
+  const genPct = Math.min(100, Math.round(100 * (Number(st.iter) || 0) / Math.max(1, Number(st.max_iters) || maxIters)));
   const gradData = variables
     .map((v: any) => ({ name: v.name, dir: -(grad[v.name] ?? 0) }))
     .filter((d: any) => Number.isFinite(d.dir) && d.dir !== 0)
@@ -89,10 +206,39 @@ const DescentPanel: React.FC = () => {
   const bestPt = best?.torque_per_mass != null
     ? [{ td: best.torque_per_mass, eff: (best.efficiency ?? 0) * 100, z: 6 }] : [];
 
-  const launch = () => {
+  const runOneRound = () =>
+    runDescent({ rippleMax, maxIters, wEff, wTd, steps, algorithm, nSectors,
+                 targetTorque: ratedTorque, vPeakLimit, optimizeGamma: mtpa });
+
+  // Box-walking: optimize; if a variable pins to its window edge and Auto-walk is
+  // on, re-center the window on the optimum (Apply best → the ±deviation window
+  // follows the geometry) and re-run — until every variable settles inside its
+  // window, hits a physical (schema) limit, or maxRounds.  Auto-walk off → a
+  // single round, then the boundary banner offers a manual one-click continue.
+  const launch = async () => {
     setApplied(false);
-    runDescent({ rippleMax, maxIters, wEff, wTd, steps, algorithm, nSectors });
+    walkCancel.current = false;
+    setWalking(true);
+    const cap = autoWalk ? Math.max(1, maxRounds) : 1;
+    try {
+      for (let r = 0; r < cap; r++) {
+        setRound(r + 1);
+        await runOneRound();
+        if (walkCancel.current) break;
+        const soft = boundaryFlags(useMotorStore.getState().descentState, parameterSchema)
+          .filter((f) => !f.atHard);
+        if (!autoWalk || soft.length === 0 || r + 1 >= cap) break;
+        await applyDescentBest();   // re-center the window on the optimum for the next round
+      }
+    } finally {
+      setWalking(false);
+      setRound(0);
+    }
   };
+
+  // Manual "continue in the same direction": re-center on the optimum, run once more.
+  const continueWalk = async () => { await applyDescentBest(); await launch(); };
+  const stopWalk = () => { walkCancel.current = true; cancelDescent(); };
 
   const row = (label: string, m: any, cost?: number) => (
     <TableRow>
@@ -157,10 +303,55 @@ const DescentPanel: React.FC = () => {
             InputLabelProps={{ sx: { fontSize: 10 } }} />
         </Tooltip>
 
-        {descentRunning ? (
+        {/* ── Rated-duty constraints ─────────────────────────────────────── */}
+        <Tooltip title="Rated shaft torque to optimize at (Nm). Each geometry is evaluated at the current that delivers THIS torque (not a fixed current). 0 = use the operating-point current." placement="top">
+          <TextField label="T rated, Nm" type="number" size="small" value={ratedTorque}
+            onChange={e => updateSweepConstraints({ ratedTorqueNm: Math.max(0, +e.target.value || 0) })}
+            inputProps={{ min: 0, step: 0.5, style: { fontSize: 11, padding: '3px 6px', width: 52 } }}
+            InputLabelProps={{ sx: { fontSize: 10 } }} />
+        </Tooltip>
+        <Tooltip title="Inverter DC-bus voltage (V). Usable peak phase = bus × modulation factor; designs whose V_peak exceeds it are penalised. 0 = no limit." placement="top">
+          <TextField label="V bus" type="number" size="small" value={vBus}
+            onChange={e => updateSweepConstraints({ vBusV: Math.max(0, +e.target.value || 0) })}
+            inputProps={{ min: 0, step: 1, style: { fontSize: 11, padding: '3px 6px', width: 48 } }}
+            InputLabelProps={{ sx: { fontSize: 10 } }} />
+        </Tooltip>
+        <Tooltip title="PWM scheme → usable peak phase = V_bus × (SVPWM 0.577 / Sine 0.5 / Six-step 0.637)." placement="top">
+          <ToggleButtonGroup exclusive size="small" value={modulation}
+            onChange={(_, m) => m && updateSweepConstraints({ modulation: m })} sx={{ height: 26 }}>
+            <ToggleButton value="svpwm"   sx={{ px: 0.7, fontSize: 10 }}>SVPWM</ToggleButton>
+            <ToggleButton value="sine"    sx={{ px: 0.7, fontSize: 10 }}>Sine</ToggleButton>
+            <ToggleButton value="sixstep" sx={{ px: 0.7, fontSize: 10 }}>6-step</ToggleButton>
+          </ToggleButtonGroup>
+        </Tooltip>
+        <Tooltip title="Computed usable peak phase voltage limit = V_bus × modulation factor. The optimizer penalises any design whose V_peak exceeds it." placement="top">
+          <Typography variant="caption" sx={{ color: '#93c5fd', fontSize: 10, whiteSpace: 'nowrap' }}>
+            V_peak ≤ {vPeakLimit < 1e8 ? `${vPeakLimit.toFixed(0)} V` : '—'}
+          </Typography>
+        </Tooltip>
+        <Tooltip title="Optimize the load angle γ (MTPA) for the starting geometry BEFORE the geometry search (a quick parallel γ sweep runs first), so the whole run uses the best phase." placement="top">
+          <ToggleButton value="mtpa" selected={mtpa} size="small"
+            onChange={() => setMtpa(m => !m)} sx={{ px: 1, py: 0, height: 26, fontSize: 10 }}>
+            MTPA γ
+          </ToggleButton>
+        </Tooltip>
+        <Tooltip title="Auto-walk (box-walking): if a variable ends at the edge of its ±deviation window, re-center the window on the optimum and re-optimize — repeat until every variable settles inside its window, hits a physical (schema) limit, or the round cap. Off = one run, then boundary variables are flagged for a manual one-click continue." placement="top">
+          <ToggleButton value="autowalk" selected={autoWalk} size="small"
+            onChange={() => setAutoWalk(a => !a)} sx={{ px: 1, py: 0, height: 26, fontSize: 10 }}>
+            Auto-walk
+          </ToggleButton>
+        </Tooltip>
+        {autoWalk && (
+          <TextField label="max rounds" type="number" size="small" value={maxRounds}
+            onChange={(e) => setMaxRounds(Math.max(1, Math.min(20, Number(e.target.value) || 1)))}
+            sx={{ width: 88 }} inputProps={{ min: 1, max: 20, style: { fontSize: 11 } }}
+            InputLabelProps={{ style: { fontSize: 10 } }} />
+        )}
+
+        {(descentRunning || walking) ? (
           <Button variant="contained" color="error" size="small" startIcon={<StopIcon />}
-            onClick={() => cancelDescent()}>
-            Stop {st.iter ?? 0}/{st.max_iters ?? maxIters}
+            onClick={stopWalk}>
+            {walking && autoWalk ? `Stop · round ${round}/${maxRounds}` : `Stop ${st.iter ?? 0}/${st.max_iters ?? maxIters}`}
           </Button>
         ) : (
           <Button variant="contained" size="small" startIcon={<PlayArrowIcon />}
@@ -183,14 +374,33 @@ const DescentPanel: React.FC = () => {
         </Typography>
       )}
 
-      {/* Progress line */}
-      {(descentRunning || history.length > 0) && (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5 }}>
-          {descentRunning && <CircularProgress size={14} />}
+      {/* Live progress: phase headline + bar (so a long FEM run visibly works) */}
+      {(descentRunning || walking) && (
+        <Box sx={{ mb: 1 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
+            <CircularProgress size={14} />
+            <Typography variant="caption" sx={{ fontWeight: 600 }}>{statusText}</Typography>
+            {mtpaG != null && (
+              <Chip size="small" color="info" variant="outlined"
+                label={`γ = ${Number(mtpaG).toFixed(0)}°`} sx={{ height: 18, fontSize: 10 }} />
+            )}
+          </Box>
+          <LinearProgress variant={busyIndeterminate ? 'indeterminate' : 'determinate'} value={genPct}
+            sx={{ height: 6, borderRadius: 3 }} />
+        </Box>
+      )}
+
+      {/* Progress chips: iters / evals / MTPA γ / best */}
+      {(descentRunning || walking || history.length > 0) && (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5, flexWrap: 'wrap' }}>
           <Chip size="small" variant="outlined"
             label={`iter ${st.iter ?? 0}/${st.max_iters ?? maxIters}`} sx={{ height: 20, fontSize: 10 }} />
           <Chip size="small" variant="outlined"
             label={`${st.n_evals ?? 0} FEM evals`} sx={{ height: 20, fontSize: 10 }} />
+          {mtpaG != null && (
+            <Chip size="small" variant="outlined"
+              label={`MTPA γ = ${Number(mtpaG).toFixed(0)}°`} sx={{ height: 20, fontSize: 10 }} />
+          )}
           {best && (
             <Chip size="small" color="success" variant="outlined"
               label={`best F = ${st.best?.F?.toFixed?.(4) ?? '—'}`} sx={{ height: 20, fontSize: 10 }} />
@@ -279,6 +489,14 @@ const DescentPanel: React.FC = () => {
             <span style={{ color: '#3b82f6' }}>descent path</span> ·{' '}
             <span style={{ color: '#fbbf24' }}>★ best</span>
           </Typography>
+          {loadLineDesigns.some(([, a]) => a.length > 1) && (
+            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: '12px', mb: 0.5 }}>
+              <Typography variant="caption" color="text.secondary">load-lines · ◆ rated {ratedTorque} N·m:</Typography>
+              {loadLineDesigns.map(([name], i) => (
+                <Typography key={name} variant="caption" sx={{ color: LL_PALETTE[i % LL_PALETTE.length] }}>● {name}</Typography>
+              ))}
+            </Box>
+          )}
           <Box sx={{ height: 460, width: '100%' }}>
             <ResponsiveContainer width="100%" height="100%">
               <ScatterChart margin={{ top: 8, right: 24, left: 8, bottom: 18 }}>
@@ -295,6 +513,21 @@ const DescentPanel: React.FC = () => {
                 <Scatter name="descent path" data={trajPts} fill="#3b82f6"
                   line={{ stroke: '#3b82f6', strokeWidth: 1.5 }} lineType="joint" isAnimationActive={false} />
                 <Scatter name="★ best" data={bestPt} fill="#fbbf24" shape="star" isAnimationActive={false} />
+                {loadLineDesigns.map(([name, arr], i) => (
+                  <Scatter key={'ll-' + name} name={name}
+                    data={arr.map((p: any) => ({ td: p.td, eff: p.eff, z: 1, I: p.I }))}
+                    fill={LL_PALETTE[i % LL_PALETTE.length]}
+                    line={{ stroke: LL_PALETTE[i % LL_PALETTE.length], strokeWidth: 2.5 }} lineType="joint" isAnimationActive={false}>
+                    <LabelList dataKey="I" position="top" formatter={(v: any) => `${v}A`} fill={LL_PALETTE[i % LL_PALETTE.length]} fontSize={9} />
+                  </Scatter>
+                ))}
+                {ratedMarkers.map((rp: any) => (
+                  <Scatter key={'rated-' + rp.name} name={`◆ ${rp.name} @ ${ratedTorque} Nm`}
+                    data={[{ td: rp.td, eff: rp.eff, z: rp.z, I: rp.I }]}
+                    fill={rp.color} shape="diamond" isAnimationActive={false}>
+                    <LabelList dataKey="I" position="right" formatter={(v: any) => `${v}A`} fill={rp.color} fontSize={9} />
+                  </Scatter>
+                ))}
               </ScatterChart>
             </ResponsiveContainer>
           </Box>
@@ -324,6 +557,37 @@ const DescentPanel: React.FC = () => {
               </BarChart>
             </ResponsiveContainer>
           </Box>
+        </Box>
+      )}
+
+      {/* Boundary-active variables → flag + one-click box-walk continue */}
+      {boundary.length > 0 && (
+        <Box sx={{ mb: 1.5, p: 1, borderRadius: 1, border: '1px solid',
+                   borderColor: softPinned.length ? '#f59e0b' : '#22c55e',
+                   bgcolor: softPinned.length ? 'rgba(245,158,11,0.08)' : 'rgba(34,197,94,0.08)' }}>
+          <Typography variant="caption" sx={{ display: 'block', fontWeight: 700, mb: 0.5,
+                      color: softPinned.length ? '#f59e0b' : '#22c55e' }}>
+            {softPinned.length
+              ? `⚠ ${boundary.length} переменн${boundary.length === 1 ? 'ая' : 'ых'} на границе диапазона`
+              : '✓ упёрлись в физический предел — оптимум найден'}
+          </Typography>
+          {boundary.map((f) => (
+            <Typography key={f.name} variant="caption"
+              sx={{ display: 'block', fontSize: 10.5, color: 'text.secondary' }}>
+              <strong>{f.label}</strong>: {f.value.toFixed(2)} {f.pinned === 'high' ? '↑' : '↓'}{' '}
+              край [{f.min.toFixed(2)} … {f.max.toFixed(2)}]
+              {f.atHard
+                ? <span style={{ color: '#ef4444' }}> · физ. предел</span>
+                : <span style={{ color: '#f59e0b' }}> · можно сдвинуть окно</span>}
+            </Typography>
+          ))}
+          {softPinned.length > 0 && (
+            <Button variant="outlined" color="warning" size="small" sx={{ mt: 0.75 }}
+              startIcon={<TrendingDownIcon />} disabled={!connectedToApi}
+              onClick={continueWalk}>
+              Сдвинуть окно и продолжить ({softPinned.length})
+            </Button>
+          )}
         </Box>
       )}
 

@@ -47,9 +47,13 @@ interface SweepVarCardProps {
 }
 
 const SweepVarCard: React.FC<SweepVarCardProps> = ({ paramName, label, unit }) => {
-  const { sweepConfig, updateVariation } = useMotorStore();
+  const { sweepConfig, updateVariation, geometry } = useMotorStore();
   const v = sweepConfig.variations[paramName];
   if (!v || v.mode === 'fixed') return null;
+  // Optimize cards show the CURRENT geometry value + a symmetric ± deviation
+  // (search range = value ∓ deviation) instead of raw min/max.
+  const cur = Number((geometry as Record<string, any>)[paramName] ?? ((Number(v.min) + Number(v.max)) / 2));
+  const delta = +Math.max(0, (Number(v.max) - Number(v.min)) / 2).toFixed(4);
 
   return (
     <Card variant="outlined" sx={{ mb: 1.5, bgcolor: 'rgba(255,255,255,0.02)' }}>
@@ -83,38 +87,42 @@ const SweepVarCard: React.FC<SweepVarCardProps> = ({ paramName, label, unit }) =
           </IconButton>
         </Box>
 
-        {/* Range inputs */}
-        <Box sx={{ display: 'flex', gap: 1 }}>
-          <TextField
-            label="Min"
-            size="small"
-            type="number"
-            value={v.min}
-            onChange={e => updateVariation(paramName, { min: parseFloat(e.target.value) })}
-            inputProps={{ style: { fontSize: 12, padding: '4px 8px' } }}
-            sx={{ flex: 1 }}
-          />
-          <TextField
-            label="Max"
-            size="small"
-            type="number"
-            value={v.max}
-            onChange={e => updateVariation(paramName, { max: parseFloat(e.target.value) })}
-            inputProps={{ style: { fontSize: 12, padding: '4px 8px' } }}
-            sx={{ flex: 1 }}
-          />
-          {v.mode === 'sweep' && (
+        {/* Range inputs — optimize: current value ± symmetric deviation;
+            sweep: explicit min / max / step grid. */}
+        {v.mode === 'optimize' ? (
+          <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
             <TextField
-              label="Step"
-              size="small"
-              type="number"
-              value={v.step}
-              onChange={e => updateVariation(paramName, { step: parseFloat(e.target.value) })}
+              label="value (current)" size="small" type="number" value={cur} disabled
+              inputProps={{ style: { fontSize: 12, padding: '4px 8px' } }}
+              sx={{ flex: 1 }}
+            />
+            <Typography variant="body2" sx={{ color: 'text.secondary', fontWeight: 600 }}>±</Typography>
+            <TextField
+              label="deviation" size="small" type="number" value={delta}
+              onChange={e => {
+                const d = Math.max(0, parseFloat(e.target.value) || 0);
+                updateVariation(paramName, { min: cur - d, max: cur + d });
+              }}
               inputProps={{ min: 0, style: { fontSize: 12, padding: '4px 8px' } }}
               sx={{ flex: 1 }}
             />
-          )}
-        </Box>
+            <Typography variant="caption" sx={{ color: 'text.secondary', whiteSpace: 'nowrap', minWidth: 88, textAlign: 'right' }}>
+              [{(cur - delta).toFixed(2)} … {(cur + delta).toFixed(2)}]
+            </Typography>
+          </Box>
+        ) : (
+          <Box sx={{ display: 'flex', gap: 1 }}>
+            <TextField label="Min" size="small" type="number" value={v.min}
+              onChange={e => updateVariation(paramName, { min: parseFloat(e.target.value) })}
+              inputProps={{ style: { fontSize: 12, padding: '4px 8px' } }} sx={{ flex: 1 }} />
+            <TextField label="Max" size="small" type="number" value={v.max}
+              onChange={e => updateVariation(paramName, { max: parseFloat(e.target.value) })}
+              inputProps={{ style: { fontSize: 12, padding: '4px 8px' } }} sx={{ flex: 1 }} />
+            <TextField label="Step" size="small" type="number" value={v.step}
+              onChange={e => updateVariation(paramName, { step: parseFloat(e.target.value) })}
+              inputProps={{ min: 0, style: { fontSize: 12, padding: '4px 8px' } }} sx={{ flex: 1 }} />
+          </Box>
+        )}
       </CardContent>
     </Card>
   );
@@ -375,7 +383,7 @@ const SweepConfigPanel: React.FC = () => {
             <Slider
               value={sweepConfig.rippleThreshold * 100}
               onChange={(_, v) => updateRippleThreshold((v as number) / 100)}
-              min={1} max={50} step={0.5}
+              min={0} max={10} step={0.5}
               sx={{ flex: 1 }}
             />
             <Typography variant="body2" sx={{ minWidth: 42, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>

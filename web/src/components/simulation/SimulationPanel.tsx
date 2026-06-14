@@ -264,10 +264,14 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // and back keeps the result without recomputing. Without this the right pane
   // is a black void after every reload until you click Run. The backend caches
   // the transient, so the auto-run is a fast cache hit on subsequent reloads.
-  useEffect(() => {
-    if (active && runNonce === 0 && !simBusy) launchRun(false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active]);
+  // NO auto-run on open.  The transient charts restore the LAST result on mount
+  // (from localStorage, or the backend's persisted last via ?restore=true), so a
+  // reload SHOWS the previous simulation instead of silently recomputing it.  A
+  // fresh state with nothing saved shows the "press Run" prompt; only the Run
+  // button (or a settings change + Re-run) computes.  (Was: auto-launchRun when
+  // runNonce===0 — that recomputed on every reload where runNonce hadn't been
+  // persisted or the backend cache key missed.)
+  useEffect(() => { void active; void simBusy; }, [active]);
   // Steps per electrical period (transient time resolution).  Persisted.
   // The text field edits a free string (stepsStr) and only commits a
   // clamped integer on blur / Enter, so typing "12" over "6" works

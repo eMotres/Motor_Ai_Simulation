@@ -125,10 +125,7 @@ const DescentPanel: React.FC = () => {
   // Box-walking: keep re-centering the ±deviation window on the optimum until
   // every variable settles inside its window (or hits a physical limit).
   const [autoWalk, setAutoWalk]   = useState(false);
-  const [maxRounds, setMaxRounds] = useState(5);
-  const [round, setRound]         = useState(0);      // 1-based walk round while auto-walking
-  const [walking, setWalking]     = useState(false);  // an auto-walk sequence (≥1 round) is in flight
-  const walkCancel = useRef(false);
+  const [maxRounds, setMaxRounds] = useState(5);   // box-walking round cap (server-side auto-walk)
   const localRun = useRef(false);   // true while THIS panel is the one running (its runDescent polls)
 
   // Live mirror: while a run is in progress server-side (even one started in
@@ -194,21 +191,22 @@ const DescentPanel: React.FC = () => {
   // finished run.  Soft = re-centerable; hard = window already at the schema's
   // physical limit → a genuine constraint (the banner offers a one-click continue
   // for the soft ones; box-walking does it automatically when Auto-walk is on).
-  const boundary = (!descentRunning && !walking && (best || st.result))
+  const boundary = (!descentRunning && (best || st.result))
     ? boundaryFlags(st, parameterSchema) : [];
   const softPinned = boundary.filter((f) => !f.atHard);
 
   // Live status: what the optimizer is doing right now (so a long run visibly
-  // works).  phase comes from the backend (mtpa γ sweep / optimizing); the walk
-  // round is frontend-local.
+  // works).  phase + walk round both come from the backend (server-side box-walking).
   const phase = st.phase as string | undefined;
   const mtpaG = st.mtpa_gamma_deg;
+  const walkRound = Number(st.walk_round) || 1;
+  const walkRounds = Number(st.walk_rounds) || 1;
   const genText = phase === 'mtpa'     ? 'MTPA γ — finding max-torque angle…'
                 : phase === 'baseline' ? 'baseline solve…'
                 : phase === 'starting' ? 'building mesh…'
                 : descentRunning       ? `generation ${st.iter ?? 0}/${st.max_iters ?? maxIters}`
                 : 'done';
-  const statusText = ((walking && autoWalk) ? `Round ${round}/${maxRounds} · ` : '') + genText;
+  const statusText = ((walkRounds > 1) ? `Round ${walkRound}/${walkRounds} · ` : '') + genText;
   const busyIndeterminate = phase === 'mtpa' || phase === 'baseline' || phase === 'starting';
   const genPct = Math.min(100, Math.round(100 * (Number(st.iter) || 0) / Math.max(1, Number(st.max_iters) || maxIters)));
   const gradData = variables
@@ -230,41 +228,25 @@ const DescentPanel: React.FC = () => {
   const bestPt = best?.torque_per_mass != null
     ? [{ td: best.torque_per_mass, eff: (best.efficiency ?? 0) * 100, z: 6 }] : [];
 
-  const runOneRound = () =>
-    runDescent({ rippleMax, maxIters, wEff, wTd, steps, algorithm, nSectors,
-                 targetTorque: ratedTorque, vPeakLimit, optimizeGamma: mtpa });
-
-  // Box-walking: optimize; if a variable pins to its window edge and Auto-walk is
-  // on, re-center the window on the optimum (Apply best → the ±deviation window
-  // follows the geometry) and re-run — until every variable settles inside its
-  // window, hits a physical (schema) limit, or maxRounds.  Auto-walk off → a
-  // single round, then the boundary banner offers a manual one-click continue.
+  // Box-walking now runs SERVER-SIDE: with Auto-walk on we hand the backend
+  // auto_expand + maxRounds and it re-centers the window + re-runs round after round
+  // on its own (the tab can be closed — the live mirror reattaches). runDescent
+  // resolves when the whole sequence finishes.
   const launch = async () => {
     setApplied(false);
-    walkCancel.current = false;
     localRun.current = true;
-    setWalking(true);
-    const cap = autoWalk ? Math.max(1, maxRounds) : 1;
     try {
-      for (let r = 0; r < cap; r++) {
-        setRound(r + 1);
-        await runOneRound();
-        if (walkCancel.current) break;
-        const soft = boundaryFlags(useMotorStore.getState().descentState, parameterSchema)
-          .filter((f) => !f.atHard);
-        if (!autoWalk || soft.length === 0 || r + 1 >= cap) break;
-        await applyDescentBest();   // re-center the window on the optimum for the next round
-      }
+      await runDescent({ rippleMax, maxIters, wEff, wTd, steps, algorithm, nSectors,
+                         targetTorque: ratedTorque, vPeakLimit, optimizeGamma: mtpa,
+                         autoExpand: autoWalk, maxRounds });
     } finally {
-      setWalking(false);
-      setRound(0);
       localRun.current = false;
     }
   };
 
-  // Manual "continue in the same direction": re-center on the optimum, run once more.
+  // Manual "continue in the same direction": re-center on the optimum, run once more
+  // (Auto-walk off → a single backend round).
   const continueWalk = async () => { await applyDescentBest(); await launch(); };
-  const stopWalk = () => { walkCancel.current = true; cancelDescent(); };
 
   const row = (label: string, m: any, cost?: number) => (
     <TableRow>
@@ -361,7 +343,7 @@ const DescentPanel: React.FC = () => {
             MTPA γ
           </ToggleButton>
         </Tooltip>
-        <Tooltip title="Auto-walk (box-walking): if a variable ends at the edge of its ±deviation window, re-center the window on the optimum and re-optimize — repeat until every variable settles inside its window, hits a physical (schema) limit, or the round cap. Off = one run, then boundary variables are flagged for a manual one-click continue." placement="top">
+        <Tooltip title="Auto-walk (box-walking): if a variable ends at the edge of its ±deviation window, the server re-centers the window on the optimum and re-optimizes — round after round, until every variable settles inside its window, hits a physical (schema) limit, or the round cap. Runs FULLY on the backend: you can close the tab and it finishes on its own. Off = one run, then boundary variables are flagged for a manual one-click continue." placement="top">
           <ToggleButton value="autowalk" selected={autoWalk} size="small"
             onChange={() => setAutoWalk(a => !a)} sx={{ px: 1, py: 0, height: 26, fontSize: 10 }}>
             Auto-walk
@@ -374,10 +356,10 @@ const DescentPanel: React.FC = () => {
             InputLabelProps={{ style: { fontSize: 10 } }} />
         )}
 
-        {(descentRunning || walking) ? (
+        {descentRunning ? (
           <Button variant="contained" color="error" size="small" startIcon={<StopIcon />}
-            onClick={stopWalk}>
-            {walking && autoWalk ? `Stop · round ${round}/${maxRounds}` : `Stop ${st.iter ?? 0}/${st.max_iters ?? maxIters}`}
+            onClick={() => cancelDescent()}>
+            {walkRounds > 1 ? `Stop · round ${walkRound}/${walkRounds}` : `Stop ${st.iter ?? 0}/${st.max_iters ?? maxIters}`}
           </Button>
         ) : (
           <Button variant="contained" size="small" startIcon={<PlayArrowIcon />}
@@ -401,7 +383,7 @@ const DescentPanel: React.FC = () => {
       )}
 
       {/* Live progress: phase headline + bar (so a long FEM run visibly works) */}
-      {(descentRunning || walking) && (
+      {descentRunning && (
         <Box sx={{ mb: 1 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
             <CircularProgress size={14} />
@@ -417,7 +399,7 @@ const DescentPanel: React.FC = () => {
       )}
 
       {/* Progress chips: iters / evals / MTPA γ / best */}
-      {(descentRunning || walking || history.length > 0) && (
+      {(descentRunning || history.length > 0) && (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5, flexWrap: 'wrap' }}>
           <Chip size="small" variant="outlined"
             label={`iter ${st.iter ?? 0}/${st.max_iters ?? maxIters}`} sx={{ height: 20, fontSize: 10 }} />

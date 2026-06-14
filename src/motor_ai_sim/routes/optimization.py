@@ -575,6 +575,12 @@ class DescentRequest(BaseModel):
     v_peak_limit: float = 1e9
     # Optimize the load angle γ (MTPA) for the starting geometry BEFORE the search.
     optimize_gamma: bool = True
+    # Box-walking: when a variable ends pinned at a window edge, re-centre the
+    # ±deviation window on the optimum and re-run, server-side, until everything
+    # settles inside / hits a physical limit / max_rounds.  Fully unattended.
+    auto_expand: bool = False
+    max_rounds: int = 5
+    boundary_margin: float = 0.05
     run_id: str = ""
 
 
@@ -621,6 +627,53 @@ def _descent_cost(m: Dict[str, Any], base: Dict[str, Any],
     return (-F + pen), F
 
 
+def _boundary_flags(specs, best_x, margin=0.05):
+    """Variables whose optimum landed within `margin` of a window edge → the true
+    optimum is probably OUTSIDE the ±deviation window.  at_hard_limit = the window
+    is already at the schema's physical min/max (a real limit, not a too-narrow
+    window).  Drives the box-walking stop condition (server-side)."""
+    out = []
+    for v in specs:
+        nm = v["name"]; lo = float(v["lo"]); hi = float(v["hi"])
+        x = best_x.get(nm)
+        if x is None:
+            continue
+        x = float(x); w = hi - lo
+        if w <= 0:
+            continue
+        m = margin * w
+        pinned = "high" if x >= hi - m else ("low" if x <= lo + m else None)
+        if not pinned:
+            continue
+        hlo = v.get("hard_lo"); hhi = v.get("hard_hi")
+        at_hard = ((pinned == "high" and hhi is not None and hi >= float(hhi) - 1e-9) or
+                   (pinned == "low"  and hlo is not None and lo <= float(hlo) + 1e-9))
+        out.append({"name": nm, "value": x, "min": lo, "max": hi,
+                    "pinned": pinned, "at_hard_limit": bool(at_hard)})
+    return out
+
+
+def _recenter_specs(specs, best_x):
+    """Slide each variable's window to be centred on the optimum, keeping its width
+    (±deviation) constant, clamped to the schema's physical min/max.  This is the
+    box-walking step: the window walks toward the optimum without growing."""
+    out = []
+    for v in specs:
+        nm = v["name"]; lo = float(v["lo"]); hi = float(v["hi"])
+        nv = dict(v); x = best_x.get(nm); d = (hi - lo) / 2.0
+        if x is not None and d > 0:
+            x = float(x); nlo, nhi = x - d, x + d
+            hlo = v.get("hard_lo"); hhi = v.get("hard_hi")
+            if hlo is not None:
+                nlo = max(float(hlo), nlo)
+            if hhi is not None:
+                nhi = min(float(hhi), nhi)
+            if nhi > nlo:
+                nv["lo"] = nlo; nv["hi"] = nhi
+        out.append(nv)
+    return out
+
+
 def _mtpa_gamma_sweep(geom, ref_I, steps, coil_temp, mesh_size, min_size, n_sectors,
                       lo=-50.0, hi=0.0, step=5.0):
     """Find the load angle γ that MAXIMISES torque (MTPA) for ONE geometry at a
@@ -654,7 +707,11 @@ def _mtpa_gamma_sweep(geom, ref_I, steps, coil_temp, mesh_size, min_size, n_sect
 def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                     steps, coil_temp, mesh_size, min_size, max_iters, run_id,
                     n_sectors=-1, v_peak_limit=1e9, target_torque=0.0,
-                    optimize_gamma=True) -> None:
+                    optimize_gamma=True, auto_expand=False, max_rounds=1,
+                    boundary_margin=0.05) -> None:
+    # NOTE: server-side box-walking (auto_expand) is implemented for CMA-ES only;
+    # the gradient path runs a single round, then the UI flags boundary variables
+    # for a manual one-click continue.
     from concurrent.futures import ThreadPoolExecutor, as_completed
     try:
         cfg = get_config()
@@ -867,7 +924,8 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
 def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                   steps, coil_temp, mesh_size, min_size, max_iters, run_id,
                   n_sectors=-1, v_peak_limit=1e9, target_torque=0.0,
-                  optimize_gamma=True) -> None:
+                  optimize_gamma=True, auto_expand=False, max_rounds=1,
+                  boundary_margin=0.05) -> None:
     """Covariance-Matrix-Adaptation Evolution Strategy — derivative-free,
     noise-robust geometry search.  Same penalised cost as the gradient descent
     (−(eff/eff0)^w_eff·(td/td0)^w_td + λ·max(0, ripple−ripple_max)), evaluated on
@@ -885,21 +943,10 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
         return
     try:
         cfg = get_config()
-        geo0 = dict(cfg.get("geometry", {}))
+        geo0 = dict(cfg.get("geometry", {}))   # round-0 start; re-centred to best each round
         I = float(op.get("current_a", 85.0)); g = float(op.get("gamma_deg", 0.0))
-        names = [v["name"] for v in var_specs]
-        lo = np.array([float(v["lo"]) for v in var_specs])
-        hi = np.array([float(v["hi"]) for v in var_specs])
-        span = np.maximum(hi - lo, 1e-9)
-        is_int = [bool(v.get("is_int")) for v in var_specs]
-
-        def to_geom(xn):
-            phys = lo + np.clip(np.asarray(xn, float), 0.0, 1.0) * span
-            return {nm: (float(round(phys[i])) if is_int[i] else float(phys[i]))
-                    for i, nm in enumerate(names)}
-
         _torque_tol = 0.02       # probe within ±2 % of target → accept, no 2nd solve
-        warm = [I]               # warm-start probe current (last geometry's rated current)
+        warm = [I]               # warm-start probe current (shared starting guess)
 
         def _eval_at(dd, cur):
             return _subprocess_eval(dd, cur, steps, coil_temp, n_periods=1.0,
@@ -907,11 +954,11 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                                     min_size_mm=min_size, n_sectors=n_sectors)
 
         def evalx(d):
-            # Target-torque with warm-start + ±2 % band (see _descent_worker): the
-            # probe at the last geometry's rated current usually lands in band → one
-            # solve; only a miss triggers a rescale + 2nd solve.
+            # Target-torque with warm-start + ±2 % band: probe at the warm-start
+            # current (snapshot once — parallel evals share warm[]); a miss triggers a
+            # rescale (T≈linear in I) + 2nd solve.
             if target_torque and target_torque > 0:
-                probe = warm[0]                      # snapshot ONCE (parallel evals share warm[])
+                probe = warm[0]
                 o1 = _eval_at(d, probe)
                 if not o1.get("ok"):
                     return o1
@@ -926,88 +973,124 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                 return _eval_at(d, I2)
             return _eval_at(d, I)
 
-        x0n = np.clip((np.array([float(geo0.get(nm, lo[i])) for i, nm in enumerate(names)]) - lo) / span, 0.0, 1.0)
-        # MTPA: optimize the load angle γ for the starting geometry FIRST, then run
-        # the whole geometry search at that phase.
-        if optimize_gamma:
-            with _descent_lock:
-                _descent_state["phase"] = "mtpa"
-            _save_descent_state()
-            _gm = _mtpa_gamma_sweep(to_geom(x0n), I, steps, coil_temp, mesh_size, min_size, n_sectors)
-            if _gm is not None:
-                g = _gm
-                with _descent_lock:
-                    _descent_state["mtpa_gamma_deg"] = g
-        with _descent_lock:
-            _descent_state["phase"] = "baseline"
-        _save_descent_state()
-        b = evalx(to_geom(x0n)); n_evals = 1
-        if not b.get("ok"):
-            with _descent_lock:
-                _descent_state.update(error=f"baseline eval failed: {b.get('error')}", running=False)
-            return
-        base = b["res"]
-        cost0, F0 = _descent_cost(base, base, ripple_max, w_eff, w_td, lam, v_peak_limit)
-        best = {"x": to_geom(x0n), "metrics": base, "cost": cost0, "F": F0}
+        # ── Cross-round state (box-walking: re-centre the window + re-run) ───────
+        best = None              # global best across all rounds
+        base = None              # round-0 baseline = fixed F reference
+        all_pts = []; history = []
+        n_evals = 0; it_global = 0
+        cur_specs = [dict(v) for v in var_specs]
+        rounds = max(1, int(max_rounds)) if auto_expand else 1
+        boundary = []
 
         def _bstate():
             return {"metrics": _msum(best["metrics"]), "cost": round(best["cost"], 5),
                     "F": round(best["F"], 5), "x": dict(best["x"])}
-        def _hrow(it, m, c, F, xd):
-            return {"iter": it, **_msum(m), "cost": round(c, 5), "F": round(F, 5),
+        def _hrow(itg, m, c, F, xd):
+            return {"iter": itg, **_msum(m), "cost": round(c, 5), "F": round(F, 5),
                     "x": {k: round(float(v), 4) for k, v in xd.items()}}
 
-        history = [_hrow(0, base, cost0, F0, best["x"])]
-        all_pts = [p for p in [_pt(b, "baseline")] if p]
-        with _descent_lock:
-            _descent_state.update(running=True, iter=0, max_iters=max_iters, phase="optimizing", n_evals=n_evals,
-                                  baseline=_msum(base), best=_bstate(), current=_msum(base),
-                                  history=list(history), error=None, grad={}, points=list(all_pts),
-                                  variables=[{"name": v["name"], "lo": v["lo"], "hi": v["hi"],
-                                              "step": v["step"]} for v in var_specs])
+        for rnd in range(rounds):
+            names = [v["name"] for v in cur_specs]
+            lo = np.array([float(v["lo"]) for v in cur_specs])
+            hi = np.array([float(v["hi"]) for v in cur_specs])
+            span = np.maximum(hi - lo, 1e-9)
+            is_int = [bool(v.get("is_int")) for v in cur_specs]
 
-        es = cma.CMAEvolutionStrategy(list(x0n), 0.25,
-                                      {"bounds": [0.0, 1.0], "maxiter": int(max_iters),
-                                       "verbose": -9, "seed": 12345})
-        it = 0
-        while not es.stop():
-            with _descent_lock:
-                if _descent_state["cancel"]:
-                    break
-            sols = es.ask()
-            outs = [None] * len(sols)
-            cost_by_i = {}
-            with ThreadPoolExecutor(max_workers=_SCAN_WORKERS) as ex:
-                futs = {ex.submit(evalx, to_geom(s)): i for i, s in enumerate(sols)}
-                for fut in as_completed(futs):
-                    i = futs[fut]
-                    out = fut.result()
-                    outs[i] = out
-                    n_evals += 1
-                    if out and out.get("ok"):
-                        c, Fv = _descent_cost(out["res"], base, ripple_max, w_eff, w_td, lam, v_peak_limit)
-                        cost_by_i[i] = c
-                        p = _pt(out, "cmaes")
-                        if p:
-                            all_pts.append(p)
-                        if c < best["cost"] - 1e-9:
-                            best = {"x": to_geom(sols[i]), "metrics": out["res"], "cost": c, "F": Fv}
-                    else:
-                        cost_by_i[i] = 1e6        # failed eval → repelled
-                    # Publish per-EVAL (not once per generation) so the objective-space
-                    # chart fills in real time as each FEM solve lands.
+            def to_geom(xn, names=names, lo=lo, span=span, is_int=is_int):
+                phys = lo + np.clip(np.asarray(xn, float), 0.0, 1.0) * span
+                return {nm: (float(round(phys[i])) if is_int[i] else float(phys[i]))
+                        for i, nm in enumerate(names)}
+
+            x0n = np.clip((np.array([float(geo0.get(nm, lo[i])) for i, nm in enumerate(names)]) - lo) / span, 0.0, 1.0)
+
+            if rnd == 0:
+                # MTPA: optimize the load angle γ for the starting geometry FIRST.
+                if optimize_gamma:
                     with _descent_lock:
-                        _descent_state["n_evals"] = n_evals
-                        _descent_state["points"] = list(all_pts)
-                        _descent_state["best"] = _bstate()
-                        _descent_state["current"] = _msum(best["metrics"])
-            costs = [cost_by_i.get(i, 1e6) for i in range(len(sols))]
-            es.tell(sols, costs)
-            it += 1
-            history.append(_hrow(it, best["metrics"], best["cost"], best["F"], best["x"]))
+                        _descent_state["phase"] = "mtpa"
+                    _save_descent_state()
+                    _gm = _mtpa_gamma_sweep(to_geom(x0n), I, steps, coil_temp, mesh_size, min_size, n_sectors)
+                    if _gm is not None:
+                        g = _gm
+                        with _descent_lock:
+                            _descent_state["mtpa_gamma_deg"] = g
+                with _descent_lock:
+                    _descent_state["phase"] = "baseline"
+                _save_descent_state()
+                b = evalx(to_geom(x0n)); n_evals += 1
+                if not b.get("ok"):
+                    with _descent_lock:
+                        _descent_state.update(error=f"baseline eval failed: {b.get('error')}", running=False)
+                    return
+                base = b["res"]
+                cost0, F0 = _descent_cost(base, base, ripple_max, w_eff, w_td, lam, v_peak_limit)
+                best = {"x": to_geom(x0n), "metrics": base, "cost": cost0, "F": F0}
+                history.append(_hrow(0, base, cost0, F0, best["x"]))
+                _bp = _pt(b, "baseline")
+                if _bp:
+                    all_pts.append(_bp)
+
             with _descent_lock:
-                _descent_state.update(iter=it, history=list(history))
-            _save_descent_state()   # checkpoint each generation (survives a mid-run restart)
+                _descent_state.update(running=True, iter=0, max_iters=max_iters, phase="optimizing",
+                                      walk_round=rnd + 1, walk_rounds=rounds, n_evals=n_evals,
+                                      baseline=_msum(base), best=_bstate(), current=_msum(best["metrics"]),
+                                      history=list(history), error=None, grad={}, points=list(all_pts), boundary=[],
+                                      variables=[{"name": v["name"], "lo": v["lo"], "hi": v["hi"],
+                                                  "step": v["step"]} for v in cur_specs])
+
+            es = cma.CMAEvolutionStrategy(list(x0n), 0.25,
+                                          {"bounds": [0.0, 1.0], "maxiter": int(max_iters),
+                                           "verbose": -9, "seed": 12345})
+            it_round = 0
+            cancelled = False
+            while not es.stop():
+                with _descent_lock:
+                    if _descent_state["cancel"]:
+                        cancelled = True
+                        break
+                sols = es.ask()
+                cost_by_i = {}
+                with ThreadPoolExecutor(max_workers=_SCAN_WORKERS) as ex:
+                    futs = {ex.submit(evalx, to_geom(s)): i for i, s in enumerate(sols)}
+                    for fut in as_completed(futs):
+                        i = futs[fut]
+                        out = fut.result()
+                        n_evals += 1
+                        if out and out.get("ok"):
+                            c, Fv = _descent_cost(out["res"], base, ripple_max, w_eff, w_td, lam, v_peak_limit)
+                            cost_by_i[i] = c
+                            p = _pt(out, "cmaes")
+                            if p:
+                                all_pts.append(p)
+                            if c < best["cost"] - 1e-9:
+                                best = {"x": to_geom(sols[i]), "metrics": out["res"], "cost": c, "F": Fv}
+                        else:
+                            cost_by_i[i] = 1e6        # failed eval → repelled
+                        # Publish per-EVAL so the objective-space chart fills in real time.
+                        with _descent_lock:
+                            _descent_state["n_evals"] = n_evals
+                            _descent_state["points"] = list(all_pts)
+                            _descent_state["best"] = _bstate()
+                            _descent_state["current"] = _msum(best["metrics"])
+                costs = [cost_by_i.get(i, 1e6) for i in range(len(sols))]
+                es.tell(sols, costs)
+                it_round += 1; it_global += 1
+                history.append(_hrow(it_global, best["metrics"], best["cost"], best["F"], best["x"]))
+                with _descent_lock:
+                    _descent_state.update(iter=it_round, history=list(history))
+                _save_descent_state()   # checkpoint each generation
+
+            # Box-walking: did any variable end pinned at its window edge?
+            boundary = _boundary_flags(cur_specs, best["x"], boundary_margin)
+            with _descent_lock:
+                _descent_state["boundary"] = boundary
+            soft = [f for f in boundary if not f["at_hard_limit"]]
+            if cancelled or not auto_expand or not soft:
+                break
+            # re-centre the window on the optimum and walk again (next round)
+            geo0 = dict(best["x"])
+            cur_specs = _recenter_specs(cur_specs, best["x"])
+
         with _descent_lock:
             _descent_state["result"] = {
                 "best": {"x": best["x"],
@@ -1017,6 +1100,7 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                 "baseline": _msum(base), "history": list(history), "n_evals": n_evals,
                 "operating_point": op, "ripple_max_pct": ripple_max,
                 "weights": {"w_eff": w_eff, "w_td": w_td, "lambda": lam},
+                "boundary": boundary, "walk_rounds": rounds,
                 "algorithm": "cmaes"}
     except Exception as e:  # noqa: BLE001
         log.exception("CMA-ES failed")
@@ -1068,7 +1152,8 @@ def descent_start(req: DescentRequest):
         if is_int:
             step = max(1.0, round(step))
         var_specs.append({"name": v.name, "lo": lo, "hi": hi,
-                          "step": step, "is_int": is_int})
+                          "step": step, "is_int": is_int,
+                          "hard_lo": s_lo, "hard_hi": s_hi})
 
     if not var_specs:
         raise HTTPException(status_code=400,
@@ -1087,23 +1172,31 @@ def descent_start(req: DescentRequest):
     # Rated-duty constraints (off when 0 / huge): target torque + peak-voltage cap.
     v_peak_limit  = float(req.v_peak_limit) if float(req.v_peak_limit) > 0 else 1e9
     target_torque = max(0.0, float(req.target_torque_nm))
+    # Box-walking (server-side auto-expand): re-centre the window + re-run until settled.
+    auto_expand     = bool(req.auto_expand)
+    max_rounds      = max(1, min(int(req.max_rounds), 20))
+    boundary_margin = min(0.3, max(0.01, float(req.boundary_margin)))
 
     with _descent_lock:
         _descent_state.update({"running": True, "iter": 0, "max_iters": max_iters,
                                "n_evals": 0, "best": None, "current": None,
                                "history": [], "baseline": None, "result": None, "phase": "starting",
                                "points": [], "grad": {}, "mtpa_gamma_deg": None,
+                               "boundary": [], "walk_round": 1,
+                               "walk_rounds": (max_rounds if auto_expand else 1),
                                "run_id": req.run_id, "error": None, "cancel": False})
     threading.Thread(
         target=worker,
         args=(var_specs, op, float(req.ripple_max_pct), float(req.w_eff),
               float(req.w_td), float(req.penalty_lambda), steps,
               float(req.coil_temp_c), mesh_size, min_size, max_iters, req.run_id,
-              n_sectors, v_peak_limit, target_torque, bool(req.optimize_gamma)),
+              n_sectors, v_peak_limit, target_torque, bool(req.optimize_gamma),
+              auto_expand, max_rounds, boundary_margin),
         daemon=True).start()
     return {"started": True, "algorithm": algo, "n_sectors": n_sectors,
             "target_torque_nm": target_torque, "v_peak_limit": v_peak_limit,
-            "n_variables": len(var_specs), "max_iters": max_iters,
+            "n_variables": len(var_specs), "max_iters": max_iters, "auto_expand": auto_expand,
+            "max_rounds": (max_rounds if auto_expand else 1),
             "variables": [s["name"] for s in var_specs], "steps_per_period": steps}
 
 

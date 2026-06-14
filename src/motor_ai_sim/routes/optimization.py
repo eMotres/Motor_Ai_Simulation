@@ -721,10 +721,13 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
         _spec_by = {v["name"]: v for v in var_specs}
 
         def _fit(name, val):
-            """Clamp into bounds; round integer-typed variables."""
+            """Clamp into bounds; round integers; snap mm vars to the 0.1 mm grid."""
             v = _spec_by[name]
             val = min(v["hi"], max(v["lo"], val))
-            return round(val) if v.get("is_int") else val
+            if v.get("is_int"):
+                return round(val)
+            q = float(v.get("quant", 0.0) or 0.0)
+            return (round(val / q) * q) if q > 0 else val
 
         # Start at the current config value for each variable, clamped to bounds.
         x = {}
@@ -995,11 +998,17 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
             hi = np.array([float(v["hi"]) for v in cur_specs])
             span = np.maximum(hi - lo, 1e-9)
             is_int = [bool(v.get("is_int")) for v in cur_specs]
+            quant = [float(v.get("quant", 0.0) or 0.0) for v in cur_specs]
 
-            def to_geom(xn, names=names, lo=lo, span=span, is_int=is_int):
+            def to_geom(xn, names=names, lo=lo, span=span, is_int=is_int, quant=quant):
                 phys = lo + np.clip(np.asarray(xn, float), 0.0, 1.0) * span
-                return {nm: (float(round(phys[i])) if is_int[i] else float(phys[i]))
-                        for i, nm in enumerate(names)}
+                def _q(i):
+                    if is_int[i]:
+                        return float(round(phys[i]))
+                    if quant[i] > 0:                      # mm var → snap to the 0.1 mm grid
+                        return float(round(phys[i] / quant[i]) * quant[i])
+                    return float(phys[i])
+                return {nm: _q(i) for i, nm in enumerate(names)}
 
             x0n = np.clip((np.array([float(geo0.get(nm, lo[i])) for i, nm in enumerate(names)]) - lo) / span, 0.0, 1.0)
 
@@ -1151,9 +1160,12 @@ def descent_start(req: DescentRequest):
         is_int = str(meta.get("type", "float")) == "int"
         if is_int:
             step = max(1.0, round(step))
+        # Manufacturable grid: snap mm-dimensioned variables to 0.1 mm during the
+        # search, so the optimizer only ever evaluates (and returns) round values.
+        quant = 0.1 if str(meta.get("unit", "")).strip().lower() == "mm" else 0.0
         var_specs.append({"name": v.name, "lo": lo, "hi": hi,
                           "step": step, "is_int": is_int,
-                          "hard_lo": s_lo, "hard_hi": s_hi})
+                          "hard_lo": s_lo, "hard_hi": s_hi, "quant": quant})
 
     if not var_specs:
         raise HTTPException(status_code=400,

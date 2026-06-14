@@ -82,6 +82,9 @@ const DescentPanel: React.FC = () => {
   // along each curve, so a vertical (same Nm/kg) shows which design is more
   // efficient at the same load.
   const [loadLines, setLoadLines] = useState<Record<string, any[]> | null>(null);
+  // Load-lines (current-sweep overlay) are a disambiguation tool — OFF by default,
+  // shown on demand after a run when two candidates are too close to call.
+  const [showLoadLines, setShowLoadLines] = useState(false);
   useEffect(() => {
     fetch('/last_loadline.json').then(r => (r.ok ? r.json() : null))
       .then(d => { if (d && typeof d === 'object' && Object.keys(d).length) setLoadLines(d); })
@@ -505,14 +508,24 @@ const DescentPanel: React.FC = () => {
       {/* 2-D objective-space projection: efficiency (Y) vs torque/mass (X) */}
       {(feasiblePts.length + infeasiblePts.length) > 1 && (
         <Box sx={{ mb: 2 }}>
-          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
-            Objective space — efficiency vs torque/mass ·{' '}
-            <span style={{ color: '#22c55e' }}>feasible</span> /{' '}
-            <span style={{ color: '#ef4444' }}>ripple&gt;limit</span> ·{' '}
-            <span style={{ color: '#3b82f6' }}>descent path</span> ·{' '}
-            <span style={{ color: '#fbbf24' }}>★ best</span>
-          </Typography>
-          {loadLineDesigns.some(([, a]) => a.length > 1) && (
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, mb: 0.5, flexWrap: 'wrap' }}>
+            <Typography variant="caption" color="text.secondary">
+              Objective space — efficiency vs torque/mass ·{' '}
+              <span style={{ color: '#22c55e' }}>feasible</span> /{' '}
+              <span style={{ color: '#ef4444' }}>ripple&gt;limit</span> ·{' '}
+              <span style={{ color: '#3b82f6' }}>descent path</span> ·{' '}
+              <span style={{ color: '#fbbf24' }}>★ best</span>
+            </Typography>
+            {history.length > 0 && loadLineDesigns.some(([, a]) => a.length > 1) && (
+              <Tooltip title="Overlay current-sweep load-lines for the finalist designs — a disambiguation tool for AFTER a run, when two candidates are too close to tell apart from the objective points alone. Each curve sweeps current; the ◆ marks the rated torque. Off by default to keep the chart clean." placement="top">
+                <ToggleButton value="ll" selected={showLoadLines} size="small"
+                  onChange={() => setShowLoadLines(v => !v)} sx={{ px: 1, py: 0, height: 24, fontSize: 10 }}>
+                  Load-lines
+                </ToggleButton>
+              </Tooltip>
+            )}
+          </Box>
+          {showLoadLines && loadLineDesigns.some(([, a]) => a.length > 1) && (
             <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: '12px', mb: 0.5 }}>
               <Typography variant="caption" color="text.secondary">load-lines · ◆ rated {ratedTorque} N·m:</Typography>
               {loadLineDesigns.map(([name], i) => (
@@ -536,7 +549,7 @@ const DescentPanel: React.FC = () => {
                 <Scatter name="descent path" data={trajPts} fill="#3b82f6"
                   line={{ stroke: '#3b82f6', strokeWidth: 1.5 }} lineType="joint" isAnimationActive={false} />
                 <Scatter name="★ best" data={bestPt} fill="#fbbf24" shape="star" isAnimationActive={false} />
-                {loadLineDesigns.map(([name, arr], i) => (
+                {showLoadLines && loadLineDesigns.map(([name, arr], i) => (
                   <Scatter key={'ll-' + name} name={name}
                     data={arr.map((p: any) => ({ td: p.td, eff: p.eff, z: 1, I: p.I }))}
                     fill={LL_PALETTE[i % LL_PALETTE.length]}
@@ -544,7 +557,7 @@ const DescentPanel: React.FC = () => {
                     <LabelList dataKey="I" position="top" formatter={(v: any) => `${v}A`} fill={LL_PALETTE[i % LL_PALETTE.length]} fontSize={9} />
                   </Scatter>
                 ))}
-                {ratedMarkers.map((rp: any) => (
+                {showLoadLines && ratedMarkers.map((rp: any) => (
                   <Scatter key={'rated-' + rp.name} name={`◆ ${rp.name} @ ${ratedTorque} Nm`}
                     data={[{ td: rp.td, eff: rp.eff, z: rp.z, I: rp.I }]}
                     fill={rp.color} shape="diamond" isAnimationActive={false}>

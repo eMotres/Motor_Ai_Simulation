@@ -399,33 +399,49 @@ const MeshPanel: React.FC = () => {
   const [femLoading,  setFemLoading]  = useState<boolean>(false);
   const [femError,    setFemError]    = useState<string | null>(null);
 
-  const fetchFemMesh = useCallback(() => {
+  // Monotonic build id: only the LATEST build's result is applied, so a stale build
+  // (e.g. the premature mount build with default settings) can't overwrite the
+  // config-correct one — that mismatch is what showed a 1/4 mesh under a "Full"
+  // toggle on first open.  `over` lets the mount build use the just-loaded config
+  // values directly, before the async setState has propagated to these closures.
+  const buildSeq = useRef(0);
+  const fetchFemMesh = useCallback((over?: Partial<{
+    mesh_size_mm: number; min_size_mm: number; normal_deviation: number;
+    outer_air_factor: number; gap_layers: number; n_sectors: number;
+  }>) => {
+    const mySeq = ++buildSeq.current;
     setFemLoading(true);
     setFemError(null);
+    const _ms = (over?.mesh_size_mm     ?? meshSizeMm).toString();
+    const _mn = (over?.min_size_mm      ?? minSizeMm).toString();
+    const _nd = (over?.normal_deviation ?? normalDev).toString();
+    const _oa = (over?.outer_air_factor ?? outerAirFactor).toString();
+    const _gl = (over?.gap_layers       ?? gapLayers).toString();
+    const _ns = (over?.n_sectors        ?? nSectors).toString();
     const base = solverMesh
       ? `${API}/api/simulation/mesh/build2d_sliding_band`
       : `${API}/api/simulation/mesh/build2d`;
     const qs = new URLSearchParams(solverMesh ? {
       rotor_angle_deg:   rotorAngle.toString(),
-      mesh_size_mm:      meshSizeMm.toString(),
-      min_size_mm:       minSizeMm.toString(),
+      mesh_size_mm:      _ms,
+      min_size_mm:       _mn,
       surface_deviation: '0.005',     // real geometry — no flattening
-      normal_deviation:  normalDev.toString(),
-      outer_air_factor:  outerAirFactor.toString(),
-      gap_layers:        gapLayers.toString(),
-      n_sectors:         nSectors.toString(),
+      normal_deviation:  _nd,
+      outer_air_factor:  _oa,
+      gap_layers:        _gl,
+      n_sectors:         _ns,
       stator_fillet_mm:  '0',          // native geometry — no extra smoothing
       component_mesh:    componentMeshJson,
       pole_copy:         poleCopy ? 'true' : 'false',
     } : {
-      mesh_size_mm:        meshSizeMm.toString(),
-      min_size_mm:         minSizeMm.toString(),
+      mesh_size_mm:        _ms,
+      min_size_mm:         _mn,
       surface_deviation:   '0.005',   // real geometry — no flattening
-      normal_deviation:    normalDev.toString(),
+      normal_deviation:    _nd,
       rotor_angle_deg:     rotorAngle.toString(),
-      outer_air_factor:    outerAirFactor.toString(),
-      gap_layers:          gapLayers.toString(),
-      n_sectors:           nSectors.toString(),
+      outer_air_factor:    _oa,
+      gap_layers:          _gl,
+      n_sectors:           _ns,
       stator_fillet_mm:    '0',          // native geometry — no extra smoothing
       component_mesh:      componentMeshJson,
     }).toString();
@@ -434,8 +450,8 @@ const MeshPanel: React.FC = () => {
         if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
         return r.json();
       })
-      .then((d: FemMesh) => { setFemMesh(d); setFemLoading(false); })
-      .catch(e => { setFemError(String(e)); setFemLoading(false); });
+      .then((d: FemMesh) => { if (mySeq !== buildSeq.current) return; setFemMesh(d); setFemLoading(false); })
+      .catch(e => { if (mySeq !== buildSeq.current) return; setFemError(String(e)); setFemLoading(false); });
   }, [solverMesh, meshSizeMm, minSizeMm, normalDev, rotorAngle,
       outerAirFactor, gapLayers, nSectors, componentMeshJson, poleCopy]);
 
@@ -459,16 +475,23 @@ const MeshPanel: React.FC = () => {
         if (typeof d.normal_deviation === 'number') setNormalDev(d.normal_deviation);
         if (typeof d.n_sectors        === 'number') setNSectors(d.n_sectors);
         meshReady.current = true;     // saves allowed only AFTER config is loaded
+        // Build the initial mesh with the JUST-LOADED config values (not the stale
+        // defaults) so the displayed mesh matches the Symmetry toggle on first open.
+        fetchFemMesh({
+          mesh_size_mm:     typeof d.mesh_size_mm     === 'number' ? d.mesh_size_mm : undefined,
+          min_size_mm:      typeof d.min_size_mm      === 'number' ? d.min_size_mm : undefined,
+          normal_deviation: typeof d.normal_deviation === 'number' ? d.normal_deviation : undefined,
+          outer_air_factor: typeof d.outer_air_factor === 'number' ? d.outer_air_factor : undefined,
+          gap_layers:       typeof d.gap_layers       === 'number' ? Math.min(3, Math.max(1, Math.round(d.gap_layers))) : undefined,
+          n_sectors:        typeof d.n_sectors        === 'number' ? d.n_sectors : undefined,
+        });
       })
-      .catch(() => {});
+      .catch(() => { fetchFemMesh(); });   // config load failed → build with current defaults
 
     fetch(`${API}/api/geometry/summary`)
       .then(r => r.json())
       .then(d => setGeo(d))
       .catch(() => {});
-
-    // Auto-build the initial FEM mesh
-    fetchFemMesh();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

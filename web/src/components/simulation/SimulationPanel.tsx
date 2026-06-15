@@ -281,7 +281,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // The text field edits a free string (stepsStr) and only commits a
   // clamped integer on blur / Enter, so typing "12" over "6" works
   // naturally instead of producing "62".
-  const [steps,    setSteps]    = usePersisted('stepsPP', 72);   // transient pts/period (matches slip-node grid)
+  const [steps,    setSteps]    = usePersisted('stepsPP', 24);   // transient frames/period — single source (optimizer reads this too)
   // Magnet/shaft eddy losses ALWAYS come from the real field solve
   // (J = σ(−∂A/∂t + U), per-magnet ∫J=0, assigned-material σ — the Ansys way),
   // never the classical slab d²/12 estimate.  No toggle: real fields only.

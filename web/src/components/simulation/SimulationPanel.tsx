@@ -145,7 +145,12 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   const loadWinding = useCallback(() => {
     fetch(`${API}/api/winding/config`)
       .then(r => r.json())
-      .then(d => { setWindCfg(d); setLayoutDraft(d.layout || ''); })
+      .then(d => {
+        setWindCfg(d); setLayoutDraft(d.layout || '');
+        // config.yaml is the persistent, cross-browser source for the connection;
+        // adopt it on load so a fresh browser / other tab reflects the real value.
+        if (d.connection) setConnection(d.connection);
+      })
       .catch(() => {});
   }, []);
   useEffect(() => { loadWinding(); }, [loadWinding]);
@@ -593,7 +598,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 <Button
                   size="small"
                   variant={connection === c.key ? 'contained' : 'outlined'}
-                  onClick={() => setConnection(c.key)}
+                  onClick={() => { setConnection(c.key); applyWinding({ connection: c.key }); }}
                   disabled={isRunning}
                   sx={{ flex: 1, fontSize: 11, fontWeight: 700, py: 0.5,
                     textTransform: 'none',
@@ -734,16 +739,6 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                   f_elec [Hz]  =  rpm × pole_pairs / 60
                   rpm          =  f_elec × 60 / pole_pairs
                 Editing one immediately recomputes the other. */}
-            <TextField label="Frequency (Hz)" type="number" size="small" fullWidth
-              value={Number(frequency.toFixed(2))}
-              onChange={e => {
-                const f = +e.target.value;
-                setFrequency(f);
-                setRpm(+(f * 60 / polePairs).toFixed(1));
-              }}
-              inputProps={{ step: 10, min: 1, max: 2000 }} disabled={isRunning}
-              helperText={`f = rpm × ${polePairs} / 60`}
-              FormHelperTextProps={{ sx: { fontSize: 10, color: '#475569', mx: 0 } }}/>
             <TextField label="Speed (rpm)" type="number" size="small" fullWidth
               value={Number(rpm.toFixed(0))}
               onChange={e => {
@@ -752,7 +747,14 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 setFrequency(+(r * polePairs / 60).toFixed(2));
               }}
               inputProps={{ step: 100, min: 0 }} disabled={isRunning}
-              helperText={`rpm = f × 60 / ${polePairs}`}
+              helperText={`electrical f = ${Number(frequency.toFixed(1))} Hz`}
+              FormHelperTextProps={{ sx: { fontSize: 10, color: '#475569', mx: 0 } }}/>
+            {/* Frequency is DERIVED from rpm (f = rpm × pole_pairs / 60) — read-only,
+                single source is the speed above.  Editing rpm recomputes it. */}
+            <TextField label="Frequency (Hz) — derived" type="number" size="small" fullWidth
+              value={Number(frequency.toFixed(2))}
+              disabled
+              helperText={`f = rpm × ${polePairs} / 60`}
               FormHelperTextProps={{ sx: { fontSize: 10, color: '#475569', mx: 0 } }}/>
             {/* The "Rotor Angle (°)" initial-position field was removed —
                 in the auto-run architecture the Field Animation sweeps the

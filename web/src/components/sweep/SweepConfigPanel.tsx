@@ -6,33 +6,21 @@ import {
   IconButton,
   TextField,
   InputAdornment,
-  Chip,
   Divider,
   Card,
   CardContent,
   Slider,
-  Collapse,
-  ToggleButton,
-  ToggleButtonGroup,
-  CircularProgress,
   Tooltip,
   Select,
   MenuItem,
   FormControl,
   InputLabel,
 } from '@mui/material';
-import PlayArrowIcon from '@mui/icons-material/PlayArrow';
-import StopIcon      from '@mui/icons-material/Stop';
 import ShowChartIcon from '@mui/icons-material/ShowChart';
 import CloseIcon     from '@mui/icons-material/Close';
 import TuneIcon      from '@mui/icons-material/Tune';
-import FolderOpenIcon from '@mui/icons-material/FolderOpen';
-import RefreshIcon    from '@mui/icons-material/Refresh';
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import RefreshIcon   from '@mui/icons-material/Refresh';
 import { useMotorStore } from '../../stores/motorStore';
-import type { VariationMode } from '../../types/motor';
-import ParetoResults from './ParetoResults';
-import SavedRunsDialog from './SavedRunsDialog';
 import DescentPanel from './DescentPanel';
 
 // Non-geometry variables (selected outside the Geometry tab) need their own
@@ -53,7 +41,7 @@ const readSim = <T,>(key: string, def: T): T => {
   }
 };
 
-// ── Card for one sweep/optimize parameter ─────────────────────────────────────
+// ── Card for one optimization variable (current value ± symmetric deviation) ───
 
 interface SweepVarCardProps {
   paramName: string;
@@ -65,15 +53,14 @@ const SweepVarCard: React.FC<SweepVarCardProps> = ({ paramName, label, unit }) =
   const { sweepConfig, updateVariation, geometry } = useMotorStore();
   const v = sweepConfig.variations[paramName];
   if (!v || v.mode === 'fixed') return null;
-  // Optimize cards show the CURRENT geometry value + a symmetric ± deviation
-  // (search range = value ∓ deviation) instead of raw min/max.
+  // The search window is the CURRENT geometry value ± a symmetric deviation.
+  // The value itself is owned by the Geometry tab (shown read-only here).
   const cur = Number((geometry as Record<string, any>)[paramName] ?? ((Number(v.min) + Number(v.max)) / 2));
   const delta = +Math.max(0, (Number(v.max) - Number(v.min)) / 2).toFixed(4);
 
   return (
     <Card variant="outlined" sx={{ mb: 1.5, bgcolor: 'rgba(255,255,255,0.02)' }}>
       <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
-        {/* Header */}
         <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
           <Typography variant="body2" sx={{ fontWeight: 600, flex: 1 }}>
             {label}
@@ -83,61 +70,31 @@ const SweepVarCard: React.FC<SweepVarCardProps> = ({ paramName, label, unit }) =
               </Typography>
             )}
           </Typography>
-          <ToggleButtonGroup
-            exclusive
-            size="small"
-            value={v.mode}
-            onChange={(_, m) => m && updateVariation(paramName, { mode: m as VariationMode })}
-            sx={{ height: 22, mr: 1 }}
-          >
-            <ToggleButton value="sweep"    color="primary" sx={{ px: 1, py: 0, fontSize: 10, minWidth: 50 }}>Sweep</ToggleButton>
-            <ToggleButton value="optimize" color="success" sx={{ px: 1, py: 0, fontSize: 10, minWidth: 42 }}>Optimize</ToggleButton>
-          </ToggleButtonGroup>
-          <IconButton
-            size="small"
-            onClick={() => updateVariation(paramName, { mode: 'fixed' })}
-            sx={{ p: 0.25 }}
-          >
+          <IconButton size="small" onClick={() => updateVariation(paramName, { mode: 'fixed' })} sx={{ p: 0.25 }}>
             <CloseIcon sx={{ fontSize: 14 }} />
           </IconButton>
         </Box>
 
-        {/* Range inputs — optimize: current value ± symmetric deviation;
-            sweep: explicit min / max / step grid. */}
-        {v.mode === 'optimize' ? (
-          <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-            <TextField
-              label="value (current)" size="small" type="number" value={cur} disabled
-              inputProps={{ style: { fontSize: 12, padding: '4px 8px' } }}
-              sx={{ flex: 1 }}
-            />
-            <Typography variant="body2" sx={{ color: 'text.secondary', fontWeight: 600 }}>±</Typography>
-            <TextField
-              label="deviation" size="small" type="number" value={delta}
-              onChange={e => {
-                const d = Math.max(0, parseFloat(e.target.value) || 0);
-                updateVariation(paramName, { min: cur - d, max: cur + d });
-              }}
-              inputProps={{ min: 0, style: { fontSize: 12, padding: '4px 8px' } }}
-              sx={{ flex: 1 }}
-            />
-            <Typography variant="caption" sx={{ color: 'text.secondary', whiteSpace: 'nowrap', minWidth: 88, textAlign: 'right' }}>
-              [{(cur - delta).toFixed(2)} … {(cur + delta).toFixed(2)}]
-            </Typography>
-          </Box>
-        ) : (
-          <Box sx={{ display: 'flex', gap: 1 }}>
-            <TextField label="Min" size="small" type="number" value={v.min}
-              onChange={e => updateVariation(paramName, { min: parseFloat(e.target.value) })}
-              inputProps={{ style: { fontSize: 12, padding: '4px 8px' } }} sx={{ flex: 1 }} />
-            <TextField label="Max" size="small" type="number" value={v.max}
-              onChange={e => updateVariation(paramName, { max: parseFloat(e.target.value) })}
-              inputProps={{ style: { fontSize: 12, padding: '4px 8px' } }} sx={{ flex: 1 }} />
-            <TextField label="Step" size="small" type="number" value={v.step}
-              onChange={e => updateVariation(paramName, { step: parseFloat(e.target.value) })}
-              inputProps={{ min: 0, style: { fontSize: 12, padding: '4px 8px' } }} sx={{ flex: 1 }} />
-          </Box>
-        )}
+        <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+          <TextField
+            label="value (current)" size="small" type="number" value={cur} disabled
+            inputProps={{ style: { fontSize: 12, padding: '4px 8px' } }}
+            sx={{ flex: 1 }}
+          />
+          <Typography variant="body2" sx={{ color: 'text.secondary', fontWeight: 600 }}>±</Typography>
+          <TextField
+            label="deviation" size="small" type="number" value={delta}
+            onChange={e => {
+              const d = Math.max(0, parseFloat(e.target.value) || 0);
+              updateVariation(paramName, { min: cur - d, max: cur + d });
+            }}
+            inputProps={{ min: 0, style: { fontSize: 12, padding: '4px 8px' } }}
+            sx={{ flex: 1 }}
+          />
+          <Typography variant="caption" sx={{ color: 'text.secondary', whiteSpace: 'nowrap', minWidth: 88, textAlign: 'right' }}>
+            [{(cur - delta).toFixed(2)} … {(cur + delta).toFixed(2)}]
+          </Typography>
+        </Box>
       </CardContent>
     </Card>
   );
@@ -153,24 +110,8 @@ const SweepConfigPanel: React.FC = () => {
     updateOperatingPoint,
     updateRippleThreshold,
     updateSweepConstraints,
-    connectedToApi,
     initVariationsFromSchema,
-    runOptimization,
-    cancelOptimization,
-    optimizationResult,
-    optimizationRunning,
-    optimizationProgress,
-    optimizationError,
   } = useMotorStore();
-
-  // FEM scan settings: frames per FULL electrical period (losses need a whole
-  // period; 18 = 3 samples per 6·k ripple cycle) and the geometry cap.
-  const [scanSteps, setScanSteps] = React.useState(18);
-  const [maxGeom,   setMaxGeom]   = React.useState(24);
-  const [savedOpen, setSavedOpen] = React.useState(false);
-  const savedRuns = useMotorStore(s => s.savedRuns);
-  const refreshSaved = useMotorStore(s => s.refreshSaved);
-  useEffect(() => { refreshSaved(); }, [refreshSaved]);
 
   useEffect(() => {
     if (parameterSchema.length > 0) initVariationsFromSchema();
@@ -178,31 +119,33 @@ const SweepConfigPanel: React.FC = () => {
 
   // ── Operating speed / load angle come from the Simulation tab ───────────────
   // One source of truth: pull rpm & γ from the Simulation tab's localStorage into
-  // BOTH operating points whenever the Sweep tab opens (it re-mounts on tab switch),
-  // so the torque optimizer and the Pareto scan run at exactly the condition the
-  // user set in Simulation — no more typing rpm in two places / silent drift.
+  // the operating point whenever the Sweep tab opens (it re-mounts on tab switch),
+  // so the optimizer runs at exactly the condition set in Simulation.  A storage
+  // listener also catches edits made in another browser window.
   const syncOpFromSim = React.useCallback(() => {
     const rpm   = Number(readSim('rpm',   3950));
     const gamma = Number(readSim('gamma', 0));
     updateOperatingPoint(0, { rpm, gamma_deg: gamma });
     updateOperatingPoint(1, { rpm, gamma_deg: gamma });
   }, [updateOperatingPoint]);
-  useEffect(() => { syncOpFromSim(); }, [syncOpFromSim]);
+  useEffect(() => {
+    syncOpFromSim();
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === 'sim.rpm' || e.key === 'sim.gamma') syncOpFromSim();
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, [syncOpFromSim]);
 
-  const [showScanCurrents, setShowScanCurrents] = React.useState(false);
   const ratedTorque = sweepConfig.ratedTorqueNm ?? 30.5;
   const opRpm   = sweepConfig.operatingPoints[0]?.rpm ?? 3950;
   const opGamma = sweepConfig.operatingPoints[0]?.gamma_deg ?? 0;
 
   const schemaMap = Object.fromEntries(parameterSchema.map(p => [p.name, p]));
+  const sweepEntries = Object.entries(sweepConfig.variations).filter(([, v]) => v.mode !== 'fixed');
 
-  const sweepEntries   = Object.entries(sweepConfig.variations).filter(([, v]) => v.mode !== 'fixed');
-  const sweepCount     = sweepEntries.filter(([, v]) => v.mode === 'sweep').length;
-  const optimizeCount  = sweepEntries.filter(([, v]) => v.mode === 'optimize').length;
-
-  // ── Add-variable dropdown: make the Sweep tab self-contained (no need to
-  //    hunt chart-icons in the Geometry/Simulation tabs). Adds the chosen param
-  //    as an "optimize" variable with a sensible default range.
+  // ── Add-variable dropdown: make the tab self-contained (no need to hunt
+  //    chart-icons in the Geometry/Simulation tabs).  Adds as an optimize var.
   const DEFAULT_RANGE: Record<string, { min: number; max: number; step: number }> = {
     gamma_deg: { min: -20, max: 0, step: 5 },
   };
@@ -221,25 +164,6 @@ const SweepConfigPanel: React.FC = () => {
     'gamma_deg',
   ].filter(n => !activeNames.has(n));
 
-  // Grid size: ∏ (#values per sweep var).  floor(+ε) so an exact 2.0 doesn't
-  // round up to 3 (the old ceil counted 81 combos as 144).
-  const estimateRuns = () =>
-    Object.values(sweepConfig.variations)
-      .filter(v => v.mode === 'sweep')
-      .reduce((acc, v) => {
-        const steps = Math.max(1, Math.floor((v.max - v.min) / Math.max(v.step || 1, 1e-9) + 1e-9) + 1);
-        return acc * steps;
-      }, 1);
-
-  // Default the geometry cap to the FULL design count (sweep grid × optimize
-  // spread) so the scan computes exactly the points the Sweep Variables define —
-  // no subsampling.  The user can still lower the field for a quick subset.
-  useEffect(() => {
-    const full = estimateRuns() * Math.pow(4, optimizeCount);
-    setMaxGeom(Math.max(1, Math.min(400, full)));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [JSON.stringify(sweepConfig.variations)]);
-
   return (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
 
@@ -250,64 +174,25 @@ const SweepConfigPanel: React.FC = () => {
         display: 'flex', alignItems: 'center', gap: 1, flexShrink: 0,
       }}>
         <ShowChartIcon sx={{ fontSize: 16 }} />
-        <Typography variant="subtitle2" sx={{ flex: 1 }}>Sweep / Optimize</Typography>
-        <Chip size="small" label={`${sweepCount} sweep`}  color="primary" variant={sweepCount   > 0 ? 'filled' : 'outlined'} sx={{ height: 18, fontSize: 10 }} />
-        <Chip size="small" label={`${optimizeCount} opt`} color="success" variant={optimizeCount > 0 ? 'filled' : 'outlined'} sx={{ height: 18, fontSize: 10 }} />
-        {sweepCount > 0 && (
-          <Chip size="small" label={`~${estimateRuns()} variants`} variant="outlined" sx={{ height: 18, fontSize: 10 }} />
-        )}
-        <Tooltip title="Saved scan results — load or delete (stored on disk)" placement="top">
-          <Button size="small" variant="outlined" startIcon={<FolderOpenIcon sx={{ fontSize: 14 }} />}
-            onClick={() => setSavedOpen(true)}
-            sx={{ ml: 1, fontSize: 10, py: 0.2, textTransform: 'none', flexShrink: 0 }}>
-            Saved{savedRuns.length ? ` (${savedRuns.length})` : ''}
-          </Button>
-        </Tooltip>
-        <Tooltip title="FEM frames per FULL electrical period. Losses (iron/magnet eddy via dB/dt) need a whole period to be correct. 18 = 3 samples per 6·k ripple cycle; 36 resolves the ripple finely (slower). Snapped to a divisor of 72 slip nodes." placement="top">
-          <TextField label="steps/T" type="number" size="small" value={scanSteps}
-            onChange={e => setScanSteps(Math.max(6, Math.min(72, Math.round(+e.target.value) || 18)))}
-            inputProps={{ min: 6, max: 72, style: { fontSize: 11, padding: '3px 6px', width: 38 } }}
-            InputLabelProps={{ sx: { fontSize: 10 } }} sx={{ ml: 1 }} />
-        </Tooltip>
-        <Tooltip title="Cap on the number of geometries evaluated (each is a real FEM transient × 2 currents). Sweep grids and optimize spreads are subsampled to this." placement="top">
-          <TextField label="max geom" type="number" size="small" value={maxGeom}
-            onChange={e => setMaxGeom(Math.max(1, Math.min(400, Math.round(+e.target.value) || 24)))}
-            inputProps={{ min: 1, max: 400, style: { fontSize: 11, padding: '3px 6px', width: 38 } }}
-            InputLabelProps={{ sx: { fontSize: 10 } }} />
-        </Tooltip>
-        {optimizationRunning ? (
-          <Button
-            variant="contained" color="error" startIcon={<StopIcon />}
-            size="small" sx={{ flexShrink: 0, ml: 1 }}
-            onClick={() => cancelOptimization()}
-          >
-            {`Stop ${optimizationProgress?.done ?? 0}/${optimizationProgress?.total ?? 0}`}
-          </Button>
-        ) : (
-          <Button
-            variant="contained" startIcon={<PlayArrowIcon />}
-            disabled={sweepEntries.length === 0 || !connectedToApi}
-            size="small" sx={{ flexShrink: 0, ml: 1 }}
-            onClick={() => runOptimization(scanSteps, maxGeom)}
-          >
-            Run FEM scan
-          </Button>
-        )}
+        <Typography variant="subtitle2" sx={{ flex: 1 }}>Optimize</Typography>
+        <Typography variant="caption" color="text.disabled">
+          {sweepEntries.length} variable{sweepEntries.length === 1 ? '' : 's'}
+        </Typography>
       </Box>
 
-      {/* ── Body: config (two columns) + results ── */}
+      {/* ── Body: config (two columns) + the optimizer ── */}
       <Box sx={{ flex: 1, overflowY: 'auto', p: 3 }}>
        <Box sx={{ display: 'flex', gap: 4 }}>
 
-        {/* Left: sweep variable cards */}
+        {/* Left: optimization variable cards */}
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <Typography variant="overline" color="text.secondary" sx={{ fontSize: 10, letterSpacing: 1, display: 'block', mb: 1 }}>
-            Sweep Variables
+            Optimization Variables
           </Typography>
           <Typography variant="caption" color="text.disabled" sx={{ display: 'block', mb: 1.5 }}>
             Add a parameter below (or via the chart icon in <strong>Geometry</strong> / the
-            <strong> γ</strong> checkbox in <strong>Simulation</strong>). Each is added as an
-            <strong> Optimize</strong> variable — switch to Sweep or set the range in its card.
+            <strong> γ</strong> checkbox in <strong>Simulation</strong>). Each is optimized within
+            its current value ± deviation.
           </Typography>
 
           <FormControl size="small" fullWidth sx={{ mb: 2 }}>
@@ -338,7 +223,7 @@ const SweepConfigPanel: React.FC = () => {
             <Box sx={{ textAlign: 'center', py: 5, color: 'text.disabled' }}>
               <TuneIcon sx={{ fontSize: 40, mb: 1, opacity: 0.2, display: 'block', mx: 'auto' }} />
               <Typography variant="caption">
-                No parameters selected for sweep or optimization.
+                No parameters selected for optimization.
               </Typography>
             </Box>
           ) : (
@@ -355,7 +240,7 @@ const SweepConfigPanel: React.FC = () => {
 
         <Divider orientation="vertical" flexItem />
 
-        {/* Right: operating points + ripple */}
+        {/* Right: operating point + ripple */}
         <Box sx={{ flex: 1, minWidth: 0 }}>
 
           <Typography variant="overline" color="text.secondary" sx={{ fontSize: 10, letterSpacing: 1, display: 'block', mb: 0.5 }}>
@@ -366,7 +251,7 @@ const SweepConfigPanel: React.FC = () => {
             for each design. Speed &amp; load angle are taken from the <strong>Simulation</strong> tab.
           </Typography>
 
-          <Card variant="outlined" sx={{ mb: 2, bgcolor: 'rgba(255,255,255,0.02)' }}>
+          <Card variant="outlined" sx={{ mb: 2.5, bgcolor: 'rgba(255,255,255,0.02)' }}>
             <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25 }}>
                 <TextField
@@ -407,41 +292,6 @@ const SweepConfigPanel: React.FC = () => {
             </CardContent>
           </Card>
 
-          {/* Legacy: per-current points feed only the "Run FEM scan" Pareto tool.
-              The torque optimizer below ignores these — it solves the current itself. */}
-          <Box
-            onClick={() => setShowScanCurrents(s => !s)}
-            sx={{ display: 'flex', alignItems: 'center', gap: 0.5, cursor: 'pointer', mb: 2, userSelect: 'none' }}
-          >
-            <ExpandMoreIcon sx={{ fontSize: 16, transition: 'transform 120ms',
-              transform: showScanCurrents ? 'rotate(0deg)' : 'rotate(-90deg)' }} />
-            <Typography variant="caption" color="text.secondary">
-              FEM-scan currents — for the “Run FEM scan” Pareto tool only
-            </Typography>
-          </Box>
-          <Collapse in={showScanCurrents}>
-            <Box sx={{ display: 'flex', gap: 2, mb: 3 }}>
-              {([0, 1] as const).map(i => (
-                <Card key={i} variant="outlined" sx={{ flex: 1, bgcolor: 'rgba(255,255,255,0.02)' }}>
-                  <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
-                    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, display: 'block', mb: 1 }}>
-                      Point {i + 1}
-                    </Typography>
-                    <TextField
-                      label="Current" size="small" type="number" fullWidth
-                      value={sweepConfig.operatingPoints[i].current_a}
-                      onChange={e => updateOperatingPoint(i, { current_a: parseFloat(e.target.value) })}
-                      InputProps={{ endAdornment: <InputAdornment position="end">A</InputAdornment> }}
-                      inputProps={{ min: 0, step: 1 }}
-                    />
-                  </CardContent>
-                </Card>
-              ))}
-            </Box>
-          </Collapse>
-
-          <Divider sx={{ mb: 2.5 }} />
-
           <Typography variant="overline" color="text.secondary" sx={{ fontSize: 10, letterSpacing: 1, display: 'block', mb: 0.5 }}>
             Torque Ripple Constraint
           </Typography>
@@ -466,19 +316,9 @@ const SweepConfigPanel: React.FC = () => {
         </Box>
        </Box>
 
-        {/* ── Results: Pareto front ── */}
-        {optimizationError && (
-          <Typography color="error" variant="caption" sx={{ display: 'block', mt: 2 }}>
-            Optimization error: {optimizationError}
-          </Typography>
-        )}
-        {optimizationResult && <ParetoResults result={optimizationResult} />}
-
-        {/* ── Gradient / coordinate descent ── */}
+        {/* ── Torque-driven optimizer (gradient / CMA-ES + box-walking) ── */}
         <DescentPanel />
       </Box>
-
-      <SavedRunsDialog open={savedOpen} onClose={() => setSavedOpen(false)} />
     </Box>
   );
 };

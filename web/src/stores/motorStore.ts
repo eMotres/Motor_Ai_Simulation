@@ -13,9 +13,6 @@ import type {
   VariationConfig,
   OperatingPoint,
   ParameterVariation,
-  OptimizationResult,
-  OptDesignPoint,
-  SavedRunMeta,
 } from '../types/motor';
 import {
   defaultGeometryParams,
@@ -25,77 +22,10 @@ import {
 
 const API_BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
 
-// ─── Material config types ────────────────────────────────────────────────────
-
-export interface SteelMaterial {
-  preset: string;
-  name: string;
-  mu_r: number;
-  sigma: number;
-  B_sat: number;
-  density: number;
-  lamination_mm: number;
-}
-
-export interface MagnetMaterial {
-  preset: string;
-  name: string;
-  Br: number;
-  Hc: number;
-  mu_rec: number;
-  density: number;
-  max_temp_c: number;
-}
-
-export interface WindingMaterial {
-  preset: string;
-  name: string;
-  sigma: number;
-  fill_factor: number;
-  density: number;
-  alpha: number;
-}
-
-export interface ShaftMaterial {
-  preset: string;
-  name: string;
-  density: number;
-  yield_strength_mpa: number;
-  tensile_mpa: number;
-}
-
-export interface MaterialConfig {
-  stator:   SteelMaterial;
-  rotor:    SteelMaterial;
-  magnets:  MagnetMaterial;
-  windings: WindingMaterial;
-  shaft:    ShaftMaterial;
-}
-
-export type ComponentMaterialKey = keyof MaterialConfig;
-
-const defaultMaterialConfig: MaterialConfig = {
-  stator: {
-    preset: 'm27_silicon_steel', name: 'M27 Silicon Steel',
-    mu_r: 4000, sigma: 2.5e6, B_sat: 1.70, density: 7700, lamination_mm: 0.457,
-  },
-  rotor: {
-    preset: 'm27_silicon_steel', name: 'M27 Silicon Steel',
-    mu_r: 4000, sigma: 2.5e6, B_sat: 1.70, density: 7700, lamination_mm: 0.457,
-  },
-  magnets: {
-    preset: 'ndfeb_n42', name: 'NdFeB N42',
-    Br: 1.28, Hc: 979, mu_rec: 1.05, density: 7500, max_temp_c: 150,
-  },
-  windings: {
-    preset: 'copper', name: 'Copper',
-    sigma: 5.96e7, fill_factor: 0.55, density: 8960, alpha: 0.00393,
-  },
-  shaft: {
-    preset: 'carbon_steel_1045', name: 'Carbon Steel 1045',
-    density: 7850, yield_strength_mpa: 530, tensile_mpa: 625,
-  },
-};
+// Material PROPERTIES (Br, μr, σ, …) are not edited in the UI — material
+// selection is library-based, assigned per part on the Materials tab via
+// /api/materials (see useMotorAssignments).  The old editable materialConfig
+// (and its MaterialsPanel) were dead code and have been removed.
 
 // View mode for 3D visualization
 type ViewMode = 'solid' | 'pointcloud' | 'hybrid' | 'stl';
@@ -104,7 +34,6 @@ interface MotorState {
   // State
   geometry: MotorGeometryParams;
   materials: MaterialAssignments;
-  materialConfig: MaterialConfig;
   meshSettings: MeshSettings;
   parameterSchema: ParameterSchema[];
   parameterGroups: ParameterGroup[];
@@ -127,7 +56,6 @@ interface MotorState {
   // Actions
   setGeometryUpdating: (v: boolean) => void;
   updateGeometry: (params: Partial<MotorGeometryParams>) => void;
-  updateComponentMaterial: (comp: ComponentMaterialKey, patch: Record<string, number | string>) => void;
   updateMaterials: (materials: Partial<MaterialAssignments>) => void;
   updateMeshSettings: (settings: Partial<MeshSettings>) => void;
   setViewMode: (mode: ViewMode) => void;
@@ -159,21 +87,6 @@ interface MotorState {
   updateSweepConstraints: (patch: Partial<SweepConfig>) => void;
   initVariationsFromSchema: () => void;
 
-  // Design optimization (FEM Pareto scan)
-  optimizationResult: OptimizationResult | null;
-  optimizationRunning: boolean;
-  optimizationProgress: { done: number; total: number } | null;
-  optimizationError: string | null;
-  runOptimization: (stepsPerPeriod?: number, maxGeometries?: number) => Promise<void>;
-  cancelOptimization: () => Promise<void>;
-
-  // FEM refinement of selected (front) designs
-  refineRunning: boolean;
-  refineProgress: { done: number; total: number } | null;
-  refineResults: OptDesignPoint[] | null;
-  refineError: string | null;
-  refineFront: (stepsPerPeriod?: number) => Promise<void>;
-
   // Gradient / coordinate descent (fixed current+rpm, vary whitelisted vars)
   descentRunning: boolean;
   descentState: any | null;           // raw /descent/progress payload
@@ -192,12 +105,6 @@ interface MotorState {
   applyDescentBest: () => Promise<void>;
   loadLastDescent: () => Promise<void>;   // re-hydrate the last run's charts from the backend
 
-  // Saved scan results (persisted to disk)
-  savedRuns: SavedRunMeta[];
-  refreshSaved: () => Promise<void>;
-  saveCurrentResult: (name: string) => Promise<void>;
-  loadSaved: (id: string) => Promise<void>;
-  deleteSaved: (id: string) => Promise<void>;
   /** Hydrate sweepConfig from the backend so the selected variables follow the
    *  user across browsers; seeds the server if it has none yet but this browser does. */
   loadServerSweepConfig: () => Promise<void>;
@@ -221,7 +128,6 @@ export const useMotorStore = create<MotorState>()(
       // Initial state
       geometry: { ...defaultGeometryParams },
       materials: defaultMaterialAssignments,
-      materialConfig: defaultMaterialConfig,
       meshSettings: defaultMeshSettings,
       parameterSchema: [],
       parameterGroups: [],
@@ -253,14 +159,6 @@ export const useMotorStore = create<MotorState>()(
       },
 
       setGeometryUpdating: (v) => set({ isGeometryUpdating: v }),
-
-      updateComponentMaterial: (comp, patch) =>
-        set((state) => ({
-          materialConfig: {
-            ...state.materialConfig,
-            [comp]: { ...state.materialConfig[comp], ...patch },
-          },
-        })),
 
       // Local Actions
       updateGeometry: (params) => set((state) => ({
@@ -696,162 +594,8 @@ export const useMotorStore = create<MotorState>()(
         }));
       },
 
-      // ── Design optimization ─────────────────────────────────────────────────
-      optimizationResult: null,
-      optimizationRunning: false,
-      optimizationProgress: null,
-      optimizationError: null,
-      runOptimization: async (stepsPerPeriod = 6, maxGeometries = 24) => {
-        const { sweepConfig } = get();
-        // Design variables = GEOMETRY params marked sweep/optimize (sweep →
-        // grid, optimize → spread). current/rpm come from the operating points.
-        // Design variables = every variation marked sweep/optimize.  This
-        // includes geometry params (selected via the Geometry chart icon) AND
-        // the load angle gamma_deg (selected via the Simulation tab checkbox);
-        // the backend splits gamma_deg out of the geometry override and threads
-        // it to the FEM current vector, so the mesh is unchanged.
-        const variables = Object.entries(sweepConfig.variations)
-          .filter(([, v]) => v.mode !== 'fixed')
-          .map(([name, v]) => ({ name, min: Number(v.min), max: Number(v.max),
-                                 mode: v.mode, step: Number(v.step) }));
-
-        // Each geometry evaluated at BOTH operating currents → two FEM points
-        // joined by a load-line segment.
-        const [op0, op1] = sweepConfig.operatingPoints;
-        const operating_points = [
-          { gamma_deg: 0, current_a: op0.current_a, rpm: op0.rpm },
-          { gamma_deg: 0, current_a: op1.current_a, rpm: op1.rpm },
-        ];
-        const ripple_max_pct = sweepConfig.rippleThreshold * 100;
-
-        set({ optimizationRunning: true, optimizationError: null,
-              optimizationProgress: { done: 0, total: 0 }, refineResults: null });
-        try {
-          // Every scan point is a REAL sliding-band transient (geometry + mesh
-          // rebuilt per candidate) at stepsPerPeriod frames — background + poll.
-          // Honor the Mesh-tab resolution so tuning it (coarser = fewer
-          // elements) directly speeds up the scan.
-          let mesh_size_mm = 4.0, min_size_mm = 0.3;
-          try { mesh_size_mm = Number(JSON.parse(localStorage.getItem('mesh.meshSize') ?? '4')) || 4.0; } catch { /* default */ }
-          try { min_size_mm  = Number(JSON.parse(localStorage.getItem('mesh.minSize')  ?? '0.3')) || 0.3; } catch { /* default */ }
-          const res = await fetch(`${API_BASE_URL}/api/optimization/scan`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              variables, operating_points, ripple_max_pct,
-              steps_per_period: stepsPerPeriod, max_geometries: maxGeometries,
-              mesh_size_mm, min_size_mm,
-            }),
-          });
-          if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
-          // eslint-disable-next-line no-constant-condition
-          while (true) {
-            await new Promise(r => setTimeout(r, 2000));
-            const pr = await fetch(`${API_BASE_URL}/api/optimization/scan/progress`);
-            const st = await pr.json();
-            set({ optimizationProgress: { done: st.done, total: st.total } });
-            if (!st.running) {
-              if (st.error) throw new Error(st.error);
-              if (st.result) set({ optimizationResult: st.result as OptimizationResult });
-              break;
-            }
-          }
-          set({ optimizationRunning: false });
-        } catch (e: any) {
-          set({ optimizationError: String(e?.message ?? e), optimizationRunning: false });
-        }
-      },
-
-      // Stop the running scan — the backend returns whatever it computed so far,
-      // and the polling loop in runOptimization picks up that partial result.
-      cancelOptimization: async () => {
-        try {
-          await fetch(`${API_BASE_URL}/api/optimization/scan/cancel`, { method: 'POST' });
-        } catch { /* ignore */ }
-      },
-
-      // ── Saved scan results (disk) ───────────────────────────────────────────
-      savedRuns: [],
-      refreshSaved: async () => {
-        try {
-          const r = await fetch(`${API_BASE_URL}/api/optimization/saved`);
-          const d = await r.json();
-          set({ savedRuns: d.saved || [] });
-        } catch { /* ignore */ }
-      },
-      saveCurrentResult: async (name: string) => {
-        const { optimizationResult } = get();
-        if (!optimizationResult) return;
-        const config = {
-          steps_per_period: (optimizationResult as any).steps_per_period,
-          operating_points: optimizationResult.operating_points,
-          variables: optimizationResult.variables,
-          ripple_max_pct: optimizationResult.ripple_max_pct,
-        };
-        try {
-          await fetch(`${API_BASE_URL}/api/optimization/saved`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, result: optimizationResult, config }),
-          });
-          await get().refreshSaved();
-        } catch { /* ignore */ }
-      },
-      loadSaved: async (id: string) => {
-        try {
-          const r = await fetch(`${API_BASE_URL}/api/optimization/saved/${id}`);
-          if (!r.ok) return;
-          const d = await r.json();
-          set({ optimizationResult: d.result as OptimizationResult, refineResults: null });
-        } catch { /* ignore */ }
-      },
-      deleteSaved: async (id: string) => {
-        try {
-          await fetch(`${API_BASE_URL}/api/optimization/saved/${id}`, { method: 'DELETE' });
-          await get().refreshSaved();
-        } catch { /* ignore */ }
-      },
-
-      // ── FEM refinement of the Pareto-front designs ──────────────────────────
-      refineRunning: false,
-      refineProgress: null,
-      refineResults: null,
-      refineError: null,
-      refineFront: async (stepsPerPeriod = 40) => {
-        const { optimizationResult } = get();
-        if (!optimizationResult) return;
-        const OPK = new Set(['gamma_deg', 'current_a', 'rpm']);
-        // The front designs (geometry overrides + their operating current).
-        const designs = optimizationResult.pareto_indices.map(i => {
-          const d = optimizationResult.points[i];
-          const overrides: Record<string, number> = {};
-          Object.entries(d.overrides || {}).forEach(([k, v]) => {
-            if (!OPK.has(k)) overrides[k] = v as number;
-          });
-          return { overrides, current_a: d.current_a, rpm: d.rpm || 3950 };
-        });
-        if (!designs.length) return;
-        set({ refineRunning: true, refineError: null, refineResults: null,
-              refineProgress: { done: 0, total: designs.length } });
-        try {
-          const res = await fetch(`${API_BASE_URL}/api/optimization/refine`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ designs, steps_per_period: stepsPerPeriod, coil_temp_c: 120 }),
-          });
-          if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
-          // poll progress until done
-          // eslint-disable-next-line no-constant-condition
-          while (true) {
-            await new Promise(r => setTimeout(r, 2000));
-            const pr = await fetch(`${API_BASE_URL}/api/optimization/refine/progress`);
-            const st = await pr.json();
-            set({ refineProgress: { done: st.done, total: st.total },
-                  refineResults: (st.results || []).filter((x: any) => !x.error) });
-            if (!st.running) break;
-          }
-          set({ refineRunning: false });
-        } catch (e: any) {
-          set({ refineError: String(e?.message ?? e), refineRunning: false });
-        }
-      },
+      // (Legacy Pareto FEM-scan + front-refine + saved-scan-runs were removed —
+      //  the torque-driven descent below is now the sole optimizer.)
 
       // ── Gradient / coordinate descent ───────────────────────────────────────
       descentRunning: false,
@@ -982,7 +726,6 @@ export const useMotorStore = create<MotorState>()(
       partialize: (state) => ({
         geometry: state.geometry,
         materials: state.materials,
-        materialConfig: state.materialConfig,
         meshSettings: state.meshSettings,
         sweepConfig: state.sweepConfig,
         lastOptSnapshot: state.lastOptSnapshot,

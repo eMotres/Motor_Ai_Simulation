@@ -119,7 +119,7 @@ const DescentPanel: React.FC = () => {
 
   const [maxIters, setMaxIters] = useState(10);
   const [wEff, setWEff] = useState(1);
-  const [wTd, setWTd]   = useState(0);   // 0 = optimize EFFICIENCY only (mass free); raise to also reward torque/mass
+  const [wTd, setWTd]   = useState(1);   // reward torque/mass too (default); 0 = efficiency only → design ignores mass
   const [steps, setSteps] = useState(24);
   const [applied, setApplied] = useState(false);
   // Algorithm: CMA-ES (derivative-free, noise-robust, default) vs the original

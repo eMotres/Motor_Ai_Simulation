@@ -185,16 +185,31 @@ def suggest(
         for i, k in enumerate(feat_keys):
             if k in bounds:
                 lo[i], hi[i] = bounds[k]
-    cand = lo + (hi - lo) * rng.random((n_candidates, len(feat_keys)))
+    span = np.where(hi > lo, hi - lo, 1.0)
+
+    # The feasible region (ripple ≤ gate) is a THIN slice of a 16-D box → uniform
+    # sampling almost never lands in it.  Sample mostly as local perturbations of
+    # the best OBSERVED designs (trust-region, where feasibility lives) + some
+    # uniform global exploration.
+    obs_feas = ys["ripple"] <= ripple_max
+    if obs_feas.any():
+        seeds = X[obs_feas][np.argsort((ys["td"] * ys["eff"])[obs_feas])[::-1][:5]]
+    else:
+        seeds = X[np.argsort(ys["ripple"])[:5]]                 # the closest-to-feasible evals
+    per_seed = max(1, n_candidates // (2 * len(seeds)))
+    local = np.vstack([s + rng.normal(0, 0.06, (per_seed, len(feat_keys))) * span for s in seeds])
+    glob = lo + (hi - lo) * rng.random((max(1, n_candidates - len(local)), len(feat_keys)))
+    cand = np.clip(np.vstack([local, glob]), lo, hi)
 
     models = {t: _fit_forest(X, ys[t]) for t in ("ripple", "td", "eff")}
     pred = {t: m.predict(cand) for t, m in models.items()}
-    # RF uncertainty = std across trees (exploration bonus for ripple feasibility).
+    # RF uncertainty = std across trees (exploration bonus on the ripple gate).
     rip_std = np.std([est.predict(cand) for est in models["ripple"].estimators_], axis=0)
 
-    feasible = pred["ripple"] - 0.5 * rip_std <= ripple_max   # optimistic on the gate
-    score = pred["td"] * pred["eff"]
-    score[~feasible] = -np.inf
+    feasible = pred["ripple"] - 0.5 * rip_std <= ripple_max     # optimistic on the gate
+    if not feasible.any():                                      # nothing predicted-feasible →
+        feasible = pred["ripple"] <= np.percentile(pred["ripple"], 5)   # take the lowest-ripple 5%
+    score = np.where(feasible, pred["td"] * pred["eff"], -np.inf)
     order = np.argsort(score)[::-1][:n]
 
     sugg = []
@@ -236,6 +251,11 @@ def _print_report(recs, n_suggest, ripple_max):
 
 
 def main(argv=None):
+    import sys
+    try:                                   # Windows console is cp1252 → force UTF-8 for ↓↑²×·
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
     ap = argparse.ArgumentParser(description="Motor optimizer surrogate / variable importance")
     ap.add_argument("--dataset", default=None, help="path to .opt_dataset.jsonl")
     ap.add_argument("--suggest", type=int, default=5, help="number of next-design suggestions")

@@ -100,7 +100,7 @@ interface MotorState {
                        algorithm: string; nSectors: number;
                        targetTorque?: number; vPeakLimit?: number;
                        optimizeGamma?: boolean; autoExpand?: boolean;
-                       maxRounds?: number }) => Promise<void>;
+                       maxRounds?: number; surrogateSeed?: boolean }) => Promise<void>;
   cancelDescent: () => Promise<void>;
   applyDescentBest: () => Promise<void>;
   loadLastDescent: () => Promise<void>;   // re-hydrate the last run's charts from the backend
@@ -603,7 +603,7 @@ export const useMotorStore = create<MotorState>()(
       descentError: null,
       lastOptSnapshot: null,
       setLastOptSnapshot: (s) => set({ lastOptSnapshot: s }),
-      runDescent: async ({ rippleMax, maxIters, wEff, wTd, steps, algorithm, nSectors, targetTorque, vPeakLimit, optimizeGamma, autoExpand, maxRounds }) => {
+      runDescent: async ({ rippleMax, maxIters, wEff, wTd, steps, algorithm, nSectors, targetTorque, vPeakLimit, optimizeGamma, autoExpand, maxRounds, surrogateSeed }) => {
         const { sweepConfig, geometry } = get();
         // Variables = every active (non-fixed) entry.  OPTIMIZE vars search a
         // SYMMETRIC ± deviation around the CURRENT geometry value (range tracks the
@@ -640,6 +640,7 @@ export const useMotorStore = create<MotorState>()(
               optimize_gamma: optimizeGamma ?? true,
               auto_expand: autoExpand ?? false,
               max_rounds: maxRounds ?? 5,
+              surrogate_seed: surrogateSeed ?? false,
             }),
           });
           if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);

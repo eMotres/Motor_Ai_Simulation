@@ -610,6 +610,10 @@ class DescentRequest(BaseModel):
     v_peak_limit: float = 1e9
     # Optimize the load angle γ (MTPA) for the starting geometry BEFORE the search.
     optimize_gamma: bool = True
+    # Surrogate (Bayesian) warm-start: seed the search from the best geometry the
+    # RandomForest surrogate predicts over ALL accumulated evals (config/.opt_dataset.jsonl).
+    # Falls back to the current geometry if there isn't enough data yet (<20 evals).
+    surrogate_seed: bool = False
     # Box-walking: when a variable ends pinned at a window edge, re-centre the
     # ±deviation window on the optimum and re-run, server-side, until everything
     # settles inside / hits a physical limit / max_rounds.  Fully unattended.
@@ -745,7 +749,7 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                     steps, coil_temp, mesh_size, min_size, max_iters, run_id,
                     n_sectors=-1, v_peak_limit=1e9, target_torque=0.0,
                     optimize_gamma=True, auto_expand=False, max_rounds=1,
-                    boundary_margin=0.05) -> None:
+                    boundary_margin=0.05, surrogate_seed=False) -> None:
     # NOTE: server-side box-walking (auto_expand) is implemented for CMA-ES only;
     # the gradient path runs a single round, then the UI flags boundary variables
     # for a manual one-click continue.
@@ -961,11 +965,30 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
         _save_descent_state()   # persist so the optimization survives a reload/restart
 
 
+def _surrogate_seed_overrides(var_specs, ripple_max, min_n=20):
+    """Bayesian warm-start: the geometry the RandomForest surrogate predicts best
+    over ALL accumulated evals (config/.opt_dataset.jsonl).  Returns {var: value}
+    clamped to each variable's current window, or None if there isn't enough data."""
+    try:
+        from motor_ai_sim.optimization import surrogate as _surr
+        recs = _surr.filter_operating(_surr.load_dataset(_dataset_path()))
+        if len(recs) < int(min_n):
+            return None
+        bounds = {v["name"]: (float(v["lo"]), float(v["hi"])) for v in var_specs}
+        sg = _surr.suggest(recs, bounds=bounds, n=1, ripple_max=float(ripple_max))
+        if not sg.get("ok") or not sg.get("suggestions"):
+            return None
+        return sg["suggestions"][0].get("overrides") or None
+    except Exception as _e:   # noqa: BLE001
+        log.warning("surrogate seed unavailable: %s", _e)
+        return None
+
+
 def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                   steps, coil_temp, mesh_size, min_size, max_iters, run_id,
                   n_sectors=-1, v_peak_limit=1e9, target_torque=0.0,
                   optimize_gamma=True, auto_expand=False, max_rounds=1,
-                  boundary_margin=0.05) -> None:
+                  boundary_margin=0.05, surrogate_seed=False) -> None:
     """Covariance-Matrix-Adaptation Evolution Strategy — derivative-free,
     noise-robust geometry search.  Same penalised cost as the gradient descent
     (−(eff/eff0)^w_eff·(td/td0)^w_td + λ·max(0, ripple−ripple_max)), evaluated on
@@ -1048,6 +1071,17 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                 return {nm: _q(i) for i, nm in enumerate(names)}
 
             x0n = np.clip((np.array([float(geo0.get(nm, lo[i])) for i, nm in enumerate(names)]) - lo) / span, 0.0, 1.0)
+
+            # Bayesian warm-start (surrogate seed): start round 0 from the geometry the
+            # surrogate predicts best over all accumulated evals — a learned-good region
+            # instead of the current design.  Silent fall-back to current geom if <20 evals.
+            if surrogate_seed and rnd == 0:
+                _seed_ov = _surrogate_seed_overrides(cur_specs, ripple_max)
+                if _seed_ov:
+                    x0n = np.clip((np.array([float(_seed_ov.get(nm, geo0.get(nm, lo[i])))
+                                             for i, nm in enumerate(names)]) - lo) / span, 0.0, 1.0)
+                    with _descent_lock:
+                        _descent_state["seeded_from_surrogate"] = True
 
             if rnd == 0:
                 # MTPA: optimize the load angle γ for the starting geometry FIRST.
@@ -1240,7 +1274,7 @@ def descent_start(req: DescentRequest):
               float(req.w_td), float(req.penalty_lambda), steps,
               float(req.coil_temp_c), mesh_size, min_size, max_iters, req.run_id,
               n_sectors, v_peak_limit, target_torque, bool(req.optimize_gamma),
-              auto_expand, max_rounds, boundary_margin),
+              auto_expand, max_rounds, boundary_margin, bool(req.surrogate_seed)),
         daemon=True).start()
     return {"started": True, "algorithm": algo, "n_sectors": n_sectors,
             "target_torque_nm": target_torque, "v_peak_limit": v_peak_limit,
@@ -1260,6 +1294,21 @@ def descent_cancel():
     with _descent_lock:
         _descent_state["cancel"] = True
     return {"cancelled": True}
+
+
+@router.get("/surrogate")
+def surrogate_report(suggest: int = 5, ripple_max: float = 5.0):
+    """Surrogate variable-importance (which geometry vars drive ripple vs torque vs
+    efficiency) + a few Bayesian-style next-design suggestions, learned from the
+    accumulated eval dataset (config/.opt_dataset.jsonl)."""
+    try:
+        from motor_ai_sim.optimization import surrogate as _surr
+        recs = _surr.load_dataset(_dataset_path())
+        return {"n_total": len(recs),
+                "importance": _surr.variable_importance(recs),
+                "suggest": _surr.suggest(recs, n=int(suggest), ripple_max=float(ripple_max))}
+    except Exception as e:   # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"surrogate report failed: {e}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

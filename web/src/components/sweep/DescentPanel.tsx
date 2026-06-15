@@ -131,6 +131,7 @@ const DescentPanel: React.FC = () => {
   // Box-walking: keep re-centering the ±deviation window on the optimum until
   // every variable settles inside its window (or hits a physical limit).
   const [autoWalk, setAutoWalk]   = useState(false);
+  const [surrogateSeed, setSurrogateSeed] = useState(false);  // Bayesian warm-start from accumulated evals
   const [maxRounds, setMaxRounds] = useState(5);   // box-walking round cap (server-side auto-walk)
   const [snoozeKey, setSnoozeKey] = useState('');  // signature of a dismissed change-set
   const localRun = useRef(false);   // true while THIS panel is the one running (its runDescent polls)
@@ -288,7 +289,7 @@ const DescentPanel: React.FC = () => {
     try {
       await runDescent({ rippleMax, maxIters, wEff, wTd, steps, algorithm, nSectors,
                          targetTorque: ratedTorque, vPeakLimit, optimizeGamma: mtpa,
-                         autoExpand: autoWalk, maxRounds });
+                         autoExpand: autoWalk, maxRounds, surrogateSeed });
     } finally {
       localRun.current = false;
     }
@@ -397,6 +398,12 @@ const DescentPanel: React.FC = () => {
           <ToggleButton value="autowalk" selected={autoWalk} size="small"
             onChange={() => setAutoWalk(a => !a)} sx={{ px: 1, py: 0, height: 26, fontSize: 10 }}>
             Auto-walk
+          </ToggleButton>
+        </Tooltip>
+        <Tooltip title="Surrogate (Bayesian) warm-start: seed the search from the geometry a RandomForest surrogate predicts best over ALL past evaluations (learned, not fixed). The more you optimize, the smarter the start → fewer FEM solves. Falls back to the current geometry until ~20 evals are logged." placement="top">
+          <ToggleButton value="surrogate" selected={surrogateSeed} size="small"
+            onChange={() => setSurrogateSeed(s => !s)} sx={{ px: 1, py: 0, height: 26, fontSize: 10 }}>
+            Surrogate seed
           </ToggleButton>
         </Tooltip>
         {autoWalk && (

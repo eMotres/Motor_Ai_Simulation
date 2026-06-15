@@ -366,13 +366,8 @@ const DescentPanel: React.FC = () => {
             InputLabelProps={{ sx: { fontSize: 10 } }} />
         </Tooltip>
 
-        {/* ── Rated-duty constraints ─────────────────────────────────────── */}
-        <Tooltip title="Rated shaft torque to optimize at (Nm). Each geometry is evaluated at the current that delivers THIS torque (not a fixed current). 0 = use the operating-point current." placement="top">
-          <TextField label="T rated, Nm" type="number" size="small" value={ratedTorque}
-            onChange={e => updateSweepConstraints({ ratedTorqueNm: Math.max(0, +e.target.value || 0) })}
-            inputProps={{ min: 0, step: 0.5, style: { fontSize: 11, padding: '3px 6px', width: 52 } }}
-            InputLabelProps={{ sx: { fontSize: 10 } }} />
-        </Tooltip>
+        {/* ── Rated-duty constraints ─── target torque is set in the Operating
+            Point card above (it drives the auto-solved current); here: V-bus. ── */}
         <Tooltip title="Inverter DC-bus voltage (V). Usable peak phase = bus × modulation factor; designs whose V_peak exceeds it are penalised. 0 = no limit." placement="top">
           <TextField label="V bus" type="number" size="small" value={vBus}
             onChange={e => updateSweepConstraints({ vBusV: Math.max(0, +e.target.value || 0) })}

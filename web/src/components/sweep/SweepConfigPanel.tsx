@@ -11,6 +11,7 @@ import {
   Card,
   CardContent,
   Slider,
+  Collapse,
   ToggleButton,
   ToggleButtonGroup,
   CircularProgress,
@@ -26,6 +27,8 @@ import ShowChartIcon from '@mui/icons-material/ShowChart';
 import CloseIcon     from '@mui/icons-material/Close';
 import TuneIcon      from '@mui/icons-material/Tune';
 import FolderOpenIcon from '@mui/icons-material/FolderOpen';
+import RefreshIcon    from '@mui/icons-material/Refresh';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { useMotorStore } from '../../stores/motorStore';
 import type { VariationMode } from '../../types/motor';
 import ParetoResults from './ParetoResults';
@@ -36,6 +39,18 @@ import DescentPanel from './DescentPanel';
 // display label/unit since they are absent from the geometry parameter schema.
 const SPECIAL_VARS: Record<string, { label: string; unit: string }> = {
   gamma_deg: { label: 'Load angle γ', unit: '°' },
+};
+
+// Read a value the Simulation tab persisted in localStorage (keys are sim.*).
+// This is the single source of truth for the operating speed / load angle —
+// the Sweep tab pulls rpm & γ from here instead of keeping its own copy.
+const readSim = <T,>(key: string, def: T): T => {
+  try {
+    const raw = localStorage.getItem(`sim.${key}`);
+    return raw == null ? def : (JSON.parse(raw) as T);
+  } catch {
+    return def;
+  }
 };
 
 // ── Card for one sweep/optimize parameter ─────────────────────────────────────
@@ -134,8 +149,10 @@ const SweepConfigPanel: React.FC = () => {
   const {
     parameterSchema,
     sweepConfig,
+    updateVariation,
     updateOperatingPoint,
     updateRippleThreshold,
+    updateSweepConstraints,
     connectedToApi,
     initVariationsFromSchema,
     runOptimization,
@@ -158,6 +175,24 @@ const SweepConfigPanel: React.FC = () => {
   useEffect(() => {
     if (parameterSchema.length > 0) initVariationsFromSchema();
   }, [parameterSchema.length]);
+
+  // ── Operating speed / load angle come from the Simulation tab ───────────────
+  // One source of truth: pull rpm & γ from the Simulation tab's localStorage into
+  // BOTH operating points whenever the Sweep tab opens (it re-mounts on tab switch),
+  // so the torque optimizer and the Pareto scan run at exactly the condition the
+  // user set in Simulation — no more typing rpm in two places / silent drift.
+  const syncOpFromSim = React.useCallback(() => {
+    const rpm   = Number(readSim('rpm',   3950));
+    const gamma = Number(readSim('gamma', 0));
+    updateOperatingPoint(0, { rpm, gamma_deg: gamma });
+    updateOperatingPoint(1, { rpm, gamma_deg: gamma });
+  }, [updateOperatingPoint]);
+  useEffect(() => { syncOpFromSim(); }, [syncOpFromSim]);
+
+  const [showScanCurrents, setShowScanCurrents] = React.useState(false);
+  const ratedTorque = sweepConfig.ratedTorqueNm ?? 30.5;
+  const opRpm   = sweepConfig.operatingPoints[0]?.rpm ?? 3950;
+  const opGamma = sweepConfig.operatingPoints[0]?.gamma_deg ?? 0;
 
   const schemaMap = Object.fromEntries(parameterSchema.map(p => [p.name, p]));
 
@@ -324,52 +359,86 @@ const SweepConfigPanel: React.FC = () => {
         <Box sx={{ flex: 1, minWidth: 0 }}>
 
           <Typography variant="overline" color="text.secondary" sx={{ fontSize: 10, letterSpacing: 1, display: 'block', mb: 0.5 }}>
-            Operating Points
+            Operating Point
           </Typography>
           <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
-            Each geometry variant is evaluated at both points → segment in Pareto space (Torque/mass vs Efficiency)
+            The optimizer targets a <strong>torque</strong> — the phase current is solved automatically
+            for each design. Speed &amp; load angle are taken from the <strong>Simulation</strong> tab.
           </Typography>
 
-          <Box sx={{ display: 'flex', gap: 2, mb: 3 }}>
-            {([0, 1] as const).map(i => (
-              <Card key={i} variant="outlined" sx={{ flex: 1, bgcolor: 'rgba(255,255,255,0.02)' }}>
-                <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
-                  <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, display: 'block', mb: 1 }}>
-                    Point {i + 1}
+          <Card variant="outlined" sx={{ mb: 2, bgcolor: 'rgba(255,255,255,0.02)' }}>
+            <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25 }}>
+                <TextField
+                  label="Target torque"
+                  size="small"
+                  type="number"
+                  value={ratedTorque}
+                  onChange={e => updateSweepConstraints({ ratedTorqueNm: Math.max(0, parseFloat(e.target.value) || 0) })}
+                  InputProps={{ endAdornment: <InputAdornment position="end">N·m</InputAdornment> }}
+                  inputProps={{ min: 0, step: 0.5 }}
+                  helperText="Each design is solved at the current that delivers this torque"
+                  FormHelperTextProps={{ sx: { fontSize: 10, mx: 0 } }}
+                />
+                <Box sx={{ display: 'flex', gap: 1 }}>
+                  <TextField
+                    label="Speed" size="small" type="number" value={opRpm} disabled
+                    InputProps={{ endAdornment: <InputAdornment position="end">RPM</InputAdornment> }}
+                    sx={{ flex: 1 }}
+                  />
+                  <TextField
+                    label="Load angle γ" size="small" type="number" value={opGamma} disabled
+                    InputProps={{ endAdornment: <InputAdornment position="end">°</InputAdornment> }}
+                    sx={{ flex: 1 }}
+                  />
+                </Box>
+                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <Typography variant="caption" color="text.disabled">
+                    Speed &amp; γ from the Simulation tab · current auto-solved
                   </Typography>
-                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                  <Tooltip title="Re-read Speed & γ from the Simulation tab" placement="top">
+                    <Button size="small" onClick={syncOpFromSim} startIcon={<RefreshIcon sx={{ fontSize: 14 }} />}
+                      sx={{ fontSize: 10, py: 0, textTransform: 'none', minWidth: 0 }}>
+                      Sync
+                    </Button>
+                  </Tooltip>
+                </Box>
+              </Box>
+            </CardContent>
+          </Card>
+
+          {/* Legacy: per-current points feed only the "Run FEM scan" Pareto tool.
+              The torque optimizer below ignores these — it solves the current itself. */}
+          <Box
+            onClick={() => setShowScanCurrents(s => !s)}
+            sx={{ display: 'flex', alignItems: 'center', gap: 0.5, cursor: 'pointer', mb: 2, userSelect: 'none' }}
+          >
+            <ExpandMoreIcon sx={{ fontSize: 16, transition: 'transform 120ms',
+              transform: showScanCurrents ? 'rotate(0deg)' : 'rotate(-90deg)' }} />
+            <Typography variant="caption" color="text.secondary">
+              FEM-scan currents — for the “Run FEM scan” Pareto tool only
+            </Typography>
+          </Box>
+          <Collapse in={showScanCurrents}>
+            <Box sx={{ display: 'flex', gap: 2, mb: 3 }}>
+              {([0, 1] as const).map(i => (
+                <Card key={i} variant="outlined" sx={{ flex: 1, bgcolor: 'rgba(255,255,255,0.02)' }}>
+                  <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, display: 'block', mb: 1 }}>
+                      Point {i + 1}
+                    </Typography>
                     <TextField
-                      label="Current"
-                      size="small"
-                      type="number"
+                      label="Current" size="small" type="number" fullWidth
                       value={sweepConfig.operatingPoints[i].current_a}
                       onChange={e => updateOperatingPoint(i, { current_a: parseFloat(e.target.value) })}
                       InputProps={{ endAdornment: <InputAdornment position="end">A</InputAdornment> }}
                       inputProps={{ min: 0, step: 1 }}
                     />
-                    <TextField
-                      label="Speed"
-                      size="small"
-                      type="number"
-                      value={sweepConfig.operatingPoints[i].rpm}
-                      onChange={e => updateOperatingPoint(i, { rpm: parseFloat(e.target.value) })}
-                      InputProps={{ endAdornment: <InputAdornment position="end">RPM</InputAdornment> }}
-                      inputProps={{ min: 0, step: 100 }}
-                    />
-                    <TextField
-                      label="Load angle γ"
-                      size="small"
-                      type="number"
-                      value={sweepConfig.operatingPoints[i].gamma_deg ?? 0}
-                      onChange={e => updateOperatingPoint(i, { gamma_deg: parseFloat(e.target.value) })}
-                      InputProps={{ endAdornment: <InputAdornment position="end">°</InputAdornment> }}
-                      inputProps={{ step: 1 }}
-                    />
-                  </Box>
-                </CardContent>
-              </Card>
-            ))}
-          </Box>
+                  </CardContent>
+                </Card>
+              ))}
+            </Box>
+          </Collapse>
 
           <Divider sx={{ mb: 2.5 }} />
 

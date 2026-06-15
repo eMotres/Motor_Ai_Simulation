@@ -36,30 +36,30 @@ try:
     from modulus.sym.geometry.primitives_2d import Circle, Rectangle
     from modulus.sym.geometry.csg import CSGUnion, CSGDifference, CSGIntersection
     HAS_MODULUS = True
-except ImportError:
-    try:
-        from physicsnemo.sym.geometry.primitives_2d import Circle, Rectangle
-        # CSG ops (union/diff/intersect) are built into Geometry via +/-/& operators
-        HAS_MODULUS = True
-    except ImportError:
-        HAS_MODULUS = False
+except Exception:
+    # NOTE: deliberately NOT falling back to physicsnemo here — physicsnemo imports
+    # NVIDIA Warp, whose native warp.dll can be missing/corrupt on this machine and
+    # pops a BLOCKING "Bad Image" dialog at import time (cannot be caught).  The active
+    # scikit-fem solver builds polygons via cadquery/shapely and never samples this
+    # PINN CSG, so a stub is sufficient and keeps the import warp-free.
+    HAS_MODULUS = False
 
-        class _GeoStub:
-            def __init__(self, *a, **kw):
-                self._name = kw.get("name", "stub")
-            def __sub__(self, other): return self
-            def __add__(self, other): return self
-            def __and__(self, other): return self
-            def sample_interior(self, n, **kw):
-                return {"x": np.zeros((n, 1)), "y": np.zeros((n, 1))}
-            def sample_boundary(self, n, **kw):
-                return {"x": np.zeros((n, 1)), "y": np.zeros((n, 1))}
+    class _GeoStub:
+        def __init__(self, *a, **kw):
+            self._name = kw.get("name", "stub")
+        def __sub__(self, other): return self
+        def __add__(self, other): return self
+        def __and__(self, other): return self
+        def sample_interior(self, n, **kw):
+            return {"x": np.zeros((n, 1)), "y": np.zeros((n, 1))}
+        def sample_boundary(self, n, **kw):
+            return {"x": np.zeros((n, 1)), "y": np.zeros((n, 1))}
 
-        class Circle(_GeoStub):       # type: ignore
-            def __init__(self, center=(0, 0), radius=1.0, **kw): super().__init__(**kw)
-        class Rectangle(_GeoStub):    # type: ignore
-            def __init__(self, point1=(0, 0), point2=(1, 1), **kw): super().__init__(**kw)
-        CSGUnion = CSGDifference = CSGIntersection = _GeoStub
+    class Circle(_GeoStub):       # type: ignore
+        def __init__(self, center=(0, 0), radius=1.0, **kw): super().__init__(**kw)
+    class Rectangle(_GeoStub):    # type: ignore
+        def __init__(self, point1=(0, 0), point2=(1, 1), **kw): super().__init__(**kw)
+    CSGUnion = CSGDifference = CSGIntersection = _GeoStub
 
 
 # ── Material conductivities ───────────────────────────────────────────────────

@@ -1285,7 +1285,7 @@ def descent_start(req: DescentRequest):
         _descent_state.update({"running": True, "iter": 0, "max_iters": max_iters,
                                "n_evals": 0, "best": None, "current": None,
                                "history": [], "baseline": None, "result": None, "phase": "starting",
-                               "points": [], "grad": {}, "mtpa_gamma_deg": None,
+                               "points": [], "grad": {}, "mtpa_gamma_deg": None, "variables": [],
                                "boundary": [], "walk_round": 1, "converged": False,
                                "seeded_from_surrogate": False,
                                "walk_rounds": (max_rounds if auto_expand else 1),

@@ -309,6 +309,7 @@ const DescentPanel: React.FC = () => {
       <TableCell align="right" sx={{ fontSize: 11 }}>{fmtPct(m?.efficiency)}</TableCell>
       <TableCell align="right" sx={{ fontSize: 11 }}>{fmtNum(m?.torque_per_mass, 3)}</TableCell>
       <TableCell align="right" sx={{ fontSize: 11 }}>{fmtNum(m?.T_em_Nm, 1)}</TableCell>
+      <TableCell align="right" sx={{ fontSize: 11 }}>{fmtNum(m?.current_a, 1)}</TableCell>
       <TableCell align="right" sx={{ fontSize: 11 }}>{fmtNum(m?.mass_total_kg, 2)}</TableCell>
       <TableCell align="right" sx={{ fontSize: 11 }}>{cost == null ? '—' : cost.toFixed(4)}</TableCell>
     </TableRow>
@@ -425,7 +426,11 @@ const DescentPanel: React.FC = () => {
       </Box>
 
       <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
-        Fixed operating point: <strong>{op0.current_a} A @ {op0.rpm} rpm, γ={op0.gamma_deg ?? 0}°</strong> · variables:{' '}
+        {ratedTorque > 0 ? (
+          <>Operating point: <strong>T = {ratedTorque} N·m @ {op0.rpm} rpm</strong>{mtpa ? ' (MTPA γ)' : `, γ=${op0.gamma_deg ?? 0}°`} — current is <strong>auto-solved per design</strong> to hit this torque (probe {op0.current_a} A)</>
+        ) : (
+          <>Fixed operating point: <strong>{op0.current_a} A @ {op0.rpm} rpm, γ={op0.gamma_deg ?? 0}°</strong></>
+        )} · variables:{' '}
         <strong>{activeVars.length}</strong> · ripple ≤ <strong>{rippleMax.toFixed(1)}%</strong>{' '}
         (Torque Ripple Constraint slider). Only whitelisted variables are varied.
       </Typography>
@@ -528,6 +533,7 @@ const DescentPanel: React.FC = () => {
               <TableCell align="right" sx={{ fontSize: 10, color: 'text.secondary' }}>Eff</TableCell>
               <TableCell align="right" sx={{ fontSize: 10, color: 'text.secondary' }}>Nm/kg</TableCell>
               <TableCell align="right" sx={{ fontSize: 10, color: 'text.secondary' }}>T (Nm)</TableCell>
+              <TableCell align="right" sx={{ fontSize: 10, color: 'text.secondary' }}>I (A)</TableCell>
               <TableCell align="right" sx={{ fontSize: 10, color: 'text.secondary' }}>Mass</TableCell>
               <TableCell align="right" sx={{ fontSize: 10, color: 'text.secondary' }}>cost</TableCell>
             </TableRow>

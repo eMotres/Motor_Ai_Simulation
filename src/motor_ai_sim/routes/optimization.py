@@ -594,6 +594,8 @@ def _msum(m: Dict[str, Any]) -> Dict[str, Any]:
         "mass_total_kg":   m.get("mass_total_kg"),
         "P_loss_total_W":  m.get("P_loss_total_W"),
         "V_peak":          m.get("V_peak"),
+        "current_a":       m.get("current_a"),   # current the design was solved at
+                                                 # (auto-adjusted to hit the target torque)
     }
 
 

@@ -178,6 +178,10 @@ interface MotorState {
   descentRunning: boolean;
   descentState: any | null;           // raw /descent/progress payload
   descentError: string | null;
+  // Snapshot of the optimization INPUTS at the last launch — used to detect what
+  // changed since (materials, rpm, ripple, winding, …) and suggest re-optimizing.
+  lastOptSnapshot: Record<string, any> | null;
+  setLastOptSnapshot: (s: Record<string, any> | null) => void;
   runDescent: (opts: { rippleMax: number; maxIters: number; wEff: number;
                        wTd: number; steps: number;
                        algorithm: string; nSectors: number;
@@ -853,6 +857,8 @@ export const useMotorStore = create<MotorState>()(
       descentRunning: false,
       descentState: null,
       descentError: null,
+      lastOptSnapshot: null,
+      setLastOptSnapshot: (s) => set({ lastOptSnapshot: s }),
       runDescent: async ({ rippleMax, maxIters, wEff, wTd, steps, algorithm, nSectors, targetTorque, vPeakLimit, optimizeGamma, autoExpand, maxRounds }) => {
         const { sweepConfig, geometry } = get();
         // Variables = every active (non-fixed) entry.  OPTIMIZE vars search a
@@ -979,6 +985,7 @@ export const useMotorStore = create<MotorState>()(
         materialConfig: state.materialConfig,
         meshSettings: state.meshSettings,
         sweepConfig: state.sweepConfig,
+        lastOptSnapshot: state.lastOptSnapshot,
       }),
     }
   )

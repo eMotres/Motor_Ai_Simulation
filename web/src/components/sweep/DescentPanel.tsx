@@ -65,10 +65,10 @@ function boundaryFlags(st: any, schema: any[], margin = 0.05): BoundaryFlag[] {
 
 const DescentPanel: React.FC = () => {
   const {
-    sweepConfig, connectedToApi, parameterSchema,
+    sweepConfig, connectedToApi, parameterSchema, materials,
     descentRunning, descentState, descentError,
     runDescent, cancelDescent, applyDescentBest, loadLastDescent,
-    updateSweepConstraints,
+    updateSweepConstraints, lastOptSnapshot, setLastOptSnapshot,
   } = useMotorStore();
 
   // Re-hydrate the last run's charts from the backend on mount (survives reload).
@@ -132,6 +132,7 @@ const DescentPanel: React.FC = () => {
   // every variable settles inside its window (or hits a physical limit).
   const [autoWalk, setAutoWalk]   = useState(false);
   const [maxRounds, setMaxRounds] = useState(5);   // box-walking round cap (server-side auto-walk)
+  const [snoozeKey, setSnoozeKey] = useState('');  // signature of a dismissed change-set
   const localRun = useRef(false);   // true while THIS panel is the one running (its runDescent polls)
 
   // Live mirror: while a run is in progress server-side (even one started in
@@ -215,6 +216,33 @@ const DescentPanel: React.FC = () => {
   const statusText = ((walkRounds > 1) ? `Round ${walkRound}/${walkRounds} · ` : '') + genText;
   const busyIndeterminate = phase === 'mtpa' || phase === 'baseline' || phase === 'starting';
   const genPct = Math.min(100, Math.round(100 * (Number(st.iter) || 0) / Math.max(1, Number(st.max_iters) || maxIters)));
+
+  // ── Re-optimize suggestion: what changed since the last optimization? ────────
+  // Snapshot the inputs at launch (in `launch`), then diff the live inputs against
+  // it.  Tracks persisted/reactive inputs (survives reload).  Winding connection is
+  // backend-only config → a follow-up.
+  const op0_ = (sweepConfig.operatingPoints?.[0] || {}) as any;
+  const _varsSig = Object.entries(sweepConfig.variations || {})
+    .filter(([, v]: any) => v.mode !== 'fixed')
+    .map(([n, v]: any) => `${n}:${v.mode}:${Number(v.min)}-${Number(v.max)}`).sort().join(' | ');
+  const optInputs: Record<string, any> = {
+    'Steel': materials?.stator_core ?? '—',
+    'Magnet': materials?.magnet ?? '—',
+    'Speed (rpm)': op0_.rpm,
+    'Load angle γ': op0_.gamma_deg ?? 0,
+    'Ripple limit (%)': +((sweepConfig.rippleThreshold ?? 0) * 100).toFixed(2),
+    'Rated torque (N·m)': sweepConfig.ratedTorqueNm ?? 0,
+    'V bus (V)': sweepConfig.vBusV ?? 0,
+    'Modulation': sweepConfig.modulation ?? 'svpwm',
+    'Variables / windows': _varsSig,
+  };
+  const changes = (lastOptSnapshot && (best || st.result))
+    ? Object.keys(optInputs)
+        .filter((k) => String(optInputs[k]) !== String((lastOptSnapshot as any)[k]))
+        .map((k) => ({ label: k, prev: (lastOptSnapshot as any)[k], now: optInputs[k] }))
+    : [];
+  const changesKey = JSON.stringify(changes.map((c) => [c.label, c.now]));
+  const showChanges = changes.length > 0 && !descentRunning && changesKey !== snoozeKey;
   const gradData = variables
     .map((v: any) => ({ name: v.name, dir: -(grad[v.name] ?? 0) }))
     .filter((d: any) => Number.isFinite(d.dir) && d.dir !== 0)
@@ -255,6 +283,7 @@ const DescentPanel: React.FC = () => {
   // resolves when the whole sequence finishes.
   const launch = async () => {
     setApplied(false);
+    setLastOptSnapshot(optInputs);   // snapshot the inputs this run launches with
     localRun.current = true;
     try {
       await runDescent({ rippleMax, maxIters, wEff, wTd, steps, algorithm, nSectors,
@@ -268,6 +297,10 @@ const DescentPanel: React.FC = () => {
   // Manual "continue in the same direction": re-center on the optimum, run once more
   // (Auto-walk off → a single backend round).
   const continueWalk = async () => { await applyDescentBest(); await launch(); };
+  // Change-diff actions: warm-start re-uses continueWalk (apply best → relaunch on the
+  // new inputs); "from scratch" relaunches from the current geometry; dismiss snoozes.
+  const reoptScratch = () => { void launch(); };
+  const dismissChanges = () => setSnoozeKey(changesKey);
 
   const row = (label: string, m: any, cost?: number) => (
     <TableRow>
@@ -401,6 +434,54 @@ const DescentPanel: React.FC = () => {
         <Typography color="error" variant="caption" sx={{ display: 'block', mb: 1 }}>
           Descent error: {descentError}
         </Typography>
+      )}
+
+      {/* Inputs changed since the last optimization → comparison + warm-start re-run */}
+      {showChanges && (
+        <Box sx={{ mb: 1.5, p: 1, borderRadius: 1, border: '1px solid #f59e0b',
+                   bgcolor: 'rgba(245,158,11,0.08)' }}>
+          <Typography variant="caption" sx={{ display: 'block', fontWeight: 700, color: '#f59e0b', mb: 0.5 }}>
+            ⚠ {changes.length} input{changes.length === 1 ? '' : 's'} changed since the last optimization — re-optimize?
+          </Typography>
+          <Table size="small" sx={{ mb: 0.75, width: 'auto',
+            '& td, & th': { py: 0.2, px: 1, borderColor: 'rgba(245,158,11,0.2)' } }}>
+            <TableHead><TableRow>
+              <TableCell sx={{ fontSize: 10, color: 'text.secondary' }}>Parameter</TableCell>
+              <TableCell sx={{ fontSize: 10, color: 'text.secondary' }}>Previous</TableCell>
+              <TableCell sx={{ fontSize: 10, color: 'text.secondary' }}>Now</TableCell>
+            </TableRow></TableHead>
+            <TableBody>
+              {changes.map((c) => (
+                <TableRow key={c.label}>
+                  <TableCell sx={{ fontSize: 11 }}>{c.label}</TableCell>
+                  <TableCell sx={{ fontSize: 11, color: 'text.secondary' }}>
+                    {c.label === 'Variables / windows' ? '(set)' : String(c.prev)}
+                  </TableCell>
+                  <TableCell sx={{ fontSize: 11, color: '#fbbf24', fontWeight: 600 }}>
+                    {c.label === 'Variables / windows' ? '(changed)' : String(c.now)}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+          {best && (
+            <Typography variant="caption" sx={{ display: 'block', fontSize: 10, color: 'text.secondary', mb: 0.5 }}>
+              Warm-start re-uses the last best geometry (η {fmtPct(best.efficiency)}); rated current + MTPA γ are re-derived for the new conditions.
+            </Typography>
+          )}
+          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+            <Button variant="contained" color="warning" size="small" startIcon={<PlayArrowIcon />}
+              disabled={!connectedToApi || !best} onClick={continueWalk}>
+              Re-optimize (warm-start)
+            </Button>
+            <Button variant="outlined" size="small" disabled={!connectedToApi} onClick={reoptScratch}>
+              From scratch
+            </Button>
+            <Button variant="text" size="small" color="inherit" onClick={dismissChanges}>
+              Dismiss
+            </Button>
+          </Box>
+        </Box>
       )}
 
       {/* Live progress: phase headline + bar (so a long FEM run visibly works) */}

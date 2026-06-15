@@ -120,7 +120,12 @@ const DescentPanel: React.FC = () => {
   const [maxIters, setMaxIters] = useState(10);
   const [wEff, setWEff] = useState(1);
   const [wTd, setWTd]   = useState(1);   // reward torque/mass too (default); 0 = efficiency only → design ignores mass
-  const [steps, setSteps] = useState(24);
+  // FEM frames/period = the Simulation tab's "Steps per period" (single source) —
+  // so the optimizer evaluates ripple at the SAME resolution you simulate at.
+  const [steps] = useState(() => {
+    try { return Math.max(8, Math.min(180, Number(JSON.parse(localStorage.getItem('sim.stepsPP') ?? '72')) || 72)); }
+    catch { return 72; }
+  });
   const [applied, setApplied] = useState(false);
   // Algorithm: CMA-ES (derivative-free, noise-robust, default) vs the original
   // finite-difference gradient descent.  Symmetry: full disk (−1, accurate
@@ -348,10 +353,9 @@ const DescentPanel: React.FC = () => {
             inputProps={{ min: 1, max: 40, style: { fontSize: 11, padding: '3px 6px', width: 40 } }}
             InputLabelProps={{ sx: { fontSize: 10 } }} />
         </Tooltip>
-        <Tooltip title="FEM frames per period. Higher → cleaner ripple gradient, but slower." placement="top">
-          <TextField label="steps/T" type="number" size="small" value={steps}
-            onChange={e => setSteps(Math.max(8, Math.min(72, Math.round(+e.target.value) || 24)))}
-            inputProps={{ min: 8, max: 72, style: { fontSize: 11, padding: '3px 6px', width: 40 } }}
+        <Tooltip title="FEM frames per electrical period — taken from the Simulation tab (Steps per period), single source. Read-only here so the optimizer evaluates ripple at the resolution you simulate at." placement="top">
+          <TextField label="steps/T (sim)" type="number" size="small" value={steps} disabled
+            inputProps={{ style: { fontSize: 11, padding: '3px 6px', width: 40 } }}
             InputLabelProps={{ sx: { fontSize: 10 } }} />
         </Tooltip>
         <Tooltip title="Efficiency weight in the objective (exponent on eff/eff₀)." placement="top">

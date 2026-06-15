@@ -83,7 +83,9 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
         out = proc.stdout or ""
         m = out.rfind("@@RESULT@@")
         if m >= 0:
-            return json.loads(out[m + len("@@RESULT@@"):])
+            _res = json.loads(out[m + len("@@RESULT@@"):])
+            _log_eval(overrides, current_a, gamma_deg, _res)   # accumulate surrogate dataset
+            return _res
         tail = (proc.stderr or "").strip().splitlines()[-1:] or ["subprocess crashed"]
         return {"ok": False, "error": tail[0][:160]}
     except subprocess.TimeoutExpired:
@@ -507,6 +509,39 @@ def _descent_store_path() -> str:
     except Exception:
         _base = _os_o.path.join(_os_o.path.dirname(__file__), "..", "..", "..", "config")
     return _os_o.path.abspath(_os_o.path.join(_base, ".last_descent.json"))
+
+
+import threading as _threading_o
+_dataset_lock = _threading_o.Lock()
+
+
+def _dataset_path() -> str:
+    """JSONL of every FEM eval (geometry overrides + metrics) — the training data
+    for the surrogate / variable-importance model.  Accumulates across ALL runs so
+    future optimizations can be warm-started / Bayesian-guided from it."""
+    return _descent_store_path().replace(".last_descent.json", ".opt_dataset.jsonl")
+
+
+def _log_eval(overrides, current_a, gamma_deg, result) -> None:
+    """Append one FEM evaluation to the optimization dataset.  Thread-safe,
+    best-effort (never breaks an eval).  Called for every _subprocess_eval."""
+    try:
+        if not (result and result.get("ok")):
+            return
+        r = result.get("res") or {}
+        rec = {
+            "overrides": overrides, "current_a": current_a, "gamma_deg": gamma_deg,
+            "ripple": r.get("T_ripple_pct"), "torque": r.get("T_em_Nm"),
+            "eff": r.get("efficiency"), "td": r.get("torque_per_mass_Nm_kg"),
+            "mass": r.get("mass_total_kg"), "v_peak": r.get("V_peak"),
+            "p_loss": r.get("P_loss_total_W"),
+        }
+        import json as _json_o
+        with _dataset_lock:
+            with open(_dataset_path(), "a", encoding="utf-8") as f:
+                f.write(_json_o.dumps(rec, default=float) + "\n")
+    except Exception:
+        pass
 
 
 def _descent_json_default(o):

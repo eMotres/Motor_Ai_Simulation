@@ -64,7 +64,8 @@ _SCAN_WORKERS = _scan_worker_count()   # e.g. 10 on a 12-physical-core box
 def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
                      coil_temp_c: float, n_periods: float = 1.0,
                      gamma_deg: float = 0.0, mesh_size_mm: float = 4.0,
-                     min_size_mm: float = 0.3, n_sectors: int = -1) -> Dict[str, Any]:
+                     min_size_mm: float = 0.3, n_sectors: int = -1,
+                     _log: bool = True) -> Dict[str, Any]:
     """Evaluate ONE (geometry, current, γ) with the real sliding-band transient
     in an isolated subprocess (FEM/LLVM crash → failed design, not a dead API).
     Rebuilds the CadQuery geometry + gmsh mesh for the candidate in-memory.
@@ -84,7 +85,8 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
         m = out.rfind("@@RESULT@@")
         if m >= 0:
             _res = json.loads(out[m + len("@@RESULT@@"):])
-            _log_eval(overrides, current_a, gamma_deg, _res)   # accumulate surrogate dataset
+            if _log:
+                _log_eval(overrides, current_a, gamma_deg, _res)   # accumulate surrogate dataset
             return _res
         tail = (proc.stderr or "").strip().splitlines()[-1:] or ["subprocess crashed"]
         return {"ok": False, "error": tail[0][:160]}

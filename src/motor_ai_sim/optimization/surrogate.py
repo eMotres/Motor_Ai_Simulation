@@ -133,11 +133,13 @@ def _fit_forest(X: np.ndarray, y: np.ndarray):
 
 
 def variable_importance(
-    recs: List[Dict[str, Any]], min_samples: int = 20
+    recs: List[Dict[str, Any]], min_samples: int = 20, filter_op: bool = True
 ) -> Dict[str, Any]:
     """Per-target ranked variable importance (permutation importance, which is
-    robust to the correlated features a guided search produces)."""
-    X, feat_keys, ys = build_matrix(filter_operating(recs))
+    robust to the correlated features a guided search produces).  filter_op drops
+    the low-torque MTPA-probe rows (off for a fixed-current DOE, where torque
+    legitimately varies across samples)."""
+    X, feat_keys, ys = build_matrix(filter_operating(recs) if filter_op else recs)
     if len(X) < min_samples:
         return {"ok": False, "n": len(X), "need": min_samples, "features": feat_keys}
 

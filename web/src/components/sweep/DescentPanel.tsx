@@ -258,9 +258,9 @@ const DescentPanel: React.FC = () => {
   const infeasiblePts = points.filter((p) => p.td != null && p.ripple != null && p.ripple >  rippleMax).map(toXY);
   const trajPts = history
     .filter((h: any) => h.torque_per_mass != null)
-    .map((h: any) => ({ td: h.torque_per_mass, eff: (h.efficiency ?? 0) * 100, iter: h.iter, z: 2 }));
+    .map((h: any) => ({ td: h.torque_per_mass, eff: (h.efficiency ?? 0) * 100, ripple: h.T_ripple_pct, iter: h.iter, z: 2 }));
   const bestPt = best?.torque_per_mass != null
-    ? [{ td: best.torque_per_mass, eff: (best.efficiency ?? 0) * 100, z: 6 }] : [];
+    ? [{ td: best.torque_per_mass, eff: (best.efficiency ?? 0) * 100, ripple: best.T_ripple_pct, z: 6 }] : [];
 
   // Y (efficiency) axis domain: Manual = fixed [yMin, yMax]; Auto = fit to the
   // MEANINGFUL designs (descent path + best + feasible), padded — re-zooms as the
@@ -649,7 +649,25 @@ const DescentPanel: React.FC = () => {
                   label={{ value: 'Efficiency %', angle: -90, position: 'insideLeft', fontSize: 11 }} />
                 <ZAxis type="number" dataKey="z" range={[10, 150]} />
                 <RTooltip cursor={{ strokeDasharray: '3 3' }}
-                  formatter={(v: any, n: any) => [typeof v === 'number' ? v.toFixed(3) : v, n]} />
+                  content={({ active, payload }: any) => {
+                    if (!active || !payload || !payload.length) return null;
+                    const p = payload[0]?.payload || {};
+                    const over = p.ripple != null && p.ripple > rippleMax;
+                    return (
+                      <div style={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 4,
+                                    padding: '6px 9px', fontSize: 11, lineHeight: 1.6 }}>
+                        {p.eff != null && <div style={{ color: '#a855f7' }}>Eff %: {Number(p.eff).toFixed(3)}</div>}
+                        {p.td  != null && <div style={{ color: '#3b82f6' }}>Nm/kg: {Number(p.td).toFixed(3)}</div>}
+                        {p.ripple != null && (
+                          <div style={{ color: over ? '#ef4444' : '#22c55e' }}>
+                            Ripple %: {Number(p.ripple).toFixed(2)}{over ? ` (> ${rippleMax}%)` : ''}
+                          </div>
+                        )}
+                        {p.iter != null && <div style={{ color: '#94a3b8' }}>iter: {p.iter}</div>}
+                        {p.I    != null && <div style={{ color: '#94a3b8' }}>I: {p.I} A</div>}
+                      </div>
+                    );
+                  }} />
                 <Scatter name="ripple>limit" data={infeasiblePts} fill="#ef4444" fillOpacity={0.35} isAnimationActive={false} />
                 <Scatter name="feasible" data={feasiblePts} fill="#22c55e" fillOpacity={0.55} isAnimationActive={false} />
                 <Scatter name="descent path" data={trajPts} fill="#3b82f6"

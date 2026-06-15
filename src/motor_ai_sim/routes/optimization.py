@@ -1123,6 +1123,13 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                                            "verbose": -9, "seed": 12345})
             it_round = 0
             cancelled = False
+            # Early stopping: end the round once the best cost stops improving for
+            # _PATIENCE generations.  CMA-ES (especially surrogate-seeded) often
+            # converges in 1-2 iters, so running the full max_iters just burns FEM
+            # solves on no improvement.  max_iters stays the hard cap.
+            _PATIENCE = 3
+            _stale = 0
+            _prev_best = best["cost"]
             while not es.stop():
                 with _descent_lock:
                     if _descent_state["cancel"]:
@@ -1159,6 +1166,18 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                 with _descent_lock:
                     _descent_state.update(iter=it_round, history=list(history))
                 _save_descent_state()   # checkpoint each generation
+                # Early stop: no meaningful improvement for _PATIENCE generations.
+                _tol = max(1e-4, 1e-3 * abs(_prev_best))
+                if best["cost"] < _prev_best - _tol:
+                    _prev_best = best["cost"]; _stale = 0
+                else:
+                    _stale += 1
+                    if _stale >= _PATIENCE:
+                        log.info("descent: early stop at iter %d/%d (no improvement for %d gens)",
+                                 it_round, max_iters, _PATIENCE)
+                        with _descent_lock:
+                            _descent_state["converged"] = True
+                        break
 
             # Box-walking: did any variable end pinned at its window edge?
             boundary = _boundary_flags(cur_specs, best["x"], boundary_margin)
@@ -1265,7 +1284,8 @@ def descent_start(req: DescentRequest):
                                "n_evals": 0, "best": None, "current": None,
                                "history": [], "baseline": None, "result": None, "phase": "starting",
                                "points": [], "grad": {}, "mtpa_gamma_deg": None,
-                               "boundary": [], "walk_round": 1,
+                               "boundary": [], "walk_round": 1, "converged": False,
+                               "seeded_from_surrogate": False,
                                "walk_rounds": (max_rounds if auto_expand else 1),
                                "run_id": req.run_id, "error": None, "cancel": False})
     threading.Thread(

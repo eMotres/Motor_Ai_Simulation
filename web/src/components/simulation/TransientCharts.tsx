@@ -5,7 +5,7 @@
  * (default 60), the same mesh and solver settings as the rest of the
  * Simulation tab.  Plots T(t), P_cu/P_fe/P_total(t) and V_A/B/C(t).
  */
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Box, Paper, Typography, Tooltip,
 } from '@mui/material';
@@ -18,8 +18,13 @@ const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
 import type { TransientSummary } from './SummaryTable';
 import DemagMap from './DemagMap';
+import { useMotorStore } from '../../stores/motorStore';
 
 interface TransientPayload {
+  // Frontend-only stamp: the geometry signature this run was computed for.
+  // Lets us flag the shown result stale when the live geometry changes (the
+  // backend transient cache key omits geometry, so it can't detect this).
+  _geoSig?: string;
   n_steps: number;
   n_steps_per_period: number;
   n_periods: number;
@@ -86,6 +91,9 @@ interface Props {
   torqueFilter?: boolean;
   // Per-element irreversible demagnetisation — de-rates Br → torque/EMF + %-map.
   demag?: boolean;
+  // A design was just applied from the Sweep tab (summary numbers reused) — the
+  // shown waveforms are still the PREVIOUS design's, so flag them stale.
+  appliedFromSweep?: boolean;
 }
 
 function readMeshSetting<T>(key: string, def: T): T {
@@ -140,7 +148,7 @@ function loadLastTransient(): TransientPayload | null {
   catch { return null; }
 }
 
-const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onSummary, runNonce = 0, onBusyChange, steps = 12, fresh = false, fieldLosses = true, demag = false, torqueFilter = true }) => {
+const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onSummary, runNonce = 0, onBusyChange, steps = 12, fresh = false, fieldLosses = true, demag = false, torqueFilter = true, appliedFromSweep = false }) => {
   // `steps` (n_steps_per_period) is controlled from the left panel and
   // matches the animation viewer's n_frames so both hit the same backend
   // cache key (one solve, not two).
@@ -151,6 +159,22 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
   // True when the shown result was RESTORED on open but its params differ from
   // the current inputs (the backend flagged it stale) — a hint to press Run.
   const [stale, setStale] = useState<boolean>(false);
+
+  // GEOMETRY staleness.  The shown result is stamped (in run()) with the
+  // geometry it was solved for.  When the live geometry differs — e.g. after
+  // applying a design from the Sweep/Optimization tab — the result is stale
+  // even though the operating point is unchanged.  The backend can't catch
+  // this (its transient cache key omits geometry), so we detect it here.
+  const geometry = useMotorStore(s => s.geometry);
+  const geoSig = useMemo(() => {
+    try {
+      return Object.entries(geometry || {})
+        .filter(([, v]) => typeof v === 'number')
+        .sort(([a], [b]) => (a < b ? -1 : 1))
+        .map(([k, v]) => `${k}:${v}`).join('|');
+    } catch { return ''; }
+  }, [geometry]);
+  const geoStale = !!data && data._geoSig != null && data._geoSig !== geoSig;
 
   // Poll the backend /progress endpoint every 500 ms while a run is in
   // flight, so we can show "Frame X/N — Ys elapsed — ETA Zs" instead of
@@ -261,10 +285,14 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
         // restore=true with nothing ever saved → backend returns {restored:false}.
         // Leave the panel empty (the "press Run" prompt) — do NOT recompute.
         if (d.restored === false || !d.time_s) { setBusy(false); setError(null); return; }
+        // Stamp a FRESH run with the geometry it was computed for, so a later
+        // geometry change (e.g. applying a Sweep design) flags it stale.  A
+        // RESTORED result keeps whatever stamp it was saved with.
+        const stamped: TransientPayload = restoreOnly ? d : { ...d, _geoSig: geoSig };
         setStale(!!d.stale);
-        setData(d); setBusy(false);
+        setData(stamped); setBusy(false);
         setError(null);
-        persistLastTransient(d);            // remember it across reloads
+        persistLastTransient(stamped);      // remember it (+ stamp) across reloads
         // summary is emitted by the effect below (so its ripple matches the
         // current filter toggle, and flips with it without a re-solve).
       } catch (e: any) {
@@ -289,15 +317,24 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
   // → recompute (and overwrite the cache).  runNonce is persisted, so without
   // this guard every reload re-ran the whole FEM solve.
   const mountedRef = useRef(false);
+  const handledNonceRef = useRef(runNonce);   // the runNonce we've already acted on
   useEffect(() => {
     if (!mountedRef.current) {
       mountedRef.current = true;
+      handledNonceRef.current = runNonce;      // remember the mount nonce — never recompute it
       const last = loadLastTransient();
       if (last) { setData(last); return; }   // localStorage copy → show it, no compute
       run(true);   // none locally → ask the backend for its persisted last (restore=true, no compute)
       return;
     }
-    if (runNonce > 0) { setStale(false); run(); }   // user pressed Run → recompute fresh
+    // Recompute ONLY when the user actually presses Run (runNonce INCREMENTS).
+    // Guard on "changed" (not ">0"): React StrictMode double-invokes the mount
+    // effect, and on the 2nd invoke mountedRef is already true — a ">0" guard
+    // there recomputed on every reload (the bug: reload silently re-ran the FEM).
+    if (runNonce !== handledNonceRef.current) {
+      handledNonceRef.current = runNonce;
+      setStale(false); run();                  // user pressed Run → recompute fresh
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runNonce]);
 
@@ -377,6 +414,18 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
   return (
     <Paper sx={{ bgcolor: '#0b1220', border: '1px solid #1e293b', p: 2,
       display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+      {/* Stale-graph warning — the shown waveforms were computed for different
+          inputs/geometry (e.g. a design was just applied from Sweep).  The
+          summary numbers update instantly, but the GRAPHS need a re-solve. */}
+      {(stale || geoStale || appliedFromSweep) && (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 1,
+          bgcolor: 'rgba(251,191,36,0.12)', border: '1px solid #b45309', borderRadius: 1 }}>
+          <span style={{ fontSize: 16, lineHeight: 1 }}>⚠️</span>
+          <Typography sx={{ fontSize: 12, color: '#fbbf24', fontWeight: 600 }}>
+            These graphs are from the previous design{geoStale || appliedFromSweep ? ' — the geometry has changed' : ' — inputs changed'}. Press “Run Simulation” to recompute the correct waveforms.
+          </Typography>
+        </Box>
+      )}
       {/* ── header ────────────────────────────────────────────────────── */}
       <Box sx={{ display: 'flex', alignItems: 'center',
         justifyContent: 'space-between', gap: 2 }}>
@@ -387,11 +436,6 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
               <span style={{ color: '#475569', marginLeft: 6, fontSize: 11, cursor: 'help' }}>ⓘ</span>
             </Tooltip>
           </Typography>
-          {stale && (
-            <Typography sx={{ fontSize: 10, color: '#fbbf24' }}>
-              Showing the last computed run — current inputs differ. Press Run Simulation to recompute.
-            </Typography>
-          )}
           {data && (() => {
             const tpp = Tshown.length
               ? Math.max(...Tshown) - Math.min(...Tshown) : 0;

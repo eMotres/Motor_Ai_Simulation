@@ -39,6 +39,7 @@ export interface TransientSummary {
 interface Props {
   summary: TransientSummary | null;
   loading?: boolean;
+  fromSweep?: boolean;   // numbers reused from an applied Sweep design (no re-run)
 }
 
 const Cell: React.FC<{
@@ -77,7 +78,7 @@ const Cell: React.FC<{
   return tooltip ? <Tooltip title={tooltip} placement="top">{cell}</Tooltip> : cell;
 };
 
-const SummaryTable: React.FC<Props> = ({ summary, loading }) => {
+const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep }) => {
   if (!summary) {
     return (
       <Paper sx={{ bgcolor: '#0b1220', border: '1px solid #1e293b', p: 2,
@@ -111,6 +112,11 @@ const SummaryTable: React.FC<Props> = ({ summary, loading }) => {
         <Typography sx={{ fontSize: 10, color: '#475569' }}>
           @ {s.rpm} rpm · I_ph = {s.I_phase_rms_A} A_rms · γ = {s.gamma_deg}°
         </Typography>
+        {fromSweep && (
+          <Typography sx={{ fontSize: 10, color: '#fbbf24' }}>
+            ← from applied Sweep design (numbers reused, no re-run) · press “Run Simulation” for waveforms &amp; field maps
+          </Typography>
+        )}
       </Box>
 
       {/* ── Row 1 — primary outputs ───────────────────────────────────── */}

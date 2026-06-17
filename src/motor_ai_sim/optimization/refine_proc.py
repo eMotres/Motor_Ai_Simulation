@@ -38,7 +38,10 @@ def _coil_fit(geo: Dict[str, float]) -> tuple:
 def run_one(overrides: Dict[str, float], current_a: float, steps: int,
             coil_temp_c: float, n_periods: float = 1.0,
             gamma_deg: float = 0.0, mesh_size_mm: float = 4.0,
-            min_size_mm: float = 0.3, n_sectors: int = -1) -> Dict[str, Any]:
+            min_size_mm: float = 0.3, n_sectors: int = -1,
+            pole_copy=None, torque_filter: bool = True,
+            gap_layers: float = 3.0, end_winding_factor: float = 0.0,
+            rotor_eddy: bool = False) -> Dict[str, Any]:
     """Run the sliding-band transient for one candidate and return mean
     performance metrics (torque, efficiency, ripple, losses, mass).
 
@@ -82,7 +85,10 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         n_steps_per_period=nspp, n_periods=nper, gamma_deg=float(gamma_deg),
         I_phase_rms=float(current_a), mesh_size_mm=float(mesh_size_mm),
         min_size_mm=float(min_size_mm),
-        n_sectors=int(n_sectors), coil_temp_c=float(coil_temp_c), geo_override=overrides)
+        n_sectors=int(n_sectors), coil_temp_c=float(coil_temp_c),
+        gap_layers=float(gap_layers), end_winding_factor=float(end_winding_factor),
+        rotor_eddy=bool(rotor_eddy),
+        pole_copy=pole_copy, torque_filter=bool(torque_filter), geo_override=overrides)
 
     Tavg = float(d["T_avg_Nm"])
     cu = float(np.mean(d["P_cu_W"])); fe = float(np.mean(d["P_fe_W"]))
@@ -115,7 +121,12 @@ if __name__ == "__main__":
                       gamma_deg=spec.get("gamma_deg", 0.0),
                       mesh_size_mm=spec.get("mesh_size_mm", 4.0),
                       min_size_mm=spec.get("min_size_mm", 0.3),
-                      n_sectors=spec.get("n_sectors", -1))
+                      n_sectors=spec.get("n_sectors", -1),
+                      pole_copy=spec.get("pole_copy"),
+                      torque_filter=spec.get("torque_filter", True),
+                      gap_layers=spec.get("gap_layers", 3.0),
+                      end_winding_factor=spec.get("end_winding_factor", 0.0),
+                      rotor_eddy=spec.get("rotor_eddy", False))
         sys.stdout.write("@@RESULT@@" + json.dumps({"ok": True, "res": res}))
     except Exception as e:  # noqa: BLE001
         sys.stdout.write("@@RESULT@@" + json.dumps({"ok": False, "error": str(e)}))

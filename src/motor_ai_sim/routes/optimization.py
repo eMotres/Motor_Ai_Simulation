@@ -12,6 +12,7 @@ the Simulation tab.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
@@ -40,9 +41,128 @@ _refine_lock = threading.Lock()
 
 _scan_state: Dict[str, Any] = {
     "running": False, "done": 0, "total": 0, "result": None,
-    "run_id": "", "error": None, "cancel": False,
+    "run_id": "", "error": None, "cancel": False, "cached": 0,
 }
 _scan_lock = threading.Lock()
+
+
+def _scan_store_path() -> str:
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "config", ".last_scan.json"))
+
+
+def _save_last_scan(result: Dict[str, Any]) -> None:
+    """Persist the last completed sweep so its chart survives a reload / restart."""
+    try:
+        tmp = _scan_store_path() + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(result, fh, default=float)
+        os.replace(tmp, _scan_store_path())
+    except Exception as _e:  # noqa: BLE001
+        log.warning("could not persist last scan: %s", _e)
+
+
+def _load_last_scan() -> None:
+    try:
+        p = _scan_store_path()
+        if os.path.exists(p):
+            with open(p, encoding="utf-8") as fh:
+                _scan_state["result"] = json.load(fh)
+            log.info("restored last scan from %s", p)
+    except Exception as _e:  # noqa: BLE001
+        log.warning("could not restore last scan: %s", _e)
+
+
+_load_last_scan()   # repopulate the last sweep at startup (survives backend restart)
+
+
+# ── Persistent FEM eval cache ────────────────────────────────────────────────
+# A sweep point is a deterministic function of its inputs, so once computed it
+# never needs recomputing.  We key each result by (eval inputs + a fingerprint
+# of the physics config refine_proc reads) and persist it, so re-running a sweep
+# after widening one variable's range REUSES the points already computed and only
+# evaluates the genuinely new ones.  The config fingerprint deliberately EXCLUDES
+# the operating-point fields (max_current / phase_offset) — the scan passes
+# current & γ explicitly, so applying a design must NOT invalidate the cache.
+_EVAL_CACHE: Dict[str, Dict[str, Any]] = {}
+_eval_cache_lock = threading.Lock()
+
+
+def _eval_cache_path() -> str:
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "config", ".scan_cache.jsonl"))
+
+
+def _config_fingerprint() -> str:
+    """Hash the physics config a FEM eval depends on (geometry baseline, winding,
+    materials, magnet, rpm) so a Geometry / Materials / speed edit invalidates the
+    cache — but an operating-point change (current/γ, passed per-eval) does not."""
+    try:
+        cfg = get_config()
+        sim = {k: v for k, v in (cfg.get("simulation") or {}).items()
+               if k not in ("max_current", "phase_offset_deg", "current_a", "gamma_deg", "gamma")}
+        phys = {"geometry": cfg.get("geometry"), "winding": cfg.get("winding"),
+                "materials": cfg.get("materials"), "magnet": cfg.get("magnet"),
+                "rotor": cfg.get("rotor"), "stator": cfg.get("stator"), "sim": sim}
+        return hashlib.md5(json.dumps(phys, sort_keys=True, default=str).encode()).hexdigest()[:16]
+    except Exception:  # noqa: BLE001
+        return "nofp"
+
+
+def _eval_cache_key(overrides: Dict[str, float], current_a: float, steps: int,
+                    coil_temp_c: float, n_periods: float, gamma_deg: float,
+                    mesh_size_mm: float, min_size_mm: float, n_sectors: int,
+                    pole_copy, torque_filter: bool, cfg_fp: str,
+                    gap_layers: float = 3.0, end_winding_factor: float = 0.0,
+                    rotor_eddy: bool = False) -> str:
+    payload = {
+        "ov": {k: round(float(v), 6) for k, v in sorted(overrides.items())},
+        "I": round(float(current_a), 4), "steps": int(steps),
+        "ct": round(float(coil_temp_c), 2), "np": round(float(n_periods), 5),
+        "g": round(float(gamma_deg), 4), "ms": round(float(mesh_size_mm), 4),
+        "mn": round(float(min_size_mm), 4), "ns": int(n_sectors),
+        "pc": pole_copy, "tf": bool(torque_filter), "cfg": cfg_fp,
+        "gl": round(float(gap_layers), 2), "ew": round(float(end_winding_factor), 3),
+        "re": bool(rotor_eddy),
+    }
+    return hashlib.md5(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
+
+
+def _load_eval_cache() -> None:
+    try:
+        p = _eval_cache_path()
+        if os.path.exists(p):
+            with open(p, encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                        _EVAL_CACHE[rec["k"]] = rec["v"]   # later lines win (re-computed)
+                    except Exception:  # noqa: BLE001
+                        pass
+            log.info("loaded %d cached FEM evals from %s", len(_EVAL_CACHE), p)
+    except Exception as _e:  # noqa: BLE001
+        log.warning("could not load eval cache: %s", _e)
+
+
+_RES_KEYS = ("T_em_Nm", "efficiency", "torque_per_mass_Nm_kg", "T_ripple_pct",
+             "P_loss_total_W", "P_cu_W", "P_cu_dc_W", "P_cu_ac_W", "P_fe_W",
+             "P_mag_W", "P_shaft_W", "mass_total_kg", "V_peak")
+
+
+def _store_eval(key: str, res: Dict[str, Any]) -> None:
+    with _eval_cache_lock:
+        if key in _EVAL_CACHE:   # same inputs already cached → no duplicate file write
+            return
+        _EVAL_CACHE[key] = res
+        try:
+            with open(_eval_cache_path(), "a", encoding="utf-8") as fh:
+                fh.write(json.dumps({"k": key, "v": res}, default=float) + "\n")
+        except Exception as _e:  # noqa: BLE001
+            log.warning("could not persist eval: %s", _e)
+
+
+_load_eval_cache()   # warm the cache from disk so it survives a backend restart
 # Concurrent FEM subprocesses.  Each refine_proc is one process pinned to a
 # single core, so this is effectively "how many cores the optimizer uses".
 # Default to (physical cores − 2): use most of the box but leave ~2 cores for
@@ -65,7 +185,9 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
                      coil_temp_c: float, n_periods: float = 1.0,
                      gamma_deg: float = 0.0, mesh_size_mm: float = 4.0,
                      min_size_mm: float = 0.3, n_sectors: int = -1,
-                     _log: bool = True) -> Dict[str, Any]:
+                     _log: bool = True, pole_copy=None, torque_filter=True,
+                     gap_layers: float = 3.0, end_winding_factor: float = 0.0,
+                     rotor_eddy: bool = False) -> Dict[str, Any]:
     """Evaluate ONE (geometry, current, γ) with the real sliding-band transient
     in an isolated subprocess (FEM/LLVM crash → failed design, not a dead API).
     Rebuilds the CadQuery geometry + gmsh mesh for the candidate in-memory.
@@ -76,7 +198,11 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
                        "steps": int(steps), "coil_temp_c": float(coil_temp_c),
                        "n_periods": float(n_periods), "gamma_deg": float(gamma_deg),
                        "mesh_size_mm": float(mesh_size_mm), "min_size_mm": float(min_size_mm),
-                       "n_sectors": int(n_sectors)})
+                       "n_sectors": int(n_sectors), "pole_copy": pole_copy,
+                       "torque_filter": bool(torque_filter),
+                       "gap_layers": float(gap_layers),
+                       "end_winding_factor": float(end_winding_factor),
+                       "rotor_eddy": bool(rotor_eddy)})
     try:
         proc = subprocess.run(
             [sys.executable, "-m", "motor_ai_sim.optimization.refine_proc"],
@@ -273,6 +399,12 @@ class ScanRequest(BaseModel):
     coil_temp_c: float = 120.0
     mesh_size_mm: float = 4.0              # mesh resolution (set from Mesh tab) — coarser = faster scan
     min_size_mm: float = 0.3
+    pole_copy: Optional[bool] = None       # mesh mode (Mesh tab "Periodic")
+    torque_filter: bool = True             # band-limit ripple — Simulation's toggle
+    n_sectors: int = 1                     # FEM symmetry — SINGLE SOURCE: Mesh tab (same build as Simulation)
+    gap_layers: float = 3.0                # air-gap mesh layers — SINGLE SOURCE: Mesh tab (drives ripple/eddy; match Simulation)
+    end_winding_factor: float = 0.0        # end-winding k_end — SINGLE SOURCE: Simulation (drives copper loss / eff; 0 = auto)
+    rotor_eddy: bool = False                # field-based magnet/shaft eddy — SINGLE SOURCE: Simulation (drives magnet loss / eff vs slab estimate)
     seed: int = 12345
     run_id: str = ""
 
@@ -324,7 +456,9 @@ def _point_from_eval(out: Dict[str, Any], ov: Dict[str, float], I: float,
 
 
 def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
-                 max_geom, seed, run_id, mesh_size_mm=4.0, min_size_mm=0.3) -> None:
+                 max_geom, seed, run_id, mesh_size_mm=4.0, min_size_mm=0.3,
+                 pole_copy=None, torque_filter=True, n_sectors=1, gap_layers=3.0,
+                 end_winding=0.0, rotor_eddy=False) -> None:
     import numpy as np  # noqa: F401
     from concurrent.futures import ThreadPoolExecutor, as_completed
     from motor_ai_sim.optimization.optimizer import _pareto_front
@@ -344,6 +478,7 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
         # content (a 1/6-period window inflated them ~2-5× → wrong efficiency).
         # ``steps`` frames/period — 18 gives 3 samples per 6·k ripple cycle.
         _NPER = 1.0
+        _cfg_fp = _config_fingerprint()   # constant for this scan → one fingerprint for every point
 
         def _do(i_t):
             i, (gi, oi, ov, I, opg) = i_t
@@ -351,10 +486,27 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
             # geometry key, so split it out before building the mesh.
             g = float(ov.get("gamma_deg", opg))
             geo_ov = {k: v for k, v in ov.items() if k != "gamma_deg"}
-            out = _subprocess_eval(geo_ov, I, steps, coil_temp_c,
-                                   n_periods=_NPER, gamma_deg=g,
-                                   mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm)
-            return i, _point_from_eval(out, ov, I, gi, oi, ripple_max)
+            # Reuse a previously-computed identical point (skip the ~1-min FEM) — this
+            # is what lets a re-run after widening a range only evaluate the new points.
+            ck = _eval_cache_key(geo_ov, I, steps, coil_temp_c, _NPER, g,
+                                 mesh_size_mm, min_size_mm, n_sectors, pole_copy, torque_filter, _cfg_fp,
+                                 gap_layers, end_winding, rotor_eddy)
+            out = _EVAL_CACHE.get(ck)
+            if out is not None:
+                with _scan_lock:
+                    _scan_state["cached"] = _scan_state.get("cached", 0) + 1
+            else:
+                out = _subprocess_eval(geo_ov, I, steps, coil_temp_c,
+                                       n_periods=_NPER, gamma_deg=g,
+                                       mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm,
+                                       pole_copy=pole_copy, torque_filter=torque_filter,
+                                       n_sectors=n_sectors, gap_layers=gap_layers,
+                                       end_winding_factor=end_winding, rotor_eddy=rotor_eddy)
+                if out and out.get("ok"):
+                    _store_eval(ck, out)   # cache successful evals only (skip transient crashes)
+            pt = _point_from_eval(out, ov, I, gi, oi, ripple_max)
+            pt["gamma_deg"] = g    # stamp γ so the chart can group/connect without the request
+            return i, pt
 
         # Manual executor so a Stop can cancel the not-yet-started tasks (the
         # ~5 already-running subprocesses just finish in the background); the
@@ -371,6 +523,9 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                 done += 1
                 with _scan_lock:
                     _scan_state["done"] = done
+                    # live-stream the points computed so far so the chart fills in
+                    # as the sweep runs (not only at the end).
+                    _scan_state["points"] = [p for p in points if p is not None]
         finally:
             ex.shutdown(wait=False, cancel_futures=True)
         points = [p for p in points if p is not None]
@@ -395,11 +550,20 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
         if _scan_state["cancel"]:
             baseline = {"feasible": False, "fem": True, "overrides": {}}
         else:
-            base_out = _subprocess_eval({}, float(operating_points[0].get("current_a", 85.0)),
-                                        steps, coil_temp_c, n_periods=_NPER,
-                                        mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm)
-            baseline = _point_from_eval(base_out, {}, float(operating_points[0].get("current_a", 85.0)),
-                                        -1, 0, ripple_max)
+            _bI = float(operating_points[0].get("current_a", 85.0))
+            _bck = _eval_cache_key({}, _bI, steps, coil_temp_c, _NPER, 0.0,
+                                   mesh_size_mm, min_size_mm, n_sectors, pole_copy, torque_filter, _cfg_fp,
+                                   gap_layers, end_winding, rotor_eddy)
+            base_out = _EVAL_CACHE.get(_bck)
+            if base_out is None:
+                base_out = _subprocess_eval({}, _bI, steps, coil_temp_c, n_periods=_NPER,
+                                            mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm,
+                                            pole_copy=pole_copy, torque_filter=torque_filter,
+                                            n_sectors=n_sectors, gap_layers=gap_layers,
+                                            end_winding_factor=end_winding, rotor_eddy=rotor_eddy)
+                if base_out and base_out.get("ok"):
+                    _store_eval(_bck, base_out)
+            baseline = _point_from_eval(base_out, {}, _bI, -1, 0, ripple_max)
         with _scan_lock:
             _scan_state["done"] = len(tasks) + 1
 
@@ -414,9 +578,15 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
             "operating_points": operating_points, "ripple_max_pct": float(ripple_max),
             "objective": "pareto_torque_density_vs_efficiency_FEM",
             "steps_per_period": int(steps), "fem": True,
+            # solver params for this scan → lets the cache be re-seeded from this
+            # result later with the exact same key inputs (see /scan/seed_cache).
+            "scan_params": {"coil_temp_c": float(coil_temp_c), "mesh_size_mm": float(mesh_size_mm),
+                            "min_size_mm": float(min_size_mm), "pole_copy": pole_copy,
+                            "torque_filter": bool(torque_filter)},
         }
         with _scan_lock:
             _scan_state["result"] = result
+        _save_last_scan(result)   # persist so it survives reload / restart
     except Exception as e:  # noqa: BLE001
         log.exception("FEM scan failed")
         with _scan_lock:
@@ -450,12 +620,27 @@ def scan_designs(req: ScanRequest):
         max_geom = max(1, min(int(req.max_geometries), 400))
         mesh_size = max(1.0, min(float(req.mesh_size_mm), 12.0))
         min_size  = max(0.1, min(float(req.min_size_mm), 3.0))
+        # FEM symmetry — single source: the Mesh tab (same build the Simulation uses),
+        # so the sweep's ripple matches the Simulation for an identical geometry.
+        n_sectors = max(1, int(req.n_sectors))
+        # Air-gap mesh layers — single source: the Mesh tab.  gap_layers drives the
+        # air-gap field resolution → torque ripple + magnet eddy; the Simulation uses
+        # mesh.gapLayers, so the sweep must too or its numbers won't reproduce in Sim.
+        gap_layers = max(1.0, min(float(req.gap_layers), 8.0))
+        # End-winding k_end — single source: the Simulation tab.  Drives copper loss
+        # → efficiency; the Simulation sends its value, so the sweep must too.
+        end_winding = max(0.0, float(req.end_winding_factor))
+        # Field-based rotor eddy — single source: the Simulation (fieldLosses toggle).
+        # Slab vs field magnet-eddy differs ~3×, so the sweep must use the same model.
+        rotor_eddy = bool(req.rotor_eddy)
         _scan_state.update({"running": True, "done": 0, "total": 0, "result": None,
-                            "run_id": req.run_id, "error": None, "cancel": False})
+                            "points": [], "run_id": req.run_id, "error": None, "cancel": False,
+                            "cached": 0})
     threading.Thread(target=_scan_worker,
                      args=(variables, ops, steps, float(req.coil_temp_c),
                            float(req.ripple_max_pct), max_geom, int(req.seed), req.run_id,
-                           mesh_size, min_size),
+                           mesh_size, min_size, req.pole_copy, bool(req.torque_filter),
+                           n_sectors, gap_layers, end_winding, rotor_eddy),
                      daemon=True).start()
     return {"started": True, "steps_per_period": steps, "max_geometries": max_geom,
             "mesh_size_mm": mesh_size, "min_size_mm": min_size}
@@ -472,6 +657,117 @@ def scan_cancel():
     with _scan_lock:
         _scan_state["cancel"] = True
     return {"cancelled": True}
+
+
+class SeedCacheRequest(BaseModel):
+    # Only used for OLD results that predate scan_params storage; new results carry
+    # their own params (which take precedence) so the keys match exactly.
+    coil_temp_c: float = 120.0
+    mesh_size_mm: float = 4.0
+    min_size_mm: float = 0.3
+    pole_copy: Optional[bool] = None
+    torque_filter: bool = True
+
+
+@router.post("/scan/seed_cache")
+def seed_cache(req: SeedCacheRequest):
+    """Seed the eval cache from the LAST completed sweep so a re-run (e.g. after
+    widening a variable's range) reuses those points instead of recomputing them.
+    Each key is rebuilt exactly as the scan worker would — the scan's own solver
+    params (stored on the result; request used only as a fallback for old results)
+    plus the CURRENT config fingerprint."""
+    with _scan_lock:
+        result = _scan_state.get("result")
+    if not result or not isinstance(result.get("points"), list) or not result["points"]:
+        return {"seeded": 0, "error": "no completed sweep to seed from"}
+    steps = int(result.get("steps_per_period", 60))
+    sp = result.get("scan_params") or {}
+    coil = float(sp.get("coil_temp_c", req.coil_temp_c))
+    mesh = float(sp.get("mesh_size_mm", req.mesh_size_mm))
+    mn = float(sp.get("min_size_mm", req.min_size_mm))
+    pc = sp.get("pole_copy", req.pole_copy)
+    tf = bool(sp.get("torque_filter", req.torque_filter))
+    fp = _config_fingerprint()
+    seeded = 0
+    for p in result["points"]:
+        if not p.get("feasible") or p.get("current_a") is None or p.get("gamma_deg") is None:
+            continue
+        geo_ov = {k: v for k, v in (p.get("overrides") or {}).items() if k != "gamma_deg"}
+        res = {k: p[k] for k in _RES_KEYS if k in p}
+        key = _eval_cache_key(geo_ov, float(p["current_a"]), steps, coil, 1.0,
+                              float(p["gamma_deg"]), mesh, mn, -1, pc, tf, fp)
+        before = len(_EVAL_CACHE)
+        _store_eval(key, {"ok": True, "res": res})
+        seeded += int(len(_EVAL_CACHE) > before)
+    return {"seeded": seeded, "cache_size": len(_EVAL_CACHE), "steps": steps,
+            "params": {"coil": coil, "mesh": mesh, "min": mn, "pole_copy": pc, "torque_filter": tf}}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DOE SCREENING — Latin-Hypercube sample the design box at a FIXED current,
+# FEM-evaluate each, and compute UNBIASED global variable importance (which knobs
+# move ripple / torque / efficiency).  Wraps motor_ai_sim.optimization.doe (was
+# CLI-only) in a background job so the UI can launch it + show the importance.
+# ─────────────────────────────────────────────────────────────────────────────
+_doe_lock = threading.Lock()
+_doe_state: Dict[str, Any] = {"running": False, "done": 0, "total": 0,
+                              "importance": None, "error": None, "n_ok": 0}
+
+
+class DoeRequest(BaseModel):
+    n: int = 60                  # LHS sample count
+    current_a: float = 150.0     # fixed current (torque varies → modelable)
+    band: float = 0.3            # ± fraction of baseline per variable
+    steps_per_period: int = 18
+    n_sectors: int = -1          # -1 = full disk (accurate ripple)
+    pole_copy: Optional[bool] = None      # mesh mode (Mesh tab "Periodic")
+    torque_filter: bool = True            # band-limit ripple — Simulation's toggle
+
+
+@router.post("/doe/start")
+def doe_start(req: DoeRequest):
+    with _doe_lock:
+        if _doe_state["running"]:
+            raise HTTPException(status_code=409, detail="a DOE is already running")
+        _doe_state.update({"running": True, "done": 0, "total": int(req.n),
+                           "importance": None, "error": None, "n_ok": 0})
+
+    def _worker():
+        import re as _re
+        try:
+            from motor_ai_sim.optimization import doe as _doe, surrogate as _S
+
+            def _log(msg):   # parse "  DOE 5/60  (ok 4)" → live progress
+                m = _re.search(r"DOE (\d+)/(\d+)\s+\(ok (\d+)\)", str(msg))
+                if m:
+                    with _doe_lock:
+                        _doe_state["done"] = int(m.group(1))
+                        _doe_state["total"] = int(m.group(2))
+                        _doe_state["n_ok"] = int(m.group(3))
+
+            recs = _doe.run_doe(n=int(req.n), current_a=float(req.current_a),
+                                band=float(req.band), n_sectors=int(req.n_sectors),
+                                steps=int(req.steps_per_period),
+                                pole_copy=req.pole_copy, torque_filter=bool(req.torque_filter),
+                                log=_log)
+            vi = _S.variable_importance(recs, min_samples=15, filter_op=False)
+            with _doe_lock:
+                _doe_state["importance"] = vi
+                _doe_state["n_ok"] = len(recs)
+                _doe_state["running"] = False
+        except Exception as e:  # noqa: BLE001
+            with _doe_lock:
+                _doe_state["error"] = str(e)
+                _doe_state["running"] = False
+
+    threading.Thread(target=_worker, daemon=True).start()
+    return {"started": True, "n": int(req.n)}
+
+
+@router.get("/doe/progress")
+def doe_progress():
+    with _doe_lock:
+        return dict(_doe_state)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -598,6 +894,11 @@ class DescentRequest(BaseModel):
     coil_temp_c: float = 120.0
     mesh_size_mm: float = 4.0
     min_size_mm: float = 0.3
+    # Pole/slot mesh mode from the UI (Mesh tab "Periodic (identical poles)").
+    # None = solver env default; the optimizer must mesh the SAME way Simulation does.
+    pole_copy: Optional[bool] = None
+    # Band-limit T(t) to the physical 6·k orders — from Simulation's torque-filter toggle.
+    torque_filter: bool = True
     # 'cmaes' = Covariance-Matrix-Adaptation ES (derivative-free, noise-robust,
     # default); 'gradient' = the original finite-difference gradient descent.
     algorithm: str = "cmaes"
@@ -751,7 +1052,8 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                     steps, coil_temp, mesh_size, min_size, max_iters, run_id,
                     n_sectors=-1, v_peak_limit=1e9, target_torque=0.0,
                     optimize_gamma=True, auto_expand=False, max_rounds=1,
-                    boundary_margin=0.05, surrogate_seed=False) -> None:
+                    boundary_margin=0.05, surrogate_seed=False, pole_copy=None,
+                  torque_filter=True) -> None:
     # NOTE: server-side box-walking (auto_expand) is implemented for CMA-ES only;
     # the gradient path runs a single round, then the UI flags boundary variables
     # for a manual one-click continue.
@@ -781,9 +1083,13 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
         warm = [I]               # warm-start probe current (last geometry's rated current)
 
         def _eval_at(d, cur):
-            return _subprocess_eval(d, cur, steps, coil_temp, n_periods=1.0,
-                                    gamma_deg=g, mesh_size_mm=mesh_size,
-                                    min_size_mm=min_size, n_sectors=n_sectors)
+            o = _subprocess_eval(d, cur, steps, coil_temp, n_periods=1.0,
+                                 gamma_deg=g, mesh_size_mm=mesh_size,
+                                 min_size_mm=min_size, n_sectors=n_sectors,
+                                 pole_copy=pole_copy, torque_filter=torque_filter)
+            if o.get("ok") and isinstance(o.get("res"), dict):
+                o["res"]["current_a"] = float(cur)   # record solved current in best
+            return o
 
         def evalx(xx):
             # Target-torque: probe at the WARM-START current (the last geometry's
@@ -990,7 +1296,8 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                   steps, coil_temp, mesh_size, min_size, max_iters, run_id,
                   n_sectors=-1, v_peak_limit=1e9, target_torque=0.0,
                   optimize_gamma=True, auto_expand=False, max_rounds=1,
-                  boundary_margin=0.05, surrogate_seed=False) -> None:
+                  boundary_margin=0.05, surrogate_seed=False, pole_copy=None,
+                  torque_filter=True) -> None:
     """Covariance-Matrix-Adaptation Evolution Strategy — derivative-free,
     noise-robust geometry search.  Same penalised cost as the gradient descent
     (−(eff/eff0)^w_eff·(td/td0)^w_td + λ·max(0, ripple−ripple_max)), evaluated on
@@ -1014,9 +1321,16 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
         warm = [I]               # warm-start probe current (shared starting guess)
 
         def _eval_at(dd, cur):
-            return _subprocess_eval(dd, cur, steps, coil_temp, n_periods=1.0,
-                                    gamma_deg=g, mesh_size_mm=mesh_size,
-                                    min_size_mm=min_size, n_sectors=n_sectors)
+            o = _subprocess_eval(dd, cur, steps, coil_temp, n_periods=1.0,
+                                 gamma_deg=g, mesh_size_mm=mesh_size,
+                                 min_size_mm=min_size, n_sectors=n_sectors,
+                                 pole_copy=pole_copy, torque_filter=torque_filter)
+            # Stamp the SOLVED current onto the result so the best records the
+            # operating point it was found at (target-torque solves for it) →
+            # saving the design can persist current+γ for a reproducible sim.
+            if o.get("ok") and isinstance(o.get("res"), dict):
+                o["res"]["current_a"] = float(cur)
+            return o
 
         def evalx(d):
             # Target-torque with warm-start + ±2 % band: probe at the warm-start
@@ -1296,7 +1610,8 @@ def descent_start(req: DescentRequest):
               float(req.w_td), float(req.penalty_lambda), steps,
               float(req.coil_temp_c), mesh_size, min_size, max_iters, req.run_id,
               n_sectors, v_peak_limit, target_torque, bool(req.optimize_gamma),
-              auto_expand, max_rounds, boundary_margin, bool(req.surrogate_seed)),
+              auto_expand, max_rounds, boundary_margin, bool(req.surrogate_seed),
+              req.pole_copy, bool(req.torque_filter)),
         daemon=True).start()
     return {"started": True, "algorithm": algo, "n_sectors": n_sectors,
             "target_torque_nm": target_torque, "v_peak_limit": v_peak_limit,

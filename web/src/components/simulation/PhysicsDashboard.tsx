@@ -161,8 +161,25 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
   // Most recent transient-run summary — drives the top-of-tab overview card.
   const [transientSummary, setTransientSummary] =
     React.useState<TransientSummary | null>(null);
-  // Forward the latest summary to the parent (for the Save-simulation snapshot).
-  React.useEffect(() => { onSummary?.(transientSummary); }, [transientSummary]);  // eslint-disable-line react-hooks/exhaustive-deps
+  // A design applied from the Sweep/Optimization tab pushes its already-computed
+  // FEM summary here so the card shows those exact numbers WITHOUT a re-run.
+  // A fresh Run (runNonce increments) supersedes it.
+  const [appliedSummary, setAppliedSummary] = React.useState<TransientSummary | null>(null);
+  React.useEffect(() => {
+    const onApply = (e: Event) => {
+      const s = (e as CustomEvent).detail?.summary;
+      if (s) setAppliedSummary(s as TransientSummary);
+    };
+    window.addEventListener('sim-apply-summary', onApply as EventListener);
+    return () => window.removeEventListener('sim-apply-summary', onApply as EventListener);
+  }, []);
+  const appliedNonceRef = React.useRef(runNonce);
+  React.useEffect(() => {
+    if (runNonce !== appliedNonceRef.current) { appliedNonceRef.current = runNonce; setAppliedSummary(null); }
+  }, [runNonce]);
+  const shownSummary = appliedSummary ?? transientSummary;
+  // Forward the shown summary to the parent (for the Save-simulation snapshot).
+  React.useEffect(() => { onSummary?.(shownSummary); }, [shownSummary]);  // eslint-disable-line react-hooks/exhaustive-deps
   const [data, setData]       = useState<PhysicsData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState<string | null>(null);
@@ -261,8 +278,9 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
         </IconButton>
       </Box>
 
-      {/* ── Top-of-tab summary card — populated by TransientCharts ── */}
-      <SummaryTable summary={transientSummary}/>
+      {/* ── Top-of-tab summary card — populated by TransientCharts, or by a
+           design applied from the Sweep tab (numbers reused, no re-run) ── */}
+      <SummaryTable summary={shownSummary} fromSweep={!!appliedSummary}/>
 
       {/* Analytical "Key Scalars" table removed — all key quantities
           (T_em, P_cu/Fe/eddy, |B|_max, A_z range) come from the FEM
@@ -498,6 +516,7 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
       <TransientCharts gamma_deg={gamma_deg} I_phase_rms={I_phase_rms} fieldLosses={fieldLosses}
         demag={demag} torqueFilter={torqueFilter}
         steps={steps} runNonce={runNonce} fresh={fresh} onBusyChange={onBusyChange}
+        appliedFromSweep={!!appliedSummary}
         onSummary={setTransientSummary}/>
 
       {/* Analytical MMF(θ) hidden. */}

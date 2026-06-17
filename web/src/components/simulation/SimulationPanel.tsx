@@ -138,15 +138,12 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
 
   // ── winding LAYOUT (per-slot phase + sign = coil currents) ─────────────────
   const [windCfg, setWindCfg]       = useState<any>(null);     // /api/winding/config
-  const [layoutDraft, setLayoutDraft] = useState<string>('');
-  const [layoutBusy, setLayoutBusy] = useState<boolean>(false);
-  const [layoutMsg, setLayoutMsg]   = useState<string | null>(null);
 
   const loadWinding = useCallback(() => {
     fetch(`${API}/api/winding/config`)
       .then(r => r.json())
       .then(d => {
-        setWindCfg(d); setLayoutDraft(d.layout || '');
+        setWindCfg(d);
         // config.yaml is the persistent, cross-browser source for the connection;
         // adopt it on load so a fresh browser / other tab reflects the real value.
         if (d.connection) setConnection(d.connection);
@@ -156,19 +153,15 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   useEffect(() => { loadWinding(); }, [loadWinding]);
 
   const applyWinding = useCallback((patch: Record<string, any>) => {
-    setLayoutBusy(true); setLayoutMsg(null);
     fetch(`${API}/api/winding/config`, {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(patch),
     })
       .then(async r => {
-        const j = await r.json().catch(() => ({}));
-        if (!r.ok) throw new Error(j.detail || `HTTP ${r.status}`);
-        return j;
+        if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.detail || `HTTP ${r.status}`); }
       })
-      .then(() => { setLayoutMsg('✓ applied — re-run the simulation'); loadWinding(); })
-      .catch(e => setLayoutMsg('✗ ' + String(e.message || e)))
-      .finally(() => setLayoutBusy(false));
+      .then(() => loadWinding())
+      .catch(() => {});
   }, [loadWinding]);
 
   // Phase → colour for the slot map (A=red, B=green, C=blue); +full, −faded.
@@ -185,20 +178,6 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   const [rpm,           setRpm]           = usePersisted('rpm',       3950.0);
   const [phaseOffset,   setPhaseOffset]   = usePersisted('gamma',     0.0);   // γ [deg]
 
-  // ── d-axis angle optimisation (sweep γ ∈ [−30,30], find max torque) ────────
-  // NOTE: must be declared AFTER `current` — its dependency array reads it.
-  const [daxisSweep, setDaxisSweep] = useState<any>(null);
-  const [daxisBusy,  setDaxisBusy]  = useState<boolean>(false);
-  const runDaxisSweep = useCallback(() => {
-    setDaxisBusy(true);
-    fetch(`${API}/api/simulation/physics/daxis_sweep?lo=-30&hi=30&step=2`
-          + `&I_phase_rms=${current}&mesh_size_mm=4`)
-      .then(r => r.json())
-      .then(d => { setDaxisSweep(d); setDaxisBusy(false); })
-      .catch(() => setDaxisBusy(false));
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [current]);
-
   // γ-as-optimization-variable: a checkbox here marks the load angle γ for the
   // Sweep/Optimize grid (like the chart icon on geometry params).  When checked,
   // gamma_deg becomes a sweep variation; the user sets its min/max/step on the
@@ -206,6 +185,9 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // not the mesh — so it never rebuilds geometry.
   const gammaIsVar    = useMotorStore(s => (s.sweepConfig.variations['gamma_deg']?.mode ?? 'fixed') !== 'fixed');
   const updateVariation = useMotorStore(s => s.updateVariation);
+  // Subscribe to the live geometry so the panel re-renders (and re-evaluates
+  // result staleness) when a design is applied from the Sweep/Optimization tab.
+  const storeGeometry = useMotorStore(s => s.geometry);
   const toggleGammaVar = (on: boolean) =>
     updateVariation('gamma_deg', on
       ? { mode: 'sweep', min: phaseOffset, max: phaseOffset + 30, step: 5 }
@@ -304,13 +286,17 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   }, [current, frequency, rpm, phaseOffset, steps, coilTemp, endWinding, demag, torqueFilter, connection]);
   const [stepsStr, setStepsStr] = useState(String(steps));
   useEffect(() => { setStepsStr(String(steps)); }, [steps]);
-  // HARD upper bound: the sliding-band rotor can only sit on slip-ring nodes —
-  // 1008 ring nodes / pole_pairs positions per electrical period (72 for this
-  // 28-pole motor).  The backend silently snaps any request to a DIVISOR of
-  // that (144→72, 100→72, 50→36), which looked like "the step won't change".
-  // Clamp + snap in the UI so what you type is what actually runs.
-  const N_SLIP = 1008;                      // backend slip-ring node count (360°)
-  const stepsMax = Math.max(6, Math.floor(N_SLIP / Math.max(polePairs, 1)));
+  // HARD upper bound: the sliding-band rotor can only sit on slip-ring nodes,
+  // so steps/period must DIVIDE the nodes-per-electrical-period count.  The
+  // backend (fem_solver_2d.fem_transient_sliding_band) makes that count adaptive
+  // — a multiple of 24 (so 24/30/40/60/120 are valid), ≥120, divisible by the
+  // pole-pair count so the period tiles exactly.  Mirror the SAME formula here
+  // so the field clamps/snaps to what will actually run.
+  const SLIP_PER_PERIOD = 24 * Math.max(5, Math.ceil(1008 / (24 * Math.max(polePairs, 1))));
+  const stepsMax = SLIP_PER_PERIOD;         // nodes per electrical period
+  // valid step counts shown in the helper (divisors of stepsMax, ≥12)
+  const validSteps = Array.from({ length: stepsMax }, (_, i) => i + 1)
+    .filter(d => stepsMax % d === 0 && d >= 12);
   const snapSteps = (v: number) => {
     if (stepsMax % v === 0) return v;       // already a divisor
     let best = stepsMax;
@@ -344,6 +330,20 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   const [job,     setJob]     = useState<JobStatus | null>(null);
   const [polling, setPolling] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // ── "Apply best design" (Sweep) pushes the optimizer's operating point here ──
+  // so simulating the saved geometry reproduces the optimizer's result instead of
+  // running at the panel's idle current.  This panel is ALWAYS mounted (hidden
+  // when inactive), so it won't re-read on a tab switch — update live via event.
+  useEffect(() => {
+    const onOp = (e: Event) => {
+      const d = (e as CustomEvent).detail || {};
+      if (typeof d.current === 'number') setCurrent(d.current);
+      if (typeof d.gamma === 'number') setPhaseOffset(d.gamma);
+    };
+    window.addEventListener('sim-operating-point', onOp as EventListener);
+    return () => window.removeEventListener('sim-operating-point', onOp as EventListener);
+  }, []);
 
   // ── load server status + geometry ─────────────────────────────────────────
   useEffect(() => {
@@ -447,11 +447,20 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // NB: torqueFilter is NOT here — band-limiting is a client-side display
   // toggle (the backend always returns both raw + filtered series), so flipping
   // it must NOT mark the result stale or require a re-run.
+  const geoSig = () => {
+    try {
+      return Object.entries(storeGeometry || {})
+        .filter(([, v]) => typeof v === 'number')
+        .sort(([a], [b]) => (a < b ? -1 : 1))
+        .map(([k, v]) => `${k}:${v}`).join('|');
+    } catch { return ''; }
+  };
   const computeSig = () => JSON.stringify({
     I: current, g: phaseOffset, rpm, steps, coilTemp, endWinding, connection,
     fl: fieldLosses, dm: demag,
     ns: readMesh('nSectors', 4), ms: readMesh('meshSize', 4.0), mn: readMesh('minSize', 0.3),
     gl: readMesh('gapLayers', 2), oa: readMesh('outerAir', 1.3), nd: readMesh('normalDev', 6),
+    geo: geoSig(),   // geometry change (e.g. applied Sweep design) ⇒ result stale
   });
   // Snapshot the run's inputs the moment a run is launched (runNonce ticks).
   useEffect(() => { setRunSig(computeSig()); }, [runNonce]);  // eslint-disable-line react-hooks/exhaustive-deps
@@ -663,61 +672,6 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
             ))}
           </Box>
 
-          {/* editable layout string (paste from winding tool) */}
-          <TextField label="Layout string" size="small" fullWidth multiline minRows={2}
-            value={layoutDraft} onChange={e => setLayoutDraft(e.target.value)}
-            disabled={layoutBusy}
-            inputProps={{ style: { fontSize: 11, fontFamily: 'monospace' } }}
-            helperText={`${windCfg?.num_slots ?? 24} slots · A|a|c|… (UPPER=+, lower=−) · paste from winding tool`}
-            FormHelperTextProps={{ sx: { fontSize: 9, color: '#475569', mx: 0 } }}/>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.75 }}>
-            <Button size="small" variant="contained"
-              onClick={() => applyWinding({ layout: layoutDraft })}
-              disabled={layoutBusy}
-              sx={{ fontSize: 10, py: 0.4, textTransform: 'none' }}>
-              {layoutBusy ? 'Applying…' : 'Apply layout'}
-            </Button>
-            {layoutMsg && (
-              <Typography sx={{ fontSize: 10,
-                color: layoutMsg.startsWith('✓') ? '#4ade80' : '#fca5a5' }}>
-                {layoutMsg}
-              </Typography>
-            )}
-          </Box>
-
-          {/* ── d-axis angle optimisation: sweep γ∈[−30,30] step 2, all values ── */}
-          <Box sx={{ mt: 1.5 }}>
-            <Button size="small" variant="outlined" fullWidth
-              onClick={runDaxisSweep} disabled={daxisBusy}
-              sx={{ fontSize: 10, py: 0.4, textTransform: 'none',
-                color: '#93c5fd', borderColor: '#334155' }}>
-              {daxisBusy ? 'Optimizing… (~2 min)' : 'Optimize d-axis angle (−30…30°, step 2)'}
-            </Button>
-            {daxisSweep && (
-              <Box sx={{ mt: 1, bgcolor: '#0a1628', border: '1px solid #1e293b',
-                borderRadius: 1, p: 1 }}>
-                <Typography sx={{ fontSize: 11, color: '#4ade80', fontWeight: 700, mb: 0.5 }}>
-                  Optimal: γ = {daxisSweep.optimal_angle}° → T = {daxisSweep.optimal_torque} N·m
-                </Typography>
-                <Box sx={{ maxHeight: 180, overflowY: 'auto', display: 'grid',
-                  gridTemplateColumns: '1fr 1fr', columnGap: 1, rowGap: '1px' }}>
-                  {(daxisSweep.points || []).map((p: any) => (
-                    <Box key={p.angle} sx={{ display: 'flex', justifyContent: 'space-between',
-                      px: 0.5, borderRadius: '2px',
-                      bgcolor: p.angle === daxisSweep.optimal_angle ? '#14532d' : 'transparent' }}>
-                      <Typography sx={{ fontSize: 10, color: '#64748b',
-                        fontVariantNumeric: 'tabular-nums' }}>γ={p.angle}°</Typography>
-                      <Typography sx={{ fontSize: 10,
-                        color: p.angle === daxisSweep.optimal_angle ? '#4ade80' : '#cbd5e1',
-                        fontVariantNumeric: 'tabular-nums' }}>
-                        {p.torque == null ? '—' : p.torque.toFixed(2)}
-                      </Typography>
-                    </Box>
-                  ))}
-                </Box>
-              </Box>
-            )}
-          </Box>
         </Box>
 
         <Divider sx={{ borderColor: '#1e293b' }}/>
@@ -855,7 +809,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
             onKeyDown={e => { if (e.key === 'Enter') { commitSteps(); (e.target as HTMLInputElement).blur(); } }}
             inputProps={{ inputMode: 'numeric', pattern: '[0-9]*' }}
             disabled={simBusy}
-            helperText={`Transient time resolution. Max ${stepsMax} = slip-ring positions per electrical period (1008/${polePairs}); snapped to a divisor (e.g. 36, 24) so the rotor lands on whole mesh nodes.`}
+            helperText={`Transient time resolution. Valid = divisors of ${stepsMax} (slip nodes per electrical period): ${validSteps.join(', ')}. Other values snap to the nearest so the rotor lands on whole mesh nodes.`}
             FormHelperTextProps={{ sx: { fontSize: 10, color: '#475569', mx: 0 } }}
             sx={{ mb: 1.25 }}
           />
@@ -918,7 +872,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
             <Button
               fullWidth
               variant="contained"
-              onClick={() => { if (cancelledRun) setAskResume(true); else launchRun(false); }}
+              onClick={() => { commitSteps(); if (cancelledRun) setAskResume(true); else launchRun(false); }}
               startIcon={<PlayArrowIcon />}
               sx={{
                 py: 1.2, fontWeight: 700, fontSize: 13, letterSpacing: 0.5,

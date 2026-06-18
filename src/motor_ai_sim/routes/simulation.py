@@ -101,8 +101,14 @@ def _outlines_from_polys(pfo: dict) -> list:
     return outlines
 
 
-def _current_geom_hash_and_params():
-    """Return (hash, params_dict) of the LIVE UI-edited geometry.
+def _current_geom_hash_and_params(geo: Optional[str] = None):
+    """Return (hash, params_dict) of the geometry for THIS request.
+
+    Base = the LIVE UI-edited geometry (global config). When a per-request ``geo``
+    override (a JSON dict of geometry params) is supplied it is overlaid on top —
+    step toward stateless, per-user endpoints (docs/MULTI_USER_PLAN.md): a
+    signed-in client computes against ITS OWN design without mutating the shared
+    config. Absent/malformed ``geo`` → just the global config (back-compat).
 
     Falls back to (None, None) if the geometry service is unavailable, in which
     case CadQueryMotor() reads config defaults.
@@ -111,6 +117,13 @@ def _current_geom_hash_and_params():
     try:
         from motor_ai_sim.services.geometry_service import get_current_geometry
         pd = get_current_geometry().to_dict()
+        if geo:
+            try:
+                ov = json.loads(geo)
+                if isinstance(ov, dict) and ov:
+                    pd = {**pd, **ov}
+            except Exception:
+                pass  # malformed → global config (back-compat)
         h = hashlib.md5(json.dumps(pd, sort_keys=True, default=str).encode()).hexdigest()[:12]
         return h, pd
     except Exception:
@@ -1204,6 +1217,7 @@ async def build_fem_mesh_2d_sliding_band(
     stator_fillet_mm:  float = 0.0,     # extra Shapely fillet smoothing
     component_mesh:    str   = "",      # JSON {comp: size_mm} per-part mesh size
     pole_copy:         bool  = False,   # bit-identical pole/slot template-copy mesh
+    geo:               Optional[str] = None,  # per-request geometry override (multi-user)
 ):
     """Build TWO independent meshes (stator + rotor) and stitch them into
     one renderer-friendly payload for the Mesh tab.  Lets the user
@@ -1222,12 +1236,13 @@ async def build_fem_mesh_2d_sliding_band(
     import numpy as _np
 
     _comp_mesh = _parse_component_mesh(component_mesh)
+    _gh, _pd = _current_geom_hash_and_params(geo)   # geometry (live + optional override)
     key = (round(rotor_angle_deg, 3), round(mesh_size_mm, 2),
            round(min_size_mm, 2), round(surface_deviation, 4),
            round(normal_deviation, 1), round(aspect_ratio, 1),
            round(outer_air_factor, 2), round(band_thickness_mm, 2),
            round(gap_layers, 1), int(n_sectors), round(stator_fillet_mm, 2),
-           int(bool(pole_copy)), tuple(sorted(_comp_mesh.items())))
+           int(bool(pole_copy)), tuple(sorted(_comp_mesh.items())), _gh)
     if key in _fem_mesh_sb_cache:
         return _fem_mesh_sb_cache[key]
 
@@ -1243,6 +1258,11 @@ async def build_fem_mesh_2d_sliding_band(
         raise HTTPException(status_code=500, detail=f"sliding-band unavailable: {e}")
 
     motor = CadQueryMotor()
+    # Per-request geometry override (multi-user): apply ONLY when a `geo` override
+    # is present, so the existing (no-geo) path keeps reading config defaults
+    # exactly as before — zero behaviour change without geo.
+    if geo and _pd:
+        motor.set_parameters(_pd)
     # outer_air_factor controls out_band's far-field radius, which is baked
     # into get_2d_polygons — feed it through the geometry parameters so the
     # Mesh-tab "Outer air ring" slider actually moves the boundary.

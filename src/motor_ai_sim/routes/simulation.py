@@ -101,6 +101,19 @@ def _outlines_from_polys(pfo: dict) -> list:
     return outlines
 
 
+def _parse_geo_override(geo: Optional[str]) -> Optional[dict]:
+    """Parse a per-request `geo` JSON override into a geometry dict, or None if
+    absent/malformed (so callers fall back to the global config)."""
+    if not geo:
+        return None
+    import json
+    try:
+        ov = json.loads(geo)
+        return ov if (isinstance(ov, dict) and ov) else None
+    except Exception:
+        return None
+
+
 def _current_geom_hash_and_params(geo: Optional[str] = None):
     """Return (hash, params_dict) of the geometry for THIS request.
 
@@ -2068,6 +2081,7 @@ def get_fem_transient(
     torque_filter:       bool  = True,    # ← band-limit T(t) to physical 6·k orders (off = raw)
     pole_copy:           bool  = False,   # ← bit-identical pole/slot template-copy mesh
     restore:             bool  = False,   # ← on open: return the LAST saved transient (stale if params differ) instead of recomputing
+    geo:                 Optional[str] = None,  # ← per-request geometry override (multi-user); absent = global config
 ):
     """Transient FEM analysis — runs N solves per electrical period and
     returns time-resolved T(t), losses(t) and V_phase(t).
@@ -2089,6 +2103,7 @@ def get_fem_transient(
     # Bypasses the parallel remesh-per-frame machinery entirely.
     if sliding_band:
         _comp_mesh = _parse_component_mesh(component_mesh)
+        _geo_ov = _parse_geo_override(geo)   # per-request geometry override (multi-user)
         _sb_key = ("sb", int(n_steps_per_period), round(n_periods, 2),
                    round(gamma_deg, 1), round(I_phase_rms, 1),
                    round(mesh_size_mm, 2), round(min_size_mm, 2),
@@ -2099,6 +2114,8 @@ def get_fem_transient(
                    int(bool(demag)), int(bool(torque_filter)),
                    int(bool(pole_copy)),
                    tuple(sorted(_comp_mesh.items())))
+        if _geo_ov:   # distinct cache entry per overridden geometry (no-geo key unchanged)
+            _sb_key = _sb_key + (tuple(sorted(_geo_ov.items())),)
         if not fresh and _sb_key in _fem_transient_cache:
             return _fem_transient_cache[_sb_key]
         # RESTORE path (page open / tab switch): NEVER recompute.  Hand back the
@@ -2169,6 +2186,7 @@ def get_fem_transient(
                     torque_filter=bool(torque_filter),
                     pole_copy=bool(pole_copy),
                     component_mesh_mm=_comp_mesh,
+                    geo_override=_geo_ov,
                     progress_cb=_sb_progress)
             finally:
                 _fem_transient_progress["current"]["running"] = False

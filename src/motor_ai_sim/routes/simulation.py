@@ -979,6 +979,7 @@ async def build_fem_mesh_2d(
     component_mesh:      str   = "",      # JSON {comp: size_mm} per-part target
                                           # element size: stator/rotor/magnet/
                                           # coil/shaft/outer. "" = global size.
+    geo:                 Optional[str] = None,  # per-request geometry override (multi-user)
 ):
     """Build a 2-D triangle mesh of the motor cross-section and return it as
     JSON-friendly arrays. Parameters mirror Ansys Maxwell's Curved Surface
@@ -1000,7 +1001,7 @@ async def build_fem_mesh_2d(
     # Include a hash of the LIVE geometry so editing any geometry parameter
     # (e.g. rotor_fill_r) invalidates the mesh cache and rebuilds — previously
     # the key had only mesh params, so geometry edits never showed up here.
-    _ghash, _params_dict = _current_geom_hash_and_params()
+    _ghash, _params_dict = _current_geom_hash_and_params(geo)
     _comp_mesh = _parse_component_mesh(component_mesh)
     key = (
         _ghash,
@@ -1413,6 +1414,7 @@ def get_fem_field2d(
     component_mesh:      str   = "",      # JSON {comp: size_mm} per-part mesh size
     demag:               bool  = False,   # show the irreversible-demag %-map
     pole_copy:           bool  = False,   # bit-identical pole/slot template-copy mesh
+    geo:                 Optional[str] = None,  # per-request geometry override (multi-user)
 ):
     """Field view at ONE rotor angle, computed by the SLIDING-BAND TRANSIENT
     solver (1 step, rotor PHYSICALLY placed at rotor_angle_deg) — the SAME solver
@@ -1425,6 +1427,7 @@ def get_fem_field2d(
     import time as _time
 
     _comp_mesh = _parse_component_mesh(component_mesh)
+    _geo_ov = _parse_geo_override(geo)   # per-request geometry override (multi-user)
     key = (
         "sbfield", round(rotor_angle_deg * 2) / 2, round(gamma_deg, 1),
         round(mesh_size_mm, 2), round(min_size_mm, 2), round(outer_air_factor, 2),
@@ -1432,6 +1435,8 @@ def get_fem_field2d(
         round(I_phase_rms, 2) if I_phase_rms is not None else None,
         int(bool(demag)), int(bool(pole_copy)), tuple(sorted(_comp_mesh.items())),
     )
+    if _geo_ov:   # distinct cache entry per overridden geometry (no-geo key unchanged)
+        key = key + (tuple(sorted(_geo_ov.items())),)
     if key in _fem_field_cache:
         return _fem_field_cache[key]
 
@@ -1464,7 +1469,8 @@ def get_fem_field2d(
             return_field=True, field_first=True,
             rotor_angle0_deg=float(rotor_angle_deg),
             pole_copy=bool(pole_copy),
-            component_mesh_mm=_comp_mesh)
+            component_mesh_mm=_comp_mesh,
+            geo_override=_geo_ov)
     except Exception as e:
         log.exception("SB field solve failed")
         raise HTTPException(status_code=500, detail=f"FEM solve failed: {e}")
@@ -1530,6 +1536,7 @@ def get_fem_eddy_field2d(
     n_sectors:          int   = 4,
     coil_temp_c:        float = 120.0,
     component_mesh:     str   = "",
+    geo:                Optional[str] = None,  # per-request geometry override (multi-user)
 ):
     """Run the time-coupled EDDY-CURRENT solve and return its LAST-frame field —
     A_z, |B|, and the copper eddy current density J = σ(−∂A/∂t + U_c) — in the
@@ -1538,10 +1545,13 @@ def get_fem_eddy_field2d(
     import numpy as _np
     import math as _math
     _comp_mesh = _parse_component_mesh(component_mesh)
+    _geo_ov = _parse_geo_override(geo)   # per-request geometry override (multi-user)
     key = ("eddyfld", round(gamma_deg, 1), round(I_phase_rms, 1),
            int(n_steps_per_period), round(n_periods, 2), round(mesh_size_mm, 2),
            round(min_size_mm, 2), round(outer_air_factor, 2), int(n_sectors),
            round(coil_temp_c, 1), tuple(sorted(_comp_mesh.items())))
+    if _geo_ov:   # distinct cache entry per overridden geometry (no-geo key unchanged)
+        key = key + (tuple(sorted(_geo_ov.items())),)
     if key in _fem_field_cache:
         return _fem_field_cache[key]
     try:
@@ -1562,7 +1572,8 @@ def get_fem_eddy_field2d(
             n_sectors=int(n_sectors) if int(n_sectors) > 1 else 4,
             coil_temp_c=float(coil_temp_c), eddy=True, rotor_eddy=True,
             return_field=True,
-            component_mesh_mm=_comp_mesh)
+            component_mesh_mm=_comp_mesh,
+            geo_override=_geo_ov)
     except Exception as e:
         log.exception("eddy field solve failed")
         raise HTTPException(status_code=500, detail=f"eddy solve failed: {e}")

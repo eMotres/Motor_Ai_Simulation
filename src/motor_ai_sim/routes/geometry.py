@@ -281,13 +281,33 @@ _mesh_cache: dict           = {"hash": None, "data": None, "build_time_s": None}
 _mesh2d_cache: dict         = {"hash": None, "data": None, "build_time_s": None}
 _mesh_extruded_cache: dict  = {"hash": None, "data": None, "build_time_s": None}
 
+def _resolve_geo_dict(geo: Optional[str]) -> dict:
+    """Geometry for a mesh request: the global config, optionally overlaid with a
+    per-request ``geo`` override (a JSON dict of geometry params).
+
+    Step 1 of the multi-user migration (docs/MULTI_USER_PLAN.md): a signed-in
+    client can compute the mesh for ITS OWN design by passing ``geo``, without
+    mutating the shared global config.  Absent or malformed ``geo`` falls back to
+    the global config, so existing callers are unaffected.
+    """
+    import json
+    params_dict = get_current_geometry().to_dict()
+    if geo:
+        try:
+            override = json.loads(geo)
+            if isinstance(override, dict) and override:
+                params_dict = {**params_dict, **override}
+        except Exception:
+            pass  # malformed → use the global config (back-compat)
+    return params_dict
+
+
 @router.get("/mesh")
-def get_geometry_mesh():
+def get_geometry_mesh(geo: Optional[str] = None):
     try:
         from motor_ai_sim.cadquery_geometry import CadQueryMotor
         import hashlib, json, time
-        params = get_current_geometry()
-        params_dict = params.to_dict()
+        params_dict = _resolve_geo_dict(geo)
         params_hash = hashlib.md5(json.dumps(params_dict, sort_keys=True).encode()).hexdigest()
 
         if _mesh_cache["hash"] == params_hash and _mesh_cache["data"] is not None:
@@ -313,8 +333,7 @@ def get_geometry_mesh():
             _rfr = 0.0
         if _rfr > 1e-4:
             try:
-                _w = float(params_dict.get('stator_width')
-                           or params_dict.get('motor_length') or 35.0)
+                _w = float(params_dict.get('motor_length') or 45.0)
                 _rc = motor.get_extruded_mesh_data().get('rotor_core')
                 if _rc and _rc.get('vertices'):
                     _v = _rc['vertices']
@@ -340,13 +359,12 @@ def get_geometry_mesh():
 
 
 @router.get("/mesh2d")
-def get_geometry_mesh2d():
+def get_geometry_mesh2d(geo: Optional[str] = None):
     """Return flat 2-D cross-section meshes for all motor components (shapely+earcut, no CadQuery)."""
     try:
         from motor_ai_sim.cadquery_geometry import CadQueryMotor
         import hashlib, json, time
-        params = get_current_geometry()
-        params_dict = params.to_dict()
+        params_dict = _resolve_geo_dict(geo)
         params_hash = hashlib.md5(json.dumps(params_dict, sort_keys=True).encode()).hexdigest()
 
         if _mesh2d_cache["hash"] == params_hash and _mesh2d_cache["data"] is not None:
@@ -368,7 +386,7 @@ def get_geometry_mesh2d():
 
 
 @router.get("/mesh_extruded")
-def get_geometry_mesh_extruded(depth: Optional[float] = None):
+def get_geometry_mesh_extruded(depth: Optional[float] = None, geo: Optional[str] = None):
     """
     Return 3-D meshes built by extruding 2-D Shapely cross-sections (no CadQuery).
 
@@ -379,8 +397,7 @@ def get_geometry_mesh_extruded(depth: Optional[float] = None):
     try:
         from motor_ai_sim.cadquery_geometry import CadQueryMotor
         import hashlib, json, time
-        params = get_current_geometry()
-        params_dict = params.to_dict()
+        params_dict = _resolve_geo_dict(geo)
         cache_key = hashlib.md5(
             json.dumps({**params_dict, "_depth": depth}, sort_keys=True).encode()
         ).hexdigest()

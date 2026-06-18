@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { syncActiveMotor } from '../components/common/motorSettings';
+import { setGeoGetter } from '../lib/apiAuth';
 import type {
   MotorGeometryParams,
   MaterialAssignments,
@@ -82,6 +83,7 @@ interface MotorState {
   // Sweep / Optimization
   sweepConfig: SweepConfig;
   updateVariation: (paramName: string, variation: Partial<ParameterVariation>) => void;
+  setVariations: (variations: SweepConfig['variations']) => void;
   updateOperatingPoint: (index: 0 | 1, point: Partial<OperatingPoint>) => void;
   updateRippleThreshold: (threshold: number) => void;
   updateSweepConstraints: (patch: Partial<SweepConfig>) => void;
@@ -553,6 +555,11 @@ export const useMotorStore = create<MotorState>()(
           },
         })),
 
+      // Replace the whole variations map at once — used to swap the per-algorithm
+      // variable sets (each sub-tab keeps its own selection in localStorage).
+      setVariations: (variations) =>
+        set((state) => ({ sweepConfig: { ...state.sweepConfig, variations } })),
+
       updateOperatingPoint: (index, point) =>
         set((state) => {
           const pts: [OperatingPoint, OperatingPoint] = [...state.sweepConfig.operatingPoints] as [OperatingPoint, OperatingPoint];
@@ -586,9 +593,14 @@ export const useMotorStore = create<MotorState>()(
             step: param.step ?? (current !== 0 ? Math.abs(current) * 0.1 : 1),
           };
         }
-        // Preserve non-schema variables (e.g. the load angle γ, selected from the
-        // Simulation tab) — they aren't in parameterSchema but must survive re-init.
-        if (existing['gamma_deg']) variations['gamma_deg'] = existing['gamma_deg'];
+        // Preserve ALL non-schema variables (load angle γ, phase current, …) — they
+        // aren't in parameterSchema but MUST survive re-init.  This effect runs on
+        // every mount, and a tab switch remounts the panel, so keeping only γ here
+        // (the old behaviour) made a phase-current (or any non-schema) variable
+        // vanish when you left the Optimization tab and came back.
+        for (const k of Object.keys(existing)) {
+          if (!(k in variations)) variations[k] = existing[k];
+        }
         set((state) => ({
           sweepConfig: { ...state.sweepConfig, variations },
         }));
@@ -604,25 +616,23 @@ export const useMotorStore = create<MotorState>()(
       lastOptSnapshot: null,
       setLastOptSnapshot: (s) => set({ lastOptSnapshot: s }),
       runDescent: async ({ rippleMax, maxIters, wEff, wTd, steps, algorithm, nSectors, targetTorque, vPeakLimit, optimizeGamma, autoExpand, maxRounds, surrogateSeed }) => {
-        const { sweepConfig, geometry } = get();
-        // Variables = every active (non-fixed) entry.  OPTIMIZE vars search a
-        // SYMMETRIC ± deviation around the CURRENT geometry value (range tracks the
-        // live design, matching the UI's "value ± deviation"); SWEEP keeps its grid.
+        const { sweepConfig } = get();
+        // Fixed operating point = Sweep "Point 1" (γ/current from Simulation).
+        const op0 = sweepConfig.operatingPoints[0] || ({} as any);
+        // Variables = every active (non-fixed) entry; each card sets its explicit
+        // [min, max] + step — the single shared variable interface used by every
+        // algorithm (Optimize searches [min,max]; Sweep grids it; DOE screens it).
         const variables = Object.entries(sweepConfig.variations)
           .filter(([, v]) => v.mode !== 'fixed')
-          .map(([name, v]) => {
-            const cur = Number((geometry as Record<string, any>)[name]);
-            const dlt = (Number(v.max) - Number(v.min)) / 2;
-            const sym = v.mode === 'optimize' && Number.isFinite(cur) && dlt > 0;
-            return { name, min: sym ? cur - dlt : Number(v.min),
-                     max: sym ? cur + dlt : Number(v.max),
-                     mode: v.mode, step: Number(v.step) };
-          });
-        // Fixed operating point = Sweep "Point 1" (current + rpm).
-        const op0 = sweepConfig.operatingPoints[0];
-        let mesh_size_mm = 4.0, min_size_mm = 0.3;
+          .map(([name, v]) => ({ name, min: Number(v.min), max: Number(v.max),
+                                 mode: v.mode, step: Number(v.step) }));
+        // Mesh settings — all from the Mesh tab (single source), so the optimizer
+        // meshes EXACTLY like Simulation (incl. the Periodic pole/slot toggle).
+        let mesh_size_mm = 4.0, min_size_mm = 0.3, pole_copy = false, torque_filter = true;
         try { mesh_size_mm = Number(JSON.parse(localStorage.getItem('mesh.meshSize') ?? '4')) || 4.0; } catch { /* default */ }
         try { min_size_mm  = Number(JSON.parse(localStorage.getItem('mesh.minSize')  ?? '0.3')) || 0.3; } catch { /* default */ }
+        try { pole_copy    = JSON.parse(localStorage.getItem('mesh.poleCopy') ?? 'false') === true; } catch { /* default */ }
+        try { torque_filter = JSON.parse(localStorage.getItem('sim.torqueFilter') ?? 'true') !== false; } catch { /* default */ }
 
         set({ descentRunning: true, descentError: null, descentState: null });
         try {
@@ -633,7 +643,7 @@ export const useMotorStore = create<MotorState>()(
               operating_point: { gamma_deg: op0.gamma_deg ?? 0, current_a: op0.current_a, rpm: op0.rpm },
               ripple_max_pct: rippleMax, w_eff: wEff, w_td: wTd,
               max_iters: maxIters, steps_per_period: steps,
-              mesh_size_mm, min_size_mm,
+              mesh_size_mm, min_size_mm, pole_copy, torque_filter,
               algorithm, n_sectors: nSectors,
               target_torque_nm: targetTorque ?? 0,
               v_peak_limit: vPeakLimit ?? 1e9,
@@ -667,6 +677,32 @@ export const useMotorStore = create<MotorState>()(
         if (!overrides || !Object.keys(overrides).length) return;
         if (get().connectedToApi) await get().updateGeometryViaApi(overrides);
         else get().updateGeometry(overrides);
+        // Persist the OPERATING POINT the design was found at (solved current +
+        // MTPA γ).  Without this, simulating the saved geometry runs at the
+        // Simulation panel's idle current → low torque → inflated ripple% (the
+        // 55% the user hit).  max_current is the solver's I_phase_rms — the same
+        // quantity the optimizer solved as current_a.
+        const m = st?.best?.metrics || st?.result?.best;
+        const I = (typeof m?.current_a === 'number') ? m.current_a : undefined;
+        const g = (typeof st?.mtpa_gamma_deg === 'number') ? st.mtpa_gamma_deg
+                : (typeof m?.gamma_deg === 'number' ? m.gamma_deg : undefined);
+        if (I === undefined && g === undefined) return;
+        if (get().connectedToApi) {
+          try {
+            await fetch(`${API_BASE_URL}/api/simulation/config`, {
+              method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                ...(I !== undefined ? { max_current: I } : {}),
+                ...(g !== undefined ? { phase_offset_deg: g } : {}),
+              }),
+            });
+          } catch { /* non-fatal: live event below still updates the panel */ }
+        }
+        // SimulationPanel is ALWAYS mounted (hidden when inactive), so it won't
+        // re-read on a tab switch — nudge it to adopt the operating point live.
+        try {
+          window.dispatchEvent(new CustomEvent('sim-operating-point', { detail: { current: I, gamma: g } }));
+        } catch { /* SSR/no-window */ }
       },
       loadLastDescent: async () => {
         // The backend keeps the last descent in memory — re-hydrate it so the
@@ -692,9 +728,11 @@ export const useMotorStore = create<MotorState>()(
           const local = get().sweepConfig;
           const srvVars = config?.variations && typeof config.variations === 'object'
             ? config.variations : null;
-          if (srvVars && _sweepSelected(srvVars) > 0) {
-            // Server has a real config → it wins (this is what makes it
-            // browser-independent).
+          if (srvVars && _sweepSelected(srvVars) > 0 && _sweepSelected(local.variations) === 0) {
+            // Adopt the server's config ONLY when THIS browser has no selection yet
+            // (fresh load).  If this browser already has variables, they win (handled
+            // below) — so a reload never clobbers your selections with a server copy
+            // that may be stale (e.g. a var added <600 ms before reload hadn't synced).
             const ops = Array.isArray(config.operatingPoints) && config.operatingPoints.length === 2
               ? config.operatingPoints : local.operatingPoints;
             _sweepHydrating = true;
@@ -711,8 +749,8 @@ export const useMotorStore = create<MotorState>()(
             } });
             _sweepHydrating = false;
           } else if (_sweepSelected(local.variations) > 0) {
-            // Server has nothing real yet, but THIS browser does → seed it so the
-            // selection then shows in every browser.
+            // THIS browser has selections → they win on reload; push them to the
+            // server so they sync out (covers server-empty AND server-stale).
             fetch(`${API_BASE_URL}/api/sweep/config`, {
               method: 'PUT', headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(local),
@@ -837,6 +875,21 @@ export const useBuildTimingStore = create<BuildTimingState>()((set) => ({
 if (typeof window !== 'undefined' && import.meta.env?.DEV) {
   (window as unknown as { __motorStore?: typeof useMotorStore }).__motorStore = useMotorStore;
 }
+
+// P2 (multi-user): feed the live geometry to the fetch interceptor so every
+// COMPUTE request carries THIS client's design (?geo=) — stateless per-user
+// isolation, no shared global config. See docs/MULTI_USER_PLAN.md.
+setGeoGetter(() => {
+  try {
+    const g = useMotorStore.getState().geometry as Record<string, unknown> | undefined;
+    if (!g) return null;
+    const num: Record<string, number> = {};
+    for (const [k, v] of Object.entries(g)) {
+      if (typeof v === 'number' && Number.isFinite(v)) num[k] = v;
+    }
+    return Object.keys(num).length ? JSON.stringify(num) : null;
+  } catch { return null; }
+});
 
 export const useUIStore = create<UIState>()(
   persist(

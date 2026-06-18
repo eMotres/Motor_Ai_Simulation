@@ -111,9 +111,14 @@ const SweepVarCard: React.FC<SweepVarCardProps> = ({ paramName, label, unit, opt
         {!optimize && Number.isFinite(cur) && (() => {
           const outLo = cur < Number(v.min), outHi = cur > Number(v.max);
           const out = outLo || outHi;
+          // Show the FAITHFUL value (not snapped to 0.1) — a small fractional
+          // param like magnet_fill = 0.467 must not display as "0.5" and look like
+          // it contradicts "below min 0.48".  Trim trailing zeros for tidiness.
+          const shown = isInt ? String(Math.round(cur))
+            : cur.toFixed(3).replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
           return (
             <Typography variant="caption" sx={{ color: out ? '#fbbf24' : 'text.disabled', mb: 0.75, display: 'block' }}>
-              now: {fmt(cur)}{unit ? ` ${unit}` : ''} (from {src})
+              now: {shown}{unit ? ` ${unit}` : ''} (from {src})
               {out && ` — ${outLo ? 'below min' : 'above max'}, widen the range to include it`}
             </Typography>
           );

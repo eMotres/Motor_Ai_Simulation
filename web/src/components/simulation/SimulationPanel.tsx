@@ -545,7 +545,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
           ) : (
             <Chip label="Connecting…" size="small" sx={{ fontSize: 10 }}/>
           )}
-          {srvStatus && (
+          {srvStatus?.operating_point?.Br_magnet_T != null && (
             <Typography sx={{ fontSize: 10, color: '#334155', mt: 0.5 }}>
               Br = {srvStatus.operating_point.Br_magnet_T.toFixed(2)} T
               &nbsp;(from materials config)

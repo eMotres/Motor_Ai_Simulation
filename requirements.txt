@@ -17,3 +17,4 @@ trimesh==4.11.2
 # Firebase ID-token verification (tier gating). [crypto] pulls cryptography.
 pyjwt[crypto]==2.10.1
 cma>=4.0  # CMA-ES optimizer
+sympy>=1.13  # symbolic back-EMF / modulus calc (pdes.py, solver_2d.py) — without it /api/simulation/status errors

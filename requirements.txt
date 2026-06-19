@@ -16,6 +16,10 @@ pyyaml==6.0.3
 trimesh==4.11.2
 # Firebase ID-token verification (tier gating). [crypto] pulls cryptography.
 pyjwt[crypto]==2.10.1
+# Admin SDK: user-management + stats for /api/admin/* (lists Firebase Auth users,
+# reads Firestore design counts). Uses Application Default Credentials on Cloud
+# Run; absent locally -> admin endpoints serve flagged mock data.
+firebase-admin>=6.5,<7
 cma>=4.0  # CMA-ES optimizer
 sympy>=1.13  # symbolic back-EMF / modulus calc (pdes.py, solver_2d.py) — without it /api/simulation/status errors
 mapbox-earcut>=1.0  # 2D polygon triangulation (cadquery_geometry.get_2d_mesh_data) — without it /api/geometry/mesh2d + mesh_extruded return empty (geometry doesn't render) and build2d_sliding_band 500s

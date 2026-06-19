@@ -34,6 +34,8 @@ import MotorScene from './components/viewer3d/MotorScene';
 import ParameterVariationTable from './components/sweep/ParameterVariationTable';
 import MotorsCatalog from './components/catalog/MotorsCatalog';
 import AuthButton from './components/auth/AuthButton';
+import { useAuth } from './contexts/AuthContext';
+import AdminPanel from './components/admin/AdminPanel';
 import MaterialControls from './components/parameters/MaterialControls';
 import SweepConfigPanel from './components/sweep/SweepConfigPanel';
 import MaterialsLibraryTree from './components/materials/MaterialsLibraryTree';
@@ -137,6 +139,7 @@ const GeometryBuildTimer: React.FC = () => {
 
 function App() {
   const { activeTab, setActiveTab, showGrid, showAxes, toggleGrid, toggleAxes } = useUIStore();
+  const { isAdmin } = useAuth();
   const [panelWidth, setPanelWidth] = React.useState(300);
   const [selectedMaterial, setSelectedMaterial] = useState<SelectedMaterial | null>(null);
   const { library: matLibrary, loading: matLoading, error: matError } = useMaterialsLibrary();
@@ -195,7 +198,13 @@ function App() {
     return () => clearTimeout(id);
   }, [activeTab]);
 
-  const showViewer = activeTab !== 'sweep' && activeTab !== 'motors' && activeTab !== 'compare';
+  // Don't strand a user on the admin tab if they sign out / lose admin.
+  useEffect(() => {
+    if (activeTab === 'admin' && !isAdmin) setActiveTab('motors');
+  }, [activeTab, isAdmin, setActiveTab]);
+
+  const showViewer = activeTab !== 'sweep' && activeTab !== 'motors'
+    && activeTab !== 'compare' && activeTab !== 'admin';
 
   return (
     <ThemeProvider theme={darkTheme}>
@@ -291,6 +300,7 @@ function App() {
             <Tab label="Simulation" value="simulation" sx={{ minHeight: 40, fontSize: '0.8rem' }} />
             <Tab label="Configure" value="compare" sx={{ minHeight: 40, fontSize: '0.8rem' }} />
             <Tab label="Optimization" value="sweep" sx={{ minHeight: 40, fontSize: '0.8rem' }} />
+            {isAdmin && <Tab label="Admin" value="admin" sx={{ minHeight: 40, fontSize: '0.8rem', fontWeight: 700, color: '#fbbf24' }} />}
           </Tabs>
         </Box>
 
@@ -341,6 +351,9 @@ function App() {
 
           {/* Configure — simple tuner (configurator) + saved-sim diff */}
           {activeTab === 'compare' && <CompareTab />}
+
+          {/* Admin — user management + usage statistics (admin only) */}
+          {activeTab === 'admin' && isAdmin && <AdminPanel />}
 
           {/* Materials: left half (tree + detail) | right half (real geometry + assign) */}
           {activeTab === 'materials' && (

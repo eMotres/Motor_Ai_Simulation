@@ -24,6 +24,7 @@ import time
 import urllib.request
 from typing import Optional
 
+from fastapi import Header, HTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -175,3 +176,41 @@ def install_tier_gate(app) -> None:
     """Attach the tier gate. Call BEFORE adding CORS so CORS stays outermost
     and 403/401 responses still carry CORS headers for the browser."""
     app.add_middleware(TierGateMiddleware)
+
+
+def _is_admin_caller(authorization: Optional[str]) -> tuple[bool, Optional[dict]]:
+    """(is_admin, user|None). Admin iff the signed-in account is admin-tier
+    (email in ADMIN_EMAILS, or a 'tier=admin' claim).
+
+    Local/unconfigured dev — no enforcement AND no ADMIN_EMAILS configured — is
+    treated as admin so the admin UI is reachable without credentials. As soon
+    as ADMIN_EMAILS is set (which production must do), only those accounts are
+    admin, even with AUTH_ENFORCE off — so the admin page never leaks to ordinary
+    visitors."""
+    user = resolve_user(authorization)
+    if not AUTH_ENFORCE and not _ADMIN_EMAILS:
+        return True, user
+    return (user is not None and user.get("tier") == "admin"), user
+
+
+def account_info(authorization: Optional[str]) -> dict:
+    """Resolve who's calling -> {uid,email,tier,isAdmin,enforced} for /api/me."""
+    is_admin, user = _is_admin_caller(authorization)
+    return {
+        "uid": user["uid"] if user else ("local-dev" if is_admin else None),
+        "email": user["email"] if user else None,
+        "tier": "admin" if is_admin else (user["tier"] if user else "anon"),
+        "isAdmin": is_admin,
+        "enforced": AUTH_ENFORCE,
+    }
+
+
+def require_admin(authorization: Optional[str] = Header(default=None)) -> dict:
+    """FastAPI dependency: allow only admin callers (see _is_admin_caller).
+    A non-admin gets 403, an anonymous caller 401."""
+    is_admin, user = _is_admin_caller(authorization)
+    if not is_admin:
+        if user is None:
+            raise HTTPException(status_code=401, detail="Sign in required.")
+        raise HTTPException(status_code=403, detail="Admin access required.")
+    return user or {"uid": "local-dev", "email": None, "tier": "admin"}

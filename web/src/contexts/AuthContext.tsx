@@ -3,10 +3,16 @@ import { onAuthStateChanged, signInWithPopup, signOut, type User } from 'firebas
 import { auth, googleProvider, firebaseEnabled } from '../lib/firebase';
 import { installFetchAuth, setTokenGetter } from '../lib/apiAuth';
 
+const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
+
 export interface AuthState {
   user: User | null;
   loading: boolean;
   enabled: boolean;
+  /** Plan tier resolved from the backend (anon/free/pro/team/admin). */
+  tier: string;
+  /** True when the signed-in account is an admin (or local dev). Gates the admin UI. */
+  isAdmin: boolean;
   signIn: () => Promise<void>;
   logout: () => Promise<void>;
   /** Firebase ID token for authenticating backend calls (null if signed out). */
@@ -14,7 +20,7 @@ export interface AuthState {
 }
 
 const AuthCtx = createContext<AuthState>({
-  user: null, loading: false, enabled: false,
+  user: null, loading: false, enabled: false, tier: 'anon', isAdmin: false,
   signIn: async () => {}, logout: async () => {}, getToken: async () => null,
 });
 
@@ -23,6 +29,10 @@ export const useAuth = () => useContext(AuthCtx);
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState<boolean>(firebaseEnabled);
+  // Role is resolved server-side (the token + ADMIN_EMAILS), so we ask the
+  // backend via /api/me rather than trusting anything client-side.
+  const [tier, setTier] = useState<string>('anon');
+  const [isAdmin, setIsAdmin] = useState<boolean>(false);
 
   // Install the fetch interceptor once, and keep it pointed at the live token.
   useEffect(() => {
@@ -35,8 +45,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       try { await auth.authStateReady(); } catch { /* older SDK: fall through */ }
       return auth.currentUser ? auth.currentUser.getIdToken() : null;
     });
-    if (!firebaseEnabled || !auth) { setLoading(false); return; }
-    return onAuthStateChanged(auth, (u) => { setUser(u); setLoading(false); });
+    // Ask the backend who we are (the fetch interceptor attaches the token).
+    const loadRole = async () => {
+      try {
+        const j = await fetch(`${API}/api/me`).then((r) => r.json());
+        setTier(j.tier ?? 'anon'); setIsAdmin(Boolean(j.isAdmin));
+      } catch { setTier('anon'); setIsAdmin(false); }
+    };
+    if (!firebaseEnabled || !auth) { setLoading(false); void loadRole(); return; }
+    return onAuthStateChanged(auth, (u) => { setUser(u); setLoading(false); void loadRole(); });
   }, []);
 
   const signIn = async () => {
@@ -48,7 +65,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const getToken = async () => (user ? user.getIdToken() : null);
 
   return (
-    <AuthCtx.Provider value={{ user, loading, enabled: firebaseEnabled, signIn, logout, getToken }}>
+    <AuthCtx.Provider value={{ user, loading, enabled: firebaseEnabled, tier, isAdmin, signIn, logout, getToken }}>
       {children}
     </AuthCtx.Provider>
   );

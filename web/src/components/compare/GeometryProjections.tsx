@@ -21,7 +21,7 @@ const STEEL = '#3b4453', STEEL_DK = '#2a3142', SHAFT = '#5b6675', BG = '#060d17'
 const COPPER = '#c27d33', COPPER_DK = '#5e3a16';
 const LABEL = { fontSize: 11, color: '#64748b', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em' } as const;
 const SUB = { fontSize: 10, color: '#475569', mb: 0.5 } as const;
-const PANEL = { flex: '1 1 380px', minWidth: 320, maxWidth: 500, bgcolor: '#0b1424', border: '1px solid #1e293b', borderRadius: 1, p: 1.5 } as const;
+const PANEL = { bgcolor: '#0b1424', border: '1px solid #1e293b', borderRadius: 1, p: 1.5 } as const;
 
 type Comp = { vertices: number[][]; faces: number[][] };
 type Mesh2D = Record<string, Comp>;
@@ -112,9 +112,11 @@ const CrossSectionReal: React.FC<{
       const hT = tMax * 0.92;
       const C = (r: number, t: number): [number, number] => [r * ct - t * st, r * st + t * ct];
       ctx.fillStyle = COPPER;
+      // anchor the top (outer) wire at the slot back and stack inward toward the
+      // bore — matches the real winding build (top_y fixed, wires added downward).
       for (let k = 0; k < N; k++) {
-        const ri = rMin + insulation + k * rowPitch, ro = ri + wireH;
-        if (ro > rMax - insulation + 1e-6) break;
+        const ro = rMax - insulation - k * rowPitch, ri = ro - wireH;
+        if (ri < rMin + insulation - 1e-6) break;
         const p1 = C(ri, -hT), p2 = C(ri, hT), p3 = C(ro, hT), p4 = C(ro, -hT);
         ctx.beginPath();
         ctx.moveTo(TX(p1[0]), TY(p1[1])); ctx.lineTo(TX(p2[0]), TY(p2[1]));
@@ -126,7 +128,7 @@ const CrossSectionReal: React.FC<{
 
   return (
     <Box sx={{ position: 'relative', textAlign: 'center' }}>
-      <canvas ref={canvasRef} width={480} height={480} style={{ width: '100%', maxWidth: 460, aspectRatio: '1 / 1', height: 'auto', display: 'block', opacity: state === 'loading' ? 0.4 : 1, transition: 'opacity .15s' }} />
+      <canvas ref={canvasRef} width={720} height={720} style={{ width: '100%', aspectRatio: '1 / 1', height: 'auto', display: 'block', opacity: state === 'loading' ? 0.4 : 1, transition: 'opacity .15s' }} />
       {state === 'loading' && <CircularProgress size={20} sx={{ color: '#3b82f6', position: 'absolute', top: '50%', left: '50%', mt: '-10px', ml: '-10px' }} />}
       {state === 'error' && <Typography sx={{ fontSize: 11, color: '#f87171', position: 'absolute', top: '46%', left: 0, right: 0 }}>geometry preview needs the backend</Typography>}
     </Box>
@@ -149,7 +151,7 @@ const SideView: React.FC<{ ref0: ReferenceMotor; knobs: Knobs }> = ({ ref0, knob
     hatch.push(<line key={i} x1={x} y1={y0} x2={x} y2={y0 + stackH} stroke={STEEL_DK} strokeWidth={0.6} />);
   }
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', maxWidth: 460, aspectRatio: '1 / 1', height: 'auto', display: 'block' }}>
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', aspectRatio: '1 / 1', height: 'auto', display: 'block' }}>
       {/* the motor stack — solid, no air, no shaft */}
       <rect x={x0} y={y0} width={stackW} height={stackH} fill={STEEL} stroke="#475569" strokeWidth={1} />
       {hatch}
@@ -180,13 +182,13 @@ const GeometryProjections: React.FC<{ ref0: ReferenceMotor; knobs: Knobs }> = ({
 
   return (
     <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
-      <Box sx={PANEL}>
+      <Box sx={{ ...PANEL, flex: '2 1 420px', minWidth: 340 }}>
         <Typography sx={LABEL}>Cross-section (XY) — real geometry</Typography>
         <Typography sx={SUB}>{knobs.N} turns/slot · {knobs.wireH_mm.toFixed(2)} mm wire · {ref0.geo.numSlots} slots / {ref0.geo.numPoles} poles</Typography>
         <CrossSectionReal geoStr={geoStr} N={knobs.N} wireH={knobs.wireH_mm}
           insulation={ref0.fit.insulation_mm} spacing={ref0.fit.wireSpacingY_mm} />
       </Box>
-      <Box sx={PANEL}>
+      <Box sx={{ ...PANEL, flex: '1 1 240px', minWidth: 220 }}>
         <Typography sx={LABEL}>Side view — stack length</Typography>
         <Typography sx={SUB}>Lamination stack · L = {knobs.L_mm.toFixed(0)} mm · Ø{(2 * ref0.geo.statorOR_mm).toFixed(0)} mm</Typography>
         <Box sx={{ textAlign: 'center' }}><SideView ref0={ref0} knobs={knobs} /></Box>

@@ -43,7 +43,16 @@ const EfficiencyMap: React.FC<{ p: Passport; knobs: Knobs; packMax: number }> = 
   useEffect(() => {
     const cv = canvasRef.current; if (!cv) return;
     const ctx = cv.getContext('2d'); if (!ctx) return;
-    const W = cv.width, H = cv.height;
+    // Render at device resolution so the labels stay crisp: the canvas is shown
+    // at ~full panel width via CSS, so a small fixed buffer would be upscaled and
+    // blur the text.  Draw in logical (LW×LH) coordinates scaled to the buffer.
+    const LW = 780, LH = 340;
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = cv.clientWidth || LW;
+    cv.width = Math.round(cssW * dpr);
+    cv.height = Math.round(cssW * (LH / LW) * dpr);
+    ctx.setTransform(cv.width / LW, 0, 0, cv.height / LH, 0, 0);
+    const W = LW, H = LH;
     const ML = 46, MB = 30, MT = 8, MR = 70;
     const pw = W - ML - MR, ph = H - MT - MB;
     ctx.clearRect(0, 0, W, H);

@@ -34,6 +34,11 @@ export interface Passport {
   Pfe0_W: number;      // base iron (core) loss
   Pmag0_W: number;     // base magnet eddy loss
   mass0_kg: number;    // base active mass
+  // FEM speed-sweep curves at the base operating point (I0, γ, L0): iron and
+  // magnet+shaft eddy loss vs rpm.  When present, scaleMotor interpolates these
+  // (× length factor) instead of the analytical f^1.5 / f² laws.  Assumed ~current-
+  // independent (loss dominated by the magnet flux); a 2D I×rpm map is future work.
+  speed?: { rpm: number[]; Pfe_W: number[]; Pmag_W: number[] };
 }
 
 export interface Knobs {
@@ -57,6 +62,26 @@ export interface ScaledResult {
   efficiency: number;   // 0..1
   mass_kg: number;
   torque_per_mass: number;
+}
+
+/** Linear interpolation of ys at x over sorted xs; extrapolates beyond the ends
+ *  using the end segment's slope (loss floored at 0). */
+function interp(xs: number[], ys: number[], x: number): number {
+  const n = xs.length;
+  if (n === 0) return 0;
+  if (n === 1) return ys[0];
+  if (x <= xs[0]) {
+    const s = (ys[1] - ys[0]) / (xs[1] - xs[0]);
+    return Math.max(0, ys[0] + s * (x - xs[0]));
+  }
+  if (x >= xs[n - 1]) {
+    const s = (ys[n - 1] - ys[n - 2]) / (xs[n - 1] - xs[n - 2]);
+    return Math.max(0, ys[n - 1] + s * (x - xs[n - 1]));
+  }
+  let i = 1;
+  while (i < n && xs[i] < x) i++;
+  const t = (x - xs[i - 1]) / (xs[i] - xs[i - 1]);
+  return ys[i - 1] + t * (ys[i] - ys[i - 1]);
 }
 
 /** Instant analytical scaling of a passport to a new (length, turns, wire, I, rpm). */
@@ -94,8 +119,12 @@ export function scaleMotor(p: Passport, k: Knobs): ScaledResult {
   const P_mech = T * omega;
 
   const P_cu = 3 * k.I_A * k.I_A * R;             // 3-phase I²R
-  const P_fe = p.Pfe0_W * fL * Math.pow(fRpm, 1.5); // Bertotti ~ f^1.5 (B fixed)
-  const P_mag = p.Pmag0_W * fL * fRpm * fRpm;       // eddy ~ f²
+  // Iron + magnet loss: FEM speed-curve (interpolated over rpm, × length factor)
+  // when the passport carries one, else the analytical f^1.5 / f² laws.
+  const sp = p.speed;
+  const hasCurve = !!(sp && sp.rpm.length >= 2);
+  const P_fe = hasCurve ? interp(sp!.rpm, sp!.Pfe_W, k.rpm) * fL : p.Pfe0_W * fL * Math.pow(fRpm, 1.5);
+  const P_mag = hasCurve ? interp(sp!.rpm, sp!.Pmag_W, k.rpm) * fL : p.Pmag0_W * fL * fRpm * fRpm;
   const P_loss = P_cu + P_fe + P_mag;
 
   const eff = P_mech > 0 ? P_mech / (P_mech + P_loss) : 0;

@@ -54,6 +54,7 @@ logs/
 # Local configuration
 .env
 .env.local
+.env.production
 *.local
 
 # OS

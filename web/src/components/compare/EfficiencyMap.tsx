@@ -15,11 +15,26 @@ const SQRT3 = Math.sqrt(3);
 const RPM_MAX = 8000;
 const ETA_LO = 0.80, ETA_HI = 0.99;
 
-/** efficiency → colour: red (low) → yellow → green (high), clamped to [lo,hi]. */
+// Ansys-style spectrum: blue (low) → cyan → green → yellow → orange → red (high).
+const JET_STOPS: [number, [number, number, number]][] = [
+  [0.00, [0, 0, 255]],     // blue
+  [0.22, [0, 220, 255]],   // cyan
+  [0.45, [0, 210, 0]],     // green
+  [0.65, [240, 240, 0]],   // yellow
+  [0.82, [255, 140, 0]],   // orange
+  [1.00, [220, 0, 0]],     // red
+];
+/** efficiency → Ansys spectrum colour, clamped to [lo,hi]. */
 function effColor(eta: number, lo: number, hi: number): string {
   const t = Math.max(0, Math.min(1, (eta - lo) / (hi - lo)));
-  if (t < 0.5) { const u = t / 0.5; return `rgb(230,${Math.round(70 + u * 180)},45)`; }
-  const u = (t - 0.5) / 0.5; return `rgb(${Math.round(230 - u * 185)},225,${Math.round(45 + u * 45)})`;
+  for (let i = 1; i < JET_STOPS.length; i++) {
+    if (t <= JET_STOPS[i][0]) {
+      const [t0, c0] = JET_STOPS[i - 1], [t1, c1] = JET_STOPS[i];
+      const u = t1 > t0 ? (t - t0) / (t1 - t0) : 0;
+      return `rgb(${Math.round(c0[0] + u * (c1[0] - c0[0]))},${Math.round(c0[1] + u * (c1[1] - c0[1]))},${Math.round(c0[2] + u * (c1[2] - c0[2]))})`;
+    }
+  }
+  return 'rgb(220,0,0)';
 }
 
 const EfficiencyMap: React.FC<{ p: Passport; knobs: Knobs; packMax: number }> = ({ p, knobs, packMax }) => {

@@ -105,28 +105,33 @@ const SideView: React.FC<{ ref0: ReferenceMotor; knobs: Knobs }> = ({ ref0, knob
   const g = ref0.geo;
   const W = 360, H = 360;
   const OD = 2 * g.statorOR_mm;
-  const s2 = 150 / OD;
+  const s2 = 270 / OD;                          // outer diameter → 270 px (radial, vertical)
   const stackH = OD * s2, stackW = knobs.L_mm * s2;
-  const cx = W / 2, cy = H / 2;
+  const cx = W / 2, cy = H / 2 - 6;
   const x0 = cx - stackW / 2, y0 = cy - stackH / 2;
-  const shaftR = g.rotorIR_mm * s2, overhang = 24;
+  // lamination hatch (the stack is many thin sheets along the length)
   const hatch: React.ReactNode[] = [];
-  const n = Math.max(2, Math.round(stackW / 5));
+  const n = Math.max(3, Math.round(stackW / 6));
   for (let i = 1; i < n; i++) {
     const x = x0 + (i / n) * stackW;
-    hatch.push(<line key={i} x1={x} y1={y0} x2={x} y2={y0 + stackH} stroke={STEEL_DK} strokeWidth={0.5} />);
+    hatch.push(<line key={i} x1={x} y1={y0} x2={x} y2={y0 + stackH} stroke={STEEL_DK} strokeWidth={0.6} />);
   }
   return (
     <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', maxWidth: 460, aspectRatio: '1 / 1', height: 'auto', display: 'block' }}>
-      <rect x={x0 - overhang} y={cy - shaftR} width={stackW + 2 * overhang} height={2 * shaftR} rx={2} fill={SHAFT} />
-      <rect x={x0} y={y0} width={stackW} height={stackH} rx={2} fill={STEEL} stroke="#1e293b" />
+      {/* the motor stack — solid, no air, no shaft */}
+      <rect x={x0} y={y0} width={stackW} height={stackH} rx={3} fill={STEEL} stroke="#475569" strokeWidth={1} />
       {hatch}
-      <line x1={x0} y1={y0 + stackH + 11} x2={x0 + stackW} y2={y0 + stackH + 11} stroke="#94a3b8" strokeWidth={0.8} />
-      <line x1={x0} y1={y0 + stackH + 7} x2={x0} y2={y0 + stackH + 15} stroke="#94a3b8" strokeWidth={0.8} />
-      <line x1={x0 + stackW} y1={y0 + stackH + 7} x2={x0 + stackW} y2={y0 + stackH + 15} stroke="#94a3b8" strokeWidth={0.8} />
-      <text x={cx} y={y0 + stackH + 26} fill="#cbd5e1" fontSize={12} textAnchor="middle" fontFamily="monospace">{knobs.L_mm.toFixed(0)} mm</text>
-      <text x={x0 - overhang - 4} y={cy} fill="#64748b" fontSize={10} textAnchor="middle" dominantBaseline="middle"
-        transform={`rotate(-90 ${x0 - overhang - 4} ${cy})`}>Ø{OD.toFixed(0)} mm</text>
+      {/* length dimension (bottom) */}
+      <line x1={x0} y1={y0 + stackH + 13} x2={x0 + stackW} y2={y0 + stackH + 13} stroke="#94a3b8" strokeWidth={0.9} />
+      <line x1={x0} y1={y0 + stackH + 8} x2={x0} y2={y0 + stackH + 18} stroke="#94a3b8" strokeWidth={0.9} />
+      <line x1={x0 + stackW} y1={y0 + stackH + 8} x2={x0 + stackW} y2={y0 + stackH + 18} stroke="#94a3b8" strokeWidth={0.9} />
+      <text x={cx} y={y0 + stackH + 30} fill="#cbd5e1" fontSize={13} textAnchor="middle" fontFamily="monospace">{knobs.L_mm.toFixed(0)} mm</text>
+      {/* diameter dimension (left) */}
+      <line x1={x0 - 13} y1={y0} x2={x0 - 13} y2={y0 + stackH} stroke="#94a3b8" strokeWidth={0.9} />
+      <line x1={x0 - 18} y1={y0} x2={x0 - 8} y2={y0} stroke="#94a3b8" strokeWidth={0.9} />
+      <line x1={x0 - 18} y1={y0 + stackH} x2={x0 - 8} y2={y0 + stackH} stroke="#94a3b8" strokeWidth={0.9} />
+      <text x={x0 - 20} y={cy} fill="#94a3b8" fontSize={11} textAnchor="middle" dominantBaseline="middle"
+        transform={`rotate(-90 ${x0 - 20} ${cy})`}>Ø{OD.toFixed(0)} mm</text>
     </svg>
   );
 };
@@ -151,7 +156,7 @@ const GeometryProjections: React.FC<{ ref0: ReferenceMotor; knobs: Knobs }> = ({
       </Box>
       <Box sx={PANEL}>
         <Typography sx={LABEL}>Side view — stack length</Typography>
-        <Typography sx={SUB}>L = {knobs.L_mm.toFixed(0)} mm · Ø{(2 * ref0.geo.statorOR_mm).toFixed(0)} mm (grey = shaft)</Typography>
+        <Typography sx={SUB}>Lamination stack · L = {knobs.L_mm.toFixed(0)} mm · Ø{(2 * ref0.geo.statorOR_mm).toFixed(0)} mm</Typography>
         <Box sx={{ textAlign: 'center' }}><SideView ref0={ref0} knobs={knobs} /></Box>
       </Box>
     </Box>

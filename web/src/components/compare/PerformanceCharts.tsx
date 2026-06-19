@@ -16,6 +16,7 @@ import {
   CartesianGrid, Tooltip as RcTooltip, Legend, ReferenceLine,
 } from 'recharts';
 import { scaleMotor, type Passport, type Knobs } from '../../lib/motorScaling';
+import EfficiencyMap from './EfficiencyMap';
 
 const SQRT3 = Math.sqrt(3);
 const PANEL = { bgcolor: '#0b1424', border: '1px solid #1e293b', borderRadius: 1, p: 2 } as const;
@@ -116,6 +117,8 @@ const PerformanceCharts: React.FC<{ p: Passport; knobs: Knobs; packMin: number; 
           </ResponsiveContainer>
         </Paper>
       </Box>
+
+      <EfficiencyMap p={p} knobs={knobs} packMax={packMax} />
     </Box>
   );
 };

@@ -301,6 +301,11 @@ const ConfiguratorPanel: React.FC = () => {
         </Box>
       </Box>
 
+      {/* ── GEOMETRY PROJECTIONS (before battery: see geometry change as you tune) ── */}
+      <Box sx={{ px: 2, pb: 1.5 }}>
+        <GeometryProjections ref0={ref} knobs={knobs} />
+      </Box>
+
       {/* ── BATTERY & VOLTAGE MATCH ── */}
       <Box sx={{ px: 2, pb: 1.5 }}>
         <BatteryPanel vDc={result.Vphase_peak_V * Math.sqrt(3)} bat={battery} onChange={setBattery} />
@@ -309,11 +314,6 @@ const ConfiguratorPanel: React.FC = () => {
       {/* ── PERFORMANCE VS SPEED ── */}
       <Box sx={{ px: 2, pb: 1.5 }}>
         <PerformanceCharts p={p} knobs={knobs} packMin={battery.cells * battery.min} packMax={battery.cells * battery.max} />
-      </Box>
-
-      {/* ── GEOMETRY PROJECTIONS ── */}
-      <Box sx={{ px: 2, pb: 1.5 }}>
-        <GeometryProjections ref0={ref} knobs={knobs} />
       </Box>
 
       {/* ── COMPARISON ── */}

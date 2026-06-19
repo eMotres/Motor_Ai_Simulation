@@ -29,7 +29,7 @@ import {
   REFERENCE_PASSPORTS, CONNECTIONS, connLabel, type ReferenceMotor,
 } from '../../lib/referencePassports';
 import GeometryProjections from './GeometryProjections';
-import BatteryPanel from './BatteryPanel';
+import BatteryPanel, { type Battery, defaultBattery } from './BatteryPanel';
 
 const baseKnobs = (p: Passport): Knobs => ({
   N: p.N0, L_mm: p.L0_mm, wireH_mm: p.wireH0_mm, nP: p.nP0, I_A: p.I0_A, rpm: p.rpm0,
@@ -42,6 +42,7 @@ interface SavedConfig {
   knobs: Knobs;
   result: ScaledResult;
   iMax: number;
+  battery?: Battery;   // snapshot of the battery this config was saved with
 }
 
 const LS_KEY = 'configurator.configs.v1';
@@ -116,8 +117,19 @@ const ConfiguratorPanel: React.FC = () => {
   );
   const p = ref.passport;
   const [knobs, setKnobs] = useState<Knobs>(() => baseKnobs(p));
-  // reset knobs whenever the reference changes
-  useEffect(() => { setKnobs(baseKnobs(ref.passport)); }, [refId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const skipReset = React.useRef(false);
+  // reset knobs whenever the reference changes (skipped while loading a saved config)
+  useEffect(() => {
+    if (skipReset.current) { skipReset.current = false; return; }
+    setKnobs(baseKnobs(ref.passport));
+  }, [refId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // battery the user runs the motor from (persisted; snapshotted into each saved config)
+  const [battery, setBattery] = useState<Battery>(() => {
+    try { const r = localStorage.getItem('configurator.battery.v1'); if (r) { const b = JSON.parse(r); if (b?.type) return b; } } catch { /* ignore */ }
+    return defaultBattery();
+  });
+  useEffect(() => { try { localStorage.setItem('configurator.battery.v1', JSON.stringify(battery)); } catch { /* ignore */ } }, [battery]);
 
   const [configs, setConfigs] = useState<SavedConfig[]>(() => {
     try { const r = localStorage.getItem(LS_KEY); const a = r ? JSON.parse(r) : null; return Array.isArray(a) ? a : []; }
@@ -154,9 +166,15 @@ const ConfiguratorPanel: React.FC = () => {
     const n = configs.filter((c) => c.refId === refId).length + 1;
     const name = `${connLabel(knobs.nP)} · ${knobs.N}t · ${fmt(knobs.L_mm, 0)}mm · ${fmt(knobs.wireH_mm, 2)}mm (#${n})`;
     const id = `cfg_${Math.random().toString(36).slice(2, 9)}`;
-    setConfigs((cs) => [...cs, { id, name, refId, knobs: { ...knobs }, result, iMax }]);
+    setConfigs((cs) => [...cs, { id, name, refId, knobs: { ...knobs }, result, iMax, battery: { ...battery } }]);
   };
   const delConfig = (id: string) => setConfigs((cs) => cs.filter((c) => c.id !== id));
+  // load a saved config back as the current design — knobs + battery (+ reference)
+  const loadConfig = (c: SavedConfig) => {
+    if (c.refId !== refId) { skipReset.current = true; setRefId(c.refId); }
+    setKnobs({ ...c.knobs });
+    if (c.battery) setBattery({ ...c.battery });
+  };
 
   const RES_COLS: { key: string; label: string; unit: string; d: number; goodHi?: boolean; get: (c: SavedConfig) => number }[] = [
     { key: 'T',    label: 'Torque',  unit: 'N·m', d: 1, goodHi: true,  get: (c) => c.result.T_Nm },
@@ -284,7 +302,7 @@ const ConfiguratorPanel: React.FC = () => {
 
       {/* ── BATTERY & VOLTAGE MATCH ── */}
       <Box sx={{ px: 2, pb: 1.5 }}>
-        <BatteryPanel vDc={result.Vphase_peak_V * Math.sqrt(3)} />
+        <BatteryPanel vDc={result.Vphase_peak_V * Math.sqrt(3)} bat={battery} onChange={setBattery} />
       </Box>
 
       {/* ── GEOMETRY PROJECTIONS ── */}
@@ -296,7 +314,7 @@ const ConfiguratorPanel: React.FC = () => {
       <Box sx={{ px: 2, pb: 2 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.75 }}>
           <Typography sx={{ fontSize: 13, fontWeight: 700, color: '#e2e8f0' }}>Saved configurations</Typography>
-          <Typography sx={{ fontSize: 11, color: '#64748b' }}>({configs.length}) — green = best · red = worst</Typography>
+          <Typography sx={{ fontSize: 11, color: '#64748b' }}>({configs.length}) — green = best · red = worst · click a row to load</Typography>
           <Box sx={{ flex: 1 }} />
           {configs.length > 0 && (
             <Button onClick={() => setConfigs([])} size="small" sx={{ fontSize: 11, textTransform: 'none', color: '#7f1d1d' }}>Clear all</Button>
@@ -316,7 +334,8 @@ const ConfiguratorPanel: React.FC = () => {
               <Box component="tbody">
                 {configs.map((c) => (
                   <Box component="tr" key={c.id} sx={{ '&:hover': { bgcolor: '#0d1b30' } }}>
-                    <Box component="td" sx={{ ...TD, textAlign: 'left', color: '#e2e8f0', fontFamily: 'inherit', fontWeight: 600 }}>{c.name}</Box>
+                    <Box component="td" onClick={() => loadConfig(c)} title="Load this configuration as the current design (knobs + battery)"
+                      sx={{ ...TD, textAlign: 'left', color: '#60a5fa', fontFamily: 'inherit', fontWeight: 600, cursor: 'pointer', '&:hover': { textDecoration: 'underline' } }}>{c.name}</Box>
                     {KNB_COLS.map((k) => <Box component="td" key={k.label} sx={{ ...TD, color: '#fbbf24' }}>{k.get(c)}</Box>)}
                     {RES_COLS.map((r) => {
                       const v = r.get(c);

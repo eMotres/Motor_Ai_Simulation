@@ -7,18 +7,18 @@
  * required DC-bus voltage marked on it, so it's obvious whether the battery can
  * drive the motor — and down to what state of charge.
  */
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo } from 'react';
 import { Box, Typography, ToggleButton, ToggleButtonGroup, TextField } from '@mui/material';
 import BatteryChargingFullIcon from '@mui/icons-material/BatteryChargingFull';
 
-type CellType = 'NMC' | 'LFP';
-interface Battery { type: CellType; cells: number; nom: number; max: number; min: number; }
+export type CellType = 'NMC' | 'LFP';
+export interface Battery { type: CellType; cells: number; nom: number; max: number; min: number; }
 
-const PRESETS: Record<CellType, { nom: number; max: number; min: number; label: string }> = {
+export const PRESETS: Record<CellType, { nom: number; max: number; min: number; label: string }> = {
   NMC: { nom: 3.7, max: 4.2, min: 3.0, label: 'NMC' },
   LFP: { nom: 3.2, max: 3.65, min: 2.5, label: 'LiFePO₄' },
 };
-const LS = 'configurator.battery.v1';
+export const defaultBattery = (): Battery => ({ type: 'NMC', cells: 100, ...PRESETS.NMC });
 const LABEL = { fontSize: 11, color: '#64748b', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em' } as const;
 const PANEL = { bgcolor: '#0b1424', border: '1px solid #1e293b', borderRadius: 1, p: 2 } as const;
 const fmt = (v: number, d = 0) => (Number.isFinite(v) ? v.toFixed(d) : '—');
@@ -30,26 +30,19 @@ const numField = (label: string, value: number, onChange: (e: any) => void, step
     sx={{ '& .MuiOutlinedInput-notchedOutline': { borderColor: '#334155' } }} />
 );
 
-const BatteryPanel: React.FC<{ vDc: number }> = ({ vDc }) => {
-  const [bat, setBat] = useState<Battery>(() => {
-    try { const r = localStorage.getItem(LS); if (r) { const b = JSON.parse(r); if (b && b.type) return b; } } catch { /* ignore */ }
-    return { type: 'NMC', cells: 100, ...PRESETS.NMC };
-  });
-  useEffect(() => { try { localStorage.setItem(LS, JSON.stringify(bat)); } catch { /* ignore */ } }, [bat]);
-
-  const setType = (t: CellType | null) => { if (t) setBat((b) => ({ ...b, type: t, ...PRESETS[t] })); };
+const BatteryPanel: React.FC<{ vDc: number; bat: Battery; onChange: (b: Battery) => void }> = ({ vDc, bat, onChange }) => {
+  const setType = (t: CellType | null) => { if (t) onChange({ ...bat, type: t, ...PRESETS[t] }); };
   const setF = (k: keyof Battery) => (e: React.ChangeEvent<HTMLInputElement>) => {
-    const v = parseFloat(e.target.value); if (Number.isFinite(v)) setBat((b) => ({ ...b, [k]: v }));
+    const v = parseFloat(e.target.value); if (Number.isFinite(v)) onChange({ ...bat, [k]: v });
   };
 
   const packMin = bat.cells * bat.min, packNom = bat.cells * bat.nom, packMax = bat.cells * bat.max;
 
-  const { status, color } = useMemo(() => {
-    if (vDc > packMax) return { status: `Battery can't drive the motor — needs ${fmt(vDc)} V, pack maxes at ${fmt(packMax)} V (full). Add cells or lower the motor voltage.`, color: '#f87171' };
-    if (vDc > packNom) return { status: `Runs only near full charge — motor needs ${fmt(vDc)} V, above the ${fmt(packNom)} V nominal.`, color: '#fbbf24' };
-    if (vDc > packMin) return { status: `Within range — motor ${fmt(vDc)} V sits between empty (${fmt(packMin)} V) and nominal (${fmt(packNom)} V).`, color: '#4ade80' };
-    return { status: `Full headroom — motor ${fmt(vDc)} V is below even the empty-pack voltage (${fmt(packMin)} V).`, color: '#4ade80' };
-  }, [vDc, packMin, packNom, packMax]);
+  const color = useMemo(() => {
+    if (vDc > packMax) return '#f87171';   // can't drive
+    if (vDc > packNom) return '#fbbf24';   // only near full charge
+    return '#4ade80';                      // within range
+  }, [vDc, packNom, packMax]);
 
   // ── voltage bar ───────────────────────────────────────────────────────────
   const W = 640, padX = 14;
@@ -114,8 +107,6 @@ const BatteryPanel: React.FC<{ vDc: number }> = ({ vDc }) => {
         <polygon points={`${mX - 5},${barY - 14} ${mX + 5},${barY - 14} ${mX},${barY - 6}`} fill={color} />
         <text x={Math.min(Math.max(mX, 40), W - 40)} y={barY - 18} fill={color} fontSize={12} fontWeight={700} textAnchor="middle" fontFamily="monospace">motor {fmt(vDc)} V</text>
       </svg>
-
-      <Typography sx={{ fontSize: 12, color, mt: 0.5 }}>{status}</Typography>
     </Box>
   );
 };

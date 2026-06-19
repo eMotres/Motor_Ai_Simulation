@@ -53,7 +53,7 @@ const BatteryPanel: React.FC<{ vDc: number }> = ({ vDc }) => {
 
   // ── voltage bar ───────────────────────────────────────────────────────────
   const W = 640, padX = 14;
-  const lo = Math.min(packMin, vDc) * 0.95, hi = Math.max(packMax, vDc) * 1.05;
+  const lo = 0, hi = Math.max(packMax, vDc) * 1.05;   // axis from 0 → whole range visible
   const X = (v: number) => padX + ((v - lo) / (hi - lo)) * (W - 2 * padX);
   const barY = 30, barH = 22;
   const mX = X(vDc);

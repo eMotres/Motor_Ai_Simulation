@@ -61,13 +61,17 @@ const KnobSlider: React.FC<{
   onChange: (v: number) => void; warn?: boolean;
 }> = ({ label, unit, value, base, min, max, step, d = 1, onChange, warn }) => {
   const delta = pctDelta(value, base);
+  const [txt, setTxt] = React.useState<string | null>(null);   // non-null while the field is being typed in
   return (
     <Box sx={{ mb: 1.25 }}>
-      <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1, mb: 0.25 }}>
+      <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.75, mb: 0.25 }}>
         <Typography sx={{ ...LABEL, flex: 1 }}>{label}</Typography>
-        <Typography sx={{ fontSize: 14, fontWeight: 700, color: warn ? '#f87171' : '#e2e8f0', fontFamily: 'monospace' }}>
-          {fmt(value, d)}{unit ? <Box component="span" sx={{ fontSize: 11, color: '#64748b', ml: 0.5 }}>{unit}</Box> : null}
-        </Typography>
+        <input value={txt ?? fmt(value, d)} type="number" step={step}
+          onChange={(e) => { setTxt(e.target.value); const v = parseFloat(e.target.value); if (Number.isFinite(v) && v >= min && v <= max) onChange(v); }}
+          onBlur={(e) => { const v = parseFloat(e.target.value); if (Number.isFinite(v)) onChange(Math.min(max, Math.max(min, v))); setTxt(null); }}
+          onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+          style={{ width: 66, background: 'transparent', border: '1px solid #334155', borderRadius: 4, color: warn ? '#f87171' : '#e2e8f0', fontSize: 14, fontWeight: 700, fontFamily: 'monospace', textAlign: 'right', padding: '1px 5px' }} />
+        {unit ? <Box component="span" sx={{ fontSize: 11, color: '#64748b' }}>{unit}</Box> : null}
         {Math.abs(delta) >= 0.5 && (
           <Typography sx={{ fontSize: 11, color: delta > 0 ? '#60a5fa' : '#94a3b8', fontFamily: 'monospace', width: 50, textAlign: 'right' }}>
             {delta > 0 ? '+' : ''}{fmt(delta, 0)}%

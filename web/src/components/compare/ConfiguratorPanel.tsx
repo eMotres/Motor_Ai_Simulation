@@ -156,7 +156,7 @@ const ConfiguratorPanel: React.FC = () => {
   const RES_COLS: { key: string; label: string; unit: string; d: number; goodHi?: boolean; get: (c: SavedConfig) => number }[] = [
     { key: 'T',    label: 'Torque',  unit: 'N·m', d: 1, goodHi: true,  get: (c) => c.result.T_Nm },
     { key: 'P',    label: 'Power',   unit: 'kW',  d: 2, goodHi: true,  get: (c) => c.result.P_mech_W / 1000 },
-    { key: 'V',    label: 'V phase', unit: 'Vpk', d: 0,                get: (c) => c.result.Vphase_peak_V },
+    { key: 'V',    label: 'DC bus',  unit: 'V',   d: 0,                get: (c) => c.result.Vphase_peak_V * Math.sqrt(3) },
     { key: 'eff',  label: 'η',       unit: '%',   d: 1, goodHi: true,  get: (c) => c.result.efficiency * 100 },
     { key: 'loss', label: 'Losses',  unit: 'W',   d: 0, goodHi: false, get: (c) => c.result.P_loss_W },
     { key: 'J',    label: 'J',       unit: 'A/mm²', d: 1, goodHi: false, get: (c) => (c.knobs.I_A / Math.max(1, c.knobs.nP)) / Math.max(1e-6, ref.fit.wireWidth_mm * c.knobs.wireH_mm) },
@@ -234,7 +234,7 @@ const ConfiguratorPanel: React.FC = () => {
           <Box sx={{ display: 'flex', gap: 1.25, flexWrap: 'wrap' }}>
             <MetricTile label="Torque" value={result.T_Nm} unit="N·m" d={1} base={baseRes.T_Nm} goodHi />
             <MetricTile label="Power" value={result.P_mech_W / 1000} unit="kW" d={2} base={baseRes.P_mech_W / 1000} goodHi />
-            <MetricTile label="V phase pk" value={result.Vphase_peak_V} unit="V" d={0} base={baseRes.Vphase_peak_V} />
+            <MetricTile label="DC bus (min)" value={result.Vphase_peak_V * Math.sqrt(3)} unit="V" d={0} base={baseRes.Vphase_peak_V * Math.sqrt(3)} />
             <MetricTile label="Efficiency" value={result.efficiency * 100} unit="%" d={1} base={baseRes.efficiency * 100} goodHi />
           </Box>
           <Box sx={{ display: 'flex', gap: 1.25, flexWrap: 'wrap' }}>

@@ -128,7 +128,7 @@ const CrossSectionReal: React.FC<{
 
   return (
     <Box sx={{ position: 'relative', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <canvas ref={canvasRef} width={720} height={720} style={{ height: '100%', width: 'auto', maxWidth: '100%', aspectRatio: '1 / 1', display: 'block', opacity: state === 'loading' ? 0.4 : 1, transition: 'opacity .15s' }} />
+      <canvas ref={canvasRef} width={720} height={720} style={{ height: '100%', width: 'auto', aspectRatio: '1 / 1', display: 'block', opacity: state === 'loading' ? 0.4 : 1, transition: 'opacity .15s' }} />
       {state === 'loading' && <CircularProgress size={20} sx={{ color: '#3b82f6', position: 'absolute', top: '50%', left: '50%', mt: '-10px', ml: '-10px' }} />}
       {state === 'error' && <Typography sx={{ fontSize: 11, color: '#f87171', position: 'absolute', top: '46%', left: 0, right: 0 }}>geometry preview needs the backend</Typography>}
     </Box>
@@ -182,7 +182,7 @@ const SideView: React.FC<{ ref0: ReferenceMotor; knobs: Knobs }> = ({ ref0, knob
   }, [ref0, knobs.L_mm, W, stackW, stackH, OD]);
 
   return <canvas ref={canvasRef} width={W} height={H}
-    style={{ height: '100%', width: 'auto', maxWidth: '100%', aspectRatio: `${W} / ${H}`, display: 'block' }} />;
+    style={{ height: '100%', width: 'auto', aspectRatio: `${W} / ${H}`, display: 'block' }} />;
 };
 
 const GeometryProjections: React.FC<{ ref0: ReferenceMotor; knobs: Knobs }> = ({ ref0, knobs }) => {

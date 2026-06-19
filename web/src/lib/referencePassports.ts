@@ -30,6 +30,12 @@ export interface ReferenceMotor {
     slotWidth_mm: number;
     wireWidth_mm: number;      // fixed conductor width
   };
+  // cross-section geometry for the schematic projections (radii in mm)
+  geo: {
+    statorOR_mm: number; statorIR_mm: number;
+    rotorOR_mm: number; rotorIR_mm: number;
+    numSlots: number; numPoles: number; magnetHeight_mm: number;
+  };
 }
 
 export const REFERENCE_PASSPORTS: ReferenceMotor[] = [
@@ -46,6 +52,7 @@ export const REFERENCE_PASSPORTS: ReferenceMotor[] = [
       endWindFrac: 0.33, Pfe0_W: 164.4, Pmag0_W: 5.7, mass0_kg: 10.141,
     },
     fit: { slotHeight_mm: 19.8, insulation_mm: 0.2, wireSpacingY_mm: 0.13, slotWidth_mm: 7.6, wireWidth_mm: 7.0 },
+    geo: { statorOR_mm: 100, statorIR_mm: 73, rotorOR_mm: 72.35, rotorIR_mm: 49.35, numSlots: 24, numPoles: 20, magnetHeight_mm: 21.4 },
   },
 ];
 

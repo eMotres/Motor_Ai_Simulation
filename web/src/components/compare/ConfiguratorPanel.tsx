@@ -28,6 +28,7 @@ import {
 import {
   REFERENCE_PASSPORTS, CONNECTIONS, connLabel, type ReferenceMotor,
 } from '../../lib/referencePassports';
+import GeometryProjections from './GeometryProjections';
 
 const baseKnobs = (p: Passport): Knobs => ({
   N: p.N0, L_mm: p.L0_mm, wireH_mm: p.wireH0_mm, nP: p.nP0, I_A: p.I0_A, rpm: p.rpm0,
@@ -268,6 +269,11 @@ const ConfiguratorPanel: React.FC = () => {
             Add to comparison
           </Button>
         </Box>
+      </Box>
+
+      {/* ── GEOMETRY PROJECTIONS ── */}
+      <Box sx={{ px: 2, pb: 1.5 }}>
+        <GeometryProjections ref0={ref} knobs={knobs} />
       </Box>
 
       {/* ── COMPARISON ── */}

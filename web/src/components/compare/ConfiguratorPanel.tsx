@@ -30,6 +30,7 @@ import {
 } from '../../lib/referencePassports';
 import GeometryProjections from './GeometryProjections';
 import BatteryPanel, { type Battery, defaultBattery } from './BatteryPanel';
+import PerformanceCharts from './PerformanceCharts';
 
 const baseKnobs = (p: Passport): Knobs => ({
   N: p.N0, L_mm: p.L0_mm, wireH_mm: p.wireH0_mm, nP: p.nP0, I_A: p.I0_A, rpm: p.rpm0,
@@ -303,6 +304,11 @@ const ConfiguratorPanel: React.FC = () => {
       {/* ── BATTERY & VOLTAGE MATCH ── */}
       <Box sx={{ px: 2, pb: 1.5 }}>
         <BatteryPanel vDc={result.Vphase_peak_V * Math.sqrt(3)} bat={battery} onChange={setBattery} />
+      </Box>
+
+      {/* ── PERFORMANCE VS SPEED ── */}
+      <Box sx={{ px: 2, pb: 1.5 }}>
+        <PerformanceCharts p={p} knobs={knobs} packMin={battery.cells * battery.min} packMax={battery.cells * battery.max} />
       </Box>
 
       {/* ── GEOMETRY PROJECTIONS ── */}

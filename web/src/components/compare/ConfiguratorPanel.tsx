@@ -125,6 +125,13 @@ const ConfiguratorPanel: React.FC = () => {
   const stackFrac = (knobs.N * knobs.wireH_mm) / ref.fit.slotHeight_mm;
   const overFit  = stackFrac > ref.fit.maxStackFrac;
   const overCurr = knobs.I_A > iMax + 1e-6;
+  // Hard limiter: the copper stack height (turns × wire thickness) must stay
+  // below the slot.  Cap each slider by the OTHER knob's current value, so the
+  // product N·wireH can never exceed the usable slot height.
+  const stackLimit_mm = ref.fit.slotHeight_mm * ref.fit.maxStackFrac;
+  const turnsMax = Math.max(3, Math.min(30, Math.floor(stackLimit_mm / knobs.wireH_mm)));
+  const wireMax  = Math.max(0.3, Math.min(2.5, Math.floor(stackLimit_mm / knobs.N / 0.05) * 0.05));
+  const atLimit  = knobs.N >= turnsMax || knobs.wireH_mm >= wireMax - 1e-9;
 
   const set = (k: keyof Knobs) => (v: number) => setKnobs((s) => ({ ...s, [k]: v }));
   const reset = () => setKnobs(baseKnobs(p));
@@ -161,7 +168,7 @@ const ConfiguratorPanel: React.FC = () => {
     resExt[r.key] = ns.length ? { min: Math.min(...ns), max: Math.max(...ns) } : null;
   });
 
-  const fitColor = overFit ? '#f87171' : stackFrac > ref.fit.maxStackFrac * 0.85 ? '#fbbf24' : '#4ade80';
+  const fitColor = overFit ? '#f87171' : atLimit ? '#fbbf24' : '#4ade80';
 
   return (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', bgcolor: '#060d17', overflow: 'auto' }}>
@@ -188,8 +195,8 @@ const ConfiguratorPanel: React.FC = () => {
 
           <Typography sx={{ ...LABEL, color: '#475569', mb: 0.75 }}>Build</Typography>
           <KnobSlider label="Stack length" unit="mm" value={knobs.L_mm} base={p.L0_mm} min={15} max={150} step={1} d={0} onChange={set('L_mm')} />
-          <KnobSlider label="Turns / slot" value={knobs.N} base={p.N0} min={3} max={30} step={1} d={0} onChange={set('N')} warn={overFit} />
-          <KnobSlider label="Wire thickness" unit="mm" value={knobs.wireH_mm} base={p.wireH0_mm} min={0.3} max={2.5} step={0.05} d={2} onChange={set('wireH_mm')} warn={overFit} />
+          <KnobSlider label="Turns / slot" value={knobs.N} base={p.N0} min={3} max={turnsMax} step={1} d={0} onChange={set('N')} warn={atLimit} />
+          <KnobSlider label="Wire thickness" unit="mm" value={knobs.wireH_mm} base={p.wireH0_mm} min={0.3} max={wireMax} step={0.05} d={2} onChange={set('wireH_mm')} warn={atLimit} />
 
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5, mb: 1 }}>
             <Typography sx={{ ...LABEL, flex: 1 }}>Winding connection</Typography>
@@ -231,15 +238,18 @@ const ConfiguratorPanel: React.FC = () => {
           <Box sx={{ ...PANEL, p: 1.25 }}>
             <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1, mb: 0.5 }}>
               <Typography sx={{ ...LABEL, flex: 1 }}>Slot fill (copper stack)</Typography>
+              <Typography sx={{ fontSize: 12, color: '#64748b', fontFamily: 'monospace' }}>
+                {fmt(knobs.N * knobs.wireH_mm, 1)} / {fmt(stackLimit_mm, 1)} mm
+              </Typography>
               <Typography sx={{ fontSize: 13, fontWeight: 700, color: fitColor, fontFamily: 'monospace' }}>{fmt(stackFrac * 100, 0)}%</Typography>
             </Box>
             <LinearProgress variant="determinate" value={Math.min(100, stackFrac * 100)}
               sx={{ height: 8, borderRadius: 1, bgcolor: '#0f172a', '& .MuiLinearProgress-bar': { bgcolor: fitColor } }} />
-            {overFit && (
-              <Typography sx={{ fontSize: 11, color: '#f87171', mt: 0.5 }}>
-                Won't fit — {knobs.N} turns × {fmt(knobs.wireH_mm, 2)} mm exceeds the slot. Reduce turns or wire thickness.
-              </Typography>
-            )}
+            <Typography sx={{ fontSize: 11, color: atLimit ? '#fbbf24' : '#64748b', mt: 0.5 }}>
+              {atLimit
+                ? `At slot limit — turns × wire are capped so the coil stays below the ${fmt(ref.fit.slotHeight_mm, 1)} mm slot.`
+                : `Turns × wire capped to keep the coil below the slot (${fmt(ref.fit.slotHeight_mm, 1)} mm × ${fmt(ref.fit.maxStackFrac * 100, 0)}% usable = ${fmt(stackLimit_mm, 1)} mm).`}
+            </Typography>
           </Box>
 
           {/* wire current cap */}

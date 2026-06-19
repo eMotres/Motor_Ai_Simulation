@@ -101,7 +101,9 @@ const BatteryPanel: React.FC<{ vDc: number }> = ({ vDc }) => {
         <rect x={X(packMin)} y={barY} width={Math.max(1, X(packMax) - X(packMin))} height={barH} rx={3} fill="url(#batgrad)" opacity={0.55} stroke="#334155" />
         {/* nominal tick */}
         <line x1={X(packNom)} y1={barY - 5} x2={X(packNom)} y2={barY + barH + 5} stroke="#22c55e" strokeWidth={1.5} strokeDasharray="3 2" />
-        {/* end + nominal labels */}
+        {/* axis labels: 0 / min / nom / max */}
+        <line x1={X(0)} y1={barY + barH + 2} x2={X(0)} y2={barY + barH + 8} stroke="#475569" strokeWidth={1} />
+        <text x={X(0)} y={barY + barH + 18} fill="#64748b" fontSize={11} textAnchor="start" fontFamily="monospace">0</text>
         <text x={X(packMin)} y={barY + barH + 18} fill="#94a3b8" fontSize={11} textAnchor="middle" fontFamily="monospace">{fmt(packMin)}</text>
         <text x={X(packNom)} y={barY + barH + 18} fill="#22c55e" fontSize={11} textAnchor="middle" fontFamily="monospace">{fmt(packNom)}</text>
         <text x={X(packMax)} y={barY + barH + 18} fill="#94a3b8" fontSize={11} textAnchor="middle" fontFamily="monospace">{fmt(packMax)}</text>

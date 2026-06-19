@@ -105,7 +105,7 @@ const EfficiencyMap: React.FC<{ p: Passport; knobs: Knobs; packMax: number }> = 
         const segs = SEGS[idx]; if (!segs) continue;
         const pos = corners.map(([a, b]) => [cX(a), cY(b)] as [number, number]);
         const ept = (e: number): [number, number] => { const a = e, b = (e + 1) % 4; const t = (L - v[a]) / (v[b] - v[a]); return [pos[a][0] + t * (pos[b][0] - pos[a][0]), pos[a][1] + t * (pos[b][1] - pos[a][1])]; };
-        for (const [ea, eb] of segs) { const pa = ept(ea), pb = ept(eb); ctx.beginPath(); ctx.moveTo(pa[0], pa[1]); ctx.lineTo(pb[0], pb[1]); ctx.stroke(); if (!labelPt && pa[0] > ML + pw * 0.25) labelPt = pa; }
+        for (const [ea, eb] of segs) { const pa = ept(ea), pb = ept(eb); ctx.beginPath(); ctx.moveTo(pa[0], pa[1]); ctx.lineTo(pb[0], pb[1]); ctx.stroke(); for (const q of [pa, pb]) if (q[1] > MT + 9 && (!labelPt || q[1] < labelPt[1])) labelPt = q; }
       }
       if (labelPt) {
         const tx = `${(L * 100).toFixed(L >= 0.975 ? 1 : 0)}`; const tw = ctx.measureText(tx).width;

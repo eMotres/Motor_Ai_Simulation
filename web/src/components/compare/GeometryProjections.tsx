@@ -20,7 +20,7 @@ const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001').replace(/\
 const STEEL = '#3b4453', STEEL_DK = '#2a3142', SHAFT = '#5b6675', BG = '#060d17';
 const LABEL = { fontSize: 11, color: '#64748b', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em' } as const;
 const SUB = { fontSize: 10, color: '#475569', mb: 0.5 } as const;
-const PANEL = { flex: '1 1 300px', minWidth: 270, bgcolor: '#0b1424', border: '1px solid #1e293b', borderRadius: 1, p: 1.5 } as const;
+const PANEL = { flex: '1 1 380px', minWidth: 320, maxWidth: 500, bgcolor: '#0b1424', border: '1px solid #1e293b', borderRadius: 1, p: 1.5 } as const;
 
 type Comp = { vertices: number[][]; faces: number[][] };
 type Mesh2D = Record<string, Comp>;
@@ -35,9 +35,14 @@ const colorFor = (key: string): string => {
   if (key.startsWith('coil')) return ['#c27d33', '#b8860b', '#a0651e'][(parseInt(key.split('_')[1] || '0', 10) || 0) % 3];
   return '#475569';
 };
+// Skip the air-gap band meshes (in_band / out_band), the shaft and any air
+// region — only the iron, magnets and copper winding are drawn.
+const SKIP = (key: string): boolean =>
+  key === 'shaft' || key.includes('band') || key.includes('air');
+// Draw coils LAST so the copper sits on top of the iron (and is never hidden).
 const drawOrder = (key: string): number =>
-  key.startsWith('stator') ? 0 : key.startsWith('rotor') ? 1 : key === 'shaft' ? 2
-    : key.startsWith('magnet') ? 3 : key.startsWith('coil') ? 4 : 5;
+  key.startsWith('stator') ? 0 : key.startsWith('rotor') ? 1
+    : key.startsWith('magnet') ? 2 : key.startsWith('coil') ? 3 : 4;
 
 const CrossSectionReal: React.FC<{ geoStr: string }> = ({ geoStr }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -63,8 +68,9 @@ const CrossSectionReal: React.FC<{ geoStr: string }> = ({ geoStr }) => {
     const ctx = cv.getContext('2d'); if (!ctx) return;
     const W = cv.width, H = cv.height;
     ctx.clearRect(0, 0, W, H);
+    const keys = Object.keys(mesh).filter((k) => !SKIP(k));
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-    for (const comp of Object.values(mesh)) for (const v of comp.vertices) {
+    for (const k of keys) for (const v of mesh[k].vertices) {
       if (v[0] < minX) minX = v[0]; if (v[0] > maxX) maxX = v[0];
       if (v[1] < minY) minY = v[1]; if (v[1] > maxY) maxY = v[1];
     }
@@ -73,7 +79,7 @@ const CrossSectionReal: React.FC<{ geoStr: string }> = ({ geoStr }) => {
     const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
     const TX = (x: number) => (x - cx) * scale + W / 2;
     const TY = (y: number) => H / 2 - (y - cy) * scale;   // flip Y (motor up → canvas down)
-    for (const key of Object.keys(mesh).sort((a, b) => drawOrder(a) - drawOrder(b))) {
+    for (const key of keys.sort((a, b) => drawOrder(a) - drawOrder(b))) {
       const { vertices, faces } = mesh[key];
       ctx.fillStyle = colorFor(key);
       ctx.beginPath();
@@ -88,7 +94,7 @@ const CrossSectionReal: React.FC<{ geoStr: string }> = ({ geoStr }) => {
 
   return (
     <Box sx={{ position: 'relative', textAlign: 'center' }}>
-      <canvas ref={canvasRef} width={320} height={320} style={{ width: '100%', maxWidth: 320, height: 'auto', opacity: state === 'loading' ? 0.4 : 1, transition: 'opacity .15s' }} />
+      <canvas ref={canvasRef} width={480} height={480} style={{ width: '100%', maxWidth: 460, aspectRatio: '1 / 1', height: 'auto', display: 'block', opacity: state === 'loading' ? 0.4 : 1, transition: 'opacity .15s' }} />
       {state === 'loading' && <CircularProgress size={20} sx={{ color: '#3b82f6', position: 'absolute', top: '50%', left: '50%', mt: '-10px', ml: '-10px' }} />}
       {state === 'error' && <Typography sx={{ fontSize: 11, color: '#f87171', position: 'absolute', top: '46%', left: 0, right: 0 }}>geometry preview needs the backend</Typography>}
     </Box>
@@ -97,11 +103,11 @@ const CrossSectionReal: React.FC<{ geoStr: string }> = ({ geoStr }) => {
 
 const SideView: React.FC<{ ref0: ReferenceMotor; knobs: Knobs }> = ({ ref0, knobs }) => {
   const g = ref0.geo;
-  const W = 320, H = 168;
+  const W = 360, H = 360;
   const OD = 2 * g.statorOR_mm;
-  const s2 = 118 / OD;
+  const s2 = 150 / OD;
   const stackH = OD * s2, stackW = knobs.L_mm * s2;
-  const cx = W / 2, cy = H / 2 - 6;
+  const cx = W / 2, cy = H / 2;
   const x0 = cx - stackW / 2, y0 = cy - stackH / 2;
   const shaftR = g.rotorIR_mm * s2, overhang = 24;
   const hatch: React.ReactNode[] = [];
@@ -111,7 +117,7 @@ const SideView: React.FC<{ ref0: ReferenceMotor; knobs: Knobs }> = ({ ref0, knob
     hatch.push(<line key={i} x1={x} y1={y0} x2={x} y2={y0 + stackH} stroke={STEEL_DK} strokeWidth={0.5} />);
   }
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', maxWidth: 340, height: 'auto' }}>
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', maxWidth: 460, aspectRatio: '1 / 1', height: 'auto', display: 'block' }}>
       <rect x={x0 - overhang} y={cy - shaftR} width={stackW + 2 * overhang} height={2 * shaftR} rx={2} fill={SHAFT} />
       <rect x={x0} y={y0} width={stackW} height={stackH} rx={2} fill={STEEL} stroke="#1e293b" />
       {hatch}

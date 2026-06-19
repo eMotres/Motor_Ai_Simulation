@@ -56,18 +56,26 @@ const EfficiencyMap: React.FC<{ p: Passport; knobs: Knobs; packMax: number }> = 
     const Tmax = scaleMotor(p, { ...knobs, I_A: iMax }).T_Nm || 1;
 
     const NX = 90, NY = 56, cw = pw / NX, ch = ph / NY;
+    // pass 1 — efficiency grid + auto-range over reachable cells (Ansys scales the
+    // legend to the field's actual min/max, so the full spectrum spans the data).
+    const cells: { x: number; y: number; eta: number; reach: boolean }[] = [];
+    let lo = Infinity, hi = -Infinity;
     for (let ix = 0; ix < NX; ix++) {
       const rpm = ((ix + 0.5) / NX) * RPM_MAX;
-      const x = ML + ix * cw;
       for (let iy = 0; iy < NY; iy++) {
         const T = ((iy + 0.5) / NY) * Tmax;
         const I = base > 0 ? (p.I0_A * T) / base : 0;
         const s = scaleMotor(p, { ...knobs, I_A: I, rpm });
-        const vdc = s.Vphase_peak_V * SQRT3;
-        const y = MT + ph - (iy + 1) * ch;
-        ctx.fillStyle = vdc > packMax ? '#0f172a' : s.efficiency <= 0 ? '#0b1424' : effColor(s.efficiency, ETA_LO, ETA_HI);
-        ctx.fillRect(x, y, cw + 0.6, ch + 0.6);
+        const reach = s.Vphase_peak_V * SQRT3 <= packMax && s.efficiency > 0;
+        cells.push({ x: ML + ix * cw, y: MT + ph - (iy + 1) * ch, eta: s.efficiency, reach });
+        if (reach) { if (s.efficiency < lo) lo = s.efficiency; if (s.efficiency > hi) hi = s.efficiency; }
       }
+    }
+    if (!isFinite(lo) || hi - lo < 1e-4) { lo = ETA_LO; hi = ETA_HI; }
+    // pass 2 — draw cells over the data range
+    for (const c of cells) {
+      ctx.fillStyle = c.reach ? effColor(c.eta, lo, hi) : '#0f172a';
+      ctx.fillRect(c.x, c.y, cw + 0.6, ch + 0.6);
     }
 
     // operating point
@@ -89,10 +97,10 @@ const EfficiencyMap: React.FC<{ p: Passport; knobs: Knobs; packMax: number }> = 
 
     // colour bar
     const cbX = W - MR + 16, cbW = 12;
-    for (let i = 0; i < ph; i++) ctx.fillStyle = effColor(ETA_HI - (i / ph) * (ETA_HI - ETA_LO), ETA_LO, ETA_HI), ctx.fillRect(cbX, MT + i, cbW, 1);
+    for (let i = 0; i < ph; i++) ctx.fillStyle = effColor(hi - (i / ph) * (hi - lo), lo, hi), ctx.fillRect(cbX, MT + i, cbW, 1);
     ctx.strokeStyle = '#334155'; ctx.strokeRect(cbX, MT, cbW, ph);
     ctx.fillStyle = '#64748b'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-    [ETA_HI, (ETA_HI + ETA_LO) / 2, ETA_LO].forEach((e, i) => ctx.fillText(`${(e * 100).toFixed(0)}%`, cbX + cbW + 3, MT + (i / 2) * ph));
+    [hi, (hi + lo) / 2, lo].forEach((e, i) => ctx.fillText(`${(e * 100).toFixed(1)}%`, cbX + cbW + 3, MT + (i / 2) * ph));
   }, [p, knobs, packMax]);
 
   return (

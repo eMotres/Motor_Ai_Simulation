@@ -60,6 +60,7 @@ def sample_bounds(band: float) -> Dict[str, Any]:
 def run_doe(n: int = 60, current_a: float = 150.0, band: float = 0.35, n_sectors: int = -1,
             steps: int = 18, gamma_deg: float = 0.0, coil_temp_c: float = 120.0,
             mesh_size_mm: float = 4.0, min_size_mm: float = 0.3, workers: int = 10,
+            pole_copy=None, torque_filter: bool = True,
             log=print) -> List[Dict[str, Any]]:
     from scipy.stats.qmc import LatinHypercube
     from motor_ai_sim.routes.optimization import _subprocess_eval
@@ -86,7 +87,8 @@ def run_doe(n: int = 60, current_a: float = 150.0, band: float = 0.35, n_sectors
         # _log=False → DOE samples do NOT pollute the optimizer's surrogate dataset.
         return ov, _subprocess_eval(ov, current_a, steps, coil_temp_c, n_periods=1.0,
                                     gamma_deg=gamma_deg, mesh_size_mm=mesh_size_mm,
-                                    min_size_mm=min_size_mm, n_sectors=n_sectors, _log=False)
+                                    min_size_mm=min_size_mm, n_sectors=n_sectors, _log=False,
+                                    pole_copy=pole_copy, torque_filter=torque_filter)
 
     recs: List[Dict[str, Any]] = []
     done = 0

@@ -67,7 +67,6 @@ const PARAM_META: Record<string, { label: string; unit?: string; d?: number }> =
   tooth_width:        { label: 'Tooth width',   unit: 'mm',  d: 2 },
   tooth2_width:       { label: 'Tooth2 width',  unit: 'mm',  d: 2 },
   motor_length:       { label: 'Stack length',  unit: 'mm',  d: 1 },
-  stator_width:       { label: 'Stator width',  unit: 'mm',  d: 1 },
   shaft_height:       { label: 'Shaft h',       unit: 'mm',  d: 2 },
   core_thickness:     { label: 'Core thick.',   unit: 'mm',  d: 2 },
 };

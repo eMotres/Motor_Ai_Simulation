@@ -13,6 +13,7 @@ import {
   ResponsiveContainer, Legend, BarChart, Bar, Cell, ReferenceLine,
   ScatterChart, Scatter, ZAxis, LabelList,
 } from 'recharts';
+import Scatter3D from './Scatter3D';
 import { useMotorStore } from '../../stores/motorStore';
 
 /**
@@ -63,6 +64,17 @@ function boundaryFlags(st: any, schema: any[], margin = 0.05): BoundaryFlag[] {
   return out;
 }
 
+// A small labelled group so the toolbar reads as organised sections instead of
+// one long cramped row.  Module-level (stable identity) so inputs don't remount.
+const Group: React.FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => (
+  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+    <Typography sx={{ fontSize: 9, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.6, fontWeight: 700 }}>
+      {label}
+    </Typography>
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap' }}>{children}</Box>
+  </Box>
+);
+
 const DescentPanel: React.FC = () => {
   const {
     sweepConfig, connectedToApi, parameterSchema, materials,
@@ -85,6 +97,7 @@ const DescentPanel: React.FC = () => {
   // Load-lines (current-sweep overlay) are a disambiguation tool — OFF by default,
   // shown on demand after a run when two candidates are too close to call.
   const [showLoadLines, setShowLoadLines] = useState(false);
+  const [view3d, setView3d] = useState(false);   // 2-D ScatterChart vs 3-D (ripple on z)
   // Objective-chart Y (efficiency) scaling: Auto re-fits to the meaningful designs
   // as the run progresses; Manual fixes a range (the low infeasible points are not
   // informative, so cut them).
@@ -128,11 +141,15 @@ const DescentPanel: React.FC = () => {
   });
   const [applied, setApplied] = useState(false);
   // Algorithm: CMA-ES (derivative-free, noise-robust, default) vs the original
-  // finite-difference gradient descent.  Symmetry: full disk (−1, accurate
-  // ripple, default) vs ¼ sector (4, ~3× faster — good for quick debugging).
+  // finite-difference gradient descent.
   const [algorithm, setAlgorithm] = useState<'cmaes' | 'gradient'>('cmaes');
-  const [nSectors, setNSectors]   = useState<-1 | 4>(-1);
-  const [mtpa, setMtpa]           = useState(true);   // optimize γ (MTPA) before the geometry search
+  // FEM symmetry = the Mesh tab's sector count (single source) — the optimizer
+  // builds the disk EXACTLY like Simulation does, so optimizer ripple ==
+  // Simulation ripple (no opt↔Sim mismatch).  Set it on the Mesh tab; read-only here.
+  const nSectors = (() => {
+    try { return Math.max(1, Math.round(Number(JSON.parse(localStorage.getItem('mesh.nSectors') ?? '4')) || 4)); }
+    catch { return 4; }
+  })();
   // Box-walking: keep re-centering the ±deviation window on the optimum until
   // every variable settles inside its window (or hits a physical limit).
   const [autoWalk, setAutoWalk]   = useState(false);
@@ -211,17 +228,21 @@ const DescentPanel: React.FC = () => {
   // Live status: what the optimizer is doing right now (so a long run visibly
   // works).  phase + walk round both come from the backend (server-side box-walking).
   const phase = st.phase as string | undefined;
-  const mtpaG = st.mtpa_gamma_deg;
   const walkRound = Number(st.walk_round) || 1;
   const walkRounds = Number(st.walk_rounds) || 1;
-  const genText = phase === 'mtpa'     ? 'MTPA γ — finding max-torque angle…'
-                : phase === 'baseline' ? 'baseline solve…'
+  const genText = phase === 'baseline' ? 'baseline solve…'
                 : phase === 'starting' ? 'building mesh…'
                 : descentRunning       ? `generation ${st.iter ?? 0}/${st.max_iters ?? maxIters}`
                 : 'done';
   const statusText = ((walkRounds > 1) ? `Round ${walkRound}/${walkRounds} · ` : '') + genText;
-  const busyIndeterminate = phase === 'mtpa' || phase === 'baseline' || phase === 'starting';
-  const genPct = Math.min(100, Math.round(100 * (Number(st.iter) || 0) / Math.max(1, Number(st.max_iters) || maxIters)));
+  const busyIndeterminate = phase === 'baseline' || phase === 'starting';
+  // Eval-based progress so the bar visibly creeps WITHIN a generation — CMA-ES
+  // only bumps `iter` once a whole generation of ~λ evals finishes, so at full
+  // disk the bar would otherwise sit flat for ~15 min.  λ ≈ 4 + 3·ln(N) (the CMA
+  // default population), N = number of optimized variables.
+  const _lambda = 4 + Math.floor(3 * Math.log(Math.max(2, activeVars.length)));
+  const genPct = Math.min(99, Math.round(100 * Math.max(0, (Number(st.n_evals) || 0) - 1)
+                                          / Math.max(1, (Number(st.max_iters) || maxIters) * _lambda)));
 
   // ── Re-optimize suggestion: what changed since the last optimization? ────────
   // Snapshot the inputs at launch (in `launch`), then diff the live inputs against
@@ -293,7 +314,7 @@ const DescentPanel: React.FC = () => {
     localRun.current = true;
     try {
       await runDescent({ rippleMax, maxIters, wEff, wTd, steps, algorithm, nSectors,
-                         targetTorque: ratedTorque, vPeakLimit, optimizeGamma: mtpa,
+                         targetTorque: ratedTorque, vPeakLimit, optimizeGamma: false,
                          autoExpand: autoWalk, maxRounds, surrogateSeed });
     } finally {
       localRun.current = false;
@@ -325,98 +346,12 @@ const DescentPanel: React.FC = () => {
     <Box sx={{ mt: 4 }}>
       <Divider sx={{ mb: 2 }} />
 
-      {/* Header / controls */}
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', mb: 1 }}>
+      {/* ── Header: title + Run ── */}
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5 }}>
         <TrendingDownIcon sx={{ fontSize: 18 }} />
-        <Typography variant="subtitle2" sx={{ flex: 1, minWidth: 180 }}>
-          {algorithm === 'cmaes' ? 'CMA-ES' : 'Gradient descent'} — max efficiency × torque/mass
+        <Typography variant="subtitle2" sx={{ flex: 1, minWidth: 160 }}>
+          Geometry optimizer — maximise efficiency × torque/mass
         </Typography>
-
-        <Tooltip title="Optimization algorithm. CMA-ES: derivative-free, noise-robust evolution strategy (recommended). Gradient: the original finite-difference descent." placement="top">
-          <ToggleButtonGroup exclusive size="small" value={algorithm}
-            onChange={(_, a) => a && setAlgorithm(a)} sx={{ height: 26 }}>
-            <ToggleButton value="cmaes"    sx={{ px: 1, fontSize: 10 }}>CMA-ES</ToggleButton>
-            <ToggleButton value="gradient" sx={{ px: 1, fontSize: 10 }}>Gradient</ToggleButton>
-          </ToggleButtonGroup>
-        </Tooltip>
-        <Tooltip title="FEM symmetry for every evaluation. Full disk = accurate ripple (recommended). ¼ sector = ~3× faster but over-reports ripple ~2.7× (good for quick algorithm debugging, not final numbers)." placement="top">
-          <ToggleButtonGroup exclusive size="small" value={nSectors}
-            onChange={(_, n) => n != null && setNSectors(n)} sx={{ height: 26 }}>
-            <ToggleButton value={-1} sx={{ px: 1, fontSize: 10 }}>Full</ToggleButton>
-            <ToggleButton value={4}  sx={{ px: 1, fontSize: 10 }}>¼</ToggleButton>
-          </ToggleButtonGroup>
-        </Tooltip>
-
-        <Tooltip title="Descent iterations. Each: ±step per variable (gradient) + line search." placement="top">
-          <TextField label="iters" type="number" size="small" value={maxIters}
-            onChange={e => setMaxIters(Math.max(1, Math.min(40, Math.round(+e.target.value) || 1)))}
-            inputProps={{ min: 1, max: 40, style: { fontSize: 11, padding: '3px 6px', width: 40 } }}
-            InputLabelProps={{ sx: { fontSize: 10 } }} />
-        </Tooltip>
-        <Tooltip title="FEM frames per electrical period — taken from the Simulation tab (Steps per period), single source. Read-only here so the optimizer evaluates ripple at the resolution you simulate at." placement="top">
-          <TextField label="steps/T (sim)" type="number" size="small" value={steps} disabled
-            inputProps={{ style: { fontSize: 11, padding: '3px 6px', width: 40 } }}
-            InputLabelProps={{ sx: { fontSize: 10 } }} />
-        </Tooltip>
-        <Tooltip title="Efficiency weight in the objective (exponent on eff/eff₀)." placement="top">
-          <TextField label="w·eff" type="number" size="small" value={wEff}
-            onChange={e => setWEff(Math.max(0, +e.target.value || 0))}
-            inputProps={{ min: 0, step: 0.5, style: { fontSize: 11, padding: '3px 6px', width: 40 } }}
-            InputLabelProps={{ sx: { fontSize: 10 } }} />
-        </Tooltip>
-        <Tooltip title="Torque-density weight (exponent on td/td₀)." placement="top">
-          <TextField label="w·Nm/kg" type="number" size="small" value={wTd}
-            onChange={e => setWTd(Math.max(0, +e.target.value || 0))}
-            inputProps={{ min: 0, step: 0.5, style: { fontSize: 11, padding: '3px 6px', width: 44 } }}
-            InputLabelProps={{ sx: { fontSize: 10 } }} />
-        </Tooltip>
-
-        {/* ── Rated-duty constraints ─── target torque is set in the Operating
-            Point card above (it drives the auto-solved current); here: V-bus. ── */}
-        <Tooltip title="Inverter DC-bus voltage (V). Usable peak phase = bus × modulation factor; designs whose V_peak exceeds it are penalised. 0 = no limit." placement="top">
-          <TextField label="V bus" type="number" size="small" value={vBus}
-            onChange={e => updateSweepConstraints({ vBusV: Math.max(0, +e.target.value || 0) })}
-            inputProps={{ min: 0, step: 1, style: { fontSize: 11, padding: '3px 6px', width: 48 } }}
-            InputLabelProps={{ sx: { fontSize: 10 } }} />
-        </Tooltip>
-        <Tooltip title="PWM scheme → usable peak phase = V_bus × (SVPWM 0.577 / Sine 0.5 / Six-step 0.637)." placement="top">
-          <ToggleButtonGroup exclusive size="small" value={modulation}
-            onChange={(_, m) => m && updateSweepConstraints({ modulation: m })} sx={{ height: 26 }}>
-            <ToggleButton value="svpwm"   sx={{ px: 0.7, fontSize: 10 }}>SVPWM</ToggleButton>
-            <ToggleButton value="sine"    sx={{ px: 0.7, fontSize: 10 }}>Sine</ToggleButton>
-            <ToggleButton value="sixstep" sx={{ px: 0.7, fontSize: 10 }}>6-step</ToggleButton>
-          </ToggleButtonGroup>
-        </Tooltip>
-        <Tooltip title="Computed usable peak phase voltage limit = V_bus × modulation factor. The optimizer penalises any design whose V_peak exceeds it." placement="top">
-          <Typography variant="caption" sx={{ color: '#93c5fd', fontSize: 10, whiteSpace: 'nowrap' }}>
-            V_peak ≤ {vPeakLimit < 1e8 ? `${vPeakLimit.toFixed(0)} V` : '—'}
-          </Typography>
-        </Tooltip>
-        <Tooltip title="Optimize the load angle γ (MTPA) for the starting geometry BEFORE the geometry search (a quick parallel γ sweep runs first), so the whole run uses the best phase." placement="top">
-          <ToggleButton value="mtpa" selected={mtpa} size="small"
-            onChange={() => setMtpa(m => !m)} sx={{ px: 1, py: 0, height: 26, fontSize: 10 }}>
-            MTPA γ
-          </ToggleButton>
-        </Tooltip>
-        <Tooltip title="Auto-walk (box-walking): if a variable ends at the edge of its ±deviation window, the server re-centers the window on the optimum and re-optimizes — round after round, until every variable settles inside its window, hits a physical (schema) limit, or the round cap. Runs FULLY on the backend: you can close the tab and it finishes on its own. Off = one run, then boundary variables are flagged for a manual one-click continue." placement="top">
-          <ToggleButton value="autowalk" selected={autoWalk} size="small"
-            onChange={() => setAutoWalk(a => !a)} sx={{ px: 1, py: 0, height: 26, fontSize: 10 }}>
-            Auto-walk
-          </ToggleButton>
-        </Tooltip>
-        <Tooltip title="Surrogate (Bayesian) warm-start: seed the search from the geometry a RandomForest surrogate predicts best over ALL past evaluations (learned, not fixed). The more you optimize, the smarter the start → fewer FEM solves. Falls back to the current geometry until ~20 evals are logged." placement="top">
-          <ToggleButton value="surrogate" selected={surrogateSeed} size="small"
-            onChange={() => setSurrogateSeed(s => !s)} sx={{ px: 1, py: 0, height: 26, fontSize: 10 }}>
-            Surrogate seed
-          </ToggleButton>
-        </Tooltip>
-        {autoWalk && (
-          <TextField label="max rounds" type="number" size="small" value={maxRounds}
-            onChange={(e) => setMaxRounds(Math.max(1, Math.min(20, Number(e.target.value) || 1)))}
-            sx={{ width: 88 }} inputProps={{ min: 1, max: 20, style: { fontSize: 11 } }}
-            InputLabelProps={{ style: { fontSize: 10 } }} />
-        )}
-
         {descentRunning ? (
           <Button variant="contained" color="error" size="small" startIcon={<StopIcon />}
             onClick={() => cancelDescent()}>
@@ -431,9 +366,96 @@ const DescentPanel: React.FC = () => {
         )}
       </Box>
 
+      {/* ── Controls grouped into labelled sections ── */}
+      <Box sx={{ display: 'flex', gap: 2.5, flexWrap: 'wrap', alignItems: 'flex-start', mb: 1.5 }}>
+        <Group label="Algorithm">
+          <Tooltip title="Optimization algorithm. CMA-ES: derivative-free, noise-robust evolution strategy (recommended). Gradient: the original finite-difference descent." placement="top">
+            <ToggleButtonGroup exclusive size="small" value={algorithm}
+              onChange={(_, a) => a && setAlgorithm(a)} sx={{ height: 26 }}>
+              <ToggleButton value="cmaes"    sx={{ px: 1, fontSize: 10 }}>CMA-ES</ToggleButton>
+              <ToggleButton value="gradient" sx={{ px: 1, fontSize: 10 }}>Gradient</ToggleButton>
+            </ToggleButtonGroup>
+          </Tooltip>
+          <Tooltip title="FEM symmetry — taken from the Mesh tab (sectors), single source. Read-only here so the optimizer builds the disk the SAME way Simulation does → optimizer ripple == Simulation ripple." placement="top">
+            <Chip size="small" variant="outlined"
+              label={`sym: ${nSectors <= 1 ? 'Full disk' : `1/${nSectors}`} · Mesh`}
+              sx={{ height: 26, fontSize: 10 }} />
+          </Tooltip>
+          <Tooltip title="Descent iterations / CMA-ES generations." placement="top">
+            <TextField label="iters" type="number" size="small" value={maxIters}
+              onChange={e => setMaxIters(Math.max(1, Math.min(40, Math.round(+e.target.value) || 1)))}
+              inputProps={{ min: 1, max: 40, style: { fontSize: 11, padding: '3px 6px', width: 40 } }}
+              InputLabelProps={{ sx: { fontSize: 10 } }} />
+          </Tooltip>
+          <Tooltip title="FEM frames per electrical period — taken from the Simulation tab (Steps per period), single source. Read-only here so the optimizer evaluates ripple at the resolution you simulate at." placement="top">
+            <TextField label="steps/T (sim)" type="number" size="small" value={steps} disabled
+              inputProps={{ style: { fontSize: 11, padding: '3px 6px', width: 40 } }}
+              InputLabelProps={{ sx: { fontSize: 10 } }} />
+          </Tooltip>
+        </Group>
+
+        <Group label="Objective weights">
+          <Tooltip title="Efficiency weight in the objective (exponent on eff/eff₀)." placement="top">
+            <TextField label="w·eff" type="number" size="small" value={wEff}
+              onChange={e => setWEff(Math.max(0, +e.target.value || 0))}
+              inputProps={{ min: 0, step: 0.5, style: { fontSize: 11, padding: '3px 6px', width: 40 } }}
+              InputLabelProps={{ sx: { fontSize: 10 } }} />
+          </Tooltip>
+          <Tooltip title="Torque-density weight (exponent on td/td₀). 0 = ignore mass (efficiency only)." placement="top">
+            <TextField label="w·Nm/kg" type="number" size="small" value={wTd}
+              onChange={e => setWTd(Math.max(0, +e.target.value || 0))}
+              inputProps={{ min: 0, step: 0.5, style: { fontSize: 11, padding: '3px 6px', width: 44 } }}
+              InputLabelProps={{ sx: { fontSize: 10 } }} />
+          </Tooltip>
+        </Group>
+
+        <Group label="Inverter limit">
+          <Tooltip title="Inverter DC-bus voltage (V). Usable peak phase = bus × modulation factor; designs whose V_peak exceeds it are penalised. 0 = no limit." placement="top">
+            <TextField label="V bus" type="number" size="small" value={vBus}
+              onChange={e => updateSweepConstraints({ vBusV: Math.max(0, +e.target.value || 0) })}
+              inputProps={{ min: 0, step: 1, style: { fontSize: 11, padding: '3px 6px', width: 48 } }}
+              InputLabelProps={{ sx: { fontSize: 10 } }} />
+          </Tooltip>
+          <Tooltip title="PWM scheme → usable peak phase = V_bus × (SVPWM 0.577 / Sine 0.5 / Six-step 0.637)." placement="top">
+            <ToggleButtonGroup exclusive size="small" value={modulation}
+              onChange={(_, m) => m && updateSweepConstraints({ modulation: m })} sx={{ height: 26 }}>
+              <ToggleButton value="svpwm"   sx={{ px: 0.7, fontSize: 10 }}>SVPWM</ToggleButton>
+              <ToggleButton value="sine"    sx={{ px: 0.7, fontSize: 10 }}>Sine</ToggleButton>
+              <ToggleButton value="sixstep" sx={{ px: 0.7, fontSize: 10 }}>6-step</ToggleButton>
+            </ToggleButtonGroup>
+          </Tooltip>
+          <Tooltip title="Computed usable peak phase voltage limit = V_bus × modulation factor. The optimizer penalises any design whose V_peak exceeds it." placement="top">
+            <Typography variant="caption" sx={{ color: '#93c5fd', fontSize: 10, whiteSpace: 'nowrap', alignSelf: 'center' }}>
+              V_peak ≤ {vPeakLimit < 1e8 ? `${vPeakLimit.toFixed(0)} V` : '—'}
+            </Typography>
+          </Tooltip>
+        </Group>
+
+        <Group label="Search options">
+          <Tooltip title="Auto-walk (box-walking): if a variable ends at the edge of its ±deviation window, the server re-centers the window on the optimum and re-optimizes — round after round, until every variable settles inside its window, hits a physical (schema) limit, or the round cap. Runs FULLY on the backend: you can close the tab and it finishes on its own. Off = one run, then boundary variables are flagged for a manual one-click continue." placement="top">
+            <ToggleButton value="autowalk" selected={autoWalk} size="small"
+              onChange={() => setAutoWalk(a => !a)} sx={{ px: 1, py: 0, height: 26, fontSize: 10 }}>
+              Auto-walk
+            </ToggleButton>
+          </Tooltip>
+          <Tooltip title="Surrogate (Bayesian) warm-start: seed the search from the geometry a RandomForest surrogate predicts best over ALL past evaluations (learned, not fixed). The more you optimize, the smarter the start → fewer FEM solves. Falls back to the current geometry until ~20 evals are logged." placement="top">
+            <ToggleButton value="surrogate" selected={surrogateSeed} size="small"
+              onChange={() => setSurrogateSeed(s => !s)} sx={{ px: 1, py: 0, height: 26, fontSize: 10 }}>
+              Surrogate seed
+            </ToggleButton>
+          </Tooltip>
+          {autoWalk && (
+            <TextField label="max rounds" type="number" size="small" value={maxRounds}
+              onChange={(e) => setMaxRounds(Math.max(1, Math.min(20, Number(e.target.value) || 1)))}
+              sx={{ width: 88 }} inputProps={{ min: 1, max: 20, style: { fontSize: 11 } }}
+              InputLabelProps={{ style: { fontSize: 10 } }} />
+          )}
+        </Group>
+      </Box>
+
       <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
         {ratedTorque > 0 ? (
-          <>Operating point: <strong>T = {ratedTorque} N·m @ {op0.rpm} rpm</strong>{mtpa ? ' (MTPA γ)' : `, γ=${op0.gamma_deg ?? 0}°`} — current is <strong>auto-solved per design</strong> to hit this torque (probe {op0.current_a} A)</>
+          <>Operating point: <strong>T = {ratedTorque} N·m @ {op0.rpm} rpm, γ={op0.gamma_deg ?? 0}°</strong> (γ from Simulation) — current is <strong>auto-solved per design</strong> to hit this torque (probe {op0.current_a} A)</>
         ) : (
           <>Fixed operating point: <strong>{op0.current_a} A @ {op0.rpm} rpm, γ={op0.gamma_deg ?? 0}°</strong></>
         )} · variables:{' '}
@@ -477,7 +499,7 @@ const DescentPanel: React.FC = () => {
           </Table>
           {best && (
             <Typography variant="caption" sx={{ display: 'block', fontSize: 10, color: 'text.secondary', mb: 0.5 }}>
-              Warm-start re-uses the last best geometry (η {fmtPct(best.efficiency)}); rated current + MTPA γ are re-derived for the new conditions.
+              Warm-start re-uses the last best geometry (η {fmtPct(best.efficiency)}); the rated current is re-derived for the new conditions (γ from Simulation).
             </Typography>
           )}
           <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
@@ -501,27 +523,19 @@ const DescentPanel: React.FC = () => {
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
             <CircularProgress size={14} />
             <Typography variant="caption" sx={{ fontWeight: 600 }}>{statusText}</Typography>
-            {mtpaG != null && (
-              <Chip size="small" color="info" variant="outlined"
-                label={`γ = ${Number(mtpaG).toFixed(0)}°`} sx={{ height: 18, fontSize: 10 }} />
-            )}
           </Box>
           <LinearProgress variant={busyIndeterminate ? 'indeterminate' : 'determinate'} value={genPct}
             sx={{ height: 6, borderRadius: 3 }} />
         </Box>
       )}
 
-      {/* Progress chips: iters / evals / MTPA γ / best */}
+      {/* Progress chips: iters / evals / best */}
       {(descentRunning || history.length > 0) && (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5, flexWrap: 'wrap' }}>
           <Chip size="small" variant="outlined"
             label={`iter ${st.iter ?? 0}/${st.max_iters ?? maxIters}`} sx={{ height: 20, fontSize: 10 }} />
           <Chip size="small" variant="outlined"
             label={`${st.n_evals ?? 0} FEM evals`} sx={{ height: 20, fontSize: 10 }} />
-          {mtpaG != null && (
-            <Chip size="small" variant="outlined"
-              label={`MTPA γ = ${Number(mtpaG).toFixed(0)}°`} sx={{ height: 20, fontSize: 10 }} />
-          )}
           {best && (
             <Chip size="small" color="success" variant="outlined"
               label={`best F = ${st.best?.F?.toFixed?.(4) ?? '—'}`} sx={{ height: 20, fontSize: 10 }} />
@@ -613,6 +627,13 @@ const DescentPanel: React.FC = () => {
               <span style={{ color: '#fbbf24' }}>★ best</span>
             </Typography>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap' }}>
+              <Tooltip title="2-D = efficiency vs torque/mass. 3-D lifts ripple onto the height (z) axis, with a translucent plane at the ripple gate — see the eff×td-vs-ripple trade-off at a glance. Drag to rotate." placement="top">
+                <ToggleButtonGroup exclusive size="small" value={view3d ? '3d' : '2d'}
+                  onChange={(_, m) => m && setView3d(m === '3d')} sx={{ height: 24 }}>
+                  <ToggleButton value="2d" sx={{ px: 0.8, fontSize: 10 }}>2D</ToggleButton>
+                  <ToggleButton value="3d" sx={{ px: 0.8, fontSize: 10 }}>3D</ToggleButton>
+                </ToggleButtonGroup>
+              </Tooltip>
               <Tooltip title="Y-axis (efficiency) scaling. Auto = fit to the meaningful designs (descent path + best + feasible) and re-zoom as the run progresses, dropping the uninformative low points. Manual = fix the range below." placement="top">
                 <ToggleButtonGroup exclusive size="small" value={yMode}
                   onChange={(_, m) => m && setYMode(m)} sx={{ height: 24 }}>
@@ -651,6 +672,11 @@ const DescentPanel: React.FC = () => {
             </Box>
           )}
           <Box sx={{ height: 460, width: '100%' }}>
+            {view3d ? (
+              <Scatter3D points={points} rippleMax={rippleMax}
+                best={best && best.torque_per_mass != null
+                  ? { td: best.torque_per_mass, eff: best.efficiency, ripple: best.T_ripple_pct } : null} />
+            ) : (
             <ResponsiveContainer width="100%" height="100%">
               <ScatterChart margin={{ top: 8, right: 24, left: 8, bottom: 18 }}>
                 <CartesianGrid strokeDasharray="3 3" opacity={0.15} />
@@ -701,6 +727,7 @@ const DescentPanel: React.FC = () => {
                 ))}
               </ScatterChart>
             </ResponsiveContainer>
+            )}
           </Box>
         </Box>
       )}

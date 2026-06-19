@@ -47,25 +47,37 @@ _GMSH_LOCK = threading.RLock()
 MU0 = 4e-7 * math.pi
 
 # Single source of truth for the d-axis phase offset: the electrical angle added
-# to (rotor_angle·pole_pairs + γ) so that γ=0 lands on the q-axis (max torque).
-# MUST be identical across every solve path (transient currents, static field,
-# eddy) — otherwise the field/torque would be at a different phase per path.
-# 90° → the natural d-q convention: at rotor=0, γ=0 the q-axis current has
-# I_A = cos(90°) = 0 (phase A on the d-axis) with POSITIVE/motoring torque.
-# This works now that the magnet polarity is correct (flipped) — before the flip
-# the same I_A=0 point gave braking torque, which forced the non-physical 270°.
-# (NB: the torque PEAK is ~30° el away, at γ≈−30° — the residual rotor d-axis vs
-#  phase-A geometric offset; mechanical alignment is intentionally kept at 0.)
-DAXIS_SHIFT_DEG = 90.0
+# to (rotor_angle·pole_pairs + γ) so that γ=0 lands on the q-axis.  MUST be
+# identical across every solve path (transient currents, static field, eddy) —
+# otherwise the field/torque would be at a different phase per path.
+#
+# = ideal 90° d→q rotation  +  the motor's rotor-d-axis-vs-phase-A GEOMETRIC
+# offset.  That offset is TOPOLOGY-dependent (pole/slot/winding) and must be
+# calibrated per motor: a hardcoded 90 left γ=0 ~18° off the q-axis for the
+# 20-pole/24-slot motor, so torque peaked at γ≈+38° and "kept rising with γ"
+# instead of peaking at a small-+ MTPA.
+# Calibrated 2026-06-16 for the 20p/24s topology via a no-load (I=0) run:
+# psi_A(θ) peaks at θ*=34.2° mech (342° el) ⇒ DAXIS = (90 − 342) ≡ 108° (mod 360).
+# Now γ=0 = q-axis and MTPA sits at a small + γ (~+20° for this motor).
+# RECALIBRATE only if the pole/slot/winding TOPOLOGY changes (dimension sweeps
+# don't move it): run fem_transient_sliding_band(I_phase_rms=0); θ* = rotor angle
+# of max psi_A_Wb; DAXIS_SHIFT_DEG = (90 − θ*·pole_pairs) mod 360.
+DAXIS_SHIFT_DEG = 108.0
 
 # Number of equally-spaced nodes on the sliding-band slip circle (r = mid_r).
 # Shared by in_band (exterior) and out_band (hole) so the two half-meshes get
-# IDENTICAL matching nodes there.  Multiple of 14 (pole pairs) so the rotor
-# step aligns to whole nodes for n_steps ∈ {12,24,36,72,...}.
-# 1008 = 14·72 → 252 nodes per 90° sector ≈ 0.46 mm tangential spacing on the
-# slip ring.  This count drives the angular resolution of the rotor-rotation
-# merge, so lowering it raises torque ripple — keep it high.  The VISUAL band
-# width is controlled by the radial air-gap size field, not this.
+# IDENTICAL matching nodes there.  This count drives the angular resolution of
+# the rotor-rotation merge, so lowering it raises torque ripple — keep it high.
+# The VISUAL band width is controlled by the radial air-gap size field, not this.
+#
+# NB: the TRANSIENT solver does NOT use this fixed value — it computes an
+# adaptive n_slip_eff = pole_pairs·per_period (per_period a multiple of 24, ≥120)
+# so the slip ring is divisible by the pole-pair count for ANY motor and the
+# electrical period tiles EXACTLY.  1008 = 14·72 tiled cleanly only for 14
+# pole-pairs (28 poles); a 10-pp / 20-pole motor got 1008/10 = 100.8 → a coarse,
+# 24-skipping step grid that under-resolved ripple & efficiency.  This constant
+# stays the fallback for the static/eddy paths (_simplify_polys default) that
+# don't know pole_pairs.
 _N_SLIP = 1008
 
 # Structured slip strips (explicit offset rings at mid±δ).  Tested as a fix for
@@ -3541,10 +3553,20 @@ def fem_transient_sliding_band(
                 'B': Ipk * math.cos(te - 2 * math.pi / 3),
                 'C': Ipk * math.cos(te + 2 * math.pi / 3)}
 
+    # ── Slip-ring resolution (ADAPTIVE to pole count) ─────────────────────
+    # Nodes per electrical period = a multiple of 24 (so 24/30/40/60/120 are all
+    # valid step counts) and ≥120, scaled so the full-ring node count stays
+    # ≥~1008 (fine tangential spacing → accurate ripple).  n_slip_eff =
+    # pole_pairs·per_period is divisible by pole_pairs BY CONSTRUCTION → the rotor
+    # advances a whole number of nodes each step (strictly periodic torque) and
+    # the electrical period tiles EXACTLY (vs the old fixed 1008 → 100.8/period).
+    _slip_per_period = 24 * max(5, math.ceil(1008 / (24 * pole_pairs)))
+    n_slip_eff = pole_pairs * _slip_per_period
+
     # ── Snap steps/period so the rotor lands on whole slip nodes ──────────
-    # The slip ring has _N_SLIP/pole_pairs nodes per electrical period; for a
-    # uniform (periodic, non-chaotic) rotor advance, n_steps must divide that.
-    _nodes_per_period = _N_SLIP // pole_pairs
+    # For a uniform (periodic, non-chaotic) rotor advance, n_steps must divide
+    # the nodes-per-period.
+    _nodes_per_period = _slip_per_period
     _req_steps = int(n_steps_per_period)
     n_steps_per_period = _snap_steps_to_nodes(_req_steps, _nodes_per_period)
     if n_steps_per_period != _req_steps:
@@ -3558,6 +3580,7 @@ def fem_transient_sliding_band(
         motor.set_parameters(geo_override)   # in-memory candidate geometry
     polys = motor.get_2d_polygons(rotor_angle_deg=float(rotor_angle0_deg))
     polys = _simplify_polys(polys, tol_mm=0.005, stator_fillet_mm=stator_fillet_mm,
+                            n_slip=n_slip_eff,
                             band_mode=("moving" if (_SB_MOVING_BAND or _full_ring)
                                        else "merged"))
     ms, ts, cs, mr, tr, cr = _build_sliding_band_meshes(
@@ -3582,10 +3605,10 @@ def fem_transient_sliding_band(
         r = np.hypot(P[0], P[1])
         idx = np.where(np.abs(r - r_at) < 1e-6)[0]
         ang = np.degrees(np.arctan2(P[1, idx], P[0, idx])) % 360.0
-        step = 360.0 / _N_SLIP
+        step = 360.0 / n_slip_eff
         kg = np.round(ang / step)
         on_grid = np.abs(ang - kg * step) < (0.05 * step)
-        idx, ang, kg = idx[on_grid], ang[on_grid], kg[on_grid].astype(int) % _N_SLIP
+        idx, ang, kg = idx[on_grid], ang[on_grid], kg[on_grid].astype(int) % n_slip_eff
         # one node per grid slot (keep the angularly-closest if duplicated)
         if kg.size:
             order = np.lexsort((np.abs(ang - np.round(ang / step) * step), kg))

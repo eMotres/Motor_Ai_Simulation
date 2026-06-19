@@ -529,7 +529,7 @@ function createLocalStatorGeometry(geometry: any): THREE.BufferGeometry {
   const numSlots = geometry.num_slots || 36;
   const slotHeight = geometry.slot_height || 16;
   const slotWidth = geometry.slot_width || (geometry.tooth_width ? geometry.tooth_width * 0.6 : 4.5);
-  const statorWidth = geometry.stator_width || 30;
+  const statorWidth = geometry.motor_length || 30;
 
   const shape = new THREE.Shape();
   shape.absarc(0, 0, outerR, 0, Math.PI * 2, false);
@@ -561,7 +561,7 @@ function createLocalStatorGeometry(geometry: any): THREE.BufferGeometry {
 function createLocalRotorGeometry(geometry: any): THREE.BufferGeometry {
   const outerR = geometry.rotor_outer_radius || 79.55;
   const innerR = geometry.rotor_inner_radius || 64.55;
-  const statorWidth = geometry.stator_width || 30;
+  const statorWidth = geometry.motor_length || 30;
 
   const shape = new THREE.Shape();
   shape.absarc(0, 0, outerR, 0, Math.PI * 2, false);
@@ -577,7 +577,7 @@ function createLocalRotorGeometry(geometry: any): THREE.BufferGeometry {
 function createLocalShaftGeometry(geometry: any): THREE.BufferGeometry {
   const outerR = geometry.rotor_inner_radius || 64.55;
   const innerR = outerR - (geometry.shaft_height || 3);
-  const statorWidth = geometry.stator_width || 30;
+  const statorWidth = geometry.motor_length || 30;
 
   const shape = new THREE.Shape();
   shape.absarc(0, 0, outerR, 0, Math.PI * 2, false);
@@ -595,7 +595,7 @@ function createLocalMagnetsGeometry(geometry: any): { geometry: THREE.BufferGeom
   const rotorInnerR = geometry.rotor_inner_radius || 64.55;
   const rotorHouseH = geometry.rotor_house_height || 1.2;
   const numPoles = geometry.num_poles || 42;
-  const statorWidth = geometry.stator_width || 30;
+  const statorWidth = geometry.motor_length || 30;
   const magFillDown = geometry.magnet_fill_down || 0.9;
 
   const poleAngle = (2 * Math.PI) / numPoles;

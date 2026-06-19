@@ -8,6 +8,13 @@
 //   length  L  : torque, EMF, iron, magnet loss, mass ∝ L ; R = R_active·L + R_end
 //   turns   N  : torque, EMF ∝ N ; R ∝ N           (wire cross-section unchanged)
 //   wire    h  : wire_width is FIXED, so area ∝ wire_height(h) ; R ∝ 1/h ; Imax ∝ h
+//   connect nP : 4 coils/phase re-wired (4S→nP1, 2P·2S→nP2, 4P→nP4) — pure
+//                electrical voltage↔current trade: series count = 4/nP, so
+//                torque,EMF ∝ nP0/nP ; R ∝ (nP0/nP)² ; Imax ∝ nP/nP0
+//   voltage    : terminal V = back-EMF + load drop.  The drop (mostly the
+//                synchronous reactance X·I, X = ωL, L ∝ turns²·L_stack·series²)
+//                is pinned at the loaded base point (Vload0−Vemf0) and rescaled,
+//                so V matches FEM at base and scales physically off it.
 //
 // v1 is LINEAR. Deferred (see docs/MULTI_USER_PLAN.md): non-linear copper AC /
 // proximity loss vs wire thickness, and coil-to-magnet-distance loss effects.
@@ -18,8 +25,10 @@ export interface Passport {
   wireH0_mm: number;   // base wire thickness (wire_height); wire_width fixed
   I0_A: number;        // base phase current (rms)
   rpm0: number;        // base speed
+  nP0: number;         // base parallel paths (4S→1, 2P·2S→2, 4P→4); 4 coils/phase
   T0_Nm: number;       // base torque at (I0, rpm0)
-  Vemf0_peak_V: number;// base back-EMF peak at (N0, L0, rpm0)   (terminal V = EMF + R·I)
+  Vemf0_peak_V: number;// base back-EMF peak at (N0, L0, rpm0)   (no-load terminal V)
+  Vload0_peak_V?: number; // base LOADED terminal-V peak at (I0, rpm0); enables the reactive-drop model
   R0_ohm: number;      // base phase resistance
   endWindFrac: number; // 0..1 fraction of R0 that is end-winding (does NOT scale with L)
   Pfe0_W: number;      // base iron (core) loss
@@ -31,6 +40,7 @@ export interface Knobs {
   N: number;       // turns
   L_mm: number;    // lamination length
   wireH_mm: number;// wire thickness
+  nP: number;      // parallel paths (winding connection: 4S→1, 2P·2S→2, 4P→4)
   I_A: number;     // phase current (rms)
   rpm: number;     // speed
 }
@@ -56,17 +66,29 @@ export function scaleMotor(p: Passport, k: Knobs): ScaledResult {
   const fH = p.wireH0_mm ? k.wireH_mm / p.wireH0_mm : 1;
   const fI = p.I0_A ? k.I_A / p.I0_A : 1;
   const fRpm = p.rpm0 ? k.rpm / p.rpm0 : 1;
+  // Winding connection: 4 coils/phase re-wired. Series count = 4/nP, so torque &
+  // back-EMF ∝ nP0/nP and resistance ∝ (nP0/nP)². Pure electrical, no field change.
+  const fConn = p.nP0 && k.nP ? p.nP0 / k.nP : 1;
 
-  // Torque ∝ N·L (magnet flux linkage), and ∝ I at the same load angle.
-  const T = p.T0_Nm * fN * fL * fI;
+  // Torque ∝ N·L (magnet flux linkage), ∝ I at the same load angle, ∝ series count.
+  const T = p.T0_Nm * fN * fL * fI * fConn;
 
   // Resistance: active copper ∝ L, end-winding ~const; ∝ N (more turns of same
-  // wire); ∝ 1/area = 1/wire_height (wire_width fixed).
-  const R = ((1 - p.endWindFrac) * fL + p.endWindFrac) * p.R0_ohm * fN / fH;
+  // wire); ∝ 1/area = 1/wire_height (wire_width fixed); ∝ (nP0/nP)² (connection).
+  const R = ((1 - p.endWindFrac) * fL + p.endWindFrac) * p.R0_ohm * fN / fH * fConn * fConn;
 
-  // Back-EMF ∝ N·L·rpm ; terminal phase voltage ≈ EMF + R·I (peak).
-  const Vemf = p.Vemf0_peak_V * fN * fL * fRpm;
-  const Vphase = Vemf + R * k.I_A * Math.SQRT2;   // R·I as a peak addend
+  // Back-EMF (no-load) ∝ N·L·rpm·(series count).
+  const Vemf = p.Vemf0_peak_V * fN * fL * fRpm * fConn;
+  // Loaded terminal voltage = EMF + load drop.  The drop is dominated by the
+  // synchronous reactance X·I (X = ωL, L ∝ turns²·L_stack·series²); its value at
+  // the loaded base point, (Vload0 − Vemf0), is rescaled by fI·fRpm·fN²·fL·fConn².
+  // Falls back to the resistive drop R·I when no loaded base voltage is supplied.
+  const Vdrop0 = p.Vload0_peak_V && p.Vload0_peak_V > p.Vemf0_peak_V
+    ? p.Vload0_peak_V - p.Vemf0_peak_V : 0;
+  const Vdrop = Vdrop0 > 0
+    ? Vdrop0 * fI * fRpm * fN * fN * fL * fConn * fConn
+    : R * k.I_A * Math.SQRT2;
+  const Vphase = Vemf + Vdrop;
 
   const omega = (2 * Math.PI * k.rpm) / 60;
   const P_mech = T * omega;
@@ -88,8 +110,10 @@ export function scaleMotor(p: Passport, k: Knobs): ScaledResult {
 }
 
 /** Largest phase current the winding can carry, scaled by conductor area
- *  (wire_height; wire_width fixed). Lets the tuner cap I to the wire. */
+ *  (wire_height; wire_width fixed) and parallel paths (more paths share the
+ *  phase current, so the phase can carry more). Lets the tuner cap I to the wire. */
 export function maxCurrent(p: Passport, k: Knobs): number {
   const fH = p.wireH0_mm ? k.wireH_mm / p.wireH0_mm : 1;
-  return p.I0_A * fH;   // I_max ∝ conductor area ∝ wire_height
+  const fConnI = p.nP0 && k.nP ? k.nP / p.nP0 : 1;
+  return p.I0_A * fH * fConnI;   // I_max ∝ conductor area (wire_height) × parallel paths
 }

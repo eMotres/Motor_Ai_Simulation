@@ -334,7 +334,7 @@ class CadQueryMotor:
         inner_r = p['stator_inner_radius']
         core_h     = p['core_thickness']
         slot_height = p['slot_height']
-        stator_w   = p['stator_width']
+        stator_w   = p['motor_length']   # axial stack length (single source)
         num_slots  = int(p['num_slots'])
         tooth_width  = p['tooth_width']
         tooth2_width = p.get('tooth2_width', 4.5)
@@ -470,7 +470,7 @@ class CadQueryMotor:
 
         shaft_r = p['rotor_inner_radius']
         shaft_in = p['shaft_inner_radius']
-        length = p['stator_width']
+        length = p['motor_length']
 
         # Print shaft parameters for debugging
         print(f"[DEBUG] _create_shaft: shaft_r={shaft_r}, shaft_in={shaft_in}")
@@ -494,7 +494,7 @@ class CadQueryMotor:
         p = self.parameters
         rotor_or = p['rotor_outer_radius']
         inner_r  = p['stator_inner_radius']
-        length   = p['stator_width']
+        length   = p['motor_length']
         mid_r    = 0.5 * (rotor_or + inner_r)
         return (
             cq.Workplane("XY")
@@ -512,7 +512,7 @@ class CadQueryMotor:
         outer_r  = p['stator_outer_radius']
         rotor_or = p['rotor_outer_radius']
         inner_r  = p['stator_inner_radius']
-        length   = p['stator_width']
+        length   = p['motor_length']
         mid_r    = 0.5 * (rotor_or + inner_r)
         # Default outer_air_factor=1.3 if not set
         r_outer  = float(p.get('outer_air_factor', 1.3)) * outer_r
@@ -529,7 +529,7 @@ class CadQueryMotor:
         rotor_inner_r = p['rotor_inner_radius']
         rotor_outer_r = p['rotor_outer_radius']
         num_poles = int(p['num_poles'])
-        width = p['stator_width']
+        width = p['motor_length']
 
         mag_h = p['magnet_height']                  # magnet height
         rotor_house_h = p['rotor_house_height']     # rotor housing thickness
@@ -587,13 +587,13 @@ class CadQueryMotor:
         
         rotor_outer_r = p['rotor_outer_radius']
         rotor_inner_r = p['rotor_inner_radius']
-        width = p['stator_width']
+        width = p['motor_length']
         num_poles = int(p['num_poles'])
         magnet_hole = p['rotor_hole']
         pole_angle = 360.0 / num_poles
         mag_fill_up = p['magnet_fill_up']
         mag_h = p['magnet_height']
-        width = p['stator_width']
+        width = p['motor_length']
 
         mag_angle_up = radians(pole_angle * mag_fill_up*magnet_hole / 2)
         rec_w = 2*rotor_outer_r * sin(mag_angle_up)
@@ -634,7 +634,7 @@ class CadQueryMotor:
         outer_r = p['stator_outer_radius']
         inner_r = p['stator_inner_radius']
         core_h = p['core_thickness']
-        stator_w = p['stator_width']
+        stator_w = p['motor_length']
         num_slots = int(p['num_slots'])
         tooth_width = p['tooth_width']
         

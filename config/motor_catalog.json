@@ -12,7 +12,12 @@
         "Instant analytical preview when editing params",
         "Save up to 3 of your own designs"
       ],
-      "limits": { "live_fem": false, "saves": 3, "optimization": false, "export": false }
+      "limits": {
+        "live_fem": false,
+        "saves": 3,
+        "optimization": false,
+        "export": false
+      }
     },
     {
       "id": "pro",
@@ -27,7 +32,12 @@
         "Torque-ripple optimization",
         "Export CSV / DXF"
       ],
-      "limits": { "live_fem": true, "saves": -1, "optimization": true, "export": true }
+      "limits": {
+        "live_fem": true,
+        "saves": -1,
+        "optimization": true,
+        "export": true
+      }
     },
     {
       "id": "team",
@@ -42,10 +52,27 @@
         "Priority compute queue",
         "REST API access"
       ],
-      "limits": { "live_fem": true, "saves": -1, "optimization": true, "export": true, "api": true }
+      "limits": {
+        "live_fem": true,
+        "saves": -1,
+        "optimization": true,
+        "export": true,
+        "api": true
+      }
     }
   ],
-  "diameters_mm": [40, 70, 100, 150, 200, 250, 300, 350, 400, 450],
+  "diameters_mm": [
+    40,
+    70,
+    100,
+    150,
+    200,
+    250,
+    300,
+    350,
+    400,
+    450
+  ],
   "motors": [
     {
       "id": "cat_150_baseline",
@@ -94,6 +121,40 @@
       "tier": "free",
       "description": "200 mm spoke-PM (24s / 28p), wire 6.5x0.8, 15 wires/slot, magnet 21.33 — the working motor (I=150 A, 466.7 Hz, 2000 rpm).",
       "preset": "200_mm"
+    },
+    {
+      "id": "cat_my_baseline",
+      "diameter_mm": 150,
+      "name": "Baseline (initial)",
+      "topology": "Spoke-PM SPMSM",
+      "slots": 24,
+      "poles": 28,
+      "rpm": 3950,
+      "current_a": 85,
+      "T_avg_Nm": 25.28,
+      "ripple_pct": 17.6,
+      "gamma_deg": 0,
+      "tier": "free",
+      "description": "Original 24/28 spoke-PM design as first specified.",
+      "preset": "my_baseline",
+      "owner": "user"
+    },
+    {
+      "id": "cat_my_motor",
+      "diameter_mm": 200,
+      "name": "My motor",
+      "topology": "Spoke-PM SPMSM",
+      "slots": 24,
+      "poles": 20,
+      "rpm": 4000,
+      "current_a": 110,
+      "T_avg_Nm": 0,
+      "ripple_pct": 0,
+      "gamma_deg": 0,
+      "tier": "free",
+      "description": "Your saved motor — My motor.",
+      "preset": "my_motor",
+      "owner": "user"
     }
   ]
 }

@@ -429,7 +429,7 @@ class MotorGeometry2D:
         outer_r = p['stator_outer_radius']
         inner_r = p['stator_inner_radius']
         core_h = p['core_thickness']
-        stator_w = p['stator_width']
+        stator_w = p['motor_length']   # axial stack length (single source)
         num_slots = int(p['num_slots'])
         tooth_width = p['tooth_width']
         wire_w = p['wire_width']

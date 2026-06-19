@@ -42,7 +42,7 @@ import { useMaterialsLibrary } from './components/materials/useMaterialsLibrary'
 import type { SelectedMaterial } from './components/materials/useMaterialsLibrary';
 import { useMotorStore, useUIStore } from './stores/motorStore';
 import SimulationPanel from './components/simulation/SimulationPanel';
-import ComparePanel from './components/compare/ComparePanel';
+import CompareTab from './components/compare/CompareTab';
 import MeshPanel from './components/mesh/MeshPanel';
 import { ensureActiveMotor } from './components/common/motorSettings';
 
@@ -289,8 +289,8 @@ function App() {
             <Tab label="Materials" value="materials" sx={{ minHeight: 40, fontSize: '0.8rem' }} />
             <Tab label="Mesh" value="mesh" sx={{ minHeight: 40, fontSize: '0.8rem' }} />
             <Tab label="Simulation" value="simulation" sx={{ minHeight: 40, fontSize: '0.8rem' }} />
-            <Tab label="Compare" value="compare" sx={{ minHeight: 40, fontSize: '0.8rem' }} />
-            <Tab label="Sweep" value="sweep" sx={{ minHeight: 40, fontSize: '0.8rem' }} />
+            <Tab label="Configure" value="compare" sx={{ minHeight: 40, fontSize: '0.8rem' }} />
+            <Tab label="Optimization" value="sweep" sx={{ minHeight: 40, fontSize: '0.8rem' }} />
           </Tabs>
         </Box>
 
@@ -339,8 +339,8 @@ function App() {
           {/* Sweep */}
           {activeTab === 'sweep' && <SweepConfigPanel />}
 
-          {/* Compare — diff saved simulations (geometry / currents / angles / mesh) */}
-          {activeTab === 'compare' && <ComparePanel />}
+          {/* Configure — simple tuner (configurator) + saved-sim diff */}
+          {activeTab === 'compare' && <CompareTab />}
 
           {/* Materials: left half (tree + detail) | right half (real geometry + assign) */}
           {activeTab === 'materials' && (

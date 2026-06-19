@@ -123,6 +123,10 @@ const ConfiguratorPanel: React.FC = () => {
   const result  = useMemo(() => scaleMotor(p, knobs), [p, knobs]);
   const baseRes = useMemo(() => scaleMotor(p, baseKnobs(p)), [p]);
   const iMax    = useMemo(() => maxCurrent(p, knobs), [p, knobs]);
+  // Current density in the conductor (A/mm², RMS) = coil current / wire area;
+  // coil current = phase current / parallel paths, wire area = width × height.
+  const J_A_mm2 = (knobs.I_A / Math.max(1, knobs.nP)) / Math.max(1e-6, ref.fit.wireWidth_mm * knobs.wireH_mm);
+  const baseJ   = (p.I0_A / Math.max(1, p.nP0)) / Math.max(1e-6, ref.fit.wireWidth_mm * p.wireH0_mm);
   const overCurr = knobs.I_A > iMax + 1e-6;
   // Hard slot-fit limiter — mirrors the backend constraint
   // (geometry_constraints._wire_height_max): N rows of (wire_height + radial
@@ -155,6 +159,7 @@ const ConfiguratorPanel: React.FC = () => {
     { key: 'V',    label: 'V phase', unit: 'Vpk', d: 0,                get: (c) => c.result.Vphase_peak_V },
     { key: 'eff',  label: 'η',       unit: '%',   d: 1, goodHi: true,  get: (c) => c.result.efficiency * 100 },
     { key: 'loss', label: 'Losses',  unit: 'W',   d: 0, goodHi: false, get: (c) => c.result.P_loss_W },
+    { key: 'J',    label: 'J',       unit: 'A/mm²', d: 1, goodHi: false, get: (c) => (c.knobs.I_A / Math.max(1, c.knobs.nP)) / Math.max(1e-6, ref.fit.wireWidth_mm * c.knobs.wireH_mm) },
     { key: 'mass', label: 'Mass',    unit: 'kg',  d: 2, goodHi: false, get: (c) => c.result.mass_kg },
     { key: 'tm',   label: 'T/mass',  unit: '',    d: 2, goodHi: true,  get: (c) => c.result.torque_per_mass },
   ];
@@ -233,6 +238,7 @@ const ConfiguratorPanel: React.FC = () => {
             <MetricTile label="Efficiency" value={result.efficiency * 100} unit="%" d={1} base={baseRes.efficiency * 100} goodHi />
           </Box>
           <Box sx={{ display: 'flex', gap: 1.25, flexWrap: 'wrap' }}>
+            <MetricTile label="Curr. density" value={J_A_mm2} unit="A/mm²" d={1} base={baseJ} goodHi={false} />
             <MetricTile label="Total loss" value={result.P_loss_W} unit="W" d={0} base={baseRes.P_loss_W} goodHi={false} />
             <MetricTile label="Mass" value={result.mass_kg} unit="kg" d={2} base={baseRes.mass_kg} goodHi={false} />
             <MetricTile label="T / mass" value={result.torque_per_mass} unit="N·m/kg" d={2} base={baseRes.torque_per_mass} goodHi />

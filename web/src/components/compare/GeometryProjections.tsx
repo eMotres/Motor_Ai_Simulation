@@ -18,6 +18,7 @@ import { useMotorStore } from '../../stores/motorStore';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001').replace(/\/$/, '');
 const STEEL = '#3b4453', STEEL_DK = '#2a3142', SHAFT = '#5b6675', BG = '#060d17';
+const COPPER = '#c27d33', COPPER_DK = '#5e3a16';
 const LABEL = { fontSize: 11, color: '#64748b', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em' } as const;
 const SUB = { fontSize: 10, color: '#475569', mb: 0.5 } as const;
 const PANEL = { flex: '1 1 380px', minWidth: 320, maxWidth: 500, bgcolor: '#0b1424', border: '1px solid #1e293b', borderRadius: 1, p: 1.5 } as const;
@@ -44,7 +45,9 @@ const drawOrder = (key: string): number =>
   key.startsWith('stator') ? 0 : key.startsWith('rotor') ? 1
     : key.startsWith('magnet') ? 2 : key.startsWith('coil') ? 3 : 4;
 
-const CrossSectionReal: React.FC<{ geoStr: string }> = ({ geoStr }) => {
+const CrossSectionReal: React.FC<{
+  geoStr: string; N: number; wireH: number; insulation: number; spacing: number;
+}> = ({ geoStr, N, wireH, insulation, spacing }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [mesh, setMesh] = useState<Mesh2D | null>(meshCache.get(geoStr) ?? null);
   const [state, setState] = useState<'idle' | 'loading' | 'error'>(meshCache.has(geoStr) ? 'idle' : 'loading');
@@ -79,7 +82,8 @@ const CrossSectionReal: React.FC<{ geoStr: string }> = ({ geoStr }) => {
     const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
     const TX = (x: number) => (x - cx) * scale + W / 2;
     const TY = (y: number) => H / 2 - (y - cy) * scale;   // flip Y (motor up → canvas down)
-    for (const key of keys.sort((a, b) => drawOrder(a) - drawOrder(b))) {
+    // 1) iron + magnets from the real mesh (coils handled separately below)
+    for (const key of keys.filter((k) => !k.startsWith('coil')).sort((a, b) => drawOrder(a) - drawOrder(b))) {
       const { vertices, faces } = mesh[key];
       ctx.fillStyle = colorFor(key);
       ctx.beginPath();
@@ -90,7 +94,35 @@ const CrossSectionReal: React.FC<{ geoStr: string }> = ({ geoStr }) => {
       }
       ctx.fill();
     }
-  }, [mesh]);
+    // 2) winding: draw the ACTUAL N wire rows inside each real coil slot, so the
+    //    coils respond to the turns + wire-thickness knobs (the backend mesh gives
+    //    a fixed slot-fill region; we place the real wires using its geometry).
+    ctx.strokeStyle = COPPER_DK; ctx.lineWidth = 0.6;
+    const rowPitch = wireH + spacing;
+    for (const key of keys.filter((k) => k.startsWith('coil'))) {
+      const verts = mesh[key].vertices;
+      const m = verts.length || 1;
+      let sx = 0, sy = 0; for (const v of verts) { sx += v[0]; sy += v[1]; }
+      const th = Math.atan2(sy / m, sx / m), ct = Math.cos(th), st = Math.sin(th);
+      let rMin = Infinity, rMax = -Infinity, tMax = 0;
+      for (const v of verts) {
+        const rr = v[0] * ct + v[1] * st, tt = -v[0] * st + v[1] * ct;
+        if (rr < rMin) rMin = rr; if (rr > rMax) rMax = rr; if (Math.abs(tt) > tMax) tMax = Math.abs(tt);
+      }
+      const hT = tMax * 0.92;
+      const C = (r: number, t: number): [number, number] => [r * ct - t * st, r * st + t * ct];
+      ctx.fillStyle = COPPER;
+      for (let k = 0; k < N; k++) {
+        const ri = rMin + insulation + k * rowPitch, ro = ri + wireH;
+        if (ro > rMax - insulation + 1e-6) break;
+        const p1 = C(ri, -hT), p2 = C(ri, hT), p3 = C(ro, hT), p4 = C(ro, -hT);
+        ctx.beginPath();
+        ctx.moveTo(TX(p1[0]), TY(p1[1])); ctx.lineTo(TX(p2[0]), TY(p2[1]));
+        ctx.lineTo(TX(p3[0]), TY(p3[1])); ctx.lineTo(TX(p4[0]), TY(p4[1])); ctx.closePath();
+        ctx.fill(); ctx.stroke();
+      }
+    }
+  }, [mesh, N, wireH, insulation, spacing]);
 
   return (
     <Box sx={{ position: 'relative', textAlign: 'center' }}>
@@ -119,7 +151,7 @@ const SideView: React.FC<{ ref0: ReferenceMotor; knobs: Knobs }> = ({ ref0, knob
   return (
     <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', maxWidth: 460, aspectRatio: '1 / 1', height: 'auto', display: 'block' }}>
       {/* the motor stack — solid, no air, no shaft */}
-      <rect x={x0} y={y0} width={stackW} height={stackH} rx={3} fill={STEEL} stroke="#475569" strokeWidth={1} />
+      <rect x={x0} y={y0} width={stackW} height={stackH} fill={STEEL} stroke="#475569" strokeWidth={1} />
       {hatch}
       {/* length dimension (bottom) */}
       <line x1={x0} y1={y0 + stackH + 13} x2={x0 + stackW} y2={y0 + stackH + 13} stroke="#94a3b8" strokeWidth={0.9} />
@@ -138,21 +170,21 @@ const SideView: React.FC<{ ref0: ReferenceMotor; knobs: Knobs }> = ({ ref0, knob
 
 const GeometryProjections: React.FC<{ ref0: ReferenceMotor; knobs: Knobs }> = ({ ref0, knobs }) => {
   const storeGeo = useMotorStore((s) => s.geometry) as Record<string, unknown>;
-  // real geometry = active geometry with the tuned winding overlaid
+  // The iron / magnet cross-section does not depend on the winding knobs, so the
+  // mesh is fetched once per geometry; the N wires are drawn on top client-side.
   const geoStr = useMemo(() => {
     const g: Record<string, number> = {};
     for (const [k, v] of Object.entries(storeGeo || {})) if (typeof v === 'number') g[k] = v;
-    g.num_wires_per_slot = knobs.N;
-    g.wire_height = knobs.wireH_mm;
     return JSON.stringify(g);
-  }, [storeGeo, knobs.N, knobs.wireH_mm]);
+  }, [storeGeo]);
 
   return (
     <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
       <Box sx={PANEL}>
         <Typography sx={LABEL}>Cross-section (XY) — real geometry</Typography>
         <Typography sx={SUB}>{knobs.N} turns/slot · {knobs.wireH_mm.toFixed(2)} mm wire · {ref0.geo.numSlots} slots / {ref0.geo.numPoles} poles</Typography>
-        <CrossSectionReal geoStr={geoStr} />
+        <CrossSectionReal geoStr={geoStr} N={knobs.N} wireH={knobs.wireH_mm}
+          insulation={ref0.fit.insulation_mm} spacing={ref0.fit.wireSpacingY_mm} />
       </Box>
       <Box sx={PANEL}>
         <Typography sx={LABEL}>Side view — stack length</Typography>

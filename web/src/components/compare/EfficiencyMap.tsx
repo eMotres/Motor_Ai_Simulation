@@ -69,7 +69,7 @@ const EfficiencyMap: React.FC<{ p: Passport; knobs: Knobs; packMax: number }> = 
     const NX = 90, NY = 56, cw = pw / NX, ch = ph / NY;
     // pass 1 — efficiency grid + auto-range over reachable cells (Ansys scales the
     // legend to the field's actual min/max, so the full spectrum spans the data).
-    const cells: { x: number; y: number; eta: number; reach: boolean }[] = [];
+    const eta = new Array<number>(NX * NY), reach = new Array<boolean>(NX * NY);
     let lo = Infinity, hi = -Infinity;
     for (let ix = 0; ix < NX; ix++) {
       const rpm = RPM_MIN + ((ix + 0.5) / NX) * (RPM_MAX - RPM_MIN);
@@ -77,16 +77,41 @@ const EfficiencyMap: React.FC<{ p: Passport; knobs: Knobs; packMax: number }> = 
         const T = T_MIN + ((iy + 0.5) / NY) * (Tmax - T_MIN);
         const I = base > 0 ? (p.I0_A * T) / base : 0;
         const s = scaleMotor(p, { ...knobs, I_A: I, rpm });
-        const reach = s.Vphase_peak_V * SQRT3 <= packMax && s.efficiency > 0;
-        cells.push({ x: ML + ix * cw, y: MT + ph - (iy + 1) * ch, eta: s.efficiency, reach });
-        if (reach) { if (s.efficiency < lo) lo = s.efficiency; if (s.efficiency > hi) hi = s.efficiency; }
+        const r = s.Vphase_peak_V * SQRT3 <= packMax && s.efficiency > 0;
+        eta[ix * NY + iy] = s.efficiency; reach[ix * NY + iy] = r;
+        if (r) { if (s.efficiency < lo) lo = s.efficiency; if (s.efficiency > hi) hi = s.efficiency; }
       }
     }
     if (!isFinite(lo) || hi - lo < 1e-4) { lo = ETA_LO; hi = ETA_HI; }
-    // pass 2 — draw cells over the data range
-    for (const c of cells) {
-      ctx.fillStyle = c.reach ? effColor(c.eta, lo, hi) : '#0f172a';
-      ctx.fillRect(c.x, c.y, cw + 0.6, ch + 0.6);
+    // pass 2 — coloured cells
+    for (let ix = 0; ix < NX; ix++) for (let iy = 0; iy < NY; iy++) {
+      ctx.fillStyle = reach[ix * NY + iy] ? effColor(eta[ix * NY + iy], lo, hi) : '#0f172a';
+      ctx.fillRect(ML + ix * cw, MT + ph - (iy + 1) * ch, cw + 0.6, ch + 0.6);
+    }
+    // pass 3 — iso-efficiency contour lines (marching squares over cell centres)
+    const cX = (ix: number) => ML + (ix + 0.5) * cw, cY = (iy: number) => MT + ph - (iy + 0.5) * ch;
+    const SEGS: Record<number, number[][]> = { 1: [[3, 0]], 2: [[0, 1]], 3: [[3, 1]], 4: [[1, 2]], 5: [[3, 0], [1, 2]], 6: [[0, 2]], 7: [[3, 2]], 8: [[2, 3]], 9: [[2, 0]], 10: [[0, 1], [2, 3]], 11: [[2, 1]], 12: [[1, 3]], 13: [[1, 0]], 14: [[0, 3]] };
+    const LEVELS = [0.90, 0.92, 0.94, 0.95, 0.96, 0.97, 0.975, 0.98, 0.985];
+    ctx.lineWidth = 1; ctx.font = '600 10px sans-serif';
+    for (const L of LEVELS) {
+      if (L <= lo || L >= hi) continue;
+      ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+      let labelPt: [number, number] | null = null;
+      for (let ix = 0; ix < NX - 1; ix++) for (let iy = 0; iy < NY - 1; iy++) {
+        const corners = [[ix, iy], [ix + 1, iy], [ix + 1, iy + 1], [ix, iy + 1]];
+        if (!corners.every(([a, b]) => reach[a * NY + b])) continue;
+        const v = corners.map(([a, b]) => eta[a * NY + b]);
+        const idx = (v[0] > L ? 1 : 0) | (v[1] > L ? 2 : 0) | (v[2] > L ? 4 : 0) | (v[3] > L ? 8 : 0);
+        const segs = SEGS[idx]; if (!segs) continue;
+        const pos = corners.map(([a, b]) => [cX(a), cY(b)] as [number, number]);
+        const ept = (e: number): [number, number] => { const a = e, b = (e + 1) % 4; const t = (L - v[a]) / (v[b] - v[a]); return [pos[a][0] + t * (pos[b][0] - pos[a][0]), pos[a][1] + t * (pos[b][1] - pos[a][1])]; };
+        for (const [ea, eb] of segs) { const pa = ept(ea), pb = ept(eb); ctx.beginPath(); ctx.moveTo(pa[0], pa[1]); ctx.lineTo(pb[0], pb[1]); ctx.stroke(); if (!labelPt && pa[0] > ML + pw * 0.25) labelPt = pa; }
+      }
+      if (labelPt) {
+        const tx = `${(L * 100).toFixed(L >= 0.975 ? 1 : 0)}`; const tw = ctx.measureText(tx).width;
+        ctx.fillStyle = 'rgba(11,20,36,0.7)'; ctx.fillRect(labelPt[0] - tw / 2 - 2, labelPt[1] - 6, tw + 4, 12);
+        ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(tx, labelPt[0], labelPt[1]);
+      }
     }
 
     // operating point

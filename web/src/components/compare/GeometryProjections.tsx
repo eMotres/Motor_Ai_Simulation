@@ -135,39 +135,54 @@ const CrossSectionReal: React.FC<{
   );
 };
 
+// Side view on a CANVAS (not SVG): a canvas has reliable intrinsic sizing, so it
+// renders height-driven without the SVG width/flex-basis clamping — guaranteeing
+// the SAME scale as the cross-section (OD pixel-height matches the diameter).
 const SideView: React.FC<{ ref0: ReferenceMotor; knobs: Knobs }> = ({ ref0, knobs }) => {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const g = ref0.geo;
-  const W = 600, H = 720;                       // same 720 frame as the cross-section canvas
+  const H = 720;                                 // same 720 frame as the cross-section canvas
   const OD = 2 * g.statorOR_mm;
   const s2 = (0.82 * H) / OD;                    // SAME scale factor (0.82) → motor same size in both views
   const stackH = OD * s2, stackW = knobs.L_mm * s2;
-  const cx = W / 2, cy = H / 2;
-  const x0 = cx - stackW / 2, y0 = cy - stackH / 2;
-  // lamination hatch (the stack is many thin sheets along the length)
-  const hatch: React.ReactNode[] = [];
-  const n = Math.max(3, Math.round(stackW / 11));
-  for (let i = 1; i < n; i++) {
-    const x = x0 + (i / n) * stackW;
-    hatch.push(<line key={i} x1={x} y1={y0} x2={x} y2={y0 + stackH} stroke={STEEL_DK} strokeWidth={0.9} />);
-  }
-  return (
-    <svg viewBox={`0 0 ${W} ${H}`} style={{ height: '100%', width: 'auto', maxWidth: '100%', display: 'block' }}>
-      {/* the motor stack — solid, no air, no shaft */}
-      <rect x={x0} y={y0} width={stackW} height={stackH} fill={STEEL} stroke="#475569" strokeWidth={1.4} />
-      {hatch}
-      {/* length dimension (bottom) */}
-      <line x1={x0} y1={y0 + stackH + 18} x2={x0 + stackW} y2={y0 + stackH + 18} stroke="#94a3b8" strokeWidth={1.2} />
-      <line x1={x0} y1={y0 + stackH + 11} x2={x0} y2={y0 + stackH + 25} stroke="#94a3b8" strokeWidth={1.2} />
-      <line x1={x0 + stackW} y1={y0 + stackH + 11} x2={x0 + stackW} y2={y0 + stackH + 25} stroke="#94a3b8" strokeWidth={1.2} />
-      <text x={cx} y={y0 + stackH + 44} fill="#cbd5e1" fontSize={22} textAnchor="middle" fontFamily="monospace">{knobs.L_mm.toFixed(0)} mm</text>
-      {/* diameter dimension (left) */}
-      <line x1={x0 - 20} y1={y0} x2={x0 - 20} y2={y0 + stackH} stroke="#94a3b8" strokeWidth={1.2} />
-      <line x1={x0 - 26} y1={y0} x2={x0 - 14} y2={y0} stroke="#94a3b8" strokeWidth={1.2} />
-      <line x1={x0 - 26} y1={y0 + stackH} x2={x0 - 14} y2={y0 + stackH} stroke="#94a3b8" strokeWidth={1.2} />
-      <text x={x0 - 30} y={cy} fill="#94a3b8" fontSize={17} textAnchor="middle" dominantBaseline="middle"
-        transform={`rotate(-90 ${x0 - 30} ${cy})`}>Ø{OD.toFixed(0)} mm</text>
-    </svg>
-  );
+  const W = Math.round(stackW + 130);            // buffer hugs the stack (+ room for dimensions)
+
+  useEffect(() => {
+    const cv = canvasRef.current; if (!cv) return;
+    cv.width = W; cv.height = H;
+    const ctx = cv.getContext('2d'); if (!ctx) return;
+    ctx.clearRect(0, 0, W, H);
+    const cx = W / 2, cy = H / 2, x0 = cx - stackW / 2, y0 = cy - stackH / 2;
+    // lamination stack — solid, no air, no shaft
+    ctx.fillStyle = STEEL; ctx.fillRect(x0, y0, stackW, stackH);
+    ctx.strokeStyle = '#475569'; ctx.lineWidth = 1.4; ctx.strokeRect(x0, y0, stackW, stackH);
+    // lamination hatch
+    ctx.strokeStyle = STEEL_DK; ctx.lineWidth = 0.9;
+    const n = Math.max(3, Math.round(stackW / 11));
+    for (let i = 1; i < n; i++) { const x = x0 + (i / n) * stackW; ctx.beginPath(); ctx.moveTo(x, y0); ctx.lineTo(x, y0 + stackH); ctx.stroke(); }
+    // length dimension (bottom)
+    ctx.strokeStyle = '#94a3b8'; ctx.lineWidth = 1.3;
+    const ly = y0 + stackH + 24;
+    ctx.beginPath();
+    ctx.moveTo(x0, ly); ctx.lineTo(x0 + stackW, ly);
+    ctx.moveTo(x0, ly - 8); ctx.lineTo(x0, ly + 8); ctx.moveTo(x0 + stackW, ly - 8); ctx.lineTo(x0 + stackW, ly + 8);
+    ctx.stroke();
+    ctx.fillStyle = '#cbd5e1'; ctx.font = '700 26px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    ctx.fillText(`${knobs.L_mm.toFixed(0)} mm`, cx, ly + 10);
+    // diameter dimension (left)
+    const dx = x0 - 30;
+    ctx.strokeStyle = '#94a3b8'; ctx.lineWidth = 1.3;
+    ctx.beginPath();
+    ctx.moveTo(dx, y0); ctx.lineTo(dx, y0 + stackH);
+    ctx.moveTo(dx - 8, y0); ctx.lineTo(dx + 8, y0); ctx.moveTo(dx - 8, y0 + stackH); ctx.lineTo(dx + 8, y0 + stackH);
+    ctx.stroke();
+    ctx.save(); ctx.translate(dx - 14, cy); ctx.rotate(-Math.PI / 2);
+    ctx.fillStyle = '#94a3b8'; ctx.font = '600 20px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(`Ø${OD.toFixed(0)} mm`, 0, 0); ctx.restore();
+  }, [ref0, knobs.L_mm, W, stackW, stackH, OD]);
+
+  return <canvas ref={canvasRef} width={W} height={H}
+    style={{ height: '100%', width: 'auto', maxWidth: '100%', aspectRatio: `${W} / ${H}`, display: 'block' }} />;
 };
 
 const GeometryProjections: React.FC<{ ref0: ReferenceMotor; knobs: Knobs }> = ({ ref0, knobs }) => {
@@ -181,7 +196,7 @@ const GeometryProjections: React.FC<{ ref0: ReferenceMotor; knobs: Knobs }> = ({
   }, [storeGeo]);
 
   return (
-    <Box sx={{ display: 'flex', gap: 2, alignItems: 'stretch', height: 'min(72vh, 680px)' }}>
+    <Box sx={{ display: 'flex', gap: 2, alignItems: 'stretch', justifyContent: 'center', height: 'min(88vh, 820px)' }}>
       <Box sx={{ ...PANEL, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
         <Typography sx={LABEL}>Cross-section (XY) — real geometry</Typography>
         <Typography sx={SUB}>{knobs.N} turns/slot · {knobs.wireH_mm.toFixed(1)} mm wire · {ref0.geo.numSlots} slots / {ref0.geo.numPoles} poles</Typography>
@@ -192,7 +207,7 @@ const GeometryProjections: React.FC<{ ref0: ReferenceMotor; knobs: Knobs }> = ({
       </Box>
       <Box sx={{ ...PANEL, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
         <Typography sx={LABEL}>Side view — stack length</Typography>
-        <Typography sx={SUB}>Lamination stack · L = {knobs.L_mm.toFixed(0)} mm · Ø{(2 * ref0.geo.statorOR_mm).toFixed(0)} mm</Typography>
+        <Typography sx={SUB}>L = {knobs.L_mm.toFixed(0)} mm · Ø{(2 * ref0.geo.statorOR_mm).toFixed(0)} mm</Typography>
         <Box sx={{ flex: 1, minHeight: 0, mt: 0.5, display: 'flex', justifyContent: 'center' }}>
           <SideView ref0={ref0} knobs={knobs} />
         </Box>

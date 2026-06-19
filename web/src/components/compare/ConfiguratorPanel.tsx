@@ -139,7 +139,7 @@ const ConfiguratorPanel: React.FC = () => {
   const stackFrac = stackHeight_mm / availStack_mm;
   const overFit   = stackHeight_mm > availStack_mm + 1e-9;
   const turnsMax  = Math.max(3, Math.min(30, Math.floor(availStack_mm / rowPitch_mm)));
-  const wireMax   = Math.max(0.3, Math.min(2.5, Math.floor((availStack_mm / knobs.N - ref.fit.wireSpacingY_mm) / 0.05) * 0.05));
+  const wireMax   = Math.max(0.3, Math.min(2.5, Math.floor((availStack_mm / knobs.N - ref.fit.wireSpacingY_mm) / 0.1) * 0.1));
   const atLimit   = knobs.N >= turnsMax || knobs.wireH_mm >= wireMax - 1e-9;
 
   const set = (k: keyof Knobs) => (v: number) => setKnobs((s) => ({ ...s, [k]: v }));
@@ -206,7 +206,7 @@ const ConfiguratorPanel: React.FC = () => {
           <Typography sx={{ ...LABEL, color: '#475569', mb: 0.75 }}>Build</Typography>
           <KnobSlider label="Stack length" unit="mm" value={knobs.L_mm} base={p.L0_mm} min={15} max={150} step={1} d={0} onChange={set('L_mm')} />
           <KnobSlider label="Turns / slot" value={knobs.N} base={p.N0} min={3} max={turnsMax} step={1} d={0} onChange={set('N')} warn={atLimit} />
-          <KnobSlider label="Wire thickness" unit="mm" value={knobs.wireH_mm} base={p.wireH0_mm} min={0.3} max={wireMax} step={0.05} d={2} onChange={set('wireH_mm')} warn={atLimit} />
+          <KnobSlider label="Wire thickness" unit="mm" value={knobs.wireH_mm} base={p.wireH0_mm} min={0.3} max={wireMax} step={0.1} d={1} onChange={set('wireH_mm')} warn={atLimit} />
 
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5, mb: 1 }}>
             <Typography sx={{ ...LABEL, flex: 1 }}>Winding connection</Typography>

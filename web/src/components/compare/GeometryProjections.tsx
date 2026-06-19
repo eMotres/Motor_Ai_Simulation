@@ -46,8 +46,8 @@ const drawOrder = (key: string): number =>
     : key.startsWith('magnet') ? 2 : key.startsWith('coil') ? 3 : 4;
 
 const CrossSectionReal: React.FC<{
-  geoStr: string; N: number; wireH: number; insulation: number; spacing: number;
-}> = ({ geoStr, N, wireH, insulation, spacing }) => {
+  geoStr: string; N: number; wireH: number; insulation: number; spacing: number; slotIR: number;
+}> = ({ geoStr, N, wireH, insulation, spacing, slotIR }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [mesh, setMesh] = useState<Mesh2D | null>(meshCache.get(geoStr) ?? null);
   const [state, setState] = useState<'idle' | 'loading' | 'error'>(meshCache.has(geoStr) ? 'idle' : 'loading');
@@ -78,7 +78,7 @@ const CrossSectionReal: React.FC<{
       if (v[1] < minY) minY = v[1]; if (v[1] > maxY) maxY = v[1];
     }
     if (!isFinite(minX)) return;
-    const scale = Math.min(W / (maxX - minX), H / (maxY - minY)) * 0.94;
+    const scale = Math.min(W / (maxX - minX), H / (maxY - minY)) * 0.82;  // matches SideView scale
     const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
     const TX = (x: number) => (x - cx) * scale + W / 2;
     const TY = (y: number) => H / 2 - (y - cy) * scale;   // flip Y (motor up → canvas down)
@@ -116,7 +116,7 @@ const CrossSectionReal: React.FC<{
       // bore — matches the real winding build (top_y fixed, wires added downward).
       for (let k = 0; k < N; k++) {
         const ro = rMax - insulation - k * rowPitch, ri = ro - wireH;
-        if (ri < rMin + insulation - 1e-6) break;
+        if (ri < slotIR + insulation - 1e-6) break;   // fill to the slot opening (bore), not just the mesh copper region
         const p1 = C(ri, -hT), p2 = C(ri, hT), p3 = C(ro, hT), p4 = C(ro, -hT);
         ctx.beginPath();
         ctx.moveTo(TX(p1[0]), TY(p1[1])); ctx.lineTo(TX(p2[0]), TY(p2[1]));
@@ -127,8 +127,8 @@ const CrossSectionReal: React.FC<{
   }, [mesh, N, wireH, insulation, spacing]);
 
   return (
-    <Box sx={{ position: 'relative', textAlign: 'center' }}>
-      <canvas ref={canvasRef} width={720} height={720} style={{ width: '100%', aspectRatio: '1 / 1', height: 'auto', display: 'block', opacity: state === 'loading' ? 0.4 : 1, transition: 'opacity .15s' }} />
+    <Box sx={{ position: 'relative', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <canvas ref={canvasRef} width={720} height={720} style={{ height: '100%', width: 'auto', maxWidth: '100%', aspectRatio: '1 / 1', display: 'block', opacity: state === 'loading' ? 0.4 : 1, transition: 'opacity .15s' }} />
       {state === 'loading' && <CircularProgress size={20} sx={{ color: '#3b82f6', position: 'absolute', top: '50%', left: '50%', mt: '-10px', ml: '-10px' }} />}
       {state === 'error' && <Typography sx={{ fontSize: 11, color: '#f87171', position: 'absolute', top: '46%', left: 0, right: 0 }}>geometry preview needs the backend</Typography>}
     </Box>
@@ -137,35 +137,35 @@ const CrossSectionReal: React.FC<{
 
 const SideView: React.FC<{ ref0: ReferenceMotor; knobs: Knobs }> = ({ ref0, knobs }) => {
   const g = ref0.geo;
-  const W = 360, H = 360;
+  const W = 600, H = 720;                       // same 720 frame as the cross-section canvas
   const OD = 2 * g.statorOR_mm;
-  const s2 = 270 / OD;                          // outer diameter → 270 px (radial, vertical)
+  const s2 = (0.82 * H) / OD;                    // SAME scale factor (0.82) → motor same size in both views
   const stackH = OD * s2, stackW = knobs.L_mm * s2;
-  const cx = W / 2, cy = H / 2 - 6;
+  const cx = W / 2, cy = H / 2;
   const x0 = cx - stackW / 2, y0 = cy - stackH / 2;
   // lamination hatch (the stack is many thin sheets along the length)
   const hatch: React.ReactNode[] = [];
-  const n = Math.max(3, Math.round(stackW / 6));
+  const n = Math.max(3, Math.round(stackW / 11));
   for (let i = 1; i < n; i++) {
     const x = x0 + (i / n) * stackW;
-    hatch.push(<line key={i} x1={x} y1={y0} x2={x} y2={y0 + stackH} stroke={STEEL_DK} strokeWidth={0.6} />);
+    hatch.push(<line key={i} x1={x} y1={y0} x2={x} y2={y0 + stackH} stroke={STEEL_DK} strokeWidth={0.9} />);
   }
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', aspectRatio: '1 / 1', height: 'auto', display: 'block' }}>
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ height: '100%', width: 'auto', maxWidth: '100%', display: 'block' }}>
       {/* the motor stack — solid, no air, no shaft */}
-      <rect x={x0} y={y0} width={stackW} height={stackH} fill={STEEL} stroke="#475569" strokeWidth={1} />
+      <rect x={x0} y={y0} width={stackW} height={stackH} fill={STEEL} stroke="#475569" strokeWidth={1.4} />
       {hatch}
       {/* length dimension (bottom) */}
-      <line x1={x0} y1={y0 + stackH + 13} x2={x0 + stackW} y2={y0 + stackH + 13} stroke="#94a3b8" strokeWidth={0.9} />
-      <line x1={x0} y1={y0 + stackH + 8} x2={x0} y2={y0 + stackH + 18} stroke="#94a3b8" strokeWidth={0.9} />
-      <line x1={x0 + stackW} y1={y0 + stackH + 8} x2={x0 + stackW} y2={y0 + stackH + 18} stroke="#94a3b8" strokeWidth={0.9} />
-      <text x={cx} y={y0 + stackH + 30} fill="#cbd5e1" fontSize={13} textAnchor="middle" fontFamily="monospace">{knobs.L_mm.toFixed(0)} mm</text>
+      <line x1={x0} y1={y0 + stackH + 18} x2={x0 + stackW} y2={y0 + stackH + 18} stroke="#94a3b8" strokeWidth={1.2} />
+      <line x1={x0} y1={y0 + stackH + 11} x2={x0} y2={y0 + stackH + 25} stroke="#94a3b8" strokeWidth={1.2} />
+      <line x1={x0 + stackW} y1={y0 + stackH + 11} x2={x0 + stackW} y2={y0 + stackH + 25} stroke="#94a3b8" strokeWidth={1.2} />
+      <text x={cx} y={y0 + stackH + 44} fill="#cbd5e1" fontSize={22} textAnchor="middle" fontFamily="monospace">{knobs.L_mm.toFixed(0)} mm</text>
       {/* diameter dimension (left) */}
-      <line x1={x0 - 13} y1={y0} x2={x0 - 13} y2={y0 + stackH} stroke="#94a3b8" strokeWidth={0.9} />
-      <line x1={x0 - 18} y1={y0} x2={x0 - 8} y2={y0} stroke="#94a3b8" strokeWidth={0.9} />
-      <line x1={x0 - 18} y1={y0 + stackH} x2={x0 - 8} y2={y0 + stackH} stroke="#94a3b8" strokeWidth={0.9} />
-      <text x={x0 - 20} y={cy} fill="#94a3b8" fontSize={11} textAnchor="middle" dominantBaseline="middle"
-        transform={`rotate(-90 ${x0 - 20} ${cy})`}>Ø{OD.toFixed(0)} mm</text>
+      <line x1={x0 - 20} y1={y0} x2={x0 - 20} y2={y0 + stackH} stroke="#94a3b8" strokeWidth={1.2} />
+      <line x1={x0 - 26} y1={y0} x2={x0 - 14} y2={y0} stroke="#94a3b8" strokeWidth={1.2} />
+      <line x1={x0 - 26} y1={y0 + stackH} x2={x0 - 14} y2={y0 + stackH} stroke="#94a3b8" strokeWidth={1.2} />
+      <text x={x0 - 30} y={cy} fill="#94a3b8" fontSize={17} textAnchor="middle" dominantBaseline="middle"
+        transform={`rotate(-90 ${x0 - 30} ${cy})`}>Ø{OD.toFixed(0)} mm</text>
     </svg>
   );
 };
@@ -181,17 +181,21 @@ const GeometryProjections: React.FC<{ ref0: ReferenceMotor; knobs: Knobs }> = ({
   }, [storeGeo]);
 
   return (
-    <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
-      <Box sx={{ ...PANEL, flex: '2 1 420px', minWidth: 340 }}>
+    <Box sx={{ display: 'flex', gap: 2, alignItems: 'stretch', height: 'min(72vh, 680px)' }}>
+      <Box sx={{ ...PANEL, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
         <Typography sx={LABEL}>Cross-section (XY) — real geometry</Typography>
-        <Typography sx={SUB}>{knobs.N} turns/slot · {knobs.wireH_mm.toFixed(2)} mm wire · {ref0.geo.numSlots} slots / {ref0.geo.numPoles} poles</Typography>
-        <CrossSectionReal geoStr={geoStr} N={knobs.N} wireH={knobs.wireH_mm}
-          insulation={ref0.fit.insulation_mm} spacing={ref0.fit.wireSpacingY_mm} />
+        <Typography sx={SUB}>{knobs.N} turns/slot · {knobs.wireH_mm.toFixed(1)} mm wire · {ref0.geo.numSlots} slots / {ref0.geo.numPoles} poles</Typography>
+        <Box sx={{ flex: 1, minHeight: 0, mt: 0.5 }}>
+          <CrossSectionReal geoStr={geoStr} N={knobs.N} wireH={knobs.wireH_mm}
+            insulation={ref0.fit.insulation_mm} spacing={ref0.fit.wireSpacingY_mm} slotIR={ref0.geo.statorIR_mm} />
+        </Box>
       </Box>
-      <Box sx={{ ...PANEL, flex: '1 1 240px', minWidth: 220 }}>
+      <Box sx={{ ...PANEL, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
         <Typography sx={LABEL}>Side view — stack length</Typography>
         <Typography sx={SUB}>Lamination stack · L = {knobs.L_mm.toFixed(0)} mm · Ø{(2 * ref0.geo.statorOR_mm).toFixed(0)} mm</Typography>
-        <Box sx={{ textAlign: 'center' }}><SideView ref0={ref0} knobs={knobs} /></Box>
+        <Box sx={{ flex: 1, minHeight: 0, mt: 0.5, display: 'flex', justifyContent: 'center' }}>
+          <SideView ref0={ref0} knobs={knobs} />
+        </Box>
       </Box>
     </Box>
   );

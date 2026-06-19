@@ -13,6 +13,8 @@ export interface AuthState {
   tier: string;
   /** True when the signed-in account is an admin (or local dev). Gates the admin UI. */
   isAdmin: boolean;
+  /** True when the backend enforces auth (production). When false, role restrictions are off. */
+  enforced: boolean;
   signIn: () => Promise<void>;
   logout: () => Promise<void>;
   /** Firebase ID token for authenticating backend calls (null if signed out). */
@@ -20,7 +22,7 @@ export interface AuthState {
 }
 
 const AuthCtx = createContext<AuthState>({
-  user: null, loading: false, enabled: false, tier: 'anon', isAdmin: false,
+  user: null, loading: false, enabled: false, tier: 'anon', isAdmin: false, enforced: false,
   signIn: async () => {}, logout: async () => {}, getToken: async () => null,
 });
 
@@ -33,6 +35,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // backend via /api/me rather than trusting anything client-side.
   const [tier, setTier] = useState<string>('anon');
   const [isAdmin, setIsAdmin] = useState<boolean>(false);
+  const [enforced, setEnforced] = useState<boolean>(false);
 
   // Install the fetch interceptor once, and keep it pointed at the live token.
   useEffect(() => {
@@ -49,8 +52,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const loadRole = async () => {
       try {
         const j = await fetch(`${API}/api/me`).then((r) => r.json());
-        setTier(j.tier ?? 'anon'); setIsAdmin(Boolean(j.isAdmin));
-      } catch { setTier('anon'); setIsAdmin(false); }
+        setTier(j.tier ?? 'anon'); setIsAdmin(Boolean(j.isAdmin)); setEnforced(Boolean(j.enforced));
+      } catch { setTier('anon'); setIsAdmin(false); setEnforced(false); }
     };
     if (!firebaseEnabled || !auth) { setLoading(false); void loadRole(); return; }
     return onAuthStateChanged(auth, (u) => { setUser(u); setLoading(false); void loadRole(); });
@@ -65,7 +68,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const getToken = async () => (user ? user.getIdToken() : null);
 
   return (
-    <AuthCtx.Provider value={{ user, loading, enabled: firebaseEnabled, tier, isAdmin, signIn, logout, getToken }}>
+    <AuthCtx.Provider value={{ user, loading, enabled: firebaseEnabled, tier, isAdmin, enforced, signIn, logout, getToken }}>
       {children}
     </AuthCtx.Provider>
   );

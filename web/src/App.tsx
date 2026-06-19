@@ -139,7 +139,12 @@ const GeometryBuildTimer: React.FC = () => {
 
 function App() {
   const { activeTab, setActiveTab, showGrid, showAxes, toggleGrid, toggleAxes } = useUIStore();
-  const { isAdmin } = useAuth();
+  const { isAdmin, tier, enforced } = useAuth();
+  // Engineering UI (FEM/mesh/optimization) is for paid + admin accounts. Free /
+  // anonymous users get the Motors storefront + the analytical Configurator only.
+  // Gated ONLY when the backend enforces auth — so the open beta (enforcement off)
+  // still shows everything to everyone, and no current visitor loses access.
+  const fullUI = !enforced || isAdmin || tier === 'pro' || tier === 'team';
   const [panelWidth, setPanelWidth] = React.useState(300);
   const [selectedMaterial, setSelectedMaterial] = useState<SelectedMaterial | null>(null);
   const { library: matLibrary, loading: matLoading, error: matError } = useMaterialsLibrary();
@@ -198,10 +203,11 @@ function App() {
     return () => clearTimeout(id);
   }, [activeTab]);
 
-  // Don't strand a user on the admin tab if they sign out / lose admin.
+  // Keep the active tab within what the role allows (after sign-out / role change).
   useEffect(() => {
-    if (activeTab === 'admin' && !isAdmin) setActiveTab('motors');
-  }, [activeTab, isAdmin, setActiveTab]);
+    if (activeTab === 'admin' && !isAdmin) { setActiveTab('motors'); return; }
+    if (!fullUI && activeTab !== 'motors' && activeTab !== 'compare') setActiveTab('compare');
+  }, [activeTab, isAdmin, fullUI, setActiveTab]);
 
   const showViewer = activeTab !== 'sweep' && activeTab !== 'motors'
     && activeTab !== 'compare' && activeTab !== 'admin';
@@ -294,12 +300,12 @@ function App() {
             sx={{ minHeight: 40 }}
           >
             <Tab label="Motors" value="motors" sx={{ minHeight: 40, fontSize: '0.8rem', fontWeight: 700 }} />
-            <Tab label="Geometry" value="geometry" sx={{ minHeight: 40, fontSize: '0.8rem' }} />
-            <Tab label="Materials" value="materials" sx={{ minHeight: 40, fontSize: '0.8rem' }} />
-            <Tab label="Mesh" value="mesh" sx={{ minHeight: 40, fontSize: '0.8rem' }} />
-            <Tab label="Simulation" value="simulation" sx={{ minHeight: 40, fontSize: '0.8rem' }} />
+            {fullUI && <Tab label="Geometry" value="geometry" sx={{ minHeight: 40, fontSize: '0.8rem' }} />}
+            {fullUI && <Tab label="Materials" value="materials" sx={{ minHeight: 40, fontSize: '0.8rem' }} />}
+            {fullUI && <Tab label="Mesh" value="mesh" sx={{ minHeight: 40, fontSize: '0.8rem' }} />}
+            {fullUI && <Tab label="Simulation" value="simulation" sx={{ minHeight: 40, fontSize: '0.8rem' }} />}
             <Tab label="Configure" value="compare" sx={{ minHeight: 40, fontSize: '0.8rem' }} />
-            <Tab label="Optimization" value="sweep" sx={{ minHeight: 40, fontSize: '0.8rem' }} />
+            {fullUI && <Tab label="Optimization" value="sweep" sx={{ minHeight: 40, fontSize: '0.8rem' }} />}
             {isAdmin && <Tab label="Admin" value="admin" sx={{ minHeight: 40, fontSize: '0.8rem', fontWeight: 700, color: '#fbbf24' }} />}
           </Tabs>
         </Box>

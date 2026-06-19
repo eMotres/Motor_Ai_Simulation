@@ -64,15 +64,17 @@ const EfficiencyMap: React.FC<{ p: Passport; knobs: Knobs; packMax: number }> = 
     const base = p.T0_Nm * fN * fL * fConn;
     const Tmax = scaleMotor(p, { ...knobs, I_A: iMax }).T_Nm || 1;
 
+    // axes don't start at 0 (degenerate there): rpm from 500, torque from ~10% nominal
+    const RPM_MIN = 500, T_MIN = 0.1 * base;
     const NX = 90, NY = 56, cw = pw / NX, ch = ph / NY;
     // pass 1 — efficiency grid + auto-range over reachable cells (Ansys scales the
     // legend to the field's actual min/max, so the full spectrum spans the data).
     const cells: { x: number; y: number; eta: number; reach: boolean }[] = [];
     let lo = Infinity, hi = -Infinity;
     for (let ix = 0; ix < NX; ix++) {
-      const rpm = ((ix + 0.5) / NX) * RPM_MAX;
+      const rpm = RPM_MIN + ((ix + 0.5) / NX) * (RPM_MAX - RPM_MIN);
       for (let iy = 0; iy < NY; iy++) {
-        const T = ((iy + 0.5) / NY) * Tmax;
+        const T = T_MIN + ((iy + 0.5) / NY) * (Tmax - T_MIN);
         const I = base > 0 ? (p.I0_A * T) / base : 0;
         const s = scaleMotor(p, { ...knobs, I_A: I, rpm });
         const reach = s.Vphase_peak_V * SQRT3 <= packMax && s.efficiency > 0;
@@ -89,8 +91,10 @@ const EfficiencyMap: React.FC<{ p: Passport; knobs: Knobs; packMax: number }> = 
 
     // operating point
     const opT = scaleMotor(p, knobs).T_Nm;
-    const ox = ML + Math.min(1, knobs.rpm / RPM_MAX) * pw;
-    const oy = MT + ph - Math.min(1, opT / Tmax) * ph;
+    const fx = Math.max(0, Math.min(1, (knobs.rpm - RPM_MIN) / (RPM_MAX - RPM_MIN)));
+    const fy = Math.max(0, Math.min(1, (opT - T_MIN) / (Tmax - T_MIN)));
+    const ox = ML + fx * pw;
+    const oy = MT + ph - fy * ph;
     ctx.strokeStyle = '#fff'; ctx.lineWidth = 2;
     ctx.beginPath(); ctx.arc(ox, oy, 4.5, 0, 2 * Math.PI); ctx.stroke();
 
@@ -98,9 +102,9 @@ const EfficiencyMap: React.FC<{ p: Passport; knobs: Knobs; packMax: number }> = 
     ctx.strokeStyle = '#334155'; ctx.lineWidth = 1; ctx.strokeRect(ML, MT, pw, ph);
     ctx.fillStyle = '#64748b'; ctx.font = '10px sans-serif';
     ctx.textAlign = 'center'; ctx.textBaseline = 'top';
-    for (let r = 0; r <= RPM_MAX; r += 2000) ctx.fillText(`${r / 1000}k`, ML + (r / RPM_MAX) * pw, MT + ph + 5);
+    for (const r of [RPM_MIN, 2000, 4000, 6000, 8000]) ctx.fillText(`${r / 1000}k`, ML + ((r - RPM_MIN) / (RPM_MAX - RPM_MIN)) * pw, MT + ph + 5);
     ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
-    for (let i = 0; i <= 4; i++) { const t = (i / 4) * Tmax; ctx.fillText(`${t.toFixed(0)}`, ML - 5, MT + ph - (i / 4) * ph); }
+    for (let i = 0; i <= 4; i++) { const t = T_MIN + (i / 4) * (Tmax - T_MIN); ctx.fillText(`${t.toFixed(0)}`, ML - 5, MT + ph - (i / 4) * ph); }
     ctx.textAlign = 'center'; ctx.fillText('Speed (rpm)', ML + pw / 2, MT + ph + 17);
     ctx.save(); ctx.translate(11, MT + ph / 2); ctx.rotate(-Math.PI / 2); ctx.fillText('Torque (N·m)', 0, 0); ctx.restore();
 

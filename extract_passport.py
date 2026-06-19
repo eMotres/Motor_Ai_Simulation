@@ -80,5 +80,14 @@ print(f"T0={T0:.2f} Nm   Vemf0_peak={Vemf0:.1f} V   rpm0={rpm0:.0f}")
 print(f"Pfe0={sa['P_core_W']} W   Pmag0={sa['P_solid_W']} W   mass0={sa['mass_total_kg']} kg")
 print(f"loaded summary: eff={sa.get('efficiency')}  Vph_peak={sa.get('V_phase_peak_V')} "
       f"P_mech={sa.get('P_mech_W')} W  ripple={sa.get('T_ripple_pct')}%")
+fit = {
+    "slotHeight_mm":   float(g.get("slot_height", 0.0)),
+    "insulation_mm":   float(g.get("insulation_thickness", 0.0)),
+    "wireSpacingY_mm": float(g.get("wire_spacing_y", 0.0)),
+    "slotWidth_mm":    float(g.get("slot_width", 0.0)),
+    "wireWidth_mm":    float(g.get("wire_width", 0.0)),
+}
 print("\n--- PASSPORT JSON (paste into web/src/lib/referencePassports.ts) ---")
 print(json.dumps(passport, indent=2))
+print("\n--- FIT (slot context; mirrors geometry_constraints._wire_height_max) ---")
+print(json.dumps(fit, indent=2))

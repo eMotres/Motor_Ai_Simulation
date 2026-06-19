@@ -122,16 +122,20 @@ const ConfiguratorPanel: React.FC = () => {
   const result  = useMemo(() => scaleMotor(p, knobs), [p, knobs]);
   const baseRes = useMemo(() => scaleMotor(p, baseKnobs(p)), [p]);
   const iMax    = useMemo(() => maxCurrent(p, knobs), [p, knobs]);
-  const stackFrac = (knobs.N * knobs.wireH_mm) / ref.fit.slotHeight_mm;
-  const overFit  = stackFrac > ref.fit.maxStackFrac;
   const overCurr = knobs.I_A > iMax + 1e-6;
-  // Hard limiter: the copper stack height (turns × wire thickness) must stay
-  // below the slot.  Cap each slider by the OTHER knob's current value, so the
-  // product N·wireH can never exceed the usable slot height.
-  const stackLimit_mm = ref.fit.slotHeight_mm * ref.fit.maxStackFrac;
-  const turnsMax = Math.max(3, Math.min(30, Math.floor(stackLimit_mm / knobs.wireH_mm)));
-  const wireMax  = Math.max(0.3, Math.min(2.5, Math.floor(stackLimit_mm / knobs.N / 0.05) * 0.05));
-  const atLimit  = knobs.N >= turnsMax || knobs.wireH_mm >= wireMax - 1e-9;
+  // Hard slot-fit limiter — mirrors the backend constraint
+  // (geometry_constraints._wire_height_max): N rows of (wire_height + radial
+  // spacing) must fit between the two insulation layers.  Each slider's max is
+  // derived from the OTHER knob's current value, so the winding can never
+  // overflow the slot (which would push coils across the air gap).
+  const availStack_mm  = ref.fit.slotHeight_mm - 2 * ref.fit.insulation_mm;
+  const rowPitch_mm    = knobs.wireH_mm + ref.fit.wireSpacingY_mm;   // one wire row + its radial gap
+  const stackHeight_mm = knobs.N * rowPitch_mm;
+  const stackFrac = stackHeight_mm / availStack_mm;
+  const overFit   = stackHeight_mm > availStack_mm + 1e-9;
+  const turnsMax  = Math.max(3, Math.min(30, Math.floor(availStack_mm / rowPitch_mm)));
+  const wireMax   = Math.max(0.3, Math.min(2.5, Math.floor((availStack_mm / knobs.N - ref.fit.wireSpacingY_mm) / 0.05) * 0.05));
+  const atLimit   = knobs.N >= turnsMax || knobs.wireH_mm >= wireMax - 1e-9;
 
   const set = (k: keyof Knobs) => (v: number) => setKnobs((s) => ({ ...s, [k]: v }));
   const reset = () => setKnobs(baseKnobs(p));
@@ -237,9 +241,9 @@ const ConfiguratorPanel: React.FC = () => {
           {/* slot-fit gauge */}
           <Box sx={{ ...PANEL, p: 1.25 }}>
             <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1, mb: 0.5 }}>
-              <Typography sx={{ ...LABEL, flex: 1 }}>Slot fill (copper stack)</Typography>
+              <Typography sx={{ ...LABEL, flex: 1 }}>Slot fill (winding stack)</Typography>
               <Typography sx={{ fontSize: 12, color: '#64748b', fontFamily: 'monospace' }}>
-                {fmt(knobs.N * knobs.wireH_mm, 1)} / {fmt(stackLimit_mm, 1)} mm
+                {fmt(stackHeight_mm, 1)} / {fmt(availStack_mm, 1)} mm
               </Typography>
               <Typography sx={{ fontSize: 13, fontWeight: 700, color: fitColor, fontFamily: 'monospace' }}>{fmt(stackFrac * 100, 0)}%</Typography>
             </Box>
@@ -247,8 +251,8 @@ const ConfiguratorPanel: React.FC = () => {
               sx={{ height: 8, borderRadius: 1, bgcolor: '#0f172a', '& .MuiLinearProgress-bar': { bgcolor: fitColor } }} />
             <Typography sx={{ fontSize: 11, color: atLimit ? '#fbbf24' : '#64748b', mt: 0.5 }}>
               {atLimit
-                ? `At slot limit — turns × wire are capped so the coil stays below the ${fmt(ref.fit.slotHeight_mm, 1)} mm slot.`
-                : `Turns × wire capped to keep the coil below the slot (${fmt(ref.fit.slotHeight_mm, 1)} mm × ${fmt(ref.fit.maxStackFrac * 100, 0)}% usable = ${fmt(stackLimit_mm, 1)} mm).`}
+                ? `At slot limit — turns × wire capped so the winding fits the slot.`
+                : `${knobs.N} rows × (${fmt(knobs.wireH_mm, 2)} + ${fmt(ref.fit.wireSpacingY_mm, 2)} gap) mm; usable = ${fmt(ref.fit.slotHeight_mm, 1)} − 2×${fmt(ref.fit.insulation_mm, 2)} insulation = ${fmt(availStack_mm, 1)} mm.`}
             </Typography>
           </Box>
 

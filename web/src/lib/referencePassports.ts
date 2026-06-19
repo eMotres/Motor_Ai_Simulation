@@ -18,14 +18,17 @@ export interface ReferenceMotor {
   poles: number;
   slots: number;
   passport: Passport;
-  // slot/wire context for the fit gauge (wire_width is FIXED — never a knob).
-  // Conductors stack in a single column (wire_width ~ slot_width), so the
-  // binding constraint is the stack HEIGHT: N * wire_height <= slotHeight*max.
+  // slot/wire context — mirrors the backend slot-fit constraint
+  // (geometry_constraints._wire_height_max, which mirrors the radial wire stack
+  // in cadquery_geometry): N rows of (wire_height + wireSpacingY) must fit between
+  // the two insulation layers.  wire_width is FIXED (not a knob), so only the
+  // radial (height) stack varies with the tuned knobs.
   fit: {
-    slotHeight_mm: number;
+    slotHeight_mm: number;     // radial slot height
+    insulation_mm: number;     // slot-liner thickness per radial side (counted ×2)
+    wireSpacingY_mm: number;   // radial gap between stacked wire rows
     slotWidth_mm: number;
-    wireWidth_mm: number;    // fixed conductor width
-    maxStackFrac: number;    // N*wireH / slotHeight must stay below this to fit
+    wireWidth_mm: number;      // fixed conductor width
   };
 }
 
@@ -42,7 +45,7 @@ export const REFERENCE_PASSPORTS: ReferenceMotor[] = [
       T0_Nm: 80.235, Vemf0_peak_V: 174.76, Vload0_peak_V: 210.7, R0_ohm: 0.02457,
       endWindFrac: 0.33, Pfe0_W: 164.4, Pmag0_W: 5.7, mass0_kg: 10.141,
     },
-    fit: { slotHeight_mm: 19.8, slotWidth_mm: 7.6, wireWidth_mm: 7.0, maxStackFrac: 0.92 },
+    fit: { slotHeight_mm: 19.8, insulation_mm: 0.2, wireSpacingY_mm: 0.13, slotWidth_mm: 7.6, wireWidth_mm: 7.0 },
   },
 ];
 

@@ -28,7 +28,7 @@ const COLOR: Record<string, string> = { gemini: '#60a5fa', anthropic: '#a78bfa',
 // Curated shortlist of CURRENT models (no retired ones — e.g. Gemini 1.5 is gone).
 // The `*-latest` aliases always track Google's newest stable model.
 const CURATED: Record<Provider, string[]> = {
-  gemini: ['gemini-flash-latest', 'gemini-pro-latest', 'gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash'],
+  gemini: ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash', 'gemini-flash-latest', 'gemini-pro-latest'],
   anthropic: ['claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5'],
 };
 

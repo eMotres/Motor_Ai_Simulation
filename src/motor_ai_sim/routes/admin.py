@@ -17,7 +17,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 
-from motor_ai_sim.auth import require_admin
+from motor_ai_sim.auth import require_admin, require_admin_or_token
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -276,8 +276,9 @@ def _mock_tickets() -> list[dict]:
 
 
 @router.get("/tickets")
-def list_tickets(_admin: dict = Depends(require_admin)):
-    """All support tickets across users (bugs / feature requests / questions)."""
+def list_tickets(_admin: dict = Depends(require_admin_or_token)):
+    """All support tickets across users (bugs / feature requests / questions).
+    Read-only — also reachable with the ADMIN_API_TOKEN bearer (nightly agent)."""
     admin = _ensure_admin()
     if admin is None:
         t = _mock_tickets()

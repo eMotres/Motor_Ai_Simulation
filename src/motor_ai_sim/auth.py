@@ -17,6 +17,7 @@ preview stay free for everyone.
 """
 from __future__ import annotations
 
+import hmac
 import json
 import os
 import threading
@@ -53,6 +54,11 @@ _ADMIN_EMAILS = {
     for e in os.environ.get("ADMIN_EMAILS", "").split(",")
     if e.strip()
 }
+
+# Optional static token for headless read-only automation (the nightly tickets
+# agent). When set, a `Bearer <ADMIN_API_TOKEN>` header authenticates admin READ
+# endpoints without a Firebase session. NEVER honour it on mutating endpoints.
+ADMIN_API_TOKEN = os.environ.get("ADMIN_API_TOKEN", "").strip()
 
 _TIER_RANK = {"anon": -1, "free": 0, "pro": 1, "team": 2, "admin": 3}
 
@@ -217,3 +223,22 @@ def require_admin(authorization: Optional[str] = Header(default=None)) -> dict:
             raise HTTPException(status_code=401, detail="Sign in required.")
         raise HTTPException(status_code=403, detail="Admin access required.")
     return user or {"uid": "local-dev", "email": None, "tier": "admin"}
+
+
+def _has_service_token(authorization: Optional[str]) -> bool:
+    """True if the request carries the configured ADMIN_API_TOKEN as a bearer."""
+    if not ADMIN_API_TOKEN or not authorization:
+        return False
+    parts = authorization.split(" ", 1)
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        return False
+    return hmac.compare_digest(parts[1].strip(), ADMIN_API_TOKEN)
+
+
+def require_admin_or_token(authorization: Optional[str] = Header(default=None)) -> dict:
+    """Like require_admin, but ALSO accepts the static ADMIN_API_TOKEN bearer for
+    headless read-only automation (the nightly tickets agent). Apply ONLY to GET
+    read endpoints — mutating endpoints must keep require_admin."""
+    if _has_service_token(authorization):
+        return {"uid": "service-agent", "email": None, "tier": "admin", "service": True}
+    return require_admin(authorization)

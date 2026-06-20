@@ -91,7 +91,8 @@ const SupportSettings: React.FC<{ cfg: SupportCfg; onSaved: () => void }> = ({ c
         {/* Step 2 — model */}
         <Typography sx={STEP}>2 · Model</Typography>
         <Select value={opts.includes(model) ? model : ''} onChange={(e) => setModel(e.target.value)} size="small" fullWidth
-          displayEmpty sx={{ mb: 2, fontSize: 13, bgcolor: '#060d17' }}>
+          displayEmpty sx={{ mb: 2, fontSize: 13, bgcolor: '#060d17' }}
+          MenuProps={{ PaperProps: { sx: { maxHeight: 340, bgcolor: '#0b1424' } } }}>
           {opts.length === 0 && <MenuItem value="" disabled sx={{ fontSize: 13 }}>loading…</MenuItem>}
           {opts.map((m) => <MenuItem key={m} value={m} sx={{ fontSize: 13 }}>{m}</MenuItem>)}
         </Select>

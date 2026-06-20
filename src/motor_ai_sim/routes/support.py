@@ -11,15 +11,43 @@ Bugs / feature requests are stored as tickets in Firestore by the frontend
 """
 from __future__ import annotations
 
+import json
 import os
 from fastapi import APIRouter, Body
 
 router = APIRouter(prefix="/api/support", tags=["support"])
 
-# Default to the most capable model; set ANTHROPIC_SUPPORT_MODEL=claude-haiku-4-5
-# for ~5x lower cost on this high-volume, simple-Q&A surface.
+# Anthropic (Claude) model. Set ANTHROPIC_SUPPORT_MODEL=claude-haiku-4-5 for
+# ~5x lower cost on this high-volume, simple-Q&A surface.
 SUPPORT_MODEL = os.environ.get("ANTHROPIC_SUPPORT_MODEL", "claude-opus-4-8")
 _MAX_TURNS = 20
+
+# Provider: "anthropic" (Claude) or "gemini" (Google). If SUPPORT_PROVIDER isn't
+# set, auto-detect from whichever key is present — Gemini is preferred because
+# many users already have a free-tier Google key.
+SUPPORT_PROVIDER = os.environ.get("SUPPORT_PROVIDER", "").strip().lower()
+GEMINI_API_KEY = (os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY") or "").strip()
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash").strip()
+
+
+def _active_provider() -> str:
+    if SUPPORT_PROVIDER in ("anthropic", "gemini"):
+        return SUPPORT_PROVIDER
+    if GEMINI_API_KEY:
+        return "gemini"
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return "anthropic"
+    return "none"
+
+
+def provider_status() -> dict:
+    """Non-secret status for the admin UI — never returns the key itself."""
+    p = _active_provider()
+    if p == "gemini":
+        return {"provider": "gemini", "model": GEMINI_MODEL, "configured": bool(GEMINI_API_KEY)}
+    if p == "anthropic":
+        return {"provider": "anthropic", "model": SUPPORT_MODEL, "configured": bool(os.environ.get("ANTHROPIC_API_KEY"))}
+    return {"provider": "none", "model": None, "configured": False}
 
 SYSTEM_PROMPT = """You are the friendly in-app assistant for **Motor AI Simulator**, a web app for designing and analysing electric motors (interior-PM / spoke-PM synchronous machines).
 
@@ -88,30 +116,68 @@ def _mock_reply(messages: list[dict]) -> str:
     )
 
 
+def _gemini_reply(messages: list[dict]) -> str:
+    """Call the Google Gemini REST API (no SDK dependency). Raises on failure."""
+    import urllib.request
+
+    url = (
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+    )
+    contents = [
+        {"role": "user" if m["role"] == "user" else "model", "parts": [{"text": m["content"]}]}
+        for m in messages
+    ]
+    body = {
+        "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+        "contents": contents,
+        "generationConfig": {"maxOutputTokens": 1024},
+    }
+    req = urllib.request.Request(
+        url, data=json.dumps(body).encode("utf-8"),
+        headers={"Content-Type": "application/json"}, method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    cands = data.get("candidates") or []
+    parts = (cands[0].get("content", {}).get("parts") if cands else None) or []
+    return "".join(p.get("text", "") for p in parts).strip()
+
+
 @router.post("/chat")
 def chat(body: dict = Body(default={})):
     messages = _sanitize(body.get("messages"))
     if not messages:
         return {"reply": "Hi! How can I help you with the motor simulator?", "source": "mock"}
 
-    client = _get_client()
-    if client is None:
+    provider = _active_provider()
+    if provider == "none":
         return {"reply": _mock_reply(messages), "source": "mock"}
 
     try:
-        # Minimal, model-agnostic params so the same call works on Opus or Haiku.
+        if provider == "gemini":
+            text = _gemini_reply(messages)
+            return {"reply": text or "(no reply)", "source": "gemini", "model": GEMINI_MODEL}
+        # anthropic
+        client = _get_client()
+        if client is None:
+            return {"reply": _mock_reply(messages), "source": "mock"}
         resp = client.messages.create(
-            model=SUPPORT_MODEL,
-            max_tokens=1024,
-            system=SYSTEM_PROMPT,
-            messages=messages,
+            model=SUPPORT_MODEL, max_tokens=1024, system=SYSTEM_PROMPT, messages=messages,
         )
         text = next((b.text for b in resp.content if b.type == "text"), "")
         return {"reply": text or "(no reply)", "source": "claude", "model": SUPPORT_MODEL}
     except Exception as e:
+        msg = str(e)
+        rate_limited = "429" in msg or "quota" in msg.lower() or "RESOURCE_EXHAUSTED" in msg
         return {
-            "reply": "Sorry — I couldn't answer just now. Please try again, or use the "
-                     "**Report** tab to reach the team.",
+            "reply": (
+                "The assistant is busy right now (usage limit reached). Please try "
+                "again in a minute — or use the **Report** tab to reach the team."
+                if rate_limited else
+                "Sorry — I couldn't answer just now. Please try again, or use the "
+                "**Report** tab to reach the team."
+            ),
             "source": "error",
-            "detail": str(e)[:200],
+            "detail": msg[:200],
         }

@@ -46,6 +46,8 @@ interface AdminTicket {
 const TICKET_STATUSES = ['open', 'in_progress', 'resolved', 'closed'] as const;
 const T_STATUS_COLOR: Record<string, string> = { open: '#60a5fa', in_progress: '#fbbf24', resolved: '#4ade80', closed: '#64748b' };
 const T_TYPE_COLOR: Record<string, string> = { bug: '#f87171', feature: '#a78bfa', question: '#64748b' };
+interface SupportCfg { provider: string; model: string | null; configured: boolean; }
+const PROVIDER_COLOR: Record<string, string> = { gemini: '#60a5fa', anthropic: '#a78bfa', none: '#64748b' };
 
 const PANEL = { bgcolor: '#0b1424', border: '1px solid #1e293b', borderRadius: 1.5, p: 2 } as const;
 const CARD = { bgcolor: '#060d17', border: '1px solid #1e293b', borderRadius: 1, px: 2, py: 1.25, flex: 1, minWidth: 130 } as const;
@@ -80,16 +82,18 @@ const AdminPanel: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [tickets, setTickets] = useState<AdminTicket[]>([]);
+  const [supportCfg, setSupportCfg] = useState<SupportCfg | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      const [u, s, tk] = await Promise.all([
+      const [u, s, tk, sc] = await Promise.all([
         fetch(`${API}/api/admin/users`).then((r) => { if (!r.ok) throw new Error(`users HTTP ${r.status}`); return r.json(); }),
         fetch(`${API}/api/admin/stats`).then((r) => { if (!r.ok) throw new Error(`stats HTTP ${r.status}`); return r.json(); }),
         fetch(`${API}/api/admin/tickets`).then((r) => (r.ok ? r.json() : { tickets: [] })).catch(() => ({ tickets: [] })),
+        fetch(`${API}/api/admin/support`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
       ]);
-      setUsers(u.users || []); setSource(u.source || ''); setStats(s); setTickets(tk.tickets || []);
+      setUsers(u.users || []); setSource(u.source || ''); setStats(s); setTickets(tk.tickets || []); setSupportCfg(sc);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'failed to load');
     } finally {
@@ -176,6 +180,23 @@ const AdminPanel: React.FC = () => {
             <StatCard label="Paid plans" value={paid} sub="pro + team" color="#3b82f6" />
             <StatCard label="Saved designs" value={stats.designs} sub="across all users" color="#a78bfa" />
           </Box>
+
+          {/* AI support assistant status (no secrets — provider/model/key-set only) */}
+          {supportCfg && (
+            <Paper sx={{ ...PANEL, py: 1, mb: 2, display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
+              <Typography sx={LABEL}>AI support assistant</Typography>
+              <Chip label={supportCfg.provider} size="small"
+                sx={{ height: 20, fontSize: 10, fontWeight: 700, bgcolor: '#0e1a2f', color: PROVIDER_COLOR[supportCfg.provider] ?? '#64748b' }} />
+              {supportCfg.model && <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>{supportCfg.model}</Typography>}
+              <Box sx={{ flex: 1 }} />
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
+                <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: supportCfg.configured ? '#4ade80' : '#f87171' }} />
+                <Typography sx={{ fontSize: 11.5, color: supportCfg.configured ? '#4ade80' : '#f87171' }}>
+                  {supportCfg.configured ? 'key configured' : 'no key — demo mode'}
+                </Typography>
+              </Box>
+            </Paper>
+          )}
 
           {/* tier breakdown + signups */}
           <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', mb: 2 }}>

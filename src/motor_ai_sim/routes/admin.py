@@ -310,3 +310,11 @@ def set_ticket_status(body: dict = Body(default={}), _admin: dict = Depends(requ
     db = firestore.client()
     db.collection("users").document(uid).collection("tickets").document(tid).update({"status": status})
     return {"ok": True, "source": "firebase", "id": tid, "status": status}
+
+
+@router.get("/support")
+def support_config(_admin: dict = Depends(require_admin)):
+    """Non-secret status of the AI support assistant: provider, model, key set?
+    Never returns the API key itself."""
+    from motor_ai_sim.routes import support as support_mod
+    return support_mod.provider_status()

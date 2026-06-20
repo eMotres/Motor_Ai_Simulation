@@ -25,9 +25,9 @@ Response: `{ source, count, tickets: [{ id, uid, type, title, description, statu
 
 Work only the tickets with `status == "open"`.
 
-**Early exits (do NOT open a PR):**
-- The endpoint is unreachable / not deployed yet, or `source == "mock"` → write one line "backend not live / no real data yet — nothing to do" and STOP.
-- Zero `open` tickets → write "no open tickets" and STOP.
+**Early exits (do NOT open a PR — but still write the local report, Step 5):**
+- The endpoint is unreachable / not deployed yet, or `source == "mock"` → report "backend not live / no real data yet — nothing to do" and STOP.
+- Zero `open` tickets → report "no open tickets tonight" and STOP.
 
 ## Step 2 — Triage + fix, per ticket
 
@@ -66,6 +66,15 @@ The PR body IS the report. Lead with a table:
 | <id>   | bug  | …     | ⚠️ attempted, build failed — needs hands-on |
 
 Then, per ticket: what you found, what you changed (or why not), and any questions. End with a short "Recommended next" list (which fixes are safe to merge as-is, which need Vadim's eyes).
+
+## Step 5 — ALWAYS leave a local report (so Vadim can read it without GitHub)
+
+Every run — including early exits and no-op nights — write a plain-markdown report to the **local working tree** so it can be opened directly in an editor:
+
+- `nightly-reports/<YYYY-MM-DD>.md` — the dated report.
+- `nightly-reports/latest.md` — overwrite with the same content each run (always the most recent).
+
+This folder is gitignored, so writing it does **not** affect git state or the branch — write it regardless of which branch is checked out, and write it even when you early-exit (so Vadim always sees a fresh file confirming the run happened). The report content is the same as the PR body: the ticket table + per-ticket detail + recommended-next (or just the one-line early-exit reason). If a PR was opened, include its URL at the top of the file.
 
 ## Tone / safety recap
 

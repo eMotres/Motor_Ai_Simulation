@@ -80,6 +80,10 @@ src/cadquery_cache/
 .scratch/
 logfile_uv*.txt
 
+# Nightly tickets agent — plain-text reports written to the local machine
+# (so they're readable without GitHub). Not source; never committed.
+nightly-reports/
+
 # Saved optimization scan results (runtime, not source)
 optimization_saves/
 

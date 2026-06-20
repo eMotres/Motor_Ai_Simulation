@@ -327,3 +327,10 @@ def set_support_config(body: dict = Body(default={}), admin_user: dict = Depends
     from motor_ai_sim.routes import support as support_mod
     who = admin_user.get("email") or admin_user.get("uid") or "admin"
     return support_mod.set_overrides(body or {}, who=who)
+
+
+@router.get("/support/models")
+def support_models(_admin: dict = Depends(require_admin)):
+    """Available models per provider (live from the provider API, static fallback)."""
+    from motor_ai_sim.routes import support as support_mod
+    return support_mod.list_models()

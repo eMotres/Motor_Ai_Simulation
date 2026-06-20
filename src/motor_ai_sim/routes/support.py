@@ -174,6 +174,65 @@ def set_overrides(data: dict, who: str = "admin") -> dict:
     return {"ok": True}
 
 
+# ── Model discovery (live from each provider, with a static fallback) ─────────
+_STATIC_MODELS = {
+    "gemini": [
+        "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash",
+        "gemini-2.0-flash-lite", "gemini-1.5-pro", "gemini-1.5-flash",
+    ],
+    "anthropic": [
+        "claude-opus-4-8", "claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5",
+    ],
+}
+
+
+# Drop non-text-chat models (image / audio / music / robotics / etc.) from the
+# picker — they can't power a text support chat even though they list generateContent.
+_GEMINI_DENY = (
+    "image", "tts", "audio", "music", "lyria", "robotics", "embedding",
+    "computer-use", "nano-banana", "deep-research", "antigravity", "veo", "imagen",
+)
+
+
+def _gemini_models(key: str) -> list[str]:
+    import urllib.request
+    url = f"https://generativelanguage.googleapis.com/v1beta/models?key={key}"
+    with urllib.request.urlopen(url, timeout=15) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    out = []
+    for m in data.get("models", []):
+        if "generateContent" in (m.get("supportedGenerationMethods") or []):
+            name = (m.get("name") or "").split("/")[-1]
+            if name and not any(d in name for d in _GEMINI_DENY):
+                out.append(name)
+    return sorted(set(out))
+
+
+def _anthropic_models(key: str) -> list[str]:
+    import anthropic
+    c = anthropic.Anthropic(api_key=key)
+    return [m.id for m in c.models.list()]
+
+
+def list_models() -> dict:
+    """Available models per provider — live from the provider API when a key is
+    present, else a curated static list. Never raises."""
+    eff = _effective()
+    res: dict = {}
+    for name, fetch in (("gemini", _gemini_models), ("anthropic", _anthropic_models)):
+        models, source = _STATIC_MODELS[name], "static"
+        key = eff[name]["key"]
+        if key:
+            try:
+                live = fetch(key)
+                if live:
+                    models, source = live, "live"
+            except Exception:
+                pass
+        res[name] = {"models": models, "source": source}
+    return res
+
+
 # ── Provider clients ─────────────────────────────────────────────────────────
 _ant_clients: dict = {}
 

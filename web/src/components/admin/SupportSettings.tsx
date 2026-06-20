@@ -12,7 +12,6 @@
 import React, { useEffect, useState } from 'react';
 import {
   Box, Paper, Typography, Chip, Select, MenuItem, TextField, Button, CircularProgress,
-  ToggleButtonGroup, ToggleButton,
 } from '@mui/material';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
@@ -83,10 +82,11 @@ const SupportSettings: React.FC<{ cfg: SupportCfg; onSaved: () => void }> = ({ c
       <Box sx={{ maxWidth: 460 }}>
         {/* Step 1 — company */}
         <Typography sx={STEP}>1 · Company</Typography>
-        <ToggleButtonGroup exclusive value={provider} onChange={(_, v) => v && choose(v)} fullWidth size="small" sx={{ mb: 2 }}>
-          <ToggleButton value="gemini" sx={{ textTransform: 'none', fontSize: 13 }}>Google Gemini</ToggleButton>
-          <ToggleButton value="anthropic" sx={{ textTransform: 'none', fontSize: 13 }}>Anthropic Claude</ToggleButton>
-        </ToggleButtonGroup>
+        <Select value={provider} onChange={(e) => choose(e.target.value as Provider)} size="small" fullWidth
+          sx={{ mb: 2, fontSize: 13, bgcolor: '#060d17' }}>
+          <MenuItem value="gemini" sx={{ fontSize: 13 }}>Google Gemini</MenuItem>
+          <MenuItem value="anthropic" sx={{ fontSize: 13 }}>Anthropic Claude</MenuItem>
+        </Select>
 
         {/* Step 2 — model */}
         <Typography sx={STEP}>2 · Model</Typography>

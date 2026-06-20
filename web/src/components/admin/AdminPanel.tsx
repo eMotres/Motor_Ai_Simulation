@@ -21,6 +21,7 @@ import {
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid,
   Tooltip as RcTooltip,
 } from 'recharts';
+import SupportSettings, { type SupportCfg } from './SupportSettings';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 
@@ -46,8 +47,6 @@ interface AdminTicket {
 const TICKET_STATUSES = ['open', 'in_progress', 'resolved', 'closed'] as const;
 const T_STATUS_COLOR: Record<string, string> = { open: '#60a5fa', in_progress: '#fbbf24', resolved: '#4ade80', closed: '#64748b' };
 const T_TYPE_COLOR: Record<string, string> = { bug: '#f87171', feature: '#a78bfa', question: '#64748b' };
-interface SupportCfg { provider: string; model: string | null; configured: boolean; }
-const PROVIDER_COLOR: Record<string, string> = { gemini: '#60a5fa', anthropic: '#a78bfa', none: '#64748b' };
 
 const PANEL = { bgcolor: '#0b1424', border: '1px solid #1e293b', borderRadius: 1.5, p: 2 } as const;
 const CARD = { bgcolor: '#060d17', border: '1px solid #1e293b', borderRadius: 1, px: 2, py: 1.25, flex: 1, minWidth: 130 } as const;
@@ -181,22 +180,6 @@ const AdminPanel: React.FC = () => {
             <StatCard label="Saved designs" value={stats.designs} sub="across all users" color="#a78bfa" />
           </Box>
 
-          {/* AI support assistant status (no secrets — provider/model/key-set only) */}
-          {supportCfg && (
-            <Paper sx={{ ...PANEL, py: 1, mb: 2, display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
-              <Typography sx={LABEL}>AI support assistant</Typography>
-              <Chip label={supportCfg.provider} size="small"
-                sx={{ height: 20, fontSize: 10, fontWeight: 700, bgcolor: '#0e1a2f', color: PROVIDER_COLOR[supportCfg.provider] ?? '#64748b' }} />
-              {supportCfg.model && <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>{supportCfg.model}</Typography>}
-              <Box sx={{ flex: 1 }} />
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
-                <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: supportCfg.configured ? '#4ade80' : '#f87171' }} />
-                <Typography sx={{ fontSize: 11.5, color: supportCfg.configured ? '#4ade80' : '#f87171' }}>
-                  {supportCfg.configured ? 'key configured' : 'no key — demo mode'}
-                </Typography>
-              </Box>
-            </Paper>
-          )}
 
           {/* tier breakdown + signups */}
           <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', mb: 2 }}>
@@ -373,6 +356,8 @@ const AdminPanel: React.FC = () => {
               </TableBody>
             </Table>
           </Paper>
+
+          {supportCfg && <SupportSettings cfg={supportCfg} onSaved={() => void load()} />}
         </>
       )}
     </Box>

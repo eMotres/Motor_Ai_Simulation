@@ -14,6 +14,13 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // Server-only config (AI provider keys in /config/ai, etc.) — written by the
+    // backend via the Admin SDK. NEVER client-accessible. The deny-all default
+    // below already covers this; kept explicit so the intent is obvious.
+    match /config/{document=**} {
+      allow read, write: if false;
+    }
+
     // Deny everything else by default.
     match /{document=**} {
       allow read, write: if false;

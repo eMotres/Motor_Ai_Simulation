@@ -314,7 +314,16 @@ def set_ticket_status(body: dict = Body(default={}), _admin: dict = Depends(requ
 
 @router.get("/support")
 def support_config(_admin: dict = Depends(require_admin)):
-    """Non-secret status of the AI support assistant: provider, model, key set?
-    Never returns the API key itself."""
+    """Non-secret status of the AI support assistant: provider, models, key set?
+    Returns only masked key hints — never the API key itself."""
     from motor_ai_sim.routes import support as support_mod
     return support_mod.provider_status()
+
+
+@router.post("/support")
+def set_support_config(body: dict = Body(default={}), admin_user: dict = Depends(require_admin)):
+    """Save AI support settings (provider, models, keys). Keys are write-only and
+    stored server-side (Firestore config/ai) — never returned to the browser."""
+    from motor_ai_sim.routes import support as support_mod
+    who = admin_user.get("email") or admin_user.get("uid") or "admin"
+    return support_mod.set_overrides(body or {}, who=who)

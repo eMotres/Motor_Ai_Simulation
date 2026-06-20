@@ -106,7 +106,7 @@ const SupportSettings: React.FC<{ cfg: SupportCfg; onSaved: () => void }> = ({ c
           inputProps={{ style: { fontSize: 13 } }} />
 
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mt: 2 }}>
-          <Button variant="contained" onClick={() => void save()} disabled={saving || envOnly || !model}
+          <Button variant="contained" onClick={() => void save()} disabled={saving || !model}
             sx={{ textTransform: 'none' }}>
             {saving ? <CircularProgress size={18} /> : 'Save settings'}
           </Button>

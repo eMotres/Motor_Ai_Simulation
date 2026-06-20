@@ -36,6 +36,7 @@ import MotorsCatalog from './components/catalog/MotorsCatalog';
 import AuthButton from './components/auth/AuthButton';
 import { useAuth } from './contexts/AuthContext';
 import AdminPanel from './components/admin/AdminPanel';
+import SupportWidget from './components/support/SupportWidget';
 import MaterialControls from './components/parameters/MaterialControls';
 import SweepConfigPanel from './components/sweep/SweepConfigPanel';
 import MaterialsLibraryTree from './components/materials/MaterialsLibraryTree';
@@ -420,6 +421,8 @@ function App() {
           </Box>
         </Box>
       </Box>
+      {/* Floating help/feedback — available to every user, on every tab */}
+      <SupportWidget />
     </ThemeProvider>
   );
 }

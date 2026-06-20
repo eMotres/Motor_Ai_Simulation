@@ -39,6 +39,13 @@ interface Stats {
   byTier: Record<string, number>; active7: number; active30: number;
   signups: { date: string; count: number; total: number }[];
 }
+interface AdminTicket {
+  id: string; uid: string | null; type: string; title: string; description: string;
+  status: string; email: string | null; createdAt: number | null;
+}
+const TICKET_STATUSES = ['open', 'in_progress', 'resolved', 'closed'] as const;
+const T_STATUS_COLOR: Record<string, string> = { open: '#60a5fa', in_progress: '#fbbf24', resolved: '#4ade80', closed: '#64748b' };
+const T_TYPE_COLOR: Record<string, string> = { bug: '#f87171', feature: '#a78bfa', question: '#64748b' };
 
 const PANEL = { bgcolor: '#0b1424', border: '1px solid #1e293b', borderRadius: 1.5, p: 2 } as const;
 const CARD = { bgcolor: '#060d17', border: '1px solid #1e293b', borderRadius: 1, px: 2, py: 1.25, flex: 1, minWidth: 130 } as const;
@@ -72,15 +79,17 @@ const AdminPanel: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [tickets, setTickets] = useState<AdminTicket[]>([]);
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      const [u, s] = await Promise.all([
+      const [u, s, tk] = await Promise.all([
         fetch(`${API}/api/admin/users`).then((r) => { if (!r.ok) throw new Error(`users HTTP ${r.status}`); return r.json(); }),
         fetch(`${API}/api/admin/stats`).then((r) => { if (!r.ok) throw new Error(`stats HTTP ${r.status}`); return r.json(); }),
+        fetch(`${API}/api/admin/tickets`).then((r) => (r.ok ? r.json() : { tickets: [] })).catch(() => ({ tickets: [] })),
       ]);
-      setUsers(u.users || []); setSource(u.source || ''); setStats(s);
+      setUsers(u.users || []); setSource(u.source || ''); setStats(s); setTickets(tk.tickets || []);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'failed to load');
     } finally {
@@ -105,6 +114,16 @@ const AdminPanel: React.FC = () => {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ disabled }),
       });
       setUsers((us) => us.map((u) => (u.uid === uid ? { ...u, disabled } : u)));
+    } catch { /* keep prior state */ } finally { setBusy(null); }
+  };
+  const changeTicketStatus = async (t: AdminTicket, status: string) => {
+    setBusy(t.id);
+    try {
+      await fetch(`${API}/api/admin/tickets/status`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ uid: t.uid, id: t.id, status }),
+      });
+      setTickets((ts) => ts.map((x) => (x.id === t.id ? { ...x, status } : x)));
     } catch { /* keep prior state */ } finally { setBusy(null); }
   };
 
@@ -266,6 +285,68 @@ const AdminPanel: React.FC = () => {
                     <TableCell colSpan={6} sx={{ color: '#475569', textAlign: 'center', py: 3 }}>
                       No users yet.
                     </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </Paper>
+
+          {/* support tickets */}
+          <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1, mt: 3, mb: 1 }}>
+            <Typography sx={{ fontSize: 15, fontWeight: 800, color: '#e2e8f0' }}>Support tickets</Typography>
+            <Typography sx={{ fontSize: 11, color: '#64748b' }}>
+              {tickets.length} · {tickets.filter((t) => t.status === 'open').length} open
+            </Typography>
+          </Box>
+          <Paper sx={{ ...PANEL, p: 0, overflow: 'hidden' }}>
+            <Table size="small" sx={{
+              '& td, & th': { borderColor: '#1e293b', fontSize: 12.5 },
+              '& th': { color: '#64748b', fontWeight: 700, textTransform: 'uppercase', fontSize: 10, letterSpacing: '0.04em' },
+            }}>
+              <TableHead>
+                <TableRow>
+                  <TableCell>Type</TableCell>
+                  <TableCell>Title</TableCell>
+                  <TableCell>User</TableCell>
+                  <TableCell>Created</TableCell>
+                  <TableCell>Status</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {tickets.map((t) => (
+                  <TableRow key={t.id} hover>
+                    <TableCell>
+                      <Chip label={t.type} size="small" sx={{ height: 18, fontSize: 9.5, bgcolor: '#0e1a2f', color: T_TYPE_COLOR[t.type] ?? '#64748b' }} />
+                    </TableCell>
+                    <TableCell>
+                      <Typography sx={{ fontSize: 13, color: '#e2e8f0', fontWeight: 600 }}>{t.title}</Typography>
+                      {t.description && (
+                        <Typography sx={{ fontSize: 10.5, color: '#475569', maxWidth: 380, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {t.description}
+                        </Typography>
+                      )}
+                    </TableCell>
+                    <TableCell sx={{ color: '#94a3b8' }}>{t.email ?? t.uid}</TableCell>
+                    <TableCell sx={{ color: '#94a3b8' }}>{fmtDate(t.createdAt)}</TableCell>
+                    <TableCell>
+                      <Select
+                        value={t.status} variant="standard" disableUnderline disabled={busy === t.id}
+                        onChange={(e) => void changeTicketStatus(t, e.target.value)}
+                        sx={{
+                          fontSize: 12, fontWeight: 700, color: T_STATUS_COLOR[t.status] ?? '#94a3b8',
+                          '& .MuiSelect-select': { py: 0.25, pr: '20px !important' }, '& svg': { color: '#475569' },
+                        }}
+                      >
+                        {TICKET_STATUSES.map((s) => (
+                          <MenuItem key={s} value={s} sx={{ fontSize: 12, color: T_STATUS_COLOR[s] }}>{s.replace('_', ' ')}</MenuItem>
+                        ))}
+                      </Select>
+                    </TableCell>
+                  </TableRow>
+                ))}
+                {tickets.length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={5} sx={{ color: '#475569', textAlign: 'center', py: 3 }}>No tickets yet.</TableCell>
                   </TableRow>
                 )}
               </TableBody>

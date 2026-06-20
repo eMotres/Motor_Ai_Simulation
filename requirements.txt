@@ -20,6 +20,10 @@ pyjwt[crypto]==2.10.1
 # reads Firestore design counts). Uses Application Default Credentials on Cloud
 # Run; absent locally -> admin endpoints serve flagged mock data.
 firebase-admin>=6.5,<7
+# Anthropic SDK: in-app AI support assistant (/api/support/chat). Reads
+# ANTHROPIC_API_KEY from env (server-side only); absent -> endpoint serves a
+# flagged mock reply. Set ANTHROPIC_SUPPORT_MODEL to override the model.
+anthropic>=0.40
 cma>=4.0  # CMA-ES optimizer
 sympy>=1.13  # symbolic back-EMF / modulus calc (pdes.py, solver_2d.py) — without it /api/simulation/status errors
 mapbox-earcut>=1.0  # 2D polygon triangulation (cadquery_geometry.get_2d_mesh_data) — without it /api/geometry/mesh2d + mesh_extruded return empty (geometry doesn't render) and build2d_sliding_band 500s

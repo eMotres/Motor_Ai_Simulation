@@ -226,3 +226,86 @@ def set_disabled(uid: str, body: dict = Body(default={}), _admin: dict = Depends
     from firebase_admin import auth as fb_auth
     fb_auth.update_user(uid, disabled=disabled)
     return {"ok": True, "source": "firebase", "uid": uid, "disabled": disabled}
+
+
+# ── Tickets (support: bugs / feature requests / questions) ────────────────────
+_VALID_TICKET_STATUS = ("open", "in_progress", "resolved", "closed")
+
+
+def _ms(v):
+    """Best-effort convert a Firestore timestamp / number to epoch ms."""
+    try:
+        if v is None:
+            return None
+        if isinstance(v, (int, float)):
+            return float(v)
+        return float(v.timestamp()) * 1000.0  # Firestore DatetimeWithNanoseconds
+    except Exception:
+        return None
+
+
+def _ticket_view(d: dict) -> dict:
+    return {
+        "type": d.get("type") or "question",
+        "title": d.get("title") or "(no title)",
+        "description": d.get("description") or "",
+        "status": d.get("status") or "open",
+        "email": d.get("email"),
+        "createdAt": _ms(d.get("createdAt")),
+    }
+
+
+def _mock_tickets() -> list[dict]:
+    now = time.time() * 1000
+    # (type, title, description, status, email, days_ago)
+    rows = [
+        ("bug", "Efficiency map dark above 6000 rpm", "Looks like a render bug, not the battery limit.", "open", "alice.pro@example.com", 0.3),
+        ("feature", "Add field-weakening to the speed range", "Want torque beyond base speed (constant-power).", "open", "dmitri.team@example.com", 1.2),
+        ("question", "How do I export the efficiency map?", "Is CSV export part of Pro?", "resolved", "erin.free@example.com", 4.0),
+        ("bug", "Battery bar caps below the real max voltage", "198-cell LFP reads 723 V but the bar stops earlier.", "in_progress", "carla.team@example.com", 2.1),
+        ("feature", "Save more than 3 designs on Free", "", "closed", "frank.free@example.com", 9.0),
+    ]
+    out = []
+    for i, (typ, title, desc, status, email, dago) in enumerate(rows):
+        out.append({
+            "id": f"mock_t{i:02d}", "uid": f"mock_{i:02d}",
+            "type": typ, "title": title, "description": desc,
+            "status": status, "email": email, "createdAt": now - dago * _DAY_MS,
+        })
+    return out
+
+
+@router.get("/tickets")
+def list_tickets(_admin: dict = Depends(require_admin)):
+    """All support tickets across users (bugs / feature requests / questions)."""
+    admin = _ensure_admin()
+    if admin is None:
+        t = _mock_tickets()
+        return {"source": "mock", "count": len(t), "tickets": t}
+    from firebase_admin import firestore
+    db = firestore.client()
+    out = []
+    for d in db.collection_group("tickets").stream():
+        parent = d.reference.parent.parent  # users/{uid}
+        out.append({"id": d.id, "uid": parent.id if parent else None, **_ticket_view(d.to_dict() or {})})
+    out.sort(key=lambda x: x.get("createdAt") or 0, reverse=True)
+    return {"source": "firebase", "count": len(out), "tickets": out}
+
+
+@router.post("/tickets/status")
+def set_ticket_status(body: dict = Body(default={}), _admin: dict = Depends(require_admin)):
+    """Update a ticket's status (open / in_progress / resolved / closed)."""
+    uid = (body or {}).get("uid")
+    tid = (body or {}).get("id")
+    status = (body or {}).get("status")
+    if status not in _VALID_TICKET_STATUS:
+        raise HTTPException(status_code=400, detail=f"status must be one of {_VALID_TICKET_STATUS}")
+    if not uid or not tid:
+        raise HTTPException(status_code=400, detail="uid and id are required")
+    admin = _ensure_admin()
+    if admin is None:
+        return {"ok": True, "source": "mock", "id": tid, "status": status}
+    from firebase_admin import firestore
+    db = firestore.client()
+    db.collection("users").document(uid).collection("tickets").document(tid).update({"status": status})
+    return {"ok": True, "source": "firebase", "id": tid, "status": status}

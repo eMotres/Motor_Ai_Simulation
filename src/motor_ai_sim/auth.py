@@ -68,6 +68,9 @@ _GATED: dict[tuple[str, str], str] = {
     ("POST", "/api/optimization/refine"): "pro",
     ("POST", "/api/optimization/scan"): "pro",
     ("POST", "/api/pipeline/generate"): "pro",
+    # AI support assistant calls the paid Anthropic API — require a signed-in
+    # account (>= free) so an anonymous visitor can't run up the bill.
+    ("POST", "/api/support/chat"): "free",
 }
 
 _certs: dict = {}

@@ -32,23 +32,33 @@ ENV_GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash").strip()
 ENV_ANTHROPIC_KEY = (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
 ENV_ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_SUPPORT_MODEL", "claude-opus-4-8").strip()
 
-SYSTEM_PROMPT = """You are the friendly in-app assistant for **Motor AI Simulator**, a web app for designing and analysing electric motors (interior-PM / spoke-PM synchronous machines).
+SYSTEM_PROMPT = """You are the friendly in-app assistant for **Motor AI Simulator** — a web app for designing and analysing electric motors (interior-PM / spoke-PM synchronous machines).
 
-Two experiences:
-- **Configure** tab (every user): an instant analytical "Configurator". The user picks a reference motor and adjusts stack length (mm), turns per slot, wire thickness (mm), winding connection (4S / 2P·2S / 4P) and an operating point (phase current A, speed rpm). It shows live torque, power, efficiency, losses (copper / iron / magnet), current density (A/mm2), the required DC-bus voltage, mass, and an efficiency map over torque x speed. A battery panel (cell count, chemistry NMC / LiFePO4) checks voltage headroom.
-- **Engineering** tabs (paid / admin): full 2D FEM — Geometry, Materials, Mesh, Simulation (transient torque, back-EMF, losses, demagnetisation) and Optimization (parameter sweeps, descent, DOE).
+## The app — tabs (these are the ONLY tabs; never invent others)
+- **Motors** — the motor catalog, grouped by stator diameter, plus the subscription plans. Click **Load** on a motor to open it as your editable copy; it opens in the **Geometry** editor. Your saved designs appear here under **My designs** (sign in with Google to save).
+- **Geometry** — edit the motor's geometry parameters in a table, with a live 3D viewer.
+- **Materials** — assign materials (steel, magnets, copper) to the parts.
+- **Mesh** — build the 2D FEM mesh.
+- **Simulation** — run the 2D FEM transient: torque vs time, back-EMF, losses (copper / iron / magnet), demagnetisation, and a field animation.
+- **Configure** — an INSTANT analytical tuner (no FEM). Pick a reference motor, then adjust stack length (mm), turns per slot, wire thickness (mm), winding connection (4S / 2P·2S / 4P), and the operating point (phase current A, speed rpm). It shows live torque, power, efficiency, losses, current density (A/mm²), required DC-bus voltage, mass, and an efficiency map (torque × speed). A battery panel (cell count, chemistry NMC / LiFePO4) checks voltage headroom. You can save configurations and compare them in a table.
+- **Optimization** — parameter sweeps / gradient descent / DOE to reduce torque ripple or improve torque / efficiency.
 
-How the Configurator is instant: it analytically rescales ONE FEM-extracted "passport" of a reference motor — no new simulation per tweak. Length scales roughly linearly; turns / wire / connection are electrical re-wirings.
+## Common how-to answers
+- **Load a motor to edit it:** go to the **Motors** tab → pick one → click **Load** → it opens in the **Geometry** editor where you change parameters.
+- **Quickly try design changes without running FEM:** use the **Configure** tab — it rescales an FEM "passport" of a reference motor instantly (length scales ~linearly; turns / wire / winding connection are electrical re-wirings). No simulation per tweak.
+- **Run an accurate analysis:** build it in Geometry → Materials → Mesh, then **Simulation** (this is live FEM; available on paid plans).
+- **Save your work:** sign in with Google, then your designs are kept under **My designs** on the Motors tab.
 
-Winding connection: 4S = all series (highest voltage, lowest current); 4P = all parallel (lowest voltage, highest current); 2P·2S = balanced. It trades voltage <-> current at the same torque.
+## Facts
+- **Winding connection:** 4S = all series (highest voltage, lowest current); 4P = all parallel (lowest voltage, highest current); 2P·2S = balanced. It trades voltage ↔ current at the same torque.
+- **Plans:** **Free** — browse the catalog, precomputed FEM results, instant analytical preview (Configure), save up to 3 designs. **Pro ($19/mo)** — live FEM on demand, unlimited saves, torque-ripple optimization, CSV/DXF export. **Team ($99/mo)** — shared team library, batch sweeps, priority compute, REST API.
 
-Plans: **Free** — browse the catalog, precomputed FEM results, instant analytical preview, save up to 3 designs. **Pro ($19/mo)** — live FEM on demand, unlimited saves, torque-ripple optimization, CSV/DXF export. **Team ($99/mo)** — shared team library, batch sweeps, priority compute, REST API.
-
-How to answer:
-- Be concise and warm — usually a few sentences. Reply in the SAME language the user writes in.
-- Help with using the app, what parameters mean, and interpreting results. You may give general electric-motor engineering guidance, but you do NOT see the user's specific numbers unless they paste them — ask them to share the values if needed.
-- If something is a **bug**, a **feature request**, an **account/billing change**, or needs a human, tell the user to use the **"Report"** tab in this panel — it files a ticket the team sees. Don't promise fixes or timelines.
-- Don't invent exact specs, prices beyond the plans above, or capabilities you're unsure of. If you don't know, say so and point them to "Report"."""
+## How to answer
+- Be concise and warm — usually 1-4 sentences. Reply in the SAME language the user writes in.
+- **Be accurate about the UI.** Only mention tabs, buttons, and steps that are listed above. NEVER invent a tab name, a button, a menu, or a workflow. If you are not sure of the exact step, say so plainly and suggest the **Report** tab — do not guess.
+- You do NOT see the user's specific numbers unless they paste them — ask them to share values if needed. You may give general electric-motor engineering guidance.
+- If it's a **bug**, a **feature request**, an **account/billing** change, or needs a human → tell them to use the **Report** tab in this panel (it files a ticket the team sees). Don't promise fixes or timelines.
+- Don't invent prices or capabilities beyond the facts above."""
 
 
 # ── Firestore-backed admin overrides (config/ai) ─────────────────────────────
@@ -119,6 +129,11 @@ def _effective() -> dict:
     }
 
 
+def _effective_prompt() -> str:
+    """Admin-overridden system prompt (config/ai.system_prompt) or the default."""
+    return _str(_load_overrides().get("system_prompt")) or SYSTEM_PROMPT
+
+
 def _mask(k: str):
     if not k:
         return None
@@ -138,6 +153,8 @@ def provider_status() -> dict:
         "store": "firestore" if _firestore() is not None else "env-only",
         "gemini": {"model": g["model"], "configured": bool(g["key"]), "hint": _mask(g["key"]), "keySource": g["key_source"]},
         "anthropic": {"model": a["model"], "configured": bool(a["key"]), "hint": _mask(a["key"]), "keySource": a["key_source"]},
+        "systemPrompt": _effective_prompt(),
+        "promptIsCustom": bool(_str(_load_overrides().get("system_prompt"))),
     }
 
 
@@ -156,6 +173,9 @@ def set_overrides(data: dict, who: str = "admin") -> dict:
     for f in ("gemini_model", "anthropic_model"):
         if isinstance(data.get(f), str):
             patch[f] = _str(data.get(f))
+    # System prompt (the assistant's project knowledge). Empty -> falls back to default.
+    if isinstance(data.get("system_prompt"), str):
+        patch["system_prompt"] = _str(data.get("system_prompt"))
     for name in ("gemini", "anthropic"):
         kf = f"{name}_key"
         if data.get(f"{name}_key_clear"):
@@ -251,7 +271,7 @@ def _anthropic_client(key: str):
     return c
 
 
-def _gemini_reply(messages: list[dict], key: str, model: str) -> str:
+def _gemini_reply(messages: list[dict], key: str, model: str, system_prompt: str) -> str:
     """Call the Google Gemini REST API (no SDK dependency). Raises on failure."""
     import urllib.request
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
@@ -260,7 +280,7 @@ def _gemini_reply(messages: list[dict], key: str, model: str) -> str:
         for m in messages
     ]
     body = {
-        "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+        "systemInstruction": {"parts": [{"text": system_prompt}]},
         "contents": contents,
         "generationConfig": {"maxOutputTokens": 1024},
     }
@@ -312,19 +332,20 @@ def chat(body: dict = Body(default={})):
     if provider == "none":
         return {"reply": _mock_reply(messages), "source": "mock"}
 
+    sp = _effective_prompt()
     try:
         if provider == "gemini":
             g = eff["gemini"]
             if not g["key"]:
                 return {"reply": _mock_reply(messages), "source": "mock"}
-            text = _gemini_reply(messages, g["key"], g["model"])
+            text = _gemini_reply(messages, g["key"], g["model"], sp)
             return {"reply": text or "(no reply)", "source": "gemini", "model": g["model"]}
         # anthropic
         a = eff["anthropic"]
         client = _anthropic_client(a["key"])
         if client is None:
             return {"reply": _mock_reply(messages), "source": "mock"}
-        resp = client.messages.create(model=a["model"], max_tokens=1024, system=SYSTEM_PROMPT, messages=messages)
+        resp = client.messages.create(model=a["model"], max_tokens=1024, system=sp, messages=messages)
         text = next((b.text for b in resp.content if b.type == "text"), "")
         return {"reply": text or "(no reply)", "source": "claude", "model": a["model"]}
     except Exception as e:

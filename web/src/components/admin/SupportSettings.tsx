@@ -20,6 +20,7 @@ interface ProviderInfo { model: string; configured: boolean; hint: string | null
 export interface SupportCfg {
   provider: string; providerOverride?: string; model: string | null; configured: boolean;
   store: string; gemini: ProviderInfo; anthropic: ProviderInfo;
+  systemPrompt?: string; promptIsCustom?: boolean;
 }
 type Provider = 'gemini' | 'anthropic';
 const TITLE: Record<Provider, string> = { gemini: 'Google Gemini', anthropic: 'Anthropic Claude' };
@@ -42,6 +43,7 @@ const SupportSettings: React.FC<{ cfg: SupportCfg; onSaved: () => void }> = ({ c
   const [provider, setProvider] = useState<Provider>(initial);
   const [model, setModel] = useState<string>(pickModel(initial));
   const [apiKey, setApiKey] = useState('');
+  const [prompt, setPrompt] = useState(cfg.systemPrompt ?? '');
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
@@ -60,6 +62,7 @@ const SupportSettings: React.FC<{ cfg: SupportCfg; onSaved: () => void }> = ({ c
       [provider === 'gemini' ? 'gemini_model' : 'anthropic_model']: model,
     };
     if (apiKey.trim()) body[provider === 'gemini' ? 'gemini_key' : 'anthropic_key'] = apiKey.trim();
+    if (prompt !== (cfg.systemPrompt ?? '')) body.system_prompt = prompt;  // only when edited
     try {
       const r = await fetch(`${API}/api/admin/support`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
@@ -107,24 +110,33 @@ const SupportSettings: React.FC<{ cfg: SupportCfg; onSaved: () => void }> = ({ c
         <TextField value={apiKey} onChange={(e) => setApiKey(e.target.value)} size="small" fullWidth type="password"
           placeholder={info.configured ? '•••••••• (unchanged)' : 'paste your API key…'} autoComplete="off"
           inputProps={{ style: { fontSize: 13 } }} />
-
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mt: 2 }}>
-          <Button variant="contained" onClick={() => void save()} disabled={saving || !model}
-            sx={{ textTransform: 'none' }}>
-            {saving ? <CircularProgress size={18} /> : 'Save settings'}
-          </Button>
-          {msg && <Typography sx={{ fontSize: 12.5, color: msg.ok ? '#4ade80' : '#f87171' }}>{msg.text}</Typography>}
-          <Box sx={{ flex: 1 }} />
-          <Typography sx={{ fontSize: 10, color: '#64748b' }}>store: {cfg.store}</Typography>
-        </Box>
-
-        <Typography sx={{ fontSize: 10.5, color: '#64748b', mt: 1.5, lineHeight: 1.5 }}>
-          Keys are stored on the server and never shown again — only a masked hint.
-          {envOnly
-            ? ' This server has no settings store (Firebase Admin SDK not configured), so saving is disabled here — set keys via Cloud Run env vars.'
-            : ' ⚠️ Make sure your Firestore rules deny client reads on the /config collection (see firestore.rules).'}
-        </Typography>
       </Box>
+
+      {/* Step 4 — assistant knowledge (system prompt), full width */}
+      <Typography sx={{ ...STEP, mt: 2.5 }}>4 · Assistant knowledge {cfg.promptIsCustom ? '· customised' : '· default'}</Typography>
+      <Typography sx={{ fontSize: 10.5, color: '#64748b', mb: 0.75 }}>
+        This is what the assistant knows about the app. Edit it to fix wrong answers — it applies immediately on Save. Clear the box and Save to reset to the built-in default.
+      </Typography>
+      <TextField value={prompt} onChange={(e) => setPrompt(e.target.value)} size="small" fullWidth multiline minRows={8} maxRows={22}
+        inputProps={{ style: { fontSize: 12, fontFamily: 'ui-monospace, SFMono-Regular, monospace', lineHeight: 1.5 } }}
+        sx={{ '& .MuiInputBase-root': { bgcolor: '#060d17' } }} />
+
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mt: 2 }}>
+        <Button variant="contained" onClick={() => void save()} disabled={saving || !model}
+          sx={{ textTransform: 'none' }}>
+          {saving ? <CircularProgress size={18} /> : 'Save settings'}
+        </Button>
+        {msg && <Typography sx={{ fontSize: 12.5, color: msg.ok ? '#4ade80' : '#f87171' }}>{msg.text}</Typography>}
+        <Box sx={{ flex: 1 }} />
+        <Typography sx={{ fontSize: 10, color: '#64748b' }}>store: {cfg.store}</Typography>
+      </Box>
+
+      <Typography sx={{ fontSize: 10.5, color: '#64748b', mt: 1.5, lineHeight: 1.5 }}>
+        Keys are stored on the server and never shown again — only a masked hint.
+        {envOnly
+          ? ' This server has no settings store (Firebase Admin SDK not configured), so saving is disabled here — set keys via Cloud Run env vars.'
+          : ' ⚠️ Make sure your Firestore rules deny client reads on the /config collection (see firestore.rules).'}
+      </Typography>
     </Paper>
   );
 };

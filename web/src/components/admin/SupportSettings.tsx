@@ -9,7 +9,7 @@
  * the UI only ever shows a masked hint, never the key. Leave the key blank to
  * keep the current one.
  */
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import {
   Box, Paper, Typography, Chip, Select, MenuItem, TextField, Button, CircularProgress,
 } from '@mui/material';
@@ -25,31 +25,33 @@ type Provider = 'gemini' | 'anthropic';
 const TITLE: Record<Provider, string> = { gemini: 'Google Gemini', anthropic: 'Anthropic Claude' };
 const COLOR: Record<string, string> = { gemini: '#60a5fa', anthropic: '#a78bfa', none: '#64748b' };
 
+// Curated shortlist of CURRENT models (no retired ones — e.g. Gemini 1.5 is gone).
+// The `*-latest` aliases always track Google's newest stable model.
+const CURATED: Record<Provider, string[]> = {
+  gemini: ['gemini-flash-latest', 'gemini-pro-latest', 'gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash'],
+  anthropic: ['claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5'],
+};
+
 const PANEL = { bgcolor: '#0b1424', border: '1px solid #1e293b', borderRadius: 1.5, p: 2 } as const;
 const STEP = { fontSize: 11, color: '#64748b', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em', mb: 0.75 } as const;
 
 const SupportSettings: React.FC<{ cfg: SupportCfg; onSaved: () => void }> = ({ cfg, onSaved }) => {
   const initial: Provider = (cfg.providerOverride === 'anthropic' || cfg.provider === 'anthropic') ? 'anthropic' : 'gemini';
+  // If the saved model is a retired one (e.g. Gemini 1.5/1.0), start from a current default.
+  const pickModel = (p: Provider) => (/1\.5|1\.0/.test(cfg[p].model) ? CURATED[p][0] : cfg[p].model);
   const [provider, setProvider] = useState<Provider>(initial);
-  const [model, setModel] = useState<string>(cfg[initial].model);
+  const [model, setModel] = useState<string>(pickModel(initial));
   const [apiKey, setApiKey] = useState('');
-  const [models, setModels] = useState<Record<Provider, string[]>>({ gemini: [], anthropic: [] });
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   const envOnly = cfg.store === 'env-only';
   const info = cfg[provider];
 
-  useEffect(() => {
-    fetch(`${API}/api/admin/support/models`).then((r) => (r.ok ? r.json() : null))
-      .then((d) => { if (d) setModels({ gemini: d.gemini?.models ?? [], anthropic: d.anthropic?.models ?? [] }); })
-      .catch(() => { /* keep empty -> falls back to the current model only */ });
-  }, []);
+  const choose = (p: Provider) => { setProvider(p); setModel(pickModel(p)); setApiKey(''); setMsg(null); };
 
-  const choose = (p: Provider) => { setProvider(p); setModel(cfg[p].model); setApiKey(''); setMsg(null); };
-
-  // model dropdown options: provider's list, with the current model guaranteed present
-  const opts = Array.from(new Set([model, ...(models[provider] ?? [])].filter(Boolean)));
+  // model dropdown: curated current models, with the saved model guaranteed present
+  const opts = Array.from(new Set([model, ...CURATED[provider]].filter(Boolean)));
 
   const save = async () => {
     setSaving(true); setMsg(null);

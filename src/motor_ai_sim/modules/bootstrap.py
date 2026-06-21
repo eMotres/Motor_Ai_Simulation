@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from ..contracts import CONTRACTS_VERSION
 from .base import ModuleManifest, StubModule, UIContribution
+from .controller import FocController
 from .cost import BasicCost
 from .geometry_2d import AeroStatorGeometry2D
 from .geometry_3d import AeroStatorGeometry3D
@@ -24,6 +25,7 @@ def _mechanical_stub() -> StubModule:
     return StubModule(ModuleManifest(
         name="solver-mechanical", version="0.0.1", capability="solver.mechanical", kind="compute",
         contracts_version=CONTRACTS_VERSION, depends_on=["mesh"],
+        inputs=["MeshIR"], outputs=["ResultIR"],
         summary="ROADMAP: structural stress + modal on the same mesh -> ResultIR(stress_max_MPa)",
         ui=UIContribution(panel_id="simulation", title="Simulation", order=50, as_tab=False)))
 
@@ -38,6 +40,7 @@ def default_registry() -> ModuleRegistry:
         EmTransientSolver(),      # solver.em_transient  -> mesh
         ThermalSolver(),          # solver.thermal       -> solver.em_transient
         _mechanical_stub(),       # solver.mechanical    -> mesh   (roadmap)
+        FocController(),          # controller   (MachineState -> ControlSignal)
         SurrogateRF(),            # surrogate
         Optimizer(),              # optimization -> surrogate + solver.em_transient
         BasicCost(),              # cost         -> geometry.2d

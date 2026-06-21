@@ -27,6 +27,7 @@ class SkfemMesh2D:
         return ModuleManifest(
             name=self.NAME, version=self.VERSION, capability=self.CAPABILITY, kind="compute",
             contracts_version=CONTRACTS_VERSION, depends_on=["geometry.2d"],
+            inputs=["GeometryIR"], outputs=["MeshIR"],
             summary="gmsh + skfem triangular mesh with domain tags -> MeshIR",
             ui=UIContribution(panel_id="mesh", title="Mesh",
                               frontend_module="components/mesh/MeshPanel", order=40))

@@ -35,6 +35,12 @@ class ModuleManifest(BaseModel):
     capability: str                            # "geometry.2d" | "geometry.3d" | "mesh" | "solver.em_transient" | "cost" | ...
     kind: str = "compute"                      # "compute" | "ui"
     depends_on: List[str] = Field(default_factory=list)  # upstream CAPABILITIES required (e.g. geometry.3d -> ["geometry.2d"])
+    # Explicit I/O interface: the contract TYPES this module consumes / produces.
+    # e.g. mesh inputs=["GeometryIR"] outputs=["MeshIR"]; a controller
+    # inputs=["MachineState"] outputs=["ControlSignal"]. The kernel checks that a
+    # pipeline's stages are port-compatible (upstream outputs cover downstream inputs).
+    inputs: List[str] = Field(default_factory=list)
+    outputs: List[str] = Field(default_factory=list)
     contracts_version: str
     summary: str = ""
     ui: Optional[UIContribution] = None

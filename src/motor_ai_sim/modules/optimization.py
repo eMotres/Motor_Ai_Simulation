@@ -22,6 +22,7 @@ class Optimizer:
         return ModuleManifest(
             name=self.NAME, version=self.VERSION, capability=self.CAPABILITY, kind="compute",
             contracts_version=CONTRACTS_VERSION, depends_on=["surrogate", "solver.em_transient"],
+            inputs=["ParameterSet"], outputs=["ParameterSet", "ResultIR"],
             summary="Surrogate-guided + FEM-confirmed search (torque-density x efficiency)",
             ui=UIContribution(panel_id="optimization", title="Optimization",
                               frontend_module="components/optimization/OptimizationPanel", order=60))

@@ -23,6 +23,7 @@ class AeroStatorGeometry3D:
         return ModuleManifest(
             name=self.NAME, version=self.VERSION, capability=self.CAPABILITY, kind="compute",
             contracts_version=CONTRACTS_VERSION, depends_on=["geometry.2d"],
+            inputs=["GeometryIR"], outputs=["GeometryIR"],
             summary="ROADMAP: extrude/revolve geometry.2d cross-section -> GeometryIR(dim=3)",
             ui=UIContribution(panel_id="geometry3d", title="3D", frontend_module=None, order=25, as_tab=False))
 

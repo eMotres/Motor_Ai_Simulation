@@ -22,6 +22,8 @@ interface ModuleManifest {
   capability: string;
   kind: string;
   depends_on: string[];
+  inputs?: string[];
+  outputs?: string[];
   contracts_version: string;
   summary: string;
   ui?: UIContribution | null;
@@ -82,6 +84,13 @@ const ModulesPanel: React.FC = () => {
                 )}
               </Box>
               {m.summary && <Typography sx={{ fontSize: 11, color: '#94a3b8', mt: 0.5 }}>{m.summary}</Typography>}
+              {(m.inputs?.length || m.outputs?.length) ? (
+                <Typography sx={{ fontSize: 10.5, color: '#7dd3fc', mt: 0.5, fontFamily: 'monospace' }}>
+                  in: {(m.inputs && m.inputs.length) ? m.inputs.join(', ') : '∅'}
+                  {'  →  '}
+                  out: {(m.outputs && m.outputs.length) ? m.outputs.join(', ') : '∅'}
+                </Typography>
+              ) : null}
               <Box sx={{ display: 'flex', gap: 1.5, mt: 0.5, fontSize: 10.5, color: '#64748b', flexWrap: 'wrap' }}>
                 <span>contracts {m.contracts_version}</span>
                 {m.depends_on.length > 0 && <span>depends on: {m.depends_on.join(', ')}</span>}

@@ -34,6 +34,7 @@ class EmStaticSolver:
         return ModuleManifest(
             name=self.NAME, version=self.VERSION, capability=self.CAPABILITY, kind="compute",
             contracts_version=CONTRACTS_VERSION, depends_on=["mesh"],
+            inputs=["MeshIR", "Excitation"], outputs=["ResultIR"],
             summary="Magnetostatic field solve (A_z, |B|) at one rotor angle -> ResultIR",
             ui=UIContribution(panel_id="simulation", title="Simulation",
                               frontend_module="components/simulation/SimulationPanel", order=50))
@@ -57,6 +58,7 @@ class EmTransientSolver:
         return ModuleManifest(
             name=self.NAME, version=self.VERSION, capability=self.CAPABILITY, kind="compute",
             contracts_version=CONTRACTS_VERSION, depends_on=["mesh"],
+            inputs=["MeshIR", "Excitation"], outputs=["ResultIR", "MachineState"],
             summary="Sliding-band transient over one electrical period -> torque/losses/V ResultIR",
             ui=UIContribution(panel_id="simulation", title="Simulation",
                               frontend_module="components/simulation/SimulationPanel", order=50))
@@ -78,6 +80,7 @@ class ThermalSolver:
         return ModuleManifest(
             name=self.NAME, version=self.VERSION, capability=self.CAPABILITY, kind="compute",
             contracts_version=CONTRACTS_VERSION, depends_on=["solver.em_transient"],
+            inputs=["MeshIR", "ResultIR"], outputs=["ResultIR"],
             summary="Steady 2D heat conduction from EM losses -> temperature-map ResultIR (T_max)",
             ui=UIContribution(panel_id="simulation", title="Simulation",
                               frontend_module="components/simulation/SimulationPanel", order=50))

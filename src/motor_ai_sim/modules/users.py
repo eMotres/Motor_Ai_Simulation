@@ -21,6 +21,7 @@ class UsersModule:
         return ModuleManifest(
             name=self.NAME, version=self.VERSION, capability=self.CAPABILITY, kind="ui",
             contracts_version=CONTRACTS_VERSION, depends_on=[],
+            inputs=[], outputs=["UserContext"],
             summary="Auth, tiers/roles (free/pro/team/admin), quotas, saved-design library",
             ui=UIContribution(panel_id="admin", title="Admin",
                               frontend_module="components/admin/AdminPanel", order=90))

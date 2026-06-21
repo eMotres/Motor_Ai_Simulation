@@ -35,6 +35,7 @@ class AeroStatorGeometry2D:
             capability=self.CAPABILITY,
             kind="compute",
             contracts_version=CONTRACTS_VERSION,
+            inputs=["ParameterSet"], outputs=["GeometryIR"],
             summary="AeroStator Core fully-parametric 2D cross-section -> GeometryIR(dim=2)",
             ui=UIContribution(
                 panel_id="geometry",

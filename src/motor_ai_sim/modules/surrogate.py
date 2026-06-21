@@ -23,6 +23,7 @@ class SurrogateRF:
         return ModuleManifest(
             name=self.NAME, version=self.VERSION, capability=self.CAPABILITY, kind="compute",
             contracts_version=CONTRACTS_VERSION, depends_on=[],
+            inputs=["ParameterSet"], outputs=["ResultIR"],
             summary="Calibrated surrogate -> predicted torque/efficiency for a design (no FEM)",
             ui=UIContribution(panel_id="optimization", title="Optimization",
                               frontend_module="components/optimization/OptimizationPanel", order=60, as_tab=False))

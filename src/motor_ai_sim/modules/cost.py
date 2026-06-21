@@ -34,6 +34,7 @@ class BasicCost:
         return ModuleManifest(
             name=self.NAME, version=self.VERSION, capability=self.CAPABILITY, kind="compute",
             contracts_version=CONTRACTS_VERSION, depends_on=["geometry.2d"],
+            inputs=["GeometryIR"], outputs=["CostIR"],
             summary="Active-material mass x unit price (+labor) -> CostIR",
             ui=UIContribution(panel_id="cost", title="Cost", frontend_module=None, order=70, as_tab=False))
 

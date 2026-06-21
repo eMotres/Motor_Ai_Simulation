@@ -1644,6 +1644,168 @@ def get_fem_eddy_field2d(
     return result
 
 
+_thermal_field_cache: Dict[tuple, Dict] = {}
+
+
+def _thermal_k(category: str, name, default: float) -> float:
+    """Thermal conductivity [W/m·K] of a named material, or a category default."""
+    if not name:
+        return default
+    try:
+        from motor_ai_sim.materials import get_material
+        v = getattr(get_material(category, name), "thermal_conductivity", None)
+        return float(v) if v else default
+    except Exception:
+        return default
+
+
+def _thermal_k_any(name, default: float) -> float:
+    """Thermal conductivity of a material whose category is unknown (e.g. shaft)."""
+    if not name:
+        return default
+    from motor_ai_sim.materials import get_material
+    for cat in ("conductor", "steel", "magnet"):
+        try:
+            v = getattr(get_material(cat, name), "thermal_conductivity", None)
+            if v:
+                return float(v)
+        except Exception:
+            pass
+    return default
+
+
+@router.get("/physics/thermal_field2d")
+def get_thermal_field2d(
+    ambient_temp:       float = 25.0,    # coolant / ambient [°C]
+    h_conv:             float = 50.0,    # housing convection coeff [W/m²·K]
+    slot_k:             float = 1.5,     # effective slot (Cu+insulation+air) k [W/m·K]
+    gap_k:              float = 0.10,    # effective air-gap k [W/m·K]
+    gamma_deg:          float = 0.0,
+    I_phase_rms:        float = 120.0,
+    n_steps_per_period: int   = 12,
+    n_periods:          float = 2.0,
+    mesh_size_mm:       float = 3.0,
+    min_size_mm:        float = 0.3,
+    outer_air_factor:   float = 1.3,
+    n_sectors:          int   = 4,
+    coil_temp_c:        float = 120.0,
+    component_mesh:     str   = "",
+    geo:                Optional[str] = None,
+):
+    """Steady-state 2-D thermal map. Runs the EM eddy solve for the loss field
+    (cached), then solves −∇·(k∇T)=q on the same mesh with convection at the
+    housing.  Returns the temperature field, heat flux, and per-component T_max."""
+    import numpy as _np
+    _geo_ov = _parse_geo_override(geo)
+    key = ("thermal", round(ambient_temp, 1), round(h_conv, 1), round(slot_k, 3),
+           round(gap_k, 3), round(gamma_deg, 1), round(I_phase_rms, 1),
+           int(n_steps_per_period), round(n_periods, 2), round(mesh_size_mm, 2),
+           round(min_size_mm, 2), round(outer_air_factor, 2), int(n_sectors),
+           round(coil_temp_c, 1), component_mesh)
+    if _geo_ov:
+        key = key + (tuple(sorted(_geo_ov.items())),)
+    if key in _thermal_field_cache:
+        return _thermal_field_cache[key]
+
+    # 1. EM losses on the mesh (reuses the eddy-field cache → cheap on repeat)
+    em = get_fem_eddy_field2d(
+        gamma_deg=gamma_deg, I_phase_rms=I_phase_rms,
+        n_steps_per_period=n_steps_per_period, n_periods=n_periods,
+        mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm,
+        outer_air_factor=outer_air_factor, n_sectors=n_sectors,
+        coil_temp_c=coil_temp_c, component_mesh=component_mesh, geo=geo)
+    verts = _np.asarray(em["vertices"], float)         # (n,2) metres
+    tris = _np.asarray(em["triangles"], int)            # (m,3)
+    tags = _np.asarray(em["domain_per_tri"], int)       # collapsed palette tags
+    loss_dens = _np.asarray(em.get("loss_density_per_tri") or [], float)
+    if loss_dens.size != tris.shape[0]:
+        loss_dens = _np.zeros(tris.shape[0])
+    Pcu = float(em.get("P_cu_W", 0.0))
+
+    # 2. geometry: housing radius + copper volume (for the copper heat density)
+    from motor_ai_sim.config import get_config
+    cfg = get_config()
+    g = dict(cfg.get("geometry", {}))
+    if _geo_ov:
+        g.update(_geo_ov)
+    R_house = float(g.get("stator_diameter", 200.0)) / 2.0 * 1e-3
+    stator_inner_m = R_house - float(g.get("core_thickness", 5.0)) * 1e-3 \
+        - float(g.get("slot_height", 18.0)) * 1e-3
+    rotor_outer_m = stator_inner_m - float(g.get("air_gap", 0.6)) * 1e-3
+    L = float(g.get("motor_length", 30.0)) * 1e-3
+    num_slots = int(round(float(g.get("num_seg", 1)) * float(g.get("num_slots_per_segment", 6))))
+    V_cu = (num_slots * float(g.get("num_wires_per_slot", 12))
+            * float(g.get("wire_width", 5.0)) * 1e-3
+            * float(g.get("wire_height", 0.8)) * 1e-3 * L)
+    q_cu = (Pcu / V_cu) if V_cu > 1e-12 else 0.0
+
+    # 3. materials → conductivities
+    mats = cfg.get("materials", {})
+    k_steel = _thermal_k("steel", mats.get("stator_core"), 25.0)
+    k_mag = _thermal_k("magnet", mats.get("magnet"), 8.0)
+    k_shaft = _thermal_k_any(mats.get("shaft"), 150.0)
+
+    # 4. per-element k + q from the collapsed domain tags
+    (DOM_AIR, DOM_STATOR, DOM_COIL, DOM_AIRGAP, DOM_MAG_N, DOM_ROTOR,
+     DOM_SHAFT, DOM_BAND, DOM_OUTER, DOM_MAG_S) = 0, 1, 2, 3, 4, 5, 6, 7, 8, 44
+    k_elem = _np.full(tris.shape[0], gap_k)             # default = air / gap
+    q_elem = loss_dens.copy()
+    is_steel = (tags == DOM_STATOR) | (tags == DOM_ROTOR)
+    is_mag = (tags == DOM_MAG_N) | (tags == DOM_MAG_S)
+    is_coil = (tags == DOM_COIL)
+    k_elem[is_steel] = k_steel
+    k_elem[is_mag] = k_mag
+    k_elem[tags == DOM_SHAFT] = k_shaft
+    k_elem[is_coil] = slot_k
+    q_elem[is_coil] = q_cu                              # copper loss density (overwrites eddy part)
+
+    # 5. steady thermal solve — drop ALL air (outer + gap + slip band); the rotor
+    # is reconnected to the stator by an explicit gap conductance bridge.
+    from motor_ai_sim.simulation.thermal_solver_2d import solve_steady_thermal
+    th = solve_steady_thermal(
+        verts.T, tris.T, tags, k_elem, q_elem,
+        drop_tags=[DOM_OUTER, DOM_AIRGAP, DOM_BAND, DOM_AIR],
+        r_housing_m=R_house, rotor_outer_m=rotor_outer_m, stator_inner_m=stator_inner_m,
+        gap_k=float(gap_k), h_conv=float(h_conv), t_ambient=float(ambient_temp))
+
+    # 6. per-component temperatures
+    Tn = _np.asarray(th["T_node"]); ts = _np.asarray(th["triangles"], int)
+    tg = _np.asarray(th["cell_tags"], int)
+
+    def _comp(mask):
+        if not mask.any():
+            return None
+        nodes = _np.unique(ts[mask])
+        return {"max": round(float(Tn[nodes].max()), 1), "avg": round(float(Tn[nodes].mean()), 1)}
+
+    result = {
+        "ok": True,
+        "n_vertices": len(th["vertices"]), "n_triangles": len(th["triangles"]),
+        "vertices": th["vertices"], "triangles": th["triangles"],
+        "domain_per_tri": th["cell_tags"],
+        "temperature_per_node": th["T_node"],            # °C
+        "heat_flux_per_tri": th["flux_elem"],            # W/m² (vector)
+        "flux_mag_per_tri": th["flux_mag_elem"],
+        "T_min": round(float(th["T_min"]), 1), "T_max": round(float(th["T_max"]), 1),
+        "n_bridge_links": th.get("n_bridge_links"), "n_nonfinite": th.get("n_nonfinite"),
+        "n_housing_facets": th.get("n_housing_facets"),
+        "ambient_temp": float(ambient_temp), "h_conv": float(h_conv),
+        "slot_k": float(slot_k), "gap_k": float(gap_k),
+        "k_steel": round(k_steel, 1), "k_magnet": round(k_mag, 1), "k_shaft": round(k_shaft, 1),
+        "components": {
+            "winding": _comp(tg == DOM_COIL),
+            "magnet": _comp((tg == DOM_MAG_N) | (tg == DOM_MAG_S)),
+            "stator": _comp(tg == DOM_STATOR),
+            "rotor": _comp(tg == DOM_ROTOR),
+        },
+        "P_cu_W": round(Pcu, 1), "P_fe_W": em.get("P_fe_W"),
+        "P_mag_eddy_W": em.get("P_mag_eddy_W"), "P_loss_total_W": em.get("P_loss_total_W"),
+        "outlines": em.get("outlines"), "extent": em.get("extent"),
+    }
+    _thermal_field_cache[key] = result
+    return result
+
+
 _daxis_sweep_cache: Dict[tuple, Dict] = {}
 
 

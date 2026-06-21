@@ -16,7 +16,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Box, Paper, Typography, CircularProgress, Button, Tooltip,
-  ToggleButton, ToggleButtonGroup,
+  ToggleButton, ToggleButtonGroup, TextField, Select, MenuItem,
 } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { Canvas, useThree } from '@react-three/fiber';
@@ -75,12 +75,22 @@ function readMeshSetting<T>(key: string, def: T): T {
 }
 
 // ── R3F mesh component ────────────────────────────────────────────────────
-type FieldMode = 'Az' | 'Bmag' | 'J' | 'Jeddy' | 'Loss' | 'Demag';
+type FieldMode = 'Az' | 'Bmag' | 'J' | 'Jeddy' | 'Loss' | 'Demag' | 'Temp';
 // Modes powered by the (slow) time-coupled eddy-current transient rather than
 // the fast magnetostatic snapshot: J⟳ (real current crowding / proximity) and
 // Loss (Ansys-style W/m³ density map).  Selecting either lazily runs the eddy
 // solve (~25 s) and caches its last-frame field + cycle-averaged loss density.
 const EDDY_MODES = new Set<FieldMode>(['Jeddy', 'Loss']);
+
+// Turbo colormap (Google) — perceptually uniform blue→green→red, the standard
+// for temperature maps.  Polynomial approximation (Mikhailov).
+function turbo01(t: number): [number, number, number] {
+  const x = Math.max(0, Math.min(1, t));
+  const r = 34.61 + x * (1172.33 + x * (-10793.56 + x * (33300.12 + x * (-38394.49 + x * 14825.05))));
+  const g = 23.31 + x * (557.33 + x * (1225.33 + x * (-3574.96 + x * (3245.91 - x * 1219.0))));
+  const b = 27.20 + x * (3211.10 + x * (-15327.97 + x * (27814.00 + x * (-22569.18 + x * 6838.66))));
+  return [Math.max(0, Math.min(255, r)), Math.max(0, Math.min(255, g)), Math.max(0, Math.min(255, b))];
+}
 
 // Diverging blue→green→red colormap for signed J_z (Ansys "J" style:
 // red = +max, blue = −max, green = 0).
@@ -161,8 +171,8 @@ function buildIsoLines(
   return new Float32Array(pos);
 }
 
-const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode; logLoss: boolean }>
-  = ({ payload, mode, logLoss }) => {
+const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode; logLoss: boolean; showFlux?: boolean }>
+  = ({ payload, mode, logLoss, showFlux }) => {
   // Fill geometry — per-vertex Ansys-style banded rainbow for A_z, or
   // per-triangle flat jet for |B|.  We SKIP DOM_OUTER (8) triangles so
   // the outer far-field air ring (visible only for the BC) doesn't eat
@@ -182,6 +192,34 @@ const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode; logLoss: boole
         Math.floor((p / 100) * (a.length - 1))));
       return a[i];
     };
+
+    if (mode === 'Temp') {
+      // Temperature field [°C] — nodal colour on the thermal SOLID sub-mesh
+      // (this payload carries its own vertices/triangles; outer air + gap are
+      // already removed, so render EVERY triangle).  Turbo LUT, blue→red.
+      const Tn = payload.temperature_per_node ?? [];
+      const tmin = payload.T_min ?? (Tn.length ? Math.min(...Tn) : 0);
+      const tmax = payload.T_max ?? (Tn.length ? Math.max(...Tn) : 1);
+      const rng = Math.max(tmax - tmin, 1e-6);
+      const positions = new Float32Array(vertices.length * 3);
+      const colors = new Float32Array(vertices.length * 3);
+      for (let i = 0; i < vertices.length; i++) {
+        positions[3 * i] = vertices[i][0] * S;
+        positions[3 * i + 1] = vertices[i][1] * S;
+        positions[3 * i + 2] = 0;
+        const [r, g2, b] = turbo01((((Tn[i] ?? tmin) - tmin) / rng));
+        colors[3 * i] = r / 255; colors[3 * i + 1] = g2 / 255; colors[3 * i + 2] = b / 255;
+      }
+      const indexArr: number[] = [];
+      for (let i = 0; i < triangles.length; i++)
+        indexArr.push(triangles[i][0], triangles[i][1], triangles[i][2]);
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      g.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+      g.setIndex(new THREE.BufferAttribute(new Uint32Array(indexArr), 1));
+      (g as any).userData = { T_lo: tmin, T_hi: tmax };
+      return g;
+    }
 
     if (mode === 'Az') {
       // LINEAR mapping of A_z → colormap (no compression) so the iso-line
@@ -487,6 +525,42 @@ const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode; logLoss: boole
     return g;
   }, [payload]);
 
+  // Heat-flux arrows (Temp view) — q = -k∇T per element, drawn from each
+  // sampled element centroid, length ∝ |q| (clamped).  Shows heat flowing from
+  // the hot winding outward to the cooled housing.
+  const fluxGeo = useMemo(() => {
+    if (mode !== 'Temp' || !showFlux) return null;
+    const flux = payload.heat_flux_per_tri ?? [];
+    const fmag = payload.flux_mag_per_tri ?? [];
+    if (!flux.length) return null;
+    const S = 1000;
+    const { vertices, triangles, extent } = payload;
+    const pos = Float64Array.from(fmag.filter(v => v > 0)).sort();
+    const qref = pos.length ? pos[Math.floor(0.9 * (pos.length - 1))] : 1;
+    const span = Math.max(extent[1] - extent[0], extent[3] - extent[2]) * S;
+    const Lmax = span * 0.035;
+    const step = Math.max(1, Math.floor(triangles.length / 500));
+    const arr: number[] = [];
+    for (let ti = 0; ti < triangles.length; ti += step) {
+      const f = flux[ti]; if (!f) continue;
+      const m = fmag[ti] || Math.hypot(f[0], f[1]);
+      if (m <= 1e-9) continue;
+      const [a, b, c] = triangles[ti];
+      const cx = (vertices[a][0] + vertices[b][0] + vertices[c][0]) / 3 * S;
+      const cy = (vertices[a][1] + vertices[b][1] + vertices[c][1]) / 3 * S;
+      const len = Math.min(1, m / qref) * Lmax;
+      const ux = f[0] / m, uy = f[1] / m;
+      const ex = cx + ux * len, ey = cy + uy * len;
+      arr.push(cx, cy, 1.4, ex, ey, 1.4);                         // shaft
+      const hb = len * 0.32;
+      arr.push(ex, ey, 1.4, ex - hb * (ux + uy), ey - hb * (uy - ux), 1.4);  // barb
+      arr.push(ex, ey, 1.4, ex - hb * (ux - uy), ey - hb * (uy + ux), 1.4);  // barb
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(arr), 3));
+    return g;
+  }, [payload, mode, showFlux]);
+
   return (
     <group>
       <mesh geometry={fillGeo}>
@@ -495,6 +569,11 @@ const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode; logLoss: boole
       {isoGeo && (
         <lineSegments geometry={isoGeo}>
           <lineBasicMaterial color={0x0b1220} transparent opacity={0.85}/>
+        </lineSegments>
+      )}
+      {fluxGeo && (
+        <lineSegments geometry={fluxGeo}>
+          <lineBasicMaterial color={0xe2e8f0} transparent opacity={0.7}/>
         </lineSegments>
       )}
       <lineSegments geometry={outGeo}>
@@ -625,8 +704,20 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
   const [eddyLoading, setEddyLoading] = useState<boolean>(false);
   const [eddyErr,     setEddyErr]     = useState<string | null>(null);
   const [logLoss,     setLogLoss]     = useState<boolean>(true);   // log W/m³ map
+  // Thermal (Temp view) — a steady-state conduction solve fed by the eddy
+  // losses; lazily fetched, re-run when γ/I or the cooling inputs change.
+  const [thermalPayload, setThermalPayload] = useState<FemPayload | null>(null);
+  const [thermalLoading, setThermalLoading] = useState<boolean>(false);
+  const [thermalErr,     setThermalErr]     = useState<string | null>(null);
+  const [ambientT, setAmbientT] = useState<number>(40);     // °C
+  const [hConv,    setHConv]    = useState<number>(120);    // W/m²K (forced air)
+  const [showFlux, setShowFlux] = useState<boolean>(true);
   const isEddy = !payloadOverride && EDDY_MODES.has(mode);
-  const payload = payloadOverride ?? (isEddy ? eddyPayload : fetchedPayload);
+  const isThermal = !payloadOverride && mode === 'Temp';
+  const payload = payloadOverride
+    ?? (isThermal ? thermalPayload : isEddy ? eddyPayload : fetchedPayload);
+  const busy = isThermal ? thermalLoading : isEddy ? eddyLoading : loading;
+  const errMsg = isThermal ? thermalErr : isEddy ? eddyErr : error;
   // The static solver always computes a demag map (a check at full Br), but if
   // the user has demag modelling OFF the map (all 0 % at no-load) is just
   // confusing — only offer the Demag view when demag is actually enabled.
@@ -734,13 +825,45 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isEddy, eddyPayload, eddyLoading, eddyErr]);
 
+  // ── Thermal (Temp view) ───────────────────────────────────────────────────
+  const thermalCurrent = (I_phase_rms !== undefined && I_phase_rms > 0) ? I_phase_rms : 0;
+  const fetchThermal = () => {
+    if (payloadOverride) return;
+    setThermalLoading(true); setThermalErr(null);
+    const comp = JSON.stringify(readMeshSetting<Record<string, number>>('componentMesh', {}));
+    const qs = new URLSearchParams({
+      ambient_temp:     String(ambientT),
+      h_conv:           String(hConv),
+      gamma_deg:        String(gamma_deg),
+      I_phase_rms:      String(thermalCurrent),
+      mesh_size_mm:     String(readMeshSetting('meshSize', 4.0)),
+      min_size_mm:      String(readMeshSetting('minSize',  0.3)),
+      outer_air_factor: String(readMeshSetting('outerAir', 1.3)),
+      n_sectors:        String(readMeshSetting('nSectors', 4)),
+      component_mesh:   comp,
+    }).toString();
+    fetch(`${API}/api/simulation/physics/thermal_field2d?${qs}`)
+      .then(async r => { if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`); return r.json(); })
+      .then((d: FemPayload) => { setThermalPayload(d); setThermalLoading(false); })
+      .catch(e => { setThermalErr(String(e)); setThermalLoading(false); });
+  };
+  // γ / I / cooling changed → cached thermal solve is stale.
+  useEffect(() => { setThermalPayload(null); setThermalErr(null); },
+    [gamma_deg, I_phase_rms, ambientT, hConv]);
+  useEffect(() => {
+    if (isThermal && !thermalPayload && !thermalLoading && !thermalErr) fetchThermal();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isThermal, thermalPayload, thermalLoading, thermalErr]);
+
   return (
     <Paper sx={{ bgcolor: '#0b1220', border: '1px solid #1e293b', p: 2,
       display: 'flex', flexDirection: 'column', gap: 1 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <Box>
           <Typography sx={{ fontSize: 13, color: '#cbd5e1', fontWeight: 700 }}>
-            {mode === 'Loss'
+            {mode === 'Temp'
+              ? <>Temperature — °C (steady-state thermal solve)</>
+              : mode === 'Loss'
               ? <>Loss density — W/m³ (eddy-current transient)</>
               : mode === 'Jeddy'
                 ? <>Current density J — eddy solve (proximity)</>
@@ -782,6 +905,12 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
                 Loss
               </ToggleButton>
             )}
+            {!payloadOverride && (
+              <ToggleButton value="Temp"
+                title="Steady-state temperature map — solves heat conduction from the EM losses (slow, ~25 s)">
+                Temp
+              </ToggleButton>
+            )}
             {demagOn && <ToggleButton value="Demag">Demag</ToggleButton>}
           </ToggleButtonGroup>
           {mode === 'Loss' && (
@@ -792,10 +921,35 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
               {logLoss ? 'log' : 'lin'}
             </Button>
           )}
+          {isThermal && (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+              <Tooltip title="Ambient / coolant temperature (°C)">
+                <TextField size="small" type="number" label="T₀ °C" value={ambientT}
+                  onChange={(e) => setAmbientT(Number(e.target.value))}
+                  sx={{ width: 78, '& .MuiInputBase-input': { fontSize: 11, py: 0.5 },
+                    '& .MuiInputLabel-root': { fontSize: 11 } }} />
+              </Tooltip>
+              <Tooltip title="Cooling at the housing → convection coefficient h [W/m²·K]">
+                <Select size="small" value={hConv} onChange={(e) => setHConv(Number(e.target.value))}
+                  sx={{ fontSize: 11, '& .MuiSelect-select': { py: 0.5 } }}>
+                  <MenuItem sx={{ fontSize: 11 }} value={10}>Natural air (h≈10)</MenuItem>
+                  <MenuItem sx={{ fontSize: 11 }} value={120}>Forced air (h≈120)</MenuItem>
+                  <MenuItem sx={{ fontSize: 11 }} value={600}>Liquid jacket (h≈600)</MenuItem>
+                  <MenuItem sx={{ fontSize: 11 }} value={2000}>Aggressive liquid (h≈2000)</MenuItem>
+                </Select>
+              </Tooltip>
+              <Button size="small" onClick={() => setShowFlux(v => !v)}
+                title="Toggle heat-flux arrows"
+                sx={{ color: showFlux ? '#e2e8f0' : '#64748b', fontSize: 10, textTransform: 'none',
+                  minWidth: 0, px: 1, border: '1px solid #1e293b' }}>
+                flux
+              </Button>
+            </Box>
+          )}
           {!hideRefresh && (
             <Button size="small" startIcon={<RefreshIcon fontSize="small"/>}
-              onClick={isEddy ? fetchEddy : fetchFem}
-              disabled={isEddy ? eddyLoading : loading}
+              onClick={isThermal ? fetchThermal : isEddy ? fetchEddy : fetchFem}
+              disabled={busy}
               sx={{ color: '#93c5fd', fontSize: 11, textTransform: 'none' }}>
               Re-solve
             </Button>
@@ -803,10 +957,10 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
         </Box>
       </Box>
 
-      {(isEddy ? eddyErr : error) && (
+      {errMsg && (
         <Typography sx={{ fontSize: 11, color: '#fca5a5', p: 1,
           border: '1px solid #7f1d1d', borderRadius: 1 }}>
-          {isEddy ? eddyErr : error}
+          {errMsg}
         </Typography>
       )}
 
@@ -816,14 +970,16 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
         {/* Canvas */}
         <Box sx={{ position: 'relative', border: '1px solid #0f172a',
           bgcolor: '#060d17', minHeight: 460 }}>
-          {(isEddy ? eddyLoading : loading) && (
+          {busy && (
             <Box sx={{ position: 'absolute', inset: 0, flexDirection: 'column',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               bgcolor: 'rgba(6,13,23,0.7)', zIndex: 5, gap: 1 }}>
               <CircularProgress size={32}/>
-              {isEddy && (
+              {(isEddy || isThermal) && (
                 <Typography sx={{ fontSize: 11, color: '#94a3b8' }}>
-                  Running eddy-current transient (~25 s)…
+                  {isThermal
+                    ? 'Running thermal solve (EM losses + conduction, ~25 s)…'
+                    : 'Running eddy-current transient (~25 s)…'}
                 </Typography>
               )}
             </Box>
@@ -834,7 +990,7 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
                 near={0.1} far={5000}/>
               <FitView payload={payload} controlsRef={controlsRef}/>
               <ambientLight intensity={1}/>
-              <FieldMesh payload={payload} mode={mode} logLoss={logLoss}/>
+              <FieldMesh payload={payload} mode={mode} logLoss={logLoss} showFlux={showFlux}/>
               <OrbitControls ref={controlsRef} enableDamping={false}
                 enableRotate enablePan enableZoom zoomSpeed={1.2}/>
               {/* Drive + follow the overlay Viewcube (same as Geometry). */}
@@ -860,6 +1016,10 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
               Math.floor((p / 100) * (a.length - 1))));
             return a[i];
           };
+          if (mode === 'Temp') {
+            return <ColorBar vmin={payload.T_min ?? 0} vmax={payload.T_max ?? 1}
+              unit="°C" lut={(t) => turbo01(t)} fmt={(v) => v.toFixed(0)}/>;
+          }
           if (mode === 'Bmag') {
             const Bs: number[] = [];
             for (let ti = 0; ti < tris.length; ti++) {
@@ -932,7 +1092,14 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
       {payload && (
         <Box sx={{ display: 'grid',
           gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 1, mt: 1 }}>
-          {(isEddy
+          {(isThermal
+            ? [
+                { label: 'Winding T_max', value: payload.components?.winding ? `${payload.components.winding.max} °C` : '—' },
+                { label: 'Magnet T_max',  value: payload.components?.magnet ? `${payload.components.magnet.max} °C` : '—' },
+                { label: 'Stator T_max',  value: payload.components?.stator ? `${payload.components.stator.max} °C` : '—' },
+                { label: 'Hot-spot',      value: `${(payload.T_max ?? 0).toFixed(0)} °C` },
+              ]
+            : isEddy
             ? [
                 { label: 'Copper loss', value: `${(payload.P_cu_W ?? 0).toFixed(0)} W` },
                 { label: 'Iron loss',   value: `${(payload.P_fe_W ?? 0).toFixed(0)} W` },

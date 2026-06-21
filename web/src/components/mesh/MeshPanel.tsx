@@ -508,6 +508,24 @@ const MeshPanel: React.FC = () => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nSectors]);
 
+  // ── Valid symmetry sectors for THIS motor ───────────────────────────────
+  // A sector model is only valid for divisors of GCD(slots, poles): each wedge
+  // must hold a whole number of slots AND poles.  e.g. 12s/14p → GCD 2 → {1,2}
+  // (only Full or 1/2); 24s/28p → GCD 4 → {1,2,4}.  Offering an invalid sector
+  // (e.g. 1/4 of a 12-slot motor) builds a broken cut mesh.
+  const _gcd = (a: number, b: number): number => (b === 0 ? a : _gcd(b, a % b));
+  const symSlots = geo?.num_slots ?? 24;
+  const symPoles = geo?.num_poles ?? 28;
+  const symGcd = Math.max(1, _gcd(Math.round(symSlots), Math.round(symPoles)));
+  const validSectors = [1, 2, 3, 4, 6, 8, 12].filter(s => symGcd % s === 0);
+  // If the persisted nSectors is invalid for this motor, snap to the finest valid.
+  useEffect(() => {
+    if (geo && !validSectors.includes(nSectors)) {
+      setNSectors(validSectors[validSectors.length - 1]);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [geo, symGcd]);
+
   // ── Standard / Periodic (pole-copy) switch ──────────────────────────────
   // Toggling it must REBUILD the displayed mesh immediately, like the symmetry
   // switch — otherwise the change silently does nothing until the next "Rebuild
@@ -785,7 +803,7 @@ const MeshPanel: React.FC = () => {
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
                 <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>
                   Symmetry
-                  <Tooltip title="Split motor into N equal wedges. 24 slots + 28 poles → GCD = 4 → 1/4 model (6 slots + 7 poles per sector). Anti-periodic BC on radial cuts (7 = odd # of poles)." placement="right">
+                  <Tooltip title={`Split the motor into N equal wedges. ${symSlots} slots / ${symPoles} poles → GCD = ${symGcd} → valid models: ${validSectors.map(s => s === 1 ? 'Full' : '1/' + s).join(', ')} (each wedge needs whole slots AND poles). Anti-periodic BC on the radial cuts when poles-per-sector is odd.`} placement="right">
                     <span style={{ color: '#475569', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
                   </Tooltip>
                 </Typography>
@@ -799,19 +817,19 @@ const MeshPanel: React.FC = () => {
                     textTransform: 'none',
                     '&.Mui-selected': { color: '#e2e8f0', bgcolor: '#1e3a5f',
                       borderColor: '#3b82f6' } } }}>
-                <ToggleButton value={1}>Full</ToggleButton>
-                <ToggleButton value={2}>1/2</ToggleButton>
-                <ToggleButton value={4}>1/4</ToggleButton>
+                {validSectors.map(s => (
+                  <ToggleButton key={s} value={s}>{s === 1 ? 'Full' : `1/${s}`}</ToggleButton>
+                ))}
               </ToggleButtonGroup>
               {nSectors > 1 ? (
                 <Typography sx={{ fontSize: 9, color: '#334155', mt: 0.5 }}>
-                  {24 / nSectors} slots + {28 / nSectors} poles per sector ·
-                  {(28 / nSectors) % 2 === 1 ? ' anti-periodic' : ' periodic'} BC on radial
-                  cuts ({28 / nSectors} poles = {(28 / nSectors) % 2 === 1 ? 'odd' : 'even'})
+                  {symSlots / nSectors} slots + {symPoles / nSectors} poles per sector ·
+                  {(symPoles / nSectors) % 2 === 1 ? ' anti-periodic' : ' periodic'} BC on radial
+                  cuts ({symPoles / nSectors} poles = {(symPoles / nSectors) % 2 === 1 ? 'odd' : 'even'})
                 </Typography>
               ) : (
                 <Typography sx={{ fontSize: 9, color: '#334155', mt: 0.5 }}>
-                  Full 360° — stitched from two clean 1/2 sectors (no cuts, no double mesh).
+                  Full 360° — stitched from clean half-sectors (no cuts, no double mesh).
                   Saved permanently &amp; used by Simulation + charts.
                 </Typography>
               )}

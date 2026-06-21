@@ -42,7 +42,7 @@ raw["geometry"].update(dict(
     magnet_height=5.0, rotor_house_height=1.0, shaft_height=2.0,
     magnet_fill_down=0.9, magnet_fill_up=0.80, magnet_fill_radius=1.0, magnet_up_gap=0.7,
     rotor_hole=0.6, magnet_down_height=1.0,
-    stator_fillet_r=0.0, stator_fillet_r1=0.0, rotor_fill_r=0.2,  # no slot-corner rounding
+    stator_fillet_r=0.9, stator_fillet_r1=0.0, rotor_fill_r=0.2,  # OUTER fillet only; no inner-slot rounding
     motor_length=12,
 ))
 raw["materials"].update(dict(stator_core="20SW1200", rotor_core="20SW1200", magnet="F45SH_120C"))

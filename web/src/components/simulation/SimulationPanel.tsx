@@ -872,7 +872,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
             <Button
               fullWidth
               variant="contained"
-              onClick={() => { commitSteps(); if (cancelledRun) setAskResume(true); else launchRun(false); }}
+              onClick={() => { commitSteps(); if (cancelledRun) setAskResume(true); else launchRun(true); }}
               startIcon={<PlayArrowIcon />}
               sx={{
                 py: 1.2, fontWeight: 700, fontSize: 13, letterSpacing: 0.5,

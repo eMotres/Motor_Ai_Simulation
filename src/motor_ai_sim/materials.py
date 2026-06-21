@@ -122,6 +122,8 @@ class MagnetMaterial:
     mu_rec: float = 1.0    # Recoil permeability (dimensionless)
     sigma: float = 0.0     # S/m (for eddy-current loss)
     density: float = 7500.0  # kg/m³
+    thermal_conductivity: Optional[float] = None   # W/(m·K)  (NdFeB ≈ 8)
+    specific_heat: Optional[float] = None           # J/(kg·K) (NdFeB ≈ 460)
 
     bh_curve: List[BHPoint] = field(default_factory=list)
 
@@ -191,6 +193,8 @@ def _parse_magnet(name: str, raw: dict) -> MagnetMaterial:
         mu_rec=float(raw.get("mu_rec") or 1),
         sigma=float(raw.get("sigma") or 0),
         density=float(raw.get("density") or 7500),
+        thermal_conductivity=raw.get("thermal_conductivity"),
+        specific_heat=raw.get("specific_heat"),
         bh_curve=bh,
     )
 

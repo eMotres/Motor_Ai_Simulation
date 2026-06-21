@@ -7,7 +7,7 @@
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Box, Paper, Typography, Tooltip,
+  Box, Paper, Typography, Tooltip, CircularProgress,
 } from '@mui/material';
 import {
   ResponsiveContainer, LineChart, Line, XAxis, YAxis,
@@ -148,6 +148,7 @@ function loadLastTransient(): TransientPayload | null {
   catch { return null; }
 }
 
+// (live recompute progress strip: elapsed + points, driven by busy + /progress)
 const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onSummary, runNonce = 0, onBusyChange, steps = 12, fresh = false, fieldLosses = true, demag = false, torqueFilter = true, appliedFromSweep = false }) => {
   // `steps` (n_steps_per_period) is controlled from the left panel and
   // matches the animation viewer's n_frames so both hit the same backend
@@ -176,26 +177,51 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
   }, [geometry]);
   const geoStale = !!data && data._geoSig != null && data._geoSig !== geoSig;
 
-  // Poll the backend /progress endpoint every 500 ms while a run is in
-  // flight, so we can show "Frame X/N — Ys elapsed — ETA Zs" instead of
-  // an opaque spinning "Running…".
+  // Poll the backend /progress endpoint so we can show a live "Computing X/N
+  // points — Ys elapsed" strip.  Polled CONTINUOUSLY while mounted — NOT gated
+  // on the frontend `busy` flag.  The transient solve can be launched by THIS
+  // panel OR by the field/animation viewer (they share one backend solve), and
+  // the backend's `running` flag is the single source of truth for whether a
+  // solve is in flight.  Cadence backs off to 1.5 s when idle to stay cheap;
+  // tightens to 350 ms while a solve is running so the counter advances live.
   useEffect(() => {
-    if (!busy) { setProgress(null); return; }
     let alive = true;
+    let misses = 0;
+    let timer = 0;
     const tick = async () => {
       if (!alive) return;
       try {
         const r = await fetch(`${API}/api/simulation/physics/fem_transient/progress`);
         if (r.ok) {
           const p: ProgressInfo = await r.json();
-          if (alive) setProgress(p);
+          if (alive) { setProgress(p); misses = p.running ? 0 : Math.min(misses + 1, 99); }
         }
       } catch {/* ignore polling errors */}
+      if (alive) timer = window.setTimeout(tick, misses > 3 ? 1500 : 350);
     };
     tick();   // immediate first read
-    const id = window.setInterval(tick, 500);
-    return () => { alive = false; window.clearInterval(id); };
-  }, [busy]);
+    return () => { alive = false; window.clearTimeout(timer); };
+  }, []);
+
+  // A solve is in flight if EITHER this panel's own fetch is busy OR the backend
+  // reports a transient running (covers the field/animation-viewer-triggered
+  // solve, and survives the frontend busy flag being flaky in dev StrictMode).
+  const solving = busy || !!progress?.running;
+
+  // Local wall-clock so "elapsed" advances SMOOTHLY in real time (every 200 ms)
+  // — the backend /progress poll only refreshes every 500 ms and not until the
+  // solve loop starts, so on its own it can't show a live ticking timer.  This
+  // is what makes the recompute visibly "running" the instant Run is pressed.
+  const [solveElapsed, setSolveElapsed] = useState(0);
+  const solveStartRef = useRef(0);
+  useEffect(() => {
+    if (!solving) { setSolveElapsed(0); return; }
+    solveStartRef.current = performance.now();
+    setSolveElapsed(0);
+    const id = window.setInterval(
+      () => setSolveElapsed((performance.now() - solveStartRef.current) / 1000), 200);
+    return () => window.clearInterval(id);
+  }, [solving]);
 
   const abortRef = useRef<AbortController | null>(null);
 
@@ -460,35 +486,54 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
           })()}
         </Box>
         {/* Steps/period + Run moved to the left panel's "Run Simulation".
-            Just show the live frame counter here while solving. */}
-        {busy && progress && progress.total > 0 && (
+            Just show the live point counter here while solving. */}
+        {solving && (
           <Typography sx={{ fontSize: 11, color: '#60a5fa', fontWeight: 600,
             whiteSpace: 'nowrap' }}>
-            Frame {progress.step}/{progress.total}
+            {progress && progress.total > 0
+              ? `Point ${progress.step}/${progress.total}`
+              : `Computing ${steps} points…`}
           </Typography>
         )}
       </Box>
 
-      {/* Live progress strip — only visible while a transient is running */}
-      {busy && progress && progress.total > 0 && (
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.4,
-          px: 1, py: 0.6, bgcolor: '#060d17', border: '1px solid #1e293b',
-          borderRadius: 1, fontFamily: 'monospace' }}>
+      {/* Live progress strip — appears the INSTANT a recompute starts (not
+          gated on the first backend poll), so the user always sees the solve
+          running: a live-ticking elapsed clock, the number of points computed
+          so far, and a fill bar. */}
+      {solving && (() => {
+        const total = (progress && progress.total > 0) ? progress.total : steps;
+        const step  = progress ? Math.min(progress.step, total) : 0;
+        const pct   = Math.min(100, 100 * step / Math.max(1, total));
+        const eta   = (progress && progress.eta_s) ? progress.eta_s : 0;
+        const perPt = (progress && progress.per_step_s) ? progress.per_step_s
+                    : (step > 0 ? solveElapsed / step : 0);
+        return (
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.6,
+          px: 1.25, py: 0.9, bgcolor: '#0a1424', border: '1px solid #1d4ed8',
+          borderRadius: 1, fontFamily: 'monospace',
+          boxShadow: '0 0 10px rgba(37,99,235,0.25)' }}>
           <Box sx={{ display: 'flex', justifyContent: 'space-between',
-            fontSize: 10, color: '#94a3b8' }}>
-            <span>Solving frame <b>{progress.step}</b> of <b>{progress.total}</b>
-              {progress.per_step_s ? `   ·   ${progress.per_step_s.toFixed(1)} s/frame` : ''}</span>
-            <span>elapsed <b>{progress.elapsed_s.toFixed(1)} s</b>   ·   ETA <b>{progress.eta_s.toFixed(1)} s</b></span>
+            alignItems: 'baseline', fontSize: 12, color: '#bfdbfe' }}>
+            <span>
+              <CircularProgress size={11} thickness={6}
+                sx={{ color: '#3b82f6', mr: 0.8, verticalAlign: 'middle' }}/>
+              Computing&nbsp;<b style={{ color: '#e0f2fe' }}>{step}</b>&nbsp;/&nbsp;<b>{total}</b>&nbsp;points
+              {perPt ? `   ·   ${perPt.toFixed(2)} s/pt` : ''}
+            </span>
+            <span style={{ color: '#93c5fd' }}>
+              elapsed&nbsp;<b style={{ color: '#e0f2fe' }}>{solveElapsed.toFixed(1)} s</b>
+              {eta ? `   ·   ETA ${eta.toFixed(0)} s` : ''}
+            </span>
           </Box>
-          <Box sx={{ width: '100%', height: 4, bgcolor: '#0f172a',
-            borderRadius: 2, overflow: 'hidden' }}>
-            <Box sx={{
-              width: `${(100 * progress.step / Math.max(1, progress.total)).toFixed(1)}%`,
-              height: '100%', bgcolor: '#3b82f6',
-              transition: 'width 0.4s ease' }}/>
+          <Box sx={{ width: '100%', height: 6, bgcolor: '#0f172a',
+            borderRadius: 3, overflow: 'hidden' }}>
+            <Box sx={{ width: `${pct.toFixed(1)}%`, height: '100%',
+              bgcolor: '#3b82f6', transition: 'width 0.3s ease' }}/>
           </Box>
         </Box>
-      )}
+        );
+      })()}
 
       {error && (
         <Typography sx={{ fontSize: 11, color: '#fca5a5', p: 1,

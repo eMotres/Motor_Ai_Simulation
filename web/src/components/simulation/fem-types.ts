@@ -51,4 +51,21 @@ export interface FemPayload {
   eddy?:                 boolean;
   P_cu_ac_solve_W?:      number;
   V_peak?:               number;
+
+  // ── Thermal solve (Temp view) ───────────────────────────────────────────
+  // The thermal payload carries its OWN solid sub-mesh in vertices/triangles/
+  // domain_per_tri (outer air + gap dropped), plus nodal temperature and flux.
+  temperature_per_node?: number[];             // °C
+  heat_flux_per_tri?:    [number, number][];   // W/m² vector per element
+  flux_mag_per_tri?:     number[];             // |q| W/m²
+  T_min?:                number;
+  T_max?:                number;
+  components?: {
+    winding?: { max: number; avg: number } | null;
+    magnet?:  { max: number; avg: number } | null;
+    stator?:  { max: number; avg: number } | null;
+    rotor?:   { max: number; avg: number } | null;
+  };
+  ambient_temp?: number; h_conv?: number;
+  k_steel?: number; k_magnet?: number; k_shaft?: number;
 }

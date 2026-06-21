@@ -84,6 +84,42 @@ def geometry_ir_from_polys(
                       provenance=provenance)
 
 
+# ── geometry: GeometryIR -> polys dict (inverse, for the existing mesher) ────
+def polys_from_geometry_ir(gir: Any) -> Dict[str, Any]:
+    """Inverse of geometry_ir_from_polys: rebuild the shapely polys dict the
+    existing mesher consumes. This is the geometry.2d -> mesh handoff bridge until
+    the mesher consumes GeometryIR natively."""
+    from shapely.geometry import Polygon
+
+    def poly(region: Any):
+        ext = [(float(p[0]), float(p[1])) for p in region.exterior.points]
+        holes = [[(float(p[0]), float(p[1])) for p in h.points] for h in region.holes]
+        return Polygon(ext, holes)
+
+    out: Dict[str, Any] = {"magnets": [], "coils": []}
+    for r in gir.regions:
+        role = getattr(r.role, "value", r.role)
+        if role == "stator":
+            out["stator"] = poly(r)
+        elif role == "rotor":
+            out["rotor"] = poly(r)
+        elif role == "shaft":
+            out["shaft"] = poly(r)
+        elif role == "air_gap":
+            out["in_band"] = poly(r)
+        elif role == "air_outer":
+            out["out_band"] = poly(r)
+        elif role == "magnet":
+            out["magnets"].append((poly(r), r.polarity_deg))
+        elif role == "coil":
+            out["coils"].append(poly(r))
+    if gir.symmetry.slip_radius_mm is not None:
+        out["mid_r_mm"] = float(gir.symmetry.slip_radius_mm)
+    if gir.symmetry.outer_bc_radius_mm is not None:
+        out["r_outer_boundary_mm"] = float(gir.symmetry.outer_bc_radius_mm)
+    return out
+
+
 # ── mesh: skfem MeshTri + tags -> MeshIR ─────────────────────────────────────
 def mesh_ir_from_skfem(
     mesh: Any,                       # skfem MeshTri: mesh.p (2,N), mesh.t (3,M)

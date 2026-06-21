@@ -23,7 +23,6 @@ import BoltIcon         from '@mui/icons-material/Bolt';
 import SimulationCharts from './SimulationCharts';
 import PhysicsDashboard from './PhysicsDashboard';
 import ModelCompare from './ModelCompare';
-import CostEstimate from './CostEstimate';
 import SaveToMotorButton from '../common/SaveToMotorButton';
 import { syncActiveMotor } from '../common/motorSettings';
 import SaveIcon from '@mui/icons-material/Save';
@@ -1171,10 +1170,6 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
         {/* ── Model comparison (diagnostics) — runs the three torque models
             across a γ sweep so the inter-model discrepancy is visible. ── */}
         <ModelCompare I_phase_rms={current} />
-
-        {/* ── Material cost — runs THROUGH the modular kernel (geometry.2d → cost).
-            First user-facing feature on the module pipeline; additive. ── */}
-        <CostEstimate />
 
         {/* ── Physics dashboard (the standard FEM interface) — FIRST so the
             FEM results + fields + transient are the prominent view ── */}

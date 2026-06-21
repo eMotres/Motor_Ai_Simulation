@@ -47,6 +47,7 @@ import { useMotorStore, useUIStore } from './stores/motorStore';
 import SimulationPanel from './components/simulation/SimulationPanel';
 import CompareTab from './components/compare/CompareTab';
 import MeshPanel from './components/mesh/MeshPanel';
+import CostPanel from './components/cost/CostPanel';
 import { ensureActiveMotor } from './components/common/motorSettings';
 
 const darkTheme = createTheme({
@@ -211,7 +212,7 @@ function App() {
   }, [activeTab, isAdmin, fullUI, setActiveTab]);
 
   const showViewer = activeTab !== 'sweep' && activeTab !== 'motors'
-    && activeTab !== 'compare' && activeTab !== 'admin';
+    && activeTab !== 'compare' && activeTab !== 'admin' && activeTab !== 'cost';
 
   return (
     <ThemeProvider theme={darkTheme}>
@@ -305,6 +306,7 @@ function App() {
             {fullUI && <Tab label="Materials" value="materials" sx={{ minHeight: 40, fontSize: '0.8rem' }} />}
             {fullUI && <Tab label="Mesh" value="mesh" sx={{ minHeight: 40, fontSize: '0.8rem' }} />}
             {fullUI && <Tab label="Simulation" value="simulation" sx={{ minHeight: 40, fontSize: '0.8rem' }} />}
+            {fullUI && <Tab label="Cost" value="cost" sx={{ minHeight: 40, fontSize: '0.8rem' }} />}
             <Tab label="Configure" value="compare" sx={{ minHeight: 40, fontSize: '0.8rem' }} />
             {fullUI && <Tab label="Optimization" value="sweep" sx={{ minHeight: 40, fontSize: '0.8rem' }} />}
             {isAdmin && <Tab label="Admin" value="admin" sx={{ minHeight: 40, fontSize: '0.8rem', fontWeight: 700, color: '#fbbf24' }} />}
@@ -410,6 +412,7 @@ function App() {
             </Box>
           )}
           {activeTab === 'mesh' && <MeshPanel />}
+          {activeTab === 'cost' && <CostPanel />}
           {/* Simulation stays MOUNTED across tab switches (display toggle, not
               an unmount) so the computed dashboard — T(t), losses, harmonics
               and the field animation — survives navigating to another tab and

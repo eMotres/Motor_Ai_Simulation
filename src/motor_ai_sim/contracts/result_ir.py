@@ -76,6 +76,10 @@ class ResultIR(BaseModel):
     scalars: ScalarResults = Field(default_factory=ScalarResults)
     series: Optional[SeriesResults] = None
     fields: Optional[FieldResults] = None
+    # Transitional: the producer's full untyped payload, so a UI can be migrated
+    # onto the kernel byte-identically before it consumes the typed scalars/series.
+    # The typed fields above remain the CONTRACT; `raw` is a migration bridge.
+    raw: Optional[Dict[str, Any]] = None
     provenance: Optional[Provenance] = None
 
     @classmethod

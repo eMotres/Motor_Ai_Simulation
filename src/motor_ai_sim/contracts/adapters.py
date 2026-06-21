@@ -183,7 +183,10 @@ def result_ir_from_transient(sbres: Dict[str, Any], *, provenance: Optional[Prov
             extra=extra,
         )
 
-    return ResultIR(physics="em_transient", scalars=scalars, series=series, provenance=provenance)
+    # Carry the full payload (minus heavy per-frame fields) so a UI can migrate
+    # onto the kernel byte-identically; the typed scalars/series stay the contract.
+    raw = {k: v for k, v in sbres.items() if k != "frames"}
+    return ResultIR(physics="em_transient", scalars=scalars, series=series, raw=raw, provenance=provenance)
 
 
 def stamp(module: str, *, version: str = "0.1.0", input_hash: Optional[str] = None,

@@ -2427,7 +2427,12 @@ def get_fem_transient(
             except Exception as _se:
                 log.warning("SB summary build failed: %s", _se)
             _fem_transient_cache[_sb_key] = _sbres
-            _save_last_transient(_sb_key, _sbres)   # survive a back-end restart
+            # Persist for "restore last simulation" on reload — but ONLY the user's
+            # MAIN motor. Per-candidate evals (optimizer / kernel runs with a geo
+            # override) must never clobber the saved simulation, and parallel
+            # optimizer subprocesses must not race on the shared store file.
+            if not _geo_ov:
+                _save_last_transient(_sb_key, _sbres)   # survive a back-end restart
             return _sbres
         except HTTPException:
             raise

@@ -12,6 +12,17 @@ from __future__ import annotations
 import math
 from typing import Dict, Any
 
+_KERNEL = None
+
+
+def _kernel():
+    """Lazy singleton Kernel for this subprocess — build the module registry once."""
+    global _KERNEL
+    if _KERNEL is None:
+        from motor_ai_sim.modules.kernel import Kernel
+        _KERNEL = Kernel()
+    return _KERNEL
+
 
 def _coil_fit(geo: Dict[str, float]) -> tuple:
     """How many of the requested wires actually fit in the slot before the stack
@@ -49,8 +60,7 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
     fraction of the electrical period swept.  For a cheap ripple-amplitude probe
     the scan uses n_periods=1/6 (one 6·k ripple cycle) with ~6 frames; a full
     refine uses n_periods=1 with more frames."""
-    import numpy as np
-    from motor_ai_sim.simulation.fem_solver_2d import em_transient_eval
+    import numpy as np, json
     from motor_ai_sim.optimization.design_eval import build_params, _masses
     from motor_ai_sim.config import get_config
 
@@ -81,16 +91,22 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
     # window holds exactly ``steps`` frames.
     nper = max(1e-3, float(n_periods))
     nspp = max(4, int(round(int(steps) / nper)))
-    # SAME canonical solve the Simulation tab uses (em_transient_eval) — the
-    # optimizer can no longer diverge from what the user sees in Simulation.
-    d = em_transient_eval(
-        n_steps_per_period=nspp, n_periods=nper, gamma_deg=float(gamma_deg),
-        I_phase_rms=float(current_a), mesh_size_mm=float(mesh_size_mm),
-        min_size_mm=float(min_size_mm),
-        n_sectors=int(n_sectors), coil_temp_c=float(coil_temp_c),
-        gap_layers=float(gap_layers), end_winding_factor=float(end_winding_factor),
-        rotor_eddy=bool(rotor_eddy),
-        pole_copy=pole_copy, torque_filter=bool(torque_filter), geo_override=overrides)
+    # Run the candidate THROUGH the kernel module solver.em_transient (the SAME
+    # module the Simulation tab uses), inside this isolated subprocess. The module
+    # -> get_fem_transient -> em_transient_eval; the geo override means it won't
+    # touch the user's saved simulation. result.raw is the sliding-band dict.
+    _out = _kernel().run("solver.em_transient", {
+        "n_steps_per_period": nspp, "n_periods": nper, "gamma_deg": float(gamma_deg),
+        "I_phase_rms": float(current_a), "mesh_size_mm": float(mesh_size_mm),
+        "min_size_mm": float(min_size_mm), "n_sectors": int(n_sectors),
+        "coil_temp_c": float(coil_temp_c), "gap_layers": float(gap_layers),
+        "end_winding_factor": float(end_winding_factor), "rotor_eddy": bool(rotor_eddy),
+        "pole_copy": pole_copy, "torque_filter": bool(torque_filter),
+        "sliding_band": True, "fresh": True, "geo": json.dumps(overrides),
+    })
+    if not _out.get("ok"):
+        raise RuntimeError(_out.get("error") or "solver.em_transient failed")
+    d = getattr(_out.get("result"), "raw", None) or {}
 
     Tavg = float(d["T_avg_Nm"])
     cu = float(np.mean(d["P_cu_W"])); fe = float(np.mean(d["P_fe_W"]))

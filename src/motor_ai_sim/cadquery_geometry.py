@@ -342,8 +342,11 @@ class CadQueryMotor:
         wire_w     = p['wire_width']
         ins_w      = p['insulation_thickness']
         wire_d_x   = p['wire_spacing_x']
-        slot_fillet_r  = p.get('stator_fillet_r',  2.5)
-        slot_fillet_r1 = p.get('stator_fillet_r1', 0.5)
+        # Default 0 = SHARP slot corners. A missing param must never silently add a
+        # fillet (that re-introduced slot rounding nobody asked for). Fillets are
+        # opt-in: only applied when a preset explicitly sets a positive radius.
+        slot_fillet_r  = p.get('stator_fillet_r',  0.0)
+        slot_fillet_r1 = p.get('stator_fillet_r1', 0.0)
 
         slot_w  = wire_w + ins_w*2 + wire_d_x
         slot_h  = slot_height
@@ -1114,8 +1117,9 @@ class CadQueryMotor:
         # ── Stator corner rounding (matches 3D _OuterRingSelector / _InnerRingSelector) ──
         # Apply _fillet_corner only to vertices near outer_r (concave slot-wall corners)
         # and near inner_r (convex tooth-tip corners), matching the 3D fillet selectors.
-        fillet_r  = p.get('stator_fillet_r',  2.5)
-        fillet_r1 = p.get('stator_fillet_r1', 0.9)
+        # Default 0 = SHARP corners (opt-in fillets only; see 3D path above).
+        fillet_r  = p.get('stator_fillet_r',  0.0)
+        fillet_r1 = p.get('stator_fillet_r1', 0.0)
 
         def _fillet_coords(coords, target_r, r_tol, fillet_radius, min_angle_deg=20.0):
             """Round only SHARP corners near target_r in a coordinate ring."""
@@ -1550,8 +1554,9 @@ class CadQueryMotor:
                 result = result.buffer(0)
             return result
 
-        fillet_r  = p.get('stator_fillet_r',  2.5)
-        fillet_r1 = p.get('stator_fillet_r1', 0.9)
+        # Default 0 = SHARP corners (opt-in fillets only; see 3D path above).
+        fillet_r  = p.get('stator_fillet_r',  0.0)
+        fillet_r1 = p.get('stator_fillet_r1', 0.0)
         if fillet_r > 0 and hasattr(stator_poly, 'exterior'):
             stator_poly = _fillet_ring_corners_2d(stator_poly, outer_r, 1.5, fillet_r)
         if fillet_r1 > 0 and hasattr(stator_poly, 'exterior'):

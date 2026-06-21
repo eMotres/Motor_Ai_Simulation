@@ -1,34 +1,45 @@
 geometry:
-  stator_diameter: 200
-  slot_height: 19.8
-  core_thickness: 7.2
-  num_seg: 4
+  stator_diameter: 40
+  slot_height: 5
+  core_thickness: 2
+  num_seg: 2
   num_slots_per_segment: 6
-  num_poles_per_segment: 5
-  air_gap: 0.65
-  tooth_width: 11.2
-  tooth2_width: 7.7
-  cut_width: 8.1
+  num_poles_per_segment: 7
+  air_gap: 0.25
+  tooth_width: 3
+  tooth2_width: 1.8
+  cut_width: 1
   insulation_thickness: 0.2
-  wire_width: 7
-  wire_height: 0.9
+  wire_width: 2.5
+  wire_height: 0.6
   wire_spacing_x: 0.1
   wire_spacing_y: 0.13
-  num_wires_per_slot: 12.0
+  num_wires_per_slot: 8
   slot_hs: 0.267
-  magnet_height: 21.4
-  rotor_house_height: 1.6
-  shaft_height: 4.0
+  magnet_height: 5
+  rotor_house_height: 1
+  shaft_height: 2
   magnet_fill_down: 0.9
-  magnet_fill_up: 0.467
-  magnet_fill_radius: 3
-  magnet_up_gap: 2.67
+  magnet_fill_up: 0.8
+  magnet_fill_radius: 1
+  magnet_up_gap: 0.7
   rotor_hole: 0.6
-  magnet_down_height: 2.6
-  stator_fillet_r: 4.6
-  stator_fillet_r1: 1.7
-  rotor_fill_r: 0.5
-  motor_length: 45
+  magnet_down_height: 1
+  stator_fillet_r: 0.0
+  stator_fillet_r1: 0.0
+  rotor_fill_r: 0.2
+  motor_length: 12
+  stator_outer_radius: 20
+  stator_inner_radius: 13
+  num_slots: 12
+  num_poles: 14
+  angle_slot: 30
+  angle_pole: 25.714285714285715
+  slot_pitch: 0.5235987755982988
+  pole_pitch: 0.4487989505128276
+  rotor_outer_radius: 12.75
+  rotor_inner_radius: 6.75
+  slot_width: 3.1
 derived_params:
   stator_outer_radius: stator_diameter / 2
   stator_inner_radius: stator_outer_radius - core_thickness - slot_height
@@ -361,12 +372,12 @@ mesh:
   n_radial: 11
   n_angular: 104
   n_angular_slots: 20
-  mesh_size_mm: 4.0
+  mesh_size_mm: 0.6
   outer_air_factor: 1.2
   gap_layers: 1.0
   normal_deviation: 6.0
   min_size_mm: 0.3
-  n_sectors: 4
+  n_sectors: 2
 materials:
   stator_core: B15AHV950M
   slot: copper
@@ -385,7 +396,12 @@ winding:
   layers: 1
   layout: A|a|b|B|C|c|a|A|B|b|c|C|A|a|b|B|C|c|a|A|B|b|c|C
 simulation:
-  max_current: 110.0
-  frequency: 666.67
-  rpm: 4000.0
-  phase_offset_deg: 0.0
+  max_current: 35
+  frequency: 1400.0
+  rpm: 12000
+  phase_offset_deg: -42
+  steps_per_period: 24
+  demag: false
+  coil_temp_c: 120
+  end_winding_factor: 1.66
+  connection: 4S

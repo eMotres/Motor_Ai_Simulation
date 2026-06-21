@@ -118,6 +118,29 @@ const ModulesPanel: React.FC = () => {
           })()}
           {study.field?.error && <Typography sx={{ fontSize: 11, color: '#fca5a5' }}>{study.field.error}</Typography>}
         </Box>
+
+        {/* FULL chain: 4 modules compose in one kernel study */}
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
+          <Button size="small" variant="contained" disabled={!!studyBusy}
+            onClick={() => runStudy('full', ['geometry.2d', 'mesh', 'solver.em_static', 'cost'])}
+            sx={{ textTransform: 'none', fontSize: 11 }}>
+            {studyBusy === 'full' ? 'Running full pipeline…' : 'Run FULL pipeline: geometry.2d → mesh → solver.em_static → cost'}
+          </Button>
+          {study.full && !study.full.error && (() => {
+            const em = study.full.steps?.['solver.em_static']?.result;
+            const bmean = em?.scalars?.b_mag_mean_T;
+            const nn = em?.raw?.n_nodes;
+            const total = study.full.steps?.cost?.result?.total;
+            return (
+              <Typography sx={{ fontSize: 11, fontFamily: 'monospace', color: study.full.ok ? '#34d399' : '#fbbf24' }}>
+                study {study.full.ok ? 'ok' : 'partial'} — {steps(study.full)}
+                {bmean != null && `   →   B̄=${Number(bmean).toFixed(2)} T on ${nn} nodes`}
+                {total != null && ` · cost $${total}`}
+              </Typography>
+            );
+          })()}
+          {study.full?.error && <Typography sx={{ fontSize: 11, color: '#fca5a5' }}>{study.full.error}</Typography>}
+        </Box>
       </Box>
 
       {loading && (

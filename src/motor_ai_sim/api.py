@@ -27,6 +27,7 @@ from motor_ai_sim.routes.account import router as account_router
 from motor_ai_sim.routes.admin import router as admin_router
 from motor_ai_sim.routes.support import router as support_router
 from motor_ai_sim.routes.modules import router as modules_router
+from motor_ai_sim.routes.kernel import router as kernel_router
 from motor_ai_sim.services.geometry_service import get_current_geometry, params_to_dict
 from motor_ai_sim import materials as mat_lib
 
@@ -74,6 +75,7 @@ app.include_router(account_router)
 app.include_router(admin_router)
 app.include_router(support_router)
 app.include_router(modules_router)
+app.include_router(kernel_router)
 
 
 @app.on_event("startup")

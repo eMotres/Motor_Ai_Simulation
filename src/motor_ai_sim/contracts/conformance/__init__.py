@@ -7,5 +7,11 @@ contract + its conformance gate, not trust.
 from __future__ import annotations
 
 from .geometry import assert_geometry_ir, assert_geometry_provider
+from .mesh import assert_mesh_ir, assert_mesh_provider
+from .result import assert_result_ir
 
-__all__ = ["assert_geometry_ir", "assert_geometry_provider"]
+__all__ = [
+    "assert_geometry_ir", "assert_geometry_provider",
+    "assert_mesh_ir", "assert_mesh_provider",
+    "assert_result_ir",
+]

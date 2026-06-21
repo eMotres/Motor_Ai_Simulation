@@ -3105,6 +3105,55 @@ def build_materials(
     return mats
 
 
+def _field2d_static_inputs(
+    rotor_angle_deg: float = 0.0,
+    gamma_deg: float = 0.0,
+    I_phase_rms: Optional[float] = None,
+):
+    """Config-derived inputs for the magnetostatic field solve.
+
+    SHARED by fem_field2d (which builds its own mesh) and solve_field2d_on_mesh
+    (which consumes a prebuilt mesh from the `mesh` module). Single source for the
+    operating point + per-domain materials, so the self-meshing path and the
+    mesh -> solver handoff path can never drift apart.
+
+    Returns (polys_simplified, materials, params).
+    """
+    from motor_ai_sim.cadquery_geometry import CadQueryMotor
+    from motor_ai_sim.simulation.geometry_2d import params_from_config, MotorDomains2D
+    from motor_ai_sim.config import get_config
+
+    cfg  = get_config()
+    sim  = cfg.get("simulation", {})
+    geo  = cfg.get("geometry",   {})
+    wind = cfg.get("winding",    {})
+
+    p = params_from_config()
+    d = MotorDomains2D(p)
+
+    # ── Operating-point currents (γ=0 → q-axis, +π/2 shift) ──────────────
+    if I_phase_rms is None:
+        I_phase_rms = sim.get("max_current", 85.0)
+    n_parallel   = wind.get("n_parallel", 2)
+    n_wires      = geo.get("num_wires_per_slot", 14)
+    pole_pairs   = p.num_poles // 2
+    I_coil_peak  = I_phase_rms / n_parallel * math.sqrt(2)
+    theta_e      = math.radians(rotor_angle_deg * pole_pairs + gamma_deg + DAXIS_SHIFT_DEG)
+    I_ph = {
+        'A': I_coil_peak * math.cos(theta_e),
+        'B': I_coil_peak * math.cos(theta_e - 2 * math.pi / 3),
+        'C': I_coil_peak * math.cos(theta_e + 2 * math.pi / 3),
+    }
+
+    # ── Real CadQuery polygons at this rotor angle (simplified to match mesh) ──
+    motor = CadQueryMotor()
+    polys = _simplify_polys(motor.get_2d_polygons(rotor_angle_deg=rotor_angle_deg), tol_mm=0.3)
+
+    slot_area = p.slot_width_m * p.slot_height_m * p.fill_factor
+    mats = build_materials(I_ph, d.winding_layout, polys, rotor_angle_deg, slot_area, n_wires)
+    return polys, mats, p
+
+
 def fem_field2d(
     rotor_angle_deg: float = 0.0,
     gamma_deg: float = 0.0,
@@ -3117,40 +3166,11 @@ def fem_field2d(
     endpoint can drop in as a swap.
     """
     import time as _t
-    from motor_ai_sim.cadquery_geometry import CadQueryMotor
-    from motor_ai_sim.simulation.geometry_2d import (
-        params_from_config, MotorDomains2D,
-    )
-    from motor_ai_sim.config import get_config
 
     t_start = _t.time()
-    cfg  = get_config()
-    sim  = cfg.get("simulation", {})
-    geo  = cfg.get("geometry",   {})
-    wind = cfg.get("winding",    {})
-
-    p = params_from_config()
-    d = MotorDomains2D(p)
-
-    # ── Operating-point currents (γ=0 → q-axis, +π/2 shift) ──────────────
-    I_phase_rms  = sim.get("max_current", 85.0)
-    n_parallel   = wind.get("n_parallel", 2)
-    n_wires      = geo.get("num_wires_per_slot", 14)
-    pole_pairs   = p.num_poles // 2
-    I_coil_peak  = I_phase_rms / n_parallel * math.sqrt(2)
-    theta_e      = math.radians(rotor_angle_deg * pole_pairs + gamma_deg + DAXIS_SHIFT_DEG)
-    I_ph = {
-        'A': I_coil_peak * math.cos(theta_e),
-        'B': I_coil_peak * math.cos(theta_e - 2 * math.pi / 3),
-        'C': I_coil_peak * math.cos(theta_e + 2 * math.pi / 3),
-    }
-
-    # ── Real CadQuery polygons at this rotor angle ────────────────────────
-    motor = CadQueryMotor()
-    polys = motor.get_2d_polygons(rotor_angle_deg=rotor_angle_deg)
+    polys, mats, p = _field2d_static_inputs(rotor_angle_deg, gamma_deg)
 
     log.info("FEM: building triangle mesh (h=%.2f mm)…", mesh_size_mm)
-    polys = _simplify_polys(polys, tol_mm=0.3)
     mesh, cell_tags, classify_fn = build_mesh_from_polygons(polys, rotor_angle_deg, mesh_size_mm)
 
     # Reclassify each triangle by its centroid (mm) — robust against gmsh tag loss
@@ -3162,10 +3182,6 @@ def fem_field2d(
     )
     log.info("FEM: reclassified cells — %s", dict(zip(*np.unique(cell_tags, return_counts=True))))
     log.info("FEM: mesh has %d nodes, %d triangles", mesh.p.shape[1], mesh.t.shape[1])
-
-    slot_area = p.slot_width_m * p.slot_height_m * p.fill_factor
-    mats = build_materials(I_ph, d.winding_layout, polys, rotor_angle_deg,
-                           slot_area, n_wires)
 
     # Solve
     A = solve_magnetostatics(mesh, cell_tags, mats)
@@ -3186,6 +3202,45 @@ def fem_field2d(
         n_nodes=mesh.p.shape[1],
         solve_time_s=_t.time() - t_start,
     )
+
+
+def solve_field2d_on_mesh(
+    mesh,
+    cell_tags: np.ndarray,
+    *,
+    rotor_angle_deg: float = 0.0,
+    gamma_deg: float = 0.0,
+    I_phase_rms: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Magnetostatic field solve on a PREBUILT mesh — the end-to-end
+    mesh -> solver handoff.
+
+    The static solver consumes exactly the discretization the `mesh` module
+    produced (its MeshIR vertices/triangles/cell_tags), instead of meshing
+    again. The operating point + per-domain materials come from
+    _field2d_static_inputs, SHARED with the self-meshing fem_field2d, so the
+    physics is identical — only the mesh provenance differs.
+
+    Returns a JSON-friendly field summary (no per-node arrays); callers that
+    need the full field still use fem_field2d / the field route.
+    """
+    import time as _t
+    t0 = _t.time()
+    _polys, mats, _p = _field2d_static_inputs(rotor_angle_deg, gamma_deg, I_phase_rms)
+    cell_tags = np.asarray(cell_tags).astype(int)
+
+    A = solve_magnetostatics(mesh, cell_tags, mats)
+    Bx, By = _per_triangle_B(mesh, A)
+    Bmag = np.sqrt(Bx ** 2 + By ** 2)
+    return {
+        "n_nodes":     int(mesh.p.shape[1]),
+        "n_cells":     int(mesh.t.shape[1]),
+        "A_z_min":     float(A.min()),
+        "A_z_max":     float(A.max()),
+        "B_mag_max_T": float(Bmag.max()),
+        "B_mag_mean_T": float(Bmag.mean()),
+        "solve_time_s": round(_t.time() - t0, 3),
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────

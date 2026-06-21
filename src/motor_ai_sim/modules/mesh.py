@@ -53,7 +53,14 @@ class SkfemMesh2D:
             polys = motor.get_2d_polygons(rotor_angle_deg)
             source = "config"
 
-        mesh, cell_tags, _ = fs.build_mesh_from_polygons(
+        # Raw gmsh cell_tags are PER-INSTANCE and SOLVER-READY: each magnet is
+        # DOM_MAG_BASE+i, each coil DOM_COIL_BASE+i — exactly the tags
+        # build_materials / solve_magnetostatics key sources on. A downstream
+        # solver consumes this MeshIR directly (the mesh -> solver handoff).
+        # (classify_fn returns the COLLAPSED render palette — air/iron/coil/
+        # mag_N/mag_S — for visualization, NOT the physics source tags, so we do
+        # NOT reclassify here or the magnet/coil sources would be lost.)
+        mesh, cell_tags, _classify = fs.build_mesh_from_polygons(
             polys, rotor_angle_deg, float(mesh_size_mm),
             min_size_mm=float(min_size_mm), geo_cfg=geo, n_sectors=int(n_sectors))
         tag_names = {fs.DOM_AIR: "air", fs.DOM_STATOR: "stator", fs.DOM_COIL: "coil",

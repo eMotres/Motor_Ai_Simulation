@@ -40,12 +40,40 @@ class EmStaticSolver:
                               frontend_module="components/simulation/SimulationPanel", order=50))
 
     def run(self, payload: Optional[Dict[str, Any]] = None) -> ResultIR:
+        p = payload or {}
         try:
+            # ── end-to-end mesh -> solver handoff ────────────────────────────
+            # If the `mesh` module ran upstream (run_study threads its MeshIR
+            # under payload['upstream']['mesh']), solve on THAT exact mesh — no
+            # re-meshing. This is the modules genuinely composing: geometry.2d
+            # -> mesh (MeshIR) -> solver.em_static (solves the MeshIR).
+            mesh_ir = (p.get("upstream") or {}).get("mesh")
+            if mesh_ir is not None and getattr(mesh_ir, "vertices", None) is not None:
+                from motor_ai_sim.contracts.adapters import skfem_from_mesh_ir
+                from motor_ai_sim.simulation.fem_solver_2d import solve_field2d_on_mesh
+                mesh, cell_tags = skfem_from_mesh_ir(mesh_ir)
+                res = solve_field2d_on_mesh(
+                    mesh, cell_tags,
+                    rotor_angle_deg=float(p.get("rotor_angle_deg", 0.0)),
+                    gamma_deg=float(p.get("gamma_deg", 0.0)),
+                    I_phase_rms=p.get("I_phase_rms"))
+                prov = stamp(self.NAME, version=self.VERSION, elapsed_s=res.get("solve_time_s"))
+                prov.notes["mesh_source"] = "mesh (upstream MeshIR)"
+                prov.notes["n_nodes"] = str(res.get("n_nodes"))
+                return ResultIR(
+                    physics="em_static",
+                    scalars=ScalarResults(b_mag_max_T=res.get("B_mag_max_T"),
+                                          b_mag_mean_T=res.get("B_mag_mean_T")),
+                    raw=res, provenance=prov)
+
+            # ── fallback: no upstream mesh -> self-meshing field route ────────
             from motor_ai_sim.routes.simulation import get_fem_field2d
-            res = _call_filtered(get_fem_field2d, payload) or {}
+            res = _call_filtered(get_fem_field2d, p) or {}
+            prov = stamp(self.NAME, version=self.VERSION)
+            prov.notes["mesh_source"] = "self (field route)"
             return ResultIR(physics="em_static",
                             scalars=ScalarResults(torque_Nm=res.get("torque_Nm")),
-                            provenance=stamp(self.NAME, version=self.VERSION))
+                            provenance=prov)
         except Exception as e:  # noqa: BLE001
             return ResultIR.failed("em_static", f"{type(e).__name__}: {e}",
                                    provenance=stamp(self.NAME, version=self.VERSION))

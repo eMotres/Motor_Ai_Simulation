@@ -139,6 +139,19 @@ def mesh_ir_from_skfem(
     )
 
 
+def skfem_from_mesh_ir(mesh_ir: Any) -> Tuple[Any, "np.ndarray"]:
+    """Inverse of mesh_ir_from_skfem: rebuild a skfem MeshTri + cell_tags from a
+    MeshIR. This is the mesh -> solver handoff: a solver consumes the `mesh`
+    module's IR as its computational mesh instead of meshing again. Lazy skfem
+    import keeps contracts the dependency leaf (numpy-only at import time)."""
+    from skfem import MeshTri
+
+    p = np.asarray(mesh_ir.vertices, dtype=float).T          # (2, N)
+    t = np.ascontiguousarray(np.asarray(mesh_ir.triangles).T.astype(np.int64))  # (3, M)
+    cell_tags = np.asarray(mesh_ir.cell_tags).astype(int)
+    return MeshTri(p, t), cell_tags
+
+
 # ── result: transient solver dict (sbres) -> ResultIR ────────────────────────
 def result_ir_from_transient(sbres: Dict[str, Any], *, provenance: Optional[Provenance] = None) -> ResultIR:
     """Map the sliding-band transient result dict (and its 'summary') to ResultIR."""

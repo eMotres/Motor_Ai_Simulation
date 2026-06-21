@@ -2321,7 +2321,7 @@ def get_fem_transient(
             # (×4), verified within 0.7% of the literal full disk.  Quasi-static
             # (genuine literal full disk) exists in fem_quasistatic_transient but is
             # ~10× slower (re-meshes per frame) — not used by default.
-            from motor_ai_sim.simulation.fem_solver_2d import fem_transient_sliding_band
+            from motor_ai_sim.simulation.fem_solver_2d import em_transient_eval
             import time as _t
             # Per-frame progress so the web UI's "Solving frame X of N" + ETA
             # advance during a sliding-band run.  The remesh path used to drive
@@ -2342,24 +2342,20 @@ def get_fem_transient(
                 _cur["step"] = int(_done)
                 _cur["total"] = int(_total)
             try:
-                _sbres = fem_transient_sliding_band(
+                # ONE canonical solve — shared with the optimizer (refine_proc) and
+                # the solver.em_transient module via em_transient_eval, so they can
+                # never diverge.  'Full' (n_sectors<=1) solves the full ring (matches
+                # the Mesh tab); 1/4 1/2 solve the sector (1/4 is the UI default).
+                _sbres = em_transient_eval(
                     n_steps_per_period=int(n_steps_per_period), n_periods=float(n_periods),
                     gamma_deg=float(gamma_deg), I_phase_rms=float(I_phase_rms),
                     mesh_size_mm=float(mesh_size_mm), min_size_mm=float(min_size_mm),
                     outer_air_factor=float(outer_air_factor), gap_layers=float(gap_layers),
-                    # 'Full' (n_sectors<=1) solves the full ring so it matches
-                    # the full-motor mesh shown in the Mesh tab; ¼/½ solve the
-                    # sector.  ¼ remains the default (set in the UI).
-                    n_sectors=int(n_sectors) if int(n_sectors) > 1 else -1,
-                    stator_fillet_mm=float(stator_fillet_mm),
-                    coil_temp_c=float(coil_temp_c),
-                    end_winding_factor=float(end_winding_factor),
-                    rotor_eddy=bool(rotor_eddy),
-                    demag=bool(demag),
-                    torque_filter=bool(torque_filter),
-                    pole_copy=bool(pole_copy),
-                    component_mesh_mm=_comp_mesh,
-                    geo_override=_geo_ov,
+                    n_sectors=int(n_sectors), stator_fillet_mm=float(stator_fillet_mm),
+                    coil_temp_c=float(coil_temp_c), end_winding_factor=float(end_winding_factor),
+                    rotor_eddy=bool(rotor_eddy), demag=bool(demag),
+                    torque_filter=bool(torque_filter), pole_copy=bool(pole_copy),
+                    component_mesh_mm=_comp_mesh, geo_override=_geo_ov,
                     progress_cb=_sb_progress)
             finally:
                 _fem_transient_progress["current"]["running"] = False

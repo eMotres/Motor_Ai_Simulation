@@ -50,7 +50,7 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
     the scan uses n_periods=1/6 (one 6·k ripple cycle) with ~6 frames; a full
     refine uses n_periods=1 with more frames."""
     import numpy as np
-    from motor_ai_sim.simulation.fem_solver_2d import fem_transient_sliding_band
+    from motor_ai_sim.simulation.fem_solver_2d import em_transient_eval
     from motor_ai_sim.optimization.design_eval import build_params, _masses
     from motor_ai_sim.config import get_config
 
@@ -81,7 +81,9 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
     # window holds exactly ``steps`` frames.
     nper = max(1e-3, float(n_periods))
     nspp = max(4, int(round(int(steps) / nper)))
-    d = fem_transient_sliding_band(
+    # SAME canonical solve the Simulation tab uses (em_transient_eval) — the
+    # optimizer can no longer diverge from what the user sees in Simulation.
+    d = em_transient_eval(
         n_steps_per_period=nspp, n_periods=nper, gamma_deg=float(gamma_deg),
         I_phase_rms=float(current_a), mesh_size_mm=float(mesh_size_mm),
         min_size_mm=float(min_size_mm),

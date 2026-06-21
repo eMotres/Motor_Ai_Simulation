@@ -5256,6 +5256,51 @@ def _build_full_disk_from_halves(polys, rotor_angle_deg, mesh_size_mm,
     return meshF, ct.astype(_np.int16), cf
 
 
+def em_transient_eval(
+    *,
+    n_steps_per_period: int,
+    n_periods: float,
+    gamma_deg: float,
+    I_phase_rms: float,
+    mesh_size_mm: float = 4.0,
+    min_size_mm: float = 0.3,
+    outer_air_factor: float = 1.3,
+    gap_layers: float = 3.0,
+    n_sectors: int = -1,
+    stator_fillet_mm: float = 0.0,
+    coil_temp_c: float = 120.0,
+    end_winding_factor: float = 0.0,
+    rotor_eddy: bool = False,
+    demag: bool = False,
+    torque_filter: bool = True,
+    pole_copy=None,
+    component_mesh_mm=None,
+    geo_override=None,
+    progress_cb=None,
+) -> Dict:
+    """THE single canonical sliding-band transient invocation.
+
+    Every consumer that needs a 2-D transient solve funnels through here — the
+    Simulation route (get_fem_transient), the optimizer (refine_proc.run_one) and
+    the solver.em_transient module — so the optimizer's physics can NEVER drift
+    from what the Simulation tab shows. Pure: no caching, no global progress, no
+    disk-save (those UI concerns stay in the route, which wraps this). Returns the
+    raw sliding-band result dict (sbres).
+    """
+    return fem_transient_sliding_band(
+        n_steps_per_period=int(n_steps_per_period), n_periods=float(n_periods),
+        gamma_deg=float(gamma_deg), I_phase_rms=float(I_phase_rms),
+        mesh_size_mm=float(mesh_size_mm), min_size_mm=float(min_size_mm),
+        outer_air_factor=float(outer_air_factor), gap_layers=float(gap_layers),
+        n_sectors=int(n_sectors) if int(n_sectors) > 1 else -1,
+        stator_fillet_mm=float(stator_fillet_mm),
+        coil_temp_c=float(coil_temp_c), end_winding_factor=float(end_winding_factor),
+        rotor_eddy=bool(rotor_eddy), demag=bool(demag),
+        torque_filter=bool(torque_filter), pole_copy=pole_copy,
+        component_mesh_mm=(component_mesh_mm or {}), geo_override=geo_override,
+        progress_cb=progress_cb)
+
+
 def fem_quasistatic_transient(
     n_steps_per_period: int = 24,
     n_periods: float = 1.0,

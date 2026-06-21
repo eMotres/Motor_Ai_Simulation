@@ -140,23 +140,6 @@
       "owner": "user"
     },
     {
-      "id": "cat_my_motor",
-      "diameter_mm": 40,
-      "name": "My motor",
-      "topology": "Spoke-PM SPMSM",
-      "slots": 12,
-      "poles": 14,
-      "rpm": 12000,
-      "current_a": 35,
-      "T_avg_Nm": 0,
-      "ripple_pct": 0,
-      "gamma_deg": 0,
-      "tier": "free",
-      "description": "Your saved motor — My motor.",
-      "preset": "my_motor",
-      "owner": "user"
-    },
-    {
       "id": "cat_motor_40mm",
       "diameter_mm": 40,
       "name": "40 mm · 12s/14p high-speed",
@@ -217,6 +200,23 @@
       "tier": "free",
       "description": "40 mm spoke-PM inrunner, 12 slots / 14 poles. 0.44 N·m, 558 W @ 12 000 rpm, 91.4 % eff at 35 A. 6-cell (18–25 V) bus, lots of voltage headroom. F45SH magnets, 20SW1200 steel. MTPA γ=−42°.",
       "preset": "my_motor_40mm",
+      "owner": "user"
+    },
+    {
+      "id": "cat_my_motor",
+      "diameter_mm": 40,
+      "name": "My motor",
+      "topology": "Spoke-PM SPMSM",
+      "slots": 12,
+      "poles": 14,
+      "rpm": 12000,
+      "current_a": 35,
+      "T_avg_Nm": 0,
+      "ripple_pct": 0,
+      "gamma_deg": 0,
+      "tier": "free",
+      "description": "Your saved motor — My motor.",
+      "preset": "my_motor",
       "owner": "user"
     }
   ]

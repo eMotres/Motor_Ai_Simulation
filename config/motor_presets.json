@@ -410,7 +410,7 @@
     "id": "my_motor",
     "name": "My motor",
     "description": "",
-    "order": 23,
+    "order": 29,
     "metrics": {},
     "owner": "user",
     "geometry": {
@@ -440,7 +440,7 @@
       "magnet_up_gap": 0.7,
       "rotor_hole": 0.6,
       "magnet_down_height": 1.0,
-      "stator_fillet_r": 0.5,
+      "stator_fillet_r": 0.92,
       "stator_fillet_r1": 0.0,
       "rotor_fill_r": 0.2,
       "motor_length": 12

@@ -33,8 +33,9 @@ def col(k: str):
     return {"stator_core": "#26344a", "rotor_core": "#314158", "shaft": "#4a5a73"}.get(k)
 
 
-out = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {VW:.0f} {VW:.0f}">',
-       f'<rect width="{VW:.0f}" height="{VW:.0f}" fill="#0a0f1a"/>']
+VB = sys.argv[3] if len(sys.argv) > 3 else f"0 0 {VW:.0f} {VW:.0f}"  # zoom crop "x y w h"
+out = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{VB}">',
+       f'<rect x="-50" y="-50" width="{VW+100:.0f}" height="{VW+100:.0f}" fill="#0a0f1a"/>']
 order = (["stator_core", "rotor_core"]
          + [k for k in md if k.startswith("coil")]
          + [k for k in md if k.startswith("magnet")] + ["shaft"])

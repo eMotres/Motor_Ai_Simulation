@@ -5,7 +5,7 @@
  * the first consumer of that registry — proof the web-as-modules wiring works.
  */
 import React, { useEffect, useState } from 'react';
-import { Box, Paper, Typography, Chip, CircularProgress } from '@mui/material';
+import { Box, Paper, Typography, Chip, CircularProgress, Button } from '@mui/material';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 
@@ -47,6 +47,22 @@ const ModulesPanel: React.FC = () => {
     return () => { alive = false; };
   }, []);
 
+  // Run a real multi-module pipeline THROUGH the kernel (geometry.2d -> cost),
+  // proving the app computes through the chain of modules, not just listing them.
+  const [study, setStudy] = useState<any | null>(null);
+  const [studyBusy, setStudyBusy] = useState(false);
+  const runStudy = async () => {
+    setStudyBusy(true); setStudy(null);
+    try {
+      const r = await fetch(`${API}/api/kernel/study`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ capabilities: ['geometry.2d', 'cost'] }),
+      });
+      setStudy(await r.json());
+    } catch (e) { setStudy({ error: String(e) }); }
+    setStudyBusy(false);
+  };
+
   return (
     <Paper sx={PANEL}>
       <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1, mb: 1 }}>
@@ -57,6 +73,21 @@ const ModulesPanel: React.FC = () => {
         Read live from <code>/api/modules</code> — the portal builds itself from these manifests
         (web interfaces are modules too: each declares its UI panel).
       </Typography>
+
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 1.5, flexWrap: 'wrap' }}>
+        <Button size="small" variant="outlined" onClick={runStudy} disabled={studyBusy}
+          sx={{ textTransform: 'none', fontSize: 11 }}>
+          {studyBusy ? 'Running…' : 'Run pipeline: geometry.2d → cost'}
+        </Button>
+        {study && !study.error && (
+          <Typography sx={{ fontSize: 11, fontFamily: 'monospace', color: study.ok ? '#34d399' : '#fbbf24' }}>
+            study {study.ok ? 'ok' : 'partial'} —{' '}
+            {Object.entries(study.steps || {}).map(([cap, s]: any) => `${cap}:${s.ok ? 'ok' : 'fail'}`).join('  ·  ')}
+            {study.steps?.cost?.result?.total != null && `   →   cost $${study.steps.cost.result.total}`}
+          </Typography>
+        )}
+        {study?.error && <Typography sx={{ fontSize: 11, color: '#fca5a5' }}>{study.error}</Typography>}
+      </Box>
 
       {loading && (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, color: '#64748b' }}>

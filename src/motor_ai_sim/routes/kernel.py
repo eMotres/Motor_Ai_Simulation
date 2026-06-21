@@ -10,7 +10,7 @@ expensive-endpoint auth gate (added when the app is switched over).
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter
 from pydantic import BaseModel
@@ -59,4 +59,22 @@ def run(req: KernelRunRequest) -> Dict[str, Any]:
     out = _get_kernel().run(req.capability, req.payload)
     if "result" in out:
         out["result"] = _serialize(out["result"])
+    return out
+
+
+class KernelStudyRequest(BaseModel):
+    capabilities: List[str]                 # pipeline stages, run in order
+    payload: Optional[Dict[str, Any]] = None  # shared base payload for every stage
+
+
+@router.post("/study")
+def study(req: KernelStudyRequest) -> Dict[str, Any]:
+    """Run a pipeline of capabilities through the kernel. Each stage's result is
+    threaded to the next (payload['upstream']); failures are recorded, not raised
+    (fault isolation). Returns per-stage {ok, module, result|error}."""
+    steps = [(cap, dict(req.payload or {})) for cap in req.capabilities]
+    out = _get_kernel().run_study(steps)
+    for step in out.get("steps", {}).values():
+        if "result" in step:
+            step["result"] = _serialize(step["result"])
     return out

@@ -6,8 +6,16 @@
  */
 import React, { useEffect, useState } from 'react';
 import { Box, Paper, Typography, Chip, CircularProgress, Button } from '@mui/material';
+import { useUIStore } from '../../stores/motorStore';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
+
+// Manifest panel_id -> main-nav tab value: the portal navigates FROM the module
+// manifests (web-as-module). Only entries that map to a real tab are clickable.
+const PANEL_TO_TAB: Record<string, string> = {
+  geometry: 'geometry', mesh: 'mesh', simulation: 'simulation',
+  cost: 'cost', optimization: 'sweep',
+};
 
 interface UIContribution {
   panel_id: string;
@@ -34,6 +42,7 @@ const PANEL = { bgcolor: '#0b1424', border: '1px solid #1e293b', borderRadius: 1
 const ITEM = { bgcolor: '#060d17', border: '1px solid #1e293b', borderRadius: 1, px: 1.5, py: 1 } as const;
 
 const ModulesPanel: React.FC = () => {
+  const setActiveTab = useUIStore((s: any) => s.setActiveTab);
   const [data, setData] = useState<ModulesResp | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -163,10 +172,16 @@ const ModulesPanel: React.FC = () => {
                 <Chip size="small" label={m.capability} sx={{ height: 18, fontSize: 10, bgcolor: '#1d4ed8', color: '#fff' }} />
                 <Chip size="small" variant="outlined" label={`v${m.version}`} sx={{ height: 18, fontSize: 10 }} />
                 <Chip size="small" variant="outlined" label={m.kind} sx={{ height: 18, fontSize: 10 }} />
-                {m.ui && (
-                  <Chip size="small" variant="outlined" label={`UI: ${m.ui.panel_id}`}
-                    sx={{ height: 18, fontSize: 10, color: '#34d399', borderColor: '#34d399' }} />
-                )}
+                {m.ui && (() => {
+                  const tab = PANEL_TO_TAB[m.ui!.panel_id];
+                  return (
+                    <Chip size="small" variant="outlined" label={`UI: ${m.ui!.panel_id}`}
+                      clickable={!!tab} onClick={tab ? () => setActiveTab(tab as any) : undefined}
+                      title={tab ? `Open the ${m.ui!.panel_id} tab` : undefined}
+                      sx={{ height: 18, fontSize: 10, color: '#34d399', borderColor: '#34d399',
+                            cursor: tab ? 'pointer' : 'default' }} />
+                  );
+                })()}
               </Box>
               {m.summary && <Typography sx={{ fontSize: 11, color: '#94a3b8', mt: 0.5 }}>{m.summary}</Typography>}
               {(m.inputs?.length || m.outputs?.length) ? (

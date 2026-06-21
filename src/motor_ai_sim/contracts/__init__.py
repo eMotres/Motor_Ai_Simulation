@@ -18,6 +18,7 @@ from .common import MaterialRef, Provenance
 from .geometry_ir import GeometryIR, Region, RegionRole, Ring, Symmetry, WindingTag
 from .mesh_ir import MeshIR
 from .result_ir import FieldArray, FieldResults, ResultIR, ScalarResults, SeriesResults
+from .cost_ir import CostIR, CostLine
 
 __all__ = [
     "CONTRACTS_VERSION",
@@ -25,4 +26,5 @@ __all__ = [
     "GeometryIR", "Region", "RegionRole", "Ring", "Symmetry", "WindingTag",
     "MeshIR",
     "ResultIR", "ScalarResults", "SeriesResults", "FieldArray", "FieldResults",
+    "CostIR", "CostLine",
 ]

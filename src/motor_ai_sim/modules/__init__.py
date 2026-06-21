@@ -7,10 +7,10 @@ services later) can change without touching module code.
 """
 from __future__ import annotations
 
-from .base import Module, ModuleManifest, UIContribution
+from .base import Module, ModuleManifest, StubModule, UIContribution
 from .registry import DependencyError, ModuleRegistry
 
 __all__ = [
-    "Module", "ModuleManifest", "UIContribution",
+    "Module", "ModuleManifest", "UIContribution", "StubModule",
     "ModuleRegistry", "DependencyError",
 ]

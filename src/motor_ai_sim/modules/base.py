@@ -46,3 +46,23 @@ class Module(Protocol):
 
     def manifest(self) -> ModuleManifest: ...
     def run(self, payload: Any) -> Any: ...
+
+
+class StubModule:
+    """A capability on the roadmap but not implemented yet.
+
+    Carries a REAL manifest (so the module catalog + dependency graph + UI map
+    are complete and the portal can show what's coming), but run() raises so a
+    caller learns it isn't live yet. This is how the system stays honest about
+    partial coverage instead of hiding unbuilt modules.
+    """
+
+    def __init__(self, manifest: ModuleManifest) -> None:
+        self._m = manifest
+
+    def manifest(self) -> ModuleManifest:
+        return self._m
+
+    def run(self, payload: Any) -> Any:
+        raise NotImplementedError(
+            f"{self._m.name} (capability {self._m.capability!r}) is on the roadmap, not implemented yet")

@@ -1,12 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import {
-  Box, Typography, Chip, CircularProgress, Button, Tooltip,
-  Table, TableBody, TableCell, TableHead, TableRow,
+  Box, Typography, Chip, CircularProgress, Button,
 } from '@mui/material';
 import BoltIcon from '@mui/icons-material/Bolt';
 import CheckIcon from '@mui/icons-material/Check';
 import { useUIStore } from '../../stores/motorStore';
 import MyDesigns from './MyDesigns';
+import MotorThumbnail from './MotorThumbnail';
 import { openMotor } from '../common/motorSettings';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
@@ -14,8 +14,11 @@ const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 interface Motor {
   id: string; diameter_mm: number; name: string; topology: string;
   slots: number; poles: number; rpm: number; current_a: number;
-  T_avg_Nm: number; ripple_pct: number; gamma_deg: number;
+  T_avg_Nm: number; ripple_pct: number | null; gamma_deg: number;
   tier: string; description: string; preset?: string;
+  // enriched (optional) — shown when present
+  power_w?: number; efficiency_pct?: number; voltage_pk_v?: number;
+  magnet?: string; steel?: string; length_mm?: number; wire?: string;
 }
 interface Tier {
   id: string; name: string; price_usd: number; highlight: boolean;
@@ -24,6 +27,27 @@ interface Tier {
 interface Catalog { tiers: Tier[]; diameters_mm: number[]; motors: Motor[]; }
 
 const tierColor: Record<string, string> = { free: '#10b981', pro: '#3b82f6', team: '#a855f7' };
+
+const fmtT = (t: number) => (t >= 10 ? t.toFixed(1) : t.toFixed(2));
+const fmtP = (w: number) => (w >= 1000 ? `${(w / 1000).toFixed(2)} kW` : `${Math.round(w)} W`);
+
+// one headline stat (big number + caption)
+const Stat: React.FC<{ value: string; unit?: string; label: string; color?: string }> = ({ value, unit, label, color }) => (
+  <Box sx={{ textAlign: 'center', flex: 1, minWidth: 0 }}>
+    <Typography sx={{ fontWeight: 800, color: color ?? '#e2e8f0', fontSize: '0.98rem', lineHeight: 1.1, whiteSpace: 'nowrap' }}>
+      {value}{unit && <span style={{ fontSize: '0.62rem', color: '#94a3b8', fontWeight: 600 }}> {unit}</span>}
+    </Typography>
+    <Typography sx={{ color: '#64748b', fontSize: '0.58rem', textTransform: 'uppercase', letterSpacing: '0.04em', mt: 0.2 }}>{label}</Typography>
+  </Box>
+);
+
+// one detail key/value row cell
+const Detail: React.FC<{ k: string; v: React.ReactNode }> = ({ k, v }) => (
+  <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1, minWidth: 0 }}>
+    <Typography sx={{ color: '#64748b', fontSize: '0.68rem', whiteSpace: 'nowrap' }}>{k}</Typography>
+    <Typography sx={{ color: '#cbd5e1', fontSize: '0.68rem', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{v}</Typography>
+  </Box>
+);
 
 const MotorsCatalog: React.FC = () => {
   const [cat, setCat] = useState<Catalog | null>(null);
@@ -54,13 +78,75 @@ const MotorsCatalog: React.FC = () => {
 
   const byDiameter = (d: number) => cat.motors.filter((m) => m.diameter_mm === d);
 
+  const renderCard = (m: Motor) => {
+    const hasEff = typeof m.efficiency_pct === 'number';
+    const hasPwr = typeof m.power_w === 'number';
+    const hasRip = typeof m.ripple_pct === 'number';
+    return (
+      <Box key={m.id} sx={{
+        flex: '1 1 290px', maxWidth: 360, display: 'flex', flexDirection: 'column',
+        p: 1.5, borderRadius: 2, border: '1px solid #1e293b', bgcolor: '#0b1220',
+        transition: 'border-color .15s, box-shadow .15s',
+        '&:hover': { borderColor: '#334a6b', boxShadow: '0 0 0 1px #1e3a5f55' },
+      }}>
+        {/* header: thumbnail + identity */}
+        <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center', mb: 1 }}>
+          <Box sx={{ flexShrink: 0, lineHeight: 0 }}><MotorThumbnail motorId={m.id} slots={m.slots} poles={m.poles} size={84} /></Box>
+          <Box sx={{ minWidth: 0, flex: 1 }}>
+            <Typography sx={{ fontWeight: 700, color: '#e2e8f0', fontSize: '0.86rem', lineHeight: 1.2, mb: 0.6 }}>{m.name}</Typography>
+            <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
+              <Chip size="small" label={`Ø ${m.diameter_mm} mm`} sx={{ height: 18, fontSize: '0.6rem', bgcolor: '#0f1d33', color: '#60a5fa', fontWeight: 700 }} />
+              <Chip size="small" label={`${m.slots}s / ${m.poles}p`} sx={{ height: 18, fontSize: '0.6rem', bgcolor: '#111827', color: '#94a3b8' }} />
+              <Chip size="small" label={m.tier} sx={{ height: 18, fontSize: '0.58rem', textTransform: 'capitalize', bgcolor: `${tierColor[m.tier] ?? '#334155'}22`, color: tierColor[m.tier] ?? '#94a3b8' }} />
+            </Box>
+          </Box>
+        </Box>
+
+        {/* headline stats */}
+        <Box sx={{ display: 'flex', gap: 0.5, py: 1, my: 0.5, borderTop: '1px solid #1e293b', borderBottom: '1px solid #1e293b' }}>
+          <Stat value={fmtT(m.T_avg_Nm)} unit="N·m" label="torque" color="#86efac" />
+          {hasPwr
+            ? <Stat value={fmtP(m.power_w!)} label="power" color="#7dd3fc" />
+            : <Stat value={String(m.rpm)} unit="rpm" label="speed" />}
+          {hasEff
+            ? <Stat value={m.efficiency_pct!.toFixed(1)} unit="%" label="efficiency" color="#fcd34d" />
+            : hasRip
+              ? <Stat value={m.ripple_pct!.toFixed(1)} unit="%" label="ripple" color={m.ripple_pct! < 8 ? '#86efac' : '#fdba74'} />
+              : <Stat value={`${m.current_a}`} unit="A" label="current" />}
+        </Box>
+
+        {/* detail grid */}
+        <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 1.5, rowGap: 0.35, mb: 1 }}>
+          <Detail k="Speed" v={`${m.rpm} rpm`} />
+          <Detail k="Current" v={`${m.current_a} A`} />
+          {typeof m.voltage_pk_v === 'number' && <Detail k="Voltage" v={`${m.voltage_pk_v} V pk`} />}
+          {typeof m.length_mm === 'number' && <Detail k="Length" v={`${m.length_mm} mm`} />}
+          {m.magnet && <Detail k="Magnet" v={m.magnet} />}
+          {m.steel && <Detail k="Steel" v={m.steel} />}
+          {m.wire && <Detail k="Wire" v={m.wire} />}
+          {typeof m.gamma_deg === 'number' && <Detail k="MTPA γ" v={`${m.gamma_deg}°`} />}
+        </Box>
+
+        <Box sx={{ flex: 1 }} />
+
+        {/* action */}
+        <Button size="small" fullWidth variant="outlined"
+          startIcon={busy === m.id ? <CircularProgress size={12} /> : <BoltIcon sx={{ fontSize: 15 }} />}
+          disabled={!!busy} onClick={() => loadMotor(m)}
+          sx={{ textTransform: 'none', fontSize: '0.74rem', py: 0.4 }}>
+          Load into editor
+        </Button>
+      </Box>
+    );
+  };
+
   return (
     <Box sx={{ p: 3, overflowY: 'auto', height: '100%' }}>
       <Typography variant="h5" sx={{ fontWeight: 800, color: '#e2e8f0', mb: 0.5 }}>
         Motor Catalog
       </Typography>
       <Typography sx={{ color: '#94a3b8', mb: 3, fontSize: '0.9rem' }}>
-        Ready-made designs by stator diameter. Click <b>Load</b> to open one in the editor.
+        Ready-made designs by stator diameter. Each card shows the geometry and headline performance — click <b>Load</b> to open one in the editor as your own editable copy.
       </Typography>
 
       {/* ── User's saved designs ──────────────────────────────────── */}
@@ -98,12 +184,12 @@ const MotorsCatalog: React.FC = () => {
         ))}
       </Box>
 
-      {/* ── Catalog by diameter ───────────────────────────────────── */}
+      {/* ── Catalog by diameter (cards) ───────────────────────────── */}
       {cat.diameters_mm.map((d) => {
         const motors = byDiameter(d);
         return (
-          <Box key={d} sx={{ mb: 2.5 }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
+          <Box key={d} sx={{ mb: 3 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.25 }}>
               <Typography sx={{ fontWeight: 800, color: '#60a5fa', fontSize: '1rem' }}>
                 Ø {d} mm
               </Typography>
@@ -116,51 +202,9 @@ const MotorsCatalog: React.FC = () => {
                 — no motors yet (spec coming) —
               </Typography>
             ) : (
-              <Table size="small" sx={{
-                '& td, & th': { borderColor: '#1e293b', py: 0.6, fontSize: '0.78rem', color: '#cbd5e1' },
-                '& th': { color: '#64748b', fontWeight: 600, fontSize: '0.65rem', textTransform: 'uppercase' },
-              }}>
-                <TableHead>
-                  <TableRow>
-                    <TableCell>Motor</TableCell><TableCell>Topology</TableCell>
-                    <TableCell align="center">Slots/Poles</TableCell><TableCell align="center">RPM</TableCell>
-                    <TableCell align="center">Torque</TableCell><TableCell align="center">Ripple</TableCell>
-                    <TableCell align="center">Plan</TableCell><TableCell align="right"></TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {motors.map((m) => (
-                    <TableRow key={m.id} hover sx={{ '&:hover': { bgcolor: '#111827' } }}>
-                      <TableCell>
-                        <Tooltip title={m.description} placement="top" arrow>
-                          <Box>
-                            <Typography sx={{ fontWeight: 600, color: '#e2e8f0', fontSize: '0.8rem' }}>{m.name}</Typography>
-                          </Box>
-                        </Tooltip>
-                      </TableCell>
-                      <TableCell sx={{ color: '#94a3b8' }}>{m.topology}</TableCell>
-                      <TableCell align="center">{m.slots}/{m.poles}</TableCell>
-                      <TableCell align="center">{m.rpm}</TableCell>
-                      <TableCell align="center" sx={{ color: '#86efac' }}>{m.T_avg_Nm?.toFixed(1)} N·m</TableCell>
-                      <TableCell align="center" sx={{ color: m.ripple_pct < 8 ? '#86efac' : '#fdba74' }}>
-                        {m.ripple_pct?.toFixed(1)}%
-                      </TableCell>
-                      <TableCell align="center">
-                        <Chip size="small" label={m.tier}
-                          sx={{ height: 18, fontSize: '0.6rem', textTransform: 'capitalize',
-                            bgcolor: `${tierColor[m.tier] ?? '#334155'}22`, color: tierColor[m.tier] ?? '#94a3b8' }} />
-                      </TableCell>
-                      <TableCell align="right">
-                        <Button size="small" variant="outlined" startIcon={busy === m.id ? <CircularProgress size={12} /> : <BoltIcon sx={{ fontSize: 14 }} />}
-                          disabled={!!busy} onClick={() => loadMotor(m)}
-                          sx={{ textTransform: 'none', fontSize: '0.72rem', py: 0.2 }}>
-                          Load
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+              <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'stretch' }}>
+                {motors.map(renderCard)}
+              </Box>
             )}
           </Box>
         );

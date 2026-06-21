@@ -1464,6 +1464,15 @@ def build_periodic_coil_mesh(geo_cfg: dict, num_slots: int,
     n_wires = int(geo_cfg.get("num_wires_per_slot", 14))
     ins_w   = float(geo_cfg.get("insulation_thickness", 0.15))
     tooth_w = float(geo_cfg.get("tooth_width", 9.2))
+    # ── Feasibility clamp (single source: geometry_constraints.wire_height_fits_slot)
+    # Without this the copper mesh overflows the stator bore, across the air gap,
+    # onto the rotor — overlapping meshes and current injected in the gap (physically
+    # invalid).  MUST match cadquery_geometry.get_2d_polygons so the copper current
+    # mesh and the material-domain polygons agree wire-for-wire.
+    _slot_h = float(geo_cfg.get("slot_height", 0.0))
+    _wh_max = (_slot_h - 2.0 * ins_w) / max(1, n_wires) - wire_dy
+    if _wh_max > 1e-3 and wire_h > _wh_max:
+        wire_h = _wh_max
     core_h  = float(geo_cfg.get("core_thickness", 4.2))
 
     # Match cadquery_geometry._create_coils geometry exactly

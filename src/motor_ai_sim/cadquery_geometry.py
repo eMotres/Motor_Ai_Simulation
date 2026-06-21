@@ -643,9 +643,14 @@ class CadQueryMotor:
         wire_h = p['wire_height']        # 0.6 mm
         wire_d_x = p['wire_spacing_x']     # 0.1 mm
         wire_d_y = p['wire_spacing_y']     # 0.13 mm
-        ins_w  = p['insulation_thickness'] 
-        num_wires = int(p['num_wires_per_slot']) 
-        
+        ins_w  = p['insulation_thickness']
+        num_wires = int(p['num_wires_per_slot'])
+        # Feasibility clamp (match get_2d_polygons / geometry_constraints): the
+        # winding must fit the slot or coils overflow the bore onto the rotor.
+        _wh_max = (float(p.get('slot_height', 0.0)) - 2.0 * ins_w) / max(1, num_wires) - wire_d_y
+        if _wh_max > 1e-3 and wire_h > _wh_max:
+            wire_h = _wh_max
+
         # Calculate slot dimensions
         half_slots = num_slots // 2
         slot_angle = 360.0 / half_slots
@@ -820,6 +825,12 @@ class CadQueryMotor:
         wire_dy     = p['wire_spacing_y']
         wire_h      = p['wire_height']
         num_wires   = int(p['num_wires_per_slot'])
+        # ── Feasibility clamp (match get_2d_polygons / geometry_constraints) ──
+        # The winding must fit the slot, else coils overflow the bore across the
+        # air gap onto the rotor (overlapping meshes / invalid cross-section).
+        _wh_max = (float(p.get('slot_height', 0.0)) - 2.0 * ins_w) / max(1, num_wires) - wire_dy
+        if _wh_max > 1e-3 and wire_h > _wh_max:
+            wire_h = _wh_max
 
         # ── magnet params ──────────────────────────────────────────────────
         num_poles   = int(p['num_poles'])

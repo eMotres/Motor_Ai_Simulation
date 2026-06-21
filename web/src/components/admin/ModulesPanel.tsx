@@ -47,21 +47,26 @@ const ModulesPanel: React.FC = () => {
     return () => { alive = false; };
   }, []);
 
-  // Run a real multi-module pipeline THROUGH the kernel (geometry.2d -> cost),
-  // proving the app computes through the chain of modules, not just listing them.
-  const [study, setStudy] = useState<any | null>(null);
-  const [studyBusy, setStudyBusy] = useState(false);
-  const runStudy = async () => {
-    setStudyBusy(true); setStudy(null);
+  // Run real multi-module pipelines THROUGH the kernel, proving the app computes
+  // through the chain of modules (not just listing them) — including the
+  // end-to-end mesh -> solver handoff (em_static solves on the mesh module's
+  // MeshIR, no re-mesh).
+  const [study, setStudy] = useState<Record<string, any>>({});
+  const [studyBusy, setStudyBusy] = useState<string | null>(null);
+  const runStudy = async (key: string, capabilities: string[]) => {
+    setStudyBusy(key); setStudy((s) => ({ ...s, [key]: null }));
     try {
       const r = await fetch(`${API}/api/kernel/study`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ capabilities: ['geometry.2d', 'cost'] }),
+        body: JSON.stringify({ capabilities }),
       });
-      setStudy(await r.json());
-    } catch (e) { setStudy({ error: String(e) }); }
-    setStudyBusy(false);
+      const j = await r.json();
+      setStudy((s) => ({ ...s, [key]: j }));
+    } catch (e) { setStudy((s) => ({ ...s, [key]: { error: String(e) } })); }
+    setStudyBusy(null);
   };
+  const steps = (j: any) => Object.entries(j?.steps || {})
+    .map(([cap, s]: any) => `${cap}:${s.ok ? 'ok' : 'fail'}`).join('  ·  ');
 
   return (
     <Paper sx={PANEL}>
@@ -74,19 +79,45 @@ const ModulesPanel: React.FC = () => {
         (web interfaces are modules too: each declares its UI panel).
       </Typography>
 
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 1.5, flexWrap: 'wrap' }}>
-        <Button size="small" variant="outlined" onClick={runStudy} disabled={studyBusy}
-          sx={{ textTransform: 'none', fontSize: 11 }}>
-          {studyBusy ? 'Running…' : 'Run pipeline: geometry.2d → cost'}
-        </Button>
-        {study && !study.error && (
-          <Typography sx={{ fontSize: 11, fontFamily: 'monospace', color: study.ok ? '#34d399' : '#fbbf24' }}>
-            study {study.ok ? 'ok' : 'partial'} —{' '}
-            {Object.entries(study.steps || {}).map(([cap, s]: any) => `${cap}:${s.ok ? 'ok' : 'fail'}`).join('  ·  ')}
-            {study.steps?.cost?.result?.total != null && `   →   cost $${study.steps.cost.result.total}`}
-          </Typography>
-        )}
-        {study?.error && <Typography sx={{ fontSize: 11, color: '#fca5a5' }}>{study.error}</Typography>}
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75, mb: 1.5 }}>
+        {/* geometry.2d -> cost */}
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
+          <Button size="small" variant="outlined" disabled={!!studyBusy}
+            onClick={() => runStudy('cost', ['geometry.2d', 'cost'])}
+            sx={{ textTransform: 'none', fontSize: 11 }}>
+            {studyBusy === 'cost' ? 'Running…' : 'Run pipeline: geometry.2d → cost'}
+          </Button>
+          {study.cost && !study.cost.error && (
+            <Typography sx={{ fontSize: 11, fontFamily: 'monospace', color: study.cost.ok ? '#34d399' : '#fbbf24' }}>
+              study {study.cost.ok ? 'ok' : 'partial'} — {steps(study.cost)}
+              {study.cost.steps?.cost?.result?.total != null && `   →   cost $${study.cost.steps.cost.result.total}`}
+            </Typography>
+          )}
+          {study.cost?.error && <Typography sx={{ fontSize: 11, color: '#fca5a5' }}>{study.cost.error}</Typography>}
+        </Box>
+
+        {/* geometry.2d -> mesh -> solver.em_static  (the mesh -> solver handoff) */}
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
+          <Button size="small" variant="outlined" disabled={!!studyBusy}
+            onClick={() => runStudy('field', ['geometry.2d', 'mesh', 'solver.em_static'])}
+            sx={{ textTransform: 'none', fontSize: 11 }}>
+            {studyBusy === 'field' ? 'Solving…' : 'Run pipeline: geometry.2d → mesh → solver.em_static'}
+          </Button>
+          {study.field && !study.field.error && (() => {
+            const em = study.field.steps?.['solver.em_static']?.result;
+            const meshN = study.field.steps?.mesh?.result?.n_nodes;
+            const nn = em?.raw?.n_nodes;
+            const bmean = em?.scalars?.b_mag_mean_T;
+            const src = em?.provenance?.notes?.mesh_source;
+            return (
+              <Typography sx={{ fontSize: 11, fontFamily: 'monospace', color: study.field.ok ? '#34d399' : '#fbbf24' }}>
+                study {study.field.ok ? 'ok' : 'partial'} — {steps(study.field)}
+                {bmean != null && `   →   B̄=${Number(bmean).toFixed(2)} T on ${nn} nodes${meshN === nn ? ' (= mesh ✓)' : ''} via ${src}`}
+              </Typography>
+            );
+          })()}
+          {study.field?.error && <Typography sx={{ fontSize: 11, color: '#fca5a5' }}>{study.field.error}</Typography>}
+        </Box>
       </Box>
 
       {loading && (

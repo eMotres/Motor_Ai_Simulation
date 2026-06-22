@@ -56,12 +56,38 @@ const LABEL = { fontSize: 11, color: '#64748b', fontWeight: 700, textTransform: 
 const TH = { px: 1.25, py: 0.7, fontSize: 10, color: '#64748b', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em', whiteSpace: 'nowrap', textAlign: 'right', borderBottom: '1px solid #1e293b', bgcolor: '#0b1424' } as const;
 const TD = { px: 1.25, py: 0.5, fontSize: 12, whiteSpace: 'nowrap', textAlign: 'right', borderBottom: '1px solid #0f172a', fontFamily: 'monospace', color: '#cbd5e1' } as const;
 
+// ── user-editable slider ranges (persisted) ──────────────────────────────────
+type KnobKey = 'L_mm' | 'N' | 'wireH_mm' | 'I_A' | 'rpm';
+interface KRange { min: number; max: number; }
+const DEFAULT_RANGES: Record<KnobKey, KRange> = {
+  L_mm:     { min: 15,  max: 150 },
+  N:        { min: 3,   max: 24 },
+  wireH_mm: { min: 0.3, max: 2.0 },
+  I_A:      { min: 0,   max: 300 },
+  rpm:      { min: 0,   max: 8000 },
+};
+const RANGES_LS = 'configurator.ranges.v1';
+const KNOBS_LS  = 'configurator.knobs.v1';
+const REFID_LS  = 'configurator.refId.v1';
+
+// a small editable range endpoint (the min / max flanking a slider)
+const RangeEnd: React.FC<{ value: number; d: number; title: string; onCommit: (v: number) => void }> = ({ value, d, title, onCommit }) => {
+  const [t, setT] = React.useState<string | null>(null);
+  return (
+    <input title={title} type="number" value={t ?? fmt(value, d)}
+      onChange={(e) => setT(e.target.value)}
+      onBlur={(e) => { const v = parseFloat(e.target.value); if (Number.isFinite(v)) onCommit(v); setT(null); }}
+      onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+      style={{ width: 44, flexShrink: 0, background: 'transparent', border: '1px solid #233149', borderRadius: 4, color: '#64748b', fontSize: 10, fontWeight: 600, fontFamily: 'monospace', textAlign: 'center', padding: '1px 2px' }} />
+  );
+};
+
 // ── one tunable knob row: label + live value (+ Δ vs reference) + slider ──
 const KnobSlider: React.FC<{
   label: string; unit?: string; value: number; base: number;
   min: number; max: number; step: number; d?: number;
-  onChange: (v: number) => void; warn?: boolean;
-}> = ({ label, unit, value, base, min, max, step, d = 1, onChange, warn }) => {
+  onChange: (v: number) => void; onRangeChange?: (min: number, max: number) => void; warn?: boolean;
+}> = ({ label, unit, value, base, min, max, step, d = 1, onChange, onRangeChange, warn }) => {
   const delta = pctDelta(value, base);
   const [txt, setTxt] = React.useState<string | null>(null);   // non-null while the field is being typed in
   return (
@@ -80,9 +106,13 @@ const KnobSlider: React.FC<{
           </Typography>
         )}
       </Box>
-      <Slider value={value} min={min} max={max} step={step}
-        onChange={(_, v) => onChange(v as number)} size="small"
-        sx={{ color: warn ? '#f87171' : '#3b82f6', py: 0.5, '& .MuiSlider-thumb': { width: 13, height: 13 } }} />
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+        {onRangeChange && <RangeEnd value={min} d={d} title="Range min — editable" onCommit={(v) => onRangeChange(Math.min(v, max - step), max)} />}
+        <Slider value={value} min={min} max={max} step={step}
+          onChange={(_, v) => onChange(v as number)} size="small"
+          sx={{ flex: 1, color: warn ? '#f87171' : '#3b82f6', py: 0.5, '& .MuiSlider-thumb': { width: 13, height: 13 } }} />
+        {onRangeChange && <RangeEnd value={max} d={d} title="Range max — editable" onCommit={(v) => onRangeChange(min, Math.max(v, min + step))} />}
+      </Box>
     </Box>
   );
 };
@@ -111,16 +141,40 @@ const MetricTile: React.FC<{
 };
 
 const ConfiguratorPanel: React.FC = () => {
-  const [refId, setRefId] = useState<string>(REFERENCE_PASSPORTS[0]?.id ?? '');
+  const [refId, setRefId] = useState<string>(() => {
+    try { const r = localStorage.getItem(REFID_LS); if (r && REFERENCE_PASSPORTS.some((x) => x.id === r)) return r; } catch { /* ignore */ }
+    return REFERENCE_PASSPORTS[0]?.id ?? '';
+  });
+  useEffect(() => { try { localStorage.setItem(REFID_LS, refId); } catch { /* ignore */ } }, [refId]);
   const ref: ReferenceMotor = useMemo(
     () => REFERENCE_PASSPORTS.find((r) => r.id === refId) ?? REFERENCE_PASSPORTS[0],
     [refId],
   );
   const p = ref.passport;
-  const [knobs, setKnobs] = useState<Knobs>(() => baseKnobs(p));
+  const [knobs, setKnobs] = useState<Knobs>(() => {
+    try { const r = localStorage.getItem(KNOBS_LS); if (r) { const k = JSON.parse(r); if (k && typeof k.N === 'number') return k as Knobs; } } catch { /* ignore */ }
+    return baseKnobs(p);
+  });
+  // remember the user's tuning across reloads
+  useEffect(() => { try { localStorage.setItem(KNOBS_LS, JSON.stringify(knobs)); } catch { /* ignore */ } }, [knobs]);
+  // user-editable slider ranges (persisted, per parameter)
+  const [ranges, setRanges] = useState<Record<KnobKey, KRange>>(() => {
+    try { const r = localStorage.getItem(RANGES_LS); if (r) return { ...DEFAULT_RANGES, ...JSON.parse(r) }; } catch { /* ignore */ }
+    return DEFAULT_RANGES;
+  });
+  useEffect(() => { try { localStorage.setItem(RANGES_LS, JSON.stringify(ranges)); } catch { /* ignore */ } }, [ranges]);
+  const setRange = (k: KnobKey) => (min: number, max: number) => {
+    setRanges((s) => ({ ...s, [k]: { min, max } }));
+    setKnobs((s) => ({ ...s, [k]: Math.min(max, Math.max(min, (s as Record<string, number>)[k])) }));
+  };
   const skipReset = React.useRef(false);
-  // reset knobs whenever the reference changes (skipped while loading a saved config)
+  const lastRefId = React.useRef(refId);
+  // reset knobs only when the reference ACTUALLY changes — compare to the last
+  // refId (robust to mount + StrictMode double-invoke, which would otherwise wipe
+  // the restored tuning) and skip while loading a saved config.
   useEffect(() => {
+    if (lastRefId.current === refId) return;   // mount / replay — not a real change
+    lastRefId.current = refId;
     if (skipReset.current) { skipReset.current = false; return; }
     setKnobs(baseKnobs(ref.passport));
   }, [refId]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -228,9 +282,9 @@ const ConfiguratorPanel: React.FC = () => {
           <Typography sx={{ fontSize: 11, color: '#64748b', mb: 1.5 }}>{ref.subtitle}</Typography>
 
           <Typography sx={{ ...LABEL, color: '#475569', mb: 0.75 }}>Build</Typography>
-          <KnobSlider label="Stack length" unit="mm" value={knobs.L_mm} base={p.L0_mm} min={15} max={150} step={1} d={0} onChange={set('L_mm')} />
-          <KnobSlider label="Turns / slot" value={knobs.N} base={p.N0} min={3} max={turnsMax} step={1} d={0} onChange={set('N')} warn={atLimit} />
-          <KnobSlider label="Wire thickness" unit="mm" value={knobs.wireH_mm} base={p.wireH0_mm} min={0.3} max={wireMax} step={0.1} d={1} onChange={set('wireH_mm')} warn={atLimit} />
+          <KnobSlider label="Stack length" unit="mm" value={knobs.L_mm} base={p.L0_mm} min={ranges.L_mm.min} max={ranges.L_mm.max} step={1} d={0} onChange={set('L_mm')} onRangeChange={setRange('L_mm')} />
+          <KnobSlider label="Turns / slot" value={knobs.N} base={p.N0} min={ranges.N.min} max={ranges.N.max} step={1} d={0} onChange={set('N')} onRangeChange={setRange('N')} warn={atLimit} />
+          <KnobSlider label="Wire thickness" unit="mm" value={knobs.wireH_mm} base={p.wireH0_mm} min={ranges.wireH_mm.min} max={ranges.wireH_mm.max} step={0.1} d={1} onChange={set('wireH_mm')} onRangeChange={setRange('wireH_mm')} warn={atLimit} />
 
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5, mb: 1 }}>
             <Typography sx={{ ...LABEL, flex: 1 }}>Winding connection</Typography>
@@ -246,8 +300,8 @@ const ConfiguratorPanel: React.FC = () => {
           </Box>
 
           <Typography sx={{ ...LABEL, color: '#475569', mt: 1.5, mb: 0.75 }}>Operating point</Typography>
-          <KnobSlider label="Phase current" unit="A" value={knobs.I_A} base={p.I0_A} min={0} max={300} step={1} d={0} onChange={set('I_A')} warn={overCurr} />
-          <KnobSlider label="Speed" unit="rpm" value={knobs.rpm} base={p.rpm0} min={0} max={8000} step={50} d={0} onChange={set('rpm')} />
+          <KnobSlider label="Phase current" unit="A" value={knobs.I_A} base={p.I0_A} min={ranges.I_A.min} max={ranges.I_A.max} step={1} d={0} onChange={set('I_A')} onRangeChange={setRange('I_A')} warn={overCurr} />
+          <KnobSlider label="Speed" unit="rpm" value={knobs.rpm} base={p.rpm0} min={ranges.rpm.min} max={ranges.rpm.max} step={50} d={0} onChange={set('rpm')} onRangeChange={setRange('rpm')} />
 
           <Button onClick={reset} size="small" startIcon={<RestartAltIcon sx={{ fontSize: 16 }} />}
             sx={{ fontSize: 11, textTransform: 'none', color: '#94a3b8', mt: 1 }}>Reset to reference</Button>

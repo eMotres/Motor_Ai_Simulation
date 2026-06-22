@@ -1,34 +1,34 @@
 geometry:
-  stator_diameter: 40
-  slot_height: 5
-  core_thickness: 2
-  num_seg: 2
-  num_slots_per_segment: 6
-  num_poles_per_segment: 7
-  air_gap: 0.25
-  tooth_width: 3
-  tooth2_width: 1.8
-  cut_width: 1
-  insulation_thickness: 0.2
+  stator_diameter: 40.0
+  slot_height: 5.8
+  core_thickness: 1.9
+  num_seg: 2.0
+  num_slots_per_segment: 6.0
+  num_poles_per_segment: 7.0
+  air_gap: 0.2
+  tooth_width: 3.1
+  tooth2_width: 1.9
+  cut_width: 1.0
+  insulation_thickness: 0.06
   wire_width: 2.5
-  wire_height: 0.445
+  wire_height: 0.5
   wire_spacing_x: 0.1
-  wire_spacing_y: 0.13
-  num_wires_per_slot: 8
+  wire_spacing_y: 0.1
+  num_wires_per_slot: 8.0
   slot_hs: 0.267
-  magnet_height: 5
-  rotor_house_height: 1
-  shaft_height: 2
-  magnet_fill_down: 0.9
-  magnet_fill_up: 0.8
-  magnet_fill_radius: 1
-  magnet_up_gap: 0.7
-  rotor_hole: 0.6
-  magnet_down_height: 1
-  stator_fillet_r: 1
-  stator_fillet_r1: 0.3
-  rotor_fill_r: 0.2
-  motor_length: 12
+  magnet_height: 6.5
+  rotor_house_height: 1.0
+  shaft_height: 2.0
+  magnet_fill_down: 0.85
+  magnet_fill_up: 0.42
+  magnet_fill_radius: 0.3
+  magnet_up_gap: 0.2
+  rotor_hole: 0.85
+  magnet_down_height: 1.0
+  stator_fillet_r: 1.0
+  stator_fillet_r1: 0.0
+  rotor_fill_r: 0.0
+  motor_length: 12.0
   stator_outer_radius: 20
   stator_inner_radius: 13
   num_slots: 12
@@ -119,7 +119,7 @@ geometry_schema:
     label: Tooth Width
     unit: mm
     type: float
-    min: 4
+    min: 1
     max: 50
     step: 0.1
     group: stator
@@ -392,17 +392,17 @@ materials:
 custom_materials: {}
 winding:
   n_coils_per_phase: 4
-  connection: 4S
+  connection: 2S
   n_parallel: 1
-  n_series: 4
+  n_series: 2
   layers: 1
   layout: A|a|b|B|C|c|a|A|B|b|c|C|A|a|b|B|C|c|a|A|B|b|c|C
 simulation:
   max_current: 35
   frequency: 1400.0
-  rpm: 12000
-  phase_offset_deg: -42
-  steps_per_period: 72
+  rpm: 12000.0
+  phase_offset_deg: -42.0
+  steps_per_period: 16
   demag: false
   coil_temp_c: 120
   end_winding_factor: 1.66

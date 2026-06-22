@@ -169,14 +169,15 @@ const GeometryProjections: React.FC<{ ref0: ReferenceMotor; knobs: Knobs }> = ({
     return JSON.stringify(g);
   }, [storeGeo, knobs.N, knobs.wireH_mm]);
 
-  // Outer diameter + stack length come from the LIVE geometry store — the same
-  // single source the cross-section uses — not the static reference passport.
+  // Outer diameter comes from the live geometry (there is no diameter knob). The
+  // stack length IS the STACK LENGTH knob, so dragging it redraws the side view
+  // live (the side view is pure canvas — no backend round-trip).
   const gnum = (k: string): number | undefined =>
     (typeof storeGeo?.[k] === 'number' ? (storeGeo[k] as number) : undefined);
   const OD_mm = gnum('stator_diameter')
     ?? (gnum('stator_outer_radius') !== undefined ? (gnum('stator_outer_radius') as number) * 2 : undefined)
     ?? 2 * ref0.geo.statorOR_mm;
-  const L_mm = gnum('motor_length') ?? knobs.L_mm;
+  const L_mm = knobs.L_mm;
   // Slot/pole counts come from the live geometry (matching the cross-section mesh).
   // The winding (turns + wire thickness) is folded into geoStr above, so the backend
   // rebuilds the real winding — nothing is drawn client-side.

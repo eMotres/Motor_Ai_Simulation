@@ -26,7 +26,7 @@ import {
   scaleMotor, maxCurrent, type Passport, type Knobs, type ScaledResult,
 } from '../../lib/motorScaling';
 import {
-  REFERENCE_PASSPORTS, CONNECTIONS, connLabel, type ReferenceMotor,
+  REFERENCE_PASSPORTS, CONNECTIONS, connLabel, fetchCatalogReferences, type ReferenceMotor,
 } from '../../lib/referencePassports';
 import GeometryProjections from './GeometryProjections';
 import BatteryPanel, { type Battery, defaultBattery } from './BatteryPanel';
@@ -143,14 +143,19 @@ const MetricTile: React.FC<{
 
 const ConfiguratorPanel: React.FC = () => {
   const { isAdmin } = useAuth();   // editing the slider ranges is admin-only
+  // FEM-characterised catalog motors (fetched) come first; the built-in
+  // REFERENCE_PASSPORTS stay as a seed/fallback.
+  const [catalogRefs, setCatalogRefs] = useState<ReferenceMotor[]>([]);
+  useEffect(() => { fetchCatalogReferences().then((rs) => { if (rs.length) setCatalogRefs(rs); }).catch(() => {}); }, []);
+  const allRefs = useMemo(() => [...catalogRefs, ...REFERENCE_PASSPORTS], [catalogRefs]);
   const [refId, setRefId] = useState<string>(() => {
-    try { const r = localStorage.getItem(REFID_LS); if (r && REFERENCE_PASSPORTS.some((x) => x.id === r)) return r; } catch { /* ignore */ }
+    try { const r = localStorage.getItem(REFID_LS); if (r) return r; } catch { /* ignore */ }
     return REFERENCE_PASSPORTS[0]?.id ?? '';
   });
   useEffect(() => { try { localStorage.setItem(REFID_LS, refId); } catch { /* ignore */ } }, [refId]);
   const ref: ReferenceMotor = useMemo(
-    () => REFERENCE_PASSPORTS.find((r) => r.id === refId) ?? REFERENCE_PASSPORTS[0],
-    [refId],
+    () => allRefs.find((r) => r.id === refId) ?? allRefs[0],
+    [refId, allRefs],
   );
   const p = ref.passport;
   const [knobs, setKnobs] = useState<Knobs>(() => {
@@ -271,7 +276,7 @@ const ConfiguratorPanel: React.FC = () => {
         <Typography sx={LABEL}>Reference</Typography>
         <Select value={refId} onChange={(e) => setRefId(e.target.value)} size="small"
           sx={{ minWidth: 260, fontSize: 13, color: '#e2e8f0', bgcolor: '#0b1424', '& .MuiOutlinedInput-notchedOutline': { borderColor: '#334155' } }}>
-          {REFERENCE_PASSPORTS.map((r) => (
+          {allRefs.map((r) => (
             <MenuItem key={r.id} value={r.id} sx={{ fontSize: 13 }}>{r.name}</MenuItem>
           ))}
         </Select>

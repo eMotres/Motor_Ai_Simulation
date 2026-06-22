@@ -154,7 +154,60 @@
       "wire": "2.5×0.6 · 8 turns",
       "tier": "free",
       "description": "40 mm spoke-PM inrunner, 12 slots / 14 poles. 0.44 N·m, 558 W @ 12 000 rpm, 91.4 % eff at 35 A. 6-cell (18–25 V) bus, lots of voltage headroom. F45SH magnets, 20SW1200 steel. MTPA γ=−42°.",
-      "preset": "motor_40mm"
+      "preset": "motor_40mm",
+      "passport": {
+        "passport": {
+          "N0": 8.0,
+          "L0_mm": 12.0,
+          "wireH0_mm": 0.6,
+          "I0_A": 35.0,
+          "rpm0": 12000,
+          "nP0": 1.0,
+          "T0_Nm": 0.257,
+          "Vemf0_peak_V": 20.93,
+          "Vload0_peak_V": 16.7,
+          "R0_ohm": 0.01018,
+          "endWindFrac": 0.396,
+          "Pfe0_W": 2.5,
+          "Pmag0_W": 0.5,
+          "mass0_kg": 0.149,
+          "speed": {
+            "rpm": [
+              2000,
+              4000,
+              6000
+            ],
+            "Pfe_W": [
+              0.3,
+              0.6,
+              1.0
+            ],
+            "Pmag_W": [
+              0.0,
+              0.1,
+              0.1
+            ]
+          }
+        },
+        "fit": {
+          "slotHeight_mm": 5.0,
+          "insulation_mm": 0.2,
+          "wireSpacingY_mm": 0.13,
+          "slotWidth_mm": 3.1,
+          "wireWidth_mm": 2.5
+        },
+        "geo": {
+          "statorOR_mm": 20.0,
+          "statorIR_mm": 13.0,
+          "rotorOR_mm": 12.75,
+          "rotorIR_mm": 6.75,
+          "numSlots": 12,
+          "numPoles": 14,
+          "magnetHeight_mm": 5.0
+        },
+        "poles": 14,
+        "slots": 12
+      }
     },
     {
       "id": "cat_motor_100mm",

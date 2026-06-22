@@ -74,3 +74,38 @@ export const CONNECTIONS: { label: string; nP: number; hint: string }[] = [
 
 export const connLabel = (nP: number) =>
   CONNECTIONS.find((c) => c.nP === nP)?.label ?? `${nP}P`;
+
+// ── Catalog-derived references ────────────────────────────────────────────────
+// Motors published into the MOTORS catalog with a FEM-generated passport (admin
+// "Generate passport" → POST /api/catalog/{id}/passport).  These are the real,
+// simulation-backed references; REFERENCE_PASSPORTS above is the built-in seed /
+// fallback used when the catalog has no characterised motor.
+const _API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001').replace(/\/$/, '');
+
+export async function fetchCatalogReferences(): Promise<ReferenceMotor[]> {
+  try {
+    const r = await fetch(`${_API}/api/catalog`, { cache: 'no-store' });
+    if (!r.ok) return [];
+    const cat = await r.json();
+    const out: ReferenceMotor[] = [];
+    for (const m of (cat.motors ?? []) as Array<Record<string, any>>) {
+      const sp = m?.passport;                         // { passport, fit, geo, poles, slots }
+      if (!sp?.passport || !sp?.geo || !sp?.fit) continue;   // only motors that were characterised
+      const p = sp.passport as Passport;
+      const poles = Number(sp.poles ?? sp.geo.numPoles ?? 0);
+      const slots = Number(sp.slots ?? sp.geo.numSlots ?? 0);
+      out.push({
+        id: `cat:${m.id}`,
+        name: String(m.name ?? `${m.diameter_mm ?? '?'} mm`),
+        subtitle: `${slots}-slot / ${poles}-pole · ~${(p.T0_Nm ?? 0).toFixed((p.T0_Nm ?? 0) < 10 ? 1 : 0)} N·m @ ${p.rpm0 ?? '?'} rpm · FEM`,
+        poles, slots,
+        passport: p,
+        fit: sp.fit,
+        geo: sp.geo,
+      });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}

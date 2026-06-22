@@ -911,8 +911,11 @@ export const useUIStore = create<UIState>()(
       renderMode: 'extruded' as 'extruded' | '2d',
       view2d: false,
 
-      // Component tree defaults
-      componentVisibility: { stator: true, rotor: true, magnets: true, coils: true, shaft: true, in_band: true, out_band: true, wire_insulation: true, slot_insulation: true },
+      // Component tree defaults. The FEM sliding-band air domains (in_band/out_band) and the
+      // thin insulation layers are analysis overlays, not physical parts — and the bands are
+      // drawn as big translucent disks that cover the whole stator+coils. Default them OFF so
+      // the motor renders cleanly; they stay individually toggleable in the component tree.
+      componentVisibility: { stator: true, rotor: true, magnets: true, coils: true, shaft: true, in_band: false, out_band: false, wire_insulation: false, slot_insulation: false },
       coilVisibility: {},
       magnetVisibility: {},
 
@@ -961,6 +964,17 @@ export const useUIStore = create<UIState>()(
     }),
     {
       name: 'motor-ui-storage',
+      version: 1,
+      // v1: the FEM sliding-band air domains (in_band/out_band) used to default visible and were
+      // drawn as big translucent disks covering the whole motor — it looked like a geometry glitch.
+      // Force them off once for users who persisted the old default; they remain toggleable.
+      migrate: (persisted: any, version: number) => {
+        if (version < 1 && persisted?.componentVisibility) {
+          persisted.componentVisibility.in_band = false;
+          persisted.componentVisibility.out_band = false;
+        }
+        return persisted;
+      },
     }
   )
 );

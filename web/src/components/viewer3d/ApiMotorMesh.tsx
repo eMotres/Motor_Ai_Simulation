@@ -72,10 +72,8 @@ export function useMotorMesh() {
     }
 
     inflightRequest.then(result => {
-      if (result) {
-        setData(result);
-        setGeometryUpdating(false);
-      }
+      if (result) setData(result);
+      setGeometryUpdating(false);   // clear the build indicator on settle (success OR failure)
     });
   }, [connectedToApi, geometryKey]);
 
@@ -292,7 +290,8 @@ export function useMotorMeshExtruded() {
         .finally(() => { inflightRequestExt = null; });
     }
     inflightRequestExt.then(result => {
-      if (result) { setData(result); setGeometryUpdating(false); }
+      if (result) setData(result);
+      setGeometryUpdating(false);   // clear on settle (success OR failure)
     });
   }, [connectedToApi, geometryKey]);
 
@@ -411,14 +410,14 @@ let inflightRequest2d: Promise<AllMeshData> | null = null;
 let inflightGeometryKey2d = '';
 
 export function useMotorMesh2d() {
-  const { geometry, connectedToApi } = useMotorStore();
+  const { geometry, connectedToApi, setGeometryUpdating } = useMotorStore();
   const [data, setData] = useState<AllMeshData | null>(null);
   const geometryKey = JSON.stringify(geometry);
 
   useEffect(() => {
     if (!connectedToApi) { setData(null); return; }
     const cached = mesh2dCache.get(geometryKey);
-    if (cached) { setData(cached); return; }
+    if (cached) { setData(cached); setGeometryUpdating(false); return; }
 
     if (!inflightRequest2d || inflightGeometryKey2d !== geometryKey) {
       inflightGeometryKey2d = geometryKey;
@@ -428,7 +427,7 @@ export function useMotorMesh2d() {
         .catch(err => { console.error('Failed to fetch 2d mesh:', err); return null as unknown as AllMeshData; })
         .finally(() => { inflightRequest2d = null; });
     }
-    inflightRequest2d.then(result => { if (result) setData(result); });
+    inflightRequest2d.then(result => { if (result) setData(result); setGeometryUpdating(false); });
   }, [connectedToApi, geometryKey]);
 
   return data;

@@ -18,7 +18,6 @@ import { useMotorStore } from '../../stores/motorStore';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001').replace(/\/$/, '');
 const STEEL = '#3b4453', STEEL_DK = '#2a3142', SHAFT = '#5b6675', BG = '#060d17';
-const COPPER = '#c27d33', COPPER_DK = '#5e3a16';
 const LABEL = { fontSize: 11, color: '#64748b', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em' } as const;
 const SUB = { fontSize: 10, color: '#475569', mb: 0.5 } as const;
 const PANEL = { bgcolor: '#0b1424', border: '1px solid #1e293b', borderRadius: 1, p: 1.5 } as const;
@@ -45,9 +44,7 @@ const drawOrder = (key: string): number =>
   key.startsWith('stator') ? 0 : key.startsWith('rotor') ? 1
     : key.startsWith('magnet') ? 2 : key.startsWith('coil') ? 3 : 4;
 
-const CrossSectionReal: React.FC<{
-  geoStr: string; N: number; wireH: number; insulation: number; spacing: number; slotIR: number;
-}> = ({ geoStr, N, wireH, insulation, spacing, slotIR }) => {
+const CrossSectionReal: React.FC<{ geoStr: string }> = ({ geoStr }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [mesh, setMesh] = useState<Mesh2D | null>(meshCache.get(geoStr) ?? null);
   const [state, setState] = useState<'idle' | 'loading' | 'error'>(meshCache.has(geoStr) ? 'idle' : 'loading');
@@ -82,8 +79,11 @@ const CrossSectionReal: React.FC<{
     const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
     const TX = (x: number) => (x - cx) * scale + W / 2;
     const TY = (y: number) => H / 2 - (y - cy) * scale;   // flip Y (motor up → canvas down)
-    // 1) iron + magnets from the real mesh (coils handled separately below)
-    for (const key of keys.filter((k) => !k.startsWith('coil')).sort((a, b) => drawOrder(a) - drawOrder(b))) {
+    // Draw EVERY region straight from the real mesh — iron, magnets AND copper
+    // coils — sorted so copper sits on top.  The coil regions ARE the real winding
+    // built from the geometry, so the cross-section always matches the actual
+    // motor (single source of truth; no synthetic per-turn overlay).
+    for (const key of keys.slice().sort((a, b) => drawOrder(a) - drawOrder(b))) {
       const { vertices, faces } = mesh[key];
       ctx.fillStyle = colorFor(key);
       ctx.beginPath();
@@ -94,37 +94,7 @@ const CrossSectionReal: React.FC<{
       }
       ctx.fill();
     }
-    // 2) winding: draw the ACTUAL N wire rows inside each real coil slot, so the
-    //    coils respond to the turns + wire-thickness knobs (the backend mesh gives
-    //    a fixed slot-fill region; we place the real wires using its geometry).
-    ctx.strokeStyle = COPPER_DK; ctx.lineWidth = 0.6;
-    const rowPitch = wireH + spacing;
-    for (const key of keys.filter((k) => k.startsWith('coil'))) {
-      const verts = mesh[key].vertices;
-      const m = verts.length || 1;
-      let sx = 0, sy = 0; for (const v of verts) { sx += v[0]; sy += v[1]; }
-      const th = Math.atan2(sy / m, sx / m), ct = Math.cos(th), st = Math.sin(th);
-      let rMin = Infinity, rMax = -Infinity, tMax = 0;
-      for (const v of verts) {
-        const rr = v[0] * ct + v[1] * st, tt = -v[0] * st + v[1] * ct;
-        if (rr < rMin) rMin = rr; if (rr > rMax) rMax = rr; if (Math.abs(tt) > tMax) tMax = Math.abs(tt);
-      }
-      const hT = tMax * 0.92;
-      const C = (r: number, t: number): [number, number] => [r * ct - t * st, r * st + t * ct];
-      ctx.fillStyle = COPPER;
-      // anchor the top (outer) wire at the slot back and stack inward toward the
-      // bore — matches the real winding build (top_y fixed, wires added downward).
-      for (let k = 0; k < N; k++) {
-        const ro = rMax - insulation - k * rowPitch, ri = ro - wireH;
-        if (ri < slotIR + insulation - 1e-6) break;   // fill to the slot opening (bore), not just the mesh copper region
-        const p1 = C(ri, -hT), p2 = C(ri, hT), p3 = C(ro, hT), p4 = C(ro, -hT);
-        ctx.beginPath();
-        ctx.moveTo(TX(p1[0]), TY(p1[1])); ctx.lineTo(TX(p2[0]), TY(p2[1]));
-        ctx.lineTo(TX(p3[0]), TY(p3[1])); ctx.lineTo(TX(p4[0]), TY(p4[1])); ctx.closePath();
-        ctx.fill(); ctx.stroke();
-      }
-    }
-  }, [mesh, N, wireH, insulation, spacing]);
+  }, [mesh]);
 
   return (
     <Box sx={{ position: 'relative', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -202,23 +172,21 @@ const GeometryProjections: React.FC<{ ref0: ReferenceMotor; knobs: Knobs }> = ({
     ?? (gnum('stator_outer_radius') !== undefined ? (gnum('stator_outer_radius') as number) * 2 : undefined)
     ?? 2 * ref0.geo.statorOR_mm;
   const L_mm = gnum('motor_length') ?? knobs.L_mm;
-  // Slot/pole counts and the wire-placement geometry also come from the live
-  // geometry (so the label + winding overlay match the cross-section mesh); only
-  // N-turns and wire thickness stay configurator knobs (the winding being tuned).
-  const numSlots = gnum('num_slots') ?? ref0.geo.numSlots;
-  const numPoles = gnum('num_poles') ?? ref0.geo.numPoles;
-  const slotIR_mm     = gnum('stator_inner_radius') ?? ref0.geo.statorIR_mm;
-  const insulation_mm = gnum('insulation_thickness') ?? ref0.fit.insulation_mm;
-  const spacing_mm    = gnum('wire_spacing_y') ?? ref0.fit.wireSpacingY_mm;
+  // Slot/pole counts and the winding (turns + wire) shown in the label also come
+  // from the live geometry, matching the cross-section mesh that is drawn region
+  // by region. Knob values are only fallbacks when the geometry omits a field.
+  const numSlots  = gnum('num_slots') ?? ref0.geo.numSlots;
+  const numPoles  = gnum('num_poles') ?? ref0.geo.numPoles;
+  const nWires    = gnum('num_wires_per_slot') ?? knobs.N;
+  const wireH_geo = gnum('wire_height') ?? knobs.wireH_mm;
 
   return (
     <Box sx={{ display: 'flex', gap: 2, alignItems: 'stretch', justifyContent: 'center', height: 'min(88vh, 820px)' }}>
       <Box sx={{ ...PANEL, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
         <Typography sx={LABEL}>Cross-section (XY) — real geometry</Typography>
-        <Typography sx={SUB}>{knobs.N} turns/slot · {knobs.wireH_mm.toFixed(1)} mm wire · {numSlots} slots / {numPoles} poles</Typography>
+        <Typography sx={SUB}>{nWires} turns/slot · {wireH_geo.toFixed(1)} mm wire · {numSlots} slots / {numPoles} poles</Typography>
         <Box sx={{ flex: 1, minHeight: 0, mt: 0.5 }}>
-          <CrossSectionReal geoStr={geoStr} N={knobs.N} wireH={knobs.wireH_mm}
-            insulation={insulation_mm} spacing={spacing_mm} slotIR={slotIR_mm} />
+          <CrossSectionReal geoStr={geoStr} />
         </Box>
       </Box>
       <Box sx={{ ...PANEL, display: 'flex', flexDirection: 'column', minWidth: 0 }}>

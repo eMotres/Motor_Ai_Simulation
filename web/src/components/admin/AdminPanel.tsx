@@ -23,6 +23,7 @@ import {
 } from 'recharts';
 import SupportSettings, { type SupportCfg } from './SupportSettings';
 import ModulesPanel from './ModulesPanel';
+import PassportManager from './PassportManager';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 
@@ -359,6 +360,8 @@ const AdminPanel: React.FC = () => {
           </Paper>
 
           {supportCfg && <SupportSettings cfg={supportCfg} onSaved={() => void load()} />}
+
+          <PassportManager />
 
           <ModulesPanel />
         </>

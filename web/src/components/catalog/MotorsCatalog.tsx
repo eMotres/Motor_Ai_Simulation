@@ -1,10 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import {
-  Box, Typography, Chip, CircularProgress, Button,
+  Box, Typography, Chip, CircularProgress, Button, Tooltip, IconButton,
 } from '@mui/material';
 import BoltIcon from '@mui/icons-material/Bolt';
 import CheckIcon from '@mui/icons-material/Check';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import { useUIStore } from '../../stores/motorStore';
+import { useAuth } from '../../contexts/AuthContext';
 import MyDesigns from './MyDesigns';
 import MotorThumbnail from './MotorThumbnail';
 import { openMotor } from '../common/motorSettings';
@@ -50,15 +52,24 @@ const Detail: React.FC<{ k: string; v: React.ReactNode }> = ({ k, v }) => (
 );
 
 const MotorsCatalog: React.FC = () => {
+  const { isAdmin } = useAuth();
   const [cat, setCat] = useState<Catalog | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const setActiveTab = useUIStore((s) => s.setActiveTab);
 
-  useEffect(() => {
-    fetch(`${API}/api/catalog`).then((r) => r.json()).then(setCat)
-      .catch(() => setCat(null)).finally(() => setLoading(false));
-  }, []);
+  const load = () => fetch(`${API}/api/catalog`).then((r) => r.json()).then(setCat)
+    .catch(() => setCat(null)).finally(() => setLoading(false));
+  useEffect(() => { load(); }, []);
+
+  const deleteMotor = async (m: Motor) => {
+    if (!window.confirm(`Delete "${m.name}" from the catalog?\nThis removes the card and its underlying preset.`)) return;
+    setBusy(m.id);
+    try {
+      await fetch(`${API}/api/catalog/${encodeURIComponent(m.id)}`, { method: 'DELETE' });
+      await load();
+    } finally { setBusy(null); }
+  };
 
   const loadMotor = async (m: Motor) => {
     setBusy(m.id);
@@ -130,12 +141,25 @@ const MotorsCatalog: React.FC = () => {
         <Box sx={{ flex: 1 }} />
 
         {/* action */}
-        <Button size="small" fullWidth variant="outlined"
-          startIcon={busy === m.id ? <CircularProgress size={12} /> : <BoltIcon sx={{ fontSize: 15 }} />}
-          disabled={!!busy} onClick={() => loadMotor(m)}
-          sx={{ textTransform: 'none', fontSize: '0.74rem', py: 0.4 }}>
-          Load into editor
-        </Button>
+        <Box sx={{ display: 'flex', gap: 0.5 }}>
+          <Button size="small" fullWidth variant="outlined"
+            startIcon={busy === m.id ? <CircularProgress size={12} /> : <BoltIcon sx={{ fontSize: 15 }} />}
+            disabled={!!busy} onClick={() => loadMotor(m)}
+            sx={{ textTransform: 'none', fontSize: '0.74rem', py: 0.4, flex: 1 }}>
+            Load into editor
+          </Button>
+          {isAdmin && (
+            <Tooltip title="Delete from catalog (admin)">
+              <span>
+                <IconButton size="small" disabled={!!busy} onClick={() => deleteMotor(m)}
+                  sx={{ color: '#f87171', border: '1px solid #7f1d1d', borderRadius: 1,
+                    '&:hover': { bgcolor: '#7f1d1d33', borderColor: '#ef4444' } }}>
+                  <DeleteOutlineIcon sx={{ fontSize: 16 }} />
+                </IconButton>
+              </span>
+            </Tooltip>
+          )}
+        </Box>
       </Box>
     );
   };

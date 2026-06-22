@@ -18,6 +18,12 @@ from .base import ModuleManifest, UIContribution
 
 # Rough default unit prices (USD/kg). Overridable via payload["prices"].
 _DEFAULT_PRICES = {"copper": 9.0, "magnet": 80.0, "steel": 3.0, "shaft": 2.0}
+# Insulator prices keyed by MATERIAL NAME (USD/kg) — slot liner cost depends
+# strongly on the chosen material (Nomex vs AlN), so price per material, not per
+# generic bucket.  Overridable via payload["prices"].  NOTE: wire enamel
+# (polyimide) is NOT priced here — it comes pre-applied on the magnet wire, so its
+# cost is bundled into the copper line (it's thermal-only, see _COSTED_INSULATION).
+_INSULATOR_PRICES = {"Nomex": 50.0, "Al2O3": 25.0, "AlN": 250.0}
 # Map a mass-component key -> a price bucket.
 _BUCKET = {
     "copper": "copper", "stranded": "copper", "winding": "copper",
@@ -30,6 +36,19 @@ _DENSITY = {"copper": 8960.0, "magnet": 7500.0, "steel": 7650.0, "shaft": 7850.0
 # RegionRole -> mass bucket (air/band have no mass).
 _ROLE_BUCKET = {"coil": "copper", "magnet": "magnet", "stator": "steel",
                 "rotor": "steel", "shaft": "shaft"}
+# Insulation roles that get a COST line: only the slot liner (Nomex/ceramic) is a
+# separate purchased material.  Wire enamel (wire_insulation/polyimide) is bundled
+# into the wire → thermal-only, NOT costed.  Maps role -> default material name.
+_COSTED_INSULATION = {"slot_insulation": "Nomex"}
+
+
+def _insulator_density(name: str) -> float:
+    """Density [kg/m³] of an insulator from the materials library (fallback 1400)."""
+    try:
+        from ..materials import get_material
+        return float(getattr(get_material("insulator", name), "density", 0.0)) or 1400.0
+    except Exception:
+        return 1400.0
 
 
 def masses_from_geometry_ir(gir: Any, *, length_mm: Optional[float] = None) -> Dict[str, float]:
@@ -40,9 +59,7 @@ def masses_from_geometry_ir(gir: Any, *, length_mm: Optional[float] = None) -> D
                  else (gir.parameters or {}).get("motor_length", 50.0))
     masses: Dict[str, float] = {}
     for r in gir.regions:
-        bucket = _ROLE_BUCKET.get(getattr(r.role, "value", r.role))
-        if not bucket:
-            continue
+        role = getattr(r.role, "value", r.role)
         try:
             area = Polygon([(p[0], p[1]) for p in r.exterior.points]).area
             for h in r.holes:
@@ -50,6 +67,16 @@ def masses_from_geometry_ir(gir: Any, *, length_mm: Optional[float] = None) -> D
         except Exception:
             continue
         vol_m3 = max(area, 0.0) * L_mm * 1e-9          # mm^2 * mm -> mm^3 -> m^3
+        if role == "wire_insulation":
+            continue   # enamel cost is bundled into the (enamelled) wire — thermal-only
+        if role in _COSTED_INSULATION:
+            # key by the assigned material name; density from the library.
+            matname = getattr(r, "material", None) or _COSTED_INSULATION[role]
+            masses[matname] = masses.get(matname, 0.0) + vol_m3 * _insulator_density(matname)
+            continue
+        bucket = _ROLE_BUCKET.get(role)
+        if not bucket:
+            continue
         masses[bucket] = masses.get(bucket, 0.0) + vol_m3 * _DENSITY[bucket]
     return {k: round(v, 4) for k, v in masses.items()}
 
@@ -68,15 +95,18 @@ class BasicCost:
 
     def build(self, masses_kg: Dict[str, float], *, prices: Optional[Dict[str, float]] = None,
               labor_usd: float = 25.0) -> CostIR:
-        px = {**_DEFAULT_PRICES, **(prices or {})}
+        px = {**_DEFAULT_PRICES, **_INSULATOR_PRICES, **(prices or {})}
         lines = []
         total = 0.0
         for key, mass in (masses_kg or {}).items():
-            bucket = _BUCKET.get(str(key).lower(), "steel")
-            unit = float(px.get(bucket, 0.0))
+            k = str(key)
+            if k in _INSULATOR_PRICES:           # insulation: priced by material name
+                unit = float(px.get(k, 0.0))
+            else:
+                unit = float(px.get(_BUCKET.get(k.lower(), "steel"), 0.0))
             cost = float(mass) * unit
             total += cost
-            lines.append(CostLine(item=str(key), mass_kg=float(mass), unit_price_per_kg=unit, cost=round(cost, 2)))
+            lines.append(CostLine(item=k, mass_kg=float(mass), unit_price_per_kg=unit, cost=round(cost, 2)))
         if labor_usd:
             total += labor_usd
             lines.append(CostLine(item="labor", cost=round(float(labor_usd), 2)))

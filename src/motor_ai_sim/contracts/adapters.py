@@ -73,6 +73,15 @@ def geometry_ir_from_polys(
             rid = f"coil_{i}" if j == 0 else f"coil_{i}_{j}"
             regions.append(Region(id=rid, role=RegionRole.COIL, exterior=ext, holes=holes))
 
+    # slot liner + wire enamel: lists of Polygon (EM-inert; thermal/cost domains)
+    for key, role in (("slot_insulation", RegionRole.SLOT_INSULATION),
+                      ("wire_insulation", RegionRole.WIRE_INSULATION)):
+        for i, ip in enumerate(polys.get(key, []) or []):
+            for j, (ext, holes) in enumerate(_poly_pieces(ip)):
+                rid = f"{key}_{i}" if j == 0 else f"{key}_{i}_{j}"
+                regions.append(Region(id=rid, role=role, exterior=ext, holes=holes,
+                                      material=mats.get(key)))
+
     sym = Symmetry(
         n_sectors=int((parameters or {}).get("n_sectors", 1) or 1),
         slip_radius_mm=(float(polys["mid_r_mm"]) if polys.get("mid_r_mm") is not None else None),
@@ -96,7 +105,7 @@ def polys_from_geometry_ir(gir: Any) -> Dict[str, Any]:
         holes = [[(float(p[0]), float(p[1])) for p in h.points] for h in region.holes]
         return Polygon(ext, holes)
 
-    out: Dict[str, Any] = {"magnets": [], "coils": []}
+    out: Dict[str, Any] = {"magnets": [], "coils": [], "slot_insulation": [], "wire_insulation": []}
     for r in gir.regions:
         role = getattr(r.role, "value", r.role)
         if role == "stator":
@@ -113,6 +122,10 @@ def polys_from_geometry_ir(gir: Any) -> Dict[str, Any]:
             out["magnets"].append((poly(r), r.polarity_deg))
         elif role == "coil":
             out["coils"].append(poly(r))
+        elif role == "slot_insulation":
+            out["slot_insulation"].append(poly(r))
+        elif role == "wire_insulation":
+            out["wire_insulation"].append(poly(r))
     if gir.symmetry.slip_radius_mm is not None:
         out["mid_r_mm"] = float(gir.symmetry.slip_radius_mm)
     if gir.symmetry.outer_bc_radius_mm is not None:

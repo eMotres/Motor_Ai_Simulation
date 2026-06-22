@@ -130,3 +130,18 @@ export async function createMotorFromCurrent(name: string): Promise<ActiveMotor>
   setActiveMotor(m);
   return m;
 }
+
+/** "Overwrite this motor": save the current geometry + mesh + simulation back into
+ *  the ACTIVE motor's preset (same id) and refresh its Motors-tab card. Unlike
+ *  "Save as new", this does NOT fork — it republishes the motor you're editing. */
+export async function overwriteActiveMotor(): Promise<ActiveMotor> {
+  const active = getActiveMotor();
+  if (!active) throw new Error('No active motor to overwrite');
+  const r = await fetch(`${API}/api/presets`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: active.id, name: active.name,
+      mesh: readMeshSettings(), simulation: readSimSettings() }),
+  });
+  if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
+  return active;
+}

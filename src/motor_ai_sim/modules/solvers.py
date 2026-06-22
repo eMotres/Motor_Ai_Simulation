@@ -198,7 +198,8 @@ class EmThermalCoupled:
                      "iterations": len(hist), "converged": converged, "runaway": runaway,
                      "components": th.get("components"), "T_max": th.get("T_max"), "T_min": th.get("T_min"),
                      "P_cu_W": th.get("P_cu_W"), "P_fe_W": th.get("P_fe_W"),
-                     "P_loss_total_W": th.get("P_loss_total_W")},
+                     "P_loss_total_W": th.get("P_loss_total_W"),
+                     "cooling": th.get("cooling")},
                 provenance=prov)
         except Exception as e:  # noqa: BLE001
             return ResultIR.failed("em_thermal", f"{type(e).__name__}: {e}",

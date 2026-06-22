@@ -367,6 +367,22 @@ export const ApiMotorExtruded: React.FC = () => {
           );
         })
       }
+      {/* Slot liner (Nomex/ceramic) — green, between coils and iron */}
+      {geometries.slot_insulation && componentVisibility.slot_insulation && (
+        <mesh geometry={geometries.slot_insulation} onClick={click('slot_insulation')}>
+          <meshStandardMaterial color="#3fae5a" metalness={0} roughness={0.9} envMapIntensity={envIntensity}
+            side={THREE.DoubleSide}
+            emissive={emissive('slot_insulation', '#3fae5a')} emissiveIntensity={emissiveIntensity('slot_insulation')} />
+        </mesh>
+      )}
+      {/* Wire enamel (polyimide) — orange, wraps each conductor */}
+      {geometries.wire_insulation && componentVisibility.wire_insulation && (
+        <mesh geometry={geometries.wire_insulation} onClick={click('wire_insulation')}>
+          <meshStandardMaterial color="#d98a3a" metalness={0} roughness={0.85} envMapIntensity={envIntensity}
+            side={THREE.DoubleSide}
+            emissive={emissive('wire_insulation', '#d98a3a')} emissiveIntensity={emissiveIntensity('wire_insulation')} />
+        </mesh>
+      )}
       {/* Sliding-band air rings — translucent so the user can see them as distinct domains */}
       {geometries.in_band && componentVisibility.in_band && (
         <mesh geometry={geometries.in_band} onClick={click('in_band')}>
@@ -504,6 +520,19 @@ export const ApiMotor2dFlat: React.FC = () => {
         })
       }
 
+      {/* slot liner (green) + wire enamel (orange) */}
+      {geometries.slot_insulation && componentVisibility.slot_insulation && (
+        <mesh geometry={geometries.slot_insulation} onClick={click('slot_insulation')}>
+          <meshStandardMaterial color="#3fae5a" metalness={0} roughness={1} side={THREE.DoubleSide}
+            emissive={emissive('slot_insulation', '#3fae5a')} emissiveIntensity={eI('slot_insulation')} />
+        </mesh>
+      )}
+      {geometries.wire_insulation && componentVisibility.wire_insulation && (
+        <mesh geometry={geometries.wire_insulation} onClick={click('wire_insulation')}>
+          <meshStandardMaterial color="#d98a3a" metalness={0} roughness={1} side={THREE.DoubleSide}
+            emissive={emissive('wire_insulation', '#d98a3a')} emissiveIntensity={eI('wire_insulation')} />
+        </mesh>
+      )}
       {/* Sliding-band: in_band (green) and out_band (purple) — translucent overlays */}
       {geometries.in_band && componentVisibility.in_band && (
         <mesh geometry={geometries.in_band} onClick={click('in_band')}>

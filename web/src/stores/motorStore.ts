@@ -797,7 +797,7 @@ useMotorStore.subscribe((state) => {
 });
 
 // Component visibility keys
-export type CompKey = 'stator' | 'rotor' | 'magnets' | 'coils' | 'shaft' | 'in_band' | 'out_band';
+export type CompKey = 'stator' | 'rotor' | 'magnets' | 'coils' | 'shaft' | 'in_band' | 'out_band' | 'wire_insulation' | 'slot_insulation';
 
 // UI State
 interface UIState {
@@ -912,7 +912,7 @@ export const useUIStore = create<UIState>()(
       view2d: false,
 
       // Component tree defaults
-      componentVisibility: { stator: true, rotor: true, magnets: true, coils: true, shaft: true, in_band: true, out_band: true },
+      componentVisibility: { stator: true, rotor: true, magnets: true, coils: true, shaft: true, in_band: true, out_band: true, wire_insulation: true, slot_insulation: true },
       coilVisibility: {},
       magnetVisibility: {},
 
@@ -947,14 +947,14 @@ export const useUIStore = create<UIState>()(
 
       isolateComponent: (key) =>
         set({
-          componentVisibility: { stator: false, rotor: false, magnets: false, coils: false, shaft: false, in_band: false, out_band: false, [key]: true },
+          componentVisibility: { stator: false, rotor: false, magnets: false, coils: false, shaft: false, in_band: false, out_band: false, wire_insulation: false, slot_insulation: false, [key]: true },
           coilVisibility: {},
           magnetVisibility: {},
         }),
 
       showAllComponents: () =>
         set({
-          componentVisibility: { stator: true, rotor: true, magnets: true, coils: true, shaft: true, in_band: true, out_band: true },
+          componentVisibility: { stator: true, rotor: true, magnets: true, coils: true, shaft: true, in_band: true, out_band: true, wire_insulation: true, slot_insulation: true },
           coilVisibility: {},
           magnetVisibility: {},
         }),

@@ -45,13 +45,35 @@ export interface ConductorData {
   wire_height_mm: number | null;
 }
 
+export interface InsulatorData {
+  description: string;
+  sigma: number;
+  density: number;
+  thermal_conductivity: number | null;
+  specific_heat: number | null;
+  mu_r: number;
+}
+
+export interface CoolantData {
+  description: string;
+  phase: string;                 // 'liquid' | 'gas'
+  density: number;
+  specific_heat: number;
+  thermal_conductivity: number;
+  kinematic_viscosity: number;
+  prandtl: number;
+  sigma: number;
+}
+
 export interface MaterialsLibrary {
   steel: Record<string, SteelData>;
   magnet: Record<string, MagnetData>;
   conductor: Record<string, ConductorData>;
+  insulator: Record<string, InsulatorData>;
+  coolant: Record<string, CoolantData>;
 }
 
-export type MaterialCategory = 'steel' | 'magnet' | 'conductor';
+export type MaterialCategory = 'steel' | 'magnet' | 'conductor' | 'insulator' | 'coolant';
 
 export interface SelectedMaterial {
   category: MaterialCategory;

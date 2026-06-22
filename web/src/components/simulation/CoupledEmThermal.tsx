@@ -11,8 +11,9 @@
  * loss<->temperature feedback visible.
  */
 import React, { useState } from 'react';
-import { Box, Paper, Typography, Button, TextField, Switch, FormControlLabel, CircularProgress, Chip } from '@mui/material';
+import { Box, Paper, Typography, Button, Switch, FormControlLabel, CircularProgress, Chip } from '@mui/material';
 import { useMotorStore } from '../../stores/motorStore';
+import { getCoolingPayload } from './CoolingControls';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 const CARD = { bgcolor: '#0b1424', border: '1px solid #1e293b', borderRadius: 1.5, p: 2 } as const;
@@ -22,8 +23,6 @@ interface Props { I_phase_rms?: number; gamma_deg?: number; steps?: number; }
 const CoupledEmThermal: React.FC<Props> = ({ I_phase_rms = 85, gamma_deg = 0, steps = 12 }) => {
   const geometry = useMotorStore((s: any) => s.geometry);
   const [enabled, setEnabled] = useState<boolean>(() => localStorage.getItem('sim.multiphysics') === '1');
-  const [ambient, setAmbient] = useState(25);
-  const [hConv, setHConv] = useState(50);
   const [busy, setBusy] = useState(false);
   const [res, setRes] = useState<any>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -38,8 +37,8 @@ const CoupledEmThermal: React.FC<Props> = ({ I_phase_rms = 85, gamma_deg = 0, st
         body: JSON.stringify({
           capability: 'solver.em_thermal',
           payload: {
-            I_phase_rms, gamma_deg, n_steps_per_period: steps, n_periods: 1, n_sectors: 4,
-            ambient_temp: ambient, h_conv: hConv, max_iter: 6,
+            I_phase_rms, gamma_deg, n_steps_per_period: steps, n_periods: 1, n_sectors: 4, max_iter: 6,
+            ...getCoolingPayload(),                         // cooling system from the left panel
             geo: JSON.stringify(geometry || {}),
           },
         }),
@@ -81,12 +80,9 @@ const CoupledEmThermal: React.FC<Props> = ({ I_phase_rms = 85, gamma_deg = 0, st
       {enabled && (
         <Box sx={{ mt: 1.5 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap', mb: 1 }}>
-            <TextField label="Ambient °C" type="number" size="small" value={ambient}
-              onChange={(e) => setAmbient(parseFloat(e.target.value) || 0)}
-              sx={{ width: 110, '& input': { fontSize: 12 } }} />
-            <TextField label="h_conv W/m²K" type="number" size="small" value={hConv}
-              onChange={(e) => setHConv(parseFloat(e.target.value) || 0)}
-              sx={{ width: 130, '& input': { fontSize: 12 } }} />
+            <Typography sx={{ fontSize: 11.5, color: '#94a3b8' }}>
+              Cooling system set in the left panel ←
+            </Typography>
             <Typography sx={{ fontSize: 11, color: '#64748b', fontFamily: 'monospace' }}>
               @ {I_phase_rms} A · γ {gamma_deg}° · {steps} steps
             </Typography>
@@ -128,6 +124,12 @@ const CoupledEmThermal: React.FC<Props> = ({ I_phase_rms = 85, gamma_deg = 0, st
                   <Metric label="Winding (avg)" value={comp.winding ? `${comp.winding.avg} °C` : '—'} />
                   <Metric label="Magnet (avg)" value={comp.magnet ? `${comp.magnet.avg} °C` : '—'} />
                   <Metric label="Copper loss" value={`${raw.P_cu_W} W`} />
+                  {raw.cooling?.fluid_temp_out_c != null && (
+                    <Metric label="Coolant out" value={`${raw.cooling.fluid_temp_out_c} °C`} hot />
+                  )}
+                  {raw.cooling?.h_conv != null && (
+                    <Metric label="h used" value={`${raw.cooling.h_conv} W/m²K`} />
+                  )}
                 </Box>
               )}
             </Box>

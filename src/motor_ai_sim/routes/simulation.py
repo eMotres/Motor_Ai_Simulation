@@ -1674,10 +1674,98 @@ def _thermal_k_any(name, default: float) -> float:
     return default
 
 
+# ── Cooling-system models — the whole outer stator surface (housing) is cooled ──
+# Fluid properties (rho kg/m3, cp J/kgK, k W/mK, nu m2/s, Pr) come from the
+# materials library (config/materials_library.yaml → `coolant:`), so every fluid
+# used in the model is also a catalogued material.  The table below is only a
+# safety fallback if the library is missing an entry.
+_COOLANT_FALLBACK = {
+    "water":            (1000.0, 4186.0, 0.60, 1.0e-6, 7.0),
+    "water_glycol_50":  (1070.0, 3300.0, 0.40, 3.0e-6, 25.0),
+    "oil":              (860.0,  2000.0, 0.14, 4.0e-5, 280.0),
+    "ethylene_glycol":  (1110.0, 2400.0, 0.25, 1.5e-5, 150.0),
+    "air":              (1.16,   1007.0, 0.0263, 1.56e-5, 0.707),   # ~300 K
+}
+
+
+def _coolant_props(name: str):
+    """(rho, cp, k, nu, Pr) for a coolant — read FROM the materials library so the
+    catalogue is the single source of truth; falls back to the built-in table so
+    the thermal model never breaks on a missing/renamed entry."""
+    try:
+        from motor_ai_sim import materials as _mat
+        return _mat.get_coolant(name).props_tuple
+    except Exception:
+        return _COOLANT_FALLBACK.get(name, _COOLANT_FALLBACK["water"])
+
+
+def _cooling_bc(*, mode: str, t_ambient_c: float, air_speed_mps: float,
+                fluid: str, fluid_temp_in_c: float, flow_lpm: float,
+                p_loss_w: float, r_housing_m: float, length_m: float,
+                h_manual: float):
+    """Convert a cooling-system spec into the housing Robin BC (h, T_sink) plus
+    reportable extras.  Cooling acts on the full outer stator surface (area A).
+
+      • manual : use the supplied h_manual + ambient (legacy behaviour).
+      • air    : forced convection over the housing as a cylinder in cross-flow
+                 (Churchill-Bernstein) from the air speed, natural-convection floor.
+                 'Heat we can blow off' = h·A·ΔT (= the losses at equilibrium).
+      • liquid : coolant carries the losses → T_out = T_in + P/(ṁ·cp); the BC sink
+                 is the MEAN coolant temp; h is a flow-scaled water-jacket estimate.
+    """
+    import math
+    A = 2.0 * math.pi * max(r_housing_m, 1e-4) * max(length_m, 1e-3)   # housing area [m²]
+
+    if mode == "liquid":
+        rho, cp, kf, nu, Pr = _coolant_props(fluid)
+        m_dot = rho * (max(flow_lpm, 0.0) / 60000.0)            # L/min → m³/s → kg/s
+        dT = (p_loss_w / (m_dot * cp)) if m_dot > 1e-9 else 0.0
+        t_out = fluid_temp_in_c + dT
+        t_sink = fluid_temp_in_c + dT / 2.0                      # mean coolant temp
+        # Jacket convection — flow-scaled estimate (no channel geometry): a water
+        # jacket runs ~0.6–6 kW/m²·K; scale ≈ flow^0.8 (Dittus-Boelter trend).
+        h = max(600.0, 1800.0 * (max(flow_lpm, 0.1) / 8.0) ** 0.8)
+        h = min(h, 8000.0)
+        extras = {
+            "mode": "liquid", "fluid": fluid, "flow_lpm": round(flow_lpm, 2),
+            "fluid_temp_in_c": round(fluid_temp_in_c, 1),
+            "fluid_temp_out_c": round(t_out, 1), "fluid_dT_c": round(dT, 1),
+            "m_dot_kg_s": round(m_dot, 4), "h_conv": round(h, 0),
+            "housing_area_m2": round(A, 4), "heat_removed_W": round(p_loss_w, 1),
+        }
+        return h, t_sink, extras
+
+    if mode == "air":
+        rho, cp, ka, nu, Pr = _coolant_props("air")
+        D = 2.0 * max(r_housing_m, 1e-4)
+        v = max(air_speed_mps, 0.0)
+        Re = v * D / nu if v > 0.0 else 0.0
+        h_forced = 0.0
+        if Re > 1.0:
+            Nu = (0.3 + (0.62 * Re ** 0.5 * Pr ** (1 / 3))
+                  / (1 + (0.4 / Pr) ** (2 / 3)) ** 0.25
+                  * (1 + (Re / 282000.0) ** (5 / 8)) ** (4 / 5))
+            h_forced = Nu * ka / D
+        h_nat = 7.0                       # still-air natural-convection floor
+        h = max(h_forced, h_nat)
+        extras = {
+            "mode": "air", "air_temp_c": round(t_ambient_c, 1),
+            "air_speed_mps": round(v, 2), "Re": round(Re, 0), "h_conv": round(h, 1),
+            "regime": "forced" if h_forced > h_nat else "natural",
+            "housing_area_m2": round(A, 4), "heat_removed_W": round(p_loss_w, 1),
+            "cooling_capacity_W_per_K": round(h * A, 2),
+        }
+        return h, t_ambient_c, extras
+
+    # manual (legacy): caller-supplied h + ambient
+    return h_manual, t_ambient_c, {"mode": "manual", "h_conv": round(h_manual, 1),
+                                   "housing_area_m2": round(A, 4)}
+
+
 @router.get("/physics/thermal_field2d")
 def get_thermal_field2d(
     ambient_temp:       float = 25.0,    # coolant / ambient [°C]
-    h_conv:             float = 50.0,    # housing convection coeff [W/m²·K]
+    h_conv:             float = 50.0,    # housing convection coeff [W/m²·K] (manual mode)
     slot_k:             float = 1.5,     # effective slot (Cu+insulation+air) k [W/m·K]
     gap_k:              float = 0.10,    # effective air-gap k [W/m·K]
     gamma_deg:          float = 0.0,
@@ -1691,6 +1779,11 @@ def get_thermal_field2d(
     coil_temp_c:        float = 120.0,
     component_mesh:     str   = "",
     geo:                Optional[str] = None,
+    cooling_mode:       str   = "manual",   # "manual" | "air" | "liquid"
+    air_speed_mps:      float = 0.0,        # air: airflow speed over the housing
+    fluid:              str   = "water",    # liquid: coolant name (materials lib `coolant:`)
+    fluid_temp_in_c:    float = 25.0,       # liquid: inlet temperature
+    flow_lpm:           float = 0.0,        # liquid: volumetric flow [L/min]
 ):
     """Steady-state 2-D thermal map. Runs the EM eddy solve for the loss field
     (cached), then solves −∇·(k∇T)=q on the same mesh with convection at the
@@ -1701,7 +1794,9 @@ def get_thermal_field2d(
            round(gap_k, 3), round(gamma_deg, 1), round(I_phase_rms, 1),
            int(n_steps_per_period), round(n_periods, 2), round(mesh_size_mm, 2),
            round(min_size_mm, 2), round(outer_air_factor, 2), int(n_sectors),
-           round(coil_temp_c, 1), component_mesh)
+           round(coil_temp_c, 1), component_mesh,
+           cooling_mode, round(air_speed_mps, 2), fluid,
+           round(fluid_temp_in_c, 1), round(flow_lpm, 2))
     if _geo_ov:
         key = key + (tuple(sorted(_geo_ov.items())),)
     if key in _thermal_field_cache:
@@ -1745,6 +1840,20 @@ def get_thermal_field2d(
     k_mag = _thermal_k("magnet", mats.get("magnet"), 8.0)
     k_shaft = _thermal_k_any(mats.get("shaft"), 150.0)
 
+    # Slot insulation as a SERIES thermal resistance on the copper→iron path.
+    # The liner (insulation_thickness, Nomex/ceramic) and wire enamel are sub-mesh
+    # thin (0.05–0.15 mm < 0.3 mm mesh), so we LUMP them into the coil-region
+    # effective conductivity rather than meshing thin strips:
+    #     k_eff = h_slot / (h_slot/k_winding + t_liner/k_liner)   (series, ≤ k_winding)
+    # k_winding = the slot_k param (Cu + enamel + air, transverse).  Effect:
+    # Nomex (k≈0.14) → strong barrier → HOTTER windings;  AlN ceramic (k≈170) →
+    # negligible barrier → k_eff≈k_winding (cooler).  The real liner trade-off.
+    k_liner = _thermal_k("insulator", mats.get("slot_insulation"), 0.14)
+    t_liner = float(g.get("insulation_thickness", 0.2))    # mm  (liner thickness)
+    h_slot  = float(g.get("slot_height", 14.0))            # mm  (winding radial extent)
+    slot_k_eff = h_slot / (
+        h_slot / max(float(slot_k), 1e-6) + t_liner / max(float(k_liner), 1e-6))
+
     # 4. per-element k + q from the collapsed domain tags
     (DOM_AIR, DOM_STATOR, DOM_COIL, DOM_AIRGAP, DOM_MAG_N, DOM_ROTOR,
      DOM_SHAFT, DOM_BAND, DOM_OUTER, DOM_MAG_S) = 0, 1, 2, 3, 4, 5, 6, 7, 8, 44
@@ -1756,17 +1865,26 @@ def get_thermal_field2d(
     k_elem[is_steel] = k_steel
     k_elem[is_mag] = k_mag
     k_elem[tags == DOM_SHAFT] = k_shaft
-    k_elem[is_coil] = slot_k
+    k_elem[is_coil] = slot_k_eff                        # winding + slot-liner series resistance
     q_elem[is_coil] = q_cu                              # copper loss density (overwrites eddy part)
 
-    # 5. steady thermal solve — drop ALL air (outer + gap + slip band); the rotor
+    # 5. cooling system → housing Robin BC (h, sink temp).  The whole outer stator
+    # surface is cooled.  Air: h from air speed (cylinder cross-flow); liquid: outlet
+    # temp from the energy balance + mean-coolant sink.  manual: caller's h + ambient.
+    P_loss_total = float(em.get("P_loss_total_W") or 0.0)
+    h_eff, t_sink, cooling = _cooling_bc(
+        mode=cooling_mode, t_ambient_c=ambient_temp, air_speed_mps=air_speed_mps,
+        fluid=fluid, fluid_temp_in_c=fluid_temp_in_c, flow_lpm=flow_lpm,
+        p_loss_w=P_loss_total, r_housing_m=R_house, length_m=L, h_manual=h_conv)
+
+    # 6. steady thermal solve — drop ALL air (outer + gap + slip band); the rotor
     # is reconnected to the stator by an explicit gap conductance bridge.
     from motor_ai_sim.simulation.thermal_solver_2d import solve_steady_thermal
     th = solve_steady_thermal(
         verts.T, tris.T, tags, k_elem, q_elem,
         drop_tags=[DOM_OUTER, DOM_AIRGAP, DOM_BAND, DOM_AIR],
         r_housing_m=R_house, rotor_outer_m=rotor_outer_m, stator_inner_m=stator_inner_m,
-        gap_k=float(gap_k), h_conv=float(h_conv), t_ambient=float(ambient_temp))
+        gap_k=float(gap_k), h_conv=float(h_eff), t_ambient=float(t_sink))
 
     # 6. per-component temperatures
     Tn = _np.asarray(th["T_node"]); ts = _np.asarray(th["triangles"], int)
@@ -1789,8 +1907,12 @@ def get_thermal_field2d(
         "T_min": round(float(th["T_min"]), 1), "T_max": round(float(th["T_max"]), 1),
         "n_bridge_links": th.get("n_bridge_links"), "n_nonfinite": th.get("n_nonfinite"),
         "n_housing_facets": th.get("n_housing_facets"),
-        "ambient_temp": float(ambient_temp), "h_conv": float(h_conv),
+        "ambient_temp": float(ambient_temp), "h_conv": round(float(h_eff), 1),
+        "t_sink_c": round(float(t_sink), 1), "cooling": cooling,
         "slot_k": float(slot_k), "gap_k": float(gap_k),
+        "slot_k_eff": round(float(slot_k_eff), 3),         # winding + liner series k
+        "k_liner": round(float(k_liner), 3),               # slot-liner material conductivity
+        "liner_material": mats.get("slot_insulation"),
         "k_steel": round(k_steel, 1), "k_magnet": round(k_mag, 1), "k_shaft": round(k_shaft, 1),
         "components": {
             "winding": _comp(tg == DOM_COIL),

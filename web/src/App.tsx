@@ -38,6 +38,7 @@ import { useAuth } from './contexts/AuthContext';
 import AdminPanel from './components/admin/AdminPanel';
 import SupportWidget from './components/support/SupportWidget';
 import MaterialControls from './components/parameters/MaterialControls';
+import SaveToMotorButton from './components/common/SaveToMotorButton';
 import SweepConfigPanel from './components/sweep/SweepConfigPanel';
 import MaterialsLibraryTree from './components/materials/MaterialsLibraryTree';
 import MaterialDetailView from './components/materials/MaterialDetailView';
@@ -228,6 +229,7 @@ function App() {
       render: () => (
         <Box sx={{ display: 'flex', height: '100%' }}>
           <Box sx={{ width: panelWidth, flexShrink: 0, overflowY: 'auto', p: 1.5 }}>
+            <Box sx={{ mb: 1.5 }}><SaveToMotorButton /></Box>
             <ParameterVariationTable />
           </Box>
           <Box onMouseDown={onDividerMouseDown} sx={{ width: 5, flexShrink: 0, cursor: 'col-resize',

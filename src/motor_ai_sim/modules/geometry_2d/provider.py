@@ -81,6 +81,8 @@ class AeroStatorGeometry2D:
                 "stator": mats.get("stator_core"),
                 "rotor": mats.get("rotor_core"),
                 "magnet": mats.get("magnet"),
+                "slot_insulation": mats.get("slot_insulation"),
+                "wire_insulation": mats.get("wire_insulation"),
             },
             provenance=stamp(self.NAME, version=self.VERSION, elapsed_s=time.time() - t0),
         )

@@ -22,9 +22,9 @@ import ErrorIcon        from '@mui/icons-material/Error';
 import BoltIcon         from '@mui/icons-material/Bolt';
 import SimulationCharts from './SimulationCharts';
 import PhysicsDashboard from './PhysicsDashboard';
-import ModelCompare from './ModelCompare';
 import CoupledEmThermal from './CoupledEmThermal';
-import SaveToMotorButton from '../common/SaveToMotorButton';
+import CoolingControls from './CoolingControls';
+import HelpTip from '../common/HelpTip';
 import { syncActiveMotor } from '../common/motorSettings';
 import SaveIcon from '@mui/icons-material/Save';
 import type { TransientSummary } from './SummaryTable';
@@ -324,7 +324,6 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // ── derived winding values ────────────────────────────────────────────────
   const I_coil_rms  = current / connDef.nP;                  // Arms per coil
   const I_coil_peak = I_coil_rms * Math.sqrt(2);             // A peak per coil
-  const ampTurns    = nWiresPerSlot * I_coil_rms;            // A·turns per slot
 
   // ── job state ─────────────────────────────────────────────────────────────
   const [jobId,   setJobId]   = useState<string | null>(null);
@@ -529,68 +528,6 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
         display: 'flex', flexDirection: 'column', gap: 2,
       }}>
 
-        {/* Solver badge */}
-        <Box>
-          <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, color: '#475569',
-            letterSpacing: '0.1em', textTransform: 'uppercase', mb: 1 }}>
-            Solver
-          </Typography>
-          {srvStatus ? (
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <Chip icon={<BoltIcon sx={{ fontSize: 13 }}/>} label="2-D FEM"
-                size="small" color="success" sx={{ fontSize: 10 }} />
-              <Tooltip title={srvStatus.solver}>
-                <InfoOutlinedIcon sx={{ fontSize: 14, color: '#475569', cursor: 'help' }}/>
-              </Tooltip>
-            </Box>
-          ) : (
-            <Chip label="Connecting…" size="small" sx={{ fontSize: 10 }}/>
-          )}
-          {srvStatus?.operating_point?.Br_magnet_T != null && (
-            <Typography sx={{ fontSize: 10, color: '#334155', mt: 0.5 }}>
-              Br = {srvStatus.operating_point.Br_magnet_T.toFixed(2)} T
-              &nbsp;(from materials config)
-            </Typography>
-          )}
-        </Box>
-
-        <Divider sx={{ borderColor: '#1e293b' }}/>
-
-        {/* Rotor periodicity (moved from right panel) */}
-        <Box>
-          <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, color: '#475569',
-            letterSpacing: '0.1em', textTransform: 'uppercase', mb: 1 }}>
-            Rotor Periodicity
-          </Typography>
-          <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0.6 }}>
-            {[
-              { label: 'Pole pairs',        value: polePairs.toString(),                                       sub: `${numPoles} poles / 2` },
-              { label: 'Electrical period', value: `${elecPeriod_deg.toFixed(2)}°`,                            sub: `360° / ${polePairs}` },
-              { label: 'Cogging period',    value: `${coggingPeriod_deg.toFixed(3)}°`,                         sub: `360° / LCM(${numSlots},${numPoles})` },
-              { label: 'Cogging / elec',    value: Math.round(elecPeriod_deg / coggingPeriod_deg).toString(),  sub: 'samples' },
-            ].map(item => (
-              <Box key={item.label} sx={{ bgcolor: '#0a1628', borderRadius: 1,
-                px: 0.8, py: 0.6, border: '1px solid #1e293b' }}>
-                <Typography sx={{ fontSize: 8.5, color: '#475569',
-                  textTransform: 'uppercase', letterSpacing: '0.06em',
-                  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {item.label}
-                </Typography>
-                <Typography sx={{ fontSize: 12, fontWeight: 700, color: '#93c5fd',
-                  fontVariantNumeric: 'tabular-nums', lineHeight: 1.1 }}>
-                  {item.value}
-                </Typography>
-                <Typography sx={{ fontSize: 8.5, color: '#334155',
-                  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {item.sub}
-                </Typography>
-              </Box>
-            ))}
-          </Box>
-        </Box>
-
-        <Divider sx={{ borderColor: '#1e293b' }}/>
-
         {/* Winding connection */}
         <Box>
           <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, color: '#475569',
@@ -621,26 +558,6 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
             ))}
           </Box>
 
-          {/* Derived values */}
-          <Box sx={{ bgcolor: '#0a1628', borderRadius: 1, p: 1.2,
-            border: '1px solid #1e293b', display: 'flex', flexDirection: 'column', gap: 0.4 }}>
-            {[
-              { label: 'Parallel branches',  value: `${connDef.nP}` },
-              { label: 'Series coils/branch', value: `${connDef.nS}` },
-              { label: 'I coil (RMS)',        value: `${I_coil_rms.toFixed(1)} A` },
-              { label: 'I coil (peak) →sim',  value: `${I_coil_peak.toFixed(1)} A`, hi: true },
-              { label: 'A·turns / slot',      value: `${ampTurns.toFixed(0)} At` },
-            ].map(row => (
-              <Box key={row.label} sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                <Typography sx={{ fontSize: 10, color: '#475569' }}>{row.label}</Typography>
-                <Typography sx={{ fontSize: 11, fontWeight: 600,
-                  color: (row as any).hi ? '#4ade80' : '#94a3b8',
-                  fontVariantNumeric: 'tabular-nums' }}>
-                  {row.value}
-                </Typography>
-              </Box>
-            ))}
-          </Box>
         </Box>
 
         <Divider sx={{ borderColor: '#1e293b' }}/>
@@ -688,8 +605,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
             <TextField label="I phase RMS (Arms)" type="number" size="small" fullWidth
               value={current} onChange={e => setCurrent(+e.target.value)}
               inputProps={{ step: 5, min: 0, max: 500 }} disabled={isRunning}
-              helperText={`I coil peak = ${I_coil_peak.toFixed(1)} A → sent to solver`}
-              FormHelperTextProps={{ sx: { fontSize: 10, color: '#3b82f6', mx: 0 } }}/>
+              InputProps={{ endAdornment: <HelpTip title={`I coil peak = ${I_coil_peak.toFixed(1)} A → sent to solver`} /> }}/>
             {/* Frequency ↔ Speed are mutually locked:
                   f_elec [Hz]  =  rpm × pole_pairs / 60
                   rpm          =  f_elec × 60 / pole_pairs
@@ -702,15 +618,13 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 setFrequency(+(r * polePairs / 60).toFixed(2));
               }}
               inputProps={{ step: 100, min: 0 }} disabled={isRunning}
-              helperText={`electrical f = ${Number(frequency.toFixed(1))} Hz`}
-              FormHelperTextProps={{ sx: { fontSize: 10, color: '#475569', mx: 0 } }}/>
+              InputProps={{ endAdornment: <HelpTip title={`electrical f = ${Number(frequency.toFixed(1))} Hz`} /> }}/>
             {/* Frequency is DERIVED from rpm (f = rpm × pole_pairs / 60) — read-only,
                 single source is the speed above.  Editing rpm recomputes it. */}
             <TextField label="Frequency (Hz) — derived" type="number" size="small" fullWidth
               value={Number(frequency.toFixed(2))}
               disabled
-              helperText={`f = rpm × ${polePairs} / 60`}
-              FormHelperTextProps={{ sx: { fontSize: 10, color: '#475569', mx: 0 } }}/>
+              InputProps={{ endAdornment: <HelpTip title={`f = rpm × ${polePairs} / 60 — derived from speed`} /> }}/>
             {/* The "Rotor Angle (°)" initial-position field was removed —
                 in the auto-run architecture the Field Animation sweeps the
                 whole 25.71° electrical period itself, so picking a single
@@ -729,33 +643,10 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               value={phaseOffset}
               onChange={e => setPhaseOffset(+e.target.value)}
               inputProps={{ step: 5, min: -90, max: 90 }}
-              helperText={`I direction = 90° + γ elec from d-axis.  ` +
-                          `γ=0 → q-axis (max torque),  γ=±90 → d-axis (field weakening)`}
+              InputProps={{ endAdornment: <HelpTip title={`I direction = 90° + γ elec from d-axis.  ` +
+                          `γ=0 → q-axis (max torque),  γ=±90 → d-axis (field weakening)`} /> }}
               disabled={isRunning}
-              FormHelperTextProps={{ sx: { fontSize: 10, color: '#475569', mx: 0 } }}
             />
-            {/* Mark γ as a Sweep/Optimize variable (like the chart icon on a
-                geometry param).  Checked → gamma_deg joins the Sweep grid; set
-                its range on the Sweep tab card. */}
-            <Tooltip title="Add the load angle γ to the Sweep/Optimize grid. Range (min/max/step) is set on the Sweep tab. γ rotates the current vector only — the mesh is unchanged." placement="right">
-              <FormControlLabel
-                sx={{ mt: -0.5, ml: 0.25 }}
-                control={
-                  <Checkbox
-                    size="small"
-                    checked={gammaIsVar}
-                    onChange={e => toggleGammaVar(e.target.checked)}
-                    icon={<ShowChartIcon sx={{ fontSize: 18, color: '#475569' }} />}
-                    checkedIcon={<ShowChartIcon sx={{ fontSize: 18, color: '#60a5fa' }} />}
-                  />
-                }
-                label={
-                  <Typography variant="caption" sx={{ color: gammaIsVar ? '#60a5fa' : '#94a3b8' }}>
-                    Sweep γ (optimization variable)
-                  </Typography>
-                }
-              />
-            </Tooltip>
 
             {/* ── Copper-loss physics: temperature + end-winding ──
                 The 2-D field only sees the in-slot (active) copper.  ρ_Cu rises
@@ -767,9 +658,8 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               value={coilTemp}
               onChange={e => setCoilTemp(+e.target.value)}
               inputProps={{ step: 10, min: -40, max: 220 }}
-              helperText={`ρ_Cu(T): +0.393 %/°C from 20 °C → higher copper loss`}
+              InputProps={{ endAdornment: <HelpTip title={`ρ_Cu(T): +0.393 %/°C from 20 °C → higher copper loss`} /> }}
               disabled={isRunning}
-              FormHelperTextProps={{ sx: { fontSize: 10, color: '#475569', mx: 0 } }}
             />
             <TextField
               label="End-winding factor k_end (editable)"
@@ -777,12 +667,16 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               value={endWinding}
               onChange={e => setEndWinding(+e.target.value)}
               inputProps={{ step: 0.05, min: 0, max: 6 }}
-              helperText={`k_end = (π·tooth_w/2 + L_stack)/L_stack` +
+              InputProps={{ endAdornment: <HelpTip title={`k_end = (π·tooth_w/2 + L_stack)/L_stack` +
                           ` = ${endWindingGeo ? endWindingGeo.toFixed(3) : '—'}` +
-                          ` from geometry · auto-recomputed on geometry change`}
+                          ` from geometry · auto-recomputed on geometry change`} /> }}
               disabled={isRunning}
-              FormHelperTextProps={{ sx: { fontSize: 10, color: '#475569', mx: 0 } }}
             />
+
+            {/* Cooling system (Air / liquid) — drives the housing convection BC of
+                the coupled EM↔thermal solve.  Lives here in the left panel; the
+                "Run coupled solve" button + results are in the Multiphysics block. */}
+            <CoolingControls />
 
             {/* Slot currents bar / PINN Training settings / RUN SIMULATION
                 button removed.  The Simulation tab now uses real FEM via the
@@ -810,8 +704,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
             onKeyDown={e => { if (e.key === 'Enter') { commitSteps(); (e.target as HTMLInputElement).blur(); } }}
             inputProps={{ inputMode: 'numeric', pattern: '[0-9]*' }}
             disabled={simBusy}
-            helperText={`Transient time resolution. Valid = divisors of ${stepsMax} (slip nodes per electrical period): ${validSteps.join(', ')}. Other values snap to the nearest so the rotor lands on whole mesh nodes.`}
-            FormHelperTextProps={{ sx: { fontSize: 10, color: '#475569', mx: 0 } }}
+            InputProps={{ endAdornment: <HelpTip title={`Transient time resolution. Valid = divisors of ${stepsMax} (slip nodes per electrical period): ${validSteps.join(', ')}. Other values snap to the nearest so the rotor lands on whole mesh nodes.`} /> }}
             sx={{ mb: 1.25 }}
           />
           {/* Per-element irreversible demagnetisation (Ansys-style).  A pre-pass
@@ -892,9 +785,6 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 ? 'Stopped — Run to resume the finished frames or start fresh'
                 : 'Edit γ / current / mesh settings, then launch one solve'}
           </Typography>
-          <Box sx={{ mt: 1 }}>
-            <SaveToMotorButton disabled={simBusy} />
-          </Box>
         </Box>
 
         {/* ── Resume / fresh dialog (after a Stop) ── */}
@@ -1167,10 +1057,6 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
         {/* Analytical SimulationCharts (currents / voltages / losses) removed —
             the FEM transient panel inside PhysicsDashboard below shows all
             three waveforms computed from the actual mesh solve. */}
-
-        {/* ── Model comparison (diagnostics) — runs the three torque models
-            across a γ sweep so the inter-model discrepancy is visible. ── */}
-        <ModelCompare I_phase_rms={current} />
 
         {/* ── Multiphysics: coupled EM↔thermal (on/off, slow — runs the
             solver.em_thermal module: losses ↔ temperature to equilibrium). ── */}

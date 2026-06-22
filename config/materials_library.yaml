@@ -1280,3 +1280,110 @@ conductor:
     permeability: 0.999991
     wire_type: rectangular
     thermal_alpha: 0.0039
+
+# ---------------------------------------------------------------------------
+# Electrical insulators / dielectrics (slot liner + wire enamel).
+# Electromagnetically inert: sigma≈0, permeability≈1 → behave like air in the
+# magnetic solve.  They matter for the THERMAL model (heat path copper→iron) and
+# for MASS/COST.  Values are standard handbook references at ~room temperature;
+# edit per datasheet as needed.
+# ---------------------------------------------------------------------------
+insulator:
+
+  polyimide:
+    description: "Polyimide wire enamel (Kapton-type magnet-wire film). Thermal only; cost bundled in wire."
+    sigma: 0.0
+    density: 1420            # kg/m³
+    thermal_conductivity: 0.12   # W/(m·K)
+    specific_heat: 1100          # J/(kg·K)
+    permeability: 1.0
+
+  Nomex:
+    description: "Nomex 410 aramid paper — slot liner (ground-wall insulation)."
+    sigma: 0.0
+    density: 880             # kg/m³  (pressed calendered aramid paper)
+    thermal_conductivity: 0.14   # W/(m·K)
+    specific_heat: 1200          # J/(kg·K)
+    permeability: 1.0
+
+  Al2O3:
+    description: "Alumina (96% Al₂O₃) ceramic slot liner — high-temp, moderate k."
+    sigma: 0.0
+    density: 3800            # kg/m³
+    thermal_conductivity: 30     # W/(m·K)
+    specific_heat: 880           # J/(kg·K)
+    permeability: 1.0
+
+  AlN:
+    description: "Aluminium nitride ceramic slot liner — very high thermal conductivity."
+    sigma: 0.0
+    density: 3260            # kg/m³
+    thermal_conductivity: 170    # W/(m·K)
+    specific_heat: 740           # J/(kg·K)
+    permeability: 1.0
+
+
+# ---------------------------------------------------------------------------
+# COOLANTS / FLUIDS — cooling-system working fluids (liquids + air).
+# EM-inert (sigma≈0, mu_r≈1).  Consumed by the thermal model's cooling BC:
+# the convection coefficient h(v) (air, cylinder cross-flow) and the coolant
+# energy balance T_out = T_in + P/(ṁ·cp) (liquid) read rho/cp/k/nu/Pr FROM HERE
+# — this YAML is the single source of truth for fluid properties.
+# Properties are handbook references near operating temperature.
+# ---------------------------------------------------------------------------
+coolant:
+
+  air:
+    description: "Air at ~300 K — natural / forced-convection coolant (gas)."
+    phase: gas
+    density: 1.16                 # kg/m³
+    specific_heat: 1007           # cp  J/(kg·K)
+    thermal_conductivity: 0.0263  # k   W/(m·K)
+    kinematic_viscosity: 1.56e-5  # nu  m²/s
+    prandtl: 0.707
+    sigma: 0.0
+    permeability: 1.0
+
+  water:
+    description: "Liquid water — water-jacket coolant."
+    phase: liquid
+    density: 1000                 # kg/m³
+    specific_heat: 4186           # cp  J/(kg·K)
+    thermal_conductivity: 0.60    # k   W/(m·K)
+    kinematic_viscosity: 1.0e-6   # nu  m²/s
+    prandtl: 7.0
+    sigma: 0.0
+    permeability: 1.0
+
+  water_glycol_50:
+    description: "50/50 water–ethylene-glycol — anti-freeze jacket coolant."
+    phase: liquid
+    density: 1070                 # kg/m³
+    specific_heat: 3300           # cp  J/(kg·K)
+    thermal_conductivity: 0.40    # k   W/(m·K)
+    kinematic_viscosity: 3.0e-6   # nu  m²/s
+    prandtl: 25.0
+    sigma: 0.0
+    permeability: 1.0
+
+  oil:
+    description: "Transformer / cooling oil — direct-contact coolant."
+    phase: liquid
+    density: 860                  # kg/m³
+    specific_heat: 2000           # cp  J/(kg·K)
+    thermal_conductivity: 0.14    # k   W/(m·K)
+    kinematic_viscosity: 4.0e-5   # nu  m²/s
+    prandtl: 280.0
+    sigma: 0.0
+    permeability: 1.0
+
+  ethylene_glycol:
+    description: "Pure ethylene glycol — high-boiling coolant."
+    phase: liquid
+    density: 1110                 # kg/m³
+    specific_heat: 2400           # cp  J/(kg·K)
+    thermal_conductivity: 0.25    # k   W/(m·K)
+    kinematic_viscosity: 1.5e-5   # nu  m²/s
+    prandtl: 150.0
+    sigma: 0.0
+    permeability: 1.0

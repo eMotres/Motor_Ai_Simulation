@@ -15,6 +15,7 @@ import {
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import { useMotorStore } from '../../stores/motorStore';
+import HelpTip from '../common/HelpTip';
 
 const GROUPS = [
   { id: 'stator',      label: 'Stator Parameters' },
@@ -160,7 +161,7 @@ const AddParameterDialog: React.FC<Props> = ({ open, onClose }) => {
               placeholder="pole_arc_ratio"
               fullWidth
               required
-              helperText="Used in code and YAML"
+              InputProps={{ endAdornment: <HelpTip title="Used in code and YAML" /> }}
             />
           </Box>
 

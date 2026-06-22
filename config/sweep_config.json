@@ -188,10 +188,10 @@
         "step": 1
       },
       "gamma_deg": {
-        "mode": "fixed",
-        "min": 20,
-        "max": 30,
-        "step": 2
+        "mode": "sweep",
+        "min": -42,
+        "max": -12,
+        "step": 5
       },
       "current_a": {
         "mode": "fixed",
@@ -203,13 +203,13 @@
     "operatingPoints": [
       {
         "current_a": 85,
-        "rpm": 4000,
-        "gamma_deg": 28
+        "rpm": 12000,
+        "gamma_deg": -42
       },
       {
         "current_a": 90,
-        "rpm": 4000,
-        "gamma_deg": 28
+        "rpm": 12000,
+        "gamma_deg": -42
       }
     ],
     "rippleThreshold": 0.1,

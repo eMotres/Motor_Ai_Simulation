@@ -10,6 +10,8 @@ import {
   Layers as LayersIcon,
   RadioButtonChecked as MagnetIcon,
   Cable as CableIcon,
+  Shield as InsulatorIcon,
+  WaterDrop as CoolantIcon,
 } from '@mui/icons-material';
 import type { MaterialsLibrary, SelectedMaterial, MaterialCategory } from './useMaterialsLibrary';
 
@@ -25,6 +27,8 @@ const CATEGORIES: {
   { key: 'steel',     label: 'Lamination Steel', color: '#64748b', icon: <LayersIcon sx={{ fontSize: 14 }} />, chip: 'EM' },
   { key: 'magnet',    label: 'Magnets',           color: '#ef4444', icon: <MagnetIcon sx={{ fontSize: 14 }} />, chip: 'PM' },
   { key: 'conductor', label: 'Metal',              color: '#f59e0b', icon: <CableIcon  sx={{ fontSize: 14 }} /> },
+  { key: 'insulator', label: 'Insulators',         color: '#3fae5a', icon: <InsulatorIcon sx={{ fontSize: 14 }} />, chip: 'INS' },
+  { key: 'coolant',   label: 'Coolants & Air',     color: '#38bdf8', icon: <CoolantIcon sx={{ fontSize: 14 }} />, chip: 'FLU' },
 ];
 
 // Short human-friendly label from database key
@@ -46,7 +50,7 @@ interface Props {
 
 const MaterialsLibraryTree: React.FC<Props> = ({ library, loading, error, selected, onSelect }) => {
   const [open, setOpen] = useState<Record<MaterialCategory, boolean>>({
-    steel: true, magnet: true, conductor: true,
+    steel: true, magnet: true, conductor: true, insulator: true, coolant: true,
   });
 
   const toggle = (cat: MaterialCategory) =>
@@ -183,6 +187,16 @@ function subtitleFor(category: MaterialCategory, data: any): string {
   if (category === 'conductor') {
     const s = data.sigma ? `${(data.sigma / 1e6).toFixed(1)} MS/m` : '?';
     return `σ=${s}`;
+  }
+  if (category === 'insulator') {
+    const k = data.thermal_conductivity != null ? `${data.thermal_conductivity}` : '?';
+    const cp = data.specific_heat != null ? `${data.specific_heat}` : '?';
+    return `k=${k} W/m·K  cp=${cp}`;
+  }
+  if (category === 'coolant') {
+    const k = data.thermal_conductivity != null ? `${data.thermal_conductivity}` : '?';
+    const cp = data.specific_heat != null ? `${data.specific_heat}` : '?';
+    return `${data.phase ?? ''} · k=${k}  cp=${cp}`;
   }
   return '';
 }

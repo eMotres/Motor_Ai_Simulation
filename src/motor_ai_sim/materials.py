@@ -152,6 +152,50 @@ class ConductorMaterial:
         return 1.0 / self.sigma if self.sigma > 0 else float("inf")
 
 
+@dataclass
+class InsulatorMaterial:
+    """Electrical insulator / dielectric (slot liner, wire enamel).
+
+    EM-inert (sigma≈0, mu_r≈1 → acts like air in the magnetic solve); matters for
+    the thermal model (heat path copper→iron) and for mass/cost.
+    """
+    name: str
+    description: str = ""
+    sigma: float = 0.0                              # S/m  (≈0, dielectric)
+    density: float = 1400.0                         # kg/m³
+    thermal_conductivity: Optional[float] = None    # W/(m·K)
+    specific_heat: Optional[float] = None           # J/(kg·K)
+    mu_r: float = 1.0                               # relative permeability (~1)
+
+
+@dataclass
+class CoolantMaterial:
+    """Cooling working fluid (liquid coolant or air) for the thermal model.
+
+    EM-inert (sigma≈0, mu_r≈1).  Carries the thermophysical properties consumed
+    by the cooling boundary condition in the thermal solver: the convection
+    coefficient h(v) (air cross-flow) and the coolant energy balance
+    T_out = T_in + P/(ṁ·cp) (liquid).  This is the single source of truth — the
+    cooling model reads rho/cp/k/nu/Pr from here, no hard-coded fluid tables.
+    """
+    name: str
+    description: str = ""
+    phase: str = "liquid"                           # 'liquid' | 'gas'
+    density: float = 1000.0                         # rho  kg/m³
+    specific_heat: float = 4186.0                   # cp   J/(kg·K)
+    thermal_conductivity: float = 0.60              # k    W/(m·K)
+    kinematic_viscosity: float = 1.0e-6             # nu   m²/s
+    prandtl: float = 7.0                            # Pr   (dimensionless)
+    sigma: float = 0.0                              # S/m  (EM-inert)
+    mu_r: float = 1.0                               # relative permeability (~1)
+
+    @property
+    def props_tuple(self) -> Tuple[float, float, float, float, float]:
+        """(rho, cp, k, nu, Pr) — the tuple consumed by the cooling BC."""
+        return (self.density, self.specific_heat, self.thermal_conductivity,
+                self.kinematic_viscosity, self.prandtl)
+
+
 # ---------------------------------------------------------------------------
 # Internal parsers
 # ---------------------------------------------------------------------------
@@ -213,22 +257,53 @@ def _parse_conductor(name: str, raw: dict) -> ConductorMaterial:
     )
 
 
+def _parse_insulator(name: str, raw: dict) -> InsulatorMaterial:
+    return InsulatorMaterial(
+        name=name,
+        description=raw.get("description", ""),
+        sigma=float(raw.get("sigma") or 0.0),
+        density=float(raw.get("density") or 1400),
+        thermal_conductivity=raw.get("thermal_conductivity"),
+        specific_heat=raw.get("specific_heat"),
+        mu_r=float(raw.get("permeability", 1.0) or 1.0),
+    )
+
+
+def _parse_coolant(name: str, raw: dict) -> CoolantMaterial:
+    return CoolantMaterial(
+        name=name,
+        description=raw.get("description", ""),
+        phase=raw.get("phase", "liquid"),
+        density=float(raw.get("density") or 1000.0),
+        specific_heat=float(raw.get("specific_heat") or 4186.0),
+        thermal_conductivity=float(raw.get("thermal_conductivity") or 0.60),
+        kinematic_viscosity=float(raw.get("kinematic_viscosity") or 1.0e-6),
+        prandtl=float(raw.get("prandtl") or 7.0),
+        sigma=float(raw.get("sigma") or 0.0),
+        mu_r=float(raw.get("permeability", 1.0) or 1.0),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
-Category = Literal["steel", "magnet", "conductor"]
+Category = Literal["steel", "magnet", "conductor", "insulator", "coolant"]
 
 _PARSERS = {
     "steel": _parse_steel,
     "magnet": _parse_magnet,
     "conductor": _parse_conductor,
+    "insulator": _parse_insulator,
+    "coolant": _parse_coolant,
 }
 
 _TYPE_MAP = {
     "steel": SteelMaterial,
     "magnet": MagnetMaterial,
     "conductor": ConductorMaterial,
+    "insulator": InsulatorMaterial,
+    "coolant": CoolantMaterial,
 }
 
 
@@ -252,18 +327,19 @@ def list_materials(category: Optional[Category] = None) -> Dict[str, List[str]]:
     lib = _load()
     if category:
         return {category: list(lib.get(category, {}).keys())}
-    return {cat: list(lib.get(cat, {}).keys()) for cat in ("steel", "magnet", "conductor")}
+    return {cat: list(lib.get(cat, {}).keys())
+            for cat in ("steel", "magnet", "conductor", "insulator", "coolant")}
 
 
 def get_material(
     category: Category,
     name: str,
-) -> SteelMaterial | MagnetMaterial | ConductorMaterial:
+) -> SteelMaterial | MagnetMaterial | ConductorMaterial | InsulatorMaterial:
     """Retrieve a material by category and name.
 
     Parameters
     ----------
-    category : 'steel' | 'magnet' | 'conductor'
+    category : 'steel' | 'magnet' | 'conductor' | 'insulator'
     name : material key as it appears in materials_library.yaml
 
     Raises
@@ -302,6 +378,16 @@ def get_conductor(name: str) -> ConductorMaterial:
     return get_material("conductor", name)  # type: ignore[return-value]
 
 
+def get_insulator(name: str) -> InsulatorMaterial:
+    """Shorthand for ``get_material('insulator', name)``."""
+    return get_material("insulator", name)  # type: ignore[return-value]
+
+
+def get_coolant(name: str) -> CoolantMaterial:
+    """Shorthand for ``get_material('coolant', name)``."""
+    return get_material("coolant", name)  # type: ignore[return-value]
+
+
 def all_steels() -> Dict[str, SteelMaterial]:
     """Return all steel materials as a dict {name: SteelMaterial}."""
     lib = _load()
@@ -318,6 +404,18 @@ def all_conductors() -> Dict[str, ConductorMaterial]:
     """Return all conductor materials as a dict {name: ConductorMaterial}."""
     lib = _load()
     return {n: _parse_conductor(n, raw) for n, raw in lib.get("conductor", {}).items()}
+
+
+def all_insulators() -> Dict[str, InsulatorMaterial]:
+    """Return all insulator materials as a dict {name: InsulatorMaterial}."""
+    lib = _load()
+    return {n: _parse_insulator(n, raw) for n, raw in lib.get("insulator", {}).items()}
+
+
+def all_coolants() -> Dict[str, CoolantMaterial]:
+    """Return all coolant fluids (liquids + air) as a dict {name: CoolantMaterial}."""
+    lib = _load()
+    return {n: _parse_coolant(n, raw) for n, raw in lib.get("coolant", {}).items()}
 
 
 def reload() -> None:

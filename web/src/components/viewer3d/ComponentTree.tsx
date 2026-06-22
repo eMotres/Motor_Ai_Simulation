@@ -448,6 +448,30 @@ const ComponentTree: React.FC = () => {
             onIsolate={() => isolateComponent('shaft')}
           />
 
+          {/* Slot liner (Nomex / ceramic) */}
+          <LeafRow
+            label="Slot liner"
+            color="#3fae5a"
+            visible={componentVisibility.slot_insulation}
+            isLast={false}
+            selected={selectedPart === 'slot_insulation'}
+            onToggle={() => toggleComponentVisibility('slot_insulation')}
+            onSelect={selectPart('slot_insulation')}
+            onIsolate={() => isolateComponent('slot_insulation')}
+          />
+
+          {/* Wire enamel (polyimide) */}
+          <LeafRow
+            label="Wire enamel"
+            color="#d98a3a"
+            visible={componentVisibility.wire_insulation}
+            isLast={false}
+            selected={selectedPart === 'wire_insulation'}
+            onToggle={() => toggleComponentVisibility('wire_insulation')}
+            onSelect={selectPart('wire_insulation')}
+            onIsolate={() => isolateComponent('wire_insulation')}
+          />
+
           {/* Sliding-band: in_band (rotor-side air ring) */}
           <LeafRow
             label="In Band (rotating air)"

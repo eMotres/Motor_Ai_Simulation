@@ -26,6 +26,8 @@ class RegionRole(str, Enum):
     AIR_GAP = "air_gap"        # inner air disk that rotates with the rotor (in-band)
     AIR_OUTER = "air_outer"    # outer air to the far-field BC (stationary, out-band)
     BAND = "band"              # sliding / motion band inside the air gap
+    SLOT_INSULATION = "slot_insulation"  # slot liner (Nomex/ceramic): thermal + cost
+    WIRE_INSULATION = "wire_insulation"  # wire enamel (polyimide): thermal only (cost bundled in wire)
 
 
 class Ring(BaseModel):

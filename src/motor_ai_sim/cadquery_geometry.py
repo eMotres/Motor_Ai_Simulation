@@ -342,9 +342,12 @@ class CadQueryMotor:
         wire_w     = p['wire_width']
         ins_w      = p['insulation_thickness']
         wire_d_x   = p['wire_spacing_x']
-        # Default 0 = SHARP slot corners. A missing param must never silently add a
-        # fillet (that re-introduced slot rounding nobody asked for). Fillets are
-        # opt-in: only applied when a preset explicitly sets a positive radius.
+        # Stator corner fillets (WANTED on every motor):
+        #   stator_fillet_r  → rounds OUTER-ring corners (stator OD profile)
+        #   stator_fillet_r1 → rounds INNER / air-gap-side corners (tooth tips, slot mouths)
+        # The deep slot-POCKET corners (where the coil sits) stay SHARP automatically:
+        # the fillet is radius-gated to outer_r / inner_r, and the pocket is at mid-radius.
+        # (See [[slot_fillet_root_cause]] — earlier I wrongly killed these entirely.)
         slot_fillet_r  = p.get('stator_fillet_r',  0.0)
         slot_fillet_r1 = p.get('stator_fillet_r1', 0.0)
 
@@ -790,6 +793,66 @@ class CadQueryMotor:
                 
         return mesh_data
     
+    def _build_insulation_polys(self):
+        """(wire_insulation_polys, slot_insulation_polys) — shapely Polygons in mm.
+
+        SINGLE SOURCE used by get_2d_polygons (FEM/cost) AND get_2d_mesh_data (3D
+        viewer / tree), so the two never drift apart.  Per slot column:
+          • wire enamel  = wire-column envelope (grown wire_spacing_x/2 in X,
+            wire_spacing_y/2 in Y) MINUS the copper wires.  polyimide.
+          • slot liner   = a U-band of thickness insulation_thickness on the THREE
+            iron-facing sides (two tooth walls + the yoke); open at the air-gap side.
+        """
+        from math import radians  # noqa: F401 (kept for parity with callers)
+        from shapely.geometry import Polygon as SPoly
+        from shapely.ops import unary_union
+        from shapely.affinity import rotate as _affine_rotate
+        p = self.parameters
+        outer_r = p['stator_outer_radius']; inner_r = p['stator_inner_radius']
+        core_h = p['core_thickness']; tooth_w = p['tooth_width']
+        wire_w = p['wire_width']; ins_w = p['insulation_thickness']
+        wire_dx = p['wire_spacing_x']; wire_dy = p['wire_spacing_y']; wire_h = p['wire_height']
+        num_wires = int(p['num_wires_per_slot']); num_slots = int(p['num_slots'])
+        _wh_max = (float(p.get('slot_height', 0.0)) - 2.0 * ins_w) / max(1, num_wires) - wire_dy
+        if _wh_max > 1e-3 and wire_h > _wh_max:
+            wire_h = _wh_max
+        half_slots = num_slots // 2
+        slot_angle_deg = 360.0 / half_slots
+        right_x = tooth_w / 2 + ins_w + wire_dx / 2
+        top_y_c = (outer_r - core_h) - ins_w - wire_dy / 2
+        min_wire_r = inner_r + ins_w
+        n_fit = 0
+        for step in range(num_wires):
+            if top_y_c - step * (wire_h + wire_dy) - wire_h < min_wire_r:
+                break
+            n_fit += 1
+        wpolys = []; spolys = []
+        if n_fit > 0:
+            for i in range(half_slots):
+                ang = i * slot_angle_deg
+                for sx0 in (right_x, -(right_x + wire_w)):
+                    lw = []
+                    for s in range(n_fit):
+                        cy = top_y_c - s * (wire_h + wire_dy)
+                        lw.append(SPoly([(sx0, cy), (sx0 + wire_w, cy),
+                                         (sx0 + wire_w, cy - wire_h), (sx0, cy - wire_h)]))
+                    copper = unary_union(lw)
+                    y_top = top_y_c; y_bot = top_y_c - (n_fit - 1) * (wire_h + wire_dy) - wire_h
+                    el = sx0 - wire_dx / 2; er = sx0 + wire_w + wire_dx / 2
+                    et = y_top + wire_dy / 2; eb = y_bot - wire_dy / 2
+                    env = SPoly([(el, et), (er, et), (er, eb), (el, eb)])
+                    wi = env.difference(copper)
+                    if not wi.is_valid: wi = wi.buffer(0)
+                    if (not wi.is_empty) and wi.area > 1e-9:
+                        wpolys.append(_affine_rotate(wi, ang, origin=(0, 0)))
+                    outer = SPoly([(el - ins_w, et + ins_w), (er + ins_w, et + ins_w),
+                                   (er + ins_w, eb), (el - ins_w, eb)])
+                    liner = outer.difference(env)
+                    if not liner.is_valid: liner = liner.buffer(0)
+                    if (not liner.is_empty) and liner.area > 1e-9:
+                        spolys.append(_affine_rotate(liner, ang, origin=(0, 0)))
+        return wpolys, spolys
+
     def get_2d_mesh_data(self) -> Dict[str, Dict]:
         """
         Build flat 2D cross-section meshes for all motor components.
@@ -1114,10 +1177,8 @@ class CadQueryMotor:
         if not stator_poly.is_valid:
             stator_poly = stator_poly.buffer(0)
 
-        # ── Stator corner rounding (matches 3D _OuterRingSelector / _InnerRingSelector) ──
-        # Apply _fillet_corner only to vertices near outer_r (concave slot-wall corners)
-        # and near inner_r (convex tooth-tip corners), matching the 3D fillet selectors.
-        # Default 0 = SHARP corners (opt-in fillets only; see 3D path above).
+        # ── Stator corner rounding (outer-ring via fillet_r, air-gap side via fillet_r1) ──
+        # Pocket corners stay sharp (radius-gated; pocket at mid-radius). [[slot_fillet_root_cause]]
         fillet_r  = p.get('stator_fillet_r',  0.0)
         fillet_r1 = p.get('stator_fillet_r1', 0.0)
 
@@ -1157,8 +1218,11 @@ class CadQueryMotor:
                 result = result.buffer(0)
             return result
 
+        # Outer band = 0.45·core_thickness (cap 1.5) so it can't reach the slot-bottom
+        # corners on small motors (see [[slot_fillet_root_cause]]).
+        _out_tol = min(1.5, 0.45 * core_h)
         if fillet_r > 0 and hasattr(stator_poly, 'exterior'):
-            stator_poly = _fillet_ring_corners(stator_poly, outer_r, 1.5, fillet_r)
+            stator_poly = _fillet_ring_corners(stator_poly, outer_r, _out_tol, fillet_r)
         if fillet_r1 > 0 and hasattr(stator_poly, 'exterior'):
             stator_poly = _fillet_ring_corners(stator_poly, inner_r, 1.0, fillet_r1)
 
@@ -1193,6 +1257,29 @@ class CadQueryMotor:
                             ]
                             result[key]['vertex_count'] += r['vertex_count']
                             result[key]['face_count']   += r['face_count']
+
+        # ── 5b. SLOT INSULATION (wire enamel + slot liner) ────────────────
+        # Shared geometry with get_2d_polygons (single source). Each merged into
+        # ONE part so the 3D tree shows a single "Wire enamel" / "Slot liner" item.
+        def _merge_part(key, r):
+            if not r:
+                return
+            if key not in result:
+                result[key] = r
+            else:
+                base = result[key]['vertex_count']
+                result[key]['vertices'] += r['vertices']
+                result[key]['faces']    += [[f + base for f in face] for face in r['faces']]
+                result[key]['vertex_count'] += r['vertex_count']
+                result[key]['face_count']   += r['face_count']
+        try:
+            _wpolys, _spolys = self._build_insulation_polys()
+            for _wp in _wpolys:
+                _merge_part('wire_insulation', _tri(_wp, z=Z_COIL))
+            for _sp in _spolys:
+                _merge_part('slot_insulation', _tri(_sp, z=Z_COIL))
+        except Exception as _e:
+            print(f"[2d] Failed to build insulation meshes: {_e}")
 
         # ── 6. SLIDING-BAND AIR DOMAINS ───────────────────────────────────
         # in_band  = full DISK r=0..mid_r  MINUS rotor + magnets + shaft.
@@ -1313,8 +1400,9 @@ class CadQueryMotor:
         mag_fill_r  = p['magnet_fill_radius']
         magnet_r    = rotor_ir + rotor_hh
         magnet_hole = p['rotor_hole']
-        fillet_r    = p.get('stator_fillet_r', 2.5)
-        fillet_r1   = p.get('stator_fillet_r1', 0.9)
+        # default 0 = param-driven (no landmine); re-read at the fillet application below
+        fillet_r    = p.get('stator_fillet_r',  0.0)
+        fillet_r1   = p.get('stator_fillet_r1', 0.0)
 
         # ── Zero-position alignment ──────────────────────────────────────
         # At rotor_angle_deg = 0 the rotor IRON TOOTH between mag[6] (N)
@@ -1554,11 +1642,16 @@ class CadQueryMotor:
                 result = result.buffer(0)
             return result
 
-        # Default 0 = SHARP corners (opt-in fillets only; see 3D path above).
+        # Outer-ring fillet (fillet_r) + air-gap-side fillet (fillet_r1). [[slot_fillet_root_cause]]
+        # The outer band must stay in the OUTER part of the back-iron so it can NEVER
+        # reach the slot-bottom (yoke-side) corners — on small motors those sit only
+        # ~1.4 mm from the OD and a fixed 1.5 mm band wrongly rounded them (the bug
+        # that only showed on small diameters).  Band = 0.45·core_thickness (cap 1.5).
         fillet_r  = p.get('stator_fillet_r',  0.0)
         fillet_r1 = p.get('stator_fillet_r1', 0.0)
+        _out_tol = min(1.5, 0.45 * core_h)
         if fillet_r > 0 and hasattr(stator_poly, 'exterior'):
-            stator_poly = _fillet_ring_corners_2d(stator_poly, outer_r, 1.5, fillet_r)
+            stator_poly = _fillet_ring_corners_2d(stator_poly, outer_r, _out_tol, fillet_r)
         if fillet_r1 > 0 and hasattr(stator_poly, 'exterior'):
             stator_poly = _fillet_ring_corners_2d(stator_poly, inner_r, 1.0, fillet_r1)
 
@@ -1602,6 +1695,13 @@ class CadQueryMotor:
                     wp = SPoly([_rot(*pt, a) for pt in local])
                     if wp.is_valid and wp.area > 0:
                         coil_polys.append(wp)              # ONE polygon per wire
+
+        # ── Slot insulation objects (thermal + mass/cost; EM-inert) ───────────
+        # wire enamel (polyimide) + slot liner (Nomex/ceramic), via the SHARED
+        # _build_insulation_polys() so the 3D viewer (get_2d_mesh_data) shows the
+        # exact same geometry.  Enamel = envelope−copper; liner = ins_w U-band on the
+        # 3 iron-facing sides.
+        wire_ins_polys, slot_ins_polys = self._build_insulation_polys()
 
         # ── Sliding-band air domains: in_band + out_band ──────────────────
         # in_band  = full DISK r=0..mid_r  MINUS rotor + magnets + shaft.
@@ -1655,6 +1755,8 @@ class CadQueryMotor:
             'mid_r_mm': mid_r,            # slip-surface radius (mm)
             'r_outer_boundary_mm': r_outer,  # outer Dirichlet BC radius (mm)
             'coils':    coil_polys,       # list of Shapely Polygon in mm
+            'wire_insulation': wire_ins_polys,  # list[Polygon] — wire enamel (polyimide); thermal+display (cost in wire)
+            'slot_insulation': slot_ins_polys,  # list[Polygon] — slot liner (Nomex/ceramic); thermal+cost+display
             # Winding fit: True if the requested num_wires_per_slot did NOT fit in
             # the slot (stack clamped to n_wires_fit so coils stay out of the gap).
             'coils_overflow': bool(getattr(self, '_coils_overflow', False)),

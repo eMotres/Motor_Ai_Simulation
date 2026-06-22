@@ -17,6 +17,7 @@ import {
 } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { useMotorStore } from '../../stores/motorStore';
+import HelpTip from '../common/HelpTip';
 
 /**
  * Free-typing numeric field.
@@ -97,12 +98,9 @@ const NumberField: React.FC<NumberFieldProps> = ({
         }
       }}
       inputProps={{ inputMode: 'decimal', step }}
+      InputProps={{ endAdornment: helperText ? <HelpTip title={helperText} /> : undefined }}
       error={invalid}
-      helperText={
-        invalid
-          ? `Allowed: ${min ?? '−∞'} … ${max ?? '∞'}`
-          : helperText
-      }
+      helperText={invalid ? `Allowed: ${min ?? '−∞'} … ${max ?? '∞'}` : undefined}
       disabled={disabled}
     />
   );

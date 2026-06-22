@@ -26,6 +26,7 @@ import { useMotorStore } from '../../stores/motorStore';
 import DescentPanel from './DescentPanel';
 import SweepStudyPanel from './SweepStudyPanel';
 import DOEPanel from './DOEPanel';
+import HelpTip from '../common/HelpTip';
 
 // Non-geometry variables (selected outside the Geometry tab) need their own
 // display label/unit since they are absent from the geometry parameter schema.
@@ -461,10 +462,12 @@ const SweepConfigPanel: React.FC = () => {
                   type="number"
                   value={ratedTorque}
                   onChange={e => updateSweepConstraints({ ratedTorqueNm: Math.max(0, parseFloat(e.target.value) || 0) })}
-                  InputProps={{ endAdornment: <InputAdornment position="end">N·m</InputAdornment> }}
+                  InputProps={{ endAdornment: (
+                    <InputAdornment position="end" sx={{ gap: 0.5 }}>
+                      N·m<HelpTip title="Each design is solved at the current that delivers this torque" />
+                    </InputAdornment>
+                  ) }}
                   inputProps={{ min: 0, step: 0.5 }}
-                  helperText="Each design is solved at the current that delivers this torque"
-                  FormHelperTextProps={{ sx: { fontSize: 10, mx: 0 } }}
                 />
                 <Box sx={{ display: 'flex', gap: 1 }}>
                   <TextField

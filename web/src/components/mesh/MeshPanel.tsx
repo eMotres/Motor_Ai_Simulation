@@ -27,7 +27,6 @@ import SaveIcon from '@mui/icons-material/Save';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import FemMeshViewer3D from './FemMeshViewer3D';
 import FemMeshViewer2D from './FemMeshViewer2D';
-import SaveToMotorButton from '../common/SaveToMotorButton';
 import { syncActiveMotor } from '../common/motorSettings';
 
 // WebGL is unavailable in some embedded / sandboxed browser panels
@@ -68,12 +67,15 @@ const DOMAIN_RGBA: Record<number, [number, number, number, number]> = {
   6:  [180, 180, 190, 210],   // shaft          grey
   7:  [115, 217, 204, 230],   // band           teal
   8:  [56,  102, 140, 200],   // outer air      deep blue
+  9:  [63,  174, 90,  240],   // slot liner     green   (Nomex/ceramic)
+  10: [217, 138, 58,  240],   // wire enamel    orange  (polyimide)
   44: [239, 68,  68,  240],   // magnet S       red
 };
 const DOMAIN_NAMES: Record<number, string> = {
   0: 'Air',     1: 'Stator',  2: 'Winding',  3: 'Air gap',
   4: 'Magnet N', 5: 'Rotor',  6: 'Shaft',
   7: 'Band',    8: 'Outer air',
+  9: 'Slot liner', 10: 'Wire enamel',
   44: 'Magnet S',
 };
 
@@ -900,8 +902,6 @@ const MeshPanel: React.FC = () => {
             >
               {femLoading ? 'Building…' : 'Rebuild mesh'}
             </Button>
-
-            <SaveToMotorButton />
 
             {femError && <Alert severity="error" sx={{ fontSize: 11 }}>{femError}</Alert>}
 

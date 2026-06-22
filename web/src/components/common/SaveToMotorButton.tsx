@@ -6,7 +6,7 @@ import { Box, Button, TextField, Tooltip, CircularProgress } from '@mui/material
 import SaveIcon from '@mui/icons-material/Save';
 import CheckIcon from '@mui/icons-material/Check';
 import BoltIcon from '@mui/icons-material/Bolt';
-import { getActiveMotor, createMotorFromCurrent } from './motorSettings';
+import { getActiveMotor, createMotorFromCurrent, overwriteActiveMotor } from './motorSettings';
 
 interface Props { disabled?: boolean; }
 
@@ -21,6 +21,8 @@ const SaveToMotorButton: React.FC<Props> = ({ disabled }) => {
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
+  const [ovrBusy, setOvrBusy] = useState(false);
+  const [ovrDone, setOvrDone] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   const create = async () => {
@@ -33,6 +35,15 @@ const SaveToMotorButton: React.FC<Props> = ({ disabled }) => {
       setDone(true); setTimeout(() => setDone(false), 2200);
     } catch (e: any) { setErr(String(e.message ?? e)); }
     finally { setBusy(false); }
+  };
+
+  const overwrite = async () => {
+    setOvrBusy(true); setErr(null);
+    try {
+      await overwriteActiveMotor();
+      setOvrDone(true); setTimeout(() => setOvrDone(false), 2200);
+    } catch (e: any) { setErr(String(e.message ?? e)); }
+    finally { setOvrBusy(false); }
   };
 
   return (
@@ -59,13 +70,27 @@ const SaveToMotorButton: React.FC<Props> = ({ disabled }) => {
           </Button>
         </Box>
       ) : (
-        <Button size="small" variant="outlined" fullWidth disableElevation disabled={disabled}
-          startIcon={done ? <CheckIcon sx={{ fontSize: 15 }} /> : <SaveIcon sx={{ fontSize: 15 }} />}
-          onClick={() => setNaming(true)}
-          sx={{ textTransform: 'none', fontSize: 11, borderColor: '#334155', color: done ? '#34d399' : '#a5b4fc',
-            '&:hover': { borderColor: '#6366f1', bgcolor: '#1e1b4b' } }}>
-          {done ? 'Saved as new ✓' : 'Save as new motor…'}
-        </Button>
+        <Box sx={{ display: 'flex', gap: 0.5 }}>
+          {active && (
+            <Tooltip title={`Overwrite "${active.name}" in place with the current geometry / mesh / simulation (updates its Motors-tab card). Use "Save as new" to keep the original and fork a copy.`} placement="top">
+              <span style={{ flex: 1 }}>
+                <Button size="small" variant="contained" fullWidth disableElevation disabled={disabled || ovrBusy}
+                  startIcon={ovrBusy ? <CircularProgress size={13} /> : ovrDone ? <CheckIcon sx={{ fontSize: 15 }} /> : <SaveIcon sx={{ fontSize: 15 }} />}
+                  onClick={overwrite}
+                  sx={{ textTransform: 'none', fontSize: 11, bgcolor: ovrDone ? '#059669' : '#4f46e5', '&:hover': { bgcolor: '#6366f1' } }}>
+                  {ovrDone ? 'Saved ✓' : 'Overwrite this motor'}
+                </Button>
+              </span>
+            </Tooltip>
+          )}
+          <Button size="small" variant="outlined" disableElevation disabled={disabled}
+            startIcon={done ? <CheckIcon sx={{ fontSize: 15 }} /> : <SaveIcon sx={{ fontSize: 15 }} />}
+            onClick={() => setNaming(true)}
+            sx={{ flex: active ? 'unset' : 1, whiteSpace: 'nowrap', textTransform: 'none', fontSize: 11, borderColor: '#334155',
+              color: done ? '#34d399' : '#a5b4fc', '&:hover': { borderColor: '#6366f1', bgcolor: '#1e1b4b' } }}>
+            {done ? 'Saved ✓' : active ? 'Save as new…' : 'Save as new motor…'}
+          </Button>
+        </Box>
       )}
       {err && <Box sx={{ fontSize: 10, color: '#f87171' }}>{err}</Box>}
     </Box>

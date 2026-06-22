@@ -11,7 +11,7 @@ geometry:
   cut_width: 1
   insulation_thickness: 0.2
   wire_width: 2.5
-  wire_height: 0.6
+  wire_height: 0.445
   wire_spacing_x: 0.1
   wire_spacing_y: 0.13
   num_wires_per_slot: 8
@@ -25,8 +25,8 @@ geometry:
   magnet_up_gap: 0.7
   rotor_hole: 0.6
   magnet_down_height: 1
-  stator_fillet_r: 0.0
-  stator_fillet_r1: 0.0
+  stator_fillet_r: 1
+  stator_fillet_r1: 0.3
   rotor_fill_r: 0.2
   motor_length: 12
   stator_outer_radius: 20
@@ -297,16 +297,18 @@ geometry_schema:
     max: 5
     step: 0.1
     group: stator
-    description: Fillet radius on outer-ring corners of stator (at outer radius)
+    description: Fillet radius on the OUTER-ring corners of the stator (near the OD).
+      Does NOT round the slot pocket — only the outer profile corners.
   stator_fillet_r1:
-    label: Inner Corner Fillet
+    label: Air-gap Corner Fillet
     unit: mm
     type: float
     min: 0
     max: 2
     step: 0.1
     group: stator
-    description: Fillet radius on inner-ring corners of stator (at inner radius)
+    description: Fillet radius on the INNER / air-gap-side corners (tooth tips, slot
+      mouths near the bore). Does NOT round the deep slot pocket.
   rotor_fill_r:
     label: Rotor Corner Fillet
     unit: mm
@@ -365,8 +367,6 @@ sweep_whitelist:
 - magnet_fill_radius
 - magnet_up_gap
 - magnet_down_height
-- stator_fillet_r
-- stator_fillet_r1
 - rotor_fill_r
 mesh:
   n_radial: 11
@@ -387,6 +387,8 @@ materials:
   rotor_core: B15AHV950M
   magnet: Arnold_N52UH_150C
   shaft: Aluminium_6061
+  slot_insulation: Nomex
+  wire_insulation: polyimide
 custom_materials: {}
 winding:
   n_coils_per_phase: 4
@@ -400,7 +402,7 @@ simulation:
   frequency: 1400.0
   rpm: 12000
   phase_offset_deg: -42
-  steps_per_period: 24
+  steps_per_period: 72
   demag: false
   coil_temp_c: 120
   end_winding_factor: 1.66

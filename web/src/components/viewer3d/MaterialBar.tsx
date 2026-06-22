@@ -24,7 +24,7 @@ interface PartCfg {
   color: string;
 }
 
-const PART_CFG: Record<CompKey, PartCfg> = {
+const PART_CFG: Partial<Record<CompKey, PartCfg>> = {
   stator:   { assignKey: 'stator_core', label: 'Stator Core',           color: '#3b82f6' },
   rotor:    { assignKey: 'rotor_core',  label: 'Rotor Core',            color: '#2563eb' },
   magnets:  { assignKey: 'magnet',      label: 'Magnets',               color: '#ef4444' },
@@ -32,6 +32,8 @@ const PART_CFG: Record<CompKey, PartCfg> = {
   shaft:    { assignKey: 'shaft',       label: 'Shaft',                 color: '#64748b' },
   in_band:  { assignKey: 'air_gap',     label: 'In Band (rotating)',    color: '#22c55e' },
   out_band: { assignKey: 'air_gap',     label: 'Out Band (static)',     color: '#a855f7' },
+  // slot_insulation / wire_insulation: shown in the tree + 3D, but no material-reassign
+  // bar yet (no crash — guarded below).
 };
 
 // All categories in display order
@@ -63,6 +65,7 @@ const MaterialBar: React.FC = () => {
   if (!selectedPart) return null;
 
   const cfg = PART_CFG[selectedPart];
+  if (!cfg) return null;   // e.g. insulation parts — no material-reassign bar
   const current = assignments ? assignments[cfg.assignKey] : null;
   const open = Boolean(anchorEl);
 

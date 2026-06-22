@@ -239,6 +239,32 @@ def get_materials_library():
                 "wire_height_mm": m.wire_height_mm,
             }
 
+        # Insulators (slot liner / wire enamel) — thermal + cost, EM-inert
+        result["insulator"] = {}
+        for name, m in mat_lib.all_insulators().items():
+            result["insulator"][name] = {
+                "description": m.description,
+                "sigma": m.sigma,
+                "density": m.density,
+                "thermal_conductivity": m.thermal_conductivity,
+                "specific_heat": m.specific_heat,
+                "mu_r": m.mu_r,
+            }
+
+        # Coolants / fluids (liquids + air) — properties feed the cooling model
+        result["coolant"] = {}
+        for name, m in mat_lib.all_coolants().items():
+            result["coolant"][name] = {
+                "description": m.description,
+                "phase": m.phase,
+                "density": m.density,
+                "specific_heat": m.specific_heat,
+                "thermal_conductivity": m.thermal_conductivity,
+                "kinematic_viscosity": m.kinematic_viscosity,
+                "prandtl": m.prandtl,
+                "sigma": m.sigma,
+            }
+
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -246,16 +272,13 @@ def get_materials_library():
 
 @app.get("/api/materials/library/{category}")
 def get_materials_library_category(category: str):
-    """Return materials for a specific category: steel | magnet | conductor."""
+    """Return materials for a specific category:
+    steel | magnet | conductor | insulator | coolant."""
     try:
-        if category == "steel":
-            names = mat_lib.list_materials("steel")["steel"]
-        elif category == "magnet":
-            names = mat_lib.list_materials("magnet")["magnet"]
-        elif category == "conductor":
-            names = mat_lib.list_materials("conductor")["conductor"]
-        else:
+        valid = {"steel", "magnet", "conductor", "insulator", "coolant"}
+        if category not in valid:
             raise HTTPException(status_code=404, detail=f"Unknown category '{category}'")
+        names = mat_lib.list_materials(category)[category]  # type: ignore[arg-type]
         return {"category": category, "materials": names}
     except HTTPException:
         raise

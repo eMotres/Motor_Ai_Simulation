@@ -16,7 +16,7 @@ from .geometry_3d import AeroStatorGeometry3D
 from .mesh import SkfemMesh2D
 from .optimization import Optimizer
 from .registry import ModuleRegistry
-from .solvers import EmStaticSolver, EmTransientSolver, ThermalSolver
+from .solvers import EmStaticSolver, EmTransientSolver, EmThermalCoupled, ThermalSolver
 from .surrogate import SurrogateRF
 from .users import UsersModule
 
@@ -39,6 +39,7 @@ def default_registry() -> ModuleRegistry:
         EmStaticSolver(),         # solver.em_static     -> mesh
         EmTransientSolver(),      # solver.em_transient  -> mesh
         ThermalSolver(),          # solver.thermal       -> solver.em_transient
+        EmThermalCoupled(),       # solver.em_thermal    -> solver.thermal  (loss<->temp feedback)
         _mechanical_stub(),       # solver.mechanical    -> mesh   (roadmap)
         FocController(),          # controller   (MachineState -> ControlSignal)
         SurrogateRF(),            # surrogate

@@ -94,10 +94,6 @@ interface Props {
   // A design was just applied from the Sweep tab (summary numbers reused) — the
   // shown waveforms are still the PREVIOUS design's, so flag them stale.
   appliedFromSweep?: boolean;
-  // Route the transient through the modular kernel (POST /api/kernel/run,
-  // capability solver.em_transient) instead of the direct route — same solver,
-  // same result, exercised through the module pipeline. Default off.
-  kernelMode?: boolean;
 }
 
 function readMeshSetting<T>(key: string, def: T): T {
@@ -153,7 +149,7 @@ function loadLastTransient(): TransientPayload | null {
 }
 
 // (live recompute progress strip: elapsed + points, driven by busy + /progress)
-const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onSummary, runNonce = 0, onBusyChange, steps = 12, fresh = false, fieldLosses = true, demag = false, torqueFilter = true, appliedFromSweep = false, kernelMode = false }) => {
+const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onSummary, runNonce = 0, onBusyChange, steps = 12, fresh = false, fieldLosses = true, demag = false, torqueFilter = true, appliedFromSweep = false }) => {
   // `steps` (n_steps_per_period) is controlled from the left panel and
   // matches the animation viewer's n_frames so both hit the same backend
   // cache key (one solve, not two).
@@ -295,36 +291,26 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
       run_id:             String(runNonce),
       fresh,
     };
-    const qs = new URLSearchParams(
-      Object.fromEntries(Object.entries(p).map(([k, v]) => [k, String(v)])),
-    ).toString();
     // Helper: fetch with auto-retry against transient connection drops.
     // The uvicorn supervisor sometimes respawns the worker mid-request when
     // a heavy FEM solve crashes the LLVM JIT; without a retry the user sees
     // a permanent "Failed to fetch" until they click Re-run manually.
     const attempt = async (i = 0): Promise<void> => {
       try {
-        // kernelMode → run the SAME solve THROUGH the modular kernel (POST
-        // /api/kernel/run, capability solver.em_transient); result.raw is the
-        // transient payload (frames are dropped by the IR — fine, ignored here).
-        // Off → the direct route.  Progress/cancel/cache/restore are shared global
-        // backend state, so they behave identically either way.
-        let d: TransientPayload & { restored?: boolean; stale?: boolean };
-        if (kernelMode) {
-          const r = await fetch(`${API}/api/kernel/run`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ capability: 'solver.em_transient', payload: p }),
-            signal: ctrl.signal });
-          if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
-          const j = await r.json();
-          if (!j.ok) throw new Error(j.error || 'kernel solve failed');
-          d = (j.result && j.result.raw) || {};
-        } else {
-          const r = await fetch(`${API}/api/simulation/physics/fem_transient?${qs}`,
-            { signal: ctrl.signal });
-          if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
-          d = await r.json();
-        }
+        // ALWAYS through the modular kernel (POST /api/kernel/run, capability
+        // solver.em_transient). The kernel -> get_fem_transient -> em_transient_eval
+        // (the same solver), so results are identical to the old direct route.
+        // result.raw is the transient payload (frames are dropped by the IR —
+        // ignored here; the animation viewer fetches frames directly). Progress /
+        // cancel / cache / restore are shared global backend state.
+        const r = await fetch(`${API}/api/kernel/run`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ capability: 'solver.em_transient', payload: p }),
+          signal: ctrl.signal });
+        if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
+        const j = await r.json();
+        if (!j.ok) throw new Error(j.error || 'kernel solve failed');
+        const d: TransientPayload & { restored?: boolean; stale?: boolean } = (j.result && j.result.raw) || {};
         // restore=true with nothing ever saved → backend returns {restored:false}.
         // Leave the panel empty (the "press Run" prompt) — do NOT recompute.
         if (d.restored === false || !d.time_s) { setBusy(false); setError(null); return; }

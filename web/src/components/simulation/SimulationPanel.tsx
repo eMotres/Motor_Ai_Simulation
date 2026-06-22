@@ -278,10 +278,6 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // (drops the broadband slip-node noise a balanced 3-phase machine cannot
   // produce).  ON by default; turn off to inspect the raw per-frame torque.
   const [torqueFilter, setTorqueFilter] = usePersisted('torqueFilter', true);
-  // Route the transient solve through the modular kernel (solver.em_transient)
-  // instead of the direct route — same solver, exercised through the module
-  // pipeline. Lets the user verify the modules really run the app. Default off.
-  const [kernelMode, setKernelMode] = usePersisted('kernelMode', false);
   // Auto-save EVERY simulation change into the active motor ("my copy").
   // syncActiveMotor is internally debounced, so firing on each change is fine.
   useEffect(() => {
@@ -858,26 +854,6 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               }
             />
           </Tooltip>
-          {/* Run the transient THROUGH the modular kernel (solver.em_transient)
-              vs the direct route — same solver + identical result, but exercised
-              through the module pipeline.  Lets you verify the modules really run
-              the app.  Progress / Stop / restore work the same either way. */}
-          <Tooltip title="Run this transient through the modular kernel (POST /api/kernel/run → capability solver.em_transient) instead of the direct endpoint. Same solver, identical result — it just proves the app's core compute runs through the module pipeline. Progress, Stop and restore behave identically." placement="right">
-            <FormControlLabel
-              sx={{ mt: -0.5, mb: 0.75, ml: 0.25 }}
-              control={
-                <Checkbox size="small" checked={kernelMode}
-                  onChange={e => setKernelMode(e.target.checked)}
-                  disabled={simBusy}
-                  sx={{ p: 0.5, color: '#475569', '&.Mui-checked': { color: '#3b82f6' } }} />
-              }
-              label={
-                <Typography variant="caption" sx={{ color: kernelMode ? '#60a5fa' : '#94a3b8' }}>
-                  Compute via module kernel
-                </Typography>
-              }
-            />
-          </Tooltip>
           {simBusy ? (
             <Button
               fullWidth
@@ -1215,7 +1191,6 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
           fieldLosses={fieldLosses}
           demag={demag}
           torqueFilter={torqueFilter}
-          kernelMode={kernelMode}
         />
 
       </Box>

@@ -1,0 +1,148 @@
+/**
+ * CoupledEmThermal — the multiphysics EM<->thermal coupling, on/off in the UI.
+ *
+ * Runs the `solver.em_thermal` module through the kernel: it iterates
+ *   EM loss field -> thermal solve -> winding temperature -> fed BACK as the next
+ *   EM operating temp (rho_Cu rises with T => more loss => hotter)
+ * until the copper reaches thermal EQUILIBRIUM (or flags thermal runaway).
+ *
+ * It is OFF by default and gated behind an explicit "Run" because each iteration
+ * is a full EM+thermal solve (slow). The iteration history makes the inter-module
+ * loss<->temperature feedback visible.
+ */
+import React, { useState } from 'react';
+import { Box, Paper, Typography, Button, TextField, Switch, FormControlLabel, CircularProgress, Chip } from '@mui/material';
+import { useMotorStore } from '../../stores/motorStore';
+
+const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
+const CARD = { bgcolor: '#0b1424', border: '1px solid #1e293b', borderRadius: 1.5, p: 2 } as const;
+
+interface Props { I_phase_rms?: number; gamma_deg?: number; steps?: number; }
+
+const CoupledEmThermal: React.FC<Props> = ({ I_phase_rms = 85, gamma_deg = 0, steps = 12 }) => {
+  const geometry = useMotorStore((s: any) => s.geometry);
+  const [enabled, setEnabled] = useState<boolean>(() => localStorage.getItem('sim.multiphysics') === '1');
+  const [ambient, setAmbient] = useState(25);
+  const [hConv, setHConv] = useState(50);
+  const [busy, setBusy] = useState(false);
+  const [res, setRes] = useState<any>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const toggle = (on: boolean) => { setEnabled(on); localStorage.setItem('sim.multiphysics', on ? '1' : '0'); };
+
+  const run = async () => {
+    setBusy(true); setErr(null); setRes(null);
+    try {
+      const r = await fetch(`${API}/api/kernel/run`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          capability: 'solver.em_thermal',
+          payload: {
+            I_phase_rms, gamma_deg, n_steps_per_period: steps, n_periods: 1, n_sectors: 4,
+            ambient_temp: ambient, h_conv: hConv, max_iter: 6,
+            geo: JSON.stringify(geometry || {}),
+          },
+        }),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || 'coupled solve failed');
+      setRes(j.result);
+    } catch (e) { setErr(String(e)); }
+    setBusy(false);
+  };
+
+  const raw = res?.raw || {};
+  const comp = raw.components || {};
+  const converged = raw.converged;
+  const runaway = raw.runaway;
+  const hist: number[] = raw.coil_temp_history_C || [];
+
+  return (
+    <Paper sx={CARD}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
+        <Typography sx={{ fontSize: 14, fontWeight: 700, color: '#e2e8f0' }}>Multiphysics — coupled EM ↔ thermal</Typography>
+        <Typography sx={{ fontSize: 10.5, color: '#64748b', fontFamily: 'monospace' }}>module: solver.em_thermal</Typography>
+        <Box sx={{ flex: 1 }} />
+        <FormControlLabel
+          control={<Switch size="small" checked={enabled} onChange={(e) => toggle(e.target.checked)} />}
+          label={<Typography sx={{ fontSize: 12, color: enabled ? '#60a5fa' : '#94a3b8' }}>{enabled ? 'On' : 'Off'}</Typography>}
+          sx={{ mr: 0 }}
+        />
+      </Box>
+
+      {!enabled && (
+        <Typography sx={{ fontSize: 11.5, color: '#64748b', mt: 0.5 }}>
+          Off — torque/losses use a fixed coil temperature. Turn on to iterate losses ↔ temperature to the
+          self-consistent operating point (slower: each step is a full EM + thermal solve).
+        </Typography>
+      )}
+
+      {enabled && (
+        <Box sx={{ mt: 1.5 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap', mb: 1 }}>
+            <TextField label="Ambient °C" type="number" size="small" value={ambient}
+              onChange={(e) => setAmbient(parseFloat(e.target.value) || 0)}
+              sx={{ width: 110, '& input': { fontSize: 12 } }} />
+            <TextField label="h_conv W/m²K" type="number" size="small" value={hConv}
+              onChange={(e) => setHConv(parseFloat(e.target.value) || 0)}
+              sx={{ width: 130, '& input': { fontSize: 12 } }} />
+            <Typography sx={{ fontSize: 11, color: '#64748b', fontFamily: 'monospace' }}>
+              @ {I_phase_rms} A · γ {gamma_deg}° · {steps} steps
+            </Typography>
+            <Box sx={{ flex: 1 }} />
+            <Button size="small" variant="contained" onClick={run} disabled={busy}
+              sx={{ textTransform: 'none', fontSize: 11 }}>
+              {busy ? 'Solving…' : 'Run coupled solve'}
+            </Button>
+          </Box>
+
+          {busy && (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, color: '#64748b', py: 0.5 }}>
+              <CircularProgress size={14} /> Iterating EM ↔ thermal to equilibrium…
+            </Box>
+          )}
+          {err && <Typography sx={{ fontSize: 11.5, color: '#fca5a5' }}>Coupled solve failed: {err}</Typography>}
+
+          {res && hist.length > 0 && (
+            <Box>
+              {/* the loss<->temperature feedback, iteration by iteration */}
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap', mb: 1 }}>
+                <Typography sx={{ fontSize: 11, color: '#94a3b8' }}>copper temp per iteration:</Typography>
+                {hist.map((t, i) => (
+                  <Chip key={i} size="small" label={`${t}°C`}
+                    sx={{ height: 20, fontSize: 10.5, fontFamily: 'monospace',
+                          bgcolor: i === hist.length - 1 ? '#1d4ed8' : '#1e293b', color: '#e2e8f0' }} />
+                ))}
+              </Box>
+
+              {runaway ? (
+                <Typography sx={{ fontSize: 12.5, color: '#fca5a5', fontWeight: 600 }}>
+                  ⚠ Thermal runaway — no stable equilibrium at this operating point. Increase cooling (h_conv)
+                  or reduce current.
+                </Typography>
+              ) : (
+                <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 1 }}>
+                  <Metric label="Equilibrium copper" value={`${raw.coil_temp_converged_C} °C`} hot />
+                  <Metric label="Hot-spot T_max" value={`${raw.T_max} °C`} />
+                  <Metric label="Winding (avg)" value={comp.winding ? `${comp.winding.avg} °C` : '—'} />
+                  <Metric label="Magnet (avg)" value={comp.magnet ? `${comp.magnet.avg} °C` : '—'} />
+                  <Metric label="Copper loss" value={`${raw.P_cu_W} W`} />
+                </Box>
+              )}
+            </Box>
+          )}
+        </Box>
+      )}
+    </Paper>
+  );
+};
+
+const Metric: React.FC<{ label: string; value: string; hot?: boolean }> = ({ label, value, hot }) => (
+  <Box sx={{ bgcolor: '#060d17', border: '1px solid #1e293b', borderRadius: 1, px: 1.25, py: 0.75 }}>
+    <Typography sx={{ fontSize: 9.5, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.4 }}>{label}</Typography>
+    <Typography sx={{ fontSize: 15, fontWeight: 700, color: hot ? '#fb923c' : '#e2e8f0', fontFamily: 'monospace' }}>{value}</Typography>
+  </Box>
+);
+
+export default CoupledEmThermal;

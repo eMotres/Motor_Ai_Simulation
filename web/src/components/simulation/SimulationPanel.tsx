@@ -23,6 +23,7 @@ import BoltIcon         from '@mui/icons-material/Bolt';
 import SimulationCharts from './SimulationCharts';
 import PhysicsDashboard from './PhysicsDashboard';
 import ModelCompare from './ModelCompare';
+import CoupledEmThermal from './CoupledEmThermal';
 import SaveToMotorButton from '../common/SaveToMotorButton';
 import { syncActiveMotor } from '../common/motorSettings';
 import SaveIcon from '@mui/icons-material/Save';
@@ -1194,6 +1195,10 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
         {/* ── Model comparison (diagnostics) — runs the three torque models
             across a γ sweep so the inter-model discrepancy is visible. ── */}
         <ModelCompare I_phase_rms={current} />
+
+        {/* ── Multiphysics: coupled EM↔thermal (on/off, slow — runs the
+            solver.em_thermal module: losses ↔ temperature to equilibrium). ── */}
+        <CoupledEmThermal I_phase_rms={current} gamma_deg={phaseOffset} steps={steps} />
 
         {/* ── Physics dashboard (the standard FEM interface) — FIRST so the
             FEM results + fields + transient are the prominent view ── */}

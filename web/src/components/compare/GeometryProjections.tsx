@@ -138,13 +138,12 @@ const CrossSectionReal: React.FC<{
 // Side view on a CANVAS (not SVG): a canvas has reliable intrinsic sizing, so it
 // renders height-driven without the SVG width/flex-basis clamping — guaranteeing
 // the SAME scale as the cross-section (OD pixel-height matches the diameter).
-const SideView: React.FC<{ ref0: ReferenceMotor; knobs: Knobs }> = ({ ref0, knobs }) => {
+const SideView: React.FC<{ OD_mm: number; L_mm: number }> = ({ OD_mm, L_mm }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const g = ref0.geo;
   const H = 720;                                 // same 720 frame as the cross-section canvas
-  const OD = 2 * g.statorOR_mm;
+  const OD = OD_mm > 0 ? OD_mm : 1;              // outer diameter — from the live geometry
   const s2 = (0.82 * H) / OD;                    // SAME scale factor (0.82) → motor same size in both views
-  const stackH = OD * s2, stackW = knobs.L_mm * s2;
+  const stackH = OD * s2, stackW = Math.max(1, L_mm) * s2;
   const W = Math.round(stackW + 130);            // buffer hugs the stack (+ room for dimensions)
 
   useEffect(() => {
@@ -168,7 +167,7 @@ const SideView: React.FC<{ ref0: ReferenceMotor; knobs: Knobs }> = ({ ref0, knob
     ctx.moveTo(x0, ly - 8); ctx.lineTo(x0, ly + 8); ctx.moveTo(x0 + stackW, ly - 8); ctx.lineTo(x0 + stackW, ly + 8);
     ctx.stroke();
     ctx.fillStyle = '#cbd5e1'; ctx.font = '700 26px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
-    ctx.fillText(`${knobs.L_mm.toFixed(0)} mm`, cx, ly + 10);
+    ctx.fillText(`${L_mm.toFixed(0)} mm`, cx, ly + 10);
     // diameter dimension (left)
     const dx = x0 - 30;
     ctx.strokeStyle = '#94a3b8'; ctx.lineWidth = 1.3;
@@ -179,7 +178,7 @@ const SideView: React.FC<{ ref0: ReferenceMotor; knobs: Knobs }> = ({ ref0, knob
     ctx.save(); ctx.translate(dx - 14, cy); ctx.rotate(-Math.PI / 2);
     ctx.fillStyle = '#94a3b8'; ctx.font = '600 20px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText(`Ø${OD.toFixed(0)} mm`, 0, 0); ctx.restore();
-  }, [ref0, knobs.L_mm, W, stackW, stackH, OD]);
+  }, [OD_mm, L_mm, W, stackW, stackH, OD]);
 
   return <canvas ref={canvasRef} width={W} height={H}
     style={{ height: '100%', width: 'auto', aspectRatio: `${W} / ${H}`, display: 'block' }} />;
@@ -195,21 +194,38 @@ const GeometryProjections: React.FC<{ ref0: ReferenceMotor; knobs: Knobs }> = ({
     return JSON.stringify(g);
   }, [storeGeo]);
 
+  // Outer diameter + stack length come from the LIVE geometry store — the same
+  // single source the cross-section uses — not the static reference passport.
+  const gnum = (k: string): number | undefined =>
+    (typeof storeGeo?.[k] === 'number' ? (storeGeo[k] as number) : undefined);
+  const OD_mm = gnum('stator_diameter')
+    ?? (gnum('stator_outer_radius') !== undefined ? (gnum('stator_outer_radius') as number) * 2 : undefined)
+    ?? 2 * ref0.geo.statorOR_mm;
+  const L_mm = gnum('motor_length') ?? knobs.L_mm;
+  // Slot/pole counts and the wire-placement geometry also come from the live
+  // geometry (so the label + winding overlay match the cross-section mesh); only
+  // N-turns and wire thickness stay configurator knobs (the winding being tuned).
+  const numSlots = gnum('num_slots') ?? ref0.geo.numSlots;
+  const numPoles = gnum('num_poles') ?? ref0.geo.numPoles;
+  const slotIR_mm     = gnum('stator_inner_radius') ?? ref0.geo.statorIR_mm;
+  const insulation_mm = gnum('insulation_thickness') ?? ref0.fit.insulation_mm;
+  const spacing_mm    = gnum('wire_spacing_y') ?? ref0.fit.wireSpacingY_mm;
+
   return (
     <Box sx={{ display: 'flex', gap: 2, alignItems: 'stretch', justifyContent: 'center', height: 'min(88vh, 820px)' }}>
       <Box sx={{ ...PANEL, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
         <Typography sx={LABEL}>Cross-section (XY) — real geometry</Typography>
-        <Typography sx={SUB}>{knobs.N} turns/slot · {knobs.wireH_mm.toFixed(1)} mm wire · {ref0.geo.numSlots} slots / {ref0.geo.numPoles} poles</Typography>
+        <Typography sx={SUB}>{knobs.N} turns/slot · {knobs.wireH_mm.toFixed(1)} mm wire · {numSlots} slots / {numPoles} poles</Typography>
         <Box sx={{ flex: 1, minHeight: 0, mt: 0.5 }}>
           <CrossSectionReal geoStr={geoStr} N={knobs.N} wireH={knobs.wireH_mm}
-            insulation={ref0.fit.insulation_mm} spacing={ref0.fit.wireSpacingY_mm} slotIR={ref0.geo.statorIR_mm} />
+            insulation={insulation_mm} spacing={spacing_mm} slotIR={slotIR_mm} />
         </Box>
       </Box>
       <Box sx={{ ...PANEL, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
         <Typography sx={LABEL}>Side view — stack length</Typography>
-        <Typography sx={SUB}>L = {knobs.L_mm.toFixed(0)} mm · Ø{(2 * ref0.geo.statorOR_mm).toFixed(0)} mm</Typography>
+        <Typography sx={SUB}>L = {L_mm.toFixed(0)} mm · Ø{OD_mm.toFixed(0)} mm</Typography>
         <Box sx={{ flex: 1, minHeight: 0, mt: 0.5, display: 'flex', justifyContent: 'center' }}>
-          <SideView ref0={ref0} knobs={knobs} />
+          <SideView OD_mm={OD_mm} L_mm={L_mm} />
         </Box>
       </Box>
     </Box>

@@ -152,6 +152,26 @@ function App() {
   const [panelWidth, setPanelWidth] = React.useState(300);
   const [selectedMaterial, setSelectedMaterial] = useState<SelectedMaterial | null>(null);
   const { library: matLibrary, loading: matLoading, error: matError } = useMaterialsLibrary();
+  // Remember the last-viewed material so the detail pane restores it next session.
+  useEffect(() => {
+    try { if (selectedMaterial) localStorage.setItem('materials.selected', JSON.stringify(selectedMaterial)); } catch { /* quota */ }
+  }, [selectedMaterial]);
+  // Once the library loads, ensure a material is selected — the last-viewed one (if it
+  // still exists) or the first available — so the detail pane is never empty.
+  useEffect(() => {
+    if (!matLibrary) return;
+    const lib = matLibrary as unknown as Record<string, Record<string, unknown>>;
+    const has = (s: SelectedMaterial | null): boolean =>
+      !!s && !!lib[s.category] && Object.prototype.hasOwnProperty.call(lib[s.category], s.name);
+    if (has(selectedMaterial)) return;
+    let restore: SelectedMaterial | null = null;
+    try { const raw = localStorage.getItem('materials.selected'); if (raw) restore = JSON.parse(raw); } catch { /* ignore */ }
+    if (has(restore)) { setSelectedMaterial(restore); return; }
+    for (const cat of ['steel', 'magnet', 'conductor', 'insulator', 'coolant'] as const) {
+      const names = Object.keys(lib[cat] ?? {});
+      if (names.length) { setSelectedMaterial({ category: cat, name: names[0] }); return; }
+    }
+  }, [matLibrary, selectedMaterial]);
   const isDragging = React.useRef(false);
 
   const onDividerMouseDown = React.useCallback((e: React.MouseEvent) => {

@@ -6,7 +6,7 @@ import {
 } from 'recharts';
 import type {
   MaterialsLibrary, SelectedMaterial,
-  SteelData, MagnetData, ConductorData,
+  SteelData, MagnetData, ConductorData, InsulatorData, CoolantData,
 } from './useMaterialsLibrary';
 
 // ─── Color palette for multi-freq loss curves ─────────────────────────────────
@@ -315,6 +315,33 @@ const ConductorDetail: React.FC<{ name: string; data: ConductorData }> = ({ name
   </Box>
 );
 
+// ─── Insulator detail ─────────────────────────────────────────────────────────
+const InsulatorDetail: React.FC<{ name: string; data: InsulatorData }> = ({ data }) => (
+  <Box>
+    <Section title="Thermal & Electrical Properties" accentColor="#3fae5a">
+      <Row label="Thermal conductivity" value={data.thermal_conductivity != null ? String(data.thermal_conductivity) : '—'} unit="W/(m·K)" highlight />
+      <Row label="Specific heat"        value={data.specific_heat != null ? String(data.specific_heat) : '—'} unit="J/(kg·K)" />
+      <Row label="Density"              value={String(data.density)} unit="kg/m³" />
+      <Row label="Conductivity σ"       value={data.sigma > 0 ? `${(data.sigma / 1e6).toFixed(3)}` : '≈ 0 (dielectric)'} unit={data.sigma > 0 ? 'MS/m' : ''} />
+      <Row label="Rel. permeability μr" value={data.mu_r.toFixed(2)} />
+    </Section>
+  </Box>
+);
+
+// ─── Coolant detail ───────────────────────────────────────────────────────────
+const CoolantDetail: React.FC<{ name: string; data: CoolantData }> = ({ data }) => (
+  <Box>
+    <Section title="Fluid Properties (cooling model)" accentColor="#38bdf8">
+      <Row label="Phase"                 value={data.phase} highlight />
+      <Row label="Thermal conductivity k" value={String(data.thermal_conductivity)} unit="W/(m·K)" highlight />
+      <Row label="Specific heat cp"      value={String(data.specific_heat)} unit="J/(kg·K)" highlight />
+      <Row label="Density ρ"             value={String(data.density)} unit="kg/m³" />
+      <Row label="Kinematic viscosity ν" value={data.kinematic_viscosity.toExponential(2)} unit="m²/s" />
+      <Row label="Prandtl number Pr"     value={String(data.prandtl)} />
+    </Section>
+  </Box>
+);
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function bertotti(d: SteelData, f: number, B: number): number {
@@ -327,9 +354,11 @@ function bertotti(d: SteelData, f: number, B: number): number {
 // ─── Category accent ─────────────────────────────────────────────────────────
 const CAT_COLOR: Record<string, string> = {
   steel: '#64748b', magnet: '#ef4444', conductor: '#f59e0b',
+  insulator: '#3fae5a', coolant: '#38bdf8',
 };
 const CAT_LABEL: Record<string, string> = {
   steel: 'Electrical Steel', magnet: 'Permanent Magnet', conductor: 'Conductor',
+  insulator: 'Insulator', coolant: 'Coolant / Fluid',
 };
 
 // ─── Root component ───────────────────────────────────────────────────────────
@@ -384,6 +413,8 @@ const MaterialDetailView: React.FC<Props> = ({ library, selected }) => {
       {category === 'steel'     && <SteelDetail     name={name} data={data as SteelData}     />}
       {category === 'magnet'    && <MagnetDetail    name={name} data={data as MagnetData}    />}
       {category === 'conductor' && <ConductorDetail name={name} data={data as ConductorData} />}
+      {category === 'insulator' && <InsulatorDetail name={name} data={data as InsulatorData} />}
+      {category === 'coolant'   && <CoolantDetail   name={name} data={data as CoolantData}   />}
     </Box>
   );
 };

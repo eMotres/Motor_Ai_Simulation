@@ -26,7 +26,7 @@ import {
   scaleMotor, maxCurrent, type Passport, type Knobs, type ScaledResult,
 } from '../../lib/motorScaling';
 import {
-  REFERENCE_PASSPORTS, CONNECTIONS, connLabel, fetchCatalogReferences, type ReferenceMotor,
+  REFERENCE_PASSPORTS, windingConnections, connLabel, fetchCatalogReferences, type ReferenceMotor,
 } from '../../lib/referencePassports';
 import GeometryProjections from './GeometryProjections';
 import BatteryPanel, { type Battery, defaultBattery } from './BatteryPanel';
@@ -206,6 +206,11 @@ const ConfiguratorPanel: React.FC = () => {
   // coil current = phase current / parallel paths, wire area = width × height.
   const J_A_mm2 = (knobs.I_A / Math.max(1, knobs.nP)) / Math.max(1e-6, ref.fit.wireWidth_mm * knobs.wireH_mm);
   const baseJ   = (p.I0_A / Math.max(1, p.nP0)) / Math.max(1e-6, ref.fit.wireWidth_mm * p.wireH0_mm);
+  // winding connections are derived from THIS reference's slot count (C = slots/6)
+  const conns = useMemo(() => windingConnections(ref.geo.numSlots), [ref.geo.numSlots]);
+  useEffect(() => {
+    if (conns.length && !conns.some((c) => c.nP === knobs.nP)) setKnobs((s) => ({ ...s, nP: conns[0].nP }));
+  }, [conns]); // eslint-disable-line react-hooks/exhaustive-deps
   const overCurr = knobs.I_A > iMax + 1e-6;
   // Hard slot-fit limiter — mirrors the backend constraint
   // (geometry_constraints._wire_height_max): N rows of (wire_height + radial
@@ -226,7 +231,7 @@ const ConfiguratorPanel: React.FC = () => {
 
   const addConfig = () => {
     const n = configs.filter((c) => c.refId === refId).length + 1;
-    const name = `${connLabel(knobs.nP)} · ${knobs.N}t · ${fmt(knobs.L_mm, 0)}mm · ${fmt(knobs.wireH_mm, 2)}mm (#${n})`;
+    const name = `${connLabel(knobs.nP, ref.geo.numSlots)} · ${knobs.N}t · ${fmt(knobs.L_mm, 0)}mm · ${fmt(knobs.wireH_mm, 2)}mm (#${n})`;
     const id = `cfg_${Math.random().toString(36).slice(2, 9)}`;
     setConfigs((cs) => [...cs, { id, name, refId, knobs: { ...knobs }, result, iMax, battery: { ...battery } }]);
   };
@@ -249,7 +254,7 @@ const ConfiguratorPanel: React.FC = () => {
     { key: 'tm',   label: 'T/mass',  unit: '',    d: 2, goodHi: true,  get: (c) => c.result.torque_per_mass },
   ];
   const KNB_COLS: { label: string; get: (c: SavedConfig) => string }[] = [
-    { label: 'Conn',   get: (c) => connLabel(c.knobs.nP) },
+    { label: 'Conn',   get: (c) => connLabel(c.knobs.nP, (allRefs.find((r) => r.id === c.refId)?.geo.numSlots ?? ref.geo.numSlots)) },
     { label: 'Turns',  get: (c) => `${c.knobs.N}` },
     { label: 'Length', get: (c) => fmt(c.knobs.L_mm, 0) },
     { label: 'Wire h', get: (c) => fmt(c.knobs.wireH_mm, 2) },
@@ -296,7 +301,7 @@ const ConfiguratorPanel: React.FC = () => {
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5, mb: 1 }}>
             <Typography sx={{ ...LABEL, flex: 1 }}>Winding connection</Typography>
             <ToggleButtonGroup exclusive size="small" value={knobs.nP} onChange={(_, v) => v != null && set('nP')(v)}>
-              {CONNECTIONS.map((c) => (
+              {conns.map((c) => (
                 <ToggleButton key={c.nP} value={c.nP} title={c.hint}
                   sx={{ px: 1.5, py: 0.25, fontSize: 12, color: '#94a3b8', borderColor: '#334155',
                     '&.Mui-selected': { bgcolor: '#1d4ed8', color: '#fff', '&:hover': { bgcolor: '#2563eb' } } }}>

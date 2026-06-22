@@ -334,10 +334,35 @@ def get_full_config():
 
 # ── Winding connection ────────────────────────────────────────────────────────
 
-_VALID_CONNECTIONS = {"4S", "2P2S", "4P"}
+def _conn_label(n_series: int, n_parallel: int) -> str:
+    """Canonical connection label: all-series '{C}S', all-parallel '{C}P',
+    else '{nS}S-{nP}P'."""
+    if n_parallel <= 1:
+        return f"{n_series}S"
+    if n_series <= 1:
+        return f"{n_parallel}P"
+    return f"{n_series}S-{n_parallel}P"
+
+
+def _winding_connections(num_slots: int):
+    """Valid series/parallel winding connections for a 3-phase SINGLE-LAYER
+    winding: coils per phase C = num_slots / 6, and every factor pair
+    (n_series x n_parallel = C) is an option (n_parallel = parallel paths).
+    e.g. 12 slots -> C=2 -> 2S, 2P ; 24 -> C=4 -> 4S, 2S-2P, 4P ;
+    36 -> 6S, 3S-2P, 2S-3P, 6P ; 48 -> 8S, 4S-2P, 2S-4P, 8P."""
+    C = max(1, round((num_slots or 0) / 6))
+    out = []
+    for n_parallel in range(1, C + 1):
+        if C % n_parallel:
+            continue
+        n_series = C // n_parallel
+        out.append({"label": _conn_label(n_series, n_parallel),
+                    "n_parallel": n_parallel, "n_series": n_series})
+    return out
+
 
 class WindingConfigPatch(BaseModel):
-    connection:       Optional[str] = None  # "4S" | "2P2S" | "4P"
+    connection:       Optional[str] = None  # slot-dependent, e.g. "4S" | "2S-2P" | "4P"
     n_coils_per_phase: Optional[int] = None
     layers:            Optional[int] = None  # 1 = single-layer, 2 = double-layer
     layout:            Optional[str] = None  # explicit per-slot "A|a|c|C|…" string
@@ -380,7 +405,8 @@ def get_winding_config():
     # compact layout string (UPPER=+, lower=−) for the editor field
     layout_str = "|".join(p if d > 0 else p.lower() for p, d in lay)
     return {
-        "connection":         w.get("connection", "2P2S"),
+        "connection":         _conn_label(n_series, n_parallel),
+        "connections":        _winding_connections(num_slots),
         "n_coils_per_phase":  n_coils,
         "n_parallel":         n_parallel,
         "n_series":           n_series,
@@ -396,15 +422,23 @@ def get_winding_config():
 
 
 def _parse_connection(conn: str):
-    """Parse '2P2S' → (n_parallel=2, n_series=2)."""
+    """Parse a connection label → (n_parallel, n_series).
+    New: '2S-2P' (series-parallel) ; '4S' (all series) ; '4P' (all parallel).
+    Back-compat: '2P2S' (old parallel-series form)."""
     import re as _re
-    m = _re.match(r'^(\d+)P(\d+)S$', conn)
+    conn = (conn or "").strip()
+    m = _re.match(r'^(\d+)S-(\d+)P$', conn)        # nS S - nP P  (new)
+    if m:
+        return int(m.group(2)), int(m.group(1))
+    m = _re.match(r'^(\d+)P(\d+)S$', conn)          # nP P nS S  (old)
     if m:
         return int(m.group(1)), int(m.group(2))
-    if conn == "4S":
-        return 1, 4
-    if conn == "4P":
-        return 4, 1
+    m = _re.match(r'^(\d+)S$', conn)                # all series
+    if m:
+        return 1, int(m.group(1))
+    m = _re.match(r'^(\d+)P$', conn)                # all parallel
+    if m:
+        return int(m.group(1)), 1
     raise ValueError(f"Unknown connection '{conn}'")
 
 
@@ -413,13 +447,18 @@ def update_winding_config(patch: WindingConfigPatch):
     """Update winding connection in motor_config.yaml."""
     updates: dict = {}
     if patch.connection is not None:
-        if patch.connection not in _VALID_CONNECTIONS:
+        try:
+            n_par, n_ser = _parse_connection(patch.connection)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        num_slots, _ = _current_winding_layout()
+        opts = _winding_connections(num_slots)
+        if (n_par, n_ser) not in {(c["n_parallel"], c["n_series"]) for c in opts}:
             raise HTTPException(
                 status_code=400,
-                detail=f"Invalid connection '{patch.connection}'. Valid: {sorted(_VALID_CONNECTIONS)}"
-            )
-        n_par, n_ser = _parse_connection(patch.connection)
-        updates["connection"] = f'"{patch.connection}"'
+                detail=f"Connection '{patch.connection}' invalid for {num_slots} slots. "
+                       f"Valid: {[c['label'] for c in opts]}")
+        updates["connection"] = f'"{_conn_label(n_ser, n_par)}"'
         updates["n_parallel"]  = str(n_par)
         updates["n_series"]    = str(n_ser)
     if patch.n_coils_per_phase is not None:

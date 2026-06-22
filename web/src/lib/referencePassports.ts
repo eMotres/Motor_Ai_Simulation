@@ -64,16 +64,31 @@ export const REFERENCE_PASSPORTS: ReferenceMotor[] = [
   },
 ];
 
-// Winding connection options (4 coils/phase).  nP = parallel paths; the series
-// count is 4/nP.  Pure electrical re-wiring — voltage <-> current trade.
-export const CONNECTIONS: { label: string; nP: number; hint: string }[] = [
-  { label: '4S',    nP: 1, hint: 'all series — highest voltage, lowest current' },
-  { label: '2P·2S', nP: 2, hint: 'balanced' },
-  { label: '4P',    nP: 4, hint: 'all parallel — lowest voltage, highest current' },
-];
+// Winding connection options, derived from the SLOT COUNT.  For a 3-phase
+// single-layer winding the coils per phase C = numSlots/6, and every factor pair
+// (nS series × nP parallel = C) is a valid connection (nP = parallel paths).
+//   12 slots → C=2 → 2S, 2P ;  24 → 4S, 2S-2P, 4P ;
+//   36 → 6S, 3S-2P, 2S-3P, 6P ;  48 → 8S, 4S-2P, 2S-4P, 8P.
+export interface WindingConn { label: string; nP: number; nS: number; hint: string; }
 
-export const connLabel = (nP: number) =>
-  CONNECTIONS.find((c) => c.nP === nP)?.label ?? `${nP}P`;
+export function windingConnections(numSlots: number): WindingConn[] {
+  const C = Math.max(1, Math.round((numSlots || 0) / 6));
+  const out: WindingConn[] = [];
+  for (let nP = 1; nP <= C; nP++) {
+    if (C % nP) continue;
+    const nS = C / nP;
+    const label = nP === 1 ? `${C}S` : nS === 1 ? `${C}P` : `${nS}S-${nP}P`;
+    const hint = nP === 1 ? 'all series — highest voltage, lowest current'
+      : nS === 1 ? 'all parallel — lowest voltage, highest current'
+      : `${nS} series × ${nP} parallel`;
+    out.push({ label, nP, nS, hint });
+  }
+  return out;
+}
+
+/** Label for a parallel-path count nP at the given slot count. */
+export const connLabel = (nP: number, numSlots: number): string =>
+  windingConnections(numSlots).find((c) => c.nP === nP)?.label ?? `${nP}P`;
 
 // ── Catalog-derived references ────────────────────────────────────────────────
 // Motors published into the MOTORS catalog with a FEM-generated passport (admin

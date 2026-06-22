@@ -14,6 +14,7 @@ import {
 } from '@mui/material';
 import ShowChartIcon from '@mui/icons-material/ShowChart';
 import { useMotorStore } from '../../stores/motorStore';
+import { windingConnections } from '../../lib/referencePassports';
 import PlayArrowIcon    from '@mui/icons-material/PlayArrow';
 import StopIcon         from '@mui/icons-material/Stop';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
@@ -100,13 +101,10 @@ const Row: React.FC<{ label: string; value: string; unit?: string; highlight?: b
 function gcd(a: number, b: number): number { return b === 0 ? a : gcd(b, a % b); }
 function lcm(a: number, b: number): number { return (a * b) / gcd(a, b); }
 
-// ── winding connection definitions ───────────────────────────────────────────
-type ConnectionKey = '4S' | '2P2S' | '4P';
-const CONNECTIONS: { key: ConnectionKey; label: string; nP: number; nS: number; desc: string }[] = [
-  { key: '4S',   label: '4S',   nP: 1, nS: 4, desc: '4 series — max voltage' },
-  { key: '2P2S', label: '2P·2S', nP: 2, nS: 2, desc: '2 parallel × 2 series' },
-  { key: '4P',   label: '4P',   nP: 4, nS: 1, desc: '4 parallel — max current' },
-];
+// Winding connection options come from the backend (/api/winding/config), which
+// derives them from the slot count: coils/phase C = slots/6, every factor pair
+// (nS series × nP parallel = C) is an option.  See api._winding_connections.
+interface WindConn { label: string; n_parallel: number; n_series: number; }
 
 const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => {
   // localStorage-backed state so the whole left column survives reloads.
@@ -134,11 +132,19 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   const [nCoilsPerPhase, setNCoilsPerPhase] = useState<number>(4);
 
   // ── winding connection ────────────────────────────────────────────────────
-  const [connection, setConnection] = usePersisted<ConnectionKey>('connection', '2P2S');
-  const connDef = CONNECTIONS.find(c => c.key === connection)!;
+  const [connection, setConnection] = usePersisted<string>('connection', '4S');
 
   // ── winding LAYOUT (per-slot phase + sign = coil currents) ─────────────────
   const [windCfg, setWindCfg]       = useState<any>(null);     // /api/winding/config
+  // connection options + the selected connection's parallel-path count come from
+  // the backend (slot-derived). I_coil = I_phase / n_parallel.
+  // Prefer the backend's slot-derived options; fall back to deriving them locally
+  // from the slot count so the UI still works against an older backend that
+  // doesn't yet return `connections`.
+  const windConns: WindConn[] = windCfg?.connections
+    ?? windingConnections(windCfg?.num_slots ?? 0).map((c) => ({ label: c.label, n_parallel: c.nP, n_series: c.nS }));
+  const connDef = windConns.find((c) => c.label === connection);
+  const nParallel = connDef?.n_parallel ?? windCfg?.n_parallel ?? 1;
 
   const loadWinding = useCallback(() => {
     fetch(`${API}/api/winding/config`)
@@ -166,6 +172,15 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   }, [loadWinding]);
 
   // Phase → colour for the slot map (A=red, B=green, C=blue); +full, −faded.
+  // self-heal: if the persisted connection isn't valid for THIS motor's slot count
+  // (e.g. a 4-coil connection inherited on a 12-slot motor), switch to the first valid one.
+  useEffect(() => {
+    if (windConns.length && !windConns.some((c) => c.label === connection)) {
+      setConnection(windConns[0].label);
+      applyWinding({ connection: windConns[0].label });
+    }
+  }, [windCfg]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const PHASE_COLOR: Record<string, string> = { A: '#ef4444', B: '#22c55e', C: '#3b82f6' };
 
   // ── derived periodicity ───────────────────────────────────────────────────
@@ -322,7 +337,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   const device: 'cpu' | 'cuda' = 'cpu';
 
   // ── derived winding values ────────────────────────────────────────────────
-  const I_coil_rms  = current / connDef.nP;                  // Arms per coil
+  const I_coil_rms  = current / nParallel;                   // Arms per coil
   const I_coil_peak = I_coil_rms * Math.sqrt(2);             // A peak per coil
 
   // ── job state ─────────────────────────────────────────────────────────────
@@ -539,17 +554,17 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
           </Typography>
 
           {/* Connection buttons */}
-          <Box sx={{ display: 'flex', gap: 0.75, mb: 1.5 }}>
-            {CONNECTIONS.map(c => (
-              <Tooltip key={c.key} title={c.desc} placement="top">
+          <Box sx={{ display: 'flex', gap: 0.75, mb: 1.5, flexWrap: 'wrap' }}>
+            {windConns.map(c => (
+              <Tooltip key={c.label} title={`${c.n_series} series × ${c.n_parallel} parallel`} placement="top">
                 <Button
                   size="small"
-                  variant={connection === c.key ? 'contained' : 'outlined'}
-                  onClick={() => { setConnection(c.key); applyWinding({ connection: c.key }); }}
+                  variant={connection === c.label ? 'contained' : 'outlined'}
+                  onClick={() => { setConnection(c.label); applyWinding({ connection: c.label }); }}
                   disabled={isRunning}
-                  sx={{ flex: 1, fontSize: 11, fontWeight: 700, py: 0.5,
+                  sx={{ flex: 1, minWidth: 52, fontSize: 11, fontWeight: 700, py: 0.5,
                     textTransform: 'none',
-                    ...(connection === c.key ? {} : { color: '#64748b', borderColor: '#334155' })
+                    ...(connection === c.label ? {} : { color: '#64748b', borderColor: '#334155' })
                   }}
                 >
                   {c.label}

@@ -47,5 +47,11 @@ def default_registry() -> ModuleRegistry:
         UsersModule(),            # users
     ):
         reg.register(module)
+    # Plugin-SDK: auto-register external geometry providers dropped into
+    # modules/geometry_plugins/ (capability geometry.2d.<id>). No core edit needed
+    # to add a new motor topology — see docs/PLUGIN_SDK.md.
+    from .geometry_plugins import discover_geometry_plugins
+    for plug in discover_geometry_plugins():
+        reg.register(plug)
     reg.check_dependencies()
     return reg

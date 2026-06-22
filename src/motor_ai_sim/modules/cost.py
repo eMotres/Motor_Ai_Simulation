@@ -87,8 +87,10 @@ class BasicCost:
         p = payload or {}
         masses = p.get("masses_kg") or p.get("masses") or {}
         if not masses:
-            # pipeline handoff: derive masses from an upstream geometry.2d GeometryIR
-            gir = (p.get("upstream") or {}).get("geometry.2d")
+            # pipeline handoff: derive masses from an upstream GeometryIR — the
+            # built-in geometry.2d OR any geometry.* plugin (Plugin-SDK).
+            from ._geo_util import upstream_geometry
+            gir = upstream_geometry(p)
             if gir is not None and hasattr(gir, "regions"):
                 masses = masses_from_geometry_ir(gir, length_mm=p.get("length_mm"))
         if not masses:

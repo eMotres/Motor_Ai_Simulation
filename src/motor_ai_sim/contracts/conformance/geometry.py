@@ -31,8 +31,10 @@ def assert_geometry_ir(gir: GeometryIR, *, dim: int = 2) -> None:
 def assert_geometry_provider(provider: Any, *, dim: int = 2, payload: Optional[dict] = None) -> GeometryIR:
     """Run a geometry module through the full conformance gate; returns its GeometryIR."""
     man = provider.manifest()
-    assert man.capability in ("geometry.2d", "geometry.3d"), \
-        f"geometry provider capability must be geometry.2d/3d, got {man.capability!r}"
+    # geometry.2d / geometry.3d, OR a namespaced plugin (geometry.2d.<id>) from the
+    # Plugin-SDK — all are valid geometry providers as long as the IR conforms.
+    assert man.capability.startswith("geometry.2d") or man.capability.startswith("geometry.3d"), \
+        f"geometry provider capability must be geometry.2d* / geometry.3d*, got {man.capability!r}"
     assert man.contracts_version, "manifest must stamp contracts_version"
     gir = provider.run(payload)
     assert_geometry_ir(gir, dim=dim)

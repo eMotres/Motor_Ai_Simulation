@@ -75,8 +75,9 @@ class SkfemMesh2D:
             provenance=prov)
 
     def run(self, payload: Optional[Dict[str, Any]] = None) -> MeshIR:
+        from ._geo_util import upstream_geometry
         p = payload or {}
-        gir = (p.get("upstream") or {}).get("geometry.2d")   # threaded by run_study
+        gir = upstream_geometry(p)   # geometry.2d OR any geometry.* plugin (run_study)
         return self.build(p.get("params"), geometry_ir=gir,
                           rotor_angle_deg=float(p.get("rotor_angle_deg", 0.0)),
                           mesh_size_mm=float(p.get("mesh_size_mm", 2.0)), n_sectors=int(p.get("n_sectors", 1)))

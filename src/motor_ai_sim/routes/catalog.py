@@ -82,3 +82,50 @@ def delete_motor(motor_id: str, drop_preset: bool = True):
         except Exception:
             pass
     return {"status": "ok", "deleted": motor_id, "dropped_preset": dropped_preset}
+
+
+# ── Passport: characterise a motor via FEM so the Configurator can scale it ──
+
+@router.post("/{motor_id}/passport")
+def generate_motor_passport(motor_id: str, coarse: bool = False):
+    """Admin: FEM-characterise a catalog motor and store its passport.
+
+    Applies the motor's preset (so its geometry + operating point become the
+    active config), runs the passport extraction (3 base solves + an rpm loss
+    sweep), and saves the result on the catalog entry.  FEM-heavy (minutes);
+    `coarse=true` uses fewer steps/rpms for a quick smoke test.
+
+    Side effect: switches the active motor to the one being characterised.
+    """
+    cat = _load()
+    motor = next((m for m in cat.get("motors", []) if m.get("id") == motor_id), None)
+    if not motor:
+        raise HTTPException(status_code=404, detail=f"motor '{motor_id}' not found")
+    preset_id = motor.get("preset")
+    if not preset_id:
+        raise HTTPException(status_code=400, detail=f"motor '{motor_id}' has no preset to characterise")
+    try:
+        from motor_ai_sim.routes.presets import apply_preset
+        apply_preset(preset_id)
+        from motor_ai_sim.passport import generate_passport
+        kw = dict(base_steps=6, sweep_steps=6, rpms=[2000.0, 4000.0, 6000.0]) if coarse else {}
+        result = generate_passport(**kw)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"passport generation failed: {e}")
+    motor["passport"] = result
+    _save(cat)
+    return {"status": "ok", "motor": motor_id, "coarse": coarse, "passport": result}
+
+
+@router.get("/{motor_id}/passport")
+def get_motor_passport(motor_id: str):
+    """Return a motor's stored passport (404 if it hasn't been generated yet)."""
+    cat = _load()
+    motor = next((m for m in cat.get("motors", []) if m.get("id") == motor_id), None)
+    if not motor:
+        raise HTTPException(status_code=404, detail=f"motor '{motor_id}' not found")
+    passport = motor.get("passport")
+    if not passport:
+        raise HTTPException(status_code=404,
+                            detail=f"motor '{motor_id}' has no passport — generate it first")
+    return passport

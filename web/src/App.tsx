@@ -49,6 +49,7 @@ import CompareTab from './components/compare/CompareTab';
 import MeshPanel from './components/mesh/MeshPanel';
 import CostPanel from './components/cost/CostPanel';
 import { ensureActiveMotor } from './components/common/motorSettings';
+import { useModulePanels } from './modules/moduleTabs';
 
 const darkTheme = createTheme({
   palette: {
@@ -211,8 +212,72 @@ function App() {
     if (!fullUI && activeTab !== 'motors' && activeTab !== 'compare') setActiveTab('compare');
   }, [activeTab, isAdmin, fullUI, setActiveTab]);
 
-  const showViewer = activeTab !== 'sweep' && activeTab !== 'motors'
-    && activeTab !== 'compare' && activeTab !== 'admin' && activeTab !== 'cost';
+  // ── Tab registry — the bar AND the content are GENERATED from this list.
+  // Module-backed tabs take their title + order from the /api/modules manifests
+  // (web-as-module); the static values here are the fallback when manifests are
+  // unavailable, so the shell never breaks. ──
+  const panels = useModulePanels();
+  const tabDefs: Array<{
+    id: string; label: string; order: number; panelId?: string;
+    gate: 'always' | 'fullUI' | 'admin'; showViewer: boolean; keepMounted?: boolean;
+    render: () => React.ReactNode;
+  }> = [
+    { id: 'motors', label: 'Motors', order: 0, gate: 'always', showViewer: false,
+      render: () => <MotorsCatalog /> },
+    { id: 'geometry', label: 'Geometry', order: 20, panelId: 'geometry', gate: 'fullUI', showViewer: true,
+      render: () => (
+        <Box sx={{ display: 'flex', height: '100%' }}>
+          <Box sx={{ width: panelWidth, flexShrink: 0, overflowY: 'auto', p: 1.5 }}>
+            <ParameterVariationTable />
+          </Box>
+          <Box onMouseDown={onDividerMouseDown} sx={{ width: 5, flexShrink: 0, cursor: 'col-resize',
+            bgcolor: 'divider', transition: 'background-color 0.15s', '&:hover': { bgcolor: 'primary.main' }, userSelect: 'none' }} />
+          <Box sx={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
+            <MaterialControls /><MotorScene /><GeometryBuildTimer />
+          </Box>
+        </Box>
+      ) },
+    { id: 'materials', label: 'Materials', order: 30, gate: 'fullUI', showViewer: true,
+      render: () => (
+        <Box sx={{ display: 'flex', height: '100%' }}>
+          <Box sx={{ width: '50%', display: 'flex', borderRight: '1px solid', borderColor: 'divider', overflow: 'hidden' }}>
+            <Box sx={{ width: panelWidth, flexShrink: 0, overflowY: 'auto', borderRight: '1px solid', borderColor: 'divider' }}>
+              <MaterialsLibraryTree library={matLibrary} loading={matLoading} error={matError}
+                selected={selectedMaterial} onSelect={setSelectedMaterial} />
+            </Box>
+            <Box onMouseDown={onDividerMouseDown} sx={{ width: 5, flexShrink: 0, cursor: 'col-resize',
+              bgcolor: 'divider', transition: 'background-color 0.15s', '&:hover': { bgcolor: 'primary.main' }, userSelect: 'none' }} />
+            <Box sx={{ flex: 1, overflow: 'hidden', bgcolor: '#0a1120' }}>
+              <MaterialDetailView library={matLibrary} selected={selectedMaterial} />
+            </Box>
+          </Box>
+          <Box sx={{ width: '50%', overflow: 'hidden', position: 'relative', bgcolor: '#060d17' }}>
+            <MotorScene />
+          </Box>
+        </Box>
+      ) },
+    { id: 'mesh', label: 'Mesh', order: 40, panelId: 'mesh', gate: 'fullUI', showViewer: true,
+      render: () => <MeshPanel /> },
+    { id: 'simulation', label: 'Simulation', order: 50, panelId: 'simulation', gate: 'fullUI', showViewer: true, keepMounted: true,
+      render: () => <SimulationPanel active={activeTab === 'simulation'} /> },
+    { id: 'sweep', label: 'Optimization', order: 60, panelId: 'optimization', gate: 'fullUI', showViewer: false,
+      render: () => <SweepConfigPanel /> },
+    { id: 'cost', label: 'Cost', order: 70, panelId: 'cost', gate: 'fullUI', showViewer: false,
+      render: () => <CostPanel /> },
+    { id: 'compare', label: 'Configure', order: 75, gate: 'always', showViewer: false,
+      render: () => <CompareTab /> },
+    { id: 'admin', label: 'Admin', order: 90, panelId: 'admin', gate: 'admin', showViewer: false,
+      render: () => <AdminPanel /> },
+  ];
+  const tabs = tabDefs
+    .map((t) => ({
+      ...t,
+      label: (t.panelId && panels[t.panelId]?.title) || t.label,
+      order: (t.panelId && panels[t.panelId]?.order) ?? t.order,
+    }))
+    .filter((t) => t.gate === 'always' || (t.gate === 'fullUI' && fullUI) || (t.gate === 'admin' && isAdmin))
+    .sort((a, b) => a.order - b.order);
+  const showViewer = !!tabs.find((t) => t.id === activeTab)?.showViewer;
 
   return (
     <ThemeProvider theme={darkTheme}>
@@ -301,127 +366,29 @@ function App() {
             variant="fullWidth"
             sx={{ minHeight: 40 }}
           >
-            <Tab label="Motors" value="motors" sx={{ minHeight: 40, fontSize: '0.8rem', fontWeight: 700 }} />
-            {fullUI && <Tab label="Geometry" value="geometry" sx={{ minHeight: 40, fontSize: '0.8rem' }} />}
-            {fullUI && <Tab label="Materials" value="materials" sx={{ minHeight: 40, fontSize: '0.8rem' }} />}
-            {fullUI && <Tab label="Mesh" value="mesh" sx={{ minHeight: 40, fontSize: '0.8rem' }} />}
-            {fullUI && <Tab label="Simulation" value="simulation" sx={{ minHeight: 40, fontSize: '0.8rem' }} />}
-            {fullUI && <Tab label="Cost" value="cost" sx={{ minHeight: 40, fontSize: '0.8rem' }} />}
-            <Tab label="Configure" value="compare" sx={{ minHeight: 40, fontSize: '0.8rem' }} />
-            {fullUI && <Tab label="Optimization" value="sweep" sx={{ minHeight: 40, fontSize: '0.8rem' }} />}
-            {isAdmin && <Tab label="Admin" value="admin" sx={{ minHeight: 40, fontSize: '0.8rem', fontWeight: 700, color: '#fbbf24' }} />}
+            {tabs.map((t) => (
+              <Tab key={t.id} label={t.label} value={t.id}
+                sx={{ minHeight: 40, fontSize: '0.8rem',
+                  ...(t.id === 'motors' ? { fontWeight: 700 } : {}),
+                  ...(t.id === 'admin' ? { fontWeight: 700, color: '#fbbf24' } : {}) }} />
+            ))}
           </Tabs>
         </Box>
 
         {/* ── Main Content ── */}
         <Box sx={{ flex: 1, overflow: 'hidden' }}>
 
-          {/* Motors catalog (full width) */}
-          {activeTab === 'motors' && <MotorsCatalog />}
-
-          {/* Geometry: parameter table (left) + 3D viewer (right) */}
-          {activeTab === 'geometry' && (
-            <Box sx={{ display: 'flex', height: '100%' }}>
-              {/* Parameter table */}
-              <Box sx={{
-                width: panelWidth,
-                flexShrink: 0,
-                overflowY: 'auto',
-                p: 1.5,
-              }}>
-                <ParameterVariationTable />
+          {/* Tabs are GENERATED from the registry (manifest-driven). Each tab's
+              content is rendered when active; keep-mounted tabs (Simulation) stay
+              mounted and are just display-toggled so the computed dashboard +
+              field animation survive navigating away and back. */}
+          {tabs.map((t) => (
+            t.keepMounted ? (
+              <Box key={t.id} sx={{ height: '100%', display: activeTab === t.id ? 'block' : 'none' }}>
+                {t.render()}
               </Box>
-
-              {/* Draggable divider */}
-              <Box
-                onMouseDown={onDividerMouseDown}
-                sx={{
-                  width: 5,
-                  flexShrink: 0,
-                  cursor: 'col-resize',
-                  bgcolor: 'divider',
-                  transition: 'background-color 0.15s',
-                  '&:hover': { bgcolor: 'primary.main' },
-                  userSelect: 'none',
-                }}
-              />
-
-              {/* 3D viewer with material controls overlay */}
-              <Box sx={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
-                <MaterialControls />
-                <MotorScene />
-                <GeometryBuildTimer />
-              </Box>
-            </Box>
-          )}
-
-          {/* Sweep */}
-          {activeTab === 'sweep' && <SweepConfigPanel />}
-
-          {/* Configure — simple tuner (configurator) + saved-sim diff */}
-          {activeTab === 'compare' && <CompareTab />}
-
-          {/* Admin — user management + usage statistics (admin only) */}
-          {activeTab === 'admin' && isAdmin && <AdminPanel />}
-
-          {/* Materials: left half (tree + detail) | right half (real geometry + assign) */}
-          {activeTab === 'materials' && (
-            <Box sx={{ display: 'flex', height: '100%' }}>
-
-              {/* ── LEFT HALF: tree + material properties ── */}
-              <Box sx={{ width: '50%', display: 'flex', borderRight: '1px solid', borderColor: 'divider', overflow: 'hidden' }}>
-
-                {/* Material library tree */}
-                <Box sx={{
-                  width: panelWidth,
-                  flexShrink: 0,
-                  overflowY: 'auto',
-                  borderRight: '1px solid',
-                  borderColor: 'divider',
-                }}>
-                  <MaterialsLibraryTree
-                    library={matLibrary}
-                    loading={matLoading}
-                    error={matError}
-                    selected={selectedMaterial}
-                    onSelect={setSelectedMaterial}
-                  />
-                </Box>
-
-                {/* Draggable divider */}
-                <Box
-                  onMouseDown={onDividerMouseDown}
-                  sx={{
-                    width: 5, flexShrink: 0, cursor: 'col-resize',
-                    bgcolor: 'divider', transition: 'background-color 0.15s',
-                    '&:hover': { bgcolor: 'primary.main' },
-                    userSelect: 'none',
-                  }}
-                />
-
-                {/* Material detail: properties + charts */}
-                <Box sx={{ flex: 1, overflow: 'hidden', bgcolor: '#0a1120' }}>
-                  <MaterialDetailView library={matLibrary} selected={selectedMaterial} />
-                </Box>
-              </Box>
-
-              {/* ── RIGHT HALF: real 3D motor (click to select & assign) ── */}
-              <Box sx={{ width: '50%', overflow: 'hidden', position: 'relative', bgcolor: '#060d17' }}>
-                <MotorScene />
-              </Box>
-            </Box>
-          )}
-          {activeTab === 'mesh' && <MeshPanel />}
-          {activeTab === 'cost' && <CostPanel />}
-          {/* Simulation stays MOUNTED across tab switches (display toggle, not
-              an unmount) so the computed dashboard — T(t), losses, harmonics
-              and the field animation — survives navigating to another tab and
-              back.  Conditionally unmounting wiped the right panel on every
-              tab change.  runNonce starts at 0, so nothing auto-runs while it
-              sits hidden. */}
-          <Box sx={{ height: '100%', display: activeTab === 'simulation' ? 'block' : 'none' }}>
-            <SimulationPanel active={activeTab === 'simulation'} />
-          </Box>
+            ) : (activeTab === t.id ? <React.Fragment key={t.id}>{t.render()}</React.Fragment> : null)
+          ))}
         </Box>
       </Box>
       {/* Floating help/feedback — available to every user, on every tab */}

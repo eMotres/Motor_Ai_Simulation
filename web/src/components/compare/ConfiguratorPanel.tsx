@@ -30,6 +30,7 @@ import {
 } from '../../lib/referencePassports';
 import GeometryProjections from './GeometryProjections';
 import BatteryPanel, { type Battery, defaultBattery } from './BatteryPanel';
+import { useAuth } from '../../contexts/AuthContext';
 import PerformanceCharts from './PerformanceCharts';
 
 const baseKnobs = (p: Passport): Knobs => ({
@@ -141,6 +142,7 @@ const MetricTile: React.FC<{
 };
 
 const ConfiguratorPanel: React.FC = () => {
+  const { isAdmin } = useAuth();   // editing the slider ranges is admin-only
   const [refId, setRefId] = useState<string>(() => {
     try { const r = localStorage.getItem(REFID_LS); if (r && REFERENCE_PASSPORTS.some((x) => x.id === r)) return r; } catch { /* ignore */ }
     return REFERENCE_PASSPORTS[0]?.id ?? '';
@@ -282,9 +284,9 @@ const ConfiguratorPanel: React.FC = () => {
           <Typography sx={{ fontSize: 11, color: '#64748b', mb: 1.5 }}>{ref.subtitle}</Typography>
 
           <Typography sx={{ ...LABEL, color: '#475569', mb: 0.75 }}>Build</Typography>
-          <KnobSlider label="Stack length" unit="mm" value={knobs.L_mm} base={p.L0_mm} min={ranges.L_mm.min} max={ranges.L_mm.max} step={1} d={0} onChange={set('L_mm')} onRangeChange={setRange('L_mm')} />
-          <KnobSlider label="Turns / slot" value={knobs.N} base={p.N0} min={ranges.N.min} max={ranges.N.max} step={1} d={0} onChange={set('N')} onRangeChange={setRange('N')} warn={atLimit} />
-          <KnobSlider label="Wire thickness" unit="mm" value={knobs.wireH_mm} base={p.wireH0_mm} min={ranges.wireH_mm.min} max={ranges.wireH_mm.max} step={0.1} d={1} onChange={set('wireH_mm')} onRangeChange={setRange('wireH_mm')} warn={atLimit} />
+          <KnobSlider label="Stack length" unit="mm" value={knobs.L_mm} base={p.L0_mm} min={ranges.L_mm.min} max={ranges.L_mm.max} step={1} d={0} onChange={set('L_mm')} onRangeChange={isAdmin ? setRange('L_mm') : undefined} />
+          <KnobSlider label="Turns / slot" value={knobs.N} base={p.N0} min={ranges.N.min} max={ranges.N.max} step={1} d={0} onChange={set('N')} onRangeChange={isAdmin ? setRange('N') : undefined} warn={atLimit} />
+          <KnobSlider label="Wire thickness" unit="mm" value={knobs.wireH_mm} base={p.wireH0_mm} min={ranges.wireH_mm.min} max={ranges.wireH_mm.max} step={0.1} d={1} onChange={set('wireH_mm')} onRangeChange={isAdmin ? setRange('wireH_mm') : undefined} warn={atLimit} />
 
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5, mb: 1 }}>
             <Typography sx={{ ...LABEL, flex: 1 }}>Winding connection</Typography>
@@ -300,8 +302,8 @@ const ConfiguratorPanel: React.FC = () => {
           </Box>
 
           <Typography sx={{ ...LABEL, color: '#475569', mt: 1.5, mb: 0.75 }}>Operating point</Typography>
-          <KnobSlider label="Phase current" unit="A" value={knobs.I_A} base={p.I0_A} min={ranges.I_A.min} max={ranges.I_A.max} step={1} d={0} onChange={set('I_A')} onRangeChange={setRange('I_A')} warn={overCurr} />
-          <KnobSlider label="Speed" unit="rpm" value={knobs.rpm} base={p.rpm0} min={ranges.rpm.min} max={ranges.rpm.max} step={50} d={0} onChange={set('rpm')} onRangeChange={setRange('rpm')} />
+          <KnobSlider label="Phase current" unit="A" value={knobs.I_A} base={p.I0_A} min={ranges.I_A.min} max={ranges.I_A.max} step={1} d={0} onChange={set('I_A')} onRangeChange={isAdmin ? setRange('I_A') : undefined} warn={overCurr} />
+          <KnobSlider label="Speed" unit="rpm" value={knobs.rpm} base={p.rpm0} min={ranges.rpm.min} max={ranges.rpm.max} step={50} d={0} onChange={set('rpm')} onRangeChange={isAdmin ? setRange('rpm') : undefined} />
 
           <Button onClick={reset} size="small" startIcon={<RestartAltIcon sx={{ fontSize: 16 }} />}
             sx={{ fontSize: 11, textTransform: 'none', color: '#94a3b8', mt: 1 }}>Reset to reference</Button>

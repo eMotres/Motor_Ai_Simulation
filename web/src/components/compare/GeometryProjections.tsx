@@ -18,7 +18,6 @@ import { useMotorStore } from '../../stores/motorStore';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001').replace(/\/$/, '');
 const STEEL = '#3b4453', STEEL_DK = '#2a3142', SHAFT = '#5b6675', BG = '#060d17';
-const COPPER = '#c27d33', COPPER_DK = '#5e3a16';
 const LABEL ={ fontSize: 11, color: '#64748b', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em' } as const;
 const SUB = { fontSize: 10, color: '#475569', mb: 0.5 } as const;
 const PANEL = { bgcolor: '#0b1424', border: '1px solid #1e293b', borderRadius: 1, p: 1.5 } as const;
@@ -45,9 +44,7 @@ const drawOrder = (key: string): number =>
   key.startsWith('stator') ? 0 : key.startsWith('rotor') ? 1
     : key.startsWith('magnet') ? 2 : key.startsWith('coil') ? 3 : 4;
 
-const CrossSectionReal: React.FC<{
-  geoStr: string; N: number; wireH: number; spacing: number; insulation: number;
-}> = ({ geoStr, N, wireH, spacing, insulation }) => {
+const CrossSectionReal: React.FC<{ geoStr: string }> = ({ geoStr }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [mesh, setMesh] = useState<Mesh2D | null>(meshCache.get(geoStr) ?? null);
   const [state, setState] = useState<'idle' | 'loading' | 'error'>(meshCache.has(geoStr) ? 'idle' : 'loading');
@@ -82,8 +79,12 @@ const CrossSectionReal: React.FC<{
     const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
     const TX = (x: number) => (x - cx) * scale + W / 2;
     const TY = (y: number) => H / 2 - (y - cy) * scale;   // flip Y (motor up → canvas down)
-    // 1) iron + magnets straight from the real mesh (the fixed slot/tooth shape).
-    for (const key of keys.filter((k) => !k.startsWith('coil')).sort((a, b) => drawOrder(a) - drawOrder(b))) {
+    // Draw every region straight from the REAL mesh — iron, magnets and the copper
+    // winding — sorted so copper sits on top. The backend builds the ACTUAL winding
+    // (individual wires) into the coil regions, so this is the real motor geometry,
+    // not a synthetic overlay. It redraws whenever the geometry sent to the mesh
+    // changes — which now includes the turns + wire-thickness knobs (see geoStr).
+    for (const key of keys.slice().sort((a, b) => drawOrder(a) - drawOrder(b))) {
       const { vertices, faces } = mesh[key];
       ctx.fillStyle = colorFor(key);
       ctx.beginPath();
@@ -94,40 +95,7 @@ const CrossSectionReal: React.FC<{
       }
       ctx.fill();
     }
-    // 2) winding: fill each REAL slot region with the tuned winding — N turns of
-    //    wireH-thick wire (the configurator knobs). The slot footprint comes from
-    //    the mesh coil region itself (its own radial span rMin..rMax), so the
-    //    copper always sits inside the real slot AND redraws live as the turns /
-    //    wire-thickness knobs change.  rMin is read from the region (never a
-    //    passport radius) so it can't mismatch the drawn geometry.
-    ctx.strokeStyle = COPPER_DK; ctx.lineWidth = 0.6;
-    ctx.fillStyle = COPPER;
-    const rowPitch = wireH + Math.max(0, spacing);
-    for (const key of keys.filter((k) => k.startsWith('coil'))) {
-      const verts = mesh[key].vertices;
-      const m = verts.length || 1;
-      let sx = 0, sy = 0; for (const v of verts) { sx += v[0]; sy += v[1]; }
-      const th = Math.atan2(sy / m, sx / m), ct = Math.cos(th), st = Math.sin(th);
-      let rMin = Infinity, rMax = -Infinity, tMax = 0;
-      for (const v of verts) {
-        const rr = v[0] * ct + v[1] * st, tt = -v[0] * st + v[1] * ct;
-        if (rr < rMin) rMin = rr; if (rr > rMax) rMax = rr; if (Math.abs(tt) > tMax) tMax = Math.abs(tt);
-      }
-      const hT = tMax * 0.92;
-      const C = (r: number, t: number): [number, number] => [r * ct - t * st, r * st + t * ct];
-      // stack wires from the slot back (rMax) toward the bore (rMin); stop at the
-      // real slot's inner edge so the copper never spills outside the geometry.
-      for (let k = 0; k < N; k++) {
-        const ro = rMax - insulation - k * rowPitch, ri = ro - wireH;
-        if (ri < rMin + insulation - 1e-6) break;
-        const p1 = C(ri, -hT), p2 = C(ri, hT), p3 = C(ro, hT), p4 = C(ro, -hT);
-        ctx.beginPath();
-        ctx.moveTo(TX(p1[0]), TY(p1[1])); ctx.lineTo(TX(p2[0]), TY(p2[1]));
-        ctx.lineTo(TX(p3[0]), TY(p3[1])); ctx.lineTo(TX(p4[0]), TY(p4[1])); ctx.closePath();
-        ctx.fill(); ctx.stroke();
-      }
-    }
-  }, [mesh, N, wireH, spacing, insulation]);
+  }, [mesh]);
 
   return (
     <Box sx={{ position: 'relative', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -189,13 +157,17 @@ const SideView: React.FC<{ OD_mm: number; L_mm: number }> = ({ OD_mm, L_mm }) =>
 
 const GeometryProjections: React.FC<{ ref0: ReferenceMotor; knobs: Knobs }> = ({ ref0, knobs }) => {
   const storeGeo = useMotorStore((s) => s.geometry) as Record<string, unknown>;
-  // The iron / magnet cross-section does not depend on the winding knobs, so the
-  // mesh is fetched once per geometry; the N wires are drawn on top client-side.
+  // The cross-section is the REAL backend mesh. We overlay the configurator's
+  // winding knobs onto the geometry sent to /mesh2d — turns → wires/slot, wire
+  // thickness → wire height — so the backend rebuilds the actual winding and the
+  // drawing reacts to the knobs (the backend models individual wires).
   const geoStr = useMemo(() => {
     const g: Record<string, number> = {};
     for (const [k, v] of Object.entries(storeGeo || {})) if (typeof v === 'number') g[k] = v;
+    g.num_wires_per_slot = knobs.N;
+    g.wire_height = knobs.wireH_mm;
     return JSON.stringify(g);
-  }, [storeGeo]);
+  }, [storeGeo, knobs.N, knobs.wireH_mm]);
 
   // Outer diameter + stack length come from the LIVE geometry store — the same
   // single source the cross-section uses — not the static reference passport.
@@ -205,14 +177,11 @@ const GeometryProjections: React.FC<{ ref0: ReferenceMotor; knobs: Knobs }> = ({
     ?? (gnum('stator_outer_radius') !== undefined ? (gnum('stator_outer_radius') as number) * 2 : undefined)
     ?? 2 * ref0.geo.statorOR_mm;
   const L_mm = gnum('motor_length') ?? knobs.L_mm;
-  // Slot/pole counts come from the live geometry (matching the cross-section
-  // mesh). The wire spacing + slot-liner thickness used to lay out the winding
-  // also come from the geometry; the turns count + wire thickness are the
-  // configurator knobs (the winding being tuned), so the copper redraws with them.
+  // Slot/pole counts come from the live geometry (matching the cross-section mesh).
+  // The winding (turns + wire thickness) is folded into geoStr above, so the backend
+  // rebuilds the real winding — nothing is drawn client-side.
   const numSlots  = gnum('num_slots') ?? ref0.geo.numSlots;
   const numPoles  = gnum('num_poles') ?? ref0.geo.numPoles;
-  const insulation_mm = gnum('insulation_thickness') ?? ref0.fit.insulation_mm;
-  const spacing_mm    = gnum('wire_spacing_y') ?? ref0.fit.wireSpacingY_mm;
 
   return (
     <Box sx={{ display: 'flex', gap: 2, alignItems: 'stretch', justifyContent: 'center', height: 'min(88vh, 820px)' }}>
@@ -220,8 +189,7 @@ const GeometryProjections: React.FC<{ ref0: ReferenceMotor; knobs: Knobs }> = ({
         <Typography sx={LABEL}>Cross-section (XY) — real geometry</Typography>
         <Typography sx={SUB}>{knobs.N} turns/slot · {knobs.wireH_mm.toFixed(1)} mm wire · {numSlots} slots / {numPoles} poles</Typography>
         <Box sx={{ flex: 1, minHeight: 0, mt: 0.5 }}>
-          <CrossSectionReal geoStr={geoStr} N={knobs.N} wireH={knobs.wireH_mm}
-            insulation={insulation_mm} spacing={spacing_mm} />
+          <CrossSectionReal geoStr={geoStr} />
         </Box>
       </Box>
       <Box sx={{ ...PANEL, display: 'flex', flexDirection: 'column', minWidth: 0 }}>

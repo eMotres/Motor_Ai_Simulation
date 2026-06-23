@@ -34,6 +34,7 @@ import MotorScene from './components/viewer3d/MotorScene';
 import ParameterVariationTable from './components/sweep/ParameterVariationTable';
 import MotorsCatalog from './components/catalog/MotorsCatalog';
 import AuthButton from './components/auth/AuthButton';
+import { VersionBadge } from './components/VersionBadge';
 import { useAuth } from './contexts/AuthContext';
 import AdminPanel from './components/admin/AdminPanel';
 import SupportWidget from './components/support/SupportWidget';
@@ -314,6 +315,7 @@ function App() {
         >
           <Toolbar variant="dense" sx={{ gap: 1 }}>
             <Typography variant="h6" sx={{ mr: 1 }}>Motor AI Simulator</Typography>
+            <VersionBadge />
 
             {isLoading && <CircularProgress size={18} sx={{ mr: 1 }} />}
             {connectedToApi ? (

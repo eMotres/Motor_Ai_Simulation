@@ -299,6 +299,26 @@ def get_material_detail(category: str, name: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/version")
+def get_app_version():
+    """App version + build metadata. Single source = repo-root VERSION (baked into
+    the image). Lets the frontend display the version and detect frontend/backend
+    skew. gitSha/builtAt are stamped at deploy time via env (scripts/release.ps1)."""
+    import os
+    from pathlib import Path
+    version = "0.0.0"
+    try:
+        version = (Path(__file__).resolve().parent.parent.parent / "VERSION").read_text(
+            encoding="utf-8").strip() or version
+    except Exception:
+        pass
+    return {
+        "version": version,
+        "gitSha": os.environ.get("APP_GIT_SHA", "unknown"),
+        "builtAt": os.environ.get("APP_BUILT_AT"),
+    }
+
+
 @app.get("/api/config")
 def get_full_config(geo: Optional[str] = None):
     try:

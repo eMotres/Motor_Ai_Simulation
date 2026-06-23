@@ -22,6 +22,7 @@ RUN pip install -r requirements.txt
 
 COPY src/    ./src/
 COPY config/ ./config/
+COPY VERSION ./VERSION
 
 # Cloud Run injects $PORT (default 8080). One uvicorn worker — the FEM solver
 # spawns its own process pool internally.

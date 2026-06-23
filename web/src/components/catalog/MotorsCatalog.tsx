@@ -52,7 +52,8 @@ const Detail: React.FC<{ k: string; v: React.ReactNode }> = ({ k, v }) => (
 );
 
 const MotorsCatalog: React.FC = () => {
-  const { isAdmin } = useAuth();
+  const { isAdmin, user, signIn, enforced } = useAuth();
+  const needsSignIn = enforced && !user;   // anon must register to load/configure
   const [cat, setCat] = useState<Catalog | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
@@ -72,6 +73,9 @@ const MotorsCatalog: React.FC = () => {
   };
 
   const loadMotor = async (m: Motor) => {
+    // Browsing is open to everyone; WORKING with a motor requires sign-in.
+    // Anonymous visitors get the Google sign-in prompt instead of a broken load.
+    if (needsSignIn) { void signIn(); return; }
     setBusy(m.id);
     try {
       // Open as YOUR editable copy: a curated template forks into "my_<id>" so
@@ -146,7 +150,7 @@ const MotorsCatalog: React.FC = () => {
             startIcon={busy === m.id ? <CircularProgress size={12} /> : <BoltIcon sx={{ fontSize: 15 }} />}
             disabled={!!busy} onClick={() => loadMotor(m)}
             sx={{ textTransform: 'none', fontSize: '0.74rem', py: 0.4, flex: 1 }}>
-            Load into editor
+            {needsSignIn ? 'Sign in to load' : 'Load into editor'}
           </Button>
           {isAdmin && (
             <Tooltip title="Delete from catalog (admin)">

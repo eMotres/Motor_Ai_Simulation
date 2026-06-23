@@ -144,12 +144,14 @@ const GeometryBuildTimer: React.FC = () => {
 
 function App() {
   const { activeTab, setActiveTab, showGrid, showAxes, toggleGrid, toggleAxes } = useUIStore();
-  const { isAdmin, tier, enforced } = useAuth();
-  // Engineering UI (FEM/mesh/optimization) is for paid + admin accounts. Free /
-  // anonymous users get the Motors storefront + the analytical Configurator only.
-  // Gated ONLY when the backend enforces auth — so the open beta (enforcement off)
-  // still shows everything to everyone, and no current visitor loses access.
-  const fullUI = !enforced || isAdmin || tier === 'pro' || tier === 'team';
+  const { user, isAdmin, tier, enforced } = useAuth();
+  // Access tiers (only enforced when the backend has AUTH_ENFORCE on; with it off,
+  // dev shows everything):
+  //   • Anonymous       → the Motors catalog ONLY (browse, can't work with a motor).
+  //   • Signed in (free) → + the analytical Configurator.
+  //   • Pro / team / admin → + the full engineering UI (geometry/mesh/FEM/optimize).
+  const signedIn = !enforced || !!user;
+  const fullUI   = !enforced || isAdmin || tier === 'pro' || tier === 'team';
   const [panelWidth, setPanelWidth] = React.useState(300);
   const [selectedMaterial, setSelectedMaterial] = useState<SelectedMaterial | null>(null);
   const { library: matLibrary, loading: matLoading, error: matError } = useMaterialsLibrary();
@@ -231,8 +233,10 @@ function App() {
   // Keep the active tab within what the role allows (after sign-out / role change).
   useEffect(() => {
     if (activeTab === 'admin' && !isAdmin) { setActiveTab('motors'); return; }
+    // Anonymous visitors get the catalog only — Configure + FEM require sign-in.
+    if (!signedIn && activeTab !== 'motors') { setActiveTab('motors'); return; }
     if (!fullUI && activeTab !== 'motors' && activeTab !== 'compare') setActiveTab('compare');
-  }, [activeTab, isAdmin, fullUI, setActiveTab]);
+  }, [activeTab, isAdmin, fullUI, signedIn, setActiveTab]);
 
   // ── Tab registry — the bar AND the content are GENERATED from this list.
   // Module-backed tabs take their title + order from the /api/modules manifests
@@ -241,7 +245,7 @@ function App() {
   const panels = useModulePanels();
   const tabDefs: Array<{
     id: string; label: string; order: number; panelId?: string;
-    gate: 'always' | 'fullUI' | 'admin'; showViewer: boolean; keepMounted?: boolean;
+    gate: 'always' | 'signedIn' | 'fullUI' | 'admin'; showViewer: boolean; keepMounted?: boolean;
     render: () => React.ReactNode;
   }> = [
     { id: 'motors', label: 'Motors', order: 0, gate: 'always', showViewer: false,
@@ -287,7 +291,7 @@ function App() {
       render: () => <SweepConfigPanel /> },
     { id: 'cost', label: 'Cost', order: 70, panelId: 'cost', gate: 'fullUI', showViewer: false,
       render: () => <CostPanel /> },
-    { id: 'compare', label: 'Configure', order: 75, gate: 'always', showViewer: false,
+    { id: 'compare', label: 'Configure', order: 75, gate: 'signedIn', showViewer: false,
       render: () => <CompareTab /> },
     { id: 'admin', label: 'Admin', order: 90, panelId: 'admin', gate: 'admin', showViewer: false,
       render: () => <AdminPanel /> },
@@ -298,7 +302,7 @@ function App() {
       label: (t.panelId && panels[t.panelId]?.title) || t.label,
       order: (t.panelId && panels[t.panelId]?.order) ?? t.order,
     }))
-    .filter((t) => t.gate === 'always' || (t.gate === 'fullUI' && fullUI) || (t.gate === 'admin' && isAdmin))
+    .filter((t) => t.gate === 'always' || (t.gate === 'signedIn' && signedIn) || (t.gate === 'fullUI' && fullUI) || (t.gate === 'admin' && isAdmin))
     .sort((a, b) => a.order - b.order);
   const showViewer = !!tabs.find((t) => t.id === activeTab)?.showViewer;
 

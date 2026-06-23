@@ -8,6 +8,9 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
 ## [Unreleased]
 
 ### Changed
+- **Access control:** the Motors catalog stays open to everyone, but **Configure +
+  the engineering tabs now require sign-in**. Anonymous visitors browse motors only;
+  "Load" prompts Google sign-in (previously anon could open Configure and work).
 - Catalog: first diameter bucket **5 mm → 12 mm**.
 
 ### Removed

@@ -10,6 +10,8 @@ export interface MotorAssignments {
   rotor_core: string;
   magnet: string;
   shaft: string;
+  slot_insulation?: string;   // slot liner (insulator)
+  wire_insulation?: string;   // wire enamel (insulator)
 }
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8000') + '/api/materials';

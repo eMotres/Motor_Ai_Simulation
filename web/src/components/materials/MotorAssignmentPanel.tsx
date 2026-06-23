@@ -22,6 +22,8 @@ const PARTS: MotorPart[] = [
   { key: 'rotor_core',  label: 'Rotor Core',   allowedCategory: 'steel',     fallbackFill: '#1f2937', accentFill: '#60a5fa' },
   { key: 'magnet',      label: 'Magnets',       allowedCategory: 'magnet',    fallbackFill: '#7f1d1d', accentFill: '#f87171' },
   { key: 'slot',        label: 'Windings',      allowedCategory: 'conductor', fallbackFill: '#78350f', accentFill: '#fbbf24' },
+  { key: 'slot_insulation', label: 'Slot Liner',  allowedCategory: 'insulator', fallbackFill: '#3f3f46', accentFill: '#a78bfa' },
+  { key: 'wire_insulation', label: 'Wire Enamel', allowedCategory: 'insulator', fallbackFill: '#3f3f46', accentFill: '#a78bfa' },
   { key: 'shaft',       label: 'Shaft',         allowedCategory: null,        fallbackFill: '#1e293b', accentFill: '#64748b' },
 ];
 

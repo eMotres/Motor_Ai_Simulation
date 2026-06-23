@@ -121,7 +121,8 @@ def health_check():
     return {"status": "healthy"}
 
 
-_ASSIGNABLE_PARTS = {'stator_core', 'slot', 'rotor_core', 'magnet', 'shaft'}
+_ASSIGNABLE_PARTS = {'stator_core', 'slot', 'rotor_core', 'magnet', 'shaft',
+                     'slot_insulation', 'wire_insulation'}
 _CONFIG_PATH = Path(__file__).parent.parent.parent / "config" / "motor_config.yaml"
 
 

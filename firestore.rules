@@ -21,6 +21,15 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // Shared (admin-managed) materials library. Only the backend touches it —
+    // reads + writes go through the Admin SDK (GET /api/materials/library serves
+    // it; POST/DELETE /api/materials/global, admin-gated, mutate it). Clients
+    // never access it directly. (Per-user "my materials" live under
+    // users/{uid}/materials, already covered by the owner rule above.)
+    match /materials_global/{id} {
+      allow read, write: if false;
+    }
+
     // Deny everything else by default.
     match /{document=**} {
       allow read, write: if false;

@@ -14,6 +14,7 @@ import CheckIcon from '@mui/icons-material/Check';
 import { useUIStore, type CompKey } from '../../stores/motorStore';
 import { useMotorAssignments } from '../materials/useMotorAssignments';
 import { useMaterialsLibrary } from '../materials/useMaterialsLibrary';
+import type { MaterialCategory } from '../materials/useMaterialsLibrary';
 import type { MotorAssignments } from '../materials/useMotorAssignments';
 
 // ─── Part config ──────────────────────────────────────────────────────────────
@@ -32,15 +33,17 @@ const PART_CFG: Partial<Record<CompKey, PartCfg>> = {
   shaft:    { assignKey: 'shaft',       label: 'Shaft',                 color: '#64748b' },
   in_band:  { assignKey: 'air_gap',     label: 'In Band (rotating)',    color: '#22c55e' },
   out_band: { assignKey: 'air_gap',     label: 'Out Band (static)',     color: '#a855f7' },
-  // slot_insulation / wire_insulation: shown in the tree + 3D, but no material-reassign
-  // bar yet (no crash — guarded below).
+  slot_insulation: { assignKey: 'slot_insulation', label: 'Slot Liner',  color: '#a78bfa' },
+  wire_insulation: { assignKey: 'wire_insulation', label: 'Wire Enamel', color: '#a78bfa' },
 };
 
 // All categories in display order
-const CATEGORY_CFG: { key: 'steel' | 'magnet' | 'conductor'; label: string; color: string }[] = [
+const CATEGORY_CFG: { key: MaterialCategory; label: string; color: string }[] = [
   { key: 'steel',     label: 'Lamination Steel', color: '#64748b' },
   { key: 'magnet',    label: 'Magnets',          color: '#ef4444' },
   { key: 'conductor', label: 'Metal',            color: '#f59e0b' },
+  { key: 'insulator', label: 'Insulators',       color: '#3fae5a' },
+  { key: 'coolant',   label: 'Coolants & Air',   color: '#38bdf8' },
 ];
 
 // ─── Component ────────────────────────────────────────────────────────────────

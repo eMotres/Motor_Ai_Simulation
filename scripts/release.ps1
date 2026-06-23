@@ -21,14 +21,15 @@ if ($Version) {
   Set-Content -Path 'VERSION' -Value $Version -NoNewline -Encoding ascii
 }
 $Version = (Get-Content 'VERSION' -Raw).Trim()
-$sha     = (git rev-parse --short HEAD).Trim()
 $builtAt = (Get-Date).ToUniversalTime().ToString('o')
-Write-Host "==> Releasing v$Version  ($sha)  $builtAt" -ForegroundColor Cyan
 
-# 1) commit any VERSION/CHANGELOG change + tag
+# 1) commit any VERSION/CHANGELOG change FIRST, then capture the sha so it points at
+#    the exact released commit (not the one before it), then tag.
 git add VERSION CHANGELOG.md
 git diff --cached --quiet
 if ($LASTEXITCODE -ne 0) { git commit -m "Release v$Version" }
+$sha = (git rev-parse --short HEAD).Trim()
+Write-Host "==> Releasing v$Version  ($sha)  $builtAt" -ForegroundColor Cyan
 $tagExists = git tag -l "v$Version"
 if (-not $tagExists) { git tag -a "v$Version" -m "Release v$Version" } else { Write-Host "   tag v$Version already exists" }
 

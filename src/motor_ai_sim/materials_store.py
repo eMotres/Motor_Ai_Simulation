@@ -14,6 +14,7 @@ merged in the frontend — not here.
 """
 from __future__ import annotations
 
+import time
 from typing import Any, Dict, Iterable, Optional
 
 _COLLECTION = "materials_global"
@@ -75,6 +76,39 @@ def read_global() -> Dict[str, Dict[str, dict]]:
     return out
 
 
+# Short-TTL cache so the solver (which calls get_material many times per solve, and
+# in a subprocess for transients) doesn't hit Firestore on every lookup. Writes
+# below invalidate it; otherwise it refreshes every _GLOBAL_TTL seconds.
+_GLOBAL_TTL = 30.0
+_global_cache: Optional[Dict[str, Dict[str, dict]]] = None
+_global_cache_t = 0.0
+
+
+def _read_global_cached() -> Dict[str, Dict[str, dict]]:
+    global _global_cache, _global_cache_t
+    now = time.time()
+    if _global_cache is not None and (now - _global_cache_t) < _GLOBAL_TTL:
+        return _global_cache
+    _global_cache = read_global()
+    _global_cache_t = now
+    return _global_cache
+
+
+def _invalidate_cache() -> None:
+    global _global_cache
+    _global_cache = None
+
+
+def global_material(category: str, name: str) -> Optional[Dict[str, Any]]:
+    """Physical props of a single GLOBAL material (None if absent or hidden); meta
+    keys stripped. Cached. Used by materials.get_material so admin-added / edited
+    materials resolve in every compute path (field maps, transient, analytical)."""
+    doc = _read_global_cached().get(category, {}).get(name)
+    if not doc or doc.get("hidden"):
+        return None
+    return {k: v for k, v in doc.items() if k not in _META_KEYS}
+
+
 def merge_library(builtin: Dict[str, Dict[str, dict]]) -> Dict[str, Dict[str, dict]]:
     """Merge the global layer over the built-in library.
 
@@ -110,6 +144,7 @@ def upsert_global(category: str, name: str, props: Dict[str, Any], who: str) -> 
     doc = {**clean, "category": category, "name": name, "hidden": False,
            "updatedBy": who, "updatedAt": firestore.SERVER_TIMESTAMP}
     db.collection(_COLLECTION).document(_doc_id(category, name)).set(doc, merge=True)
+    _invalidate_cache()
     return {"ok": True, "source": "firebase", "category": category, "name": name}
 
 
@@ -127,6 +162,8 @@ def delete_global(category: str, name: str, who: str,
     if builtin_names and name in set(builtin_names):
         ref.set({"category": category, "name": name, "hidden": True,
                  "updatedBy": who, "updatedAt": firestore.SERVER_TIMESTAMP}, merge=True)
+        _invalidate_cache()
         return {"ok": True, "source": "firebase", "hidden": True, "category": category, "name": name}
     ref.delete()
+    _invalidate_cache()
     return {"ok": True, "source": "firebase", "deleted": True, "category": category, "name": name}

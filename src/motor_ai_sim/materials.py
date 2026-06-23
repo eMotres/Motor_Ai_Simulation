@@ -18,7 +18,7 @@ Usage
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields as dataclass_fields
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Literal
 
@@ -331,6 +331,32 @@ def list_materials(category: Optional[Category] = None) -> Dict[str, List[str]]:
             for cat in ("steel", "magnet", "conductor", "insulator", "coolant")}
 
 
+_DATACLASS_BY_CAT = {
+    "steel": SteelMaterial, "magnet": MagnetMaterial, "conductor": ConductorMaterial,
+    "insulator": InsulatorMaterial, "coolant": CoolantMaterial,
+}
+
+
+def material_from_dict(category: Category, name: str, d: dict):
+    """Build a material dataclass from a GET-library-format dict (the shape served
+    by /api/materials/library — i.e. the admin-managed GLOBAL layer). Robust to
+    extra/missing keys; pure properties (resistivity, energy_product, mu_r_initial)
+    are not fields and are ignored. core_loss_curves (display-only) is dropped — the
+    solver uses the Bertotti kh/kc/ke + bh_curve."""
+    cls = _DATACLASS_BY_CAT[category]
+    names = {f.name for f in dataclass_fields(cls)}
+    kwargs: dict = {}
+    for k, v in (d or {}).items():
+        if k == "name" or k == "core_loss_curves" or k not in names:
+            continue
+        if k == "bh_curve" and isinstance(v, list):
+            kwargs[k] = [(float(p[0]), float(p[1])) for p in v
+                         if isinstance(p, (list, tuple)) and len(p) >= 2]
+        else:
+            kwargs[k] = v
+    return cls(name=name, **kwargs)
+
+
 def get_material(
     category: Category,
     name: str,
@@ -356,6 +382,17 @@ def get_material(
     cat_data = lib.get(category)
     if cat_data is None:
         raise KeyError(f"Unknown category '{category}'. Valid: steel, magnet, conductor")
+    # Admin-managed GLOBAL layer (Firestore) overrides / extends the built-in YAML,
+    # so an edited built-in or a newly-added shared material resolves everywhere the
+    # solver looks up materials. Best-effort: any problem (no SDK, malformed doc)
+    # falls through to the built-in library and never breaks resolution.
+    try:
+        from motor_ai_sim import materials_store
+        gdoc = materials_store.global_material(category, name)
+        if gdoc is not None:
+            return material_from_dict(category, name, gdoc)
+    except Exception:  # noqa: BLE001
+        pass
     raw = cat_data.get(name)
     if raw is None:
         available = list(cat_data.keys())

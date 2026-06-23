@@ -7,6 +7,13 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
 
 ## [Unreleased]
 
+### Added
+- **Configure → Thermal (analytical estimate):** steady-state winding / magnet / housing
+  temperatures computed from the configured losses + the **same cooling inputs as
+  Simulation** (air / water / glycol / oil, ambient, speed/flow, live h). Lumped
+  resistance model — instant, no FEM; warns when the winding (~155 °C, class F) or magnet
+  (~150 °C) limit is exceeded.
+
 ### Changed
 - **Access control:** the Motors catalog stays open to everyone, but **Configure +
   the engineering tabs now require sign-in**. Anonymous visitors browse motors only;

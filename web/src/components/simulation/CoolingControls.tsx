@@ -19,7 +19,7 @@ const COOLANTS: Record<string, string> = { Water: 'water', 'Water-glycol': 'wate
 const lsGet = (k: string, d: string): string => { try { return localStorage.getItem('sim.cool.' + k) ?? d; } catch { return d; } };
 const lsSet = (k: string, v: string): void => { try { localStorage.setItem('sim.cool.' + k, v); } catch { /* quota */ } };
 
-function airH(v: number, D: number): number {           // Churchill-Bernstein, cylinder cross-flow
+export function airH(v: number, D: number): number {    // Churchill-Bernstein, cylinder cross-flow
   const nu = 1.56e-5, ka = 0.0263, Pr = 0.707;
   if (!(v > 0) || !(D > 0)) return 7;
   const Re = v * D / nu;
@@ -27,7 +27,7 @@ function airH(v: number, D: number): number {           // Churchill-Bernstein, 
     * Math.pow(1 + Math.pow(Re / 282000, 5 / 8), 4 / 5);
   return Math.max(Nu * ka / D, 7);                       // natural-convection floor
 }
-const liqH = (q: number): number => Math.min(8000, Math.max(600, 1800 * Math.pow(Math.max(q, 0.1) / 8, 0.8)));
+export const liqH = (q: number): number => Math.min(8000, Math.max(600, 1800 * Math.pow(Math.max(q, 0.1) / 8, 0.8)));
 
 /** Cooling spec for the thermal / coupled-solve payload (read from localStorage). */
 export function getCoolingPayload(): Record<string, number | string> {
@@ -43,7 +43,7 @@ export function getCoolingPayload(): Record<string, number | string> {
   };
 }
 
-const CoolingControls: React.FC = () => {
+const CoolingControls: React.FC<{ diameterMm?: number }> = ({ diameterMm }) => {
   const geometry = useMotorStore((s: any) => s.geometry);
   const [sys, setSys] = useState<string>(() => lsGet('mode', 'Air'));
   const [temp, setTemp] = useState<number>(() => parseFloat(lsGet('temp', '25')) || 25);
@@ -51,7 +51,7 @@ const CoolingControls: React.FC = () => {
   const [flow, setFlow] = useState<number>(() => parseFloat(lsGet('flow', '8')) || 8);
 
   const isAir = sys === 'Air';
-  const D = (Number(geometry?.stator_diameter) || 150) / 1000;     // housing OD [m]
+  const D = (diameterMm ?? (Number(geometry?.stator_diameter) || 150)) / 1000;  // housing OD [m]
   const h = isAir ? airH(airSpeed, D) : liqH(flow);
   const changed = () => { try { window.dispatchEvent(new Event('cooling:changed')); } catch { /* ignore */ } };
   const onSys   = (v: string) => { setSys(v);   lsSet('mode', v); changed(); };

@@ -32,6 +32,7 @@ import GeometryProjections from './GeometryProjections';
 import BatteryPanel, { type Battery, defaultBattery } from './BatteryPanel';
 import { useAuth } from '../../contexts/AuthContext';
 import PerformanceCharts from './PerformanceCharts';
+import ConfiguratorThermal from './ConfiguratorThermal';
 
 const baseKnobs = (p: Passport): Knobs => ({
   N: p.N0, L_mm: p.L0_mm, wireH_mm: p.wireH0_mm, nP: p.nP0, I_A: p.I0_A, rpm: p.rpm0,
@@ -375,6 +376,24 @@ const ConfiguratorPanel: React.FC = () => {
       {/* ── BATTERY & VOLTAGE MATCH ── */}
       <Box sx={{ px: 2, pb: 1.5 }}>
         <BatteryPanel vDc={result.Vphase_peak_V * Math.sqrt(3)} bat={battery} onChange={setBattery} />
+      </Box>
+
+      {/* ── THERMAL (analytical estimate, same cooling inputs as Simulation) ── */}
+      <Box sx={{ px: 2, pb: 1.5 }}>
+        <ConfiguratorThermal
+          geom={{
+            statorOD_mm: ref.geo.statorOR_mm * 2,
+            stackLength_mm: knobs.L_mm,
+            numSlots: ref.geo.numSlots,
+            slotHeight_mm: ref.fit.slotHeight_mm,
+            slotWidth_mm: ref.fit.slotWidth_mm,
+            insulation_mm: ref.fit.insulation_mm,
+            coreThickness_mm: Math.max(0, ref.geo.statorOR_mm - ref.geo.statorIR_mm - ref.fit.slotHeight_mm),
+            airGap_mm: Math.max(0, ref.geo.statorIR_mm - ref.geo.rotorOR_mm),
+            magnetOD_mm: ref.geo.rotorOR_mm * 2,
+          }}
+          losses={{ P_cu_W: result.P_cu_W, P_fe_W: result.P_fe_W, P_mag_W: result.P_mag_W }}
+        />
       </Box>
 
       {/* ── PERFORMANCE VS SPEED ── */}

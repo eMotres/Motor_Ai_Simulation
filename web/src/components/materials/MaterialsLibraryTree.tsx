@@ -2,11 +2,12 @@ import React, { useState } from 'react';
 import {
   Box, Typography, CircularProgress, Collapse,
   List, ListItemButton, ListItemText, ListItemIcon,
-  Chip,
+  Chip, IconButton, Tooltip,
 } from '@mui/material';
 import {
   ExpandMore as ExpandMoreIcon,
   ExpandLess as ExpandLessIcon,
+  Add as AddIcon,
   Layers as LayersIcon,
   RadioButtonChecked as MagnetIcon,
   Cable as CableIcon,
@@ -44,6 +45,9 @@ interface Props {
   error: string | null;
   selected: SelectedMaterial | null;
   onSelect: (sel: SelectedMaterial) => void;
+  /** Admin: show a "+" on each category to add a new shared material. */
+  canAdd?: boolean;
+  onAdd?: (category: MaterialCategory) => void;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -121,6 +125,17 @@ const MaterialsLibraryTree: React.FC<Props> = ({ library, loading, error, select
               <Typography sx={{ fontSize: '0.65rem', color: '#475569', mr: 0.5 }}>
                 {items.length}
               </Typography>
+              {canAdd && onAdd && (
+                <Tooltip title={`Add a new ${cat.label} material (shared library)`}>
+                  <IconButton
+                    size="small"
+                    onClick={(e) => { e.stopPropagation(); onAdd(cat.key); }}
+                    sx={{ p: 0.25, mr: 0.25, color: '#475569', '&:hover': { color: cat.color } }}
+                  >
+                    <AddIcon sx={{ fontSize: 14 }} />
+                  </IconButton>
+                </Tooltip>
+              )}
               {isOpen ? <ExpandLessIcon sx={{ fontSize: 14, color: '#475569' }} /> : <ExpandMoreIcon sx={{ fontSize: 14, color: '#475569' }} />}
             </ListItemButton>
 

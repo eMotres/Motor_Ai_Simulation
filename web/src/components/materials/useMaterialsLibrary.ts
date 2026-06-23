@@ -137,13 +137,15 @@ export function useMaterialsLibrary() {
   const [error, setError] = useState<string | null>(null);
 
   // built-in + global (from the backend, already merged + tagged there)
-  useEffect(() => {
+  const reloadBase = useCallback(() => {
     setLoading(true);
     fetch((import.meta.env.VITE_API_URL ?? 'http://localhost:8000') + '/api/materials/library', { cache: 'no-store' })
       .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
       .then(data => { setBase(data); setLoading(false); })
       .catch(e => { setError(String(e)); setLoading(false); });
   }, []);
+
+  useEffect(() => { reloadBase(); }, [reloadBase]);
 
   // per-user "my materials" (client Firestore) — reloadable after copy/edit/delete
   const reloadMine = useCallback(async () => {
@@ -152,6 +154,9 @@ export function useMaterialsLibrary() {
   }, [uid]);
 
   useEffect(() => { void reloadMine(); }, [reloadMine]);
+
+  /** Refetch both layers (after an edit/add/delete to global or mine). */
+  const reload = useCallback(() => { reloadBase(); void reloadMine(); }, [reloadBase, reloadMine]);
 
   const library = useMemo<MaterialsLibrary | null>(() => {
     if (!base) return null;
@@ -165,5 +170,5 @@ export function useMaterialsLibrary() {
     return out;
   }, [base, mine]);
 
-  return { library, loading, error, reloadMine, uid };
+  return { library, loading, error, reload, reloadMine, uid };
 }

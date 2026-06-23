@@ -44,7 +44,8 @@ import SweepConfigPanel from './components/sweep/SweepConfigPanel';
 import MaterialsLibraryTree from './components/materials/MaterialsLibraryTree';
 import MaterialDetailView from './components/materials/MaterialDetailView';
 import { useMaterialsLibrary } from './components/materials/useMaterialsLibrary';
-import type { SelectedMaterial } from './components/materials/useMaterialsLibrary';
+import type { SelectedMaterial, MaterialCategory } from './components/materials/useMaterialsLibrary';
+import { saveGlobal, blankMaterial, type Cat } from './lib/materialsActions';
 import { useMotorStore, useUIStore } from './stores/motorStore';
 import SimulationPanel from './components/simulation/SimulationPanel';
 import CompareTab from './components/compare/CompareTab';
@@ -154,7 +155,17 @@ function App() {
   const fullUI   = !enforced || isAdmin || tier === 'pro' || tier === 'team';
   const [panelWidth, setPanelWidth] = React.useState(300);
   const [selectedMaterial, setSelectedMaterial] = useState<SelectedMaterial | null>(null);
-  const { library: matLibrary, loading: matLoading, error: matError } = useMaterialsLibrary();
+  const { library: matLibrary, loading: matLoading, error: matError, reload: matReload } = useMaterialsLibrary();
+
+  // Admin: create a new blank material in the shared (global) library, then select it to edit.
+  const handleAddGlobal = async (category: MaterialCategory) => {
+    const name = `New ${category} ${Date.now().toString(36).slice(-4)}`;
+    try {
+      await saveGlobal(category as Cat, name, blankMaterial(category as Cat));
+      matReload();
+      setSelectedMaterial({ category, name });
+    } catch { /* error surfaces in the detail view on the next action */ }
+  };
   // Remember the last-viewed material so the detail pane restores it next session.
   useEffect(() => {
     try { if (selectedMaterial) localStorage.setItem('materials.selected', JSON.stringify(selectedMaterial)); } catch { /* quota */ }
@@ -264,18 +275,20 @@ function App() {
           </Box>
         </Box>
       ) },
-    { id: 'materials', label: 'Materials', order: 30, gate: 'fullUI', showViewer: true,
+    { id: 'materials', label: 'Materials', order: 30, gate: 'signedIn', showViewer: true,
       render: () => (
         <Box sx={{ display: 'flex', height: '100%' }}>
           <Box sx={{ width: '50%', display: 'flex', borderRight: '1px solid', borderColor: 'divider', overflow: 'hidden' }}>
             <Box sx={{ width: panelWidth, flexShrink: 0, overflowY: 'auto', borderRight: '1px solid', borderColor: 'divider' }}>
               <MaterialsLibraryTree library={matLibrary} loading={matLoading} error={matError}
-                selected={selectedMaterial} onSelect={setSelectedMaterial} />
+                selected={selectedMaterial} onSelect={setSelectedMaterial}
+                canAdd={isAdmin} onAdd={handleAddGlobal} />
             </Box>
             <Box onMouseDown={onDividerMouseDown} sx={{ width: 5, flexShrink: 0, cursor: 'col-resize',
               bgcolor: 'divider', transition: 'background-color 0.15s', '&:hover': { bgcolor: 'primary.main' }, userSelect: 'none' }} />
             <Box sx={{ flex: 1, overflow: 'hidden', bgcolor: '#0a1120' }}>
-              <MaterialDetailView library={matLibrary} selected={selectedMaterial} />
+              <MaterialDetailView library={matLibrary} selected={selectedMaterial}
+                onChanged={matReload} onSelect={setSelectedMaterial} />
             </Box>
           </Box>
           <Box sx={{ width: '50%', overflow: 'hidden', position: 'relative', bgcolor: '#060d17' }}>

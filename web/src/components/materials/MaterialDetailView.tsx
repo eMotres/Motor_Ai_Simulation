@@ -1,13 +1,22 @@
-import React, { useMemo } from 'react';
-import { Box, Typography, Chip, Divider } from '@mui/material';
+import React, { useMemo, useState } from 'react';
+import { Box, Typography, Chip, Divider, Button, TextField, Stack, CircularProgress } from '@mui/material';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import EditIcon from '@mui/icons-material/Edit';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import SaveIcon from '@mui/icons-material/Save';
+import CloseIcon from '@mui/icons-material/Close';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid,
   Tooltip as RechartTooltip, Legend, ResponsiveContainer, ReferenceLine,
 } from 'recharts';
 import type {
-  MaterialsLibrary, SelectedMaterial,
+  MaterialsLibrary, SelectedMaterial, MaterialCategory,
   SteelData, MagnetData, ConductorData, InsulatorData, CoolantData,
 } from './useMaterialsLibrary';
+import { useAuth } from '../../contexts/AuthContext';
+import {
+  saveMine, deleteMine, copyToMine, saveGlobal, deleteGlobal, stripMeta, type Cat,
+} from '../../lib/materialsActions';
 
 // ─── Color palette for multi-freq loss curves ─────────────────────────────────
 const FREQ_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#a78bfa', '#06b6d4'];
@@ -361,47 +370,184 @@ const CAT_LABEL: Record<string, string> = {
   insulator: 'Insulator', coolant: 'Coolant / Fluid',
 };
 
+// ─── Editable scalar fields per category ──────────────────────────────────────
+type FieldDef = { key: string; label: string; unit?: string; type?: 'number' | 'text' };
+const EDITABLE_FIELDS: Record<MaterialCategory, FieldDef[]> = {
+  steel: [
+    { key: 'description', label: 'Description', type: 'text' },
+    { key: 'density', label: 'Density', unit: 'kg/m³' },
+    { key: 'sigma', label: 'Conductivity σ', unit: 'S/m' },
+    { key: 'stacking_factor', label: 'Stacking factor' },
+    { key: 'core_loss_kh', label: 'k_h', unit: 'W/(m³·Hz·T²)' },
+    { key: 'core_loss_kc', label: 'k_c', unit: 'W/(m³·Hz²·T²)' },
+    { key: 'core_loss_ke', label: 'k_e', unit: 'W/(m³·Hz^1.5·T^1.5)' },
+  ],
+  magnet: [
+    { key: 'description', label: 'Description', type: 'text' },
+    { key: 'Br', label: 'Remanence Br', unit: 'T' },
+    { key: 'Hc', label: 'Coercivity Hc', unit: 'A/m' },
+    { key: 'mu_rec', label: 'Recoil μ_rec' },
+    { key: 'sigma', label: 'Conductivity σ', unit: 'S/m' },
+    { key: 'density', label: 'Density', unit: 'kg/m³' },
+  ],
+  conductor: [
+    { key: 'description', label: 'Description', type: 'text' },
+    { key: 'sigma', label: 'Conductivity σ', unit: 'S/m' },
+    { key: 'density', label: 'Density', unit: 'kg/m³' },
+    { key: 'thermal_conductivity', label: 'Thermal conductivity', unit: 'W/(m·K)' },
+    { key: 'specific_heat', label: 'Specific heat', unit: 'J/(kg·K)' },
+    { key: 'thermal_alpha', label: 'Temp. coeff. α', unit: '1/K' },
+  ],
+  insulator: [
+    { key: 'description', label: 'Description', type: 'text' },
+    { key: 'thermal_conductivity', label: 'Thermal conductivity', unit: 'W/(m·K)' },
+    { key: 'specific_heat', label: 'Specific heat', unit: 'J/(kg·K)' },
+    { key: 'density', label: 'Density', unit: 'kg/m³' },
+    { key: 'sigma', label: 'Conductivity σ', unit: 'S/m' },
+    { key: 'mu_r', label: 'Rel. permeability μr' },
+  ],
+  coolant: [
+    { key: 'description', label: 'Description', type: 'text' },
+    { key: 'phase', label: 'Phase (liquid/gas)', type: 'text' },
+    { key: 'density', label: 'Density ρ', unit: 'kg/m³' },
+    { key: 'specific_heat', label: 'Specific heat cp', unit: 'J/(kg·K)' },
+    { key: 'thermal_conductivity', label: 'Thermal conductivity k', unit: 'W/(m·K)' },
+    { key: 'kinematic_viscosity', label: 'Kinematic viscosity ν', unit: 'm²/s' },
+    { key: 'prandtl', label: 'Prandtl Pr' },
+  ],
+};
+
+/** Keep obvious derived fields consistent after an edit (display only). */
+function recomputeDerived(category: MaterialCategory, p: Record<string, any>): Record<string, any> {
+  const out = { ...p };
+  if (category === 'conductor' && typeof out.sigma === 'number' && out.sigma > 0) out.resistivity = 1 / out.sigma;
+  if (category === 'magnet' && typeof out.Br === 'number' && typeof out.Hc === 'number') {
+    out.energy_product_kj_m3 = (out.Br * out.Hc) / 4 / 1000;
+  }
+  return out;
+}
+
+const SOURCE_CHIP: Record<string, { label: string; color: string }> = {
+  builtin: { label: 'built-in', color: '#64748b' },
+  global:  { label: 'shared',   color: '#38bdf8' },
+  mine:    { label: 'mine',     color: '#a78bfa' },
+};
+
 // ─── Root component ───────────────────────────────────────────────────────────
 
 interface Props {
   library: MaterialsLibrary | null;
   selected: SelectedMaterial | null;
+  /** Refetch the library after an edit / copy / delete. */
+  onChanged?: () => void;
+  /** Re-point the selection (e.g. to a freshly created copy, or null after delete). */
+  onSelect?: (sel: SelectedMaterial | null) => void;
 }
 
-const MaterialDetailView: React.FC<Props> = ({ library, selected }) => {
-  if (!library || !selected) {
-    return (
-      <Box sx={{
-        height: '100%', display: 'flex', flexDirection: 'column',
-        alignItems: 'center', justifyContent: 'center', color: '#334155', gap: 1,
-      }}>
-        <Typography sx={{ fontSize: '0.9rem' }}>Select a material from the tree</Typography>
-        <Typography sx={{ fontSize: '0.75rem' }}>B-H curves and loss data will appear here</Typography>
-      </Box>
-    );
-  }
+const EmptyState: React.FC = () => (
+  <Box sx={{
+    height: '100%', display: 'flex', flexDirection: 'column',
+    alignItems: 'center', justifyContent: 'center', color: '#334155', gap: 1,
+  }}>
+    <Typography sx={{ fontSize: '0.9rem' }}>Select a material from the tree</Typography>
+    <Typography sx={{ fontSize: '0.75rem' }}>B-H curves and loss data will appear here</Typography>
+  </Box>
+);
+
+const MaterialDetailView: React.FC<Props> = ({ library, selected, onChanged, onSelect }) => {
+  const { user, isAdmin } = useAuth();
+  const uid = user?.uid ?? null;
+  const [editing, setEditing] = useState(false);
+  const [form, setForm] = useState<Record<string, any>>({});
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  // Drop edit state whenever the selected material changes.
+  React.useEffect(() => { setEditing(false); setErr(null); }, [selected?.category, selected?.name]);
+
+  if (!library || !selected) return <EmptyState />;
 
   const { category, name } = selected;
   const data = (library[category] as any)[name];
   const color = CAT_COLOR[category];
+  if (!data) return <EmptyState />;   // e.g. just deleted
+
+  const source: string = data._source ?? 'builtin';
+  const fields = EDITABLE_FIELDS[category] ?? [];
+  const canCopy = !!uid;
+  // mine → the owner edits; built-in/global → only an admin (saving makes a global override).
+  const canEdit = source === 'mine' ? !!uid : isAdmin;
+  const canDelete = canEdit;
+  const srcChip = SOURCE_CHIP[source] ?? SOURCE_CHIP.builtin;
+
+  const startEdit = () => {
+    const init: Record<string, any> = {};
+    fields.forEach(f => { init[f.key] = data[f.key]; });
+    setForm(init);
+    setErr(null);
+    setEditing(true);
+  };
+
+  const handleSave = async () => {
+    setBusy(true); setErr(null);
+    try {
+      const coerced: Record<string, any> = { ...stripMeta(data) };
+      fields.forEach(f => {
+        const v = form[f.key];
+        coerced[f.key] = f.type === 'text' ? (v ?? '') : (v === '' || v == null ? null : Number(v));
+      });
+      const next = recomputeDerived(category, coerced);
+      if (source === 'mine') {
+        if (!uid) throw new Error('Sign in required');
+        await saveMine(uid, category as Cat, name, next);
+      } else {
+        await saveGlobal(category as Cat, name, next);   // admin: built-in/global → global override
+      }
+      setEditing(false);
+      onChanged?.();
+    } catch (e) { setErr(String((e as Error).message || e)); }
+    finally { setBusy(false); }
+  };
+
+  const handleCopy = async () => {
+    if (!uid) return;
+    setBusy(true); setErr(null);
+    try {
+      const newName = await copyToMine(uid, category as Cat, name, stripMeta(data));
+      onChanged?.();
+      onSelect?.({ category, name: newName });
+    } catch (e) { setErr(String((e as Error).message || e)); }
+    finally { setBusy(false); }
+  };
+
+  const handleDelete = async () => {
+    setBusy(true); setErr(null);
+    try {
+      if (source === 'mine') { if (uid) await deleteMine(uid, category as Cat, name); }
+      else { await deleteGlobal(category as Cat, name); }
+      setEditing(false);
+      onChanged?.();
+      onSelect?.(null);
+    } catch (e) { setErr(String((e as Error).message || e)); }
+    finally { setBusy(false); }
+  };
 
   return (
     <Box sx={{ height: '100%', overflowY: 'auto', p: 2 }}>
       {/* Title */}
-      <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1.5, mb: 2 }}>
+      <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1.5, mb: 1.5 }}>
         <Box sx={{ width: 4, height: '100%', minHeight: 40, bgcolor: color, borderRadius: 1, flexShrink: 0 }} />
         <Box sx={{ flex: 1 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
             <Typography sx={{ fontSize: '1.05rem', fontWeight: 700, color: '#e2e8f0' }}>
               {name.replace(/_/g, ' ')}
             </Typography>
-            <Chip
-              label={CAT_LABEL[category]}
-              size="small"
-              sx={{ height: 18, fontSize: '0.6rem', bgcolor: `${color}20`, color }}
-            />
+            <Chip label={CAT_LABEL[category]} size="small"
+              sx={{ height: 18, fontSize: '0.6rem', bgcolor: `${color}20`, color }} />
+            <Chip label={srcChip.label} size="small"
+              sx={{ height: 18, fontSize: '0.6rem', bgcolor: `${srcChip.color}20`, color: srcChip.color }} />
           </Box>
-          {data.description && (
+          {data.description && !editing && (
             <Typography sx={{ fontSize: '0.72rem', color: '#64748b', mt: 0.25 }}>
               {data.description}
             </Typography>
@@ -409,12 +555,79 @@ const MaterialDetailView: React.FC<Props> = ({ library, selected }) => {
         </Box>
       </Box>
 
-      {/* Detail by type */}
-      {category === 'steel'     && <SteelDetail     name={name} data={data as SteelData}     />}
-      {category === 'magnet'    && <MagnetDetail    name={name} data={data as MagnetData}    />}
-      {category === 'conductor' && <ConductorDetail name={name} data={data as ConductorData} />}
-      {category === 'insulator' && <InsulatorDetail name={name} data={data as InsulatorData} />}
-      {category === 'coolant'   && <CoolantDetail   name={name} data={data as CoolantData}   />}
+      {/* Actions */}
+      <Stack direction="row" spacing={1} sx={{ mb: 1.5, flexWrap: 'wrap', gap: 0.5 }}>
+        {!editing && canCopy && (
+          <Button size="small" variant="outlined" startIcon={<ContentCopyIcon sx={{ fontSize: 14 }} />}
+            onClick={handleCopy} disabled={busy} sx={{ fontSize: '0.68rem', textTransform: 'none' }}>
+            Copy to My Materials
+          </Button>
+        )}
+        {!editing && canEdit && (
+          <Button size="small" variant="outlined" startIcon={<EditIcon sx={{ fontSize: 14 }} />}
+            onClick={startEdit} disabled={busy} sx={{ fontSize: '0.68rem', textTransform: 'none' }}>
+            {source === 'mine' ? 'Edit' : 'Edit shared'}
+          </Button>
+        )}
+        {!editing && canDelete && (
+          <Button size="small" variant="outlined" color="error" startIcon={<DeleteOutlineIcon sx={{ fontSize: 14 }} />}
+            onClick={handleDelete} disabled={busy} sx={{ fontSize: '0.68rem', textTransform: 'none' }}>
+            Delete
+          </Button>
+        )}
+        {editing && (
+          <Button size="small" variant="contained" startIcon={<SaveIcon sx={{ fontSize: 14 }} />}
+            onClick={handleSave} disabled={busy} sx={{ fontSize: '0.68rem', textTransform: 'none' }}>
+            Save
+          </Button>
+        )}
+        {editing && (
+          <Button size="small" variant="outlined" startIcon={<CloseIcon sx={{ fontSize: 14 }} />}
+            onClick={() => setEditing(false)} disabled={busy} sx={{ fontSize: '0.68rem', textTransform: 'none' }}>
+            Cancel
+          </Button>
+        )}
+        {busy && <CircularProgress size={16} sx={{ alignSelf: 'center' }} />}
+      </Stack>
+      {err && <Typography sx={{ color: '#ef4444', fontSize: '0.7rem', mb: 1 }}>{err}</Typography>}
+      {!editing && !canEdit && (
+        <Typography sx={{ color: '#475569', fontSize: '0.64rem', mb: 1 }}>
+          Built-in / shared material — copy it to My Materials to edit your own version.
+        </Typography>
+      )}
+
+      {/* Editor or read-only detail */}
+      {editing ? (
+        <Section title="Edit properties" accentColor={color}>
+          {fields.map(f => (
+            <Box key={f.key} sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 0.4 }}>
+              <Typography sx={{ flex: 1, fontSize: '0.7rem', color: '#94a3b8' }}>{f.label}</Typography>
+              <TextField
+                value={form[f.key] ?? ''}
+                onChange={e => setForm(s => ({ ...s, [f.key]: e.target.value }))}
+                size="small"
+                type={f.type === 'text' ? 'text' : 'number'}
+                sx={{ width: f.type === 'text' ? 210 : 130,
+                  '& .MuiInputBase-input': { fontSize: '0.72rem', py: 0.5, color: '#e2e8f0' },
+                  '& .MuiOutlinedInput-notchedOutline': { borderColor: '#1e293b' } }}
+              />
+              <Typography sx={{ fontSize: '0.58rem', color: '#475569', width: 92 }}>{f.unit ?? ''}</Typography>
+            </Box>
+          ))}
+          <Typography sx={{ fontSize: '0.62rem', color: '#475569', mt: 1 }}>
+            B-H / loss curves carry over unchanged.
+            {source !== 'mine' && ' Saving creates or updates the shared (global) material for everyone.'}
+          </Typography>
+        </Section>
+      ) : (
+        <>
+          {category === 'steel'     && <SteelDetail     name={name} data={data as SteelData}     />}
+          {category === 'magnet'    && <MagnetDetail    name={name} data={data as MagnetData}    />}
+          {category === 'conductor' && <ConductorDetail name={name} data={data as ConductorData} />}
+          {category === 'insulator' && <InsulatorDetail name={name} data={data as InsulatorData} />}
+          {category === 'coolant'   && <CoolantDetail   name={name} data={data as CoolantData}   />}
+        </>
+      )}
     </Box>
   );
 };

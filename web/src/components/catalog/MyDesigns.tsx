@@ -16,7 +16,7 @@ import {
 } from '../../lib/designs';
 
 const MyDesigns: React.FC = () => {
-  const { enabled, user, signIn } = useAuth();
+  const { enabled, user } = useAuth();
   const setActiveTab = useUIStore((s) => s.setActiveTab);
   const [designs, setDesigns] = useState<SavedDesign[]>([]);
   const [loading, setLoading] = useState(false);
@@ -35,19 +35,8 @@ const MyDesigns: React.FC = () => {
 
   if (!enabled) return null; // auth not configured → no saved-designs feature
 
-  if (!user) {
-    return (
-      <Box sx={{ mb: 4, p: 2, borderRadius: 2, border: '1px dashed #1e293b', bgcolor: '#0b1220' }}>
-        <Typography sx={{ color: '#cbd5e1', fontSize: '0.85rem', mb: 1 }}>
-          Sign in to <b>save your motor designs</b> and reload them anytime.
-        </Typography>
-        <Button size="small" variant="outlined" onClick={() => signIn()}
-          sx={{ textTransform: 'none', fontSize: '0.75rem' }}>
-          Sign in with Google
-        </Button>
-      </Box>
-    );
-  }
+  // Signed out → render nothing; the header already has a Sign-in button.
+  if (!user) return null;
 
   const save = async () => {
     if (!user) return;

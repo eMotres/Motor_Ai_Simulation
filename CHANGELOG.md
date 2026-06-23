@@ -7,6 +7,13 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
 
 ## [Unreleased]
 
+### Changed
+- Catalog: first diameter bucket **5 mm → 12 mm**.
+
+### Removed
+- Redundant "Sign in to save your motor designs" prompt in the catalog — the header
+  already has a Sign-in button.
+
 ## [0.1.1] — 2026-06-23
 
 ### Changed

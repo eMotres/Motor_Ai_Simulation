@@ -62,6 +62,7 @@
     }
   ],
   "diameters_mm": [
+    12,
     40,
     100,
     150,
@@ -231,6 +232,40 @@
       "tier": "free",
       "description": "100 mm spoke-PM inrunner, 24 slots / 28 poles. 6.0 N·m, 2.39 kW @ 3 800 rpm, 93.1 % eff (FEM) at 46 A, 29.4 V phase-peak — fits the 14-cell (≈50 V) bus. OPTIMIZED: teeth widened 5.0→6.5 mm to relieve saturation + 10 turns of thicker wire → +2.8 pp efficiency vs the first cut, same torque & voltage. F45SH magnets, JFE 20JNEH1200 steel. MTPA γ=−36°.",
       "preset": "motor_100mm"
+    },
+    {
+      "id": "cat_my_motor_40mm",
+      "diameter_mm": 40,
+      "name": "40 mm · 12s/14p high-speed",
+      "topology": "Spoke-PM SPMSM",
+      "slots": 12,
+      "poles": 14,
+      "rpm": 12000,
+      "current_a": 35,
+      "T_avg_Nm": 0,
+      "ripple_pct": 0,
+      "gamma_deg": -42,
+      "tier": "free",
+      "description": "Your saved motor — 40 mm · 12s/14p high-speed.",
+      "preset": "my_motor_40mm",
+      "owner": "user"
+    },
+    {
+      "id": "cat_my_motor",
+      "diameter_mm": 40,
+      "name": "My motor",
+      "topology": "Spoke-PM SPMSM",
+      "slots": 12,
+      "poles": 14,
+      "rpm": 12000,
+      "current_a": 35,
+      "T_avg_Nm": 0,
+      "ripple_pct": 0,
+      "gamma_deg": 0,
+      "tier": "free",
+      "description": "Your saved motor — My motor.",
+      "preset": "my_motor",
+      "owner": "user"
     }
   ]
 }

@@ -19,6 +19,7 @@ from .geometry_ir import GeometryIR, Region, RegionRole, Ring, Symmetry, Winding
 from .mesh_ir import MeshIR
 from .result_ir import FieldArray, FieldResults, ResultIR, ScalarResults, SeriesResults
 from .cost_ir import CostIR, CostLine
+from .material_ir import MaterialIR, MaterialProps
 from .signals import ControlSignal, Excitation, MachineState
 
 __all__ = [
@@ -28,5 +29,6 @@ __all__ = [
     "MeshIR",
     "ResultIR", "ScalarResults", "SeriesResults", "FieldArray", "FieldResults",
     "CostIR", "CostLine",
+    "MaterialIR", "MaterialProps",
     "Excitation", "ControlSignal", "MachineState",
 ]

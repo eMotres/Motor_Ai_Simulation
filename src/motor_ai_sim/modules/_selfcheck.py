@@ -36,7 +36,7 @@ def _catalog() -> str:
     caps = reg.capabilities()
     for need in ("geometry.2d", "geometry.3d", "mesh", "solver.em_static",
                  "solver.em_transient", "solver.thermal", "solver.mechanical",
-                 "surrogate", "optimization", "cost", "users"):
+                 "surrogate", "optimization", "cost", "materials", "users"):
         assert need in caps, f"missing capability {need}"
     return f"{len(mans)} modules; caps={len(caps)}; graph resolves"
 
@@ -66,6 +66,15 @@ def _cost_real() -> str:
     assert isinstance(cir, CostIR) and cir.total > 0 and len(cir.lines) >= 4
     CostIR.model_validate_json(cir.model_dump_json())
     return f"CostIR total=${cir.total} over {len(cir.lines)} lines"
+
+
+def _materials_real() -> str:
+    from motor_ai_sim.contracts.conformance import assert_materials_provider
+    from motor_ai_sim.modules.bootstrap import default_registry
+    mir = assert_materials_provider(default_registry().provider("materials"))
+    assert mir.library, "library should list at least one category"
+    return (f"MaterialIR: {len(mir.assignment)} assigned, {len(mir.materials)} resolved, "
+            f"{len(mir.library)} categories")
 
 
 def _dependency_graph() -> str:
@@ -107,6 +116,7 @@ def main() -> int:
     _check("geometry.2d conformance (real)", _geometry_conformance)
     _check("mesh -> MeshIR (real, coarse)", _mesh_real)
     _check("cost -> CostIR (real)", _cost_real)
+    _check("materials -> MaterialIR (real)", _materials_real)
     _check("dependency graph (2D->3D + unmet)", _dependency_graph)
     _check("UI map (web-as-module)", _ui_map)
 

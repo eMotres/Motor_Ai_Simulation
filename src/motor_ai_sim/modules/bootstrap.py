@@ -13,6 +13,7 @@ from .controller import FocController
 from .cost import BasicCost
 from .geometry_2d import AeroStatorGeometry2D
 from .geometry_3d import AeroStatorGeometry3D
+from .materials import MaterialsModule
 from .mesh import SkfemMesh2D
 from .optimization import Optimizer
 from .registry import ModuleRegistry
@@ -45,6 +46,7 @@ def default_registry() -> ModuleRegistry:
         SurrogateRF(),            # surrogate
         Optimizer(),              # optimization -> surrogate + solver.em_transient
         BasicCost(),              # cost         -> geometry.2d
+        MaterialsModule(),        # materials    (library + assignment -> MaterialIR)
         UsersModule(),            # users
     ):
         reg.register(module)

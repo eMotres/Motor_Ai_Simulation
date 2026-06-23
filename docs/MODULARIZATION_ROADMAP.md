@@ -38,8 +38,17 @@ Investigated and found this is mostly NOT a real gap, and forcing it would be wr
 → Real modularization starts at Phase B.
 
 ### Phase B — Materials as a module + contract — M
-`MaterialIR` (library + per-region assignment) + `materials` capability; solvers and the
-analytical path read material properties through it. Removes direct YAML edits.
+- **B1 ✅ (2026-06-23, `39c3e89`)** — `MaterialIR` / `MaterialProps` contract + `materials`
+  capability (resolves the config assignment + library into a typed IR) + conformance gate,
+  registered in bootstrap + `_selfcheck`. Additive — no consumer touched. Verified direct ==
+  kernel path (full props preserved; MaterialIR is light + JSON-serializable, a good kernel fit).
+- **B2** — make consumers read props *through* the module. `fem_solver_2d.build_materials`
+  resolves the assignment itself today (`get_material_assignments` + `mat_lib.get_material`,
+  helpers `_bh_for` / `_mu_r_for`). NOTE: it needs the **B-H curve** (nonlinear steel) and the
+  magnet **2nd-quadrant demag curve** — so B2 first extends `MaterialProps` with `bh_curve`
+  (+ magnet demag points), then points `_bh_for` / `_mu_r_for` at a single resolved
+  `MaterialIR`. Hot path → refactor must be behavior-preserving; verify with a real solve
+  before/after (identical torque/loss). Then the analytical path likewise.
 
 ### Phase C — ⭐ Configure as a module — M–L  (the portal centerpiece)
 Analytical-result contract (extend `ResultIR` / a passport IR) + `analytical.scale`
@@ -63,4 +72,5 @@ heavy solver + a job queue. When load / reliability demand it.
 
 ## Status
 - [x] A — closed as a non-gap (kernel summarizes heavy payloads by design; compute already a capability; verified 2026-06-23)
-- [ ] B materials module · [ ] C Configure module · [ ] D geometry-3d + mechanical · [ ] E workers/queue
+- [~] B materials module (B1 ✅ contract + capability + kernel-verified; B2 consumer refactor pending)
+- [ ] C Configure module · [ ] D geometry-3d + mechanical · [ ] E workers/queue

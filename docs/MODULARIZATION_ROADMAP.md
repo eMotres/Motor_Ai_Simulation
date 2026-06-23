@@ -22,11 +22,20 @@ kernel` → `verify: direct path == kernel path`.
 
 ## Phases (dependency + risk order)
 
-### Phase A — quick wins: route EXISTING modules through the kernel — S, low risk
-Modules already exist; no new contracts needed (like the transient already does).
-- **A1** — mesh build (`/api/simulation/mesh/build2d*`) → `mesh` capability (MeshIR).
-- **A2** — FEM field maps (`fem_field2d`→`solver.em_static`, `thermal_field2d`→`solver.thermal`) → kernel.
-- **A3** — optimization endpoints (scan/descent/DOE) → `optimization` capability via kernel.
+### Phase A — route existing modules through the kernel — ✅ CLOSED as a non-gap (2026-06-23)
+Investigated and found this is mostly NOT a real gap, and forcing it would be wrong:
+- The kernel HTTP layer (`routes/kernel.py:_serialize`) deliberately **summarizes MeshIR**
+  (keeps counts/tags, drops vertices/triangles) and is not a heavy-field transport. The
+  transient already runs through the kernel for its **scalars/series**, while the heavy
+  field **frames** stay on the direct route — by design.
+- **A1/A2** (mesh build, FEM field maps): the COMPUTE is already a capability
+  (`mesh`, `solver.em_static`/`solver.thermal`, used in studies). The direct routes are the
+  legitimate heavy-render/transport layer; routing them through the kernel would drop the
+  arrays the viewer needs. **Leave direct.**
+- **A3** (optimization): the per-eval solve already runs through the `em_transient` module
+  in a subprocess; the orchestration is a long streaming job (progress/cancel) unsuited to a
+  synchronous kernel call. **Already modular at the compute level.**
+→ Real modularization starts at Phase B.
 
 ### Phase B — Materials as a module + contract — M
 `MaterialIR` (library + per-region assignment) + `materials` capability; solvers and the
@@ -53,5 +62,5 @@ heavy solver + a job queue. When load / reliability demand it.
   so the order doesn't drift.
 
 ## Status
-- [ ] A1 mesh→kernel · [ ] A2 field-maps→kernel · [ ] A3 optimization→kernel
+- [x] A — closed as a non-gap (kernel summarizes heavy payloads by design; compute already a capability; verified 2026-06-23)
 - [ ] B materials module · [ ] C Configure module · [ ] D geometry-3d + mechanical · [ ] E workers/queue

@@ -2,6 +2,10 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import { onAuthStateChanged, signInWithPopup, signOut, type User } from 'firebase/auth';
 import { auth, googleProvider, firebaseEnabled } from '../lib/firebase';
 import { installFetchAuth, setTokenGetter } from '../lib/apiAuth';
+import {
+  loadActiveWorkspace, applyActiveWorkspace,
+  startActiveWorkspaceSync, stopActiveWorkspaceSync,
+} from '../lib/activeWorkspace';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 
@@ -56,7 +60,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       } catch { setTier('anon'); setIsAdmin(false); setEnforced(false); }
     };
     if (!firebaseEnabled || !auth) { setLoading(false); void loadRole(); return; }
-    return onAuthStateChanged(auth, (u) => { setUser(u); setLoading(false); void loadRole(); });
+    return onAuthStateChanged(auth, (u) => {
+      setUser(u); setLoading(false); void loadRole();
+      // P3 (multi-user): resume the signed-in user's OWN active design from
+      // Firestore, then auto-save edits. Signed out → stop syncing (anonymous
+      // visitors stay local-only on the shared sandbox). See docs/MULTI_USER_PLAN.md.
+      if (u) {
+        void (async () => {
+          try {
+            const ws = await loadActiveWorkspace(u.uid);
+            if (ws) await applyActiveWorkspace(ws);
+          } catch { /* non-fatal — local store stays the source of truth */ }
+          startActiveWorkspaceSync(u.uid);
+        })();
+      } else {
+        stopActiveWorkspaceSync();
+      }
+    });
   }, []);
 
   const signIn = async () => {

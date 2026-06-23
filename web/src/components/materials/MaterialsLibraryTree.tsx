@@ -149,14 +149,22 @@ const MaterialsLibraryTree: React.FC<Props> = ({ library, loading, error, select
                       }}
                     >
                       <Box sx={{ flex: 1, minWidth: 0 }}>
-                        <Typography sx={{
-                          fontSize: '0.72rem',
-                          color: isSelected ? '#e2e8f0' : '#94a3b8',
-                          fontWeight: isSelected ? 600 : 400,
-                          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-                        }}>
-                          {friendlyName(name)}
-                        </Typography>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0 }}>
+                          <Typography sx={{
+                            fontSize: '0.72rem',
+                            color: isSelected ? '#e2e8f0' : '#94a3b8',
+                            fontWeight: isSelected ? 600 : 400,
+                            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                          }}>
+                            {friendlyName(name)}
+                          </Typography>
+                          {data?._source === 'mine' && (
+                            <Chip label="mine" size="small" sx={{ height: 14, fontSize: '0.55rem', bgcolor: '#a78bfa22', color: '#a78bfa', flexShrink: 0, '& .MuiChip-label': { px: 0.5 } }} />
+                          )}
+                          {data?._source === 'global' && (
+                            <Chip label="shared" size="small" sx={{ height: 14, fontSize: '0.55rem', bgcolor: '#38bdf822', color: '#38bdf8', flexShrink: 0, '& .MuiChip-label': { px: 0.5 } }} />
+                          )}
+                        </Box>
                         <Typography sx={{ fontSize: '0.62rem', color: '#475569', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                           {subtitleFor(cat.key, data)}
                         </Typography>

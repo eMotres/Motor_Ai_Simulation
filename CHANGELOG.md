@@ -7,6 +7,8 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
 
 ## [Unreleased]
 
+## [0.1.1] — 2026-06-23
+
 ### Changed
 - **Rebrand → AeroStator Core** — a motor technology portal: header title, browser
   title/meta, motor-catalog copy (positioned for **aerospace, robotics, EV, marine**;

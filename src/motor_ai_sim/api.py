@@ -8,7 +8,7 @@ Usage:
 import re
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional
 
@@ -30,6 +30,8 @@ from motor_ai_sim.routes.modules import router as modules_router
 from motor_ai_sim.routes.kernel import router as kernel_router
 from motor_ai_sim.services.geometry_service import get_current_geometry, params_to_dict
 from motor_ai_sim import materials as mat_lib
+from motor_ai_sim import materials_store
+from motor_ai_sim.auth import require_admin
 
 app = FastAPI(
     title="Motor Geometry API",
@@ -266,7 +268,9 @@ def get_materials_library():
                 "sigma": m.sigma,
             }
 
-        return result
+        # Merge the admin-managed GLOBAL layer (Firestore) over the built-in
+        # library; each entry is tagged _source/_editable. Empty merge locally.
+        return materials_store.merge_library(result)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -296,6 +300,44 @@ def get_material_detail(category: str, name: str):
         return dataclasses.asdict(m)
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Global materials library (admin-managed shared layer) ─────────────────────
+
+class GlobalMaterial(BaseModel):
+    category: str
+    name: str
+    props: dict = {}
+
+
+@app.post("/api/materials/global")
+def upsert_global_material(body: GlobalMaterial, admin_user: dict = Depends(require_admin)):
+    """Create or update a material in the SHARED (global) library. Admin only.
+    Persisted to Firestore `materials_global`, merged over the built-in library."""
+    who = admin_user.get("email") or admin_user.get("uid") or "admin"
+    try:
+        return materials_store.upsert_global(body.category, body.name, body.props, who)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/materials/global/{category}/{name}")
+def delete_global_material(category: str, name: str, admin_user: dict = Depends(require_admin)):
+    """Delete a material from the shared library (admin only). Deleting a built-in
+    hides it (the bundled YAML can't be mutated at runtime)."""
+    who = admin_user.get("email") or admin_user.get("uid") or "admin"
+    try:
+        builtin_names = mat_lib.list_materials(category).get(category, [])
+    except Exception:
+        builtin_names = []
+    try:
+        return materials_store.delete_global(category, name, who, builtin_names=builtin_names)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

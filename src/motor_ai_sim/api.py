@@ -300,21 +300,36 @@ def get_material_detail(category: str, name: str):
 
 
 @app.get("/api/config")
-def get_full_config():
+def get_full_config(geo: Optional[str] = None):
     try:
         config = get_config()
         mesh_cfg = config.get("mesh", {})
         sim_cfg = config.get("simulation", {})
+        # Per-request geometry override (multi-user): merge the caller's ACTIVE
+        # geometry onto the global one so a signed-in user doesn't read the shared
+        # sandbox.  Absent/malformed → global config (back-compat).
+        geo_dict = params_to_dict(get_current_geometry())
+        _ov = None
+        if geo:
+            try:
+                import json as _json
+                _o = _json.loads(geo)
+                if isinstance(_o, dict) and _o:
+                    _ov = _o
+                    geo_dict = {**geo_dict, **_o}
+            except Exception:
+                pass
         # Geometry-derived end-winding factor k_end = (π·tooth_w/2 + L)/L,
-        # recomputed from the CURRENT geometry so the UI cell stays in sync.
+        # recomputed from the (possibly overridden) geometry so the UI cell stays in sync.
         try:
             from motor_ai_sim.simulation.geometry_2d import params_from_config as _pfc
             from motor_ai_sim.simulation.fem_solver_2d import end_winding_factor_geom as _ewf
-            _kend = round(float(_ewf(_pfc(), config.get("geometry", {}))), 3)
+            _kgeo = {**config.get("geometry", {}), **(_ov or {})}
+            _kend = round(float(_ewf(_pfc(geo_override=_ov), _kgeo)), 3)
         except Exception:
             _kend = 0.0
         return {
-            "geometry": params_to_dict(get_current_geometry()),
+            "geometry": geo_dict,
             "materials": get_material_assignments(),
             "mesh": {
                 "n_radial": mesh_cfg.get("n_radial", 10),

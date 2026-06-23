@@ -392,6 +392,7 @@ def get_physics(
     rotor_angle_deg: float = 0.0,
     gamma_deg:       float = 0.0,
     n_points:        int   = 360,
+    geo:             Optional[str] = None,
 ):
     """Return full analytical physics for the current operating point.
 
@@ -409,12 +410,15 @@ def get_physics(
         MotorDomains2D, params_from_config, build_winding_layout,
     )
 
+    _geo_ov = _parse_geo_override(geo)   # capture per-request override before `geo` is reassigned
     cfg = get_config()
     sim = cfg.get("simulation", {})
     geo = cfg.get("geometry", {})
+    if _geo_ov:
+        geo = {**geo, **_geo_ov}          # multi-user: derive from the caller's active design
     wind = cfg.get("winding", {})
 
-    p = params_from_config()
+    p = params_from_config(geo_override=_geo_ov)
     d = MotorDomains2D(p)
 
     # ── Operating point ───────────────────────────────────────────────────────
@@ -593,6 +597,7 @@ def get_field2d(
     rotor_angle_deg: float = 0.0,
     gamma_deg:       float = 0.0,
     grid_size:       int   = 150,
+    geo:             Optional[str] = None,
 ):
     """Compute 2-D analytical field map of the motor cross-section.
 
@@ -619,12 +624,15 @@ def get_field2d(
     )
     from motor_ai_sim.config import get_config
 
+    _geo_ov = _parse_geo_override(geo)   # capture before `geo` is reassigned (multi-user)
     cfg  = get_config()
     sim  = cfg.get("simulation", {})
     geo  = cfg.get("geometry",   {})
+    if _geo_ov:
+        geo = {**geo, **_geo_ov}
     wind = cfg.get("winding",    {})
 
-    p = params_from_config()
+    p = params_from_config(geo_override=_geo_ov)
     d = MotorDomains2D(p)
 
     mu0         = 4e-7 * math.pi
@@ -3103,6 +3111,7 @@ def get_torque_sweep(
     gamma_deg:  float = 0.0,   # 0° = pure q-axis (max torque)
     n_rotor:    int   = 60,   # rotor positions per electrical period
     n_ag:       int   = 720,  # points on air-gap integration circle
+    geo:        Optional[str] = None,
 ):
     """Compute T(θ) over one electrical period using Maxwell stress tensor.
 
@@ -3126,12 +3135,15 @@ def get_torque_sweep(
     )
     from motor_ai_sim.config import get_config
 
+    _geo_ov = _parse_geo_override(geo)   # capture before `geo` is reassigned (multi-user)
     cfg  = get_config()
     sim  = cfg.get("simulation", {})
     geo  = cfg.get("geometry",   {})
+    if _geo_ov:
+        geo = {**geo, **_geo_ov}
     wind = cfg.get("winding",    {})
 
-    p = params_from_config()
+    p = params_from_config(geo_override=_geo_ov)
     d = MotorDomains2D(p)
 
     mu0         = 4e-7 * math.pi
@@ -3561,6 +3573,7 @@ def _compute_masses(p, geo_cfg: dict) -> dict:
 def get_physics_sweep(
     gamma_deg: float = 0.0,
     n_points:  int   = 60,
+    geo:       Optional[str] = None,
 ):
     """Compute all losses at n_points rotor angles over one electrical period.
 
@@ -3579,12 +3592,15 @@ def get_physics_sweep(
         MotorDomains2D, params_from_config,
     )
 
+    _geo_ov = _parse_geo_override(geo)   # per-request override (multi-user)
     cfg   = get_config()
     sim   = cfg.get("simulation", {})
     geo_c = cfg.get("geometry", {})
+    if _geo_ov:
+        geo_c = {**geo_c, **_geo_ov}
     wind  = cfg.get("winding", {})
 
-    p = params_from_config()
+    p = params_from_config(geo_override=_geo_ov)
     d = MotorDomains2D(p)
 
     # ── Constants ─────────────────────────────────────────────────────────────

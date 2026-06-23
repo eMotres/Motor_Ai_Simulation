@@ -111,14 +111,19 @@ class MotorDomainParams:
     sigma_shaft:  float = 2.5e7    # Al6061 conductivity [S/m]
 
 
-def params_from_config(cfg_path: Path = _CFG_PATH) -> MotorDomainParams:
-    """Load MotorDomainParams from motor_config.yaml."""
+def params_from_config(cfg_path: Path = _CFG_PATH, geo_override=None) -> MotorDomainParams:
+    """Load MotorDomainParams from motor_config.yaml.
+
+    geo_override (multi-user): a partial/full geometry dict that takes precedence
+    over the file's geometry, so a request can derive params from a signed-in
+    user's ACTIVE design without mutating the shared global config.
+    """
     import yaml
 
     with cfg_path.open() as f:
         cfg = yaml.safe_load(f)
 
-    g   = cfg["geometry"]
+    g   = {**cfg["geometry"], **geo_override} if geo_override else cfg["geometry"]
     mm  = 1e-3
 
     r_so = g["stator_diameter"] / 2 * mm

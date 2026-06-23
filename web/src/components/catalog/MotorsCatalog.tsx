@@ -170,7 +170,7 @@ const MotorsCatalog: React.FC = () => {
         Motor Catalog
       </Typography>
       <Typography sx={{ color: '#94a3b8', mb: 3, fontSize: '0.9rem' }}>
-        Ready-made designs by stator diameter. Each card shows the geometry and headline performance — click <b>Load</b> to open one in the editor as your own editable copy.
+        Proven motor designs for <b>aerospace, robotics, EV and marine</b> drivetrains. Pick one, tune it to your spec (stack length, winding, wire), see the price, and request manufacturing — click <b>Load</b> to open one as your own editable copy.
       </Typography>
 
       {/* ── User's saved designs ──────────────────────────────────── */}

@@ -314,7 +314,10 @@ function App() {
           sx={{ backgroundColor: 'background.paper', borderBottom: '1px solid', borderColor: 'divider', flexShrink: 0 }}
         >
           <Toolbar variant="dense" sx={{ gap: 1 }}>
-            <Typography variant="h6" sx={{ mr: 1 }}>Motor AI Simulator</Typography>
+            <Typography variant="h6" sx={{ mr: 1, letterSpacing: 0.3 }}>
+              AeroStator{' '}
+              <Box component="span" sx={{ fontWeight: 300, opacity: 0.7 }}>Core</Box>
+            </Typography>
             <VersionBadge />
 
             {isLoading && <CircularProgress size={18} sx={{ mr: 1 }} />}

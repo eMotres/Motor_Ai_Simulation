@@ -20,7 +20,7 @@ export const VersionBadge: React.FC = () => {
   const tip = skew
     ? `Version mismatch — frontend v${chk?.frontend}, backend v${chk?.backend}. `
       + `Hard-reload (Ctrl+Shift+R) to get the matching frontend.`
-    : `Motor AI Simulator v${APP_VERSION} (${APP_GIT_SHA})`
+    : `AeroStator Core v${APP_VERSION} (${APP_GIT_SHA})`
       + (chk?.backend ? ` · backend v${chk.backend}` : '');
 
   return (

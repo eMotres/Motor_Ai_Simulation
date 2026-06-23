@@ -7,6 +7,12 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
 
 ## [Unreleased]
 
+### Changed
+- **Rebrand → AeroStator Core** — a motor technology portal: header title, browser
+  title/meta, motor-catalog copy (positioned for **aerospace, robotics, EV, marine**;
+  select → configure → price → request manufacturing), version-badge tooltip, and the
+  support assistant's identity. Internal package name (`motor_ai_sim`) unchanged.
+
 ## [0.1.0] — 2026-06-23
 First tracked release. Establishes app versioning + a coordinated release process
 (frontend + backend deployed together, version stamped into both, skew detected at runtime).

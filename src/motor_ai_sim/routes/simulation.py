@@ -17,11 +17,47 @@ import time
 import uuid
 from typing import Dict, Optional
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Depends, Query
 from pydantic import BaseModel, Field
 
 log = logging.getLogger(__name__)
-router = APIRouter(prefix="/api/simulation", tags=["simulation"])
+
+
+def _parse_mat_override(mat: Optional[str]) -> Optional[dict]:
+    """Parse a per-request `mat` JSON override -> {'assignment':{region:name},
+    'materials':{name:props}} or None if absent/malformed. Defensive: only the two
+    known keys, dict-typed; assignment values stringified."""
+    if not mat:
+        return None
+    import json
+    try:
+        ov = json.loads(mat)
+    except Exception:
+        return None
+    if not isinstance(ov, dict):
+        return None
+    out: dict = {}
+    a, m = ov.get("assignment"), ov.get("materials")
+    if isinstance(a, dict) and a:
+        out["assignment"] = {str(k): str(v) for k, v in a.items() if v}
+    if isinstance(m, dict) and m:
+        out["materials"] = {str(k): v for k, v in m.items() if isinstance(v, dict)}
+    return out or None
+
+
+async def _material_override_dep(mat: Optional[str] = Query(default=None)):
+    """Router-level (multi-user, Stage 2b): set THIS request's material override
+    from `mat` before the sync handler runs, so build_materials uses the signed-in
+    user's own materials. Per-task context → no cross-request leak; absent/malformed
+    clears it (None) so the solve falls back to the shared config exactly as before."""
+    from motor_ai_sim.material_context import set_request_materials
+    set_request_materials(_parse_mat_override(mat))
+
+
+router = APIRouter(
+    prefix="/api/simulation", tags=["simulation"],
+    dependencies=[Depends(_material_override_dep)],
+)
 
 # ── In-memory job store (replace with Redis/DB for production) ────────────────
 _jobs: Dict[str, Dict] = {}

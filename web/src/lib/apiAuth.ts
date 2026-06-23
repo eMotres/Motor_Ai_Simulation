@@ -25,6 +25,17 @@ export function setGeoGetter(fn: (() => string | null) | null): void {
   geoGetter = fn;
 }
 
+// ── Per-request material override (multi-user, Stage 2b) ────────────────────
+// Sends the signed-in user's assignment + the props of any non-built-in material
+// in use, as `mat=` on simulation PHYSICS requests, so the FEM solve uses the
+// user's own materials. No-op when only built-ins are assigned (getter → null).
+let matGetter: (() => string | null) | null = null;
+
+/** A component keeps this pointed at the resolved material-override JSON (or null). */
+export function setMatGetter(fn: (() => string | null) | null): void {
+  matGetter = fn;
+}
+
 // Endpoints whose result depends on the cross-section geometry. Covers the
 // geometry meshes, ALL analytical + FEM physics endpoints (physics, physics/
 // field2d|torque_sweep|sweep|fem_*|thermal_field2d — each accepts ?geo=), and
@@ -64,6 +75,22 @@ export function installFetchAuth(): void {
         if (geo) {
           const newUrl = url + (url.includes('?') ? '&' : '?') + 'geo=' + encodeURIComponent(geo);
           input = input instanceof Request ? new Request(newUrl, input) : newUrl;
+        }
+      }
+      // Stage 2b: material override on simulation physics requests. Recompute the
+      // URL from the current input (it may have been rewritten by the geo block).
+      if (matGetter) {
+        const cur =
+          typeof input === 'string' ? input
+          : input instanceof URL ? input.href
+          : input instanceof Request ? input.url
+          : String(input);
+        if (cur.startsWith(API) && /\/api\/simulation\/physics/.test(cur) && !/[?&]mat=/.test(cur)) {
+          const mat = matGetter();
+          if (mat) {
+            const newUrl = cur + (cur.includes('?') ? '&' : '?') + 'mat=' + encodeURIComponent(mat);
+            input = input instanceof Request ? new Request(newUrl, input) : newUrl;
+          }
         }
       }
     } catch {

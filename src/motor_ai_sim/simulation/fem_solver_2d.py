@@ -2952,12 +2952,38 @@ def build_materials(
     except Exception:
         assignments = {}
 
+    # ── Per-request material override (multi-user, Stage 2b) ─────────────
+    # The signed-in user's own assignment + resolved props (mine / global),
+    # sent with the request. The override WINS over the shared config; when
+    # absent, everything below behaves EXACTLY as before (built-in / global
+    # via mat_lib, which already resolves the admin global layer itself).
+    try:
+        from motor_ai_sim.material_context import get_request_materials
+        _ov = get_request_materials() or {}
+    except Exception:
+        _ov = {}
+    _ov_assign = _ov.get("assignment") or {}
+    _ov_mats = _ov.get("materials") or {}
+    if _ov_assign:
+        assignments = {**assignments, **{k: v for k, v in _ov_assign.items() if v}}
+
+    def _resolve_mat(category: str, name: str):
+        """Material dataclass: per-request override props first, else the library."""
+        from motor_ai_sim import materials as _ml
+        if name and name in _ov_mats:
+            try:
+                cat = (_ov_mats[name] or {}).get("category") or category
+                return _ml.material_from_dict(cat, name, _ov_mats[name])
+            except Exception:
+                pass
+        return _ml.get_material(category, name)
+
     def _bh_for(part_key: str, category: str = "steel"):
         name = assignments.get(part_key)
         if not name:
             return None
         try:
-            m = mat_lib.get_material(category, name)
+            m = _resolve_mat(category, name)
             bh = getattr(m, "bh_curve", None)
             if bh and len(bh) >= 2:
                 return [(float(h), float(b)) for (h, b) in bh]
@@ -2975,6 +3001,13 @@ def build_materials(
         name = assignments.get(part_key)
         if not name:
             return default
+        if name in _ov_mats:                     # per-request override (known category)
+            try:
+                cat = (_ov_mats[name] or {}).get("category") or "steel"
+                mu = getattr(_resolve_mat(cat, name), "mu_r", None)
+                return float(mu) if (mu is not None and float(mu) > 1.0) else 1.0
+            except Exception:
+                return default
         for cat in ("steel", "metal", "conductor", "magnet", "other", "custom"):
             try:
                 m = mat_lib.get_material(cat, name)
@@ -3003,7 +3036,7 @@ def build_materials(
     bh_magnet: Optional[List[Tuple[float, float]]] = None
     if mag_name:
         try:
-            mat_mag = mat_lib.get_material("magnet", mag_name)
+            mat_mag = _resolve_mat("magnet", mag_name)
             Br      = float(getattr(mat_mag, "Br",     Br))
             mu_rec  = float(getattr(mat_mag, "mu_rec", 1.05))
             M_mag   = Br / MU0

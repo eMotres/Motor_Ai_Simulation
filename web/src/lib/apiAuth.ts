@@ -25,9 +25,12 @@ export function setGeoGetter(fn: (() => string | null) | null): void {
   geoGetter = fn;
 }
 
-// Endpoints whose result depends on the cross-section geometry.
+// Endpoints whose result depends on the cross-section geometry. Covers the
+// geometry meshes, ALL analytical + FEM physics endpoints (physics, physics/
+// field2d|torque_sweep|sweep|fem_*|thermal_field2d — each accepts ?geo=), and
+// the FEM mesh build. Endpoints that don't declare `geo` simply ignore it.
 const COMPUTE_RE =
-  /\/api\/(geometry\/mesh(2d|_extruded)?|simulation\/(physics\/(fem_transient|fem_field2d|fem_eddy_field2d)|mesh\/build2d(_sliding_band)?))(\?|$)/;
+  /\/api\/(geometry\/mesh(2d|_extruded)?|simulation\/(physics(\/[a-z0-9_]+)?|mesh\/build2d(_sliding_band)?))(\?|$)/;
 
 export function installFetchAuth(): void {
   const w = window as unknown as { __fetchAuthInstalled?: boolean };

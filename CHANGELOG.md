@@ -7,7 +7,18 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
 
 ## [Unreleased]
 
+## [0.1.2] — 2026-06-23
+
 ### Added
+- **Materials management — shared admin library + per-user "My Materials":** the
+  materials library is now built-in **+** an admin-managed **global** layer
+  (Firestore `materials_global`) **+** each signed-in user's personal **mine** layer
+  (`users/{uid}/materials`). Admins add / edit / delete shared materials; any user
+  copies a material to their own library and edits its properties. Custom materials
+  **resolve in the FEM solve** — global server-side, mine/global via a stateless
+  per-request override — and material assignments persist per-user.
+- **Insulation is assignable:** selecting the slot liner / wire enamel in the
+  component tree now opens the material bar (insulator + coolant categories added).
 - **Configure → Thermal (analytical estimate):** steady-state winding / magnet / housing
   temperatures computed from the configured losses + the **same cooling inputs as
   Simulation** (air / water / glycol / oil, ambient, speed/flow, live h). Lumped
@@ -15,9 +26,9 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
   (~150 °C) limit is exceeded.
 
 ### Changed
-- **Access control:** the Motors catalog stays open to everyone, but **Configure +
-  the engineering tabs now require sign-in**. Anonymous visitors browse motors only;
-  "Load" prompts Google sign-in (previously anon could open Configure and work).
+- **Access control:** the Motors catalog stays open to everyone, but **Configure,
+  Materials + the engineering tabs now require sign-in**. Anonymous visitors browse
+  motors only; "Load" prompts Google sign-in (previously anon could open Configure and work).
 - Catalog: first diameter bucket **5 mm → 12 mm**.
 
 ### Removed

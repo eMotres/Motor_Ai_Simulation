@@ -7,6 +7,30 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
 
 ## [Unreleased]
 
+## [0.1.3] — 2026-06-24
+
+### Added
+- **Optimization chart — pick and apply any design:** an on-chart "ripple <= X%"
+  slider trims high-pulsation points without re-running; click a scatter point to
+  select it and **Apply** loads that exact geometry + operating point (not just the
+  auto-best). Objective-space axes now auto-fit to the extreme torque-density (X)
+  and efficiency (Y) of the displayed points, re-fitting live as the slider hides/
+  shows points.
+
+### Fixed
+- **Optimize efficiency now matches Simulation:** the descent evaluation left out
+  rotor (magnet) eddy losses and the end-winding factor, so Optimize reported a
+  higher efficiency than Simulation for the same design; both are now forwarded
+  (single source = Simulation).
+- **|B| field view matches the Ansys scale** — discrete blue->red bands in mTesla
+  over the real field range, instead of a continuous jet clipped at 1.8 T that
+  amplified per-element saturation noise.
+- **Eddy-current (J) field view shows the whole motor** — the route forced an
+  illegal 4-sector wedge for the 12-slot/14-pole motor and rendered only 3 of 12
+  coils; it now honours the full disk like the main Simulation.
+- **Materials tab crash** (an undefined reference), plus a per-tab error boundary
+  so one failing tab no longer blanks the whole app.
+
 ## [0.1.2] — 2026-06-23
 
 ### Added

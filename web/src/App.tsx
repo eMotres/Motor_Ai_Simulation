@@ -44,6 +44,7 @@ import SaveToMotorButton from './components/common/SaveToMotorButton';
 import SweepConfigPanel from './components/sweep/SweepConfigPanel';
 import MaterialsLibraryTree from './components/materials/MaterialsLibraryTree';
 import MaterialDetailView from './components/materials/MaterialDetailView';
+import ErrorBoundary from './components/ErrorBoundary';
 import { useMaterialsLibrary } from './components/materials/useMaterialsLibrary';
 import type { SelectedMaterial, MaterialCategory } from './components/materials/useMaterialsLibrary';
 import { saveGlobal, blankMaterial, type Cat } from './lib/materialsActions';
@@ -430,9 +431,9 @@ function App() {
           {tabs.map((t) => (
             t.keepMounted ? (
               <Box key={t.id} sx={{ height: '100%', display: activeTab === t.id ? 'block' : 'none' }}>
-                {t.render()}
+                <ErrorBoundary label={t.label}>{t.render()}</ErrorBoundary>
               </Box>
-            ) : (activeTab === t.id ? <React.Fragment key={t.id}>{t.render()}</React.Fragment> : null)
+            ) : (activeTab === t.id ? <ErrorBoundary key={t.id} label={t.label}>{t.render()}</ErrorBoundary> : null)
           ))}
         </Box>
       </Box>

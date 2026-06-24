@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import {
   Box, Typography, CircularProgress, Collapse,
   List, ListItemButton, ListItemText, ListItemIcon,
-  Chip, IconButton, Tooltip,
+  Chip, Tooltip,
 } from '@mui/material';
 import {
   ExpandMore as ExpandMoreIcon,
@@ -52,7 +52,7 @@ interface Props {
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-const MaterialsLibraryTree: React.FC<Props> = ({ library, loading, error, selected, onSelect }) => {
+const MaterialsLibraryTree: React.FC<Props> = ({ library, loading, error, selected, onSelect, canAdd, onAdd }) => {
   const [open, setOpen] = useState<Record<MaterialCategory, boolean>>({
     steel: true, magnet: true, conductor: true, insulator: true, coolant: true,
   });
@@ -127,13 +127,16 @@ const MaterialsLibraryTree: React.FC<Props> = ({ library, loading, error, select
               </Typography>
               {canAdd && onAdd && (
                 <Tooltip title={`Add a new ${cat.label} material (shared library)`}>
-                  <IconButton
-                    size="small"
+                  <Box
+                    component="span"
+                    role="button"
+                    aria-label={`add ${cat.label} material`}
                     onClick={(e) => { e.stopPropagation(); onAdd(cat.key); }}
-                    sx={{ p: 0.25, mr: 0.25, color: '#475569', '&:hover': { color: cat.color } }}
+                    sx={{ display: 'inline-flex', alignItems: 'center', p: 0.25, mr: 0.25,
+                          cursor: 'pointer', color: '#475569', '&:hover': { color: cat.color } }}
                   >
                     <AddIcon sx={{ fontSize: 14 }} />
-                  </IconButton>
+                  </Box>
                 </Tooltip>
               )}
               {isOpen ? <ExpandLessIcon sx={{ fontSize: 14, color: '#475569' }} /> : <ExpandMoreIcon sx={{ fontSize: 14, color: '#475569' }} />}
@@ -144,7 +147,7 @@ const MaterialsLibraryTree: React.FC<Props> = ({ library, loading, error, select
               <List dense disablePadding sx={{ ml: 2, mb: 1 }}>
                 {items.map(name => {
                   const isSelected = selected?.category === cat.key && selected?.name === name;
-                  const data = (library[cat.key] as any)[name];
+                  const data = (library[cat.key] as any)?.[name] ?? {};
 
                   return (
                     <ListItemButton
@@ -197,30 +200,18 @@ const MaterialsLibraryTree: React.FC<Props> = ({ library, loading, error, select
 };
 
 function subtitleFor(category: MaterialCategory, data: any): string {
-  if (category === 'steel') {
-    const kf = data.stacking_factor ?? '?';
-    const kh = data.core_loss_kh?.toFixed(1) ?? '?';
-    return `kf=${kf}  kh=${kh}`;
-  }
-  if (category === 'magnet') {
-    const Br = data.Br?.toFixed(2) ?? '?';
-    const Hc = data.Hc ? `${(data.Hc / 1000).toFixed(0)} kA/m` : '?';
-    return `Br=${Br} T  Hc=${Hc}`;
-  }
-  if (category === 'conductor') {
-    const s = data.sigma ? `${(data.sigma / 1e6).toFixed(1)} MS/m` : '?';
-    return `σ=${s}`;
-  }
-  if (category === 'insulator') {
-    const k = data.thermal_conductivity != null ? `${data.thermal_conductivity}` : '?';
-    const cp = data.specific_heat != null ? `${data.specific_heat}` : '?';
-    return `k=${k} W/m·K  cp=${cp}`;
-  }
-  if (category === 'coolant') {
-    const k = data.thermal_conductivity != null ? `${data.thermal_conductivity}` : '?';
-    const cp = data.specific_heat != null ? `${data.specific_heat}` : '?';
-    return `${data.phase ?? ''} · k=${k}  cp=${cp}`;
-  }
+  if (!data) return '';
+  const num = (v: any, d = 1) => (typeof v === 'number' && isFinite(v) ? v.toFixed(d) : '?');
+  if (category === 'steel')
+    return `kf=${data.stacking_factor ?? '?'}  kh=${num(data.core_loss_kh)}`;
+  if (category === 'magnet')
+    return `Br=${num(data.Br, 2)} T  Hc=${typeof data.Hc === 'number' ? `${(data.Hc / 1000).toFixed(0)} kA/m` : '?'}`;
+  if (category === 'conductor')
+    return `σ=${typeof data.sigma === 'number' && data.sigma ? `${(data.sigma / 1e6).toFixed(1)} MS/m` : '?'}`;
+  if (category === 'insulator')
+    return `k=${data.thermal_conductivity ?? '?'} W/m·K  cp=${data.specific_heat ?? '?'}`;
+  if (category === 'coolant')
+    return `${data.phase ?? ''} · k=${data.thermal_conductivity ?? '?'}  cp=${data.specific_heat ?? '?'}`;
   return '';
 }
 

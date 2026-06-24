@@ -1613,7 +1613,7 @@ def get_fem_eddy_field2d(
             gamma_deg=float(gamma_deg), I_phase_rms=float(I_phase_rms),
             mesh_size_mm=float(mesh_size_mm), min_size_mm=float(min_size_mm),
             outer_air_factor=float(outer_air_factor),
-            n_sectors=int(n_sectors) if int(n_sectors) > 1 else 4,
+            n_sectors=int(n_sectors) if int(n_sectors) > 1 else -1,
             coil_temp_c=float(coil_temp_c), eddy=True, rotor_eddy=True,
             return_field=True,
             component_mesh_mm=_comp_mesh,
@@ -1647,7 +1647,7 @@ def get_fem_eddy_field2d(
     def _mean(kk):
         s = d.get(kk) or [0.0]
         return float(_np.mean(_np.asarray(s, float))) if len(s) else 0.0
-    nsec = int(n_sectors) if int(n_sectors) > 1 else 4
+    nsec = int(n_sectors) if int(n_sectors) > 1 else 1
     Pcu = float(d.get("P_cu_total_solve_W", 0.0))    # eddy-solve copper (DC+AC)
     Pfe = _mean("P_fe_W"); Pmag = _mean("P_mag_eddy_W")
     Tavg = float(d.get("T_avg_Nm", 0.0)); rpm = float(d.get("rpm", 0.0))

@@ -747,7 +747,7 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
       outer_air_factor:  String(readMeshSetting('outerAir',    1.3)),
       motion_band:       String(readMeshSetting('motionBand',  true)),
       band_thickness_mm: String(readMeshSetting('bandThickness', 0.4)),
-      n_sectors:         String(readMeshSetting('nSectors',    4)),
+      n_sectors:         String(readMeshSetting('nSectors',    1)),
       stator_fillet_mm:  '0',   // native geometry — extra smoothing removed
       component_mesh:    comp,
       // The field view now runs the sliding-band solver for one frame; pass the
@@ -803,7 +803,7 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
       mesh_size_mm:     String(readMeshSetting('meshSize', 4.0)),
       min_size_mm:      String(readMeshSetting('minSize',  0.3)),
       outer_air_factor: String(readMeshSetting('outerAir', 1.3)),
-      n_sectors:        String(readMeshSetting('nSectors', 4)),
+      n_sectors:        String(readMeshSetting('nSectors', 1)),
       component_mesh:   comp,
       pole_copy:        String(readMeshSetting('poleCopy', false)),
     }).toString();
@@ -842,7 +842,7 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
       mesh_size_mm:     String(readMeshSetting('meshSize', 4.0)),
       min_size_mm:      String(readMeshSetting('minSize',  0.3)),
       outer_air_factor: String(readMeshSetting('outerAir', 1.3)),
-      n_sectors:        String(readMeshSetting('nSectors', 4)),
+      n_sectors:        String(readMeshSetting('nSectors', 1)),
       component_mesh:   comp,
     }).toString();
     fetch(`${API}/api/simulation/physics/thermal_field2d?${qs}`)

@@ -7,6 +7,8 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
 
 ## [Unreleased]
 
+## [0.1.4] — 2026-06-24
+
 ### Changed
 - **Optimization is now 2-criteria (efficiency × torque/mass); ripple is a visual
   filter, not a constraint.** Removed the pre-run "Torque ripple constraint" slider

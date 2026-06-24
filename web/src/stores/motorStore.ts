@@ -105,6 +105,7 @@ interface MotorState {
                        maxRounds?: number; surrogateSeed?: boolean }) => Promise<void>;
   cancelDescent: () => Promise<void>;
   applyDescentBest: () => Promise<void>;
+  applyDescentPoint: (pt: any) => Promise<void>;   // apply a USER-PICKED scatter point
   loadLastDescent: () => Promise<void>;   // re-hydrate the last run's charts from the backend
 
   /** Hydrate sweepConfig from the backend so the selected variables follow the
@@ -633,6 +634,12 @@ export const useMotorStore = create<MotorState>()(
         try { min_size_mm  = Number(JSON.parse(localStorage.getItem('mesh.minSize')  ?? '0.3')) || 0.3; } catch { /* default */ }
         try { pole_copy    = JSON.parse(localStorage.getItem('mesh.poleCopy') ?? 'false') === true; } catch { /* default */ }
         try { torque_filter = JSON.parse(localStorage.getItem('sim.torqueFilter') ?? 'true') !== false; } catch { /* default */ }
+        // Loss model — SINGLE SOURCE: Simulation, so Optimize's efficiency matches the
+        // Simulation tab (same keys Sweep reads). Without these the eval drops the
+        // field magnet/shaft eddy + end-winding copper → η reads several points high.
+        let rotor_eddy = true, end_winding_factor = 0;
+        try { rotor_eddy = JSON.parse(localStorage.getItem('sim.fieldLosses') ?? 'true') !== false; } catch { /* default true */ }
+        try { end_winding_factor = Number(JSON.parse(localStorage.getItem('sim.endWinding') ?? '0')) || 0; } catch { /* default 0 */ }
 
         set({ descentRunning: true, descentError: null, descentState: null });
         try {
@@ -644,6 +651,7 @@ export const useMotorStore = create<MotorState>()(
               ripple_max_pct: rippleMax, w_eff: wEff, w_td: wTd,
               max_iters: maxIters, steps_per_period: steps,
               mesh_size_mm, min_size_mm, pole_copy, torque_filter,
+              rotor_eddy, end_winding_factor,
               algorithm, n_sectors: nSectors,
               target_torque_nm: targetTorque ?? 0,
               v_peak_limit: vPeakLimit ?? 1e9,
@@ -703,6 +711,33 @@ export const useMotorStore = create<MotorState>()(
         try {
           window.dispatchEvent(new CustomEvent('sim-operating-point', { detail: { current: I, gamma: g } }));
         } catch { /* SSR/no-window */ }
+      },
+      // Apply a USER-PICKED scatter point (click-to-select on the descent chart) —
+      // same geometry + operating-point write as applyDescentBest, but for an
+      // arbitrary evaluated design instead of the optimiser's auto-best.
+      applyDescentPoint: async (pt: any) => {
+        const overrides = pt?.overrides;
+        if (!overrides || !Object.keys(overrides).length) return;
+        if (get().connectedToApi) await get().updateGeometryViaApi(overrides);
+        else get().updateGeometry(overrides);
+        const I = (typeof pt?.current_a === 'number') ? pt.current_a : undefined;
+        const g = (typeof pt?.gamma_deg === 'number') ? pt.gamma_deg : undefined;
+        if (I !== undefined || g !== undefined) {
+          if (get().connectedToApi) {
+            try {
+              await fetch(`${API_BASE_URL}/api/simulation/config`, {
+                method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  ...(I !== undefined ? { max_current: I } : {}),
+                  ...(g !== undefined ? { phase_offset_deg: g } : {}),
+                }),
+              });
+            } catch { /* non-fatal */ }
+          }
+          try {
+            window.dispatchEvent(new CustomEvent('sim-operating-point', { detail: { current: I, gamma: g } }));
+          } catch { /* SSR/no-window */ }
+        }
       },
       loadLastDescent: async () => {
         // The backend keeps the last descent in memory — re-hydrate it so the

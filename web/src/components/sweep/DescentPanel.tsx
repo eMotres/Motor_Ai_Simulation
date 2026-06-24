@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   Box, Typography, Button, TextField, Tooltip, Divider, Chip,
   CircularProgress, LinearProgress, Table, TableBody, TableCell, TableHead, TableRow,
-  ToggleButton, ToggleButtonGroup,
+  ToggleButton, ToggleButtonGroup, Slider,
 } from '@mui/material';
 import TrendingDownIcon from '@mui/icons-material/TrendingDown';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
@@ -79,7 +79,7 @@ const DescentPanel: React.FC = () => {
   const {
     sweepConfig, connectedToApi, parameterSchema, materials,
     descentRunning, descentState, descentError,
-    runDescent, cancelDescent, applyDescentBest, loadLastDescent,
+    runDescent, cancelDescent, applyDescentBest, applyDescentPoint, loadLastDescent,
     updateSweepConstraints, lastOptSnapshot, setLastOptSnapshot,
   } = useMotorStore();
 
@@ -98,6 +98,13 @@ const DescentPanel: React.FC = () => {
   // shown on demand after a run when two candidates are too close to call.
   const [showLoadLines, setShowLoadLines] = useState(false);
   const [view3d, setView3d] = useState(false);   // 2-D ScatterChart vs 3-D (ripple on z)
+  // On-chart ripple cut: post-hoc DISPLAY filter (null = show all). Independent of
+  // the search constraint (rippleMax, which steers the optimizer) — drag to visually
+  // trim high-ripple points off the chart without re-running.
+  const [displayCut, setDisplayCut] = useState<number | null>(null);
+  // User-picked scatter point (click-to-select) — when set, "Apply" applies THIS
+  // design instead of the optimiser's auto-best.
+  const [selectedPt, setSelectedPt] = useState<any | null>(null);
   // Objective-chart Y (efficiency) scaling: Auto re-fits to the meaningful designs
   // as the run progresses; Manual fixes a range (the low infeasible points are not
   // informative, so cut them).
@@ -280,9 +287,20 @@ const DescentPanel: React.FC = () => {
   // Every evaluated design is a point, split by the ripple constraint; the
   // accepted iterates form the descent trajectory.
   const points: any[] = st.points || [];
-  const toXY = (p: any) => ({ td: p.td, eff: (p.eff ?? 0) * 100, ripple: p.ripple, z: 1 });
-  const feasiblePts   = points.filter((p) => p.td != null && p.ripple != null && p.ripple <= rippleMax).map(toXY);
-  const infeasiblePts = points.filter((p) => p.td != null && p.ripple != null && p.ripple >  rippleMax).map(toXY);
+  // On-chart ripple cut (display only): hide points with ripple > effCut. The
+  // feasible/infeasible colouring still uses the SEARCH rippleMax; effCut defaults
+  // to the data max (show all) and the chart slider drags it down to trim visually.
+  const _dataMaxRipple = points.reduce((m: number, p: any) => Math.max(m, p.ripple ?? 0), 0);
+  const sliderMax = Math.max(Math.ceil(Math.max(_dataMaxRipple, rippleMax, 10)), 10);
+  const effCut = displayCut ?? sliderMax;
+  const toXY = (p: any) => ({ td: p.td, eff: (p.eff ?? 0) * 100, ripple: p.ripple, z: 1,
+                              overrides: p.overrides, current_a: p.current_a, gamma_deg: p.gamma_deg });
+  const feasiblePts   = points.filter((p) => p.td != null && p.ripple != null && p.ripple <= rippleMax && p.ripple <= effCut).map(toXY);
+  const infeasiblePts = points.filter((p) => p.td != null && p.ripple != null && p.ripple >  rippleMax && p.ripple <= effCut).map(toXY);
+  // Unfiltered count — gates the scatter section so the on-chart ripple slider
+  // stays mounted even when the cut hides most points (else dragging down would
+  // unmount the slider itself).
+  const totalValidPts = points.filter((p: any) => p.td != null && p.ripple != null).length;
   const trajPts = history
     .filter((h: any) => h.torque_per_mass != null)
     .map((h: any) => ({ td: h.torque_per_mass, eff: (h.efficiency ?? 0) * 100, ripple: h.T_ripple_pct, iter: h.iter, z: 2 }));
@@ -292,17 +310,25 @@ const DescentPanel: React.FC = () => {
   // Y (efficiency) axis domain: Manual = fixed [yMin, yMax]; Auto = fit to the
   // MEANINGFUL designs (descent path + best + feasible), padded — re-zooms as the
   // run progresses and drops the uninformative low points (clipped via allowDataOverflow).
-  const yDomain: [number | string, number | string] = (() => {
-    if (yMode === 'manual') return [yMin, yMax];
-    const es = [...feasiblePts, ...trajPts, ...bestPt]
-      .map((p: any) => p.eff).filter((e: any) => Number.isFinite(e));
-    if (!es.length) return ['auto', 'auto'];
-    const hi = Math.max(...es);
-    // Cap the downward extent ~6% below the best so the uninformative low designs
-    // (failed / low-η trials) fall off the bottom; tightens further when data is tight.
-    const lo = Math.max(Math.min(...es), hi - 6);
-    return [Math.floor(lo - 0.5), Math.ceil(hi + 0.5)];
-  })();
+  // Auto-fit BOTH axes to the bounding box of the DISPLAYED points (the ripple-cut
+  // slider decides which are shown): scale to the extreme X (Nm/kg) and Y (η) so
+  // every visible point fits with a little margin — nothing clipped, and it re-fits
+  // live as the ripple slider hides/shows points.
+  const _objShown = [...feasiblePts, ...infeasiblePts, ...trajPts, ...bestPt];
+  const _fitDomain = (vals: number[], padFrac: number, padMin: number, clampLo?: number):
+      [number | string, number | string] => {
+    const v = vals.filter((x) => Number.isFinite(x));
+    if (!v.length) return ['auto', 'auto'];
+    const lo = Math.min(...v), hi = Math.max(...v);
+    const pad = Math.max(padMin, (hi - lo) * padFrac);
+    let dlo = lo - pad;
+    if (clampLo !== undefined) dlo = Math.max(clampLo, dlo);
+    return [+dlo.toFixed(2), +(hi + pad).toFixed(2)];
+  };
+  const yDomain: [number | string, number | string] =
+    yMode === 'manual' ? [yMin, yMax] : _fitDomain(_objShown.map((p: any) => p.eff), 0.06, 0.3);
+  const xDomain: [number | string, number | string] =
+    _fitDomain(_objShown.map((p: any) => p.td), 0.06, 0.05, 0);
 
   // Box-walking now runs SERVER-SIDE: with Auto-walk on we hand the backend
   // auto_expand + maxRounds and it re-centers the window + re-runs round after round
@@ -616,7 +642,7 @@ const DescentPanel: React.FC = () => {
       )}
 
       {/* 2-D objective-space projection: efficiency (Y) vs torque/mass (X) */}
-      {(feasiblePts.length + infeasiblePts.length) > 1 && (
+      {totalValidPts > 1 && (
         <Box sx={{ mb: 2 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, mb: 0.5, flexWrap: 'wrap' }}>
             <Typography variant="caption" color="text.secondary">
@@ -671,16 +697,36 @@ const DescentPanel: React.FC = () => {
               ))}
             </Box>
           )}
+          {/* On-chart ripple cut — drag to visually trim high-ripple points off the
+              chart (display only; does NOT change the search constraint above). */}
+          {points.length > 0 && (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 1, mb: 0.5 }}>
+              <Tooltip title="Visually trim points by ripple — filters the chart only, does NOT change the search constraint that steers the optimizer. Slide left to drop high-ripple designs; full right shows every evaluated point." placement="top">
+                <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: 'nowrap', cursor: 'help' }}>
+                  Show ripple ≤ <strong>{effCut.toFixed(1)}%</strong>
+                </Typography>
+              </Tooltip>
+              <Slider size="small" min={0} max={sliderMax} step={0.1} value={effCut}
+                onChange={(_, v) => setDisplayCut(v as number)} sx={{ maxWidth: 320, flex: 1 }} />
+              <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>
+                {feasiblePts.length + infeasiblePts.length}/{points.length} shown
+              </Typography>
+              {displayCut != null && (
+                <Button size="small" sx={{ minWidth: 0, px: 0.75, fontSize: 10 }}
+                  onClick={() => setDisplayCut(null)}>all</Button>
+              )}
+            </Box>
+          )}
           <Box sx={{ height: 460, width: '100%' }}>
             {view3d ? (
-              <Scatter3D points={points} rippleMax={rippleMax}
+              <Scatter3D points={points.filter((p: any) => p.ripple == null || p.ripple <= effCut)} rippleMax={rippleMax}
                 best={best && best.torque_per_mass != null
                   ? { td: best.torque_per_mass, eff: best.efficiency, ripple: best.T_ripple_pct } : null} />
             ) : (
             <ResponsiveContainer width="100%" height="100%">
               <ScatterChart margin={{ top: 8, right: 24, left: 8, bottom: 18 }}>
                 <CartesianGrid strokeDasharray="3 3" opacity={0.15} />
-                <XAxis type="number" dataKey="td" name="Nm/kg" domain={['auto', 'auto']} tick={{ fontSize: 10 }}
+                <XAxis type="number" dataKey="td" name="Nm/kg" domain={xDomain} allowDataOverflow tick={{ fontSize: 10 }}
                   label={{ value: 'Torque / mass  (Nm/kg)', position: 'insideBottom', offset: -10, fontSize: 11 }} />
                 <YAxis type="number" dataKey="eff" name="Eff %" domain={yDomain} allowDataOverflow tick={{ fontSize: 10 }} width={48}
                   label={{ value: 'Efficiency %', angle: -90, position: 'insideLeft', fontSize: 11 }} />
@@ -705,11 +751,17 @@ const DescentPanel: React.FC = () => {
                       </div>
                     );
                   }} />
-                <Scatter name="ripple>limit" data={infeasiblePts} fill="#ef4444" fillOpacity={0.35} isAnimationActive={false} />
-                <Scatter name="feasible" data={feasiblePts} fill="#22c55e" fillOpacity={0.55} isAnimationActive={false} />
+                <Scatter name="ripple>limit" data={infeasiblePts} fill="#ef4444" fillOpacity={0.35} isAnimationActive={false}
+                  cursor="pointer" onClick={(d: any) => d && setSelectedPt(d.payload ?? d)} />
+                <Scatter name="feasible" data={feasiblePts} fill="#22c55e" fillOpacity={0.55} isAnimationActive={false}
+                  cursor="pointer" onClick={(d: any) => d && setSelectedPt(d.payload ?? d)} />
                 <Scatter name="descent path" data={trajPts} fill="#3b82f6"
                   line={{ stroke: '#3b82f6', strokeWidth: 1.5 }} lineType="joint" isAnimationActive={false} />
                 <Scatter name="★ best" data={bestPt} fill="#fbbf24" shape="star" isAnimationActive={false} />
+                {selectedPt && selectedPt.td != null && (
+                  <Scatter name="● picked" data={[{ td: selectedPt.td, eff: selectedPt.eff, z: 9 }]}
+                    fill="none" stroke="#e879f9" strokeWidth={2} shape="circle" isAnimationActive={false} />
+                )}
                 {showLoadLines && loadLineDesigns.map(([name, arr], i) => (
                   <Scatter key={'ll-' + name} name={name}
                     data={arr.map((p: any) => ({ td: p.td, eff: p.eff, z: 1, I: p.I }))}
@@ -789,16 +841,33 @@ const DescentPanel: React.FC = () => {
         </Box>
       )}
 
-      {/* Apply best */}
+      {/* Apply — the optimiser's best, OR a user-picked scatter point if one is
+          clicked. Click any point on the objective-space chart to pick it. */}
       {best && !descentRunning && (
-        <Button
-          variant="outlined" color="success" size="small"
-          startIcon={applied ? <CheckCircleIcon /> : <PlayArrowIcon />}
-          disabled={applied}
-          onClick={async () => { await applyDescentBest(); setApplied(true); }}
-        >
-          {applied ? 'Applied to geometry' : 'Apply best to geometry'}
-        </Button>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+          {selectedPt && selectedPt.overrides ? (
+            <>
+              <Button variant="outlined" color="secondary" size="small" startIcon={<PlayArrowIcon />}
+                onClick={async () => { await applyDescentPoint(selectedPt); setApplied(true); }}>
+                Apply picked point to geometry
+              </Button>
+              <Typography variant="caption" sx={{ color: '#e879f9' }}>
+                ● η {selectedPt.eff != null ? Number(selectedPt.eff).toFixed(2) : '—'}% ·{' '}
+                {selectedPt.td != null ? Number(selectedPt.td).toFixed(2) : '—'} Nm/kg ·{' '}
+                ripple {selectedPt.ripple != null ? Number(selectedPt.ripple).toFixed(2) : '—'}%
+              </Typography>
+              <Button variant="text" size="small" color="inherit"
+                onClick={() => { setSelectedPt(null); setApplied(false); }}>clear pick</Button>
+            </>
+          ) : (
+            <Button variant="outlined" color="success" size="small"
+              startIcon={applied ? <CheckCircleIcon /> : <PlayArrowIcon />}
+              disabled={applied}
+              onClick={async () => { await applyDescentBest(); setApplied(true); }}>
+              {applied ? 'Applied to geometry' : 'Apply best to geometry'}
+            </Button>
+          )}
+        </Box>
       )}
     </Box>
   );

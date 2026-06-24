@@ -111,6 +111,7 @@ function jetSigned(t: number): [number, number, number] {
 }
 
 const N_BANDS = 20;           // # of discrete colour bands / iso-A levels
+const B_BANDS = 13;           // discrete |B| colour bands (Ansys-style legend)
 
 /** Extract iso-A_z contour line segments via per-triangle linear
  *  interpolation (marching-segments on tris).
@@ -429,9 +430,11 @@ const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode; logLoss: boole
     // P1 triangle, so a flat per-triangle fill looks faceted ("scary").  Instead
     // we average each triangle's |B| onto its 3 nodes (AREA-WEIGHTED) and colour
     // PER-VERTEX, exactly like the A_z field — Three.js then interpolates the
-    // colour smoothly across every triangle → a continuous gradient, no facets.
-    // vmax = 95-percentile of the interior |B|, hard-capped at 1.8 T (iron
-    // saturation knee) so 1/4-sector sharp-corner spikes don't squash the LUT.
+    // colour smoothly across every triangle, then quantised into B_BANDS
+    // discrete bands → the Ansys "colour patch" legend look (blue→red).
+    // vmax = 99.5-percentile of the interior |B|, capped at 4 T — wide enough to
+    // show the real air-gap/tooth-tip field (~3.3 T, like Ansys), while the
+    // percentile keeps 1/4-sector sharp-corner spikes from squashing the LUT.
     const nV = vertices.length;
     const bSum = new Float64Array(nV);
     const wSum = new Float64Array(nV);
@@ -449,8 +452,8 @@ const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode; logLoss: boole
       bSum[ib] += bm * area; wSum[ib] += area;
       bSum[ic] += bm * area; wSum[ic] += area;
     }
-    const vmaxPct = pctl(interiorB, 95);
-    const vmax = Math.min(Math.max(vmaxPct, 0.05), 1.8);
+    const vmaxPct = pctl(interiorB, 99.5);
+    const vmax = Math.min(Math.max(vmaxPct, 0.05), 4.0);
 
     const keep = triangles.map((_, ti) => domain_per_tri[ti] !== DOM_OUTER);
     const positions = new Float32Array(nV * 3);
@@ -461,7 +464,7 @@ const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode; logLoss: boole
       positions[3 * i + 2] = 0;
       const bnode = wSum[i] > 0 ? bSum[i] / wSum[i] : 0;
       const t = Math.min(1, Math.max(0, bnode / vmax));
-      const [rr, gg, bb] = jet01(t);          // continuous → smooth gradient
+      const [rr, gg, bb] = jetBands(t, B_BANDS);   // Ansys-style discrete bands
       colors[3 * i]     = rr / 255;
       colors[3 * i + 1] = gg / 255;
       colors[3 * i + 2] = bb / 255;
@@ -1026,9 +1029,9 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
               if (dom[ti] === DOM_OUTER) continue;
               Bs.push(payload.Bmag_per_tri[ti]);
             }
-            const vmax = Math.min(Math.max(pct(Bs, 95), 0.05), 1.8);
-            return <ColorBar vmin={0} vmax={vmax} unit="T"
-              lut={(t) => jet01(t)}/>;
+            const vmax = Math.min(Math.max(pct(Bs, 99.5), 0.05), 4.0);
+            return <ColorBar vmin={0} vmax={vmax * 1000} unit="mT"
+              fmt={(v) => v.toFixed(0)} lut={(t) => jetBands(t, B_BANDS)}/>;
           }
           if (mode === 'Demag') {
             return <ColorBar vmin={0} vmax={100} unit="Demag %"

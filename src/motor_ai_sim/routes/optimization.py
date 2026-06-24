@@ -899,6 +899,11 @@ class DescentRequest(BaseModel):
     pole_copy: Optional[bool] = None
     # Band-limit T(t) to the physical 6·k orders — from Simulation's torque-filter toggle.
     torque_filter: bool = True
+    # Loss model — SINGLE SOURCE: Simulation, so the optimizer's efficiency matches
+    # the Simulation tab exactly. Without these the eval drops the field-based magnet/
+    # shaft eddy loss and the end-winding copper → η reads several points too high.
+    rotor_eddy: bool = True             # field-based magnet/shaft eddy (vs slab estimate)
+    end_winding_factor: float = 0.0     # k_end end-winding copper (0 = solver auto)
     # 'cmaes' = Covariance-Matrix-Adaptation ES (derivative-free, noise-robust,
     # default); 'gradient' = the original finite-difference gradient descent.
     algorithm: str = "cmaes"
@@ -947,8 +952,15 @@ def _pt(out: Dict[str, Any], kind: str):
     if not out or not out.get("ok"):
         return None
     r = out["res"]
+    # Attach the design (geometry overrides + solved current) so the chart can
+    # apply a USER-PICKED point — click a point on the scatter → Apply that exact
+    # geometry, not just the optimiser's auto-best.
+    ov = out.get("overrides") or r.get("overrides") or {}
     return {"td": r.get("torque_per_mass_Nm_kg"), "eff": r.get("efficiency"),
-            "ripple": r.get("T_ripple_pct"), "kind": kind}
+            "ripple": r.get("T_ripple_pct"), "kind": kind,
+            "overrides": {k: v for k, v in ov.items() if k != "gamma_deg"},
+            "current_a": out.get("current_a") or r.get("current_a"),
+            "gamma_deg": ov.get("gamma_deg")}
 
 
 def _descent_cost(m: Dict[str, Any], base: Dict[str, Any],
@@ -1053,7 +1065,7 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                     n_sectors=-1, v_peak_limit=1e9, target_torque=0.0,
                     optimize_gamma=True, auto_expand=False, max_rounds=1,
                     boundary_margin=0.05, surrogate_seed=False, pole_copy=None,
-                  torque_filter=True) -> None:
+                  torque_filter=True, end_winding=0.0, rotor_eddy=True) -> None:
     # NOTE: server-side box-walking (auto_expand) is implemented for CMA-ES only;
     # the gradient path runs a single round, then the UI flags boundary variables
     # for a manual one-click continue.
@@ -1086,9 +1098,12 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
             o = _subprocess_eval(d, cur, steps, coil_temp, n_periods=1.0,
                                  gamma_deg=g, mesh_size_mm=mesh_size,
                                  min_size_mm=min_size, n_sectors=n_sectors,
-                                 pole_copy=pole_copy, torque_filter=torque_filter)
+                                 pole_copy=pole_copy, torque_filter=torque_filter,
+                                 end_winding_factor=end_winding, rotor_eddy=rotor_eddy)
             if o.get("ok") and isinstance(o.get("res"), dict):
                 o["res"]["current_a"] = float(cur)   # record solved current in best
+            if isinstance(o, dict):
+                o["overrides"] = dict(d)             # stamp design → chart click-to-apply
             return o
 
         def evalx(xx):
@@ -1297,7 +1312,7 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                   n_sectors=-1, v_peak_limit=1e9, target_torque=0.0,
                   optimize_gamma=True, auto_expand=False, max_rounds=1,
                   boundary_margin=0.05, surrogate_seed=False, pole_copy=None,
-                  torque_filter=True) -> None:
+                  torque_filter=True, end_winding=0.0, rotor_eddy=True) -> None:
     """Covariance-Matrix-Adaptation Evolution Strategy — derivative-free,
     noise-robust geometry search.  Same penalised cost as the gradient descent
     (−(eff/eff0)^w_eff·(td/td0)^w_td + λ·max(0, ripple−ripple_max)), evaluated on
@@ -1324,12 +1339,15 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
             o = _subprocess_eval(dd, cur, steps, coil_temp, n_periods=1.0,
                                  gamma_deg=g, mesh_size_mm=mesh_size,
                                  min_size_mm=min_size, n_sectors=n_sectors,
-                                 pole_copy=pole_copy, torque_filter=torque_filter)
+                                 pole_copy=pole_copy, torque_filter=torque_filter,
+                                 end_winding_factor=end_winding, rotor_eddy=rotor_eddy)
             # Stamp the SOLVED current onto the result so the best records the
             # operating point it was found at (target-torque solves for it) →
             # saving the design can persist current+γ for a reproducible sim.
             if o.get("ok") and isinstance(o.get("res"), dict):
                 o["res"]["current_a"] = float(cur)
+            if isinstance(o, dict):
+                o["overrides"] = dict(dd)            # stamp design → chart click-to-apply
             return o
 
         def evalx(d):
@@ -1611,7 +1629,8 @@ def descent_start(req: DescentRequest):
               float(req.coil_temp_c), mesh_size, min_size, max_iters, req.run_id,
               n_sectors, v_peak_limit, target_torque, bool(req.optimize_gamma),
               auto_expand, max_rounds, boundary_margin, bool(req.surrogate_seed),
-              req.pole_copy, bool(req.torque_filter)),
+              req.pole_copy, bool(req.torque_filter),
+              float(req.end_winding_factor), bool(req.rotor_eddy)),
         daemon=True).start()
     return {"started": True, "algorithm": algo, "n_sectors": n_sectors,
             "target_torque_nm": target_torque, "v_peak_limit": v_peak_limit,

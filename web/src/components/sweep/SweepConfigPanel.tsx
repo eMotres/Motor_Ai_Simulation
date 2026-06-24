@@ -9,7 +9,6 @@ import {
   Divider,
   Card,
   CardContent,
-  Slider,
   Tooltip,
   Select,
   MenuItem,
@@ -163,7 +162,6 @@ const SweepConfigPanel: React.FC = () => {
     updateVariation,
     setVariations,
     updateOperatingPoint,
-    updateRippleThreshold,
     updateSweepConstraints,
     initVariationsFromSchema,
   } = useMotorStore();
@@ -497,25 +495,12 @@ const SweepConfigPanel: React.FC = () => {
           </Card>
 
           <Typography variant="overline" color="text.secondary" sx={{ fontSize: 10, letterSpacing: 1, display: 'block', mb: 0.5 }}>
-            Torque Ripple Constraint
+            Torque Ripple
           </Typography>
-          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
-            Max allowed (T_max − T_min) / T_mean per electrical cycle
-          </Typography>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-            <Slider
-              value={sweepConfig.rippleThreshold * 100}
-              onChange={(_, v) => updateRippleThreshold((v as number) / 100)}
-              min={0} max={10} step={0.5}
-              sx={{ flex: 1 }}
-            />
-            <Typography variant="body2" sx={{ minWidth: 42, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-              {(sweepConfig.rippleThreshold * 100).toFixed(1)}%
-            </Typography>
-          </Box>
-          <Typography variant="caption" color="text.disabled" sx={{ display: 'block', mt: 1 }}>
-            Ripple is the real FEM value (coarse at a low step count). If nothing
-            passes the gate, the front falls back to all feasible designs.
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+            Not a search constraint — the optimizer maximises <strong>efficiency × torque/mass</strong>{' '}
+            (2 criteria). Trim pulsation visually with the <strong>“ripple ≤ X%”</strong> slider under the
+            results chart, then pick the design you want.
           </Typography>
         </Box>
        </Box>

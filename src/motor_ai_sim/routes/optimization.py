@@ -777,11 +777,13 @@ def doe_progress():
 # downhill along the normalised gradient with a backtracking line search.
 #
 #   F    = (efficiency/eff0)^w_eff · (torque_per_mass/td0)^w_td   (both maximised)
-#   cost = −F + λ·max(0, ripple − ripple_max)                     (ripple penalty)
+#   cost = −F + λ·max(0, V_peak − V_limit)                        (voltage penalty)
 #
-# So while ripple is above target the penalty dominates (descent drives ripple
-# down first); once feasible it rides the constraint boundary while pushing
-# efficiency × torque-density up.  Every evaluation is a real sliding-band FEM
+# Ripple is NOT in the objective — the optimizer purely maximises efficiency ×
+# torque-density (2 criteria); ripple is filtered post-hoc on the results chart
+# (the on-chart "ripple ≤ X%" slider).  The only feasibility penalty left is the
+# inverter voltage budget — a design the DC bus physically can't drive at the
+# operating point is repelled.  Every evaluation is a real sliding-band FEM
 # transient in an isolated subprocess.
 # ─────────────────────────────────────────────────────────────────────────────
 _descent_state: Dict[str, Any] = {
@@ -968,18 +970,19 @@ def _descent_cost(m: Dict[str, Any], base: Dict[str, Any],
                   v_peak_limit: float = 1e9):
     """Scalar cost (lower = better) + the raw figure-of-merit F.
 
-    Penalises BOTH a ripple violation AND an over-voltage — V_peak above the
-    inverter's usable phase-voltage limit (DC-bus × modulation factor).  A design
-    the bus physically can't drive at the operating point is repelled just like an
-    over-ripple one, so the optimizer stays inside the voltage budget."""
+    The objective is purely efficiency × torque-density (2 criteria) — ripple is
+    NOT penalised (it is trimmed post-hoc on the chart).  The only feasibility
+    penalty is an over-voltage one: V_peak above the inverter's usable phase-voltage
+    limit (DC-bus × modulation factor), so a design the bus physically can't drive
+    at the operating point is repelled.  `ripple_max` is accepted for signature
+    compatibility but no longer affects the cost."""
     eff  = max(float(m.get("efficiency", 0.0) or 0.0), 1e-6)
     td   = max(float(m.get("torque_per_mass_Nm_kg", 0.0) or 0.0), 1e-6)
-    rip  = float(m.get("T_ripple_pct", 1e9) or 1e9)
     vpk  = float(m.get("V_peak", 0.0) or 0.0)
     eff0 = max(float(base.get("efficiency", 1.0) or 1.0), 1e-6)
     td0  = max(float(base.get("torque_per_mass_Nm_kg", 1.0) or 1.0), 1e-6)
     F    = ((eff / eff0) ** w_eff) * ((td / td0) ** w_td)
-    pen  = lam * max(0.0, rip - ripple_max) + lam * max(0.0, vpk - v_peak_limit)
+    pen  = lam * max(0.0, vpk - v_peak_limit)
     return (-F + pen), F
 
 

@@ -287,16 +287,17 @@ const DescentPanel: React.FC = () => {
   // Every evaluated design is a point, split by the ripple constraint; the
   // accepted iterates form the descent trajectory.
   const points: any[] = st.points || [];
-  // On-chart ripple cut (display only): hide points with ripple > effCut. The
-  // feasible/infeasible colouring still uses the SEARCH rippleMax; effCut defaults
-  // to the data max (show all) and the chart slider drags it down to trim visually.
+  // Ripple is NOT a search constraint — the optimizer maximises efficiency ×
+  // torque-density (2 criteria), and ripple is trimmed purely on the chart: the
+  // slider hides points whose ripple exceeds the cut (effCut defaults to the data
+  // max = show all, then drags down to trim visually).
   const _dataMaxRipple = points.reduce((m: number, p: any) => Math.max(m, p.ripple ?? 0), 0);
-  const sliderMax = Math.max(Math.ceil(Math.max(_dataMaxRipple, rippleMax, 10)), 10);
+  const sliderMax = Math.max(Math.ceil(_dataMaxRipple), 10);
   const effCut = displayCut ?? sliderMax;
   const toXY = (p: any) => ({ td: p.td, eff: (p.eff ?? 0) * 100, ripple: p.ripple, z: 1,
                               overrides: p.overrides, current_a: p.current_a, gamma_deg: p.gamma_deg });
-  const feasiblePts   = points.filter((p) => p.td != null && p.ripple != null && p.ripple <= rippleMax && p.ripple <= effCut).map(toXY);
-  const infeasiblePts = points.filter((p) => p.td != null && p.ripple != null && p.ripple >  rippleMax && p.ripple <= effCut).map(toXY);
+  // One series of every evaluated design; the slider visually cuts by ripple.
+  const shownPts = points.filter((p) => p.td != null && p.ripple != null && p.ripple <= effCut).map(toXY);
   // Unfiltered count — gates the scatter section so the on-chart ripple slider
   // stays mounted even when the cut hides most points (else dragging down would
   // unmount the slider itself).
@@ -314,7 +315,7 @@ const DescentPanel: React.FC = () => {
   // slider decides which are shown): scale to the extreme X (Nm/kg) and Y (η) so
   // every visible point fits with a little margin — nothing clipped, and it re-fits
   // live as the ripple slider hides/shows points.
-  const _objShown = [...feasiblePts, ...infeasiblePts, ...trajPts, ...bestPt];
+  const _objShown = [...shownPts, ...trajPts, ...bestPt];
   const _fitDomain = (vals: number[], padFrac: number, padMin: number, clampLo?: number):
       [number | string, number | string] => {
     const v = vals.filter((x) => Number.isFinite(x));
@@ -485,8 +486,8 @@ const DescentPanel: React.FC = () => {
         ) : (
           <>Fixed operating point: <strong>{op0.current_a} A @ {op0.rpm} rpm, γ={op0.gamma_deg ?? 0}°</strong></>
         )} · variables:{' '}
-        <strong>{activeVars.length}</strong> · ripple ≤ <strong>{rippleMax.toFixed(1)}%</strong>{' '}
-        (Torque Ripple Constraint slider). Only whitelisted variables are varied.
+        <strong>{activeVars.length}</strong> · objective: <strong>max efficiency × torque/mass</strong>{' '}
+        (ripple trimmed on the chart, not constrained). Only whitelisted variables are varied.
       </Typography>
 
       {descentError && (
@@ -610,7 +611,6 @@ const DescentPanel: React.FC = () => {
                   <RTooltip contentStyle={{ fontSize: 11 }} />
                   <Legend wrapperStyle={{ fontSize: 10 }} />
                   <ReferenceLine yAxisId="l" y={1} stroke="#888" strokeDasharray="4 4" />
-                  <ReferenceLine yAxisId="r" y={rippleMax} stroke="#ef4444" strokeDasharray="4 4" />
                   <Line yAxisId="l" type="monotone" dataKey="F" name="F" stroke="#22c55e" dot={{ r: 2 }} strokeWidth={2} isAnimationActive={false} />
                   <Line yAxisId="r" type="monotone" dataKey="T_ripple_pct" name="Ripple %" stroke="#f59e0b" dot={{ r: 2 }} strokeWidth={2} isAnimationActive={false} />
                 </LineChart>
@@ -709,7 +709,7 @@ const DescentPanel: React.FC = () => {
               <Slider size="small" min={0} max={sliderMax} step={0.1} value={effCut}
                 onChange={(_, v) => setDisplayCut(v as number)} sx={{ maxWidth: 320, flex: 1 }} />
               <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>
-                {feasiblePts.length + infeasiblePts.length}/{points.length} shown
+                {shownPts.length}/{points.length} shown
               </Typography>
               {displayCut != null && (
                 <Button size="small" sx={{ minWidth: 0, px: 0.75, fontSize: 10 }}
@@ -719,7 +719,7 @@ const DescentPanel: React.FC = () => {
           )}
           <Box sx={{ height: 460, width: '100%' }}>
             {view3d ? (
-              <Scatter3D points={points.filter((p: any) => p.ripple == null || p.ripple <= effCut)} rippleMax={rippleMax}
+              <Scatter3D points={points.filter((p: any) => p.ripple == null || p.ripple <= effCut)} rippleMax={effCut}
                 best={best && best.torque_per_mass != null
                   ? { td: best.torque_per_mass, eff: best.efficiency, ripple: best.T_ripple_pct } : null} />
             ) : (
@@ -735,15 +735,14 @@ const DescentPanel: React.FC = () => {
                   content={({ active, payload }: any) => {
                     if (!active || !payload || !payload.length) return null;
                     const p = payload[0]?.payload || {};
-                    const over = p.ripple != null && p.ripple > rippleMax;
                     return (
                       <div style={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 4,
                                     padding: '6px 9px', fontSize: 11, lineHeight: 1.6 }}>
                         {p.eff != null && <div style={{ color: '#a855f7' }}>Eff %: {Number(p.eff).toFixed(3)}</div>}
                         {p.td  != null && <div style={{ color: '#3b82f6' }}>Nm/kg: {Number(p.td).toFixed(3)}</div>}
                         {p.ripple != null && (
-                          <div style={{ color: over ? '#ef4444' : '#22c55e' }}>
-                            Ripple %: {Number(p.ripple).toFixed(2)}{over ? ` (> ${rippleMax}%)` : ''}
+                          <div style={{ color: '#22c55e' }}>
+                            Ripple %: {Number(p.ripple).toFixed(2)}
                           </div>
                         )}
                         {p.iter != null && <div style={{ color: '#94a3b8' }}>iter: {p.iter}</div>}
@@ -751,9 +750,7 @@ const DescentPanel: React.FC = () => {
                       </div>
                     );
                   }} />
-                <Scatter name="ripple>limit" data={infeasiblePts} fill="#ef4444" fillOpacity={0.35} isAnimationActive={false}
-                  cursor="pointer" onClick={(d: any) => d && setSelectedPt(d.payload ?? d)} />
-                <Scatter name="feasible" data={feasiblePts} fill="#22c55e" fillOpacity={0.55} isAnimationActive={false}
+                <Scatter name="designs" data={shownPts} fill="#22c55e" fillOpacity={0.55} isAnimationActive={false}
                   cursor="pointer" onClick={(d: any) => d && setSelectedPt(d.payload ?? d)} />
                 <Scatter name="descent path" data={trajPts} fill="#3b82f6"
                   line={{ stroke: '#3b82f6', strokeWidth: 1.5 }} lineType="joint" isAnimationActive={false} />

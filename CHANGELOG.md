@@ -7,6 +7,14 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
 
 ## [Unreleased]
 
+### Changed
+- **Optimization is now 2-criteria (efficiency × torque/mass); ripple is a visual
+  filter, not a constraint.** Removed the pre-run "Torque ripple constraint" slider
+  and the ripple penalty in the optimizer cost — the descent/CMA-ES search purely
+  maximises efficiency × torque-density. Run the optimization, then trim pulsation
+  with the on-chart "ripple ≤ X%" slider and pick the design you want. (The inverter
+  voltage budget is still enforced, so designs stay drivable.)
+
 ## [0.1.3] — 2026-06-24
 
 ### Added

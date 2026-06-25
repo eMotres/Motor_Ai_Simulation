@@ -24,7 +24,6 @@ import BoltIcon         from '@mui/icons-material/Bolt';
 import SimulationCharts from './SimulationCharts';
 import PhysicsDashboard from './PhysicsDashboard';
 import CoupledEmThermal from './CoupledEmThermal';
-import CoolingControls from './CoolingControls';
 import HelpTip from '../common/HelpTip';
 import { syncActiveMotor } from '../common/motorSettings';
 
@@ -610,10 +609,10 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               disabled={isRunning}
             />
 
-            {/* Cooling system (Air / liquid) — drives the housing convection BC of
-                the coupled EM↔thermal solve.  Lives here in the left panel; the
-                "Run coupled solve" button + results are in the Multiphysics block. */}
-            <CoolingControls />
+            {/* Cooling inputs now live in the Thermal (Temp) field view's toolbar
+                (Air blow-speed / Liquid inlet+outlet).  The coupled EM↔thermal solve
+                reads its cooling via getCoolingPayload() (localStorage `sim.cool.*`,
+                still editable from the Configure → Thermal panel). */}
 
             {/* Slot currents bar / PINN Training settings / RUN SIMULATION
                 button removed.  The Simulation tab now uses real FEM via the

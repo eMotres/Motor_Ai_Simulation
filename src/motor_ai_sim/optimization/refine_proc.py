@@ -102,6 +102,15 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         "coil_temp_c": float(coil_temp_c), "gap_layers": float(gap_layers),
         "end_winding_factor": float(end_winding_factor), "rotor_eddy": bool(rotor_eddy),
         "pole_copy": pole_copy, "torque_filter": bool(torque_filter),
+        # Ambient mesh/sim params the Simulation tab passes but the optimizer used to
+        # omit (so get_fem_transient fell back to ITS defaults — e.g. outer_air 1.3 vs
+        # Sim's 1.2). Pull them from the active design's config so the optimizer's
+        # em_transient_eval call is IDENTICAL to Simulation's → a picked design
+        # reproduces exactly when re-run in the Simulation tab.
+        "outer_air_factor": float(cfg.get("mesh", {}).get("outer_air_factor", 1.2)),
+        "stator_fillet_mm": 0.0,   # Simulation hardcodes 0 (native geometry, no tooth-tip smoothing)
+        "demag": bool(cfg.get("simulation", {}).get("demag", False)),
+        "component_mesh": json.dumps(cfg.get("mesh", {}).get("component_mesh") or {}),
         "sliding_band": True, "fresh": True, "geo": json.dumps(overrides),
     })
     if not _out.get("ok"):
@@ -116,7 +125,12 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
     cu_dc = float(d.get("P_cu_dc_W", cu - cu_ac))
     ploss = cu + fe + mg + sh
     pmech = Tavg * omega
-    eff = pmech / (pmech + ploss) if pmech > 0 else 0.0
+    # Efficiency EXACTLY as the Simulation reports it (P_mech_avg / P_elec_in) when the
+    # solver gives the power split, so the optimizer's η matches the Simulation tab to
+    # the digit; fall back to P_mech / (P_mech + P_loss) only if those aren't present.
+    _pe = float(d.get("P_elec_in_W", 0.0) or 0.0)
+    _pm = float(d.get("P_mech_avg_W", 0.0) or 0.0)
+    eff = (_pm / _pe) if (_pe > 0.0 and _pm > 0.0) else (pmech / (pmech + ploss) if pmech > 0 else 0.0)
     mass = float(_masses(build_params(geo), geo)["total"])
     return {
         "T_em_Nm": round(Tavg, 3), "efficiency": round(eff, 5),

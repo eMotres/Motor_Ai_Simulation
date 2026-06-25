@@ -789,6 +789,7 @@ def doe_progress():
 _descent_state: Dict[str, Any] = {
     "running": False, "iter": 0, "max_iters": 0, "n_evals": 0,
     "best": None, "current": None, "history": [], "baseline": None,
+    "baseline_line": None,
     "phase": "", "run_id": "", "error": None, "cancel": False,
 }
 _descent_lock = threading.Lock()
@@ -935,6 +936,18 @@ class DescentRequest(BaseModel):
     max_rounds: int = 5
     boundary_margin: float = 0.05
     run_id: str = ""
+    # ── Objective mode ──────────────────────────────────────────────────────
+    #  'baseline_line' (default): maximise the signed PERPENDICULAR DISTANCE above
+    #    the "current-only" baseline line.  Two FEM sims of the START geometry — at
+    #    current I and I·(1+current_bump_pct/100) — give points A and B in
+    #    (T/mass, efficiency) space; the line A–B is the trade-off you get by just
+    #    cranking current.  Its slope sets the eff / (T/mass) weights AUTOMATICALLY
+    #    (no manual guessing): w on T/mass = ΔEff (efficiency lost to +current),
+    #    w on efficiency = ΔT/mass (torque-density gained from +current).  A design
+    #    ABOVE the line beats the current-only trade-off; farther above = better.
+    #  'product': the legacy (efficiency/eff0)^w_eff · (T/mass/td0)^w_td.
+    objective: str = "baseline_line"
+    current_bump_pct: float = 10.0    # 2nd baseline current = I·(1 + pct/100)
 
 
 def _msum(m: Dict[str, Any]) -> Dict[str, Any]:
@@ -969,24 +982,58 @@ def _pt(out: Dict[str, Any], kind: str):
             "gamma_deg": ov.get("gamma_deg")}
 
 
+def _make_bline(base_m: Dict[str, Any], bump_m: Dict[str, Any],
+                bump_pct: float) -> Dict[str, Any]:
+    """Build the 'current-only' baseline line from points A (start geometry at
+    current I) and B (same geometry at I·(1+bump_pct/100)) in (T/mass, efficiency)
+    space.  The line's slope sets the objective weights automatically:
+      w on T/mass = Eff_A − Eff_B   (efficiency lost to the +current)
+      w on eff    = T/mass_B − T/mass_A   (torque-density gained from +current)
+    The signed perpendicular distance of any point P above this line is then
+    [w_td·(td_P − td_A) + w_eff·(eff_P − eff_A)] / hypot(w_td, w_eff)."""
+    td_a  = float(base_m.get("torque_per_mass_Nm_kg", 0.0) or 0.0)
+    eff_a = float(base_m.get("efficiency", 0.0) or 0.0)
+    td_b  = float(bump_m.get("torque_per_mass_Nm_kg", 0.0) or 0.0)
+    eff_b = float(bump_m.get("efficiency", 0.0) or 0.0)
+    w_td  = eff_a - eff_b          # efficiency given up per +current
+    w_eff = td_b - td_a            # torque-density gained per +current
+    norm  = ((w_td * w_td + w_eff * w_eff) ** 0.5) or 1.0
+    return {"td_a": td_a, "eff_a": eff_a, "td_b": td_b, "eff_b": eff_b,
+            "w_td": w_td, "w_eff": w_eff, "norm": norm,
+            "bump_pct": float(bump_pct),
+            "current_a": float(base_m.get("current_a", 0.0) or 0.0),
+            "current_b": float(bump_m.get("current_a", 0.0) or 0.0)}
+
+
 def _descent_cost(m: Dict[str, Any], base: Dict[str, Any],
                   ripple_max: float, w_eff: float, w_td: float, lam: float,
                   v_peak_limit: float = 1e9):
     """Scalar cost (lower = better) + the raw figure-of-merit F.
 
-    The objective is purely efficiency × torque-density (2 criteria) — ripple is
-    NOT penalised (it is trimmed post-hoc on the chart).  The only feasibility
-    penalty is an over-voltage one: V_peak above the inverter's usable phase-voltage
-    limit (DC-bus × modulation factor), so a design the bus physically can't drive
-    at the operating point is repelled.  `ripple_max` is accepted for signature
-    compatibility but no longer affects the cost."""
+    Two objective modes (ripple is NEVER penalised — it is trimmed post-hoc on the
+    chart).  The only feasibility penalty is over-voltage: V_peak above the
+    inverter's usable phase-voltage limit, so a design the bus can't drive is
+    repelled.  `ripple_max` is accepted for signature compatibility only.
+
+    • baseline-line (when base carries '_bline'): F = signed perpendicular distance
+      of (T/mass, efficiency) ABOVE the current-only baseline line.  Weights come
+      from the line itself (see _make_bline), so eff vs T/mass is balanced
+      automatically.  F > 0 ⇒ the geometry beats just cranking current.
+    • product (legacy fallback): F = (efficiency/eff0)^w_eff · (T/mass/td0)^w_td."""
+    vpk  = float(m.get("V_peak", 0.0) or 0.0)
+    pen  = lam * max(0.0, vpk - v_peak_limit)
+    bl = base.get("_bline") if isinstance(base, dict) else None
+    if bl:
+        td  = float(m.get("torque_per_mass_Nm_kg", 0.0) or 0.0)
+        eff = float(m.get("efficiency", 0.0) or 0.0)
+        score = bl["w_td"] * (td - bl["td_a"]) + bl["w_eff"] * (eff - bl["eff_a"])
+        F = score / (bl.get("norm", 1.0) or 1.0)     # true perpendicular distance
+        return (-F + pen), F
     eff  = max(float(m.get("efficiency", 0.0) or 0.0), 1e-6)
     td   = max(float(m.get("torque_per_mass_Nm_kg", 0.0) or 0.0), 1e-6)
-    vpk  = float(m.get("V_peak", 0.0) or 0.0)
     eff0 = max(float(base.get("efficiency", 1.0) or 1.0), 1e-6)
     td0  = max(float(base.get("torque_per_mass_Nm_kg", 1.0) or 1.0), 1e-6)
     F    = ((eff / eff0) ** w_eff) * ((td / td0) ** w_td)
-    pen  = lam * max(0.0, vpk - v_peak_limit)
     return (-F + pen), F
 
 
@@ -1073,7 +1120,8 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                     optimize_gamma=True, auto_expand=False, max_rounds=1,
                     boundary_margin=0.05, surrogate_seed=False, pole_copy=None,
                   torque_filter=True, end_winding=0.0, rotor_eddy=True,
-                  gap_layers=2.0) -> None:
+                  gap_layers=2.0, objective="baseline_line",
+                  current_bump_pct=10.0) -> None:
     # NOTE: server-side box-walking (auto_expand) is implemented for CMA-ES only;
     # the gradient path runs a single round, then the UI flags boundary variables
     # for a manual one-click continue.
@@ -1158,6 +1206,18 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                 _descent_state.update(error=f"baseline eval failed: {b.get('error')}")
             return
         base = b["res"]
+        # ── Baseline (current-only) line: a 2nd FEM sim of THIS geometry at
+        #    I·(1+bump) gives point B; A–B sets the perpendicular-distance weights. ──
+        if str(objective) == "baseline_line":
+            try:
+                bb = _eval_at(x, I * (1.0 + max(0.0, float(current_bump_pct)) / 100.0))
+                n_evals += 1
+                if bb.get("ok"):
+                    base["_bline"] = _make_bline(base, bb["res"], current_bump_pct)
+                    with _descent_lock:
+                        _descent_state["baseline_line"] = dict(base["_bline"])
+            except Exception:   # noqa: BLE001
+                pass
         cost0, F0 = _descent_cost(base, base, ripple_max, w_eff, w_td, lam, v_peak_limit)
         best = {"x": dict(x), "metrics": base, "cost": cost0, "F": F0}   # descent iterate
         # best_seen = the GLOBALLY lowest-cost design over ALL evaluations (not just
@@ -1284,7 +1344,8 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                         "baseline": _msum(base), "history": list(history),
                         "n_evals": n_evals,
                         "operating_point": op, "ripple_max_pct": ripple_max,
-                        "weights": {"w_eff": w_eff, "w_td": w_td, "lambda": lam}},
+                        "weights": {"w_eff": w_eff, "w_td": w_td, "lambda": lam},
+                        "baseline_line": base.get("_bline")},
                 best=_best_state())
     except Exception as e:  # noqa: BLE001
         log.exception("descent failed")
@@ -1322,7 +1383,8 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                   optimize_gamma=True, auto_expand=False, max_rounds=1,
                   boundary_margin=0.05, surrogate_seed=False, pole_copy=None,
                   torque_filter=True, end_winding=0.0, rotor_eddy=True,
-                  gap_layers=2.0) -> None:
+                  gap_layers=2.0, objective="baseline_line",
+                  current_bump_pct=10.0) -> None:
     """Covariance-Matrix-Adaptation Evolution Strategy — derivative-free,
     noise-robust geometry search.  Same penalised cost as the gradient descent
     (−(eff/eff0)^w_eff·(td/td0)^w_td + λ·max(0, ripple−ripple_max)), evaluated on
@@ -1448,6 +1510,20 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                         _descent_state.update(error=f"baseline eval failed: {b.get('error')}", running=False)
                     return
                 base = b["res"]
+                # ── Baseline (current-only) line: 2nd FEM sim of the START geometry
+                #    at I·(1+bump) → point B; A–B fixes the perpendicular-distance
+                #    weights for the whole search (kept across box-walking rounds). ──
+                if str(objective) == "baseline_line":
+                    try:
+                        bb = _eval_at(to_geom(x0n),
+                                      I * (1.0 + max(0.0, float(current_bump_pct)) / 100.0))
+                        n_evals += 1
+                        if bb.get("ok"):
+                            base["_bline"] = _make_bline(base, bb["res"], current_bump_pct)
+                            with _descent_lock:
+                                _descent_state["baseline_line"] = dict(base["_bline"])
+                    except Exception:   # noqa: BLE001
+                        pass
                 cost0, F0 = _descent_cost(base, base, ripple_max, w_eff, w_td, lam, v_peak_limit)
                 best = {"x": to_geom(x0n), "metrics": base, "cost": cost0, "F": F0}
                 history.append(_hrow(0, base, cost0, F0, best["x"]))
@@ -1544,6 +1620,7 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                 "baseline": _msum(base), "history": list(history), "n_evals": n_evals,
                 "operating_point": op, "ripple_max_pct": ripple_max,
                 "weights": {"w_eff": w_eff, "w_td": w_td, "lambda": lam},
+                "baseline_line": base.get("_bline"),
                 "boundary": boundary, "walk_rounds": rounds,
                 "algorithm": "cmaes"}
     except Exception as e:  # noqa: BLE001
@@ -1627,7 +1704,8 @@ def descent_start(req: DescentRequest):
     with _descent_lock:
         _descent_state.update({"running": True, "iter": 0, "max_iters": max_iters,
                                "n_evals": 0, "best": None, "current": None,
-                               "history": [], "baseline": None, "result": None, "phase": "starting",
+                               "history": [], "baseline": None, "baseline_line": None,
+                               "result": None, "phase": "starting",
                                "points": [], "grad": {}, "mtpa_gamma_deg": None, "variables": [],
                                "boundary": [], "walk_round": 1, "converged": False,
                                "seeded_from_surrogate": False,
@@ -1652,7 +1730,9 @@ def descent_start(req: DescentRequest):
               auto_expand, max_rounds, boundary_margin, bool(req.surrogate_seed),
               req.pole_copy, bool(req.torque_filter),
               float(req.end_winding_factor), bool(req.rotor_eddy),
-              max(1.0, min(float(req.gap_layers), 8.0))),
+              max(1.0, min(float(req.gap_layers), 8.0)),
+              str(req.objective or "baseline_line"),
+              max(0.0, min(float(req.current_bump_pct), 100.0))),
         daemon=True).start()
     return {"started": True, "algorithm": algo, "n_sectors": n_sectors,
             "target_torque_nm": target_torque, "v_peak_limit": v_peak_limit,

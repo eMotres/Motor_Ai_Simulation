@@ -140,6 +140,13 @@ const DescentPanel: React.FC = () => {
   const [maxIters, setMaxIters] = useState(10);
   const [wEff, setWEff] = useState(1);
   const [wTd, setWTd]   = useState(1);   // reward torque/mass too (default); 0 = efficiency only → design ignores mass
+  // Objective mode. 'baseline_line' (default): maximise the signed PERPENDICULAR
+  // DISTANCE above the "current-only" line — two sims of the START geometry (at I
+  // and I·(1+bump)) set the eff/(T/mass) weights automatically from the line slope,
+  // so a design above the line beats just cranking current. 'product': legacy
+  // efficiency^w_eff · (T/mass)^w_td.
+  const [objective, setObjective] = useState<'baseline_line' | 'product'>('baseline_line');
+  const [currentBump, setCurrentBump] = useState(10);   // 2nd baseline current = I·(1+pct/100)
   // FEM frames/period = the Simulation tab's "Steps per period" (single source) —
   // so the optimizer evaluates ripple at the SAME resolution you simulate at.
   const [steps] = useState(() => {
@@ -330,6 +337,30 @@ const DescentPanel: React.FC = () => {
   const xDomain: [number | string, number | string] =
     _fitDomain(_objShown.map((p: any) => p.td), 0.06, 0.05, 0);
 
+  // ── Baseline (current-only) line A–B ────────────────────────────────────────
+  // Two sims of the START geometry (at I and I·(1+bump)) define the trade-off you
+  // get by just cranking current.  A design ABOVE this line beats it; the signed
+  // perpendicular distance to it IS the objective.  Draw the line across the plot,
+  // mark its A/B endpoints, and surface the auto-derived weights (the line slope).
+  const bline: any = st.baseline_line || st.result?.baseline_line || null;
+  const blA = bline ? { td: bline.td_a, eff: (bline.eff_a ?? 0) * 100, tag: `${Math.round(bline.current_a)}A` } : null;
+  const blB = bline ? { td: bline.td_b, eff: (bline.eff_b ?? 0) * 100, tag: `${Math.round(bline.current_b)}A` } : null;
+  const blMarkers = (blA && blB) ? [{ ...blA, z: 5 }, { ...blB, z: 5 }] : [];
+  const _xN = (v: number | string, fb: number) => (typeof v === 'number' ? v : fb);
+  const _blSeg = (blA && blB && Math.abs(blB.td - blA.td) > 1e-9)
+    ? (() => {
+        const slope = (blB.eff - blA.eff) / (blB.td - blA.td);
+        const yAt = (x: number) => blA.eff + slope * (x - blA.td);
+        const xLo = _xN(xDomain[0], Math.min(blA.td, blB.td));
+        const xHi = _xN(xDomain[1], Math.max(blA.td, blB.td));
+        return [{ x: xLo, y: yAt(xLo) }, { x: xHi, y: yAt(xHi) }];
+      })()
+    : null;
+  // Auto-weights from the slope: efficiency is weighted by the T/mass GAINED per
+  // +current (Nm/kg); T/mass by the efficiency LOST per +current (%-points).
+  const blWeffNmKg = bline ? (bline.w_eff ?? 0) : 0;         // ΔT/mass  (weight on η)
+  const blWtdPct   = bline ? (bline.w_td ?? 0) * 100 : 0;     // ΔEff %   (weight on T/mass)
+
   // Box-walking now runs SERVER-SIDE: with Auto-walk on we hand the backend
   // auto_expand + maxRounds and it re-centers the window + re-runs round after round
   // on its own (the tab can be closed — the live mirror reattaches). runDescent
@@ -341,7 +372,8 @@ const DescentPanel: React.FC = () => {
     try {
       await runDescent({ rippleMax, maxIters, wEff, wTd, steps, algorithm, nSectors,
                          targetTorque: 0, vPeakLimit: 1e9, optimizeGamma: false,   // fixed Simulation current, no voltage limit
-                         autoExpand: autoWalk, maxRounds, surrogateSeed });
+                         autoExpand: autoWalk, maxRounds, surrogateSeed,
+                         objective, currentBumpPct: currentBump });
     } finally {
       localRun.current = false;
     }
@@ -420,19 +452,37 @@ const DescentPanel: React.FC = () => {
           </Tooltip>
         </Group>
 
-        <Group label="Objective weights">
-          <Tooltip title="Efficiency weight in the objective (exponent on eff/eff₀)." placement="top">
-            <TextField label="w·eff" type="number" size="small" value={wEff}
-              onChange={e => setWEff(Math.max(0, +e.target.value || 0))}
-              inputProps={{ min: 0, step: 0.5, style: { fontSize: 11, padding: '3px 6px', width: 40 } }}
-              InputLabelProps={{ sx: { fontSize: 10 } }} />
+        <Group label="Objective">
+          <Tooltip title="How designs are scored. 'Above baseline' (recommended): two sims of the START geometry — at I and I·(1+bump) — define the 'current-only' trade-off line; the optimizer maximises the PERPENDICULAR DISTANCE above it, so the efficiency vs T/mass weights come from the line's slope automatically (no manual guessing). 'η × T/mass': the legacy weighted product." placement="top">
+            <ToggleButtonGroup exclusive size="small" value={objective}
+              onChange={(_, v) => v && setObjective(v)} sx={{ height: 26 }}>
+              <ToggleButton value="baseline_line" sx={{ px: 1, fontSize: 10 }}>Above baseline</ToggleButton>
+              <ToggleButton value="product"       sx={{ px: 1, fontSize: 10 }}>η × T/mass</ToggleButton>
+            </ToggleButtonGroup>
           </Tooltip>
-          <Tooltip title="Torque-density weight (exponent on td/td₀). 0 = ignore mass (efficiency only)." placement="top">
-            <TextField label="w·Nm/kg" type="number" size="small" value={wTd}
-              onChange={e => setWTd(Math.max(0, +e.target.value || 0))}
-              inputProps={{ min: 0, step: 0.5, style: { fontSize: 11, padding: '3px 6px', width: 44 } }}
-              InputLabelProps={{ sx: { fontSize: 10 } }} />
-          </Tooltip>
+          {objective === 'baseline_line' ? (
+            <Tooltip title="The 2nd baseline sim runs at I·(1+this%). Larger = a longer baseline arm (steadier slope) but a bigger efficiency drop to span. 10% is a good default." placement="top">
+              <TextField label="+% I" type="number" size="small" value={currentBump}
+                onChange={e => setCurrentBump(Math.max(1, Math.min(50, Math.round(+e.target.value) || 10)))}
+                inputProps={{ min: 1, max: 50, style: { fontSize: 11, padding: '3px 6px', width: 44 } }}
+                InputLabelProps={{ sx: { fontSize: 10 } }} />
+            </Tooltip>
+          ) : (
+            <>
+              <Tooltip title="Efficiency weight (exponent on eff/eff₀)." placement="top">
+                <TextField label="w·eff" type="number" size="small" value={wEff}
+                  onChange={e => setWEff(Math.max(0, +e.target.value || 0))}
+                  inputProps={{ min: 0, step: 0.5, style: { fontSize: 11, padding: '3px 6px', width: 40 } }}
+                  InputLabelProps={{ sx: { fontSize: 10 } }} />
+              </Tooltip>
+              <Tooltip title="Torque-density weight (exponent on td/td₀). 0 = ignore mass." placement="top">
+                <TextField label="w·Nm/kg" type="number" size="small" value={wTd}
+                  onChange={e => setWTd(Math.max(0, +e.target.value || 0))}
+                  inputProps={{ min: 0, step: 0.5, style: { fontSize: 11, padding: '3px 6px', width: 44 } }}
+                  InputLabelProps={{ sx: { fontSize: 10 } }} />
+              </Tooltip>
+            </>
+          )}
         </Group>
 
         <Group label="Search options">
@@ -459,7 +509,10 @@ const DescentPanel: React.FC = () => {
 
       <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
         Operating point (from Simulation): <strong>{op0.current_a} A @ {op0.rpm} rpm, γ={op0.gamma_deg ?? 0}°</strong> · variables:{' '}
-        <strong>{activeVars.length}</strong> · objective: <strong>max efficiency × torque/mass</strong>{' '}
+        <strong>{activeVars.length}</strong> · objective:{' '}
+        <strong>{objective === 'baseline_line'
+          ? `max distance above the current-only line (sims @ I and +${currentBump}% I)`
+          : 'max efficiency × torque/mass'}</strong>{' '}
         (ripple trimmed on the chart, not constrained). Only whitelisted variables are varied.
       </Typography>
 
@@ -624,6 +677,7 @@ const DescentPanel: React.FC = () => {
               <span style={{ color: '#ef4444' }}>ripple&gt;limit</span> ·{' '}
               <span style={{ color: '#3b82f6' }}>descent path</span> ·{' '}
               <span style={{ color: '#fbbf24' }}>★ best</span>
+              {bline && <> · <span style={{ color: '#f59e0b' }}>— baseline (current-only)</span></>}
             </Typography>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap' }}>
               <Tooltip title="2-D = efficiency vs torque/mass. 3-D lifts ripple onto the height (z) axis, with a translucent plane at the ripple gate — see the eff×td-vs-ripple trade-off at a glance. Drag to rotate." placement="top">
@@ -662,6 +716,13 @@ const DescentPanel: React.FC = () => {
               )}
             </Box>
           </Box>
+          {bline && (
+            <Typography variant="caption" sx={{ display: 'block', color: '#f59e0b', mb: 0.5, lineHeight: 1.5 }}>
+              Baseline +{bline.bump_pct}% current: T/mass {blA!.td.toFixed(2)}→{blB!.td.toFixed(2)} Nm/kg,
+              η {blA!.eff.toFixed(2)}→{blB!.eff.toFixed(2)}% · auto-weights — η ×{blWeffNmKg.toFixed(2)} (Nm/kg gained per +I),
+              T/mass ×{blWtdPct.toFixed(2)} (% lost per +I) · score = ⟂ distance above the line
+            </Typography>
+          )}
           {showLoadLines && loadLineDesigns.some(([, a]) => a.length > 1) && (
             <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: '12px', mb: 0.5 }}>
               <Typography variant="caption" color="text.secondary">load-lines · ◆ rated {ratedTorque} N·m:</Typography>
@@ -723,6 +784,16 @@ const DescentPanel: React.FC = () => {
                       </div>
                     );
                   }} />
+                {_blSeg && (
+                  <ReferenceLine ifOverflow="hidden" segment={_blSeg as any}
+                    stroke="#f59e0b" strokeDasharray="6 4" strokeWidth={1.5} />
+                )}
+                {blMarkers.length > 0 && (
+                  <Scatter name="baseline" data={blMarkers} fill="#f59e0b" fillOpacity={0.95}
+                    shape="cross" isAnimationActive={false}>
+                    <LabelList dataKey="tag" position="top" fontSize={9} fill="#f59e0b" />
+                  </Scatter>
+                )}
                 <Scatter name="designs" data={shownPts} fill="#22c55e" fillOpacity={0.55} isAnimationActive={false}
                   cursor="pointer" onClick={(d: any) => d && setSelectedPt(d.payload ?? d)} />
                 <Scatter name="descent path" data={trajPts} fill="#3b82f6"

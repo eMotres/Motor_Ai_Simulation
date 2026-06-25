@@ -119,7 +119,8 @@ interface MotorState {
                        algorithm: string; nSectors: number;
                        targetTorque?: number; vPeakLimit?: number;
                        optimizeGamma?: boolean; autoExpand?: boolean;
-                       maxRounds?: number; surrogateSeed?: boolean }) => Promise<void>;
+                       maxRounds?: number; surrogateSeed?: boolean;
+                       objective?: string; currentBumpPct?: number }) => Promise<void>;
   cancelDescent: () => Promise<void>;
   applyDescentBest: () => Promise<void>;
   applyDescentPoint: (pt: any) => Promise<void>;   // apply a USER-PICKED scatter point
@@ -633,7 +634,7 @@ export const useMotorStore = create<MotorState>()(
       descentError: null,
       lastOptSnapshot: null,
       setLastOptSnapshot: (s) => set({ lastOptSnapshot: s }),
-      runDescent: async ({ rippleMax, maxIters, wEff, wTd, steps, algorithm, nSectors, targetTorque, vPeakLimit, optimizeGamma, autoExpand, maxRounds, surrogateSeed }) => {
+      runDescent: async ({ rippleMax, maxIters, wEff, wTd, steps, algorithm, nSectors, targetTorque, vPeakLimit, optimizeGamma, autoExpand, maxRounds, surrogateSeed, objective, currentBumpPct }) => {
         const { sweepConfig } = get();
         // Fixed operating point = Sweep "Point 1" (γ/current from Simulation).
         const op0 = sweepConfig.operatingPoints[0] || ({} as any);
@@ -683,6 +684,8 @@ export const useMotorStore = create<MotorState>()(
               auto_expand: autoExpand ?? false,
               max_rounds: maxRounds ?? 5,
               surrogate_seed: surrogateSeed ?? false,
+              objective: objective ?? 'baseline_line',
+              current_bump_pct: currentBumpPct ?? 10,
             }),
           });
           if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);

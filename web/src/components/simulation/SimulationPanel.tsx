@@ -27,8 +27,6 @@ import CoupledEmThermal from './CoupledEmThermal';
 import CoolingControls from './CoolingControls';
 import HelpTip from '../common/HelpTip';
 import { syncActiveMotor } from '../common/motorSettings';
-import SaveIcon from '@mui/icons-material/Save';
-import type { TransientSummary } from './SummaryTable';
 
 // NOTE: using port 8001 (new backend with loss calculations)
 // Change back to 8000 after restarting the main backend
@@ -201,9 +199,6 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // not the mesh — so it never rebuilds geometry.
   const gammaIsVar    = useMotorStore(s => (s.sweepConfig.variations['gamma_deg']?.mode ?? 'fixed') !== 'fixed');
   const updateVariation = useMotorStore(s => s.updateVariation);
-  // Subscribe to the live geometry so the panel re-renders (and re-evaluates
-  // result staleness) when a design is applied from the Sweep/Optimization tab.
-  const storeGeometry = useMotorStore(s => s.geometry);
   const toggleGammaVar = (on: boolean) =>
     updateVariation('gamma_deg', on
       ? { mode: 'sweep', min: phaseOffset, max: phaseOffset + 30, step: 5 }
@@ -458,95 +453,6 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   };
 
   const isRunning = job?.status === 'queued' || job?.status === 'running';
-
-  // ── Save-simulation snapshot (for the Compare tab) ──────────────────────
-  // The rich FEM result summary is produced by the transient panel; we lift it
-  // here via PhysicsDashboard.onSummary, bundle it with the input parameters
-  // (operating point + mesh + geometry), and POST it to the saved-sims store.
-  const [lastSummary, setLastSummary] = useState<TransientSummary | null>(null);
-  const [saveName, setSaveName] = useState('');
-  const [saveBusy, setSaveBusy] = useState(false);
-  const [saveMsg,  setSaveMsg]  = useState<string | null>(null);
-  const [runSig,   setRunSig]   = useState<string | null>(null);
-  const readMesh = <T,>(k: string, def: T): T => {
-    try { const r = localStorage.getItem(`mesh.${k}`); return r == null ? def : (JSON.parse(r) as T); }
-    catch { return def; }
-  };
-  // Signature of every input that changes the FEM result.  Re-read each render
-  // (incl. localStorage mesh.* which the Mesh tab edits) so we can tell when the
-  // displayed result no longer matches the current settings.
-  // NB: torqueFilter is NOT here — band-limiting is a client-side display
-  // toggle (the backend always returns both raw + filtered series), so flipping
-  // it must NOT mark the result stale or require a re-run.
-  const geoSig = () => {
-    try {
-      return Object.entries(storeGeometry || {})
-        .filter(([, v]) => typeof v === 'number')
-        .sort(([a], [b]) => (a < b ? -1 : 1))
-        .map(([k, v]) => `${k}:${v}`).join('|');
-    } catch { return ''; }
-  };
-  const computeSig = () => JSON.stringify({
-    I: current, g: phaseOffset, rpm, steps, coilTemp, endWinding, connection,
-    fl: fieldLosses, dm: demag,
-    ns: readMesh('nSectors', 1), ms: readMesh('meshSize', 4.0), mn: readMesh('minSize', 0.3),
-    gl: readMesh('gapLayers', 2), oa: readMesh('outerAir', 1.3), nd: readMesh('normalDev', 6),
-    geo: geoSig(),   // geometry change (e.g. applied Sweep design) ⇒ result stale
-  });
-  // Snapshot the run's inputs the moment a run is launched (runNonce ticks).
-  useEffect(() => { setRunSig(computeSig()); }, [runNonce]);  // eslint-disable-line react-hooks/exhaustive-deps
-  // The shown summary is STALE if any sim input changed since that run — then
-  // saving would store the NEW params against the OLD result (the "all rows
-  // identical" bug).  Block Save until the user re-runs.
-  const settingsChanged = !!lastSummary && runSig != null && computeSig() !== runSig;
-  const saveSimulation = async () => {
-    if (settingsChanged) { setSaveMsg('Settings changed — press Re-run Simulation first'); return; }
-    if (!lastSummary) { setSaveMsg('Run a simulation first'); return; }
-    setSaveBusy(true); setSaveMsg(null);
-    try {
-      // Snapshot all numeric geometry params so any geometry change is diffable.
-      let geo: Record<string, number> = {};
-      try {
-        const cfg = await fetch(`${API}/api/config`).then(r => r.json());
-        const g = cfg.geometry ?? {};
-        geo = Object.fromEntries(
-          Object.entries(g).filter(([, v]) => typeof v === 'number')
-        ) as Record<string, number>;
-      } catch { /* geometry optional */ }
-      const params = {
-        ...geo,
-        I_phase_rms: current,
-        gamma_deg: phaseOffset,
-        rpm,
-        frequency_hz: frequency,
-        coil_temp_c: coilTemp,
-        end_winding_factor: endWinding,
-        connection,
-        steps_per_period: steps,
-        field_losses: fieldLosses,
-        demag,
-        torque_filter: torqueFilter,
-        n_sectors: readMesh('nSectors', 1),
-        mesh_size_mm: readMesh('meshSize', 4.0),
-        min_size_mm: readMesh('minSize', 0.3),
-        num_poles: numPoles,
-        num_slots: numSlots,
-        num_wires_per_slot: nWiresPerSlot,
-      };
-      const name = saveName.trim() || `sim ${new Date().toLocaleString()}`;
-      const r = await fetch(`${API}/api/sims/saved`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, params, results: lastSummary }),
-      });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      setSaveMsg('✓ saved — open the Compare tab');
-      setSaveName('');
-    } catch (e: any) {
-      setSaveMsg('✗ ' + String(e.message || e));
-    } finally {
-      setSaveBusy(false);
-    }
-  };
 
   // ─────────────────────────────────────────────────────────────────────────
   return (
@@ -844,41 +750,6 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
       {/* ── RIGHT: results ── */}
       <Box sx={{ flex: 1, overflowY: 'auto', p: 3, display: 'flex', flexDirection: 'column', gap: 3 }}>
 
-        {/* ── Save-simulation card → snapshots the run for the Compare tab ── */}
-        <Paper sx={{ bgcolor: '#0a1628', border: '1px solid #1e3a5f', p: 1.5, borderRadius: 2,
-          display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
-          <SaveIcon sx={{ color: '#60a5fa' }} />
-          <Box sx={{ flex: 1, minWidth: 200 }}>
-            <Typography sx={{ fontSize: 12, fontWeight: 700, color: '#e2e8f0' }}>
-              Save this simulation
-            </Typography>
-            <Typography sx={{ fontSize: 10, color: (simBusy || settingsChanged) ? '#fbbf24' : '#64748b' }}>
-              {simBusy
-                ? 'Simulation running — Save enables when it finishes'
-                : settingsChanged
-                  ? '⚠ Settings changed since the last run — press “Re-run Simulation” to update before saving'
-                  : lastSummary
-                    ? `T_avg = ${lastSummary.T_em_avg_Nm.toFixed(1)} N·m · ripple = ${lastSummary.T_ripple_pct.toFixed(1)} % · η = ${(lastSummary.efficiency * 100).toFixed(1)} % → snapshot for the Compare tab`
-                    : 'Run a simulation first, then snapshot it for side-by-side comparison'}
-            </Typography>
-          </Box>
-          <TextField size="small" placeholder="name (e.g. baseline 1/2)"
-            value={saveName} onChange={e => setSaveName(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter' && !simBusy && !settingsChanged) saveSimulation(); }}
-            disabled={simBusy || settingsChanged}
-            sx={{ width: 220 }} inputProps={{ style: { fontSize: 12 } }} />
-          <Button variant="contained" onClick={saveSimulation}
-            disabled={!lastSummary || saveBusy || simBusy || settingsChanged} startIcon={<SaveIcon />}
-            sx={{ textTransform: 'none', bgcolor: '#2563eb', '&:hover': { bgcolor: '#1d4ed8' } }}>
-            {saveBusy ? 'Saving…' : simBusy ? 'Running…' : settingsChanged ? 'Re-run first' : 'Save'}
-          </Button>
-          {saveMsg && (
-            <Typography sx={{ fontSize: 11, color: saveMsg.startsWith('✓') ? '#4ade80' : '#fca5a5' }}>
-              {saveMsg}
-            </Typography>
-          )}
-        </Paper>
-
         {/* Header + Physics overview card removed by user request.
             • The "2D Magnetostatics / Governing equation / Rotor
               periodicity / Domains" block is dropped entirely.
@@ -1104,7 +975,6 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
           fresh={freshRun}
           onBusyChange={setSimBusy}
           steps={steps}
-          onSummary={setLastSummary}
           fieldLosses={fieldLosses}
           demag={demag}
           torqueFilter={torqueFilter}

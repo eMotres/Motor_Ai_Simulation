@@ -15,6 +15,7 @@ import {
 import {
   ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts';
+import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import { useMotorStore } from '../../stores/motorStore';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
@@ -542,8 +543,8 @@ const SweepStudyPanel: React.FC = () => {
                   : '(base — no swept variables)'}
               </Typography>
               <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mt: 0.5 }}>
-                <Button size="small" variant="contained" onClick={() => applyPoint(selected)}
-                  sx={{ textTransform: 'none', fontSize: 11 }}>
+                <Button size="small" variant="outlined" color="success" startIcon={<PlayArrowIcon />}
+                  onClick={() => applyPoint(selected)}>
                   Apply picked point to geometry
                 </Button>
                 {applyMsg && <Typography sx={{ fontSize: 11,

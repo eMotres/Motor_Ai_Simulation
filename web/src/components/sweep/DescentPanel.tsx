@@ -910,7 +910,7 @@ const DescentPanel: React.FC = () => {
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
           {selectedPt && selectedPt.overrides ? (
             <>
-              <Button variant="outlined" color="secondary" size="small" startIcon={<PlayArrowIcon />}
+              <Button variant="outlined" color="success" size="small" startIcon={<PlayArrowIcon />}
                 onClick={async () => { await applyDescentPoint(selectedPt); setApplied(true); }}>
                 Apply picked point to geometry
               </Button>

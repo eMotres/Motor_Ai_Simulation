@@ -1632,6 +1632,16 @@ def descent_start(req: DescentRequest):
                                "boundary": [], "walk_round": 1, "converged": False,
                                "seeded_from_surrogate": False,
                                "walk_rounds": (max_rounds if auto_expand else 1),
+                               # Eval parameters this run used — pinned to the result so applying
+                               # a point can RESTORE them into the Simulation tab (else re-running
+                               # the Sim at toggled settings won't reproduce the picked design).
+                               "eval_params": {
+                                   "steps_per_period": steps, "n_sectors": n_sectors,
+                                   "gap_layers": float(req.gap_layers), "coil_temp_c": float(req.coil_temp_c),
+                                   "pole_copy": req.pole_copy, "torque_filter": bool(req.torque_filter),
+                                   "rotor_eddy": bool(req.rotor_eddy),
+                                   "end_winding_factor": float(req.end_winding_factor),
+                                   "mesh_size_mm": mesh_size, "min_size_mm": min_size},
                                "run_id": req.run_id, "error": None, "cancel": False})
     threading.Thread(
         target=worker,

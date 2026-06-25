@@ -360,6 +360,22 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
     return () => window.removeEventListener('sim-operating-point', onOp as EventListener);
   }, []);
 
+  // Pin: when a descent design is applied, adopt the run's eval params so re-running
+  // the Simulation reproduces the picked point (mesh params are read fresh from
+  // localStorage; these persisted-state fields need a live nudge, like the op-point).
+  useEffect(() => {
+    const onEval = (e: Event) => {
+      const p = (e as CustomEvent).detail || {};
+      if (typeof p.steps_per_period === 'number') { setSteps(p.steps_per_period); setStepsStr(String(p.steps_per_period)); }
+      if (typeof p.coil_temp_c === 'number') setCoilTemp(p.coil_temp_c);
+      if (typeof p.end_winding_factor === 'number') setEndWinding(p.end_winding_factor);
+      if (typeof p.demag === 'boolean') setDemag(p.demag);
+      if (typeof p.torque_filter === 'boolean') setTorqueFilter(p.torque_filter);
+    };
+    window.addEventListener('descent-eval-params', onEval as EventListener);
+    return () => window.removeEventListener('descent-eval-params', onEval as EventListener);
+  }, []);
+
   // ── load server status + geometry ─────────────────────────────────────────
   useEffect(() => {
     fetch(`${API}/api/simulation/status`)

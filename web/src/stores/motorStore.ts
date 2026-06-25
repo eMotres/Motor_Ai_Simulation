@@ -23,6 +23,23 @@ import {
 
 const API_BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
 
+// Restore the eval parameters a descent run used into the Simulation tab's sources,
+// so re-running the Simulation on an applied design REPRODUCES it (the optimizer eval
+// is byte-identical to Simulation, so identical params => identical numbers). Mesh
+// params are read fresh from localStorage at request time; the persisted-state Sim
+// fields (steps, coil temp, …) are nudged live via the 'descent-eval-params' event.
+function restoreDescentEvalParams(st: any): void {
+  const ep = st?.eval_params;
+  if (!ep || typeof ep !== 'object') return;
+  const put = (k: string, v: unknown) => { if (v != null) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* quota */ } } };
+  put('sim.stepsPP', ep.steps_per_period);  put('mesh.nSectors', ep.n_sectors);
+  put('mesh.gapLayers', ep.gap_layers);     put('sim.coilTemp', ep.coil_temp_c);
+  put('mesh.poleCopy', ep.pole_copy);       put('sim.torqueFilter', ep.torque_filter);
+  put('sim.fieldLosses', ep.rotor_eddy);    put('sim.endWinding', ep.end_winding_factor);
+  put('mesh.meshSize', ep.mesh_size_mm);    put('mesh.minSize', ep.min_size_mm);
+  try { window.dispatchEvent(new CustomEvent('descent-eval-params', { detail: ep })); } catch { /* SSR */ }
+}
+
 // Material PROPERTIES (Br, μr, σ, …) are not edited in the UI — material
 // selection is library-based, assigned per part on the Materials tab via
 // /api/materials (see useMotorAssignments).  The old editable materialConfig
@@ -692,6 +709,7 @@ export const useMotorStore = create<MotorState>()(
         if (!overrides || !Object.keys(overrides).length) return;
         if (get().connectedToApi) await get().updateGeometryViaApi(overrides);
         else get().updateGeometry(overrides);
+        restoreDescentEvalParams(st);   // pin the run's eval params into the Simulation tab
         // Persist the OPERATING POINT the design was found at (solved current +
         // MTPA γ).  Without this, simulating the saved geometry runs at the
         // Simulation panel's idle current → low torque → inflated ripple% (the
@@ -727,6 +745,7 @@ export const useMotorStore = create<MotorState>()(
         if (!overrides || !Object.keys(overrides).length) return;
         if (get().connectedToApi) await get().updateGeometryViaApi(overrides);
         else get().updateGeometry(overrides);
+        restoreDescentEvalParams(get().descentState);   // pin the run's eval params into the Simulation tab
         const I = (typeof pt?.current_a === 'number') ? pt.current_a : undefined;
         const g = (typeof pt?.gamma_deg === 'number') ? pt.gamma_deg : undefined;
         if (I !== undefined || g !== undefined) {

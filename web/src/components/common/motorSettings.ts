@@ -44,6 +44,23 @@ function applyBlock(ns: string, map: [string, string][], block?: Record<string, 
 export const readMeshSettings = (): Record<string, unknown> => readBlock('mesh', MESH_MAP);
 export const readSimSettings  = (): Record<string, unknown> => readBlock('sim', SIM_MAP);
 
+/** The current Simulation summary the user SEES (persisted by PhysicsDashboard to
+ *  `sim.lastSummary`), mapped to the backend's card-metric keys.  Sent on save so
+ *  a motor's card shows those exact numbers — not a stale config/.last_transient.
+ *  Undefined → backend falls back to the last FEM run (previous behaviour). */
+export function readSimMetrics(): Record<string, number> | undefined {
+  try {
+    const s = JSON.parse(localStorage.getItem('sim.lastSummary') || 'null');
+    if (!s || typeof s !== 'object') return undefined;
+    const m: Record<string, number> = {};
+    const set = (k: string, v: unknown) => { const n = Number(v); if (Number.isFinite(n)) m[k] = n; };
+    set('T_avg_Nm', s.T_em_avg_Nm); set('efficiency', s.efficiency);
+    set('T_ripple_pct', s.T_ripple_pct); set('V_peak', s.V_phase_peak_V);
+    set('P_mech_W', s.P_mech_W);
+    return Object.keys(m).length ? m : undefined;
+  } catch { return undefined; }
+}
+
 export interface ActiveMotor { id: string; name: string; }
 
 export function getActiveMotor(): ActiveMotor | null {
@@ -122,7 +139,8 @@ export async function openMotor(presetId: string, name: string): Promise<boolean
 export async function createMotorFromCurrent(name: string): Promise<ActiveMotor> {
   const r = await fetch(`${API}/api/presets`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, mesh: readMeshSettings(), simulation: readSimSettings() }),
+    body: JSON.stringify({ name, mesh: readMeshSettings(), simulation: readSimSettings(),
+      metrics: readSimMetrics() }),
   });
   if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
   const d = await r.json();
@@ -140,7 +158,7 @@ export async function overwriteActiveMotor(): Promise<ActiveMotor> {
   const r = await fetch(`${API}/api/presets`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ id: active.id, name: active.name,
-      mesh: readMeshSettings(), simulation: readSimSettings() }),
+      mesh: readMeshSettings(), simulation: readSimSettings(), metrics: readSimMetrics() }),
   });
   if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
   return active;

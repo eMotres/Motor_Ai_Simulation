@@ -178,8 +178,15 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
     if (runNonce !== appliedNonceRef.current) { appliedNonceRef.current = runNonce; setAppliedSummary(null); }
   }, [runNonce]);
   const shownSummary = appliedSummary ?? transientSummary;
-  // Forward the shown summary to the parent (for the Save-simulation snapshot).
-  React.useEffect(() => { onSummary?.(shownSummary); }, [shownSummary]);  // eslint-disable-line react-hooks/exhaustive-deps
+  // Forward the shown summary to the parent (for the Save-simulation snapshot) and
+  // persist it, so "Save as new motor" stamps the card with the numbers the user
+  // actually SEES here — not a stale .last_transient on disk.
+  React.useEffect(() => {
+    onSummary?.(shownSummary);
+    try {
+      if (shownSummary) localStorage.setItem('sim.lastSummary', JSON.stringify(shownSummary));
+    } catch { /* quota */ }
+  }, [shownSummary]);  // eslint-disable-line react-hooks/exhaustive-deps
   const [data, setData]       = useState<PhysicsData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState<string | null>(null);

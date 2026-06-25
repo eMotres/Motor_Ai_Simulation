@@ -23,7 +23,146 @@ _CONFIG_PATH = _ROOT / "config" / "motor_config.yaml"
 _CATALOG_PATH = _ROOT / "config" / "motor_catalog.json"
 
 
-def _upsert_catalog_entry(preset_id: str, preset: dict) -> None:
+def _thumb_path_d(geom, c: float, s: float) -> str:
+    """Shapely Polygon/MultiPolygon -> SVG path 'd' (mm->view units, y flipped)."""
+    if geom is None or getattr(geom, "is_empty", True):
+        return ""
+    geoms = list(geom.geoms) if geom.geom_type == "MultiPolygon" else [geom]
+    parts = []
+    for g in geoms:
+        if g.is_empty:
+            continue
+        for ring in [g.exterior, *g.interiors]:
+            pts = list(ring.coords)
+            if len(pts) < 3:
+                continue
+            d = " L ".join(f"{c + x * s:.2f} {c - y * s:.2f}" for x, y in pts)
+            parts.append("M " + d + " Z")
+    return " ".join(parts)
+
+
+def _gen_thumb_svg(geo: dict):
+    """Real-geometry cross-section SVG (stator + slots, rotor, coils, magnets by
+    polarity, shaft) from the ACTUAL CadQuery geometry — the same themed snapshot
+    the prebuilt catalog cards use (design_runs/gen_thumbnails.py). Returns the SVG
+    string, or None if the geometry can't be built (card falls back to a schematic)."""
+    try:
+        from motor_ai_sim.cadquery_geometry import CadQueryMotor
+        C, VIEW, MARGIN = 60.0, 120.0, 4.0
+        COL = dict(stator="#26344a", rotor="#314158", shaft="#4a5a73",
+                   coil="#c6822f", magN="#e0556a", magS="#5b8def", edge="#46597a")
+        m = CadQueryMotor()
+        m.set_parameters(geo)
+        P = m.get_2d_polygons()
+        R = float(m.parameters["stator_outer_radius"])
+        s = (VIEW / 2 - MARGIN) / R
+        out = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {VIEW:.0f} {VIEW:.0f}">']
+        out.append(f'<path d="{_thumb_path_d(P["stator"], C, s)}" fill="{COL["stator"]}" '
+                   f'fill-rule="evenodd" stroke="{COL["edge"]}" stroke-width="0.7"/>')
+        out.append(f'<path d="{_thumb_path_d(P["rotor"], C, s)}" fill="{COL["rotor"]}" fill-rule="evenodd"/>')
+        for c in P.get("coils", []):
+            out.append(f'<path d="{_thumb_path_d(c, C, s)}" fill="{COL["coil"]}"/>')
+        for poly, pol in P.get("magnets", []):
+            out.append(f'<path d="{_thumb_path_d(poly, C, s)}" fill="{COL["magN"] if pol > 0 else COL["magS"]}"/>')
+        out.append(f'<path d="{_thumb_path_d(P["shaft"], C, s)}" fill="{COL["shaft"]}"/>')
+        out.append("</svg>")
+        return "".join(out)
+    except Exception:
+        return None
+
+
+def _mat_name(mid) -> str:
+    """Short display name for a material id (Arnold_N52UH_150C -> N52UH 150C)."""
+    s = str(mid or "").strip()
+    for pref in ("Arnold_", "JFE_", "Hitachi_", "Vacuumschmelze_", "VAC_"):
+        if s.startswith(pref):
+            s = s[len(pref):]
+            break
+    return s.replace("_", " ")
+
+
+def _last_transient_summary():
+    """The most recent FEM transient result (config/.last_transient.json) so a
+    just-saved motor's card carries real torque / power / efficiency / voltage
+    (the user simulates a motor, then saves it)."""
+    try:
+        p = _ROOT / "config" / ".last_transient.json"
+        if not p.exists():
+            return None
+        blob = json.loads(p.read_text(encoding="utf-8"))
+        r = blob.get("result")
+        return r if isinstance(r, dict) else None
+    except Exception:
+        return None
+
+
+def _enrich_card_entry(entry: dict, geo: dict, sim: dict, met: dict) -> None:
+    """Fill the card with the SAME headline + detail fields the prebuilt motors
+    show (power, efficiency, voltage, magnet, steel, length, wire), so user-saved
+    cards look identical. Geometry/material fields are deterministic; torque /
+    power / eff / voltage come from the saved metrics or the last FEM run."""
+    import math
+
+    def _num(v):
+        try:
+            return float(v)
+        except Exception:
+            return None
+
+    ml = _num(geo.get("motor_length"))
+    if ml:
+        entry["length_mm"] = round(ml, 1)
+    ww, wh, nw = _num(geo.get("wire_width")), _num(geo.get("wire_height")), _num(geo.get("num_wires_per_slot"))
+    if ww and wh and nw:
+        entry["wire"] = f"{ww:g}x{wh:g} mm, {int(round(nw))}t"   # ASCII only (no mojibake)
+
+    try:
+        from motor_ai_sim.config import get_config
+        mats = get_config().get("materials") or {}
+        if mats.get("magnet"):
+            entry["magnet"] = _mat_name(mats["magnet"])
+        if mats.get("stator_core"):
+            entry["steel"] = _mat_name(mats["stator_core"])
+    except Exception:
+        pass
+
+    # Prefer the metrics saved with the motor; else fall back to the last FEM run.
+    mm = dict(met or {})
+    if not any(mm.get(k) is not None for k in ("efficiency", "T_avg_Nm", "T_em_Nm")):
+        mm = _last_transient_summary() or mm
+
+    def _pick(*keys):
+        for k in keys:
+            v = _num(mm.get(k))
+            if v is not None:
+                return v
+        return None
+
+    tavg = _pick("T_avg_Nm", "T_em_Nm", "torque")
+    vpk = _pick("V_peak", "voltage_pk_v", "v_peak")
+    rip = _pick("T_ripple_pct", "ripple_pct", "ripple")
+    rpm = _num(sim.get("rpm")) or 0.0
+    pmech = _pick("P_mech_avg_W", "P_mech_W", "power_w")
+    pelec = _pick("P_elec_in_W")
+    eff = _pick("efficiency", "efficiency_pct")
+    if eff is None and pmech and pelec and pelec > 0:
+        eff = pmech / pelec     # the FEM result stores the power split, not η directly
+
+    if tavg is not None:
+        entry["T_avg_Nm"] = round(tavg, 3)
+    if pmech:
+        entry["power_w"] = round(pmech, 1)
+    elif tavg is not None and rpm > 0:
+        entry["power_w"] = round(tavg * 2 * math.pi * rpm / 60.0, 1)
+    if eff is not None:
+        entry["efficiency_pct"] = round(eff * 100.0 if eff <= 1.0 else eff, 1)
+    if vpk is not None:
+        entry["voltage_pk_v"] = round(vpk, 1)
+    if rip is not None:
+        entry["ripple_pct"] = round(rip, 1)
+
+
+def _upsert_catalog_entry(preset_id: str, preset: dict, gen_thumb: bool = True) -> None:
     """Add/update a Motors-catalog card for this preset so saved motors show
     up in the Motors tab and can be re-loaded."""
     try:
@@ -43,6 +182,15 @@ def _upsert_catalog_entry(preset_id: str, preset: dict) -> None:
     slots = ns * _i(geo.get("num_slots_per_segment"))
     poles = ns * _i(geo.get("num_poles_per_segment"))
     cid = f"cat_{preset_id}"
+    # Real-geometry thumbnail from the ACTUAL geometry, stored inline on the card.
+    # Generate on a geometry save; on a mesh/sim-only save reuse the card's
+    # existing SVG so it isn't dropped (and we don't rebuild CadQuery needlessly).
+    thumb = _gen_thumb_svg(geo) if gen_thumb else None
+    if not thumb:
+        for _m in cat.get("motors", []):
+            if _m.get("id") == cid and _m.get("thumb_svg"):
+                thumb = _m["thumb_svg"]
+                break
     entry = {
         "id": cid, "diameter_mm": dia or 0, "name": preset.get("name", preset_id),
         "topology": "Spoke-PM SPMSM", "slots": slots, "poles": poles,
@@ -52,6 +200,9 @@ def _upsert_catalog_entry(preset_id: str, preset: dict) -> None:
         "description": preset.get("description") or f"Your saved motor — {preset.get('name', preset_id)}.",
         "preset": preset_id, "owner": "user",
     }
+    if thumb:
+        entry["thumb_svg"] = thumb
+    _enrich_card_entry(entry, geo, sim, met)   # power/eff/voltage/magnet/steel/length/wire
     cat.setdefault("tiers", []); cat.setdefault("diameters_mm", []); cat.setdefault("motors", [])
     if dia and dia not in cat["diameters_mm"]:
         cat["diameters_mm"] = sorted(set([*cat["diameters_mm"], dia]))
@@ -259,9 +410,10 @@ def save_motor_settings(preset_id: str, patch: SettingsPatch):
         p["simulation"] = {**(p.get("simulation") or {}), **patch.simulation}
     presets[preset_id] = p
     _save_presets(presets)
-    # keep the Motors-tab card in sync for user motors
+    # keep the Motors-tab card in sync for user motors; only rebuild the
+    # geometry thumbnail when the geometry actually changed (else reuse it).
     if p.get("owner") == "user":
-        _upsert_catalog_entry(preset_id, p)
+        _upsert_catalog_entry(preset_id, p, gen_thumb=(patch.geometry is not None))
     return {"status": "ok", "id": preset_id,
             "saved": [k for k in ("geometry", "mesh", "simulation")
                       if getattr(patch, k) is not None]}

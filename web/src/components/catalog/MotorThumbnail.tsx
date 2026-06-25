@@ -8,7 +8,7 @@
  */
 import React, { useState } from 'react';
 
-interface Props { slots: number; poles: number; size?: number; motorId?: string; }
+interface Props { slots: number; poles: number; size?: number; motorId?: string; thumbSvg?: string; }
 
 const C = 60;            // centre
 const R_STATOR = 57;     // stator outer
@@ -22,10 +22,21 @@ const bar = (deg: number, rIn: number, rOut: number, w: number, key: string, fil
     transform={`rotate(${deg} ${C} ${C})`} fill={fill} {...extra} />
 );
 
-const MotorThumbnail: React.FC<Props> = ({ slots, poles, size = 92, motorId }) => {
+const MotorThumbnail: React.FC<Props> = ({ slots, poles, size = 92, motorId, thumbSvg }) => {
   const [failed, setFailed] = useState(false);
 
-  // Real cross-section snapshot (generated from the actual geometry).
+  // Inline real-geometry SVG (stored on the card at save time) — the true
+  // cross-section without needing a hosted asset, so user-saved motors render
+  // their actual geometry everywhere (local + prod).
+  if (thumbSvg) {
+    return (
+      <img src={`data:image/svg+xml;utf8,${encodeURIComponent(thumbSvg)}`}
+        width={size} height={size} alt={`${slots}-slot / ${poles}-pole cross-section`}
+        style={{ display: 'block' }} />
+    );
+  }
+
+  // Real cross-section snapshot (generated from the actual geometry, hosted asset).
   if (motorId && !failed) {
     return (
       <img src={`${import.meta.env.BASE_URL}motor-thumbs/${motorId}.svg`}

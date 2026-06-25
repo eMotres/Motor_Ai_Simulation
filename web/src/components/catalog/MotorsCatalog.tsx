@@ -18,6 +18,7 @@ interface Motor {
   slots: number; poles: number; rpm: number; current_a: number;
   T_avg_Nm: number; ripple_pct: number | null; gamma_deg: number;
   tier: string; description: string; preset?: string;
+  thumb_svg?: string;   // inline real-geometry cross-section (user-saved motors)
   // enriched (optional) — shown when present
   power_w?: number; efficiency_pct?: number; voltage_pk_v?: number;
   magnet?: string; steel?: string; length_mm?: number; wire?: string;
@@ -106,7 +107,7 @@ const MotorsCatalog: React.FC = () => {
       }}>
         {/* header: thumbnail + identity */}
         <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center', mb: 1 }}>
-          <Box sx={{ flexShrink: 0, lineHeight: 0 }}><MotorThumbnail motorId={m.id} slots={m.slots} poles={m.poles} size={84} /></Box>
+          <Box sx={{ flexShrink: 0, lineHeight: 0 }}><MotorThumbnail motorId={m.id} thumbSvg={m.thumb_svg} slots={m.slots} poles={m.poles} size={84} /></Box>
           <Box sx={{ minWidth: 0, flex: 1 }}>
             <Typography sx={{ fontWeight: 700, color: '#e2e8f0', fontSize: '0.86rem', lineHeight: 1.2, mb: 0.6 }}>{m.name}</Typography>
             <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
@@ -127,13 +128,13 @@ const MotorsCatalog: React.FC = () => {
             ? <Stat value={m.efficiency_pct!.toFixed(1)} unit="%" label="efficiency" color="#fcd34d" />
             : hasRip
               ? <Stat value={m.ripple_pct!.toFixed(1)} unit="%" label="ripple" color={m.ripple_pct! < 8 ? '#86efac' : '#fdba74'} />
-              : <Stat value={`${m.current_a}`} unit="A" label="current" />}
+              : <Stat value={`${Math.round(m.current_a)}`} unit="A" label="current" />}
         </Box>
 
         {/* detail grid */}
         <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 1.5, rowGap: 0.35, mb: 1 }}>
           <Detail k="Speed" v={`${m.rpm} rpm`} />
-          <Detail k="Current" v={`${m.current_a} A`} />
+          <Detail k="Current" v={`${Math.round(m.current_a)} A`} />
           {typeof m.voltage_pk_v === 'number' && <Detail k="Voltage" v={`${m.voltage_pk_v} V pk`} />}
           {typeof m.length_mm === 'number' && <Detail k="Length" v={`${m.length_mm} mm`} />}
           {m.magnet && <Detail k="Magnet" v={m.magnet} />}

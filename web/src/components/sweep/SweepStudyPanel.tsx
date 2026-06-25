@@ -506,11 +506,11 @@ const SweepStudyPanel: React.FC = () => {
               <ScatterChart margin={{ top: 8, right: 24, left: 8, bottom: 24 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
                 <XAxis type="number" dataKey="x" name="Nm/kg" tick={{ fontSize: 10 }}
-                  domain={(zoom && extent) ? clampDom(zoom.x, extent.x) : ['auto', 'auto']} allowDataOverflow
+                  domain={extent ? (zoom ? clampDom(zoom.x, extent.x) : extent.x) : ['auto', 'auto']} allowDataOverflow={!!zoom}
                   tickFormatter={(v: number) => v.toFixed(2)}
                   label={{ value: 'Torque / mass (N·m/kg)', position: 'insideBottom', offset: -12, fontSize: 11, fill: '#64748b' }} />
                 <YAxis type="number" dataKey="y" name="Eff %" tick={{ fontSize: 10 }} width={52}
-                  domain={(zoom && extent) ? clampDom(zoom.y, extent.y) : ['auto', 'auto']} allowDataOverflow
+                  domain={extent ? (zoom ? clampDom(zoom.y, extent.y) : extent.y) : ['auto', 'auto']} allowDataOverflow={!!zoom}
                   tickFormatter={(v: number) => v.toFixed(2)}
                   label={{ value: 'Efficiency (%)', angle: -90, position: 'insideLeft', fontSize: 11, fill: '#64748b' }} />
                 <Tooltip content={<SweepTooltip />} />

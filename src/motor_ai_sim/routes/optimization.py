@@ -950,6 +950,24 @@ class DescentRequest(BaseModel):
     current_bump_pct: float = 10.0    # 2nd baseline current = I·(1 + pct/100)
 
 
+class BaselineRequest(BaseModel):
+    """Compute ONLY the current-only baseline line (2 sims of the current geometry
+    at I and I·(1+bump)) — so the chart can draw it up-front, before running a full
+    optimization.  Same eval params as a descent so the line is consistent."""
+    operating_point: OptOperating = Field(default_factory=OptOperating)
+    current_bump_pct: float = 10.0
+    steps_per_period: int = 24
+    coil_temp_c: float = 120.0
+    mesh_size_mm: float = 4.0
+    min_size_mm: float = 0.3
+    gap_layers: float = 2.0
+    pole_copy: Optional[bool] = None
+    torque_filter: bool = True
+    rotor_eddy: bool = True
+    end_winding_factor: float = 0.0
+    n_sectors: int = -1
+
+
 def _msum(m: Dict[str, Any]) -> Dict[str, Any]:
     """Compact metric snapshot for history / progress."""
     return {
@@ -1739,6 +1757,40 @@ def descent_start(req: DescentRequest):
             "n_variables": len(var_specs), "max_iters": max_iters, "auto_expand": auto_expand,
             "max_rounds": (max_rounds if auto_expand else 1),
             "variables": [s["name"] for s in var_specs], "steps_per_period": steps}
+
+
+@router.post("/descent/baseline")
+def descent_baseline(req: BaselineRequest):
+    """Two FEM sims of the CURRENT geometry — at I and I·(1+bump) — defining the
+    'current-only' trade-off line A–B, so the objective-space chart can draw it
+    BEFORE a full optimization.  Runs synchronously (2 evals); returns the line +
+    auto-weights via _make_bline (same as a descent computes internally)."""
+    I    = float(req.operating_point.current_a)
+    g    = float(req.operating_point.gamma_deg)
+    bump = max(0.0, min(float(req.current_bump_pct), 100.0))
+    steps     = max(8, min(int(req.steps_per_period), 180))
+    mesh_size = max(1.0, min(float(req.mesh_size_mm), 12.0))
+    min_size  = max(0.1, min(float(req.min_size_mm), 3.0))
+    gap       = max(1.0, min(float(req.gap_layers), 8.0))
+    n_sectors = int(req.n_sectors)
+
+    def _ev(cur: float):
+        return _subprocess_eval({}, cur, steps, float(req.coil_temp_c), n_periods=1.0,
+                                gamma_deg=g, mesh_size_mm=mesh_size, min_size_mm=min_size,
+                                n_sectors=n_sectors, pole_copy=req.pole_copy,
+                                torque_filter=bool(req.torque_filter),
+                                end_winding_factor=float(req.end_winding_factor),
+                                rotor_eddy=bool(req.rotor_eddy), gap_layers=gap)
+
+    a = _ev(I)
+    if not a.get("ok"):
+        raise HTTPException(status_code=500, detail=f"baseline A eval failed: {a.get('error')}")
+    b = _ev(I * (1.0 + bump / 100.0))
+    if not b.get("ok"):
+        raise HTTPException(status_code=500, detail=f"baseline B eval failed: {b.get('error')}")
+    a["res"]["current_a"] = I
+    b["res"]["current_a"] = I * (1.0 + bump / 100.0)
+    return {"baseline_line": _make_bline(a["res"], b["res"], bump)}
 
 
 @router.get("/descent/progress")

@@ -110,6 +110,9 @@ interface MotorState {
   descentRunning: boolean;
   descentState: any | null;           // raw /descent/progress payload
   descentError: string | null;
+  baselineLine: any | null;           // standalone current-only line (drawn before a run)
+  baselineBusy: boolean;
+  baselineError: string | null;
   // Snapshot of the optimization INPUTS at the last launch — used to detect what
   // changed since (materials, rpm, ripple, winding, …) and suggest re-optimizing.
   lastOptSnapshot: Record<string, any> | null;
@@ -125,6 +128,7 @@ interface MotorState {
   applyDescentBest: () => Promise<void>;
   applyDescentPoint: (pt: any) => Promise<void>;   // apply a USER-PICKED scatter point
   loadLastDescent: () => Promise<void>;   // re-hydrate the last run's charts from the backend
+  computeBaselineLine: (opts: { currentBumpPct: number; steps: number; nSectors: number }) => Promise<void>;
 
   /** Hydrate sweepConfig from the backend so the selected variables follow the
    *  user across browsers; seeds the server if it has none yet but this browser does. */
@@ -632,6 +636,9 @@ export const useMotorStore = create<MotorState>()(
       descentRunning: false,
       descentState: null,
       descentError: null,
+      baselineLine: null,
+      baselineBusy: false,
+      baselineError: null,
       lastOptSnapshot: null,
       setLastOptSnapshot: (s) => set({ lastOptSnapshot: s }),
       runDescent: async ({ rippleMax, maxIters, wEff, wTd, steps, algorithm, nSectors, targetTorque, vPeakLimit, optimizeGamma, autoExpand, maxRounds, surrogateSeed, objective, currentBumpPct }) => {
@@ -700,6 +707,43 @@ export const useMotorStore = create<MotorState>()(
           set({ descentRunning: false });
         } catch (e: any) {
           set({ descentError: String(e?.message ?? e), descentRunning: false });
+        }
+      },
+      computeBaselineLine: async ({ currentBumpPct, steps, nSectors }) => {
+        // Draw the current-only baseline line up-front (2 sims @ I, +bump% I), WITHOUT
+        // a full optimization. Same eval params (single sources) as runDescent so the
+        // line matches what the optimizer will evaluate against.
+        const { sweepConfig } = get();
+        const op0 = sweepConfig.operatingPoints[0] || ({} as any);
+        let mesh_size_mm = 4.0, min_size_mm = 0.3, pole_copy = false, torque_filter = true;
+        try { mesh_size_mm = Number(JSON.parse(localStorage.getItem('mesh.meshSize') ?? '4')) || 4.0; } catch { /* default */ }
+        try { min_size_mm  = Number(JSON.parse(localStorage.getItem('mesh.minSize')  ?? '0.3')) || 0.3; } catch { /* default */ }
+        try { pole_copy    = JSON.parse(localStorage.getItem('mesh.poleCopy') ?? 'false') === true; } catch { /* default */ }
+        try { torque_filter = JSON.parse(localStorage.getItem('sim.torqueFilter') ?? 'true') !== false; } catch { /* default */ }
+        let rotor_eddy = true, end_winding_factor = 0;
+        try { rotor_eddy = JSON.parse(localStorage.getItem('sim.fieldLosses') ?? 'true') !== false; } catch { /* default */ }
+        try { end_winding_factor = Number(JSON.parse(localStorage.getItem('sim.endWinding') ?? '0')) || 0; } catch { /* default */ }
+        let gap_layers = 2, coil_temp_c = 120;
+        try { gap_layers  = Number(JSON.parse(localStorage.getItem('mesh.gapLayers') ?? '2')) || 2; } catch { /* default */ }
+        try { coil_temp_c = Number(JSON.parse(localStorage.getItem('sim.coilTemp')  ?? '120')) || 120; } catch { /* default */ }
+        set({ baselineBusy: true, baselineError: null });
+        try {
+          const res = await fetch(`${API_BASE_URL}/api/optimization/descent/baseline`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              operating_point: { gamma_deg: op0.gamma_deg ?? 0, current_a: op0.current_a, rpm: op0.rpm },
+              current_bump_pct: currentBumpPct, steps_per_period: steps, n_sectors: nSectors,
+              mesh_size_mm, min_size_mm, pole_copy, torque_filter,
+              rotor_eddy, end_winding_factor, gap_layers, coil_temp_c,
+            }),
+          });
+          if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
+          const j = await res.json();
+          set({ baselineLine: j.baseline_line ?? null });
+        } catch (e: any) {
+          set({ baselineError: String(e?.message ?? e) });
+        } finally {
+          set({ baselineBusy: false });
         }
       },
       cancelDescent: async () => {

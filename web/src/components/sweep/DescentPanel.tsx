@@ -79,6 +79,7 @@ const DescentPanel: React.FC = () => {
   const {
     sweepConfig, connectedToApi, parameterSchema, materials,
     descentRunning, descentState, descentError,
+    baselineLine, baselineBusy, baselineError, computeBaselineLine,
     runDescent, cancelDescent, applyDescentBest, applyDescentPoint, loadLastDescent,
     updateSweepConstraints, lastOptSnapshot, setLastOptSnapshot,
   } = useMotorStore();
@@ -314,6 +315,13 @@ const DescentPanel: React.FC = () => {
     ? [{ td: best.torque_per_mass, eff: (best.efficiency ?? 0) * 100, ripple: best.T_ripple_pct, z: 6,
          overrides: _bestX, current_a: best.current_a, gamma_deg: _bestG }] : [];
 
+  // ── Baseline (current-only) line A–B ── from a run (st.baseline_line) OR the
+  // standalone "Draw baseline" button (baselineLine). Computed here so the axes
+  // can frame it even before any optimization point exists.
+  const bline: any = st.baseline_line || st.result?.baseline_line || baselineLine || null;
+  const blA = bline ? { td: bline.td_a, eff: (bline.eff_a ?? 0) * 100, tag: `${Math.round(bline.current_a)}A` } : null;
+  const blB = bline ? { td: bline.td_b, eff: (bline.eff_b ?? 0) * 100, tag: `${Math.round(bline.current_b)}A` } : null;
+
   // Y (efficiency) axis domain: Manual = fixed [yMin, yMax]; Auto = fit to the
   // MEANINGFUL designs (descent path + best + feasible), padded — re-zooms as the
   // run progresses and drops the uninformative low points (clipped via allowDataOverflow).
@@ -321,7 +329,7 @@ const DescentPanel: React.FC = () => {
   // slider decides which are shown): scale to the extreme X (Nm/kg) and Y (η) so
   // every visible point fits with a little margin — nothing clipped, and it re-fits
   // live as the ripple slider hides/shows points.
-  const _objShown = [...shownPts, ...trajPts, ...bestPt];
+  const _objShown = [...shownPts, ...trajPts, ...bestPt, ...(blA && blB ? [blA, blB] : [])];
   const _fitDomain = (vals: number[], padFrac: number, padMin: number, clampLo?: number):
       [number | string, number | string] => {
     const v = vals.filter((x) => Number.isFinite(x));
@@ -337,14 +345,8 @@ const DescentPanel: React.FC = () => {
   const xDomain: [number | string, number | string] =
     _fitDomain(_objShown.map((p: any) => p.td), 0.06, 0.05, 0);
 
-  // ── Baseline (current-only) line A–B ────────────────────────────────────────
-  // Two sims of the START geometry (at I and I·(1+bump)) define the trade-off you
-  // get by just cranking current.  A design ABOVE this line beats it; the signed
-  // perpendicular distance to it IS the objective.  Draw the line across the plot,
-  // mark its A/B endpoints, and surface the auto-derived weights (the line slope).
-  const bline: any = st.baseline_line || st.result?.baseline_line || null;
-  const blA = bline ? { td: bline.td_a, eff: (bline.eff_a ?? 0) * 100, tag: `${Math.round(bline.current_a)}A` } : null;
-  const blB = bline ? { td: bline.td_b, eff: (bline.eff_b ?? 0) * 100, tag: `${Math.round(bline.current_b)}A` } : null;
+  // Baseline-line chart geometry — A/B markers + a segment extended across the
+  // visible X-range (bline/blA/blB are computed above so the axes can frame them).
   const blMarkers = (blA && blB) ? [{ ...blA, z: 5 }, { ...blB, z: 5 }] : [];
   const _xN = (v: number | string, fb: number) => (typeof v === 'number' ? v : fb);
   const _blSeg = (blA && blB && Math.abs(blB.td - blA.td) > 1e-9)
@@ -461,12 +463,25 @@ const DescentPanel: React.FC = () => {
             </ToggleButtonGroup>
           </Tooltip>
           {objective === 'baseline_line' ? (
-            <Tooltip title="The 2nd baseline sim runs at I·(1+this%). Larger = a longer baseline arm (steadier slope) but a bigger efficiency drop to span. 10% is a good default." placement="top">
-              <TextField label="+% I" type="number" size="small" value={currentBump}
-                onChange={e => setCurrentBump(Math.max(1, Math.min(50, Math.round(+e.target.value) || 10)))}
-                inputProps={{ min: 1, max: 50, style: { fontSize: 11, padding: '3px 6px', width: 44 } }}
-                InputLabelProps={{ sx: { fontSize: 10 } }} />
-            </Tooltip>
+            <>
+              <Tooltip title="The 2nd baseline sim runs at I·(1+this%). Larger = a longer baseline arm (steadier slope) but a bigger efficiency drop to span. 10% is a good default." placement="top">
+                <TextField label="+% I" type="number" size="small" value={currentBump}
+                  onChange={e => setCurrentBump(Math.max(1, Math.min(50, Math.round(+e.target.value) || 10)))}
+                  inputProps={{ min: 1, max: 50, style: { fontSize: 11, padding: '3px 6px', width: 44 } }}
+                  InputLabelProps={{ sx: { fontSize: 10 } }} />
+              </Tooltip>
+              <Tooltip title="Run the 2 baseline sims now (at I and +X% I) and draw the current-only line on the chart below — see the reference before launching the full optimization." placement="top">
+                <span>
+                  <Button size="small" variant="outlined"
+                    onClick={() => computeBaselineLine({ currentBumpPct: currentBump, steps, nSectors })}
+                    disabled={!connectedToApi || baselineBusy || descentRunning}
+                    startIcon={baselineBusy ? <CircularProgress size={12} color="inherit" /> : undefined}
+                    sx={{ textTransform: 'none', fontSize: 10, height: 26 }}>
+                    {baselineBusy ? 'Computing…' : 'Draw baseline'}
+                  </Button>
+                </span>
+              </Tooltip>
+            </>
           ) : (
             <>
               <Tooltip title="Efficiency weight (exponent on eff/eff₀)." placement="top">
@@ -519,6 +534,11 @@ const DescentPanel: React.FC = () => {
       {descentError && (
         <Typography color="error" variant="caption" sx={{ display: 'block', mb: 1 }}>
           Descent error: {descentError}
+        </Typography>
+      )}
+      {baselineError && (
+        <Typography color="error" variant="caption" sx={{ display: 'block', mb: 1 }}>
+          Baseline error: {baselineError}
         </Typography>
       )}
 
@@ -667,8 +687,9 @@ const DescentPanel: React.FC = () => {
         </Box>
       )}
 
-      {/* 2-D objective-space projection: efficiency (Y) vs torque/mass (X) */}
-      {totalValidPts > 1 && (
+      {/* 2-D objective-space projection: efficiency (Y) vs torque/mass (X).
+          Shown once there are designs OR a standalone baseline line to draw. */}
+      {(totalValidPts > 1 || bline) && (
         <Box sx={{ mb: 2 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, mb: 0.5, flexWrap: 'wrap' }}>
             <Typography variant="caption" color="text.secondary">

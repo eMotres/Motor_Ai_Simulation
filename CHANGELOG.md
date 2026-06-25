@@ -7,6 +7,25 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
 
 ## [Unreleased]
 
+## [0.1.7] — 2026-06-25
+
+### Fixed
+- **Sweep-study chart now draws its points.** Under recharts v3 the objective chart
+  rendered an empty plot (points + curves positioned outside the axes); it now drives
+  the axes from the explicit data extent, so all designs + curves show.
+- **Saved-motor card uses the Simulation result you see.** Creating/overwriting a
+  motor now stamps the card with the live Simulation summary (sent as metrics),
+  instead of falling back to a stale on-disk last-transient that could differ from
+  the displayed (applied) result.
+
+### Changed
+- **Unified Apply buttons** across Optimize + Sweep — all green outlined with a ▶
+  icon and the same "Apply picked point to geometry" wording.
+- **Sweep table torque → 2 decimals** (0.57 / 0.60 / 0.61 … instead of all "0.6").
+- **Removed the "Save this simulation" snapshot card** — motors are saved through
+  the motor flow (Save as new / Overwrite), which captures geometry + the current
+  simulation, so the second save path was redundant.
+
 ## [0.1.6] — 2026-06-25
 
 ### Added

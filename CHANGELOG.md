@@ -7,6 +7,32 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
 
 ## [Unreleased]
 
+## [0.1.5] — 2026-06-25
+
+### Changed
+- **Optimizer ≡ Simulation (computational integrity).** A design picked in
+  Optimize now reproduces exactly when re-run in Simulation. The optimizer's FEM
+  evaluation calls the *same* solver with byte-identical parameters — the previously
+  dropped air-gap layers, coil temperature, outer-air factor, demag flag and
+  component-mesh are now threaded through, and efficiency uses the Simulation
+  formula (P_mech / P_elec). Applying a point also restores that run's evaluation
+  parameters into the Simulation tab, so the point reproduces even if settings
+  changed in between.
+- **Simpler optimizer operating point.** The optimizer runs at the Simulation
+  tab's fixed current / speed / γ and varies *only* the selected geometry
+  variables — removed the "target torque / auto-solve current" mode and the
+  inverter voltage limit (set voltage by hand instead). `current` stays selectable
+  as a variable: unselected it's the fixed Simulation current, selected the
+  optimizer varies it. The ★ best point is now click-selectable and applicable.
+- **Mesh symmetry defaults to Full** (full disk — the accurate, canonical mesh)
+  everywhere: Simulation, Mesh, Optimize, Sweep, DOE and the animation viewer.
+
+### Added
+- **Real-geometry thumbnails + full metrics on saved-motor cards.** Saving a motor
+  now renders its actual cross-section as an inline thumbnail and fills the card
+  exactly like the prebuilt catalog — torque, power, efficiency, voltage, magnet,
+  steel, stack length and wire spec.
+
 ## [0.1.4] — 2026-06-24
 
 ### Changed

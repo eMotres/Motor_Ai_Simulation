@@ -714,6 +714,8 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
   const [thermalErr,     setThermalErr]     = useState<string | null>(null);
   const [ambientT, setAmbientT] = useState<number>(40);     // °C
   const [hConv,    setHConv]    = useState<number>(120);    // W/m²K (forced air)
+  const [coolOpen,  setCoolOpen]  = useState(false);   // cooling dropdown open
+  const [coolHover, setCoolHover] = useState(false);   // cooling tooltip hover-intent
   const [showFlux, setShowFlux] = useState<boolean>(true);
   const isEddy = !payloadOverride && EDDY_MODES.has(mode);
   const isThermal = !payloadOverride && mode === 'Temp';
@@ -932,8 +934,11 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
                   sx={{ width: 78, '& .MuiInputBase-input': { fontSize: 11, py: 0.5 },
                     '& .MuiInputLabel-root': { fontSize: 11 } }} />
               </Tooltip>
-              <Tooltip title="Cooling at the housing → convection coefficient h [W/m²·K]">
+              <Tooltip title="Cooling at the housing → convection coefficient h [W/m²·K]"
+                open={coolHover && !coolOpen}
+                onOpen={() => setCoolHover(true)} onClose={() => setCoolHover(false)}>
                 <Select size="small" value={hConv} onChange={(e) => setHConv(Number(e.target.value))}
+                  open={coolOpen} onOpen={() => setCoolOpen(true)} onClose={() => setCoolOpen(false)}
                   sx={{ fontSize: 11, '& .MuiSelect-select': { py: 0.5 } }}>
                   <MenuItem sx={{ fontSize: 11 }} value={10}>Natural air (h≈10)</MenuItem>
                   <MenuItem sx={{ fontSize: 11 }} value={120}>Forced air (h≈120)</MenuItem>

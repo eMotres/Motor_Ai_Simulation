@@ -127,7 +127,7 @@ const SweepVarCard: React.FC<SweepVarCardProps> = ({ paramName, label, unit, opt
         {optimize ? (
           // Optimize: vary the variable by ± a change window around its CURRENT
           // value — more intuitive than absolute min/max (that's the Sweep view).
-          <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+          <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap', rowGap: 0.5 }}>
             <Typography variant="caption" sx={{ fontWeight: 700, color: '#e2e8f0', flexShrink: 0 }}>
               {fmt(anchor)}{unit ? ` ${unit}` : ''}
             </Typography>
@@ -141,7 +141,7 @@ const SweepVarCard: React.FC<SweepVarCardProps> = ({ paramName, label, unit, opt
             </Typography>
           </Box>
         ) : (
-          <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+          <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap', rowGap: 0.5 }}>
             <RangeField label="min"  value={Number(v.min)}  onChange={n => updateVariation(paramName, { min: n })} />
             <RangeField label="max"  value={Number(v.max)}  onChange={n => updateVariation(paramName, { max: n })} />
             <RangeField label="step" value={Number(v.step)} onChange={n => updateVariation(paramName, { step: n })} />
@@ -343,7 +343,7 @@ const SweepConfigPanel: React.FC = () => {
           <ToggleButton value="doe" sx={{ textTransform: 'none', fontSize: 12 }}>DOE / Importance</ToggleButton>
         </ToggleButtonGroup>
        {algoTab !== 'doe' && (
-        <Box sx={{ display: 'flex', gap: 4 }}>
+        <Box sx={{ display: 'flex', gap: 3, alignItems: 'flex-start' }}>
 
         {/* Left: optimization variable cards */}
         <Box sx={{ flex: 1, minWidth: 0 }}>
@@ -426,32 +426,29 @@ const SweepConfigPanel: React.FC = () => {
               </Typography>
             </Box>
           ) : (
-            sweepEntries.map(([name]) => (
-              <SweepVarCard
-                key={name}
-                paramName={name}
-                label={schemaMap[name]?.label ?? SPECIAL_VARS[name]?.label ?? name}
-                unit={schemaMap[name]?.unit ?? SPECIAL_VARS[name]?.unit}
-                optimize={algoTab === 'optimize'}
-              />
-            ))
+            <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', columnGap: 1.5 }}>
+              {sweepEntries.map(([name]) => (
+                <SweepVarCard
+                  key={name}
+                  paramName={name}
+                  label={schemaMap[name]?.label ?? SPECIAL_VARS[name]?.label ?? name}
+                  unit={schemaMap[name]?.unit ?? SPECIAL_VARS[name]?.unit}
+                  optimize={algoTab === 'optimize'}
+                />
+              ))}
+            </Box>
           )}
         </Box>
 
         <Divider orientation="vertical" flexItem />
 
-        {/* Right: operating point + ripple */}
-        <Box sx={{ flex: 1, minWidth: 0 }}>
+        {/* Right: operating point + ripple (narrow — frees width for 2-col variables) */}
+        <Box sx={{ flexShrink: 0, width: 280 }}>
 
           <Typography variant="overline" color="text.secondary" sx={{ fontSize: 10, letterSpacing: 1, display: 'block', mb: 0.5 }}>
             Operating Point
           </Typography>
-          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
-            The optimizer targets a <strong>torque</strong> — the phase current is solved automatically
-            for each design. Speed &amp; load angle are taken from the <strong>Simulation</strong> tab.
-          </Typography>
-
-          <Card variant="outlined" sx={{ mb: 2.5, bgcolor: 'rgba(255,255,255,0.02)' }}>
+          <Card variant="outlined" sx={{ mb: 2.5, mt: 0.5, bgcolor: 'rgba(255,255,255,0.02)' }}>
             <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25 }}>
                 <TextField
@@ -497,9 +494,7 @@ const SweepConfigPanel: React.FC = () => {
             Torque Ripple
           </Typography>
           <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-            Not a search constraint — the optimizer maximises <strong>efficiency × torque/mass</strong>{' '}
-            (2 criteria). Trim pulsation visually with the <strong>“ripple ≤ X%”</strong> slider under the
-            results chart, then pick the design you want.
+            Not a constraint — trim it with the <strong>“ripple ≤ X%”</strong> slider under the results chart.
           </Typography>
         </Box>
        </Box>

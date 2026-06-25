@@ -7,6 +7,35 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
 
 ## [Unreleased]
 
+## [0.1.6] — 2026-06-25
+
+### Added
+- **Baseline-line objective for the optimizer — no more guessing the weights.** Two
+  FEM sims of the start geometry (at the Simulation current I and at I·(1+bump%))
+  define a "current-only" trade-off line in (torque/mass, efficiency) space. The
+  optimizer now maximises the signed *perpendicular distance above* that line, so a
+  design only wins if it beats what you'd get by just cranking current. The eff vs
+  torque/mass weights come from the line's slope automatically (efficiency weighted
+  by the T/mass gained per +current, T/mass by the efficiency lost per +current).
+  It's the default objective; the legacy η × T/mass is a toggle.
+- **"Draw baseline" button** — draws that reference line on the objective-space chart
+  up-front (just the 2 sims), before launching a full optimization, with its A/B
+  endpoints labelled by current and the auto-derived weights shown.
+
+### Changed
+- **Optimization variables now lay out in two columns** (was a single tall stack);
+  the operating-point / ripple pane is narrowed to make room, and the stale
+  "optimizer targets a torque" text is gone (it runs at the fixed Simulation current).
+
+### Fixed
+- **Simulation summary flags a stale operating point.** The Physics Dashboard doesn't
+  recompute when you change the current/γ (by design — no surprise FEM), so it could
+  show an old run's numbers and look like an optimizer↔Simulation mismatch. It now
+  shows an amber banner — "shown for I = X A_rms, differs from the current setting
+  (I = Z A) — press Run Simulation" — whenever the displayed result is for a
+  different operating point than what's set. (At the *same* current the optimizer and
+  Simulation are byte-identical; the mismatch was only the stale display.)
+
 ## [0.1.5] — 2026-06-25
 
 ### Changed

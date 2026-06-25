@@ -154,7 +154,7 @@ const DescentPanel: React.FC = () => {
   // builds the disk EXACTLY like Simulation does, so optimizer ripple ==
   // Simulation ripple (no opt↔Sim mismatch).  Set it on the Mesh tab; read-only here.
   const nSectors = (() => {
-    try { return Math.max(1, Math.round(Number(JSON.parse(localStorage.getItem('mesh.nSectors') ?? '4')) || 4)); }
+    try { return Math.max(1, Math.round(Number(JSON.parse(localStorage.getItem('mesh.nSectors') ?? '1')) || 1)); }
     catch { return 4; }
   })();
   // Box-walking: keep re-centering the ±deviation window on the optimum until
@@ -190,10 +190,6 @@ const DescentPanel: React.FC = () => {
   const op0 = sweepConfig.operatingPoints[0];
   // Rated-duty constraints → usable peak-phase voltage limit from the DC bus + PWM scheme.
   const ratedTorque = sweepConfig.ratedTorqueNm ?? 30.5;
-  const vBus = sweepConfig.vBusV ?? 140;
-  const modulation = sweepConfig.modulation ?? 'svpwm';
-  const MOD_FACTOR: Record<string, number> = { svpwm: 1 / Math.sqrt(3), sine: 0.5, sixstep: 2 / Math.PI };
-  const vPeakLimit = vBus > 0 ? vBus * (MOD_FACTOR[modulation] ?? MOD_FACTOR.svpwm) : 1e9;
   // Rated operating point ON each load line: interpolate where T = rated torque,
   // so a diamond marks the duty point on every curve.
   const ratedMarkers = (sweepConfig.ratedTorqueNm && sweepConfig.ratedTorqueNm > 0
@@ -265,9 +261,6 @@ const DescentPanel: React.FC = () => {
     'Speed (rpm)': op0_.rpm,
     'Load angle γ': op0_.gamma_deg ?? 0,
     'Ripple limit (%)': +((sweepConfig.rippleThreshold ?? 0) * 100).toFixed(2),
-    'Rated torque (N·m)': sweepConfig.ratedTorqueNm ?? 0,
-    'V bus (V)': sweepConfig.vBusV ?? 0,
-    'Modulation': sweepConfig.modulation ?? 'svpwm',
     'Variables / windows': _varsSig,
   };
   const changes = (lastOptSnapshot && (best || st.result))
@@ -305,8 +298,14 @@ const DescentPanel: React.FC = () => {
   const trajPts = history
     .filter((h: any) => h.torque_per_mass != null)
     .map((h: any) => ({ td: h.torque_per_mass, eff: (h.efficiency ?? 0) * 100, ripple: h.T_ripple_pct, iter: h.iter, z: 2 }));
+  // The ★ best carries its geometry + operating point too, so it is click-selectable
+  // and "Apply picked point" works on it exactly like any other scatter point.
+  const _bestX = st.best?.x || st.result?.best?.overrides;
+  const _bestG = (typeof st.mtpa_gamma_deg === 'number') ? st.mtpa_gamma_deg
+               : (typeof best?.gamma_deg === 'number' ? best.gamma_deg : undefined);
   const bestPt = best?.torque_per_mass != null
-    ? [{ td: best.torque_per_mass, eff: (best.efficiency ?? 0) * 100, ripple: best.T_ripple_pct, z: 6 }] : [];
+    ? [{ td: best.torque_per_mass, eff: (best.efficiency ?? 0) * 100, ripple: best.T_ripple_pct, z: 6,
+         overrides: _bestX, current_a: best.current_a, gamma_deg: _bestG }] : [];
 
   // Y (efficiency) axis domain: Manual = fixed [yMin, yMax]; Auto = fit to the
   // MEANINGFUL designs (descent path + best + feasible), padded — re-zooms as the
@@ -341,7 +340,7 @@ const DescentPanel: React.FC = () => {
     localRun.current = true;
     try {
       await runDescent({ rippleMax, maxIters, wEff, wTd, steps, algorithm, nSectors,
-                         targetTorque: ratedTorque, vPeakLimit, optimizeGamma: false,
+                         targetTorque: 0, vPeakLimit: 1e9, optimizeGamma: false,   // fixed Simulation current, no voltage limit
                          autoExpand: autoWalk, maxRounds, surrogateSeed });
     } finally {
       localRun.current = false;
@@ -436,28 +435,6 @@ const DescentPanel: React.FC = () => {
           </Tooltip>
         </Group>
 
-        <Group label="Inverter limit">
-          <Tooltip title="Inverter DC-bus voltage (V). Usable peak phase = bus × modulation factor; designs whose V_peak exceeds it are penalised. 0 = no limit." placement="top">
-            <TextField label="V bus" type="number" size="small" value={vBus}
-              onChange={e => updateSweepConstraints({ vBusV: Math.max(0, +e.target.value || 0) })}
-              inputProps={{ min: 0, step: 1, style: { fontSize: 11, padding: '3px 6px', width: 48 } }}
-              InputLabelProps={{ sx: { fontSize: 10 } }} />
-          </Tooltip>
-          <Tooltip title="PWM scheme → usable peak phase = V_bus × (SVPWM 0.577 / Sine 0.5 / Six-step 0.637)." placement="top">
-            <ToggleButtonGroup exclusive size="small" value={modulation}
-              onChange={(_, m) => m && updateSweepConstraints({ modulation: m })} sx={{ height: 26 }}>
-              <ToggleButton value="svpwm"   sx={{ px: 0.7, fontSize: 10 }}>SVPWM</ToggleButton>
-              <ToggleButton value="sine"    sx={{ px: 0.7, fontSize: 10 }}>Sine</ToggleButton>
-              <ToggleButton value="sixstep" sx={{ px: 0.7, fontSize: 10 }}>6-step</ToggleButton>
-            </ToggleButtonGroup>
-          </Tooltip>
-          <Tooltip title="Computed usable peak phase voltage limit = V_bus × modulation factor. The optimizer penalises any design whose V_peak exceeds it." placement="top">
-            <Typography variant="caption" sx={{ color: '#93c5fd', fontSize: 10, whiteSpace: 'nowrap', alignSelf: 'center' }}>
-              V_peak ≤ {vPeakLimit < 1e8 ? `${vPeakLimit.toFixed(0)} V` : '—'}
-            </Typography>
-          </Tooltip>
-        </Group>
-
         <Group label="Search options">
           <Tooltip title="Auto-walk (box-walking): if a variable ends at the edge of its ±deviation window, the server re-centers the window on the optimum and re-optimizes — round after round, until every variable settles inside its window, hits a physical (schema) limit, or the round cap. Runs FULLY on the backend: you can close the tab and it finishes on its own. Off = one run, then boundary variables are flagged for a manual one-click continue." placement="top">
             <ToggleButton value="autowalk" selected={autoWalk} size="small"
@@ -481,11 +458,7 @@ const DescentPanel: React.FC = () => {
       </Box>
 
       <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
-        {ratedTorque > 0 ? (
-          <>Operating point: <strong>T = {ratedTorque} N·m @ {op0.rpm} rpm, γ={op0.gamma_deg ?? 0}°</strong> (γ from Simulation) — current is <strong>auto-solved per design</strong> to hit this torque (probe {op0.current_a} A)</>
-        ) : (
-          <>Fixed operating point: <strong>{op0.current_a} A @ {op0.rpm} rpm, γ={op0.gamma_deg ?? 0}°</strong></>
-        )} · variables:{' '}
+        Operating point (from Simulation): <strong>{op0.current_a} A @ {op0.rpm} rpm, γ={op0.gamma_deg ?? 0}°</strong> · variables:{' '}
         <strong>{activeVars.length}</strong> · objective: <strong>max efficiency × torque/mass</strong>{' '}
         (ripple trimmed on the chart, not constrained). Only whitelisted variables are varied.
       </Typography>
@@ -754,7 +727,8 @@ const DescentPanel: React.FC = () => {
                   cursor="pointer" onClick={(d: any) => d && setSelectedPt(d.payload ?? d)} />
                 <Scatter name="descent path" data={trajPts} fill="#3b82f6"
                   line={{ stroke: '#3b82f6', strokeWidth: 1.5 }} lineType="joint" isAnimationActive={false} />
-                <Scatter name="★ best" data={bestPt} fill="#fbbf24" shape="star" isAnimationActive={false} />
+                <Scatter name="★ best" data={bestPt} fill="#fbbf24" shape="star" isAnimationActive={false}
+                  cursor="pointer" onClick={(d: any) => d && setSelectedPt(d.payload ?? d)} />
                 {selectedPt && selectedPt.td != null && (
                   <Scatter name="● picked" data={[{ td: selectedPt.td, eff: selectedPt.eff, z: 9 }]}
                     fill="none" stroke="#e879f9" strokeWidth={2} shape="circle" isAnimationActive={false} />

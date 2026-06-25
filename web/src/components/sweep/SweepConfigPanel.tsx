@@ -162,7 +162,6 @@ const SweepConfigPanel: React.FC = () => {
     updateVariation,
     setVariations,
     updateOperatingPoint,
-    updateSweepConstraints,
     initVariationsFromSchema,
   } = useMotorStore();
 
@@ -176,23 +175,24 @@ const SweepConfigPanel: React.FC = () => {
   // so the optimizer runs at exactly the condition set in Simulation.  A storage
   // listener also catches edits made in another browser window.
   const syncOpFromSim = React.useCallback(() => {
-    const rpm   = Number(readSim('rpm',   3950));
-    const gamma = Number(readSim('gamma', 0));
-    updateOperatingPoint(0, { rpm, gamma_deg: gamma });
-    updateOperatingPoint(1, { rpm, gamma_deg: gamma });
+    const rpm     = Number(readSim('rpm',     3950));
+    const gamma   = Number(readSim('gamma',   0));
+    const current = Number(readSim('current', 85));
+    updateOperatingPoint(0, { rpm, gamma_deg: gamma, current_a: current });
+    updateOperatingPoint(1, { rpm, gamma_deg: gamma, current_a: current });
   }, [updateOperatingPoint]);
   useEffect(() => {
     syncOpFromSim();
     const onStorage = (e: StorageEvent) => {
-      if (e.key === 'sim.rpm' || e.key === 'sim.gamma') syncOpFromSim();
+      if (e.key === 'sim.rpm' || e.key === 'sim.gamma' || e.key === 'sim.current') syncOpFromSim();
     };
     window.addEventListener('storage', onStorage);
     return () => window.removeEventListener('storage', onStorage);
   }, [syncOpFromSim]);
 
-  const ratedTorque = sweepConfig.ratedTorqueNm ?? 30.5;
-  const opRpm   = sweepConfig.operatingPoints[0]?.rpm ?? 3950;
-  const opGamma = sweepConfig.operatingPoints[0]?.gamma_deg ?? 0;
+  const opRpm     = sweepConfig.operatingPoints[0]?.rpm ?? 3950;
+  const opGamma   = sweepConfig.operatingPoints[0]?.gamma_deg ?? 0;
+  const opCurrent = sweepConfig.operatingPoints[0]?.current_a ?? Number(readSim('current', 85));
 
   const schemaMap = Object.fromEntries(parameterSchema.map(p => [p.name, p]));
   const sweepEntries = Object.entries(sweepConfig.variations).filter(([, v]) => v.mode !== 'fixed');
@@ -455,17 +455,16 @@ const SweepConfigPanel: React.FC = () => {
             <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25 }}>
                 <TextField
-                  label="Target torque"
+                  label="Current"
                   size="small"
                   type="number"
-                  value={ratedTorque}
-                  onChange={e => updateSweepConstraints({ ratedTorqueNm: Math.max(0, parseFloat(e.target.value) || 0) })}
+                  value={opCurrent}
+                  disabled
                   InputProps={{ endAdornment: (
                     <InputAdornment position="end" sx={{ gap: 0.5 }}>
-                      N·m<HelpTip title="Each design is solved at the current that delivers this torque" />
+                      A<HelpTip title="Phase current (RMS) — taken from the Simulation tab. The optimizer runs at THIS fixed current and varies only the selected geometry variables." />
                     </InputAdornment>
                   ) }}
-                  inputProps={{ min: 0, step: 0.5 }}
                 />
                 <Box sx={{ display: 'flex', gap: 1 }}>
                   <TextField
@@ -481,7 +480,7 @@ const SweepConfigPanel: React.FC = () => {
                 </Box>
                 <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                   <Typography variant="caption" color="text.disabled">
-                    Speed &amp; γ from the Simulation tab · current auto-solved
+                    Current, speed &amp; γ — all from the Simulation tab
                   </Typography>
                   <Tooltip title="Re-read Speed & γ from the Simulation tab" placement="top">
                     <Button size="small" onClick={syncOpFromSim} startIcon={<RefreshIcon sx={{ fontSize: 14 }} />}

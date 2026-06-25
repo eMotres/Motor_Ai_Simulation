@@ -7,6 +7,18 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
 
 ## [Unreleased]
 
+### Fixed
+- **Thermal: windings now run hot, as they should.** The slot was meshed ~1 element
+  across, which thermally *shorted* the copper to the iron — the coil↔tooth ΔT was a
+  dead ~1 °C no matter the insulation. The coil region is now auto-refined (~4 elements
+  across the slot) so the winding gradient resolves, and the slot's effective
+  conductivity is computed from the **real wire stack** — a volume-weighted *series*
+  ("layered") mean of the stacked conductors and air-dominated inter-wire gaps — giving
+  **≈0.18 W/m·K** instead of the old hardcoded 1.5 (a Maxwell copper-inclusion estimate
+  would over-state it at ~0.4). Result: the coils are now the clear hotspot (e.g. 94 °C),
+  ~5 °C above the slot-adjacent iron and ~17 °C above the cooled outer skin. Pass
+  `slot_k>0` to override the auto value manually.
+
 ## [0.1.7] — 2026-06-25
 
 ### Fixed

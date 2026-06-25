@@ -1810,7 +1810,7 @@ def _cooling_bc(*, mode: str, t_ambient_c: float, air_speed_mps: float,
 def get_thermal_field2d(
     ambient_temp:       float = 25.0,    # coolant / ambient [°C]
     h_conv:             float = 50.0,    # housing convection coeff [W/m²·K] (manual mode)
-    slot_k:             float = 1.5,     # effective slot (Cu+insulation+air) k [W/m·K]
+    slot_k:             float = 0.0,     # slot transverse k [W/m·K]; 0 = auto from winding (Cu fill + enamel)
     gap_k:              float = 0.10,    # effective air-gap k [W/m·K]
     gamma_deg:          float = 0.0,
     I_phase_rms:        float = 120.0,
@@ -1834,6 +1834,26 @@ def get_thermal_field2d(
     housing.  Returns the temperature field, heat flux, and per-component T_max."""
     import numpy as _np
     _geo_ov = _parse_geo_override(geo)
+
+    # Auto-refine the COIL mesh for the thermal solve.  A slot meshed ~1 element
+    # across thermally shorts the windings to the iron (every coil node sits on
+    # the slot wall, shared with k≈25 steel) → no interior node can heat up and the
+    # winding hotspot collapses, regardless of the (correct) homogenised slot_k.
+    # Target ~4 elements across the slot width so the winding gradient resolves.
+    try:
+        from motor_ai_sim.config import get_config as _get_cfg
+        _g0 = dict(_get_cfg().get("geometry", {}))
+        if _geo_ov:
+            _g0.update(_geo_ov)
+        _slot_w = float(_g0.get("slot_width", 3.0) or 3.0)
+        _cm0 = _parse_component_mesh(component_mesh)
+        if "coil" not in _cm0:
+            import json as _json
+            _cm0["coil"] = round(max(0.4, min(_slot_w / 4.0, float(mesh_size_mm))), 3)
+            component_mesh = _json.dumps(_cm0)
+    except Exception:
+        pass
+
     key = ("thermal", round(ambient_temp, 1), round(h_conv, 1), round(slot_k, 3),
            round(gap_k, 3), round(gamma_deg, 1), round(I_phase_rms, 1),
            int(n_steps_per_period), round(n_periods, 2), round(mesh_size_mm, 2),
@@ -1895,8 +1915,29 @@ def get_thermal_field2d(
     k_liner = _thermal_k("insulator", mats.get("slot_insulation"), 0.14)
     t_liner = float(g.get("insulation_thickness", 0.2))    # mm  (liner thickness)
     h_slot  = float(g.get("slot_height", 14.0))            # mm  (winding radial extent)
+    # Winding bulk transverse k FROM THE ACTUAL WIRE STACK — a volume-weighted
+    # SERIES ("layered") mean, not a hardcoded guess and not a copper-inclusion
+    # (Maxwell) estimate, which the high copper fraction inflates to ~0.4.  Heat
+    # leaving the slot crosses, IN SERIES, the stacked conductors (k≈400 → negligible
+    # R) and the inter-wire gaps; those gaps are air-dominated (thin enamel build /
+    # imperfect impregnation), and air (k≈0.026) sets the resistance.  For this
+    # 8-wire winding the series mean is ≈0.18 W/m·K — the realistic transverse value.
+    # A high constant slot_k thermally SHORTS the windings to the iron → no hotspot
+    # (the old bug).  Pass slot_k>0 to override with a manual value.
+    k_cu_w   = _thermal_k_any(mats.get("winding") or mats.get("conductor"), 400.0)
+    k_enamel = _thermal_k("insulator", mats.get("wire_insulation"), 0.12)
+    k_gap    = 0.026                                       # still air in the inter-wire gaps
+    _sw = float(g.get("slot_width", 3.0)); _nw = float(g.get("num_wires_per_slot", 8))
+    _ww = float(g.get("wire_width", 2.5)); _wh = float(g.get("wire_height", 0.5))
+    _sy = float(g.get("wire_spacing_y", 0.1))              # mm, inter-wire gap (air-filled)
+    f_cu = min(max((_nw * _ww * _wh) / max(_sw * h_slot, 1e-6), 0.0), 0.92)   # copper fill (reported)
+    _d_cu  = _nw * _wh                                      # total copper thickness across the stack
+    _d_gap = max(_nw - 1.0, 0.0) * _sy                      # total inter-wire gap thickness
+    _R_ser = _d_cu / max(k_cu_w, 1e-6) + _d_gap / max(k_gap, 1e-6)   # series resistance (copper + gaps)
+    slot_k_auto = (_d_cu + _d_gap) / max(_R_ser, 1e-9)      # winding bulk transverse k (≈0.18)
+    slot_k_used = float(slot_k) if float(slot_k) > 0.0 else slot_k_auto   # >0 = manual override
     slot_k_eff = h_slot / (
-        h_slot / max(float(slot_k), 1e-6) + t_liner / max(float(k_liner), 1e-6))
+        h_slot / max(slot_k_used, 1e-6) + t_liner / max(float(k_liner), 1e-6))   # + liner in series
 
     # 4. per-element k + q from the collapsed domain tags
     (DOM_AIR, DOM_STATOR, DOM_COIL, DOM_AIRGAP, DOM_MAG_N, DOM_ROTOR,
@@ -1953,7 +1994,11 @@ def get_thermal_field2d(
         "n_housing_facets": th.get("n_housing_facets"),
         "ambient_temp": float(ambient_temp), "h_conv": round(float(h_eff), 1),
         "t_sink_c": round(float(t_sink), 1), "cooling": cooling,
-        "slot_k": float(slot_k), "gap_k": float(gap_k),
+        "slot_k": round(float(slot_k_used), 3),            # winding bulk transverse k (auto unless slot_k>0 override)
+        "slot_k_auto": round(float(slot_k_auto), 3),       # series-stack value (Cu + air gaps)
+        "slot_fill": round(float(f_cu), 3),                # copper fill fraction in the slot
+        "k_enamel": round(float(k_enamel), 3),             # wire-insulation (enamel) conductivity
+        "gap_k": float(gap_k),
         "slot_k_eff": round(float(slot_k_eff), 3),         # winding + liner series k
         "k_liner": round(float(k_liner), 3),               # slot-liner material conductivity
         "liner_material": mats.get("slot_insulation"),

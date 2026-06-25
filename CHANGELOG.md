@@ -7,6 +7,8 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
 
 ## [Unreleased]
 
+## [0.1.8] — 2026-06-25
+
 ### Changed
 - **Thermal cooling: pick Air or Liquid, with a physical model for each.** The Temp
   view's cooling control is now a method selector. **Air** adds a *blow-speed*

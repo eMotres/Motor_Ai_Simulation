@@ -640,6 +640,13 @@ export const useMotorStore = create<MotorState>()(
         let rotor_eddy = true, end_winding_factor = 0;
         try { rotor_eddy = JSON.parse(localStorage.getItem('sim.fieldLosses') ?? 'true') !== false; } catch { /* default true */ }
         try { end_winding_factor = Number(JSON.parse(localStorage.getItem('sim.endWinding') ?? '0')) || 0; } catch { /* default 0 */ }
+        // Air-gap mesh layers + coil temperature — SINGLE SOURCE: Mesh/Simulation tabs,
+        // so the optimizer meshes the air gap (dominant torque/ripple driver) and sets
+        // copper resistance EXACTLY like Simulation, else a selected design won't
+        // reproduce when re-run in the Simulation tab.
+        let gap_layers = 2, coil_temp_c = 120;
+        try { gap_layers  = Number(JSON.parse(localStorage.getItem('mesh.gapLayers') ?? '2')) || 2; } catch { /* default */ }
+        try { coil_temp_c = Number(JSON.parse(localStorage.getItem('sim.coilTemp')  ?? '120')) || 120; } catch { /* default */ }
 
         set({ descentRunning: true, descentError: null, descentState: null });
         try {
@@ -651,7 +658,7 @@ export const useMotorStore = create<MotorState>()(
               ripple_max_pct: rippleMax, w_eff: wEff, w_td: wTd,
               max_iters: maxIters, steps_per_period: steps,
               mesh_size_mm, min_size_mm, pole_copy, torque_filter,
-              rotor_eddy, end_winding_factor,
+              rotor_eddy, end_winding_factor, gap_layers, coil_temp_c,
               algorithm, n_sectors: nSectors,
               target_torque_nm: targetTorque ?? 0,
               v_peak_limit: vPeakLimit ?? 1e9,

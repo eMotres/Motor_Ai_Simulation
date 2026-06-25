@@ -896,6 +896,10 @@ class DescentRequest(BaseModel):
     coil_temp_c: float = 120.0
     mesh_size_mm: float = 4.0
     min_size_mm: float = 0.3
+    # Air-gap mesh layers — SINGLE SOURCE: the Mesh tab. The dominant driver of the
+    # Arkkio torque + ripple; MUST match Simulation or a selected design won't
+    # reproduce in the Simulation tab.
+    gap_layers: float = 2.0
     # Pole/slot mesh mode from the UI (Mesh tab "Periodic (identical poles)").
     # None = solver env default; the optimizer must mesh the SAME way Simulation does.
     pole_copy: Optional[bool] = None
@@ -1068,7 +1072,8 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                     n_sectors=-1, v_peak_limit=1e9, target_torque=0.0,
                     optimize_gamma=True, auto_expand=False, max_rounds=1,
                     boundary_margin=0.05, surrogate_seed=False, pole_copy=None,
-                  torque_filter=True, end_winding=0.0, rotor_eddy=True) -> None:
+                  torque_filter=True, end_winding=0.0, rotor_eddy=True,
+                  gap_layers=2.0) -> None:
     # NOTE: server-side box-walking (auto_expand) is implemented for CMA-ES only;
     # the gradient path runs a single round, then the UI flags boundary variables
     # for a manual one-click continue.
@@ -1102,7 +1107,8 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                                  gamma_deg=g, mesh_size_mm=mesh_size,
                                  min_size_mm=min_size, n_sectors=n_sectors,
                                  pole_copy=pole_copy, torque_filter=torque_filter,
-                                 end_winding_factor=end_winding, rotor_eddy=rotor_eddy)
+                                 end_winding_factor=end_winding, rotor_eddy=rotor_eddy,
+                                 gap_layers=gap_layers)
             if o.get("ok") and isinstance(o.get("res"), dict):
                 o["res"]["current_a"] = float(cur)   # record solved current in best
             if isinstance(o, dict):
@@ -1315,7 +1321,8 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                   n_sectors=-1, v_peak_limit=1e9, target_torque=0.0,
                   optimize_gamma=True, auto_expand=False, max_rounds=1,
                   boundary_margin=0.05, surrogate_seed=False, pole_copy=None,
-                  torque_filter=True, end_winding=0.0, rotor_eddy=True) -> None:
+                  torque_filter=True, end_winding=0.0, rotor_eddy=True,
+                  gap_layers=2.0) -> None:
     """Covariance-Matrix-Adaptation Evolution Strategy — derivative-free,
     noise-robust geometry search.  Same penalised cost as the gradient descent
     (−(eff/eff0)^w_eff·(td/td0)^w_td + λ·max(0, ripple−ripple_max)), evaluated on
@@ -1343,7 +1350,8 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                                  gamma_deg=g, mesh_size_mm=mesh_size,
                                  min_size_mm=min_size, n_sectors=n_sectors,
                                  pole_copy=pole_copy, torque_filter=torque_filter,
-                                 end_winding_factor=end_winding, rotor_eddy=rotor_eddy)
+                                 end_winding_factor=end_winding, rotor_eddy=rotor_eddy,
+                                 gap_layers=gap_layers)
             # Stamp the SOLVED current onto the result so the best records the
             # operating point it was found at (target-torque solves for it) →
             # saving the design can persist current+γ for a reproducible sim.
@@ -1633,7 +1641,8 @@ def descent_start(req: DescentRequest):
               n_sectors, v_peak_limit, target_torque, bool(req.optimize_gamma),
               auto_expand, max_rounds, boundary_margin, bool(req.surrogate_seed),
               req.pole_copy, bool(req.torque_filter),
-              float(req.end_winding_factor), bool(req.rotor_eddy)),
+              float(req.end_winding_factor), bool(req.rotor_eddy),
+              max(1.0, min(float(req.gap_layers), 8.0))),
         daemon=True).start()
     return {"started": True, "algorithm": algo, "n_sectors": n_sectors,
             "target_torque_nm": target_torque, "v_peak_limit": v_peak_limit,

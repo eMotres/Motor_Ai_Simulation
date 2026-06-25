@@ -80,7 +80,7 @@ const SweepTable: React.FC<{ points: any[]; rpm: number; vdcFactor?: number; sel
     if (varied(rows.map(r => r.I))) c.push({ id: 'I', label: 'I (A)', get: r => r.I, fmt: v => v.toFixed(1), vcol: true });
     if (varied(rows.map(r => r.g))) c.push({ id: 'g', label: 'γ (°)', get: r => r.g, fmt: v => v.toFixed(0), vcol: true });
     c.push(
-      { id: 'T', label: 'T (N·m)', get: r => r.T, fmt: v => v.toFixed(1) },
+      { id: 'T', label: 'T (N·m)', get: r => r.T, fmt: v => v.toFixed(2) },
       { id: 'P', label: 'P (kW)', get: r => r.P, fmt: v => v.toFixed(2) },
       { id: 'eff', label: 'η %', get: r => r.eff, fmt: v => v.toFixed(2) },
       { id: 'Vdc', label: 'V_dc (V)', get: r => r.Vpk / vdcF, fmt: v => v.toFixed(0) },
@@ -407,8 +407,8 @@ const SweepStudyPanel: React.FC = () => {
         window.dispatchEvent(new CustomEvent('sim-apply-summary', { detail: { summary } }));
       } catch { /* summary is best-effort — geometry + operating point already applied */ }
       const ovStr = Object.entries(p.overrides || {}).map(([k, v]) => `${k}=${v}`).join(', ');
-      setApplyMsg(`✓ saved${ovStr ? ': ' + ovStr : ' (base geometry)'} · I=${p.I} A · γ=${p.g}° — numbers shown in Simulation (Run there only for waveforms)`);
-    } catch (e: any) { setApplyMsg('✗ save FAILED (' + String(e?.message ?? e) + ') — nothing was changed; try again'); }
+      setApplyMsg(`✓ applied${ovStr ? ': ' + ovStr : ' (base geometry)'} · I=${p.I} A · γ=${p.g}° — numbers shown in Simulation (Run there only for waveforms)`);
+    } catch (e: any) { setApplyMsg('✗ apply FAILED (' + String(e?.message ?? e) + ') — nothing was changed; try again'); }
   };
 
   const VarLine: React.FC<{ on: boolean; label: string; v: any; fixedVal: number }> = ({ on, label, v, fixedVal }) => (
@@ -534,7 +534,7 @@ const SweepStudyPanel: React.FC = () => {
           {selected && (
             <Box sx={{ mt: 1, p: 1, bgcolor: '#0a1628', border: '1px solid #334155', borderRadius: 1 }}>
               <Typography sx={{ fontSize: 11, color: '#cbd5e1' }}>
-                Picked: <strong>I = {selected.I} A · γ = {selected.g}°</strong> → η {selected.y?.toFixed?.(2)} % · {selected.x?.toFixed?.(2)} N·m/kg · T {selected.T?.toFixed?.(1)} N·m · ripple {selected.ripple?.toFixed?.(1)} %
+                Picked: <strong>I = {selected.I} A · γ = {selected.g}°</strong> → η {selected.y?.toFixed?.(2)} % · {selected.x?.toFixed?.(2)} N·m/kg · T {selected.T?.toFixed?.(2)} N·m · ripple {selected.ripple?.toFixed?.(1)} %
               </Typography>
               <Typography sx={{ fontSize: 10.5, color: '#93c5fd', mt: 0.25, wordBreak: 'break-word' }}>
                 geometry: {Object.keys(selected.overrides || {}).length
@@ -544,7 +544,7 @@ const SweepStudyPanel: React.FC = () => {
               <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mt: 0.5 }}>
                 <Button size="small" variant="contained" onClick={() => applyPoint(selected)}
                   sx={{ textTransform: 'none', fontSize: 11 }}>
-                  Apply &amp; save this design
+                  Apply picked point to geometry
                 </Button>
                 {applyMsg && <Typography sx={{ fontSize: 11,
                   color: applyMsg.startsWith('✓') ? '#4ade80' : applyMsg.startsWith('✗') ? '#fca5a5' : '#64748b' }}>

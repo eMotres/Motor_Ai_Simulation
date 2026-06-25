@@ -727,8 +727,11 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
   const [thermalPayload, setThermalPayload] = useState<FemPayload | null>(null);
   const [thermalLoading, setThermalLoading] = useState<boolean>(false);
   const [thermalErr,     setThermalErr]     = useState<string | null>(null);
-  const [ambientT, setAmbientT] = useState<number>(40);     // °C
-  const [hConv,    setHConv]    = useState<number>(120);    // W/m²K (forced air)
+  const [ambientT, setAmbientT] = useState<number>(40);     // °C — ambient air / coolant INLET temp
+  const [coolMode, setCoolMode] = useState<'air' | 'liquid'>('air');
+  const [airSpeed, setAirSpeed] = useState<number>(10);     // m/s — air blow speed (→ h)
+  const [fluid,    setFluid]    = useState<string>('water'); // liquid coolant
+  const [tOut,     setTOut]     = useState<number>(60);     // °C — liquid target OUTLET temp (= housing)
   const [coolOpen,  setCoolOpen]  = useState(false);   // cooling dropdown open
   const [coolHover, setCoolHover] = useState(false);   // cooling tooltip hover-intent
   const [showFlux, setShowFlux] = useState<boolean>(true);
@@ -852,8 +855,12 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
     setThermalLoading(true); setThermalErr(null);
     const comp = JSON.stringify(readMeshSetting<Record<string, number>>('componentMesh', {}));
     const qs = new URLSearchParams({
-      ambient_temp:     String(ambientT),
-      h_conv:           String(hConv),
+      cooling_mode:     coolMode,
+      ambient_temp:     String(ambientT),           // air ambient / coolant inlet
+      air_speed_mps:    String(coolMode === 'air' ? airSpeed : 0),
+      fluid:            fluid,
+      fluid_temp_in_c:  String(ambientT),           // liquid inlet = T₀
+      fluid_temp_out_c: String(tOut),               // liquid outlet (= housing); flow derived
       gamma_deg:        String(gamma_deg),
       I_phase_rms:      String(thermalCurrent),
       rpm:              String(readSimSetting('rpm', 0)),
@@ -870,7 +877,7 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
   };
   // γ / I / cooling changed → cached thermal solve is stale.
   useEffect(() => { setThermalPayload(null); setThermalErr(null); },
-    [gamma_deg, I_phase_rms, ambientT, hConv]);
+    [gamma_deg, I_phase_rms, ambientT, coolMode, airSpeed, fluid, tOut]);
   useEffect(() => {
     if (isThermal && !thermalPayload && !thermalLoading && !thermalErr) fetchThermal();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -951,25 +958,72 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
             </Button>
           )}
           {isThermal && (
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
-              <Tooltip title="Ambient / coolant temperature (°C)">
-                <TextField size="small" type="number" label="T₀ °C" value={ambientT}
-                  onChange={(e) => setAmbientT(Number(e.target.value))}
-                  sx={{ width: 78, '& .MuiInputBase-input': { fontSize: 11, py: 0.5 },
-                    '& .MuiInputLabel-root': { fontSize: 11 } }} />
-              </Tooltip>
-              <Tooltip title="Cooling at the housing → convection coefficient h [W/m²·K]"
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap' }}>
+              {/* cooling mode: air (blow speed) | liquid (in/out temps) */}
+              <Tooltip title="Cooling method at the housing"
                 open={coolHover && !coolOpen}
                 onOpen={() => setCoolHover(true)} onClose={() => setCoolHover(false)}>
-                <Select size="small" value={hConv} onChange={(e) => setHConv(Number(e.target.value))}
+                <Select size="small" value={coolMode}
+                  onChange={(e) => setCoolMode(e.target.value as 'air' | 'liquid')}
                   open={coolOpen} onOpen={() => setCoolOpen(true)} onClose={() => setCoolOpen(false)}
                   sx={{ fontSize: 11, '& .MuiSelect-select': { py: 0.5 } }}>
-                  <MenuItem sx={{ fontSize: 11 }} value={10}>Natural air (h≈10)</MenuItem>
-                  <MenuItem sx={{ fontSize: 11 }} value={120}>Forced air (h≈120)</MenuItem>
-                  <MenuItem sx={{ fontSize: 11 }} value={600}>Liquid jacket (h≈600)</MenuItem>
-                  <MenuItem sx={{ fontSize: 11 }} value={2000}>Aggressive liquid (h≈2000)</MenuItem>
+                  <MenuItem sx={{ fontSize: 11 }} value="air">Air cooling</MenuItem>
+                  <MenuItem sx={{ fontSize: 11 }} value="liquid">Liquid cooling</MenuItem>
                 </Select>
               </Tooltip>
+
+              {coolMode === 'air' ? (
+                <>
+                  <Tooltip title="Ambient air temperature (°C)">
+                    <TextField size="small" type="number" label="Air °C" value={ambientT}
+                      onChange={(e) => setAmbientT(Number(e.target.value))}
+                      sx={{ width: 76, '& .MuiInputBase-input': { fontSize: 11, py: 0.5 },
+                        '& .MuiInputLabel-root': { fontSize: 11 } }} />
+                  </Tooltip>
+                  <Tooltip title="Blow speed over the housing → convection h (Churchill–Bernstein). 0 = still air (natural).">
+                    <Select size="small" value={airSpeed} onChange={(e) => setAirSpeed(Number(e.target.value))}
+                      sx={{ fontSize: 11, '& .MuiSelect-select': { py: 0.5 } }}>
+                      <MenuItem sx={{ fontSize: 11 }} value={0}>Still air (0 m/s)</MenuItem>
+                      <MenuItem sx={{ fontSize: 11 }} value={2}>2 m/s</MenuItem>
+                      <MenuItem sx={{ fontSize: 11 }} value={5}>5 m/s</MenuItem>
+                      <MenuItem sx={{ fontSize: 11 }} value={10}>10 m/s</MenuItem>
+                      <MenuItem sx={{ fontSize: 11 }} value={20}>20 m/s</MenuItem>
+                      <MenuItem sx={{ fontSize: 11 }} value={30}>30 m/s</MenuItem>
+                    </Select>
+                  </Tooltip>
+                </>
+              ) : (
+                <>
+                  <Tooltip title="Coolant">
+                    <Select size="small" value={fluid} onChange={(e) => setFluid(String(e.target.value))}
+                      sx={{ fontSize: 11, '& .MuiSelect-select': { py: 0.5 } }}>
+                      <MenuItem sx={{ fontSize: 11 }} value="water">Water</MenuItem>
+                      <MenuItem sx={{ fontSize: 11 }} value="glycol">Glycol 50%</MenuItem>
+                      <MenuItem sx={{ fontSize: 11 }} value="oil">Oil</MenuItem>
+                    </Select>
+                  </Tooltip>
+                  <Tooltip title="Coolant inlet temperature (°C)">
+                    <TextField size="small" type="number" label="In °C" value={ambientT}
+                      onChange={(e) => setAmbientT(Number(e.target.value))}
+                      sx={{ width: 70, '& .MuiInputBase-input': { fontSize: 11, py: 0.5 },
+                        '& .MuiInputLabel-root': { fontSize: 11 } }} />
+                  </Tooltip>
+                  <Tooltip title="Coolant outlet temperature (°C) — the housing is held at this temp; the flow rate is computed from inlet↔outlet ΔT.">
+                    <TextField size="small" type="number" label="Out °C" value={tOut}
+                      onChange={(e) => setTOut(Number(e.target.value))}
+                      sx={{ width: 70, '& .MuiInputBase-input': { fontSize: 11, py: 0.5 },
+                        '& .MuiInputLabel-root': { fontSize: 11 } }} />
+                  </Tooltip>
+                  {(payload as any)?.cooling?.flow_lpm != null && (
+                    <Tooltip title="Flow rate required to carry the losses with the chosen inlet↔outlet ΔT (computed automatically).">
+                      <Typography sx={{ fontSize: 11, color: '#7dd3fc', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
+                        → {Number((payload as any).cooling.flow_lpm).toFixed(1)} L/min
+                      </Typography>
+                    </Tooltip>
+                  )}
+                </>
+              )}
+
               <Button size="small" onClick={() => setShowFlux(v => !v)}
                 title="Toggle heat-flux arrows"
                 sx={{ color: showFlux ? '#e2e8f0' : '#64748b', fontSize: 10, textTransform: 'none',

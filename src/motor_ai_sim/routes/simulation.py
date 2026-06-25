@@ -1746,7 +1746,7 @@ def _coolant_props(name: str):
 def _cooling_bc(*, mode: str, t_ambient_c: float, air_speed_mps: float,
                 fluid: str, fluid_temp_in_c: float, flow_lpm: float,
                 p_loss_w: float, r_housing_m: float, length_m: float,
-                h_manual: float):
+                h_manual: float, fluid_temp_out_c: float = 0.0):
     """Convert a cooling-system spec into the housing Robin BC (h, T_sink) plus
     reportable extras.  Cooling acts on the full outer stator surface (area A).
 
@@ -1762,20 +1762,24 @@ def _cooling_bc(*, mode: str, t_ambient_c: float, air_speed_mps: float,
 
     if mode == "liquid":
         rho, cp, kf, nu, Pr = _coolant_props(fluid)
-        m_dot = rho * (max(flow_lpm, 0.0) / 60000.0)            # L/min → m³/s → kg/s
-        dT = (p_loss_w / (m_dot * cp)) if m_dot > 1e-9 else 0.0
-        t_out = fluid_temp_in_c + dT
-        t_sink = fluid_temp_in_c + dT / 2.0                      # mean coolant temp
-        # Jacket convection — flow-scaled estimate (no channel geometry): a water
-        # jacket runs ~0.6–6 kW/m²·K; scale ≈ flow^0.8 (Dittus-Boelter trend).
-        h = max(600.0, 1800.0 * (max(flow_lpm, 0.1) / 8.0) ** 0.8)
-        h = min(h, 8000.0)
+        # INVERTED liquid model: the user sets the inlet AND target outlet temps.
+        # The flow rate needed to carry the losses with that ΔT is DERIVED from the
+        # energy balance (ṁ = P/(cp·ΔT)), and the housing (outer contour) is HELD at
+        # the OUTLET coolant temp — the hottest the jacket reaches, a conservative
+        # reference.  Bigger chosen ΔT → less flow required.
+        t_in  = float(fluid_temp_in_c)
+        t_out = max(float(fluid_temp_out_c), t_in + 0.1)         # outlet must exceed inlet
+        dT    = t_out - t_in
+        m_dot = (p_loss_w / (cp * dT)) if dT > 1e-6 else 0.0     # required mass flow [kg/s]
+        flow_lpm_req = (m_dot / max(rho, 1e-6)) * 60000.0        # → L/min  (DERIVED, reported)
+        t_sink = t_out                                           # outer contour = outlet temp
+        h = max(2.0e4, p_loss_w / (A * 0.05))                    # pin housing to t_out (film drop ≤0.05°C)
         extras = {
-            "mode": "liquid", "fluid": fluid, "flow_lpm": round(flow_lpm, 2),
-            "fluid_temp_in_c": round(fluid_temp_in_c, 1),
-            "fluid_temp_out_c": round(t_out, 1), "fluid_dT_c": round(dT, 1),
-            "m_dot_kg_s": round(m_dot, 4), "h_conv": round(h, 0),
+            "mode": "liquid", "fluid": fluid, "flow_lpm": round(flow_lpm_req, 2),
+            "fluid_temp_in_c": round(t_in, 1), "fluid_temp_out_c": round(t_out, 1),
+            "fluid_dT_c": round(dT, 1), "m_dot_kg_s": round(m_dot, 4),
             "housing_area_m2": round(A, 4), "heat_removed_W": round(p_loss_w, 1),
+            "flow_auto": True,
         }
         return h, t_sink, extras
 
@@ -1828,7 +1832,8 @@ def get_thermal_field2d(
     air_speed_mps:      float = 0.0,        # air: airflow speed over the housing
     fluid:              str   = "water",    # liquid: coolant name (materials lib `coolant:`)
     fluid_temp_in_c:    float = 25.0,       # liquid: inlet temperature
-    flow_lpm:           float = 0.0,        # liquid: volumetric flow [L/min]
+    fluid_temp_out_c:   float = 0.0,        # liquid: target OUTLET temp (housing held here; flow derived)
+    flow_lpm:           float = 0.0,        # liquid: volumetric flow [L/min] (legacy; now derived from ΔT)
 ):
     """Steady-state 2-D thermal map. Runs the EM eddy solve for the loss field
     (cached), then solves −∇·(k∇T)=q on the same mesh with convection at the
@@ -1861,7 +1866,7 @@ def get_thermal_field2d(
            round(min_size_mm, 2), round(outer_air_factor, 2), int(n_sectors),
            round(coil_temp_c, 1), component_mesh,
            cooling_mode, round(air_speed_mps, 2), fluid,
-           round(fluid_temp_in_c, 1), round(flow_lpm, 2))
+           round(fluid_temp_in_c, 1), round(fluid_temp_out_c, 1), round(flow_lpm, 2))
     if _geo_ov:
         key = key + (tuple(sorted(_geo_ov.items())),)
     if key in _thermal_field_cache:
@@ -1984,7 +1989,8 @@ def get_thermal_field2d(
     P_loss_total = float(em.get("P_loss_total_W") or 0.0)
     h_eff, t_sink, cooling = _cooling_bc(
         mode=cooling_mode, t_ambient_c=ambient_temp, air_speed_mps=air_speed_mps,
-        fluid=fluid, fluid_temp_in_c=fluid_temp_in_c, flow_lpm=flow_lpm,
+        fluid=fluid, fluid_temp_in_c=fluid_temp_in_c, fluid_temp_out_c=fluid_temp_out_c,
+        flow_lpm=flow_lpm,
         p_loss_w=P_loss_total, r_housing_m=R_house, length_m=L, h_manual=h_conv)
 
     # 6. steady thermal solve — drop ALL air (outer + gap + slip band); the rotor

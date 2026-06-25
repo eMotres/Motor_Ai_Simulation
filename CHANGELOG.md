@@ -8,6 +8,14 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
 ## [Unreleased]
 
 ### Changed
+- **Thermal cooling: pick Air or Liquid, with a physical model for each.** The Temp
+  view's cooling control is now a method selector. **Air** adds a *blow-speed*
+  selector (still / 2 / 5 / 10 / 20 / 30 m/s) → the housing convection h is computed
+  from it (Churchill–Bernstein). **Liquid** takes the coolant + **inlet and outlet
+  temperatures**: the outer contour (housing) is held at the **outlet** temp, and the
+  **flow rate is computed automatically** from the energy balance ṁ = P_loss/(cp·ΔT)
+  and shown read-only (smaller chosen ΔT → more flow). Replaces the old fixed-h preset
+  dropdown.
 - **Thermal map uses the full colour range (Fusion-style).** The temperature view
   now renders the Ansys-style blue→cyan→green→yellow→red rainbow and, by default,
   **histogram-equalises** it — each node is coloured by its rank in the temperature

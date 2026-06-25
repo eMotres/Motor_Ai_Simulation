@@ -7,6 +7,16 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
 
 ## [Unreleased]
 
+### Changed
+- **Air-gap thermal conductivity is now physical + speed-dependent.** It was a
+  hardcoded 0.10 W/m·K; it's now computed from the gap Taylor number (Becker–Kaye
+  Nusselt correlation) using the **rotor speed from the Simulation tab** and the gap
+  geometry. At rest / low speed the gap is still-air conduction (~0.03 W/m·K); as the
+  rotor spins fast enough, Taylor vortices stir the gap and raise the effective k.
+  Bigger radius / wider gap / higher rpm → more enhancement (e.g. a thin-gap small
+  motor stays laminar to ~25k rpm; a large machine enhances at a few thousand rpm).
+  Pass `gap_k>0` to override with a fixed value.
+
 ### Fixed
 - **Thermal: windings now run hot, as they should.** The slot was meshed ~1 element
   across, which thermally *shorted* the copper to the iron — the coil↔tooth ΔT was a

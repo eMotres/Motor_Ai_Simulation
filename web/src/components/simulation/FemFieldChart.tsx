@@ -73,6 +73,15 @@ function readMeshSetting<T>(key: string, def: T): T {
     return raw == null ? def : (JSON.parse(raw) as T);
   } catch { return def; }
 }
+// Simulation-tab settings live under `sim.*` (single source the Simulation panel
+// writes).  The thermal solve reads rpm from here so the air-gap conductivity
+// tracks the operating speed you set in Simulation.
+function readSimSetting<T>(key: string, def: T): T {
+  try {
+    const raw = localStorage.getItem(`sim.${key}`);
+    return raw == null ? def : (JSON.parse(raw) as T);
+  } catch { return def; }
+}
 
 // ── R3F mesh component ────────────────────────────────────────────────────
 type FieldMode = 'Az' | 'Bmag' | 'J' | 'Jeddy' | 'Loss' | 'Demag' | 'Temp';
@@ -841,6 +850,7 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
       h_conv:           String(hConv),
       gamma_deg:        String(gamma_deg),
       I_phase_rms:      String(thermalCurrent),
+      rpm:              String(readSimSetting('rpm', 0)),
       mesh_size_mm:     String(readMeshSetting('meshSize', 4.0)),
       min_size_mm:      String(readMeshSetting('minSize',  0.3)),
       outer_air_factor: String(readMeshSetting('outerAir', 1.3)),

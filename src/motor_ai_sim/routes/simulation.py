@@ -1811,7 +1811,8 @@ def get_thermal_field2d(
     ambient_temp:       float = 25.0,    # coolant / ambient [°C]
     h_conv:             float = 50.0,    # housing convection coeff [W/m²·K] (manual mode)
     slot_k:             float = 0.0,     # slot transverse k [W/m·K]; 0 = auto from winding (Cu fill + enamel)
-    gap_k:              float = 0.10,    # effective air-gap k [W/m·K]
+    gap_k:              float = 0.0,     # air-gap k [W/m·K]; 0 = auto (Taylor-enhanced from rpm)
+    rpm:                float = 0.0,     # rotor speed [rpm] (from Simulation) → gap Taylor number
     gamma_deg:          float = 0.0,
     I_phase_rms:        float = 120.0,
     n_steps_per_period: int   = 12,
@@ -1855,7 +1856,7 @@ def get_thermal_field2d(
         pass
 
     key = ("thermal", round(ambient_temp, 1), round(h_conv, 1), round(slot_k, 3),
-           round(gap_k, 3), round(gamma_deg, 1), round(I_phase_rms, 1),
+           round(gap_k, 3), round(rpm, 1), round(gamma_deg, 1), round(I_phase_rms, 1),
            int(n_steps_per_period), round(n_periods, 2), round(mesh_size_mm, 2),
            round(min_size_mm, 2), round(outer_air_factor, 2), int(n_sectors),
            round(coil_temp_c, 1), component_mesh,
@@ -1891,6 +1892,30 @@ def get_thermal_field2d(
     stator_inner_m = R_house - float(g.get("core_thickness", 5.0)) * 1e-3 \
         - float(g.get("slot_height", 18.0)) * 1e-3
     rotor_outer_m = stator_inner_m - float(g.get("air_gap", 0.6)) * 1e-3
+
+    # Air-gap effective conductivity — ROTATION-ENHANCED (Taylor–Couette).  At rest
+    # the gap is still-air conduction (~0.03 W/m·K); as the rotor spins, Taylor
+    # vortices stir the gap air and raise the effective cross-gap k.  We size it from
+    # the gap Taylor number with the Becker–Kaye Nusselt correlation, using the rotor
+    # speed from the Simulation tab.  Bigger radius / wider gap / higher rpm → more
+    # enhancement.  Pass gap_k>0 to override with a fixed value.
+    if float(gap_k) > 0.0:
+        gap_k_eff = float(gap_k); gap_Ta = None; gap_Nu = 1.0
+    else:
+        _r_m   = max((rotor_outer_m + stator_inner_m) / 2.0, 1e-4)   # mean gap radius [m]
+        _delta = max(stator_inner_m - rotor_outer_m, 1e-5)           # radial gap thickness [m]
+        _omega = abs(float(rpm)) * 2.0 * _np.pi / 60.0               # rotor angular speed [rad/s]
+        _k_air  = 0.030                                              # air k at ~75 °C gap temp [W/m·K]
+        _nu_air = 2.0e-5                                             # air kinematic viscosity ~75 °C [m²/s]
+        gap_Ta = (_omega ** 2) * _r_m * (_delta ** 3) / (_nu_air ** 2)
+        if gap_Ta < 1700.0:
+            gap_Nu = 1.0                                             # sub-critical → pure conduction
+        elif gap_Ta <= 1.0e4:
+            gap_Nu = 0.128 * gap_Ta ** 0.367                         # Becker–Kaye, transitional
+        else:
+            gap_Nu = 0.409 * gap_Ta ** 0.241                         # Becker–Kaye, turbulent
+        gap_k_eff = max(gap_Nu * _k_air, _k_air)                     # ≥ still-air conduction
+
     L = float(g.get("motor_length", 30.0)) * 1e-3
     num_slots = int(round(float(g.get("num_seg", 1)) * float(g.get("num_slots_per_segment", 6))))
     V_cu = (num_slots * float(g.get("num_wires_per_slot", 12))
@@ -1942,7 +1967,7 @@ def get_thermal_field2d(
     # 4. per-element k + q from the collapsed domain tags
     (DOM_AIR, DOM_STATOR, DOM_COIL, DOM_AIRGAP, DOM_MAG_N, DOM_ROTOR,
      DOM_SHAFT, DOM_BAND, DOM_OUTER, DOM_MAG_S) = 0, 1, 2, 3, 4, 5, 6, 7, 8, 44
-    k_elem = _np.full(tris.shape[0], gap_k)             # default = air / gap
+    k_elem = _np.full(tris.shape[0], gap_k_eff)         # default = air / gap (Taylor-enhanced)
     q_elem = loss_dens.copy()
     is_steel = (tags == DOM_STATOR) | (tags == DOM_ROTOR)
     is_mag = (tags == DOM_MAG_N) | (tags == DOM_MAG_S)
@@ -1969,7 +1994,7 @@ def get_thermal_field2d(
         verts.T, tris.T, tags, k_elem, q_elem,
         drop_tags=[DOM_OUTER, DOM_AIRGAP, DOM_BAND, DOM_AIR],
         r_housing_m=R_house, rotor_outer_m=rotor_outer_m, stator_inner_m=stator_inner_m,
-        gap_k=float(gap_k), h_conv=float(h_eff), t_ambient=float(t_sink))
+        gap_k=float(gap_k_eff), h_conv=float(h_eff), t_ambient=float(t_sink))
 
     # 6. per-component temperatures
     Tn = _np.asarray(th["T_node"]); ts = _np.asarray(th["triangles"], int)
@@ -1998,7 +2023,11 @@ def get_thermal_field2d(
         "slot_k_auto": round(float(slot_k_auto), 3),       # series-stack value (Cu + air gaps)
         "slot_fill": round(float(f_cu), 3),                # copper fill fraction in the slot
         "k_enamel": round(float(k_enamel), 3),             # wire-insulation (enamel) conductivity
-        "gap_k": float(gap_k),
+        "gap_k": round(float(gap_k_eff), 3),               # air-gap k used (Taylor-enhanced unless gap_k>0 override)
+        "gap_k_taylor": round(float(gap_k_eff), 3),        # rotation-enhanced gap conductivity
+        "gap_Ta": (round(float(gap_Ta), 0) if gap_Ta is not None else None),  # gap Taylor number
+        "gap_Nu": round(float(gap_Nu), 2),                 # Nusselt enhancement (k_eff/k_air)
+        "rpm": float(rpm),
         "slot_k_eff": round(float(slot_k_eff), 3),         # winding + liner series k
         "k_liner": round(float(k_liner), 3),               # slot-liner material conductivity
         "liner_material": mats.get("slot_insulation"),

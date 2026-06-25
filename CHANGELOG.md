@@ -8,6 +8,13 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
 ## [Unreleased]
 
 ### Changed
+- **Thermal map uses the full colour range (Fusion-style).** The temperature view
+  now renders the Ansys-style blue→cyan→green→yellow→red rainbow and, by default,
+  **histogram-equalises** it — each node is coloured by its rank in the temperature
+  distribution, so the whole spectrum lands on the structure even when the motor is
+  a tight hot plateau (most of it within a few °C). The colour bar is labelled at the
+  temperature quantiles so a colour still reads as a real °C. A new **equalised /
+  linear** toggle (next to the Temp view) switches back to a faithful linear scale.
 - **Air-gap thermal conductivity is now physical + speed-dependent.** It was a
   hardcoded 0.10 W/m·K; it's now computed from the gap Taylor number (Becker–Kaye
   Nusselt correlation) using the **rotor speed from the Simulation tab** and the gap

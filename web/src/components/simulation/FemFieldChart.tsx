@@ -91,16 +91,6 @@ type FieldMode = 'Az' | 'Bmag' | 'J' | 'Jeddy' | 'Loss' | 'Demag' | 'Temp';
 // solve (~25 s) and caches its last-frame field + cycle-averaged loss density.
 const EDDY_MODES = new Set<FieldMode>(['Jeddy', 'Loss']);
 
-// Turbo colormap (Google) — perceptually uniform blue→green→red, the standard
-// for temperature maps.  Polynomial approximation (Mikhailov).
-function turbo01(t: number): [number, number, number] {
-  const x = Math.max(0, Math.min(1, t));
-  const r = 34.61 + x * (1172.33 + x * (-10793.56 + x * (33300.12 + x * (-38394.49 + x * 14825.05))));
-  const g = 23.31 + x * (557.33 + x * (1225.33 + x * (-3574.96 + x * (3245.91 - x * 1219.0))));
-  const b = 27.20 + x * (3211.10 + x * (-15327.97 + x * (27814.00 + x * (-22569.18 + x * 6838.66))));
-  return [Math.max(0, Math.min(255, r)), Math.max(0, Math.min(255, g)), Math.max(0, Math.min(255, b))];
-}
-
 // Diverging blue→green→red colormap for signed J_z (Ansys "J" style:
 // red = +max, blue = −max, green = 0).
 function jetSigned(t: number): [number, number, number] {
@@ -181,8 +171,8 @@ function buildIsoLines(
   return new Float32Array(pos);
 }
 
-const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode; logLoss: boolean; showFlux?: boolean }>
-  = ({ payload, mode, logLoss, showFlux }) => {
+const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode; logLoss: boolean; eqTemp?: boolean; showFlux?: boolean }>
+  = ({ payload, mode, logLoss, eqTemp = true, showFlux }) => {
   // Fill geometry — per-vertex Ansys-style banded rainbow for A_z, or
   // per-triangle flat jet for |B|.  We SKIP DOM_OUTER (8) triangles so
   // the outer far-field air ring (visible only for the BC) doesn't eat
@@ -206,18 +196,31 @@ const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode; logLoss: boole
     if (mode === 'Temp') {
       // Temperature field [°C] — nodal colour on the thermal SOLID sub-mesh
       // (this payload carries its own vertices/triangles; outer air + gap are
-      // already removed, so render EVERY triangle).  Turbo LUT, blue→red.
+      // already removed, so render EVERY triangle).  Ansys-style rainbow
+      // (blue→red).  A motor under steady cooling is a tight hot PLATEAU — most
+      // of the structure sits in a few °C — so a linear scale maps it all to one
+      // colour.  Default = histogram-EQUALISED: colour by each node's RANK among
+      // all nodes, so the full blue→red spectrum lands on the real distribution
+      // (the vivid Fusion look).  eqTemp=false → faithful linear scale.
       const Tn = payload.temperature_per_node ?? [];
       const tmin = payload.T_min ?? (Tn.length ? Math.min(...Tn) : 0);
       const tmax = payload.T_max ?? (Tn.length ? Math.max(...Tn) : 1);
       const rng = Math.max(tmax - tmin, 1e-6);
+      // rank fraction per node (histogram equalisation)
+      const N = Tn.length;
+      const rankFrac = new Float64Array(N);
+      if (eqTemp && N > 1) {
+        const order = Array.from({ length: N }, (_, i) => i).sort((a, b) => (Tn[a] - Tn[b]));
+        for (let r = 0; r < N; r++) rankFrac[order[r]] = r / (N - 1);
+      }
       const positions = new Float32Array(vertices.length * 3);
       const colors = new Float32Array(vertices.length * 3);
       for (let i = 0; i < vertices.length; i++) {
         positions[3 * i] = vertices[i][0] * S;
         positions[3 * i + 1] = vertices[i][1] * S;
         positions[3 * i + 2] = 0;
-        const [r, g2, b] = turbo01((((Tn[i] ?? tmin) - tmin) / rng));
+        const t = eqTemp ? rankFrac[i] : (((Tn[i] ?? tmin) - tmin) / rng);
+        const [r, g2, b] = jet01(t);
         colors[3 * i] = r / 255; colors[3 * i + 1] = g2 / 255; colors[3 * i + 2] = b / 255;
       }
       const indexArr: number[] = [];
@@ -489,7 +492,7 @@ const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode; logLoss: boole
     g.setIndex(new THREE.BufferAttribute(new Uint32Array(indexArr), 1));
     (g as any).userData = { Bmag_vmax: vmax };
     return g;
-  }, [payload, mode, logLoss]);
+  }, [payload, mode, logLoss, eqTemp]);
 
   // Iso-A contour lines (only in A_z mode) — drawn as crisp DARK lines on
   // top of the rainbow fill, like the "flux lines" in FEMM / FEMAG.  We
@@ -630,8 +633,9 @@ const ColorBar: React.FC<{
   lut: (t: number) => [number, number, number];
   log?: boolean;                     // log-spaced tick labels (fill is still 0..1 LUT)
   fmt?: (v: number) => string;       // custom number format (e.g. large W/m³)
-}> = ({ vmin, vmax, unit, lut, log = false, fmt }) => {
-  const ticks = useMemo(() => {
+  tickValues?: number[];             // explicit tick labels (bottom→top), e.g. quantiles for an equalised scale
+}> = ({ vmin, vmax, unit, lut, log = false, fmt, tickValues }) => {
+  const linTicks = useMemo(() => {
     const n = 5;
     if (log && vmin > 0 && vmax > 0) {
       const a = Math.log10(vmin), b = Math.log10(vmax);
@@ -640,6 +644,7 @@ const ColorBar: React.FC<{
     }
     return Array.from({ length: n }, (_, i) => vmin + (vmax - vmin) * (i / (n - 1)));
   }, [vmin, vmax, log]);
+  const ticks = (tickValues && tickValues.length) ? tickValues : linTicks;
   const f = fmt ?? ((v: number) => v.toFixed(2));
   const stops = Array.from({ length: 11 }, (_, k) => {
     const [r, g, b] = lut(k / 10);
@@ -716,6 +721,7 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
   const [eddyLoading, setEddyLoading] = useState<boolean>(false);
   const [eddyErr,     setEddyErr]     = useState<string | null>(null);
   const [logLoss,     setLogLoss]     = useState<boolean>(true);   // log W/m³ map
+  const [eqTemp,      setEqTemp]      = useState<boolean>(true);   // histogram-equalised temp colours
   // Thermal (Temp view) — a steady-state conduction solve fed by the eddy
   // losses; lazily fetched, re-run when γ/I or the cooling inputs change.
   const [thermalPayload, setThermalPayload] = useState<FemPayload | null>(null);
@@ -936,6 +942,14 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
               {logLoss ? 'log' : 'lin'}
             </Button>
           )}
+          {mode === 'Temp' && (
+            <Button size="small" onClick={() => setEqTemp(v => !v)}
+              title="Colour scale: Equalised spreads the full blue→red spectrum over the temperature distribution (vivid, non-linear); Linear is a true °C scale."
+              sx={{ color: '#93c5fd', fontSize: 10, textTransform: 'none',
+                minWidth: 0, px: 1, border: '1px solid #1e293b' }}>
+              {eqTemp ? 'equalised' : 'linear'}
+            </Button>
+          )}
           {isThermal && (
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
               <Tooltip title="Ambient / coolant temperature (°C)">
@@ -1008,7 +1022,7 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
                 near={0.1} far={5000}/>
               <FitView payload={payload} controlsRef={controlsRef}/>
               <ambientLight intensity={1}/>
-              <FieldMesh payload={payload} mode={mode} logLoss={logLoss} showFlux={showFlux}/>
+              <FieldMesh payload={payload} mode={mode} logLoss={logLoss} eqTemp={eqTemp} showFlux={showFlux}/>
               <OrbitControls ref={controlsRef} enableDamping={false}
                 enableRotate enablePan enableZoom zoomSpeed={1.2}/>
               {/* Drive + follow the overlay Viewcube (same as Geometry). */}
@@ -1035,8 +1049,15 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
             return a[i];
           };
           if (mode === 'Temp') {
+            // Equalised scale → label the bar at the temperature QUANTILES (the
+            // °C at each 25% of the colour range), so a colour still reads as a
+            // real temperature even though the spacing is non-linear.
+            const Ts = (payload.temperature_per_node ?? []).slice().sort((a, b) => a - b);
+            const q = (f: number) => Ts.length ? Ts[Math.min(Ts.length - 1, Math.round(f * (Ts.length - 1)))] : 0;
+            const qticks = Ts.length ? [q(0), q(0.25), q(0.5), q(0.75), q(1)] : undefined;
             return <ColorBar vmin={payload.T_min ?? 0} vmax={payload.T_max ?? 1}
-              unit="°C" lut={(t) => turbo01(t)} fmt={(v) => v.toFixed(0)}/>;
+              unit="°C" lut={(t) => jet01(t)} fmt={(v) => v.toFixed(0)}
+              tickValues={eqTemp ? qticks : undefined}/>;
           }
           if (mode === 'Bmag') {
             const Bs: number[] = [];

@@ -998,7 +998,8 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
                     <Select size="small" value={fluid} onChange={(e) => setFluid(String(e.target.value))}
                       sx={{ fontSize: 11, '& .MuiSelect-select': { py: 0.5 } }}>
                       <MenuItem sx={{ fontSize: 11 }} value="water">Water</MenuItem>
-                      <MenuItem sx={{ fontSize: 11 }} value="glycol">Glycol 50%</MenuItem>
+                      <MenuItem sx={{ fontSize: 11 }} value="water_glycol_50">Glycol 50%</MenuItem>
+                      <MenuItem sx={{ fontSize: 11 }} value="ethylene_glycol">Ethylene glycol</MenuItem>
                       <MenuItem sx={{ fontSize: 11 }} value="oil">Oil</MenuItem>
                     </Select>
                   </Tooltip>
@@ -1014,13 +1015,17 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
                       sx={{ width: 70, '& .MuiInputBase-input': { fontSize: 11, py: 0.5 },
                         '& .MuiInputLabel-root': { fontSize: 11 } }} />
                   </Tooltip>
-                  {(payload as any)?.cooling?.flow_lpm != null && (
-                    <Tooltip title="Flow rate required to carry the losses with the chosen inlet↔outlet ΔT (computed automatically).">
-                      <Typography sx={{ fontSize: 11, color: '#7dd3fc', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
-                        → {Number((payload as any).cooling.flow_lpm).toFixed(1)} L/min
-                      </Typography>
-                    </Tooltip>
-                  )}
+                  {(payload as any)?.cooling?.flow_lpm != null && (() => {
+                    const lpm = Number((payload as any).cooling.flow_lpm);
+                    const txt = lpm >= 1 ? `${lpm.toFixed(2)} L/min` : `${(lpm * 1000).toFixed(0)} mL/min`;
+                    return (
+                      <Tooltip title="Flow rate required to carry the losses with the chosen inlet↔outlet ΔT (computed automatically). Small losses need very little flow.">
+                        <Typography sx={{ fontSize: 11, color: '#7dd3fc', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
+                          → {txt}
+                        </Typography>
+                      </Tooltip>
+                    );
+                  })()}
                 </>
               )}
 

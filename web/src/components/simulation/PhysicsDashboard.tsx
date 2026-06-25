@@ -280,7 +280,8 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
 
       {/* ── Top-of-tab summary card — populated by TransientCharts, or by a
            design applied from the Sweep tab (numbers reused, no re-run) ── */}
-      <SummaryTable summary={shownSummary} fromSweep={!!appliedSummary}/>
+      <SummaryTable summary={shownSummary} fromSweep={!!appliedSummary}
+        liveOp={{ current: I_phase_rms, gamma: gamma_deg }}/>
 
       {/* Analytical "Key Scalars" table removed — all key quantities
           (T_em, P_cu/Fe/eddy, |B|_max, A_z range) come from the FEM

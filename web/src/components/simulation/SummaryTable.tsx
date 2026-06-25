@@ -40,6 +40,11 @@ interface Props {
   summary: TransientSummary | null;
   loading?: boolean;
   fromSweep?: boolean;   // numbers reused from an applied Sweep design (no re-run)
+  // Currently-set operating point (the Simulation inputs). If the shown summary was
+  // computed at a DIFFERENT current / γ (e.g. the user changed it after the run, and
+  // the Optimize tab already uses the new point), flag the result as stale so the
+  // Sim numbers aren't mistaken for the current point.
+  liveOp?: { current?: number; gamma?: number };
 }
 
 const Cell: React.FC<{
@@ -78,7 +83,7 @@ const Cell: React.FC<{
   return tooltip ? <Tooltip title={tooltip} placement="top">{cell}</Tooltip> : cell;
 };
 
-const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep }) => {
+const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) => {
   if (!summary) {
     return (
       <Paper sx={{ bgcolor: '#0b1220', border: '1px solid #1e293b', p: 2,
@@ -101,6 +106,14 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep }) => {
                                                 : s.T_ripple_pct <= 15 ? 'amber'
                                                 : 'red';
 
+  // Stale-operating-point guard: these numbers were computed at the summary's own
+  // current / γ.  If the inputs have since changed (the optimizer already uses the
+  // new point), the Sim shows an OLD point — flag it so it isn't compared 1:1.
+  const liveI = liveOp?.current, liveG = liveOp?.gamma;
+  const dI = Number.isFinite(liveI as number) ? Math.abs((liveI as number) - s.I_phase_rms_A) : 0;
+  const dG = Number.isFinite(liveG as number) ? Math.abs((liveG as number) - s.gamma_deg)     : 0;
+  const stale = dI > 0.05 || dG > 0.05;
+
   return (
     <Paper sx={{ bgcolor: '#0b1220', border: '1px solid #1e293b', p: 2,
       display: 'flex', flexDirection: 'column', gap: 1 }}>
@@ -112,6 +125,17 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep }) => {
         <Typography sx={{ fontSize: 10, color: '#475569' }}>
           @ {s.rpm} rpm · I_ph = {s.I_phase_rms_A} A_rms · γ = {s.gamma_deg}°
         </Typography>
+        {stale && (
+          <Box sx={{ width: '100%', mt: 0.5, px: 1, py: 0.6, borderRadius: 1,
+            bgcolor: 'rgba(245,158,11,0.10)', border: '1px solid rgba(245,158,11,0.4)' }}>
+            <Typography sx={{ fontSize: 11, color: '#f59e0b', fontWeight: 700 }}>
+              ⚠ Shown for I = {s.I_phase_rms_A} A_rms{dG > 0.05 ? `, γ = ${s.gamma_deg}°` : ''} — differs from the current setting
+              {Number.isFinite(liveI as number)
+                ? ` (I = ${fmt(liveI as number, 2)} A${dG > 0.05 && Number.isFinite(liveG as number) ? `, γ = ${fmt(liveG as number, 0)}°` : ''})`
+                : ''}. These numbers are for the OLD point — press “Run Simulation” to recompute at the current one.
+            </Typography>
+          </Box>
+        )}
         {fromSweep && (
           <Typography sx={{ fontSize: 10, color: '#fbbf24' }}>
             ← from applied Sweep design (numbers reused, no re-run) · press “Run Simulation” for waveforms &amp; field maps

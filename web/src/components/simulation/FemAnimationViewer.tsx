@@ -126,7 +126,7 @@ const FemAnimationViewer: React.FC<Props> = ({
       outer_air_factor:   String(readMeshSetting('outerAir',    1.3)),
       motion_band:        String(readMeshSetting('motionBand',  true)),
       band_thickness_mm:  String(readMeshSetting('bandThickness', 0.4)),
-      n_sectors:          String(readMeshSetting('nSectors',    4)),
+      n_sectors:          String(readMeshSetting('nSectors',    1)),
       stator_fillet_mm:   '0',   // native geometry — extra smoothing removed
       // Same per-part mesh sizes as TransientCharts → shared backend cache key.
       component_mesh:     JSON.stringify(readMeshSetting<Record<string, number>>('componentMesh', {})),

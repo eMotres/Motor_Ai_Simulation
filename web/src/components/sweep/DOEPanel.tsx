@@ -71,7 +71,7 @@ const DOEPanel: React.FC = () => {
       const res = await fetch(`${API}/api/optimization/doe/start`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ n, current_a: current, band, steps_per_period: steps,
-          n_sectors: Math.max(1, Math.round(readNum('mesh.nSectors', 4))),   // single source: Mesh tab (same as Simulation)
+          n_sectors: Math.max(1, Math.round(readNum('mesh.nSectors', 1))),   // single source: Mesh tab (same as Simulation)
           pole_copy: readBool('mesh.poleCopy', false), torque_filter: readBool('sim.torqueFilter', true) }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);

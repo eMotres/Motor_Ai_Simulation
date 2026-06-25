@@ -489,7 +489,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   const computeSig = () => JSON.stringify({
     I: current, g: phaseOffset, rpm, steps, coilTemp, endWinding, connection,
     fl: fieldLosses, dm: demag,
-    ns: readMesh('nSectors', 4), ms: readMesh('meshSize', 4.0), mn: readMesh('minSize', 0.3),
+    ns: readMesh('nSectors', 1), ms: readMesh('meshSize', 4.0), mn: readMesh('minSize', 0.3),
     gl: readMesh('gapLayers', 2), oa: readMesh('outerAir', 1.3), nd: readMesh('normalDev', 6),
     geo: geoSig(),   // geometry change (e.g. applied Sweep design) ⇒ result stale
   });
@@ -526,7 +526,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
         field_losses: fieldLosses,
         demag,
         torque_filter: torqueFilter,
-        n_sectors: readMesh('nSectors', 4),
+        n_sectors: readMesh('nSectors', 1),
         mesh_size_mm: readMesh('meshSize', 4.0),
         min_size_mm: readMesh('minSize', 0.3),
         num_poles: numPoles,

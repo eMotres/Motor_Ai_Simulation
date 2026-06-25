@@ -312,7 +312,7 @@ const MeshPanel: React.FC = () => {
   const [view,        setView]        = useState<'fem' | 'pinn'>('fem');
   // ── Persisted mesh settings (survive tab switches) ──────────────────────
   // Hook: each setting reads its initial value from localStorage and writes
-  // back on every change.  Default symmetry is 1/4 per user request.
+  // back on every change.  Default symmetry is Full (full disk) per user request.
   const usePersisted = <T,>(key: string, def: T) => {
     const [v, setV] = useState<T>(() => {
       try {
@@ -339,7 +339,7 @@ const MeshPanel: React.FC = () => {
   const [rotorAngle,  setRotorAngle]  = usePersisted<number>('rotorAngle', 0.0);
   // ── Solver-domain extensions (Ansys-style) ───────────────────────────────
   const [outerAirFactor, setOuterAirFactor] = usePersisted<number>('outerAir', 1.3);
-  const [nSectors,       setNSectors]       = usePersisted<number>('nSectors', 4);   // 1/4 by default
+  const [nSectors,       setNSectors]       = usePersisted<number>('nSectors', 1);   // Full (full disk) by default
   // Air-gap element rows PER SIDE of the slip midline (1-3, default 2). The
   // value persists in config.yaml (loaded below, clamped to the new 1-3 range).
   const [gapLayers,      setGapLayers]      = usePersisted<number>('gapLayers', 2);
@@ -520,10 +520,10 @@ const MeshPanel: React.FC = () => {
   const symPoles = geo?.num_poles ?? 28;
   const symGcd = Math.max(1, _gcd(Math.round(symSlots), Math.round(symPoles)));
   const validSectors = [1, 2, 3, 4, 6, 8, 12].filter(s => symGcd % s === 0);
-  // If the persisted nSectors is invalid for this motor, snap to the finest valid.
+  // If the persisted nSectors is invalid for this motor, snap to Full (always valid).
   useEffect(() => {
     if (geo && !validSectors.includes(nSectors)) {
-      setNSectors(validSectors[validSectors.length - 1]);
+      setNSectors(validSectors[0]);   // = 1 (Full) — validSectors always includes 1
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [geo, symGcd]);

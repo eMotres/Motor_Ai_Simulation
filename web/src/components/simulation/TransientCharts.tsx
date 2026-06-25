@@ -263,7 +263,7 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
       motion_band:        readMeshSetting('motionBand',  true),
       band_thickness_mm:  readMeshSetting('bandThickness', 0.4),
       gap_layers:         readMeshSetting('gapLayers',   2),
-      n_sectors:          readMeshSetting('nSectors',    4),
+      n_sectors:          readMeshSetting('nSectors',    1),
       stator_fillet_mm:   0,   // native geometry — extra smoothing removed
       // ALWAYS use the sliding band for the transient torque/back-EMF — meshes
       // ONCE and rotates the rotor through a moving band (clean, physical T(t)),

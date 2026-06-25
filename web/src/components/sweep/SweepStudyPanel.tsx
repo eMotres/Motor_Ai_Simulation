@@ -237,7 +237,7 @@ const SweepStudyPanel: React.FC = () => {
           ripple_max_pct: 100, max_geometries: Math.max(1, nGeom),
           mesh_size_mm: readLS('mesh.meshSize', 4), min_size_mm: readLS('mesh.minSize', 0.3),
           pole_copy: readBool('mesh.poleCopy', false), torque_filter: readBool('sim.torqueFilter', true),
-          n_sectors: Math.max(1, Math.round(readLS('mesh.nSectors', 4))),   // single source: Mesh tab (same as Simulation)
+          n_sectors: Math.max(1, Math.round(readLS('mesh.nSectors', 1))),   // single source: Mesh tab (same as Simulation)
           gap_layers: readLS('mesh.gapLayers', 2),   // single source: Mesh tab — drives ripple/eddy; must match Simulation
           end_winding_factor: readLS('sim.endWinding', 0),   // single source: Simulation — drives copper loss/eff (same value Sim sends)
           rotor_eddy: readBool('sim.fieldLosses', true),   // single source: Simulation — field vs slab magnet eddy (drives eff)

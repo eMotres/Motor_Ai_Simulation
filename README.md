@@ -1,108 +1,51 @@
 # Electric Motor AI Simulator
 
-Physics-Informed Neural Network for Electric Motor Simulation using PhysicsNeMo.
+A full-stack **2-D FEM design platform for BLDC/PMSM motors** — parametric geometry,
+real finite-element electromagnetics, thermal, optimization and cost estimation, with a
+browser workbench.
+
+> **Note:** the electromagnetics are solved with a classical **finite-element method
+> (scikit-fem + gmsh, on CPU)** — there is **no** PINN / neural-network / NVIDIA Modulus /
+> PhysicsNeMo / PyTorch dependency. (An earlier prototype targeted Modulus PINNs; that path
+> was removed — only inert, guarded references may remain in a few legacy modules.)
 
 ## Features
 
-- 🧲 Parametric 2D/3D geometry of BLDC/PMSM motors
-- 🔧 Material definitions (electrical steel, permanent magnets, copper, air)
-- 📊 Mesh generation with material properties
-- 🧠 Physics-Informed Neural Networks for electromagnetic simulation
-- 📈 Visualization tools for motor geometry and fields
+- 🧲 Parametric 2-D geometry of BLDC/PMSM motors (CadQuery + gmsh)
+- 🧮 **FEM electromagnetics** — magnetostatic field, time-stepped transient with a
+  sliding air-gap band (torque, back-EMF, iron/copper/magnet losses, demagnetisation)
+- 🌡️ Steady-state **thermal** map (scikit-fem conduction; air / liquid cooling models)
+- 📈 **Optimization** (CMA-ES / descent) + DOE sweeps over geometry and operating point
+- 💶 **Cost estimation** — material masses × prices + labour, by line item
+- 🧊 3-D viewer, field/loss/temperature colour maps, saved-motor catalog
 
-## Installation
+## Architecture
 
-### Prerequisites
+- **Backend** — FastAPI (Python). FEM via scikit-fem + gmsh; geometry via CadQuery;
+  optimization via CMA-ES. Containerised (`Dockerfile` → `requirements.txt`), runs on
+  Cloud Run.
+- **Frontend** — React + Vite + TypeScript + MUI + Three.js (`web/`), deployed to
+  Firebase Hosting.
 
-- Python 3.10+
-- PyTorch 2.0+
-- PhysicsNeMo
-
-### Install PhysicsNeMo
-
-```bash
-# From local installation (recommended for development)
-pip install -e /path/to/modulus
-
-# Or from GitHub
-pip install git+https://github.com/NVIDIA/physicsnemo.git
-```
-
-### Install Motor AI Simulator
+## Run locally
 
 ```bash
-# From source
-cd motor_ai_sim
-pip install -e .
+# Backend (FastAPI on :8001)
+pip install -r requirements.txt
+PYTHONPATH=src uvicorn motor_ai_sim.api:app --port 8001
 
-# With development dependencies
-pip install -e ".[dev]"
+# Frontend (Vite dev server on :5173)
+cd web && npm install && npm run dev
 ```
-
-## Quick Start
-
-```python
-from motor_ai_sim.geometry import MotorGeometryParams, MotorMeshGenerator
-from motor_ai_sim.utils import visualize_motor
-
-# Create motor geometry
-params = MotorGeometryParams(
-    stator_outer_radius=0.05,
-    stator_inner_radius=0.03,
-    rotor_outer_radius=0.028,
-    num_slots=12,
-    num_poles=4,
-)
-
-# Generate mesh with materials
-generator = MotorMeshGenerator(params)
-meshes = generator.generate()
-
-# Visualize
-visualize_motor(meshes)
-```
-
-## Project Structure
-
-```
-motor_ai_sim/
-├── src/motor_ai_sim/
-│   ├── geometry/
-│   │   ├── materials.py         # Material definitions
-│   │   ├── motor_geometry.py    # Parametric geometry
-│   │   └── mesh_generator.py    # Mesh generation
-│   └── utils/
-│       └── visualization.py     # Plotting utilities
-├── config/
-│   └── motor_config.yaml        # Motor parameters
-├── examples/
-│   └── visualize_motor.py       # Example script
-└── tests/
-    └── test_geometry.py         # Unit tests
-```
-
-## Motor Components
-
-| Component | Description | Material |
-|-----------|-------------|----------|
-| Stator Core | Laminated electrical steel | M-27 Silicon Steel |
-| Stator Slots | Copper windings | Copper |
-| Air Gap | Air between stator and rotor | Air |
-| Rotor Core | Solid or laminated steel | M-27 Silicon Steel |
-| Permanent Magnets | NdFeB magnets | N42SH |
-| Shaft | Steel shaft | Carbon Steel |
 
 ## Physics
 
-The simulator solves Maxwell's equations for magnetostatics:
+Magnetostatics from Maxwell's equations, in terms of the magnetic vector potential **A**
+(**B = ∇ × A**):
 
-- **∇ × H = J** (Ampère's Law)
-- **∇ · B = 0** (No magnetic monopoles)
-- **B = μH** (Constitutive relation)
-
-Using vector potential **A** where **B = ∇ × A**:
-
-- **∇²A = -μJ** (Poisson equation)
+- **∇ × H = J** (Ampère), **∇ · B = 0**, **B = μH**
+- ⇒ **∇·(ν ∇A_z) = −J_z** — solved per time step on the FEM mesh; torque from the
+  Maxwell stress tensor on the air-gap circle, losses from the cycle-averaged field.
 
 ## License
 
@@ -110,6 +53,6 @@ MIT License
 
 ## References
 
-- [PhysicsNeMo Documentation](https://nvidia.github.io/physicsnemo/)
+- [scikit-fem](https://github.com/kinnala/scikit-fem) · [gmsh](https://gmsh.info/)
 - [Maxwell's Equations](https://en.wikipedia.org/wiki/Maxwell%27s_equations)
 - [BLDC Motor Design](https://en.wikipedia.org/wiki/Brushless_DC_electric_motor)

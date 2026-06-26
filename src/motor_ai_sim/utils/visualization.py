@@ -28,7 +28,7 @@ def visualize_motor(
     """Visualize the complete motor cross-section.
 
     Args:
-        meshes: Dictionary of region meshes from MotorMeshGenerator
+        meshes: Dictionary of region meshes
         title: Plot title
         figsize: Figure size (width, height)
         show_materials: Whether to show material legend

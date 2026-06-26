@@ -1,20 +1,10 @@
-"""2-D magnetostatics PINN solver using NVIDIA Modulus Sym.
+"""2-D magnetostatics solver configuration and analytical (dry-run) results.
 
-This module assembles the full Modulus training problem:
-
-    Domains:
-        stator_core  →  Magnetostatics2D(mu_r=mu_fe)
-        air_gap      →  Magnetostatics2D(mu_r=1)
-        rotor_core   →  Magnetostatics2D(mu_r=mu_fe)
-        magnet       →  PermanentMagnet2D(Br, Mx, My)
-        slot_A       →  Magnetostatics2D(mu_r=1, J_z=+J_peak)
-        slot_B       →  Magnetostatics2D(mu_r=1, J_z=-J_peak)
-        shaft        →  Magnetostatics2D(mu_r=mu_shaft)
-
-    Boundary conditions:
-        outer_stator    →  A_z = 0  (Dirichlet, Neumann-by-symmetry)
-        inner_shaft     →  A_z = 0  (Dirichlet)
-        interfaces      →  continuity of A_z and ν·∂A_z/∂n  (auto via PINN)
+The NVIDIA Modulus PINN training path has been removed.  The active EM solver is
+scikit-fem (see motor_ai_sim.simulation.fem_solver_2d).  This module retains the
+operating-point configuration (SimConfig) and the analytical copper-loss /
+efficiency "dry-run" result that the /api/simulation/run + /status endpoints
+still consume.
 
 Run:
     python -m motor_ai_sim.simulation.solver_2d
@@ -26,32 +16,17 @@ or via the REST API:
 from __future__ import annotations
 
 import logging
-import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict
 
-import numpy as np
-
-from motor_ai_sim.simulation.pdes import (
-    Magnetostatics2D,
-    PermanentMagnet2D,
-    MagnetostaticsAC2D,
-    MU_0,
-)
 from motor_ai_sim.simulation.geometry_2d import (
     MotorDomains2D,
     MotorDomainParams,
     params_from_config,
-    winding_current_density,
 )
 from motor_ai_sim.simulation.postprocess import (
-    compute_torque_maxwell,
-    compute_flux_density,
-    make_polar_grid,
     compute_copper_losses,
-    compute_iron_losses_by_domain,
-    compute_magnet_losses,
     compute_efficiency,
 )
 from motor_ai_sim.config import get_config
@@ -59,50 +34,7 @@ from motor_ai_sim.materials import get_material
 
 log = logging.getLogger(__name__)
 
-# ── Modulus availability ──────────────────────────────────────────────────────
-try:
-    from modulus.sym.solver import Solver
-    from modulus.sym.domain import Domain
-    from modulus.sym.domain.constraint import (
-        PointwiseInteriorConstraint,
-        PointwiseBoundaryConstraint,
-    )
-    from modulus.sym.models.fully_connected import FullyConnectedArch
-    from modulus.sym.models.fourier_net import FourierNetArch
-    from modulus.sym.node import Node
-    from modulus.sym.key import Key
-    from modulus.sym.hydra import ModulusConfig
-    HAS_MODULUS = True
-except ImportError:
-    try:
-        from physicsnemo.sym.solver import Solver
-        from physicsnemo.sym.domain import Domain
-        from physicsnemo.sym.domain.constraint import (
-            PointwiseInteriorConstraint,
-            PointwiseBoundaryConstraint,
-            PointwiseConstraint,
-        )
-        from physicsnemo.sym.dataset import DictPointwiseDataset
-        from physicsnemo.sym.loss import PointwiseLossNorm
-        from physicsnemo.sym.models.fully_connected import FullyConnectedArch
-        from physicsnemo.sym.models.fourier_net import FourierNetArch
-        from physicsnemo.sym.node import Node
-        from physicsnemo.sym.key import Key
-        from physicsnemo.sym.models.activation import Activation
-        HAS_MODULUS = True
-    except ImportError:
-        HAS_MODULUS = False
-        log.warning("NVIDIA Modulus not found — solver will run in dry-run mode.")
-
-
-def _act_enum(name):
-    """physicsnemo-sym 2.4 wants an Activation enum, not a string like 'tanh'
-    (old Modulus Sym accepted strings).  Map our config string → enum; fall back
-    to the raw string if the enum isn't importable (older Modulus)."""
-    try:
-        return getattr(Activation, str(name).upper())
-    except (NameError, AttributeError):
-        return name
+HAS_MODULUS = False  # NVIDIA Modulus path removed
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -111,7 +43,7 @@ def _act_enum(name):
 
 @dataclass
 class SimConfig:
-    """Runtime parameters for the 2-D magnetostatics PINN."""
+    """Runtime parameters for the 2-D magnetostatics solve."""
 
     # Operating point (read from motor_config.yaml by default)
     I_peak: float = 10.0           # Peak coil current [A]  = I_phase_peak / n_parallel
@@ -167,24 +99,24 @@ class SimConfig:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 2.  Main solver builder
+# 2.  Solver
 # ─────────────────────────────────────────────────────────────────────────────
 
 class MagnetostaticsSolver2D:
-    """Assembles and runs the Modulus PINN for 2-D motor magnetostatics.
+    """Operating-point holder that returns analytical copper-loss / efficiency
+    results.  (The NVIDIA Modulus PINN training path has been removed; the active
+    field solve lives in motor_ai_sim.simulation.fem_solver_2d.)
 
     Usage
     -----
     >>> solver = MagnetostaticsSolver2D.from_config()
     >>> result = solver.run()
-    >>> print(f"Torque = {result['torque_Nm']:.3f} N·m")
     """
 
     def __init__(self, sim_cfg: SimConfig, geo_params: MotorDomainParams):
         self.cfg = sim_cfg
         self.geo = MotorDomains2D(geo_params)
         self.gp = geo_params
-        self._solver: Optional[object] = None
 
     @classmethod
     def from_config(cls) -> "MagnetostaticsSolver2D":
@@ -192,247 +124,10 @@ class MagnetostaticsSolver2D:
         geo_params = params_from_config()
         return cls(sim_cfg, geo_params)
 
-    # ── assemble ──────────────────────────────────────────────────────────────
-    def build(self) -> None:
-        """Assemble Modulus Domain + Solver (requires Modulus to be installed).
-
-        Uses frequency-domain AC magnetostatics (MagnetostaticsAC2D) for all
-        domains.  Network outputs Ar(x,y) and Ai(x,y) — real and imaginary
-        parts of the vector-potential phasor A_z = Ar + j·Ai.
-
-        This captures:
-          - skin effect and proximity effect in copper conductors (σ_cu)
-          - eddy current losses in NdFeB magnets (σ_mag)
-          - B-field distribution for Bertotti iron losses in steel (σ=0)
-        """
-        if not HAS_MODULUS:
-            log.warning("build() called but Modulus is not installed — skipping.")
-            return
-
-        cfg = self.cfg
-        gp  = self.gp
-
-        omega = 2 * math.pi * cfg.frequency_hz   # electrical angular frequency
-
-        # ── 1. Network: maps (x, y) → [Ar, Ai] ───────────────────────────
-        # NON-DIMENSIONALISE the I/O via Key scale=(mean, std):
-        #   * inputs  x,y are in METRES (±0.075) → tanh sits in its linear
-        #     regime and the MLP can't form the localised slot/magnet features.
-        #     Scaling by R = r_stator_out feeds the net coords in [-1, 1].
-        #   * outputs A_z ~ O(0.01-0.05) Wb/m.  Scaling the raw O(1) net output
-        #     by A0 conditions the BC (A_z=0) vs PDE residual balance.
-        R_scale = gp.r_stator_out
-        A0_scale = 0.05                      # characteristic |A_z| [Wb/m]
-        in_keys  = [Key("x", scale=(0.0, R_scale)),
-                    Key("y", scale=(0.0, R_scale))]
-        out_keys = [Key("Ar", scale=(0.0, A0_scale)),
-                    Key("Ai", scale=(0.0, A0_scale))]
-        # FOURIER FEATURES beat the spectral bias of a plain tanh/SiLU MLP, which
-        # can only learn the lowest harmonic and so completely misses the 24-slot
-        # / 28-pole high-frequency structure.  At normalised radius ~0.8 the 28
-        # poles are angular mode ~14, so we need per-axis frequencies up to ~16.
-        if getattr(cfg, "use_fourier", True):
-            freqs = list(range(0, 17))       # axis frequencies 0..16
-            net = FourierNetArch(
-                input_keys=in_keys,
-                output_keys=out_keys,
-                frequencies=("axis", freqs),
-                frequencies_params=("axis", freqs),
-                layer_size=cfg.layer_size,
-                nr_layers=cfg.num_layers,
-                activation_fn=_act_enum(cfg.activation),
-            )
-        else:
-            net = FullyConnectedArch(
-                input_keys=in_keys,
-                output_keys=out_keys,
-                layer_size=cfg.layer_size,
-                nr_layers=cfg.num_layers,
-                activation_fn=_act_enum(cfg.activation),
-            )
-        nodes = [net.make_node(name="A_phasor_network")]
-        self._net = net   # keep the arch so postprocess can eval it directly
-                          # (physicsnemo-sym 2.4 dropped solver.get_network_output)
-
-        # ── 2. Phase currents at this rotor angle ──────────────────────────
-        pole_pairs = gp.num_poles // 2
-        theta_elec = math.radians(cfg.rotor_angle_deg * pole_pairs
-                                  + cfg.phase_offset_deg)
-        I_phase = {
-            'A':  cfg.I_peak * math.cos(theta_elec),
-            'B':  cfg.I_peak * math.cos(theta_elec - 2 * math.pi / 3),
-            'C':  cfg.I_peak * math.cos(theta_elec + 2 * math.pi / 3),
-        }
-        log.info(
-            "Phase currents: I_A=%.1f  I_B=%.1f  I_C=%.1f A  (theta_elec=%.1f deg)",
-            I_phase['A'], I_phase['B'], I_phase['C'],
-            math.degrees(theta_elec),
-        )
-
-        slot_area = gp.slot_width_m * gp.slot_height_m * gp.fill_factor
-
-        # ── 3. Bulk-domain PDE nodes ───────────────────────────────────────
-        # Laminated steel: σ=0 (Bertotti handles iron losses in post-process)
-        stator_pde = MagnetostaticsAC2D(mu_r=cfg.mu_r_stator, sigma=0.0, omega=omega)
-        nodes += stator_pde.make_nodes()
-
-        rotor_pde  = MagnetostaticsAC2D(mu_r=cfg.mu_r_rotor,  sigma=0.0, omega=omega)
-        nodes += rotor_pde.make_nodes()
-
-        shaft_pde  = MagnetostaticsAC2D(mu_r=cfg.mu_r_shaft,  sigma=0.0, omega=omega)
-        nodes += shaft_pde.make_nodes()
-
-        air_pde    = MagnetostaticsAC2D(mu_r=1.0,              sigma=0.0, omega=omega)
-        nodes += air_pde.make_nodes()
-
-        # ── 4. Domain ─────────────────────────────────────────────────────
-        domain = Domain()
-        _outvars_zero = {"magnetostatics_ac_real": 0, "magnetostatics_ac_imag": 0}
-
-        def _add_interior(name: str, geo, weight: float = 1.0):
-            """Add constraint using Modulus CSG geometry."""
-            domain.add_constraint(
-                PointwiseInteriorConstraint(
-                    nodes=nodes,
-                    geometry=geo,
-                    outvar=_outvars_zero,
-                    batch_size=cfg.batch_size_interior,
-                    lambda_weighting={k: weight for k in _outvars_zero},
-                ),
-                name=f"interior_{name}",
-            )
-
-        def _add_pointwise(name: str, numpy_domain, n_pts: int = 2000,
-                           weight: float = 1.0):
-            """Add constraint using pre-sampled points from numpy domain.
-
-            Used for slots/magnets that aren't native Modulus CSG objects.
-            """
-            pts = numpy_domain.sample_interior(n_pts)
-            area_val = float(np.prod([
-                np.ptp(pts["x"]) if np.ptp(pts["x"]) > 0 else 1.0,
-                np.ptp(pts["y"]) if np.ptp(pts["y"]) > 0 else 1.0,
-            ])) / n_pts
-            invar = {
-                "x": pts["x"].reshape(-1, 1),
-                "y": pts["y"].reshape(-1, 1),
-            }
-            outvar = {
-                "magnetostatics_ac_real": np.zeros((n_pts, 1)),
-                "magnetostatics_ac_imag": np.zeros((n_pts, 1)),
-            }
-            lam = {k: np.full((n_pts, 1), weight) for k in outvar}
-            dataset = DictPointwiseDataset(invar=invar, outvar=outvar,
-                                           lambda_weighting=lam)
-            domain.add_constraint(
-                PointwiseConstraint(
-                    nodes=nodes,
-                    dataset=dataset,
-                    loss=PointwiseLossNorm(),
-                    batch_size=min(cfg.batch_size_interior, n_pts),
-                    shuffle=True,
-                    drop_last=False,
-                    num_workers=0,
-                ),
-                name=f"interior_{name}",
-            )
-
-        _add_interior("stator_core", self.geo["stator_core"])
-        _add_interior("air_gap",     self.geo["air_gap"])
-        _add_interior("rotor_core",  self.geo["rotor_core"])
-        _add_interior("shaft",       self.geo["shaft"])
-
-        # ── 5. Per-slot conductor constraints (24 slots) ───────────────────
-        slot_pde_cache: Dict[tuple, object] = {}
-        for slot_name, slot_geo, (phase, direction) in self.geo.slot_domains():
-            J_z = direction * I_phase[phase] * gp.num_wires_per_slot / slot_area
-            key = (phase, direction)
-            if key not in slot_pde_cache:
-                pde = MagnetostaticsAC2D(
-                    mu_r=1.0, sigma=gp.sigma_cu, omega=omega, Jr=J_z,
-                )
-                slot_pde_cache[key] = pde
-                nodes += pde.make_nodes()
-            _add_pointwise(slot_name, slot_geo, n_pts=1000)
-
-        # ── 6. Per-magnet constraints (28 poles) ──────────────────────────
-        # TANGENTIAL magnetization along the magnet bottom edge, alternating
-        # with polarity — same model as the analytical Green's-function solver
-        # in routes/simulation.py::get_field2d.
-        # Equivalent magnet source.  For a *position-dependent* tangential field
-        # M = polarity·(Br/μ₀)·φ̂(φ) the bound current density is
-        #   J_mag = curl(M)_z = (1/r)·∂(r·M_φ)/∂r = M_φ/r,
-        # a genuine VOLUME source the interior collocation can sample.  This is a
-        # FIRST approximation: the FEM uses a *constant* M-vector per magnet
-        # (curl = 0 inside, source = a surface current on the magnet edges) and
-        # captures it via its weak form ∫(Mx ∂v/∂y − My ∂v/∂x).  A strong-form
-        # PINN can't see a surface delta, so the exact net-current-neutral fix is
-        # a WINDOWED M (smooth M→0 at the magnet edges, turning the surface
-        # current into a thin samplable body layer).  TODO: window for exactness.
-        # The M_φ/r form already injects the 28-pole structure (a harmonic ~14
-        # appears in the air-gap A_z spectrum).
-        from sympy import Symbol as _Sym, sqrt as _sqrt
-        _xs = _Sym("x"); _ys = _Sym("y")
-        _r  = _sqrt(_xs**2 + _ys**2)
-        pole_pitch = 2 * math.pi / gp.num_poles
-        for mag_name, mag_geo, polarity in self.geo.magnet_domains():
-            i = int(mag_name.split("_")[1])
-            phi_c = (i + 0.5) * pole_pitch
-            # Tangent (+φ̂) at angle φ_c is (-sin(φ_c), cos(φ_c))
-            Mx = polarity * (-math.sin(phi_c))
-            My = polarity * (+math.cos(phi_c))
-            M_phi   = polarity * cfg.Br_magnet / MU_0       # |M| [A/m], signed
-            src_r   = M_phi / _r                            # curl(M)_z [A/m²]
-            pm_ac_pde = MagnetostaticsAC2D(
-                mu_r=1.05, sigma=gp.sigma_mag, omega=omega, src_r=src_r,
-            )
-            nodes += pm_ac_pde.make_nodes()
-            _add_pointwise(mag_name, mag_geo, n_pts=500)
-            self.geo.material_props[mag_name].update(
-                {"Mx": Mx, "My": My, "Br": cfg.Br_magnet}
-            )
-
-        # ── 7. Dirichlet BC: Ar = Ai = 0 on outer stator ─────────────────
-        domain.add_constraint(
-            PointwiseBoundaryConstraint(
-                nodes=nodes,
-                geometry=self.geo["full"],
-                outvar={"Ar": 0, "Ai": 0},
-                batch_size=cfg.batch_size_boundary,
-                # Weight the Dirichlet BC so it's comparable to the now-O(1)
-                # PDE residual.  (At weight 1 it was swamped by the un-scaled PDE;
-                # at 100 with the rescaled PDE it OVER-constrained A→0 everywhere.)
-                lambda_weighting={"Ar": 20.0, "Ai": 20.0},
-            ),
-            name="bc_outer_dirichlet",
-        )
-
-        self._domain = domain
-        self._nodes  = nodes
-        log.info("Modulus solver assembled (AC phasor). omega=%.1f rad/s, "
-                 "%d slot + %d magnet constraints.",
-                 omega, gp.num_slots, gp.num_poles)
-
-    # ── train ─────────────────────────────────────────────────────────────────
+    # ── run ─────────────────────────────────────────────────────────────────
     def run(self) -> Dict:
-        """Train PINN and return key results."""
-        if not HAS_MODULUS:
-            return self._dry_run()
-
-        self.build()
-
-        cfg = self.cfg
-        cfg.output_dir.mkdir(parents=True, exist_ok=True)
-
-        solver = Solver(
-            cfg=self._make_modulus_cfg(),
-            domain=self._domain,
-        )
-        solver.solve()
-        log.info("Training complete. Computing torque...")
-
-        result = self._postprocess(solver)
-        return result
+        """Return the analytical (copper-loss / efficiency) result."""
+        return self._dry_run()
 
     def _loss_inputs(self) -> dict:
         """Collect geometry + winding params needed for loss calculations.
@@ -467,168 +162,9 @@ class MagnetostaticsSolver2D:
             "rpm":               self.cfg.rpm,
         }
 
-    def _postprocess(self, solver) -> Dict:
-        """Compute all losses and torque from the trained AC phasor network.
-
-        The network outputs Ar(x,y), Ai(x,y) — real/imaginary parts of
-        A_z phasor.  From these we derive:
-
-          B field      : B_x = dAr/dy + j dAi/dy,  B_y = -dAr/dx - j dAi/dx
-          Copper losses: from J_total = J_source - jωσ·A_z distribution
-          Magnet eddy  : P = (ω²σ/2) ∫|A_z|² dV  (classical formula)
-          Iron losses  : Bertotti on |B|_rms from PINN B field
-          Torque       : Maxwell stress tensor on air-gap circle
-        """
-        import torch
-        gp    = self.gp
-        omega = 2 * math.pi * self.cfg.frequency_hz
-
-        # physicsnemo-sym 2.4 dropped solver.get_network_output, so evaluate the
-        # trained arch (a torch Module, trained in-place) directly.
-        net = getattr(self, "_net", None)
-        if net is not None:
-            try:
-                _dev = next(net.parameters()).device
-            except StopIteration:
-                _dev = torch.device("cpu")
-            net.eval()
-
-        def _eval(x: np.ndarray, y: np.ndarray) -> tuple:
-            """Return (Ar, Ai) arrays evaluated at (x, y) points by calling the
-            trained FullyConnectedArch on (x, y) input tensors."""
-            if net is None:
-                return np.zeros_like(x), np.zeros_like(y)
-            xi = torch.as_tensor(np.asarray(x).reshape(-1, 1), dtype=torch.float32, device=_dev)
-            yi = torch.as_tensor(np.asarray(y).reshape(-1, 1), dtype=torch.float32, device=_dev)
-            with torch.no_grad():
-                out = net({"x": xi, "y": yi})
-            return (out["Ar"].detach().cpu().numpy().reshape(-1),
-                    out["Ai"].detach().cpu().numpy().reshape(-1))
-
-        # ── Build evaluation grid ─────────────────────────────────────────
-        x_g, y_g = make_polar_grid(gp.r_shaft_in, gp.r_stator_out,
-                                   n_r=40, n_phi=180)
-        Ar_g, Ai_g = _eval(x_g, y_g)
-        # Reconstruct |A_z|² and |B|_rms on the grid
-        A_mag2 = Ar_g**2 + Ai_g**2         # |A_z phasor|²
-
-        # A_z_fn returning real part (for Maxwell torque — uses peak field)
-        def A_z_fn(x, y):
-            Ar, _ = _eval(x, y)
-            return Ar.reshape(x.shape)
-
-        _, _, B_mag = compute_flux_density(A_z_fn, x_g, y_g)
-
-        # ── Torque (Maxwell stress on air-gap midline) ─────────────────────
-        r_eval = (gp.r_air_out + gp.r_air_in) / 2
-        torque = compute_torque_maxwell(A_z_fn, r_eval=r_eval,
-                                        stack_length=gp.stack_length)
-
-        # ── Copper losses — AC (skin + proximity from PINN field) ─────────
-        # J_total = J_source − jωσ_cu · A_z
-        # P_cu = (1/(2σ_cu)) · stack_length · Σ_slots ∫|J_total|² dA
-        li = self._loss_inputs()
-        slot_area = gp.slot_width_m * gp.slot_height_m * gp.fill_factor
-        P_cu_ac = 0.0
-        pole_pairs = gp.num_poles // 2
-        theta_elec = math.radians(self.cfg.rotor_angle_deg * pole_pairs
-                                  + self.cfg.phase_offset_deg)
-        I_phase = {
-            'A': self.cfg.I_peak * math.cos(theta_elec),
-            'B': self.cfg.I_peak * math.cos(theta_elec - 2 * math.pi / 3),
-            'C': self.cfg.I_peak * math.cos(theta_elec + 2 * math.pi / 3),
-        }
-        for _, slot_geo, (phase, direction) in self.geo.slot_domains():
-            J_src = direction * I_phase[phase] * gp.num_wires_per_slot / slot_area
-            pts = slot_geo.sample_interior(n=2000)
-            xs = pts["x"].ravel()
-            ys = pts["y"].ravel()
-            Ar_s, Ai_s = _eval(xs, ys)
-            # J_total_re = J_src − ω σ_cu Ai,  J_total_im = −ω σ_cu Ar
-            J_re = J_src - omega * gp.sigma_cu * Ai_s
-            J_im = -omega * gp.sigma_cu * Ar_s
-            J2   = J_re**2 + J_im**2           # |J_total|²
-            # Integrate: area ≈ slot_area, mean of J²
-            P_cu_ac += (1.0 / (2.0 * gp.sigma_cu)) * float(J2.mean()) * slot_area * gp.stack_length
-
-        # DC analytical baseline for R_phase (used for winding summary)
-        cu_dc = compute_copper_losses(**{k: li[k] for k in [
-            "I_phase_rms", "n_coils_per_phase", "n_parallel", "n_series",
-            "n_wires_per_slot", "wire_width_m", "wire_height_m",
-            "motor_length_m", "r_slot_mid_m", "n_slots",
-        ]})
-
-        # ── Iron losses (Bertotti, from PINN |B| field) ────────────────────
-        try:
-            from motor_ai_sim import materials as mat_lib
-            from motor_ai_sim.config import get_config as _gc
-            mat_cfg = _gc().get("materials", {})
-            steel   = mat_lib.get_material("steel", mat_cfg.get("stator_core", "20SW1200"))
-            kh, kc, ke = steel.core_loss_kh, steel.core_loss_kc, steel.core_loss_ke
-        except Exception:
-            kh, kc, ke = 2.5, 0.003, 0.0
-
-        fe = compute_iron_losses_by_domain(
-            A_z_fn, frequency=li["frequency"],
-            stack_length=gp.stack_length,
-            r_stator_in=gp.r_stator_in, r_stator_out=gp.r_stator_out,
-            r_rotor_in=gp.r_rotor_in,   r_rotor_out=gp.r_rotor_out,
-            kh=kh, kc=kc, ke=ke,
-        )
-
-        # ── Magnet eddy losses — AC (from PINN A_z field) ─────────────────
-        # P_mag = (ω²σ_mag/2) · stack_length · Σ_magnets ∫|A_z|² dA
-        P_mag_ac = 0.0
-        for _, mag_geo, _ in self.geo.magnet_domains():
-            pts = mag_geo.sample_interior(n=1000)
-            xs  = pts["x"].ravel()
-            ys  = pts["y"].ravel()
-            Ar_m, Ai_m = _eval(xs, ys)
-            A2 = Ar_m**2 + Ai_m**2
-            # Magnet sector area ≈ (π * (r_out²−r_in²) / num_poles) * fill
-            sector_area = (math.pi * (gp.r_rotor_out**2 - gp.r_rotor_in**2)
-                           / gp.num_poles * gp.magnet_fill_fraction)
-            P_mag_ac += (omega**2 * gp.sigma_mag / 2.0) * float(A2.mean()) * sector_area * gp.stack_length
-
-        # ── Efficiency ─────────────────────────────────────────────────────
-        eff = compute_efficiency(
-            torque_Nm=torque, rpm=li["rpm"],
-            P_cu_W=P_cu_ac,
-            P_fe_W=fe["P_fe_total_W"],
-            P_mag_W=P_mag_ac,
-        )
-
-        log.info(
-            "Post-process: T=%.3f Nm  P_cu_ac=%.1f W  P_fe=%.1f W  "
-            "P_mag=%.1f W  eta=%.1f%%",
-            torque, P_cu_ac, fe["P_fe_total_W"], P_mag_ac,
-            eff["efficiency_pct"] or 0,
-        )
-
-        return {
-            "torque_Nm":        torque,
-            "B_max_T":          float(B_mag.max()),
-            "B_mean_T":         float(B_mag.mean()),
-            "training_steps":   self.cfg.max_steps,
-            "output_dir":       str(self.cfg.output_dir),
-            # Losses (AC — from PINN field)
-            "P_cu_total_W":     P_cu_ac,
-            "P_cu_dc_W":        cu_dc["P_cu_total_W"],   # DC baseline
-            "R_phase_ohm":      cu_dc["R_phase_ohm"],
-            "P_fe_stator_W":    fe["P_fe_stator_W"],
-            "P_fe_rotor_W":     fe["P_fe_rotor_W"],
-            "P_mag_eddy_W":     P_mag_ac,
-            # Efficiency
-            "P_mech_W":         eff["P_mech_W"],
-            "P_input_W":        eff["P_input_W"],
-            "P_loss_total_W":   eff["P_loss_total_W"],
-            "efficiency_pct":   eff["efficiency_pct"],
-        }
-
-    # ── dry run (no Modulus) ──────────────────────────────────────────────────
     def _dry_run(self) -> Dict:
-        """Copper losses computed analytically; iron/magnet need PINN field."""
-        log.warning("DRY RUN — Modulus not installed. Copper losses computed analytically.")
+        """Copper losses computed analytically; iron/magnet need a field solve."""
+        log.warning("Analytical result — copper losses computed analytically.")
         domains = MotorDomains2D(self.gp)
         log.info("\n%s", domains.summary())
 
@@ -658,120 +194,17 @@ class MagnetostaticsSolver2D:
             "R_coil_ohm":       cu["R_coil_ohm"],
             "L_turn_mm":        cu["L_turn_mm"],
             "I_coil_rms_A":     cu["I_coil_rms_A"],
-            # Iron / magnet — need PINN field
+            # Iron / magnet — need a field solve
             "P_fe_stator_W":    None,
             "P_fe_rotor_W":     None,
             "P_mag_eddy_W":     None,
-            # Efficiency — need torque from PINN
+            # Efficiency — needs torque from a field solve
             "P_mech_W":         None,
             "P_input_W":        None,
             "P_loss_total_W":   cu["P_cu_total_W"],
             "efficiency_pct":   None,
-            "note":             "Iron/magnet losses and efficiency require NVIDIA Modulus",
+            "note":             "Iron/magnet losses and efficiency require the FEM field solver",
         }
-
-    def _make_modulus_cfg(self):
-        """Build a complete PhysicsNeMoConfig-compatible OmegaConf object.
-
-        PhysicsNeMo's Solver+Trainer expects all the keys listed below; if
-        any are missing it errors with "Missing key X". We populate the
-        ones it reads with sensible defaults; the rest can stay empty.
-        """
-        cfg = self.cfg
-        from omegaconf import OmegaConf
-        net_dir = str(cfg.output_dir / "network")
-        Path(net_dir).mkdir(parents=True, exist_ok=True)
-
-        d = {
-            # Top-level
-            "network_dir":              net_dir,
-            "initialization_network_dir": "",
-            "save_filetypes":           "vtk,npz",
-            "summary_histograms":       "off",
-            "jit":                      False,           # avoid PyTorch JIT issues
-            "jit_use_nvfuser":          False,
-            "jit_arch_mode":            "only_activation",
-            "jit_autograd_nodes":       False,
-            "cuda_graphs":              False,          # disable for portability
-            "cuda_graph_warmup":        20,
-            "find_unused_parameters":   False,
-            "broadcast_buffers":        False,
-            "device":                   cfg.device,
-            "debug":                    False,
-            "run_mode":                 "train",
-
-            # Training schedule
-            "training": {
-                "max_steps":            int(cfg.max_steps),
-                "grad_agg_freq":        1,
-                "rec_results_freq":     max(cfg.max_steps // 5, 100),
-                "rec_validation_freq":  max(cfg.max_steps // 5, 100),
-                "rec_inference_freq":   max(cfg.max_steps // 5, 100),
-                "rec_monitor_freq":     max(cfg.max_steps // 5, 100),
-                "rec_constraint_freq":  max(cfg.max_steps // 5, 100),
-                "save_network_freq":    max(cfg.max_steps // 2, 200),
-                "print_stats_freq":     max(cfg.max_steps // 10, 50),
-                "summary_freq":         max(cfg.max_steps // 5, 100),
-                "grad_clip_max_norm":   0.5,
-                "monitor_grad_clip":    False,
-                # Neural Tangent Kernel reweighting (off)
-                "ntk": {"use_ntk": False, "save_name": "ntk", "run_freq": 1000},
-            },
-
-            # Early-stopping (disabled — train full max_steps)
-            "stop_criterion": {
-                "metric":    None,
-                "min_delta": None,
-                "patience":  100000,
-                "mode":      "min",
-                "freq":      1000,
-                "strict":    False,
-            },
-
-            # Optimizer (Adam — instantiated via Hydra)
-            "optimizer": {
-                "_target_": "torch.optim.Adam",
-                "_params_": {
-                    # physicsnemo-sym 2.4 renamed the strategy methods:
-                    # adam → adam_compute_gradients / adam_apply_gradients
-                    "compute_gradients": "adam_compute_gradients",
-                    "apply_gradients":   "adam_apply_gradients",
-                },
-                "lr":     cfg.learning_rate,
-                "betas":  [0.9, 0.999],
-                "eps":    1e-8,
-                "weight_decay": 0.0,
-            },
-
-            # Scheduler — keep LR constant
-            "scheduler": {
-                "_target_": "torch.optim.lr_scheduler.ConstantLR",
-                "factor":   1.0,
-                "total_iters": int(cfg.max_steps),
-            },
-
-            # Loss aggregator (PhysicsNeMo's standard SumLoss)
-            "loss": {
-                "_target_": "physicsnemo.sym.loss.aggregator.Sum",
-                "weights":  None,
-            },
-
-            # AMP / batch_size at top level (defaults from physicsnemo default config)
-            "amp":        False,
-            "amp_dtype":  "float16",
-            "batch_size": {"interior": cfg.batch_size_interior, "boundary": cfg.batch_size_boundary},
-
-            # Profiler
-            "profiler": {
-                "profile":    False,
-                "start_step": 0,
-                "end_step":   100,
-            },
-
-            "graph": {"func_arch": False, "func_arch_allow_partial_hessian": True},
-            "custom": {},
-        }
-        return OmegaConf.create(d)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

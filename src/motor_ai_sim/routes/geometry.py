@@ -6,7 +6,6 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict
 
 from motor_ai_sim.config import get_config, clear_config_cache, DEFAULT_CONFIG_PATH
-from motor_ai_sim.geometry.motor_geometry import HAS_MODULUS
 from motor_ai_sim.services.geometry_service import (
     generate_synthetic_pointcloud,
     get_current_geometry,
@@ -433,43 +432,9 @@ def get_geometry_pointcloud(n_points: int = 20000):
     try:
         params = get_current_geometry(reload=True)
 
-        if HAS_MODULUS:
-            from motor_ai_sim.geometry.motor_geometry import MotorGeometry2D
-            motor = MotorGeometry2D(params)
-            geometries = motor.get_modulus_geometries()
+        pointcloud_data = generate_synthetic_pointcloud(params, n_points)
 
-            regions_to_sample = {
-                'stator_core': 'steel',
-                'rotor_core': 'steel',
-                'coils': 'copper',
-                'magnets': 'permanent_magnet',
-                'shaft': 'steel',
-                'air_gap': 'air',
-            }
-            pointcloud_data = {}
-            for region_name, material_type in regions_to_sample.items():
-                if region_name not in geometries:
-                    continue
-                try:
-                    samples = geometries[region_name].sample_interior(n_points)
-                    if hasattr(samples, 'numpy'):
-                        samples = samples.numpy()
-                    points = samples.T.tolist() if samples.shape[0] == 3 else samples.tolist()
-                    if points and len(points[0]) == 2:
-                        points = [[x, y, 0.0] for x, y in points]
-                    pointcloud_data[region_name] = {
-                        'points': points,
-                        'material': material_type,
-                        'count': len(points),
-                    }
-                except Exception as e:
-                    pointcloud_data[region_name] = {
-                        'points': [], 'material': material_type, 'count': 0, 'error': str(e)
-                    }
-        else:
-            pointcloud_data = generate_synthetic_pointcloud(params, n_points)
-
-        return {'n_points': n_points, 'has_modulus': HAS_MODULUS, 'regions': pointcloud_data}
+        return {'n_points': n_points, 'has_modulus': False, 'regions': pointcloud_data}
     except HTTPException:
         raise
     except Exception as e:

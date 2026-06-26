@@ -2,13 +2,14 @@
 
 ## Overview
 
-This is a **2D electromagnetic motor simulator** combining:
-- **Physics-based analytical Green's function solver** (instant field + torque)
-- **NVIDIA Modulus PINN neural network** (optional, for nonlinear saturation)
-- **Real motor geometry from CadQuery** (24 stator slots, 28 rotor poles)
-- **Web UI** for visualization and FEA validation
+This is a **2D electromagnetic motor design platform** combining:
+- **scikit-fem finite-element solver** (magnetostatic field + torque, transient eddy/loss,
+  steady-state thermal) — CPU FEM, **no PINN / NVIDIA Modulus / torch**
+- **Real motor geometry from CadQuery** (configurable slots/poles)
+- **Optimization (CMA-ES), DOE sweeps, and cost estimation**
+- **Web UI** (React) for geometry, simulation, optimization and visualization
 
-**Goal**: Validate physics calculations against ANSYS FEA
+**Goal**: Fast, validated 2D FEM motor design (cross-checked against ANSYS FEA)
 
 ---
 
@@ -34,7 +35,7 @@ Visit: **http://localhost:5173**
 |-------|------|------|
 | Backend | FastAPI (Python) | **8001** |
 | Frontend | React + Vite + MUI | **5173** |
-| Physics | Analytical Green's function + Modulus PINN | — |
+| Physics | scikit-fem FEM (magnetostatic / transient / thermal) + gmsh meshing | — |
 | Geometry | CadQuery 3D → Shapely 2D polygons | — |
 
 ---
@@ -154,7 +155,7 @@ Captures:
 ### Why Analytical First?
 - **Instant feedback**: 1.9s warm response
 - **Validates physics**: Cogging shape correct; amplitude scaled empirically
-- **FEA comparison**: Easy to validate before PINN training
+- **FEA comparison**: results cross-checked against ANSYS FEA
 
 ### Why Real Geometry?
 - **User requirement**: "везде выводить реальную" (output REAL everywhere)
@@ -173,7 +174,6 @@ Captures:
 | Issue | Status | Impact |
 |-------|--------|--------|
 | Magnet polarization not drawn | ❌ Pending | User explicitly requested |
-| Modulus PINN not installed | ⚠️ Torch dep. | Analytical solver sufficient |
 | Voltage chart approximate | 🟡 Medium | Uses R + X_L, no back-EMF |
 
 ---

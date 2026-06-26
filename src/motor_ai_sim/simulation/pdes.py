@@ -1,4 +1,4 @@
-"""PDE definitions for 2D magnetostatics using NVIDIA Modulus symbolic API.
+"""PDE definitions for 2D magnetostatics (sympy symbolic API).
 
 Physical model
 --------------
@@ -24,33 +24,21 @@ Permanent magnet contribution (remanent magnetisation M):
     ν · (∂²A_z/∂x² + ∂²A_z/∂y²) + J_z
         − ν₀ · (∂M_y/∂x − ∂M_x/∂y) = 0                (3)
 
-All implemented as Modulus `PDE` subclasses so they can be used directly
-in `PointwiseInteriorConstraint`.
+All implemented as `PDE` subclasses holding sympy residual expressions.
 """
 
 from __future__ import annotations
 
 from sympy import Symbol, Function, Number, sqrt, diff, Abs
 
-# ── Modulus symbolic PDE base ─────────────────────────────────────────────────
-try:
-    from modulus.sym.eq.pde import PDE
-    HAS_MODULUS = True
-except ImportError:
-    try:
-        from physicsnemo.sym.eq.pde import PDE      # physicsnemo-sym package
-        HAS_MODULUS = True
-    except ImportError:
-        try:
-            from physicsnemo.eq.pde import PDE      # legacy path
-            HAS_MODULUS = True
-        except ImportError:
-            HAS_MODULUS = False
+# ── Symbolic PDE base ─────────────────────────────────────────────────────────
+HAS_MODULUS = False  # NVIDIA Modulus path removed
 
-        class PDE:                                   # minimal stub for offline dev
-            """Stub PDE base used when Modulus is not installed."""
-            name = "PDE"
-            equations: dict = {}
+
+class PDE:
+    """Minimal sympy PDE base (NVIDIA Modulus PDE base removed)."""
+    name = "PDE"
+    equations: dict = {}
 
 
 # ── μ₀ constant ───────────────────────────────────────────────────────────────
@@ -135,7 +123,7 @@ class MagnetosticsNonlinear2D(PDE):
         nu = nu_0 + (nu_fe_0 - nu_0) / (1.0 - ratio_sq + 1e-6)
 
         # ∂/∂x(ν ∂A_z/∂x) + ∂/∂y(ν ∂A_z/∂y) + J_z = 0
-        # Expand using product rule (Modulus handles autodiff of nu·∂A_z/∂x)
+        # Expand using product rule (sympy handles the symbolic derivatives)
         self.equations = {
             "magnetostatics_nl": (
                 diff(nu * diff(A_z, x), x)

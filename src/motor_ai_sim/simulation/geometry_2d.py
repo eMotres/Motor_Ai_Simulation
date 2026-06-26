@@ -1,4 +1,4 @@
-"""2-D motor domains for Modulus PINN training.
+"""2-D motor sub-domain definitions (radii, winding layout, magnet polarity).
 
 Domain map
 ----------
@@ -19,7 +19,7 @@ Winding layout (24 slots / 28 poles = 14 pole-pairs, 3-phase):
   Computed via star-of-slots method.  Each slot is assigned one phase
   (A/B/C) and direction (+1/−1).  Used by the solver to set J_z per slot.
 
-All coordinates in metres (Modulus SI).  Config uses mm → divide by 1000.
+All coordinates in metres (SI).  Config uses mm → divide by 1000.
 """
 
 from __future__ import annotations
@@ -31,35 +31,11 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
-# ── Modulus CSG primitives ────────────────────────────────────────────────────
-try:
-    from modulus.sym.geometry.primitives_2d import Circle, Rectangle
-    from modulus.sym.geometry.csg import CSGUnion, CSGDifference, CSGIntersection
-    HAS_MODULUS = True
-except Exception:
-    # NOTE: deliberately NOT falling back to physicsnemo here — physicsnemo imports
-    # NVIDIA Warp, whose native warp.dll can be missing/corrupt on this machine and
-    # pops a BLOCKING "Bad Image" dialog at import time (cannot be caught).  The active
-    # scikit-fem solver builds polygons via cadquery/shapely and never samples this
-    # PINN CSG, so a stub is sufficient and keeps the import warp-free.
-    HAS_MODULUS = False
-
-    class _GeoStub:
-        def __init__(self, *a, **kw):
-            self._name = kw.get("name", "stub")
-        def __sub__(self, other): return self
-        def __add__(self, other): return self
-        def __and__(self, other): return self
-        def sample_interior(self, n, **kw):
-            return {"x": np.zeros((n, 1)), "y": np.zeros((n, 1))}
-        def sample_boundary(self, n, **kw):
-            return {"x": np.zeros((n, 1)), "y": np.zeros((n, 1))}
-
-    class Circle(_GeoStub):       # type: ignore
-        def __init__(self, center=(0, 0), radius=1.0, **kw): super().__init__(**kw)
-    class Rectangle(_GeoStub):    # type: ignore
-        def __init__(self, point1=(0, 0), point2=(1, 1), **kw): super().__init__(**kw)
-    CSGUnion = CSGDifference = CSGIntersection = _GeoStub
+# ── Geometry primitives ───────────────────────────────────────────────────────
+# The active scikit-fem solver builds polygons via cadquery/shapely and never
+# samples PINN CSG; the NVIDIA Modulus CSG path has been removed.  The numpy
+# domain samplers below provide everything the live code needs.
+HAS_MODULUS = False  # NVIDIA Modulus path removed
 
 
 # ── Material conductivities ───────────────────────────────────────────────────
@@ -164,11 +140,10 @@ def params_from_config(cfg_path: Path = _CFG_PATH, geo_override=None) -> MotorDo
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 2.  Numpy-based domain samplers
-#     These work both in dry-run (no Modulus) and with Modulus PointCloud.
 # ─────────────────────────────────────────────────────────────────────────────
 
 class _NumpyDomain:
-    """Minimal sampling interface compatible with Modulus PointCloud and dry-run."""
+    """Minimal numpy sampling interface for the motor sub-domains."""
 
     def sample_interior(self, n: int, **kw) -> Dict[str, np.ndarray]:
         raise NotImplementedError
@@ -365,18 +340,14 @@ class MotorDomains2D:
         p = self.p
 
         def annulus(r_out: float, r_in: float) -> object:
-            if HAS_MODULUS:
-                return Circle((0, 0), r_out) - Circle((0, 0), r_in)
             return AnnulusDomain(r_out, r_in)
 
         # ── Bulk domains ──────────────────────────────────────────────────────
         self.domains["stator_core"] = annulus(p.r_stator_out, p.r_stator_in)
         self.domains["air_gap"]     = annulus(p.r_air_out,    p.r_air_in)
         self.domains["rotor_core"]  = annulus(p.r_rotor_in,   p.r_shaft_in)
-        self.domains["shaft"]       = (Circle((0, 0), p.r_shaft_in)
-                                       if HAS_MODULUS else AnnulusDomain(p.r_shaft_in, 0.0))
-        self.domains["full"]        = (Circle((0, 0), p.r_stator_out)
-                                       if HAS_MODULUS else AnnulusDomain(p.r_stator_out, 0.0))
+        self.domains["shaft"]       = AnnulusDomain(p.r_shaft_in, 0.0)
+        self.domains["full"]        = AnnulusDomain(p.r_stator_out, 0.0)
 
         self._set_props("stator_core", sigma=p.sigma_fe_lam, mu_r=5000.0)
         self._set_props("air_gap",     sigma=SIGMA_AIR,      mu_r=1.0)

@@ -1,30 +1,15 @@
 """Tests for motor geometry and materials."""
 
 import pytest
-import torch
 import numpy as np
 
 from motor_ai_sim.geometry import (
     MotorGeometryParams,
-    MotorGeometry2D,
-    MotorMeshGenerator,
-    MeshBuilder,
     GeometryRegion,  # Deprecated but still available
     MagneticMaterial,
     MaterialRegistry,
     get_material_id,
 )
-
-# Check if Modulus is available
-try:
-    from modulus.geometry.primitives_2d import Circle, Rectangle
-    HAS_MODULUS = True
-except ImportError:
-    try:
-        from physicsnemo.geometry.primitives_2d import Circle, Rectangle
-        HAS_MODULUS = True
-    except ImportError:
-        HAS_MODULUS = False
 
 
 class TestMotorGeometryParams:
@@ -123,106 +108,6 @@ class TestMotorGeometryParams:
         assert abs(MotorGeometryParams.rad_to_deg(np.pi/2) - 90.0) < 1e-10
 
 
-@pytest.mark.skipif(not HAS_MODULUS, reason="NVIDIA Modulus not installed")
-class TestMotorGeometry2DModulus:
-    """Tests for MotorGeometry2D class with Modulus CSG primitives."""
-
-    @pytest.fixture
-    def params(self):
-        """Create default geometry parameters."""
-        return MotorGeometryParams()
-
-    @pytest.fixture
-    def geometry(self, params):
-        """Create geometry generator."""
-        return MotorGeometry2D(params)
-
-    def test_create_geometry(self, geometry):
-        """Test geometry creation."""
-        assert geometry.params is not None
-
-    def test_get_modulus_geometries(self, geometry):
-        """Test getting Modulus CSG geometry objects."""
-        geometries = geometry.get_modulus_geometries()
-        
-        # Check all regions exist
-        assert "stator_core" in geometries
-        assert "air_gap" in geometries
-        assert "rotor_core" in geometries
-        assert "shaft" in geometries
-        assert "magnets" in geometries
-        assert "slots" in geometries
-
-    def test_geometry_is_csg_object(self, geometry):
-        """Test that returned geometries are actual CSG objects."""
-        geometries = geometry.get_modulus_geometries()
-        
-        # Shaft should be a Circle
-        from modulus.geometry.primitives_2d import Circle
-        assert isinstance(geometries['shaft'], Circle)
-
-    def test_get_magnetization_directions(self, geometry):
-        """Test that magnetization directions are computed correctly."""
-        directions = geometry.get_magnetization_directions()
-        
-        # Should have one direction per pole
-        assert len(directions) == geometry.params.num_poles
-        
-        # Each direction should be a unit vector
-        for pole_idx, mag_dir in directions.items():
-            mag_norm = np.linalg.norm(mag_dir)
-            assert abs(mag_norm - 1.0) < 1e-10
-            
-            # Alternating signs
-            expected_sign = 1.0 if pole_idx % 2 == 0 else -1.0
-            theta_center = pole_idx * geometry.params.pole_pitch
-            expected_dir = expected_sign * np.array([
-                np.cos(theta_center),
-                np.sin(theta_center),
-            ])
-            assert np.allclose(mag_dir, expected_dir)
-
-    def test_get_individual_slots(self, geometry):
-        """Test getting individual slot geometries."""
-        slots = geometry.get_individual_slot_geometries()
-        
-        # Should have one geometry per slot
-        assert len(slots) == geometry.params.num_slots
-
-    def test_get_individual_magnets(self, geometry):
-        """Test getting individual magnet geometries."""
-        magnets = geometry.get_individual_magnet_geometries()
-        
-        # Should have one geometry per pole
-        assert len(magnets) == geometry.params.num_poles
-
-    def test_get_summary(self, geometry):
-        """Test geometry summary."""
-        summary = geometry.get_summary()
-        
-        assert "stator_outer_radius" in summary
-        assert "stator_inner_radius" in summary
-        assert "rotor_outer_radius" in summary
-        assert "air_gap" in summary
-        assert "num_slots" in summary
-        assert "num_poles" in summary
-
-
-class TestMotorGeometry2DWithoutModulus:
-    """Tests for MotorGeometry2D when Modulus is not available."""
-
-    def test_import_error_without_modulus(self, monkeypatch):
-        """Test that ImportError is raised when Modulus is not available."""
-        # This test only runs when Modulus is not installed
-        if HAS_MODULUS:
-            pytest.skip("Modulus is installed, skipping test for missing Modulus")
-        
-        params = MotorGeometryParams()
-        
-        with pytest.raises(ImportError, match="NVIDIA Modulus is required"):
-            MotorGeometry2D(params)
-
-
 class TestGeometryRegionDeprecated:
     """Tests for deprecated GeometryRegion class."""
 
@@ -243,143 +128,6 @@ class TestGeometryRegionDeprecated:
             assert len(w) == 1
             assert issubclass(w[0].category, DeprecationWarning)
             assert "deprecated" in str(w[0].message).lower()
-
-
-class TestMeshBuilder:
-    """Tests for MeshBuilder class."""
-
-    @pytest.fixture
-    def builder(self):
-        """Create mesh builder."""
-        return MeshBuilder(device="cpu")
-
-    def test_mesh_annulus(self, builder):
-        """Test meshing an annulus region."""
-        region = GeometryRegion(
-            name="test_annulus",
-            region_type="annulus",
-            r_inner=50.0,
-            r_outer=100.0,
-        )
-        
-        mesh = builder.mesh_region(region, n_radial=5, n_angular=32)
-        
-        assert "points" in mesh
-        assert "cells" in mesh
-        assert mesh["region"] == "test_annulus"
-        
-        # Check radius bounds
-        points = mesh["points"]
-        radii = torch.sqrt(points[:, 0]**2 + points[:, 1]**2)
-        assert radii.min() >= 50.0 - 1e-3
-        assert radii.max() <= 100.0 + 1e-3
-
-    def test_mesh_sector(self, builder):
-        """Test meshing a sector region."""
-        region = GeometryRegion(
-            name="test_sector",
-            region_type="sector",
-            r_inner=50.0,
-            r_outer=100.0,
-            theta_start=0.0,
-            theta_end=np.pi / 4,
-        )
-        
-        mesh = builder.mesh_region(region, n_radial=5, n_angular=8)
-        
-        assert "points" in mesh
-        assert "cells" in mesh
-        assert mesh["region"] == "test_sector"
-        
-        # Check angular bounds
-        points = mesh["points"]
-        angles = torch.atan2(points[:, 1], points[:, 0])
-        assert angles.min() >= 0.0 - 1e-3
-        assert angles.max() <= np.pi / 4 + 1e-3
-
-    def test_mesh_disk(self, builder):
-        """Test meshing a disk region."""
-        region = GeometryRegion(
-            name="test_disk",
-            region_type="disk",
-            r_outer=50.0,
-        )
-        
-        mesh = builder.mesh_region(region, n_radial=5, n_angular=32)
-        
-        assert "points" in mesh
-        assert "cells" in mesh
-        assert mesh["region"] == "test_disk"
-        
-        # Check radius bounds (disk includes center)
-        points = mesh["points"]
-        radii = torch.sqrt(points[:, 0]**2 + points[:, 1]**2)
-        assert radii.min() >= 0.0 - 1e-3
-        assert radii.max() <= 50.0 + 1e-3
-
-
-class TestMotorMeshGenerator:
-    """Tests for MotorMeshGenerator class."""
-
-    @pytest.fixture
-    def params(self):
-        """Create geometry parameters."""
-        return MotorGeometryParams(
-            num_seg=3,
-            num_slots_per_segment=4,
-            num_poles_per_segment=4,
-        )
-
-    @pytest.fixture
-    def generator(self, params):
-        """Create mesh generator."""
-        return MotorMeshGenerator(params)
-
-    def test_generate_mesh(self, generator):
-        """Test mesh generation with materials."""
-        meshes = generator.generate(n_radial=3, n_angular=16, n_angular_slots=4)
-        
-        # Check all regions exist
-        assert "stator_core" in meshes
-        assert "air_gap" in meshes
-        assert "rotor_core" in meshes
-        assert "shaft" in meshes
-        
-        # Check slots
-        slot_count = sum(1 for k in meshes.keys() if k.startswith("slot_"))
-        assert slot_count == generator.params.num_slots
-        
-        # Check magnets
-        magnet_count = sum(1 for k in meshes.keys() if k.startswith("magnet_"))
-        assert magnet_count == generator.params.num_poles
-
-    def test_material_properties(self, generator):
-        """Test that material properties are assigned."""
-        meshes = generator.generate(n_radial=3, n_angular=16, n_angular_slots=4)
-        
-        # Check stator core has material properties
-        stator = meshes["stator_core"]
-        assert "point_data" in stator
-        assert "mu_r" in stator["point_data"]
-        assert "sigma" in stator["point_data"]
-        assert "material_id" in stator["point_data"]
-        assert "material_name" in stator["point_data"]
-        
-        # Check material name (human-readable name)
-        assert "silicon" in stator["point_data"]["material_name"].lower() or "steel" in stator["point_data"]["material_name"].lower()
-
-    def test_magnet_magnetization(self, generator):
-        """Test that magnets have magnetization vectors."""
-        meshes = generator.generate(n_radial=3, n_angular=16, n_angular_slots=4)
-        
-        for i in range(generator.params.num_poles):
-            magnet = meshes[f"magnet_{i}"]
-            assert "point_data" in magnet
-            assert "magnetization" in magnet["point_data"]
-            
-            # Magnetization should be a 2D vector
-            mag = magnet["point_data"]["magnetization"]
-            assert mag.shape[1] == 2  # 2D vectors
 
 
 class TestMaterials:

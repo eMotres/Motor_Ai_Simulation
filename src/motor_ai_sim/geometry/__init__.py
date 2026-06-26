@@ -2,68 +2,37 @@
 
 This module provides:
 - Material definitions and registry
-- Parametric motor geometry parameters and Modulus CSG geometries
-- Mesh generation from geometry regions (legacy)
+- Parametric motor geometry parameters
 
 Architecture:
-1. motor_geometry.py - Defines geometry parameters and Modulus CSG geometries
+1. motor_geometry.py - Defines geometry parameters
 2. motor_material.py - Defines magnetic materials
-3. motor_mesh.py - Creates triangular meshes (legacy, for backward compatibility)
 
-New API (recommended):
-    from motor_ai_sim.geometry import MotorGeometryParams, MotorGeometry2D
-    
+Usage:
+    from motor_ai_sim.geometry import MotorGeometryParams
+
     params = MotorGeometryParams.from_yaml("config/motor_config.yaml")
-    geometry = MotorGeometry2D(params)
-    geometries = geometry.get_modulus_geometries()
-    
-    # Sample points for PINN training
-    stator_points = geometries['stator_core'].sample_interior(1000)
-
-Legacy API (deprecated):
-    regions = geometry.get_regions()  # Returns GeometryRegion objects
 """
 
 from motor_ai_sim.geometry.motor_geometry import (
     MotorGeometryParams,
-    MotorGeometry2D,
     GeometryRegion,  # Deprecated, kept for backward compatibility
-    HAS_MODULUS,  # Flag indicating if Modulus is available
+    HAS_MODULUS,  # Always False — NVIDIA Modulus path removed
 )
 
-# motor_material / motor_mesh are LEGACY Modulus helpers that import torch.  The
-# FEM backend doesn't use them, and torch isn't installed in the Cloud Run image,
-# so guard the import — the package (and MotorGeometryParams) still loads.
-try:
-    from motor_ai_sim.geometry.motor_material import (
-        MagneticMaterial,
-        MaterialRegistry,
-        get_material_id,
-    )
-    from motor_ai_sim.geometry.motor_mesh import (
-        MeshBuilder,
-        MotorMeshGenerator,
-        MaterialAssignment,
-        DEFAULT_MATERIAL_ASSIGNMENTS,
-    )
-except ImportError:
-    MagneticMaterial = MaterialRegistry = get_material_id = None
-    MeshBuilder = MotorMeshGenerator = MaterialAssignment = None
-    DEFAULT_MATERIAL_ASSIGNMENTS = None
+from motor_ai_sim.geometry.motor_material import (
+    MagneticMaterial,
+    MaterialRegistry,
+    get_material_id,
+)
 
 __all__ = [
     # Materials
     "MagneticMaterial",
     "MaterialRegistry",
     "get_material_id",
-    # Geometry parameters and Modulus CSG geometries
+    # Geometry parameters
     "MotorGeometryParams",
-    "MotorGeometry2D",
     "GeometryRegion",  # Deprecated
     "HAS_MODULUS",
-    # Mesh generation (legacy)
-    "MeshBuilder",
-    "MotorMeshGenerator",
-    "MaterialAssignment",
-    "DEFAULT_MATERIAL_ASSIGNMENTS",
 ]

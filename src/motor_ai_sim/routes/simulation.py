@@ -1,8 +1,8 @@
-"""REST endpoints for the 2-D magnetostatics PINN simulation.
+"""REST endpoints for the 2-D magnetostatics simulation.
 
 Endpoints
 ---------
-GET  /api/simulation/status          — check Modulus availability
+GET  /api/simulation/status          — solver info + current operating point
 POST /api/simulation/run             — start a simulation (async)
 GET  /api/simulation/result/{job_id} — poll job status / result
 GET  /api/simulation/config          — current operating-point config

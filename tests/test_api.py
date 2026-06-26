@@ -136,6 +136,5 @@ class TestPipelineStatus:
         assert r.status_code == 200
         data = r.json()
         assert "fusion360_available" in data
-        assert "modulus_bridge_available" in data
         assert "cache_enabled" in data
         assert isinstance(data["cache_enabled"], bool)

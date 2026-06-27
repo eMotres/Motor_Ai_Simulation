@@ -219,11 +219,27 @@ class CadQueryMotor:
         if 'rotor_outer_radius' in mapped and 'magnet_height' in mapped and 'rotor_house_height' in mapped:
             mapped['rotor_inner_radius'] = mapped['rotor_outer_radius'] - mapped['magnet_height'] - mapped['rotor_house_height']
         
-        if 'num_seg' in mapped and 'num_slots_per_segment' in mapped:
-            mapped['num_slots'] = int(mapped['num_seg'] * mapped['num_slots_per_segment'])
-        
-        if 'num_seg' in mapped and 'num_poles_per_segment' in mapped:
-            mapped['num_poles'] = int(mapped['num_seg'] * mapped['num_poles_per_segment'])
+        # Pole/slot COUNT is defined by the geometry's magnets/slots: num_poles and
+        # num_slots are AUTHORITATIVE.  The segment view (num_seg × *_per_segment) is
+        # the winding-periodicity representation DERIVED from them (num_seg = the
+        # symmetry = gcd(slots, poles)).  Only fall back to the segment product when
+        # the explicit counts are absent — otherwise a STALE num_seg left over from a
+        # different motor (e.g. a 24/28 design) would silently rebuild the wrong pole
+        # count (24 slots / 28 poles) for a 12/14 motor.
+        import math as _math
+        _P = mapped.get('num_poles'); _S = mapped.get('num_slots')
+        if _P is None and 'num_seg' in mapped and 'num_poles_per_segment' in mapped:
+            _P = mapped['num_seg'] * mapped['num_poles_per_segment']
+        if _S is None and 'num_seg' in mapped and 'num_slots_per_segment' in mapped:
+            _S = mapped['num_seg'] * mapped['num_slots_per_segment']
+        if _P is not None and _S is not None:
+            _P = int(round(_P)); _S = int(round(_S))
+            mapped['num_poles'] = _P
+            mapped['num_slots'] = _S
+            _seg = _math.gcd(_S, _P) or 1            # winding periodicity / mesh symmetry
+            mapped['num_seg'] = _seg
+            mapped['num_poles_per_segment'] = _P // _seg
+            mapped['num_slots_per_segment'] = _S // _seg
         
         if 'rotor_inner_radius' in mapped and 'shaft_height' in mapped:
             mapped['shaft_radius'] = mapped['rotor_inner_radius'] - mapped['shaft_height']

@@ -3511,8 +3511,11 @@ def _params_from_geo_dict(g: dict):
     r_ro = r_si - g["air_gap"] * mm
     r_ri = r_ro - g["magnet_height"] * mm - g["rotor_house_height"] * mm
     r_sh = r_ri - g["shaft_height"] * mm
-    num_slots = int(g["num_seg"] * g["num_slots_per_segment"])
-    num_poles = int(g["num_seg"] * g["num_poles_per_segment"])
+    # Pole/slot COUNT is defined by the geometry (magnets/slots) — num_poles/num_slots
+    # are authoritative; the segment product is only a fallback (a stale num_seg from a
+    # different motor must not override the real count).
+    num_slots = int(g.get("num_slots") or round(g["num_seg"] * g["num_slots_per_segment"]))
+    num_poles = int(g.get("num_poles") or round(g["num_seg"] * g["num_poles_per_segment"]))
     slot_width_m = (g["wire_width"] + 2 * g["wire_spacing_x"]
                     + 2 * g["insulation_thickness"]) * mm
     return MotorDomainParams(

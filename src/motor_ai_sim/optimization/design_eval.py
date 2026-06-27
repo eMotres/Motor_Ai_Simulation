@@ -97,8 +97,8 @@ def build_params(geo: Dict[str, Any]) -> _P:
     r_ro = r_si - geo["air_gap"] * mm
     r_ri = r_ro - geo["magnet_height"] * mm - geo["rotor_house_height"] * mm
     r_sh = r_ri - geo["shaft_height"] * mm
-    num_slots = int(geo["num_seg"] * geo["num_slots_per_segment"])
-    num_poles = int(geo["num_seg"] * geo["num_poles_per_segment"])
+    num_slots = int(geo.get("num_slots") or round(geo["num_seg"] * geo["num_slots_per_segment"]))
+    num_poles = int(geo.get("num_poles") or round(geo["num_seg"] * geo["num_poles_per_segment"]))
     slot_width_m = (geo["wire_width"] + 2 * geo["wire_spacing_x"]
                     + 2 * geo["insulation_thickness"]) * mm
     return _P(

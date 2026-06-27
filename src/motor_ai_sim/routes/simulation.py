@@ -1922,7 +1922,7 @@ def get_thermal_field2d(
         gap_k_eff = max(gap_Nu * _k_air, _k_air)                     # ≥ still-air conduction
 
     L = float(g.get("motor_length", 30.0)) * 1e-3
-    num_slots = int(round(float(g.get("num_seg", 1)) * float(g.get("num_slots_per_segment", 6))))
+    num_slots = int(g.get("num_slots") or round(float(g.get("num_seg", 1)) * float(g.get("num_slots_per_segment", 6))))
     V_cu = (num_slots * float(g.get("num_wires_per_slot", 12))
             * float(g.get("wire_width", 5.0)) * 1e-3
             * float(g.get("wire_height", 0.8)) * 1e-3 * L)

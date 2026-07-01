@@ -427,45 +427,18 @@ def _simplify_polys(polys: dict, tol_mm: float = 0.005,
                        else _g.geoms[0].exterior.coords)
                 _r_ro_est = max(_r_ro_est,
                                 max(math.hypot(x, y) for x, y in _xy))
-            # Stator gap-facing (bore) radius = the MINIMUM radius over the whole
-            # stator boundary.  A clean bore is an interior ring at r_si; but the
-            # slot-mouth fillet can fragment the stator into many parts whose
-            # EXTERIORS reach down to the bore (no interior ring), so scan both.
             _r_si_est = float("inf")
             if out.get("stator") is not None:
-                _st = out["stator"]
-                _st_parts = list(_st.geoms) if hasattr(_st, "geoms") else [_st]
-                for _sg in _st_parts:
-                    _rings = [_sg.exterior] + list(_sg.interiors)
-                    for _ring in _rings:
-                        _rmin = min(math.hypot(x, y) for x, y in _ring.coords)
-                        if _rmin < _r_si_est:
-                            _r_si_est = _rmin
+                _sg = (out["stator"].geoms[0] if hasattr(out["stator"], "geoms")
+                       else out["stator"])
+                for _intr in _sg.interiors:
+                    _r_si_est = min(_r_si_est,
+                                    min(math.hypot(x, y) for x, y in _intr.coords))
             _gap_est = (_r_si_est - _r_ro_est) \
                 if (_r_si_est < float("inf") and _r_ro_est > 0) else 0.0
             _delta = min(max(_SB_BAND_DELTA_FRAC * _gap_est, 0.04), 0.4) if _gap_est > 0.05 else 0.0
-            # STRUCTURED gap.  The NEW mapped (transfinite) air-gap band is built
-            # downstream in build_mesh_from_polygons (a separate transfinite gap
-            # annulus welded to the OCC iron), so when the per-request
-            # `structured_gap` flag is set we DO NOT build the legacy thin-annuli
-            # partition here — we keep CLEAN half-bands (in_band→mid, mid→out_band)
-            # and only RECORD the seam geometry the mesh builder needs.  The legacy
-            # env flag (_SB_STRUCTURED_GAP) still drives the old shapely-annuli path.
-            _do_struct = bool(_SB_STRUCTURED_GAP)
-            if bool(structured_gap) and _r_ro_est > 0 and _r_si_est < float("inf") \
-                    and _gap_est > 0.05:
-                # r_ro/r_si are near-perfect circles (rotor OD / stator bore); the
-                # mesh builder cuts the uniform annulus [r_ro..mid] (rotor half) and
-                # [mid..r_si] (stator half) out of the free air and replaces it with
-                # a transfinite 2K-ring band welded at these radii.
-                _K_struct = max(1, int(round(float(gap_layers))))
-                out["mapped_gap_spec"] = {
-                    "r_ro": float(_r_ro_est),
-                    "r_si": float(_r_si_est),
-                    "mid_r": float(mid_r),
-                    "K": _K_struct,
-                    "N": int(_N),
-                }
+            # STRUCTURED gap: per-request param OR the global env flag.
+            _do_struct = bool(structured_gap) or _SB_STRUCTURED_GAP
 
             def _parts(_g):
                 return list(_g.geoms) if hasattr(_g, "geoms") else [_g]
@@ -889,10 +862,6 @@ def _split_polys_for_sliding_band(polys: dict) -> Tuple[dict, dict]:
     if polys.get("mid_r_mm") is not None:
         polys_s["mid_r_mm"] = polys["mid_r_mm"]
         polys_r["mid_r_mm"] = polys["mid_r_mm"]
-    # Carry the mapped (transfinite) air-gap spec through to both halves.
-    if polys.get("mapped_gap_spec") is not None:
-        polys_s["mapped_gap_spec"] = polys["mapped_gap_spec"]
-        polys_r["mapped_gap_spec"] = polys["mapped_gap_spec"]
     return polys_s, polys_r
 
 
@@ -1130,17 +1099,6 @@ def _build_sliding_band_meshes(
     # Structured-strip offset rings (mid±δ): keep their seeded vertices too.
     _extra_tf = polys.get("transfinite_ring_radii_mm") or []
 
-    # Mapped (transfinite) air-gap band.  When present, each half replaces the
-    # free-meshed uniform gap annulus with EXACTLY K concentric rings welded to
-    # the iron: rotor half owns [r_ro..mid], stator half owns [mid..r_si].  Both
-    # rings + the slip ring at mid land on the SAME 2πj/N grid so the halves
-    # merge by node identity (slip coupling) and the gap is ANSYS-style.
-    _mgs = polys.get("mapped_gap_spec")
-    _gap_spec_r = _gap_spec_s = None
-    if _mgs:
-        _gap_spec_r = dict(_mgs, side="rotor")   # inner half [r_ro..mid]
-        _gap_spec_s = dict(_mgs, side="stator")  # outer half [mid..r_si]
-
     # Map the air domains onto the keys the mesh builder recognises:
     #   rotor half:  in_band  → "air_gap"   (DOM_AIRGAP)
     #   stator half: out_band → "air_outer" (DOM_OUTER, far-field air)
@@ -1237,8 +1195,7 @@ def _build_sliding_band_meshes(
     if mesh_s is None:
         mesh_s, tags_s, classify_s = build_mesh_from_polygons(
             polys_s_for_mesh, n_sectors=n_sectors,
-            rotational_period_deg=_slot_period,
-            mapped_gap_spec=_gap_spec_s, **_common_kw)
+            rotational_period_deg=_slot_period, **_common_kw)
 
     # Build rotor half with the SAME sector clip as the stator
     # (n_sectors).  The rotor mesh covers ONE sector (1/n_sectors of the
@@ -1261,8 +1218,7 @@ def _build_sliding_band_meshes(
     if mesh_r is None:
         mesh_r, tags_r, classify_r = build_mesh_from_polygons(
             polys_r_for_mesh, n_sectors=n_sectors,
-            rotational_period_deg=_pole_period,
-            mapped_gap_spec=_gap_spec_r, **_common_kw)
+            rotational_period_deg=_pole_period, **_common_kw)
 
     # Apply rotor rotation as a rigid body — node coords only, topology
     # unchanged.  This is the heart of sliding-band: every frame just
@@ -1659,109 +1615,6 @@ def build_periodic_coil_mesh(geo_cfg: dict, num_slots: int,
     return verts_mm * 1e-3, tris   # mm → m
 
 
-def _mapped_gap_seam_r(spec: dict) -> Tuple[float, float]:
-    """(inner_r, outer_r) of the uniform gap annulus for this half (mm).
-
-    Rotor half owns [r_ro .. mid]; stator half owns [mid .. r_si].
-    """
-    mid = float(spec["mid_r"])
-    if spec.get("side") == "stator":
-        return mid, float(spec["r_si"])
-    return float(spec["r_ro"]), mid
-
-
-def _build_transfinite_gap_band(spec: dict, sector_deg: float,
-                                min_size_mm: float) -> Tuple[np.ndarray, np.ndarray]:
-    """Build ONE half's uniform air-gap annulus as EXACTLY K concentric rings
-    (transfinite sectors), returned as (P_mm[2,n], T[3,m]) with CCW triangles.
-
-    The annulus [r_in..r_out] spans 0..sector_deg degrees.  Its inner and outer
-    arcs carry M = N·sector_deg/360 angular divisions → every ring node lands on
-    the 2πj/N slip grid, so the band welds to the iron (at r_in/r_out) and to the
-    opposite half (at mid) by pure node identity.  K radial layers = `spec["K"]`.
-
-    PROVEN technique (see docs/MAPPED_GAP_DESIGN.md): a transfinite SURFACE on a
-    sector-split annulus forces exactly K uniform radial layers (high-aspect
-    elements are allowed under transfinite, so the fine gap no longer forces the
-    free mesher to subdivide).
-    """
-    import gmsh
-    r_in, r_out = _mapped_gap_seam_r(spec)
-    K = max(1, int(round(float(spec["K"]))))
-    N = int(spec["N"])
-    step = 360.0 / N
-    M_total = int(round(sector_deg / step))            # angular intervals over wedge
-    if M_total < 1 or abs(M_total * step - sector_deg) > 1e-6:
-        raise ValueError(f"mapped gap: sector {sector_deg}° not an integer number "
-                         f"of slip steps ({step}°)")
-    # Split the wedge into sectors of ≤ ~30 angular divisions each (keeps every
-    # transfinite surface a well-conditioned quad-ish block).  seg must divide
-    # M_total so seam angles stay on the grid.
-    seg = 1
-    for s in range(max(1, M_total // 30), M_total + 1):
-        if M_total % s == 0:
-            seg = s
-            break
-    M = M_total // seg
-
-    _GMSH_LOCK.acquire()
-    try:
-        try:
-            gmsh.initialize([], interruptible=False)
-        except TypeError:
-            gmsh.initialize()
-        try:
-            gmsh.option.setNumber("General.Terminal", 0)
-            gmsh.model.add("mapped_gap_band")
-            geo = gmsh.model.geo
-            c = geo.addPoint(0.0, 0.0, 0.0)
-            seam = [sector_deg * s / seg for s in range(seg + 1)]
-
-            def _pt(r, ang_deg):
-                a = math.radians(ang_deg)
-                return geo.addPoint(r * math.cos(a), r * math.sin(a), 0.0)
-
-            inner = [_pt(r_in, a) for a in seam]
-            outer = [_pt(r_out, a) for a in seam]
-            for s in range(seg):
-                ia = geo.addCircleArc(inner[s], c, inner[s + 1])
-                oa = geo.addCircleArc(outer[s], c, outer[s + 1])
-                l1 = geo.addLine(inner[s], outer[s])
-                l2 = geo.addLine(inner[s + 1], outer[s + 1])
-                sf = geo.addPlaneSurface([geo.addCurveLoop([ia, l2, -oa, -l1])])
-                geo.mesh.setTransfiniteCurve(ia, M + 1)
-                geo.mesh.setTransfiniteCurve(oa, M + 1)
-                geo.mesh.setTransfiniteCurve(l1, K + 1)
-                geo.mesh.setTransfiniteCurve(l2, K + 1)
-                geo.mesh.setTransfiniteSurface(sf)
-            geo.synchronize()
-            gmsh.model.mesh.generate(2)
-            ntags, ncoords, _ = gmsh.model.mesh.getNodes()
-            tag2idx = {int(t): i for i, t in enumerate(ntags)}
-            _, etn = gmsh.model.mesh.getElementsByType(2)
-            T = np.array([tag2idx[int(t)] for t in etn], int).reshape(-1, 3).T
-            P = ncoords.reshape(-1, 3)[:, :2].T.copy()
-        finally:
-            try:
-                gmsh.finalize()
-            except Exception:
-                pass
-    finally:
-        _GMSH_LOCK.release()
-
-    # Drop the isolated arc-centre node (origin), then orient CCW for skfem.
-    used = np.unique(T)
-    remap = -np.ones(P.shape[1], int)
-    remap[used] = np.arange(used.size)
-    P = P[:, used]
-    T = remap[T]
-    _a = 0.5 * ((P[0, T[1]] - P[0, T[0]]) * (P[1, T[2]] - P[1, T[0]])
-                - (P[0, T[2]] - P[0, T[0]]) * (P[1, T[1]] - P[1, T[0]]))
-    if np.median(_a) < 0:
-        T = T[[0, 2, 1], :]
-    return P, T
-
-
 def build_mesh_from_polygons(polys: dict,
                              rotor_angle_deg: float = 0.0,
                              mesh_size_mm: float = 1.5,
@@ -1781,7 +1634,6 @@ def build_mesh_from_polygons(polys: dict,
                              rotational_period_deg: Optional[float] = None,
                              extra_transfinite_radii: Optional[List[float]] = None,
                              transfinite_radial_cuts: bool = False,
-                             mapped_gap_spec: Optional[dict] = None,
                              ) -> Tuple["MeshTri", np.ndarray]:
     """Construct a conforming triangle mesh from the CadQuery polygon dict.
 
@@ -1930,100 +1782,6 @@ def build_mesh_from_polygons(polys: dict,
         # 3) Symmetry: clip ALL polygons to a 360°/n_sectors wedge
         if n_sectors > 1:
             polys = _clip_polys_to_sector(polys, n_sectors=n_sectors)
-
-        # 3b) Mapped (transfinite) air-gap band: CUT the uniform gap annulus out
-        # of the free air so it stops on an EXACT N-gon seam ring; the annulus is
-        # rebuilt below (after meshing) as K concentric transfinite rings and
-        # welded back at that ring.  Rotor half → air stops at r_ro (keeps the
-        # inter-magnet pockets below it); stator half → air starts at r_si (keeps
-        # the slot openings + outer air above it).  The slip ring at mid comes
-        # from the transfinite band, so it is NOT on the iron mesh here.
-        _mapped_seam_r = None
-        if mapped_gap_spec is not None:
-            try:
-                from shapely.geometry import Polygon as _MgPoly
-                _mg_N = int(mapped_gap_spec["N"])
-                _mg_side = mapped_gap_spec.get("side")
-                _seam_r, _mg_out = _mapped_gap_seam_r(mapped_gap_spec)
-
-                def _ngon(_r, _n):
-                    return _MgPoly([(_r * math.cos(2 * math.pi * i / _n),
-                                     _r * math.sin(2 * math.pi * i / _n))
-                                    for i in range(_n)])
-
-                from shapely.ops import unary_union as _uu_mg
-
-                def _drop_slivers_mg(_g, _min_a=5e-3):
-                    """Keep only polygon parts with area ≥ _min_a mm²."""
-                    if _g is None or _g.is_empty:
-                        return _g
-                    _ps = list(_g.geoms) if hasattr(_g, "geoms") else [_g]
-                    _keep = [p for p in _ps if p.geom_type == "Polygon"
-                             and p.area >= _min_a]
-                    if not _keep:
-                        return _g
-                    if len(_keep) == 1:
-                        return _keep[0]
-                    from shapely.geometry import MultiPolygon as _MP2
-                    return _MP2(_keep)
-
-                if _mg_side == "stator":
-                    # Stator bore (r_si) sits BELOW the stator iron, so a plain
-                    # difference cleanly removes the uniform gap [mid..r_si] and
-                    # leaves the slot openings + outer air (no slivers).
-                    _seam_r = _mg_out           # weld at r_si (stator bore)
-                    _cutter = _ngon(_seam_r, _mg_N)
-                    _air = polys.get("air_outer")
-                    if _air is not None:
-                        _air2 = _air.difference(_cutter)
-                        if not _air2.is_valid:
-                            _air2 = _air2.buffer(0)
-                        polys["air_outer"] = _drop_slivers_mg(_air2)
-                else:
-                    # Rotor OD == r_ro, so intersecting the air with disk(r_ro)
-                    # leaves a ragged ring of degenerate slivers between the
-                    # rotor-OD polygon (~r_ro) and the exact N-gon circle.  CLAMP
-                    # the rotor solids to the N-gon disk first so the OD lands
-                    # EXACTLY on the seam ring (a ~1 µm adjustment), then rebuild
-                    # the sub-seam air as disk_ngon(r_ro) − clamped-solids: no
-                    # coincident-boundary slivers, and the iron OD == band inner
-                    # ring for a clean weld.
-                    _cutter = _ngon(_seam_r, _mg_N)
-                    _rsolids = []
-                    if polys.get("rotor") is not None:
-                        _rc = polys["rotor"].intersection(_cutter)
-                        if not _rc.is_valid:
-                            _rc = _rc.buffer(0)
-                        polys["rotor"] = _rc
-                        _rsolids.append(_rc)
-                    if polys.get("shaft") is not None:
-                        _rsolids.append(polys["shaft"])
-                    _mags2 = []
-                    for _mp, _pol in polys.get("magnets", []):
-                        if _mp is not None:
-                            _mc = _mp.intersection(_cutter)
-                            if not _mc.is_valid:
-                                _mc = _mc.buffer(0)
-                            _mags2.append((_mc, _pol))
-                            _rsolids.append(_mc)
-                        else:
-                            _mags2.append((_mp, _pol))
-                    if _mags2:
-                        polys["magnets"] = _mags2
-                    _pockets = _cutter
-                    if _rsolids:
-                        _pockets = _cutter.difference(_uu_mg(_rsolids))
-                    if not _pockets.is_valid:
-                        _pockets = _pockets.buffer(0)
-                    polys["air_gap"] = _drop_slivers_mg(_pockets)
-                _mapped_seam_r = float(_seam_r)
-                # force the seam ring transfinite (exact N-gon vertices) so the
-                # iron boundary matches the band's arc nodes for the weld.
-                extra_transfinite_radii = list(extra_transfinite_radii or []) + [_mapped_seam_r]
-            except Exception as _mge:
-                log.warning("mapped-gap air cut skipped: %s", _mge)
-                mapped_gap_spec = None
-                _mapped_seam_r = None
 
         # Build OCC surfaces, keeping track of which dom each surface represents.
         # We list them in order from outer to inner; OCC `fragment` will produce
@@ -2630,38 +2388,6 @@ def build_mesh_from_polygons(polys: dict,
     mesh_io.points = mesh_io.points * 1e-3
     mesh = from_meshio(mesh_io)
     cell_tags = np.array(cell_tags_list, dtype=np.int16)
-
-    # ── MAPPED (transfinite) AIR-GAP BAND ────────────────────────────────
-    # The uniform gap annulus was cut out above; rebuild it as EXACTLY K
-    # concentric transfinite rings and weld it into the iron mesh at the seam
-    # ring (r_ro rotor / r_si stator).  The band's opposite ring is the slip
-    # ring at mid — left free for the sliding coupling.  Both rings sit on the
-    # 2πj/N grid, identical to the iron's forced seam ring, so the weld
-    # (_weld_coincident_nodes, called at the end) is pure node identity.
-    if mapped_gap_spec is not None and _mapped_seam_r is not None:
-        try:
-            from skfem import MeshTri
-            _sector_deg = 360.0 / int(n_sectors) if (n_sectors and int(n_sectors) > 1) \
-                else 360.0
-            _Pg_mm, _Tg = _build_transfinite_gap_band(
-                mapped_gap_spec, _sector_deg, min_size_mm)
-            _Pg_m = _Pg_mm * 1e-3
-            _n_old = mesh.p.shape[1]
-            _new_p = np.hstack([mesh.p, _Pg_m])
-            _new_t = np.hstack([mesh.t, _Tg + _n_old])
-            _new_tags = np.concatenate([
-                cell_tags,
-                np.full(_Tg.shape[1], DOM_AIRGAP, dtype=np.int16)])
-            mesh = MeshTri(doflocs=_new_p.astype(np.float64),
-                           t=_new_t.astype(np.int64))
-            cell_tags = _new_tags
-            _ri, _ro = _mapped_gap_seam_r(mapped_gap_spec)
-            log.info("mapped gap (%s): added %d transfinite tris "
-                     "[%.3f..%.3f mm, K=%d, N=%d] for weld",
-                     mapped_gap_spec.get("side"), _Tg.shape[1], _ri, _ro,
-                     int(mapped_gap_spec["K"]), int(mapped_gap_spec["N"]))
-        except Exception as _mge:
-            log.warning("mapped-gap band build failed (%s) — free gap kept", _mge)
 
     # ── PERIODIC COIL SUBSTITUTION ───────────────────────────────────────
     if periodic_coils and geo_cfg is not None:

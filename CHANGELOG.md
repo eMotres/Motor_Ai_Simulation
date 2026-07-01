@@ -7,6 +7,22 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
 
 ## [Unreleased]
 
+## [0.1.9] — 2026-07-01
+
+### Changed
+- Mapped/structured air-gap mesh: the gap-facing iron boundary now conforms
+  directly to the transfinite ring arcs — the ε-retract and the free-meshed
+  filler strips are removed. Exact 2K uniform rings; the structured mean-torque
+  deficit vs the free mesh drops from ~−20 % to −1..−6 % (the retract had been
+  blunting the tooth tips). Free mode (structured gap off) is byte-for-byte
+  unchanged.
+- Unified section-header styling across the Geometry / Cost / Optimization
+  panels via a shared `SectionLabel` token (were blue / light-grey).
+
+### Added
+- `GEO_UNBOUNDED` backend env flag lifts all geometry parameter min/max caps for
+  large-motor exploration (default off → production caps unchanged).
+
 ## [0.1.8] — 2026-06-25
 
 ### Changed

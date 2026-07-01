@@ -115,3 +115,47 @@ care (found 72 of 96 — some merged with iron, but rings still exact).
 - Build cells in the SAME OCC model as that half's iron (build_mesh_from_polygons), add
   to the fragment, set transfinite. Slip ring stays uniform at mid for the sliding.
 - Free mode (structured_gap=False) unchanged.
+
+## ROUTE A — IMPLEMENTED (2026-07-01)
+
+Implemented in `fem_solver_2d.py` behind `structured_gap`. What it took beyond the proof:
+
+1. **ε retract (the key enabler).** In the REAL motor the gap-facing iron is a FUZZY
+   CadQuery polygon (hundreds of vertices ≈ r_ro / r_si), not the proof's clean OCC
+   circle.  Those vertices land on the cells' inner/outer arcs and subdivide each cell
+   into 5–10 corners → `setTransfiniteSurface` rejects them (needs 3/4).  Fix: pull the
+   iron ε=10 µm OFF the arcs (`rotor ∩ disk(r_ro−ε)`, `stator − disk(r_si+ε)`).  Then
+   ALL cells are clean 4-corner quads and mesh transfinite → EXACTLY 2K uniform rings.
+   The stator (teeth/slots) needs the full 10 µm; 5 µm left ~half the stator cells
+   subdivided.  ε is magnetically tiny (0.08 % of radius) and torque is FLAT vs ε.
+2. **in_band / out_band exclude the gap ring.**  Subtract a clean annulus (`disk(mid)−
+   disk(r_ro)`), drop chord/circle slivers, 10 µm simplify (else the OCC converter's
+   loop-closure fails after the sector clip).  This stops the coarse air from
+   subdividing the cells' mid arcs.
+3. **ε bridge filler.**  The retract opens a µm void iron↔cells → non-conforming crack →
+   DEAD field (torque 0).  `_build_structured_gap_cells` also emits a thin FREE-meshed
+   filler layer (rotor r_ro−ε→r_ro, stator r_si→r_si+ε) that shares the cells' clean arc
+   and meets the fuzzy iron → conforming.  Each filler cell is tagged with the material
+   BEHIND it (iron under a tooth / between poles, air in a slot mouth / pole gap) —
+   blanket-iron shorts the slot openings.  Restored in BOTH build paths
+   (`build_mesh_from_polygons` classifier AND `_stitch_full_half` mirror-reclassify).
+
+### Verified (40 mm 12s/14p, full_ring production path)
+- Rings EXACT: gap_layers 1/2/3 → 2/4/6 uniform rings, spacing Gap/(2K).
+- Slip ring UNIFORM on the global grid for both halves (n_slip nodes; ×2 on the full
+  disk mirror), so the sliding coupling `_ring()` is untouched.
+- Mesh CONFORMING: transient runs, field alive.
+- Free mode (structured_gap=False) byte-for-byte unchanged (every structured branch is
+  gated on the flag / the spec being present).
+
+### OPEN ISSUE — mean torque ≈ −24 % vs free (NOT yet ≈)
+No-load flux linkage psi_A is −8 %; Arkkio torque ∝ B_r·B_φ ∝ flux² amplifies that to
+≈ −16 %, plus a few % more → measured −20…−24 % (free 0.56 → structured 0.42 N·m).  It is
+NOT ε (torque is flat vs ε: −20.9 %@8 µm, −19.2 %@15 µm), NOT material composition (rotor
+iron area 177.0 vs 177.4, magnet area identical), NOT the moving-vs-merged coupling
+(−23 % even with both merged at n_sectors=2).  The −8 % flux is ε-independent → the prime
+suspects are the tooth-tip discretization (the `difference(disk)` retract blunts the tips)
+and/or B accuracy on the high-aspect (M≈14:1) transfinite cells.  Next steps: (a) compare
+gap B_r at gap_layers=3 vs =1 to separate resolution from shape; (b) preserve the tooth-tip
+taper (retract only the smooth OD, not the teeth) or snap the rotor OD to a grid-aligned
+clean circle to drop the rotor ε; (c) check the Arkkio integrand on the uniform cells.

@@ -1677,7 +1677,12 @@ def build_mesh_from_polygons(polys: dict,
         gmsh.option.setNumber("Mesh.CharacteristicLengthFactor", 1.0)
         gmsh.option.setNumber("Mesh.Algorithm", 6)
         gmsh.option.setNumber("Geometry.Tolerance", 1e-5)
-        gmsh.option.setNumber("Geometry.ToleranceBoolean", 1e-3)
+        # 10 µm boolean tolerance: the CadQuery magnet fillets/up-gap leave adjacent
+        # polygon boundaries ~3 µm apart (below the geometry's real 60 µm features but
+        # above the old 1 µm), which OCC fragment left as razor slivers on the rotor
+        # (magnet/air/shaft edges).  10 µm fuses those cleanly (0 slivers) while staying
+        # well under the smallest real feature; >20 µm over-merges and reintroduces slivers.
+        gmsh.option.setNumber("Geometry.ToleranceBoolean", 1e-2)
         gmsh.model.add("motor2d")
         occ = gmsh.model.occ
 

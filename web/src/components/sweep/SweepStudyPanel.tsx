@@ -49,7 +49,9 @@ const OP_VARS = new Set(['current_a', 'gamma_deg']);
 // (geometry overrides + operating point); the rest are FEM outputs. Every metric
 // already rides on each point (the backend spreads the full eval result). Click
 // any header to sort asc/desc. Losses map to the Ansys breakdown:
-// core = P_fe, stranded = P_cu (winding), solid = P_mag + P_shaft (eddy in solids).
+// core = P_fe; copper winding is split into Cu DC (I²R, INCLUDES the end-windings via
+// k_end → grows with tooth_width) and Cu AC (proximity/eddy in the strands); solid =
+// P_mag + P_shaft (eddy in solid conductors).
 interface SweepTableCol { id: string; label: string; get: (r: any) => number; fmt: (v: number) => string; vcol?: boolean }
 const SweepTable: React.FC<{ points: any[]; rpm: number; vdcFactor?: number; selectedPk?: string; onPick?: (r: any) => void }> =
   ({ points, rpm, vdcFactor, selectedPk, onPick }) => {
@@ -68,7 +70,9 @@ const SweepTable: React.FC<{ points: any[]; rpm: number; vdcFactor?: number; sel
         T: Number(p.T_em_Nm) || 0, P, eff, Vpk: Number(p.V_peak) || 0,
         ripple: Number(p.T_ripple_pct) || 0, mass, td,
         pd: mass > 0 ? P / mass : 0, ploss: Number(p.P_loss_total_W) || 0, core: Number(p.P_fe_W) || 0,
-        stranded: Number(p.P_cu_W) || 0, solid: (Number(p.P_mag_W) || 0) + (Number(p.P_shaft_W) || 0),
+        stranded: Number(p.P_cu_W) || 0,
+        strandedDc: Number(p.P_cu_dc_W) || 0, strandedAc: Number(p.P_cu_ac_W) || 0,
+        solid: (Number(p.P_mag_W) || 0) + (Number(p.P_shaft_W) || 0),
         pk: `${I.toFixed(2)}_${g.toFixed(2)}_${td.toFixed(3)}`,
       };
     }), [points, omega]);
@@ -86,13 +90,14 @@ const SweepTable: React.FC<{ points: any[]; rpm: number; vdcFactor?: number; sel
       { id: 'eff', label: 'η %', get: r => r.eff, fmt: v => v.toFixed(2) },
       { id: 'Vdc', label: 'V_dc (V)', get: r => r.Vpk / vdcF, fmt: v => v.toFixed(0) },
       { id: 'ripple', label: 'ripple %', get: r => r.ripple, fmt: v => v.toFixed(2) },
-      { id: 'mass', label: 'mass (kg)', get: r => r.mass, fmt: v => v.toFixed(2) },
+      { id: 'mass', label: 'mass (kg)', get: r => r.mass, fmt: v => v.toFixed(3) },
       { id: 'td', label: 'N·m/kg', get: r => r.td, fmt: v => v.toFixed(2) },
       { id: 'pd', label: 'kW/kg', get: r => r.pd, fmt: v => v.toFixed(3) },
-      { id: 'ploss', label: 'P_loss (W)', get: r => r.ploss, fmt: v => v.toFixed(0) },
-      { id: 'core', label: 'core (W)', get: r => r.core, fmt: v => v.toFixed(0) },
-      { id: 'stranded', label: 'stranded (W)', get: r => r.stranded, fmt: v => v.toFixed(0) },
-      { id: 'solid', label: 'solid (W)', get: r => r.solid, fmt: v => v.toFixed(0) },
+      { id: 'ploss', label: 'P_loss (W)', get: r => r.ploss, fmt: v => v.toFixed(1) },
+      { id: 'core', label: 'core (W)', get: r => r.core, fmt: v => v.toFixed(1) },
+      { id: 'cuDc', label: 'Cu DC (W)', get: r => r.strandedDc, fmt: v => v.toFixed(1) },
+      { id: 'cuAc', label: 'Cu AC (W)', get: r => r.strandedAc, fmt: v => v.toFixed(1) },
+      { id: 'solid', label: 'solid (W)', get: r => r.solid, fmt: v => v.toFixed(1) },
     );
     return c;
   }, [rows, vdcF]);
@@ -240,7 +245,7 @@ const SweepStudyPanel: React.FC = () => {
           pole_copy: readBool('mesh.poleCopy', false), torque_filter: readBool('sim.torqueFilter', true),
           n_sectors: Math.max(1, Math.round(readLS('mesh.nSectors', 1))),   // single source: Mesh tab (same as Simulation)
           gap_layers: readLS('mesh.gapLayers', 2),   // single source: Mesh tab — drives ripple/eddy; must match Simulation
-          end_winding_factor: readLS('sim.endWinding', 0),   // single source: Simulation — drives copper loss/eff (same value Sim sends)
+          end_winding_factor: readLS('sim.endWinding', 0),   // sent for parity, but a sweep RECOMPUTES k_end per-point from each candidate's geometry (backend refine_proc forces auto) — you can't pin one k_end across changing tooth_width/slot geometry
           rotor_eddy: readBool('sim.fieldLosses', true),   // single source: Simulation — field vs slab magnet eddy (drives eff)
           run_id: `sweep_${nPts}`,
         }),
@@ -256,12 +261,16 @@ const SweepStudyPanel: React.FC = () => {
     try { await fetch(`${API}/api/optimization/scan/cancel`, { method: 'POST' }); } catch { /* ignore */ }
   };
 
-  // Wipe the displayed result + its localStorage copy (e.g. a stale sweep from
-  // before the d-axis recalibration).  The backend's last-scan is cleared
-  // separately; a fresh Run overwrites this anyway.
-  const clearResult = () => {
+  // Wipe the displayed result + its localStorage copy AND the backend FEM eval
+  // cache, so the next "Run sweep" recomputes every point from scratch.  Without
+  // the cache wipe, an identical grid (same variables + mesh + operating points)
+  // returns the cached points instantly — which reads as "Run took the old values
+  // and didn't recompute".  Clear result = explicit "start fresh".
+  const clearResult = async () => {
     setResult(null); setSelected(null); setProgress(null); setZoom(null);
     try { localStorage.removeItem('sweepStudy.lastResult'); } catch { /* ignore */ }
+    try { await fetch(`${API}/api/optimization/scan/clear_cache`, { method: 'POST' }); }
+    catch { /* ignore — display is already cleared */ }
   };
 
   // Group feasible points and join them along the chosen variable (current or γ).

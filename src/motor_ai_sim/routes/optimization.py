@@ -112,7 +112,7 @@ def _eval_cache_key(overrides: Dict[str, float], current_a: float, steps: int,
                     mesh_size_mm: float, min_size_mm: float, n_sectors: int,
                     pole_copy, torque_filter: bool, cfg_fp: str,
                     gap_layers: float = 3.0, end_winding_factor: float = 0.0,
-                    rotor_eddy: bool = False) -> str:
+                    rotor_eddy: bool = False, hi_fidelity: bool = False) -> str:
     payload = {
         "ov": {k: round(float(v), 6) for k, v in sorted(overrides.items())},
         "I": round(float(current_a), 4), "steps": int(steps),
@@ -121,7 +121,7 @@ def _eval_cache_key(overrides: Dict[str, float], current_a: float, steps: int,
         "mn": round(float(min_size_mm), 4), "ns": int(n_sectors),
         "pc": pole_copy, "tf": bool(torque_filter), "cfg": cfg_fp,
         "gl": round(float(gap_layers), 2), "ew": round(float(end_winding_factor), 3),
-        "re": bool(rotor_eddy),
+        "re": bool(rotor_eddy), "hf": bool(hi_fidelity),
     }
     return hashlib.md5(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
 
@@ -187,7 +187,7 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
                      min_size_mm: float = 0.3, n_sectors: int = -1,
                      _log: bool = True, pole_copy=None, torque_filter=True,
                      gap_layers: float = 3.0, end_winding_factor: float = 0.0,
-                     rotor_eddy: bool = False) -> Dict[str, Any]:
+                     rotor_eddy: bool = False, hi_fidelity: bool = False) -> Dict[str, Any]:
     """Evaluate ONE (geometry, current, γ) with the real sliding-band transient
     in an isolated subprocess (FEM/LLVM crash → failed design, not a dead API).
     Rebuilds the CadQuery geometry + gmsh mesh for the candidate in-memory.
@@ -202,7 +202,8 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
                        "torque_filter": bool(torque_filter),
                        "gap_layers": float(gap_layers),
                        "end_winding_factor": float(end_winding_factor),
-                       "rotor_eddy": bool(rotor_eddy)})
+                       "rotor_eddy": bool(rotor_eddy),
+                       "hi_fidelity": bool(hi_fidelity)})
     try:
         proc = subprocess.run(
             [sys.executable, "-m", "motor_ai_sim.optimization.refine_proc"],
@@ -405,6 +406,7 @@ class ScanRequest(BaseModel):
     gap_layers: float = 3.0                # air-gap mesh layers — SINGLE SOURCE: Mesh tab (drives ripple/eddy; match Simulation)
     end_winding_factor: float = 0.0        # end-winding k_end — SINGLE SOURCE: Simulation (drives copper loss / eff; 0 = auto)
     rotor_eddy: bool = False                # field-based magnet/shaft eddy — SINGLE SOURCE: Simulation (drives magnet loss / eff vs slab estimate)
+    hi_fidelity: bool = False               # 2× slip nodes + finer mesh + ≥4 gap layers — SINGLE SOURCE: Mesh tab (smoother raw torque, ~3-5× slower)
     seed: int = 12345
     run_id: str = ""
 
@@ -458,7 +460,7 @@ def _point_from_eval(out: Dict[str, Any], ov: Dict[str, float], I: float,
 def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                  max_geom, seed, run_id, mesh_size_mm=4.0, min_size_mm=0.3,
                  pole_copy=None, torque_filter=True, n_sectors=1, gap_layers=3.0,
-                 end_winding=0.0, rotor_eddy=False) -> None:
+                 end_winding=0.0, rotor_eddy=False, hi_fidelity=False) -> None:
     import numpy as np  # noqa: F401
     from concurrent.futures import ThreadPoolExecutor, as_completed
     from motor_ai_sim.optimization.optimizer import _pareto_front
@@ -490,7 +492,7 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
             # is what lets a re-run after widening a range only evaluate the new points.
             ck = _eval_cache_key(geo_ov, I, steps, coil_temp_c, _NPER, g,
                                  mesh_size_mm, min_size_mm, n_sectors, pole_copy, torque_filter, _cfg_fp,
-                                 gap_layers, end_winding, rotor_eddy)
+                                 gap_layers, end_winding, rotor_eddy, hi_fidelity)
             out = _EVAL_CACHE.get(ck)
             if out is not None:
                 with _scan_lock:
@@ -501,7 +503,8 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                                        mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm,
                                        pole_copy=pole_copy, torque_filter=torque_filter,
                                        n_sectors=n_sectors, gap_layers=gap_layers,
-                                       end_winding_factor=end_winding, rotor_eddy=rotor_eddy)
+                                       end_winding_factor=end_winding, rotor_eddy=rotor_eddy,
+                                       hi_fidelity=hi_fidelity)
                 if out and out.get("ok"):
                     _store_eval(ck, out)   # cache successful evals only (skip transient crashes)
             pt = _point_from_eval(out, ov, I, gi, oi, ripple_max)
@@ -553,14 +556,15 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
             _bI = float(operating_points[0].get("current_a", 85.0))
             _bck = _eval_cache_key({}, _bI, steps, coil_temp_c, _NPER, 0.0,
                                    mesh_size_mm, min_size_mm, n_sectors, pole_copy, torque_filter, _cfg_fp,
-                                   gap_layers, end_winding, rotor_eddy)
+                                   gap_layers, end_winding, rotor_eddy, hi_fidelity)
             base_out = _EVAL_CACHE.get(_bck)
             if base_out is None:
                 base_out = _subprocess_eval({}, _bI, steps, coil_temp_c, n_periods=_NPER,
                                             mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm,
                                             pole_copy=pole_copy, torque_filter=torque_filter,
                                             n_sectors=n_sectors, gap_layers=gap_layers,
-                                            end_winding_factor=end_winding, rotor_eddy=rotor_eddy)
+                                            end_winding_factor=end_winding, rotor_eddy=rotor_eddy,
+                                            hi_fidelity=hi_fidelity)
                 if base_out and base_out.get("ok"):
                     _store_eval(_bck, base_out)
             baseline = _point_from_eval(base_out, {}, _bI, -1, 0, ripple_max)
@@ -622,7 +626,12 @@ def scan_designs(req: ScanRequest):
         min_size  = max(0.1, min(float(req.min_size_mm), 3.0))
         # FEM symmetry — single source: the Mesh tab (same build the Simulation uses),
         # so the sweep's ripple matches the Simulation for an identical geometry.
-        n_sectors = max(1, int(req.n_sectors))
+        # "Full"(1) MUST mean the full ring (-1), exactly like the Simulation transient
+        # route (simulation.py: n_sectors ≤1 → -1).  Passing raw 1 made the solver build
+        # an invalid NS=4 wedge (90°) — broken for any motor whose pole count is not a
+        # multiple of 4 (e.g. 14 poles → 3.5/sector) → spurious tooth-width torque slope
+        # + scattered ripple.  This was the sweep-vs-Simulation mismatch vs ANSYS.
+        n_sectors = -1 if int(req.n_sectors) <= 1 else int(req.n_sectors)
         # Air-gap mesh layers — single source: the Mesh tab.  gap_layers drives the
         # air-gap field resolution → torque ripple + magnet eddy; the Simulation uses
         # mesh.gapLayers, so the sweep must too or its numbers won't reproduce in Sim.
@@ -633,6 +642,10 @@ def scan_designs(req: ScanRequest):
         # Field-based rotor eddy — single source: the Simulation (fieldLosses toggle).
         # Slab vs field magnet-eddy differs ~3×, so the sweep must use the same model.
         rotor_eddy = bool(req.rotor_eddy)
+        # Hi-fidelity torque — single source: the Mesh tab toggle.  2× slip-ring nodes +
+        # finer angular mesh + ≥4 gap layers → less per-mesh mean-torque scatter (smoother
+        # tooth-width trend), at ~3-5× the runtime.  Same bundle the Simulation tab uses.
+        hi_fidelity = bool(req.hi_fidelity)
         _scan_state.update({"running": True, "done": 0, "total": 0, "result": None,
                             "points": [], "run_id": req.run_id, "error": None, "cancel": False,
                             "cached": 0})
@@ -640,7 +653,7 @@ def scan_designs(req: ScanRequest):
                      args=(variables, ops, steps, float(req.coil_temp_c),
                            float(req.ripple_max_pct), max_geom, int(req.seed), req.run_id,
                            mesh_size, min_size, req.pole_copy, bool(req.torque_filter),
-                           n_sectors, gap_layers, end_winding, rotor_eddy),
+                           n_sectors, gap_layers, end_winding, rotor_eddy, hi_fidelity),
                      daemon=True).start()
     return {"started": True, "steps_per_period": steps, "max_geometries": max_geom,
             "mesh_size_mm": mesh_size, "min_size_mm": min_size}
@@ -701,6 +714,28 @@ def seed_cache(req: SeedCacheRequest):
         seeded += int(len(_EVAL_CACHE) > before)
     return {"seeded": seeded, "cache_size": len(_EVAL_CACHE), "steps": steps,
             "params": {"coil": coil, "mesh": mesh, "min": mn, "pole_copy": pc, "torque_filter": tf}}
+
+
+@router.post("/scan/clear_cache")
+def clear_cache():
+    """Wipe the persistent FEM eval cache (memory + .scan_cache.jsonl) so the NEXT
+    sweep recomputes EVERY point from scratch.  The cache normally makes re-running
+    the same grid instant (deterministic inputs → same outputs); this is the explicit
+    "give me fresh numbers" escape hatch for when the inputs are identical but the
+    solver code changed (the key can't see code edits).  Wired to the sweep panel's
+    "Clear result" button, so Clear → Run always recomputes."""
+    with _eval_cache_lock:
+        n = len(_EVAL_CACHE)
+        _EVAL_CACHE.clear()
+        removed = False
+        try:
+            p = _eval_cache_path()
+            if os.path.exists(p):
+                os.remove(p); removed = True
+        except Exception as _e:   # noqa: BLE001
+            log.warning("could not delete eval cache file: %s", _e)
+    log.info("eval cache cleared: %d entries dropped (file removed=%s)", n, removed)
+    return {"cleared": n, "file_removed": removed, "cache_size": len(_EVAL_CACHE)}
 
 
 # ─────────────────────────────────────────────────────────────────────────────

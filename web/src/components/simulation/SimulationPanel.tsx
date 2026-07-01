@@ -628,9 +628,10 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
         )}
 
         {/* ── Run Simulation — launches ONE FEM solve with the current
-              operating point + mesh settings.  Pinned at the bottom of the
-              left panel so the user can edit several fields, then run. ── */}
-        <Box sx={{ mt: 'auto', pt: 1 }}>
+              operating point + mesh settings.  Flows directly under the fields
+              above (the panel scrolls if needed); no bottom-pin, which used to
+              leave a big empty gap now that the cooling/PINN sections are gone. ── */}
+        <Box sx={{ pt: 1 }}>
           <TextField
             label="Steps per electrical period"
             type="text" size="small" fullWidth

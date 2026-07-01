@@ -123,14 +123,13 @@ def geometry_is_valid(p: _P) -> bool:
 
 
 def _end_winding_factor(p: _P, geo: Dict[str, Any]) -> float:
-    """k_end = (π·tooth_w/2 + L)/L  — tooth-coil end-turn (validated formula)."""
-    L = float(p.stack_length)
-    if L <= 0:
-        return 1.0
-    r_mid = p.r_stator_in + p.slot_height_m * 0.5
-    tau = 2.0 * math.pi * r_mid / max(p.num_slots, 1)
-    tooth_w = max(tau - p.slot_width_m, 0.3 * tau)
-    return (math.pi * tooth_w / 2.0 + L) / L
+    """k_end end-winding length factor — delegates to the SINGLE SOURCE
+    ``motor_ai_sim.masses.end_winding_factor`` so the optimizer's analytic copper
+    loss uses the EXACT same k_end as the mass (compute_masses) and the FEM solver
+    (copper_loss_W).  (The old local copy used ``tau − slot_width`` and so was frozen
+    under a tooth-width sweep, while the mass tracked the tooth — they disagreed.)"""
+    from motor_ai_sim.masses import end_winding_factor
+    return end_winding_factor(p, geo)
 
 
 def _copper_loss(p: _P, geo: Dict[str, Any], I_phase_rms: float,
@@ -150,34 +149,13 @@ def _copper_loss(p: _P, geo: Dict[str, Any], I_phase_rms: float,
 
 
 def _masses(p: _P, geo: Dict[str, Any]) -> Dict[str, float]:
-    """Component masses (replicates routes.simulation._compute_masses)."""
-    L = p.stack_length
-    n_wires = float(geo.get("num_wires_per_slot", 14))
-    wire_area = p.wire_width_m * p.wire_height_m
-    ns = p.num_slots
-
-    V_stator_full = math.pi * (p.r_stator_out**2 - p.r_stator_in**2) * L
-    V_slots = ns * p.slot_width_m * p.slot_height_m * L
-    m_stator = max(V_stator_full - V_slots, 0.0) * RHO_STEEL
-
-    r_mid_slot = p.r_stator_in + p.slot_height_m * 0.5
-    tau_slot = 2 * math.pi * r_mid_slot / ns
-    L_endturn = math.pi * tau_slot / 2 + p.slot_height_m
-    V_cu = ns * wire_area * n_wires * (L + 2 * L_endturn)
-    m_cu = V_cu * RHO_CU
-
-    V_mag = math.pi * (p.r_rotor_out**2 - p.r_rotor_in**2) * L * p.magnet_fill_fraction
-    m_mag = V_mag * RHO_MAG
-
-    V_rotor = math.pi * (p.r_rotor_in**2 - p.r_shaft_in**2) * L
-    m_rotor = max(V_rotor, 0.0) * RHO_STEEL
-
-    V_shaft = math.pi * p.r_shaft_in**2 * L
-    m_shaft = V_shaft * RHO_AL
-
-    m_total = m_stator + m_cu + m_mag + m_rotor + m_shaft
-    return {"stator": m_stator, "cu": m_cu, "mag": m_mag, "rotor": m_rotor,
-            "shaft": m_shaft, "total": m_total}
+    """Component masses — delegates to the SINGLE SOURCE
+    ``motor_ai_sim.masses.compute_masses`` (stator iron = back-iron yoke + teeth∝
+    tooth_width), so the sweep / all three optimizers use the exact same mass — and
+    therefore torque-density — as Simulation.  (The old local copy parametrised the
+    stator iron by slot_width only, so a tooth-width sweep left the mass constant.)"""
+    from motor_ai_sim.masses import compute_masses
+    return compute_masses(p, geo)
 
 
 @dataclass

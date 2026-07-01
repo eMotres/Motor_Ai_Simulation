@@ -347,6 +347,10 @@ const MeshPanel: React.FC = () => {
   // rotate-copy them so every pole/slot is identical → no pole-to-pole mesh
   // variance.  Read by the field & simulation fetches too (mesh.poleCopy).
   const [poleCopy,       setPoleCopy]       = usePersisted<boolean>('poleCopy', false);
+  // Structured (concentric-ring) air gap: mesh the gap as ANSYS-style concentric
+  // circles + radial spokes instead of free triangles.  Experimental — cleans the
+  // gap mesh + broadband ripple, but doesn't lower peak ripple (teeth are the floor).
+  const [structuredGap,  setStructuredGap]  = usePersisted<boolean>('structuredGap', false);
   // ── Per-component mesh size (study mesh-density effect on results) ─────────
   // {comp: target element size mm}. Empty/0 → use the global size for that part.
   // Persisted under 'mesh.componentMesh' so the Simulation tab's solve reads the
@@ -435,6 +439,7 @@ const MeshPanel: React.FC = () => {
       stator_fillet_mm:  '0',          // native geometry — no extra smoothing
       component_mesh:    componentMeshJson,
       pole_copy:         poleCopy ? 'true' : 'false',
+      structured_gap:    structuredGap ? 'true' : 'false',   // ANSYS-style concentric-ring gap
     } : {
       mesh_size_mm:        _ms,
       min_size_mm:         _mn,
@@ -455,7 +460,7 @@ const MeshPanel: React.FC = () => {
       .then((d: FemMesh) => { if (mySeq !== buildSeq.current) return; setFemMesh(d); setFemLoading(false); })
       .catch(e => { if (mySeq !== buildSeq.current) return; setFemError(String(e)); setFemLoading(false); });
   }, [solverMesh, meshSizeMm, minSizeMm, normalDev, rotorAngle,
-      outerAirFactor, gapLayers, nSectors, componentMeshJson, poleCopy]);
+      outerAirFactor, gapLayers, nSectors, componentMeshJson, poleCopy, structuredGap]);
 
   // Gate: don't persist mesh settings back to config until the mount config-load
   // has populated state — otherwise a slow/interrupted load would let the
@@ -749,8 +754,8 @@ const MeshPanel: React.FC = () => {
             <Box>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
                 <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>
-                  Air-gap layers (per side)
-                  <Tooltip title="Element rows between the rotating slip midline and the iron on EACH side (stator and rotor). The sliding band splits the gap at the midline, so '2' = 2 rows you see between the midline and the stator (and 2 toward the rotor). 2 is the mesh-independent sweet spot for Maxwell-stress torque; 3 is plenty — more adds cost without accuracy." placement="right">
+                  Air-gap fidelity (layers/side)
+                  <Tooltip title="The single air-gap fidelity control. Sets BOTH the radial element rows per side of the sliding midline (torque via Maxwell stress) AND the tangential slip-ring node count (eddy-loss accuracy — more nodes = less node-identification jitter). 2 is the sweet spot for mean torque; raise to 4+ for the cleanest eddy/solid losses (slower, ~gap=4 ≈ the retired High-fidelity mode). Drives the mesh preview and the Simulation solve identically." placement="right">
                     <span style={{ color: '#475569', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
                   </Tooltip>
                 </Typography>
@@ -758,10 +763,38 @@ const MeshPanel: React.FC = () => {
                   sx={{ fontSize: 11, height: 20, bgcolor: '#1e3a5f', color: '#93c5fd' }}/>
               </Box>
               <Slider
-                value={gapLayers} min={1} max={3} step={1}
+                value={gapLayers} min={1} max={6} step={1}
                 marks onChange={(_, v) => setGapLayers(v as number)}
                 sx={{ color: '#06b6d4' }}
               />
+            </Box>
+
+            {/* Air-gap mesh: free triangles vs ANSYS-style concentric rings (experimental) */}
+            <Box>
+              <Typography sx={{ fontSize: '0.62rem', fontWeight: 700, color: '#475569',
+                letterSpacing: '0.08em', textTransform: 'uppercase', mb: 0.5 }}>
+                Air-gap mesh
+                <Tooltip title="Free = gmsh Delaunay triangles in the gap (default). Structured = ANSYS-style concentric rings + radial spokes: the gap is partitioned into Air-gap-fidelity rings per side. Use fidelity 3+ for an EXACTLY that-many-ring gap; at 1-2 the rows are so thick vs the fine slip ring (~1000 nodes) that gmsh adds extra radial layers to avoid stretched triangles, so you see more rings than set. Cleans the gap mesh + broadband ripple, but does NOT lower peak ripple (the tooth mesh is the floor). Drives the mesh preview AND the Simulation solve." placement="right">
+                  <span style={{ color: '#475569', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
+                </Tooltip>
+              </Typography>
+              <ToggleButtonGroup
+                value={structuredGap ? 'struct' : 'free'} exclusive size="small" fullWidth
+                onChange={(_, v) => v != null && setStructuredGap(v === 'struct')}
+                sx={{ width: '100%',
+                  '& .MuiToggleButton-root': { flex: 1, py: 0.3, fontSize: 11,
+                    color: '#64748b', borderColor: '#1e293b', textTransform: 'none',
+                    '&.Mui-selected': { color: '#e2e8f0', bgcolor: '#1e3a5f',
+                      borderColor: '#3b82f6' } } }}>
+                <ToggleButton value="free">Free (triangles)</ToggleButton>
+                <ToggleButton value="struct">Structured (rings)</ToggleButton>
+              </ToggleButtonGroup>
+              {structuredGap && (
+                <Typography sx={{ fontSize: 9, color: '#34d399', mt: 0.5 }}>
+                  Concentric rings + radial spokes in the gap (ANSYS-style). Cleaner gap
+                  mesh; ~20% more nodes. Peak ripple unchanged (teeth are the floor).
+                </Typography>
+              )}
             </Box>
 
             {/* ── Per-component mesh size (mesh-convergence study) ───────── */}

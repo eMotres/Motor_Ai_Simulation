@@ -111,6 +111,28 @@ _SB_POLE_COPY_STATOR = _os_sb.environ.get("SB_POLE_COPY_STATOR", "0") == "1"
 # two-mesh gap bias is resolved.
 _SB_MOVING_BAND = False
 
+# Harmonic air-gap macroelement (Davat): replace the single-layer moving-band strip
+# with the ANALYTIC Laplace solution of the gap annulus (block-circulant coupling,
+# DFT-diagonal 2×2 per-harmonic blocks; rotor rotation = smooth phase e^{ikφ}).
+# Implemented + validated (per-harmonic stiffness vs FEM annulus; mean torque matches
+# the band).  RESULT (2026-06-30, #141): it does NOT reduce torque ripple — measured
+# WORSE than the band at the same mesh (raw 25.6 % vs 17.6 %), because the dominant
+# ripple is the FEM half-mesh teeth/slot discretisation (present in the field, seen by
+# every torque contour), NOT the gap coupling; the band's coarse strip happens to
+# low-pass it while the macroelement faithfully captures + (via virtual work) amplifies
+# it.  Kept behind this flag (default OFF → production uses the band) for reference.
+_SB_AIRGAP_MACRO = False
+# Structured (concentric-ring) air gap: partition EACH half-gap (rotor OD->R1 and
+# R2->stator bore) into `gap_layers` thin annular rows bounded by uniform N-gon rings
+# on the slip angular grid -> the gap meshes as an ANSYS-style structured band
+# (concentric circles + near-radial spokes) instead of free Delaunay triangles.  The
+# slip band R1..R2 is untouched.  EXPERIMENTAL (default OFF, env SB_STRUCTURED_GAP=1):
+# the dominant torque-ripple source is the tooth/slot half-mesh discretisation, NOT the
+# gap coupling (see _SB_AIRGAP_MACRO / #141), so this mainly regularises the gap mesh
+# and the slip re-pairing noise -- MEASURE before trusting it to move ripple.
+_SB_STRUCTURED_GAP = _os_sb.environ.get("SB_STRUCTURED_GAP", "0") == "1"
+_SLIP_PER_PERIOD_OVERRIDE = 0   # 0 = adaptive formula; >0 forces slip nodes/period (ring density)
+
 # ── Torque-band diagnostic (off by default; set ['on']=True before a solve to
 # collect the per-frame Arkkio torque over radial sub-bands of the gap, to
 # localise where parasitic ripple comes from — e.g. the slip-ring interface).
@@ -290,7 +312,9 @@ def _simplify_polys(polys: dict, tol_mm: float = 0.005,
                      stator_fillet_mm: float = 0.8,
                      normal_dev_deg: float = 0.0,
                      n_slip: Optional[int] = None,
-                     band_mode: str = "merged") -> dict:
+                     band_mode: str = "merged",
+                     gap_layers: float = 2.0,
+                     structured_gap: bool = False) -> dict:
     """Drop near-collinear vertices below chord tolerance `tol_mm`.
 
     Default 0.005 mm matches Ansys Maxwell's "Surface Deviation = 0.01 mm"
@@ -413,6 +437,8 @@ def _simplify_polys(polys: dict, tol_mm: float = 0.005,
             _gap_est = (_r_si_est - _r_ro_est) \
                 if (_r_si_est < float("inf") and _r_ro_est > 0) else 0.0
             _delta = min(max(_SB_BAND_DELTA_FRAC * _gap_est, 0.04), 0.4) if _gap_est > 0.05 else 0.0
+            # STRUCTURED gap: per-request param OR the global env flag.
+            _do_struct = bool(structured_gap) or _SB_STRUCTURED_GAP
 
             def _parts(_g):
                 return list(_g.geoms) if hasattr(_g, "geoms") else [_g]
@@ -431,19 +457,57 @@ def _simplify_polys(polys: dict, tol_mm: float = 0.005,
                 # irregular fans were the order-6 ripple source).
                 _r1 = mid_r - _delta
                 _r2 = mid_r + _delta
-                in_band = _SPoly2(_ring_pts(_r1))
-                if rotor_solids:
-                    in_band = in_band.difference(_uu(rotor_solids))
-                if not in_band.is_valid: in_band = in_band.buffer(0)
-                out["in_band"] = in_band
+                if _do_struct:
+                    # STRUCTURED gap: partition each half-gap into `gap_layers`
+                    # concentric annular rows bounded by uniform N-gon rings on the
+                    # slip angular grid → the gap meshes as ANSYS-style concentric
+                    # circles + near-radial spokes.  The slip band R1..R2 is left
+                    # intact; rows sit strictly inside the clean gap (a thin
+                    # transition sliver to the iron stays free-meshed).
+                    _K = max(1, int(round(float(gap_layers))))
+                    _lo = _r_ro_est + 0.02          # just above the rotor OD
+                    _hi = _r_si_est - 0.02          # just below the stator tooth tips
+                    _radii_in  = sorted({_lo + (_r1 - _lo) * i / _K for i in range(_K)}
+                                        | {_r1})                                   # _lo .. R1
+                    _radii_out = sorted({_r2}
+                                        | {_r2 + (_hi - _r2) * i / _K for i in range(1, _K + 1)})  # R2 .. _hi
+                    _rings_in  = [_ring_pts(r) for r in _radii_in]
+                    _rings_out = [_ring_pts(r) for r in _radii_out]
+                    # rotor-side in_band: inner core (disk(radii_in[0]) − solids) + rows up to R1
+                    _core = _SPoly2(_rings_in[0])
+                    if rotor_solids:
+                        _core = _core.difference(_uu(rotor_solids))
+                    if not _core.is_valid: _core = _core.buffer(0)
+                    _in_parts = _parts(_core)
+                    for _i in range(len(_rings_in) - 1):
+                        _in_parts.append(_SPoly2(_rings_in[_i + 1], [_rings_in[_i]]))
+                    out["in_band"] = _SMulti2(_in_parts)
+                    # stator-side out_band: rows from R2 + outer shell (r_outer − stator)
+                    _out_parts = []
+                    for _i in range(len(_rings_out) - 1):
+                        _out_parts.append(_SPoly2(_rings_out[_i + 1], [_rings_out[_i]]))
+                    _shell = _SPoly2(rout_ring, [_rings_out[-1]])
+                    if out.get("stator") is not None:
+                        _shell = _shell.difference(out["stator"])
+                    if not _shell.is_valid: _shell = _shell.buffer(0)
+                    _out_parts += _parts(_shell)
+                    out["out_band"] = _SMulti2(_out_parts)
+                    out["band_radii_mm"] = [_r1, _r2]
+                    out["transfinite_ring_radii_mm"] = sorted(set(_radii_in + _radii_out))
+                else:
+                    in_band = _SPoly2(_ring_pts(_r1))
+                    if rotor_solids:
+                        in_band = in_band.difference(_uu(rotor_solids))
+                    if not in_band.is_valid: in_band = in_band.buffer(0)
+                    out["in_band"] = in_band
 
-                out_band = _SPoly2(rout_ring, [_ring_pts(_r2)])
-                if out.get("stator") is not None:
-                    out_band = out_band.difference(out["stator"])
-                if not out_band.is_valid: out_band = out_band.buffer(0)
-                out["out_band"] = out_band
-                out["band_radii_mm"] = [_r1, _r2]
-                out["transfinite_ring_radii_mm"] = [_r1, _r2]
+                    out_band = _SPoly2(rout_ring, [_ring_pts(_r2)])
+                    if out.get("stator") is not None:
+                        out_band = out_band.difference(out["stator"])
+                    if not out_band.is_valid: out_band = out_band.buffer(0)
+                    out["out_band"] = out_band
+                    out["band_radii_mm"] = [_r1, _r2]
+                    out["transfinite_ring_radii_mm"] = [_r1, _r2]
             elif _SB_STRUCTURED_STRIPS and _delta > 0 \
                     and (mid_r - _delta) > _r_ro_est + 0.02 \
                     and (mid_r + _delta) < _r_si_est - 0.02:
@@ -466,6 +530,36 @@ def _simplify_polys(polys: dict, tol_mm: float = 0.005,
                 # (transfinite 2/edge) or gmsh re-subdivides them and the
                 # strip alignment is lost.  The mesh builder reads this.
                 out["transfinite_ring_radii_mm"] = [mid_r - _delta, mid_r + _delta]
+            elif _do_struct and _r_ro_est > 0 and _r_si_est < float("inf") and _gap_est > 0.05:
+                # STRUCTURED merged gap: concentric rings r_ro→mid_r (rotor) and
+                # mid_r→r_si (stator); the slip stays the SINGLE shared ring at mid_r,
+                # so the mesh is CONTINUOUS (no empty band) — this is the path the Mesh
+                # viewer uses, so the user sees the ANSYS-style structured gap directly.
+                _K = max(1, int(round(float(gap_layers))))
+                _lo = _r_ro_est + 0.02
+                _hi = _r_si_est - 0.02
+                _radii_in  = sorted({_lo + (mid_r - _lo) * i / _K for i in range(_K)} | {mid_r})
+                _radii_out = sorted({mid_r} | {mid_r + (_hi - mid_r) * i / _K for i in range(1, _K + 1)})
+                _rings_in  = [_ring_pts(r) for r in _radii_in]
+                _rings_out = [_ring_pts(r) for r in _radii_out]
+                _core = _SPoly2(_rings_in[0])
+                if rotor_solids:
+                    _core = _core.difference(_uu(rotor_solids))
+                if not _core.is_valid: _core = _core.buffer(0)
+                _in_parts = _parts(_core)
+                for _i in range(len(_rings_in) - 1):
+                    _in_parts.append(_SPoly2(_rings_in[_i + 1], [_rings_in[_i]]))
+                out["in_band"] = _SMulti2(_in_parts)
+                _out_parts = []
+                for _i in range(len(_rings_out) - 1):
+                    _out_parts.append(_SPoly2(_rings_out[_i + 1], [_rings_out[_i]]))
+                _shell = _SPoly2(rout_ring, [_rings_out[-1]])
+                if out.get("stator") is not None:
+                    _shell = _shell.difference(out["stator"])
+                if not _shell.is_valid: _shell = _shell.buffer(0)
+                _out_parts += _parts(_shell)
+                out["out_band"] = _SMulti2(_out_parts)
+                out["transfinite_ring_radii_mm"] = sorted(set(_radii_in + _radii_out))
             else:
                 in_band = _SPoly2(mid_ring)
                 if rotor_solids:
@@ -3458,20 +3552,13 @@ def end_winding_factor_geom(p, geo_cfg) -> float:
 
     This machine is a 24-slot / 28-pole FRACTIONAL-SLOT CONCENTRATED winding
     (q = slots/(phases·poles) = 0.29 < 1) → tooth coils, each wound around ONE
-    tooth.  Its end-turns are SHORT (they just arc over the tooth), so the
-    end-turn per side ≈ a half-loop over the tooth width, NOT the long
-    distributed-winding half-pole-pitch span.  (The old 'π·τ/2 + slot_depth'
-    estimate was a distributed-winding formula → over-counted k_end at 3.3 and
-    the copper loss by ~1.7×.)"""
-    L = float(p.stack_length)
-    if L <= 0:
-        return 1.0
-    r_mid = p.r_stator_in + p.slot_height_m * 0.5
-    tau = 2.0 * math.pi * r_mid / max(p.num_slots, 1)        # slot pitch
-    tooth_w = max(tau - p.slot_width_m, 0.3 * tau)           # tooth the coil wraps
-    # k_end = (π·tooth_width/2 + L_stack) / L_stack  — the tooth-coil end-turn
-    # (half-loop over the tooth) added to the active stack length.
-    return (math.pi * tooth_w / 2.0 + L) / L
+    tooth.  Its end-turns are SHORT (they just arc over the tooth).
+
+    SINGLE SOURCE: delegates to motor_ai_sim.masses.end_winding_factor so the copper
+    MASS (compute_masses), phase RESISTANCE and LOSS (copper_loss_W) all scale by the
+    exact same k_end."""
+    from motor_ai_sim.masses import end_winding_factor
+    return end_winding_factor(p, geo_cfg)
 
 
 def copper_loss_W(p, geo_cfg, I_phase_rms, n_parallel,
@@ -3561,6 +3648,18 @@ def fem_transient_sliding_band(
                                      # in CAD (magnets+pockets rotated before meshing);
                                      # with 1 step this is a true static solve at that
                                      # angle using the SB machinery minus the sliding.
+    hi_fidelity: bool = False,       # "High-fidelity torque": 2× slip-ring nodes + finer
+                                     # feature mesh (÷8 not ÷4) → pushes the numerical
+                                     # picket-fence torque hash to higher orders + halves
+                                     # the over-resolved cogging.  ~2× slower; mean torque
+                                     # unchanged.  Off by default (speed).
+    honest_eddy: bool = False,       # ADDITIVE diagnostic: ALSO compute the coupled
+                                     # (reaction-included) rotor eddy via eddy_solver_2d
+                                     # for comparison vs the resistance-limited post-
+                                     # process.  Captures rotor-node A history; fail-safe
+                                     # (any error leaves the production numbers intact).
+    structured_gap: bool = False,    # ANSYS-style concentric-ring air-gap mesh (experimental
+                                     # Mesh-tab toggle; default off = free gmsh gap).
 ) -> dict:
     """Sliding-band transient: mesh the stator + rotor halves ONCE, then sweep
     the rotor by shifting the slip-ring node pairing (no remeshing) so the
@@ -3607,11 +3706,39 @@ def fem_transient_sliding_band(
     else:
         p = params_from_config()
     dom = MotorDomains2D(p)
+    # ── Feature-relative mesh refinement (real element sizing, not a fudge) ──
+    # mesh_size_mm is an ABSOLUTE target.  On a small motor the UI default
+    # (4 mm) leaves ~1 element across a 2.8 mm slot → the field, torque and
+    # back-EMF are grossly under-resolved AND mesh-dependent.  Convergence study
+    # (12s/14p 40 mm, I=38, γ=−32): at mesh 1.5 mm the result is garbage
+    # (T 0.52, KV 484, 175 % ripple); it only plateaus at mesh ≲ slot_width/3
+    # (T≈0.565, KV≈585, 11 % ripple from 1.0→0.5 mm).  So clamp the target to
+    # resolve the smallest in-plane feature (slot or tooth) with ≥4 elements.
+    # This only ever REFINES (min) — motors with large features (e.g. 200 mm)
+    # keep their coarser mesh.  Radial air-gap resolution is separate
+    # (gap_layers).  No operating-point tuning — pure geometric element sizing.
+    try:
+        _feat_mm = min(float(geo.get("slot_width", 1e9) or 1e9),
+                       float(geo.get("tooth_width", 1e9) or 1e9))
+        if 0.0 < _feat_mm < 1e8:
+            _elem_per_feat = 8.0 if hi_fidelity else 4.0   # hi-fi: finer angular mesh
+            _mesh_feat = max(float(min_size_mm), _feat_mm / _elem_per_feat)
+            if _mesh_feat < mesh_size_mm - 1e-9:
+                log.info("mesh auto-refined %.2f → %.2f mm (smallest feature "
+                         "%.2f mm ÷ %g) — small-motor resolution",
+                         mesh_size_mm, _mesh_feat, _feat_mm, _elem_per_feat)
+                mesh_size_mm = _mesh_feat
+    except Exception as _e:
+        log.warning("mesh feature-refine skipped: %s", _e)
     # n_sectors == -1: DIAGNOSTIC full ring — no sector cuts at all (the moving
     # band makes a closed 360° pair of halves feasible: the halves are open
     # annuli, not the historically OCC-double-meshed full cross-section).
-    _full_ring = (int(n_sectors) == -1)
-    NS = 1 if _full_ring else (int(n_sectors) if n_sectors and n_sectors > 1 else 4)
+    # n_sectors ≤ 1 → FULL RING (NS=1).  -1 was the historical "full ring" flag;
+    # 1 ("Full" from the UI) must mean the same — NOT fall through to NS=4, which is
+    # an invalid 90° wedge for any motor whose pole count is not a multiple of 4
+    # (e.g. 14 poles → 3.5/sector → corrupt anti-periodic BC → spurious torque/ripple).
+    _full_ring = (int(n_sectors) <= 1)
+    NS = 1 if _full_ring else int(n_sectors)
     sector_deg = 360.0 / NS
     pole_pairs = p.num_poles // 2
     # Sector boundary sign: ANTI-periodic (−1) only when the sector spans an
@@ -3653,6 +3780,22 @@ def fem_transient_sliding_band(
                 'B': Ipk * math.cos(te - 2 * math.pi / 3),
                 'C': Ipk * math.cos(te + 2 * math.pi / 3)}
 
+    # ── High-fidelity = genuinely higher resolution EVERYWHERE the noise lives ─
+    # The raw torque ripple of the sliding-band transient carries a BROADBAND
+    # numerical floor at the non-6·k orders a balanced 3-φ machine cannot produce.
+    # Measured (40 mm 12s/14p) it is a FIELD-level artifact: IDENTICAL on every
+    # torque contour (band strip / rotor-surface / stator-surface / whole gap) and
+    # NOT removed by any single knob — gap_layers ALONE even makes it worse
+    # (20.8 %→25.5 %), steps don't move it (→21.8 %), pole_copy doesn't (→20.3 %).
+    # Only RAISING ALL THREE TOGETHER pulls the floor down: tangential band
+    # density (slip nodes), radial gap density (gap_layers) and the global mesh.
+    # So hi_fidelity bundles all three (mesh ÷8 vs ÷4 above; slip 2× below;
+    # gap_layers≥4 here) → measured raw 20.8 %→~14 %, RMS 4.7 %→3.0 %.  This is the
+    # honest "spend compute for accuracy" mode, NOT a filter — the real DC torque
+    # is unchanged and the 6·k physical ripple already matches Ansys.  gap_layers
+    # is bumped ONLY inside this bundle (it is counter-productive on its own).
+    if hi_fidelity:
+        gap_layers = max(float(gap_layers), 4.0)
     # ── Slip-ring resolution (ADAPTIVE to pole count) ─────────────────────
     # Nodes per electrical period = a multiple of 24 (so 24/30/40/60/120 are all
     # valid step counts) and ≥120, scaled so the full-ring node count stays
@@ -3660,8 +3803,26 @@ def fem_transient_sliding_band(
     # pole_pairs·per_period is divisible by pole_pairs BY CONSTRUCTION → the rotor
     # advances a whole number of nodes each step (strictly periodic torque) and
     # the electrical period tiles EXACTLY (vs the old fixed 1008 → 100.8/period).
-    _slip_per_period = 24 * max(5, math.ceil(1008 / (24 * pole_pairs)))
+    # Air-gap layers is the SINGLE fidelity regulator (the UI "Air-gap layer" slider):
+    # more layers -> more tangential slip nodes -> less node-identification jitter in the
+    # eddy loss (the same knob also sets the radial gap density above).  Calibrated so
+    # gap_layers=1 -> 1008 (fast) and gap_layers=4 -> 2016 (= the retired hi-fidelity slip);
+    # the _slip_per_period rounding below keeps the count pole-pair-divisible for any motor.
+    _slip_base = int(round(1008.0 * (max(1.0, float(gap_layers)) + 2.0) / 3.0))
+    _slip_per_period = 24 * max(5, math.ceil(_slip_base / (24 * pole_pairs)))
     n_slip_eff = pole_pairs * _slip_per_period
+    if bool(_SB_AIRGAP_MACRO) and _full_ring:
+        # The harmonic macroelement is ANALYTIC between ring nodes, so a COARSE ring
+        # is enough — and its coupling is a DENSE N×N block, so a small N is wanted.
+        # 48 nodes/period resolves angular harmonics to 24·pole_pairs (≫ the
+        # significant slot/pole orders); the node-identification band needed the
+        # fine ≥120/period purely to keep the re-pairing quiet — the macroelement
+        # does not.  This is the efficiency lever that makes the dense block cheap.
+        _slip_per_period = 48
+        n_slip_eff = pole_pairs * _slip_per_period
+    if _SLIP_PER_PERIOD_OVERRIDE and _full_ring:        # advanced: force ring density
+        _slip_per_period = int(_SLIP_PER_PERIOD_OVERRIDE)
+        n_slip_eff = pole_pairs * _slip_per_period
 
     # ── Snap steps/period so the rotor lands on whole slip nodes ──────────
     # For a uniform (periodic, non-chaotic) rotor advance, n_steps must divide
@@ -3680,7 +3841,8 @@ def fem_transient_sliding_band(
         motor.set_parameters(geo_override)   # in-memory candidate geometry
     polys = motor.get_2d_polygons(rotor_angle_deg=float(rotor_angle0_deg))
     polys = _simplify_polys(polys, tol_mm=0.005, stator_fillet_mm=stator_fillet_mm,
-                            n_slip=n_slip_eff,
+                            n_slip=n_slip_eff, gap_layers=gap_layers,
+                            structured_gap=structured_gap,
                             band_mode=("moving" if (_SB_MOVING_BAND or _full_ring)
                                        else "merged"))
     ms, ts, cs, mr, tr, cr = _build_sliding_band_meshes(
@@ -4143,6 +4305,85 @@ def fem_transient_sliding_band(
         _gR2 = sring.astype(int)                # stator-ring DOFs
         _dphi_b = math.radians(spacing)
 
+        # ── Harmonic air-gap macroelement (Davat) — analytic gap, smooth torque ──
+        # Couple the two uniform rings by the EXACT Laplace solution of the gap
+        # annulus instead of the single-layer triangle strip.  Both rings are
+        # uniform N-gons ⇒ the coupling is block-circulant and DFT-diagonalises into
+        # 2×2 per-harmonic blocks; rotor rotation by m nodes is a smooth phase
+        # e^{i·k·φ} (no node re-pairing) → the broadband sliding-band ripple is gone
+        # at the source.  Per-harmonic stiffness + nodal assembly validated standalone
+        # (energy == analytic == FEM annulus; m-shift == circulant shift).  Full-ring
+        # only for now (sector anti-periodic harmonics deferred).
+        _use_macro = bool(_SB_AIRGAP_MACRO) and _full_ring
+        if _use_macro:
+            _Nm = int(Nring)
+            _r1M, _r2M, _stkM = float(_r1_m), float(_r2_m), float(p.stack_length)
+
+            def _Qk_gap(k):
+                # per-harmonic 2×2 [[Q11(rotor),Q12],[Q12,Q22(stator)]] for the gap
+                # energy u^T Q u with u=(A@r1, A@r2); r1=rotor ring, r2=stator ring.
+                # Closed form in ρ=r1/r2<1 (the raw r^{±2k} form overflows for the
+                # large k reached at N~1008): Q11=Q22=k(1+ρ^2k)/(1−ρ^2k),
+                # Q12=−2k·ρ^k/(1−ρ^2k).  ρ^k→0 for high k → self-stiffness ~k, no
+                # cross-coupling (the gap low-passes the surface field), as expected.
+                if k == 0:
+                    c = 1.0 / math.log(_r2M / _r1M)
+                    return c, -c, c
+                rhok = (_r1M / _r2M) ** k
+                rho2k = rhok * rhok
+                den = 1.0 - rho2k
+                q11 = k * (1.0 + rho2k) / den
+                return q11, -2.0 * k * rhok / den, q11
+
+            # PER-UNIT-LENGTH normalisation: the half-mesh K_const carries no stack
+            # length (2D solve; L is applied later in the torque/loss post-processing,
+            # exactly like _T_band).  So the gap coupling must also be per-unit — the
+            # stack length _stkM is applied only in _T_macro below.  (Baking L in here
+            # made the gap ~1/L weaker than the iron → decoupled, garbage field.)
+            _Gm = 2.0 * math.pi / (MU0 * _Nm)             # DFT energy normalisation (per-unit)
+            _mu_rr = np.empty(_Nm); _mu_rs = np.empty(_Nm); _mu_ss = np.empty(_Nm)
+            for _j in range(_Nm):
+                _q11, _q12, _q22 = _Qk_gap(min(_j, _Nm - _j))   # phys order = min(j,N−j)
+                _mu_rr[_j], _mu_rs[_j], _mu_ss[_j] = _Gm*_q11, _Gm*_q12, _Gm*_q22
+            for _j in (0, _Nm // 2):                       # unpaired bins counted once
+                _mu_rr[_j] *= 0.5; _mu_rs[_j] *= 0.5; _mu_ss[_j] *= 0.5
+            _jfreq = np.arange(_Nm, dtype=float)
+            _jfreq[_jfreq > _Nm/2] -= _Nm                  # signed frequency (for ∂/∂φ)
+            _ii_m = (np.arange(_Nm)[:, None] - np.arange(_Nm)[None, :]) % _Nm
+
+            def _circ_of(mu):                              # circulant C[i,j]=col[(i−j)%N]
+                return np.fft.ifft(mu).real[_ii_m]
+            _Krr_blk = _circ_of(_mu_rr)                    # rotor-rotor  (m-independent)
+            _Kss_blk = _circ_of(_mu_ss)                    # stator-stator(m-independent)
+            _Rg1, _Cg1 = np.meshgrid(_gR1, _gR1, indexing="ij")
+            _Rg2, _Cg2 = np.meshgrid(_gR2, _gR2, indexing="ij")
+            _Rg12, _Cg12 = np.meshgrid(_gR1, _gR2, indexing="ij")
+
+            def _K_gap_macro(m):
+                # rotor↔stator block at rotor shift m: phase e^{i·2π·jfreq·m/N}
+                _krs = np.fft.ifft(_mu_rs *
+                                   np.exp(1j*2*np.pi*_jfreq*int(m)/_Nm)).real[_ii_m]
+                # forward block  K[gR1[a],gR2[b]] = _krs[a,b]  and its symmetric
+                # transpose K[gR2[b],gR1[a]] = _krs[a,b] (NOT _krs[b,a] — _krs is
+                # asymmetric for m≠0, so a literal .T here made the global matrix
+                # non-symmetric → garbage solve at non-integer-pole shifts).
+                rows = np.concatenate([_Rg1.ravel(), _Rg2.ravel(),
+                                       _Rg12.ravel(), _Cg12.ravel()])
+                cols = np.concatenate([_Cg1.ravel(), _Cg2.ravel(),
+                                       _Cg12.ravel(), _Rg12.ravel()])
+                data = np.concatenate([_Krr_blk.ravel(), _Kss_blk.ravel(),
+                                       _krs.ravel(), _krs.ravel()])
+                return _coo((data, (rows, cols)), shape=(n, n)).tocsr()
+
+            def _T_macro(m, Avec):
+                # virtual work: T = −∂(L·w_gap)/∂φ ; only the rotor↔stator term depends
+                # on φ.  w_rs(per-unit) = (1/N) Σ μ_rs(j) e^{i·jfreq·φ} conj(Ûr) Ûs;
+                # the real torque scales by the stack length _stkM (= L).
+                Ur = np.fft.fft(Avec[_gR1]); Us = np.fft.fft(Avec[_gR2])
+                ph = np.exp(1j*2*np.pi*_jfreq*int(m)/_Nm)
+                return float(-(_stkM/_Nm) * np.sum(
+                    (1j*_jfreq) * _mu_rs * ph * np.conj(Ur) * Us).real)
+
         def _tri_template(P3):
             (x1, y1), (x2, y2), (x3, y3) = P3
             bb = np.array([y2 - y3, y3 - y1, y1 - y2])
@@ -4325,7 +4566,7 @@ def fem_transient_sliding_band(
             if _moving:
                 Pro = Pro_const
                 outer_red = outer_red_const
-                _Kband_p = _K_band(m_shift)
+                _Kband_p = _K_gap_macro(m_shift) if _use_macro else _K_band(m_shift)
             else:
                 suf = _SignedUF(n)
                 for a, b in zip(Mn, Sn):
@@ -4417,6 +4658,7 @@ def fem_transient_sliding_band(
     _field_snap = None       # eddy last-frame field snapshot (if return_field)
     _hist_Am = []            # per-frame A on magnet nodes (loss post-processing)
     _hist_Ash = []           # per-frame A on shaft nodes (field-based shaft loss)
+    _hist_A_rotor = []       # per-frame A on ALL rotor nodes (honest coupled eddy)
     # When the demag pre-pass ran, the measurement pass is the SECOND half of
     # the work — continue the progress counter so the UI bar doesn't reset.
     _prog_off = n_total if (demag and _mag_idx.size) else 0
@@ -4440,7 +4682,7 @@ def fem_transient_sliding_band(
             # constraints left are the m-INDEPENDENT sector cuts → constant Pro.
             Pro = Pro_const
             outer_red = outer_red_const
-            _Kband_f = _K_band(m_shift)
+            _Kband_f = _K_gap_macro(m_shift) if _use_macro else _K_band(m_shift)
         else:
             # legacy: signed union-find merges ring nodes (slip) + cut pairs.
             suf = _SignedUF(n)
@@ -4460,6 +4702,12 @@ def fem_transient_sliding_band(
         # Reset the per-element iron reluctivity to the unsaturated base each
         # frame so the saturation solution is a pure function of rotor position
         # (no history dependence) → the torque ripple is strictly PERIODIC.
+        # NB: warm-starting from the previous frame was tried and REVERTED — the
+        # damped Picard doesn't converge tightly enough for start-independence, so
+        # warm-start left each frame at a slightly different convergence level and
+        # INCREASED the ripple (19.8 %→25.4 % measured).  The per-frame reset is
+        # load-bearing for ripple consistency; a real speedup needs a tighter
+        # nonlinear solver (Aitken/Newton) first — see memory torque_ripple_root_cause.
         for hn in ("s", "r"):
             for tag in sb_sat[hn]:
                 nu_el[hn][tag][:] = 1.0 / (MU0 * max(mu0[hn].get(tag, 1.0), 1.0))
@@ -4522,6 +4770,9 @@ def fem_transient_sliding_band(
         if rotor_eddy and _shaftnode_glob.size:
             # Shaft-node A history → field-based (rotor-frame) shaft eddy loss.
             _hist_Ash.append(A[_shaftnode_glob].copy())
+        if honest_eddy:
+            # ALL rotor-node A history → coupled (reaction-included) eddy diagnostic.
+            _hist_A_rotor.append(A[nsn:nsn + half["r"]["n"]].copy())
         # capture the converged per-element B for the loss integrals
         _Bxs, _Bys = _per_triangle_B(half["s"]["mesh"], A[:nsn])
         _Bxr, _Byr = _per_triangle_B(half["r"]["mesh"], A[nsn:])
@@ -4569,7 +4820,7 @@ def fem_transient_sliding_band(
         # the coupled STRIP only (the half-mesh gap fields are sheared and carry
         # a spurious DC torque; the strip is the consistent rotor↔stator join).
         if _moving:
-            Tq_sec = _T_band(m_shift, A)
+            Tq_sec = _T_macro(m_shift, A) if _use_macro else _T_band(m_shift, A)
         else:
             Tq_sec = _arkkio_torque(mesh_all, A, p.r_rotor_out, p.r_stator_in,
                                     p.stack_length)
@@ -4960,32 +5211,35 @@ def fem_transient_sliding_band(
                  if _coil_idx.size else np.zeros((2, 0)))
     P_cu_ac_series, P_cu_ac_avg = _prox_eddy_split(
         _hist_cx, _hist_cy, _coil_idx, _coil_cen, areas_s, _sigma_cu, _w_cu, _h_cu)
-    # Solid-steel shaft: high μ → tiny skin depth → small loss (and little flux
-    # reaches this deep).  Computed for completeness.
-    # σ from the ASSIGNED shaft material (e.g. aluminium 6061 = 2.58e7 S/m —
-    # the old hardcoded carbon-steel 4.5e6 was 5.7× off); μ_r ≈ 1 for Al, but
-    # keep the steel default when the assigned material is magnetic steel.
+    # Shaft eddy (any SOLID conductor, e.g. aluminium).  Computed the SAME geometry-
+    # exact field way as the magnets — NO slab/cylinder shape factor, NO skin-depth
+    # cap, NO fudge:
+    #     P = σ · ∫ (∂A/∂t − ⟨∂A/∂t⟩_body)² dA · L · NS
+    # integrated over the REAL shaft element areas, with the area-mean ∂A/∂t removed so
+    # the net axial current ∮J dA = 0 over the single connected shaft body.  Because it
+    # integrates the actual E = −∂A/∂t over the actual geometry, it reproduces the exact
+    # solid-cylinder loss with no shape correction.  The co-rotating shaft sees the
+    # magnet field as DC → only the AC slot-ripple / armature reaction dissipates; ∂A/∂t
+    # is the slip-jitter-smoothed material derivative (same _angle_ddt_2d as the
+    # magnets).  UNIVERSAL: every σ>0 domain (magnet, shaft, …) uses this identical
+    # formula; laminated iron (σ=0) contributes nothing here (its loss is in CoreLoss).
     _sigma_shaft = _sigma_shaft_lib
-    _mu_r_shaft  = 200.0 if _sigma_shaft < 1e7 else 1.0
-    _r_shaft     = max(1e-3, float(getattr(p, "r_shaft_out",
-                                           getattr(p, "r_rotor_in", 0.02)) or 0.02))
-    _delta_sh    = math.sqrt(2.0 / (_sigma_shaft * _omega_e * MU0 * _mu_r_shaft))
-    _d_sh_eff    = min(2.0 * _r_shaft, 2.0 * _delta_sh)
-    # Shaft eddy loss: NEGLIGIBLE in this 2-D model — reported as ~0.
-    # Physics (per Vadim): the shaft co-rotates with the rotor, so the dominant
-    # MAGNET field is DC in its frame → no loss; the stator slot ripple has decayed
-    # to essentially nothing at the shaft radius; the only real loss is the tiny
-    # coil-current (armature-reaction) term, which is 0 at no-load and minimal on
-    # load.  That term is below what this pipeline can resolve: a ¼-sector models
-    # the connected full-ring shaft as a wedge that sees a SPURIOUS order-1 net-flux
-    # swing, and aluminium's huge σ (≈43× the magnet) amplifies both that and the
-    # slip-merge jitter — every numerical estimate came out a different artefact
-    # (lab-frame slab 59 W, field-based 0.2–2 kW), none physical.  So we report the
-    # honest leading-order value, ~0.  (A faithful small number would need a
-    # full-ring mesh + the coupled σ·∂A/∂t eddy solve, which carries the reaction
-    # that damps the aluminium loss — a separate, larger build.)
-    P_shaft_series = [0.0] * n_total
-    P_shaft_avg = 0.0
+    if (_shaft_group is not None and _hist_Ash
+            and np.asarray(_hist_Ash[0]).size and _sigma_shaft > 0.0):
+        _Ash  = np.asarray(_hist_Ash, float)                      # (N, n_shaftnodes)
+        _dAsh = _angle_ddt_2d(_Ash)                               # material ∂A/∂t = −E
+        _dA_e = _dAsh[:, _shaft_group["tri"]].mean(axis=1)        # (N, E) per element
+        _ar_sh = _shaft_group["areas"]
+        _w_sh  = _ar_sh / max(_ar_sh.sum(), 1e-30)
+        _F_sh  = _dA_e - (_dA_e * _w_sh[None, :]).sum(axis=1, keepdims=True)   # ∮J=0
+        _Psh_t = _declip(_sigma_shaft
+                         * np.sum(_F_sh ** 2 * _ar_sh[None, :], axis=1)
+                         * p.stack_length * NS)
+        P_shaft_series = _Psh_t.tolist()
+        P_shaft_avg    = float(np.mean(_Psh_t))
+    else:
+        P_shaft_series = [0.0] * n_total
+        P_shaft_avg    = 0.0
 
     # ── Field-based rotor eddy loss from the magnetodynamic solve (Stage 1) ──
     # ∫σ(∂A/∂t)² straight from the eddy field — NO slab/d/cap.  Compare against
@@ -5095,6 +5349,47 @@ def fem_transient_sliding_band(
 
         _field_snap["loss_dens"] = _dens.tolist()
 
+    # ── Honest (coupled, reaction-included) rotor eddy — ADDITIVE diagnostic ──────
+    # Solve the magneto-DYNAMIC problem on the REAL rotor mesh (eddy_solver_2d),
+    # driven by the captured rotor-node A history, so the skin REACTION the post-
+    # process above IGNORES is included.  Geometry-exact (iron mu_r + every conductor
+    # shape are in the mesh), uniform per body (each magnet + the shaft = one floating
+    # body, the SAME formula).  Fail-safe: any error -> 0, production numbers intact.
+    P_mag_honest = P_shaft_honest = 0.0
+    if honest_eddy and _hist_A_rotor:
+        try:
+            from motor_ai_sim.simulation.eddy_solver_2d import honest_rotor_eddy as _hre
+            _rm = half["r"]["mesh"]
+            _tags_r = np.zeros(_rm.t.shape[1], int)
+            for _tg, _els in half["r"]["cells"].items():
+                _tags_r[np.asarray(_els, int)] = int(_tg)
+            _mag_tags_h = [int(tg) for tg in np.unique(_tags_r) if int(tg) >= DOM_MAG_BASE]
+
+            def _muf(tg):
+                tg = int(tg)
+                if tg >= DOM_MAG_BASE:                 # magnet (NdFeB recoil ~1.05)
+                    return 1.05
+                if tg == DOM_ROTOR:                    # rotor back-iron: converged mu_r
+                    try:
+                        _n = nu_el.get("r", {}).get(DOM_ROTOR)
+                        if _n is not None and np.size(_n):
+                            return 1.0 / (MU0 * float(np.mean(_n)))
+                    except Exception:
+                        pass
+                    return 1000.0
+                return 1.0                             # shaft (Al) / air = non-magnetic
+            P_mag_honest, P_shaft_honest, _hfreqs = _hre(
+                np.asarray(_rm.p, float), np.asarray(_rm.t, int), _tags_r,
+                _muf, _sigma_of_tag, _mag_tags_h, DOM_SHAFT,
+                np.asarray(_hist_A_rotor, float), float(n_total) * dt,
+                float(p.stack_length), float(NS))
+            log.info("HONEST rotor eddy: mag=%.3f shaft=%.3f W (%d harmonics) | "
+                     "resistance-limited mag=%.3f shaft=%.3f W",
+                     P_mag_honest, P_shaft_honest, len(_hfreqs), P_mag_avg, P_shaft_avg)
+        except Exception as _e:
+            log.warning("honest_eddy diagnostic failed (production unaffected): %s", _e)
+            P_mag_honest = P_shaft_honest = 0.0
+
     return {
         "method": "sliding_band",
         # 'field' = magnet/shaft losses from the σ·∂A/∂t magnetodynamic solve
@@ -5117,6 +5412,8 @@ def fem_transient_sliding_band(
         "P_mag_eddy_W": P_mag_series, "P_loss_total_W": P_tot_series,
         "P_cu_dc_W": P_cu_dc, "P_cu_ac_W": P_cu_ac_series,
         "P_shaft_eddy_W": P_shaft_series,
+        "P_mag_honest_W": round(float(P_mag_honest), 3),    # coupled (reaction) eddy — diagnostic
+        "P_shaft_honest_W": round(float(P_shaft_honest), 3),
         "P_cu_ac_solve_W": round(P_cu_ac_solve_W, 1),       # field-based copper AC (eddy solve)
         "P_cu_total_solve_W": round(P_cu_total_solve_W, 1),  # field-based copper total
         "P_mech_avg_W": P_mech_avg,                          # energy-conserving shaft power
@@ -5313,6 +5610,8 @@ def em_transient_eval(
     component_mesh_mm=None,
     geo_override=None,
     progress_cb=None,
+    hi_fidelity: bool = False,
+    structured_gap: bool = False,
 ) -> Dict:
     """THE single canonical sliding-band transient invocation.
 
@@ -5334,7 +5633,8 @@ def em_transient_eval(
         rotor_eddy=bool(rotor_eddy), demag=bool(demag),
         torque_filter=bool(torque_filter), pole_copy=pole_copy,
         component_mesh_mm=(component_mesh_mm or {}), geo_override=geo_override,
-        progress_cb=progress_cb)
+        progress_cb=progress_cb, hi_fidelity=bool(hi_fidelity),
+        structured_gap=bool(structured_gap))
 
 
 def fem_quasistatic_transient(

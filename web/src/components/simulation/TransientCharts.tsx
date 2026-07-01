@@ -278,6 +278,8 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
       torque_filter:      torqueFilter,
       // Bit-identical pole/slot mesh (Mesh-tab "Periodic" toggle).
       pole_copy:          readMeshSetting('poleCopy', false),
+      // ANSYS-style concentric-ring air-gap mesh (Mesh-tab "Air-gap mesh" toggle).
+      structured_gap:     readMeshSetting('structuredGap', false),
       // Copper-loss physics: coil temperature → ρ_Cu(T); end-winding factor
       // (0 = auto-estimate from geometry) for the copper the 2-D field misses.
       coil_temp_c:        readSimSetting('coilTemp',   120.0),

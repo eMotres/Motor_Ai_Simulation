@@ -52,7 +52,7 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
             min_size_mm: float = 0.3, n_sectors: int = -1,
             pole_copy=None, torque_filter: bool = True,
             gap_layers: float = 3.0, end_winding_factor: float = 0.0,
-            rotor_eddy: bool = False) -> Dict[str, Any]:
+            rotor_eddy: bool = False, hi_fidelity: bool = False) -> Dict[str, Any]:
     """Run the sliding-band transient for one candidate and return mean
     performance metrics (torque, efficiency, ripple, losses, mass).
 
@@ -84,6 +84,14 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         raise ValueError(
             f"infeasible winding: {n_req} turns cannot fit the slot even clamped")
 
+    # A parameter SWEEP / optimization explores GEOMETRY, and k_end is a FUNCTION of the
+    # geometry (tooth_width, slot_width, …).  Pinning ONE k_end across changing geometry
+    # would freeze the end-winding copper loss — yet a wider tooth has a longer end-turn
+    # and MUST cost more DC I²R copper.  So always recompute k_end PER-POINT from each
+    # candidate's geometry (auto), ignoring any single pinned value the Simulation tab
+    # sent.  This keeps the copper LOSS and the copper MASS (mass uses auto k_end via
+    # _masses below) on the SAME per-point k_end — consistent and tooth-dependent.
+    end_winding_factor = 0.0
     rpm = float(cfg.get("simulation", {}).get("rpm", 3950.0))
     omega = 2 * math.pi * rpm / 60.0
 
@@ -102,6 +110,8 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         "coil_temp_c": float(coil_temp_c), "gap_layers": float(gap_layers),
         "end_winding_factor": float(end_winding_factor), "rotor_eddy": bool(rotor_eddy),
         "pole_copy": pole_copy, "torque_filter": bool(torque_filter),
+        "hi_fidelity": bool(hi_fidelity),   # 2× slip nodes + finer mesh + gap layers → smoother raw torque
+
         # Ambient mesh/sim params the Simulation tab passes but the optimizer used to
         # omit (so get_fem_transient fell back to ITS defaults — e.g. outer_air 1.3 vs
         # Sim's 1.2). Pull them from the active design's config so the optimizer's
@@ -158,7 +168,8 @@ if __name__ == "__main__":
                       torque_filter=spec.get("torque_filter", True),
                       gap_layers=spec.get("gap_layers", 3.0),
                       end_winding_factor=spec.get("end_winding_factor", 0.0),
-                      rotor_eddy=spec.get("rotor_eddy", False))
+                      rotor_eddy=spec.get("rotor_eddy", False),
+                      hi_fidelity=spec.get("hi_fidelity", False))
         sys.stdout.write("@@RESULT@@" + json.dumps({"ok": True, "res": res}))
     except Exception as e:  # noqa: BLE001
         sys.stdout.write("@@RESULT@@" + json.dumps({"ok": False, "error": str(e)}))

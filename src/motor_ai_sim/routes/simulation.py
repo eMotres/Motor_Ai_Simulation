@@ -1275,6 +1275,8 @@ async def build_fem_mesh_2d_sliding_band(
     stator_fillet_mm:  float = 0.0,     # extra Shapely fillet smoothing
     component_mesh:    str   = "",      # JSON {comp: size_mm} per-part mesh size
     pole_copy:         bool  = False,   # bit-identical pole/slot template-copy mesh
+    hi_fidelity:       bool  = False,   # match the SOLVER's hi-fi mesh: feature÷8 + gap≥4
+    structured_gap:    bool  = False,   # ANSYS-style concentric-ring gap (experimental toggle)
     geo:               Optional[str] = None,  # per-request geometry override (multi-user)
 ):
     """Build TWO independent meshes (stator + rotor) and stitch them into
@@ -1300,7 +1302,8 @@ async def build_fem_mesh_2d_sliding_band(
            round(normal_deviation, 1), round(aspect_ratio, 1),
            round(outer_air_factor, 2), round(band_thickness_mm, 2),
            round(gap_layers, 1), int(n_sectors), round(stator_fillet_mm, 2),
-           int(bool(pole_copy)), tuple(sorted(_comp_mesh.items())), _gh)
+           int(bool(pole_copy)), int(bool(hi_fidelity)), int(bool(structured_gap)),
+           tuple(sorted(_comp_mesh.items())), _gh)
     if key in _fem_mesh_sb_cache:
         return _fem_mesh_sb_cache[key]
 
@@ -1338,7 +1341,8 @@ async def build_fem_mesh_2d_sliding_band(
     polys = _simplify_polys(polys, tol_mm=surface_deviation,
                              stator_fillet_mm=stator_fillet_mm,
                              normal_dev_deg=normal_deviation,
-                             band_mode="merged")
+                             band_mode="merged",
+                             gap_layers=gap_layers, structured_gap=structured_gap)
     # in_band / out_band now come straight from get_2d_polygons (full inner
     # air disk + outer air annulus), so the old air-gap-splitting motion
     # band is no longer needed for the sliding-band path.
@@ -1347,14 +1351,30 @@ async def build_fem_mesh_2d_sliding_band(
     # gap_layers, normal_deviation) — the SAME values the transient solver now
     # uses (its old hard clamps were removed), so this is byte-for-byte the mesh
     # that computes T(t)/V(t)/losses.
+    # Match the SOLVER's auto-refine EXACTLY (fem_transient_sliding_band): refine the
+    # target element to smallest-feature/8 under hi-fi (/4 otherwise), and force >=4
+    # air-gap layers under hi-fi.  Without this the Mesh viewer drew a COARSER mesh than
+    # the transient actually solved (especially with hi-fidelity ON) — the "why is the
+    # real mesh different?" gap.  With it, the viewer is byte-for-byte the solved mesh.
+    _eff_mesh = float(mesh_size_mm); _eff_gap = float(gap_layers)
+    try:
+        _feat = min(float(motor.parameters.get("slot_width", 1e9) or 1e9),
+                    float(motor.parameters.get("tooth_width", 1e9) or 1e9))
+        if 0.0 < _feat < 1e8:
+            _eff_mesh = min(_eff_mesh, max(float(min_size_mm),
+                                           _feat / (8.0 if hi_fidelity else 4.0)))
+    except Exception:
+        pass
+    if hi_fidelity:
+        _eff_gap = max(_eff_gap, 4.0)
     try:
         mesh_s, tags_s, classify_s, mesh_r, tags_r, classify_r = \
             _build_sliding_band_meshes(
                 polys, rotor_angle_deg=rotor_angle_deg,
-                mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm,
+                mesh_size_mm=_eff_mesh, min_size_mm=min_size_mm,
                 normal_deviation_deg=normal_deviation, aspect_ratio=aspect_ratio,
                 outer_air_factor=outer_air_factor,
-                band_thickness_mm=band_thickness_mm, gap_layers=gap_layers,
+                band_thickness_mm=band_thickness_mm, gap_layers=_eff_gap,
                 n_sectors=(1 if _full_ring_view else n_sectors),
                 geo_cfg=motor.parameters,
                 component_mesh_mm=_comp_mesh,
@@ -2499,6 +2519,8 @@ def get_fem_transient(
     demag:               bool  = False,   # ← per-element irreversible demagnetisation (de-rates Br → torque)
     torque_filter:       bool  = True,    # ← band-limit T(t) to physical 6·k orders (off = raw)
     pole_copy:           bool  = False,   # ← bit-identical pole/slot template-copy mesh
+    hi_fidelity:         bool  = False,   # ← 2× slip nodes + finer mesh → smoother raw torque (slower)
+    structured_gap:      bool  = False,   # ← ANSYS-style concentric-ring air-gap mesh (experimental)
     restore:             bool  = False,   # ← on open: return the LAST saved transient (stale if params differ) instead of recomputing
     geo:                 Optional[str] = None,  # ← per-request geometry override (multi-user); absent = global config
 ):
@@ -2531,7 +2553,7 @@ def get_fem_transient(
                    round(coil_temp_c, 1), round(end_winding_factor, 3),
                    int(bool(rotor_eddy)), round(gap_layers, 1),
                    int(bool(demag)), int(bool(torque_filter)),
-                   int(bool(pole_copy)),
+                   int(bool(pole_copy)), int(bool(hi_fidelity)), int(bool(structured_gap)),
                    tuple(sorted(_comp_mesh.items())))
         if _geo_ov:   # distinct cache entry per overridden geometry (no-geo key unchanged)
             _sb_key = _sb_key + (tuple(sorted(_geo_ov.items())),)
@@ -2602,7 +2624,8 @@ def get_fem_transient(
                     rotor_eddy=bool(rotor_eddy), demag=bool(demag),
                     torque_filter=bool(torque_filter), pole_copy=bool(pole_copy),
                     component_mesh_mm=_comp_mesh, geo_override=_geo_ov,
-                    progress_cb=_sb_progress)
+                    progress_cb=_sb_progress, hi_fidelity=bool(hi_fidelity),
+                    structured_gap=bool(structured_gap))
             finally:
                 _fem_transient_progress["current"]["running"] = False
             # ── Summary block (masses, loss split, KV, efficiency, specific
@@ -2612,7 +2635,8 @@ def get_fem_transient(
                 from motor_ai_sim.simulation.geometry_2d import params_from_config as _pfc
                 from motor_ai_sim.config import get_config as _gc
                 _p = _pfc(); _geo_cfg = _gc().get("geometry", {})
-                _masses = _compute_masses(_p, _geo_cfg)
+                _masses = _compute_masses(_p, _geo_cfg,
+                                          k_end=float(_sbres.get("end_winding_factor", 0.0) or 0.0))
                 _m_tot = float(_masses["total_active_kg"])
                 _rpm = float(_sbres.get("rpm", 3950.0))
                 _Tavg = float(_sbres.get("T_avg_Nm", 0.0))
@@ -3453,8 +3477,8 @@ def _compute_losses(p, geo_cfg, wind_cfg, sim_cfg, MMF, B_pm, freq, omega_e, P_c
     B_stat_eff = math.sqrt((B_tooth**2 + B_back**2) / 2.0)
     k_st       = 0.001088          # calibrated for 20SW1200 at 50 Hz, 1 T
     P_sp_stat  = k_st * freq**1.6 * B_stat_eff**2     # W/kg
-    m_stator   = (math.pi * (p.r_stator_out**2 - p.r_stator_in**2) * p.stack_length
-                  - N_slots * p.slot_width_m * p.slot_height_m * p.stack_length) * 7650
+    from motor_ai_sim.masses import compute_masses
+    m_stator   = compute_masses(p, geo_cfg)["stator"]   # single source (yoke + teeth ∝ tooth_width)
     P_fe_stat  = P_sp_stat * m_stator
 
     # ── 2. Fe rotor — slot-harmonic frequency ─────────────────────────────────
@@ -3602,8 +3626,14 @@ def _compute_torque(p, geo_cfg, wind_cfg, sim_cfg, gamma_deg: float) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 # Component mass calculator
 # ─────────────────────────────────────────────────────────────────────────────
-def _compute_masses(p, geo_cfg: dict) -> dict:
+def _compute_masses(p, geo_cfg: dict, k_end: float = 0.0) -> dict:
     """Calculate mass of each motor component.
+
+    ``k_end`` (0 = auto): the end-winding factor to bill the copper at.  Pass the
+    SAME value the loss/R path used (the solver returns it as ``end_winding_factor``)
+    so the copper MASS and the copper LOSS / phase R agree — whether k_end is the
+    geometric auto value or a user pin.  0 → ``compute_masses`` derives it from the
+    geometry (matching the solver's own auto path).
 
     Materials and densities:
       20SW1200 silicon steel : 7650 kg/m³
@@ -3612,68 +3642,24 @@ def _compute_masses(p, geo_cfg: dict) -> dict:
       Rotor back-iron (steel): 7650 kg/m³
       Al6061 shaft           : 2700 kg/m³
     """
-    import math
-    RHO_STEEL = 7650.0
-    RHO_CU    = 8900.0
-    RHO_MAG   = 7500.0
-    RHO_AL    = 2700.0
-
-    L  = p.stack_length
-    mm = 1e-3
-    n_wires    = geo_cfg.get("num_wires_per_slot", 14)
-    wire_w     = geo_cfg.get("wire_width",  5.0) * mm
-    wire_h     = geo_cfg.get("wire_height", 0.6) * mm
-    fill       = p.fill_factor
-    num_slots  = p.num_slots
-
-    # ── 1. Stator core (back-iron + teeth), subtract slots ────────────────────
-    V_stator_full = math.pi * (p.r_stator_out**2 - p.r_stator_in**2) * L
-    V_slots       = num_slots * p.slot_width_m * p.slot_height_m * L
-    V_stator_net  = V_stator_full - V_slots
-    m_stator      = V_stator_net * RHO_STEEL
-
-    # ── 2. Copper windings (slot portion + end-turns) ─────────────────────────
-    wire_area     = wire_w * wire_h                          # one wire [m²]
-    V_cu_slot     = num_slots * wire_area * n_wires * L      # in slots
-    # End-winding length per coil side ≈ half pole-pitch + slot depth
-    r_mid_slot    = p.r_stator_in + p.slot_height_m * 0.5
-    tau_slot      = 2 * math.pi * r_mid_slot / num_slots
-    L_endturn     = math.pi * tau_slot / 2 + p.slot_height_m  # one side [m]
-    V_cu_end      = num_slots * wire_area * n_wires * 2 * L_endturn
-    m_cu          = (V_cu_slot + V_cu_end) * RHO_CU
-
-    # ── 3. Permanent magnets ──────────────────────────────────────────────────
-    V_mag = math.pi * (p.r_rotor_out**2 - p.r_rotor_in**2) * L * p.magnet_fill_fraction
-    m_mag = V_mag * RHO_MAG
-
-    # ── 4. Rotor back-iron (below magnets to shaft OD) ────────────────────────
-    V_rotor = math.pi * (p.r_rotor_in**2 - p.r_shaft_in**2) * L
-    m_rotor = V_rotor * RHO_STEEL
-
-    # ── 5. Shaft (Al6061, only active length — no shaft extension) ────────────
-    V_shaft = math.pi * p.r_shaft_in**2 * L
-    m_shaft = V_shaft * RHO_AL
-
-    # ── 6. Air gap (for completeness, mass = 0) ───────────────────────────────
-    m_air = 0.0
-
-    m_total = m_stator + m_cu + m_mag + m_rotor + m_shaft
-
-    # Specific power / torque (at gamma=90°, rough)
-    # Use T_max placeholder — exact from torque endpoint
+    # SINGLE SOURCE: motor_ai_sim.masses.compute_masses — identical mass to the sweep
+    # and all three optimizers (stator iron = back-iron yoke + teeth ∝ tooth_width).
+    from motor_ai_sim.masses import compute_masses, RHO_STEEL, RHO_CU, RHO_MAG, RHO_AL
+    m = compute_masses(p, geo_cfg, k_end=k_end)
+    m_total = m["total"]
     return {
         "components": [
             {"name": "Stator core (20SW1200)",  "material": "silicon steel", "density_kg_m3": RHO_STEEL,
-             "volume_cm3": round(V_stator_net*1e6, 1), "mass_kg": round(m_stator, 3)},
+             "volume_cm3": round(m["V_stator"]*1e6, 1), "mass_kg": round(m["stator"], 3),
+             "note": f"yoke {round(m['V_yoke']*1e6,1)}cm3 + teeth {round(m['V_teeth']*1e6,1)}cm3 (∝ tooth_width)"},
             {"name": "Copper windings (Cu)",    "material": "copper",        "density_kg_m3": RHO_CU,
-             "volume_cm3": round((V_cu_slot+V_cu_end)*1e6, 1), "mass_kg": round(m_cu, 3),
-             "note": f"slot {round(V_cu_slot*1e6,1)}cm3 + end-turn {round(V_cu_end*1e6,1)}cm3"},
+             "volume_cm3": round(m["V_cu"]*1e6, 1), "mass_kg": round(m["cu"], 3)},
             {"name": "Magnets (F45SH NdFeB)",  "material": "NdFeB",          "density_kg_m3": RHO_MAG,
-             "volume_cm3": round(V_mag*1e6, 1), "mass_kg": round(m_mag, 3)},
+             "volume_cm3": round(m["V_mag"]*1e6, 1), "mass_kg": round(m["mag"], 3)},
             {"name": "Rotor back-iron (steel)", "material": "silicon steel",  "density_kg_m3": RHO_STEEL,
-             "volume_cm3": round(V_rotor*1e6, 1), "mass_kg": round(m_rotor, 3)},
+             "volume_cm3": round(m["V_rotor"]*1e6, 1), "mass_kg": round(m["rotor"], 3)},
             {"name": "Shaft (Al6061)",          "material": "aluminium",      "density_kg_m3": RHO_AL,
-             "volume_cm3": round(V_shaft*1e6, 1), "mass_kg": round(m_shaft, 3)},
+             "volume_cm3": round(m["V_shaft"]*1e6, 1), "mass_kg": round(m["shaft"], 3)},
         ],
         "total_active_kg": round(m_total, 3),
         "note": "Active components only (no housing/frame/bearings). Typical frame adds 30-50% mass.",
@@ -3767,11 +3753,11 @@ def get_physics_sweep(
     f_slot_harm  = freq * num_slots / pole_pairs
     omega_slot   = 2 * math.pi * f_slot_harm
 
-    # Active-iron masses (subtract slot volume from stator ring)
-    rho_fe   = 7650.0
-    m_stator = (math.pi * (p.r_stator_out**2 - p.r_stator_in**2) * p.stack_length
-                - num_slots * p.slot_width_m * p.slot_height_m * p.stack_length) * rho_fe
-    m_rotor  = math.pi * (p.r_rotor_in**2 - p.r_shaft_in**2) * p.stack_length * rho_fe
+    # Active-iron masses — single source (yoke + teeth ∝ tooth_width; same as Simulation/sweep)
+    from motor_ai_sim.masses import compute_masses
+    _mm      = compute_masses(p, geo_c)
+    m_stator = _mm["stator"]
+    m_rotor  = _mm["rotor"]
 
     # Magnet geometry
     r_mid_mag  = (p.r_rotor_out + p.r_rotor_in) / 2

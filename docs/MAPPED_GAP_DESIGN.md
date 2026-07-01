@@ -96,3 +96,22 @@ sector annulus:
 - [x] Core technique proven (`_tf_annulus_test.py`).
 - [ ] Integration into `_build_sliding_band_meshes` (route A or B).
 - [ ] Verify exact rings + solver.
+
+## ROUTE A — PROVEN (2026-07-01, Vadim's cylinder idea)
+
+`_routeA_PROVEN.py`: build the gap as concentric cylinder-sector cells (2K radial × S
+angular) as OCC surfaces IN THE SAME MODEL as the iron, `occ.fragment` everything, then
+set each gap cell transfinite (arcs → M+1 nodes, radial edges → 2 nodes, surface
+transfinite). Result: gap meshes as EXACTLY 2K+1 radial levels, uniform Gap/(2K), and
+the whole thing is ONE conforming mesh — **fragment gives conformity for free, no manual
+weld.** This is why route A beats route B (weld): the node-mismatch wall never appears.
+
+Measured (r_ro=12.1, r_si=12.3, K=2): radial levels [12.1, 12.15, 12.2, 12.25, 12.3] = 4
+uniform rings. One conforming mesh (2073 tris). Cell identification after fragment needs
+care (found 72 of 96 — some merged with iron, but rings still exact).
+
+### Integration (route A, for _build_sliding_band_meshes)
+- Per half: rotor gap cells r_ro→mid, stator gap cells mid→r_si (seams don't cross mid).
+- Build cells in the SAME OCC model as that half's iron (build_mesh_from_polygons), add
+  to the fragment, set transfinite. Slip ring stays uniform at mid for the sliding.
+- Free mode (structured_gap=False) unchanged.

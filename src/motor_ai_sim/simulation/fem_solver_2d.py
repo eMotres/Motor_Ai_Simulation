@@ -531,35 +531,76 @@ def _simplify_polys(polys: dict, tol_mm: float = 0.005,
                 # strip alignment is lost.  The mesh builder reads this.
                 out["transfinite_ring_radii_mm"] = [mid_r - _delta, mid_r + _delta]
             elif _do_struct and _r_ro_est > 0 and _r_si_est < float("inf") and _gap_est > 0.05:
-                # STRUCTURED merged gap: concentric rings r_ro→mid_r (rotor) and
-                # mid_r→r_si (stator); the slip stays the SINGLE shared ring at mid_r,
-                # so the mesh is CONTINUOUS (no empty band) — this is the path the Mesh
-                # viewer uses, so the user sees the ANSYS-style structured gap directly.
+                # ── STRUCTURED (mapped) gap — ROUTE A ─────────────────────────
+                # DO NOT partition the gap into thin shapely annuli here (that is
+                # the route-B approach that fails: OCC merges sub-tolerance rings
+                # away and the survivors come back with ragged node counts).
+                # Instead: EXCLUDE the gap annulus from in_band / out_band and
+                # hand the mesh builder a spec so it builds the gap as concentric
+                # cylinder-sector CELLS (2K radial × S angular OCC surfaces) IN
+                # THE SAME occ.fragment as the iron, then sets each cell
+                # transfinite → EXACTLY 2K uniform rings, one conforming mesh.
+                #   rotor half owns r_ro→mid_r (K rings), stator half owns
+                #   mid_r→r_si (K rings) → 2K total.  The slip ring at mid_r is
+                #   built on the uniform S·M = n_slip grid so the sliding coupling
+                #   (_ring node identification) is untouched.
                 _K = max(1, int(round(float(gap_layers))))
-                _lo = _r_ro_est + 0.02
-                _hi = _r_si_est - 0.02
-                _radii_in  = sorted({_lo + (mid_r - _lo) * i / _K for i in range(_K)} | {mid_r})
-                _radii_out = sorted({mid_r} | {mid_r + (_hi - mid_r) * i / _K for i in range(1, _K + 1)})
-                _rings_in  = [_ring_pts(r) for r in _radii_in]
-                _rings_out = [_ring_pts(r) for r in _radii_out]
-                _core = _SPoly2(_rings_in[0])
+
+                def _drop_tiny(g, amin=0.01):
+                    # Clipping the annulus off a polygonal (chorded) OD leaves a
+                    # crescent SLIVER between every chord and the true circle.
+                    # These are ~0 area — drop them so only the real pockets /
+                    # shaft / outer shell remain (else OCC shreds the gap).
+                    ps = list(g.geoms) if hasattr(g, "geoms") else [g]
+                    ps = [q for q in ps
+                          if q.geom_type == "Polygon" and q.area >= amin]
+                    if not ps:
+                        return None
+                    return ps[0] if len(ps) == 1 else _SMulti2(ps)
+
+                # in_band = free inner air (disk(mid_r) − solids) with the pure
+                # gap RING r_ro→mid_r SUBTRACTED (a clean annulus polygon), so the
+                # transfinite cells own that ring.  We SUBTRACT an annulus rather
+                # than INTERSECT disk(r_ro): the pockets lie fully below r_ro so
+                # their boundaries are untouched (no disk-arc points injected →
+                # the OCC converter stays happy).  Drop any sliver remnants.
+                _gap_ring_in = _SPoly2(mid_ring, [_ring_pts(_r_ro_est)])
+                in_band = _SPoly2(mid_ring)
                 if rotor_solids:
-                    _core = _core.difference(_uu(rotor_solids))
-                if not _core.is_valid: _core = _core.buffer(0)
-                _in_parts = _parts(_core)
-                for _i in range(len(_rings_in) - 1):
-                    _in_parts.append(_SPoly2(_rings_in[_i + 1], [_rings_in[_i]]))
-                out["in_band"] = _SMulti2(_in_parts)
-                _out_parts = []
-                for _i in range(len(_rings_out) - 1):
-                    _out_parts.append(_SPoly2(_rings_out[_i + 1], [_rings_out[_i]]))
-                _shell = _SPoly2(rout_ring, [_rings_out[-1]])
+                    in_band = in_band.difference(_uu(rotor_solids))
+                in_band = in_band.difference(_gap_ring_in)
+                if not in_band.is_valid: in_band = in_band.buffer(0)
+                in_band = _drop_tiny(in_band)
+                if in_band is not None:
+                    # 10 µm simplify: the annulus cut leaves pocket-top points
+                    # that, after the sector clip, break the OCC converter's loop
+                    # closure ("curve loop is not closed").  10 µm ≪ the 200 µm
+                    # gap; the cells (not this polygon) pin the exact r_ro ring
+                    # and fragment reconciles the offset.
+                    in_band = in_band.simplify(0.01, preserve_topology=True)
+                    out["in_band"] = in_band
+                # out_band = free outer air (annulus mid_r→r_out − stator) with the
+                # gap ring mid_r→r_si SUBTRACTED, so the cells own it.  The slot
+                # openings sit above r_si so they are untouched.
+                _gap_ring_out = _SPoly2(_ring_pts(_r_si_est), [mid_ring])
+                out_band = _SPoly2(rout_ring, [mid_ring])
                 if out.get("stator") is not None:
-                    _shell = _shell.difference(out["stator"])
-                if not _shell.is_valid: _shell = _shell.buffer(0)
-                _out_parts += _parts(_shell)
-                out["out_band"] = _SMulti2(_out_parts)
-                out["transfinite_ring_radii_mm"] = sorted(set(_radii_in + _radii_out))
+                    out_band = out_band.difference(out["stator"])
+                out_band = out_band.difference(_gap_ring_out)
+                if not out_band.is_valid: out_band = out_band.buffer(0)
+                out_band = _drop_tiny(out_band)
+                if out_band is not None:
+                    out_band = out_band.simplify(0.01, preserve_topology=True)
+                    out["out_band"] = out_band
+                # Spec consumed by build_mesh_from_polygons (per half).  It knows
+                # its own n_sectors and picks S (sectors/wedge) + M (arc divisions)
+                # so S·M·n_sectors = n_slip → mid ring lands on the global grid.
+                out["structured_gap_spec"] = {
+                    "r_ro": float(_r_ro_est), "mid": float(mid_r),
+                    "r_si": float(_r_si_est), "K": int(_K), "n_slip": int(_N),
+                }
+                # No transfinite_ring_radii_mm here — the cells carry their own
+                # transfinite seeding; the old ring-radii path is route B.
             else:
                 in_band = _SPoly2(mid_ring)
                 if rotor_solids:
@@ -862,6 +903,17 @@ def _split_polys_for_sliding_band(polys: dict) -> Tuple[dict, dict]:
     if polys.get("mid_r_mm") is not None:
         polys_s["mid_r_mm"] = polys["mid_r_mm"]
         polys_r["mid_r_mm"] = polys["mid_r_mm"]
+    # Structured-gap (route-A) spec: give each half its OWN gap band range so the
+    # mesh builder fills only that half's slice with transfinite cells.
+    #   rotor half:  r_ro → mid   (K rings, inner half of the gap)
+    #   stator half: mid  → r_si  (K rings, outer half of the gap)
+    _sg = polys.get("structured_gap_spec")
+    if _sg is not None:
+        _base = {"K": int(_sg["K"]), "n_slip": int(_sg["n_slip"])}
+        polys_r["structured_gap_spec"] = dict(
+            _base, r_lo=float(_sg["r_ro"]), r_hi=float(_sg["mid"]), half="rotor")
+        polys_s["structured_gap_spec"] = dict(
+            _base, r_lo=float(_sg["mid"]), r_hi=float(_sg["r_si"]), half="stator")
     return polys_s, polys_r
 
 
@@ -1615,6 +1667,66 @@ def build_periodic_coil_mesh(geo_cfg: dict, num_slots: int,
     return verts_mm * 1e-3, tris   # mm → m
 
 
+def _structured_gap_sm(n_slip: int, n_sectors: int,
+                       m_target: int = 14) -> Tuple[int, int]:
+    """Pick (S, M) for the structured-gap cells of ONE wedge (route A).
+
+    S = number of angular cells in the [0, 2π/n_sectors] wedge, M = arc
+    divisions per cell.  Requirement: S·M = n_slip / n_sectors (so the mid
+    ring lands EXACTLY on the global slip grid 2πj/n_slip and the sliding
+    coupling's _ring() finds a uniform ring).  Among the (S, M) factorings
+    of slip_wedge, prefer M near ``m_target`` (~14, like the proven proto)
+    to keep cell aspect reasonable and the surface count modest.
+    """
+    slip_wedge = int(n_slip) // int(n_sectors)
+    if slip_wedge <= 0:
+        return 1, max(1, int(n_slip))
+    # candidate M = every divisor of slip_wedge; pick the one closest to target
+    divs = [d for d in range(1, slip_wedge + 1) if slip_wedge % d == 0]
+    M = min(divs, key=lambda d: (abs(d - m_target), d))
+    S = slip_wedge // M
+    return S, M
+
+
+def _build_structured_gap_cells(occ, spec: dict, n_sectors: int,
+                                center_pt: int) -> Tuple[List[int], float, float, int]:
+    """Build the route-A gap cells (concentric cylinder-sectors) for one half
+    as OCC plane surfaces, over the [0, 2π/n_sectors] wedge.
+
+    ``spec`` = {r_lo, r_hi, K, n_slip}.  Returns (cell_surface_tags, r_lo, r_hi,
+    M) — the caller adds the tags to the SAME occ.fragment as the iron, then
+    (after fragment) identifies cells by centroid radius in (r_lo, r_hi) and
+    sets each transfinite: arcs → M+1 nodes, radial edges → 2 nodes.  K radial
+    layers → K+1 uniform radial levels in this half's gap slice.
+    """
+    r_lo = float(spec["r_lo"]); r_hi = float(spec["r_hi"])
+    K = max(1, int(spec["K"]))
+    n_slip = int(spec["n_slip"])
+    ns = max(1, int(n_sectors))
+    Phi = 2.0 * math.pi / ns
+    S, M = _structured_gap_sm(n_slip, ns)
+
+    def _P(r, a):
+        return occ.addPoint(r * math.cos(a), r * math.sin(a), 0)
+
+    radii = np.linspace(r_lo, r_hi, K + 1)
+    cells: List[int] = []
+    for ir in range(K):
+        ra, rb = float(radii[ir]), float(radii[ir + 1])
+        for s in range(S):
+            a1 = Phi * s / S
+            a2 = Phi * (s + 1) / S
+            p1, p2 = _P(ra, a1), _P(ra, a2)
+            p3, p4 = _P(rb, a2), _P(rb, a1)
+            ain = occ.addCircleArc(p1, center_pt, p2)
+            aout = occ.addCircleArc(p4, center_pt, p3)
+            l2 = occ.addLine(p2, p3)
+            l1 = occ.addLine(p1, p4)
+            cells.append(occ.addPlaneSurface(
+                [occ.addCurveLoop([ain, l2, -aout, -l1])]))
+    return cells, r_lo, r_hi, M
+
+
 def build_mesh_from_polygons(polys: dict,
                              rotor_angle_deg: float = 0.0,
                              mesh_size_mm: float = 1.5,
@@ -1814,6 +1926,34 @@ def build_mesh_from_polygons(polys: dict,
             for surf in _shapely_to_occ(coil_poly):
                 domain_surfaces.append((surf, DOM_COIL_BASE + i))
 
+        # ── STRUCTURED (mapped) air gap — ROUTE A ─────────────────────────────
+        # Build the gap for THIS half as concentric cylinder-sector cells and
+        # add them to the SAME fragment as the iron.  in_band/out_band were built
+        # (in _simplify_polys) to STOP at the rotor OD / start at the stator bore,
+        # so these cells own the gap slice exclusively.  Conformity is automatic
+        # (one fragmented model); the transfinite seeding (below, post-fragment)
+        # forces EXACTLY K+1 uniform radial levels in this half.
+        _sg_spec = polys.get("structured_gap_spec")
+        _sg_cells: List[int] = []
+        _sg_M = 0
+        _sg_rlo = _sg_rhi = 0.0
+        _sg_input_idx: List[int] = []      # indices into domain_surfaces of cells
+        if _sg_spec is not None:
+            try:
+                _sg_center = occ.addPoint(0.0, 0.0, 0.0)
+                _sg_cells, _sg_rlo, _sg_rhi, _sg_M = _build_structured_gap_cells(
+                    occ, _sg_spec, n_sectors, _sg_center)
+                for _cs in _sg_cells:
+                    _sg_input_idx.append(len(domain_surfaces))
+                    domain_surfaces.append((_cs, DOM_AIRGAP))
+                log.info("structured gap (route A): %s half, %d cells r=%.3f→%.3f "
+                         "(K=%d, M=%d/arc, n_sectors=%d)",
+                         _sg_spec.get("half", "?"), len(_sg_cells),
+                         _sg_rlo, _sg_rhi, int(_sg_spec["K"]), _sg_M, n_sectors)
+            except Exception as _sge:
+                log.warning("structured gap cell build failed (%s) — free gap", _sge)
+                _sg_cells = []
+
         occ.synchronize()
 
         # Capture each surface's centroid BEFORE fragmenting so we can re-classify
@@ -1837,6 +1977,18 @@ def build_mesh_from_polygons(polys: dict,
             out_map = [[dt] for dt in dim_tags]
 
         occ.synchronize()
+
+        # STRUCTURED gap: collect the EXACT fragment tags that came from the gap
+        # cell inputs (via out_map), so the transfinite pass targets ONLY those
+        # cells — not a big iron/air surface whose centroid happens to fall in
+        # the gap band (that would try to make a 17-corner surface transfinite).
+        _sg_cell_frag_tags: set = set()
+        if _sg_input_idx:
+            for _ii in _sg_input_idx:
+                _ol = out_map[_ii] if _ii < len(out_map) else []
+                for (_od, _ot) in _ol:
+                    if _od == 2:
+                        _sg_cell_frag_tags.add(int(_ot))
 
         # Classify each fragment: first by polygon membership for the small
         # features (coils, magnets), then fall back to radial annulus for the
@@ -2144,14 +2296,70 @@ def build_mesh_from_polygons(polys: dict,
             gmsh.model.mesh.field.setNumbers(_minf, "FieldsList", _bg_fields)
             gmsh.model.mesh.field.setAsBackgroundMesh(_minf)
 
+        # ── STRUCTURED gap cells: set each gap cell TRANSFINITE (route A) ──────
+        # For every cell surface (centroid radius in this half's gap band): arcs
+        # → M+1 nodes, radial edges → 2 nodes, then setTransfiniteSurface.  gmsh
+        # then fills the cell with EXACTLY 2 uniform triangle rows between two
+        # arcs → K cells stacked radially give K+1 uniform radial levels, and the
+        # arc at mid_r carries the uniform S·M = n_slip/n_sectors slip grid.
+        # This REPLACES the 2-node slip-ring seeding for the mid ring (below),
+        # which is skipped when the cells own it (else it would fight M+1 vs 2).
+        _sg_active = bool(_sg_cell_frag_tags) and _sg_M > 0
+        if _sg_active:
+            try:
+                _sg_n = 0; _sg_skip = 0
+                for (_d, _surf) in gmsh.model.getEntities(2):
+                    if int(_surf) not in _sg_cell_frag_tags:
+                        continue
+                    _cvs = gmsh.model.getBoundary([(_d, _surf)], oriented=False)
+                    # A clean cell is a 4-sided quad (2 arcs + 2 radial edges).
+                    # If OCC merged this cell into a bigger region (>4 sides), we
+                    # CANNOT make it transfinite (gmsh needs 3/4 corners) — skip
+                    # it (it meshes free; a merged cell is rare and only softens
+                    # one row locally).
+                    if len(_cvs) != 4:
+                        _sg_skip += 1
+                        continue
+                    for (_cd, _cv) in _cvs:
+                        _bpts = gmsh.model.getBoundary(
+                            [(_cd, _cv)], oriented=False)
+                        _prs = [math.hypot(*gmsh.model.getValue(0, _pt, [])[:2])
+                                for (_pdim, _pt) in _bpts]
+                        if len(_prs) != 2:
+                            continue
+                        # arc (both endpoints same radius) → M+1; radial → 2
+                        _is_arc = abs(_prs[0] - _prs[1]) < 1e-4
+                        gmsh.model.mesh.setTransfiniteCurve(
+                            _cv, (_sg_M + 1) if _is_arc else 2)
+                    try:
+                        gmsh.model.mesh.setTransfiniteSurface(_surf)
+                        _sg_n += 1
+                    except Exception as _tse:
+                        log.warning("structured gap TF surface failed: %s", _tse)
+                log.info("structured gap: %d cells set transfinite, %d skipped "
+                         "(merged) (M=%d/arc → uniform rings)",
+                         _sg_n, _sg_skip, _sg_M)
+            except Exception as _sge2:
+                log.warning("structured gap transfinite skipped: %s", _sge2)
+                _sg_active = False
+
         # ── Sliding-band slip ring: force the mid_r boundary to keep EXACTLY
         # its polygon vertices (transfinite, 2 nodes/edge) so both half-meshes
         # share an identical, equally-spaced node ring at r = slip_transfinite_r.
         # Matching nodes let the two halves MERGE by node identity (a shared
         # DOF) when the rotor is rotated by an integer node step — no
         # interpolation, no flux-coupling error.
-        _tf_radii = ([float(slip_transfinite_r)] if slip_transfinite_r is not None else []) \
-                    + [float(r) for r in (extra_transfinite_radii or [])]
+        #
+        # STRUCTURED gap: the transfinite cells already seed the mid_r ring on
+        # the uniform S·M grid — do NOT re-seed it here (2 nodes/edge would
+        # collide with the cells' M+1).  Only seed OTHER extra radii, and only
+        # those NOT inside a gap band the cells own.
+        if _sg_active and slip_transfinite_r is not None:
+            _tf_radii = [float(r) for r in (extra_transfinite_radii or [])
+                         if not (_sg_rlo - 1e-3 <= float(r) <= _sg_rhi + 1e-3)]
+        else:
+            _tf_radii = ([float(slip_transfinite_r)] if slip_transfinite_r is not None else []) \
+                        + [float(r) for r in (extra_transfinite_radii or [])]
         if _tf_radii:
             try:
                 _counts = [0] * len(_tf_radii)
@@ -2205,6 +2413,12 @@ def build_mesh_from_polygons(polys: dict,
                         _xyz = gmsh.model.getValue(1, _ct, [_tv])
                         _pts.append((_xyz[0], _xyz[1]))
                     _rm = math.hypot(_pts[1][0], _pts[1][1])
+                    # STRUCTURED gap: the cells' seam radial edges are already
+                    # transfinite(2) and node-exact — leave them out of the sector
+                    # cut pairing (their periodic copies coincide by construction;
+                    # re-setting them here would double-constrain the curve).
+                    if _sg_active and (_sg_rlo - 1e-4 <= _rm <= _sg_rhi + 1e-4):
+                        continue
                     if _on_ray(_pts, 1.0, 0.0):
                         _cutA.append((_rm, _ct))
                     elif _on_ray(_pts, _cph, _sph):
@@ -2281,6 +2495,14 @@ def build_mesh_from_polygons(polys: dict,
                             abs(math.hypot(px, py) - _slip_rr) < 1e-3
                             for px, py in _pts):
                         continue                      # transfinite slip ring
+                    # STRUCTURED gap: every cell curve (arcs + radial edges) is
+                    # already transfinite; its rotated copies coincide on the
+                    # uniform grid by construction — exclude from periodicity so
+                    # gmsh does not double-constrain a transfinite curve.
+                    if _sg_active and all(
+                            _sg_rlo - 1e-3 <= math.hypot(px, py) <= _sg_rhi + 1e-3
+                            for px, py in _pts):
+                        continue
                     if _phi_cut is not None:
                         def _on_ray(ux, uy):
                             return all(abs(px*uy - py*ux) <= 1e-4

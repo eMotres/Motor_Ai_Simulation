@@ -550,11 +550,13 @@ def _simplify_polys(polys: dict, tol_mm: float = 0.005,
                 # cells only mesh transfinite if NO foreign boundary vertex lands
                 # on their inner/outer arcs; the fuzzy CadQuery OD polygon has
                 # hundreds of vertices AT r_ro that would subdivide every cell
-                # into 5-10 corners (transfinite needs 3/4).  ε (5 µm ≫ the 1 µm
-                # OCC boolean tol, ≪ the 200 µm gap → 0.04 % of radius) keeps the
-                # iron clear.  The cells then fill r_ro→mid / mid→r_si; the µm-thin
-                # air ring iron→cell is closed by node welding after meshing.
-                _eps = 0.005
+                # into 5-10 corners (transfinite needs 3/4).  ε (10 µm ≫ the 1 µm
+                # OCC boolean tol, ≪ the 200 µm gap → 0.08 % of radius) keeps the
+                # iron clear.  The stator bore (teeth + slot openings) needs the
+                # full 10 µm; 5 µm left ~half the stator cells subdivided.  The
+                # cells fill r_ro→mid / mid→r_si; the µm iron→cell ring is meshed
+                # by gmsh and cleaned by node welding after meshing.
+                _eps = 0.01
                 _ro_c = _r_ro_est - _eps      # rotor iron capped here
                 _si_c = _r_si_est + _eps      # stator iron starts here
 

@@ -94,8 +94,9 @@ sector annulus:
 
 ## Status
 - [x] Core technique proven (`_tf_annulus_test.py`).
-- [ ] Integration into `_build_sliding_band_meshes` (route A or B).
-- [ ] Verify exact rings + solver.
+- [x] Integration into `_build_sliding_band_meshes` (route A).
+- [x] Verify exact rings + solver.
+- [x] CLEAN arc boundary — ε retract + filler REMOVED (see bottom section, 2026-07-01).
 
 ## ROUTE A — PROVEN (2026-07-01, Vadim's cylinder idea)
 
@@ -173,3 +174,76 @@ To close it further (optional, for torque-accuracy parity at low ring counts):
 For the current goal (ANSYS-style uniform structured gap, behind an experimental toggle,
 default off) the mesh is correct and the torque is convergent; users wanting torque
 parity raise the Air-gap-layers slider.
+
+## ROUTE A — CLEAN ARC BOUNDARY (2026-07-01): ε retract + filler REMOVED
+
+The deferred next step ("snap the tip arcs to the cell grid", above) is now DONE.  The
+ε-retract and the free-meshed bridge filler are both gone; the iron's gap-facing boundary
+conforms DIRECTLY to the cells' transfinite arc.
+
+### Mechanism
+`_iron_arc_ring_occ` (fem_solver_2d.py): when a `structured_gap_spec` is present, the
+gap-facing edge of EVERY domain that touches the half's gap ring is emitted in OCC as
+**circle arcs coincident with the gap cells' arc**, instead of the fuzzy CadQuery polyline:
+- ROTOR half: rotor OD (r_ro) — a clean full circle; also the rotor pocket air that
+  reaches r_ro.
+- STATOR half: stator bore (r_si) — tooth-tip arcs alternating with slot-mouth openings;
+  also the slot-mouth air (out_band) that reaches r_si.
+
+Each maximal run of on-ring polygon vertices (|r−r_ring|<30 µm) is replaced by a chain of
+arcs whose endpoints are **snapped to the uniform seam grid** (angles 2π·k/(S·n_sectors)),
+using a shared memoized point-adder so the arc endpoints reuse the SAME OCC point tags the
+cells place at each seam.  `occ.fragment` then merges the coincident arc + seam points, so
+every gap cell keeps exactly 4 corners → `setTransfiniteSurface` accepts it → EXACT uniform
+rings.  Slot mouths stay OPEN: between two snapped tooth-tip arcs the boundary lifts
+radially into the slot as LINES (no arc seals the mouth), so the mouth cell's outer arc is
+a free gap↔slot interface (flux crosses).
+
+So `eps = 0` in the spec: `_simplify_polys` skips the iron/air retract clips, and
+`_build_structured_gap_cells` emits NO filler; `_stitch_full_half`'s ε-ring material
+restore is inert (gated on eps>0).  `_SG_EPS_OVERRIDE` still forces the legacy retract path
+for A/B debugging.
+
+Why this works where the earlier attempt didn't: the STATOR slip ring at `mid` needs
+uniform seams, and a cell shares its top/bottom seams, so the r_si arc also has uniform
+seams — but the tooth/mouth *corners* need not be seams; SNAPPING each tooth-tip run's
+endpoints to the nearest seam keeps every bore vertex on a seam, so no cell subdivides
+(the snap perturbs tooth-edge angular position by ≤½ a seam, ≈2.5°, a tiny geometry
+approximation — not a mesh failure).
+
+### Verified (40 mm 12s/14p, full_ring production path, n_sectors=−1)
+- **NO filler strips** at either boundary (rendered PNGs at gl=1/2/3).
+- Rings EXACT: gl=1/2/3 → 2/4/6 uniform gap rings [12.1..12.3], spacing Gap/(2K).
+  Both halves: 96/96 gap cells transfinite, **0 skipped, 0 filler**.
+- Slip ring at mid uniform: 1008 nodes on the global 2πj/N grid (full disk) → sliding
+  coupling `_ring()` untouched.
+- Material classification clean: gap [12.1,12.3] = all air; iron right up to r_ro/r_si;
+  slot mouths = air, tooth tips = iron (no iron slot-short, no 2ε gap widening).
+- Free mode (structured_gap=False) BYTE-FOR-BYTE unchanged (T_avg=0.58163274 identical to
+  pre-work c419618, every digit).
+
+### TORQUE — deficit essentially GONE (the retract was blunting the tooth tips)
+Mean torque vs free (full_ring, 40 mm 12s/14p, I=60 A, γ=10°):
+
+    gap_layers=2 → 0.5581 vs 0.5778  (−3.4 %   was −24.1 %)
+    gap_layers=3 → 0.5490 vs 0.5816  (−5.6 %   was −20.6 %)
+    gap_layers=4 → 0.5719 vs 0.5781  (−1.1 %   was −16.9 %)
+
+Removing the ε retract (which the OLD note above suspected of blunting the tooth tips,
+`stator − disk(r_si+ε)`) collapsed the −17..−24 % deficit to ≈−1..−6 %.  So the deficit was
+NOT mainly a uniform-resolution effect — it was the retract eating the tooth-tip taper +
+the 2ε gap widening.  Losses match (~152 W both); structured ripple is lower (uniform
+rings).
+
+### Residual compromise
+Tooth-tip / slot-mouth angular corners are snapped to the seam grid (≤½ seam ≈ 2.5° at
+S=36/wedge).  For finer slot-opening fidelity, bias `_structured_gap_sm` toward smaller M
+(more seams) — the rings stay exact; only the surface count rises.  The rotor side has no
+approximation at all (its OD is a full circle already on every seam).
+
+### Files
+- `_iron_arc_ring_occ`, `_gap_edge_occ`, cell-builder `getP` sharing — fem_solver_2d.py.
+- Proofs: `_routeA_arc_rotor_proof.py` (72/72 rotor), `_routeA_arc_stator_proof.py`
+  (72/72 stator incl. mouths).  Verification: `_z_torque_cmp.py`, `_z_render_gap.py`,
+  `_z_free_regress.py` (drive the full-disk path on a stable 40 mm config via `_use40.py`
+  so tests never touch the user's live on-disk config).

@@ -18,6 +18,7 @@ import PlayArrowIcon    from '@mui/icons-material/PlayArrow';
 import CircularProgress from '@mui/material/CircularProgress';
 import { useMotorStore } from '../../stores/motorStore';
 import AddParameterDialog from '../parameters/AddParameterDialog';
+import SectionLabel from '../common/SectionLabel';
 
 const numFieldSx = {
   width: '100%',   // fill the fixed-width value column → values line up vertically
@@ -301,16 +302,7 @@ const ParameterVariationTable: React.FC = () => {
       {groups.map((group, gi) => (
         <Box key={group.id}>
           {gi > 0 && <Divider sx={{ my: 1 }} />}
-          <Typography
-            variant="caption"
-            color="primary"
-            sx={{
-              fontWeight: 700, display: 'block', px: 0.5, py: 0.5,
-              textTransform: 'uppercase', fontSize: 10, letterSpacing: 0.5,
-            }}
-          >
-            {group.label}
-          </Typography>
+          <SectionLabel sx={{ px: 0.5, py: 0.5 }}>{group.label}</SectionLabel>
 
           {group.params.map(param => {
             const variation = sweepConfig.variations[param.name];

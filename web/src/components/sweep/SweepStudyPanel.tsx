@@ -17,6 +17,7 @@ import {
 } from 'recharts';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import { useMotorStore } from '../../stores/motorStore';
+import SectionLabel from '../common/SectionLabel';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
 
@@ -431,10 +432,7 @@ const SweepStudyPanel: React.FC = () => {
 
   return (
     <Box sx={{ mt: 2 }}>
-      <Typography sx={{ fontSize: '0.7rem', fontWeight: 700, color: '#475569',
-        letterSpacing: '0.1em', textTransform: 'uppercase', mb: 0.5 }}>
-        Sweep study — efficiency vs torque/mass
-      </Typography>
+      <SectionLabel sx={{ mb: 0.5 }}>Sweep study — efficiency vs torque/mass</SectionLabel>
       <Typography sx={{ fontSize: 11, color: '#64748b', mb: 1.25 }}>
         Sweeps the <strong>variables you added above</strong> (current/γ → operating points,
         geometry → a grid). Each point is a real full-disk transient (~1 min each — keep grids small).

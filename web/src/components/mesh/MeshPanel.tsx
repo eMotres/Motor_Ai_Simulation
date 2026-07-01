@@ -309,7 +309,7 @@ const MeshPanel: React.FC = () => {
   const [error,   setError]   = useState<string | null>(null);
 
   // ── FEM mesh state ─────────────────────────────────────────────────────────
-  const [view,        setView]        = useState<'fem' | 'pinn'>('fem');
+  const [view] = useState<'fem' | 'pinn'>('fem');   // always the real FEM mesh; no view toggle
   // ── Persisted mesh settings (survive tab switches) ──────────────────────
   // Hook: each setting reads its initial value from localStorage and writes
   // back on every change.  Default symmetry is Full (full disk) per user request.
@@ -383,9 +383,8 @@ const MeshPanel: React.FC = () => {
   // Shapely buffer on top of the CadQuery fillets, deforming the Mesh geometry
   // away from the Geometry tab.  The Mesh now always uses the native geometry
   // (stator_fillet_mm = 0), identical to the Geometry tab.
-  const [showEdges,    setShowEdges]    = useState<boolean>(true);
-  const [showOutlines, setShowOutlines] = useState<boolean>(true);
-  const [fillDomains,  setFillDomains]  = useState<boolean>(true);
+  // Display is fixed: the mesh (domain fill + triangle edges + geometry outlines)
+  // is ALWAYS shown — no toggles.
   // Sliding-band TWO-mesh view (feature/sliding-band-fem branch).  When on,
   // fetches /mesh/build2d_sliding_band which returns the stator and rotor
   // meshes concatenated — moving the rotor_angle slider rigidly rotates
@@ -611,39 +610,8 @@ const MeshPanel: React.FC = () => {
         display: 'flex', flexDirection: 'column', gap: 2,
       }}>
 
-        {/* ── View toggle ── */}
-        <Box>
-          <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, color: '#475569',
-            letterSpacing: '0.1em', textTransform: 'uppercase', mb: 0.75 }}>
-            View
-          </Typography>
-          <ToggleButtonGroup
-            value={view} exclusive size="small"
-            onChange={(_, v) => v && setView(v as 'fem' | 'pinn')}
-            sx={{ width: '100%',
-              '& .MuiToggleButton-root': { flex: 1, py: 0.5, fontSize: 11,
-                color: '#64748b', borderColor: '#1e293b', textTransform: 'none',
-                '&.Mui-selected': { color: '#e2e8f0', bgcolor: '#1e3a5f',
-                  borderColor: '#3b82f6' } } }}>
-            <ToggleButton value="fem">FEM mesh (real)</ToggleButton>
-          </ToggleButtonGroup>
-        </Box>
-
-        <Divider sx={{ borderColor: '#1e293b' }}/>
-
         {view === 'fem' && (
           <>
-            <Box>
-              <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, color: '#475569',
-                letterSpacing: '0.1em', textTransform: 'uppercase', mb: 0.5 }}>
-                FEM Triangle Mesh
-              </Typography>
-              <Typography sx={{ fontSize: 11, color: '#334155' }}>
-                Conforming mesh of the real CadQuery cross-section (gmsh OCC).
-                Used by the scikit-fem 2-D magnetostatics solver.
-              </Typography>
-            </Box>
-
             {/* mesh_size_mm */}
             <Box>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
@@ -774,27 +742,20 @@ const MeshPanel: React.FC = () => {
               <Typography sx={{ fontSize: '0.62rem', fontWeight: 700, color: '#475569',
                 letterSpacing: '0.08em', textTransform: 'uppercase', mb: 0.5 }}>
                 Air-gap mesh
-                <Tooltip title="Free = gmsh Delaunay triangles in the gap (default). Structured = ANSYS-style concentric rings + radial spokes: the gap is partitioned into Air-gap-fidelity rings per side. Use fidelity 3+ for an EXACTLY that-many-ring gap; at 1-2 the rows are so thick vs the fine slip ring (~1000 nodes) that gmsh adds extra radial layers to avoid stretched triangles, so you see more rings than set. Cleans the gap mesh + broadband ripple, but does NOT lower peak ripple (the tooth mesh is the floor). Drives the mesh preview AND the Simulation solve." placement="right">
-                  <span style={{ color: '#475569', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
-                </Tooltip>
               </Typography>
-              <ToggleButtonGroup
-                value={structuredGap ? 'struct' : 'free'} exclusive size="small" fullWidth
-                onChange={(_, v) => v != null && setStructuredGap(v === 'struct')}
-                sx={{ width: '100%',
-                  '& .MuiToggleButton-root': { flex: 1, py: 0.3, fontSize: 11,
-                    color: '#64748b', borderColor: '#1e293b', textTransform: 'none',
-                    '&.Mui-selected': { color: '#e2e8f0', bgcolor: '#1e3a5f',
-                      borderColor: '#3b82f6' } } }}>
-                <ToggleButton value="free">Free (triangles)</ToggleButton>
-                <ToggleButton value="struct">Structured (rings)</ToggleButton>
-              </ToggleButtonGroup>
-              {structuredGap && (
-                <Typography sx={{ fontSize: 9, color: '#34d399', mt: 0.5 }}>
-                  Concentric rings + radial spokes in the gap (ANSYS-style). Cleaner gap
-                  mesh; ~20% more nodes. Peak ripple unchanged (teeth are the floor).
-                </Typography>
-              )}
+              <Tooltip placement="right" title="Free = gmsh Delaunay triangles in the gap (default). Structured = ANSYS-style concentric rings + radial spokes: the gap is partitioned into Air-gap-fidelity rings per side (~20% more nodes). Use fidelity 3+ for exactly that many rings; at 1-2 gmsh adds extra layers to avoid stretched triangles vs the fine slip ring. Cleans the gap mesh + broadband ripple, but does NOT lower peak ripple (the tooth mesh is the floor). Drives the mesh preview AND the Simulation solve.">
+                <ToggleButtonGroup
+                  value={structuredGap ? 'struct' : 'free'} exclusive size="small" fullWidth
+                  onChange={(_, v) => v != null && setStructuredGap(v === 'struct')}
+                  sx={{ width: '100%',
+                    '& .MuiToggleButton-root': { flex: 1, py: 0.3, fontSize: 11,
+                      color: '#64748b', borderColor: '#1e293b', textTransform: 'none',
+                      '&.Mui-selected': { color: '#e2e8f0', bgcolor: '#1e3a5f',
+                        borderColor: '#3b82f6' } } }}>
+                  <ToggleButton value="free">Free (triangles)</ToggleButton>
+                  <ToggleButton value="struct">Structured (rings)</ToggleButton>
+                </ToggleButtonGroup>
+              </Tooltip>
             </Box>
 
             {/* ── Per-component mesh size (mesh-convergence study) ───────── */}
@@ -838,36 +799,23 @@ const MeshPanel: React.FC = () => {
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
                 <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>
                   Symmetry
-                  <Tooltip title={`Split the motor into N equal wedges. ${symSlots} slots / ${symPoles} poles → GCD = ${symGcd} → valid models: ${validSectors.map(s => s === 1 ? 'Full' : '1/' + s).join(', ')} (each wedge needs whole slots AND poles). Anti-periodic BC on the radial cuts when poles-per-sector is odd.`} placement="right">
-                    <span style={{ color: '#475569', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
-                  </Tooltip>
                 </Typography>
               </Box>
-              <ToggleButtonGroup
-                value={nSectors} exclusive size="small" fullWidth
-                onChange={(_, v) => v != null && setNSectors(v as number)}
-                sx={{ width: '100%',
-                  '& .MuiToggleButton-root': { flex: 1, py: 0.3,
-                    fontSize: 11, color: '#64748b', borderColor: '#1e293b',
-                    textTransform: 'none',
-                    '&.Mui-selected': { color: '#e2e8f0', bgcolor: '#1e3a5f',
-                      borderColor: '#3b82f6' } } }}>
-                {validSectors.map(s => (
-                  <ToggleButton key={s} value={s}>{s === 1 ? 'Full' : `1/${s}`}</ToggleButton>
-                ))}
-              </ToggleButtonGroup>
-              {nSectors > 1 ? (
-                <Typography sx={{ fontSize: 9, color: '#334155', mt: 0.5 }}>
-                  {symSlots / nSectors} slots + {symPoles / nSectors} poles per sector ·
-                  {(symPoles / nSectors) % 2 === 1 ? ' anti-periodic' : ' periodic'} BC on radial
-                  cuts ({symPoles / nSectors} poles = {(symPoles / nSectors) % 2 === 1 ? 'odd' : 'even'})
-                </Typography>
-              ) : (
-                <Typography sx={{ fontSize: 9, color: '#334155', mt: 0.5 }}>
-                  Full 360° — stitched from clean half-sectors (no cuts, no double mesh).
-                  Saved permanently &amp; used by Simulation + charts.
-                </Typography>
-              )}
+              <Tooltip placement="right" title={`Split the motor into N equal wedges (${symSlots} slots / ${symPoles} poles, GCD ${symGcd} → ${validSectors.map(s => s === 1 ? 'Full' : '1/' + s).join(', ')}). ${nSectors > 1 ? `Now: ${symSlots / nSectors} slots + ${symPoles / nSectors} poles per sector, ${(symPoles / nSectors) % 2 === 1 ? 'anti-periodic' : 'periodic'} BC on the radial cuts.` : 'Full 360° — stitched from clean half-sectors (no cuts, no double mesh).'} Saved & used by Simulation + charts.`}>
+                <ToggleButtonGroup
+                  value={nSectors} exclusive size="small" fullWidth
+                  onChange={(_, v) => v != null && setNSectors(v as number)}
+                  sx={{ width: '100%',
+                    '& .MuiToggleButton-root': { flex: 1, py: 0.3,
+                      fontSize: 11, color: '#64748b', borderColor: '#1e293b',
+                      textTransform: 'none',
+                      '&.Mui-selected': { color: '#e2e8f0', bgcolor: '#1e3a5f',
+                        borderColor: '#3b82f6' } } }}>
+                  {validSectors.map(s => (
+                    <ToggleButton key={s} value={s}>{s === 1 ? 'Full' : `1/${s}`}</ToggleButton>
+                  ))}
+                </ToggleButtonGroup>
+              </Tooltip>
             </Box>
 
             {/* Periodic (template-copy) mesh toggle */}
@@ -875,55 +823,21 @@ const MeshPanel: React.FC = () => {
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
                 <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>
                   Pole/slot mesh
-                  <Tooltip title="Standard: each pole/slot meshed independently (slightly different node pattern → pole-to-pole mesh variance on the losses). Periodic: mesh ONE pole + ONE slot, rotate-copy them so every pole and slot is BIT-IDENTICAL → that variance is removed. Applies to the Mesh view, field views and Simulation." placement="right">
-                    <span style={{ color: '#475569', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
-                  </Tooltip>
                 </Typography>
               </Box>
-              <ToggleButtonGroup
-                value={poleCopy ? 'periodic' : 'standard'} exclusive size="small" fullWidth
-                onChange={(_, v) => v != null && setPoleCopy(v === 'periodic')}
-                sx={{ width: '100%',
-                  '& .MuiToggleButton-root': { flex: 1, py: 0.3, fontSize: 11,
-                    color: '#64748b', borderColor: '#1e293b', textTransform: 'none',
-                    '&.Mui-selected': { color: '#e2e8f0', bgcolor: '#1e3a5f',
-                      borderColor: '#3b82f6' } } }}>
-                <ToggleButton value="standard">Standard</ToggleButton>
-                <ToggleButton value="periodic">Periodic (identical poles)</ToggleButton>
-              </ToggleButtonGroup>
-              {poleCopy && (
-                <Typography sx={{ fontSize: 9, color: '#34d399', mt: 0.5 }}>
-                  Every pole + slot is a bit-identical rotated copy → zero pole-to-pole
-                  mesh variance. Also drives the field views &amp; Simulation.
-                </Typography>
-              )}
-            </Box>
-
-            {/* Display toggles */}
-            <Box>
-              <Typography sx={{ fontSize: '0.62rem', fontWeight: 700, color: '#475569',
-                letterSpacing: '0.08em', textTransform: 'uppercase', mb: 0.5 }}>
-                Display
-              </Typography>
-              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
-                {[
-                  { label: 'Fill triangles by domain',  val: fillDomains,  set: setFillDomains  },
-                  { label: 'Show CadQuery outlines',    val: showOutlines, set: setShowOutlines },
-                  { label: 'Show triangle edges',       val: showEdges,    set: setShowEdges    },
-                ].map(({ label, val, set }) => (
-                  <Box key={label} onClick={() => set(!val)}
-                    sx={{ display: 'flex', alignItems: 'center', gap: 1, cursor: 'pointer',
-                      p: 0.5, borderRadius: 1,
-                      bgcolor: val ? '#1e293b' : 'transparent',
-                      border: '1px solid', borderColor: val ? '#334155' : 'transparent' }}>
-                    <Box sx={{ width: 12, height: 12, borderRadius: 0.5, flexShrink: 0,
-                      bgcolor: val ? '#3b82f6' : '#1e293b',
-                      border: '1px solid #334155' }}/>
-                    <Typography sx={{ fontSize: 11,
-                      color: val ? '#e2e8f0' : '#475569' }}>{label}</Typography>
-                  </Box>
-                ))}
-              </Box>
+              <Tooltip placement="right" title="Standard: each pole/slot meshed independently (slightly different node pattern → pole-to-pole mesh variance on the losses). Periodic: mesh ONE pole + ONE slot, rotate-copy them so every pole and slot is BIT-IDENTICAL → that variance is removed. Applies to the Mesh view, field views and Simulation.">
+                <ToggleButtonGroup
+                  value={poleCopy ? 'periodic' : 'standard'} exclusive size="small" fullWidth
+                  onChange={(_, v) => v != null && setPoleCopy(v === 'periodic')}
+                  sx={{ width: '100%',
+                    '& .MuiToggleButton-root': { flex: 1, py: 0.3, fontSize: 11,
+                      color: '#64748b', borderColor: '#1e293b', textTransform: 'none',
+                      '&.Mui-selected': { color: '#e2e8f0', bgcolor: '#1e3a5f',
+                        borderColor: '#3b82f6' } } }}>
+                  <ToggleButton value="standard">Standard</ToggleButton>
+                  <ToggleButton value="periodic">Periodic (identical poles)</ToggleButton>
+                </ToggleButtonGroup>
+              </Tooltip>
             </Box>
 
             <Button
@@ -1153,12 +1067,12 @@ const MeshPanel: React.FC = () => {
               <Box sx={{ position: 'absolute', inset: 0 }}>
                 {WEBGL_OK ? (
                   <FemMeshViewer3D payload={femMesh as any}
-                    showFill={fillDomains}
-                    showWire={showEdges}
-                    showOutlines={showOutlines}
+                    showFill
+                    showWire
+                    showOutlines
                     showGrid/>
                 ) : (
-                  <FemMeshViewer2D payload={femMesh as any} showWire={showEdges}/>
+                  <FemMeshViewer2D payload={femMesh as any} showWire/>
                 )}
               </Box>
               {!WEBGL_OK && (

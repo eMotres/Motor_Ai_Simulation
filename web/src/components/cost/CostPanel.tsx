@@ -10,6 +10,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Box, Paper, Typography, Button, TextField, CircularProgress, Divider } from '@mui/material';
 import { useMotorStore } from '../../stores/motorStore';
+import SectionLabel from '../common/SectionLabel';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 
@@ -89,7 +90,7 @@ const CostPanel: React.FC = () => {
       <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'flex-start' }}>
         {/* ── Price assumptions ── */}
         <Paper sx={{ ...CARD, width: 290, flexShrink: 0 }}>
-          <Typography sx={{ fontSize: 13, fontWeight: 700, color: '#e2e8f0', mb: 1.5 }}>Price assumptions</Typography>
+          <SectionLabel sx={{ mb: 1.5 }}>Price assumptions</SectionLabel>
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25 }}>
             {PRICE_FIELDS.map(f => (
               <Box key={f.key} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>

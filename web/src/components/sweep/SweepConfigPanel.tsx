@@ -26,6 +26,7 @@ import DescentPanel from './DescentPanel';
 import SweepStudyPanel from './SweepStudyPanel';
 import DOEPanel from './DOEPanel';
 import HelpTip from '../common/HelpTip';
+import SectionLabel from '../common/SectionLabel';
 
 // Non-geometry variables (selected outside the Geometry tab) need their own
 // display label/unit since they are absent from the geometry parameter schema.
@@ -347,9 +348,7 @@ const SweepConfigPanel: React.FC = () => {
 
         {/* Left: optimization variable cards */}
         <Box sx={{ flex: 1, minWidth: 0 }}>
-          <Typography variant="overline" color="text.secondary" sx={{ fontSize: 10, letterSpacing: 1, display: 'block', mb: 1 }}>
-            Optimization Variables
-          </Typography>
+          <SectionLabel sx={{ mb: 1 }}>Optimization Variables</SectionLabel>
           <Typography variant="caption" color="text.disabled" sx={{ display: 'block', mb: 1.5 }}>
             Add a parameter (geometry, load angle γ, or phase current) and set its
             <strong> range (min · max)</strong> and <strong>step</strong>. Each algorithm keeps
@@ -445,9 +444,7 @@ const SweepConfigPanel: React.FC = () => {
         {/* Right: operating point + ripple (narrow — frees width for 2-col variables) */}
         <Box sx={{ flexShrink: 0, width: 280 }}>
 
-          <Typography variant="overline" color="text.secondary" sx={{ fontSize: 10, letterSpacing: 1, display: 'block', mb: 0.5 }}>
-            Operating Point
-          </Typography>
+          <SectionLabel sx={{ mb: 0.5 }}>Operating Point</SectionLabel>
           <Card variant="outlined" sx={{ mb: 2.5, mt: 0.5, bgcolor: 'rgba(255,255,255,0.02)' }}>
             <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25 }}>
@@ -490,9 +487,7 @@ const SweepConfigPanel: React.FC = () => {
             </CardContent>
           </Card>
 
-          <Typography variant="overline" color="text.secondary" sx={{ fontSize: 10, letterSpacing: 1, display: 'block', mb: 0.5 }}>
-            Torque Ripple
-          </Typography>
+          <SectionLabel sx={{ mb: 0.5 }}>Torque Ripple</SectionLabel>
           <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
             Not a constraint — trim it with the <strong>“ripple ≤ X%”</strong> slider under the results chart.
           </Typography>

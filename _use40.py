@@ -22,3 +22,14 @@ _C.load_config(_CFG40, reload=True)     # prime the singleton so get_config() hi
 # used by CadQueryMotor) — patch it too, else geometry reads the live on-disk file.
 import motor_ai_sim.geometry.motor_geometry as _MG
 _MG.DEFAULT_CONFIG_PATH = _CFG40
+
+# geometry_2d.params_from_config has its OWN _CFG_PATH (used by the transient for
+# the slip radius `mid`) — patch it too so `mid` agrees with the polygon mid_r_mm.
+import motor_ai_sim.simulation.geometry_2d as _G2
+_G2._CFG_PATH = _CFG40
+# params_from_config's default arg was bound at def time to the old _CFG_PATH;
+# rebind the default so callers that omit cfg_path use the 40mm file.
+try:
+    _G2.params_from_config.__defaults__ = (_CFG40, None)
+except Exception:
+    pass

@@ -1780,8 +1780,17 @@ def _iron_arc_ring_occ(occ, center_pt: int, geom, r_ring: float,
                 j = i
                 while j < n and on[j]:
                     j += 1
-                a_s = math.atan2(pts[i][1], pts[i][0]) % (2.0 * math.pi)
-                a_e = math.atan2(pts[j - 1][1], pts[j - 1][0]) % (2.0 * math.pi)
+                a_s = math.atan2(pts[i][1], pts[i][0])
+                a_e = math.atan2(pts[j - 1][1], pts[j - 1][0])
+                # Take the SHORT arc between the run's endpoints (unwrap a_e so
+                # |a_e−a_s| ≤ π) so a run straddling θ=0 does not wind the long
+                # way round the circle.  In the stitched build (180° wedges) runs
+                # never cross the seam, but this keeps the helper correct for a
+                # single-model full disk (n_sectors=1) too.
+                while a_e - a_s > math.pi:
+                    a_e -= 2.0 * math.pi
+                while a_e - a_s < -math.pi:
+                    a_e += 2.0 * math.pi
                 k_s = int(round(a_s / step))
                 k_e = int(round(a_e / step))
                 rng = (range(k_s, k_e + 1) if k_e >= k_s

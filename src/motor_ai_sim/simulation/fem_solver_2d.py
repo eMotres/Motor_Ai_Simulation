@@ -625,6 +625,7 @@ def _simplify_polys(polys: dict, tol_mm: float = 0.005,
                 out["structured_gap_spec"] = {
                     "r_ro": float(_r_ro_est), "mid": float(mid_r),
                     "r_si": float(_r_si_est), "K": int(_K), "n_slip": int(_N),
+                    "eps": float(_eps),
                 }
                 # No transfinite_ring_radii_mm here — the cells carry their own
                 # transfinite seeding; the old ring-radii path is route B.
@@ -936,7 +937,8 @@ def _split_polys_for_sliding_band(polys: dict) -> Tuple[dict, dict]:
     #   stator half: mid  → r_si  (K rings, outer half of the gap)
     _sg = polys.get("structured_gap_spec")
     if _sg is not None:
-        _base = {"K": int(_sg["K"]), "n_slip": int(_sg["n_slip"])}
+        _base = {"K": int(_sg["K"]), "n_slip": int(_sg["n_slip"]),
+                 "eps": float(_sg.get("eps", 0.0))}
         polys_r["structured_gap_spec"] = dict(
             _base, r_lo=float(_sg["r_ro"]), r_hi=float(_sg["mid"]), half="rotor")
         polys_s["structured_gap_spec"] = dict(
@@ -1715,20 +1717,28 @@ def _structured_gap_sm(n_slip: int, n_sectors: int,
     return S, M
 
 
-def _build_structured_gap_cells(occ, spec: dict, n_sectors: int,
-                                center_pt: int) -> Tuple[List[int], float, float, int]:
+def _build_structured_gap_cells(occ, spec: dict, n_sectors: int, center_pt: int,
+                                eps: float = 0.0
+                                ) -> Tuple[List[int], List[int], float, float, int]:
     """Build the route-A gap cells (concentric cylinder-sectors) for one half
     as OCC plane surfaces, over the [0, 2π/n_sectors] wedge.
 
-    ``spec`` = {r_lo, r_hi, K, n_slip}.  Returns (cell_surface_tags, r_lo, r_hi,
-    M) — the caller adds the tags to the SAME occ.fragment as the iron, then
-    (after fragment) identifies cells by centroid radius in (r_lo, r_hi) and
-    sets each transfinite: arcs → M+1 nodes, radial edges → 2 nodes.  K radial
-    layers → K+1 uniform radial levels in this half's gap slice.
+    ``spec`` = {r_lo, r_hi, K, n_slip, half}.  Returns
+    (transfinite_cell_tags, filler_tags, r_lo, r_hi, M):
+      • transfinite cells: K radial layers r_lo→r_hi → K+1 uniform radial levels;
+        the caller sets each transfinite (arcs → M+1, radial → 2).
+      • filler cells: ONE thin free-meshed layer bridging the ε retract gap to
+        the iron (rotor: r_ro−ε→r_ro on the r_lo side; stator: r_si→r_si+ε on the
+        r_hi side).  It shares the transfinite cells' clean arc (r_lo or r_hi) so
+        it conforms above, and meets the fuzzy iron below/above (free-meshed, so
+        the iron's subdividing vertices are harmless).  This closes the void the
+        ε retract opens → the mesh is CONFORMING (flux crosses; torque ≠ 0).
+        Returned SEPARATELY so it is NOT set transfinite.
     """
     r_lo = float(spec["r_lo"]); r_hi = float(spec["r_hi"])
     K = max(1, int(spec["K"]))
     n_slip = int(spec["n_slip"])
+    half = str(spec.get("half", ""))
     ns = max(1, int(n_sectors))
     Phi = 2.0 * math.pi / ns
     S, M = _structured_gap_sm(n_slip, ns)
@@ -1736,10 +1746,9 @@ def _build_structured_gap_cells(occ, spec: dict, n_sectors: int,
     def _P(r, a):
         return occ.addPoint(r * math.cos(a), r * math.sin(a), 0)
 
-    radii = np.linspace(r_lo, r_hi, K + 1)
-    cells: List[int] = []
-    for ir in range(K):
-        ra, rb = float(radii[ir]), float(radii[ir + 1])
+    def _sector_layer(ra, rb):
+        """S plane-surface cells between radii ra<rb over the wedge."""
+        out = []
         for s in range(S):
             a1 = Phi * s / S
             a2 = Phi * (s + 1) / S
@@ -1749,9 +1758,24 @@ def _build_structured_gap_cells(occ, spec: dict, n_sectors: int,
             aout = occ.addCircleArc(p4, center_pt, p3)
             l2 = occ.addLine(p2, p3)
             l1 = occ.addLine(p1, p4)
-            cells.append(occ.addPlaneSurface(
+            out.append(occ.addPlaneSurface(
                 [occ.addCurveLoop([ain, l2, -aout, -l1])]))
-    return cells, r_lo, r_hi, M
+        return out
+
+    radii = np.linspace(r_lo, r_hi, K + 1)
+    cells: List[int] = []
+    for ir in range(K):
+        cells += _sector_layer(float(radii[ir]), float(radii[ir + 1]))
+
+    # ε bridge filler on the IRON side of this half (free-meshed).  Rotor iron is
+    # capped at r_ro−ε (= r_lo−ε here); stator iron starts at r_si+ε (= r_hi+ε).
+    filler: List[int] = []
+    if eps > 0.0:
+        if half == "stator":
+            filler = _sector_layer(r_hi, r_hi + eps)     # r_si → r_si+ε
+        else:                                             # rotor (default)
+            filler = _sector_layer(r_lo - eps, r_lo)     # r_ro−ε → r_ro
+    return cells, filler, r_lo, r_hi, M
 
 
 def build_mesh_from_polygons(polys: dict,
@@ -1964,19 +1988,33 @@ def build_mesh_from_polygons(polys: dict,
         _sg_cells: List[int] = []
         _sg_M = 0
         _sg_rlo = _sg_rhi = 0.0
-        _sg_input_idx: List[int] = []      # indices into domain_surfaces of cells
+        _sg_input_idx: List[int] = []      # indices into domain_surfaces of TF cells
         if _sg_spec is not None:
             try:
                 _sg_center = occ.addPoint(0.0, 0.0, 0.0)
-                _sg_cells, _sg_rlo, _sg_rhi, _sg_M = _build_structured_gap_cells(
-                    occ, _sg_spec, n_sectors, _sg_center)
+                _sg_eps = float(_sg_spec.get("eps", 0.0))
+                _sg_cells, _sg_filler, _sg_rlo, _sg_rhi, _sg_M = \
+                    _build_structured_gap_cells(
+                        occ, _sg_spec, n_sectors, _sg_center, eps=_sg_eps)
                 for _cs in _sg_cells:
                     _sg_input_idx.append(len(domain_surfaces))
                     domain_surfaces.append((_cs, DOM_AIRGAP))
-                log.info("structured gap (route A): %s half, %d cells r=%.3f→%.3f "
-                         "(K=%d, M=%d/arc, n_sectors=%d)",
-                         _sg_spec.get("half", "?"), len(_sg_cells),
-                         _sg_rlo, _sg_rhi, int(_sg_spec["K"]), _sg_M, n_sectors)
+                # Filler ring (ε bridge to the iron) — FREE-meshed (not tracked in
+                # _sg_input_idx so never set transfinite).  Tag it with the IRON it
+                # replaces (the ε retract carved this sliver out of the rotor OD /
+                # stator bore) so the magnetic gap is NOT widened by 2ε → torque
+                # matches free mode.  The stator sliver is iron under teeth and air
+                # in slot mouths; tagging the 10 µm strip as stator iron is a
+                # negligible approximation (10 µm × slot-opening fraction).
+                _fill_dom = (DOM_STATOR if _sg_spec.get("half") == "stator"
+                             else DOM_ROTOR)
+                for _fs in _sg_filler:
+                    domain_surfaces.append((_fs, _fill_dom))
+                log.info("structured gap (route A): %s half, %d cells + %d filler "
+                         "r=%.3f→%.3f (K=%d, M=%d/arc, ε=%.4f, n_sectors=%d)",
+                         _sg_spec.get("half", "?"), len(_sg_cells), len(_sg_filler),
+                         _sg_rlo, _sg_rhi, int(_sg_spec["K"]), _sg_M, _sg_eps,
+                         n_sectors)
             except Exception as _sge:
                 log.warning("structured gap cell build failed (%s) — free gap", _sge)
                 _sg_cells = []
@@ -4089,11 +4127,16 @@ def fem_transient_sliding_band(
     if geo_override:
         motor.set_parameters(geo_override)   # in-memory candidate geometry
     polys = motor.get_2d_polygons(rotor_angle_deg=float(rotor_angle0_deg))
+    # STRUCTURED (mapped) gap uses the MERGED band: the route-A cells own the
+    # whole gap r_ro→mid→r_si with the SINGLE shared slip ring at mid_r (uniform
+    # S·M grid).  The moving-band split (mid±δ, empty re-stitched strip) is
+    # incompatible with the cells, so force merged when structured_gap is on.
+    _band_mode = ("merged" if structured_gap
+                  else ("moving" if (_SB_MOVING_BAND or _full_ring) else "merged"))
     polys = _simplify_polys(polys, tol_mm=0.005, stator_fillet_mm=stator_fillet_mm,
                             n_slip=n_slip_eff, gap_layers=gap_layers,
                             structured_gap=structured_gap,
-                            band_mode=("moving" if (_SB_MOVING_BAND or _full_ring)
-                                       else "merged"))
+                            band_mode=_band_mode)
     ms, ts, cs, mr, tr, cr = _build_sliding_band_meshes(
         polys, 0.0, mesh_size_mm, min_size_mm=min_size_mm,
         outer_air_factor=outer_air_factor, band_thickness_mm=0.4,

@@ -1989,6 +1989,9 @@ def build_mesh_from_polygons(polys: dict,
         _sg_M = 0
         _sg_rlo = _sg_rhi = 0.0
         _sg_input_idx: List[int] = []      # indices into domain_surfaces of TF cells
+        _sg_filler_idx: List[int] = []     # indices into domain_surfaces of filler
+        _sg_filler_half = "rotor"
+        _sg_eps = 0.0
         if _sg_spec is not None:
             try:
                 _sg_center = occ.addPoint(0.0, 0.0, 0.0)
@@ -2000,16 +2003,17 @@ def build_mesh_from_polygons(polys: dict,
                     _sg_input_idx.append(len(domain_surfaces))
                     domain_surfaces.append((_cs, DOM_AIRGAP))
                 # Filler ring (ε bridge to the iron) — FREE-meshed (not tracked in
-                # _sg_input_idx so never set transfinite).  Tag it with the IRON it
-                # replaces (the ε retract carved this sliver out of the rotor OD /
-                # stator bore) so the magnetic gap is NOT widened by 2ε → torque
-                # matches free mode.  The stator sliver is iron under teeth and air
-                # in slot mouths; tagging the 10 µm strip as stator iron is a
-                # negligible approximation (10 µm × slot-opening fraction).
-                _fill_dom = (DOM_STATOR if _sg_spec.get("half") == "stator"
-                             else DOM_ROTOR)
+                # _sg_input_idx so never set transfinite).  Each thin filler cell
+                # must carry the SAME material as the iron/air DIRECTLY behind it:
+                # iron under a tooth / between poles, air in a slot mouth / pole
+                # gap.  A blanket iron tag SHORTS the slot openings (iron bridges
+                # adjacent teeth) → ~25 % of the gap flux leaks tangentially →
+                # torque collapses.  Classify each filler cell below (post-frag)
+                # by centroid vs the retracted iron; tag AIR provisionally here.
+                _sg_filler_half = str(_sg_spec.get("half", "rotor"))
                 for _fs in _sg_filler:
-                    domain_surfaces.append((_fs, _fill_dom))
+                    _sg_filler_idx.append(len(domain_surfaces))
+                    domain_surfaces.append((_fs, DOM_AIRGAP))
                 log.info("structured gap (route A): %s half, %d cells + %d filler "
                          "r=%.3f→%.3f (K=%d, M=%d/arc, ε=%.4f, n_sectors=%d)",
                          _sg_spec.get("half", "?"), len(_sg_cells), len(_sg_filler),
@@ -2054,6 +2058,50 @@ def build_mesh_from_polygons(polys: dict,
                 for (_od, _ot) in _ol:
                     if _od == 2:
                         _sg_cell_frag_tags.add(int(_ot))
+
+        # STRUCTURED gap ε-filler: decide each filler cell's material by the iron
+        # DIRECTLY behind it.  Rotor filler (r_ro−ε→r_ro): iron if the point just
+        # inside the retracted rotor OD is in the rotor (or a magnet); else air.
+        # Stator filler (r_si→r_si+ε): iron if the point just inside the retracted
+        # stator bore is in the stator; else air (slot mouth).  This stops the
+        # blanket-iron slot short that collapses the gap flux.
+        _sg_filler_dom: Dict[int, int] = {}   # filler fragment tag → domain id
+        if _sg_filler_idx:
+            from shapely.geometry import Point as _PtF
+            _st_poly = polys.get("stator")
+            _ro_poly = polys.get("rotor")
+            _mag_polys = [mp for mp, _pl in polys.get("magnets", []) if mp is not None]
+            _probe = max(1e-4, 0.4 * float(_sg_eps))   # radial probe depth into iron
+            for _ii in _sg_filler_idx:
+                _ol = out_map[_ii] if _ii < len(out_map) else []
+                for (_od, _ot) in _ol:
+                    if _od != 2:
+                        continue
+                    try:
+                        _com = occ.getCenterOfMass(2, int(_ot))
+                    except Exception:
+                        _sg_filler_dom[int(_ot)] = DOM_AIRGAP
+                        continue
+                    _rr = math.hypot(_com[0], _com[1])
+                    _th = math.atan2(_com[1], _com[0])
+                    if _sg_filler_half == "stator":
+                        _pr = _rr + _probe            # probe outward (into stator)
+                        _pt = _PtF(_pr * math.cos(_th), _pr * math.sin(_th))
+                        _dom = (DOM_STATOR if (_st_poly is not None
+                                              and _st_poly.contains(_pt))
+                                else DOM_AIRGAP)
+                    else:
+                        _pr = _rr - _probe            # probe inward (into rotor)
+                        _pt = _PtF(_pr * math.cos(_th), _pr * math.sin(_th))
+                        _dom = DOM_AIRGAP
+                        if _ro_poly is not None and _ro_poly.contains(_pt):
+                            _dom = DOM_ROTOR
+                        else:
+                            for _mi, _mp in enumerate(_mag_polys):
+                                if _mp.contains(_pt):
+                                    _dom = DOM_MAG_BASE + _mi
+                                    break
+                    _sg_filler_dom[int(_ot)] = _dom
 
         # Classify each fragment: first by polygon membership for the small
         # features (coils, magnets), then fall back to radial annulus for the
@@ -2191,16 +2239,20 @@ def build_mesh_from_polygons(polys: dict,
         for dim, tag in fragment_out:
             if dim != 2:
                 continue
-            sources = frag_to_doms.get(int(tag), [])
-            if sources:
-                dom_id = max(sources, key=_spec)
+            if int(tag) in _sg_filler_dom:
+                # ε-filler cell: material decided by the iron behind it (above).
+                dom_id = _sg_filler_dom[int(tag)]
             else:
-                # Fallback: centroid-based radial classifier (rare path)
-                try:
-                    com = occ.getCenterOfMass(2, tag)
-                    dom_id = _classify(com[0], com[1])
-                except Exception:
-                    dom_id = DOM_AIR
+                sources = frag_to_doms.get(int(tag), [])
+                if sources:
+                    dom_id = max(sources, key=_spec)
+                else:
+                    # Fallback: centroid-based radial classifier (rare path)
+                    try:
+                        com = occ.getCenterOfMass(2, tag)
+                        dom_id = _classify(com[0], com[1])
+                    except Exception:
+                        dom_id = DOM_AIR
             frag_surfaces.append((int(tag), int(dom_id)))
 
         # Group surfaces by domain id — one physical group per domain

@@ -549,20 +549,20 @@ def _simplify_polys(polys: dict, tol_mm: float = 0.005,
                 #   built on the uniform S·M = n_slip grid so the sliding coupling
                 #   (_ring node identification) is untouched.
                 _K = max(1, int(round(float(gap_layers))))
-                # ε retract: pull the gap-facing iron a few µm OFF the cells'
-                # arcs (rotor OD → r_ro−ε, stator bore → r_si+ε).  The route-A
-                # cells only mesh transfinite if NO foreign boundary vertex lands
-                # on their inner/outer arcs; the fuzzy CadQuery OD polygon has
-                # hundreds of vertices AT r_ro that would subdivide every cell
-                # into 5-10 corners (transfinite needs 3/4).  ε (10 µm ≫ the 1 µm
-                # OCC boolean tol, ≪ the 200 µm gap → 0.08 % of radius) keeps the
-                # iron clear.  The stator bore (teeth + slot openings) needs the
-                # full 10 µm; 5 µm left ~half the stator cells subdivided.  The
-                # cells fill r_ro→mid / mid→r_si; the µm iron→cell ring is meshed
-                # by gmsh and cleaned by node welding after meshing.
-                _eps = float(_SG_EPS_OVERRIDE) if _SG_EPS_OVERRIDE else 0.01
-                _ro_c = _r_ro_est - _eps      # rotor iron capped here
-                _si_c = _r_si_est + _eps      # stator iron starts here
+                # ── CLEAN arc-boundary route A (no ε retract, no filler) ──────
+                # The gap cells only mesh transfinite if NO foreign vertex lands
+                # inside a cell arc.  Rather than pull the iron ε OFF the arcs and
+                # bridge the void with a free-meshed filler ring (the OLD approach
+                # — it left two ugly rings of sliver triangles AND blunted the
+                # tooth tips → torque deficit), we now keep the iron at its TRUE
+                # gap radius and rebuild its gap-facing ring as circle arcs
+                # COINCIDENT with the cells' arc (snapped to the seam grid) in
+                # build_mesh_from_polygons::_iron_arc_ring_occ.  So ε = 0 here:
+                # no retract clip, no filler, no post-mesh ε-ring reclassify.
+                # (_SG_EPS_OVERRIDE still forces the legacy retract for debugging.)
+                _eps = float(_SG_EPS_OVERRIDE) if _SG_EPS_OVERRIDE else 0.0
+                _ro_c = _r_ro_est - _eps      # = r_ro when ε=0 (no retract)
+                _si_c = _r_si_est + _eps      # = r_si when ε=0
 
                 def _drop_tiny(g, amin=0.01):
                     # Clipping the annulus off a polygonal (chorded) OD leaves a
@@ -576,17 +576,19 @@ def _simplify_polys(polys: dict, tol_mm: float = 0.005,
                         return None
                     return ps[0] if len(ps) == 1 else _SMulti2(ps)
 
-                # Cap the gap-facing iron at r_ro−ε / r_si+ε so its polygon
-                # vertices do not sit on the cell arcs.  Clip via a disk
-                # intersection (rotor) / disk subtraction (stator bore).
-                if out.get("rotor") is not None:
-                    _rc = out["rotor"].intersection(_SPoly2(_ring_pts(_ro_c)))
-                    if not _rc.is_empty:
-                        out["rotor"] = (_rc.buffer(0) if not _rc.is_valid else _rc)
-                if out.get("stator") is not None:
-                    _sc = out["stator"].difference(_SPoly2(_ring_pts(_si_c)))
-                    if not _sc.is_empty:
-                        out["stator"] = (_sc.buffer(0) if not _sc.is_valid else _sc)
+                # Legacy ε retract of the iron — ONLY when _SG_EPS_OVERRIDE forces
+                # ε>0 (debugging the old path).  With the default ε=0 the iron
+                # keeps its true OD/bore and the arc-ring OCC build handles
+                # conformity, so we skip the retract clip entirely.
+                if _eps > 0.0:
+                    if out.get("rotor") is not None:
+                        _rc = out["rotor"].intersection(_SPoly2(_ring_pts(_ro_c)))
+                        if not _rc.is_empty:
+                            out["rotor"] = (_rc.buffer(0) if not _rc.is_valid else _rc)
+                    if out.get("stator") is not None:
+                        _sc = out["stator"].difference(_SPoly2(_ring_pts(_si_c)))
+                        if not _sc.is_empty:
+                            out["stator"] = (_sc.buffer(0) if not _sc.is_valid else _sc)
                 # in_band = free inner air (disk(mid_r) − solids) with the pure
                 # gap RING r_ro→mid_r SUBTRACTED (a clean annulus polygon), so the
                 # transfinite cells own that ring.  We SUBTRACT an annulus rather
@@ -600,7 +602,12 @@ def _simplify_polys(polys: dict, tol_mm: float = 0.005,
                 if rotor_solids:
                     in_band = in_band.difference(_uu(rotor_solids))
                 in_band = in_band.difference(_gap_ring_in)
-                in_band = in_band.intersection(_SPoly2(_ring_pts(_ro_c)))
+                # Legacy ε retract only: clip the air a further ε below r_ro so no
+                # air vertex sits on the cell arc.  With ε=0 the gap-ring
+                # subtraction already bounds the air at r_ro; the arc iron owns
+                # that circle, so skip the extra clip.
+                if _eps > 0.0:
+                    in_band = in_band.intersection(_SPoly2(_ring_pts(_ro_c)))
                 if not in_band.is_valid: in_band = in_band.buffer(0)
                 in_band = _drop_tiny(in_band)
                 if in_band is not None:
@@ -617,7 +624,10 @@ def _simplify_polys(polys: dict, tol_mm: float = 0.005,
                 if out.get("stator") is not None:
                     out_band = out_band.difference(out["stator"])
                 out_band = out_band.difference(_gap_ring_out)
-                out_band = out_band.difference(_SPoly2(_ring_pts(_si_c)))
+                # Legacy ε retract only (see in_band above).  With ε=0 the arc
+                # iron owns the r_si circle, so skip the extra clip.
+                if _eps > 0.0:
+                    out_band = out_band.difference(_SPoly2(_ring_pts(_si_c)))
                 if not out_band.is_valid: out_band = out_band.buffer(0)
                 out_band = _drop_tiny(out_band)
                 if out_band is not None:
@@ -1721,8 +1731,128 @@ def _structured_gap_sm(n_slip: int, n_sectors: int,
     return S, M
 
 
+def _iron_arc_ring_occ(occ, center_pt: int, geom, r_ring: float,
+                       n_sectors: int, S: int, getP, dedupe_fn,
+                       tol_mm: float = 0.03) -> List[int]:
+    """Build OCC plane surfaces for an iron (Multi)Polygon whose gap-facing ring
+    (vertices at r ≈ ``r_ring``) is replaced by circle arcs COINCIDENT with the
+    structured-gap cells' arc at that radius (route A, clean — no ε retract).
+
+    Why: the cells only mesh transfinite if NO foreign vertex lands INSIDE a cell
+    arc (which would give the cell a 5th+ corner).  The raw CadQuery iron boundary
+    is a fuzzy polyline with hundreds of vertices at r_ring; converting it as
+    lines subdivides every cell arc.  Instead we emit, for each maximal run of
+    on-ring vertices, a chain of circle arcs whose endpoints are SNAPPED to the
+    cells' uniform seam grid (angles 2π·k/(S·n_sectors)).  Because the arc share
+    the exact circle + the exact seam endpoints as the cell arcs, occ.fragment
+    merges them → each gap cell keeps its 4 corners.  Off-ring boundary (yoke
+    outer edge, slot-mouth walls, radial sector cuts, shaft arc) stays polyline.
+
+    Slot mouths (stator) stay OPEN to the gap: between two snapped tooth-tip arcs
+    the boundary lifts radially into the slot as lines — no arc seals the mouth,
+    so the mouth cell's outer arc is a free gap↔slot interface (flux crosses).
+
+    ``getP(x, y)`` must be a caller-provided memoized point-adder so iron arc
+    endpoints share the SAME OCC point tags as the cells' seam points (exact
+    coincidence).  Returns the list of surface tags created.
+    """
+    import numpy as _np
+    ns = max(1, int(n_sectors))
+    step = (2.0 * math.pi / ns) / max(1, int(S))     # seam angular spacing
+
+    def _ring_curveloop(coords):
+        """One curve loop: on-ring runs → seam-snapped arcs, else lines."""
+        pts = dedupe_fn(coords)
+        if len(pts) < 3:
+            return None
+        n = len(pts)
+        r = _np.hypot([p[0] for p in pts], [p[1] for p in pts])
+        # "On the gap ring" = radius within tol of r_ring.  Works for both the
+        # rotor OD (iron below the ring) and the stator bore (iron above it):
+        # only the vertices sitting AT r_ring must snap to the cell arc.
+        on = _np.abs(r - r_ring) < tol_mm
+        # Build an ordered node list: replace each on-ring run by the seam nodes
+        # spanning its (snapped) angular extent; keep off-ring vertices as-is.
+        loop: List[Tuple[str, int]] = []
+        i = 0
+        while i < n:
+            if on[i]:
+                j = i
+                while j < n and on[j]:
+                    j += 1
+                a_s = math.atan2(pts[i][1], pts[i][0]) % (2.0 * math.pi)
+                a_e = math.atan2(pts[j - 1][1], pts[j - 1][0]) % (2.0 * math.pi)
+                k_s = int(round(a_s / step))
+                k_e = int(round(a_e / step))
+                rng = (range(k_s, k_e + 1) if k_e >= k_s
+                       else range(k_s, k_e - 1, -1))
+                for k in rng:
+                    a = step * k
+                    loop.append(("ARC", getP(r_ring * math.cos(a),
+                                             r_ring * math.sin(a))))
+                i = j
+            else:
+                loop.append(("PT", getP(pts[i][0], pts[i][1])))
+                i += 1
+        # Emit curves: consecutive ARC-ARC → circle arc (shares the cell arc);
+        # any run touching an off-ring PT → straight line.
+        curves: List[int] = []
+        L = len(loop)
+        for a in range(L):
+            (ta, pa) = loop[a]
+            (tb, pb) = loop[(a + 1) % L]
+            if pa == pb:
+                continue
+            if ta == "ARC" and tb == "ARC":
+                try:
+                    curves.append(occ.addCircleArc(pa, center_pt, pb))
+                    continue
+                except Exception:
+                    pass
+            try:
+                curves.append(occ.addLine(pa, pb))
+            except Exception:
+                continue
+        if len(curves) < 3:
+            return None
+        try:
+            return occ.addCurveLoop(curves)
+        except Exception:
+            return None
+
+    def _polys_only(gm):
+        if gm is None or gm.is_empty:
+            return []
+        if gm.geom_type == "Polygon":
+            return [gm]
+        if hasattr(gm, "geoms"):
+            out: List = []
+            for sub in gm.geoms:
+                out.extend(_polys_only(sub))
+            return out
+        return []
+
+    surfs: List[int] = []
+    for g in _polys_only(geom):
+        if g.is_empty or g.area < 1e-6:
+            continue
+        outer = _ring_curveloop(list(g.exterior.coords)[:-1])
+        if outer is None:
+            continue
+        holes = []
+        for h in g.interiors:
+            hw = _ring_curveloop(list(h.coords)[:-1])
+            if hw is not None:
+                holes.append(hw)
+        try:
+            surfs.append(occ.addPlaneSurface([outer, *holes]))
+        except Exception as _e:
+            log.warning("iron arc-ring surface failed: %s", _e)
+    return surfs
+
+
 def _build_structured_gap_cells(occ, spec: dict, n_sectors: int, center_pt: int,
-                                eps: float = 0.0
+                                eps: float = 0.0, getP=None
                                 ) -> Tuple[List[int], List[int], float, float, int]:
     """Build the route-A gap cells (concentric cylinder-sectors) for one half
     as OCC plane surfaces, over the [0, 2π/n_sectors] wedge.
@@ -1747,8 +1877,15 @@ def _build_structured_gap_cells(occ, spec: dict, n_sectors: int, center_pt: int,
     Phi = 2.0 * math.pi / ns
     S, M = _structured_gap_sm(n_slip, ns)
 
-    def _P(r, a):
-        return occ.addPoint(r * math.cos(a), r * math.sin(a), 0)
+    # When a shared memoized point-adder is passed (route-A clean arc iron), reuse
+    # it so the cells' arc endpoints at r_lo/r_hi share the SAME OCC point tags as
+    # the iron arc boundary → occ.fragment sees one coincident curve per seam.
+    if getP is not None:
+        def _P(r, a):
+            return getP(r * math.cos(a), r * math.sin(a))
+    else:
+        def _P(r, a):
+            return occ.addPoint(r * math.cos(a), r * math.sin(a), 0)
 
     def _sector_layer(ra, rb):
         """S plane-surface cells between radii ra<rb over the wedge."""
@@ -1956,17 +2093,79 @@ def build_mesh_from_polygons(polys: dict,
         # ones automatically.
         domain_surfaces: List[Tuple[int, int]] = []   # (surf_tag, domain_id)
 
-        for surf in _shapely_to_occ(polys.get("air_outer")):
+        # ── STRUCTURED gap (route A) — CLEAN arc iron boundary (no ε retract) ──
+        # When a structured_gap_spec is present we build the gap-facing iron of
+        # THIS half with its ring edge (rotor OD at r_lo=r_ro, or stator bore at
+        # r_hi=r_si) emitted as circle arcs COINCIDENT with the gap cells' arc,
+        # snapped to the uniform seam grid.  occ.fragment then merges the shared
+        # arc so every gap cell keeps 4 corners → transfinite → EXACT uniform
+        # rings, with NO ε retract and NO bridge filler (the old ugly sliver
+        # strips).  The iron keeps its true gap radius (rotor OD=r_ro, stator
+        # bore=r_si); slot mouths stay open to the gap.
+        _sg_spec0 = polys.get("structured_gap_spec")
+        _sg_arc_half = None       # "rotor" | "stator" | None
+        _sg_arc_r = 0.0
+        _sg_arc_S = 0
+        if _sg_spec0 is not None:
+            try:
+                _sg_arc_half = str(_sg_spec0.get("half", "")) or None
+                _sg_arc_S, _ = _structured_gap_sm(
+                    int(_sg_spec0["n_slip"]), max(1, int(n_sectors)))
+                # rotor half: gap ring is the OD at r_lo (=r_ro).
+                # stator half: gap ring is the bore at r_hi (=r_si).
+                _sg_arc_r = (float(_sg_spec0["r_hi"]) if _sg_arc_half == "stator"
+                             else float(_sg_spec0["r_lo"]))
+            except Exception:
+                _sg_arc_half = None
+        # Shared memoized point-adder: iron arc endpoints reuse the SAME OCC point
+        # tags the gap cells will place at each seam (exact coincidence).
+        _sg_center_pt = occ.addPoint(0.0, 0.0, 0.0) if _sg_arc_half else None
+        _sg_ptcache: Dict[Tuple[float, float], int] = {}
+
+        def _sg_getP(x, y):
+            _key = (round(x, 6), round(y, 6))
+            _t = _sg_ptcache.get(_key)
+            if _t is None:
+                _t = occ.addPoint(x, y, 0)
+                _sg_ptcache[_key] = _t
+            return _t
+
+        def _gap_edge_occ(geom, on_gap_edge: bool):
+            """Build surface(s) for a domain that borders the structured gap:
+            when it touches THIS half's gap ring (rotor OD=r_lo / stator
+            bore=r_hi) its ring run is emitted as arcs coincident with the cell
+            arc (so no foreign vertex subdivides a cell).  Applies to the
+            gap-facing iron AND to any AIR that reaches the ring (rotor pocket
+            air at r_ro, stator slot-mouth air at r_si) — otherwise their fuzzy
+            1008-gon ring boundary would subdivide the mouth/pocket cells.
+            Non-gap-edge domains use the plain polyline converter."""
+            if (on_gap_edge and _sg_arc_half is not None
+                    and geom is not None and not geom.is_empty):
+                s = _iron_arc_ring_occ(
+                    occ, _sg_center_pt, geom, _sg_arc_r,
+                    n_sectors, _sg_arc_S, _sg_getP, _dedupe)
+                if s:
+                    return s
+                log.warning("structured gap: arc edge build empty (%s) — "
+                            "polyline fallback", _sg_arc_half)
+            return _shapely_to_occ(geom)
+
+        # air_outer borders the gap on the STATOR half (slot mouths at r_si);
+        # air_gap (inner air) borders it on the ROTOR half (pockets at r_ro).
+        for surf in _gap_edge_occ(polys.get("air_outer"),
+                                  _sg_arc_half == "stator"):
             domain_surfaces.append((surf, DOM_OUTER))
         for surf in _shapely_to_occ(polys.get("air_background")):
             domain_surfaces.append((surf, DOM_AIR))
-        for surf in _shapely_to_occ(polys.get("stator")):
+        for surf in _gap_edge_occ(polys.get("stator"), _sg_arc_half == "stator"):
             domain_surfaces.append((surf, DOM_STATOR))
-        for surf in _shapely_to_occ(polys.get("rotor")):
+        for surf in _gap_edge_occ(polys.get("rotor"), _sg_arc_half == "rotor"):
             domain_surfaces.append((surf, DOM_ROTOR))
         for surf in _shapely_to_occ(polys.get("shaft")):
             domain_surfaces.append((surf, DOM_SHAFT))
-        for surf in _shapely_to_occ(polys.get("air_gap")):
+        # air_gap = inner air (pockets etc.); on the ROTOR half it reaches r_ro.
+        for surf in _gap_edge_occ(polys.get("air_gap"),
+                                  _sg_arc_half == "rotor"):
             domain_surfaces.append((surf, DOM_AIRGAP))
         for surf in _shapely_to_occ(polys.get("airgap_band")):
             domain_surfaces.append((surf, DOM_BAND))
@@ -1998,11 +2197,18 @@ def build_mesh_from_polygons(polys: dict,
         _sg_eps = 0.0
         if _sg_spec is not None:
             try:
-                _sg_center = occ.addPoint(0.0, 0.0, 0.0)
+                # Reuse the shared center point + memoized point-adder from the
+                # arc iron build so the cells' r_lo/r_hi seam points COINCIDE with
+                # the iron arc endpoints (route A clean).  Falls back to a fresh
+                # center when the arc iron path is inactive (eps>0 legacy retract).
+                _sg_center = (_sg_center_pt if _sg_center_pt is not None
+                              else occ.addPoint(0.0, 0.0, 0.0))
+                _sg_getP2 = _sg_getP if _sg_arc_half is not None else None
                 _sg_eps = float(_sg_spec.get("eps", 0.0))
                 _sg_cells, _sg_filler, _sg_rlo, _sg_rhi, _sg_M = \
                     _build_structured_gap_cells(
-                        occ, _sg_spec, n_sectors, _sg_center, eps=_sg_eps)
+                        occ, _sg_spec, n_sectors, _sg_center, eps=_sg_eps,
+                        getP=_sg_getP2)
                 for _cs in _sg_cells:
                     _sg_input_idx.append(len(domain_surfaces))
                     domain_surfaces.append((_cs, DOM_AIRGAP))

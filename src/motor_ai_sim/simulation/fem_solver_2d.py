@@ -545,6 +545,18 @@ def _simplify_polys(polys: dict, tol_mm: float = 0.005,
                 #   built on the uniform S·M = n_slip grid so the sliding coupling
                 #   (_ring node identification) is untouched.
                 _K = max(1, int(round(float(gap_layers))))
+                # ε retract: pull the gap-facing iron a few µm OFF the cells'
+                # arcs (rotor OD → r_ro−ε, stator bore → r_si+ε).  The route-A
+                # cells only mesh transfinite if NO foreign boundary vertex lands
+                # on their inner/outer arcs; the fuzzy CadQuery OD polygon has
+                # hundreds of vertices AT r_ro that would subdivide every cell
+                # into 5-10 corners (transfinite needs 3/4).  ε (5 µm ≫ the 1 µm
+                # OCC boolean tol, ≪ the 200 µm gap → 0.04 % of radius) keeps the
+                # iron clear.  The cells then fill r_ro→mid / mid→r_si; the µm-thin
+                # air ring iron→cell is closed by node welding after meshing.
+                _eps = 0.005
+                _ro_c = _r_ro_est - _eps      # rotor iron capped here
+                _si_c = _r_si_est + _eps      # stator iron starts here
 
                 def _drop_tiny(g, amin=0.01):
                     # Clipping the annulus off a polygonal (chorded) OD leaves a
@@ -558,35 +570,48 @@ def _simplify_polys(polys: dict, tol_mm: float = 0.005,
                         return None
                     return ps[0] if len(ps) == 1 else _SMulti2(ps)
 
+                # Cap the gap-facing iron at r_ro−ε / r_si+ε so its polygon
+                # vertices do not sit on the cell arcs.  Clip via a disk
+                # intersection (rotor) / disk subtraction (stator bore).
+                if out.get("rotor") is not None:
+                    _rc = out["rotor"].intersection(_SPoly2(_ring_pts(_ro_c)))
+                    if not _rc.is_empty:
+                        out["rotor"] = (_rc.buffer(0) if not _rc.is_valid else _rc)
+                if out.get("stator") is not None:
+                    _sc = out["stator"].difference(_SPoly2(_ring_pts(_si_c)))
+                    if not _sc.is_empty:
+                        out["stator"] = (_sc.buffer(0) if not _sc.is_valid else _sc)
                 # in_band = free inner air (disk(mid_r) − solids) with the pure
                 # gap RING r_ro→mid_r SUBTRACTED (a clean annulus polygon), so the
                 # transfinite cells own that ring.  We SUBTRACT an annulus rather
                 # than INTERSECT disk(r_ro): the pockets lie fully below r_ro so
                 # their boundaries are untouched (no disk-arc points injected →
-                # the OCC converter stays happy).  Drop any sliver remnants.
+                # the OCC converter stays happy).  Then clip the air to r_ro−ε too
+                # (so no air boundary lands on the cell arcs either) and drop
+                # slivers.  The µm iron→cell ring is welded post-mesh.
                 _gap_ring_in = _SPoly2(mid_ring, [_ring_pts(_r_ro_est)])
                 in_band = _SPoly2(mid_ring)
                 if rotor_solids:
                     in_band = in_band.difference(_uu(rotor_solids))
                 in_band = in_band.difference(_gap_ring_in)
+                in_band = in_band.intersection(_SPoly2(_ring_pts(_ro_c)))
                 if not in_band.is_valid: in_band = in_band.buffer(0)
                 in_band = _drop_tiny(in_band)
                 if in_band is not None:
-                    # 10 µm simplify: the annulus cut leaves pocket-top points
-                    # that, after the sector clip, break the OCC converter's loop
-                    # closure ("curve loop is not closed").  10 µm ≪ the 200 µm
-                    # gap; the cells (not this polygon) pin the exact r_ro ring
-                    # and fragment reconciles the offset.
+                    # 10 µm simplify collapses near-duplicate points the boolean
+                    # ops leave (else the OCC loop-closure fails after the sector
+                    # clip). 10 µm ≪ the 200 µm gap.
                     in_band = in_band.simplify(0.01, preserve_topology=True)
                     out["in_band"] = in_band
                 # out_band = free outer air (annulus mid_r→r_out − stator) with the
-                # gap ring mid_r→r_si SUBTRACTED, so the cells own it.  The slot
-                # openings sit above r_si so they are untouched.
+                # gap ring mid_r→r_si SUBTRACTED, so the cells own it, then clipped
+                # to start at r_si+ε.  Slot openings sit above r_si (untouched).
                 _gap_ring_out = _SPoly2(_ring_pts(_r_si_est), [mid_ring])
                 out_band = _SPoly2(rout_ring, [mid_ring])
                 if out.get("stator") is not None:
                     out_band = out_band.difference(out["stator"])
                 out_band = out_band.difference(_gap_ring_out)
+                out_band = out_band.difference(_SPoly2(_ring_pts(_si_c)))
                 if not out_band.is_valid: out_band = out_band.buffer(0)
                 out_band = _drop_tiny(out_band)
                 if out_band is not None:

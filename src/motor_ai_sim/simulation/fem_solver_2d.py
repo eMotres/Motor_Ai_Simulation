@@ -131,6 +131,10 @@ _SB_AIRGAP_MACRO = False
 # gap coupling (see _SB_AIRGAP_MACRO / #141), so this mainly regularises the gap mesh
 # and the slip re-pairing noise -- MEASURE before trusting it to move ripple.
 _SB_STRUCTURED_GAP = _os_sb.environ.get("SB_STRUCTURED_GAP", "0") == "1"
+# STRUCTURED gap ε retract (mm): how far the gap-facing iron is pulled off the
+# transfinite cell arcs so its fuzzy polygon vertices do not subdivide them.
+# None → the code default (0.01).  Diagnostic override hook (torque/ε studies).
+_SG_EPS_OVERRIDE = None
 _SLIP_PER_PERIOD_OVERRIDE = 0   # 0 = adaptive formula; >0 forces slip nodes/period (ring density)
 
 # ── Torque-band diagnostic (off by default; set ['on']=True before a solve to
@@ -556,7 +560,7 @@ def _simplify_polys(polys: dict, tol_mm: float = 0.005,
                 # full 10 µm; 5 µm left ~half the stator cells subdivided.  The
                 # cells fill r_ro→mid / mid→r_si; the µm iron→cell ring is meshed
                 # by gmsh and cleaned by node welding after meshing.
-                _eps = 0.01
+                _eps = float(_SG_EPS_OVERRIDE) if _SG_EPS_OVERRIDE else 0.01
                 _ro_c = _r_ro_est - _eps      # rotor iron capped here
                 _si_c = _r_si_est + _eps      # stator iron starts here
 
@@ -5837,6 +5841,45 @@ def _stitch_full_half(polys_half: dict, default_dom: int,
             ct[_sh.contains_xy(gg, cen[:, 0], cen[:, 1])] = tag
         except Exception:
             pass
+
+    # STRUCTURED gap: the ε retract pulled the iron OFF the cell arcs for the OCC
+    # build, so the thin ε ring (rotor r_ro−ε→r_ro, stator r_si→r_si+ε) is NOT
+    # inside the retracted iron polygon → the pass above left it as air, WIDENING
+    # the magnetic gap by 2ε and collapsing torque.  Restore its material: a tri
+    # in the ε ring is iron where the retracted iron sits DIRECTLY behind it (probe
+    # ε inward for the rotor / outward for the stator).
+    _sg = polys_half.get("structured_gap_spec")
+    if _sg is not None and float(_sg.get("eps", 0.0)) > 0.0:
+        _eps = float(_sg["eps"])
+        _rr = _np.hypot(cen[:, 0], cen[:, 1]); _th = _np.arctan2(cen[:, 1], cen[:, 0])
+        _probe = max(1e-4, 0.4 * _eps)
+        _ro_poly = polys_half.get("rotor"); _st_poly = polys_half.get("stator")
+        _mags = [mp for mp, _pl in polys_half.get("magnets", []) if mp is not None]
+        if str(_sg.get("half")) == "stator":
+            # stator ε ring is on the r_hi (= r_si) side
+            _rsi = float(_sg["r_hi"])
+            if _st_poly is not None:
+                _m = (_rr >= _rsi - 1e-6) & (_rr <= _rsi + _eps + 1e-6)
+                if _m.any():
+                    _px = (_rr[_m] + _probe) * _np.cos(_th[_m])
+                    _py = (_rr[_m] + _probe) * _np.sin(_th[_m])
+                    _iron = _sh.contains_xy(_st_poly, _px, _py)
+                    _idx = _np.where(_m)[0]
+                    ct[_idx[_iron]] = DOM_STATOR
+        else:
+            # rotor ε ring is on the r_lo (= r_ro) side
+            _rro = float(_sg["r_lo"])
+            if _ro_poly is not None:
+                _m = (_rr >= _rro - _eps - 1e-6) & (_rr <= _rro + 1e-6)
+                if _m.any():
+                    _px = (_rr[_m] - _probe) * _np.cos(_th[_m])
+                    _py = (_rr[_m] - _probe) * _np.sin(_th[_m])
+                    _iron = _sh.contains_xy(_ro_poly, _px, _py)
+                    _idx = _np.where(_m)[0]
+                    ct[_idx[_iron]] = DOM_ROTOR
+                    for _mi, _mp in enumerate(_mags):
+                        _inm = _sh.contains_xy(_mp, _px, _py)
+                        ct[_idx[_inm]] = DOM_MAG_BASE + _mi
 
     class _CF:
         pass

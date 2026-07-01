@@ -1,0 +1,8 @@
+spec: {'r_ro': 12.100000000000003, 'r_si': 12.29629706167341, 'mid_r': 12.200000000000001, 'K': 1, 'N': 168}
+building ROTOR half...
+
+Failure to parse tags from meshio.
+Transforming over 1000 vertices to C_CONTIGUOUS.
+Transforming over 1000 elements to C_CONTIGUOUS.
+rotor done 1.0s: 3149n/5746t
+rotor gap band levels [12.100..12.200]: [np.float64(12.0999), np.float64(12.2)] (want 2 for K=1)

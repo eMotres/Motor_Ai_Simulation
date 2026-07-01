@@ -1,0 +1,4 @@
+importing...
+imported 0.5s
+spec set: True
+sector cuts NOT matched (0 vs 0 curves) — cut meshes may disagree node-wise

@@ -489,15 +489,15 @@
       "shaft_diameter": 5
     },
     "simulation": {
-      "max_current": 35,
-      "rpm": 12000,
+      "max_current": 1690,
+      "rpm": 1800,
       "phase_offset_deg": 0,
-      "steps_per_period": 72,
+      "steps_per_period": 60,
       "demag": false,
       "coil_temp_c": 120,
-      "frequency": 2000,
+      "frequency": 300,
       "end_winding_factor": 1.43,
-      "connection": "4S"
+      "connection": "4P"
     },
     "mesh": {
       "mesh_size_mm": 8,

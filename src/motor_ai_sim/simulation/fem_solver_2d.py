@@ -6594,7 +6594,7 @@ def _build_full_disk_from_halves(polys, rotor_angle_deg, mesh_size_mm,
                                  min_size_mm, outer_air_factor, motion_band,
                                  band_thickness_mm, geo_cfg, component_mesh_mm,
                                  normal_deviation_deg=6.0, aspect_ratio=10.0,
-                                 gap_layers=3.0):
+                                 gap_layers=3.0, structured_slot=False):
     """Build a CLEAN full-disk (n_sectors=1) mesh by stitching TWO 1/2 sector
     meshes (the half is meshed cleanly by OCC; the full 360° is NOT).
 
@@ -6621,7 +6621,8 @@ def _build_full_disk_from_halves(polys, rotor_angle_deg, mesh_size_mm,
         normal_deviation_deg=normal_deviation_deg, aspect_ratio=aspect_ratio,
         outer_air_factor=outer_air_factor, motion_band=motion_band,
         band_thickness_mm=band_thickness_mm, gap_layers=gap_layers, n_sectors=2,
-        geo_cfg=geo_cfg, component_mesh_mm=component_mesh_mm)
+        geo_cfg=geo_cfg, component_mesh_mm=component_mesh_mm,
+        structured_slot=structured_slot)
     V = mesh2.p.T; T = mesh2.t.T; N = len(V)
 
     # 2) stitch: half + 180°-rotated copy, then weld coincident seam nodes
@@ -6668,6 +6669,22 @@ def _build_full_disk_from_halves(polys, rotor_angle_deg, mesh_size_mm,
             ct[_sh.contains_xy(gg, cen[:, 0], cen[:, 1])] = tag
         except Exception:
             pass
+
+    # STRUCTURED SLOT: reclassify the enamel/liner cells (defaulted to air / gap
+    # above; not in any coil/iron polygon).  Only touch tris still on air so
+    # copper stays copper.  Gated on structured_slot (free path byte-identical).
+    if structured_slot:
+        for _ik, _idm in (("wire_insulation", DOM_WIRE_INS),
+                          ("slot_insulation", DOM_SLOT_INS)):
+            for _ip in (polys.get(_ik) or []):
+                if _ip is None or _ip.is_empty:
+                    continue
+                try:
+                    _hit = _sh.contains_xy(_ip, cen[:, 0], cen[:, 1]) & \
+                        ((ct == DOM_AIR) | (ct == DOM_AIRGAP) | (ct == DOM_OUTER))
+                    ct[_hit] = _idm
+                except Exception:
+                    pass
 
     class _CF:
         pass

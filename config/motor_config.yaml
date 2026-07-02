@@ -393,16 +393,16 @@ materials:
 custom_materials: {}
 winding:
   n_coils_per_phase: 4
-  connection: 4S
-  n_parallel: 1
-  n_series: 4
+  connection: "4P"
+  n_parallel: 4
+  n_series: 1
   layers: 1
   layout: A|a|b|B|C|c|a|A|B|b|c|C|A|a|b|B|C|c|a|A|B|b|c|C
 simulation:
-  max_current: 35
-  frequency: 2000.0
-  rpm: 12000
-  phase_offset_deg: 0
+  max_current: 1690.0
+  frequency: 300.0
+  rpm: 1800.0
+  phase_offset_deg: 0.0
   steps_per_period: 72
   demag: false
   coil_temp_c: 120

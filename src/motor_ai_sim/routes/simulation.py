@@ -1023,6 +1023,8 @@ async def build_fem_mesh_2d(
     component_mesh:      str   = "",      # JSON {comp: size_mm} per-part target
                                           # element size: stator/rotor/magnet/
                                           # coil/shaft/outer. "" = global size.
+    structured_slot:     bool  = False,   # ANSYS-style transfinite slot interior
+                                          # (copper+enamel+liner, sliver-free); off = free
     geo:                 Optional[str] = None,  # per-request geometry override (multi-user)
 ):
     """Build a 2-D triangle mesh of the motor cross-section and return it as
@@ -1062,6 +1064,7 @@ async def build_fem_mesh_2d(
         int(n_sectors),
         round(stator_fillet_mm, 2),
         tuple(sorted(_comp_mesh.items())),
+        bool(structured_slot),
     )
     if key in _fem_mesh_cache:
         return _fem_mesh_cache[key]
@@ -1109,7 +1112,7 @@ async def build_fem_mesh_2d(
                 outer_air_factor, motion_band, band_thickness_mm,
                 motor.parameters, _comp_mesh,
                 normal_deviation_deg=normal_deviation, aspect_ratio=aspect_ratio,
-                gap_layers=gap_layers)
+                gap_layers=gap_layers, structured_slot=bool(structured_slot))
         else:
             mesh, cell_tags_from_build, classify_fn = build_mesh_from_polygons(
                 polys, rotor_angle_deg, mesh_size_mm,
@@ -1124,6 +1127,7 @@ async def build_fem_mesh_2d(
                 gap_layers=gap_layers,
                 n_sectors=n_sectors,
                 component_mesh_mm=_comp_mesh,
+                structured_slot=bool(structured_slot),
             )
     except Exception as e:
         log.exception("mesh build failed")

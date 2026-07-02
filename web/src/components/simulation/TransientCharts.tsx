@@ -45,6 +45,7 @@ interface TransientPayload {
   T_ripple_raw_pct?: number;
   T_ripple_filt_pct?: number;
   P_cu_W: number[];
+  P_cu_dc_W?: number;      // flat DC (I²R) part — chart shows it vs DC+AC so the eddy share is visible
   P_fe_W: number[];
   P_mag_eddy_W: number[];
   P_shaft_eddy_W?: number[];
@@ -414,6 +415,8 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
       t_ms:  t,
       T_em:  Tshown[i],
       P_cu:  data.P_cu_W[i],
+      // Flat DC (I²R) copper line — the gap up to P_cu is the AC eddy/proximity share.
+      P_cu_dc: data.P_cu_dc_W ?? undefined,
       P_fe:  data.P_fe_W[i],
       P_mag: data.P_mag_eddy_W[i],
       P_shaft: (data.P_shaft_eddy_W ?? [])[i] ?? 0,
@@ -661,10 +664,16 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
                 <RcTooltip {...TOOLTIP}/>
                 <Legend wrapperStyle={{ fontSize: 10 }}/>
                 <Line type="monotone" dataKey="P_cu" stroke="#fbbf24"
-                  name="P_Cu" strokeWidth={2}
+                  name="P_Cu (DC+AC)" strokeWidth={2}
                   dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
                     r={3} fill={d.stroke} stroke="none"/>}
                   activeDot={{ r: 5 }}
+                  isAnimationActive={false}/>
+                {/* Flat DC-only copper reference: the vertical gap to P_Cu (DC+AC)
+                    IS the eddy/proximity loss share in the winding. */}
+                <Line type="monotone" dataKey="P_cu_dc" stroke="#b45309"
+                  name="P_Cu DC only" strokeWidth={2} strokeDasharray="6 3"
+                  dot={false} activeDot={{ r: 4 }}
                   isAnimationActive={false}/>
                 <Line type="monotone" dataKey="P_fe" stroke="#f87171"
                   name="P_Fe" strokeWidth={2}

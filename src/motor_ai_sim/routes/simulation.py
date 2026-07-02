@@ -1992,6 +1992,7 @@ def get_thermal_field2d(
     # 4. per-element k + q from the collapsed domain tags
     (DOM_AIR, DOM_STATOR, DOM_COIL, DOM_AIRGAP, DOM_MAG_N, DOM_ROTOR,
      DOM_SHAFT, DOM_BAND, DOM_OUTER, DOM_MAG_S) = 0, 1, 2, 3, 4, 5, 6, 7, 8, 44
+    DOM_WIRE_INS, DOM_SLOT_INS = 9, 10       # structured-slot insulation domains
     k_elem = _np.full(tris.shape[0], gap_k_eff)         # default = air / gap (Taylor-enhanced)
     q_elem = loss_dens.copy()
     is_steel = (tags == DOM_STATOR) | (tags == DOM_ROTOR)
@@ -2000,7 +2001,21 @@ def get_thermal_field2d(
     k_elem[is_steel] = k_steel
     k_elem[is_mag] = k_mag
     k_elem[tags == DOM_SHAFT] = k_shaft
-    k_elem[is_coil] = slot_k_eff                        # winding + slot-liner series resistance
+    # ── Slot liner / enamel: LUMPED vs MESHED ─────────────────────────────────
+    # If the mesh carries the structured-slot insulation domains, the liner is a
+    # REAL meshed barrier — give it its true (low) conductivity and give the
+    # copper PURE winding k (no lumped series liner, else the barrier is counted
+    # twice).  Otherwise fall back to the historical lumped slot_k_eff on the
+    # coil (liner smeared into the winding transverse k).
+    _has_meshed_ins = bool(((tags == DOM_WIRE_INS) | (tags == DOM_SLOT_INS)).any())
+    if _has_meshed_ins:
+        k_elem[is_coil] = slot_k_used                   # winding bulk only (liner is separate)
+        k_elem[tags == DOM_SLOT_INS] = float(k_liner)   # meshed liner barrier
+        k_elem[tags == DOM_WIRE_INS] = float(k_enamel)  # meshed enamel + inter-wire gaps
+        log.info("thermal: meshed slot insulation (liner k=%.3f, enamel k=%.3f, "
+                 "winding k=%.3f)", float(k_liner), float(k_enamel), slot_k_used)
+    else:
+        k_elem[is_coil] = slot_k_eff                    # winding + slot-liner series resistance
     q_elem[is_coil] = q_cu                              # copper loss density (overwrites eddy part)
 
     # 5. cooling system → housing Robin BC (h, sink temp).  The whole outer stator

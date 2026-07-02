@@ -248,7 +248,8 @@ class CadQueryMotor:
             mapped['shaft_inner_radius'] = mapped['rotor_inner_radius'] - mapped['shaft_height']
         
         # Ensure magnet parameters exist
-        for key in ['magnet_fill_down', 'magnet_fill_up', 'magnet_fill_radius', 'magnet_up_gap', 'magnet_down_height']:
+        for key in ['magnet_fill_down', 'magnet_fill_up', 'magnet_fill_radius', 'magnet_up_gap', 'magnet_down_height',
+                    'magnet_lamination']:   # in-plane segment size, mm; 0 = solid
             if key not in mapped:
                 mapped[key] = config_params.get(key, 0.0)
         
@@ -1349,6 +1350,107 @@ class CadQueryMotor:
 
         return result
 
+    @staticmethod
+    def _laminate_magnets(mag_polys, seg_mm: float, num_poles: int):
+        """Magnet lamination — split each magnet polygon into ≈``seg_mm``-sized
+        insulated pieces along its LONGEST in-plane dimension (2-D segmentation).
+
+        radial extent ≥ tangential → concentric-circle cuts (radial slices);
+        otherwise                  → radial-ray cuts   (tangential slices).
+
+        The cuts are ZERO-width: pieces TOUCH, so the mesh conforms with shared
+        nodes and the magnetic field is IDENTICAL to the solid magnet.  The
+        electrical isolation comes from the per-body treatment downstream —
+        every returned piece gets its own DOM_MAG tag, hence its own floating
+        conductor (∮J = 0) in BOTH eddy-loss paths (history post-process
+        ``_mag_groups`` and the honest coupled solve) — which is exactly what
+        physical segmentation does: smaller loops → quadratically less loss.
+        Each piece also gets its own tangential M from its OWN centroid in
+        build_materials, i.e. arc-true magnetisation for free.
+
+        Piece count per magnet is capped so the machine stays inside the
+        DOM_MAG tag budget [DOM_MAG_BASE .. DOM_COIL_BASE) = 100 ids even on a
+        full-disk build.  Fail-safe: if slicing loses area (>2 %), that magnet
+        stays solid.  Works for ANY magnet shape (universal — operates on the
+        final polygon, after fillets).  Returns [(piece, polarity), ...]."""
+        import math as _m
+        from shapely.geometry import Polygon as _P, MultiPolygon as _MP, Point as _Pt
+
+        out = []
+        cap = max(1, 96 // max(1, int(num_poles)))       # tag-budget cap / pole
+        _N_ARC = 512                                      # circle facets (sag ≪ mesh tol)
+        _origin = _Pt(0.0, 0.0)
+        for mp, pol in mag_polys:
+            if mp is None or mp.is_empty or seg_mm <= 0.1:
+                out.append((mp, pol)); continue
+            try:
+                xy = list(mp.exterior.coords)
+                rr = [_m.hypot(x, y) for x, y in xy]
+                # r_hi: max distance is always attained at a vertex.  r_lo must be
+                # the TRUE min distance to the region — a straight bottom edge
+                # between two vertices at radius R sags INSIDE the R-circle
+                # (chord sagitta: the 450's magnet bottom dips 123.3 → 122.1 mm),
+                # so min-over-vertices missed a 28 mm² lens under the innermost
+                # annulus cut.  shapely distance(origin→polygon) is exact.
+                r_lo, r_hi = float(mp.distance(_origin)), max(rr)
+                c = mp.centroid
+                ca = _m.atan2(c.y, c.x)
+                # unwrap angles around the centroid direction (seam-safe)
+                angs = [(_m.atan2(y, x) - ca + _m.pi) % (2.0 * _m.pi) - _m.pi
+                        for x, y in xy]
+                a_lo, a_hi = min(angs), max(angs)
+                rad_ext = r_hi - r_lo
+                tan_ext = (a_hi - a_lo) * 0.5 * (r_lo + r_hi)
+                n = int(_m.ceil(max(rad_ext, tan_ext) / float(seg_mm)))
+                n = max(1, min(n, cap))
+                if n == 1:
+                    out.append((mp, pol)); continue
+                pieces = []
+                if rad_ext >= tan_ext:
+                    # radial slices: cut with concentric annuli
+                    edges = [r_lo + rad_ext * k / n for k in range(n + 1)]
+                    edges[0] = max(edges[0] - 1e-6, 1e-9)
+                    edges[-1] += 1e-6
+                    def _ring(r):
+                        return [(r * _m.cos(2 * _m.pi * j / _N_ARC),
+                                 r * _m.sin(2 * _m.pi * j / _N_ARC))
+                                for j in range(_N_ARC)]
+                    for k in range(n):
+                        annulus = _P(_ring(edges[k + 1]), [_ring(edges[k])])
+                        pieces.append(mp.intersection(annulus))
+                else:
+                    # tangential slices: cut with radial-ray wedges
+                    R = 10.0 * r_hi
+                    for k in range(n):
+                        b0 = ca + a_lo + (a_hi - a_lo) * k / n
+                        b1 = ca + a_lo + (a_hi - a_lo) * (k + 1) / n
+                        if k == 0:      b0 -= 1e-7
+                        if k == n - 1:  b1 += 1e-7
+                        bm = 0.5 * (b0 + b1)
+                        wedge = _P([(0.0, 0.0),
+                                    (R * _m.cos(b0), R * _m.sin(b0)),
+                                    (R * _m.cos(bm), R * _m.sin(bm)),
+                                    (R * _m.cos(b1), R * _m.sin(b1))])
+                        pieces.append(mp.intersection(wedge))
+                a_min = 1e-4 * mp.area
+                got = []
+                for pc in pieces:
+                    if pc is None or pc.is_empty:
+                        continue
+                    if not pc.is_valid:
+                        pc = pc.buffer(0)
+                    for g in (list(pc.geoms) if isinstance(pc, _MP) else [pc]):
+                        if g.area > a_min:
+                            got.append((g, pol))
+                # fail-safe: keep the solid magnet if slicing lost area
+                if got and abs(sum(g.area for g, _p in got) - mp.area) < 0.02 * mp.area:
+                    out.extend(got)
+                else:
+                    out.append((mp, pol))
+            except Exception:
+                out.append((mp, pol))                     # any hiccup → solid
+        return out
+
     def get_2d_polygons(self, rotor_angle_deg: float = 0.0) -> Dict[str, Any]:
         """Return raw Shapely polygon objects for each motor domain.
 
@@ -1516,6 +1618,17 @@ class CadQueryMotor:
             # SMALL d-axis phase shift (≈0 ± a few deg) instead of ~270°.
             polarity = -1 if i % 2 == 0 else +1
             mag_polys.append((mp, polarity))
+
+        # ── Magnet lamination (magnet_lamination, mm; 0 = solid) ─────────────
+        # Split every magnet into ≈seg-sized insulated pieces (see the helper
+        # for the physics).  MUST happen after the pole loop and BEFORE any
+        # consumer: the rotor POCKETS above (hole_polys) keep the FULL magnet
+        # outline — the cavity is one pocket no matter how the magnet inside
+        # is sliced — and the air bands below subtract the union of the pieces,
+        # which equals the solid magnet region (zero-width cuts).
+        _seg_mm = float(p.get('magnet_lamination', 0.0) or 0.0)
+        if _seg_mm > 0.1:
+            mag_polys = self._laminate_magnets(mag_polys, _seg_mm, num_poles)
 
         # Rotor = annulus rotor_or..rotor_ir minus union(all holes).
         # Using shapely difference avoids the invalid-polygon problem

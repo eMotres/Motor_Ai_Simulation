@@ -5785,7 +5785,14 @@ def fem_transient_sliding_band(
     _rho_cu   = RHO_CU_20 * (1.0 + ALPHA_CU * (float(coil_temp_c) - 20.0))
     _sigma_cu = 1.0 / _rho_cu
     _delta_cu = math.sqrt(2.0 * _rho_cu / (_omega_e * MU0))
-    _w_cu = min(float(geo.get("wire_width",  5.0)) * 1e-3, 2.0 * _delta_cu)  # ↔ B_radial
+    # wire_split (per Vadim, matches his ANSYS practice): the wide flat bar is
+    # wound as N parallel strips across its WIDTH (insulated + transposed), so
+    # the width-direction proximity loops see w/N, cutting that loss term ∝N².
+    # Assumes ideal transposition (no circulating currents between strips).
+    # The 2·δ skin cap still applies on top (whichever is smaller governs).
+    _n_wsplit = max(1, int(round(float(geo.get("wire_split", 1) or 1))))
+    _w_cu = min(float(geo.get("wire_width",  5.0)) * 1e-3 / _n_wsplit,
+                2.0 * _delta_cu)                                             # ↔ B_radial
     _h_cu = min(float(geo.get("wire_height", 0.8)) * 1e-3, 2.0 * _delta_cu)  # ↔ B_tangential
     _sm = half["s"]["mesh"]
     _coil_cen = ((_sm.p[:, _sm.t].mean(axis=1))[:, _coil_idx]

@@ -247,3 +247,107 @@ approximation at all (its OD is a full circle already on every seam).
   (72/72 stator incl. mouths).  Verification: `_z_torque_cmp.py`, `_z_render_gap.py`,
   `_z_free_regress.py` (drive the full-disk path on a stable 40 mm config via `_use40.py`
   so tests never touch the user's live on-disk config).
+
+---
+
+# STRUCTURED SLOT INTERIOR — route A extended to the copper/enamel/liner (2026-07-02)
+
+Same route-A idea (structured OCC cells + `occ.fragment` for automatic
+conformity + `setTransfiniteSurface`), extended from the air gap to the STATOR
+SLOT INTERIOR.  Solves the user's complaint: the thin insulation in the slot —
+slot **liner** (coil↔iron, ~0.06 mm), wire **enamel** + inter-wire spacing — was
+free-meshed into razor slivers (measured **408 tris <5° at 40 mm**, worst angle
+1.42°).  Magnetically minor (µr=1) but it wrecks the THERMAL solve (the liner is
+the copper→iron heat barrier) and violates "mesh = geometry".
+
+Gated on a new `structured_slot` flag (default OFF); the free path is
+**byte-for-byte unchanged** (free regression T_avg=0.58163274, every digit).
+
+## Why the slot is EASIER than the gap
+The slot interior is a **cartesian tensor grid** in the un-rotated frame (before
+`cadquery_geometry`'s per-slot `_affine_rotate`): wires are axis-aligned
+rectangles stacked in y; the enamel envelope is the copper grown `wire_spacing/2`
+(so it also holds the inter-wire gaps + margins); the liner is an `ins_w` U-band
+on the three iron-facing sides (OPEN at the gap side).  So there are NO arcs —
+every cell is a straight-edged quad.  No ε retract, no arc-snapping (all that gap
+machinery was to make a FUZZY circular iron boundary conform).
+
+## Mechanism (fem_solver_2d.py)
+1. **`_slot_grid_columns(geo_cfg)`** — recomputes the exact cartesian grid of one
+   slot column, MIRRORING `cadquery_geometry._build_insulation_polys` /
+   `get_2d_polygons` (same `right_x`, `top_y_c`, `n_fit` feasibility clamp).  Each
+   cell is tagged copper / enamel (`DOM_WIRE_INS`) / liner (`DOM_SLOT_INS`) by its
+   centre, plus the wire step for copper.
+2. **`_build_structured_slot_cells`** — emits each cell as an OCC quad via a
+   SHARED memoized point-adder (so neighbouring cells and both sides of every
+   copper/enamel/liner interface reuse the SAME OCC points → conforming within
+   the block).  Copper cells carry the per-coil current tag
+   `DOM_COIL_BASE + (col*n_fit + step)`, matching `coil_polys` order, so
+   `build_materials` injects the right (phase, direction) J into every wire.
+   Built in the SAME model as the iron → `occ.fragment` makes the teeth/yoke
+   conform automatically (no weld, no overlap buffer).
+3. **`_slot_block_footprint`** — union of every column's liner-outer envelope,
+   carved out of `out_band`/`air_gap` so the free air STOPS at the block (else
+   `fragment` slices µm slivers where out_band's copper-hole boundary nearly
+   coincides with a cell edge).
+4. **Post-fragment transfinite pass** — set each slot cell transfinite.  Two
+   things were essential to get ZERO slivers:
+   - **Global element size `h`, not per-cell.**  Node count on every edge =
+     `round(len/h)+1` for ONE global `h` (= the thinnest insulation feature,
+     capped by `_SS_MAXDIV`).  A per-CELL aspect target made a fat copper cell and
+     a thin liner cell DISAGREE on their SHARED edge (3 vs 18 nodes) → gmsh
+     sheared one cell's grid into slivers (the "diagonal parallelogram" failure).
+     One global `h` ⇒ a shared edge gets the same count from both sides
+     (conformity) and opposite edges match automatically.  Feature-relative: a
+     bigger motor's cells are longer → more sub-cells at the same quality, so the
+     block quality is IDENTICAL at 40 mm and 450 mm.
+   - **Explicit ordered corners** to `setTransfiniteSurface(surf,"Left",corners)`,
+     found by walking the boundary curves (chain by shared endpoint).
+5. **`DOM_WIRE_INS`/`DOM_SLOT_INS`** registered in `build_materials` (µr=1, inert)
+   so the FE assembly gives them air-like stiffness instead of SKIPPING them (an
+   unassembled tag = a hole in the matrix).
+6. **Full-ring stitch** (`_stitch_full_half`): `_split_polys_for_sliding_band`
+   now carries `wire_insulation`/`slot_insulation` to the stator half, and the
+   stitch RECLASSIFIES the enamel/liner cells back to their material (else they
+   default to DOM_OUTER, which the thermal solve drops → liner barrier lost).
+   Gated on `structured_slot` so the free stitch is byte-identical.
+7. **Thermal** (`routes/simulation.py`): when the mesh carries the insulation
+   domains, the liner gets its true low `k` and the copper gets PURE winding `k`
+   (the liner is a real meshed barrier now, not the lumped series `slot_k_eff` —
+   else double-counted).  Falls back byte-identically to the lumped model when
+   absent.
+
+## Verified
+- **Slot INSULATION block quality (40 mm AND 450 mm, full-ring production path,
+  structured_gap OFF): min interior angle 16.7°, aspect ≤ 3.5, ZERO tris <15°**
+  (was 408 tris <5°, worst 1.4°).  Identical at both scales (feature-relative).
+  Isolated cell build (no fragment): min angle 18.6°.
+- **EM sane** (40 mm full-disk, I=60 A, γ=12°, free vs structured slot):
+  T_avg 0.5437 → 0.5591 Nm (+2.8 %), V_peak 7.83 → 8.09 V (+3.3 %), P_cu identical,
+  torque ripple 6.0 % → **0.3 %** (uniform copper mesh removes per-wire mesh
+  asymmetry).  Physics preserved (insulation inert; the small rise is better
+  slot-current resolution).
+- **Thermal sane**: steady solve on the structured mesh converges to finite
+  T_max with the winding hotter than the iron (the meshed liner barrier working),
+  resolving the copper→iron gradient directly instead of smearing it.
+- **Free path byte-identical** with `structured_slot=False` (T_avg=0.58163274).
+
+## Residual compromise
+- The **slot-mouth air** (between the block's flat bottom `eb` and the curved
+  bore) and the tooth-tip / far-field air are still FREE-meshed (a few slivers,
+  as in the baseline) — they are AIR (µr=1; the mouth air is dropped/air in the
+  thermal solve), NOT the insulation.  The hard criterion (clean insulation) is
+  met.  Structuring the curved mouth would need the gap route-A arc machinery.
+- `structured_slot` + `structured_gap` TOGETHER: the block picks up a few slivers
+  from the gap cells' interaction near the bore (block clean when gap is off,
+  which is the production default).  Both flags are experimental/off by default.
+
+## Files
+- `_slot_grid_columns`, `_slot_block_footprint`, `_build_structured_slot_cells`,
+  the `structured_slot` branch in `build_mesh_from_polygons`, the transfinite
+  pass, `DOM_WIRE_INS`/`DOM_SLOT_INS` — fem_solver_2d.py.  Thermal k —
+  routes/simulation.py `get_thermal_field2d`.
+- Verification: `_slot_quality.py` (full-ring block quality per scale),
+  `_slot_build_test.py` (isolated sector build), `_slot_only.py` (bare cells),
+  `_slot_em_cmp.py` (torque/back-EMF A/B), `_slot_thermal_cmp.py` (meshed liner),
+  `_slot_proof.py` (before/after renders), all via `_use40.py`.

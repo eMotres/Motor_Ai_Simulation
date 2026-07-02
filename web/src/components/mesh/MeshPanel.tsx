@@ -463,6 +463,23 @@ const MeshPanel: React.FC = () => {
   }, [solverMesh, meshSizeMm, minSizeMm, normalDev, rotorAngle,
       outerAirFactor, gapLayers, nSectors, componentMeshJson, poleCopy, structuredGap]);
 
+  // ── Max-element-size bounds = the feature/4 quality floor ─────────────────
+  // Above the floor the solver clamps the iron anyway (those slider positions
+  // were dead — the "Max size doesn't change the mesh" report).  Bounding the
+  // slider to the floor makes its ENTIRE range live.  Floor comes from the last
+  // mesh build (feature_floor_mm); fall back to the old fixed range until then.
+  const _floor = (femMesh?.feature_floor_mm && femMesh.feature_floor_mm > 0.4)
+    ? femMesh.feature_floor_mm : null;
+  const meshMax  = _floor ?? 8;
+  const meshMin  = _floor ? Math.max(0.2, +(_floor / 6).toFixed(2)) : 1.5;
+  const meshStep = _floor ? Math.max(0.05, +((meshMax - meshMin) / 18).toFixed(2)) : 0.5;
+  // Snap a persisted value sitting above the floor down onto it, so the Chip and
+  // the transient solve use the size that is ACTUALLY meshed (not a dead 8 mm).
+  useEffect(() => {
+    if (_floor && meshSizeMm > _floor + 1e-6) setMeshSizeMm(+_floor.toFixed(2));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [_floor]);
+
   // Gate: don't persist mesh settings back to config until the mount config-load
   // has populated state — otherwise a slow/interrupted load would let the
   // debounced save write STALE localStorage into config (a clobber).
@@ -547,6 +564,21 @@ const MeshPanel: React.FC = () => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [poleCopy]);
 
+  // Auto-rebuild when a mesh-density slider changes, debounced ~450 ms after the
+  // last move.  Previously Max/Min size, normal-deviation, gap-layers and the
+  // outer-air ring only re-meshed on the Rebuild button, so dragging them looked
+  // like it "did nothing" (the reported bug).  poleCopy/symmetry already
+  // auto-rebuild — this makes the continuous sliders consistent.  The debounce
+  // coalesces a drag into ONE build after the user lets go.  First run skipped
+  // (mount already builds).
+  const densityFirstRun = useRef(true);
+  useEffect(() => {
+    if (densityFirstRun.current) { densityFirstRun.current = false; return; }
+    const id = setTimeout(() => fetchFemMesh(), 450);
+    return () => clearTimeout(id);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [meshSizeMm, minSizeMm, normalDev, gapLayers, outerAirFactor]);
+
   // Persist the Mesh-tab settings to config.yaml — ONLY on the explicit
   // "Rebuild mesh" click (rebuildMesh below), not on every slider move. This
   // makes them permanent + reused in all later sessions.
@@ -619,33 +651,18 @@ const MeshPanel: React.FC = () => {
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
                 <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>
                   Max element size
-                  <Tooltip title="Triangle edge length in open regions (mesh_size_mm)" placement="right">
+                  <Tooltip title={`Coarsest triangle edge length in the iron/body. Bounded to the feature/4 quality floor${_floor ? ` = ${_floor.toFixed(2)} mm for this motor (≥4 elements across the smallest tooth/slot)` : ''}: above it the solver clamps anyway, so the slider stops there and every position actually changes the mesh. Lower it to refine (finer, slower).`} placement="right">
                     <span style={{ color: '#475569', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
                   </Tooltip>
                 </Typography>
-                <Chip label={`${meshSizeMm.toFixed(1)} mm`} size="small"
+                <Chip label={`${Math.min(meshSizeMm, meshMax).toFixed(1)} mm`} size="small"
                   sx={{ fontSize: 11, height: 20, bgcolor: '#1e3a5f', color: '#93c5fd' }}/>
               </Box>
               <Slider
-                value={meshSizeMm} min={1.5} max={8} step={0.5}
+                value={Math.min(meshSizeMm, meshMax)} min={meshMin} max={meshMax} step={meshStep}
                 onChange={(_, v) => setMeshSizeMm(v as number)}
                 sx={{ color: '#3b82f6' }}
               />
-              {/* Honest effective size: iron is capped to the feature/4 quality
-                  floor, so the requested value above it does nothing to the
-                  motor body — show what was ACTUALLY meshed. */}
-              {femMesh?.effective_mesh_size_mm != null && (() => {
-                const floor = femMesh.feature_floor_mm;
-                const capped = floor != null && meshSizeMm > floor + 1e-6;
-                return (
-                  <Typography sx={{ fontSize: 10, mt: 0.25,
-                    color: capped ? '#f59e0b' : '#475569' }}>
-                    {capped
-                      ? `→ iron meshed at ${femMesh.effective_mesh_size_mm} mm (feature/4 floor) — lower the slider below ${floor} mm to refine`
-                      : `→ iron meshed at ${femMesh.effective_mesh_size_mm} mm`}
-                  </Typography>
-                );
-              })()}
             </Box>
 
             {/* min_size_mm */}

@@ -63,7 +63,8 @@ def build_stator_half(scale, mode):
         polys, 0.0, 1.5, min_size_mm=min_sz, outer_air_factor=1.3,
         band_thickness_mm=0.4, n_sectors=-1, geo_cfg=m.parameters,
         normal_deviation_deg=8.0, aspect_ratio=10.0, gap_layers=gl,
-        component_mesh_mm=None, full_ring=True, pole_copy=False)
+        component_mesh_mm=None, full_ring=True, pole_copy=False,
+        structured_slot=(mode == "struct"))
     return m, (np.asarray(ms.p) * 1000.0, np.asarray(ms.t), np.asarray(ts))
 
 
@@ -102,6 +103,7 @@ def slot_mask(P, T, m):
 
 def main():
     m, (P, T, tags) = build_stator_half(SCALE, MODE)
+    tags = np.asarray(tags)
     min_ang, aspect = tri_quality(P, T)
     sm = slot_mask(P, T, m)
 
@@ -120,6 +122,10 @@ def main():
     print(f"  total tris: {T.shape[1]}")
     stats(np.ones(T.shape[1], bool), "WHOLE MESH")
     stats(sm, "SLOT INTERIOR")
+    blk = (tags == F.DOM_WIRE_INS) | (tags == F.DOM_SLOT_INS) | (tags >= F.DOM_COIL_BASE)
+    stats(blk, "SLOT BLOCK (cu+enamel+liner)")
+    print(f"  block tag counts: copper={int((tags>=F.DOM_COIL_BASE).sum())} "
+          f"enamel={int((tags==F.DOM_WIRE_INS).sum())} liner={int((tags==F.DOM_SLOT_INS).sum())}")
 
     # render slot close-up: pick the slot near +Y (angle ~90 deg)
     fig, ax = plt.subplots(1, 2, figsize=(15, 8))

@@ -936,7 +936,12 @@ def _split_polys_for_sliding_band(polys: dict) -> Tuple[dict, dict]:
     iron / copper / magnet domains they tile the whole cross-section, so
     NO background-air or motion-band post-processing is needed.
     """
-    STATOR_KEYS = ("stator", "coils", "out_band")
+    # wire_insulation / slot_insulation ride along on the stator side so the
+    # full-ring stitch (_stitch_full_half) can reclassify the structured-slot
+    # enamel/liner cells back to their material (else they default to air and
+    # the thermal solve DROPS the liner heat barrier).
+    STATOR_KEYS = ("stator", "coils", "out_band",
+                   "wire_insulation", "slot_insulation")
     ROTOR_KEYS  = ("shaft", "rotor", "magnets", "in_band")
 
     polys_s: dict = {}
@@ -1139,6 +1144,7 @@ def _build_sliding_band_meshes(
         component_mesh_mm: Optional[dict] = None,
         full_ring: bool = False,            # TRUE 360°: stitch 2×180° per half
         pole_copy: Optional[bool] = None,   # template-copy poles/slots; None=env default
+        structured_slot: bool = False,      # structured (transfinite) slot interior
 ):
     """Build the stator-half and rotor-half meshes for the sliding-band solver.
 
@@ -1226,6 +1232,7 @@ def _build_sliding_band_meshes(
         add_background_air=False, slip_transfinite_r=_slip_r,
         extra_transfinite_radii=_extra_tf,
         component_mesh_mm=component_mesh_mm,
+        structured_slot=bool(structured_slot),
     )
 
     if full_ring:
@@ -3022,38 +3029,38 @@ def build_mesh_from_polygons(polys: dict,
         # cell OCC merged into a bigger surface (>4 curves) is skipped (rare).
         _ss_active = bool(_ss_cell_frag_tags)
         if _ss_active:
-            # Target sub-cell edge (mm): keep it a bit below the smallest thin
-            # insulation feature so even the thinnest strip gets ≥1 division and
-            # square-ish elements; cap subdivisions so a huge motor stays sane.
+            # Sub-division policy: node count on EVERY edge = round(len / h) + 1
+            # for a SINGLE global element size h.  Using one global h (not a
+            # per-cell aspect target) is essential for CONFORMITY: two adjacent
+            # cells share an edge, and the shared edge's node count must be the
+            # SAME from both sides — a per-cell rule makes a fat copper cell and a
+            # thin liner cell disagree on their shared edge (3 vs 18 nodes), and
+            # gmsh then meshes one of them with a SHEARED (slivered) grid.  With a
+            # global h the shared edge gets one count from both → clean.  h is
+            # feature-relative (the thinnest insulation feature) so thin strips
+            # get ≥1 division and their long side is subdivided enough to avoid
+            # slivers; _SS_MAXDIV caps the copper's long-side count so a wide slot
+            # (or a 450 mm motor) does not explode the triangle budget.
             try:
                 _ss_gc = geo_cfg or {}
-                _ss_feat = min(float(_ss_gc.get("wire_height", 1e9) or 1e9),
-                               float(_ss_gc.get("insulation_thickness", 1e9) or 1e9),
-                               float(_ss_gc.get("wire_spacing_y", 1e9) or 1e9))
-                if not (0.0 < _ss_feat < 1e8):
-                    _ss_feat = float(min_size_mm)
+                _ss_h = min(float(_ss_gc.get("insulation_thickness", 1e9) or 1e9),
+                            float(_ss_gc.get("wire_spacing_y", 1e9) or 1e9),
+                            float(_ss_gc.get("wire_height", 1e9) or 1e9))
+                if not (0.0 < _ss_h < 1e8):
+                    _ss_h = float(min_size_mm)
             except Exception:
-                _ss_feat = float(min_size_mm)
-            _ss_h = max(1e-3, min(float(_ss_feat), float(min_size_mm) * 2.0))
-            _SS_MAXDIV = 40
-            def _edge_geom(_cv):
-                _bp = gmsh.model.getBoundary([(1, _cv)], oriented=False)
-                _xy = [gmsh.model.getValue(0, _pt, [])[:2] for (_pd, _pt) in _bp]
-                if len(_xy) != 2:
-                    return None
-                (x0, y0), (x1, y1) = _xy
-                dx = x1 - x0; dy = y1 - y0
-                L = math.hypot(dx, dy)
-                if L < 1e-12:
-                    return None
-                # unit direction (undirected: force a canonical sign so the two
-                # PARALLEL opposite edges compare equal regardless of orientation)
-                ux, uy = dx / L, dy / L
-                if (ux < 0) or (abs(ux) < 1e-9 and uy < 0):
-                    ux, uy = -ux, -uy
-                return (_cv, L, ux, uy)
-            def _ndiv(_L):
+                _ss_h = float(min_size_mm)
+            _ss_h = max(1e-3, _ss_h)
+            _SS_MAXDIV = 16          # max node count per edge (caps copper width)
+            def _nd_for(_L):
                 return max(2, min(_SS_MAXDIV, int(round(_L / _ss_h)) + 1))
+            def _endpoints(_cv):
+                _bp = gmsh.model.getBoundary([(1, _cv)], oriented=False)
+                _pts = [int(_pt) for (_pd, _pt) in _bp]
+                return _pts if len(_pts) == 2 else None
+            def _pxy(_pt):
+                _v = gmsh.model.getValue(0, _pt, [])
+                return (_v[0], _v[1])
             try:
                 _ss_n = 0; _ss_skip = 0
                 for (_d, _surf) in gmsh.model.getEntities(2):
@@ -3063,54 +3070,68 @@ def build_mesh_from_polygons(polys: dict,
                     if len(_cvs) != 4:
                         _ss_skip += 1
                         continue
-                    _info = []
+                    # Build point→curves adjacency so we can walk the boundary in
+                    # CYCLIC order and hand setTransfiniteSurface EXPLICIT corners.
+                    # Without explicit, ordered corners gmsh can pick a corner
+                    # permutation that makes the transfinite interpolation SHEAR
+                    # (parallelogram elements running diagonally = slivers) when the
+                    # two directions have different node counts.
+                    _edges = {}       # curve tag → (p0, p1)
                     _ok = True
                     for (_cd, _cv) in _cvs:
-                        _g = _edge_geom(_cv)
-                        if _g is None:
+                        _ep = _endpoints(_cv)
+                        if _ep is None:
                             _ok = False; break
-                        _info.append(_g)
+                        _edges[int(_cv)] = (_ep[0], _ep[1])
                     if not _ok:
                         _ss_skip += 1
                         continue
-                    # Pair the 2 PARALLEL opposite edges (a rectangle has two such
-                    # pairs).  Match by direction vector, NOT midpoint distance —
-                    # for a HIGH-ASPECT cell the two long edges are close together
-                    # yet the perpendicular short edge midpoint is farther, so a
-                    # distance test mispairs perpendicular edges → sheared
-                    # transfinite grid → slivers.  Give each parallel pair the SAME
-                    # node count (transfinite requirement).
-                    _used = [False] * 4
-                    _pairs = []
-                    for _i in range(4):
-                        if _used[_i]:
-                            continue
-                        _best = -1; _bdot = -1.0
-                        for _j in range(4):
-                            if _j == _i or _used[_j]:
-                                continue
-                            _dot = abs(_info[_i][2] * _info[_j][2]
-                                       + _info[_i][3] * _info[_j][3])
-                            if _dot > _bdot:
-                                _bdot = _dot; _best = _j
-                        if _best < 0:
+                    # Walk: start at any curve, chain by shared endpoint.
+                    _clist = list(_edges.keys())
+                    _order_c = [_clist[0]]
+                    _order_p = [_edges[_clist[0]][0], _edges[_clist[0]][1]]
+                    _remaining = set(_clist[1:])
+                    while _remaining and len(_order_c) < 4:
+                        _tail = _order_p[-1]; _nxt = None
+                        for _c in _remaining:
+                            _a, _b = _edges[_c]
+                            if _a == _tail:
+                                _nxt = (_c, _b); break
+                            if _b == _tail:
+                                _nxt = (_c, _a); break
+                        if _nxt is None:
                             _ok = False; break
-                        _used[_i] = _used[_best] = True
-                        _pairs.append((_i, _best))
-                    if not _ok or len(_pairs) != 2:
+                        _order_c.append(_nxt[0]); _order_p.append(_nxt[1])
+                        _remaining.discard(_nxt[0])
+                    # _order_p now = [c0,c1,c2,c3,(c0)]; drop the closing repeat.
+                    if not _ok or len(_order_c) != 4 or len(set(_order_p[:4])) != 4:
                         _ss_skip += 1
                         continue
-                    for (_a, _b) in _pairs:
-                        _nd = _ndiv(0.5 * (_info[_a][1] + _info[_b][1]))
-                        gmsh.model.mesh.setTransfiniteCurve(_info[_a][0], _nd)
-                        gmsh.model.mesh.setTransfiniteCurve(_info[_b][0], _nd)
+                    _corners = _order_p[:4]
+                    _cxy = [_pxy(_p) for _p in _corners]
+                    # Side lengths (corner i → i+1); each side's node count from
+                    # the GLOBAL h.  Opposite sides have equal length ⇒ equal
+                    # count (transfinite requirement) automatically; a shared edge
+                    # gets the same count from the neighbour too (conformity).
+                    def _dist(_a, _b):
+                        return math.hypot(_cxy[_a][0] - _cxy[_b][0],
+                                          _cxy[_a][1] - _cxy[_b][1])
+                    _LA = 0.5 * (_dist(0, 1) + _dist(2, 3))
+                    _LB = 0.5 * (_dist(1, 2) + _dist(3, 0))
+                    _nA = _nd_for(_LA); _nB = _nd_for(_LB)
+                    gmsh.model.mesh.setTransfiniteCurve(_order_c[0], _nA)
+                    gmsh.model.mesh.setTransfiniteCurve(_order_c[2], _nA)
+                    gmsh.model.mesh.setTransfiniteCurve(_order_c[1], _nB)
+                    gmsh.model.mesh.setTransfiniteCurve(_order_c[3], _nB)
                     try:
-                        gmsh.model.mesh.setTransfiniteSurface(_surf)
+                        gmsh.model.mesh.setTransfiniteSurface(
+                            _surf, "Left", _corners)
                         _ss_n += 1
                     except Exception:
                         _ss_skip += 1
                 log.info("structured slot: %d cells set transfinite, %d skipped "
-                         "(merged/non-quad); sub-cell≈%.3f mm", _ss_n, _ss_skip, _ss_h)
+                         "(merged/non-quad); global sub-cell h≈%.3f mm",
+                         _ss_n, _ss_skip, _ss_h)
             except Exception as _sse2:
                 log.warning("structured slot transfinite skipped: %s", _sse2)
                 _ss_active = False
@@ -6498,6 +6519,24 @@ def _stitch_full_half(polys_half: dict, default_dom: int,
             ct[_sh.contains_xy(gg, cen[:, 0], cen[:, 1])] = tag
         except Exception:
             pass
+
+    # STRUCTURED SLOT: reclassify the enamel + liner cells (they defaulted to
+    # air above and are NOT in any coil/iron polygon).  Only touch tris still on
+    # the default air tag so copper (already tagged above) is never overwritten;
+    # liner ⟂ enamel don't overlap, so order between them is irrelevant.  Without
+    # this the liner defaults to DOM_OUTER, which the THERMAL solve DROPS →
+    # the copper→iron heat barrier vanishes.
+    for _ik, _idm in (("wire_insulation", DOM_WIRE_INS),
+                      ("slot_insulation", DOM_SLOT_INS)):
+        _ipolys = polys_half.get(_ik) or []
+        for _ip in _ipolys:
+            if _ip is None or _ip.is_empty:
+                continue
+            try:
+                _hit = _sh.contains_xy(_ip, cen[:, 0], cen[:, 1]) & (ct == default_dom)
+                ct[_hit] = _idm
+            except Exception:
+                pass
 
     # STRUCTURED gap: the ε retract pulled the iron OFF the cell arcs for the OCC
     # build, so the thin ε ring (rotor r_ro−ε→r_ro, stator r_si→r_si+ε) is NOT

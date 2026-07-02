@@ -6528,9 +6528,11 @@ def _stitch_full_half(polys_half: dict, default_dom: int,
     # the default air tag so copper (already tagged above) is never overwritten;
     # liner ⟂ enamel don't overlap, so order between them is irrelevant.  Without
     # this the liner defaults to DOM_OUTER, which the THERMAL solve DROPS →
-    # the copper→iron heat barrier vanishes.
-    for _ik, _idm in (("wire_insulation", DOM_WIRE_INS),
-                      ("slot_insulation", DOM_SLOT_INS)):
+    # the copper→iron heat barrier vanishes.  GATED on structured_slot so the
+    # FREE path is byte-identical (else these polys would re-tag slot air).
+    for _ik, _idm in ((("wire_insulation", DOM_WIRE_INS),
+                       ("slot_insulation", DOM_SLOT_INS))
+                      if build_kwargs.get("structured_slot") else ()):
         _ipolys = polys_half.get(_ik) or []
         for _ip in _ipolys:
             if _ip is None or _ip.is_empty:

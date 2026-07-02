@@ -5338,8 +5338,12 @@ def fem_transient_sliding_band(
         if rotor_eddy and _shaftnode_glob.size:
             # Shaft-node A history → field-based (rotor-frame) shaft eddy loss.
             _hist_Ash.append(A[_shaftnode_glob].copy())
-        if honest_eddy:
-            # ALL rotor-node A history → coupled (reaction-included) eddy diagnostic.
+        if honest_eddy or rotor_eddy:
+            # ALL rotor-node A history → coupled (reaction-included) rotor eddy.
+            # With rotor_eddy this is now the PRODUCTION magnet/shaft loss (the
+            # history-based post-process is jitter-dominated for screened bodies
+            # — see the honest-swap block below); honest_eddy alone keeps the
+            # old diagnostic behaviour.  ~N·n_rotor_nodes·8 B ≈ 10-20 MB.
             _hist_A_rotor.append(A[nsn:nsn + half["r"]["n"]].copy())
         # capture the converged per-element B for the loss integrals
         _Bxs, _Bys = _per_triangle_B(half["s"]["mesh"], A[:nsn])
@@ -5519,12 +5523,21 @@ def fem_transient_sliding_band(
         if float(theta_u[-1]) >= _W - 1e-9:
             # degenerate: last node is the periodic image of the first — drop it
             uniq = uniq[:-1]; Bu = Bu[:-1]; theta_u = theta_u[:-1]; U -= 1
-        # savgol at a FIXED PHYSICAL width (≈1/3 slot pitch) — a window set in
-        # SAMPLES (the old U//8) made the smoothing bandwidth depend on the
-        # run length: a 2-period run smoothed the genuine 15° slot ripple away
-        # (P_mag halved vs the 1-period run on identical physics).
+        # savgol at a FIXED PHYSICAL width (≈1/3 slot pitch).  Two past bugs:
+        # (a) a window set in SAMPLES (the old U//8) made the width depend on
+        #     the run length — a 2-period run smoothed the genuine 15° slot
+        #     ripple away (P_mag halved on identical physics);
+        # (b) the angle→samples conversion divided by the slip-NODE spacing
+        #     (_spacing_rad) instead of the SAMPLE spacing, so the effective
+        #     width was 5°×(nodes advanced per step): 60° at 12 steps, 30° at
+        #     24, 10° at 72 — the filter NARROWED as the step count grew, so
+        #     the "converged" rotor eddy loss GREW with steps (450 mm shaft:
+        #     0.8→12.7→25.6 kW at 12/24/72) instead of converging.  Fixed:
+        #     divide by the actual theta_u sample spacing.
         _w_ang = math.radians(5.0)                            # smoothing width
-        w = int(round(_w_ang / max(_spacing_rad, 1e-12)))
+        _samp_rad = (float(np.median(np.diff(theta_u))) if U >= 2
+                     else _spacing_rad)
+        w = int(round(_w_ang / max(_samp_rad, 1e-12)))
         w = max(5, w | 1)                                     # odd, ≥5
         _exact = (pre is not None and post is not None
                   and U == N and np.array_equal(uniq, _m_arr))
@@ -5809,6 +5822,69 @@ def fem_transient_sliding_band(
         P_shaft_series = [0.0] * n_total
         P_shaft_avg    = 0.0
 
+    # ── HONEST (coupled) rotor eddy — PRODUCTION magnet/shaft loss when rotor_eddy ──
+    # Frequency-domain multi-body solve on the REAL rotor mesh (eddy_solver_2d),
+    # driven by the captured rotor-node A history: per-harmonic screening + skin
+    # reaction are SOLVED, and the fixed harmonic ceiling (k ≤ 16) band-limits the
+    # drive to the physical rotor-frame orders.  The history post-process above
+    # squares ∂A/∂t, so the slip-band node-identification jitter — which does NOT
+    # decay with depth the way physical field harmonics do — dominates SCREENED
+    # bodies: the 450 mm shaft (under 50 mm magnet + 5 mm back-iron; physical
+    # reach ~e⁻⁹) read 32→45 kW of pure jitter (GROWING with step count) vs a
+    # stable 0.5-0.6 kW here.  So with rotor_eddy the honest values REPLACE the
+    # history-based magnet/shaft averages: the magnet series keeps its (physical
+    # slot-ripple) shape rescaled to the honest mean; the shaft series — whose
+    # shape is jitter, not physics — is flattened to the honest mean.
+    # honest_eddy alone keeps the old additive-diagnostic behaviour.
+    # Fail-safe: any error → the history-based values stand (as before).
+    P_mag_honest = P_shaft_honest = 0.0
+    P_mag_hist_avg = float(P_mag_avg); P_shaft_hist_avg = float(P_shaft_avg)
+    _honest_ok = False
+    if (honest_eddy or rotor_eddy) and _hist_A_rotor:
+        try:
+            from motor_ai_sim.simulation.eddy_solver_2d import honest_rotor_eddy as _hre
+            _rm = half["r"]["mesh"]
+            _tags_r = np.zeros(_rm.t.shape[1], int)
+            for _tg, _els in half["r"]["cells"].items():
+                _tags_r[np.asarray(_els, int)] = int(_tg)
+            _mag_tags_h = [int(tg) for tg in np.unique(_tags_r) if int(tg) >= DOM_MAG_BASE]
+
+            def _muf(tg):
+                tg = int(tg)
+                if tg >= DOM_MAG_BASE:                 # magnet (NdFeB recoil ~1.05)
+                    return 1.05
+                if tg == DOM_ROTOR:                    # rotor back-iron: converged mu_r
+                    try:
+                        _n = nu_el.get("r", {}).get(DOM_ROTOR)
+                        if _n is not None and np.size(_n):
+                            return 1.0 / (MU0 * float(np.mean(_n)))
+                    except Exception:
+                        pass
+                    return 1000.0
+                return 1.0                             # shaft (Al) / air = non-magnetic
+            P_mag_honest, P_shaft_honest, _hfreqs = _hre(
+                np.asarray(_rm.p, float), np.asarray(_rm.t, int), _tags_r,
+                _muf, _sigma_of_tag, _mag_tags_h, DOM_SHAFT,
+                np.asarray(_hist_A_rotor, float), float(n_total) * dt,
+                float(p.stack_length), float(NS))
+            _honest_ok = True
+            log.info("HONEST rotor eddy: mag=%.3f shaft=%.3f W (%d harmonics) | "
+                     "resistance-limited mag=%.3f shaft=%.3f W",
+                     P_mag_honest, P_shaft_honest, len(_hfreqs), P_mag_avg, P_shaft_avg)
+        except Exception as _e:
+            log.warning("honest rotor eddy failed (history-based values stand): %s", _e)
+            P_mag_honest = P_shaft_honest = 0.0
+    if rotor_eddy and _honest_ok:
+        _mh = float(P_mag_honest)
+        if P_mag_avg > 1e-9:
+            _kh = _mh / P_mag_avg
+            P_mag_series = [v * _kh for v in P_mag_series]
+        else:
+            P_mag_series = [_mh] * n_total
+        P_mag_avg = _mh
+        P_shaft_series = [float(P_shaft_honest)] * n_total
+        P_shaft_avg = float(P_shaft_honest)
+
     # ── Field-based rotor eddy loss from the magnetodynamic solve (Stage 1) ──
     # ∫σ(∂A/∂t)² straight from the eddy field — NO slab/d/cap.  Compare against
     # the slab estimate above.  Skip the first electrical period (eddy warmup).
@@ -5931,52 +6007,17 @@ def fem_transient_sliding_band(
 
         _field_snap["loss_dens"] = _dens.tolist()
 
-    # ── Honest (coupled, reaction-included) rotor eddy — ADDITIVE diagnostic ──────
-    # Solve the magneto-DYNAMIC problem on the REAL rotor mesh (eddy_solver_2d),
-    # driven by the captured rotor-node A history, so the skin REACTION the post-
-    # process above IGNORES is included.  Geometry-exact (iron mu_r + every conductor
-    # shape are in the mesh), uniform per body (each magnet + the shaft = one floating
-    # body, the SAME formula).  Fail-safe: any error -> 0, production numbers intact.
-    P_mag_honest = P_shaft_honest = 0.0
-    if honest_eddy and _hist_A_rotor:
-        try:
-            from motor_ai_sim.simulation.eddy_solver_2d import honest_rotor_eddy as _hre
-            _rm = half["r"]["mesh"]
-            _tags_r = np.zeros(_rm.t.shape[1], int)
-            for _tg, _els in half["r"]["cells"].items():
-                _tags_r[np.asarray(_els, int)] = int(_tg)
-            _mag_tags_h = [int(tg) for tg in np.unique(_tags_r) if int(tg) >= DOM_MAG_BASE]
-
-            def _muf(tg):
-                tg = int(tg)
-                if tg >= DOM_MAG_BASE:                 # magnet (NdFeB recoil ~1.05)
-                    return 1.05
-                if tg == DOM_ROTOR:                    # rotor back-iron: converged mu_r
-                    try:
-                        _n = nu_el.get("r", {}).get(DOM_ROTOR)
-                        if _n is not None and np.size(_n):
-                            return 1.0 / (MU0 * float(np.mean(_n)))
-                    except Exception:
-                        pass
-                    return 1000.0
-                return 1.0                             # shaft (Al) / air = non-magnetic
-            P_mag_honest, P_shaft_honest, _hfreqs = _hre(
-                np.asarray(_rm.p, float), np.asarray(_rm.t, int), _tags_r,
-                _muf, _sigma_of_tag, _mag_tags_h, DOM_SHAFT,
-                np.asarray(_hist_A_rotor, float), float(n_total) * dt,
-                float(p.stack_length), float(NS))
-            log.info("HONEST rotor eddy: mag=%.3f shaft=%.3f W (%d harmonics) | "
-                     "resistance-limited mag=%.3f shaft=%.3f W",
-                     P_mag_honest, P_shaft_honest, len(_hfreqs), P_mag_avg, P_shaft_avg)
-        except Exception as _e:
-            log.warning("honest_eddy diagnostic failed (production unaffected): %s", _e)
-            P_mag_honest = P_shaft_honest = 0.0
+    # (The honest coupled rotor-eddy solve moved ABOVE the loss-series assembly —
+    # it is now the production magnet/shaft loss when rotor_eddy is on.)
 
     return {
         "method": "sliding_band",
-        # 'field' = magnet/shaft losses from the σ·∂A/∂t magnetodynamic solve
-        # (per-magnet ∫J=0, library σ); 'slab' = classical d²/12 estimate.
-        "loss_model": ("field" if rotor_eddy else "slab"),
+        # 'field+honest' = magnet/shaft loss from the coupled frequency-domain
+        # rotor solve (screening + skin reaction, k≤16 physical band) — the
+        # production model with rotor_eddy; 'field' = its history-based σ·∂A/∂t
+        # fallback; 'slab' = classical d²/12 estimate.
+        "loss_model": ("field+honest" if (rotor_eddy and _honest_ok)
+                        else ("field" if rotor_eddy else "slab")),
         "n_steps": n_total, "n_steps_per_period": int(n_steps_per_period),
         "n_periods": float(n_periods), "rpm": rpm, "f_elec_Hz": f_elec,
         "dt_s": dt, "T_period_s": (1.0 / f_elec if f_elec > 1e-9 else 0.0),
@@ -5994,8 +6035,10 @@ def fem_transient_sliding_band(
         "P_mag_eddy_W": P_mag_series, "P_loss_total_W": P_tot_series,
         "P_cu_dc_W": P_cu_dc, "P_cu_ac_W": P_cu_ac_series,
         "P_shaft_eddy_W": P_shaft_series,
-        "P_mag_honest_W": round(float(P_mag_honest), 3),    # coupled (reaction) eddy — diagnostic
+        "P_mag_honest_W": round(float(P_mag_honest), 3),    # coupled (reaction) eddy — production w/ rotor_eddy
         "P_shaft_honest_W": round(float(P_shaft_honest), 3),
+        "P_mag_hist_W": round(float(P_mag_hist_avg), 3),    # pre-swap history-based avgs (diagnostic:
+        "P_shaft_hist_W": round(float(P_shaft_hist_avg), 3),  # jitter-dominated for screened bodies)
         "P_cu_ac_solve_W": round(P_cu_ac_solve_W, 1),       # field-based copper AC (eddy solve)
         "P_cu_total_solve_W": round(P_cu_total_solve_W, 1),  # field-based copper total
         "P_mech_avg_W": P_mech_avg,                          # energy-conserving shaft power

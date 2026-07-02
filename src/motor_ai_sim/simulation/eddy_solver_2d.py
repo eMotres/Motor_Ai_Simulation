@@ -319,7 +319,7 @@ def region_eddy_from_history(
 def honest_rotor_eddy(
     p: np.ndarray, t: np.ndarray, tags: np.ndarray, mu_r_of_tag, sigma_of_tag,
     mag_tags: Sequence[int], shaft_tag: int, A_hist: np.ndarray, period_s: float,
-    L: float, NS: float = 1.0,
+    L: float, NS: float = 1.0, n_harm: int = 17,
 ) -> Tuple[float, float, List[float]]:
     """Honest (reaction-included) eddy loss of the ROTOR conductors, computed on the
     production transient's REAL rotor mesh, driven by the rotor-node A history it
@@ -366,8 +366,16 @@ def honest_rotor_eddy(
             A_hist = savgol_filter(A_hist, w, 3, axis=0, mode="interp")
         except Exception:
             pass
+    # Fixed PHYSICAL harmonic ceiling (independent of the frame count).  The
+    # rotor-frame drive physically contains only the low orders per electrical
+    # period — armature MMF 6f/12f (k=6, 12) and stator-slotting multiples
+    # (k = slots/pp ≈ 2.4, 4.8, … ≤ ~14.4 for 24s/20p) — while the slip-band
+    # node-identification jitter is broadband.  Without the cap the rFFT's kmax
+    # grows with the step count (12 @ 24 frames → 36 @ 72), so the jitter band
+    # ADDED loss with resolution (honest mag 12.2 → 15.1 kW going 24 → 72 steps).
+    # n_harm=17 keeps k ≤ 16: every physical line, none of the resolution growth.
     Pbod, freqs = region_eddy_from_history(p, t, nu, sig, bodies, bmask, A_hist,
-                                           period_s, L)
+                                           period_s, L, n_harm=n_harm)
     P_mag = float(np.sum(Pbod[:n_mag])) * NS
     P_shaft = (float(np.sum(Pbod[n_mag:])) * NS) if has_shaft else 0.0
     return P_mag, P_shaft, freqs

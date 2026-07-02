@@ -1151,16 +1151,21 @@ def _build_sliding_band_meshes(
     polys_s, polys_r = _split_polys_for_sliding_band(polys)
 
     # ── Iron/magnet quality floor: default the iron + magnet element size to
-    # min(global, 2 mm) unless the user set their own per-part value.  The
-    # transient's torque quality is governed by the iron discretisation —
-    # at a 4 mm global size the teeth get ~2 elements and the per-tooth /
-    # per-pocket mesh asymmetry shows up as parasitic low-order torque
-    # ripple (was 27 N·m pk-pk at I=0 on the 150 mm motor; ~8 with 2 mm
-    # iron).  This restores the original "iron ≤ 2 mm" behaviour as a
-    # VISIBLE per-part default (the Mesh tab renders these same meshes), and
-    # the user can still override any part explicitly in the Mesh tab.
+    # the global element size, which the CALLERS already clamp to smallest-
+    # feature/4 (fem_transient_sliding_band's feature-refine + the Mesh route's
+    # _eff_mesh) — that ÷4 IS the single quality floor (≥4 elements across the
+    # smallest tooth/slot; torque quality plateaus there).
+    #
+    # The old extra `min(global, 2 mm)` absolute cap is REMOVED (per Vadim
+    # 2026-07-02 — "auto quality-floor, slider honest"): on LARGE motors where
+    # feature/4 > 2 mm it silently over-refined the iron to 2 mm AND made the
+    # Max-element-size slider a no-op above 2 mm (e.g. 450 mm: slider 4/8/12 all
+    # collapsed to iron 2 mm).  Small motors are unaffected — their feature/4 is
+    # already < 2 mm, so the 2 mm cap never bound there (the 150 mm ripple fix it
+    # was added for is now carried by feature/4 = slot/4 ≈ 1.4 mm < 2 mm).
+    # The user can still override any part explicitly in the Mesh tab.
     component_mesh_mm = dict(component_mesh_mm or {})
-    _iron_cap = min(float(mesh_size_mm), 2.0)
+    _iron_cap = float(mesh_size_mm)
     for _part in ("stator", "rotor", "magnet"):
         _v = component_mesh_mm.get(_part)
         if _v is None or not (_v > 0):

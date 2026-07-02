@@ -53,6 +53,8 @@ interface FemMesh {
   domain_counts: Record<string, number>;
   extent: [number, number, number, number];
   mesh_size_mm: number;
+  effective_mesh_size_mm?: number;   // what the iron was ACTUALLY meshed at (feature/4 floor)
+  feature_floor_mm?: number | null;  // the smallest-feature/4 quality floor
   note: string;
 }
 
@@ -629,6 +631,21 @@ const MeshPanel: React.FC = () => {
                 onChange={(_, v) => setMeshSizeMm(v as number)}
                 sx={{ color: '#3b82f6' }}
               />
+              {/* Honest effective size: iron is capped to the feature/4 quality
+                  floor, so the requested value above it does nothing to the
+                  motor body — show what was ACTUALLY meshed. */}
+              {femMesh?.effective_mesh_size_mm != null && (() => {
+                const floor = femMesh.feature_floor_mm;
+                const capped = floor != null && meshSizeMm > floor + 1e-6;
+                return (
+                  <Typography sx={{ fontSize: 10, mt: 0.25,
+                    color: capped ? '#f59e0b' : '#475569' }}>
+                    {capped
+                      ? `→ iron meshed at ${femMesh.effective_mesh_size_mm} mm (feature/4 floor) — lower the slider below ${floor} mm to refine`
+                      : `→ iron meshed at ${femMesh.effective_mesh_size_mm} mm`}
+                  </Typography>
+                );
+              })()}
             </Box>
 
             {/* min_size_mm */}

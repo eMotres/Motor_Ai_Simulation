@@ -1356,13 +1356,17 @@ async def build_fem_mesh_2d_sliding_band(
     # air-gap layers under hi-fi.  Without this the Mesh viewer drew a COARSER mesh than
     # the transient actually solved (especially with hi-fidelity ON) — the "why is the
     # real mesh different?" gap.  With it, the viewer is byte-for-byte the solved mesh.
-    _eff_mesh = float(mesh_size_mm); _eff_gap = float(gap_layers)
+    _eff_mesh = float(mesh_size_mm); _eff_gap = float(gap_layers); _feat_floor = None
     try:
         _feat = min(float(motor.parameters.get("slot_width", 1e9) or 1e9),
                     float(motor.parameters.get("tooth_width", 1e9) or 1e9))
         if 0.0 < _feat < 1e8:
-            _eff_mesh = min(_eff_mesh, max(float(min_size_mm),
-                                           _feat / (8.0 if hi_fidelity else 4.0)))
+            # feature/4 (÷8 hi-fi) is the quality floor: the coarsest the iron is
+            # allowed to be.  Report it so the Mesh tab can show the HONEST size
+            # actually meshed (the slider value is capped to this, so "8 mm" was
+            # misleading when the floor is ~4 mm).
+            _feat_floor = max(float(min_size_mm), _feat / (8.0 if hi_fidelity else 4.0))
+            _eff_mesh = min(_eff_mesh, _feat_floor)
     except Exception:
         pass
     if hi_fidelity:
@@ -1432,6 +1436,12 @@ async def build_fem_mesh_2d_sliding_band(
         "n_rotor_tris":      int(mesh_r.t.shape[1]),
         "n_vertices":        len(verts),
         "n_triangles":       len(tris),
+        # Honest mesh sizing: what the slider requested vs what was actually
+        # meshed (iron is capped to the feature/4 quality floor).
+        "mesh_size_mm":            float(mesh_size_mm),
+        "effective_mesh_size_mm":  round(float(_eff_mesh), 3),
+        "feature_floor_mm":        (round(float(_feat_floor), 3)
+                                    if _feat_floor is not None else None),
         "vertices":          verts,
         "triangles":         tris,
         "domain_per_tri":    tags.tolist(),

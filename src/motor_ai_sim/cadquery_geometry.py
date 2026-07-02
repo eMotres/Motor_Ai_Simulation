@@ -249,7 +249,8 @@ class CadQueryMotor:
         
         # Ensure magnet parameters exist
         for key in ['magnet_fill_down', 'magnet_fill_up', 'magnet_fill_radius', 'magnet_up_gap', 'magnet_down_height',
-                    'magnet_lamination']:   # in-plane segment size, mm; 0 = solid
+                    'magnet_lamination',        # AXIAL slice length, mm (loss factor in solver); 0 = solid
+                    'magnet_lamination_tan']:   # in-plane segment size, mm (geometry split); 0 = off
             if key not in mapped:
                 mapped[key] = config_params.get(key, 0.0)
         
@@ -1619,14 +1620,18 @@ class CadQueryMotor:
             polarity = -1 if i % 2 == 0 else +1
             mag_polys.append((mp, polarity))
 
-        # ── Magnet lamination (magnet_lamination, mm; 0 = solid) ─────────────
-        # Split every magnet into ≈seg-sized insulated pieces (see the helper
-        # for the physics).  MUST happen after the pole loop and BEFORE any
+        # ── In-plane magnet segmentation (magnet_lamination_tan, mm; 0 = off) ──
+        # Split every magnet into ≈seg-sized insulated pieces IN THE CROSS-
+        # SECTION (see the helper for the physics).  NOTE: the user-facing
+        # `magnet_lamination` parameter means AXIAL slicing (along the stack,
+        # e.g. 180 mm / 10 mm = 18 slices) — that cannot be meshed in 2-D and is
+        # applied as an analytic eddy-loss factor in the solver instead.  This
+        # in-plane splitter stays available under its own key for cross-section
+        # segmentation studies.  MUST happen after the pole loop and BEFORE any
         # consumer: the rotor POCKETS above (hole_polys) keep the FULL magnet
-        # outline — the cavity is one pocket no matter how the magnet inside
-        # is sliced — and the air bands below subtract the union of the pieces,
+        # outline, and the air bands below subtract the union of the pieces,
         # which equals the solid magnet region (zero-width cuts).
-        _seg_mm = float(p.get('magnet_lamination', 0.0) or 0.0)
+        _seg_mm = float(p.get('magnet_lamination_tan', 0.0) or 0.0)
         if _seg_mm > 0.1:
             mag_polys = self._laminate_magnets(mag_polys, _seg_mm, num_poles)
 

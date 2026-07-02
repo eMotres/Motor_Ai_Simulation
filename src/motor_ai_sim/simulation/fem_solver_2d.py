@@ -5885,6 +5885,48 @@ def fem_transient_sliding_band(
         P_shaft_series = [float(P_shaft_honest)] * n_total
         P_shaft_avg = float(P_shaft_honest)
 
+    # ── AXIAL magnet lamination (magnet_lamination, mm; 0 = solid) ──────────
+    # Slicing the magnets ALONG THE STACK (per Vadim: the 450's 180 mm magnets
+    # laminated at 10 mm = 18 slices) cannot be meshed in this 2-D model — the
+    # J_z formulation assumes infinitely long conductors (loss ∝ w_eff², the
+    # in-plane loop width, with free loop closure at z = ±∞).  A finite axial
+    # slice of length l forces the loop to close within the slice, adding the
+    # return-path resistance; in the resistance-limited regime (NdFeB skin
+    # depth ≈ 16 mm @ 1.8 kHz > l = 10 mm) the classical rectangular-plate
+    # result rescales the eddy loss by
+    #     k_ax = l² / (l² + w_eff²),   w_eff = magnet area / longest extent
+    # (limits: l→∞ → 1 = the 2-D value; l ≪ w → (l/w)², loops close axially).
+    # Field / torque / mass are untouched — insulated cuts do not change the
+    # magnetostatics.  Applied to the PRODUCTION magnet numbers (series + avg +
+    # the reported honest value); P_mag_hist_W stays the raw-2D diagnostic.
+    # lam=0 keeps k=1 (pure 2-D, back-compat); a real 180 mm solid magnet is
+    # itself k(180) ≈ 0.97 — negligible.  Shaft: not affected by this param.
+    try:
+        _lam_mm = float((geo or {}).get("magnet_lamination", 0.0) or 0.0)
+    except Exception:
+        _lam_mm = 0.0
+    if _lam_mm > 0.1 and P_mag_avg > 0.0:
+        try:
+            _mp0 = (polys.get("magnets") or [(None, 0)])[0][0]
+            _xy0 = list(_mp0.exterior.coords)
+            _rr0 = [math.hypot(_x, _y) for _x, _y in _xy0]
+            _c0 = _mp0.centroid
+            _ca0 = math.atan2(_c0.y, _c0.x)
+            _an0 = [((math.atan2(_y, _x) - _ca0 + math.pi) % (2.0 * math.pi)) - math.pi
+                    for _x, _y in _xy0]
+            _rad0 = max(_rr0) - min(_rr0)
+            _tan0 = (max(_an0) - min(_an0)) * 0.5 * (max(_rr0) + min(_rr0))
+            _w_eff = _mp0.area / max(max(_rad0, _tan0), 1e-9)
+            _l_ax = min(_lam_mm, float(p.stack_length) * 1e3)   # can't exceed the stack
+            _k_ax = (_l_ax * _l_ax) / (_l_ax * _l_ax + _w_eff * _w_eff)
+            P_mag_series = [v * _k_ax for v in P_mag_series]
+            P_mag_avg = float(P_mag_avg) * _k_ax
+            P_mag_honest = float(P_mag_honest) * _k_ax
+            log.info("magnet AXIAL lamination: l=%.1f mm, w_eff=%.1f mm -> k_ax=%.4f, "
+                     "P_mag=%.0f W", _l_ax, _w_eff, _k_ax, P_mag_avg)
+        except Exception as _e:
+            log.warning("magnet lamination factor skipped: %s", _e)
+
     # ── Field-based rotor eddy loss from the magnetodynamic solve (Stage 1) ──
     # ∫σ(∂A/∂t)² straight from the eddy field — NO slab/d/cap.  Compare against
     # the slab estimate above.  Skip the first electrical period (eddy warmup).

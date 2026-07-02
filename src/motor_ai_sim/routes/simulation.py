@@ -1361,11 +1361,13 @@ async def build_fem_mesh_2d_sliding_band(
         _feat = min(float(motor.parameters.get("slot_width", 1e9) or 1e9),
                     float(motor.parameters.get("tooth_width", 1e9) or 1e9))
         if 0.0 < _feat < 1e8:
-            # feature/4 (÷8 hi-fi) is the quality floor: the coarsest the iron is
-            # allowed to be.  Report it so the Mesh tab can show the HONEST size
-            # actually meshed (the slider value is capped to this, so "8 mm" was
-            # misleading when the floor is ~4 mm).
-            _feat_floor = max(float(min_size_mm), _feat / (8.0 if hi_fidelity else 4.0))
+            # feature/2 (÷4 hi-fi) is the quality floor: the coarsest the iron is
+            # allowed to be = 2 elements across the smallest tooth/slot.  Per Vadim
+            # 2026-07-02 the previous feature/4 was too fine on big motors (450 mm:
+            # feature/4 = 3.9 mm forced a 96k-tri mesh); feature/2 ≈ 8 mm there lets
+            # it mesh coarse + fast, and the slider still refines down.  Report it so
+            # the Mesh tab bounds the slider to it (the actually-meshed size).
+            _feat_floor = max(float(min_size_mm), _feat / (4.0 if hi_fidelity else 2.0))
             _eff_mesh = min(_eff_mesh, _feat_floor)
     except Exception:
         pass

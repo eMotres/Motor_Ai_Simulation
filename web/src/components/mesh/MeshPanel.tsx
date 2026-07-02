@@ -651,7 +651,7 @@ const MeshPanel: React.FC = () => {
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
                 <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>
                   Max element size
-                  <Tooltip title={`Coarsest triangle edge length in the iron/body. Bounded to the feature/4 quality floor${_floor ? ` = ${_floor.toFixed(2)} mm for this motor (≥4 elements across the smallest tooth/slot)` : ''}: above it the solver clamps anyway, so the slider stops there and every position actually changes the mesh. Lower it to refine (finer, slower).`} placement="right">
+                  <Tooltip title={`Coarsest triangle edge length in the iron/body. Bounded to the feature/2 quality floor${_floor ? ` = ${_floor.toFixed(2)} mm for this motor (2 elements across the smallest tooth/slot)` : ''}: above it the solver clamps anyway, so the slider stops there and every position actually changes the mesh. Lower it to refine (finer + more accurate, slower).`} placement="right">
                     <span style={{ color: '#475569', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
                   </Tooltip>
                 </Typography>

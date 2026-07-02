@@ -4284,7 +4284,7 @@ def fem_transient_sliding_band(
         _feat_mm = min(float(geo.get("slot_width", 1e9) or 1e9),
                        float(geo.get("tooth_width", 1e9) or 1e9))
         if 0.0 < _feat_mm < 1e8:
-            _elem_per_feat = 8.0 if hi_fidelity else 4.0   # hi-fi: finer angular mesh
+            _elem_per_feat = 4.0 if hi_fidelity else 2.0   # normal: 2 elem/feature ceiling (÷4 hi-fi)
             _mesh_feat = max(float(min_size_mm), _feat_mm / _elem_per_feat)
             if _mesh_feat < mesh_size_mm - 1e-9:
                 log.info("mesh auto-refined %.2f → %.2f mm (smallest feature "

@@ -1,0 +1,22 @@
+{"overrides": {"tooth_width": 3.1}, "current_a": 40.0, "gamma_deg": -32.0, "ripple": 14.07, "torque": 0.618, "eff": 0.89479, "td": 6.2736, "mass": 0.098, "v_peak": 13.2, "p_loss": 90.4}
+{"overrides": {"tooth_width": 3.1}, "current_a": 38.0, "gamma_deg": -32.0, "ripple": 13.4, "torque": 0.588, "eff": 0.89444, "td": 5.9774, "mass": 0.098, "v_peak": 13.2, "p_loss": 84.4}
+{"overrides": {"tooth_width": 3.2}, "current_a": 38.0, "gamma_deg": -32.0, "ripple": 10.62, "torque": 0.592, "eff": 0.89781, "td": 5.9664, "mass": 0.099, "v_peak": 13.2, "p_loss": 84.1}
+{"overrides": {"tooth_width": 3.2}, "current_a": 40.0, "gamma_deg": -32.0, "ripple": 12.66, "torque": 0.626, "eff": 0.89563, "td": 6.3089, "mass": 0.099, "v_peak": 13.4, "p_loss": 90.5}
+{"overrides": {"tooth_width": 3.3}, "current_a": 38.0, "gamma_deg": -32.0, "ripple": 11.93, "torque": 0.606, "eff": 0.89796, "td": 6.0613, "mass": 0.1, "v_peak": 13.4, "p_loss": 84.6}
+{"overrides": {"tooth_width": 3.3}, "current_a": 40.0, "gamma_deg": -32.0, "ripple": 9.65, "torque": 0.632, "eff": 0.89651, "td": 6.3134, "mass": 0.1, "v_peak": 13.2, "p_loss": 90.5}
+{"overrides": {"tooth_width": 3.4}, "current_a": 38.0, "gamma_deg": -32.0, "ripple": 7.77, "torque": 0.608, "eff": 0.89974, "td": 6.0282, "mass": 0.101, "v_peak": 13.2, "p_loss": 84.3}
+{"overrides": {"tooth_width": 3.4}, "current_a": 40.0, "gamma_deg": -32.0, "ripple": 7.85, "torque": 0.637, "eff": 0.89609, "td": 6.3199, "mass": 0.101, "v_peak": 13.0, "p_loss": 92.2}
+{"overrides": {"tooth_width": 3.5}, "current_a": 38.0, "gamma_deg": -32.0, "ripple": 8.19, "torque": 0.608, "eff": 0.89924, "td": 5.9828, "mass": 0.102, "v_peak": 12.9, "p_loss": 84.7}
+{"overrides": {"tooth_width": 3.5}, "current_a": 40.0, "gamma_deg": -32.0, "ripple": 7.16, "torque": 0.643, "eff": 0.89734, "td": 6.3286, "mass": 0.102, "v_peak": 12.9, "p_loss": 91.5}
+{"overrides": {}, "current_a": 38.0, "gamma_deg": 0.0, "ripple": 11.7, "torque": 0.444, "eff": 0.87068, "td": 4.3672, "mass": 0.102, "v_peak": 10.3, "p_loss": 81.5}
+{"overrides": {"tooth_width": 3.1}, "current_a": 40.0, "gamma_deg": -32.0, "ripple": 10.07, "torque": 0.61, "eff": 0.89723, "td": 6.2002, "mass": 0.098, "v_peak": 13.6, "p_loss": 87.6}
+{"overrides": {"tooth_width": 3.1}, "current_a": 38.0, "gamma_deg": -32.0, "ripple": 16.87, "torque": 0.581, "eff": 0.90003, "td": 5.904, "mass": 0.098, "v_peak": 13.4, "p_loss": 81.1}
+{"overrides": {"tooth_width": 3.2}, "current_a": 38.0, "gamma_deg": -32.0, "ripple": 9.67, "torque": 0.6, "eff": 0.90165, "td": 6.0433, "mass": 0.099, "v_peak": 13.4, "p_loss": 81.5}
+{"overrides": {"tooth_width": 3.2}, "current_a": 40.0, "gamma_deg": -32.0, "ripple": 11.12, "torque": 0.624, "eff": 0.89908, "td": 6.2925, "mass": 0.099, "v_peak": 13.8, "p_loss": 87.5}
+{"overrides": {"tooth_width": 3.3}, "current_a": 40.0, "gamma_deg": -32.0, "ripple": 10.99, "torque": 0.638, "eff": 0.90073, "td": 6.3767, "mass": 0.1, "v_peak": 13.1, "p_loss": 87.7}
+{"overrides": {"tooth_width": 3.3}, "current_a": 38.0, "gamma_deg": -32.0, "ripple": 12.06, "torque": 0.606, "eff": 0.90207, "td": 6.0549, "mass": 0.1, "v_peak": 13.1, "p_loss": 81.4}
+{"overrides": {"tooth_width": 3.4}, "current_a": 38.0, "gamma_deg": -32.0, "ripple": 9.38, "torque": 0.599, "eff": 0.9022, "td": 5.9433, "mass": 0.101, "v_peak": 12.8, "p_loss": 81.3}
+{"overrides": {"tooth_width": 3.4}, "current_a": 40.0, "gamma_deg": -32.0, "ripple": 8.25, "torque": 0.635, "eff": 0.89976, "td": 6.3, "mass": 0.101, "v_peak": 13.0, "p_loss": 88.2}
+{"overrides": {"tooth_width": 3.5}, "current_a": 40.0, "gamma_deg": -32.0, "ripple": 6.92, "torque": 0.643, "eff": 0.90079, "td": 6.3274, "mass": 0.102, "v_peak": 13.0, "p_loss": 88.4}
+{"overrides": {"tooth_width": 3.5}, "current_a": 38.0, "gamma_deg": -32.0, "ripple": 8.49, "torque": 0.611, "eff": 0.90304, "td": 6.0136, "mass": 0.102, "v_peak": 13.1, "p_loss": 81.9}
+{"overrides": {}, "current_a": 38.0, "gamma_deg": 0.0, "ripple": 14.46, "torque": 0.442, "eff": 0.87542, "td": 4.3509, "mass": 0.102, "v_peak": 10.1, "p_loss": 78.7}

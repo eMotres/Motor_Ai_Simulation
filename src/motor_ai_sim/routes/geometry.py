@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from typing import Any, Optional
 
@@ -245,6 +246,11 @@ def get_geometry_schema():
         whitelist = config.get("sweep_whitelist", None)
         allow_all = not whitelist
         whitelist_set = set(whitelist or [])
+        # GEO_UNBOUNDED=1 lifts every parameter's min/max cap (debug/exploration
+        # across motor scales 40 mm ↔ 450 mm) so the field clamp never blocks a
+        # value.  The yaml bounds are preserved; this only overrides them at serve
+        # time while the flag is on — unset the env var to restore the caps.
+        _unbounded = os.environ.get("GEO_UNBOUNDED", "0") == "1"
 
         parameters = [
             {
@@ -252,8 +258,8 @@ def get_geometry_schema():
                 "label": meta.get("label", name.replace("_", " ").title()),
                 "unit": meta.get("unit", ""),
                 "type": meta.get("type", "float"),
-                "min": meta.get("min", 0),
-                "max": meta.get("max", 1000),
+                "min": 0 if _unbounded else meta.get("min", 0),
+                "max": 1_000_000 if _unbounded else meta.get("max", 1000),
                 "step": meta.get("step", 0.1),
                 "group": meta.get("group", "other"),
                 "description": meta.get("description", ""),

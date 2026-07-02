@@ -44,10 +44,10 @@
         "step": 0.05
       },
       "tooth_width": {
-        "mode": "fixed",
-        "min": 11,
-        "max": 11.2,
-        "step": 0.2
+        "mode": "optimize",
+        "min": 3.1,
+        "max": 3.5,
+        "step": 0.1
       },
       "tooth2_width": {
         "mode": "fixed",
@@ -170,7 +170,7 @@
         "step": 0.2
       },
       "rotor_fill_r": {
-        "mode": "optimize",
+        "mode": "fixed",
         "min": 0.2,
         "max": 0.5,
         "step": 0.3
@@ -188,32 +188,32 @@
         "step": 1
       },
       "gamma_deg": {
-        "mode": "sweep",
-        "min": -42,
-        "max": -12,
-        "step": 5
+        "mode": "fixed",
+        "min": -40,
+        "max": -26,
+        "step": 2
       },
       "current_a": {
-        "mode": "fixed",
-        "min": 100,
-        "max": 110,
-        "step": 10
+        "mode": "optimize",
+        "min": 38,
+        "max": 40,
+        "step": 2
       }
     },
     "operatingPoints": [
       {
-        "current_a": 85,
-        "rpm": 12000,
-        "gamma_deg": -42
+        "current_a": 38,
+        "rpm": 13000,
+        "gamma_deg": -32
       },
       {
-        "current_a": 90,
-        "rpm": 12000,
-        "gamma_deg": -42
+        "current_a": 38,
+        "rpm": 13000,
+        "gamma_deg": -32
       }
     ],
-    "rippleThreshold": 0.1,
-    "ratedTorqueNm": 77.7,
+    "rippleThreshold": 0,
+    "ratedTorqueNm": 0.6,
     "vBusV": 480,
     "modulation": "svpwm"
   },

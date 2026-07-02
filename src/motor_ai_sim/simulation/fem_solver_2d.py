@@ -174,6 +174,14 @@ DOM_ROTOR   = 5
 DOM_SHAFT   = 6
 DOM_BAND    = 7   # motion / slip band inside the air gap (transient solver)
 DOM_OUTER   = 8   # outer air ring (far-field boundary, beyond stator OD)
+# Slot insulation domains (structured-slot mesher).  Both are magnetically
+# INERT (µr=1, no source) — they only matter for the THERMAL solve, where the
+# liner is the dominant copper→iron heat-flux barrier and must be a REAL meshed
+# region (not a lumped series resistance smeared into the coil).  Kept distinct
+# from DOM_AIR so the thermal k map gives them the insulator conductivity and
+# the thermal solver does NOT drop them (unlike DOM_AIR).
+DOM_WIRE_INS = 9   # wire enamel + inter-wire gaps (envelope minus copper)
+DOM_SLOT_INS = 10  # slot liner U-band (coil ↔ iron, 3 iron-facing sides)
 DOM_MAG_S   = 44  # S pole (generic, used for visualisation tag)
 
 # Per-magnet domain IDs are allocated in [DOM_MAG_BASE, DOM_MAG_BASE + N_MAG).
@@ -1928,6 +1936,244 @@ def _build_structured_gap_cells(occ, spec: dict, n_sectors: int, center_pt: int,
     return cells, filler, r_lo, r_hi, M
 
 
+def _slot_grid_columns(geo_cfg: dict) -> Tuple[List[dict], float]:
+    """Compute the CARTESIAN tensor-product grid of ONE slot column (in the
+    un-rotated frame) plus every column's angular position.
+
+    Mirrors cadquery_geometry._build_insulation_polys / get_2d_polygons EXACTLY
+    so the structured cells coincide with the copper / enamel / liner polygons
+    the geometry emits (and the free mesh would otherwise slice into slivers).
+
+    A "column" is one vertical stack of wires on one side of a tooth.  The slot
+    interior is the union of the copper wires, the wire-enamel envelope (grown
+    wire_spacing/2 around the copper, so it also contains the inter-wire gaps
+    and the side/top margins), and the slot liner (an ``ins_w`` U-band on the
+    three iron-facing sides — left tooth wall, right tooth wall, yoke top —
+    OPEN at the gap side).
+
+    Returns (columns, ins_w):
+      columns = list of {angle_deg, xs, ys, cells} where
+        • xs, ys        = the sorted grid-line coordinates (mm, un-rotated)
+        • cells         = list of (ix, iy, dom_id): the cell in column/row
+                          (ix,iy) [between xs[ix]..xs[ix+1], ys[iy]..ys[iy+1]]
+                          carries domain dom_id (copper / enamel / liner).
+      Cells NOT listed are outside the liner envelope (they are not emitted).
+    Empty columns (winding does not fit) → columns == [].
+    """
+    p = geo_cfg
+    def _g(k, d=0.0):
+        try:
+            return float(p.get(k, d))
+        except Exception:
+            return float(d)
+    outer_r = _g("stator_outer_radius"); inner_r = _g("stator_inner_radius")
+    core_h  = _g("core_thickness");       tooth_w = _g("tooth_width")
+    wire_w  = _g("wire_width");           ins_w   = _g("insulation_thickness")
+    wire_dx = _g("wire_spacing_x");       wire_dy = _g("wire_spacing_y")
+    wire_h  = _g("wire_height")
+    num_wires = int(_g("num_wires_per_slot", 1))
+    num_slots = int(_g("num_slots", 2))
+    # Feasibility clamp (identical to the geometry): the winding must fit the
+    # slot, else the coils overflow the bore across the air gap onto the rotor.
+    _wh_max = (_g("slot_height") - 2.0 * ins_w) / max(1, num_wires) - wire_dy
+    if _wh_max > 1e-3 and wire_h > _wh_max:
+        wire_h = _wh_max
+    if wire_w <= 0 or wire_h <= 0 or num_wires < 1 or num_slots < 2:
+        return [], ins_w
+
+    half_slots = num_slots // 2
+    slot_angle_deg = 360.0 / half_slots
+    right_x = tooth_w / 2.0 + ins_w + wire_dx / 2.0
+    top_y_c = (outer_r - core_h) - ins_w - wire_dy / 2.0
+    min_wire_r = inner_r + ins_w
+    # Count wires that fit (geometry stops stacking when a wire's bottom would
+    # cross into the bore keep-out).
+    n_fit = 0
+    for s in range(num_wires):
+        if top_y_c - s * (wire_h + wire_dy) - wire_h < min_wire_r:
+            break
+        n_fit += 1
+    if n_fit <= 0:
+        return [], ins_w
+
+    y_top = top_y_c
+    y_bot = top_y_c - (n_fit - 1) * (wire_h + wire_dy) - wire_h
+    et = y_top + wire_dy / 2.0        # envelope top
+    eb = y_bot - wire_dy / 2.0        # envelope bottom (gap side — liner OPEN here)
+
+    def _column(sx0: float) -> dict:
+        el = sx0 - wire_dx / 2.0                 # envelope left
+        er = sx0 + wire_w + wire_dx / 2.0        # envelope right
+        # ── X grid lines: liner-left | env-left | copper-left | copper-right |
+        #    env-right | liner-right.
+        xs = [el - ins_w, el, sx0, sx0 + wire_w, er, er + ins_w]
+        # ── Y grid lines: liner-top | env-top | then each wire top/bottom,
+        #    down to env-bottom (= eb, the gap-open side, NO liner strip).
+        ys = [et + ins_w, et]
+        for s in range(n_fit):
+            cy = top_y_c - s * (wire_h + wire_dy)
+            ys.append(cy)                 # wire top
+            ys.append(cy - wire_h)        # wire bottom
+        ys.append(eb)
+        # dedupe + sort ascending (grid indexing convention)
+        xs = sorted(set(round(v, 9) for v in xs))
+        ys = sorted(set(round(v, 9) for v in ys))
+        # ── Classify each cell (ix,iy) by its centre.
+        #   copper : inside a wire rectangle [sx0,sx0+wire_w]×[cy-wire_h,cy]
+        #   liner  : inside the U-band (outside env, inside liner-outer)
+        #   enamel : inside env, not copper (incl. inter-wire gaps + margins)
+        wire_yspans = []
+        for s in range(n_fit):
+            cy = top_y_c - s * (wire_h + wire_dy)
+            wire_yspans.append((s, cy - wire_h, cy))
+        # cells: (ix, iy, dom_id, wire_step)  wire_step = which wire (0..n_fit-1)
+        # for copper cells, else -1.  Used to map the cell to the right per-coil
+        # current tag (DOM_COIL_BASE + coil_index).
+        cells: List[Tuple[int, int, int, int]] = []
+        for ix in range(len(xs) - 1):
+            xm = 0.5 * (xs[ix] + xs[ix + 1])
+            for iy in range(len(ys) - 1):
+                ym = 0.5 * (ys[iy] + ys[iy + 1])
+                in_env = (el - 1e-9 <= xm <= er + 1e-9) and (eb - 1e-9 <= ym <= et + 1e-9)
+                step = -1
+                if sx0 - 1e-9 <= xm <= sx0 + wire_w + 1e-9:
+                    for (ss, lo, hi) in wire_yspans:
+                        if lo - 1e-9 <= ym <= hi + 1e-9:
+                            step = ss
+                            break
+                if step >= 0:
+                    dom = DOM_COIL
+                elif in_env:
+                    dom = DOM_WIRE_INS
+                else:
+                    dom = DOM_SLOT_INS
+                cells.append((ix, iy, dom, step))
+        return {"xs": xs, "ys": ys, "cells": cells, "n_fit": n_fit}
+
+    columns: List[dict] = []
+    for i in range(half_slots):
+        ang = i * slot_angle_deg
+        for sx0 in (right_x, -(right_x + wire_w)):
+            col = _column(sx0)
+            col["angle_deg"] = ang
+            columns.append(col)
+    return columns, ins_w
+
+
+def _slot_block_footprint(geo_cfg: dict):
+    """Shapely (Multi)Polygon = the union of every slot column's OUTER envelope
+    (the liner-outer rectangle) rotated to its slot angle.
+
+    Used to CARVE the slot block out of the surrounding air polygon (out_band /
+    air_gap) when the structured-slot mesher is active, so the free air never
+    overlaps the structured cells (an overlap makes occ.fragment slice µm-thin
+    slivers where the air's own coil-hole boundary almost — but not exactly —
+    coincides with a cell edge).  Returns None if there is no winding.
+    """
+    try:
+        from shapely.geometry import Polygon as _SPoly
+        from shapely.ops import unary_union as _uu
+        from shapely.affinity import rotate as _rot
+    except Exception:
+        return None
+    columns, _ins = _slot_grid_columns(geo_cfg)
+    if not columns:
+        return None
+    boxes = []
+    for col in columns:
+        xs = col["xs"]; ys = col["ys"]
+        x0, x1 = xs[0], xs[-1]; y0, y1 = ys[0], ys[-1]
+        box = _SPoly([(x0, y0), (x1, y0), (x1, y1), (x0, y1)])
+        boxes.append(_rot(box, col["angle_deg"], origin=(0, 0)))
+    try:
+        u = _uu(boxes)
+        return u if (u is not None and not u.is_empty) else None
+    except Exception:
+        return None
+
+
+def _build_structured_slot_cells(occ, geo_cfg: dict, n_sectors: int,
+                                  getP=None) -> List[Tuple[int, int]]:
+    """Build the slot interior (copper + enamel + liner) as STRUCTURED OCC
+    plane-surface cells for ALL slot columns, in the SAME model as the iron.
+
+    Each cell is a small axis-aligned rectangle (in the column's local frame),
+    rotated to the column's angular position, with its four corners taken from a
+    shared memoized point-adder so neighbouring cells (and the two sides of every
+    liner/enamel/copper interface) share nodes exactly.  ``occ.fragment`` then
+    makes the iron teeth/yoke conform to the cell block automatically (route A —
+    no welding, no overlap buffer).  Post-fragment the caller sets each cell
+    transfinite (1 division/edge → 2 triangles), so NO free-meshed slivers ever
+    appear in the slot.
+
+    Cells clipped away by the sector wedge (n_sectors>1) are dropped by an
+    angular test so the structured block never crosses a sector cut.
+
+    Returns [(surface_tag, dom_id), ...] in build order.
+    """
+    columns, _ins = _slot_grid_columns(geo_cfg)
+    if not columns:
+        return []
+    ns = max(1, int(n_sectors))
+    wedge = (2.0 * math.pi / ns) if ns > 1 else None
+
+    if getP is not None:
+        _P = getP
+    else:
+        _ptc: Dict[Tuple[float, float], int] = {}
+        def _P(x, y):
+            k = (round(x, 6), round(y, 6))
+            t = _ptc.get(k)
+            if t is None:
+                t = occ.addPoint(x, y, 0)
+                _ptc[k] = t
+            return t
+
+    out: List[Tuple[int, int]] = []
+    for col_i, col in enumerate(columns):
+        a = math.radians(col["angle_deg"])
+        ca, sa = math.cos(a), math.sin(a)
+        xs = col["xs"]; ys = col["ys"]
+        n_fit = int(col.get("n_fit", 0))
+
+        def _rot(x, y):
+            return (x * ca - y * sa, x * sa + y * ca)
+
+        # Sector clip: skip the whole column if its centre falls outside the
+        # [0, wedge] sector (keeps the block from crossing a radial cut).
+        if wedge is not None:
+            xm = 0.5 * (xs[0] + xs[-1]); ym = 0.5 * (ys[0] + ys[-1])
+            rx, ry = _rot(xm, ym)
+            th = math.atan2(ry, rx)
+            if th < 0:
+                th += 2.0 * math.pi
+            if th > wedge + 1e-6:
+                continue
+
+        for (ix, iy, dom, step) in col["cells"]:
+            x0, x1 = xs[ix], xs[ix + 1]
+            y0, y1 = ys[iy], ys[iy + 1]
+            p1 = _P(*_rot(x0, y0)); p2 = _P(*_rot(x1, y0))
+            p3 = _P(*_rot(x1, y1)); p4 = _P(*_rot(x0, y1))
+            if len({p1, p2, p3, p4}) < 4:
+                continue
+            # Copper cells → the per-coil current tag (DOM_COIL_BASE + coil_idx)
+            # matching cadquery_geometry's coil_polys order (column-major:
+            # coil_idx = col_i * n_fit + wire_step) so build_materials injects the
+            # correct (phase, direction) current density into every wire.
+            dom_id = dom
+            if dom == DOM_COIL and step >= 0 and n_fit > 0:
+                dom_id = DOM_COIL_BASE + (col_i * n_fit + step)
+            try:
+                l1 = occ.addLine(p1, p2); l2 = occ.addLine(p2, p3)
+                l3 = occ.addLine(p3, p4); l4 = occ.addLine(p4, p1)
+                s = occ.addPlaneSurface([occ.addCurveLoop([l1, l2, l3, l4])])
+                out.append((s, dom_id))
+            except Exception:
+                continue
+    return out
+
+
 def build_mesh_from_polygons(polys: dict,
                              rotor_angle_deg: float = 0.0,
                              mesh_size_mm: float = 1.5,
@@ -1947,6 +2193,7 @@ def build_mesh_from_polygons(polys: dict,
                              rotational_period_deg: Optional[float] = None,
                              extra_transfinite_radii: Optional[List[float]] = None,
                              transfinite_radial_cuts: bool = False,
+                             structured_slot: bool = False,
                              ) -> Tuple["MeshTri", np.ndarray]:
     """Construct a conforming triangle mesh from the CadQuery polygon dict.
 
@@ -2092,6 +2339,31 @@ def build_mesh_from_polygons(polys: dict,
                                       band_thickness_mm=band_thickness_mm)
             if add_background_air:
                 polys = _add_background_air(polys, outer_air_factor=outer_air_factor)
+
+        # ── STRUCTURED SLOT: carve the slot block out of the surrounding air ──
+        # The structured cells (built below) own the whole slot interior.  The
+        # geometry's out_band air only subtracts the COPPER, so it still overlaps
+        # the enamel + liner; leaving that overlap makes occ.fragment cut µm-thin
+        # slivers where out_band's copper-hole boundary nearly (but not exactly)
+        # coincides with a cell edge.  Subtract the block footprint so the air
+        # STOPS at the block and fragment has nothing to slice.
+        if structured_slot and geo_cfg is not None:
+            _ss_fp = _slot_block_footprint(geo_cfg)
+            if _ss_fp is not None and not _ss_fp.is_empty:
+                _ss_fp = _ss_fp.buffer(1e-4)   # tiny grow: swallow OCC-tol seams
+                polys = dict(polys)
+                for _ak in ("air_outer", "air_gap"):
+                    _ap = polys.get(_ak)
+                    if _ap is not None and not _ap.is_empty:
+                        try:
+                            _d = _ap.difference(_ss_fp)
+                            if not _d.is_valid:
+                                _d = _d.buffer(0)
+                            if not _d.is_empty:
+                                polys[_ak] = _d
+                        except Exception:
+                            pass
+
         # 3) Symmetry: clip ALL polygons to a 360°/n_sectors wedge
         if n_sectors > 1:
             polys = _clip_polys_to_sector(polys, n_sectors=n_sectors)
@@ -2185,9 +2457,50 @@ def build_mesh_from_polygons(polys: dict,
                 domain_surfaces.append((surf, DOM_MAG_BASE + i))
         # Each coil polygon gets a UNIQUE per-slot id (DOM_COIL_BASE + i),
         # so build_materials can assign the right (phase, sign) current.
-        for i, coil_poly in enumerate(polys.get("coils", [])):
-            for surf in _shapely_to_occ(coil_poly):
-                domain_surfaces.append((surf, DOM_COIL_BASE + i))
+        # STRUCTURED SLOT: the structured cells below emit the copper with the
+        # SAME per-coil ids (matching the geometry's coil_polys order), so skip
+        # the free coil polygons entirely — otherwise their free triangulation
+        # would fight the transfinite cells at the coil boundary.
+        if not structured_slot:
+            for i, coil_poly in enumerate(polys.get("coils", [])):
+                for surf in _shapely_to_occ(coil_poly):
+                    domain_surfaces.append((surf, DOM_COIL_BASE + i))
+
+        # ── STRUCTURED SLOT INTERIOR — ROUTE A (copper + enamel + liner) ──────
+        # Build the whole slot interior (wires + wire enamel + slot liner) as a
+        # cartesian grid of transfinite OCC cells IN THE SAME MODEL as the iron.
+        # occ.fragment makes the teeth/yoke conform to the block automatically,
+        # and the post-fragment transfinite pass (below) fills every cell with
+        # exactly 2 triangles → ZERO free-meshed slivers in the thin insulation.
+        # Gated on `structured_slot`; free path unchanged when off.
+        _ss_input_idx: List[int] = []     # indices into domain_surfaces of slot cells
+        if structured_slot and geo_cfg is not None:
+            try:
+                _ss_ptc: Dict[Tuple[float, float], int] = {}
+                def _ss_getP(x, y):
+                    _k = (round(x, 6), round(y, 6))
+                    _t = _ss_ptc.get(_k)
+                    if _t is None:
+                        _t = occ.addPoint(x, y, 0)
+                        _ss_ptc[_k] = _t
+                    return _t
+                _ss_cells = _build_structured_slot_cells(
+                    occ, geo_cfg, n_sectors, getP=_ss_getP)
+                for (_cs, _dom) in _ss_cells:
+                    _ss_input_idx.append(len(domain_surfaces))
+                    domain_surfaces.append((_cs, _dom))
+                _n_cu = sum(1 for _, d in _ss_cells if d >= DOM_COIL_BASE)
+                _n_en = sum(1 for _, d in _ss_cells if d == DOM_WIRE_INS)
+                _n_li = sum(1 for _, d in _ss_cells if d == DOM_SLOT_INS)
+                log.info("structured slot: %d cells (%d copper, %d enamel, "
+                         "%d liner)", len(_ss_cells), _n_cu, _n_en, _n_li)
+            except Exception as _sse:
+                log.warning("structured slot build failed (%s) — free coils", _sse)
+                _ss_input_idx = []
+                # fall back: emit the free coils we skipped above
+                for i, coil_poly in enumerate(polys.get("coils", [])):
+                    for surf in _shapely_to_occ(coil_poly):
+                        domain_surfaces.append((surf, DOM_COIL_BASE + i))
 
         # ── STRUCTURED (mapped) air gap — ROUTE A ─────────────────────────────
         # Build the gap for THIS half as concentric cylinder-sector cells and
@@ -2277,6 +2590,16 @@ def build_mesh_from_polygons(polys: dict,
                 for (_od, _ot) in _ol:
                     if _od == 2:
                         _sg_cell_frag_tags.add(int(_ot))
+
+        # STRUCTURED SLOT: same — collect the fragment tags that came from the
+        # slot cell inputs, so the transfinite pass targets ONLY those quads.
+        _ss_cell_frag_tags: set = set()
+        if _ss_input_idx:
+            for _ii in _ss_input_idx:
+                _ol = out_map[_ii] if _ii < len(out_map) else []
+                for (_od, _ot) in _ol:
+                    if _od == 2:
+                        _ss_cell_frag_tags.add(int(_ot))
 
         # STRUCTURED gap ε-filler: decide each filler cell's material by the iron
         # DIRECTLY behind it.  Rotor filler (r_ro−ε→r_ro): iron if the point just
@@ -2428,6 +2751,13 @@ def build_mesh_from_polygons(polys: dict,
         specificity = {
             DOM_COIL:    9,
             # DOM_MAG_BASE..DOM_MAG_BASE+N_MAG handled separately below
+            # Slot insulation (structured slot): beats iron/air so the enamel &
+            # liner cells win over the surrounding out_band air (which was NOT
+            # cut around them) and the adjacent stator iron edge — but loses to
+            # copper (DOM_COIL_BASE, spec 10), so a shared copper/enamel edge
+            # stays copper.
+            DOM_SLOT_INS: 8,
+            DOM_WIRE_INS: 8,
             DOM_BAND:    7,
             DOM_AIRGAP:  6,
             DOM_SHAFT:   5,
@@ -2678,6 +3008,112 @@ def build_mesh_from_polygons(polys: dict,
             except Exception as _sge2:
                 log.warning("structured gap transfinite skipped: %s", _sge2)
                 _sg_active = False
+
+        # ── STRUCTURED SLOT cells: set each cell TRANSFINITE (near-square subgrid)
+        # Every slot quad (copper / enamel / liner) is a clean 4-corner rectangle
+        # after fragment (its neighbours share the SAME OCC points).  A single
+        # 2-triangle split of a HIGH-ASPECT cell (e.g. a 5×0.2 mm wire) would make
+        # a ~2° sliver, so we instead subdivide each edge so the sub-elements are
+        # ~SQUARE: opposite edges get matching node counts (transfinite needs
+        # them equal), targeting a sub-cell size = the cell's SHORTER side.  gmsh
+        # fills the quad with a structured (nx·ny·2) grid of well-shaped triangles
+        # — no free mesher, no slivers.  Feature-relative: a 450 mm wire (bigger
+        # cell) simply gets more sub-cells, so quality holds at every scale.  A
+        # cell OCC merged into a bigger surface (>4 curves) is skipped (rare).
+        _ss_active = bool(_ss_cell_frag_tags)
+        if _ss_active:
+            # Target sub-cell edge (mm): keep it a bit below the smallest thin
+            # insulation feature so even the thinnest strip gets ≥1 division and
+            # square-ish elements; cap subdivisions so a huge motor stays sane.
+            try:
+                _ss_gc = geo_cfg or {}
+                _ss_feat = min(float(_ss_gc.get("wire_height", 1e9) or 1e9),
+                               float(_ss_gc.get("insulation_thickness", 1e9) or 1e9),
+                               float(_ss_gc.get("wire_spacing_y", 1e9) or 1e9))
+                if not (0.0 < _ss_feat < 1e8):
+                    _ss_feat = float(min_size_mm)
+            except Exception:
+                _ss_feat = float(min_size_mm)
+            _ss_h = max(1e-3, min(float(_ss_feat), float(min_size_mm) * 2.0))
+            _SS_MAXDIV = 40
+            def _edge_geom(_cv):
+                _bp = gmsh.model.getBoundary([(1, _cv)], oriented=False)
+                _xy = [gmsh.model.getValue(0, _pt, [])[:2] for (_pd, _pt) in _bp]
+                if len(_xy) != 2:
+                    return None
+                (x0, y0), (x1, y1) = _xy
+                dx = x1 - x0; dy = y1 - y0
+                L = math.hypot(dx, dy)
+                if L < 1e-12:
+                    return None
+                # unit direction (undirected: force a canonical sign so the two
+                # PARALLEL opposite edges compare equal regardless of orientation)
+                ux, uy = dx / L, dy / L
+                if (ux < 0) or (abs(ux) < 1e-9 and uy < 0):
+                    ux, uy = -ux, -uy
+                return (_cv, L, ux, uy)
+            def _ndiv(_L):
+                return max(2, min(_SS_MAXDIV, int(round(_L / _ss_h)) + 1))
+            try:
+                _ss_n = 0; _ss_skip = 0
+                for (_d, _surf) in gmsh.model.getEntities(2):
+                    if int(_surf) not in _ss_cell_frag_tags:
+                        continue
+                    _cvs = gmsh.model.getBoundary([(_d, _surf)], oriented=False)
+                    if len(_cvs) != 4:
+                        _ss_skip += 1
+                        continue
+                    _info = []
+                    _ok = True
+                    for (_cd, _cv) in _cvs:
+                        _g = _edge_geom(_cv)
+                        if _g is None:
+                            _ok = False; break
+                        _info.append(_g)
+                    if not _ok:
+                        _ss_skip += 1
+                        continue
+                    # Pair the 2 PARALLEL opposite edges (a rectangle has two such
+                    # pairs).  Match by direction vector, NOT midpoint distance —
+                    # for a HIGH-ASPECT cell the two long edges are close together
+                    # yet the perpendicular short edge midpoint is farther, so a
+                    # distance test mispairs perpendicular edges → sheared
+                    # transfinite grid → slivers.  Give each parallel pair the SAME
+                    # node count (transfinite requirement).
+                    _used = [False] * 4
+                    _pairs = []
+                    for _i in range(4):
+                        if _used[_i]:
+                            continue
+                        _best = -1; _bdot = -1.0
+                        for _j in range(4):
+                            if _j == _i or _used[_j]:
+                                continue
+                            _dot = abs(_info[_i][2] * _info[_j][2]
+                                       + _info[_i][3] * _info[_j][3])
+                            if _dot > _bdot:
+                                _bdot = _dot; _best = _j
+                        if _best < 0:
+                            _ok = False; break
+                        _used[_i] = _used[_best] = True
+                        _pairs.append((_i, _best))
+                    if not _ok or len(_pairs) != 2:
+                        _ss_skip += 1
+                        continue
+                    for (_a, _b) in _pairs:
+                        _nd = _ndiv(0.5 * (_info[_a][1] + _info[_b][1]))
+                        gmsh.model.mesh.setTransfiniteCurve(_info[_a][0], _nd)
+                        gmsh.model.mesh.setTransfiniteCurve(_info[_b][0], _nd)
+                    try:
+                        gmsh.model.mesh.setTransfiniteSurface(_surf)
+                        _ss_n += 1
+                    except Exception:
+                        _ss_skip += 1
+                log.info("structured slot: %d cells set transfinite, %d skipped "
+                         "(merged/non-quad); sub-cell≈%.3f mm", _ss_n, _ss_skip, _ss_h)
+            except Exception as _sse2:
+                log.warning("structured slot transfinite skipped: %s", _sse2)
+                _ss_active = False
 
         # ── Sliding-band slip ring: force the mid_r boundary to keep EXACTLY
         # its polygon vertices (transfinite, 2 nodes/edge) so both half-meshes
@@ -3714,6 +4150,12 @@ def build_materials(
         DOM_COIL:   FEMMaterial("coil",   mu_r=1.0, sigma=SIGMA_CU_20),
         DOM_MAG_N:  FEMMaterial("mag_N",  mu_r=mu_rec, sigma=SIGMA_NDFEB),
         DOM_MAG_S:  FEMMaterial("mag_S",  mu_r=mu_rec, sigma=SIGMA_NDFEB),
+        # Slot insulation (structured slot) — magnetically INERT (µr=1, no
+        # source, no σ eddy path).  Present so the FE assembly gives these
+        # cells a normal air-like stiffness contribution instead of SKIPPING
+        # them (an unassembled tag = a hole in the stiffness matrix).
+        DOM_WIRE_INS: FEMMaterial("wire_ins", mu_r=1.0),
+        DOM_SLOT_INS: FEMMaterial("slot_ins", mu_r=1.0),
     }
 
     # ── Per-magnet tangential magnetization (SPOKE-PM topology) ──────────

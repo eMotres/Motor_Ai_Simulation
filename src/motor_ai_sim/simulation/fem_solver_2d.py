@@ -5834,10 +5834,24 @@ def fem_transient_sliding_band(
     # — at no-load this equals −P_loss (the drive overcomes every loss), and it
     # never relies on the numerically-noisy cogging-mean torque (T_avg·ω gave a
     # spurious −620 W at I=0 against 325 W of loss, violating conservation).
+    #
+    # ⚠ PER-BRANCH → TOTAL:  VA/VB/VC are the PER-BRANCH terminal voltages (ψ was
+    # divided by n_parallel to get one branch's linkage — see the ψ scaling and
+    # the legacy-path comment) and IA/IB/IC are the PER-BRANCH conductor currents
+    # (I_phase ÷ n_parallel, see `_currents`).  So ⟨Σ v·i⟩ is the power of ONE
+    # parallel branch per phase.  The phase has n_parallel such branches in
+    # parallel (same terminal V, currents add), so the machine's TOTAL electrical
+    # input is n_parallel × ⟨Σ v·i⟩.  WITHOUT this factor P_elec_in — and hence
+    # the energy-balance shaft power and efficiency — came out ÷n_parallel too
+    # small (129 kW / η 92.8 % vs the 557 kW / η 98 % the airgap torque T·ω=563 kW
+    # implies at n_parallel=4).  Losses (P_cu via copper_loss_W, iron/magnet from
+    # the ×NS field integrals) are already whole-machine totals, so only the ⟨v·i⟩
+    # terminal power carried the per-branch scale.
     _omega_m = 2.0 * math.pi * rpm / 60.0
     P_elec_in = (float(np.mean(np.asarray(VA) * np.asarray(IA)
                                + np.asarray(VB) * np.asarray(IB)
                                + np.asarray(VC) * np.asarray(IC)))
+                 * float(n_parallel)
                  if IA else 0.0)
     P_loss_total_avg = float(np.mean(P_tot_series)) if P_tot_series else 0.0
     P_airgap_avg = float(Tavg * _omega_m)        # electromagnetic (Arkkio) power

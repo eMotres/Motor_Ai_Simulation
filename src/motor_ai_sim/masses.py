@@ -34,15 +34,13 @@ def end_winding_factor(p: Any, geo: Dict[str, Any] | None = None) -> float:
     solver's loss/R use the exact same number.
 
     Tooth-coil (fractional-slot concentrated) winding: each axial end-turn is a
-    half-loop joining the two coil sides that flank the wound tooth.  Its span is the
-    coil-side centre-to-centre distance = (slot_width/2 + tooth_width + slot_width/2)
-    = ``tooth_width + slot_width`` — so the loop length per side = π·span/2 and
-        k_end = (π·(tooth_width + slot_width)/2 + L_stack) / L_stack.
-    Crucially this GROWS with ``tooth_width``: a wider tooth lengthens the loop, so
-    copper mass / R / loss all rise with the tooth (slope π/2L per mm), penalising
-    over-wide teeth in the torque-density sweep — matching Ansys.  (The previous
-    ``tooth = slot_pitch − slot_width`` form tracked slot_width only and was frozen
-    under a tooth-width sweep, wrongly rewarding ever-wider teeth.)"""
+    half-loop hugging the wound tooth.  Its diameter is the tooth width, so the loop
+    length per side = π·tooth_width/2 and
+        k_end = (π·tooth_width/2 + L_stack) / L_stack.
+    (Per Vadim, 2026-07-02: the half-loop wraps the TOOTH, span = tooth_width — NOT
+    the full slot pitch tooth_width + slot_width.)  It still GROWS with ``tooth_width``
+    (slope π/2L per mm), so a wider tooth costs more copper mass / R / loss —
+    penalising over-wide teeth in the torque-density sweep, matching Ansys."""
     L = float(p.stack_length)
     if L <= 0:
         return 1.0
@@ -52,7 +50,7 @@ def end_winding_factor(p: Any, geo: Dict[str, Any] | None = None) -> float:
         r_mid = p.r_stator_in + p.slot_height_m * 0.5
         tau   = 2.0 * math.pi * r_mid / max(int(p.num_slots), 1)
         tooth_w = max(tau - slot_w, 0.3 * tau)
-    span = tooth_w + slot_w                  # coil-side centre-to-centre over the tooth
+    span = tooth_w                           # end-turn half-loop hugs the tooth (diameter = tooth_width)
     return (math.pi * span / 2.0 + L) / L
 
 

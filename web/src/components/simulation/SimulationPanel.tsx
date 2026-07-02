@@ -298,11 +298,18 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   useEffect(() => { setStepsStr(String(steps)); }, [steps]);
   // HARD upper bound: the sliding-band rotor can only sit on slip-ring nodes,
   // so steps/period must DIVIDE the nodes-per-electrical-period count.  The
-  // backend (fem_solver_2d.fem_transient_sliding_band) makes that count adaptive
-  // — a multiple of 24 (so 24/30/40/60/120 are valid), ≥120, divisible by the
-  // pole-pair count so the period tiles exactly.  Mirror the SAME formula here
-  // so the field clamps/snaps to what will actually run.
-  const SLIP_PER_PERIOD = 24 * Math.max(5, Math.ceil(1008 / (24 * Math.max(polePairs, 1))));
+  // backend (fem_solver_2d.fem_transient_sliding_band) makes that count adaptive:
+  //   _slip_base       = round(1008·(gap_layers+2)/3)        // scales with air-gap layers
+  //   _slip_per_period = 24·max(5, ceil(_slip_base/(24·pp))) // multiple of 24, pole-pair-divisible
+  // Mirror the SAME formula (incl. the gap_layers term — previously this used a
+  // fixed 1008 ≙ gap_layers=1, so it predicted 120 while the solver used 144 at
+  // gap_layers=2: the field kept 60 but the solver snapped it to 72).
+  const gapLayers = (() => {
+    try { return Number(JSON.parse(localStorage.getItem('mesh.gapLayers') ?? '2')) || 2; }
+    catch { return 2; }
+  })();
+  const _slipBase = Math.round(1008 * (Math.max(1, gapLayers) + 2) / 3);
+  const SLIP_PER_PERIOD = 24 * Math.max(5, Math.ceil(_slipBase / (24 * Math.max(polePairs, 1))));
   const stepsMax = SLIP_PER_PERIOD;         // nodes per electrical period
   // valid step counts shown in the helper (divisors of stepsMax, ≥12)
   const validSteps = Array.from({ length: stepsMax }, (_, i) => i + 1)
@@ -315,6 +322,14 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
           || (Math.abs(d - v) === Math.abs(best - v) && d > best))) best = d;
     return best;
   };
+  // Snap the committed steps onto the valid grid whenever it changes (motor /
+  // gap_layers change) or on mount, so the FIELD shows exactly what the solver
+  // runs — no "typed 60, ran 72" surprise.
+  useEffect(() => {
+    const s = snapSteps(steps);
+    if (s !== steps) { setSteps(s); setStepsStr(String(s)); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stepsMax]);
   const commitSteps = () => {
     const v = Math.round(Number(stepsStr));
     const clamped = Number.isFinite(v)

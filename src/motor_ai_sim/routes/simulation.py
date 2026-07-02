@@ -2629,73 +2629,20 @@ def get_fem_transient(
             finally:
                 _fem_transient_progress["current"]["running"] = False
             # ── Summary block (masses, loss split, KV, efficiency, specific
-            # torque/power) so the Simulation values table renders — same shape
-            # as the remesh path produces.
+            # torque/power) so the Simulation values table renders.  Built by the
+            # SHARED helper (_build_transient_summary) so the direct route, the
+            # legacy remesh path AND the kernel/solver.em_transient path all use the
+            # SAME formula and every run returns a populated `summary`.
             try:
-                from motor_ai_sim.simulation.geometry_2d import params_from_config as _pfc
-                from motor_ai_sim.config import get_config as _gc
-                _p = _pfc(); _geo_cfg = _gc().get("geometry", {})
-                _masses = _compute_masses(_p, _geo_cfg,
-                                          k_end=float(_sbres.get("end_winding_factor", 0.0) or 0.0))
-                _m_tot = float(_masses["total_active_kg"])
-                _rpm = float(_sbres.get("rpm", 3950.0))
-                _Tavg = float(_sbres.get("T_avg_Nm", 0.0))
-                _Pmech = float(_sbres.get("P_mech_avg_W",
-                                          _Tavg * 2 * _math.pi * _rpm / 60))
-                # Period-MEAN of each instantaneous loss series — NOT [0].
-                # The iron/magnet series ripple as the teeth pass (mag eddy
-                # swings ~88%); frame 0 sits near the peak, so picking [0]
-                # would overstate the reported average loss.  Copper is DC
-                # (flat) so its mean == [0] anyway.
-                def _mean(_k):
-                    _s = _sbres.get(_k) or [0.0]
-                    return float(_np.mean(_np.asarray(_s, float))) if len(_s) else 0.0
-                _Pcu = _mean("P_cu_W")
-                _Pfe = _mean("P_fe_W")
-                _Pmag = _mean("P_mag_eddy_W")
-                _Pshaft = _mean("P_shaft_eddy_W")   # solid-shaft eddy (bulk conductor)
-                _Vpk = float(_sbres.get("V_peak", 0.0))
-                _Vrms = _Vpk / _math.sqrt(2)
-                _Vlpk = _Vpk * _math.sqrt(3); _Vlrms = _Vlpk / _math.sqrt(2)
-                # Total INCLUDES shaft eddy so the breakdown sums to the same loss
-                # the solver's energy-balanced P_mech subtracts (else the card's
-                # Mech-power ≠ Σ(displayed losses) by the hidden shaft term).
-                _ploss = _Pcu + _Pfe + _Pmag + _Pshaft
-                # Energy conservation: P_mech = P_elec_in − P_loss (the solver now
-                # computes it this way, so at no-load P_mech = −P_loss exactly).
-                # Efficiency = shaft out / electrical in; 0 when not motoring.
-                _Pelec = float(_sbres.get("P_elec_in_W", _Pmech + _ploss))
-                _eff = (_Pmech / _Pelec) if (_Pmech > 0 and _Pelec > 1.0) else 0.0
-                _sbres["summary"] = {
-                    "rpm": _rpm,
-                    "I_phase_rms_A": round(float(I_phase_rms), 2),
-                    "gamma_deg": round(float(gamma_deg), 2),
-                    "T_em_avg_Nm": round(_Tavg, 3),
-                    "T_ripple_pct": round(float(_sbres.get("T_ripple_pct", 0.0)), 1),
-                    "T_ripple_raw_pct": round(float(_sbres.get("T_ripple_raw_pct", 0.0)), 1),
-                    "T_ripple_filt_pct": round(float(_sbres.get("T_ripple_filt_pct", 0.0)), 1),
-                    "P_mech_W": round(_Pmech, 1),
-                    "V_phase_peak_V": round(_Vpk, 1),
-                    "V_phase_rms_V": round(_Vrms, 1),
-                    "V_line_peak_V": round(_Vlpk, 1),
-                    "V_line_rms_V": round(_Vlrms, 1),
-                    "KV_rpm_per_V_phase": round(_rpm / _Vrms, 2) if _Vrms > 1 else 0.0,
-                    "KV_rpm_per_V_line":  round(_rpm / _Vlrms, 2) if _Vlrms > 1 else 0.0,
-                    "P_loss_total_W": round(_ploss, 1),
-                    "P_core_W":     round(_Pfe, 1),            # laminated iron
-                    "P_stranded_W": round(_Pcu, 1),            # copper
-                    "P_solid_W":    round(_Pmag + _Pshaft, 1), # magnet + shaft eddy
-                    "efficiency":   round(_eff, 4),
-                    "coil_temp_C":  round(float(_sbres.get("coil_temp_C", coil_temp_c)), 1),
-                    "end_winding_factor": round(float(_sbres.get("end_winding_factor", 0.0)), 2),
-                    "mass_total_kg": round(_m_tot, 3),
-                    "mass_components": _masses["components"],
-                    "torque_per_mass_Nm_kg": round(_Tavg / max(_m_tot, 1e-6), 3),
-                    "power_per_mass_W_kg":   round(_Pmech / max(_m_tot, 1e-6), 1),
-                    "loss_density_W_kg":     round(_ploss / max(_m_tot, 1e-6), 1),
-                }
+                _sbres["summary"] = _build_transient_summary(
+                    _sbres, I_phase_rms=I_phase_rms, gamma_deg=gamma_deg,
+                    coil_temp_c=coil_temp_c, geo_override=_geo_ov)
             except Exception as _se:
-                log.warning("SB summary build failed: %s", _se)
+                # A summary-build failure MUST be visible (not a silently frozen
+                # card set): log it AND attach an error marker so the frontend can
+                # surface it instead of keeping stale numbers.
+                log.exception("SB summary build failed")
+                _sbres["summary_error"] = f"{type(_se).__name__}: {_se}"
             _fem_transient_cache[_sb_key] = _sbres
             # Persist for "restore last simulation" on reload — but ONLY the user's
             # MAIN motor. Per-candidate evals (optimizer / kernel runs with a geo
@@ -3162,65 +3109,17 @@ def get_fem_transient(
     }
 
     # ── Summary block: masses, loss breakdown, KV, specific torque/power ──
-    geo_cfg = cfg.get("geometry", {})
-    masses  = _compute_masses(p_sim, geo_cfg)
-    m_total = masses["total_active_kg"]
-
-    P_cu_avg  = float(_np.mean(P_cu_series))
-    P_fe_avg  = float(_np.mean(P_fe_series))
-    P_mag_avg = float(_np.mean(P_eddy_series))
-    T_avg     = float(_np.mean(T_em_series))
-    P_mech    = _Pmech_shaft          # energy-conserving (P_elec_in − P_loss)
-
-    V_peak = float(max(max(map(abs, V_A)),
-                         max(map(abs, V_B)),
-                         max(map(abs, V_C))))
-    V_phase_rms_estim = V_peak / _math.sqrt(2)
-    V_line_peak       = V_peak * _math.sqrt(3)
-    V_line_rms        = V_line_peak / _math.sqrt(2)
-    # KV constant — motor velocity constant in rpm/V.  Use V_phase_RMS as
-    # the standard convention (matches ω·ψ_pm/√2 at no-load).  Guard
-    # against zero voltage (e.g. open-circuit run with I=0).
-    KV_rpm_per_V_phase = (rpm / V_phase_rms_estim) if V_phase_rms_estim > 1.0 else 0.0
-    KV_rpm_per_V_line  = (rpm / V_line_rms)        if V_line_rms       > 1.0 else 0.0
-
-    P_loss_avg = P_cu_avg + P_fe_avg + P_mag_avg
-    # Efficiency = shaft out / electrical in (motoring only); 0 at no-load where
-    # P_elec_in = 0 and the shaft merely absorbs the losses (P_mech = −P_loss).
-    eff_avg    = (P_mech / _Pelec_in) if (P_mech > 0 and _Pelec_in > 1.0) else 0.0
-
-    payload["summary"] = {
-        # Operating point
-        "rpm":              rpm,
-        "I_phase_rms_A":    round(float(I_phase_rms), 2),
-        "gamma_deg":        round(float(gamma_deg), 2),
-        # Mechanics
-        "T_em_avg_Nm":      round(T_avg, 3),
-        "T_ripple_pct":     round(_Trip_phys, 1),
-        "T_ripple_raw_pct": round(_Trip_raw, 1),
-        "P_mech_W":         round(P_mech, 1),
-        # Voltage / current
-        "V_phase_peak_V":   round(V_peak, 1),
-        "V_phase_rms_V":    round(V_phase_rms_estim, 1),
-        "V_line_peak_V":    round(V_line_peak, 1),
-        "V_line_rms_V":     round(V_line_rms, 1),
-        "KV_rpm_per_V_phase": round(KV_rpm_per_V_phase, 2),
-        "KV_rpm_per_V_line":  round(KV_rpm_per_V_line, 2),
-        # Losses split by physical loss family
-        # (core = laminated iron, stranded = wound copper, solid = bulk
-        # conductors like magnets and shaft eddies)
-        "P_loss_total_W":     round(P_loss_avg, 1),
-        "P_core_W":           round(P_fe_avg, 1),       # lamination
-        "P_stranded_W":       round(P_cu_avg, 1),       # copper
-        "P_solid_W":          round(P_mag_avg, 1),      # magnets + shaft
-        "efficiency":         round(eff_avg, 4),
-        # Mass + specific performance
-        "mass_total_kg":      round(m_total, 3),
-        "mass_components":    masses["components"],
-        "torque_per_mass_Nm_kg":  round(T_avg / max(m_total, 1e-6), 3),
-        "power_per_mass_W_kg":    round(P_mech / max(m_total, 1e-6), 1),
-        "loss_density_W_kg":      round(P_loss_avg / max(m_total, 1e-6), 1),
-    }
+    # Built by the SHARED helper (_build_transient_summary) so this legacy remesh
+    # path uses the SAME formula as the sliding-band path and the kernel — every
+    # run returns a populated `summary`.  (This path builds masses from the global
+    # config; it has never honored a per-request geo override, so pass None.)
+    try:
+        payload["summary"] = _build_transient_summary(
+            payload, I_phase_rms=I_phase_rms, gamma_deg=gamma_deg,
+            coil_temp_c=coil_temp_c, geo_override=None)
+    except Exception as _se:
+        log.exception("remesh summary build failed")
+        payload["summary_error"] = f"{type(_se).__name__}: {_se}"
 
     if include_frames:
         payload["frames"] = frames
@@ -3664,6 +3563,103 @@ def _compute_masses(p, geo_cfg: dict, k_end: float = 0.0) -> dict:
         "total_active_kg": round(m_total, 3),
         "note": "Active components only (no housing/frame/bearings). Typical frame adds 30-50% mass.",
         "estimated_total_with_frame_kg": round(m_total * 1.4, 2),
+    }
+
+
+def _build_transient_summary(
+    sbres: dict,
+    *,
+    I_phase_rms: float,
+    gamma_deg: float,
+    coil_temp_c: float,
+    geo_override: Optional[dict] = None,
+) -> dict:
+    """Build the Simulation summary block (masses, loss split, KV, efficiency,
+    specific torque/power) from a finished transient result dict.
+
+    THE single source for the summary formula — called by BOTH the sliding-band
+    path AND the legacy remesh path in get_fem_transient, AND by the kernel's
+    solver.em_transient module (via get_fem_transient), so the summary can never
+    drift between the direct route and the kernel and every card is populated on
+    every run.  Operates purely on the result dict's keys (T_avg_Nm, P_cu_W,
+    P_fe_W, P_mag_eddy_W, P_shaft_eddy_W, V_peak, P_elec_in_W, rpm, …), defaulting
+    any key a given path did not emit — so it is robust to either producer.
+
+    ``geo_override`` (the per-request geometry, if any) is threaded into the mass
+    calc so an applied design's torque/mass density reflects THAT geometry, not
+    the globally-saved one.
+    """
+    import math as _math
+    import numpy as _np
+    from motor_ai_sim.simulation.geometry_2d import params_from_config as _pfc
+    from motor_ai_sim.config import get_config as _gc
+
+    # Masses for the CURRENT operating geometry (respect a per-request override so
+    # an applied design's specific torque/power is billed against its own mass).
+    _p = _pfc(geo_override=geo_override)
+    _geo_cfg = dict(_gc().get("geometry", {}))
+    if geo_override:
+        _geo_cfg = {**_geo_cfg, **geo_override}
+    _masses = _compute_masses(_p, _geo_cfg,
+                              k_end=float(sbres.get("end_winding_factor", 0.0) or 0.0))
+    _m_tot = float(_masses["total_active_kg"])
+
+    _rpm = float(sbres.get("rpm", 3950.0))
+    _Tavg = float(sbres.get("T_avg_Nm", 0.0))
+    _Pmech = float(sbres.get("P_mech_avg_W", _Tavg * 2 * _math.pi * _rpm / 60))
+
+    # Period-MEAN of each instantaneous loss series — NOT [0].  The iron/magnet
+    # series ripple as the teeth pass; frame 0 sits near a peak, so [0] would
+    # overstate the reported average loss.  Copper is DC (flat) so its mean == [0].
+    def _mean(_k):
+        _s = sbres.get(_k) or [0.0]
+        return float(_np.mean(_np.asarray(_s, float))) if len(_s) else 0.0
+    _Pcu = _mean("P_cu_W")
+    _Pfe = _mean("P_fe_W")
+    _Pmag = _mean("P_mag_eddy_W")
+    _Pshaft = _mean("P_shaft_eddy_W")   # solid-shaft eddy (bulk conductor)
+
+    _Vpk = float(sbres.get("V_peak", 0.0))
+    _Vrms = _Vpk / _math.sqrt(2)
+    _Vlpk = _Vpk * _math.sqrt(3)
+    _Vlrms = _Vlpk / _math.sqrt(2)
+
+    # Total INCLUDES shaft eddy so the breakdown sums to the same loss the solver's
+    # energy-balanced P_mech subtracts (else the card's Mech-power ≠ Σ losses).
+    _ploss = _Pcu + _Pfe + _Pmag + _Pshaft
+    # Energy conservation: P_mech = P_elec_in − P_loss.  Efficiency = shaft out /
+    # electrical in; 0 when not motoring.
+    _Pelec = float(sbres.get("P_elec_in_W", _Pmech + _ploss))
+    _eff = (_Pmech / _Pelec) if (_Pmech > 0 and _Pelec > 1.0) else 0.0
+
+    return {
+        "rpm": _rpm,
+        "I_phase_rms_A": round(float(I_phase_rms), 2),
+        "gamma_deg": round(float(gamma_deg), 2),
+        "T_em_avg_Nm": round(_Tavg, 3),
+        "T_ripple_pct": round(float(sbres.get("T_ripple_pct", 0.0)), 1),
+        "T_ripple_raw_pct": round(float(sbres.get("T_ripple_raw_pct", 0.0)), 1),
+        "T_ripple_filt_pct": round(float(sbres.get("T_ripple_filt_pct",
+                                                   sbres.get("T_ripple_pct", 0.0))), 1),
+        "P_mech_W": round(_Pmech, 1),
+        "V_phase_peak_V": round(_Vpk, 1),
+        "V_phase_rms_V": round(_Vrms, 1),
+        "V_line_peak_V": round(_Vlpk, 1),
+        "V_line_rms_V": round(_Vlrms, 1),
+        "KV_rpm_per_V_phase": round(_rpm / _Vrms, 2) if _Vrms > 1 else 0.0,
+        "KV_rpm_per_V_line":  round(_rpm / _Vlrms, 2) if _Vlrms > 1 else 0.0,
+        "P_loss_total_W": round(_ploss, 1),
+        "P_core_W":     round(_Pfe, 1),            # laminated iron
+        "P_stranded_W": round(_Pcu, 1),            # copper
+        "P_solid_W":    round(_Pmag + _Pshaft, 1), # magnet + shaft eddy
+        "efficiency":   round(_eff, 4),
+        "coil_temp_C":  round(float(sbres.get("coil_temp_C", coil_temp_c)), 1),
+        "end_winding_factor": round(float(sbres.get("end_winding_factor", 0.0)), 2),
+        "mass_total_kg": round(_m_tot, 3),
+        "mass_components": _masses["components"],
+        "torque_per_mass_Nm_kg": round(_Tavg / max(_m_tot, 1e-6), 3),
+        "power_per_mass_W_kg":   round(_Pmech / max(_m_tot, 1e-6), 1),
+        "loss_density_W_kg":     round(_ploss / max(_m_tot, 1e-6), 1),
     }
 
 

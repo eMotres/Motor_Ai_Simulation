@@ -56,6 +56,10 @@ interface TransientPayload {
   T_harm_order?: number[];
   T_harm_amp?: number[];
   summary?: TransientSummary;
+  // Set (instead of `summary`) when the backend solved the waveforms but the
+  // summary-block build threw — lets the UI surface the error rather than freeze
+  // the cards on the previous run's numbers.
+  summary_error?: string;
   // Demagnetisation (present only when demag=true): per-magnet worst-cell
   // report + the full-mesh per-element Br factor for the %-map.
   demag_report?: Array<{
@@ -312,10 +316,27 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
         if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
         const j = await r.json();
         if (!j.ok) throw new Error(j.error || 'kernel solve failed');
-        const d: TransientPayload & { restored?: boolean; stale?: boolean } = (j.result && j.result.raw) || {};
+        const d: TransientPayload & { restored?: boolean; stale?: boolean } =
+          (j.result && j.result.raw) || {};
         // restore=true with nothing ever saved → backend returns {restored:false}.
-        // Leave the panel empty (the "press Run" prompt) — do NOT recompute.
-        if (d.restored === false || !d.time_s) { setBusy(false); setError(null); return; }
+        // Leave the panel empty (the "press Run" prompt) — do NOT recompute, NOT
+        // an error.  This is the ONLY legitimate empty payload.
+        if (d.restored === false) { setBusy(false); setError(null); return; }
+        // A real Run (or a restore of a saved run) that came back 200 OK but with
+        // no usable waveform is a FAILED solve, not an empty state — surface it
+        // instead of silently keeping the previous (stale) numbers.
+        if (!d.time_s || !d.time_s.length) {
+          setBusy(false);
+          setError('Solve returned no data — see backend logs');
+          return;
+        }
+        // Backend built the waveforms but the summary-block build threw: the cards
+        // would otherwise freeze on the previous run's values with no warning.
+        if (d.summary_error) {
+          setBusy(false);
+          setError(`Summary unavailable: ${d.summary_error}`);
+          return;
+        }
         // Stamp a FRESH run with the geometry it was computed for, so a later
         // geometry change (e.g. applying a Sweep design) flags it stale.  A
         // RESTORED result keeps whatever stamp it was saved with.
@@ -418,6 +439,9 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
   // the summary cards flip together with the torque curve + spectrum on toggle —
   // instantly, no re-solve.  (Declared AFTER ripplePct so its dep array doesn't
   // hit the temporal-dead-zone.)  Fires on data change + whenever the toggle does.
+  // NB: a run that lacks a summary never reaches setData — the fetch surfaces it
+  // as an error first (see the run() guards) — so `data && !data.summary` here
+  // means only the empty-panel state (data null): correctly a no-op, not a freeze.
   useEffect(() => {
     if (!data?.summary || !onSummary) return;
     onSummary({ ...data.summary, T_ripple_pct: ripplePct });

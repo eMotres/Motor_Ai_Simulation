@@ -967,7 +967,10 @@ class DescentRequest(BaseModel):
     # Box-walking: when a variable ends pinned at a window edge, re-centre the
     # ±deviation window on the optimum and re-run, server-side, until everything
     # settles inside / hits a physical limit / max_rounds.  Fully unattended.
-    auto_expand: bool = False
+    # Default ON (per Vadim 2026-07-02): a variable pinned at its window edge
+    # auto-extends the window in that direction and keeps optimizing — the run
+    # never stalls just because the user's initial range was too narrow.
+    auto_expand: bool = True
     max_rounds: int = 5
     boundary_margin: float = 0.05
     run_id: str = ""
@@ -1185,6 +1188,10 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
         I   = float(op.get("current_a", 85.0))
         g   = float(op.get("gamma_deg", 0.0))
         _spec_by = {v["name"]: v for v in var_specs}
+        for v in var_specs:                      # remember the ORIGINAL window —
+            v["lo0"] = float(v["lo"])            # auto-expand growth caps + events
+            v["hi0"] = float(v["hi"])
+            v["span0"] = max(float(v["hi"]) - float(v["lo"]), 1e-12)
 
         def _fit(name, val):
             """Clamp into bounds; round integers; snap mm vars to the 0.1 mm grid."""
@@ -1288,6 +1295,58 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
             return {"metrics": _msum(best_seen["metrics"]), "cost": round(best_seen["cost"], 5),
                     "F": round(best_seen["F"], 5), "x": dict(best_seen["x"])}
 
+        def _expand_pinned(it_no: int) -> bool:
+            """AUTO-EXPAND (per Vadim 2026-07-02): when the accepted iterate sits
+            pinned at a window edge, GROW the window in that direction and keep
+            optimizing — the user's range is a starting guess, not a wall.
+            Growth per event = max(half the ORIGINAL span, 3 steps); the schema's
+            physical min/max is never crossed; each side may grow at most 4× the
+            original span per run (runaway guard).  Every extension is logged and
+            published to the progress feed (range_events) + refreshes the live
+            variables list, so the UI shows exactly what moved and where."""
+            if not auto_expand:
+                return False
+            grew = False
+            for v in var_specs:
+                nm = v["name"]; lo = float(v["lo"]); hi = float(v["hi"])
+                xv = best["x"].get(nm)
+                if xv is None or hi <= lo:
+                    continue
+                xv = float(xv)
+                m = max(boundary_margin * (hi - lo), float(v["step"]) * 1.001)
+                inc = max(0.5 * v["span0"], 3.0 * float(v["step"]))
+                ev = None
+                if xv >= hi - m:                          # pinned at the TOP edge
+                    new_hi = min(hi + inc, v["hi0"] + 4.0 * v["span0"])
+                    if v.get("hard_hi") is not None:
+                        new_hi = min(new_hi, float(v["hard_hi"]))
+                    if new_hi > hi + 1e-12:
+                        v["hi"] = new_hi
+                        ev = {"side": "high", "from": round(hi, 6), "to": round(new_hi, 6)}
+                elif xv <= lo + m:                        # pinned at the BOTTOM edge
+                    new_lo = max(lo - inc, v["lo0"] - 4.0 * v["span0"])
+                    if v.get("hard_lo") is not None:
+                        new_lo = max(new_lo, float(v["hard_lo"]))
+                    if new_lo < lo - 1e-12:
+                        v["lo"] = new_lo
+                        ev = {"side": "low", "from": round(lo, 6), "to": round(new_lo, 6)}
+                if ev:
+                    grew = True
+                    ev.update(name=nm, value=round(xv, 6), iter=int(it_no))
+                    log.info("descent AUTO-EXPAND: %s pinned %s at %.6g -> window %s "
+                             "edge %.6g -> %.6g", nm, ev["side"], xv, ev["side"],
+                             ev["from"], ev["to"])
+                    with _descent_lock:
+                        _descent_state.setdefault("range_events", []).append(dict(ev))
+                        _descent_state["variables"] = [
+                            {"name": s["name"], "lo": s["lo"], "hi": s["hi"],
+                             "step": s["step"]} for s in var_specs]
+            if grew:
+                with _descent_lock:
+                    _descent_state["boundary"] = _boundary_flags(
+                        var_specs, best["x"], boundary_margin)
+            return grew
+
         history = [{"iter": 0, **_msum(base), "cost": round(cost0, 5), "F": round(F0, 5),
                     "x": {k: round(float(v), 4) for k, v in x.items()}}]
         all_pts = [p for p in [_pt(b, "baseline")] if p]   # every eval → objective-space point
@@ -1348,6 +1407,12 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
 
             gmax = max((abs(gv) for gv in grad.values()), default=0.0)
             if gmax < 1e-9:
+                # Flat gradient: pinned variables produce a zero component (both
+                # probes clamp onto the same edge point) — if that's the cause,
+                # auto-expand the window and keep going; else truly converged.
+                if _expand_pinned(it):
+                    lr = max(lr, 3.0)
+                    continue
                 break                  # flat → converged
 
             # ── backtracking line search downhill along the unit gradient ───
@@ -1385,10 +1450,23 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                 lr *= 0.5
                 with _descent_lock:
                     _descent_state["iter"] = it
-                if lr < 0.05:
-                    break              # step too small → converged
+            # AUTO-EXPAND check EVERY iteration (improved or not): the iterate
+            # may sit pinned at a window edge — the common case is pinned from
+            # the very BASELINE (config value clamped into a too-narrow window),
+            # where nothing ever "improves" because every move clamps back onto
+            # the same edge point.  Widen right away so the NEXT gradient can
+            # cross; only declare convergence when the step has collapsed AND
+            # nothing was pinned/extendable.
+            if _expand_pinned(it):
+                lr = max(lr, 3.0)      # fresh territory → restore the step size
+            elif (not improved) and lr < 0.05:
+                break                  # step too small, nothing pinned → converged
 
         with _descent_lock:
+            # Final boundary flags (the UI banner reads these for the gradient
+            # path too — previously only CMA-ES published them).
+            _descent_state["boundary"] = _boundary_flags(var_specs, best_seen["x"],
+                                                         boundary_margin)
             _descent_state.update(
                 result={"best": {"metrics": _msum(best_seen["metrics"]),
                                  "cost": round(best_seen["cost"], 5),
@@ -1662,7 +1740,23 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                 break
             # re-centre the window on the optimum and walk again (next round)
             geo0 = dict(best["x"])
+            _old_win = {v["name"]: (float(v["lo"]), float(v["hi"])) for v in cur_specs}
             cur_specs = _recenter_specs(cur_specs, best["x"])
+            # Publish each moved window to the info feed (range_events) — same
+            # stream the gradient path's auto-expand uses, so the UI shows the
+            # box-walk regardless of algorithm.
+            with _descent_lock:
+                for v in cur_specs:
+                    o = _old_win.get(v["name"])
+                    if o and (abs(o[0] - float(v["lo"])) > 1e-12
+                              or abs(o[1] - float(v["hi"])) > 1e-12):
+                        _descent_state.setdefault("range_events", []).append({
+                            "iter": int(rnd + 1), "name": v["name"], "side": "walk",
+                            "from": round(o[0], 6), "to": round(float(v["lo"]), 6),
+                            "from_hi": round(o[1], 6), "to_hi": round(float(v["hi"]), 6),
+                            "value": round(float(best["x"].get(v["name"], 0.0)), 6)})
+                        log.info("CMA box-walk: %s window [%.6g, %.6g] -> [%.6g, %.6g]",
+                                 v["name"], o[0], o[1], float(v["lo"]), float(v["hi"]))
 
         with _descent_lock:
             _descent_state["result"] = {
@@ -1761,6 +1855,7 @@ def descent_start(req: DescentRequest):
                                "result": None, "phase": "starting",
                                "points": [], "grad": {}, "mtpa_gamma_deg": None, "variables": [],
                                "boundary": [], "walk_round": 1, "converged": False,
+                               "range_events": [],   # auto-expansions of pinned variables (info feed)
                                "seeded_from_surrogate": False,
                                "walk_rounds": (max_rounds if auto_expand else 1),
                                # Eval parameters this run used — pinned to the result so applying

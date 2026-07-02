@@ -167,7 +167,9 @@ const DescentPanel: React.FC = () => {
   })();
   // Box-walking: keep re-centering the ±deviation window on the optimum until
   // every variable settles inside its window (or hits a physical limit).
-  const [autoWalk, setAutoWalk]   = useState(false);
+  // Default ON (per Vadim): a variable pinned at its window edge auto-extends /
+  // walks the window server-side and keeps optimizing instead of stalling.
+  const [autoWalk, setAutoWalk]   = useState(true);
   const [surrogateSeed, setSurrogateSeed] = useState(false);  // Bayesian warm-start from accumulated evals
   const [maxRounds, setMaxRounds] = useState(5);   // box-walking round cap (server-side auto-walk)
   const [snoozeKey, setSnoozeKey] = useState('');  // signature of a dismissed change-set
@@ -254,6 +256,16 @@ const DescentPanel: React.FC = () => {
   const _lambda = 4 + Math.floor(3 * Math.log(Math.max(2, activeVars.length)));
   const genPct = Math.min(99, Math.round(100 * Math.max(0, (Number(st.n_evals) || 0) - 1)
                                           / Math.max(1, (Number(st.max_iters) || maxIters) * _lambda)));
+  // Auto-expand info feed (server): window edges GROWN in place (gradient path)
+  // or WALKED between rounds (CMA) because the optimum was pinned there.  Show
+  // the latest state per variable+side so the user sees where the search went
+  // beyond the ranges they drew.
+  const rangeEvents: any[] = Array.isArray((st as any).range_events) ? (st as any).range_events : [];
+  const rangeSummary = (() => {
+    const latest = new Map<string, any>();
+    for (const e of rangeEvents) latest.set(`${e.name}:${e.side}`, e);
+    return Array.from(latest.values());
+  })();
 
   // ── Re-optimize suggestion: what changed since the last optimization? ────────
   // Snapshot the inputs at launch (in `launch`), then diff the live inputs against
@@ -600,6 +612,18 @@ const DescentPanel: React.FC = () => {
           <LinearProgress variant={busyIndeterminate ? 'indeterminate' : 'determinate'} value={genPct}
             sx={{ height: 6, borderRadius: 3 }} />
         </Box>
+      )}
+
+      {/* Auto-expand feed: which variable windows the server extended (gradient)
+          or walked (CMA) because the optimum was pinned at their edge. */}
+      {rangeSummary.length > 0 && (
+        <Typography variant="caption" sx={{ display: 'block', color: '#f59e0b', mb: 1 }}>
+          {'Range auto-extended: '}
+          {rangeSummary.map((e: any) => e.side === 'walk'
+            ? `${e.name} → [${e.to} … ${e.to_hi}]`
+            : `${e.name} ${e.side === 'high' ? 'max' : 'min'} ${e.from} → ${e.to}`
+          ).join(' · ')}
+        </Typography>
       )}
 
       {/* Progress chips: iters / evals / best */}

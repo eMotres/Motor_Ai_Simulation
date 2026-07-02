@@ -1601,6 +1601,7 @@ def get_fem_eddy_field2d(
     coil_temp_c:        float = 120.0,
     component_mesh:     str   = "",
     geo:                Optional[str] = None,  # per-request geometry override (multi-user)
+    structured_slot:    bool  = False,  # ANSYS-style transfinite slot interior (opt-in)
 ):
     """Run the time-coupled EDDY-CURRENT solve and return its LAST-frame field —
     A_z, |B|, and the copper eddy current density J = σ(−∂A/∂t + U_c) — in the
@@ -1613,7 +1614,8 @@ def get_fem_eddy_field2d(
     key = ("eddyfld", round(gamma_deg, 1), round(I_phase_rms, 1),
            int(n_steps_per_period), round(n_periods, 2), round(mesh_size_mm, 2),
            round(min_size_mm, 2), round(outer_air_factor, 2), int(n_sectors),
-           round(coil_temp_c, 1), tuple(sorted(_comp_mesh.items())))
+           round(coil_temp_c, 1), tuple(sorted(_comp_mesh.items())),
+           bool(structured_slot))
     if _geo_ov:   # distinct cache entry per overridden geometry (no-geo key unchanged)
         key = key + (tuple(sorted(_geo_ov.items())),)
     if key in _fem_field_cache:
@@ -1637,6 +1639,7 @@ def get_fem_eddy_field2d(
             coil_temp_c=float(coil_temp_c), eddy=True, rotor_eddy=True,
             return_field=True,
             component_mesh_mm=_comp_mesh,
+            structured_slot=bool(structured_slot),
             geo_override=_geo_ov)
     except Exception as e:
         log.exception("eddy field solve failed")
@@ -1854,6 +1857,8 @@ def get_thermal_field2d(
     fluid_temp_in_c:    float = 25.0,       # liquid: inlet temperature
     fluid_temp_out_c:   float = 0.0,        # liquid: target OUTLET temp (housing held here; flow derived)
     flow_lpm:           float = 0.0,        # liquid: volumetric flow [L/min] (legacy; now derived from ΔT)
+    structured_slot:    bool  = False,      # ANSYS-style transfinite slot interior → meshed
+                                            # liner heat barrier (opt-in; else lumped slot_k)
 ):
     """Steady-state 2-D thermal map. Runs the EM eddy solve for the loss field
     (cached), then solves −∇·(k∇T)=q on the same mesh with convection at the
@@ -1886,7 +1891,8 @@ def get_thermal_field2d(
            round(min_size_mm, 2), round(outer_air_factor, 2), int(n_sectors),
            round(coil_temp_c, 1), component_mesh,
            cooling_mode, round(air_speed_mps, 2), fluid,
-           round(fluid_temp_in_c, 1), round(fluid_temp_out_c, 1), round(flow_lpm, 2))
+           round(fluid_temp_in_c, 1), round(fluid_temp_out_c, 1), round(flow_lpm, 2),
+           bool(structured_slot))
     if _geo_ov:
         key = key + (tuple(sorted(_geo_ov.items())),)
     if key in _thermal_field_cache:
@@ -1898,7 +1904,8 @@ def get_thermal_field2d(
         n_steps_per_period=n_steps_per_period, n_periods=n_periods,
         mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm,
         outer_air_factor=outer_air_factor, n_sectors=n_sectors,
-        coil_temp_c=coil_temp_c, component_mesh=component_mesh, geo=geo)
+        coil_temp_c=coil_temp_c, component_mesh=component_mesh, geo=geo,
+        structured_slot=bool(structured_slot))
     verts = _np.asarray(em["vertices"], float)         # (n,2) metres
     tris = _np.asarray(em["triangles"], int)            # (m,3)
     tags = _np.asarray(em["domain_per_tri"], int)       # collapsed palette tags

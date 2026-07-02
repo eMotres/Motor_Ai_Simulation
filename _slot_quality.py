@@ -51,10 +51,12 @@ def build_stator_half(scale, mode):
     if scale == "450":
         m = _scale_450(m)
     gl = 2
+    # structured_gap stays OFF (production default); this test isolates the
+    # structured SLOT.  (The gap has its own toggle + is already clean.)
     polys = F._simplify_polys(
         m.get_2d_polygons(rotor_angle_deg=0.0), tol_mm=0.005,
         stator_fillet_mm=0.0, n_slip=1008, gap_layers=gl,
-        structured_gap=(mode == "struct"), band_mode="merged")
+        structured_gap=False, band_mode="merged")
     # feature-relative min size: ~1/3 of the smallest thin insulation feature
     ins = float(m.parameters["insulation_thickness"])
     dy = float(m.parameters["wire_spacing_y"])

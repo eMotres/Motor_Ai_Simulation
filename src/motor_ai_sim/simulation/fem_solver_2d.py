@@ -4681,6 +4681,8 @@ def fem_transient_sliding_band(
                                      # (any error leaves the production numbers intact).
     structured_gap: bool = False,    # ANSYS-style concentric-ring air-gap mesh (experimental
                                      # Mesh-tab toggle; default off = free gmsh gap).
+    structured_slot: bool = False,   # ANSYS-style structured (transfinite) slot interior
+                                     # (copper + enamel + liner); default off = free slot.
 ) -> dict:
     """Sliding-band transient: mesh the stator + rotor halves ONCE, then sweep
     the rotor by shifting the slip-ring node pairing (no remeshing) so the
@@ -4878,7 +4880,8 @@ def fem_transient_sliding_band(
         normal_deviation_deg=8.0, aspect_ratio=10.0,
         gap_layers=gap_layers,
         component_mesh_mm=component_mesh_mm,
-        full_ring=_full_ring, pole_copy=pole_copy)
+        full_ring=_full_ring, pole_copy=pole_copy,
+        structured_slot=structured_slot)
     Ps, Tts = ms.p.copy(), ms.t.copy(); Pr, Ttr = mr.p.copy(), mr.t.copy()
     nsn = Ps.shape[1]
     Pall = np.hstack([Ps, Pr]); Tall = np.hstack([Tts, Ttr + nsn])

@@ -495,12 +495,12 @@
       "steps_per_period": 72,
       "demag": false,
       "coil_temp_c": 120,
-      "frequency": 1400,
-      "end_winding_factor": 1.34,
-      "connection": "2S"
+      "frequency": 2000,
+      "end_winding_factor": 1.43,
+      "connection": "4S"
     },
     "mesh": {
-      "mesh_size_mm": 4,
+      "mesh_size_mm": 8,
       "gap_layers": 2,
       "component_mesh": {},
       "min_size_mm": 0.3,

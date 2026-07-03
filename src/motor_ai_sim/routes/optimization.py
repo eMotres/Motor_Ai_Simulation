@@ -972,6 +972,10 @@ class DescentRequest(BaseModel):
     # never stalls just because the user's initial range was too narrow.
     auto_expand: bool = True
     max_rounds: int = 5
+    # >0 → the cost actively penalises T_ripple_pct above ripple_max_pct
+    # (λ_r·overshoot/100).  0 (default) keeps the old behaviour: ripple is only
+    # a post-hoc chart gate, never felt by the optimizer.
+    ripple_penalty_lambda: float = 0.0
     boundary_margin: float = 0.05
     run_id: str = ""
     # ── Objective mode ──────────────────────────────────────────────────────
@@ -1061,15 +1065,24 @@ def _make_bline(base_m: Dict[str, Any], bump_m: Dict[str, Any],
             "current_b": float(bump_m.get("current_a", 0.0) or 0.0)}
 
 
+_RIPPLE_PEN_LAM = {"v": 0.0}   # >0 → _descent_cost penalises ripple over ripple_max
+                               # (set per run from DescentRequest.ripple_penalty_lambda;
+                               # one descent runs at a time, so a module global is safe)
+
+
 def _descent_cost(m: Dict[str, Any], base: Dict[str, Any],
                   ripple_max: float, w_eff: float, w_td: float, lam: float,
                   v_peak_limit: float = 1e9):
     """Scalar cost (lower = better) + the raw figure-of-merit F.
 
-    Two objective modes (ripple is NEVER penalised — it is trimmed post-hoc on the
-    chart).  The only feasibility penalty is over-voltage: V_peak above the
-    inverter's usable phase-voltage limit, so a design the bus can't drive is
-    repelled.  `ripple_max` is accepted for signature compatibility only.
+    Two objective modes.  By DEFAULT ripple is not penalised (trimmed post-hoc on
+    the chart) — but when the request sets ripple_penalty_lambda > 0 the cost adds
+        λ_r · max(0, T_ripple_pct − ripple_max) / 100
+    so the optimizer actively holds ripple under the gate (per Vadim: "ripple < 4 %
+    при максимальном КПД и плотности момента" — the chart-trim alone let CMA drift
+    to 7.6 % because the objective never felt the constraint).  The other
+    feasibility penalty is over-voltage: V_peak above the inverter's usable
+    phase-voltage limit, so a design the bus can't drive is repelled.
 
     • baseline-line (when base carries '_bline'): F = signed perpendicular distance
       of (T/mass, efficiency) ABOVE the current-only baseline line.  Weights come
@@ -1078,6 +1091,11 @@ def _descent_cost(m: Dict[str, Any], base: Dict[str, Any],
     • product (legacy fallback): F = (efficiency/eff0)^w_eff · (T/mass/td0)^w_td."""
     vpk  = float(m.get("V_peak", 0.0) or 0.0)
     pen  = lam * max(0.0, vpk - v_peak_limit)
+    _rp = float(_RIPPLE_PEN_LAM.get("v", 0.0) or 0.0)
+    if _rp > 0.0:
+        _rip = float(m.get("T_ripple_pct", 0.0) or 0.0)
+        # /100: 1 % overshoot → 0.01·λ_r, same order as typical F gains (~0.01)
+        pen += _rp * max(0.0, _rip - float(ripple_max)) / 100.0
     bl = base.get("_bline") if isinstance(base, dict) else None
     if bl:
         td  = float(m.get("torque_per_mass_Nm_kg", 0.0) or 0.0)
@@ -1843,6 +1861,8 @@ def descent_start(req: DescentRequest):
     # Rated-duty constraints (off when 0 / huge): target torque + peak-voltage cap.
     v_peak_limit  = float(req.v_peak_limit) if float(req.v_peak_limit) > 0 else 1e9
     target_torque = max(0.0, float(req.target_torque_nm))
+    # Ripple penalty (per-run; one descent at a time → module global is safe).
+    _RIPPLE_PEN_LAM["v"] = max(0.0, float(req.ripple_penalty_lambda or 0.0))
     # Box-walking (server-side auto-expand): re-centre the window + re-run until settled.
     auto_expand     = bool(req.auto_expand)
     max_rounds      = max(1, min(int(req.max_rounds), 20))

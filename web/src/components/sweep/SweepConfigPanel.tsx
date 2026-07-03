@@ -163,6 +163,7 @@ const SweepConfigPanel: React.FC = () => {
     updateVariation,
     setVariations,
     updateOperatingPoint,
+    updateRippleThreshold,
     initVariationsFromSchema,
   } = useMotorStore();
 
@@ -488,9 +489,14 @@ const SweepConfigPanel: React.FC = () => {
           </Card>
 
           <SectionLabel sx={{ mb: 0.5 }}>Torque Ripple</SectionLabel>
-          <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-            Not a constraint — trim it with the <strong>“ripple ≤ X%”</strong> slider under the results chart.
-          </Typography>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <TextField label="limit ≤ %" size="small" type="number"
+              value={+((sweepConfig.rippleThreshold ?? 0) * 100).toFixed(2)}
+              onChange={e => updateRippleThreshold(Math.max(0, (+e.target.value || 0)) / 100)}
+              inputProps={{ min: 0, step: 0.5, style: { fontSize: 12, width: 64 } }}
+              InputLabelProps={{ sx: { fontSize: 11 } }} />
+            <HelpTip title="Ripple limit for the optimizer. Enforced in the cost only when 'ripple λ' > 0 in the optimizer toolbar below (cost += λ·max(0, ripple% − limit%)/100). With λ = 0 the limit is inactive — trim points visually with the 'ripple ≤ X%' slider under the results chart." />
+          </Box>
         </Box>
        </Box>
        )}

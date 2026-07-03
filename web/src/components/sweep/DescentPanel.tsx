@@ -8,6 +8,7 @@ import TrendingDownIcon from '@mui/icons-material/TrendingDown';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import StopIcon from '@mui/icons-material/Stop';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import HelpTip from '../common/HelpTip';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip,
   ResponsiveContainer, Legend, BarChart, Bar, Cell, ReferenceLine,
@@ -141,6 +142,18 @@ const DescentPanel: React.FC = () => {
   const [maxIters, setMaxIters] = useState(10);
   const [wEff, setWEff] = useState(1);
   const [wTd, setWTd]   = useState(1);   // reward torque/mass too (default); 0 = efficiency only → design ignores mass
+  // Ripple-gate enforcement weight in the optimizer cost (0 = off → ripple is only
+  // trimmed on the chart). Persisted: forgetting a set λ on reload would silently
+  // relaunch unconstrained runs.
+  const [rippleLam, setRippleLam] = useState<number>(() => {
+    try { return Math.max(0, Number(JSON.parse(localStorage.getItem('opt.rippleLam') ?? '0')) || 0); }
+    catch { return 0; }
+  });
+  const updRippleLam = (v: number) => {
+    const x = Math.max(0, v || 0);
+    setRippleLam(x);
+    try { localStorage.setItem('opt.rippleLam', JSON.stringify(x)); } catch { /* ignore */ }
+  };
   // Objective mode. 'baseline_line' (default): maximise the signed PERPENDICULAR
   // DISTANCE above the "current-only" line — two sims of the START geometry (at I
   // and I·(1+bump)) set the eff/(T/mass) weights automatically from the line slope,
@@ -281,6 +294,7 @@ const DescentPanel: React.FC = () => {
     'Speed (rpm)': op0_.rpm,
     'Load angle γ': op0_.gamma_deg ?? 0,
     'Ripple limit (%)': +((sweepConfig.rippleThreshold ?? 0) * 100).toFixed(2),
+    'Ripple penalty λ': rippleLam,
     'Variables / windows': _varsSig,
   };
   const changes = (lastOptSnapshot && (best || st.result))
@@ -387,7 +401,8 @@ const DescentPanel: React.FC = () => {
       await runDescent({ rippleMax, maxIters, wEff, wTd, steps, algorithm, nSectors,
                          targetTorque: 0, vPeakLimit: 1e9, optimizeGamma: false,   // fixed Simulation current, no voltage limit
                          autoExpand: autoWalk, maxRounds, surrogateSeed,
-                         objective, currentBumpPct: currentBump });
+                         objective, currentBumpPct: currentBump,
+                         ripplePenaltyLambda: rippleLam });
     } finally {
       localRun.current = false;
     }
@@ -474,6 +489,13 @@ const DescentPanel: React.FC = () => {
               <ToggleButton value="product"       sx={{ px: 1, fontSize: 10 }}>η × T/mass</ToggleButton>
             </ToggleButtonGroup>
           </Tooltip>
+          <Tooltip title={`Ripple penalty weight λ. 0 = OFF: the ripple limit (${rippleMax.toFixed(1)}% from Operating points) is NOT enforced — ripple is only trimmed on the chart. λ > 0 adds cost += λ·max(0, ripple% − limit%)/100, so the optimizer actively avoids designs over the limit: ~25 = soft pressure, 100 = hard wall. Works with both objectives.`} placement="top">
+            <TextField label="ripple λ" type="number" size="small" value={rippleLam}
+              onChange={e => updRippleLam(+e.target.value)}
+              inputProps={{ min: 0, step: 5, style: { fontSize: 11, padding: '3px 6px', width: 44 } }}
+              InputLabelProps={{ sx: { fontSize: 10 } }}
+              sx={rippleLam > 0 ? { '& .MuiOutlinedInput-notchedOutline': { borderColor: '#f59e0b' } } : undefined} />
+          </Tooltip>
           {objective === 'baseline_line' ? (
             <>
               <Tooltip title="The 2nd baseline sim runs at I·(1+this%). Larger = a longer baseline arm (steadier slope) but a bigger efficiency drop to span. 10% is a good default." placement="top">
@@ -534,14 +556,24 @@ const DescentPanel: React.FC = () => {
         </Group>
       </Box>
 
-      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
-        Operating point (from Simulation): <strong>{op0.current_a} A @ {op0.rpm} rpm, γ={op0.gamma_deg ?? 0}°</strong> · variables:{' '}
-        <strong>{activeVars.length}</strong> · objective:{' '}
-        <strong>{objective === 'baseline_line'
-          ? `max distance above the current-only line (sims @ I and +${currentBump}% I)`
-          : 'max efficiency × torque/mass'}</strong>{' '}
-        (ripple trimmed on the chart, not constrained). Only whitelisted variables are varied.
-      </Typography>
+      {/* Run summary — structured data only; the explanation lives in the ⓘ tooltip. */}
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mb: 1.5, flexWrap: 'wrap' }}>
+        <Chip size="small" variant="outlined" sx={{ height: 20, fontSize: 10 }}
+          label={`${op0.current_a} A · ${op0.rpm} rpm · γ ${op0.gamma_deg ?? 0}°`} />
+        <Chip size="small" variant="outlined" sx={{ height: 20, fontSize: 10 }}
+          label={`${activeVars.length} vars`} />
+        <Chip size="small" variant="outlined" sx={{ height: 20, fontSize: 10 }}
+          label={objective === 'baseline_line' ? 'obj: above baseline' : 'obj: η × T/mass'} />
+        <Chip size="small" variant="outlined"
+          label={rippleLam > 0 ? `ripple ≤ ${rippleMax.toFixed(1)}% · λ ${rippleLam}` : 'ripple: chart-only'}
+          sx={{ height: 20, fontSize: 10,
+                ...(rippleLam > 0 ? { color: '#f59e0b', borderColor: 'rgba(245,158,11,0.6)' } : {}) }} />
+        <HelpTip title={`Operating point — from Simulation (single source). Objective: ${objective === 'baseline_line'
+            ? `max perpendicular distance above the current-only line (2 sims of the start geometry @ I and +${currentBump}% I set the η vs T/mass weights from the line slope)`
+            : 'max (η/η₀)^w·eff × (T/mass ÷ (T/mass)₀)^w·Nm/kg'}. Ripple: ${rippleLam > 0
+            ? `enforced in the cost above ${rippleMax.toFixed(1)}% (λ=${rippleLam})`
+            : 'NOT constrained — trimmed on the chart only; set ripple λ > 0 to enforce the limit'}. Only whitelisted geometry variables are varied.`} />
+      </Box>
 
       {descentError && (
         <Typography color="error" variant="caption" sx={{ display: 'block', mb: 1 }}>
@@ -615,15 +647,23 @@ const DescentPanel: React.FC = () => {
       )}
 
       {/* Auto-expand feed: which variable windows the server extended (gradient)
-          or walked (CMA) because the optimum was pinned at their edge. */}
+          or walked (CMA) because the optimum was pinned at their edge.
+          Structured chips (one per variable), explanation in the ⓘ tooltip. */}
       {rangeSummary.length > 0 && (
-        <Typography variant="caption" sx={{ display: 'block', color: '#f59e0b', mb: 1 }}>
-          {'Range auto-extended: '}
-          {rangeSummary.map((e: any) => e.side === 'walk'
-            ? `${e.name} → [${e.to} … ${e.to_hi}]`
-            : `${e.name} ${e.side === 'high' ? 'max' : 'min'} ${e.from} → ${e.to}`
-          ).join(' · ')}
-        </Typography>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6, mb: 1, flexWrap: 'wrap' }}>
+          <Typography variant="caption" sx={{ color: '#f59e0b', fontWeight: 600 }}>
+            Auto-extended · {rangeSummary.length}
+          </Typography>
+          <HelpTip title="Variable windows the server moved during the run because the optimum was pinned at an edge (Auto-walk / auto-expand). '→ [lo … hi]' = window re-centered on the round's best; 'min/max a → b' = one edge grown in place. Latest state per variable." />
+          {rangeSummary.map((e: any) => (
+            <Chip key={`${e.name}:${e.side}`} size="small" variant="outlined"
+              label={e.side === 'walk'
+                ? `${e.name} → [${e.to} … ${e.to_hi}]`
+                : `${e.name} ${e.side === 'high' ? 'max' : 'min'} ${e.from} → ${e.to}`}
+              sx={{ height: 20, fontSize: 10, color: '#f59e0b',
+                    borderColor: 'rgba(245,158,11,0.45)' }} />
+          ))}
+        </Box>
       )}
 
       {/* Progress chips: iters / evals / best */}

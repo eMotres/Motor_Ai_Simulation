@@ -469,6 +469,42 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
     });
   }, [data, torqueFilter]);
 
+  // Phase-voltage harmonic spectrum — client-side DFT of V(t) over the stored
+  // window (N samples = n_periods electrical periods, so harmonic h lives in
+  // bin h·n_periods).  Magnitudes of the three phases are averaged: a balanced
+  // machine has identical per-phase spectra, so averaging only suppresses
+  // numerical asymmetry.  THD = √(ΣV_h², h≥2) / V₁.
+  const vharm = React.useMemo(() => {
+    if (!data?.V_A?.length) return null;
+    const N = data.V_A.length;
+    const P = Math.max(1, Math.round(data.n_periods || 1));
+    const hMax = Math.min(25, Math.floor(N / (2 * P)) - 1);
+    if (hMax < 1) return null;
+    const phases = [data.V_A, data.V_B, data.V_C].filter(a => a?.length === N);
+    const mag = (h: number) => {
+      let sum = 0;
+      for (const v of phases) {
+        let re = 0, im = 0;
+        const w = (2 * Math.PI * h * P) / N;
+        for (let n = 0; n < N; n++) {
+          // Edge samples of the dψ/dt central difference can be NaN/null in
+          // older stored runs — treat them as 0 instead of poisoning the DFT.
+          const x = Number.isFinite(v[n]) ? v[n] : 0;
+          re += x * Math.cos(w * n); im -= x * Math.sin(w * n);
+        }
+        sum += (2 / N) * Math.hypot(re, im);
+      }
+      return sum / phases.length;
+    };
+    const rows = [];
+    for (let h = 1; h <= hMax; h++) rows.push({ order: h, amp: mag(h) });
+    const v1 = rows[0].amp;
+    const thd = v1 > 1e-9
+      ? 100 * Math.sqrt(rows.slice(1).reduce((s, r) => s + r.amp * r.amp, 0)) / v1
+      : 0;
+    return { rows: rows.map(r => ({ ...r, pct: v1 > 1e-9 ? (100 * r.amp / v1) : 0 })), v1, thd };
+  }, [data]);
+
   return (
     <Paper sx={{ bgcolor: '#0b1220', border: '1px solid #1e293b', p: 2,
       display: 'flex', flexDirection: 'column', gap: 1.5 }}>
@@ -782,6 +818,43 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
               </LineChart>
             </ResponsiveContainer>
           </Box>
+
+          {/* ── Voltage harmonic spectrum ── */}
+          {vharm && (
+          <Box sx={{ height: 200 }}>
+            <Typography sx={{ fontSize: 11, fontWeight: 700, color: '#94a3b8' }}>
+              Voltage harmonics (order = ×f_elec)
+              <span style={{ color: '#475569', fontWeight: 400 }}>
+                {'  ·  '}V₁ ≈ {vharm.v1.toFixed(1)} V · THD ≈ {vharm.thd.toFixed(1)} %
+              </span>
+              <Tooltip title="DFT of the phase voltage V = R·I + dψ/dt (3-phase magnitude average). With sinusoidal imposed currents everything above order 1 is the machine itself: back-EMF shape + slotting. Green = fundamental (the useful component). Blue = 5/7/11/13… — these pair into the 6·k torque-ripple orders and load the inverter. Grey = triplen (3/9/15…) zero-sequence — visible phase-to-neutral but cancels line-to-line in a wye winding, drives no current. No PWM here — an inverter adds its own switching harmonics on top." placement="top">
+                <span style={{ color: '#475569', marginLeft: 6, fontSize: 11, cursor: 'help' }}>ⓘ</span>
+              </Tooltip>
+            </Typography>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={vharm.rows} margin={{ top: 8, right: 10, left: 0, bottom: 16 }}>
+                <CartesianGrid {...GRID}/>
+                <XAxis dataKey="order" tick={AXIS} interval={0}
+                  label={{ value: 'harmonic order (n × f_elec)', position: 'insideBottom',
+                    offset: -4, style: { fontSize: 10, fill: '#475569' } }}/>
+                <YAxis tick={AXIS}
+                  label={{ value: 'amp [V]', angle: -90,
+                    position: 'insideLeft', offset: 12,
+                    style: { fontSize: 10, fill: '#475569' } }}/>
+                <RcTooltip {...TOOLTIP}
+                  labelFormatter={(v: number) => `harmonic n = ${v}`}
+                  formatter={(val: number, _n: string, p: any) =>
+                    [`${Number(val).toFixed(2)} V  (${p?.payload?.pct?.toFixed(1)} % of V₁)`, 'amplitude']}/>
+                <Bar dataKey="amp" isAnimationActive={false}>
+                  {vharm.rows.map((r, i) => (
+                    <Cell key={i} fill={r.order === 1 ? '#34d399'
+                      : r.order % 3 === 0 ? '#64748b' : '#3b82f6'}/>
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </Box>
+          )}
 
           {/* ── Demagnetisation: per-magnet report (%) + per-element %-map ── */}
           {data.demag_report && data.demag_report.length > 0 && (

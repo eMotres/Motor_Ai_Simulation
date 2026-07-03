@@ -154,6 +154,26 @@ const DescentPanel: React.FC = () => {
     setRippleLam(x);
     try { localStorage.setItem('opt.rippleLam', JSON.stringify(x)); } catch { /* ignore */ }
   };
+  // Line-to-line voltage THD gate (FOC waveform quality) — same opt-in penalty
+  // pattern as ripple; persisted for the same reason.
+  const [thdLam, setThdLam] = useState<number>(() => {
+    try { return Math.max(0, Number(JSON.parse(localStorage.getItem('opt.thdLam') ?? '0')) || 0); }
+    catch { return 0; }
+  });
+  const updThdLam = (v: number) => {
+    const x = Math.max(0, v || 0);
+    setThdLam(x);
+    try { localStorage.setItem('opt.thdLam', JSON.stringify(x)); } catch { /* ignore */ }
+  };
+  const [thdMax, setThdMax] = useState<number>(() => {
+    try { return Math.max(0, Number(JSON.parse(localStorage.getItem('opt.thdMax') ?? '5')) || 5); }
+    catch { return 5; }
+  });
+  const updThdMax = (v: number) => {
+    const x = Math.max(0, v || 0);
+    setThdMax(x);
+    try { localStorage.setItem('opt.thdMax', JSON.stringify(x)); } catch { /* ignore */ }
+  };
   // Objective mode. 'baseline_line' (default): maximise the signed PERPENDICULAR
   // DISTANCE above the "current-only" line — two sims of the START geometry (at I
   // and I·(1+bump)) set the eff/(T/mass) weights automatically from the line slope,
@@ -295,6 +315,8 @@ const DescentPanel: React.FC = () => {
     'Load angle γ': op0_.gamma_deg ?? 0,
     'Ripple limit (%)': +((sweepConfig.rippleThreshold ?? 0) * 100).toFixed(2),
     'Ripple penalty λ': rippleLam,
+    'THD penalty λ': thdLam,
+    'THD limit (%)': thdMax,
     'Variables / windows': _varsSig,
   };
   const changes = (lastOptSnapshot && (best || st.result))
@@ -402,7 +424,8 @@ const DescentPanel: React.FC = () => {
                          targetTorque: 0, vPeakLimit: 1e9, optimizeGamma: false,   // fixed Simulation current, no voltage limit
                          autoExpand: autoWalk, maxRounds, surrogateSeed,
                          objective, currentBumpPct: currentBump,
-                         ripplePenaltyLambda: rippleLam });
+                         ripplePenaltyLambda: rippleLam,
+                         thdPenaltyLambda: thdLam, thdMaxPct: thdMax });
     } finally {
       localRun.current = false;
     }
@@ -420,6 +443,9 @@ const DescentPanel: React.FC = () => {
     <TableRow>
       <TableCell sx={{ fontWeight: 600, fontSize: 11 }}>{label}</TableCell>
       <TableCell align="right" sx={{ fontSize: 11 }}>{fmtNum(m?.T_ripple_pct, 2)}%</TableCell>
+      <TableCell align="right" sx={{ fontSize: 11 }}>
+        {m?.THD_LL_pct == null ? '—' : `${fmtNum(m.THD_LL_pct, 2)}%`}
+      </TableCell>
       <TableCell align="right" sx={{ fontSize: 11 }}>{fmtPct(m?.efficiency)}</TableCell>
       <TableCell align="right" sx={{ fontSize: 11 }}>{fmtNum(m?.torque_per_mass, 3)}</TableCell>
       <TableCell align="right" sx={{ fontSize: 11 }}>{fmtNum(m?.T_em_Nm, 1)}</TableCell>
@@ -496,6 +522,21 @@ const DescentPanel: React.FC = () => {
               InputLabelProps={{ sx: { fontSize: 10 } }}
               sx={rippleLam > 0 ? { '& .MuiOutlinedInput-notchedOutline': { borderColor: '#f59e0b' } } : undefined} />
           </Tooltip>
+          <Tooltip title={`Voltage-quality gate for sinusoidal FOC drives: line-to-line THD of the phase voltage (non-triplen harmonics 5/7/11/13… — triplens cancel in wye and are excluded). λ > 0 adds cost += λ·max(0, THD_LL% − limit%)/100, steering the optimizer toward a sinusoidal back-EMF: ~25 = soft, 100 = hard wall. 0 = report only. CIANO-S target: THD_LL < 5%.`} placement="top">
+            <TextField label="THD λ" type="number" size="small" value={thdLam}
+              onChange={e => updThdLam(+e.target.value)}
+              inputProps={{ min: 0, step: 5, style: { fontSize: 11, padding: '3px 6px', width: 44 } }}
+              InputLabelProps={{ sx: { fontSize: 10 } }}
+              sx={thdLam > 0 ? { '& .MuiOutlinedInput-notchedOutline': { borderColor: '#22d3ee' } } : undefined} />
+          </Tooltip>
+          {thdLam > 0 && (
+            <Tooltip title="THD_LL limit [%] the penalty enforces." placement="top">
+              <TextField label="THD ≤ %" type="number" size="small" value={thdMax}
+                onChange={e => updThdMax(+e.target.value)}
+                inputProps={{ min: 0, step: 0.5, style: { fontSize: 11, padding: '3px 6px', width: 44 } }}
+                InputLabelProps={{ sx: { fontSize: 10 } }} />
+            </Tooltip>
+          )}
           {objective === 'baseline_line' ? (
             <>
               <Tooltip title="The 2nd baseline sim runs at I·(1+this%). Larger = a longer baseline arm (steadier slope) but a bigger efficiency drop to span. 10% is a good default." placement="top">
@@ -568,6 +609,12 @@ const DescentPanel: React.FC = () => {
           label={rippleLam > 0 ? `ripple ≤ ${rippleMax.toFixed(1)}% · λ ${rippleLam}` : 'ripple: chart-only'}
           sx={{ height: 20, fontSize: 10,
                 ...(rippleLam > 0 ? { color: '#f59e0b', borderColor: 'rgba(245,158,11,0.6)' } : {}) }} />
+        {thdLam > 0 && (
+          <Chip size="small" variant="outlined"
+            label={`THD_LL ≤ ${thdMax}% · λ ${thdLam}`}
+            sx={{ height: 20, fontSize: 10, color: '#22d3ee',
+                  borderColor: 'rgba(34,211,238,0.6)' }} />
+        )}
         <HelpTip title={`Operating point — from Simulation (single source). Objective: ${objective === 'baseline_line'
             ? `max perpendicular distance above the current-only line (2 sims of the start geometry @ I and +${currentBump}% I set the η vs T/mass weights from the line slope)`
             : 'max (η/η₀)^w·eff × (T/mass ÷ (T/mass)₀)^w·Nm/kg'}. Ripple: ${rippleLam > 0
@@ -687,6 +734,7 @@ const DescentPanel: React.FC = () => {
             <TableRow>
               <TableCell sx={{ fontSize: 10, color: 'text.secondary' }}>—</TableCell>
               <TableCell align="right" sx={{ fontSize: 10, color: 'text.secondary' }}>Ripple</TableCell>
+              <TableCell align="right" sx={{ fontSize: 10, color: 'text.secondary' }}>THD_LL</TableCell>
               <TableCell align="right" sx={{ fontSize: 10, color: 'text.secondary' }}>Eff</TableCell>
               <TableCell align="right" sx={{ fontSize: 10, color: 'text.secondary' }}>Nm/kg</TableCell>
               <TableCell align="right" sx={{ fontSize: 10, color: 'text.secondary' }}>T (Nm)</TableCell>

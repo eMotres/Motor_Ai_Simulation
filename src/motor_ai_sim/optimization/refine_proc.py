@@ -142,6 +142,10 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
     _pm = float(d.get("P_mech_avg_W", 0.0) or 0.0)
     eff = (_pm / _pe) if (_pe > 0.0 and _pm > 0.0) else (pmech / (pmech + ploss) if pmech > 0 else 0.0)
     mass = float(_masses(build_params(geo), geo)["total"])
+    # Voltage waveform quality — SAME helper as the Simulation summary, so the
+    # optimizer's THD is byte-identical to the Simulation tab's.
+    from motor_ai_sim.simulation.postproc import voltage_harmonics
+    vh = voltage_harmonics(d)
     return {
         "T_em_Nm": round(Tavg, 3), "efficiency": round(eff, 5),
         "torque_per_mass_Nm_kg": round(Tavg / mass, 4) if mass > 0 else 0.0,
@@ -150,6 +154,10 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         "P_cu_dc_W": round(cu_dc, 1), "P_cu_ac_W": round(cu_ac, 1),
         "P_fe_W": round(fe, 1), "P_mag_W": round(mg, 1), "P_shaft_W": round(sh, 1),
         "mass_total_kg": round(mass, 3), "V_peak": round(float(d["V_peak"]), 1),
+        "V1_phase_V": vh["V1_phase_V"], "THD_pct": vh["THD_pct"],
+        "THD_LL_pct": vh["THD_LL_pct"],
+        "Kt_Nm_per_Arms": (round(Tavg / float(current_a), 4)
+                           if float(current_a or 0.0) > 1e-9 else 0.0),
     }
 
 

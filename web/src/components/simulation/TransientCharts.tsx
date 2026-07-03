@@ -502,7 +502,13 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
     const thd = v1 > 1e-9
       ? 100 * Math.sqrt(rows.slice(1).reduce((s, r) => s + r.amp * r.amp, 0)) / v1
       : 0;
-    return { rows: rows.map(r => ({ ...r, pct: v1 > 1e-9 ? (100 * r.amp / v1) : 0 })), v1, thd };
+    // Line-to-line THD: triplens (3/9/15…) are zero-sequence and cancel in the
+    // line voltage of a wye winding, so only non-triplen orders count — this is
+    // the number a sinusoidal FOC drive actually fights (CIANO-S target < 5%).
+    const thdLL = v1 > 1e-9
+      ? 100 * Math.sqrt(rows.slice(1).reduce((s, r) => s + (r.order % 3 !== 0 ? r.amp * r.amp : 0), 0)) / v1
+      : 0;
+    return { rows: rows.map(r => ({ ...r, pct: v1 > 1e-9 ? (100 * r.amp / v1) : 0 })), v1, thd, thdLL };
   }, [data]);
 
   return (
@@ -826,6 +832,10 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
               Voltage harmonics (order = ×f_elec)
               <span style={{ color: '#475569', fontWeight: 400 }}>
                 {'  ·  '}V₁ ≈ {vharm.v1.toFixed(1)} V · THD ≈ {vharm.thd.toFixed(1)} %
+                {' · '}
+              </span>
+              <span style={{ color: '#22d3ee', fontWeight: 600 }}>
+                THD_LL ≈ {vharm.thdLL.toFixed(1)} %
               </span>
               <Tooltip title="DFT of the phase voltage V = R·I + dψ/dt (3-phase magnitude average). With sinusoidal imposed currents everything above order 1 is the machine itself: back-EMF shape + slotting. Green = fundamental (the useful component). Blue = 5/7/11/13… — these pair into the 6·k torque-ripple orders and load the inverter. Grey = triplen (3/9/15…) zero-sequence — visible phase-to-neutral but cancels line-to-line in a wye winding, drives no current. No PWM here — an inverter adds its own switching harmonics on top." placement="top">
                 <span style={{ color: '#475569', marginLeft: 6, fontSize: 11, cursor: 'help' }}>ⓘ</span>

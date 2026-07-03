@@ -124,7 +124,8 @@ interface MotorState {
                        optimizeGamma?: boolean; autoExpand?: boolean;
                        maxRounds?: number; surrogateSeed?: boolean;
                        objective?: string; currentBumpPct?: number;
-                       ripplePenaltyLambda?: number }) => Promise<void>;
+                       ripplePenaltyLambda?: number;
+                       thdPenaltyLambda?: number; thdMaxPct?: number }) => Promise<void>;
   cancelDescent: () => Promise<void>;
   applyDescentBest: () => Promise<void>;
   applyDescentPoint: (pt: any) => Promise<void>;   // apply a USER-PICKED scatter point
@@ -642,7 +643,7 @@ export const useMotorStore = create<MotorState>()(
       baselineError: null,
       lastOptSnapshot: null,
       setLastOptSnapshot: (s) => set({ lastOptSnapshot: s }),
-      runDescent: async ({ rippleMax, maxIters, wEff, wTd, steps, algorithm, nSectors, targetTorque, vPeakLimit, optimizeGamma, autoExpand, maxRounds, surrogateSeed, objective, currentBumpPct, ripplePenaltyLambda }) => {
+      runDescent: async ({ rippleMax, maxIters, wEff, wTd, steps, algorithm, nSectors, targetTorque, vPeakLimit, optimizeGamma, autoExpand, maxRounds, surrogateSeed, objective, currentBumpPct, ripplePenaltyLambda, thdPenaltyLambda, thdMaxPct }) => {
         const { sweepConfig } = get();
         // Fixed operating point = Sweep "Point 1" (γ/current from Simulation).
         const op0 = sweepConfig.operatingPoints[0] || ({} as any);
@@ -697,6 +698,9 @@ export const useMotorStore = create<MotorState>()(
               // Ripple gate enforcement in the COST (0 = off, ripple only trimmed on
               // the chart): cost += λ·max(0, ripple% − limit%)/100.
               ripple_penalty_lambda: ripplePenaltyLambda ?? 0,
+              // Line-to-line voltage THD gate (FOC waveform quality), same scale.
+              thd_penalty_lambda: thdPenaltyLambda ?? 0,
+              thd_max_pct: thdMaxPct ?? 5,
             }),
           });
           if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);

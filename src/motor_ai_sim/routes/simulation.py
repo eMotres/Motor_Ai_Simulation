@@ -3604,6 +3604,7 @@ def _build_transient_summary(
     import math as _math
     import numpy as _np
     from motor_ai_sim.simulation.geometry_2d import params_from_config as _pfc
+    from motor_ai_sim.simulation.postproc import voltage_harmonics as _vharm
     from motor_ai_sim.config import get_config as _gc
 
     # Masses for the CURRENT operating geometry (respect a per-request override so
@@ -3644,6 +3645,13 @@ def _build_transient_summary(
     _Pelec = float(sbres.get("P_elec_in_W", _Pmech + _ploss))
     _eff = (_Pmech / _Pelec) if (_Pmech > 0 and _Pelec > 1.0) else 0.0
 
+    # Voltage waveform quality (CIANO THD spec): V₁ + phase/line-to-line THD +
+    # torque constant — first-class metrics on EVERY run so the optimizer can
+    # hold THD_LL like it holds ripple.
+    _vh = _vharm(sbres)
+    _kt = (round(_Tavg / float(I_phase_rms), 4)
+           if float(I_phase_rms or 0.0) > 1e-9 else 0.0)
+
     return {
         "rpm": _rpm,
         "I_phase_rms_A": round(float(I_phase_rms), 2),
@@ -3660,6 +3668,10 @@ def _build_transient_summary(
         "V_line_rms_V": round(_Vlrms, 1),
         "KV_rpm_per_V_phase": round(_rpm / _Vrms, 2) if _Vrms > 1 else 0.0,
         "KV_rpm_per_V_line":  round(_rpm / _Vlrms, 2) if _Vlrms > 1 else 0.0,
+        "V1_phase_V":     _vh["V1_phase_V"],
+        "THD_pct":        _vh["THD_pct"],
+        "THD_LL_pct":     _vh["THD_LL_pct"],
+        "Kt_Nm_per_Arms": _kt,
         "P_loss_total_W": round(_ploss, 1),
         "P_core_W":     round(_Pfe, 1),            # laminated iron
         "P_stranded_W": round(_Pcu, 1),            # copper

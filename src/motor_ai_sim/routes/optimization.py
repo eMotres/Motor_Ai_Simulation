@@ -147,7 +147,8 @@ def _load_eval_cache() -> None:
 
 _RES_KEYS = ("T_em_Nm", "efficiency", "torque_per_mass_Nm_kg", "T_ripple_pct",
              "P_loss_total_W", "P_cu_W", "P_cu_dc_W", "P_cu_ac_W", "P_fe_W",
-             "P_mag_W", "P_shaft_W", "mass_total_kg", "V_peak")
+             "P_mag_W", "P_shaft_W", "mass_total_kg", "V_peak",
+             "V1_phase_V", "THD_pct", "THD_LL_pct", "Kt_Nm_per_Arms")
 
 
 def _store_eval(key: str, res: Dict[str, Any]) -> None:
@@ -976,6 +977,12 @@ class DescentRequest(BaseModel):
     # (λ_r·overshoot/100).  0 (default) keeps the old behaviour: ripple is only
     # a post-hoc chart gate, never felt by the optimizer.
     ripple_penalty_lambda: float = 0.0
+    # >0 → the cost penalises THD_LL_pct (line-to-line voltage THD, non-triplen
+    # harmonics — what a wye-connected FOC drive fights) above thd_max_pct, same
+    # λ·overshoot/100 scale as the ripple penalty.  CIANO spec: THD_LL < 5 % for
+    # the FOC variant.  0 (default) = THD is reported but not constrained.
+    thd_penalty_lambda: float = 0.0
+    thd_max_pct: float = 5.0
     boundary_margin: float = 0.05
     run_id: str = ""
     # ── Objective mode ──────────────────────────────────────────────────────
@@ -1020,6 +1027,8 @@ def _msum(m: Dict[str, Any]) -> Dict[str, Any]:
         "mass_total_kg":   m.get("mass_total_kg"),
         "P_loss_total_W":  m.get("P_loss_total_W"),
         "V_peak":          m.get("V_peak"),
+        "THD_LL_pct":      m.get("THD_LL_pct"),      # line-to-line voltage THD (FOC)
+        "Kt_Nm_per_Arms":  m.get("Kt_Nm_per_Arms"),
         "current_a":       m.get("current_a"),   # current the design was solved at
                                                  # (auto-adjusted to hit the target torque)
     }
@@ -1037,6 +1046,7 @@ def _pt(out: Dict[str, Any], kind: str):
     ov = out.get("overrides") or r.get("overrides") or {}
     return {"td": r.get("torque_per_mass_Nm_kg"), "eff": r.get("efficiency"),
             "ripple": r.get("T_ripple_pct"), "kind": kind,
+            "thd": r.get("THD_LL_pct"),      # line-to-line voltage THD (FOC quality)
             "overrides": {k: v for k, v in ov.items() if k != "gamma_deg"},
             "current_a": out.get("current_a") or r.get("current_a"),
             "gamma_deg": ov.get("gamma_deg")}
@@ -1068,6 +1078,8 @@ def _make_bline(base_m: Dict[str, Any], bump_m: Dict[str, Any],
 _RIPPLE_PEN_LAM = {"v": 0.0}   # >0 → _descent_cost penalises ripple over ripple_max
                                # (set per run from DescentRequest.ripple_penalty_lambda;
                                # one descent runs at a time, so a module global is safe)
+_THD_PEN = {"lam": 0.0, "max": 5.0}   # >0 → _descent_cost penalises THD_LL_pct over
+                                      # thd_max_pct (same per-run-global pattern)
 
 
 def _descent_cost(m: Dict[str, Any], base: Dict[str, Any],
@@ -1096,6 +1108,10 @@ def _descent_cost(m: Dict[str, Any], base: Dict[str, Any],
         _rip = float(m.get("T_ripple_pct", 0.0) or 0.0)
         # /100: 1 % overshoot → 0.01·λ_r, same order as typical F gains (~0.01)
         pen += _rp * max(0.0, _rip - float(ripple_max)) / 100.0
+    _tl = float(_THD_PEN.get("lam", 0.0) or 0.0)
+    if _tl > 0.0:
+        _thd = float(m.get("THD_LL_pct", 0.0) or 0.0)
+        pen += _tl * max(0.0, _thd - float(_THD_PEN.get("max", 5.0))) / 100.0
     bl = base.get("_bline") if isinstance(base, dict) else None
     if bl:
         td  = float(m.get("torque_per_mass_Nm_kg", 0.0) or 0.0)
@@ -1863,6 +1879,9 @@ def descent_start(req: DescentRequest):
     target_torque = max(0.0, float(req.target_torque_nm))
     # Ripple penalty (per-run; one descent at a time → module global is safe).
     _RIPPLE_PEN_LAM["v"] = max(0.0, float(req.ripple_penalty_lambda or 0.0))
+    # THD penalty (CIANO FOC spec: clean line-to-line back-EMF; same pattern).
+    _THD_PEN["lam"] = max(0.0, float(req.thd_penalty_lambda or 0.0))
+    _THD_PEN["max"] = max(0.0, float(req.thd_max_pct or 5.0))
     # Box-walking (server-side auto-expand): re-centre the window + re-run until settled.
     auto_expand     = bool(req.auto_expand)
     max_rounds      = max(1, min(int(req.max_rounds), 20))

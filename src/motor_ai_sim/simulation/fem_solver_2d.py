@@ -5071,13 +5071,18 @@ def fem_transient_sliding_band(
     # its frames after the loop — every reported series/metric is steady-state.
     # dt = T_elec·n_periods/n_total is invariant under the dual bump.
     _vskip = 0
+    _v_nspp = int(round(n_steps_per_period))
     if _vdrive:
-        # Two settling periods: the electrical time constant L/R spans several
-        # periods on a low-R machine, so the DC start-up mode decays slowly —
-        # the phasor initialisation (frame 0) puts the state NEAR the periodic
-        # orbit and two discarded periods absorb the residual.
-        _vskip = 2 * max(2, int(round(n_steps_per_period)))
-        n_periods = float(n_periods) + 2.0
+        # FOUR settling periods.  The electrical time constant L/R spans several
+        # periods on a low-R machine, so a marched DC start-up mode decays too
+        # slowly to shed by brute force.  Instead: the phasor init lands near the
+        # orbit, then the boundary flux is sampled at each period end (it
+        # converges GEOMETRICALLY) and Aitken Δ²-extrapolated to its limit after
+        # 3 samples — killing the residual DC in one shot — with a 4th period to
+        # let the harmonics re-settle on the DC-free fundamental.
+        _v_settle_periods = 4
+        _vskip = _v_settle_periods * max(2, _v_nspp)
+        n_periods = float(n_periods) + float(_v_settle_periods)
         n_total += _vskip
     period_mech = 360.0 / pole_pairs                      # one electrical period [deg mech]
     T_series = []; psiA = []; psiB = []; psiC = []
@@ -5286,21 +5291,150 @@ def fem_transient_sliding_band(
                 pc_ += val_
         return pa_, pb_, pc_
 
-    # Voltage-drive circuit state: branch currents (same convention as
-    # _currents/ψ/R_phase, so V = R·i + dψ/dt is self-consistent) + previous-
-    # step flux for the backward-Euler dψ/dt.  L̂ is a scalar incremental-
-    # inductance preconditioner — it only sets the iteration STEP, the converged
-    # currents satisfy the circuit equation regardless; a diagonal secant
-    # refines it from the first frames.
+    # Voltage-drive circuit state: the phase currents are UNKNOWNS solved with
+    # the field (strong field↔circuit coupling — see the Picard loop).  Warm-
+    # start from the previous frame + the previous-step flux for backward-Euler.
+    from scipy.sparse.linalg import splu as _splu
     _iv_state = {'A': 0.0, 'B': 0.0, 'C': 0.0}
     _psi_prev = None
-    _L_est = None
-    _V_MAX_IT, _V_RELAX = 20, 1.0   # full Newton steps (local Jacobian)
-    _v_tol = 0.005 * max(float(I_phase_rms) / n_parallel * math.sqrt(2), 1e-9)
-    _v_diag = {"iters": [], "resid": []}   # circuit-iteration convergence stats
-    _v_align = 0.0   # dq-frame rotation that puts the MEASURED PM flux on +d
-                     # (frame-0 probe sets it; the DAXIS constant aligns the
-                     # CURRENT convention, not the Park frame — off by ~90°)
+    _v_diag = {"iters": [], "resid": []}   # circuit convergence stats per frame
+    _v_bpsi = []            # period-boundary flux samples (psiA, psiB) for Aitken
+    _v_aitken_done = False
+
+    if _vdrive:
+        # ── Phasor steady-state initialiser ──────────────────────────────────
+        # The electrical time constant tau = L/R spans ~20 electrical periods on
+        # a low-R machine, so a marched start-up would need ~100 periods to shed
+        # its DC transient — impractical.  Instead measure the PM flux + the dq
+        # inductances once at theta=0 and place the current DIRECTLY on the
+        # periodic orbit (i(0), psi(-dt)); the march then only has to develop the
+        # small saturation/slotting harmonics on top of a DC-free fundamental.
+        import math as _m
+        _pp = pole_pairs
+        # m_shift = 0 periodicity setup
+        if _moving:
+            _Pro0, _out0 = Pro_const, outer_red_const
+            _Kb0 = _K_gap_macro(0) if _use_macro else _K_band(0)
+        else:
+            _suf = _SignedUF(n)
+            for _a, _b in zip(Mn, Sn):
+                _suf.union(int(_b), int(_a), _bc_sign)
+            for _kk in range(Nring):
+                _suf.union(int(rring[_kk] + nsn), int(sring[_kk]), 1)
+            _rt = [_suf.find(_ii) for _ii in range(n)]
+            _rid = np.array([_r for _r, _ in _rt]); _rsg = np.array([_s for _, _s in _rt], float)
+            _uq, _iv = np.unique(_rid, return_inverse=True)
+            _Pro0 = _coo((_rsg, (np.arange(n), _iv)), shape=(n, _uq.size)).tocsr()
+            _out0 = np.unique(_iv[outer_nodes]); _Kb0 = None
+        _Pmag0 = np.concatenate([np.zeros(nsn), f_mag])
+        _Pa0 = np.concatenate([f_coil['A'] - f_coil['C'], np.zeros(half["r"]["n"])])
+        _Pb0 = np.concatenate([f_coil['B'] - f_coil['C'], np.zeros(half["r"]["n"])])
+        for _hn in ("s", "r"):
+            for _tg in sb_sat[_hn]:
+                nu_el[_hn][_tg][:] = 1.0 / (MU0 * max(mu0[_hn].get(_tg, 1.0), 1.0))
+
+        def _assemble0():
+            _bl = []
+            for _hn in ("s", "r"):
+                _h = half[_hn]; _K = K_const[_hn].copy()
+                for _tg, _sbi in sb_sat[_hn].items():
+                    _b0 = b0_sat[_hn][_tg]; _nf = _b0.zeros()
+                    _nf[_h["cells"][_tg]] = nu_el[_hn][_tg]
+                    _K = _K + asm(_stiff_nu, _sbi, nu=_b0.interpolate(_nf))
+                _bl.append(_K)
+            _K = _bd(_bl).tocsr()
+            if _Kb0 is not None:
+                _K = (_K + _Kb0).tocsr()
+            return _K
+
+        def _fac0(_K):
+            _Kg = (_Pro0.T @ _K @ _Pro0).tocsr()
+            _mk = np.ones(_Kg.shape[0], bool); _mk[_out0] = False
+            _fr = np.flatnonzero(_mk)
+            _lu = _splu(_Kg[_fr][:, _fr].tocsc())
+            _N = _Kg.shape[0]
+
+            def _bs(_ff):
+                _r = (_Pro0.T @ _ff)[_fr]
+                _x = np.zeros(_N); _x[_fr] = _lu.solve(_r)
+                return _Pro0 @ _x
+            return _bs
+
+        _the0 = _m.radians(0.0 * _pp + DAXIS_SHIFT_DEG)  # theta_eff=0 electrical
+
+        def _park(_xa_, _xb_, _xc_, _th):
+            return ((2.0 / 3.0) * (_xa_ * _m.cos(_th) + _xb_ * _m.cos(_th - 2.094395102393195)
+                                   + _xc_ * _m.cos(_th + 2.094395102393195)),
+                    -(2.0 / 3.0) * (_xa_ * _m.sin(_th) + _xb_ * _m.sin(_th - 2.094395102393195)
+                                    + _xc_ * _m.sin(_th + 2.094395102393195)))
+
+        def _ipark(_d, _q, _th):
+            return (_d * _m.cos(_th) - _q * _m.sin(_th),
+                    _d * _m.cos(_th - 2.094395102393195) - _q * _m.sin(_th - 2.094395102393195),
+                    _d * _m.cos(_th + 2.094395102393195) - _q * _m.sin(_th + 2.094395102393195))
+
+        _w = 2.0 * _m.pi * f_elec
+        _V0 = _voltages(0.0)
+        # Coupled phasor Picard: solve the dq STEADY-STATE circuit and the
+        # saturated field TOGETHER at theta=0, so the inductances used for the
+        # operating point are measured AT that operating point (Lq changes ~5x
+        # between i=0 and full load -> an i=0 estimate leaves a large DC).
+        _id0 = _iq0 = 0.0; _thal = _the0; _align = 0.0
+        _psi_pm_d = 0.0; _Ldd = _Lqq = _Ldq = _Lqd = 1e-6
+        for _it in range(nonlinear_iterations):
+            _K0 = _assemble0(); _bs = _fac0(_K0)
+            _A0 = _bs(_Pmag0); _xa = _bs(_Pa0); _xb = _bs(_Pb0)
+            _pm = _psi_of(_A0); _qa = _psi_of(_xa); _qb = _psi_of(_xb)
+            _ppmA, _ppmB, _ppmC = _pm[0] * sc_psi, _pm[1] * sc_psi, _pm[2] * sc_psi
+            # align d on the PM flux, measure the dq inductances there
+            _pd0, _pq0 = _park(_ppmA, _ppmB, _ppmC, _the0)
+            _align = _m.atan2(_pq0, _pd0); _thal = _the0 + _align
+            _psi_pm_d = _m.hypot(_pd0, _pq0)
+            _Laa, _Lba = _qa[0] * sc_psi, _qa[1] * sc_psi
+            _Lab, _Lbb = _qb[0] * sc_psi, _qb[1] * sc_psi
+            _idA, _idB, _idC = _ipark(1.0, 0.0, _thal)
+            _iqA, _iqB, _iqC = _ipark(0.0, 1.0, _thal)
+            _Ldd, _Lqd = _park(_Laa * _idA + _Lab * _idB, _Lba * _idA + _Lbb * _idB,
+                               -((_Laa + _Lba) * _idA + (_Lab + _Lbb) * _idB), _thal)
+            _Ldq, _Lqq = _park(_Laa * _iqA + _Lab * _iqB, _Lba * _iqA + _Lbb * _iqB,
+                               -((_Laa + _Lba) * _iqA + (_Lab + _Lbb) * _iqB), _thal)
+            # dq steady state: V_d = R i_d - w psi_q ; V_q = R i_q + w psi_d
+            _Vd, _Vq = _park(_V0['A'], _V0['B'], _V0['C'], _thal)
+            _M = np.array([[R_phase - _w * _Lqd, -_w * _Lqq],
+                           [_w * _Ldd, R_phase + _w * _Ldq]])
+            try:
+                _idq = np.linalg.solve(_M, np.array([_Vd, _Vq - _w * _psi_pm_d]))
+            except np.linalg.LinAlgError:
+                _idq = np.array([0.0, 0.0])
+            _id0, _iq0 = float(_idq[0]), float(_idq[1])
+            # operating-point field: A = A_pm + iA*xa + iB*xb (i_C folded in),
+            # then update the iron saturation from it for the next iterate.
+            _iA0, _iB0, _iC0 = _ipark(_id0, _iq0, _thal)
+            _Aop = _A0 + _iA0 * _xa + _iB0 * _xb
+            for _hn, _off in (("s", 0), ("r", nsn)):
+                _h = half[_hn]
+                _Bx, _By = _per_triangle_B(_h["mesh"], _Aop[_off:_off + _h["n"]])
+                _Bm = np.sqrt(_Bx ** 2 + _By ** 2)
+                for _tg, _cv in sat_bh[_hn].items():
+                    _ix = _h["cells"][_tg]
+                    if _ix.size == 0:
+                        continue
+                    _mn = _mu_r_from_bh_vec(_cv, _Bm[_ix])
+                    nu_el[_hn][_tg] = 0.5 * nu_el[_hn][_tg] + 0.5 / (MU0 * np.maximum(_mn, 1.0))
+        _iA0, _iB0, _iC0 = _ipark(_id0, _iq0, _thal)
+        _iv_state = {'A': _iA0, 'B': _iB0, 'C': _iC0}
+        # psi at t=-dt on the orbit: dq are constant in steady state, so the
+        # previous-step flux is just the SAME dq vector mapped one FRAME back —
+        # i.e. the park angle rotated by the per-frame electrical step w*dt (NOT
+        # one slip-node; a frame spans many slip nodes).  Getting this wrong
+        # injects a spurious rotational EMF at frame 0 -> a decaying DC current.
+        _psd = _psi_pm_d + _Ldd * _id0 + _Ldq * _iq0
+        _psq = _Lqd * _id0 + _Lqq * _iq0
+        _thal_m1 = _thal - _w * dt
+        _psi_prev = dict(zip(('A', 'B', 'C'), _ipark(_psd, _psq, _thal_m1)))
+        log.info("vdrive phasor init: Ld=%.4g Lq=%.4g H |psi_pm|=%.4g Wb "
+                 "i_dq=(%.1f, %.1f) A i0=(%.1f, %.1f, %.1f)",
+                 _Ldd, _Lqq, _psi_pm_d, _id0, _iq0, _iA0, _iB0, _iC0)
 
     for k in range(n_total):
         if progress_cb is not None:
@@ -5315,216 +5449,167 @@ def fem_transient_sliding_band(
         if not _vdrive:
             Ist = _currents(theta_eff)
         else:
-            Ist = dict(_iv_state)   # warm start from the previous frame
-        # Voltage drive: repeat the frame solve, correcting the phase currents
-        # from the circuit equation V = R·i + dψ/dt (backward Euler), until the
-        # residual converges — the currents that flow are the machine's own.
-        for _vit in range(_V_MAX_IT if _vdrive else 1):
+            Ist = dict(_iv_state)   # warm start (only seeds the saturation Picard)
+        if _moving:
+            # Moving band: the rotor<->stator coupling is the closed-form strip
+            # stiffness K_band(m) (added to K below); the only node-pairing
+            # constraints left are the m-INDEPENDENT sector cuts -> constant Pro.
+            Pro = Pro_const
+            outer_red = outer_red_const
+            _Kband_f = _K_gap_macro(m_shift) if _use_macro else _K_band(m_shift)
+        else:
+            # legacy: signed union-find merges ring nodes (slip) + cut pairs.
+            suf = _SignedUF(n)
+            for a, b in zip(Mn, Sn):
+                suf.union(int(b), int(a), _bc_sign)
+            for kk in range(Nring):
+                j = kk + m_shift; sg = 1
+                while j > Nring - 1: j -= (Nring - 1); sg *= _bc_sign
+                while j < 0:         j += (Nring - 1); sg *= _bc_sign
+                suf.union(int(rring[kk] + nsn), int(sring[j]), sg)
+            roots = [suf.find(i) for i in range(n)]
+            rid = np.array([r for r, _ in roots]); rsg = np.array([s for _, s in roots], float)
+            uniq, inv = np.unique(rid, return_inverse=True)
+            Pro = _coo((rsg, (np.arange(n), inv)), shape=(n, uniq.size)).tocsr()
+            outer_red = np.unique(inv[outer_nodes])
+            _Kband_f = None
+        # Source vectors.  Current drive: one fixed load vector f (Ist known).
+        # Voltage drive: the winding "unit-current" columns so the field can be
+        # written A = A_pm + i_A*xa + i_B*xb with i_C = -i_A-i_B (coil C folded
+        # in), and the currents solved from the circuit.
+        _n_rot = half["r"]["n"]
+        if not _vdrive:
             f_cur_s = (Ist['A'] * f_coil['A'] + Ist['B'] * f_coil['B']
                        + Ist['C'] * f_coil['C'])
             f = np.concatenate([f_cur_s, f_mag])
-            if _moving:
-                # Moving band: the rotor↔stator coupling is the closed-form strip
-                # stiffness K_band(m) (added to K below); the only node-pairing
-                # constraints left are the m-INDEPENDENT sector cuts → constant Pro.
-                Pro = Pro_const
-                outer_red = outer_red_const
-                _Kband_f = _K_gap_macro(m_shift) if _use_macro else _K_band(m_shift)
-            else:
-                # legacy: signed union-find merges ring nodes (slip) + cut pairs.
-                suf = _SignedUF(n)
-                for a, b in zip(Mn, Sn):
-                    suf.union(int(b), int(a), _bc_sign)
-                for kk in range(Nring):
-                    j = kk + m_shift; sg = 1
-                    while j > Nring - 1: j -= (Nring - 1); sg *= _bc_sign
-                    while j < 0:         j += (Nring - 1); sg *= _bc_sign
-                    suf.union(int(rring[kk] + nsn), int(sring[j]), sg)
-                roots = [suf.find(i) for i in range(n)]
-                rid = np.array([r for r, _ in roots]); rsg = np.array([s for _, s in roots], float)
-                uniq, inv = np.unique(rid, return_inverse=True)
-                Pro = _coo((rsg, (np.arange(n), inv)), shape=(n, uniq.size)).tocsr()
-                outer_red = np.unique(inv[outer_nodes])
-                _Kband_f = None
-            # Reset the per-element iron reluctivity to the unsaturated base each
-            # frame so the saturation solution is a pure function of rotor position
-            # (no history dependence) → the torque ripple is strictly PERIODIC.
-            # NB: warm-starting from the previous frame was tried and REVERTED — the
-            # damped Picard doesn't converge tightly enough for start-independence, so
-            # warm-start left each frame at a slightly different convergence level and
-            # INCREASED the ripple (19.8 %→25.4 % measured).  The per-frame reset is
-            # load-bearing for ripple consistency; a real speedup needs a tighter
-            # nonlinear solver (Aitken/Newton) first — see memory torque_ripple_root_cause.
+        else:
+            _Pmag = np.concatenate([np.zeros(nsn), f_mag])
+            _Pa = np.concatenate([f_coil['A'] - f_coil['C'], np.zeros(_n_rot)])
+            _Pb = np.concatenate([f_coil['B'] - f_coil['C'], np.zeros(_n_rot)])
+        # Reset the per-element iron reluctivity to the unsaturated base each
+        # frame so the saturation solution is a pure function of rotor position
+        # (no history dependence) -> the torque ripple is strictly PERIODIC.
+        # NB: warm-starting nu_el was tried and REVERTED -- the damped Picard
+        # doesn't converge tightly enough for start-independence, so warm-start
+        # left each frame at a slightly different convergence level and INCREASED
+        # the ripple.  The per-frame reset is load-bearing (torque_ripple_root_cause).
+        for hn in ("s", "r"):
+            for tag in sb_sat[hn]:
+                nu_el[hn][tag][:] = 1.0 / (MU0 * max(mu0[hn].get(tag, 1.0), 1.0))
+        A = np.zeros(n)
+        # Voltage drive changes the current every Picard step, so the saturation
+        # state moves more than at fixed current -> a few extra iterations.
+        _n_pic = nonlinear_iterations + (6 if _vdrive else 0)
+        for it in range(_n_pic):
+            blocks = []
             for hn in ("s", "r"):
-                for tag in sb_sat[hn]:
-                    nu_el[hn][tag][:] = 1.0 / (MU0 * max(mu0[hn].get(tag, 1.0), 1.0))
-            A = np.zeros(n)
-            for it in range(nonlinear_iterations):
-                blocks = []
-                for hn in ("s", "r"):
-                    h = half[hn]; K = K_const[hn].copy()
-                    for tag, _sbi in sb_sat[hn].items():
-                        b0 = b0_sat[hn][tag]; nf = b0.zeros()
-                        nf[h["cells"][tag]] = nu_el[hn][tag]   # P0 dof = global elem id
-                        K = K + asm(_stiff_nu, _sbi, nu=b0.interpolate(nf))
-                    blocks.append(K)
-                K = _bd(blocks).tocsr()
-                if _Kband_f is not None:
-                    K = (K + _Kband_f).tocsr()   # moving-band strip coupling
-                if eddy:
-                    Keff = (K + _Minv_dt).tocsr()
-                    # Solid-bar coils: current imposed via the ∫J=I constraint,
-                    # NOT a source — the RHS carries magnets + eddy history.
-                    rhs_field = (np.concatenate([np.zeros(nsn), f_mag])
-                                 + _Minv_dt @ A_prev)
-                    I_vec = np.concatenate([
-                        np.array([Ist[ph] for ph in _phase]) * _Iunit,
-                        np.zeros(len(_cons) - _n_coil_con)])
-                    A, U_cons = _solve_eddy_constrained(Keff, rhs_field, Pro,
-                                                        outer_red, I_vec, A_prev)
-                else:
-                    A = Pro @ _sksolve(*condense((Pro.T @ K @ Pro).tocsr(),
-                                                  Pro.T @ f, D=outer_red))
-                for hn, off in (("s", 0), ("r", nsn)):
-                    h = half[hn]
-                    Bx, By = _per_triangle_B(h["mesh"], A[off:off + h["n"]])
-                    Bm = np.sqrt(Bx ** 2 + By ** 2)
-                    for tag, curve in sat_bh[hn].items():
-                        idx = h["cells"][tag]
-                        if idx.size == 0:
-                            continue
-                        # PER-ELEMENT reluctivity: each iron triangle gets its own
-                        # μ(|B|) from the B-H curve.  Damped (Picard) update of the
-                        # element-wise ν field used by the saturable-tag assembly.
-                        mu_new = _mu_r_from_bh_vec(curve, Bm[idx])
-                        nu_new = 1.0 / (MU0 * np.maximum(mu_new, 1.0))
-                        nu_el[hn][tag] = 0.5 * nu_el[hn][tag] + 0.5 * nu_new
-            # per-phase flux linkage of THIS solution — needed in-loop for the
-            # voltage-drive circuit residual; reused below for the ψ series.
-            pa, pb, pc = _psi_of(A)
-            if not _vdrive:
-                break
-            _psi_now = {'A': pa * sc_psi, 'B': pb * sc_psi, 'C': pc * sc_psi}
-            _thr = math.radians(theta_eff * pole_pairs + DAXIS_SHIFT_DEG) + _v_align
-            _c0, _s0 = math.cos(_thr), math.sin(_thr)
-            _c1, _s1 = (math.cos(_thr - 2.0 * math.pi / 3.0),
-                        math.sin(_thr - 2.0 * math.pi / 3.0))
-            _c2, _s2 = (math.cos(_thr + 2.0 * math.pi / 3.0),
-                        math.sin(_thr + 2.0 * math.pi / 3.0))
+                h = half[hn]; K = K_const[hn].copy()
+                for tag, _sbi in sb_sat[hn].items():
+                    b0 = b0_sat[hn][tag]; nf = b0.zeros()
+                    nf[h["cells"][tag]] = nu_el[hn][tag]   # P0 dof = global elem id
+                    K = K + asm(_stiff_nu, _sbi, nu=b0.interpolate(nf))
+                blocks.append(K)
+            K = _bd(blocks).tocsr()
+            if _Kband_f is not None:
+                K = (K + _Kband_f).tocsr()   # moving-band strip coupling
+            if eddy:
+                Keff = (K + _Minv_dt).tocsr()
+                # Solid-bar coils: current imposed via the integral J=I constraint,
+                # NOT a source -- the RHS carries magnets + eddy history.
+                rhs_field = (np.concatenate([np.zeros(nsn), f_mag])
+                             + _Minv_dt @ A_prev)
+                I_vec = np.concatenate([
+                    np.array([Ist[ph] for ph in _phase]) * _Iunit,
+                    np.zeros(len(_cons) - _n_coil_con)])
+                A, U_cons = _solve_eddy_constrained(Keff, rhs_field, Pro,
+                                                    outer_red, I_vec, A_prev)
+            elif _vdrive:
+                # ---- STRONG field + circuit coupling ------------------------
+                # The phase currents are unknowns solved WITH the field on the
+                # EXACT inductance of the current saturation state:
+                #   A = A_pm + i_A*xa + i_B*xb   (i_C = -i_A - i_B), where
+                #     A_pm = K^-1 * f_mag                 (PM flux, i = 0)
+                #     xa   = K^-1 * (coilA - coilC),  xb = K^-1 * (coilB - coilC)
+                # so K*A reproduces the imposed winding source exactly.  The
+                # per-phase flux linkages give the PM flux + the 2x2 inductance
+                # L; the circuit (backward Euler)
+                #   (R*I2 + L/dt) * i = V - (psi_pm - psi_prev)/dt
+                # is solved directly for i.  No outer iteration, no frozen
+                # Jacobian -- L is re-measured EVERY Picard step, so saturation
+                # and the circuit converge together.  Factor K once, reuse the
+                # LU for all three back-solves.
+                Kg = (Pro.T @ K @ Pro).tocsr()
+                _msk = np.ones(Kg.shape[0], bool); _msk[outer_red] = False
+                _free = np.flatnonzero(_msk)
+                _lu = _splu(Kg[_free][:, _free].tocsc())
 
-            def _park(xa, xb, xc):
-                return ((2.0 / 3.0) * (xa * _c0 + xb * _c1 + xc * _c2),
-                        -(2.0 / 3.0) * (xa * _s0 + xb * _s1 + xc * _s2))
+                def _bsolve(_ffull, _lu=_lu, _free=_free, _Ncol=Kg.shape[0]):
+                    _fr = (Pro.T @ _ffull)[_free]
+                    _xr = np.zeros(_Ncol); _xr[_free] = _lu.solve(_fr)
+                    return Pro @ _xr
 
-            def _invpark(xd, xq):
-                return (xd * _c0 - xq * _s0,
-                        xd * _c1 - xq * _s1,
-                        xd * _c2 - xq * _s2)
-
-            if k == 0:
-                # ── Frame-0 probe (4 solves): PM flux phasor → phasor-init the
-                # current AT the operating point, then measure the LOCAL 2×2
-                # incremental-inductance Jacobian around it (small ±δ in d and
-                # q, cross-terms included).  A chord L from a 0→rated probe and
-                # per-axis secants were both tried and REVERTED: the chord
-                # overestimates the saturated local slope and the secant
-                # differentiates Picard noise — either way the circuit Newton
-                # bounced at the iteration cap and the orbit drifted.
-                _Ipk_sc = max(float(I_phase_rms) / n_parallel * math.sqrt(2), 1e-9)
-                _psid0, _psiq0 = _park(_psi_now['A'], _psi_now['B'], _psi_now['C'])
-                if _vit == 0:                       # i = 0 → pure PM flux
-                    # Rotate the dq frame so the measured PM flux sits on +d —
-                    # from here on d IS the magnet axis by construction.
-                    _v_align = math.atan2(_psiq0, _psid0)
-                    _psid0, _psiq0 = math.hypot(_psid0, _psiq0), 0.0
-                    # refresh the trig constants IN PLACE so the closures
-                    # (_park/_invpark) already speak the aligned frame — the
-                    # probe currents below must be placed in it, not the old one
-                    _thr = (math.radians(theta_eff * pole_pairs
-                                         + DAXIS_SHIFT_DEG) + _v_align)
-                    _c0, _s0 = math.cos(_thr), math.sin(_thr)
-                    _c1, _s1 = (math.cos(_thr - 2.0 * math.pi / 3.0),
-                                math.sin(_thr - 2.0 * math.pi / 3.0))
-                    _c2, _s2 = (math.cos(_thr + 2.0 * math.pi / 3.0),
-                                math.sin(_thr + 2.0 * math.pi / 3.0))
-                    _w_e = 2.0 * math.pi * f_elec
-                    _psi_pm_ph = complex(_psid0, _psiq0)
-                    # voltage phasor in the ALIGNED frame
-                    _thv0 = math.radians(v_delta_deg + DAXIS_SHIFT_DEG) - _v_align
-                    _V_ph = complex(float(v_phase_peak) * math.cos(_thv0),
-                                    float(v_phase_peak) * math.sin(_thv0))
-                    _L_rough = max(abs(_psi_pm_ph), 1e-6) / _Ipk_sc
-                    _i_ph = (_V_ph - 1j * _w_e * _psi_pm_ph) / complex(
-                        R_phase, _w_e * _L_rough)
-                    _probe = {"psi_pm": (_psid0, _psiq0),
-                              "i0": (_i_ph.real, _i_ph.imag),
-                              "dI": max(0.05 * _Ipk_sc, 1e-3)}
-                    Ist['A'], Ist['B'], Ist['C'] = _invpark(*_probe["i0"])
-                    continue
-                if _vit == 1:                       # base point ψ(i0)
-                    _probe["psi_i0"] = (_psid0, _psiq0)
-                    Ist['A'], Ist['B'], Ist['C'] = _invpark(
-                        _probe["i0"][0] + _probe["dI"], _probe["i0"][1])
-                    continue
-                if _vit == 2:                       # +δ on d → Jacobian column d
-                    _probe["Jd"] = ((_psid0 - _probe["psi_i0"][0]) / _probe["dI"],
-                                    (_psiq0 - _probe["psi_i0"][1]) / _probe["dI"])
-                    Ist['A'], Ist['B'], Ist['C'] = _invpark(
-                        _probe["i0"][0], _probe["i0"][1] + _probe["dI"])
-                    continue
-                # _vit == 3: +δ on q → Jacobian column q; assemble & invert
-                _probe["Jq"] = ((_psid0 - _probe["psi_i0"][0]) / _probe["dI"],
-                                (_psiq0 - _probe["psi_i0"][1]) / _probe["dI"])
-                _Ldd, _Lqd = _probe["Jd"]     # dψd/did, dψq/did
-                _Ldq, _Lqq = _probe["Jq"]     # dψd/diq, dψq/diq
-                _Ldd = max(_Ldd, 1e-7); _Lqq = max(_Lqq, 1e-7)
-                # Newton matrix of g(i) = V − R·i − (ψ(i) − ψprev)/dt:
-                #   −dg/di = R·I₂ + Ldq_matrix/dt  → solve (−dg/di)·Δi = g
-                _a11 = R_phase + _Ldd / dt; _a12 = _Ldq / dt
-                _a21 = _Lqd / dt;           _a22 = R_phase + _Lqq / dt
-                _det = _a11 * _a22 - _a12 * _a21
-                if abs(_det) < 1e-18:
-                    _det = math.copysign(1e-18, _det if _det else 1.0)
-                _vJ = (_a11, _a12, _a21, _a22, _det)
-                Ist['A'], Ist['B'], Ist['C'] = _invpark(*_probe["i0"])
-                _psi_seed = _invpark(
-                    _probe["psi_i0"][0], _probe["psi_i0"][1])
-                log.info("vdrive probe: Ldd=%.4g Lqq=%.4g Ldq=%.4g Lqd=%.4g H, "
-                         "|psi_pm|=%.4g Wb, i0=(%.1f, %.1f) A",
-                         _Ldd, _Lqq, _Ldq, _Lqd,
-                         abs(complex(*_probe["psi_pm"])),
-                         _probe["i0"][0], _probe["i0"][1])
-                break
-            _rA = _Vt['A'] - R_phase * Ist['A'] - (_psi_now['A'] - _psi_prev['A']) / dt
-            _rB = _Vt['B'] - R_phase * Ist['B'] - (_psi_now['B'] - _psi_prev['B']) / dt
-            _rC = -_rA - _rB              # balanced set (V, i, ψ each sum to ~0)
-            _rd, _rq = _park(_rA, _rB, _rC)
-            _id_now, _iq_now = _park(Ist['A'], Ist['B'], Ist['C'])
-            # Full 2×2 Newton step with the frame-0 LOCAL Jacobian (cross-
-            # saturation terms included): (R·I₂ + L/dt)·Δi = r.
-            _a11, _a12, _a21, _a22, _det = _vJ
-            _did = (_rd * _a22 - _rq * _a12) / _det
-            _diq = (_rq * _a11 - _rd * _a21) / _det
-            _id_new = _id_now + _V_RELAX * _did
-            _iq_new = _iq_now + _V_RELAX * _diq
-            Ist['A'], Ist['B'], Ist['C'] = _invpark(_id_new, _iq_new)
-            if max(abs(_did), abs(_diq)) < _v_tol:
-                break
-        if _vdrive:
-            _v_diag["iters"].append(_vit + 1)
-            try:
-                _v_diag["resid"].append(float(max(abs(_rA), abs(_rB))))
-            except NameError:
-                pass
-            if k == 0:
-                # frame 0 = Ld/Lq probe: seed the BE flux from the initialised
-                # current, not from the probe's q-test field
-                _psi_prev = {'A': _psi_seed[0], 'B': _psi_seed[1],
-                             'C': _psi_seed[2]}
+                A_pm = _bsolve(_Pmag); xa = _bsolve(_Pa); xb = _bsolve(_Pb)
+                _pm = _psi_of(A_pm); _qa = _psi_of(xa); _qb = _psi_of(xb)
+                _psi_pmA = _pm[0] * sc_psi; _psi_pmB = _pm[1] * sc_psi
+                _Laa = _qa[0] * sc_psi; _Lba = _qa[1] * sc_psi
+                _Lab = _qb[0] * sc_psi; _Lbb = _qb[1] * sc_psi
+                if _psi_prev is None:   # first (discarded settling) frame bootstrap
+                    _psi_prev = {'A': _psi_pmA, 'B': _psi_pmB, 'C': _pm[2] * sc_psi}
+                _Mc = np.array([[R_phase + _Laa / dt, _Lab / dt],
+                                [_Lba / dt, R_phase + _Lbb / dt]])
+                _bc = np.array([_Vt['A'] - (_psi_pmA - _psi_prev['A']) / dt,
+                                _Vt['B'] - (_psi_pmB - _psi_prev['B']) / dt])
+                _iab = np.linalg.solve(_Mc, _bc)
+                _iA = float(_iab[0]); _iB = float(_iab[1])
+                Ist = {'A': _iA, 'B': _iB, 'C': -_iA - _iB}
+                A = A_pm + _iA * xa + _iB * xb
             else:
-                _psi_prev = {'A': pa * sc_psi, 'B': pb * sc_psi,
-                             'C': pc * sc_psi}
+                A = Pro @ _sksolve(*condense((Pro.T @ K @ Pro).tocsr(),
+                                              Pro.T @ f, D=outer_red))
+            for hn, off in (("s", 0), ("r", nsn)):
+                h = half[hn]
+                Bx, By = _per_triangle_B(h["mesh"], A[off:off + h["n"]])
+                Bm = np.sqrt(Bx ** 2 + By ** 2)
+                for tag, curve in sat_bh[hn].items():
+                    idx = h["cells"][tag]
+                    if idx.size == 0:
+                        continue
+                    # PER-ELEMENT reluctivity: each iron triangle gets its own
+                    # mu(|B|) from the B-H curve.  Damped (Picard) update of the
+                    # element-wise nu field used by the saturable-tag assembly.
+                    mu_new = _mu_r_from_bh_vec(curve, Bm[idx])
+                    nu_new = 1.0 / (MU0 * np.maximum(mu_new, 1.0))
+                    nu_el[hn][tag] = 0.5 * nu_el[hn][tag] + 0.5 * nu_new
+        # per-phase flux linkage of the converged solution (also used below).
+        pa, pb, pc = _psi_of(A)
+        if _vdrive:
+            # circuit residual on the CONVERGED solution (health check: ~0 when
+            # the coupled Picard converged).
+            _psiA_c = pa * sc_psi; _psiB_c = pb * sc_psi
+            _resA = _Vt['A'] - R_phase * Ist['A'] - (_psiA_c - _psi_prev['A']) / dt
+            _resB = _Vt['B'] - R_phase * Ist['B'] - (_psiB_c - _psi_prev['B']) / dt
+            _v_diag["iters"].append(int(_n_pic))
+            _v_diag["resid"].append(float(max(abs(_resA), abs(_resB))))
+            _psi_prev = {'A': _psiA_c, 'B': _psiB_c, 'C': pc * sc_psi}
             _iv_state = dict(Ist)
+            # Aitken DC-mode removal: the period-boundary flux converges
+            # geometrically toward the steady orbit; sample it at each period end
+            # and Δ²-extrapolate the limit after 3 samples, re-anchoring psi_prev
+            # so the slow L/R DC transient is eliminated in one shot.
+            if (not _v_aitken_done) and _v_nspp > 0 and ((k + 1) % _v_nspp == 0):
+                _v_bpsi.append((_psiA_c, _psiB_c))
+                if len(_v_bpsi) >= 3:
+                    _p0, _p1, _p2 = _v_bpsi[-3:]
+                    _new = {}
+                    for _ci, _ky in enumerate(('A', 'B')):
+                        _x0, _x1, _x2 = _p0[_ci], _p1[_ci], _p2[_ci]
+                        _d1 = _x1 - _x0; _d2 = _x2 - _x1; _dd = _d2 - _d1
+                        _new[_ky] = (_x2 - _d2 * _d2 / _dd) if abs(_dd) > 1e-15 else _x2
+                    _new['C'] = -(_new['A'] + _new['B'])
+                    _psi_prev = _new
+                    _v_aitken_done = True
+                    log.info("vdrive Aitken DC removal at k=%d: psiA %.4g -> %.4g",
+                             k, _psiA_c, _new['A'])
         if eddy:
             # Joule loss = ∫σ J²/σ² = ∫σ(−∂A/∂t + U_c)² over the conductors.
             # The conductor voltage U_c cancels the large inductive −∂A/∂t,

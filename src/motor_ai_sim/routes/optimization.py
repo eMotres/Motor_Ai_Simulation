@@ -872,6 +872,8 @@ def _log_eval(overrides, current_a, gamma_deg, result) -> None:
             "eff": r.get("efficiency"), "td": r.get("torque_per_mass_Nm_kg"),
             "mass": r.get("mass_total_kg"), "v_peak": r.get("V_peak"),
             "p_loss": r.get("P_loss_total_W"),
+            # Waveform quality (CIANO FOC spec) — lets the surrogate screen THD.
+            "thd_ll": r.get("THD_LL_pct"), "kt": r.get("Kt_Nm_per_Arms"),
         }
         import json as _json_o
         with _dataset_lock:

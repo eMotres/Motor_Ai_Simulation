@@ -24,6 +24,12 @@ export interface TransientSummary {
   V_line_rms_V:        number;
   KV_rpm_per_V_phase:  number;
   KV_rpm_per_V_line:   number;
+  V1_phase_V?:         number;
+  THD_pct?:            number;
+  THD_LL_pct?:         number;
+  I1_A?:               number;   // fundamental current amplitude (branch, from FFT)
+  THD_I_pct?:          number;   // ≈0 in current drive; real parasitics in voltage drive
+  Kt_Nm_per_Arms?:     number;
   P_loss_total_W:      number;
   P_core_W:            number;
   P_stranded_W:        number;

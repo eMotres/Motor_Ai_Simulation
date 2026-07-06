@@ -2535,6 +2535,15 @@ def get_fem_transient(
     structured_gap:      bool  = False,   # ← ANSYS-style concentric-ring air-gap mesh (experimental)
     restore:             bool  = False,   # ← on open: return the LAST saved transient (stale if params differ) instead of recomputing
     geo:                 Optional[str] = None,  # ← per-request geometry override (multi-user); absent = global config
+    drive:               str   = "current",  # ← "current" (imposed sinusoidal I) | "voltage"
+                                             #   (imposed sinusoidal V — the currents are the
+                                             #   machine's own response, incl. back-EMF-harmonic
+                                             #   parasitics; the FOC-drive verification mode)
+    v_phase_peak:        float = 0.0,     # ← voltage drive: phase-voltage amplitude [V, peak]
+    v_delta_deg:         float = 0.0,     # ← voltage drive: voltage angle [°el] in the γ frame
+    harm_ref:            bool  = True,    # ← voltage drive: ALSO run a current-drive reference at
+                                          #   the extracted fundamental (I₁, γ₁) → ΔP_harm = the
+                                          #   watt cost of the parasitic harmonic currents
 ):
     """Transient FEM analysis — runs N solves per electrical period and
     returns time-resolved T(t), losses(t) and V_phase(t).
@@ -2566,7 +2575,9 @@ def get_fem_transient(
                    int(bool(rotor_eddy)), round(gap_layers, 1),
                    int(bool(demag)), int(bool(torque_filter)),
                    int(bool(pole_copy)), int(bool(hi_fidelity)), int(bool(structured_gap)),
-                   tuple(sorted(_comp_mesh.items())))
+                   tuple(sorted(_comp_mesh.items())),
+                   str(drive or "current"), round(float(v_phase_peak), 2),
+                   round(float(v_delta_deg), 1), int(bool(harm_ref)))
         if _geo_ov:   # distinct cache entry per overridden geometry (no-geo key unchanged)
             _sb_key = _sb_key + (tuple(sorted(_geo_ov.items())),)
         if not fresh and _sb_key in _fem_transient_cache:
@@ -2637,7 +2648,55 @@ def get_fem_transient(
                     torque_filter=bool(torque_filter), pole_copy=bool(pole_copy),
                     component_mesh_mm=_comp_mesh, geo_override=_geo_ov,
                     progress_cb=_sb_progress, hi_fidelity=bool(hi_fidelity),
-                    structured_gap=bool(structured_gap))
+                    structured_gap=bool(structured_gap),
+                    drive=str(drive or "current"),
+                    v_phase_peak=float(v_phase_peak),
+                    v_delta_deg=float(v_delta_deg))
+                # ── ΔP_harm (voltage drive): current-drive REFERENCE at the
+                # extracted fundamental (I₁, γ₁), so the comparison runs at a
+                # MATCHED fundamental current — the loss difference is then
+                # purely the parasitic harmonic currents' watt cost.
+                if str(drive or "").lower().startswith("v") and harm_ref:
+                    try:
+                        from motor_ai_sim.simulation.postproc import fundamental_current
+                        _fc = fundamental_current(_sbres)
+                        if _fc["I1_phase_rms_A"] > 1e-3:
+                            _fem_transient_progress["current"]["phase"] = \
+                                "fem-solve (harm-ref, sinusoidal current)"
+                            _ref = em_transient_eval(
+                                n_steps_per_period=int(n_steps_per_period),
+                                n_periods=float(n_periods),
+                                gamma_deg=float(_fc["gamma1_deg"]),
+                                I_phase_rms=float(_fc["I1_phase_rms_A"]),
+                                mesh_size_mm=float(mesh_size_mm),
+                                min_size_mm=float(min_size_mm),
+                                outer_air_factor=float(outer_air_factor),
+                                gap_layers=float(gap_layers),
+                                n_sectors=int(n_sectors),
+                                stator_fillet_mm=float(stator_fillet_mm),
+                                coil_temp_c=float(coil_temp_c),
+                                end_winding_factor=float(end_winding_factor),
+                                rotor_eddy=bool(rotor_eddy), demag=bool(demag),
+                                torque_filter=bool(torque_filter),
+                                pole_copy=bool(pole_copy),
+                                component_mesh_mm=_comp_mesh, geo_override=_geo_ov,
+                                hi_fidelity=bool(hi_fidelity),
+                                structured_gap=bool(structured_gap))
+                            import numpy as _np_hr
+                            _pl_v = float(_np_hr.mean(_sbres.get(
+                                "P_loss_total_W") or [0.0]))
+                            _pl_r = float(_np_hr.mean(_ref.get(
+                                "P_loss_total_W") or [0.0]))
+                            _sbres["harm_ref"] = {
+                                "I1_phase_rms_A": round(_fc["I1_phase_rms_A"], 2),
+                                "gamma1_deg": round(_fc["gamma1_deg"], 1),
+                                "P_loss_ref_W": round(_pl_r, 1),
+                                "P_loss_v_W": round(_pl_v, 1),
+                                "T_ref_Nm": round(float(_ref.get("T_avg_Nm", 0.0)), 3),
+                            }
+                            _sbres["dP_harm_W"] = round(_pl_v - _pl_r, 1)
+                    except Exception:
+                        log.exception("harm_ref reference run failed (non-fatal)")
             finally:
                 _fem_transient_progress["current"]["running"] = False
             # ── Summary block (masses, loss split, KV, efficiency, specific
@@ -3154,6 +3213,114 @@ def get_fem_transient(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 7b.  Analytic ΔP_harm screening (CIANO spec) — no FEM beyond two cached runs
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/physics/harm_screening")
+def get_harm_screening(
+    n_steps_per_period:  int   = 48,
+    gamma_deg:           float = 0.0,
+    I_phase_rms:         float = 85.0,
+    mesh_size_mm:        float = 4.0,
+    min_size_mm:         float = 0.3,
+    gap_layers:          float = 3.0,
+    n_sectors:           int   = 4,
+    coil_temp_c:         float = 120.0,
+    end_winding_factor:  float = 0.0,
+    rotor_eddy:          bool  = True,
+    torque_filter:       bool  = True,
+    pole_copy:           bool  = False,
+    hi_fidelity:         bool  = False,
+    structured_gap:      bool  = False,
+    component_mesh:      str   = "",
+    geo:                 Optional[str] = None,
+):
+    """Cheap analytic estimate of the harmonic-current losses a sinusoidal
+    VOLTAGE supply (FOC) would add on this design — the CIANO screening step.
+
+    Two current-drive runs (both cache-reusable): the LOADED point and NO-LOAD
+    (I=0 → the pure back-EMF spectrum E_n + cogging).  Then per non-triplen
+    harmonic the current a stiff sinusoidal supply forces through the winding
+    is I_n ≈ E_n/(n·ω·L̂), with L̂ measured from the loaded fundamental phasors
+    L̂ = |V̂₁ − R·Î₁ − Ê₁|/(ω·|Î₁|).  Copper cost scales as Σ(I_n/I₁)²·K_ac(n)
+    on the run's own measured copper loss (K_ac(n) = 1 + (K_ac1−1)·n², skin/
+    proximity); iron cost as Σ(E_n/E₁)²·n^0.4 on the measured iron loss.
+    Analytic → instant on cache hits; the honest number is the voltage-drive
+    transient (drive="voltage"), this ranks candidates without paying for it.
+    """
+    common = dict(
+        n_steps_per_period=n_steps_per_period, n_periods=1.0,
+        gamma_deg=gamma_deg, mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm,
+        gap_layers=gap_layers, n_sectors=n_sectors, coil_temp_c=coil_temp_c,
+        end_winding_factor=end_winding_factor, rotor_eddy=rotor_eddy,
+        torque_filter=torque_filter, pole_copy=pole_copy,
+        hi_fidelity=hi_fidelity, structured_gap=structured_gap,
+        component_mesh=component_mesh, geo=geo, sliding_band=True,
+    )
+    loaded = get_fem_transient(I_phase_rms=I_phase_rms, **common)
+    noload = get_fem_transient(I_phase_rms=0.0, **common)
+
+    import numpy as _np
+    from motor_ai_sim.simulation.postproc import (voltage_harmonics,
+                                                  complex_fundamental)
+    R = float(loaded.get("R_phase_ohm", 0.0) or 0.0)
+    w = 2.0 * math.pi * float(loaded.get("f_elec_Hz", 0.0) or 1.0)
+    V1 = complex_fundamental(loaded, "V_A")
+    I1 = complex_fundamental(loaded, "I_A")
+    E1 = complex_fundamental(noload, "V_A")
+    if abs(I1) < 1e-6 or w <= 0.0:
+        raise HTTPException(status_code=422,
+                            detail="loaded run has no fundamental current")
+    L_hat = abs(V1 - R * I1 - E1) / (w * abs(I1))
+    _vh = voltage_harmonics(noload)
+    amps = _vh.get("V_harm_amp") or []          # E_n, orders 1..h_max
+    E1a = amps[0] if amps else 0.0
+    # Non-triplen harmonic currents under a stiff sinusoidal supply.
+    harm = []
+    _sum_fe = 0.0
+    for n_ord in range(2, len(amps) + 1):
+        if n_ord % 3 == 0:
+            continue                             # triplen: floating wye blocks it
+        En = amps[n_ord - 1]
+        In = En / (n_ord * w * L_hat) if L_hat > 1e-12 else 0.0
+        _sum_fe += (En / E1a) ** 2 * n_ord ** 0.4 if E1a > 1e-9 else 0.0
+        if In > 1e-3:
+            harm.append({"n": n_ord, "E_n_V": round(En, 3),
+                         "I_n_A": round(In, 3)})
+    # Copper: the run's own measured copper loss scaled by the harmonic-current
+    # ratio with AC (skin/proximity) growth K_ac(n)=1+(K_ac1−1)n².
+    _pcu = float(_np.mean(loaded.get("P_cu_W") or [0.0]))
+    _pcu_dc = float(loaded.get("P_cu_dc_W", 0.0) or 0.0)
+    _kac1 = (_pcu / _pcu_dc) if _pcu_dc > 1e-9 else 1.0
+    _sum_cu = 0.0
+    for h in harm:
+        _kacn = 1.0 + (_kac1 - 1.0) * h["n"] ** 2
+        _sum_cu += (h["I_n_A"] / abs(I1)) ** 2 * (_kacn / max(_kac1, 1.0))
+    dP_cu = _pcu * _sum_cu
+    _pfe = float(_np.mean(loaded.get("P_fe_W") or [0.0]))
+    dP_fe = _pfe * _sum_fe
+    _Tnl = _np.asarray(noload.get("T_em_Nm") or [0.0], dtype=float)
+    _thd_pred = (100.0 * math.sqrt(sum((h["I_n_A"] / abs(I1)) ** 2
+                                       for h in harm)))
+    return {
+        "L_hat_H": round(L_hat, 8),
+        "R_phase_ohm": R,
+        "E1_V": round(E1a, 2),
+        "E_THD_LL_pct": _vh.get("THD_LL_pct", 0.0),
+        "I1_A": round(abs(I1), 3),               # branch amplitude, as I_A series
+        "harmonic_currents": harm,
+        "THD_I_pred_pct": round(_thd_pred, 2),
+        "dP_cu_harm_W": round(dP_cu, 1),
+        "dP_fe_harm_W": round(dP_fe, 1),
+        "dP_harm_W": round(dP_cu + dP_fe, 1),
+        "cogging_pkpk_Nm": round(float(_Tnl.max() - _Tnl.min()), 3),
+        "T_avg_Nm": round(float(loaded.get("T_avg_Nm", 0.0)), 3),
+        "P_cu_W": round(_pcu, 1), "P_fe_W": round(_pfe, 1),
+        "K_ac1": round(_kac1, 3),
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 8.  Torque sweep  —  Maxwell stress tensor on air-gap circle
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -3649,8 +3816,21 @@ def _build_transient_summary(
     # torque constant — first-class metrics on EVERY run so the optimizer can
     # hold THD_LL like it holds ripple.
     _vh = _vharm(sbres)
-    _kt = (round(_Tavg / float(I_phase_rms), 4)
-           if float(I_phase_rms or 0.0) > 1e-9 else 0.0)
+    # Current waveform quality: ≈0 in current drive (imposed sinusoids); in
+    # VOLTAGE drive this is the real parasitic harmonic-current content the
+    # distorted back-EMF forces through the winding.
+    from motor_ai_sim.simulation.postproc import current_harmonics as _iharm
+    _ih = _iharm(sbres)
+    # Voltage drive: the requested I_phase_rms is 0 — use the run's own
+    # fundamental current for Kt so the card stays meaningful in both modes.
+    _kt_I = float(I_phase_rms or 0.0)
+    if _kt_I <= 1e-9 and str(sbres.get("drive", "")).startswith("v"):
+        try:
+            from motor_ai_sim.simulation.postproc import fundamental_current
+            _kt_I = float(fundamental_current(sbres)["I1_phase_rms_A"])
+        except Exception:
+            _kt_I = 0.0
+    _kt = round(_Tavg / _kt_I, 4) if _kt_I > 1e-9 else 0.0
 
     return {
         "rpm": _rpm,
@@ -3671,6 +3851,8 @@ def _build_transient_summary(
         "V1_phase_V":     _vh["V1_phase_V"],
         "THD_pct":        _vh["THD_pct"],
         "THD_LL_pct":     _vh["THD_LL_pct"],
+        "I1_A":           _ih["I1_A"],
+        "THD_I_pct":      _ih["THD_I_pct"],
         "Kt_Nm_per_Arms": _kt,
         "P_loss_total_W": round(_ploss, 1),
         "P_core_W":     round(_Pfe, 1),            # laminated iron

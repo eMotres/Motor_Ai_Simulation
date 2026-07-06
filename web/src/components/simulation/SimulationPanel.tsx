@@ -190,6 +190,13 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   const [frequency,     setFrequency]     = usePersisted('frequency', 921.67);
   const [rpm,           setRpm]           = usePersisted('rpm',       3950.0);
   const [phaseOffset,   setPhaseOffset]   = usePersisted('gamma',     0.0);   // γ [deg]
+  // Drive mode for the transient: imposed sinusoidal CURRENT (design work) or
+  // imposed sinusoidal VOLTAGE (FOC-drive verification — the currents become
+  // the machine's own response, incl. the parasitic harmonics a distorted
+  // back-EMF forces through the winding + their real extra losses).
+  const [drive,   setDrive]   = usePersisted<'current' | 'voltage'>('drive', 'current');
+  const [vPeak,   setVPeak]   = usePersisted('vPeak',  30.0);  // phase-voltage amplitude [V]
+  const [vDelta,  setVDelta]  = usePersisted('vDelta',  0.0);  // voltage angle δ [°el], same frame as γ
 
   // γ-as-optimization-variable: a checkbox here marks the load angle γ for the
   // Sweep/Optimize grid (like the chart icon on geometry params).  When checked,
@@ -553,10 +560,42 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
           </Typography>
 
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+            {/* Drive mode: imposed sinusoidal current (design work) vs imposed
+                sinusoidal voltage (FOC-drive verification — currents become the
+                machine's own response incl. back-EMF-harmonic parasitics). */}
+            <Box sx={{ display: 'flex', gap: 0.5 }}>
+              {(['current', 'voltage'] as const).map(m => (
+                <Button key={m} size="small" fullWidth disabled={isRunning}
+                  variant={drive === m ? 'contained' : 'outlined'}
+                  onClick={() => setDrive(m)}
+                  sx={{ fontSize: '0.7rem', textTransform: 'none', py: 0.3 }}>
+                  {m === 'current' ? 'Current drive' : 'Voltage drive'}
+                </Button>
+              ))}
+              <HelpTip title={'Current drive: imposed sinusoidal phase currents (design work). ' +
+                'Voltage drive: imposed sinusoidal phase voltages — the currents are the ' +
+                'machine’s own response, including the parasitic harmonics a distorted ' +
+                'back-EMF forces through the winding (FOC-controller verification). ' +
+                'Voltage drive needs ≥48 steps/period to resolve harmonic currents.'} />
+            </Box>
+            {drive === 'current' ? (
             <TextField label="I phase RMS (Arms)" type="number" size="small" fullWidth
               value={current} onChange={e => setCurrent(+e.target.value)}
               inputProps={{ step: 5, min: 0, max: 500 }} disabled={isRunning}
               InputProps={{ endAdornment: <HelpTip title={`I coil peak = ${I_coil_peak.toFixed(1)} A → sent to solver`} /> }}/>
+            ) : (<>
+            <TextField label="V phase peak (V)" type="number" size="small" fullWidth
+              value={vPeak} onChange={e => setVPeak(+e.target.value)}
+              inputProps={{ step: 1, min: 0, max: 2000 }} disabled={isRunning}
+              InputProps={{ endAdornment: <HelpTip title={'Amplitude of the imposed sinusoidal phase voltage. ' +
+                'Tip: run a current-drive simulation first — its V₁ (fundamental phase voltage) ' +
+                'is the natural starting value.'} /> }}/>
+            <TextField label="δ — voltage angle (°el)" type="number" size="small" fullWidth
+              value={vDelta} onChange={e => setVDelta(+e.target.value)}
+              inputProps={{ step: 5, min: -180, max: 180 }} disabled={isRunning}
+              InputProps={{ endAdornment: <HelpTip title={'Voltage-vector angle in the same electrical frame as γ ' +
+                '(0° = q-axis). The load angle: more δ → more torque until pull-out.'} /> }}/>
+            </>)}
             {/* Frequency ↔ Speed are mutually locked:
                   f_elec [Hz]  =  rpm × pole_pairs / 60
                   rpm          =  f_elec × 60 / pole_pairs
@@ -993,6 +1032,9 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
           fieldLosses={fieldLosses}
           demag={demag}
           torqueFilter={torqueFilter}
+          drive={drive}
+          vPeak={vPeak}
+          vDelta={vDelta}
         />
 
       </Box>

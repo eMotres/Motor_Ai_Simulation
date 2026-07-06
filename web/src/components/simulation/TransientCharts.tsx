@@ -61,6 +61,17 @@ interface TransientPayload {
   // summary-block build threw — lets the UI surface the error rather than freeze
   // the cards on the previous run's numbers.
   summary_error?: string;
+  // Voltage drive (drive="voltage"): applied V, circuit diagnostics + the
+  // matched-fundamental current-drive reference → ΔP_harm.
+  drive?: 'current' | 'voltage';
+  v_phase_peak_V?: number | null;
+  v_delta_deg?: number | null;
+  v_dc_residual_A?: number | null;
+  dP_harm_W?: number | null;
+  harm_ref?: {
+    I1_phase_rms_A: number; gamma1_deg: number;
+    P_loss_ref_W: number; P_loss_v_W: number; T_ref_Nm: number;
+  } | null;
   // Demagnetisation (present only when demag=true): per-magnet worst-cell
   // report + the full-mesh per-element Br factor for the %-map.
   demag_report?: Array<{
@@ -99,6 +110,11 @@ interface Props {
   // A design was just applied from the Sweep tab (summary numbers reused) — the
   // shown waveforms are still the PREVIOUS design's, so flag them stale.
   appliedFromSweep?: boolean;
+  // Drive mode: imposed sinusoidal current (default) or imposed sinusoidal
+  // voltage (FOC verification — currents are the machine's own response).
+  drive?: 'current' | 'voltage';
+  vPeak?: number;   // voltage drive: phase-voltage amplitude [V, peak]
+  vDelta?: number;  // voltage drive: voltage angle δ [°el] in the γ frame
 }
 
 function readMeshSetting<T>(key: string, def: T): T {
@@ -154,7 +170,7 @@ function loadLastTransient(): TransientPayload | null {
 }
 
 // (live recompute progress strip: elapsed + points, driven by busy + /progress)
-const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onSummary, runNonce = 0, onBusyChange, steps = 12, fresh = false, fieldLosses = true, demag = false, torqueFilter = true, appliedFromSweep = false }) => {
+const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onSummary, runNonce = 0, onBusyChange, steps = 12, fresh = false, fieldLosses = true, demag = false, torqueFilter = true, appliedFromSweep = false, drive = 'current', vPeak = 0, vDelta = 0 }) => {
   // `steps` (n_steps_per_period) is controlled from the left panel and
   // matches the animation viewer's n_frames so both hit the same backend
   // cache key (one solve, not two).
@@ -262,6 +278,14 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
       n_steps_per_period: steps,
       n_periods:          1,
       gamma_deg, I_phase_rms,
+      // Drive mode: "voltage" imposes sinusoidal phase voltages — the currents
+      // become the machine's own response (incl. back-EMF-harmonic parasitics)
+      // and the backend also runs a matched-fundamental current-drive reference
+      // (harm_ref) so ΔP_harm = the watt cost of those harmonic currents.
+      drive,
+      v_phase_peak:       drive === 'voltage' ? vPeak  : 0,
+      v_delta_deg:        drive === 'voltage' ? vDelta : 0,
+      harm_ref:           drive === 'voltage',
       mesh_size_mm:       readMeshSetting('meshSize',    4.0),
       min_size_mm:        readMeshSetting('minSize',     0.3),
       outer_air_factor:   readMeshSetting('outerAir',    1.3),
@@ -558,6 +582,26 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
               </Typography>
             );
           })()}
+          {/* Voltage-drive result strip: what was applied + what the machine
+              answered with (harmonic currents = the FOC controller's real
+              disturbance) + the watt cost vs a clean sinusoidal current. */}
+          {data?.drive === 'voltage' && (
+            <Typography sx={{ fontSize: 10, color: '#94a3b8', mt: 0.25 }}>
+              <span style={{ color: '#a78bfa', fontWeight: 700 }}>voltage drive</span>
+              {' '}V = {Number(data.v_phase_peak_V ?? 0).toFixed(1)} V @ δ {Number(data.v_delta_deg ?? 0).toFixed(1)}°
+              {data.summary?.THD_I_pct != null &&
+                <> · THD_I = <b style={{ color: (data.summary.THD_I_pct <= 5 ? '#34d399' : data.summary.THD_I_pct <= 15 ? '#fbbf24' : '#f87171') }}>
+                  {data.summary.THD_I_pct.toFixed(1)} %</b></>}
+              {data.harm_ref &&
+                <> · I₁ = {data.harm_ref.I1_phase_rms_A.toFixed(1)} A @ γ₁ {data.harm_ref.gamma1_deg.toFixed(1)}°</>}
+              {data.dP_harm_W != null &&
+                <> · ΔP_harm = <b style={{ color: (data.dP_harm_W as number) > 0 ? '#fbbf24' : '#34d399' }}>
+                  {(data.dP_harm_W as number) >= 0 ? '+' : ''}{Number(data.dP_harm_W).toFixed(1)} W</b>
+                  <HelpTip title={'Extra loss caused by the parasitic harmonic currents: this voltage-drive run minus a current-drive reference at the SAME fundamental current (I₁, γ₁). Positive = the distorted back-EMF costs real watts under a sinusoidal FOC supply.'} /></>}
+              {data.v_dc_residual_A != null &&
+                <> · DC resid {Number(data.v_dc_residual_A).toFixed(2)} A</>}
+            </Typography>
+          )}
         </Box>
         {/* Steps/period + Run moved to the left panel's "Run Simulation".
             Just show the live point counter here while solving. */}

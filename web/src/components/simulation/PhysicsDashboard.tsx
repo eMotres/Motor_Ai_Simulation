@@ -113,6 +113,12 @@ interface Props {
   demag?:         boolean;
   // Band-limit T(t) to the physical 6·k orders (default ON; off = raw torque).
   torqueFilter?:  boolean;
+  // Transient drive mode: imposed sinusoidal current vs imposed sinusoidal
+  // voltage (FOC verification).  Threaded to TransientCharts only — the
+  // static/animation views stay current-driven (illustrative).
+  drive?:         'current' | 'voltage';
+  vPeak?:         number;
+  vDelta?:        number;
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -154,7 +160,7 @@ function exportCSV(filename: string, rows: Record<string, number | string>[]) {
 }
 
 // ── main component ────────────────────────────────────────────────────────────
-const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_rms, pinnLosses, runNonce = 0, onBusyChange, steps = 12, fresh = false, onSummary, fieldLosses = true, demag = false, torqueFilter = true }) => {
+const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_rms, pinnLosses, runNonce = 0, onBusyChange, steps = 12, fresh = false, onSummary, fieldLosses = true, demag = false, torqueFilter = true, drive = 'current', vPeak = 0, vDelta = 0 }) => {
   // Latest FEM solve payload — kept around so future siblings can reuse it.
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [_femPayload, setFemPayload] = React.useState<FemPayload | null>(null);
@@ -523,6 +529,7 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
       {/* ── Transient: T(t), P(t), V(t) — one FEM solve per time step ── */}
       <TransientCharts gamma_deg={gamma_deg} I_phase_rms={I_phase_rms} fieldLosses={fieldLosses}
         demag={demag} torqueFilter={torqueFilter}
+        drive={drive} vPeak={vPeak} vDelta={vDelta}
         steps={steps} runNonce={runNonce} fresh={fresh} onBusyChange={onBusyChange}
         appliedFromSweep={!!appliedSummary}
         onSummary={setTransientSummary}/>

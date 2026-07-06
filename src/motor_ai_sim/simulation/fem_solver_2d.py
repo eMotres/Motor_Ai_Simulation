@@ -5301,6 +5301,8 @@ def fem_transient_sliding_band(
     from scipy.sparse.linalg import splu as _splu
     _iv_state = {'A': 0.0, 'B': 0.0, 'C': 0.0}
     _psi_prev = None
+    _th_eff_prev = None     # previous frame's SNAPPED rotor angle (rotor-time dt)
+    _dt_k = dt              # per-frame rotor-time step (uniform when nodes align)
     _v_diag = {"iters": [], "resid": []}   # circuit convergence stats per frame
     _v_bpsi = []            # period-boundary flux samples (psiA, psiB) for Aitken
     _v_aitken_done = False
@@ -5454,8 +5456,25 @@ def fem_transient_sliding_band(
         # there too and R split between i_k and i_{k−1} — this removes the
         # backward-Euler phase lag (ωΔt/2, 15°el at 12 steps/period) that
         # otherwise skews the whole operating point when |V| ≈ |E|.
+        #
+        # CRITICAL: the field only exists at SNAPPED slip-node angles θ_eff, so
+        # the circuit must live in "rotor time": Δt_k = Δθ_eff/ω with V sampled
+        # at the midpoint of the ACTUAL motion.  Dividing the snapped-rotor Δψ
+        # by the UNIFORM dt instead modulates dψ/dt by the node-quantisation
+        # sawtooth (±33 % at 48 steps vs 72 nodes/period — fake volts ≫ |V−E|)
+        # and Crank–Nicolson rings undamped at Nyquist → monster harmonic
+        # currents (THD_I ~110 % observed).  Rotor-time stepping removes the
+        # artifact exactly; over a period Σ Δt_k = the nominal period.
         _dth_frame = period_mech * n_periods / n_total     # mech deg per frame
-        _Vt = _voltages(theta_eff - 0.5 * _dth_frame) if _vdrive else None
+        if _vdrive:
+            if _th_eff_prev is None:            # very first frame: nominal step
+                _th_eff_prev = theta_eff - _dth_frame
+            _dth_eff = theta_eff - _th_eff_prev
+            _dt_k = dt * (_dth_eff / _dth_frame) if _dth_eff > 1e-12 else dt
+            _Vt = _voltages(0.5 * (theta_eff + _th_eff_prev))
+            _th_eff_prev = theta_eff
+        else:
+            _Vt = None
         _iv_prev = dict(_iv_state) if _vdrive else None    # i_{k−1} for the R/2 term
         if not _vdrive:
             Ist = _currents(theta_eff)
@@ -5568,18 +5587,38 @@ def fem_transient_sliding_band(
                 A_pm = _bsolve(_Pmag); xa = _bsolve(_Pa); xb = _bsolve(_Pb)
                 _pm = _psi_of(A_pm); _qa = _psi_of(xa); _qb = _psi_of(xb)
                 _psi_pmA = _pm[0] * sc_psi; _psi_pmB = _pm[1] * sc_psi
-                _Laa = _qa[0] * sc_psi; _Lba = _qa[1] * sc_psi
-                _Lab = _qb[0] * sc_psi; _Lbb = _qb[1] * sc_psi
+                _psi_pmC = _pm[2] * sc_psi
+                _Laa = _qa[0] * sc_psi; _Lba = _qa[1] * sc_psi; _Lca = _qa[2] * sc_psi
+                _Lab = _qb[0] * sc_psi; _Lbb = _qb[1] * sc_psi; _Lcb = _qb[2] * sc_psi
                 if _psi_prev is None:   # first (discarded settling) frame bootstrap
-                    _psi_prev = {'A': _psi_pmA, 'B': _psi_pmB, 'C': _pm[2] * sc_psi}
-                # Crank–Nicolson circuit at the mid-step time:
-                #   V_mid = R·(i_k + i_{k−1})/2 + (ψ_k − ψ_{k−1})/dt
-                _Mc = np.array([[0.5 * R_phase + _Laa / dt, _Lab / dt],
-                                [_Lba / dt, 0.5 * R_phase + _Lbb / dt]])
-                _bc = np.array([_Vt['A'] - (_psi_pmA - _psi_prev['A']) / dt
-                                - 0.5 * R_phase * _iv_prev['A'],
-                                _Vt['B'] - (_psi_pmB - _psi_prev['B']) / dt
-                                - 0.5 * R_phase * _iv_prev['B']])
+                    _psi_prev = {'A': _psi_pmA, 'B': _psi_pmB, 'C': _psi_pmC}
+                # Crank–Nicolson circuit at the mid-step time of the ACTUAL
+                # rotor motion (Δt_k = Δθ_eff/ω — see the frame-top comment),
+                # in the LINE-TO-LINE (floating-neutral wye) formulation:
+                #   V_AB = R·(Δi_k + Δi_{k−1})/2 + (Δψ_k − Δψ_{k−1})/Δt_k  (Δ = A−B)
+                #   V_BC likewise (B−C), with i_C = −i_A − i_B.
+                # A real FOC inverter drives an ISOLATED-neutral machine: the
+                # zero-sequence back-EMF (triplen harmonics — large on this
+                # concentrated winding) falls on the floating neutral and drives
+                # NO current.  Applying phase voltages to the phase equations
+                # directly pins the machine's neutral to the source's and shorts
+                # that zero-sequence EMF through the tiny zero-seq inductance →
+                # monster fake triplen currents (measured h3 ≈ 43 % of I₁,
+                # THD_I ≈ 110 %).  Line-to-line differences kill the zero
+                # sequence exactly — as the physical isolated neutral does.
+                _dpmA = _psi_pmA - _psi_prev['A']
+                _dpmB = _psi_pmB - _psi_prev['B']
+                _dpmC = _psi_pmC - _psi_prev['C']
+                _Mc = np.array([
+                    [0.5 * R_phase + (_Laa - _Lba) / _dt_k,
+                     -0.5 * R_phase + (_Lab - _Lbb) / _dt_k],
+                    [0.5 * R_phase + (_Lba - _Lca) / _dt_k,
+                     1.0 * R_phase + (_Lbb - _Lcb) / _dt_k]])
+                _bc = np.array([
+                    (_Vt['A'] - _Vt['B']) - (_dpmA - _dpmB) / _dt_k
+                    - 0.5 * R_phase * (_iv_prev['A'] - _iv_prev['B']),
+                    (_Vt['B'] - _Vt['C']) - (_dpmB - _dpmC) / _dt_k
+                    - 0.5 * R_phase * (_iv_prev['B'] - _iv_prev['C'])])
                 _iab = np.linalg.solve(_Mc, _bc)
                 _iA = float(_iab[0]); _iB = float(_iab[1])
                 Ist = {'A': _iA, 'B': _iB, 'C': -_iA - _iB}
@@ -5606,11 +5645,19 @@ def fem_transient_sliding_band(
         if _vdrive:
             # circuit residual on the CONVERGED solution (health check: ~0 when
             # the coupled Picard converged).
-            _psiA_c = pa * sc_psi; _psiB_c = pb * sc_psi
-            _resA = (_Vt['A'] - 0.5 * R_phase * (Ist['A'] + _iv_prev['A'])
-                     - (_psiA_c - _psi_prev['A']) / dt)
-            _resB = (_Vt['B'] - 0.5 * R_phase * (Ist['B'] + _iv_prev['B'])
-                     - (_psiB_c - _psi_prev['B']) / dt)
+            _psiA_c = pa * sc_psi; _psiB_c = pb * sc_psi; _psiC_c = pc * sc_psi
+            # line-to-line residuals (the phase-A equation alone is legitimately
+            # nonzero by the zero-sequence EMF the floating neutral absorbs)
+            _resA = ((_Vt['A'] - _Vt['B'])
+                     - 0.5 * R_phase * (Ist['A'] - Ist['B']
+                                        + _iv_prev['A'] - _iv_prev['B'])
+                     - ((_psiA_c - _psiB_c)
+                        - (_psi_prev['A'] - _psi_prev['B'])) / _dt_k)
+            _resB = ((_Vt['B'] - _Vt['C'])
+                     - 0.5 * R_phase * (Ist['B'] - Ist['C']
+                                        + _iv_prev['B'] - _iv_prev['C'])
+                     - ((_psiB_c - _psiC_c)
+                        - (_psi_prev['B'] - _psi_prev['C'])) / _dt_k)
             _v_diag["iters"].append(int(_n_pic))
             _v_diag["resid"].append(float(max(abs(_resA), abs(_resB))))
             _psi_prev = {'A': _psiA_c, 'B': _psiB_c, 'C': pc * sc_psi}
@@ -5781,7 +5828,7 @@ def fem_transient_sliding_band(
     #    per-period post-processing (spectra, band-limit, summaries) is unchanged.
     if _vdrive and _vskip:
         n_total -= _vskip
-        n_periods = float(n_periods) - 1.0
+        n_periods = float(n_periods) - float(_v_settle_periods)
         _slice_lists = [T_series, psiA, psiB, psiC, IA, IB, IC, tt, _mshift_hist,
                         _hist_sx, _hist_sy, _hist_rx, _hist_ry, _hist_mx, _hist_my,
                         _hist_cx, _hist_cy, _hist_shx, _hist_shy,
@@ -6437,6 +6484,7 @@ def fem_transient_sliding_band(
         "P_airgap_W": P_airgap_avg,                          # electromagnetic T_avg·ω
         "P_loss_total_avg_W": P_loss_total_avg,
         "R_phase_ohm": R_phase, "n_slip_nodes": int(Nring),
+        "n_parallel": int(n_parallel),
         "coil_temp_C": float(coil_temp_c),
         "end_winding_factor": float(_k_end_used),
         # Drive mode: "current" (imposed sinusoidal I) or "voltage" (imposed
@@ -6678,6 +6726,9 @@ def em_transient_eval(
     progress_cb=None,
     hi_fidelity: bool = False,
     structured_gap: bool = False,
+    drive: str = "current",
+    v_phase_peak: float = 0.0,
+    v_delta_deg: float = 0.0,
 ) -> Dict:
     """THE single canonical sliding-band transient invocation.
 
@@ -6700,7 +6751,9 @@ def em_transient_eval(
         torque_filter=bool(torque_filter), pole_copy=pole_copy,
         component_mesh_mm=(component_mesh_mm or {}), geo_override=geo_override,
         progress_cb=progress_cb, hi_fidelity=bool(hi_fidelity),
-        structured_gap=bool(structured_gap))
+        structured_gap=bool(structured_gap),
+        drive=str(drive or "current"), v_phase_peak=float(v_phase_peak),
+        v_delta_deg=float(v_delta_deg))
 
 
 def fem_quasistatic_transient(

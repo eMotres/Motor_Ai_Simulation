@@ -5073,14 +5073,18 @@ def fem_transient_sliding_band(
     _vskip = 0
     _v_nspp = int(round(n_steps_per_period))
     if _vdrive:
-        # FOUR settling periods.  The electrical time constant L/R spans several
-        # periods on a low-R machine, so a marched DC start-up mode decays too
-        # slowly to shed by brute force.  Instead: the phasor init lands near the
-        # orbit, then the boundary flux is sampled at each period end (it
-        # converges GEOMETRICALLY) and Aitken Δ²-extrapolated to its limit after
-        # 3 samples — killing the residual DC in one shot — with a 4th period to
-        # let the harmonics re-settle on the DC-free fundamental.
-        _v_settle_periods = 4
+        # TEN settling periods with ITERATED Aitken.  The electrical time
+        # constant L/R spans many periods on a low-R machine, so a marched DC
+        # start-up decays too slowly to shed by brute force.  Instead: the
+        # phasor init lands near the orbit, then the period-boundary flux
+        # (which converges GEOMETRICALLY) is Δ²-extrapolated to its limit at
+        # every 3rd boundary (anchors at periods 3, 6, 9 — each application
+        # cuts the residual DC ~3×), and the final settling period runs after
+        # the last anchor so the reported window starts on a clean orbit.
+        # Settling frames use a REDUCED Picard depth (the DC dynamics only
+        # need L roughly right); the last settling period + the reported
+        # window run at full depth.
+        _v_settle_periods = 10
         _vskip = _v_settle_periods * max(2, _v_nspp)
         n_periods = float(n_periods) + float(_v_settle_periods)
         n_total += _vskip
@@ -5445,7 +5449,14 @@ def fem_transient_sliding_band(
         theta = (k / n_total) * period_mech * n_periods
         m_shift = int(round(theta / spacing))
         theta_eff = m_shift * spacing
-        _Vt = _voltages(theta_eff) if _vdrive else None
+        # Voltage drive uses a Crank–Nicolson circuit: (ψ_k − ψ_{k−1})/dt is the
+        # EXACT centred derivative at the mid-step time, so V must be sampled
+        # there too and R split between i_k and i_{k−1} — this removes the
+        # backward-Euler phase lag (ωΔt/2, 15°el at 12 steps/period) that
+        # otherwise skews the whole operating point when |V| ≈ |E|.
+        _dth_frame = period_mech * n_periods / n_total     # mech deg per frame
+        _Vt = _voltages(theta_eff - 0.5 * _dth_frame) if _vdrive else None
+        _iv_prev = dict(_iv_state) if _vdrive else None    # i_{k−1} for the R/2 term
         if not _vdrive:
             Ist = _currents(theta_eff)
         else:
@@ -5499,7 +5510,13 @@ def fem_transient_sliding_band(
         A = np.zeros(n)
         # Voltage drive changes the current every Picard step, so the saturation
         # state moves more than at fixed current -> a few extra iterations.
-        _n_pic = nonlinear_iterations + (6 if _vdrive else 0)
+        # SETTLING frames (all but the last discarded period) only need the DC
+        # trajectory roughly right -> a shallow Picard is ~3× cheaper; the last
+        # settling period + the whole reported window run at full depth.
+        if _vdrive and _vskip and k < (_vskip - _v_nspp):
+            _n_pic = max(6, nonlinear_iterations // 2)
+        else:
+            _n_pic = nonlinear_iterations + (6 if _vdrive else 0)
         for it in range(_n_pic):
             blocks = []
             for hn in ("s", "r"):
@@ -5555,10 +5572,14 @@ def fem_transient_sliding_band(
                 _Lab = _qb[0] * sc_psi; _Lbb = _qb[1] * sc_psi
                 if _psi_prev is None:   # first (discarded settling) frame bootstrap
                     _psi_prev = {'A': _psi_pmA, 'B': _psi_pmB, 'C': _pm[2] * sc_psi}
-                _Mc = np.array([[R_phase + _Laa / dt, _Lab / dt],
-                                [_Lba / dt, R_phase + _Lbb / dt]])
-                _bc = np.array([_Vt['A'] - (_psi_pmA - _psi_prev['A']) / dt,
-                                _Vt['B'] - (_psi_pmB - _psi_prev['B']) / dt])
+                # Crank–Nicolson circuit at the mid-step time:
+                #   V_mid = R·(i_k + i_{k−1})/2 + (ψ_k − ψ_{k−1})/dt
+                _Mc = np.array([[0.5 * R_phase + _Laa / dt, _Lab / dt],
+                                [_Lba / dt, 0.5 * R_phase + _Lbb / dt]])
+                _bc = np.array([_Vt['A'] - (_psi_pmA - _psi_prev['A']) / dt
+                                - 0.5 * R_phase * _iv_prev['A'],
+                                _Vt['B'] - (_psi_pmB - _psi_prev['B']) / dt
+                                - 0.5 * R_phase * _iv_prev['B']])
                 _iab = np.linalg.solve(_Mc, _bc)
                 _iA = float(_iab[0]); _iB = float(_iab[1])
                 Ist = {'A': _iA, 'B': _iB, 'C': -_iA - _iB}
@@ -5586,17 +5607,22 @@ def fem_transient_sliding_band(
             # circuit residual on the CONVERGED solution (health check: ~0 when
             # the coupled Picard converged).
             _psiA_c = pa * sc_psi; _psiB_c = pb * sc_psi
-            _resA = _Vt['A'] - R_phase * Ist['A'] - (_psiA_c - _psi_prev['A']) / dt
-            _resB = _Vt['B'] - R_phase * Ist['B'] - (_psiB_c - _psi_prev['B']) / dt
+            _resA = (_Vt['A'] - 0.5 * R_phase * (Ist['A'] + _iv_prev['A'])
+                     - (_psiA_c - _psi_prev['A']) / dt)
+            _resB = (_Vt['B'] - 0.5 * R_phase * (Ist['B'] + _iv_prev['B'])
+                     - (_psiB_c - _psi_prev['B']) / dt)
             _v_diag["iters"].append(int(_n_pic))
             _v_diag["resid"].append(float(max(abs(_resA), abs(_resB))))
             _psi_prev = {'A': _psiA_c, 'B': _psiB_c, 'C': pc * sc_psi}
             _iv_state = dict(Ist)
-            # Aitken DC-mode removal: the period-boundary flux converges
-            # geometrically toward the steady orbit; sample it at each period end
-            # and Δ²-extrapolate the limit after 3 samples, re-anchoring psi_prev
-            # so the slow L/R DC transient is eliminated in one shot.
-            if (not _v_aitken_done) and _v_nspp > 0 and ((k + 1) % _v_nspp == 0):
+            # ITERATED Aitken DC-mode removal: the period-boundary flux converges
+            # geometrically toward the steady orbit; sample it at each period
+            # end and Δ²-extrapolate the limit whenever 3 fresh samples exist
+            # since the last anchor (anchors at periods 3, 6, 9 within the
+            # settling window — each application cuts the residual DC ~3×).
+            # Samples must share the cycle phase (period spacing) so the
+            # periodic flux content cancels exactly in the differences.
+            if _v_nspp > 0 and ((k + 1) % _v_nspp == 0) and (k + 1) < _vskip:
                 _v_bpsi.append((_psiA_c, _psiB_c))
                 if len(_v_bpsi) >= 3:
                     _p0, _p1, _p2 = _v_bpsi[-3:]
@@ -5606,10 +5632,26 @@ def fem_transient_sliding_band(
                         _d1 = _x1 - _x0; _d2 = _x2 - _x1; _dd = _d2 - _d1
                         _new[_ky] = (_x2 - _d2 * _d2 / _dd) if abs(_dd) > 1e-15 else _x2
                     _new['C'] = -(_new['A'] + _new['B'])
-                    _psi_prev = _new
-                    _v_aitken_done = True
-                    log.info("vdrive Aitken DC removal at k=%d: psiA %.4g -> %.4g",
-                             k, _psiA_c, _new['A'])
+                    _corr = max(abs(_new['A'] - _psiA_c), abs(_new['B'] - _psiB_c))
+                    _drift = max(abs(_p2[0] - _p1[0]), abs(_p2[1] - _p1[1]))
+                    # Guarded anchor: once the boundary drift is below noise the
+                    # Δ² quotient divides noise by noise and the "correction"
+                    # EXPLODES — skip when already converged (drift < 0.05 % of
+                    # the PM flux) or when the extrapolation is unstable
+                    # (|corr| ≫ drift).  Better to keep marching than to kick a
+                    # converged orbit right before the reported window.
+                    _flux_scale = max(abs(_psiA_c), abs(_psiB_c), 1e-6)
+                    if _drift < 5e-4 * _flux_scale or _corr > 5.0 * _drift:
+                        log.info("vdrive Aitken anchor SKIPPED at period %d "
+                                 "(drift %.3g, corr %.3g Wb — converged/unstable)",
+                                 (k + 1) // _v_nspp, _drift, _corr)
+                        _v_bpsi.clear()
+                    else:
+                        _psi_prev = _new
+                        _v_bpsi.clear()   # fresh samples only after the re-anchor
+                        log.info("vdrive Aitken anchor at period %d: psiA %.4g -> "
+                                 "%.4g (|corr| %.3g Wb)", (k + 1) // _v_nspp,
+                                 _psiA_c, _new['A'], _corr)
         if eddy:
             # Joule loss = ∫σ J²/σ² = ∫σ(−∂A/∂t + U_c)² over the conductors.
             # The conductor voltage U_c cancels the large inductive −∂A/∂t,
@@ -6402,8 +6444,12 @@ def fem_transient_sliding_band(
         "drive": ("voltage" if _vdrive else "current"),
         "v_phase_peak_V": float(v_phase_peak) if _vdrive else None,
         "v_delta_deg": float(v_delta_deg) if _vdrive else None,
-        # circuit-iteration convergence stats (per frame, incl. settling)
+        # circuit-iteration convergence stats (per frame, incl. settling) + the
+        # honest steady-state quality gauge: mean phase current over the
+        # REPORTED window (≈0 A on a converged periodic orbit).
         "v_drive_diag": (_v_diag if _vdrive else None),
+        "v_dc_residual_A": (round(float(np.mean(np.asarray(IA, float))), 3)
+                            if (_vdrive and IA) else None),
         "T_harm_order": T_harm_order, "T_harm_amp": T_harm_amp,
         "field": _field_snap,
         # Demagnetisation (populated only when demag=True): per-element Br

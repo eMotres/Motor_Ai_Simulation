@@ -3263,6 +3263,7 @@ def get_harm_screening(
     loaded = get_fem_transient(I_phase_rms=I_phase_rms, **common)
     noload = get_fem_transient(I_phase_rms=0.0, **common)
 
+    import math
     import numpy as _np
     from motor_ai_sim.simulation.postproc import (voltage_harmonics,
                                                   complex_fundamental)

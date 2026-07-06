@@ -4355,6 +4355,20 @@ def fem_transient_sliding_band(
     # clean back-EMF yields near-sinusoidal currents and a distorted one shows
     # its real parasitic harmonic currents + their losses.
     _vdrive = str(drive or "current").strip().lower().startswith("v")
+    if _vdrive and rotor_eddy:
+        # Voltage drive + conducting-rotor dynamics is NOT implemented: the
+        # eddy path imposes coil currents via integral constraints while the
+        # voltage circuit needs them as unknowns.  Before this guard the frame
+        # loop silently took the no-eddy branch — the vdrive orbit then solved
+        # DIFFERENT physics (no magnet-eddy screening, ψ off by ~5 %) than the
+        # rotor_eddy current-drive it was compared against, skewing the
+        # round-trip fundamental ~10 %/19° and ΔP_harm by the whole P_mag.
+        # Explicitly drop eddy on BOTH (the route mirrors this in harm_ref) so
+        # voltage runs and their references always share the same physics.
+        log.warning("voltage drive: rotor_eddy not supported yet — running "
+                    "without conducting-rotor dynamics (magnet/shaft eddy "
+                    "losses excluded; ΔP_harm = copper+iron harmonic cost)")
+        rotor_eddy = False
 
     def _voltages(rotor_angle_deg):
         vpk = float(v_phase_peak)

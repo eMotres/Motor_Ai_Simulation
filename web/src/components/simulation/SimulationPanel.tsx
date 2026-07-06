@@ -573,10 +573,13 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 </Button>
               ))}
               <HelpTip title={'Current drive: imposed sinusoidal phase currents (design work). ' +
-                'Voltage drive: imposed sinusoidal phase voltages — the currents are the ' +
-                'machine’s own response, including the parasitic harmonics a distorted ' +
-                'back-EMF forces through the winding (FOC-controller verification). ' +
-                'Voltage drive needs ≥48 steps/period to resolve harmonic currents.'} />
+                'Voltage drive: imposed sinusoidal LINE voltages (floating neutral, as a real ' +
+                'wye FOC inverter) — the currents are the machine’s own response, including the ' +
+                'parasitic harmonics a distorted back-EMF forces through the winding; ΔP_harm ' +
+                'compares against a current-drive reference at the same fundamental current. ' +
+                'Needs ≥48 steps/period. Runs without rotor-eddy dynamics (magnet/shaft eddy ' +
+                'losses excluded on both sides of the comparison). Near no-load (V ≈ back-EMF) ' +
+                'the current is extremely sensitive to V — like the real machine open-loop.'} />
             </Box>
             {drive === 'current' ? (
             <TextField label="I phase RMS (Arms)" type="number" size="small" fullWidth

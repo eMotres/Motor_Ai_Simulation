@@ -2676,7 +2676,10 @@ def get_fem_transient(
                                 stator_fillet_mm=float(stator_fillet_mm),
                                 coil_temp_c=float(coil_temp_c),
                                 end_winding_factor=float(end_winding_factor),
-                                rotor_eddy=bool(rotor_eddy), demag=bool(demag),
+                                # eddy is unsupported (and force-dropped) in the
+                                # voltage solve — the reference must match its
+                                # physics or ΔP_harm absorbs the whole P_mag.
+                                rotor_eddy=False, demag=bool(demag),
                                 torque_filter=bool(torque_filter),
                                 pole_copy=bool(pole_copy),
                                 component_mesh_mm=_comp_mesh, geo_override=_geo_ov,

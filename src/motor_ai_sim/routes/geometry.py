@@ -67,6 +67,26 @@ def update_geometry(update: GeometryUpdateModel):
         for key, value in update.model_dump().items():
             if value is not None and key in geometry_section:
                 geometry_section[key] = value
+        # Recompute the DERIVED raw fields that shadow the formulas.  The YAML
+        # stores both num_seg/num_*_per_segment AND flattened num_poles/
+        # num_slots/angle_* — the solver path reads the flattened ones, so a
+        # segment-count edit that skips this left e.g. num_poles at the OLD
+        # value: a 20-pole rotor driven at the 28-pole frequency (T garbage)
+        # with the 28-pole winding layout.
+        try:
+            _ns = float(geometry_section.get("num_seg", 0) or 0)
+            _pps = float(geometry_section.get("num_poles_per_segment", 0) or 0)
+            _sps = float(geometry_section.get("num_slots_per_segment", 0) or 0)
+            if _ns > 0 and _pps > 0 and "num_poles" in geometry_section:
+                geometry_section["num_poles"] = int(round(_ns * _pps))
+                if "angle_pole" in geometry_section:
+                    geometry_section["angle_pole"] = 360.0 / (_ns * _pps)
+            if _ns > 0 and _sps > 0 and "num_slots" in geometry_section:
+                geometry_section["num_slots"] = int(round(_ns * _sps))
+                if "angle_slot" in geometry_section:
+                    geometry_section["angle_slot"] = 360.0 / (_ns * _sps)
+        except Exception:
+            pass
         with open(config_path, "w", encoding="utf-8") as f:
             yaml.dump(config, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
 

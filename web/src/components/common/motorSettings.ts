@@ -56,6 +56,9 @@ export function readSimMetrics(): Record<string, number> | undefined {
     const set = (k: string, v: unknown) => { const n = Number(v); if (Number.isFinite(n)) m[k] = n; };
     set('T_avg_Nm', s.T_em_avg_Nm); set('efficiency', s.efficiency);
     set('T_ripple_pct', s.T_ripple_pct); set('V_peak', s.V_phase_peak_V);
+    // Card voltage — LINE-TO-LINE peak of the actual waveforms (DC-bus sizing);
+    // the phase peak stays in V_peak for reference but the card ignores it.
+    set('V_line_peak_V', s.V_line_peak_V);
     set('P_mech_W', s.P_mech_W);
     return Object.keys(m).length ? m : undefined;
   } catch { return undefined; }

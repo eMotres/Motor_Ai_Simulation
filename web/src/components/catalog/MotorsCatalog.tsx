@@ -168,7 +168,7 @@ const MotorsCatalog: React.FC = () => {
         <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 1.5, rowGap: 0.35, mb: 1 }}>
           <Detail k="Speed" v={`${m.rpm} rpm`} />
           <Detail k="Current" v={`${Math.round(m.current_a)} A`} />
-          {typeof m.voltage_pk_v === 'number' && <Detail k="Voltage" v={`${m.voltage_pk_v} V pk`} />}
+          {typeof m.voltage_pk_v === 'number' && <Detail k="Voltage" v={`${m.voltage_pk_v} V pk LL`} />}
           {typeof m.length_mm === 'number' && <Detail k="Length" v={`${m.length_mm} mm`} />}
           {m.magnet && <Detail k="Magnet" v={m.magnet} />}
           {m.steel && <Detail k="Steel" v={m.steel} />}

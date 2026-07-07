@@ -139,7 +139,12 @@ def _enrich_card_entry(entry: dict, geo: dict, sim: dict, met: dict) -> None:
         return None
 
     tavg = _pick("T_avg_Nm", "T_em_Nm", "torque")
-    vpk = _pick("V_peak", "voltage_pk_v", "v_peak")
+    # Card voltage = LINE-TO-LINE peak of the actual waveforms (what the DC bus
+    # must cover).  The PHASE peak is inflated by triplen harmonics that cancel
+    # line-to-line, and √3×phase overstates the true LL peak by up to ~25 % on
+    # concentrated windings — so no fallback conversion: without an honest LL
+    # value the field is dropped (it reappears on the next save/run).
+    vpk = _pick("V_line_peak_V", "v_line_peak_v")
     rip = _pick("T_ripple_pct", "ripple_pct", "ripple")
     rpm = _num(sim.get("rpm")) or 0.0
     pmech = _pick("P_mech_avg_W", "P_mech_W", "power_w")
@@ -158,6 +163,8 @@ def _enrich_card_entry(entry: dict, geo: dict, sim: dict, met: dict) -> None:
         entry["efficiency_pct"] = round(eff * 100.0 if eff <= 1.0 else eff, 1)
     if vpk is not None:
         entry["voltage_pk_v"] = round(vpk, 1)
+    else:
+        entry.pop("voltage_pk_v", None)   # never keep a stale PHASE-peak value
     if rip is not None:
         entry["ripple_pct"] = round(rip, 1)
 

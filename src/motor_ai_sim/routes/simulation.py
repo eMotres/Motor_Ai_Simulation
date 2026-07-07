@@ -411,10 +411,24 @@ def update_sim_config(patch: SimConfigPatch):
 
     # Atomic write (temp + replace) — write_text truncate-then-write leaves a
     # window where a concurrent reader parses an empty config and clobbers it.
+    # On Windows os.replace raises PermissionError while ANY other handle holds
+    # the target (a concurrent get_config() read, the presets autosave, an
+    # editor) — observed as a 500 killing the settings save mid-session.  The
+    # lock is transient, so retry briefly before giving up.
     import os as _os
+    import time as _time
     _tmp = cfg_path.with_suffix(".yaml.tmp")
     _tmp.write_text(''.join(result), encoding="utf-8")
-    _os.replace(_tmp, cfg_path)
+    for _attempt in range(10):
+        try:
+            _os.replace(_tmp, cfg_path)
+            break
+        except PermissionError:
+            if _attempt == 9:
+                raise HTTPException(
+                    status_code=503,
+                    detail="config file is locked by another process — retry")
+            _time.sleep(0.05 * (_attempt + 1))
     clear_config_cache()
     return {"status": "ok", "updated": updates}
 

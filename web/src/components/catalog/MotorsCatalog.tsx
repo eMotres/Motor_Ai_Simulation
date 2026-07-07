@@ -5,6 +5,7 @@ import {
 import BoltIcon from '@mui/icons-material/Bolt';
 import CheckIcon from '@mui/icons-material/Check';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import DriveFileRenameOutlineIcon from '@mui/icons-material/DriveFileRenameOutline';
 import { useUIStore } from '../../stores/motorStore';
 import { useAuth } from '../../contexts/AuthContext';
 import MyDesigns from './MyDesigns';
@@ -18,6 +19,7 @@ interface Motor {
   slots: number; poles: number; rpm: number; current_a: number;
   T_avg_Nm: number; ripple_pct: number | null; gamma_deg: number;
   tier: string; description: string; preset?: string;
+  owner?: string;       // "user" for saved motors (renamable), absent for curated
   thumb_svg?: string;   // inline real-geometry cross-section (user-saved motors)
   // enriched (optional) — shown when present
   power_w?: number; efficiency_pct?: number; voltage_pk_v?: number;
@@ -69,6 +71,24 @@ const MotorsCatalog: React.FC = () => {
     setBusy(m.id);
     try {
       await fetch(`${API}/api/catalog/${encodeURIComponent(m.id)}`, { method: 'DELETE' });
+      await load();
+    } finally { setBusy(null); }
+  };
+
+  const renameMotor = async (m: Motor) => {
+    if (!m.preset) return;
+    const name = window.prompt('New name for this motor:', m.name);
+    if (!name || !name.trim() || name.trim() === m.name) return;
+    setBusy(m.id);
+    try {
+      const r = await fetch(`${API}/api/presets/${encodeURIComponent(m.preset)}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name.trim() }),
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        window.alert(`Rename failed: ${j.detail || `HTTP ${r.status}`}`);
+      }
       await load();
     } finally { setBusy(null); }
   };
@@ -153,6 +173,17 @@ const MotorsCatalog: React.FC = () => {
             sx={{ textTransform: 'none', fontSize: '0.74rem', py: 0.4, flex: 1 }}>
             {needsSignIn ? 'Sign in to load' : 'Load into editor'}
           </Button>
+          {m.preset && (isAdmin || m.owner === 'user') && (
+            <Tooltip title="Rename">
+              <span>
+                <IconButton size="small" disabled={!!busy} onClick={() => renameMotor(m)}
+                  sx={{ color: '#94a3b8', border: '1px solid #334155', borderRadius: 1,
+                    '&:hover': { bgcolor: '#1e293b', borderColor: '#64748b' } }}>
+                  <DriveFileRenameOutlineIcon sx={{ fontSize: 16 }} />
+                </IconButton>
+              </span>
+            </Tooltip>
+          )}
           {isAdmin && (
             <Tooltip title="Delete from catalog (admin)">
               <span>

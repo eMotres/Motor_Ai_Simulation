@@ -448,6 +448,30 @@ def open_motor(preset_id: str):
     return apply_preset(target)
 
 
+class RenamePresetRequest(BaseModel):
+    name: str
+    description: Optional[str] = None
+
+
+@router.patch("/{preset_id}")
+def rename_preset(preset_id: str, req: RenamePresetRequest):
+    """Rename a saved motor (display name only — the id stays stable, so the
+    catalog card, apply/open flows and any geometry links keep working)."""
+    presets = _load_presets()
+    if preset_id not in presets:
+        raise HTTPException(status_code=404, detail=f"preset '{preset_id}' not found")
+    new_name = (req.name or "").strip()
+    if not new_name:
+        raise HTTPException(status_code=422, detail="name must not be empty")
+    presets[preset_id]["name"] = new_name
+    if req.description is not None:
+        presets[preset_id]["description"] = req.description
+    _save_presets(presets)
+    # Refresh the Motors-tab card in place; keep its thumbnail (no CadQuery run).
+    _upsert_catalog_entry(preset_id, presets[preset_id], gen_thumb=False)
+    return {"status": "ok", "id": preset_id, "name": new_name}
+
+
 @router.delete("/{preset_id}")
 def delete_preset(preset_id: str):
     presets = _load_presets()

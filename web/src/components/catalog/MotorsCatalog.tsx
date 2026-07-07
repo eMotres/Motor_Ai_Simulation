@@ -25,6 +25,7 @@ interface Motor {
   // enriched (optional) — shown when present
   power_w?: number; efficiency_pct?: number; voltage_pk_v?: number;
   magnet?: string; steel?: string; length_mm?: number; wire?: string;
+  mass_kg?: number;     // active mass (stator+Cu+magnets+rotor+shaft)
 }
 interface Tier {
   id: string; name: string; price_usd: number; highlight: boolean;
@@ -173,6 +174,9 @@ const MotorsCatalog: React.FC = () => {
           <Detail k="Steel" v={m.steel || '—'} />
           <Detail k="Wire" v={m.wire || '—'} />
           <Detail k="MTPA γ" v={typeof m.gamma_deg === 'number' ? `${m.gamma_deg}°` : '—'} />
+          <Detail k="Mass" v={typeof m.mass_kg === 'number' ? `${m.mass_kg} kg` : '—'} />
+          <Detail k="Torque/kg" v={typeof m.mass_kg === 'number' && m.mass_kg > 0 && m.T_avg_Nm > 0
+            ? `${(m.T_avg_Nm / m.mass_kg).toFixed(1)} N·m/kg` : '—'} />
         </Box>
 
         <Box sx={{ flex: 1 }} />

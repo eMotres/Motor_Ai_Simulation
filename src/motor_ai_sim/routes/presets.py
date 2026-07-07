@@ -165,6 +165,23 @@ def _enrich_card_entry(entry: dict, geo: dict, sim: dict, met: dict) -> None:
         entry["voltage_pk_v"] = round(vpk, 1)
     else:
         entry.pop("voltage_pk_v", None)   # never keep a stale PHASE-peak value
+
+    # Active mass: prefer the saved run's summary value; else compute it
+    # DETERMINISTICALLY from the preset geometry (same compute_masses as the
+    # Simulation summary card — no FEM needed).
+    mass = _pick("mass_total_kg", "mass_kg")
+    if mass is None:
+        try:
+            from motor_ai_sim.simulation.geometry_2d import params_from_config as _pfc
+            from motor_ai_sim.masses import compute_masses as _cm
+            _p = _pfc(geo_override=geo)
+            from motor_ai_sim.config import get_config as _gc
+            _gcfg = {**dict(_gc().get("geometry", {})), **geo}
+            mass = float(_cm(_p, _gcfg, k_end=0.0)["total"])
+        except Exception:
+            mass = None
+    if mass is not None:
+        entry["mass_kg"] = round(mass, 2)
     if rip is not None:
         entry["ripple_pct"] = round(rip, 1)
 

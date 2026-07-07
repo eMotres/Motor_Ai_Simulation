@@ -188,6 +188,15 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // ── form state (current = I_phase_rms) ───────────────────────────────────
   const [current,       setCurrent]       = usePersisted('current',   85.0);
   const [frequency,     setFrequency]     = usePersisted('frequency', 921.67);
+  // Frequency is DERIVED (f = rpm·pp/60) — recompute whenever rpm OR the pole
+  // count changes.  It used to be seeded once from the config's saved operating
+  // point and only refreshed on manual rpm edits, so a pole-count change left
+  // the stale value (e.g. 921.67 Hz shown for a 20-pole motor instead of 658.33).
+  useEffect(() => {
+    const f = +(rpm * Math.round(numPoles / 2) / 60).toFixed(2);
+    if (Number.isFinite(f) && f > 0 && Math.abs(f - frequency) > 0.01) setFrequency(f);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rpm, numPoles]);
   const [rpm,           setRpm]           = usePersisted('rpm',       3950.0);
   const [phaseOffset,   setPhaseOffset]   = usePersisted('gamma',     0.0);   // γ [deg]
   // Drive mode for the transient: imposed sinusoidal CURRENT (design work) or

@@ -60,6 +60,7 @@ export function readSimMetrics(): Record<string, number> | undefined {
     // the phase peak stays in V_peak for reference but the card ignores it.
     set('V_line_peak_V', s.V_line_peak_V);
     set('P_mech_W', s.P_mech_W);
+    set('mass_total_kg', s.mass_total_kg);
     return Object.keys(m).length ? m : undefined;
   } catch { return undefined; }
 }

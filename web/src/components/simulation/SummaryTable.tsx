@@ -29,6 +29,7 @@ export interface TransientSummary {
   THD_LL_pct?:         number;
   I1_A?:               number;   // fundamental current amplitude (branch, from FFT)
   THD_I_pct?:          number;   // ≈0 in current drive; real parasitics in voltage drive
+  V1_LL_V?:            number;   // fundamental of the ACTUAL line-to-line waveform
   Kt_Nm_per_Arms?:     number;
   P_loss_total_W:      number;
   P_core_W:            number;
@@ -157,7 +158,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
           tooltip="Average electromagnetic torque from Maxwell stress integral over one electrical period"/>
         <Cell label="Mech power" value={`${fmt(s.P_mech_W / 1000, 2)}`} unit="kW"
           accent="blue"
-          tooltip="T_em × ω_mech = shaft mechanical power"/>
+          tooltip="Shaft power from the energy balance P_elec_in − P_loss (≈ T_em × ω_mech)"/>
         <Cell label="Active mass" value={fmt(s.mass_total_kg, 2)} unit="kg"
           tooltip="Sum of stator iron + copper + magnets + rotor iron + shaft (active section, no housing)"/>
         <Cell label="Torque density" value={fmt(s.torque_per_mass_Nm_kg, 2)} unit="N·m/kg"
@@ -180,35 +181,35 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
         gridTemplateColumns: 'repeat(6, minmax(0, 1fr))', gap: 1 }}>
         <Cell label="Total loss" value={fmtK(s.P_loss_total_W)} unit="W"
           accent="amber"
-          tooltip="Cu + Fe (Bertotti) + magnet eddy"/>
+          tooltip="Cu + Fe (Bertotti) + magnet eddy + shaft eddy — period means"/>
         <Cell label="Core (lamination)" value={fmtK(s.P_core_W)} unit="W"
-          tooltip="Bertotti loss in stator + rotor steel — kh·f·B² + kc·(f·B)² + ke·(f·B)^1.5"/>
+          tooltip="Bertotti loss in stator + rotor steel — kh·f·B² + kc·(f·B)² + ke·(f·B)^1.5, period mean"/>
         <Cell label="Stranded (copper)" value={fmtK(s.P_stranded_W)} unit="W"
-          tooltip="I²R losses in coil windings (3-phase)"/>
+          tooltip="I²R (DC) + AC eddy/proximity share in the coil windings, incl. end-winding resistance (k_end) and ρ_Cu(T)"/>
         <Cell label="Solid (magnets)" value={fmtK(s.P_solid_W)} unit="W"
-          tooltip="Eddy-current losses in solid magnets (σ·ω²·B²·d²/12 slab model)"/>
+          tooltip="Magnet + shaft eddy from the coupled conducting-rotor field solve (with per-magnet ∫J=0 and lamination factor); the d²/12 slab estimate is used only when field losses are off"/>
         <Cell label="Loss density" value={fmt(s.loss_density_W_kg, 1)} unit="W/kg"
           tooltip="P_loss / mass — thermal stress indicator"/>
         <Cell label="Efficiency η" value={fmt(s.efficiency * 100, 2)} unit="%"
           accent={accentEff}
-          tooltip="P_mech / (P_mech + P_loss_total)"/>
+          tooltip="P_mech / P_elec_in (energy balance; equals P_mech/(P_mech+P_loss) when the input power isn't reported)"/>
       </Box>
 
       {/* ── Row 3 — voltage + KV ───────────────────────────────────────── */}
       <Box sx={{ display: 'grid',
         gridTemplateColumns: 'repeat(6, minmax(0, 1fr))', gap: 1 }}>
         <Cell label="V_phase peak" value={fmt(s.V_phase_peak_V, 1)} unit="V"
-          tooltip="Phase voltage peak at terminals = R·I + dψ/dt"/>
+          tooltip="Max |V_A|, |V_B|, |V_C| of the actual waveform (R·I + dψ/dt) — includes harmonics"/>
         <Cell label="V_line peak" value={fmt(s.V_line_peak_V, 1)} unit="V"
-          tooltip="√3 × V_phase_peak — line-to-line peak"/>
+          tooltip="Max of the ACTUAL |V_A−V_B|, |V_B−V_C|, |V_C−V_A| waveforms (triplens cancel line-to-line, so this is LESS than √3×phase peak). This is what the DC bus / battery must cover."/>
         <Cell label="V_phase RMS" value={fmt(s.V_phase_rms_V, 1)} unit="V"
-          tooltip="V_phase_peak / √2"/>
+          tooltip="True RMS of the phase waveform (not peak/√2 — harmonics included)"/>
         <Cell label="V_line RMS" value={fmt(s.V_line_rms_V, 1)} unit="V"
-          tooltip="V_line_peak / √2"/>
+          tooltip="True RMS of the line-to-line waveforms (mean of the 3 pairs)"/>
         <Cell label="KV (phase)" value={fmt(s.KV_rpm_per_V_phase, 1)} unit="rpm/V"
-          tooltip="Motor velocity constant — rpm per V_phase_RMS"/>
+          tooltip="rpm / (V₁_phase RMS) — from the FUNDAMENTAL voltage at THIS load point. Not the no-load KV: under field-weakening γ the loaded voltage differs from the back-EMF."/>
         <Cell label="KV (line)" value={fmt(s.KV_rpm_per_V_line, 1)} unit="rpm/V"
-          tooltip="Motor velocity constant — rpm per V_line_RMS"/>
+          tooltip="rpm / (V₁_LL RMS) — fundamental line-to-line at this load point"/>
       </Box>
 
       {/* ── Mass component breakdown ───────────────────────────────────── */}

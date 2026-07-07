@@ -30,9 +30,15 @@ def voltage_harmonics(d: Dict[str, Any], h_max: int = 25) -> Dict[str, Any]:
     machine, so averaging only suppresses numerical asymmetry.  Non-finite
     samples (dψ/dt edge artifacts in older stored runs) are zeroed rather
     than poisoning the sums.
+
+    THD_LL comes from the ACTUAL line-to-line waveforms (V_A−V_B, V_B−V_C,
+    V_C−V_A): triplens cancel there physically, and — unlike the non-triplen
+    approximation from the phase spectrum — real phase UNBALANCE (e.g. the
+    sector-mesh seam bias) shows up honestly.  Falls back to the non-triplen
+    phase approximation when a phase series is missing.
     """
     out: Dict[str, Any] = {"V1_phase_V": 0.0, "THD_pct": 0.0,
-                           "THD_LL_pct": 0.0, "V_harm_amp": []}
+                           "THD_LL_pct": 0.0, "V1_LL_V": 0.0, "V_harm_amp": []}
     amps = _phase_harmonics(d, ("V_A", "V_B", "V_C"), h_max)
     if not amps:
         return out
@@ -45,7 +51,38 @@ def voltage_harmonics(d: Dict[str, Any], h_max: int = 25) -> Dict[str, Any]:
         out["THD_pct"] = round(100.0 * float(np.sqrt(np.sum(hi ** 2))) / v1, 2)
         nt = hi[orders % 3 != 0]
         out["THD_LL_pct"] = round(100.0 * float(np.sqrt(np.sum(nt ** 2))) / v1, 2)
+        out["V1_LL_V"] = round(math.sqrt(3.0) * v1, 2)   # exact for the fundamental
+    ll = _line_harmonics(d, h_max)
+    if ll:
+        v1ll = ll[0]
+        out["V1_LL_V"] = round(v1ll, 2)
+        if v1ll > 1e-9:
+            hill = np.asarray(ll[1:], dtype=float)
+            out["THD_LL_pct"] = round(
+                100.0 * float(np.sqrt(np.sum(hill ** 2))) / v1ll, 2)
     return out
+
+
+def _line_harmonics(d: Dict[str, Any], h_max: int) -> list:
+    """Per-order amplitudes of the ACTUAL line-to-line voltages (3-pair
+    magnitude average) — None-safe wrapper building A−B/B−C/C−A on the fly."""
+    keys = ("V_A", "V_B", "V_C")
+    va = d.get(keys[0]) or []
+    N = len(va)
+    if N < 4:
+        return []
+    vs = []
+    for k in keys:
+        v = d.get(k)
+        if not (isinstance(v, (list, tuple)) and len(v) == N):
+            return []
+        vs.append(np.nan_to_num(np.asarray(v, dtype=float),
+                                nan=0.0, posinf=0.0, neginf=0.0))
+    va_, vb_, vc_ = vs
+    dd = {"n_periods": d.get("n_periods", 1.0),
+          "LL_ab": (va_ - vb_).tolist(), "LL_bc": (vb_ - vc_).tolist(),
+          "LL_ca": (vc_ - va_).tolist()}
+    return _phase_harmonics(dd, ("LL_ab", "LL_bc", "LL_ca"), h_max)
 
 
 def _phase_harmonics(d: Dict[str, Any], keys, h_max: int) -> list:

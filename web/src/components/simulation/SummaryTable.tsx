@@ -129,25 +129,22 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
         <Typography sx={{ fontSize: 13, color: '#cbd5e1', fontWeight: 700 }}>
           Simulation summary — real FEM results
         </Typography>
-        <Typography sx={{ fontSize: 10, color: '#475569' }}>
+        <Typography sx={{ fontSize: 10, color: stale ? '#f59e0b' : '#475569' }}>
           @ {s.rpm} rpm · I_ph = {s.I_phase_rms_A} A_rms · γ = {s.gamma_deg}°
+          {stale && (
+            <Tooltip title={`Computed at I = ${s.I_phase_rms_A} A, γ = ${s.gamma_deg}° — the panel is now set to `
+              + `${Number.isFinite(liveI as number) ? `I = ${fmt(liveI as number, 2)} A` : ''}`
+              + `${dG > 0.05 && Number.isFinite(liveG as number) ? `, γ = ${fmt(liveG as number, 0)}°` : ''}. `
+              + 'Run Simulation to recompute at the current point.'} placement="top">
+              <span style={{ marginLeft: 6, cursor: 'help' }}>⚠</span>
+            </Tooltip>
+          )}
+          {fromSweep && (
+            <Tooltip title="Numbers reused from the applied Sweep design (no re-run). Run Simulation for waveforms and field maps." placement="top">
+              <span style={{ marginLeft: 6, color: '#fbbf24', cursor: 'help' }}>← Sweep</span>
+            </Tooltip>
+          )}
         </Typography>
-        {stale && (
-          <Box sx={{ width: '100%', mt: 0.5, px: 1, py: 0.6, borderRadius: 1,
-            bgcolor: 'rgba(245,158,11,0.10)', border: '1px solid rgba(245,158,11,0.4)' }}>
-            <Typography sx={{ fontSize: 11, color: '#f59e0b', fontWeight: 700 }}>
-              ⚠ Shown for I = {s.I_phase_rms_A} A_rms{dG > 0.05 ? `, γ = ${s.gamma_deg}°` : ''} — differs from the current setting
-              {Number.isFinite(liveI as number)
-                ? ` (I = ${fmt(liveI as number, 2)} A${dG > 0.05 && Number.isFinite(liveG as number) ? `, γ = ${fmt(liveG as number, 0)}°` : ''})`
-                : ''}. These numbers are for the OLD point — press “Run Simulation” to recompute at the current one.
-            </Typography>
-          </Box>
-        )}
-        {fromSweep && (
-          <Typography sx={{ fontSize: 10, color: '#fbbf24' }}>
-            ← from applied Sweep design (numbers reused, no re-run) · press “Run Simulation” for waveforms &amp; field maps
-          </Typography>
-        )}
       </Box>
 
       {/* ── Row 1 — primary outputs ───────────────────────────────────── */}

@@ -611,17 +611,19 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
   return (
     <Paper sx={{ bgcolor: '#0b1220', border: '1px solid #1e293b', p: 2,
       display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-      {/* Stale-graph warning — the shown waveforms were computed for different
-          inputs/geometry (e.g. a design was just applied from Sweep).  The
-          summary numbers update instantly, but the GRAPHS need a re-solve. */}
+      {/* Stale-graph marker — the shown waveforms were computed for different
+          inputs/geometry (e.g. a design was just applied from Sweep).  Kept to
+          a compact chip (details on hover) — no text walls in the UI. */}
       {(stale || geoStale || appliedFromSweep) && (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 1,
-          bgcolor: 'rgba(251,191,36,0.12)', border: '1px solid #b45309', borderRadius: 1 }}>
-          <span style={{ fontSize: 16, lineHeight: 1 }}>⚠️</span>
-          <Typography sx={{ fontSize: 12, color: '#fbbf24', fontWeight: 600 }}>
-            These graphs are from the previous design{geoStale || appliedFromSweep ? ' — the geometry has changed' : ' — inputs changed'}. Press “Run Simulation” to recompute the correct waveforms.
-          </Typography>
-        </Box>
+        <Tooltip title={`The waveforms below were computed ${geoStale || appliedFromSweep
+            ? 'for the PREVIOUS geometry' : 'for different inputs'} — run Simulation to recompute.`}
+          placement="top">
+          <Box sx={{ alignSelf: 'flex-start', px: 1, py: 0.25, borderRadius: 1,
+            bgcolor: 'rgba(251,191,36,0.12)', border: '1px solid #b45309',
+            fontSize: 11, color: '#fbbf24', fontWeight: 700, cursor: 'help' }}>
+            ⚠ stale
+          </Box>
+        </Tooltip>
       )}
       {/* ── header ────────────────────────────────────────────────────── */}
       <Box sx={{ display: 'flex', alignItems: 'center',

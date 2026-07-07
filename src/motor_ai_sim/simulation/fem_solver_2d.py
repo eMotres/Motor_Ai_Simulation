@@ -1182,7 +1182,17 @@ def _build_sliding_band_meshes(
         _sl_ = int(round(float((geo_cfg or {}).get("num_slots_per_segment", 0))))
         _pl_ = int(round(float((geo_cfg or {}).get("num_poles_per_segment", 0))))
         if _ns_ > 0 and _sl_ > 0:
-            _slot_period = 360.0 / (_ns_ * _sl_)
+            # The stator polygon repeats every TWO slot pitches, not one: slots
+            # are built in PAIRS (half_slots loop in get_2d_polygons) — a full
+            # tooth on the pair boundary, two coil pockets, and a SHORT centre
+            # tooth (tooth2) carrying the slot opening between them.  A one-
+            # slot-pitch wedge is therefore asymmetric by construction (left cut
+            # bisects the full tooth, right cut bisects the short tooth → OCC
+            # splits the two radial cuts differently, "not periodic-weldable
+            # 29 vs 29, 3 aligned"), which silently disabled the stator
+            # template-copy AND mis-grouped curves in the rotational-periodicity
+            # signature.  The TRUE period is the slot-pair pitch.
+            _slot_period = 2.0 * 360.0 / (_ns_ * _sl_)
         if _ns_ > 0 and _pl_ > 0:
             _pole_period = 360.0 / (_ns_ * _pl_)
     except Exception:

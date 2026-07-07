@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
   Box, Typography, Chip, CircularProgress, Button, Tooltip, IconButton,
+  Dialog, DialogTitle, DialogContent, DialogActions, TextField,
 } from '@mui/material';
 import BoltIcon from '@mui/icons-material/Bolt';
 import CheckIcon from '@mui/icons-material/Check';
@@ -75,21 +76,33 @@ const MotorsCatalog: React.FC = () => {
     } finally { setBusy(null); }
   };
 
-  const renameMotor = async (m: Motor) => {
-    if (!m.preset) return;
-    const name = window.prompt('New name for this motor:', m.name);
-    if (!name || !name.trim() || name.trim() === m.name) return;
+  // Rename runs through a proper dialog — window.prompt is silently
+  // suppressed by Chrome once "prevent additional dialogs" was ever ticked,
+  // which made the pencil look dead.
+  const [renameTarget, setRenameTarget] = useState<Motor | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+  const [renameErr, setRenameErr] = useState<string | null>(null);
+  const openRename = (m: Motor) => { setRenameTarget(m); setRenameValue(m.name); setRenameErr(null); };
+  const submitRename = async () => {
+    const m = renameTarget;
+    const name = renameValue.trim();
+    if (!m?.preset || !name) return;
+    if (name === m.name) { setRenameTarget(null); return; }
     setBusy(m.id);
     try {
       const r = await fetch(`${API}/api/presets/${encodeURIComponent(m.preset)}`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: name.trim() }),
+        body: JSON.stringify({ name }),
       });
       if (!r.ok) {
         const j = await r.json().catch(() => ({}));
-        window.alert(`Rename failed: ${j.detail || `HTTP ${r.status}`}`);
+        setRenameErr(String(j.detail || `HTTP ${r.status}`));
+        return;
       }
+      setRenameTarget(null);
       await load();
+    } catch (e) {
+      setRenameErr(String(e));
     } finally { setBusy(null); }
   };
 
@@ -176,7 +189,7 @@ const MotorsCatalog: React.FC = () => {
           {m.preset && (isAdmin || m.owner === 'user') && (
             <Tooltip title="Rename">
               <span>
-                <IconButton size="small" disabled={!!busy} onClick={() => renameMotor(m)}
+                <IconButton size="small" disabled={!!busy} onClick={() => openRename(m)}
                   sx={{ color: '#94a3b8', border: '1px solid #334155', borderRadius: 1,
                     '&:hover': { bgcolor: '#1e293b', borderColor: '#64748b' } }}>
                   <DriveFileRenameOutlineIcon sx={{ fontSize: 16 }} />
@@ -269,6 +282,31 @@ const MotorsCatalog: React.FC = () => {
           </Box>
         );
       })}
+
+      {/* ── Rename dialog (window.prompt is unreliable — Chrome suppresses it) ── */}
+      <Dialog open={!!renameTarget} onClose={() => setRenameTarget(null)}
+        PaperProps={{ sx: { bgcolor: '#0b1220', border: '1px solid #1e293b', borderRadius: 2, minWidth: 360 } }}>
+        <DialogTitle sx={{ color: '#e2e8f0', fontSize: '0.95rem', fontWeight: 700 }}>
+          Rename motor
+        </DialogTitle>
+        <DialogContent>
+          <TextField autoFocus fullWidth size="small" label="Name"
+            value={renameValue}
+            onChange={(e) => setRenameValue(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') void submitRename(); }}
+            error={!!renameErr} helperText={renameErr ?? ' '}
+            sx={{ mt: 1 }} />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setRenameTarget(null)}
+            sx={{ textTransform: 'none', color: '#94a3b8' }}>Cancel</Button>
+          <Button variant="contained" disabled={!!busy || !renameValue.trim()}
+            onClick={() => void submitRename()}
+            sx={{ textTransform: 'none' }}>
+            {busy ? <CircularProgress size={14} /> : 'Save'}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 };

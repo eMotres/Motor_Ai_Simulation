@@ -128,9 +128,12 @@ const MotorsCatalog: React.FC = () => {
   const byDiameter = (d: number) => cat.motors.filter((m) => m.diameter_mm === d);
 
   const renderCard = (m: Motor) => {
+    // UNIFORM card layout: every motor shows the same stats and the same
+    // detail rows in the same places; a missing value renders as a dash.
     const hasEff = typeof m.efficiency_pct === 'number';
-    const hasPwr = typeof m.power_w === 'number';
-    const hasRip = typeof m.ripple_pct === 'number';
+    const powerW = typeof m.power_w === 'number'
+      ? m.power_w
+      : (m.T_avg_Nm > 0 && m.rpm > 0 ? m.T_avg_Nm * 2 * Math.PI * m.rpm / 60 : null);
     return (
       <Box key={m.id} sx={{
         flex: '1 1 290px', maxWidth: 360, display: 'flex', flexDirection: 'column',
@@ -151,29 +154,25 @@ const MotorsCatalog: React.FC = () => {
           </Box>
         </Box>
 
-        {/* headline stats */}
+        {/* headline stats — SAME three slots on every card */}
         <Box sx={{ display: 'flex', gap: 0.5, py: 1, my: 0.5, borderTop: '1px solid #1e293b', borderBottom: '1px solid #1e293b' }}>
-          <Stat value={fmtT(m.T_avg_Nm)} unit="N·m" label="torque" color="#86efac" />
-          {hasPwr
-            ? <Stat value={fmtP(m.power_w!)} label="power" color="#7dd3fc" />
-            : <Stat value={String(m.rpm)} unit="rpm" label="speed" />}
-          {hasEff
-            ? <Stat value={m.efficiency_pct!.toFixed(1)} unit="%" label="efficiency" color="#fcd34d" />
-            : hasRip
-              ? <Stat value={m.ripple_pct!.toFixed(1)} unit="%" label="ripple" color={m.ripple_pct! < 8 ? '#86efac' : '#fdba74'} />
-              : <Stat value={`${Math.round(m.current_a)}`} unit="A" label="current" />}
+          <Stat value={m.T_avg_Nm > 0 ? fmtT(m.T_avg_Nm) : '—'}
+            unit={m.T_avg_Nm > 0 ? 'N·m' : undefined} label="torque" color="#86efac" />
+          <Stat value={powerW != null ? fmtP(powerW) : '—'} label="power" color="#7dd3fc" />
+          <Stat value={hasEff ? m.efficiency_pct!.toFixed(1) : '—'}
+            unit={hasEff ? '%' : undefined} label="efficiency" color="#fcd34d" />
         </Box>
 
-        {/* detail grid */}
+        {/* detail grid — SAME eight rows on every card; missing value = dash */}
         <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 1.5, rowGap: 0.35, mb: 1 }}>
-          <Detail k="Speed" v={`${m.rpm} rpm`} />
-          <Detail k="Current" v={`${Math.round(m.current_a)} A`} />
-          {typeof m.voltage_pk_v === 'number' && <Detail k="Voltage" v={`${m.voltage_pk_v} V pk LL`} />}
-          {typeof m.length_mm === 'number' && <Detail k="Length" v={`${m.length_mm} mm`} />}
-          {m.magnet && <Detail k="Magnet" v={m.magnet} />}
-          {m.steel && <Detail k="Steel" v={m.steel} />}
-          {m.wire && <Detail k="Wire" v={m.wire} />}
-          {typeof m.gamma_deg === 'number' && <Detail k="MTPA γ" v={`${m.gamma_deg}°`} />}
+          <Detail k="Speed" v={m.rpm > 0 ? `${m.rpm} rpm` : '—'} />
+          <Detail k="Current" v={m.current_a > 0 ? `${Math.round(m.current_a)} A` : '—'} />
+          <Detail k="Voltage" v={typeof m.voltage_pk_v === 'number' ? `${m.voltage_pk_v} V pk LL` : '—'} />
+          <Detail k="Length" v={typeof m.length_mm === 'number' ? `${m.length_mm} mm` : '—'} />
+          <Detail k="Magnet" v={m.magnet || '—'} />
+          <Detail k="Steel" v={m.steel || '—'} />
+          <Detail k="Wire" v={m.wire || '—'} />
+          <Detail k="MTPA γ" v={typeof m.gamma_deg === 'number' ? `${m.gamma_deg}°` : '—'} />
         </Box>
 
         <Box sx={{ flex: 1 }} />

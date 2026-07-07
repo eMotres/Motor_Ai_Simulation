@@ -188,6 +188,8 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // ── form state (current = I_phase_rms) ───────────────────────────────────
   const [current,       setCurrent]       = usePersisted('current',   85.0);
   const [frequency,     setFrequency]     = usePersisted('frequency', 921.67);
+  const [rpm,           setRpm]           = usePersisted('rpm',       3950.0);
+  const [phaseOffset,   setPhaseOffset]   = usePersisted('gamma',     0.0);   // γ [deg]
   // Frequency is DERIVED (f = rpm·pp/60) — recompute whenever rpm OR the pole
   // count changes.  It used to be seeded once from the config's saved operating
   // point and only refreshed on manual rpm edits, so a pole-count change left
@@ -197,8 +199,6 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
     if (Number.isFinite(f) && f > 0 && Math.abs(f - frequency) > 0.01) setFrequency(f);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rpm, numPoles]);
-  const [rpm,           setRpm]           = usePersisted('rpm',       3950.0);
-  const [phaseOffset,   setPhaseOffset]   = usePersisted('gamma',     0.0);   // γ [deg]
   // Drive mode for the transient: imposed sinusoidal CURRENT (design work) or
   // imposed sinusoidal VOLTAGE (FOC-drive verification — the currents become
   // the machine's own response, incl. the parasitic harmonics a distorted
@@ -409,7 +409,9 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
         setSrvStatus(d);
         if (d.operating_point) {
           setCurrent(d.operating_point.max_current ?? 85);
-          setFrequency(d.operating_point.frequency_hz ?? 921.67);
+          // frequency is NOT seeded from the saved operating point — it is
+          // fully derived (rpm·pp/60, effect above); seeding it here raced the
+          // geometry load and pinned the stale value after a pole-count change.
           setRpm(d.operating_point.rpm ?? 3950);
         }
         simReady.current = true;     // operating point loaded → debounced saves allowed

@@ -470,6 +470,10 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
       P_tot: data.P_loss_total_W[i],
       I_A:   data.I_A[i], I_B: data.I_B[i], I_C: data.I_C[i],
       V_A:   data.V_A[i], V_B: data.V_B[i], V_C: data.V_C[i],
+      // Line-to-line voltage — what a wye-connected inverter actually applies.
+      // Zero-sequence (triplen) content cancels in the difference by physics.
+      V_LL:  (Number.isFinite(data.V_A[i]) && Number.isFinite(data.V_B[i]))
+               ? data.V_A[i] - data.V_B[i] : 0,
     }));
   }, [data, Tshown]);
 
@@ -556,6 +560,38 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
       ? 100 * Math.sqrt(rows.slice(1).reduce((s, r) => s + (r.order % 3 !== 0 ? r.amp * r.amp : 0), 0)) / v1
       : 0;
     return { rows: rows.map(r => ({ ...r, pct: v1 > 1e-9 ? (100 * r.amp / v1) : 0 })), v1, thd, thdLL };
+  }, [data]);
+
+  // Line-to-line voltage harmonic spectrum — DFT of the ACTUAL V_AB = V_A − V_B
+  // waveform.  Triplen (3/9/15…) orders cancel in the difference by physics, so
+  // their bars sit at ≈0 here — the visual proof of why THD_LL excludes them.
+  // The THD of this curve IS the line-to-line THD a sinusoidal FOC drive fights
+  // (matches the summary THD_LL up to phase unbalance), and V₁_LL ≈ √3·V₁_phase.
+  const vllHarm = React.useMemo(() => {
+    if (!data?.V_A?.length || !data?.V_B?.length
+        || data.V_B.length !== data.V_A.length) return null;
+    const N = data.V_A.length;
+    const P = Math.max(1, Math.round(data.n_periods || 1));
+    const hMax = Math.min(25, Math.floor(N / (2 * P)) - 1);
+    if (hMax < 1) return null;
+    const vll = data.V_A.map((a, i) => {
+      const b = data.V_B[i];
+      return (Number.isFinite(a) && Number.isFinite(b)) ? a - b : 0;
+    });
+    const rows = [];
+    for (let h = 1; h <= hMax; h++) {
+      let re = 0, im = 0;
+      const w = (2 * Math.PI * h * P) / N;
+      for (let n = 0; n < N; n++) {
+        re += vll[n] * Math.cos(w * n); im -= vll[n] * Math.sin(w * n);
+      }
+      rows.push({ order: h, amp: (2 / N) * Math.hypot(re, im) });
+    }
+    const v1 = rows[0].amp;
+    const thd = v1 > 1e-9
+      ? 100 * Math.sqrt(rows.slice(1).reduce((s, r) => s + r.amp * r.amp, 0)) / v1
+      : 0;
+    return { rows: rows.map(r => ({ ...r, pct: v1 > 1e-9 ? (100 * r.amp / v1) : 0 })), v1, thd };
   }, [data]);
 
   return (
@@ -929,6 +965,77 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
                   {vharm.rows.map((r, i) => (
                     <Cell key={i} fill={r.order === 1 ? '#34d399'
                       : r.order % 3 === 0 ? '#64748b' : '#3b82f6'}/>
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </Box>
+          )}
+
+          {/* ── Line-to-line voltage V_AB = V_A − V_B ── */}
+          <Box sx={{ height: 220 }}>
+            <Typography sx={{ fontSize: 11, fontWeight: 700, color: '#94a3b8' }}>
+              Line-to-line voltage V_LL = V_A − V_B
+              {vllHarm && <span style={{ color: '#475569', fontWeight: 400 }}>
+                {'  ·  '}V₁_LL ≈ {vllHarm.v1.toFixed(1)} V</span>}
+              <Tooltip title="The voltage a wye-connected inverter actually applies between two terminals. Zero-sequence (triplen) harmonics of the phase voltage cancel in the difference, so this waveform is cleaner than the phase one. V₁_LL ≈ √3 × V₁_phase." placement="top">
+                <span style={{ color: '#475569', marginLeft: 6, fontSize: 11, cursor: 'help' }}>ⓘ</span>
+              </Tooltip>
+            </Typography>
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={rows} margin={{ top: 8, right: 10, left: 0, bottom: 16 }}>
+                <CartesianGrid {...GRID}/>
+                <XAxis dataKey="t_ms" tick={AXIS} tickFormatter={fmtMs}
+                  label={{ value: 't [ms]', position: 'insideBottom',
+                    offset: -4, style: { fontSize: 10, fill: '#475569' } }}/>
+                <YAxis tick={AXIS}
+                  label={{ value: 'V [V]', angle: -90,
+                    position: 'insideLeft', offset: 12,
+                    style: { fontSize: 10, fill: '#475569' } }}/>
+                <RcTooltip {...TOOLTIP}/>
+                <Line type="monotone" dataKey="V_LL" stroke="#a78bfa"
+                  name="V_LL" strokeWidth={2}
+                  dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
+                    r={3} fill={d.stroke} stroke="none"/>}
+                  activeDot={{ r: 5 }}
+                  isAnimationActive={false}/>
+              </LineChart>
+            </ResponsiveContainer>
+          </Box>
+
+          {/* ── Line-to-line harmonic spectrum ── */}
+          {vllHarm && (
+          <Box sx={{ height: 200 }}>
+            <Typography sx={{ fontSize: 11, fontWeight: 700, color: '#94a3b8' }}>
+              Line-to-line harmonics (order = ×f_elec)
+              <span style={{ color: '#475569', fontWeight: 400 }}>
+                {'  ·  '}V₁_LL ≈ {vllHarm.v1.toFixed(1)} V ·{' '}
+              </span>
+              <span style={{ color: '#22d3ee', fontWeight: 600 }}>
+                THD ≈ {vllHarm.thd.toFixed(1)} %
+              </span>
+              <Tooltip title="DFT of the ACTUAL V_AB waveform. Triplen bars (3/9/15…, grey) sit at ≈0 because zero-sequence cancels between two phases of a wye winding — the physical reason THD_LL excludes them. The THD of this curve is what a sinusoidal FOC supply fights (CIANO-S target < 5%); any residual triplen content here indicates phase unbalance." placement="top">
+                <span style={{ color: '#475569', marginLeft: 6, fontSize: 11, cursor: 'help' }}>ⓘ</span>
+              </Tooltip>
+            </Typography>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={vllHarm.rows} margin={{ top: 8, right: 10, left: 0, bottom: 16 }}>
+                <CartesianGrid {...GRID}/>
+                <XAxis dataKey="order" tick={AXIS} interval={0}
+                  label={{ value: 'harmonic order (n × f_elec)', position: 'insideBottom',
+                    offset: -4, style: { fontSize: 10, fill: '#475569' } }}/>
+                <YAxis tick={AXIS}
+                  label={{ value: 'amp [V]', angle: -90,
+                    position: 'insideLeft', offset: 12,
+                    style: { fontSize: 10, fill: '#475569' } }}/>
+                <RcTooltip {...TOOLTIP}
+                  labelFormatter={(v: number) => `harmonic n = ${v}`}
+                  formatter={(val: number, _n: string, p: any) =>
+                    [`${Number(val).toFixed(2)} V  (${p?.payload?.pct?.toFixed(1)} % of V₁_LL)`, 'amplitude']}/>
+                <Bar dataKey="amp" isAnimationActive={false}>
+                  {vllHarm.rows.map((r, i) => (
+                    <Cell key={i} fill={r.order === 1 ? '#34d399'
+                      : r.order % 3 === 0 ? '#64748b' : '#8b5cf6'}/>
                   ))}
                 </Bar>
               </BarChart>

@@ -57,6 +57,9 @@ interface TransientPayload {
   T_harm_order?: number[];
   T_harm_amp?: number[];
   summary?: TransientSummary;
+  // ISO timestamp of the solve (backend stamp) — shown in the header so a
+  // stale view is recognisable at a glance.
+  computed_at?: string;
   // Set (instead of `summary`) when the backend solved the waveforms but the
   // summary-block build threw — lets the UI surface the error rather than freeze
   // the cards on the previous run's numbers.
@@ -420,6 +423,26 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [busy]);
 
+  // CROSS-TAB sync: another tab's finished run writes sim.lastTransient — adopt
+  // it live.  Without this a background tab silently keeps showing its old
+  // result ("пересчиталось, но не обновилось" when two app tabs are open: the
+  // solve lands only in the tab whose Run button was pressed).  The `storage`
+  // event fires only in OTHER tabs (never the writer), so there is no loop; a
+  // tab that is mid-solve keeps its own run (busyRef guard).
+  const busyRef = useRef(false);
+  useEffect(() => { busyRef.current = busy; }, [busy]);
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== LAST_KEY || !e.newValue || busyRef.current) return;
+      try {
+        const d = JSON.parse(e.newValue) as TransientPayload;
+        if (d?.time_s?.length) { setData(d); setStale(false); setError(null); }
+      } catch { /* corrupt entry — ignore */ }
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
+
   // Build chart-friendly row arrays
   // Torque series shown: band-limited (6·k) when the filter is ON, raw per-
   // frame otherwise.  Both arrays come from the backend, so flipping the
@@ -579,6 +602,9 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
                   : `cogging pk-pk = ${tpp.toFixed(2)} N·m`}
                 {' · '}<span style={{ color: torqueFilter ? '#34d399' : '#fbbf24' }}>
                   {torqueFilter ? '6·k filtered' : 'raw'}</span>
+                {data.computed_at &&
+                  <> · <span style={{ color: '#60a5fa' }}>
+                    solved {new Date(data.computed_at).toLocaleTimeString()}</span></>}
               </Typography>
             );
           })()}

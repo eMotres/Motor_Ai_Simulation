@@ -263,15 +263,26 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
     }));
   }, [data, pinnLosses]);
 
-  if (loading) return (
-    <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
-      <CircularProgress size={28} sx={{ color: '#3b82f6' }}/>
-    </Box>
-  );
-  if (error) return (
-    <Box sx={{ color: '#ef4444', fontSize: 12, p: 2 }}>Physics API error: {error}</Box>
-  );
-  if (!data) return null;
+  // NEVER unmount the tree once data exists.  Every Run ticks runNonce →
+  // fetchData() → loading=true; an early `return <Spinner/>` here UNMOUNTED the
+  // whole dashboard — including TransientCharts, whose in-flight FEM fetch then
+  // resolved into a DEAD instance (setData no-op; only the localStorage persist
+  // survived).  The remounted chart adopted the PREVIOUS run from localStorage
+  // and swallowed the nonce, so the screen always showed run N−1 ("пересчитал,
+  // но значения старые").  Keep the old analytics visible while refreshing
+  // (stale-while-revalidate); the spinner/error live in a FIXED status slot
+  // inside the stable tree so sibling positions never shift.
+  if (!data) {
+    if (loading) return (
+      <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
+        <CircularProgress size={28} sx={{ color: '#3b82f6' }}/>
+      </Box>
+    );
+    if (error) return (
+      <Box sx={{ color: '#ef4444', fontSize: 12, p: 2 }}>Physics API error: {error}</Box>
+    );
+    return null;
+  }
 
   const sc = data.scalars;
   const lossTotal = data.losses.P_total_W;
@@ -285,6 +296,11 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
           Physics Dashboard
         </Typography>
         <Chip label="real FEM" size="small" sx={{ fontSize: 10, bgcolor: '#1a2e1a', color: '#4ade80' }}/>
+        {/* fixed status slot — refresh spinner / analytics error render HERE so
+            the tree below never unmounts (see the loading note above) */}
+        {loading && <CircularProgress size={14} thickness={6} sx={{ color: '#3b82f6' }}/>}
+        {error && !loading &&
+          <Typography sx={{ fontSize: 11, color: '#ef4444' }}>analytics refresh failed: {error}</Typography>}
         <Box sx={{ flex: 1 }}/>
         <IconButton size="small" onClick={fetchData} sx={{ color: '#475569' }}>
           <RefreshIcon fontSize="small"/>

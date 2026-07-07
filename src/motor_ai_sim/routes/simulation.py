@@ -2718,6 +2718,11 @@ def get_fem_transient(
                 _fem_transient_progress["current"]["running"] = False
             # ── Summary block (masses, loss split, KV, efficiency, specific
             # torque/power) so the Simulation values table renders.  Built by the
+            # Stamp WHEN this run was solved — the UI shows it in the header so
+            # "is this the fresh result?" is answerable at a glance (a stale
+            # background tab was indistinguishable from a failed update).
+            from datetime import datetime as _dtm
+            _sbres["computed_at"] = _dtm.now().isoformat(timespec="seconds")
             # SHARED helper (_build_transient_summary) so the direct route, the
             # legacy remesh path AND the kernel/solver.em_transient path all use the
             # SAME formula and every run returns a populated `summary`.

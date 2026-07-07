@@ -3822,10 +3822,32 @@ def _build_transient_summary(
     _Pmag = _mean("P_mag_eddy_W")
     _Pshaft = _mean("P_shaft_eddy_W")   # solid-shaft eddy (bulk conductor)
 
+    # Voltage figures from the ACTUAL waveforms.  The old shortcuts
+    # (rms = pk/√2, line = √3·phase) hold only for a pure balanced sinusoid:
+    # on a concentrated winding the PHASE peak is inflated by the (large)
+    # triplen harmonics, which CANCEL in the line-to-line difference — the
+    # √3 shortcut then overstates the line peak by tens of percent (measured
+    # 121.6 V card vs 95 V real V_A−V_B on the 24s28p), which corrupts
+    # battery/inverter sizing.  Fall back to the shortcuts only when the
+    # per-frame series are missing (old stored runs).
+    import numpy as _np_v
     _Vpk = float(sbres.get("V_peak", 0.0))
     _Vrms = _Vpk / _math.sqrt(2)
     _Vlpk = _Vpk * _math.sqrt(3)
     _Vlrms = _Vlpk / _math.sqrt(2)
+    _vs = [sbres.get(k) for k in ("V_A", "V_B", "V_C")]
+    if all(isinstance(v, (list, tuple)) and len(v) == len(_vs[0]) and len(v) >= 4
+           for v in _vs):
+        _va, _vb, _vc = (_np_v.nan_to_num(_np_v.asarray(v, float),
+                                          nan=0.0, posinf=0.0, neginf=0.0)
+                         for v in _vs)
+        _Vpk = float(max(_np_v.max(_np_v.abs(p)) for p in (_va, _vb, _vc)))
+        _Vrms = float(_np_v.mean([_np_v.sqrt(_np_v.mean(p ** 2))
+                                  for p in (_va, _vb, _vc)]))
+        _lls = (_va - _vb, _vb - _vc, _vc - _va)
+        _Vlpk = float(max(_np_v.max(_np_v.abs(p)) for p in _lls))
+        _Vlrms = float(_np_v.mean([_np_v.sqrt(_np_v.mean(p ** 2))
+                                   for p in _lls]))
 
     # Total INCLUDES shaft eddy so the breakdown sums to the same loss the solver's
     # energy-balanced P_mech subtracts (else the card's Mech-power ≠ Σ losses).

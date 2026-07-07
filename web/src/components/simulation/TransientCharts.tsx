@@ -470,10 +470,15 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
       P_tot: data.P_loss_total_W[i],
       I_A:   data.I_A[i], I_B: data.I_B[i], I_C: data.I_C[i],
       V_A:   data.V_A[i], V_B: data.V_B[i], V_C: data.V_C[i],
-      // Line-to-line voltage — what a wye-connected inverter actually applies.
-      // Zero-sequence (triplen) content cancels in the difference by physics.
-      V_LL:  (Number.isFinite(data.V_A[i]) && Number.isFinite(data.V_B[i]))
+      // Line-to-line voltages — what a wye-connected inverter actually applies.
+      // Zero-sequence (triplen) content cancels in the differences by physics;
+      // any SHAPE difference between the three pairs is phase unbalance.
+      V_AB:  (Number.isFinite(data.V_A[i]) && Number.isFinite(data.V_B[i]))
                ? data.V_A[i] - data.V_B[i] : 0,
+      V_BC:  (Number.isFinite(data.V_B[i]) && Number.isFinite(data.V_C[i]))
+               ? data.V_B[i] - data.V_C[i] : 0,
+      V_CA:  (Number.isFinite(data.V_C[i]) && Number.isFinite(data.V_A[i]))
+               ? data.V_C[i] - data.V_A[i] : 0,
     }));
   }, [data, Tshown]);
 
@@ -562,30 +567,39 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
     return { rows: rows.map(r => ({ ...r, pct: v1 > 1e-9 ? (100 * r.amp / v1) : 0 })), v1, thd, thdLL };
   }, [data]);
 
-  // Line-to-line voltage harmonic spectrum — DFT of the ACTUAL V_AB = V_A − V_B
-  // waveform.  Triplen (3/9/15…) orders cancel in the difference by physics, so
-  // their bars sit at ≈0 here — the visual proof of why THD_LL excludes them.
-  // The THD of this curve IS the line-to-line THD a sinusoidal FOC drive fights
-  // (matches the summary THD_LL up to phase unbalance), and V₁_LL ≈ √3·V₁_phase.
+  // Line-to-line voltage harmonic spectrum — DFT of the ACTUAL differences
+  // V_A−V_B / V_B−V_C / V_C−V_A (3-pair magnitude average, same convention as
+  // the backend summary THD_LL).  Triplen (3/9/15…) orders cancel in the
+  // differences by physics, so their bars sit at ≈0 here — the visual proof of
+  // why THD_LL excludes them; residual triplen bars expose phase unbalance.
+  // The THD of this spectrum IS the line-to-line THD a sinusoidal FOC drive
+  // fights, and V₁_LL ≈ √3·V₁_phase.
   const vllHarm = React.useMemo(() => {
-    if (!data?.V_A?.length || !data?.V_B?.length
-        || data.V_B.length !== data.V_A.length) return null;
+    if (!data?.V_A?.length || !data?.V_B?.length || !data?.V_C?.length
+        || data.V_B.length !== data.V_A.length
+        || data.V_C.length !== data.V_A.length) return null;
     const N = data.V_A.length;
     const P = Math.max(1, Math.round(data.n_periods || 1));
     const hMax = Math.min(25, Math.floor(N / (2 * P)) - 1);
     if (hMax < 1) return null;
-    const vll = data.V_A.map((a, i) => {
-      const b = data.V_B[i];
-      return (Number.isFinite(a) && Number.isFinite(b)) ? a - b : 0;
-    });
+    const f = (x: number) => (Number.isFinite(x) ? x : 0);
+    const pairs = [
+      data.V_A.map((a, i) => f(a) - f(data.V_B[i])),
+      data.V_B.map((b, i) => f(b) - f(data.V_C[i])),
+      data.V_C.map((c, i) => f(c) - f(data.V_A[i])),
+    ];
     const rows = [];
     for (let h = 1; h <= hMax; h++) {
-      let re = 0, im = 0;
       const w = (2 * Math.PI * h * P) / N;
-      for (let n = 0; n < N; n++) {
-        re += vll[n] * Math.cos(w * n); im -= vll[n] * Math.sin(w * n);
+      let m = 0;
+      for (const vll of pairs) {
+        let re = 0, im = 0;
+        for (let n = 0; n < N; n++) {
+          re += vll[n] * Math.cos(w * n); im -= vll[n] * Math.sin(w * n);
+        }
+        m += (2 / N) * Math.hypot(re, im);
       }
-      rows.push({ order: h, amp: (2 / N) * Math.hypot(re, im) });
+      rows.push({ order: h, amp: m / pairs.length });
     }
     const v1 = rows[0].amp;
     const thd = v1 > 1e-9
@@ -972,13 +986,13 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
           </Box>
           )}
 
-          {/* ── Line-to-line voltage V_AB = V_A − V_B ── */}
+          {/* ── Line-to-line voltages V_AB / V_BC / V_CA ── */}
           <Box sx={{ height: 220 }}>
             <Typography sx={{ fontSize: 11, fontWeight: 700, color: '#94a3b8' }}>
-              Line-to-line voltage V_LL = V_A − V_B
+              Line-to-line voltages V_AB / V_BC / V_CA
               {vllHarm && <span style={{ color: '#475569', fontWeight: 400 }}>
                 {'  ·  '}V₁_LL ≈ {vllHarm.v1.toFixed(1)} V</span>}
-              <Tooltip title="The voltage a wye-connected inverter actually applies between two terminals. Zero-sequence (triplen) harmonics of the phase voltage cancel in the difference, so this waveform is cleaner than the phase one. V₁_LL ≈ √3 × V₁_phase." placement="top">
+              <Tooltip title="The voltages a wye-connected inverter actually applies between terminal pairs. Zero-sequence (triplen) harmonics cancel in the differences, so these waveforms are cleaner than the phase ones. In a perfectly balanced model the three curves are identical time-shifted copies — visible shape/amplitude differences between them are phase unbalance (e.g. sector-mesh seams)." placement="top">
                 <span style={{ color: '#475569', marginLeft: 6, fontSize: 11, cursor: 'help' }}>ⓘ</span>
               </Tooltip>
             </Typography>
@@ -993,8 +1007,21 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
                     position: 'insideLeft', offset: 12,
                     style: { fontSize: 10, fill: '#475569' } }}/>
                 <RcTooltip {...TOOLTIP}/>
-                <Line type="monotone" dataKey="V_LL" stroke="#a78bfa"
-                  name="V_LL" strokeWidth={2}
+                <Legend wrapperStyle={{ fontSize: 10 }}/>
+                <Line type="monotone" dataKey="V_AB" stroke="#a78bfa"
+                  name="V_AB" strokeWidth={2}
+                  dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
+                    r={3} fill={d.stroke} stroke="none"/>}
+                  activeDot={{ r: 5 }}
+                  isAnimationActive={false}/>
+                <Line type="monotone" dataKey="V_BC" stroke="#f472b6"
+                  name="V_BC" strokeWidth={2}
+                  dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
+                    r={3} fill={d.stroke} stroke="none"/>}
+                  activeDot={{ r: 5 }}
+                  isAnimationActive={false}/>
+                <Line type="monotone" dataKey="V_CA" stroke="#fbbf24"
+                  name="V_CA" strokeWidth={2}
                   dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
                     r={3} fill={d.stroke} stroke="none"/>}
                   activeDot={{ r: 5 }}

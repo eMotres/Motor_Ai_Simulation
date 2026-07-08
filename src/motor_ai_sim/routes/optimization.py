@@ -1077,11 +1077,48 @@ def _make_bline(base_m: Dict[str, Any], bump_m: Dict[str, Any],
             "current_b": float(bump_m.get("current_a", 0.0) or 0.0)}
 
 
-_RIPPLE_PEN_LAM = {"v": 0.0}   # >0 → _descent_cost penalises ripple over ripple_max
-                               # (set per run from DescentRequest.ripple_penalty_lambda;
-                               # one descent runs at a time, so a module global is safe)
+_RIPPLE_PEN_LAM = {"v": 0.0, "v0": 0.0}
+# "v"  = the LIVE ripple-penalty weight _descent_cost reads (escalated across
+#        box-walk rounds by the continuation ramp below).
+# "v0" = the run's INITIAL weight from DescentRequest.ripple_penalty_lambda; the
+#        ramp is disabled when v0 == 0 (ripple then stays a chart-only gate).
+# One descent runs at a time, so a module global is safe.
+_RIPPLE_RAMP      = 2.0    # ×λ per box-walk round while ripple is still over the gate
+_RIPPLE_RAMP_CAP  = 16.0   # λ never exceeds v0·cap (bounded escalation)
+_RIPPLE_OVER_TOL  = 0.3    # %-points slack before a design counts as "over the gate"
 _THD_PEN = {"lam": 0.0, "max": 5.0}   # >0 → _descent_cost penalises THD_LL_pct over
                                       # thd_max_pct (same per-run-global pattern)
+
+
+def _ripple_ramp_step(best_metrics: Dict[str, Any], ripple_max: float,
+                      rnd: int) -> Optional[Dict[str, Any]]:
+    """Augmented-Lagrangian-style penalty CONTINUATION for ripple.
+
+    If the round's best design still breaches the ripple gate and a penalty is
+    active (v0>0) but not yet at the cap, GROW the live weight so the next round
+    feels stronger pressure — the optimizer starts soft (free to explore torque/
+    efficiency) and is progressively forced under the ripple limit.  Returns an
+    event dict (for the range_events info feed) when it ramped, else None.
+
+    The user's ripple LIMIT + one starting λ is all that's needed: the algorithm
+    escalates on its own until the constraint holds or the cap is hit."""
+    v0 = float(_RIPPLE_PEN_LAM.get("v0", 0.0) or 0.0)
+    if v0 <= 0.0:
+        return None
+    rip = float(best_metrics.get("T_ripple_pct", 0.0) or 0.0)
+    if rip <= float(ripple_max) + _RIPPLE_OVER_TOL:
+        return None                                   # already under the gate
+    cur = float(_RIPPLE_PEN_LAM.get("v", v0) or v0)
+    cap = v0 * _RIPPLE_RAMP_CAP
+    if cur >= cap - 1e-9:
+        return None                                   # escalation exhausted
+    new = min(cur * _RIPPLE_RAMP, cap)
+    _RIPPLE_PEN_LAM["v"] = new
+    log.info("descent ripple RAMP: ripple %.2f%% > gate %.2f%% -> lambda %.3g -> %.3g",
+             rip, float(ripple_max), cur, new)
+    return {"iter": int(rnd), "name": "ripple_penalty", "side": "ramp",
+            "from": round(cur, 4), "to": round(new, 4),
+            "ripple": round(rip, 2), "gate": round(float(ripple_max), 2)}
 
 
 def _descent_cost(m: Dict[str, Any], base: Dict[str, Any],
@@ -1383,6 +1420,20 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                         var_specs, best["x"], boundary_margin)
             return grew
 
+        def _ramp_ripple(it_no: int) -> bool:
+            """Gradient-path twin of the CMA continuation: when the search would
+            otherwise converge but the incumbent still breaches the ripple gate,
+            escalate λ and keep going (re-score the incumbent under the new λ)."""
+            ev = _ripple_ramp_step(best["metrics"], ripple_max, it_no)
+            if ev is None:
+                return False
+            best["cost"], best["F"] = _descent_cost(
+                best["metrics"], base, ripple_max, w_eff, w_td, lam, v_peak_limit)
+            with _descent_lock:
+                _descent_state.setdefault("range_events", []).append(dict(ev))
+                _descent_state["best"] = _best_state()
+            return True
+
         history = [{"iter": 0, **_msum(base), "cost": round(cost0, 5), "F": round(F0, 5),
                     "x": {k: round(float(v), 4) for k, v in x.items()}}]
         all_pts = [p for p in [_pt(b, "baseline")] if p]   # every eval → objective-space point
@@ -1446,7 +1497,7 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                 # Flat gradient: pinned variables produce a zero component (both
                 # probes clamp onto the same edge point) — if that's the cause,
                 # auto-expand the window and keep going; else truly converged.
-                if _expand_pinned(it):
+                if _expand_pinned(it) or _ramp_ripple(it):
                     lr = max(lr, 3.0)
                     continue
                 break                  # flat → converged
@@ -1496,7 +1547,10 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
             if _expand_pinned(it):
                 lr = max(lr, 3.0)      # fresh territory → restore the step size
             elif (not improved) and lr < 0.05:
-                break                  # step too small, nothing pinned → converged
+                if _ramp_ripple(it):   # converged geometry-wise but ripple over gate
+                    lr = max(lr, 3.0)  #   → tighten the penalty and keep going
+                else:
+                    break              # step too small, nothing pinned → converged
 
         with _descent_lock:
             # Final boundary flags (the UI banner reads these for the gradient
@@ -1616,6 +1670,11 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
         all_pts = []; history = []
         n_evals = 0; it_global = 0
         cur_specs = [dict(v) for v in var_specs]
+        # Remember each variable's ORIGINAL window so the box-walk can GROW a
+        # pinned side (bounded to 4× the original span), like the gradient path.
+        for v in cur_specs:
+            v["lo0"] = float(v["lo"]); v["hi0"] = float(v["hi"])
+            v["span0"] = max(float(v["hi"]) - float(v["lo"]), 1e-9)
         rounds = max(1, int(max_rounds)) if auto_expand else 1
         boundary = []
 
@@ -1772,27 +1831,68 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
             with _descent_lock:
                 _descent_state["boundary"] = boundary
             soft = [f for f in boundary if not f["at_hard_limit"]]
-            if cancelled or not auto_expand or not soft:
+
+            # Ripple-penalty CONTINUATION: if the round's best still breaches the
+            # ripple gate, escalate λ so the NEXT round feels stronger pressure —
+            # and keep walking even if every variable already settled (the
+            # constraint, not the window, decides when the search is done).
+            ramp_ev = _ripple_ramp_step(best["metrics"], ripple_max, rnd + 1)
+            if ramp_ev is not None:
+                # Re-score the incumbent under the new λ so cross-round "< best"
+                # comparisons stay consistent with the escalated cost.
+                best["cost"], best["F"] = _descent_cost(
+                    best["metrics"], base, ripple_max, w_eff, w_td, lam, v_peak_limit)
+                with _descent_lock:
+                    _descent_state.setdefault("range_events", []).append(dict(ramp_ev))
+                    _descent_state["best"] = _bstate()
+
+            # Stop only when nothing is pinned AND ripple is under the gate
+            # (or the user disabled auto-continue / cancelled).
+            if cancelled or not auto_expand or (not soft and ramp_ev is None):
                 break
-            # re-centre the window on the optimum and walk again (next round)
+
+            # Re-centre the window on the optimum, then GROW any soft-pinned side
+            # so the next round explores fresh territory instead of only sliding
+            # (bounded to 4× the ORIGINAL span + the schema's physical limit).
             geo0 = dict(best["x"])
+            _pin = {f["name"]: f["pinned"] for f in soft}
             _old_win = {v["name"]: (float(v["lo"]), float(v["hi"])) for v in cur_specs}
             cur_specs = _recenter_specs(cur_specs, best["x"])
-            # Publish each moved window to the info feed (range_events) — same
-            # stream the gradient path's auto-expand uses, so the UI shows the
-            # box-walk regardless of algorithm.
+            for v in cur_specs:
+                side = _pin.get(v["name"])
+                if not side:
+                    continue
+                inc = max(0.5 * v["span0"], 3.0 * float(v["step"]))
+                if side == "high":
+                    nhi = min(float(v["hi"]) + inc, v["hi0"] + 4.0 * v["span0"])
+                    if v.get("hard_hi") is not None:
+                        nhi = min(nhi, float(v["hard_hi"]))
+                    v["hi"] = max(float(v["hi"]), nhi)
+                else:                                  # pinned "low"
+                    nlo = max(float(v["lo"]) - inc, v["lo0"] - 4.0 * v["span0"])
+                    if v.get("hard_lo") is not None:
+                        nlo = max(nlo, float(v["hard_lo"]))
+                    v["lo"] = min(float(v["lo"]), nlo)
+            # Publish moved/grown windows to the info feed (range_events) + refresh
+            # the live variables list, so the UI shows exactly what moved.
             with _descent_lock:
+                _descent_state["variables"] = [
+                    {"name": v["name"], "lo": v["lo"], "hi": v["hi"], "step": v["step"]}
+                    for v in cur_specs]
                 for v in cur_specs:
                     o = _old_win.get(v["name"])
                     if o and (abs(o[0] - float(v["lo"])) > 1e-12
                               or abs(o[1] - float(v["hi"])) > 1e-12):
+                        _grew = v["name"] in _pin
                         _descent_state.setdefault("range_events", []).append({
-                            "iter": int(rnd + 1), "name": v["name"], "side": "walk",
+                            "iter": int(rnd + 1), "name": v["name"],
+                            "side": "grow" if _grew else "walk",
                             "from": round(o[0], 6), "to": round(float(v["lo"]), 6),
                             "from_hi": round(o[1], 6), "to_hi": round(float(v["hi"]), 6),
                             "value": round(float(best["x"].get(v["name"], 0.0)), 6)})
-                        log.info("CMA box-walk: %s window [%.6g, %.6g] -> [%.6g, %.6g]",
-                                 v["name"], o[0], o[1], float(v["lo"]), float(v["hi"]))
+                        log.info("CMA box-%s: %s window [%.6g, %.6g] -> [%.6g, %.6g]",
+                                 "grow" if _grew else "walk", v["name"],
+                                 o[0], o[1], float(v["lo"]), float(v["hi"]))
 
         with _descent_lock:
             _descent_state["result"] = {
@@ -1880,7 +1980,10 @@ def descent_start(req: DescentRequest):
     v_peak_limit  = float(req.v_peak_limit) if float(req.v_peak_limit) > 0 else 1e9
     target_torque = max(0.0, float(req.target_torque_nm))
     # Ripple penalty (per-run; one descent at a time → module global is safe).
-    _RIPPLE_PEN_LAM["v"] = max(0.0, float(req.ripple_penalty_lambda or 0.0))
+    # v0 is the INITIAL weight; the box-walk ramp escalates "v" from it.
+    _rp0 = max(0.0, float(req.ripple_penalty_lambda or 0.0))
+    _RIPPLE_PEN_LAM["v"] = _rp0
+    _RIPPLE_PEN_LAM["v0"] = _rp0
     # THD penalty (CIANO FOC spec: clean line-to-line back-EMF; same pattern).
     _THD_PEN["lam"] = max(0.0, float(req.thd_penalty_lambda or 0.0))
     _THD_PEN["max"] = max(0.0, float(req.thd_max_pct or 5.0))

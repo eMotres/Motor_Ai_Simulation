@@ -145,9 +145,22 @@ const DescentPanel: React.FC = () => {
   // Ripple-gate enforcement weight in the optimizer cost (0 = off → ripple is only
   // trimmed on the chart). Persisted: forgetting a set λ on reload would silently
   // relaunch unconstrained runs.
+  // Ripple suppression is ON by default (λ=25, "soft pressure").  The backend
+  // now ESCALATES λ across box-walk rounds (penalty continuation) until ripple
+  // is under the gate, so a moderate start is all that's needed.  One-time
+  // migration seeds the default for users whose localStorage predates this
+  // (was hard-'0'); after that the field is fully user-controlled (0 = off).
   const [rippleLam, setRippleLam] = useState<number>(() => {
-    try { return Math.max(0, Number(JSON.parse(localStorage.getItem('opt.rippleLam') ?? '0')) || 0); }
-    catch { return 0; }
+    try {
+      const raw = localStorage.getItem('opt.rippleLam');
+      if (raw == null || localStorage.getItem('opt.rippleLamV2') == null) {
+        localStorage.setItem('opt.rippleLamV2', '1');
+        const seeded = raw == null ? 25 : Math.max(0, Number(JSON.parse(raw)) || 0) || 25;
+        localStorage.setItem('opt.rippleLam', JSON.stringify(seeded));
+        return seeded;
+      }
+      return Math.max(0, Number(JSON.parse(raw)) || 0);
+    } catch { return 25; }
   });
   const updRippleLam = (v: number) => {
     const x = Math.max(0, v || 0);
@@ -515,7 +528,7 @@ const DescentPanel: React.FC = () => {
               <ToggleButton value="product"       sx={{ px: 1, fontSize: 10 }}>η × T/mass</ToggleButton>
             </ToggleButtonGroup>
           </Tooltip>
-          <Tooltip title={`Ripple penalty weight λ. 0 = OFF: the ripple limit (${rippleMax.toFixed(1)}% from Operating points) is NOT enforced — ripple is only trimmed on the chart. λ > 0 adds cost += λ·max(0, ripple% − limit%)/100, so the optimizer actively avoids designs over the limit: ~25 = soft pressure, 100 = hard wall. Works with both objectives.`} placement="top">
+          <Tooltip title={`Ripple suppression — starting penalty weight λ (ON by default = 25). Adds cost += λ·max(0, ripple% − limit%)/100 against the limit (${rippleMax.toFixed(1)}% from Operating points). With Auto-walk on, the backend ESCALATES λ (×2 per round, up to 16× this start) until ripple falls under the limit, and keeps optimizing while ripple is still over — so this start value only sets how gently it begins: ~25 soft, 100 aggressive. 0 = OFF (ripple only trimmed on the chart, never felt by the optimizer).`} placement="top">
             <TextField label="ripple λ" type="number" size="small" value={rippleLam}
               onChange={e => updRippleLam(+e.target.value)}
               inputProps={{ min: 0, step: 5, style: { fontSize: 11, padding: '3px 6px', width: 44 } }}
@@ -701,15 +714,25 @@ const DescentPanel: React.FC = () => {
           <Typography variant="caption" sx={{ color: '#f59e0b', fontWeight: 600 }}>
             Auto-extended · {rangeSummary.length}
           </Typography>
-          <HelpTip title="Variable windows the server moved during the run because the optimum was pinned at an edge (Auto-walk / auto-expand). '→ [lo … hi]' = window re-centered on the round's best; 'min/max a → b' = one edge grown in place. Latest state per variable." />
-          {rangeSummary.map((e: any) => (
-            <Chip key={`${e.name}:${e.side}`} size="small" variant="outlined"
-              label={e.side === 'walk'
+          <HelpTip title="What the optimizer auto-adjusted during the run. 'var → [lo … hi]' = window re-centered on the round's best (box-walk); 'var grew [lo … hi]' = a pinned edge grown into fresh territory; 'min/max a → b' = one edge extended (gradient); 'ripple λ a → b' = ripple penalty escalated because ripple was still over the limit (penalty continuation). You set initial ranges + a starting λ — the algorithm moves both on its own." />
+          {rangeSummary.map((e: any) => {
+            const isRamp = e.side === 'ramp';
+            const isGrow = e.side === 'grow';
+            const clr = isRamp ? '#f472b6' : '#f59e0b';
+            const label = isRamp
+              ? `ripple λ ${e.from} → ${e.to}`
+              : e.side === 'walk'
                 ? `${e.name} → [${e.to} … ${e.to_hi}]`
-                : `${e.name} ${e.side === 'high' ? 'max' : 'min'} ${e.from} → ${e.to}`}
-              sx={{ height: 20, fontSize: 10, color: '#f59e0b',
-                    borderColor: 'rgba(245,158,11,0.45)' }} />
-          ))}
+                : isGrow
+                  ? `${e.name} grew [${e.to} … ${e.to_hi}]`
+                  : `${e.name} ${e.side === 'high' ? 'max' : 'min'} ${e.from} → ${e.to}`;
+            return (
+              <Chip key={`${e.name}:${e.side}`} size="small" variant="outlined"
+                label={label}
+                sx={{ height: 20, fontSize: 10, color: clr,
+                      borderColor: `${clr}73` }} />
+            );
+          })}
         </Box>
       )}
 

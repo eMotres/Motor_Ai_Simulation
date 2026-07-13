@@ -4959,8 +4959,12 @@ def fem_transient_sliding_band(
         # does not.  This is the efficiency lever that makes the dense block cheap.
         _slip_per_period = 48
         n_slip_eff = pole_pairs * _slip_per_period
-    if _SLIP_PER_PERIOD_OVERRIDE and _full_ring:        # advanced: force ring density
-        _slip_per_period = int(_SLIP_PER_PERIOD_OVERRIDE)
+    if _SLIP_PER_PERIOD_OVERRIDE:        # advanced: force ring density (dev flag —
+        # decouples ring-count/mesh convergence studies from the adaptive
+        # slip(gap_layers) coupling).  Snapped UP to the 24k grid so the wedge
+        # node counts (n_slip/n_sectors) stay integral for sector models too.
+        _spo = int(_SLIP_PER_PERIOD_OVERRIDE)
+        _slip_per_period = 24 * max(1, math.ceil(_spo / 24.0))
         n_slip_eff = pole_pairs * _slip_per_period
 
     # ── Snap steps/period so the rotor lands on whole slip nodes ──────────

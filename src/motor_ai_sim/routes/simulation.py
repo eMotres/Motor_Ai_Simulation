@@ -3886,6 +3886,9 @@ def _build_transient_summary(
         "T_ripple_raw_pct": round(float(sbres.get("T_ripple_raw_pct", 0.0)), 1),
         "T_ripple_filt_pct": round(float(sbres.get("T_ripple_filt_pct",
                                                    sbres.get("T_ripple_pct", 0.0))), 1),
+        # Mesh-noise floor: RMS of the forbidden (non-6·k) torque orders, % of
+        # mean torque — how much numerical noise the 6·k gate removed.
+        "T_noise_floor_pct": round(float(sbres.get("T_noise_floor_pct", 0.0)), 2),
         "P_mech_W": round(_Pmech, 1),
         "V_phase_peak_V": round(_Vpk, 1),
         "V_phase_rms_V": round(_Vrms, 1),

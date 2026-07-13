@@ -121,7 +121,12 @@ _SB_MOVING_BAND = False
 # every torque contour), NOT the gap coupling; the band's coarse strip happens to
 # low-pass it while the macroelement faithfully captures + (via virtual work) amplifies
 # it.  Kept behind this flag (default OFF → production uses the band) for reference.
-_SB_AIRGAP_MACRO = False
+# 2026-07-08: env-gated (SB_AIRGAP_MACRO=1) so it can be re-tested ON TOP OF the
+# structured (mapped) gap — the 2026-06-30 verdict above was measured on the FREE
+# mesh, where the macroelement faithfully passed the tooth-discretisation noise;
+# on the clean structured field the two are complementary (cells clean the field,
+# the macro gives a smooth, continuous-angle coupling).
+_SB_AIRGAP_MACRO = _os_sb.environ.get("SB_AIRGAP_MACRO", "0") == "1"
 # Structured (concentric-ring) air gap: partition EACH half-gap (rotor OD->R1 and
 # R2->stator bore) into `gap_layers` thin annular rows bounded by uniform N-gon rings
 # on the slip angular grid -> the gap meshes as an ANSYS-style structured band
@@ -4061,10 +4066,13 @@ def band_limit_torque(T_series, n_steps_per_period, n_periods):
     simply KEEP THE MULTIPLES OF 6 and drop the rest — no amplitude threshold, no
     special-casing.  The MEAN (calibrated average torque) is preserved exactly.
 
-    Returns (T_phys_list, ripple_phys_pct, ripple_raw_pct)."""
+    Returns (T_phys_list, ripple_phys_pct, ripple_raw_pct, noise_floor_pct) —
+    noise_floor_pct = RMS of the DISCARDED (forbidden-order) content as % of the
+    mean torque: an honest, always-visible measure of how much numerical mesh
+    noise the solve carried (0 on a perfectly converged mesh)."""
     x = np.asarray(T_series, float); n = x.size
     if n == 0:
-        return [], 0.0, 0.0
+        return [], 0.0, 0.0, 0.0
     avg = float(x.mean())
     def _pp(arr):
         return (100.0 * (float(arr.max()) - float(arr.min())) / abs(avg)
@@ -4073,12 +4081,14 @@ def band_limit_torque(T_series, n_steps_per_period, n_periods):
     nper = max(1, int(round(n_periods)))
     step = 6 * nper                                  # electrical order 6 → bin 6·nper
     if n < 2 * step:                                 # too few frames to resolve order 6
-        return x.tolist(), raw_rip, raw_rip
+        return x.tolist(), raw_rip, raw_rip, 0.0
     F = np.fft.rfft(x - avg)
     G = np.zeros_like(F)
     G[step:F.size:step] = F[step:F.size:step]        # keep DC + every 6·k harmonic
     xf = np.fft.irfft(G, n=n) + avg
-    return xf.tolist(), _pp(xf), raw_rip
+    noise = (100.0 * float(np.sqrt(np.mean((x - xf) ** 2))) / abs(avg)
+             if abs(avg) > 1e-9 else 0.0)
+    return xf.tolist(), _pp(xf), raw_rip, noise
 
 
 class _SignedUF:
@@ -6027,7 +6037,7 @@ def fem_transient_sliding_band(
     # INSTANTLY without a 30 s re-solve.  band_limit_torque preserves the mean
     # exactly, so T_avg is identical for raw and filtered.
     _T_raw = list(T_series)
-    _T_filt, Trip_filt, Trip_raw = band_limit_torque(
+    _T_filt, Trip_filt, Trip_raw, Tnoise_pct = band_limit_torque(
         T_series, n_steps_per_period, n_periods)
     # T_em_Nm follows the toggle for back-compat (saved sims + server summary);
     # the UI uses the explicit T_em_raw_Nm / T_em_filt_Nm fields below to flip
@@ -6487,6 +6497,9 @@ def fem_transient_sliding_band(
             (k / n_total) * period_mech * n_periods for k in range(n_total)],
         "T_em_Nm": T_series, "T_avg_Nm": Tavg, "T_ripple_pct": Trip,
         "T_ripple_raw_pct": Trip_raw, "T_ripple_filt_pct": Trip_filt,
+        # RMS of the forbidden (non-6·k) torque orders as % of mean torque —
+        # the mesh-noise floor the 6·k gate removed.  ~0 on a converged mesh.
+        "T_noise_floor_pct": round(float(Tnoise_pct), 2),
         # Both reconstructions — the UI toggles between them client-side (no
         # re-solve) when the "Torque filter" checkbox is flipped.
         "T_em_raw_Nm": _T_raw, "T_em_filt_Nm": _T_filt,

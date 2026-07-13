@@ -1352,10 +1352,19 @@ async def build_fem_mesh_2d_sliding_band(
     # moving band's mid±δ split has no triangles there and would show as a black
     # strip in the display.
     _full_ring_view = int(n_sectors) <= 1
+    # Slip-ring density: SAME adaptive formula as the transient solver, so the
+    # Mesh tab shows the mesh the solver actually uses (it used to fall back to
+    # the global default ring — a DIFFERENT, coarser grid than any solve).
+    try:
+        _pp_v = max(1, int(round(float(_pd.get("num_poles", 20)))) // 2)
+    except Exception:
+        _pp_v = 10
+    _slip_base_v = int(round(1008.0 * (max(1.0, float(gap_layers)) + 2.0) / 3.0))
+    _n_slip_v = _pp_v * 24 * max(5, _math.ceil(_slip_base_v / (24 * _pp_v)))
     polys = _simplify_polys(polys, tol_mm=surface_deviation,
                              stator_fillet_mm=stator_fillet_mm,
                              normal_dev_deg=normal_deviation,
-                             band_mode="merged",
+                             band_mode="merged", n_slip=_n_slip_v,
                              gap_layers=gap_layers, structured_gap=structured_gap)
     # in_band / out_band now come straight from get_2d_polygons (full inner
     # air disk + outer air annulus), so the old air-gap-splitting motion

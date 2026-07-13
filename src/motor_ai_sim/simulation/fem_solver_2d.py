@@ -146,6 +146,15 @@ _SB_IRON_RESAMPLE = _os_sb.environ.get("SB_IRON_RESAMPLE", "0") == "1"
 # gap coupling (see _SB_AIRGAP_MACRO / #141), so this mainly regularises the gap mesh
 # and the slip re-pairing noise -- MEASURE before trusting it to move ripple.
 _SB_STRUCTURED_GAP = _os_sb.environ.get("SB_STRUCTURED_GAP", "0") == "1"
+# BELT: the DEFAULT implementation behind the structured_gap toggle.  The gap
+# annulus (r_ro→mid→r_si) is built directly in numpy — K uniform rings × the
+# n_slip angular grid per half — and WELDED into the gmsh half-mesh by exact
+# node identity: the iron and the pocket/mouth air are resampled onto the same
+# slip grid, so every belt boundary node coincides bit-for-bit with a half-mesh
+# node.  No OCC cells, no arc snapping, no fragment — the whole class of
+# silent-drop / seam-snap / subdivided-arc failures of route A disappears.
+# SB_BELT=0 falls back to the legacy route-A OCC cells (kept for comparison).
+_SB_BELT = _os_sb.environ.get("SB_BELT", "1") == "1"
 # STRUCTURED gap ε retract (mm): how far the gap-facing iron is pulled off the
 # transfinite cell arcs so its fuzzy polygon vertices do not subdivide them.
 # None → the code default (0.01).  Diagnostic override hook (torque/ε studies).
@@ -464,7 +473,10 @@ def _simplify_polys(polys: dict, tol_mm: float = 0.005,
             # slip grid, mouth/pocket corners preserved exactly.  Re-collect
             # rotor_solids afterwards so the band construction below uses the
             # resampled iron.
-            if _SB_IRON_RESAMPLE and _gap_est > 0.05:
+            _belt_mode = _SB_BELT and (bool(structured_gap) or _SB_STRUCTURED_GAP)
+            if (_SB_IRON_RESAMPLE or _belt_mode) and _gap_est > 0.05:
+                # (forced in belt mode: the belt welds by node IDENTITY, so the
+                # iron boundary must sit exactly on the slip grid)
                 if out.get("rotor") is not None:
                     out["rotor"] = _resample_ring_arcs(out["rotor"], _r_ro_est, _N)
                 if out.get("stator") is not None:
@@ -647,7 +659,17 @@ def _simplify_polys(polys: dict, tol_mm: float = 0.005,
                     # 10 µm simplify collapses near-duplicate points the boolean
                     # ops leave (else the OCC loop-closure fails after the sector
                     # clip). 10 µm ≪ the 200 µm gap.
-                    in_band = in_band.simplify(0.01, preserve_topology=True)
+                    # BELT welds by node identity: the ring-subtraction vertices
+                    # (exact slip-grid points) MUST survive.  10 µm simplify
+                    # collapses the 0.4 µm-sagitta slip arcs into ~1.4° chords
+                    # (measured — the route-A pocket-hole story); 0.1 µm still
+                    # kills true boolean duplicates but keeps every grid vertex.
+                    in_band = in_band.simplify(
+                        (1e-4 if _belt_mode else 0.01), preserve_topology=True)
+                    if _belt_mode:
+                        # ring subtraction can leave PINCHED (self-touching)
+                        # polygons — split them or the OCC loop fails
+                        in_band = _split_geom_pinches(in_band)
                     out["in_band"] = in_band
                 # out_band = free outer air (annulus mid_r→r_out − stator) with the
                 # gap ring mid_r→r_si SUBTRACTED, so the cells own it, then clipped
@@ -664,7 +686,10 @@ def _simplify_polys(polys: dict, tol_mm: float = 0.005,
                 if not out_band.is_valid: out_band = out_band.buffer(0)
                 out_band = _drop_tiny(out_band)
                 if out_band is not None:
-                    out_band = out_band.simplify(0.01, preserve_topology=True)
+                    out_band = out_band.simplify(
+                        (1e-4 if _belt_mode else 0.01), preserve_topology=True)
+                    if _belt_mode:
+                        out_band = _split_geom_pinches(out_band)
                     out["out_band"] = out_band
                 # Spec consumed by build_mesh_from_polygons (per half).  It knows
                 # its own n_sectors and picks S (sectors/wedge) + M (arc divisions)
@@ -1240,7 +1265,17 @@ def _build_sliding_band_meshes(
         _si = float(geo_cfg.get("stator_inner_radius", 0.0))
         _slip_r = 0.5 * (_ro + _si) if (_ro > 0 and _si > _ro) else None
     # Structured-strip offset rings (mid±δ): keep their seeded vertices too.
-    _extra_tf = polys.get("transfinite_ring_radii_mm") or []
+    _extra_tf = list(polys.get("transfinite_ring_radii_mm") or [])
+    # BELT: pin the gap-facing boundary circles (rotor OD r_ro, stator bore
+    # r_si) as transfinite rings — every boundary Line keeps EXACTLY its two
+    # endpoint vertices as mesh nodes.  Without this gmsh re-samples the
+    # boundary at its own density and the belt's node-identity weld finds
+    # nothing to weld to (measured: nodes at arbitrary angles, r off by the
+    # chord sagitta).  Same machinery that keeps the mid slip ring exact.
+    if _SB_BELT:
+        _bsp = polys.get("structured_gap_spec")
+        if _bsp:
+            _extra_tf = _extra_tf + [float(_bsp["r_ro"]), float(_bsp["r_si"])]
 
     # Map the air domains onto the keys the mesh builder recognises:
     #   rotor half:  in_band  → "air_gap"   (DOM_AIRGAP)
@@ -1311,6 +1346,16 @@ def _build_sliding_band_meshes(
             mesh_r, tags_r, classify_r = _stitch_full_half(
                 polys_r_for_mesh, DOM_AIRGAP,
                 dict(_common_kw, rotational_period_deg=_pole_period))
+        # BELT: weld each half's numpy-built gap annulus in (node identity —
+        # boundaries were resampled onto the slip grid).  BEFORE the rotor
+        # rotation: the rotor's belt slice rotates rigidly with it.
+        if _SB_BELT:
+            _bs = polys_s.get("structured_gap_spec")
+            _br = polys_r.get("structured_gap_spec")
+            if _bs:
+                mesh_s, tags_s = _weld_belt_into_half(mesh_s, tags_s, _bs, "stator", 1)
+            if _br:
+                mesh_r, tags_r = _weld_belt_into_half(mesh_r, tags_r, _br, "rotor", 1)
         if abs(rotor_angle_deg) > 1e-9:
             mesh_r = type(mesh_r)(_rotate_mesh_points(mesh_r.p, rotor_angle_deg),
                                    mesh_r.t)
@@ -1362,6 +1407,17 @@ def _build_sliding_band_meshes(
         mesh_r, tags_r, classify_r = build_mesh_from_polygons(
             polys_r_for_mesh, n_sectors=n_sectors,
             rotational_period_deg=_pole_period, **_common_kw)
+
+    # BELT on the sector build: the open belt slice's cut columns land exactly
+    # on the radial cuts (grid angles), so the sector master–slave pairing
+    # picks them up like any other cut node.
+    if _SB_BELT:
+        _bs = polys_s.get("structured_gap_spec")
+        _br = polys_r.get("structured_gap_spec")
+        if _bs:
+            mesh_s, tags_s = _weld_belt_into_half(mesh_s, tags_s, _bs, "stator", n_sectors)
+        if _br:
+            mesh_r, tags_r = _weld_belt_into_half(mesh_r, tags_r, _br, "rotor", n_sectors)
 
     # Apply rotor rotation as a rigid body — node coords only, topology
     # unchanged.  This is the heart of sliding-band: every frame just
@@ -1766,6 +1822,70 @@ def build_periodic_coil_mesh(geo_cfg: dict, num_slots: int,
 _SG_M_TARGET = int(_os_sb.environ.get("SB_SG_M_TARGET", "14") or 14)
 
 
+def _split_ring_pinches(ring):
+    """A ring visiting the same point twice (non-consecutively) is a PINCH —
+    two loops touching at a node.  Shapely tolerates it; OCC rejects the curve
+    loop ('Curve loop is not closed', a figure-eight).  Split into separate
+    loops at every pinch (recursively).  ``ring`` = list of (x, y), open."""
+    ring = list(ring)
+    seen = {}
+    for idx, p in enumerate(ring):
+        k = (round(p[0], 7), round(p[1], 7))
+        if k in seen:
+            a = seen[k]
+            inner = ring[a:idx]
+            outer = ring[:a] + ring[idx:]
+            out = []
+            if len(inner) >= 3:
+                out += _split_ring_pinches(inner)
+            if len(outer) >= 3:
+                out += _split_ring_pinches(outer)
+            return out
+        seen[k] = idx
+    return [ring]
+
+
+def _split_geom_pinches(geom):
+    """Apply _split_ring_pinches to every polygon of a (Multi)Polygon; holes
+    are re-attached to whichever part contains them."""
+    from shapely.geometry import Polygon as _P, MultiPolygon as _MP
+    if geom is None or getattr(geom, "is_empty", True):
+        return geom
+    def _one(p):
+        try:
+            rings = _split_ring_pinches(list(p.exterior.coords)[:-1])
+            if len(rings) == 1:
+                return [p]
+            holes = [list(h.coords)[:-1] for h in p.interiors]
+            parts = []
+            for ring in rings:
+                q = _P(ring)
+                if not q.is_valid:
+                    q = q.buffer(0)
+                if q is None or q.is_empty:
+                    continue
+                own = [h for h in holes
+                       if len(h) >= 3 and q.contains(_P(h).representative_point())]
+                if own:
+                    q = _P(ring, own)
+                    if not q.is_valid:
+                        q = q.buffer(0)
+                for gg in (q.geoms if hasattr(q, "geoms") else [q]):
+                    if gg.geom_type == "Polygon" and not gg.is_empty:
+                        parts.append(gg)
+            return parts if parts else [p]
+        except Exception:
+            return [p]
+    geoms = geom.geoms if hasattr(geom, "geoms") else [geom]
+    parts = []
+    for g in geoms:
+        if g.geom_type == "Polygon":
+            parts.extend(_one(g))
+    if not parts:
+        return geom
+    return _MP(parts) if len(parts) > 1 else parts[0]
+
+
 def _resample_ring_arcs(geom, r_ring: float, n_grid: int, tol_mm: float = 0.02):
     """Return `geom` with every boundary run lying ON the circle r≈r_ring
     resampled to the UNIFORM angular grid (n_grid points per revolution),
@@ -1778,6 +1898,15 @@ def _resample_ring_arcs(geom, r_ring: float, n_grid: int, tol_mm: float = 0.02):
     step = 2.0 * math.pi / max(8, int(n_grid))
 
     def _ring(coords):
+        # VERTEX-INDEPENDENT run detection.  Deciding "on the ring" per VERTEX
+        # (|r−r_ring|<tol) made tooth/pocket corners flip in or out of a run
+        # depending on where the CadQuery fillet polygonisation happened to put
+        # a vertex — DIFFERENT per tooth → per-tooth snap differences → broken
+        # slot symmetry (forbidden torque orders) + inflated cogging.  Instead:
+        # find the CONTINUOUS angles where the boundary crosses the circle
+        # r = r_ring − δ (linear interpolation along segments — identical for
+        # every tooth up to the µm polygonisation), and replace everything
+        # above that circle with grid nodes k ∈ [ceil(θin/step), floor(θout/step)].
         pts = [(float(x), float(y)) for x, y in coords]
         if len(pts) > 1 and math.hypot(pts[0][0]-pts[-1][0], pts[0][1]-pts[-1][1]) < 1e-12:
             pts = pts[:-1]
@@ -1789,60 +1918,224 @@ def _resample_ring_arcs(geom, r_ring: float, n_grid: int, tol_mm: float = 0.02):
         if not on.any():
             return coords
         if bool(on.all()):
-            # full circle at r_ring → pure uniform ring
             return [(r_ring*math.cos(step*k), r_ring*math.sin(step*k))
                     for k in range(max(8, int(n_grid)))]
-        # rotate so index 0 is OFF-ring (wrap-around run bug — see arc-ring fix)
+        # rotate so index 0 is OFF-ring → every run is contiguous (wrap-around
+        # runs split across the array boundary caused the pocket-hole bug)
         if bool(on[0]):
             k0 = int(_np.argmin(on))
             pts = pts[k0:] + pts[:k0]
+            r = _np.roll(r, -k0)
             on = _np.roll(on, -k0)
+
+        delta = min(tol_mm * 0.2, 0.005)
+
+        def _cross_angle(i_on, i_off):
+            """CONTINUOUS run-end angle: where the boundary leaves the ring,
+            interpolated on the segment on→off at r_ring ± δ (the off side's
+            own side).  Vertex-placement independent — a fillet vertex landing
+            just in/out of the tol window moves this by µm, not by a segment,
+            so every tooth/pocket snaps IDENTICALLY."""
+            pa, ra = pts[i_on % n], r[i_on % n]
+            pb, rb = pts[i_off % n], r[i_off % n]
+            r_c = r_ring + (delta if rb > r_ring else -delta)
+            t = (r_c - ra) / (rb - ra) if abs(rb - ra) > 1e-12 else 0.0
+            t = min(1.0, max(0.0, t))
+            x = pa[0] + t * (pb[0] - pa[0]); y = pa[1] + t * (pb[1] - pa[1])
+            return math.atan2(y, x)
+
         out = []
+        def _push(p):
+            if not out or math.hypot(p[0]-out[-1][0], p[1]-out[-1][1]) > 1e-9:
+                out.append(p)
         i = 0
         while i < n:
             if not on[i]:
-                out.append(pts[i]); i += 1
+                _push(pts[i]); i += 1
                 continue
             j = i
             while j < n and on[j]:
                 j += 1
-            a0 = math.atan2(pts[i][1], pts[i][0])
-            a1 = math.atan2(pts[j-1][1], pts[j-1][0])
-            while a1 - a0 > math.pi:  a1 -= 2*math.pi
-            while a1 - a0 < -math.pi: a1 += 2*math.pi
-            out.append(pts[i])                       # exact run start
-            if abs(a1 - a0) > 1.5 * step:
-                kk0 = int(math.floor(min(a0, a1) / step)) - 1
-                kk1 = int(math.ceil(max(a0, a1) / step)) + 1
-                ks = [k for k in range(kk0, kk1 + 1)
-                      if min(a0, a1) + 0.25*step < step*k < max(a0, a1) - 0.25*step]
-                if a1 < a0:
-                    ks = ks[::-1]
-                out.extend((r_ring*math.cos(step*k), r_ring*math.sin(step*k))
-                           for k in ks)
-            if j - 1 > i:
-                out.append(pts[j-1])                 # exact run end
+            a_in = _cross_angle(i, i - 1)
+            a_out = _cross_angle(j - 1, j % n)
+            a_mid = math.atan2(pts[(i + j - 1) // 2][1], pts[(i + j - 1) // 2][0])
+            while a_in - a_mid > math.pi:  a_in -= 2*math.pi
+            while a_in - a_mid < -math.pi: a_in += 2*math.pi
+            while a_out - a_mid > math.pi:  a_out -= 2*math.pi
+            while a_out - a_mid < -math.pi: a_out += 2*math.pi
+            lo, hi = (a_in, a_out) if a_out >= a_in else (a_out, a_in)
+            # ROUND (not ceil/floor) both ends: the iron run and the adjacent
+            # pocket/mouth run share the SAME physical crossing angle, so
+            # rounding makes them meet at the SAME grid node — ceil/floor made
+            # each retreat inward, leaving an uncovered node between domains
+            # (belt weld deficit, one gap node per pocket edge).
+            k_lo = int(round(lo / step))
+            k_hi = int(round(hi / step))
+            ks = list(range(k_lo, k_hi + 1))
+            if a_out < a_in:
+                ks = ks[::-1]
+            if not ks:
+                ks = [int(round(0.5 * (lo + hi) / step))]
+            for k in ks:
+                _push((r_ring*math.cos(step*k), r_ring*math.sin(step*k)))
             i = j
+        # De-spike: two runs separated by a tiny off-ring dip can snap to the
+        # SAME grid node → ... K, dip, K ... = a zero-area bow-tie that breaks
+        # the OCC curve loop ("Curve loop is not closed", seen at gap_layers=2
+        # where the slip grid is coarser).  Collapse A,B,A → A repeatedly.
+        changed = True
+        while changed and len(out) >= 3:
+            changed = False
+            m = len(out)
+            for a in range(m):
+                if (math.hypot(out[a][0]-out[(a+2) % m][0],
+                               out[a][1]-out[(a+2) % m][1]) < 1e-9):
+                    hi_i, lo_i = sorted(((a+1) % m, (a+2) % m), reverse=True)
+                    del out[hi_i]; del out[lo_i]
+                    changed = True
+                    break
         return out
+
+    _split_pinches = _split_ring_pinches
 
     def _poly(p):
         try:
-            q = _P(_ring(p.exterior.coords),
-                   [_ring(h.coords) for h in p.interiors])
-            if not q.is_valid:
-                q = q.buffer(0)
-            return q if (q and not q.is_empty) else p
+            rings = _split_pinches(_ring(p.exterior.coords))
+            holes = [_ring(h.coords) for h in p.interiors]
+            parts = []
+            for ring in rings:
+                q = _P(ring)
+                if not q.is_valid:
+                    q = q.buffer(0)
+                if q is None or q.is_empty:
+                    continue
+                # attach each hole to the part that contains it
+                own = [h for h in holes
+                       if len(h) >= 3 and q.contains(_P(h).representative_point())]
+                if own:
+                    q = _P(ring, own)
+                    if not q.is_valid:
+                        q = q.buffer(0)
+                for gg in (q.geoms if hasattr(q, "geoms") else [q]):
+                    if gg.geom_type == "Polygon" and not gg.is_empty:
+                        parts.append(gg)
+            return parts if parts else [p]
         except Exception:
-            return p
+            return [p]
 
     if geom is None or geom.is_empty:
         return geom
     if geom.geom_type == "Polygon":
-        return _poly(geom)
+        parts = _poly(geom)
+        return _MP(parts) if len(parts) > 1 else parts[0]
     if hasattr(geom, "geoms"):
-        parts = [_poly(g) for g in geom.geoms if g.geom_type == "Polygon"]
+        parts = []
+        for g in geom.geoms:
+            if g.geom_type == "Polygon":
+                parts.extend(_poly(g))
         return _MP(parts) if len(parts) > 1 else (parts[0] if parts else geom)
     return geom
+
+
+def _weld_belt_into_half(mesh, tags, spec: dict, half: str, n_sectors: int):
+    """BELT: build this half's gap slice (r_lo→r_hi from ``spec``) directly in
+    numpy — K uniform radial rings × the n_slip angular grid — and weld it into
+    the gmsh half-mesh by EXACT node identity (the iron / pocket / mouth
+    boundaries were resampled onto the same grid, so the belt's inner boundary
+    nodes coincide bit-for-bit with existing mesh nodes).
+
+    Returns (mesh, tags) with the belt merged in; raises on a weld deficit
+    (missing coincident nodes = the boundary was NOT on the grid → would leave
+    a crack; better to fail loudly than solve a torn field)."""
+    from scipy.spatial import cKDTree as _KD
+
+    N = int(spec["n_slip"])
+    K = max(1, int(spec["K"]))
+    r_lo = float(spec["r_lo"]) * 1e-3      # mm → m (mesh coords are metres)
+    r_hi = float(spec["r_hi"]) * 1e-3
+    ns = max(1, int(n_sectors))
+    full = (ns == 1)
+    cols = N if full else (N // ns + 1)    # open sector keeps both cut columns
+    ang0 = 2.0 * math.pi / N
+    span = (2.0 * math.pi) if full else (2.0 * math.pi / ns)
+
+    P = np.asarray(mesh.p, float); T = np.asarray(mesh.t, np.int64)
+    n0 = P.shape[1]
+
+    # ── The belt's IRON-side row is the mesh's OWN boundary ring ────────────
+    # Take the ACTUAL half-mesh nodes sitting on the iron-side circle (r_lo
+    # for the rotor half, r_hi for the stator half) and stitch the first belt
+    # row onto them with a two-pointer seam triangulation.  Conformity is then
+    # guaranteed BY CONSTRUCTION for any boundary the mesher produced — no
+    # node-identity assumption, no weld deficit (pocket corners, segment gaps
+    # and other boundary irregularities are absorbed by the seam row).
+    r_iron = r_lo if half == "rotor" else r_hi
+    rP = np.hypot(P[0], P[1])
+    ring_idx = np.where(np.abs(rP - r_iron) < 2e-6)[0]        # ±2 µm
+    if ring_idx.size < 8:
+        raise ValueError(f"belt[{half}]: only {ring_idx.size} mesh nodes on the "
+                         f"iron circle r={r_iron*1e3:.4f}mm — boundary not on the ring")
+    angP = np.arctan2(P[1, ring_idx], P[0, ring_idx])
+    if full:
+        order = np.argsort(angP)
+        iron = ring_idx[order]; iron_a = angP[order]
+    else:
+        angP = np.mod(angP, 2.0 * math.pi)
+        sel = (angP > -1e-9) & (angP < span + 1e-9)
+        order = np.argsort(angP[sel])
+        iron = ring_idx[sel][order]; iron_a = angP[sel][order]
+
+    # uniform rows: seam row at the iron radius offset is not needed — rows
+    # start at the FIRST uniform ring (one layer in) and go to the slip side.
+    rows_r = (np.linspace(r_lo, r_hi, K + 1)[1:] if half == "rotor"
+              else np.linspace(r_lo, r_hi, K + 1)[:-1][::-1])
+    # rows_r[0] is the ring adjacent to the iron; rows_r[-1] is the slip ring
+    aa = np.arange(cols) * ang0
+    bp_rows = []
+    for r_ in rows_r:
+        bp_rows.append(np.vstack([r_ * np.cos(aa), r_ * np.sin(aa)]))
+    bp = np.hstack(bp_rows)                                   # (2, K*cols)
+    bdom = DOM_AIRGAP if half == "rotor" else DOM_OUTER
+
+    def _uid(j, i):        # uniform-grid node id (global, after concat)
+        return n0 + j * cols + (i % cols if full else min(i, cols - 1))
+
+    tri = []
+    # ── seam: iron boundary nodes ↔ first uniform ring (two-pointer merge) ──
+    m = iron.size
+    ia = 0; ib = 0
+    a_ext = np.concatenate([iron_a, iron_a[:1] + (2.0 * math.pi if full else 0.0)])
+    ncell = cols if full else cols - 1
+    b_ext = np.concatenate([aa, [aa[-1] + ang0] if full else [aa[-1]]])
+    total_a = m if full else m - 1
+    total_b = ncell
+    while ia < total_a or ib < total_b:
+        adv_a = (ia < total_a) and (ib >= total_b or a_ext[ia + 1] <= b_ext[ib + 1])
+        if adv_a:
+            tri.append((int(iron[ia % m]), int(iron[(ia + 1) % m]), _uid(0, ib)))
+            ia += 1
+        else:
+            tri.append((int(iron[ia % m]), _uid(0, ib + 1), _uid(0, ib)))
+            ib += 1
+    # ── uniform quads between successive rings ──
+    for j in range(len(rows_r) - 1):
+        for i in range(ncell):
+            a = _uid(j, i); b = _uid(j, i + 1)
+            c = _uid(j + 1, i); d = _uid(j + 1, i + 1)
+            tri.append((a, b, d)); tri.append((a, d, c))
+    bt = np.asarray(tri, dtype=np.int64).T
+
+    Pall = np.hstack([P, bp])
+    Tall = np.hstack([T, bt])
+    tags_all = np.concatenate([np.asarray(tags),
+                               np.full(bt.shape[1], bdom, dtype=np.asarray(tags).dtype)])
+    # drop degenerate tris (duplicate iron nodes etc.)
+    good = ((Tall[0] != Tall[1]) & (Tall[1] != Tall[2]) & (Tall[0] != Tall[2]))
+    mesh_out = type(mesh)(Pall, np.ascontiguousarray(Tall[:, good]))
+    tags_out = tags_all[good]
+    log.info("belt[%s]: %d iron boundary nodes, %d uniform rings x %d, %d tris",
+             half, m, len(rows_r), ncell, bt.shape[1])
+    return mesh_out, tags_out
 
 
 def _structured_gap_sm(n_slip: int, n_sectors: int,
@@ -2180,6 +2473,20 @@ def build_mesh_from_polygons(polys: dict,
                 out.pop()
             return out
 
+        # Memoised point adder: identical coordinates (to 0.1 nm) reuse ONE OCC
+        # point tag, so near-coincident polygon vertices produce a==b segments
+        # (skipped) instead of ~zero-length lines OCC rejects — which used to
+        # leave the curve loop OPEN ("Curve loop is not closed" build failure).
+        _occ_ptcache: Dict[Tuple[float, float], int] = {}
+
+        def _occ_pt(x: float, y: float) -> int:
+            _k = (round(x, 7), round(y, 7))
+            _t = _occ_ptcache.get(_k)
+            if _t is None:
+                _t = occ.addPoint(x, y, 0)
+                _occ_ptcache[_k] = _t
+            return _t
+
         def _shapely_to_occ(geom) -> List[int]:
             """Build OCC plane surfaces from a Shapely (Multi)Polygon.
             Uses addPolyline-like construction via dedup'd point loops.
@@ -2203,6 +2510,36 @@ def build_mesh_from_polygons(polys: dict,
                     return out
                 return []  # LineString / Point → not a surface
             geoms = _polys_only(geom)
+            # Split PINCHED (self-touching) rings — Shapely tolerates a ring
+            # that visits the same point twice, OCC rejects the loop.  Pinches
+            # arise from ring subtractions and half/wedge clips; the converter
+            # is the one place every polygon passes through.
+            _gs2 = []
+            from shapely.geometry import Polygon as _SP3
+            for g in geoms:
+                _ext0 = _dedupe(list(g.exterior.coords)[:-1])
+                rings = _split_ring_pinches(_ext0)
+                # NOTE: even a single returned ring may be CLEANED (tiny
+                # sub-loops < 3 pts dropped) — always rebuild from the rings,
+                # never fall back to the original pinched polygon.
+                if len(rings) == 1 and len(rings[0]) == len(_ext0):
+                    _gs2.append(g)
+                    continue
+                holes = [list(h.coords)[:-1] for h in g.interiors]
+                for ring in rings:
+                    if len(ring) < 3:
+                        continue
+                    q = _SP3(ring)
+                    if not q.is_valid:
+                        q = q.buffer(0)
+                    own = [h for h in holes if len(h) >= 3 and
+                           q.contains(_SP3(h).representative_point())]
+                    if own:
+                        q = _SP3(ring, own)
+                        if not q.is_valid:
+                            q = q.buffer(0)
+                    _gs2.extend(_polys_only(q))
+            geoms = _gs2
             tags: List[int] = []
             for g in geoms:
                 if g.is_empty or g.area < 1e-6:
@@ -2210,37 +2547,54 @@ def build_mesh_from_polygons(polys: dict,
                 ext = _dedupe(list(g.exterior.coords)[:-1])
                 if len(ext) < 3:
                     continue
-                pt_tags = [occ.addPoint(x, y, 0) for x, y in ext]
+                pt_tags = [_occ_pt(x, y) for x, y in ext]
                 line_tags = []
-                for i in range(len(pt_tags)):
-                    a = pt_tags[i]; b = pt_tags[(i + 1) % len(pt_tags)]
-                    if a == b:
+                # CHAIN build: a failed segment (OCC rejects ~zero-length lines
+                # between coincident-but-distinct points) must NOT break the
+                # loop — bridge from the last successful endpoint instead
+                # ("Curve loop is not closed" took the whole build down).
+                tail = pt_tags[0]
+                for i in range(1, len(pt_tags) + 1):
+                    b = pt_tags[i % len(pt_tags)]
+                    if tail == b:
                         continue
                     try:
-                        line_tags.append(occ.addLine(a, b))
+                        line_tags.append(occ.addLine(tail, b))
+                        tail = b
                     except Exception:
-                        # Two points at identical location — skip
-                        continue
+                        continue          # keep tail → bridge over the bad point
                 if len(line_tags) < 3:
                     continue
-                outer_wire = occ.addCurveLoop(line_tags)
+                try:
+                    outer_wire = occ.addCurveLoop(line_tags)
+                except Exception as _e:
+                    _c = g.centroid
+                    log.warning("polygon loop failed (%s): area=%.4f mm2 at "
+                                "(%.2f, %.2f) r=%.3f — polygon SKIPPED",
+                                _e, g.area, _c.x, _c.y, math.hypot(_c.x, _c.y))
+                    continue
                 hole_wires: List[int] = []
                 for hole in g.interiors:
                     hext = _dedupe(list(hole.coords)[:-1])
                     if len(hext) < 3:
                         continue
-                    hpts = [occ.addPoint(x, y, 0) for x, y in hext]
+                    hpts = [_occ_pt(x, y) for x, y in hext]
                     hlines = []
-                    for i in range(len(hpts)):
-                        a = hpts[i]; b = hpts[(i + 1) % len(hpts)]
-                        if a == b:
+                    htail = hpts[0]
+                    for i in range(1, len(hpts) + 1):
+                        b = hpts[i % len(hpts)]
+                        if htail == b:
                             continue
                         try:
-                            hlines.append(occ.addLine(a, b))
+                            hlines.append(occ.addLine(htail, b))
+                            htail = b
                         except Exception:
-                            continue
+                            continue      # bridge over the bad point (see exterior)
                     if len(hlines) >= 3:
-                        hole_wires.append(occ.addCurveLoop(hlines))
+                        try:
+                            hole_wires.append(occ.addCurveLoop(hlines))
+                        except Exception as _e:
+                            log.warning("hole loop skipped (%s)", _e)
                 try:
                     surf = occ.addPlaneSurface([outer_wire, *hole_wires])
                     tags.append(surf)
@@ -2286,7 +2640,11 @@ def build_mesh_from_polygons(polys: dict,
         # rings, with NO ε retract and NO bridge filler (the old ugly sliver
         # strips).  The iron keeps its true gap radius (rotor OD=r_ro, stator
         # bore=r_si); slot mouths stay open to the gap.
-        _sg_spec0 = polys.get("structured_gap_spec")
+        # BELT mode: the gap is built OUTSIDE gmsh (numpy annulus welded by node
+        # identity in _build_sliding_band_meshes) — skip the whole OCC route-A
+        # machinery (arc-ring iron + transfinite cells).  The polygons still
+        # carry the ring cut-outs + resampled boundaries the belt welds onto.
+        _sg_spec0 = None if _SB_BELT else polys.get("structured_gap_spec")
         _sg_arc_half = None       # "rotor" | "stator" | None
         _sg_arc_r = 0.0
         _sg_arc_S = 0
@@ -2371,7 +2729,7 @@ def build_mesh_from_polygons(polys: dict,
         # so these cells own the gap slice exclusively.  Conformity is automatic
         # (one fragmented model); the transfinite seeding (below, post-fragment)
         # forces EXACTLY K+1 uniform radial levels in this half.
-        _sg_spec = polys.get("structured_gap_spec")
+        _sg_spec = None if _SB_BELT else polys.get("structured_gap_spec")
         _sg_cells: List[int] = []
         _sg_M = 0
         _sg_rlo = _sg_rhi = 0.0

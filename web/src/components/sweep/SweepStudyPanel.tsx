@@ -247,6 +247,7 @@ const SweepStudyPanel: React.FC = () => {
           n_sectors: Math.max(1, Math.round(readLS('mesh.nSectors', 1))),   // single source: Mesh tab (same as Simulation)
           gap_layers: readLS('mesh.gapLayers', 2),   // single source: Mesh tab — drives ripple/eddy; must match Simulation
           structured_gap: readBool('mesh.structuredGap', false),   // single source: Mesh tab "Structured" — belt gap mesh (honest ripple, ¼ == full disk)
+          airgap_macro: readBool('mesh.harmonicGap', false),   // Mesh tab "Harmonic gap" — full-disk sweeps: step-independent RAW ripple
           end_winding_factor: readLS('sim.endWinding', 0),   // sent for parity, but a sweep RECOMPUTES k_end per-point from each candidate's geometry (backend refine_proc forces auto) — you can't pin one k_end across changing tooth_width/slot geometry
           rotor_eddy: readBool('sim.fieldLosses', true),   // single source: Simulation — field vs slab magnet eddy (drives eff)
           run_id: `sweep_${nPts}`,

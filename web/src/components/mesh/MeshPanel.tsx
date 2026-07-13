@@ -10,7 +10,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert, Box, Button, Chip, CircularProgress, Divider,
-  Paper, Slider, TextField, Tooltip, Typography, ToggleButton, ToggleButtonGroup,
+  Paper, Slider, Switch, TextField, Tooltip, Typography, ToggleButton, ToggleButtonGroup,
 } from '@mui/material';
 
 // Per-component mesh-size controls (study mesh-density effect on results).
@@ -353,6 +353,10 @@ const MeshPanel: React.FC = () => {
   // circles + radial spokes instead of free triangles.  Experimental — cleans the
   // gap mesh + broadband ripple, but doesn't lower peak ripple (teeth are the floor).
   const [structuredGap,  setStructuredGap]  = usePersisted<boolean>('structuredGap', false);
+  // Harmonic air-gap macroelement: smooth per-harmonic rotor↔stator coupling instead
+  // of node re-pairing → RAW torque ripple becomes step-count independent (the honest
+  // unfiltered figure).  Solver-side only (mesh preview unchanged); full disk only.
+  const [harmonicGap,    setHarmonicGap]    = usePersisted<boolean>('harmonicGap', false);
   // ── Per-component mesh size (study mesh-density effect on results) ─────────
   // {comp: target element size mm}. Empty/0 → use the global size for that part.
   // Persisted under 'mesh.componentMesh' so the Simulation tab's solve reads the
@@ -789,6 +793,13 @@ const MeshPanel: React.FC = () => {
                   <ToggleButton value="free">Free (triangles)</ToggleButton>
                   <ToggleButton value="struct">Structured (rings)</ToggleButton>
                 </ToggleButtonGroup>
+              </Tooltip>
+              <Tooltip placement="right" title="Replaces the node re-pairing slip coupling with a smooth per-harmonic rotor-stator link. RAW (unfiltered) torque ripple becomes independent of the step count — the honest ripple figure. Full-disk sector only (silently ignored on 1/2 or 1/4 sector models). Solver-side: the mesh preview is unchanged.">
+                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mt: 0.75 }}>
+                  <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>Harmonic gap (exact ripple)</Typography>
+                  <Switch size="small" checked={harmonicGap}
+                    onChange={(e) => setHarmonicGap(e.target.checked)} />
+                </Box>
               </Tooltip>
             </Box>
 

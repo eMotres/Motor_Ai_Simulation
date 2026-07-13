@@ -2556,6 +2556,7 @@ def get_fem_transient(
     pole_copy:           bool  = False,   # ← bit-identical pole/slot template-copy mesh
     hi_fidelity:         bool  = False,   # ← 2× slip nodes + finer mesh → smoother raw torque (slower)
     structured_gap:      bool  = False,   # ← ANSYS-style concentric-ring air-gap mesh (experimental)
+    airgap_macro:        bool  = False,   # ← harmonic air-gap macroelement (honest RAW ripple; full ring only)
     restore:             bool  = False,   # ← on open: return the LAST saved transient (stale if params differ) instead of recomputing
     geo:                 Optional[str] = None,  # ← per-request geometry override (multi-user); absent = global config
     drive:               str   = "current",  # ← "current" (imposed sinusoidal I) | "voltage"
@@ -2598,6 +2599,7 @@ def get_fem_transient(
                    int(bool(rotor_eddy)), round(gap_layers, 1),
                    int(bool(demag)), int(bool(torque_filter)),
                    int(bool(pole_copy)), int(bool(hi_fidelity)), int(bool(structured_gap)),
+                   int(bool(airgap_macro)),
                    tuple(sorted(_comp_mesh.items())),
                    str(drive or "current"), round(float(v_phase_peak), 2),
                    round(float(v_delta_deg), 1), int(bool(harm_ref)))
@@ -2672,6 +2674,7 @@ def get_fem_transient(
                     component_mesh_mm=_comp_mesh, geo_override=_geo_ov,
                     progress_cb=_sb_progress, hi_fidelity=bool(hi_fidelity),
                     structured_gap=bool(structured_gap),
+                    airgap_macro=bool(airgap_macro),
                     drive=str(drive or "current"),
                     v_phase_peak=float(v_phase_peak),
                     v_delta_deg=float(v_delta_deg))
@@ -2707,7 +2710,8 @@ def get_fem_transient(
                                 pole_copy=bool(pole_copy),
                                 component_mesh_mm=_comp_mesh, geo_override=_geo_ov,
                                 hi_fidelity=bool(hi_fidelity),
-                                structured_gap=bool(structured_gap))
+                                structured_gap=bool(structured_gap),
+                                airgap_macro=bool(airgap_macro))
                             import numpy as _np_hr
                             _pl_v = float(_np_hr.mean(_sbres.get(
                                 "P_loss_total_W") or [0.0]))

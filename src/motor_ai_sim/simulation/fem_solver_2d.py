@@ -4765,6 +4765,12 @@ def fem_transient_sliding_band(
                                      # (any error leaves the production numbers intact).
     structured_gap: bool = False,    # ANSYS-style concentric-ring air-gap mesh (experimental
                                      # Mesh-tab toggle; default off = free gmsh gap).
+    airgap_macro: bool = False,      # harmonic air-gap macroelement (Mesh-tab "Harmonic gap"):
+                                     # replaces the node re-pairing slip coupling with a smooth
+                                     # analytic per-harmonic rotor↔stator link → RAW T(t) becomes
+                                     # step-count independent (honest unfiltered ripple).  Full
+                                     # ring only (sector harmonics deferred) — silently ignored
+                                     # on sector models.  ORs with the SB_AIRGAP_MACRO env flag.
     drive: str = "current",          # "current" = imposed sinusoidal phase currents (default);
                                      # "voltage" = imposed sinusoidal phase VOLTAGE — the phase
                                      # currents become circuit STATE solved from V = R·i + dψ/dt
@@ -4950,7 +4956,7 @@ def fem_transient_sliding_band(
     _slip_base = int(round(1008.0 * (max(1.0, float(gap_layers)) + 2.0) / 3.0))
     _slip_per_period = 24 * max(5, math.ceil(_slip_base / (24 * pole_pairs)))
     n_slip_eff = pole_pairs * _slip_per_period
-    if bool(_SB_AIRGAP_MACRO) and _full_ring:
+    if (bool(_SB_AIRGAP_MACRO) or bool(airgap_macro)) and _full_ring:
         # The harmonic macroelement is ANALYTIC between ring nodes, so a COARSE ring
         # is enough — and its coupling is a DENSE N×N block, so a small N is wanted.
         # 48 nodes/period resolves angular harmonics to 24·pole_pairs (≫ the
@@ -5462,7 +5468,7 @@ def fem_transient_sliding_band(
         # at the source.  Per-harmonic stiffness + nodal assembly validated standalone
         # (energy == analytic == FEM annulus; m-shift == circulant shift).  Full-ring
         # only for now (sector anti-periodic harmonics deferred).
-        _use_macro = bool(_SB_AIRGAP_MACRO) and _full_ring
+        _use_macro = (bool(_SB_AIRGAP_MACRO) or bool(airgap_macro)) and _full_ring
         if _use_macro:
             _Nm = int(Nring)
             _r1M, _r2M, _stkM = float(_r1_m), float(_r2_m), float(p.stack_length)
@@ -7289,6 +7295,7 @@ def em_transient_eval(
     progress_cb=None,
     hi_fidelity: bool = False,
     structured_gap: bool = False,
+    airgap_macro: bool = False,
     drive: str = "current",
     v_phase_peak: float = 0.0,
     v_delta_deg: float = 0.0,
@@ -7314,7 +7321,7 @@ def em_transient_eval(
         torque_filter=bool(torque_filter), pole_copy=pole_copy,
         component_mesh_mm=(component_mesh_mm or {}), geo_override=geo_override,
         progress_cb=progress_cb, hi_fidelity=bool(hi_fidelity),
-        structured_gap=bool(structured_gap),
+        structured_gap=bool(structured_gap), airgap_macro=bool(airgap_macro),
         drive=str(drive or "current"), v_phase_peak=float(v_phase_peak),
         v_delta_deg=float(v_delta_deg))
 

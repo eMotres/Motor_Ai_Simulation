@@ -113,7 +113,7 @@ def _eval_cache_key(overrides: Dict[str, float], current_a: float, steps: int,
                     pole_copy, torque_filter: bool, cfg_fp: str,
                     gap_layers: float = 3.0, end_winding_factor: float = 0.0,
                     rotor_eddy: bool = False, hi_fidelity: bool = False,
-                    structured_gap: bool = False) -> str:
+                    structured_gap: bool = False, airgap_macro: bool = False) -> str:
     payload = {
         "ov": {k: round(float(v), 6) for k, v in sorted(overrides.items())},
         "I": round(float(current_a), 4), "steps": int(steps),
@@ -123,7 +123,7 @@ def _eval_cache_key(overrides: Dict[str, float], current_a: float, steps: int,
         "pc": pole_copy, "tf": bool(torque_filter), "cfg": cfg_fp,
         "gl": round(float(gap_layers), 2), "ew": round(float(end_winding_factor), 3),
         "re": bool(rotor_eddy), "hf": bool(hi_fidelity),
-        "sg": bool(structured_gap),
+        "sg": bool(structured_gap), "am": bool(airgap_macro),
     }
     return hashlib.md5(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
 
@@ -211,7 +211,7 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
                      _log: bool = True, pole_copy=None, torque_filter=True,
                      gap_layers: float = 3.0, end_winding_factor: float = 0.0,
                      rotor_eddy: bool = False, hi_fidelity: bool = False,
-                     structured_gap: bool = False) -> Dict[str, Any]:
+                     structured_gap: bool = False, airgap_macro: bool = False) -> Dict[str, Any]:
     """Evaluate ONE (geometry, current, γ) with the real sliding-band transient
     in an isolated subprocess (FEM/LLVM crash → failed design, not a dead API).
     Rebuilds the CadQuery geometry + gmsh mesh for the candidate in-memory.
@@ -228,7 +228,8 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
                        "end_winding_factor": float(end_winding_factor),
                        "rotor_eddy": bool(rotor_eddy),
                        "hi_fidelity": bool(hi_fidelity),
-                       "structured_gap": bool(structured_gap)})
+                       "structured_gap": bool(structured_gap),
+                       "airgap_macro": bool(airgap_macro)})
     try:
         proc = subprocess.run(
             [sys.executable, "-m", "motor_ai_sim.optimization.refine_proc"],
@@ -433,6 +434,7 @@ class ScanRequest(BaseModel):
     rotor_eddy: bool = False                # field-based magnet/shaft eddy — SINGLE SOURCE: Simulation (drives magnet loss / eff vs slab estimate)
     hi_fidelity: bool = False               # 2× slip nodes + finer mesh + ≥4 gap layers — SINGLE SOURCE: Mesh tab (smoother raw torque, ~3-5× slower)
     structured_gap: bool = False            # belt (mapped concentric-ring) gap mesh — SINGLE SOURCE: Mesh tab "Structured"; honest ripple, ¼-sector == full disk
+    airgap_macro: bool = False              # harmonic gap coupling — SINGLE SOURCE: Mesh tab "Harmonic gap"; RAW ripple step-independent (full ring only)
     seed: int = 12345
     run_id: str = ""
 
@@ -487,7 +489,7 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                  max_geom, seed, run_id, mesh_size_mm=4.0, min_size_mm=0.3,
                  pole_copy=None, torque_filter=True, n_sectors=1, gap_layers=3.0,
                  end_winding=0.0, rotor_eddy=False, hi_fidelity=False,
-                 structured_gap=False) -> None:
+                 structured_gap=False, airgap_macro=False) -> None:
     import numpy as np  # noqa: F401
     from concurrent.futures import ThreadPoolExecutor, as_completed
     from motor_ai_sim.optimization.optimizer import _pareto_front
@@ -519,7 +521,7 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
             # is what lets a re-run after widening a range only evaluate the new points.
             ck = _eval_cache_key(geo_ov, I, steps, coil_temp_c, _NPER, g,
                                  mesh_size_mm, min_size_mm, n_sectors, pole_copy, torque_filter, _cfg_fp,
-                                 gap_layers, end_winding, rotor_eddy, hi_fidelity, structured_gap)
+                                 gap_layers, end_winding, rotor_eddy, hi_fidelity, structured_gap, airgap_macro)
             out = _EVAL_CACHE.get(ck)
             if out is not None:
                 with _scan_lock:
@@ -531,7 +533,8 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                                        pole_copy=pole_copy, torque_filter=torque_filter,
                                        n_sectors=n_sectors, gap_layers=gap_layers,
                                        end_winding_factor=end_winding, rotor_eddy=rotor_eddy,
-                                       hi_fidelity=hi_fidelity, structured_gap=structured_gap)
+                                       hi_fidelity=hi_fidelity, structured_gap=structured_gap,
+                                       airgap_macro=airgap_macro)
                 if out and out.get("ok"):
                     _store_eval(ck, out)   # cache successful evals only (skip transient crashes)
             pt = _point_from_eval(out, ov, I, gi, oi, ripple_max)
@@ -583,7 +586,7 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
             _bI = float(operating_points[0].get("current_a", 85.0))
             _bck = _eval_cache_key({}, _bI, steps, coil_temp_c, _NPER, 0.0,
                                    mesh_size_mm, min_size_mm, n_sectors, pole_copy, torque_filter, _cfg_fp,
-                                   gap_layers, end_winding, rotor_eddy, hi_fidelity, structured_gap)
+                                   gap_layers, end_winding, rotor_eddy, hi_fidelity, structured_gap, airgap_macro)
             base_out = _EVAL_CACHE.get(_bck)
             if base_out is None:
                 base_out = _subprocess_eval({}, _bI, steps, coil_temp_c, n_periods=_NPER,
@@ -591,7 +594,8 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                                             pole_copy=pole_copy, torque_filter=torque_filter,
                                             n_sectors=n_sectors, gap_layers=gap_layers,
                                             end_winding_factor=end_winding, rotor_eddy=rotor_eddy,
-                                            hi_fidelity=hi_fidelity, structured_gap=structured_gap)
+                                            hi_fidelity=hi_fidelity, structured_gap=structured_gap,
+                                       airgap_macro=airgap_macro)
                 if base_out and base_out.get("ok"):
                     _store_eval(_bck, base_out)
             baseline = _point_from_eval(base_out, {}, _bI, -1, 0, ripple_max)
@@ -677,6 +681,7 @@ def scan_designs(req: ScanRequest):
         # "Structured" toggle.  Honest ripple (¼-sector == full disk), same build
         # the Simulation tab uses.
         structured_gap = bool(req.structured_gap)
+        airgap_macro = bool(req.airgap_macro)
         _scan_state.update({"running": True, "done": 0, "total": 0, "result": None,
                             "points": [], "run_id": req.run_id, "error": None, "cancel": False,
                             "cached": 0})
@@ -685,7 +690,7 @@ def scan_designs(req: ScanRequest):
                            float(req.ripple_max_pct), max_geom, int(req.seed), req.run_id,
                            mesh_size, min_size, req.pole_copy, bool(req.torque_filter),
                            n_sectors, gap_layers, end_winding, rotor_eddy, hi_fidelity,
-                           structured_gap),
+                           structured_gap, airgap_macro),
                      daemon=True).start()
     return {"started": True, "steps_per_period": steps, "max_geometries": max_geom,
             "mesh_size_mm": mesh_size, "min_size_mm": min_size}
@@ -987,6 +992,9 @@ class DescentRequest(BaseModel):
     # "Structured" toggle.  Honest ripple (¼-sector == full disk), same build
     # as the Simulation tab.
     structured_gap: bool = False
+    # Harmonic gap coupling — SINGLE SOURCE: Mesh tab "Harmonic gap".  RAW
+    # ripple becomes step-count independent; full ring only (ignored on sectors).
+    airgap_macro: bool = False
     # Pole/slot mesh mode from the UI (Mesh tab "Periodic (identical poles)").
     # None = solver env default; the optimizer must mesh the SAME way Simulation does.
     pole_copy: Optional[bool] = None
@@ -1061,6 +1069,7 @@ class BaselineRequest(BaseModel):
     min_size_mm: float = 0.3
     gap_layers: float = 2.0
     structured_gap: bool = False   # Mesh tab "Structured" toggle (belt gap mesh)
+    airgap_macro: bool = False     # Mesh tab "Harmonic gap" (step-independent RAW ripple; full ring)
     pole_copy: Optional[bool] = None
     torque_filter: bool = True
     rotor_eddy: bool = True
@@ -1299,7 +1308,7 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                     boundary_margin=0.05, surrogate_seed=False, pole_copy=None,
                   torque_filter=True, end_winding=0.0, rotor_eddy=True,
                   gap_layers=2.0, objective="baseline_line",
-                  current_bump_pct=10.0, structured_gap=False) -> None:
+                  current_bump_pct=10.0, structured_gap=False, airgap_macro=False) -> None:
     # NOTE: server-side box-walking (auto_expand) is implemented for CMA-ES only;
     # the gradient path runs a single round, then the UI flags boundary variables
     # for a manual one-click continue.
@@ -1338,7 +1347,8 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                                  min_size_mm=min_size, n_sectors=n_sectors,
                                  pole_copy=pole_copy, torque_filter=torque_filter,
                                  end_winding_factor=end_winding, rotor_eddy=rotor_eddy,
-                                 gap_layers=gap_layers, structured_gap=structured_gap)
+                                 gap_layers=gap_layers, structured_gap=structured_gap,
+                                 airgap_macro=airgap_macro)
             if o.get("ok") and isinstance(o.get("res"), dict):
                 o["res"]["current_a"] = float(cur)   # record solved current in best
             if isinstance(o, dict):
@@ -1654,7 +1664,7 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                   boundary_margin=0.05, surrogate_seed=False, pole_copy=None,
                   torque_filter=True, end_winding=0.0, rotor_eddy=True,
                   gap_layers=2.0, objective="baseline_line",
-                  current_bump_pct=10.0, structured_gap=False) -> None:
+                  current_bump_pct=10.0, structured_gap=False, airgap_macro=False) -> None:
     """Covariance-Matrix-Adaptation Evolution Strategy — derivative-free,
     noise-robust geometry search.  Same penalised cost as the gradient descent
     (−(eff/eff0)^w_eff·(td/td0)^w_td + λ·max(0, ripple−ripple_max)), evaluated on
@@ -1683,7 +1693,8 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                                  min_size_mm=min_size, n_sectors=n_sectors,
                                  pole_copy=pole_copy, torque_filter=torque_filter,
                                  end_winding_factor=end_winding, rotor_eddy=rotor_eddy,
-                                 gap_layers=gap_layers, structured_gap=structured_gap)
+                                 gap_layers=gap_layers, structured_gap=structured_gap,
+                                 airgap_macro=airgap_macro)
             # Stamp the SOLVED current onto the result so the best records the
             # operating point it was found at (target-torque solves for it) →
             # saving the design can persist current+γ for a reproducible sim.
@@ -2061,6 +2072,7 @@ def descent_start(req: DescentRequest):
                                    "rotor_eddy": bool(req.rotor_eddy),
                                    "end_winding_factor": float(req.end_winding_factor),
                                    "structured_gap": bool(req.structured_gap),
+                                   "airgap_macro": bool(req.airgap_macro),
                                    "mesh_size_mm": mesh_size, "min_size_mm": min_size},
                                "run_id": req.run_id, "error": None, "cancel": False})
     threading.Thread(
@@ -2075,7 +2087,7 @@ def descent_start(req: DescentRequest):
               max(1.0, min(float(req.gap_layers), 8.0)),
               str(req.objective or "baseline_line"),
               max(0.0, min(float(req.current_bump_pct), 100.0)),
-              bool(req.structured_gap)),
+              bool(req.structured_gap), bool(req.airgap_macro)),
         daemon=True).start()
     return {"started": True, "algorithm": algo, "n_sectors": n_sectors,
             "target_torque_nm": target_torque, "v_peak_limit": v_peak_limit,
@@ -2106,7 +2118,8 @@ def descent_baseline(req: BaselineRequest):
                                 torque_filter=bool(req.torque_filter),
                                 end_winding_factor=float(req.end_winding_factor),
                                 rotor_eddy=bool(req.rotor_eddy), gap_layers=gap,
-                                structured_gap=bool(req.structured_gap))
+                                structured_gap=bool(req.structured_gap),
+                                airgap_macro=bool(req.airgap_macro))
 
     a = _ev(I)
     if not a.get("ok"):

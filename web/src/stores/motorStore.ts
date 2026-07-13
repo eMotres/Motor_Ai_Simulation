@@ -677,6 +677,8 @@ export const useMotorStore = create<MotorState>()(
         // Belt (mapped) gap mesh — SINGLE SOURCE: the Mesh tab "Structured" toggle.
         // Honest ripple (quarter == full disk), same build as Simulation.
         try { structured_gap = JSON.parse(localStorage.getItem('mesh.structuredGap') ?? 'false') === true; } catch { /* default */ }
+        let airgap_macro = false;
+        try { airgap_macro = JSON.parse(localStorage.getItem('mesh.harmonicGap') ?? 'false') === true; } catch { /* default */ }
 
         set({ descentRunning: true, descentError: null, descentState: null });
         try {
@@ -688,7 +690,7 @@ export const useMotorStore = create<MotorState>()(
               ripple_max_pct: rippleMax, w_eff: wEff, w_td: wTd,
               max_iters: maxIters, steps_per_period: steps,
               mesh_size_mm, min_size_mm, pole_copy, torque_filter,
-              rotor_eddy, end_winding_factor, gap_layers, coil_temp_c, structured_gap,
+              rotor_eddy, end_winding_factor, gap_layers, coil_temp_c, structured_gap, airgap_macro,
               algorithm, n_sectors: nSectors,
               target_torque_nm: targetTorque ?? 0,
               v_peak_limit: vPeakLimit ?? 1e9,
@@ -740,6 +742,8 @@ export const useMotorStore = create<MotorState>()(
         // Belt (mapped) gap mesh — SINGLE SOURCE: the Mesh tab "Structured" toggle.
         // Honest ripple (quarter == full disk), same build as Simulation.
         try { structured_gap = JSON.parse(localStorage.getItem('mesh.structuredGap') ?? 'false') === true; } catch { /* default */ }
+        let airgap_macro = false;
+        try { airgap_macro = JSON.parse(localStorage.getItem('mesh.harmonicGap') ?? 'false') === true; } catch { /* default */ }
         set({ baselineBusy: true, baselineError: null });
         try {
           const res = await fetch(`${API_BASE_URL}/api/optimization/descent/baseline`, {
@@ -748,7 +752,7 @@ export const useMotorStore = create<MotorState>()(
               operating_point: { gamma_deg: op0.gamma_deg ?? 0, current_a: op0.current_a, rpm: op0.rpm },
               current_bump_pct: currentBumpPct, steps_per_period: steps, n_sectors: nSectors,
               mesh_size_mm, min_size_mm, pole_copy, torque_filter,
-              rotor_eddy, end_winding_factor, gap_layers, coil_temp_c, structured_gap,
+              rotor_eddy, end_winding_factor, gap_layers, coil_temp_c, structured_gap, airgap_macro,
             }),
           });
           if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);

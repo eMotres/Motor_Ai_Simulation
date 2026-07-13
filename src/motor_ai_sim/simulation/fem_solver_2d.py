@@ -150,7 +150,11 @@ _SB_STRUCTURED_GAP = _os_sb.environ.get("SB_STRUCTURED_GAP", "0") == "1"
 # transfinite cell arcs so its fuzzy polygon vertices do not subdivide them.
 # None → the code default (0.01).  Diagnostic override hook (torque/ε studies).
 _SG_EPS_OVERRIDE = None
-_SLIP_PER_PERIOD_OVERRIDE = 0   # 0 = adaptive formula; >0 forces slip nodes/period (ring density)
+# 0 = adaptive formula (slip density scales with gap_layers); >0 forces slip
+# nodes/period.  Env-gated so convergence studies can vary ONE discretisation
+# at a time — the adaptive coupling (n_slip ~ gap_layers) otherwise changes the
+# slip ring, the seam grid AND the air mesh together, making gl-sweeps impure.
+_SLIP_PER_PERIOD_OVERRIDE = int(_os_sb.environ.get("SB_SLIP_PER_PERIOD", "0") or 0)
 
 # ── Torque-band diagnostic (off by default; set ['on']=True before a solve to
 # collect the per-frame Arkkio torque over radial sub-bands of the gap, to

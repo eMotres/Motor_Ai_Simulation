@@ -671,9 +671,12 @@ export const useMotorStore = create<MotorState>()(
         // so the optimizer meshes the air gap (dominant torque/ripple driver) and sets
         // copper resistance EXACTLY like Simulation, else a selected design won't
         // reproduce when re-run in the Simulation tab.
-        let gap_layers = 2, coil_temp_c = 120;
+        let gap_layers = 2, coil_temp_c = 120, structured_gap = false;
         try { gap_layers  = Number(JSON.parse(localStorage.getItem('mesh.gapLayers') ?? '2')) || 2; } catch { /* default */ }
         try { coil_temp_c = Number(JSON.parse(localStorage.getItem('sim.coilTemp')  ?? '120')) || 120; } catch { /* default */ }
+        // Belt (mapped) gap mesh — SINGLE SOURCE: the Mesh tab "Structured" toggle.
+        // Honest ripple (quarter == full disk), same build as Simulation.
+        try { structured_gap = JSON.parse(localStorage.getItem('mesh.structuredGap') ?? 'false') === true; } catch { /* default */ }
 
         set({ descentRunning: true, descentError: null, descentState: null });
         try {
@@ -685,7 +688,7 @@ export const useMotorStore = create<MotorState>()(
               ripple_max_pct: rippleMax, w_eff: wEff, w_td: wTd,
               max_iters: maxIters, steps_per_period: steps,
               mesh_size_mm, min_size_mm, pole_copy, torque_filter,
-              rotor_eddy, end_winding_factor, gap_layers, coil_temp_c,
+              rotor_eddy, end_winding_factor, gap_layers, coil_temp_c, structured_gap,
               algorithm, n_sectors: nSectors,
               target_torque_nm: targetTorque ?? 0,
               v_peak_limit: vPeakLimit ?? 1e9,
@@ -731,9 +734,12 @@ export const useMotorStore = create<MotorState>()(
         let rotor_eddy = true, end_winding_factor = 0;
         try { rotor_eddy = JSON.parse(localStorage.getItem('sim.fieldLosses') ?? 'true') !== false; } catch { /* default */ }
         try { end_winding_factor = Number(JSON.parse(localStorage.getItem('sim.endWinding') ?? '0')) || 0; } catch { /* default */ }
-        let gap_layers = 2, coil_temp_c = 120;
+        let gap_layers = 2, coil_temp_c = 120, structured_gap = false;
         try { gap_layers  = Number(JSON.parse(localStorage.getItem('mesh.gapLayers') ?? '2')) || 2; } catch { /* default */ }
         try { coil_temp_c = Number(JSON.parse(localStorage.getItem('sim.coilTemp')  ?? '120')) || 120; } catch { /* default */ }
+        // Belt (mapped) gap mesh — SINGLE SOURCE: the Mesh tab "Structured" toggle.
+        // Honest ripple (quarter == full disk), same build as Simulation.
+        try { structured_gap = JSON.parse(localStorage.getItem('mesh.structuredGap') ?? 'false') === true; } catch { /* default */ }
         set({ baselineBusy: true, baselineError: null });
         try {
           const res = await fetch(`${API_BASE_URL}/api/optimization/descent/baseline`, {
@@ -742,7 +748,7 @@ export const useMotorStore = create<MotorState>()(
               operating_point: { gamma_deg: op0.gamma_deg ?? 0, current_a: op0.current_a, rpm: op0.rpm },
               current_bump_pct: currentBumpPct, steps_per_period: steps, n_sectors: nSectors,
               mesh_size_mm, min_size_mm, pole_copy, torque_filter,
-              rotor_eddy, end_winding_factor, gap_layers, coil_temp_c,
+              rotor_eddy, end_winding_factor, gap_layers, coil_temp_c, structured_gap,
             }),
           });
           if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);

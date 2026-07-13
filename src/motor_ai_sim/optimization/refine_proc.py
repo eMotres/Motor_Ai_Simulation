@@ -52,7 +52,8 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
             min_size_mm: float = 0.3, n_sectors: int = -1,
             pole_copy=None, torque_filter: bool = True,
             gap_layers: float = 3.0, end_winding_factor: float = 0.0,
-            rotor_eddy: bool = False, hi_fidelity: bool = False) -> Dict[str, Any]:
+            rotor_eddy: bool = False, hi_fidelity: bool = False,
+            structured_gap: bool = False) -> Dict[str, Any]:
     """Run the sliding-band transient for one candidate and return mean
     performance metrics (torque, efficiency, ripple, losses, mass).
 
@@ -111,6 +112,7 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         "end_winding_factor": float(end_winding_factor), "rotor_eddy": bool(rotor_eddy),
         "pole_copy": pole_copy, "torque_filter": bool(torque_filter),
         "hi_fidelity": bool(hi_fidelity),   # 2× slip nodes + finer mesh + gap layers → smoother raw torque
+        "structured_gap": bool(structured_gap),   # belt gap mesh (Mesh tab "Structured") → honest ripple, ¼==full
 
         # Ambient mesh/sim params the Simulation tab passes but the optimizer used to
         # omit (so get_fem_transient fell back to ITS defaults — e.g. outer_air 1.3 vs
@@ -177,7 +179,8 @@ if __name__ == "__main__":
                       gap_layers=spec.get("gap_layers", 3.0),
                       end_winding_factor=spec.get("end_winding_factor", 0.0),
                       rotor_eddy=spec.get("rotor_eddy", False),
-                      hi_fidelity=spec.get("hi_fidelity", False))
+                      hi_fidelity=spec.get("hi_fidelity", False),
+                      structured_gap=spec.get("structured_gap", False))
         sys.stdout.write("@@RESULT@@" + json.dumps({"ok": True, "res": res}))
     except Exception as e:  # noqa: BLE001
         sys.stdout.write("@@RESULT@@" + json.dumps({"ok": False, "error": str(e)}))

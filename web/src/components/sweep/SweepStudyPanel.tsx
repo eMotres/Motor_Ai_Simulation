@@ -246,6 +246,7 @@ const SweepStudyPanel: React.FC = () => {
           pole_copy: readBool('mesh.poleCopy', false), torque_filter: readBool('sim.torqueFilter', true),
           n_sectors: Math.max(1, Math.round(readLS('mesh.nSectors', 1))),   // single source: Mesh tab (same as Simulation)
           gap_layers: readLS('mesh.gapLayers', 2),   // single source: Mesh tab — drives ripple/eddy; must match Simulation
+          structured_gap: readBool('mesh.structuredGap', false),   // single source: Mesh tab "Structured" — belt gap mesh (honest ripple, ¼ == full disk)
           end_winding_factor: readLS('sim.endWinding', 0),   // sent for parity, but a sweep RECOMPUTES k_end per-point from each candidate's geometry (backend refine_proc forces auto) — you can't pin one k_end across changing tooth_width/slot geometry
           rotor_eddy: readBool('sim.fieldLosses', true),   // single source: Simulation — field vs slab magnet eddy (drives eff)
           run_id: `sweep_${nPts}`,
@@ -435,8 +436,9 @@ const SweepStudyPanel: React.FC = () => {
       <SectionLabel sx={{ mb: 0.5 }}>Sweep study — efficiency vs torque/mass</SectionLabel>
       <Typography sx={{ fontSize: 11, color: '#64748b', mb: 1.25 }}>
         Sweeps the <strong>variables you added above</strong> (current/γ → operating points,
-        geometry → a grid). Each point is a real full-disk transient (~1 min each — keep grids small).
-        rpm &amp; mesh come from the Simulation / Mesh tabs.
+        geometry → a grid). Each point is a real transient built exactly like Simulation —
+        sector, gap mesh and the Structured (belt) toggle all come from the Mesh tab.
+        For honest ripple use Structured; ¼ sector then matches the full disk and is ~4× faster.
       </Typography>
 
       <Box sx={{ bgcolor: '#0a1628', border: '1px solid #1e293b', borderRadius: 1, p: 1, mb: 1.25 }}>

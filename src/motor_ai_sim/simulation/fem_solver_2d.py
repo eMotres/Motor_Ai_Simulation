@@ -2075,12 +2075,14 @@ def _weld_belt_into_half(mesh, tags, spec: dict, half: str, n_sectors: int):
     if ring_idx.size < 8:
         raise ValueError(f"belt[{half}]: only {ring_idx.size} mesh nodes on the "
                          f"iron circle r={r_iron*1e3:.4f}mm — boundary not on the ring")
-    angP = np.arctan2(P[1, ring_idx], P[0, ring_idx])
+    # SAME angular convention as the belt rows (0..2π) — sorting the iron by
+    # raw atan2 (−π..π] paired the wrong halves in the seam (field welded with
+    # a half-turn twist: psi collapsed 14.7 → 5.4 mWb).
+    angP = np.mod(np.arctan2(P[1, ring_idx], P[0, ring_idx]), 2.0 * math.pi)
     if full:
         order = np.argsort(angP)
         iron = ring_idx[order]; iron_a = angP[order]
     else:
-        angP = np.mod(angP, 2.0 * math.pi)
         sel = (angP > -1e-9) & (angP < span + 1e-9)
         order = np.argsort(angP[sel])
         iron = ring_idx[sel][order]; iron_a = angP[sel][order]

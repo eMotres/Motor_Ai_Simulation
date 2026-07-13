@@ -375,7 +375,7 @@ def refine_designs(req: RefineRequest):
 @router.get("/refine/progress")
 def refine_progress():
     with _refine_lock:
-        return dict(_refine_state)
+        return _json_sane(dict(_refine_state))
 
 
 @router.post("/refine/cancel")
@@ -660,10 +660,23 @@ def scan_designs(req: ScanRequest):
             "mesh_size_mm": mesh_size, "min_size_mm": min_size}
 
 
+def _json_sane(obj):
+    """Replace NaN/Inf floats with None recursively — FastAPI's strict JSON
+    encoder 500s on them ('Out of range float values are not JSON compliant'),
+    which blinded the whole Sweep progress panel when ONE eval produced a NaN."""
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    if isinstance(obj, dict):
+        return {k: _json_sane(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_sane(v) for v in obj]
+    return obj
+
+
 @router.get("/scan/progress")
 def scan_progress():
     with _scan_lock:
-        return dict(_scan_state)
+        return _json_sane(dict(_scan_state))
 
 
 @router.post("/scan/cancel")
@@ -2070,7 +2083,7 @@ def descent_baseline(req: BaselineRequest):
 @router.get("/descent/progress")
 def descent_progress():
     with _descent_lock:
-        return dict(_descent_state)
+        return _json_sane(dict(_descent_state))
 
 
 @router.post("/descent/cancel")

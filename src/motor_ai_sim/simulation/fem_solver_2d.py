@@ -1730,8 +1730,16 @@ def build_periodic_coil_mesh(geo_cfg: dict, num_slots: int,
     return verts_mm * 1e-3, tris   # mm → m
 
 
+# Structured-gap seam density: the iron's gap-facing arcs snap to the seam grid
+# (spacing = M slip nodes).  M_target=14 gave a ~3° seam step on the 150 mm
+# 24s20p — coarser than the ~5° slot opening, so the snap distorted the mouths
+# by up to ±1 seam DIFFERENTLY per tooth (T −23 %, forbidden h1-h3 reappeared).
+# Smaller M → finer seams → smaller geometry perturbation (more, thinner cells).
+_SG_M_TARGET = int(_os_sb.environ.get("SB_SG_M_TARGET", "14") or 14)
+
+
 def _structured_gap_sm(n_slip: int, n_sectors: int,
-                       m_target: int = 14) -> Tuple[int, int]:
+                       m_target: int = None) -> Tuple[int, int]:
     """Pick (S, M) for the structured-gap cells of ONE wedge (route A).
 
     S = number of angular cells in the [0, 2π/n_sectors] wedge, M = arc
@@ -1741,6 +1749,8 @@ def _structured_gap_sm(n_slip: int, n_sectors: int,
     of slip_wedge, prefer M near ``m_target`` (~14, like the proven proto)
     to keep cell aspect reasonable and the surface count modest.
     """
+    if m_target is None:
+        m_target = _SG_M_TARGET
     slip_wedge = int(n_slip) // int(n_sectors)
     if slip_wedge <= 0:
         return 1, max(1, int(n_slip))
@@ -1791,6 +1801,20 @@ def _iron_arc_ring_occ(occ, center_pt: int, geom, r_ring: float,
         # rotor OD (iron below the ring) and the stator bore (iron above it):
         # only the vertices sitting AT r_ring must snap to the cell arc.
         on = _np.abs(r - r_ring) < tol_mm
+        # A polygon whose FIRST vertex sits inside an on-ring run splits that
+        # run across the array boundary: the linear scan below then snaps the
+        # "tail" and "head" pieces separately, their seam ranges OVERLAP (round
+        # widens each to the nearest seam), and the loop walks the same arc
+        # twice → self-intersecting curve loop → OCC rejects it → the polygon
+        # was silently DROPPED (a HOLE: 20 pocket holes = −13 % flux on the
+        # 24s20p rotor half).  Rotate the vertex list so index 0 is OFF-ring —
+        # every run is then contiguous.  (All-on-ring polygons keep as-is: one
+        # single run covering the full loop is already contiguous.)
+        if bool(on[0]) and not bool(on.all()):
+            k0 = int(_np.argmin(on))          # first off-ring vertex
+            pts = pts[k0:] + pts[:k0]
+            r = _np.roll(r, -k0)
+            on = _np.roll(on, -k0)
         # Build an ordered node list: replace each on-ring run by the seam nodes
         # spanning its (snapped) angular extent; keep off-ring vertices as-is.
         loop: List[Tuple[str, int]] = []
@@ -1836,17 +1860,26 @@ def _iron_arc_ring_occ(occ, center_pt: int, geom, r_ring: float,
                 try:
                     curves.append(occ.addCircleArc(pa, center_pt, pb))
                     continue
-                except Exception:
-                    pass
+                except Exception as _e:
+                    log.warning("arc-ring: addCircleArc failed (%s) pts %d->%d — "
+                                "line fallback", _e, pa, pb)
             try:
                 curves.append(occ.addLine(pa, pb))
-            except Exception:
+            except Exception as _e:
+                # A dropped segment BREAKS the loop → the whole polygon would be
+                # dropped → a HOLE in the mesh (measured: −13 % flux on 24s20p).
+                log.warning("arc-ring: addLine failed (%s) pts %d->%d — SEGMENT "
+                            "LOST, loop will not close", _e, pa, pb)
                 continue
         if len(curves) < 3:
+            log.warning("arc-ring: curve loop degenerate (%d curves from %d pts, "
+                        "r_ring=%.4f) — polygon will be DROPPED", len(curves), n, r_ring)
             return None
         try:
             return occ.addCurveLoop(curves)
-        except Exception:
+        except Exception as _e:
+            log.warning("arc-ring: addCurveLoop failed (%s; %d curves, r_ring=%.4f)"
+                        " — polygon will be DROPPED", _e, len(curves), r_ring)
             return None
 
     def _polys_only(gm):
@@ -1867,6 +1900,13 @@ def _iron_arc_ring_occ(occ, center_pt: int, geom, r_ring: float,
             continue
         outer = _ring_curveloop(list(g.exterior.coords)[:-1])
         if outer is None:
+            # NOTE: no polyline fallback here — an on-ring polyline coincident
+            # with the cell arcs makes occ.fragment intersect every chord with
+            # every arc (combinatorial blow-up, measured: build hangs >10 min).
+            # A dropped polygon is a HOLE in the mesh (dead flux) — the loud
+            # warning below must be treated as a build FAILURE to investigate.
+            log.warning("arc-ring: polygon SKIPPED (area %.3f mm2, r_ring=%.4f)"
+                        " — a HOLE is left in the mesh here", g.area, r_ring)
             continue
         holes = []
         for h in g.interiors:

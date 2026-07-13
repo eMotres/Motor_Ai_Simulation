@@ -135,8 +135,15 @@ _SB_AIRGAP_MACRO = _os_sb.environ.get("SB_AIRGAP_MACRO", "0") == "1"
 # width), which projects into the ALLOWED 6k torque orders and is the reason
 # h6/h12 amplitudes do not converge with mesh refinement.  Unlike the
 # structured-gap snap this does NOT re-geometrise the mouths, so the cogging
-# is not distorted.  Experimental (env SB_IRON_RESAMPLE=1).
-_SB_IRON_RESAMPLE = _os_sb.environ.get("SB_IRON_RESAMPLE", "0") == "1"
+# is not distorted.
+# DEFAULT ON (2026-07-13, opt out with SB_IRON_RESAMPLE=0): besides the noise
+# win (forbidden orders -> 0 in the A/B), unsnapped arcs are a HANG risk — the
+# air-gap annulus and the iron discretise the same circle with different
+# vertex counts, fragment leaves µm-thin sliver wedges on the bore, and gmsh's
+# edge recovery splits those slivers forever (generate() never returns; took
+# down every sweep eval on the 24s20p config).  Snapping both arcs to the slip
+# grid removes the slivers by construction.
+_SB_IRON_RESAMPLE = _os_sb.environ.get("SB_IRON_RESAMPLE", "1") == "1"
 # Structured (concentric-ring) air gap: partition EACH half-gap (rotor OD->R1 and
 # R2->stator bore) into `gap_layers` thin annular rows bounded by uniform N-gon rings
 # on the slip angular grid -> the gap meshes as an ANSYS-style structured band

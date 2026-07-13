@@ -126,10 +126,24 @@ def _eval_cache_key(overrides: Dict[str, float], current_a: float, steps: int,
     return hashlib.md5(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
 
 
+def _eval_healthy(out: Dict[str, Any]) -> bool:
+    """True only for an eval whose FEM actually produced numbers.  A worker that
+    dies mid-solve (or a solver that silently returns an empty field) can emit
+    ok=true with NaN torque — caching that poisons every re-run of the sweep
+    with instantly-"done" empty points, so gate both store AND load on it."""
+    try:
+        r = out.get("res") if isinstance(out.get("res"), dict) else out
+        t = r.get("T_em_Nm")
+        return isinstance(t, (int, float)) and math.isfinite(float(t))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _load_eval_cache() -> None:
     try:
         p = _eval_cache_path()
         if os.path.exists(p):
+            n_bad = 0
             with open(p, encoding="utf-8") as fh:
                 for line in fh:
                     line = line.strip()
@@ -137,10 +151,14 @@ def _load_eval_cache() -> None:
                         continue
                     try:
                         rec = json.loads(line)
+                        if not _eval_healthy(rec["v"]):
+                            n_bad += 1
+                            continue
                         _EVAL_CACHE[rec["k"]] = rec["v"]   # later lines win (re-computed)
                     except Exception:  # noqa: BLE001
                         pass
-            log.info("loaded %d cached FEM evals from %s", len(_EVAL_CACHE), p)
+            log.info("loaded %d cached FEM evals from %s (skipped %d unhealthy)",
+                     len(_EVAL_CACHE), p, n_bad)
     except Exception as _e:  # noqa: BLE001
         log.warning("could not load eval cache: %s", _e)
 
@@ -152,6 +170,8 @@ _RES_KEYS = ("T_em_Nm", "efficiency", "torque_per_mass_Nm_kg", "T_ripple_pct",
 
 
 def _store_eval(key: str, res: Dict[str, Any]) -> None:
+    if not _eval_healthy(res):   # never cache a NaN/empty eval (see _eval_healthy)
+        return
     with _eval_cache_lock:
         if key in _EVAL_CACHE:   # same inputs already cached → no duplicate file write
             return

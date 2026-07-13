@@ -127,6 +127,16 @@ _SB_MOVING_BAND = False
 # on the clean structured field the two are complementary (cells clean the field,
 # the macro gives a smooth, continuous-angle coupling).
 _SB_AIRGAP_MACRO = _os_sb.environ.get("SB_AIRGAP_MACRO", "0") == "1"
+# Uniform tangential RESAMPLING of the iron's gap-facing arcs (rotor OD, stator
+# bore) on the slip angular grid — WITHOUT touching the slot-mouth / pocket
+# corner angles (run endpoints are preserved exactly; only the chord sampling
+# BETWEEN them is made uniform).  Attacks the free mesh's random chord
+# "roughness" of the gap surfaces (sagitta noise ~µm modulating the local gap
+# width), which projects into the ALLOWED 6k torque orders and is the reason
+# h6/h12 amplitudes do not converge with mesh refinement.  Unlike the
+# structured-gap snap this does NOT re-geometrise the mouths, so the cogging
+# is not distorted.  Experimental (env SB_IRON_RESAMPLE=1).
+_SB_IRON_RESAMPLE = _os_sb.environ.get("SB_IRON_RESAMPLE", "0") == "1"
 # Structured (concentric-ring) air gap: partition EACH half-gap (rotor OD->R1 and
 # R2->stator bore) into `gap_layers` thin annular rows bounded by uniform N-gon rings
 # on the slip angular grid -> the gap meshes as an ANSYS-style structured band
@@ -445,6 +455,20 @@ def _simplify_polys(polys: dict, tol_mm: float = 0.005,
                                     min(math.hypot(x, y) for x, y in _intr.coords))
             _gap_est = (_r_si_est - _r_ro_est) \
                 if (_r_si_est < float("inf") and _r_ro_est > 0) else 0.0
+            # Uniform-chord resampling of the iron's gap surfaces (experimental,
+            # SB_IRON_RESAMPLE=1): rotor OD + stator bore arcs re-sampled on the
+            # slip grid, mouth/pocket corners preserved exactly.  Re-collect
+            # rotor_solids afterwards so the band construction below uses the
+            # resampled iron.
+            if _SB_IRON_RESAMPLE and _gap_est > 0.05:
+                if out.get("rotor") is not None:
+                    out["rotor"] = _resample_ring_arcs(out["rotor"], _r_ro_est, _N)
+                if out.get("stator") is not None:
+                    out["stator"] = _resample_ring_arcs(out["stator"], _r_si_est, _N)
+                rotor_solids = []
+                if out.get("rotor") is not None: rotor_solids.append(out["rotor"])
+                if out.get("shaft") is not None: rotor_solids.append(out["shaft"])
+                rotor_solids += [m for m, _p in out["magnets"] if m is not None]
             _delta = min(max(_SB_BAND_DELTA_FRAC * _gap_est, 0.04), 0.4) if _gap_est > 0.05 else 0.0
             # STRUCTURED gap: per-request param OR the global env flag.
             _do_struct = bool(structured_gap) or _SB_STRUCTURED_GAP
@@ -1738,6 +1762,85 @@ def build_periodic_coil_mesh(geo_cfg: dict, num_slots: int,
 _SG_M_TARGET = int(_os_sb.environ.get("SB_SG_M_TARGET", "14") or 14)
 
 
+def _resample_ring_arcs(geom, r_ring: float, n_grid: int, tol_mm: float = 0.02):
+    """Return `geom` with every boundary run lying ON the circle r≈r_ring
+    resampled to the UNIFORM angular grid (n_grid points per revolution),
+    keeping each run's END vertices exactly (slot-mouth / pocket corner angles
+    untouched).  Kills the random chord-sagitta roughness of the iron's
+    gap-facing surface without re-geometrising the openings."""
+    import numpy as _np
+    from shapely.geometry import Polygon as _P, MultiPolygon as _MP
+
+    step = 2.0 * math.pi / max(8, int(n_grid))
+
+    def _ring(coords):
+        pts = [(float(x), float(y)) for x, y in coords]
+        if len(pts) > 1 and math.hypot(pts[0][0]-pts[-1][0], pts[0][1]-pts[-1][1]) < 1e-12:
+            pts = pts[:-1]
+        n = len(pts)
+        if n < 3:
+            return coords
+        r = _np.hypot([p[0] for p in pts], [p[1] for p in pts])
+        on = _np.abs(r - r_ring) < tol_mm
+        if not on.any():
+            return coords
+        if bool(on.all()):
+            # full circle at r_ring → pure uniform ring
+            return [(r_ring*math.cos(step*k), r_ring*math.sin(step*k))
+                    for k in range(max(8, int(n_grid)))]
+        # rotate so index 0 is OFF-ring (wrap-around run bug — see arc-ring fix)
+        if bool(on[0]):
+            k0 = int(_np.argmin(on))
+            pts = pts[k0:] + pts[:k0]
+            on = _np.roll(on, -k0)
+        out = []
+        i = 0
+        while i < n:
+            if not on[i]:
+                out.append(pts[i]); i += 1
+                continue
+            j = i
+            while j < n and on[j]:
+                j += 1
+            a0 = math.atan2(pts[i][1], pts[i][0])
+            a1 = math.atan2(pts[j-1][1], pts[j-1][0])
+            while a1 - a0 > math.pi:  a1 -= 2*math.pi
+            while a1 - a0 < -math.pi: a1 += 2*math.pi
+            out.append(pts[i])                       # exact run start
+            if abs(a1 - a0) > 1.5 * step:
+                kk0 = int(math.floor(min(a0, a1) / step)) - 1
+                kk1 = int(math.ceil(max(a0, a1) / step)) + 1
+                ks = [k for k in range(kk0, kk1 + 1)
+                      if min(a0, a1) + 0.25*step < step*k < max(a0, a1) - 0.25*step]
+                if a1 < a0:
+                    ks = ks[::-1]
+                out.extend((r_ring*math.cos(step*k), r_ring*math.sin(step*k))
+                           for k in ks)
+            if j - 1 > i:
+                out.append(pts[j-1])                 # exact run end
+            i = j
+        return out
+
+    def _poly(p):
+        try:
+            q = _P(_ring(p.exterior.coords),
+                   [_ring(h.coords) for h in p.interiors])
+            if not q.is_valid:
+                q = q.buffer(0)
+            return q if (q and not q.is_empty) else p
+        except Exception:
+            return p
+
+    if geom is None or geom.is_empty:
+        return geom
+    if geom.geom_type == "Polygon":
+        return _poly(geom)
+    if hasattr(geom, "geoms"):
+        parts = [_poly(g) for g in geom.geoms if g.geom_type == "Polygon"]
+        return _MP(parts) if len(parts) > 1 else (parts[0] if parts else geom)
+    return geom
+
+
 def _structured_gap_sm(n_slip: int, n_sectors: int,
                        m_target: int = None) -> Tuple[int, int]:
     """Pick (S, M) for the structured-gap cells of ONE wedge (route A).
@@ -1754,9 +1857,17 @@ def _structured_gap_sm(n_slip: int, n_sectors: int,
     slip_wedge = int(n_slip) // int(n_sectors)
     if slip_wedge <= 0:
         return 1, max(1, int(n_slip))
-    # candidate M = every divisor of slip_wedge; pick the one closest to target
+    # candidate M = every divisor of slip_wedge; pick the one closest to target.
+    # HARD PREFERENCE: EVEN S.  The stator wedge always spans 2 slot pitches
+    # (slot_period = a slot PAIR), so an odd S puts a half-integer number of
+    # seams per slot pitch — the seam grid PHASE then alternates between the
+    # wedge's two slots, their mouth corners snap DIFFERENTLY, and the slot
+    # symmetry breaks (measured on 24s20p: gl=5 → S=49 odd → h6 tripled +
+    # forbidden orders).  An even S keeps every slot's snap identical.
     divs = [d for d in range(1, slip_wedge + 1) if slip_wedge % d == 0]
-    M = min(divs, key=lambda d: (abs(d - m_target), d))
+    even = [d for d in divs if (slip_wedge // d) % 2 == 0]
+    pool = even if even else divs
+    M = min(pool, key=lambda d: (abs(d - m_target), d))
     S = slip_wedge // M
     return S, M
 

@@ -177,21 +177,19 @@ def _arc_xy(r: float, x0: float, x1: float, n: int = 24, sign: float = 1.0) -> n
 
 
 def stator_unit_blocks(p: Dict, density: float = 1.0) -> List[Tuple]:
-    """Block list (S,E,N,W,nx,ny,tag) for ONE 30° unit, built as the half
-    [tooth axis .. tooth2 axis] mirrored about the tooth2 axis (polar scans
-    confirmed the unit is symmetric about it).  Local frame: wound-tooth axis
-    along +Y.  Measured topology (24 slots, unit = 30°):
+    """ONE 30-deg stator unit as TWO warped tensor grids (premeshed), fully
+    conforming by construction — the same treatment as the rotor unit:
 
-      * wound tooth: VERTICAL walls x = ±tooth_w/2, bore arc → slot bottom;
-      * coil slot [x_t .. x_t+slot_w]: OPEN at the bore; liner U + enamel comb
-        + wire stack pinned to the flat slot bottom (y = OD − core_thickness);
-      * tooth2 on the 15° axis: CLOSED V-notch on its axis — linear wedge
-        walls from a virtual apex (r_apex on the axis) opening to the OD, top
-        blended into the OD arc by the stator_fillet_r fillet;
-      * yoke: between the flat slot bottom chord and the OD arc.
+      T1 [0 .. x_cut] x [bore arc .. OD arc]: x-columns anchored on every
+         vertical wall (tooth, liner, wire column, tooth2 wall x_cut); rows
+         blend bore arc -> exact envelope/wire levels -> slot bottom -> OD
+         arc.  Domain tags per cell from the (column, row) intervals.
+      T2 [x_cut .. 15-deg axis] x [apex .. OD arc]: the V-notch air; columns
+         warp from the vertical wall (+ OD fillet arc above y_tan) to the
+         unit axis; shares T1's row levels on the wall so the seam welds.
 
-    First pass ignores the sub-mm bore fillets (r1≈0.5) and the fill_r2 apex
-    rounding; the coverage harness quantifies the residual (~1 % iron area).
+    Unit = half + mirror about the tooth2 axis.  Sub-mm bore fillets (r1)
+    and the fill_r2 apex rounding stay deferred (coverage ~ -0.3% iron).
     """
     f = stator_unit_frame(p)
     R_o, R_i = f["outer_r"], f["inner_r"]
@@ -200,130 +198,208 @@ def stator_unit_blocks(p: Dict, density: float = 1.0) -> List[Tuple]:
     ins, nw = f["ins_w"], f["n_wires"]
     y_sb = f["y_slot_bottom"]
     y_wt, y_wb = f["y_wire_top"], f["y_wire_bot"]
-    slot_w = ww + 2.0 * ins + wdx           # coil-slot width (vertical walls)
-    xs2 = xt + slot_w                        # tooth2-side slot wall
-    xc0 = xt + ins + wdx / 2.0              # wire column left
-    xc1 = xc0 + ww                           # wire column right
-    x_env0, x_env1 = xt + ins, xs2 - ins    # liner inner faces
-    unit_half = math.radians(15.0)          # tooth2 axis angle
-    ca, sa = math.cos(unit_half), math.sin(unit_half)
-
-    # V-notch: its LEFT wall is simply the cutter's vertical edge x = x_cut
-    # (the p1s→p2s side of the CadQuery trapezoid) continued to the OD; the
-    # right wall is the mirrored vertical of the NEXT unit.  The two verticals
-    # meet on the tooth2 axis at r_apex = x_cut / sin(15°) — the closed-V apex
-    # (matches the polar scans: half-width(r) = x_cut·cos15° − sin15°·√(r²−x_cut²)).
+    slot_w = ww + 2.0 * ins + wdx
+    xs2 = xt + slot_w
+    xc0 = xt + ins + wdx / 2.0
+    xc1 = xc0 + ww
+    x_env0, x_env1 = xt + ins, xs2 - ins
+    unit_half = math.radians(15.0)
+    sa = math.sin(unit_half)
     x_cut = f["x_cut"]
-    apex = (x_cut, x_cut / math.tan(unit_half))
-    r_apex = x_cut / sa
+    apex_y = x_cut / math.tan(unit_half)
     fill_od = float(p.get("stator_fillet_r", 0.0) or 0.0)
-    # OD fillet arc between the vertical wall and the OD circle (inside iron):
-    # centre C is fill_od left of the wall AND fill_od inside the OD circle.
     if fill_od > 1e-6:
         cx_f = x_cut - fill_od
         cy_f = math.sqrt(max((R_o - fill_od) ** 2 - cx_f ** 2, 0.0))
-        y_tan = cy_f                              # tangency on the wall (x=x_cut)
-        od_tan = (cx_f * R_o / (R_o - fill_od),   # tangency on the OD circle
-                  cy_f * R_o / (R_o - fill_od))
-        phi_f0 = math.atan2(x_cut - cx_f, y_tan - cy_f)       # = 90° (wall side)
-        phi_f1 = math.atan2(od_tan[0] - cx_f, od_tan[1] - cy_f)
-        tf = np.linspace(phi_f0, phi_f1, 7)
-        fillet_arc = np.stack([cx_f + fill_od * np.sin(tf),
-                               cy_f + fill_od * np.cos(tf)], axis=1)
+        y_tan = cy_f
+        od_tan_x = cx_f * R_o / (R_o - fill_od)
     else:
         y_tan = math.sqrt(R_o ** 2 - x_cut ** 2)
-        od_tan = (x_cut, y_tan)
-        fillet_arc = np.array([[x_cut, y_tan], [x_cut, y_tan]])
-    phi_od_end = math.atan2(od_tan[0], od_tan[1])   # OD angle of the fillet end
+        od_tan_x = x_cut
 
-    def n_of(length_mm, lo=1):
-        return max(lo, int(round(abs(length_mm) * density)))
-
-    blocks: List[Tuple] = []
-
-    def quad(x0, x1, y0, y1, tag, nx=None, ny=None):
-        nx = nx or n_of(x1 - x0); ny = ny or n_of(y1 - y0)
-        blocks.append((_seg((x0, y0), (x1, y0)), _seg((x1, y0), (x1, y1)),
-                       _seg((x0, y1), (x1, y1)), _seg((x0, y0), (x0, y1)),
-                       nx, ny, tag))
+    def n_of(L, lo=1):
+        return max(lo, int(round(abs(L) * density)))
 
     def ybore(x):
         return math.sqrt(max(R_i * R_i - x * x, 0.0))
 
-    # ── 1) wound-tooth half [0..xt] ────────────────────────────────────────
-    blocks.append((_arc_xy(R_i, 0.0, xt, n=n_of(xt, 3)),
-                   _seg((xt, ybore(xt)), (xt, y_sb)),
-                   _seg((0.0, y_sb), (xt, y_sb)),
-                   _seg((0.0, R_i), (0.0, y_sb)),
-                   n_of(xt, 2), n_of(y_sb - R_i, 4), TAG_IRON))
+    def yod(x):
+        return math.sqrt(max(R_o * R_o - x * x, 0.0))
 
-    # ── 2) coil slot column [xt..xs2] ──────────────────────────────────────
+    # ── column grid (x anchors + fill) ─────────────────────────────────────
+    anchors = [0.0, xt, x_env0, xc0, xc1, x_env1, xs2, x_cut]
+    xs = [0.0]
+    for a, b in zip(anchors[:-1], anchors[1:]):
+        k = n_of((b - a) * 1.2, 1)
+        xs.extend(np.linspace(a, b, k + 1)[1:])
+    xg = np.array(xs)
+
+    # ── row levels (v-parameter bands) ─────────────────────────────────────
+    # band A: bore(x) -> envelope bottom (warped rows)
     y_env_bot = y_wb - wdy / 2.0
-    blocks.append((_arc_xy(R_i, xt, xs2, n=n_of(slot_w, 3)),
-                   _seg((xs2, ybore(xs2)), (xs2, y_env_bot)),
-                   _seg((xt, y_env_bot), (xs2, y_env_bot)),
-                   _seg((xt, ybore(xt)), (xt, y_env_bot)),
-                   n_of(slot_w, 2), n_of(y_env_bot - ybore(xt), 3), TAG_AIR))
-    quad(xt, x_env0, y_env_bot, y_sb - ins, TAG_LINER, nx=1)
-    quad(x_env1, xs2, y_env_bot, y_sb - ins, TAG_LINER, nx=1)
-    quad(xt, xs2, y_sb - ins, y_sb, TAG_LINER, ny=1)
-    if nw > 0:
-        quad(x_env0, xc0, y_env_bot, y_sb - ins, TAG_ENAMEL, nx=1)
-        quad(xc1, x_env1, y_env_bot, y_sb - ins, TAG_ENAMEL, nx=1)
-        quad(xc0, xc1, y_wt + wdy / 2.0, y_sb - ins, TAG_ENAMEL, ny=1)
-        y = y_wt
-        for k in range(nw):
-            quad(xc0, xc1, y - wh, y, TAG_COIL,
-                 ny=max(1, int(round(wh * density * 2))))
-            y2 = y - wh - (wdy if k < nw - 1 else wdy / 2.0)
-            quad(xc0, xc1, y2, y - wh, TAG_ENAMEL, ny=1)
-            y -= wh + wdy
-    else:
-        quad(x_env0, x_env1, y_env_bot, y_sb - ins, TAG_AIR)
+    nA = max(2, n_of(y_env_bot - ybore(xs2), 2))
+    # band B: exact envelope levels (liner/enamel/wires) — FIXED y levels
+    levB = [y_env_bot]
+    y = y_wb
+    for k in range(nw):
+        levB.append(y); levB.append(y + wh)
+        y += wh + wdy
+    levB.append(y_sb - ins)
+    levB.append(y_sb)
+    levB = sorted(set(round(v, 9) for v in levB))
+    if apex_y > levB[0] and apex_y < y_sb:
+        levB = sorted(set(levB + [round(apex_y, 9)]))
+    # band C: slot bottom -> OD(x) (warped rows)
+    nC = max(2, n_of(R_o - y_sb, 2))
 
-    # ── 3) tooth2 half + V half-notch (vertical wall x = x_cut) ────────────
-    x_axis_bore = R_i * sa                    # unit-axis x at the bore
-    y_wall_bore = ybore(x_cut) if x_cut < R_i else 0.0
-    # 3a. body below the apex: bore arc → apex arc (radius r_apex)
-    th0 = math.asin(min(xs2 / r_apex, 1.0))
-    arcS = _arc_xy(R_i, xs2, x_axis_bore, n=n_of(x_axis_bore - xs2, 3))
-    ths = np.linspace(th0, unit_half, max(3, n_of(r_apex * (unit_half - th0), 2) + 1))
-    arcN_apex = np.stack([r_apex * np.sin(ths), r_apex * np.cos(ths)], axis=1)
-    axis_lo = np.array([[x_axis_bore, R_i * ca],
-                        [r_apex * sa, r_apex * ca]])
-    blocks.append((arcS, axis_lo, arcN_apex,
-                   _seg((xs2, ybore(xs2)), (xs2, r_apex * math.cos(th0))),
-                   n_of(x_axis_bore - xs2, 3), n_of(r_apex - R_i, 2), TAG_IRON))
-    # 3b. body above the apex: slot wall .. vertical V wall, apex arc .. slot bottom
-    blocks.append((arcN_apex,
-                   _seg(apex, (x_cut, y_sb)),
-                   _seg((xs2, y_sb), (x_cut, y_sb)),
-                   _seg((xs2, r_apex * math.cos(th0)), (xs2, y_sb)),
-                   n_of(x_cut - xs2, 3), n_of(y_sb - apex[1], 3), TAG_IRON))
-    # 3c. yoke: slot bottom chord → OD arc, east wall = vertical + OD fillet
-    east_yoke = np.concatenate([np.array([[x_cut, y_sb]]), fillet_arc], axis=0)
-    arcOD = _arc_xy(R_o, 0.0, od_tan[0], n=max(4, n_of(R_o * phi_od_end, 3)))
-    blocks.append((_seg((0.0, y_sb), (x_cut, y_sb)),
-                   east_yoke, arcOD,
-                   _seg((0.0, y_sb), (0.0, R_o)),
-                   n_of(x_cut, 4), n_of(R_o - y_sb, 3), TAG_IRON))
-    # 3d. V half-notch air: apex → OD between the wall(+fillet) and the axis
-    axis_hi = np.array([[r_apex * sa, r_apex * ca], [R_o * sa, R_o * ca]])
-    vwall_full = np.concatenate(
-        [np.array([[x_cut, apex[1]]]), fillet_arc], axis=0)
-    arcOD_v = _arc_xy(R_o, od_tan[0], R_o * sa,
-                      n=max(3, n_of(R_o * (unit_half - phi_od_end), 2)))
-    blocks.append((np.array([apex, apex]), axis_hi, arcOD_v, vwall_full,
-                   max(2, n_of(R_o * (unit_half - phi_od_end), 2)),
-                   n_of(R_o - r_apex, 4), TAG_AIR))
+    rows = []           # list of callables y(x)
+    for i in range(nA):
+        t = i / nA
+        rows.append(lambda x, t=t: ybore(x) * (1 - t) + y_env_bot * t)
+    for lv in levB[:-1]:
+        rows.append(lambda x, lv=lv: lv)
+    for i in range(nC + 1):
+        t = i / nC
+        rows.append(lambda x, t=t: y_sb * (1 - t) + yod(x) * t)
+    n_rows = len(rows)
 
-    # ── mirror about the tooth2 axis to complete the 30° unit ─────────────
-    a2 = math.radians(90.0 - 15.0)
-    Rm = np.array([[math.cos(2 * a2), math.sin(2 * a2)],
-                   [math.sin(2 * a2), -math.cos(2 * a2)]])
-    mirrored = [(S @ Rm.T, E @ Rm.T, N @ Rm.T, W @ Rm.T, nx, ny, tag)
-                for (S, E, N, W, nx, ny, tag) in blocks]
-    return blocks + mirrored
+    def wall_x(y):
+        # tooth2 outer wall: vertical x_cut, blended into the OD fillet arc
+        if fill_od > 1e-6 and y > y_tan:
+            return cx_f + math.sqrt(max(fill_od ** 2 - (y - cy_f) ** 2, 0.0))
+        return x_cut
+
+    V1 = np.empty((n_rows * len(xg), 2))
+    iC0 = n_rows - (nC + 1)                   # first row of zone C (yoke blend)
+    wall_pts: List[Tuple[float, float]] = []   # tooth2-wall node per row (shared with T2)
+    y_top_wall = math.sqrt(max(R_o ** 2 - od_tan_x ** 2, 0.0))  # fillet end on OD
+    for i, fy in enumerate(rows):
+        ys = np.array([fy(x) for x in xg])
+        xr = xg.copy()
+        # last column follows the tooth2 wall + OD fillet; in zone C its row
+        # levels blend to the FILLET END on the OD (not the vertical's OD).
+        if i >= iC0:
+            t = (i - iC0) / nC
+            yw = y_sb * (1 - t) + y_top_wall * t
+        else:
+            yw = float(ys[-1])
+        xr[-1] = wall_x(yw)
+        ys[-1] = yw
+        wall_pts.append((xr[-1], yw))
+        V1[i * len(xg):(i + 1) * len(xg), 0] = xr
+        V1[i * len(xg):(i + 1) * len(xg), 1] = ys
+    idx = np.arange(n_rows * len(xg)).reshape(n_rows, len(xg))
+    a_ = idx[:-1, :-1].ravel(); b_ = idx[:-1, 1:].ravel()
+    c_ = idx[1:, 1:].ravel();   d_ = idx[1:, :-1].ravel()
+    T1 = np.concatenate([np.stack([a_, b_, c_], 1), np.stack([a_, c_, d_], 1)])
+
+    # cell tags
+    xc_ = 0.5 * (xg[:-1] + xg[1:])
+    nx_ = len(xg) - 1
+    tag_rows = []
+    yb_mid = [0.5 * (rows[i](0.0) + rows[i + 1](0.0)) for i in range(n_rows - 1)]
+    for i in range(n_rows - 1):
+        ymid_at = lambda x: 0.5 * (rows[i](x) + rows[i + 1](x))
+        row_tags = np.empty(nx_, np.int16)
+        for j, xm in enumerate(xc_):
+            ym = ymid_at(xm)
+            if ym >= y_sb - 1e-9:
+                tg = TAG_IRON                       # yoke
+            elif xm <= xt:
+                tg = TAG_IRON                       # wound tooth
+            elif xm >= xs2:
+                # tooth2 body vs V apex region: above the line through apex it
+                # is still iron up to the wall (T2 handles beyond x_cut)
+                tg = TAG_IRON
+            else:
+                # slot interior
+                if ym < y_env_bot - 1e-9:
+                    tg = TAG_AIR
+                elif ym >= y_sb - ins - 1e-9:
+                    tg = TAG_LINER                  # liner top strip
+                elif xm <= x_env0 or xm >= x_env1:
+                    tg = TAG_LINER                  # liner side strips
+                elif xm <= xc0 or xm >= xc1:
+                    tg = TAG_ENAMEL                 # enamel margins
+                else:
+                    # wire stack: inside a wire level?
+                    tg = TAG_ENAMEL
+                    yy = y_wb
+                    for k in range(nw):
+                        if yy - 1e-9 <= ym <= yy + wh + 1e-9:
+                            tg = TAG_COIL
+                            break
+                        yy += wh + wdy
+            row_tags[j] = tg
+        tag_rows.append(row_tags)
+    G1 = np.concatenate([np.stack(tag_rows).ravel()] * 2)
+
+    # ── T2: V half-notch air [x_cut .. axis] x [apex .. OD] ───────────────
+    wallV = [(x_cut, apex_y)] + [(xw, yw) for (xw, yw) in wall_pts
+                                 if yw > apex_y + 1e-9]
+    nV = len(wallV)
+    mcols = max(2, n_of((R_o * sa - x_cut) * 1.2, 2))
+    V2 = np.empty((nV * (mcols + 1), 2))
+    ca_u = math.cos(unit_half)
+    for i, (xw, yw) in enumerate(wallV):
+        if i == nV - 1:
+            # TOP row: exactly on the OD arc, fillet end → unit axis
+            ph0 = math.atan2(od_tan_x, math.sqrt(R_o ** 2 - od_tan_x ** 2))
+            ph = np.linspace(ph0, unit_half, mcols + 1)
+            V2[i * (mcols + 1):(i + 1) * (mcols + 1), 0] = R_o * np.sin(ph)
+            V2[i * (mcols + 1):(i + 1) * (mcols + 1), 1] = R_o * np.cos(ph)
+            continue
+        # axis point at the same RADIUS as the wall point (keeps rows radial-ish)
+        rr_ = math.hypot(xw, yw)
+        ax_x, ax_y = rr_ * sa, rr_ * ca_u
+        ts = np.linspace(0.0, 1.0, mcols + 1)
+        V2[i * (mcols + 1):(i + 1) * (mcols + 1), 0] = xw * (1 - ts) + ax_x * ts
+        V2[i * (mcols + 1):(i + 1) * (mcols + 1), 1] = yw * (1 - ts) + ax_y * ts
+    idx2 = np.arange(nV * (mcols + 1)).reshape(nV, mcols + 1)
+    a2 = idx2[:-1, :-1].ravel(); b2 = idx2[:-1, 1:].ravel()
+    c2 = idx2[1:, 1:].ravel();   d2 = idx2[1:, :-1].ravel()
+    T2b = np.concatenate([np.stack([a2, b2, c2], 1), np.stack([a2, c2, d2], 1)])
+    G2 = np.full(len(T2b), TAG_AIR, np.int16)
+
+    # ── T3: iron wedge UNDER the V apex [wall .. axis] × [bore .. r_apex] ──
+    # polar tensor: theta warps from the wall line asin(x_cut/r) to the axis;
+    # degenerates to the apex point at r_apex (fan) — conforming with the
+    # mirror on the axis; the straight wall seam T-stitches against T1.
+    r_apex_r = math.hypot(x_cut, apex_y)
+    nw3 = max(2, n_of(r_apex_r - R_i, 2))
+    m3 = max(2, mcols // 2)
+    V3 = np.empty(((nw3 + 1) * (m3 + 1), 2))
+    for i in range(nw3 + 1):
+        r = R_i + (r_apex_r - R_i) * i / nw3
+        th0 = math.asin(min(x_cut / r, 1.0))
+        th = np.linspace(th0, unit_half, m3 + 1)
+        V3[i * (m3 + 1):(i + 1) * (m3 + 1), 0] = r * np.sin(th)
+        V3[i * (m3 + 1):(i + 1) * (m3 + 1), 1] = r * np.cos(th)
+    idx3 = np.arange((nw3 + 1) * (m3 + 1)).reshape(nw3 + 1, m3 + 1)
+    a3 = idx3[:-1, :-1].ravel(); b3 = idx3[:-1, 1:].ravel()
+    c3 = idx3[1:, 1:].ravel();   d3 = idx3[1:, :-1].ravel()
+    T3b = np.concatenate([np.stack([a3, b3, c3], 1), np.stack([a3, c3, d3], 1)])
+    G3 = np.full(len(T3b), TAG_IRON, np.int16)
+
+    V = np.concatenate([V1, V2, V3])
+    T = np.concatenate([T1, T2b + len(V1), T3b + len(V1) + len(V2)])
+    G = np.concatenate([G1, G2, G3])
+    p0, p1, p2 = V[T[:, 0]], V[T[:, 1]], V[T[:, 2]]
+    ar2 = (p1[:, 0] - p0[:, 0]) * (p2[:, 1] - p0[:, 1]) - \
+          (p1[:, 1] - p0[:, 1]) * (p2[:, 0] - p0[:, 0])
+    cw = ar2 < 0
+    T[cw] = T[cw][:, ::-1]
+    keep = np.abs(ar2) > 1e-12
+    T = T[keep]; G = G[keep]
+
+    # mirror about the tooth2 axis (15 deg)
+    a2m = math.radians(90.0 - 15.0)
+    Rm = np.array([[math.cos(2 * a2m), math.sin(2 * a2m)],
+                   [math.sin(2 * a2m), -math.cos(2 * a2m)]])
+    Vm = V @ Rm.T
+    Tm = (T + len(V))[:, ::-1]
+    return [("premeshed", np.concatenate([V, Vm]),
+             np.concatenate([T, Tm]), np.concatenate([G, G]))]
 
 
 TAG_MAGNET = 4

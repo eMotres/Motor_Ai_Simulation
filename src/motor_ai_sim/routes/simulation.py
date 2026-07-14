@@ -2556,7 +2556,7 @@ def get_fem_transient(
     pole_copy:           bool  = False,   # ← bit-identical pole/slot template-copy mesh
     hi_fidelity:         bool  = False,   # ← 2× slip nodes + finer mesh → smoother raw torque (slower)
     structured_gap:      bool  = False,   # ← ANSYS-style concentric-ring air-gap mesh (experimental)
-    airgap_macro:        bool  = False,   # ← harmonic air-gap macroelement (honest RAW ripple; full ring only)
+    airgap_macro:        bool  = False,   # ← harmonic air-gap macroelement (honest RAW ripple; full ring + sectors)
     restore:             bool  = False,   # ← on open: return the LAST saved transient (stale if params differ) instead of recomputing
     geo:                 Optional[str] = None,  # ← per-request geometry override (multi-user); absent = global config
     drive:               str   = "current",  # ← "current" (imposed sinusoidal I) | "voltage"

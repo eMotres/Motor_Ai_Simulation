@@ -794,7 +794,7 @@ const MeshPanel: React.FC = () => {
                   <ToggleButton value="struct">Structured (rings)</ToggleButton>
                 </ToggleButtonGroup>
               </Tooltip>
-              <Tooltip placement="right" title="Replaces the node re-pairing slip coupling with a smooth per-harmonic rotor-stator link. RAW (unfiltered) torque ripple becomes independent of the step count — the honest ripple figure. Full-disk sector only (silently ignored on 1/2 or 1/4 sector models). Solver-side: the mesh preview is unchanged.">
+              <Tooltip placement="right" title="Replaces the node re-pairing slip coupling with a smooth per-harmonic rotor-stator link. RAW (unfiltered) torque ripple becomes step-count independent — the honest ripple figure. Works on the full disk AND sector models (anti-periodic harmonic ladder); sector evals are ~5x faster. Solver-side: the mesh preview is unchanged.">
                 <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mt: 0.75 }}>
                   <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>Harmonic gap (exact ripple)</Typography>
                   <Switch size="small" checked={harmonicGap}

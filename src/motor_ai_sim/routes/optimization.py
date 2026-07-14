@@ -434,7 +434,7 @@ class ScanRequest(BaseModel):
     rotor_eddy: bool = False                # field-based magnet/shaft eddy — SINGLE SOURCE: Simulation (drives magnet loss / eff vs slab estimate)
     hi_fidelity: bool = False               # 2× slip nodes + finer mesh + ≥4 gap layers — SINGLE SOURCE: Mesh tab (smoother raw torque, ~3-5× slower)
     structured_gap: bool = False            # belt (mapped concentric-ring) gap mesh — SINGLE SOURCE: Mesh tab "Structured"; honest ripple, ¼-sector == full disk
-    airgap_macro: bool = False              # harmonic gap coupling — SINGLE SOURCE: Mesh tab "Harmonic gap"; RAW ripple step-independent (full ring only)
+    airgap_macro: bool = False              # harmonic gap coupling — SINGLE SOURCE: Mesh tab "Harmonic gap"; RAW ripple step-independent (full ring + sectors)
     seed: int = 12345
     run_id: str = ""
 
@@ -993,7 +993,7 @@ class DescentRequest(BaseModel):
     # as the Simulation tab.
     structured_gap: bool = False
     # Harmonic gap coupling — SINGLE SOURCE: Mesh tab "Harmonic gap".  RAW
-    # ripple becomes step-count independent; full ring only (ignored on sectors).
+    # ripple becomes step-count independent; full ring AND sector models.
     airgap_macro: bool = False
     # Pole/slot mesh mode from the UI (Mesh tab "Periodic (identical poles)").
     # None = solver env default; the optimizer must mesh the SAME way Simulation does.
@@ -1069,7 +1069,7 @@ class BaselineRequest(BaseModel):
     min_size_mm: float = 0.3
     gap_layers: float = 2.0
     structured_gap: bool = False   # Mesh tab "Structured" toggle (belt gap mesh)
-    airgap_macro: bool = False     # Mesh tab "Harmonic gap" (step-independent RAW ripple; full ring)
+    airgap_macro: bool = False     # Mesh tab "Harmonic gap" (step-independent RAW ripple; full ring + sectors)
     pole_copy: Optional[bool] = None
     torque_filter: bool = True
     rotor_eddy: bool = True

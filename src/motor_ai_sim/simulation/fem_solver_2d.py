@@ -4768,9 +4768,10 @@ def fem_transient_sliding_band(
     airgap_macro: bool = False,      # harmonic air-gap macroelement (Mesh-tab "Harmonic gap"):
                                      # replaces the node re-pairing slip coupling with a smooth
                                      # analytic per-harmonic rotor↔stator link → RAW T(t) becomes
-                                     # step-count independent (honest unfiltered ripple).  Full
-                                     # ring only (sector harmonics deferred) — silently ignored
-                                     # on sector models.  ORs with the SB_AIRGAP_MACRO env flag.
+                                     # step-count independent (honest unfiltered ripple).  Works
+                                     # on the full ring AND sector wedges (half-integer harmonic
+                                     # ladder / skew-circulant for anti-periodic wedges).  ORs
+                                     # with the SB_AIRGAP_MACRO env flag.
     drive: str = "current",          # "current" = imposed sinusoidal phase currents (default);
                                      # "voltage" = imposed sinusoidal phase VOLTAGE — the phase
                                      # currents become circuit STATE solved from V = R·i + dψ/dt
@@ -4956,14 +4957,22 @@ def fem_transient_sliding_band(
     _slip_base = int(round(1008.0 * (max(1.0, float(gap_layers)) + 2.0) / 3.0))
     _slip_per_period = 24 * max(5, math.ceil(_slip_base / (24 * pole_pairs)))
     n_slip_eff = pole_pairs * _slip_per_period
-    if (bool(_SB_AIRGAP_MACRO) or bool(airgap_macro)) and _full_ring:
+    if bool(_SB_AIRGAP_MACRO) or bool(airgap_macro):
         # The harmonic macroelement is ANALYTIC between ring nodes, so a COARSE ring
         # is enough — and its coupling is a DENSE N×N block, so a small N is wanted.
         # 48 nodes/period resolves angular harmonics to 24·pole_pairs (≫ the
         # significant slot/pole orders); the node-identification band needed the
         # fine ≥120/period purely to keep the re-pairing quiet — the macroelement
         # does not.  This is the efficiency lever that makes the dense block cheap.
+        # Denser rings are WORSE, not better: they admit high spatial harmonics the
+        # real gap damps as e^{−k·g} (measured: ring-48 14.2%, ring-216 15.6±0.7,
+        # ring-432 25.7% — ring-48 acts as the physical gap filter).  Applies to
+        # sector models too (the wedge ring is n_slip/n_sectors of these nodes);
+        # bumped to the next n_sectors multiple so wedge node counts stay integral.
         _slip_per_period = 48
+        _ns_abs = max(1, abs(int(n_sectors)))
+        while (pole_pairs * _slip_per_period) % _ns_abs:
+            _slip_per_period += 1
         n_slip_eff = pole_pairs * _slip_per_period
     if _SLIP_PER_PERIOD_OVERRIDE:        # advanced: force ring density (dev flag —
         # decouples ring-count/mesh convergence studies from the adaptive
@@ -5468,9 +5477,24 @@ def fem_transient_sliding_band(
         # at the source.  Per-harmonic stiffness + nodal assembly validated standalone
         # (energy == analytic == FEM annulus; m-shift == circulant shift).  Full-ring
         # only for now (sector anti-periodic harmonics deferred).
-        _use_macro = (bool(_SB_AIRGAP_MACRO) or bool(airgap_macro)) and _full_ring
+        _use_macro = bool(_SB_AIRGAP_MACRO) or bool(airgap_macro)
         if _use_macro:
-            _Nm = int(Nring)
+            # SECTOR generalisation: a wedge of 1/S of the machine carries the
+            # (anti-)periodic harmonic ladder k = S·(m + moff), moff = 1/2 when
+            # the wedge field is ANTI-periodic (odd pole count per wedge, i.e.
+            # _bc_sign = −1) and 0 when periodic.  The half-integer ladder makes
+            # the circulant a SKEW-circulant automatically (col(d−Nw) = −col(d)),
+            # so the anti-periodic wrap sign needs no special-casing.  Full ring
+            # is the S=1, moff=0 member of the same family.
+            if _full_ring:
+                _NwM = int(Nring)                  # independent ring nodes in model
+                _SfacM = 1
+                _moffM = 0.0
+            else:
+                _NwM = int(Nring) - 1              # open wedge: last node == first via cut
+                _SfacM = max(1, int(round(360.0 / (_NwM * float(spacing)))))
+                _moffM = 0.5 if float(_bc_sign) < 0 else 0.0
+            _NfullM = _NwM * _SfacM                # full-circle node count (order base)
             _r1M, _r2M, _stkM = float(_r1_m), float(_r2_m), float(p.stack_length)
 
             def _Qk_gap(k):
@@ -5494,29 +5518,44 @@ def fem_transient_sliding_band(
             # exactly like _T_band).  So the gap coupling must also be per-unit — the
             # stack length _stkM is applied only in _T_macro below.  (Baking L in here
             # made the gap ~1/L weaker than the iron → decoupled, garbage field.)
-            _Gm = 2.0 * math.pi / (MU0 * _Nm)             # DFT energy normalisation (per-unit)
-            _mu_rr = np.empty(_Nm); _mu_rs = np.empty(_Nm); _mu_ss = np.empty(_Nm)
-            for _j in range(_Nm):
-                _q11, _q12, _q22 = _Qk_gap(min(_j, _Nm - _j))   # phys order = min(j,N−j)
+            # Wedge energy = 1/S of the machine → G = S·2π/(MU0·Nfull) = 2π/(MU0·Nw).
+            _Gm = 2.0 * math.pi / (MU0 * _NwM)            # DFT energy normalisation (per-unit)
+            _kphysM = _SfacM * (np.arange(_NwM) + _moffM)  # physical order per bin
+            _kfoldM = np.minimum(_kphysM, _NfullM - _kphysM)   # fold to 0..Nfull/2
+            _mu_rr = np.empty(_NwM); _mu_rs = np.empty(_NwM); _mu_ss = np.empty(_NwM)
+            for _j in range(_NwM):
+                _q11, _q12, _q22 = _Qk_gap(float(_kfoldM[_j]))
                 _mu_rr[_j], _mu_rs[_j], _mu_ss[_j] = _Gm*_q11, _Gm*_q12, _Gm*_q22
-            for _j in (0, _Nm // 2):                       # unpaired bins counted once
-                _mu_rr[_j] *= 0.5; _mu_rs[_j] *= 0.5; _mu_ss[_j] *= 0.5
-            _jfreq = np.arange(_Nm, dtype=float)
-            _jfreq[_jfreq > _Nm/2] -= _Nm                  # signed frequency (for ∂/∂φ)
-            _ii_m = (np.arange(_Nm)[:, None] - np.arange(_Nm)[None, :]) % _Nm
+            for _j in range(_NwM):                         # unpaired bins counted once
+                if _kphysM[_j] == 0 or 2 * _kphysM[_j] == _NfullM:
+                    _mu_rr[_j] *= 0.5; _mu_rs[_j] *= 0.5; _mu_ss[_j] *= 0.5
+            _jfreq = _kphysM.copy()                        # signed PHYSICAL order (for ∂/∂φ)
+            _jfreq[_jfreq > _NfullM/2] -= _NfullM
+            _ii_m = (np.arange(_NwM)[:, None] - np.arange(_NwM)[None, :]) % _NwM
+            # Half-integer twist: FFT bins live at (m+moff)/Nw cycles per node.
+            _twn = np.exp(-1j * 2.0 * np.pi * _moffM * np.arange(_NwM) / _NwM)
+            _twd = np.conj(_twn)                           # e^{+i·2π·moff·d/Nw}
+            _gR1M = _gR1[:_NwM]; _gR2M = _gR2[:_NwM]
 
-            def _circ_of(mu):                              # circulant C[i,j]=col[(i−j)%N]
-                return np.fft.ifft(mu).real[_ii_m]
+            def _circ_of(mu):                              # (skew-)circulant C[i,j]=col[(i−j)%Nw]
+                col = (_twd * np.fft.ifft(mu)).real
+                return col[_ii_m] * np.where(
+                    (np.arange(_NwM)[:, None] - np.arange(_NwM)[None, :]) < 0,
+                    (-1.0 if _moffM else 1.0), 1.0)
             _Krr_blk = _circ_of(_mu_rr)                    # rotor-rotor  (m-independent)
             _Kss_blk = _circ_of(_mu_ss)                    # stator-stator(m-independent)
-            _Rg1, _Cg1 = np.meshgrid(_gR1, _gR1, indexing="ij")
-            _Rg2, _Cg2 = np.meshgrid(_gR2, _gR2, indexing="ij")
-            _Rg12, _Cg12 = np.meshgrid(_gR1, _gR2, indexing="ij")
+            _Rg1, _Cg1 = np.meshgrid(_gR1M, _gR1M, indexing="ij")
+            _Rg2, _Cg2 = np.meshgrid(_gR2M, _gR2M, indexing="ij")
+            _Rg12, _Cg12 = np.meshgrid(_gR1M, _gR2M, indexing="ij")
 
             def _K_gap_macro(m):
-                # rotor↔stator block at rotor shift m: phase e^{i·2π·jfreq·m/N}
-                _krs = np.fft.ifft(_mu_rs *
-                                   np.exp(1j*2*np.pi*_jfreq*int(m)/_Nm)).real[_ii_m]
+                # rotor↔stator block at rotor shift m: phase e^{i·2π·(mm+moff)·m/Nw}
+                # (= e^{i·k_phys·φ_m}, φ_m = 2π·m/Nfull)
+                ph = np.exp(1j*2*np.pi*(np.arange(_NwM)+_moffM)*int(m)/_NwM)
+                colm = (_twd * np.fft.ifft(_mu_rs * ph))
+                _krs = colm.real[_ii_m] * np.where(
+                    (np.arange(_NwM)[:, None] - np.arange(_NwM)[None, :]) < 0,
+                    (-1.0 if _moffM else 1.0), 1.0)
                 # forward block  K[gR1[a],gR2[b]] = _krs[a,b]  and its symmetric
                 # transpose K[gR2[b],gR1[a]] = _krs[a,b] (NOT _krs[b,a] — _krs is
                 # asymmetric for m≠0, so a literal .T here made the global matrix
@@ -5531,11 +5570,14 @@ def fem_transient_sliding_band(
 
             def _T_macro(m, Avec):
                 # virtual work: T = −∂(L·w_gap)/∂φ ; only the rotor↔stator term depends
-                # on φ.  w_rs(per-unit) = (1/N) Σ μ_rs(j) e^{i·jfreq·φ} conj(Ûr) Ûs;
-                # the real torque scales by the stack length _stkM (= L).
-                Ur = np.fft.fft(Avec[_gR1]); Us = np.fft.fft(Avec[_gR2])
-                ph = np.exp(1j*2*np.pi*_jfreq*int(m)/_Nm)
-                return float(-(_stkM/_Nm) * np.sum(
+                # on φ.  w_rs(per-unit) = (1/Nw) Σ μ_rs(j) e^{i·k·φ} conj(Ûr) Ûs with
+                # Û = FFT of the moff-twisted ring samples; ∂/∂φ brings i·k_signed
+                # (PHYSICAL order).  Returns the WEDGE torque (1/S of the machine),
+                # matching _T_band's wedge convention — the caller's sector scaling
+                # applies unchanged.  Real torque scales by the stack length _stkM.
+                Ur = np.fft.fft(Avec[_gR1M] * _twn); Us = np.fft.fft(Avec[_gR2M] * _twn)
+                ph = np.exp(1j*2*np.pi*(np.arange(_NwM)+_moffM)*int(m)/_NwM)
+                return float(-(_stkM/_NwM) * np.sum(
                     (1j*_jfreq) * _mu_rs * ph * np.conj(Ur) * Us).real)
 
         def _tri_template(P3):

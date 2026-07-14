@@ -456,6 +456,83 @@ def _ring_grid(angles: np.ndarray, r0: float, r1: float, n_r: int, tag: int):
     return V, T, np.full(len(T), tag, np.int16)
 
 
+def template_solver_halves(p: Dict, polys: Dict, outer_air_factor: float = 1.2,
+                           density: float = 1.2):
+    """Solver-ready halves in DOM_* tags: (mesh_s, tags_s, cls_s,
+    mesh_r, tags_r, cls_r).  Coil/magnet domains are renumbered by centroid
+    against the CadQuery lists so the winding circuit and pole polarities
+    stay identical to the gmsh build."""
+    from skfem import MeshTri
+    from scipy.spatial import cKDTree
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+    DOM_AIR, DOM_STATOR, DOM_ROTOR, DOM_SHAFT, DOM_OUTER = 0, 1, 5, 6, 8
+    DOM_LINER, DOM_ENAMEL = 9, 10
+    DOM_MAG_BASE, DOM_COIL_BASE = 100, 200
+
+    def _components(T, mask):
+        """Connected components of the triangle subset (edge adjacency)."""
+        idx = np.where(mask)[0]
+        if not len(idx):
+            return np.array([]), 0
+        edge_map: Dict[Tuple[int, int], int] = {}
+        rows = []; cols = []
+        for k, ti in enumerate(idx):
+            t = T[ti]
+            for a, b in ((t[0], t[1]), (t[1], t[2]), (t[2], t[0])):
+                e = (min(a, b), max(a, b))
+                if e in edge_map:
+                    rows.append(edge_map[e]); cols.append(k)
+                else:
+                    edge_map[e] = k
+        n = len(idx)
+        adj = coo_matrix((np.ones(len(rows)), (rows, cols)), shape=(n, n))
+        ncomp, lab = connected_components(adj + adj.T, directed=False)
+        return lab, ncomp
+
+    def _centroids(V, T, idx):
+        return (V[T[idx, 0]] + V[T[idx, 1]] + V[T[idx, 2]]) / 3.0
+
+    def _finish(V, T, G, kind):
+        tags = np.empty(len(T), np.int16)
+        if kind == "s":
+            tags[G == TAG_IRON] = DOM_STATOR
+            tags[G == TAG_AIR] = DOM_AIR
+            tags[G == TAG_AIR + 100] = DOM_OUTER
+            tags[G == TAG_LINER] = DOM_LINER
+            tags[G == TAG_ENAMEL] = DOM_ENAMEL
+            # coils: per-triangle nearest CadQuery coil centroid (wires are
+            # thicker than the enamel gaps, so centroids never cross over)
+            mask = G == TAG_COIL
+            idx = np.where(mask)[0]
+            ref = np.array([[c.centroid.x, c.centroid.y] for c in polys["coils"]])
+            _, j = cKDTree(ref).query(_centroids(V, T, idx))
+            tags[idx] = (DOM_COIL_BASE + j).astype(np.int16)
+        else:
+            tags[G == TAG_IRON] = DOM_ROTOR
+            tags[G == TAG_AIR] = DOM_AIR
+            tags[G == TAG_IRON + 100] = DOM_SHAFT
+            mask = G == TAG_MAGNET
+            idx = np.where(mask)[0]
+            ref = np.array([[mg.centroid.x, mg.centroid.y]
+                            for mg, _pol in polys["magnets"]])
+            _, j = cKDTree(ref).query(_centroids(V, T, idx))
+            tags[idx] = (DOM_MAG_BASE + j).astype(np.int16)
+        mesh = MeshTri(np.ascontiguousarray(V.T) * 1e-3,     # mm → m (solver units)
+                       np.ascontiguousarray(T.T))
+        def _cls(x, y, _k=kind):
+            return DOM_STATOR if _k == "s" else DOM_ROTOR
+        _cls.polys = polys
+        return mesh, tags, _cls
+
+    Vs, Ts, Gs = stitch_hanging(*assemble_stator_half(
+        p, density=density, outer_air_factor=outer_air_factor))
+    Vr, Tr, Gr = stitch_hanging(*assemble_rotor_half(p, density=density))
+    ms, ts, cs = _finish(Vs, Ts, Gs, "s")
+    mr, tr, cr = _finish(Vr, Tr, Gr, "r")
+    return ms, ts, cs, mr, tr, cr
+
+
 def stitch_hanging(V: np.ndarray, T: np.ndarray, G: np.ndarray,
                    tol: float = 1e-7, max_pass: int = 4):
     """Fix T-junctions: for every boundary edge that has other mesh nodes
@@ -557,10 +634,13 @@ def assemble_rotor_half(p: Dict, density: float = 1.0):
     plus the shaft ring."""
     n_p = int(p["num_poles"])
     unit = math.radians(360.0 / n_p)
+    # CadQuery zero-position: first magnet axis at 90deg + ZERO_OFFSET, i.e.
+    # rotated by -(90 - pole_pitch/2) from the +Y axis (see get_2d_polygons).
+    ang0 = -math.radians(90.0 - 360.0 / n_p / 2.0)
     Vu, Tu, Gu = mesh_blocks(rotor_unit_blocks(p, density))
     Vs = []; Ts = []; Gs = []; off = 0
     for k in range(n_p):
-        Vs.append(_rotate(Vu, -k * unit))
+        Vs.append(_rotate(Vu, -(k * unit) - ang0))
         Ts.append(Tu + off); Gs.append(Gu); off += len(Vu)
     V = np.concatenate(Vs); T = np.concatenate(Ts); G = np.concatenate(Gs)
     V, T, G = _weld(V, T, G)

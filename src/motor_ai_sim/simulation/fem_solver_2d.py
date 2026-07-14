@@ -1337,6 +1337,11 @@ def _build_sliding_band_meshes(
                 from motor_ai_sim.simulation.iron_template import template_solver_halves
                 from motor_ai_sim.cadquery_geometry import CadQueryMotor as _CQM
                 _p_geo = _CQM().parameters
+                _sgspec = polys.get("structured_gap_spec") or {}
+                if _sgspec:            # iron circles must sit EXACTLY on the
+                    _p_geo = dict(_p_geo)   # belt-spec radii (4 um off = no weld)
+                    _p_geo["stator_inner_radius"] = float(_sgspec["r_si"])
+                    _p_geo["rotor_outer_radius"] = float(_sgspec["r_ro"])
                 (mesh_s, tags_s, classify_s,
                  mesh_r, tags_r, classify_r) = template_solver_halves(
                     _p_geo, polys, outer_air_factor=outer_air_factor,
@@ -1347,7 +1352,7 @@ def _build_sliding_band_meshes(
                 log.warning("iron template failed (%s) — gmsh build", _te)
                 mesh_s = tags_s = classify_s = None
                 mesh_r = tags_r = classify_r = None
-        if _pc_stator and _slot_period and _slot_period > 0:
+        if mesh_s is None and _pc_stator and _slot_period and _slot_period > 0:
             _ncs = round(360.0 / _slot_period)
             if _ncs >= 1 and abs(_ncs * _slot_period - 360.0) < 1e-6:
                 try:
@@ -1360,7 +1365,7 @@ def _build_sliding_band_meshes(
             mesh_s, tags_s, classify_s = _stitch_full_half(
                 polys_s_for_mesh, DOM_OUTER,
                 dict(_common_kw, rotational_period_deg=_slot_period))
-        if _pc_rotor and _pole_period and _pole_period > 0:
+        if mesh_r is None and _pc_rotor and _pole_period and _pole_period > 0:
             _ncp = round(360.0 / _pole_period)
             if _ncp >= 1 and abs(_ncp * _pole_period - 360.0) < 1e-6:
                 try:
@@ -5212,7 +5217,12 @@ def fem_transient_sliding_band(
     mats_full = build_materials(_currents(0.0), dom.winding_layout,
                                 getattr(cs, "polys", polys), 0.0, slot_area_m2, n_wires)
     for tag, idx in half["s"]["cells"].items():
-        nm = (mats_full.get(int(tag)) or FEMMaterial("x")).name
+        _mt = mats_full.get(int(tag))
+        if _mt is None:
+            if int(tag) >= 200:      # a coil tag the material map does not know
+                log.warning("psi map: unknown coil tag %d (not in material map)", int(tag))
+            continue
+        nm = _mt.name
         if not nm.startswith("coil_"):
             continue
         # name = "coil_<i>_slot<j>_<phase><+|->"  → phase is the char before +/-

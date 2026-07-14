@@ -1403,7 +1403,36 @@ def _build_sliding_band_meshes(
     _pc_stator = _SB_POLE_COPY_STATOR if pole_copy is None else bool(pole_copy)
 
     mesh_s = tags_s = classify_s = None
-    if (_pc_stator and _slot_period and _slot_period > 0):
+    mesh_r = tags_r = classify_r = None
+    if _SB_IRON_TEMPLATE:
+        # deterministic template wedge: whole units only (radial cuts land on
+        # tooth axes / inter-pole axes with clone-identical node sets), so the
+        # sector master-slave pairing matches nodes 1:1 by radius.
+        try:
+            from motor_ai_sim.simulation.iron_template import template_solver_halves
+            from motor_ai_sim.cadquery_geometry import CadQueryMotor as _CQM
+            _p_geo = _CQM().parameters
+            _ns_i = max(1, int(n_sectors))
+            if (int(_p_geo["num_slots"]) // 2) % _ns_i or int(_p_geo["num_poles"]) % _ns_i:
+                raise ValueError(f"sector {_ns_i} not unit-aligned "
+                                 f"({_p_geo['num_slots']}s/{_p_geo['num_poles']}p)")
+            _sgspec = polys.get("structured_gap_spec") or {}
+            if _sgspec:            # iron circles must sit EXACTLY on the
+                _p_geo = dict(_p_geo)   # belt-spec radii (4 um off = no weld)
+                _p_geo["stator_inner_radius"] = float(_sgspec["r_si"])
+                _p_geo["rotor_outer_radius"] = float(_sgspec["r_ro"])
+            (mesh_s, tags_s, classify_s,
+             mesh_r, tags_r, classify_r) = template_solver_halves(
+                _p_geo, polys, outer_air_factor=outer_air_factor,
+                density=max(0.3, 2.0 / max(mesh_size_mm, 0.5)),
+                n_sectors=_ns_i)
+            log.info("iron template wedge 1/%d: stator %d tris, rotor %d tris",
+                     _ns_i, mesh_s.t.shape[1], mesh_r.t.shape[1])
+        except Exception as _te:
+            log.warning("iron template wedge failed (%s) — gmsh build", _te)
+            mesh_s = tags_s = classify_s = None
+            mesh_r = tags_r = classify_r = None
+    if mesh_s is None and (_pc_stator and _slot_period and _slot_period > 0):
         _ncs = round((360.0 / n_sectors) / _slot_period)
         if _ncs >= 1 and abs(_ncs * _slot_period - 360.0 / n_sectors) < 1e-6:
             try:
@@ -1425,8 +1454,7 @@ def _build_sliding_band_meshes(
     # they rotate together as a single rigid unit per transient frame.
     # Past the sector edge the wedge wraps via anti-periodic BC (handled
     # later by the solver / master-slave pair).
-    mesh_r = tags_r = classify_r = None
-    if (_pc_rotor and _pole_period and _pole_period > 0):
+    if mesh_r is None and (_pc_rotor and _pole_period and _pole_period > 0):
         _ncp = round((360.0 / n_sectors) / _pole_period)
         if _ncp >= 1 and abs(_ncp * _pole_period - 360.0 / n_sectors) < 1e-6:
             try:

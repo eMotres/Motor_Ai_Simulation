@@ -208,7 +208,14 @@ def stator_unit_blocks(p: Dict, density: float = 1.0) -> List[Tuple]:
     x_cut = f["x_cut"]
     apex_y = x_cut / math.tan(unit_half)
     fill_od = float(p.get("stator_fillet_r", 0.0) or 0.0)
-    if fill_od > 1e-6:
+    if fill_od > 1e-6 and p.get("_od_r"):
+        # fillet arc measured from the REAL CadQuery contour (circle fit) —
+        # the tangent-circle formula below runs ~0.5 mm off along the OD
+        fill_od = float(p["_od_r"])
+        cx_f = float(p["_od_cx"]); cy_f = float(p["_od_cy"])
+        y_tan = float(p.get("_od_y_tan", cy_f))
+        od_tan_x = float(p.get("_od_tan_x", cx_f * R_o / (R_o - fill_od)))
+    elif fill_od > 1e-6:
         cx_f = x_cut - fill_od
         cy_f = math.sqrt(max((R_o - fill_od) ** 2 - cx_f ** 2, 0.0))
         y_tan = cy_f
@@ -437,12 +444,14 @@ def _weld(V: np.ndarray, T: np.ndarray, G: np.ndarray, tol: float = 1e-6):
     return V2, T2[good], G[good]
 
 
-def _ring_grid(angles: np.ndarray, r0: float, r1: float, n_r: int, tag: int):
+def _ring_grid(angles: np.ndarray, r0: float, r1: float, n_r: int, tag: int,
+               closed: bool = True):
     """Polar quad ring on EXACTLY the given sorted angle set (matches an
-    existing boundary node ring 1:1) — verts, tris, tags."""
-    na = len(angles)
+    existing boundary node ring 1:1) — verts, tris, tags.  closed=False
+    builds an OPEN fan [angles[0]..angles[-1]] (sector wedge)."""
+    na = len(angles) if closed else len(angles) - 1
     rs = np.linspace(r0, r1, n_r + 1)
-    th = np.concatenate([angles, angles[:1]])      # closed
+    th = np.concatenate([angles, angles[:1]]) if closed else angles
     V = np.stack([(rs[:, None] * np.sin(th[None, :])).ravel(),
                   (rs[:, None] * np.cos(th[None, :])).ravel()], axis=1)
     idx = np.arange((n_r + 1) * (na + 1)).reshape(n_r + 1, na + 1)
@@ -456,12 +465,109 @@ def _ring_grid(angles: np.ndarray, r0: float, r1: float, n_r: int, tag: int):
     return V, T, np.full(len(T), tag, np.int16)
 
 
+def _snap_to_contours(V: np.ndarray, T: np.ndarray, G: np.ndarray,
+                      polys: Dict, kind: str,
+                      protect_r=(), sector_rays=(), frac: float = 0.45) -> np.ndarray:
+    """Fillets v2 step 2: project class-boundary nodes onto the REAL CadQuery
+    contours (fillet arcs, pocket walls) so the staircase becomes a smooth
+    polyline.  Only nodes whose incident cells are all in {IRON, AIR, MAGNET}
+    move; nodes on protected circles (belt spec radii, shaft, outer border)
+    and on the sector cut rays stay put.  A move is rolled back if it flips
+    any incident triangle."""
+    try:
+        from shapely.ops import nearest_points
+        from shapely.geometry import Point
+    except Exception:
+        return V
+    iron_geom = polys.get("stator" if kind == "s" else "rotor")
+    if iron_geom is None:
+        return V
+    boundary = iron_geom.boundary
+    mag_bounds = []
+    if kind == "r":
+        mag_bounds = [mg.boundary for mg, _pol in polys.get("magnets") or []]
+
+    # class-boundary edges among swap-able tags
+    swap_tags = (TAG_IRON, TAG_AIR, TAG_MAGNET)
+    edge_cls: Dict[Tuple[int, int], set] = {}
+    node_tags: Dict[int, set] = {}
+    for ti, t in enumerate(T):
+        g = int(G[ti])
+        for a, b in ((t[0], t[1]), (t[1], t[2]), (t[2], t[0])):
+            edge_cls.setdefault((min(a, b), max(a, b)), set()).add(g)
+        for v in t:
+            node_tags.setdefault(int(v), set()).add(g)
+    cand = set()
+    for (a, b), cls in edge_cls.items():
+        if len(cls & set(swap_tags)) >= 2:
+            cand.add(a); cand.add(b)
+    cand = [v for v in cand if node_tags[v] <= set(swap_tags)]
+    if not cand:
+        return V
+
+    # local scale = shortest incident edge per node
+    scale = np.full(len(V), np.inf)
+    for (a, b) in edge_cls:
+        L = float(np.hypot(*(V[a] - V[b])))
+        if L < scale[a]: scale[a] = L
+        if L < scale[b]: scale[b] = L
+
+    r_all = np.hypot(V[:, 0], V[:, 1])
+    incident: Dict[int, List[int]] = {}
+    for ti, t in enumerate(T):
+        for v in t:
+            incident.setdefault(int(v), []).append(ti)
+
+    def tri_ok(ti, Vw):
+        a, b, c = T[ti]
+        return abs((Vw[b][0] - Vw[a][0]) * (Vw[c][1] - Vw[a][1])
+                   - (Vw[b][1] - Vw[a][1]) * (Vw[c][0] - Vw[a][0])) > 1e-12
+
+    V = V.copy()
+    moved = 0
+    for v in cand:
+        rv = r_all[v]
+        if any(abs(rv - pr) < 5e-4 for pr in protect_r):
+            continue
+        if sector_rays:
+            x, y = V[v]
+            on_ray = any(abs(x * math.sin(a) - y * math.cos(a)) < 1e-6
+                         and (x * math.cos(a) + y * math.sin(a)) > 0
+                         for a in sector_rays)
+            if on_ray:
+                continue
+        pt = Point(V[v, 0], V[v, 1])
+        if kind == "r" and TAG_MAGNET in node_tags[v]:
+            # magnet-wall nodes snap ONLY to the magnet contour — the pocket
+            # wall runs a fraction of a mm away and would steal them
+            best, dd = None, np.inf
+            for mb in mag_bounds:
+                q = nearest_points(mb, pt)[0]
+                if pt.distance(q) < dd:
+                    best, dd = q, pt.distance(q)
+            if best is None:
+                continue
+        else:
+            best = nearest_points(boundary, pt)[0]
+            dd = pt.distance(best)
+        if dd < 1e-9 or dd > frac * scale[v]:
+            continue
+        old = V[v].copy()
+        V[v, 0], V[v, 1] = best.x, best.y
+        if all(tri_ok(ti, V) for ti in incident[v]):
+            moved += 1
+        else:
+            V[v] = old
+    return V
+
+
 def template_solver_halves(p: Dict, polys: Dict, outer_air_factor: float = 1.2,
-                           density: float = 1.2):
+                           density: float = 1.2, n_sectors: int = 1):
     """Solver-ready halves in DOM_* tags: (mesh_s, tags_s, cls_s,
-    mesh_r, tags_r, cls_r).  Coil/magnet domains are renumbered by centroid
-    against the CadQuery lists so the winding circuit and pole polarities
-    stay identical to the gmsh build."""
+    mesh_r, tags_r, cls_r) — full ring (n_sectors=1) or one [0..360/ns]
+    wedge with clone-identical radial cuts.  Coil/magnet domains are
+    renumbered by centroid against the CadQuery lists so the winding
+    circuit and pole polarities stay identical to the gmsh build."""
     from skfem import MeshTri
     from scipy.spatial import cKDTree
     from scipy.sparse import coo_matrix
@@ -493,7 +599,37 @@ def template_solver_halves(p: Dict, polys: Dict, outer_air_factor: float = 1.2,
     def _centroids(V, T, idx):
         return (V[T[idx, 0]] + V[T[idx, 1]] + V[T[idx, 2]]) / 3.0
 
+    def _refine_by_polys(V, T, G, kind):
+        """Fillets v2: re-classify iron<->air (and magnet<->air) cells by the
+        REAL CadQuery polygons, so pocket fillets, side gaps, the true vent
+        contour, bore r1 and slot-bottom roundings all appear in the tags
+        (staircase at the local cell size).  Wires/liner/enamel/markers keep
+        their exact template tags."""
+        try:
+            from shapely import contains_xy
+        except Exception:
+            return G                          # old shapely: keep template tags
+        iron_geom = polys.get("stator" if kind == "s" else "rotor")
+        if iron_geom is None:
+            return G
+        G = G.copy()
+        C = (V[T[:, 0]] + V[T[:, 1]] + V[T[:, 2]]) / 3.0
+        swap = np.where(np.isin(G, (TAG_IRON, TAG_AIR, TAG_MAGNET)))[0]
+        if not len(swap):
+            return G
+        cx, cy = C[swap, 0], C[swap, 1]
+        in_iron = contains_xy(iron_geom, cx, cy)
+        new = np.where(in_iron, TAG_IRON, TAG_AIR).astype(G.dtype)
+        if kind == "r":
+            in_mag = np.zeros(len(swap), bool)
+            for mg, _pol in polys.get("magnets") or []:
+                in_mag |= contains_xy(mg, cx, cy)
+            new[in_mag] = TAG_MAGNET
+        G[swap] = new
+        return G
+
     def _finish(V, T, G, kind):
+        G = _refine_by_polys(V, T, G, kind)
         tags = np.empty(len(T), np.int16)
         if kind == "s":
             tags[G == TAG_IRON] = DOM_STATOR
@@ -525,9 +661,71 @@ def template_solver_halves(p: Dict, polys: Dict, outer_air_factor: float = 1.2,
         _cls.polys = polys
         return mesh, tags, _cls
 
+    # measure rotor-magnet landmarks from the FIRST CadQuery magnet: the true
+    # top radius and the wall angle at that radius (linear fit of the slanted
+    # wall away from the corner fillets) — parametric guesses are ~0.1 mm off
+    p = dict(p)
+    try:
+        mg0 = polys["magnets"][0][0]
+        Vm = np.asarray(mg0.exterior.coords)
+        rm = np.hypot(Vm[:, 0], Vm[:, 1])
+        ax0 = math.atan2(mg0.centroid.y, mg0.centroid.x)
+        dth = np.abs((np.arctan2(Vm[:, 1], Vm[:, 0]) - ax0 + math.pi)
+                     % (2 * math.pi) - math.pi)
+        r_top_m = float(rm.max())
+        r_mag1_g = (float(p["rotor_inner_radius"]) + float(p["rotor_house_height"])
+                    + float(p["magnet_down_height"]))
+        wall = (rm > r_mag1_g + 0.8) & (rm < r_top_m - 2.0) & (dth > 0.01)
+        if wall.sum() >= 4:
+            cf = np.polyfit(rm[wall], dth[wall], 1)
+            p["_mag_a_up"] = float(np.polyval(cf, r_top_m))
+        p["_mag_r_top"] = r_top_m
+    except Exception:
+        pass
+    # measure the stator OD fillet from the REAL contour (unit k=0 frame ==
+    # world): circle-fit of the arc between the V-notch wall and the OD —
+    # the parametric tangent-circle guess is ~0.5 mm off along the OD
+    try:
+        f0 = stator_unit_frame(p)
+        x_cut0, R_o0 = f0["x_cut"], f0["outer_r"]
+        g = polys["stator"]
+        pts = []
+        for gg in getattr(g, "geoms", [g]):
+            for ring in [gg.exterior] + list(gg.interiors):
+                Vc = np.asarray(ring.coords)
+                rr = np.hypot(Vc[:, 0], Vc[:, 1])
+                sel = ((rr > R_o0 - 4.5) & (rr < R_o0 + 0.005)
+                       & (Vc[:, 0] > x_cut0 - 4.6) & (Vc[:, 0] < x_cut0 + 0.3)
+                       & (Vc[:, 1] > 0.6 * R_o0))
+                pts.extend(Vc[sel].tolist())
+        pts = np.asarray(pts)
+        if len(pts) >= 6:
+            A = np.c_[2 * pts[:, 0], 2 * pts[:, 1], np.ones(len(pts))]
+            (cx, cy, c0), *_ = np.linalg.lstsq(A, (pts ** 2).sum(1), rcond=None)
+            p["_od_cx"], p["_od_cy"] = float(cx), float(cy)
+            p["_od_r"] = float(math.sqrt(c0 + cx * cx + cy * cy))
+            on_od = pts[np.hypot(pts[:, 0], pts[:, 1]) > R_o0 - 0.01]
+            on_wall = pts[np.abs(pts[:, 0] - x_cut0) < 0.05]
+            if len(on_od):
+                p["_od_tan_x"] = float(on_od[:, 0].min())
+            if len(on_wall):
+                p["_od_y_tan"] = float(on_wall[:, 1].min())
+    except Exception:
+        pass
     Vs, Ts, Gs = stitch_hanging(*assemble_stator_half(
-        p, density=density, outer_air_factor=outer_air_factor))
-    Vr, Tr, Gr = stitch_hanging(*assemble_rotor_half(p, density=density))
+        p, density=density, outer_air_factor=outer_air_factor,
+        n_sectors=n_sectors))
+    Vr, Tr, Gr = stitch_hanging(*assemble_rotor_half(
+        p, density=density, n_sectors=n_sectors))
+    rays = () if n_sectors <= 1 else (0.0, 2.0 * math.pi / n_sectors)
+    Vs = _snap_to_contours(Vs, Ts, Gs, polys, "s",
+                           protect_r=(float(p["stator_inner_radius"]),
+                                      float(p["stator_outer_radius"])),
+                           sector_rays=rays)
+    Vr = _snap_to_contours(Vr, Tr, Gr, polys, "r",
+                           protect_r=(float(p["rotor_outer_radius"]),
+                                      float(p["rotor_inner_radius"])),
+                           sector_rays=rays)
     ms, ts, cs = _finish(Vs, Ts, Gs, "s")
     mr, tr, cr = _finish(Vr, Tr, Gr, "r")
     return ms, ts, cs, mr, tr, cr
@@ -602,55 +800,82 @@ def stitch_hanging(V: np.ndarray, T: np.ndarray, G: np.ndarray,
 
 
 def assemble_stator_half(p: Dict, density: float = 1.0,
-                         outer_air_factor: float = 1.2):
-    """Full 360° stator half [bore..outer air] from rotated unit clones.
-    Local template tags; the solver integration remaps to DOM_* and renumbers
-    coils by centroid against the CadQuery coil list."""
+                         outer_air_factor: float = 1.2, n_sectors: int = 1):
+    """Stator half [bore..outer air] from rotated unit clones — full 360°
+    (n_sectors=1) or one [0..360/n_sectors] wedge.  Unit k covers the world
+    span [(n-1-k)·unit .. (n-k)·unit] (tooth axes at 0°+30k), so the wedge is
+    the SAME first clones as the full ring and its radial cuts fall exactly
+    on wound-tooth axes with clone-identical node sets (solver master-slave
+    pairs them by radius).  Local template tags; the solver integration
+    remaps to DOM_* and renumbers coils by centroid."""
+    ns = max(1, int(n_sectors))
     half_slots = int(p["num_slots"]) // 2
+    if half_slots % ns:
+        raise ValueError(f"stator: {half_slots} units not divisible by {ns} sectors")
+    n_units = half_slots // ns
     unit = math.radians(360.0 / half_slots)
     Vu, Tu, Gu = mesh_blocks(stator_unit_blocks(p, density))
     Vs = []; Ts = []; Gs = []; off = 0
-    for k in range(half_slots):
-        Vs.append(_rotate(Vu, -k * unit))      # unit frame: +Y axis; clone CW
+    for k in range(n_units):
+        if ns == 1:
+            rot = -k * unit                    # unit frame: +Y axis; clone CW
+        else:
+            # unit at rot=0 spans world [90°-unit .. 90°]; place clone k on
+            # [k·unit .. (k+1)·unit] so the wedge is [0 .. 360/ns] exactly
+            rot = (k + 1) * unit - math.pi / 2.0
+        Vs.append(_rotate(Vu, rot))
         Ts.append(Tu + off); Gs.append(Gu); off += len(Vu)
     V = np.concatenate(Vs); T = np.concatenate(Ts); G = np.concatenate(Gs)
     V, T, G = _weld(V, T, G)
-    # outer air ring on the OD node angles
+    # outer air ring on the OD node angles.  _ring_grid's angle convention is
+    # "from +Y, clockwise" (x=r·sin, y=r·cos).  For a wedge that range is
+    # continuous WITHOUT the 2π wrap — applying mod would split the arc at +Y
+    # and the open fan would jump straight across the disk (degenerate tris).
     R_o = float(p["stator_outer_radius"])
     on_od = np.where(np.abs(np.hypot(V[:, 0], V[:, 1]) - R_o) < 1e-6)[0]
-    ang = np.unique(np.round(np.mod(np.arctan2(V[on_od, 0], V[on_od, 1]),
-                                    2 * math.pi), 12))
+    raw = np.arctan2(V[on_od, 0], V[on_od, 1])
+    ang = np.unique(np.round(np.mod(raw, 2 * math.pi) if ns == 1 else raw, 12))
     r_out = R_o * float(outer_air_factor)
     Vo, To, Go = _ring_grid(ang, R_o, r_out,
                             max(2, int(round((r_out - R_o) * density * 0.5))),
-                            TAG_AIR + 100)     # marker: outer air
+                            TAG_AIR + 100, closed=(ns == 1))
     V2 = np.concatenate([V, Vo]); T2 = np.concatenate([T, To + len(V)])
     G2 = np.concatenate([G, Go])
     return _weld(V2, T2, G2)
 
 
-def assemble_rotor_half(p: Dict, density: float = 1.0):
-    """Full 360° rotor half [shaft bore..rotor OD] from rotated pole clones
-    plus the shaft ring."""
+def assemble_rotor_half(p: Dict, density: float = 1.0, n_sectors: int = 1):
+    """Rotor half [shaft bore..rotor OD] from rotated pole clones plus the
+    shaft ring — full 360° (n_sectors=1) or one [0..360/n_sectors] wedge
+    (cuts on inter-pole axes at 0°+pitch·k, clone-identical node sets)."""
+    ns = max(1, int(n_sectors))
     n_p = int(p["num_poles"])
+    if n_p % ns:
+        raise ValueError(f"rotor: {n_p} poles not divisible by {ns} sectors")
+    n_units = n_p // ns
     unit = math.radians(360.0 / n_p)
     # CadQuery zero-position: first magnet axis at 90deg + ZERO_OFFSET, i.e.
     # rotated by -(90 - pole_pitch/2) from the +Y axis (see get_2d_polygons).
     ang0 = -math.radians(90.0 - 360.0 / n_p / 2.0)
     Vu, Tu, Gu = mesh_blocks(rotor_unit_blocks(p, density))
     Vs = []; Ts = []; Gs = []; off = 0
-    for k in range(n_p):
-        Vs.append(_rotate(Vu, -(k * unit) - ang0))
+    for k in range(n_units):
+        if ns == 1:
+            rot = -(k * unit) - ang0
+        else:
+            # wedge: unit m covers world [m·pitch .. (m+1)·pitch]
+            rot = ang0 + k * unit
+        Vs.append(_rotate(Vu, rot))
         Ts.append(Tu + off); Gs.append(Gu); off += len(Vu)
     V = np.concatenate(Vs); T = np.concatenate(Ts); G = np.concatenate(Gs)
     V, T, G = _weld(V, T, G)
     R_i = float(p["rotor_inner_radius"]); r_sh = float(p["shaft_inner_radius"])
     on_ir = np.where(np.abs(np.hypot(V[:, 0], V[:, 1]) - R_i) < 1e-6)[0]
-    ang = np.unique(np.round(np.mod(np.arctan2(V[on_ir, 0], V[on_ir, 1]),
-                                    2 * math.pi), 12))
+    raw = np.arctan2(V[on_ir, 0], V[on_ir, 1])
+    ang = np.unique(np.round(np.mod(raw, 2 * math.pi) if ns == 1 else raw, 12))
     Vo, To, Go = _ring_grid(ang, r_sh, R_i,
                             max(1, int(round((R_i - r_sh) * density * 0.6))),
-                            TAG_IRON + 100)    # marker: shaft
+                            TAG_IRON + 100, closed=(ns == 1))
     V2 = np.concatenate([V, Vo]); T2 = np.concatenate([T, To + len(V)])
     G2 = np.concatenate([G, Go])
     return _weld(V2, T2, G2)
@@ -674,6 +899,13 @@ def rotor_unit_blocks(p: Dict, density: float = 1.0) -> List[Tuple]:
     up_gap = float(p["magnet_up_gap"]); r_top = R_o - up_gap
     a_dn = math.radians(pole * float(p["magnet_fill_down"]) / 2.0)
     a_up = math.radians(pole * float(p["magnet_fill_up"]) / 2.0)
+    # landmarks measured from the REAL CadQuery magnet override the
+    # parametric guesses (the CQ boolean chain shifts the magnet top by
+    # ~0.1 mm vs R_o-up_gap — a systematic wall offset otherwise)
+    if p.get("_mag_r_top"):
+        r_top = float(p["_mag_r_top"])
+    if p.get("_mag_a_up"):
+        a_up = float(p["_mag_a_up"])
     a_vent = math.radians(pole * float(p["magnet_fill_up"]) * float(p["rotor_hole"]) / 2.0)
     half = math.radians(pole / 2.0)
 

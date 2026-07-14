@@ -680,18 +680,27 @@ def rotor_unit_blocks(p: Dict, density: float = 1.0) -> List[Tuple]:
     def n_of(length_mm, lo=1):
         return max(lo, int(round(abs(length_mm) * density)))
 
-    # ── single WARPED TENSOR grid: θ-columns × r-rows, columns in the magnet
-    # span follow the slanted wall (mapped mesh) → conforming by construction,
-    # every domain boundary lies on grid lines.  No Coons, no T-junctions.
+    # ── TWO warped tensor grids: the magnet wall constrains columns only up
+    # to r_top, so the unit is split there.  Grid A [R_i..r_top] squeezes its
+    # columns to follow the slanted wall; grid B [r_top..R_o] (bridge band with
+    # the vent) keeps the UNIFORM columns — the vent sits at its true ±a_vent
+    # and the inter-pole bridge gets full column coverage.  The seam on the
+    # r_top arc has hanging nodes on both sides; the assembler's weld +
+    # stitch_hanging (arc-aware fans) makes it conforming.
     n_ang = max(8, int(round(R_o * half * density)))
-    tg = np.unique(np.concatenate([np.linspace(0.0, half, n_ang + 1),
-                                   [a_vent, a_dn]]))
-    j_dn = int(np.argmin(np.abs(tg - a_dn)))       # wall column index (exact)
-    r_rows = np.unique(np.concatenate([
+    tg_u = np.linspace(0.0, half, n_ang + 1)
+    # drop interior uniform columns that nearly coincide with the landmark
+    # angles — micron-wide twin columns become needle triangles downstream
+    step = half / n_ang
+    spec = np.array([a_vent, a_dn])
+    keep = np.ones(len(tg_u), bool)
+    keep[1:-1] = np.min(np.abs(tg_u[1:-1, None] - spec[None, :]), axis=1) > 0.35 * step
+    tg = np.unique(np.concatenate([tg_u[keep], spec]))
+    rows_A = np.unique(np.concatenate([
         np.linspace(R_i, r_mag0, max(1, n_of(house)) + 1),
         np.linspace(r_mag0, r_mag1, max(1, n_of(dn_h)) + 1),
-        np.linspace(r_mag1, r_top, max(3, n_of(r_top - r_mag1)) + 1),
-        np.linspace(r_top, R_o, max(1, n_of(up_gap)) + 1)]))
+        np.linspace(r_mag1, r_top, max(3, n_of(r_top - r_mag1)) + 1)]))
+    rows_B = np.linspace(r_top, R_o, max(3, n_of(up_gap)) + 1)
 
     def wall_ang(r):                                # magnet wall angle at r
         if r <= r_mag1:
@@ -708,25 +717,48 @@ def rotor_unit_blocks(p: Dict, density: float = 1.0) -> List[Tuple]:
         th[~inside] = w + (tg[~inside] - a_dn) * (half - w) / (half - a_dn)
         return th
 
-    nr = len(r_rows) - 1; na = len(tg) - 1
-    V = np.empty(((nr + 1) * (na + 1), 2))
-    for i, r in enumerate(r_rows):
-        th = theta_row(r)
-        V[i * (na + 1):(i + 1) * (na + 1), 0] = r * np.sin(th)
-        V[i * (na + 1):(i + 1) * (na + 1), 1] = r * np.cos(th)
-    idx = np.arange((nr + 1) * (na + 1)).reshape(nr + 1, na + 1)
-    a_ = idx[:-1, :-1].ravel(); b_ = idx[:-1, 1:].ravel()
-    c_ = idx[1:, 1:].ravel();   d_ = idx[1:, :-1].ravel()
-    T = np.concatenate([np.stack([a_, b_, c_], 1), np.stack([a_, c_, d_], 1)])
-    # tags per quad-cell → per triangle (2 tris/quad, same tag)
-    rc = 0.5 * (r_rows[:-1] + r_rows[1:])[:, None] * np.ones((1, na))
-    tc = 0.25 * (tg[:-1] + tg[1:])[None, :] * np.ones((nr, 1)) * 2.0
-    tag = np.full((nr, na), TAG_IRON, np.int16)
-    in_mag_r = (rc >= r_mag0 - 1e-9) & (rc <= r_top + 1e-9)
-    tag[in_mag_r & (tc <= a_dn)] = TAG_MAGNET       # warped col ≤ wall
-    in_vent = (rc >= r_top - 1e-9) & (tc <= a_vent + 1e-12)
-    tag[in_vent] = TAG_AIR
-    G = np.concatenate([tag.ravel(), tag.ravel()])
+    def tensor(r_rows, tgrid, warp):
+        nr = len(r_rows) - 1; na = len(tgrid) - 1
+        V = np.empty(((nr + 1) * (na + 1), 2))
+        for i, r in enumerate(r_rows):
+            th = theta_row(r) if warp else tgrid
+            V[i * (na + 1):(i + 1) * (na + 1), 0] = r * np.sin(th)
+            V[i * (na + 1):(i + 1) * (na + 1), 1] = r * np.cos(th)
+        idx = np.arange((nr + 1) * (na + 1)).reshape(nr + 1, na + 1)
+        a_ = idx[:-1, :-1].ravel(); b_ = idx[:-1, 1:].ravel()
+        c_ = idx[1:, 1:].ravel();   d_ = idx[1:, :-1].ravel()
+        T = np.concatenate([np.stack([a_, b_, c_], 1), np.stack([a_, c_, d_], 1)])
+        rc = 0.5 * (r_rows[:-1] + r_rows[1:])[:, None] * np.ones((1, na))
+        tc = 0.25 * (tgrid[:-1] + tgrid[1:])[None, :] * np.ones((nr, 1)) * 2.0
+        return V, T, rc, tc
+
+    # grid A: yoke + magnet span (wall-warped columns)
+    V_A, T_A, rc, tc = tensor(rows_A, tg, warp=True)
+    tag = np.full(rc.shape, TAG_IRON, np.int16)
+    tag[(rc >= r_mag0 - 1e-9) & (tc <= a_dn + 1e-12)] = TAG_MAGNET
+    G_A = np.concatenate([tag.ravel(), tag.ravel()])
+    # grid B: bridge band with the rectangular vent (uniform columns).  Free
+    # (non-landmark) columns that land within 0.35 steps of a squeezed grid-A
+    # node on the r_top seam SNAP to it — the weld then merges the pair
+    # exactly, instead of stitch fans building micron-base needle triangles.
+    th_top = theta_row(r_top)
+    tg_B = tg.copy()
+    locked = {0.0, float(a_vent), float(half)}
+    for j in range(1, len(tg_B) - 1):
+        if float(tg_B[j]) in locked:
+            continue
+        k = int(np.argmin(np.abs(th_top - tg_B[j])))
+        if abs(float(th_top[k] - tg_B[j])) < 0.35 * step:
+            tg_B[j] = th_top[k]
+    tg_B = np.unique(tg_B)
+    V_B, T_B, rc, tc = tensor(rows_B, tg_B, warp=False)
+    tag = np.full(rc.shape, TAG_IRON, np.int16)
+    tag[tc <= a_vent + 1e-12] = TAG_AIR
+    G_B = np.concatenate([tag.ravel(), tag.ravel()])
+
+    V = np.concatenate([V_A, V_B])
+    T = np.concatenate([T_A, T_B + len(V_A)])
+    G = np.concatenate([G_A, G_B])
     p0, p1, p2 = V[T[:, 0]], V[T[:, 1]], V[T[:, 2]]
     cw = ((p1[:, 0] - p0[:, 0]) * (p2[:, 1] - p0[:, 1])
           - (p1[:, 1] - p0[:, 1]) * (p2[:, 0] - p0[:, 0])) < 0

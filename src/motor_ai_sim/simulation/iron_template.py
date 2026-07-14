@@ -326,6 +326,81 @@ def stator_unit_blocks(p: Dict, density: float = 1.0) -> List[Tuple]:
     return blocks + mirrored
 
 
+TAG_MAGNET = 4
+
+
+def rotor_unit_blocks(p: Dict, density: float = 1.0) -> List[Tuple]:
+    """Blocks for ONE rotor pole unit (spoke-PM), half [magnet axis..+pitch/2]
+    mirrored about the magnet axis.  Local frame: magnet axis along +Y.
+
+    Measured topology (polar scans): yoke ring → magnet lower bar (radial
+    walls at ±pole·fill_down/2) → magnet trapezoid narrowing to
+    ±pole·fill_up/2 at r_top = OD−up_gap → bridge band [r_top..OD] with the
+    rectangular vent (air) of half-angle fu·hole/2 on the axis; inter-pole
+    iron is the hourglass between neighbouring magnet walls.  The magnet
+    corner fillet (magnet_fill_radius) and rotor_fill_r are deferred (v2).
+    """
+    R_o = float(p["rotor_outer_radius"]); R_i = float(p["rotor_inner_radius"])
+    house = float(p["rotor_house_height"]); pole = 360.0 / int(p["num_poles"])
+    r_mag0 = R_i + house                       # magnet bottom radius
+    dn_h = float(p["magnet_down_height"]); r_mag1 = r_mag0 + dn_h
+    up_gap = float(p["magnet_up_gap"]); r_top = R_o - up_gap
+    a_dn = math.radians(pole * float(p["magnet_fill_down"]) / 2.0)
+    a_up = math.radians(pole * float(p["magnet_fill_up"]) / 2.0)
+    a_vent = math.radians(pole * float(p["magnet_fill_up"]) * float(p["rotor_hole"]) / 2.0)
+    half = math.radians(pole / 2.0)
+
+    def n_of(length_mm, lo=1):
+        return max(lo, int(round(abs(length_mm) * density)))
+
+    def P(a, r):                               # polar → local xy (axis = +Y)
+        return (r * math.sin(a), r * math.cos(a))
+
+    def arc(r, a0, a1, n):
+        t = np.linspace(a0, a1, max(2, n))
+        return np.stack([r * np.sin(t), r * np.cos(t)], axis=1)
+
+    def rad(a, r0, r1):
+        return np.array([P(a, r0), P(a, r1)])
+
+    blocks: List[Tuple] = []
+
+    def polarq(a0, a1, r0, r1, tag, na=None, nr=None):
+        na = na or n_of((a1 - a0) * (r0 + r1) / 2, 2)
+        nr = nr or n_of(r1 - r0, 1)
+        blocks.append((arc(r0, a0, a1, na + 1), rad(a1, r0, r1),
+                       arc(r1, a0, a1, na + 1), rad(a0, r0, r1),
+                       na, nr, tag))
+
+    # 1) yoke ring
+    polarq(0.0, half, R_i, r_mag0, TAG_IRON, nr=n_of(house, 1))
+    # 2) magnet lower bar + inter-pole iron beside it
+    polarq(0.0, a_dn, r_mag0, r_mag1, TAG_MAGNET)
+    polarq(a_dn, half, r_mag0, r_mag1, TAG_IRON)
+    # 3) magnet trapezoid: straight wall from (a_dn, r_mag1) to (a_up, r_top)
+    w0 = P(a_dn, r_mag1); w1 = P(a_up, r_top)
+    nwall = n_of(math.dist(w0, w1), 3)
+    wall = np.stack([np.linspace(w0[0], w1[0], nwall + 1),
+                     np.linspace(w0[1], w1[1], nwall + 1)], axis=1)
+    na_m = n_of(a_dn * (r_mag1 + r_top) / 2, 2)
+    blocks.append((arc(r_mag1, 0.0, a_dn, na_m + 1), wall,
+                   arc(r_top, 0.0, a_up, na_m + 1), rad(0.0, r_mag1, r_top),
+                   na_m, nwall, TAG_MAGNET))
+    # 4) inter-pole hourglass iron: wall .. unit edge
+    blocks.append((arc(r_mag1, a_dn, half, na_m + 1), rad(half, r_mag1, r_top),
+                   arc(r_top, a_up, half, na_m + 1), wall,
+                   na_m, nwall, TAG_IRON))
+    # 5) bridge band with the vent
+    polarq(0.0, a_vent, r_top, R_o, TAG_AIR, nr=max(1, n_of(up_gap, 1)))
+    polarq(a_vent, half, r_top, R_o, TAG_IRON, nr=max(1, n_of(up_gap, 1)))
+
+    # mirror about the magnet axis (x → −x)
+    M = np.array([[-1.0, 0.0], [0.0, 1.0]])
+    mirrored = [(S @ M, E @ M, N @ M, W @ M, nx, ny, tag)
+                for (S, E, N, W, nx, ny, tag) in blocks]
+    return blocks + mirrored
+
+
 def mesh_blocks(blocks: List[Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray,
                                    int, int, int]],
                 weld_tol: float = 1e-7) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:

@@ -329,6 +329,177 @@ def stator_unit_blocks(p: Dict, density: float = 1.0) -> List[Tuple]:
 TAG_MAGNET = 4
 
 
+def _rotate(V: np.ndarray, ang: float) -> np.ndarray:
+    c, s = math.cos(ang), math.sin(ang)
+    return V @ np.array([[c, s], [-s, c]])   # CCW rotation of row-vectors
+
+
+def _weld(V: np.ndarray, T: np.ndarray, G: np.ndarray, tol: float = 1e-6):
+    """Merge nodes closer than tol — KDTree pair union (grid-quantisation
+    keys split pairs straddling a cell boundary, so NOT round-based)."""
+    from scipy.spatial import cKDTree
+    parent = np.arange(len(V))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    for i, j in cKDTree(V).query_pairs(tol):
+        ri, rj = find(i), find(j)
+        if ri != rj:
+            parent[max(ri, rj)] = min(ri, rj)
+    root = np.array([find(i) for i in range(len(V))])
+    uniq, inv = np.unique(root, return_inverse=True)
+    V2 = V[uniq]
+    T2 = inv[T]
+    p0, p1, p2 = V2[T2[:, 0]], V2[T2[:, 1]], V2[T2[:, 2]]
+    a2 = (p1[:, 0] - p0[:, 0]) * (p2[:, 1] - p0[:, 1]) - \
+         (p1[:, 1] - p0[:, 1]) * (p2[:, 0] - p0[:, 0])
+    good = np.abs(a2) > 1e-12
+    return V2, T2[good], G[good]
+
+
+def _ring_grid(angles: np.ndarray, r0: float, r1: float, n_r: int, tag: int):
+    """Polar quad ring on EXACTLY the given sorted angle set (matches an
+    existing boundary node ring 1:1) — verts, tris, tags."""
+    na = len(angles)
+    rs = np.linspace(r0, r1, n_r + 1)
+    th = np.concatenate([angles, angles[:1]])      # closed
+    V = np.stack([(rs[:, None] * np.sin(th[None, :])).ravel(),
+                  (rs[:, None] * np.cos(th[None, :])).ravel()], axis=1)
+    idx = np.arange((n_r + 1) * (na + 1)).reshape(n_r + 1, na + 1)
+    a = idx[:-1, :-1].ravel(); b = idx[:-1, 1:].ravel()
+    c = idx[1:, 1:].ravel();   d = idx[1:, :-1].ravel()
+    T = np.concatenate([np.stack([a, b, c], 1), np.stack([a, c, d], 1)])
+    p0, p1, p2 = V[T[:, 0]], V[T[:, 1]], V[T[:, 2]]
+    cw = ((p1[:, 0] - p0[:, 0]) * (p2[:, 1] - p0[:, 1])
+          - (p1[:, 1] - p0[:, 1]) * (p2[:, 0] - p0[:, 0])) < 0
+    T[cw] = T[cw][:, ::-1]
+    return V, T, np.full(len(T), tag, np.int16)
+
+
+def stitch_hanging(V: np.ndarray, T: np.ndarray, G: np.ndarray,
+                   tol: float = 1e-7, max_pass: int = 4):
+    """Fix T-junctions: for every boundary edge that has other mesh nodes
+    lying ON it, split the owning triangle into a fan through those nodes.
+    Neighbouring Coons blocks discretise shared curves at their own density,
+    so hanging nodes are expected — this makes the assembly conforming."""
+    from scipy.spatial import cKDTree
+    for _ in range(max_pass):
+        edge_owner: Dict[Tuple[int, int], List[int]] = {}
+        for ti, t in enumerate(T):
+            for a, b in ((t[0], t[1]), (t[1], t[2]), (t[2], t[0])):
+                edge_owner.setdefault((min(a, b), max(a, b)), []).append(ti)
+        bnd = [e for e, o in edge_owner.items() if len(o) == 1]
+        if not bnd:
+            break
+        tree = cKDTree(V)
+        new_tris: List[np.ndarray] = []
+        new_tags: List[int] = []
+        drop = np.zeros(len(T), bool)
+        n_fix = 0
+        for (a, b) in bnd:
+            ti = edge_owner[(a, b)][0]
+            if drop[ti]:
+                continue
+            pa, pb = V[a], V[b]
+            L = float(np.linalg.norm(pb - pa))
+            if L < tol:
+                continue
+            cand = tree.query_ball_point((pa + pb) / 2.0, L / 2.0 + 10 * tol)
+            d = (pb - pa) / L
+            ra, rb = float(np.hypot(*pa)), float(np.hypot(*pb))
+            arc_edge = abs(ra - rb) < 1e-6          # circular (r=const) edge
+            on: List[Tuple[float, int]] = []
+            for j in cand:
+                if j == a or j == b:
+                    continue
+                v = V[j] - pa
+                s = float(v @ d)
+                if not (tol < s < L - tol):
+                    continue
+                if abs(v[0] * d[1] - v[1] * d[0]) < tol:
+                    on.append((s, j))
+                elif arc_edge and abs(float(np.hypot(*V[j])) - ra) < 1e-6:
+                    on.append((s, j))                # node on the SAME circle
+            if not on:
+                continue
+            on.sort()
+            t = T[ti]
+            c = [x for x in t if x != a and x != b][0]
+            chain = [a] + [j for _, j in on] + [b]
+            # orientation of the original triangle (keep it for the fan)
+            e1 = V[t[1]] - V[t[0]]; e2 = V[t[2]] - V[t[0]]
+            ccw = (e1[0] * e2[1] - e1[1] * e2[0]) > 0
+            for u, w in zip(chain[:-1], chain[1:]):
+                tri = [u, w, c]
+                f1 = V[w] - V[u]; f2 = V[c] - V[u]
+                if ((f1[0] * f2[1] - f1[1] * f2[0]) > 0) != ccw:
+                    tri = [w, u, c]
+                new_tris.append(np.array(tri)); new_tags.append(int(G[ti]))
+            drop[ti] = True
+            n_fix += 1
+        if n_fix == 0:
+            break
+        T = np.concatenate([T[~drop]] + ([np.stack(new_tris)] if new_tris else []))
+        G = np.concatenate([G[~drop], np.array(new_tags, np.int16)])
+    return V, T, G
+
+
+def assemble_stator_half(p: Dict, density: float = 1.0,
+                         outer_air_factor: float = 1.2):
+    """Full 360° stator half [bore..outer air] from rotated unit clones.
+    Local template tags; the solver integration remaps to DOM_* and renumbers
+    coils by centroid against the CadQuery coil list."""
+    half_slots = int(p["num_slots"]) // 2
+    unit = math.radians(360.0 / half_slots)
+    Vu, Tu, Gu = mesh_blocks(stator_unit_blocks(p, density))
+    Vs = []; Ts = []; Gs = []; off = 0
+    for k in range(half_slots):
+        Vs.append(_rotate(Vu, -k * unit))      # unit frame: +Y axis; clone CW
+        Ts.append(Tu + off); Gs.append(Gu); off += len(Vu)
+    V = np.concatenate(Vs); T = np.concatenate(Ts); G = np.concatenate(Gs)
+    V, T, G = _weld(V, T, G)
+    # outer air ring on the OD node angles
+    R_o = float(p["stator_outer_radius"])
+    on_od = np.where(np.abs(np.hypot(V[:, 0], V[:, 1]) - R_o) < 1e-6)[0]
+    ang = np.unique(np.round(np.mod(np.arctan2(V[on_od, 0], V[on_od, 1]),
+                                    2 * math.pi), 12))
+    r_out = R_o * float(outer_air_factor)
+    Vo, To, Go = _ring_grid(ang, R_o, r_out,
+                            max(2, int(round((r_out - R_o) * density * 0.5))),
+                            TAG_AIR + 100)     # marker: outer air
+    V2 = np.concatenate([V, Vo]); T2 = np.concatenate([T, To + len(V)])
+    G2 = np.concatenate([G, Go])
+    return _weld(V2, T2, G2)
+
+
+def assemble_rotor_half(p: Dict, density: float = 1.0):
+    """Full 360° rotor half [shaft bore..rotor OD] from rotated pole clones
+    plus the shaft ring."""
+    n_p = int(p["num_poles"])
+    unit = math.radians(360.0 / n_p)
+    Vu, Tu, Gu = mesh_blocks(rotor_unit_blocks(p, density))
+    Vs = []; Ts = []; Gs = []; off = 0
+    for k in range(n_p):
+        Vs.append(_rotate(Vu, -k * unit))
+        Ts.append(Tu + off); Gs.append(Gu); off += len(Vu)
+    V = np.concatenate(Vs); T = np.concatenate(Ts); G = np.concatenate(Gs)
+    V, T, G = _weld(V, T, G)
+    R_i = float(p["rotor_inner_radius"]); r_sh = float(p["shaft_inner_radius"])
+    on_ir = np.where(np.abs(np.hypot(V[:, 0], V[:, 1]) - R_i) < 1e-6)[0]
+    ang = np.unique(np.round(np.mod(np.arctan2(V[on_ir, 0], V[on_ir, 1]),
+                                    2 * math.pi), 12))
+    Vo, To, Go = _ring_grid(ang, r_sh, R_i,
+                            max(1, int(round((R_i - r_sh) * density * 0.6))),
+                            TAG_IRON + 100)    # marker: shaft
+    V2 = np.concatenate([V, Vo]); T2 = np.concatenate([T, To + len(V)])
+    G2 = np.concatenate([G, Go])
+    return _weld(V2, T2, G2)
+
+
 def rotor_unit_blocks(p: Dict, density: float = 1.0) -> List[Tuple]:
     """Blocks for ONE rotor pole unit (spoke-PM), half [magnet axis..+pitch/2]
     mirrored about the magnet axis.  Local frame: magnet axis along +Y.
@@ -353,10 +524,69 @@ def rotor_unit_blocks(p: Dict, density: float = 1.0) -> List[Tuple]:
     def n_of(length_mm, lo=1):
         return max(lo, int(round(abs(length_mm) * density)))
 
+    # ── single WARPED TENSOR grid: θ-columns × r-rows, columns in the magnet
+    # span follow the slanted wall (mapped mesh) → conforming by construction,
+    # every domain boundary lies on grid lines.  No Coons, no T-junctions.
+    n_ang = max(8, int(round(R_o * half * density)))
+    tg = np.unique(np.concatenate([np.linspace(0.0, half, n_ang + 1),
+                                   [a_vent, a_dn]]))
+    j_dn = int(np.argmin(np.abs(tg - a_dn)))       # wall column index (exact)
+    r_rows = np.unique(np.concatenate([
+        np.linspace(R_i, r_mag0, max(1, n_of(house)) + 1),
+        np.linspace(r_mag0, r_mag1, max(1, n_of(dn_h)) + 1),
+        np.linspace(r_mag1, r_top, max(3, n_of(r_top - r_mag1)) + 1),
+        np.linspace(r_top, R_o, max(1, n_of(up_gap)) + 1)]))
+
+    def wall_ang(r):                                # magnet wall angle at r
+        if r <= r_mag1:
+            return a_dn
+        if r >= r_top:
+            return a_up
+        return a_dn + (a_up - a_dn) * (r - r_mag1) / (r_top - r_mag1)
+
+    def theta_row(r):
+        w = wall_ang(r)
+        th = tg.copy()
+        inside = tg <= a_dn + 1e-15
+        th[inside] = tg[inside] * (w / a_dn)        # squeeze magnet span
+        th[~inside] = w + (tg[~inside] - a_dn) * (half - w) / (half - a_dn)
+        return th
+
+    nr = len(r_rows) - 1; na = len(tg) - 1
+    V = np.empty(((nr + 1) * (na + 1), 2))
+    for i, r in enumerate(r_rows):
+        th = theta_row(r)
+        V[i * (na + 1):(i + 1) * (na + 1), 0] = r * np.sin(th)
+        V[i * (na + 1):(i + 1) * (na + 1), 1] = r * np.cos(th)
+    idx = np.arange((nr + 1) * (na + 1)).reshape(nr + 1, na + 1)
+    a_ = idx[:-1, :-1].ravel(); b_ = idx[:-1, 1:].ravel()
+    c_ = idx[1:, 1:].ravel();   d_ = idx[1:, :-1].ravel()
+    T = np.concatenate([np.stack([a_, b_, c_], 1), np.stack([a_, c_, d_], 1)])
+    # tags per quad-cell → per triangle (2 tris/quad, same tag)
+    rc = 0.5 * (r_rows[:-1] + r_rows[1:])[:, None] * np.ones((1, na))
+    tc = 0.25 * (tg[:-1] + tg[1:])[None, :] * np.ones((nr, 1)) * 2.0
+    tag = np.full((nr, na), TAG_IRON, np.int16)
+    in_mag_r = (rc >= r_mag0 - 1e-9) & (rc <= r_top + 1e-9)
+    tag[in_mag_r & (tc <= a_dn)] = TAG_MAGNET       # warped col ≤ wall
+    in_vent = (rc >= r_top - 1e-9) & (tc <= a_vent + 1e-12)
+    tag[in_vent] = TAG_AIR
+    G = np.concatenate([tag.ravel(), tag.ravel()])
+    p0, p1, p2 = V[T[:, 0]], V[T[:, 1]], V[T[:, 2]]
+    cw = ((p1[:, 0] - p0[:, 0]) * (p2[:, 1] - p0[:, 1])
+          - (p1[:, 1] - p0[:, 1]) * (p2[:, 0] - p0[:, 0])) < 0
+    T[cw] = T[cw][:, ::-1]
+    # mirror about the axis and return as ONE pre-meshed "block" pair via a
+    # sentinel: the assembler detects ndarray triples.
+    M = np.array([[-1.0, 0.0], [0.0, 1.0]])
+    V2 = np.concatenate([V, V @ M])
+    T2 = np.concatenate([T, (T + len(V))[:, ::-1]])
+    G2 = np.concatenate([G, G])
+    return [("premeshed", V2, T2, G2)]
+
     def P(a, r):                               # polar → local xy (axis = +Y)
         return (r * math.sin(a), r * math.cos(a))
 
-    def arc(r, a0, a1, n):
+    def arc(r, a0, a1, n=None):
         t = np.linspace(a0, a1, max(2, n))
         return np.stack([r * np.sin(t), r * np.cos(t)], axis=1)
 
@@ -412,7 +642,13 @@ def mesh_blocks(blocks: List[Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarra
     """
     all_v: List[np.ndarray] = []; all_t: List[np.ndarray] = []; all_tag: List[np.ndarray] = []
     off = 0
-    for (S, E, N, W, nx, ny, tag) in blocks:
+    for blk in blocks:
+        if len(blk) == 4 and isinstance(blk[0], str) and blk[0] == "premeshed":
+            _, v, t, g = blk                     # tensor-meshed unit (rotor)
+            all_v.append(v); all_t.append(t + off); all_tag.append(np.asarray(g, np.int16))
+            off += len(v)
+            continue
+        (S, E, N, W, nx, ny, tag) = blk
         v, t = coons_quad(S, E, N, W, nx, ny)
         all_v.append(v); all_t.append(t + off); all_tag.append(np.full(len(t), tag, np.int16))
         off += len(v)

@@ -144,6 +144,11 @@ _SB_AIRGAP_MACRO = _os_sb.environ.get("SB_AIRGAP_MACRO", "0") == "1"
 # down every sweep eval on the 24s20p config).  Snapping both arcs to the slip
 # grid removes the slivers by construction.
 _SB_IRON_RESAMPLE = _os_sb.environ.get("SB_IRON_RESAMPLE", "1") == "1"
+# Deterministic template iron mesh (iron_template.py): the WHOLE stator and
+# rotor halves come from warped tensor grids instead of gmsh — rebuilds are
+# bit-identical, so the raw-ripple rebuild band collapses.  Experimental
+# (env SB_IRON_TEMPLATE=1); full-ring path first.
+_SB_IRON_TEMPLATE = _os_sb.environ.get("SB_IRON_TEMPLATE", "0") == "1"
 # Structured (concentric-ring) air gap: partition EACH half-gap (rotor OD->R1 and
 # R2->stator bore) into `gap_layers` thin annular rows bounded by uniform N-gon rings
 # on the slip angular grid -> the gap meshes as an ANSYS-style structured band
@@ -1327,6 +1332,21 @@ def _build_sliding_band_meshes(
         _pc_stator = _SB_POLE_COPY_STATOR if pole_copy is None else bool(pole_copy)
         mesh_s = tags_s = classify_s = None
         mesh_r = tags_r = classify_r = None
+        if _SB_IRON_TEMPLATE:
+            try:
+                from motor_ai_sim.simulation.iron_template import template_solver_halves
+                from motor_ai_sim.cadquery_geometry import CadQueryMotor as _CQM
+                _p_geo = _CQM().parameters
+                (mesh_s, tags_s, classify_s,
+                 mesh_r, tags_r, classify_r) = template_solver_halves(
+                    _p_geo, polys, outer_air_factor=outer_air_factor,
+                    density=max(0.3, 2.0 / max(mesh_size_mm, 0.5)))
+                log.info("iron template halves: stator %d tris, rotor %d tris",
+                         mesh_s.t.shape[1], mesh_r.t.shape[1])
+            except Exception as _te:
+                log.warning("iron template failed (%s) — gmsh build", _te)
+                mesh_s = tags_s = classify_s = None
+                mesh_r = tags_r = classify_r = None
         if _pc_stator and _slot_period and _slot_period > 0:
             _ncs = round(360.0 / _slot_period)
             if _ncs >= 1 and abs(_ncs * _slot_period - 360.0) < 1e-6:

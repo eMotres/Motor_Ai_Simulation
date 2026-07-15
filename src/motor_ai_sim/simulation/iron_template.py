@@ -598,6 +598,89 @@ def _snap_to_contours(V: np.ndarray, T: np.ndarray, G: np.ndarray,
     return V
 
 
+def _densify_fillets(V, T, G, contours, protect_r=(), sector_rays=(),
+                     swap_tags=(TAG_IRON, TAG_AIR, TAG_MAGNET),
+                     tol=0.10, min_edge=0.35, max_pass=3):
+    """Round the tag-staircase into real fillet arcs: on every class-boundary
+    edge (tags differ, both meshable) whose midpoint sits >tol off the nearest
+    CadQuery contour — i.e. the contour BOWS (a fillet) — insert a node on the
+    contour and split the two incident triangles.  Original corner nodes stay,
+    so corner + inserted arc nodes trace the rounding.  Protected circle radii
+    (belt spec, shaft, OD) and sector cut rays are never moved onto."""
+    try:
+        from shapely.geometry import Point
+        from shapely.ops import nearest_points
+    except Exception:
+        return V, T, G
+    V = V.astype(float).copy(); T = T.copy(); G = G.copy()
+    for _ in range(max_pass):
+        edge_tris: Dict[Tuple[int, int], List[int]] = {}
+        for ti, t in enumerate(T):
+            for a, b in ((t[0], t[1]), (t[1], t[2]), (t[2], t[0])):
+                edge_tris.setdefault((min(a, b), max(a, b)), []).append(ti)
+        inserts = []
+        for (a, b), tis in edge_tris.items():
+            if len(tis) != 2:
+                continue
+            g1, g2 = int(G[tis[0]]), int(G[tis[1]])
+            if g1 == g2 or g1 not in swap_tags or g2 not in swap_tags:
+                continue
+            pa, pb = V[a], V[b]
+            L = float(np.hypot(*(pb - pa)))
+            if L < min_edge:
+                continue
+            mid = 0.5 * (pa + pb)
+            best, dd = None, 1e18
+            for cont in contours:
+                q = nearest_points(cont, Point(mid[0], mid[1]))[0]
+                d = float(np.hypot(q.x - mid[0], q.y - mid[1]))
+                if d < dd:
+                    dd, best = d, (q.x, q.y)
+            if best is None or dd < tol or dd > 0.6 * L:
+                continue
+            rr = float(np.hypot(*best))
+            if any(abs(rr - pr) < 0.02 for pr in protect_r):
+                continue
+            # a node landing on an endpoint makes a zero-area sliver — skip
+            if (np.hypot(best[0] - pa[0], best[1] - pa[1]) < 0.2
+                    or np.hypot(best[0] - pb[0], best[1] - pb[1]) < 0.2):
+                continue
+            if sector_rays:
+                bx, by = best
+                if any(abs(bx * math.sin(ar) - by * math.cos(ar)) < 1e-4
+                       and (bx * math.cos(ar) + by * math.sin(ar)) > 0
+                       for ar in sector_rays):
+                    continue
+            inserts.append((a, b, tis[0], tis[1], best))
+        if not inserts:
+            break
+        drop = set(); new_tris = []; new_tags = []; newV = []
+        base = len(V)
+        for (a, b, t1, t2, pt) in inserts:
+            if t1 in drop or t2 in drop:
+                continue
+            pidx = base + len(newV); newV.append(pt)
+            for ti in (t1, t2):
+                c = int([x for x in T[ti] if x != a and x != b][0])
+                new_tris.append([a, pidx, c]); new_tags.append(int(G[ti]))
+                new_tris.append([pidx, b, c]); new_tags.append(int(G[ti]))
+                drop.add(ti)
+        if not newV:
+            break
+        V = np.vstack([V, np.array(newV, float)])
+        keep = np.array([i for i in range(len(T)) if i not in drop], int)
+        T = np.vstack([T[keep], np.array(new_tris, T.dtype)])
+        G = np.concatenate([G[keep], np.array(new_tags, G.dtype)])
+        p0, p1, p2 = V[T[:, 0]], V[T[:, 1]], V[T[:, 2]]
+        ar2 = ((p1[:, 0] - p0[:, 0]) * (p2[:, 1] - p0[:, 1])
+               - (p1[:, 1] - p0[:, 1]) * (p2[:, 0] - p0[:, 0]))
+        cw = ar2 < 0
+        T[cw] = T[cw][:, ::-1]
+        good = np.abs(ar2) > 1e-10          # drop slivers the split may spawn
+        T = T[good]; G = G[good]
+    return V, T, G
+
+
 def template_solver_halves(p: Dict, polys: Dict, outer_air_factor: float = 1.2,
                            density: float = 1.2, n_sectors: int = 1):
     """Solver-ready halves in DOM_* tags: (mesh_s, tags_s, cls_s,
@@ -755,14 +838,31 @@ def template_solver_halves(p: Dict, polys: Dict, outer_air_factor: float = 1.2,
     Vr, Tr, Gr = stitch_hanging(*assemble_rotor_half(
         p, density=density, n_sectors=n_sectors))
     rays = () if n_sectors <= 1 else (0.0, 2.0 * math.pi / n_sectors)
-    Vs = _snap_to_contours(Vs, Ts, Gs, polys, "s",
-                           protect_r=(float(p["stator_inner_radius"]),
-                                      float(p["stator_outer_radius"])),
-                           sector_rays=rays)
-    Vr = _snap_to_contours(Vr, Tr, Gr, polys, "r",
-                           protect_r=(float(p["rotor_outer_radius"]),
-                                      float(p["rotor_inner_radius"])),
-                           sector_rays=rays)
+    pr_s = (float(p["stator_inner_radius"]), float(p["stator_outer_radius"]))
+    pr_r = (float(p["rotor_outer_radius"]), float(p["rotor_inner_radius"]),
+            float(p["shaft_inner_radius"]))
+    # fillet arcs (visible + physical): real-poly tags → snap staircase onto
+    # the contours → insert arc nodes where the contour bows (fillet) → snap
+    # the fresh nodes.  Stator boundary = OD/V-notch/tooth; rotor = iron +
+    # each magnet contour (corner fillets, pocket, vent).
+    st_cont = list(getattr(polys["stator"], "geoms", [polys["stator"]]))
+    st_bnd = [g.boundary for g in st_cont]
+    ro_cont = list(getattr(polys["rotor"], "geoms", [polys["rotor"]]))
+    ro_bnd = [g.boundary for g in ro_cont]
+    mag_bnd = [mg.boundary for mg, _pol in (polys.get("magnets") or [])]
+
+    Gs = _refine_by_polys(Vs, Ts, Gs, "s")
+    Vs = _snap_to_contours(Vs, Ts, Gs, polys, "s", protect_r=pr_s, sector_rays=rays)
+    Vs, Ts, Gs = _densify_fillets(Vs, Ts, Gs, st_bnd,
+                                  protect_r=pr_s, sector_rays=rays)
+    Vs = _snap_to_contours(Vs, Ts, Gs, polys, "s", protect_r=pr_s, sector_rays=rays)
+
+    Gr = _refine_by_polys(Vr, Tr, Gr, "r")
+    Vr = _snap_to_contours(Vr, Tr, Gr, polys, "r", protect_r=pr_r, sector_rays=rays)
+    Vr, Tr, Gr = _densify_fillets(Vr, Tr, Gr, ro_bnd + mag_bnd,
+                                  protect_r=pr_r, sector_rays=rays)
+    Vr = _snap_to_contours(Vr, Tr, Gr, polys, "r", protect_r=pr_r, sector_rays=rays)
+
     ms, ts, cs = _finish(Vs, Ts, Gs, "s")
     mr, tr, cr = _finish(Vr, Tr, Gr, "r")
     return ms, ts, cs, mr, tr, cr

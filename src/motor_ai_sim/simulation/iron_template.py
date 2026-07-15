@@ -598,20 +598,23 @@ def _snap_to_contours(V: np.ndarray, T: np.ndarray, G: np.ndarray,
     return V
 
 
-def _densify_fillets(V, T, G, contours, protect_r=(), sector_rays=(),
+def _densify_fillets(V, T, G, iron_bnd, mag_bnd=(), protect_r=(), sector_rays=(),
                      swap_tags=(TAG_IRON, TAG_AIR, TAG_MAGNET),
                      tol=0.10, min_edge=0.35, max_pass=3):
     """Round the tag-staircase into real fillet arcs: on every class-boundary
     edge (tags differ, both meshable) whose midpoint sits >tol off the nearest
-    CadQuery contour — i.e. the contour BOWS (a fillet) — insert a node on the
-    contour and split the two incident triangles.  Original corner nodes stay,
-    so corner + inserted arc nodes trace the rounding.  Protected circle radii
-    (belt spec, shaft, OD) and sector cut rays are never moved onto."""
+    RELEVANT CadQuery contour — i.e. the contour BOWS (a fillet) — insert a node
+    on the contour and split the two incident triangles.  The contour is chosen
+    by the edge's tags: a magnet|X edge snaps to the MAGNET outline (the true
+    separator), everything else to the iron outline — mixing them let a magnet
+    edge grab the rotor pocket wall and dent the flat magnet base.  Protected
+    circle radii (belt spec, shaft, OD) and sector rays are never moved onto."""
     try:
         from shapely.geometry import Point
         from shapely.ops import nearest_points
     except Exception:
         return V, T, G
+    iron_bnd = list(iron_bnd); mag_bnd = list(mag_bnd)
     V = V.astype(float).copy(); T = T.copy(); G = G.copy()
     for _ in range(max_pass):
         edge_tris: Dict[Tuple[int, int], List[int]] = {}
@@ -630,8 +633,9 @@ def _densify_fillets(V, T, G, contours, protect_r=(), sector_rays=(),
             if L < min_edge:
                 continue
             mid = 0.5 * (pa + pb)
+            conts = mag_bnd if (TAG_MAGNET in (g1, g2) and mag_bnd) else iron_bnd
             best, dd = None, 1e18
-            for cont in contours:
+            for cont in conts:
                 q = nearest_points(cont, Point(mid[0], mid[1]))[0]
                 d = float(np.hypot(q.x - mid[0], q.y - mid[1]))
                 if d < dd:
@@ -860,7 +864,7 @@ def template_solver_halves(p: Dict, polys: Dict, outer_air_factor: float = 1.2,
 
     Gr = _refine_by_polys(Vr, Tr, Gr, "r")
     Vr = _snap_to_contours(Vr, Tr, Gr, polys, "r", protect_r=pr_r, sector_rays=rays)
-    Vr, Tr, Gr = _densify_fillets(Vr, Tr, Gr, ro_bnd + mag_bnd,
+    Vr, Tr, Gr = _densify_fillets(Vr, Tr, Gr, ro_bnd, mag_bnd=mag_bnd,
                                   protect_r=pr_r, sector_rays=rays)
     Vr = _snap_to_contours(Vr, Tr, Gr, polys, "r", protect_r=pr_r, sector_rays=rays)
 
@@ -1119,6 +1123,20 @@ def rotor_unit_blocks(p: Dict, density: float = 1.0) -> List[Tuple]:
 
     # grid A: yoke + magnet span (wall-warped columns)
     V_A, T_A, rc, tc = tensor(rows_A, tg, warp=True)
+    # the magnet BOTTOM is a FLAT chord in CadQuery (its mid dips to
+    # r_mag0·cos(a_dn) ≈ 0.4 mm below the r_mag0 arc), not a constant-radius
+    # arc.  Build it flat here so the poly snap has nothing to pull — a
+    # constant-r row + partial flip-guarded snap was the magnet-base sawtooth.
+    ncol = len(tg)
+    i_bot = int(np.argmin(np.abs(rows_A - r_mag0)))
+    if abs(rows_A[i_bot] - r_mag0) < 1e-6:
+        th_b = theta_row(r_mag0)
+        y0 = r_mag0 * math.cos(_a_dn_wall)
+        magc = th_b <= wall_ang(r_mag0) + 1e-9
+        sl = slice(i_bot * ncol, (i_bot + 1) * ncol)
+        xb = V_A[sl, 0].copy(); yb = V_A[sl, 1].copy()
+        yb[magc] = y0; xb[magc] = y0 * np.tan(th_b[magc])
+        V_A[sl, 0] = xb; V_A[sl, 1] = yb
     tag = np.full(rc.shape, TAG_IRON, np.int16)
     tag[(rc >= r_mag0 - 1e-9) & (tc <= a_dn + 1e-12)] = TAG_MAGNET
     G_A = np.concatenate([tag.ravel(), tag.ravel()])

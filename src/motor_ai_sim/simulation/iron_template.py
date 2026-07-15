@@ -799,6 +799,7 @@ def template_solver_halves(p: Dict, polys: Dict, outer_air_factor: float = 1.2,
         if wall.sum() >= 4:
             cf = np.polyfit(rm[wall], dth[wall], 1)
             p["_mag_a_up"] = float(np.polyval(cf, r_top_m))
+            p["_mag_a_dn"] = float(np.polyval(cf, r_mag1_g))  # slant base (wall foot)
         p["_mag_r_top"] = r_top_m
     except Exception:
         pass
@@ -1070,12 +1071,28 @@ def rotor_unit_blocks(p: Dict, density: float = 1.0) -> List[Tuple]:
         np.linspace(r_mag1, r_top, max(3, n_of(r_top - r_mag1)) + 1)]))
     rows_B = np.linspace(r_top, R_o, max(3, n_of(up_gap)) + 1)
 
+    # the magnet slant wall is a STRAIGHT line in xy from (a_dn, r_mag1) to
+    # (a_up, r_top) — NOT a linear angle-in-radius ramp.  Building it as the
+    # true segment makes the tensor column coincide with the CadQuery wall, so
+    # the poly re-tag no longer flips cells across it (that mismatch produced a
+    # sawtooth on the magnet flank).  wall_ang(r) = angle where the segment
+    # crosses radius r.
+    _a_dn_wall = float(p.get("_mag_a_dn", a_dn))   # measured wall foot angle
+    _Ax, _Ay = r_mag1 * math.sin(_a_dn_wall), r_mag1 * math.cos(_a_dn_wall)
+    _Bx, _By = r_top * math.sin(a_up), r_top * math.cos(a_up)
+    _Dx, _Dy = _Bx - _Ax, _By - _Ay
+    _AA = _Dx * _Dx + _Dy * _Dy
+    _BB = 2.0 * (_Ax * _Dx + _Ay * _Dy)
+
     def wall_ang(r):                                # magnet wall angle at r
         if r <= r_mag1:
             return a_dn
         if r >= r_top:
             return a_up
-        return a_dn + (a_up - a_dn) * (r - r_mag1) / (r_top - r_mag1)
+        cc = _Ax * _Ax + _Ay * _Ay - r * r
+        disc = max(_BB * _BB - 4.0 * _AA * cc, 0.0)
+        t = (-_BB + math.sqrt(disc)) / (2.0 * _AA)
+        return math.atan2(_Ax + t * _Dx, _Ay + t * _Dy)
 
     def theta_row(r):
         w = wall_ang(r)

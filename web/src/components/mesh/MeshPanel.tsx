@@ -362,6 +362,13 @@ const MeshPanel: React.FC = () => {
   // instead of gmsh free triangulation — build-to-build deterministic results.
   // Falls back to gmsh automatically when the topology doesn't fit the units.
   const [ironTemplate,   setIronTemplate]   = usePersisted<boolean>('ironTemplate', true);
+  // Template halves end exactly ON the iron circles, so ONLY the structured
+  // belt meshes the air gap between them.  Keep the two coupled on EVERY render
+  // (not just on toggle) — otherwise a persisted {template ON, Free gap} state
+  // rebuilds with a black, unmeshed gap.  Runs on mount too.
+  useEffect(() => {
+    if (ironTemplate && !structuredGap) setStructuredGap(true);
+  }, [ironTemplate, structuredGap, setStructuredGap]);
   // ── Per-component mesh size (study mesh-density effect on results) ─────────
   // {comp: target element size mm}. Empty/0 → use the global size for that part.
   // Persisted under 'mesh.componentMesh' so the Simulation tab's solve reads the
@@ -791,7 +798,14 @@ const MeshPanel: React.FC = () => {
               <Tooltip placement="right" title="Free = gmsh Delaunay triangles in the gap (default). Structured = ANSYS-style concentric rings + radial spokes: the gap is partitioned into Air-gap-fidelity rings per side (~20% more nodes). Use fidelity 3+ for exactly that many rings; at 1-2 gmsh adds extra layers to avoid stretched triangles vs the fine slip ring. Cleans the gap mesh + broadband ripple, but does NOT lower peak ripple (the tooth mesh is the floor). Drives the mesh preview AND the Simulation solve.">
                 <ToggleButtonGroup
                   value={structuredGap ? 'struct' : 'free'} exclusive size="small" fullWidth
-                  onChange={(_, v) => v != null && setStructuredGap(v === 'struct')}
+                  onChange={(_, v) => {
+                    if (v == null) return;
+                    // picking Free while Template iron is on would rebuild an
+                    // empty gap (template halves need the belt) — turn the
+                    // template off so Free means the plain gmsh gap.
+                    if (v === 'free' && ironTemplate) setIronTemplate(false);
+                    setStructuredGap(v === 'struct');
+                  }}
                   sx={{ width: '100%',
                     '& .MuiToggleButton-root': { flex: 1, py: 0.3, fontSize: 11,
                       color: '#64748b', borderColor: '#1e293b', textTransform: 'none',

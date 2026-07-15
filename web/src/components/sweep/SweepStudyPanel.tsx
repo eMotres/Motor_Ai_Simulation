@@ -246,7 +246,7 @@ const SweepStudyPanel: React.FC = () => {
           pole_copy: readBool('mesh.poleCopy', false), torque_filter: readBool('sim.torqueFilter', true),
           n_sectors: Math.max(1, Math.round(readLS('mesh.nSectors', 1))),   // single source: Mesh tab (same as Simulation)
           gap_layers: readLS('mesh.gapLayers', 2),   // single source: Mesh tab — drives ripple/eddy; must match Simulation
-          structured_gap: readBool('mesh.structuredGap', false),   // single source: Mesh tab "Structured" — belt gap mesh (honest ripple, ¼ == full disk)
+          structured_gap: readBool('mesh.structuredGap', false) || readBool('mesh.ironTemplate', true),   // single source: Mesh tab "Structured" — belt gap mesh (honest ripple, ¼ == full disk)
           airgap_macro: readBool('mesh.harmonicGap', false),   // Mesh tab "Harmonic gap" — step-independent RAW ripple (full + sectors)
           iron_template: readBool('mesh.ironTemplate', true), // Mesh tab "Template iron" — deterministic iron mesh
           end_winding_factor: readLS('sim.endWinding', 0),   // sent for parity, but a sweep RECOMPUTES k_end per-point from each candidate's geometry (backend refine_proc forces auto) — you can't pin one k_end across changing tooth_width/slot geometry

@@ -681,6 +681,7 @@ export const useMotorStore = create<MotorState>()(
         try { airgap_macro = JSON.parse(localStorage.getItem('mesh.harmonicGap') ?? 'false') === true; } catch { /* default */ }
         let iron_template = true;
         try { iron_template = JSON.parse(localStorage.getItem('mesh.ironTemplate') ?? 'true') !== false; } catch { /* default */ }
+        if (iron_template) structured_gap = true;  // template needs the belt
 
         set({ descentRunning: true, descentError: null, descentState: null });
         try {
@@ -748,6 +749,7 @@ export const useMotorStore = create<MotorState>()(
         try { airgap_macro = JSON.parse(localStorage.getItem('mesh.harmonicGap') ?? 'false') === true; } catch { /* default */ }
         let iron_template = true;
         try { iron_template = JSON.parse(localStorage.getItem('mesh.ironTemplate') ?? 'true') !== false; } catch { /* default */ }
+        if (iron_template) structured_gap = true;  // template needs the belt
         set({ baselineBusy: true, baselineError: null });
         try {
           const res = await fetch(`${API_BASE_URL}/api/optimization/descent/baseline`, {

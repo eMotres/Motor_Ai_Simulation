@@ -311,7 +311,8 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
       // Bit-identical pole/slot mesh (Mesh-tab "Periodic" toggle).
       pole_copy:          readMeshSetting('poleCopy', false),
       // ANSYS-style concentric-ring air-gap mesh (Mesh-tab "Air-gap mesh" toggle).
-      structured_gap:     readMeshSetting('structuredGap', false),
+      // template halves need the belt → force structured gap when template on
+      structured_gap:     readMeshSetting('structuredGap', false) || readMeshSetting('ironTemplate', true),
       // Harmonic gap coupling (Mesh-tab "Harmonic gap"): step-independent RAW ripple.
       airgap_macro:       readMeshSetting('harmonicGap', false),
       // Deterministic template iron mesh (Mesh-tab "Template iron" toggle).

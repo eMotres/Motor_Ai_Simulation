@@ -444,6 +444,43 @@ def _weld(V: np.ndarray, T: np.ndarray, G: np.ndarray, tol: float = 1e-6):
     return V2, T2[good], G[good]
 
 
+def _graded_outer_ring(angles: np.ndarray, r0: float, r1: float, tag: int,
+                       closed: bool = True, min_count: int = 64):
+    """Air annulus [r0..r1] whose INNER arc conforms 1:1 to `angles` (so it
+    welds to the iron OD/bore nodes) but coarsens angularly by 2× each radial
+    layer (2:1 graded) out to the boundary — no fine angular grid wasted in
+    the far air.  ~6× fewer triangles than a full-resolution ring.  Full-ring
+    only; a sector's outer air is already cheap, so it uses the plain ring."""
+    ang = np.asarray(angles, float)
+    N = len(ang)
+    levels = 0
+    while (N % (2 ** (levels + 1)) == 0
+           and N // (2 ** (levels + 1)) >= min_count and levels < 3):
+        levels += 1
+    if levels == 0 or not closed:
+        return _ring_grid(ang, r0, r1, 2, tag, closed)
+    sets = [ang[::(2 ** k)] for k in range(levels + 1)]     # each = prev[::2]
+    rs = np.linspace(r0, r1, levels + 1)
+    Vs = []; base = [0]
+    for k, s in enumerate(sets):
+        Vs.append(np.stack([rs[k] * np.sin(s), rs[k] * np.cos(s)], axis=1))
+        base.append(base[-1] + len(Vs[-1]))
+    V = np.concatenate(Vs)
+    tris = []
+    for k in range(levels):
+        nf = len(sets[k]); nc = len(sets[k + 1]); of = base[k]; oc = base[k + 1]
+        for j in range(nc):
+            a = of + (2 * j) % nf; m = of + (2 * j + 1) % nf; b = of + (2 * j + 2) % nf
+            A = oc + j; B = oc + (j + 1) % nc
+            tris += [[a, m, A], [m, b, B], [m, B, A]]
+    T = np.array(tris, np.int64)
+    p0, p1, p2 = V[T[:, 0]], V[T[:, 1]], V[T[:, 2]]
+    cw = ((p1[:, 0] - p0[:, 0]) * (p2[:, 1] - p0[:, 1])
+          - (p1[:, 1] - p0[:, 1]) * (p2[:, 0] - p0[:, 0])) < 0
+    T[cw] = T[cw][:, ::-1]
+    return V, T, np.full(len(T), tag, np.int16)
+
+
 def _ring_grid(angles: np.ndarray, r0: float, r1: float, n_r: int, tag: int,
                closed: bool = True):
     """Polar quad ring on EXACTLY the given sorted angle set (matches an
@@ -836,9 +873,8 @@ def assemble_stator_half(p: Dict, density: float = 1.0,
     raw = np.arctan2(V[on_od, 0], V[on_od, 1])
     ang = np.unique(np.round(np.mod(raw, 2 * math.pi) if ns == 1 else raw, 12))
     r_out = R_o * float(outer_air_factor)
-    Vo, To, Go = _ring_grid(ang, R_o, r_out,
-                            max(2, int(round((r_out - R_o) * density * 0.5))),
-                            TAG_AIR + 100, closed=(ns == 1))
+    Vo, To, Go = _graded_outer_ring(ang, R_o, r_out, TAG_AIR + 100,
+                                    closed=(ns == 1))
     V2 = np.concatenate([V, Vo]); T2 = np.concatenate([T, To + len(V)])
     G2 = np.concatenate([G, Go])
     return _weld(V2, T2, G2)

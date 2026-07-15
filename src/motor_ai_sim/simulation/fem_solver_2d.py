@@ -1340,6 +1340,12 @@ def _build_sliding_band_meshes(
                 from motor_ai_sim.cadquery_geometry import CadQueryMotor as _CQM
                 _p_geo = _CQM().parameters
                 _sgspec = polys.get("structured_gap_spec") or {}
+                if not _sgspec:
+                    # template halves end ON the iron circles — without the
+                    # structured-gap belt NOTHING meshes the air gap (a bare
+                    # black ring in the viewer, a broken solve).  Fall back.
+                    raise ValueError("template iron needs the structured-gap "
+                                     "belt (Air-gap mesh: Structured rings)")
                 if _sgspec:            # iron circles must sit EXACTLY on the
                     _p_geo = dict(_p_geo)   # belt-spec radii (4 um off = no weld)
                     _p_geo["stator_inner_radius"] = float(_sgspec["r_si"])
@@ -1419,6 +1425,9 @@ def _build_sliding_band_meshes(
                 raise ValueError(f"sector {_ns_i} not unit-aligned "
                                  f"({_p_geo['num_slots']}s/{_p_geo['num_poles']}p)")
             _sgspec = polys.get("structured_gap_spec") or {}
+            if not _sgspec:
+                raise ValueError("template iron needs the structured-gap "
+                                 "belt (Air-gap mesh: Structured rings)")
             if _sgspec:            # iron circles must sit EXACTLY on the
                 _p_geo = dict(_p_geo)   # belt-spec radii (4 um off = no weld)
                 _p_geo["stator_inner_radius"] = float(_sgspec["r_si"])

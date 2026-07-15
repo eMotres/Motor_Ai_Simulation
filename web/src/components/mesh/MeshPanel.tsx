@@ -808,11 +808,16 @@ const MeshPanel: React.FC = () => {
                     onChange={(e) => setHarmonicGap(e.target.checked)} />
                 </Box>
               </Tooltip>
-              <Tooltip placement="right" title="Stator/rotor iron meshed by structured slot/pole unit templates on the real CadQuery contours (pocket fillets, vent, OD fillet) — build-to-build deterministic mesh and ripple. Works on the full disk and 1/2, 1/4, 1/6 sectors; falls back to gmsh when the topology doesn't fit the units.">
+              <Tooltip placement="right" title="Stator/rotor iron meshed by structured slot/pole unit templates on the real CadQuery contours (pocket fillets, vent, OD fillet) — build-to-build deterministic mesh and ripple. Works on the full disk and 1/2, 1/4, 1/6 sectors. Requires the Structured (rings) air gap (auto-enabled); falls back to gmsh when the topology doesn't fit the units.">
                 <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mt: 0.75 }}>
                   <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>Template iron (deterministic)</Typography>
                   <Switch size="small" checked={ironTemplate}
-                    onChange={(e) => setIronTemplate(e.target.checked)} />
+                    onChange={(e) => {
+                      setIronTemplate(e.target.checked);
+                      // template halves end ON the iron circles — only the
+                      // structured belt meshes the gap between them
+                      if (e.target.checked) setStructuredGap(true);
+                    }} />
                 </Box>
               </Tooltip>
             </Box>

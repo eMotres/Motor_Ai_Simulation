@@ -598,6 +598,84 @@ def _snap_to_contours(V: np.ndarray, T: np.ndarray, G: np.ndarray,
     return V
 
 
+def _despike_tag(V, T, G, tag, protect_r=(), turn_thresh=95.0, n_pass=3):
+    """Flatten needle spikes on a domain boundary: a boundary node whose two
+    boundary edges fold back sharply (convex turn > turn_thresh) is a tensor
+    corner poking past the rounded CadQuery contour.  Slide it toward the
+    midpoint of its two boundary neighbours (flip-guarded) so the fillet corner
+    reads as a rounding, not a needle; a true needle (turn>150°) the relax
+    can't move is edge-collapsed onto a neighbour.  Protected-radius nodes are
+    pinned.  Returns (V, T, G)."""
+    V = V.astype(float).copy(); T = T.copy(); G = G.copy()
+    for _ in range(n_pass):
+        # boundary edges of the `tag` domain: used by exactly one `tag` tri
+        cnt: Dict[Tuple[int, int], int] = {}
+        for ti, t in enumerate(T):
+            if int(G[ti]) != tag:
+                continue
+            for e in ((t[0], t[1]), (t[1], t[2]), (t[2], t[0])):
+                k = (min(e), max(e)); cnt[k] = cnt.get(k, 0) + 1
+        nbr: Dict[int, List[int]] = {}
+        for (a, b), n in cnt.items():
+            if n == 1:
+                nbr.setdefault(a, []).append(b); nbr.setdefault(b, []).append(a)
+        incident: Dict[int, List[int]] = {}
+        for ti, t in enumerate(T):
+            for v in t:
+                incident.setdefault(int(v), []).append(ti)
+        r_all = np.hypot(V[:, 0], V[:, 1])
+
+        def tri_ok(ti, Vw):
+            a, b, c = T[ti]
+            return abs((Vw[b, 0] - Vw[a, 0]) * (Vw[c, 1] - Vw[a, 1])
+                       - (Vw[b, 1] - Vw[a, 1]) * (Vw[c, 0] - Vw[a, 0])) > 1e-9
+        moved = 0; collapse: Dict[int, int] = {}
+        for v, nb in nbr.items():
+            if any(abs(r_all[v] - pr) < 0.02 for pr in protect_r):
+                continue
+            if len(nb) == 2:
+                p, q = V[nb[0]], V[nb[1]]
+                a = p - V[v]; b = q - V[v]
+                ca = float(a @ b) / (np.hypot(*a) * np.hypot(*b) + 1e-12)
+                turn = 180.0 - math.degrees(math.acos(max(-1.0, min(1.0, ca))))
+                if turn < turn_thresh:
+                    continue
+                old = V[v].copy()
+                V[v] = 0.5 * old + 0.5 * (0.5 * (p + q))   # under-relax to chord
+                if all(tri_ok(ti, V) for ti in incident[v]):
+                    moved += 1
+                    continue
+                V[v] = old
+                needle = turn > 150.0
+                tgt = nb[0] if np.hypot(*(p - old)) <= np.hypot(*(q - old)) else nb[1]
+            else:
+                # a stitch-fan junction node (>2 boundary edges): a needle here
+                # is a fold-back spike; collapse onto the boundary neighbour it
+                # is nearest to.  turn undefined → treat as collapse candidate.
+                needle = True
+                d = [(np.hypot(*(V[u] - V[v])), u) for u in nb]
+                d.sort(); tgt = d[0][1]
+            if needle and not any(abs(r_all[tgt] - pr) < 0.02 for pr in protect_r):
+                collapse[v] = tgt
+        if collapse:
+            # chase collapse chains so no target is itself collapsed
+            remap = np.arange(len(V))
+            for v, tgt in collapse.items():
+                t = tgt
+                while t in collapse:
+                    t = collapse[t]
+                remap[v] = t
+            T = remap[T]
+            p0, p1, p2 = V[T[:, 0]], V[T[:, 1]], V[T[:, 2]]
+            ar2 = ((p1[:, 0] - p0[:, 0]) * (p2[:, 1] - p0[:, 1])
+                   - (p1[:, 1] - p0[:, 1]) * (p2[:, 0] - p0[:, 0]))
+            keep = np.abs(ar2) > 1e-10
+            T = T[keep]; G = G[keep]; moved += len(collapse)
+        if not moved:
+            break
+    return V, T, G
+
+
 def _densify_fillets(V, T, G, iron_bnd, mag_bnd=(), protect_r=(), sector_rays=(),
                      swap_tags=(TAG_IRON, TAG_AIR, TAG_MAGNET),
                      tol=0.10, min_edge=0.35, max_pass=3):
@@ -867,6 +945,9 @@ def template_solver_halves(p: Dict, polys: Dict, outer_air_factor: float = 1.2,
     Vr, Tr, Gr = _densify_fillets(Vr, Tr, Gr, ro_bnd, mag_bnd=mag_bnd,
                                   protect_r=pr_r, sector_rays=rays)
     Vr = _snap_to_contours(Vr, Tr, Gr, polys, "r", protect_r=pr_r, sector_rays=rays)
+    # magnet top/bottom corners can leave a tensor node poking past the rounded
+    # CQ contour (a needle); flatten those spikes into the rounding
+    Vr, Tr, Gr = _despike_tag(Vr, Tr, Gr, TAG_MAGNET, protect_r=pr_r)
 
     ms, ts, cs = _finish(Vs, Ts, Gs, "s")
     mr, tr, cr = _finish(Vr, Tr, Gr, "r")

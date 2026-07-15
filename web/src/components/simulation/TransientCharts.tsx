@@ -314,6 +314,8 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
       structured_gap:     readMeshSetting('structuredGap', false),
       // Harmonic gap coupling (Mesh-tab "Harmonic gap"): step-independent RAW ripple.
       airgap_macro:       readMeshSetting('harmonicGap', false),
+      // Deterministic template iron mesh (Mesh-tab "Template iron" toggle).
+      iron_template:      readMeshSetting('ironTemplate', true),
       // Copper-loss physics: coil temperature → ρ_Cu(T); end-winding factor
       // (0 = auto-estimate from geometry) for the copper the 2-D field misses.
       coil_temp_c:        readSimSetting('coilTemp',   120.0),

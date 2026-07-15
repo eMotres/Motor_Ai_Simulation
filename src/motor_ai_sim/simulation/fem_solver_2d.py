@@ -1201,6 +1201,7 @@ def _build_sliding_band_meshes(
         component_mesh_mm: Optional[dict] = None,
         full_ring: bool = False,            # TRUE 360°: stitch 2×180° per half
         pole_copy: Optional[bool] = None,   # template-copy poles/slots; None=env default
+        iron_template: Optional[bool] = None,  # deterministic template iron; None=env default
 ):
     """Build the stator-half and rotor-half meshes for the sliding-band solver.
 
@@ -1315,6 +1316,7 @@ def _build_sliding_band_meshes(
         component_mesh_mm=component_mesh_mm,
     )
 
+    _use_tpl = _SB_IRON_TEMPLATE if iron_template is None else bool(iron_template)
     if full_ring:
         # TRUE 360°: each half stitched from two clean 180° builds (direct
         # closed-360 OCC double-meshes → dead field).  No sector cuts exist
@@ -1332,7 +1334,7 @@ def _build_sliding_band_meshes(
         _pc_stator = _SB_POLE_COPY_STATOR if pole_copy is None else bool(pole_copy)
         mesh_s = tags_s = classify_s = None
         mesh_r = tags_r = classify_r = None
-        if _SB_IRON_TEMPLATE:
+        if _use_tpl:
             try:
                 from motor_ai_sim.simulation.iron_template import template_solver_halves
                 from motor_ai_sim.cadquery_geometry import CadQueryMotor as _CQM
@@ -1404,7 +1406,7 @@ def _build_sliding_band_meshes(
 
     mesh_s = tags_s = classify_s = None
     mesh_r = tags_r = classify_r = None
-    if _SB_IRON_TEMPLATE:
+    if _use_tpl:
         # deterministic template wedge: whole units only (radial cuts land on
         # tooth axes / inter-pole axes with clone-identical node sets), so the
         # sector master-slave pairing matches nodes 1:1 by radius.
@@ -4800,6 +4802,7 @@ def fem_transient_sliding_band(
     torque_filter: bool = True,  # band-limit T(t) to the physical 6·k orders
                                  # (False = raw per-frame Maxwell-stress torque)
     pole_copy: Optional[bool] = None,  # bit-identical pole/slot mesh; None=env default
+    iron_template: Optional[bool] = None,  # deterministic template iron; None=env default
     progress_cb=None,            # optional callback(done:int, total:int) per frame
     magnet_scale: float = 1.0,   # scale ALL magnet Br (0 → PMs off = reluctance torque)
     rotor_angle0_deg: float = 0.0,   # DIAGNOSTIC: build the rotor PHYSICALLY rotated
@@ -5068,7 +5071,8 @@ def fem_transient_sliding_band(
         normal_deviation_deg=8.0, aspect_ratio=10.0,
         gap_layers=gap_layers,
         component_mesh_mm=component_mesh_mm,
-        full_ring=_full_ring, pole_copy=pole_copy)
+        full_ring=_full_ring, pole_copy=pole_copy,
+        iron_template=iron_template)
     Ps, Tts = ms.p.copy(), ms.t.copy(); Pr, Ttr = mr.p.copy(), mr.t.copy()
     nsn = Ps.shape[1]
     Pall = np.hstack([Ps, Pr]); Tall = np.hstack([Tts, Ttr + nsn])
@@ -7395,6 +7399,7 @@ def em_transient_eval(
     progress_cb=None,
     hi_fidelity: bool = False,
     structured_gap: bool = False,
+    iron_template=None,
     airgap_macro: bool = False,
     drive: str = "current",
     v_phase_peak: float = 0.0,
@@ -7419,6 +7424,7 @@ def em_transient_eval(
         coil_temp_c=float(coil_temp_c), end_winding_factor=float(end_winding_factor),
         rotor_eddy=bool(rotor_eddy), demag=bool(demag),
         torque_filter=bool(torque_filter), pole_copy=pole_copy,
+        iron_template=iron_template,
         component_mesh_mm=(component_mesh_mm or {}), geo_override=geo_override,
         progress_cb=progress_cb, hi_fidelity=bool(hi_fidelity),
         structured_gap=bool(structured_gap), airgap_macro=bool(airgap_macro),

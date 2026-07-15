@@ -1289,6 +1289,7 @@ async def build_fem_mesh_2d_sliding_band(
     stator_fillet_mm:  float = 0.0,     # extra Shapely fillet smoothing
     component_mesh:    str   = "",      # JSON {comp: size_mm} per-part mesh size
     pole_copy:         bool  = False,   # bit-identical pole/slot template-copy mesh
+    iron_template:     bool  = True,    # deterministic template iron (fallback: gmsh)
     hi_fidelity:       bool  = False,   # match the SOLVER's hi-fi mesh: feature÷8 + gap≥4
     structured_gap:    bool  = False,   # ANSYS-style concentric-ring gap (experimental toggle)
     geo:               Optional[str] = None,  # per-request geometry override (multi-user)
@@ -1316,7 +1317,7 @@ async def build_fem_mesh_2d_sliding_band(
            round(normal_deviation, 1), round(aspect_ratio, 1),
            round(outer_air_factor, 2), round(band_thickness_mm, 2),
            round(gap_layers, 1), int(n_sectors), round(stator_fillet_mm, 2),
-           int(bool(pole_copy)), int(bool(hi_fidelity)), int(bool(structured_gap)),
+           int(bool(pole_copy)), int(bool(iron_template)), int(bool(hi_fidelity)), int(bool(structured_gap)),
            tuple(sorted(_comp_mesh.items())), _gh)
     if key in _fem_mesh_sb_cache:
         return _fem_mesh_sb_cache[key]
@@ -1409,6 +1410,7 @@ async def build_fem_mesh_2d_sliding_band(
                 component_mesh_mm=_comp_mesh,
                 full_ring=_full_ring_view,
                 pole_copy=bool(pole_copy),
+                iron_template=bool(iron_template),
             )
     except Exception as e:
         log.exception("sliding-band mesh build failed")
@@ -1513,6 +1515,7 @@ def get_fem_field2d(
     component_mesh:      str   = "",      # JSON {comp: size_mm} per-part mesh size
     demag:               bool  = False,   # show the irreversible-demag %-map
     pole_copy:           bool  = False,   # bit-identical pole/slot template-copy mesh
+    iron_template:       bool  = True,    # deterministic template iron (fallback: gmsh)
     geo:                 Optional[str] = None,  # per-request geometry override (multi-user)
 ):
     """Field view at ONE rotor angle, computed by the SLIDING-BAND TRANSIENT
@@ -1532,7 +1535,7 @@ def get_fem_field2d(
         round(mesh_size_mm, 2), round(min_size_mm, 2), round(outer_air_factor, 2),
         int(n_sectors), round(stator_fillet_mm, 2),
         round(I_phase_rms, 2) if I_phase_rms is not None else None,
-        int(bool(demag)), int(bool(pole_copy)), tuple(sorted(_comp_mesh.items())),
+        int(bool(demag)), int(bool(pole_copy)), int(bool(iron_template)), tuple(sorted(_comp_mesh.items())),
     )
     if _geo_ov:   # distinct cache entry per overridden geometry (no-geo key unchanged)
         key = key + (tuple(sorted(_geo_ov.items())),)
@@ -1568,6 +1571,7 @@ def get_fem_field2d(
             return_field=True, field_first=True,
             rotor_angle0_deg=float(rotor_angle_deg),
             pole_copy=bool(pole_copy),
+            iron_template=bool(iron_template),
             component_mesh_mm=_comp_mesh,
             geo_override=_geo_ov)
     except Exception as e:
@@ -2554,6 +2558,7 @@ def get_fem_transient(
     demag:               bool  = False,   # ← per-element irreversible demagnetisation (de-rates Br → torque)
     torque_filter:       bool  = True,    # ← band-limit T(t) to physical 6·k orders (off = raw)
     pole_copy:           bool  = False,   # ← bit-identical pole/slot template-copy mesh
+    iron_template:       bool  = True,    # ← deterministic template iron (fallback: gmsh)
     hi_fidelity:         bool  = False,   # ← 2× slip nodes + finer mesh → smoother raw torque (slower)
     structured_gap:      bool  = False,   # ← ANSYS-style concentric-ring air-gap mesh (experimental)
     airgap_macro:        bool  = False,   # ← harmonic air-gap macroelement (honest RAW ripple; full ring + sectors)
@@ -2598,7 +2603,7 @@ def get_fem_transient(
                    round(coil_temp_c, 1), round(end_winding_factor, 3),
                    int(bool(rotor_eddy)), round(gap_layers, 1),
                    int(bool(demag)), int(bool(torque_filter)),
-                   int(bool(pole_copy)), int(bool(hi_fidelity)), int(bool(structured_gap)),
+                   int(bool(pole_copy)), int(bool(iron_template)), int(bool(hi_fidelity)), int(bool(structured_gap)),
                    int(bool(airgap_macro)),
                    tuple(sorted(_comp_mesh.items())),
                    str(drive or "current"), round(float(v_phase_peak), 2),
@@ -2671,6 +2676,7 @@ def get_fem_transient(
                     coil_temp_c=float(coil_temp_c), end_winding_factor=float(end_winding_factor),
                     rotor_eddy=bool(rotor_eddy), demag=bool(demag),
                     torque_filter=bool(torque_filter), pole_copy=bool(pole_copy),
+                    iron_template=bool(iron_template),
                     component_mesh_mm=_comp_mesh, geo_override=_geo_ov,
                     progress_cb=_sb_progress, hi_fidelity=bool(hi_fidelity),
                     structured_gap=bool(structured_gap),
@@ -2708,6 +2714,7 @@ def get_fem_transient(
                                 rotor_eddy=False, demag=bool(demag),
                                 torque_filter=bool(torque_filter),
                                 pole_copy=bool(pole_copy),
+                                iron_template=bool(iron_template),
                                 component_mesh_mm=_comp_mesh, geo_override=_geo_ov,
                                 hi_fidelity=bool(hi_fidelity),
                                 structured_gap=bool(structured_gap),
@@ -3265,6 +3272,7 @@ def get_harm_screening(
     rotor_eddy:          bool  = True,
     torque_filter:       bool  = True,
     pole_copy:           bool  = False,
+    iron_template:       bool  = True,
     hi_fidelity:         bool  = False,
     structured_gap:      bool  = False,
     component_mesh:      str   = "",
@@ -3289,6 +3297,7 @@ def get_harm_screening(
         gap_layers=gap_layers, n_sectors=n_sectors, coil_temp_c=coil_temp_c,
         end_winding_factor=end_winding_factor, rotor_eddy=rotor_eddy,
         torque_filter=torque_filter, pole_copy=pole_copy,
+        iron_template=iron_template,
         hi_fidelity=hi_fidelity, structured_gap=structured_gap,
         component_mesh=component_mesh, geo=geo, sliding_band=True,
     )

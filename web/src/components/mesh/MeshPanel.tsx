@@ -357,6 +357,11 @@ const MeshPanel: React.FC = () => {
   // of node re-pairing → RAW torque ripple becomes step-count independent (the honest
   // unfiltered figure).  Solver-side only (mesh preview unchanged); full disk only.
   const [harmonicGap,    setHarmonicGap]    = usePersisted<boolean>('harmonicGap', false);
+  // Deterministic template iron: stator/rotor iron meshed by the structured
+  // slot/pole unit templates (real CadQuery contours via tags + node snap)
+  // instead of gmsh free triangulation — build-to-build deterministic results.
+  // Falls back to gmsh automatically when the topology doesn't fit the units.
+  const [ironTemplate,   setIronTemplate]   = usePersisted<boolean>('ironTemplate', true);
   // ── Per-component mesh size (study mesh-density effect on results) ─────────
   // {comp: target element size mm}. Empty/0 → use the global size for that part.
   // Persisted under 'mesh.componentMesh' so the Simulation tab's solve reads the
@@ -445,6 +450,7 @@ const MeshPanel: React.FC = () => {
       component_mesh:    componentMeshJson,
       pole_copy:         poleCopy ? 'true' : 'false',
       structured_gap:    structuredGap ? 'true' : 'false',   // ANSYS-style concentric-ring gap
+      iron_template:     ironTemplate ? 'true' : 'false',    // deterministic template iron
     } : {
       mesh_size_mm:        _ms,
       min_size_mm:         _mn,
@@ -465,7 +471,8 @@ const MeshPanel: React.FC = () => {
       .then((d: FemMesh) => { if (mySeq !== buildSeq.current) return; setFemMesh(d); setFemLoading(false); })
       .catch(e => { if (mySeq !== buildSeq.current) return; setFemError(String(e)); setFemLoading(false); });
   }, [solverMesh, meshSizeMm, minSizeMm, normalDev, rotorAngle,
-      outerAirFactor, gapLayers, nSectors, componentMeshJson, poleCopy, structuredGap]);
+      outerAirFactor, gapLayers, nSectors, componentMeshJson, poleCopy, structuredGap,
+      ironTemplate]);
 
   // ── Max-element-size bounds = the feature/4 quality floor ─────────────────
   // Above the floor the solver clamps the iron anyway (those slider positions
@@ -799,6 +806,13 @@ const MeshPanel: React.FC = () => {
                   <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>Harmonic gap (exact ripple)</Typography>
                   <Switch size="small" checked={harmonicGap}
                     onChange={(e) => setHarmonicGap(e.target.checked)} />
+                </Box>
+              </Tooltip>
+              <Tooltip placement="right" title="Stator/rotor iron meshed by structured slot/pole unit templates on the real CadQuery contours (pocket fillets, vent, OD fillet) — build-to-build deterministic mesh and ripple. Works on the full disk and 1/2, 1/4, 1/6 sectors; falls back to gmsh when the topology doesn't fit the units.">
+                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mt: 0.75 }}>
+                  <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>Template iron (deterministic)</Typography>
+                  <Switch size="small" checked={ironTemplate}
+                    onChange={(e) => setIronTemplate(e.target.checked)} />
                 </Box>
               </Tooltip>
             </Box>

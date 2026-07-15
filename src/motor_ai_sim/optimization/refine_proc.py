@@ -53,7 +53,8 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
             pole_copy=None, torque_filter: bool = True,
             gap_layers: float = 3.0, end_winding_factor: float = 0.0,
             rotor_eddy: bool = False, hi_fidelity: bool = False,
-            structured_gap: bool = False, airgap_macro: bool = False) -> Dict[str, Any]:
+            structured_gap: bool = False, airgap_macro: bool = False,
+            iron_template: bool = True) -> Dict[str, Any]:
     """Run the sliding-band transient for one candidate and return mean
     performance metrics (torque, efficiency, ripple, losses, mass).
 
@@ -113,7 +114,8 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         "pole_copy": pole_copy, "torque_filter": bool(torque_filter),
         "hi_fidelity": bool(hi_fidelity),   # 2× slip nodes + finer mesh + gap layers → smoother raw torque
         "structured_gap": bool(structured_gap),   # belt gap mesh (Mesh tab "Structured") → honest ripple, ¼==full
-        "airgap_macro": bool(airgap_macro),   # harmonic gap coupling (full ring): step-independent RAW ripple
+        "airgap_macro": bool(airgap_macro),
+        "iron_template": bool(iron_template),   # harmonic gap coupling (full ring): step-independent RAW ripple
 
         # Ambient mesh/sim params the Simulation tab passes but the optimizer used to
         # omit (so get_fem_transient fell back to ITS defaults — e.g. outer_air 1.3 vs
@@ -182,7 +184,8 @@ if __name__ == "__main__":
                       rotor_eddy=spec.get("rotor_eddy", False),
                       hi_fidelity=spec.get("hi_fidelity", False),
                       structured_gap=spec.get("structured_gap", False),
-                      airgap_macro=spec.get("airgap_macro", False))
+                      airgap_macro=spec.get("airgap_macro", False),
+                      iron_template=spec.get("iron_template", True))
         sys.stdout.write("@@RESULT@@" + json.dumps({"ok": True, "res": res}))
     except Exception as e:  # noqa: BLE001
         sys.stdout.write("@@RESULT@@" + json.dumps({"ok": False, "error": str(e)}))

@@ -79,13 +79,13 @@ const MotorThumbnail: React.FC<Props> = ({ slots, poles, size = 92, motorId, thu
       <circle cx={C} cy={C} r={R_STATOR} fill="url(#tn-steel)" stroke="#3b4d68" strokeWidth={1.2} />
       {slotEls}
       {/* air gap */}
-      <circle cx={C} cy={C} r={R_BORE} fill="#0a1018" />
+      <circle cx={C} cy={C} r={R_BORE} fill="var(--panel-2)" />
       {/* rotor iron */}
       <circle cx={C} cy={C} r={R_ROTOR} fill="url(#tn-rotor)" stroke="#3b4d68" strokeWidth={0.8} />
       {magEls}
       {/* shaft */}
-      <circle cx={C} cy={C} r={R_SHAFT} fill="#475569" stroke="#64748b" strokeWidth={0.8} />
-      <circle cx={C} cy={C} r={R_SHAFT * 0.45} fill="#1e293b" />
+      <circle cx={C} cy={C} r={R_SHAFT} fill="var(--text-4)" stroke="var(--text-3)" strokeWidth={0.8} />
+      <circle cx={C} cy={C} r={R_SHAFT * 0.45} fill="var(--panel)" />
     </svg>
   );
 };

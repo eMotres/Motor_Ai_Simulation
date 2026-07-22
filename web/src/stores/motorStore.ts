@@ -656,11 +656,11 @@ export const useMotorStore = create<MotorState>()(
                                  mode: v.mode, step: Number(v.step) }));
         // Mesh settings — all from the Mesh tab (single source), so the optimizer
         // meshes EXACTLY like Simulation (incl. the Periodic pole/slot toggle).
-        let mesh_size_mm = 4.0, min_size_mm = 0.3, pole_copy = false, torque_filter = true;
+        let mesh_size_mm = 4.0, min_size_mm = 0.3, pole_copy = false, torque_filter = false;
         try { mesh_size_mm = Number(JSON.parse(localStorage.getItem('mesh.meshSize') ?? '4')) || 4.0; } catch { /* default */ }
         try { min_size_mm  = Number(JSON.parse(localStorage.getItem('mesh.minSize')  ?? '0.3')) || 0.3; } catch { /* default */ }
         try { pole_copy    = JSON.parse(localStorage.getItem('mesh.poleCopy') ?? 'false') === true; } catch { /* default */ }
-        try { torque_filter = JSON.parse(localStorage.getItem('sim.torqueFilter') ?? 'true') !== false; } catch { /* default */ }
+        try { torque_filter = JSON.parse(localStorage.getItem('sim.torqueFilter') ?? 'false') === true; } catch { /* default */ }
         // Loss model — SINGLE SOURCE: Simulation, so Optimize's efficiency matches the
         // Simulation tab (same keys Sweep reads). Without these the eval drops the
         // field magnet/shaft eddy + end-winding copper → η reads several points high.
@@ -682,6 +682,9 @@ export const useMotorStore = create<MotorState>()(
         let iron_template = true;
         try { iron_template = JSON.parse(localStorage.getItem('mesh.ironTemplate') ?? 'true') !== false; } catch { /* default */ }
         if (iron_template) structured_gap = true;  // template needs the belt
+        // Geometry-driven CDT mesh — SINGLE SOURCE: Mesh tab (same build as Simulation).
+        let geo_mesh = true;
+        try { geo_mesh = JSON.parse(localStorage.getItem('mesh.geoMesh') ?? 'true') !== false; } catch { /* default */ }
 
         set({ descentRunning: true, descentError: null, descentState: null });
         try {
@@ -693,7 +696,7 @@ export const useMotorStore = create<MotorState>()(
               ripple_max_pct: rippleMax, w_eff: wEff, w_td: wTd,
               max_iters: maxIters, steps_per_period: steps,
               mesh_size_mm, min_size_mm, pole_copy, torque_filter,
-              rotor_eddy, end_winding_factor, gap_layers, coil_temp_c, structured_gap, airgap_macro, iron_template,
+              rotor_eddy, end_winding_factor, gap_layers, coil_temp_c, structured_gap, airgap_macro, iron_template, geo_mesh,
               algorithm, n_sectors: nSectors,
               target_torque_nm: targetTorque ?? 0,
               v_peak_limit: vPeakLimit ?? 1e9,
@@ -731,11 +734,11 @@ export const useMotorStore = create<MotorState>()(
         // line matches what the optimizer will evaluate against.
         const { sweepConfig } = get();
         const op0 = sweepConfig.operatingPoints[0] || ({} as any);
-        let mesh_size_mm = 4.0, min_size_mm = 0.3, pole_copy = false, torque_filter = true;
+        let mesh_size_mm = 4.0, min_size_mm = 0.3, pole_copy = false, torque_filter = false;
         try { mesh_size_mm = Number(JSON.parse(localStorage.getItem('mesh.meshSize') ?? '4')) || 4.0; } catch { /* default */ }
         try { min_size_mm  = Number(JSON.parse(localStorage.getItem('mesh.minSize')  ?? '0.3')) || 0.3; } catch { /* default */ }
         try { pole_copy    = JSON.parse(localStorage.getItem('mesh.poleCopy') ?? 'false') === true; } catch { /* default */ }
-        try { torque_filter = JSON.parse(localStorage.getItem('sim.torqueFilter') ?? 'true') !== false; } catch { /* default */ }
+        try { torque_filter = JSON.parse(localStorage.getItem('sim.torqueFilter') ?? 'false') === true; } catch { /* default */ }
         let rotor_eddy = true, end_winding_factor = 0;
         try { rotor_eddy = JSON.parse(localStorage.getItem('sim.fieldLosses') ?? 'true') !== false; } catch { /* default */ }
         try { end_winding_factor = Number(JSON.parse(localStorage.getItem('sim.endWinding') ?? '0')) || 0; } catch { /* default */ }
@@ -750,6 +753,9 @@ export const useMotorStore = create<MotorState>()(
         let iron_template = true;
         try { iron_template = JSON.parse(localStorage.getItem('mesh.ironTemplate') ?? 'true') !== false; } catch { /* default */ }
         if (iron_template) structured_gap = true;  // template needs the belt
+        // Geometry-driven CDT mesh — SINGLE SOURCE: Mesh tab (same build as Simulation).
+        let geo_mesh = true;
+        try { geo_mesh = JSON.parse(localStorage.getItem('mesh.geoMesh') ?? 'true') !== false; } catch { /* default */ }
         set({ baselineBusy: true, baselineError: null });
         try {
           const res = await fetch(`${API_BASE_URL}/api/optimization/descent/baseline`, {
@@ -758,7 +764,7 @@ export const useMotorStore = create<MotorState>()(
               operating_point: { gamma_deg: op0.gamma_deg ?? 0, current_a: op0.current_a, rpm: op0.rpm },
               current_bump_pct: currentBumpPct, steps_per_period: steps, n_sectors: nSectors,
               mesh_size_mm, min_size_mm, pole_copy, torque_filter,
-              rotor_eddy, end_winding_factor, gap_layers, coil_temp_c, structured_gap, airgap_macro, iron_template,
+              rotor_eddy, end_winding_factor, gap_layers, coil_temp_c, structured_gap, airgap_macro, iron_template, geo_mesh,
             }),
           });
           if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);

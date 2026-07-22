@@ -21,7 +21,7 @@ import {
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 const GAMMAS = [0, -5, -10, -15, -20];
 
-const C = { an: '#a78bfa', f2: '#38bdf8', tr: '#4ade80', bg: '#060d17', border: '#1e293b', axis: '#475569' };
+const C = { an: '#a78bfa', f2: '#38bdf8', tr: '#4ade80', bg: 'var(--panel-2)', border: 'var(--panel)', axis: 'var(--text-4)' };
 
 interface Row {
   gamma: number;
@@ -84,15 +84,15 @@ const ModelCompare: React.FC<{ I_phase_rms?: number }> = ({ I_phase_rms = 168 })
     <Paper sx={{ bgcolor: C.bg, border: `1px solid ${C.border}`, borderRadius: 2, p: 2 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 1, flexWrap: 'wrap' }}>
         <ScienceIcon sx={{ fontSize: 18, color: '#a78bfa' }} />
-        <Typography sx={{ fontWeight: 700, color: '#e2e8f0', fontSize: '0.95rem' }}>
+        <Typography sx={{ fontWeight: 700, color: 'var(--text-0)', fontSize: '0.95rem' }}>
           Model Comparison — torque vs load angle γ
         </Typography>
-        <Chip label="diagnostics" size="small" sx={{ fontSize: 9, height: 16, bgcolor: '#1e293b', color: '#a78bfa' }} />
+        <Chip label="diagnostics" size="small" sx={{ fontSize: 9, height: 16, bgcolor: 'var(--panel)', color: '#a78bfa' }} />
         <Box sx={{ flex: 1 }} />
         <FormControlLabel
           control={<Checkbox size="small" checked={withTransient} disabled={busy}
-            onChange={(e) => setWithTransient(e.target.checked)} sx={{ color: '#475569', py: 0 }} />}
-          label={<Typography sx={{ fontSize: '0.72rem', color: '#94a3b8' }}>+ FEM transient (slow)</Typography>}
+            onChange={(e) => setWithTransient(e.target.checked)} sx={{ color: 'var(--text-4)', py: 0 }} />}
+          label={<Typography sx={{ fontSize: '0.72rem', color: 'var(--text-2)' }}>+ FEM transient (slow)</Typography>}
         />
         <Button size="small" variant="contained" onClick={run} disabled={busy}
           startIcon={busy ? <CircularProgress size={12} /> : <ScienceIcon sx={{ fontSize: 15 }} />}
@@ -101,7 +101,7 @@ const ModelCompare: React.FC<{ I_phase_rms?: number }> = ({ I_phase_rms = 168 })
         </Button>
       </Box>
 
-      <Typography sx={{ fontSize: '0.72rem', color: '#64748b', mb: 1 }}>
+      <Typography sx={{ fontSize: '0.72rem', color: 'var(--text-3)', mb: 1 }}>
         Same geometry &amp; current ({I_phase_rms} A). If the curves don't overlap, the models disagree;
         a flat transient line means γ isn't reaching the transient currents.
       </Typography>
@@ -119,13 +119,13 @@ const ModelCompare: React.FC<{ I_phase_rms?: number }> = ({ I_phase_rms = 168 })
               label={{ value: 'γ [°]', position: 'insideBottomRight', offset: -4, style: { fontSize: 10, fill: C.axis } }} />
             <YAxis tick={{ fill: C.axis, fontSize: 10 }}
               label={{ value: 'T_avg [N·m]', angle: -90, position: 'insideLeft', style: { fontSize: 10, fill: C.axis } }} />
-            <RcTooltip contentStyle={{ backgroundColor: '#1e293b', border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 11 }} />
+            <RcTooltip contentStyle={{ backgroundColor: 'var(--panel)', border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 11 }} />
             <Legend wrapperStyle={{ fontSize: 11 }} />
             <ReferenceLine y={96} stroke="#f59e0b" strokeDasharray="4 3"
               label={{ value: 'rated 96', fill: '#f59e0b', fontSize: 9, position: 'right' }} />
-            <Line dataKey="analytical" name="analytical (Green)" stroke={C.an} strokeWidth={2} dot={{ r: 3 }} connectNulls />
-            <Line dataKey="field2d" name="FEM field2d" stroke={C.f2} strokeWidth={2} dot={{ r: 3 }} connectNulls />
-            {withTransient && <Line dataKey="transient" name="FEM transient" stroke={C.tr} strokeWidth={2} dot={{ r: 3 }} connectNulls />}
+            <Line dataKey="analytical" name="analytical (Green)" stroke={C.an} strokeWidth={1.25} dot={{ r: 0.8 }} connectNulls />
+            <Line dataKey="field2d" name="FEM field2d" stroke={C.f2} strokeWidth={1.25} dot={{ r: 0.8 }} connectNulls />
+            {withTransient && <Line dataKey="transient" name="FEM transient" stroke={C.tr} strokeWidth={1.25} dot={{ r: 0.8 }} connectNulls />}
           </LineChart>
         </ResponsiveContainer>
       )}
@@ -133,8 +133,8 @@ const ModelCompare: React.FC<{ I_phase_rms?: number }> = ({ I_phase_rms = 168 })
       {rows.length > 0 && (
         <Table size="small" sx={{
           mt: 1,
-          '& td, & th': { borderColor: C.border, py: 0.4, fontSize: '0.74rem', color: '#cbd5e1' },
-          '& th': { color: '#64748b', fontWeight: 600, fontSize: '0.62rem', textTransform: 'uppercase' },
+          '& td, & th': { borderColor: C.border, py: 0.4, fontSize: '0.74rem', color: 'var(--text-1)' },
+          '& th': { color: 'var(--text-3)', fontWeight: 600, fontSize: '0.62rem', textTransform: 'uppercase' },
         }}>
           <TableHead>
             <TableRow>

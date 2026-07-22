@@ -16,7 +16,7 @@ import { useMotorStore } from '../../stores/motorStore';
 import { getCoolingPayload } from './CoolingControls';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
-const CARD = { bgcolor: '#0b1424', border: '1px solid #1e293b', borderRadius: 1.5, p: 2 } as const;
+const CARD = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5, p: 2 } as const;
 
 interface Props { I_phase_rms?: number; gamma_deg?: number; steps?: number; }
 
@@ -60,18 +60,18 @@ const CoupledEmThermal: React.FC<Props> = ({ I_phase_rms = 85, gamma_deg = 0, st
   return (
     <Paper sx={CARD}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
-        <Typography sx={{ fontSize: 14, fontWeight: 700, color: '#e2e8f0' }}>Multiphysics — coupled EM ↔ thermal</Typography>
-        <Typography sx={{ fontSize: 10.5, color: '#64748b', fontFamily: 'monospace' }}>module: solver.em_thermal</Typography>
+        <Typography sx={{ fontSize: 14, fontWeight: 700, color: 'var(--text-0)' }}>Multiphysics — coupled EM ↔ thermal</Typography>
+        <Typography sx={{ fontSize: 10.5, color: 'var(--text-3)', fontFamily: 'monospace' }}>module: solver.em_thermal</Typography>
         <Box sx={{ flex: 1 }} />
         <FormControlLabel
           control={<Switch size="small" checked={enabled} onChange={(e) => toggle(e.target.checked)} />}
-          label={<Typography sx={{ fontSize: 12, color: enabled ? '#60a5fa' : '#94a3b8' }}>{enabled ? 'On' : 'Off'}</Typography>}
+          label={<Typography sx={{ fontSize: 12, color: enabled ? '#60a5fa' : 'var(--text-2)' }}>{enabled ? 'On' : 'Off'}</Typography>}
           sx={{ mr: 0 }}
         />
       </Box>
 
       {!enabled && (
-        <Typography sx={{ fontSize: 11.5, color: '#64748b', mt: 0.5 }}>
+        <Typography sx={{ fontSize: 11.5, color: 'var(--text-3)', mt: 0.5 }}>
           Off — torque/losses use a fixed coil temperature. Turn on to iterate losses ↔ temperature to the
           self-consistent operating point (slower: each step is a full EM + thermal solve).
         </Typography>
@@ -80,10 +80,10 @@ const CoupledEmThermal: React.FC<Props> = ({ I_phase_rms = 85, gamma_deg = 0, st
       {enabled && (
         <Box sx={{ mt: 1.5 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap', mb: 1 }}>
-            <Typography sx={{ fontSize: 11.5, color: '#94a3b8' }}>
+            <Typography sx={{ fontSize: 11.5, color: 'var(--text-2)' }}>
               Cooling system set in the left panel ←
             </Typography>
-            <Typography sx={{ fontSize: 11, color: '#64748b', fontFamily: 'monospace' }}>
+            <Typography sx={{ fontSize: 11, color: 'var(--text-3)', fontFamily: 'monospace' }}>
               @ {I_phase_rms} A · γ {gamma_deg}° · {steps} steps
             </Typography>
             <Box sx={{ flex: 1 }} />
@@ -94,7 +94,7 @@ const CoupledEmThermal: React.FC<Props> = ({ I_phase_rms = 85, gamma_deg = 0, st
           </Box>
 
           {busy && (
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, color: '#64748b', py: 0.5 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, color: 'var(--text-3)', py: 0.5 }}>
               <CircularProgress size={14} /> Iterating EM ↔ thermal to equilibrium…
             </Box>
           )}
@@ -104,11 +104,11 @@ const CoupledEmThermal: React.FC<Props> = ({ I_phase_rms = 85, gamma_deg = 0, st
             <Box>
               {/* the loss<->temperature feedback, iteration by iteration */}
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap', mb: 1 }}>
-                <Typography sx={{ fontSize: 11, color: '#94a3b8' }}>copper temp per iteration:</Typography>
+                <Typography sx={{ fontSize: 11, color: 'var(--text-2)' }}>copper temp per iteration:</Typography>
                 {hist.map((t, i) => (
                   <Chip key={i} size="small" label={`${t}°C`}
                     sx={{ height: 20, fontSize: 10.5, fontFamily: 'monospace',
-                          bgcolor: i === hist.length - 1 ? '#1d4ed8' : '#1e293b', color: '#e2e8f0' }} />
+                          bgcolor: i === hist.length - 1 ? '#1d4ed8' : 'var(--panel)', color: 'var(--text-0)' }} />
                 ))}
               </Box>
 
@@ -141,9 +141,9 @@ const CoupledEmThermal: React.FC<Props> = ({ I_phase_rms = 85, gamma_deg = 0, st
 };
 
 const Metric: React.FC<{ label: string; value: string; hot?: boolean }> = ({ label, value, hot }) => (
-  <Box sx={{ bgcolor: '#060d17', border: '1px solid #1e293b', borderRadius: 1, px: 1.25, py: 0.75 }}>
-    <Typography sx={{ fontSize: 9.5, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.4 }}>{label}</Typography>
-    <Typography sx={{ fontSize: 15, fontWeight: 700, color: hot ? '#fb923c' : '#e2e8f0', fontFamily: 'monospace' }}>{value}</Typography>
+  <Box sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1, px: 1.25, py: 0.75 }}>
+    <Typography sx={{ fontSize: 9.5, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: 0.4 }}>{label}</Typography>
+    <Typography sx={{ fontSize: 15, fontWeight: 700, color: hot ? '#fb923c' : 'var(--text-0)', fontFamily: 'monospace' }}>{value}</Typography>
   </Box>
 );
 

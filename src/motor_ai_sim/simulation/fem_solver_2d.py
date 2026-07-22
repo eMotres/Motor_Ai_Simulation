@@ -46,6 +46,13 @@ _GMSH_LOCK = threading.RLock()
 
 MU0 = 4e-7 * math.pi
 
+# Saturation-Picard honest stopping: worst (over saturable tags) RELATIVE L2
+# fixed-point residual of the nu(|B|) update (measured BEFORE damping) below
+# which a frame's nonlinear iteration is converged (two consecutive sweeps).
+# Replaces the old fixed "14 iterations" recipe, which did not converge and left
+# a 5-8 Nm p-p no-load torque floor (see PARITY_FINDINGS_band_mode.md).
+_PIC_TOL = 1e-3
+
 # Single source of truth for the d-axis phase offset: the electrical angle added
 # to (rotor_angle·pole_pairs + γ) so that γ=0 lands on the q-axis.  MUST be
 # identical across every solve path (transient currents, static field, eddy) —
@@ -149,6 +156,20 @@ _SB_IRON_RESAMPLE = _os_sb.environ.get("SB_IRON_RESAMPLE", "1") == "1"
 # bit-identical, so the raw-ripple rebuild band collapses.  Experimental
 # (env SB_IRON_TEMPLATE=1); full-ring path first.
 _SB_IRON_TEMPLATE = _os_sb.environ.get("SB_IRON_TEMPLATE", "0") == "1"
+# Geometry-driven mesh (geo_mesh.py): triangulate the REAL CadQuery polygons
+# (all fillets) with a constrained Delaunay instead of a warped tensor template
+# — same DOM_* halves, same belt weld, but the mesh conforms to every fillet by
+# construction (magnet corners, tooth-tip r1, V-notch apex).  Rides the SAME
+# iron_template toggle + structured-gap belt; env SB_GEO_MESH=1 selects it over
+# the tensor mesher.  Full ring first; sectors clone one wedge.
+_SB_GEO_MESH = _os_sb.environ.get("SB_GEO_MESH", "0") == "1"
+# Geometry-driven 1/N SECTOR wedge (geo_mesh sector meshers): the mesh + belt +
+# anti-periodic solve all work and the MEAN physics matches the full ring.
+# With the slot/pole CELL-TILED geo iron (geo_mesh._tile_cells) the sector is a
+# bit-exact subset of the full ring — measured sector==full at two mesh
+# densities (24.6/25.3% and 23.6% @ x2), spectra identical, only 6k orders.
+# ON by default; SB_GEO_SECTOR=0 reverts a geo 1/N request to the full ring.
+_SB_GEO_SECTOR = _os_sb.environ.get("SB_GEO_SECTOR", "1") != "0"
 # Structured (concentric-ring) air gap: partition EACH half-gap (rotor OD->R1 and
 # R2->stator bore) into `gap_layers` thin annular rows bounded by uniform N-gon rings
 # on the slip angular grid -> the gap meshes as an ANSYS-style structured band
@@ -555,6 +576,16 @@ def _simplify_polys(polys: dict, tol_mm: float = 0.005,
                     out["out_band"] = _SMulti2(_out_parts)
                     out["band_radii_mm"] = [_r1, _r2]
                     out["transfinite_ring_radii_mm"] = sorted(set(_radii_in + _radii_out))
+                    # spec for the geo/template iron meshers in MOVING mode too:
+                    # carries the band radii so the halves can end on the uniform
+                    # R1/R2 rings the harmonic macroelement couples analytically.
+                    out["structured_gap_spec"] = {
+                        "r_ro": float(_r_ro_est), "mid": float(mid_r),
+                        "r_si": float(_r_si_est),
+                        "K": max(1, int(round(float(gap_layers)))),
+                        "n_slip": int(_N), "eps": 0.0,
+                        "r1": float(_r1), "r2": float(_r2),
+                    }
                 else:
                     in_band = _SPoly2(_ring_pts(_r1))
                     if rotor_solids:
@@ -569,6 +600,13 @@ def _simplify_polys(polys: dict, tol_mm: float = 0.005,
                     out["out_band"] = out_band
                     out["band_radii_mm"] = [_r1, _r2]
                     out["transfinite_ring_radii_mm"] = [_r1, _r2]
+                    out["structured_gap_spec"] = {
+                        "r_ro": float(_r_ro_est), "mid": float(mid_r),
+                        "r_si": float(_r_si_est),
+                        "K": max(1, int(round(float(gap_layers)))),
+                        "n_slip": int(_N), "eps": 0.0,
+                        "r1": float(_r1), "r2": float(_r2),
+                    }
             elif _SB_STRUCTURED_STRIPS and _delta > 0 \
                     and (mid_r - _delta) > _r_ro_est + 0.02 \
                     and (mid_r + _delta) < _r_si_est - 0.02:
@@ -1202,6 +1240,7 @@ def _build_sliding_band_meshes(
         full_ring: bool = False,            # TRUE 360°: stitch 2×180° per half
         pole_copy: Optional[bool] = None,   # template-copy poles/slots; None=env default
         iron_template: Optional[bool] = None,  # deterministic template iron; None=env default
+        geo_mesh: Optional[bool] = None,    # geometry-driven CDT mesh; None=env default
 ):
     """Build the stator-half and rotor-half meshes for the sliding-band solver.
 
@@ -1317,6 +1356,7 @@ def _build_sliding_band_meshes(
     )
 
     _use_tpl = _SB_IRON_TEMPLATE if iron_template is None else bool(iron_template)
+    _use_geo = _SB_GEO_MESH if geo_mesh is None else bool(geo_mesh)
     if full_ring:
         # TRUE 360°: each half stitched from two clean 180° builds (direct
         # closed-360 OCC double-meshes → dead field).  No sector cuts exist
@@ -1338,7 +1378,13 @@ def _build_sliding_band_meshes(
             try:
                 from motor_ai_sim.simulation.iron_template import template_solver_halves
                 from motor_ai_sim.cadquery_geometry import CadQueryMotor as _CQM
-                _p_geo = _CQM().parameters
+                # geometry params for the template/geo meshers: the CALLER's
+                # geometry (geo_cfg — carries any geo_override), NOT a fresh
+                # CadQueryMotor() = the GLOBAL config.  A preset/candidate motor
+                # meshed with the config's radii built a CHIMERA (40 mm polys +
+                # 200 mm shaft/bore rings → magnetically disconnected halves,
+                # back-EMF ≡ 0, torque ~0 — the '40/100 mm weak flux' mystery).
+                _p_geo = dict(geo_cfg) if geo_cfg else _CQM().parameters
                 _sgspec = polys.get("structured_gap_spec") or {}
                 if not _sgspec:
                     # template halves end ON the iron circles — without the
@@ -1350,12 +1396,42 @@ def _build_sliding_band_meshes(
                     _p_geo = dict(_p_geo)   # belt-spec radii (4 um off = no weld)
                     _p_geo["stator_inner_radius"] = float(_sgspec["r_si"])
                     _p_geo["rotor_outer_radius"] = float(_sgspec["r_ro"])
-                (mesh_s, tags_s, classify_s,
-                 mesh_r, tags_r, classify_r) = template_solver_halves(
-                    _p_geo, polys, outer_air_factor=outer_air_factor,
-                    density=max(0.3, 2.0 / max(mesh_size_mm, 0.5)))
-                log.info("iron template halves: stator %d tris, rotor %d tris",
-                         mesh_s.t.shape[1], mesh_r.t.shape[1])
+                _density = max(0.3, 2.0 / max(mesh_size_mm, 0.5))
+                if _use_geo:
+                    from motor_ai_sim.simulation.geo_mesh import geo_mesh_halves
+                    _cm = component_mesh_mm or {}
+                    # UI "Per-part element size → Outer air" uses key "outer";
+                    # geo applies it as ONE coarse size for all air + shaft.
+                    _air_mm = float(_cm.get("outer") or _cm.get("air") or 0.0)
+                    (mesh_s, tags_s, classify_s,
+                     mesh_r, tags_r, classify_r) = geo_mesh_halves(
+                        _p_geo, polys, outer_air_factor=outer_air_factor,
+                        density=_density, n_sectors=1,
+                        mesh_edge_mm=float(mesh_size_mm),
+                        n_slip=int(_sgspec.get("n_slip", 1008)),
+                        r_si=float(_sgspec.get("r_si", 0.0)),
+                        r_ro=float(_sgspec.get("r_ro", 0.0)),
+                        air_mesh_mm=_air_mm,
+                        # MOVING-band spec (harmonic macro): halves end on the
+                        # uniform R1/R2 rings; merged spec has no r1/r2 → 0.
+                        r1_band=float(_sgspec.get("r1", 0.0)),
+                        r2_band=float(_sgspec.get("r2", 0.0)))
+                    log.info("geo-driven halves: stator %d tris, rotor %d tris",
+                             mesh_s.t.shape[1], mesh_r.t.shape[1])
+                elif "r1" in _sgspec:
+                    # tensor template halves end ON the iron circles and know
+                    # nothing about the moving-band R1/R2 rings → the macro's
+                    # ring extraction would find nothing.  gmsh meshes the
+                    # in_band/out_band polys up to R1/R2 correctly — fall back.
+                    raise ValueError("template iron does not support the "
+                                     "moving-band macro (use geo mesh)")
+                else:
+                    (mesh_s, tags_s, classify_s,
+                     mesh_r, tags_r, classify_r) = template_solver_halves(
+                        _p_geo, polys, outer_air_factor=outer_air_factor,
+                        density=_density)
+                    log.info("iron template halves: stator %d tris, rotor %d tris",
+                             mesh_s.t.shape[1], mesh_r.t.shape[1])
             except Exception as _te:
                 log.warning("iron template failed (%s) — gmsh build", _te)
                 mesh_s = tags_s = classify_s = None
@@ -1392,9 +1468,11 @@ def _build_sliding_band_meshes(
         if _SB_BELT:
             _bs = polys_s.get("structured_gap_spec")
             _br = polys_r.get("structured_gap_spec")
-            if _bs:
+            # a MOVING-band spec (has r1/r2) carries no belt cells — the gap is
+            # coupled analytically between the R1/R2 rings, nothing to weld.
+            if _bs and "r1" not in _bs:
                 mesh_s, tags_s = _weld_belt_into_half(mesh_s, tags_s, _bs, "stator", 1)
-            if _br:
+            if _br and "r1" not in _br:
                 mesh_r, tags_r = _weld_belt_into_half(mesh_r, tags_r, _br, "rotor", 1)
         if abs(rotor_angle_deg) > 1e-9:
             mesh_r = type(mesh_r)(_rotate_mesh_points(mesh_r.p, rotor_angle_deg),
@@ -1419,7 +1497,9 @@ def _build_sliding_band_meshes(
         try:
             from motor_ai_sim.simulation.iron_template import template_solver_halves
             from motor_ai_sim.cadquery_geometry import CadQueryMotor as _CQM
-            _p_geo = _CQM().parameters
+            # caller's geometry (geo_override-aware), NOT the global config —
+            # see the full-ring branch above (chimera-mesh bug).
+            _p_geo = dict(geo_cfg) if geo_cfg else _CQM().parameters
             _ns_i = max(1, int(n_sectors))
             if (int(_p_geo["num_slots"]) // 2) % _ns_i or int(_p_geo["num_poles"]) % _ns_i:
                 raise ValueError(f"sector {_ns_i} not unit-aligned "
@@ -1432,13 +1512,33 @@ def _build_sliding_band_meshes(
                 _p_geo = dict(_p_geo)   # belt-spec radii (4 um off = no weld)
                 _p_geo["stator_inner_radius"] = float(_sgspec["r_si"])
                 _p_geo["rotor_outer_radius"] = float(_sgspec["r_ro"])
-            (mesh_s, tags_s, classify_s,
-             mesh_r, tags_r, classify_r) = template_solver_halves(
-                _p_geo, polys, outer_air_factor=outer_air_factor,
-                density=max(0.3, 2.0 / max(mesh_size_mm, 0.5)),
-                n_sectors=_ns_i)
-            log.info("iron template wedge 1/%d: stator %d tris, rotor %d tris",
-                     _ns_i, mesh_s.t.shape[1], mesh_r.t.shape[1])
+            _density = max(0.3, 2.0 / max(mesh_size_mm, 0.5))
+            if _use_geo:
+                from motor_ai_sim.simulation.geo_mesh import geo_mesh_halves
+                _cm = component_mesh_mm or {}
+                _air_mm = float(_cm.get("outer") or _cm.get("air") or 0.0)
+                (mesh_s, tags_s, classify_s,
+                 mesh_r, tags_r, classify_r) = geo_mesh_halves(
+                    _p_geo, polys, outer_air_factor=outer_air_factor,
+                    density=_density, n_sectors=_ns_i,
+                    mesh_edge_mm=float(mesh_size_mm),
+                    n_slip=int(_sgspec.get("n_slip", 1008)),
+                    r_si=float(_sgspec.get("r_si", 0.0)),
+                    r_ro=float(_sgspec.get("r_ro", 0.0)), air_mesh_mm=_air_mm,
+                    r1_band=float(_sgspec.get("r1", 0.0)),
+                    r2_band=float(_sgspec.get("r2", 0.0)))
+                log.info("geo-driven wedge 1/%d: stator %d tris, rotor %d tris",
+                         _ns_i, mesh_s.t.shape[1], mesh_r.t.shape[1])
+            elif "r1" in _sgspec:
+                raise ValueError("template iron does not support the "
+                                 "moving-band macro (use geo mesh)")
+            else:
+                (mesh_s, tags_s, classify_s,
+                 mesh_r, tags_r, classify_r) = template_solver_halves(
+                    _p_geo, polys, outer_air_factor=outer_air_factor,
+                    density=_density, n_sectors=_ns_i)
+                log.info("iron template wedge 1/%d: stator %d tris, rotor %d tris",
+                         _ns_i, mesh_s.t.shape[1], mesh_r.t.shape[1])
         except Exception as _te:
             log.warning("iron template wedge failed (%s) — gmsh build", _te)
             mesh_s = tags_s = classify_s = None
@@ -1485,9 +1585,10 @@ def _build_sliding_band_meshes(
     if _SB_BELT:
         _bs = polys_s.get("structured_gap_spec")
         _br = polys_r.get("structured_gap_spec")
-        if _bs:
+        # moving-band spec (r1/r2) → analytic gap, no belt cells to weld
+        if _bs and "r1" not in _bs:
             mesh_s, tags_s = _weld_belt_into_half(mesh_s, tags_s, _bs, "stator", n_sectors)
-        if _br:
+        if _br and "r1" not in _br:
             mesh_r, tags_r = _weld_belt_into_half(mesh_r, tags_r, _br, "rotor", n_sectors)
 
     # Apply rotor rotation as a rigid body — node coords only, topology
@@ -4796,7 +4897,20 @@ def fem_transient_sliding_band(
     gap_layers: float = 3.0,     # element layers across the air gap (Mesh-tab slider)
     n_sectors: int = 4,
     stator_fillet_mm: float = 0.0,
-    nonlinear_iterations: int = 14,
+    nonlinear_iterations: int = 100,  # CAP on the saturation Picard; the loop
+                                 # exits EARLY on the fixed-point residual
+                                 # (_PIC_TOL) — no fixed-recipe iteration counts.
+                                 # 14 was a tuned recipe that did NOT converge
+                                 # and left a 5-8 Nm no-load torque floor.
+    frozen_nu: bool = False,     # FROZEN PERMEABILITY: converge saturation ONCE
+                                 # (frame 0, extended Picard), then freeze the
+                                 # per-element nu for every rotor position.  The
+                                 # damped Picard PLATEAUS (no-load torque floor
+                                 # 5-8 Nm p-p even at 60 iters — each frame lands
+                                 # in a different nu-state); with a linear/fixed
+                                 # nu the whole chain is clean to 0.004 Nm.  The
+                                 # industry-standard method for honest cogging /
+                                 # ripple.  Current drive only.
     coil_temp_c: float = 120.0,
     end_winding_factor: float = 0.0,
     geo_override: dict = None,
@@ -4808,10 +4922,11 @@ def fem_transient_sliding_band(
     field_first: bool = False,   # snapshot the FIRST frame (rotor at angle0) instead
                                  # of the last — used by the magnetostatic field view
                                  # so the picture matches the requested rotor angle
-    torque_filter: bool = True,  # band-limit T(t) to the physical 6·k orders
+    torque_filter: bool = False,  # band-limit T(t) to the physical 6·k orders — OFF by default: the headline ripple is the RAW one (no filters)
                                  # (False = raw per-frame Maxwell-stress torque)
     pole_copy: Optional[bool] = None,  # bit-identical pole/slot mesh; None=env default
     iron_template: Optional[bool] = None,  # deterministic template iron; None=env default
+    geo_mesh: Optional[bool] = None,   # geometry-driven CDT mesh; None=env default
     progress_cb=None,            # optional callback(done:int, total:int) per frame
     magnet_scale: float = 1.0,   # scale ALL magnet Br (0 → PMs off = reluctance torque)
     rotor_angle0_deg: float = 0.0,   # DIAGNOSTIC: build the rotor PHYSICALLY rotated
@@ -4885,7 +5000,13 @@ def fem_transient_sliding_band(
     # Candidate-design evaluation (optimization refine): overlay a geometry
     # override in-memory so the global config / Simulation state is untouched.
     if geo_override:
-        geo.update({k: v for k, v in geo_override.items()})
+        # Topology-aware merge: the resulting slot/pole counts must describe the
+        # SAME motor the CAD meshes (override explicit counts > override segment
+        # form > config segment form — the exact CadQueryMotor resolution), so
+        # the winding layout, pole-pair drive and sector BC sign are phased
+        # against the meshed magnets.  See merge_geo_override.
+        from motor_ai_sim.simulation.geometry_2d import merge_geo_override
+        geo = merge_geo_override(geo, geo_override)
         p = _params_from_geo_dict(geo)
     else:
         p = params_from_config()
@@ -4922,6 +5043,20 @@ def fem_transient_sliding_band(
     # an invalid 90° wedge for any motor whose pole count is not a multiple of 4
     # (e.g. 14 poles → 3.5/sector → corrupt anti-periodic BC → spurious torque/ripple).
     _full_ring = (int(n_sectors) <= 1)
+    # Geometry-driven mesh currently ships the FULL-RING build only (the CDT
+    # is not periodic, so a sector wedge would need clone-identical radial cuts
+    # for the anti-periodic master-slave pairing — not yet built).  Force the
+    # full ring so a 1/N request still gets the real-fillet geo mesh with sound
+    # physics (full disk is the reference anyway) instead of silently reverting
+    # to the tensor wedge.
+    # geo mesh builds the 1/N wedge directly, but the sector ripple is still WIP
+    # → default a geo sector request to the validated FULL RING (correct, just
+    # slower); SB_GEO_SECTOR=1 opts into the experimental wedge.
+    _use_geo_tr = _SB_GEO_MESH if geo_mesh is None else bool(geo_mesh)
+    _tpl_on = (iron_template is None and _SB_IRON_TEMPLATE) or bool(iron_template)
+    if (_use_geo_tr and _tpl_on and not _SB_GEO_SECTOR and not _full_ring):
+        log.info("geo mesh: full ring for a 1/%d request (sector WIP)", int(n_sectors))
+        _full_ring = True
     NS = 1 if _full_ring else int(n_sectors)
     sector_deg = 360.0 / NS
     pole_pairs = p.num_poles // 2
@@ -5052,11 +5187,19 @@ def fem_transient_sliding_band(
     # the nodes-per-period.
     _nodes_per_period = _slip_per_period
     _req_steps = int(n_steps_per_period)
-    n_steps_per_period = _snap_steps_to_nodes(_req_steps, _nodes_per_period)
-    if n_steps_per_period != _req_steps:
-        log.info("SB: snapped steps/period %d → %d (divisor of %d slip nodes/"
-                 "period → whole-node rotor steps, periodic torque)",
-                 _req_steps, n_steps_per_period, _nodes_per_period)
+    # HARMONIC MACRO: the gap coupling is an ANALYTIC phase e^{i k φ} — valid at
+    # ANY rotor angle, no node re-pairing — so the whole-node snap (a node-merge
+    # constraint) does not apply: honour the requested steps exactly (the rotor
+    # advances a FRACTIONAL number of slip nodes per step; m is float).
+    _macro_free_m = bool(airgap_macro) or bool(_SB_AIRGAP_MACRO)
+    if _macro_free_m:
+        n_steps_per_period = max(1, _req_steps)
+    else:
+        n_steps_per_period = _snap_steps_to_nodes(_req_steps, _nodes_per_period)
+        if n_steps_per_period != _req_steps:
+            log.info("SB: snapped steps/period %d -> %d (divisor of %d slip "
+                     "nodes/period -> whole-node rotor steps, periodic torque)",
+                     _req_steps, n_steps_per_period, _nodes_per_period)
 
     # ── Build the two halves ONCE ────────────────────────────────────────
     motor = CadQueryMotor()
@@ -5066,9 +5209,22 @@ def fem_transient_sliding_band(
     # STRUCTURED (mapped) gap uses the MERGED band: the route-A cells own the
     # whole gap r_ro→mid→r_si with the SINGLE shared slip ring at mid_r (uniform
     # S·M grid).  The moving-band split (mid±δ, empty re-stitched strip) is
-    # incompatible with the cells, so force merged when structured_gap is on.
-    _band_mode = ("merged" if structured_gap
-                  else ("moving" if (_SB_MOVING_BAND or _full_ring) else "merged"))
+    # incompatible with the cells, so force merged when structured_gap is on —
+    # EXCEPT when the harmonic macro is requested: the macro only exists on the
+    # MOVING band (K_gap couples the R1/R2 rings analytically), and forcing
+    # merged here was exactly why the product's "Harmonic gap" toggle never ran
+    # the macroelement (it silently degraded to node-merge on a coarse ring).
+    _use_macro_req = bool(airgap_macro) or bool(_SB_AIRGAP_MACRO)
+    # Band mode must NOT depend on n_sectors: the full ring used to force
+    # "moving" while sectors solved "merged" — two different gap couplings, so
+    # ns=1 vs ns=4 disagreed systematically (T +6.7 %, V_peak +22 % on 24s20p;
+    # with a shared merged band they match to 0.3 %).  The moving band's
+    # one-row strip biases the flux linkage (see _SB_MOVING_BAND note) — keep
+    # MERGED as the sole default for every sector count; the macro (analytic
+    # gap) and the _SB_MOVING_BAND env flag still opt into "moving" explicitly.
+    _band_mode = ("moving" if _use_macro_req
+                  else ("merged" if structured_gap
+                        else ("moving" if _SB_MOVING_BAND else "merged")))
     polys = _simplify_polys(polys, tol_mm=0.005, stator_fillet_mm=stator_fillet_mm,
                             n_slip=n_slip_eff, gap_layers=gap_layers,
                             structured_gap=structured_gap,
@@ -5081,7 +5237,7 @@ def fem_transient_sliding_band(
         gap_layers=gap_layers,
         component_mesh_mm=component_mesh_mm,
         full_ring=_full_ring, pole_copy=pole_copy,
-        iron_template=iron_template)
+        iron_template=iron_template, geo_mesh=geo_mesh)
     Ps, Tts = ms.p.copy(), ms.t.copy(); Pr, Ttr = mr.p.copy(), mr.t.copy()
     nsn = Ps.shape[1]
     Pall = np.hstack([Ps, Pr]); Tall = np.hstack([Tts, Ttr + nsn])
@@ -5589,8 +5745,16 @@ def fem_transient_sliding_band(
             # exactly like _T_band).  So the gap coupling must also be per-unit — the
             # stack length _stkM is applied only in _T_macro below.  (Baking L in here
             # made the gap ~1/L weaker than the iron → decoupled, garbage field.)
-            # Wedge energy = 1/S of the machine → G = S·2π/(MU0·Nfull) = 2π/(MU0·Nw).
-            _Gm = 2.0 * math.pi / (MU0 * _NwM)            # DFT energy normalisation (per-unit)
+            # Normalise by N_FULL, not Nw: the Qk annulus form integrates the WHOLE
+            # 2π gap, so the ladder with G=2π/(MU0·Nfull) carries the machine energy;
+            # the wedge's 1/S share then comes out of the Nw-point DFT automatically.
+            # The old G=2π/(MU0·Nw) ("wedge = 1/S ⇒ S·G" reasoning) double-counted S:
+            # measured K_wedge == S × the energy restriction (1/S)·UᵀK_full·U on EVERY
+            # mode — a uniformly 4×-stiff gap on the 1/4.  That barely moves the
+            # fundamental (ψ −3%, T_avg −1% — why mean checks passed) but skews the
+            # high-harmonic field balance → spurious torque orders that grow with
+            # steps/period (sector 22→30% vs full 15%).  Full ring: Nfull==Nw, no-op.
+            _Gm = 2.0 * math.pi / (MU0 * _NfullM)         # DFT energy normalisation (per-unit)
             _kphysM = _SfacM * (np.arange(_NwM) + _moffM)  # physical order per bin
             _kfoldM = np.minimum(_kphysM, _NfullM - _kphysM)   # fold to 0..Nfull/2
             _mu_rr = np.empty(_NwM); _mu_rs = np.empty(_NwM); _mu_ss = np.empty(_NwM)
@@ -5620,9 +5784,17 @@ def fem_transient_sliding_band(
             _Rg12, _Cg12 = np.meshgrid(_gR1M, _gR2M, indexing="ij")
 
             def _K_gap_macro(m):
-                # rotor↔stator block at rotor shift m: phase e^{i·2π·(mm+moff)·m/Nw}
-                # (= e^{i·k_phys·φ_m}, φ_m = 2π·m/Nfull)
-                ph = np.exp(1j*2*np.pi*(np.arange(_NwM)+_moffM)*int(m)/_NwM)
+                # rotor↔stator block at rotor shift m: phase e^{i·κ·φ_m},
+                # φ_m = 2π·m/Nfull, κ = SIGNED physical order per bin (_jfreq).
+                # m may be FRACTIONAL — the phase is analytic in the rotor angle
+                # (no node pairing), so any steps/period is exact.  The order
+                # MUST be signed: the unsigned bin form e^{i·S(j+moff)·φ_m}
+                # differs from the true e^{iκφ_m} by e^{i·2πm} on every
+                # negative-frequency bin — invisible for whole-node m, but a
+                # fractional shift then cycles a huge spurious harmonic with
+                # the period of frac(m) (measured: T_avg 30→10, order-24 ×50 at
+                # 2/3 node per step).
+                ph = np.exp(1j * _jfreq * (2.0*np.pi*float(m)/_NfullM))
                 colm = (_twd * np.fft.ifft(_mu_rs * ph))
                 _krs = colm.real[_ii_m] * np.where(
                     (np.arange(_NwM)[:, None] - np.arange(_NwM)[None, :]) < 0,
@@ -5647,9 +5819,50 @@ def fem_transient_sliding_band(
                 # matching _T_band's wedge convention — the caller's sector scaling
                 # applies unchanged.  Real torque scales by the stack length _stkM.
                 Ur = np.fft.fft(Avec[_gR1M] * _twn); Us = np.fft.fft(Avec[_gR2M] * _twn)
-                ph = np.exp(1j*2*np.pi*(np.arange(_NwM)+_moffM)*int(m)/_NwM)
+                # SIGNED order in the phase (see _K_gap_macro) — exact for
+                # fractional m; identical to the old unsigned form for whole m.
+                ph = np.exp(1j * _jfreq * (2.0*np.pi*float(m)/_NfullM))
                 return float(-(_stkM/_NwM) * np.sum(
                     (1j*_jfreq) * _mu_rs * ph * np.conj(Ur) * Us).real)
+
+            if not _full_ring:
+                # ── SECTOR torque via UNFOLD to the validated full-ring formula ──
+                # The wedge-native (half-integer twist) torque above emits SPURIOUS
+                # harmonics (measured on the 1/4: even 10/16 + a 5× order-6 on the
+                # tensor mesh, odd 1/3/11 on the geo mesh; the ripple GROWS with
+                # steps/period) while the FIELD is provably fine (ψ and mean torque
+                # match the full ring).  So keep the K-coupling, and evaluate the
+                # per-frame torque the provably-equivalent way instead: the (anti-)
+                # periodic BC determines the WHOLE ring from the wedge samples,
+                #     A_full[j·Nw + k] = σ^j · A_wedge[k],   σ = _bc_sign
+                # (σ^S = 1 always: anti-periodic wedges come in an even count), so
+                # unfold both rings, apply the VALIDATED full-ring virtual-work
+                # formula on N_full samples, and return the wedge share (÷S — the
+                # caller multiplies by NS).  No twist algebra involved.
+                _sgnM = -1.0 if float(_bc_sign) < 0 else 1.0
+                _spowM = _sgnM ** np.arange(_SfacM)          # σ^j per sector copy
+                _GfM = 2.0 * math.pi / (MU0 * _NfullM)
+                _kfM = np.arange(_NfullM)
+                _kfoldF = np.minimum(_kfM, _NfullM - _kfM)
+                _mu_rs_f = np.empty(_NfullM)
+                for _j in range(_NfullM):
+                    _mu_rs_f[_j] = _GfM * _Qk_gap(float(_kfoldF[_j]))[1]
+                for _j in range(_NfullM):                    # unpaired bins once
+                    if _kfM[_j] == 0 or 2 * _kfM[_j] == _NfullM:
+                        _mu_rs_f[_j] *= 0.5
+                _jfreq_f = _kfM.astype(float)
+                _jfreq_f[_jfreq_f > _NfullM / 2] -= _NfullM
+
+                def _T_macro(m, Avec):                       # noqa: F811 — override
+                    Urf = np.fft.fft(np.concatenate(
+                        [_s * Avec[_gR1M] for _s in _spowM]))
+                    Usf = np.fft.fft(np.concatenate(
+                        [_s * Avec[_gR2M] for _s in _spowM]))
+                    # SIGNED order (see _K_gap_macro) — exact for fractional m
+                    ph = np.exp(1j * _jfreq_f * (2.0*np.pi*float(m)/_NfullM))
+                    return float(-(_stkM / _NfullM) * np.sum(
+                        (1j * _jfreq_f) * _mu_rs_f * ph
+                        * np.conj(Urf) * Usf).real) / _SfacM
 
         def _tri_template(P3):
             (x1, y1), (x2, y2), (x3, y3) = P3
@@ -5848,7 +6061,13 @@ def fem_transient_sliding_band(
                 try: progress_cb(k, 2 * n_total)
                 except Exception: pass
             theta = (k / n_total) * period_mech * n_periods
-            m_shift = int(round(theta / spacing))
+            if _moving and _macro_free_m:
+                m_shift = theta / spacing            # FRACTIONAL node shift
+                _mi = round(m_shift)                 # kill fp dust on whole-node
+                if abs(m_shift - _mi) < 1e-9:        # runs (exact-pad gate keys
+                    m_shift = float(_mi)             # on consecutive-int m)
+            else:
+                m_shift = int(round(theta / spacing))
             Ist = _currents(m_shift * spacing)
             f = np.concatenate([(Ist['A'] * f_coil['A'] + Ist['B'] * f_coil['B']
                                  + Ist['C'] * f_coil['C']), f_mag])
@@ -5875,6 +6094,7 @@ def fem_transient_sliding_band(
                 for tag in sb_sat[hn]:
                     nu_el[hn][tag][:] = 1.0 / (MU0 * max(mu0[hn].get(tag, 1.0), 1.0))
             A = np.zeros(n)
+            _pok = 0
             for it in range(nonlinear_iterations):
                 blocks = []
                 for hn in ("s", "r"):
@@ -5889,6 +6109,7 @@ def fem_transient_sliding_band(
                     K = (K + _Kband_p).tocsr()
                 A = Pro @ _sksolve(*condense((Pro.T @ K @ Pro).tocsr(),
                                              Pro.T @ f, D=outer_red))
+                _pres = 0.0
                 for hn, off in (("s", 0), ("r", nsn)):
                     h = half[hn]
                     Bx, By = _per_triangle_B(h["mesh"], A[off:off + h["n"]])
@@ -5898,7 +6119,21 @@ def fem_transient_sliding_band(
                         if idx.size == 0: continue
                         mu_new = _mu_r_from_bh_vec(curve, Bm[idx])
                         nu_new = 1.0 / (MU0 * np.maximum(mu_new, 1.0))
-                        nu_el[hn][tag] = 0.5 * nu_el[hn][tag] + 0.5 * nu_new
+                        # same decaying damping + honest residual stop as the
+                        # measurement pass (fixed 0.5 oscillates, see nu update
+                        # in the main frame loop)
+                        _al = 0.5 if it < 6 else max(0.05, 3.0 / (it + 1))
+                        _pres = max(_pres, float(
+                            np.linalg.norm(nu_new - nu_el[hn][tag])
+                            / max(np.linalg.norm(nu_el[hn][tag]), 1e-30)))
+                        nu_el[hn][tag] = ((1.0 - _al) * nu_el[hn][tag]
+                                          + _al * nu_new)
+                if _pres < _PIC_TOL:
+                    _pok += 1
+                    if _pok >= 2:
+                        break
+                else:
+                    _pok = 0
             _Bxr, _Byr = _per_triangle_B(half["r"]["mesh"], A[nsn:])
             for _d in _dm:
                 _ix = _d["idx"]
@@ -6096,6 +6331,7 @@ def fem_transient_sliding_band(
             # then update the iron saturation from it for the next iterate.
             _iA0, _iB0, _iC0 = _ipark(_id0, _iq0, _thal)
             _Aop = _A0 + _iA0 * _xa + _iB0 * _xb
+            _pres0 = 0.0
             for _hn, _off in (("s", 0), ("r", nsn)):
                 _h = half[_hn]
                 _Bx, _By = _per_triangle_B(_h["mesh"], _Aop[_off:_off + _h["n"]])
@@ -6105,7 +6341,17 @@ def fem_transient_sliding_band(
                     if _ix.size == 0:
                         continue
                     _mn = _mu_r_from_bh_vec(_cv, _Bm[_ix])
-                    nu_el[_hn][_tg] = 0.5 * nu_el[_hn][_tg] + 0.5 / (MU0 * np.maximum(_mn, 1.0))
+                    _nn = 1.0 / (MU0 * np.maximum(_mn, 1.0))
+                    # same decaying damping + honest residual stop as the main
+                    # frame loop (this only SEEDS the transient's initial state,
+                    # but there is no reason for it to use a different recipe)
+                    _al = 0.5 if _it < 6 else max(0.05, 3.0 / (_it + 1))
+                    _pres0 = max(_pres0, float(
+                        np.linalg.norm(_nn - nu_el[_hn][_tg])
+                        / max(np.linalg.norm(nu_el[_hn][_tg]), 1e-30)))
+                    nu_el[_hn][_tg] = (1.0 - _al) * nu_el[_hn][_tg] + _al * _nn
+            if _pres0 < _PIC_TOL:
+                break
         _iA0, _iB0, _iC0 = _ipark(_id0, _iq0, _thal)
         _iv_state = {'A': _iA0, 'B': _iB0, 'C': _iC0}
         # psi at t=-dt on the orbit: dq are constant in steady state, so the
@@ -6121,6 +6367,11 @@ def fem_transient_sliding_band(
                  "i_dq=(%.1f, %.1f) A i0=(%.1f, %.1f, %.1f)",
                  _Ldd, _Lqq, _psi_pm_d, _id0, _iq0, _iA0, _iB0, _iC0)
 
+    # Saturation-Picard convergence diagnostics (per frame): iterations actually
+    # used and the final fixed-point residual — reported in the result dict so
+    # the honesty of every run is visible, never assumed.
+    _pic_iters_hist: List[int] = []
+    _pic_resid_hist: List[float] = []
     for k in range(n_total):
         if progress_cb is not None:
             try:
@@ -6128,7 +6379,13 @@ def fem_transient_sliding_band(
             except Exception:
                 pass
         theta = (k / n_total) * period_mech * n_periods
-        m_shift = int(round(theta / spacing))
+        if _moving and _macro_free_m:
+            m_shift = theta / spacing                # FRACTIONAL node shift
+            _mi = round(m_shift)                     # kill fp dust on whole-node
+            if abs(m_shift - _mi) < 1e-9:            # runs (exact-pad gate keys
+                m_shift = float(_mi)                 # on consecutive-int m)
+        else:
+            m_shift = int(round(theta / spacing))
         theta_eff = m_shift * spacing
         # Voltage drive uses a Crank–Nicolson circuit: (ψ_k − ψ_{k−1})/dt is the
         # EXACT centred derivative at the mid-step time, so V must be sampled
@@ -6195,16 +6452,22 @@ def fem_transient_sliding_band(
             _Pmag = np.concatenate([np.zeros(nsn), f_mag])
             _Pa = np.concatenate([f_coil['A'] - f_coil['C'], np.zeros(_n_rot)])
             _Pb = np.concatenate([f_coil['B'] - f_coil['C'], np.zeros(_n_rot)])
-        # Reset the per-element iron reluctivity to the unsaturated base each
-        # frame so the saturation solution is a pure function of rotor position
-        # (no history dependence) -> the torque ripple is strictly PERIODIC.
-        # NB: warm-starting nu_el was tried and REVERTED -- the damped Picard
-        # doesn't converge tightly enough for start-independence, so warm-start
-        # left each frame at a slightly different convergence level and INCREASED
-        # the ripple.  The per-frame reset is load-bearing (torque_ripple_root_cause).
-        for hn in ("s", "r"):
-            for tag in sb_sat[hn]:
-                nu_el[hn][tag][:] = 1.0 / (MU0 * max(mu0[hn].get(tag, 1.0), 1.0))
+        # WARM-START nu across frames: adjacent rotor positions differ in their
+        # saturation pattern by well under a percent, so the previous frame's
+        # converged nu is an excellent initial guess (~4-5x fewer sweeps).
+        # HONESTY NOTE: under the OLD fixed-iteration recipe (14 sweeps, no
+        # residual test) warm-starting was UNSOUND — every frame stopped at a
+        # different stage of non-convergence and the start-dependence showed up
+        # as extra ripple, so the reset was load-bearing.  With residual-based
+        # stopping (_PIC_TOL) the fixed point is start-independent by
+        # construction: the initial guess changes the PATH, never the answer
+        # (to within tol).  Frame 0 still starts from the unsaturated base.
+        # FROZEN-NU: frame 0 converges once (extended Picard below); later frames
+        # keep that nu untouched — no reset, no update, one linear solve each.
+        if k == 0 and not (frozen_nu and not _vdrive and k > 0):
+            for hn in ("s", "r"):
+                for tag in sb_sat[hn]:
+                    nu_el[hn][tag][:] = 1.0 / (MU0 * max(mu0[hn].get(tag, 1.0), 1.0))
         A = np.zeros(n)
         # Voltage drive changes the current every Picard step, so the saturation
         # state moves more than at fixed current -> a few extra iterations.
@@ -6215,6 +6478,11 @@ def fem_transient_sliding_band(
             _n_pic = max(6, nonlinear_iterations // 2)
         else:
             _n_pic = nonlinear_iterations + (6 if _vdrive else 0)
+        if frozen_nu and not _vdrive:
+            # reference frame: extended convergence; frozen frames: 1 linear solve
+            _n_pic = max(nonlinear_iterations, 40) if k == 0 else 1
+        _pic_ok = 0; _pic_res = 0.0
+        _pic_r_prev = None; _pic_om = 0.5   # Irons–Tuck relaxation state (per frame)
         for it in range(_n_pic):
             blocks = []
             for hn in ("s", "r"):
@@ -6305,6 +6573,12 @@ def fem_transient_sliding_band(
             else:
                 A = Pro @ _sksolve(*condense((Pro.T @ K @ Pro).tocsr(),
                                               Pro.T @ f, D=outer_red))
+            if frozen_nu and not _vdrive and k > 0:
+                continue                      # frozen frames: nu stays untouched
+            # PER-ELEMENT reluctivity: each iron triangle gets its own mu(|B|)
+            # from the B-H curve.  Gather the WHOLE saturable nu state into one
+            # vector so the relaxation and the residual see the global field.
+            _nu_old_v = []; _nu_new_v = []; _nu_slices = []
             for hn, off in (("s", 0), ("r", nsn)):
                 h = half[hn]
                 Bx, By = _per_triangle_B(h["mesh"], A[off:off + h["n"]])
@@ -6313,12 +6587,51 @@ def fem_transient_sliding_band(
                     idx = h["cells"][tag]
                     if idx.size == 0:
                         continue
-                    # PER-ELEMENT reluctivity: each iron triangle gets its own
-                    # mu(|B|) from the B-H curve.  Damped (Picard) update of the
-                    # element-wise nu field used by the saturable-tag assembly.
                     mu_new = _mu_r_from_bh_vec(curve, Bm[idx])
-                    nu_new = 1.0 / (MU0 * np.maximum(mu_new, 1.0))
-                    nu_el[hn][tag] = 0.5 * nu_el[hn][tag] + 0.5 * nu_new
+                    _nu_old_v.append(nu_el[hn][tag])
+                    _nu_new_v.append(1.0 / (MU0 * np.maximum(mu_new, 1.0)))
+                    _nu_slices.append((hn, tag))
+            if _nu_slices:
+                _vo = np.concatenate(_nu_old_v)
+                _r = np.concatenate(_nu_new_v) - _vo
+                # honest fixed-point residual (relative L2, BEFORE relaxation —
+                # the relaxed step size would fake convergence)
+                _pic_res = float(np.linalg.norm(_r)
+                                 / max(np.linalg.norm(_vo), 1e-30))
+                # IRONS–TUCK (vector Aitken Δ²) adaptive relaxation: the fixed
+                # 0.5 step OSCILLATES around the fixed point (THE source of the
+                # old 5–8 Nm no-load torque floor); a 1/it decay converges but
+                # crawls (~100 sweeps to 1e-3).  Aitken measures the actual
+                # contraction from consecutive residuals and picks the step —
+                # no tuned schedules.  (Anderson(m=4) was tried and THRASHES on
+                # this map — the B-H knee makes the residual non-smooth and the
+                # secant model misfires.)  omega clamped to (0, 1]: the update
+                # stays a convex combination of old and new nu, so it can never
+                # leave the physical range the B-H curve produced.
+                if _pic_r_prev is not None:
+                    _dr = _r - _pic_r_prev
+                    _den = float(_dr @ _dr)
+                    if _den > 0.0:
+                        _pic_om = float(np.clip(
+                            -_pic_om * float(_pic_r_prev @ _dr) / _den,
+                            0.05, 1.0))
+                _pic_r_prev = _r
+                _vu = _vo + _pic_om * _r
+                _p0 = 0
+                for (_hn2, _tg2), _arr in zip(_nu_slices, _nu_old_v):
+                    nu_el[_hn2][_tg2] = _vu[_p0:_p0 + _arr.size]
+                    _p0 += _arr.size
+            # HONEST stopping: two consecutive sweeps with the worst relative
+            # nu residual under _PIC_TOL end this frame's Picard.  Lightly
+            # saturated frames exit in a handful of iterations; deep saturation
+            # runs to the cap.  No fixed-recipe iteration counts anywhere.
+            if _pic_res < _PIC_TOL:
+                _pic_ok += 1
+                if _pic_ok >= 2:
+                    break
+            else:
+                _pic_ok = 0
+        _pic_iters_hist.append(it + 1); _pic_resid_hist.append(_pic_res)
         # per-phase flux linkage of the converged solution (also used below).
         pa, pb, pc = _psi_of(A)
         if _vdrive:
@@ -6548,7 +6861,10 @@ def fem_transient_sliding_band(
     # stutter is meaningless noise.  So differentiate B against the UNIQUE
     # rotor node-positions (smooth, ~72 pts) and map the result back onto the
     # time frames — gives a clean dB/dt at any n_steps.
-    _m_arr = np.asarray(_mshift_hist, int)
+    # float: macro mode advances a FRACTIONAL node count per step (free m);
+    # integer-m runs are unchanged (whole numbers survive the float dtype, and
+    # the pole-shift exact-pad gate simply stays on its consecutive-int check).
+    _m_arr = np.asarray(_mshift_hist, float)
     _spacing_rad = math.radians(spacing)
     _omega_mech = 2.0 * math.pi * rpm / 60.0
 
@@ -7167,6 +7483,19 @@ def fem_transient_sliding_band(
         "P_loss_total_avg_W": P_loss_total_avg,
         "R_phase_ohm": R_phase, "n_slip_nodes": int(Nring),
         "n_parallel": int(n_parallel),
+        # Saturation-Picard honesty report: iterations actually used per frame
+        # (early-stop on the nu fixed-point residual < _PIC_TOL, cap =
+        # nonlinear_iterations) and the worst final residual over all frames.
+        # picard_converged=False means some frame hit the cap without meeting
+        # the tolerance — treat ripple from such a run with suspicion.
+        "picard_iters_mean": (round(float(np.mean(_pic_iters_hist)), 1)
+                              if _pic_iters_hist else 0.0),
+        "picard_iters_max": (int(max(_pic_iters_hist)) if _pic_iters_hist else 0),
+        "picard_resid_max": (round(float(max(_pic_resid_hist)), 6)
+                             if _pic_resid_hist else 0.0),
+        "picard_tol": float(_PIC_TOL),
+        "picard_converged": bool(_pic_resid_hist
+                                 and max(_pic_resid_hist) < _PIC_TOL),
         "coil_temp_C": float(coil_temp_c),
         "end_winding_factor": float(_k_end_used),
         # Drive mode: "current" (imposed sinusoidal I) or "voltage" (imposed
@@ -7401,7 +7730,7 @@ def em_transient_eval(
     end_winding_factor: float = 0.0,
     rotor_eddy: bool = False,
     demag: bool = False,
-    torque_filter: bool = True,
+    torque_filter: bool = False,
     pole_copy=None,
     component_mesh_mm=None,
     geo_override=None,
@@ -7409,7 +7738,9 @@ def em_transient_eval(
     hi_fidelity: bool = False,
     structured_gap: bool = False,
     iron_template=None,
+    geo_mesh=None,
     airgap_macro: bool = False,
+    frozen_nu: bool = False,
     drive: str = "current",
     v_phase_peak: float = 0.0,
     v_delta_deg: float = 0.0,
@@ -7433,10 +7764,11 @@ def em_transient_eval(
         coil_temp_c=float(coil_temp_c), end_winding_factor=float(end_winding_factor),
         rotor_eddy=bool(rotor_eddy), demag=bool(demag),
         torque_filter=bool(torque_filter), pole_copy=pole_copy,
-        iron_template=iron_template,
+        iron_template=iron_template, geo_mesh=geo_mesh,
         component_mesh_mm=(component_mesh_mm or {}), geo_override=geo_override,
         progress_cb=progress_cb, hi_fidelity=bool(hi_fidelity),
         structured_gap=bool(structured_gap), airgap_macro=bool(airgap_macro),
+        frozen_nu=bool(frozen_nu),
         drive=str(drive or "current"), v_phase_peak=float(v_phase_peak),
         v_delta_deg=float(v_delta_deg))
 

@@ -134,14 +134,14 @@ function readSimSetting<T>(key: string, def: T): T {
   } catch { return def; }
 }
 
-const AXIS = { fontSize: 10, fill: '#94a3b8' };
+const AXIS = { fontSize: 10, fill: 'var(--text-2)' };
 const TOOLTIP = {
-  contentStyle: { background: '#0f172a', border: '1px solid #1e293b',
-    fontSize: 11, color: '#cbd5e1' },
+  contentStyle: { background: 'var(--app-bg)', border: '1px solid var(--line-soft)',
+    fontSize: 11, color: 'var(--text-1)' },
   labelFormatter: (v: number) => `t = ${Number(v).toFixed(3)} ms`,
   formatter: (v: number) => Number(v).toFixed(3),
 };
-const GRID = { stroke: '#1e293b', strokeDasharray: '2 4' };
+const GRID = { stroke: 'var(--panel)', strokeDasharray: '2 4' };
 
 // Round the x-axis tick label to 3 decimal places (ms).  Without this
 // recharts displays the raw floating-point time values with full
@@ -173,7 +173,7 @@ function loadLastTransient(): TransientPayload | null {
 }
 
 // (live recompute progress strip: elapsed + points, driven by busy + /progress)
-const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onSummary, runNonce = 0, onBusyChange, steps = 12, fresh = false, fieldLosses = true, demag = false, torqueFilter = true, appliedFromSweep = false, drive = 'current', vPeak = 0, vDelta = 0 }) => {
+const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onSummary, runNonce = 0, onBusyChange, steps = 12, fresh = false, fieldLosses = true, demag = false, torqueFilter = false, appliedFromSweep = false, drive = 'current', vPeak = 0, vDelta = 0 }) => {
   // `steps` (n_steps_per_period) is controlled from the left panel and
   // matches the animation viewer's n_frames so both hit the same backend
   // cache key (one solve, not two).
@@ -317,6 +317,8 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
       airgap_macro:       readMeshSetting('harmonicGap', false),
       // Deterministic template iron mesh (Mesh-tab "Template iron" toggle).
       iron_template:      readMeshSetting('ironTemplate', true),
+      // Geometry-driven CDT mesh (Mesh-tab "Geometry-driven mesh" toggle, default ON).
+      geo_mesh:           readMeshSetting('geoMesh', true),
       // Copper-loss physics: coil temperature → ρ_Cu(T); end-winding factor
       // (0 = auto-estimate from geometry) for the copper the 2-D field misses.
       coil_temp_c:        readSimSetting('coilTemp',   120.0),
@@ -614,7 +616,7 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
   }, [data]);
 
   return (
-    <Paper sx={{ bgcolor: '#0b1220', border: '1px solid #1e293b', p: 2,
+    <Paper sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', p: 2,
       display: 'flex', flexDirection: 'column', gap: 1.5 }}>
       {/* Stale-graph marker — the shown waveforms were computed for different
           inputs/geometry (e.g. a design was just applied from Sweep).  Kept to
@@ -634,10 +636,10 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
       <Box sx={{ display: 'flex', alignItems: 'center',
         justifyContent: 'space-between', gap: 2 }}>
         <Box>
-          <Typography sx={{ fontSize: 13, color: '#cbd5e1', fontWeight: 700 }}>
+          <Typography sx={{ fontSize: 13, color: 'var(--text-1)', fontWeight: 700 }}>
             Transient analysis — T(t), P(t), V(t)
             <Tooltip title="Runs one FEM solve per time step over one electrical period. Each step uses the current rotor angle and instantaneous phase currents." placement="top">
-              <span style={{ color: '#475569', marginLeft: 6, fontSize: 11, cursor: 'help' }}>ⓘ</span>
+              <span style={{ color: 'var(--text-4)', marginLeft: 6, fontSize: 11, cursor: 'help' }}>ⓘ</span>
             </Tooltip>
           </Typography>
           {data && (() => {
@@ -651,7 +653,7 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
             // pk-pk in N·m instead; show the % only when there's real average torque.
             const loaded = Math.abs(data.T_avg_Nm) >= 1.0;
             return (
-              <Typography sx={{ fontSize: 10, color: '#475569' }}>
+              <Typography sx={{ fontSize: 10, color: 'var(--text-4)' }}>
                 {data.n_steps_per_period} steps/period · dt = {(data.dt_s*1e6).toFixed(1)} µs ·
                 T_period = {(data.T_period_s*1e3).toFixed(2)} ms ({data.f_elec_Hz.toFixed(1)} Hz electrical) ·
                 T_avg = {data.T_avg_Nm.toFixed(2)} N·m · {loaded
@@ -669,7 +671,7 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
               answered with (harmonic currents = the FOC controller's real
               disturbance) + the watt cost vs a clean sinusoidal current. */}
           {data?.drive === 'voltage' && (
-            <Typography sx={{ fontSize: 10, color: '#94a3b8', mt: 0.25 }}>
+            <Typography sx={{ fontSize: 10, color: 'var(--text-2)', mt: 0.25 }}>
               <span style={{ color: '#a78bfa', fontWeight: 700 }}>voltage drive</span>
               {' '}V = {Number(data.v_phase_peak_V ?? 0).toFixed(1)} V @ δ {Number(data.v_delta_deg ?? 0).toFixed(1)}°
               {data.summary?.THD_I_pct != null &&
@@ -711,26 +713,26 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
                     : (step > 0 ? solveElapsed / step : 0);
         return (
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.6,
-          px: 1.25, py: 0.9, bgcolor: '#0a1424', border: '1px solid #1d4ed8',
+          px: 1.25, py: 0.9, bgcolor: 'var(--panel-2)', border: '1px solid var(--line-accent)',
           borderRadius: 1, fontFamily: 'monospace',
-          boxShadow: '0 0 10px rgba(37,99,235,0.25)' }}>
+          boxShadow: '0 0 10px rgba(37,99,235,0.15)' }}>
           <Box sx={{ display: 'flex', justifyContent: 'space-between',
-            alignItems: 'baseline', fontSize: 12, color: '#bfdbfe' }}>
+            alignItems: 'baseline', fontSize: 12, color: 'var(--text-2)' }}>
             <span>
               <CircularProgress size={11} thickness={6}
-                sx={{ color: '#3b82f6', mr: 0.8, verticalAlign: 'middle' }}/>
-              Computing&nbsp;<b style={{ color: '#e0f2fe' }}>{step}</b>&nbsp;/&nbsp;<b>{total}</b>&nbsp;points
+                sx={{ color: 'var(--brand)', mr: 0.8, verticalAlign: 'middle' }}/>
+              Computing&nbsp;<b style={{ color: 'var(--text-0)' }}>{step}</b>&nbsp;/&nbsp;<b>{total}</b>&nbsp;points
               {perPt ? `   ·   ${perPt.toFixed(2)} s/pt` : ''}
             </span>
-            <span style={{ color: '#93c5fd' }}>
-              elapsed&nbsp;<b style={{ color: '#e0f2fe' }}>{solveElapsed.toFixed(1)} s</b>
+            <span style={{ color: 'var(--text-3)' }}>
+              elapsed&nbsp;<b style={{ color: 'var(--text-0)' }}>{solveElapsed.toFixed(1)} s</b>
               {eta ? `   ·   ETA ${eta.toFixed(0)} s` : ''}
             </span>
           </Box>
-          <Box sx={{ width: '100%', height: 6, bgcolor: '#0f172a',
+          <Box sx={{ width: '100%', height: 6, bgcolor: 'var(--line-soft)',
             borderRadius: 3, overflow: 'hidden' }}>
             <Box sx={{ width: `${pct.toFixed(1)}%`, height: '100%',
-              bgcolor: '#3b82f6', transition: 'width 0.3s ease' }}/>
+              bgcolor: 'var(--brand)', transition: 'width 0.3s ease' }}/>
           </Box>
         </Box>
         );
@@ -744,8 +746,8 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
       )}
 
       {!data && !busy && !error && (
-        <Typography sx={{ fontSize: 11, color: '#64748b', textAlign: 'center',
-          p: 3, border: '1px dashed #1e293b', borderRadius: 1 }}>
+        <Typography sx={{ fontSize: 11, color: 'var(--text-3)', textAlign: 'center',
+          p: 3, border: '1px dashed var(--panel)', borderRadius: 1 }}>
           Press <b>Run Simulation</b> (left panel) to launch a transient FEM
           sweep over one electrical period.<br/>
           {steps} steps/period.
@@ -756,26 +758,26 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
         <>
           {/* ── Torque ── */}
           <Box sx={{ height: 220 }}>
-            <Typography sx={{ fontSize: 11, fontWeight: 700, color: '#94a3b8' }}>
+            <Typography sx={{ fontSize: 11, fontWeight: 700, color: 'var(--text-2)' }}>
               Torque T_em(t)
-              <span style={{ color: '#475569', fontWeight: 400 }}>  ·  {rows.length} points</span>
+              <span style={{ color: 'var(--text-4)', fontWeight: 400 }}>  ·  {rows.length} points</span>
             </Typography>
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={rows} margin={{ top: 8, right: 10, left: 0, bottom: 16 }}>
                 <CartesianGrid {...GRID}/>
                 <XAxis dataKey="t_ms" tick={AXIS} tickFormatter={fmtMs}
                   label={{ value: 't [ms]', position: 'insideBottom',
-                    offset: -4, style: { fontSize: 10, fill: '#475569' } }}/>
+                    offset: -4, style: { fontSize: 10, fill: 'var(--text-4)' } }}/>
                 <YAxis tick={AXIS}
                   label={{ value: 'T [N·m]', angle: -90,
                     position: 'insideLeft', offset: 12,
-                    style: { fontSize: 10, fill: '#475569' } }}/>
+                    style: { fontSize: 10, fill: 'var(--text-4)' } }}/>
                 <RcTooltip {...TOOLTIP}/>
                 <Line type="monotone" dataKey="T_em" stroke="#34d399"
-                  strokeWidth={2}
+                  strokeWidth={1.25}
                   dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
                     r={3} fill={d.stroke} stroke="none"/>}
-                  activeDot={{ r: 5 }}
+                  activeDot={{ r: 2 }}
                   isAnimationActive={false}/>
               </LineChart>
             </ResponsiveContainer>
@@ -784,10 +786,10 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
           {/* ── Torque harmonic spectrum ── */}
           {harmRows.length > 0 && (
           <Box sx={{ height: 200 }}>
-            <Typography sx={{ fontSize: 11, fontWeight: 700, color: '#94a3b8' }}>
+            <Typography sx={{ fontSize: 11, fontWeight: 700, color: 'var(--text-2)' }}>
               Torque harmonics (order = ×electrical freq)
               <Tooltip title="FFT of T(t) over one electrical period. A clean PERIODIC ripple shows a few discrete bars — the 6th/12th/18th (3-phase) and slot-cogging orders. Energy spread across every order = broadband (chaotic) noise. Orange = the physical 6·k 3-phase orders." placement="top">
-                <span style={{ color: '#475569', marginLeft: 6, fontSize: 11, cursor: 'help' }}>ⓘ</span>
+                <span style={{ color: 'var(--text-4)', marginLeft: 6, fontSize: 11, cursor: 'help' }}>ⓘ</span>
               </Tooltip>
             </Typography>
             <ResponsiveContainer width="100%" height="100%">
@@ -795,11 +797,11 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
                 <CartesianGrid {...GRID}/>
                 <XAxis dataKey="order" tick={AXIS} interval={0}
                   label={{ value: 'harmonic order (n × f_elec)', position: 'insideBottom',
-                    offset: -4, style: { fontSize: 10, fill: '#475569' } }}/>
+                    offset: -4, style: { fontSize: 10, fill: 'var(--text-4)' } }}/>
                 <YAxis tick={AXIS}
                   label={{ value: 'amp [N·m]', angle: -90,
                     position: 'insideLeft', offset: 12,
-                    style: { fontSize: 10, fill: '#475569' } }}/>
+                    style: { fontSize: 10, fill: 'var(--text-4)' } }}/>
                 <RcTooltip {...TOOLTIP}
                   labelFormatter={(v: number) => `harmonic n = ${v}`}
                   formatter={(val: number, _n: string, p: any) =>
@@ -816,57 +818,57 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
 
           {/* ── Losses ── */}
           <Box sx={{ height: 220 }}>
-            <Typography sx={{ fontSize: 11, fontWeight: 700, color: '#94a3b8' }}>
+            <Typography sx={{ fontSize: 11, fontWeight: 700, color: 'var(--text-2)' }}>
               Losses (Cu / Fe / Mag / total)
-              <span style={{ color: '#475569', fontWeight: 400 }}>  ·  {rows.length} points</span>
+              <span style={{ color: 'var(--text-4)', fontWeight: 400 }}>  ·  {rows.length} points</span>
             </Typography>
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={rows} margin={{ top: 8, right: 10, left: 0, bottom: 16 }}>
                 <CartesianGrid {...GRID}/>
                 <XAxis dataKey="t_ms" tick={AXIS} tickFormatter={fmtMs}
                   label={{ value: 't [ms]', position: 'insideBottom',
-                    offset: -4, style: { fontSize: 10, fill: '#475569' } }}/>
+                    offset: -4, style: { fontSize: 10, fill: 'var(--text-4)' } }}/>
                 <YAxis tick={AXIS}
                   label={{ value: 'P [W]', angle: -90,
                     position: 'insideLeft', offset: 12,
-                    style: { fontSize: 10, fill: '#475569' } }}/>
+                    style: { fontSize: 10, fill: 'var(--text-4)' } }}/>
                 <RcTooltip {...TOOLTIP}/>
                 <Legend wrapperStyle={{ fontSize: 10 }}/>
                 <Line type="monotone" dataKey="P_cu" stroke="#fbbf24"
-                  name="P_Cu (DC+AC)" strokeWidth={2}
+                  name="P_Cu (DC+AC)" strokeWidth={1.25}
                   dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
                     r={3} fill={d.stroke} stroke="none"/>}
-                  activeDot={{ r: 5 }}
+                  activeDot={{ r: 2 }}
                   isAnimationActive={false}/>
                 {/* Flat DC-only copper reference: the vertical gap to P_Cu (DC+AC)
                     IS the eddy/proximity loss share in the winding. */}
                 <Line type="monotone" dataKey="P_cu_dc" stroke="#b45309"
-                  name="P_Cu DC only" strokeWidth={2} strokeDasharray="6 3"
-                  dot={false} activeDot={{ r: 4 }}
+                  name="P_Cu DC only" strokeWidth={1.25} strokeDasharray="6 3"
+                  dot={false} activeDot={{ r: 1.5 }}
                   isAnimationActive={false}/>
                 <Line type="monotone" dataKey="P_fe" stroke="#f87171"
-                  name="P_Fe" strokeWidth={2}
+                  name="P_Fe" strokeWidth={1.25}
                   dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
                     r={3} fill={d.stroke} stroke="none"/>}
-                  activeDot={{ r: 5 }}
+                  activeDot={{ r: 2 }}
                   isAnimationActive={false}/>
                 <Line type="monotone" dataKey="P_mag" stroke="#a78bfa"
-                  name="P_Mag" strokeWidth={2}
+                  name="P_Mag" strokeWidth={1.25}
                   dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
                     r={3} fill={d.stroke} stroke="none"/>}
-                  activeDot={{ r: 5 }}
+                  activeDot={{ r: 2 }}
                   isAnimationActive={false}/>
                 <Line type="monotone" dataKey="P_shaft" stroke="#4ade80"
-                  name="P_shaft (Al)" strokeWidth={2} strokeDasharray="4 2"
+                  name="P_shaft (Al)" strokeWidth={1.25} strokeDasharray="4 2"
                   dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
                     r={3} fill={d.stroke} stroke="none"/>}
-                  activeDot={{ r: 5 }}
+                  activeDot={{ r: 2 }}
                   isAnimationActive={false}/>
-                <Line type="monotone" dataKey="P_tot" stroke="#cbd5e1"
-                  name="P_total" strokeWidth={2}
+                <Line type="monotone" dataKey="P_tot" stroke="var(--text-1)"
+                  name="P_total" strokeWidth={1.25}
                   dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
                     r={3} fill={d.stroke} stroke="none"/>}
-                  activeDot={{ r: 5 }}
+                  activeDot={{ r: 2 }}
                   isAnimationActive={false}/>
               </LineChart>
             </ResponsiveContainer>
@@ -874,39 +876,39 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
 
           {/* ── Currents ── */}
           <Box sx={{ height: 220 }}>
-            <Typography sx={{ fontSize: 11, fontWeight: 700, color: '#94a3b8' }}>
+            <Typography sx={{ fontSize: 11, fontWeight: 700, color: 'var(--text-2)' }}>
               Phase currents I_A / I_B / I_C
-              <span style={{ color: '#475569', fontWeight: 400 }}>  ·  {rows.length} points</span>
+              <span style={{ color: 'var(--text-4)', fontWeight: 400 }}>  ·  {rows.length} points</span>
             </Typography>
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={rows} margin={{ top: 8, right: 10, left: 0, bottom: 16 }}>
                 <CartesianGrid {...GRID}/>
                 <XAxis dataKey="t_ms" tick={AXIS} tickFormatter={fmtMs}
                   label={{ value: 't [ms]', position: 'insideBottom',
-                    offset: -4, style: { fontSize: 10, fill: '#475569' } }}/>
+                    offset: -4, style: { fontSize: 10, fill: 'var(--text-4)' } }}/>
                 <YAxis tick={AXIS}
                   label={{ value: 'I [A]', angle: -90,
                     position: 'insideLeft', offset: 12,
-                    style: { fontSize: 10, fill: '#475569' } }}/>
+                    style: { fontSize: 10, fill: 'var(--text-4)' } }}/>
                 <RcTooltip {...TOOLTIP}/>
                 <Legend wrapperStyle={{ fontSize: 10 }}/>
                 <Line type="monotone" dataKey="I_A" stroke="#ef4444"
-                  name="I_A" strokeWidth={2}
+                  name="I_A" strokeWidth={1.25}
                   dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
                     r={3} fill={d.stroke} stroke="none"/>}
-                  activeDot={{ r: 5 }}
+                  activeDot={{ r: 2 }}
                   isAnimationActive={false}/>
                 <Line type="monotone" dataKey="I_B" stroke="#10b981"
-                  name="I_B" strokeWidth={2}
+                  name="I_B" strokeWidth={1.25}
                   dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
                     r={3} fill={d.stroke} stroke="none"/>}
-                  activeDot={{ r: 5 }}
+                  activeDot={{ r: 2 }}
                   isAnimationActive={false}/>
                 <Line type="monotone" dataKey="I_C" stroke="#60a5fa"
-                  name="I_C" strokeWidth={2}
+                  name="I_C" strokeWidth={1.25}
                   dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
                     r={3} fill={d.stroke} stroke="none"/>}
-                  activeDot={{ r: 5 }}
+                  activeDot={{ r: 2 }}
                   isAnimationActive={false}/>
               </LineChart>
             </ResponsiveContainer>
@@ -914,39 +916,39 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
 
           {/* ── Voltages ── */}
           <Box sx={{ height: 220 }}>
-            <Typography sx={{ fontSize: 11, fontWeight: 700, color: '#94a3b8' }}>
+            <Typography sx={{ fontSize: 11, fontWeight: 700, color: 'var(--text-2)' }}>
               Phase voltages V_A / V_B / V_C  (V_peak ≈ {data.V_peak.toFixed(1)} V)
-              <span style={{ color: '#475569', fontWeight: 400 }}>  ·  {rows.length} points</span>
+              <span style={{ color: 'var(--text-4)', fontWeight: 400 }}>  ·  {rows.length} points</span>
             </Typography>
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={rows} margin={{ top: 8, right: 10, left: 0, bottom: 16 }}>
                 <CartesianGrid {...GRID}/>
                 <XAxis dataKey="t_ms" tick={AXIS} tickFormatter={fmtMs}
                   label={{ value: 't [ms]', position: 'insideBottom',
-                    offset: -4, style: { fontSize: 10, fill: '#475569' } }}/>
+                    offset: -4, style: { fontSize: 10, fill: 'var(--text-4)' } }}/>
                 <YAxis tick={AXIS}
                   label={{ value: 'V [V]', angle: -90,
                     position: 'insideLeft', offset: 12,
-                    style: { fontSize: 10, fill: '#475569' } }}/>
+                    style: { fontSize: 10, fill: 'var(--text-4)' } }}/>
                 <RcTooltip {...TOOLTIP}/>
                 <Legend wrapperStyle={{ fontSize: 10 }}/>
                 <Line type="monotone" dataKey="V_A" stroke="#ef4444"
-                  name="V_A" strokeWidth={2}
+                  name="V_A" strokeWidth={1.25}
                   dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
                     r={3} fill={d.stroke} stroke="none"/>}
-                  activeDot={{ r: 5 }}
+                  activeDot={{ r: 2 }}
                   isAnimationActive={false}/>
                 <Line type="monotone" dataKey="V_B" stroke="#10b981"
-                  name="V_B" strokeWidth={2}
+                  name="V_B" strokeWidth={1.25}
                   dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
                     r={3} fill={d.stroke} stroke="none"/>}
-                  activeDot={{ r: 5 }}
+                  activeDot={{ r: 2 }}
                   isAnimationActive={false}/>
                 <Line type="monotone" dataKey="V_C" stroke="#60a5fa"
-                  name="V_C" strokeWidth={2}
+                  name="V_C" strokeWidth={1.25}
                   dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
                     r={3} fill={d.stroke} stroke="none"/>}
-                  activeDot={{ r: 5 }}
+                  activeDot={{ r: 2 }}
                   isAnimationActive={false}/>
               </LineChart>
             </ResponsiveContainer>
@@ -955,9 +957,9 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
           {/* ── Voltage harmonic spectrum ── */}
           {vharm && (
           <Box sx={{ height: 200 }}>
-            <Typography sx={{ fontSize: 11, fontWeight: 700, color: '#94a3b8' }}>
+            <Typography sx={{ fontSize: 11, fontWeight: 700, color: 'var(--text-2)' }}>
               Voltage harmonics (order = ×f_elec)
-              <span style={{ color: '#475569', fontWeight: 400 }}>
+              <span style={{ color: 'var(--text-4)', fontWeight: 400 }}>
                 {'  ·  '}V₁ ≈ {vharm.v1.toFixed(1)} V · THD ≈ {vharm.thd.toFixed(1)} %
                 {' · '}
               </span>
@@ -965,7 +967,7 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
                 THD_LL ≈ {vharm.thdLL.toFixed(1)} %
               </span>
               <Tooltip title="DFT of the phase voltage V = R·I + dψ/dt (3-phase magnitude average). With sinusoidal imposed currents everything above order 1 is the machine itself: back-EMF shape + slotting. Green = fundamental (the useful component). Blue = 5/7/11/13… — these pair into the 6·k torque-ripple orders and load the inverter. Grey = triplen (3/9/15…) zero-sequence — visible phase-to-neutral but cancels line-to-line in a wye winding, drives no current. No PWM here — an inverter adds its own switching harmonics on top." placement="top">
-                <span style={{ color: '#475569', marginLeft: 6, fontSize: 11, cursor: 'help' }}>ⓘ</span>
+                <span style={{ color: 'var(--text-4)', marginLeft: 6, fontSize: 11, cursor: 'help' }}>ⓘ</span>
               </Tooltip>
             </Typography>
             <ResponsiveContainer width="100%" height="100%">
@@ -973,11 +975,11 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
                 <CartesianGrid {...GRID}/>
                 <XAxis dataKey="order" tick={AXIS} interval={0}
                   label={{ value: 'harmonic order (n × f_elec)', position: 'insideBottom',
-                    offset: -4, style: { fontSize: 10, fill: '#475569' } }}/>
+                    offset: -4, style: { fontSize: 10, fill: 'var(--text-4)' } }}/>
                 <YAxis tick={AXIS}
                   label={{ value: 'amp [V]', angle: -90,
                     position: 'insideLeft', offset: 12,
-                    style: { fontSize: 10, fill: '#475569' } }}/>
+                    style: { fontSize: 10, fill: 'var(--text-4)' } }}/>
                 <RcTooltip {...TOOLTIP}
                   labelFormatter={(v: number) => `harmonic n = ${v}`}
                   formatter={(val: number, _n: string, p: any) =>
@@ -985,7 +987,7 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
                 <Bar dataKey="amp" isAnimationActive={false}>
                   {vharm.rows.map((r, i) => (
                     <Cell key={i} fill={r.order === 1 ? '#34d399'
-                      : r.order % 3 === 0 ? '#64748b' : '#3b82f6'}/>
+                      : r.order % 3 === 0 ? 'var(--text-3)' : '#3b82f6'}/>
                   ))}
                 </Bar>
               </BarChart>
@@ -995,12 +997,12 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
 
           {/* ── Line-to-line voltages V_AB / V_BC / V_CA ── */}
           <Box sx={{ height: 220 }}>
-            <Typography sx={{ fontSize: 11, fontWeight: 700, color: '#94a3b8' }}>
+            <Typography sx={{ fontSize: 11, fontWeight: 700, color: 'var(--text-2)' }}>
               Line-to-line voltages V_AB / V_BC / V_CA
-              {vllHarm && <span style={{ color: '#475569', fontWeight: 400 }}>
+              {vllHarm && <span style={{ color: 'var(--text-4)', fontWeight: 400 }}>
                 {'  ·  '}V₁_LL ≈ {vllHarm.v1.toFixed(1)} V</span>}
               <Tooltip title="The voltages a wye-connected inverter actually applies between terminal pairs. Zero-sequence (triplen) harmonics cancel in the differences, so these waveforms are cleaner than the phase ones. In a perfectly balanced model the three curves are identical time-shifted copies — visible shape/amplitude differences between them are phase unbalance (e.g. sector-mesh seams)." placement="top">
-                <span style={{ color: '#475569', marginLeft: 6, fontSize: 11, cursor: 'help' }}>ⓘ</span>
+                <span style={{ color: 'var(--text-4)', marginLeft: 6, fontSize: 11, cursor: 'help' }}>ⓘ</span>
               </Tooltip>
             </Typography>
             <ResponsiveContainer width="100%" height="100%">
@@ -1008,30 +1010,30 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
                 <CartesianGrid {...GRID}/>
                 <XAxis dataKey="t_ms" tick={AXIS} tickFormatter={fmtMs}
                   label={{ value: 't [ms]', position: 'insideBottom',
-                    offset: -4, style: { fontSize: 10, fill: '#475569' } }}/>
+                    offset: -4, style: { fontSize: 10, fill: 'var(--text-4)' } }}/>
                 <YAxis tick={AXIS}
                   label={{ value: 'V [V]', angle: -90,
                     position: 'insideLeft', offset: 12,
-                    style: { fontSize: 10, fill: '#475569' } }}/>
+                    style: { fontSize: 10, fill: 'var(--text-4)' } }}/>
                 <RcTooltip {...TOOLTIP}/>
                 <Legend wrapperStyle={{ fontSize: 10 }}/>
                 <Line type="monotone" dataKey="V_AB" stroke="#a78bfa"
-                  name="V_AB" strokeWidth={2}
+                  name="V_AB" strokeWidth={1.25}
                   dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
                     r={3} fill={d.stroke} stroke="none"/>}
-                  activeDot={{ r: 5 }}
+                  activeDot={{ r: 2 }}
                   isAnimationActive={false}/>
                 <Line type="monotone" dataKey="V_BC" stroke="#f472b6"
-                  name="V_BC" strokeWidth={2}
+                  name="V_BC" strokeWidth={1.25}
                   dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
                     r={3} fill={d.stroke} stroke="none"/>}
-                  activeDot={{ r: 5 }}
+                  activeDot={{ r: 2 }}
                   isAnimationActive={false}/>
                 <Line type="monotone" dataKey="V_CA" stroke="#fbbf24"
-                  name="V_CA" strokeWidth={2}
+                  name="V_CA" strokeWidth={1.25}
                   dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
                     r={3} fill={d.stroke} stroke="none"/>}
-                  activeDot={{ r: 5 }}
+                  activeDot={{ r: 2 }}
                   isAnimationActive={false}/>
               </LineChart>
             </ResponsiveContainer>
@@ -1040,16 +1042,16 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
           {/* ── Line-to-line harmonic spectrum ── */}
           {vllHarm && (
           <Box sx={{ height: 200 }}>
-            <Typography sx={{ fontSize: 11, fontWeight: 700, color: '#94a3b8' }}>
+            <Typography sx={{ fontSize: 11, fontWeight: 700, color: 'var(--text-2)' }}>
               Line-to-line harmonics (order = ×f_elec)
-              <span style={{ color: '#475569', fontWeight: 400 }}>
+              <span style={{ color: 'var(--text-4)', fontWeight: 400 }}>
                 {'  ·  '}V₁_LL ≈ {vllHarm.v1.toFixed(1)} V ·{' '}
               </span>
               <span style={{ color: '#22d3ee', fontWeight: 600 }}>
                 THD ≈ {vllHarm.thd.toFixed(1)} %
               </span>
               <Tooltip title="DFT of the ACTUAL V_AB waveform. Triplen bars (3/9/15…, grey) sit at ≈0 because zero-sequence cancels between two phases of a wye winding — the physical reason THD_LL excludes them. The THD of this curve is what a sinusoidal FOC supply fights (CIANO-S target < 5%); any residual triplen content here indicates phase unbalance." placement="top">
-                <span style={{ color: '#475569', marginLeft: 6, fontSize: 11, cursor: 'help' }}>ⓘ</span>
+                <span style={{ color: 'var(--text-4)', marginLeft: 6, fontSize: 11, cursor: 'help' }}>ⓘ</span>
               </Tooltip>
             </Typography>
             <ResponsiveContainer width="100%" height="100%">
@@ -1057,11 +1059,11 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
                 <CartesianGrid {...GRID}/>
                 <XAxis dataKey="order" tick={AXIS} interval={0}
                   label={{ value: 'harmonic order (n × f_elec)', position: 'insideBottom',
-                    offset: -4, style: { fontSize: 10, fill: '#475569' } }}/>
+                    offset: -4, style: { fontSize: 10, fill: 'var(--text-4)' } }}/>
                 <YAxis tick={AXIS}
                   label={{ value: 'amp [V]', angle: -90,
                     position: 'insideLeft', offset: 12,
-                    style: { fontSize: 10, fill: '#475569' } }}/>
+                    style: { fontSize: 10, fill: 'var(--text-4)' } }}/>
                 <RcTooltip {...TOOLTIP}
                   labelFormatter={(v: number) => `harmonic n = ${v}`}
                   formatter={(val: number, _n: string, p: any) =>
@@ -1069,7 +1071,7 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
                 <Bar dataKey="amp" isAnimationActive={false}>
                   {vllHarm.rows.map((r, i) => (
                     <Cell key={i} fill={r.order === 1 ? '#34d399'
-                      : r.order % 3 === 0 ? '#64748b' : '#8b5cf6'}/>
+                      : r.order % 3 === 0 ? 'var(--text-3)' : '#8b5cf6'}/>
                   ))}
                 </Bar>
               </BarChart>
@@ -1081,16 +1083,16 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
           {data.demag_report && data.demag_report.length > 0 && (
             <Box sx={{ p: 1, border: '1px solid',
               borderColor: data.demag_report.some(r => r.demagnetised) ? '#7f1d1d' : '#78350f',
-              borderRadius: 1, bgcolor: '#160e0e' }}>
+              borderRadius: 1, bgcolor: 'rgba(239,68,68,0.07)' }}>
               <Typography sx={{ fontSize: 12, fontWeight: 700, mb: 0.5,
-                color: data.demag_report.some(r => r.demagnetised) ? '#fca5a5' : '#fbbf24' }}>
+                color: data.demag_report.some(r => r.demagnetised) ? '#dc2626' : '#b45309' }}>
                 {data.demag_report.some(r => r.demagnetised)
                   ? '⛔ MAGNET DEMAGNETISATION — torque & back-EMF de-rated'
                   : '⚠ Magnets approaching demag knee'}
               </Typography>
               {data.demag_report.map((r, i) => (
                 <Typography key={i} sx={{ fontSize: 11, fontFamily: 'monospace',
-                  color: r.demagnetised ? '#fca5a5' : '#cbd5e1' }}>
+                  color: r.demagnetised ? '#fca5a5' : 'var(--text-1)' }}>
                   mag[{r.magnet_index}]: H_min = {r.H_min_kA_per_m} kA/m
                   {' '}(knee {r.H_knee_kA_per_m} kA/m, {(r.knee_proximity * 100).toFixed(0)}%)
                   {r.demagnetised && `  →  Br ×${r.Br_factor}  (−${((1 - r.Br_factor) * 100).toFixed(0)}%)`}

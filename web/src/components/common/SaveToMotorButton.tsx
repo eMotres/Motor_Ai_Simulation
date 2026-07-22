@@ -50,10 +50,10 @@ const SaveToMotorButton: React.FC<Props> = ({ disabled }) => {
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
       {active && (
         <Tooltip title={`Every geometry / mesh / simulation change auto-saves into "${active.name}". Use "Save as new motor" to keep a separate named copy in the Motors tab.`} placement="top">
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, fontSize: 11, color: '#94a3b8' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, fontSize: 11, color: 'var(--text-2)' }}>
             <BoltIcon sx={{ fontSize: 13, color: '#34d399' }} />
-            <span>Motor:&nbsp;<b style={{ color: '#e2e8f0' }}>{active.name}</b></span>
-            <span style={{ color: '#475569' }}>· auto-saved</span>
+            <span>Motor:&nbsp;<b style={{ color: 'var(--text-0)' }}>{active.name}</b></span>
+            <span style={{ color: 'var(--text-4)' }}>· auto-saved</span>
           </Box>
         </Tooltip>
       )}
@@ -62,8 +62,8 @@ const SaveToMotorButton: React.FC<Props> = ({ disabled }) => {
           <TextField size="small" autoFocus placeholder="New motor name…" value={name}
             onChange={e => setName(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') create(); if (e.key === 'Escape') setNaming(false); }}
-            inputProps={{ style: { padding: '4px 8px', fontSize: 11, color: '#e2e8f0' } }}
-            sx={{ flex: 1, '& .MuiOutlinedInput-root': { bgcolor: '#0f172a', '& fieldset': { borderColor: '#334155' } } }} />
+            inputProps={{ style: { padding: '4px 8px', fontSize: 11, color: 'var(--text-0)' } }}
+            sx={{ flex: 1, '& .MuiOutlinedInput-root': { bgcolor: 'var(--app-bg)', '& fieldset': { borderColor: 'var(--line)' } } }} />
           <Button size="small" variant="contained" disableElevation disabled={busy || !name.trim()} onClick={create}
             sx={{ textTransform: 'none', fontSize: 11, bgcolor: '#4f46e5', '&:hover': { bgcolor: '#6366f1' } }}>
             {busy ? <CircularProgress size={13} /> : 'Create'}
@@ -86,7 +86,7 @@ const SaveToMotorButton: React.FC<Props> = ({ disabled }) => {
           <Button size="small" variant="outlined" disableElevation disabled={disabled}
             startIcon={done ? <CheckIcon sx={{ fontSize: 15 }} /> : <SaveIcon sx={{ fontSize: 15 }} />}
             onClick={() => setNaming(true)}
-            sx={{ flex: active ? 'unset' : 1, whiteSpace: 'nowrap', textTransform: 'none', fontSize: 11, borderColor: '#334155',
+            sx={{ flex: active ? 'unset' : 1, whiteSpace: 'nowrap', textTransform: 'none', fontSize: 11, borderColor: 'var(--line)',
               color: done ? '#34d399' : '#a5b4fc', '&:hover': { borderColor: '#6366f1', bgcolor: '#1e1b4b' } }}>
             {done ? 'Saved ✓' : active ? 'Save as new…' : 'Save as new motor…'}
           </Button>

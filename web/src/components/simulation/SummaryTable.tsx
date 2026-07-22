@@ -31,6 +31,7 @@ export interface TransientSummary {
   THD_I_pct?:          number;   // ≈0 in current drive; real parasitics in voltage drive
   V1_LL_V?:            number;   // fundamental of the ACTUAL line-to-line waveform
   Kt_Nm_per_Arms?:     number;
+  J_coil_A_per_mm2?:   number;   // coil current density = I_rms/parallel over one strand's copper section
   P_loss_total_W:      number;
   P_core_W:            number;
   P_stranded_W:        number;
@@ -63,16 +64,16 @@ const Cell: React.FC<{
     amber:   '#fbbf24',
     red:     '#f87171',
     blue:    '#60a5fa',
-    default: '#e2e8f0',
+    default: 'var(--text-0)',
   }[accent];
   const cell = (
     <Box sx={{
       display: 'flex', flexDirection: 'column',
       px: 1.25, py: 0.8,
-      bgcolor: '#060d17', border: '1px solid #0f172a',
+      bgcolor: 'var(--panel-2)', border: '1px solid var(--app-bg)',
       borderRadius: 1, minWidth: 0,
     }}>
-      <Typography sx={{ fontSize: 9, color: '#64748b',
+      <Typography sx={{ fontSize: 9, color: 'var(--text-3)',
         letterSpacing: '0.04em', textTransform: 'uppercase',
         whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
         {label}
@@ -81,7 +82,7 @@ const Cell: React.FC<{
         fontFamily: 'monospace', lineHeight: 1.2 }}>
         {value}
         {unit && (
-          <Typography component="span" sx={{ fontSize: 10, color: '#475569',
+          <Typography component="span" sx={{ fontSize: 10, color: 'var(--text-4)',
             ml: 0.5, fontWeight: 400 }}>{unit}</Typography>
         )}
       </Typography>
@@ -93,8 +94,8 @@ const Cell: React.FC<{
 const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) => {
   if (!summary) {
     return (
-      <Paper sx={{ bgcolor: '#0b1220', border: '1px solid #1e293b', p: 2,
-        textAlign: 'center', fontSize: 11, color: '#64748b' }}>
+      <Paper sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', p: 2,
+        textAlign: 'center', fontSize: 11, color: 'var(--text-3)' }}>
         {loading
           ? 'Computing transient FEM — summary will appear when the run completes…'
           : 'No transient data yet — press “Run Simulation” in the left panel.'}
@@ -122,14 +123,14 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
   const stale = dI > 0.05 || dG > 0.05;
 
   return (
-    <Paper sx={{ bgcolor: '#0b1220', border: '1px solid #1e293b', p: 2,
+    <Paper sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', p: 2,
       display: 'flex', flexDirection: 'column', gap: 1 }}>
       <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 2,
         flexWrap: 'wrap' }}>
-        <Typography sx={{ fontSize: 13, color: '#cbd5e1', fontWeight: 700 }}>
+        <Typography sx={{ fontSize: 13, color: 'var(--text-1)', fontWeight: 700 }}>
           Simulation summary — real FEM results
         </Typography>
-        <Typography sx={{ fontSize: 10, color: stale ? '#f59e0b' : '#475569' }}>
+        <Typography sx={{ fontSize: 10, color: stale ? '#f59e0b' : 'var(--text-4)' }}>
           @ {s.rpm} rpm · I_ph = {s.I_phase_rms_A} A_rms · γ = {s.gamma_deg}°
           {stale && (
             <Tooltip title={`Computed at I = ${s.I_phase_rms_A} A, γ = ${s.gamma_deg}° — the panel is now set to `
@@ -203,8 +204,11 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
           tooltip="True RMS of the phase waveform (not peak/√2 — harmonics included)"/>
         <Cell label="V_line RMS" value={fmt(s.V_line_rms_V, 1)} unit="V"
           tooltip="True RMS of the line-to-line waveforms (mean of the 3 pairs)"/>
-        <Cell label="KV (phase)" value={fmt(s.KV_rpm_per_V_phase, 1)} unit="rpm/V"
-          tooltip="rpm / (V₁_phase RMS) — from the FUNDAMENTAL voltage at THIS load point. Not the no-load KV: under field-weakening γ the loaded voltage differs from the back-EMF."/>
+        <Cell label="J coil" value={s.J_coil_A_per_mm2 != null ? fmt(s.J_coil_A_per_mm2, 1) : '—'} unit="A/mm²"
+          accent={s.J_coil_A_per_mm2 == null ? 'default'
+                  : s.J_coil_A_per_mm2 <= 20 ? 'green'
+                  : s.J_coil_A_per_mm2 <= 40 ? 'amber' : 'red'}
+          tooltip="Coil current density = I_phase RMS / (a_parallel × strand copper section, wire_width × wire_height). The thermal-loading figure of merit: ~5–15 A/mm² continuous (natural/liquid cooling), 20–40+ for short peak / forced cooling."/>
         <Cell label="KV (line)" value={fmt(s.KV_rpm_per_V_line, 1)} unit="rpm/V"
           tooltip="rpm / (V₁_LL RMS) — fundamental line-to-line at this load point"/>
       </Box>
@@ -217,13 +221,13 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
             <Box key={i} sx={{
               flex: '1 1 0', minWidth: 0,
               px: 1, py: 0.4,
-              bgcolor: '#060d17', border: '1px solid #0f172a', borderRadius: 1 }}>
-              <Typography sx={{ fontSize: 9, color: '#64748b',
+              bgcolor: 'var(--panel-2)', border: '1px solid var(--app-bg)', borderRadius: 1 }}>
+              <Typography sx={{ fontSize: 9, color: 'var(--text-3)',
                 whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 {c.name}
               </Typography>
               <Typography sx={{ fontSize: 11, fontFamily: 'monospace',
-                color: '#cbd5e1' }}>
+                color: 'var(--text-1)' }}>
                 <b>{fmt(c.mass_kg, 3)} kg</b> · {fmt(pct, 1)}%
               </Typography>
             </Box>

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import time
 import uuid
 from typing import Dict, Optional
@@ -1290,6 +1291,7 @@ async def build_fem_mesh_2d_sliding_band(
     component_mesh:    str   = "",      # JSON {comp: size_mm} per-part mesh size
     pole_copy:         bool  = False,   # bit-identical pole/slot template-copy mesh
     iron_template:     bool  = True,    # deterministic template iron (fallback: gmsh)
+    geo_mesh:          bool  = False,   # geometry-driven CDT mesh (real fillets; full-ring only)
     hi_fidelity:       bool  = False,   # match the SOLVER's hi-fi mesh: feature÷8 + gap≥4
     structured_gap:    bool  = False,   # ANSYS-style concentric-ring gap (experimental toggle)
     geo:               Optional[str] = None,  # per-request geometry override (multi-user)
@@ -1318,6 +1320,7 @@ async def build_fem_mesh_2d_sliding_band(
            round(outer_air_factor, 2), round(band_thickness_mm, 2),
            round(gap_layers, 1), int(n_sectors), round(stator_fillet_mm, 2),
            int(bool(pole_copy)), int(bool(iron_template)), int(bool(hi_fidelity)), int(bool(structured_gap)),
+           int(bool(geo_mesh)),
            tuple(sorted(_comp_mesh.items())), _gh)
     if key in _fem_mesh_sb_cache:
         return _fem_mesh_sb_cache[key]
@@ -1353,6 +1356,8 @@ async def build_fem_mesh_2d_sliding_band(
     # moving band's mid±δ split has no triangles there and would show as a black
     # strip in the display.
     _full_ring_view = int(n_sectors) <= 1
+    # geo mesh now builds the 1/N wedge directly, so the Mesh tab shows the real
+    # sector (no full-ring force).
     # Slip-ring density: SAME adaptive formula as the transient solver, so the
     # Mesh tab shows the mesh the solver actually uses (it used to fall back to
     # the global default ring — a DIFFERENT, coarser grid than any solve).
@@ -1411,6 +1416,7 @@ async def build_fem_mesh_2d_sliding_band(
                 full_ring=_full_ring_view,
                 pole_copy=bool(pole_copy),
                 iron_template=bool(iron_template),
+                geo_mesh=bool(geo_mesh),
             )
     except Exception as e:
         log.exception("sliding-band mesh build failed")
@@ -1509,13 +1515,17 @@ def get_fem_field2d(
     outer_air_factor:    float = 1.3,
     motion_band:         bool  = True,    # accepted for URL compat (SB always bands)
     band_thickness_mm:   float = 0.4,
-    n_sectors:           int   = 4,
+    n_sectors:           int   = 4,       # snapped to a valid divisor of GCD(slots, poles)
     stator_fillet_mm:    float = 0.0,
     I_phase_rms:         Optional[float] = None,   # None = use config; 0 = zero-current
     component_mesh:      str   = "",      # JSON {comp: size_mm} per-part mesh size
     demag:               bool  = False,   # show the irreversible-demag %-map
     pole_copy:           bool  = False,   # bit-identical pole/slot template-copy mesh
     iron_template:       bool  = True,    # deterministic template iron (fallback: gmsh)
+    geo_mesh:            bool  = True,    # geometry-driven CDT mesh (Mesh-tab toggle)
+    structured_gap:      bool  = True,    # ANSYS-style ring gap (merged band)
+    airgap_macro:        bool  = False,   # harmonic gap coupling (moving band)
+    gap_layers:          float = 2.0,     # radial gap rings (K of the macro ladder)
     geo:                 Optional[str] = None,  # per-request geometry override (multi-user)
 ):
     """Field view at ONE rotor angle, computed by the SLIDING-BAND TRANSIENT
@@ -1536,6 +1546,8 @@ def get_fem_field2d(
         int(n_sectors), round(stator_fillet_mm, 2),
         round(I_phase_rms, 2) if I_phase_rms is not None else None,
         int(bool(demag)), int(bool(pole_copy)), int(bool(iron_template)), tuple(sorted(_comp_mesh.items())),
+        int(bool(geo_mesh)), int(bool(structured_gap)), int(bool(airgap_macro)),
+        round(float(gap_layers), 1),
     )
     if _geo_ov:   # distinct cache entry per overridden geometry (no-geo key unchanged)
         key = key + (tuple(sorted(_geo_ov.items())),)
@@ -1554,6 +1566,28 @@ def get_fem_field2d(
     if I_phase_rms is None:
         I_phase_rms = float(_gc().get("simulation", {}).get("max_current", 85.0))
 
+    # Effective (override-aware) motor: the SAME geometry the solver will build.
+    # Used to (a) snap n_sectors to a VALID divisor of GCD(slots, poles) — the
+    # old blind default 4 built a broken wedge on e.g. 12s14p (GCD 2) and the
+    # field view showed a corrupt picture; (b) draw palette/outlines from the
+    # requested geometry instead of the global config.
+    motor = CadQueryMotor()
+    if _geo_ov:
+        motor.set_parameters(_geo_ov)
+    _mp = motor.parameters
+    _slots = int(_mp.get("num_slots") or 0)
+    _poles = int(_mp.get("num_poles") or 0)
+    _gcd = math.gcd(_slots, _poles) if (_slots and _poles) else 1
+    _ns_req = int(n_sectors)
+    _ns_eff = -1                                     # full disk
+    if _ns_req > 1:
+        _valid = [dv for dv in range(2, _gcd + 1) if _gcd % dv == 0]
+        _ns_eff = max([dv for dv in _valid if dv <= _ns_req], default=-1)
+        if _ns_eff != _ns_req:
+            log.info("fem_field2d: n_sectors=%d invalid for %ds%dp (GCD %d) — using %s",
+                     _ns_req, _slots, _poles, _gcd,
+                     "full disk" if _ns_eff < 0 else f"1/{_ns_eff}")
+
     _t0 = _time.time()
     try:
         # 1 step (rotor pinned at the requested angle) → a true single-angle field
@@ -1565,13 +1599,17 @@ def get_fem_field2d(
             gamma_deg=float(gamma_deg), I_phase_rms=float(I_phase_rms),
             mesh_size_mm=float(mesh_size_mm), min_size_mm=float(min_size_mm),
             outer_air_factor=float(outer_air_factor),
-            n_sectors=int(n_sectors) if int(n_sectors) > 1 else -1,
+            n_sectors=_ns_eff,
             stator_fillet_mm=float(stator_fillet_mm),
             eddy=False, rotor_eddy=False, demag=bool(demag),
             return_field=True, field_first=True,
             rotor_angle0_deg=float(rotor_angle_deg),
             pole_copy=bool(pole_copy),
             iron_template=bool(iron_template),
+            geo_mesh=bool(geo_mesh),
+            structured_gap=bool(structured_gap),
+            airgap_macro=bool(airgap_macro),
+            gap_layers=float(gap_layers),
             component_mesh_mm=_comp_mesh,
             geo_override=_geo_ov)
     except Exception as e:
@@ -1590,7 +1628,8 @@ def get_fem_field2d(
     tags = _np.asarray(fld["tags"]).astype(int)
 
     # Collapse per-wire / per-magnet tags → renderer palette (rotor at angle).
-    motor = CadQueryMotor()
+    # `motor` already carries the geo override — palette/outlines match the
+    # requested geometry, not the global config.
     polys = _simplify_polys(
         motor.get_2d_polygons(rotor_angle_deg=float(rotor_angle_deg)),
         tol_mm=0.005, stator_fillet_mm=float(stator_fillet_mm))
@@ -1599,7 +1638,7 @@ def get_fem_field2d(
     for i, (mp, pol) in enumerate(polys.get("magnets", []) or []):
         tags_vis[tags == (DOM_MAG_BASE + i)] = (DOM_MAG_N if pol > 0 else DOM_MAG_S)
 
-    nsec = int(n_sectors) if int(n_sectors) > 1 else 4
+    nsec = _ns_eff if _ns_eff > 1 else 1      # ACTUAL model symmetry (full = 1)
     result = {
         "ok": True,
         "n_vertices": int(P.shape[1]), "n_triangles": int(T.shape[1]),
@@ -1665,6 +1704,19 @@ def get_fem_eddy_field2d(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"eddy solver unavailable: {e}")
     import time as _time
+    # Snap n_sectors to a valid divisor of GCD(slots, poles) — override-aware
+    # (same rule as fem_field2d; a blind 4 breaks e.g. 12s14p).
+    motor = CadQueryMotor()
+    if _geo_ov:
+        motor.set_parameters(_geo_ov)
+    _mp = motor.parameters
+    _slots = int(_mp.get("num_slots") or 0)
+    _poles = int(_mp.get("num_poles") or 0)
+    _gcd = math.gcd(_slots, _poles) if (_slots and _poles) else 1
+    _ns_eff = -1
+    if int(n_sectors) > 1:
+        _valid = [dv for dv in range(2, _gcd + 1) if _gcd % dv == 0]
+        _ns_eff = max([dv for dv in _valid if dv <= int(n_sectors)], default=-1)
     _t0 = _time.time()
     try:
         d = fem_transient_sliding_band(
@@ -1672,7 +1724,7 @@ def get_fem_eddy_field2d(
             gamma_deg=float(gamma_deg), I_phase_rms=float(I_phase_rms),
             mesh_size_mm=float(mesh_size_mm), min_size_mm=float(min_size_mm),
             outer_air_factor=float(outer_air_factor),
-            n_sectors=int(n_sectors) if int(n_sectors) > 1 else -1,
+            n_sectors=_ns_eff,
             coil_temp_c=float(coil_temp_c), eddy=True, rotor_eddy=True,
             return_field=True,
             component_mesh_mm=_comp_mesh,
@@ -1696,7 +1748,7 @@ def get_fem_eddy_field2d(
     Ld = _np.asarray(fld.get("loss_dens") or [], float)   # per-element loss density [W/m³]
 
     # Collapse per-wire / per-magnet tags → renderer palette (rotor at angle 0).
-    motor = CadQueryMotor()
+    # `motor` already carries the geo override (palette matches the request).
     polys = _simplify_polys(motor.get_2d_polygons(rotor_angle_deg=0.0), tol_mm=0.005)
     tags_vis = tags.copy()
     tags_vis[tags >= DOM_COIL_BASE] = DOM_COIL
@@ -1706,7 +1758,7 @@ def get_fem_eddy_field2d(
     def _mean(kk):
         s = d.get(kk) or [0.0]
         return float(_np.mean(_np.asarray(s, float))) if len(s) else 0.0
-    nsec = int(n_sectors) if int(n_sectors) > 1 else 1
+    nsec = _ns_eff if _ns_eff > 1 else 1
     Pcu = float(d.get("P_cu_total_solve_W", 0.0))    # eddy-solve copper (DC+AC)
     Pfe = _mean("P_fe_W"); Pmag = _mean("P_mag_eddy_W")
     Tavg = float(d.get("T_avg_Nm", 0.0)); rpm = float(d.get("rpm", 0.0))
@@ -2556,9 +2608,12 @@ def get_fem_transient(
     component_mesh:      str   = "",      # ← JSON {comp: size_mm} per-part mesh size
     rotor_eddy:          bool  = True,    # ← field-based magnet/shaft eddy losses
     demag:               bool  = False,   # ← per-element irreversible demagnetisation (de-rates Br → torque)
-    torque_filter:       bool  = True,    # ← band-limit T(t) to physical 6·k orders (off = raw)
+    torque_filter:       bool  = False,   # ← band-limit T(t) to physical 6·k orders (off = raw; honest default)
     pole_copy:           bool  = False,   # ← bit-identical pole/slot template-copy mesh
     iron_template:       bool  = True,    # ← deterministic template iron (fallback: gmsh)
+    geo_mesh:            bool  = True,    # ← geometry-driven CDT mesh (real fillets, cell-tiled iron;
+                                          #   full ring + sectors) — matches the Mesh-tab default, so
+                                          #   callers that omit it get the SAME build as Simulation
     hi_fidelity:         bool  = False,   # ← 2× slip nodes + finer mesh → smoother raw torque (slower)
     structured_gap:      bool  = False,   # ← ANSYS-style concentric-ring air-gap mesh (experimental)
     airgap_macro:        bool  = False,   # ← harmonic air-gap macroelement (honest RAW ripple; full ring + sectors)
@@ -2604,7 +2659,7 @@ def get_fem_transient(
                    int(bool(rotor_eddy)), round(gap_layers, 1),
                    int(bool(demag)), int(bool(torque_filter)),
                    int(bool(pole_copy)), int(bool(iron_template)), int(bool(hi_fidelity)), int(bool(structured_gap)),
-                   int(bool(airgap_macro)),
+                   int(bool(airgap_macro)), int(bool(geo_mesh)),
                    tuple(sorted(_comp_mesh.items())),
                    str(drive or "current"), round(float(v_phase_peak), 2),
                    round(float(v_delta_deg), 1), int(bool(harm_ref)))
@@ -2676,7 +2731,7 @@ def get_fem_transient(
                     coil_temp_c=float(coil_temp_c), end_winding_factor=float(end_winding_factor),
                     rotor_eddy=bool(rotor_eddy), demag=bool(demag),
                     torque_filter=bool(torque_filter), pole_copy=bool(pole_copy),
-                    iron_template=bool(iron_template),
+                    iron_template=bool(iron_template), geo_mesh=bool(geo_mesh),
                     component_mesh_mm=_comp_mesh, geo_override=_geo_ov,
                     progress_cb=_sb_progress, hi_fidelity=bool(hi_fidelity),
                     structured_gap=bool(structured_gap),
@@ -3270,7 +3325,7 @@ def get_harm_screening(
     coil_temp_c:         float = 120.0,
     end_winding_factor:  float = 0.0,
     rotor_eddy:          bool  = True,
-    torque_filter:       bool  = True,
+    torque_filter:       bool  = False,
     pole_copy:           bool  = False,
     iron_template:       bool  = True,
     hi_fidelity:         bool  = False,
@@ -3899,6 +3954,16 @@ def _build_transient_summary(
             _kt_I = 0.0
     _kt = round(_Tavg / _kt_I, 4) if _kt_I > 1e-9 else 0.0
 
+    # Coil current density J = conductor current / bare-copper cross-section.
+    # The conductor carries the phase current split over the a_parallel paths
+    # (turns are in series within a path); its cross-section is one strand
+    # (wire_width × wire_height).  This is the standard machine J [A/mm²] — the
+    # thermal-loading figure of merit ("Irms / phase conductor section").
+    _wind = _gc().get("winding", {})
+    _npar = max(1, int(_wind.get("n_parallel", 1) or 1))
+    _a_cond_mm2 = float(_geo_cfg.get("wire_width", 0.0)) * float(_geo_cfg.get("wire_height", 0.0))
+    _j_coil = (float(I_phase_rms) / _npar / _a_cond_mm2) if _a_cond_mm2 > 1e-9 else 0.0
+
     return {
         "rpm": _rpm,
         "I_phase_rms_A": round(float(I_phase_rms), 2),
@@ -3932,6 +3997,7 @@ def _build_transient_summary(
         "I1_A":           _ih["I1_A"],
         "THD_I_pct":      _ih["THD_I_pct"],
         "Kt_Nm_per_Arms": _kt,
+        "J_coil_A_per_mm2": round(_j_coil, 1),   # I_rms/parallel over one strand's copper section
         "P_loss_total_W": round(_ploss, 1),
         "P_core_W":     round(_Pfe, 1),            # laminated iron
         "P_stranded_W": round(_Pcu, 1),            # copper

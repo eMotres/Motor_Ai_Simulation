@@ -23,10 +23,10 @@ interface PartCfg {
 
 const PARTS: PartCfg[] = [
   { key: 'stator_core', label: 'Stator Core',  allowedCategory: 'steel',     accentColor: '#3b82f6', fallbackColor: '#374151' },
-  { key: 'rotor_core',  label: 'Rotor Core',   allowedCategory: 'steel',     accentColor: '#2563eb', fallbackColor: '#1f2937' },
+  { key: 'rotor_core',  label: 'Rotor Core',   allowedCategory: 'steel',     accentColor: '#2563eb', fallbackColor: 'var(--panel-2)' },
   { key: 'magnet',      label: 'Magnets',       allowedCategory: 'magnet',    accentColor: '#ef4444', fallbackColor: '#7f1d1d' },
   { key: 'slot',        label: 'Windings',      allowedCategory: 'conductor', accentColor: '#f59e0b', fallbackColor: '#78350f' },
-  { key: 'shaft',       label: 'Shaft',         allowedCategory: 'steel',     accentColor: '#64748b', fallbackColor: '#1e293b' },
+  { key: 'shaft',       label: 'Shaft',         allowedCategory: 'steel',     accentColor: 'var(--text-3)', fallbackColor: 'var(--panel)' },
 ];
 
 // ─── Part assignment strip ────────────────────────────────────────────────────
@@ -51,7 +51,7 @@ const AssignmentStrip: React.FC<StripProps> = ({
     px: 2,
     py: 1.25,
     bgcolor: '#080f1a',
-    borderTop: '1px solid #1e293b',
+    borderTop: '1px solid var(--line-soft)',
     flexShrink: 0,
   }}>
     {PARTS.map(part => {
@@ -73,7 +73,7 @@ const AssignmentStrip: React.FC<StripProps> = ({
             gap: 0.5,
             p: 1,
             borderRadius: 1.5,
-            border: `1px solid ${isActive ? part.accentColor + '80' : '#1e293b'}`,
+            border: `1px solid ${isActive ? part.accentColor + '80' : 'var(--panel)'}`,
             bgcolor: isActive ? `${part.accentColor}12` : 'transparent',
             cursor: 'pointer',
             transition: 'all 0.15s',
@@ -87,7 +87,7 @@ const AssignmentStrip: React.FC<StripProps> = ({
               bgcolor: inLib ? part.accentColor : part.fallbackColor,
               boxShadow: inLib ? `0 0 5px ${part.accentColor}80` : 'none',
             }}/>
-            <Typography sx={{ fontSize: 10, fontWeight: 600, color: '#94a3b8', letterSpacing: 0.5 }}>
+            <Typography sx={{ fontSize: 10, fontWeight: 600, color: 'var(--text-2)', letterSpacing: 0.5 }}>
               {part.label.toUpperCase()}
             </Typography>
           </Box>
@@ -99,9 +99,9 @@ const AssignmentStrip: React.FC<StripProps> = ({
               size="small"
               sx={{
                 fontSize: 9, height: 18,
-                bgcolor: inLib ? `${part.accentColor}20` : '#1e293b',
-                color: inLib ? part.accentColor : '#475569',
-                border: `1px solid ${inLib ? `${part.accentColor}40` : '#334155'}`,
+                bgcolor: inLib ? `${part.accentColor}20` : 'var(--panel)',
+                color: inLib ? part.accentColor : 'var(--text-4)',
+                border: `1px solid ${inLib ? `${part.accentColor}40` : 'var(--line)'}`,
                 '& .MuiChip-label': { px: 0.75 },
               }}
             />
@@ -126,8 +126,8 @@ const AssignmentStrip: React.FC<StripProps> = ({
                   display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.4,
                   p: '2px 6px', borderRadius: 1, border: 'none', cursor: 'pointer',
                   fontSize: 9, fontWeight: 700, transition: 'all 0.15s',
-                  bgcolor: alreadyAssigned ? '#14532d' : canAssign ? `${part.accentColor}30` : 'transparent',
-                  color: alreadyAssigned ? '#4ade80' : canAssign ? part.accentColor : '#1e293b',
+                  bgcolor: alreadyAssigned ? 'var(--ok-bg)' : canAssign ? `${part.accentColor}30` : 'transparent',
+                  color: alreadyAssigned ? '#4ade80' : canAssign ? part.accentColor : 'var(--panel)',
                   '&:hover:not(:disabled)': { bgcolor: canAssign ? `${part.accentColor}50` : 'transparent' },
                   '&:disabled': { cursor: 'not-allowed' },
                 }}
@@ -162,12 +162,12 @@ const MotorCrossSection: React.FC<Props> = ({ library, selected, assignments, sa
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
 
       {/* Header */}
-      <Box sx={{ px: 2, pt: 1.25, pb: 0.5, flexShrink: 0, borderBottom: '1px solid #1e293b' }}>
-        <Typography variant="overline" sx={{ color: '#475569', letterSpacing: 2, fontSize: 10 }}>
+      <Box sx={{ px: 2, pt: 1.25, pb: 0.5, flexShrink: 0, borderBottom: '1px solid var(--line-soft)' }}>
+        <Typography variant="overline" sx={{ color: 'var(--text-4)', letterSpacing: 2, fontSize: 10 }}>
           Motor Geometry
         </Typography>
         {selected && (
-          <Typography variant="body2" sx={{ color: '#64748b', fontSize: 11 }}>
+          <Typography variant="body2" sx={{ color: 'var(--text-3)', fontSize: 11 }}>
             Select a part below to assign{' '}
             <Box component="span" sx={{ color: '#93c5fd', fontWeight: 600 }}>{selected.name}</Box>
           </Typography>

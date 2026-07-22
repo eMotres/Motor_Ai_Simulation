@@ -143,7 +143,7 @@ const EfficiencyMap: React.FC<{ p: Passport; knobs: Knobs; packMax: number }> = 
 
   return (
     <Box sx={{ mt: 1.5 }}>
-      <Typography sx={{ fontSize: 11, color: '#64748b', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em', mb: 0.5 }}>
+      <Typography sx={{ fontSize: 11, color: 'var(--text-3)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em', mb: 0.5 }}>
         Efficiency map (torque × speed) — ○ operating point · dark = battery can't reach
       </Typography>
       <canvas ref={canvasRef} width={780} height={340} style={{ width: '100%', height: 'auto', display: 'block' }} />

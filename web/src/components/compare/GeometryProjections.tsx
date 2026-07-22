@@ -17,10 +17,10 @@ import type { ReferenceMotor } from '../../lib/referencePassports';
 import { useMotorStore } from '../../stores/motorStore';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001').replace(/\/$/, '');
-const STEEL = '#3b4453', STEEL_DK = '#2a3142', SHAFT = '#5b6675', BG = '#060d17';
-const LABEL ={ fontSize: 11, color: '#64748b', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em' } as const;
-const SUB = { fontSize: 10, color: '#475569', mb: 0.5 } as const;
-const PANEL = { bgcolor: '#0b1424', border: '1px solid #1e293b', borderRadius: 1, p: 1.5 } as const;
+const STEEL = '#3b4453', STEEL_DK = '#2a3142', SHAFT = '#5b6675', BG = 'var(--panel-2)';
+const LABEL ={ fontSize: 11, color: 'var(--text-3)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em' } as const;
+const SUB = { fontSize: 10, color: 'var(--text-4)', mb: 0.5 } as const;
+const PANEL = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1, p: 1.5 } as const;
 
 type Comp = { vertices: number[][]; faces: number[][] };
 type Mesh2D = Record<string, Comp>;
@@ -33,7 +33,7 @@ const colorFor = (key: string): string => {
   if (key.startsWith('rotor')) return STEEL_DK;
   if (key.startsWith('magnet')) return (parseInt(key.split('_')[1] || '0', 10) || 0) % 2 ? '#3b82f6' : '#ef4444';
   if (key.startsWith('coil')) return ['#c27d33', '#b8860b', '#a0651e'][(parseInt(key.split('_')[1] || '0', 10) || 0) % 3];
-  return '#475569';
+  return 'var(--text-4)';
 };
 // Skip the air-gap band meshes (in_band / out_band), the shaft and any air
 // region — only the iron, magnets and copper winding are drawn.

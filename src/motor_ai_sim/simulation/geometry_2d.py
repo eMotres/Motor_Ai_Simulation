@@ -87,6 +87,56 @@ class MotorDomainParams:
     sigma_shaft:  float = 2.5e7    # Al6061 conductivity [S/m]
 
 
+def merge_geo_override(base: dict, override) -> dict:
+    """Merge a per-request geometry override into the base geometry so that the
+    slot/pole COUNTS always describe the motor the CAD actually meshes.
+
+    Invariant: the electrical topology (winding layout, pole pairs, sector BC
+    sign) must equal the MESHED geometry's topology, so the counts here follow
+    the exact resolution the CAD applies:
+
+      • base (config) tier — MotorGeometryParams ALWAYS rebuilds num_slots /
+        num_poles from the segment form (num_seg × *_per_segment), so that
+        product is the truth for the config; explicit counts are only used
+        when the segment form is absent (they can be STALE derived fields from
+        a half-applied preset).
+      • override tier — CadQueryMotor.set_parameters honours the override's
+        explicit counts first, else the override's own segment form (e.g. the
+        40 mm preset's 2×6 / 2×7 = 12 s / 14 p); the base counts survive only
+        when the override says nothing about topology.
+
+    A plain dict-update instead lets one motor's counts survive next to
+    another motor's mesh geometry — a chimera whose winding layout and
+    pole-pair drive are mis-phased against the meshed magnets, so the
+    fundamental never couples (ψ ≈ 0, zero-mean torque on the full ring) and
+    sector models pick the wrong (anti-)periodic BC sign (unbalanced phases).
+    """
+    base = base or {}
+    g = dict(base)
+    if override:
+        g.update({k: v for k, v in override.items()})
+
+    def _seg_product(d: dict, per_key: str):
+        s = d.get("num_seg")
+        k = d.get(per_key)
+        if s and k:
+            return int(round(float(s) * float(k)))
+        return None
+
+    P = _seg_product(base, "num_poles_per_segment") or base.get("num_poles")
+    S = _seg_product(base, "num_slots_per_segment") or base.get("num_slots")
+    if override:
+        P = (override.get("num_poles")
+             or _seg_product(override, "num_poles_per_segment") or P)
+        S = (override.get("num_slots")
+             or _seg_product(override, "num_slots_per_segment") or S)
+    if P:
+        g["num_poles"] = int(round(P))
+    if S:
+        g["num_slots"] = int(round(S))
+    return g
+
+
 def params_from_config(cfg_path: Path = _CFG_PATH, geo_override=None) -> MotorDomainParams:
     """Load MotorDomainParams from motor_config.yaml.
 
@@ -99,7 +149,7 @@ def params_from_config(cfg_path: Path = _CFG_PATH, geo_override=None) -> MotorDo
     with cfg_path.open() as f:
         cfg = yaml.safe_load(f)
 
-    g   = {**cfg["geometry"], **geo_override} if geo_override else cfg["geometry"]
+    g   = merge_geo_override(cfg["geometry"], geo_override)
     mm  = 1e-3
 
     r_so = g["stator_diameter"] / 2 * mm

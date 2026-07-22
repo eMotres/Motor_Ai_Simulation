@@ -24,7 +24,7 @@ export interface SupportCfg {
 }
 type Provider = 'gemini' | 'anthropic';
 const TITLE: Record<Provider, string> = { gemini: 'Google Gemini', anthropic: 'Anthropic Claude' };
-const COLOR: Record<string, string> = { gemini: '#60a5fa', anthropic: '#a78bfa', none: '#64748b' };
+const COLOR: Record<string, string> = { gemini: '#60a5fa', anthropic: '#a78bfa', none: 'var(--text-3)' };
 
 // Curated shortlist of CURRENT models (no retired ones — e.g. Gemini 1.5 is gone).
 // The `*-latest` aliases always track Google's newest stable model.
@@ -33,8 +33,8 @@ const CURATED: Record<Provider, string[]> = {
   anthropic: ['claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5'],
 };
 
-const PANEL = { bgcolor: '#0b1424', border: '1px solid #1e293b', borderRadius: 1.5, p: 2 } as const;
-const STEP = { fontSize: 11, color: '#64748b', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em', mb: 0.75 } as const;
+const PANEL = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5, p: 2 } as const;
+const STEP = { fontSize: 11, color: 'var(--text-3)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em', mb: 0.75 } as const;
 
 const SupportSettings: React.FC<{ cfg: SupportCfg; onSaved: () => void }> = ({ cfg, onSaved }) => {
   const initial: Provider = (cfg.providerOverride === 'anthropic' || cfg.provider === 'anthropic') ? 'anthropic' : 'gemini';
@@ -79,16 +79,16 @@ const SupportSettings: React.FC<{ cfg: SupportCfg; onSaved: () => void }> = ({ c
   return (
     <Paper sx={{ ...PANEL, mt: 3 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 2, flexWrap: 'wrap' }}>
-        <Typography sx={{ fontSize: 15, fontWeight: 800, color: '#e2e8f0' }}>AI support assistant</Typography>
+        <Typography sx={{ fontSize: 15, fontWeight: 800, color: 'var(--text-0)' }}>AI support assistant</Typography>
         <Chip label={`active: ${cfg.provider}`} size="small"
-          sx={{ height: 20, fontSize: 10, fontWeight: 700, bgcolor: '#0e1a2f', color: COLOR[cfg.provider] ?? '#64748b' }} />
+          sx={{ height: 20, fontSize: 10, fontWeight: 700, bgcolor: 'var(--panel-2)', color: COLOR[cfg.provider] ?? 'var(--text-3)' }} />
       </Box>
 
       <Box sx={{ maxWidth: 460 }}>
         {/* Step 1 — company */}
         <Typography sx={STEP}>1 · Company</Typography>
         <Select value={provider} onChange={(e) => choose(e.target.value as Provider)} size="small" fullWidth
-          sx={{ mb: 2, fontSize: 13, bgcolor: '#060d17' }}>
+          sx={{ mb: 2, fontSize: 13, bgcolor: 'var(--panel-2)' }}>
           <MenuItem value="gemini" sx={{ fontSize: 13 }}>Google Gemini</MenuItem>
           <MenuItem value="anthropic" sx={{ fontSize: 13 }}>Anthropic Claude</MenuItem>
         </Select>
@@ -96,8 +96,8 @@ const SupportSettings: React.FC<{ cfg: SupportCfg; onSaved: () => void }> = ({ c
         {/* Step 2 — model */}
         <Typography sx={STEP}>2 · Model</Typography>
         <Select value={opts.includes(model) ? model : ''} onChange={(e) => setModel(e.target.value)} size="small" fullWidth
-          displayEmpty sx={{ mb: 2, fontSize: 13, bgcolor: '#060d17' }}
-          MenuProps={{ PaperProps: { sx: { maxHeight: 340, bgcolor: '#0b1424' } } }}>
+          displayEmpty sx={{ mb: 2, fontSize: 13, bgcolor: 'var(--panel-2)' }}
+          MenuProps={{ PaperProps: { sx: { maxHeight: 340, bgcolor: 'var(--panel-2)' } } }}>
           {opts.length === 0 && <MenuItem value="" disabled sx={{ fontSize: 13 }}>loading…</MenuItem>}
           {opts.map((m) => <MenuItem key={m} value={m} sx={{ fontSize: 13 }}>{m}</MenuItem>)}
         </Select>
@@ -114,12 +114,12 @@ const SupportSettings: React.FC<{ cfg: SupportCfg; onSaved: () => void }> = ({ c
 
       {/* Step 4 — assistant knowledge (system prompt), full width */}
       <Typography sx={{ ...STEP, mt: 2.5 }}>4 · Assistant knowledge {cfg.promptIsCustom ? '· customised' : '· default'}</Typography>
-      <Typography sx={{ fontSize: 10.5, color: '#64748b', mb: 0.75 }}>
+      <Typography sx={{ fontSize: 10.5, color: 'var(--text-3)', mb: 0.75 }}>
         This is what the assistant knows about the app. Edit it to fix wrong answers — it applies immediately on Save. Clear the box and Save to reset to the built-in default.
       </Typography>
       <TextField value={prompt} onChange={(e) => setPrompt(e.target.value)} size="small" fullWidth multiline minRows={8} maxRows={22}
         inputProps={{ style: { fontSize: 12, fontFamily: 'ui-monospace, SFMono-Regular, monospace', lineHeight: 1.5 } }}
-        sx={{ '& .MuiInputBase-root': { bgcolor: '#060d17' } }} />
+        sx={{ '& .MuiInputBase-root': { bgcolor: 'var(--panel-2)' } }} />
 
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mt: 2 }}>
         <Button variant="contained" onClick={() => void save()} disabled={saving || !model}
@@ -128,10 +128,10 @@ const SupportSettings: React.FC<{ cfg: SupportCfg; onSaved: () => void }> = ({ c
         </Button>
         {msg && <Typography sx={{ fontSize: 12.5, color: msg.ok ? '#4ade80' : '#f87171' }}>{msg.text}</Typography>}
         <Box sx={{ flex: 1 }} />
-        <Typography sx={{ fontSize: 10, color: '#64748b' }}>store: {cfg.store}</Typography>
+        <Typography sx={{ fontSize: 10, color: 'var(--text-3)' }}>store: {cfg.store}</Typography>
       </Box>
 
-      <Typography sx={{ fontSize: 10.5, color: '#64748b', mt: 1.5, lineHeight: 1.5 }}>
+      <Typography sx={{ fontSize: 10.5, color: 'var(--text-3)', mt: 1.5, lineHeight: 1.5 }}>
         Keys are stored on the server and never shown again — only a masked hint.
         {envOnly
           ? ' This server has no settings store (Firebase Admin SDK not configured), so saving is disabled here — set keys via Cloud Run env vars.'

@@ -29,7 +29,7 @@ const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 
 const TIERS = ['free', 'pro', 'team', 'admin'] as const;
 const TIER_COLOR: Record<string, string> = {
-  anon: '#475569', free: '#64748b', pro: '#3b82f6', team: '#a855f7', admin: '#fbbf24',
+  anon: 'var(--text-4)', free: 'var(--text-3)', pro: '#3b82f6', team: '#a855f7', admin: '#fbbf24',
 };
 
 interface AdminUser {
@@ -47,12 +47,12 @@ interface AdminTicket {
   status: string; email: string | null; createdAt: number | null;
 }
 const TICKET_STATUSES = ['open', 'in_progress', 'resolved', 'closed'] as const;
-const T_STATUS_COLOR: Record<string, string> = { open: '#60a5fa', in_progress: '#fbbf24', resolved: '#4ade80', closed: '#64748b' };
-const T_TYPE_COLOR: Record<string, string> = { bug: '#f87171', feature: '#a78bfa', question: '#64748b' };
+const T_STATUS_COLOR: Record<string, string> = { open: '#60a5fa', in_progress: '#fbbf24', resolved: '#4ade80', closed: 'var(--text-3)' };
+const T_TYPE_COLOR: Record<string, string> = { bug: '#f87171', feature: '#a78bfa', question: 'var(--text-3)' };
 
-const PANEL = { bgcolor: '#0b1424', border: '1px solid #1e293b', borderRadius: 1.5, p: 2 } as const;
-const CARD = { bgcolor: '#060d17', border: '1px solid #1e293b', borderRadius: 1, px: 2, py: 1.25, flex: 1, minWidth: 130 } as const;
-const LABEL = { fontSize: 10, color: '#64748b', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' } as const;
+const PANEL = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5, p: 2 } as const;
+const CARD = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1, px: 2, py: 1.25, flex: 1, minWidth: 130 } as const;
+const LABEL = { fontSize: 10, color: 'var(--text-3)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' } as const;
 
 const fmtDate = (ms?: number | null) =>
   ms ? new Date(ms).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : '—';
@@ -70,8 +70,8 @@ const StatCard: React.FC<{ label: string; value: React.ReactNode; sub?: string; 
   ({ label, value, sub, color }) => (
     <Box sx={CARD}>
       <Typography sx={LABEL}>{label}</Typography>
-      <Typography sx={{ fontSize: 24, fontWeight: 800, color: color ?? '#e2e8f0', lineHeight: 1.2 }}>{value}</Typography>
-      {sub && <Typography sx={{ fontSize: 10, color: '#475569' }}>{sub}</Typography>}
+      <Typography sx={{ fontSize: 24, fontWeight: 800, color: color ?? 'var(--text-0)', lineHeight: 1.2 }}>{value}</Typography>
+      {sub && <Typography sx={{ fontSize: 10, color: 'var(--text-4)' }}>{sub}</Typography>}
     </Box>
   );
 
@@ -141,32 +141,32 @@ const AdminPanel: React.FC = () => {
     <Box sx={{ height: '100%', overflowY: 'auto', p: 2 }}>
       {/* header */}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 2, flexWrap: 'wrap' }}>
-        <Typography sx={{ fontSize: 18, fontWeight: 800, color: '#e2e8f0' }}>Admin · Users &amp; statistics</Typography>
+        <Typography sx={{ fontSize: 18, fontWeight: 800, color: 'var(--text-0)' }}>Admin · Users &amp; statistics</Typography>
         {source === 'mock' && (
           <Tooltip title="Firebase Admin SDK isn't configured here — showing sample users. Real data appears in production once the Cloud Run service account has Firebase Auth access.">
             <Chip label="DEMO DATA" size="small" sx={{ bgcolor: '#422006', color: '#fbbf24', fontWeight: 700, fontSize: 10, height: 20 }} />
           </Tooltip>
         )}
         {source === 'firebase' && (
-          <Chip label="LIVE" size="small" sx={{ bgcolor: '#052e16', color: '#4ade80', fontWeight: 700, fontSize: 10, height: 20 }} />
+          <Chip label="LIVE" size="small" sx={{ bgcolor: 'var(--ok-bg)', color: '#4ade80', fontWeight: 700, fontSize: 10, height: 20 }} />
         )}
         <Box sx={{ flex: 1 }} />
         <Button size="small" startIcon={<RefreshIcon sx={{ fontSize: 16 }} />} onClick={() => void load()} disabled={loading}
-          sx={{ color: '#94a3b8', textTransform: 'none', fontSize: 12 }}>
+          sx={{ color: 'var(--text-2)', textTransform: 'none', fontSize: 12 }}>
           Refresh
         </Button>
       </Box>
 
       {loading && (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, color: '#64748b', py: 4 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, color: 'var(--text-3)', py: 4 }}>
           <CircularProgress size={18} /> <Typography sx={{ fontSize: 13 }}>Loading users…</Typography>
         </Box>
       )}
       {error && !loading && (
         <Paper sx={{ ...PANEL, borderColor: '#7f1d1d', mb: 2 }}>
           <Typography sx={{ color: '#f87171', fontSize: 13, fontWeight: 700 }}>Couldn't load admin data</Typography>
-          <Typography sx={{ color: '#94a3b8', fontSize: 12, mt: 0.5 }}>{error}</Typography>
-          <Typography sx={{ color: '#475569', fontSize: 11, mt: 1 }}>
+          <Typography sx={{ color: 'var(--text-2)', fontSize: 12, mt: 0.5 }}>{error}</Typography>
+          <Typography sx={{ color: 'var(--text-4)', fontSize: 11, mt: 1 }}>
             In production this endpoint is admin-only — make sure you're signed in with an admin account.
           </Typography>
         </Paper>
@@ -198,8 +198,8 @@ const AdminPanel: React.FC = () => {
                 {TIERS.map((t) => (
                   <Box key={t} sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                     <Box sx={{ width: 10, height: 10, borderRadius: '2px', bgcolor: TIER_COLOR[t] }} />
-                    <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>{t}</Typography>
-                    <Typography sx={{ fontSize: 12, color: '#e2e8f0', fontWeight: 700 }}>{stats.byTier[t] ?? 0}</Typography>
+                    <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{t}</Typography>
+                    <Typography sx={{ fontSize: 12, color: 'var(--text-0)', fontWeight: 700 }}>{stats.byTier[t] ?? 0}</Typography>
                   </Box>
                 ))}
               </Box>
@@ -215,12 +215,12 @@ const AdminPanel: React.FC = () => {
                       <stop offset="100%" stopColor="#3b82f6" stopOpacity={0} />
                     </linearGradient>
                   </defs>
-                  <CartesianGrid stroke="#1e293b" strokeDasharray="3 3" />
-                  <XAxis dataKey="date" tick={{ fill: '#475569', fontSize: 9 }} minTickGap={28} />
-                  <YAxis tick={{ fill: '#475569', fontSize: 9 }} allowDecimals={false} width={28} />
-                  <RcTooltip contentStyle={{ backgroundColor: '#0b1424', border: '1px solid #1e293b', borderRadius: 6, fontSize: 11 }}
-                    labelStyle={{ color: '#94a3b8' }} formatter={(v: number) => [v, 'total users']} />
-                  <Area type="monotone" dataKey="total" stroke="#3b82f6" strokeWidth={2} fill="url(#sg)" />
+                  <CartesianGrid stroke="var(--panel)" strokeDasharray="3 3" />
+                  <XAxis dataKey="date" tick={{ fill: 'var(--text-4)', fontSize: 9 }} minTickGap={28} />
+                  <YAxis tick={{ fill: 'var(--text-4)', fontSize: 9 }} allowDecimals={false} width={28} />
+                  <RcTooltip contentStyle={{ backgroundColor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 6, fontSize: 11 }}
+                    labelStyle={{ color: 'var(--text-2)' }} formatter={(v: number) => [v, 'total users']} />
+                  <Area type="monotone" dataKey="total" stroke="#3b82f6" strokeWidth={1.25} fill="url(#sg)" />
                 </AreaChart>
               </ResponsiveContainer>
             </Paper>
@@ -229,8 +229,8 @@ const AdminPanel: React.FC = () => {
           {/* user table */}
           <Paper sx={{ ...PANEL, p: 0, overflow: 'hidden' }}>
             <Table size="small" sx={{
-              '& td, & th': { borderColor: '#1e293b', fontSize: 12.5 },
-              '& th': { color: '#64748b', fontWeight: 700, textTransform: 'uppercase', fontSize: 10, letterSpacing: '0.04em' },
+              '& td, & th': { borderColor: 'var(--panel)', fontSize: 12.5 },
+              '& th': { color: 'var(--text-3)', fontWeight: 700, textTransform: 'uppercase', fontSize: 10, letterSpacing: '0.04em' },
             }}>
               <TableHead>
                 <TableRow>
@@ -246,9 +246,9 @@ const AdminPanel: React.FC = () => {
                 {users.map((u) => (
                   <TableRow key={u.uid} hover sx={{ opacity: u.disabled ? 0.55 : 1 }}>
                     <TableCell>
-                      <Typography sx={{ fontSize: 13, color: '#e2e8f0', fontWeight: 600 }}>{u.email ?? u.uid}</Typography>
+                      <Typography sx={{ fontSize: 13, color: 'var(--text-0)', fontWeight: 600 }}>{u.email ?? u.uid}</Typography>
                       {u.displayName && u.displayName !== (u.email ?? '').split('@')[0] && (
-                        <Typography sx={{ fontSize: 10.5, color: '#475569' }}>{u.displayName}</Typography>
+                        <Typography sx={{ fontSize: 10.5, color: 'var(--text-4)' }}>{u.displayName}</Typography>
                       )}
                     </TableCell>
                     <TableCell>
@@ -256,9 +256,9 @@ const AdminPanel: React.FC = () => {
                         value={u.tier} variant="standard" disableUnderline disabled={busy === u.uid}
                         onChange={(e) => void changeTier(u.uid, e.target.value)}
                         sx={{
-                          fontSize: 12, fontWeight: 700, color: TIER_COLOR[u.tier] ?? '#94a3b8',
+                          fontSize: 12, fontWeight: 700, color: TIER_COLOR[u.tier] ?? 'var(--text-2)',
                           '& .MuiSelect-select': { py: 0.25, pr: '20px !important' },
-                          '& svg': { color: '#475569' },
+                          '& svg': { color: 'var(--text-4)' },
                         }}
                       >
                         {TIERS.map((t) => (
@@ -266,9 +266,9 @@ const AdminPanel: React.FC = () => {
                         ))}
                       </Select>
                     </TableCell>
-                    <TableCell sx={{ color: '#94a3b8' }}>{fmtDate(u.createdAt)}</TableCell>
-                    <TableCell sx={{ color: '#94a3b8' }}>{rel(u.lastLoginAt)}</TableCell>
-                    <TableCell align="right" sx={{ color: u.designCount ? '#e2e8f0' : '#475569', fontWeight: 600 }}>{u.designCount}</TableCell>
+                    <TableCell sx={{ color: 'var(--text-2)' }}>{fmtDate(u.createdAt)}</TableCell>
+                    <TableCell sx={{ color: 'var(--text-2)' }}>{rel(u.lastLoginAt)}</TableCell>
+                    <TableCell align="right" sx={{ color: u.designCount ? 'var(--text-0)' : 'var(--text-4)', fontWeight: 600 }}>{u.designCount}</TableCell>
                     <TableCell align="center">
                       {u.disabled ? (
                         <Button size="small" disabled={busy === u.uid} onClick={() => void toggleDisabled(u.uid, false)}
@@ -279,7 +279,7 @@ const AdminPanel: React.FC = () => {
                       ) : (
                         <Button size="small" disabled={busy === u.uid} onClick={() => void toggleDisabled(u.uid, true)}
                           startIcon={<BlockIcon sx={{ fontSize: 14 }} />}
-                          sx={{ color: '#94a3b8', textTransform: 'none', fontSize: 11, minWidth: 0, '&:hover': { color: '#f87171' } }}>
+                          sx={{ color: 'var(--text-2)', textTransform: 'none', fontSize: 11, minWidth: 0, '&:hover': { color: '#f87171' } }}>
                           Disable
                         </Button>
                       )}
@@ -288,7 +288,7 @@ const AdminPanel: React.FC = () => {
                 ))}
                 {users.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={6} sx={{ color: '#475569', textAlign: 'center', py: 3 }}>
+                    <TableCell colSpan={6} sx={{ color: 'var(--text-4)', textAlign: 'center', py: 3 }}>
                       No users yet.
                     </TableCell>
                   </TableRow>
@@ -299,15 +299,15 @@ const AdminPanel: React.FC = () => {
 
           {/* support tickets */}
           <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1, mt: 3, mb: 1 }}>
-            <Typography sx={{ fontSize: 15, fontWeight: 800, color: '#e2e8f0' }}>Support tickets</Typography>
-            <Typography sx={{ fontSize: 11, color: '#64748b' }}>
+            <Typography sx={{ fontSize: 15, fontWeight: 800, color: 'var(--text-0)' }}>Support tickets</Typography>
+            <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>
               {tickets.length} · {tickets.filter((t) => t.status === 'open').length} open
             </Typography>
           </Box>
           <Paper sx={{ ...PANEL, p: 0, overflow: 'hidden' }}>
             <Table size="small" sx={{
-              '& td, & th': { borderColor: '#1e293b', fontSize: 12.5 },
-              '& th': { color: '#64748b', fontWeight: 700, textTransform: 'uppercase', fontSize: 10, letterSpacing: '0.04em' },
+              '& td, & th': { borderColor: 'var(--panel)', fontSize: 12.5 },
+              '& th': { color: 'var(--text-3)', fontWeight: 700, textTransform: 'uppercase', fontSize: 10, letterSpacing: '0.04em' },
             }}>
               <TableHead>
                 <TableRow>
@@ -322,25 +322,25 @@ const AdminPanel: React.FC = () => {
                 {tickets.map((t) => (
                   <TableRow key={t.id} hover>
                     <TableCell>
-                      <Chip label={t.type} size="small" sx={{ height: 18, fontSize: 9.5, bgcolor: '#0e1a2f', color: T_TYPE_COLOR[t.type] ?? '#64748b' }} />
+                      <Chip label={t.type} size="small" sx={{ height: 18, fontSize: 9.5, bgcolor: 'var(--panel-2)', color: T_TYPE_COLOR[t.type] ?? 'var(--text-3)' }} />
                     </TableCell>
                     <TableCell>
-                      <Typography sx={{ fontSize: 13, color: '#e2e8f0', fontWeight: 600 }}>{t.title}</Typography>
+                      <Typography sx={{ fontSize: 13, color: 'var(--text-0)', fontWeight: 600 }}>{t.title}</Typography>
                       {t.description && (
-                        <Typography sx={{ fontSize: 10.5, color: '#475569', maxWidth: 380, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        <Typography sx={{ fontSize: 10.5, color: 'var(--text-4)', maxWidth: 380, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                           {t.description}
                         </Typography>
                       )}
                     </TableCell>
-                    <TableCell sx={{ color: '#94a3b8' }}>{t.email ?? t.uid}</TableCell>
-                    <TableCell sx={{ color: '#94a3b8' }}>{fmtDate(t.createdAt)}</TableCell>
+                    <TableCell sx={{ color: 'var(--text-2)' }}>{t.email ?? t.uid}</TableCell>
+                    <TableCell sx={{ color: 'var(--text-2)' }}>{fmtDate(t.createdAt)}</TableCell>
                     <TableCell>
                       <Select
                         value={t.status} variant="standard" disableUnderline disabled={busy === t.id}
                         onChange={(e) => void changeTicketStatus(t, e.target.value)}
                         sx={{
-                          fontSize: 12, fontWeight: 700, color: T_STATUS_COLOR[t.status] ?? '#94a3b8',
-                          '& .MuiSelect-select': { py: 0.25, pr: '20px !important' }, '& svg': { color: '#475569' },
+                          fontSize: 12, fontWeight: 700, color: T_STATUS_COLOR[t.status] ?? 'var(--text-2)',
+                          '& .MuiSelect-select': { py: 0.25, pr: '20px !important' }, '& svg': { color: 'var(--text-4)' },
                         }}
                       >
                         {TICKET_STATUSES.map((s) => (
@@ -352,7 +352,7 @@ const AdminPanel: React.FC = () => {
                 ))}
                 {tickets.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={5} sx={{ color: '#475569', textAlign: 'center', py: 3 }}>No tickets yet.</TableCell>
+                    <TableCell colSpan={5} sx={{ color: 'var(--text-4)', textAlign: 'center', py: 3 }}>No tickets yet.</TableCell>
                   </TableRow>
                 )}
               </TableBody>

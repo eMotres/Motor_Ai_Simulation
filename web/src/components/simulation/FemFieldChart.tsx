@@ -656,12 +656,12 @@ const ColorBar: React.FC<{
       <Box sx={{
         width: 12, height: 200,
         background: `linear-gradient(to top, ${stops.join(', ')})`,
-        border: '1px solid #1e293b',
+        border: '1px solid var(--line-soft)',
       }}/>
       <Box sx={{ display: 'flex', flexDirection: 'column-reverse',
         justifyContent: 'space-between', height: 200 }}>
         {ticks.map((t, i) => (
-          <Typography key={i} sx={{ fontSize: 9, color: '#94a3b8',
+          <Typography key={i} sx={{ fontSize: 9, color: 'var(--text-2)',
             fontFamily: 'monospace', lineHeight: 1 }}>
             {f(t)} {unit}
           </Typography>
@@ -676,12 +676,12 @@ const StatRow: React.FC<{ label: string; value: string; sub?: string }> = ({
   label, value, sub,
 }) => (
   <Box sx={{ display: 'flex', justifyContent: 'space-between',
-    py: 0.4, borderBottom: '1px solid #0f172a' }}>
+    py: 0.4, borderBottom: '1px solid var(--app-bg)' }}>
     <Box>
-      <Typography sx={{ fontSize: 10, color: '#64748b' }}>{label}</Typography>
-      {sub && <Typography sx={{ fontSize: 9, color: '#334155' }}>{sub}</Typography>}
+      <Typography sx={{ fontSize: 10, color: 'var(--text-3)' }}>{label}</Typography>
+      {sub && <Typography sx={{ fontSize: 9, color: 'var(--line)' }}>{sub}</Typography>}
     </Box>
-    <Typography sx={{ fontSize: 11, color: '#cbd5e1', fontFamily: 'monospace' }}>
+    <Typography sx={{ fontSize: 11, color: 'var(--text-1)', fontFamily: 'monospace' }}>
       {value}
     </Typography>
   </Box>
@@ -776,6 +776,13 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
       // Bit-identical pole/slot mesh (Mesh-tab toggle) — keep the field view
       // consistent with the mesh/sim the user is verifying.
       pole_copy:         String(readMeshSetting('poleCopy', false)),
+      // SAME mesh pipeline as the transient (Mesh-tab toggles) — the field
+      // view must show the exact mesh the simulation solves on.
+      iron_template:     String(readMeshSetting('ironTemplate', true)),
+      geo_mesh:          String(readMeshSetting('geoMesh', true)),
+      structured_gap:    String(readMeshSetting('structuredGap', false) || readMeshSetting('ironTemplate', true)),
+      airgap_macro:      String(readMeshSetting('harmonicGap', false)),
+      gap_layers:        String(readMeshSetting('gapLayers', 2)),
     };
     if (I_phase_rms !== undefined) {
       params.I_phase_rms = String(I_phase_rms);
@@ -884,11 +891,11 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
   }, [isThermal, thermalPayload, thermalLoading, thermalErr]);
 
   return (
-    <Paper sx={{ bgcolor: '#0b1220', border: '1px solid #1e293b', p: 2,
+    <Paper sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', p: 2,
       display: 'flex', flexDirection: 'column', gap: 1 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <Box>
-          <Typography sx={{ fontSize: 13, color: '#cbd5e1', fontWeight: 700 }}>
+          <Typography sx={{ fontSize: 13, color: 'var(--text-1)', fontWeight: 700 }}>
             {mode === 'Temp'
               ? <>Temperature — °C (steady-state thermal solve)</>
               : mode === 'Loss'
@@ -899,10 +906,10 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
             <Tooltip title={isEddy
               ? "Time-coupled eddy-current solve over a full electrical period. J⟳ shows the real current density σ(−∂A/∂t+U) crowding toward the slot mouth (proximity effect); Loss is the cycle-averaged dissipation density [W/m³] — iron Bertotti + copper DC+AC + magnet eddy, normalised so the map integrates to the reported component losses."
               : "2-D magnetostatic field at the current rotor angle — the same per-frame field the sliding-band transient sweeps. Torque + losses are ×n_sectors for the full motor."} placement="top">
-              <span style={{ color: '#475569', marginLeft: 6, fontSize: 11, cursor: 'help' }}>ⓘ</span>
+              <span style={{ color: 'var(--text-4)', marginLeft: 6, fontSize: 11, cursor: 'help' }}>ⓘ</span>
             </Tooltip>
           </Typography>
-          <Typography sx={{ fontSize: 10, color: '#475569' }}>
+          <Typography sx={{ fontSize: 10, color: 'var(--text-4)' }}>
             {payload
               ? (subHeader
                    ? subHeader
@@ -915,8 +922,8 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
             onChange={(_, v) => v && setMode(v as FieldMode)}
             sx={{
               '& .MuiToggleButton-root': { py: 0.2, px: 1.2, fontSize: 11,
-                color: '#64748b', borderColor: '#1e293b', textTransform: 'none',
-                '&.Mui-selected': { color: '#e2e8f0', bgcolor: '#1e3a5f',
+                color: 'var(--text-3)', borderColor: 'var(--panel)', textTransform: 'none',
+                '&.Mui-selected': { color: 'var(--text-0)', bgcolor: 'var(--line-accent)',
                   borderColor: '#3b82f6' }}}}>
             <ToggleButton value="Az">A<sub>z</sub></ToggleButton>
             <ToggleButton value="Bmag">|B|</ToggleButton>
@@ -945,7 +952,7 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
             <Button size="small" onClick={() => setLogLoss(v => !v)}
               title="Toggle log / linear colour scale"
               sx={{ color: '#93c5fd', fontSize: 10, textTransform: 'none',
-                minWidth: 0, px: 1, border: '1px solid #1e293b' }}>
+                minWidth: 0, px: 1, border: '1px solid var(--line-soft)' }}>
               {logLoss ? 'log' : 'lin'}
             </Button>
           )}
@@ -953,7 +960,7 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
             <Button size="small" onClick={() => setEqTemp(v => !v)}
               title="Colour scale: Equalised spreads the full blue→red spectrum over the temperature distribution (vivid, non-linear); Linear is a true °C scale."
               sx={{ color: '#93c5fd', fontSize: 10, textTransform: 'none',
-                minWidth: 0, px: 1, border: '1px solid #1e293b' }}>
+                minWidth: 0, px: 1, border: '1px solid var(--line-soft)' }}>
               {eqTemp ? 'equalised' : 'linear'}
             </Button>
           )}
@@ -1031,8 +1038,8 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
 
               <Button size="small" onClick={() => setShowFlux(v => !v)}
                 title="Toggle heat-flux arrows"
-                sx={{ color: showFlux ? '#e2e8f0' : '#64748b', fontSize: 10, textTransform: 'none',
-                  minWidth: 0, px: 1, border: '1px solid #1e293b' }}>
+                sx={{ color: showFlux ? 'var(--text-0)' : 'var(--text-3)', fontSize: 10, textTransform: 'none',
+                  minWidth: 0, px: 1, border: '1px solid var(--line-soft)' }}>
                 flux
               </Button>
             </Box>
@@ -1059,15 +1066,15 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
         gridTemplateColumns: 'minmax(0, 1fr) auto',
         gap: 1, height: 460 }}>
         {/* Canvas */}
-        <Box sx={{ position: 'relative', border: '1px solid #0f172a',
-          bgcolor: '#060d17', minHeight: 460 }}>
+        <Box sx={{ position: 'relative', border: '1px solid var(--app-bg)',
+          bgcolor: 'var(--panel-2)', minHeight: 460 }}>
           {busy && (
             <Box sx={{ position: 'absolute', inset: 0, flexDirection: 'column',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               bgcolor: 'rgba(6,13,23,0.7)', zIndex: 5, gap: 1 }}>
               <CircularProgress size={32}/>
               {(isEddy || isThermal) && (
-                <Typography sx={{ fontSize: 11, color: '#94a3b8' }}>
+                <Typography sx={{ fontSize: 11, color: 'var(--text-2)' }}>
                   {isThermal
                     ? 'Running thermal solve (EM losses + conduction, ~25 s)…'
                     : 'Running eddy-current transient (~25 s)…'}
@@ -1076,7 +1083,7 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
             </Box>
           )}
           {payload && (
-            <Canvas style={{ background: '#060d17' }}>
+            <Canvas style={{ background: 'var(--panel-2)' }}>
               <OrthographicCamera makeDefault position={[0, 0, 300]}
                 near={0.1} far={5000}/>
               <FitView payload={payload} controlsRef={controlsRef}/>
@@ -1211,13 +1218,13 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
                 { label: 'A_z range',      value: `[${(payload.A_z_min*1000).toFixed(2)}, ${(payload.A_z_max*1000).toFixed(2)}] mWb/m` },
               ]
           ).map(s => (
-            <Box key={s.label} sx={{ p: 1, bgcolor: '#060d17',
-              border: '1px solid #0f172a', borderRadius: 1 }}>
-              <Typography sx={{ fontSize: 9, color: '#475569',
+            <Box key={s.label} sx={{ p: 1, bgcolor: 'var(--panel-2)',
+              border: '1px solid var(--app-bg)', borderRadius: 1 }}>
+              <Typography sx={{ fontSize: 9, color: 'var(--text-4)',
                 textTransform: 'uppercase', letterSpacing: '0.06em' }}>
                 {s.label}
               </Typography>
-              <Typography sx={{ fontSize: 13, fontWeight: 700, color: '#cbd5e1' }}>
+              <Typography sx={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>
                 {s.value}
               </Typography>
             </Box>
@@ -1226,14 +1233,14 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
       )}
 
       {isEddy ? (
-        <Typography sx={{ fontSize: 9, color: '#64748b', mt: 0.5 }}>
+        <Typography sx={{ fontSize: 9, color: 'var(--text-3)', mt: 0.5 }}>
           {mode === 'Loss'
             ? `Cycle-averaged loss density [W/m³] from the eddy-current transient — iron Bertotti + copper (DC I²R + AC proximity) + magnet eddy, each normalised so the map integrates to the reported component losses. ${logLoss ? 'Log' : 'Linear'} scale (toggle top-right).`
             : 'Real current density σ(−∂A/∂t+U) from the eddy solve — current crowds toward the slot opening (proximity). Compare with the uniform magnetostatic "J".'}
           {eddyNoLoad && ' No winding current (I=0): the copper loss shown is ONLY eddy/proximity induced by the spinning magnets (concentrated near the slot opening) — there is no I²R. Set a load current to see I²R copper loss and current crowding.'}
         </Typography>
       ) : (
-        <Typography sx={{ fontSize: 9, color: '#334155', mt: 0.5 }}>
+        <Typography sx={{ fontSize: 9, color: 'var(--line)', mt: 0.5 }}>
           Same mesh + Solver-Domain settings as the Mesh tab (read from
           localStorage). Sector mode uses anti-periodic Dirichlet BC on the
           radial cuts so torque, |B| and flux linkages are physically correct
@@ -1244,7 +1251,7 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
         <Box sx={{ mt: 0.5, p: 0.75, border: '1px solid', borderRadius: 1,
           borderColor: payload.demag_report.some(r => r.demagnetised)
             ? '#dc2626' : '#fbbf24',
-          bgcolor: '#0f0a05' }}>
+          bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)' }}>
           <Typography sx={{ fontSize: 10, fontWeight: 700,
             color: payload.demag_report.some(r => r.demagnetised)
               ? '#fca5a5' : '#fde68a', mb: 0.5 }}>

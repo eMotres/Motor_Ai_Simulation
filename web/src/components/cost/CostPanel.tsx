@@ -17,7 +17,7 @@ const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 interface CostLine { item: string; mass_kg?: number | null; unit_price_per_kg?: number | null; cost: number; }
 interface CostIR { currency: string; total: number; lines: CostLine[]; }
 
-const COLORS = { copper: '#d97706', magnet: '#dc2626', steel: '#475569', shaft: '#0ea5e9', labor: '#4f46e5' };
+const COLORS = { copper: '#d97706', magnet: '#dc2626', steel: 'var(--text-4)', shaft: '#0ea5e9', labor: '#4f46e5' };
 const colorFor = (item: string): string => {
   const k = item.toLowerCase();
   if (k.includes('copper') || k.includes('wind') || k.includes('strand')) return COLORS.copper;
@@ -27,7 +27,7 @@ const colorFor = (item: string): string => {
   return COLORS.steel;
 };
 
-const CARD = { bgcolor: '#0b1424', border: '1px solid #1e293b', borderRadius: 1.5, p: 2 } as const;
+const CARD = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5, p: 2 } as const;
 const PRICE_FIELDS = [
   { key: 'copper', label: 'Copper' },
   { key: 'magnet', label: 'Magnet (NdFeB)' },
@@ -71,16 +71,16 @@ const CostPanel: React.FC = () => {
   const totalMass = lines.reduce((s, l) => s + (l.mass_kg || 0), 0);
 
   return (
-    <Box sx={{ height: '100%', overflowY: 'auto', p: 2.5, bgcolor: '#060d17' }}>
+    <Box sx={{ height: '100%', overflowY: 'auto', p: 2.5, bgcolor: 'var(--panel-2)' }}>
       <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1.5, mb: 0.5, flexWrap: 'wrap' }}>
-        <Typography sx={{ fontSize: 20, fontWeight: 800, color: '#e2e8f0' }}>Material Cost</Typography>
-        <Typography sx={{ fontSize: 12, color: '#64748b', fontFamily: 'monospace' }}>via modules: geometry.2d → cost</Typography>
+        <Typography sx={{ fontSize: 20, fontWeight: 800, color: 'var(--text-0)' }}>Material Cost</Typography>
+        <Typography sx={{ fontSize: 12, color: 'var(--text-3)', fontFamily: 'monospace' }}>via modules: geometry.2d → cost</Typography>
         <Box sx={{ flex: 1 }} />
         <Button size="small" variant="contained" onClick={run} disabled={busy} sx={{ textTransform: 'none' }}>
           {busy ? 'Computing…' : 'Re-estimate'}
         </Button>
       </Box>
-      <Typography sx={{ fontSize: 12.5, color: '#94a3b8', mb: 2, maxWidth: 760 }}>
+      <Typography sx={{ fontSize: 12.5, color: 'var(--text-2)', mb: 2, maxWidth: 760 }}>
         Active-material cost of the configured motor: region area × stack length × density × unit price, plus a flat
         labor line. Computed through the modular kernel (no FEM) — it re-estimates as the geometry or prices change.
       </Typography>
@@ -95,20 +95,20 @@ const CostPanel: React.FC = () => {
             {PRICE_FIELDS.map(f => (
               <Box key={f.key} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                 <Box sx={{ width: 10, height: 10, borderRadius: '2px', bgcolor: colorFor(f.key), flexShrink: 0 }} />
-                <Typography sx={{ fontSize: 12, color: '#cbd5e1', flex: 1 }}>{f.label}</Typography>
+                <Typography sx={{ fontSize: 12, color: 'var(--text-1)', flex: 1 }}>{f.label}</Typography>
                 <TextField type="number" size="small" value={prices[f.key]}
                   onChange={(e) => setPrices(p => ({ ...p, [f.key]: parseFloat(e.target.value) || 0 }))}
-                  InputProps={{ endAdornment: <span style={{ fontSize: 10, color: '#64748b' }}>$/kg</span> }}
+                  InputProps={{ endAdornment: <span style={{ fontSize: 10, color: 'var(--text-3)' }}>$/kg</span> }}
                   sx={{ width: 116, '& input': { fontSize: 12, py: 0.5 } }} />
               </Box>
             ))}
-            <Divider sx={{ borderColor: '#1e293b', my: 0.5 }} />
+            <Divider sx={{ borderColor: 'var(--panel)', my: 0.5 }} />
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <Box sx={{ width: 10, height: 10, borderRadius: '2px', bgcolor: COLORS.labor, flexShrink: 0 }} />
-              <Typography sx={{ fontSize: 12, color: '#cbd5e1', flex: 1 }}>Labor (flat)</Typography>
+              <Typography sx={{ fontSize: 12, color: 'var(--text-1)', flex: 1 }}>Labor (flat)</Typography>
               <TextField type="number" size="small" value={labor}
                 onChange={(e) => setLabor(parseFloat(e.target.value) || 0)}
-                InputProps={{ endAdornment: <span style={{ fontSize: 10, color: '#64748b' }}>$</span> }}
+                InputProps={{ endAdornment: <span style={{ fontSize: 10, color: 'var(--text-3)' }}>$</span> }}
                 sx={{ width: 116, '& input': { fontSize: 12, py: 0.5 } }} />
             </Box>
           </Box>
@@ -119,14 +119,14 @@ const CostPanel: React.FC = () => {
         {/* ── Breakdown + total ── */}
         <Paper sx={{ ...CARD, flex: 1, minWidth: 360 }}>
           {busy && !cost && (
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, color: '#64748b', py: 2 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, color: 'var(--text-3)', py: 2 }}>
               <CircularProgress size={16} /> Running pipeline through the kernel…
             </Box>
           )}
           {cost && (
             <>
               {/* Composition bar */}
-              <Box sx={{ display: 'flex', height: 16, borderRadius: 1, overflow: 'hidden', mb: 2, border: '1px solid #1e293b' }}>
+              <Box sx={{ display: 'flex', height: 16, borderRadius: 1, overflow: 'hidden', mb: 2, border: '1px solid var(--line-soft)' }}>
                 {lines.filter(l => l.cost > 0).map(l => (
                   <Box key={l.item} title={`${l.item}: $${l.cost.toFixed(2)}`}
                     sx={{ width: `${(l.cost / Math.max(cost.total, 1e-6)) * 100}%`, bgcolor: colorFor(l.item) }} />
@@ -135,35 +135,35 @@ const CostPanel: React.FC = () => {
 
               {/* Table */}
               <Box sx={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr 1fr 1fr', rowGap: 0.6, columnGap: 1, alignItems: 'center' }}>
-                <Typography sx={{ fontSize: 11, color: '#64748b' }}>Item</Typography>
-                <Typography sx={{ fontSize: 11, color: '#64748b', textAlign: 'right' }}>Mass</Typography>
-                <Typography sx={{ fontSize: 11, color: '#64748b', textAlign: 'right' }}>$/kg</Typography>
-                <Typography sx={{ fontSize: 11, color: '#64748b', textAlign: 'right' }}>Cost</Typography>
+                <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>Item</Typography>
+                <Typography sx={{ fontSize: 11, color: 'var(--text-3)', textAlign: 'right' }}>Mass</Typography>
+                <Typography sx={{ fontSize: 11, color: 'var(--text-3)', textAlign: 'right' }}>$/kg</Typography>
+                <Typography sx={{ fontSize: 11, color: 'var(--text-3)', textAlign: 'right' }}>Cost</Typography>
                 {lines.map(l => (
                   <React.Fragment key={l.item}>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, minWidth: 0 }}>
                       <Box sx={{ width: 8, height: 8, borderRadius: '2px', bgcolor: colorFor(l.item), flexShrink: 0 }} />
-                      <Typography sx={{ fontSize: 12, color: '#cbd5e1', textTransform: 'capitalize', fontFamily: 'monospace',
+                      <Typography sx={{ fontSize: 12, color: 'var(--text-1)', textTransform: 'capitalize', fontFamily: 'monospace',
                         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.item}</Typography>
                     </Box>
-                    <Typography sx={{ fontSize: 12, color: '#94a3b8', textAlign: 'right', fontFamily: 'monospace' }}>
+                    <Typography sx={{ fontSize: 12, color: 'var(--text-2)', textAlign: 'right', fontFamily: 'monospace' }}>
                       {l.mass_kg != null ? `${l.mass_kg.toFixed(4)} kg` : '—'}</Typography>
-                    <Typography sx={{ fontSize: 12, color: '#94a3b8', textAlign: 'right', fontFamily: 'monospace' }}>
+                    <Typography sx={{ fontSize: 12, color: 'var(--text-2)', textAlign: 'right', fontFamily: 'monospace' }}>
                       {l.unit_price_per_kg != null ? `$${l.unit_price_per_kg.toFixed(2)}` : '—'}</Typography>
-                    <Typography sx={{ fontSize: 12, color: '#e2e8f0', textAlign: 'right', fontFamily: 'monospace' }}>
+                    <Typography sx={{ fontSize: 12, color: 'var(--text-0)', textAlign: 'right', fontFamily: 'monospace' }}>
                       ${l.cost.toFixed(2)}</Typography>
                   </React.Fragment>
                 ))}
               </Box>
 
-              <Divider sx={{ borderColor: '#1e293b', my: 1.5 }} />
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#94a3b8', mb: 0.5 }}>
+              <Divider sx={{ borderColor: 'var(--panel)', my: 1.5 }} />
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text-2)', mb: 0.5 }}>
                 <span>Active material ({totalMass.toFixed(3)} kg)</span><span>${materialTotal.toFixed(2)}</span>
               </Box>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-                <Typography sx={{ fontSize: 16, fontWeight: 800, color: '#e2e8f0' }}>Total</Typography>
+                <Typography sx={{ fontSize: 16, fontWeight: 800, color: 'var(--text-0)' }}>Total</Typography>
                 <Typography sx={{ fontSize: 22, fontWeight: 800, color: '#34d399' }}>
-                  ${cost.total.toFixed(2)} <span style={{ fontSize: 13, color: '#64748b' }}>{cost.currency}</span>
+                  ${cost.total.toFixed(2)} <span style={{ fontSize: 13, color: 'var(--text-3)' }}>{cost.currency}</span>
                 </Typography>
               </Box>
             </>

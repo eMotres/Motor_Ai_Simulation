@@ -61,7 +61,7 @@ const CoolingControls: React.FC<{ diameterMm?: number }> = ({ diameterMm }) => {
 
   return (
     <Box sx={{ mt: 1.5 }}>
-      <Typography sx={{ fontSize: 11, fontWeight: 700, color: '#64748b', letterSpacing: 0.5, mb: 0.75 }}>
+      <Typography sx={{ fontSize: 11, fontWeight: 700, color: 'var(--text-3)', letterSpacing: 0.5, mb: 0.75 }}>
         COOLING — outer stator surface
       </Typography>
       <Tooltip title="Air: h from air speed (cylinder cross-flow). Liquid: inlet temp + flow → outlet temp + jacket h. Used by the coupled EM↔thermal solve." placement="right">
@@ -85,7 +85,7 @@ const CoolingControls: React.FC<{ diameterMm?: number }> = ({ diameterMm }) => {
       </Box>
       <Chip size="small" label={`h ≈ ${h.toFixed(0)} W/m²K  ${isAir ? (h > 7 ? '· forced' : '· natural') : '· jacket'}`}
         sx={{ width: '100%', justifyContent: 'flex-start', fontFamily: 'monospace', fontWeight: 700,
-          bgcolor: '#0f2942', color: '#7dd3fc' }} />
+          bgcolor: 'var(--line-accent)', color: 'var(--brand)' }} />
     </Box>
   );
 };

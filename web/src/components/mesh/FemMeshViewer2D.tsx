@@ -131,7 +131,7 @@ const FemMeshViewer2D: React.FC<Props> = ({ payload, showWire = false }) => {
   if (!payload || payload.n_triangles === 0) return null;
   return (
     <canvas ref={canvasRef}
-      style={{ display: 'block', width: '100%', height: '100%', cursor: 'grab', background: '#060d17' }}
+      style={{ display: 'block', width: '100%', height: '100%', cursor: 'grab', background: 'var(--panel-2)' }}
       onWheel={onWheel} onMouseDown={onDown} onMouseMove={onMove}
       onMouseUp={onUp} onMouseLeave={onUp} onDoubleClick={onDouble} />
   );

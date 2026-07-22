@@ -13,8 +13,8 @@ const HelpTip: React.FC<{ title: React.ReactNode }> = ({ title }) => (
   <Tooltip title={title} placement="top" arrow enterTouchDelay={0}
     componentsProps={{ tooltip: { sx: { fontSize: 11, maxWidth: 300, lineHeight: 1.4 } } }}>
     <InfoOutlinedIcon
-      sx={{ fontSize: 15, color: '#475569', cursor: 'help', flexShrink: 0,
-        '&:hover': { color: '#94a3b8' } }} />
+      sx={{ fontSize: 15, color: 'var(--text-4)', cursor: 'help', flexShrink: 0,
+        '&:hover': { color: 'var(--text-2)' } }} />
   </Tooltip>
 );
 

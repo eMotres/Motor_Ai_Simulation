@@ -295,7 +295,7 @@ const FemMeshViewer3D: React.FC<ViewerProps> = ({
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%' }}>
     <Canvas
-      style={{ width: '100%', height: '100%', display: 'block', background: '#060d17' }}
+      style={{ width: '100%', height: '100%', display: 'block', background: 'var(--panel-2)' }}
       resize={{ debounce: 0 }}>
       <ResizeFix/>
       <OrthographicCamera makeDefault position={[0, 0, 300]} near={0.1} far={5000}/>
@@ -308,10 +308,10 @@ const FemMeshViewer3D: React.FC<ViewerProps> = ({
           args={[400, 400]}
           cellSize={5}
           cellThickness={0.3}
-          cellColor="#1e293b"
+          cellColor="var(--panel)"
           sectionSize={25}
           sectionThickness={0.6}
-          sectionColor="#334155"
+          sectionColor="var(--line)"
           fadeDistance={250}
           fadeStrength={1.5}
           rotation={[Math.PI / 2, 0, 0]}

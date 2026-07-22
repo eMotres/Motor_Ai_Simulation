@@ -25,7 +25,7 @@ const CATEGORIES: {
   icon: React.ReactNode;
   chip?: string;
 }[] = [
-  { key: 'steel',     label: 'Lamination Steel', color: '#64748b', icon: <LayersIcon sx={{ fontSize: 14 }} />, chip: 'EM' },
+  { key: 'steel',     label: 'Lamination Steel', color: 'var(--text-3)', icon: <LayersIcon sx={{ fontSize: 14 }} />, chip: 'EM' },
   { key: 'magnet',    label: 'Magnets',           color: '#ef4444', icon: <MagnetIcon sx={{ fontSize: 14 }} />, chip: 'PM' },
   { key: 'conductor', label: 'Metal',              color: '#f59e0b', icon: <CableIcon  sx={{ fontSize: 14 }} /> },
   { key: 'insulator', label: 'Insulators',         color: '#3fae5a', icon: <InsulatorIcon sx={{ fontSize: 14 }} />, chip: 'INS' },
@@ -82,7 +82,7 @@ const MaterialsLibraryTree: React.FC<Props> = ({ library, loading, error, select
     <Box sx={{ height: '100%', overflowY: 'auto' }}>
       {/* Header */}
       <Box sx={{ px: 2, pt: 2, pb: 1 }}>
-        <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, color: '#475569', letterSpacing: '0.1em', textTransform: 'uppercase' }}>
+        <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, color: 'var(--text-4)', letterSpacing: '0.1em', textTransform: 'uppercase' }}>
           Materials Library
         </Typography>
       </Box>
@@ -102,8 +102,8 @@ const MaterialsLibraryTree: React.FC<Props> = ({ library, loading, error, select
                 borderLeft: `3px solid ${cat.color}`,
                 mx: 1, borderRadius: 1,
                 mb: '2px',
-                bgcolor: 'rgba(255,255,255,0.03)',
-                '&:hover': { bgcolor: 'rgba(255,255,255,0.06)' },
+                bgcolor: 'var(--line-soft)',
+                '&:hover': { bgcolor: 'var(--line-soft)' },
               }}
             >
               <ListItemIcon sx={{ minWidth: 24, color: cat.color }}>
@@ -112,7 +112,7 @@ const MaterialsLibraryTree: React.FC<Props> = ({ library, loading, error, select
               <ListItemText
                 primary={cat.label}
                 primaryTypographyProps={{
-                  sx: { fontSize: '0.75rem', fontWeight: 600, color: '#cbd5e1' },
+                  sx: { fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-1)' },
                 }}
               />
               {cat.chip && (
@@ -122,7 +122,7 @@ const MaterialsLibraryTree: React.FC<Props> = ({ library, loading, error, select
                   sx={{ height: 16, fontSize: '0.6rem', bgcolor: `${cat.color}22`, color: cat.color, mr: 0.5 }}
                 />
               )}
-              <Typography sx={{ fontSize: '0.65rem', color: '#475569', mr: 0.5 }}>
+              <Typography sx={{ fontSize: '0.65rem', color: 'var(--text-4)', mr: 0.5 }}>
                 {items.length}
               </Typography>
               {canAdd && onAdd && (
@@ -133,13 +133,13 @@ const MaterialsLibraryTree: React.FC<Props> = ({ library, loading, error, select
                     aria-label={`add ${cat.label} material`}
                     onClick={(e) => { e.stopPropagation(); onAdd(cat.key); }}
                     sx={{ display: 'inline-flex', alignItems: 'center', p: 0.25, mr: 0.25,
-                          cursor: 'pointer', color: '#475569', '&:hover': { color: cat.color } }}
+                          cursor: 'pointer', color: 'var(--text-4)', '&:hover': { color: cat.color } }}
                   >
                     <AddIcon sx={{ fontSize: 14 }} />
                   </Box>
                 </Tooltip>
               )}
-              {isOpen ? <ExpandLessIcon sx={{ fontSize: 14, color: '#475569' }} /> : <ExpandMoreIcon sx={{ fontSize: 14, color: '#475569' }} />}
+              {isOpen ? <ExpandLessIcon sx={{ fontSize: 14, color: 'var(--text-4)' }} /> : <ExpandMoreIcon sx={{ fontSize: 14, color: 'var(--text-4)' }} />}
             </ListItemButton>
 
             {/* Material items */}
@@ -163,14 +163,14 @@ const MaterialsLibraryTree: React.FC<Props> = ({ library, loading, error, select
                           borderLeft: `2px solid ${cat.color}`,
                           '&:hover': { bgcolor: `${cat.color}28` },
                         },
-                        '&:hover': { bgcolor: 'rgba(255,255,255,0.04)' },
+                        '&:hover': { bgcolor: 'var(--line-soft)' },
                       }}
                     >
                       <Box sx={{ flex: 1, minWidth: 0 }}>
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0 }}>
                           <Typography sx={{
                             fontSize: '0.72rem',
-                            color: isSelected ? '#e2e8f0' : '#94a3b8',
+                            color: isSelected ? 'var(--text-0)' : 'var(--text-2)',
                             fontWeight: isSelected ? 600 : 400,
                             whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
                           }}>
@@ -183,7 +183,7 @@ const MaterialsLibraryTree: React.FC<Props> = ({ library, loading, error, select
                             <Chip label="shared" size="small" sx={{ height: 14, fontSize: '0.55rem', bgcolor: '#38bdf822', color: '#38bdf8', flexShrink: 0, '& .MuiChip-label': { px: 0.5 } }} />
                           )}
                         </Box>
-                        <Typography sx={{ fontSize: '0.62rem', color: '#475569', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        <Typography sx={{ fontSize: '0.62rem', color: 'var(--text-4)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                           {subtitleFor(cat.key, data)}
                         </Typography>
                       </Box>

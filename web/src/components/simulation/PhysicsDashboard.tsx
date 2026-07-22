@@ -38,8 +38,8 @@ const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
 // ── palette ───────────────────────────────────────────────────────────────────
 const C = {
   A: '#f87171', B: '#4ade80', C: '#60a5fa',
-  bg: '#060d17', paper: '#0a1628', border: '#1e293b',
-  grid: '#1e293b', axis: '#475569',
+  bg: 'var(--panel-2)', paper: 'var(--panel-2)', border: 'var(--panel)',
+  grid: 'var(--panel)', axis: 'var(--text-4)',
   MMF: '#a78bfa', B_total: '#fbbf24', B_winding: '#38bdf8', B_pm: '#f97316',
   Cu: '#fbbf24', Fe_s: '#f87171', Fe_r: '#fb923c', Mag: '#a78bfa',
 };
@@ -128,8 +128,8 @@ const CHART_STYLE = {
 const AXIS_STYLE   = { stroke: C.axis, fontSize: 10 };
 const GRID_STYLE   = { stroke: C.grid, strokeDasharray: '3 3' };
 const TOOLTIP_STYLE = {
-  contentStyle: { backgroundColor: '#1e293b', border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 11 },
-  labelStyle:   { color: '#94a3b8' },
+  contentStyle: { backgroundColor: 'var(--panel)', border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 11 },
+  labelStyle:   { color: 'var(--text-2)' },
 };
 
 function SectionLabel({ title, note, tooltip }: { title: string; note?: string; tooltip?: string }) {
@@ -138,10 +138,10 @@ function SectionLabel({ title, note, tooltip }: { title: string; note?: string; 
       <Typography sx={{ fontSize: 11, fontWeight: 700, color: '#3b82f6',
         textTransform: 'uppercase', letterSpacing: '0.08em' }}>{title}</Typography>
       {note && <Chip label={note} size="small"
-        sx={{ fontSize: 9, height: 16, bgcolor: '#1e293b', color: '#64748b' }}/>}
+        sx={{ fontSize: 9, height: 16, bgcolor: 'var(--panel)', color: 'var(--text-3)' }}/>}
       {tooltip && (
         <Tooltip title={tooltip} placement="right">
-          <InfoOutlinedIcon sx={{ fontSize: 13, color: '#334155', cursor: 'help' }}/>
+          <InfoOutlinedIcon sx={{ fontSize: 13, color: 'var(--line)', cursor: 'help' }}/>
         </Tooltip>
       )}
     </Box>
@@ -160,7 +160,7 @@ function exportCSV(filename: string, rows: Record<string, number | string>[]) {
 }
 
 // ── main component ────────────────────────────────────────────────────────────
-const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_rms, pinnLosses, runNonce = 0, onBusyChange, steps = 12, fresh = false, onSummary, fieldLosses = true, demag = false, torqueFilter = true, drive = 'current', vPeak = 0, vDelta = 0 }) => {
+const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_rms, pinnLosses, runNonce = 0, onBusyChange, steps = 12, fresh = false, onSummary, fieldLosses = true, demag = false, torqueFilter = false, drive = 'current', vPeak = 0, vDelta = 0 }) => {
   // Latest FEM solve payload — kept around so future siblings can reuse it.
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [_femPayload, setFemPayload] = React.useState<FemPayload | null>(null);
@@ -292,17 +292,17 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
 
       {/* ── Header ── */}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
-        <Typography variant="h6" sx={{ color: '#e2e8f0', fontWeight: 700 }}>
+        <Typography variant="h6" sx={{ color: 'var(--text-0)', fontWeight: 700 }}>
           Physics Dashboard
         </Typography>
-        <Chip label="real FEM" size="small" sx={{ fontSize: 10, bgcolor: '#1a2e1a', color: '#4ade80' }}/>
+        <Chip label="real FEM" size="small" sx={{ fontSize: 10, bgcolor: 'var(--ok-bg)', color: '#4ade80' }}/>
         {/* fixed status slot — refresh spinner / analytics error render HERE so
             the tree below never unmounts (see the loading note above) */}
         {loading && <CircularProgress size={14} thickness={6} sx={{ color: '#3b82f6' }}/>}
         {error && !loading &&
           <Typography sx={{ fontSize: 11, color: '#ef4444' }}>analytics refresh failed: {error}</Typography>}
         <Box sx={{ flex: 1 }}/>
-        <IconButton size="small" onClick={fetchData} sx={{ color: '#475569' }}>
+        <IconButton size="small" onClick={fetchData} sx={{ color: 'var(--text-4)' }}>
           <RefreshIcon fontSize="small"/>
         </IconButton>
       </Box>
@@ -320,11 +320,11 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
           shows the FEM-computed T_em / P_mech / efficiency. */}
       <Paper sx={{ ...CHART_STYLE,
         borderColor: data.torque.T_em_Nm > 0.5 ? '#4ade80' : '#f97316',
-        bgcolor: '#060d17', display: 'none' }}>
+        bgcolor: 'var(--panel-2)', display: 'none' }}>
         <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 2, flexWrap: 'wrap' }}>
           {/* Main torque value */}
           <Box sx={{ flex: '0 0 auto', textAlign: 'center',
-            bgcolor: '#0a2010', border: '1px solid #14532d',
+            bgcolor: 'var(--ok-bg)', border: '1px solid var(--ok-bg)',
             borderRadius: 2, px: 3, py: 2, minWidth: 140 }}>
             <Typography sx={{ fontSize: 11, color: '#4ade80', textTransform: 'uppercase',
               letterSpacing: '0.1em', mb: 0.5 }}>Torque T_em</Typography>
@@ -332,34 +332,34 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
               color: data.torque.T_em_Nm > 0.5 ? '#4ade80' : '#f97316' }}>
               {data.torque.T_em_Nm.toFixed(1)}
             </Typography>
-            <Typography sx={{ fontSize: 14, color: '#64748b' }}>N·m</Typography>
-            <Typography sx={{ fontSize: 9, color: '#475569', mt: 0.5 }}>
+            <Typography sx={{ fontSize: 14, color: 'var(--text-3)' }}>N·m</Typography>
+            <Typography sx={{ fontSize: 9, color: 'var(--text-4)', mt: 0.5 }}>
               γ = {data.torque.gamma_deg}°
             </Typography>
           </Box>
 
           {/* Max torque at gamma=90 */}
           <Box sx={{ flex: '0 0 auto', textAlign: 'center',
-            bgcolor: '#0a1020', border: '1px solid #1e293b',
+            bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)',
             borderRadius: 2, px: 2, py: 2, minWidth: 120 }}>
             <Typography sx={{ fontSize: 10, color: '#3b82f6', textTransform: 'uppercase',
               letterSpacing: '0.08em', mb: 0.5 }}>T_max (γ=90°)</Typography>
             <Typography sx={{ fontSize: 28, fontWeight: 800, color: '#3b82f6' }}>
               {data.torque.T_max_Nm.toFixed(1)}
             </Typography>
-            <Typography sx={{ fontSize: 13, color: '#64748b' }}>N·m</Typography>
+            <Typography sx={{ fontSize: 13, color: 'var(--text-3)' }}>N·m</Typography>
           </Box>
 
           {/* Power */}
           <Box sx={{ flex: '0 0 auto', textAlign: 'center',
-            bgcolor: '#0a1020', border: '1px solid #1e293b',
+            bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)',
             borderRadius: 2, px: 2, py: 2, minWidth: 120 }}>
             <Typography sx={{ fontSize: 10, color: '#a78bfa', textTransform: 'uppercase',
               letterSpacing: '0.08em', mb: 0.5 }}>P_mech (γ=90°)</Typography>
             <Typography sx={{ fontSize: 28, fontWeight: 800, color: '#a78bfa' }}>
               {(data.torque.P_mech_max_W / 1000).toFixed(1)}
             </Typography>
-            <Typography sx={{ fontSize: 13, color: '#64748b' }}>kW</Typography>
+            <Typography sx={{ fontSize: 13, color: 'var(--text-3)' }}>kW</Typography>
           </Box>
 
           {/* Efficiency at gamma=90 */}
@@ -369,8 +369,8 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
             const eta = P_m / (P_m + P_l) * 100;
             return (
               <Box sx={{ flex: '0 0 auto', textAlign: 'center',
-                bgcolor: eta > 93 ? '#0a2010' : '#1a1000',
-                border: `1px solid ${eta > 93 ? '#14532d' : '#78350f'}`,
+                bgcolor: eta > 93 ? 'var(--ok-bg)' : '#1a1000',
+                border: `1px solid ${eta > 93 ? 'var(--ok-bg)' : '#78350f'}`,
                 borderRadius: 2, px: 2, py: 2, minWidth: 100 }}>
                 <Typography sx={{ fontSize: 10, color: eta > 93 ? '#4ade80' : '#fbbf24',
                   textTransform: 'uppercase', letterSpacing: '0.08em', mb: 0.5 }}>η (est.)</Typography>
@@ -378,7 +378,7 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
                   color: eta > 93 ? '#4ade80' : '#fbbf24' }}>
                   {eta.toFixed(1)}
                 </Typography>
-                <Typography sx={{ fontSize: 13, color: '#64748b' }}>%</Typography>
+                <Typography sx={{ fontSize: 13, color: 'var(--text-3)' }}>%</Typography>
               </Box>
             );
           })()}
@@ -396,8 +396,8 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
               ['k_w (winding factor)', `${data.torque.k_w}`],
             ].map(([k, v]) => (
               <Box key={k as string} sx={{ display: 'flex', justifyContent: 'space-between', py: 0.2 }}>
-                <Typography sx={{ fontSize: 10, color: '#64748b' }}>{k}</Typography>
-                <Typography sx={{ fontSize: 10, fontWeight: 600, color: '#e2e8f0' }}>{v}</Typography>
+                <Typography sx={{ fontSize: 10, color: 'var(--text-3)' }}>{k}</Typography>
+                <Typography sx={{ fontSize: 10, fontWeight: 600, color: 'var(--text-0)' }}>{v}</Typography>
               </Box>
             ))}
           </Box>
@@ -422,15 +422,15 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
           <Typography sx={{ fontSize: 11, fontWeight: 700, color: '#3b82f6',
             textTransform: 'uppercase', letterSpacing: '0.08em' }}>Component Masses</Typography>
           <Chip label={`${data.masses.total_active_kg} kg active`} size="small"
-            sx={{ fontSize: 10, bgcolor: '#1e3a5f', color: '#93c5fd' }}/>
+            sx={{ fontSize: 10, bgcolor: 'var(--line-accent)', color: '#93c5fd' }}/>
           <Chip label={`~${data.masses.estimated_total_with_frame_kg} kg with frame`}
-            size="small" sx={{ fontSize: 10, bgcolor: '#1e293b', color: '#64748b' }}/>
+            size="small" sx={{ fontSize: 10, bgcolor: 'var(--panel)', color: 'var(--text-3)' }}/>
         </Box>
         <Box sx={{ display: 'grid', gridTemplateColumns: '1fr auto auto auto', gap: '1px',
-          bgcolor: '#1e293b', borderRadius: 1, overflow: 'hidden' }}>
+          bgcolor: 'var(--panel)', borderRadius: 1, overflow: 'hidden' }}>
           {['Component', 'Material', 'Vol [cm³]', 'Mass [kg]'].map(h => (
-            <Box key={h} sx={{ bgcolor: '#0a1628', px: 1.5, py: 0.75 }}>
-              <Typography sx={{ fontSize: 9, color: '#475569', fontWeight: 700,
+            <Box key={h} sx={{ bgcolor: 'var(--panel-2)', px: 1.5, py: 0.75 }}>
+              <Typography sx={{ fontSize: 9, color: 'var(--text-4)', fontWeight: 700,
                 textTransform: 'uppercase' }}>{h}</Typography>
             </Box>
           ))}
@@ -438,19 +438,19 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
             const colors = ['#f87171','#fbbf24','#38bdf8','#f87171','#4ade80'];
             return (
               <React.Fragment key={i}>
-                <Box sx={{ bgcolor: '#060d17', px: 1.5, py: 0.6 }}>
+                <Box sx={{ bgcolor: 'var(--panel-2)', px: 1.5, py: 0.6 }}>
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
                     <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: colors[i], flexShrink: 0 }}/>
-                    <Typography sx={{ fontSize: 10, color: '#94a3b8' }}>{c.name}</Typography>
+                    <Typography sx={{ fontSize: 10, color: 'var(--text-2)' }}>{c.name}</Typography>
                   </Box>
                 </Box>
-                <Box sx={{ bgcolor: '#060d17', px: 1.5, py: 0.6 }}>
-                  <Typography sx={{ fontSize: 10, color: '#475569' }}>{c.material}</Typography>
+                <Box sx={{ bgcolor: 'var(--panel-2)', px: 1.5, py: 0.6 }}>
+                  <Typography sx={{ fontSize: 10, color: 'var(--text-4)' }}>{c.material}</Typography>
                 </Box>
-                <Box sx={{ bgcolor: '#060d17', px: 1.5, py: 0.6, textAlign: 'right' }}>
-                  <Typography sx={{ fontSize: 10, color: '#64748b' }}>{c.volume_cm3}</Typography>
+                <Box sx={{ bgcolor: 'var(--panel-2)', px: 1.5, py: 0.6, textAlign: 'right' }}>
+                  <Typography sx={{ fontSize: 10, color: 'var(--text-3)' }}>{c.volume_cm3}</Typography>
                 </Box>
-                <Box sx={{ bgcolor: '#060d17', px: 1.5, py: 0.6, textAlign: 'right' }}>
+                <Box sx={{ bgcolor: 'var(--panel-2)', px: 1.5, py: 0.6, textAlign: 'right' }}>
                   <Typography sx={{ fontSize: 11, fontWeight: 700, color: colors[i] }}>
                     {c.mass_kg}
                   </Typography>
@@ -458,20 +458,20 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
               </React.Fragment>
             );
           })}
-          <Box sx={{ bgcolor: '#0a1628', px: 1.5, py: 0.75, gridColumn: 'span 3',
-            borderTop: '1px solid #1e293b' }}>
-            <Typography sx={{ fontSize: 10, fontWeight: 700, color: '#e2e8f0' }}>
+          <Box sx={{ bgcolor: 'var(--panel-2)', px: 1.5, py: 0.75, gridColumn: 'span 3',
+            borderTop: '1px solid var(--line-soft)' }}>
+            <Typography sx={{ fontSize: 10, fontWeight: 700, color: 'var(--text-0)' }}>
               Total active components
             </Typography>
           </Box>
-          <Box sx={{ bgcolor: '#0a1628', px: 1.5, py: 0.75, textAlign: 'right',
-            borderTop: '1px solid #1e293b' }}>
+          <Box sx={{ bgcolor: 'var(--panel-2)', px: 1.5, py: 0.75, textAlign: 'right',
+            borderTop: '1px solid var(--line-soft)' }}>
             <Typography sx={{ fontSize: 13, fontWeight: 800, color: '#fbbf24' }}>
               {data.masses.total_active_kg} kg
             </Typography>
           </Box>
         </Box>
-        <Typography sx={{ fontSize: 9, color: '#334155', mt: 1 }}>
+        <Typography sx={{ fontSize: 9, color: 'var(--line)', mt: 1 }}>
           {data.masses.note}
           {` Power density: ${(data.torque.P_mech_max_W / data.masses.total_active_kg / 1000).toFixed(1)} kW/kg active
             — ${(data.torque.P_mech_max_W / data.masses.estimated_total_with_frame_kg / 1000).toFixed(1)} kW/kg with frame.`}
@@ -506,22 +506,22 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
           ].map(({ label, val, color, note }) => (
             <Box key={label} sx={{
               display: 'flex', flexDirection: 'column', alignItems: 'center',
-              bgcolor: '#060d17', border: `1px solid ${color}33`,
+              bgcolor: 'var(--panel-2)', border: `1px solid ${color}33`,
               borderRadius: 1.5, px: 2, py: 1.5, minWidth: 90, flex: 1,
             }}>
-              <Typography sx={{ fontSize: 9, color: '#64748b', mb: 0.25 }}>{label}</Typography>
+              <Typography sx={{ fontSize: 9, color: 'var(--text-3)', mb: 0.25 }}>{label}</Typography>
               <Typography sx={{ fontSize: 20, fontWeight: 800, color, lineHeight: 1.1 }}>
                 {val >= 1000 ? `${(val/1000).toFixed(1)}k` : val.toFixed(0)}
               </Typography>
-              <Typography sx={{ fontSize: 9, color: '#475569' }}>W</Typography>
-              <Typography sx={{ fontSize: 8, color: '#334155', mt: 0.25, textAlign: 'center' }}>
+              <Typography sx={{ fontSize: 9, color: 'var(--text-4)' }}>W</Typography>
+              <Typography sx={{ fontSize: 8, color: 'var(--line)', mt: 0.25, textAlign: 'center' }}>
                 {note}
               </Typography>
             </Box>
           ))}
         </Box>
-        <Box sx={{ mt: 1, p: 1, bgcolor: '#060d17', borderRadius: 1 }}>
-          <Typography sx={{ fontSize: 9, color: '#475569' }}>
+        <Box sx={{ mt: 1, p: 1, bgcolor: 'var(--panel-2)', borderRadius: 1 }}>
+          <Typography sx={{ fontSize: 9, color: 'var(--text-4)' }}>
             {data.losses.model_note}
             {` f_slot = ${data.losses.f_slot_Hz?.toFixed(0)} Hz (slot harmonic in rotor frame = f_e × N_slots / p).`}
             {` eta_analytical = ${(data.torque.P_mech_max_W / (data.torque.P_mech_max_W + data.losses.P_total_W) * 100).toFixed(1)}%`}
@@ -556,12 +556,12 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
           <SectionLabel title="Magnetomotive Force MMF(θ)"
             note="analytical"
             tooltip="Spatial distribution of winding MMF around the airgap. Rectangular steps from concentrated slots. Ansys shows the same from FEA current density."/>
-          <IconButton size="small" sx={{ color: '#334155' }}
+          <IconButton size="small" sx={{ color: 'var(--line)' }}
             onClick={() => exportCSV('MMF.csv', spatialData.map(p => ({ theta: p.theta, MMF: p.MMF })))}>
             <DownloadIcon fontSize="small"/>
           </IconButton>
         </Box>
-        <Typography sx={{ fontSize: 10, color: '#475569', mb: 1 }}>
+        <Typography sx={{ fontSize: 10, color: 'var(--text-4)', mb: 1 }}>
           Peak = {sc.MMF_peak_At} At · 24 slots · 14 turns/slot · I_coil_peak = {sc.I_coil_peak_A} A
         </Typography>
         <ResponsiveContainer width="100%" height={200}>
@@ -569,14 +569,14 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
             <CartesianGrid {...GRID_STYLE}/>
             <XAxis dataKey="theta" tickFormatter={v => `${v}°`} tick={AXIS_STYLE}
               label={{ value: 'θ_mech [°]', position: 'insideBottomRight', offset: -5,
-                style: { fontSize: 10, fill: '#475569' }}}/>
+                style: { fontSize: 10, fill: 'var(--text-4)' }}}/>
             <YAxis tick={AXIS_STYLE} label={{ value: 'MMF [At]', angle: -90,
-              position: 'insideLeft', style: { fontSize: 10, fill: '#475569' }}}/>
+              position: 'insideLeft', style: { fontSize: 10, fill: 'var(--text-4)' }}}/>
             <RcTooltip {...TOOLTIP_STYLE}
               formatter={(v: number) => [`${v.toFixed(0)} At`, 'MMF']}
               labelFormatter={(l: number) => `θ = ${l}°`}/>
             <ReferenceLine y={0} stroke={C.border}/>
-            <Line dataKey="MMF" stroke={C.MMF} dot={false} strokeWidth={1.5} name="MMF"/>
+            <Line dataKey="MMF" stroke={C.MMF} dot={false} strokeWidth={1} name="MMF"/>
           </LineChart>
         </ResponsiveContainer>
       </Paper>
@@ -587,7 +587,7 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
           <SectionLabel title="Air-Gap Radial Flux Density B_r(θ)"
             note="analytical (linear model)"
             tooltip="B_winding = μ₀·MMF/g. B_pm = rectangular PM approximation at Br=1.19T. B_total = sum. Compare with Ansys B_r on airgap path."/>
-          <IconButton size="small" sx={{ color: '#334155' }}
+          <IconButton size="small" sx={{ color: 'var(--line)' }}
             onClick={() => exportCSV('B_airgap.csv', spatialData)}>
             <DownloadIcon fontSize="small"/>
           </IconButton>
@@ -602,15 +602,15 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
             <XAxis dataKey="theta" tickFormatter={v => `${v}°`} tick={AXIS_STYLE}/>
             <YAxis tick={AXIS_STYLE}
               label={{ value: 'B [T]', angle: -90, position: 'insideLeft',
-                style: { fontSize: 10, fill: '#475569' }}}/>
+                style: { fontSize: 10, fill: 'var(--text-4)' }}}/>
             <RcTooltip {...TOOLTIP_STYLE}
               formatter={(v: number, name: string) => [`${v.toFixed(3)} T`, name]}
               labelFormatter={(l: number) => `θ = ${l}°`}/>
             <Legend wrapperStyle={{ fontSize: 11 }}/>
             <ReferenceLine y={0} stroke={C.border}/>
-            <Line dataKey="B_pm"      stroke={C.B_pm}      dot={false} strokeWidth={1.5} name="B_pm"      strokeDasharray="4 2"/>
-            <Line dataKey="B_winding" stroke={C.B_winding} dot={false} strokeWidth={1.5} name="B_winding" strokeDasharray="2 3"/>
-            <Line dataKey="B_total"   stroke={C.B_total}   dot={false} strokeWidth={2}   name="B_total"/>
+            <Line dataKey="B_pm"      stroke={C.B_pm}      dot={false} strokeWidth={1} name="B_pm"      strokeDasharray="4 2"/>
+            <Line dataKey="B_winding" stroke={C.B_winding} dot={false} strokeWidth={1} name="B_winding" strokeDasharray="2 3"/>
+            <Line dataKey="B_total"   stroke={C.B_total}   dot={false} strokeWidth={1.25}   name="B_total"/>
           </LineChart>
         </ResponsiveContainer>
       </Paper>
@@ -621,12 +621,12 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
           <SectionLabel title="Spatial Harmonic Spectrum of B"
             note="FFT of B_total"
             tooltip="Spatial orders of the air-gap flux density. Dominant order = pole-pair number (14). Sub-harmonics cause additional iron losses. Compare Ansys FFT of B_r."/>
-          <IconButton size="small" sx={{ color: '#334155' }}
+          <IconButton size="small" sx={{ color: 'var(--line)' }}
             onClick={() => exportCSV('harmonics.csv', harmonicData)}>
             <DownloadIcon fontSize="small"/>
           </IconButton>
         </Box>
-        <Typography sx={{ fontSize: 10, color: '#475569', mb: 1 }}>
+        <Typography sx={{ fontSize: 10, color: 'var(--text-4)', mb: 1 }}>
           Fundamental = order {14} (pole pairs). Sub/super harmonics cause extra Fe losses &amp; noise.
         </Typography>
         <ResponsiveContainer width="100%" height={200}>
@@ -634,22 +634,22 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
             <CartesianGrid {...GRID_STYLE}/>
             <XAxis dataKey="order" tick={AXIS_STYLE}
               label={{ value: 'Harmonic order', position: 'insideBottomRight', offset: -5,
-                style: { fontSize: 10, fill: '#475569' }}}/>
+                style: { fontSize: 10, fill: 'var(--text-4)' }}}/>
             <YAxis tick={AXIS_STYLE}
               label={{ value: '|B_n| [T]', angle: -90, position: 'insideLeft',
-                style: { fontSize: 10, fill: '#475569' }}}/>
+                style: { fontSize: 10, fill: 'var(--text-4)' }}}/>
             <RcTooltip {...TOOLTIP_STYLE}
               formatter={(v: number) => [`${v.toFixed(4)} T`, 'Amplitude']}
               labelFormatter={(l: number) => `Order ${l}`}/>
             <Bar dataKey="amp" name="Amplitude">
               {harmonicData.map((entry) => (
                 <Cell key={entry.order}
-                  fill={entry.order === 14 ? '#fbbf24' : entry.order % 2 === 0 ? '#3b82f6' : '#475569'}/>
+                  fill={entry.order === 14 ? '#fbbf24' : entry.order % 2 === 0 ? '#3b82f6' : 'var(--text-4)'}/>
               ))}
             </Bar>
           </BarChart>
         </ResponsiveContainer>
-        <Typography sx={{ fontSize: 9, color: '#334155', mt: 0.5 }}>
+        <Typography sx={{ fontSize: 9, color: 'var(--line)', mt: 0.5 }}>
           Yellow = fundamental (p=14). Blue = even orders. Grey = odd. Sub-harmonics below 14 indicate winding asymmetry.
         </Typography>
       </Paper>
@@ -665,10 +665,10 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
             <CartesianGrid {...GRID_STYLE}/>
             <XAxis dataKey="slot" tick={AXIS_STYLE}
               label={{ value: 'Slot #', position: 'insideBottomRight', offset: -5,
-                style: { fontSize: 10, fill: '#475569' }}}/>
+                style: { fontSize: 10, fill: 'var(--text-4)' }}}/>
             <YAxis tick={AXIS_STYLE}
               label={{ value: 'J_z [MA/m²]', angle: -90, position: 'insideLeft',
-                style: { fontSize: 10, fill: '#475569' }}}/>
+                style: { fontSize: 10, fill: 'var(--text-4)' }}}/>
             <RcTooltip {...TOOLTIP_STYLE}
               formatter={(v: number, _: string, props: { payload: typeof slotBarData[0] }) =>
                 [`${v.toFixed(3)} MA/m²`, `Phase ${props.payload.phase}`]}
@@ -688,7 +688,7 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
             <Box key={ph} sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
               <Box sx={{ width: 10, height: 10, borderRadius: '50%',
                 bgcolor: ph === 'A' ? C.A : ph === 'B' ? C.B : C.C }}/>
-              <Typography sx={{ fontSize: 10, color: '#64748b' }}>Phase {ph}</Typography>
+              <Typography sx={{ fontSize: 10, color: 'var(--text-3)' }}>Phase {ph}</Typography>
             </Box>
           ))}
         </Box>
@@ -700,7 +700,7 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
           <SectionLabel title="Loss Breakdown"
             note="analytical estimates vs PINN"
             tooltip="Analytical = classical formulas. PINN = from solved A_z field (AC redistribution included). Compare Ansys loss report."/>
-          <IconButton size="small" sx={{ color: '#334155' }}
+          <IconButton size="small" sx={{ color: 'var(--line)' }}
             onClick={() => exportCSV('losses.csv', lossData)}>
             <DownloadIcon fontSize="small"/>
           </IconButton>
@@ -715,12 +715,12 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
             <XAxis dataKey="name" tick={{ ...AXIS_STYLE, fontSize: 10 }}/>
             <YAxis tick={AXIS_STYLE}
               label={{ value: 'P [W]', angle: -90, position: 'insideLeft',
-                style: { fontSize: 10, fill: '#475569' }}}/>
+                style: { fontSize: 10, fill: 'var(--text-4)' }}}/>
             <RcTooltip {...TOOLTIP_STYLE}
               formatter={(v: number | null, name: string) =>
                 [v != null ? `${v.toFixed(1)} W` : '—', name]}/>
             <Legend wrapperStyle={{ fontSize: 11 }}/>
-            <Bar dataKey="analytical" name="Analytical (classical)" fill="#475569" radius={[2,2,0,0]}/>
+            <Bar dataKey="analytical" name="Analytical (classical)" fill="var(--text-4)" radius={[2,2,0,0]}/>
             {lossData.some(d => d.pinn != null) && (
               <Bar dataKey="pinn" name="PINN (from A_z)" fill="#4ade80" radius={[2,2,0,0]}/>
             )}
@@ -729,7 +729,7 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
 
         {/* Loss pie summary */}
         <Divider sx={{ borderColor: C.border, my: 1.5 }}/>
-        <Typography sx={{ fontSize: 9, fontWeight: 700, color: '#475569',
+        <Typography sx={{ fontSize: 9, fontWeight: 700, color: 'var(--text-4)',
           textTransform: 'uppercase', letterSpacing: 1, mb: 0.75 }}>
           Analytical breakdown (% of total)
         </Typography>
@@ -742,13 +742,13 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
             { label: 'Mag eddy',val: data.losses.P_mag_eddy_W, color: C.Mag },
           ].map(({ label, val, color }) => (
             <Box key={label} sx={{ display: 'flex', alignItems: 'center', gap: 0.5,
-              bgcolor: '#060d17', px: 1, py: 0.4, borderRadius: 1 }}>
+              bgcolor: 'var(--panel-2)', px: 1, py: 0.4, borderRadius: 1 }}>
               <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: color }}/>
-              <Typography sx={{ fontSize: 10, color: '#94a3b8' }}>{label}</Typography>
+              <Typography sx={{ fontSize: 10, color: 'var(--text-2)' }}>{label}</Typography>
               <Typography sx={{ fontSize: 10, fontWeight: 700, color }}>
                 {(val / lossTotal * 100).toFixed(1)}%
               </Typography>
-              <Typography sx={{ fontSize: 9, color: '#475569' }}>
+              <Typography sx={{ fontSize: 9, color: 'var(--text-4)' }}>
                 {val.toFixed(0)}W
               </Typography>
             </Box>
@@ -764,7 +764,7 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
         <SectionLabel title="Magnet Eddy — Segmentation Impact"
           note="classical formula P ~ d²"
           tooltip="Eddy losses scale as d². Segmentation is the key lever. PINN will compute exact from A_z."/>
-        <Typography sx={{ fontSize: 10, color: '#94a3b8', mb: 1 }}>
+        <Typography sx={{ fontSize: 10, color: 'var(--text-2)', mb: 1 }}>
           Current design: unsegmented (d_tang = {(2*Math.PI*(39.1+56.3)/2/1000/28*0.9*1000).toFixed(1)} mm).
           P_mag scales as number_of_segments⁻².
         </Typography>
@@ -775,7 +775,7 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
             return (
               <Box key={k} sx={{
                 display: 'flex', flexDirection: 'column', alignItems: 'center',
-                bgcolor: isCurrent ? '#2d1657' : '#060d17',
+                bgcolor: isCurrent ? '#2d1657' : 'var(--panel-2)',
                 border: `1px solid ${isCurrent ? '#7c3aed' : C.border}`,
                 borderRadius: 1, px: 1.5, py: 1, minWidth: 80,
               }}>
@@ -786,7 +786,7 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
                   color: P > 1000 ? '#ef4444' : P > 300 ? '#fbbf24' : '#4ade80' }}>
                   {P.toFixed(0)} W
                 </Typography>
-                <Typography sx={{ fontSize: 9, color: '#475569' }}>segments={k}</Typography>
+                <Typography sx={{ fontSize: 9, color: 'var(--text-4)' }}>segments={k}</Typography>
               </Box>
             );
           })}

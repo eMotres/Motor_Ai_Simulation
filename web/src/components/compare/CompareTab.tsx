@@ -18,14 +18,14 @@ const CompareTab: React.FC = () => {
   const change = (m: Mode) => { setMode(m); try { localStorage.setItem('configure.mode', m); } catch { /* ignore */ } };
 
   return (
-    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', bgcolor: '#060d17', overflow: 'hidden' }}>
+    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', bgcolor: 'var(--panel-2)', overflow: 'hidden' }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 2, pt: 1 }}>
         <ToggleButtonGroup exclusive size="small" value={mode} onChange={(_, v) => v && change(v as Mode)}>
-          <ToggleButton value="configurator" sx={{ px: 1.75, py: 0.4, fontSize: 12, textTransform: 'none', color: '#94a3b8', borderColor: '#334155',
+          <ToggleButton value="configurator" sx={{ px: 1.75, py: 0.4, fontSize: 12, textTransform: 'none', color: 'var(--text-2)', borderColor: 'var(--line)',
             '&.Mui-selected': { bgcolor: '#1d4ed8', color: '#fff', '&:hover': { bgcolor: '#2563eb' } } }}>
             Configurator
           </ToggleButton>
-          <ToggleButton value="saved" sx={{ px: 1.75, py: 0.4, fontSize: 12, textTransform: 'none', color: '#94a3b8', borderColor: '#334155',
+          <ToggleButton value="saved" sx={{ px: 1.75, py: 0.4, fontSize: 12, textTransform: 'none', color: 'var(--text-2)', borderColor: 'var(--line)',
             '&.Mui-selected': { bgcolor: '#1d4ed8', color: '#fff', '&:hover': { bgcolor: '#2563eb' } } }}>
             Saved simulations
           </ToggleButton>

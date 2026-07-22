@@ -124,14 +124,14 @@ function paramFmt(k: string, v: any): string {
 
 // shared table cell styling
 const TH = {
-  px: 1.25, py: 0.7, fontSize: 10, color: '#64748b', fontWeight: 700,
+  px: 1.25, py: 0.7, fontSize: 10, color: 'var(--text-3)', fontWeight: 700,
   textTransform: 'uppercase', letterSpacing: '0.03em', whiteSpace: 'nowrap',
-  textAlign: 'right', borderBottom: '1px solid #1e293b', bgcolor: '#0b1424',
+  textAlign: 'right', borderBottom: '1px solid var(--line-soft)', bgcolor: 'var(--panel-2)',
   position: 'sticky', top: 0, zIndex: 2,
 } as const;
 const TD = {
   px: 1.25, py: 0.55, fontSize: 12, whiteSpace: 'nowrap', textAlign: 'right',
-  borderBottom: '1px solid #0f172a', fontFamily: 'monospace', color: '#cbd5e1',
+  borderBottom: '1px solid var(--app-bg)', fontFamily: 'monospace', color: 'var(--text-1)',
 } as const;
 
 const ComparePanel: React.FC = () => {
@@ -223,38 +223,38 @@ const ComparePanel: React.FC = () => {
   });
 
   const NameCell: React.FC<{ s: SavedSim; sticky?: boolean }> = ({ s, sticky }) => (
-    <Box component="td" sx={{ ...TD, textAlign: 'left', color: '#e2e8f0', fontFamily: 'inherit',
-      fontWeight: 600, ...(sticky ? { position: 'sticky', left: 0, bgcolor: '#0a1628', zIndex: 1 } : {}) }}>
+    <Box component="td" sx={{ ...TD, textAlign: 'left', color: 'var(--text-0)', fontFamily: 'inherit',
+      fontWeight: 600, ...(sticky ? { position: 'sticky', left: 0, bgcolor: 'var(--panel-2)', zIndex: 1 } : {}) }}>
       {editId === s.id ? (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25 }}>
           <TextField value={editName} onChange={e => setEditName(e.target.value)} size="small" autoFocus
             onKeyDown={e => { if (e.key === 'Enter') commitRename(); if (e.key === 'Escape') setEditId(null); }}
             inputProps={{ style: { fontSize: 12, padding: '2px 6px' } }} sx={{ width: 150 }} />
           <IconButton size="small" onClick={commitRename} sx={{ color: '#4ade80', p: 0.25 }}><CheckIcon sx={{ fontSize: 15 }} /></IconButton>
-          <IconButton size="small" onClick={() => setEditId(null)} sx={{ color: '#64748b', p: 0.25 }}><CloseIcon sx={{ fontSize: 15 }} /></IconButton>
+          <IconButton size="small" onClick={() => setEditId(null)} sx={{ color: 'var(--text-3)', p: 0.25 }}><CloseIcon sx={{ fontSize: 15 }} /></IconButton>
         </Box>
       ) : s.name}
     </Box>
   );
 
   return (
-    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', bgcolor: '#060d17', overflow: 'hidden' }}>
+    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', bgcolor: 'var(--panel-2)', overflow: 'hidden' }}>
 
       {/* ══ TOP: library of all saved simulations ══ */}
-      <Box sx={{ flex: '1 1 50%', display: 'flex', flexDirection: 'column', minHeight: 0, borderBottom: '2px solid #1e293b' }}>
+      <Box sx={{ flex: '1 1 50%', display: 'flex', flexDirection: 'column', minHeight: 0, borderBottom: '2px solid var(--line-soft)' }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 2, py: 1 }}>
-          <Typography sx={{ fontSize: 13, fontWeight: 700, color: '#e2e8f0' }}>
+          <Typography sx={{ fontSize: 13, fontWeight: 700, color: 'var(--text-0)' }}>
             Saved simulations
           </Typography>
-          <Typography sx={{ fontSize: 11, color: '#64748b' }}>({sims.length}) — tick rows to compare below</Typography>
+          <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>({sims.length}) — tick rows to compare below</Typography>
           <Box sx={{ flex: 1 }} />
           <Button size="small" variant="outlined" startIcon={<ViewColumnIcon sx={{ fontSize: 16 }} />}
             onClick={e => setColAnchor(e.currentTarget)}
-            sx={{ fontSize: 11, textTransform: 'none', color: '#94a3b8', borderColor: '#334155',
-              '&:hover': { borderColor: '#3b82f6', color: '#cbd5e1' } }}>
+            sx={{ fontSize: 11, textTransform: 'none', color: 'var(--text-2)', borderColor: 'var(--line)',
+              '&:hover': { borderColor: '#3b82f6', color: 'var(--text-1)' } }}>
             Columns ({displayCols.length})
           </Button>
-          <Tooltip title="Reload"><IconButton size="small" onClick={load} sx={{ color: '#64748b' }}><RefreshIcon sx={{ fontSize: 17 }} /></IconButton></Tooltip>
+          <Tooltip title="Reload"><IconButton size="small" onClick={load} sx={{ color: 'var(--text-3)' }}><RefreshIcon sx={{ fontSize: 17 }} /></IconButton></Tooltip>
           {sims.length > 0 && (
             <Tooltip title="Delete all"><IconButton size="small" onClick={clearAll} sx={{ color: '#7f1d1d' }}><DeleteOutlineIcon sx={{ fontSize: 17 }} /></IconButton></Tooltip>
           )}
@@ -264,25 +264,25 @@ const ComparePanel: React.FC = () => {
         <Popover open={!!colAnchor} anchorEl={colAnchor} onClose={() => setColAnchor(null)}
           anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
           transformOrigin={{ vertical: 'top', horizontal: 'right' }}
-          PaperProps={{ sx: { bgcolor: '#0b1220', border: '1px solid #1e293b', width: 250, maxHeight: 440 } }}>
-          <Box sx={{ position: 'sticky', top: 0, bgcolor: '#0b1220', zIndex: 1, px: 1.5, pt: 1.25, pb: 0.75,
-            borderBottom: '1px solid #1e293b', display: 'flex', alignItems: 'center', gap: 0.5 }}>
-            <Typography sx={{ fontSize: 11, fontWeight: 700, color: '#cbd5e1', flex: 1 }}>Columns</Typography>
+          PaperProps={{ sx: { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', width: 250, maxHeight: 440 } }}>
+          <Box sx={{ position: 'sticky', top: 0, bgcolor: 'var(--panel-2)', zIndex: 1, px: 1.5, pt: 1.25, pb: 0.75,
+            borderBottom: '1px solid var(--line-soft)', display: 'flex', alignItems: 'center', gap: 0.5 }}>
+            <Typography sx={{ fontSize: 11, fontWeight: 700, color: 'var(--text-1)', flex: 1 }}>Columns</Typography>
             <Button size="small" onClick={() => setVisibleCols(availableKeys)} sx={{ fontSize: 10, minWidth: 0, textTransform: 'none', color: '#60a5fa' }}>All</Button>
-            <Button size="small" onClick={() => setVisibleCols([])} sx={{ fontSize: 10, minWidth: 0, textTransform: 'none', color: '#94a3b8' }}>None</Button>
-            <Button size="small" onClick={() => setVisibleCols(LIB_COLS)} sx={{ fontSize: 10, minWidth: 0, textTransform: 'none', color: '#94a3b8' }}>Reset</Button>
+            <Button size="small" onClick={() => setVisibleCols([])} sx={{ fontSize: 10, minWidth: 0, textTransform: 'none', color: 'var(--text-2)' }}>None</Button>
+            <Button size="small" onClick={() => setVisibleCols(LIB_COLS)} sx={{ fontSize: 10, minWidth: 0, textTransform: 'none', color: 'var(--text-2)' }}>Reset</Button>
           </Box>
           <Box sx={{ px: 1.5, py: 1 }}>
             {colGroups.map(g => g.keys.length === 0 ? null : (
               <Box key={g.title} sx={{ mb: 1 }}>
-                <Typography sx={{ fontSize: 9, fontWeight: 700, color: '#475569',
+                <Typography sx={{ fontSize: 9, fontWeight: 700, color: 'var(--text-4)',
                   textTransform: 'uppercase', letterSpacing: '0.06em', mb: 0.25 }}>{g.title}</Typography>
                 {g.keys.map(k => (
                   <FormControlLabel key={k} sx={{ display: 'flex', ml: 0, height: 23 }}
                     control={<Checkbox size="small" checked={visibleCols.includes(k)} onChange={() => toggleCol(k)}
-                      sx={{ p: 0.25, mr: 0.5, color: '#475569', '&.Mui-checked': { color: '#3b82f6' } }} />}
-                    label={<Typography sx={{ fontSize: 11, color: '#cbd5e1' }}>
-                      {paramLabel(k)}{paramUnit(k) ? <Box component="span" sx={{ color: '#475569' }}> ({paramUnit(k)})</Box> : null}
+                      sx={{ p: 0.25, mr: 0.5, color: 'var(--text-4)', '&.Mui-checked': { color: '#3b82f6' } }} />}
+                    label={<Typography sx={{ fontSize: 11, color: 'var(--text-1)' }}>
+                      {paramLabel(k)}{paramUnit(k) ? <Box component="span" sx={{ color: 'var(--text-4)' }}> ({paramUnit(k)})</Box> : null}
                     </Typography>} />
                 ))}
               </Box>
@@ -293,7 +293,7 @@ const ComparePanel: React.FC = () => {
         <Box sx={{ flex: 1, overflow: 'auto', px: 2, pb: 1 }}>
           {loading && <CircularProgress size={18} sx={{ color: '#3b82f6', m: 2 }} />}
           {!loading && sims.length === 0 && (
-            <Typography sx={{ fontSize: 12, color: '#64748b', m: 2 }}>
+            <Typography sx={{ fontSize: 12, color: 'var(--text-3)', m: 2 }}>
               No saved simulations yet. In the <b>Simulation</b> tab, run a solve and press
               <b> Save simulation</b> to snapshot it here.
             </Typography>
@@ -305,7 +305,7 @@ const ComparePanel: React.FC = () => {
                 <Box component="th" sx={{ ...TH, textAlign: 'left', left: 36, zIndex: 3 }}>Name</Box>
                 {displayCols.map(k => (
                   <Box component="th" key={k} sx={TH}>
-                    {paramLabel(k)}{paramUnit(k) ? <Box component="span" sx={{ color: '#334155', fontWeight: 400 }}> {paramUnit(k)}</Box> : null}
+                    {paramLabel(k)}{paramUnit(k) ? <Box component="span" sx={{ color: 'var(--line)', fontWeight: 400 }}> {paramUnit(k)}</Box> : null}
                   </Box>
                 ))}
                 <Box component="th" sx={{ ...TH, textAlign: 'left' }}>Saved</Box>
@@ -314,23 +314,23 @@ const ComparePanel: React.FC = () => {
               <Box component="tbody">
                 {sims.map(s => (
                   <Box component="tr" key={s.id}
-                    sx={{ bgcolor: sel.has(s.id) ? '#0f2036' : 'transparent', '&:hover': { bgcolor: '#0d1b30' } }}>
+                    sx={{ bgcolor: sel.has(s.id) ? 'var(--panel-2)' : 'transparent', '&:hover': { bgcolor: 'var(--panel-2)' } }}>
                     <Box component="td" sx={{ ...TD, textAlign: 'center', position: 'sticky', left: 0,
-                      bgcolor: sel.has(s.id) ? '#0f2036' : '#060d17', zIndex: 1 }}>
+                      bgcolor: sel.has(s.id) ? 'var(--panel-2)' : 'var(--panel-2)', zIndex: 1 }}>
                       <Checkbox size="small" checked={sel.has(s.id)} onChange={() => toggle(s.id)}
-                        sx={{ p: 0.25, color: '#475569', '&.Mui-checked': { color: '#3b82f6' } }} />
+                        sx={{ p: 0.25, color: 'var(--text-4)', '&.Mui-checked': { color: '#3b82f6' } }} />
                     </Box>
                     <Box component="td" sx={{ ...TD, p: 0, position: 'sticky', left: 36,
-                      bgcolor: sel.has(s.id) ? '#0f2036' : '#060d17', zIndex: 1 }}>
+                      bgcolor: sel.has(s.id) ? 'var(--panel-2)' : 'var(--panel-2)', zIndex: 1 }}>
                       <Box sx={{ px: 1.25, py: 0.55 }}><NameCell s={s} /></Box>
                     </Box>
                     {displayCols.map(k => (
                       <Box component="td" key={k} sx={TD}>{paramFmt(k, s.params?.[k])}</Box>
                     ))}
-                    <Box component="td" sx={{ ...TD, textAlign: 'left', color: '#475569', fontSize: 10 }}>{s.created}</Box>
+                    <Box component="td" sx={{ ...TD, textAlign: 'left', color: 'var(--text-4)', fontSize: 10 }}>{s.created}</Box>
                     <Box component="td" sx={{ ...TD, textAlign: 'center' }}>
-                      <Tooltip title="Rename"><IconButton size="small" onClick={() => startRename(s)} sx={{ color: '#64748b', p: 0.25, '&:hover': { color: '#60a5fa' } }}><EditIcon sx={{ fontSize: 15 }} /></IconButton></Tooltip>
-                      <Tooltip title="Delete"><IconButton size="small" onClick={() => del(s.id)} sx={{ color: '#64748b', p: 0.25, '&:hover': { color: '#f87171' } }}><DeleteOutlineIcon sx={{ fontSize: 15 }} /></IconButton></Tooltip>
+                      <Tooltip title="Rename"><IconButton size="small" onClick={() => startRename(s)} sx={{ color: 'var(--text-3)', p: 0.25, '&:hover': { color: '#60a5fa' } }}><EditIcon sx={{ fontSize: 15 }} /></IconButton></Tooltip>
+                      <Tooltip title="Delete"><IconButton size="small" onClick={() => del(s.id)} sx={{ color: 'var(--text-3)', p: 0.25, '&:hover': { color: '#f87171' } }}><DeleteOutlineIcon sx={{ fontSize: 15 }} /></IconButton></Tooltip>
                     </Box>
                   </Box>
                 ))}
@@ -344,8 +344,8 @@ const ComparePanel: React.FC = () => {
       <Box sx={{ flex: '1 1 50%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 2, py: 1 }}>
           <CompareArrowsIcon sx={{ color: '#60a5fa', fontSize: 18 }} />
-          <Typography sx={{ fontSize: 13, fontWeight: 700, color: '#e2e8f0' }}>Comparison</Typography>
-          <Typography sx={{ fontSize: 11, color: '#64748b' }}>
+          <Typography sx={{ fontSize: 13, fontWeight: 700, color: 'var(--text-0)' }}>Comparison</Typography>
+          <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>
             {selected.length} selected · {diffKeys.length} differing input{diffKeys.length === 1 ? '' : 's'} · green = best / red = worst per result
           </Typography>
         </Box>
@@ -358,18 +358,18 @@ const ComparePanel: React.FC = () => {
                 <Box component="th" sx={{ ...TH, textAlign: 'left', left: 0, zIndex: 3, position: 'sticky' }}>Simulation</Box>
                 {diffKeys.map(k => (
                   <Box component="th" key={k} sx={{ ...TH, color: '#fbbf24' }}>
-                    {paramLabel(k)}{paramUnit(k) ? <Box component="span" sx={{ color: '#334155', fontWeight: 400 }}> {paramUnit(k)}</Box> : null}
+                    {paramLabel(k)}{paramUnit(k) ? <Box component="span" sx={{ color: 'var(--line)', fontWeight: 400 }}> {paramUnit(k)}</Box> : null}
                   </Box>
                 ))}
                 {RESULT_COLS.map(r => (
                   <Box component="th" key={r.key} sx={{ ...TH, color: '#4ade80' }}>
-                    {r.label}{r.unit ? <Box component="span" sx={{ color: '#334155', fontWeight: 400 }}> {r.unit}</Box> : null}
+                    {r.label}{r.unit ? <Box component="span" sx={{ color: 'var(--line)', fontWeight: 400 }}> {r.unit}</Box> : null}
                   </Box>
                 ))}
               </Box></Box>
               <Box component="tbody">
                 {selected.map(s => (
-                  <Box component="tr" key={s.id} sx={{ '&:hover': { bgcolor: '#0d1b30' } }}>
+                  <Box component="tr" key={s.id} sx={{ '&:hover': { bgcolor: 'var(--panel-2)' } }}>
                     <NameCell s={s} sticky />
                     {diffKeys.map(k => (
                       <Box component="td" key={k} sx={{ ...TD, color: '#fbbf24' }}>{paramFmt(k, s.params?.[k])}</Box>
@@ -378,7 +378,7 @@ const ComparePanel: React.FC = () => {
                       const raw = Number(s.results?.[r.key]);
                       const has = Number.isFinite(raw);
                       const ext = resExtent[r.key];
-                      let col = '#cbd5e1';
+                      let col = 'var(--text-1)';
                       if (has && ext && ext.min !== ext.max && r.better) {
                         const best = r.better === 'hi' ? ext.max : ext.min;
                         const worst = r.better === 'hi' ? ext.min : ext.max;
@@ -387,7 +387,7 @@ const ComparePanel: React.FC = () => {
                       }
                       return (
                         <Box component="td" key={r.key} sx={{ ...TD, color: col,
-                          fontWeight: col !== '#cbd5e1' ? 700 : 400 }}>
+                          fontWeight: col !== 'var(--text-1)' ? 700 : 400 }}>
                           {has ? fmtNum(raw, r.d ?? 2, r.scale ?? 1) : '—'}
                         </Box>
                       );
@@ -396,7 +396,7 @@ const ComparePanel: React.FC = () => {
                 ))}
                 {diffKeys.length === 0 && (
                   <Box component="tr"><Box component="td" {...({ colSpan: 1 + RESULT_COLS.length } as any)}
-                    sx={{ ...TD, textAlign: 'left', color: '#64748b' }}>
+                    sx={{ ...TD, textAlign: 'left', color: 'var(--text-3)' }}>
                     Selected runs have identical inputs — only the results differ.
                   </Box></Box>
                 )}

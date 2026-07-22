@@ -26,11 +26,11 @@ const CHART_STYLE = {
   backgroundColor: 'transparent',
   fontSize: 11,
 };
-const AXIS_STYLE = { fontSize: 10, fill: '#64748b' };
-const GRID_STROKE = '#1e293b';
+const AXIS_STYLE = { fontSize: 10, fill: 'var(--text-3)' };
+const GRID_STROKE = 'var(--panel)';
 const TOOLTIP_STYLE: React.CSSProperties = {
-  backgroundColor: '#1e293b',
-  border: '1px solid #334155',
+  backgroundColor: 'var(--panel)',
+  border: '1px solid var(--line)',
   borderRadius: 6,
   fontSize: 11,
 };
@@ -42,20 +42,20 @@ const Row: React.FC<{ label: string; value: string; unit?: string; highlight?: b
   <Box sx={{
     display: 'flex', alignItems: 'baseline', gap: 1,
     py: '3px', px: 1,
-    '&:hover': { bgcolor: 'rgba(255,255,255,0.02)' },
+    '&:hover': { bgcolor: 'var(--line-soft)' },
     borderRadius: 1,
   }}>
-    <Typography sx={{ flex: 1, fontSize: '0.7rem', color: '#64748b' }}>{label}</Typography>
+    <Typography sx={{ flex: 1, fontSize: '0.7rem', color: 'var(--text-3)' }}>{label}</Typography>
     <Typography sx={{
       fontSize: '0.75rem',
       fontWeight: highlight ? 700 : 400,
-      color: highlight ? '#e2e8f0' : '#94a3b8',
+      color: highlight ? 'var(--text-0)' : 'var(--text-2)',
       fontVariantNumeric: 'tabular-nums',
     }}>
       {value}
     </Typography>
     {unit && (
-      <Typography sx={{ fontSize: '0.65rem', color: '#475569', minWidth: 50 }}>{unit}</Typography>
+      <Typography sx={{ fontSize: '0.65rem', color: 'var(--text-4)', minWidth: 50 }}>{unit}</Typography>
     )}
   </Box>
 );
@@ -66,18 +66,18 @@ const Section: React.FC<{ title: string; children: React.ReactNode; accentColor?
 }) => (
   <Box sx={{
     mb: 2,
-    bgcolor: 'rgba(15,23,42,0.6)',
-    border: '1px solid #1e293b',
+    bgcolor: 'var(--panel-2)',
+    border: '1px solid var(--line-soft)',
     borderRadius: 2,
     overflow: 'hidden',
   }}>
     <Box sx={{
       px: 2, py: 1,
-      borderBottom: '1px solid #1e293b',
+      borderBottom: '1px solid var(--line-soft)',
       display: 'flex', alignItems: 'center', gap: 1,
     }}>
       <Box sx={{ width: 3, height: 14, bgcolor: accentColor, borderRadius: 1, flexShrink: 0 }} />
-      <Typography sx={{ fontSize: '0.7rem', fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+      <Typography sx={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-3)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
         {title}
       </Typography>
     </Box>
@@ -111,12 +111,12 @@ const BHChart: React.FC<{ points: [number, number][]; xLabel: string; yLabel: st
           domain={['dataMin', 'dataMax']}
           tickCount={6}
           tick={AXIS_STYLE}
-          label={{ value: formattedXLabel, position: 'insideBottom', offset: -14, style: { fontSize: 10, fill: '#475569' } }}
+          label={{ value: formattedXLabel, position: 'insideBottom', offset: -14, style: { fontSize: 10, fill: 'var(--text-4)' } }}
         />
         <YAxis
           tick={AXIS_STYLE}
           width={36}
-          label={{ value: yLabel, angle: -90, position: 'insideLeft', offset: 8, style: { fontSize: 10, fill: '#475569' } }}
+          label={{ value: yLabel, angle: -90, position: 'insideLeft', offset: 8, style: { fontSize: 10, fill: 'var(--text-4)' } }}
         />
         <RechartTooltip
           contentStyle={TOOLTIP_STYLE}
@@ -133,7 +133,7 @@ const BHChart: React.FC<{ points: [number, number][]; xLabel: string; yLabel: st
           dataKey="y"
           stroke={lineColor}
           dot={false}
-          strokeWidth={2}
+          strokeWidth={1.25}
           name={yLabel}
         />
       </LineChart>
@@ -176,12 +176,12 @@ const CoreLossChart: React.FC<{
           domain={['dataMin', 'dataMax']}
           tickCount={6}
           tick={AXIS_STYLE}
-          label={{ value: 'B [T]', position: 'insideBottom', offset: -14, style: { fontSize: 10, fill: '#475569' } }}
+          label={{ value: 'B [T]', position: 'insideBottom', offset: -14, style: { fontSize: 10, fill: 'var(--text-4)' } }}
         />
         <YAxis
           tick={AXIS_STYLE}
           width={40}
-          label={{ value: yLabel, angle: -90, position: 'insideLeft', offset: 8, style: { fontSize: 10, fill: '#475569' } }}
+          label={{ value: yLabel, angle: -90, position: 'insideLeft', offset: 8, style: { fontSize: 10, fill: 'var(--text-4)' } }}
         />
         <RechartTooltip
           contentStyle={TOOLTIP_STYLE}
@@ -192,7 +192,7 @@ const CoreLossChart: React.FC<{
           content={() => (
             <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: '6px 12px', paddingTop: 6 }}>
               {freqs.map((freq, i) => (
-                <span key={freq} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, color: '#94a3b8' }}>
+                <span key={freq} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, color: 'var(--text-2)' }}>
                   <span style={{ display: 'inline-block', width: 16, height: 2, borderRadius: 1, backgroundColor: FREQ_COLORS[i % FREQ_COLORS.length] }} />
                   {freq}
                 </span>
@@ -207,7 +207,7 @@ const CoreLossChart: React.FC<{
             dataKey={freq}
             stroke={FREQ_COLORS[i % FREQ_COLORS.length]}
             dot={false}
-            strokeWidth={1.5}
+            strokeWidth={1}
             name={freq}
             connectNulls
           />
@@ -221,7 +221,7 @@ const CoreLossChart: React.FC<{
 const SteelDetail: React.FC<{ name: string; data: SteelData }> = ({ name, data }) => (
   <Box>
     {/* Properties */}
-    <Section title="Properties" accentColor="#64748b">
+    <Section title="Properties" accentColor="var(--text-3)">
       <Row label="Form"             value={data.form}                            highlight />
       <Row label="Conductivity σ"   value={data.sigma > 0 ? `${(data.sigma / 1e6).toFixed(3)}` : '≈ 0 (insulating)'}  unit={data.sigma > 0 ? 'MS/m' : ''} />
       <Row label="Density"          value={String(data.density)}                 unit="kg/m³" />
@@ -233,7 +233,7 @@ const SteelDetail: React.FC<{ name: string; data: SteelData }> = ({ name, data }
       <Row label="k_h (hysteresis)"    value={data.core_loss_kh.toFixed(4)}      unit="W/(m³·Hz·T²)"    highlight />
       <Row label="k_c (classical eddy)" value={data.core_loss_kc.toFixed(6)}     unit="W/(m³·Hz²·T²)" />
       <Row label="k_e (excess)"         value={data.core_loss_ke.toFixed(6)}     unit="W/(m³·Hz^1.5·T^1.5)" />
-      <Divider sx={{ my: 1, borderColor: '#1e293b' }} />
+      <Divider sx={{ my: 1, borderColor: 'var(--panel)' }} />
       <Row label="P @ 50 Hz, 1 T"  value={bertotti(data, 50,  1.0).toFixed(2)}   unit="W/kg" />
       <Row label="P @ 400 Hz, 1 T" value={bertotti(data, 400, 1.0).toFixed(2)}   unit="W/kg" highlight />
       <Row label="P @ 1 kHz, 1 T"  value={bertotti(data, 1000, 1.0).toFixed(2)}  unit="W/kg" />
@@ -312,7 +312,7 @@ const ConductorDetail: React.FC<{ name: string; data: ConductorData }> = ({ name
         <Row label="Temp. coeff. α"       value={data.thermal_alpha.toFixed(5)}     unit="1/K" />
       )}
       {data.thermal_conductivity == null && data.specific_heat == null && data.thermal_alpha == null && (
-        <Typography sx={{ fontSize: '0.7rem', color: '#475569', px: 1, py: 0.5 }}>No thermal data</Typography>
+        <Typography sx={{ fontSize: '0.7rem', color: 'var(--text-4)', px: 1, py: 0.5 }}>No thermal data</Typography>
       )}
     </Section>
     {(data.wire_width_mm != null || data.wire_height_mm != null) && (
@@ -362,7 +362,7 @@ function bertotti(d: SteelData, f: number, B: number): number {
 
 // ─── Category accent ─────────────────────────────────────────────────────────
 const CAT_COLOR: Record<string, string> = {
-  steel: '#64748b', magnet: '#ef4444', conductor: '#f59e0b',
+  steel: 'var(--text-3)', magnet: '#ef4444', conductor: '#f59e0b',
   insulator: '#3fae5a', coolant: '#38bdf8',
 };
 const CAT_LABEL: Record<string, string> = {
@@ -428,7 +428,7 @@ function recomputeDerived(category: MaterialCategory, p: Record<string, any>): R
 }
 
 const SOURCE_CHIP: Record<string, { label: string; color: string }> = {
-  builtin: { label: 'built-in', color: '#64748b' },
+  builtin: { label: 'built-in', color: 'var(--text-3)' },
   global:  { label: 'shared',   color: '#38bdf8' },
   mine:    { label: 'mine',     color: '#a78bfa' },
 };
@@ -447,7 +447,7 @@ interface Props {
 const EmptyState: React.FC = () => (
   <Box sx={{
     height: '100%', display: 'flex', flexDirection: 'column',
-    alignItems: 'center', justifyContent: 'center', color: '#334155', gap: 1,
+    alignItems: 'center', justifyContent: 'center', color: 'var(--line)', gap: 1,
   }}>
     <Typography sx={{ fontSize: '0.9rem' }}>Select a material from the tree</Typography>
     <Typography sx={{ fontSize: '0.75rem' }}>B-H curves and loss data will appear here</Typography>
@@ -539,7 +539,7 @@ const MaterialDetailView: React.FC<Props> = ({ library, selected, onChanged, onS
         <Box sx={{ width: 4, height: '100%', minHeight: 40, bgcolor: color, borderRadius: 1, flexShrink: 0 }} />
         <Box sx={{ flex: 1 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
-            <Typography sx={{ fontSize: '1.05rem', fontWeight: 700, color: '#e2e8f0' }}>
+            <Typography sx={{ fontSize: '1.05rem', fontWeight: 700, color: 'var(--text-0)' }}>
               {name.replace(/_/g, ' ')}
             </Typography>
             <Chip label={CAT_LABEL[category]} size="small"
@@ -548,7 +548,7 @@ const MaterialDetailView: React.FC<Props> = ({ library, selected, onChanged, onS
               sx={{ height: 18, fontSize: '0.6rem', bgcolor: `${srcChip.color}20`, color: srcChip.color }} />
           </Box>
           {data.description && !editing && (
-            <Typography sx={{ fontSize: '0.72rem', color: '#64748b', mt: 0.25 }}>
+            <Typography sx={{ fontSize: '0.72rem', color: 'var(--text-3)', mt: 0.25 }}>
               {data.description}
             </Typography>
           )}
@@ -591,7 +591,7 @@ const MaterialDetailView: React.FC<Props> = ({ library, selected, onChanged, onS
       </Stack>
       {err && <Typography sx={{ color: '#ef4444', fontSize: '0.7rem', mb: 1 }}>{err}</Typography>}
       {!editing && !canEdit && (
-        <Typography sx={{ color: '#475569', fontSize: '0.64rem', mb: 1 }}>
+        <Typography sx={{ color: 'var(--text-4)', fontSize: '0.64rem', mb: 1 }}>
           Built-in / shared material — copy it to My Materials to edit your own version.
         </Typography>
       )}
@@ -601,20 +601,20 @@ const MaterialDetailView: React.FC<Props> = ({ library, selected, onChanged, onS
         <Section title="Edit properties" accentColor={color}>
           {fields.map(f => (
             <Box key={f.key} sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 0.4 }}>
-              <Typography sx={{ flex: 1, fontSize: '0.7rem', color: '#94a3b8' }}>{f.label}</Typography>
+              <Typography sx={{ flex: 1, fontSize: '0.7rem', color: 'var(--text-2)' }}>{f.label}</Typography>
               <TextField
                 value={form[f.key] ?? ''}
                 onChange={e => setForm(s => ({ ...s, [f.key]: e.target.value }))}
                 size="small"
                 type={f.type === 'text' ? 'text' : 'number'}
                 sx={{ width: f.type === 'text' ? 210 : 130,
-                  '& .MuiInputBase-input': { fontSize: '0.72rem', py: 0.5, color: '#e2e8f0' },
-                  '& .MuiOutlinedInput-notchedOutline': { borderColor: '#1e293b' } }}
+                  '& .MuiInputBase-input': { fontSize: '0.72rem', py: 0.5, color: 'var(--text-0)' },
+                  '& .MuiOutlinedInput-notchedOutline': { borderColor: 'var(--panel)' } }}
               />
-              <Typography sx={{ fontSize: '0.58rem', color: '#475569', width: 92 }}>{f.unit ?? ''}</Typography>
+              <Typography sx={{ fontSize: '0.58rem', color: 'var(--text-4)', width: 92 }}>{f.unit ?? ''}</Typography>
             </Box>
           ))}
-          <Typography sx={{ fontSize: '0.62rem', color: '#475569', mt: 1 }}>
+          <Typography sx={{ fontSize: '0.62rem', color: 'var(--text-4)', mt: 1 }}>
             B-H / loss curves carry over unchanged.
             {source !== 'mine' && ' Saving creates or updates the shared (global) material for everyone.'}
           </Typography>

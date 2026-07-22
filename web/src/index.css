@@ -4,6 +4,56 @@
   box-sizing: border-box;
 }
 
+/* ── Design tokens ─────────────────────────────────────────────────────────
+   Light values mirror the aerostator.com (eMotres) site design system
+   (see eMotres/src/app/globals.css); dark values are the app's original
+   palette.  Components reference ONLY these vars — never raw hex — so the
+   whole app flips with html[data-theme]. */
+:root,
+html[data-theme='dark'] {
+  --app-bg: #0f172a;            /* page background */
+  --panel: #1e293b;             /* elevated surface (Paper) */
+  --panel-2: #0b1220;           /* deep surface (chart wells) */
+  --line: #334155;              /* strong border / chart grid */
+  --line-soft: #1e293b;         /* subtle border */
+  --text-0: #f1f5f9;            /* headings */
+  --text-1: #cbd5e1;            /* primary text */
+  --text-2: #94a3b8;            /* secondary text */
+  --text-3: #64748b;            /* tertiary text */
+  --text-4: #475569;            /* dimmest labels */
+  --brand: #3b82f6;             /* primary accent */
+  --brand-2: #60a5fa;           /* light accent */
+  --line-accent: #1e3a5f;       /* blue-tinted border */
+  --ok-bg: #14532d;             /* success-tinted surface */
+  --overlay: rgba(0, 0, 0, 0.75);
+  --input-bg: rgba(30, 41, 59, 0.5);
+  --scroll-track: #1e293b;
+  --scroll-thumb: #475569;
+  --scroll-thumb-hover: #64748b;
+}
+
+html[data-theme='light'] {
+  --app-bg: #f7f6f3;
+  --panel: #ffffff;
+  --panel-2: #ffffff;
+  --line: #e2e0dc;
+  --line-soft: #edecea;
+  --text-0: #0d0d0d;
+  --text-1: #1a1a1a;
+  --text-2: #44443f;
+  --text-3: #5f5e59;
+  --text-4: #807d77;
+  --brand: #2563eb;
+  --brand-2: #60a5fa;
+  --line-accent: #bfdbfe;
+  --ok-bg: #dcfce7;
+  --overlay: rgba(255, 255, 255, 0.88);
+  --input-bg: #ffffff;
+  --scroll-track: #edecea;
+  --scroll-thumb: #cfccc6;
+  --scroll-thumb-hover: #b5b2ab;
+}
+
 html, body, #root {
   width: 100%;
   height: 100%;
@@ -33,16 +83,16 @@ body {
 }
 
 ::-webkit-scrollbar-track {
-  background: #1e293b;
+  background: var(--scroll-track);
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #475569;
+  background: var(--scroll-thumb);
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #64748b;
+  background: var(--scroll-thumb-hover);
 }
 
 /* Remove number input spinners globally */
@@ -58,7 +108,7 @@ input[type="number"] {
 /* MUI overrides */
 .MuiTextField-root {
   .MuiOutlinedInput-root {
-    background-color: rgba(30, 41, 59, 0.5);
+    background-color: var(--input-bg);
   }
 }
 

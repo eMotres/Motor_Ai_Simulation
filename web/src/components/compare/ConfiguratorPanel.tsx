@@ -53,10 +53,10 @@ const fmt = (v: number, d = 1) => (Number.isFinite(v) ? v.toFixed(d) : '—');
 const pctDelta = (cur: number, base: number) => (base ? ((cur - base) / base) * 100 : 0);
 
 // theme bits (match ComparePanel)
-const PANEL = { bgcolor: '#0b1424', border: '1px solid #1e293b', borderRadius: 1 } as const;
-const LABEL = { fontSize: 11, color: '#64748b', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em' } as const;
-const TH = { px: 1.25, py: 0.7, fontSize: 10, color: '#64748b', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em', whiteSpace: 'nowrap', textAlign: 'right', borderBottom: '1px solid #1e293b', bgcolor: '#0b1424' } as const;
-const TD = { px: 1.25, py: 0.5, fontSize: 12, whiteSpace: 'nowrap', textAlign: 'right', borderBottom: '1px solid #0f172a', fontFamily: 'monospace', color: '#cbd5e1' } as const;
+const PANEL = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1 } as const;
+const LABEL = { fontSize: 11, color: 'var(--text-3)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em' } as const;
+const TH = { px: 1.25, py: 0.7, fontSize: 10, color: 'var(--text-3)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em', whiteSpace: 'nowrap', textAlign: 'right', borderBottom: '1px solid var(--line-soft)', bgcolor: 'var(--panel-2)' } as const;
+const TD = { px: 1.25, py: 0.5, fontSize: 12, whiteSpace: 'nowrap', textAlign: 'right', borderBottom: '1px solid var(--app-bg)', fontFamily: 'monospace', color: 'var(--text-1)' } as const;
 
 // ── user-editable slider ranges (persisted) ──────────────────────────────────
 type KnobKey = 'L_mm' | 'N' | 'wireH_mm' | 'I_A' | 'rpm';
@@ -80,7 +80,7 @@ const RangeEnd: React.FC<{ value: number; d: number; title: string; onCommit: (v
       onChange={(e) => setT(e.target.value)}
       onBlur={(e) => { const v = parseFloat(e.target.value); if (Number.isFinite(v)) onCommit(v); setT(null); }}
       onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
-      style={{ width: 44, flexShrink: 0, background: 'transparent', border: '1px solid #233149', borderRadius: 4, color: '#64748b', fontSize: 10, fontWeight: 600, fontFamily: 'monospace', textAlign: 'center', padding: '1px 2px' }} />
+      style={{ width: 44, flexShrink: 0, background: 'transparent', border: '1px solid #233149', borderRadius: 4, color: 'var(--text-3)', fontSize: 10, fontWeight: 600, fontFamily: 'monospace', textAlign: 'center', padding: '1px 2px' }} />
   );
 };
 
@@ -100,10 +100,10 @@ const KnobSlider: React.FC<{
           onChange={(e) => { setTxt(e.target.value); const v = parseFloat(e.target.value); if (Number.isFinite(v) && v >= min && v <= max) onChange(v); }}
           onBlur={(e) => { const v = parseFloat(e.target.value); if (Number.isFinite(v)) onChange(Math.min(max, Math.max(min, v))); setTxt(null); }}
           onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
-          style={{ width: 66, background: 'transparent', border: '1px solid #334155', borderRadius: 4, color: warn ? '#f87171' : '#e2e8f0', fontSize: 14, fontWeight: 700, fontFamily: 'monospace', textAlign: 'right', padding: '1px 5px' }} />
-        {unit ? <Box component="span" sx={{ fontSize: 11, color: '#64748b' }}>{unit}</Box> : null}
+          style={{ width: 66, background: 'transparent', border: '1px solid var(--line)', borderRadius: 4, color: warn ? '#f87171' : 'var(--text-0)', fontSize: 14, fontWeight: 700, fontFamily: 'monospace', textAlign: 'right', padding: '1px 5px' }} />
+        {unit ? <Box component="span" sx={{ fontSize: 11, color: 'var(--text-3)' }}>{unit}</Box> : null}
         {Math.abs(delta) >= 0.5 && (
-          <Typography sx={{ fontSize: 11, color: delta > 0 ? '#60a5fa' : '#94a3b8', fontFamily: 'monospace', width: 50, textAlign: 'right' }}>
+          <Typography sx={{ fontSize: 11, color: delta > 0 ? '#60a5fa' : 'var(--text-2)', fontFamily: 'monospace', width: 50, textAlign: 'right' }}>
             {delta > 0 ? '+' : ''}{fmt(delta, 0)}%
           </Typography>
         )}
@@ -126,12 +126,12 @@ const MetricTile: React.FC<{
   const delta = pctDelta(value, base);
   const show = Math.abs(delta) >= 0.5;
   const good = goodHi === undefined ? null : goodHi ? delta > 0 : delta < 0;
-  const dColor = good === null ? '#94a3b8' : good ? '#4ade80' : '#f87171';
+  const dColor = good === null ? 'var(--text-2)' : good ? '#4ade80' : '#f87171';
   return (
     <Box sx={{ ...PANEL, p: 1.25, flex: '1 1 0', minWidth: 108 }}>
       <Typography sx={LABEL}>{label}</Typography>
-      <Typography sx={{ fontSize: 20, fontWeight: 800, color: '#f1f5f9', fontFamily: 'monospace', lineHeight: 1.25 }}>
-        {fmt(value, d)}<Box component="span" sx={{ fontSize: 12, color: '#64748b', ml: 0.5 }}>{unit}</Box>
+      <Typography sx={{ fontSize: 20, fontWeight: 800, color: 'var(--text-0)', fontFamily: 'monospace', lineHeight: 1.25 }}>
+        {fmt(value, d)}<Box component="span" sx={{ fontSize: 12, color: 'var(--text-3)', ml: 0.5 }}>{unit}</Box>
       </Typography>
       {show && (
         <Typography sx={{ fontSize: 11, color: dColor, fontFamily: 'monospace' }}>
@@ -272,16 +272,16 @@ const ConfiguratorPanel: React.FC = () => {
   const fitColor = overFit ? '#f87171' : atLimit ? '#fbbf24' : '#4ade80';
 
   return (
-    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', bgcolor: '#060d17', overflow: 'auto' }}>
+    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', bgcolor: 'var(--panel-2)', overflow: 'auto' }}>
       {/* header: reference picker */}
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 2, py: 1.25, borderBottom: '1px solid #1e293b' }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 2, py: 1.25, borderBottom: '1px solid var(--line-soft)' }}>
         <BoltIcon sx={{ color: '#60a5fa', fontSize: 20 }} />
-        <Typography sx={{ fontSize: 14, fontWeight: 800, color: '#e2e8f0' }}>Configurator</Typography>
-        <Typography sx={{ fontSize: 11, color: '#64748b' }}>instant — no simulation</Typography>
+        <Typography sx={{ fontSize: 14, fontWeight: 800, color: 'var(--text-0)' }}>Configurator</Typography>
+        <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>instant — no simulation</Typography>
         <Box sx={{ flex: 1 }} />
         <Typography sx={LABEL}>Reference</Typography>
         <Select value={refId} onChange={(e) => setRefId(e.target.value)} size="small"
-          sx={{ minWidth: 260, fontSize: 13, color: '#e2e8f0', bgcolor: '#0b1424', '& .MuiOutlinedInput-notchedOutline': { borderColor: '#334155' } }}>
+          sx={{ minWidth: 260, fontSize: 13, color: 'var(--text-0)', bgcolor: 'var(--panel-2)', '& .MuiOutlinedInput-notchedOutline': { borderColor: 'var(--line)' } }}>
           {allRefs.map((r) => (
             <MenuItem key={r.id} value={r.id} sx={{ fontSize: 13 }}>{r.name}</MenuItem>
           ))}
@@ -291,10 +291,10 @@ const ConfiguratorPanel: React.FC = () => {
       <Box sx={{ display: 'flex', gap: 2, p: 2, flexWrap: 'wrap' }}>
         {/* ── KNOBS ── */}
         <Box sx={{ ...PANEL, p: 2, flex: '1 1 360px', minWidth: 320 }}>
-          <Typography sx={{ fontSize: 12, fontWeight: 800, color: '#cbd5e1', mb: 0.25 }}>{ref.name}</Typography>
-          <Typography sx={{ fontSize: 11, color: '#64748b', mb: 1.5 }}>{ref.subtitle}</Typography>
+          <Typography sx={{ fontSize: 12, fontWeight: 800, color: 'var(--text-1)', mb: 0.25 }}>{ref.name}</Typography>
+          <Typography sx={{ fontSize: 11, color: 'var(--text-3)', mb: 1.5 }}>{ref.subtitle}</Typography>
 
-          <Typography sx={{ ...LABEL, color: '#475569', mb: 0.75 }}>Build</Typography>
+          <Typography sx={{ ...LABEL, color: 'var(--text-4)', mb: 0.75 }}>Build</Typography>
           <KnobSlider label="Stack length" unit="mm" value={knobs.L_mm} base={p.L0_mm} min={ranges.L_mm.min} max={ranges.L_mm.max} step={1} d={0} onChange={set('L_mm')} onRangeChange={isAdmin ? setRange('L_mm') : undefined} />
           <KnobSlider label="Turns / slot" value={knobs.N} base={p.N0} min={ranges.N.min} max={ranges.N.max} step={1} d={0} onChange={set('N')} onRangeChange={isAdmin ? setRange('N') : undefined} warn={atLimit} />
           <KnobSlider label="Wire thickness" unit="mm" value={knobs.wireH_mm} base={p.wireH0_mm} min={ranges.wireH_mm.min} max={ranges.wireH_mm.max} step={0.1} d={1} onChange={set('wireH_mm')} onRangeChange={isAdmin ? setRange('wireH_mm') : undefined} warn={atLimit} />
@@ -304,7 +304,7 @@ const ConfiguratorPanel: React.FC = () => {
             <ToggleButtonGroup exclusive size="small" value={knobs.nP} onChange={(_, v) => v != null && set('nP')(v)}>
               {conns.map((c) => (
                 <ToggleButton key={c.nP} value={c.nP} title={c.hint}
-                  sx={{ px: 1.5, py: 0.25, fontSize: 12, color: '#94a3b8', borderColor: '#334155',
+                  sx={{ px: 1.5, py: 0.25, fontSize: 12, color: 'var(--text-2)', borderColor: 'var(--line)',
                     '&.Mui-selected': { bgcolor: '#1d4ed8', color: '#fff', '&:hover': { bgcolor: '#2563eb' } } }}>
                   {c.label}
                 </ToggleButton>
@@ -312,12 +312,12 @@ const ConfiguratorPanel: React.FC = () => {
             </ToggleButtonGroup>
           </Box>
 
-          <Typography sx={{ ...LABEL, color: '#475569', mt: 1.5, mb: 0.75 }}>Operating point</Typography>
+          <Typography sx={{ ...LABEL, color: 'var(--text-4)', mt: 1.5, mb: 0.75 }}>Operating point</Typography>
           <KnobSlider label="Phase current" unit="A" value={knobs.I_A} base={p.I0_A} min={ranges.I_A.min} max={ranges.I_A.max} step={1} d={0} onChange={set('I_A')} onRangeChange={isAdmin ? setRange('I_A') : undefined} warn={overCurr} />
           <KnobSlider label="Speed" unit="rpm" value={knobs.rpm} base={p.rpm0} min={ranges.rpm.min} max={ranges.rpm.max} step={50} d={0} onChange={set('rpm')} onRangeChange={isAdmin ? setRange('rpm') : undefined} />
 
           <Button onClick={reset} size="small" startIcon={<RestartAltIcon sx={{ fontSize: 16 }} />}
-            sx={{ fontSize: 11, textTransform: 'none', color: '#94a3b8', mt: 1 }}>Reset to reference</Button>
+            sx={{ fontSize: 11, textTransform: 'none', color: 'var(--text-2)', mt: 1 }}>Reset to reference</Button>
         </Box>
 
         {/* ── RESULT ── */}
@@ -340,14 +340,14 @@ const ConfiguratorPanel: React.FC = () => {
           <Box sx={{ ...PANEL, p: 1.25 }}>
             <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1, mb: 0.5 }}>
               <Typography sx={{ ...LABEL, flex: 1 }}>Slot fill (winding stack)</Typography>
-              <Typography sx={{ fontSize: 12, color: '#64748b', fontFamily: 'monospace' }}>
+              <Typography sx={{ fontSize: 12, color: 'var(--text-3)', fontFamily: 'monospace' }}>
                 {fmt(stackHeight_mm, 1)} / {fmt(availStack_mm, 1)} mm
               </Typography>
               <Typography sx={{ fontSize: 13, fontWeight: 700, color: fitColor, fontFamily: 'monospace' }}>{fmt(stackFrac * 100, 0)}%</Typography>
             </Box>
             <LinearProgress variant="determinate" value={Math.min(100, stackFrac * 100)}
-              sx={{ height: 8, borderRadius: 1, bgcolor: '#0f172a', '& .MuiLinearProgress-bar': { bgcolor: fitColor } }} />
-            <Typography sx={{ fontSize: 11, color: atLimit ? '#fbbf24' : '#64748b', mt: 0.5 }}>
+              sx={{ height: 8, borderRadius: 1, bgcolor: 'var(--app-bg)', '& .MuiLinearProgress-bar': { bgcolor: fitColor } }} />
+            <Typography sx={{ fontSize: 11, color: atLimit ? '#fbbf24' : 'var(--text-3)', mt: 0.5 }}>
               {atLimit
                 ? `At slot limit — turns × wire capped so the winding fits the slot.`
                 : `${knobs.N} rows × (${fmt(knobs.wireH_mm, 2)} + ${fmt(ref.fit.wireSpacingY_mm, 2)} gap) mm; usable = ${fmt(ref.fit.slotHeight_mm, 1)} − 2×${fmt(ref.fit.insulation_mm, 2)} insulation = ${fmt(availStack_mm, 1)} mm.`}
@@ -356,7 +356,7 @@ const ConfiguratorPanel: React.FC = () => {
 
           {/* wire current cap */}
           <Alert severity={overCurr ? 'error' : 'info'} icon={false}
-            sx={{ py: 0.25, fontSize: 12, bgcolor: overCurr ? '#3f1d1d' : '#0b1424', color: overCurr ? '#fecaca' : '#94a3b8', border: '1px solid', borderColor: overCurr ? '#7f1d1d' : '#1e293b' }}>
+            sx={{ py: 0.25, fontSize: 12, bgcolor: overCurr ? '#3f1d1d' : 'var(--panel-2)', color: overCurr ? '#fecaca' : 'var(--text-2)', border: '1px solid', borderColor: overCurr ? '#7f1d1d' : 'var(--panel)' }}>
             Wire current limit ≈ <b>{fmt(iMax, 0)} A</b> (scales with wire thickness × parallel paths).
             {overCurr && ` Current ${fmt(knobs.I_A, 0)} A exceeds it — thicken wire or use more parallel paths.`}
           </Alert>
@@ -404,8 +404,8 @@ const ConfiguratorPanel: React.FC = () => {
       {/* ── COMPARISON ── */}
       <Box sx={{ px: 2, pb: 2 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.75 }}>
-          <Typography sx={{ fontSize: 13, fontWeight: 700, color: '#e2e8f0' }}>Saved configurations</Typography>
-          <Typography sx={{ fontSize: 11, color: '#64748b' }}>({configs.length}) — green = best · red = worst · click a row to load</Typography>
+          <Typography sx={{ fontSize: 13, fontWeight: 700, color: 'var(--text-0)' }}>Saved configurations</Typography>
+          <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>({configs.length}) — green = best · red = worst · click a row to load</Typography>
           <Box sx={{ flex: 1 }} />
           {configs.length > 0 && (
             <Button onClick={() => setConfigs([])} size="small" sx={{ fontSize: 11, textTransform: 'none', color: '#7f1d1d' }}>Clear all</Button>
@@ -419,18 +419,18 @@ const ConfiguratorPanel: React.FC = () => {
               <Box component="thead"><Box component="tr">
                 <Box component="th" sx={{ ...TH, textAlign: 'left' }}>Configuration</Box>
                 {KNB_COLS.map((k) => <Box component="th" key={k.label} sx={{ ...TH, color: '#fbbf24' }}>{k.label}</Box>)}
-                {RES_COLS.map((r) => <Box component="th" key={r.key} sx={{ ...TH, color: '#4ade80' }}>{r.label}{r.unit ? <Box component="span" sx={{ color: '#334155', fontWeight: 400 }}> {r.unit}</Box> : null}</Box>)}
+                {RES_COLS.map((r) => <Box component="th" key={r.key} sx={{ ...TH, color: '#4ade80' }}>{r.label}{r.unit ? <Box component="span" sx={{ color: 'var(--line)', fontWeight: 400 }}> {r.unit}</Box> : null}</Box>)}
                 <Box component="th" sx={{ ...TH, textAlign: 'center' }}>✕</Box>
               </Box></Box>
               <Box component="tbody">
                 {configs.map((c) => (
-                  <Box component="tr" key={c.id} sx={{ '&:hover': { bgcolor: '#0d1b30' } }}>
+                  <Box component="tr" key={c.id} sx={{ '&:hover': { bgcolor: 'var(--panel-2)' } }}>
                     <Box component="td" onClick={() => loadConfig(c)} title="Load this configuration as the current design (knobs + battery)"
                       sx={{ ...TD, textAlign: 'left', color: '#60a5fa', fontFamily: 'inherit', fontWeight: 600, cursor: 'pointer', '&:hover': { textDecoration: 'underline' } }}>{c.name}</Box>
                     {KNB_COLS.map((k) => <Box component="td" key={k.label} sx={{ ...TD, color: '#fbbf24' }}>{k.get(c)}</Box>)}
                     {RES_COLS.map((r) => {
                       const v = r.get(c);
-                      let col = '#cbd5e1';
+                      let col = 'var(--text-1)';
                       const e = resExt[r.key];
                       if (e && e.min !== e.max && r.goodHi !== undefined) {
                         const best = r.goodHi ? e.max : e.min;
@@ -438,10 +438,10 @@ const ConfiguratorPanel: React.FC = () => {
                         if (Math.abs(v - best) < 1e-9) col = '#4ade80';
                         else if (Math.abs(v - worst) < 1e-9) col = '#f87171';
                       }
-                      return <Box component="td" key={r.key} sx={{ ...TD, color: col, fontWeight: col !== '#cbd5e1' ? 700 : 400 }}>{fmt(v, r.d)}</Box>;
+                      return <Box component="td" key={r.key} sx={{ ...TD, color: col, fontWeight: col !== 'var(--text-1)' ? 700 : 400 }}>{fmt(v, r.d)}</Box>;
                     })}
                     <Box component="td" sx={{ ...TD, textAlign: 'center' }}>
-                      <IconButton size="small" onClick={() => delConfig(c.id)} sx={{ color: '#64748b', p: 0.25, '&:hover': { color: '#f87171' } }}><DeleteOutlineIcon sx={{ fontSize: 15 }} /></IconButton>
+                      <IconButton size="small" onClick={() => delConfig(c.id)} sx={{ color: 'var(--text-3)', p: 0.25, '&:hover': { color: '#f87171' } }}><DeleteOutlineIcon sx={{ fontSize: 15 }} /></IconButton>
                     </Box>
                   </Box>
                 ))}

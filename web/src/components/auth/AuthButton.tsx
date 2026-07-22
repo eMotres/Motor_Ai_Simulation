@@ -9,7 +9,7 @@ const AuthButton: React.FC = () => {
   const { user, loading, enabled, signIn, logout } = useAuth();
 
   if (!enabled) return null;
-  if (loading) return <CircularProgress size={18} sx={{ color: '#94a3b8' }} />;
+  if (loading) return <CircularProgress size={18} sx={{ color: 'var(--text-2)' }} />;
 
   if (!user) {
     return (
@@ -26,14 +26,14 @@ const AuthButton: React.FC = () => {
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
       <Tooltip title={user.email || ''} arrow>
         <Avatar src={user.photoURL || undefined}
-          sx={{ width: 26, height: 26, fontSize: '0.8rem', bgcolor: '#1e3a5f' }}>
+          sx={{ width: 26, height: 26, fontSize: '0.8rem', bgcolor: 'var(--line-accent)' }}>
           {(user.displayName || user.email || '?')[0]?.toUpperCase()}
         </Avatar>
       </Tooltip>
       <Button size="small" variant="text"
         startIcon={<LogoutIcon sx={{ fontSize: 15 }} />}
         onClick={() => logout().catch(() => {})}
-        sx={{ textTransform: 'none', fontSize: '0.72rem', color: '#94a3b8' }}>
+        sx={{ textTransform: 'none', fontSize: '0.72rem', color: 'var(--text-2)' }}>
         Sign out
       </Button>
     </Box>

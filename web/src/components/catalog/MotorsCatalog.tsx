@@ -41,18 +41,18 @@ const fmtP = (w: number) => (w >= 1000 ? `${(w / 1000).toFixed(2)} kW` : `${Math
 // one headline stat (big number + caption)
 const Stat: React.FC<{ value: string; unit?: string; label: string; color?: string }> = ({ value, unit, label, color }) => (
   <Box sx={{ textAlign: 'center', flex: 1, minWidth: 0 }}>
-    <Typography sx={{ fontWeight: 800, color: color ?? '#e2e8f0', fontSize: '0.98rem', lineHeight: 1.1, whiteSpace: 'nowrap' }}>
-      {value}{unit && <span style={{ fontSize: '0.62rem', color: '#94a3b8', fontWeight: 600 }}> {unit}</span>}
+    <Typography sx={{ fontWeight: 800, color: color ?? 'var(--text-0)', fontSize: '0.98rem', lineHeight: 1.1, whiteSpace: 'nowrap' }}>
+      {value}{unit && <span style={{ fontSize: '0.62rem', color: 'var(--text-2)', fontWeight: 600 }}> {unit}</span>}
     </Typography>
-    <Typography sx={{ color: '#64748b', fontSize: '0.58rem', textTransform: 'uppercase', letterSpacing: '0.04em', mt: 0.2 }}>{label}</Typography>
+    <Typography sx={{ color: 'var(--text-3)', fontSize: '0.58rem', textTransform: 'uppercase', letterSpacing: '0.04em', mt: 0.2 }}>{label}</Typography>
   </Box>
 );
 
 // one detail key/value row cell
 const Detail: React.FC<{ k: string; v: React.ReactNode }> = ({ k, v }) => (
   <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1, minWidth: 0 }}>
-    <Typography sx={{ color: '#64748b', fontSize: '0.68rem', whiteSpace: 'nowrap' }}>{k}</Typography>
-    <Typography sx={{ color: '#cbd5e1', fontSize: '0.68rem', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{v}</Typography>
+    <Typography sx={{ color: 'var(--text-3)', fontSize: '0.68rem', whiteSpace: 'nowrap' }}>{k}</Typography>
+    <Typography sx={{ color: 'var(--text-1)', fontSize: '0.68rem', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{v}</Typography>
   </Box>
 );
 
@@ -138,25 +138,25 @@ const MotorsCatalog: React.FC = () => {
     return (
       <Box key={m.id} sx={{
         flex: '1 1 290px', maxWidth: 360, display: 'flex', flexDirection: 'column',
-        p: 1.5, borderRadius: 2, border: '1px solid #1e293b', bgcolor: '#0b1220',
+        p: 1.5, borderRadius: 2, border: '1px solid var(--line-soft)', bgcolor: 'var(--panel-2)',
         transition: 'border-color .15s, box-shadow .15s',
-        '&:hover': { borderColor: '#334a6b', boxShadow: '0 0 0 1px #1e3a5f55' },
+        '&:hover': { borderColor: '#334a6b', boxShadow: '0 0 0 1px var(--line-accent)55' },
       }}>
         {/* header: thumbnail + identity */}
         <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center', mb: 1 }}>
           <Box sx={{ flexShrink: 0, lineHeight: 0 }}><MotorThumbnail motorId={m.id} thumbSvg={m.thumb_svg} slots={m.slots} poles={m.poles} size={84} /></Box>
           <Box sx={{ minWidth: 0, flex: 1 }}>
-            <Typography sx={{ fontWeight: 700, color: '#e2e8f0', fontSize: '0.86rem', lineHeight: 1.2, mb: 0.6 }}>{m.name}</Typography>
+            <Typography sx={{ fontWeight: 700, color: 'var(--text-0)', fontSize: '0.86rem', lineHeight: 1.2, mb: 0.6 }}>{m.name}</Typography>
             <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
-              <Chip size="small" label={`Ø ${m.diameter_mm} mm`} sx={{ height: 18, fontSize: '0.6rem', bgcolor: '#0f1d33', color: '#60a5fa', fontWeight: 700 }} />
-              <Chip size="small" label={`${m.slots}s / ${m.poles}p`} sx={{ height: 18, fontSize: '0.6rem', bgcolor: '#111827', color: '#94a3b8' }} />
-              <Chip size="small" label={m.tier} sx={{ height: 18, fontSize: '0.58rem', textTransform: 'capitalize', bgcolor: `${tierColor[m.tier] ?? '#334155'}22`, color: tierColor[m.tier] ?? '#94a3b8' }} />
+              <Chip size="small" label={`Ø ${m.diameter_mm} mm`} sx={{ height: 18, fontSize: '0.6rem', bgcolor: 'var(--panel-2)', color: '#60a5fa', fontWeight: 700 }} />
+              <Chip size="small" label={`${m.slots}s / ${m.poles}p`} sx={{ height: 18, fontSize: '0.6rem', bgcolor: 'var(--panel-2)', color: 'var(--text-2)' }} />
+              <Chip size="small" label={m.tier} sx={{ height: 18, fontSize: '0.58rem', textTransform: 'capitalize', bgcolor: `${tierColor[m.tier] ?? 'var(--line)'}22`, color: tierColor[m.tier] ?? 'var(--text-2)' }} />
             </Box>
           </Box>
         </Box>
 
         {/* headline stats — SAME three slots on every card */}
-        <Box sx={{ display: 'flex', gap: 0.5, py: 1, my: 0.5, borderTop: '1px solid #1e293b', borderBottom: '1px solid #1e293b' }}>
+        <Box sx={{ display: 'flex', gap: 0.5, py: 1, my: 0.5, borderTop: '1px solid var(--line-soft)', borderBottom: '1px solid var(--line-soft)' }}>
           <Stat value={m.T_avg_Nm > 0 ? fmtT(m.T_avg_Nm) : '—'}
             unit={m.T_avg_Nm > 0 ? 'N·m' : undefined} label="torque" color="#86efac" />
           <Stat value={powerW != null ? fmtP(powerW) : '—'} label="power" color="#7dd3fc" />
@@ -193,8 +193,8 @@ const MotorsCatalog: React.FC = () => {
             <Tooltip title="Rename">
               <span>
                 <IconButton size="small" disabled={!!busy} onClick={() => openRename(m)}
-                  sx={{ color: '#94a3b8', border: '1px solid #334155', borderRadius: 1,
-                    '&:hover': { bgcolor: '#1e293b', borderColor: '#64748b' } }}>
+                  sx={{ color: 'var(--text-2)', border: '1px solid var(--line)', borderRadius: 1,
+                    '&:hover': { bgcolor: 'var(--panel)', borderColor: 'var(--text-3)' } }}>
                   <DriveFileRenameOutlineIcon sx={{ fontSize: 16 }} />
                 </IconButton>
               </span>
@@ -218,10 +218,10 @@ const MotorsCatalog: React.FC = () => {
 
   return (
     <Box sx={{ p: 3, overflowY: 'auto', height: '100%' }}>
-      <Typography variant="h5" sx={{ fontWeight: 800, color: '#e2e8f0', mb: 0.5 }}>
+      <Typography variant="h5" sx={{ fontWeight: 800, color: 'var(--text-0)', mb: 0.5 }}>
         Motor Catalog
       </Typography>
-      <Typography sx={{ color: '#94a3b8', mb: 3, fontSize: '0.9rem' }}>
+      <Typography sx={{ color: 'var(--text-2)', mb: 3, fontSize: '0.9rem' }}>
         Proven motor designs for <b>aerospace, robotics, EV and marine</b> drivetrains. Pick one, tune it to your spec (stack length, winding, wire), see the price, and request manufacturing — click <b>Load</b> to open one as your own editable copy.
       </Typography>
 
@@ -233,27 +233,27 @@ const MotorsCatalog: React.FC = () => {
         {cat.tiers.map((t) => (
           <Box key={t.id} sx={{
             flex: '1 1 220px', maxWidth: 300, p: 2, borderRadius: 2,
-            border: `1px solid ${t.highlight ? tierColor[t.id] : '#1e293b'}`,
-            bgcolor: t.highlight ? '#0f1d33' : '#0b1220',
+            border: `1px solid ${t.highlight ? tierColor[t.id] : 'var(--panel)'}`,
+            bgcolor: t.highlight ? 'var(--panel-2)' : 'var(--panel-2)',
             boxShadow: t.highlight ? `0 0 0 1px ${tierColor[t.id]}55` : 'none',
           }}>
             <Box sx={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
               <Typography sx={{ fontWeight: 700, color: tierColor[t.id] }}>{t.name}</Typography>
-              <Typography sx={{ color: '#e2e8f0', fontWeight: 700 }}>
+              <Typography sx={{ color: 'var(--text-0)', fontWeight: 700 }}>
                 {t.price_usd === 0 ? 'Free' : `$${t.price_usd}/mo`}
               </Typography>
             </Box>
-            <Typography sx={{ color: '#64748b', fontSize: '0.7rem', mb: 1 }}>{t.tagline}</Typography>
+            <Typography sx={{ color: 'var(--text-3)', fontSize: '0.7rem', mb: 1 }}>{t.tagline}</Typography>
             {t.features.map((f, i) => (
               <Box key={i} sx={{ display: 'flex', gap: 0.5, alignItems: 'flex-start', mb: 0.25 }}>
                 <CheckIcon sx={{ fontSize: 14, color: tierColor[t.id], mt: '2px' }} />
-                <Typography sx={{ color: '#cbd5e1', fontSize: '0.72rem' }}>{f}</Typography>
+                <Typography sx={{ color: 'var(--text-1)', fontSize: '0.72rem' }}>{f}</Typography>
               </Box>
             ))}
             <Button size="small" fullWidth disabled={t.price_usd === 0}
               variant={t.highlight ? 'contained' : 'outlined'}
               sx={{ mt: 1.5, textTransform: 'none', fontSize: '0.72rem',
-                ...(t.price_usd === 0 ? { color: '#64748b' } : {}) }}>
+                ...(t.price_usd === 0 ? { color: 'var(--text-3)' } : {}) }}>
               {t.price_usd === 0 ? 'Current plan' : 'Upgrade (soon)'}
             </Button>
           </Box>
@@ -269,12 +269,12 @@ const MotorsCatalog: React.FC = () => {
               <Typography sx={{ fontWeight: 800, color: '#60a5fa', fontSize: '1rem' }}>
                 Ø {d} mm
               </Typography>
-              <Box sx={{ flex: 1, height: '1px', bgcolor: '#1e293b' }} />
+              <Box sx={{ flex: 1, height: '1px', bgcolor: 'var(--panel)' }} />
               <Chip size="small" label={`${motors.length} motor${motors.length === 1 ? '' : 's'}`}
-                sx={{ height: 18, fontSize: '0.62rem', bgcolor: '#111827', color: '#64748b' }} />
+                sx={{ height: 18, fontSize: '0.62rem', bgcolor: 'var(--panel-2)', color: 'var(--text-3)' }} />
             </Box>
             {motors.length === 0 ? (
-              <Typography sx={{ color: '#475569', fontSize: '0.78rem', fontStyle: 'italic', pl: 1, py: 0.5 }}>
+              <Typography sx={{ color: 'var(--text-4)', fontSize: '0.78rem', fontStyle: 'italic', pl: 1, py: 0.5 }}>
                 — no motors yet (spec coming) —
               </Typography>
             ) : (
@@ -288,8 +288,8 @@ const MotorsCatalog: React.FC = () => {
 
       {/* ── Rename dialog (window.prompt is unreliable — Chrome suppresses it) ── */}
       <Dialog open={!!renameTarget} onClose={() => setRenameTarget(null)}
-        PaperProps={{ sx: { bgcolor: '#0b1220', border: '1px solid #1e293b', borderRadius: 2, minWidth: 360 } }}>
-        <DialogTitle sx={{ color: '#e2e8f0', fontSize: '0.95rem', fontWeight: 700 }}>
+        PaperProps={{ sx: { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 2, minWidth: 360 } }}>
+        <DialogTitle sx={{ color: 'var(--text-0)', fontSize: '0.95rem', fontWeight: 700 }}>
           Rename motor
         </DialogTitle>
         <DialogContent>
@@ -302,7 +302,7 @@ const MotorsCatalog: React.FC = () => {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setRenameTarget(null)}
-            sx={{ textTransform: 'none', color: '#94a3b8' }}>Cancel</Button>
+            sx={{ textTransform: 'none', color: 'var(--text-2)' }}>Cancel</Button>
           <Button variant="contained" disabled={!!busy || !renameValue.trim()}
             onClick={() => void submitRename()}
             sx={{ textTransform: 'none' }}>

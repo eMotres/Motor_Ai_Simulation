@@ -148,11 +148,11 @@ const Scatter3D: React.FC<{ points: P3[]; rippleMax: number; best?: P3 | null }>
         <Box sx={{ position: 'absolute', top: 4, left: 6, display: 'flex', gap: 1, alignItems: 'center', pointerEvents: 'auto' }}>
           <FormControlLabel sx={{ m: 0 }} control={
             <Checkbox size="small" checked={showProj} onChange={e => setShowProj(e.target.checked)} sx={{ p: 0.25 }} />
-          } label={<span style={{ fontSize: 10, color: '#94a3b8' }}>floor proj</span>} />
-          <Typography sx={{ fontSize: 10, color: '#64748b' }}>drag = rotate · height = ripple · ◯green ≤ gate</Typography>
+          } label={<span style={{ fontSize: 10, color: 'var(--text-2)' }}>floor proj</span>} />
+          <Typography sx={{ fontSize: 10, color: 'var(--text-3)' }}>drag = rotate · height = ripple · ◯green ≤ gate</Typography>
         </Box>
         {hover && (
-          <Box sx={{ position: 'absolute', bottom: 6, right: 8, fontSize: 11, color: '#cbd5e1', bgcolor: 'rgba(10,22,40,.88)', px: 1, py: 0.25, borderRadius: 1 }}>
+          <Box sx={{ position: 'absolute', bottom: 6, right: 8, fontSize: 11, color: 'var(--text-1)', bgcolor: 'var(--overlay)', px: 1, py: 0.25, borderRadius: 1 }}>
             td {hover.td.toFixed(2)} · eff {(hover.eff * 100).toFixed(2)}% · ripple {hover.ripple.toFixed(1)}%
           </Box>
         )}

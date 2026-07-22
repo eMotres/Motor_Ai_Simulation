@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { useUIStore, type CompKey } from '../../stores/motorStore';
 import { useMotorMesh } from './ApiMotorMesh';
+import { PART_COLORS } from '../../lib/partColors';
 
 // ─── Icons ───────────────────────────────────────────────────────────────────
 
@@ -24,7 +25,7 @@ const EyeOff = () => (
 const MotorIcon = () => (
   <svg width="12" height="12" viewBox="0 0 24 24">
     <circle cx="12" cy="12" r="10" fill="#1e40af" />
-    <circle cx="12" cy="12" r="6"  fill="#1e3a5f" />
+    <circle cx="12" cy="12" r="6"  fill="var(--line-accent)" />
     <circle cx="12" cy="12" r="2"  fill="#60a5fa" />
   </svg>
 );
@@ -68,7 +69,7 @@ const LeafRow: React.FC<LeafRowProps> = ({ label, color, visible, isLast, indent
       onClick={onSelect}
       style={rowStyle(hovered, selected, indent)}
     >
-      <span style={{ color: '#1e293b', fontSize: 10, flexShrink: 0 }}>
+      <span style={{ color: 'var(--text-4)', fontSize: 10, flexShrink: 0 }}>
         {isLast ? '└' : '├'}
       </span>
 
@@ -78,7 +79,7 @@ const LeafRow: React.FC<LeafRowProps> = ({ label, color, visible, isLast, indent
         style={{
           background: 'none', border: 'none', cursor: 'pointer', padding: 0,
           display: 'flex', alignItems: 'center', flexShrink: 0,
-          color: visible ? '#64748b' : '#1e293b',
+          color: visible ? 'var(--text-3)' : 'var(--text-4)',
           transition: 'color 0.15s',
         }}
       >
@@ -95,7 +96,7 @@ const LeafRow: React.FC<LeafRowProps> = ({ label, color, visible, isLast, indent
 
       <span style={{
         flex: 1,
-        color: visible ? '#cbd5e1' : '#334155',
+        color: visible ? 'var(--text-1)' : 'var(--text-4)',
         transition: 'color 0.15s',
         overflow: 'hidden',
         textOverflow: 'ellipsis',
@@ -158,7 +159,7 @@ const GroupRow: React.FC<GroupRowProps> = ({
         style={rowStyle(hovered, selected)}
       >
         {/* Tree connector */}
-        <span style={{ color: '#1e293b', fontSize: 10, flexShrink: 0 }}>
+        <span style={{ color: 'var(--text-4)', fontSize: 10, flexShrink: 0 }}>
           {isLast ? '└' : '├'}
         </span>
 
@@ -168,7 +169,7 @@ const GroupRow: React.FC<GroupRowProps> = ({
           title={expanded ? 'Collapse' : 'Expand'}
           style={{
             background: 'none', border: 'none', cursor: 'pointer', padding: 0,
-            color: '#475569', fontSize: 8, lineHeight: 1, flexShrink: 0,
+            color: 'var(--text-4)', fontSize: 8, lineHeight: 1, flexShrink: 0,
             display: 'flex', alignItems: 'center',
           }}
         >
@@ -182,7 +183,7 @@ const GroupRow: React.FC<GroupRowProps> = ({
           style={{
             background: 'none', border: 'none', cursor: 'pointer', padding: 0,
             display: 'flex', alignItems: 'center', flexShrink: 0,
-            color: groupVisible ? '#64748b' : '#1e293b',
+            color: groupVisible ? 'var(--text-3)' : 'var(--text-4)',
             transition: 'color 0.15s',
           }}
         >
@@ -201,7 +202,7 @@ const GroupRow: React.FC<GroupRowProps> = ({
         {/* Label + hidden-count badge */}
         <span style={{
           flex: 1,
-          color: groupVisible ? '#cbd5e1' : '#334155',
+          color: groupVisible ? 'var(--text-1)' : 'var(--text-4)',
           transition: 'color 0.15s',
           fontSize: 11,
           display: 'flex', alignItems: 'center', gap: 4,
@@ -209,7 +210,7 @@ const GroupRow: React.FC<GroupRowProps> = ({
           {label}
           {groupVisible && hiddenChildCount > 0 && (
             <span style={{
-              fontSize: 8, color: '#475569',
+              fontSize: 8, color: 'var(--text-4)',
               background: 'rgba(71,85,105,0.25)',
               borderRadius: 3, padding: '0 3px',
             }}>
@@ -299,12 +300,12 @@ const ComponentTree: React.FC = () => {
         left: 8,
         zIndex: 1100,
         width: 220,
-        background: 'rgba(10, 17, 30, 0.88)',
+        background: 'var(--overlay)',
         backdropFilter: 'blur(8px)',
-        border: '1px solid rgba(51, 65, 85, 0.6)',
+        border: '1px solid var(--line)',
         borderRadius: 6,
         fontSize: 11,
-        color: '#94a3b8',
+        color: 'var(--text-2)',
         userSelect: 'none',
         boxShadow: '0 4px 16px rgba(0,0,0,0.5)',
       }}
@@ -315,15 +316,15 @@ const ComponentTree: React.FC = () => {
         style={{
           display: 'flex', alignItems: 'center', gap: 5,
           padding: '5px 8px',
-          borderBottom: collapsed ? 'none' : '1px solid rgba(51,65,85,0.5)',
+          borderBottom: collapsed ? 'none' : '1px solid var(--line)',
           cursor: 'pointer',
         }}
       >
-        <span style={{ fontSize: 9, color: '#475569', lineHeight: 1 }}>
+        <span style={{ fontSize: 9, color: 'var(--text-4)', lineHeight: 1 }}>
           {collapsed ? '▶' : '▼'}
         </span>
         <MotorIcon />
-        <span style={{ flex: 1, fontWeight: 600, color: '#e2e8f0', fontSize: 11 }}>
+        <span style={{ flex: 1, fontWeight: 600, color: 'var(--text-0)', fontSize: 11 }}>
           Motor Assembly
         </span>
         {!collapsed && !allVisible && (
@@ -333,7 +334,7 @@ const ComponentTree: React.FC = () => {
               background: 'none',
               border: '1px solid rgba(51,65,85,0.6)',
               borderRadius: 3,
-              color: '#64748b',
+              color: 'var(--text-3)',
               cursor: 'pointer',
               fontSize: 9,
               padding: '1px 5px',
@@ -352,7 +353,7 @@ const ComponentTree: React.FC = () => {
           {/* Stator Core */}
           <LeafRow
             label="Stator Core"
-            color="#7f8c8d"
+            color={PART_COLORS.statorIron}
             visible={componentVisibility.stator}
             isLast={false}
             selected={selectedPart === 'stator'}
@@ -364,7 +365,7 @@ const ComponentTree: React.FC = () => {
           {/* Rotor Core */}
           <LeafRow
             label="Rotor Core"
-            color="#5d6d7e"
+            color={PART_COLORS.rotorIron}
             visible={componentVisibility.rotor}
             isLast={false}
             selected={selectedPart === 'rotor'}
@@ -376,7 +377,7 @@ const ComponentTree: React.FC = () => {
           {/* Windings (expandable) */}
           <GroupRow
             label="Windings"
-            color="#b87333"
+            color={PART_COLORS.copper}
             groupVisible={componentVisibility.coils}
             expanded={windingsExpanded}
             isLast={false}
@@ -394,7 +395,7 @@ const ComponentTree: React.FC = () => {
                 <LeafRow
                   key={i}
                   label={`Coil ${i + 1}`}
-                  color="#b87333"
+                  color={PART_COLORS.copper}
                   visible={vis}
                   isLast={i === coilCount - 1}
                   indent={8}
@@ -407,7 +408,7 @@ const ComponentTree: React.FC = () => {
           {/* Magnets (expandable) */}
           <GroupRow
             label="Magnets"
-            color="#ef4444"
+            color={PART_COLORS.magnetN}
             groupVisible={componentVisibility.magnets}
             expanded={magnetsExpanded}
             isLast={false}
@@ -426,7 +427,7 @@ const ComponentTree: React.FC = () => {
                 <LeafRow
                   key={i}
                   label={`Magnet ${i + 1}${isNorth ? ' N' : ' S'}`}
-                  color={isNorth ? '#ef4444' : '#3b82f6'}
+                  color={isNorth ? PART_COLORS.magnetN : PART_COLORS.magnetS}
                   visible={vis}
                   isLast={i === magnetCount - 1}
                   indent={8}
@@ -439,7 +440,7 @@ const ComponentTree: React.FC = () => {
           {/* Shaft */}
           <LeafRow
             label="Shaft"
-            color="#374151"
+            color={PART_COLORS.shaft}
             visible={componentVisibility.shaft}
             isLast={false}
             selected={selectedPart === 'shaft'}
@@ -451,7 +452,7 @@ const ComponentTree: React.FC = () => {
           {/* Slot liner (Nomex / ceramic) */}
           <LeafRow
             label="Slot liner"
-            color="#3fae5a"
+            color={PART_COLORS.slotLiner}
             visible={componentVisibility.slot_insulation}
             isLast={false}
             selected={selectedPart === 'slot_insulation'}
@@ -463,7 +464,7 @@ const ComponentTree: React.FC = () => {
           {/* Wire enamel (polyimide) */}
           <LeafRow
             label="Wire enamel"
-            color="#d98a3a"
+            color={PART_COLORS.enamel}
             visible={componentVisibility.wire_insulation}
             isLast={false}
             selected={selectedPart === 'wire_insulation'}
@@ -475,7 +476,7 @@ const ComponentTree: React.FC = () => {
           {/* Sliding-band: in_band (rotor-side air ring) */}
           <LeafRow
             label="In Band (rotating air)"
-            color="#22c55e"
+            color={PART_COLORS.inBand}
             visible={componentVisibility.in_band}
             isLast={false}
             selected={selectedPart === 'in_band'}
@@ -487,7 +488,7 @@ const ComponentTree: React.FC = () => {
           {/* Sliding-band: out_band (stator-side air ring) */}
           <LeafRow
             label="Out Band (static air)"
-            color="#a855f7"
+            color={PART_COLORS.outBand}
             visible={componentVisibility.out_band}
             isLast={true}
             selected={selectedPart === 'out_band'}

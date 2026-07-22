@@ -23,9 +23,9 @@ import {
 } from '../../lib/support';
 
 const STATUS_COLOR: Record<string, string> = {
-  open: '#60a5fa', in_progress: '#fbbf24', resolved: '#4ade80', closed: '#64748b',
+  open: '#60a5fa', in_progress: '#fbbf24', resolved: '#4ade80', closed: 'var(--text-3)',
 };
-const TYPE_COLOR: Record<string, string> = { bug: '#f87171', feature: '#a78bfa', question: '#64748b' };
+const TYPE_COLOR: Record<string, string> = { bug: '#f87171', feature: '#a78bfa', question: 'var(--text-3)' };
 const GREETING: ChatMsg = {
   role: 'assistant',
   content: 'Hi! I can help with the Configurator, motor parameters, plans, and how the app works. Ask away — or use **Report** to send a bug or feature request.',
@@ -114,17 +114,17 @@ const SupportWidget: React.FC = () => {
       position: 'fixed', bottom: 20, right: 20, zIndex: 1300,
       width: 'min(380px, calc(100vw - 32px))', height: 'min(560px, calc(100vh - 40px))',
       display: 'flex', flexDirection: 'column', overflow: 'hidden',
-      bgcolor: '#0b1424', border: '1px solid #1e293b', borderRadius: 2,
+      bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 2,
       boxShadow: '0 10px 40px rgba(0,0,0,0.5)',
     }}>
       {/* header */}
-      <Box sx={{ display: 'flex', alignItems: 'center', px: 1.5, py: 1, bgcolor: '#0e1a2f', borderBottom: '1px solid #1e293b' }}>
-        <Typography sx={{ fontSize: 14, fontWeight: 800, color: '#e2e8f0', flex: 1 }}>Help &amp; feedback</Typography>
-        <IconButton size="small" onClick={() => setOpen(false)} sx={{ color: '#64748b' }}><CloseIcon sx={{ fontSize: 18 }} /></IconButton>
+      <Box sx={{ display: 'flex', alignItems: 'center', px: 1.5, py: 1, bgcolor: 'var(--panel-2)', borderBottom: '1px solid var(--line-soft)' }}>
+        <Typography sx={{ fontSize: 14, fontWeight: 800, color: 'var(--text-0)', flex: 1 }}>Help &amp; feedback</Typography>
+        <IconButton size="small" onClick={() => setOpen(false)} sx={{ color: 'var(--text-3)' }}><CloseIcon sx={{ fontSize: 18 }} /></IconButton>
       </Box>
 
       <Tabs value={tab} onChange={(_, v) => setTab(v)} variant="fullWidth"
-        sx={{ minHeight: 36, borderBottom: '1px solid #1e293b', '& .MuiTab-root': { minHeight: 36, fontSize: 12, textTransform: 'none' } }}>
+        sx={{ minHeight: 36, borderBottom: '1px solid var(--line-soft)', '& .MuiTab-root': { minHeight: 36, fontSize: 12, textTransform: 'none' } }}>
         <Tab label="Ask" value="ask" />
         <Tab label="Report" value="report" />
         {user && <Tab label="My tickets" value="tickets" />}
@@ -137,14 +137,14 @@ const SupportWidget: React.FC = () => {
             {msgs.map((m, i) => (
               <Box key={i} sx={{
                 alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start', maxWidth: '85%',
-                bgcolor: m.role === 'user' ? '#1e3a5f' : '#162234', color: '#e2e8f0',
+                bgcolor: m.role === 'user' ? 'var(--line-accent)' : 'var(--line-soft)', color: 'var(--text-0)',
                 px: 1.25, py: 0.85, borderRadius: 1.5, fontSize: 13, lineHeight: 1.45, whiteSpace: 'pre-wrap',
               }}>
                 {m.content}
               </Box>
             ))}
             {sending && (
-              <Box sx={{ alignSelf: 'flex-start', display: 'flex', alignItems: 'center', gap: 1, color: '#64748b', px: 1 }}>
+              <Box sx={{ alignSelf: 'flex-start', display: 'flex', alignItems: 'center', gap: 1, color: 'var(--text-3)', px: 1 }}>
                 <CircularProgress size={12} /> <Typography sx={{ fontSize: 12 }}>thinking…</Typography>
               </Box>
             )}
@@ -154,12 +154,12 @@ const SupportWidget: React.FC = () => {
               </Typography>
             )}
           </Box>
-          <Box sx={{ display: 'flex', gap: 0.75, p: 1, borderTop: '1px solid #1e293b' }}>
+          <Box sx={{ display: 'flex', gap: 0.75, p: 1, borderTop: '1px solid var(--line-soft)' }}>
             <TextField
               value={input} onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); } }}
               placeholder="Ask about the app…" size="small" fullWidth multiline maxRows={3}
-              sx={{ '& .MuiInputBase-root': { fontSize: 13, bgcolor: '#060d17' } }}
+              sx={{ '& .MuiInputBase-root': { fontSize: 13, bgcolor: 'var(--panel-2)' } }}
             />
             <IconButton onClick={() => void send()} disabled={!input.trim() || sending} sx={{ color: '#60a5fa' }}>
               <SendIcon sx={{ fontSize: 20 }} />
@@ -173,13 +173,13 @@ const SupportWidget: React.FC = () => {
         <Box sx={{ flex: 1, overflowY: 'auto', p: 2 }}>
           {!user ? (
             <Box sx={{ textAlign: 'center', mt: 4 }}>
-              <Typography sx={{ fontSize: 13, color: '#94a3b8', mb: 2 }}>Sign in to send a bug report or feature request — so we can follow up with you.</Typography>
+              <Typography sx={{ fontSize: 13, color: 'var(--text-2)', mb: 2 }}>Sign in to send a bug report or feature request — so we can follow up with you.</Typography>
               <Button variant="contained" size="small" onClick={() => void signIn()} sx={{ textTransform: 'none' }}>Sign in with Google</Button>
             </Box>
           ) : submitted ? (
             <Box sx={{ textAlign: 'center', mt: 4 }}>
               <Typography sx={{ fontSize: 14, color: '#4ade80', fontWeight: 700, mb: 1 }}>Thanks — sent! ✓</Typography>
-              <Typography sx={{ fontSize: 12, color: '#94a3b8', mb: 2 }}>The team will see your ticket. You can track it under “My tickets”.</Typography>
+              <Typography sx={{ fontSize: 12, color: 'var(--text-2)', mb: 2 }}>The team will see your ticket. You can track it under “My tickets”.</Typography>
               <Button size="small" onClick={() => setSubmitted(false)} sx={{ textTransform: 'none', color: '#60a5fa' }}>Send another</Button>
             </Box>
           ) : (
@@ -207,16 +207,16 @@ const SupportWidget: React.FC = () => {
           {loadingTickets ? (
             <Box sx={{ display: 'flex', justifyContent: 'center', mt: 4 }}><CircularProgress size={20} /></Box>
           ) : tickets.length === 0 ? (
-            <Typography sx={{ fontSize: 12.5, color: '#64748b', textAlign: 'center', mt: 4 }}>No tickets yet. Use the Report tab to file one.</Typography>
+            <Typography sx={{ fontSize: 12.5, color: 'var(--text-3)', textAlign: 'center', mt: 4 }}>No tickets yet. Use the Report tab to file one.</Typography>
           ) : tickets.map((t) => (
-            <Box key={t.id} sx={{ bgcolor: '#060d17', border: '1px solid #1e293b', borderRadius: 1, p: 1.25, mb: 1 }}>
+            <Box key={t.id} sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1, p: 1.25, mb: 1 }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mb: 0.5 }}>
-                <Chip label={t.type} size="small" sx={{ height: 18, fontSize: 9.5, bgcolor: '#0e1a2f', color: TYPE_COLOR[t.type] ?? '#64748b' }} />
+                <Chip label={t.type} size="small" sx={{ height: 18, fontSize: 9.5, bgcolor: 'var(--panel-2)', color: TYPE_COLOR[t.type] ?? 'var(--text-3)' }} />
                 <Box sx={{ flex: 1 }} />
-                <Chip label={(t.status || 'open').replace('_', ' ')} size="small" sx={{ height: 18, fontSize: 9.5, bgcolor: '#0e1a2f', color: STATUS_COLOR[t.status] ?? '#64748b' }} />
+                <Chip label={(t.status || 'open').replace('_', ' ')} size="small" sx={{ height: 18, fontSize: 9.5, bgcolor: 'var(--panel-2)', color: STATUS_COLOR[t.status] ?? 'var(--text-3)' }} />
               </Box>
-              <Typography sx={{ fontSize: 13, color: '#e2e8f0', fontWeight: 600 }}>{t.title}</Typography>
-              {t.description && <Typography sx={{ fontSize: 11.5, color: '#94a3b8', mt: 0.25 }}>{t.description}</Typography>}
+              <Typography sx={{ fontSize: 13, color: 'var(--text-0)', fontWeight: 600 }}>{t.title}</Typography>
+              {t.description && <Typography sx={{ fontSize: 11.5, color: 'var(--text-2)', mt: 0.25 }}>{t.description}</Typography>}
             </Box>
           ))}
         </Box>

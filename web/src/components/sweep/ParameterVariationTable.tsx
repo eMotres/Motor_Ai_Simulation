@@ -346,7 +346,7 @@ const ParameterVariationTable: React.FC = () => {
                       ? 'rgba(245,158,11,0.08)'
                       : isActive
                         ? 'rgba(59,130,246,0.08)'
-                        : 'rgba(255,255,255,0.03)',
+                        : 'var(--line-soft)',
                   },
                 }}
               >

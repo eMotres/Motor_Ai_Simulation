@@ -38,8 +38,8 @@ interface ModuleManifest {
 }
 interface ModulesResp { modules: ModuleManifest[]; capabilities: string[]; count: number; }
 
-const PANEL = { bgcolor: '#0b1424', border: '1px solid #1e293b', borderRadius: 1.5, p: 2, mt: 3 } as const;
-const ITEM = { bgcolor: '#060d17', border: '1px solid #1e293b', borderRadius: 1, px: 1.5, py: 1 } as const;
+const PANEL = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5, p: 2, mt: 3 } as const;
+const ITEM = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1, px: 1.5, py: 1 } as const;
 
 const ModulesPanel: React.FC = () => {
   const setActiveTab = useUIStore((s: any) => s.setActiveTab);
@@ -80,10 +80,10 @@ const ModulesPanel: React.FC = () => {
   return (
     <Paper sx={PANEL}>
       <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1, mb: 1 }}>
-        <Typography sx={{ fontSize: 14, fontWeight: 700, color: '#e2e8f0' }}>Platform Modules</Typography>
+        <Typography sx={{ fontSize: 14, fontWeight: 700, color: 'var(--text-0)' }}>Platform Modules</Typography>
         {data && <Chip size="small" label={`${data.count} registered`} sx={{ height: 20, fontSize: 11 }} />}
       </Box>
-      <Typography sx={{ fontSize: 11.5, color: '#64748b', mb: 1.5 }}>
+      <Typography sx={{ fontSize: 11.5, color: 'var(--text-3)', mb: 1.5 }}>
         Read live from <code>/api/modules</code> — the portal builds itself from these manifests
         (web interfaces are modules too: each declares its UI panel).
       </Typography>
@@ -153,7 +153,7 @@ const ModulesPanel: React.FC = () => {
       </Box>
 
       {loading && (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, color: '#64748b' }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, color: 'var(--text-3)' }}>
           <CircularProgress size={14} /> Loading modules…
         </Box>
       )}
@@ -168,7 +168,7 @@ const ModulesPanel: React.FC = () => {
           {data.modules.map((m) => (
             <Box key={m.name} sx={ITEM}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
-                <Typography sx={{ fontSize: 13, fontWeight: 600, color: '#e2e8f0' }}>{m.name}</Typography>
+                <Typography sx={{ fontSize: 13, fontWeight: 600, color: 'var(--text-0)' }}>{m.name}</Typography>
                 <Chip size="small" label={m.capability} sx={{ height: 18, fontSize: 10, bgcolor: '#1d4ed8', color: '#fff' }} />
                 <Chip size="small" variant="outlined" label={`v${m.version}`} sx={{ height: 18, fontSize: 10 }} />
                 <Chip size="small" variant="outlined" label={m.kind} sx={{ height: 18, fontSize: 10 }} />
@@ -183,7 +183,7 @@ const ModulesPanel: React.FC = () => {
                   );
                 })()}
               </Box>
-              {m.summary && <Typography sx={{ fontSize: 11, color: '#94a3b8', mt: 0.5 }}>{m.summary}</Typography>}
+              {m.summary && <Typography sx={{ fontSize: 11, color: 'var(--text-2)', mt: 0.5 }}>{m.summary}</Typography>}
               {(m.inputs?.length || m.outputs?.length) ? (
                 <Typography sx={{ fontSize: 10.5, color: '#7dd3fc', mt: 0.5, fontFamily: 'monospace' }}>
                   in: {(m.inputs && m.inputs.length) ? m.inputs.join(', ') : '∅'}
@@ -191,7 +191,7 @@ const ModulesPanel: React.FC = () => {
                   out: {(m.outputs && m.outputs.length) ? m.outputs.join(', ') : '∅'}
                 </Typography>
               ) : null}
-              <Box sx={{ display: 'flex', gap: 1.5, mt: 0.5, fontSize: 10.5, color: '#64748b', flexWrap: 'wrap' }}>
+              <Box sx={{ display: 'flex', gap: 1.5, mt: 0.5, fontSize: 10.5, color: 'var(--text-3)', flexWrap: 'wrap' }}>
                 <span>contracts {m.contracts_version}</span>
                 {m.depends_on.length > 0 && <span>depends on: {m.depends_on.join(', ')}</span>}
                 {m.ui?.frontend_module && <span>panel → {m.ui.frontend_module}</span>}

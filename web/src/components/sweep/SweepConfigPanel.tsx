@@ -93,7 +93,7 @@ const SweepVarCard: React.FC<SweepVarCardProps> = ({ paramName, label, unit, opt
   const half   = snap(Math.max(0, (Number(v.max) - Number(v.min)) / 2));
 
   return (
-    <Card variant="outlined" sx={{ mb: 1.5, bgcolor: 'rgba(255,255,255,0.02)' }}>
+    <Card variant="outlined" sx={{ mb: 1.5, bgcolor: 'var(--line-soft)' }}>
       <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
         <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
           <Typography variant="body2" sx={{ fontWeight: 600, flex: 1 }}>
@@ -129,7 +129,7 @@ const SweepVarCard: React.FC<SweepVarCardProps> = ({ paramName, label, unit, opt
           // Optimize: vary the variable by ± a change window around its CURRENT
           // value — more intuitive than absolute min/max (that's the Sweep view).
           <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap', rowGap: 0.5 }}>
-            <Typography variant="caption" sx={{ fontWeight: 700, color: '#e2e8f0', flexShrink: 0 }}>
+            <Typography variant="caption" sx={{ fontWeight: 700, color: 'var(--text-0)', flexShrink: 0 }}>
               {fmt(anchor)}{unit ? ` ${unit}` : ''}
             </Typography>
             <RangeField label="± change" value={half}
@@ -446,7 +446,7 @@ const SweepConfigPanel: React.FC = () => {
         <Box sx={{ flexShrink: 0, width: 280 }}>
 
           <SectionLabel sx={{ mb: 0.5 }}>Operating Point</SectionLabel>
-          <Card variant="outlined" sx={{ mb: 2.5, mt: 0.5, bgcolor: 'rgba(255,255,255,0.02)' }}>
+          <Card variant="outlined" sx={{ mb: 2.5, mt: 0.5, bgcolor: 'var(--line-soft)' }}>
             <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25 }}>
                 <TextField

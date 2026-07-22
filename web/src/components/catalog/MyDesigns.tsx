@@ -64,8 +64,8 @@ const MyDesigns: React.FC = () => {
   };
 
   return (
-    <Box sx={{ mb: 4, p: 2, borderRadius: 2, border: '1px solid #1e293b', bgcolor: '#0b1220' }}>
-      <Typography sx={{ fontWeight: 800, color: '#e2e8f0', fontSize: '1rem', mb: 1 }}>My Motors</Typography>
+    <Box sx={{ mb: 4, p: 2, borderRadius: 2, border: '1px solid var(--line-soft)', bgcolor: 'var(--panel-2)' }}>
+      <Typography sx={{ fontWeight: 800, color: 'var(--text-0)', fontSize: '1rem', mb: 1 }}>My Motors</Typography>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 1.5, flexWrap: 'wrap' }}>
         <TextField size="small" placeholder="Name this design…" value={name}
           onChange={(e) => setName(e.target.value)}
@@ -83,13 +83,13 @@ const MyDesigns: React.FC = () => {
       {loading ? (
         <CircularProgress size={18} />
       ) : designs.length === 0 ? (
-        <Typography sx={{ color: '#475569', fontSize: '0.78rem', fontStyle: 'italic' }}>
+        <Typography sx={{ color: 'var(--text-4)', fontSize: '0.78rem', fontStyle: 'italic' }}>
           No saved designs yet. Tune a motor in the editor, then click <b>Save current</b>.
         </Typography>
       ) : (
         <Table size="small" sx={{
-          '& td, & th': { borderColor: '#1e293b', py: 0.6, fontSize: '0.78rem', color: '#cbd5e1' },
-          '& th': { color: '#64748b', fontWeight: 600, fontSize: '0.65rem', textTransform: 'uppercase' },
+          '& td, & th': { borderColor: 'var(--panel)', py: 0.6, fontSize: '0.78rem', color: 'var(--text-1)' },
+          '& th': { color: 'var(--text-3)', fontWeight: 600, fontSize: '0.65rem', textTransform: 'uppercase' },
         }}>
           <TableHead>
             <TableRow>
@@ -101,8 +101,8 @@ const MyDesigns: React.FC = () => {
           </TableHead>
           <TableBody>
             {designs.map((d) => (
-              <TableRow key={d.id} hover sx={{ '&:hover': { bgcolor: '#111827' } }}>
-                <TableCell sx={{ fontWeight: 600, color: '#e2e8f0' }}>{d.name}</TableCell>
+              <TableRow key={d.id} hover sx={{ '&:hover': { bgcolor: 'var(--panel-2)' } }}>
+                <TableCell sx={{ fontWeight: 600, color: 'var(--text-0)' }}>{d.name}</TableCell>
                 <TableCell align="center" sx={{ color: '#86efac' }}>
                   {d.metrics?.T_avg_Nm != null ? `${d.metrics.T_avg_Nm.toFixed(1)} N·m` : '—'}
                 </TableCell>
@@ -118,7 +118,7 @@ const MyDesigns: React.FC = () => {
                   <Tooltip title="Delete" arrow>
                     <span>
                       <IconButton size="small" disabled={!!busy} onClick={() => remove(d)}
-                        sx={{ color: '#64748b', '&:hover': { color: '#f87171' } }}>
+                        sx={{ color: 'var(--text-3)', '&:hover': { color: '#f87171' } }}>
                         <DeleteOutlineIcon sx={{ fontSize: 16 }} />
                       </IconButton>
                     </span>

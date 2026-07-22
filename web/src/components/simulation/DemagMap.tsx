@@ -64,13 +64,13 @@ const DemagMap: React.FC<{ field: DemagField }> = ({ field }) => {
     vs.map(([x, y]) => `${(x - xmin).toFixed(3)},${(ymax - y).toFixed(3)}`).join(' ');
 
   return (
-    <Paper sx={{ bgcolor: '#0b1220', border: '1px solid #1e293b', p: 2,
+    <Paper sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', p: 2,
       display: 'flex', flexDirection: 'column', gap: 1 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <Typography sx={{ fontSize: 13, color: '#cbd5e1', fontWeight: 700 }}>
+        <Typography sx={{ fontSize: 13, color: 'var(--text-1)', fontWeight: 700 }}>
           Demagnetisation map — % of Br lost (per element)
           <Tooltip title="Irreversible demagnetisation at every magnet element: % = (1 − Br_factor)·100, where Br_factor comes from the recoil line at the worst demagnetising field the element saw over the electrical period. 0 % = full strength, 100 % = fully demagnetised. This is the same de-rating applied to the magnets in the torque / back-EMF above." placement="top">
-            <span style={{ color: '#475569', marginLeft: 6, fontSize: 11, cursor: 'help' }}>ⓘ</span>
+            <span style={{ color: 'var(--text-4)', marginLeft: 6, fontSize: 11, cursor: 'help' }}>ⓘ</span>
           </Tooltip>
         </Typography>
         <Typography sx={{ fontSize: 11, color: worst > 0.5 ? '#f87171' : '#34d399', fontWeight: 600 }}>
@@ -79,28 +79,28 @@ const DemagMap: React.FC<{ field: DemagField }> = ({ field }) => {
       </Box>
 
       <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'stretch' }}>
-        <Box sx={{ flexGrow: 1, bgcolor: '#060d17', border: '1px solid #0f172a',
+        <Box sx={{ flexGrow: 1, bgcolor: 'var(--panel-2)', border: '1px solid var(--app-bg)',
           borderRadius: 1, minHeight: 300, display: 'flex' }}>
           <svg viewBox={`${-pad} ${-pad} ${W + 2 * pad} ${H + 2 * pad}`}
             width="100%" height="320" preserveAspectRatio="xMidYMid meet"
             style={{ display: 'block' }}>
             {tris.map((t, i) => (
               <polygon key={i} points={poly(t.v)} fill={demagColor(t.pct)}
-                stroke="#0b1220" strokeWidth={W / 600} />
+                stroke="var(--panel-2)" strokeWidth={W / 600} />
             ))}
           </svg>
         </Box>
         {/* Vertical 0–100 % colour legend */}
         <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center',
           justifyContent: 'space-between', py: 0.5, width: 54 }}>
-          <Typography sx={{ fontSize: 9, color: '#94a3b8' }}>100%</Typography>
+          <Typography sx={{ fontSize: 9, color: 'var(--text-2)' }}>100%</Typography>
           <Box sx={{ flexGrow: 1, width: 14, my: 0.5, borderRadius: 1,
-            border: '1px solid #1e293b',
+            border: '1px solid var(--line-soft)',
             background: `linear-gradient(to top,
               ${demagColor(0)} 0%, ${demagColor(25)} 25%, ${demagColor(50)} 50%,
               ${demagColor(75)} 75%, ${demagColor(100)} 100%)` }} />
-          <Typography sx={{ fontSize: 9, color: '#94a3b8' }}>0%</Typography>
-          <Typography sx={{ fontSize: 8, color: '#475569', mt: 0.5, textAlign: 'center' }}>
+          <Typography sx={{ fontSize: 9, color: 'var(--text-2)' }}>0%</Typography>
+          <Typography sx={{ fontSize: 8, color: 'var(--text-4)', mt: 0.5, textAlign: 'center' }}>
             Br lost
           </Typography>
         </Box>

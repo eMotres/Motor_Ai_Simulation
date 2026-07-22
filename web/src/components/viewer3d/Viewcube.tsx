@@ -208,7 +208,7 @@ const Viewcube: React.FC<{ size?: number }> = ({ size = 100 }) => {
         title="Home view"
         style={{
           alignSelf: 'flex-start',
-          background: hovHome ? 'rgba(37,99,235,0.18)' : 'rgba(255,255,255,0.06)',
+          background: hovHome ? 'rgba(37,99,235,0.18)' : 'var(--line-soft)',
           border: `1px solid ${hovHome ? 'rgba(37,99,235,0.5)' : 'rgba(120,160,190,0.3)'}`,
           borderRadius: 5,
           cursor: 'pointer',
@@ -232,7 +232,7 @@ const Viewcube: React.FC<{ size?: number }> = ({ size = 100 }) => {
           orthographic
           camera={{ position: [0, 0, 200], zoom: 1.05, near: 0.1, far: 1000 }}
           style={{
-            background: 'rgba(16, 22, 36, 0.90)',
+            background: 'var(--overlay)',
             borderRadius: 8,
             border: '1px solid rgba(80,110,140,0.35)',
             boxShadow: '0 2px 10px rgba(0,0,0,0.45)',

@@ -9,15 +9,15 @@
       },
       "slot_height": {
         "mode": "fixed",
-        "min": 14.85,
-        "max": 24.75,
+        "min": 11.1,
+        "max": 15.1,
         "step": 0.1
       },
       "core_thickness": {
         "mode": "fixed",
-        "min": 7.2,
-        "max": 7.4,
-        "step": 0.2
+        "min": 3.7,
+        "max": 6.1,
+        "step": 0.1
       },
       "num_seg": {
         "mode": "fixed",
@@ -45,21 +45,21 @@
       },
       "tooth_width": {
         "mode": "fixed",
-        "min": 11,
-        "max": 11.2,
-        "step": 0.2
+        "min": 2,
+        "max": 2.8,
+        "step": 0.1
       },
       "tooth2_width": {
-        "mode": "fixed",
-        "min": 7.5,
-        "max": 7.7,
+        "mode": "optimize",
+        "min": 2,
+        "max": 2.4,
         "step": 0.2
       },
       "cut_width": {
         "mode": "fixed",
-        "min": 7.1,
-        "max": 9.1,
-        "step": 1
+        "min": 4.2,
+        "max": 7,
+        "step": 0.2
       },
       "insulation_thickness": {
         "mode": "fixed",
@@ -69,14 +69,14 @@
       },
       "wire_width": {
         "mode": "fixed",
-        "min": 7,
-        "max": 7.5,
-        "step": 0.5
+        "min": 1.5,
+        "max": 2.5,
+        "step": 0.2
       },
       "wire_height": {
         "mode": "fixed",
-        "min": 0.68,
-        "max": 1.13,
+        "min": 0.5,
+        "max": 0.75,
         "step": 0.1
       },
       "wire_spacing_x": {
@@ -93,9 +93,15 @@
       },
       "num_wires_per_slot": {
         "mode": "fixed",
-        "min": 12,
-        "max": 20,
-        "step": 2
+        "min": 11,
+        "max": 18,
+        "step": 1
+      },
+      "wire_split": {
+        "mode": "fixed",
+        "min": 2,
+        "max": 2,
+        "step": 1
       },
       "slot_hs": {
         "mode": "fixed",
@@ -104,10 +110,10 @@
         "step": 0.01
       },
       "magnet_height": {
-        "mode": "fixed",
-        "min": 21,
-        "max": 21.8,
-        "step": 0.4
+        "mode": "optimize",
+        "min": 5.4,
+        "max": 5.6,
+        "step": 0.2
       },
       "rotor_house_height": {
         "mode": "fixed",
@@ -129,21 +135,21 @@
       },
       "magnet_fill_up": {
         "mode": "fixed",
-        "min": 0.48,
-        "max": 0.52,
-        "step": 0.2
+        "min": 0.2,
+        "max": 0.3,
+        "step": 0.01
       },
       "magnet_fill_radius": {
-        "mode": "fixed",
-        "min": 2,
-        "max": 3,
-        "step": 0.5
+        "mode": "optimize",
+        "min": 0.1,
+        "max": 0.2,
+        "step": 0.1
       },
       "magnet_up_gap": {
-        "mode": "fixed",
-        "min": 0.8699999999999999,
-        "max": 4.47,
-        "step": 0.1
+        "mode": "optimize",
+        "min": 0.1,
+        "max": 0.2,
+        "step": 0.05
       },
       "rotor_hole": {
         "mode": "fixed",
@@ -153,9 +159,15 @@
       },
       "magnet_down_height": {
         "mode": "fixed",
-        "min": 2.6,
-        "max": 3,
-        "step": 0.4
+        "min": -0.2,
+        "max": 3.8,
+        "step": 0.1
+      },
+      "magnet_lamination": {
+        "mode": "fixed",
+        "min": 0,
+        "max": 0,
+        "step": 0.5
       },
       "stator_fillet_r": {
         "mode": "fixed",
@@ -170,10 +182,10 @@
         "step": 0.2
       },
       "rotor_fill_r": {
-        "mode": "optimize",
-        "min": 0.2,
-        "max": 0.5,
-        "step": 0.3
+        "mode": "fixed",
+        "min": 0.1,
+        "max": 0.3,
+        "step": 0.1
       },
       "motor_length": {
         "mode": "fixed",
@@ -188,32 +200,32 @@
         "step": 1
       },
       "gamma_deg": {
-        "mode": "sweep",
-        "min": -42,
-        "max": -12,
-        "step": 5
+        "mode": "fixed",
+        "min": -50,
+        "max": -40,
+        "step": 2
       },
       "current_a": {
-        "mode": "fixed",
-        "min": 100,
-        "max": 110,
-        "step": 10
+        "mode": "optimize",
+        "min": 42,
+        "max": 45,
+        "step": 3
       }
     },
     "operatingPoints": [
       {
-        "current_a": 85,
-        "rpm": 12000,
-        "gamma_deg": -42
+        "current_a": 42,
+        "rpm": 13000,
+        "gamma_deg": -44
       },
       {
-        "current_a": 90,
-        "rpm": 12000,
-        "gamma_deg": -42
+        "current_a": 42,
+        "rpm": 13000,
+        "gamma_deg": -44
       }
     ],
-    "rippleThreshold": 0.1,
-    "ratedTorqueNm": 77.7,
+    "rippleThreshold": 0.08,
+    "ratedTorqueNm": 0.6,
     "vBusV": 480,
     "modulation": "svpwm"
   },

@@ -412,16 +412,16 @@ const MotorField2D: React.FC<Props> = ({ gamma_deg }) => {
         {data && (
           <>
             <Chip label={`|B|_max = ${data.stats.B_mag_max.toFixed(3)} T`}
-              size="small" sx={{ fontSize: 9, height: 16, bgcolor: '#1e3a5f', color: '#93c5fd' }}/>
+              size="small" sx={{ fontSize: 9, height: 16, bgcolor: 'var(--line-accent)', color: '#93c5fd' }}/>
             <Chip label={`θ = ${rotorAng}° mech`}
-              size="small" sx={{ fontSize: 9, height: 16, bgcolor: '#1e293b', color: '#64748b' }}/>
+              size="small" sx={{ fontSize: 9, height: 16, bgcolor: 'var(--panel)', color: 'var(--text-3)' }}/>
           </>
         )}
         <Box sx={{ flex: 1 }}/>
-        <IconButton size="small" onClick={fetchField} sx={{ color: '#475569' }}>
+        <IconButton size="small" onClick={fetchField} sx={{ color: 'var(--text-4)' }}>
           <RefreshIcon fontSize="small"/>
         </IconButton>
-        <IconButton size="small" onClick={downloadPng} sx={{ color: '#475569' }}>
+        <IconButton size="small" onClick={downloadPng} sx={{ color: 'var(--text-4)' }}>
           <DownloadIcon fontSize="small"/>
         </IconButton>
       </Box>
@@ -444,7 +444,7 @@ const MotorField2D: React.FC<Props> = ({ gamma_deg }) => {
             width={CANVAS_SIZE} height={CANVAS_SIZE}
             style={{
               width: CANVAS_SIZE, height: CANVAS_SIZE,
-              borderRadius: 4, border: '1px solid #1e293b',
+              borderRadius: 4, border: '1px solid var(--line-soft)',
               display: 'block',
             }}
           />
@@ -455,15 +455,15 @@ const MotorField2D: React.FC<Props> = ({ gamma_deg }) => {
 
           {/* Field selector */}
           <Box>
-            <Typography sx={{ fontSize: 9, color: '#475569', textTransform: 'uppercase',
+            <Typography sx={{ fontSize: 9, color: 'var(--text-4)', textTransform: 'uppercase',
               letterSpacing: 1, mb: 0.5 }}>Field</Typography>
             <ToggleButtonGroup size="small" value={field} exclusive
               onChange={(_, v) => v && setField(v)}
               sx={{ flexDirection: 'column', alignItems: 'flex-start', gap: 0.25,
                 '& .MuiToggleButton-root': {
                   width: '100%', justifyContent: 'flex-start', py: 0.4, px: 1,
-                  fontSize: 11, color: '#64748b', borderColor: '#1e293b', textTransform: 'none',
-                  '&.Mui-selected': { color: '#e2e8f0', bgcolor: '#1e3a5f', borderColor: '#3b82f6' },
+                  fontSize: 11, color: 'var(--text-3)', borderColor: 'var(--panel)', textTransform: 'none',
+                  '&.Mui-selected': { color: 'var(--text-0)', bgcolor: 'var(--line-accent)', borderColor: '#3b82f6' },
                 },
               }}>
               <ToggleButton value="B_mag">|B| flux density [T]</ToggleButton>
@@ -475,7 +475,7 @@ const MotorField2D: React.FC<Props> = ({ gamma_deg }) => {
 
           {/* Overlays */}
           <Box>
-            <Typography sx={{ fontSize: 9, color: '#475569', textTransform: 'uppercase',
+            <Typography sx={{ fontSize: 9, color: 'var(--text-4)', textTransform: 'uppercase',
               letterSpacing: 1, mb: 0.5 }}>Overlays</Typography>
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
               {[
@@ -484,11 +484,11 @@ const MotorField2D: React.FC<Props> = ({ gamma_deg }) => {
               ].map(({ label, val, set }) => (
                 <Box key={label} onClick={() => set(!val)}
                   sx={{ display: 'flex', alignItems: 'center', gap: 1, cursor: 'pointer',
-                    p: 0.5, borderRadius: 1, bgcolor: val ? '#1e293b' : 'transparent',
-                    border: '1px solid', borderColor: val ? '#334155' : 'transparent' }}>
+                    p: 0.5, borderRadius: 1, bgcolor: val ? 'var(--panel)' : 'transparent',
+                    border: '1px solid', borderColor: val ? 'var(--line)' : 'transparent' }}>
                   <Box sx={{ width: 12, height: 12, borderRadius: 0.5, flexShrink: 0,
-                    bgcolor: val ? '#3b82f6' : '#1e293b', border: '1px solid #334155' }}/>
-                  <Typography sx={{ fontSize: 10, color: val ? '#e2e8f0' : '#475569' }}>
+                    bgcolor: val ? '#3b82f6' : 'var(--panel)', border: '1px solid var(--line)' }}/>
+                  <Typography sx={{ fontSize: 10, color: val ? 'var(--text-0)' : 'var(--text-4)' }}>
                     {label}
                   </Typography>
                 </Box>
@@ -498,10 +498,10 @@ const MotorField2D: React.FC<Props> = ({ gamma_deg }) => {
 
           {/* Rotor angle slider */}
           <Box>
-            <Typography sx={{ fontSize: 9, color: '#475569', textTransform: 'uppercase',
+            <Typography sx={{ fontSize: 9, color: 'var(--text-4)', textTransform: 'uppercase',
               letterSpacing: 1, mb: 0.5 }}>
               Rotor angle: {rotorAng.toFixed(1)}° mech
-              <Typography component="span" sx={{ fontSize: 9, color: '#334155', ml: 1 }}>
+              <Typography component="span" sx={{ fontSize: 9, color: 'var(--line)', ml: 1 }}>
                 ({(rotorAng * 14).toFixed(0)}° elec)
               </Typography>
             </Typography>
@@ -512,7 +512,7 @@ const MotorField2D: React.FC<Props> = ({ gamma_deg }) => {
               min={0} max={25.71} step={0.43}
               sx={{ color: '#3b82f6', py: 0.5,
                 '& .MuiSlider-thumb': { width: 12, height: 12 } }}/>
-            <Typography sx={{ fontSize: 9, color: '#334155' }}>
+            <Typography sx={{ fontSize: 9, color: 'var(--line)' }}>
               One electrical period = 25.71° mech (14 pole pairs)
             </Typography>
           </Box>
@@ -520,10 +520,10 @@ const MotorField2D: React.FC<Props> = ({ gamma_deg }) => {
           {/* Colour bar */}
           {data && field !== 'domain' && (
             <Box>
-              <Typography sx={{ fontSize: 9, color: '#475569', textTransform: 'uppercase',
+              <Typography sx={{ fontSize: 9, color: 'var(--text-4)', textTransform: 'uppercase',
                 letterSpacing: 1, mb: 0.5 }}>Colour scale</Typography>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <Typography sx={{ fontSize: 9, color: '#64748b', width: 40 }}>
+                <Typography sx={{ fontSize: 9, color: 'var(--text-3)', width: 40 }}>
                   {field === 'B_mag' ? '0' :
                    field === 'A_z'   ? data.stats.A_z_min.toExponential(1) :
                    (-data.stats.J_z_max/1e6).toFixed(0)+'M'}
@@ -534,7 +534,7 @@ const MotorField2D: React.FC<Props> = ({ gamma_deg }) => {
                     ? 'linear-gradient(to right, #b21821, #f4a582, #fff, #92c5de, #2166ac)'
                     : 'linear-gradient(to right, #440154, #3b528b, #21918c, #5dc962, #fde725)',
                 }}/>
-                <Typography sx={{ fontSize: 9, color: '#64748b', width: 40, textAlign: 'right' }}>
+                <Typography sx={{ fontSize: 9, color: 'var(--text-3)', width: 40, textAlign: 'right' }}>
                   {field === 'B_mag' ? data.stats.B_mag_max.toFixed(2)+'T' :
                    field === 'A_z'   ? data.stats.A_z_max.toExponential(1) :
                    (data.stats.J_z_max/1e6).toFixed(0)+'M'}
@@ -546,7 +546,7 @@ const MotorField2D: React.FC<Props> = ({ gamma_deg }) => {
           {/* Domain legend */}
           {field === 'domain' && (
             <Box>
-              <Typography sx={{ fontSize: 9, color: '#475569', textTransform: 'uppercase',
+              <Typography sx={{ fontSize: 9, color: 'var(--text-4)', textTransform: 'uppercase',
                 letterSpacing: 1, mb: 0.75 }}>Real Geometry Domains</Typography>
               {[
                 { col: 'rgb(72,85,99)',    label: 'Stator steel (20SW1200)' },
@@ -560,7 +560,7 @@ const MotorField2D: React.FC<Props> = ({ gamma_deg }) => {
               ].map(({ col, label }) => (
                 <Box key={label} sx={{ display:'flex', alignItems:'center', gap:0.75, mb:0.25 }}>
                   <Box sx={{ width:10, height:10, bgcolor:col, borderRadius:'2px', flexShrink:0 }}/>
-                  <Typography sx={{ fontSize:9, color:'#94a3b8' }}>{label}</Typography>
+                  <Typography sx={{ fontSize:9, color:'var(--text-2)' }}>{label}</Typography>
                 </Box>
               ))}
             </Box>
@@ -568,8 +568,8 @@ const MotorField2D: React.FC<Props> = ({ gamma_deg }) => {
 
           {/* Stats */}
           {data && (
-            <Box sx={{ bgcolor:'#060d17', p:1, borderRadius:1, border:'1px solid #1e293b' }}>
-              <Typography sx={{ fontSize:9, fontWeight:700, color:'#475569',
+            <Box sx={{ bgcolor:'var(--panel-2)', p:1, borderRadius:1, border:'1px solid var(--line-soft)' }}>
+              <Typography sx={{ fontSize:9, fontWeight:700, color:'var(--text-4)',
                 textTransform:'uppercase', letterSpacing:1, mb:0.5 }}>Field stats</Typography>
               {[
                 ['|B|_max',  `${data.stats.B_mag_max.toFixed(3)} T`],
@@ -579,16 +579,16 @@ const MotorField2D: React.FC<Props> = ({ gamma_deg }) => {
                 ['Grid',     `${data.grid_size}×${data.grid_size}`],
               ].map(([k,v])=>(
                 <Box key={k as string} sx={{ display:'flex', justifyContent:'space-between', py:0.15 }}>
-                  <Typography sx={{ fontSize:9, color:'#475569' }}>{k}</Typography>
-                  <Typography sx={{ fontSize:9, fontWeight:600, color:'#94a3b8' }}>{v}</Typography>
+                  <Typography sx={{ fontSize:9, color:'var(--text-4)' }}>{k}</Typography>
+                  <Typography sx={{ fontSize:9, fontWeight:600, color:'var(--text-2)' }}>{v}</Typography>
                 </Box>
               ))}
             </Box>
           )}
 
           {/* Note */}
-          <Box sx={{ p:1, bgcolor:'#0a1020', borderRadius:1, border:'1px solid #1e293b' }}>
-            <Typography sx={{ fontSize:8, color:'#334155', lineHeight:1.4 }}>
+          <Box sx={{ p:1, bgcolor:'var(--panel-2)', borderRadius:1, border:'1px solid var(--line-soft)' }}>
+            <Typography sx={{ fontSize:8, color:'var(--line)', lineHeight:1.4 }}>
               {data?.note ?? ''}
               <br/><br/>
               PINN solves the exact nonlinear PDE with μ(B), giving correct B in steel regions.

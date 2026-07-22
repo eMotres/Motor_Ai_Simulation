@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { useUIStore } from '../../stores/motorStore';
+import { PART_COLORS } from '../../lib/partColors';
 
 interface STLMeshProps {
   vertices: number[];
@@ -15,25 +16,15 @@ interface STLMeshProps {
 }
 
 // PBR Material configurations for Fusion 360 style - base colors only, metalness/roughness from UI
+// matte: true → the part keeps its saturated colour (no metallic env wash);
+// iron/shaft stay metallic for the industrial look.
 const PBR_MATERIALS = {
-  stator: {
-    color: '#7f8c8d',
-  },
-  coil: {
-    color: '#b87333',
-  },
-  magnet: {
-    color: '#4a90d9',
-  },
-  rotor: {
-    color: '#7f8c8d',
-  },
-  shaft: {
-    color: '#505050',
-  },
-  default: {
-    color: '#4a90d9',
-  },
+  stator: { color: PART_COLORS.statorIron, matte: false },
+  coil: { color: PART_COLORS.copper, matte: true },
+  magnet: { color: PART_COLORS.magnetN, matte: true },
+  rotor: { color: PART_COLORS.rotorIron, matte: false },
+  shaft: { color: PART_COLORS.shaft, matte: false },
+  default: { color: '#4a90d9', matte: false },
 };
 
 function getMaterialColor(materialType?: string): string {
@@ -58,6 +49,8 @@ export function STLMesh({
   
   // Get base color from material type
   const baseColor = materialType ? getMaterialColor(materialType) : color;
+  const isMatte = !!(materialType
+    && PBR_MATERIALS[materialType as keyof typeof PBR_MATERIALS]?.matte);
 
   useEffect(() => {
     if (!vertices.length || !faces.length) {
@@ -102,13 +95,14 @@ export function STLMesh({
       <mesh ref={meshRef}>
         <bufferGeometry />
         <meshStandardMaterial
+          toneMapped={false}
           color={baseColor}
           transparent={opacity < 1}
           opacity={opacity}
           side={THREE.DoubleSide}
-          metalness={metalness}
-          roughness={roughness}
-          envMapIntensity={envIntensity * 1.5}
+          metalness={isMatte ? 0 : metalness}
+          roughness={isMatte ? 0.8 : roughness}
+          envMapIntensity={isMatte ? 0 : envIntensity * 1.5}
         />
       </mesh>
       

@@ -19,6 +19,29 @@ from typing import Dict, Optional, List, Tuple, Any
 from math import sin, cos, tan, radians, degrees, pi, acos, atan2
 #import math
 
+
+def _safe_union(a, b):
+    """Binary shapely union robust to GEOS 'side location conflict' — thrown when
+    a valid polygon is unioned with a TINY feature (e.g. a 0.2 mm slot-mouth fillet
+    circle on a 40 mm stator) whose edges land within float noise of the base.
+    Retries with buffer(0) then snap-rounded (grid_size) inputs, which resolve the
+    degenerate noding without changing the shape meaningfully (grid ≤ 1 um)."""
+    try:
+        return a.union(b)
+    except Exception:
+        pass
+    try:
+        return a.buffer(0).union(b.buffer(0))
+    except Exception:
+        pass
+    import shapely
+    for gs in (1e-6, 1e-5, 1e-4):
+        try:
+            return shapely.union(a, b, grid_size=gs)
+        except Exception:
+            continue
+    return a.buffer(1e-9).union(b.buffer(1e-9))    # last resort
+
 # CadQuery imports - try to import lazily
 HAS_CADQUERY = False
 
@@ -227,11 +250,22 @@ class CadQueryMotor:
         # different motor (e.g. a 24/28 design) would silently rebuild the wrong pole
         # count (24 slots / 28 poles) for a 12/14 motor.
         import math as _math
-        _P = mapped.get('num_poles'); _S = mapped.get('num_slots')
-        if _P is None and 'num_seg' in mapped and 'num_poles_per_segment' in mapped:
-            _P = mapped['num_seg'] * mapped['num_poles_per_segment']
-        if _S is None and 'num_seg' in mapped and 'num_slots_per_segment' in mapped:
-            _S = mapped['num_seg'] * mapped['num_slots_per_segment']
+        # Priority: an OVERRIDE's explicit counts > the OVERRIDE's segment form >
+        # the config's counts.  Read the segment form from api_params (the caller's
+        # override), NOT from `mapped` — `mapped` is seeded from the config, which
+        # ALWAYS carries num_slots/num_poles, so a preset that only supplies the
+        # segment view (num_seg × *_per_segment, e.g. the 40 mm 2×6/2×7 = 12s/14p)
+        # would otherwise be silently overridden by the config's 24 s / 20 p and mesh
+        # the wrong winding onto the wrong geometry (T ~= 0, singular sector solve).
+        _P = api_params.get('num_poles'); _S = api_params.get('num_slots')
+        if _P is None and api_params.get('num_seg') and api_params.get('num_poles_per_segment'):
+            _P = api_params['num_seg'] * api_params['num_poles_per_segment']
+        if _S is None and api_params.get('num_seg') and api_params.get('num_slots_per_segment'):
+            _S = api_params['num_seg'] * api_params['num_slots_per_segment']
+        if _P is None:
+            _P = mapped.get('num_poles')
+        if _S is None:
+            _S = mapped.get('num_slots')
         if _P is not None and _S is not None:
             _P = int(round(_P)); _S = int(round(_S))
             mapped['num_poles'] = _P
@@ -1095,7 +1129,7 @@ class CadQueryMotor:
             if not rect_poly.is_valid:
                 rect_poly = rect_poly.buffer(0)
 
-            hole = mp.union(rect_poly)
+            hole = _safe_union(mp, rect_poly)
             if not hole.is_valid:
                 hole = hole.buffer(0)
             hole_polys.append(hole)
@@ -1115,7 +1149,10 @@ class CadQueryMotor:
         if _rfr > 1e-4:
             def _npoly(g): return len(g.geoms) if g.geom_type == 'MultiPolygon' else (0 if g.is_empty else 1)
             try:
-                _f = _round_corners_vertex(rotor_poly, _rfr)
+                # sub-bridge surface band: round the air-gap tips only, keep the
+                # magnet-side pole corners sharp (see get_2d_polygons for why).
+                _band = min(1.5, 0.6 * float(self.parameters.get('magnet_up_gap', 1.5) or 1.5))
+                _f = _round_corners_vertex(rotor_poly, _rfr, surface_band=_band)
                 if not _f.is_valid: _f = _f.buffer(0)
                 if (_f.is_valid and not _f.is_empty
                         and _f.area >= 0.85 * rotor_poly.area
@@ -1156,7 +1193,7 @@ class CadQueryMotor:
             cx, cy = _rot(p3s[0], p3s[1], a)
             circ_p = SPoly([(cx + fill_r * cos(2*pi*k/64),
                               cy + fill_r * sin(2*pi*k/64)) for k in range(64)])
-            m_p = trap_p.union(circ_p)
+            m_p = _safe_union(trap_p, circ_p)
             cutters.append(m_p if m_p.is_valid else m_p.buffer(0))
 
             # -X trapezoid pre-merged with fill_r fillet circle
@@ -1167,7 +1204,7 @@ class CadQueryMotor:
             cxn, cyn = _rot(-p3s[0], p3s[1], a)
             circ_n = SPoly([(cxn + fill_r * cos(2*pi*k/64),
                               cyn + fill_r * sin(2*pi*k/64)) for k in range(64)])
-            m_n = trap_n.union(circ_n)
+            m_n = _safe_union(trap_n, circ_n)
             cutters.append(m_n if m_n.is_valid else m_n.buffer(0))
 
             # slot rectangles
@@ -1611,7 +1648,7 @@ class CadQueryMotor:
             rect_pts = [_rot(x, y, a) for x, y in rect_local]
             rect_poly = SPoly(rect_pts)
             if not rect_poly.is_valid: rect_poly = rect_poly.buffer(0)
-            hole = mp.union(rect_poly)
+            hole = _safe_union(mp, rect_poly)
             if not hole.is_valid: hole = hole.buffer(0)
             hole_polys.append(hole)
             # Magnet polarity FLIPPED (N↔S vs the old i%2 convention): the rotor
@@ -1660,7 +1697,14 @@ class CadQueryMotor:
             def _npoly(g):
                 return len(g.geoms) if g.geom_type == 'MultiPolygon' else (0 if g.is_empty else 1)
             try:
-                _f = _round_corners_vertex(rotor_poly, _rfr)
+                # surface band must be NARROWER than the magnet-top bridge
+                # (mag_up_gap): the pocket-top corners sit only up_gap below the
+                # OD, so the default 1.5 mm band swallowed them too and rounded
+                # the pole iron NEXT TO THE MAGNETS (dense mesh fans there).
+                # Air-gap-side tips are AT max radius → a sub-bridge band keeps
+                # them rounded while every magnet-side corner stays sharp.
+                _band = min(1.5, 0.6 * float(p.get('magnet_up_gap', 1.5) or 1.5))
+                _f = _round_corners_vertex(rotor_poly, _rfr, surface_band=_band)
                 if not _f.is_valid:
                     _f = _f.buffer(0)
                 if (_f.is_valid and not _f.is_empty
@@ -1704,7 +1748,7 @@ class CadQueryMotor:
             cx, cy = _rot(p3s[0], p3s[1], a)
             circ_p = SPoly([(cx + fill_r2*cos(2*pi*k/32), cy + fill_r2*sin(2*pi*k/32))
                              for k in range(32)])
-            m_p = trap_p.union(circ_p)
+            m_p = _safe_union(trap_p, circ_p)
             cutters.append(m_p if m_p.is_valid else m_p.buffer(0))
 
             mp1n=(-p1s[0],p1s[1]); mp2n=(-p2s[0],p2s[1])
@@ -1713,7 +1757,7 @@ class CadQueryMotor:
             cxn,cyn = _rot(-p3s[0],p3s[1],a)
             circ_n = SPoly([(cxn + fill_r2*cos(2*pi*k/32), cyn + fill_r2*sin(2*pi*k/32))
                              for k in range(32)])
-            m_n = trap_n.union(circ_n)
+            m_n = _safe_union(trap_n, circ_n)
             cutters.append(m_n if m_n.is_valid else m_n.buffer(0))
 
             slot_w_c = wire_w + ins_w*2 + wire_dx

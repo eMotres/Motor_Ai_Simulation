@@ -1,7 +1,6 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ThemeProvider,
-  createTheme,
   CssBaseline,
   AppBar,
   Toolbar,
@@ -29,7 +28,10 @@ import {
   BubbleChart as BubbleChartIcon,
   Layers as LayersIcon,
   DeleteSweep as DeleteSweepIcon,
+  LightMode as LightModeIcon,
+  DarkMode as DarkModeIcon,
 } from '@mui/icons-material';
+import { buildAppTheme, loadThemeMode, saveThemeMode, type AppMode } from './theme';
 import MotorScene from './components/viewer3d/MotorScene';
 import ParameterVariationTable from './components/sweep/ParameterVariationTable';
 import MotorsCatalog from './components/catalog/MotorsCatalog';
@@ -56,21 +58,9 @@ import CostPanel from './components/cost/CostPanel';
 import { ensureActiveMotor } from './components/common/motorSettings';
 import { useModulePanels } from './modules/moduleTabs';
 
-const darkTheme = createTheme({
-  palette: {
-    mode: 'dark',
-    primary: { main: '#3b82f6' },
-    secondary: { main: '#10b981' },
-    background: { default: '#0f172a', paper: '#1e293b' },
-  },
-  typography: {
-    fontFamily: '"Inter", "Roboto", "Helvetica", "Arial", sans-serif',
-  },
-  components: {
-    MuiTextField: { defaultProps: { variant: 'outlined', size: 'small' } },
-    MuiSlider: { styleOverrides: { root: { color: '#3b82f6' } } },
-  },
-});
+// Theme is built from the shared eMotres/aerostator design tokens — see
+// src/theme.ts.  Light is the default (matches the marketing site); dark
+// stays available via the AppBar toggle.
 
 // ─── Geometry build timer ───────────────────────────────────────────────────
 const indicatorBoxSx = {
@@ -82,7 +72,7 @@ const indicatorBoxSx = {
   display: 'flex',
   alignItems: 'center',
   gap: 1,
-  bgcolor: 'rgba(0,0,0,0.75)',
+  bgcolor: 'var(--overlay)',
   backdropFilter: 'blur(4px)',
   px: 2,
   py: 0.75,
@@ -146,6 +136,9 @@ const GeometryBuildTimer: React.FC = () => {
 };
 
 function App() {
+  const [themeMode, setThemeMode] = useState<AppMode>(() => loadThemeMode());
+  useEffect(() => { saveThemeMode(themeMode); }, [themeMode]);
+  const appTheme = useMemo(() => buildAppTheme(themeMode), [themeMode]);
   const { activeTab, setActiveTab, showGrid, showAxes, toggleGrid, toggleAxes } = useUIStore();
   const { user, isAdmin, tier, enforced } = useAuth();
   // Access tiers (only enforced when the backend has AUTH_ENFORCE on; with it off,
@@ -280,21 +273,24 @@ function App() {
     { id: 'materials', label: 'Materials', order: 30, gate: 'signedIn', showViewer: true,
       render: () => (
         <Box sx={{ display: 'flex', height: '100%' }}>
-          <Box sx={{ width: '50%', display: 'flex', borderRight: '1px solid', borderColor: 'divider', overflow: 'hidden' }}>
-            <Box sx={{ width: panelWidth, flexShrink: 0, overflowY: 'auto', borderRight: '1px solid', borderColor: 'divider' }}>
-              <MaterialsLibraryTree library={matLibrary} loading={matLoading} error={matError}
-                selected={selectedMaterial} onSelect={setSelectedMaterial}
-                canAdd={isAdmin} onAdd={handleAddGlobal} />
+          {/* Library tree — full-height column on the left */}
+          <Box sx={{ width: panelWidth, flexShrink: 0, overflowY: 'auto', borderRight: '1px solid', borderColor: 'divider' }}>
+            <MaterialsLibraryTree library={matLibrary} loading={matLoading} error={matError}
+              selected={selectedMaterial} onSelect={setSelectedMaterial}
+              canAdd={isAdmin} onAdd={handleAddGlobal} />
+          </Box>
+          <Box onMouseDown={onDividerMouseDown} sx={{ width: 5, flexShrink: 0, cursor: 'col-resize',
+            bgcolor: 'divider', transition: 'background-color 0.15s', '&:hover': { bgcolor: 'primary.main' }, userSelect: 'none' }} />
+          {/* Right area — HORIZONTAL split: geometry on top, material props below */}
+          <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+            <Box sx={{ height: '50%', overflow: 'hidden', position: 'relative',
+              borderBottom: '1px solid', borderColor: 'divider', bgcolor: 'var(--panel-2)' }}>
+              <MotorScene />
             </Box>
-            <Box onMouseDown={onDividerMouseDown} sx={{ width: 5, flexShrink: 0, cursor: 'col-resize',
-              bgcolor: 'divider', transition: 'background-color 0.15s', '&:hover': { bgcolor: 'primary.main' }, userSelect: 'none' }} />
-            <Box sx={{ flex: 1, overflow: 'hidden', bgcolor: '#0a1120' }}>
+            <Box sx={{ flex: 1, overflow: 'hidden', bgcolor: 'var(--panel-2)' }}>
               <MaterialDetailView library={matLibrary} selected={selectedMaterial}
                 onChanged={matReload} onSelect={setSelectedMaterial} />
             </Box>
-          </Box>
-          <Box sx={{ width: '50%', overflow: 'hidden', position: 'relative', bgcolor: '#060d17' }}>
-            <MotorScene />
           </Box>
         </Box>
       ) },
@@ -322,7 +318,7 @@ function App() {
   const showViewer = !!tabs.find((t) => t.id === activeTab)?.showViewer;
 
   return (
-    <ThemeProvider theme={darkTheme}>
+    <ThemeProvider theme={appTheme}>
       <CssBaseline />
       <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
 
@@ -396,6 +392,14 @@ function App() {
               </Box>
             )}
 
+            <Tooltip title={themeMode === 'light' ? 'Dark theme' : 'Light theme'}>
+              <IconButton size="small"
+                onClick={() => setThemeMode(m => (m === 'light' ? 'dark' : 'light'))}>
+                {themeMode === 'light'
+                  ? <DarkModeIcon fontSize="small" />
+                  : <LightModeIcon fontSize="small" />}
+              </IconButton>
+            </Tooltip>
             <Tooltip title="Reset to Defaults">
               <IconButton size="small" onClick={resetToDefaults}>
                 <RefreshIcon fontSize="small" />

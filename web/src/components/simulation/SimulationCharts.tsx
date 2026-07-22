@@ -47,14 +47,14 @@ interface ChartProps {
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 const CHART_STYLE = {
-  bgcolor: '#060d17',
-  border: '1px solid #1e293b',
+  bgcolor: 'var(--panel-2)',
+  border: '1px solid var(--line-soft)',
   borderRadius: 2,
   p: 2,
 };
 
-const AXIS_STYLE = { stroke: '#334155', fontSize: 10 };
-const GRID_STYLE = { stroke: '#1e293b', strokeDasharray: '3 3' };
+const AXIS_STYLE = { stroke: 'var(--line)', fontSize: 10 };
+const GRID_STYLE = { stroke: 'var(--panel)', strokeDasharray: '3 3' };
 
 function sectionLabel(title: string, note?: string) {
   return (
@@ -65,7 +65,7 @@ function sectionLabel(title: string, note?: string) {
       </Typography>
       {note && (
         <Chip label={note} size="small"
-          sx={{ fontSize: 9, height: 16, bgcolor: '#1e293b', color: '#64748b' }}/>
+          sx={{ fontSize: 9, height: 16, bgcolor: 'var(--panel)', color: 'var(--text-3)' }}/>
       )}
     </Box>
   );
@@ -162,9 +162,9 @@ const SimulationCharts: React.FC<ChartProps> = ({
   const T_period_ms = parseFloat(((elecPeriod_deg / 360) * (60 / rpm) * 1000).toFixed(4));
 
   const tooltipStyle = {
-    contentStyle: { backgroundColor: '#1e293b', border: '1px solid #334155',
+    contentStyle: { backgroundColor: 'var(--panel)', border: '1px solid var(--line)',
       borderRadius: 6, fontSize: 11 },
-    labelStyle: { color: '#94a3b8' },
+    labelStyle: { color: 'var(--text-2)' },
   };
 
   // X-axis tick formatter
@@ -175,17 +175,17 @@ const SimulationCharts: React.FC<ChartProps> = ({
 
       {/* ── Header ── */}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
-        <Typography variant="h6" sx={{ color: '#e2e8f0', fontWeight: 700 }}>
+        <Typography variant="h6" sx={{ color: 'var(--text-0)', fontWeight: 700 }}>
           Waveforms — One Electrical Period
         </Typography>
         <Chip label={`${elecPeriod_deg.toFixed(2)}° mech`} size="small"
-          sx={{ fontSize: 10, bgcolor: '#1e3a5f', color: '#93c5fd' }}/>
+          sx={{ fontSize: 10, bgcolor: 'var(--line-accent)', color: '#93c5fd' }}/>
         <Chip label={`${T_period_ms.toFixed(3)} ms`} size="small"
-          sx={{ fontSize: 10, bgcolor: '#1e3a5f', color: '#93c5fd' }}/>
+          sx={{ fontSize: 10, bgcolor: 'var(--line-accent)', color: '#93c5fd' }}/>
         <Chip label={`${n_cogging} cogging sub-periods`} size="small"
           sx={{ fontSize: 10, bgcolor: '#2d1e0f', color: '#fb923c' }}/>
       </Box>
-      <Typography sx={{ fontSize: 11, color: '#475569', mt: -1 }}>
+      <Typography sx={{ fontSize: 11, color: 'var(--text-4)', mt: -1 }}>
         Vertical dashed lines = cogging boundaries ({coggingPeriod_deg.toFixed(3)}° each).
         Torque T(θ) and iron losses require NVIDIA Modulus.
       </Typography>
@@ -198,10 +198,10 @@ const SimulationCharts: React.FC<ChartProps> = ({
             <CartesianGrid {...GRID_STYLE} />
             <XAxis dataKey="theta" tickFormatter={xFmt} tick={AXIS_STYLE}
               label={{ value: 'θ_mech [°]', position: 'insideBottomRight',
-                       offset: -5, style: { fontSize: 10, fill: '#475569' } }}/>
+                       offset: -5, style: { fontSize: 10, fill: 'var(--text-4)' } }}/>
             <YAxis tick={AXIS_STYLE}
               label={{ value: 'i [A]', angle: -90, position: 'insideLeft',
-                       style: { fontSize: 10, fill: '#475569' } }}/>
+                       style: { fontSize: 10, fill: 'var(--text-4)' } }}/>
             <RcTooltip {...tooltipStyle}
               formatter={(v: number, name: string) => [`${v.toFixed(1)} A`, name]}
               labelFormatter={(l: number) => `θ = ${l.toFixed(2)}°`}
@@ -211,9 +211,9 @@ const SimulationCharts: React.FC<ChartProps> = ({
               <ReferenceLine key={d} x={d} stroke="#f97316" strokeDasharray="2 4"
                 strokeWidth={0.8} strokeOpacity={0.6}/>
             ))}
-            <Line dataKey="iA" name="i_A" stroke="#f87171" dot={false} strokeWidth={2}/>
-            <Line dataKey="iB" name="i_B" stroke="#4ade80" dot={false} strokeWidth={2}/>
-            <Line dataKey="iC" name="i_C" stroke="#60a5fa" dot={false} strokeWidth={2}/>
+            <Line dataKey="iA" name="i_A" stroke="#f87171" dot={false} strokeWidth={1.25}/>
+            <Line dataKey="iB" name="i_B" stroke="#4ade80" dot={false} strokeWidth={1.25}/>
+            <Line dataKey="iC" name="i_C" stroke="#60a5fa" dot={false} strokeWidth={1.25}/>
           </LineChart>
         </ResponsiveContainer>
       </Paper>
@@ -221,7 +221,7 @@ const SimulationCharts: React.FC<ChartProps> = ({
       {/* ── Chart 2: Phase Voltages ── */}
       <Paper sx={CHART_STYLE}>
         {sectionLabel('Phase Voltages', `R·i + X_L·i  (L_est = ${(L_phase_est_H*1000).toFixed(2)} mH)`)}
-        <Typography sx={{ fontSize: 10, color: '#475569', mb: 0.75 }}>
+        <Typography sx={{ fontSize: 10, color: 'var(--text-4)', mb: 0.75 }}>
           ⚠ Approximate — back-EMF from flux linkage requires PINN
         </Typography>
         <ResponsiveContainer width="100%" height={200}>
@@ -230,7 +230,7 @@ const SimulationCharts: React.FC<ChartProps> = ({
             <XAxis dataKey="theta" tickFormatter={xFmt} tick={AXIS_STYLE}/>
             <YAxis tick={AXIS_STYLE}
               label={{ value: 'V [V]', angle: -90, position: 'insideLeft',
-                       style: { fontSize: 10, fill: '#475569' } }}/>
+                       style: { fontSize: 10, fill: 'var(--text-4)' } }}/>
             <RcTooltip {...tooltipStyle}
               formatter={(v: number, name: string) => [`${v.toFixed(1)} V`, name]}
               labelFormatter={(l: number) => `θ = ${l.toFixed(2)}°`}
@@ -240,9 +240,9 @@ const SimulationCharts: React.FC<ChartProps> = ({
               <ReferenceLine key={d} x={d} stroke="#f97316" strokeDasharray="2 4"
                 strokeWidth={0.8} strokeOpacity={0.6}/>
             ))}
-            <Line dataKey="vA" name="V_A" stroke="#f87171" dot={false} strokeWidth={2}/>
-            <Line dataKey="vB" name="V_B" stroke="#4ade80" dot={false} strokeWidth={2}/>
-            <Line dataKey="vC" name="V_C" stroke="#60a5fa" dot={false} strokeWidth={2}/>
+            <Line dataKey="vA" name="V_A" stroke="#f87171" dot={false} strokeWidth={1.25}/>
+            <Line dataKey="vB" name="V_B" stroke="#4ade80" dot={false} strokeWidth={1.25}/>
+            <Line dataKey="vC" name="V_C" stroke="#60a5fa" dot={false} strokeWidth={1.25}/>
           </LineChart>
         </ResponsiveContainer>
       </Paper>
@@ -256,7 +256,7 @@ const SimulationCharts: React.FC<ChartProps> = ({
             <XAxis dataKey="theta" tickFormatter={xFmt} tick={AXIS_STYLE}/>
             <YAxis tick={AXIS_STYLE}
               label={{ value: 'P [W]', angle: -90, position: 'insideLeft',
-                       style: { fontSize: 10, fill: '#475569' } }}/>
+                       style: { fontSize: 10, fill: 'var(--text-4)' } }}/>
             <RcTooltip {...tooltipStyle}
               formatter={(v: number, name: string) => [`${v.toFixed(1)} W`, name]}
               labelFormatter={(l: number) => `θ = ${l.toFixed(2)}°`}
@@ -266,10 +266,10 @@ const SimulationCharts: React.FC<ChartProps> = ({
               <ReferenceLine key={d} x={d} stroke="#f97316" strokeDasharray="2 4"
                 strokeWidth={0.8} strokeOpacity={0.6}/>
             ))}
-            <Line dataKey="Pcu" name="P_cu (Cu)" stroke="#fbbf24" dot={false} strokeWidth={2}/>
+            <Line dataKey="Pcu" name="P_cu (Cu)" stroke="#fbbf24" dot={false} strokeWidth={1.25}/>
           </LineChart>
         </ResponsiveContainer>
-        <Typography sx={{ fontSize: 10, color: '#334155', mt: 0.5 }}>
+        <Typography sx={{ fontSize: 10, color: 'var(--line)', mt: 0.5 }}>
           P_cu is constant for balanced 3-phase: P = (3/2) × R_phase × I_peak²
           = {((1.5 * R_phase * I_phase_peak ** 2)).toFixed(1)} W
         </Typography>

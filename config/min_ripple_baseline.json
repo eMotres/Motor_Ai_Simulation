@@ -1,0 +1,56 @@
+{
+  "label": "min-ripple baseline (200mm / 20p24s)",
+  "purpose": "Named restore point for MANUAL tuning. The active motor_config.yaml currently equals this design; manual edits will mutate the live config, so this file preserves the min-ripple starting point to compare against / revert to.",
+  "saved_at": "2026-06-17",
+  "operating_point": {
+    "max_current_A": 100.0,
+    "gamma_deg": 28.0,
+    "rpm": 4000.0,
+    "comment": "From motor_config.yaml simulation block (max_current, phase_offset_deg, rpm). Current auto-solves to ~77.7 N.m target via the optimizer; the Simulation runs this fixed 100 A."
+  },
+  "geometry": {
+    "stator_diameter": 200,
+    "slot_height": 19.8,
+    "core_thickness": 6.8,
+    "num_seg": 4,
+    "num_slots_per_segment": 6,
+    "num_poles_per_segment": 5,
+    "air_gap": 0.65,
+    "tooth_width": 11.4,
+    "tooth2_width": 7.5,
+    "cut_width": 8.1,
+    "insulation_thickness": 0.2,
+    "wire_width": 6.6,
+    "wire_height": 0.9,
+    "wire_spacing_x": 0.1,
+    "wire_spacing_y": 0.13,
+    "num_wires_per_slot": 12.0,
+    "slot_hs": 0.267,
+    "magnet_height": 21.4,
+    "rotor_house_height": 1.6,
+    "shaft_height": 4.0,
+    "magnet_fill_down": 0.9,
+    "magnet_fill_up": 0.467,
+    "magnet_fill_radius": 3.3000000000000003,
+    "magnet_up_gap": 2.67,
+    "rotor_hole": 0.6,
+    "magnet_down_height": 2.3,
+    "stator_fillet_r": 4.6,
+    "stator_fillet_r1": 1.8,
+    "rotor_fill_r": 2.1,
+    "motor_length": 45
+  },
+  "metrics_at_target_torque_77_7Nm_log": {
+    "comment": "From the overnight campaign log, at the AUTO-SOLVED current (~107 A) that hits the 77.7 N.m target, steps=120, n_sectors=-1 (old optimizer 'clean ring' build).",
+    "efficiency_pct": 94.29,
+    "torque_per_mass_Nm_kg": 7.78,
+    "T_ripple_pct": 7.78,
+    "T_Nm": 78.1,
+    "current_A": 107
+  },
+  "metrics_at_simulation_point_100A_g28_steps120": {
+    "comment": "Verified 2026-06-17 via verify_nsectors_unify.py at the Simulation's fixed 100 A / gamma 28 / 4000 rpm / steps=120. The two FEM build modes differ by only ~1.7 pp ripple (and the ordering flips run-to-run) -> the spread is mesh noise (~+/-2 pp), not a real design difference; efficiency and torque are identical. The now-unified optimizer/sweep/DOE use n_sectors = mesh.nSectors, exactly like the Simulation tab.",
+    "n_sectors_1_simulation_build":  { "efficiency_pct": 94.25, "T_ripple_pct": 9.27,  "T_Nm": 71.58, "V_peak": 213.1 },
+    "n_sectors_minus1_old_opt_build": { "efficiency_pct": 94.29, "T_ripple_pct": 10.93, "T_Nm": 72.92, "V_peak": 209.4 }
+  }
+}

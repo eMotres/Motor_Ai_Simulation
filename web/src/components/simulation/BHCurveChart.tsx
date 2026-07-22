@@ -83,13 +83,13 @@ const BHCurveChart: React.FC<Props> = ({
   if (!curveData.length) return null;
 
   return (
-    <Paper sx={{ bgcolor: '#0b1220', border: '1px solid #1e293b', p: 2,
+    <Paper sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', p: 2,
       display: 'flex', flexDirection: 'column', gap: 1 }}>
       <Box>
-        <Typography sx={{ fontSize: 13, color: '#cbd5e1', fontWeight: 700 }}>
+        <Typography sx={{ fontSize: 13, color: 'var(--text-1)', fontWeight: 700 }}>
           Magnet B–H demagnetisation curve · per-magnet operating points
         </Typography>
-        <Typography sx={{ fontSize: 10, color: '#475569' }}>
+        <Typography sx={{ fontSize: 10, color: 'var(--text-4)' }}>
           Black line: measured BH curve of the magnet grade assigned in the Materials
           tab.  Each dot = one magnet's worst-cell operating point (H projected on +M̂,
           B along the same axis).  Dots below the knee are in irreversible demag.
@@ -98,30 +98,30 @@ const BHCurveChart: React.FC<Props> = ({
       <Box sx={{ height: 320 }}>
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart margin={{ top: 8, right: 10, left: 0, bottom: 26 }}>
-            <CartesianGrid stroke="#1e293b" strokeDasharray="2 4"/>
+            <CartesianGrid stroke="var(--panel)" strokeDasharray="2 4"/>
             <XAxis
               type="number"
               dataKey="H_kA_per_m"
-              tick={{ fontSize: 10, fill: '#94a3b8' }}
+              tick={{ fontSize: 10, fill: 'var(--text-2)' }}
               label={{ value: 'H [kA/m]', position: 'insideBottom',
-                offset: -8, style: { fontSize: 10, fill: '#475569' } }}
+                offset: -8, style: { fontSize: 10, fill: 'var(--text-4)' } }}
               domain={['dataMin', 'dataMax']}
             />
             <YAxis
               type="number"
               dataKey="B_T"
-              tick={{ fontSize: 10, fill: '#94a3b8' }}
+              tick={{ fontSize: 10, fill: 'var(--text-2)' }}
               label={{ value: 'B [T]', angle: -90, position: 'insideLeft',
-                offset: 12, style: { fontSize: 10, fill: '#475569' } }}
+                offset: 12, style: { fontSize: 10, fill: 'var(--text-4)' } }}
               domain={[-1.2, 1.5]}
             />
             <Tooltip
-              contentStyle={{ background: '#0f172a', border: '1px solid #1e293b',
-                fontSize: 11, color: '#cbd5e1' }}
+              contentStyle={{ background: 'var(--app-bg)', border: '1px solid var(--line-soft)',
+                fontSize: 11, color: 'var(--text-1)' }}
               labelFormatter={(v) => `H = ${(v as number).toFixed(0)} kA/m`}
             />
-            <ReferenceLine y={0} stroke="#475569" strokeDasharray="3 3"/>
-            <ReferenceLine x={0} stroke="#475569" strokeDasharray="3 3"/>
+            <ReferenceLine y={0} stroke="var(--text-4)" strokeDasharray="3 3"/>
+            <ReferenceLine x={0} stroke="var(--text-4)" strokeDasharray="3 3"/>
             {H_knee != null && (
               <ReferenceLine x={H_knee} stroke="#fbbf24" strokeDasharray="2 4"
                 label={{ value: `knee ${H_knee.toFixed(0)} kA/m`,
@@ -131,9 +131,9 @@ const BHCurveChart: React.FC<Props> = ({
               data={curveData}
               dataKey="B_T"
               type="monotone"
-              stroke="#cbd5e1"
-              strokeWidth={2}
-              dot={{ r: 2, fill: '#64748b' }}
+              stroke="var(--text-1)"
+              strokeWidth={1.25}
+              dot={{ r: 0.5, fill: 'var(--text-3)' }}
               isAnimationActive={false}
               name="BH curve"
             />
@@ -147,13 +147,13 @@ const BHCurveChart: React.FC<Props> = ({
                 const d = demagByIdx.get(p.magnet_index);
                 const colour = d?.demagnetised ? '#ef4444'
                               : d ? '#fbbf24' : '#10b981';
-                return <Cell key={i} fill={colour} stroke="#0b1220"/>;
+                return <Cell key={i} fill={colour} stroke="var(--panel-2)"/>;
               })}
             </Scatter>
           </ComposedChart>
         </ResponsiveContainer>
       </Box>
-      <Box sx={{ display: 'flex', gap: 2, fontSize: 10, color: '#64748b' }}>
+      <Box sx={{ display: 'flex', gap: 2, fontSize: 10, color: 'var(--text-3)' }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
           <Box sx={{ width: 10, height: 10, bgcolor: '#10b981', borderRadius: '50%' }}/>
           safe
@@ -166,7 +166,7 @@ const BHCurveChart: React.FC<Props> = ({
           <Box sx={{ width: 10, height: 10, bgcolor: '#ef4444', borderRadius: '50%' }}/>
           demagnetised
         </Box>
-        <Box sx={{ ml: 'auto', fontFamily: 'monospace', color: '#94a3b8' }}>
+        <Box sx={{ ml: 'auto', fontFamily: 'monospace', color: 'var(--text-2)' }}>
           {opData.length} magnets · {(demag_report ?? []).length} flagged
           {has_demag && ' · ⛔ irreversible loss'}
           {!has_demag && has_near && ' · ⚠ near-knee'}

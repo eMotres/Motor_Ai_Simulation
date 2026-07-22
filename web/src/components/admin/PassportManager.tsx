@@ -19,7 +19,7 @@ import {
 import BoltIcon from '@mui/icons-material/Bolt';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
-const PANEL = { bgcolor: '#0b1424', border: '1px solid #1e293b', borderRadius: 1.5 } as const;
+const PANEL = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5 } as const;
 
 interface CatMotor {
   id: string; name?: string; diameter_mm?: number; preset?: string;
@@ -62,14 +62,14 @@ const PassportManager: React.FC = () => {
   return (
     <>
       <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1, mt: 3, mb: 1, flexWrap: 'wrap' }}>
-        <Typography sx={{ fontSize: 15, fontWeight: 800, color: '#e2e8f0' }}>References &amp; passports</Typography>
-        <Typography sx={{ fontSize: 11, color: '#64748b' }}>{done}/{motors.length} characterised</Typography>
+        <Typography sx={{ fontSize: 15, fontWeight: 800, color: 'var(--text-0)' }}>References &amp; passports</Typography>
+        <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>{done}/{motors.length} characterised</Typography>
         <Box sx={{ flex: 1 }} />
         <FormControlLabel
-          control={<Checkbox size="small" checked={coarse} onChange={(e) => setCoarse(e.target.checked)} sx={{ color: '#475569', '&.Mui-checked': { color: '#60a5fa' } }} />}
-          label={<Typography sx={{ fontSize: 11, color: '#94a3b8' }}>coarse (fast)</Typography>} />
+          control={<Checkbox size="small" checked={coarse} onChange={(e) => setCoarse(e.target.checked)} sx={{ color: 'var(--text-4)', '&.Mui-checked': { color: '#60a5fa' } }} />}
+          label={<Typography sx={{ fontSize: 11, color: 'var(--text-2)' }}>coarse (fast)</Typography>} />
       </Box>
-      <Typography sx={{ fontSize: 11, color: '#475569', mb: 1 }}>
+      <Typography sx={{ fontSize: 11, color: 'var(--text-4)', mb: 1 }}>
         Generating a passport runs a FEM sweep on the motor (minutes) and publishes it to the catalog, so the
         Configurator can scale it instantly. Switches the active motor while it runs.
       </Typography>
@@ -78,8 +78,8 @@ const PassportManager: React.FC = () => {
       )}
       <Paper sx={{ ...PANEL, p: 0, overflow: 'hidden' }}>
         <Table size="small" sx={{
-          '& td, & th': { borderColor: '#1e293b', fontSize: 12.5 },
-          '& th': { color: '#64748b', fontWeight: 700, textTransform: 'uppercase', fontSize: 10, letterSpacing: '0.04em' },
+          '& td, & th': { borderColor: 'var(--panel)', fontSize: 12.5 },
+          '& th': { color: 'var(--text-3)', fontWeight: 700, textTransform: 'uppercase', fontSize: 10, letterSpacing: '0.04em' },
         }}>
           <TableHead>
             <TableRow>
@@ -94,13 +94,13 @@ const PassportManager: React.FC = () => {
               const p = m.passport?.passport;
               return (
                 <TableRow key={m.id} hover>
-                  <TableCell><Typography sx={{ fontSize: 13, color: '#e2e8f0', fontWeight: 600 }}>{m.name ?? m.id}</Typography></TableCell>
-                  <TableCell align="right" sx={{ color: '#94a3b8' }}>{m.diameter_mm ?? '—'}</TableCell>
+                  <TableCell><Typography sx={{ fontSize: 13, color: 'var(--text-0)', fontWeight: 600 }}>{m.name ?? m.id}</Typography></TableCell>
+                  <TableCell align="right" sx={{ color: 'var(--text-2)' }}>{m.diameter_mm ?? '—'}</TableCell>
                   <TableCell>
                     {p
                       ? <Chip size="small" label={`T0 ${Number(p.T0_Nm ?? 0).toFixed((p.T0_Nm ?? 0) < 10 ? 1 : 0)} N·m · ${p.speed?.rpm?.length ?? 0} rpm pts`}
-                          sx={{ height: 18, fontSize: 9.5, bgcolor: '#052e16', color: '#4ade80' }} />
-                      : <Chip size="small" label="none" sx={{ height: 18, fontSize: 9.5, bgcolor: '#1e293b', color: '#64748b' }} />}
+                          sx={{ height: 18, fontSize: 9.5, bgcolor: 'var(--ok-bg)', color: '#4ade80' }} />
+                      : <Chip size="small" label="none" sx={{ height: 18, fontSize: 9.5, bgcolor: 'var(--panel)', color: 'var(--text-3)' }} />}
                   </TableCell>
                   <TableCell align="right">
                     <Button size="small" disabled={!!busy} onClick={() => void generate(m)}
@@ -113,7 +113,7 @@ const PassportManager: React.FC = () => {
               );
             })}
             {!loading && motors.length === 0 && (
-              <TableRow><TableCell colSpan={4} sx={{ color: '#475569', textAlign: 'center', py: 3 }}>No catalog motors.</TableCell></TableRow>
+              <TableRow><TableCell colSpan={4} sx={{ color: 'var(--text-4)', textAlign: 'center', py: 3 }}>No catalog motors.</TableCell></TableRow>
             )}
           </TableBody>
         </Table>

@@ -3,6 +3,11 @@ import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
 import { AuthProvider } from './contexts/AuthContext'
+import { loadThemeMode } from './theme'
+
+// Stamp the persisted theme on <html> BEFORE first paint so the CSS design
+// tokens (index.css) resolve to the right palette with no flash.
+document.documentElement.dataset.theme = loadThemeMode();
 
 // ── Hybrid ResizeObserver ────────────────────────────────────────────────
 // Some embedded / preview browsers ship a ResizeObserver whose callback NEVER

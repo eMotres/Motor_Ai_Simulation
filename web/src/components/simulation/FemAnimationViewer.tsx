@@ -252,18 +252,18 @@ const FemAnimationViewer: React.FC<Props> = ({
     : undefined;
 
   return (
-    <Paper sx={{ bgcolor: '#0b1220', border: '1px solid #1e293b', p: 2,
+    <Paper sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', p: 2,
       display: 'flex', flexDirection: 'column', gap: 1.5 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         flexWrap: 'wrap', gap: 1 }}>
         <Box>
-          <Typography sx={{ fontSize: 13, color: '#cbd5e1', fontWeight: 700 }}>
+          <Typography sx={{ fontSize: 13, color: 'var(--text-1)', fontWeight: 700 }}>
             Field Animation — rotor through one electrical period
             <Tooltip title="Runs the transient FEM N_frames times (one solve per keyframe), capturing the full field map at each rotor angle. Use the slider to scrub through the period — rotor moves in real geometry, fields update with it. Each fetch takes ~n_frames × 3 s for mesh_size_mm=4." placement="top">
-              <span style={{ color: '#475569', marginLeft: 6, fontSize: 11, cursor: 'help' }}>ⓘ</span>
+              <span style={{ color: 'var(--text-4)', marginLeft: 6, fontSize: 11, cursor: 'help' }}>ⓘ</span>
             </Tooltip>
           </Typography>
-          <Typography sx={{ fontSize: 10, color: '#475569' }}>
+          <Typography sx={{ fontSize: 10, color: 'var(--text-4)' }}>
             {data
               ? `${data.frames.length} keyframes  ·  period ${(data.T_period_s*1000).toFixed(3)} ms  ·  f_elec ${data.f_elec_Hz.toFixed(1)} Hz  ·  rpm ${data.rpm}`
               : 'Idle — click "Run animation" to compute'}
@@ -273,7 +273,7 @@ const FemAnimationViewer: React.FC<Props> = ({
           <Button size="small" variant="contained" disableElevation
             onClick={runAnimation} disabled={loading}
             startIcon={loading ? <CircularProgress size={14}/> : <RestartAltIcon fontSize="small"/>}
-            sx={{ textTransform: 'none', fontSize: 11, bgcolor: '#1e3a5f',
+            sx={{ textTransform: 'none', fontSize: 11, bgcolor: 'var(--line-accent)',
               '&:hover': { bgcolor: '#2c5282' }}}>
             {loading ? 'Running FEM…' : (data ? 'Re-run animation' : 'Run animation')}
           </Button>
@@ -293,10 +293,10 @@ const FemAnimationViewer: React.FC<Props> = ({
       {!payloadForChart && loading && (
         <Box sx={{ display: 'flex', alignItems: 'center',
           justifyContent: 'center', minHeight: 460,
-          border: '1px solid #0f172a', bgcolor: '#060d17' }}>
+          border: '1px solid var(--app-bg)', bgcolor: 'var(--panel-2)' }}>
           <Box sx={{ textAlign: 'center' }}>
             <CircularProgress size={40}/>
-            <Typography sx={{ mt: 1, fontSize: 12, color: '#475569' }}>
+            <Typography sx={{ mt: 1, fontSize: 12, color: 'var(--text-4)' }}>
               Solving FEM for {n_frames} keyframes…
             </Typography>
           </Box>
@@ -317,8 +317,8 @@ const FemAnimationViewer: React.FC<Props> = ({
       {/* Playback controls — slider + play / pause + FPS */}
       {data && data.frames.length > 1 && (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 2,
-          px: 1, py: 0.5, bgcolor: '#060d17',
-          border: '1px solid #0f172a', borderRadius: 1 }}>
+          px: 1, py: 0.5, bgcolor: 'var(--panel-2)',
+          border: '1px solid var(--app-bg)', borderRadius: 1 }}>
           <IconButton size="small" onClick={() => setPlaying(p => !p)}
             sx={{ color: '#93c5fd' }}>
             {playing ? <PauseIcon fontSize="small"/> : <PlayArrowIcon fontSize="small"/>}
@@ -337,22 +337,22 @@ const FemAnimationViewer: React.FC<Props> = ({
               }}
             />
             <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-              <Typography sx={{ fontSize: 9, color: '#64748b', fontFamily: 'monospace' }}>
+              <Typography sx={{ fontSize: 9, color: 'var(--text-3)', fontFamily: 'monospace' }}>
                 t = {t_ms_now.toFixed(3)} ms
               </Typography>
-              <Typography sx={{ fontSize: 9, color: '#64748b', fontFamily: 'monospace' }}>
+              <Typography sx={{ fontSize: 9, color: 'var(--text-3)', fontFamily: 'monospace' }}>
                 rotor = {rotorDeg.toFixed(2)}°  ·  θ_e = {(rotorDeg * 14).toFixed(0)}°
               </Typography>
             </Box>
           </Box>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-            <Typography sx={{ fontSize: 10, color: '#64748b' }}>FPS</Typography>
+            <Typography sx={{ fontSize: 10, color: 'var(--text-3)' }}>FPS</Typography>
             <ToggleButtonGroup value={fps} exclusive size="small"
               onChange={(_, v) => v && setFps(v as number)}
               sx={{
                 '& .MuiToggleButton-root': { py: 0, px: 0.8, fontSize: 10,
-                  color: '#64748b', borderColor: '#1e293b', textTransform: 'none',
-                  '&.Mui-selected': { color: '#e2e8f0', bgcolor: '#1e3a5f',
+                  color: 'var(--text-3)', borderColor: 'var(--panel)', textTransform: 'none',
+                  '&.Mui-selected': { color: 'var(--text-0)', bgcolor: 'var(--line-accent)',
                     borderColor: '#3b82f6' }}}}>
               <ToggleButton value={2}>2</ToggleButton>
               <ToggleButton value={4}>4</ToggleButton>
@@ -363,7 +363,7 @@ const FemAnimationViewer: React.FC<Props> = ({
         </Box>
       )}
 
-      <Typography sx={{ fontSize: 9, color: '#334155' }}>
+      <Typography sx={{ fontSize: 9, color: 'var(--line)' }}>
         Each keyframe is a separate FEM solve at the actual rotor angle — magnets,
         rotor body and air-gap field reflect the physical state at that moment.
         Stator iron + slot positions stay fixed.  Iso-lines and the colour-bar

@@ -12,7 +12,7 @@ import type { SxProps, Theme } from '@mui/material';
 export const SECTION_LABEL_SX = {
   fontSize: '0.65rem',
   fontWeight: 700,
-  color: '#475569',
+  color: 'var(--text-4)',
   letterSpacing: '0.08em',
   textTransform: 'uppercase',
   display: 'block',

@@ -7,6 +7,57 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
 
 ## [Unreleased]
 
+### Fixed
+- **Geo mesh honours "Max element size" as the actual element edge.** The CDT
+  cell area was derived LINEARLY from the requested size (0.3·L instead of
+  0.433·L²), so iron interiors always meshed ~2× finer than the slider said.
+- **Rotor teeth now mesh at stator quality (q20) — root cause was a µm
+  "zipper", not the sharp corner.** CadQuery discretises the shared
+  iron-pocket/magnet boundary INDEPENDENTLY for the two polygons, leaving the
+  two polylines 2–4 µm apart (a point-to-SEGMENT offset the PSLG vertex weld
+  cannot see). Triangle was forced to bridge the µm strip with a fringe of
+  micro-triangles along the wall — this is what blew up q-refinement
+  (~5 500 Steiner points per pole), forced the area-only fallback (ragged fan
+  texture), produced zero-area slivers and even a NaN solve crash. With corner
+  fillets the same interleave concentrated ~2 300 micro-triangles at EVERY
+  magnet top corner. Fix, two parts: (1) weld the magnet outline onto the iron
+  chain (snap + residual point-to-segment projection with existing-vertex
+  preference); (2) the shared pocket walls are then NOT re-added to the PSLG
+  at all — the iron chain alone delimits them, and only the magnet's
+  air-facing runs are added (`_air_facing_runs`), so every wall has exactly
+  ONE sampling. Result (24s20p, Max = 2.75 mm, ¼ wedge, fillet 1.0): rotor
+  45 116 → **2 390** triangles, median aspect 1.98 / p90 3.30 (stator:
+  2.40 / 3.16), zero degenerates, zero micro-triangles, q20 converges with
+  ARmax = 5 — also at a 0-fillet corner. Safety nets kept: budgeted q20 with
+  area-only fallback, chord-clip defeaturing of <15° iron corners, edge-collapse
+  pass for zero-area slivers (slip/shaft grid rings pinned for the belt weld).
+
+### Added
+- **"Air element size" slider** (Mesh → Solver Domain): element size for the
+  open air (far-field, slot pockets, shaft core), auto = coarse; same store as
+  the per-part "Outer air" field.
+
+### Fixed (parity)
+- **Full disk (n_sectors=1) and 1/4 sector now agree.** The transient solved the
+  air gap with DIFFERENT band models depending on the sector count: the full
+  ring silently forced the "moving" band (R1/R2 rings + one closed-form strip
+  row) while sectors solved the "merged" single slip ring — two different gap
+  couplings, so ns=1 vs ns=4 disagreed systematically (24s20p @ 100 A:
+  torque −6.7 %, V_peak −22 %, efficiency +1.3 pp on the ring side). The band
+  mode no longer depends on n_sectors: MERGED is the sole default for every
+  sector count ("moving" remains opt-in via the harmonic macro or
+  SB_MOVING_BAND=1). After the fix (structured gap, steps=120): torque
+  29.20 vs 29.10 Nm (0.36 %), efficiency 93.89 vs 93.90 %, V_peak 71.4 vs
+  71.0 V. Torque-spectrum comparison shows the ¼ wedge is the spectrally
+  CLEAN solve (non-6k noise floor 0.02 % vs the ring's 1.66 %); the remaining
+  ripple gap (19.9 vs 22.2 %) sits in the h24/h36 cogging orders which the
+  ring's broadband numeric noise damps — see PARITY_FINDINGS_band_mode.md.
+  Verified on the geo (CDT) pipeline too: means within 0.6 %, h12/h30 within
+  1–2 %. Tightening the ring's saturation Picard is NOT a fix (fixed-recipe
+  iteration; 28 iters shifts T_avg +2.5 % and doubles the noise floor) — the
+  ¼ sector is the ripple reference; the full ring stays valid for means and
+  field maps.
+
 ## [0.1.9] — 2026-07-01
 
 ### Changed
@@ -224,3 +275,52 @@ First tracked release. Establishes app versioning + a coordinated release proces
   settle); FEM sliding-band air domains no longer obscure the motor (default off + migration).
 - **40 mm geometry:** `tooth_width` schema minimum lowered (4 → 1) so small motors are
   editable in the UI and build without a degenerate slot fillet.
+
+## 2026-07-20 (поздно): починен измеритель пульсаций
+
+- Пикар насыщения: затухающее демпфирование (α=0.5 → 3/(it+1), пол 0.05)
+  вжито в nu-update fem_solver_2d.py. При n_pic≈40–100 решение сходится:
+  mean(I=0) → 0, спектр момента чистый (семейство 6k).
+- Диагноз слоями: (1) несходимость Пикара = 5–8 Н·м шума; (2) скользящая
+  полоса добавляет ~60 % к h6 против аналитического макроэлемента;
+  (3) остаток h6≈1.5 — реальный сатурационный коггинг 12-кратного статора
+  (12 главных + 12 вспомогательных зубьев, порядки кратны 60/об).
+- Честные цифры (макро, n_pic=100): no-load p-p 2.75 Н·м; нагрузка I=85
+  γ=32: mean 27.4 Н·м, ripple 11.7 % (полоса: 29.6 Н·м, 17.6 %; ANSYS:
+  29.37 Н·м, 3.44 %).
+- Сталь (JFE vs B15) и крупная геометрия точки ANSYS — не факторы (±4 %).
+- Детали: PARITY_FINDINGS_band_mode.md.
+
+## 2026-07-21: паритет пульсаций с ANSYS достигнут
+
+- Ротор конфига приведён к ANSYS (magnet_height 16, up_gap 2, fill_up 0.46,
+  fill_radius 1, rotor_fill_r 2) — пользователь.
+- Честный замер (макро + n_pic=100): нагрузка I=85 γ=32 → ripple 4.15 %
+  (ANSYS 3.44 %), no-load коггинг p-p 1.57 Н·м (ANSYS ~1.09 с их шумом).
+  Расхождение по пульсациям ЗАКРЫТО; главный драйвер был ротор.
+- Открыто: mean момента макро на ~7 % ниже полосы — калибровка экстракции.
+
+## 2026-07-21: честные дефолты — без фильтров и рецептов
+
+- Пикар насыщения: фиксированный «рецепт 14 итераций» УДАЛЁН. Теперь цикл
+  останавливается по невязке неподвижной точки nu (< 1e-3 два свипа подряд),
+  потолок 100. Диагностика в каждом результате: picard_iters_mean/max,
+  picard_resid_max, picard_converged — честность каждого прогона видна,
+  а не предполагается. То же для demag-препасса и фазорного инита vdrive.
+- Фильтр момента (6k-полоса) по умолчанию ВЫКЛЮЧЕН везде: солвер,
+  em_transient_eval, маршруты симуляции, оптимизатор (run_one, DescentRequest,
+  scan, refine), фронтенд (чекбокс, localStorage-дефолты). Заголовочная
+  T_ripple_pct — теперь сырая. Фильтр остался только как явная опция UI.
+- ВНИМАНИЕ: у существующих браузеров чекбокс мог сохраниться включённым в
+  localStorage ('torqueFilter') — снять галку один раз в Simulation.
+
+## 2026-07-21 (продолжение): адаптивная релаксация Айткена в Пикаре
+
+- Расписание демпфирования (0.5 → 3/(it+1)) заменено релаксацией
+  Иронса–Така (векторный Aitken Δ²): шаг подбирается из фактических
+  невязок, настроечных констант нет. Anderson(m=4) испытан и отброшен —
+  на изломе B-H секущая модель разносит итерацию.
+- Валидация (кольцо, макро, no-load, сетка 2.8): h6=0.5483 (реф. 0.549),
+  mean=−0.0007, iters_mean=58.8, resid_max=1.4e-3 (tol 1e-3 — кадры, не
+  дошедшие до tol на потолке 100, честно репортят converged=False).
+  Стоимость ~4× против старого «рецепта 14»; физика сошедшаяся.

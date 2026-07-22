@@ -112,18 +112,18 @@ const SweepTable: React.FC<{ points: any[]; rpm: number; vdcFactor?: number; sel
   const onSort = (id: string) => { if (sortId === id) setDir(d => (d === 1 ? -1 : 1)); else { setSortId(id); setDir(1); } };
 
   if (!rows.length) return null;
-  const th: React.CSSProperties = { position: 'sticky', top: 0, cursor: 'pointer', padding: '4px 7px', textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid #334155', userSelect: 'none' };
+  const th: React.CSSProperties = { position: 'sticky', top: 0, cursor: 'pointer', padding: '4px 7px', textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid var(--line)', userSelect: 'none' };
   return (
     <Box sx={{ mt: 1.5 }}>
-      <Typography sx={{ fontSize: 11, color: '#94a3b8', mb: 0.5 }}>
+      <Typography sx={{ fontSize: 11, color: 'var(--text-2)', mb: 0.5 }}>
         All swept designs ({rows.length}) — <span style={{ color: '#93c5fd' }}>variables</span> + outputs · click a column to sort
       </Typography>
-      <Box sx={{ maxHeight: 360, overflow: 'auto', border: '1px solid #1e293b', borderRadius: 1 }}>
+      <Box sx={{ maxHeight: 360, overflow: 'auto', border: '1px solid var(--line-soft)', borderRadius: 1 }}>
         <table style={{ borderCollapse: 'collapse', fontSize: 10.5, width: '100%', fontFamily: 'var(--font-mono, monospace)' }}>
           <thead>
             <tr>{cols.map(c => (
               <th key={c.id} onClick={() => onSort(c.id)}
-                style={{ ...th, background: c.vcol ? '#10243f' : '#0e1a2f', color: c.vcol ? '#93c5fd' : '#cbd5e1', fontWeight: sortId === c.id ? 700 : 400 }}>
+                style={{ ...th, background: c.vcol ? 'var(--line-accent)' : 'var(--panel-2)', color: c.vcol ? 'var(--brand)' : 'var(--text-1)', fontWeight: sortId === c.id ? 700 : 400 }}>
                 {c.label}{sortId === c.id ? (dir === 1 ? ' ▲' : ' ▼') : ''}
               </th>))}</tr>
           </thead>
@@ -132,9 +132,9 @@ const SweepTable: React.FC<{ points: any[]; rpm: number; vdcFactor?: number; sel
               const sel = selectedPk != null && r.pk === selectedPk;
               return (
               <tr key={i} onClick={() => onPick && onPick(r)}
-                style={{ background: sel ? '#1e3a5f' : (i % 2 ? '#0a1628' : '#0c1c34'), cursor: onPick ? 'pointer' : 'default' }}>
+                style={{ background: sel ? 'var(--line-accent)' : (i % 2 ? 'var(--panel-2)' : 'var(--line-soft)'), cursor: onPick ? 'pointer' : 'default' }}>
                 {cols.map(c => (
-                  <td key={c.id} style={{ padding: '3px 7px', textAlign: 'right', whiteSpace: 'nowrap', color: c.vcol ? (sel ? '#fff' : '#e2e8f0') : (sel ? '#e2e8f0' : '#cbd5e1'), borderBottom: '1px solid #14233c' }}>
+                  <td key={c.id} style={{ padding: '3px 7px', textAlign: 'right', whiteSpace: 'nowrap', color: 'var(--text-0)', borderBottom: '1px solid var(--line-soft)' }}>
                     {c.fmt(c.get(r))}
                   </td>))}
               </tr>); })}
@@ -145,15 +145,34 @@ const SweepTable: React.FC<{ points: any[]; rpm: number; vdcFactor?: number; sel
   );
 };
 
+// Compact numeric format: integers stay whole, floats show up to 3 sig-figs
+// without trailing zeros (0.592, 5.4, 12, 3).
+const _fmtVar = (v: any) =>
+  typeof v === 'number' ? String(parseFloat(v.toFixed(3))) : String(v);
+
 const SweepTooltip: React.FC<any> = ({ active, payload }) => {
   if (!active || !payload?.length) return null;
   const d = payload[0].payload;
+  const ov = (d.overrides || {}) as Record<string, any>;
+  // geometry vars only — I and γ are already in the header line above
+  const ovKeys = Object.keys(ov).filter(k => k !== 'gamma_deg' && k !== 'current_a');
   return (
-    <Box sx={{ bgcolor: '#0a1628', border: '1px solid #334155', borderRadius: 1, p: 1, fontSize: 11 }}>
+    <Box sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line)', borderRadius: 1, p: 1, fontSize: 11, maxWidth: 360 }}>
       <div style={{ color: '#93c5fd', fontWeight: 700 }}>I = {d.I} A · γ = {d.g}°{d.gi ? ` · geom ${d.gi}` : ''}</div>
-      <div style={{ color: '#a855f7' }}>η = {d.y.toFixed(2)} %</div>
+      {/* every swept variable that changes at this point (the point's overrides) */}
+      {ovKeys.length > 0 && (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 10, rowGap: 1,
+          marginTop: 3, paddingTop: 3, borderTop: '1px solid var(--line-soft)', fontSize: 10 }}>
+          {ovKeys.map(k => (
+            <span key={k} style={{ color: 'var(--text-3)', whiteSpace: 'nowrap' }}>
+              {k} = <b style={{ color: 'var(--text-1)' }}>{_fmtVar(ov[k])}</b>
+            </span>
+          ))}
+        </div>
+      )}
+      <div style={{ color: '#a855f7', marginTop: 3 }}>η = {d.y.toFixed(2)} %</div>
       <div style={{ color: '#3b82f6' }}>{d.x.toFixed(2)} N·m/kg</div>
-      <div style={{ color: '#94a3b8' }}>T = {d.T?.toFixed?.(1)} N·m · ripple {d.ripple?.toFixed?.(1)} %</div>
+      <div style={{ color: 'var(--text-2)' }}>T = {d.T?.toFixed?.(1)} N·m · ripple {d.ripple?.toFixed?.(1)} %</div>
     </Box>
   );
 };
@@ -243,12 +262,13 @@ const SweepStudyPanel: React.FC = () => {
           variables: scanVars, operating_points: ops, steps_per_period: steps,
           ripple_max_pct: 100, max_geometries: Math.max(1, nGeom),
           mesh_size_mm: readLS('mesh.meshSize', 4), min_size_mm: readLS('mesh.minSize', 0.3),
-          pole_copy: readBool('mesh.poleCopy', false), torque_filter: readBool('sim.torqueFilter', true),
+          pole_copy: readBool('mesh.poleCopy', false), torque_filter: readBool('sim.torqueFilter', false),
           n_sectors: Math.max(1, Math.round(readLS('mesh.nSectors', 1))),   // single source: Mesh tab (same as Simulation)
           gap_layers: readLS('mesh.gapLayers', 2),   // single source: Mesh tab — drives ripple/eddy; must match Simulation
           structured_gap: readBool('mesh.structuredGap', false) || readBool('mesh.ironTemplate', true),   // single source: Mesh tab "Structured" — belt gap mesh (honest ripple, ¼ == full disk)
           airgap_macro: readBool('mesh.harmonicGap', false),   // Mesh tab "Harmonic gap" — step-independent RAW ripple (full + sectors)
           iron_template: readBool('mesh.ironTemplate', true), // Mesh tab "Template iron" — deterministic iron mesh
+          geo_mesh: readBool('mesh.geoMesh', true),   // Mesh tab "Geometry-driven mesh" — SAME build as Simulation (cell-tiled iron)
           end_winding_factor: readLS('sim.endWinding', 0),   // sent for parity, but a sweep RECOMPUTES k_end per-point from each candidate's geometry (backend refine_proc forces auto) — you can't pin one k_end across changing tooth_width/slot geometry
           rotor_eddy: readBool('sim.fieldLosses', true),   // single source: Simulation — field vs slab magnet eddy (drives eff)
           run_id: `sweep_${nPts}`,
@@ -426,28 +446,28 @@ const SweepStudyPanel: React.FC = () => {
   };
 
   const VarLine: React.FC<{ on: boolean; label: string; v: any; fixedVal: number }> = ({ on, label, v, fixedVal }) => (
-    <Typography sx={{ fontSize: 11, color: on ? '#cbd5e1' : '#475569', mb: 0.2 }}>
+    <Typography sx={{ fontSize: 11, color: on ? 'var(--text-1)' : 'var(--text-4)', mb: 0.2 }}>
       • <strong>{label}</strong>: {on
-        ? <>{v.min} … {v.max} step {v.step} <span style={{ color: '#64748b' }}>({buildGrid(Number(v.min), Number(v.max), Number(v.step)).length} pts)</span></>
-        : <>{fixedVal} <span style={{ color: '#475569' }}>(fixed — add it to the variables above to sweep)</span></>}
+        ? <>{v.min} … {v.max} step {v.step} <span style={{ color: 'var(--text-3)' }}>({buildGrid(Number(v.min), Number(v.max), Number(v.step)).length} pts)</span></>
+        : <>{fixedVal} <span style={{ color: 'var(--text-4)' }}>(fixed — add it to the variables above to sweep)</span></>}
     </Typography>
   );
 
   return (
     <Box sx={{ mt: 2 }}>
       <SectionLabel sx={{ mb: 0.5 }}>Sweep study — efficiency vs torque/mass</SectionLabel>
-      <Typography sx={{ fontSize: 11, color: '#64748b', mb: 1.25 }}>
+      <Typography sx={{ fontSize: 11, color: 'var(--text-3)', mb: 1.25 }}>
         Sweeps the <strong>variables you added above</strong> (current/γ → operating points,
         geometry → a grid). Each point is a real transient built exactly like Simulation —
         sector, gap mesh and the Structured (belt) toggle all come from the Mesh tab.
         For honest ripple use Structured; ¼ sector then matches the full disk and is ~4× faster.
       </Typography>
 
-      <Box sx={{ bgcolor: '#0a1628', border: '1px solid #1e293b', borderRadius: 1, p: 1, mb: 1.25 }}>
+      <Box sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1, p: 1, mb: 1.25 }}>
         <VarLine on={!!cV} label="Phase current" v={cV} fixedVal={readLS('sim.current', 85)} />
         <VarLine on={!!gV} label="Load angle γ" v={gV} fixedVal={readLS('sim.gamma', 0)} />
         {geomVars.map(([name, v]) => (
-          <Typography key={name} sx={{ fontSize: 11, color: '#cbd5e1', mb: 0.2 }}>
+          <Typography key={name} sx={{ fontSize: 11, color: 'var(--text-1)', mb: 0.2 }}>
             • <strong>{name}</strong>: {v.min} … {v.max} step {v.step}
           </Typography>
         ))}
@@ -464,7 +484,7 @@ const SweepStudyPanel: React.FC = () => {
             <MenuItem value="gamma_deg" sx={{ fontSize: 12 }}>γ (curve per current)</MenuItem>
           </Select>
         </FormControl>
-        <Typography sx={{ fontSize: 11, color: nPts > 40 ? '#fca5a5' : '#64748b', flex: 1 }}>
+        <Typography sx={{ fontSize: 11, color: nPts > 40 ? '#fca5a5' : 'var(--text-3)', flex: 1 }}>
           <strong>{nPts}</strong> pt{nPts === 1 ? '' : 's'}{nPts > 40 ? ' — large, slow' : ''}
         </Typography>
       </Box>
@@ -482,12 +502,12 @@ const SweepStudyPanel: React.FC = () => {
         )}
         {!running && result && (
           <Button size="small" variant="text" onClick={clearResult}
-            sx={{ textTransform: 'none', fontSize: 11, color: '#94a3b8', minWidth: 0 }}>
+            sx={{ textTransform: 'none', fontSize: 11, color: 'var(--text-2)', minWidth: 0 }}>
             Clear result
           </Button>
         )}
         {progress && running && (
-          <Typography sx={{ fontSize: 11, color: '#64748b' }}>
+          <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>
             {progress.done}/{progress.total}{progress.cached ? ` · ${progress.cached} reused` : ''}</Typography>
         )}
         {err && <Typography sx={{ fontSize: 11, color: '#fca5a5' }}>✗ {err}</Typography>}
@@ -498,8 +518,8 @@ const SweepStudyPanel: React.FC = () => {
 
       {(running || series.length > 0) && (
         <>
-          <Divider sx={{ borderColor: '#1e293b', my: 1 }} />
-          <Typography sx={{ fontSize: 11, color: '#64748b', mb: 0.5 }}>
+          <Divider sx={{ borderColor: 'var(--panel)', my: 1 }} />
+          <Typography sx={{ fontSize: 11, color: 'var(--text-3)', mb: 0.5 }}>
             {running
               ? `computing… ${nFeasible} point${nFeasible === 1 ? '' : 's'} so far`
               : `${nFeasible} feasible point${nFeasible === 1 ? '' : 's'} · ${series.length} curve${series.length === 1 ? '' : 's'} · click a point to pick & save it`}
@@ -516,15 +536,15 @@ const SweepStudyPanel: React.FC = () => {
           <Box ref={chartBoxRef} onDoubleClick={() => setZoom(null)} sx={{ height: 340 }}>
             <ResponsiveContainer width="100%" height="100%">
               <ScatterChart margin={{ top: 8, right: 24, left: 8, bottom: 24 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--panel)" />
                 <XAxis type="number" dataKey="x" name="Nm/kg" tick={{ fontSize: 10 }}
                   domain={extent ? (zoom ? clampDom(zoom.x, extent.x) : extent.x) : ['auto', 'auto']} allowDataOverflow={!!zoom}
                   tickFormatter={(v: number) => v.toFixed(2)}
-                  label={{ value: 'Torque / mass (N·m/kg)', position: 'insideBottom', offset: -12, fontSize: 11, fill: '#64748b' }} />
+                  label={{ value: 'Torque / mass (N·m/kg)', position: 'insideBottom', offset: -12, fontSize: 11, fill: 'var(--text-3)' }} />
                 <YAxis type="number" dataKey="y" name="Eff %" tick={{ fontSize: 10 }} width={52}
                   domain={extent ? (zoom ? clampDom(zoom.y, extent.y) : extent.y) : ['auto', 'auto']} allowDataOverflow={!!zoom}
                   tickFormatter={(v: number) => v.toFixed(2)}
-                  label={{ value: 'Efficiency (%)', angle: -90, position: 'insideLeft', fontSize: 11, fill: '#64748b' }} />
+                  label={{ value: 'Efficiency (%)', angle: -90, position: 'insideLeft', fontSize: 11, fill: 'var(--text-3)' }} />
                 <Tooltip content={<SweepTooltip />} />
                 {/* Legend removed — the table below lists I/γ per design, and
                     selecting a row highlights its point (and vice-versa). */}
@@ -535,7 +555,7 @@ const SweepStudyPanel: React.FC = () => {
                     lineJointType="monotoneX" isAnimationActive={false} cursor="pointer"
                     shape={(p: any) => {
                       const sel = selected && p.payload?.pk === (selected as any).pk;
-                      return <circle cx={p.cx} cy={p.cy} r={sel ? 5.5 : 2.4} fill={sel ? '#fbbf24' : GCOL[i % GCOL.length]}
+                      return <circle cx={p.cx} cy={p.cy} r={sel ? 5.5 : 3.5} fill={sel ? '#fbbf24' : GCOL[i % GCOL.length]}
                         stroke={sel ? '#fff' : 'none'} strokeWidth={sel ? 1.5 : 0} />;
                     }}
                     onClick={(d: any) => { setSelected(d?.payload ?? d); setApplyMsg(null); }} />
@@ -544,8 +564,8 @@ const SweepStudyPanel: React.FC = () => {
             </ResponsiveContainer>
           </Box>
           {selected && (
-            <Box sx={{ mt: 1, p: 1, bgcolor: '#0a1628', border: '1px solid #334155', borderRadius: 1 }}>
-              <Typography sx={{ fontSize: 11, color: '#cbd5e1' }}>
+            <Box sx={{ mt: 1, p: 1, bgcolor: 'var(--panel-2)', border: '1px solid var(--line)', borderRadius: 1 }}>
+              <Typography sx={{ fontSize: 11, color: 'var(--text-1)' }}>
                 Picked: <strong>I = {selected.I} A · γ = {selected.g}°</strong> → η {selected.y?.toFixed?.(2)} % · {selected.x?.toFixed?.(2)} N·m/kg · T {selected.T?.toFixed?.(2)} N·m · ripple {selected.ripple?.toFixed?.(1)} %
               </Typography>
               <Typography sx={{ fontSize: 10.5, color: '#93c5fd', mt: 0.25, wordBreak: 'break-word' }}>
@@ -559,7 +579,7 @@ const SweepStudyPanel: React.FC = () => {
                   Apply picked point to geometry
                 </Button>
                 {applyMsg && <Typography sx={{ fontSize: 11,
-                  color: applyMsg.startsWith('✓') ? '#4ade80' : applyMsg.startsWith('✗') ? '#fca5a5' : '#64748b' }}>
+                  color: applyMsg.startsWith('✓') ? '#4ade80' : applyMsg.startsWith('✗') ? '#fca5a5' : 'var(--text-3)' }}>
                   {applyMsg}</Typography>}
               </Box>
             </Box>

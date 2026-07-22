@@ -101,11 +101,11 @@ interface MotorGeo {
 // ── domain list (mirrors geometry_2d.py) ─────────────────────────────────────
 const DOMAINS = [
   { key: 'stator_core', label: 'Stator Core', color: '#3b82f6' },
-  { key: 'air_gap',     label: 'Air Gap',     color: '#94a3b8' },
+  { key: 'air_gap',     label: 'Air Gap',     color: 'var(--text-2)' },
   { key: 'rotor_core',  label: 'Rotor Core',  color: '#2563eb' },
   { key: 'magnet',      label: 'Magnets',     color: '#ef4444' },
   { key: 'slot',        label: 'Windings',    color: '#f59e0b' },
-  { key: 'shaft',       label: 'Shaft',       color: '#64748b' },
+  { key: 'shaft',       label: 'Shaft',       color: 'var(--text-3)' },
 ];
 
 // Estimate collocation points per domain (mirrors batch_size_interior in solver)
@@ -209,7 +209,7 @@ const FemMeshCanvas: React.FC<FemMeshCanvasProps> = ({
         ref={canvasRef}
         width={size}
         height={size}
-        style={{ borderRadius: 12, border: '1px solid #1e293b', display: 'block' }}
+        style={{ borderRadius: 12, border: '1px solid var(--line-soft)', display: 'block' }}
       />
     </Box>
   );
@@ -268,7 +268,7 @@ const CollocationPreview: React.FC<PreviewProps> = ({ cfg, geo }) => {
     const nA = Math.max(8, Math.min(cfg.n_angular, 128));
     const nS = Math.max(4, Math.min(cfg.n_angular_slots, 32));
     return [
-      ...ringDots(r.sh, r.ri, nR, nA, '#64748b', 'shaft'),
+      ...ringDots(r.sh, r.ri, nR, nA, 'var(--text-3)', 'shaft'),
       ...ringDots(r.ri, r.ro, nR, nA, '#3b82f6', 'rotor'),
       ...ringDots(r.ro, r.si, nR, nS, '#f59e0b', 'gap'),
       ...ringDots(r.si, r.so, nR, nA, '#2563eb', 'stator'),
@@ -277,24 +277,24 @@ const CollocationPreview: React.FC<PreviewProps> = ({ cfg, geo }) => {
 
   return (
     <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
-      <svg width={SVG_SIZE} height={SVG_SIZE} style={{ background: '#060d17', borderRadius: 12 }}>
+      <svg width={SVG_SIZE} height={SVG_SIZE} style={{ background: 'var(--panel-2)', borderRadius: 12 }}>
         {r && <>
           {/* domain annuli */}
-          <circle cx={CX} cy={CY} r={r.so} fill="none" stroke="#1e293b" strokeWidth={1}/>
-          <circle cx={CX} cy={CY} r={r.si} fill="none" stroke="#334155" strokeWidth={0.8}/>
-          <circle cx={CX} cy={CY} r={r.ro} fill="none" stroke="#334155" strokeWidth={0.8}/>
-          <circle cx={CX} cy={CY} r={r.ri} fill="none" stroke="#334155" strokeWidth={0.8}/>
-          <circle cx={CX} cy={CY} r={r.sh} fill="none" stroke="#1e293b" strokeWidth={0.8}/>
+          <circle cx={CX} cy={CY} r={r.so} fill="none" stroke="var(--panel)" strokeWidth={1}/>
+          <circle cx={CX} cy={CY} r={r.si} fill="none" stroke="var(--line)" strokeWidth={0.8}/>
+          <circle cx={CX} cy={CY} r={r.ro} fill="none" stroke="var(--line)" strokeWidth={0.8}/>
+          <circle cx={CX} cy={CY} r={r.ri} fill="none" stroke="var(--line)" strokeWidth={0.8}/>
+          <circle cx={CX} cy={CY} r={r.sh} fill="none" stroke="var(--panel)" strokeWidth={0.8}/>
           {/* filled regions */}
-          <circle cx={CX} cy={CY} r={r.so} fill="#1e293b22"/>
-          <circle cx={CX} cy={CY} r={r.si} fill="#0a1628"/>
-          <circle cx={CX} cy={CY} r={r.ri} fill="#1e3a5f22"/>
-          <circle cx={CX} cy={CY} r={r.sh} fill="#0f172a"/>
+          <circle cx={CX} cy={CY} r={r.so} fill="var(--panel)22"/>
+          <circle cx={CX} cy={CY} r={r.si} fill="var(--panel-2)"/>
+          <circle cx={CX} cy={CY} r={r.ri} fill="var(--line-accent)22"/>
+          <circle cx={CX} cy={CY} r={r.sh} fill="var(--app-bg)"/>
         </>}
         {dots}
         {/* center cross */}
-        <line x1={CX - 6} y1={CY} x2={CX + 6} y2={CY} stroke="#334155" strokeWidth={0.8}/>
-        <line x1={CX} y1={CY - 6} x2={CX} y2={CY + 6} stroke="#334155" strokeWidth={0.8}/>
+        <line x1={CX - 6} y1={CY} x2={CX + 6} y2={CY} stroke="var(--line)" strokeWidth={0.8}/>
+        <line x1={CX} y1={CY - 6} x2={CX} y2={CY + 6} stroke="var(--line)" strokeWidth={0.8}/>
       </svg>
     </Box>
   );
@@ -362,6 +362,11 @@ const MeshPanel: React.FC = () => {
   // instead of gmsh free triangulation — build-to-build deterministic results.
   // Falls back to gmsh automatically when the topology doesn't fit the units.
   const [ironTemplate,   setIronTemplate]   = usePersisted<boolean>('ironTemplate', true);
+  // Geometry-driven mesh: triangulate the REAL CadQuery polygons (every fillet)
+  // with a constrained Delaunay instead of warping a tensor template — the mesh
+  // conforms to magnet corners, tooth-tip r1 and the V-notch apex by
+  // construction.  Full-ring only for now (a 1/N request builds the full disk).
+  const [geoMesh,        setGeoMesh]        = usePersisted<boolean>('geoMesh', true);
   // Template halves end exactly ON the iron circles, so ONLY the structured
   // belt meshes the air gap between them.  Keep the two coupled on EVERY render
   // (not just on toggle) — otherwise a persisted {template ON, Free gap} state
@@ -458,6 +463,7 @@ const MeshPanel: React.FC = () => {
       pole_copy:         poleCopy ? 'true' : 'false',
       structured_gap:    structuredGap ? 'true' : 'false',   // ANSYS-style concentric-ring gap
       iron_template:     ironTemplate ? 'true' : 'false',    // deterministic template iron
+      geo_mesh:          geoMesh ? 'true' : 'false',         // geometry-driven CDT (real fillets)
     } : {
       mesh_size_mm:        _ms,
       min_size_mm:         _mn,
@@ -479,7 +485,7 @@ const MeshPanel: React.FC = () => {
       .catch(e => { if (mySeq !== buildSeq.current) return; setFemError(String(e)); setFemLoading(false); });
   }, [solverMesh, meshSizeMm, minSizeMm, normalDev, rotorAngle,
       outerAirFactor, gapLayers, nSectors, componentMeshJson, poleCopy, structuredGap,
-      ironTemplate]);
+      ironTemplate, geoMesh]);
 
   // ── Max-element-size bounds = the feature/4 quality floor ─────────────────
   // Above the floor the solver clamps the iron anyway (those slider positions
@@ -653,12 +659,12 @@ const MeshPanel: React.FC = () => {
   };
 
   return (
-    <Box sx={{ display: 'flex', height: '100%', overflow: 'hidden', bgcolor: '#060d17' }}>
+    <Box sx={{ display: 'flex', height: '100%', overflow: 'hidden', bgcolor: 'var(--panel-2)' }}>
 
       {/* ── LEFT: controls ── */}
       <Box sx={{
         width: 320, flexShrink: 0, overflowY: 'auto',
-        borderRight: '1px solid #1e293b', p: 2,
+        borderRight: '1px solid var(--line-soft)', p: 2,
         display: 'flex', flexDirection: 'column', gap: 2,
       }}>
 
@@ -667,14 +673,14 @@ const MeshPanel: React.FC = () => {
             {/* mesh_size_mm */}
             <Box>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-                <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>
+                <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>
                   Max element size
                   <Tooltip title={`Coarsest triangle edge length in the iron/body. Bounded to the feature/2 quality floor${_floor ? ` = ${_floor.toFixed(2)} mm for this motor (2 elements across the smallest tooth/slot)` : ''}: above it the solver clamps anyway, so the slider stops there and every position actually changes the mesh. Lower it to refine (finer + more accurate, slower).`} placement="right">
-                    <span style={{ color: '#475569', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
+                    <span style={{ color: 'var(--text-4)', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
                   </Tooltip>
                 </Typography>
                 <Chip label={`${Math.min(meshSizeMm, meshMax).toFixed(1)} mm`} size="small"
-                  sx={{ fontSize: 11, height: 20, bgcolor: '#1e3a5f', color: '#93c5fd' }}/>
+                  sx={{ fontSize: 11, height: 20, bgcolor: 'var(--line-accent)', color: '#93c5fd' }}/>
               </Box>
               <Slider
                 value={Math.min(meshSizeMm, meshMax)} min={meshMin} max={meshMax} step={meshStep}
@@ -686,14 +692,14 @@ const MeshPanel: React.FC = () => {
             {/* min_size_mm */}
             <Box>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-                <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>
+                <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>
                   Min element size
                   <Tooltip title="Lower bound on triangle size at fillets / thin features" placement="right">
-                    <span style={{ color: '#475569', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
+                    <span style={{ color: 'var(--text-4)', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
                   </Tooltip>
                 </Typography>
                 <Chip label={`${minSizeMm.toFixed(2)} mm`} size="small"
-                  sx={{ fontSize: 11, height: 20, bgcolor: '#1e293b', color: '#94a3b8' }}/>
+                  sx={{ fontSize: 11, height: 20, bgcolor: 'var(--panel)', color: 'var(--text-2)' }}/>
               </Box>
               <Slider
                 value={minSizeMm} min={0.1} max={2.0} step={0.05}
@@ -705,14 +711,14 @@ const MeshPanel: React.FC = () => {
             {/* Normal deviation — fillet-arc resolution (max angle per segment) */}
             <Box>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-                <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>
+                <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>
                   Normal deviation
                   <Tooltip title="Fillet-arc accuracy (Ansys Normal Deviation): max angle per segment of a rounded corner. Lower → more segments per fillet → smoother arc + finer mesh on the fillet. Drives the fillet vertex density (n_arc) in the geometry." placement="right">
-                    <span style={{ color: '#475569', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
+                    <span style={{ color: 'var(--text-4)', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
                   </Tooltip>
                 </Typography>
                 <Chip label={`${normalDev.toFixed(1)}°`} size="small"
-                  sx={{ fontSize: 11, height: 20, bgcolor: '#1e293b', color: '#94a3b8' }}/>
+                  sx={{ fontSize: 11, height: 20, bgcolor: 'var(--panel)', color: 'var(--text-2)' }}/>
               </Box>
               <Slider
                 value={normalDev} min={2.0} max={20.0} step={0.5}
@@ -724,25 +730,25 @@ const MeshPanel: React.FC = () => {
             {/* rotor angle */}
             <Box>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-                <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>Rotor angle</Typography>
+                <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>Rotor angle</Typography>
                 <Chip label={`${rotorAngle.toFixed(1)}°`} size="small"
-                  sx={{ fontSize: 11, height: 20, bgcolor: '#1e293b', color: '#94a3b8' }}/>
+                  sx={{ fontSize: 11, height: 20, bgcolor: 'var(--panel)', color: 'var(--text-2)' }}/>
               </Box>
               <Slider
                 value={rotorAngle} min={0} max={25.71} step={0.5}
                 onChange={(_, v) => setRotorAngle(v as number)}
                 sx={{ color: '#3b82f6' }}
               />
-              <Typography sx={{ fontSize: 9, color: '#334155' }}>
+              <Typography sx={{ fontSize: 9, color: 'var(--line)' }}>
                 0…25.71° mech = one electrical period
               </Typography>
             </Box>
 
-            <Divider sx={{ borderColor: '#1e293b' }}/>
+            <Divider sx={{ borderColor: 'var(--panel)' }}/>
 
             {/* ── Solver-domain section (Ansys-style) ────────────────────── */}
             <Box>
-              <Typography sx={{ fontSize: '0.62rem', fontWeight: 700, color: '#475569',
+              <Typography sx={{ fontSize: '0.62rem', fontWeight: 700, color: 'var(--text-4)',
                 letterSpacing: '0.08em', textTransform: 'uppercase', mb: 0.5 }}>
                 Solver Domain
               </Typography>
@@ -751,17 +757,17 @@ const MeshPanel: React.FC = () => {
             {/* Outer air ring factor */}
             <Box>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-                <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>
+                <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>
                   Outer air ring
                   <Tooltip title="Extend mesh beyond stator OD so the Dirichlet A=0 far-field BC is applied on air, not iron. 1.0 = off; 1.3 ≈ Ansys Region Padding 30%." placement="right">
-                    <span style={{ color: '#475569', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
+                    <span style={{ color: 'var(--text-4)', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
                   </Tooltip>
                 </Typography>
                 <Chip label={outerAirFactor <= 1.001 ? 'off'
                   : `×${outerAirFactor.toFixed(2)}`} size="small"
                   sx={{ fontSize: 11, height: 20,
-                    bgcolor: outerAirFactor > 1.001 ? '#1e3a5f' : '#1e293b',
-                    color: outerAirFactor > 1.001 ? '#93c5fd' : '#94a3b8' }}/>
+                    bgcolor: outerAirFactor > 1.001 ? 'var(--line-accent)' : 'var(--panel)',
+                    color: outerAirFactor > 1.001 ? '#93c5fd' : 'var(--text-2)' }}/>
               </Box>
               <Slider
                 value={outerAirFactor} min={1.0} max={2.0} step={0.05}
@@ -770,17 +776,43 @@ const MeshPanel: React.FC = () => {
               />
             </Box>
 
+            {/* Air element size — open air / shaft / far-field (same store as
+                the Per-part "Outer air" field; 0 = auto coarse) */}
+            <Box>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>
+                  Air element size
+                  <Tooltip title="Element size (mm) for the open air: outer far-field, slot pockets, shaft core. Auto = coarse (≈2× the iron element, ≥3 mm) — the open air carries little flux, so coarse is cheap and safe. Same setting as the Per-part 'Outer air' field below." placement="right">
+                    <span style={{ color: 'var(--text-4)', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
+                  </Tooltip>
+                </Typography>
+                <Chip label={(componentMesh.outer ?? 0) > 0
+                  ? `${(componentMesh.outer as number).toFixed(1)} mm` : 'auto'} size="small"
+                  sx={{ fontSize: 11, height: 20,
+                    bgcolor: (componentMesh.outer ?? 0) > 0 ? 'var(--line-accent)' : 'var(--panel)',
+                    color: (componentMesh.outer ?? 0) > 0 ? '#93c5fd' : 'var(--text-2)' }}/>
+              </Box>
+              <Slider
+                value={componentMesh.outer ?? 0} min={0} max={8} step={0.5}
+                onChange={(_, v) => {
+                  const n = v as number;
+                  setCompSize('outer', n > 0 ? String(n) : '');
+                }}
+                sx={{ color: '#3b82f6' }}
+              />
+            </Box>
+
             {/* Air-gap layers — element rows on EACH side of the slip midline */}
             <Box>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-                <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>
+                <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>
                   Air-gap fidelity (layers/side)
                   <Tooltip title="The single air-gap fidelity control. Sets BOTH the radial element rows per side of the sliding midline (torque via Maxwell stress) AND the tangential slip-ring node count (eddy-loss accuracy — more nodes = less node-identification jitter). 2 is the sweet spot for mean torque; raise to 4+ for the cleanest eddy/solid losses (slower, ~gap=4 ≈ the retired High-fidelity mode). Drives the mesh preview and the Simulation solve identically." placement="right">
-                    <span style={{ color: '#475569', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
+                    <span style={{ color: 'var(--text-4)', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
                   </Tooltip>
                 </Typography>
                 <Chip label={`${gapLayers.toFixed(0)}/side`} size="small"
-                  sx={{ fontSize: 11, height: 20, bgcolor: '#1e3a5f', color: '#93c5fd' }}/>
+                  sx={{ fontSize: 11, height: 20, bgcolor: 'var(--line-accent)', color: '#93c5fd' }}/>
               </Box>
               <Slider
                 value={gapLayers} min={1} max={6} step={1}
@@ -791,7 +823,7 @@ const MeshPanel: React.FC = () => {
 
             {/* Air-gap mesh: free triangles vs ANSYS-style concentric rings (experimental) */}
             <Box>
-              <Typography sx={{ fontSize: '0.62rem', fontWeight: 700, color: '#475569',
+              <Typography sx={{ fontSize: '0.62rem', fontWeight: 700, color: 'var(--text-4)',
                 letterSpacing: '0.08em', textTransform: 'uppercase', mb: 0.5 }}>
                 Air-gap mesh
               </Typography>
@@ -808,8 +840,8 @@ const MeshPanel: React.FC = () => {
                   }}
                   sx={{ width: '100%',
                     '& .MuiToggleButton-root': { flex: 1, py: 0.3, fontSize: 11,
-                      color: '#64748b', borderColor: '#1e293b', textTransform: 'none',
-                      '&.Mui-selected': { color: '#e2e8f0', bgcolor: '#1e3a5f',
+                      color: 'var(--text-3)', borderColor: 'var(--panel)', textTransform: 'none',
+                      '&.Mui-selected': { color: 'var(--text-0)', bgcolor: 'var(--line-accent)',
                         borderColor: '#3b82f6' } } }}>
                   <ToggleButton value="free">Free (triangles)</ToggleButton>
                   <ToggleButton value="struct">Structured (rings)</ToggleButton>
@@ -817,20 +849,31 @@ const MeshPanel: React.FC = () => {
               </Tooltip>
               <Tooltip placement="right" title="Replaces the node re-pairing slip coupling with a smooth per-harmonic rotor-stator link. RAW (unfiltered) torque ripple becomes step-count independent — the honest ripple figure. Works on the full disk AND sector models (anti-periodic harmonic ladder); sector evals are ~5x faster. Solver-side: the mesh preview is unchanged.">
                 <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mt: 0.75 }}>
-                  <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>Harmonic gap (exact ripple)</Typography>
+                  <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>Harmonic gap (exact ripple)</Typography>
                   <Switch size="small" checked={harmonicGap}
                     onChange={(e) => setHarmonicGap(e.target.checked)} />
                 </Box>
               </Tooltip>
               <Tooltip placement="right" title="Stator/rotor iron meshed by structured slot/pole unit templates on the real CadQuery contours (pocket fillets, vent, OD fillet) — build-to-build deterministic mesh and ripple. Works on the full disk and 1/2, 1/4, 1/6 sectors. Requires the Structured (rings) air gap (auto-enabled); falls back to gmsh when the topology doesn't fit the units.">
                 <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mt: 0.75 }}>
-                  <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>Template iron (deterministic)</Typography>
+                  <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>Template iron (deterministic)</Typography>
                   <Switch size="small" checked={ironTemplate}
                     onChange={(e) => {
                       setIronTemplate(e.target.checked);
                       // template halves end ON the iron circles — only the
                       // structured belt meshes the gap between them
                       if (e.target.checked) setStructuredGap(true);
+                      else setGeoMesh(false);   // geo rides the template path
+                    }} />
+                </Box>
+              </Tooltip>
+              <Tooltip placement="right" title="Triangulate the REAL CadQuery polygons (every fillet) with a constrained Delaunay instead of warping a tensor template — the mesh conforms to magnet corners, tooth-tip r1 and the V-notch apex by construction. Rides the Template-iron path (auto-enables it). Full disk only for now: a 1/N request builds the full ring.">
+                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mt: 0.75 }}>
+                  <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>Geometry-driven mesh (fillets)</Typography>
+                  <Switch size="small" checked={geoMesh}
+                    onChange={(e) => {
+                      setGeoMesh(e.target.checked);
+                      if (e.target.checked) { setIronTemplate(true); setStructuredGap(true); }
                     }} />
                 </Box>
               </Tooltip>
@@ -839,10 +882,10 @@ const MeshPanel: React.FC = () => {
             {/* ── Per-component mesh size (mesh-convergence study) ───────── */}
             <Box>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-                <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>
+                <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>
                   Per-part element size (mm)
                   <Tooltip title="Target triangle size INSIDE each motor part. Empty = use the global Max size for that part. Set a finer/coarser value per part to study how mesh density changes the simulated torque/losses (mesh-convergence). Applies to both the mesh preview and the Simulation solve." placement="right">
-                    <span style={{ color: '#475569', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
+                    <span style={{ color: 'var(--text-4)', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
                   </Tooltip>
                 </Typography>
                 {Object.keys(componentMesh).length > 0 && (
@@ -854,7 +897,7 @@ const MeshPanel: React.FC = () => {
               <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0.6 }}>
                 {MESH_COMPONENTS.map(({ key, label }) => (
                   <Box key={key} sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                    <Typography sx={{ fontSize: 11, color: '#cbd5e1', flex: 1 }}>
+                    <Typography sx={{ fontSize: 11, color: 'var(--text-1)', flex: 1 }}>
                       {label}
                     </Typography>
                     <TextField
@@ -863,9 +906,9 @@ const MeshPanel: React.FC = () => {
                       onChange={e => setCompSize(key, e.target.value)}
                       inputProps={{ inputMode: 'decimal', style: {
                         padding: '2px 6px', fontSize: 11, width: 52,
-                        color: '#e2e8f0', textAlign: 'right' } }}
-                      sx={{ '& .MuiOutlinedInput-root': { bgcolor: '#0f172a',
-                        '& fieldset': { borderColor: '#1e293b' } } }}
+                        color: 'var(--text-0)', textAlign: 'right' } }}
+                      sx={{ '& .MuiOutlinedInput-root': { bgcolor: 'var(--app-bg)',
+                        '& fieldset': { borderColor: 'var(--panel)' } } }}
                     />
                   </Box>
                 ))}
@@ -875,7 +918,7 @@ const MeshPanel: React.FC = () => {
             {/* Symmetry sectors */}
             <Box>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-                <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>
+                <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>
                   Symmetry
                 </Typography>
               </Box>
@@ -885,9 +928,9 @@ const MeshPanel: React.FC = () => {
                   onChange={(_, v) => v != null && setNSectors(v as number)}
                   sx={{ width: '100%',
                     '& .MuiToggleButton-root': { flex: 1, py: 0.3,
-                      fontSize: 11, color: '#64748b', borderColor: '#1e293b',
+                      fontSize: 11, color: 'var(--text-3)', borderColor: 'var(--panel)',
                       textTransform: 'none',
-                      '&.Mui-selected': { color: '#e2e8f0', bgcolor: '#1e3a5f',
+                      '&.Mui-selected': { color: 'var(--text-0)', bgcolor: 'var(--line-accent)',
                         borderColor: '#3b82f6' } } }}>
                   {validSectors.map(s => (
                     <ToggleButton key={s} value={s}>{s === 1 ? 'Full' : `1/${s}`}</ToggleButton>
@@ -899,7 +942,7 @@ const MeshPanel: React.FC = () => {
             {/* Periodic (template-copy) mesh toggle */}
             <Box sx={{ mt: 1.5 }}>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-                <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>
+                <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>
                   Pole/slot mesh
                 </Typography>
               </Box>
@@ -909,8 +952,8 @@ const MeshPanel: React.FC = () => {
                   onChange={(_, v) => v != null && setPoleCopy(v === 'periodic')}
                   sx={{ width: '100%',
                     '& .MuiToggleButton-root': { flex: 1, py: 0.3, fontSize: 11,
-                      color: '#64748b', borderColor: '#1e293b', textTransform: 'none',
-                      '&.Mui-selected': { color: '#e2e8f0', bgcolor: '#1e3a5f',
+                      color: 'var(--text-3)', borderColor: 'var(--panel)', textTransform: 'none',
+                      '&.Mui-selected': { color: 'var(--text-0)', bgcolor: 'var(--line-accent)',
                         borderColor: '#3b82f6' } } }}>
                   <ToggleButton value="standard">Standard</ToggleButton>
                   <ToggleButton value="periodic">Periodic (identical poles)</ToggleButton>
@@ -923,7 +966,7 @@ const MeshPanel: React.FC = () => {
               startIcon={femLoading ? <CircularProgress size={14} color="inherit"/> : <RefreshIcon/>}
               onClick={rebuildMesh}
               disabled={femLoading}
-              sx={{ py: 0.8, fontSize: 11, color: '#3b82f6', borderColor: '#1e3a5f' }}
+              sx={{ py: 0.8, fontSize: 11, color: '#3b82f6', borderColor: 'var(--line-accent)' }}
             >
               {femLoading ? 'Building…' : 'Rebuild mesh'}
             </Button>
@@ -931,53 +974,53 @@ const MeshPanel: React.FC = () => {
             {femError && <Alert severity="error" sx={{ fontSize: 11 }}>{femError}</Alert>}
 
             {femMesh && (
-              <Box sx={{ bgcolor: '#0a1628', borderRadius: 1, p: 1, border: '1px solid #1e293b' }}>
-                <Typography sx={{ fontSize: 10, color: '#475569', mb: 0.5 }}>Mesh stats</Typography>
+              <Box sx={{ bgcolor: 'var(--panel-2)', borderRadius: 1, p: 1, border: '1px solid var(--line-soft)' }}>
+                <Typography sx={{ fontSize: 10, color: 'var(--text-4)', mb: 0.5 }}>Mesh stats</Typography>
                 <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <Typography sx={{ fontSize: 11, color: '#94a3b8' }}>vertices</Typography>
-                  <Typography sx={{ fontSize: 11, color: '#e2e8f0', fontVariantNumeric: 'tabular-nums' }}>
+                  <Typography sx={{ fontSize: 11, color: 'var(--text-2)' }}>vertices</Typography>
+                  <Typography sx={{ fontSize: 11, color: 'var(--text-0)', fontVariantNumeric: 'tabular-nums' }}>
                     {femMesh.n_vertices.toLocaleString()}
                   </Typography>
                 </Box>
                 <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <Typography sx={{ fontSize: 11, color: '#94a3b8' }}>triangles</Typography>
-                  <Typography sx={{ fontSize: 11, color: '#e2e8f0', fontVariantNumeric: 'tabular-nums' }}>
+                  <Typography sx={{ fontSize: 11, color: 'var(--text-2)' }}>triangles</Typography>
+                  <Typography sx={{ fontSize: 11, color: 'var(--text-0)', fontVariantNumeric: 'tabular-nums' }}>
                     {femMesh.n_triangles.toLocaleString()}
                   </Typography>
                 </Box>
               </Box>
             )}
 
-            <Divider sx={{ borderColor: '#1e293b' }}/>
+            <Divider sx={{ borderColor: 'var(--panel)' }}/>
           </>
         )}
 
         {view === 'pinn' && (
           <>
         <Box>
-          <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, color: '#475569',
+          <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, color: 'var(--text-4)',
             letterSpacing: '0.1em', textTransform: 'uppercase', mb: 0.5 }}>
             Collocation Points
           </Typography>
-          <Typography sx={{ fontSize: 11, color: '#334155' }}>
+          <Typography sx={{ fontSize: 11, color: 'var(--line)' }}>
             PINN samples random points inside each domain. Higher density →
             better accuracy, slower training.
           </Typography>
         </Box>
 
-        <Divider sx={{ borderColor: '#1e293b' }}/>
+        <Divider sx={{ borderColor: 'var(--panel)' }}/>
 
         {/* n_radial */}
         <Box>
           <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-            <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>
+            <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>
               Radial layers
               <Tooltip title="Number of concentric circles of sample points per domain" placement="right">
-                <span style={{ color: '#475569', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
+                <span style={{ color: 'var(--text-4)', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
               </Tooltip>
             </Typography>
             <Chip label={cfg.n_radial} size="small"
-              sx={{ fontSize: 11, height: 20, bgcolor: '#1e3a5f', color: '#93c5fd' }}/>
+              sx={{ fontSize: 11, height: 20, bgcolor: 'var(--line-accent)', color: '#93c5fd' }}/>
           </Box>
           <Slider
             value={cfg.n_radial} min={2} max={30} step={1}
@@ -989,14 +1032,14 @@ const MeshPanel: React.FC = () => {
         {/* n_angular */}
         <Box>
           <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-            <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>
+            <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>
               Angular divisions
               <Tooltip title="Points around each radial ring in the main domains" placement="right">
-                <span style={{ color: '#475569', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
+                <span style={{ color: 'var(--text-4)', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
               </Tooltip>
             </Typography>
             <Chip label={cfg.n_angular} size="small"
-              sx={{ fontSize: 11, height: 20, bgcolor: '#1e3a5f', color: '#93c5fd' }}/>
+              sx={{ fontSize: 11, height: 20, bgcolor: 'var(--line-accent)', color: '#93c5fd' }}/>
           </Box>
           <Slider
             value={cfg.n_angular} min={8} max={256} step={8}
@@ -1008,14 +1051,14 @@ const MeshPanel: React.FC = () => {
         {/* n_angular_slots */}
         <Box>
           <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-            <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>
+            <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>
               Slot angular divisions
               <Tooltip title="Denser angular sampling inside slots/magnets for accuracy" placement="right">
-                <span style={{ color: '#475569', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
+                <span style={{ color: 'var(--text-4)', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
               </Tooltip>
             </Typography>
             <Chip label={cfg.n_angular_slots} size="small"
-              sx={{ fontSize: 11, height: 20, bgcolor: '#1e3a5f', color: '#93c5fd' }}/>
+              sx={{ fontSize: 11, height: 20, bgcolor: 'var(--line-accent)', color: '#93c5fd' }}/>
           </Box>
           <Slider
             value={cfg.n_angular_slots} min={2} max={64} step={2}
@@ -1024,11 +1067,11 @@ const MeshPanel: React.FC = () => {
           />
         </Box>
 
-        <Divider sx={{ borderColor: '#1e293b' }}/>
+        <Divider sx={{ borderColor: 'var(--panel)' }}/>
 
         {/* Point count table */}
         <Box>
-          <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, color: '#475569',
+          <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, color: 'var(--text-4)',
             letterSpacing: '0.1em', textTransform: 'uppercase', mb: 1 }}>
             Estimated Sample Points
           </Typography>
@@ -1038,24 +1081,24 @@ const MeshPanel: React.FC = () => {
               justifyContent: 'space-between', py: 0.35 }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
                 <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: d.color, flexShrink: 0 }}/>
-                <Typography sx={{ fontSize: 11, color: '#64748b' }}>{d.label}</Typography>
+                <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>{d.label}</Typography>
               </Box>
-              <Typography sx={{ fontSize: 11, fontWeight: 600, color: '#94a3b8', fontVariantNumeric: 'tabular-nums' }}>
+              <Typography sx={{ fontSize: 11, fontWeight: 600, color: 'var(--text-2)', fontVariantNumeric: 'tabular-nums' }}>
                 {(pointsPerDomain[d.key] ?? 0).toLocaleString()}
               </Typography>
             </Box>
           ))}
 
-          <Divider sx={{ borderColor: '#1e293b', my: 0.75 }}/>
+          <Divider sx={{ borderColor: 'var(--panel)', my: 0.75 }}/>
           <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-            <Typography sx={{ fontSize: 12, fontWeight: 700, color: '#94a3b8' }}>Total</Typography>
-            <Typography sx={{ fontSize: 12, fontWeight: 700, color: '#e2e8f0', fontVariantNumeric: 'tabular-nums' }}>
+            <Typography sx={{ fontSize: 12, fontWeight: 700, color: 'var(--text-2)' }}>Total</Typography>
+            <Typography sx={{ fontSize: 12, fontWeight: 700, color: 'var(--text-0)', fontVariantNumeric: 'tabular-nums' }}>
               {totalPoints.toLocaleString()}
             </Typography>
           </Box>
         </Box>
 
-        <Divider sx={{ borderColor: '#1e293b' }}/>
+        <Divider sx={{ borderColor: 'var(--panel)' }}/>
 
         <Button
           variant="contained" color="primary" fullWidth
@@ -1077,10 +1120,10 @@ const MeshPanel: React.FC = () => {
         overflow: 'auto' }}>
 
         <Box>
-          <Typography variant="h6" sx={{ color: '#e2e8f0', fontWeight: 700, mb: 0.5 }}>
+          <Typography variant="h6" sx={{ color: 'var(--text-0)', fontWeight: 700, mb: 0.5 }}>
             {view === 'fem' ? '2-D FEM Triangle Mesh' : 'Collocation Sampling Grid'}
           </Typography>
-          <Typography sx={{ fontSize: 12, color: '#475569' }}>
+          <Typography sx={{ fontSize: 12, color: 'var(--text-4)' }}>
             {view === 'fem'
               ? 'Conforming triangle mesh of the actual CadQuery cross-section. Each colour = one motor domain.'
               : 'Live preview of point distribution used during PINN training. Each coloured ring corresponds to one domain.'}
@@ -1125,7 +1168,7 @@ const MeshPanel: React.FC = () => {
         )}
 
         {/* Preview pane */}
-        <Paper sx={{ flex: 1, bgcolor: '#060d17', border: '1px solid #1e293b',
+        <Paper sx={{ flex: 1, bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)',
           borderRadius: 2, overflow: 'hidden', display: 'flex',
           alignItems: 'center', justifyContent: 'center', minHeight: 540,
           position: 'relative' }}>
@@ -1155,7 +1198,7 @@ const MeshPanel: React.FC = () => {
               </Box>
               {!WEBGL_OK && (
                 <Box sx={{ position: 'absolute', top: 8, left: 8, zIndex: 4,
-                  bgcolor: 'rgba(10,22,40,0.8)', px: 1, py: 0.5, borderRadius: 1,
+                  bgcolor: 'var(--overlay)', px: 1, py: 0.5, borderRadius: 1,
                   pointerEvents: 'none' }}>
                   <Typography sx={{ fontSize: 9, color: '#fbbf24' }}>
                     2D view (WebGL unavailable in this window) · wheel = zoom · drag = pan
@@ -1166,9 +1209,9 @@ const MeshPanel: React.FC = () => {
               <Viewcube/>
               {/* Help text overlay */}
               <Box sx={{ position: 'absolute', left: 8, bottom: 8, zIndex: 4,
-                bgcolor: 'rgba(10,22,40,0.7)', px: 1, py: 0.5, borderRadius: 1,
+                bgcolor: 'var(--overlay)', px: 1, py: 0.5, borderRadius: 1,
                 pointerEvents: 'none' }}>
-                <Typography sx={{ fontSize: 9, color: '#94a3b8' }}>
+                <Typography sx={{ fontSize: 9, color: 'var(--text-2)' }}>
                   Drag = orbit · Right-drag / Shift+drag = pan · Wheel = zoom
                 </Typography>
               </Box>
@@ -1179,7 +1222,7 @@ const MeshPanel: React.FC = () => {
         </Paper>
 
         {view === 'fem' && femMesh && (
-          <Typography sx={{ fontSize: 10, color: '#475569', textAlign: 'center' }}>
+          <Typography sx={{ fontSize: 10, color: 'var(--text-4)', textAlign: 'center' }}>
             {femMesh.note}
           </Typography>
         )}

@@ -69,7 +69,7 @@ function boundaryFlags(st: any, schema: any[], margin = 0.05): BoundaryFlag[] {
 // one long cramped row.  Module-level (stable identity) so inputs don't remount.
 const Group: React.FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => (
   <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
-    <Typography sx={{ fontSize: 9, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.6, fontWeight: 700 }}>
+    <Typography sx={{ fontSize: 9, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: 0.6, fontWeight: 700 }}>
       {label}
     </Typography>
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap' }}>{children}</Box>
@@ -780,7 +780,7 @@ const DescentPanel: React.FC = () => {
           {/* Convergence: figure of merit F ↑ and ripple (constraint) */}
           <Box sx={{ flex: 1, minWidth: 320 }}>
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
-              Convergence — F = eff×Nm/kg (↑, green) · ripple (orange, limit in red)
+              Convergence — F = eff×Nm/kg (green, ↑) · ripple % (blue)
             </Typography>
             <Box sx={{ height: 200 }}>
               <ResponsiveContainer width="100%" height="100%">
@@ -792,8 +792,8 @@ const DescentPanel: React.FC = () => {
                   <RTooltip contentStyle={{ fontSize: 11 }} />
                   <Legend wrapperStyle={{ fontSize: 10 }} />
                   <ReferenceLine yAxisId="l" y={1} stroke="#888" strokeDasharray="4 4" />
-                  <Line yAxisId="l" type="monotone" dataKey="F" name="F" stroke="#22c55e" dot={{ r: 2 }} strokeWidth={2} isAnimationActive={false} />
-                  <Line yAxisId="r" type="monotone" dataKey="T_ripple_pct" name="Ripple %" stroke="#f59e0b" dot={{ r: 2 }} strokeWidth={2} isAnimationActive={false} />
+                  <Line yAxisId="l" type="monotone" dataKey="F" name="F" stroke="#22c55e" dot={{ r: 0.5 }} strokeWidth={1.25} isAnimationActive={false} />
+                  <Line yAxisId="r" type="monotone" dataKey="T_ripple_pct" name="Ripple %" stroke="#38bdf8" dot={{ r: 0.5 }} strokeWidth={1.25} isAnimationActive={false} />
                 </LineChart>
               </ResponsiveContainer>
             </Box>
@@ -802,7 +802,7 @@ const DescentPanel: React.FC = () => {
           {/* Metric trajectories: torque density + efficiency */}
           <Box sx={{ flex: 1, minWidth: 320 }}>
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
-              Metrics — torque/mass (blue) · efficiency % (purple)
+              Metrics — torque/mass (blue) · efficiency % (green)
             </Typography>
             <Box sx={{ height: 200 }}>
               <ResponsiveContainer width="100%" height="100%">
@@ -813,8 +813,8 @@ const DescentPanel: React.FC = () => {
                   <YAxis yAxisId="r" orientation="right" tick={{ fontSize: 10 }} width={42} domain={['auto', 'auto']} />
                   <RTooltip contentStyle={{ fontSize: 11 }} />
                   <Legend wrapperStyle={{ fontSize: 10 }} />
-                  <Line yAxisId="l" type="monotone" dataKey="torque_per_mass" name="Nm/kg" stroke="#3b82f6" dot={{ r: 2 }} strokeWidth={2} isAnimationActive={false} />
-                  <Line yAxisId="r" type="monotone" dataKey="eff_pct" name="Eff %" stroke="#a855f7" dot={{ r: 2 }} strokeWidth={2} isAnimationActive={false} />
+                  <Line yAxisId="l" type="monotone" dataKey="torque_per_mass" name="Nm/kg" stroke="#3b82f6" dot={{ r: 0.5 }} strokeWidth={1.25} isAnimationActive={false} />
+                  <Line yAxisId="r" type="monotone" dataKey="eff_pct" name="Eff %" stroke="#22c55e" dot={{ r: 0.5 }} strokeWidth={1.25} isAnimationActive={false} />
                 </LineChart>
               </ResponsiveContainer>
             </Box>
@@ -926,23 +926,23 @@ const DescentPanel: React.FC = () => {
                     if (!active || !payload || !payload.length) return null;
                     const p = payload[0]?.payload || {};
                     return (
-                      <div style={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 4,
+                      <div style={{ background: 'var(--app-bg)', border: '1px solid var(--line)', borderRadius: 4,
                                     padding: '6px 9px', fontSize: 11, lineHeight: 1.6 }}>
-                        {p.eff != null && <div style={{ color: '#a855f7' }}>Eff %: {Number(p.eff).toFixed(3)}</div>}
+                        {p.eff != null && <div style={{ color: '#22c55e' }}>Eff %: {Number(p.eff).toFixed(3)}</div>}
                         {p.td  != null && <div style={{ color: '#3b82f6' }}>Nm/kg: {Number(p.td).toFixed(3)}</div>}
                         {p.ripple != null && (
                           <div style={{ color: '#22c55e' }}>
                             Ripple %: {Number(p.ripple).toFixed(2)}
                           </div>
                         )}
-                        {p.iter != null && <div style={{ color: '#94a3b8' }}>iter: {p.iter}</div>}
-                        {p.I    != null && <div style={{ color: '#94a3b8' }}>I: {p.I} A</div>}
+                        {p.iter != null && <div style={{ color: 'var(--text-2)' }}>iter: {p.iter}</div>}
+                        {p.I    != null && <div style={{ color: 'var(--text-2)' }}>I: {p.I} A</div>}
                       </div>
                     );
                   }} />
                 {_blSeg && (
                   <ReferenceLine ifOverflow="hidden" segment={_blSeg as any}
-                    stroke="#f59e0b" strokeDasharray="6 4" strokeWidth={1.5} />
+                    stroke="#f59e0b" strokeDasharray="6 4" strokeWidth={1} />
                 )}
                 {blMarkers.length > 0 && (
                   <Scatter name="baseline" data={blMarkers} fill="#f59e0b" fillOpacity={0.95}
@@ -951,14 +951,22 @@ const DescentPanel: React.FC = () => {
                   </Scatter>
                 )}
                 <Scatter name="designs" data={shownPts} fill="#22c55e" fillOpacity={0.55} isAnimationActive={false}
+                  shape={(p: any) => (
+                    <g>
+                      {/* invisible fat hit-area so the tiny dot stays clickable */}
+                      <circle cx={p.cx} cy={p.cy} r={6} fill="transparent" />
+                      <circle cx={p.cx} cy={p.cy} r={2.2} fill="#15803d" fillOpacity={0.9} />
+                    </g>
+                  )}
                   cursor="pointer" onClick={(d: any) => d && setSelectedPt(d.payload ?? d)} />
                 <Scatter name="descent path" data={trajPts} fill="#3b82f6"
+                  shape={(p: any) => <circle cx={p.cx} cy={p.cy} r={2.2} fill="#1d4ed8" />}
                   line={{ stroke: '#3b82f6', strokeWidth: 1.5 }} lineType="joint" isAnimationActive={false} />
                 <Scatter name="★ best" data={bestPt} fill="#fbbf24" shape="star" isAnimationActive={false}
                   cursor="pointer" onClick={(d: any) => d && setSelectedPt(d.payload ?? d)} />
                 {selectedPt && selectedPt.td != null && (
                   <Scatter name="● picked" data={[{ td: selectedPt.td, eff: selectedPt.eff, z: 9 }]}
-                    fill="none" stroke="#e879f9" strokeWidth={2} shape="circle" isAnimationActive={false} />
+                    fill="none" stroke="#e879f9" strokeWidth={1.25} shape="circle" isAnimationActive={false} />
                 )}
                 {showLoadLines && loadLineDesigns.map(([name, arr], i) => (
                   <Scatter key={'ll-' + name} name={name}

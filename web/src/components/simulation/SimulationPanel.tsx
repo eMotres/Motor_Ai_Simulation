@@ -81,12 +81,12 @@ const Row: React.FC<{ label: string; value: string; unit?: string; highlight?: b
   label, value, unit, highlight,
 }) => (
   <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', py: 0.4 }}>
-    <Typography sx={{ fontSize: 11, color: '#64748b' }}>{label}</Typography>
+    <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>{label}</Typography>
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-      <Typography sx={{ fontSize: 12, fontWeight: 600, color: highlight ? '#4ade80' : '#e2e8f0' }}>
+      <Typography sx={{ fontSize: 12, fontWeight: 600, color: highlight ? '#4ade80' : 'var(--text-0)' }}>
         {value}
       </Typography>
-      {unit && <Typography sx={{ fontSize: 10, color: '#475569' }}>{unit}</Typography>}
+      {unit && <Typography sx={{ fontSize: 10, color: 'var(--text-4)' }}>{unit}</Typography>}
     </Box>
   </Box>
 );
@@ -302,7 +302,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // Band-limit the transient torque to the physical 6·k electrical orders
   // (drops the broadband slip-node noise a balanced 3-phase machine cannot
   // produce).  ON by default; turn off to inspect the raw per-frame torque.
-  const [torqueFilter, setTorqueFilter] = usePersisted('torqueFilter', true);
+  const [torqueFilter, setTorqueFilter] = usePersisted('torqueFilter', false);
   // Auto-save EVERY simulation change into the active motor ("my copy").
   // syncActiveMotor is internally debounced, so firing on each change is fine.
   useEffect(() => {
@@ -488,22 +488,22 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
 
   // ─────────────────────────────────────────────────────────────────────────
   return (
-    <Box sx={{ display: 'flex', height: '100%', overflow: 'hidden', bgcolor: '#060d17' }}>
+    <Box sx={{ display: 'flex', height: '100%', overflow: 'hidden', bgcolor: 'var(--panel-2)' }}>
 
       {/* ── LEFT: controls ── */}
       <Box sx={{
         width: 320, flexShrink: 0, overflowY: 'auto',
-        borderRight: '1px solid #1e293b', p: 2,
+        borderRight: '1px solid var(--line-soft)', p: 2,
         display: 'flex', flexDirection: 'column', gap: 2,
       }}>
 
         {/* Winding connection */}
         <Box>
-          <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, color: '#475569',
+          <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, color: 'var(--text-4)',
             letterSpacing: '0.1em', textTransform: 'uppercase', mb: 1 }}>
             Winding Connection
           </Typography>
-          <Typography sx={{ fontSize: 10, color: '#334155', mb: 1.2 }}>
+          <Typography sx={{ fontSize: 10, color: 'var(--line)', mb: 1.2 }}>
             {nCoilsPerPhase} coils/phase · {nWiresPerSlot} wires/slot
           </Typography>
 
@@ -518,7 +518,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                   disabled={isRunning}
                   sx={{ flex: 1, minWidth: 52, fontSize: 11, fontWeight: 700, py: 0.5,
                     textTransform: 'none',
-                    ...(connection === c.label ? {} : { color: '#64748b', borderColor: '#334155' })
+                    ...(connection === c.label ? {} : { color: 'var(--text-3)', borderColor: 'var(--line)' })
                   }}
                 >
                   {c.label}
@@ -529,17 +529,17 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
 
         </Box>
 
-        <Divider sx={{ borderColor: '#1e293b' }}/>
+        <Divider sx={{ borderColor: 'var(--panel)' }}/>
 
         {/* ── Coil layout — currents (phase + sign) per slot ── */}
         <Box>
-          <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, color: '#475569',
+          <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, color: 'var(--text-4)',
             letterSpacing: '0.1em', textTransform: 'uppercase', mb: 1 }}>
             Coil Layout — currents per slot
           </Typography>
 
           {/* single-layer winding (this machine has no double-layer variant) */}
-          <Typography sx={{ fontSize: 10, color: '#64748b', mb: 1 }}>
+          <Typography sx={{ fontSize: 10, color: 'var(--text-3)', mb: 1 }}>
             Single-layer winding · {windCfg?.num_slots ?? 24} slots
           </Typography>
 
@@ -550,7 +550,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 <Box sx={{ width: 16, height: 18, borderRadius: '2px',
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
                   fontSize: 9, fontWeight: 700, color: '#fff',
-                  bgcolor: PHASE_COLOR[ph] || '#64748b',
+                  bgcolor: PHASE_COLOR[ph] || 'var(--text-3)',
                   opacity: d > 0 ? 1 : 0.4,
                   border: d > 0 ? '1px solid rgba(255,255,255,0.45)' : '1px solid transparent' }}>
                   {d > 0 ? ph : ph.toLowerCase()}
@@ -561,11 +561,11 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
 
         </Box>
 
-        <Divider sx={{ borderColor: '#1e293b' }}/>
+        <Divider sx={{ borderColor: 'var(--panel)' }}/>
 
         {/* Operating point */}
         <Box>
-          <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, color: '#475569',
+          <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, color: 'var(--text-4)',
             letterSpacing: '0.1em', textTransform: 'uppercase', mb: 1.5 }}>
             Operating Point
           </Typography>
@@ -723,10 +723,10 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 <Checkbox size="small" checked={demag}
                   onChange={e => setDemag(e.target.checked)}
                   disabled={simBusy}
-                  sx={{ p: 0.5, color: '#475569', '&.Mui-checked': { color: '#c084fc' } }} />
+                  sx={{ p: 0.5, color: 'var(--text-4)', '&.Mui-checked': { color: '#c084fc' } }} />
               }
               label={
-                <Typography variant="caption" sx={{ color: demag ? '#c084fc' : '#94a3b8' }}>
+                <Typography variant="caption" sx={{ color: demag ? '#c084fc' : 'var(--text-2)' }}>
                   Demagnetisation — de-rate torque (FEM, per element)
                 </Typography>
               }
@@ -743,10 +743,10 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 <Checkbox size="small" checked={torqueFilter}
                   onChange={e => setTorqueFilter(e.target.checked)}
                   disabled={simBusy}
-                  sx={{ p: 0.5, color: '#475569', '&.Mui-checked': { color: '#34d399' } }} />
+                  sx={{ p: 0.5, color: 'var(--text-4)', '&.Mui-checked': { color: '#34d399' } }} />
               }
               label={
-                <Typography variant="caption" sx={{ color: torqueFilter ? '#34d399' : '#94a3b8' }}>
+                <Typography variant="caption" sx={{ color: torqueFilter ? '#34d399' : 'var(--text-2)' }}>
                   Torque filter — physical 6·k orders only
                 </Typography>
               }
@@ -783,7 +783,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               {runNonce === 0 ? 'Run Simulation' : 'Re-run Simulation'}
             </Button>
           )}
-          <Typography sx={{ fontSize: 10, color: '#475569', textAlign: 'center', mt: 0.75 }}>
+          <Typography sx={{ fontSize: 10, color: 'var(--text-4)', textAlign: 'center', mt: 0.75 }}>
             {simBusy
               ? 'Solving the transient — press Stop to cancel'
               : cancelledRun
@@ -794,17 +794,17 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
 
         {/* ── Resume / fresh dialog (after a Stop) ── */}
         <Dialog open={askResume} onClose={() => setAskResume(false)}
-          PaperProps={{ sx: { bgcolor: '#0b1220', border: '1px solid #1e293b', borderRadius: 2 } }}>
-          <DialogTitle sx={{ fontSize: 15, color: '#e2e8f0' }}>Resume the stopped run?</DialogTitle>
+          PaperProps={{ sx: { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 2 } }}>
+          <DialogTitle sx={{ fontSize: 15, color: 'var(--text-0)' }}>Resume the stopped run?</DialogTitle>
           <DialogContent>
-            <Typography sx={{ fontSize: 13, color: '#94a3b8' }}>
+            <Typography sx={{ fontSize: 13, color: 'var(--text-2)' }}>
               The previous transient was stopped part-way.  <b>Continue</b> keeps the
               frames already solved and only computes the missing ones.
               <b> Start fresh</b> discards them and recomputes the whole period.
             </Typography>
           </DialogContent>
           <DialogActions sx={{ px: 3, pb: 2, gap: 1 }}>
-            <Button onClick={() => launchRun(true)} sx={{ textTransform: 'none', color: '#94a3b8' }}>
+            <Button onClick={() => launchRun(true)} sx={{ textTransform: 'none', color: 'var(--text-2)' }}>
               Start fresh
             </Button>
             <Button onClick={() => launchRun(false)} variant="contained"
@@ -824,22 +824,22 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
             • Rotor-periodicity info now lives in the LEFT control
               panel, in a compact 2×2 grid right under the Solver
               badge.  See <Box>{Rotor Periodicity}</Box> above. */}
-        <Paper sx={{ bgcolor: '#0a1628', border: '1px solid #1e293b', p: 2,
+        <Paper sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', p: 2,
           borderRadius: 2, display: 'none' }}>
           <Typography sx={{ fontSize: 11, fontWeight: 700, color: '#3b82f6', mb: 1.5,
             textTransform: 'uppercase', letterSpacing: 1 }}>
             Governing Equation
           </Typography>
-          <Box sx={{ fontFamily: 'monospace', fontSize: 12, color: '#94a3b8', lineHeight: 2 }}>
+          <Box sx={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--text-2)', lineHeight: 2 }}>
             <Box>∂/∂x(ν ∂A_z/∂x) + ∂/∂y(ν ∂A_z/∂y) = −J_z</Box>
-            <Box sx={{ color: '#475569', fontSize: 10, mt: 0.5 }}>
+            <Box sx={{ color: 'var(--text-4)', fontSize: 10, mt: 0.5 }}>
               ν = reluctivity = 1/(μ₀ μᵣ) &nbsp;|&nbsp;
               B_x = ∂A_z/∂y &nbsp;|&nbsp;
               B_y = −∂A_z/∂x
             </Box>
           </Box>
 
-          <Divider sx={{ borderColor: '#1e293b', my: 1.5 }}/>
+          <Divider sx={{ borderColor: 'var(--panel)', my: 1.5 }}/>
 
           {/* Periodicity info */}
           <Typography sx={{ fontSize: 11, fontWeight: 700, color: '#3b82f6', mb: 1,
@@ -853,13 +853,13 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               { label: 'Cogging period',    value: `${coggingPeriod_deg.toFixed(3)}°`,     sub: `360° / LCM(${numSlots},${numPoles})` },
               { label: 'Cogging per elec', value: Math.round(elecPeriod_deg / coggingPeriod_deg).toString(), sub: 'samples for full curve' },
             ].map(item => (
-              <Box key={item.label} sx={{ bgcolor: '#0f1e35', borderRadius: 1, p: 1,
-                border: '1px solid #1e293b' }}>
-                <Typography sx={{ fontSize: 9, color: '#475569', textTransform: 'uppercase',
+              <Box key={item.label} sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1, p: 1,
+                border: '1px solid var(--line-soft)' }}>
+                <Typography sx={{ fontSize: 9, color: 'var(--text-4)', textTransform: 'uppercase',
                   letterSpacing: '0.08em' }}>{item.label}</Typography>
                 <Typography sx={{ fontSize: 14, fontWeight: 700, color: '#93c5fd',
                   fontVariantNumeric: 'tabular-nums' }}>{item.value}</Typography>
-                <Typography sx={{ fontSize: 9, color: '#334155' }}>{item.sub}</Typography>
+                <Typography sx={{ fontSize: 9, color: 'var(--line)' }}>{item.sub}</Typography>
               </Box>
             ))}
           </Box>
@@ -869,7 +869,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
             or one parametric PINN with θ as input.
           </Alert>
 
-          <Divider sx={{ borderColor: '#1e293b', my: 1.5 }}/>
+          <Divider sx={{ borderColor: 'var(--panel)', my: 1.5 }}/>
 
           <Typography sx={{ fontSize: 11, fontWeight: 700, color: '#3b82f6', mb: 1,
             textTransform: 'uppercase', letterSpacing: 1 }}>
@@ -878,11 +878,11 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
           <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
             {[
               { name: 'Stator Core', color: '#3b82f6',  pde: 'μᵣ = 5000' },
-              { name: 'Air Gap',     color: '#94a3b8',  pde: 'μᵣ = 1' },
+              { name: 'Air Gap',     color: 'var(--text-2)',  pde: 'μᵣ = 1' },
               { name: 'Rotor Core',  color: '#2563eb',  pde: 'μᵣ = 5000' },
               { name: 'Magnets',     color: '#ef4444',  pde: 'Br = 1.2 T' },
               { name: 'Windings',    color: '#f59e0b',  pde: 'J = ±J_peak' },
-              { name: 'Shaft',       color: '#64748b',  pde: 'μᵣ = 1000' },
+              { name: 'Shaft',       color: 'var(--text-3)',  pde: 'μᵣ = 1000' },
             ].map(d => (
               <Tooltip key={d.name} title={`PDE: ${d.pde}`} placement="top">
                 <Chip label={d.name} size="small" sx={{
@@ -898,9 +898,9 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
 
         {/* Job progress */}
         {job && (
-          <Paper sx={{ bgcolor: '#0a1628', border: '1px solid #1e293b', p: 2, borderRadius: 2 }}>
+          <Paper sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', p: 2, borderRadius: 2 }}>
             <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.5 }}>
-              <Typography sx={{ fontSize: 11, fontWeight: 700, color: '#475569',
+              <Typography sx={{ fontSize: 11, fontWeight: 700, color: 'var(--text-4)',
                 textTransform: 'uppercase', letterSpacing: 1 }}>
                 Job {job.job_id}
               </Typography>
@@ -914,20 +914,20 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 label={job.status.toUpperCase()}
                 size="small"
                 sx={{ fontSize: 10,
-                  bgcolor: job.status === 'done' ? '#14532d' : job.status === 'error' ? '#7f1d1d' : '#1e3a5f',
+                  bgcolor: job.status === 'done' ? 'var(--ok-bg)' : job.status === 'error' ? '#7f1d1d' : 'var(--line-accent)',
                   color:   job.status === 'done' ? '#4ade80' : job.status === 'error' ? '#f87171' : '#93c5fd',
                 }}
               />
               {job.elapsed_s != null && (
                 <Chip label={`${job.elapsed_s.toFixed(1)}s`} size="small"
-                  sx={{ fontSize: 10, bgcolor: '#1e293b', color: '#64748b' }}/>
+                  sx={{ fontSize: 10, bgcolor: 'var(--panel)', color: 'var(--text-3)' }}/>
               )}
             </Box>
 
             <LinearProgress
               variant="determinate"
               value={job.progress * 100}
-              sx={{ borderRadius: 1, height: 4, bgcolor: '#1e293b',
+              sx={{ borderRadius: 1, height: 4, bgcolor: 'var(--panel)',
                 '& .MuiLinearProgress-bar': {
                   bgcolor: job.status === 'error' ? '#ef4444' : '#3b82f6',
                 }
@@ -942,7 +942,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
 
         {/* Results */}
         {job?.result && (
-          <Paper sx={{ bgcolor: '#0a1628', border: '1px solid #1e293b', p: 2, borderRadius: 2 }}>
+          <Paper sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', p: 2, borderRadius: 2 }}>
             {job.result.status === 'dry_run' && (
               <Alert severity="info" sx={{ fontSize: 10, mb: 1.5, py: 0.5,
                 '& .MuiAlert-message': { py: 0 } }}>
@@ -953,7 +953,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
             {/* ── Efficiency banner ── */}
             {job.result.efficiency_pct != null && (
               <Box sx={{ textAlign: 'center', py: 1.5, mb: 1.5,
-                bgcolor: '#0a2010', borderRadius: 1, border: '1px solid #14532d' }}>
+                bgcolor: 'var(--ok-bg)', borderRadius: 1, border: '1px solid var(--ok-bg)' }}>
                 <Typography sx={{ fontSize: 28, fontWeight: 800,
                   color: job.result.efficiency_pct > 90 ? '#4ade80' : '#fbbf24' }}>
                   {job.result.efficiency_pct.toFixed(1)} %
@@ -989,7 +989,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
             </Box>
 
             {/* ── Winding params ── */}
-            <Typography sx={{ fontSize: 9, fontWeight: 700, color: '#475569',
+            <Typography sx={{ fontSize: 9, fontWeight: 700, color: 'var(--text-4)',
               textTransform: 'uppercase', letterSpacing: 1, mb: 0.75 }}>
               Winding (computed)
             </Typography>
@@ -1000,7 +1000,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
             </Box>
 
             {/* ── Field ── */}
-            <Typography sx={{ fontSize: 9, fontWeight: 700, color: '#475569',
+            <Typography sx={{ fontSize: 9, fontWeight: 700, color: 'var(--text-4)',
               textTransform: 'uppercase', letterSpacing: 1, mb: 0.75 }}>
               Magnetic Field
             </Typography>
@@ -1010,9 +1010,9 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               <Row label="Steps"  value={job.result.training_steps.toString()}/>
             </Box>
 
-            <Divider sx={{ borderColor: '#1e293b', my: 1.5 }}/>
+            <Divider sx={{ borderColor: 'var(--panel)', my: 1.5 }}/>
 
-            <Typography sx={{ fontSize: 10, color: '#334155' }}>
+            <Typography sx={{ fontSize: 10, color: 'var(--line)' }}>
               Next steps: open output_dir in ParaView to visualise A_z, B field,
               and H field maps.
             </Typography>

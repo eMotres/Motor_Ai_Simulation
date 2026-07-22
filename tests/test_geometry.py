@@ -201,3 +201,62 @@ geometry:
         """Test loading from non-existent file raises error."""
         with pytest.raises(FileNotFoundError):
             MotorGeometryParams.from_yaml("nonexistent_config.yaml")
+
+
+class TestMergeGeoOverride:
+    """The per-request geometry override must define the motor's topology.
+
+    Invariant: the merged dict's num_slots/num_poles always describe the
+    OVERRIDE's motor — explicit counts first, else the override's own
+    num_seg × *_per_segment product; the base config's counts survive only
+    when the override says nothing about topology.  (A plain dict-update let
+    the base's counts pair with the override's mesh geometry — a chimera
+    that mis-phased the winding layout and pole-pair drive: psi ~ 0, zero-
+    mean torque on the full ring, wrong sector BC sign on wedges.)
+    """
+
+    BASE = {"num_slots": 24, "num_poles": 20, "num_seg": 4,
+            "num_slots_per_segment": 6, "num_poles_per_segment": 5,
+            "stator_diameter": 150.0}
+
+    def test_explicit_counts_win(self):
+        from motor_ai_sim.simulation.geometry_2d import merge_geo_override
+        g = merge_geo_override(self.BASE, {"num_slots": 12, "num_poles": 14})
+        assert (g["num_slots"], g["num_poles"]) == (12, 14)
+
+    def test_segment_form_beats_base_counts(self):
+        from motor_ai_sim.simulation.geometry_2d import merge_geo_override
+        ov = {"num_seg": 2, "num_slots_per_segment": 6,
+              "num_poles_per_segment": 7, "stator_diameter": 40.0}
+        g = merge_geo_override(self.BASE, ov)
+        assert (g["num_slots"], g["num_poles"]) == (12, 14)
+        assert g["stator_diameter"] == 40.0
+
+    def test_null_counts_fall_back_to_segment_form(self):
+        from motor_ai_sim.simulation.geometry_2d import merge_geo_override
+        ov = {"num_slots": None, "num_poles": None, "num_seg": 4,
+              "num_slots_per_segment": 6, "num_poles_per_segment": 7}
+        g = merge_geo_override(self.BASE, ov)
+        assert (g["num_slots"], g["num_poles"]) == (24, 28)
+
+    def test_topology_silent_override_keeps_base_counts(self):
+        from motor_ai_sim.simulation.geometry_2d import merge_geo_override
+        g = merge_geo_override(self.BASE, {"air_gap": 0.3})
+        assert (g["num_slots"], g["num_poles"]) == (24, 20)
+
+    def test_no_override_returns_base(self):
+        from motor_ai_sim.simulation.geometry_2d import merge_geo_override
+        g = merge_geo_override(self.BASE, None)
+        assert g == self.BASE
+
+    def test_inconsistent_base_follows_segment_form(self):
+        # A half-applied config can carry stale explicit counts next to the
+        # primary segment form; the CAD (MotorGeometryParams) meshes the
+        # segment form, so the resolved counts must match it.
+        from motor_ai_sim.simulation.geometry_2d import merge_geo_override
+        base = dict(self.BASE, num_seg=2, num_slots_per_segment=6,
+                    num_poles_per_segment=7)   # stale explicit 24/20
+        g = merge_geo_override(base, None)
+        assert (g["num_slots"], g["num_poles"]) == (12, 14)
+        g = merge_geo_override(base, {"air_gap": 0.3})
+        assert (g["num_slots"], g["num_poles"]) == (12, 14)

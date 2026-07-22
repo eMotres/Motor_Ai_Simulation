@@ -72,7 +72,7 @@ const DOEPanel: React.FC = () => {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ n, current_a: current, band, steps_per_period: steps,
           n_sectors: Math.max(1, Math.round(readNum('mesh.nSectors', 1))),   // single source: Mesh tab (same as Simulation)
-          pole_copy: readBool('mesh.poleCopy', false), torque_filter: readBool('sim.torqueFilter', true) }),
+          pole_copy: readBool('mesh.poleCopy', false), torque_filter: readBool('sim.torqueFilter', false) }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
       await poll();
@@ -104,7 +104,7 @@ const DOEPanel: React.FC = () => {
 
   return (
     <Box>
-      <Typography sx={{ fontSize: 11, color: '#64748b', mb: 1.5 }}>
+      <Typography sx={{ fontSize: 11, color: 'var(--text-3)', mb: 1.5 }}>
         Latin-Hypercube screening at a <strong>fixed current</strong> — samples the whole design box
         (±band per variable), FEM-evaluates each, and ranks which variables drive
         ripple / torque / efficiency (unbiased global importance, RandomForest). Fixed current →
@@ -125,7 +125,7 @@ const DOEPanel: React.FC = () => {
           <Button size="small" variant="outlined" disabled sx={{ textTransform: 'none' }}>Running…</Button>
         )}
         {progress && running && (
-          <Typography sx={{ fontSize: 11, color: '#64748b' }}>
+          <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>
             {progress.done}/{progress.total} · ok {progress.n_ok}
           </Typography>
         )}
@@ -142,22 +142,22 @@ const DOEPanel: React.FC = () => {
       )}
       {targets.length > 0 && (
         <>
-          <Divider sx={{ borderColor: '#1e293b', my: 1 }} />
-          <Typography sx={{ fontSize: 11, color: '#64748b', mb: 1 }}>
+          <Divider sx={{ borderColor: 'var(--panel)', my: 1 }} />
+          <Typography sx={{ fontSize: 11, color: 'var(--text-3)', mb: 1 }}>
             Variable importance (n={imp.n} LHS samples) — higher = stronger driver
           </Typography>
           {targets.map(([key, info]) => (
             <Box key={key} sx={{ mb: 1.5 }}>
-              <Typography sx={{ fontSize: 11, fontWeight: 700, color: TCOL[key] || '#cbd5e1', mb: 0.5 }}>
-                {info.label} <span style={{ color: '#475569', fontWeight: 400 }}>(R²={info.r2?.toFixed?.(2)})</span>
+              <Typography sx={{ fontSize: 11, fontWeight: 700, color: TCOL[key] || 'var(--text-1)', mb: 0.5 }}>
+                {info.label} <span style={{ color: 'var(--text-4)', fontWeight: 400 }}>(R²={info.r2?.toFixed?.(2)})</span>
               </Typography>
               {(info.ranking || []).slice(0, 6).map((row: any) => (
                 <Box key={row.var} sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: '2px' }}>
-                  <Typography sx={{ fontSize: 10, color: '#94a3b8', width: 130, textAlign: 'right', flexShrink: 0 }}>{row.var}</Typography>
-                  <Box sx={{ flex: 1, height: 10, bgcolor: '#0a1628', borderRadius: 0.5, overflow: 'hidden' }}>
-                    <Box sx={{ width: `${Math.round((row.importance || 0) * 100)}%`, height: '100%', bgcolor: TCOL[key] || '#64748b' }} />
+                  <Typography sx={{ fontSize: 10, color: 'var(--text-2)', width: 130, textAlign: 'right', flexShrink: 0 }}>{row.var}</Typography>
+                  <Box sx={{ flex: 1, height: 10, bgcolor: 'var(--panel-2)', borderRadius: 0.5, overflow: 'hidden' }}>
+                    <Box sx={{ width: `${Math.round((row.importance || 0) * 100)}%`, height: '100%', bgcolor: TCOL[key] || 'var(--text-3)' }} />
                   </Box>
-                  <Typography sx={{ fontSize: 10, color: '#64748b', width: 38, textAlign: 'right', flexShrink: 0 }}>
+                  <Typography sx={{ fontSize: 10, color: 'var(--text-3)', width: 38, textAlign: 'right', flexShrink: 0 }}>
                     {((row.importance || 0) * 100).toFixed(0)}%
                   </Typography>
                 </Box>

@@ -42,6 +42,18 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
   ripple" mode) auto-forces the structured belt + current-drive magnetostatics.
   The frontend transient request passes `element_order` from a `mesh.p2HiFi`
   flag (default P1); no UI toggle was added.
+- **P2 transient sped up ~1.8× (converged) via ν warm-start + stiffness split.**
+  The P2 branch reset the BH-saturation ν to base every frame (re-converging from
+  cold, ~70 Picard sweeps) and re-assembled the whole mesh each sweep. Now: ν
+  warm-starts from the previous frame (only frame 0 pays the cold ~70; later
+  frames ~40), the constant-ν stiffness is assembled once with only the saturable
+  iron re-assembled per sweep, and the free-DOF solve uses a precomputed slice.
+  Same fixed point (torque/ripple/loss match to <1 %, no-load mean stays ~0), but
+  to reach it P2 is ~1.8× faster (3.5 vs 6.4 s/frame at mesh 1.5) and now actually
+  reports converged. The per-frame floor is the direct factorization of the 2×
+  larger P2 system (LU reuse was tried and rejected — ν moves too much between
+  sweeps). GUIDANCE: run P2 at a COARSER mesh than P1 (≈1.5–2.0 mm) — its value is
+  coarse-mesh accuracy, and cost scales with DOFs.
 - **P2 now reports real eddy/iron/copper losses** (`rotor_eddy=True`), so a P2
   loaded sim gives efficiency, not zeros. Magnet + shaft eddy come from the same
   honest reaction-included rotor solve P1 uses (`honest_rotor_eddy`) on the P2

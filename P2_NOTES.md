@@ -430,6 +430,61 @@ slightly (P_fe 9.8 W @36 st vs P1 7.1 W); at typical step counts (≤24) it
 matches P1 to <10 %. The magnet/shaft eddy (the dominant rotor-conductor loss)
 is unaffected — it uses the same FFT solve as P1.
 
+---
+
+## PERFORMANCE — warm-start ν + constant/variable stiffness split
+
+The P2 branch was profiled "catastrophically slow." Root cause: it RESET ν to
+the unsaturated base EVERY frame, so every frame re-converged the BH-knee
+saturation from cold (~70 Picard sweeps), and the whole mesh was re-assembled
+each sweep.
+
+Three fixes (physics UNCHANGED — same fixed point, just reached cheaper):
+1. **Warm-start ν across frames.** Only frame 0 converges from base; later frames
+   start from the previous frame's converged ν → ~40 sweeps instead of ~70. The
+   cap is raised (frame 0 ≥70, later ≥45) so frames actually REACH the tol.
+   SOUND because the Picard early-stops on the residual — the start changes the
+   path, not the fixed point. (My earlier note warned warm-start biases the mean;
+   that was ONLY because the old low cap left frames short of the tol. With an
+   adequate cap they converge and the no-load mean stays ~0 — verified −0.004 Nm.)
+2. **Constant/variable stiffness split.** The non-saturable ν (air/magnet/coil/
+   shaft) never changes, so its whole-mesh stiffness `K_const2` is assembled ONCE;
+   each sweep re-assembles only the saturable IRON tags on their element
+   sub-bases (P1-style). Per-sweep assembly cut ~30 %.
+3. **Reachable P2 Picard tol** `_PIC_TOL2 = 6e-3` (vs the module 1e-3): a few
+   BH-knee elements plateau above 1e-3 on a coarse belt mesh; the TORQUE/loss
+   fixed point is flat to <0.3 % between residual 0.03 and 0.007, so chasing 1e-3
+   burns ~30 sweeps/frame for no physics change.
+
+**Before / after (I=30 γ=−20, n_sectors=2, mesh 1.5, 12 steps, Nring 169):**
+
+| version | wall/frame | sweeps/frame | converged? | T_avg | ripple |
+|---------|-----------|--------------|------------|-------|--------|
+| before, nl=8 (as profiled) | 0.82 s | 8 (cap) | ✗ res 0.48 | 0.320 | 18.7 % (garbage) |
+| before, nl=70 (forced converge) | 6.37 s | 70 (cap) | ~res 1e-3 | 0.3843 | 20.21 % |
+| **after** (warm-start+split) | **3.51 s** | 41.8 | **✓ res 6e-3** | 0.3818 | 20.31 % |
+
+→ To reach the SAME converged fixed point, ~**1.8× faster** (3.51 vs 6.37 s) AND
+it now reports converged; physics matches to <1 % (T_avg 0.65 %, ripple 0.5 %),
+no-load mean stays ~0. vs P1-converged (1.48 s/frame) P2 is now ~2.4× (was ~4.3×).
+
+**What did NOT help (measured, rejected):** the per-frame solve is
+FACTORIZATION-bound (78 % of wall: 33 s of 42 s is `spsolve`/`splu` of the ~13 k
+reduced system, 500×). Reusing the LU as a warm-started GMRES preconditioner
+across sweeps FAILED (325 s!) — ν changes too much between sweeps, so the frozen
+LU is a poor preconditioner and GMRES burns its max iters then re-factorizes
+anyway. No UMFPACK available (SuperLU only). Precomputing the free-DOF slice +
+`splu` (skipping `condense`) shaved ~6 %. So P2's floor here is the direct solve
+of a 2× larger system than P1 — inherent to quadratic elements.
+
+**USER GUIDANCE — run P2 at a COARSER mesh than P1.** P2's whole value is
+coarse-mesh accuracy: the convergence proof showed its torque noise floor is
+already low at mesh 1.5–2.0 mm (where P1 still staircases), and P2 cost scales
+steeply with DOF count (∝ solve). So pair P2 with mesh ≈1.5–2.0 mm, NOT the fine
+mesh P1 needs — a fine-mesh P2 is both unnecessary (accuracy already there) and
+the slowest possible combination. The "P2 high-fidelity ripple" mode should be
+understood as "coarse mesh, high element order", not "fine mesh".
+
 ### NOT done (raises NotImplementedError, documented in-code)
 1. **Coupled σ∂A/∂t J-view solve (`eddy=True`), voltage drive, demag pre-pass**
    on P2 — the app transient uses none of these (they are opt-in diagnostics /

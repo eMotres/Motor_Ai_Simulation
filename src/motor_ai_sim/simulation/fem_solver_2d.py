@@ -6263,6 +6263,18 @@ def fem_transient_sliding_band(
         def _stiff_nu2(u, v, w):
             return w["nu"] * _dot(_grad(u), _grad(v))
 
+        # Newton tangent (differential-reluctivity) term:  T(u,v) =
+        # 2·(dν/dB²)·(∇A·∇u)(∇A·∇v), with ∇A the current field gradient and
+        # dν/dB² per element.  Added to the secant stiffness K(ν) to form the
+        # Jacobian J = K + T of the magnetostatic residual R = K(ν(|B|))·A − f.
+        @BilinearForm
+        def _tang_nu2(u, v, w):
+            gA = w["gA"]                       # (2, nelem, nqp) current ∇A
+            gu = _grad(u); gv = _grad(v)
+            au = gA[0] * gu[0] + gA[1] * gu[1]
+            av = gA[0] * gv[0] + gA[1] * gv[1]
+            return w["c"] * au * av            # c = 2·dν/dB² (element-constant)
+
         # ── vertex & edge dof maps ───────────────────────────────────────────
         vdof = b2.nodal_dofs[0]                       # global vertex id -> P2 dof
         fdof = b2.facet_dofs[0]                       # facet (edge) id  -> P2 dof
@@ -6448,6 +6460,11 @@ def fem_transient_sliding_band(
         # ripple that P2 actually fixes), so the remaining T(θ) variation is
         # purely geometric: P1 staircases, P2 is smooth.
         nu_all2 = nu_base2.copy()      # persists across frames when frozen_nu
+        # NEWTON–RAPHSON for the BH nonlinearity (default; SB_NO_NEWTON=1 forces
+        # the damped-Picard path).  Cross-frame warm starts: the previous frame's
+        # converged field A and ν (a near-perfect Newton initial guess).
+        _use_newton = (_os_sb.environ.get("SB_NO_NEWTON") != "1")
+        _A2_prev = None; _nu_conv2 = None
         for k in range(n_total):
             if progress_cb is not None:
                 try: progress_cb(k, n_total)
@@ -6472,83 +6489,178 @@ def fem_transient_sliding_band(
             # 0 reaches _PIC_TOL2 from cold and warm-started frames have headroom.
             # Same strategy as the P1 main loop.
             if k == 0:
-                nu_all2 = nu_base2.copy()          # both modes: from base at k=0
-            if frozen_nu:
-                _n_pic2 = max(nonlinear_iterations, 40) if k == 0 else 1
-            else:
-                # frame 0 (cold) needs the most sweeps to reach _PIC_TOL2; warm-
-                # started frames start near the fixed point and early-stop well
-                # under these caps.
-                _n_pic2 = max(nonlinear_iterations, 70 if k == 0 else 45)
+                nu_all2 = nu_base2.copy()          # frozen path: base at k=0
             _Ptf = np.asarray(Pro.T @ f).ravel()
             # free (non-Dirichlet) reduced DOFs — CONSTANT within a frame (Pro and
             # the outer Dirichlet set are fixed), so precompute the slice once.
             _free2 = np.setdiff1d(np.arange(Pro.shape[1]), outer_red)
             _bff2 = _Ptf[_free2]
-            A2 = np.zeros(N2)
-            _res = 0.0; _nit = 0
-            _pic_ok = 0; _pic_r_prev = None; _pic_om = 0.5   # Irons–Tuck state
-            for it in range(_n_pic2):
-                _nit = it + 1
-                # constant part (assembled once, whole mesh) + only the saturable
-                # iron tags on their element sub-bases (P1-style split).
-                K = K_const2.copy()
-                for _sb2, _sb02, _ids2, _c2 in _sat_sub2:
-                    _nf2 = _sb02.zeros(); _nf2[_ids2] = nu_all2[_ids2]
-                    K = K + asm(_stiff_nu2, _sb2, nu=_sb02.interpolate(_nf2))
-                Kr = (Pro.T @ K.tocsr() @ Pro).tocsr()
-                Kff = Kr[_free2][:, _free2].tocsc()
-                # Direct solve on the precomputed free sub-system (homogeneous
-                # outer Dirichlet, A=0 on the boundary), skipping condense's
-                # per-sweep re-slicing overhead.  Prefer the MKL PARDISO solver
-                # (multi-threaded, and it reuses the symbolic factorization across
-                # the same-pattern sweeps of a frame) — measured 1.8–2.4× faster
-                # than SuperLU on the ~28 k full-ring system (≈1.1× on the small
-                # sector).  Falls back to SuperLU if pypardiso is unavailable or
-                # raises, so a run can never break.
+            # cross-frame warm starts (previous converged field + ν).  The slip
+            # pairing (Pro) changes every frame, so the previous field A_prev lives
+            # on the PREVIOUS constraint manifold range(Pro_prev); PROJECT it onto
+            # the current range(Pro) (least-squares, average each paired group) so
+            # the Newton start is constraint-consistent — otherwise Newton drifts
+            # off-manifold and diverges frame-to-frame.
+            if k == 0 or _nu_conv2 is None:
+                _nu_start = nu_base2.copy(); _A_start = np.zeros(N2)
+            else:
+                _nu_start = _nu_conv2.copy()
+                _pd = np.asarray(Pro.multiply(Pro).sum(axis=0)).ravel()
+                _A_start = Pro @ (np.asarray(Pro.T @ _A2_prev).ravel()
+                                  / np.maximum(_pd, 1.0))
+
+            def _solve_ff(Mff, rhs):
+                nonlocal _pardiso2
                 if _pardiso2 is not None:
                     try:
-                        _xf2 = _pardiso2.solve(Kff, _bff2)
+                        return _pardiso2.solve(Mff, rhs)
                     except Exception as _pe2:
-                        log.warning("pypardiso solve failed (%s) — SuperLU fallback", _pe2)
+                        log.warning("pypardiso solve failed (%s) — SuperLU fallback",
+                                    _pe2)
                         _pardiso2 = None
-                        _xf2 = _splu2(Kff).solve(_bff2)
-                else:
-                    _xf2 = _splu2(Kff).solve(_bff2)
-                _xred2 = np.zeros(Pro.shape[1]); _xred2[_free2] = _xf2
-                A2 = Pro @ _xred2
-                if (frozen_nu and k > 0) or not _sat2:
-                    break                          # frozen frame: 1 linear solve
-                Bx_q, By_q, dxq = _p2_B_at_quad(b2, A2)
-                _area = dxq.sum(axis=1)
-                Bmag_el = (np.sqrt(Bx_q ** 2 + By_q ** 2) * dxq).sum(axis=1) \
-                    / np.maximum(_area, 1e-30)
-                # Gather the WHOLE saturable ν state into one vector so the
-                # relaxation and residual see the global field (as the P1 loop).
-                _vo = np.concatenate([nu_all2[_ids] for _ids, _ in _sat2])
-                _vn = np.concatenate([
-                    1.0 / (MU0 * np.maximum(_mu_r_from_bh_vec(_c, Bmag_el[_ids]), 1.0))
-                    for _ids, _c in _sat2])
-                _rr = _vn - _vo
-                _res = float(np.linalg.norm(_rr) / max(np.linalg.norm(_vo), 1e-30))
-                # IRONS–TUCK (vector Aitken Δ²) adaptive relaxation — same as P1.
-                if _pic_r_prev is not None:
-                    _dr = _rr - _pic_r_prev; _den = float(_dr @ _dr)
-                    if _den > 0.0:
-                        _pic_om = float(np.clip(
-                            -_pic_om * float(_pic_r_prev @ _dr) / _den, 0.05, 1.0))
-                _pic_r_prev = _rr
-                _vu = _vo + _pic_om * _rr
-                _p0 = 0
+                return _splu2(Mff).solve(rhs)
+
+            def _elemB(Avec):
+                bx, by, dq = _p2_B_at_quad(b2, Avec)
+                ar = dq.sum(axis=1)
+                return (np.sqrt(bx ** 2 + by ** 2) * dq).sum(axis=1) \
+                    / np.maximum(ar, 1e-30)
+
+            def _nu_of(Bmag, base):
+                nu = base.copy()
                 for _ids, _c in _sat2:
-                    nu_all2[_ids] = _vu[_p0:_p0 + _ids.size]; _p0 += _ids.size
-                if _res < _PIC_TOL2:
-                    _pic_ok += 1
-                    if _pic_ok >= 2:
+                    nu[_ids] = 1.0 / (MU0 * np.maximum(
+                        _mu_r_from_bh_vec(_c, Bmag[_ids]), 1.0))
+                return nu
+
+            def _asmK(nu):
+                K = K_const2.copy()
+                for _sb2, _sb02, _ids2, _c2 in _sat_sub2:
+                    _nf2 = _sb02.zeros(); _nf2[_ids2] = nu[_ids2]
+                    K = K + asm(_stiff_nu2, _sb2, nu=_sb02.interpolate(_nf2))
+                return K.tocsr()
+
+            _res = 0.0; _nit = 0; _newton_ok = False
+            # ── NEWTON–RAPHSON (differential-reluctivity tangent) ─────────────
+            # Residual R(A)=K(ν(elem-mean|B|))·A−f is IDENTICAL to the Picard fixed
+            # point (element-mean ν per iron element), so Newton converges to the
+            # SAME physics — just far fewer sweeps.  Jacobian J=K+T with the
+            # per-element tangent T=2(dν/dB²)(∇A·∇u)(∇A·∇v).  Line-search on |R|
+            # globalises the BH knee; if it collapses, this frame falls back to
+            # damped Picard (never returns garbage).
+            if _use_newton and not frozen_nu and _sat2:
+                # POINTWISE ν(|B|²) at quadrature points — the residual and the
+                # tangent then use the SAME nonlinearity, giving a TRUE (quadratic)
+                # Newton step.  (An element-mean ν residual with a pointwise
+                # tangent is inconsistent → no acceleration.)  For P2, B is linear
+                # per element, so pointwise ν is also the more accurate model; it
+                # is validated to match the element-mean Picard fixed point below.
+                def _Kpw(Avec):
+                    K = K_const2.copy(); info = []
+                    for _sb2, _sb02, _ids2, _c2 in _sat_sub2:
+                        gA = _sb2.interpolate(Avec).grad            # (2,nel,nqp)
+                        Bm = np.sqrt(np.maximum(gA[0] ** 2 + gA[1] ** 2, 1e-18))
+                        mur = np.maximum(_mu_r_from_bh_vec(
+                            _c2, Bm.ravel()).reshape(Bm.shape), 1.0)
+                        nuq = 1.0 / (MU0 * mur)
+                        K = K + asm(_stiff_nu2, _sb2, nu=nuq)
+                        info.append((_sb2, _ids2, _c2, gA, Bm, nuq))
+                    return K.tocsr(), info
+
+                def _rfree_pw(Avec, K):
+                    return np.asarray(Pro.T @ (K @ Avec - f)).ravel()[_free2]
+
+                A2 = _A_start.copy(); _fail = False; _rrel = 1.0
+                _bnrm = max(float(np.linalg.norm(_bff2)), 1e-30)
+                for it in range(max(int(nonlinear_iterations), 20)):
+                    _nit = it + 1
+                    K, _info = _Kpw(A2)
+                    r_free = _rfree_pw(A2, K)
+                    _rrel = float(np.linalg.norm(r_free)) / _bnrm
+                    if _rrel < 1e-7:
                         break
+                    # tangent T = 2(dν/dB²)(∇A·∇u)(∇A·∇v), pointwise & consistent
+                    T = None
+                    for _sb2, _ids2, _c2, gA, Bm, nuq in _info:
+                        _dB = 1e-3 * Bm + 1e-6
+                        nu1 = 1.0 / (MU0 * np.maximum(_mu_r_from_bh_vec(
+                            _c2, (Bm + _dB).ravel()).reshape(Bm.shape), 1.0))
+                        nup = np.maximum((nu1 - nuq) / _dB / (2.0 * Bm), 0.0)  # dν/dB²
+                        Ti = asm(_tang_nu2, _sb2, gA=gA, c=2.0 * nup)
+                        T = Ti if T is None else T + Ti
+                    J = (K + T).tocsr() if T is not None else K
+                    Jff = (Pro.T @ J @ Pro).tocsr()[_free2][:, _free2].tocsc()
+                    try:
+                        _du = _solve_ff(Jff, -r_free)
+                    except Exception as _je:
+                        log.info("P2 Newton solve failed (%s) — Picard fallback", _je)
+                        _fail = True; break
+                    _duf = np.zeros(Pro.shape[1]); _duf[_free2] = _du
+                    dA = Pro @ _duf
+                    # backtracking line-search on the residual norm (BH-knee safety)
+                    _r0 = float(np.linalg.norm(r_free)); _lam = 1.0; _acc = False
+                    for _ls in range(6):
+                        A_try = A2 + _lam * dA
+                        _Kt, _ = _Kpw(A_try)
+                        if float(np.linalg.norm(_rfree_pw(A_try, _Kt))) < _r0:
+                            A2 = A_try; _acc = True; break
+                        _lam *= 0.5
+                    if not _acc:
+                        _fail = True; break
+                # accept only if the field residual actually reached tol
+                if (not _fail) and (_rrel < 1e-7):
+                    _newton_ok = True; _res = _rrel
+                    # element-mean ν for the loss post-processing (loss code uses
+                    # per-element ν); negligible vs the pointwise field solve.
+                    nu_all2 = _nu_of(_elemB(A2), nu_all2)
                 else:
-                    _pic_ok = 0
+                    log.info("P2 Newton not converged at frame %d (%d its, rrel=%.1e)"
+                             " — Picard fallback", k, _nit, _rrel)
+            # ── DAMPED PICARD (SB_NO_NEWTON, frozen_nu, or Newton fell back) ──
+            if not _newton_ok:
+                if not frozen_nu:
+                    nu_all2 = _nu_start.copy()     # warm-start (base at k=0)
+                if frozen_nu:
+                    _n_pic2 = max(nonlinear_iterations, 40) if k == 0 else 1
+                else:
+                    _n_pic2 = max(nonlinear_iterations, 70 if k == 0 else 45)
+                A2 = np.zeros(N2)
+                _res = 0.0; _nit = 0
+                _pic_ok = 0; _pic_r_prev = None; _pic_om = 0.5   # Irons–Tuck state
+                for it in range(_n_pic2):
+                    _nit = it + 1
+                    K = _asmK(nu_all2)
+                    Kff = (Pro.T @ K @ Pro).tocsr()[_free2][:, _free2].tocsc()
+                    _xf2 = _solve_ff(Kff, _bff2)
+                    _xred2 = np.zeros(Pro.shape[1]); _xred2[_free2] = _xf2
+                    A2 = Pro @ _xred2
+                    if (frozen_nu and k > 0) or not _sat2:
+                        break                      # frozen frame: 1 linear solve
+                    Bmag_el = _elemB(A2)
+                    _vo = np.concatenate([nu_all2[_ids] for _ids, _ in _sat2])
+                    _vn = np.concatenate([
+                        1.0 / (MU0 * np.maximum(_mu_r_from_bh_vec(_c, Bmag_el[_ids]), 1.0))
+                        for _ids, _c in _sat2])
+                    _rr = _vn - _vo
+                    _res = float(np.linalg.norm(_rr) / max(np.linalg.norm(_vo), 1e-30))
+                    if _pic_r_prev is not None:
+                        _dr = _rr - _pic_r_prev; _den = float(_dr @ _dr)
+                        if _den > 0.0:
+                            _pic_om = float(np.clip(
+                                -_pic_om * float(_pic_r_prev @ _dr) / _den, 0.05, 1.0))
+                    _pic_r_prev = _rr
+                    _vu = _vo + _pic_om * _rr
+                    _p0 = 0
+                    for _ids, _c in _sat2:
+                        nu_all2[_ids] = _vu[_p0:_p0 + _ids.size]; _p0 += _ids.size
+                    if _res < _PIC_TOL2:
+                        _pic_ok += 1
+                        if _pic_ok >= 2:
+                            break
+                    else:
+                        _pic_ok = 0
             _pic_iters.append(_nit); _pic_res_max = max(_pic_res_max, _res)
+            _A2_prev = A2.copy(); _nu_conv2 = nu_all2.copy()
             Tq = _arkkio_torque_p2(mesh_all, A2, b2, p.r_rotor_out,
                                    p.r_stator_in, p.stack_length) * NS
             _T2.append(Tq)

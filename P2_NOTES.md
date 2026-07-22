@@ -507,8 +507,63 @@ mean ~0, losses intact. Cumulative P2 speedup this session ≈ **2.2×** vs the
 original converged baseline (warm-start+split 1.8× × PARDISO 1.2×).
 
 So P2's floor is now the (MKL-accelerated) direct solve of a 2× larger system
-than P1 — inherent to quadratic elements. The remaining lever would be
-Newton-Raphson for the BH nonlinearity (fewer sweeps), not the linear solver.
+than P1 — inherent to quadratic elements.
+
+### NEWTON–RAPHSON for the BH nonlinearity (default; SB_NO_NEWTON=1 = Picard)
+
+The damped Picard needs ~40 sweeps/frame (the BH knee converges linearly).
+Newton with the differential-reluctivity tangent gets there in ~13 — the biggest
+single speedup, and it also converges TIGHTER (the true fixed point).
+
+Implementation (in the element_order==2 frame loop):
+- **Pointwise ν(|B|²) at quadrature points** for BOTH the residual R=K(ν)·A−f AND
+  the tangent J=K(ν)+T, T=2(dν/dB²)(∇A·∇u)(∇A·∇v) — they MUST use the same
+  nonlinearity or Newton is not a true Newton step (an element-mean residual +
+  pointwise tangent was tried first and did NOT accelerate). dν/dB² by per-quad
+  finite difference of the BH curve. J is SPD (ν'≥0).
+- **Converge on the FIELD residual** |K(ν(A))·A−f|/|f| < 1e-7 (the actual
+  magnetostatic fixed point R=0), NOT the ν-change (which stalls while R is still
+  large — the first bug: ν-stop gave a wrong torque).
+- **Projected cross-frame warm start** (the critical bug): the slip pairing Pro
+  changes every frame, so the previous field A_prev lives on the PREVIOUS
+  constraint manifold range(Pro_prev). Feeding it raw made Newton drift
+  off-manifold and ramp the torque frame-to-frame (0.35→1.6→−0.5). Fix: project
+  A_prev onto the current range(Pro) — `Pro·((Proᵀ A_prev)/group_sizes)` (Proᵀ Pro
+  is diagonal). Frame 0 starts cold (zeros).
+- **Line-search** on |R| (backtracking) globalises the BH knee; a collapse, solve
+  failure, or a cap hit without reaching tol falls back to damped Picard for that
+  frame (never returns garbage). Reuses the pardiso solver.
+
+**Validation (40 mm 12s14p, n_sectors=2, mesh 1.5):**
+
+| case | Picard s/fr (iters) | Newton s/fr (iters) | speedup | T_avg match |
+|------|---------------------|---------------------|---------|-------------|
+| loaded I=30 γ=−20 | 3.82 (41.7) | **1.77 (13.2)** | 2.2× | 0.3819 vs 0.3818 |
+| loaded I=30 + rotor_eddy | 3.8 (42) | **2.03 (13.2)** | 1.9× | P_mag 0.496, P_cu_ac 5.90 |
+| heavy I=60 γ=−40 | 3.80 (43.6) | **2.20 (13.8)** | 1.7× | 0.8190 vs 0.8239 (0.6 %) |
+| full ring, mesh 1.0 | 6.58 (42) | **4.25 (16.0)** | 1.5× | 0.3821 |
+| no-load cogging | — | 2.50 (15.9) | — | mean **−0.0004** (no bias) |
+
+All frames converged via Newton (conv=True) at every load/symmetry tested — the
+Picard fallback never triggered. Robust across no-load → heavy saturation,
+sector and full ring.
+
+**Newton is MORE converged than the old Picard.** Mean torque matches to <1 %,
+but the RIPPLE is lower (16.4 % vs 20.3 % at I=30): Picard STALLS at ν-change 6e-3
+(it_mean 42 even at nl=150, res 5e-3) — it never fully reaches R=0, so its frame
+torques carry convergence noise that inflates the ripple. Newton drives R to
+1e-7 (the exact per-frame solution), so its 16.4 % is the TRUE fixed-point ripple,
+and it AGREES with the P1 result (17.2 %) at the same point — confirming Newton is
+right and the old Picard number was under-converged. Newton converges to the SAME
+(true) fixed point Picard was approaching, just all the way.
+
+Cumulative P2 speedup vs the original converged baseline (reset-Picard, no
+pardiso ≈ 6.4 s/fr sector): warm-start+split → pardiso → Newton ⇒ **~3.6×**
+(1.77 s/fr) while also improving accuracy.
+
+Future: the SAME tangent would accelerate P1 (for P1, B is constant per element
+so pointwise ν == element-mean — no fixed-point subtlety, even cleaner). Not
+wired now (keeping P1 validated-unchanged is the priority).
 
 **USER GUIDANCE — run P2 at a COARSER mesh than P1.** P2's whole value is
 coarse-mesh accuracy: the convergence proof showed its torque noise floor is

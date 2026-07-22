@@ -42,6 +42,17 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
   ripple" mode) auto-forces the structured belt + current-drive magnetostatics.
   The frontend transient request passes `element_order` from a `mesh.p2HiFi`
   flag (default P1); no UI toggle was added.
+- **P2 uses Newton-Raphson for the BH saturation (default).** The damped Picard
+  needs ~40 sweeps/frame; Newton with the differential-reluctivity tangent
+  (pointwise ν(|B|²), J = K(ν) + 2(dν/dB²)(∇A·∇u)(∇A·∇v)) converges in ~13,
+  giving 1.5–2.2× less wall-time (loaded sector 3.82→1.77 s/frame). It converges
+  the field residual to 1e-7 — the exact per-frame magnetostatic solution — so it
+  is also MORE accurate than the Picard (which stalled at ν-change 6e-3): the true
+  fixed-point ripple is 16.4 % (matching the P1 result 17.2 %), vs the
+  under-converged Picard's 20.3 %; mean torque and losses match to <1 %. Robust
+  across no-load→heavy load and sector/full-ring (fallback to damped Picard on any
+  frame Newton can't globalise; never triggered in testing). `SB_NO_NEWTON=1`
+  forces Picard. Not wired into P1 (the same tangent would accelerate it later).
 - **P2 solve uses MKL PARDISO (pypardiso) when available.** The P2 per-frame cost
   is factorization-bound; benchmarked on the real Picard sweep sequence, a
   persistent `PyPardisoSolver` (symbolic reuse across same-pattern sweeps) beats

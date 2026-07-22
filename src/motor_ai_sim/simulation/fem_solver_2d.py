@@ -4757,15 +4757,16 @@ def _p2_B_at_quad(basis, A_vec):
 
 def _arkkio_torque_p2(mesh, A_vec, basis, r_in_m: float, r_out_m: float,
                       stack_length_m: float) -> float:
-    """Arkkio torque from a P2 field: quadrature integral of r·B_r·B_φ over the
-    gap-annulus elements.
+    """Arkkio torque via a quadrature integral of r·B_r·B_φ over the gap-annulus
+    elements.  Works for BOTH P1 and P2 fields — it uses the SAME element as the
+    supplied `basis`, evaluating ∇A at the element quadrature points.
 
         T = L/(μ₀·(r_out−r_in)) · ∫∫_annulus r·B_r·B_φ dA
 
-    Evaluating B at the element quadrature points (where P2 B is linear) makes
-    the stress integral converge far faster with mesh density than the P1
-    centroid-constant integral.  Returns the SECTOR torque (caller ×n_sectors)."""
-    from skfem import Basis, ElementTriP2
+    For a P2 field B is linear in the element (fast convergence, smooth torque);
+    for a P1 field B is constant per element (the centroid value), so this matches
+    the classic `_arkkio_torque`.  Returns the SECTOR torque (caller ×n_sectors)."""
+    from skfem import Basis
     P, T = mesh.p, mesh.t
     cx = (P[0, T[0]] + P[0, T[1]] + P[0, T[2]]) / 3.0
     cy = (P[1, T[0]] + P[1, T[1]] + P[1, T[2]]) / 3.0
@@ -4773,7 +4774,7 @@ def _arkkio_torque_p2(mesh, A_vec, basis, r_in_m: float, r_out_m: float,
     gap_idx = np.where((rc >= r_in_m) & (rc <= r_out_m))[0]
     if gap_idx.size == 0:
         return 0.0
-    gb = Basis(mesh, ElementTriP2(), elements=gap_idx)
+    gb = Basis(mesh, basis.elem, elements=gap_idx)   # same element order as the field
     Bx, By, dx = _p2_B_at_quad(gb, A_vec)
     X = gb.global_coordinates().value          # (2, n_gap_elem, n_qp) metres
     r = np.sqrt(X[0] ** 2 + X[1] ** 2)
@@ -4784,28 +4785,39 @@ def _arkkio_torque_p2(mesh, A_vec, basis, r_in_m: float, r_out_m: float,
     return stack_length_m / (MU0 * (r_out_m - r_in_m)) * val
 
 
-def solve_magnetostatics_p2(mesh, cell_tags: np.ndarray,
-                            materials: Dict[int, FEMMaterial],
-                            nonlinear_iterations: int = 8):
-    """Quadratic (P2) magnetostatic solve — the P2 twin of solve_magnetostatics.
+def solve_magnetostatics_fem(mesh, cell_tags: np.ndarray,
+                             materials: Dict[int, FEMMaterial],
+                             element_order: int = 2,
+                             nonlinear_iterations: int = 8):
+    """Magnetostatic solve on ElementTriP1 (order 1) or ElementTriP2 (order 2).
 
-    Same weak form  ∫ ν ∇A·∇v = ∫ J_z v + ∫(Mx ∂v/∂y − My ∂v/∂x), same
-    per-element BH Picard (_mu_r_from_bh_vec, 0.5 damping), but on ElementTriP2:
-    A is quadratic so B = curl A is LINEAR per element.  Returns (A_vec, basis)
-    where A_vec has length basis.N = n_nodes + n_edges and `basis` is the P2
-    Basis needed to extract B / torque (see _arkkio_torque_p2).
+    Same weak form  ∫ ν ∇A·∇v = ∫ J_z v + ∫(Mx ∂v/∂y − My ∂v/∂x) and the same
+    per-element BH Picard (_mu_r_from_bh_vec, 0.5 damping) for BOTH orders — the
+    ONLY difference is the element (order 2 ⇒ A quadratic ⇒ B linear per element,
+    smooth torque; order 1 ⇒ A linear ⇒ B piecewise-constant, staircase).  Using
+    ONE code path for both makes P1-vs-P2 a controlled comparison (identical mesh,
+    sources, Picard, and — importantly — the same robust facet-based outer
+    Dirichlet BC, which the legacy vertex-id `_outer_boundary_nodes` gets wrong on
+    some meshes → singular matrix).
 
-    Iron saturation is iterated as in the P1 solver; magnet irreversible-demag
-    is NOT modelled here (the P1 path retains that) — for cogging/ripple studies
-    the recoil-line demag is a second-order correction.
+    Returns (A_vec, basis).  A_vec length = basis.N (order 1: n_nodes; order 2:
+    n_nodes + n_edges); `basis` is needed to extract B / torque (_arkkio_torque_p2
+    works for both — it evaluates ∇A at the element quadrature points).
+
+    Iron saturation is iterated per element; magnet irreversible-demag is NOT
+    modelled here (a second-order correction for cogging/ripple studies).
     """
-    from skfem import (Basis, ElementTriP2, ElementTriP0, BilinearForm,
-                       LinearForm, asm, condense, solve)
+    from skfem import (Basis, ElementTriP1, ElementTriP2, ElementTriP0,
+                       BilinearForm, LinearForm, asm, condense, solve)
     from skfem.helpers import dot, grad
     import time as _t
 
+    if int(element_order) not in (1, 2):
+        raise ValueError(f"element_order must be 1 or 2, got {element_order}")
+    Elem = ElementTriP1 if int(element_order) == 1 else ElementTriP2
+
     t0 = _t.time()
-    basis = Basis(mesh, ElementTriP2())
+    basis = Basis(mesh, Elem())
     b0 = basis.with_element(ElementTriP0())        # P0 on the SAME quadrature rule
     n = basis.N
     n_tri = mesh.t.shape[1]
@@ -4841,7 +4853,7 @@ def solve_magnetostatics_p2(mesh, cell_tags: np.ndarray,
             continue
         tag_mat[int(tag)] = mat
         tag_cells[int(tag)] = idx
-        sub = Basis(mesh, ElementTriP2(), elements=idx)
+        sub = Basis(mesh, Elem(), elements=idx)
         if mat.J_z != 0.0:
             f_current += asm(rhs_unit, sub) * mat.J_z
         if abs(mat.Mx) > 0:
@@ -4911,9 +4923,19 @@ def solve_magnetostatics_p2(mesh, cell_tags: np.ndarray,
             nu_all[idx] = nu_upd
         if not changed and it > 0:
             break
-    log.info("FEM P2 solve: %d dofs, %d triangles, %d Picard iters, %.2fs",
-             n, n_tri, it + 1, _t.time() - t0)
+    log.info("FEM P%d solve: %d dofs, %d triangles, %d Picard iters, %.2fs",
+             int(element_order), n, n_tri, it + 1, _t.time() - t0)
     return A, basis
+
+
+def solve_magnetostatics_p2(mesh, cell_tags: np.ndarray,
+                            materials: Dict[int, FEMMaterial],
+                            nonlinear_iterations: int = 8):
+    """Quadratic (P2) magnetostatic solve — thin wrapper over
+    solve_magnetostatics_fem(element_order=2).  Returns (A_vec, basis)."""
+    return solve_magnetostatics_fem(mesh, cell_tags, materials,
+                                    element_order=2,
+                                    nonlinear_iterations=nonlinear_iterations)
 
 
 def band_limit_torque(T_series, n_steps_per_period, n_periods):

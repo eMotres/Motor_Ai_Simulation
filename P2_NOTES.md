@@ -94,8 +94,36 @@ T(theta) — the staircase signature).  It imports the REAL module functions
 - Same per-element BH Picard (`_mu_r_from_bh_vec`, 0.5 damping) as P1, driven by the
   element-mean of the quadrature-point |B|.
 
-### RESULTS (real, from the FEM sweep)
-<!-- RESULTS_PLACEHOLDER: filled from sweep.out below -->
+### RESULTS (real, measured)
+
+**Validated P2 field (single angle, θ=0°, mesh 1.6 mm, I=0):**
+- P2 solve converged: A finite, |A|max = 2.48e-3 Wb/m, **B_mag max = 1.640 T**
+  (physically sensible iron peak for this PM motor), B_mag mean ≈ 0.051 T.
+- P2 no-load Arkkio torque @ θ=0° = **-3.0e-31 N·m ≈ 0** — which is the
+  PHYSICALLY CORRECT value: cogging torque passes through zero at the aligned /
+  symmetric rotor position.  (A nonzero value here would indicate a source/BC bug.)
+
+**Two pre-existing bugs found and worked around (NOT caused by this branch):**
+1. `build_mesh_from_polygons` + centroid `classify_fn` reclassification maps every
+   magnet to the GENERIC tags DOM_MAG_N=4 / DOM_MAG_S=44, which carry mu_r but
+   **no Mx/My** → magnet source vanishes → torque collapses to 0.  fem_field2d does
+   this reclassify too.  Fix in the proof: use the ORIGINAL per-magnet cell tags
+   (DOM_MAG_BASE+i) straight from build_mesh_from_polygons.
+2. The legacy static solver `solve_magnetostatics` + `fem_field2d` produce a
+   **SINGULAR matrix** (spsolve → all-nan A, B_mag=0) on this 40 mm config at
+   mesh 1.6–3.0 mm — verified directly: `fem_field2d(0,0,mesh=1.6)` returns
+   B_mag_max = 0.0, A_z 97% nan.  Root cause is the vertex-id outer Dirichlet
+   (`_outer_boundary_nodes`); the new `solve_magnetostatics_fem` uses a
+   facet-based `get_dofs` BC and is NON-singular on the same mesh (P2 above ran
+   clean).  The production/validated path for this motor is the TRANSIENT
+   sliding-band solver, not this static one.
+
+**Controlled P1-vs-P2 sweep:** `p2_cogging_proof.py` now solves BOTH orders through
+the SAME `solve_magnetostatics_fem` (identical mesh, sources, Picard, facet BC —
+only the element differs) with the original per-magnet tags, and reports cogging
+p-p + jitter at two mesh densities.  The multi-angle sweep is slow (~1–2 min/angle
+for P1+P2); a full-period two-density run is being executed with a long timeout.
+Each angle's P1 and P2 torque + p-p are printed and can be pasted here.
 
 ---
 

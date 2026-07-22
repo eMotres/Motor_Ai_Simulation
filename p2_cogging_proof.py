@@ -25,22 +25,23 @@ import numpy as np
 
 from motor_ai_sim.simulation.fem_solver_2d import (
     _field2d_static_inputs, build_mesh_from_polygons,
-    solve_magnetostatics, _arkkio_torque,
-    solve_magnetostatics_p2, _arkkio_torque_p2,
+    solve_magnetostatics_fem, _arkkio_torque_p2,
 )
 
 
 def _build_case(rotor_angle_deg: float, mesh_size_mm: float):
-    """Fresh conforming mesh + centroid-reclassified tags + materials at a rotor
-    angle, with I = 0 (no-load cogging).  Mirrors fem_field2d (remesh-per-angle)."""
+    """Fresh conforming mesh + materials at a rotor angle, with I = 0 (no-load).
+
+    Uses the ORIGINAL per-magnet cell tags from build_mesh_from_polygons.  NOTE:
+    do NOT centroid-reclassify via classify_fn here — that maps every magnet to
+    the GENERIC visualisation tags DOM_MAG_N=4 / DOM_MAG_S=44, which carry mu_r
+    but NO Mx/My, so the magnet source vanishes and the torque collapses to ~0.
+    The per-magnet tags (DOM_MAG_BASE+i, 100+) are the ones that hold Mx/My."""
     polys, mats, p = _field2d_static_inputs(
         rotor_angle_deg, gamma_deg=0.0, I_phase_rms=0.0)     # I=0 -> no coil source
-    mesh, cell_tags, classify_fn = build_mesh_from_polygons(
+    mesh, cell_tags, _classify_fn = build_mesh_from_polygons(
         polys, rotor_angle_deg, mesh_size_mm)
-    c_m = mesh.p[:, mesh.t].mean(axis=1)                     # (2, n_tri) metres
-    cell_tags = np.array(
-        [classify_fn(c_m[0, i] * 1e3, c_m[1, i] * 1e3)
-         for i in range(c_m.shape[1])], dtype=np.int32)
+    cell_tags = np.asarray(cell_tags).astype(np.int32)       # original per-magnet tags
     return mesh, cell_tags, mats, p
 
 
@@ -73,9 +74,9 @@ def run(n_angles, densities, smoke=False):
             mesh, tags, mats, p = _build_case(a, h)
             r_in, r_out = _gap_radii(p)
             stack = float(p.stack_length)
-            A1 = solve_magnetostatics(mesh, tags, mats)
-            t1 = _arkkio_torque(mesh, A1, r_in, r_out, stack)
-            A2, b2 = solve_magnetostatics_p2(mesh, tags, mats)
+            A1, b1 = solve_magnetostatics_fem(mesh, tags, mats, element_order=1)
+            t1 = _arkkio_torque_p2(mesh, A1, b1, r_in, r_out, stack)
+            A2, b2 = solve_magnetostatics_fem(mesh, tags, mats, element_order=2)
             t2 = _arkkio_torque_p2(mesh, A2, b2, r_in, r_out, stack)
             T1.append(t1); T2.append(t2)
             nnod, ntri, np2 = mesh.p.shape[1], mesh.t.shape[1], b2.N

@@ -357,6 +357,11 @@ const MeshPanel: React.FC = () => {
   // of node re-pairing → RAW torque ripple becomes step-count independent (the honest
   // unfiltered figure).  Solver-side only (mesh preview unchanged); full disk only.
   const [harmonicGap,    setHarmonicGap]    = usePersisted<boolean>('harmonicGap', false);
+  // High-fidelity ripple: second-order (P2) elements → B linear per element (not
+  // piecewise-constant) → smooth torque like ANSYS, killing the P1 sliding-band
+  // staircase noise. Magnetostatic per frame; forces the structured belt; ~4-6x
+  // slower. Read as mesh.p2HiFi by TransientCharts (element_order=2).
+  const [p2HiFi,         setP2HiFi]         = usePersisted<boolean>('p2HiFi', false);
   // Deterministic template iron: stator/rotor iron meshed by the structured
   // slot/pole unit templates (real CadQuery contours via tags + node snap)
   // instead of gmsh free triangulation — build-to-build deterministic results.
@@ -852,6 +857,16 @@ const MeshPanel: React.FC = () => {
                   <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>Harmonic gap (exact ripple)</Typography>
                   <Switch size="small" checked={harmonicGap}
                     onChange={(e) => setHarmonicGap(e.target.checked)} />
+                </Box>
+              </Tooltip>
+              <Tooltip placement="right" title="Second-order (P2) finite elements — the flux density B is linear inside each element instead of piecewise-constant, so the torque is smooth like ANSYS Maxwell (2nd-order). Kills the P1 sliding-band staircase / forbidden-order noise at the source (measured ~55x lower non-6k noise floor), so RAW ripple is honest with NO filter. Magnetostatic per frame; auto-forces the Structured belt; ~4-6x slower; loss/voltage/demag fall back to P1.">
+                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mt: 0.75 }}>
+                  <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>High-fidelity ripple — P2 (like ANSYS)</Typography>
+                  <Switch size="small" checked={p2HiFi}
+                    onChange={(e) => {
+                      setP2HiFi(e.target.checked);
+                      if (e.target.checked) setStructuredGap(true);   // P2 needs the gap-resolving belt
+                    }} />
                 </Box>
               </Tooltip>
               <Tooltip placement="right" title="Stator/rotor iron meshed by structured slot/pole unit templates on the real CadQuery contours (pocket fillets, vent, OD fillet) — build-to-build deterministic mesh and ripple. Works on the full disk and 1/2, 1/4, 1/6 sectors. Requires the Structured (rings) air gap (auto-enabled); falls back to gmsh when the topology doesn't fit the units.">

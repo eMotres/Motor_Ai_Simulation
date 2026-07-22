@@ -148,3 +148,35 @@ validated for the STATIC case (the proof).  Remaining for a full P2 transient:
 2. Route the transient per-frame field solve + `_T_band`/`_T_macro` torque through the P2
    basis and `_arkkio_torque_p2`.
 3. Eddy/circuit (σ·∂A/∂t mass matrix, back-EMF flux linkage) on P2 DOFs.
+
+---
+
+## STAGE 1 EMPIRICAL RESULT — blocked by the 0.2 mm air gap (honest)
+
+Ran the proof at the fixed commit (22b4113), mesh 1.6 & 1.2 mm, 6 angles:
+- P2 torque = EXACTLY 0.0 at every angle (θ=0 gave −3e-31; θ=0.714, 1.429 gave +0.0).
+- P1 torque = NaN at every angle (singular matrix).
+
+ROOT CAUSE (not a P2 physics failure): this motor's air gap is only **0.2 mm**
+(r_rotor_out 13.00 → r_stator_in 13.20). The remesh-per-angle CDT mesher
+(`build_mesh_from_polygons`) does NOT refine the gap below ~1 mm, so the Arkkio
+band [13.00, 13.20] mm contains **zero triangles** → the torque integral sums
+nothing (P2 → exactly 0) and the rotor/stator become disconnected across the
+un-meshed gap → the P1 stiffness is singular (NaN). The iron field still solves
+(B_max 1.64 T) — only the GAP is unresolved.
+
+This is precisely WHY the production transient uses a STRUCTURED BELT with forced
+gap layers (gap_layers) instead of a free CDT mesh. The remesh-per-angle proof
+approach is fundamentally unsuited to a 0.2 mm gap.
+
+### Consequence for the P2 programme
+A clean empirical P1-vs-P2 cogging proof on THIS motor needs the gap resolved,
+which means P2 on the STRUCTURED BELT — i.e. exactly the Stage-2 transient work
+(pair P2 edge-midpoint DOFs across the sliding cut). The standalone remesh proof
+cannot demonstrate it here. The P2 static field solve itself is validated as
+correct (converged, B_max 1.64 T, symmetric-position torque ≈ 0); what remains is
+running it on a gap-resolving mesh, which is the belt/transient integration.
+
+STATUS: P2 static solver = built + field-validated. Empirical cogging proof on the
+40 mm motor = blocked by gap meshing. Full production fix (P2 transient on the
+belt) = not done; the band edge-DOF pairing is the single remaining blocker.

@@ -101,3 +101,7 @@ config/saved_simulations.json
 
 # runtime: persisted last transient (repopulates cache on restart)
 config/.last_transient.json
+pq.out
+smoke.out
+sweep.out
+quick.out

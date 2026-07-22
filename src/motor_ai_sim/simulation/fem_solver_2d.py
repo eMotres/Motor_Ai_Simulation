@@ -6403,6 +6403,7 @@ def fem_transient_sliding_band(
         _rot_vdof = vdof[nsn:nsn + _nr2]              # rotor vertex -> P2 dof
         _histA_rot2 = []                              # (N, n_rotor_nodes) rotor A
         _hsx2 = []; _hsy2 = []; _hrx2 = []; _hry2 = []  # stator/rotor iron B(t)
+        _hcx2 = []; _hcy2 = []                        # coil B(t) for AC copper
         # FROZEN PERMEABILITY (frozen_nu): converge the saturation ONCE at frame
         # 0 (extended Picard) then hold the per-element ν fixed for every rotor
         # position — the industry-standard honest cogging/ripple method.  It
@@ -6494,6 +6495,8 @@ def fem_transient_sliding_band(
                 _hsx2.append(_bx_el[_iron_s_idx]); _hsy2.append(_by_el[_iron_s_idx])
                 _hrx2.append(_bx_el[_iron_r_idx + nst])
                 _hry2.append(_by_el[_iron_r_idx + nst])
+                if _coil_idx.size:                     # coil B for AC copper loss
+                    _hcx2.append(_bx_el[_coil_idx]); _hcy2.append(_by_el[_coil_idx])
             if return_field and ((field_first and k == 0)
                                  or (not field_first and k == n_total - 1)):
                 _Bx_all, _By_all = _p2_B_at_quad(
@@ -6510,13 +6513,44 @@ def fem_transient_sliding_band(
         # (P1's default transient uses eddy=False too — the coupled σ∂A/∂t J-view
         # solve is NOT the app loss path.)  Current drive → copper = I²R (DC).
         _lm2 = "none(magnetostatic P2)"
-        P_cu_dc2 = float(P_cu)                              # from copper_loss_W
+        P_cu_dc2 = float(P_cu)                              # from copper_loss_W (I²R)
+        P_cu_ac_ser2 = [0.0] * n_total; P_cu_ac_avg2 = 0.0
         P_cu_ser2 = [P_cu_dc2] * n_total
         P_fe_ser2 = [0.0] * n_total; P_fe_avg2 = 0.0
         P_mag_ser2 = [0.0] * n_total; P_mag_avg2 = 0.0
         P_shaft_ser2 = [0.0] * n_total; P_shaft_avg2 = 0.0
         if rotor_eddy:
             _two_pi2_2 = 2.0 * math.pi ** 2
+
+            # ── AC copper (proximity/skin) — MUST match P1: DC I²R is already
+            #    element-order-independent (same copper_loss_W); the AC part is the
+            #    coil proximity loss σ/12·Σ(d_r²·dBr² + d_t²·dBt²), field split into
+            #    radial/tangential (same _prox_eddy_split model P1 uses).  Periodic
+            #    central-difference dB/dt (P2 field is smooth).
+            _rho_cu2 = RHO_CU_20 * (1.0 + ALPHA_CU * (float(coil_temp_c) - 20.0))
+            _sig_cu2 = 1.0 / _rho_cu2
+            _om_e2 = 2.0 * math.pi * max(1e-6, f_elec)
+            _dlt_cu2 = math.sqrt(2.0 * _rho_cu2 / (_om_e2 * MU0))
+            _nws2 = max(1, int(round(float(geo.get("wire_split", 1) or 1))))
+            _w_cu2 = min(float(geo.get("wire_width", 5.0)) * 1e-3 / _nws2,
+                         2.0 * _dlt_cu2)
+            _h_cu2 = min(float(geo.get("wire_height", 0.8)) * 1e-3, 2.0 * _dlt_cu2)
+            if _coil_idx.size and _hcx2:
+                _smp = half["s"]["mesh"]
+                _cc = (_smp.p[:, _smp.t].mean(axis=1))[:, _coil_idx]
+                Xc = np.asarray(_hcx2); Yc = np.asarray(_hcy2)     # (N, E)
+                _rr = np.hypot(_cc[0], _cc[1]); _rr = np.where(_rr < 1e-9, 1e-9, _rr)
+                _uxc = (_cc[0] / _rr)[None, :]; _uyc = (_cc[1] / _rr)[None, :]
+                _Brc = Xc * _uxc + Yc * _uyc; _Btc = -Xc * _uyc + Yc * _uxc
+                _dBrc = (np.roll(_Brc, -1, 0) - np.roll(_Brc, 1, 0)) / (2.0 * dt)
+                _dBtc = (np.roll(_Btc, -1, 0) - np.roll(_Btc, 1, 0)) / (2.0 * dt)
+                _volc = areas_s[_coil_idx] * p.stack_length
+                _Pac = (_sig_cu2 / 12.0) * np.sum(
+                    (_w_cu2 ** 2 * _dBrc ** 2 + _h_cu2 ** 2 * _dBtc ** 2)
+                    * _volc[None, :], axis=1) * NS
+                _Pac = np.maximum(_Pac, 0.0)
+                P_cu_ac_ser2 = _Pac.tolist(); P_cu_ac_avg2 = float(np.mean(_Pac))
+            P_cu_ser2 = [P_cu_dc2 + ac for ac in P_cu_ac_ser2]
 
             def _iron_p2(hx, hy, idx, areas_half, mat):
                 # compact Bertotti: classical eddy ∝⟨(dB/dt)²⟩ (ripples) + flat
@@ -6623,7 +6657,7 @@ def fem_transient_sliding_band(
             "P_cu_W": P_cu_ser2, "P_fe_W": P_fe_ser2,
             "P_mag_eddy_W": P_mag_ser2, "P_shaft_eddy_W": P_shaft_ser2,
             "P_loss_total_W": P_tot_ser2,
-            "P_cu_dc_W": P_cu_dc2, "P_cu_ac_W": [0.0] * n_total,
+            "P_cu_dc_W": P_cu_dc2, "P_cu_ac_W": P_cu_ac_ser2,
             "P_mag_honest_W": round(float(P_mag_avg2), 3),
             "P_shaft_honest_W": round(float(P_shaft_avg2), 3),
             "P_fe_avg_W": round(float(P_fe_avg2), 3),

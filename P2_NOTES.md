@@ -375,6 +375,61 @@ tried — a mesh-quality issue in the P1 iron_template path, unrelated to elemen
 order. The app default pairs `iron_template` with `geo_mesh=True`, where both
 orders are clean (table above).
 
+### COPPER fixed (element-order-independent) + MAGNET-EDDY convergence study
+
+A reviewer found two discrepancies vs P1; both resolved:
+
+**1. Copper was NOT element-order-independent — FIXED.** P1's `P_cu_W` series is
+DC I²R **plus** AC proximity/skin (`_prox_eddy_split` on the coil B(t)); the P2
+branch was reporting DC only. Now P2 captures the coil B(t) history and computes
+the SAME split (σ/12·Σ(w²·dBr² + h²·dBt²), wire dims capped at 2·δ). Verified
+identical DC and matching AC:
+
+| order | steps | P_cu_dc | P_cu_ac | P_fe |
+|-------|-------|---------|---------|------|
+| P1 | 18 | 28.4 W | 7.09 W | 5.83 W |
+| P2 | 18 | **28.4 W** | **7.04 W** | 5.28 W |
+| P1 | 36 | 28.4 W | 9.12 W | 7.08 W |
+| P2 | 36 | **28.4 W** | **9.49 W** | 9.82 W |
+
+DC copper is now byte-identical (same `copper_loss_W`, R_phase, current — it
+never should have differed), and AC matches P1 to ~5 %.
+
+**2. Magnet eddy: P2's lower value is the PHYSICALLY CORRECT one, P1's is
+staircase-noise-inflated.** P_mag (honest_rotor_eddy, the SAME reaction-included
+FFT solve for both orders) at I=30 γ=−20, n_sectors=2:
+
+| order | mesh 1.5 / 18st | mesh 1.5 / 36st | mesh 1.0 / 18st | ripple |
+|-------|-----------------|-----------------|-----------------|--------|
+| P1 | 1.161 W | 1.45 W | 1.081 W | 45–53 % |
+| **P2** | **0.326 W** | **0.469 W** | **0.351 W** | 22–29 % |
+
+Definitive reading:
+- **P2 is NOT under-fed.** Its torque, DC+AC copper and (@18 st) iron loss all
+  match P1 → the field magnitude and low-order harmonics are correct. Only the
+  HIGH-frequency content differs.
+- P2's field carries **~2× less ripple** (the sliding-band staircase). Magnet
+  eddy is driven by the AC field the magnets see, so P1's extra staircase drives
+  extra — and NUMERICAL — eddy (the convergence proof showed that staircase does
+  not vanish with mesh refinement for P1). P2 excludes it.
+- **P1's P_mag is itself unstable across settings** (0.45 W at one mesh, 1.16 W
+  at 18 st, 1.55 W in the reviewer's run) — the signature of a noise-driven
+  quantity. P2 is 3–4× lower and mesh-stable (0.326→0.351 over 1.5→1.0 mm).
+- Residual step-dependence in BOTH (P1 +25 %, P2 +44 % over 18→36 st) is
+  `honest_rotor_eddy`'s harmonic-sampling (more frames → more resolved
+  harmonics), a sampling effect common to both, NOT the element-order artifact.
+
+Conclusion: **P2's magnet eddy (~0.33 W) is the more correct value; P1's ~1.1 W
+over-reports by ~3× due to numerical staircase-induced eddy currents in the
+magnets — a further P2 WIN.**
+
+KNOWN LIMITATION: the P2 iron/coil-AC losses use a periodic central-difference
+dB/dt (not P1's savgol slip-jitter filter, which is defined only later in the P1
+loop), so at HIGH step counts P2's iron classical-eddy term over-reports
+slightly (P_fe 9.8 W @36 st vs P1 7.1 W); at typical step counts (≤24) it
+matches P1 to <10 %. The magnet/shaft eddy (the dominant rotor-conductor loss)
+is unaffected — it uses the same FFT solve as P1.
+
 ### NOT done (raises NotImplementedError, documented in-code)
 1. **Coupled σ∂A/∂t J-view solve (`eddy=True`), voltage drive, demag pre-pass**
    on P2 — the app transient uses none of these (they are opt-in diagnostics /

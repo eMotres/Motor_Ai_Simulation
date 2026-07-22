@@ -6364,7 +6364,15 @@ def fem_transient_sliding_band(
                  + Ist['B'] * f_coil2['B'] + Ist['C'] * f_coil2['C'])
             Pro, outer_red = _build_Pro2(m_shift)
             if not frozen_nu:
-                nu_all2 = nu_base2.copy()          # re-converge every frame
+                # RESET ν per frame (each frame independently re-converged from
+                # base).  NOTE: warm-starting ν from the previous frame is only
+                # SOUND when every frame reaches _PIC_TOL; at no-load the magnet
+                # saturation needs ~70 sweeps to converge, so a warm-start with a
+                # modest cap leaves frames path-dependent and injects a DC torque
+                # bias.  Independent per-frame reset keeps the residual error
+                # UNBIASED (it averages to ~0 mean) — the honest choice for the
+                # cogging convergence study.
+                nu_all2 = nu_base2.copy()
             elif k == 0:
                 nu_all2 = nu_base2.copy()          # frozen: converge once at k=0
             _n_pic2 = (max(nonlinear_iterations, 40) if (frozen_nu and k == 0)

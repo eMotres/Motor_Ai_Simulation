@@ -224,6 +224,59 @@ P2 non-frozen is ~4–6× slower than P1 (per-frame ν re-convergence over ~2× 
 dof count): no-load 24-frame mesh-1.0 run ≈ 3 min for P2 vs ~30 s for P1.
 `frozen_nu` makes P2 much cheaper (frame 0 converges, later frames = 1 solve).
 
+NOTE on ν warm-starting: the P1 main loop warm-starts ν across frames; the P2
+branch deliberately does NOT (it resets to base each frame). Warm-starting is
+only sound when EVERY frame reaches `_PIC_TOL`, but at no-load the magnet
+saturation needs ~70 sweeps to converge (measured: 1-frame P2 res 5e-2 @25 it,
+4e-3 @50, 9e-4 @76) — a warm-start with a modest per-frame cap leaves frames
+path-dependent and injects a spurious DC torque bias (measured mean −0.008 Nm
+vs the reset path's ~0). Independent per-frame reset keeps the residual error
+UNBIASED (averages to ~0 mean) — the honest choice for the cogging study.
+
+---
+
+## CONVERGENCE PROOF — P2 noise floor →0, P1 stays flat (the make-or-break test)
+
+No-load cogging, FULL RING, structured belt, ring density FIXED (Nring=336,
+`SB_SLIP_PER_PERIOD=48`), gap_layers=2, 24 steps/period, non-frozen, matched
+`nonlinear_iterations=25` for BOTH orders (so residual non-convergence is
+common-mode and the P1-vs-P2 difference is purely the element order). "noise
+floor" = RMS of the FORBIDDEN (non-6·k) torque orders in ABSOLUTE Nm (the %
+form is undefined at no-load since ⟨T⟩≈0); it is the honest measure of the
+non-physical sliding-band staircase. Physical cogging (12s14p) lives at
+electrical order 12 = 6·2, which the 6·k band keeps.
+
+| mesh (mm) | order | mean T (Nm) | raw p-p (Nm) | phys 6k p-p (Nm) | **noise floor (Nm)** | jitter Δ²T |
+|-----------|-------|-------------|--------------|------------------|----------------------|------------|
+| 1.4 | P1 | −0.0071 | 0.0771 | 0.0515 | **0.01442** | 0.0397 |
+| 1.4 | P2 | −0.0013 | 0.0360 | 0.0289 | **0.00420** | 0.0246 |
+| 1.0 | P1 | −0.0065 | 0.0833 | 0.0508 | **0.01547** | 0.0390 |
+| 1.0 | P2 | +0.0004 | 0.0389 | 0.0277 | **0.00340** | 0.0224 |
+| 0.7 | P1 | −0.0080 | 0.0739 | 0.0445 | **0.01353** | 0.0351 |
+| 0.7 | P2 | −0.0008 | 0.0305 | 0.0215 | **0.00233** | 0.0165 |
+
+**Result — P2 is CORRECT, not merely different:**
+- **P2 noise floor CONVERGES toward 0** with mesh refinement:
+  0.00420 → 0.00340 → **0.00233 Nm** (monotone, ~½ over 1.4→0.7 mm).
+- **P1 noise floor is FLAT / mesh-independent** at ~0.0135–0.0155 Nm — the
+  staircase does not vanish with refinement (piecewise-constant gap B). At
+  mesh 0.7 mm P2's floor is **5.8× lower** than P1's.
+- P2 raw p-p and jitter also shrink (0.036→0.031, 0.025→0.017); P1's stay put.
+- P2 restores the physically-correct near-ZERO cogging mean (±0.001 Nm) at
+  every density; P1 carries a ~−0.007 Nm DC offset (half-mesh Arkkio shear).
+
+### Harmonic-macro cross-check (honest, partially inconclusive)
+`airgap_macro=True` (P1, analytic gap, full ring, mesh 1.0, converged) gives
+no-load raw p-p 0.140, phys-6k p-p 0.0815, noise floor 0.0209 Nm — i.e. the
+macro and the merged-band P1 (phys-6k 0.051) disagree on the ABSOLUTE physical
+cogging amplitude by ~1.6×, and the macro is actually NOISIER than merged P1 at
+no-load (its coarse 48-node ring admits harmonics — the code notes "denser
+rings are WORSE" for the macro). So the two coupling schemes do NOT pin the
+absolute cogging amplitude at this resolution; they share the physical ORDER
+(12). The macro is therefore not a clean amplitude reference here, and the P2
+NOISE-FLOOR CONVERGENCE above (a within-scheme, matched-settings mesh study) is
+the solid evidence, not the cross-scheme amplitude match.
+
 ---
 
 ## STAGE 3 — wiring + what remains

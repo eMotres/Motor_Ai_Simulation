@@ -4739,6 +4739,183 @@ def _arkkio_torque(mesh, A_nodal: np.ndarray, r_in_m: float, r_out_m: float,
     return (stack_length_m / (MU0 * (r_out_m - r_in_m))) * float(np.sum(integrand))
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+#  SECOND-ORDER (P2 / quadratic) magnetostatics — B = curl A is LINEAR per
+#  element instead of piecewise-constant, so the Arkkio air-gap torque is smooth
+#  where P1 staircases.  Additive: the P1 path above is untouched; callers opt in
+#  via element_order=2.  Validated by p2_cogging_proof.py (see P2_NOTES.md).
+# ─────────────────────────────────────────────────────────────────────────────
+def _p2_B_at_quad(basis, A_vec):
+    """B = (∂A/∂y, −∂A/∂x) at every element's quadrature points for a P2 field,
+    plus the integration measure dx.  Each returned array is (n_elem, n_qp).
+    Because A is quadratic, ∇A (hence B) is LINEAR within each element — the
+    physical origin of P2's smooth torque."""
+    Af = basis.interpolate(A_vec)
+    g = Af.grad                        # (2, n_elem, n_qp) global gradient
+    return g[1], -g[0], basis.dx       # B_x, B_y, dx
+
+
+def _arkkio_torque_p2(mesh, A_vec, basis, r_in_m: float, r_out_m: float,
+                      stack_length_m: float) -> float:
+    """Arkkio torque from a P2 field: quadrature integral of r·B_r·B_φ over the
+    gap-annulus elements.
+
+        T = L/(μ₀·(r_out−r_in)) · ∫∫_annulus r·B_r·B_φ dA
+
+    Evaluating B at the element quadrature points (where P2 B is linear) makes
+    the stress integral converge far faster with mesh density than the P1
+    centroid-constant integral.  Returns the SECTOR torque (caller ×n_sectors)."""
+    from skfem import Basis, ElementTriP2
+    P, T = mesh.p, mesh.t
+    cx = (P[0, T[0]] + P[0, T[1]] + P[0, T[2]]) / 3.0
+    cy = (P[1, T[0]] + P[1, T[1]] + P[1, T[2]]) / 3.0
+    rc = np.hypot(cx, cy)
+    gap_idx = np.where((rc >= r_in_m) & (rc <= r_out_m))[0]
+    if gap_idx.size == 0:
+        return 0.0
+    gb = Basis(mesh, ElementTriP2(), elements=gap_idx)
+    Bx, By, dx = _p2_B_at_quad(gb, A_vec)
+    X = gb.global_coordinates().value          # (2, n_gap_elem, n_qp) metres
+    r = np.sqrt(X[0] ** 2 + X[1] ** 2)
+    cosp, sinp = X[0] / r, X[1] / r
+    Br = Bx * cosp + By * sinp
+    Bph = -Bx * sinp + By * cosp
+    val = float(np.sum(dx * r * Br * Bph))
+    return stack_length_m / (MU0 * (r_out_m - r_in_m)) * val
+
+
+def solve_magnetostatics_p2(mesh, cell_tags: np.ndarray,
+                            materials: Dict[int, FEMMaterial],
+                            nonlinear_iterations: int = 8):
+    """Quadratic (P2) magnetostatic solve — the P2 twin of solve_magnetostatics.
+
+    Same weak form  ∫ ν ∇A·∇v = ∫ J_z v + ∫(Mx ∂v/∂y − My ∂v/∂x), same
+    per-element BH Picard (_mu_r_from_bh_vec, 0.5 damping), but on ElementTriP2:
+    A is quadratic so B = curl A is LINEAR per element.  Returns (A_vec, basis)
+    where A_vec has length basis.N = n_nodes + n_edges and `basis` is the P2
+    Basis needed to extract B / torque (see _arkkio_torque_p2).
+
+    Iron saturation is iterated as in the P1 solver; magnet irreversible-demag
+    is NOT modelled here (the P1 path retains that) — for cogging/ripple studies
+    the recoil-line demag is a second-order correction.
+    """
+    from skfem import (Basis, ElementTriP2, ElementTriP0, BilinearForm,
+                       LinearForm, asm, condense, solve)
+    from skfem.helpers import dot, grad
+    import time as _t
+
+    t0 = _t.time()
+    basis = Basis(mesh, ElementTriP2())
+    b0 = basis.with_element(ElementTriP0())        # P0 on the SAME quadrature rule
+    n = basis.N
+    n_tri = mesh.t.shape[1]
+
+    @BilinearForm
+    def stiffness_nu(u, v, w):
+        return w["nu"] * dot(grad(u), grad(v))
+
+    @LinearForm
+    def rhs_unit(v, w):
+        return 1.0 * v
+
+    @LinearForm
+    def rhs_dvdy(v, w):
+        return grad(v)[1]
+
+    @LinearForm
+    def rhs_dvdx(v, w):
+        return grad(v)[0]
+
+    unique_tags = np.unique(cell_tags)
+    tag_mat: Dict[int, FEMMaterial] = {}
+    tag_cells: Dict[int, np.ndarray] = {}
+    f_current = np.zeros(n)
+    tag_fMx: Dict[int, np.ndarray] = {}
+    tag_fMy: Dict[int, np.ndarray] = {}
+    for tag in unique_tags:
+        mat = materials.get(int(tag))
+        if mat is None:
+            continue
+        idx = np.where(cell_tags == tag)[0]
+        if idx.size == 0:
+            continue
+        tag_mat[int(tag)] = mat
+        tag_cells[int(tag)] = idx
+        sub = Basis(mesh, ElementTriP2(), elements=idx)
+        if mat.J_z != 0.0:
+            f_current += asm(rhs_unit, sub) * mat.J_z
+        if abs(mat.Mx) > 0:
+            tag_fMx[int(tag)] = asm(rhs_dvdy, sub)
+        if abs(mat.My) > 0:
+            tag_fMy[int(tag)] = asm(rhs_dvdx, sub)
+
+    # Per-element reluctivity ν (P0 dof == element id), init from μ_r.
+    nu_all = np.empty(n_tri)
+    for tag in unique_tags:
+        mat = materials.get(int(tag))
+        idx = np.where(cell_tags == tag)[0]
+        mur = mat.mu_r if mat is not None else 1.0
+        nu_all[idx] = 1.0 / (MU0 * max(mur, 1.0))
+
+    br_factor = {t: 1.0 for t in tag_mat if t >= DOM_MAG_BASE}
+
+    def _assemble_K():
+        nf = b0.zeros()
+        nf[:] = nu_all
+        return asm(stiffness_nu, basis, nu=b0.interpolate(nf)).tocsr()
+
+    def _assemble_f():
+        f = f_current.copy()
+        for tag, fMx in tag_fMx.items():
+            f += fMx * (tag_mat[tag].Mx * br_factor.get(tag, 1.0))
+        for tag, fMy in tag_fMy.items():
+            f -= fMy * (tag_mat[tag].My * br_factor.get(tag, 1.0))
+        return f
+
+    # Dirichlet DOFs on the outer circle — P2 must include EDGE-MIDPOINT dofs,
+    # not just vertices, so select by boundary facet and let get_dofs expand.
+    r_nodes = np.sqrt(mesh.p[0] ** 2 + mesh.p[1] ** 2)
+    r_max = r_nodes.max()
+    out_facets = mesh.facets_satisfying(
+        lambda x: np.sqrt(x[0] ** 2 + x[1] ** 2) >= r_max - 5e-4)
+    D = basis.get_dofs(facets=out_facets)
+
+    A = np.zeros(n)
+    it = 0
+    for it in range(max(1, nonlinear_iterations)):
+        K = _assemble_K()
+        f = _assemble_f()
+        A = solve(*condense(K, f, D=D))
+        Bx_q, By_q, dx = _p2_B_at_quad(basis, A)
+        area = dx.sum(axis=1)
+        Bmag_q = np.sqrt(Bx_q ** 2 + By_q ** 2)
+        Bmag_el = (Bmag_q * dx).sum(axis=1) / np.maximum(area, 1e-30)
+        changed = False
+        for tag in (DOM_STATOR, DOM_ROTOR, DOM_SHAFT):
+            idx = tag_cells.get(tag)
+            if idx is None:
+                continue
+            mat = tag_mat[tag]
+            Bm = Bmag_el[idx]
+            if mat.bh_curve and len(mat.bh_curve) >= 2:
+                mu_new = _mu_r_from_bh_vec(mat.bh_curve, Bm)
+            else:
+                ratio = np.where(Bm > 1.8, (1.8 / np.maximum(Bm, 1e-9)) ** 3, 1.0)
+                mu_new = mat.mu_r * ratio + 5.0 * (1.0 - ratio)
+            nu_new = 1.0 / (MU0 * np.maximum(mu_new, 1.0))
+            nu_upd = 0.5 * nu_all[idx] + 0.5 * nu_new
+            rel = float(np.max(np.abs(nu_upd - nu_all[idx])
+                               / np.maximum(nu_all[idx], 1e-30)))
+            if rel > 0.02:
+                changed = True
+            nu_all[idx] = nu_upd
+        if not changed and it > 0:
+            break
+    log.info("FEM P2 solve: %d dofs, %d triangles, %d Picard iters, %.2fs",
+             n, n_tri, it + 1, _t.time() - t0)
+    return A, basis
+
+
 def band_limit_torque(T_series, n_steps_per_period, n_periods):
     """Reconstruct T(t) from the electrical orders a BALANCED three-phase machine
     can physically produce — DC + EVERY 6·k order (6, 12, 18, 24, …): the
@@ -4959,6 +5136,15 @@ def fem_transient_sliding_band(
                                      # parasitic harmonic currents (FOC-drive verification mode).
     v_phase_peak: float = 0.0,       # voltage drive: phase-voltage amplitude [V, peak]
     v_delta_deg: float = 0.0,        # voltage drive: voltage angle [°el] in the SAME frame as γ
+    element_order: int = 1,          # 1 = P1 linear (default, unchanged); 2 = P2 quadratic
+                                     # elements (B linear per element → smooth Arkkio torque,
+                                     # no P1 staircase).  P2 on the sliding band requires
+                                     # edge-midpoint stitching across the moving cut that is
+                                     # NOT yet implemented; element_order=2 is currently only
+                                     # supported by the standalone static P2 solver
+                                     # (solve_magnetostatics_p2) — see P2_NOTES.md.  Requesting
+                                     # 2 here raises NotImplementedError rather than silently
+                                     # returning a P1 result mislabelled as P2.
 ) -> dict:
     """Sliding-band transient: mesh the stator + rotor halves ONCE, then sweep
     the rotor by shifting the slip-ring node pairing (no remeshing) so the
@@ -4993,6 +5179,20 @@ def fem_transient_sliding_band(
     # faster.  Defaults (mesh 4 mm clamped→… no: now literally 4 mm; gap_layers
     # 3) reproduce the previous behaviour closely; drag to mesh≈2 mm / gap≈3-4
     # for the cleanest torque.
+    element_order = int(element_order)
+    if element_order not in (1, 2):
+        raise ValueError(f"element_order must be 1 or 2, got {element_order}")
+    if element_order == 2:
+        # P2 on the moving sliding band needs edge-midpoint DOF stitching across
+        # the slip cut, which is not implemented yet.  Fail loudly instead of
+        # returning a P1 field mislabelled as P2.  The P2 field solve itself IS
+        # implemented and validated for the STATIC case (solve_magnetostatics_p2,
+        # p2_cogging_proof.py) — see P2_NOTES.md, Stage 2/3.
+        raise NotImplementedError(
+            "element_order=2 (P2) is not yet wired into the sliding-band "
+            "transient (moving-cut edge-midpoint stitching pending). Use the "
+            "standalone static P2 solver solve_magnetostatics_p2 / "
+            "p2_cogging_proof.py for P2 results. See P2_NOTES.md.")
     mesh_size_mm = float(mesh_size_mm)
     min_size_mm = float(min_size_mm)
     cfg = get_config(); sim = cfg.get("simulation", {})
@@ -7744,6 +7944,7 @@ def em_transient_eval(
     drive: str = "current",
     v_phase_peak: float = 0.0,
     v_delta_deg: float = 0.0,
+    element_order: int = 1,          # 1 = P1 (default); 2 = P2 (see fem_transient_sliding_band)
 ) -> Dict:
     """THE single canonical sliding-band transient invocation.
 
@@ -7770,7 +7971,7 @@ def em_transient_eval(
         structured_gap=bool(structured_gap), airgap_macro=bool(airgap_macro),
         frozen_nu=bool(frozen_nu),
         drive=str(drive or "current"), v_phase_peak=float(v_phase_peak),
-        v_delta_deg=float(v_delta_deg))
+        v_delta_deg=float(v_delta_deg), element_order=int(element_order))
 
 
 def fem_quasistatic_transient(

@@ -42,6 +42,16 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
   ripple" mode) auto-forces the structured belt + current-drive magnetostatics.
   The frontend transient request passes `element_order` from a `mesh.p2HiFi`
   flag (default P1); no UI toggle was added.
+- **P2 now reports real eddy/iron/copper losses** (`rotor_eddy=True`), so a P2
+  loaded sim gives efficiency, not zeros. Magnet + shaft eddy come from the same
+  honest reaction-included rotor solve P1 uses (`honest_rotor_eddy`) on the P2
+  rotor A(t) history; iron from Bertotti on dB/dt; copper from I²R. Validated
+  (I=30, γ=−20, app-default mesh): P2 magnet/shaft/iron eddy match P1 within ~7 %
+  (0.55 vs 0.58 W magnet, 0.12 vs 0.12 W shaft, 5.9 vs 5.9 W iron) while P2 keeps
+  ~2× cleaner ripple (10.4 % vs 21.3 %). The route keeps `rotor_eddy` on for P2;
+  only the opt-in coupled-eddy J-view, voltage drive and demag pre-pass stay
+  gated (the app transient uses none of them — P1's app path is `eddy=False`
+  too).
 
 ### Fixed
 - **Geo mesh honours "Max element size" as the actual element edge.** The CDT

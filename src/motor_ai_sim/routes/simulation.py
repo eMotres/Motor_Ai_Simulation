@@ -2657,13 +2657,14 @@ def get_fem_transient(
         _comp_mesh = _parse_component_mesh(component_mesh)
         _geo_ov = _parse_geo_override(geo)   # per-request geometry override (multi-user)
         # P2 "high-fidelity ripple": needs the merged structured belt and is
-        # magnetostatic / current-drive only.  Coerce the incompatible defaults
-        # (this endpoint defaults rotor_eddy=True) so the mode is self-consistent
-        # — otherwise the solver raises NotImplementedError.  P1 path untouched.
+        # current-drive.  rotor_eddy (post-processed magnet/shaft/iron losses) IS
+        # supported on P2 — keep it.  Coerce only the still-unsupported options
+        # (coupled σ∂A/∂t J-view, voltage drive, demag pre-pass, harmonic macro)
+        # so the mode is self-consistent — otherwise the solver raises
+        # NotImplementedError.  P1 path untouched.
         if int(element_order) == 2:
             structured_gap = True
             airgap_macro = False
-            rotor_eddy = False
             demag = False
             drive = "current"
         _sb_key = ("sb", int(n_steps_per_period), round(n_periods, 2),

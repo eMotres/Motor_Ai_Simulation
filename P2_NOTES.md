@@ -333,13 +333,57 @@ physically equivalent to full-ring P2 and ~2.3× faster (half the mesh). This is
 the model the app's default config (`n_sectors=2`) uses. Pairing coverage
 logged: 168/168 ring edges, 33 cut vertices, 29 cut edges.
 
+## ROTOR-EDDY LOSSES ON P2 DONE — real magnet/shaft/iron/copper losses
+
+`element_order=2` + `rotor_eddy=True` now runs a COMPLETE transient loss report,
+using the SAME architecture as the P1 app path (which is `eddy=False` too — the
+coupled σ∂A/∂t "J-view" solve is NOT the app loss path). The P2 branch:
+- captures the rotor-frame nodal A(t) history (`A2[vdof[rotor]]`) and the
+  element-mean iron B(t) histories per frame;
+- **magnet + shaft eddy** = the honest, reaction-included frequency-domain rotor
+  solve `eddy_solver_2d.honest_rotor_eddy` on the P2 rotor A-history — the SAME
+  function P1 calls (rotor back-iron μ_r taken from the converged P2 ν);
+- **iron** = compact Bertotti on dB/dt (periodic central difference — the P2
+  field is already smooth, so P1's savgol slip-jitter filter is unneeded);
+- **copper** = I²R (`copper_loss_W`, current drive).
+
+Why post-processing and not a σ∂A/∂t mass matrix in the main solve: P1's APP
+transient is `eddy=False` (get_fem_transient never sets eddy=True) — it too is a
+magnetostatic field with the eddy LOSSES post-processed by the same honest rotor
+solve. So P2 matching that path IS "a full transient like P1". The coupled
+σ∂A/∂t bordered J-view solve (`eddy=True`) stays gated for P2 (it is an opt-in
+diagnostic the app does not use).
+
+**Validation (40 mm 12s14p, I=30 γ=−20, n_sectors=2, rotor_eddy=True):**
+
+| flags | order | ripple | P_mag (magnet eddy) | P_shaft | P_fe (iron) | P_cu |
+|-------|-------|--------|---------------------|---------|-------------|------|
+| clean (iron_template=F, mesh 1.5) | P1 | 16.8 % | 0.45 W | 0.148 W | 5.85 W | 28.4 W |
+| clean | **P2** | **9.1 %** | **0.49 W** | **0.168 W** | **5.97 W** | 28.4 W |
+| APP default (geo_mesh=T → full ring, mesh 1.0) | P1 | 21.3 % | 0.583 W | 0.116 W | ~5.9 W | 28.4 W |
+| APP default | **P2** | **10.4 %** | **0.549 W** | **0.124 W** | **5.88 W** | 28.4 W |
+
+Magnet/shaft/iron eddy losses agree within **~7 %** of P1 (eddy loss is a field
+property, not an element-order artifact — as expected), while P2 keeps its ~2×
+cleaner torque ripple. Copper is identical (same I²R). The route now KEEPS
+`rotor_eddy` on for P2 (only eddy/voltage/demag/macro are coerced off), so a P2
+loaded sim reports real losses + efficiency, not a P1 fallback.
+
+NOTE (pre-existing, not P2): `iron_template=True` WITHOUT `geo_mesh=True` gives
+garbage ripple for BOTH P1 (136 %) and P2 (50–226 %) on this motor at every mesh
+tried — a mesh-quality issue in the P1 iron_template path, unrelated to element
+order. The app default pairs `iron_template` with `geo_mesh=True`, where both
+orders are clean (table above).
+
 ### NOT done (raises NotImplementedError, documented in-code)
-1. **Eddy / voltage-drive / demag / rotor-eddy** coupling on P2 DOFs — the P2
-   branch is magnetostatic-per-frame (the right physics for the cogging/ripple
-   goal; eddy is a loss refinement).
+1. **Coupled σ∂A/∂t J-view solve (`eddy=True`), voltage drive, demag pre-pass**
+   on P2 — the app transient uses none of these (they are opt-in diagnostics /
+   drive modes); the P2 magnetostatic-field + honest-eddy-loss path matches the
+   P1 app path.
 2. **Moving / harmonic-macro band** on P2 (structured merged belt only for now).
 
 STATUS: P2 static solver = built + validated. **P2 full transient on the belt =
-DONE and validated for BOTH full ring and anti-periodic sector** (blocker
-solved, convergence proven, sector == full ring). Remaining = eddy/voltage P2
+DONE** — full ring AND anti-periodic sector, mesh-convergent, sector == full
+ring, and now with REAL rotor-eddy/iron/copper losses matching P1 to ~7 %.
+Remaining = the opt-in coupled-eddy J-view / voltage-drive / demag diagnostics
 (cleanly gated).

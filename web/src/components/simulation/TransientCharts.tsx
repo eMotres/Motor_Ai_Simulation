@@ -315,6 +315,12 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
       structured_gap:     readMeshSetting('structuredGap', false) || readMeshSetting('ironTemplate', true),
       // Harmonic gap coupling (Mesh-tab "Harmonic gap"): step-independent RAW ripple.
       airgap_macro:       readMeshSetting('harmonicGap', false),
+      // P2 "high-fidelity ripple" (Mesh-tab "P2 elements" toggle, default OFF = P1).
+      // 2 = quadratic elements → B linear per element → smooth Arkkio torque (no P1
+      // staircase; the forbidden-order noise floor converges to 0 with mesh
+      // refinement). The backend forces the structured belt and current-drive
+      // magnetostatics for P2 (no eddy/voltage/demag on P2 yet). Slower (~4-6×).
+      element_order:      readMeshSetting('p2HiFi', false) ? 2 : 1,
       // Deterministic template iron mesh (Mesh-tab "Template iron" toggle).
       iron_template:      readMeshSetting('ironTemplate', true),
       // Geometry-driven CDT mesh (Mesh-tab "Geometry-driven mesh" toggle, default ON).

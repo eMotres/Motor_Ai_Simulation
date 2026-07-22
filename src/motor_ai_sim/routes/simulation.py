@@ -2617,6 +2617,12 @@ def get_fem_transient(
     hi_fidelity:         bool  = False,   # ← 2× slip nodes + finer mesh → smoother raw torque (slower)
     structured_gap:      bool  = False,   # ← ANSYS-style concentric-ring air-gap mesh (experimental)
     airgap_macro:        bool  = False,   # ← harmonic air-gap macroelement (honest RAW ripple; full ring + sectors)
+    element_order:       int   = 1,       # ← 1 = P1 linear (default) | 2 = P2 quadratic "high-fidelity
+                                          #   ripple": B linear per element → smooth Arkkio torque (no P1
+                                          #   staircase; noise floor →0 with mesh refinement).  Requires the
+                                          #   structured belt (forced on below when 2); magnetostatic per
+                                          #   frame (current drive; no eddy/voltage/demag on P2 yet — those
+                                          #   raise NotImplementedError in the solver).
     restore:             bool  = False,   # ← on open: return the LAST saved transient (stale if params differ) instead of recomputing
     geo:                 Optional[str] = None,  # ← per-request geometry override (multi-user); absent = global config
     drive:               str   = "current",  # ← "current" (imposed sinusoidal I) | "voltage"
@@ -2650,6 +2656,16 @@ def get_fem_transient(
     if sliding_band:
         _comp_mesh = _parse_component_mesh(component_mesh)
         _geo_ov = _parse_geo_override(geo)   # per-request geometry override (multi-user)
+        # P2 "high-fidelity ripple": needs the merged structured belt and is
+        # magnetostatic / current-drive only.  Coerce the incompatible defaults
+        # (this endpoint defaults rotor_eddy=True) so the mode is self-consistent
+        # — otherwise the solver raises NotImplementedError.  P1 path untouched.
+        if int(element_order) == 2:
+            structured_gap = True
+            airgap_macro = False
+            rotor_eddy = False
+            demag = False
+            drive = "current"
         _sb_key = ("sb", int(n_steps_per_period), round(n_periods, 2),
                    round(gamma_deg, 1), round(I_phase_rms, 1),
                    round(mesh_size_mm, 2), round(min_size_mm, 2),
@@ -2662,7 +2678,8 @@ def get_fem_transient(
                    int(bool(airgap_macro)), int(bool(geo_mesh)),
                    tuple(sorted(_comp_mesh.items())),
                    str(drive or "current"), round(float(v_phase_peak), 2),
-                   round(float(v_delta_deg), 1), int(bool(harm_ref)))
+                   round(float(v_delta_deg), 1), int(bool(harm_ref)),
+                   int(element_order))
         if _geo_ov:   # distinct cache entry per overridden geometry (no-geo key unchanged)
             _sb_key = _sb_key + (tuple(sorted(_geo_ov.items())),)
         if not fresh and _sb_key in _fem_transient_cache:
@@ -2738,7 +2755,8 @@ def get_fem_transient(
                     airgap_macro=bool(airgap_macro),
                     drive=str(drive or "current"),
                     v_phase_peak=float(v_phase_peak),
-                    v_delta_deg=float(v_delta_deg))
+                    v_delta_deg=float(v_delta_deg),
+                    element_order=int(element_order))
                 # ── ΔP_harm (voltage drive): current-drive REFERENCE at the
                 # extracted fundamental (I₁, γ₁), so the comparison runs at a
                 # MATCHED fundamental current — the loss difference is then

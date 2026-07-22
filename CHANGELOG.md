@@ -24,8 +24,24 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
   loaded (I=30, γ=−20) ripple 24.9→**14.8 %**, forbidden-order noise floor
   3.9→**1.1 %** (3.6× less numerical staircase). The P1 default
   (`element_order=1`) is byte-for-byte unchanged. Not yet on P2: the
-  anti-periodic **sector** wedge (`n_sectors≥2`), and eddy/voltage/demag
-  coupling — these raise a clear `NotImplementedError`. See `P2_NOTES.md`.
+  eddy/voltage/demag coupling — these raise a clear `NotImplementedError`. See
+  `P2_NOTES.md`.
+- **P2 works on the anti-periodic SECTOR wedge (`n_sectors≥2`), not just the
+  full ring.** The belt projection now also welds the radial-cut vertices AND
+  cut-edge midpoints with the anti-periodic sign, and uses the open-wedge ring
+  wrap map. Validated: `n_sectors=2` P2 T_avg matches full-ring P2 to **0.3 %**
+  (0.3771 vs 0.3761 Nm, loaded), and is ~2.3× faster (half the mesh). This is
+  the symmetry the default config (`n_sectors=2`) uses.
+- **P2 convergence proven.** No-load cogging at mesh 1.4/1.0/0.7 mm (full ring,
+  fixed ring density): the P2 forbidden-order torque noise floor CONVERGES
+  0.0042→0.0034→**0.0023 Nm** (toward 0) while P1 stays flat at ~0.014 Nm
+  (mesh-independent staircase) — at 0.7 mm P2's floor is 5.8× lower. Confirms P2
+  is physically correct, not merely different from P1.
+- **`element_order` wired through the app** — `GET /physics/fem_transient` takes
+  an `element_order` query param (default 1); requesting 2 (a "high-fidelity
+  ripple" mode) auto-forces the structured belt + current-drive magnetostatics.
+  The frontend transient request passes `element_order` from a `mesh.p2HiFi`
+  flag (default P1); no UI toggle was added.
 
 ### Fixed
 - **Geo mesh honours "Max element size" as the actual element edge.** The CDT

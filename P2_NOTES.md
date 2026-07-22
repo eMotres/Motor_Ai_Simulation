@@ -279,14 +279,34 @@ the solid evidence, not the cross-scheme amplitude match.
 
 ---
 
-## STAGE 3 — wiring + what remains
+## STAGE 3 — wiring into the app (DONE)
 
-- `element_order` is forwarded through `em_transient_eval` (STAGE C done) — any
-  consumer (Simulation route, optimizer, sweep) can request P2 by passing
-  `element_order=2`. Sector/eddy P2 requests raise a clear `NotImplementedError`
-  rather than silently returning P1.
+Full request path now threads `element_order` end-to-end:
+`TransientCharts.tsx` (frontend request) → `GET /physics/fem_transient`
+(`get_fem_transient`) → `em_transient_eval` → `fem_transient_sliding_band`.
+
+- **Backend** `routes/simulation.py :: get_fem_transient` — new query param
+  `element_order: int = 1`, added to the sliding-band cache key and passed to
+  `em_transient_eval`. When `element_order == 2` the route COERCES a
+  self-consistent P2 mode (the endpoint defaults `rotor_eddy=True`, which P2
+  rejects): forces `structured_gap=True`, `rotor_eddy=False`, `demag=False`,
+  `drive="current"`, `airgap_macro=False`. Verified end-to-end: a P2 request
+  with the default `rotor_eddy=True` returns `method="sliding_band_p2"`,
+  `element_order=2`, no exception.
+- **Frontend** `web/src/components/simulation/TransientCharts.tsx` — the request
+  object now sets `element_order: readMeshSetting('p2HiFi', false) ? 2 : 1`
+  (a Mesh-tab boolean flag, default OFF = P1). No UI control was added (per
+  scope) — a future "P2 / high-fidelity ripple" checkbox just needs to write the
+  `mesh.p2HiFi` localStorage key that this line already reads. The Sweep panel
+  (`SweepStudyPanel.tsx`) would add the same one field to its request to opt in.
+- `element_order` is forwarded through `em_transient_eval`; `modules/solvers.py`
+  `_call_filtered(get_fem_transient, payload)` passes it through automatically
+  (it filters on the signature, now includes the param), so the optimizer/
+  refine path inherits it (default 1).
 - The P1 default (`element_order=1`) is byte-for-byte unchanged (verified:
   n_sectors=2 loaded run still `method=sliding_band`, T_avg 0.587).
+- Eddy/voltage/demag and moving/macro-band P2 requests raise a clear
+  `NotImplementedError` rather than silently returning P1.
 
 ## SECTOR P2 DONE — anti-periodic wedge (n_sectors≥2)
 

@@ -5160,13 +5160,14 @@ def fem_transient_sliding_band(
     v_delta_deg: float = 0.0,        # voltage drive: voltage angle [°el] in the SAME frame as γ
     element_order: int = 1,          # 1 = P1 linear (default, unchanged); 2 = P2 quadratic
                                      # elements (B linear per element → smooth Arkkio torque,
-                                     # no P1 staircase).  P2 on the sliding band requires
-                                     # edge-midpoint stitching across the moving cut that is
-                                     # NOT yet implemented; element_order=2 is currently only
-                                     # supported by the standalone static P2 solver
-                                     # (solve_magnetostatics_p2) — see P2_NOTES.md.  Requesting
-                                     # 2 here raises NotImplementedError rather than silently
-                                     # returning a P1 result mislabelled as P2.
+                                     # no P1 staircase).  P2 runs the FULL magnetostatic
+                                     # sliding-band transient on the merged structured belt —
+                                     # full ring (n_sectors≤1) AND anti-periodic sector wedge
+                                     # (n_sectors≥2) — via edge-midpoint DOF stitching across
+                                     # the moving slip cut and the radial cuts (see the P2
+                                     # branch below and P2_NOTES.md).  Still gated (raises
+                                     # NotImplementedError): the moving/harmonic-macro band and
+                                     # eddy/voltage/demag coupling on P2.
 ) -> dict:
     """Sliding-band transient: mesh the stator + rotor halves ONCE, then sweep
     the rotor by shifting the slip-ring node pairing (no remeshing) so the
@@ -6214,19 +6215,17 @@ def fem_transient_sliding_band(
     # (not just the vertices) as the rotor shifts by m slip nodes.  Assembled on
     # the SINGLE stitched mesh (mesh_all) — simplest correct P2 assembly — with a
     # per-frame P2 projection Pro2 that welds ring vertices AND ring-edge
-    # midpoints.  Magnetostatic per frame (no σ∂A/∂t): for the cogging / ripple
-    # goal this is exactly the physics that matters; eddy on P2 is a refinement.
+    # midpoints (and, for a SECTOR wedge, the radial-cut vertices + cut-edge
+    # midpoints with the anti-periodic _bc_sign).  Works for the full ring AND
+    # anti-periodic sector wedges (validated: sector T_avg == full-ring T_avg to
+    # 0.3 %).  Magnetostatic per frame (no σ∂A/∂t): for the cogging / ripple goal
+    # this is exactly the physics that matters; eddy on P2 is a refinement.
     if element_order == 2:
         from skfem import ElementTriP2 as _P2E
         if _moving:
             raise NotImplementedError(
                 "P2 + moving/harmonic-macro band not implemented; run the merged "
                 "structured belt (structured_gap=True, element_order=2).")
-        if not _full_ring:
-            raise NotImplementedError(
-                "P2 sliding band supports the FULL RING (n_sectors<=1) only — the "
-                "sector anti-periodic edge-midpoint stitching is pending. Use "
-                "n_sectors=-1 for P2. See P2_NOTES.md.")
         if eddy or _vdrive or demag or rotor_eddy:
             raise NotImplementedError(
                 "P2 path is magnetostatic-per-frame only (no eddy / voltage / "
@@ -6290,28 +6289,80 @@ def fem_transient_sliding_band(
             lambda x: np.hypot(x[0], x[1]) >= r_all.max() - 5e-4)
         _D2_ids = np.asarray(b2.get_dofs(facets=_out_fac2).flatten(), int)
 
-        # ── per-frame P2 projection: weld ring VERTICES and ring EDGE midpoints
-        _kk_all = np.arange(Nring)
-        _kk1_all = (np.arange(Nring) + 1) % Nring     # full ring: closed
-        _re_dofs = np.array([_edge_dof(int(rring[a]) + nsn, int(rring[b]) + nsn)
-                             for a, b in zip(_kk_all, _kk1_all)], dtype=object)
+        # ── per-frame P2 projection: weld ring + (for sector) radial-cut, both
+        #    VERTICES and EDGE midpoints, with the anti-periodic sign ──────────
+        # Ring edges are between angularly-consecutive ring nodes: for the FULL
+        # ring the ring is CLOSED (Nring edges, kk→(kk+1)%Nring); for a SECTOR
+        # wedge it is OPEN (Nring−1 edges, kk→kk+1).  rring/sring are index-
+        # aligned (both sorted by grid slot 0..Nring−1).
+        if _full_ring:
+            _re_pairs = [(kk, (kk + 1) % Nring) for kk in range(Nring)]
+        else:
+            _re_pairs = [(kk, kk + 1) for kk in range(Nring - 1)]
+        # rotor ring-edge midpoint dof for each segment (constant across frames)
+        _re_dofs = [_edge_dof(int(rring[a]) + nsn, int(rring[b]) + nsn)
+                    for a, b in _re_pairs]
         _n_redge = int(sum(x is not None for x in _re_dofs))
-        log.info("P2 belt: N2=%d dofs, ring=%d nodes, %d/%d ring-edge midpoints paired",
-                 N2, Nring, _n_redge, Nring)
+
+        # Anti-periodic RADIAL-CUT welds (sector only) — VERTICES and the cut-
+        # boundary EDGE midpoints.  Mn/Sn are matched master/slave cut vertices
+        # sorted by radius, so consecutive entries (i, i+1) delimit a cut edge on
+        # each side; the slave DOF = _bc_sign · master DOF, same as P1's vertex BC.
+        _cut_v = []          # (slave_dof, master_dof, sign) for vertices
+        _cut_e = []          # (slave_edge_dof, master_edge_dof, sign) for edges
+        if not _full_ring and Mn.size:
+            for i in range(Mn.size):
+                _cut_v.append((int(vdof[int(Sn[i])]), int(vdof[int(Mn[i])]),
+                               float(_bc_sign)))
+            for i in range(Mn.size - 1):
+                em = _edge_dof(int(Mn[i]), int(Mn[i + 1]))
+                es = _edge_dof(int(Sn[i]), int(Sn[i + 1]))
+                if em is not None and es is not None:
+                    _cut_e.append((int(es), int(em), float(_bc_sign)))
+        log.info("P2 belt: N2=%d dofs, %s, ring=%d nodes, %d/%d ring-edge + "
+                 "%d cut-vertex + %d cut-edge midpoints paired",
+                 N2, "full ring" if _full_ring else "sector",
+                 Nring, _n_redge, len(_re_pairs), len(_cut_v), len(_cut_e))
+
+        def _ring_map(m_shift):
+            # rotor ring node kk -> (stator node j, sign).  Full ring: periodic
+            # mod Nring, sign +1.  Sector: open wedge of Nring nodes, wrap period
+            # Nring−1 with a _bc_sign flip per wrap (identical to the P1 loop).
+            if _full_ring:
+                j = (np.arange(Nring) + int(m_shift)) % Nring
+                return j.astype(int), np.ones(Nring)
+            j = np.empty(Nring, int); sg = np.ones(Nring)
+            for kk in range(Nring):
+                jj = kk + int(m_shift); s = 1.0
+                while jj > Nring - 1: jj -= (Nring - 1); s *= _bc_sign
+                while jj < 0:         jj += (Nring - 1); s *= _bc_sign
+                j[kk] = jj; sg[kk] = s
+            return j, sg
 
         def _build_Pro2(m_shift):
             suf = _SignedUF(N2)
-            j0 = (_kk_all + int(m_shift)) % Nring
-            j1 = (j0 + 1) % Nring
+            # radial-cut anti-periodic welds (sector) — m-independent
+            for sd, md, sgn in _cut_v:
+                suf.union(sd, md, sgn)
+            for sd, md, sgn in _cut_e:
+                suf.union(sd, md, sgn)
+            # slip-ring welds (vertices + edge midpoints), rotor shifted by m
+            j, sg = _ring_map(m_shift)
             for kk in range(Nring):
                 suf.union(int(vdof[int(rring[kk]) + nsn]),
-                          int(vdof[int(sring[j0[kk]])]), 1)
-                re = _re_dofs[kk]
+                          int(vdof[int(sring[j[kk]])]), float(sg[kk]))
+            for e, (a, b) in enumerate(_re_pairs):
+                re = _re_dofs[e]
                 if re is None:
                     continue
-                se = _edge_dof(int(sring[j0[kk]]), int(sring[j1[kk]]))
+                # the rotor edge (a,b) maps to the stator edge (j[a], j[b]); it is
+                # a real mesh edge only when the two endpoints stay angularly
+                # consecutive with the SAME sign (i.e. no wrap between them).
+                if sg[a] != sg[b]:
+                    continue
+                se = _edge_dof(int(sring[j[a]]), int(sring[j[b]]))
                 if se is not None:
-                    suf.union(int(re), int(se), 1)
+                    suf.union(int(re), int(se), float(sg[a]))
             roots = [suf.find(i) for i in range(N2)]
             rid = np.array([r for r, _ in roots])
             rsg = np.array([s for _, s in roots], float)

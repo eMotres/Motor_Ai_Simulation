@@ -288,17 +288,38 @@ the solid evidence, not the cross-scheme amplitude match.
 - The P1 default (`element_order=1`) is byte-for-byte unchanged (verified:
   n_sectors=2 loaded run still `method=sliding_band`, T_avg 0.587).
 
+## SECTOR P2 DONE — anti-periodic wedge (n_sectors≥2)
+
+`_build_Pro2` now welds, in addition to the slip-ring vertices+edge-midpoints:
+- the **radial-cut** anti-periodic VERTEX pairs `Sn[i] = _bc_sign·Mn[i]`
+  (`_pair_sector_cut_nodes`, same as the P1 vertex BC), AND
+- the **cut-EDGE midpoints**: consecutive-by-radius cut vertices `(Mn[i],Mn[i+1])`
+  delimit a cut-boundary edge whose midpoint welds to `(Sn[i],Sn[i+1])`'s with
+  `_bc_sign`.
+- the slip ring uses the open-wedge wrap map `_ring_map` (period Nring−1, a
+  `_bc_sign` flip per wrap — identical to the P1 loop); a ring-edge midpoint is
+  paired only when both endpoints keep the SAME sign (no wrap between them), so
+  the one seam edge at the wrap point is left free (measure-zero, harmless).
+
+**Validation (40 mm 12s14p, structured belt, loaded I=30 γ=−20, non-frozen):**
+
+| model | T_avg | raw p-p | ripple | noise floor | Nring | time |
+|-------|-------|---------|--------|-------------|-------|------|
+| full ring (n_sectors=−1) | 0.3761 Nm | 0.0403 | 10.7 % | 1.17 % | 336 | 83 s |
+| **sector (n_sectors=2)** | **0.3771 Nm** | 0.0342 | 9.1 % | 0.49 % | 169 | 36 s |
+
+Mean torque agrees to **0.3 %**, series shapes near-identical — sector P2 is
+physically equivalent to full-ring P2 and ~2.3× faster (half the mesh). This is
+the model the app's default config (`n_sectors=2`) uses. Pairing coverage
+logged: 168/168 ring edges, 33 cut vertices, 29 cut edges.
+
 ### NOT done (raises NotImplementedError, documented in-code)
-1. **Sector (anti-periodic) wedge** `n_sectors≥2` on P2 — needs the cut-edge
-   midpoints paired with the `_bc_sign` sign and the ring-edge sign handled at
-   the sector-boundary wrap. Full ring (`n_sectors=-1`) is the physical
-   reference and is what the P2 path supports today. The production config uses
-   `n_sectors=2`, so wiring P2 into the default Simulation still needs this.
-2. **Eddy / voltage-drive / demag / rotor-eddy** coupling on P2 DOFs — the P2
+1. **Eddy / voltage-drive / demag / rotor-eddy** coupling on P2 DOFs — the P2
    branch is magnetostatic-per-frame (the right physics for the cogging/ripple
    goal; eddy is a loss refinement).
-3. **Moving / harmonic-macro band** on P2 (structured merged belt only for now).
+2. **Moving / harmonic-macro band** on P2 (structured merged belt only for now).
 
 STATUS: P2 static solver = built + validated. **P2 full transient on the belt =
-DONE and validated** (blocker solved, real P1-vs-P2 wins above). Remaining =
-sector anti-periodic P2 + eddy/voltage P2 (both cleanly gated).
+DONE and validated for BOTH full ring and anti-periodic sector** (blocker
+solved, convergence proven, sector == full ring). Remaining = eddy/voltage P2
+(cleanly gated).

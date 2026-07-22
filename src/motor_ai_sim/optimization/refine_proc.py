@@ -54,7 +54,8 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
             gap_layers: float = 3.0, end_winding_factor: float = 0.0,
             rotor_eddy: bool = False, hi_fidelity: bool = False,
             structured_gap: bool = False, airgap_macro: bool = False,
-            iron_template: bool = True, geo_mesh: bool = True) -> Dict[str, Any]:
+            iron_template: bool = True, geo_mesh: bool = True,
+            element_order: int = 1) -> Dict[str, Any]:
     """Run the sliding-band transient for one candidate and return mean
     performance metrics (torque, efficiency, ripple, losses, mass).
 
@@ -101,6 +102,28 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
     # window holds exactly ``steps`` frames.
     nper = max(1e-3, float(n_periods))
     nspp = max(4, int(round(int(steps) / nper)))
+    # P2 "high-fidelity ripple" self-consistency — MIRRORS the Simulation route
+    # (routes/simulation.py get_fem_transient): element_order=2 needs the merged
+    # structured belt and current-drive magnetostatics, so coerce the incompatible
+    # options (force structured_gap; disable airgap_macro + demag; keep rotor_eddy
+    # — P2 supports post-processed losses).  And since a P2 sector solve == the
+    # full motor for ripple at ~S× lower cost, auto-use the natural symmetry
+    # sector gcd(slots, poles) = num_seg when the caller left the full motor.
+    _eo = int(element_order)
+    _sg = bool(structured_gap); _am = bool(airgap_macro)
+    _demag = bool(cfg.get("simulation", {}).get("demag", False))
+    _ns = int(n_sectors)
+    if _eo == 2:
+        _sg = True; _am = False; _demag = False
+        if _ns <= 1:
+            try:
+                _sym = int(geo.get("num_seg")
+                           or math.gcd(int(geo.get("num_slots", 1)),
+                                       int(geo.get("num_poles", 1))) or 1)
+                if _sym >= 2:
+                    _ns = _sym
+            except Exception:
+                pass
     # Run the candidate THROUGH the kernel module solver.em_transient (the SAME
     # module the Simulation tab uses), inside this isolated subprocess. The module
     # -> get_fem_transient -> em_transient_eval; the geo override means it won't
@@ -108,15 +131,16 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
     _out = _kernel().run("solver.em_transient", {
         "n_steps_per_period": nspp, "n_periods": nper, "gamma_deg": float(gamma_deg),
         "I_phase_rms": float(current_a), "mesh_size_mm": float(mesh_size_mm),
-        "min_size_mm": float(min_size_mm), "n_sectors": int(n_sectors),
+        "min_size_mm": float(min_size_mm), "n_sectors": int(_ns),
         "coil_temp_c": float(coil_temp_c), "gap_layers": float(gap_layers),
         "end_winding_factor": float(end_winding_factor), "rotor_eddy": bool(rotor_eddy),
         "pole_copy": pole_copy, "torque_filter": bool(torque_filter),
         "hi_fidelity": bool(hi_fidelity),   # 2× slip nodes + finer mesh + gap layers → smoother raw torque
-        "structured_gap": bool(structured_gap),   # belt gap mesh (Mesh tab "Structured") → honest ripple, ¼==full
-        "airgap_macro": bool(airgap_macro),
+        "structured_gap": bool(_sg),   # belt gap mesh (Mesh tab "Structured") → honest ripple, ¼==full
+        "airgap_macro": bool(_am),
         "iron_template": bool(iron_template),   # harmonic gap coupling (full ring): step-independent RAW ripple
         "geo_mesh": bool(geo_mesh),   # geometry-driven CDT mesh (Mesh tab) — same build as Simulation
+        "element_order": int(_eo),   # 1 = P1 (default); 2 = P2 quadratic "high-fidelity ripple"
 
         # Ambient mesh/sim params the Simulation tab passes but the optimizer used to
         # omit (so get_fem_transient fell back to ITS defaults — e.g. outer_air 1.3 vs
@@ -125,7 +149,7 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         # reproduces exactly when re-run in the Simulation tab.
         "outer_air_factor": float(cfg.get("mesh", {}).get("outer_air_factor", 1.2)),
         "stator_fillet_mm": 0.0,   # Simulation hardcodes 0 (native geometry, no tooth-tip smoothing)
-        "demag": bool(cfg.get("simulation", {}).get("demag", False)),
+        "demag": bool(_demag),   # forced off for P2 (demag pre-pass not wired on P2)
         "component_mesh": json.dumps(cfg.get("mesh", {}).get("component_mesh") or {}),
         "sliding_band": True, "fresh": True, "geo": json.dumps(overrides),
     })
@@ -187,7 +211,8 @@ if __name__ == "__main__":
                       structured_gap=spec.get("structured_gap", False),
                       airgap_macro=spec.get("airgap_macro", False),
                       iron_template=spec.get("iron_template", True),
-                      geo_mesh=spec.get("geo_mesh", True))
+                      geo_mesh=spec.get("geo_mesh", True),
+                      element_order=spec.get("element_order", 1))
         sys.stdout.write("@@RESULT@@" + json.dumps({"ok": True, "res": res}))
     except Exception as e:  # noqa: BLE001
         sys.stdout.write("@@RESULT@@" + json.dumps({"ok": False, "error": str(e)}))

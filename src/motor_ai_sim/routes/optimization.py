@@ -114,7 +114,8 @@ def _eval_cache_key(overrides: Dict[str, float], current_a: float, steps: int,
                     gap_layers: float = 3.0, end_winding_factor: float = 0.0,
                     rotor_eddy: bool = False, hi_fidelity: bool = False,
                     structured_gap: bool = False, airgap_macro: bool = False,
-                    iron_template: bool = True, geo_mesh: bool = True) -> str:
+                    iron_template: bool = True, geo_mesh: bool = True,
+                    element_order: int = 1) -> str:
     payload = {
         "ov": {k: round(float(v), 6) for k, v in sorted(overrides.items())},
         "I": round(float(current_a), 4), "steps": int(steps),
@@ -125,7 +126,7 @@ def _eval_cache_key(overrides: Dict[str, float], current_a: float, steps: int,
         "gl": round(float(gap_layers), 2), "ew": round(float(end_winding_factor), 3),
         "re": bool(rotor_eddy), "hf": bool(hi_fidelity),
         "sg": bool(structured_gap), "am": bool(airgap_macro), "it": bool(iron_template),
-        "gm": bool(geo_mesh),
+        "gm": bool(geo_mesh), "eo": int(element_order),
     }
     return hashlib.md5(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
 
@@ -214,7 +215,8 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
                      gap_layers: float = 3.0, end_winding_factor: float = 0.0,
                      rotor_eddy: bool = False, hi_fidelity: bool = False,
                      structured_gap: bool = False, airgap_macro: bool = False,
-                     iron_template: bool = True, geo_mesh: bool = True) -> Dict[str, Any]:
+                     iron_template: bool = True, geo_mesh: bool = True,
+                     element_order: int = 1) -> Dict[str, Any]:
     """Evaluate ONE (geometry, current, γ) with the real sliding-band transient
     in an isolated subprocess (FEM/LLVM crash → failed design, not a dead API).
     Rebuilds the CadQuery geometry + gmsh mesh for the candidate in-memory.
@@ -234,7 +236,8 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
                        "structured_gap": bool(structured_gap),
                        "airgap_macro": bool(airgap_macro),
                        "iron_template": bool(iron_template),
-                       "geo_mesh": bool(geo_mesh)})
+                       "geo_mesh": bool(geo_mesh),
+                       "element_order": int(element_order)})
     try:
         proc = subprocess.run(
             [sys.executable, "-m", "motor_ai_sim.optimization.refine_proc"],
@@ -442,6 +445,7 @@ class ScanRequest(BaseModel):
     airgap_macro: bool = False              # harmonic gap coupling — SINGLE SOURCE: Mesh tab "Harmonic gap"; RAW ripple step-independent (full ring + sectors)
     iron_template: bool = True              # deterministic template iron mesh (fallback: gmsh)
     geo_mesh: bool = True                   # geometry-driven CDT mesh — SINGLE SOURCE: Mesh tab (same build as Simulation)
+    element_order: int = 1                  # 1 = P1 (default) | 2 = P2 "high-fidelity ripple" — SINGLE SOURCE: Mesh tab "P2 elements" (mesh.p2HiFi); honest ripple, ~2× slower/point
     seed: int = 12345
     run_id: str = ""
 
@@ -497,7 +501,7 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                  pole_copy=None, torque_filter=False, n_sectors=1, gap_layers=3.0,
                  end_winding=0.0, rotor_eddy=False, hi_fidelity=False,
                  structured_gap=False, airgap_macro=False, iron_template=True,
-                 geo_mesh=True) -> None:
+                 geo_mesh=True, element_order=1) -> None:
     import numpy as np  # noqa: F401
     from concurrent.futures import ThreadPoolExecutor, as_completed
     from motor_ai_sim.optimization.optimizer import _pareto_front
@@ -530,7 +534,8 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
             ck = _eval_cache_key(geo_ov, I, steps, coil_temp_c, _NPER, g,
                                  mesh_size_mm, min_size_mm, n_sectors, pole_copy, torque_filter, _cfg_fp,
                                  gap_layers, end_winding, rotor_eddy, hi_fidelity, structured_gap, airgap_macro,
-                                 iron_template=iron_template, geo_mesh=geo_mesh)
+                                 iron_template=iron_template, geo_mesh=geo_mesh,
+                                 element_order=element_order)
             out = _EVAL_CACHE.get(ck)
             if out is not None:
                 with _scan_lock:
@@ -544,7 +549,8 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                                        end_winding_factor=end_winding, rotor_eddy=rotor_eddy,
                                        hi_fidelity=hi_fidelity, structured_gap=structured_gap,
                                        airgap_macro=airgap_macro,
-                                       iron_template=iron_template, geo_mesh=geo_mesh)
+                                       iron_template=iron_template, geo_mesh=geo_mesh,
+                                       element_order=element_order)
                 if out and out.get("ok"):
                     _store_eval(ck, out)   # cache successful evals only (skip transient crashes)
             pt = _point_from_eval(out, ov, I, gi, oi, ripple_max)
@@ -597,7 +603,8 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
             _bck = _eval_cache_key({}, _bI, steps, coil_temp_c, _NPER, 0.0,
                                    mesh_size_mm, min_size_mm, n_sectors, pole_copy, torque_filter, _cfg_fp,
                                    gap_layers, end_winding, rotor_eddy, hi_fidelity, structured_gap, airgap_macro,
-                                 iron_template=iron_template, geo_mesh=geo_mesh)
+                                 iron_template=iron_template, geo_mesh=geo_mesh,
+                                 element_order=element_order)
             base_out = _EVAL_CACHE.get(_bck)
             if base_out is None:
                 base_out = _subprocess_eval({}, _bI, steps, coil_temp_c, n_periods=_NPER,
@@ -607,7 +614,8 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                                             end_winding_factor=end_winding, rotor_eddy=rotor_eddy,
                                             hi_fidelity=hi_fidelity, structured_gap=structured_gap,
                                        airgap_macro=airgap_macro,
-                                       iron_template=iron_template, geo_mesh=geo_mesh)
+                                       iron_template=iron_template, geo_mesh=geo_mesh,
+                                       element_order=element_order)
                 if base_out and base_out.get("ok"):
                     _store_eval(_bck, base_out)
             baseline = _point_from_eval(base_out, {}, _bI, -1, 0, ripple_max)
@@ -700,6 +708,12 @@ def scan_designs(req: ScanRequest):
         # gmsh moving mesh under airgap_macro (template+macro raises) and its
         # assembly noise read as 58-75% ripple vs the Simulation's honest value.
         geo_mesh = bool(getattr(req, 'geo_mesh', True))
+        # P2 "high-fidelity ripple" — SINGLE SOURCE: Mesh tab "P2 elements"
+        # (mesh.p2HiFi).  refine_proc.run_one applies the same P2 coercions the
+        # Simulation route does (force belt, auto natural-symmetry sector, keep
+        # rotor_eddy), so an element_order=2 sweep point matches a Simulation P2
+        # run at the SAME geometry/operating point.  Default 1 = P1 (unchanged).
+        element_order = int(getattr(req, 'element_order', 1) or 1)
         _scan_state.update({"running": True, "done": 0, "total": 0, "result": None,
                             "points": [], "run_id": req.run_id, "error": None, "cancel": False,
                             "cached": 0})
@@ -708,7 +722,8 @@ def scan_designs(req: ScanRequest):
                            float(req.ripple_max_pct), max_geom, int(req.seed), req.run_id,
                            mesh_size, min_size, req.pole_copy, bool(req.torque_filter),
                            n_sectors, gap_layers, end_winding, rotor_eddy, hi_fidelity,
-                           structured_gap, airgap_macro, iron_template, geo_mesh),
+                           structured_gap, airgap_macro, iron_template, geo_mesh,
+                           element_order),
                      daemon=True).start()
     return {"started": True, "steps_per_period": steps, "max_geometries": max_geom,
             "mesh_size_mm": mesh_size, "min_size_mm": min_size}
@@ -1016,6 +1031,12 @@ class DescentRequest(BaseModel):
     iron_template: bool = True
     # Geometry-driven CDT mesh — SINGLE SOURCE: Mesh tab (same build as Simulation).
     geo_mesh: bool = True
+    # P2 "high-fidelity ripple" — SINGLE SOURCE: Mesh tab "P2 elements" (mesh.p2HiFi).
+    # 1 = P1 (default); 2 = P2 quadratic → each candidate is SCORED on the honest
+    # low ripple (no P1 staircase), so a ripple-gated optimization actually targets
+    # the real ripple.  run_one applies the P2 belt + natural-symmetry-sector
+    # coercions per eval.  ~2× slower/eval.
+    element_order: int = 1
     # Pole/slot mesh mode from the UI (Mesh tab "Periodic (identical poles)").
     # None = solver env default; the optimizer must mesh the SAME way Simulation does.
     pole_copy: Optional[bool] = None
@@ -1098,6 +1119,7 @@ class BaselineRequest(BaseModel):
     rotor_eddy: bool = True
     end_winding_factor: float = 0.0
     n_sectors: int = -1
+    element_order: int = 1         # 1 = P1 (default); 2 = P2 — match the descent so the baseline line uses the same ripple model
 
 
 def _msum(m: Dict[str, Any]) -> Dict[str, Any]:
@@ -1295,7 +1317,7 @@ def _recenter_specs(specs, best_x):
 
 
 def _mtpa_gamma_sweep(geom, ref_I, steps, coil_temp, mesh_size, min_size, n_sectors,
-                      lo=-50.0, hi=0.0, step=5.0):
+                      lo=-50.0, hi=0.0, step=5.0, element_order=1):
     """Find the load angle γ that MAXIMISES torque (MTPA) for ONE geometry at a
     reference current — a coarse PARALLEL sweep + parabolic refine.  Run once
     before the geometry search so the whole optimization uses the best phase."""
@@ -1305,7 +1327,8 @@ def _mtpa_gamma_sweep(geom, ref_I, steps, coil_temp, mesh_size, min_size, n_sect
     def _one(gc):
         o = _subprocess_eval(geom, ref_I, steps, coil_temp, n_periods=1.0,
                              gamma_deg=float(gc), mesh_size_mm=mesh_size,
-                             min_size_mm=min_size, n_sectors=n_sectors)
+                             min_size_mm=min_size, n_sectors=n_sectors,
+                             element_order=element_order)
         return (float(gc), float(o["res"].get("T_em_Nm", 0.0) or 0.0)) if o.get("ok") else None
 
     with ThreadPoolExecutor(max_workers=_SCAN_WORKERS) as ex:
@@ -1332,7 +1355,7 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                   torque_filter=False, end_winding=0.0, rotor_eddy=True,
                   gap_layers=2.0, objective="baseline_line",
                   current_bump_pct=10.0, structured_gap=False, airgap_macro=False,
-                  iron_template=True, geo_mesh=True) -> None:
+                  iron_template=True, geo_mesh=True, element_order=1) -> None:
     # NOTE: server-side box-walking (auto_expand) is implemented for CMA-ES only;
     # the gradient path runs a single round, then the UI flags boundary variables
     # for a manual one-click continue.
@@ -1373,7 +1396,8 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                                  end_winding_factor=end_winding, rotor_eddy=rotor_eddy,
                                  gap_layers=gap_layers, structured_gap=structured_gap,
                                  airgap_macro=airgap_macro,
-                                 iron_template=iron_template, geo_mesh=geo_mesh)
+                                 iron_template=iron_template, geo_mesh=geo_mesh,
+                                 element_order=element_order)
             if o.get("ok") and isinstance(o.get("res"), dict):
                 o["res"]["current_a"] = float(cur)   # record solved current in best
             if isinstance(o, dict):
@@ -1407,7 +1431,8 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
             with _descent_lock:
                 _descent_state["phase"] = "mtpa"
             _save_descent_state()
-            _gm = _mtpa_gamma_sweep(x, I, steps, coil_temp, mesh_size, min_size, n_sectors)
+            _gm = _mtpa_gamma_sweep(x, I, steps, coil_temp, mesh_size, min_size, n_sectors,
+                                    element_order=element_order)
             if _gm is not None:
                 g = _gm
                 with _descent_lock:
@@ -1690,7 +1715,7 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                   torque_filter=False, end_winding=0.0, rotor_eddy=True,
                   gap_layers=2.0, objective="baseline_line",
                   current_bump_pct=10.0, structured_gap=False, airgap_macro=False,
-                  iron_template=True, geo_mesh=True) -> None:
+                  iron_template=True, geo_mesh=True, element_order=1) -> None:
     """Covariance-Matrix-Adaptation Evolution Strategy — derivative-free,
     noise-robust geometry search.  Same penalised cost as the gradient descent
     (−(eff/eff0)^w_eff·(td/td0)^w_td + λ·max(0, ripple−ripple_max)), evaluated on
@@ -1721,7 +1746,8 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                                  end_winding_factor=end_winding, rotor_eddy=rotor_eddy,
                                  gap_layers=gap_layers, structured_gap=structured_gap,
                                  airgap_macro=airgap_macro,
-                                 iron_template=iron_template, geo_mesh=geo_mesh)
+                                 iron_template=iron_template, geo_mesh=geo_mesh,
+                                 element_order=element_order)
             # Stamp the SOLVED current onto the result so the best records the
             # operating point it was found at (target-torque solves for it) →
             # saving the design can persist current+γ for a reproducible sim.
@@ -1809,7 +1835,8 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                     with _descent_lock:
                         _descent_state["phase"] = "mtpa"
                     _save_descent_state()
-                    _gm = _mtpa_gamma_sweep(to_geom(x0n), I, steps, coil_temp, mesh_size, min_size, n_sectors)
+                    _gm = _mtpa_gamma_sweep(to_geom(x0n), I, steps, coil_temp, mesh_size, min_size, n_sectors,
+                                            element_order=element_order)
                     if _gm is not None:
                         g = _gm
                         with _descent_lock:
@@ -2118,7 +2145,8 @@ def descent_start(req: DescentRequest):
               max(0.0, min(float(req.current_bump_pct), 100.0)),
               bool(req.structured_gap), bool(req.airgap_macro)),
         kwargs={"iron_template": bool(getattr(req, "iron_template", True)),
-                "geo_mesh": bool(getattr(req, "geo_mesh", True))},
+                "geo_mesh": bool(getattr(req, "geo_mesh", True)),
+                "element_order": int(getattr(req, "element_order", 1) or 1)},
         daemon=True).start()
     return {"started": True, "algorithm": algo, "n_sectors": n_sectors,
             "target_torque_nm": target_torque, "v_peak_limit": v_peak_limit,
@@ -2152,7 +2180,8 @@ def descent_baseline(req: BaselineRequest):
                                 structured_gap=bool(req.structured_gap),
                                 airgap_macro=bool(req.airgap_macro),
                                 iron_template=bool(getattr(req, "iron_template", True)),
-                                geo_mesh=bool(getattr(req, "geo_mesh", True)))
+                                geo_mesh=bool(getattr(req, "geo_mesh", True)),
+                                element_order=int(getattr(req, "element_order", 1) or 1))
 
     a = _ev(I)
     if not a.get("ok"):

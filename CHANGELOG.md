@@ -42,6 +42,22 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
   ripple" mode) auto-forces the structured belt + current-drive magnetostatics.
   The frontend transient request passes `element_order` from a `mesh.p2HiFi`
   flag (default P1); no UI toggle was added.
+- **`element_order` threaded through the Sweep study AND the descent optimizer.**
+  The Sweep chart previously always ran P1, so its ripple showed the P1 staircase
+  (inflated) while the Simulation P2 toggle showed the honest low value. Now the
+  scan path (`ScanRequest.element_order` → `_scan_worker` → `_subprocess_eval` →
+  `refine_proc.run_one`) and the descent optimizer path (`DescentRequest` /
+  `BaselineRequest.element_order` → `_descent_worker`/`_cmaes_worker`/
+  `_mtpa_gamma_sweep` → `_subprocess_eval`) both carry it, `run_one` applying the
+  same P2 self-consistency coercions the Simulation route does (force structured
+  belt, disable macro/demag, keep rotor_eddy, auto-use the natural-symmetry
+  sector). Added to the eval cache key so P1/P2 results don't collide. Frontends
+  (`SweepStudyPanel.tsx`, `motorStore.ts` descent/baseline) send
+  `element_order = mesh.p2HiFi ? 2 : 1` — the same flag the Simulation P2 toggle
+  sets. Validated (40 mm 12s14p, I=30 γ=−20): a P2 sweep point reports the honest
+  **14.9 %** ripple vs P1's **24.4 %** at matched T_avg (0.413 vs 0.416),
+  matching a Simulation P2 run. Default `element_order=1` (P1) is unchanged. A P2
+  sweep/optimization is ~2× slower per point (the user wants honest ripple).
 - **P2 uses Newton-Raphson for the BH saturation (default).** The damped Picard
   needs ~40 sweeps/frame; Newton with the differential-reluctivity tangent
   (pointwise ν(|B|²), J = K(ν) + 2(dν/dB²)(∇A·∇u)(∇A·∇v)) converges in ~13,

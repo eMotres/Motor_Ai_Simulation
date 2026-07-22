@@ -565,6 +565,38 @@ Future: the SAME tangent would accelerate P1 (for P1, B is constant per element
 so pointwise ν == element-mean — no fixed-point subtlety, even cleaner). Not
 wired now (keeping P1 validated-unchanged is the priority).
 
+---
+
+## STAGE 4 — `element_order` in the Sweep study + descent optimizer
+
+The Sweep study and the descent/CMA-ES optimizer ran P1 ONLY, so their ripple
+showed the P1 staircase (inflated) while the Simulation P2 toggle showed the
+honest low value. Now `element_order` threads the whole optimization chain,
+mirroring the Simulation route:
+
+- **`optimization/refine_proc.py :: run_one`** — new `element_order` param;
+  applies the SAME P2 coercions as the Simulation route (force structured belt,
+  disable airgap_macro + demag, keep rotor_eddy, auto-use the natural-symmetry
+  sector `gcd(slots,poles)=num_seg` when n_sectors≤1) and passes
+  `element_order` into the `solver.em_transient` kernel dict. `__main__` reads it
+  from the stdin spec.
+- **`routes/optimization.py`** — `element_order` added to `_subprocess_eval`, the
+  eval CACHE KEY (so P1/P2 don't collide), `ScanRequest`/`DescentRequest`/
+  `BaselineRequest`, `_scan_worker`, `_descent_worker`, `_cmaes_worker`,
+  `_mtpa_gamma_sweep`, and the `descent/start` + `descent/baseline` routes.
+- **Frontends** — `SweepStudyPanel.tsx` and `motorStore.ts` (descent + baseline)
+  send `element_order = mesh.p2HiFi ? 2 : 1` (the same Mesh-tab flag the
+  Simulation P2 toggle sets). No new UI control.
+- The DOE sensitivity panel (`/doe/start`) is a separate path that does not
+  display ripple; left on P1.
+
+**Validation** (`_subprocess_eval`, 40 mm 12s14p, I=30 γ=−20, mesh 1.5, 12 steps,
+sweep-like flags): P1 ripple **24.4 %** (T_avg 0.416) vs P2 **14.9 %** (T_avg
+0.413) — P2 is the honest low value (matches the Simulation P2 run), P1 the
+staircase. P2 eval ~1.5× slower (41 s vs 28 s). element_order=1 unchanged. All
+signatures verified to accept `element_order`; a `DescentRequest(element_order=2)`
+reaches the solver as P2.
+
 **USER GUIDANCE — run P2 at a COARSER mesh than P1.** P2's whole value is
 coarse-mesh accuracy: the convergence proof showed its torque noise floor is
 already low at mesh 1.5–2.0 mm (where P1 still staircases), and P2 cost scales

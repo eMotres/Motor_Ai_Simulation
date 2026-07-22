@@ -685,6 +685,10 @@ export const useMotorStore = create<MotorState>()(
         // Geometry-driven CDT mesh — SINGLE SOURCE: Mesh tab (same build as Simulation).
         let geo_mesh = true;
         try { geo_mesh = JSON.parse(localStorage.getItem('mesh.geoMesh') ?? 'true') !== false; } catch { /* default */ }
+        // P2 "high-fidelity ripple" — SINGLE SOURCE: Mesh tab "P2 elements" (mesh.p2HiFi).
+        // Scores each candidate on the honest P2 ripple (no P1 staircase). ~2× slower/eval.
+        let element_order = 1;
+        try { element_order = (JSON.parse(localStorage.getItem('mesh.p2HiFi') ?? 'false') === true) ? 2 : 1; } catch { /* default */ }
 
         set({ descentRunning: true, descentError: null, descentState: null });
         try {
@@ -696,7 +700,7 @@ export const useMotorStore = create<MotorState>()(
               ripple_max_pct: rippleMax, w_eff: wEff, w_td: wTd,
               max_iters: maxIters, steps_per_period: steps,
               mesh_size_mm, min_size_mm, pole_copy, torque_filter,
-              rotor_eddy, end_winding_factor, gap_layers, coil_temp_c, structured_gap, airgap_macro, iron_template, geo_mesh,
+              rotor_eddy, end_winding_factor, gap_layers, coil_temp_c, structured_gap, airgap_macro, iron_template, geo_mesh, element_order,
               algorithm, n_sectors: nSectors,
               target_torque_nm: targetTorque ?? 0,
               v_peak_limit: vPeakLimit ?? 1e9,
@@ -756,6 +760,8 @@ export const useMotorStore = create<MotorState>()(
         // Geometry-driven CDT mesh — SINGLE SOURCE: Mesh tab (same build as Simulation).
         let geo_mesh = true;
         try { geo_mesh = JSON.parse(localStorage.getItem('mesh.geoMesh') ?? 'true') !== false; } catch { /* default */ }
+        let element_order = 1;
+        try { element_order = (JSON.parse(localStorage.getItem('mesh.p2HiFi') ?? 'false') === true) ? 2 : 1; } catch { /* default */ }
         set({ baselineBusy: true, baselineError: null });
         try {
           const res = await fetch(`${API_BASE_URL}/api/optimization/descent/baseline`, {
@@ -764,7 +770,7 @@ export const useMotorStore = create<MotorState>()(
               operating_point: { gamma_deg: op0.gamma_deg ?? 0, current_a: op0.current_a, rpm: op0.rpm },
               current_bump_pct: currentBumpPct, steps_per_period: steps, n_sectors: nSectors,
               mesh_size_mm, min_size_mm, pole_copy, torque_filter,
-              rotor_eddy, end_winding_factor, gap_layers, coil_temp_c, structured_gap, airgap_macro, iron_template, geo_mesh,
+              rotor_eddy, end_winding_factor, gap_layers, coil_temp_c, structured_gap, airgap_macro, iron_template, geo_mesh, element_order,
             }),
           });
           if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);

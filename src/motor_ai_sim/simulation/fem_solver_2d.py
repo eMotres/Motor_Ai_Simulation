@@ -5204,17 +5204,13 @@ def fem_transient_sliding_band(
     element_order = int(element_order)
     if element_order not in (1, 2):
         raise ValueError(f"element_order must be 1 or 2, got {element_order}")
-    if element_order == 2:
-        # P2 on the moving sliding band needs edge-midpoint DOF stitching across
-        # the slip cut, which is not implemented yet.  Fail loudly instead of
-        # returning a P1 field mislabelled as P2.  The P2 field solve itself IS
-        # implemented and validated for the STATIC case (solve_magnetostatics_p2,
-        # p2_cogging_proof.py) — see P2_NOTES.md, Stage 2/3.
-        raise NotImplementedError(
-            "element_order=2 (P2) is not yet wired into the sliding-band "
-            "transient (moving-cut edge-midpoint stitching pending). Use the "
-            "standalone static P2 solver solve_magnetostatics_p2 / "
-            "p2_cogging_proof.py for P2 results. See P2_NOTES.md.")
+    # NOTE: element_order == 2 (P2) is handled by a dedicated magnetostatic
+    # sliding-band branch further down (just after `dt` is defined), once the
+    # stitched mesh + belt ring/cut data have been built.  It implements the
+    # moving-cut edge-midpoint DOF stitching (the historical blocker) for the
+    # merged, full-ring structured belt.  The guard there raises
+    # NotImplementedError for the still-unsupported sub-cases (moving/macro band,
+    # sector wedge, eddy/voltage/demag).  See P2_NOTES.md, Stage 2/3.
     mesh_size_mm = float(mesh_size_mm)
     min_size_mm = float(min_size_mm)
     cfg = get_config(); sim = cfg.get("simulation", {})
@@ -6206,6 +6202,272 @@ def fem_transient_sliding_band(
     T_series = []; psiA = []; psiB = []; psiC = []
     IA = []; IB = []; IC = []; tt = []
     dt = (1.0 / max(f_elec, 1e-9)) * n_periods / n_total
+
+    # ═══════════════════════════════════════════════════════════════════════
+    #  P2 (quadratic) SLIDING-BAND MAGNETOSTATIC PATH  (element_order == 2)
+    # ═══════════════════════════════════════════════════════════════════════
+    # B = curl A is LINEAR per element instead of piecewise-constant, so the
+    # Arkkio air-gap torque is SMOOTH where P1 staircases.  The blocker solved
+    # here is the moving-cut EDGE-MIDPOINT DOF stitching: P2 puts a dof on every
+    # element edge, including the belt's rotor/stator interface edges, so the
+    # signed union-find that welds the slip cut must pair those edge midpoints
+    # (not just the vertices) as the rotor shifts by m slip nodes.  Assembled on
+    # the SINGLE stitched mesh (mesh_all) — simplest correct P2 assembly — with a
+    # per-frame P2 projection Pro2 that welds ring vertices AND ring-edge
+    # midpoints.  Magnetostatic per frame (no σ∂A/∂t): for the cogging / ripple
+    # goal this is exactly the physics that matters; eddy on P2 is a refinement.
+    if element_order == 2:
+        from skfem import ElementTriP2 as _P2E
+        if _moving:
+            raise NotImplementedError(
+                "P2 + moving/harmonic-macro band not implemented; run the merged "
+                "structured belt (structured_gap=True, element_order=2).")
+        if not _full_ring:
+            raise NotImplementedError(
+                "P2 sliding band supports the FULL RING (n_sectors<=1) only — the "
+                "sector anti-periodic edge-midpoint stitching is pending. Use "
+                "n_sectors=-1 for P2. See P2_NOTES.md.")
+        if eddy or _vdrive or demag or rotor_eddy:
+            raise NotImplementedError(
+                "P2 path is magnetostatic-per-frame only (no eddy / voltage / "
+                "demag / rotor-eddy coupling yet). See P2_NOTES.md.")
+
+        b2 = Basis(mesh_all, _P2E())
+        b2_0 = b2.with_element(ElementTriP0())      # P0 for per-element ν interpolate
+        N2 = b2.N
+        nst = int(Tts.shape[1])                      # rotor elems in mesh_all are +nst
+        n_all_el = int(mesh_all.t.shape[1])
+
+        @BilinearForm
+        def _stiff_nu2(u, v, w):
+            return w["nu"] * _dot(_grad(u), _grad(v))
+
+        # ── vertex & edge dof maps ───────────────────────────────────────────
+        vdof = b2.nodal_dofs[0]                       # global vertex id -> P2 dof
+        fdof = b2.facet_dofs[0]                       # facet (edge) id  -> P2 dof
+        _fac = mesh_all.facets
+        _fa = np.minimum(_fac[0], _fac[1]); _fb = np.maximum(_fac[0], _fac[1])
+        _emap = {(int(_fa[i]), int(_fb[i])): i for i in range(_fac.shape[1])}
+
+        def _edge_dof(va, vb):
+            fi = _emap.get((va, vb) if va < vb else (vb, va))
+            return None if fi is None else int(fdof[fi])
+
+        # ── P2 sources on the stitched mesh ──────────────────────────────────
+        # magnet: per-element M over ALL elements (rotor block offset by nst)
+        _mx_all = np.zeros(n_all_el); _my_all = np.zeros(n_all_el)
+        _mx_all[nst:] = _Mx_glob * _br_glob          # _br_glob folds magnet_scale
+        _my_all[nst:] = _My_glob * _br_glob
+        f_mag2 = asm(_msrc, b2, mx=b2_0.interpolate(_mx_all),
+                     my=b2_0.interpolate(_my_all))
+        # per-phase UNIT-current stator coil sources
+        f_coil2 = {'A': np.zeros(N2), 'B': np.zeros(N2), 'C': np.zeros(N2)}
+        for _ph in ('A', 'B', 'C'):
+            _Iu = {'A': 0.0, 'B': 0.0, 'C': 0.0}; _Iu[_ph] = 1.0
+            _mu = build_materials(_Iu, dom.winding_layout,
+                                  getattr(cs, "polys", polys), 0.0,
+                                  slot_area_m2, n_wires)
+            for tag, idx in half["s"]["cells"].items():
+                m_ = _mu.get(int(tag))
+                if m_ is None or m_.J_z == 0.0:
+                    continue
+                sb = Basis(mesh_all, _P2E(), elements=np.asarray(idx, int))
+                f_coil2[_ph] += asm(_f1, sb) * m_.J_z
+
+        # ── per-element base ν + saturable element sets (mesh_all element ids) ─
+        nu_base2 = np.empty(n_all_el)
+        for _hn, _off in (("s", 0), ("r", nst)):
+            for tag, idx in half[_hn]["cells"].items():
+                nu_base2[np.asarray(idx, int) + _off] = 1.0 / (
+                    MU0 * max(mu0[_hn].get(int(tag), 1.0), 1.0))
+        _sat2 = []          # (elem_ids_in_mesh_all, bh_curve)
+        for _hn, _off in (("s", 0), ("r", nst)):
+            for tag, curve in sat_bh[_hn].items():
+                _sat2.append((np.asarray(half[_hn]["cells"][tag], int) + _off, curve))
+
+        # ── outer Dirichlet: facet-based so P2 edge midpoints are pinned too ──
+        _out_fac2 = mesh_all.facets_satisfying(
+            lambda x: np.hypot(x[0], x[1]) >= r_all.max() - 5e-4)
+        _D2_ids = np.asarray(b2.get_dofs(facets=_out_fac2).flatten(), int)
+
+        # ── per-frame P2 projection: weld ring VERTICES and ring EDGE midpoints
+        _kk_all = np.arange(Nring)
+        _kk1_all = (np.arange(Nring) + 1) % Nring     # full ring: closed
+        _re_dofs = np.array([_edge_dof(int(rring[a]) + nsn, int(rring[b]) + nsn)
+                             for a, b in zip(_kk_all, _kk1_all)], dtype=object)
+        _n_redge = int(sum(x is not None for x in _re_dofs))
+        log.info("P2 belt: N2=%d dofs, ring=%d nodes, %d/%d ring-edge midpoints paired",
+                 N2, Nring, _n_redge, Nring)
+
+        def _build_Pro2(m_shift):
+            suf = _SignedUF(N2)
+            j0 = (_kk_all + int(m_shift)) % Nring
+            j1 = (j0 + 1) % Nring
+            for kk in range(Nring):
+                suf.union(int(vdof[int(rring[kk]) + nsn]),
+                          int(vdof[int(sring[j0[kk]])]), 1)
+                re = _re_dofs[kk]
+                if re is None:
+                    continue
+                se = _edge_dof(int(sring[j0[kk]]), int(sring[j1[kk]]))
+                if se is not None:
+                    suf.union(int(re), int(se), 1)
+            roots = [suf.find(i) for i in range(N2)]
+            rid = np.array([r for r, _ in roots])
+            rsg = np.array([s for _, s in roots], float)
+            uniq, inv = np.unique(rid, return_inverse=True)
+            Pro = _coo((rsg, (np.arange(N2), inv)),
+                       shape=(N2, uniq.size)).tocsr()
+            return Pro, np.unique(inv[_D2_ids])
+
+        # ── P2 flux linkage (vertex-average per stator coil element) ─────────
+        _As_v = vdof[:nsn]                            # stator vertex -> P2 dof
+        _sc_psi2 = p.stack_length * NS / float(n_parallel)
+
+        def _psi2(A2):
+            As_ = A2[_As_v]
+            A_tri = (As_[Tts[0]] + As_[Tts[1]] + As_[Tts[2]]) / 3.0
+            pa = pb = pc = 0.0
+            for idx_, ar_, dir_, ph_ in coil_info:
+                sa_ = float(np.sum(ar_))
+                if sa_ <= 0:
+                    continue
+                v_ = dir_ * float(np.sum(A_tri[idx_] * ar_)) / sa_
+                if ph_ == 'A':   pa += v_
+                elif ph_ == 'B': pb += v_
+                else:            pc += v_
+            return _sc_psi2 * pa, _sc_psi2 * pb, _sc_psi2 * pc
+
+        # ── frame loop ───────────────────────────────────────────────────────
+        _T2 = []; _psiA = []; _psiB = []; _psiC = []; _tt = []
+        _IA = []; _IB = []; _IC = []
+        _pic_iters = []; _pic_res_max = 0.0
+        _snap2 = None
+        # FROZEN PERMEABILITY (frozen_nu): converge the saturation ONCE at frame
+        # 0 (extended Picard) then hold the per-element ν fixed for every rotor
+        # position — the industry-standard honest cogging/ripple method.  It
+        # removes the per-frame saturation-Picard jitter (which does NOT converge
+        # to _PIC_TOL on a coarse mesh and otherwise MASKS the discretisation
+        # ripple that P2 actually fixes), so the remaining T(θ) variation is
+        # purely geometric: P1 staircases, P2 is smooth.
+        nu_all2 = nu_base2.copy()      # persists across frames when frozen_nu
+        for k in range(n_total):
+            if progress_cb is not None:
+                try: progress_cb(k, n_total)
+                except Exception: pass
+            theta = (k / n_total) * period_mech * n_periods
+            m_shift = int(round(theta / spacing))
+            theta_eff = m_shift * spacing
+            Ist = _currents(theta_eff)
+            _IA.append(Ist['A']); _IB.append(Ist['B']); _IC.append(Ist['C'])
+            f = (f_mag2 + Ist['A'] * f_coil2['A']
+                 + Ist['B'] * f_coil2['B'] + Ist['C'] * f_coil2['C'])
+            Pro, outer_red = _build_Pro2(m_shift)
+            if not frozen_nu:
+                nu_all2 = nu_base2.copy()          # re-converge every frame
+            elif k == 0:
+                nu_all2 = nu_base2.copy()          # frozen: converge once at k=0
+            _n_pic2 = (max(nonlinear_iterations, 40) if (frozen_nu and k == 0)
+                       else (1 if frozen_nu else max(1, nonlinear_iterations)))
+            A2 = np.zeros(N2)
+            _res = 0.0; _nit = 0
+            _pic_ok = 0; _pic_r_prev = None; _pic_om = 0.5   # Irons–Tuck state
+            for it in range(_n_pic2):
+                _nit = it + 1
+                K = asm(_stiff_nu2, b2, nu=b2_0.interpolate(nu_all2))
+                Kr = (Pro.T @ K @ Pro).tocsr()
+                A2 = Pro @ _sksolve(*condense(Kr, Pro.T @ f, D=outer_red))
+                if (frozen_nu and k > 0) or not _sat2:
+                    break                          # frozen frame: 1 linear solve
+                Bx_q, By_q, dxq = _p2_B_at_quad(b2, A2)
+                _area = dxq.sum(axis=1)
+                Bmag_el = (np.sqrt(Bx_q ** 2 + By_q ** 2) * dxq).sum(axis=1) \
+                    / np.maximum(_area, 1e-30)
+                # Gather the WHOLE saturable ν state into one vector so the
+                # relaxation and residual see the global field (as the P1 loop).
+                _vo = np.concatenate([nu_all2[_ids] for _ids, _ in _sat2])
+                _vn = np.concatenate([
+                    1.0 / (MU0 * np.maximum(_mu_r_from_bh_vec(_c, Bmag_el[_ids]), 1.0))
+                    for _ids, _c in _sat2])
+                _rr = _vn - _vo
+                _res = float(np.linalg.norm(_rr) / max(np.linalg.norm(_vo), 1e-30))
+                # IRONS–TUCK (vector Aitken Δ²) adaptive relaxation — same as P1.
+                if _pic_r_prev is not None:
+                    _dr = _rr - _pic_r_prev; _den = float(_dr @ _dr)
+                    if _den > 0.0:
+                        _pic_om = float(np.clip(
+                            -_pic_om * float(_pic_r_prev @ _dr) / _den, 0.05, 1.0))
+                _pic_r_prev = _rr
+                _vu = _vo + _pic_om * _rr
+                _p0 = 0
+                for _ids, _c in _sat2:
+                    nu_all2[_ids] = _vu[_p0:_p0 + _ids.size]; _p0 += _ids.size
+                if _res < _PIC_TOL:
+                    _pic_ok += 1
+                    if _pic_ok >= 2:
+                        break
+                else:
+                    _pic_ok = 0
+            _pic_iters.append(_nit); _pic_res_max = max(_pic_res_max, _res)
+            Tq = _arkkio_torque_p2(mesh_all, A2, b2, p.r_rotor_out,
+                                   p.r_stator_in, p.stack_length) * NS
+            _T2.append(Tq)
+            _pa, _pb, _pc = _psi2(A2)
+            _psiA.append(_pa); _psiB.append(_pb); _psiC.append(_pc)
+            _tt.append(k * dt)
+            if return_field and ((field_first and k == 0)
+                                 or (not field_first and k == n_total - 1)):
+                _Bx_all, _By_all = _p2_B_at_quad(
+                    Basis(mesh_all, _P2E()), A2)[:2]
+                _snap2 = {"P_mm": (mesh_all.p * 1e3).copy(),
+                          "T": mesh_all.t.copy(),
+                          "A": A2[vdof].copy(),
+                          "nsn": int(nsn)}
+        # ── metrics ──────────────────────────────────────────────────────────
+        T_arr = np.asarray(_T2, float)
+        Tavg = float(T_arr.mean()) if T_arr.size else 0.0
+        _Tf, Trip, Trip_raw, Tnoise = band_limit_torque(
+            _T2, int(n_steps_per_period), int(round(n_periods)))
+        # back-EMF V = R·i + dψ/dt (central diff on the reported window)
+        def _ddt(arr):
+            a = np.asarray(arr, float)
+            return (np.gradient(a) / dt).tolist() if a.size > 1 else [0.0] * a.size
+        VA = _ddt(_psiA); VB = _ddt(_psiB); VC = _ddt(_psiC)
+        Vpk = float(np.max(np.abs(VA + VB + VC))) if _psiA else 0.0
+        _ang = [(k / n_total) * period_mech * n_periods for k in range(n_total)]
+        log.info("P2 belt transient done: %d frames, T_avg=%.5f Nm, "
+                 "ripple_raw=%.2f%%, picard_max_res=%.2e", n_total, Tavg,
+                 Trip_raw, _pic_res_max)
+        return {
+            "method": "sliding_band_p2", "element_order": 2,
+            "loss_model": "none(magnetostatic P2)",
+            "n_steps": n_total, "n_steps_per_period": int(n_steps_per_period),
+            "n_periods": float(n_periods), "rpm": rpm, "f_elec_Hz": f_elec,
+            "dt_s": dt, "T_period_s": (1.0 / f_elec if f_elec > 1e-9 else 0.0),
+            "time_s": _tt, "rotor_angle_deg": _ang,
+            "T_em_Nm": _T2, "T_avg_Nm": Tavg, "T_ripple_pct": Trip_raw,
+            "T_ripple_raw_pct": Trip_raw, "T_ripple_filt_pct": Trip,
+            "T_noise_floor_pct": round(float(Tnoise), 2),
+            "T_em_raw_Nm": list(_T2), "T_em_filt_Nm": _Tf,
+            "psi_A_Wb": _psiA, "psi_B_Wb": _psiB, "psi_C_Wb": _psiC,
+            "V_A": VA, "V_B": VB, "V_C": VC, "V_peak": Vpk,
+            "I_A": _IA, "I_B": _IB, "I_C": _IC,
+            "P_cu_W": [0.0] * n_total, "P_fe_W": [0.0] * n_total,
+            "P_mag_eddy_W": [0.0] * n_total, "P_loss_total_W": [0.0] * n_total,
+            "R_phase_ohm": R_phase, "n_slip_nodes": int(Nring),
+            "n_parallel": int(n_parallel),
+            "picard_iters_mean": (round(float(np.mean(_pic_iters)), 1)
+                                  if _pic_iters else 0.0),
+            "picard_iters_max": (int(max(_pic_iters)) if _pic_iters else 0),
+            "picard_resid_max": round(float(_pic_res_max), 6),
+            "picard_tol": float(_PIC_TOL),
+            "picard_converged": bool(_pic_res_max < _PIC_TOL),
+            "coil_temp_C": float(coil_temp_c),
+            "end_winding_factor": float(_k_end_used),
+            "drive": "current",
+            "field": _snap2,
+        }
+
     # Eddy-current (magnetodynamic) coupling: backward-Euler adds (Msig/dt) to the
     # stiffness and (Msig/dt)·A_prev to the RHS.  Msig is 0 outside solid
     # conductors, so air/iron are unaffected.  A_prev follows the material points

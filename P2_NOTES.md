@@ -151,32 +151,101 @@ validated for the STATIC case (the proof).  Remaining for a full P2 transient:
 
 ---
 
-## STAGE 1 EMPIRICAL RESULT — blocked by the 0.2 mm air gap (honest)
+## STAGE 1 EMPIRICAL RESULT — blocked by the 0.2 mm air gap (honest, superseded)
 
-Ran the proof at the fixed commit (22b4113), mesh 1.6 & 1.2 mm, 6 angles:
-- P2 torque = EXACTLY 0.0 at every angle (θ=0 gave −3e-31; θ=0.714, 1.429 gave +0.0).
-- P1 torque = NaN at every angle (singular matrix).
+Ran the remesh-per-angle proof at commit 22b4113, mesh 1.6 & 1.2 mm, 6 angles:
+- P2 torque = EXACTLY 0.0 at every angle; P1 = NaN (singular matrix).
 
 ROOT CAUSE (not a P2 physics failure): this motor's air gap is only **0.2 mm**
-(r_rotor_out 13.00 → r_stator_in 13.20). The remesh-per-angle CDT mesher
-(`build_mesh_from_polygons`) does NOT refine the gap below ~1 mm, so the Arkkio
-band [13.00, 13.20] mm contains **zero triangles** → the torque integral sums
-nothing (P2 → exactly 0) and the rotor/stator become disconnected across the
-un-meshed gap → the P1 stiffness is singular (NaN). The iron field still solves
-(B_max 1.64 T) — only the GAP is unresolved.
-
+(r_rotor_out 13.00 → r_stator_in 13.20). The remesh-per-angle CDT mesher does
+NOT refine the gap below ~1 mm, so the Arkkio band contains **zero triangles**.
 This is precisely WHY the production transient uses a STRUCTURED BELT with forced
-gap layers (gap_layers) instead of a free CDT mesh. The remesh-per-angle proof
-approach is fundamentally unsuited to a 0.2 mm gap.
+gap layers. The remesh-per-angle proof is unsuited to a 0.2 mm gap → moved the
+P1-vs-P2 comparison onto the belt (Stage 2 below), which resolves it.
 
-### Consequence for the P2 programme
-A clean empirical P1-vs-P2 cogging proof on THIS motor needs the gap resolved,
-which means P2 on the STRUCTURED BELT — i.e. exactly the Stage-2 transient work
-(pair P2 edge-midpoint DOFs across the sliding cut). The standalone remesh proof
-cannot demonstrate it here. The P2 static field solve itself is validated as
-correct (converged, B_max 1.64 T, symmetric-position torque ≈ 0); what remains is
-running it on a gap-resolving mesh, which is the belt/transient integration.
+---
 
-STATUS: P2 static solver = built + field-validated. Empirical cogging proof on the
-40 mm motor = blocked by gap meshing. Full production fix (P2 transient on the
-belt) = not done; the band edge-DOF pairing is the single remaining blocker.
+## STAGE 2 DONE — P2 EDGE-DOF STITCHING ON THE BELT (the blocker, SOLVED)
+
+`fem_transient_sliding_band(..., element_order=2)` now runs the FULL transient
+on the structured belt. Implemented as a dedicated magnetostatic P2 branch
+(`if element_order == 2:` just after `dt` is defined in the frame-loop prep),
+assembled on the SINGLE stitched mesh `mesh_all` (simplest correct P2 assembly)
+with a per-frame P2 projection that welds the belt interface:
+
+- **The blocker fix.** P2 adds a dof on every element edge, including the belt's
+  rotor-ring and stator-ring interface edges. `_build_Pro2(m_shift)` extends the
+  signed union-find (`_SignedUF`) so, for each ring segment kk, it welds BOTH the
+  ring **vertex** `rring[kk] ↔ sring[(kk+m)%Nring]` AND the ring-**edge midpoint**
+  `edge(rring[kk],rring[kk+1]) ↔ edge(sring[j],sring[j+1])`, sign +1 (full ring).
+  A `mesh.facets`→facet-index map (`_emap`/`_edge_dof`) locates each edge's P2
+  dof via `basis.facet_dofs`. Validated: **all Nring ring-edge midpoints paired**
+  (168/168 at slip24, 336/336 at slip48).
+- Per-element ν (P0 interpolate), Irons–Tuck saturation Picard (identical to P1),
+  torque via `_arkkio_torque_p2` (∇A at element quad points → linear-B Arkkio),
+  facet-based outer Dirichlet (`get_dofs(facets=...)`) so P2 boundary midpoints
+  are pinned. `frozen_nu` supported (converge ν once, freeze). Magnetostatic per
+  frame — no σ∂A/∂t.
+
+### STAGE A + B RESULTS (real, measured — 40 mm 12s14p structured belt, full ring)
+
+| case | metric | P1 | P2 | P2 win |
+|------|--------|----|----|--------|
+| **No-load cogging** (mesh 1.0 mm, Nring 336, 24 steps, non-frozen) | mean T | −0.0153 Nm | **+0.0009 Nm** | 16× closer to physical 0 |
+|   | raw p-p | 0.0731 Nm | **0.0296 Nm** | **2.5×** smoother |
+|   | jitter (RMS Δ²T, staircase signature) | 0.0338 | **0.0161** | **2.1×** |
+| **Loaded** I=30 γ=−20 (mesh 1.5 mm, Nring 336, 12 steps, non-frozen) | mean T | 0.371 Nm | 0.381 Nm | — |
+|   | raw ripple | 24.9 % | **14.8 %** | **1.7×** |
+|   | noise floor (forbidden-order RMS = numerical staircase) | 3.88 % | **1.08 %** | **3.6×** |
+
+The P1 no-load mean carries a DC offset (the merged half-mesh Arkkio shear); P2's
+linear-per-element gap B restores the physically-correct near-zero cogging mean
+AND halves the p-p / jitter. Under load, P2 cuts the forbidden-order noise floor
+(the honest measure of non-physical sliding-band staircase) by 3.6×.
+
+**Methodology honesty notes (learned the hard way, recorded so the next agent
+doesn't repeat it):**
+- **Use the NON-FROZEN (per-frame re-converged ν) path for the comparison, not
+  `frozen_nu`.** On this motor `frozen_nu` at load gives ~125 % ripple for BOTH
+  P1 and P2 (verified on the untouched P1 path too) — freezing frame-0
+  saturation is simply wrong once armature reaction rotates the saturation
+  pattern. It is fine only for very light / no-load saturation.
+- **Mesh must resolve the geometry** (≲ slot_width/3, i.e. ≲1–1.5 mm here). On a
+  3 mm mesh the coarse-geometry cogging dwarfs the discretisation-order
+  difference and P1 ≈ P2 (both ~garbage) — the solver's own comment already
+  warns 3 mm is under-resolved. The wins above are at 1.0–1.5 mm.
+- Both orders were run at matched settings so the comparison is controlled;
+  neither fully converges the per-frame ν (picard res ~0.05–0.1 at the caps
+  used), but they sit at comparable convergence so the RELATIVE smoothness is
+  fair.
+
+### Cost
+P2 non-frozen is ~4–6× slower than P1 (per-frame ν re-convergence over ~2× the
+dof count): no-load 24-frame mesh-1.0 run ≈ 3 min for P2 vs ~30 s for P1.
+`frozen_nu` makes P2 much cheaper (frame 0 converges, later frames = 1 solve).
+
+---
+
+## STAGE 3 — wiring + what remains
+
+- `element_order` is forwarded through `em_transient_eval` (STAGE C done) — any
+  consumer (Simulation route, optimizer, sweep) can request P2 by passing
+  `element_order=2`. Sector/eddy P2 requests raise a clear `NotImplementedError`
+  rather than silently returning P1.
+- The P1 default (`element_order=1`) is byte-for-byte unchanged (verified:
+  n_sectors=2 loaded run still `method=sliding_band`, T_avg 0.587).
+
+### NOT done (raises NotImplementedError, documented in-code)
+1. **Sector (anti-periodic) wedge** `n_sectors≥2` on P2 — needs the cut-edge
+   midpoints paired with the `_bc_sign` sign and the ring-edge sign handled at
+   the sector-boundary wrap. Full ring (`n_sectors=-1`) is the physical
+   reference and is what the P2 path supports today. The production config uses
+   `n_sectors=2`, so wiring P2 into the default Simulation still needs this.
+2. **Eddy / voltage-drive / demag / rotor-eddy** coupling on P2 DOFs — the P2
+   branch is magnetostatic-per-frame (the right physics for the cogging/ripple
+   goal; eddy is a loss refinement).
+3. **Moving / harmonic-macro band** on P2 (structured merged belt only for now).
+
+STATUS: P2 static solver = built + validated. **P2 full transient on the belt =
+DONE and validated** (blocker solved, real P1-vs-P2 wins above). Remaining =
+sector anti-periodic P2 + eddy/voltage P2 (both cleanly gated).

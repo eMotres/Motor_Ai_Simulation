@@ -7,6 +7,26 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
 
 ## [Unreleased]
 
+### Added
+- **P2 (second-order / quadratic) elements now run the full sliding-band
+  transient** on the gap-resolving structured belt (`element_order=2`,
+  `structured_gap=True`, full ring `n_sectors=-1`). B = curl A is LINEAR per
+  element instead of piecewise-constant, so the air-gap Arkkio torque is
+  physically smooth where P1 staircases — no filters. The historical blocker,
+  pairing the P2 **edge-midpoint** DOFs across the moving slip cut, is solved:
+  the signed union-find that welds the belt now welds each interface ring
+  vertex AND its ring-edge midpoint to the partner as the rotor shifts by *m*
+  slip nodes (validated: all ring-edge midpoints paired). Assembled on the
+  single stitched mesh with a facet-based outer Dirichlet BC so the P2 boundary
+  midpoints are pinned too. Real measured wins (40 mm 12s14p, structured belt):
+  no-load cogging mean −0.015→**+0.001 Nm** (P2 restores the physical zero),
+  p-p 0.073→**0.030 Nm** (2.5×), staircase jitter 0.034→**0.016** (2.1×);
+  loaded (I=30, γ=−20) ripple 24.9→**14.8 %**, forbidden-order noise floor
+  3.9→**1.1 %** (3.6× less numerical staircase). The P1 default
+  (`element_order=1`) is byte-for-byte unchanged. Not yet on P2: the
+  anti-periodic **sector** wedge (`n_sectors≥2`), and eddy/voltage/demag
+  coupling — these raise a clear `NotImplementedError`. See `P2_NOTES.md`.
+
 ### Fixed
 - **Geo mesh honours "Max element size" as the actual element edge.** The CDT
   cell area was derived LINEARLY from the requested size (0.3·L instead of

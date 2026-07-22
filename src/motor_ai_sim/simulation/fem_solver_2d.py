@@ -6223,6 +6223,18 @@ def fem_transient_sliding_band(
     if element_order == 2:
         from skfem import ElementTriP2 as _P2E
         from scipy.sparse.linalg import splu as _splu2
+        # ONE persistent MKL PARDISO solver for the whole run: it caches the
+        # symbolic factorization and reuses it across the same-pattern Picard
+        # sweeps of a frame (re-analysing only when the pattern changes — new
+        # frame / new slip pairing).  None ⇒ pypardiso unavailable ⇒ SuperLU.
+        try:
+            if _os_sb.environ.get("SB_NO_PARDISO") == "1":
+                raise ImportError("disabled via SB_NO_PARDISO")
+            import pypardiso as _pypard2
+            _pardiso2 = _pypard2.PyPardisoSolver()
+        except Exception as _pae:
+            log.info("pypardiso unavailable (%s) — using SuperLU for P2", _pae)
+            _pardiso2 = None
         if _moving:
             raise NotImplementedError(
                 "P2 + moving/harmonic-macro band not implemented; run the merged "
@@ -6488,8 +6500,21 @@ def fem_transient_sliding_band(
                 Kff = Kr[_free2][:, _free2].tocsc()
                 # Direct solve on the precomputed free sub-system (homogeneous
                 # outer Dirichlet, A=0 on the boundary), skipping condense's
-                # per-sweep re-slicing overhead.
-                _xf2 = _splu2(Kff).solve(_bff2)
+                # per-sweep re-slicing overhead.  Prefer the MKL PARDISO solver
+                # (multi-threaded, and it reuses the symbolic factorization across
+                # the same-pattern sweeps of a frame) — measured 1.8–2.4× faster
+                # than SuperLU on the ~28 k full-ring system (≈1.1× on the small
+                # sector).  Falls back to SuperLU if pypardiso is unavailable or
+                # raises, so a run can never break.
+                if _pardiso2 is not None:
+                    try:
+                        _xf2 = _pardiso2.solve(Kff, _bff2)
+                    except Exception as _pe2:
+                        log.warning("pypardiso solve failed (%s) — SuperLU fallback", _pe2)
+                        _pardiso2 = None
+                        _xf2 = _splu2(Kff).solve(_bff2)
+                else:
+                    _xf2 = _splu2(Kff).solve(_bff2)
                 _xred2 = np.zeros(Pro.shape[1]); _xred2[_free2] = _xf2
                 A2 = Pro @ _xred2
                 if (frozen_nu and k > 0) or not _sat2:

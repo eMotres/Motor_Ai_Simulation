@@ -42,6 +42,15 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
   ripple" mode) auto-forces the structured belt + current-drive magnetostatics.
   The frontend transient request passes `element_order` from a `mesh.p2HiFi`
   flag (default P1); no UI toggle was added.
+- **P2 solve uses MKL PARDISO (pypardiso) when available.** The P2 per-frame cost
+  is factorization-bound; benchmarked on the real Picard sweep sequence, a
+  persistent `PyPardisoSolver` (symbolic reuse across same-pattern sweeps) beats
+  SuperLU 1.8–2.4× on the ~28k full-ring system the app uses (≈1.1× on the small
+  sector). Wired into the P2 solve with a try/except SuperLU fallback (never
+  breaks a run) and an `SB_NO_PARDISO=1` debug gate; NOT wired into P1 (kept on
+  scipy to guarantee byte-for-byte P1 output). Integrated: P2 full-ring 7.97→6.58
+  s/frame, sector 3.51→2.87 s/frame; mean torque identical, ripple <0.6%. Exact
+  to 3e-12.
 - **P2 transient sped up ~1.8× (converged) via ν warm-start + stiffness split.**
   The P2 branch reset the BH-saturation ν to base every frame (re-converging from
   cold, ~70 Picard sweeps) and re-assembled the whole mesh each sweep. Now: ν

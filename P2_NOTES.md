@@ -468,14 +468,47 @@ Three fixes (physics UNCHANGED — same fixed point, just reached cheaper):
 it now reports converged; physics matches to <1 % (T_avg 0.65 %, ripple 0.5 %),
 no-load mean stays ~0. vs P1-converged (1.48 s/frame) P2 is now ~2.4× (was ~4.3×).
 
-**What did NOT help (measured, rejected):** the per-frame solve is
-FACTORIZATION-bound (78 % of wall: 33 s of 42 s is `spsolve`/`splu` of the ~13 k
-reduced system, 500×). Reusing the LU as a warm-started GMRES preconditioner
-across sweeps FAILED (325 s!) — ν changes too much between sweeps, so the frozen
-LU is a poor preconditioner and GMRES burns its max iters then re-factorizes
-anyway. No UMFPACK available (SuperLU only). Precomputing the free-DOF slice +
-`splu` (skipping `condense`) shaved ~6 %. So P2's floor here is the direct solve
-of a 2× larger system than P1 — inherent to quadratic elements.
+**The per-frame solve is FACTORIZATION-bound** (78 % of wall: 33 s of 42 s is the
+direct factorization of the ~13 k reduced system, 500×). Reusing the LU as a
+warm-started GMRES preconditioner across sweeps FAILED (325 s!) — ν moves too
+much between sweeps, so the frozen LU is a poor preconditioner and GMRES burns
+its max iters then re-factorizes anyway. Precomputing the free-DOF slice + `splu`
+(skipping `condense`) shaved ~6 %.
+
+### MKL PARDISO for the factorization (pypardiso)
+
+`pypardiso` (Intel MKL PARDISO, multi-threaded) is installed. Benchmarked on the
+REAL Picard sequence (8 consecutive sweeps dumped from a frame — same sparsity
+pattern, ν-dependent values — with a PERSISTENT `PyPardisoSolver` reused across
+solves so it caches the symbolic factorization):
+
+| system | scipy `splu` (refactor each) | pypardiso (warm, reuse) | speedup | exact? |
+|--------|------------------------------|-------------------------|---------|--------|
+| sector, ~12 k dofs | 41 ms/solve | 38 ms/solve | **1.08×** | 3e-12 |
+| full ring, ~28 k dofs | 150–190 ms/solve | 80–85 ms/solve | **1.8–2.4×** | 3e-12 |
+
+MKL's thread-spawn overhead dominates the tiny 12 k sector (barely a win), but on
+the ~28 k full-ring system (which the app-default `geo_mesh=True` uses for every
+n_sectors request) it is clearly >1.5×. So a single persistent `PyPardisoSolver`
+is wired into the P2 solve, with a try/except SuperLU fallback (a run can never
+break) and an `SB_NO_PARDISO=1` debug gate. **Not wired into P1** (left on scipy
+— avoids any byte-for-byte risk on the default path, per the reviewer's caution).
+
+Integrated before/after (element_order=2, wall/frame):
+- sector (mesh 1.5, 12 k): 3.51 → **2.87 s** (1.22×)
+- full ring (mesh 1.0, 28 k): 7.97 → **6.58 s** (1.21×)
+
+The overall gain (~1.2×) is smaller than the raw solve speedup because assembly +
+triple-product (~22 % of wall) are unchanged, the reduced-matrix pattern drifts by
+a couple of entries between sweeps (pruned explicit zeros) so PARDISO re-analyses
+more than the ideal, and there is a per-pattern MKL init cost. Physics unchanged:
+mean torque identical, ripple within 0.6 % (non-convergence roundoff), no-load
+mean ~0, losses intact. Cumulative P2 speedup this session ≈ **2.2×** vs the
+original converged baseline (warm-start+split 1.8× × PARDISO 1.2×).
+
+So P2's floor is now the (MKL-accelerated) direct solve of a 2× larger system
+than P1 — inherent to quadratic elements. The remaining lever would be
+Newton-Raphson for the BH nonlinearity (fewer sweeps), not the linear solver.
 
 **USER GUIDANCE — run P2 at a COARSER mesh than P1.** P2's whole value is
 coarse-mesh accuracy: the convergence proof showed its torque noise floor is

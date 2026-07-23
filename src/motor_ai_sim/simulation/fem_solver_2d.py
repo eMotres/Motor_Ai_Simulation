@@ -85,6 +85,16 @@ DAXIS_SHIFT_DEG = 108.0   # LEGACY FALLBACK ONLY — the transient now AUTO-cali
 _DAXIS_CACHE: Dict[tuple, float] = {}
 _DAXIS_CALIBRATING = False
 
+def _daxis_disk_path():
+    """Shared on-disk DAXIS cache so sweep subprocesses (fresh interpreters, empty
+    in-memory cache) don't each re-run the calibration → per-design timeout."""
+    try:
+        import os
+        from motor_ai_sim.config import DEFAULT_CONFIG_PATH as _cp
+        return os.path.join(os.path.dirname(str(_cp)), ".daxis_cache.json")
+    except Exception:
+        return None
+
 def _daxis_topology_key(p, geo, wind) -> tuple:
     return (int(getattr(p, "num_poles", 0) or 0),
             int((geo or {}).get("num_slots") or 0),
@@ -102,19 +112,36 @@ def _resolve_daxis_shift(p, geo, wind, pole_pairs, geo_override, n_sectors) -> f
     key = _daxis_topology_key(p, geo, wind)
     if key in _DAXIS_CACHE:
         return _DAXIS_CACHE[key]
+    skey = "_".join(str(x) for x in key)
+    _dp = _daxis_disk_path()
+    if _dp:                           # shared disk cache (across sweep subprocesses)
+        try:
+            import os, json
+            if os.path.exists(_dp):
+                with open(_dp) as _f:
+                    _v = json.load(_f).get(skey)
+                if _v is not None:
+                    _DAXIS_CACHE[key] = float(_v)
+                    return float(_v)
+        except Exception:
+            pass
     daxis = None                      # None ⇒ calibration did not succeed
     try:
         _DAXIS_CALIBRATING = True
+        # Cheapest possible calibration: θ* (the ψ_A peak angle) is a bulk
+        # geometric quantity → a COARSE mesh + the smallest natural symmetry
+        # sector + few P1 steps localise it fine, and keep the extra geometry
+        # build well inside the sweep's per-design budget.
+        import math as _mth
+        _cal_ns = _mth.gcd(int((geo or {}).get("num_slots") or 1),
+                           int(getattr(p, "num_poles", 1) or 1)) or 1
         cal = em_transient_eval(
-            n_steps_per_period=48, n_periods=1.0, gamma_deg=0.0,
-            I_phase_rms=0.0, mesh_size_mm=1.2, min_size_mm=0.45,
+            n_steps_per_period=24, n_periods=1.0, gamma_deg=0.0,
+            I_phase_rms=0.0, mesh_size_mm=2.5, min_size_mm=0.7,
             outer_air_factor=1.2, gap_layers=1.0,
-            n_sectors=int(n_sectors) if n_sectors else -1,
+            n_sectors=_cal_ns if _cal_ns >= 2 else -1,
             coil_temp_c=120.0, rotor_eddy=False,
-            iron_template=False, geo_mesh=True,   # fast CDT mesh; avoid the slow
-                                                  # template-iron gmsh wedge fallback.
-                                                  # 48 steps → sub-degree θ* on the
-                                                  # ψ_A peak (P1 linear solves are cheap)
+            iron_template=False, geo_mesh=True,
             geo_override=geo_override, element_order=1)
         psi = np.asarray(cal.get("psi_A_Wb") or [], float)
         ang = np.asarray(cal.get("rotor_angle_deg") or [], float)
@@ -140,6 +167,21 @@ def _resolve_daxis_shift(p, geo, wind, pole_pairs, geo_override, n_sectors) -> f
     if daxis is None:                 # calibration failed → use fallback, DON'T
         return float(DAXIS_SHIFT_DEG) # cache it (so a later request can retry)
     _DAXIS_CACHE[key] = daxis
+    if _dp:                           # persist so sweep subprocesses reuse it
+        try:
+            import os, json
+            _disk = {}
+            if os.path.exists(_dp):
+                try:
+                    with open(_dp) as _f:
+                        _disk = json.load(_f) or {}
+                except Exception:
+                    _disk = {}
+            _disk[skey] = float(daxis)
+            with open(_dp, "w") as _f:
+                json.dump(_disk, _f)
+        except Exception:
+            pass
     return daxis
 
 # Number of equally-spaced nodes on the sliding-band slip circle (r = mid_r).

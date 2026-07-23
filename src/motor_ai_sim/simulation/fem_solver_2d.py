@@ -69,7 +69,72 @@ _PIC_TOL = 1e-3
 # RECALIBRATE only if the pole/slot/winding TOPOLOGY changes (dimension sweeps
 # don't move it): run fem_transient_sliding_band(I_phase_rms=0); θ* = rotor angle
 # of max psi_A_Wb; DAXIS_SHIFT_DEG = (90 − θ*·pole_pairs) mod 360.
-DAXIS_SHIFT_DEG = 108.0
+DAXIS_SHIFT_DEG = 108.0   # LEGACY FALLBACK ONLY — the transient now AUTO-calibrates
+                          # this per motor topology (see _resolve_daxis_shift); this
+                          # hard value is used only if the no-load calibration fails.
+
+# ── Per-motor d-axis auto-calibration ────────────────────────────────────────
+# The geometric rotor-d-axis-vs-phase-A offset is TOPOLOGY-dependent (pole/slot/
+# winding), so a single hard-coded DAXIS_SHIFT_DEG is only right for ONE motor
+# (it was calibrated for 20p/24s and was ~48° wrong for 14p/12s → the UI's γ was
+# 48° off the true q-axis).  We now compute θ* (rotor angle of peak no-load ψ_A)
+# from a cheap I=0 run and set DAXIS = (90 − θ*·pole_pairs) mod 360, so γ=0 is the
+# TRUE q-axis and the γ the user enters equals the PHYSICAL current angle from the
+# q-axis (identical to ANSYS's el_deg).  Cached per topology; θ* is invariant to
+# dimension sweeps.
+_DAXIS_CACHE: Dict[tuple, float] = {}
+_DAXIS_CALIBRATING = False
+
+def _daxis_topology_key(p, geo, wind) -> tuple:
+    return (int(getattr(p, "num_poles", 0) or 0),
+            int((geo or {}).get("num_slots") or 0),
+            int((wind or {}).get("layers", 1) or 1),
+            str((wind or {}).get("connection", "")))
+
+def _resolve_daxis_shift(p, geo, wind, pole_pairs, geo_override, n_sectors) -> float:
+    """DAXIS (elec deg) that makes γ=0 the true q-axis for THIS motor topology.
+    Computed from a cheap no-load (I=0) run — ψ_A(θ) peaks at the d-axis, so
+    DAXIS = (90 − θ*·pole_pairs) mod 360.  Cached per topology; recursion-guarded
+    (the I=0 calibration run has no current, so DAXIS is irrelevant inside it)."""
+    global _DAXIS_CALIBRATING
+    if _DAXIS_CALIBRATING:
+        return DAXIS_SHIFT_DEG
+    key = _daxis_topology_key(p, geo, wind)
+    if key in _DAXIS_CACHE:
+        return _DAXIS_CACHE[key]
+    daxis = float(DAXIS_SHIFT_DEG)
+    try:
+        _DAXIS_CALIBRATING = True
+        cal = em_transient_eval(
+            n_steps_per_period=36, n_periods=1.0, gamma_deg=0.0,
+            I_phase_rms=0.0, mesh_size_mm=1.2, min_size_mm=0.4,
+            outer_air_factor=1.2, gap_layers=1.0,
+            n_sectors=int(n_sectors) if n_sectors else -1,
+            coil_temp_c=120.0, rotor_eddy=False,
+            geo_override=geo_override, element_order=1)
+        psi = np.asarray(cal.get("psi_A_Wb") or [], float)
+        ang = np.asarray(cal.get("rotor_angle_deg") or [], float)
+        if psi.size >= 4 and ang.size == psi.size:
+            n = psi.size
+            k0 = int(np.argmax(psi))
+            ym1, y0, yp1 = psi[(k0 - 1) % n], psi[k0], psi[(k0 + 1) % n]
+            den = (ym1 - 2.0 * y0 + yp1)
+            frac = 0.5 * (ym1 - yp1) / den if abs(den) > 1e-30 else 0.0
+            dstep = float(ang[1] - ang[0]) if n > 1 else 0.0
+            theta_star = (k0 + frac) * dstep            # mech deg of ψ_A peak
+            daxis = (90.0 - theta_star * float(pole_pairs)) % 360.0
+            log.info("d-axis auto-cal: theta*=%.2f deg mech -> DAXIS=%.1f deg "
+                     "(topology poles=%d slots=%d)", theta_star, daxis, key[0], key[1])
+        else:
+            log.warning("d-axis auto-cal: no ψ_A from calibration run -> fallback %.1f",
+                        DAXIS_SHIFT_DEG)
+    except Exception as _e:
+        log.warning("d-axis auto-calibration failed (%s) -> fallback %.1f",
+                    _e, DAXIS_SHIFT_DEG)
+    finally:
+        _DAXIS_CALIBRATING = False
+    _DAXIS_CACHE[key] = daxis
+    return daxis
 
 # Number of equally-spaced nodes on the sliding-band slip circle (r = mid_r).
 # Shared by in_band (exterior) and out_band (hole) so the two half-meshes get
@@ -5309,11 +5374,16 @@ def fem_transient_sliding_band(
     slot_area_m2 = p.slot_width_m * p.slot_height_m * p.fill_factor
     mid = 0.5 * (p.r_rotor_out + p.r_stator_in)
 
+    # d-axis phase offset AUTO-CALIBRATED for this motor topology so γ=0 is the
+    # true q-axis and γ equals the physical current angle from the q-axis (=ANSYS
+    # el_deg).  Cached per topology; the I=0 calibration run is recursion-guarded.
+    daxis_eff = _resolve_daxis_shift(p, geo, wind, pole_pairs, geo_override, n_sectors)
+
     def _currents(rotor_angle_deg):
         Ipk = float(I_phase_rms) / n_parallel * math.sqrt(2)
-        # d-axis phase offset so γ=0 = q-axis — shared module constant so the
-        # transient, static and eddy paths all use the SAME phase shift.
-        te = math.radians(rotor_angle_deg * pole_pairs + gamma_deg + DAXIS_SHIFT_DEG)
+        # d-axis phase offset so γ=0 = q-axis — per-topology auto-calibrated value
+        # (daxis_eff) shared by the current & voltage excitation in this solve.
+        te = math.radians(rotor_angle_deg * pole_pairs + gamma_deg + daxis_eff)
         return {'A': Ipk * math.cos(te),
                 'B': Ipk * math.cos(te - 2 * math.pi / 3),
                 'C': Ipk * math.cos(te + 2 * math.pi / 3)}
@@ -5340,7 +5410,7 @@ def fem_transient_sliding_band(
 
     def _voltages(rotor_angle_deg):
         vpk = float(v_phase_peak)
-        te = math.radians(rotor_angle_deg * pole_pairs + v_delta_deg + DAXIS_SHIFT_DEG)
+        te = math.radians(rotor_angle_deg * pole_pairs + v_delta_deg + daxis_eff)
         return {'A': vpk * math.cos(te),
                 'B': vpk * math.cos(te - 2 * math.pi / 3),
                 'C': vpk * math.cos(te + 2 * math.pi / 3)}

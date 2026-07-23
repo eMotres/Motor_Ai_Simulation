@@ -429,7 +429,7 @@ simulation:
   max_current: 42.0
   frequency: 1516.67
   rpm: 13000.0
-  phase_offset_deg: -38.0
+  phase_offset_deg: 10.0
   steps_per_period: 16
   demag: false
   coil_temp_c: 120

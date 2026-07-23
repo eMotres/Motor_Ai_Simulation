@@ -431,8 +431,15 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
         // derived value CHANGES — like the other geometry-derived parameters —
         // but leave a manual override untouched if the geometry is the same.
         const kAuto = Number(d.end_winding_factor);
-        if (Number.isFinite(kAuto) && kAuto > 0 && kAuto !== endWindingGeo) {
-          setEndWinding(+kAuto.toFixed(2));
+        if (Number.isFinite(kAuto) && kAuto > 0) {
+          // Show the CURRENT geometry's auto k_end (end-turn length / stack).
+          // Seed the cell when it's at 0 ("auto"/unset) OR when the geometry
+          // changed (kAuto differs from the last seeded value) — so it never
+          // sits at a misleading 0 and always tracks the geometry; a manual
+          // override is left untouched only while the geometry is unchanged.
+          if (!(endWinding > 0) || kAuto !== endWindingGeo) {
+            setEndWinding(+kAuto.toFixed(2));
+          }
           setEndWindingGeo(kAuto);
         }
       })
@@ -671,9 +678,10 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               value={endWinding}
               onChange={e => setEndWinding(+e.target.value)}
               inputProps={{ step: 0.05, min: 0, max: 6 }}
-              InputProps={{ endAdornment: <HelpTip title={`k_end = (π·tooth_w/2 + L_stack)/L_stack` +
-                          ` = ${endWindingGeo ? endWindingGeo.toFixed(3) : '—'}` +
-                          ` from geometry · auto-recomputed on geometry change`} /> }}
+              InputProps={{ endAdornment: <HelpTip title={`End-winding copper: scales the coil resistance/loss by the end-turn length.` +
+                          ` k_end = (π·tooth_w/2 + L_stack)/L_stack = ${endWindingGeo ? endWindingGeo.toFixed(3) : '—'} for THIS geometry.` +
+                          ` AUTO by default — recomputed for every geometry and used in all simulations AND optimizations` +
+                          ` (0 in the field also means auto). Type a value only to override for this run.`} /> }}
               disabled={isRunning}
             />
 

@@ -4771,21 +4771,9 @@ def _arkkio_torque_p2(mesh, A_vec, basis, r_in_m: float, r_out_m: float,
     cx = (P[0, T[0]] + P[0, T[1]] + P[0, T[2]]) / 3.0
     cy = (P[1, T[0]] + P[1, T[1]] + P[1, T[2]]) / 3.0
     rc = np.hypot(cx, cy)
-    # Integrate a strip STRICTLY INSIDE the air gap — drop the ~30 % nearest each
-    # iron boundary.  The Maxwell-stress tensor is exact only in the source-free
-    # gap air; the element rows touching the rotor pole tips / stator tooth tips
-    # carry armature-reaction field that contaminates σ_rθ and, UNDER LOAD,
-    # inflated the mean torque ~25 % vs the P1 belt-strip Arkkio (which already
-    # integrates only the mid-gap DOM_BAND ring).  No-load was unaffected because
-    # the contamination is armature-driven.  Re-normalise by the strip width.
-    _m = 0.30 * (r_out_m - r_in_m)
-    _lo, _hi = r_in_m + _m, r_out_m - _m
-    gap_idx = np.where((rc >= _lo) & (rc <= _hi))[0]
-    if gap_idx.size == 0:                                   # gap too thin to sub-band → full annulus
-        _lo, _hi = r_in_m, r_out_m
-        gap_idx = np.where((rc >= _lo) & (rc <= _hi))[0]
-        if gap_idx.size == 0:
-            return 0.0
+    gap_idx = np.where((rc >= r_in_m) & (rc <= r_out_m))[0]
+    if gap_idx.size == 0:
+        return 0.0
     gb = Basis(mesh, basis.elem, elements=gap_idx)   # same element order as the field
     Bx, By, dx = _p2_B_at_quad(gb, A_vec)
     X = gb.global_coordinates().value          # (2, n_gap_elem, n_qp) metres
@@ -4794,7 +4782,7 @@ def _arkkio_torque_p2(mesh, A_vec, basis, r_in_m: float, r_out_m: float,
     Br = Bx * cosp + By * sinp
     Bph = -Bx * sinp + By * cosp
     val = float(np.sum(dx * r * Br * Bph))
-    return stack_length_m / (MU0 * (_hi - _lo)) * val
+    return stack_length_m / (MU0 * (r_out_m - r_in_m)) * val
 
 
 def solve_magnetostatics_fem(mesh, cell_tags: np.ndarray,

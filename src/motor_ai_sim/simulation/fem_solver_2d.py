@@ -102,15 +102,19 @@ def _resolve_daxis_shift(p, geo, wind, pole_pairs, geo_override, n_sectors) -> f
     key = _daxis_topology_key(p, geo, wind)
     if key in _DAXIS_CACHE:
         return _DAXIS_CACHE[key]
-    daxis = float(DAXIS_SHIFT_DEG)
+    daxis = None                      # None ⇒ calibration did not succeed
     try:
         _DAXIS_CALIBRATING = True
         cal = em_transient_eval(
-            n_steps_per_period=36, n_periods=1.0, gamma_deg=0.0,
-            I_phase_rms=0.0, mesh_size_mm=1.2, min_size_mm=0.4,
+            n_steps_per_period=48, n_periods=1.0, gamma_deg=0.0,
+            I_phase_rms=0.0, mesh_size_mm=1.2, min_size_mm=0.45,
             outer_air_factor=1.2, gap_layers=1.0,
             n_sectors=int(n_sectors) if n_sectors else -1,
             coil_temp_c=120.0, rotor_eddy=False,
+            iron_template=False, geo_mesh=True,   # fast CDT mesh; avoid the slow
+                                                  # template-iron gmsh wedge fallback.
+                                                  # 48 steps → sub-degree θ* on the
+                                                  # ψ_A peak (P1 linear solves are cheap)
             geo_override=geo_override, element_order=1)
         psi = np.asarray(cal.get("psi_A_Wb") or [], float)
         ang = np.asarray(cal.get("rotor_angle_deg") or [], float)
@@ -133,6 +137,8 @@ def _resolve_daxis_shift(p, geo, wind, pole_pairs, geo_override, n_sectors) -> f
                     _e, DAXIS_SHIFT_DEG)
     finally:
         _DAXIS_CALIBRATING = False
+    if daxis is None:                 # calibration failed → use fallback, DON'T
+        return float(DAXIS_SHIFT_DEG) # cache it (so a later request can retry)
     _DAXIS_CACHE[key] = daxis
     return daxis
 

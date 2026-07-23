@@ -1199,9 +1199,15 @@ magnet:
     description: "Sintered NdFeB magnet, F45SH grade — operating point 120 °C"
     grade: F45SH
     temperature_c: 120
-    Br: 1.190          # T   — NdFeB-class remanence
-    Hc: 648541         # A/m — NdFeB-class coercivity
-    mu_rec: 1.460      # Br / (mu0 * Hc)
+    Br: 1.190          # T   — NdFeB-class remanence at 120 °C
+    # Recoil permeability of SINTERED NdFeB is ~1.05 (essentially temp-independent);
+    # the old mu_rec=1.46 came from a too-low Hc=648 kA/m and made the magnet region
+    # far too "soft" — the magnetostatic solve (demag off) uses mu_rec as the magnet
+    # μ_r, so it over-read the PM flux linkage and torque (~+5%).  Corrected to the
+    # datasheet value; normal coercivity follows as Hc = Br/(mu0·mu_rec).  (The
+    # bh_curve recoil slope already implied ~1.08, not 1.46.)
+    Hc: 901878         # A/m — normal coercivity = Br / (mu0 * mu_rec)
+    mu_rec: 1.050      # relative recoil permeability (sintered NdFeB)
     # NdFeB is a metallic alloy (Nd-Fe-B), so eddy-current losses are
     # significant — σ ≈ 625 kS/m at 20 °C, dropping a few percent at
     # 120 °C (thermal phonon scattering).  Use the standard reference

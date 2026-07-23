@@ -2687,6 +2687,23 @@ def get_fem_transient(
                         n_sectors = _sym
                 except Exception:
                     pass
+        # Config fingerprint of the base physics a solve depends on but that is
+        # NOT in the request signature (num_wires_per_slot, the whole geometry,
+        # winding connection, materials/magnet/steel).  WITHOUT this, editing a
+        # geometry field (e.g. wires 9→7) and re-running returned the STALE
+        # cached result — the reported "it didn't change immediately" bug — because
+        # the operating-point key was unchanged.  A per-request geo override is
+        # still appended below (it changes the effective geometry on top of this).
+        try:
+            import hashlib as _hl, json as _jl
+            from motor_ai_sim.config import get_config as _gc_fp
+            _cfg_all = _gc_fp() or {}
+            _cfp = _hl.md5(_jl.dumps(
+                {"g": _cfg_all.get("geometry"), "w": _cfg_all.get("winding"),
+                 "m": _cfg_all.get("materials"), "mag": _cfg_all.get("magnet")},
+                sort_keys=True, default=str).encode()).hexdigest()[:16]
+        except Exception:
+            _cfp = "nofp"
         _sb_key = ("sb", int(n_steps_per_period), round(n_periods, 2),
                    round(gamma_deg, 1), round(I_phase_rms, 1),
                    round(mesh_size_mm, 2), round(min_size_mm, 2),
@@ -2700,7 +2717,7 @@ def get_fem_transient(
                    tuple(sorted(_comp_mesh.items())),
                    str(drive or "current"), round(float(v_phase_peak), 2),
                    round(float(v_delta_deg), 1), int(bool(harm_ref)),
-                   int(element_order))
+                   int(element_order), _cfp)
         if _geo_ov:   # distinct cache entry per overridden geometry (no-geo key unchanged)
             _sb_key = _sb_key + (tuple(sorted(_geo_ov.items())),)
         if not fresh and _sb_key in _fem_transient_cache:

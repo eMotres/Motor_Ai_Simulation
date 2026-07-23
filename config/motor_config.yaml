@@ -6,11 +6,11 @@ geometry:
   num_slots_per_segment: 6
   num_poles_per_segment: 7
   air_gap: 0.2
-  tooth_width: 3.2
+  tooth_width: 3.4
   tooth2_width: 2.2
-  cut_width: 1.6
+  cut_width: 1.5
   insulation_thickness: 0.05
-  wire_width: 2.1
+  wire_width: 2.2
   wire_height: 0.6
   wire_spacing_x: 0.1
   wire_spacing_y: 0.1
@@ -28,7 +28,7 @@ geometry:
   magnet_down_height: 1.4000000000000001
   magnet_lamination: 10
   stator_fillet_r: 1.2
-  stator_fillet_r1: 0.1
+  stator_fillet_r1: 0.0
   rotor_fill_r: 0.2
   motor_length: 12
   stator_outer_radius: 20.0

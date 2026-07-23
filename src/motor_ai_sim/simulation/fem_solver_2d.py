@@ -6806,6 +6806,45 @@ def fem_transient_sliding_band(
         P_loss_avg2 = float(np.mean(P_tot_ser2)) if P_tot_ser2 else 0.0
 
         # ── metrics ──────────────────────────────────────────────────────────
+        # Raw Maxwell-stress (Arkkio) torque — kept as a DIAGNOSTIC only.  On the
+        # node-repaired sliding band the gap field is contaminated UNDER LOAD, so
+        # the volume-weighted Maxwell integral is radius-INCONSISTENT (measured
+        # 0.78..1.30 Nm across integration bands for one converged frame) and
+        # over-reads the mean torque ~35 % vs the energy method / ANSYS.
+        _T2raw = list(_T2)                       # preserve the Maxwell series (diag)
+        T_arr = np.asarray(_T2, float)
+        T_maxwell_avg = float(T_arr.mean()) if T_arr.size else 0.0
+        # ── ENERGY-CONSISTENT torque (flux-linkage / Clarke) ──────────────────
+        # This is the ANSYS energy method (virtual work) expressed through the
+        # terminal flux linkages ψ and phase currents I:  T = (3/2)·p·(ψα·iβ −
+        # ψβ·iα), the frame-invariant instantaneous electromagnetic torque from
+        # the air-gap power balance P = T·ω.  It NEVER touches the gap field, so
+        # it is immune to the sliding-band contamination and is radius-independent
+        # by construction.  Validated against ω·ψ_pm back-EMF and ANSYS (0.67 vs
+        # 0.57 Nm, a normal 2-D modelling gap).  This is the HEADLINE mean torque.
+        # NOTE: pure cogging (I=0 slot reluctance) does not couple to the terminal
+        # current and so is not in this series — it is the separate no-load metric.
+        _torque_method = "maxwell_stress"
+        try:
+            _pa = np.asarray(_psiA, float); _pb = np.asarray(_psiB, float)
+            _pc = np.asarray(_psiC, float)
+            _ea = np.asarray(_IA, float); _eb = np.asarray(_IB, float)
+            _ec = np.asarray(_IC, float)
+            # No-load / cogging study: the terminal current is ~0, the energy
+            # torque is identically 0, and the (armature-driven) gap contamination
+            # is ABSENT — so the raw Maxwell cogging IS trustworthy and must stay.
+            # Only switch to the energy method when a real load current flows.
+            _Ipk = float(np.max(np.abs(np.concatenate([_ea, _eb, _ec])))) if _ea.size else 0.0
+            if _pa.size and _pa.size == _ea.size and _Ipk > 1.0:
+                _s = 2.0 / 3.0; _kc = math.sqrt(3.0) / 2.0
+                _psial = _s * (_pa - 0.5 * _pb - 0.5 * _pc); _psibe = _s * _kc * (_pb - _pc)
+                _ial = _s * (_ea - 0.5 * _eb - 0.5 * _ec); _ibe = _s * _kc * (_eb - _ec)
+                _T2e = (1.5 * float(pole_pairs) * (_psial * _ibe - _psibe * _ial))
+                _T2 = _T2e.tolist()
+                _torque_method = "energy_flux_linkage"
+            # else: no-load (or no terminal data) → keep the Maxwell cogging series
+        except Exception as _te:
+            log.warning("P2 energy torque failed (%s) — using Maxwell series", _te)
         T_arr = np.asarray(_T2, float)
         Tavg = float(T_arr.mean()) if T_arr.size else 0.0
         _Tf, Trip, Trip_raw, Tnoise = band_limit_torque(
@@ -6834,6 +6873,9 @@ def fem_transient_sliding_band(
             "T_ripple_raw_pct": Trip_raw, "T_ripple_filt_pct": Trip,
             "T_noise_floor_pct": round(float(Tnoise), 2),
             "T_em_raw_Nm": list(_T2), "T_em_filt_Nm": _Tf,
+            "torque_method": _torque_method,
+            "T_avg_maxwell_Nm": round(T_maxwell_avg, 4),
+            "T_em_maxwell_Nm": list(_T2raw),
             "psi_A_Wb": _psiA, "psi_B_Wb": _psiB, "psi_C_Wb": _psiC,
             "V_A": VA, "V_B": VB, "V_C": VC, "V_peak": Vpk,
             "I_A": _IA, "I_B": _IB, "I_C": _IC,

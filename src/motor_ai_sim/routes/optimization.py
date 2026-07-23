@@ -734,6 +734,17 @@ def scan_designs(req: ScanRequest):
                 "rpm": float(o.rpm)} for o in (req.operating_points or [])] or \
               [{"gamma_deg": 0.0, "current_a": 85.0, "rpm": 3950.0}]
         steps = max(4, min(int(req.steps_per_period), 180))
+        # Torque RIPPLE is a high-harmonic quantity — the 12s14p cogging sits at the
+        # 12th electrical harmonic, so < ~48 frames/period UNDERSAMPLES and ALIASES
+        # it.  The aliasing is geometry-dependent, so a coarse step count produced
+        # SPURIOUS ripple minima (e.g. magnet_fill_up=0.40 read 4.4 % at 24 steps
+        # but 5.4 % at 48) → the sweep "found" ripple wins that vanish at Simulation
+        # resolution.  For honest-ripple runs (P2 / structured belt) floor the frame
+        # count so the sweep's ripple equals the converged value.  Mean torque is
+        # step-insensitive, so this only fixes ripple; mesh is already converged at
+        # the 1.0 mm floor (1.0 and 0.5 mm agree to 0.03 % at 48 steps).
+        if int(getattr(req, "element_order", 1)) == 2 or bool(req.structured_gap):
+            steps = max(steps, 48)
         max_geom = max(1, min(int(req.max_geometries), 400))
         mesh_size = max(1.0, min(float(req.mesh_size_mm), 12.0))
         min_size  = max(0.1, min(float(req.min_size_mm), 3.0))

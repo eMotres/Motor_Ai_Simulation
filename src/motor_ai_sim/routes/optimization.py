@@ -44,6 +44,7 @@ _scan_state: Dict[str, Any] = {
     "run_id": "", "error": None, "cancel": False, "cached": 0,
 }
 _scan_lock = threading.Lock()
+_scan_thread: Optional["threading.Thread"] = None   # the live worker (liveness guard)
 
 
 def _scan_store_path() -> str:
@@ -241,7 +242,9 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
     try:
         proc = subprocess.run(
             [sys.executable, "-m", "motor_ai_sim.optimization.refine_proc"],
-            input=spec, capture_output=True, text=True, timeout=900)
+            # 300 s cap: a healthy eval (even P2 full-ring) finishes in ~1-2 min;
+            # a longer run is a hang → let it die so it can't tie up a worker.
+            input=spec, capture_output=True, text=True, timeout=300)
         out = proc.stdout or ""
         m = out.rfind("@@RESULT@@")
         if m >= 0:
@@ -503,7 +506,7 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                  structured_gap=False, airgap_macro=False, iron_template=True,
                  geo_mesh=True, element_order=1) -> None:
     import numpy as np  # noqa: F401
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
     from motor_ai_sim.optimization.optimizer import _pareto_front
     try:
         geos = _enumerate_geometries(variables, int(max_geom), n_opt=4, seed=seed)
@@ -564,12 +567,27 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
         futs = [ex.submit(_do, it) for it in enumerate(tasks)]
         done = 0
         try:
-            for fut in as_completed(futs):
+            # Poll with a 1 s timeout instead of blocking on as_completed(): a Stop
+            # must take effect within ~1 s EVEN IF the in-flight subprocess evals
+            # are slow or hung — otherwise as_completed() blocks waiting for a
+            # future that never completes, the cancel is never seen, and
+            # _scan_state["running"] stays True (→ "a scan is already running" 409
+            # on the next Run).  On cancel we stop harvesting and shut down; the
+            # ~few running subprocesses finish/timeout on their own in the
+            # background and are ignored.
+            pending = set(futs)
+            while pending:
                 if _scan_state["cancel"]:
                     break
-                i, pt = fut.result()
-                points[i] = pt
-                done += 1
+                just_done, pending = wait(pending, timeout=1.0,
+                                          return_when=FIRST_COMPLETED)
+                for fut in just_done:
+                    try:
+                        i, pt = fut.result()
+                    except Exception:      # a single dead eval must not stall the sweep
+                        continue
+                    points[i] = pt
+                    done += 1
                 with _scan_lock:
                     _scan_state["done"] = done
                     # live-stream the points computed so far so the chart fills in
@@ -654,9 +672,16 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
 @router.post("/scan")
 def scan_designs(req: ScanRequest):
     """Start a background FEM scan — every point is a real transient."""
+    global _scan_thread
     with _scan_lock:
+        # Liveness guard: only 409 if a scan is genuinely running.  If the flag
+        # is stale (the worker thread died/crashed without clearing it), don't
+        # trap the user forever — reset and start fresh.
         if _scan_state["running"]:
-            raise HTTPException(status_code=409, detail="a scan is already running")
+            _alive = _scan_thread is not None and _scan_thread.is_alive()
+            if _alive:
+                raise HTTPException(status_code=409, detail="a scan is already running")
+            _scan_state["running"] = False   # dead worker → clear the stale flag
         # Whitelist gate: only sweep_whitelist params (plus the load-angle
         # gamma_deg, which is not a geometry knob) may be scanned.  Empty/missing
         # whitelist → allow all (back-compat).
@@ -717,14 +742,15 @@ def scan_designs(req: ScanRequest):
         _scan_state.update({"running": True, "done": 0, "total": 0, "result": None,
                             "points": [], "run_id": req.run_id, "error": None, "cancel": False,
                             "cached": 0})
-    threading.Thread(target=_scan_worker,
+    _scan_thread = threading.Thread(target=_scan_worker,
                      args=(variables, ops, steps, float(req.coil_temp_c),
                            float(req.ripple_max_pct), max_geom, int(req.seed), req.run_id,
                            mesh_size, min_size, req.pole_copy, bool(req.torque_filter),
                            n_sectors, gap_layers, end_winding, rotor_eddy, hi_fidelity,
                            structured_gap, airgap_macro, iron_template, geo_mesh,
                            element_order),
-                     daemon=True).start()
+                     daemon=True)
+    _scan_thread.start()
     return {"started": True, "steps_per_period": steps, "max_geometries": max_geom,
             "mesh_size_mm": mesh_size, "min_size_mm": min_size}
 
@@ -750,8 +776,13 @@ def scan_progress():
 
 @router.post("/scan/cancel")
 def scan_cancel():
+    # Set the cancel flag (the worker's 1 s poll loop sees it and stops within
+    # ~1 s).  Belt-and-suspenders: if the worker thread is already dead but the
+    # flag is stale, clear "running" here too so the next Run isn't blocked.
     with _scan_lock:
         _scan_state["cancel"] = True
+        if _scan_thread is None or not _scan_thread.is_alive():
+            _scan_state["running"] = False
     return {"cancelled": True}
 
 

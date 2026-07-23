@@ -673,15 +673,32 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
 def scan_designs(req: ScanRequest):
     """Start a background FEM scan — every point is a real transient."""
     global _scan_thread
-    with _scan_lock:
-        # Liveness guard: only 409 if a scan is genuinely running.  If the flag
-        # is stale (the worker thread died/crashed without clearing it), don't
-        # trap the user forever — reset and start fresh.
-        if _scan_state["running"]:
+    # Start guard (done OUTSIDE the param lock so the wait can't deadlock the
+    # worker's finally, which needs _scan_lock to clear "running"):
+    #  • genuinely running scan, no Stop pending → 409;
+    #  • Stop already requested (cancel set) → the worker is winding down; WAIT
+    #    up to ~6 s for it to finish, then start fresh — so "Stop then Run" is
+    #    NOT a race that 409s (the reported bug);
+    #  • dead/stale worker → clear the flag and start.
+    import time as _time
+    _deadline = _time.time() + 6.0
+    while True:
+        with _scan_lock:
+            _running = _scan_state["running"]
             _alive = _scan_thread is not None and _scan_thread.is_alive()
-            if _alive:
+            _cancelling = bool(_scan_state.get("cancel"))
+            if not _running or not _alive:
+                _scan_state["running"] = False          # clear stale / dead worker
+                break
+            if not _cancelling:
                 raise HTTPException(status_code=409, detail="a scan is already running")
-            _scan_state["running"] = False   # dead worker → clear the stale flag
+            # else: a Stop is in progress — fall through and wait for wind-down
+        if _time.time() >= _deadline:
+            with _scan_lock:
+                _scan_state["running"] = False           # took too long → force clear
+            break
+        _time.sleep(0.15)
+    with _scan_lock:
         # Whitelist gate: only sweep_whitelist params (plus the load-angle
         # gamma_deg, which is not a geometry knob) may be scanned.  Empty/missing
         # whitelist → allow all (back-compat).

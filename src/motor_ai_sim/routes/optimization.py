@@ -526,46 +526,66 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
         _NPER = 1.0
         _cfg_fp = _config_fingerprint()   # constant for this scan → one fingerprint for every point
 
-        def _do(i_t):
-            i, (gi, oi, ov, I, opg) = i_t
-            # γ as a swept variable overrides the operating-point γ; it is NOT a
-            # geometry key, so split it out before building the mesh.
-            g = float(ov.get("gamma_deg", opg))
-            geo_ov = {k: v for k, v in ov.items() if k != "gamma_deg"}
-            # Reuse a previously-computed identical point (skip the ~1-min FEM) — this
-            # is what lets a re-run after widening a range only evaluate the new points.
-            ck = _eval_cache_key(geo_ov, I, steps, coil_temp_c, _NPER, g,
+        def _cache_key(geo_ov, I, g):
+            return _eval_cache_key(geo_ov, I, steps, coil_temp_c, _NPER, g,
                                  mesh_size_mm, min_size_mm, n_sectors, pole_copy, torque_filter, _cfg_fp,
                                  gap_layers, end_winding, rotor_eddy, hi_fidelity, structured_gap, airgap_macro,
                                  iron_template=iron_template, geo_mesh=geo_mesh,
                                  element_order=element_order)
-            out = _EVAL_CACHE.get(ck)
-            if out is not None:
-                with _scan_lock:
-                    _scan_state["cached"] = _scan_state.get("cached", 0) + 1
-            else:
-                out = _subprocess_eval(geo_ov, I, steps, coil_temp_c,
-                                       n_periods=_NPER, gamma_deg=g,
-                                       mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm,
-                                       pole_copy=pole_copy, torque_filter=torque_filter,
-                                       n_sectors=n_sectors, gap_layers=gap_layers,
-                                       end_winding_factor=end_winding, rotor_eddy=rotor_eddy,
-                                       hi_fidelity=hi_fidelity, structured_gap=structured_gap,
-                                       airgap_macro=airgap_macro,
-                                       iron_template=iron_template, geo_mesh=geo_mesh,
-                                       element_order=element_order)
-                if out and out.get("ok"):
-                    _store_eval(ck, out)   # cache successful evals only (skip transient crashes)
+
+        def _mk_point(out, ov, I, gi, oi, g):
             pt = _point_from_eval(out, ov, I, gi, oi, ripple_max)
             pt["gamma_deg"] = g    # stamp γ so the chart can group/connect without the request
-            return i, pt
+            return pt
+
+        def _do(i_t):
+            # COMPUTE path — only cache MISSES reach here (hits are pre-filled
+            # before the pool starts, see below).  γ as a swept variable
+            # overrides the operating-point γ; it is NOT a geometry key.
+            i, (gi, oi, ov, I, opg) = i_t
+            g = float(ov.get("gamma_deg", opg))
+            geo_ov = {k: v for k, v in ov.items() if k != "gamma_deg"}
+            out = _subprocess_eval(geo_ov, I, steps, coil_temp_c,
+                                   n_periods=_NPER, gamma_deg=g,
+                                   mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm,
+                                   pole_copy=pole_copy, torque_filter=torque_filter,
+                                   n_sectors=n_sectors, gap_layers=gap_layers,
+                                   end_winding_factor=end_winding, rotor_eddy=rotor_eddy,
+                                   hi_fidelity=hi_fidelity, structured_gap=structured_gap,
+                                   airgap_macro=airgap_macro,
+                                   iron_template=iron_template, geo_mesh=geo_mesh,
+                                   element_order=element_order)
+            if out and out.get("ok"):
+                _store_eval(_cache_key(geo_ov, I, g), out)   # cache successful evals only
+            return i, _mk_point(out, ov, I, gi, oi, g)
+
+        # PREFILL: instantly plot every point already in the cache (from prior
+        # sweeps — survives a backend restart via .scan_cache.jsonl) with NO FEM
+        # re-run, then compute ONLY the misses.  This is what makes a re-run's
+        # already-computed points appear on the chart immediately (0 s) instead
+        # of trickling through the worker, and shrinks the work to the new points.
+        misses = []
+        for i, t in enumerate(tasks):
+            gi, oi, ov, I, opg = t
+            g = float(ov.get("gamma_deg", opg))
+            geo_ov = {k: v for k, v in ov.items() if k != "gamma_deg"}
+            out = _EVAL_CACHE.get(_cache_key(geo_ov, I, g))
+            if out is not None:
+                points[i] = _mk_point(out, ov, I, gi, oi, g)
+            else:
+                misses.append((i, t))
+        n_cached = sum(1 for p in points if p is not None)
+        with _scan_lock:
+            _scan_state["cached"] = n_cached
+            _scan_state["done"] = n_cached
+            _scan_state["points"] = [p for p in points if p is not None]   # instant plot
 
         # Manual executor so a Stop can cancel the not-yet-started tasks (the
         # ~5 already-running subprocesses just finish in the background); the
         # partial results computed so far are kept and shown.
         ex = ThreadPoolExecutor(max_workers=_SCAN_WORKERS)
-        futs = [ex.submit(_do, it) for it in enumerate(tasks)]
-        done = 0
+        futs = [ex.submit(_do, it) for it in misses]
+        done = n_cached
         try:
             # Poll with a 1 s timeout instead of blocking on as_completed(): a Stop
             # must take effect within ~1 s EVEN IF the in-flight subprocess evals

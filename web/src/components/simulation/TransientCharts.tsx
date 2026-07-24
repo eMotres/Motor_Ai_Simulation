@@ -1085,27 +1085,9 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
           </Box>
           )}
 
-          {/* ── Demagnetisation: per-magnet report (%) + per-element %-map ── */}
-          {data.demag_report && data.demag_report.length > 0 && (
-            <Box sx={{ p: 1, border: '1px solid',
-              borderColor: data.demag_report.some(r => r.demagnetised) ? '#7f1d1d' : '#78350f',
-              borderRadius: 1, bgcolor: 'rgba(239,68,68,0.07)' }}>
-              <Typography sx={{ fontSize: 12, fontWeight: 700, mb: 0.5,
-                color: data.demag_report.some(r => r.demagnetised) ? '#dc2626' : '#b45309' }}>
-                {data.demag_report.some(r => r.demagnetised)
-                  ? '⛔ MAGNET DEMAGNETISATION — torque & back-EMF de-rated'
-                  : '⚠ Magnets approaching demag knee'}
-              </Typography>
-              {data.demag_report.map((r, i) => (
-                <Typography key={i} sx={{ fontSize: 11, fontFamily: 'monospace',
-                  color: r.demagnetised ? '#fca5a5' : 'var(--text-1)' }}>
-                  mag[{r.magnet_index}]: H_min = {r.H_min_kA_per_m} kA/m
-                  {' '}(knee {r.H_knee_kA_per_m} kA/m, {(r.knee_proximity * 100).toFixed(0)}%)
-                  {r.demagnetised && `  →  Br ×${r.Br_factor}  (−${((1 - r.Br_factor) * 100).toFixed(0)}%)`}
-                </Typography>
-              ))}
-            </Box>
-          )}
+          {/* Per-magnet demag warning banner removed — it over-flagged
+              "IRREVERSIBLE LOSS" (the demag model over-derates sharp corners).
+              The per-element demag %-map below stays as the honest view. */}
           {data.demag_field && <DemagMap field={data.demag_field as any} />}
         </>
       )}

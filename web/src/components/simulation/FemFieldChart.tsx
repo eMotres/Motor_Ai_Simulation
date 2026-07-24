@@ -1282,28 +1282,9 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
           and multiplied by n_sectors to represent the full motor.
         </Typography>
       )}
-      {payload && payload.demag_report && payload.demag_report.length > 0 && (
-        <Box sx={{ mt: 0.5, p: 0.75, border: '1px solid', borderRadius: 1,
-          borderColor: payload.demag_report.some(r => r.demagnetised)
-            ? '#dc2626' : '#fbbf24',
-          bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)' }}>
-          <Typography sx={{ fontSize: 10, fontWeight: 700,
-            color: payload.demag_report.some(r => r.demagnetised)
-              ? '#fca5a5' : '#fde68a', mb: 0.5 }}>
-            {payload.demag_report.some(r => r.demagnetised)
-              ? '⛔ MAGNET DEMAGNETISATION'
-              : '⚠ Magnets approaching demag knee'}
-          </Typography>
-          {payload.demag_report.map((r, i) => (
-            <Typography key={i} sx={{ fontSize: 9, color: '#fcd34d',
-              fontFamily: 'monospace' }}>
-              mag[{r.magnet_index}]: H_min = {r.H_min_kA_per_m} kA/m
-              (knee {r.H_knee_kA_per_m} kA/m, {(r.knee_proximity*100).toFixed(0)}%)
-              {r.demagnetised && '  → IRREVERSIBLE LOSS'}
-            </Typography>
-          ))}
-        </Box>
-      )}
+      {/* Demag warning banner removed — the per-magnet knee report over-flagged
+          (the demag model over-derates sharp corners); the demag % map above is
+          the honest per-element view. */}
     </Paper>
   );
 };

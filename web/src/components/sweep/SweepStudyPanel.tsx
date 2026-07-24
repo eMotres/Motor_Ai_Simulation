@@ -74,7 +74,9 @@ const SweepTable: React.FC<{ points: any[]; rpm: number; vdcFactor?: number; sel
         stranded: Number(p.P_cu_W) || 0,
         strandedDc: Number(p.P_cu_dc_W) || 0, strandedAc: Number(p.P_cu_ac_W) || 0,
         solid: (Number(p.P_mag_W) || 0) + (Number(p.P_shaft_W) || 0),
-        pk: `${I.toFixed(2)}_${g.toFixed(2)}_${td.toFixed(3)}`,
+        // Stable unique key = (geometry, operating-point) — SAME in the chart, so
+        // clicking a point highlights its row and vice-versa (no float-round drift).
+        pk: `g${p.geom_id ?? 0}_o${p.op_index ?? 0}`,
       };
     }), [points, omega]);
 
@@ -319,7 +321,9 @@ const SweepStudyPanel: React.FC = () => {
                     td: p.torque_per_mass_Nm_kg, Vpk: p.V_peak,
                     ploss: p.P_loss_total_W, core: p.P_fe_W,
                     stranded: p.P_cu_W, solid: (p.P_mag_W ?? 0) + (p.P_shaft_W ?? 0),
-                    pk: `${Number(cur).toFixed(2)}_${Number(gam).toFixed(2)}_${Number(p.torque_per_mass_Nm_kg).toFixed(3)}` };
+                    // SAME stable key as the table row (geometry, operating-point)
+                    // so point↔row selection cross-highlights reliably.
+                    pk: `g${gi}_o${p.op_index ?? 0}` };
       if (!groups.has(key)) groups.set(key, { label, rows: [] });
       groups.get(key)!.rows.push(row);
     }

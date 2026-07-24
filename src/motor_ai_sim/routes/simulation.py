@@ -1653,6 +1653,11 @@ def get_fem_field2d(
         "A_z_min": float(A.min()), "A_z_max": float(A.max()),
         "B_mag_max": float(Bmag.max()),
         "n_sectors": nsec, "symmetry_mult": nsec,
+        "poles_per_sector": (int(_poles // nsec) if nsec > 1 and _poles else 0),
+        # Anti-periodic radial-cut BC (A_z flips sign between adjacent sectors)
+        # ⇔ an ODD number of poles per sector.  The full-ring display tiling needs
+        # this to place each rotated copy with the right sign.
+        "anti_periodic": bool(nsec > 1 and _poles and (_poles // nsec) % 2 == 1),
         "solve_time_s": round(_time.time() - _t0, 1), "total_time_s": 0.0,
     }
     # Demag %-map + per-magnet knee report (only when demag modelling is on).
@@ -1785,6 +1790,11 @@ def get_fem_eddy_field2d(
         "A_z_min": float(A.min()), "A_z_max": float(A.max()),
         "B_mag_max": float(Bmag.max()),
         "n_sectors": nsec, "symmetry_mult": nsec,
+        "poles_per_sector": (int(_poles // nsec) if nsec > 1 and _poles else 0),
+        # Anti-periodic radial-cut BC (A_z flips sign between adjacent sectors)
+        # ⇔ an ODD number of poles per sector.  The full-ring display tiling needs
+        # this to place each rotated copy with the right sign.
+        "anti_periodic": bool(nsec > 1 and _poles and (_poles // nsec) % 2 == 1),
         "rpm": rpm, "freq_Hz": round(float(d.get("f_elec_Hz", 0.0)), 2),
         "T_em_Nm": round(Tavg, 3),
         "P_cu_W": round(Pcu, 1), "P_fe_W": round(Pfe, 1),

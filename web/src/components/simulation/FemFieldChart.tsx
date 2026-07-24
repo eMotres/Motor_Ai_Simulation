@@ -29,6 +29,7 @@ const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
 // ── types ─────────────────────────────────────────────────────────────────
 import type { FemPayload } from './fem-types';
+import { tileFullRing } from './fem-types';
 export type { FemPayload } from './fem-types';
 
 // ── colour maps ───────────────────────────────────────────────────────────
@@ -806,8 +807,9 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
         return r.json();
       })
       .then((d: FemPayload) => {
-        setPayload(d); setLoading(false);
-        if (onPayload) onPayload(d);
+        const full = tileFullRing(d);   // sector solve → full-ring display
+        setPayload(full); setLoading(false);
+        if (onPayload) onPayload(full);
       })
       .catch(e => { setError(String(e)); setLoading(false); });
   };
@@ -851,7 +853,7 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
         if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
         return r.json();
       })
-      .then((d: FemPayload) => { setEddyPayload(d); setEddyLoading(false); })
+      .then((d: FemPayload) => { setEddyPayload(tileFullRing(d)); setEddyLoading(false); })
       .catch(e => { setEddyErr(String(e)); setEddyLoading(false); });
   };
 
@@ -891,7 +893,7 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
     }).toString();
     fetch(`${API}/api/simulation/physics/thermal_field2d?${qs}`)
       .then(async r => { if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`); return r.json(); })
-      .then((d: FemPayload) => { setThermalPayload(d); setThermalLoading(false); })
+      .then((d: FemPayload) => { setThermalPayload(tileFullRing(d)); setThermalLoading(false); })
       .catch(e => { setThermalErr(String(e)); setThermalLoading(false); });
   };
   // γ / I / cooling changed → cached thermal solve is stale.

@@ -1684,11 +1684,17 @@ def get_fem_eddy_field2d(
     coil_temp_c:        float = 120.0,
     component_mesh:     str   = "",
     geo:                Optional[str] = None,  # per-request geometry override (multi-user)
+    coupled:            bool  = True,   # True = full time-coupled σ∂A/∂t solve (J⟳ view);
+                                        # False = FAST transient (no eddy coupling) — the
+                                        # Loss MAP is reconstructed from the transient's
+                                        # Bertotti/slab/DC losses and needs no coupled solve,
+                                        # so the Loss view runs ~2× faster with this off.
 ):
-    """Run the time-coupled EDDY-CURRENT solve and return its LAST-frame field —
-    A_z, |B|, and the copper eddy current density J = σ(−∂A/∂t + U_c) — in the
-    SAME payload shape the magnetostatic field renderer consumes, so the existing
-    Az / |B| / J views show the eddy-solve fields.  Slow (~25 s)."""
+    """Return the LAST-frame field — A_z, |B|, copper eddy J = σ(−∂A/∂t + U_c) and
+    the per-element loss density — in the magnetostatic renderer's payload shape.
+    ``coupled=True`` runs the slow time-coupled eddy-current solve (needed for the
+    J⟳ current-crowding view, ~25 s); ``coupled=False`` skips it (the Loss map is
+    reconstructed from the transient losses regardless), so the Loss view is fast."""
     import numpy as _np
     import math as _math
     _comp_mesh = _parse_component_mesh(component_mesh)
@@ -1696,7 +1702,7 @@ def get_fem_eddy_field2d(
     key = ("eddyfld", round(gamma_deg, 1), round(I_phase_rms, 1),
            int(n_steps_per_period), round(n_periods, 2), round(mesh_size_mm, 2),
            round(min_size_mm, 2), round(outer_air_factor, 2), int(n_sectors),
-           round(coil_temp_c, 1), tuple(sorted(_comp_mesh.items())))
+           round(coil_temp_c, 1), tuple(sorted(_comp_mesh.items())), bool(coupled))
     if _geo_ov:   # distinct cache entry per overridden geometry (no-geo key unchanged)
         key = key + (tuple(sorted(_geo_ov.items())),)
     if key in _fem_field_cache:
@@ -1730,7 +1736,7 @@ def get_fem_eddy_field2d(
             mesh_size_mm=float(mesh_size_mm), min_size_mm=float(min_size_mm),
             outer_air_factor=float(outer_air_factor),
             n_sectors=_ns_eff,
-            coil_temp_c=float(coil_temp_c), eddy=True, rotor_eddy=True,
+            coil_temp_c=float(coil_temp_c), eddy=bool(coupled), rotor_eddy=True,
             return_field=True,
             component_mesh_mm=_comp_mesh,
             geo_override=_geo_ov)
@@ -1764,7 +1770,10 @@ def get_fem_eddy_field2d(
         s = d.get(kk) or [0.0]
         return float(_np.mean(_np.asarray(s, float))) if len(s) else 0.0
     nsec = _ns_eff if _ns_eff > 1 else 1
-    Pcu = float(d.get("P_cu_total_solve_W", 0.0))    # eddy-solve copper (DC+AC)
+    # Copper: the coupled solve reports P_cu_total_solve_W; the fast (coupled=False)
+    # path has no coupled solve, so use the transient's own DC+AC copper series.
+    Pcu = (float(d.get("P_cu_total_solve_W", 0.0)) if coupled
+           else _mean("P_cu_W"))
     Pfe = _mean("P_fe_W"); Pmag = _mean("P_mag_eddy_W")
     Tavg = float(d.get("T_avg_Nm", 0.0)); rpm = float(d.get("rpm", 0.0))
     ploss = Pcu + Pfe + Pmag

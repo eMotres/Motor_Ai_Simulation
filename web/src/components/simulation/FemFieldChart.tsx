@@ -847,6 +847,9 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
       n_sectors:        String(readMeshSetting('nSectors', 1)),
       component_mesh:   comp,
       pole_copy:        String(readMeshSetting('poleCopy', false)),
+      // Loss only needs the reconstructed loss-density map (no coupled solve) → FAST.
+      // The J⟳ current-crowding view needs the true time-coupled eddy currents.
+      coupled:          String(mode === 'Jeddy'),
     }).toString();
     fetch(`${base}?${qs}`)
       .then(async r => {
@@ -861,7 +864,7 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
   // matter — the eddy run sweeps a whole period — so we don't invalidate on it).
   useEffect(() => {
     setEddyPayload(null); setEddyErr(null);
-  }, [gamma_deg, I_phase_rms]);
+  }, [gamma_deg, I_phase_rms, mode]);   // Loss (fast) vs J⟳ (coupled) need different solves
 
   // Lazily run the (slow) eddy solve the first time a J⟳ / Loss view is shown.
   useEffect(() => {

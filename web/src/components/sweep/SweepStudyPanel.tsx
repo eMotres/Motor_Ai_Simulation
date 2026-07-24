@@ -554,7 +554,11 @@ const SweepStudyPanel: React.FC = () => {
                 {/* Legend removed — the table below lists I/γ per design, and
                     selecting a row highlights its point (and vice-versa). */}
                 {series.map((s, i) => (
-                  <Scatter key={s.key} name={s.label} data={s.rows}
+                  // key includes the current selection so Recharts re-renders the
+                  // custom point shapes when a TABLE ROW is picked (external state
+                  // change) — otherwise the highlighted point only updates on a
+                  // direct chart click.
+                  <Scatter key={`${s.key}|${(selected as any)?.pk ?? ''}`} name={s.label} data={s.rows}
                     fill={GCOL[i % GCOL.length]}
                     line={{ stroke: GCOL[i % GCOL.length], strokeWidth: 1.5 }}
                     lineJointType="monotoneX" isAnimationActive={false} cursor="pointer"

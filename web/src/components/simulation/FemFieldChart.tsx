@@ -405,14 +405,24 @@ const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode; logLoss: boole
     }
 
     if (mode === 'Demag') {
-      // Demag %: show ONLY magnet triangles, coloured by the IRREVERSIBLE
-      // demagnetisation  % = (1 − Br_factor)·100  — blue = 0 % (safe),
-      // red = 100 % (fully demagnetised).  Non-magnet cells drop out so the
-      // magnet geometry stands alone on the canvas.
+      // Demag map, ANSYS-style: show ONLY magnet triangles, coloured by the % of
+      // Br REMAINING  = Br_factor·100.  100 % = full strength (the magnet body) →
+      // RED (top of the legend); the demagnetised corners fall to the low end →
+      // BLUE.  The legend AUTO-RANGES to the real span [min remaining … 100 %]
+      // instead of a fixed 0-100, so a few-% demag is actually visible.
       const dc = (payload as any).demag_coef_per_tri as number[] | undefined;
       const dom = domain_per_tri;
       const DOM_MAG_N = 4, DOM_MAG_S = 44;
       const nTri = triangles.length;
+      // Worst loss fraction over the magnets → the auto-range span (floored so a
+      // fully-healthy magnet still gets a sane, non-degenerate legend).
+      let lostMax = 0;
+      for (let i = 0; i < nTri; i++) {
+        if (dom[i] !== DOM_MAG_N && dom[i] !== DOM_MAG_S) continue;
+        const cc = dc ? Math.max(0, Math.min(1, dc[i])) : 1;
+        const lost = 1 - cc; if (lost > lostMax) lostMax = lost;
+      }
+      const lostSpan = Math.max(lostMax, 0.02);
       const positions = new Float32Array(nTri * 3 * 3);
       const colors    = new Float32Array(nTri * 3 * 3);
       let p = 0, c = 0;
@@ -420,7 +430,9 @@ const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode; logLoss: boole
         if (dom[i] !== DOM_MAG_N && dom[i] !== DOM_MAG_S) continue;
         const tt = triangles[i];
         const coef = dc ? Math.max(0, Math.min(1, dc[i])) : 1;
-        const [rr, gg, bb] = jetBands(1 - coef, 11);   // colour by % lost (red = demagnetised)
+        // 1 = full Br (safe) → red;  0 = worst remaining in this map → blue.
+        const tCol = Math.max(0, Math.min(1, 1 - (1 - coef) / lostSpan));
+        const [rr, gg, bb] = jetBands(tCol, 11);
         for (const vi of tt) {
           positions[p++] = vertices[vi][0] * S;
           positions[p++] = vertices[vi][1] * S;
@@ -1136,8 +1148,19 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
               fmt={(v) => v.toFixed(0)} lut={(t) => jetBands(t, B_BANDS)}/>;
           }
           if (mode === 'Demag') {
-            return <ColorBar vmin={0} vmax={100} unit="Demag %"
-              lut={(t) => jetBands(t, 11)}/>;
+            // % of Br REMAINING, auto-ranged to the real span (ANSYS-style):
+            // 100 % (full strength) at the top → red; the worst magnet element
+            // sets the bottom → blue.  Matches the fill's lostSpan floor.
+            const dc = (payload as any).demag_coef_per_tri as number[] | undefined;
+            let lostMax = 0;
+            for (let ti = 0; ti < tris.length; ti++) {
+              if (dom[ti] !== 4 && dom[ti] !== 44) continue;
+              const cc = dc ? Math.max(0, Math.min(1, dc[ti])) : 1;
+              const lost = 1 - cc; if (lost > lostMax) lostMax = lost;
+            }
+            const lostSpan = Math.max(lostMax, 0.02);
+            return <ColorBar vmin={(1 - lostSpan) * 100} vmax={100} unit="% Br"
+              fmt={(v) => v.toFixed(1)} lut={(t) => jetBands(t, 11)}/>;
           }
           if (mode === 'Loss') {
             // Loss-density bar [W/m³] — log or linear to match the fill.

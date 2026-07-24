@@ -1557,7 +1557,8 @@ def get_fem_field2d(
     try:
         from motor_ai_sim.simulation.fem_solver_2d import (
             fem_transient_sliding_band, _simplify_polys,
-            DOM_MAG_BASE, DOM_COIL_BASE, DOM_MAG_N, DOM_MAG_S, DOM_COIL)
+            DOM_MAG_BASE, DOM_COIL_BASE, DOM_MAG_N, DOM_MAG_S, DOM_COIL,
+            DOM_STATOR, DOM_ROTOR)
         from motor_ai_sim.cadquery_geometry import CadQueryMotor
         from motor_ai_sim.config import get_config as _gc
     except Exception as e:
@@ -1638,9 +1639,66 @@ def get_fem_field2d(
     for i, (mp, pol) in enumerate(polys.get("magnets", []) or []):
         tags_vis[tags == (DOM_MAG_BASE + i)] = (DOM_MAG_N if pol > 0 else DOM_MAG_S)
 
+    # ── Single-frame ANALYTIC loss-density map [W/m³] ────────────────────────
+    # The Loss view is ONE magnetostatic frame (like |B|): estimate the local loss
+    # density from THIS frame's B / J — no multi-frame transient.  Frames are run
+    # ONLY for the field animation.
+    #   iron   : Bertotti   p = kh·f·B² + kc·f²·B² + ke·f^1.5·B^1.5
+    #   magnet : slab eddy   p = σ·(d·ω·B)² / 24     (d = magnet tangential width)
+    #   copper : resistive   p = ρ_Cu(T)·J²
+    # Approximate (local instantaneous |B| as the amplitude proxy) but instant and
+    # shows WHERE losses concentrate, matching the |B|/J views' 1-frame speed.
+    _loss_dens = _np.zeros(int(T.shape[1]))
+    try:
+        from motor_ai_sim import materials as _ml2
+        from motor_ai_sim.config import (get_config as _gcfg2,
+                                          get_material_assignments as _gma2)
+        _cfg2 = _gcfg2() or {}
+        _sim2 = _cfg2.get("simulation") or {}
+        _rpm = float(_sim2.get("rpm", 0.0) or 0.0)
+        _ctemp = float(_sim2.get("coil_temp_c", 120.0) or 120.0)
+        _felec = _rpm * (max(int(_poles), 2) // 2) / 60.0
+        _wel = 2.0 * math.pi * _felec
+        _asg = _gma2() or {}
+        if _felec > 0:
+            for _dom, _mkey in ((DOM_STATOR, "stator_core"), (DOM_ROTOR, "rotor_core")):
+                _msk = (tags == _dom)
+                if not _msk.any():
+                    continue
+                try:
+                    _kh, _kc, _ke = _ml2.effective_bertotti(
+                        _ml2.get_material("steel", _asg.get(_mkey)))
+                except Exception:
+                    continue
+                _b = Bmag[_msk]
+                _loss_dens[_msk] = (_kh * _felec * _b ** 2 + _kc * _felec ** 2 * _b ** 2
+                                    + _ke * _felec ** 1.5 * _np.power(_b, 1.5))
+            _mmsk = (tags >= DOM_MAG_BASE) & (tags < DOM_COIL_BASE)
+            if _mmsk.any():
+                try:
+                    _sig = float(getattr(_ml2.get_material("magnet", _asg.get("magnet")),
+                                         "sigma", 0.0) or 0.0)
+                except Exception:
+                    _sig = 0.0
+                _rout = float(_mp.get("rotor_outer_radius", 0.0) or 0.0) * 1e-3
+                _dtan = (2.0 * math.pi * _rout / max(int(_poles), 2)
+                         * float(_mp.get("magnet_fill_up", 0.5) or 0.5))
+                if _sig > 0 and _dtan > 0:
+                    _b = Bmag[_mmsk]
+                    _loss_dens[_mmsk] = _sig * (_dtan * _wel * _b) ** 2 / 24.0
+        _cmsk = (tags >= DOM_COIL_BASE)
+        if _cmsk.any():
+            _rho_cu = 1.724e-8 * (1.0 + 0.00393 * (_ctemp - 20.0))
+            _loss_dens[_cmsk] = _rho_cu * (Jtri[_cmsk] ** 2)
+    except Exception as _le:
+        log.warning("field-view loss density failed: %s", _le)
+        _loss_dens = _np.zeros(int(T.shape[1]))
+
     nsec = _ns_eff if _ns_eff > 1 else 1      # ACTUAL model symmetry (full = 1)
     result = {
         "ok": True,
+        "loss_density_per_tri": _loss_dens.tolist(),
+        "loss_dens_max": float(_loss_dens.max()) if _loss_dens.size else 0.0,
         "n_vertices": int(P.shape[1]), "n_triangles": int(T.shape[1]),
         "vertices": P.T.tolist(), "triangles": T.T.tolist(),
         "domain_per_tri": tags_vis.tolist(),

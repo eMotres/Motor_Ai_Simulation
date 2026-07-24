@@ -90,7 +90,9 @@ type FieldMode = 'Az' | 'Bmag' | 'J' | 'Jeddy' | 'Loss' | 'Demag' | 'Temp';
 // the fast magnetostatic snapshot: J⟳ (real current crowding / proximity) and
 // Loss (Ansys-style W/m³ density map).  Selecting either lazily runs the eddy
 // solve (~25 s) and caches its last-frame field + cycle-averaged loss density.
-const EDDY_MODES = new Set<FieldMode>(['Jeddy', 'Loss']);
+// Only J⟳ (eddy-current crowding) needs the slow time-coupled solve.  Loss now
+// comes from the single magnetostatic frame (analytic loss density) like |B|.
+const EDDY_MODES = new Set<FieldMode>(['Jeddy']);
 
 // Diverging blue→green→red colormap for signed J_z (Ansys "J" style:
 // red = +max, blue = −max, green = 0).

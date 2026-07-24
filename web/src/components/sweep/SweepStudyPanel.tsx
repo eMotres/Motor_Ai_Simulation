@@ -120,7 +120,7 @@ const SweepTable: React.FC<{ points: any[]; rpm: number; vdcFactor?: number; sel
       <Typography sx={{ fontSize: 11, color: 'var(--text-2)', mb: 0.5 }}>
         All swept designs ({rows.length}) — <span style={{ color: '#93c5fd' }}>variables</span> + outputs · click a column to sort
       </Typography>
-      <Box sx={{ maxHeight: 360, overflow: 'auto', border: '1px solid var(--line-soft)', borderRadius: 1 }}>
+      <Box sx={{ overflowX: 'auto', border: '1px solid var(--line-soft)', borderRadius: 1 }}>
         <table style={{ borderCollapse: 'collapse', fontSize: 10.5, width: '100%', fontFamily: 'var(--font-mono, monospace)' }}>
           <thead>
             <tr>{cols.map(c => (

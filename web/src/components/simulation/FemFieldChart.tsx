@@ -841,6 +841,13 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
     const qs = new URLSearchParams({
       gamma_deg:        String(gamma_deg),
       I_phase_rms:      String(eddyCurrent),
+      // The Loss/J⟳ views run a full nonlinear transient; the loss-density MAP is a
+      // VISUAL and does not need the dashboard's 24 frames.  10 frames / 1 period
+      // (≥9 keeps the de-jitter savgol; still resolves the 6f loss harmonic) ≈ 2.4×
+      // fewer nonlinear solves → ~2.4× faster, and the result caches so a repeat
+      // view of the same operating point is instant.
+      n_steps_per_period: '10',
+      n_periods:          '1',
       mesh_size_mm:     String(readMeshSetting('meshSize', 4.0)),
       min_size_mm:      String(readMeshSetting('minSize',  0.3)),
       outer_air_factor: String(readMeshSetting('outerAir', 1.3)),

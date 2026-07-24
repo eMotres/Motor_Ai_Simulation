@@ -17,16 +17,16 @@ geometry:
   num_wires_per_slot: 7
   wire_split: 1
   slot_hs: 0.267
-  magnet_height: 5.7
+  magnet_height: 6.2
   rotor_house_height: 1.0
   shaft_height: 2.0
   magnet_fill_down: 0.9
-  magnet_fill_up: 0.3548855421196862
+  magnet_fill_up: 0.24
   magnet_fill_radius: 0.2
   magnet_up_gap: 0.2
   rotor_hole: 0.6
-  magnet_down_height: 1.4000000000000001
-  magnet_lamination: 10
+  magnet_down_height: 1.4
+  magnet_lamination: 0
   stator_fillet_r: 1.2
   stator_fillet_r1: 0.0
   rotor_fill_r: 0.2
@@ -397,6 +397,7 @@ sweep_whitelist:
 - magnet_up_gap
 - magnet_down_height
 - rotor_fill_r
+- rotor_hole
 mesh:
   n_radial: 11
   n_angular: 104

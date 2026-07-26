@@ -1,11 +1,37 @@
 """Integration tests for the FastAPI endpoints."""
 
+import shutil
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
 from motor_ai_sim.api import app
 
 client = TestClient(app)
+
+_CONFIG = Path(__file__).resolve().parents[1] / "config" / "motor_config.yaml"
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _preserve_working_config():
+    """Put ``config/motor_config.yaml`` back the way we found it.
+
+    These tests PUT to /api/geometry and POST to /api/geometry/reset, and both
+    write the real config file — the same one the user's active design lives in.
+    Running the suite silently replaced a 30 mm 12s14p machine with the 200 mm
+    defaults, which is a nasty way to lose an afternoon's work and gives anyone
+    a good reason never to run the tests.
+
+    The right fix is to point the API at a temp config during tests; until the
+    config layer takes an injectable path, save and restore.
+    """
+    backup = _CONFIG.read_bytes() if _CONFIG.exists() else None
+    try:
+        yield
+    finally:
+        if backup is not None:
+            _CONFIG.write_bytes(backup)
 
 
 class TestHealthAndMeta:

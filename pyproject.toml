@@ -78,3 +78,7 @@ ignore_missing_imports = true
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
+markers = [
+    # Real FEM solves — minutes, not milliseconds. Deselect with -m "not slow".
+    "slow: physics regression cases that run the actual solver",
+]

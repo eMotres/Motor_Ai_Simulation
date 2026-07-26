@@ -6835,19 +6835,25 @@ def fem_transient_sliding_band(
             _pa, _pb, _pc = _psi2(A2)
             _psiA.append(_pa); _psiB.append(_pb); _psiC.append(_pc)
             _tt.append(k * dt)
+            # Element-mean B in the iron and the coils, captured on EVERY frame —
+            # the same thing the P1 path does unconditionally.  This used to sit
+            # inside `if rotor_eddy:`, which meant P2 reported ZERO core loss and
+            # zero AC copper loss whenever that flag was off, and overstated the
+            # efficiency by exactly those terms.  `rotor_eddy` means "magnet and
+            # shaft eddy losses" — it has no business gating the iron.  Harmless
+            # while P1 was the default; a silent error the moment P2 became it.
+            _bx_q, _by_q, _dxq = _p2_B_at_quad(b2, A2)
+            _ar_el = _dxq.sum(axis=1)
+            _bx_el = (_bx_q * _dxq).sum(axis=1) / np.maximum(_ar_el, 1e-30)
+            _by_el = (_by_q * _dxq).sum(axis=1) / np.maximum(_ar_el, 1e-30)
+            _hsx2.append(_bx_el[_iron_s_idx]); _hsy2.append(_by_el[_iron_s_idx])
+            _hrx2.append(_bx_el[_iron_r_idx + nst])
+            _hry2.append(_by_el[_iron_r_idx + nst])
+            if _coil_idx.size:                     # coil B for AC copper loss
+                _hcx2.append(_bx_el[_coil_idx]); _hcy2.append(_by_el[_coil_idx])
             if rotor_eddy:
                 # rotor-frame nodal A (magnet/shaft eddy via honest_rotor_eddy)
                 _histA_rot2.append(A2[_rot_vdof].copy())
-                # element-mean B in the iron regions (Bertotti iron loss)
-                _bx_q, _by_q, _dxq = _p2_B_at_quad(b2, A2)
-                _ar_el = _dxq.sum(axis=1)
-                _bx_el = (_bx_q * _dxq).sum(axis=1) / np.maximum(_ar_el, 1e-30)
-                _by_el = (_by_q * _dxq).sum(axis=1) / np.maximum(_ar_el, 1e-30)
-                _hsx2.append(_bx_el[_iron_s_idx]); _hsy2.append(_by_el[_iron_s_idx])
-                _hrx2.append(_bx_el[_iron_r_idx + nst])
-                _hry2.append(_by_el[_iron_r_idx + nst])
-                if _coil_idx.size:                     # coil B for AC copper loss
-                    _hcx2.append(_bx_el[_coil_idx]); _hcy2.append(_by_el[_coil_idx])
             if return_field and ((field_first and k == 0)
                                  or (not field_first and k == n_total - 1)):
                 _Bx_all, _By_all = _p2_B_at_quad(
@@ -6863,112 +6869,118 @@ def fem_transient_sliding_band(
         # domain rotor solve `honest_rotor_eddy`, iron via Bertotti on dB/dt.
         # (P1's default transient uses eddy=False too — the coupled σ∂A/∂t J-view
         # solve is NOT the app loss path.)  Current drive → copper = I²R (DC).
-        _lm2 = "none(magnetostatic P2)"
+        # Iron (Bertotti) and AC copper are always in; rotor_eddy only adds the
+        # coupled magnet/shaft term, which upgrades this label below.
+        _lm2 = "field (P2 magnetostatic + Bertotti iron + AC copper)"
         P_cu_dc2 = float(P_cu)                              # from copper_loss_W (I²R)
         P_cu_ac_ser2 = [0.0] * n_total; P_cu_ac_avg2 = 0.0
         P_cu_ser2 = [P_cu_dc2] * n_total
         P_fe_ser2 = [0.0] * n_total; P_fe_avg2 = 0.0
         P_mag_ser2 = [0.0] * n_total; P_mag_avg2 = 0.0
         P_shaft_ser2 = [0.0] * n_total; P_shaft_avg2 = 0.0
-        if rotor_eddy:
-            _two_pi2_2 = 2.0 * math.pi ** 2
+        # Losses from the captured B(t).  Copper AC and iron are computed
+        # UNCONDITIONALLY, matching the P1 path — they do not depend on the
+        # rotor-eddy model.  The magnet/shaft eddy below is the part rotor_eddy
+        # actually selects, and it is already gated by `if _histA_rot2:`, which
+        # is only populated when the flag is on.
+        _two_pi2_2 = 2.0 * math.pi ** 2
 
-            # ── AC copper (proximity/skin) — MUST match P1: DC I²R is already
-            #    element-order-independent (same copper_loss_W); the AC part is the
-            #    coil proximity loss σ/12·Σ(d_r²·dBr² + d_t²·dBt²), field split into
-            #    radial/tangential (same _prox_eddy_split model P1 uses).  Periodic
-            #    central-difference dB/dt (P2 field is smooth).
-            _rho_cu2 = RHO_CU_20 * (1.0 + ALPHA_CU * (float(coil_temp_c) - 20.0))
-            _sig_cu2 = 1.0 / _rho_cu2
-            _om_e2 = 2.0 * math.pi * max(1e-6, f_elec)
-            _dlt_cu2 = math.sqrt(2.0 * _rho_cu2 / (_om_e2 * MU0))
-            _nws2 = max(1, int(round(float(geo.get("wire_split", 1) or 1))))
-            _w_cu2 = min(float(geo.get("wire_width", 5.0)) * 1e-3 / _nws2,
-                         2.0 * _dlt_cu2)
-            _h_cu2 = min(float(geo.get("wire_height", 0.8)) * 1e-3, 2.0 * _dlt_cu2)
-            if _coil_idx.size and _hcx2:
-                _smp = half["s"]["mesh"]
-                _cc = (_smp.p[:, _smp.t].mean(axis=1))[:, _coil_idx]
-                Xc = np.asarray(_hcx2); Yc = np.asarray(_hcy2)     # (N, E)
-                _rr = np.hypot(_cc[0], _cc[1]); _rr = np.where(_rr < 1e-9, 1e-9, _rr)
-                _uxc = (_cc[0] / _rr)[None, :]; _uyc = (_cc[1] / _rr)[None, :]
-                _Brc = Xc * _uxc + Yc * _uyc; _Btc = -Xc * _uyc + Yc * _uxc
-                _dBrc = (np.roll(_Brc, -1, 0) - np.roll(_Brc, 1, 0)) / (2.0 * dt)
-                _dBtc = (np.roll(_Btc, -1, 0) - np.roll(_Btc, 1, 0)) / (2.0 * dt)
-                _volc = areas_s[_coil_idx] * p.stack_length
-                _Pac = (_sig_cu2 / 12.0) * np.sum(
-                    (_w_cu2 ** 2 * _dBrc ** 2 + _h_cu2 ** 2 * _dBtc ** 2)
-                    * _volc[None, :], axis=1) * NS
-                _Pac = np.maximum(_Pac, 0.0)
-                P_cu_ac_ser2 = _Pac.tolist(); P_cu_ac_avg2 = float(np.mean(_Pac))
-            P_cu_ser2 = [P_cu_dc2 + ac for ac in P_cu_ac_ser2]
+        # ── AC copper (proximity/skin) — MUST match P1: DC I²R is already
+        #    element-order-independent (same copper_loss_W); the AC part is the
+        #    coil proximity loss σ/12·Σ(d_r²·dBr² + d_t²·dBt²), field split into
+        #    radial/tangential (same _prox_eddy_split model P1 uses).  Periodic
+        #    central-difference dB/dt (P2 field is smooth).
+        _rho_cu2 = RHO_CU_20 * (1.0 + ALPHA_CU * (float(coil_temp_c) - 20.0))
+        _sig_cu2 = 1.0 / _rho_cu2
+        _om_e2 = 2.0 * math.pi * max(1e-6, f_elec)
+        _dlt_cu2 = math.sqrt(2.0 * _rho_cu2 / (_om_e2 * MU0))
+        _nws2 = max(1, int(round(float(geo.get("wire_split", 1) or 1))))
+        _w_cu2 = min(float(geo.get("wire_width", 5.0)) * 1e-3 / _nws2,
+                     2.0 * _dlt_cu2)
+        _h_cu2 = min(float(geo.get("wire_height", 0.8)) * 1e-3, 2.0 * _dlt_cu2)
+        if _coil_idx.size and _hcx2:
+            _smp = half["s"]["mesh"]
+            _cc = (_smp.p[:, _smp.t].mean(axis=1))[:, _coil_idx]
+            Xc = np.asarray(_hcx2); Yc = np.asarray(_hcy2)     # (N, E)
+            _rr = np.hypot(_cc[0], _cc[1]); _rr = np.where(_rr < 1e-9, 1e-9, _rr)
+            _uxc = (_cc[0] / _rr)[None, :]; _uyc = (_cc[1] / _rr)[None, :]
+            _Brc = Xc * _uxc + Yc * _uyc; _Btc = -Xc * _uyc + Yc * _uxc
+            _dBrc = (np.roll(_Brc, -1, 0) - np.roll(_Brc, 1, 0)) / (2.0 * dt)
+            _dBtc = (np.roll(_Btc, -1, 0) - np.roll(_Btc, 1, 0)) / (2.0 * dt)
+            _volc = areas_s[_coil_idx] * p.stack_length
+            _Pac = (_sig_cu2 / 12.0) * np.sum(
+                (_w_cu2 ** 2 * _dBrc ** 2 + _h_cu2 ** 2 * _dBtc ** 2)
+                * _volc[None, :], axis=1) * NS
+            _Pac = np.maximum(_Pac, 0.0)
+            P_cu_ac_ser2 = _Pac.tolist(); P_cu_ac_avg2 = float(np.mean(_Pac))
+        P_cu_ser2 = [P_cu_dc2 + ac for ac in P_cu_ac_ser2]
 
-            def _iron_p2(hx, hy, idx, areas_half, mat):
-                # compact Bertotti: classical eddy ∝⟨(dB/dt)²⟩ (ripples) + flat
-                # hysteresis + excess.  Periodic central-difference dB/dt (the P2
-                # field is already smooth, so the P1 savgol slip-jitter filter is
-                # unnecessary here).  Coeffs fitted from the material's measured
-                # loss curves (effective_bertotti).  Returns (P(t) [N], hyst [W]).
-                if mat is None or idx.size == 0 or len(hx) == 0:
-                    return np.zeros(n_total), 0.0
-                X = np.asarray(hx); Y = np.asarray(hy)         # (N, E)
-                kh, kc, ke = _mat_lib.effective_bertotti(mat)
-                sf = float(getattr(mat, "stacking_factor", 0.95))
-                vol = areas_half[idx] * p.stack_length * sf
-                dX = (np.roll(X, -1, 0) - np.roll(X, 1, 0)) / (2.0 * dt)
-                dY = (np.roll(Y, -1, 0) - np.roll(Y, 1, 0)) / (2.0 * dt)
-                pcl = (kc / _two_pi2_2) * np.sum((dX ** 2 + dY ** 2)
-                                                 * vol[None, :], axis=1)
-                Bac2 = (((X.max(0) - X.min(0)) * 0.5) ** 2
-                        + ((Y.max(0) - Y.min(0)) * 0.5) ** 2)
-                phys = float(np.sum((kh * f_elec * Bac2
-                                     + ke * f_elec ** 1.5
-                                     * np.power(np.maximum(Bac2, 0.0), 0.75)) * vol))
-                return pcl, phys
+        def _iron_p2(hx, hy, idx, areas_half, mat):
+            # compact Bertotti: classical eddy ∝⟨(dB/dt)²⟩ (ripples) + flat
+            # hysteresis + excess.  Periodic central-difference dB/dt (the P2
+            # field is already smooth, so the P1 savgol slip-jitter filter is
+            # unnecessary here).  Coeffs fitted from the material's measured
+            # loss curves (effective_bertotti).  Returns (P(t) [N], hyst [W]).
+            if mat is None or idx.size == 0 or len(hx) == 0:
+                return np.zeros(n_total), 0.0
+            X = np.asarray(hx); Y = np.asarray(hy)         # (N, E)
+            kh, kc, ke = _mat_lib.effective_bertotti(mat)
+            sf = float(getattr(mat, "stacking_factor", 0.95))
+            vol = areas_half[idx] * p.stack_length * sf
+            dX = (np.roll(X, -1, 0) - np.roll(X, 1, 0)) / (2.0 * dt)
+            dY = (np.roll(Y, -1, 0) - np.roll(Y, 1, 0)) / (2.0 * dt)
+            pcl = (kc / _two_pi2_2) * np.sum((dX ** 2 + dY ** 2)
+                                             * vol[None, :], axis=1)
+            Bac2 = (((X.max(0) - X.min(0)) * 0.5) ** 2
+                    + ((Y.max(0) - Y.min(0)) * 0.5) ** 2)
+            phys = float(np.sum((kh * f_elec * Bac2
+                                 + ke * f_elec ** 1.5
+                                 * np.power(np.maximum(Bac2, 0.0), 0.75)) * vol))
+            return pcl, phys
 
-            _pcl_s, _ph_s = _iron_p2(_hsx2, _hsy2, _iron_s_idx, areas_s, _steel_s)
-            _pcl_r, _ph_r = _iron_p2(_hrx2, _hry2, _iron_r_idx, areas_r, _steel_r)
-            _P_fe_t = (_pcl_s + _pcl_r) * NS + (_ph_s + _ph_r) * NS
-            _P_fe_t = np.maximum(_P_fe_t, 0.0)
-            P_fe_ser2 = _P_fe_t.tolist(); P_fe_avg2 = float(np.mean(_P_fe_t))
-            # magnet + shaft eddy: honest (reaction-included) rotor solve on the
-            # rotor-frame A(t) history — the SAME function the P1 path uses.
-            if _histA_rot2:
-                try:
-                    from motor_ai_sim.simulation.eddy_solver_2d import (
-                        honest_rotor_eddy as _hre2)
-                    _rm = half["r"]["mesh"]
-                    _tags_r2 = np.zeros(_rm.t.shape[1], int)
-                    for _tg, _els in half["r"]["cells"].items():
-                        _tags_r2[np.asarray(_els, int)] = int(_tg)
-                    _magt2 = [int(tg) for tg in np.unique(_tags_r2)
-                              if int(tg) >= DOM_MAG_BASE]
-                    # rotor back-iron μ_r from the CONVERGED P2 ν (last frame)
-                    _rir = half["r"]["cells"].get(int(DOM_ROTOR))
-                    if _rir is not None and np.size(_rir):
-                        _mur_bi = 1.0 / (MU0 * float(np.mean(
-                            nu_all2[np.asarray(_rir, int) + nst])))
-                    else:
-                        _mur_bi = 1000.0
+        _pcl_s, _ph_s = _iron_p2(_hsx2, _hsy2, _iron_s_idx, areas_s, _steel_s)
+        _pcl_r, _ph_r = _iron_p2(_hrx2, _hry2, _iron_r_idx, areas_r, _steel_r)
+        _P_fe_t = (_pcl_s + _pcl_r) * NS + (_ph_s + _ph_r) * NS
+        _P_fe_t = np.maximum(_P_fe_t, 0.0)
+        P_fe_ser2 = _P_fe_t.tolist(); P_fe_avg2 = float(np.mean(_P_fe_t))
+        # magnet + shaft eddy: honest (reaction-included) rotor solve on the
+        # rotor-frame A(t) history — the SAME function the P1 path uses.
+        if _histA_rot2:
+            try:
+                from motor_ai_sim.simulation.eddy_solver_2d import (
+                    honest_rotor_eddy as _hre2)
+                _rm = half["r"]["mesh"]
+                _tags_r2 = np.zeros(_rm.t.shape[1], int)
+                for _tg, _els in half["r"]["cells"].items():
+                    _tags_r2[np.asarray(_els, int)] = int(_tg)
+                _magt2 = [int(tg) for tg in np.unique(_tags_r2)
+                          if int(tg) >= DOM_MAG_BASE]
+                # rotor back-iron μ_r from the CONVERGED P2 ν (last frame)
+                _rir = half["r"]["cells"].get(int(DOM_ROTOR))
+                if _rir is not None and np.size(_rir):
+                    _mur_bi = 1.0 / (MU0 * float(np.mean(
+                        nu_all2[np.asarray(_rir, int) + nst])))
+                else:
+                    _mur_bi = 1000.0
 
-                    def _muf2(tg):
-                        tg = int(tg)
-                        if tg >= DOM_MAG_BASE: return 1.05
-                        if tg == DOM_ROTOR:    return _mur_bi
-                        return 1.0
-                    P_mag_avg2, P_shaft_avg2, _hf2 = _hre2(
-                        np.asarray(_rm.p, float), np.asarray(_rm.t, int), _tags_r2,
-                        _muf2, _sigma_of_tag, _magt2, DOM_SHAFT,
-                        np.asarray(_histA_rot2, float), float(n_total) * dt,
-                        float(p.stack_length), float(NS))
-                    P_mag_ser2 = [float(P_mag_avg2)] * n_total
-                    P_shaft_ser2 = [float(P_shaft_avg2)] * n_total
-                    _lm2 = "field+honest (P2 magnetostatic + coupled rotor eddy)"
-                    log.info("P2 rotor eddy: mag=%.3f shaft=%.3f W (%d harmonics); "
-                             "iron=%.3f W, copper(dc)=%.1f W", P_mag_avg2,
-                             P_shaft_avg2, len(_hf2), P_fe_avg2, P_cu_dc2)
-                except Exception as _e2:
-                    log.warning("P2 honest rotor eddy failed: %s", _e2)
+                def _muf2(tg):
+                    tg = int(tg)
+                    if tg >= DOM_MAG_BASE: return 1.05
+                    if tg == DOM_ROTOR:    return _mur_bi
+                    return 1.0
+                P_mag_avg2, P_shaft_avg2, _hf2 = _hre2(
+                    np.asarray(_rm.p, float), np.asarray(_rm.t, int), _tags_r2,
+                    _muf2, _sigma_of_tag, _magt2, DOM_SHAFT,
+                    np.asarray(_histA_rot2, float), float(n_total) * dt,
+                    float(p.stack_length), float(NS))
+                P_mag_ser2 = [float(P_mag_avg2)] * n_total
+                P_shaft_ser2 = [float(P_shaft_avg2)] * n_total
+                _lm2 = "field+honest (P2 magnetostatic + coupled rotor eddy)"
+                log.info("P2 rotor eddy: mag=%.3f shaft=%.3f W (%d harmonics); "
+                         "iron=%.3f W, copper(dc)=%.1f W", P_mag_avg2,
+                         P_shaft_avg2, len(_hf2), P_fe_avg2, P_cu_dc2)
+            except Exception as _e2:
+                log.warning("P2 honest rotor eddy failed: %s", _e2)
         P_tot_ser2 = [c + f + m + s for c, f, m, s in
                       zip(P_cu_ser2, P_fe_ser2, P_mag_ser2, P_shaft_ser2)]
         P_loss_avg2 = float(np.mean(P_tot_ser2)) if P_tot_ser2 else 0.0

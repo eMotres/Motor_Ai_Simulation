@@ -220,9 +220,13 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
       : { mode: 'fixed' });
   const [coilTemp,      setCoilTemp]      = usePersisted('coilTemp',  120.0); // °C
   const [endWinding,    setEndWinding]    = usePersisted('endWinding', 0.0);  // k_end (editable)
-  // Last geometry-derived k_end we seeded the cell with — lets us re-seed on a
-  // geometry change without clobbering a manual override on an unchanged geom.
+  // Last geometry-derived k_end we seeded the cell with — shown in the tooltip.
   const [endWindingGeo, setEndWindingGeo] = usePersisted('endWindingGeo', 0.0);
+  // k_end = (π·tooth_w/2 + L_stack)/L_stack, so it moves with every tooth_width /
+  // stack-length edit.  Re-seeding is keyed on this signature instead of running
+  // once on mount, which used to leave a stale (or bare 0) factor behind in every
+  // consumer that reads `sim.endWinding` (TransientCharts, motorStore, sweep).
+  const geomSig = useMotorStore(s => JSON.stringify(s.geometry ?? {}));
 
   // ── Run-Simulation gating ──────────────────────────────────────────────
   // The FEM transient + field animation only (re)compute when runNonce
@@ -234,6 +238,32 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // result reappears WITHOUT recomputing. It only changes when the user presses
   // Run for a new simulation. (Was useState(0) → every reload wiped it.)
   const [runNonce, setRunNonce] = usePersisted('runNonce', 0);
+  // Active magnet + the two numbers that decide how it behaves: Br sets the flux,
+  // the BH-curve knee sets how much demagnetising field it survives.  Refreshed on
+  // the same event a material change fires, so it never lags the assignment.
+  const [magInfo, setMagInfo] = useState<{ name: string; Br?: number; knee?: number } | null>(null);
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const a = await (await fetch(`${API}/api/materials`)).json();
+        const name = String(a?.magnet || '');
+        if (!name) return;
+        let Br: number | undefined, knee: number | undefined;
+        try {
+          const m = await (await fetch(`${API}/api/materials/library/magnet/${encodeURIComponent(name)}`)).json();
+          const mm = m?.material ?? m;
+          Br = Number(mm?.Br);
+          const bh = mm?.bh_curve;
+          if (Array.isArray(bh) && bh.length > 1) knee = Number(bh[0]?.[1] <= 0 ? bh[1]?.[0] : bh[0]?.[0]);
+        } catch { /* library lookup is optional */ }
+        setMagInfo({ name, Br: Number.isFinite(Br as number) ? Br : undefined,
+                     knee: Number.isFinite(knee as number) ? knee : undefined });
+      } catch { /* offline — the badge just stays as it was */ }
+    };
+    load();
+    window.addEventListener('sim-design-applied', load);
+    return () => window.removeEventListener('sim-design-applied', load);
+  }, []);
   const [simBusy,  setSimBusy]  = useState(false);
   // "fresh" tells the backend to discard any frames cached from a Stopped
   // run and recompute everything; cancelledRun remembers that the last run
@@ -346,12 +376,16 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
     if (s !== steps) { setSteps(s); setStepsStr(String(s)); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stepsMax]);
+  // Set when the typed value was moved onto the valid grid — the snap used to be
+  // silent, so "typed 40, got 36" read as the field resetting itself.
+  const [stepsSnapped, setStepsSnapped] = useState<number | null>(null);
   const commitSteps = () => {
     const v = Math.round(Number(stepsStr));
     const clamped = Number.isFinite(v)
       ? snapSteps(Math.max(6, Math.min(stepsMax, v))) : steps;
     setSteps(clamped);
     setStepsStr(String(clamped));
+    setStepsSnapped(Number.isFinite(v) && v !== clamped ? v : null);
   };
   // ── rotor angle / PINN training settings removed ──────────────────────
   // FEM auto-run now sweeps the rotor through the full electrical period,
@@ -393,12 +427,28 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
       const p = (e as CustomEvent).detail || {};
       if (typeof p.steps_per_period === 'number') { setSteps(p.steps_per_period); setStepsStr(String(p.steps_per_period)); }
       if (typeof p.coil_temp_c === 'number') setCoilTemp(p.coil_temp_c);
-      if (typeof p.end_winding_factor === 'number') setEndWinding(p.end_winding_factor);
+      // 0 = "auto" (the descent let the solver derive k_end per candidate); adopting
+      // that 0 would blank a cell that must always show the geometry's real factor.
+      if (Number(p.end_winding_factor) > 0) setEndWinding(Number(p.end_winding_factor));
       if (typeof p.demag === 'boolean') setDemag(p.demag);
       if (typeof p.torque_filter === 'boolean') setTorqueFilter(p.torque_filter);
     };
     window.addEventListener('descent-eval-params', onEval as EventListener);
     return () => window.removeEventListener('descent-eval-params', onEval as EventListener);
+  }, []);
+
+  // Applying a design (Optimization / Sweep) swapped the geometry AND the operating
+  // point, so the dashboard has to recompute for it — otherwise it keeps showing the
+  // previous design until the user notices and presses Re-run.  The apply already
+  // PATCHed the operating point, so only tick the run gate here: re-PATCHing would
+  // write back this listener's stale current/γ over the values just applied.
+  useEffect(() => {
+    const onRerun = () => {
+      setFreshRun(false); setCancelledRun(false); setAskResume(false);
+      setRunNonce(n => n + 1);
+    };
+    window.addEventListener('sim-rerun', onRerun);
+    return () => window.removeEventListener('sim-rerun', onRerun);
   }, []);
 
   // ── load server status + geometry ─────────────────────────────────────────
@@ -413,6 +463,13 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
           // fully derived (rpm·pp/60, effect above); seeding it here raced the
           // geometry load and pinned the stale value after a pole-count change.
           setRpm(d.operating_point.rpm ?? 3950);
+          // γ is PATCHed to config on every edit but was never read back, so it
+          // survived only in this browser's localStorage: a fresh browser, or any
+          // motor load that seeded a different value, showed 0 and looked like the
+          // setting "never saves".  Config is the durable, cross-browser source —
+          // restore from it exactly like current and rpm above.
+          const _g = Number(d.operating_point.phase_offset_deg);
+          if (Number.isFinite(_g)) setPhaseOffset(_g);
         }
         simReady.current = true;     // operating point loaded → debounced saves allowed
       })
@@ -426,25 +483,33 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
         if (g.num_poles)        setNumPoles(g.num_poles);
         if (g.num_slots)        setNumSlots(g.num_slots);
         if (g.num_wires_per_slot) setNWiresPerSlot(g.num_wires_per_slot);
-        // End-winding factor k_end = (π·tooth_w/2 + L)/L, derived from the
-        // CURRENT geometry.  Re-seed the (editable) cell whenever the geometry-
-        // derived value CHANGES — like the other geometry-derived parameters —
-        // but leave a manual override untouched if the geometry is the same.
-        const kAuto = Number(d.end_winding_factor);
-        if (Number.isFinite(kAuto) && kAuto > 0) {
-          // Show the CURRENT geometry's auto k_end (end-turn length / stack).
-          // Seed the cell when it's at 0 ("auto"/unset) OR when the geometry
-          // changed (kAuto differs from the last seeded value) — so it never
-          // sits at a misleading 0 and always tracks the geometry; a manual
-          // override is left untouched only while the geometry is unchanged.
-          if (!(endWinding > 0) || kAuto !== endWindingGeo) {
-            setEndWinding(+kAuto.toFixed(2));
-          }
-          setEndWindingGeo(kAuto);
-        }
       })
       .catch(() => {});
   }, []);
+
+  // ── k_end always tracks the CURRENT geometry ──────────────────────────────
+  // masses.end_winding_factor is the SINGLE SOURCE (the copper mass, phase
+  // resistance and copper loss all scale by it), so re-fetch the canonical value
+  // on every geometry change rather than once on mount.  Persisting the real
+  // number instead of a bare 0 ("auto") also fixes every consumer that reads
+  // `sim.endWinding` straight from localStorage — the transient charts, the
+  // dashboard and a sweep now all scale the copper loss by the same end-turn
+  // length the solver uses.
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${API}/api/config`)
+      .then(r => r.json())
+      .then(d => {
+        if (cancelled) return;
+        const kAuto = Number(d.end_winding_factor);
+        if (!Number.isFinite(kAuto) || kAuto <= 0) return;
+        const k = +kAuto.toFixed(3);
+        setEndWindingGeo(k);
+        setEndWinding(k);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [geomSig]);
 
   // ── polling ───────────────────────────────────────────────────────────────
   const stopPolling = useCallback(() => {
@@ -576,6 +641,30 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
             letterSpacing: '0.1em', textTransform: 'uppercase', mb: 1.5 }}>
             Operating Point
           </Typography>
+          {magInfo && (
+            <Tooltip placement="right" title={
+              `The magnet these results are solved with. Br sets the flux; the knee is how much `
+              + `demagnetising field it survives. Two magnets with the same Br but different knees `
+              + `behave IDENTICALLY unless "Demagnetisation" below is ticked — that is the only `
+              + `model that reads the knee.`}>
+              <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.75, mb: 1.25,
+                px: 1, py: 0.5, borderRadius: 0.5, cursor: 'help',
+                border: '1px solid var(--line)', bgcolor: 'var(--panel-2)' }}>
+                <Typography sx={{ fontSize: 9.5, color: 'var(--text-4)', textTransform: 'uppercase',
+                  letterSpacing: '0.06em' }}>magnet</Typography>
+                <Typography sx={{ fontSize: 11, fontWeight: 700, color: '#2563eb' }}>{magInfo.name}</Typography>
+                <Box sx={{ flex: 1 }} />
+                {magInfo.Br != null && (
+                  <Typography sx={{ fontSize: 10, color: 'var(--text-3)' }}>Br {magInfo.Br.toFixed(2)} T</Typography>
+                )}
+                {magInfo.knee != null && (
+                  <Typography sx={{ fontSize: 10, color: demag ? 'var(--text-3)' : 'var(--text-4)' }}>
+                    knee {(magInfo.knee / 1000).toFixed(0)} kA/m{demag ? '' : ' (unused)'}
+                  </Typography>
+                )}
+              </Box>
+            </Tooltip>
+          )}
 
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
             {/* Drive mode: imposed sinusoidal current (design work) vs imposed
@@ -680,8 +769,9 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               inputProps={{ step: 0.05, min: 0, max: 6 }}
               InputProps={{ endAdornment: <HelpTip title={`End-winding copper: scales the coil resistance/loss by the end-turn length.` +
                           ` k_end = (π·tooth_w/2 + L_stack)/L_stack = ${endWindingGeo ? endWindingGeo.toFixed(3) : '—'} for THIS geometry.` +
-                          ` AUTO by default — recomputed for every geometry and used in all simulations AND optimizations` +
-                          ` (0 in the field also means auto). Type a value only to override for this run.`} /> }}
+                          ` Re-derived on EVERY geometry change and used in all simulations AND optimizations —` +
+                          ` it scales the copper loss and phase resistance for the end-turns a 2-D solve can't see.` +
+                          ` Type a value to override it until the geometry changes again.`} /> }}
               disabled={isRunning}
             />
 
@@ -717,6 +807,11 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
             onKeyDown={e => { if (e.key === 'Enter') { commitSteps(); (e.target as HTMLInputElement).blur(); } }}
             inputProps={{ inputMode: 'numeric', pattern: '[0-9]*' }}
             disabled={simBusy}
+            helperText={stepsSnapped != null
+              ? `${stepsSnapped} is not a divisor of ${stepsMax} — snapped to ${steps}. Valid: ${validSteps.join(', ')}`
+              : `Valid: ${validSteps.join(', ')}`}
+            FormHelperTextProps={{ sx: { fontSize: 9.5, mx: 0, mt: 0.25, lineHeight: 1.3,
+              color: stepsSnapped != null ? '#b45309' : 'var(--text-3)' } }}
             InputProps={{ endAdornment: <HelpTip title={`Transient time resolution. Valid = divisors of ${stepsMax} (slip nodes per electrical period): ${validSteps.join(', ')}. Other values snap to the nearest so the rotor lands on whole mesh nodes.`} /> }}
             sx={{ mb: 1.25 }}
           />

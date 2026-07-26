@@ -55,7 +55,7 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
             rotor_eddy: bool = False, hi_fidelity: bool = False,
             structured_gap: bool = False, airgap_macro: bool = False,
             iron_template: bool = True, geo_mesh: bool = True,
-            element_order: int = 1) -> Dict[str, Any]:
+            element_order: int = 2) -> Dict[str, Any]:
     """Run the sliding-band transient for one candidate and return mean
     performance metrics (torque, efficiency, ripple, losses, mass).
 
@@ -176,6 +176,25 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
     # optimizer's THD is byte-identical to the Simulation tab's.
     from motor_ai_sim.simulation.postproc import voltage_harmonics
     vh = voltage_harmonics(d)
+    # Thermal loading and the speed constant, computed EXACTLY as the Simulation
+    # summary does (routes/simulation.py): J = I_rms / n_parallel over ONE strand's
+    # section, KV from the fundamental line voltage phasor.  Same formula → an
+    # optimizer design and a Simulation run of it report the same number.
+    _npar = max(1, int((cfg.get("winding", {}) or {}).get("n_parallel", 1) or 1))
+    _a_cond_mm2 = float(geo.get("wire_width", 0.0)) * float(geo.get("wire_height", 0.0))
+    j_coil = (float(current_a) / _npar / _a_cond_mm2) if _a_cond_mm2 > 1e-9 else 0.0
+    kv_line = (rpm / (vh["V1_LL_V"] / math.sqrt(2))) if vh.get("V1_LL_V", 0.0) > 1 else 0.0
+    # Peak LINE voltage — the DC-bus sizing number.  Taken from the actual
+    # line-to-line waveforms like the Simulation summary does, falling back to the
+    # sqrt(3)*V_phase_peak identity only when the phase waveforms aren't returned.
+    _vs = [d.get(k) for k in ("V_A", "V_B", "V_C")]
+    if all(isinstance(v, (list, tuple)) and len(v) >= 4 for v in _vs) \
+            and len({len(v) for v in _vs}) == 1:
+        _va, _vb, _vc = (np.nan_to_num(np.asarray(v, float), nan=0.0, posinf=0.0, neginf=0.0)
+                         for v in _vs)
+        v_line_peak = float(max(np.max(np.abs(p)) for p in (_va - _vb, _vb - _vc, _vc - _va)))
+    else:
+        v_line_peak = float(d["V_peak"]) * math.sqrt(3)
     return {
         "T_em_Nm": round(Tavg, 3), "efficiency": round(eff, 5),
         "torque_per_mass_Nm_kg": round(Tavg / mass, 4) if mass > 0 else 0.0,
@@ -183,9 +202,26 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         "P_loss_total_W": round(ploss, 1), "P_cu_W": round(cu, 1),
         "P_cu_dc_W": round(cu_dc, 1), "P_cu_ac_W": round(cu_ac, 1),
         "P_fe_W": round(fe, 1), "P_mag_W": round(mg, 1), "P_shaft_W": round(sh, 1),
+        # Same loss split under the Simulation's OWN names, so a design carries one
+        # vocabulary from the optimizer through the Compare table.
+        "P_core_W": round(fe, 1),                 # laminated iron
+        "P_stranded_W": round(cu, 1),             # copper
+        "P_solid_W": round(mg + sh, 1),           # magnet + shaft eddy
+        # SHAFT power, defined exactly as the Simulation summary defines it
+        # (P_elec_in - all losses, energy-conserving).  `pmech` above is the
+        # AIRGAP product T*omega — the two differ by the rotor losses plus the
+        # energy-balance residual, so reporting the airgap figure under the name
+        # P_mech_W produced Compare rows whose power contradicted their torque.
+        "P_mech_W": round(_pm if _pm > 0.0 else pmech, 1),
+        "J_coil_A_per_mm2": round(j_coil, 1),
+        "KV_rpm_per_V_line": round(kv_line, 2),
+        "power_per_mass_W_kg": round((_pm if _pm > 0.0 else pmech) / mass, 1) if mass > 0 else 0.0,
+        "loss_density_W_kg": round(ploss / mass, 1) if mass > 0 else 0.0,
         "mass_total_kg": round(mass, 3), "V_peak": round(float(d["V_peak"]), 1),
+        "V_line_peak_V": round(v_line_peak, 1),
+        "I_phase_rms_A": round(float(current_a), 2),
         "V1_phase_V": vh["V1_phase_V"], "THD_pct": vh["THD_pct"],
-        "THD_LL_pct": vh["THD_LL_pct"],
+        "THD_LL_pct": vh["THD_LL_pct"], "V1_LL_V": vh.get("V1_LL_V", 0.0),
         "Kt_Nm_per_Arms": (round(Tavg / float(current_a), 4)
                            if float(current_a or 0.0) > 1e-9 else 0.0),
     }
@@ -212,7 +248,7 @@ if __name__ == "__main__":
                       airgap_macro=spec.get("airgap_macro", False),
                       iron_template=spec.get("iron_template", True),
                       geo_mesh=spec.get("geo_mesh", True),
-                      element_order=spec.get("element_order", 1))
+                      element_order=spec.get("element_order", 2))
         sys.stdout.write("@@RESULT@@" + json.dumps({"ok": True, "res": res}))
     except Exception as e:  # noqa: BLE001
         sys.stdout.write("@@RESULT@@" + json.dumps({"ok": False, "error": str(e)}))

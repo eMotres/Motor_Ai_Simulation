@@ -18,11 +18,15 @@ Usage
 
 from __future__ import annotations
 
+import logging
+import time
 from dataclasses import dataclass, field, fields as dataclass_fields
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Literal
 
 import yaml
+
+_log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Path
@@ -31,16 +35,44 @@ _LIB_PATH = Path(__file__).parent.parent.parent / "config" / "materials_library.
 
 # Module-level cache
 _library: Optional[dict] = None
+_lib_mtime: float = 0.0      # mtime of the YAML the cached copy was parsed from
+_lib_checked: float = 0.0    # monotonic clock of the last mtime probe
+# The library used to be read exactly ONCE per process, so a material added or
+# edited on disk stayed invisible — to the API *and* to the in-process solver —
+# until a restart, which silently made a run use the wrong magnet.  The cache now
+# follows the file.  The mtime is probed at most this often so the solver's
+# per-element lookups don't turn into a syscall storm.
+_MTIME_PROBE_S = 1.0
 
 
 def _load() -> dict:
-    """Load and cache the materials library YAML."""
-    global _library
-    if _library is None:
-        if not _LIB_PATH.exists():
-            raise FileNotFoundError(f"Materials library not found: {_LIB_PATH}")
+    """Load the materials library YAML, re-reading it when the file changes."""
+    global _library, _lib_mtime, _lib_checked
+    now = time.monotonic()
+    if _library is not None and (now - _lib_checked) < _MTIME_PROBE_S:
+        return _library
+    if not _LIB_PATH.exists():
+        if _library is not None:
+            return _library          # file vanished mid-session: keep serving it
+        raise FileNotFoundError(f"Materials library not found: {_LIB_PATH}")
+    _lib_checked = now
+    mtime = _LIB_PATH.stat().st_mtime
+    if _library is not None and mtime == _lib_mtime:
+        return _library
+    try:
         with _LIB_PATH.open("r", encoding="utf-8") as f:
-            _library = yaml.safe_load(f)
+            parsed = yaml.safe_load(f)
+    except Exception as e:                      # noqa: BLE001
+        # Half-written or malformed edit: keep the last good copy rather than
+        # taking the whole solver down mid-run.  The next probe retries.
+        if _library is not None:
+            _log.warning("materials_library.yaml unreadable (%s) — keeping the "
+                         "previously loaded copy", e)
+            return _library
+        raise
+    _library = parsed
+    _lib_mtime = mtime
+    _bertotti_fit_cache.clear()      # derived fits belong to the old file
     return _library
 
 
@@ -456,9 +488,11 @@ def all_coolants() -> Dict[str, CoolantMaterial]:
 
 
 def reload() -> None:
-    """Force reload of the library from disk (useful during development)."""
-    global _library
+    """Force reload of the library from disk, bypassing the mtime probe."""
+    global _library, _lib_mtime, _lib_checked
     _library = None
+    _lib_mtime = 0.0
+    _lib_checked = 0.0
     _load()
     _bertotti_fit_cache.clear()
 

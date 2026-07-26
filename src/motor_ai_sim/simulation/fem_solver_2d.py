@@ -53,6 +53,12 @@ MU0 = 4e-7 * math.pi
 # a 5-8 Nm p-p no-load torque floor (see PARITY_FINDINGS_band_mode.md).
 _PIC_TOL = 1e-3
 
+# Convergence tolerance on the per-element magnet Br factor: a frame counts as
+# converged once no element's remanence still moves by more than this.  The
+# demag de-rating is monotone, so this only decides when the coupling
+# (magnet weakens -> its own demagnetising field weakens) has settled.
+_DEMAG_TOL = 1e-4
+
 # Single source of truth for the d-axis phase offset: the electrical angle added
 # to (rotor_angle·pole_pairs + γ) so that γ=0 lands on the q-axis.  MUST be
 # identical across every solve path (transient currents, static field, eddy) —
@@ -4752,6 +4758,37 @@ def solve_field2d_on_mesh(
 # 5.  Full FEM pipeline with torque + losses (Simulation tab endpoint)
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _smooth_demag_H(mesh, idx: np.ndarray, H_el: np.ndarray) -> np.ndarray:
+    """Area-weighted nodal smoothing of the demagnetising field inside ONE magnet.
+
+    H is recovered from B = mu0*(H + M), and on P1 elements B is constant per
+    triangle, so the value in a sharp magnet corner is a mesh artefact: it grows
+    without bound as the mesh is refined and de-rates that element to ~0 Br.  That
+    is why the corner minimum read 0.037 against Ansys' 0.558 on the same design.
+
+    Averaging onto the NODES (weighted by element area) and back gives the
+    continuous field the de-rating should be judged on — mesh-independent and the
+    same post-processing Ansys plots.  Smoothing is confined to this magnet's own
+    elements so nothing leaks across the magnet/iron boundary.
+
+    NOTE this makes the model LESS conservative than the raw peak: the corner is no
+    longer driven to zero.  The raw per-element worst is still reported alongside.
+    """
+    t = np.asarray(mesh.t)[:, idx]                 # 3 x n nodes of this magnet
+    x, y = np.asarray(mesh.p)[0], np.asarray(mesh.p)[1]
+    ax, ay = x[t[0]], y[t[0]]
+    bx, by = x[t[1]], y[t[1]]
+    cx, cy = x[t[2]], y[t[2]]
+    area = 0.5 * np.abs((bx - ax) * (cy - ay) - (cx - ax) * (by - ay))
+    area = np.maximum(area, 1e-30)
+    nsum = np.zeros(x.size); wsum = np.zeros(x.size)
+    for k in range(3):
+        np.add.at(nsum, t[k], H_el * area)
+        np.add.at(wsum, t[k], area)
+    Hn = nsum / np.maximum(wsum, 1e-30)
+    return Hn[t].mean(axis=0)
+
+
 def _per_triangle_B(mesh, A_nodal: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     """Compute B = (B_x, B_y) per triangle from P1 nodal A_z.
     Returns (B_x_per_tri, B_y_per_tri) — both shape (n_tri,).
@@ -6317,6 +6354,19 @@ def fem_transient_sliding_band(
         _vskip = _v_settle_periods * max(2, _v_nspp)
         n_periods = float(n_periods) + float(_v_settle_periods)
         n_total += _vskip
+    # Demagnetisation: SETTLING pass, then a clean measurement pass.
+    # The magnet weakens THROUGH the run, so a single pass measures a machine
+    # whose magnets are still changing: torque decays across the window and the
+    # reported "ripple" is mostly that decay (NdFeB measured 19 % with demag vs
+    # 9 % without — the extra 10 points were the magnet dying, not a physical
+    # oscillation).  Run one extra period first so the de-rating settles, then
+    # discard those frames.  Every reported number then comes from the second
+    # pass, on a magnet that has stopped moving.
+    _dmskip = 0
+    if demag and _mag_idx.size and _v_nspp > 1 and n_total > 1:
+        _dmskip = _v_nspp
+        n_periods = float(n_periods) + 1.0
+        n_total += _dmskip
     period_mech = 360.0 / pole_pairs                      # one electrical period [deg mech]
     T_series = []; psiA = []; psiB = []; psiC = []
     IA = []; IB = []; IC = []; tt = []
@@ -7094,130 +7144,122 @@ def fem_transient_sliding_band(
             _o = np.argsort(_hs)
             _dm.append(dict(idx=np.asarray(_idx, int), Mx=_m.Mx, My=_m.My,
                             Mm=_Mm, knee=float(_knee), mu_r=float(_m.mu_r),
-                            hs=_hs[_o], bs=_bs[_o], Br0=_Mm * MU0, tag=int(_tag)))
-        _Hmin = np.full(_nt_r, np.inf)
-        for k in range(n_total):
-            if progress_cb is not None:
-                try: progress_cb(k, 2 * n_total)
-                except Exception: pass
-            theta = (k / n_total) * period_mech * n_periods
-            if _moving and _macro_free_m:
-                m_shift = theta / spacing            # FRACTIONAL node shift
-                _mi = round(m_shift)                 # kill fp dust on whole-node
-                if abs(m_shift - _mi) < 1e-9:        # runs (exact-pad gate keys
-                    m_shift = float(_mi)             # on consecutive-int m)
-            else:
-                m_shift = int(round(theta / spacing))
-            Ist = _currents(m_shift * spacing)
-            f = np.concatenate([(Ist['A'] * f_coil['A'] + Ist['B'] * f_coil['B']
-                                 + Ist['C'] * f_coil['C']), f_mag])
-            if _moving:
-                Pro = Pro_const
-                outer_red = outer_red_const
-                _Kband_p = _K_gap_macro(m_shift) if _use_macro else _K_band(m_shift)
-            else:
-                suf = _SignedUF(n)
-                for a, b in zip(Mn, Sn):
-                    suf.union(int(b), int(a), _bc_sign)
-                for kk in range(Nring):
-                    j = kk + m_shift; sg = 1
-                    while j > Nring - 1: j -= (Nring - 1); sg *= _bc_sign
-                    while j < 0:         j += (Nring - 1); sg *= _bc_sign
-                    suf.union(int(rring[kk] + nsn), int(sring[j]), sg)
-                roots = [suf.find(i) for i in range(n)]
-                rid = np.array([r for r, _ in roots]); rsg = np.array([s for _, s in roots], float)
-                uniq, inv = np.unique(rid, return_inverse=True)
-                Pro = _coo((rsg, (np.arange(n), inv)), shape=(n, uniq.size)).tocsr()
-                outer_red = np.unique(inv[outer_nodes])
-                _Kband_p = None
-            for hn in ("s", "r"):
-                for tag in sb_sat[hn]:
-                    nu_el[hn][tag][:] = 1.0 / (MU0 * max(mu0[hn].get(tag, 1.0), 1.0))
-            A = np.zeros(n)
-            _pok = 0
-            for it in range(nonlinear_iterations):
-                blocks = []
-                for hn in ("s", "r"):
-                    h = half[hn]; K = K_const[hn].copy()
-                    for tag, _sbi in sb_sat[hn].items():
-                        b0 = b0_sat[hn][tag]; nf = b0.zeros()
-                        nf[h["cells"][tag]] = nu_el[hn][tag]
-                        K = K + asm(_stiff_nu, _sbi, nu=b0.interpolate(nf))
-                    blocks.append(K)
-                K = _bd(blocks).tocsr()
-                if _Kband_p is not None:
-                    K = (K + _Kband_p).tocsr()
-                A = Pro @ _sksolve(*condense((Pro.T @ K @ Pro).tocsr(),
-                                             Pro.T @ f, D=outer_red))
-                _pres = 0.0
-                for hn, off in (("s", 0), ("r", nsn)):
-                    h = half[hn]
-                    Bx, By = _per_triangle_B(h["mesh"], A[off:off + h["n"]])
-                    Bm = np.sqrt(Bx ** 2 + By ** 2)
-                    for tag, curve in sat_bh[hn].items():
-                        idx = h["cells"][tag]
-                        if idx.size == 0: continue
-                        mu_new = _mu_r_from_bh_vec(curve, Bm[idx])
-                        nu_new = 1.0 / (MU0 * np.maximum(mu_new, 1.0))
-                        # same decaying damping + honest residual stop as the
-                        # measurement pass (fixed 0.5 oscillates, see nu update
-                        # in the main frame loop)
-                        _al = 0.5 if it < 6 else max(0.05, 3.0 / (it + 1))
-                        _pres = max(_pres, float(
-                            np.linalg.norm(nu_new - nu_el[hn][tag])
-                            / max(np.linalg.norm(nu_el[hn][tag]), 1e-30)))
-                        nu_el[hn][tag] = ((1.0 - _al) * nu_el[hn][tag]
-                                          + _al * nu_new)
-                if _pres < _PIC_TOL:
-                    _pok += 1
-                    if _pok >= 2:
-                        break
-                else:
-                    _pok = 0
-            _Bxr, _Byr = _per_triangle_B(half["r"]["mesh"], A[nsn:])
+                            hs=_hs[_o], bs=_bs[_o],
+                            # INTRINSIC curve J = B - mu0*H: the load-line
+                            # construction below works in (H, J), where the
+                            # magnet's own line passes through the origin.
+                            Js=_bs[_o] - MU0 * _hs[_o],
+                            # Recoil slope taken from the curve's OWN top segment
+                            # rather than the declared mu_rec: the two disagree by
+                            # a few percent (curve 1.083 vs declared 1.05 for
+                            # F45SH), and any mismatch shows up as a spurious
+                            # couple of percent of PERMANENT loss on a magnet that
+                            # never left the reversible part of its curve.
+                            mu_rec_c=(abs(float(_bs[_o][-1] - _bs[_o][-2]))
+                                      / max(abs(float(_hs[_o][-1] - _hs[_o][-2])), 1e-9)
+                                      / MU0) if len(_o) >= 2 else float(_m.mu_r),
+                            Br0=_Mm * MU0, tag=int(_tag)))
+        # De-rating is part of EVERY frame's nonlinear fixed point, solved by the
+        # same Picard that handles the iron B-H knee (see the call inside the
+        # frame loop).  The magnet weakens, its own demagnetising field weakens
+        # with it, and the frame is not converged until the two agree.
+        #
+        # Applying it once per time step instead made the answer depend on the
+        # step count (Fe16N2: 0.27 N*m at 24 steps vs 0.23 at 48) — a numerical
+        # artefact, not physics.  Damping that dependence away with a relaxation
+        # factor was a fudge and is gone; converging the coupling is the fix.
+        # The older one-shot pre-pass was worse still: it swept the whole period
+        # at full Br, then applied that field to a magnet which no longer existed.
+        _rmesh_dm = half["r"]["mesh"]
+        _demag_seen = {}          # magnet tag -> worst smoothed H seen so far
+        # Per-ELEMENT field diagnostics, independent of the de-rating rule:
+        #   _H_first — H on the very first step, i.e. on the PRISTINE magnet.
+        #              This is the field the geometry produces, before any
+        #              feedback, so it says where demagnetisation *should*
+        #              start.  Comparing it with the final Br map separates a
+        #              wrong field from a wrong de-rating rule.
+        #   _H_worst — running per-element minimum over the whole run.
+        _H_first = np.full(_nt_r, np.nan)
+        _H_worst = np.full(_nt_r, np.inf)
+
+        def _demag_derate(_Bxr_f, _Byr_f) -> bool:
+            """Apply this step's field to _br_glob.  True if anything weakened."""
+            _chg = False
             for _d in _dm:
                 _ix = _d["idx"]
-                _BdotM = _Bxr[_ix] * _d["Mx"] + _Byr[_ix] * _d["My"]
-                _H = _BdotM / (MU0 * _d["Mm"]) - _d["Mm"]     # full strength
-                _Hmin[_ix] = np.minimum(_Hmin[_ix], _H)
-        for _d in _dm:
-            _ix = _d["idx"]; _H = _Hmin[_ix]
-            _bad = _H < _d["knee"]
-            _wi = int(np.argmin(_H)); _hmin = float(_H[_wi])
-            _prox = _hmin / _d["knee"] if _d["knee"] < 0 else 0.0
-            if np.any(_bad):
-                _Bop = np.interp(_H[_bad], _d["hs"], _d["bs"])
-                _Brn = _Bop - _d["mu_r"] * MU0 * _H[_bad]
-                _ratio = np.clip(_Brn / max(_d["Br0"], 1e-12), 0.0, 1.0)
-                _br_glob[_ix[_bad]] = np.minimum(_br_glob[_ix[_bad]], _ratio)
-            if _prox > 0.85:
-                _demag_report.append({
-                    "magnet_index": int(_d["tag"] - DOM_MAG_BASE),
-                    "H_min_kA_per_m": round(_hmin * 1e-3, 1),
-                    "H_knee_kA_per_m": round(_d["knee"] * 1e-3, 1),
-                    "knee_proximity": round(_prox, 2),
-                    "demagnetised": bool(_prox > 1.0),
-                    "Br_factor": round(float(np.min(_br_glob[_ix])), 3),
-                })
-        f_mag = _build_fmag(_br_glob)     # weakened magnets for the measurement pass
-        _nst = int(Tts.shape[1])
-        _demag_coef = np.ones(int(mesh_all.t.shape[1]))
-        _demag_coef[_nst:] = _br_glob
-        # Field-map payload (full stitched mesh + per-element Br factor) so the
-        # UI can render the demagnetisation %-map (% demag = (1 − Br_factor)·100)
-        # in the same FemFieldChart 'Demag' mode used by the static field view.
-        _pmm = mesh_all.p * 1e3
-        _demag_field = {
-            "vertices":           _pmm.T.tolist(),
-            "triangles":          mesh_all.t.T.astype(int).tolist(),
-            "domain_per_tri":     np.concatenate([np.asarray(ts), np.asarray(tr)]).astype(int).tolist(),
-            "demag_coef_per_tri": _demag_coef.tolist(),
-            "mag_domains":        sorted({int(_d["tag"]) for _d in _dm}),  # which tags are magnets
-            "extent": [float(_pmm[0].min()), float(_pmm[0].max()),
-                       float(_pmm[1].min()), float(_pmm[1].max())],
-        }
-        log.warning("demag pre-pass: %d/%d magnet elems de-rated, min Br_factor %.3f",
-                    int(np.sum(_br_glob < 0.999)), int(_mag_idx.size), float(_br_glob.min()))
+                _BdotM = _Bxr_f[_ix] * _d["Mx"] + _Byr_f[_ix] * _d["My"]
+                # H along M for the magnet's CURRENT strength: B_par/mu0 - M(now).
+                # Only the magnetisation term scales with the de-rating.
+                _Hraw = _BdotM / (MU0 * _d["Mm"]) - _d["Mm"] * _br_glob[_ix]
+                _H = _smooth_demag_H(_rmesh_dm, _ix, _Hraw)
+                _msk = np.isnan(_H_first[_ix])
+                if np.any(_msk):
+                    _H_first[_ix[_msk]] = _H[_msk]
+                np.minimum.at(_H_worst, _ix, _H)
+                _hmin = float(_H.min())
+                if _hmin < _demag_seen.get(_d["tag"], np.inf):
+                    _demag_seen[_d["tag"]] = _hmin
+                # ── Load-line construction, per element ──────────────────────
+                # Reading the curve AT the present H is wrong for a magnet that
+                # demagnetises itself: H is produced mostly by the element's own
+                # magnetisation, so H and M collapse together.  Evaluating the
+                # curve at the full-strength field fixes a state that cannot
+                # exist — it drove Fe16N2 to Br 0.016 when the self-consistent
+                # answer is 0.26 (hand check: load line vs curve, alpha = 0.42).
+                #
+                # The honest operating point is the classic graphical one: where
+                # the element's LOAD LINE crosses the material's intrinsic curve.
+                # With
+                #     alpha = B_par / (mu0 * M * br)     effective permeance
+                #     H(br) = (alpha - 1) * M * br
+                # eliminating br gives a straight line through the origin in
+                # (H, J):   J = mu0 * H / (alpha - 1).
+                # alpha comes from the FEM field, so the geometry, saturation and
+                # armature all set it; the Picard re-measures it after every
+                # update, which makes the constant-alpha step self-correcting.
+                _cur = _br_glob[_ix]
+                _Bpar_mu0 = _H + _d["Mm"] * _cur             # A/m
+                _alpha = _Bpar_mu0 / np.maximum(_d["Mm"] * _cur, 1e-9)
+                # alpha >= 1 means the element is not being demagnetised at all.
+                _k = MU0 / np.minimum(_alpha - 1.0, -1e-9)   # load-line slope < 0
+                _hs = _d["hs"]; _Jsv = _d["Js"]
+                # Walk the tabulated segments from H = 0 downwards and take the
+                # FIRST crossing — for a monotone curve that is the operating
+                # point.  Default (no crossing) = untouched.
+                _Jst = np.full(_ix.size, _d["Br0"])
+                _Hst = np.zeros(_ix.size)
+                _hit = np.zeros(_ix.size, bool)
+                for _i in range(len(_hs) - 2, -1, -1):
+                    _h0, _h1 = float(_hs[_i]), float(_hs[_i + 1])
+                    if _h1 <= _h0:
+                        continue
+                    _s = (float(_Jsv[_i + 1]) - float(_Jsv[_i])) / (_h1 - _h0)
+                    _den = _s - _k
+                    _Hc = np.where(np.abs(_den) > 1e-30,
+                                   (_s * _h0 - float(_Jsv[_i])) / _den, np.nan)
+                    _ok = (~_hit) & np.isfinite(_Hc) & (_Hc >= _h0 - 1e-6) \
+                        & (_Hc <= _h1 + 1e-6)
+                    if np.any(_ok):
+                        _Jst[_ok] = _k[_ok] * _Hc[_ok]
+                        _Hst[_ok] = _Hc[_ok]
+                        _hit |= _ok
+                # Only the IRREVERSIBLE part is a loss.  Follow the recoil line
+                # from the operating point back to H = 0: an element that never
+                # left the reversible upper branch lands exactly on Br0 and keeps
+                # its full strength, while one that crossed the knee returns a
+                # genuinely lower remanence.  Using J at the operating point
+                # instead booked the curve's own recoil slope as permanent damage
+                # and cost every healthy element ~5 %.
+                _Brn = _Jst - (_d["mu_rec_c"] - 1.0) * MU0 * _Hst
+                _new = np.minimum(_cur, np.clip(_Brn / max(_d["Br0"], 1e-12),
+                                                0.0, 1.0))
+                if np.any(_new < _cur - _DEMAG_TOL):
+                    _chg = True
+                _br_glob[_ix] = _new
+            return _chg
+
+        # starts at FULL strength — the magnets weaken as the run progresses
+        f_mag = _build_fmag(_br_glob)
 
     _field_snap = None       # eddy last-frame field snapshot (if return_field)
     _hist_Am = []            # per-frame A on magnet nodes (loss post-processing)
@@ -7225,8 +7267,8 @@ def fem_transient_sliding_band(
     _hist_A_rotor = []       # per-frame A on ALL rotor nodes (honest coupled eddy)
     # When the demag pre-pass ran, the measurement pass is the SECOND half of
     # the work — continue the progress counter so the UI bar doesn't reset.
-    _prog_off = n_total if (demag and _mag_idx.size) else 0
-    _prog_tot = 2 * n_total if (demag and _mag_idx.size) else n_total
+    _prog_off = 0
+    _prog_tot = n_total   # single pass: demag is applied inside this loop
 
     # Per-phase flux linkage of a solution — used INSIDE the voltage-drive
     # circuit iteration and for the ψ series (single implementation).
@@ -7668,9 +7710,41 @@ def fem_transient_sliding_band(
             if _pic_res < _PIC_TOL:
                 _pic_ok += 1
                 if _pic_ok >= 2:
+                    # Saturation has converged FOR THE PRESENT MAGNET STATE, so
+                    # this is the only place the irreversible demag rule may be
+                    # evaluated.  Applying it to an intermediate Picard iterate
+                    # is wrong and destructive: the early sweeps start from
+                    # unsaturated iron and pass through fields that are pure
+                    # numerical transients (measured H ≈ −880 kA/m against a
+                    # converged −550), and a monotone irreversible rule burns
+                    # that artefact into the magnet permanently — it wiped NdFeB
+                    # to Br 0.03 and cost a third of the torque.
+                    #
+                    # Weakening the magnet moves the saturation state, so the
+                    # Picard is re-entered and the frame only ends when the
+                    # field and the magnet agree.
+                    if demag and _mag_idx.size:
+                        _Bxr_p, _Byr_p = _per_triangle_B(half["r"]["mesh"],
+                                                         A[nsn:])
+                        if _demag_derate(_Bxr_p, _Byr_p):
+                            f_mag = _build_fmag(_br_glob)
+                            if _vdrive:
+                                _Pmag = np.concatenate([np.zeros(nsn), f_mag])
+                            else:
+                                f = np.concatenate([f_cur_s, f_mag])
+                            _pic_ok = 0
+                            continue
                     break
             else:
                 _pic_ok = 0
+        if (demag and _mag_idx.size and frozen_nu and not _vdrive and k > 0):
+            # Frozen-nu frames run a single linear solve and never reach the
+            # convergence test above; with nu fixed that solve IS the converged
+            # field, so the same rule applies to it directly.
+            _Bxr_p, _Byr_p = _per_triangle_B(half["r"]["mesh"], A[nsn:])
+            if _demag_derate(_Bxr_p, _Byr_p):
+                f_mag = _build_fmag(_br_glob)
+                f = np.concatenate([f_cur_s, f_mag])
         _pic_iters_hist.append(it + 1); _pic_resid_hist.append(_pic_res)
         # per-phase flux linkage of the converged solution (also used below).
         pa, pb, pc = _psi_of(A)
@@ -7759,7 +7833,10 @@ def fem_transient_sliding_band(
         # capture the converged per-element B for the loss integrals
         _Bxs, _Bys = _per_triangle_B(half["s"]["mesh"], A[:nsn])
         _Bxr, _Byr = _per_triangle_B(half["r"]["mesh"], A[nsn:])
-        if return_field and ((field_first and k == 0)
+        # field_first snapshots the FIRST frame of the MEASUREMENT pass — frame 0
+        # is now a settling frame with a magnet that has not yet de-rated, and
+        # showing that as "the demag map" would report a pristine magnet.
+        if return_field and ((field_first and k == _dmskip)
                              or (not field_first and k == n_total - 1)):
             # Field snapshot for the viewer: A_z, per-element B, and a current
             # density J.  eddy=True → the EDDY density J = σ(−∂A/∂t + U_c) on the
@@ -7872,6 +7949,25 @@ def fem_transient_sliding_band(
         for _lst in _slice_lists:
             if len(_lst) > _vskip:
                 del _lst[:_vskip]
+        _t0_new = tt[0] if tt else 0.0
+        tt[:] = [_t - _t0_new for _t in tt]
+    # ── Demag: drop the settling period.  The magnets keep their de-rated state
+    #    (_br_glob is cumulative), only the FRAMES are discarded, so the reported
+    #    window is one full period of a machine whose magnets have settled.
+    if _dmskip:
+        n_total -= _dmskip
+        n_periods = float(n_periods) - 1.0
+        _slice_lists = [T_series, psiA, psiB, psiC, IA, IB, IC, tt, _mshift_hist,
+                        _hist_sx, _hist_sy, _hist_rx, _hist_ry, _hist_mx, _hist_my,
+                        _hist_cx, _hist_cy, _hist_shx, _hist_shy,
+                        _hist_Am, _hist_Ash, _hist_A_rotor]
+        try:
+            _slice_lists.append(_eddy_P)   # exists only when eddy=True
+        except NameError:
+            pass
+        for _lst in _slice_lists:
+            if len(_lst) > _dmskip:
+                del _lst[:_dmskip]
         _t0_new = tt[0] if tt else 0.0
         tt[:] = [_t - _t0_new for _t in tt]
     # ── Spectral periodic time-derivative (truncated to K harmonics) ─────────
@@ -8020,6 +8116,45 @@ def fem_transient_sliding_band(
     VA = [R_phase * i + e for i, e in zip(IA, eA.tolist())]
     VB = [R_phase * i + e for i, e in zip(IB, eB.tolist())]
     VC = [R_phase * i + e for i, e in zip(IC, eC.tolist())]
+
+    # ── HYBRID torque: energy-consistent MEAN + Maxwell-stress RIPPLE ─────────
+    # IDENTICAL to the P2 branch above — one torque definition for the whole
+    # solver, not two.  P1 reported the raw Arkkio/Maxwell mean, which on the
+    # node-repaired sliding band over-reads ~35 % under load: measured 0.181 N*m
+    # here against 0.130 in ANSYS for the same design, and 0.181/1.35 = 0.134.
+    # That gap was never physics, only this missing correction.
+    #
+    # P1 is still reachable for the things P2 cannot do (irreversible demag,
+    # coupled eddy, voltage drive), so it has to report the same number as P2 or
+    # every demag result is silently inflated.
+    #   MEAN   — energy/virtual-work via the terminal quantities:
+    #            <T> = (3/2)*p*<psi_al*i_be - psi_be*i_al>.  Never touches the
+    #            gap field, so it is immune to the slip-band contamination.
+    #   RIPPLE — the Maxwell series, which DOES resolve cogging and slot
+    #            harmonics (the flux-linkage torque is winding-filtered and
+    #            cannot see them).
+    # No-load (I ~ 0) keeps the raw Maxwell cogging: the energy torque is 0 there.
+    _torque_method_p1 = "maxwell_stress"
+    _mx_raw_p1 = list(T_series)          # keep the Maxwell series as a diagnostic
+    try:
+        _pa1 = np.asarray(psiA, float); _pb1 = np.asarray(psiB, float)
+        _pc1 = np.asarray(psiC, float)
+        _ea1 = np.asarray(IA, float); _eb1 = np.asarray(IB, float)
+        _ec1 = np.asarray(IC, float)
+        _Ipk1 = (float(np.max(np.abs(np.concatenate([_ea1, _eb1, _ec1]))))
+                 if _ea1.size else 0.0)
+        if _pa1.size and _pa1.size == _ea1.size and _Ipk1 > 1.0:
+            _s1 = 2.0 / 3.0; _kc1 = math.sqrt(3.0) / 2.0
+            _psial1 = _s1 * (_pa1 - 0.5 * _pb1 - 0.5 * _pc1)
+            _psibe1 = _s1 * _kc1 * (_pb1 - _pc1)
+            _ial1 = _s1 * (_ea1 - 0.5 * _eb1 - 0.5 * _ec1)
+            _ibe1 = _s1 * _kc1 * (_eb1 - _ec1)
+            _Te1 = 1.5 * float(pole_pairs) * (_psial1 * _ibe1 - _psibe1 * _ial1)
+            _mx1 = np.asarray(T_series, float)
+            T_series = (_mx1 - _mx1.mean() + float(_Te1.mean())).tolist()
+            _torque_method_p1 = "energy_mean+maxwell_ripple"
+    except Exception as _te1:
+        log.warning("P1 hybrid torque failed (%s) — using Maxwell series", _te1)
     Tavg = float(np.mean(T_series)) if T_series else 0.0
 
     # ── Band-limit the torque to the physical 6·k electrical orders ──────────
@@ -8483,6 +8618,54 @@ def fem_transient_sliding_band(
     # (The honest coupled rotor-eddy solve moved ABOVE the loss-series assembly —
     # it is now the production magnet/shaft loss when rotor_eddy is on.)
 
+    # Demag payload is built HERE, after the run: with per-step de-rating the
+    # coefficients only reach their final value once the last step is done, so
+    # snapshotting them before the loop (as the old pre-pass did) would have
+    # captured the pristine magnet.
+    if demag and _mag_idx.size and _dm:
+        _nst = int(Tts.shape[1])
+        _demag_coef = np.ones(int(mesh_all.t.shape[1]))
+        _demag_coef[_nst:] = _br_glob
+        _pmm = mesh_all.p * 1e3
+        _demag_field = {
+            "vertices":           _pmm.T.tolist(),
+            "triangles":          mesh_all.t.T.astype(int).tolist(),
+            "domain_per_tri":     np.concatenate([np.asarray(ts), np.asarray(tr)]).astype(int).tolist(),
+            "demag_coef_per_tri": _demag_coef.tolist(),
+            "mag_domains":        sorted({int(_d["tag"]) for _d in _dm}),
+            "extent": [float(_pmm[0].min()), float(_pmm[0].max()),
+                       float(_pmm[1].min()), float(_pmm[1].max())],
+        }
+        # Raw per-element demagnetising field, for diagnosing the map against a
+        # reference solver: H_first is the field on the PRISTINE magnet (pure
+        # geometry, no de-rating feedback), H_worst the running per-element
+        # minimum.  Two extra full-mesh arrays — opt-in so the normal response
+        # stays lean.
+        if _os_sb.environ.get("SB_DEMAG_H_DUMP") == "1":
+            _demag_field.update({
+                "H_first_per_tri": np.concatenate(
+                    [np.full(_nst, np.nan), _H_first]).tolist(),
+                "H_worst_per_tri": np.concatenate(
+                    [np.full(_nst, np.nan),
+                     np.where(np.isinf(_H_worst), np.nan, _H_worst)]).tolist(),
+                "H_knee_per_mag": {str(int(_d["tag"])): float(_d["knee"])
+                                   for _d in _dm},
+            })
+        for _d in _dm:
+            _hmin = float(_demag_seen.get(_d["tag"], 0.0))
+            _prox = _hmin / _d["knee"] if _d["knee"] < 0 else 0.0
+            if _prox > 0.85:
+                _demag_report.append({
+                    "magnet_index":     int(_d["tag"] - DOM_MAG_BASE),
+                    "H_min_kA_per_m":   round(_hmin * 1e-3, 1),
+                    "H_knee_kA_per_m":  round(_d["knee"] * 1e-3, 1),
+                    "knee_proximity":   round(_prox, 2),
+                    "demagnetised":     bool(_prox > 1.0),
+                    "Br_factor":        round(float(np.min(_br_glob[_d["idx"]])), 3),
+                })
+        log.warning("demag (per-step): %d/%d magnet elems de-rated, min Br_factor %.3f",
+                    int(np.sum(_br_glob < 0.999)), int(_mag_idx.size), float(_br_glob.min()))
+
     return {
         "method": "sliding_band",
         # 'field+honest' = magnet/shaft loss from the coupled frequency-domain
@@ -8497,6 +8680,12 @@ def fem_transient_sliding_band(
         "time_s": tt, "rotor_angle_deg": [
             (k / n_total) * period_mech * n_periods for k in range(n_total)],
         "T_em_Nm": T_series, "T_avg_Nm": Tavg, "T_ripple_pct": Trip,
+        # Which torque definition produced the number above, plus the raw
+        # Maxwell-stress series it was re-centred from — same transparency the
+        # P2 branch already provides, so an inflated mean can never hide again.
+        "torque_method": _torque_method_p1,
+        "T_avg_maxwell_Nm": round(float(np.mean(_mx_raw_p1)) if _mx_raw_p1 else 0.0, 4),
+        "T_em_maxwell_Nm": list(_mx_raw_p1),
         "T_ripple_raw_pct": Trip_raw, "T_ripple_filt_pct": Trip_filt,
         # RMS of the forbidden (non-6·k) torque orders as % of mean torque —
         # the mesh-noise floor the 6·k gate removed.  ~0 on a converged mesh.

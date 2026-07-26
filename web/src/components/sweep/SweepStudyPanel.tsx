@@ -445,6 +445,19 @@ const SweepStudyPanel: React.FC = () => {
         };
         window.dispatchEvent(new CustomEvent('sim-apply-summary', { detail: { summary } }));
       } catch { /* summary is best-effort — geometry + operating point already applied */ }
+      // The applied geometry moved k_end; refresh it BEFORE the recompute so the
+      // copper loss isn't scaled by the previous design's end-turn length.
+      try {
+        const dc = await (await fetch(`${API}/api/config`)).json();
+        const k = Number(dc?.end_winding_factor);
+        if (Number.isFinite(k) && k > 0) localStorage.setItem('sim.endWinding', JSON.stringify(+k.toFixed(3)));
+      } catch { /* non-fatal — the Simulation panel re-seeds on the geometry change */ }
+      // Recompute the dashboard for THIS design; the summary above stands in until
+      // the solve reports its own numbers, so nothing stale is ever shown as current.
+      try {
+        window.dispatchEvent(new CustomEvent('sim-design-applied'));
+        window.dispatchEvent(new CustomEvent('sim-rerun'));
+      } catch { /* SSR/no-window */ }
       const ovStr = Object.entries(p.overrides || {}).map(([k, v]) => `${k}=${v}`).join(', ');
       setApplyMsg(`✓ applied${ovStr ? ': ' + ovStr : ' (base geometry)'} · I=${p.I} A · γ=${p.g}° — numbers shown in Simulation (Run there only for waveforms)`);
     } catch (e: any) { setApplyMsg('✗ apply FAILED (' + String(e?.message ?? e) + ') — nothing was changed; try again'); }

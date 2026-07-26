@@ -22,6 +22,7 @@ import EditIcon          from '@mui/icons-material/Edit';
 import CheckIcon         from '@mui/icons-material/Check';
 import CloseIcon         from '@mui/icons-material/Close';
 import CompareArrowsIcon from '@mui/icons-material/CompareArrows';
+import { useAuth } from '../../contexts/AuthContext';
 import ViewColumnIcon    from '@mui/icons-material/ViewColumn';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
@@ -87,21 +88,36 @@ const OP_KEYS   = ['I_phase_rms', 'gamma_deg', 'rpm', 'frequency_hz', 'coil_temp
 const MESH_KEYS = ['n_sectors', 'mesh_size_mm', 'min_size_mm'];
 const orderIdx  = (k: string) => { const i = Object.keys(PARAM_META).indexOf(k); return i === -1 ? 1e9 : i; };
 
-// result columns in the BOTTOM comparison table
+// The modelling RESULTS — ordered the way they answer "which variant is better":
+// torque → power → speed → efficiency → densities → ripple → mass → current
+// density → the full loss breakdown.  These lead BOTH tables (before any input
+// parameter), because that is what a comparison is actually read for.
 const RESULT_COLS: { key: string; label: string; unit?: string; d?: number;
-                     scale?: number; better?: 'hi' | 'lo' }[] = [
-  { key: 'T_em_avg_Nm',          label: 'T_avg',          unit: 'N·m',    d: 2, better: 'hi' },
-  { key: 'T_ripple_pct',         label: 'Ripple',         unit: '%',      d: 1, better: 'lo' },
-  { key: 'efficiency',           label: 'η',              unit: '%',      d: 2, scale: 100, better: 'hi' },
-  { key: 'P_mech_W',             label: 'P mech',         unit: 'kW',     d: 2, scale: 1e-3, better: 'hi' },
-  { key: 'P_loss_total_W',       label: 'Total loss',     unit: 'W',      d: 0, better: 'lo' },
-  { key: 'P_core_W',             label: 'Fe loss',        unit: 'W',      d: 0, better: 'lo' },
-  { key: 'P_stranded_W',         label: 'Cu loss',        unit: 'W',      d: 0, better: 'lo' },
-  { key: 'P_solid_W',            label: 'Magnet loss',    unit: 'W',      d: 0, better: 'lo' },
-  { key: 'V_phase_peak_V',       label: 'V_ph peak',      unit: 'V',      d: 1 },
-  { key: 'KV_rpm_per_V_line',    label: 'KV line',        unit: 'rpm/V',  d: 1 },
-  { key: 'mass_total_kg',        label: 'Mass',           unit: 'kg',     d: 2, better: 'lo' },
-  { key: 'torque_per_mass_Nm_kg',label: 'T density',      unit: 'N·m/kg', d: 2, better: 'hi' },
+                     scale?: number; better?: 'hi' | 'lo';
+                     derive?: (r: Record<string, any>) => number }[] = [
+  { key: 'T_em_avg_Nm',          label: 'Torque',      unit: 'N·m',    d: 3, better: 'hi' },
+  { key: 'P_mech_W',             label: 'Power',       unit: 'kW',     d: 2, scale: 1e-3, better: 'hi',
+    derive: r => Number(r.T_em_avg_Nm) * 2 * Math.PI * Number(r.rpm) / 60 },
+  { key: 'rpm',                  label: 'Speed',       unit: 'rpm',    d: 0 },
+  { key: 'efficiency',           label: 'Efficiency',  unit: '%',      d: 2, scale: 100, better: 'hi' },
+  { key: 'torque_per_mass_Nm_kg',label: 'TD',          unit: 'N·m/kg', d: 2, better: 'hi' },
+  { key: 'power_per_mass_W_kg',  label: 'PD',          unit: 'kW/kg',  d: 2, scale: 1e-3, better: 'hi',
+    derive: r => Number(r.T_em_avg_Nm) * 2 * Math.PI * Number(r.rpm) / 60 / Number(r.mass_total_kg) },
+  { key: 'T_ripple_pct',         label: 'Ripple',      unit: '%',      d: 2, better: 'lo' },
+  { key: 'mass_total_kg',        label: 'Mass',        unit: 'kg',     d: 3, better: 'lo' },
+  { key: 'J_coil_A_per_mm2',     label: 'J coil',      unit: 'A/mm²',  d: 1, better: 'lo' },
+  { key: 'P_loss_total_W',       label: 'Loss total',  unit: 'W',      d: 1, better: 'lo' },
+  // Drive-side trio, kept together right after the loss total: the bus voltage a
+  // design demands, the current it was solved at, and its speed constant.
+  { key: 'V_line_peak_V',        label: 'V_line peak', unit: 'V',      d: 1 },
+  { key: 'I_phase_rms_A',        label: 'I phase',     unit: 'A rms',  d: 1 },
+  { key: 'KV_rpm_per_V_line',    label: 'KV (line)',   unit: 'rpm/V',  d: 1 },
+  // …then the loss breakdown behind its total.
+  { key: 'P_core_W',             label: 'Fe loss',     unit: 'W',      d: 1, better: 'lo' },
+  { key: 'P_stranded_W',         label: 'Cu loss',     unit: 'W',      d: 1, better: 'lo' },
+  { key: 'P_solid_W',            label: 'Magnet loss', unit: 'W',      d: 1, better: 'lo' },
+  { key: 'loss_density_W_kg',    label: 'Loss dens.',  unit: 'W/kg',   d: 0, better: 'lo' },
+  { key: 'V_phase_peak_V',       label: 'V_ph peak',   unit: 'V',      d: 1 },
 ];
 
 function fmtNum(v: any, d = 2, scale = 1): string {
@@ -114,8 +130,15 @@ function valEq(a: any, b: any): boolean {
   if (typeof a === 'number' && typeof b === 'number') return Math.abs(a - b) < 1e-6;
   return String(a) === String(b);
 }
+/** A result column's value: derived where the column defines it, stored otherwise. */
+function resultVal(r: typeof RESULT_COLS[number], s: SavedSim): number {
+  const raw = r.derive ? r.derive(s.results || {}) : Number(s.results?.[r.key]);
+  return Number.isFinite(raw) ? raw : NaN;
+}
 const paramLabel = (k: string) => PARAM_META[k]?.label ?? k;
 const paramUnit  = (k: string) => PARAM_META[k]?.unit;
+/** Percent hugs its label; every other unit is spaced off it. */
+const unitGap = (u?: string) => (u === '%' ? '' : ' ');
 function paramFmt(k: string, v: any): string {
   const m = PARAM_META[k];
   if (typeof v === 'number') return fmtNum(v, m?.d ?? 3);
@@ -123,8 +146,12 @@ function paramFmt(k: string, v: any): string {
 }
 
 // shared table cell styling
+// Result columns get the app's primary blue (same family as the buttons) —
+// readable on both themes, unlike the dark-theme green accent it replaced.
+const HDR_RESULT = '#2563eb';
+const HDR_DIFF   = '#b45309';   // amber-700: the pale #fbbf24 vanished on white
 const TH = {
-  px: 1.25, py: 0.7, fontSize: 10, color: 'var(--text-3)', fontWeight: 700,
+  px: 1.25, py: 0.7, fontSize: 10.5, color: 'var(--text-2)', fontWeight: 700,
   textTransform: 'uppercase', letterSpacing: '0.03em', whiteSpace: 'nowrap',
   textAlign: 'right', borderBottom: '1px solid var(--line-soft)', bgcolor: 'var(--panel-2)',
   position: 'sticky', top: 0, zIndex: 2,
@@ -148,6 +175,7 @@ const ComparePanel: React.FC = () => {
   });
   useEffect(() => { try { localStorage.setItem('compare.libCols', JSON.stringify(visibleCols)); } catch {} }, [visibleCols]);
   const [colAnchor, setColAnchor] = useState<HTMLElement | null>(null);
+  const { user } = useAuth();
 
   const load = useCallback(() => {
     setLoading(true); setErr(null);
@@ -167,6 +195,13 @@ const ComparePanel: React.FC = () => {
       .finally(() => setLoading(false));
   }, []);
   useEffect(() => { load(); }, [load]);
+  // A point added from the Simulation tab ("+ Compare") shows up without a manual
+  // refresh, even if this panel was already mounted.
+  useEffect(() => {
+    const onChanged = () => load();
+    window.addEventListener('compare-points-changed', onChanged);
+    return () => window.removeEventListener('compare-points-changed', onChanged);
+  }, [load]);
 
   const toggle = (id: string) =>
     setSel(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
@@ -200,7 +235,12 @@ const ComparePanel: React.FC = () => {
     { title: 'Mesh',      keys: availableKeys.filter(k => MESH_KEYS.includes(k)) },
     { title: 'Geometry',  keys: availableKeys.filter(k => !OP_KEYS.includes(k) && !MESH_KEYS.includes(k)) },
   ];
-  const displayCols = availableKeys.filter(k => visibleCols.includes(k));
+  // Speed and phase current now lead the row as RESULT columns (the value the run
+  // was actually solved at), so drop the identical INPUT columns — otherwise every
+  // row carries the same number twice.  Filtering here (rather than trimming
+  // LIB_COLS) also cleans up column choices already saved in localStorage.
+  const COVERED_BY_RESULTS = new Set(['rpm', 'I_phase_rms']);
+  const displayCols = availableKeys.filter(k => visibleCols.includes(k) && !COVERED_BY_RESULTS.has(k));
   const toggleCol = (k: string) =>
     setVisibleCols(prev => prev.includes(k) ? prev.filter(x => x !== k) : [...prev, k]);
 
@@ -218,13 +258,71 @@ const ComparePanel: React.FC = () => {
   // per-result best/worst across the selected rows (for highlight)
   const resExtent: Record<string, { min: number; max: number }> = {};
   RESULT_COLS.forEach(r => {
-    const nums = selected.map(s => Number(s.results?.[r.key])).filter(Number.isFinite);
+    const nums = selected.map(s => resultVal(r, s)).filter(Number.isFinite);
     if (nums.length) resExtent[r.key] = { min: Math.min(...nums), max: Math.max(...nums) };
   });
+  // Same, but across EVERY saved row — so the library table alone already shows
+  // which variant leads on each metric, without having to tick rows first.
+  const libExtent: Record<string, { min: number; max: number }> = {};
+  RESULT_COLS.forEach(r => {
+    const nums = sims.map(s => resultVal(r, s)).filter(Number.isFinite);
+    if (nums.length) libExtent[r.key] = { min: Math.min(...nums), max: Math.max(...nums) };
+  });
 
-  const NameCell: React.FC<{ s: SavedSim; sticky?: boolean }> = ({ s, sticky }) => (
+  /** Green on the best value, red on the worst — grey when a metric has no
+   *  better/worse direction (speed, voltage) or every row ties. */
+  const metricColor = (r: typeof RESULT_COLS[number], raw: number,
+                       ext?: { min: number; max: number }): string => {
+    if (!Number.isFinite(raw) || !ext || ext.min === ext.max || !r.better) return 'var(--text-1)';
+    const best  = r.better === 'hi' ? ext.max : ext.min;
+    const worst = r.better === 'hi' ? ext.min : ext.max;
+    if (Math.abs(raw - best)  < 1e-9) return '#4ade80';
+    if (Math.abs(raw - worst) < 1e-9) return '#f87171';
+    return 'var(--text-1)';
+  };
+
+  // Largest value per column across the SELECTED rows — the reference the Δ%
+  // row is measured against (keys prefixed so a result and an input of the same
+  // name can't collide).
+  const colMax: Record<string, number> = {};
+  RESULT_COLS.forEach(r => {
+    const ns = selected.map(s => resultVal(r, s)).filter(Number.isFinite);
+    if (ns.length) colMax[`r:${r.key}`] = Math.max(...ns);
+  });
+  const diffSet = new Set(diffKeys);
+
+  /** Deviation from the column maximum, in %. 0 % = the leader. */
+  const PctCell: React.FC<{ v: number; max?: number }> = ({ v, max }) => {
+    const ok = Number.isFinite(v) && Number.isFinite(max as number) && Math.abs(max as number) > 1e-12;
+    const d = ok ? (v / (max as number) - 1) * 100 : NaN;
+    const atMax = ok && Math.abs(d) < 1e-9;
+    return (
+      <Box component="td" sx={{ ...TD, fontSize: 9.5,
+        color: atMax ? '#4ade80' : (ok ? 'var(--text-4)' : 'var(--line)') }}>
+        {ok ? `${d > -1e-9 ? '' : ''}${d.toFixed(1)}%` : '—'}
+      </Box>
+    );
+  };
+
+  /** One result cell, shared by the library and the comparison table. */
+  const ResultCell: React.FC<{ r: typeof RESULT_COLS[number]; s: SavedSim;
+                               ext?: { min: number; max: number } }> = ({ r, s, ext }) => {
+    const raw = resultVal(r, s);
+    const col = metricColor(r, raw, ext);
+    return (
+      <Box component="td" sx={{ ...TD, color: col, fontWeight: col !== 'var(--text-1)' ? 700 : 400 }}>
+        {Number.isFinite(raw) ? fmtNum(raw, r.d ?? 2, r.scale ?? 1) : '—'}
+      </Box>
+    );
+  };
+
+  // Renders its OWN <td>, so callers must place it directly in the row — wrapping
+  // it in another <td> nests a cell inside a cell (invalid HTML, and React warns).
+  // `left` is where the sticky column starts: 0 in the comparison table, past the
+  // tick box in the library one.
+  const NameCell: React.FC<{ s: SavedSim; sticky?: boolean; left?: number }> = ({ s, sticky, left = 0 }) => (
     <Box component="td" sx={{ ...TD, textAlign: 'left', color: 'var(--text-0)', fontFamily: 'inherit',
-      fontWeight: 600, ...(sticky ? { position: 'sticky', left: 0, bgcolor: 'var(--panel-2)', zIndex: 1 } : {}) }}>
+      fontWeight: 600, ...(sticky ? { position: 'sticky', left, bgcolor: 'var(--panel-2)', zIndex: 1 } : {}) }}>
       {editId === s.id ? (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25 }}>
           <TextField value={editName} onChange={e => setEditName(e.target.value)} size="small" autoFocus
@@ -233,7 +331,23 @@ const ComparePanel: React.FC = () => {
           <IconButton size="small" onClick={commitRename} sx={{ color: '#4ade80', p: 0.25 }}><CheckIcon sx={{ fontSize: 15 }} /></IconButton>
           <IconButton size="small" onClick={() => setEditId(null)} sx={{ color: 'var(--text-3)', p: 0.25 }}><CloseIcon sx={{ fontSize: 15 }} /></IconButton>
         </Box>
-      ) : s.name}
+      ) : (
+        // Rename lives in the sticky NAME column, not only in the far-right
+        // Actions column: with the result columns in front, Actions sits past a
+        // screen-width of horizontal scrolling and is effectively unreachable.
+        // Double-clicking the name works too.
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5,
+          '&:hover .renameBtn': { opacity: 1 } }}
+          onDoubleClick={() => startRename(s)}
+          title="Double-click to rename">
+          <Box component="span" sx={{ cursor: 'text' }}>{s.name}</Box>
+          <IconButton className="renameBtn" size="small" onClick={() => startRename(s)}
+            sx={{ opacity: 0.25, transition: 'opacity .15s', color: 'var(--text-3)', p: 0.15,
+              '&:hover': { color: '#60a5fa' } }}>
+            <EditIcon sx={{ fontSize: 13 }} />
+          </IconButton>
+        </Box>
+      )}
     </Box>
   );
 
@@ -247,6 +361,18 @@ const ComparePanel: React.FC = () => {
             Saved simulations
           </Typography>
           <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>({sims.length}) — tick rows to compare below</Typography>
+          {/* The backend keys this store per user (saved_sims._bucket): signed in →
+              your own library, anonymous → the shared local one.  Without saying so,
+              a sign-in/sign-out silently swaps the whole list and reads as data loss. */}
+          <Tooltip placement="top" title={user
+            ? 'Points are saved to YOUR library. Sign out and this list is replaced by the local one.'
+            : 'Not signed in — points go to the shared LOCAL library on this machine. Sign in and you will see your own library instead.'}>
+            <Typography sx={{ fontSize: 10.5, px: 0.75, py: 0.15, borderRadius: 0.5, cursor: 'help',
+              border: '1px solid var(--line)', whiteSpace: 'nowrap',
+              color: user ? '#4ade80' : '#fbbf24' }}>
+              {user ? `library: ${user.email ?? String(user.uid).slice(0, 8)}` : 'library: local (not signed in)'}
+            </Typography>
+          </Tooltip>
           <Box sx={{ flex: 1 }} />
           <Button size="small" variant="outlined" startIcon={<ViewColumnIcon sx={{ fontSize: 16 }} />}
             onClick={e => setColAnchor(e.currentTarget)}
@@ -294,8 +420,8 @@ const ComparePanel: React.FC = () => {
           {loading && <CircularProgress size={18} sx={{ color: '#3b82f6', m: 2 }} />}
           {!loading && sims.length === 0 && (
             <Typography sx={{ fontSize: 12, color: 'var(--text-3)', m: 2 }}>
-              No saved simulations yet. In the <b>Simulation</b> tab, run a solve and press
-              <b> Save simulation</b> to snapshot it here.
+              No comparison points yet. In the <b>Simulation</b> tab, run a solve and press
+              <b> + Add to Compare</b> on the summary card to snapshot the design here.
             </Typography>
           )}
           {sims.length > 0 && (
@@ -303,9 +429,16 @@ const ComparePanel: React.FC = () => {
               <Box component="thead"><Box component="tr">
                 <Box component="th" sx={{ ...TH, textAlign: 'center', left: 0, zIndex: 3, position: 'sticky' }}>✓</Box>
                 <Box component="th" sx={{ ...TH, textAlign: 'left', left: 36, zIndex: 3 }}>Name</Box>
+                {/* RESULTS first — the numbers the choice is made on. */}
+                {RESULT_COLS.map(r => (
+                  <Box component="th" key={`r-${r.key}`} sx={{ ...TH, color: HDR_RESULT }}>
+                    {r.label}{r.unit ? <Box component="span" sx={{ color: 'var(--text-3)', fontWeight: 500 }}>{unitGap(r.unit)}{r.unit}</Box> : null}
+                  </Box>
+                ))}
+                {/* …then the inputs that produced them. */}
                 {displayCols.map(k => (
                   <Box component="th" key={k} sx={TH}>
-                    {paramLabel(k)}{paramUnit(k) ? <Box component="span" sx={{ color: 'var(--line)', fontWeight: 400 }}> {paramUnit(k)}</Box> : null}
+                    {paramLabel(k)}{paramUnit(k) ? <Box component="span" sx={{ color: 'var(--text-3)', fontWeight: 500 }}>{unitGap(paramUnit(k))}{paramUnit(k)}</Box> : null}
                   </Box>
                 ))}
                 <Box component="th" sx={{ ...TH, textAlign: 'left' }}>Saved</Box>
@@ -320,10 +453,10 @@ const ComparePanel: React.FC = () => {
                       <Checkbox size="small" checked={sel.has(s.id)} onChange={() => toggle(s.id)}
                         sx={{ p: 0.25, color: 'var(--text-4)', '&.Mui-checked': { color: '#3b82f6' } }} />
                     </Box>
-                    <Box component="td" sx={{ ...TD, p: 0, position: 'sticky', left: 36,
-                      bgcolor: sel.has(s.id) ? 'var(--panel-2)' : 'var(--panel-2)', zIndex: 1 }}>
-                      <Box sx={{ px: 1.25, py: 0.55 }}><NameCell s={s} /></Box>
-                    </Box>
+                    <NameCell s={s} sticky left={36} />
+                    {RESULT_COLS.map(r => (
+                      <ResultCell key={`r-${r.key}`} r={r} s={s} ext={libExtent[r.key]} />
+                    ))}
                     {displayCols.map(k => (
                       <Box component="td" key={k} sx={TD}>{paramFmt(k, s.params?.[k])}</Box>
                     ))}
@@ -346,7 +479,7 @@ const ComparePanel: React.FC = () => {
           <CompareArrowsIcon sx={{ color: '#60a5fa', fontSize: 18 }} />
           <Typography sx={{ fontSize: 13, fontWeight: 700, color: 'var(--text-0)' }}>Comparison</Typography>
           <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>
-            {selected.length} selected · {diffKeys.length} differing input{diffKeys.length === 1 ? '' : 's'} · green = best / red = worst per result
+            {selected.length} selected · {diffKeys.length} differing input{diffKeys.length === 1 ? '' : 's'} (amber) · green = best / red = worst · Δ% row = deviation from the column maximum
           </Typography>
         </Box>
         <Box sx={{ flex: 1, overflow: 'auto', px: 2, pb: 2 }}>
@@ -354,48 +487,52 @@ const ComparePanel: React.FC = () => {
             <Alert severity="info" sx={{ fontSize: 12 }}>Tick at least two rows above to compare them.</Alert>
           ) : (
             <Box component="table" sx={{ borderCollapse: 'collapse', width: '100%' }}>
+              {/* SAME column layout as the library above — results first, then the
+                  inputs — so the eye doesn't have to re-learn the table halfway down
+                  the screen.  Inputs that DIFFER across the selection are amber. */}
               <Box component="thead"><Box component="tr">
                 <Box component="th" sx={{ ...TH, textAlign: 'left', left: 0, zIndex: 3, position: 'sticky' }}>Simulation</Box>
-                {diffKeys.map(k => (
-                  <Box component="th" key={k} sx={{ ...TH, color: '#fbbf24' }}>
-                    {paramLabel(k)}{paramUnit(k) ? <Box component="span" sx={{ color: 'var(--line)', fontWeight: 400 }}> {paramUnit(k)}</Box> : null}
+                {RESULT_COLS.map(r => (
+                  <Box component="th" key={`r-${r.key}`} sx={{ ...TH, color: HDR_RESULT }}>
+                    {r.label}{r.unit ? <Box component="span" sx={{ color: 'var(--text-3)', fontWeight: 500 }}>{unitGap(r.unit)}{r.unit}</Box> : null}
                   </Box>
                 ))}
-                {RESULT_COLS.map(r => (
-                  <Box component="th" key={r.key} sx={{ ...TH, color: '#4ade80' }}>
-                    {r.label}{r.unit ? <Box component="span" sx={{ color: 'var(--line)', fontWeight: 400 }}> {r.unit}</Box> : null}
+                {displayCols.map(k => (
+                  <Box component="th" key={k} sx={{ ...TH, color: diffSet.has(k) ? HDR_DIFF : 'var(--text-2)' }}>
+                    {paramLabel(k)}{paramUnit(k) ? <Box component="span" sx={{ color: 'var(--text-3)', fontWeight: 500 }}>{unitGap(paramUnit(k))}{paramUnit(k)}</Box> : null}
                   </Box>
                 ))}
               </Box></Box>
               <Box component="tbody">
-                {selected.map(s => (
+                {selected.map(s => [
                   <Box component="tr" key={s.id} sx={{ '&:hover': { bgcolor: 'var(--panel-2)' } }}>
                     <NameCell s={s} sticky />
-                    {diffKeys.map(k => (
-                      <Box component="td" key={k} sx={{ ...TD, color: '#fbbf24' }}>{paramFmt(k, s.params?.[k])}</Box>
+                    {RESULT_COLS.map(r => (
+                      <ResultCell key={`r-${r.key}`} r={r} s={s} ext={resExtent[r.key]} />
                     ))}
-                    {RESULT_COLS.map(r => {
-                      const raw = Number(s.results?.[r.key]);
-                      const has = Number.isFinite(raw);
-                      const ext = resExtent[r.key];
-                      let col = 'var(--text-1)';
-                      if (has && ext && ext.min !== ext.max && r.better) {
-                        const best = r.better === 'hi' ? ext.max : ext.min;
-                        const worst = r.better === 'hi' ? ext.min : ext.max;
-                        if (Math.abs(raw - best) < 1e-9) col = '#4ade80';
-                        else if (Math.abs(raw - worst) < 1e-9) col = '#f87171';
-                      }
-                      return (
-                        <Box component="td" key={r.key} sx={{ ...TD, color: col,
-                          fontWeight: col !== 'var(--text-1)' ? 700 : 400 }}>
-                          {has ? fmtNum(raw, r.d ?? 2, r.scale ?? 1) : '—'}
-                        </Box>
-                      );
-                    })}
-                  </Box>
-                ))}
+                    {displayCols.map(k => (
+                      <Box component="td" key={k} sx={{ ...TD, color: diffSet.has(k) ? '#fbbf24' : 'var(--text-1)' }}>
+                        {paramFmt(k, s.params?.[k])}
+                      </Box>
+                    ))}
+                  </Box>,
+                  // Δ% against the largest value in each column: 0.0 % marks the
+                  // leader, everything else reads as "how far behind".
+                  <Box component="tr" key={`${s.id}-pct`}>
+                    <Box component="td" sx={{ ...TD, textAlign: 'right', position: 'sticky', left: 0,
+                      bgcolor: 'var(--panel-2)', zIndex: 1, color: 'var(--text-4)', fontSize: 9.5 }}>
+                      Δ% from max
+                    </Box>
+                    {RESULT_COLS.map(r => (
+                      <PctCell key={`p-${r.key}`} v={resultVal(r, s)} max={colMax[`r:${r.key}`]} />
+                    ))}
+                    {displayCols.map(k => (
+                      <PctCell key={`p-${k}`} v={Number(s.params?.[k])} max={colMax[`p:${k}`]} />
+                    ))}
+                  </Box>,
+                ])}
                 {diffKeys.length === 0 && (
-                  <Box component="tr"><Box component="td" {...({ colSpan: 1 + RESULT_COLS.length } as any)}
+                  <Box component="tr"><Box component="td" {...({ colSpan: 1 + RESULT_COLS.length + displayCols.length } as any)}
                     sx={{ ...TD, textAlign: 'left', color: 'var(--text-3)' }}>
                     Selected runs have identical inputs — only the results differ.
                   </Box></Box>

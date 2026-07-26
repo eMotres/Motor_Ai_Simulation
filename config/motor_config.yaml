@@ -1,47 +1,47 @@
 geometry:
-  stator_diameter: 40
-  slot_height: 5.5
-  core_thickness: 1.9
+  stator_diameter: 30
+  slot_height: 4.3
+  core_thickness: 1.5
   num_seg: 2
   num_slots_per_segment: 6
   num_poles_per_segment: 7
   air_gap: 0.2
-  tooth_width: 3.4
-  tooth2_width: 2.2
+  tooth_width: 2.6
+  tooth2_width: 1.4
   cut_width: 1.5
   insulation_thickness: 0.05
-  wire_width: 2.2
-  wire_height: 0.6
+  wire_width: 2
+  wire_height: 0.5
   wire_spacing_x: 0.1
   wire_spacing_y: 0.1
-  num_wires_per_slot: 7
+  num_wires_per_slot: 6
   wire_split: 1
   slot_hs: 0.267
-  magnet_height: 6.2
-  rotor_house_height: 1.0
-  shaft_height: 2.0
+  magnet_height: 4.5
+  rotor_house_height: 0.8
+  shaft_height: 2
   magnet_fill_down: 0.9
-  magnet_fill_up: 0.24
-  magnet_fill_radius: 0.2
-  magnet_up_gap: 0.2
-  rotor_hole: 0.6
+  magnet_fill_up: 0.3
+  magnet_fill_radius: 0.1
+  magnet_up_gap: 0.1
+  rotor_hole: 0.7
   magnet_down_height: 1.4
   magnet_lamination: 0
   stator_fillet_r: 1.2
-  stator_fillet_r1: 0.0
+  stator_fillet_r1: 0
   rotor_fill_r: 0.2
-  motor_length: 12
-  stator_outer_radius: 20.0
-  stator_inner_radius: 13.200000000000001
+  motor_length: 10
+  stator_outer_radius: 20
+  stator_inner_radius: 12.400000000000002
   num_slots: 12
   num_poles: 14
   angle_slot: 30.0
   angle_pole: 25.714285714285715
   slot_pitch: 0.5235987755982988
   pole_pitch: 0.4487989505128276
-  rotor_outer_radius: 12.950000000000001
-  rotor_inner_radius: 6.550000000000001
-  slot_width: 2.4
+  rotor_outer_radius: 12.200000000000003
+  rotor_inner_radius: 5.100000000000003
+  slot_width: 2.5000000000000004
   shaft_diameter: 5
 derived_params:
   stator_outer_radius: stator_diameter / 2
@@ -59,9 +59,9 @@ geometry_schema:
     label: Stator Diameter
     unit: mm
     type: float
-    min: 100
+    min: 20
     max: 600
-    step: 50
+    step: 1
     group: stator
     description: Outer diameter of the stator
   slot_height:
@@ -393,6 +393,7 @@ sweep_whitelist:
 - num_wires_per_slot
 - magnet_height
 - magnet_fill_up
+- magnet_fill_down
 - magnet_fill_radius
 - magnet_up_gap
 - magnet_down_height
@@ -404,8 +405,8 @@ mesh:
   n_angular_slots: 20
   mesh_size_mm: 0.6
   outer_air_factor: 1.2
-  gap_layers: 1.0
-  normal_deviation: 6.0
+  gap_layers: 1
+  normal_deviation: 6
   min_size_mm: 0.3
   n_sectors: 2
 materials:
@@ -427,14 +428,14 @@ winding:
   n_series: 2
   layers: 1
 simulation:
-  max_current: 42.0
-  frequency: 1516.67
-  rpm: 13000.0
+  max_current: 32.0
+  frequency: 1750.0
+  rpm: 15000.0
   phase_offset_deg: 10.0
-  steps_per_period: 16
-  demag: false
+  steps_per_period: 36
+  demag: true
   coil_temp_c: 120
-  end_winding_factor: 0
-  connection: 2S-2P
+  end_winding_factor: 1.45
+  connection: 2S
   current_a: 60.0
   gamma_deg: -40.0

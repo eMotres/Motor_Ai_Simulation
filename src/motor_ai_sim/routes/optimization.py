@@ -116,7 +116,7 @@ def _eval_cache_key(overrides: Dict[str, float], current_a: float, steps: int,
                     rotor_eddy: bool = False, hi_fidelity: bool = False,
                     structured_gap: bool = False, airgap_macro: bool = False,
                     iron_template: bool = True, geo_mesh: bool = True,
-                    element_order: int = 1) -> str:
+                    element_order: int = 2) -> str:
     payload = {
         "ov": {k: round(float(v), 6) for k, v in sorted(overrides.items())},
         "I": round(float(current_a), 4), "steps": int(steps),
@@ -217,7 +217,7 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
                      rotor_eddy: bool = False, hi_fidelity: bool = False,
                      structured_gap: bool = False, airgap_macro: bool = False,
                      iron_template: bool = True, geo_mesh: bool = True,
-                     element_order: int = 1) -> Dict[str, Any]:
+                     element_order: int = 2) -> Dict[str, Any]:
     """Evaluate ONE (geometry, current, γ) with the real sliding-band transient
     in an isolated subprocess (FEM/LLVM crash → failed design, not a dead API).
     Rebuilds the CadQuery geometry + gmsh mesh for the candidate in-memory.
@@ -448,7 +448,7 @@ class ScanRequest(BaseModel):
     airgap_macro: bool = False              # harmonic gap coupling — SINGLE SOURCE: Mesh tab "Harmonic gap"; RAW ripple step-independent (full ring + sectors)
     iron_template: bool = True              # deterministic template iron mesh (fallback: gmsh)
     geo_mesh: bool = True                   # geometry-driven CDT mesh — SINGLE SOURCE: Mesh tab (same build as Simulation)
-    element_order: int = 1                  # 1 = P1 (default) | 2 = P2 "high-fidelity ripple" — SINGLE SOURCE: Mesh tab "P2 elements" (mesh.p2HiFi); honest ripple, ~2× slower/point
+    element_order: int = 2                  # 2 = P2 (DEFAULT — the only trustworthy basis: energy-consistent mean torque + mesh-convergent ripple) | 1 = P1, kept ONLY for what P2 cannot do (irreversible demag, coupled eddy, voltage drive)
     seed: int = 12345
     run_id: str = ""
 
@@ -743,7 +743,7 @@ def scan_designs(req: ScanRequest):
         # count so the sweep's ripple equals the converged value.  Mean torque is
         # step-insensitive, so this only fixes ripple; mesh is already converged at
         # the 1.0 mm floor (1.0 and 0.5 mm agree to 0.03 % at 48 steps).
-        if int(getattr(req, "element_order", 1)) == 2 or bool(req.structured_gap):
+        if int(getattr(req, "element_order", 2)) == 2 or bool(req.structured_gap):
             steps = max(steps, 48)
         max_geom = max(1, min(int(req.max_geometries), 400))
         mesh_size = max(1.0, min(float(req.mesh_size_mm), 12.0))
@@ -786,7 +786,7 @@ def scan_designs(req: ScanRequest):
         # Simulation route does (force belt, auto natural-symmetry sector, keep
         # rotor_eddy), so an element_order=2 sweep point matches a Simulation P2
         # run at the SAME geometry/operating point.  Default 1 = P1 (unchanged).
-        element_order = int(getattr(req, 'element_order', 1) or 1)
+        element_order = int(getattr(req, 'element_order', 2) or 2)
         _scan_state.update({"running": True, "done": 0, "total": 0, "result": None,
                             "points": [], "run_id": req.run_id, "error": None, "cancel": False,
                             "cached": 0})
@@ -1083,6 +1083,41 @@ def _load_descent_state() -> None:
 
 _load_descent_state()   # repopulate at import (startup)
 
+# mtime of the checkpoint the in-memory state was last taken from
+_descent_disk_mtime = [0.0]
+
+
+def _refresh_descent_state_from_disk() -> None:
+    """Adopt a checkpoint written by a run hosted OUTSIDE this process.
+
+    The optimizer is a plain function, so a long run can be driven from its own
+    process to survive a web-server restart — and `_cmaes_worker` checkpoints to
+    this same file every generation.  Without picking that up, the progress
+    endpoint would keep serving the snapshot taken at import and the UI would look
+    frozen for the whole run.  The file's `running` flag is only believed while the
+    file is still being touched: a stale one means that process is gone.
+    """
+    import time as _t
+    try:
+        p = _descent_store_path()
+        m = _os_o.path.getmtime(p)
+    except Exception:      # noqa: BLE001 — no checkpoint yet
+        return
+    if m <= _descent_disk_mtime[0]:
+        return
+    _descent_disk_mtime[0] = m
+    try:
+        with open(p, encoding="utf-8") as fh:
+            blob = _json_o.load(fh)
+    except Exception as _e:   # noqa: BLE001 — mid-write; the next poll retries
+        log.debug("descent checkpoint unreadable: %s", _e)
+        return
+    if not isinstance(blob, dict):
+        return
+    _descent_state.update(blob)
+    _descent_state["running"] = bool(blob.get("running")) and (_t.time() - m) < 300.0
+    _descent_state["cancel"] = False
+
 
 class DescentRequest(BaseModel):
     variables: List[OptVariable] = Field(default_factory=list)   # names (+optional bounds/step)
@@ -1115,7 +1150,7 @@ class DescentRequest(BaseModel):
     # low ripple (no P1 staircase), so a ripple-gated optimization actually targets
     # the real ripple.  run_one applies the P2 belt + natural-symmetry-sector
     # coercions per eval.  ~2× slower/eval.
-    element_order: int = 1
+    element_order: int = 2
     # Pole/slot mesh mode from the UI (Mesh tab "Periodic (identical poles)").
     # None = solver env default; the optimizer must mesh the SAME way Simulation does.
     pole_copy: Optional[bool] = None
@@ -1198,7 +1233,7 @@ class BaselineRequest(BaseModel):
     rotor_eddy: bool = True
     end_winding_factor: float = 0.0
     n_sectors: int = -1
-    element_order: int = 1         # 1 = P1 (default); 2 = P2 — match the descent so the baseline line uses the same ripple model
+    element_order: int = 2         # P2 by default — the baseline line must use the same basis as the descent
 
 
 def _msum(m: Dict[str, Any]) -> Dict[str, Any]:
@@ -1210,7 +1245,21 @@ def _msum(m: Dict[str, Any]) -> Dict[str, Any]:
         "T_ripple_pct":    m.get("T_ripple_pct"),
         "mass_total_kg":   m.get("mass_total_kg"),
         "P_loss_total_W":  m.get("P_loss_total_W"),
+        # The loss BREAKDOWN, thermal loading and densities the eval already
+        # computes.  Dropping them here used to leave every optimizer design with
+        # blank Fe/Cu/magnet/J columns in Compare, so an optimum could not be read
+        # against a Simulation run of the same geometry.
+        "P_core_W":        m.get("P_core_W"),        # laminated iron
+        "P_stranded_W":    m.get("P_stranded_W"),    # copper
+        "P_solid_W":       m.get("P_solid_W"),       # magnet + shaft eddy
+        "P_mech_W":        m.get("P_mech_W"),
+        "J_coil_A_per_mm2": m.get("J_coil_A_per_mm2"),
+        "KV_rpm_per_V_line": m.get("KV_rpm_per_V_line"),
+        "power_per_mass_W_kg": m.get("power_per_mass_W_kg"),
+        "loss_density_W_kg":   m.get("loss_density_W_kg"),
         "V_peak":          m.get("V_peak"),
+        "V_line_peak_V":   m.get("V_line_peak_V"),   # DC-bus sizing number
+        "I_phase_rms_A":   m.get("I_phase_rms_A"),
         "THD_LL_pct":      m.get("THD_LL_pct"),      # line-to-line voltage THD (FOC)
         "Kt_Nm_per_Arms":  m.get("Kt_Nm_per_Arms"),
         "current_a":       m.get("current_a"),   # current the design was solved at
@@ -2225,7 +2274,7 @@ def descent_start(req: DescentRequest):
               bool(req.structured_gap), bool(req.airgap_macro)),
         kwargs={"iron_template": bool(getattr(req, "iron_template", True)),
                 "geo_mesh": bool(getattr(req, "geo_mesh", True)),
-                "element_order": int(getattr(req, "element_order", 1) or 1)},
+                "element_order": int(getattr(req, "element_order", 2) or 2)},
         daemon=True).start()
     return {"started": True, "algorithm": algo, "n_sectors": n_sectors,
             "target_torque_nm": target_torque, "v_peak_limit": v_peak_limit,
@@ -2260,7 +2309,7 @@ def descent_baseline(req: BaselineRequest):
                                 airgap_macro=bool(req.airgap_macro),
                                 iron_template=bool(getattr(req, "iron_template", True)),
                                 geo_mesh=bool(getattr(req, "geo_mesh", True)),
-                                element_order=int(getattr(req, "element_order", 1) or 1))
+                                element_order=int(getattr(req, "element_order", 2) or 2))
 
     a = _ev(I)
     if not a.get("ok"):
@@ -2276,6 +2325,10 @@ def descent_baseline(req: BaselineRequest):
 @router.get("/descent/progress")
 def descent_progress():
     with _descent_lock:
+        # Nothing in flight HERE does not mean nothing is in flight: a run may be
+        # hosted in its own process.  Pick up its checkpoint so the UI tracks it.
+        if not _descent_state.get("running"):
+            _refresh_descent_state_from_disk()
         return _json_sane(dict(_descent_state))
 
 

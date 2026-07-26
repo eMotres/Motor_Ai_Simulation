@@ -1540,6 +1540,23 @@ def get_fem_field2d(
 
     _comp_mesh = _parse_component_mesh(component_mesh)
     _geo_ov = _parse_geo_override(geo)   # per-request geometry override (multi-user)
+    # Fingerprint what the SOLVE depends on but the URL doesn't carry: the shared
+    # config (geometry / winding / material assignment) and this request's per-user
+    # material override.  Without it the field view kept serving a picture built
+    # from a different design — a changed magnet or a config-side geometry edit
+    # left the cached image in place.
+    try:
+        import hashlib as _hl_f, json as _jl_f
+        from motor_ai_sim.config import get_config as _gc_f
+        from motor_ai_sim.material_context import get_request_materials as _grm_f
+        _cfg_f = _gc_f() or {}
+        _cfp_f = _hl_f.md5(_jl_f.dumps(
+            {"g": _cfg_f.get("geometry"), "w": _cfg_f.get("winding"),
+             "m": _cfg_f.get("materials"), "mag": _cfg_f.get("magnet"),
+             "req_mat": _grm_f()},
+            sort_keys=True, default=str).encode()).hexdigest()[:16]
+    except Exception:
+        _cfp_f = "nofp"
     key = (
         "sbfield", round(rotor_angle_deg * 2) / 2, round(gamma_deg, 1),
         round(mesh_size_mm, 2), round(min_size_mm, 2), round(outer_air_factor, 2),
@@ -1547,7 +1564,7 @@ def get_fem_field2d(
         round(I_phase_rms, 2) if I_phase_rms is not None else None,
         int(bool(demag)), int(bool(pole_copy)), int(bool(iron_template)), tuple(sorted(_comp_mesh.items())),
         int(bool(geo_mesh)), int(bool(structured_gap)), int(bool(airgap_macro)),
-        round(float(gap_layers), 1),
+        round(float(gap_layers), 1), _cfp_f,
     )
     if _geo_ov:   # distinct cache entry per overridden geometry (no-geo key unchanged)
         key = key + (tuple(sorted(_geo_ov.items())),)
@@ -2694,12 +2711,17 @@ def get_fem_transient(
     hi_fidelity:         bool  = False,   # ← 2× slip nodes + finer mesh → smoother raw torque (slower)
     structured_gap:      bool  = False,   # ← ANSYS-style concentric-ring air-gap mesh (experimental)
     airgap_macro:        bool  = False,   # ← harmonic air-gap macroelement (honest RAW ripple; full ring + sectors)
-    element_order:       int   = 1,       # ← 1 = P1 linear (default) | 2 = P2 quadratic "high-fidelity
+    element_order:       int   = 2,       # ← 2 = P2 quadratic (DEFAULT) | 1 = P1 linear "high-fidelity
                                           #   ripple": B linear per element → smooth Arkkio torque (no P1
                                           #   staircase; noise floor →0 with mesh refinement).  Requires the
                                           #   structured belt (forced on below when 2); magnetostatic per
-                                          #   frame (current drive; no eddy/voltage/demag on P2 yet — those
-                                          #   raise NotImplementedError in the solver).
+                                          #   frame (current drive).
+                                          #   P2 is the default because it is the only basis good for both
+                                          #   halves of the answer at once: an energy-consistent mean torque
+                                          #   and a mesh-convergent ripple.  P1 stays reachable ONLY for the
+                                          #   couplings P2 does not implement — irreversible demag, coupled
+                                          #   eddy, voltage drive — which raise NotImplementedError on P2, so
+                                          #   the demag view and the eddy/voltage modes still select it.
     restore:             bool  = False,   # ← on open: return the LAST saved transient (stale if params differ) instead of recomputing
     geo:                 Optional[str] = None,  # ← per-request geometry override (multi-user); absent = global config
     drive:               str   = "current",  # ← "current" (imposed sinusoidal I) | "voltage"
@@ -2774,10 +2796,17 @@ def get_fem_transient(
         try:
             import hashlib as _hl, json as _jl
             from motor_ai_sim.config import get_config as _gc_fp
+            from motor_ai_sim.material_context import get_request_materials as _grm_fp
             _cfg_all = _gc_fp() or {}
+            # A signed-in user's material choice lives ONLY in this request's `mat=`
+            # override (per-user, never written to the shared config).  Leaving it
+            # out of the key meant "assign a different magnet, press Run" replayed
+            # the previous material's cached solve — same torque, same losses, no
+            # hint anything was stale.
             _cfp = _hl.md5(_jl.dumps(
                 {"g": _cfg_all.get("geometry"), "w": _cfg_all.get("winding"),
-                 "m": _cfg_all.get("materials"), "mag": _cfg_all.get("magnet")},
+                 "m": _cfg_all.get("materials"), "mag": _cfg_all.get("magnet"),
+                 "req_mat": _grm_fp()},
                 sort_keys=True, default=str).encode()).hexdigest()[:16]
         except Exception:
             _cfp = "nofp"

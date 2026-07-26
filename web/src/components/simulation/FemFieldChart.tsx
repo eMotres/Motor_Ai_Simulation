@@ -59,14 +59,69 @@ function jet01(t: number): [number, number, number] {
   return [r, g, b];
 }
 
-// Discrete-banded rainbow — quantize t into N levels so the fill renders
-// as Ansys-style colour patches instead of a smooth gradient.
-function jetBands(t: number, n: number = 20): [number, number, number] {
-  // Quantise to band centres so the colour matches the iso-line at the band edge.
-  const tq = (Math.floor(t * n) + 0.5) / n;
-  return jet01(tq);
+// Discrete-banded rainbow for the LEGEND (and anything drawn on the CPU).
+// The field fill itself bands in the fragment shader below — see BAND_FRAG.
+function bandLut(t: number, n: number): [number, number, number] {
+  return jet01((Math.floor(Math.max(0, Math.min(1, t)) * n) + 0.5) / n);
 }
 
+// Ansys-style banded fill.  The band edges must be evaluated PER PIXEL from the
+// interpolated SCALAR — quantising at the vertices and letting the GPU blend the
+// resulting RGB mixes neighbouring band colours and turns the field into
+// blotches.  So the shader carries the scalar through and quantises in the
+// fragment stage, which puts every band edge exactly on an iso-line.
+const BAND_VERT = `
+  attribute float aVal;
+  varying float vVal;
+  void main() {
+    vVal = aVal;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+const BAND_FRAG = `
+  uniform float uBands;          // 0 = continuous
+  varying float vVal;
+  vec3 jet(float x) {
+    x = clamp(x, 0.0, 1.0);
+    return vec3(clamp(1.5 - abs(4.0 * x - 3.0), 0.0, 1.0),
+                clamp(1.5 - abs(4.0 * x - 2.0), 0.0, 1.0),
+                clamp(1.5 - abs(4.0 * x - 1.0), 0.0, 1.0));
+  }
+  void main() {
+    float t = clamp(vVal, 0.0, 1.0);
+    if (uBands > 0.5) t = (floor(t * uBands) + 0.5) / uBands;   // band centre
+    gl_FragColor = vec4(jet(t), 1.0);
+  }
+`;
+// Bands per mode — mirrors what the legend draws.
+const MODE_BANDS: Record<string, number> = { Az: 20, Bmag: 13, Demag: 11 };
+
+/**
+ * Colour range for the Demag map: [worst, best] remaining Br over the magnet
+ * triangles only. Auto-ranged at BOTH ends — with the top pinned at 100 % a
+ * magnet that sits between 15 % and 31 % gets the bottom sixth of the palette
+ * and reads as one flat colour. Shared by the fill and the legend so the two
+ * cannot drift apart. Degenerate spans are widened around their centre.
+ */
+function demagRange(
+  dc: number[] | undefined, dom: number[] | Int32Array,
+  nTri: number, magN: number, magS: number,
+): [number, number] {
+  let lo = Infinity, hi = -Infinity;
+  for (let i = 0; i < nTri; i++) {
+    if (dom[i] !== magN && dom[i] !== magS) continue;
+    const cc = dc ? Math.max(0, Math.min(1, dc[i])) : 1;
+    if (cc < lo) lo = cc;
+    if (cc > hi) hi = cc;
+  }
+  if (!isFinite(lo) || !isFinite(hi)) return [0, 1];
+  if (hi - lo < 0.02) {                       // uniform map: widen, stay in [0,1]
+    const mid = 0.5 * (lo + hi);
+    lo = Math.max(0, mid - 0.01);
+    hi = Math.min(1, Math.max(lo + 0.02, mid + 0.01));
+  }
+  return [lo, hi];
+}
 // ── helpers: read mesh params persisted by MeshPanel ──────────────────────
 function readMeshSetting<T>(key: string, def: T): T {
   try {
@@ -113,7 +168,6 @@ function jetSigned(t: number): [number, number, number] {
 }
 
 const N_BANDS = 20;           // # of discrete colour bands / iso-A levels
-const B_BANDS = 13;           // discrete |B| colour bands (Ansys-style legend)
 
 /** Extract iso-A_z contour line segments via per-triangle linear
  *  interpolation (marching-segments on tris).
@@ -261,14 +315,20 @@ const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode; logLoss: boole
       const keep = triangles.map((_, ti) => domain_per_tri[ti] !== DOM_OUTER);
       const positions = new Float32Array(vertices.length * 3);
       const colors    = new Float32Array(vertices.length * 3);
+      const vals      = new Float32Array(vertices.length);   // scalar for the shader
       for (let i = 0; i < vertices.length; i++) {
         positions[3 * i]     = vertices[i][0] * S;
         positions[3 * i + 1] = vertices[i][1] * S;
         positions[3 * i + 2] = 0;
-        // map A_z → [-1, 1] via signed log, then to [0, 1] for jetBands
+        // map A_z → [-1, 1] via signed log, then to [0, 1] for the colour map.
+        // CONTINUOUS: these are VERTEX colours that the GPU interpolates across
+        // each triangle, so quantising here banded the nodes and then blended the
+        // bands — neither clean iso-bands nor a smooth field, just blotches.  The
+        // iso-lines are drawn separately and still mark the levels.
         const tc = compress(A_z_per_node[i]);
         const t  = 0.5 + 0.5 * tc;
-        const [r, g, b] = jetBands(t, N_BANDS);
+        vals[i] = Math.max(0, Math.min(1, t));
+        const [r, g, b] = jet01(vals[i]);
         colors[3 * i]     = r / 255;
         colors[3 * i + 1] = g / 255;
         colors[3 * i + 2] = b / 255;
@@ -281,6 +341,7 @@ const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode; logLoss: boole
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', new THREE.BufferAttribute(positions, 3));
       g.setAttribute('color',    new THREE.BufferAttribute(colors, 3));
+      g.setAttribute('aVal',     new THREE.BufferAttribute(vals, 1));
       g.setIndex(new THREE.BufferAttribute(new Uint32Array(indexArr), 1));
       // Stash the symmetric percentile-clipped range so isoGeo and the
       // colour bar can re-use the EXACT same scale.
@@ -417,26 +478,46 @@ const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode; logLoss: boole
       const dom = domain_per_tri;
       const DOM_MAG_N = 4, DOM_MAG_S = 44;
       const nTri = triangles.length;
-      // Worst loss fraction over the magnets → the auto-range span (floored so a
-      // fully-healthy magnet still gets a sane, non-degenerate legend).
-      let lostMax = 0;
+      // Auto-range BOTH ends to the real span [worst … best remaining].  Pinning
+      // the top at 100 % wastes the whole upper half of the palette whenever no
+      // element is still at full strength — a magnet sitting between 15 % and
+      // 31 % rendered as one flat blue.
+      const [coefLo, coefHi] = demagRange(dc, dom, nTri, DOM_MAG_N, DOM_MAG_S);
+      const coefSpan = coefHi - coefLo;
+      // SMOOTH, nodal-averaged — same treatment as |B| below, and what Ansys
+      // shows.  Br_factor is constant per element, so a flat per-triangle fill
+      // renders a corner-localised loss as hard-edged blocks; averaging onto the
+      // NODES (area-weighted) and colouring per-vertex lets the GPU interpolate
+      // across each triangle, so the gradient into the demagnetised corner reads
+      // the way the physics actually varies.
+      const dSum = new Float64Array(vertices.length);
+      const dW   = new Float64Array(vertices.length);
       for (let i = 0; i < nTri; i++) {
         if (dom[i] !== DOM_MAG_N && dom[i] !== DOM_MAG_S) continue;
+        const [ia, ib, ic] = triangles[i];
+        const ax = vertices[ia][0], ay = vertices[ia][1];
+        const bx = vertices[ib][0], by = vertices[ib][1];
+        const cx = vertices[ic][0], cy = vertices[ic][1];
+        const area = Math.abs((bx - ax) * (cy - ay) - (cx - ax) * (by - ay)) * 0.5 || 1e-12;
         const cc = dc ? Math.max(0, Math.min(1, dc[i])) : 1;
-        const lost = 1 - cc; if (lost > lostMax) lostMax = lost;
+        dSum[ia] += cc * area; dW[ia] += area;
+        dSum[ib] += cc * area; dW[ib] += area;
+        dSum[ic] += cc * area; dW[ic] += area;
       }
-      const lostSpan = Math.max(lostMax, 0.02);
       const positions = new Float32Array(nTri * 3 * 3);
       const colors    = new Float32Array(nTri * 3 * 3);
-      let p = 0, c = 0;
+      const vals = new Float32Array(nTri * 3);             // scalar for the shader
+      let p = 0, c = 0, q = 0;
       for (let i = 0; i < nTri; i++) {
         if (dom[i] !== DOM_MAG_N && dom[i] !== DOM_MAG_S) continue;
-        const tt = triangles[i];
-        const coef = dc ? Math.max(0, Math.min(1, dc[i])) : 1;
-        // 1 = full Br (safe) → red;  0 = worst remaining in this map → blue.
-        const tCol = Math.max(0, Math.min(1, 1 - (1 - coef) / lostSpan));
-        const [rr, gg, bb] = jetBands(tCol, 11);
-        for (const vi of tt) {
+        for (const vi of triangles[i]) {
+          const coefV = dW[vi] > 0 ? dSum[vi] / dW[vi] : 1;
+          // top of the span = best remaining → red;  bottom = worst → blue.
+          const tCol = Math.max(0, Math.min(1, (coefV - coefLo) / coefSpan));
+          vals[q++] = tCol;
+          const [rr, gg, bb] = jet01(tCol);   // continuous: the vertex colours are
+                                              // what get interpolated, so banding
+                                              // here would quantise the gradient
           positions[p++] = vertices[vi][0] * S;
           positions[p++] = vertices[vi][1] * S;
           positions[p++] = 0;
@@ -450,6 +531,7 @@ const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode; logLoss: boole
         new THREE.BufferAttribute(positions.subarray(0, p), 3));
       g.setAttribute('color',
         new THREE.BufferAttribute(colors.subarray(0, c), 3));
+      g.setAttribute('aVal', new THREE.BufferAttribute(vals.subarray(0, q), 1));
       return g;
     }
 
@@ -457,8 +539,9 @@ const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode; logLoss: boole
     // P1 triangle, so a flat per-triangle fill looks faceted ("scary").  Instead
     // we average each triangle's |B| onto its 3 nodes (AREA-WEIGHTED) and colour
     // PER-VERTEX, exactly like the A_z field — Three.js then interpolates the
-    // colour smoothly across every triangle, then quantised into B_BANDS
-    // discrete bands → the Ansys "colour patch" legend look (blue→red).
+    // colour smoothly across every triangle (blue→red, continuous — banding the
+    // vertex colours quantised the nodes and then blended the bands, which read
+    // as blotches rather than a field).
     // vmax = 99.5-percentile of the interior |B|, capped at 4 T — wide enough to
     // show the real air-gap/tooth-tip field (~3.3 T, like Ansys), while the
     // percentile keeps 1/4-sector sharp-corner spikes from squashing the LUT.
@@ -485,13 +568,15 @@ const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode; logLoss: boole
     const keep = triangles.map((_, ti) => domain_per_tri[ti] !== DOM_OUTER);
     const positions = new Float32Array(nV * 3);
     const colors    = new Float32Array(nV * 3);
+    const vals      = new Float32Array(nV);                  // scalar for the shader
     for (let i = 0; i < nV; i++) {
       positions[3 * i]     = vertices[i][0] * S;
       positions[3 * i + 1] = vertices[i][1] * S;
       positions[3 * i + 2] = 0;
       const bnode = wSum[i] > 0 ? bSum[i] / wSum[i] : 0;
       const t = Math.min(1, Math.max(0, bnode / vmax));
-      const [rr, gg, bb] = jetBands(t, B_BANDS);   // Ansys-style discrete bands
+      vals[i] = t;
+      const [rr, gg, bb] = jet01(t);
       colors[3 * i]     = rr / 255;
       colors[3 * i + 1] = gg / 255;
       colors[3 * i + 2] = bb / 255;
@@ -504,6 +589,7 @@ const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode; logLoss: boole
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     g.setAttribute('color',    new THREE.BufferAttribute(colors, 3));
+    g.setAttribute('aVal',     new THREE.BufferAttribute(vals, 1));
     g.setIndex(new THREE.BufferAttribute(new Uint32Array(indexArr), 1));
     (g as any).userData = { Bmag_vmax: vmax };
     return g;
@@ -594,7 +680,19 @@ const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode; logLoss: boole
   return (
     <group>
       <mesh geometry={fillGeo}>
-        <meshBasicMaterial vertexColors side={THREE.DoubleSide}/>
+        {/* Modes that carry the raw scalar band it per-pixel (Ansys look); the
+            rest keep the CPU-side vertex colours they already compute. */}
+        {fillGeo?.getAttribute('aVal') ? (
+          <shaderMaterial
+            key={`band-${mode}`}
+            side={THREE.DoubleSide}
+            vertexShader={BAND_VERT}
+            fragmentShader={BAND_FRAG}
+            uniforms={{ uBands: { value: MODE_BANDS[mode] ?? 0 } }}
+          />
+        ) : (
+          <meshBasicMaterial vertexColors side={THREE.DoubleSide}/>
+        )}
       </mesh>
       {isoGeo && (
         <lineSegments geometry={isoGeo}>
@@ -803,7 +901,7 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
       params.I_phase_rms = String(I_phase_rms);
     }
     const qs = new URLSearchParams(params).toString();
-    fetch(`${base}?${qs}`)
+    fetch(`${base}?${qs}`, { cache: 'no-store' })
       .then(async r => {
         if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
         return r.json();
@@ -826,6 +924,17 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
     fetchFem();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gamma_deg, rotor_angle_deg, I_phase_rms, payloadOverride]);
+
+  // Assigning a different magnet/steel changes the solve but NOT the URL, so this
+  // view has no way to notice on its own — re-fetch on the same event a material
+  // change fires.  Without it the map kept showing the previous material, and a
+  // manual Re-solve only re-read the browser's cached response for that URL.
+  useEffect(() => {
+    const onApplied = () => { if (!payloadOverride) fetchFem(); };
+    window.addEventListener('sim-design-applied', onApplied);
+    return () => window.removeEventListener('sim-design-applied', onApplied);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [payloadOverride, mode, gamma_deg, I_phase_rms]);
 
   // Use the ACTUAL operating-point current — no silent substitution (a hidden
   // fallback to 120 A made the no-load Loss view show full I²R copper loss, which
@@ -860,7 +969,7 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
       // The J⟳ current-crowding view needs the true time-coupled eddy currents.
       coupled:          String(mode === 'Jeddy'),
     }).toString();
-    fetch(`${base}?${qs}`)
+    fetch(`${base}?${qs}`, { cache: 'no-store' })
       .then(async r => {
         if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
         return r.json();
@@ -1159,22 +1268,17 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
             }
             const vmax = Math.min(Math.max(pct(Bs, 99.5), 0.05), 4.0);
             return <ColorBar vmin={0} vmax={vmax * 1000} unit="mT"
-              fmt={(v) => v.toFixed(0)} lut={(t) => jetBands(t, B_BANDS)}/>;
+              fmt={(v) => v.toFixed(0)} lut={(t) => bandLut(t, MODE_BANDS.Bmag)}/>;
           }
           if (mode === 'Demag') {
-            // % of Br REMAINING, auto-ranged to the real span (ANSYS-style):
-            // 100 % (full strength) at the top → red; the worst magnet element
-            // sets the bottom → blue.  Matches the fill's lostSpan floor.
+            // % of Br REMAINING, auto-ranged at BOTH ends to the real span: the
+            // best magnet element sets the top → red, the worst the bottom →
+            // blue.  Must use the SAME range helper as the fill or the legend
+            // stops describing the colours.
             const dc = (payload as any).demag_coef_per_tri as number[] | undefined;
-            let lostMax = 0;
-            for (let ti = 0; ti < tris.length; ti++) {
-              if (dom[ti] !== 4 && dom[ti] !== 44) continue;
-              const cc = dc ? Math.max(0, Math.min(1, dc[ti])) : 1;
-              const lost = 1 - cc; if (lost > lostMax) lostMax = lost;
-            }
-            const lostSpan = Math.max(lostMax, 0.02);
-            return <ColorBar vmin={(1 - lostSpan) * 100} vmax={100} unit="% Br"
-              fmt={(v) => v.toFixed(1)} lut={(t) => jetBands(t, 11)}/>;
+            const [lo, hi] = demagRange(dc, dom, tris.length, 4, 44);
+            return <ColorBar vmin={lo * 100} vmax={hi * 100} unit="% Br"
+              fmt={(v) => v.toFixed(1)} lut={(t) => bandLut(t, MODE_BANDS.Demag)}/>;
           }
           if (mode === 'Loss') {
             // Loss-density bar [W/m³] — log or linear to match the fill.
@@ -1222,7 +1326,7 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
           const amax = Math.max(Math.abs(lo), Math.abs(hi), 1e-12);
           return (
             <ColorBar vmin={-amax} vmax={+amax} unit="Wb/m"
-              lut={(t) => jetBands(t, N_BANDS)}/>
+              lut={(t) => bandLut(t, MODE_BANDS.Az)}/>
           );
         })()}
 

@@ -1195,6 +1195,59 @@ magnet:
       - [-14000,    1.281]
       - [0,         1.300]
 
+  # ── Fe16N2 (iron nitride) — RESEARCH MATERIAL, literature estimate ─────────
+  # Not a datasheet: bracketed from published work, since no qualified bulk
+  # magnet is sold.  Common to both: Ku > 1.0 MJ/m3 and mu0*Ms > 2.4 T
+  # (PhysRevApplied 6.024013 / Sci.Rep. 25436), loop squareness Hk/Hcj = 0.79
+  # (Niron, current best pressed), decomposes above 214 C.  sigma is an estimate
+  # (metallic, Fe-based -> higher eddy loss than NdFeB).  The demag curve is
+  # built as linear recoil to the knee at 0.79*Hcj, then the collapse to J = 0
+  # at Hcj -- the low-anisotropy behaviour that decides this material's fate.
+  #
+  # TEMPERATURE: quoted at 20 C, while F45SH_120C is quoted hot (120 C).  The
+  # solver does NOT temperature-correct magnets -- `temperature_c` is metadata and
+  # the declared Br/curve are used as-is -- so mixing the two in one study needs
+  # this caveat.  For COERCIVITY it barely matters: Fe16N2's temperature
+  # coefficient is +0.4 Oe/K over 27-152 C (Acta Mater. 2020), two orders of
+  # magnitude smaller than NdFeB's -81.9 Oe/K, so its knee at 120 C is within a
+  # few kA/m of the value here.  Br still falls with temperature, so these
+  # numbers remain the OPTIMISTIC end for a hot machine.
+  Fe16N2_optimistic:
+    description: Fe16N2 iron nitride - OPTIMISTIC commercial target (Niron-class claims, Br up to 1.5 T, Hcj 4 kOe). Literature estimate, NOT a qualified datasheet.
+    grade: Fe16N2-opt
+    temperature_c: 20
+    Br: 1.35
+    Hc: 300735
+    mu_rec: 1.10
+    sigma: 2.0e6
+    density: 7100
+    thermal_conductivity: 20.0
+    specific_heat: 450
+    bh_curve:
+    - [-320000, -0.402]
+    - [-252800, 1.001]
+    - [-189600, 1.088]
+    - [-126400, 1.175]
+    - [-63200, 1.263]
+    - [0, 1.35]
+  Fe16N2_lab_best:
+    description: Fe16N2 iron nitride - BEST PUBLISHED measurement (free-standing foils, Hcj 1910 Oe, 20 MGOe; Sci.Rep. 25436). Bulk anisotropic to date is weaker (9 MGOe).
+    grade: Fe16N2-lab
+    temperature_c: 20
+    Br: 1.20
+    Hc: 147023
+    mu_rec: 1.10
+    sigma: 2.0e6
+    density: 7100
+    thermal_conductivity: 20.0
+    specific_heat: 450
+    bh_curve:
+    - [-152000, -0.191]
+    - [-120080, 1.034]
+    - [-90060, 1.076]
+    - [-60040, 1.117]
+    - [-30020, 1.159]
+    - [0, 1.2]
   F45SH_120C:
     description: "Sintered NdFeB magnet, F45SH grade — operating point 120 °C"
     grade: F45SH

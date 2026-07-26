@@ -77,6 +77,15 @@ export function useMotorAssignments() {
           setAssignments(d.assignments);
         }
         setSaving(false);
+        // A different material IS a different machine: the numbers on the
+        // Simulation tab now belong to the previous one.  Drop them and recompute,
+        // the same handshake an applied design uses — without this the tab kept
+        // showing the old magnet's torque and losses with nothing to say so, which
+        // read as "I changed the material and nothing happened".
+        try {
+          window.dispatchEvent(new CustomEvent('sim-design-applied'));
+          window.dispatchEvent(new CustomEvent('sim-rerun'));
+        } catch { /* SSR/no-window */ }
       } catch (e) { setError(String(e)); setSaving(false); }
     })();
   }, [uid]);

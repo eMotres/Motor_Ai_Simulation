@@ -1,41 +1,23 @@
 /**
- * CompareTab — host for the "Configure" tab.  Switches between:
- *   • Configurator — the simple tuner: pick a reference passport, tune
- *     length / turns / wire / connection, instant T/P/V/η, compare configs.
- *   • Saved simulations — the original diff of saved FEM runs (admin tool).
- * Defaults to the Configurator; the choice persists in localStorage.
+ * CompareTab — host for the "Configure" tab: the Configurator, i.e. the simple
+ * tuner (pick a reference passport, tune length / turns / wire / connection,
+ * instant T/P/V/η).
+ *
+ * The saved-simulations diff that used to share this tab behind a toggle now has
+ * its own top-level "Compare" tab (ComparePanel), so comparison points live where
+ * you would look for them instead of behind a mode switch.
  */
-import React, { useState } from 'react';
-import { Box, ToggleButton, ToggleButtonGroup } from '@mui/material';
+import React from 'react';
+import { Box } from '@mui/material';
 import ConfiguratorPanel from './ConfiguratorPanel';
-import ComparePanel from './ComparePanel';
 
-type Mode = 'configurator' | 'saved';
-
-const CompareTab: React.FC = () => {
-  const [mode, setMode] = useState<Mode>(() =>
-    (localStorage.getItem('configure.mode') === 'saved' ? 'saved' : 'configurator'));
-  const change = (m: Mode) => { setMode(m); try { localStorage.setItem('configure.mode', m); } catch { /* ignore */ } };
-
-  return (
-    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', bgcolor: 'var(--panel-2)', overflow: 'hidden' }}>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 2, pt: 1 }}>
-        <ToggleButtonGroup exclusive size="small" value={mode} onChange={(_, v) => v && change(v as Mode)}>
-          <ToggleButton value="configurator" sx={{ px: 1.75, py: 0.4, fontSize: 12, textTransform: 'none', color: 'var(--text-2)', borderColor: 'var(--line)',
-            '&.Mui-selected': { bgcolor: '#1d4ed8', color: '#fff', '&:hover': { bgcolor: '#2563eb' } } }}>
-            Configurator
-          </ToggleButton>
-          <ToggleButton value="saved" sx={{ px: 1.75, py: 0.4, fontSize: 12, textTransform: 'none', color: 'var(--text-2)', borderColor: 'var(--line)',
-            '&.Mui-selected': { bgcolor: '#1d4ed8', color: '#fff', '&:hover': { bgcolor: '#2563eb' } } }}>
-            Saved simulations
-          </ToggleButton>
-        </ToggleButtonGroup>
-      </Box>
-      <Box sx={{ flex: 1, minHeight: 0 }}>
-        {mode === 'configurator' ? <ConfiguratorPanel /> : <ComparePanel />}
-      </Box>
+const CompareTab: React.FC = () => (
+  <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column',
+    bgcolor: 'var(--panel-2)', overflow: 'hidden' }}>
+    <Box sx={{ flex: 1, minHeight: 0 }}>
+      <ConfiguratorPanel />
     </Box>
-  );
-};
+  </Box>
+);
 
 export default CompareTab;

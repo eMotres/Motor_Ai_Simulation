@@ -30,7 +30,13 @@ export default function MaterialOverrideSync(): null {
           }
         }
       }
-      if (Object.keys(materials).length === 0) return null;   // only built-ins in use
+      // Send the ASSIGNMENT whenever there is one, even if every material in it
+      // is a built-in. Returning null here (the old "only built-ins in use"
+      // short-circuit) dropped the assignment along with the empty props map, so
+      // the backend silently fell back to config/motor_config.yaml — picking a
+      // library magnet in the UI had NO effect on the solve. `materials` may stay
+      // empty: the backend resolves built-in names from its own library.
+      if (Object.keys(assignments).length === 0) return null;
       return JSON.stringify({ assignment: assignments, materials });
     });
     return () => setMatGetter(null);

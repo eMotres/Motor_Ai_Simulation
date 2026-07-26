@@ -179,10 +179,25 @@ const PhysicsDashboard: React.FC<Props> = ({ rotorAngle_deg, gamma_deg, I_phase_
     window.addEventListener('sim-apply-summary', onApply as EventListener);
     return () => window.removeEventListener('sim-apply-summary', onApply as EventListener);
   }, []);
-  const appliedNonceRef = React.useRef(runNonce);
+  // An applied design REPLACES the geometry, so everything on the card belongs to the
+  // previous one.  Drop it instead of presenting it as current while the recompute
+  // this apply kicked off is still running.
   React.useEffect(() => {
-    if (runNonce !== appliedNonceRef.current) { appliedNonceRef.current = runNonce; setAppliedSummary(null); }
+    const onApplied = () => setTransientSummary(null);
+    window.addEventListener('sim-design-applied', onApplied);
+    return () => window.removeEventListener('sim-design-applied', onApplied);
+  }, []);
+  // A fresh Run supersedes an applied summary — but only once ITS OWN result is in.
+  // (Was: cleared the moment runNonce ticked, which made an auto-recompute fall back
+  // to the PREVIOUS design's numbers for the whole solve.)
+  const appliedNonceRef = React.useRef(runNonce);
+  const [runPending, setRunPending] = React.useState(false);
+  React.useEffect(() => {
+    if (runNonce !== appliedNonceRef.current) { appliedNonceRef.current = runNonce; setRunPending(true); }
   }, [runNonce]);
+  React.useEffect(() => {
+    if (runPending && transientSummary) { setAppliedSummary(null); setRunPending(false); }
+  }, [runPending, transientSummary]);
   const shownSummary = appliedSummary ?? transientSummary;
   // Forward the shown summary to the parent (for the Save-simulation snapshot) and
   // persist it, so "Save as new motor" stamps the card with the numbers the user

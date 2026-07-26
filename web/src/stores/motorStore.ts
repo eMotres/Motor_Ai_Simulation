@@ -35,9 +35,38 @@ function restoreDescentEvalParams(st: any): void {
   put('sim.stepsPP', ep.steps_per_period);  put('mesh.nSectors', ep.n_sectors);
   put('mesh.gapLayers', ep.gap_layers);     put('sim.coilTemp', ep.coil_temp_c);
   put('mesh.poleCopy', ep.pole_copy);       put('sim.torqueFilter', ep.torque_filter);
-  put('sim.fieldLosses', ep.rotor_eddy);    put('sim.endWinding', ep.end_winding_factor);
+  put('sim.fieldLosses', ep.rotor_eddy);
+  // k_end: 0 in a descent means "auto" — the solver recomputes it from each
+  // candidate's own geometry.  Pinning that 0 here blanked the Simulation cell and
+  // every consumer reading `sim.endWinding`.  The applied design's geometry re-seeds
+  // the real factor, so only carry an EXPLICIT override across.
+  if (Number(ep.end_winding_factor) > 0) put('sim.endWinding', ep.end_winding_factor);
   put('mesh.meshSize', ep.mesh_size_mm);    put('mesh.minSize', ep.min_size_mm);
   try { window.dispatchEvent(new CustomEvent('descent-eval-params', { detail: ep })); } catch { /* SSR */ }
+}
+
+// k_end follows the geometry (masses.end_winding_factor is the SINGLE SOURCE) and the
+// transient reads it straight from localStorage, so refresh it BEFORE asking for a
+// recompute — otherwise the first solve after an apply scales the copper loss by the
+// PREVIOUS design's end-turn length.
+async function refreshEndWindingFactor(): Promise<void> {
+  try {
+    const r = await fetch(`${API_BASE_URL}/api/config`);
+    const d = await r.json();
+    const k = Number(d?.end_winding_factor);
+    if (Number.isFinite(k) && k > 0) localStorage.setItem('sim.endWinding', JSON.stringify(+k.toFixed(3)));
+  } catch { /* non-fatal: the Simulation panel also re-seeds on the geometry change */ }
+}
+
+// Applying a design swaps the geometry under the Simulation tab: drop the previous
+// design's numbers ('sim-design-applied') and kick off the recompute that fills the
+// dashboard with this design's ('sim-rerun').  An already-known summary pushed via
+// 'sim-apply-summary' stays on screen until that solve reports its own.
+function announceAppliedDesign(): void {
+  try {
+    window.dispatchEvent(new CustomEvent('sim-design-applied'));
+    window.dispatchEvent(new CustomEvent('sim-rerun'));
+  } catch { /* SSR/no-window */ }
 }
 
 // Material PROPERTIES (Br, μr, σ, …) are not edited in the UI — material
@@ -802,23 +831,26 @@ export const useMotorStore = create<MotorState>()(
         const I = (typeof m?.current_a === 'number') ? m.current_a : undefined;
         const g = (typeof st?.mtpa_gamma_deg === 'number') ? st.mtpa_gamma_deg
                 : (typeof m?.gamma_deg === 'number' ? m.gamma_deg : undefined);
-        if (I === undefined && g === undefined) return;
-        if (get().connectedToApi) {
+        if (I !== undefined || g !== undefined) {
+          if (get().connectedToApi) {
+            try {
+              await fetch(`${API_BASE_URL}/api/simulation/config`, {
+                method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  ...(I !== undefined ? { max_current: I } : {}),
+                  ...(g !== undefined ? { phase_offset_deg: g } : {}),
+                }),
+              });
+            } catch { /* non-fatal: live event below still updates the panel */ }
+          }
+          // SimulationPanel is ALWAYS mounted (hidden when inactive), so it won't
+          // re-read on a tab switch — nudge it to adopt the operating point live.
           try {
-            await fetch(`${API_BASE_URL}/api/simulation/config`, {
-              method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                ...(I !== undefined ? { max_current: I } : {}),
-                ...(g !== undefined ? { phase_offset_deg: g } : {}),
-              }),
-            });
-          } catch { /* non-fatal: live event below still updates the panel */ }
+            window.dispatchEvent(new CustomEvent('sim-operating-point', { detail: { current: I, gamma: g } }));
+          } catch { /* SSR/no-window */ }
         }
-        // SimulationPanel is ALWAYS mounted (hidden when inactive), so it won't
-        // re-read on a tab switch — nudge it to adopt the operating point live.
-        try {
-          window.dispatchEvent(new CustomEvent('sim-operating-point', { detail: { current: I, gamma: g } }));
-        } catch { /* SSR/no-window */ }
+        await refreshEndWindingFactor();
+        announceAppliedDesign();
       },
       // Apply a USER-PICKED scatter point (click-to-select on the descent chart) —
       // same geometry + operating-point write as applyDescentBest, but for an
@@ -847,6 +879,8 @@ export const useMotorStore = create<MotorState>()(
             window.dispatchEvent(new CustomEvent('sim-operating-point', { detail: { current: I, gamma: g } }));
           } catch { /* SSR/no-window */ }
         }
+        await refreshEndWindingFactor();
+        announceAppliedDesign();
       },
       loadLastDescent: async () => {
         // The backend keeps the last descent in memory — re-hydrate it so the

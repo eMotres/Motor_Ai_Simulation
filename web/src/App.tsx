@@ -53,6 +53,7 @@ import { saveGlobal, blankMaterial, type Cat } from './lib/materialsActions';
 import { useMotorStore, useUIStore } from './stores/motorStore';
 import SimulationPanel from './components/simulation/SimulationPanel';
 import CompareTab from './components/compare/CompareTab';
+import ComparePanel from './components/compare/ComparePanel';
 import MeshPanel from './components/mesh/MeshPanel';
 import CostPanel from './components/cost/CostPanel';
 import { ensureActiveMotor } from './components/common/motorSettings';
@@ -300,6 +301,8 @@ function App() {
       render: () => <SimulationPanel active={activeTab === 'simulation'} /> },
     { id: 'sweep', label: 'Optimization', order: 60, panelId: 'optimization', gate: 'fullUI', showViewer: false,
       render: () => <SweepConfigPanel /> },
+    { id: 'comparePoints', label: 'Compare', order: 65, gate: 'fullUI', showViewer: false,
+      render: () => <ComparePanel /> },
     { id: 'cost', label: 'Cost', order: 70, panelId: 'cost', gate: 'fullUI', showViewer: false,
       render: () => <CostPanel /> },
     { id: 'compare', label: 'Configure', order: 75, gate: 'signedIn', showViewer: false,

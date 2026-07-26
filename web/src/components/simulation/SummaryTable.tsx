@@ -8,6 +8,7 @@
  */
 import React from 'react';
 import { Box, Paper, Typography, Tooltip } from '@mui/material';
+import AddToCompareButton from '../compare/AddToCompareButton';
 
 export interface TransientSummary {
   rpm:                 number;
@@ -93,12 +94,25 @@ const Cell: React.FC<{
 
 const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) => {
   if (!summary) {
+    // Keep the header (and the disabled "+ Compare") in place even with nothing to
+    // show: the button vanishing entirely before the first run made it impossible
+    // to find. Its tooltip explains what is missing.
     return (
       <Paper sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', p: 2,
-        textAlign: 'center', fontSize: 11, color: 'var(--text-3)' }}>
-        {loading
-          ? 'Computing transient FEM — summary will appear when the run completes…'
-          : 'No transient data yet — press “Run Simulation” in the left panel.'}
+        display: 'flex', flexDirection: 'column', gap: 1 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
+          <Typography sx={{ fontSize: 13, color: 'var(--text-1)', fontWeight: 700 }}>
+            Simulation summary — real FEM results
+          </Typography>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, ml: 'auto' }}>
+            <AddToCompareButton />
+          </Box>
+        </Box>
+        <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>
+          {loading
+            ? 'Computing transient FEM — summary will appear when the run completes…'
+            : 'No transient data yet — press “Run Simulation” in the left panel.'}
+        </Typography>
       </Paper>
     );
   }
@@ -130,6 +144,11 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
         <Typography sx={{ fontSize: 13, color: 'var(--text-1)', fontWeight: 700 }}>
           Simulation summary — real FEM results
         </Typography>
+        {/* Snapshot THIS design as a comparison point (Compare tab). Sits next to
+            the numbers it captures, so it is obvious what gets saved. */}
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, ml: 'auto' }}>
+          <AddToCompareButton />
+        </Box>
         <Typography sx={{ fontSize: 10, color: stale ? '#f59e0b' : 'var(--text-4)' }}>
           @ {s.rpm} rpm · I_ph = {s.I_phase_rms_A} A_rms · γ = {s.gamma_deg}°
           {stale && (
@@ -157,7 +176,10 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
         <Cell label="Mech power" value={`${fmt(s.P_mech_W / 1000, 2)}`} unit="kW"
           accent="blue"
           tooltip="Shaft power from the energy balance P_elec_in − P_loss (≈ T_em × ω_mech)"/>
-        <Cell label="Active mass" value={fmt(s.mass_total_kg, 2)} unit="kg"
+        {/* 3 decimals: a 30 mm machine weighs ~0.05 kg, so 2 decimals showed a
+            single significant digit and hid every change during optimization.
+            Matches the per-component breakdown below, which already uses 3. */}
+        <Cell label="Active mass" value={fmt(s.mass_total_kg, 3)} unit="kg"
           tooltip="Sum of stator iron + copper + magnets + rotor iron + shaft (active section, no housing)"/>
         <Cell label="Torque density" value={fmt(s.torque_per_mass_Nm_kg, 2)} unit="N·m/kg"
           tooltip="T_em / mass_active — figure of merit for motor compactness"/>

@@ -26,6 +26,17 @@ DEFAULT_CONFIG_PATH = Path(__file__).parent.parent.parent / "config" / "motor_co
 # Global config cache
 _cached_config: Optional[Union[DictConfig, dict]] = None
 _cached_config_path: Optional[Path] = None
+# The cache FOLLOWS the file: mtime of the copy we hold, and when we last looked.
+# Without this the cache was write-once per process and every out-of-process edit
+# — an optimizer script, a text editor, `git checkout` — stayed invisible until a
+# restart. That is the mechanism behind two recurring complaints: "the load angle
+# is never remembered" (the API served a cached 0 while the YAML said 10) and "I
+# changed the material and nothing happened". Same fix the materials library got.
+_cached_config_mtime: Optional[float] = None
+_cached_config_checked: float = 0.0
+# Probe the file at most this often — a stat() per call would be wasteful inside
+# the FEM loops, and a second of staleness has never mattered here.
+_MTIME_PROBE_S = 1.0
 
 
 def load_config(config_path: Optional[Union[str, Path]] = None, 
@@ -40,15 +51,25 @@ def load_config(config_path: Optional[Union[str, Path]] = None,
         Configuration dictionary (OmegaConf DictConfig if available)
     """
     global _cached_config, _cached_config_path
+    global _cached_config_mtime, _cached_config_checked
 
     if config_path is None:
         config_path = DEFAULT_CONFIG_PATH
     else:
         config_path = Path(config_path)
 
-    # Return cached config if available and same path
+    # Serve the cache only while it still matches the file on disk.
     if not reload and _cached_config is not None and _cached_config_path == config_path:
-        return _cached_config
+        import time as _t
+        _now = _t.time()
+        if _now - _cached_config_checked < _MTIME_PROBE_S:
+            return _cached_config
+        _cached_config_checked = _now
+        try:
+            if config_path.stat().st_mtime == _cached_config_mtime:
+                return _cached_config
+        except OSError:
+            return _cached_config      # unreadable right now → keep what we have
 
     if not config_path.exists():
         raise FileNotFoundError(f"Config file not found: {config_path}")
@@ -64,6 +85,12 @@ def load_config(config_path: Optional[Union[str, Path]] = None,
 
     _cached_config = config
     _cached_config_path = config_path
+    try:
+        _cached_config_mtime = config_path.stat().st_mtime
+    except OSError:
+        _cached_config_mtime = None
+    import time as _t
+    _cached_config_checked = _t.time()
 
     return config
 
@@ -191,5 +218,8 @@ def clear_config_cache():
     to reload it.
     """
     global _cached_config, _cached_config_path
+    global _cached_config_mtime, _cached_config_checked
     _cached_config = None
     _cached_config_path = None
+    _cached_config_mtime = None
+    _cached_config_checked = 0.0

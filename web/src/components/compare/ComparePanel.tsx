@@ -22,7 +22,9 @@ import EditIcon          from '@mui/icons-material/Edit';
 import CheckIcon         from '@mui/icons-material/Check';
 import CloseIcon         from '@mui/icons-material/Close';
 import CompareArrowsIcon from '@mui/icons-material/CompareArrows';
+import PlayArrowIcon     from '@mui/icons-material/PlayArrow';
 import { useAuth } from '../../contexts/AuthContext';
+import { useMotorStore, useUIStore } from '../../stores/motorStore';
 import ViewColumnIcon    from '@mui/icons-material/ViewColumn';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
@@ -168,6 +170,10 @@ const ComparePanel: React.FC = () => {
   const [err,     setErr]     = useState<string | null>(null);
   const [editId,  setEditId]  = useState<string | null>(null);
   const [editName,setEditName]= useState('');
+  const [applyMsg, setApplyMsg] = useState<string | null>(null);
+  const updateGeometryViaApi = useMotorStore(s => s.updateGeometryViaApi);
+  const clearStlCache = useMotorStore(s => s.clearStlCache);
+  const setActiveTab = useUIStore(s => s.setActiveTab);
   // column-picker for the TOP library table (persisted)
   const [visibleCols, setVisibleCols] = useState<string[]>(() => {
     try { const r = localStorage.getItem('compare.libCols'); const a = r ? JSON.parse(r) : null;
@@ -220,6 +226,90 @@ const ComparePanel: React.FC = () => {
       })
       .then(load)
       .catch(e => setErr(String(e.message ?? e)));
+
+  // ── Apply a saved point back into the live design ─────────────────────────
+  // A Compare row already carries the full geometry it was solved with, so it
+  // can be pushed back: the Geometry tab then draws that machine and Simulation
+  // recomputes it. Without this the rows are a dead end — you can read a good
+  // optimum but not get back to it, and after a solver change (lamination, say)
+  // a stored row cannot be re-checked at all.
+  //
+  // Same path "Apply picked point" uses in the sweep panel: geometry via the
+  // API, operating point into the sim config, then the two events that make the
+  // Simulation tab drop its stale summary and re-solve.
+  const applyPoint = async (s: SavedSim) => {
+    const p: Record<string, any> = s.params || {};
+    // geometry only — params also carries the operating point and mesh settings
+    const NON_GEOM = new Set([
+      'I_phase_rms', 'gamma_deg', 'rpm', 'coil_temp_c', 'end_winding_factor',
+      'connection', 'steps_per_period', 'n_sectors', 'element_order',
+      'mesh_size_mm', 'min_size_mm', 'gap_layers', 'frequency_hz',
+    ]);
+    const geo: Record<string, number> = {};
+    const mats: Record<string, string> = {};
+    for (const [k, v] of Object.entries(p)) {
+      if (k.startsWith('mat_') && typeof v === 'string' && v) { mats[k.slice(4)] = v; continue; }
+      if (!NON_GEOM.has(k) && typeof v === 'number' && Number.isFinite(v)) geo[k] = v;
+    }
+    if (!Object.keys(geo).length) { setErr(`"${s.name}" carries no geometry to apply`); return; }
+    setErr(null); setApplyMsg(`applying "${s.name}" …`);
+    try {
+      await updateGeometryViaApi(geo as any);
+      // MATERIALS — a design is its geometry AND what it is made of. Applying the
+      // shape alone would re-check a Fe16N2 result against whatever magnet is
+      // currently assigned, with nothing on screen to say so. Points saved before
+      // materials were snapshotted have none; those keep the current assignment
+      // and the message below says exactly that, rather than pretending.
+      let matNote = '';
+      const matNames = Object.keys(mats);
+      if (matNames.length) {
+        for (const [part, name] of Object.entries(mats)) {
+          const r = await fetch(`${API}/api/materials`, {
+            method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ part, material: name }),
+          });
+          if (!r.ok) throw new Error(`material ${part}=${name}: HTTP ${r.status}`);
+        }
+        matNote = ` · materials: ${mats.magnet ?? '—'}`;
+      } else {
+        matNote = ' · no materials stored — kept the current assignment';
+      }
+      const I = Number(p.I_phase_rms), g = Number(p.gamma_deg);
+      if (Number.isFinite(I) || Number.isFinite(g)) {
+        await fetch(`${API}/api/simulation/config`, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ...(Number.isFinite(I) ? { max_current: I } : {}),
+            ...(Number.isFinite(g) ? { phase_offset_deg: g } : {}),
+          }),
+        });
+        window.dispatchEvent(new CustomEvent('sim-operating-point',
+          { detail: { current: I, gamma: g } }));
+      }
+      if (Number.isFinite(Number(p.rpm))) localStorage.setItem('sim.rpm', JSON.stringify(Number(p.rpm)));
+      if (Number.isFinite(Number(p.coil_temp_c))) localStorage.setItem('sim.coilTemp', JSON.stringify(Number(p.coil_temp_c)));
+      // k_end belongs to the NEW geometry — re-seed it before the recompute or
+      // the copper loss is scaled by the previous design's end-turn length.
+      try {
+        const dc = await (await fetch(`${API}/api/config`)).json();
+        const k = Number(dc?.end_winding_factor);
+        if (Number.isFinite(k) && k > 0) localStorage.setItem('sim.endWinding', JSON.stringify(+k.toFixed(3)));
+      } catch { /* the Simulation panel re-seeds on the geometry change anyway */ }
+      // GEOMETRY REBUILD — updateGeometryViaApi refreshes the parametric view
+      // from the store, but the STL cache is keyed on the old parameters and
+      // would keep showing the previous machine in the 3D view. Drop it so the
+      // next look rebuilds. Best-effort: a stale cache is a cosmetic problem,
+      // failing the whole apply over it is not.
+      try { await clearStlCache(); } catch { /* cosmetic only */ }
+      window.dispatchEvent(new CustomEvent('sim-design-applied'));
+      window.dispatchEvent(new CustomEvent('sim-rerun'));
+      setApplyMsg(`✓ "${s.name}" applied${matNote} — geometry rebuilt, recomputing in Simulation`);
+      setActiveTab('simulation');
+    } catch (e: any) {
+      setApplyMsg(null);
+      setErr(`Apply failed: ${String(e?.message ?? e)} — nothing was changed`);
+    }
+  };
 
   const del = (id: string) =>
     mutate(`${API}/api/sims/saved/${id}`, { method: 'DELETE' }, 'Delete');
@@ -385,6 +475,14 @@ const ComparePanel: React.FC = () => {
           '&:hover .renameBtn': { opacity: 1 } }}
           onDoubleClick={() => startRename(s)}
           title="Double-click to rename">
+          {/* Apply sits FIRST and is always visible: it is the one action that
+              turns a stored row back into a live design you can look at. */}
+          <Tooltip title="Apply this geometry + operating point, then recompute in Simulation">
+            <IconButton size="small" onClick={() => applyPoint(s)}
+              sx={{ color: '#2563eb', p: 0.15, '&:hover': { color: '#1d4ed8' } }}>
+              <PlayArrowIcon sx={{ fontSize: 16 }} />
+            </IconButton>
+          </Tooltip>
           <Box component="span" sx={{ cursor: 'text' }}>{s.name}</Box>
           <IconButton className="renameBtn" size="small" onClick={() => startRename(s)}
             sx={{ opacity: 0.25, transition: 'opacity .15s', color: 'var(--text-3)', p: 0.15,
@@ -466,6 +564,8 @@ const ComparePanel: React.FC = () => {
           </Box>
         </Popover>
         {err && <Alert severity="error" sx={{ fontSize: 11, mx: 2 }}>{err}</Alert>}
+        {applyMsg && <Alert severity="info" sx={{ fontSize: 11, mx: 2 }}
+          onClose={() => setApplyMsg(null)}>{applyMsg}</Alert>}
         <Box sx={{ flex: 1, overflow: 'auto', px: 2, pb: 1 }}>
           {loading && <CircularProgress size={18} sx={{ color: '#3b82f6', m: 2 }} />}
           {!loading && sims.length === 0 && (

@@ -382,6 +382,16 @@ def update_sim_config(patch: SimConfigPatch):
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
 
+    # The load angle lives under two names — phase_offset_deg (UI, presets) and
+    # gamma_deg (solver, optimizer) — and the same for the current. Writing only
+    # the one the caller named let them drift: the panel showed γ=0 while the FEM
+    # ran at 10, and an optimization inherited a stale current. Mirror them.
+    for _a, _b in (("phase_offset_deg", "gamma_deg"), ("max_current", "current_a")):
+        if _a in updates and _b not in updates:
+            updates[_b] = updates[_a]
+        elif _b in updates and _a not in updates:
+            updates[_a] = updates[_b]
+
     lines = content.splitlines(keepends=True)
     in_sim = False
     result = []

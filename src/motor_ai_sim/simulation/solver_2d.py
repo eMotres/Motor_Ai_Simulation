@@ -93,7 +93,12 @@ class SimConfig:
             I_peak=sim.get("max_current", 10.0),
             frequency_hz=sim.get("frequency", 50.0),
             rpm=sim.get("rpm", 2000.0),
-            phase_offset_deg=sim.get("phase_offset_deg", 0.0),
+            # ONE angle, two historical spellings: the UI/presets write
+            # phase_offset_deg, the solver and the optimizer read gamma_deg.
+            # They drifted apart silently — the panel showed 0 while the FEM ran
+            # at 10 — so fall back to the other name instead of to a hard 0.
+            phase_offset_deg=sim.get("phase_offset_deg",
+                                     sim.get("gamma_deg", 0.0)),
             Br_magnet=Br,
         )
 

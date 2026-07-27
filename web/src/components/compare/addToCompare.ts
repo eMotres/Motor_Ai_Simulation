@@ -31,7 +31,21 @@ async function buildParams(): Promise<Record<string, unknown>> {
   // comparison row pairing one design's inputs with another's outputs is a lie.
   const s = readShownSummary() as Record<string, unknown>;
   const solved = (v: unknown, fallback: unknown) => (Number.isFinite(Number(v)) ? Number(v) : fallback);
+  // MATERIALS are part of the design, not decoration: the same geometry with a
+  // different magnet or steel is a different machine and a different row. They
+  // were missing from the snapshot, so a stored point could be applied back as
+  // geometry only and silently picked up whatever materials happened to be
+  // assigned at the time — which is how a Fe16N2 result gets re-checked against
+  // NdFeB without a word. Prefixed so they never collide with a geometry key.
+  const materials: Record<string, string> = {};
+  try {
+    const cfg = await (await fetch(`${API}/api/config`)).json();
+    for (const [part, name] of Object.entries(cfg?.materials ?? {})) {
+      if (typeof name === 'string' && name) materials[`mat_${part}`] = name;
+    }
+  } catch { /* best-effort — a point without materials is still comparable */ }
   return {
+    ...materials,
     // operating point
     I_phase_rms:        solved(s.I_phase_rms_A, sim.max_current),
     gamma_deg:          solved(s.gamma_deg,     sim.phase_offset_deg),

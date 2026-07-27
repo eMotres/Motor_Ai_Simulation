@@ -8,10 +8,13 @@ path survived so long is that nothing was watching the numbers.
 
 Design notes, in case a case starts failing for the wrong reason:
 
-* **Config-independent geometry.** Every case passes its geometry through
-  ``geo_override`` and materials are forced on the cached config in-process, so
-  editing ``config/motor_config.yaml`` (which the user does constantly) cannot
-  turn a red test into a code problem.
+* **Config-independent.** Geometry goes in through ``geo_override`` and the
+  magnet through the per-request material override, so editing
+  ``config/motor_config.yaml`` (which the user does constantly) cannot turn a red
+  test into a code problem. Mutating the cached config was tried and is NOT
+  equivalent: the cache follows the file now, so a live API server autosaving
+  mid-run reloaded it and dropped the override — the suite passed alone and
+  failed in a batch.
 * **Coarse on purpose.** 12 steps/period on a 1.4 mm mesh. These are not
   publication numbers; they only have to be *reproducible*. Keeping the suite
   near five minutes is what makes it get run.
@@ -38,7 +41,7 @@ from typing import Any, Dict
 import numpy as np
 import pytest
 
-from motor_ai_sim.config import get_config
+from motor_ai_sim.material_context import set_request_materials
 from motor_ai_sim.simulation.fem_solver_2d import fem_transient_sliding_band
 
 BASELINE = Path(__file__).with_name("physics_baseline.json")
@@ -129,10 +132,17 @@ def _metrics(d: Dict[str, Any]) -> Dict[str, float]:
 
 
 def _run(case: str) -> Dict[str, float]:
-    cfg = get_config(reload=True)
-    cfg["materials"]["magnet"] = MAGNET      # in-process only, never the YAML
+    # Force the magnet through the per-request override, NOT by mutating the
+    # cached config. The cache now follows the file, so anything touching
+    # motor_config.yaml mid-run — a live API server, an editor — reloads it and
+    # silently drops an in-process mutation. That made this suite pass alone and
+    # fail in a batch, which is worse than failing outright.
+    set_request_materials({"assignment": {"magnet": MAGNET}, "materials": {}})
     kw = dict(CASES[case])
-    d = fem_transient_sliding_band(geo_override=dict(GEO_30MM), **kw)
+    try:
+        d = fem_transient_sliding_band(geo_override=dict(GEO_30MM), **kw)
+    finally:
+        set_request_materials(None)
     return _metrics(d)
 
 

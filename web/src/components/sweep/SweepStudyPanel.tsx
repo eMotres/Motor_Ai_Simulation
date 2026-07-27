@@ -269,7 +269,10 @@ const SweepStudyPanel: React.FC = () => {
           gap_layers: readLS('mesh.gapLayers', 2),   // single source: Mesh tab — drives ripple/eddy; must match Simulation
           structured_gap: readBool('mesh.structuredGap', false) || readBool('mesh.ironTemplate', true),   // single source: Mesh tab "Structured" — belt gap mesh (honest ripple, ¼ == full disk)
           airgap_macro: readBool('mesh.harmonicGap', false),   // Mesh tab "Harmonic gap" — step-independent RAW ripple (full + sectors)
-          element_order: readBool('mesh.p2HiFi', false) ? 2 : 1,   // Mesh tab "P2 elements" (mesh.p2HiFi) — quadratic FE: honest low ripple (no P1 staircase), ~2× slower/point. Same flag the Simulation P2 toggle sets.
+          // P2 by default, same flag the Mesh tab sets — the sweep must rank
+          // designs on the SAME basis the Simulation tab reports, or the
+          // winner it picks is not the design you then look at.
+          element_order: readBool('mesh.p2HiFi', true) ? 2 : 1,
           iron_template: readBool('mesh.ironTemplate', true), // Mesh tab "Template iron" — deterministic iron mesh
           geo_mesh: readBool('mesh.geoMesh', true),   // Mesh tab "Geometry-driven mesh" — SAME build as Simulation (cell-tiled iron)
           end_winding_factor: readLS('sim.endWinding', 0),   // sent for parity, but a sweep RECOMPUTES k_end per-point from each candidate's geometry (backend refine_proc forces auto) — you can't pin one k_end across changing tooth_width/slot geometry

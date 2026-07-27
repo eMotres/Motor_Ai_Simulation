@@ -315,12 +315,18 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
       structured_gap:     readMeshSetting('structuredGap', false) || readMeshSetting('ironTemplate', true),
       // Harmonic gap coupling (Mesh-tab "Harmonic gap"): step-independent RAW ripple.
       airgap_macro:       readMeshSetting('harmonicGap', false),
-      // P2 "high-fidelity ripple" (Mesh-tab "P2 elements" toggle, default OFF = P1).
-      // 2 = quadratic elements → B linear per element → smooth Arkkio torque (no P1
-      // staircase; the forbidden-order noise floor converges to 0 with mesh
-      // refinement). The backend forces the structured belt and current-drive
-      // magnetostatics for P2 (no eddy/voltage/demag on P2 yet). Slower (~4-6×).
-      element_order:      readMeshSetting('p2HiFi', false) ? 2 : 1,
+      // P2 is the calculation basis (Mesh-tab toggle, default ON): quadratic
+      // elements → B linear per element → smooth Arkkio torque, no P1 staircase,
+      // and the forbidden-order noise floor converges to 0 with mesh refinement.
+      // Irreversible demagnetisation runs on P2 now too.
+      //
+      // VOLTAGE DRIVE still forces P1: the circuit coupling is not wired for P2.
+      // Sending P2 anyway is worse than useless — the backend silently coerces
+      // drive back to "current", so the user picks a voltage drive, gets a
+      // current-drive answer, and nothing on screen says so. Choose P1 here
+      // instead, where the requested drive is actually what runs.
+      element_order:      (drive === 'voltage' ? 1
+                           : (readMeshSetting('p2HiFi', true) ? 2 : 1)),
       // Deterministic template iron mesh (Mesh-tab "Template iron" toggle).
       iron_template:      readMeshSetting('ironTemplate', true),
       // Geometry-driven CDT mesh (Mesh-tab "Geometry-driven mesh" toggle, default ON).

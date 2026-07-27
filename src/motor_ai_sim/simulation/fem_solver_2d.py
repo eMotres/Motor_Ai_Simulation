@@ -51,6 +51,8 @@ from motor_ai_sim.simulation.sb_domains import (  # noqa: F401  (re-export)
 # existing imports off fem_solver_2d keep working.
 from motor_ai_sim.simulation.demag import MagnetDemag as _MagnetDemag
 from motor_ai_sim.simulation.losses import (
+    rotor_eddy_tags as _rotor_eddy_tags,
+    rotor_mu_lookup as _rotor_mu_lookup,
     copper_ac_dims as _copper_ac_dims,
     proximity_loss_series as _proximity_loss_series,
     TWO_PI_SQ as _TWO_PI_SQ,
@@ -3050,24 +3052,15 @@ def fem_transient_sliding_band(
                 from motor_ai_sim.simulation.eddy_solver_2d import (
                     honest_rotor_eddy as _hre2)
                 _rm = half["r"]["mesh"]
-                _tags_r2 = np.zeros(_rm.t.shape[1], int)
-                for _tg, _els in half["r"]["cells"].items():
-                    _tags_r2[np.asarray(_els, int)] = int(_tg)
-                _magt2 = [int(tg) for tg in np.unique(_tags_r2)
-                          if int(tg) >= DOM_MAG_BASE]
+                # Tags + magnet list + mu lookup: shared with P1 (losses.py).
+                _tags_r2, _magt2 = _rotor_eddy_tags(
+                    half["r"]["cells"], _rm.t.shape[1], DOM_MAG_BASE)
                 # rotor back-iron μ_r from the CONVERGED P2 ν (last frame)
                 _rir = half["r"]["cells"].get(int(DOM_ROTOR))
-                if _rir is not None and np.size(_rir):
-                    _mur_bi = 1.0 / (MU0 * float(np.mean(
-                        nu_all2[np.asarray(_rir, int) + nst])))
-                else:
-                    _mur_bi = 1000.0
-
-                def _muf2(tg):
-                    tg = int(tg)
-                    if tg >= DOM_MAG_BASE: return 1.05
-                    if tg == DOM_ROTOR:    return _mur_bi
-                    return 1.0
+                _mur_bi = (1.0 / (MU0 * float(np.mean(
+                    nu_all2[np.asarray(_rir, int) + nst])))
+                    if _rir is not None and np.size(_rir) else 1000.0)
+                _muf2 = _rotor_mu_lookup(_mur_bi, DOM_MAG_BASE, DOM_ROTOR)
                 P_mag_avg2, P_shaft_avg2, _hf2 = _hre2(
                     np.asarray(_rm.p, float), np.asarray(_rm.t, int), _tags_r2,
                     _muf2, _sigma_of_tag, _magt2, DOM_SHAFT,
@@ -4374,24 +4367,15 @@ def fem_transient_sliding_band(
         try:
             from motor_ai_sim.simulation.eddy_solver_2d import honest_rotor_eddy as _hre
             _rm = half["r"]["mesh"]
-            _tags_r = np.zeros(_rm.t.shape[1], int)
-            for _tg, _els in half["r"]["cells"].items():
-                _tags_r[np.asarray(_els, int)] = int(_tg)
-            _mag_tags_h = [int(tg) for tg in np.unique(_tags_r) if int(tg) >= DOM_MAG_BASE]
-
-            def _muf(tg):
-                tg = int(tg)
-                if tg >= DOM_MAG_BASE:                 # magnet (NdFeB recoil ~1.05)
-                    return 1.05
-                if tg == DOM_ROTOR:                    # rotor back-iron: converged mu_r
-                    try:
-                        _n = nu_el.get("r", {}).get(DOM_ROTOR)
-                        if _n is not None and np.size(_n):
-                            return 1.0 / (MU0 * float(np.mean(_n)))
-                    except Exception:
-                        pass
-                    return 1000.0
-                return 1.0                             # shaft (Al) / air = non-magnetic
+            _tags_r, _mag_tags_h = _rotor_eddy_tags(
+                half["r"]["cells"], _rm.t.shape[1], DOM_MAG_BASE)
+            try:
+                _n_bi = nu_el.get("r", {}).get(DOM_ROTOR)
+                _mur_bi1 = (1.0 / (MU0 * float(np.mean(_n_bi)))
+                            if _n_bi is not None and np.size(_n_bi) else 1000.0)
+            except Exception:
+                _mur_bi1 = 1000.0
+            _muf = _rotor_mu_lookup(_mur_bi1, DOM_MAG_BASE, DOM_ROTOR)
             P_mag_honest, P_shaft_honest, _hfreqs = _hre(
                 np.asarray(_rm.p, float), np.asarray(_rm.t, int), _tags_r,
                 _muf, _sigma_of_tag, _mag_tags_h, DOM_SHAFT,

@@ -198,3 +198,36 @@ class TestProximityLoss:
             X, Y, np.arange(4), cen, np.ones(4), 0.0, 2e-3, 9e-3,
             0.01, n, central_difference(1e-4))
         assert avg == 0.0 and len(ser) == n
+
+
+class TestRotorEddyInputs:
+    """Tag assembly for the coupled rotor-eddy solve — was written out twice."""
+
+    def test_tags_and_magnet_list(self):
+        from motor_ai_sim.simulation.losses import rotor_eddy_tags
+        cells = {5: np.array([0, 1]), 6: np.array([2]),
+                 100: np.array([3, 4]), 101: np.array([5])}
+        tags, mags = rotor_eddy_tags(cells, 6, dom_mag_base=100)
+        assert list(tags) == [5, 5, 6, 100, 100, 101]
+        assert mags == [100, 101], "each magnet must stay its own region"
+
+    def test_untagged_elements_default_to_zero(self):
+        """A gap in the cell map must not silently inherit a neighbour's tag —
+        that would put air into the magnet loss."""
+        from motor_ai_sim.simulation.losses import rotor_eddy_tags
+        tags, mags = rotor_eddy_tags({100: np.array([2])}, 4, dom_mag_base=100)
+        assert list(tags) == [0, 0, 100, 0] and mags == [100]
+
+    def test_mu_lookup_routes_each_region(self):
+        from motor_ai_sim.simulation.losses import rotor_mu_lookup
+        mu = rotor_mu_lookup(mu_back_iron=850.0, dom_mag_base=100, dom_rotor=5)
+        assert mu(100) == pytest.approx(1.05)     # magnet recoil
+        assert mu(5) == pytest.approx(850.0)      # converged back iron
+        assert mu(6) == pytest.approx(1.0)        # shaft / air, non-magnetic
+        assert mu(0) == pytest.approx(1.0)
+
+    def test_back_iron_uses_the_converged_value_not_a_default(self):
+        """Feeding the eddy solve a linear 1000 would put it on a different
+        machine than the transient that produced the field."""
+        from motor_ai_sim.simulation.losses import rotor_mu_lookup
+        assert rotor_mu_lookup(1234.0, 100, 5)(5) == pytest.approx(1234.0)

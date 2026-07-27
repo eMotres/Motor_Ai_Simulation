@@ -162,3 +162,37 @@ def proximity_loss_series(
         * vol[None, :], axis=1) * scale
     Pt = (post or (lambda a: np.maximum(a, 0.0)))(Pt)
     return Pt.tolist(), float(np.mean(Pt))
+
+
+def rotor_eddy_tags(cells: dict, n_tri: int, dom_mag_base: int
+                    ) -> Tuple[np.ndarray, list]:
+    """Per-element domain tags for the rotor half, and which of them are magnets.
+
+    Both element orders built this by hand, identically. The coupled rotor-eddy
+    solve needs a dense tag array (it assembles per-region), and the magnet list
+    decides which regions get their loss reported separately from the shaft.
+    """
+    tags = np.zeros(int(n_tri), int)
+    for tag, elems in cells.items():
+        tags[np.asarray(elems, int)] = int(tag)
+    mag_tags = [int(t) for t in np.unique(tags) if int(t) >= dom_mag_base]
+    return tags, mag_tags
+
+
+def rotor_mu_lookup(mu_back_iron: float, dom_mag_base: int, dom_rotor: int,
+                    mu_magnet: float = 1.05) -> Callable[[int], float]:
+    """tag -> relative permeability for the rotor-eddy solve.
+
+    Magnets recoil at ~1.05, the back iron uses the CONVERGED nu from the run
+    that just finished (a linear 1000 would put the eddy solve on a different
+    machine than the transient), and everything else — shaft aluminium, air — is
+    non-magnetic.
+    """
+    def _mu(tag: int) -> float:
+        tag = int(tag)
+        if tag >= dom_mag_base:
+            return mu_magnet
+        if tag == dom_rotor:
+            return float(mu_back_iron)
+        return 1.0
+    return _mu

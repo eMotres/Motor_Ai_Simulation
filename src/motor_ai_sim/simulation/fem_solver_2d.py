@@ -50,6 +50,11 @@ from motor_ai_sim.simulation.sb_domains import (  # noqa: F401  (re-export)
 # lookups, winding helpers).  Pure functions, no solver state — re-exported so
 # existing imports off fem_solver_2d keep working.
 from motor_ai_sim.simulation.demag import MagnetDemag as _MagnetDemag
+from motor_ai_sim.simulation.losses import (
+    TWO_PI_SQ as _TWO_PI_SQ,
+    central_difference as _central_difference,
+    iron_loss_series as _iron_loss_series,
+)
 from motor_ai_sim.simulation.field_ops import (  # noqa: F401  (re-export)
     MU0, RHO_CU_20, ALPHA_CU,
     _snap_steps_to_nodes, _build_magnet_bh_curve_payload, _b_from_bh_at_H,
@@ -3006,7 +3011,6 @@ def fem_transient_sliding_band(
         # rotor-eddy model.  The magnet/shaft eddy below is the part rotor_eddy
         # actually selects, and it is already gated by `if _histA_rot2:`, which
         # is only populated when the flag is on.
-        _two_pi2_2 = 2.0 * math.pi ** 2
 
         # ── AC copper (proximity/skin) — MUST match P1: DC I²R is already
         #    element-order-independent (same copper_loss_W); the AC part is the
@@ -3038,28 +3042,13 @@ def fem_transient_sliding_band(
             P_cu_ac_ser2 = _Pac.tolist(); P_cu_ac_avg2 = float(np.mean(_Pac))
         P_cu_ser2 = [P_cu_dc2 + ac for ac in P_cu_ac_ser2]
 
+        # Iron loss: ONE implementation (simulation/losses.py) for both element
+        # orders.  The only genuine difference is the dB/dt estimator — the P2
+        # field is smooth in time, so a plain central difference is enough.
         def _iron_p2(hx, hy, idx, areas_half, mat):
-            # compact Bertotti: classical eddy ∝⟨(dB/dt)²⟩ (ripples) + flat
-            # hysteresis + excess.  Periodic central-difference dB/dt (the P2
-            # field is already smooth, so the P1 savgol slip-jitter filter is
-            # unnecessary here).  Coeffs fitted from the material's measured
-            # loss curves (effective_bertotti).  Returns (P(t) [N], hyst [W]).
-            if mat is None or idx.size == 0 or len(hx) == 0:
-                return np.zeros(n_total), 0.0
-            X = np.asarray(hx); Y = np.asarray(hy)         # (N, E)
-            kh, kc, ke = _mat_lib.effective_bertotti(mat)
-            sf = float(getattr(mat, "stacking_factor", 0.95))
-            vol = areas_half[idx] * p.stack_length * sf
-            dX = (np.roll(X, -1, 0) - np.roll(X, 1, 0)) / (2.0 * dt)
-            dY = (np.roll(Y, -1, 0) - np.roll(Y, 1, 0)) / (2.0 * dt)
-            pcl = (kc / _two_pi2_2) * np.sum((dX ** 2 + dY ** 2)
-                                             * vol[None, :], axis=1)
-            Bac2 = (((X.max(0) - X.min(0)) * 0.5) ** 2
-                    + ((Y.max(0) - Y.min(0)) * 0.5) ** 2)
-            phys = float(np.sum((kh * f_elec * Bac2
-                                 + ke * f_elec ** 1.5
-                                 * np.power(np.maximum(Bac2, 0.0), 0.75)) * vol))
-            return pcl, phys
+            return _iron_loss_series(
+                hx, hy, idx, areas_half, mat, p.stack_length, f_elec, n_total,
+                _central_difference(dt), _mat_lib.effective_bertotti)
 
         _pcl_s, _ph_s = _iron_p2(_hsx2, _hsy2, _iron_s_idx, areas_s, _steel_s)
         _pcl_r, _ph_r = _iron_p2(_hrx2, _hry2, _iron_r_idx, areas_r, _steel_r)
@@ -3997,7 +3986,7 @@ def fem_transient_sliding_band(
     # only: that keeps the genuine fundamental + slot-ripple content but drops
     # the quantisation noise floor near Nyquist, giving a clean V(t) and a
     # physically-rippling (not noisy, not flat) loss(t).
-    _two_pi2 = 2.0 * math.pi ** 2
+    _two_pi2 = _TWO_PI_SQ      # shared with simulation/losses.py
 
     def _spectral_ddt(x, kmax):
         x = np.asarray(x, float); N = x.size
@@ -4228,23 +4217,12 @@ def fem_transient_sliding_band(
     #            eddy from the smooth |dB/dt|²(t) → ripples as the teeth pass.
     # magnet(t)= σ·d²/12·|dB/dt|²(t)  → ripples likewise.
     def _iron_series(hx, hy, idx, areas_half, mat, qp=None):
-        if mat is None or idx.size == 0 or not hx or np.asarray(hx[0]).size == 0:
-            return np.zeros(n_total), 0.0
-        X = np.asarray(hx); Y = np.asarray(hy)            # (N, E)
-        # Maxwell-style coefficients: fitted from the material's MEASURED loss
-        # curves when present (relative-error-weighted NNLS over every (f,B)
-        # point), falling back to the YAML kh/kc/ke.  Real curves → real loss.
-        kh, kc, ke = _mat_lib.effective_bertotti(mat)
-        sf = float(getattr(mat, "stacking_factor", 0.95))
-        vol = areas_half[idx] * p.stack_length * sf       # (E,)
-        dX = _angle_ddt_2d(X, qp); dY = _angle_ddt_2d(Y, qp)
-        pcl_t = (kc / _two_pi2) * np.sum((dX ** 2 + dY ** 2) * vol[None, :], axis=1)
-        Bac2 = (((X.max(0) - X.min(0)) * 0.5) ** 2
-                + ((Y.max(0) - Y.min(0)) * 0.5) ** 2)
-        phys = float(np.sum((kh * f_elec * Bac2
-                             + ke * f_elec ** 1.5
-                               * np.power(np.maximum(Bac2, 0.0), 0.75)) * vol))
-        return pcl_t, phys
+        # Same one implementation as the P2 branch.  P1 needs the SMOOTHED angle
+        # derivative: the sliding band re-pairs nodes every frame, and a raw
+        # difference amplifies that jitter — the loss tripled going 24 -> 72 steps.
+        return _iron_loss_series(
+            hx, hy, idx, areas_half, mat, p.stack_length, f_elec, n_total,
+            lambda X: _angle_ddt_2d(X, qp), _mat_lib.effective_bertotti)
 
     _pcl_s, _ph_s = _iron_series(_hist_sx, _hist_sy, _iron_s_idx, areas_s, _steel_s)
     _pcl_r, _ph_r = _iron_series(_hist_rx, _hist_ry, _iron_r_idx, areas_r, _steel_r)

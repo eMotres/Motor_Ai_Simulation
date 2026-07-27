@@ -51,6 +51,8 @@ from motor_ai_sim.simulation.sb_domains import (  # noqa: F401  (re-export)
 # existing imports off fem_solver_2d keep working.
 from motor_ai_sim.simulation.demag import MagnetDemag as _MagnetDemag
 from motor_ai_sim.simulation.losses import (
+    copper_ac_dims as _copper_ac_dims,
+    proximity_loss_series as _proximity_loss_series,
     TWO_PI_SQ as _TWO_PI_SQ,
     central_difference as _central_difference,
     iron_loss_series as _iron_loss_series,
@@ -3017,29 +3019,15 @@ def fem_transient_sliding_band(
         #    coil proximity loss σ/12·Σ(d_r²·dBr² + d_t²·dBt²), field split into
         #    radial/tangential (same _prox_eddy_split model P1 uses).  Periodic
         #    central-difference dB/dt (P2 field is smooth).
-        _rho_cu2 = RHO_CU_20 * (1.0 + ALPHA_CU * (float(coil_temp_c) - 20.0))
-        _sig_cu2 = 1.0 / _rho_cu2
-        _om_e2 = 2.0 * math.pi * max(1e-6, f_elec)
-        _dlt_cu2 = math.sqrt(2.0 * _rho_cu2 / (_om_e2 * MU0))
-        _nws2 = max(1, int(round(float(geo.get("wire_split", 1) or 1))))
-        _w_cu2 = min(float(geo.get("wire_width", 5.0)) * 1e-3 / _nws2,
-                     2.0 * _dlt_cu2)
-        _h_cu2 = min(float(geo.get("wire_height", 0.8)) * 1e-3, 2.0 * _dlt_cu2)
+        _sig_cu2, _w_cu2, _h_cu2 = _copper_ac_dims(
+            geo, coil_temp_c, f_elec, RHO_CU_20, ALPHA_CU, MU0)
         if _coil_idx.size and _hcx2:
             _smp = half["s"]["mesh"]
             _cc = (_smp.p[:, _smp.t].mean(axis=1))[:, _coil_idx]
-            Xc = np.asarray(_hcx2); Yc = np.asarray(_hcy2)     # (N, E)
-            _rr = np.hypot(_cc[0], _cc[1]); _rr = np.where(_rr < 1e-9, 1e-9, _rr)
-            _uxc = (_cc[0] / _rr)[None, :]; _uyc = (_cc[1] / _rr)[None, :]
-            _Brc = Xc * _uxc + Yc * _uyc; _Btc = -Xc * _uyc + Yc * _uxc
-            _dBrc = (np.roll(_Brc, -1, 0) - np.roll(_Brc, 1, 0)) / (2.0 * dt)
-            _dBtc = (np.roll(_Btc, -1, 0) - np.roll(_Btc, 1, 0)) / (2.0 * dt)
-            _volc = areas_s[_coil_idx] * p.stack_length
-            _Pac = (_sig_cu2 / 12.0) * np.sum(
-                (_w_cu2 ** 2 * _dBrc ** 2 + _h_cu2 ** 2 * _dBtc ** 2)
-                * _volc[None, :], axis=1) * NS
-            _Pac = np.maximum(_Pac, 0.0)
-            P_cu_ac_ser2 = _Pac.tolist(); P_cu_ac_avg2 = float(np.mean(_Pac))
+            P_cu_ac_ser2, P_cu_ac_avg2 = _proximity_loss_series(
+                _hcx2, _hcy2, _coil_idx, _cc, areas_s, _sig_cu2,
+                _w_cu2, _h_cu2, p.stack_length, n_total,
+                _central_difference(dt), scale=NS)
         P_cu_ser2 = [P_cu_dc2 + ac for ac in P_cu_ac_ser2]
 
         # Iron loss: ONE implementation (simulation/losses.py) for both element
@@ -4316,40 +4304,19 @@ def fem_transient_sliding_band(
         return Pt.tolist(), float(np.mean(Pt))
 
     def _prox_eddy_split(hx, hy, idx, cen, areas_half, sigma, d_for_Br, d_for_Bt):
-        # Proximity loss with the field resolved into RADIAL and TANGENTIAL
-        # components, each paired with the conductor dimension PERPENDICULAR to
-        # it: B_r ↔ tangential width, B_θ (slot leakage) ↔ radial height.  This
-        # avoids the single-d slab over-count (a tall-thin bar barely sees the
-        # tangential slot-leakage field).
-        if sigma <= 0.0 or idx.size == 0 or not hx or np.asarray(hx[0]).size == 0:
-            return [0.0] * n_total, 0.0
-        X = np.asarray(hx); Y = np.asarray(hy)                 # (N, E)
-        r = np.hypot(cen[0], cen[1]); r = np.where(r < 1e-9, 1e-9, r)
-        ux = (cen[0] / r)[None, :]; uy = (cen[1] / r)[None, :]  # r_hat
-        Br = X * ux + Y * uy                                   # radial component
-        Bt = -X * uy + Y * ux                                  # tangential component
-        dBr = _angle_ddt_2d(Br); dBt = _angle_ddt_2d(Bt)
-        vol = areas_half[idx] * p.stack_length
-        Pt = _declip((sigma / 12.0) * np.sum(
-            (d_for_Br ** 2 * dBr ** 2 + d_for_Bt ** 2 * dBt ** 2)
-            * vol[None, :], axis=1) * NS)
-        return Pt.tolist(), float(np.mean(Pt))
+        # ONE implementation, shared with the P2 branch (simulation/losses.py).
+        # P1 keeps its smoothed angle-derivative and its outlier clip; the model
+        # itself is the same, and now provably so.
+        return _proximity_loss_series(
+            hx, hy, idx, cen, areas_half, sigma, d_for_Br, d_for_Bt,
+            p.stack_length, n_total, _angle_ddt_2d, scale=NS, post=_declip)
 
-    _omega_e = 2.0 * math.pi * max(1e-6, f_elec)
     # Copper winding bar (SOLID, one strand): proximity loss from the rotating
     # field, split into radial/tangential and each capped at 2·skin-depth.
-    _rho_cu   = RHO_CU_20 * (1.0 + ALPHA_CU * (float(coil_temp_c) - 20.0))
-    _sigma_cu = 1.0 / _rho_cu
-    _delta_cu = math.sqrt(2.0 * _rho_cu / (_omega_e * MU0))
-    # wire_split (per Vadim, matches his ANSYS practice): the wide flat bar is
-    # wound as N parallel strips across its WIDTH (insulated + transposed), so
-    # the width-direction proximity loops see w/N, cutting that loss term ∝N².
-    # Assumes ideal transposition (no circulating currents between strips).
-    # The 2·δ skin cap still applies on top (whichever is smaller governs).
-    _n_wsplit = max(1, int(round(float(geo.get("wire_split", 1) or 1))))
-    _w_cu = min(float(geo.get("wire_width",  5.0)) * 1e-3 / _n_wsplit,
-                2.0 * _delta_cu)                                             # ↔ B_radial
-    _h_cu = min(float(geo.get("wire_height", 0.8)) * 1e-3, 2.0 * _delta_cu)  # ↔ B_tangential
+    # Conductor dimensions + conductivity: wire_split and the 2*skin-depth cap,
+    # one helper shared with P2 (see losses.copper_ac_dims).
+    _sigma_cu, _w_cu, _h_cu = _copper_ac_dims(
+        geo, coil_temp_c, f_elec, RHO_CU_20, ALPHA_CU, MU0)
     _sm = half["s"]["mesh"]
     _coil_cen = ((_sm.p[:, _sm.t].mean(axis=1))[:, _coil_idx]
                  if _coil_idx.size else np.zeros((2, 0)))

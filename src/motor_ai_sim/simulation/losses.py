@@ -88,3 +88,77 @@ def central_difference(dt_s: float) -> Callable[[np.ndarray], np.ndarray]:
     def _ddt(X: np.ndarray) -> np.ndarray:
         return (np.roll(X, -1, 0) - np.roll(X, 1, 0)) / (2.0 * dt_s)
     return _ddt
+
+
+def copper_ac_dims(geo: dict, coil_temp_c: float, f_elec_hz: float,
+                   rho_cu_20: float, alpha_cu: float, mu0: float
+                   ) -> Tuple[float, float, float]:
+    """Conductor dimensions the proximity loss sees, and the conductivity.
+
+    Returns ``(sigma, d_radial, d_tangential)`` in SI.
+
+    Two caps, whichever bites first:
+      * ``wire_split`` — the wide flat bar is wound as N insulated, transposed
+        strips across its WIDTH, so the width-direction loops see w/N and that
+        loss term falls as N^2. Assumes ideal transposition (no circulating
+        current between strips).
+      * two skin depths — beyond that the field does not reach the middle of the
+        conductor and a larger dimension buys no extra loss.
+    """
+    rho = rho_cu_20 * (1.0 + alpha_cu * (float(coil_temp_c) - 20.0))
+    omega = 2.0 * math.pi * max(1e-6, float(f_elec_hz))
+    delta = math.sqrt(2.0 * rho / (omega * mu0))
+    n_split = max(1, int(round(float(geo.get("wire_split", 1) or 1))))
+    d_r = min(float(geo.get("wire_width", 5.0)) * 1e-3 / n_split, 2.0 * delta)
+    d_t = min(float(geo.get("wire_height", 0.8)) * 1e-3, 2.0 * delta)
+    return 1.0 / rho, d_r, d_t
+
+
+def proximity_loss_series(
+    hist_x: Sequence,
+    hist_y: Sequence,
+    idx: np.ndarray,
+    centroids: np.ndarray,
+    areas: np.ndarray,
+    sigma: float,
+    d_for_Br: float,
+    d_for_Bt: float,
+    stack_length_m: float,
+    n_frames: int,
+    ddt: Callable[[np.ndarray], np.ndarray],
+    scale: float = 1.0,
+    post: Optional[Callable[[np.ndarray], np.ndarray]] = None,
+) -> Tuple[list, float]:
+    """Proximity/skin loss in a SOLID conductor, field split by direction.
+
+        P = sigma/12 * sum( d_r^2 * (dB_r/dt)^2 + d_t^2 * (dB_t/dt)^2 ) * V
+
+    The split matters. Pairing each field component with the conductor dimension
+    PERPENDICULAR to it — B_r with the tangential width, B_theta (slot leakage)
+    with the radial height — avoids the single-d slab over-count: a tall thin bar
+    barely sees the tangential leakage field, and treating it as a cube says
+    otherwise.
+
+    ``scale`` multiplies up from the modelled sector to the whole machine.
+    ``post`` is the caller's outlier treatment (P1 clips to median +- 5 MAD to
+    catch a single bad frame; P2's field is smooth and only needs a floor at 0).
+    """
+    if sigma <= 0.0 or idx.size == 0 or len(hist_x) == 0:
+        return [0.0] * n_frames, 0.0
+    X = np.asarray(hist_x)
+    Y = np.asarray(hist_y)
+    if X.size == 0 or np.asarray(hist_x[0]).size == 0:
+        return [0.0] * n_frames, 0.0
+
+    r = np.hypot(centroids[0], centroids[1])
+    r = np.where(r < 1e-9, 1e-9, r)
+    ux = (centroids[0] / r)[None, :]
+    uy = (centroids[1] / r)[None, :]
+    Br = X * ux + Y * uy                       # radial
+    Bt = -X * uy + Y * ux                      # tangential
+    vol = areas[idx] * stack_length_m
+    Pt = (sigma / 12.0) * np.sum(
+        (d_for_Br ** 2 * ddt(Br) ** 2 + d_for_Bt ** 2 * ddt(Bt) ** 2)
+        * vol[None, :], axis=1) * scale
+    Pt = (post or (lambda a: np.maximum(a, 0.0)))(Pt)
+    return Pt.tolist(), float(np.mean(Pt))

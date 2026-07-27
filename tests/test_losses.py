@@ -128,3 +128,73 @@ class TestIronLoss:
         cl, pc = iron_loss_series(X, Y, np.arange(3), np.ones(3), None,
                                   0.01, 100.0, n, central_difference(1e-4), _bertotti)
         assert np.allclose(cl, 0.0) and pc == 0.0
+
+
+class TestProximityLoss:
+    """AC copper — same model for both element orders now."""
+
+    @staticmethod
+    def _radial_history(n, amp, n_elem=4):
+        """Purely RADIAL field: only the d_r term may contribute."""
+        t = np.arange(n) / n * 2 * np.pi
+        # elements on the +x axis, so r_hat = +x and B = (amp*sin, 0) is radial
+        cen = np.vstack([np.linspace(1.0, 2.0, n_elem), np.zeros(n_elem)])
+        X = np.outer(amp * np.sin(t), np.ones(n_elem))
+        Y = np.zeros_like(X)
+        return X, Y, cen
+
+    def test_radial_field_uses_the_radial_dimension_only(self):
+        """The direction split is the whole point: a field with no tangential
+        component must not be charged the tangential conductor dimension. The
+        single-d slab form gets this wrong and over-counts a tall thin bar."""
+        n = 64
+        X, Y, cen = self._radial_history(n, 1.0)
+        from motor_ai_sim.simulation.losses import proximity_loss_series
+        _, with_t = proximity_loss_series(
+            X, Y, np.arange(4), cen, np.ones(4), 5.8e7, 2e-3, 9e-3,
+            0.01, n, central_difference(1e-4))
+        _, without_t = proximity_loss_series(
+            X, Y, np.arange(4), cen, np.ones(4), 5.8e7, 2e-3, 0.0,
+            0.01, n, central_difference(1e-4))
+        assert with_t == pytest.approx(without_t, rel=1e-9)
+
+    def test_loss_scales_with_the_dimension_squared(self):
+        n = 64
+        X, Y, cen = self._radial_history(n, 1.0)
+        from motor_ai_sim.simulation.losses import proximity_loss_series
+        out = []
+        for d in (1e-3, 2e-3):
+            _, avg = proximity_loss_series(
+                X, Y, np.arange(4), cen, np.ones(4), 5.8e7, d, 0.0,
+                0.01, n, central_difference(1e-4))
+            out.append(avg)
+        assert out[1] / out[0] == pytest.approx(4.0, rel=1e-9)
+
+    def test_wire_split_cuts_the_width_term(self):
+        """N transposed strips across the width -> that loss term falls as N^2."""
+        from motor_ai_sim.simulation.losses import copper_ac_dims
+        geo1 = {"wire_width": 2.0, "wire_height": 0.5, "wire_split": 1}
+        geo4 = dict(geo1, wire_split=4)
+        _, d1, _ = copper_ac_dims(geo1, 120.0, 50.0, 1.724e-8, 0.00393, 4e-7 * math.pi)
+        _, d4, _ = copper_ac_dims(geo4, 120.0, 50.0, 1.724e-8, 0.00393, 4e-7 * math.pi)
+        assert d4 == pytest.approx(d1 / 4.0, rel=1e-9)
+
+    def test_skin_depth_caps_the_dimension(self):
+        """At high frequency the field cannot reach the middle of the bar, so a
+        wider conductor buys no extra loss — without the cap the model would
+        keep charging for copper the field never sees."""
+        from motor_ai_sim.simulation.losses import copper_ac_dims
+        geo = {"wire_width": 50.0, "wire_height": 50.0, "wire_split": 1}
+        _, d_r, d_t = copper_ac_dims(geo, 120.0, 20000.0, 1.724e-8, 0.00393,
+                                     4e-7 * math.pi)
+        assert d_r < 50e-3 and d_t < 50e-3, "the skin cap never engaged"
+        assert d_r == pytest.approx(d_t, rel=1e-12), "both are capped by the same delta"
+
+    def test_zero_conductivity_is_zero_loss(self):
+        n = 16
+        X, Y, cen = self._radial_history(n, 1.0)
+        from motor_ai_sim.simulation.losses import proximity_loss_series
+        ser, avg = proximity_loss_series(
+            X, Y, np.arange(4), cen, np.ones(4), 0.0, 2e-3, 9e-3,
+            0.01, n, central_difference(1e-4))
+        assert avg == 0.0 and len(ser) == n

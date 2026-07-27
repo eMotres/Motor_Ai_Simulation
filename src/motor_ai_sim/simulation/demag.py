@@ -189,3 +189,38 @@ class MagnetDemag:
     @property
     def tags(self) -> List[int]:
         return sorted({int(d["tag"]) for d in self.mags})
+
+    def payload(self, n_stator_tri: int, verts_mm: np.ndarray, tris: np.ndarray,
+                domain_per_tri: np.ndarray, dump_H: bool = False):
+        """(coef_per_tri, field_dict, report) for the UI map.
+
+        Shared by both element orders — the map must not depend on which order
+        produced it, or comparing a P1 demag run against a P2 one compares two
+        different pictures as well as two different solves.
+        """
+        n_all = int(tris.shape[1])
+        coef = np.ones(n_all)
+        coef[n_stator_tri:] = self.br
+        field = {
+            "vertices": verts_mm.T.tolist(),
+            "triangles": tris.T.astype(int).tolist(),
+            "domain_per_tri": np.asarray(domain_per_tri).astype(int).tolist(),
+            "demag_coef_per_tri": coef.tolist(),
+            "mag_domains": self.tags,
+            "extent": [float(verts_mm[0].min()), float(verts_mm[0].max()),
+                       float(verts_mm[1].min()), float(verts_mm[1].max())],
+        }
+        if dump_H:
+            # Raw per-element demagnetising field, for diagnosing the map against
+            # a reference solver: H_first is the field on the PRISTINE magnet
+            # (pure geometry, no feedback), H_worst the running minimum.
+            field.update({
+                "H_first_per_tri": np.concatenate(
+                    [np.full(n_stator_tri, np.nan), self.H_first]).tolist(),
+                "H_worst_per_tri": np.concatenate(
+                    [np.full(n_stator_tri, np.nan),
+                     np.where(np.isinf(self.H_worst), np.nan, self.H_worst)]).tolist(),
+                "H_knee_per_mag": {str(int(d["tag"])): float(d["knee"])
+                                   for d in self.mags},
+            })
+        return coef, field, self.report()

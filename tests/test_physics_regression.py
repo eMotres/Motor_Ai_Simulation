@@ -89,9 +89,17 @@ CASES = {
     # comes from the raw Maxwell series and guards that path separately.
     "p1_noload": dict(COMMON, element_order=1, demag=False,
                       I_phase_rms=0.0, gamma_deg=0.0),
-    # Irreversible demagnetisation, P1 only (P2 raises NotImplementedError).
-    # Pins the load-line construction AND the settling pass.
+    # Irreversible demagnetisation on P1 — pins the load-line construction AND
+    # the settling pass.
     "p1_demag": dict(COMMON, element_order=1, demag=True,
+                     I_phase_rms=60.0, gamma_deg=0.0),
+    # ...and on P2, which could not do it at all until the hook was moved to
+    # where the frame actually converges (P2 solves by Newton; the hook sat in
+    # the Picard fallback, which never runs). Pinned because THREE separate
+    # improvements — iron loss, demag, the settling pass — were added to P1 and
+    # silently missed P2, each time because the P2 branch returns before that
+    # code. Demag is physics: the two orders must agree on the magnet.
+    "p2_demag": dict(COMMON, element_order=2, demag=True,
                      I_phase_rms=60.0, gamma_deg=0.0),
 }
 

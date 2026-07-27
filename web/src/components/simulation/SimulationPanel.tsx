@@ -956,8 +956,8 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               { label: 'Cogging period',    value: `${coggingPeriod_deg.toFixed(3)}°`,     sub: `360° / LCM(${numSlots},${numPoles})` },
               { label: 'Cogging per elec', value: Math.round(elecPeriod_deg / coggingPeriod_deg).toString(), sub: 'samples for full curve' },
             ].map(item => (
-              <Box key={item.label} sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1, p: 1,
-                border: '1px solid var(--line-soft)' }}>
+              <Box key={item.label} sx={{ bgcolor: 'var(--panel-2)',
+                border: '1px solid var(--line-soft)', borderRadius: 1, p: 1 }}>
                 <Typography sx={{ fontSize: 9, color: 'var(--text-4)', textTransform: 'uppercase',
                   letterSpacing: '0.08em' }}>{item.label}</Typography>
                 <Typography sx={{ fontSize: 14, fontWeight: 700, color: '#93c5fd',

@@ -11,7 +11,9 @@ const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 // [localStorage suffix, preset key].  localStorage values are JSON-encoded.
 const MESH_MAP: [string, string][] = [
   ['meshSize', 'mesh_size_mm'], ['minSize', 'min_size_mm'],
-  ['normalDev', 'normal_deviation'], ['outerAir', 'outer_air_factor'],
+  // 'normalDev' dropped: the transient never accepted normal_deviation, so the
+  // knob only ever moved the mesh PREVIEW. Presets no longer carry it.
+  ['outerAir', 'outer_air_factor'],
   ['gapLayers', 'gap_layers'], ['nSectors', 'n_sectors'],
   ['componentMesh', 'component_mesh'],
 ];

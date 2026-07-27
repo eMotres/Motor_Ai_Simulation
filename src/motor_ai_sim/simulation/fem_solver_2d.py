@@ -2139,6 +2139,16 @@ def fem_transient_sliding_band(
         if _m is not None and (abs(_m.Mx) + abs(_m.My)) > 0:
             _mag_parts.append(np.asarray(_idx, int))
     _mag_idx = np.concatenate(_mag_parts) if _mag_parts else np.array([], int)
+    # Irreversible demagnetisation state — built HERE, before either element
+    # order branches, because both need it.  P2 used to raise NotImplementedError
+    # on demag purely because this object was constructed further down, past the
+    # point where the P2 branch returns.  Nothing about the physics was in the
+    # way: the P2 magnet source below already multiplies by _br_glob, so a
+    # weakened magnet was always going to be honoured once something weakened it.
+    _dmst = (_MagnetDemag(half["r"]["cells"], matr0, half["r"]["mesh"], _br_glob)
+             if (demag and _mag_idx.size) else None)
+    if _dmst is not None and not _dmst.active:
+        _dmst = None                      # no magnet carries a usable curve
     # Non-laminated solid conductors that ALSO carry rotating-field eddy losses
     # (in addition to magnets): the COILS (solid copper bars, stator side) and
     # the SHAFT (solid steel, rotor side).
@@ -2540,12 +2550,12 @@ def fem_transient_sliding_band(
             raise NotImplementedError(
                 "P2 + moving/harmonic-macro band not implemented; run the merged "
                 "structured belt (structured_gap=True, element_order=2).")
-        if eddy or _vdrive or demag:
+        if eddy or _vdrive:
             raise NotImplementedError(
                 "P2 path supports current-drive magnetostatics + post-processed "
-                "rotor_eddy losses; the coupled σ∂A/∂t J-view solve (eddy=True), "
-                "voltage drive and demag pre-pass are not wired for P2 yet. See "
-                "P2_NOTES.md.")
+                "rotor_eddy losses + irreversible demagnetisation; the coupled "
+                "sigma*dA/dt J-view solve (eddy=True) and voltage drive are not "
+                "wired for P2 yet. See P2_NOTES.md.")
 
         b2 = Basis(mesh_all, _P2E())
         b2_0 = b2.with_element(ElementTriP0())      # P0 for per-element ν interpolate
@@ -2841,125 +2851,164 @@ def fem_transient_sliding_band(
                     K = K + asm(_stiff_nu2, _sb2, nu=_sb02.interpolate(_nf2))
                 return K.tocsr()
 
-            _res = 0.0; _nit = 0; _newton_ok = False
-            # ── NEWTON–RAPHSON (differential-reluctivity tangent) ─────────────
-            # Residual R(A)=K(ν(elem-mean|B|))·A−f is IDENTICAL to the Picard fixed
-            # point (element-mean ν per iron element), so Newton converges to the
-            # SAME physics — just far fewer sweeps.  Jacobian J=K+T with the
-            # per-element tangent T=2(dν/dB²)(∇A·∇u)(∇A·∇v).  Line-search on |R|
-            # globalises the BH knee; if it collapses, this frame falls back to
-            # damped Picard (never returns garbage).
-            if _use_newton and not frozen_nu and _sat2:
-                # POINTWISE ν(|B|²) at quadrature points — the residual and the
-                # tangent then use the SAME nonlinearity, giving a TRUE (quadratic)
-                # Newton step.  (An element-mean ν residual with a pointwise
-                # tangent is inconsistent → no acceleration.)  For P2, B is linear
-                # per element, so pointwise ν is also the more accurate model; it
-                # is validated to match the element-mean Picard fixed point below.
-                def _Kpw(Avec):
-                    K = K_const2.copy(); info = []
-                    for _sb2, _sb02, _ids2, _c2 in _sat_sub2:
-                        gA = _sb2.interpolate(Avec).grad            # (2,nel,nqp)
-                        Bm = np.sqrt(np.maximum(gA[0] ** 2 + gA[1] ** 2, 1e-18))
-                        mur = np.maximum(_mu_r_from_bh_vec(
-                            _c2, Bm.ravel()).reshape(Bm.shape), 1.0)
-                        nuq = 1.0 / (MU0 * mur)
-                        K = K + asm(_stiff_nu2, _sb2, nu=nuq)
-                        info.append((_sb2, _ids2, _c2, gA, Bm, nuq))
-                    return K.tocsr(), info
+            # Demag makes the frame re-enterable: solve, check the magnet, and
+            # if it weakened, rebuild its source and solve again.  The de-rating
+            # is monotone and self-arresting — a weaker magnet makes a weaker
+            # demagnetising field — so this settles in a few passes; the cap is a
+            # backstop, not a schedule.
+            _dm_pass = 0
+            while True:
+                _res = 0.0; _nit = 0; _newton_ok = False
+                # ── NEWTON–RAPHSON (differential-reluctivity tangent) ─────────────
+                # Residual R(A)=K(ν(elem-mean|B|))·A−f is IDENTICAL to the Picard fixed
+                # point (element-mean ν per iron element), so Newton converges to the
+                # SAME physics — just far fewer sweeps.  Jacobian J=K+T with the
+                # per-element tangent T=2(dν/dB²)(∇A·∇u)(∇A·∇v).  Line-search on |R|
+                # globalises the BH knee; if it collapses, this frame falls back to
+                # damped Picard (never returns garbage).
+                if _use_newton and not frozen_nu and _sat2:
+                    # POINTWISE ν(|B|²) at quadrature points — the residual and the
+                    # tangent then use the SAME nonlinearity, giving a TRUE (quadratic)
+                    # Newton step.  (An element-mean ν residual with a pointwise
+                    # tangent is inconsistent → no acceleration.)  For P2, B is linear
+                    # per element, so pointwise ν is also the more accurate model; it
+                    # is validated to match the element-mean Picard fixed point below.
+                    def _Kpw(Avec):
+                        K = K_const2.copy(); info = []
+                        for _sb2, _sb02, _ids2, _c2 in _sat_sub2:
+                            gA = _sb2.interpolate(Avec).grad            # (2,nel,nqp)
+                            Bm = np.sqrt(np.maximum(gA[0] ** 2 + gA[1] ** 2, 1e-18))
+                            mur = np.maximum(_mu_r_from_bh_vec(
+                                _c2, Bm.ravel()).reshape(Bm.shape), 1.0)
+                            nuq = 1.0 / (MU0 * mur)
+                            K = K + asm(_stiff_nu2, _sb2, nu=nuq)
+                            info.append((_sb2, _ids2, _c2, gA, Bm, nuq))
+                        return K.tocsr(), info
 
-                def _rfree_pw(Avec, K):
-                    return np.asarray(Pro.T @ (K @ Avec - f)).ravel()[_free2]
+                    def _rfree_pw(Avec, K):
+                        return np.asarray(Pro.T @ (K @ Avec - f)).ravel()[_free2]
 
-                A2 = _A_start.copy(); _fail = False; _rrel = 1.0
-                _bnrm = max(float(np.linalg.norm(_bff2)), 1e-30)
-                for it in range(max(int(nonlinear_iterations), 20)):
-                    _nit = it + 1
-                    K, _info = _Kpw(A2)
-                    r_free = _rfree_pw(A2, K)
-                    _rrel = float(np.linalg.norm(r_free)) / _bnrm
-                    if _rrel < 1e-7:
-                        break
-                    # tangent T = 2(dν/dB²)(∇A·∇u)(∇A·∇v), pointwise & consistent
-                    T = None
-                    for _sb2, _ids2, _c2, gA, Bm, nuq in _info:
-                        _dB = 1e-3 * Bm + 1e-6
-                        nu1 = 1.0 / (MU0 * np.maximum(_mu_r_from_bh_vec(
-                            _c2, (Bm + _dB).ravel()).reshape(Bm.shape), 1.0))
-                        nup = np.maximum((nu1 - nuq) / _dB / (2.0 * Bm), 0.0)  # dν/dB²
-                        Ti = asm(_tang_nu2, _sb2, gA=gA, c=2.0 * nup)
-                        T = Ti if T is None else T + Ti
-                    J = (K + T).tocsr() if T is not None else K
-                    Jff = (Pro.T @ J @ Pro).tocsr()[_free2][:, _free2].tocsc()
-                    try:
-                        _du = _solve_ff(Jff, -r_free)
-                    except Exception as _je:
-                        log.info("P2 Newton solve failed (%s) — Picard fallback", _je)
-                        _fail = True; break
-                    _duf = np.zeros(Pro.shape[1]); _duf[_free2] = _du
-                    dA = Pro @ _duf
-                    # backtracking line-search on the residual norm (BH-knee safety)
-                    _r0 = float(np.linalg.norm(r_free)); _lam = 1.0; _acc = False
-                    for _ls in range(6):
-                        A_try = A2 + _lam * dA
-                        _Kt, _ = _Kpw(A_try)
-                        if float(np.linalg.norm(_rfree_pw(A_try, _Kt))) < _r0:
-                            A2 = A_try; _acc = True; break
-                        _lam *= 0.5
-                    if not _acc:
-                        _fail = True; break
-                # accept only if the field residual actually reached tol
-                if (not _fail) and (_rrel < 1e-7):
-                    _newton_ok = True; _res = _rrel
-                    # element-mean ν for the loss post-processing (loss code uses
-                    # per-element ν); negligible vs the pointwise field solve.
-                    nu_all2 = _nu_of(_elemB(A2), nu_all2)
-                else:
-                    log.info("P2 Newton not converged at frame %d (%d its, rrel=%.1e)"
-                             " — Picard fallback", k, _nit, _rrel)
-            # ── DAMPED PICARD (SB_NO_NEWTON, frozen_nu, or Newton fell back) ──
-            if not _newton_ok:
-                if not frozen_nu:
-                    nu_all2 = _nu_start.copy()     # warm-start (base at k=0)
-                if frozen_nu:
-                    _n_pic2 = max(nonlinear_iterations, 40) if k == 0 else 1
-                else:
-                    _n_pic2 = max(nonlinear_iterations, 70 if k == 0 else 45)
-                A2 = np.zeros(N2)
-                _res = 0.0; _nit = 0
-                _pic_ok = 0; _pic_r_prev = None; _pic_om = 0.5   # Irons–Tuck state
-                for it in range(_n_pic2):
-                    _nit = it + 1
-                    K = _asmK(nu_all2)
-                    Kff = (Pro.T @ K @ Pro).tocsr()[_free2][:, _free2].tocsc()
-                    _xf2 = _solve_ff(Kff, _bff2)
-                    _xred2 = np.zeros(Pro.shape[1]); _xred2[_free2] = _xf2
-                    A2 = Pro @ _xred2
-                    if (frozen_nu and k > 0) or not _sat2:
-                        break                      # frozen frame: 1 linear solve
-                    Bmag_el = _elemB(A2)
-                    _vo = np.concatenate([nu_all2[_ids] for _ids, _ in _sat2])
-                    _vn = np.concatenate([
-                        1.0 / (MU0 * np.maximum(_mu_r_from_bh_vec(_c, Bmag_el[_ids]), 1.0))
-                        for _ids, _c in _sat2])
-                    _rr = _vn - _vo
-                    _res = float(np.linalg.norm(_rr) / max(np.linalg.norm(_vo), 1e-30))
-                    if _pic_r_prev is not None:
-                        _dr = _rr - _pic_r_prev; _den = float(_dr @ _dr)
-                        if _den > 0.0:
-                            _pic_om = float(np.clip(
-                                -_pic_om * float(_pic_r_prev @ _dr) / _den, 0.05, 1.0))
-                    _pic_r_prev = _rr
-                    _vu = _vo + _pic_om * _rr
-                    _p0 = 0
-                    for _ids, _c in _sat2:
-                        nu_all2[_ids] = _vu[_p0:_p0 + _ids.size]; _p0 += _ids.size
-                    if _res < _PIC_TOL2:
-                        _pic_ok += 1
-                        if _pic_ok >= 2:
+                    A2 = _A_start.copy(); _fail = False; _rrel = 1.0
+                    _bnrm = max(float(np.linalg.norm(_bff2)), 1e-30)
+                    for it in range(max(int(nonlinear_iterations), 20)):
+                        _nit = it + 1
+                        K, _info = _Kpw(A2)
+                        r_free = _rfree_pw(A2, K)
+                        _rrel = float(np.linalg.norm(r_free)) / _bnrm
+                        if _rrel < 1e-7:
                             break
+                        # tangent T = 2(dν/dB²)(∇A·∇u)(∇A·∇v), pointwise & consistent
+                        T = None
+                        for _sb2, _ids2, _c2, gA, Bm, nuq in _info:
+                            _dB = 1e-3 * Bm + 1e-6
+                            nu1 = 1.0 / (MU0 * np.maximum(_mu_r_from_bh_vec(
+                                _c2, (Bm + _dB).ravel()).reshape(Bm.shape), 1.0))
+                            nup = np.maximum((nu1 - nuq) / _dB / (2.0 * Bm), 0.0)  # dν/dB²
+                            Ti = asm(_tang_nu2, _sb2, gA=gA, c=2.0 * nup)
+                            T = Ti if T is None else T + Ti
+                        J = (K + T).tocsr() if T is not None else K
+                        Jff = (Pro.T @ J @ Pro).tocsr()[_free2][:, _free2].tocsc()
+                        try:
+                            _du = _solve_ff(Jff, -r_free)
+                        except Exception as _je:
+                            log.info("P2 Newton solve failed (%s) — Picard fallback", _je)
+                            _fail = True; break
+                        _duf = np.zeros(Pro.shape[1]); _duf[_free2] = _du
+                        dA = Pro @ _duf
+                        # backtracking line-search on the residual norm (BH-knee safety)
+                        _r0 = float(np.linalg.norm(r_free)); _lam = 1.0; _acc = False
+                        for _ls in range(6):
+                            A_try = A2 + _lam * dA
+                            _Kt, _ = _Kpw(A_try)
+                            if float(np.linalg.norm(_rfree_pw(A_try, _Kt))) < _r0:
+                                A2 = A_try; _acc = True; break
+                            _lam *= 0.5
+                        if not _acc:
+                            _fail = True; break
+                    # accept only if the field residual actually reached tol
+                    if (not _fail) and (_rrel < 1e-7):
+                        _newton_ok = True; _res = _rrel
+                        # element-mean ν for the loss post-processing (loss code uses
+                        # per-element ν); negligible vs the pointwise field solve.
+                        nu_all2 = _nu_of(_elemB(A2), nu_all2)
                     else:
-                        _pic_ok = 0
+                        log.info("P2 Newton not converged at frame %d (%d its, rrel=%.1e)"
+                                 " — Picard fallback", k, _nit, _rrel)
+                # ── DAMPED PICARD (SB_NO_NEWTON, frozen_nu, or Newton fell back) ──
+                if not _newton_ok:
+                    if not frozen_nu:
+                        nu_all2 = _nu_start.copy()     # warm-start (base at k=0)
+                    if frozen_nu:
+                        _n_pic2 = max(nonlinear_iterations, 40) if k == 0 else 1
+                    else:
+                        _n_pic2 = max(nonlinear_iterations, 70 if k == 0 else 45)
+                    A2 = np.zeros(N2)
+                    _res = 0.0; _nit = 0
+                    _pic_ok = 0; _pic_r_prev = None; _pic_om = 0.5   # Irons–Tuck state
+                    for it in range(_n_pic2):
+                        _nit = it + 1
+                        K = _asmK(nu_all2)
+                        Kff = (Pro.T @ K @ Pro).tocsr()[_free2][:, _free2].tocsc()
+                        _xf2 = _solve_ff(Kff, _bff2)
+                        _xred2 = np.zeros(Pro.shape[1]); _xred2[_free2] = _xf2
+                        A2 = Pro @ _xred2
+                        if (frozen_nu and k > 0) or not _sat2:
+                            break                      # frozen frame: 1 linear solve
+                        Bmag_el = _elemB(A2)
+                        _vo = np.concatenate([nu_all2[_ids] for _ids, _ in _sat2])
+                        _vn = np.concatenate([
+                            1.0 / (MU0 * np.maximum(_mu_r_from_bh_vec(_c, Bmag_el[_ids]), 1.0))
+                            for _ids, _c in _sat2])
+                        _rr = _vn - _vo
+                        _res = float(np.linalg.norm(_rr) / max(np.linalg.norm(_vo), 1e-30))
+                        if _pic_r_prev is not None:
+                            _dr = _rr - _pic_r_prev; _den = float(_dr @ _dr)
+                            if _den > 0.0:
+                                _pic_om = float(np.clip(
+                                    -_pic_om * float(_pic_r_prev @ _dr) / _den, 0.05, 1.0))
+                        _pic_r_prev = _rr
+                        _vu = _vo + _pic_om * _rr
+                        _p0 = 0
+                        for _ids, _c in _sat2:
+                            nu_all2[_ids] = _vu[_p0:_p0 + _ids.size]; _p0 += _ids.size
+                        if _res < _PIC_TOL2:
+                            _pic_ok += 1
+                            if _pic_ok >= 2:
+                                break
+                        else:
+                            _pic_ok = 0
+                # ── Irreversible demagnetisation ─────────────────────────────────
+                # HERE, after the frame's nonlinear solve has converged by EITHER
+                # path — the pointwise Newton (primary) or the damped Picard
+                # (fallback).  Putting it inside the Picard was wrong: Newton
+                # converges on this machine, so the fallback never runs and the hook
+                # never fired.  It must also never see an intermediate iterate: the
+                # early sweeps start from unsaturated iron and pass through fields
+                # that are numerical transients, and a monotone irreversible rule
+                # burns those in permanently.
+                #
+                # If the magnet moved, its own field must be re-solved with the
+                # weaker source, so the frame is redone.  The de-rating is monotone
+                # and self-arresting (a weaker magnet makes a weaker demagnetising
+                # field), so this converges in a handful of passes; the cap is a
+                # backstop, not a schedule.
+                if _dmst is not None:
+                    _bxq_d, _byq_d, _dxq_d = _p2_B_at_quad(b2, A2)
+                    _ar_d = _dxq_d.sum(axis=1)
+                    _bxe_d = (_bxq_d * _dxq_d).sum(axis=1) / np.maximum(_ar_d, 1e-30)
+                    _bye_d = (_byq_d * _dxq_d).sum(axis=1) / np.maximum(_ar_d, 1e-30)
+                    if _dmst.update(_bxe_d[nst:], _bye_d[nst:]) and _dm_pass < 11:
+                        _mx_all[nst:] = _Mx_glob * _br_glob
+                        _my_all[nst:] = _My_glob * _br_glob
+                        f_mag2 = asm(_msrc, b2, mx=b2_0.interpolate(_mx_all),
+                                     my=b2_0.interpolate(_my_all))
+                        f = (f_mag2 + Ist['A'] * f_coil2['A']
+                             + Ist['B'] * f_coil2['B'] + Ist['C'] * f_coil2['C'])
+                        _bff2 = np.asarray(Pro.T @ f).ravel()[_free2]
+                        _dm_pass += 1
+                        continue                     # re-solve THIS frame
+                break
+
             _pic_iters.append(_nit); _pic_res_max = max(_pic_res_max, _res)
             _A2_prev = A2.copy(); _nu_conv2 = nu_all2.copy()
             Tq = _arkkio_torque_p2(mesh_all, A2, b2, p.r_rotor_out,
@@ -2995,6 +3044,26 @@ def fem_transient_sliding_band(
                           "T": mesh_all.t.copy(),
                           "A": A2[vdof].copy(),
                           "nsn": int(nsn)}
+        # ── Demag: drop the SETTLING period ──────────────────────────────────
+        # The P1 path has done this since the settling pass was added; the P2
+        # branch returns before that code and never got it.  The magnet weakens
+        # THROUGH the run, so reporting both periods measures a machine whose
+        # magnets are still dying: Fe16N2 came out at 69.5 % ripple against P1's
+        # 9.3 % on identical physics, which is the decay, not an oscillation.
+        # The magnet KEEPS its de-rated state (_br_glob is cumulative) — only the
+        # frames are discarded, so the reported window is one clean period.
+        if _dmskip and demag and _dmst is not None:
+            n_total -= _dmskip
+            n_periods = float(n_periods) - 1.0
+            for _lst in (_T2, _psiA, _psiB, _psiC, _IA, _IB, _IC, _tt,
+                         _hsx2, _hsy2, _hrx2, _hry2, _hcx2, _hcy2,
+                         _histA_rot2, _pic_iters):
+                if len(_lst) > _dmskip:
+                    del _lst[:_dmskip]
+            if _tt:
+                _t0s = _tt[0]
+                _tt[:] = [_t - _t0s for _t in _tt]
+
         # ── LOSS post-processing (rotor_eddy) ─────────────────────────────────
         # Same architecture as the P1 app path: the field is magnetostatic per
         # frame; the eddy-current LOSSES come from post-processing the A(t)/B(t)
@@ -3140,9 +3209,28 @@ def fem_transient_sliding_band(
         log.info("P2 belt transient done: %d frames, T_avg=%.5f Nm, "
                  "ripple_raw=%.2f%%, picard_max_res=%.2e", n_total, Tavg,
                  Trip_raw, _pic_res_max)
+        # Demag map + per-magnet report — the SAME payload the P1 path returns,
+        # built by the same code, so a P2 demag run can be compared against a P1
+        # one without also comparing two renderings.
+        _dcoef2 = _dfield2 = None
+        _drep2 = []
+        if demag and _dmst is not None:
+            _dcoef2, _dfield2, _rep2 = _dmst.payload(
+                int(Tts.shape[1]), mesh_all.p * 1e3, mesh_all.t,
+                np.concatenate([np.asarray(ts), np.asarray(tr)]),
+                dump_H=_os_sb.environ.get("SB_DEMAG_H_DUMP") == "1")
+            for _row in _rep2:
+                _row["magnet_index"] = int(_row["magnet_index"] - DOM_MAG_BASE)
+                _drep2.append(_row)
+            log.warning("P2 demag: %d/%d magnet elems de-rated, min Br_factor %.3f",
+                        int(np.sum(_br_glob < 0.999)), int(_mag_idx.size),
+                        float(_br_glob.min()))
         return {
             "method": "sliding_band_p2", "element_order": 2,
             "loss_model": _lm2,
+            "demag_coef_per_tri": (_dcoef2.tolist() if _dcoef2 is not None else None),
+            "demag_report": _drep2,
+            "demag_field": _dfield2,
             "n_steps": n_total, "n_steps_per_period": int(n_steps_per_period),
             "n_periods": float(n_periods), "rpm": rpm, "f_elec_Hz": f_elec,
             "dt_s": dt, "T_period_s": (1.0 / f_elec if f_elec > 1e-9 else 0.0),
@@ -4482,36 +4570,12 @@ def fem_transient_sliding_band(
     # coefficients only reach their final value once the last step is done, so
     # snapshotting them before the loop (as the old pre-pass did) would have
     # captured the pristine magnet.
-    if demag and _mag_idx.size and _dm:
-        _nst = int(Tts.shape[1])
-        _demag_coef = np.ones(int(mesh_all.t.shape[1]))
-        _demag_coef[_nst:] = _br_glob
-        _pmm = mesh_all.p * 1e3
-        _demag_field = {
-            "vertices":           _pmm.T.tolist(),
-            "triangles":          mesh_all.t.T.astype(int).tolist(),
-            "domain_per_tri":     np.concatenate([np.asarray(ts), np.asarray(tr)]).astype(int).tolist(),
-            "demag_coef_per_tri": _demag_coef.tolist(),
-            "mag_domains":        sorted({int(_d["tag"]) for _d in _dm}),
-            "extent": [float(_pmm[0].min()), float(_pmm[0].max()),
-                       float(_pmm[1].min()), float(_pmm[1].max())],
-        }
-        # Raw per-element demagnetising field, for diagnosing the map against a
-        # reference solver: H_first is the field on the PRISTINE magnet (pure
-        # geometry, no de-rating feedback), H_worst the running per-element
-        # minimum.  Two extra full-mesh arrays — opt-in so the normal response
-        # stays lean.
-        if _os_sb.environ.get("SB_DEMAG_H_DUMP") == "1":
-            _demag_field.update({
-                "H_first_per_tri": np.concatenate(
-                    [np.full(_nst, np.nan), _dmst.H_first]).tolist(),
-                "H_worst_per_tri": np.concatenate(
-                    [np.full(_nst, np.nan),
-                     np.where(np.isinf(_dmst.H_worst), np.nan, _dmst.H_worst)]).tolist(),
-                "H_knee_per_mag": {str(int(_d["tag"])): float(_d["knee"])
-                                   for _d in _dm},
-            })
-        for _row in _dmst.report():
+    if demag and _dmst is not None:
+        _demag_coef, _demag_field, _rep = _dmst.payload(
+            int(Tts.shape[1]), mesh_all.p * 1e3, mesh_all.t,
+            np.concatenate([np.asarray(ts), np.asarray(tr)]),
+            dump_H=_os_sb.environ.get("SB_DEMAG_H_DUMP") == "1")
+        for _row in _rep:
             _row["magnet_index"] = int(_row["magnet_index"] - DOM_MAG_BASE)
             _demag_report.append(_row)
         log.warning("demag (per-step): %d/%d magnet elems de-rated, min Br_factor %.3f",

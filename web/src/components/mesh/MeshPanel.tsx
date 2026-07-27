@@ -333,7 +333,11 @@ const MeshPanel: React.FC = () => {
   // Fillet-arc resolution (Ansys "Normal Deviation"): max angle per fillet
   // segment. Lower → more segments per rounded corner → smoother fillet + finer
   // mesh there. Wired to n_arc in the geometry (get_2d_polygons).
-  const [normalDev,   setNormalDev]   = usePersisted<number>('normalDev',  6.0);
+  // Fillet-arc resolution for the PREVIEW build only. It was a slider, and a
+  // misleading one: the transient does not take this parameter at all — its mesh
+  // call hard-codes 8 deg — so moving it changed the picture and never the
+  // result. Fixed at the solver's own value so preview and solve agree.
+  const normalDev = 8.0;
   // 'Surface deviation' control removed: any value >0.01 mm Douglas-Peucker-
   // flattened the rounded rotor-tooth / fillet arcs into straight chords, so
   // the Mesh no longer matched the real geometry. The Mesh now always uses the
@@ -349,19 +353,20 @@ const MeshPanel: React.FC = () => {
   // rotate-copy them so every pole/slot is identical → no pole-to-pole mesh
   // variance.  Read by the field & simulation fetches too (mesh.poleCopy).
   const [poleCopy,       setPoleCopy]       = usePersisted<boolean>('poleCopy', false);
-  // Structured (concentric-ring) air gap: mesh the gap as ANSYS-style concentric
-  // circles + radial spokes instead of free triangles.  Experimental — cleans the
-  // gap mesh + broadband ripple, but doesn't lower peak ripple (teeth are the floor).
-  const [structuredGap,  setStructuredGap]  = usePersisted<boolean>('structuredGap', false);
-  // Harmonic air-gap macroelement: smooth per-harmonic rotor↔stator coupling instead
-  // of node re-pairing → RAW torque ripple becomes step-count independent (the honest
-  // unfiltered figure).  Solver-side only (mesh preview unchanged); full disk only.
-  const [harmonicGap,    setHarmonicGap]    = usePersisted<boolean>('harmonicGap', false);
-  // High-fidelity ripple: second-order (P2) elements → B linear per element (not
-  // piecewise-constant) → smooth torque like ANSYS, killing the P1 sliding-band
-  // staircase noise. Magnetostatic per frame; forces the structured belt; ~4-6x
-  // slower. Read as mesh.p2HiFi by TransientCharts (element_order=2).
-  const [p2HiFi,         setP2HiFi]         = usePersisted<boolean>('p2HiFi', false);
+  // Structured (concentric-ring) air gap — ALWAYS ON, no longer a choice.
+  // The Free/Structured chooser was a lie: every consumer read it as
+  // `structuredGap || ironTemplate`, and template iron defaults on, so the belt
+  // was forced regardless of what the button showed. Kept as state (not a
+  // constant) because the toggles below still set it and the request builders
+  // still read it.
+  const [structuredGap,  setStructuredGap]  = usePersisted<boolean>('structuredGap', true);
+  // High-fidelity ripple: second-order (P2) elements → B linear per element, so
+  // the torque is smooth like ANSYS instead of carrying the P1 sliding-band
+  // staircase. DEFAULT ON: P2 is the project's calculation basis — it is the
+  // only order with an energy-consistent mean torque AND a mesh-convergent
+  // ripple. Turning it off drops to P1, which is still the only path that
+  // implements irreversible demagnetisation.
+  const [p2HiFi,         setP2HiFi]         = usePersisted<boolean>('p2HiFi', true);
   // Deterministic template iron: stator/rotor iron meshed by the structured
   // slot/pole unit templates (real CadQuery contours via tags + node snap)
   // instead of gmsh free triangulation — build-to-build deterministic results.
@@ -713,27 +718,16 @@ const MeshPanel: React.FC = () => {
               />
             </Box>
 
-            {/* Normal deviation — fillet-arc resolution (max angle per segment) */}
-            <Box>
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-                <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>
-                  Normal deviation
-                  <Tooltip title="Fillet-arc accuracy (Ansys Normal Deviation): max angle per segment of a rounded corner. Lower → more segments per fillet → smoother arc + finer mesh on the fillet. Drives the fillet vertex density (n_arc) in the geometry." placement="right">
-                    <span style={{ color: 'var(--text-4)', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
-                  </Tooltip>
-                </Typography>
-                <Chip label={`${normalDev.toFixed(1)}°`} size="small"
-                  sx={{ fontSize: 11, height: 20, bgcolor: 'var(--panel)', color: 'var(--text-2)' }}/>
-              </Box>
-              <Slider
-                value={normalDev} min={2.0} max={20.0} step={0.5}
-                onChange={(_, v) => setNormalDev(v as number)}
-                sx={{ color: '#3b82f6' }}
-              />
-            </Box>
-
-            {/* rotor angle */}
-            <Box>
+            {/* ── PREVIEW ONLY ─────────────────────────────────────────────
+                Rotor angle rotates the picture below, nothing else.  The
+                transient always starts the rotor at 0 and sweeps a full
+                electrical period, so this cannot change a result — it used to
+                sit among the solver settings and read like one. */}
+            <Box sx={{ borderTop: '1px solid var(--line-soft)', pt: 1.5, mt: 0.5 }}>
+              <Typography sx={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.08em',
+                color: 'var(--text-4)', textTransform: 'uppercase', mb: 1 }}>
+                Preview only — does not affect results
+              </Typography>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
                 <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>Rotor angle</Typography>
                 <Chip label={`${rotorAngle.toFixed(1)}°`} size="small"
@@ -745,7 +739,7 @@ const MeshPanel: React.FC = () => {
                 sx={{ color: '#3b82f6' }}
               />
               <Typography sx={{ fontSize: 9, color: 'var(--line)' }}>
-                0…25.71° mech = one electrical period
+                0…25.71° mech = one electrical period · rotates the mesh view only
               </Typography>
             </Box>
 
@@ -832,33 +826,6 @@ const MeshPanel: React.FC = () => {
                 letterSpacing: '0.08em', textTransform: 'uppercase', mb: 0.5 }}>
                 Air-gap mesh
               </Typography>
-              <Tooltip placement="right" title="Free = gmsh Delaunay triangles in the gap (default). Structured = ANSYS-style concentric rings + radial spokes: the gap is partitioned into Air-gap-fidelity rings per side (~20% more nodes). Use fidelity 3+ for exactly that many rings; at 1-2 gmsh adds extra layers to avoid stretched triangles vs the fine slip ring. Cleans the gap mesh + broadband ripple, but does NOT lower peak ripple (the tooth mesh is the floor). Drives the mesh preview AND the Simulation solve.">
-                <ToggleButtonGroup
-                  value={structuredGap ? 'struct' : 'free'} exclusive size="small" fullWidth
-                  onChange={(_, v) => {
-                    if (v == null) return;
-                    // picking Free while Template iron is on would rebuild an
-                    // empty gap (template halves need the belt) — turn the
-                    // template off so Free means the plain gmsh gap.
-                    if (v === 'free' && ironTemplate) setIronTemplate(false);
-                    setStructuredGap(v === 'struct');
-                  }}
-                  sx={{ width: '100%',
-                    '& .MuiToggleButton-root': { flex: 1, py: 0.3, fontSize: 11,
-                      color: 'var(--text-3)', borderColor: 'var(--panel)', textTransform: 'none',
-                      '&.Mui-selected': { color: 'var(--text-0)', bgcolor: 'var(--line-accent)',
-                        borderColor: '#3b82f6' } } }}>
-                  <ToggleButton value="free">Free (triangles)</ToggleButton>
-                  <ToggleButton value="struct">Structured (rings)</ToggleButton>
-                </ToggleButtonGroup>
-              </Tooltip>
-              <Tooltip placement="right" title="Replaces the node re-pairing slip coupling with a smooth per-harmonic rotor-stator link. RAW (unfiltered) torque ripple becomes step-count independent — the honest ripple figure. Works on the full disk AND sector models (anti-periodic harmonic ladder); sector evals are ~5x faster. Solver-side: the mesh preview is unchanged.">
-                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mt: 0.75 }}>
-                  <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>Harmonic gap (exact ripple)</Typography>
-                  <Switch size="small" checked={harmonicGap}
-                    onChange={(e) => setHarmonicGap(e.target.checked)} />
-                </Box>
-              </Tooltip>
               <Tooltip placement="right" title="Second-order (P2) finite elements — the flux density B is linear inside each element instead of piecewise-constant, so the torque is smooth like ANSYS Maxwell (2nd-order). Kills the P1 sliding-band staircase / forbidden-order noise at the source (measured ~55x lower non-6k noise floor), so RAW ripple is honest with NO filter. Magnetostatic per frame; auto-forces the Structured belt; ~4-6x slower; loss/voltage/demag fall back to P1.">
                 <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mt: 0.75 }}>
                   <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>High-fidelity ripple — P2 (like ANSYS)</Typography>

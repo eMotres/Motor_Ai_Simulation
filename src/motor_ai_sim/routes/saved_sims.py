@@ -122,17 +122,28 @@ def rename_sim(sim_id: str, req: RenameRequest, request: Request):
 
 @router.delete("/saved/{sim_id}")
 def delete_sim(sim_id: str, request: Request):
-    """Delete one of THIS user's snapshots by id."""
+    """Delete one of THIS user's snapshots by id.
+
+    Also sweeps the anonymous 'local' bucket for the same id.  Not a privacy
+    hole — ids are minted per save, so a signed-in user can only ever match a
+    'local' row that is their own earlier anonymous save (or one an offline
+    script wrote into both buckets).  Without this, a row saved before signing
+    in survives the delete and reappears on the next sign-out, which reads as
+    "delete does not work".
+    """
     with _LOCK:
         store = _load_all()
         bucket = _bucket(request)
-        items = store.get(bucket, [])
-        kept = [s for s in items if s.get("id") != sim_id]
-        if len(kept) == len(items):
+        removed = 0
+        for b in {bucket, "local"}:
+            items = store.get(b, [])
+            kept = [s for s in items if s.get("id") != sim_id]
+            removed += len(items) - len(kept)
+            store[b] = kept
+        if not removed:
             raise HTTPException(status_code=404, detail=f"sim '{sim_id}' not found")
-        store[bucket] = kept
         _save_all(store)
-    return {"status": "ok", "deleted": sim_id}
+    return {"status": "ok", "deleted": sim_id, "rows_removed": removed}
 
 
 @router.delete("/saved")

@@ -2016,7 +2016,15 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
             # _PATIENCE generations.  CMA-ES (especially surrogate-seeded) often
             # converges in 1-2 iters, so running the full max_iters just burns FEM
             # solves on no improvement.  max_iters stays the hard cap.
-            _PATIENCE = 3
+            #
+            # 3 is right for an unconstrained search but impatient for a
+            # CONSTRAINED one: with a ripple gate the penalty landscape is rugged
+            # and CMA-ES can spend several generations finding a direction that
+            # improves the objective WITHOUT breaching the gate.  A ripple<=5%
+            # run stopped at generation 3 having sampled 36 points in 15
+            # dimensions and reported "no improvement" — far too thin to believe.
+            # Raise it with SB_DESCENT_PATIENCE for constrained runs.
+            _PATIENCE = max(1, int(os.environ.get("SB_DESCENT_PATIENCE", "3") or 3))
             _stale = 0
             _prev_best = best["cost"]
             while not es.stop():

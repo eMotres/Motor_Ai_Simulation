@@ -206,20 +206,65 @@ const ComparePanel: React.FC = () => {
   const toggle = (id: string) =>
     setSel(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
+  // fetch() only rejects on a NETWORK failure — a 404 or 500 resolves normally.
+  // Every mutation here used to go straight to .then(load), so a rejected delete
+  // reloaded the identical list and the row just sat there with no error shown:
+  // the button looked broken. Check the status explicitly and surface it.
+  const mutate = (url: string, init: RequestInit, what: string) =>
+    fetch(url, init)
+      .then(async r => {
+        if (!r.ok) {
+          const body = await r.text().catch(() => '');
+          throw new Error(`${what} failed (HTTP ${r.status})${body ? `: ${body.slice(0, 200)}` : ''}`);
+        }
+      })
+      .then(load)
+      .catch(e => setErr(String(e.message ?? e)));
+
   const del = (id: string) =>
-    fetch(`${API}/api/sims/saved/${id}`, { method: 'DELETE' }).then(load).catch(e => setErr(String(e)));
+    mutate(`${API}/api/sims/saved/${id}`, { method: 'DELETE' }, 'Delete');
   const clearAll = () => {
     if (!window.confirm('Delete ALL saved simulations?')) return;
-    fetch(`${API}/api/sims/saved`, { method: 'DELETE' }).then(load).catch(e => setErr(String(e)));
+    mutate(`${API}/api/sims/saved`, { method: 'DELETE' }, 'Delete all');
+  };
+
+  // The per-row Delete lives in the "Actions" column — the LAST one, behind every
+  // result and input column, so on a wide table it is off-screen and effectively
+  // does not exist. The only reachable bin was "delete all", which asks a scary
+  // question and then does nothing when you cancel: ticking a row and pressing
+  // the bin looked like a broken button. So the toolbar bin now acts on the
+  // SELECTION when there is one, and only falls back to wiping the library when
+  // nothing is ticked.
+  const delSelected = async () => {
+    const ids = [...sel];
+    if (!ids.length) return clearAll();
+    const shown = selected.slice(0, 6).map(s => `  • ${s.name}`).join('\n');
+    const more = ids.length > 6 ? `\n  … and ${ids.length - 6} more` : '';
+    if (!window.confirm(`Delete ${ids.length} selected simulation(s)?\n\n${shown}${more}`)) return;
+    setErr(null);
+    const failed: string[] = [];
+    for (const id of ids) {
+      try {
+        const r = await fetch(`${API}/api/sims/saved/${id}`, { method: 'DELETE' });
+        if (!r.ok) failed.push(`${id} (HTTP ${r.status})`);
+      } catch (e) {
+        failed.push(`${id} (${String(e)})`);
+      }
+    }
+    load();
+    if (failed.length) setErr(`Could not delete: ${failed.join(', ')}`);
   };
   const startRename = (s: SavedSim) => { setEditId(s.id); setEditName(s.name); };
   const commitRename = () => {
     if (!editId) return;
     const id = editId;
-    fetch(`${API}/api/sims/saved/${id}`, {
+    // same silent-failure trap as delete — a rejected rename must not look like
+    // a successful one that simply changed nothing
+    setEditId(null);
+    mutate(`${API}/api/sims/saved/${id}`, {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: editName }),
-    }).then(() => { setEditId(null); load(); }).catch(e => setErr(String(e)));
+    }, 'Rename');
   };
 
   const selected = sims.filter(s => sel.has(s.id));
@@ -382,7 +427,12 @@ const ComparePanel: React.FC = () => {
           </Button>
           <Tooltip title="Reload"><IconButton size="small" onClick={load} sx={{ color: 'var(--text-3)' }}><RefreshIcon sx={{ fontSize: 17 }} /></IconButton></Tooltip>
           {sims.length > 0 && (
-            <Tooltip title="Delete all"><IconButton size="small" onClick={clearAll} sx={{ color: '#7f1d1d' }}><DeleteOutlineIcon sx={{ fontSize: 17 }} /></IconButton></Tooltip>
+            <Tooltip title={sel.size ? `Delete ${sel.size} ticked row${sel.size > 1 ? 's' : ''}` : 'Delete ALL saved simulations'}>
+              <IconButton size="small" onClick={delSelected}
+                sx={{ color: sel.size ? '#b91c1c' : '#7f1d1d' }}>
+                <DeleteOutlineIcon sx={{ fontSize: 17 }} />
+              </IconButton>
+            </Tooltip>
           )}
         </Box>
 

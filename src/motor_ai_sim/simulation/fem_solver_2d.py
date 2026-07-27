@@ -864,6 +864,47 @@ def build_materials(
             pass
         return None
 
+    def _stack_factor_for(part_key: str) -> float:
+        """Lamination fill factor k_f of a laminated part, from its own material.
+
+        Only laminated cores get one — the shaft is solid, magnets and copper are
+        not stacks."""
+        name = assignments.get(part_key)
+        if not name:
+            return 1.0
+        try:
+            kf = float(getattr(_resolve_mat("steel", name), "stacking_factor", 1.0))
+            return kf if 0.0 < kf <= 1.0 else 1.0
+        except Exception:
+            return 1.0
+
+    def _laminate(bh, kf: float):
+        """Fold the stack's fill factor into the B-H curve.
+
+        A lamination stack is steel and insulation in parallel across the
+        GEOMETRIC cross-section the 2D model draws.  Only k_f of that area is
+        steel, so the flux the geometric section can carry at a given H is
+
+            B_geom(H) = k_f * B_steel(H) + (1 - k_f) * mu0 * H
+
+        — the steel's own curve scaled down, plus the little the insulation
+        carries as air.  Transforming the curve here means EVERY consumer picks
+        it up automatically: the saturation Picard, the static solve, P1 and P2
+        alike.  There is nothing to remember at the call sites.
+
+        Doing it this way is also why the torque integral is left alone.  Torque
+        is computed in the AIR GAP, whose axial length is the full stack — a
+        blanket k_f on that integral would be a fudge.  The physical effect is
+        that thinner effective iron saturates sooner, the field answers, and the
+        torque follows on its own.  Expect the change to be small on this machine
+        (the gap dominates the reluctance), which is the honest answer, not a
+        disappointing one.
+        """
+        if bh is None or kf >= 1.0:
+            return bh
+        return [(float(h), kf * float(b) + (1.0 - kf) * MU0 * float(h))
+                for (h, b) in bh]
+
     def _mu_r_for(part_key: str, default: float = 1.0) -> float:
         """Resolve a part's relative permeability from its linked material,
         searching all library categories.  A non-magnetic material (e.g.
@@ -891,8 +932,17 @@ def build_materials(
             return 1.0          # found, but non-magnetic
         return default
 
-    bh_stator = _bh_for("stator_core", "steel")
-    bh_rotor  = _bh_for("rotor_core",  "steel")
+    # Laminated cores: the material's own stacking_factor now enters the MAGNETIC
+    # model, not just the loss volume.  Until this, k_f was applied to the iron
+    # loss integral only, so the solve behaved as if the core were solid steel —
+    # it carried more flux than the real stack can and saturated later.
+    _kf_s = _stack_factor_for("stator_core")
+    _kf_r = _stack_factor_for("rotor_core")
+    bh_stator = _laminate(_bh_for("stator_core", "steel"), _kf_s)
+    bh_rotor  = _laminate(_bh_for("rotor_core",  "steel"), _kf_r)
+    if _kf_s < 1.0 or _kf_r < 1.0:
+        log.info("lamination in the magnetic model: stator k_f=%.3f, rotor k_f=%.3f",
+                 _kf_s, _kf_r)
     # Shaft is typically aluminium (conductor) or steel — try steel silently;
     # missing entry means no BH curve, which is fine for the air-like Al case.
     try:
@@ -926,8 +976,13 @@ def build_materials(
         DOM_AIRGAP: FEMMaterial("airgap", mu_r=1.0),
         DOM_BAND:   FEMMaterial("band",   mu_r=1.0),
         DOM_OUTER:  FEMMaterial("outer",  mu_r=1.0),
-        DOM_STATOR: FEMMaterial("stator", mu_r=mu_r_steel, bh_curve=bh_stator),
-        DOM_ROTOR:  FEMMaterial("rotor",  mu_r=mu_r_steel, bh_curve=bh_rotor),
+        # Linear permeability gets the same treatment as the curve: steel and
+        # insulation in parallel, mu_eff = k_f*mu_r + (1 - k_f).  Matters on its
+        # own for a core with no B-H curve, where mu_r IS the whole model.
+        DOM_STATOR: FEMMaterial("stator", mu_r=_kf_s * mu_r_steel + (1.0 - _kf_s),
+                                bh_curve=bh_stator),
+        DOM_ROTOR:  FEMMaterial("rotor",  mu_r=_kf_r * mu_r_steel + (1.0 - _kf_r),
+                                bh_curve=bh_rotor),
         # Solid (non-laminated) conductors carry σ for the eddy-current solve.
         DOM_SHAFT:  FEMMaterial("shaft",  mu_r=shaft_mu_r, bh_curve=bh_shaft,
                                 sigma=SIGMA_SHAFT),

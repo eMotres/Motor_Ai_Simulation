@@ -4,6 +4,7 @@ import shutil
 from pathlib import Path
 
 import pytest
+import yaml
 from fastapi.testclient import TestClient
 
 from motor_ai_sim.api import app
@@ -32,6 +33,39 @@ def _preserve_working_config():
     finally:
         if backup is not None:
             _CONFIG.write_bytes(backup)
+
+
+def _config_geometry() -> dict:
+    """Read the ``geometry`` section straight off disk.
+
+    ``config/motor_config.yaml`` is the source of truth the geometry API serves
+    and resets to, so expectations are derived from it rather than written as
+    literals.  Hard-coded numbers here rot the moment the active design changes
+    (they were 200 mm-era values long after the design moved to 30 mm), and a
+    stale assertion at the top of the file aborts the whole run under ``-x``,
+    hiding the physics regression tests behind an irrelevant failure.
+
+    Reads the file directly instead of going through ``motor_ai_sim.config``:
+    that module caches with a 1 s mtime probe (``_MTIME_PROBE_S``), so a cached
+    copy can lag the file a test just wrote.
+    """
+    with open(_CONFIG, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f).get("geometry", {})
+
+
+def _write_config_geometry(**values) -> None:
+    """Edit the geometry section on disk behind the API's back.
+
+    Deliberately does NOT flush ``motor_ai_sim.config``'s cache or the geometry
+    service's in-process ``_current_geometry`` — that is what makes the state
+    stale, which is exactly what ``POST /api/geometry/reset`` is supposed to
+    discard.
+    """
+    with open(_CONFIG, "r", encoding="utf-8") as f:
+        cfg = yaml.safe_load(f)
+    cfg.setdefault("geometry", {}).update(values)
+    with open(_CONFIG, "w", encoding="utf-8") as f:
+        yaml.dump(cfg, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
 
 
 class TestHealthAndMeta:
@@ -77,33 +111,65 @@ class TestGeometryEndpoints:
             assert key in data, f"Missing derived param: {key}"
 
     def test_update_geometry_single_param(self):
-        r = client.put("/api/geometry", json={"stator_diameter": 220.0})
+        # Perturb the *current* design rather than jumping to a fixed diameter:
+        # a literal here is both a stale-value trap and a scale mismatch (a
+        # 220 mm stator wrapped around 4 mm slots is not a machine anyone is
+        # testing).
+        target = float(_config_geometry()["stator_diameter"]) + 10.0
+        r = client.put("/api/geometry", json={"stator_diameter": target})
         assert r.status_code == 200
         data = r.json()
-        assert data["stator_diameter"] == 220.0
-        assert data["stator_outer_radius"] == pytest.approx(110.0)
+        assert data["stator_diameter"] == pytest.approx(target)
+        assert data["stator_outer_radius"] == pytest.approx(target / 2.0)
 
     def test_update_geometry_multiple_params(self):
-        r = client.put("/api/geometry", json={"stator_diameter": 180.0, "num_seg": 4})
+        target = float(_config_geometry()["stator_diameter"]) - 5.0
+        r = client.put("/api/geometry", json={"stator_diameter": target, "num_seg": 4})
         assert r.status_code == 200
         data = r.json()
-        assert data["stator_diameter"] == 180.0
+        assert data["stator_diameter"] == pytest.approx(target)
         assert data["num_seg"] == 4
 
     def test_update_geometry_partial_preserves_others(self):
         baseline = client.get("/api/geometry").json()
         slot_height_before = baseline["slot_height"]
 
-        client.put("/api/geometry", json={"stator_diameter": 200.0})
+        client.put("/api/geometry", json={"stator_diameter": baseline["stator_diameter"] + 1.0})
         after = client.get("/api/geometry").json()
         assert after["slot_height"] == slot_height_before
 
     def test_reset_geometry(self):
-        client.put("/api/geometry", json={"stator_diameter": 300.0})
+        """``POST /reset`` re-reads config/motor_config.yaml — it is a *reload*,
+        not a restore-to-factory-defaults.
+
+        ``reset_geometry()`` (src/motor_ai_sim/services/geometry_service.py:82)
+        clears the config cache and rebuilds the geometry from the tracked YAML,
+        and ``PUT /api/geometry`` persists into that same YAML.  So the only
+        state a reset can discard is an in-process copy that has drifted from
+        the file — which is what this test sets up, by editing the file
+        directly after the PUT.
+
+        The old version PUT 300 and then asserted 200: it never exercised the
+        reload at all, it just read back the value it had itself written, and
+        the 200 was a leftover from the 200 mm-era config.
+        """
+        on_disk = float(_config_geometry()["stator_diameter"])
+
+        # In-process geometry (and the file) now say on_disk + 7 …
+        drifted = on_disk + 7.0
+        put = client.put("/api/geometry", json={"stator_diameter": drifted})
+        assert put.status_code == 200
+        assert put.json()["stator_diameter"] == pytest.approx(drifted)
+
+        # … then put the file back without telling the API, so the cached
+        # geometry is stale by exactly 7 mm.
+        _write_config_geometry(stator_diameter=on_disk)
+
         r = client.post("/api/geometry/reset")
         assert r.status_code == 200
         data = r.json()
-        assert data["stator_diameter"] == 200.0
+        assert data["stator_diameter"] == pytest.approx(on_disk)
+        assert data["stator_outer_radius"] == pytest.approx(on_disk / 2.0)
 
     def test_geometry_summary(self):
         r = client.get("/api/geometry/summary")

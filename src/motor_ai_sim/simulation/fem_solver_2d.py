@@ -67,6 +67,13 @@ from motor_ai_sim.simulation.losses import (
     TWO_PI_SQ as _TWO_PI_SQ,
     central_difference as _central_difference,
     iron_loss_series as _iron_loss_series,
+    declip as _declip,
+    loss_density_map as _loss_density_map,
+)
+from motor_ai_sim.simulation.sb_postproc import (
+    drop_settling_frames as _drop_settling_frames,
+    hybrid_torque as _hybrid_torque,
+    torque_harmonics as _torque_harmonics,
 )
 from motor_ai_sim.simulation.moving_band import (
     MovingBand as _MovingBand,
@@ -3305,12 +3312,7 @@ def fem_transient_sliding_band(
         if _vdrive and _vskip:
             n_total -= _vskip
             n_periods = float(n_periods) - float(_v_settle_periods)
-            for _lst in _v2_lists:
-                if len(_lst) > _vskip:
-                    del _lst[:_vskip]
-            if _tt:
-                _t0v = _tt[0]
-                _tt[:] = [_t - _t0v for _t in _tt]
+            _drop_settling_frames(_v2_lists, _vskip, _tt)
         # ── Demag: drop the SETTLING period ──────────────────────────────────
         # The P1 path has done this since the settling pass was added; the P2
         # branch returns before that code and never got it.  The magnet weakens
@@ -3322,15 +3324,7 @@ def fem_transient_sliding_band(
         if _dmskip and demag and _dmst is not None:
             n_total -= _dmskip
             n_periods = float(n_periods) - 1.0
-            for _lst in (_T2, _psiA, _psiB, _psiC, _IA, _IB, _IC, _tt,
-                         _hsx2, _hsy2, _hrx2, _hry2, _hcx2, _hcy2,
-                         _histA_rot2, _pic_iters,
-                         _v_diag["iters"], _v_diag["resid"]):
-                if len(_lst) > _dmskip:
-                    del _lst[:_dmskip]
-            if _tt:
-                _t0s = _tt[0]
-                _tt[:] = [_t - _t0s for _t in _tt]
+            _drop_settling_frames(_v2_lists, _dmskip, _tt)
 
         # ── Voltage drive: copper loss from the SOLVED current ───────────────
         # `copper_loss_W` ran near the top of this function on the CONFIG
@@ -3445,39 +3439,12 @@ def fem_transient_sliding_band(
         _T2raw = list(_T2)                       # preserve the Maxwell series (diag)
         T_arr = np.asarray(_T2, float)
         T_maxwell_avg = float(T_arr.mean()) if T_arr.size else 0.0
-        # ── HYBRID torque: energy-consistent MEAN + Maxwell-stress RIPPLE ──────
-        # Two physical facts, each measured by the method that is right for it:
-        #  • MEAN — the ANSYS energy method (virtual work) via the terminal flux
-        #    linkages ψ and currents I:  <T> = (3/2)·p·<ψα·iβ − ψβ·iα>, the airgap
-        #    power balance P=T·ω.  It never touches the gap field, so it is immune
-        #    to the sliding-band DC contamination that makes the raw Maxwell mean
-        #    radius-inconsistent (~+35 %); validated vs ω·ψ_pm back-EMF and ANSYS.
-        #  • RIPPLE — the Maxwell-stress torque T(t).  The flux-linkage torque is
-        #    winding-FILTERED, so it is smooth and CANNOT see cogging or the slot
-        #    harmonics → it under-reports ripple (1.7 % vs the real ~5-6 %).  The
-        #    Maxwell σ_rθ integral DOES resolve them (P2 noise floor →0 with mesh).
-        # So the reported T(t) = Maxwell AC (real ripple) re-centred on the energy
-        # mean (correct DC).  This is NOT tuning: the DC bias we remove is the
-        # measured slip-band contamination; the AC we keep is the physical ripple.
-        # No-load (I≈0) keeps the raw Maxwell cogging directly (energy torque = 0).
+        # HYBRID torque (energy-consistent MEAN + Maxwell-stress RIPPLE):
+        # simulation/sb_postproc.py — ONE definition, shared with the P1 path.
         _torque_method = "maxwell_stress"
         try:
-            _pa = np.asarray(_psiA, float); _pb = np.asarray(_psiB, float)
-            _pc = np.asarray(_psiC, float)
-            _ea = np.asarray(_IA, float); _eb = np.asarray(_IB, float)
-            _ec = np.asarray(_IC, float)
-            _Ipk = float(np.max(np.abs(np.concatenate([_ea, _eb, _ec])))) if _ea.size else 0.0
-            if _pa.size and _pa.size == _ea.size and _Ipk > 1.0:
-                _s = 2.0 / 3.0; _kc = math.sqrt(3.0) / 2.0
-                _psial = _s * (_pa - 0.5 * _pb - 0.5 * _pc); _psibe = _s * _kc * (_pb - _pc)
-                _ial = _s * (_ea - 0.5 * _eb - 0.5 * _ec); _ibe = _s * _kc * (_eb - _ec)
-                _T2e = (1.5 * float(pole_pairs) * (_psial * _ibe - _psibe * _ial))
-                _emean = float(_T2e.mean())
-                _mx = np.asarray(_T2raw, float)     # raw Maxwell σ_rθ series
-                # real Maxwell ripple, DC re-centred on the energy-consistent mean:
-                _T2 = (_mx - _mx.mean() + _emean).tolist()
-                _torque_method = "energy_mean+maxwell_ripple"
-            # else: no-load (or no terminal data) → keep the Maxwell cogging series
+            _T2, _torque_method = _hybrid_torque(
+                _psiA, _psiB, _psiC, _IA, _IB, _IC, _T2raw, pole_pairs)
         except Exception as _te:
             log.warning("P2 hybrid torque failed (%s) — using Maxwell series", _te)
         T_arr = np.asarray(_T2, float)
@@ -4326,11 +4293,7 @@ def fem_transient_sliding_band(
             _slice_lists.append(_eddy_P)   # exists only when eddy=True
         except NameError:
             pass
-        for _lst in _slice_lists:
-            if len(_lst) > _vskip:
-                del _lst[:_vskip]
-        _t0_new = tt[0] if tt else 0.0
-        tt[:] = [_t - _t0_new for _t in tt]
+        _drop_settling_frames(_slice_lists, _vskip, tt)
     # ── Demag: drop the settling period.  The magnets keep their de-rated state
     #    (_br_glob is cumulative), only the FRAMES are discarded, so the reported
     #    window is one full period of a machine whose magnets have settled.
@@ -4346,11 +4309,7 @@ def fem_transient_sliding_band(
             _slice_lists.append(_eddy_P)   # exists only when eddy=True
         except NameError:
             pass
-        for _lst in _slice_lists:
-            if len(_lst) > _dmskip:
-                del _lst[:_dmskip]
-        _t0_new = tt[0] if tt else 0.0
-        tt[:] = [_t - _t0_new for _t in tt]
+        _drop_settling_frames(_slice_lists, _dmskip, tt)
     # ── Voltage drive: copper loss from the SOLVED current ───────────────────
     # `copper_loss_W` ran near the top of this function on the CONFIG
     # I_phase_rms — but under voltage drive the current is the ANSWER, not the
@@ -4378,7 +4337,6 @@ def fem_transient_sliding_band(
     # only: that keeps the genuine fundamental + slot-ripple content but drops
     # the quantisation noise floor near Nyquist, giving a clean V(t) and a
     # physically-rippling (not noisy, not flat) loss(t).
-    _two_pi2 = _TWO_PI_SQ      # shared with simulation/losses.py
 
     def _spectral_ddt(x, kmax):
         # module-level `_spectral_ddt_series` — ONE implementation, now shared
@@ -4405,16 +4363,7 @@ def fem_transient_sliding_band(
     _angle_ddt_2d = _make_angle_ddt(_mshift_hist, _spacing_rad, _omega_mech,
                                     dt, n_periods, period_mech)
 
-    def _declip(a):
-        # Safety net: clip any residual single-frame outlier to median±5·MAD.
-        a = np.asarray(a, float)
-        if a.size < 5:
-            return a
-        med = float(np.median(a)); mad = float(np.median(np.abs(a - med)))
-        if mad <= 0:
-            return a
-        return np.clip(a, max(0.0, med - 5 * mad), med + 5 * mad)
-
+    # Single-frame outlier clip (median±5·MAD): simulation/losses.py.
     _Kv = max(1, min(5, (n_total // 2) - 1))     # back-EMF: keep it smooth
 
     # voltage V = R·I + dψ/dt  (spectrally smoothed back-EMF)
@@ -4426,7 +4375,9 @@ def fem_transient_sliding_band(
 
     # ── HYBRID torque: energy-consistent MEAN + Maxwell-stress RIPPLE ─────────
     # IDENTICAL to the P2 branch above — one torque definition for the whole
-    # solver, not two.  P1 reported the raw Arkkio/Maxwell mean, which on the
+    # solver, not two.  It is now literally the same function
+    # (simulation/sb_postproc.hybrid_torque), which is the only way "identical"
+    # stays true.  P1 reported the raw Arkkio/Maxwell mean, which on the
     # node-repaired sliding band over-reads ~35 % under load: measured 0.181 N*m
     # here against 0.130 in ANSYS for the same design, and 0.181/1.35 = 0.134.
     # That gap was never physics, only this missing correction.
@@ -4434,32 +4385,11 @@ def fem_transient_sliding_band(
     # P1 is still reachable for the things P2 cannot do (irreversible demag,
     # coupled eddy, voltage drive), so it has to report the same number as P2 or
     # every demag result is silently inflated.
-    #   MEAN   — energy/virtual-work via the terminal quantities:
-    #            <T> = (3/2)*p*<psi_al*i_be - psi_be*i_al>.  Never touches the
-    #            gap field, so it is immune to the slip-band contamination.
-    #   RIPPLE — the Maxwell series, which DOES resolve cogging and slot
-    #            harmonics (the flux-linkage torque is winding-filtered and
-    #            cannot see them).
-    # No-load (I ~ 0) keeps the raw Maxwell cogging: the energy torque is 0 there.
     _torque_method_p1 = "maxwell_stress"
     _mx_raw_p1 = list(T_series)          # keep the Maxwell series as a diagnostic
     try:
-        _pa1 = np.asarray(psiA, float); _pb1 = np.asarray(psiB, float)
-        _pc1 = np.asarray(psiC, float)
-        _ea1 = np.asarray(IA, float); _eb1 = np.asarray(IB, float)
-        _ec1 = np.asarray(IC, float)
-        _Ipk1 = (float(np.max(np.abs(np.concatenate([_ea1, _eb1, _ec1]))))
-                 if _ea1.size else 0.0)
-        if _pa1.size and _pa1.size == _ea1.size and _Ipk1 > 1.0:
-            _s1 = 2.0 / 3.0; _kc1 = math.sqrt(3.0) / 2.0
-            _psial1 = _s1 * (_pa1 - 0.5 * _pb1 - 0.5 * _pc1)
-            _psibe1 = _s1 * _kc1 * (_pb1 - _pc1)
-            _ial1 = _s1 * (_ea1 - 0.5 * _eb1 - 0.5 * _ec1)
-            _ibe1 = _s1 * _kc1 * (_eb1 - _ec1)
-            _Te1 = 1.5 * float(pole_pairs) * (_psial1 * _ibe1 - _psibe1 * _ial1)
-            _mx1 = np.asarray(T_series, float)
-            T_series = (_mx1 - _mx1.mean() + float(_Te1.mean())).tolist()
-            _torque_method_p1 = "energy_mean+maxwell_ripple"
+        T_series, _torque_method_p1 = _hybrid_torque(
+            psiA, psiB, psiC, IA, IB, IC, _mx_raw_p1, pole_pairs)
     except Exception as _te1:
         log.warning("P1 hybrid torque failed (%s) — using Maxwell series", _te1)
     Tavg = float(np.mean(T_series)) if T_series else 0.0
@@ -4502,15 +4432,7 @@ def fem_transient_sliding_band(
     # Spectrum is ALWAYS the RAW per-frame torque (not the band-limited series),
     # so the UI shows every order and the user can SEE which bars the 6·k filter
     # keeps (orange) vs drops (the broadband slip-node noise).
-    T_harm_order = []; T_harm_amp = []
-    if _T_raw:
-        _per = max(1, int(round(n_steps_per_period)))
-        _Tp = np.asarray(_T_raw[:_per], float)
-        if _Tp.size >= 4:
-            _F = np.abs(np.fft.rfft(_Tp - _Tp.mean())) / _Tp.size * 2.0
-            _nh = min(_F.size - 1, 36)
-            T_harm_order = list(range(1, _nh + 1))
-            T_harm_amp = [round(float(_F[k]), 4) for k in range(1, _nh + 1)]
+    T_harm_order, T_harm_amp = _torque_harmonics(_T_raw, n_steps_per_period)
 
     # ── Losses from the captured B(t) — PER-FRAME instantaneous series ────────
     # iron(t)  = hysteresis baseline (per-cycle quantity, flat) + classical
@@ -4813,74 +4735,27 @@ def fem_transient_sliding_band(
     P_airgap_avg = float(Tavg * _omega_m)        # electromagnetic (Arkkio) power
     P_mech_avg = P_elec_in - P_loss_total_avg     # energy-conserving shaft power
 
-    # ── Per-element loss DENSITY (W/m³) for the Ansys-style spatial map ──────
-    # Same per-element loss math as the totals above, kept per-element instead
-    # of summed, then each component NORMALISED so its volume-integral equals
-    # the reported (physically-trusted) component loss — the map both shows the
-    # spatial distribution AND integrates back to the sidebar numbers.  Element
-    # order matches the field snapshot: [stator-half | rotor-half].
+    # Per-element loss DENSITY (W/m³) for the Ansys-style spatial map:
+    # simulation/losses.py.  Four more closures over the whole loss state lived
+    # here; the model is unchanged, only its inputs are now named.
     if _field_snap is not None:
-        _nst_e = int(_Bxs.size)
-        _dens = np.zeros(int(_Bxs.size + _Bxr.size))
-
-        def _mean_sq_ddt(hx, hy, qp=None):              # time-avg |dB/dt|² per elem
-            dX = _angle_ddt_2d(np.asarray(hx), qp)
-            dY = _angle_ddt_2d(np.asarray(hy), qp)
-            return np.mean(dX ** 2 + dY ** 2, axis=0)
-
-        def _bac2(hx, hy):                              # (½ peak-peak)² per elem
-            X = np.asarray(hx); Y = np.asarray(hy)
-            return (((X.max(0) - X.min(0)) * 0.5) ** 2
-                    + ((Y.max(0) - Y.min(0)) * 0.5) ** 2)
-
-        def _norm_into(local_idx, shape_e, areas_half, base, P_target_W):
-            if local_idx.size == 0 or shape_e.size == 0 or P_target_W <= 0:
-                return
-            integ = float(np.sum(shape_e * areas_half[local_idx])) * p.stack_length * NS
-            if integ > 1e-30:
-                _dens[base + local_idx] += shape_e * (P_target_W / integ)
-
-        # Iron — stator + rotor share one Bertotti total (P_fe_avg).
-        def _iron_shape(hx, hy, idx, mat, qp=None):
-            if mat is None or idx.size == 0 or not hx or np.asarray(hx[0]).size == 0:
-                return np.zeros(idx.size)
-            kh, kc, ke = _mat_lib.effective_bertotti(mat)
-            b2 = _bac2(hx, hy)
-            return (kh * f_elec * b2
-                    + ke * f_elec ** 1.5 * np.power(np.maximum(b2, 0.0), 0.75)
-                    + (kc / _two_pi2) * _mean_sq_ddt(hx, hy, qp))
-        _sh_is = _iron_shape(_hist_sx, _hist_sy, _iron_s_idx, _steel_s)
-        _sh_ir = _iron_shape(_hist_rx, _hist_ry, _iron_r_idx, _steel_r)
-        _integ_fe = ((float(np.sum(_sh_is * areas_s[_iron_s_idx])) if _iron_s_idx.size else 0.0)
-                     + (float(np.sum(_sh_ir * areas_r[_iron_r_idx])) if _iron_r_idx.size else 0.0)
-                     ) * p.stack_length * NS
-        if _integ_fe > 1e-30 and P_fe_avg > 0:
-            _kfe = P_fe_avg / _integ_fe
-            if _iron_s_idx.size: _dens[_iron_s_idx] += _sh_is * _kfe
-            if _iron_r_idx.size: _dens[_nst_e + _iron_r_idx] += _sh_ir * _kfe
-
-        # Magnets — slab |dB/dt|² shape, normalised to P_mag_avg.
-        if _mag_idx.size and _hist_mx and np.asarray(_hist_mx[0]).size:
-            _norm_into(_mag_idx, _mean_sq_ddt(_hist_mx, _hist_my),
-                       areas_r, _nst_e, P_mag_avg)
-
-        # Copper — uniform DC ohmic + crowded AC proximity (radial/tangential).
-        if _coil_idx.size:
-            _vol_cu = float(np.sum(areas_s[_coil_idx])) * p.stack_length * NS
-            if _vol_cu > 1e-30 and P_cu_dc > 0:
-                _dens[_coil_idx] += P_cu_dc / _vol_cu
-            if _hist_cx and np.asarray(_hist_cx[0]).size and P_cu_ac_avg > 0:
-                _Xc = np.asarray(_hist_cx); _Yc = np.asarray(_hist_cy)
-                _rc = np.hypot(_coil_cen[0], _coil_cen[1])
-                _rc = np.where(_rc < 1e-9, 1e-9, _rc)
-                _uxc = (_coil_cen[0] / _rc)[None, :]; _uyc = (_coil_cen[1] / _rc)[None, :]
-                _dBrc = _angle_ddt_2d(_Xc * _uxc + _Yc * _uyc)
-                _dBtc = _angle_ddt_2d(-_Xc * _uyc + _Yc * _uxc)
-                _sh_cu = (_sigma_cu / 12.0) * np.mean(
-                    _w_cu ** 2 * _dBrc ** 2 + _h_cu ** 2 * _dBtc ** 2, axis=0)
-                _norm_into(_coil_idx, _sh_cu, areas_s, 0, P_cu_ac_avg)
-
-        _field_snap["loss_dens"] = _dens.tolist()
+        _field_snap["loss_dens"] = _loss_density_map(
+            n_stator_elems=int(_Bxs.size),
+            n_elems=int(_Bxs.size + _Bxr.size),
+            hist_sx=_hist_sx, hist_sy=_hist_sy,
+            hist_rx=_hist_rx, hist_ry=_hist_ry,
+            hist_mx=_hist_mx, hist_my=_hist_my,
+            hist_cx=_hist_cx, hist_cy=_hist_cy,
+            iron_s_idx=_iron_s_idx, iron_r_idx=_iron_r_idx,
+            mag_idx=_mag_idx, coil_idx=_coil_idx,
+            areas_s=areas_s, areas_r=areas_r, coil_centroids=_coil_cen,
+            steel_s=_steel_s, steel_r=_steel_r,
+            bertotti=_mat_lib.effective_bertotti,
+            f_elec_hz=f_elec, stack_length_m=p.stack_length, sector_scale=NS,
+            P_fe_avg=P_fe_avg, P_mag_avg=P_mag_avg,
+            P_cu_dc=P_cu_dc, P_cu_ac_avg=P_cu_ac_avg,
+            sigma_cu=_sigma_cu, d_cu_r=_w_cu, d_cu_t=_h_cu,
+            ddt=_angle_ddt_2d).tolist()
 
     # (The honest coupled rotor-eddy solve moved ABOVE the loss-series assembly —
     # it is now the production magnet/shaft loss when rotor_eddy is on.)

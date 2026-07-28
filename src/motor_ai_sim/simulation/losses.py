@@ -164,6 +164,107 @@ def proximity_loss_series(
     return Pt.tolist(), float(np.mean(Pt))
 
 
+def declip(a: np.ndarray) -> np.ndarray:
+    """Safety net: clip any residual single-frame outlier to median±5·MAD.
+
+    The P1 path's outlier treatment, passed to ``proximity_loss_series`` as
+    ``post`` and applied by hand to every other P1 loss series. It is here
+    rather than inline in the solver so that "which series are de-clipped" is
+    answerable by grep instead of by reading a 3000-line function.
+    """
+    a = np.asarray(a, float)
+    if a.size < 5:
+        return a
+    med = float(np.median(a)); mad = float(np.median(np.abs(a - med)))
+    if mad <= 0:
+        return a
+    return np.clip(a, max(0.0, med - 5 * mad), med + 5 * mad)
+
+
+def loss_density_map(
+    *,
+    n_stator_elems: int,
+    n_elems: int,
+    hist_sx, hist_sy, hist_rx, hist_ry, hist_mx, hist_my, hist_cx, hist_cy,
+    iron_s_idx: np.ndarray, iron_r_idx: np.ndarray,
+    mag_idx: np.ndarray, coil_idx: np.ndarray,
+    areas_s: np.ndarray, areas_r: np.ndarray, coil_centroids: np.ndarray,
+    steel_s: Any, steel_r: Any, bertotti: Callable[[Any], Tuple[float, float, float]],
+    f_elec_hz: float, stack_length_m: float, sector_scale: float,
+    P_fe_avg: float, P_mag_avg: float, P_cu_dc: float, P_cu_ac_avg: float,
+    sigma_cu: float, d_cu_r: float, d_cu_t: float,
+    ddt: Callable,
+) -> np.ndarray:
+    """Per-element loss DENSITY (W/m³) for the Ansys-style spatial map.
+
+    Same per-element loss math as the totals above, kept per-element instead
+    of summed, then each component NORMALISED so its volume-integral equals
+    the reported (physically-trusted) component loss — the map both shows the
+    spatial distribution AND integrates back to the sidebar numbers.  Element
+    order matches the field snapshot: [stator-half | rotor-half].
+    """
+    _nst_e = int(n_stator_elems)
+    _dens = np.zeros(int(n_elems))
+
+    def _mean_sq_ddt(hx, hy, qp=None):              # time-avg |dB/dt|² per elem
+        dX = ddt(np.asarray(hx), qp)
+        dY = ddt(np.asarray(hy), qp)
+        return np.mean(dX ** 2 + dY ** 2, axis=0)
+
+    def _bac2(hx, hy):                              # (½ peak-peak)² per elem
+        X = np.asarray(hx); Y = np.asarray(hy)
+        return (((X.max(0) - X.min(0)) * 0.5) ** 2
+                + ((Y.max(0) - Y.min(0)) * 0.5) ** 2)
+
+    def _norm_into(local_idx, shape_e, areas_half, base, P_target_W):
+        if local_idx.size == 0 or shape_e.size == 0 or P_target_W <= 0:
+            return
+        integ = float(np.sum(shape_e * areas_half[local_idx])) * stack_length_m * sector_scale
+        if integ > 1e-30:
+            _dens[base + local_idx] += shape_e * (P_target_W / integ)
+
+    # Iron — stator + rotor share one Bertotti total (P_fe_avg).
+    def _iron_shape(hx, hy, idx, mat, qp=None):
+        if mat is None or idx.size == 0 or not hx or np.asarray(hx[0]).size == 0:
+            return np.zeros(idx.size)
+        kh, kc, ke = bertotti(mat)
+        b2 = _bac2(hx, hy)
+        return (kh * f_elec_hz * b2
+                + ke * f_elec_hz ** 1.5 * np.power(np.maximum(b2, 0.0), 0.75)
+                + (kc / TWO_PI_SQ) * _mean_sq_ddt(hx, hy, qp))
+    _sh_is = _iron_shape(hist_sx, hist_sy, iron_s_idx, steel_s)
+    _sh_ir = _iron_shape(hist_rx, hist_ry, iron_r_idx, steel_r)
+    _integ_fe = ((float(np.sum(_sh_is * areas_s[iron_s_idx])) if iron_s_idx.size else 0.0)
+                 + (float(np.sum(_sh_ir * areas_r[iron_r_idx])) if iron_r_idx.size else 0.0)
+                 ) * stack_length_m * sector_scale
+    if _integ_fe > 1e-30 and P_fe_avg > 0:
+        _kfe = P_fe_avg / _integ_fe
+        if iron_s_idx.size: _dens[iron_s_idx] += _sh_is * _kfe
+        if iron_r_idx.size: _dens[_nst_e + iron_r_idx] += _sh_ir * _kfe
+
+    # Magnets — slab |dB/dt|² shape, normalised to P_mag_avg.
+    if mag_idx.size and hist_mx and np.asarray(hist_mx[0]).size:
+        _norm_into(mag_idx, _mean_sq_ddt(hist_mx, hist_my),
+                   areas_r, _nst_e, P_mag_avg)
+
+    # Copper — uniform DC ohmic + crowded AC proximity (radial/tangential).
+    if coil_idx.size:
+        _vol_cu = float(np.sum(areas_s[coil_idx])) * stack_length_m * sector_scale
+        if _vol_cu > 1e-30 and P_cu_dc > 0:
+            _dens[coil_idx] += P_cu_dc / _vol_cu
+        if hist_cx and np.asarray(hist_cx[0]).size and P_cu_ac_avg > 0:
+            _Xc = np.asarray(hist_cx); _Yc = np.asarray(hist_cy)
+            _rc = np.hypot(coil_centroids[0], coil_centroids[1])
+            _rc = np.where(_rc < 1e-9, 1e-9, _rc)
+            _uxc = (coil_centroids[0] / _rc)[None, :]; _uyc = (coil_centroids[1] / _rc)[None, :]
+            _dBrc = ddt(_Xc * _uxc + _Yc * _uyc)
+            _dBtc = ddt(-_Xc * _uyc + _Yc * _uxc)
+            _sh_cu = (sigma_cu / 12.0) * np.mean(
+                d_cu_r ** 2 * _dBrc ** 2 + d_cu_t ** 2 * _dBtc ** 2, axis=0)
+            _norm_into(coil_idx, _sh_cu, areas_s, 0, P_cu_ac_avg)
+    return _dens
+
+
 def rotor_eddy_tags(cells: dict, n_tri: int, dom_mag_base: int
                     ) -> Tuple[np.ndarray, list]:
     """Per-element domain tags for the rotor half, and which of them are magnets.

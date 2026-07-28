@@ -105,7 +105,20 @@ _PIC_TOL = 1e-3
 # see the field.  Loose enough that magnet and field settle together (the point
 # of doing it in-loop), tight enough that no numerical transient of the early
 # sweeps gets burned in by the monotone irreversible rule.
-_DM_NEWTON_TOL = 1e-4
+#
+# Kept tight because it is free, NOT because it fixed anything: 1e-4 and 1e-6
+# give bit-identical results (130/490 de-rated, T=0.2313) at identical cost, so
+# the trigger point is not what this loop is sensitive to.
+#
+# OPEN: in-loop settling de-rates 130/490 where the frame-restart scheme
+# de-rated 133/490, torque 0.2313 vs 0.2293 (+0.9 %). Tightening the trigger was
+# tried and refuted as the cause. The remaining suspect is path dependence: the
+# de-rating rule is monotone and records the worst field an element has ever
+# seen, so a warm-started sequence of fields and a sequence of cold frame
+# re-solves need not record the same minimum even though both judge on
+# converged fields. Which path is the physical one is a real question, not a
+# tuning knob — do not paper over it by matching the old number.
+_DM_NEWTON_TOL = 1e-6
 
 # Single source of truth for the d-axis phase offset: the electrical angle added
 # to (rotor_angle·pole_pairs + γ) so that γ=0 lands on the q-axis.  MUST be

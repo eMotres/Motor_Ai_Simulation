@@ -1,5 +1,13 @@
 # Voltage drive on P2 — what it needs
 
+> **Status: DONE.** Every item below is implemented in
+> `simulation/fem_solver_2d.py` (`_v_newton`, `_v_picard`, `_circ_r`, `_circ_M`,
+> the P2 phasor initialiser, the `_vskip` strip in the P2 branch). The P2 guard
+> now rejects only `eddy=True`. `tests/test_physics_regression.py` pins the
+> `p1_voltage` / `p2_voltage` pair. What the port measured is at the bottom.
+> The frontend still auto-selects P1 for voltage drive — removing that fallback
+> is a separate decision.
+
 Written from a code read, not from memory, so the next session starts from a map
 instead of a search. Line numbers are approximate and will drift; the names are
 what to grep for.
@@ -71,3 +79,43 @@ The demag hook was first placed in the P2 Picard and never fired: P2 solves by
 pointwise Newton and the damped Picard is only a fallback that does not run on
 this machine. Anything that must see a converged field belongs after the
 nonlinear solve, not inside one of the two solvers.
+
+## What the port actually did, and what it measured
+
+P1 gets the exact superposition `A = A_pm + i_A·xa + i_B·xb` for free because
+its Picard freezes ν inside a sweep. P2 solves by POINTWISE Newton, where that
+superposition is not exact, so `xa`/`xb`/`A_pm` are not the right primitives
+there. Instead the circuit is closed on the ACTUAL ψ(A) of the converged field
+and `(A, i_A, i_B)` are solved as ONE coupled Newton system: ∂A/∂i is the
+tangent back-solve `J⁻¹·P` (the DIFFERENTIAL inductance), which is the exact
+Jacobian of ψ(A(i)). One factorization, three back-solves per iteration. The
+`_v_picard` fallback IS the P1 superposition recipe, kept for `frozen_nu` /
+`SB_NO_NEWTON` / a collapsed line search.
+
+30 mm 12s14p, F45SH_120C at 120 °C, 24 steps/period, mesh 1.4 mm, V = 7.0 V pk
+at δ = +10 °el (≈ i_d = 0):
+
+| | P1 | P2 |
+|---|---|---|
+| I_A fundamental | 82.67 A pk | 71.22 A pk |
+| THD I_A | 5.79 % | 2.67 % |
+| triplen share of I_A | 0.02 % | 0.00 % |
+| `v_dc_residual_A` | −0.001 A | 0.000 A |
+| circuit residual, max over frames | 2.3e-14 V | 1.8e-14 V |
+| T_avg | 0.2550 Nm | 0.2365 Nm |
+
+The circuit itself is identical on both orders (residual at machine precision,
+no DC left on the orbit). The 14 % current gap is NOT a circuit difference: it
+is the ~2.5 % P1-vs-P2 flux-linkage difference amplified by an operating point
+where |V| ≈ |E|. Measured on P1, dI/dV at this point is **5.45** in relative
+terms (+2.57 % on V gave +14.0 % on I), and 2.49 % of ωψ₁ is 0.149 V, which
+predicts −10.2 A against the −11.4 A observed. Same amplification within P2
+alone: switching only the ν model (pointwise Newton vs element-mean Picard,
+`SB_NO_NEWTON=1`) moves T_avg 1.8 % and the current 5.6 %.
+
+Two things worth knowing before trusting a voltage-drive loss number:
+
+* `P_cu` still comes from `copper_loss_W(I_phase_rms)` — the CONFIG current, not
+  the current the circuit solved. Both orders inherit this from P1.
+* `v_drive_diag` is not trimmed by the settling strip, so its arrays are longer
+  than every other reported series. Also inherited from P1.

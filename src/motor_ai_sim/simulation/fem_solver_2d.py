@@ -2550,12 +2550,12 @@ def fem_transient_sliding_band(
             raise NotImplementedError(
                 "P2 + moving/harmonic-macro band not implemented; run the merged "
                 "structured belt (structured_gap=True, element_order=2).")
-        if eddy or _vdrive:
+        if eddy:
             raise NotImplementedError(
-                "P2 path supports current-drive magnetostatics + post-processed "
-                "rotor_eddy losses + irreversible demagnetisation; the coupled "
-                "sigma*dA/dt J-view solve (eddy=True) and voltage drive are not "
-                "wired for P2 yet. See P2_NOTES.md.")
+                "P2 path supports current- AND voltage-drive magnetostatics + "
+                "post-processed rotor_eddy losses + irreversible demagnetisation; "
+                "the coupled sigma*dA/dt J-view solve (eddy=True) is not wired "
+                "for P2 yet. See P2_NOTES.md.")
 
         b2 = Basis(mesh_all, _P2E())
         b2_0 = b2.with_element(ElementTriP0())      # P0 for per-element ν interpolate
@@ -2750,6 +2750,348 @@ def fem_transient_sliding_band(
                 else:            pc += v_
             return _sc_psi2 * pa, _sc_psi2 * pb, _sc_psi2 * pc
 
+        # ── frame-independent solver helpers ─────────────────────────────────
+        # These used to be defined INSIDE the frame loop; they close over nothing
+        # frame-specific (K_const2, _sat_sub2, _sat2, b2), and the voltage-drive
+        # phasor initialiser below has to call them BEFORE the loop starts.
+        def _solve_ff(Mff, rhs):
+            """Solve Mff·x = rhs for a 1-D or 2-D (multi-column) rhs."""
+            nonlocal _pardiso2
+            if _pardiso2 is not None:
+                try:
+                    return _pardiso2.solve(Mff, rhs)
+                except Exception as _pe2:
+                    log.warning("pypardiso solve failed (%s) — SuperLU fallback",
+                                _pe2)
+                    _pardiso2 = None
+            return _splu2(Mff).solve(rhs)
+
+        def _elemB(Avec):
+            bx, by, dq = _p2_B_at_quad(b2, Avec)
+            ar = dq.sum(axis=1)
+            return (np.sqrt(bx ** 2 + by ** 2) * dq).sum(axis=1) \
+                / np.maximum(ar, 1e-30)
+
+        def _nu_of(Bmag, base):
+            nu = base.copy()
+            for _ids, _c in _sat2:
+                nu[_ids] = 1.0 / (MU0 * np.maximum(
+                    _mu_r_from_bh_vec(_c, Bmag[_ids]), 1.0))
+            return nu
+
+        def _asmK(nu):
+            K = K_const2.copy()
+            for _sb2, _sb02, _ids2, _c2 in _sat_sub2:
+                _nf2 = _sb02.zeros(); _nf2[_ids2] = nu[_ids2]
+                K = K + asm(_stiff_nu2, _sb2, nu=_sb02.interpolate(_nf2))
+            return K.tocsr()
+
+        def _Kpw(Avec):
+            """POINTWISE ν(|B|) secant stiffness + the per-element data the
+            Newton tangent needs.  Same nonlinearity in residual and tangent."""
+            K = K_const2.copy(); info = []
+            for _sb2, _sb02, _ids2, _c2 in _sat_sub2:
+                gA = _sb2.interpolate(Avec).grad            # (2,nel,nqp)
+                Bm = np.sqrt(np.maximum(gA[0] ** 2 + gA[1] ** 2, 1e-18))
+                mur = np.maximum(_mu_r_from_bh_vec(
+                    _c2, Bm.ravel()).reshape(Bm.shape), 1.0)
+                nuq = 1.0 / (MU0 * mur)
+                K = K + asm(_stiff_nu2, _sb2, nu=nuq)
+                info.append((_sb2, _ids2, _c2, gA, Bm, nuq))
+            return K.tocsr(), info
+
+        def _tangent2(info):
+            """T = 2·(dν/dB²)·(∇A·∇u)(∇A·∇v), pointwise & consistent with _Kpw."""
+            T = None
+            for _sb2, _ids2, _c2, gA, Bm, nuq in info:
+                _dB = 1e-3 * Bm + 1e-6
+                nu1 = 1.0 / (MU0 * np.maximum(_mu_r_from_bh_vec(
+                    _c2, (Bm + _dB).ravel()).reshape(Bm.shape), 1.0))
+                nup = np.maximum((nu1 - nuq) / _dB / (2.0 * Bm), 0.0)   # dν/dB²
+                Ti = asm(_tang_nu2, _sb2, gA=gA, c=2.0 * nup)
+                T = Ti if T is None else T + Ti
+            return T
+
+        # ═══════════════════════════════════════════════════════════════════
+        #  VOLTAGE DRIVE on P2 — field ↔ circuit coupled solve
+        # ═══════════════════════════════════════════════════════════════════
+        # A circuit is physics: it cannot depend on the element order, so this is
+        # a PORT of the P1 formulation, not a second model.  Everything that was
+        # paid for in P1 debugging is kept verbatim in form:
+        #   * LINE-TO-LINE equations (floating neutral).  Phase-voltage equations
+        #     pin the machine neutral to the source's, short the zero-sequence
+        #     back-EMF (large on this concentrated winding) through the tiny
+        #     zero-sequence inductance and produce ~43 % fake triplen current.
+        #   * Crank–Nicolson in ROTOR TIME: Δt_k = Δθ_eff/ω with V sampled at the
+        #     midpoint of the ACTUAL (slip-node-snapped) motion.
+        #   * A dq phasor initialiser whose inductances are measured AT the
+        #     operating point (Lq moves ~5× from no-load to full load).
+        #   * 10 settling periods with iterated Aitken anchoring of the
+        #     period-boundary flux.
+        # What is NEW here is only the field solve: P1 gets the exact
+        # superposition A = A_pm + i_A·xa + i_B·xb for free because its Picard
+        # freezes ν within a sweep.  P2 solves by POINTWISE Newton, where that
+        # superposition is not exact, so the circuit is closed on the ACTUAL
+        # ψ(A) of the converged field and (A, i_A, i_B) are solved as ONE coupled
+        # Newton system:  ∂A/∂i is the tangent back-solve J⁻¹·P, i.e. the
+        # DIFFERENTIAL inductance — which is the correct Jacobian of ψ(A(i)).
+        _Pa2 = f_coil2['A'] - f_coil2['C']    # unit-i_A source column (i_C folded)
+        _Pb2 = f_coil2['B'] - f_coil2['C']    # unit-i_B source column
+        _iv_state = {'A': 0.0, 'B': 0.0, 'C': 0.0}
+        _psi_prev = None
+        _th_eff_prev = None      # previous frame's SNAPPED rotor angle (rotor time)
+        _dt_k = dt
+        _v_diag = {"iters": [], "resid": []}
+        _v_bpsi = []             # period-boundary flux samples for the Aitken anchor
+
+        def _pad2(Pro, free, xf):
+            _x = np.zeros(Pro.shape[1]); _x[free] = xf
+            return Pro @ _x
+
+        def _circ_r(psi, iA, iB, iv_prev, psi_prev, Vt, dtk):
+            """Line-to-line Crank–Nicolson circuit residual [V_AB, V_BC]."""
+            iC = -iA - iB
+            return np.array([
+                (Vt['A'] - Vt['B'])
+                - 0.5 * R_phase * (iA - iB + iv_prev['A'] - iv_prev['B'])
+                - ((psi[0] - psi[1]) - (psi_prev['A'] - psi_prev['B'])) / dtk,
+                (Vt['B'] - Vt['C'])
+                - 0.5 * R_phase * (iB - iC + iv_prev['B'] - iv_prev['C'])
+                - ((psi[1] - psi[2]) - (psi_prev['B'] - psi_prev['C'])) / dtk])
+
+        def _circ_M(qa, qb, dtk):
+            """∂[r_AB, r_BC]/∂[i_A, i_B] from the ∂ψ/∂i columns qa, qb.
+            i_C = −i_A − i_B, so ∂(i_B−i_C)/∂i_A = 1 and ∂/∂i_B = 2."""
+            return np.array([
+                [0.5 * R_phase + (qa[0] - qa[1]) / dtk,
+                 -0.5 * R_phase + (qb[0] - qb[1]) / dtk],
+                [0.5 * R_phase + (qa[1] - qa[2]) / dtk,
+                 1.0 * R_phase + (qb[1] - qb[2]) / dtk]])
+
+        def _v_newton(Pro, free, A_start, i_start, Vt, dtk, iv_prev, psi_prev,
+                      maxit):
+            """Coupled (A, i_A, i_B) Newton.  One Jacobian factorization per
+            iteration, three back-solves: the field correction and the two
+            ∂A/∂i columns.  Returns (ok, A2, iA, iB, rrel, nit, rc)."""
+            iA = float(i_start[0]); iB = float(i_start[1])
+            A2 = A_start.copy()
+            _PtPa = np.asarray(Pro.T @ _Pa2).ravel()[free]
+            _PtPb = np.asarray(Pro.T @ _Pb2).ravel()[free]
+            # voltage scale for the circuit residual test: the driving line-to-
+            # line amplitude (never the instantaneous value, which passes 0).
+            _vsc = max(math.sqrt(3.0) * abs(float(v_phase_peak)), 1e-3)
+            nit = 0; rrel = 1.0
+            rc = np.array([np.inf, np.inf])
+
+            def _state(Av, ia, ib):
+                fv = f_mag2 + ia * _Pa2 + ib * _Pb2
+                Kv, iv = _Kpw(Av)
+                rf = np.asarray(Pro.T @ (Kv @ Av - fv)).ravel()[free]
+                bn = max(float(np.linalg.norm(
+                    np.asarray(Pro.T @ fv).ravel()[free])), 1e-30)
+                rcv = _circ_r(_psi2(Av), ia, ib, iv_prev, psi_prev, Vt, dtk)
+                return Kv, iv, rf, float(np.linalg.norm(rf)) / bn, rcv
+
+            for it in range(maxit):
+                nit = it + 1
+                K, info, r_free, rrel, rc = _state(A2, iA, iB)
+                if rrel < 1e-7 and float(np.max(np.abs(rc))) < 1e-6 * _vsc:
+                    return True, A2, iA, iB, rrel, nit, rc
+                T = _tangent2(info)
+                J = (K + T).tocsr() if T is not None else K
+                Jff = (Pro.T @ J @ Pro).tocsr()[free][:, free].tocsc()
+                try:
+                    X = _solve_ff(Jff, np.column_stack([-r_free, _PtPa, _PtPb]))
+                except Exception as _je:
+                    log.info("P2 vdrive Newton solve failed (%s)", _je)
+                    return False, A2, iA, iB, rrel, nit, rc
+                dA0 = _pad2(Pro, free, X[:, 0])
+                dAa = _pad2(Pro, free, X[:, 1])
+                dAb = _pad2(Pro, free, X[:, 2])
+                # ψ is a LINEAR functional of A, so the linearised flux of the
+                # trial step is exact: ψ(A+δ) = ψ(A) + ψ(δ).
+                q0 = _psi2(dA0); qa = _psi2(dAa); qb = _psi2(dAb)
+                try:
+                    di = np.linalg.solve(
+                        _circ_M(qa, qb, dtk),
+                        np.array([rc[0] - (q0[0] - q0[1]) / dtk,
+                                  rc[1] - (q0[1] - q0[2]) / dtk]))
+                except np.linalg.LinAlgError:
+                    return False, A2, iA, iB, rrel, nit, rc
+                # backtracking line-search on the COMBINED merit (field residual
+                # + circuit residual) — the BH knee needs globalising and a step
+                # that fixes the field while wrecking the circuit is no step.
+                _m0 = rrel + float(np.max(np.abs(rc))) / _vsc
+                _lam = 1.0; _acc = False
+                for _ls in range(8):
+                    _At = A2 + _lam * (dA0 + di[0] * dAa + di[1] * dAb)
+                    _ia = iA + _lam * di[0]; _ib = iB + _lam * di[1]
+                    _, _, _, _rr, _rcv = _state(_At, _ia, _ib)
+                    if _rr + float(np.max(np.abs(_rcv))) / _vsc < _m0:
+                        A2 = _At; iA = _ia; iB = _ib; _acc = True
+                        break
+                    _lam *= 0.5
+                if not _acc:
+                    return False, A2, iA, iB, rrel, nit, rc
+            return False, A2, iA, iB, rrel, nit, rc
+
+        def _v_picard(Pro, free, nu_start, Vt, dtk, iv_prev, psi_prev, npic,
+                      frozen_frame):
+            """Damped-Picard fallback — this IS the P1 recipe: ν frozen inside a
+            sweep makes A = A_pm + i_A·xa + i_B·xb exact, so the 2×2 circuit is
+            solved directly on the apparent inductance.  Returns
+            (A2, iA, iB, nu, res, nit)."""
+            nu = nu_start.copy()
+            _Pt = lambda v: np.asarray(Pro.T @ v).ravel()[free]      # noqa: E731
+            A2 = np.zeros(N2); iA = iB = 0.0; res = 0.0; nit = 0
+            _ok = 0; _rp = None; _om = 0.5
+            for it in range(max(1, npic)):
+                nit = it + 1
+                K = _asmK(nu)
+                Kff = (Pro.T @ K @ Pro).tocsr()[free][:, free].tocsc()
+                X = _solve_ff(Kff, np.column_stack(
+                    [_Pt(f_mag2), _Pt(_Pa2), _Pt(_Pb2)]))
+                A_pm = _pad2(Pro, free, X[:, 0])
+                xa = _pad2(Pro, free, X[:, 1])
+                xb = _pad2(Pro, free, X[:, 2])
+                pm = _psi2(A_pm); qa = _psi2(xa); qb = _psi2(xb)
+                _bcv = np.array([
+                    (Vt['A'] - Vt['B'])
+                    - ((pm[0] - pm[1]) - (psi_prev['A'] - psi_prev['B'])) / dtk
+                    - 0.5 * R_phase * (iv_prev['A'] - iv_prev['B']),
+                    (Vt['B'] - Vt['C'])
+                    - ((pm[1] - pm[2]) - (psi_prev['B'] - psi_prev['C'])) / dtk
+                    - 0.5 * R_phase * (iv_prev['B'] - iv_prev['C'])])
+                _iab = np.linalg.solve(_circ_M(qa, qb, dtk), _bcv)
+                iA = float(_iab[0]); iB = float(_iab[1])
+                A2 = A_pm + iA * xa + iB * xb
+                if frozen_frame or not _sat2:
+                    break
+                _Bm = _elemB(A2)
+                _vo = np.concatenate([nu[_ids] for _ids, _ in _sat2])
+                _vn = np.concatenate([
+                    1.0 / (MU0 * np.maximum(_mu_r_from_bh_vec(_c, _Bm[_ids]), 1.0))
+                    for _ids, _c in _sat2])
+                _rr = _vn - _vo
+                res = float(np.linalg.norm(_rr) / max(np.linalg.norm(_vo), 1e-30))
+                if _rp is not None:
+                    _dr = _rr - _rp; _den = float(_dr @ _dr)
+                    if _den > 0.0:
+                        _om = float(np.clip(-_om * float(_rp @ _dr) / _den,
+                                            0.05, 1.0))
+                _rp = _rr
+                _vu = _vo + _om * _rr
+                _p0 = 0
+                for _ids, _c in _sat2:
+                    nu[_ids] = _vu[_p0:_p0 + _ids.size]; _p0 += _ids.size
+                if res < _PIC_TOL2:
+                    _ok += 1
+                    if _ok >= 2:
+                        break
+                else:
+                    _ok = 0
+            return A2, iA, iB, nu, res, nit
+
+        if _vdrive:
+            # ── dq phasor steady-state initialiser (P2) ──────────────────────
+            # τ = L/R spans ~20 electrical periods on a low-R machine, so a
+            # marched start-up would need ~100 periods to shed its DC.  Measure
+            # the PM flux and the dq inductances AT the operating point (coupled
+            # phasor↔saturation Picard) and place i(0), ψ(−dt) directly on the
+            # periodic orbit.  Lq changes ~5× between i=0 and full load, so an
+            # i=0 estimate would leave a large DC for the settling to grind off.
+            import math as _m
+            _Pro0v, _out0v = _build_Pro2(0)
+            _free0v = np.setdiff1d(np.arange(_Pro0v.shape[1]), _out0v)
+            _Pt0 = lambda v: np.asarray(_Pro0v.T @ v).ravel()[_free0v]  # noqa: E731
+            _RHS0 = np.column_stack([_Pt0(f_mag2), _Pt0(_Pa2), _Pt0(_Pb2)])
+            _nu_ph = nu_base2.copy()
+            _w = 2.0 * _m.pi * f_elec
+            _V0 = _voltages(0.0)
+            # θ_eff = 0 electrical.  The absolute offset CANCELS: _align below
+            # measures the PM-flux angle relative to it, so _thal is the true
+            # PM-flux angle in the ABC frame whatever reference is used here.
+            _the0 = _m.radians(0.0 * pole_pairs + daxis_eff)
+
+            def _park(_xa_, _xb_, _xc_, _th):
+                return ((2.0 / 3.0) * (_xa_ * _m.cos(_th)
+                                       + _xb_ * _m.cos(_th - 2.094395102393195)
+                                       + _xc_ * _m.cos(_th + 2.094395102393195)),
+                        -(2.0 / 3.0) * (_xa_ * _m.sin(_th)
+                                        + _xb_ * _m.sin(_th - 2.094395102393195)
+                                        + _xc_ * _m.sin(_th + 2.094395102393195)))
+
+            def _ipark(_d, _q, _th):
+                return (_d * _m.cos(_th) - _q * _m.sin(_th),
+                        _d * _m.cos(_th - 2.094395102393195)
+                        - _q * _m.sin(_th - 2.094395102393195),
+                        _d * _m.cos(_th + 2.094395102393195)
+                        - _q * _m.sin(_th + 2.094395102393195))
+
+            _id0 = _iq0 = 0.0; _thal = _the0
+            _psi_pm_d = 0.0; _Ldd = _Lqq = _Ldq = _Lqd = 1e-6
+            _Aop = np.zeros(N2)
+            for _it in range(max(int(nonlinear_iterations), 20)):
+                _Kph = _asmK(_nu_ph)
+                _Kff0 = (_Pro0v.T @ _Kph @ _Pro0v).tocsr()[_free0v][:, _free0v].tocsc()
+                _X0 = _solve_ff(_Kff0, _RHS0)
+                _A0 = _pad2(_Pro0v, _free0v, _X0[:, 0])
+                _xa = _pad2(_Pro0v, _free0v, _X0[:, 1])
+                _xb = _pad2(_Pro0v, _free0v, _X0[:, 2])
+                _pm = _psi2(_A0); _qa = _psi2(_xa); _qb = _psi2(_xb)
+                _pd0, _pq0 = _park(_pm[0], _pm[1], _pm[2], _the0)
+                _thal = _the0 + _m.atan2(_pq0, _pd0)
+                _psi_pm_d = _m.hypot(_pd0, _pq0)
+                _Laa, _Lba = _qa[0], _qa[1]
+                _Lab, _Lbb = _qb[0], _qb[1]
+                _idA, _idB, _idC = _ipark(1.0, 0.0, _thal)
+                _iqA, _iqB, _iqC = _ipark(0.0, 1.0, _thal)
+                _Ldd, _Lqd = _park(_Laa * _idA + _Lab * _idB,
+                                   _Lba * _idA + _Lbb * _idB,
+                                   -((_Laa + _Lba) * _idA + (_Lab + _Lbb) * _idB),
+                                   _thal)
+                _Ldq, _Lqq = _park(_Laa * _iqA + _Lab * _iqB,
+                                   _Lba * _iqA + _Lbb * _iqB,
+                                   -((_Laa + _Lba) * _iqA + (_Lab + _Lbb) * _iqB),
+                                   _thal)
+                _Vd, _Vq = _park(_V0['A'], _V0['B'], _V0['C'], _thal)
+                _Mdq = np.array([[R_phase - _w * _Lqd, -_w * _Lqq],
+                                 [_w * _Ldd, R_phase + _w * _Ldq]])
+                try:
+                    _idq = np.linalg.solve(
+                        _Mdq, np.array([_Vd, _Vq - _w * _psi_pm_d]))
+                except np.linalg.LinAlgError:
+                    _idq = np.array([0.0, 0.0])
+                _id0, _iq0 = float(_idq[0]), float(_idq[1])
+                _iA0, _iB0, _iC0 = _ipark(_id0, _iq0, _thal)
+                _Aop = _A0 + _iA0 * _xa + _iB0 * _xb
+                _nu_new = _nu_of(_elemB(_Aop), _nu_ph)
+                _vo0 = np.concatenate([_nu_ph[_ids] for _ids, _ in _sat2]) \
+                    if _sat2 else np.zeros(0)
+                _vn0 = np.concatenate([_nu_new[_ids] for _ids, _ in _sat2]) \
+                    if _sat2 else np.zeros(0)
+                _pres0 = (float(np.linalg.norm(_vn0 - _vo0)
+                                / max(np.linalg.norm(_vo0), 1e-30))
+                          if _vo0.size else 0.0)
+                _al = 0.5 if _it < 6 else max(0.05, 3.0 / (_it + 1))
+                _nu_ph = (1.0 - _al) * _nu_ph + _al * _nu_new
+                if _pres0 < _PIC_TOL2:
+                    break
+            _iA0, _iB0, _iC0 = _ipark(_id0, _iq0, _thal)
+            _iv_state = {'A': _iA0, 'B': _iB0, 'C': _iC0}
+            # ψ at t = −dt on the orbit: dq are constant in steady state, so the
+            # previous-step flux is the SAME dq vector mapped one FRAME back —
+            # the park angle rotated by ω·dt (NOT one slip node; a frame spans
+            # many).  Getting this wrong injects a spurious rotational EMF at
+            # frame 0 → a decaying DC current.
+            _psd = _psi_pm_d + _Ldd * _id0 + _Ldq * _iq0
+            _psq = _Lqd * _id0 + _Lqq * _iq0
+            _psi_prev = dict(zip(('A', 'B', 'C'),
+                                 _ipark(_psd, _psq, _thal - _w * dt)))
+            log.info("P2 vdrive phasor init: Ld=%.4g Lq=%.4g H |psi_pm|=%.4g Wb "
+                     "i_dq=(%.1f, %.1f) A i0=(%.1f, %.1f, %.1f)",
+                     _Ldd, _Lqq, _psi_pm_d, _id0, _iq0, _iA0, _iB0, _iC0)
+
         # ── frame loop ───────────────────────────────────────────────────────
         _T2 = []; _psiA = []; _psiB = []; _psiC = []; _tt = []
         _IA = []; _IB = []; _IC = []
@@ -2783,8 +3125,25 @@ def fem_transient_sliding_band(
             theta = (k / n_total) * period_mech * n_periods
             m_shift = int(round(theta / spacing))
             theta_eff = m_shift * spacing
-            Ist = _currents(theta_eff)
-            _IA.append(Ist['A']); _IB.append(Ist['B']); _IC.append(Ist['C'])
+            # Voltage drive: Crank–Nicolson in ROTOR TIME.  The field only exists
+            # at SNAPPED slip-node angles θ_eff, so Δt_k = Δθ_eff/ω and V is
+            # sampled at the midpoint of the ACTUAL motion.  Dividing a snapped
+            # Δψ by the UNIFORM dt instead modulates dψ/dt by the node-
+            # quantisation sawtooth (fake volts ≫ |V−E|) and CN rings undamped
+            # at Nyquist → monster harmonic currents.
+            _dth_frame = period_mech * n_periods / n_total     # mech deg / frame
+            if _vdrive:
+                if _th_eff_prev is None:        # very first frame: nominal step
+                    _th_eff_prev = theta_eff - _dth_frame
+                _dth_eff = theta_eff - _th_eff_prev
+                _dt_k = dt * (_dth_eff / _dth_frame) if _dth_eff > 1e-12 else dt
+                _Vt = _voltages(0.5 * (theta_eff + _th_eff_prev))
+                _th_eff_prev = theta_eff
+                _iv_prev = dict(_iv_state)      # i_{k−1} for the R/2 term
+                Ist = dict(_iv_state)           # warm start for the coupled solve
+            else:
+                _Vt = None; _iv_prev = None
+                Ist = _currents(theta_eff)
             f = (f_mag2 + Ist['A'] * f_coil2['A']
                  + Ist['B'] * f_coil2['B'] + Ist['C'] * f_coil2['C'])
             Pro, outer_red = _build_Pro2(m_shift)
@@ -2812,44 +3171,19 @@ def fem_transient_sliding_band(
             # the current range(Pro) (least-squares, average each paired group) so
             # the Newton start is constraint-consistent — otherwise Newton drifts
             # off-manifold and diverges frame-to-frame.
-            if k == 0 or _nu_conv2 is None:
-                _nu_start = nu_base2.copy(); _A_start = np.zeros(N2)
+            if _A2_prev is None or _nu_conv2 is None:
+                _nu_start = nu_base2.copy()
+                # Voltage drive: the phasor initialiser already produced the
+                # operating-point field at θ_eff=0 — that IS frame 0's warm start.
+                _A_start = (_Aop.copy() if (_vdrive and k == 0)
+                            else np.zeros(N2))
+                if _vdrive and k == 0:
+                    _nu_start = _nu_ph.copy()
             else:
                 _nu_start = _nu_conv2.copy()
                 _pd = np.asarray(Pro.multiply(Pro).sum(axis=0)).ravel()
                 _A_start = Pro @ (np.asarray(Pro.T @ _A2_prev).ravel()
                                   / np.maximum(_pd, 1.0))
-
-            def _solve_ff(Mff, rhs):
-                nonlocal _pardiso2
-                if _pardiso2 is not None:
-                    try:
-                        return _pardiso2.solve(Mff, rhs)
-                    except Exception as _pe2:
-                        log.warning("pypardiso solve failed (%s) — SuperLU fallback",
-                                    _pe2)
-                        _pardiso2 = None
-                return _splu2(Mff).solve(rhs)
-
-            def _elemB(Avec):
-                bx, by, dq = _p2_B_at_quad(b2, Avec)
-                ar = dq.sum(axis=1)
-                return (np.sqrt(bx ** 2 + by ** 2) * dq).sum(axis=1) \
-                    / np.maximum(ar, 1e-30)
-
-            def _nu_of(Bmag, base):
-                nu = base.copy()
-                for _ids, _c in _sat2:
-                    nu[_ids] = 1.0 / (MU0 * np.maximum(
-                        _mu_r_from_bh_vec(_c, Bmag[_ids]), 1.0))
-                return nu
-
-            def _asmK(nu):
-                K = K_const2.copy()
-                for _sb2, _sb02, _ids2, _c2 in _sat_sub2:
-                    _nf2 = _sb02.zeros(); _nf2[_ids2] = nu[_ids2]
-                    K = K + asm(_stiff_nu2, _sb2, nu=_sb02.interpolate(_nf2))
-                return K.tocsr()
 
             # Demag makes the frame re-enterable: solve, check the magnet, and
             # if it weakened, rebuild its source and solve again.  The de-rating
@@ -2859,6 +3193,45 @@ def fem_transient_sliding_band(
             _dm_pass = 0
             while True:
                 _res = 0.0; _nit = 0; _newton_ok = False
+                # ── VOLTAGE DRIVE: coupled field + circuit solve ──────────────────
+                # The phase currents are UNKNOWNS solved together with the field.
+                # Primary path: the coupled Newton (field residual + line-to-line
+                # circuit residual on the ACTUAL ψ(A), Jacobian = the tangent
+                # back-solve ∂A/∂i).  Fallback: the frozen-ν superposition Picard,
+                # which is exactly the P1 recipe.
+                if _vdrive:
+                    _vok = False
+                    if _use_newton and not frozen_nu and _sat2:
+                        (_vok, _A2v, _viA, _viB, _res, _nit,
+                         _vrc) = _v_newton(
+                            Pro, _free2, _A_start, (Ist['A'], Ist['B']),
+                            _Vt, _dt_k, _iv_prev, _psi_prev,
+                            max(int(nonlinear_iterations), 20))
+                    if _vok:
+                        A2 = _A2v; _newton_ok = True
+                        # element-mean ν for the loss post-processing
+                        nu_all2 = _nu_of(_elemB(A2), nu_all2)
+                    else:
+                        if _use_newton and not frozen_nu and _sat2:
+                            log.info("P2 vdrive Newton not converged at frame %d "
+                                     "(%d its, rrel=%.1e) — Picard fallback",
+                                     k, _nit, _res)
+                        if frozen_nu:
+                            _n_pic2 = (max(nonlinear_iterations, 40) if k == 0
+                                       else 1)
+                            _nu_in = nu_all2
+                        else:
+                            _n_pic2 = max(nonlinear_iterations,
+                                          70 if k == 0 else 45)
+                            _nu_in = _nu_start
+                        (A2, _viA, _viB, nu_all2, _res,
+                         _nit) = _v_picard(
+                            Pro, _free2, _nu_in, _Vt, _dt_k, _iv_prev,
+                            _psi_prev, _n_pic2, bool(frozen_nu and k > 0))
+                    Ist = {'A': _viA, 'B': _viB, 'C': -_viA - _viB}
+                    f = (f_mag2 + Ist['A'] * f_coil2['A']
+                         + Ist['B'] * f_coil2['B'] + Ist['C'] * f_coil2['C'])
+                    _bff2 = np.asarray(Pro.T @ f).ravel()[_free2]
                 # ── NEWTON–RAPHSON (differential-reluctivity tangent) ─────────────
                 # Residual R(A)=K(ν(elem-mean|B|))·A−f is IDENTICAL to the Picard fixed
                 # point (element-mean ν per iron element), so Newton converges to the
@@ -2866,25 +3239,14 @@ def fem_transient_sliding_band(
                 # per-element tangent T=2(dν/dB²)(∇A·∇u)(∇A·∇v).  Line-search on |R|
                 # globalises the BH knee; if it collapses, this frame falls back to
                 # damped Picard (never returns garbage).
-                if _use_newton and not frozen_nu and _sat2:
-                    # POINTWISE ν(|B|²) at quadrature points — the residual and the
-                    # tangent then use the SAME nonlinearity, giving a TRUE (quadratic)
-                    # Newton step.  (An element-mean ν residual with a pointwise
-                    # tangent is inconsistent → no acceleration.)  For P2, B is linear
-                    # per element, so pointwise ν is also the more accurate model; it
+                if (not _vdrive) and _use_newton and not frozen_nu and _sat2:
+                    # POINTWISE ν(|B|²) at quadrature points (_Kpw, hoisted above
+                    # the frame loop) — the residual and the tangent then use the
+                    # SAME nonlinearity, giving a TRUE (quadratic) Newton step.
+                    # (An element-mean ν residual with a pointwise tangent is
+                    # inconsistent → no acceleration.)  For P2, B is linear per
+                    # element, so pointwise ν is also the more accurate model; it
                     # is validated to match the element-mean Picard fixed point below.
-                    def _Kpw(Avec):
-                        K = K_const2.copy(); info = []
-                        for _sb2, _sb02, _ids2, _c2 in _sat_sub2:
-                            gA = _sb2.interpolate(Avec).grad            # (2,nel,nqp)
-                            Bm = np.sqrt(np.maximum(gA[0] ** 2 + gA[1] ** 2, 1e-18))
-                            mur = np.maximum(_mu_r_from_bh_vec(
-                                _c2, Bm.ravel()).reshape(Bm.shape), 1.0)
-                            nuq = 1.0 / (MU0 * mur)
-                            K = K + asm(_stiff_nu2, _sb2, nu=nuq)
-                            info.append((_sb2, _ids2, _c2, gA, Bm, nuq))
-                        return K.tocsr(), info
-
                     def _rfree_pw(Avec, K):
                         return np.asarray(Pro.T @ (K @ Avec - f)).ravel()[_free2]
 
@@ -2898,14 +3260,7 @@ def fem_transient_sliding_band(
                         if _rrel < 1e-7:
                             break
                         # tangent T = 2(dν/dB²)(∇A·∇u)(∇A·∇v), pointwise & consistent
-                        T = None
-                        for _sb2, _ids2, _c2, gA, Bm, nuq in _info:
-                            _dB = 1e-3 * Bm + 1e-6
-                            nu1 = 1.0 / (MU0 * np.maximum(_mu_r_from_bh_vec(
-                                _c2, (Bm + _dB).ravel()).reshape(Bm.shape), 1.0))
-                            nup = np.maximum((nu1 - nuq) / _dB / (2.0 * Bm), 0.0)  # dν/dB²
-                            Ti = asm(_tang_nu2, _sb2, gA=gA, c=2.0 * nup)
-                            T = Ti if T is None else T + Ti
+                        T = _tangent2(_info)
                         J = (K + T).tocsr() if T is not None else K
                         Jff = (Pro.T @ J @ Pro).tocsr()[_free2][:, _free2].tocsc()
                         try:
@@ -2935,7 +3290,7 @@ def fem_transient_sliding_band(
                         log.info("P2 Newton not converged at frame %d (%d its, rrel=%.1e)"
                                  " — Picard fallback", k, _nit, _rrel)
                 # ── DAMPED PICARD (SB_NO_NEWTON, frozen_nu, or Newton fell back) ──
-                if not _newton_ok:
+                if (not _vdrive) and not _newton_ok:
                     if not frozen_nu:
                         nu_all2 = _nu_start.copy()     # warm-start (base at k=0)
                     if frozen_nu:
@@ -3016,7 +3371,58 @@ def fem_transient_sliding_band(
             _T2.append(Tq)
             _pa, _pb, _pc = _psi2(A2)
             _psiA.append(_pa); _psiB.append(_pb); _psiC.append(_pc)
+            _IA.append(Ist['A']); _IB.append(Ist['B']); _IC.append(Ist['C'])
             _tt.append(k * dt)
+            if _vdrive:
+                # ── circuit bookkeeping on the CONVERGED field ───────────────
+                # Residual of the line-to-line equations evaluated with the
+                # ACTUAL ψ(A) of the converged frame (health check: ~0 when the
+                # coupled solve converged).  The phase-A equation alone is
+                # legitimately non-zero — that is the zero-sequence EMF the
+                # floating neutral absorbs.
+                _rc_c = _circ_r((_pa, _pb, _pc), Ist['A'], Ist['B'],
+                                _iv_prev, _psi_prev, _Vt, _dt_k)
+                _v_diag["iters"].append(int(_nit))
+                _v_diag["resid"].append(float(np.max(np.abs(_rc_c))))
+                _psi_prev = {'A': _pa, 'B': _pb, 'C': _pc}
+                _iv_state = dict(Ist)
+                # ITERATED Aitken DC-mode removal: the period-boundary flux
+                # converges geometrically toward the steady orbit; sample it at
+                # each period end and Δ²-extrapolate the limit whenever 3 fresh
+                # samples exist since the last anchor (anchors at periods 3, 6,
+                # 9 inside the settling window — each cuts the residual DC ~3×).
+                # Samples must share the cycle phase (period spacing) so the
+                # periodic flux content cancels exactly in the differences.
+                if _v_nspp > 0 and ((k + 1) % _v_nspp == 0) and (k + 1) < _vskip:
+                    _v_bpsi.append((_pa, _pb))
+                    if len(_v_bpsi) >= 3:
+                        _q0, _q1, _q2 = _v_bpsi[-3:]
+                        _new = {}
+                        for _ci, _ky in enumerate(('A', 'B')):
+                            _x0, _x1, _x2 = _q0[_ci], _q1[_ci], _q2[_ci]
+                            _d1 = _x1 - _x0; _d2 = _x2 - _x1; _dd = _d2 - _d1
+                            _new[_ky] = ((_x2 - _d2 * _d2 / _dd)
+                                         if abs(_dd) > 1e-15 else _x2)
+                        _new['C'] = -(_new['A'] + _new['B'])
+                        _corr = max(abs(_new['A'] - _pa), abs(_new['B'] - _pb))
+                        _drift = max(abs(_q2[0] - _q1[0]), abs(_q2[1] - _q1[1]))
+                        # Guarded anchor: once the boundary drift is below noise
+                        # the Δ² quotient divides noise by noise and the
+                        # "correction" EXPLODES — skip when already converged
+                        # (drift < 0.05 % of the PM flux) or when the
+                        # extrapolation is unstable (|corr| ≫ drift).
+                        _fs = max(abs(_pa), abs(_pb), 1e-6)
+                        if _drift < 5e-4 * _fs or _corr > 5.0 * _drift:
+                            log.info("P2 vdrive Aitken anchor SKIPPED at period %d "
+                                     "(drift %.3g, corr %.3g Wb — converged/unstable)",
+                                     (k + 1) // _v_nspp, _drift, _corr)
+                            _v_bpsi.clear()
+                        else:
+                            _psi_prev = _new
+                            _v_bpsi.clear()   # fresh samples only after re-anchor
+                            log.info("P2 vdrive Aitken anchor at period %d: psiA "
+                                     "%.4g -> %.4g (|corr| %.3g Wb)",
+                                     (k + 1) // _v_nspp, _pa, _new['A'], _corr)
             # Element-mean B in the iron and the coils, captured on EVERY frame —
             # the same thing the P1 path does unconditionally.  This used to sit
             # inside `if rotor_eddy:`, which meant P2 reported ZERO core loss and
@@ -3044,6 +3450,25 @@ def fem_transient_sliding_band(
                           "T": mesh_all.t.copy(),
                           "A": A2[vdof].copy(),
                           "nsn": int(nsn)}
+        # ── Voltage drive: drop the SETTLING periods ─────────────────────────
+        # The currents are STATE, so the run carries an electrical start-up
+        # transient; _vskip frames were prepended for it (n_total/n_periods were
+        # bumped by the same amount before this branch, so dt is unchanged).
+        # This is a SEPARATE, longer skip from the demag one below — they are
+        # applied in sequence, never double-counted: each strips its OWN prefix
+        # and decrements n_total/n_periods by its own amount.
+        _v2_lists = (_T2, _psiA, _psiB, _psiC, _IA, _IB, _IC, _tt,
+                     _hsx2, _hsy2, _hrx2, _hry2, _hcx2, _hcy2,
+                     _histA_rot2, _pic_iters)
+        if _vdrive and _vskip:
+            n_total -= _vskip
+            n_periods = float(n_periods) - float(_v_settle_periods)
+            for _lst in _v2_lists:
+                if len(_lst) > _vskip:
+                    del _lst[:_vskip]
+            if _tt:
+                _t0v = _tt[0]
+                _tt[:] = [_t - _t0v for _t in _tt]
         # ── Demag: drop the SETTLING period ──────────────────────────────────
         # The P1 path has done this since the settling pass was added; the P2
         # branch returns before that code and never got it.  The magnet weakens
@@ -3264,7 +3689,17 @@ def fem_transient_sliding_band(
             "picard_converged": bool(_pic_res_max < _PIC_TOL2),
             "coil_temp_C": float(coil_temp_c),
             "end_winding_factor": float(_k_end_used),
-            "drive": "current",
+            # Drive mode: "current" (imposed sinusoidal I) or "voltage" (imposed
+            # sinusoidal V — the currents above are the machine's own response).
+            "drive": ("voltage" if _vdrive else "current"),
+            "v_phase_peak_V": float(v_phase_peak) if _vdrive else None,
+            "v_delta_deg": float(v_delta_deg) if _vdrive else None,
+            # circuit-iteration convergence stats (per frame, incl. settling) +
+            # the honest steady-state quality gauge: mean phase current over the
+            # REPORTED window (≈0 A on a converged periodic orbit).
+            "v_drive_diag": (_v_diag if _vdrive else None),
+            "v_dc_residual_A": (round(float(np.mean(np.asarray(_IA, float))), 3)
+                                if (_vdrive and _IA) else None),
             "field": _snap2,
         }
 

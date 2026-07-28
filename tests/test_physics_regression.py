@@ -19,8 +19,9 @@ Design notes, in case a case starts failing for the wrong reason:
   publication numbers; they only have to be *reproducible*. Keeping the suite
   near five minutes is what makes it get run.
 * **Both element orders.** P2 is the default basis, but P1 is still the only
-  path that implements irreversible demag, coupled eddy and voltage drive, so
-  it has to stay pinned too.
+  path that implements the coupled eddy J-view solve, so it has to stay pinned
+  too. Demag and voltage drive now exist on BOTH orders and are pinned on both:
+  they are physics, and physics does not depend on the element order.
 
 Regenerate the baseline deliberately, never casually — a diff here is the whole
 point of the file::
@@ -53,7 +54,11 @@ RTOL = 5e-3
 # Quantities that legitimately sit near zero (cogging ripple, shaft loss) need an
 # absolute floor or the relative test divides noise by noise.
 ATOL = {"T_ripple_pct": 0.05, "P_shaft_W": 0.05, "P_solid_W": 0.05,
-        "P_core_W": 0.05, "demag_br_min": 0.01, "demag_br_mean": 0.01}
+        "P_core_W": 0.05, "demag_br_min": 0.01, "demag_br_mean": 0.01,
+        # Voltage drive: these two are ~0 by construction (a settled orbit has
+        # no DC current, a converged circuit has no residual), so a relative
+        # test on them divides noise by noise.
+        "v_dc_residual_A": 0.05, "v_circuit_resid_max_V": 1e-9}
 
 # A 30 mm 12s14p spoke machine, pinned field by field so the suite does not
 # inherit whatever is in the working config.
@@ -108,6 +113,20 @@ CASES = {
     # The cost is the demag outer loop, not the mesh.
     "p2_demag": dict(COMMON, element_order=2, demag=True,
                      I_phase_rms=60.0, gamma_deg=0.0),
+    # Voltage drive, BOTH orders, at the SAME operating point. A circuit is
+    # physics: it cannot depend on the element order, so these two cases only
+    # mean anything as a pair — pinning one alone would not catch the failure
+    # they exist for (a change that quietly moves one basis and not the other).
+    # (7.0 V pk, +10 deg) puts this machine near i_d = 0 at ~90 A pk, i.e. the
+    # same loaded, saturated, gamma~0 corner the current-drive cases use.
+    # These are the slowest cases in the suite: the currents are STATE, so each
+    # run marches 10 settling periods before the reported one.
+    "p1_voltage": dict(COMMON, element_order=1, demag=False,
+                       I_phase_rms=60.0, gamma_deg=0.0, drive="voltage",
+                       v_phase_peak=7.0, v_delta_deg=10.0),
+    "p2_voltage": dict(COMMON, element_order=2, demag=False,
+                       I_phase_rms=60.0, gamma_deg=0.0, drive="voltage",
+                       v_phase_peak=7.0, v_delta_deg=10.0),
 }
 
 MAGNET = "F45SH_120C"
@@ -135,6 +154,21 @@ def _metrics(d: Dict[str, Any]) -> Dict[str, float]:
     # a regression in the hybrid distinguishable from one in the field solve.
     if d.get("T_avg_maxwell_Nm") is not None:
         out["T_avg_maxwell_Nm"] = float(d["T_avg_maxwell_Nm"])
+    # Voltage drive: the currents are the ANSWER, not the input, so they are the
+    # first thing to pin — a broken circuit shows up in the waveform long before
+    # it moves the mean torque. v_dc_residual_A is the settling gauge (~0 A on a
+    # converged periodic orbit); it has an absolute floor because it is a
+    # near-zero quantity by construction.
+    if d.get("drive") == "voltage":
+        ia = np.asarray(d.get("I_A") or [0.0], float)
+        F = np.abs(np.fft.rfft(ia - ia.mean())) * 2.0 / max(ia.size, 1)
+        out["I_A_peak_A"] = float(np.max(np.abs(ia)))
+        out["I_A_fund_A"] = float(F[1]) if F.size > 1 else 0.0
+        out["I_A_thd_pct"] = (float(np.sqrt(np.sum(F[2:] ** 2)) / F[1] * 100.0)
+                              if F.size > 2 and F[1] > 0 else 0.0)
+        out["v_dc_residual_A"] = float(d.get("v_dc_residual_A") or 0.0)
+        out["v_circuit_resid_max_V"] = float(
+            max((d.get("v_drive_diag") or {}).get("resid") or [0.0]))
     f = d.get("demag_field")
     if f:
         br = np.asarray(f["demag_coef_per_tri"], float)

@@ -11,8 +11,13 @@ produced.  This module replaces the template with a deterministic mapped grid:
     no meshing heuristics, so identical inputs give identical meshes and a
     geometry optimiser sees smooth derivatives;
   * segment topology is FIXED by product decision (Vadim 2026-07-14): a stator
-    segment is ALWAYS 6 slots (three 30° slot-pair units) and a rotor segment
-    is 5 OR 7 spoke magnets — the block layout below hardcodes that topology;
+    segment is ALWAYS 6 slots (three slot-pair units) and a rotor segment
+    is 5 OR 7 spoke magnets — the block layout below hardcodes that topology.
+    The slot-pair unit spans 360°/(num_slots/2) — 30° on a 24-slot machine,
+    60° on a 12-slot one — and is NEVER a constant: it is read from
+    stator_unit_frame()["half_ang"].  (It used to be hardcoded to 15°, which
+    meshed a 30° unit at a 60° clone pitch: half the stator had no elements
+    at all and the wires landed in three clusters.)
   * boundary nodes on the stator bore / rotor OD land exactly on the slip
     angular grid, so the belt (structured gap) welds to the iron by identity.
 
@@ -38,6 +43,7 @@ from typing import Dict, List, Tuple
 import numpy as np
 
 __all__ = ["stator_unit_frame", "coons_quad", "mesh_blocks", "stator_unit_blocks",
+           "stator_half_mesh",
            "TAG_IRON", "TAG_COIL", "TAG_AIR", "TAG_LINER", "TAG_ENAMEL"]
 
 # local block tags (mapped to solver DOM_* by the integration layer)
@@ -176,20 +182,22 @@ def _arc_xy(r: float, x0: float, x1: float, n: int = 24, sign: float = 1.0) -> n
     return np.stack([xs, ys], axis=1)
 
 
-def stator_unit_blocks(p: Dict, density: float = 1.0) -> List[Tuple]:
-    """ONE 30-deg stator unit as TWO warped tensor grids (premeshed), fully
-    conforming by construction — the same treatment as the rotor unit:
+def stator_half_mesh(p: Dict, density: float = 1.0):
+    """HALF a slot-pair unit — local theta in [0 .. unit/2], wound-tooth axis
+    on +Y (local theta = 0), tooth2/V-notch axis on the theta = unit/2 ray.
+    Two warped tensor grids (premeshed), conforming by construction:
 
-      T1 [0 .. x_cut] x [bore arc .. OD arc]: x-columns anchored on every
+      T1 [0 .. wall] x [bore arc .. OD arc]: x-columns anchored on every
          vertical wall (tooth, liner, wire column, tooth2 wall x_cut); rows
          blend bore arc -> exact envelope/wire levels -> slot bottom -> OD
-         arc.  Domain tags per cell from the (column, row) intervals.
-      T2 [x_cut .. 15-deg axis] x [apex .. OD arc]: the V-notch air; columns
+         arc.  Domain tags per cell from the (column, row) intervals.  Below
+         the V apex `wall` is the unit ray, above it the x_cut wall.
+      T2 [x_cut .. unit/2 axis] x [apex .. OD arc]: the V-notch air; columns
          warp from the vertical wall (+ OD fillet arc above y_tan) to the
          unit axis; shares T1's row levels on the wall so the seam welds.
 
-    Unit = half + mirror about the tooth2 axis.  Sub-mm bore fillets (r1)
-    and the fill_r2 apex rounding stay deferred (coverage ~ -0.3% iron).
+    Sub-mm bore fillets (r1) and the fill_r2 apex rounding stay deferred
+    (coverage ~ -0.3% iron).  Returns (V, T, G).
     """
     f = stator_unit_frame(p)
     R_o, R_i = f["outer_r"], f["inner_r"]
@@ -203,10 +211,16 @@ def stator_unit_blocks(p: Dict, density: float = 1.0) -> List[Tuple]:
     xc0 = xt + ins + wdx / 2.0
     xc1 = xc0 + ww
     x_env0, x_env1 = xt + ins, xs2 - ins
-    unit_half = math.radians(15.0)
+    # HALF the slot-pair unit — 360/(num_slots/2)/2, NOT a constant.  The
+    # frame (and cadquery_geometry's slot cutter) derive every wall from this
+    # angle; hardcoding 15 deg silently built a 30 deg unit for a machine whose
+    # unit is 60 deg (12 slots), so the assembler's 360/half_slots clone pitch
+    # left a hole between every pair of units.
+    unit_half = float(f["half_ang"])
     sa = math.sin(unit_half)
+    tan_half = math.tan(unit_half)
     x_cut = f["x_cut"]
-    apex_y = x_cut / math.tan(unit_half)
+    apex_y = x_cut / tan_half
     fill_od = float(p.get("stator_fillet_r", 0.0) or 0.0)
     if fill_od > 1e-6 and p.get("_od_r"):
         # fillet arc measured from the REAL CadQuery contour (circle fit) —
@@ -276,21 +290,54 @@ def stator_unit_blocks(p: Dict, density: float = 1.0) -> List[Tuple]:
             return cx_f + math.sqrt(max(fill_od ** 2 - (y - cy_f) ** 2, 0.0))
         return x_cut
 
+    def row_wall(fy):
+        """Where row `fy` leaves the UNIT — (x, y) of its outermost node.
+
+        Above the V apex the unit's outer boundary is the vertical tooth2 wall
+        x = x_cut.  BELOW the apex that wall has already crossed the unit axis
+        (r·sin(unit_half) < x_cut for r < r_apex), so the row must stop on the
+        RAY theta = unit_half instead — otherwise the half overshoots into its
+        own mirror and the clones overlap near the bore.  Root of
+        x − fy(x)·tan(unit_half) on [0, x_cut] (monotone: fy decays with x).
+        """
+        y_cut = fy(x_cut)
+        if y_cut >= apex_y - 1e-12:
+            return x_cut, y_cut
+        lo, hi = 0.0, x_cut
+        for _ in range(80):
+            mid = 0.5 * (lo + hi)
+            if mid - fy(mid) * tan_half > 0.0:
+                hi = mid
+            else:
+                lo = mid
+        xw = 0.5 * (lo + hi)
+        return xw, fy(xw)
+
     V1 = np.empty((n_rows * len(xg), 2))
     iC0 = n_rows - (nC + 1)                   # first row of zone C (yoke blend)
     wall_pts: List[Tuple[float, float]] = []   # tooth2-wall node per row (shared with T2)
     y_top_wall = math.sqrt(max(R_o ** 2 - od_tan_x ** 2, 0.0))  # fillet end on OD
     for i, fy in enumerate(rows):
-        ys = np.array([fy(x) for x in xg])
         xr = xg.copy()
         # last column follows the tooth2 wall + OD fillet; in zone C its row
         # levels blend to the FILLET END on the OD (not the vertical's OD).
         if i >= iC0:
             t = (i - iC0) / nC
             yw = y_sb * (1 - t) + y_top_wall * t
+            xw = wall_x(yw)
+            ys = np.array([fy(x) for x in xg])
         else:
-            yw = float(ys[-1])
-        xr[-1] = wall_x(yw)
+            xw, yw = row_wall(fy)
+            if xw < x_cut - 1e-12:
+                # ray-clipped row: squeeze ONLY the columns outside the slot
+                # ([xs2 .. x_cut] → [xs2 .. xw]) so the column set stays
+                # monotone.  The slot columns (tooth wall, liner faces, wire
+                # faces) keep their EXACT x — that is what makes every wire
+                # cell the true wire_w × wire_h rectangle.
+                out = xg > xs2 + 1e-12
+                xr[out] = xs2 + (xg[out] - xs2) * (xw - xs2) / (x_cut - xs2)
+            ys = np.array([fy(x) for x in xr])
+        xr[-1] = xw
         ys[-1] = yw
         wall_pts.append((xr[-1], yw))
         V1[i * len(xg):(i + 1) * len(xg), 0] = xr
@@ -342,8 +389,13 @@ def stator_unit_blocks(p: Dict, density: float = 1.0) -> List[Tuple]:
     G1 = np.concatenate([np.stack(tag_rows).ravel()] * 2)
 
     # ── T2: V half-notch air [x_cut .. axis] x [apex .. OD] ───────────────
-    wallV = [(x_cut, apex_y)] + [(xw, yw) for (xw, yw) in wall_pts
-                                 if yw > apex_y + 1e-9]
+    # the apex is T2's bottom vertex only when it lies OUTSIDE the bore; when
+    # the wall meets the axis inside the bore (r_apex < R_i) the notch simply
+    # starts at the bore row (an apex vertex there would mesh air inside the
+    # rotor bore).
+    r_apex_r = math.hypot(x_cut, apex_y)
+    wallV = ([(x_cut, apex_y)] if r_apex_r > R_i + 1e-9 else []) \
+        + [(xw, yw) for (xw, yw) in wall_pts if yw > apex_y + 1e-9]
     nV = len(wallV)
     mcols = max(2, n_of((R_o * sa - x_cut) * 1.2, 2))
     V2 = np.empty((nV * (mcols + 1), 2))
@@ -368,29 +420,17 @@ def stator_unit_blocks(p: Dict, density: float = 1.0) -> List[Tuple]:
     T2b = np.concatenate([np.stack([a2, b2, c2], 1), np.stack([a2, c2, d2], 1)])
     G2 = np.full(len(T2b), TAG_AIR, np.int16)
 
-    # ── T3: iron wedge UNDER the V apex [wall .. axis] × [bore .. r_apex] ──
-    # polar tensor: theta warps from the wall line asin(x_cut/r) to the axis;
-    # degenerates to the apex point at r_apex (fan) — conforming with the
-    # mirror on the axis; the straight wall seam T-stitches against T1.
-    r_apex_r = math.hypot(x_cut, apex_y)
-    nw3 = max(2, n_of(r_apex_r - R_i, 2))
-    m3 = max(2, mcols // 2)
-    V3 = np.empty(((nw3 + 1) * (m3 + 1), 2))
-    for i in range(nw3 + 1):
-        r = R_i + (r_apex_r - R_i) * i / nw3
-        th0 = math.asin(min(x_cut / r, 1.0))
-        th = np.linspace(th0, unit_half, m3 + 1)
-        V3[i * (m3 + 1):(i + 1) * (m3 + 1), 0] = r * np.sin(th)
-        V3[i * (m3 + 1):(i + 1) * (m3 + 1), 1] = r * np.cos(th)
-    idx3 = np.arange((nw3 + 1) * (m3 + 1)).reshape(nw3 + 1, m3 + 1)
-    a3 = idx3[:-1, :-1].ravel(); b3 = idx3[:-1, 1:].ravel()
-    c3 = idx3[1:, 1:].ravel();   d3 = idx3[1:, :-1].ravel()
-    T3b = np.concatenate([np.stack([a3, b3, c3], 1), np.stack([a3, c3, d3], 1)])
-    G3 = np.full(len(T3b), TAG_IRON, np.int16)
-
-    V = np.concatenate([V1, V2, V3])
-    T = np.concatenate([T1, T2b + len(V1), T3b + len(V1) + len(V2)])
-    G = np.concatenate([G1, G2, G3])
+    # NOTE — there is deliberately no third block under the V apex.  The old
+    # T3 ("iron wedge [wall .. axis] × [bore .. r_apex]") spanned theta from
+    # asin(x_cut/r) DOWN to unit_half, i.e. a reversed interval for every
+    # r < r_apex: that strip is on the far side of the unit axis and is already
+    # meshed by the mirrored half, so it laid a second (and, with the T1
+    # overshoot, a third) copy of the same iron on top of itself.  row_wall()
+    # now stops T1 exactly on the axis below the apex, so [0 .. unit_half] is
+    # covered once and the clones tile without gap or overlap.
+    V = np.concatenate([V1, V2])
+    T = np.concatenate([T1, T2b + len(V1)])
+    G = np.concatenate([G1, G2])
     p0, p1, p2 = V[T[:, 0]], V[T[:, 1]], V[T[:, 2]]
     ar2 = (p1[:, 0] - p0[:, 0]) * (p2[:, 1] - p0[:, 1]) - \
           (p1[:, 1] - p0[:, 1]) * (p2[:, 0] - p0[:, 0])
@@ -398,9 +438,14 @@ def stator_unit_blocks(p: Dict, density: float = 1.0) -> List[Tuple]:
     T[cw] = T[cw][:, ::-1]
     keep = np.abs(ar2) > 1e-12
     T = T[keep]; G = G[keep]
+    return V, T, G
 
-    # mirror about the tooth2 axis (15 deg)
-    a2m = math.radians(90.0 - 15.0)
+
+def stator_unit_blocks(p: Dict, density: float = 1.0) -> List[Tuple]:
+    """ONE slot-pair unit = half + its mirror about the tooth2 axis, i.e. the
+    span [tooth axis .. tooth axis] with the V-notch at the centre."""
+    V, T, G = stator_half_mesh(p, density)
+    a2m = math.pi / 2.0 - float(stator_unit_frame(p)["half_ang"])
     Rm = np.array([[math.cos(2 * a2m), math.sin(2 * a2m)],
                    [math.sin(2 * a2m), -math.cos(2 * a2m)]])
     Vm = V @ Rm.T
@@ -886,33 +931,56 @@ def template_solver_halves(p: Dict, polys: Dict, outer_air_factor: float = 1.2,
     except Exception:
         pass
     # measure the stator OD fillet from the REAL contour (unit k=0 frame ==
-    # world): circle-fit of the arc between the V-notch wall and the OD —
-    # the parametric tangent-circle guess is ~0.5 mm off along the OD
+    # world — CadQuery puts a wound-tooth axis on +Y): circle-fit of the arc
+    # that rounds the corner where the V-notch wall x=x_cut meets the OD.
+    # The window is FILLET-sized around that corner and drops the vertices
+    # that lie on the OD circle / on the wall line, so only the arc itself is
+    # fitted — a window scaled to the unit (as before) swallows the whole OD
+    # run and the wall, and the least-squares circle through that mix came out
+    # ~3x the real fillet radius, which pushed the T2 notch block over the
+    # yoke (measured 3.6 % of the wedge meshed twice).
     try:
         f0 = stator_unit_frame(p)
         x_cut0, R_o0 = f0["x_cut"], f0["outer_r"]
+        rf0 = float(p.get("stator_fillet_r", 0.0) or 0.0)
+        y_c0 = math.sqrt(max(R_o0 ** 2 - x_cut0 ** 2, 0.0))
+        win = 2.2 * rf0 + 0.1
         g = polys["stator"]
+        # analytic tangent circle (vertical wall + OD) as the prior: only the
+        # vertices that already sit within 0.2·r of it are arc candidates, so
+        # a slot corner or a stray OD vertex inside the window cannot drag the
+        # least-squares fit.
+        cx_a = x_cut0 - rf0
+        cy_a = math.sqrt(max((R_o0 - rf0) ** 2 - cx_a ** 2, 0.0))
         pts = []
-        for gg in getattr(g, "geoms", [g]):
-            for ring in [gg.exterior] + list(gg.interiors):
-                Vc = np.asarray(ring.coords)
-                rr = np.hypot(Vc[:, 0], Vc[:, 1])
-                sel = ((rr > R_o0 - 4.5) & (rr < R_o0 + 0.005)
-                       & (Vc[:, 0] > x_cut0 - 4.6) & (Vc[:, 0] < x_cut0 + 0.3)
-                       & (Vc[:, 1] > 0.6 * R_o0))
-                pts.extend(Vc[sel].tolist())
+        if rf0 > 1e-6:
+            for gg in getattr(g, "geoms", [g]):
+                for ring in [gg.exterior] + list(gg.interiors):
+                    Vc = np.asarray(ring.coords)
+                    rr = np.hypot(Vc[:, 0], Vc[:, 1])
+                    d_a = np.hypot(Vc[:, 0] - cx_a, Vc[:, 1] - cy_a)
+                    sel = ((np.hypot(Vc[:, 0] - x_cut0, Vc[:, 1] - y_c0) < win)
+                           & (rr < R_o0 - 1e-6)               # off the OD
+                           & (Vc[:, 0] < x_cut0 - 1e-6)       # off the wall
+                           & (np.abs(d_a - rf0) < 0.2 * rf0))  # on the fillet
+                    pts.extend(Vc[sel].tolist())
         pts = np.asarray(pts)
         if len(pts) >= 6:
             A = np.c_[2 * pts[:, 0], 2 * pts[:, 1], np.ones(len(pts))]
             (cx, cy, c0), *_ = np.linalg.lstsq(A, (pts ** 2).sum(1), rcond=None)
-            p["_od_cx"], p["_od_cy"] = float(cx), float(cy)
-            p["_od_r"] = float(math.sqrt(c0 + cx * cx + cy * cy))
-            on_od = pts[np.hypot(pts[:, 0], pts[:, 1]) > R_o0 - 0.01]
-            on_wall = pts[np.abs(pts[:, 0] - x_cut0) < 0.05]
-            if len(on_od):
-                p["_od_tan_x"] = float(on_od[:, 0].min())
-            if len(on_wall):
-                p["_od_y_tan"] = float(on_wall[:, 1].min())
+            r_fit = float(math.sqrt(c0 + cx * cx + cy * cy))
+            # accept only a plausible fillet (a tangent circle sits at
+            # cx = x_cut − r, |c| = R_o − r); otherwise keep the parametric
+            # construction in stator_half_mesh
+            if (abs(r_fit - rf0) < 0.35 * rf0
+                    and abs(float(cx) - (x_cut0 - rf0)) < 0.35 * rf0):
+                p["_od_cx"], p["_od_cy"] = float(cx), float(cy)
+                p["_od_r"] = r_fit
+                rc = math.hypot(cx, cy)
+                # tangency points OF THE FITTED CIRCLE: on the OD along the
+                # centre ray, on the wall at the centre height
+                p["_od_tan_x"] = float(cx) * R_o0 / rc if rc > 1e-9 else x_cut0
+                p["_od_y_tan"] = float(cy)
     except Exception:
         pass
     Vs, Ts, Gs = stitch_hanging(*assemble_stator_half(
@@ -1024,30 +1092,49 @@ def stitch_hanging(V: np.ndarray, T: np.ndarray, G: np.ndarray,
 
 def assemble_stator_half(p: Dict, density: float = 1.0,
                          outer_air_factor: float = 1.2, n_sectors: int = 1):
-    """Stator half [bore..outer air] from rotated unit clones — full 360°
-    (n_sectors=1) or one [0..360/n_sectors] wedge.  Unit k covers the world
-    span [(n-1-k)·unit .. (n-k)·unit] (tooth axes at 0°+30k), so the wedge is
-    the SAME first clones as the full ring and its radial cuts fall exactly
-    on wound-tooth axes with clone-identical node sets (solver master-slave
-    pairs them by radius).  Local template tags; the solver integration
-    remaps to DOM_* and renumbers coils by centroid."""
+    """Stator half [bore..outer air] from rotated HALF-unit clones — full 360°
+    (n_sectors=1) or one [0..360/n_sectors] wedge.
+
+    The clone grid is anchored on the CadQuery wound-tooth axes, which sit at
+    90° + k·unit (get_2d_polygons rotates the +Y slot pair by i·slot_angle).
+    Depending on num_slots that lands the θ=0 cut either ON a tooth axis
+    (90 ≡ 0 mod unit, e.g. 24 slots) or on a V-notch axis (90 ≡ unit/2, e.g.
+    12 slots) — placing whole tooth-to-tooth units is only correct in the
+    first case.  Cloning HALVES covers both: every half-cell [j·unit/2 ..
+    (j+1)·unit/2] gets the direct or the mirrored half depending on which of
+    its two edges is the tooth axis.  The wedge cut rays therefore always land
+    on a mirror axis with clone-identical node sets (the solver master-slave
+    pairs them by radius).  Local template tags; the solver integration remaps
+    to DOM_* and renumbers coils by centroid."""
     ns = max(1, int(n_sectors))
     half_slots = int(p["num_slots"]) // 2
     if half_slots % ns:
         raise ValueError(f"stator: {half_slots} units not divisible by {ns} sectors")
-    n_units = half_slots // ns
     unit = math.radians(360.0 / half_slots)
-    Vu, Tu, Gu = mesh_blocks(stator_unit_blocks(p, density))
+    uh = 0.5 * unit
+    Vh, Th, Gh = stator_half_mesh(p, density)
+    Vhm = Vh @ np.array([[-1.0, 0.0], [0.0, 1.0]])   # mirror about the tooth axis
+    Thm = Th[:, ::-1]
+    phi0 = (math.pi / 2.0) % unit                    # first tooth axis ≥ 0
+
+    def _on_axis(a):                                 # a ≡ phi0 (mod unit)?
+        r = (a - phi0) % unit
+        return min(r, unit - r) < 1e-9
+
+    n_half = 2 * half_slots // ns
     Vs = []; Ts = []; Gs = []; off = 0
-    for k in range(n_units):
-        if ns == 1:
-            rot = -k * unit                    # unit frame: +Y axis; clone CW
+    for j in range(n_half):
+        lo = j * uh
+        if _on_axis(lo):
+            a_t, Vu, Tu = lo, Vhm, Thm          # tooth on the CW edge  → mirror
+        elif _on_axis(lo + uh):
+            a_t, Vu, Tu = lo + uh, Vh, Th       # tooth on the CCW edge → direct
         else:
-            # unit at rot=0 spans world [90°-unit .. 90°]; place clone k on
-            # [k·unit .. (k+1)·unit] so the wedge is [0 .. 360/ns] exactly
-            rot = (k + 1) * unit - math.pi / 2.0
-        Vs.append(_rotate(Vu, rot))
-        Ts.append(Tu + off); Gs.append(Gu); off += len(Vu)
+            raise ValueError("stator: tooth axes (90°+k·%.3f°) are not aligned "
+                             "with the θ=0 cut — no half-cell tiling"
+                             % math.degrees(unit))
+        Vs.append(_rotate(Vu, a_t - math.pi / 2.0))
+        Ts.append(Tu + off); Gs.append(Gh); off += len(Vu)
     V = np.concatenate(Vs); T = np.concatenate(Ts); G = np.concatenate(Gs)
     V, T, G = _weld(V, T, G)
     # outer air ring on the OD node angles.  _ring_grid's angle convention is

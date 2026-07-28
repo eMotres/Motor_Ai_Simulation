@@ -1368,6 +1368,56 @@ def _params_from_geo_dict(g: dict):
         num_wires_per_slot=int(g["num_wires_per_slot"]))
 
 
+def _spectral_ddt_series(x, kmax, dt):
+    """Periodic time-derivative of a one-period series, truncated to `kmax`
+    harmonics.
+
+    The rotor advances in DISCRETE slip-node steps, so psi(t) carries a
+    frame-to-frame quantisation jitter that a raw finite difference amplifies
+    into a jagged back-EMF.  Reconstructing the derivative from the LOW
+    harmonics keeps the genuine fundamental + slot-ripple content and drops the
+    quantisation floor near Nyquist.  It is also PERIODIC by construction,
+    which np.gradient is not: np.gradient falls back to a ONE-SIDED difference
+    at the two end frames, and V_peak is a max over the series, so those two
+    frames set the reported peak (this is why the P1 and P2 branches reported
+    V_peak ~11 % apart on the same physics).  ONE implementation, shared by
+    both element orders.
+    """
+    x = np.asarray(x, float); N = x.size
+    if N < 4:
+        return np.array([(x[(i + 1) % N] - x[(i - 1) % N]) / (2 * dt)
+                         for i in range(N)])
+    F = np.fft.rfft(x)
+    if kmax + 1 < F.size:
+        F[kmax + 1:] = 0.0
+    return np.fft.irfft(F * (1j * 2 * np.pi * np.fft.rfftfreq(N, d=dt)), n=N)
+
+
+def _vdrive_copper_loss(p, geo, IA, IB, IC, n_parallel, coil_temp_c,
+                        end_winding_factor):
+    """DC copper loss from the SOLVED phase currents (voltage drive only).
+
+    Under voltage drive the current is the ANSWER, not the input: the
+    `copper_loss_W` call at the top of the transient runs on the CONFIG
+    `I_phase_rms` long before the circuit has solved anything, and nothing
+    recomputed it — so P_cu (and through it P_loss_total and the efficiency)
+    was wrong by (I_solved/I_config)^2.  Recompute it here, on the settled
+    reported window, through the SAME physical model (rho(T)*J^2*V_cu*k_end).
+
+    IA/IB/IC are the PER-BRANCH conductor currents (see `_currents`), so the
+    phase rms is the branch rms times n_parallel.  Returns
+    (P_cu_W, k_end, R_phase_solved, I_phase_rms_solved).
+    """
+    _a = np.asarray(IA, float); _b = np.asarray(IB, float)
+    _c = np.asarray(IC, float)
+    _rms_branch = math.sqrt(float(np.mean(_a ** 2 + _b ** 2 + _c ** 2)) / 3.0)
+    _I_ph = _rms_branch * float(max(n_parallel, 1))
+    _P, _k_end, _R = copper_loss_W(
+        p, geo, _I_ph, n_parallel,
+        coil_temp_c=coil_temp_c, end_winding_factor=end_winding_factor)
+    return float(_P), float(_k_end), float(_R), float(_I_ph)
+
+
 def fem_transient_sliding_band(
     n_steps_per_period: int = 12,
     n_periods: float = 1.0,
@@ -3530,9 +3580,14 @@ def fem_transient_sliding_band(
         # This is a SEPARATE, longer skip from the demag one below — they are
         # applied in sequence, never double-counted: each strips its OWN prefix
         # and decrements n_total/n_periods by its own amount.
+        # v_drive_diag is per-FRAME like every other series here, so it must be
+        # trimmed with them — otherwise its indices are offset by _vskip against
+        # I/psi/T and the reported max residual is the SETTLING residual, not
+        # the steady-state one.
         _v2_lists = (_T2, _psiA, _psiB, _psiC, _IA, _IB, _IC, _tt,
                      _hsx2, _hsy2, _hrx2, _hry2, _hcx2, _hcy2,
-                     _histA_rot2, _pic_iters)
+                     _histA_rot2, _pic_iters,
+                     _v_diag["iters"], _v_diag["resid"])
         if _vdrive and _vskip:
             n_total -= _vskip
             n_periods = float(n_periods) - float(_v_settle_periods)
@@ -3555,12 +3610,33 @@ def fem_transient_sliding_band(
             n_periods = float(n_periods) - 1.0
             for _lst in (_T2, _psiA, _psiB, _psiC, _IA, _IB, _IC, _tt,
                          _hsx2, _hsy2, _hrx2, _hry2, _hcx2, _hcy2,
-                         _histA_rot2, _pic_iters):
+                         _histA_rot2, _pic_iters,
+                         _v_diag["iters"], _v_diag["resid"]):
                 if len(_lst) > _dmskip:
                     del _lst[:_dmskip]
             if _tt:
                 _t0s = _tt[0]
                 _tt[:] = [_t - _t0s for _t in _tt]
+
+        # ── Voltage drive: copper loss from the SOLVED current ───────────────
+        # `copper_loss_W` ran near the top of this function on the CONFIG
+        # I_phase_rms — but under voltage drive the current is the ANSWER, not
+        # the input, and nothing recomputed it.  P_cu (and through it
+        # P_loss_total_W and the efficiency) was wrong by (I_solved/I_config)².
+        # Recompute on the SETTLED reported window through the same
+        # ρ(T)·J²·V_cu·k_end model.  Same fix, same guard, as the P1 path below:
+        # CURRENT drive is untouched, so those results stay bit-identical.  Only
+        # the DC I²R part is config-dependent; the AC (proximity) part is taken
+        # from the SOLVED coil field and was already right.
+        if _vdrive and _IA:
+            _P_cu_old = float(P_cu)
+            P_cu, _k_end_used, _R_solved, _I_ph_solved = _vdrive_copper_loss(
+                p, geo, _IA, _IB, _IC, n_parallel, coil_temp_c,
+                end_winding_factor)
+            log.info("P2 vdrive copper: I_phase_solved=%.2f A rms (config %.2f) "
+                     "-> P_cuDC %.1f -> %.1f W (R_phase=%.6g ohm)",
+                     _I_ph_solved, float(I_phase_rms), _P_cu_old, float(P_cu),
+                     _R_solved)
 
         # ── LOSS post-processing (rotor_eddy) ─────────────────────────────────
         # Same architecture as the P1 app path: the field is magnetostatic per
@@ -3697,11 +3773,29 @@ def fem_transient_sliding_band(
         _omega_m2 = 2.0 * math.pi * rpm / 60.0
         P_airgap_avg2 = float(Tavg * _omega_m2)
         P_mech_avg2 = P_airgap_avg2 - (P_fe_avg2 + P_mag_avg2 + P_shaft_avg2)
-        # back-EMF V = R·i + dψ/dt (central diff on the reported window)
+        # Terminal voltage V = R·i + dψ/dt — the SAME two-term formula and the
+        # SAME spectral estimator the P1 path uses.  Two reporting-only bugs
+        # lived here, and together they made the two element orders disagree on
+        # V_peak by ~11-13 % for runs whose FIELDS agree to ~1.5 %:
+        #   • np.gradient is NOT periodic — it drops to a one-sided difference
+        #     at the first and last frame, and V_peak is a max over the series,
+        #     so those two edge frames set the reported peak.  The spectral
+        #     derivative (`_spectral_ddt_series`, shared with P1) is periodic by
+        #     construction and truncates the slip-node quantisation jitter.
+        #   • the R·i drop was in the comment but never in the code, so P2
+        #     reported the back-EMF where P1 reports the terminal voltage.
+        # ψ and I are per-branch on BOTH paths (identical sc_psi = L·NS/n_par),
+        # so the two are directly comparable.  Reporting only: the circuit solve
+        # closes on its own residual and never reads this series.
+        _Kv2 = max(1, min(5, (int(n_total) // 2) - 1))
+
         def _ddt(arr):
             a = np.asarray(arr, float)
-            return (np.gradient(a) / dt).tolist() if a.size > 1 else [0.0] * a.size
-        VA = _ddt(_psiA); VB = _ddt(_psiB); VC = _ddt(_psiC)
+            return (_spectral_ddt_series(a, _Kv2, dt).tolist() if a.size > 1
+                    else [0.0] * a.size)
+        VA = [R_phase * i + e for i, e in zip(_IA, _ddt(_psiA))]
+        VB = [R_phase * i + e for i, e in zip(_IB, _ddt(_psiB))]
+        VC = [R_phase * i + e for i, e in zip(_IC, _ddt(_psiC))]
         Vpk = float(np.max(np.abs(VA + VB + VC))) if _psiA else 0.0
         _ang = [(k / n_total) * period_mech * n_periods for k in range(n_total)]
         log.info("P2 belt transient done: %d frames, T_avg=%.5f Nm, "
@@ -3767,9 +3861,11 @@ def fem_transient_sliding_band(
             "drive": ("voltage" if _vdrive else "current"),
             "v_phase_peak_V": float(v_phase_peak) if _vdrive else None,
             "v_delta_deg": float(v_delta_deg) if _vdrive else None,
-            # circuit-iteration convergence stats (per frame, incl. settling) +
-            # the honest steady-state quality gauge: mean phase current over the
-            # REPORTED window (≈0 A on a converged periodic orbit).
+            # circuit-iteration convergence stats, one entry per frame of the
+            # REPORTED window (settling frames stripped with every other series,
+            # so the indices line up with I/psi/T) + the honest steady-state
+            # quality gauge: mean phase current over that window (≈0 A on a
+            # converged periodic orbit).
             "v_drive_diag": (_v_diag if _vdrive else None),
             "v_dc_residual_A": (round(float(np.mean(np.asarray(_IA, float))), 3)
                                 if (_vdrive and _IA) else None),
@@ -3948,7 +4044,13 @@ def fem_transient_sliding_band(
                 return _Pro0 @ _x
             return _bs
 
-        _the0 = _m.radians(0.0 * _pp + DAXIS_SHIFT_DEG)  # theta_eff=0 electrical
+        # θ_eff = 0 electrical, in the SAME frame `_currents`/`_voltages` use —
+        # the per-topology AUTO-calibrated offset, not the legacy hard-coded
+        # DAXIS_SHIFT_DEG (which is only right for one motor).  The absolute
+        # offset cancels (`_align` below measures the PM-flux angle relative to
+        # it), so this is a consistency fix, not a numerical one; the P2
+        # initialiser already used daxis_eff.
+        _the0 = _m.radians(0.0 * _pp + daxis_eff)
 
         def _park(_xa_, _xb_, _xc_, _th):
             return ((2.0 / 3.0) * (_xa_ * _m.cos(_th) + _xb_ * _m.cos(_th - 2.094395102393195)
@@ -4521,13 +4623,17 @@ def fem_transient_sliding_band(
     # ── Voltage drive: drop the settling period — every series below is
     #    steady-state.  n_total/n_periods return to the REQUESTED window so all
     #    per-period post-processing (spectra, band-limit, summaries) is unchanged.
+    #    v_drive_diag is per-FRAME too, so it is trimmed WITH the rest: left
+    #    untrimmed its indices were offset by _vskip against I/psi/T and the
+    #    reported max residual was the SETTLING one, not the steady-state one.
     if _vdrive and _vskip:
         n_total -= _vskip
         n_periods = float(n_periods) - float(_v_settle_periods)
         _slice_lists = [T_series, psiA, psiB, psiC, IA, IB, IC, tt, _mshift_hist,
                         _hist_sx, _hist_sy, _hist_rx, _hist_ry, _hist_mx, _hist_my,
                         _hist_cx, _hist_cy, _hist_shx, _hist_shy,
-                        _hist_Am, _hist_Ash, _hist_A_rotor]
+                        _hist_Am, _hist_Ash, _hist_A_rotor,
+                        _v_diag["iters"], _v_diag["resid"]]
         try:
             _slice_lists.append(_eddy_P)   # exists only when eddy=True
         except NameError:
@@ -4546,7 +4652,8 @@ def fem_transient_sliding_band(
         _slice_lists = [T_series, psiA, psiB, psiC, IA, IB, IC, tt, _mshift_hist,
                         _hist_sx, _hist_sy, _hist_rx, _hist_ry, _hist_mx, _hist_my,
                         _hist_cx, _hist_cy, _hist_shx, _hist_shy,
-                        _hist_Am, _hist_Ash, _hist_A_rotor]
+                        _hist_Am, _hist_Ash, _hist_A_rotor,
+                        _v_diag["iters"], _v_diag["resid"]]
         try:
             _slice_lists.append(_eddy_P)   # exists only when eddy=True
         except NameError:
@@ -4556,6 +4663,25 @@ def fem_transient_sliding_band(
                 del _lst[:_dmskip]
         _t0_new = tt[0] if tt else 0.0
         tt[:] = [_t - _t0_new for _t in tt]
+    # ── Voltage drive: copper loss from the SOLVED current ───────────────────
+    # `copper_loss_W` ran near the top of this function on the CONFIG
+    # I_phase_rms — but under voltage drive the current is the ANSWER, not the
+    # input, and nothing recomputed it.  P_cu (and through it P_loss_total_W,
+    # P_mech and the efficiency) was therefore wrong by (I_solved/I_config)²:
+    # a run drawing 134 A rms still reported the 60 A number.  Recompute here,
+    # on the SETTLED reported window, through the same ρ(T)·J²·V_cu·k_end model.
+    # CURRENT drive is untouched (the config current IS the current), so this is
+    # strictly guarded by `_vdrive` — the current-drive results are bit-identical.
+    # Only the DC I²R part is config-dependent; the AC (proximity) part below is
+    # computed from the SOLVED coil field and was already correct.
+    if _vdrive and IA:
+        _P_cu_old = float(P_cu)
+        P_cu, _k_end_used, _R_solved, _I_ph_solved = _vdrive_copper_loss(
+            p, geo, IA, IB, IC, n_parallel, coil_temp_c, end_winding_factor)
+        log.info("vdrive copper: I_phase_solved=%.2f A rms (config %.2f) -> "
+                 "P_cuDC %.1f -> %.1f W (R_phase=%.6g ohm)",
+                 _I_ph_solved, float(I_phase_rms), _P_cu_old, float(P_cu),
+                 _R_solved)
     # ── Spectral periodic time-derivative (truncated to K harmonics) ─────────
     # The rotor advances in DISCRETE slip-node steps, so ψ(t) and B(t) carry a
     # tiny frame-to-frame quantisation jitter.  A raw finite-difference dψ/dt
@@ -4567,14 +4693,10 @@ def fem_transient_sliding_band(
     _two_pi2 = _TWO_PI_SQ      # shared with simulation/losses.py
 
     def _spectral_ddt(x, kmax):
-        x = np.asarray(x, float); N = x.size
-        if N < 4:
-            return np.array([(x[(i + 1) % N] - x[(i - 1) % N]) / (2 * dt)
-                             for i in range(N)])
-        F = np.fft.rfft(x)
-        if kmax + 1 < F.size:
-            F[kmax + 1:] = 0.0
-        return np.fft.irfft(F * (1j * 2 * np.pi * np.fft.rfftfreq(N, d=dt)), n=N)
+        # module-level `_spectral_ddt_series` — ONE implementation, now shared
+        # with the P2 branch (which used np.gradient and reported a V_peak
+        # ~11 % off P1 on the same physics).
+        return _spectral_ddt_series(x, kmax, dt)
 
     # The rotor can only sit on DISCRETE slip nodes (≈ N_slip/4 ≈ 72 positions
     # per electrical period), so B depends only on the quantised angle m_shift.
@@ -4681,7 +4803,8 @@ def fem_transient_sliding_band(
         T_series = list(_T_raw);  Trip = Trip_raw
     Tavg = float(np.mean(_T_raw)) if _T_raw else Tavg
     Vpk = float(max(max(map(abs, VA)), max(map(abs, VB)), max(map(abs, VC)))) if VA else 0.0
-    # P_cu already computed physically (ρ(T)·J²·V·k_end) near the top.
+    # P_cu already computed physically (ρ(T)·J²·V·k_end) near the top — and, on
+    # a VOLTAGE drive, re-computed above from the solved current.
 
     # ── Torque harmonic spectrum over ONE electrical period ──────────────────
     # The single most telling diagnostic for "is this periodic or chaotic": a
@@ -5155,9 +5278,11 @@ def fem_transient_sliding_band(
         "drive": ("voltage" if _vdrive else "current"),
         "v_phase_peak_V": float(v_phase_peak) if _vdrive else None,
         "v_delta_deg": float(v_delta_deg) if _vdrive else None,
-        # circuit-iteration convergence stats (per frame, incl. settling) + the
-        # honest steady-state quality gauge: mean phase current over the
-        # REPORTED window (≈0 A on a converged periodic orbit).
+        # circuit-iteration convergence stats, one entry per frame of the
+        # REPORTED window (settling frames stripped with every other series, so
+        # the indices line up with I/psi/T) + the honest steady-state quality
+        # gauge: mean phase current over that window (≈0 A on a converged
+        # periodic orbit).
         "v_drive_diag": (_v_diag if _vdrive else None),
         "v_dc_residual_A": (round(float(np.mean(np.asarray(IA, float))), 3)
                             if (_vdrive and IA) else None),

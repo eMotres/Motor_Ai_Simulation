@@ -2732,13 +2732,29 @@ def fem_transient_sliding_band(
                        shape=(N2, uniq.size)).tocsr()
             return Pro, np.unique(inv[_D2_ids])
 
-        # ── P2 flux linkage (vertex-average per stator coil element) ─────────
-        _As_v = vdof[:nsn]                            # stator vertex -> P2 dof
+        # ── P2 flux linkage (EXACT area-average per stator coil element) ─────
+        # A P2 field's area average over a triangle is the mean of its three
+        # EDGE-MIDPOINT dofs, NOT the mean of its vertex dofs: the quadratic
+        # vertex shape function N_i = λ_i(2λ_i−1) integrates to EXACTLY ZERO over
+        # the element, while each edge bubble 4λ_jλ_k integrates to area/3.  So
+        #     (1/Ω)∫A dΩ = (A_e1 + A_e2 + A_e3)/3.
+        # Using the P1 centroid formula (vertex mean) on a P2 field is not an
+        # approximation, it is the wrong quadrature (checked against a 6th-order
+        # quadrature on an analytic quadratic: the edge rule is exact to 4e-16
+        # relative, the vertex rule is off by ~5 % even on a uniform mesh).
+        #
+        # This is also the ONLY choice that keeps ψ energy-consistent with the
+        # circuit: f_coil2 = ∫ N_i J_z dΩ puts EXACTLY ZERO on the vertex dofs
+        # (asm of the unit load on ElementTriP2 returns 3e-17 there) and area/3
+        # on each edge dof, so f_coil2·A ≡ J_z·Σ_e area_e·(edge mean).  ψ and the
+        # coil source therefore integrate the SAME functional; the old ψ was
+        # built from precisely the dofs the source cannot excite.
+        _As_e = fdof[mesh_all.t2f[:, :nst]]            # (3, nst) stator edge dofs
         _sc_psi2 = p.stack_length * NS / float(n_parallel)
 
         def _psi2(A2):
-            As_ = A2[_As_v]
-            A_tri = (As_[Tts[0]] + As_[Tts[1]] + As_[Tts[2]]) / 3.0
+            Ae_ = A2[_As_e]
+            A_tri = (Ae_[0] + Ae_[1] + Ae_[2]) / 3.0
             pa = pb = pc = 0.0
             for idx_, ar_, dir_, ph_ in coil_info:
                 sa_ = float(np.sum(ar_))

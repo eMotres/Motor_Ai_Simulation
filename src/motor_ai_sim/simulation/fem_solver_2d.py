@@ -3363,6 +3363,53 @@ def fem_transient_sliding_band(
                 # and self-arresting (a weaker magnet makes a weaker demagnetising
                 # field), so this converges in a handful of passes; the cap is a
                 # backstop, not a schedule.
+                #
+                # ── DO NOT move this rule inside the Newton loop ─────────────────
+                # Tried on branch `demag-in-newton` (3aaf8d1, 2acdeb5), reverted in
+                # ece72ea, and then measured to a conclusion.  30 mm 12s14p, 60 A,
+                # F45SH_120C, P2, 24 frames — the pinned p2_demag case:
+                #
+                #   judged at        restart   de-rated  Br_mean   T_avg     s
+                #   rrel<1e-7 (here) cold        241/490  0.85383  0.40562  798
+                #   rrel<1e-7        warm A2     241/490  0.85383  0.40562  288
+                #   rrel<1e-6 in-loop warm       219/490  0.87037  0.41756  190
+                #   rrel<1e-6, cap 60 warm       219/490  0.86958  0.41756  244
+                #
+                # It is NOT path dependence and NOT the cold restart.  Warm-starting
+                # the re-solve from the field just converged (see below) reproduces
+                # this code to 5e-8 on the whole Br map, with the SAME 277 rule
+                # evaluations — so where the re-solve starts provably cannot reach
+                # the answer.  Nor is either number a cap artefact on the magnet
+                # side: the in-loop scheme gives the same 219 at a settling cap of
+                # 24 and of 60.
+                #
+                # What moves the answer is WHEN the rule is allowed to look.  A
+                # GLOBAL relative residual of 1e-6 is not a converged field INSIDE a
+                # magnet corner — the corner is the last place Newton resolves.
+                # Measured at the FIRST look of each frame, which is the look that
+                # decides everything, because the magnet is still at its strongest
+                # there and that is where the frame's worst demagnetising field is:
+                #
+                #   frame   worst H, rrel<1e-7   worst H, rrel 3e-7..1e-6
+                #     1        -1072 kA/m            -993 kA/m
+                #     6         -934                 -669
+                #     8         -853                 -650
+                #    11         -858                 -728
+                #
+                # Same rotor position, same incoming magnet (Br_mean agrees to
+                # 0.2 %), 8-30 % less demagnetising field — always in that
+                # direction, because a warm-started Newton builds the armature
+                # reaction UP toward the answer and an early iterate has not got
+                # there yet.  The rule is monotone: a worst-case field missed at the
+                # first look is missed for good, since every later pass of that
+                # frame sees an already-weakened magnet and therefore a milder
+                # field.  That is the whole of the "in-Newton reports less
+                # demagnetisation and more torque", and why it grows with load
+                # (3 elements at 32 A, 24 at 60 A).
+                #
+                # So the rule may only see a field that has passed the frame's OWN
+                # convergence test.  The 3.3x that change bought is available
+                # without it, from the warm start below.
                 if _dmst is not None:
                     _bxq_d, _byq_d, _dxq_d = _p2_B_at_quad(b2, A2)
                     _ar_d = _dxq_d.sum(axis=1)
@@ -3377,6 +3424,16 @@ def fem_transient_sliding_band(
                              + Ist['B'] * f_coil2['B'] + Ist['C'] * f_coil2['C'])
                         _bff2 = np.asarray(Pro.T @ f).ravel()[_free2]
                         _dm_pass += 1
+                        # Re-solve from the field we just converged, not from the
+                        # previous FRAME's.  The magnet moved by a fraction of a
+                        # per cent, so this start is far closer than _A_start and
+                        # Newton needs 3-5 iterations instead of 12-19.  The rule
+                        # still only ever judges a field that passed the frame's
+                        # convergence test, so the judging sequence is untouched —
+                        # measured identical to the cold restart (max |dBr| 5e-8
+                        # over 490 elements, same 241/490, T_avg to 8 digits) at
+                        # 288 s against 798 s.
+                        _A_start = A2.copy()
                         continue                     # re-solve THIS frame
                 break
 

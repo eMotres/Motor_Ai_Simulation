@@ -51,6 +51,14 @@ from motor_ai_sim.simulation.sb_domains import (  # noqa: F401  (re-export)
 # existing imports off fem_solver_2d keep working.
 from motor_ai_sim.simulation.angle_ddt import make_angle_ddt as _make_angle_ddt
 from motor_ai_sim.simulation.demag import MagnetDemag as _MagnetDemag
+from motor_ai_sim.simulation.drive import (
+    Excitation as _Excitation,
+    park as _park_dq,
+    inverse_park as _ipark_dq,
+    circuit_residual_ll as _circ_r_ll,
+    circuit_jacobian_ll as _circ_M_ll,
+    aitken_flux_anchor as _aitken_flux_anchor,
+)
 from motor_ai_sim.simulation.losses import (
     rotor_eddy_tags as _rotor_eddy_tags,
     rotor_mu_lookup as _rotor_mu_lookup,
@@ -1647,14 +1655,14 @@ def fem_transient_sliding_band(
     # el_deg).  Cached per topology; the I=0 calibration run is recursion-guarded.
     daxis_eff = _resolve_daxis_shift(p, geo, wind, pole_pairs, geo_override, n_sectors)
 
-    def _currents(rotor_angle_deg):
-        Ipk = float(I_phase_rms) / n_parallel * math.sqrt(2)
-        # d-axis phase offset so γ=0 = q-axis — per-topology auto-calibrated value
-        # (daxis_eff) shared by the current & voltage excitation in this solve.
-        te = math.radians(rotor_angle_deg * pole_pairs + gamma_deg + daxis_eff)
-        return {'A': Ipk * math.cos(te),
-                'B': Ipk * math.cos(te - 2 * math.pi / 3),
-                'C': Ipk * math.cos(te + 2 * math.pi / 3)}
+    # Imposed excitation (both drives) — simulation/drive.py.  One object carries
+    # the electrical frame both the current and the voltage waveform live in, so
+    # they cannot drift apart; the P1 and P2 branches below share it.
+    _exc = _Excitation(pole_pairs=pole_pairs, daxis_deg=daxis_eff,
+                       i_peak=float(I_phase_rms) / n_parallel * math.sqrt(2),
+                       gamma_deg=gamma_deg,
+                       v_peak=float(v_phase_peak), v_delta_deg=v_delta_deg)
+    _currents = _exc.currents
 
     # Voltage drive: imposed sinusoidal PHASE voltage in the same electrical
     # frame as the currents (v_delta_deg is directly comparable to γ), so a
@@ -1676,12 +1684,7 @@ def fem_transient_sliding_band(
                     "losses excluded; ΔP_harm = copper+iron harmonic cost)")
         rotor_eddy = False
 
-    def _voltages(rotor_angle_deg):
-        vpk = float(v_phase_peak)
-        te = math.radians(rotor_angle_deg * pole_pairs + v_delta_deg + daxis_eff)
-        return {'A': vpk * math.cos(te),
-                'B': vpk * math.cos(te - 2 * math.pi / 3),
-                'C': vpk * math.cos(te + 2 * math.pi / 3)}
+    _voltages = _exc.voltages
 
     # ── High-fidelity = genuinely higher resolution EVERYWHERE the noise lives ─
     # The raw torque ripple of the sliding-band transient carries a BROADBAND
@@ -2914,25 +2917,14 @@ def fem_transient_sliding_band(
             _x = np.zeros(Pro.shape[1]); _x[free] = xf
             return Pro @ _x
 
+        # Line-to-line Crank–Nicolson circuit residual + its 2×2 Jacobian —
+        # simulation/drive.py, shared with the P1 path below.  R_phase is the
+        # only run-dependent term, so it is bound here rather than captured.
         def _circ_r(psi, iA, iB, iv_prev, psi_prev, Vt, dtk):
-            """Line-to-line Crank–Nicolson circuit residual [V_AB, V_BC]."""
-            iC = -iA - iB
-            return np.array([
-                (Vt['A'] - Vt['B'])
-                - 0.5 * R_phase * (iA - iB + iv_prev['A'] - iv_prev['B'])
-                - ((psi[0] - psi[1]) - (psi_prev['A'] - psi_prev['B'])) / dtk,
-                (Vt['B'] - Vt['C'])
-                - 0.5 * R_phase * (iB - iC + iv_prev['B'] - iv_prev['C'])
-                - ((psi[1] - psi[2]) - (psi_prev['B'] - psi_prev['C'])) / dtk])
+            return _circ_r_ll(psi, iA, iB, iv_prev, psi_prev, Vt, dtk, R_phase)
 
         def _circ_M(qa, qb, dtk):
-            """∂[r_AB, r_BC]/∂[i_A, i_B] from the ∂ψ/∂i columns qa, qb.
-            i_C = −i_A − i_B, so ∂(i_B−i_C)/∂i_A = 1 and ∂/∂i_B = 2."""
-            return np.array([
-                [0.5 * R_phase + (qa[0] - qa[1]) / dtk,
-                 -0.5 * R_phase + (qb[0] - qb[1]) / dtk],
-                [0.5 * R_phase + (qa[1] - qa[2]) / dtk,
-                 1.0 * R_phase + (qb[1] - qb[2]) / dtk]])
+            return _circ_M_ll(qa, qb, dtk, R_phase)
 
         def _v_newton(Pro, free, A_start, i_start, Vt, dtk, iv_prev, psi_prev,
                       maxit):
@@ -3079,21 +3071,7 @@ def fem_transient_sliding_band(
             # PM-flux angle in the ABC frame whatever reference is used here.
             _the0 = _m.radians(0.0 * pole_pairs + daxis_eff)
 
-            def _park(_xa_, _xb_, _xc_, _th):
-                return ((2.0 / 3.0) * (_xa_ * _m.cos(_th)
-                                       + _xb_ * _m.cos(_th - 2.094395102393195)
-                                       + _xc_ * _m.cos(_th + 2.094395102393195)),
-                        -(2.0 / 3.0) * (_xa_ * _m.sin(_th)
-                                        + _xb_ * _m.sin(_th - 2.094395102393195)
-                                        + _xc_ * _m.sin(_th + 2.094395102393195)))
-
-            def _ipark(_d, _q, _th):
-                return (_d * _m.cos(_th) - _q * _m.sin(_th),
-                        _d * _m.cos(_th - 2.094395102393195)
-                        - _q * _m.sin(_th - 2.094395102393195),
-                        _d * _m.cos(_th + 2.094395102393195)
-                        - _q * _m.sin(_th + 2.094395102393195))
-
+            _park = _park_dq; _ipark = _ipark_dq   # simulation/drive.py
             _id0 = _iq0 = 0.0; _thal = _the0
             _psi_pm_d = 0.0; _Ldd = _Lqq = _Ldq = _Lqd = 1e-6
             _Aop = np.zeros(N2)
@@ -3519,23 +3497,10 @@ def fem_transient_sliding_band(
                 if _v_nspp > 0 and ((k + 1) % _v_nspp == 0) and (k + 1) < _vskip:
                     _v_bpsi.append((_pa, _pb))
                     if len(_v_bpsi) >= 3:
-                        _q0, _q1, _q2 = _v_bpsi[-3:]
-                        _new = {}
-                        for _ci, _ky in enumerate(('A', 'B')):
-                            _x0, _x1, _x2 = _q0[_ci], _q1[_ci], _q2[_ci]
-                            _d1 = _x1 - _x0; _d2 = _x2 - _x1; _dd = _d2 - _d1
-                            _new[_ky] = ((_x2 - _d2 * _d2 / _dd)
-                                         if abs(_dd) > 1e-15 else _x2)
-                        _new['C'] = -(_new['A'] + _new['B'])
-                        _corr = max(abs(_new['A'] - _pa), abs(_new['B'] - _pb))
-                        _drift = max(abs(_q2[0] - _q1[0]), abs(_q2[1] - _q1[1]))
-                        # Guarded anchor: once the boundary drift is below noise
-                        # the Δ² quotient divides noise by noise and the
-                        # "correction" EXPLODES — skip when already converged
-                        # (drift < 0.05 % of the PM flux) or when the
-                        # extrapolation is unstable (|corr| ≫ drift).
-                        _fs = max(abs(_pa), abs(_pb), 1e-6)
-                        if _drift < 5e-4 * _fs or _corr > 5.0 * _drift:
+                        # Δ²-extrapolation + its "already converged / unstable"
+                        # guard: simulation/drive.py, shared with the P1 path.
+                        _new, _corr, _drift = _aitken_flux_anchor(_v_bpsi)
+                        if _new is None:
                             log.info("P2 vdrive Aitken anchor SKIPPED at period %d "
                                      "(drift %.3g, corr %.3g Wb — converged/unstable)",
                                      (k + 1) // _v_nspp, _drift, _corr)
@@ -4052,17 +4017,7 @@ def fem_transient_sliding_band(
         # initialiser already used daxis_eff.
         _the0 = _m.radians(0.0 * _pp + daxis_eff)
 
-        def _park(_xa_, _xb_, _xc_, _th):
-            return ((2.0 / 3.0) * (_xa_ * _m.cos(_th) + _xb_ * _m.cos(_th - 2.094395102393195)
-                                   + _xc_ * _m.cos(_th + 2.094395102393195)),
-                    -(2.0 / 3.0) * (_xa_ * _m.sin(_th) + _xb_ * _m.sin(_th - 2.094395102393195)
-                                    + _xc_ * _m.sin(_th + 2.094395102393195)))
-
-        def _ipark(_d, _q, _th):
-            return (_d * _m.cos(_th) - _q * _m.sin(_th),
-                    _d * _m.cos(_th - 2.094395102393195) - _q * _m.sin(_th - 2.094395102393195),
-                    _d * _m.cos(_th + 2.094395102393195) - _q * _m.sin(_th + 2.094395102393195))
-
+        _park = _park_dq; _ipark = _ipark_dq   # simulation/drive.py
         _w = 2.0 * _m.pi * f_elec
         _V0 = _voltages(0.0)
         # Coupled phasor Picard: solve the dq STEADY-STATE circuit and the
@@ -4326,11 +4281,8 @@ def fem_transient_sliding_band(
                 _dpmA = _psi_pmA - _psi_prev['A']
                 _dpmB = _psi_pmB - _psi_prev['B']
                 _dpmC = _psi_pmC - _psi_prev['C']
-                _Mc = np.array([
-                    [0.5 * R_phase + (_Laa - _Lba) / _dt_k,
-                     -0.5 * R_phase + (_Lab - _Lbb) / _dt_k],
-                    [0.5 * R_phase + (_Lba - _Lca) / _dt_k,
-                     1.0 * R_phase + (_Lbb - _Lcb) / _dt_k]])
+                _Mc = _circ_M_ll((_Laa, _Lba, _Lca), (_Lab, _Lbb, _Lcb),
+                                 _dt_k, R_phase)
                 _bc = np.array([
                     (_Vt['A'] - _Vt['B']) - (_dpmA - _dpmB) / _dt_k
                     - 0.5 * R_phase * (_iv_prev['A'] - _iv_prev['B']),
@@ -4466,23 +4418,10 @@ def fem_transient_sliding_band(
             if _v_nspp > 0 and ((k + 1) % _v_nspp == 0) and (k + 1) < _vskip:
                 _v_bpsi.append((_psiA_c, _psiB_c))
                 if len(_v_bpsi) >= 3:
-                    _p0, _p1, _p2 = _v_bpsi[-3:]
-                    _new = {}
-                    for _ci, _ky in enumerate(('A', 'B')):
-                        _x0, _x1, _x2 = _p0[_ci], _p1[_ci], _p2[_ci]
-                        _d1 = _x1 - _x0; _d2 = _x2 - _x1; _dd = _d2 - _d1
-                        _new[_ky] = (_x2 - _d2 * _d2 / _dd) if abs(_dd) > 1e-15 else _x2
-                    _new['C'] = -(_new['A'] + _new['B'])
-                    _corr = max(abs(_new['A'] - _psiA_c), abs(_new['B'] - _psiB_c))
-                    _drift = max(abs(_p2[0] - _p1[0]), abs(_p2[1] - _p1[1]))
-                    # Guarded anchor: once the boundary drift is below noise the
-                    # Δ² quotient divides noise by noise and the "correction"
-                    # EXPLODES — skip when already converged (drift < 0.05 % of
-                    # the PM flux) or when the extrapolation is unstable
-                    # (|corr| ≫ drift).  Better to keep marching than to kick a
-                    # converged orbit right before the reported window.
-                    _flux_scale = max(abs(_psiA_c), abs(_psiB_c), 1e-6)
-                    if _drift < 5e-4 * _flux_scale or _corr > 5.0 * _drift:
+                    # Δ²-extrapolation + its "already converged / unstable"
+                    # guard: simulation/drive.py, shared with the P2 path.
+                    _new, _corr, _drift = _aitken_flux_anchor(_v_bpsi)
+                    if _new is None:
                         log.info("vdrive Aitken anchor SKIPPED at period %d "
                                  "(drift %.3g, corr %.3g Wb — converged/unstable)",
                                  (k + 1) // _v_nspp, _drift, _corr)

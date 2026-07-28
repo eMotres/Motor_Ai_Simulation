@@ -99,14 +99,13 @@ CASES = {
     # improvements — iron loss, demag, the settling pass — were added to P1 and
     # silently missed P2, each time because the P2 branch returns before that
     # code. Demag is physics: the two orders must agree on the magnet.
-    # NOTE: this case is slow (demag on P2 re-solves a frame until the magnet
-    # settles) and coarsening it does NOT help — passing mesh_size_mm 2.2 instead
-    # of 1.4 left every number identical to six digits, which means the request
-    # never reaches the mesher on this path. Suspect iron_template + geo_mesh:
-    # those build the iron from structured unit templates driven by the geometry,
-    # so the requested element size may be ignored. If so the Mesh tab's "Max
-    # element size" slider is dead in that configuration too — same defect as
-    # Normal deviation. Worth confirming before anyone tunes mesh density here.
+    # This case is slow (demag on P2 re-solves a frame until the magnet settles)
+    # and coarsening it does NOT help — but not for the reason first suspected.
+    # Measured: 1.4 mm and 2.2 mm both give 8195 triangles, while 0.9 mm gives
+    # 8481, with the template path ON and OFF alike. mesh_size_mm IS honoured;
+    # this geometry simply imposes a floor (0.2 mm air gap, fillets, a 2 mm wire)
+    # that already demands finer than 1.4 mm, so asking for coarser is a no-op.
+    # The cost is the demag outer loop, not the mesh.
     "p2_demag": dict(COMMON, element_order=2, demag=True,
                      I_phase_rms=60.0, gamma_deg=0.0),
 }

@@ -101,25 +101,6 @@ _PIC_TOL = 1e-3
 # The magnet Br convergence tolerance moved to simulation/demag.py with the rule
 # that uses it (DEMAG_TOL) — one definition, next to the code it governs.
 
-# Relative field residual at which the P2 Newton loop starts letting the magnet
-# see the field.  Loose enough that magnet and field settle together (the point
-# of doing it in-loop), tight enough that no numerical transient of the early
-# sweeps gets burned in by the monotone irreversible rule.
-#
-# Kept tight because it is free, NOT because it fixed anything: 1e-4 and 1e-6
-# give bit-identical results (130/490 de-rated, T=0.2313) at identical cost, so
-# the trigger point is not what this loop is sensitive to.
-#
-# OPEN: in-loop settling de-rates 130/490 where the frame-restart scheme
-# de-rated 133/490, torque 0.2313 vs 0.2293 (+0.9 %). Tightening the trigger was
-# tried and refuted as the cause. The remaining suspect is path dependence: the
-# de-rating rule is monotone and records the worst field an element has ever
-# seen, so a warm-started sequence of fields and a sequence of cold frame
-# re-solves need not record the same minimum even though both judge on
-# converged fields. Which path is the physical one is a real question, not a
-# tuning knob — do not paper over it by matching the old number.
-_DM_NEWTON_TOL = 1e-6
-
 # Single source of truth for the d-axis phase offset: the electrical angle added
 # to (rotor_angle·pole_pairs + γ) so that γ=0 lands on the q-axis.  MUST be
 # identical across every solve path (transient currents, static field, eddy) —
@@ -2875,26 +2856,6 @@ def fem_transient_sliding_band(
             # is monotone and self-arresting — a weaker magnet makes a weaker
             # demagnetising field — so this settles in a few passes; the cap is a
             # backstop, not a schedule.
-            def _dm_settle(_Acur):
-                """Load-line de-rating on the current field.
-
-                Returns the rebuilt right-hand side when at least one magnet
-                element moved, else None.  In-place on _mx_all/_my_all, so the
-                caller only has to take the new f.
-                """
-                _bxq, _byq, _dxq = _p2_B_at_quad(b2, _Acur)
-                _ar = _dxq.sum(axis=1)
-                _bxe = (_bxq * _dxq).sum(axis=1) / np.maximum(_ar, 1e-30)
-                _bye = (_byq * _dxq).sum(axis=1) / np.maximum(_ar, 1e-30)
-                if not _dmst.update(_bxe[nst:], _bye[nst:]):
-                    return None
-                _mx_all[nst:] = _Mx_glob * _br_glob
-                _my_all[nst:] = _My_glob * _br_glob
-                _fm = asm(_msrc, b2, mx=b2_0.interpolate(_mx_all),
-                          my=b2_0.interpolate(_my_all))
-                return (_fm + Ist['A'] * f_coil2['A']
-                        + Ist['B'] * f_coil2['B'] + Ist['C'] * f_coil2['C'])
-
             _dm_pass = 0
             while True:
                 _res = 0.0; _nit = 0; _newton_ok = False
@@ -2929,35 +2890,11 @@ def fem_transient_sliding_band(
 
                     A2 = _A_start.copy(); _fail = False; _rrel = 1.0
                     _bnrm = max(float(np.linalg.norm(_bff2)), 1e-30)
-                    # demag passes share this budget, so give the loop room when
-                    # the magnet is still settling (each pass costs ~1-2 its).
-                    _itcap = max(int(nonlinear_iterations), 20)
-                    if _dmst is not None:
-                        _itcap += 24
-                    for it in range(_itcap):
+                    for it in range(max(int(nonlinear_iterations), 20)):
                         _nit = it + 1
                         K, _info = _Kpw(A2)
                         r_free = _rfree_pw(A2, K)
                         _rrel = float(np.linalg.norm(r_free)) / _bnrm
-                        # Let the magnet see the field HERE, inside the Newton
-                        # loop, once the field is accurate enough to be physical
-                        # (_DM_NEWTON_TOL) rather than after the whole frame has
-                        # converged.  This is what ANSYS does by folding demag
-                        # into the material law: field and magnet settle
-                        # together, warm-started, instead of the frame being
-                        # re-solved from scratch once per de-rating pass.
-                        # Still never an early iterate — 1e-4 is four decades
-                        # below the transients that a monotone irreversible rule
-                        # would otherwise burn in permanently.
-                        if (_dmst is not None and _rrel < _DM_NEWTON_TOL
-                                and _dm_pass < 24):
-                            _fnew = _dm_settle(A2)
-                            if _fnew is not None:
-                                f = _fnew
-                                _bff2 = np.asarray(Pro.T @ f).ravel()[_free2]
-                                _bnrm = max(float(np.linalg.norm(_bff2)), 1e-30)
-                                _dm_pass += 1
-                                continue      # same Newton, warm start on A2
                         if _rrel < 1e-7:
                             break
                         # tangent T = 2(dν/dB²)(∇A·∇u)(∇A·∇v), pointwise & consistent

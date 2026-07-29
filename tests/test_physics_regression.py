@@ -99,6 +99,14 @@ CASES = {
     # comes from the raw Maxwell series and guards that path separately.
     "p1_noload": dict(COMMON, element_order=1, demag=False,
                       I_phase_rms=0.0, gamma_deg=0.0),
+    # ...and the same guard on P2.  The raw-Maxwell cogging path had exactly ONE
+    # watcher (p1_noload) — an element_order that no longer exists cannot guard
+    # anything, so this case was pinned BEFORE P1 was deleted, never after.
+    # It is not a duplicate of p2_load: at I=0 the flux-linkage (energy) torque
+    # is identically zero, so T_avg/T_ripple here come from the raw Maxwell
+    # series alone. Nothing else in the suite exercises that path unloaded.
+    "p2_noload": dict(COMMON, element_order=2, demag=False,
+                      I_phase_rms=0.0, gamma_deg=0.0),
     # Irreversible demagnetisation on P1 — pins the load-line construction AND
     # the settling pass.
     "p1_demag": dict(COMMON, element_order=1, demag=True,

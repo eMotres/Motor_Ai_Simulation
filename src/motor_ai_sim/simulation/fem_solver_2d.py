@@ -1518,9 +1518,10 @@ def fem_transient_sliding_band(
                                      # (n_sectors≥2) — via edge-midpoint DOF stitching across
                                      # the moving slip cut and the radial cuts (see the P2
                                      # branch below and P2_NOTES.md).  Voltage drive, irreversible
-                                     # demag and the coupled σ·∂A/∂t eddy solve all run on P2 too.
-                                     # Still gated (raises NotImplementedError): the moving /
-                                     # harmonic-macro band, and eddy + voltage drive TOGETHER.
+                                     # demag and the coupled σ·∂A/∂t eddy solve all run on P2 too,
+                                     # INCLUDING eddy + voltage drive together (one bordered
+                                     # (A, U, i_A, i_B) Newton).  Still gated (raises
+                                     # NotImplementedError): the moving / harmonic-macro band.
 ) -> dict:
     """Sliding-band transient: mesh the stator + rotor halves ONCE, then sweep
     the rotor by shifting the slip-ring node pairing (no remeshing) so the
@@ -2369,21 +2370,6 @@ def fem_transient_sliding_band(
             raise NotImplementedError(
                 "P2 + moving/harmonic-macro band not implemented; run the merged "
                 "structured belt (structured_gap=True, element_order=2).")
-        if eddy and _vdrive:
-            # The coupled eddy solve imposes each conductor's current as an
-            # integral CONSTRAINT; the voltage circuit needs those same currents
-            # as UNKNOWNS.  Both are solvable together (the ∂A/∂i columns become
-            # back-solves of the bordered matrix with the constraint rhs), but
-            # that solve is NOT written yet — and refusing is the only honest
-            # option, because the alternative is what the P1 path does: its
-            # `if eddy: … elif _vdrive:` chain silently SKIPS the circuit and
-            # marches the previous frame's currents, reporting a current-drive
-            # answer as a voltage run.
-            raise NotImplementedError(
-                "P2: coupled eddy (eddy=True) + voltage drive is not implemented "
-                "— the winding current cannot be an integral constraint and a "
-                "circuit unknown at the same time yet.  Run either eddy with "
-                "current drive, or voltage drive without eddy.")
         b2 = Basis(mesh_all, _P2E())
         b2_0 = b2.with_element(ElementTriP0())      # P0 for per-element ν interpolate
         N2 = b2.N
@@ -3011,6 +2997,178 @@ def fem_transient_sliding_band(
                     return False, Ae, Ue, rrel, nit
             return False, Ae, Ue, rrel, nit
 
+        # ═══════════════════════════════════════════════════════════════════
+        #  COUPLED EDDY **AND** VOLTAGE DRIVE — ONE (A, U, i_A, i_B) NEWTON
+        # ═══════════════════════════════════════════════════════════════════
+        # The two features look mutually exclusive — the eddy solve imposes each
+        # wire's current as an integral CONSTRAINT, the circuit needs those same
+        # currents as UNKNOWNS — but they are not.  The constraint VALUE simply
+        # becomes a function of the circuit state:
+        #
+        #     I_b(i) = Iunit_b · i_phase(b),     i_C = −i_A − i_B
+        #
+        # so the winding current still never appears as a source term (it must
+        # not: under eddy the ampere-turns enter through the constraint row and
+        # putting them in f as well drives the machine twice), and the bordered
+        # system keeps its exact structure.  Only the constraint RHS moves:
+        #
+        #   [ K(A)+Msig/dt   −G  ] [A]   [ f_mag + (Msig/dt)·A_prev            ]
+        #   [    −Gᵀ        S·dt ] [U] = [ dt·(i_A·c_a + i_B·c_b) − Gᵀ·A_prev  ]
+        #        └──────── M_b ───────┘
+        #   plus the two LINE-TO-LINE circuit equations on ψ(A), i.
+        #
+        # with c_a = ∂I_vec/∂i_A, c_b = ∂I_vec/∂i_B (zero on the ∫J=0 rotor
+        # bodies — magnets and shaft carry no terminal current).
+        #
+        # The Newton step is therefore the SAME shape as the magnetostatic
+        # voltage drive (_v_newton): one factorization of M_b per iteration and
+        # three back-solves — the field/voltage correction and the two ∂(A,U)/∂i
+        # columns.  Those columns are back-solves of the BORDERED matrix with a
+        # pure CONSTRAINT rhs [0; dt·c], i.e. "inject one more ampere into that
+        # wire and let the eddy reaction redistribute it", which is exactly the
+        # differential inductance the circuit Jacobian needs — now including the
+        # eddy reaction, which is the whole point of running the two together.
+        #
+        # ψ is a linear functional of A, so the linearised flux of a trial step
+        # is exact and the 2×2 circuit reduction is identical to _v_newton's.
+        #
+        # NOTHING here is a fallback path: if this does not converge the frame
+        # RAISES (see the call site).  Reporting a current-drive answer as a
+        # voltage run — what the P1 `if eddy: … elif _vdrive:` chain does — is
+        # the failure mode this whole function exists to avoid.
+        #
+        # TIME STEP: the eddy history term is discretised on the SAME Δt_k the
+        # circuit uses — the ACTUAL (slip-node-snapped) rotor time, not the
+        # nominal dt.  Under current drive the two are interchangeable because
+        # nothing else in the frame carries a time scale; here the circuit
+        # already divides Δψ by Δt_k, and feeding σ·∂A/∂t a different Δt would
+        # reintroduce exactly the node-quantisation sawtooth the rotor-time step
+        # exists to remove — into the eddy loss this time instead of the current.
+        # (On the pinned geometries Δt_k == dt to the last bit: a frame spans a
+        # whole number of slip nodes.  The rescale is a scalar on a fixed matrix,
+        # so it costs nothing and it stays right when it stops being exact.)
+        _S_raw = np.array([c["S"] for c in _ed_con], float)   # S_b = ∫σ dΩ
+        _ed_ca = np.zeros(len(_ed_con)); _ed_cb = np.zeros(len(_ed_con))
+        for _ci, _c in enumerate(_ed_con):
+            if _c["key"] != "cu":
+                continue                       # ∫J = 0 body: no terminal current
+            _iu = float(_c["Iunit"])
+            if _c["phase"] == 'A':
+                _ed_ca[_ci] = _iu
+            elif _c["phase"] == 'B':
+                _ed_cb[_ci] = _iu
+            else:                              # i_C = −i_A − i_B
+                _ed_ca[_ci] = -_iu; _ed_cb[_ci] = -_iu
+
+        def _ve_newton(Pro, free, A_start, U_start, i_start, Aprev, Vt, dtk,
+                       iv_prev, psi_prev, nu_fix, maxit):
+            """Bordered (A, U, i_A, i_B) Newton: coupled σ·∂A/∂t eddy solve WITH
+            the line-to-line voltage circuit.  Returns
+            (ok, A, U, iA, iB, rrel, nit, rc_circ)."""
+            Ae = A_start.copy(); Ue = U_start.copy()
+            iA = float(i_start[0]); iB = float(i_start[1])
+            Msd_k = (_Msig2 * (1.0 / dtk)).tocsr()   # backward Euler on Δt_k
+            Sdt_k = _S_raw * dtk
+            rhs_e = f_mag2 + Msd_k @ Aprev
+            _GtAp = np.asarray(_G2.T @ Aprev).ravel()
+            _rf0 = np.asarray(Pro.T @ rhs_e).ravel()[free]
+            _bn = max(float(np.linalg.norm(_rf0)), 1e-30)
+            Bf = (Pro.T @ _G2).tocsr()[free, :]
+            # constraint-residual scale: the ampere-seconds the terminal current
+            # imposes at the DRIVING amplitude, never the instantaneous value.
+            _cn = max(float(np.linalg.norm(dtk * (_ed_ca + _ed_cb))),
+                      float(np.linalg.norm(_GtAp)), 1e-30)
+            # voltage scale for the circuit residual test — the driving line-to-
+            # line amplitude (the instantaneous value passes through 0).
+            _vsc = max(math.sqrt(3.0) * abs(float(v_phase_peak)), 1e-3)
+            nit = 0; rrel = 1.0
+            rcc = np.array([np.inf, np.inf])
+
+            def _res_ve(Av, Uv, ia, ib, Km):
+                rf = np.asarray(Pro.T @ ((Km + Msd_k) @ Av - _G2 @ Uv
+                                         - rhs_e)).ravel()[free]
+                rc = (Sdt_k * Uv - np.asarray(_G2.T @ Av).ravel()
+                      - (dtk * (ia * _ed_ca + ib * _ed_cb) - _GtAp))
+                rcv = _circ_r(_psi2(Av), ia, ib, iv_prev, psi_prev, Vt, dtk)
+                return rf, rc, rcv, max(float(np.linalg.norm(rf)) / _bn,
+                                        float(np.linalg.norm(rc)) / _cn)
+
+            # DC seed for the conductor voltages (same as the current-drive eddy
+            # solve): at ∂A/∂t = 0 the constraint gives U_b = I_b/S_b.
+            if not np.any(Ue):
+                Ue = ((iA * _ed_ca + iB * _ed_cb) / np.maximum(_S_raw, 1e-30))
+
+            for it in range(max(int(maxit), 2)):
+                nit = it + 1
+                if nu_fix is not None:
+                    Km = _asmK(nu_fix); info = None
+                else:
+                    Km, info = _Kpw(Ae)
+                rf, rc, rcc, rrel = _res_ve(Ae, Ue, iA, iB, Km)
+                if rrel < 1e-7 and float(np.max(np.abs(rcc))) < 1e-6 * _vsc:
+                    return True, Ae, Ue, iA, iB, rrel, nit, rcc
+                J = Km
+                if info is not None:
+                    T = _tangent2(info)
+                    if T is not None:
+                        J = Km + T
+                Jff = (Pro.T @ (J + Msd_k) @ Pro).tocsr()[free][:, free]
+                Mb = _bmat2([[Jff, -Bf], [-Bf.T, _diags2(Sdt_k)]]).tocsc()
+                # column 0: the (A, U) correction at frozen current
+                # columns 1,2: ∂(A, U)/∂i_A and ∂(A, U)/∂i_B — a pure CONSTRAINT
+                #              rhs, the eddy-reaction-included differential
+                #              inductance the circuit Jacobian needs.
+                _z = np.zeros(free.size)
+                try:
+                    X = _solve_ff(Mb, np.column_stack([
+                        -np.concatenate([rf, rc]),
+                        np.concatenate([_z, dtk * _ed_ca]),
+                        np.concatenate([_z, dtk * _ed_cb])]))
+                except Exception as _je:
+                    log.info("P2 eddy+vdrive bordered solve failed (%s)", _je)
+                    return False, Ae, Ue, iA, iB, rrel, nit, rcc
+                dA0 = _pad2(Pro, free, X[:free.size, 0])
+                dAa = _pad2(Pro, free, X[:free.size, 1])
+                dAb = _pad2(Pro, free, X[:free.size, 2])
+                dU0 = X[free.size:, 0]
+                dUa = X[free.size:, 1]; dUb = X[free.size:, 2]
+                q0 = _psi2(dA0); qa = _psi2(dAa); qb = _psi2(dAb)
+                try:
+                    di = np.linalg.solve(
+                        _circ_M(qa, qb, dtk),
+                        np.array([rcc[0] - (q0[0] - q0[1]) / dtk,
+                                  rcc[1] - (q0[1] - q0[2]) / dtk]))
+                except np.linalg.LinAlgError:
+                    return False, Ae, Ue, iA, iB, rrel, nit, rcc
+                dA = dA0 + di[0] * dAa + di[1] * dAb
+                dU = dU0 + di[0] * dUa + di[1] * dUb
+                if nu_fix is not None:        # linear system: the step is exact
+                    Ae = Ae + dA; Ue = Ue + dU
+                    iA += float(di[0]); iB += float(di[1])
+                    continue
+                # Backtracking line-search on the FIELD residual only — for the
+                # same reason the current-drive eddy solve uses it: the ONLY
+                # nonlinearity in this system is K(A).  Both the constraint rows
+                # and the circuit rows are exactly LINEAR in (A, U, i), so a
+                # damped step scales their residuals by exactly (1−λ) and they
+                # can never be what blocks progress; including them in the merit
+                # instead lets a residual that is ~1 by construction on the first
+                # sweep veto every field-reducing step (measured: stall at
+                # rrel≈0.97 on the current-drive path at 60 A).
+                _f0 = float(np.linalg.norm(rf))
+                lam = 1.0; acc = False
+                for _ls in range(8):
+                    At = Ae + lam * dA; Ut = Ue + lam * dU
+                    _ia = iA + lam * float(di[0]); _ib = iB + lam * float(di[1])
+                    if float(np.linalg.norm(
+                            _res_ve(At, Ut, _ia, _ib, _Kpw(At)[0])[0])) < _f0:
+                        Ae = At; Ue = Ut; iA = _ia; iB = _ib
+                        acc = True; break
+                    lam *= 0.5
+                if not acc:
+                    return False, Ae, Ue, iA, iB, rrel, nit, rcc
+            return False, Ae, Ue, iA, iB, rrel, nit, rcc
+
         if _vdrive:
             # ── dq phasor steady-state initialiser (P2) ──────────────────────
             # τ = L/R spans ~20 electrical periods on a low-R machine, so a
@@ -3133,7 +3291,13 @@ def fem_transient_sliding_band(
         # window is then a clean period on every frame.  Voltage drive already
         # marches ten settling periods, so it needs none.
         _eddy_warm = 2 if (eddy and not _vdrive) else 0
-        _Aed_prev = np.zeros(N2)              # previous-frame A per dof (material)
+        # previous-frame A per dof (material frame).  Zero is not a field the
+        # machine was ever in, so under voltage drive — where the phasor
+        # initialiser already produced the operating-point field at θ_eff = 0 —
+        # seed it with that instead of a fake step from nothing.  Either seed is
+        # inside the discarded settling window; this one just does not spend the
+        # first frames unwinding an ∂A/∂t that never happened.
+        _Aed_prev = (_Aop.copy() if (eddy and _vdrive) else np.zeros(N2))
         _Ued = np.zeros(len(_ed_con))         # per-body conductor voltages
         _ed_cu = []; _ed_mag = []; _ed_sh = []   # σ∫E² per frame [W, machine]
         _ed_dc2d = []                         # 2-D DC I²R of the same bars [W]
@@ -3221,15 +3385,16 @@ def fem_transient_sliding_band(
                 # its A2 unchanged, so the eddy run differs from the magnetostatic
                 # one ONLY by the physics that was added.
                 if eddy:
-                    _I_vec = np.array(
-                        [Ist[c["phase"]] * c["Iunit"] if c["key"] == "cu" else 0.0
-                         for c in _ed_con], float)
                     # ν frozen ⇒ the bordered system is LINEAR (one exact solve);
                     # the first frame of a frozen_nu run still converges the
                     # saturation, which is what "frozen at the reference frame"
                     # means.  No saturable iron ⇒ always linear.
                     _nu_fix = (nu_all2 if ((frozen_nu and _A2_prev is not None)
                                            or not _sat2) else None)
+                if eddy and not _vdrive:
+                    _I_vec = np.array(
+                        [Ist[c["phase"]] * c["Iunit"] if c["key"] == "cu" else 0.0
+                         for c in _ed_con], float)
                     (_eok, A2, _Ued, _res, _nit) = _eddy_solve(
                         Pro, _free2, _A_start, _Ued, _I_vec, _Aed_prev,
                         _nu_fix, max(int(nonlinear_iterations), 20))
@@ -3244,13 +3409,39 @@ def fem_transient_sliding_band(
                     if _nu_fix is None:
                         # element-mean ν for the loss post-processing
                         nu_all2 = _nu_of(_elemB(A2), nu_all2)
+                elif eddy and _vdrive:
+                    # ── EDDY **AND** VOLTAGE DRIVE: one (A, U, i_A, i_B) Newton ──
+                    # The winding current is the constraint VALUE and a circuit
+                    # unknown at once — see _ve_newton.  There is deliberately NO
+                    # fallback: the magnetostatic Picard solves different physics
+                    # and the current-drive eddy solve ignores the circuit, so
+                    # either one would report a different machine as this run.
+                    (_eok, A2, _Ued, _viA, _viB, _res, _nit,
+                     _vrc) = _ve_newton(
+                        Pro, _free2, _A_start, _Ued, (Ist['A'], Ist['B']),
+                        _Aed_prev, _Vt, _dt_k, _iv_prev, _psi_prev,
+                        _nu_fix, max(int(nonlinear_iterations), 25))
+                    if not _eok:
+                        raise RuntimeError(
+                            f"P2 coupled eddy + voltage drive: bordered (A, U, i) "
+                            f"Newton did not converge at frame {k} ({_nit} its, "
+                            f"rrel={_res:.2e}, circuit resid="
+                            f"{float(np.max(np.abs(_vrc))):.2e} V)")
+                    _newton_ok = True
+                    if _nu_fix is None:
+                        nu_all2 = _nu_of(_elemB(A2), nu_all2)
+                    # The solved currents ARE this frame's excitation from here on
+                    # (torque, ψ, the I²R reference of the eddy loss split).  f is
+                    # NOT rebuilt with them: under eddy the ampere-turns enter
+                    # through the constraint rows only.
+                    Ist = {'A': _viA, 'B': _viB, 'C': -_viA - _viB}
                 # ── VOLTAGE DRIVE: coupled field + circuit solve ──────────────────
                 # The phase currents are UNKNOWNS solved together with the field.
                 # Primary path: the coupled Newton (field residual + line-to-line
                 # circuit residual on the ACTUAL ψ(A), Jacobian = the tangent
                 # back-solve ∂A/∂i).  Fallback: the frozen-ν superposition Picard,
                 # which is exactly the P1 recipe.
-                if _vdrive:
+                if _vdrive and not eddy:
                     _vok = False
                     if _use_newton and not frozen_nu and _sat2:
                         (_vok, _A2v, _viA, _viB, _res, _nit,
@@ -3484,7 +3675,12 @@ def fem_transient_sliding_band(
                 # only the first term — which is what U = 0 means.  Done per body
                 # rather than by smearing U onto nodes, so a node shared by two
                 # conductors cannot pick up the wrong voltage.
-                _dAe = (A2 - _Aed_prev) * (1.0 / dt)          # ∂A/∂t [V/m]
+                # Δt of the step that was actually SOLVED: the rotor-time Δt_k
+                # under voltage drive (see _ve_newton), the nominal dt otherwise.
+                # Dividing by a different Δt than the solve used would put the
+                # slip-node sawtooth straight into E = −∂A/∂t + U.
+                _dt_e = _dt_k if _vdrive else dt
+                _dAe = (A2 - _Aed_prev) * (1.0 / _dt_e)       # ∂A/∂t [V/m]
                 _pg = {_kk: float(_dAe @ (_Mg @ _dAe))
                        for _kk, _Mg in _Msig_grp.items()}
                 for _ci, _c in enumerate(_ed_con):

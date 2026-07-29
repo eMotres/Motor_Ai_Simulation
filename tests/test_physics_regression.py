@@ -142,6 +142,22 @@ CASES = {
     # shaft conductivity into the coupled system.
     "p2_eddy": dict(COMMON, element_order=2, demag=False, eddy=True,
                     rotor_eddy=True, I_phase_rms=60.0, gamma_deg=0.0),
+    # The two hardest features TOGETHER: the coupled sigma*dA/dt solve, whose
+    # constraint rows IMPOSE each wire's current, driven by the voltage circuit,
+    # for which those same currents are UNKNOWNS. They are solved as one
+    # bordered (A, U, i_A, i_B) Newton. This case is the guard against the exact
+    # regression the P1 path shipped for years -- an `if eddy: ... elif vdrive:`
+    # chain that skips the circuit and reports a CURRENT-drive answer as a
+    # voltage run. If that ever comes back, the pinned currents here move to the
+    # imposed 60 A rms sinusoid and the suite says so. The paired diagnostics are
+    # what make it airtight: v_circuit_resid_max_V is ~0 only if the circuit was
+    # actually solved on the converged field, and P_cu_ac_solve_W is nonzero only
+    # if the eddy reaction was actually in it. rotor_eddy is off because the
+    # voltage drive drops it (see the warning in the solver), so this pins the
+    # copper constraint set specifically.
+    "p2_voltage_eddy": dict(COMMON, element_order=2, demag=False, eddy=True,
+                            I_phase_rms=60.0, gamma_deg=0.0, drive="voltage",
+                            v_phase_peak=7.0, v_delta_deg=10.0),
 }
 
 MAGNET = "F45SH_120C"

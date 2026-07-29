@@ -307,6 +307,9 @@ Full request path now threads `element_order` end-to-end:
   n_sectors=2 loaded run still `method=sliding_band`, T_avg 0.587).
 - Eddy/voltage/demag and moving/macro-band P2 requests raise a clear
   `NotImplementedError` rather than silently returning P1.
+  *(Historical — as of this stage. Demag, the voltage drive, the coupled eddy
+  solve and eddy + voltage drive together have all since landed on P2; only the
+  moving / harmonic-macro band still raises. See the DONE sections below.)*
 
 ## SECTOR P2 DONE — anti-periodic wedge (n_sectors≥2)
 
@@ -668,15 +671,99 @@ the constraint veto every field-reducing step and `eddy + demag` at 60 A stalled
 at rrel≈0.97 and raised. The conductor voltages are also seeded at their DC
 value I_b/S_b rather than 0, which is most of the answer.
 
+## COUPLED EDDY **+ VOLTAGE DRIVE** ON P2 DONE — one (A, U, i_A, i_B) Newton
+
+This was the last entry on the "NOT done" list, and it was there because the two
+features read as mutually exclusive: the eddy solve imposes each wire's current
+as an integral CONSTRAINT, and the circuit needs those same currents as
+UNKNOWNS. They are not. The constraint VALUE is simply a function of the circuit
+state, `I_b(i) = Iunit_b · i_phase(b)` with `i_C = −i_A − i_B`, so the winding
+current still never becomes a source term (under eddy the ampere-turns enter
+through the constraint row; putting them in `f` too would drive the machine
+twice) and the bordered block keeps its exact structure. Only its RHS moves:
+
+```
+[ K(A)+Msig/Δt   −G   ] [A]   [ f_mag + (Msig/Δt)·A_prev             ]
+[     −Gᵀ       S·Δt  ] [U] = [ Δt·(i_A·c_a + i_B·c_b) − Gᵀ·A_prev   ]
+   └────────  M_b  ────────┘
+  + the two LINE-TO-LINE circuit equations on ψ(A), i
+```
+
+`c_a = ∂I_vec/∂i_A`, `c_b = ∂I_vec/∂i_B` (zero on the ∫J=0 magnet/shaft bodies —
+they carry no terminal current). The Newton step is then the SAME shape as the
+magnetostatic voltage drive `_v_newton`: one factorization of `M_b` per
+iteration and three back-solves — the (A, U) correction plus the two ∂(A,U)/∂i
+columns. Those columns are back-solves of the **bordered** matrix with a pure
+CONSTRAINT rhs `[0; Δt·c]` — "inject one more ampere into that wire and let the
+eddy reaction redistribute it" — i.e. the differential inductance the circuit
+Jacobian needs, now *with* the eddy reaction in it, which is the whole point of
+running the two together. ψ is linear in A, so the 2×2 circuit reduction is
+identical to `_v_newton`'s. `_ve_newton`, `fem_solver_2d.py`.
+
+There is deliberately NO fallback: if it does not converge the frame RAISES.
+Falling through to the current-drive eddy solve would ignore the circuit and
+falling through to the Picard would drop σ∂A/∂t — either one reports a different
+machine than the one that was asked for. That is exactly the P1 failure this
+whole path exists to avoid (`if eddy: … elif _vdrive:` skips the circuit and
+reports a current-drive answer as a voltage run). Nothing was added to the
+Picard fallback, which never fires on P2.
+
+**Δt:** the eddy history term is discretised on the same slip-node-snapped rotor
+time Δt_k the circuit uses, not the nominal dt. Under current drive the two are
+interchangeable (nothing else in the frame carries a time scale); here the
+circuit already divides Δψ by Δt_k, and feeding σ·∂A/∂t a different Δt would put
+the node-quantisation sawtooth into the eddy loss. On the pinned geometries a
+frame spans a whole number of slip nodes so Δt_k == dt and the numbers are
+unchanged; the rescale is a scalar on a fixed matrix, so it costs nothing and it
+stays right when that stops being exact. `A_prev` is seeded from the phasor
+operating-point field instead of 0 (both seeds sit inside the 10 discarded
+settling periods; this one just does not spend frames unwinding a ∂A/∂t that
+never happened).
+
+**Validation** (30 mm 12s14p, F45SH_120C, V = 7.0 V pk, δ = +10 °el, 24
+steps/period, `n_sectors=2`, `coil_temp_c=120`, `rotor_eddy` off — the voltage
+drive drops it):
+
+| quantity | voltage only | voltage + eddy | Δ |
+|---|---|---|---|
+| I_A rms [A] | 50.2703 | 50.2390 | −0.062 % |
+| I_A peak [A] | 73.2658 | 73.2270 | −0.053 % |
+| I_A fundamental [A] | 71.0680 | 71.0241 | −0.062 % |
+| I_A THD [%] | 2.6497 | 2.6253 | −0.92 % |
+| T_avg [Nm] | 0.235961 | 0.236708 | +0.32 % |
+| T_ripple [%] | 1.2034 | 1.3388 | +11.2 % |
+| V_peak [V] | 8.7290 | 8.7231 | −0.069 % |
+| circuit residual max [V] | 1.44e−14 | 1.27e−14 | (ε·V_LL = 2.7e−15) |
+| v_dc_residual [A] | 0.0 | 0.0 | |
+
+The currents move by the eddy reaction and nothing else: −0.06 % in rms with a
+small phase shift (per-frame Δ peaks at 0.19 A, and the two half-periods carry
+equal and opposite Δ, which is what a reaction that depends on ∂A/∂t looks
+like). Both runs close their circuit at machine precision, so neither is
+reporting a current-drive answer.
+
+**The copper loss is the coupled solve's, and it checks out arithmetically.**
+`P_cu_total_solve_W = 47.867 W = σ∫E²` with `E = −∂A/∂t + U_b`; its DC reference
+`P_cu_dc_2d_solve_W = 44.629 W = Σ_b I_b²/(σ·S_b)`; the AC increment 3.237 W is
+added to the end-winding-corrected DC (`P_cu_dc_W = 61.466 W`) to give the
+reported `<P_cu_W> = 64.704 W`. The DC reference implies a 2-D phase resistance
+`R_2d = P_cu_dc_2d/(3 I_rms²) = 5.89406 mΩ` at the solved 50.239 A rms — and the
+already-validated CURRENT-drive `p2_eddy` pin, at 60 A rms on the same mesh,
+implies **5.89407 mΩ**, agreeing to 5 significant figures. Both sit +2.26 %
+above the nominal-wire arithmetic `ρ(120 °C)·L·24/A_wire = 5.76368 mΩ`, because
+the meshed FEM conductor is 0.9779 mm², not the nominal 1.000 mm² rectangle —
+the same +2.26 % shows up between `P_cu_dc_2d·k_end` and the reported
+`P_cu_dc_W`, so it is one geometry fact, not two errors.
+
+Cost: 611 s against 557 s for the same voltage-only run (+9.7 % wall, 264 frames
+including the 10 settling periods).
+
 ### NOT done (raises NotImplementedError, documented in-code)
-1. **`eddy=True` together with voltage drive** on P2 — the winding current
-   cannot be an integral constraint and a circuit unknown at the same time yet.
-   Both alone work. (P1 does not implement this either: its `if eddy: … elif
-   _vdrive:` chain silently SKIPS the circuit and reports a current-drive answer
-   as a voltage run, which is why P2 refuses instead of copying it.)
-2. **Moving / harmonic-macro band** on P2 (structured merged belt only for now).
+1. **Moving / harmonic-macro band** on P2 (structured merged belt only for now).
 
 STATUS: P2 static solver = built + validated. **P2 full transient on the belt =
 DONE** — full ring AND anti-periodic sector, mesh-convergent, sector == full
 ring, REAL rotor-eddy/iron/copper losses matching P1 to ~7 %, plus voltage
-drive, irreversible demag and the coupled σ∂A/∂t eddy solve.
+drive, irreversible demag, the coupled σ∂A/∂t eddy solve, and eddy + voltage
+drive TOGETHER. The only thing P1 can still do that P2 cannot is the moving /
+harmonic-macro band.

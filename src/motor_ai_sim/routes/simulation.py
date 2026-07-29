@@ -2728,10 +2728,13 @@ def get_fem_transient(
                                           #   frame (current drive).
                                           #   P2 is the default because it is the only basis good for both
                                           #   halves of the answer at once: an energy-consistent mean torque
-                                          #   and a mesh-convergent ripple.  P1 stays reachable ONLY for the
-                                          #   couplings P2 does not implement — irreversible demag, coupled
-                                          #   eddy, voltage drive — which raise NotImplementedError on P2, so
-                                          #   the demag view and the eddy/voltage modes still select it.
+                                          #   and a mesh-convergent ripple.  This list used to say P1 was
+                                          #   still needed for irreversible demag, the coupled σ∂A/∂t eddy
+                                          #   solve and the voltage drive — that stopped being true in
+                                          #   a1aedad / 11e1469 / 4e316b9, and eddy + voltage drive TOGETHER
+                                          #   landed too.  P2 now implements every one of them; the only
+                                          #   thing left raising NotImplementedError on P2 is the moving /
+                                          #   harmonic-macro band.
     restore:             bool  = False,   # ← on open: return the LAST saved transient (stale if params differ) instead of recomputing
     geo:                 Optional[str] = None,  # ← per-request geometry override (multi-user); absent = global config
     drive:               str   = "current",  # ← "current" (imposed sinusoidal I) | "voltage"

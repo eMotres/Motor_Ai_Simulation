@@ -80,5 +80,22 @@
   "V_peak": 8.213889072384386,
   "v_circuit_resid_max_V": 7.188694084447889e-15,
   "v_dc_residual_A": 0.0
+ },
+ "p2_voltage_eddy": {
+  "I_A_fund_A": 74.55249717735724,
+  "I_A_peak_A": 71.71680449691338,
+  "I_A_thd_pct": 1.6496020833591436,
+  "P_cu_W": 70.73742921090381,
+  "P_cu_ac_solve_W": 3.041,
+  "P_cu_total_solve_W": 52.194,
+  "P_fe_W": 3.630676048084986,
+  "P_mag_solve_W": 0.0,
+  "P_shaft_solve_W": 0.0,
+  "T_avg_Nm": 0.24085946865449706,
+  "T_avg_maxwell_Nm": 0.2419,
+  "T_ripple_pct": 1.332404146469492,
+  "V_peak": 8.210275589164329,
+  "v_circuit_resid_max_V": 7.271960811294775e-15,
+  "v_dc_residual_A": 0.0
  }
 }

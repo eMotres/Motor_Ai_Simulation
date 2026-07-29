@@ -1128,6 +1128,18 @@ def _field_snap_key_fields(*, gamma_deg, I_phase_rms, mesh_size_mm, min_size_mm,
         ("stator_fillet_mm", round(float(stator_fillet_mm), 2)),
         ("gap_layers", round(float(gap_layers), 1)),
         ("coil_temp_c", round(float(coil_temp_c), 1)),
+        # Per-part element sizes are keyed VERBATIM, and that is now correct:
+        # every entry the parser accepts changes the mesh.  It did not use to —
+        # on the geometry-driven path only "outer"/"air" reached the mesher, so a
+        # view sending {"magnet": 0.15} MISSED the snapshot of a run that solved
+        # the bit-identical mesh without it.  That was fixed where it broke (the
+        # mesher now applies stator/rotor/magnet/coil as CDT region sizes and
+        # routes shaft/airgap to the gmsh mesher, which applies them), NOT by
+        # normalising entries out of this key: a no-op normalisation here can
+        # only be a GUESS about what the mesher will do with a value, and a wrong
+        # guess serves the picture of a DIFFERENT mesh — the one failure mode
+        # this key exists to prevent.  Compare _geo_ov_for_key / _mat_ov_for_key,
+        # which normalise only against a reference they can read exactly.
         ("comp_mesh", tuple(sorted((comp_mesh or {}).items()))),
         ("pole_copy", int(bool(pole_copy))),
         ("iron_template", int(bool(iron_template))),

@@ -955,6 +955,29 @@ def _replicate_periodic_half(polys_half, period_deg, n_copies, common_kw, kind):
              kind, nN, nfeat, n_copies, mesh.p.shape[1], mesh.t.shape[1])
     return mesh, tags, types.SimpleNamespace(polys=full_polys)
 
+
+def _check_part_mesh_supported(user_cm: dict, use_geo: bool) -> None:
+    """Raise if a REQUESTED per-part element size cannot be applied on the
+    template/geo build path.
+
+    The raise is caught by the caller's `except` around the template build and
+    drops the half-build to the gmsh path, which DOES honour every component
+    key (one Constant size field per component surface group).  So a per-part
+    request is always either applied by the geo mesher or handed to a mesher
+    that applies it — it is NEVER silently ignored."""
+    if not user_cm:
+        return
+    if not use_geo:
+        raise ValueError(
+            "tensor-template iron has one global density and cannot honour "
+            f"per-part element sizes {sorted(user_cm)}")
+    from motor_ai_sim.simulation.geo_mesh import GEO_PART_KEYS
+    _bad = sorted(set(user_cm) - set(GEO_PART_KEYS))
+    if _bad:
+        raise ValueError("geometry-driven mesh cannot honour per-part element "
+                         f"size for {_bad}")
+
+
 def _build_sliding_band_meshes(
         polys: dict,
         rotor_angle_deg: float,
@@ -990,6 +1013,19 @@ def _build_sliding_band_meshes(
     classify_* are the helper returned by build_mesh_from_polygons.
     """
     polys_s, polys_r = _split_polys_for_sliding_band(polys)
+
+    # What the USER actually asked for, captured BEFORE the auto-fill below —
+    # the template/geo path must know the difference between "the caller
+    # requested magnet = 0.15 mm" and "we defaulted magnet to the global size"
+    # (the auto-fill would otherwise make EVERY run look like a per-part request).
+    _user_cm = {}
+    for _k, _v in dict(component_mesh_mm or {}).items():
+        try:
+            _fv = float(_v)
+        except (TypeError, ValueError):
+            continue
+        if _fv > 0.0:
+            _user_cm[str(_k).lower()] = _fv
 
     # ── Iron/magnet quality floor: default the iron + magnet element size to
     # the global element size, which the CALLERS already clamp to smallest-
@@ -1128,6 +1164,7 @@ def _build_sliding_band_meshes(
                     _p_geo["stator_inner_radius"] = float(_sgspec["r_si"])
                     _p_geo["rotor_outer_radius"] = float(_sgspec["r_ro"])
                 _density = max(0.3, 2.0 / max(mesh_size_mm, 0.5))
+                _check_part_mesh_supported(_user_cm, _use_geo)
                 if _use_geo:
                     from motor_ai_sim.simulation.geo_mesh import geo_mesh_halves
                     _cm = component_mesh_mm or {}
@@ -1143,6 +1180,11 @@ def _build_sliding_band_meshes(
                         r_si=float(_sgspec.get("r_si", 0.0)),
                         r_ro=float(_sgspec.get("r_ro", 0.0)),
                         air_mesh_mm=_air_mm,
+                        # per-part element sizes the USER asked for (solid
+                        # parts → their own CDT region seed); the auto-filled
+                        # iron/magnet defaults are NOT passed, so an empty
+                        # request reproduces the previous mesh bit-for-bit.
+                        part_mesh_mm=_user_cm,
                         # MOVING-band spec (harmonic macro): halves end on the
                         # uniform R1/R2 rings; merged spec has no r1/r2 → 0.
                         r1_band=float(_sgspec.get("r1", 0.0)),
@@ -1244,6 +1286,7 @@ def _build_sliding_band_meshes(
                 _p_geo["stator_inner_radius"] = float(_sgspec["r_si"])
                 _p_geo["rotor_outer_radius"] = float(_sgspec["r_ro"])
             _density = max(0.3, 2.0 / max(mesh_size_mm, 0.5))
+            _check_part_mesh_supported(_user_cm, _use_geo)
             if _use_geo:
                 from motor_ai_sim.simulation.geo_mesh import geo_mesh_halves
                 _cm = component_mesh_mm or {}
@@ -1256,6 +1299,7 @@ def _build_sliding_band_meshes(
                     n_slip=int(_sgspec.get("n_slip", 1008)),
                     r_si=float(_sgspec.get("r_si", 0.0)),
                     r_ro=float(_sgspec.get("r_ro", 0.0)), air_mesh_mm=_air_mm,
+                    part_mesh_mm=_user_cm,   # per-part sizes (see full-ring)
                     r1_band=float(_sgspec.get("r1", 0.0)),
                     r2_band=float(_sgspec.get("r2", 0.0)))
                 log.info("geo-driven wedge 1/%d: stator %d tris, rotor %d tris",

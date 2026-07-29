@@ -63,6 +63,80 @@ _ROTOR_DEFEATURE_MM = 0.06  # morphological-opening radius (mm) for the rotor
                       # ratio, it's a genuinely singular knife-edge → area-only
 _DEFAULT_N_SLIP = 1008
 
+# Per-part element size (UI "Per-part element size (mm)") keys this mesher can
+# honour.  Solid parts become their own CDT region seed with their own target
+# cell area; "outer"/"air" is the coarse air size (air_mesh_mm).  A key OUTSIDE
+# this set cannot be applied on the geometry-driven path and MUST NOT be
+# silently dropped — the caller raises and falls back to the gmsh build, which
+# honours every component key through its per-surface size fields.
+#
+# "shaft" is NOT here on purpose: the rotor cell's shaft core is a pie slice
+# bounded by the two radial cut chains, and those chains are frozen by Triangle's
+# -Y flag (clone-identical seams for the anti-periodic weld), so its area
+# constraint cannot be met and is silently dropped by Triangle (measured: a
+# 0.0043 mm^2 shaft target gives the SAME 374-tri cell as 3.9 mm^2 under
+# `pq20AaS6000Y`, and 1647 tris without the Y).  Same for "airgap" — the gap is
+# owned by the structured belt / harmonic macro, not by this CDT.  Both are
+# routed to the gmsh mesher instead, which does honour them.
+GEO_PART_KEYS = frozenset(("stator", "rotor", "magnet", "coil", "outer", "air"))
+# solid-part keys that map onto a CDT region seed (air is handled by air_mm)
+GEO_REGION_KEYS = ("stator", "rotor", "magnet", "coil")
+
+
+def _cell_area(edge_mm: float) -> float:
+    """Target CDT cell area (mm^2) for a requested triangle EDGE length (mm):
+    the equilateral relation area = 0.433*L^2.
+
+    NO 0.12 mm^2 floor here — that floor guards the GLOBAL size (it is applied
+    to a slider the user drags, and 0.12 mm^2 ~ 0.53 mm edge everywhere is
+    already a huge mesh).  A PER-PART size is an explicit, local request
+    ("mesh the magnets at 0.15 mm"): clamping it to the global floor silently
+    substituted a coarser size — 0.3 mm and 0.15 mm both collapsed to 0.12 mm^2
+    and produced the SAME mesh, which is exactly the no-op the knob was
+    reported for."""
+    return max(1e-6, 0.4330 * float(edge_mm) ** 2)
+
+
+def _seeds(air: List, solid: List) -> List:
+    """The region-seed list, in the ONE order every mesher here must use.
+
+    Triangle floods each region seed outward to the enclosing segment loop.  When
+    TWO seeds land in the same flood region the LAST one in the list wins.  The
+    air seeds come from `_air_parts` = annulus - raw steel - magnets, computed on
+    the RAW CadQuery polygons, while the PSLG is built from the resampled +
+    defeatured iron chain — so along the shaft/OD circles that difference leaves
+    hairline "air" slivers whose representative points actually sit INSIDE the
+    meshed iron.  With the iron seed first, such a stray air seed silently
+    replaced the iron's target area with the coarse AIR area: measured on the
+    30 mm rotor, seed #0 (steel) had literally NO effect on the mesh — 190 tris
+    whether its area was 0.62 or 0.039 mm^2 — which is why a per-part "rotor"
+    element size looked like a no-op.
+
+    Listing air/shaft FIRST and the solid parts (iron, coils, magnets) LAST makes
+    the solid part win its own region.  The DEFAULT mesh is unchanged (the solid
+    target area is not binding there — the quality refinement is already finer),
+    verified by an identical node-coordinate hash.
+    """
+    return list(air) + list(solid)
+
+
+def _part_areas(part_mesh_mm: Optional[Dict]) -> Dict[str, float]:
+    """{part: target cell area mm^2} for the per-part element sizes actually
+    requested.  Parts absent here keep the global/air size, so an empty request
+    reproduces the previous mesh bit-for-bit."""
+    out: Dict[str, float] = {}
+    for k, v in (part_mesh_mm or {}).items():
+        kk = str(k).lower()
+        if kk not in GEO_REGION_KEYS:
+            continue
+        try:
+            fv = float(v)
+        except (TypeError, ValueError):
+            continue
+        if fv > 0.0:
+            out[kk] = _cell_area(fv)
+    return out
+
 
 # ── low-level helpers ────────────────────────────────────────────────────────
 def _snap_ring(coords) -> np.ndarray:
@@ -536,7 +610,8 @@ def _collapse_slivers(V, T, keep_r=(), area_tol=1e-10, r_guard=0.05):
 # ── half meshers ─────────────────────────────────────────────────────────────
 def _mesh_stator_half(polys: Dict, r_bore: float, r_out_iron: float,
                       r_outer: float, n_slip: int, area: float, air_mm: float,
-                      quality: int, r2_band: float = 0.0):
+                      quality: int, r2_band: float = 0.0,
+                      part_area: Optional[Dict] = None):
     """(V mm, T) for the stator annulus [r_bore, r_outer].
 
     The winding is meshed as the REAL CadQuery conductors — the actual
@@ -550,6 +625,9 @@ def _mesh_stator_half(polys: Dict, r_bore: float, r_out_iron: float,
     air ring) gets its own coarse `air_area` seed so the far field isn't meshed
     as finely as the iron."""
     from shapely.geometry import LineString, Polygon
+    _pa = part_area or {}
+    a_iron = float(_pa.get("stator", area))                # per-part override
+    a_coil = float(_pa.get("coil", area))
     iron = _resample(polys["stator"], r_bore, n_slip)      # bore → slip grid
     coils = [w for w in (polys.get("coils") or []) if w is not None and not w.is_empty]
 
@@ -578,22 +656,23 @@ def _mesh_stator_half(polys: Dict, r_bore: float, r_out_iron: float,
     V, S = _build_pslg(lines)
 
     # region seeds: iron + each conductor fine; each air pocket coarse
-    reg = [[*iron.representative_point().coords[0], 1, area]]
-    reg += [[w.centroid.x, w.centroid.y, 2, area] for w in coils]
     ann = Polygon(_grid_circle(r_outer, 360)[:-1]).difference(
           Polygon(_grid_circle(r_bore, n_slip)[:-1]))
-    reg += [[*a.representative_point().coords[0], 3, air_area]
-            for a in _air_parts(ann, iron, coils)]
+    _air_reg = [[*a.representative_point().coords[0], 3, air_area]
+                for a in _air_parts(ann, iron, coils)]
     if 0.0 < r2_band < r_bore - 1e-6:
         # gap-air annulus [R2, bore] — FINE (it carries the gap field)
-        reg += [[0.5 * (r2_band + r_bore), 0.0, 4, area]]
+        _air_reg += [[0.5 * (r2_band + r_bore), 0.0, 4, area]]
+    reg = _seeds(_air_reg,
+                 [[*iron.representative_point().coords[0], 1, a_iron]]
+                 + [[w.centroid.x, w.centroid.y, 2, a_coil] for w in coils])
     V, T = _triangulate(V, S, area, quality, regions=reg)
     return V, T
 
 
 def _mesh_rotor_half(polys: Dict, r_od: float, r_shaft: float,
                      n_slip: int, area: float, air_mm: float, quality: int,
-                     r1_band: float = 0.0):
+                     r1_band: float = 0.0, part_area: Optional[Dict] = None):
     """(V mm, T) for the rotor disk [0, r_od].  Steel and magnets mesh at
     `area`; the solid shaft core (r < r_shaft) and the flux-barrier air pockets
     get the coarse air size — the rotor centre carries little flux.
@@ -603,6 +682,12 @@ def _mesh_rotor_half(polys: Dict, r_od: float, r_shaft: float,
     boundary (the macro couples R1↔R2 analytically, no node-merge belt)."""
     from shapely.geometry import LineString, MultiPolygon, Polygon
     air_area = max(area, 0.4330 * air_mm * air_mm)              # coarse air cell
+    _pa = part_area or {}
+    a_steel = float(_pa.get("rotor", area))                     # per-part override
+    a_mag = float(_pa.get("magnet", area))
+    # NOTE: no per-part "shaft" size here — see GEO_PART_KEYS (the -Y cut
+    # chains make the core's area constraint unsatisfiable; the request is
+    # routed to the gmsh mesher instead of being silently dropped).
     parts = [g for g in getattr(polys["rotor"], "geoms", [polys["rotor"]])
              if getattr(g, "area", 0.0) > 1e-6]                 # drop degenerate
     steel = MultiPolygon(parts) if len(parts) > 1 else parts[0]
@@ -637,16 +722,17 @@ def _mesh_rotor_half(polys: Dict, r_od: float, r_shaft: float,
     V, S = _build_pslg(lines)
 
     # region seeds: steel + each magnet fine; shaft core + flux barriers coarse
-    reg = [[*steel.representative_point().coords[0], 5, area]]
-    reg += [[mg.centroid.x, mg.centroid.y, 6, area] for mg in mags]
-    reg += [[r_shaft * 0.5, 0.0, 7, air_area]]                  # solid shaft core
+    _air_reg = [[r_shaft * 0.5, 0.0, 7, air_area]]              # solid shaft core
     ann = Polygon(_grid_circle(r_od, n_slip)[:-1]).difference(
           Polygon(_grid_circle(r_shaft, n_sh)[:-1]))
-    reg += [[*a.representative_point().coords[0], 8, air_area]
-            for a in _air_parts(ann, steel, mags)]
+    _air_reg += [[*a.representative_point().coords[0], 8, air_area]
+                 for a in _air_parts(ann, steel, mags)]
     if r1_band > r_od + 1e-6:
         # gap-air annulus [r_od, R1] — FINE (it carries the gap field)
-        reg += [[0.5 * (r_od + r1_band), 0.0, 9, area]]
+        _air_reg += [[0.5 * (r_od + r1_band), 0.0, 9, area]]
+    reg = _seeds(_air_reg,
+                 [[*steel.representative_point().coords[0], 5, a_steel]]
+                 + [[mg.centroid.x, mg.centroid.y, 6, a_mag] for mg in mags])
     V, T = _triangulate(V, S, area, quality, hole=False, regions=reg,
                         rotor_bridge=True)  # shaft solid
     return V, T
@@ -817,7 +903,7 @@ def _symmetrize_cuts(V, S, span, tol_r=0.06):
 
 def _mesh_stator_sector(polys, r_bore, r_out_iron, r_outer, n_slip, span,
                         area, air_mm, quality, r2_band: float = 0.0,
-                        cell: bool = False):
+                        cell: bool = False, part_area: Optional[Dict] = None):
     """(V mm, T) for a stator WEDGE [0, span] × [r_bore, r_outer].
     r2_band < r_bore extends the wedge inward with the gap-air annulus ending
     on the uniform moving-band ring R2 (harmonic-macro boundary).
@@ -828,6 +914,9 @@ def _mesh_stator_sector(polys, r_bore, r_out_iron, r_outer, n_slip, span,
     from shapely.geometry import LineString, Polygon
     iron_edge = math.sqrt(max(area, 1e-6) / 0.4330)
     air_area = max(area, 0.4330 * air_mm * air_mm)
+    _pa = part_area or {}
+    a_iron = float(_pa.get("stator", area))                # per-part override
+    a_coil = float(_pa.get("coil", area))
     _rin = r2_band if 0.0 < r2_band < r_bore - 1e-6 else r_bore
     W = _wedge(-1e-3, span + 1e-3, _rin - 3.0, r_outer + 3.0)
     iron = _resample(polys["stator"], r_bore, n_slip).intersection(W)
@@ -871,15 +960,16 @@ def _mesh_stator_sector(polys, r_bore, r_out_iron, r_outer, n_slip, span,
     V, S = _build_pslg(lines)
     V, S = _symmetrize_cuts(V, S, span)                 # clone-identical seam
 
-    reg = [[*iron.representative_point().coords[0], 1, area]]
-    reg += [[c.centroid.x, c.centroid.y, 2, area] for c in coils]
     ann = W.intersection(Polygon(_grid_circle(r_outer, 360)[:-1]).difference(
                          Polygon(_grid_circle(r_bore, n_slip)[:-1])))
-    reg += [[*a.representative_point().coords[0], 3, air_area]
-            for a in _air_parts(ann, iron, coils)]
+    _air_reg = [[*a.representative_point().coords[0], 3, air_area]
+                for a in _air_parts(ann, iron, coils)]
     if 0.0 < r2_band < r_bore - 1e-6:
         _rm = 0.5 * (r2_band + r_bore)
-        reg += [[_rm * math.cos(span / 2), _rm * math.sin(span / 2), 4, area]]
+        _air_reg += [[_rm * math.cos(span / 2), _rm * math.sin(span / 2), 4, area]]
+    reg = _seeds(_air_reg,
+                 [[*iron.representative_point().coords[0], 1, a_iron]]
+                 + [[c.centroid.x, c.centroid.y, 2, a_coil] for c in coils])
     hp = [[(_rin - 1.5) * math.cos(span / 2), (_rin - 1.5) * math.sin(span / 2)]]
     V, T = _triangulate(V, S, area, quality, regions=reg, hole_pts=hp,
                         no_bnd_steiner=True)
@@ -887,7 +977,8 @@ def _mesh_stator_sector(polys, r_bore, r_out_iron, r_outer, n_slip, span,
 
 
 def _mesh_rotor_sector(polys, r_od, r_shaft, n_slip, span, area, air_mm, quality,
-                       r1_band: float = 0.0, cell_copies: int = 0):
+                       r1_band: float = 0.0, cell_copies: int = 0,
+                       part_area: Optional[Dict] = None):
     """(V mm, T) for a rotor WEDGE [0, span] × [0, r_od] (shaft solid to centre).
     r1_band > r_od extends the wedge with the gap-air annulus ending on the
     uniform moving-band ring R1 (harmonic-macro boundary).
@@ -898,6 +989,12 @@ def _mesh_rotor_sector(polys, r_od, r_shaft, n_slip, span, area, air_mm, quality
     from shapely.geometry import LineString, MultiPolygon, Polygon
     iron_edge = math.sqrt(max(area, 1e-6) / 0.4330)
     air_area = max(area, 0.4330 * air_mm * air_mm)
+    _pa = part_area or {}
+    a_steel = float(_pa.get("rotor", area))                # per-part override
+    a_mag = float(_pa.get("magnet", area))
+    # NOTE: no per-part "shaft" size here — see GEO_PART_KEYS (the -Y cut
+    # chains make the core's area constraint unsatisfiable; the request is
+    # routed to the gmsh mesher instead of being silently dropped).
     parts = [g for g in getattr(polys["rotor"], "geoms", [polys["rotor"]])
              if getattr(g, "area", 0.0) > 1e-6]
     steel = MultiPolygon(parts) if len(parts) > 1 else parts[0]
@@ -953,17 +1050,19 @@ def _mesh_rotor_sector(polys, r_od, r_shaft, n_slip, span, area, air_mm, quality
     V, S = _build_pslg(lines)
     V, S = _symmetrize_cuts(V, S, span)                 # clone-identical seam
 
-    reg = [[*steel.intersection(W).representative_point().coords[0], 5, area]]
-    reg += [[g.centroid.x, g.centroid.y, 6, area] for g in mags]
-    reg += [[0.5 * r_shaft * math.cos(span / 2),
-             0.5 * r_shaft * math.sin(span / 2), 7, air_area]]   # shaft core
+    _air_reg = [[0.5 * r_shaft * math.cos(span / 2),
+                 0.5 * r_shaft * math.sin(span / 2), 7, air_area]]  # shaft core
     ann = W.intersection(Polygon(_grid_circle(r_od, n_slip)[:-1]).difference(
                          Polygon(_grid_circle(r_shaft, n_sh)[:-1])))
-    reg += [[*a.representative_point().coords[0], 8, air_area]
-            for a in _air_parts(ann, steel, mags)]
+    _air_reg += [[*a.representative_point().coords[0], 8, air_area]
+                 for a in _air_parts(ann, steel, mags)]
     if r1_band > r_od + 1e-6:
         _rm = 0.5 * (r_od + r1_band)
-        reg += [[_rm * math.cos(span / 2), _rm * math.sin(span / 2), 9, area]]
+        _air_reg += [[_rm * math.cos(span / 2), _rm * math.sin(span / 2), 9, area]]
+    reg = _seeds(
+        _air_reg,
+        [[*steel.intersection(W).representative_point().coords[0], 5, a_steel]]
+        + [[g.centroid.x, g.centroid.y, 6, a_mag] for g in mags])
     V, T = _triangulate(V, S, area, quality, hole=False, regions=reg,
                         no_bnd_steiner=True, rotor_bridge=True)  # shaft solid
     return V, T
@@ -1029,7 +1128,8 @@ def geo_mesh_halves(p: Dict, polys: Dict, outer_air_factor: float = 1.2,
                     r_si: float = 0.0, r_ro: float = 0.0,
                     air_mesh_mm: float = 0.0,
                     r1_band: float = 0.0, r2_band: float = 0.0,
-                    mesh_edge_mm: float = 0.0):
+                    mesh_edge_mm: float = 0.0,
+                    part_mesh_mm: Optional[Dict] = None):
     """Solver-ready halves in DOM_* tags, geometry-driven CDT:
     (mesh_s, tags_s, cls_s, mesh_r, tags_r, cls_r) — same signature as
     iron_template.template_solver_halves.  Full ring only for now (n_sectors
@@ -1066,6 +1166,15 @@ def geo_mesh_halves(p: Dict, polys: Dict, outer_air_factor: float = 1.2,
     iron_edge = math.sqrt(max(area, 1e-6) / 0.4330)
     air_mm = (float(air_mesh_mm) if float(air_mesh_mm or 0.0) > 0
               else max(3.0, 2.0 * iron_edge))
+    # PER-PART element size: every solid part already owns a CDT region seed
+    # (stator iron / each coil / rotor steel / each magnet), so a requested part
+    # size is simply that seed's target cell area.  Parts not requested keep the
+    # global `area`, so an empty request is bit-identical to the previous mesh.
+    part_area = _part_areas(part_mesh_mm)
+    if part_area:
+        log.info("geo per-part element size: %s (global %.3f mm)",
+                 ", ".join(f"{k}={math.sqrt(v / 0.4330):.3f}mm"
+                           for k, v in sorted(part_area.items())), iron_edge)
 
     _ns = max(1, int(n_sectors))
 
@@ -1110,11 +1219,13 @@ def geo_mesh_halves(p: Dict, polys: Dict, outer_air_factor: float = 1.2,
             _span_r = 2.0 * math.pi / _n_poles
             Vc, Tc = _mesh_stator_sector(polys, r_bore, r_out_iron, r_outer,
                                          n_slip, _span_s, area, air_mm, _Q,
-                                         r2_band=r2_band, cell=True)
+                                         r2_band=r2_band, cell=True,
+                                         part_area=part_area)
             Vs, Ts = _tile_cells(Vc, Tc, _span_s, _n_pairs // _ns)
             Vcr, Tcr = _mesh_rotor_sector(polys, r_od, r_sh, n_slip, _span_r,
                                           area, air_mm, _Q, r1_band=r1_band,
-                                          cell_copies=_n_poles)
+                                          cell_copies=_n_poles,
+                                          part_area=part_area)
             Vr, Tr = _tile_cells(Vcr, Tcr, _span_r, _n_poles // _ns)
             log.info("geo tile: stator %d x pair-cell(%dtri) = %dtri, rotor "
                      "%d x cell(%dtri) = %dtri (1/%d)", _n_pairs // _ns,
@@ -1127,15 +1238,16 @@ def geo_mesh_halves(p: Dict, polys: Dict, outer_air_factor: float = 1.2,
             span = 2.0 * math.pi / _ns
             Vs, Ts = _mesh_stator_sector(polys, r_bore, r_out_iron, r_outer,
                                          n_slip, span, area, air_mm, _Q,
-                                         r2_band=r2_band)
+                                         r2_band=r2_band, part_area=part_area)
             Vr, Tr = _mesh_rotor_sector(polys, r_od, r_sh, n_slip, span,
-                                        area, air_mm, _Q, r1_band=r1_band)
+                                        area, air_mm, _Q, r1_band=r1_band,
+                                        part_area=part_area)
         else:                                          # full ring
             Vs, Ts = _mesh_stator_half(polys, r_bore, r_out_iron,
                                        r_outer, n_slip, area, air_mm, _Q,
-                                       r2_band=r2_band)
+                                       r2_band=r2_band, part_area=part_area)
             Vr, Tr = _mesh_rotor_half(polys, r_od, r_sh, n_slip, area, air_mm, _Q,
-                                      r1_band=r1_band)
+                                      r1_band=r1_band, part_area=part_area)
     # Prune UNREFERENCED vertices (Triangle keeps every input point in the output
     # even when no triangle uses it — seen on the sector cut chains in the outer
     # air).  An unreferenced vertex is a zero stiffness row; on the 200 mm they

@@ -114,7 +114,11 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
     _demag = bool(cfg.get("simulation", {}).get("demag", False))
     _ns = int(n_sectors)
     if _eo == 2:
-        _sg = True; _am = False; _demag = False
+        # NOTE: this used to also force _demag = False — stale since P2 demag
+        # landed (a1aedad); it silently dropped demagnetisation from every P2
+        # sweep, same bug class as routes/simulation e16c3ad. Only the two
+        # genuinely-required coercions remain.
+        _sg = True; _am = False
         if _ns <= 1:
             try:
                 _sym = int(geo.get("num_seg")

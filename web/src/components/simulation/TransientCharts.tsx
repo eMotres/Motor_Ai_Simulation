@@ -320,13 +320,12 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
       // and the forbidden-order noise floor converges to 0 with mesh refinement.
       // Irreversible demagnetisation runs on P2 now too.
       //
-      // VOLTAGE DRIVE still forces P1: the circuit coupling is not wired for P2.
-      // Sending P2 anyway is worse than useless — the backend silently coerces
-      // drive back to "current", so the user picks a voltage drive, gets a
-      // current-drive answer, and nothing on screen says so. Choose P1 here
-      // instead, where the requested drive is actually what runs.
-      element_order:      (drive === 'voltage' ? 1
-                           : (readMeshSetting('p2HiFi', true) ? 2 : 1)),
+      // Voltage drive runs natively on P2 since 4e316b9 (coupled Newton
+      // circuit, verified against P1 at the same operating point), and the
+      // route stopped coercing drive/demag on P2 in e16c3ad — the old
+      // "voltage forces P1" fallback here would now silently DOWNGRADE the
+      // solve instead of protecting it.
+      element_order:      (readMeshSetting('p2HiFi', true) ? 2 : 1),
       // Deterministic template iron mesh (Mesh-tab "Template iron" toggle).
       iron_template:      readMeshSetting('ironTemplate', true),
       // Geometry-driven CDT mesh (Mesh-tab "Geometry-driven mesh" toggle, default ON).

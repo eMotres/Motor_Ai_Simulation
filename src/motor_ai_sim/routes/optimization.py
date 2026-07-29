@@ -136,9 +136,16 @@ def _eval_healthy(out: Dict[str, Any]) -> bool:
     """True only for an eval whose FEM actually produced numbers.  A worker that
     dies mid-solve (or a solver that silently returns an empty field) can emit
     ok=true with NaN torque — caching that poisons every re-run of the sweep
-    with instantly-"done" empty points, so gate both store AND load on it."""
+    with instantly-"done" empty points, so gate both store AND load on it.
+
+    Also rejects an eval whose nonlinear solve did NOT converge.  refine_proc
+    raises on that case, so a fresh eval can never reach here unhealthy on this
+    count; the check exists for cache lines and for any future path that returns
+    the stamp instead of raising."""
     try:
         r = out.get("res") if isinstance(out.get("res"), dict) else out
+        if r.get("nonlinear_converged") is False:
+            return False
         t = r.get("T_em_Nm")
         return isinstance(t, (int, float)) and math.isfinite(float(t))
     except Exception:  # noqa: BLE001
@@ -163,8 +170,16 @@ def _load_eval_cache() -> None:
                         _EVAL_CACHE[rec["k"]] = rec["v"]   # later lines win (re-computed)
                     except Exception:  # noqa: BLE001
                         pass
-            log.info("loaded %d cached FEM evals from %s (skipped %d unhealthy)",
-                     len(_EVAL_CACHE), p, n_bad)
+            # Lines written BEFORE the convergence gate carry no stamp, so they
+            # cannot be checked — they are kept (re-running them costs hours of
+            # FEM) but counted out loud, because "unverified" is not "converged".
+            n_unver = sum(
+                1 for v in _EVAL_CACHE.values()
+                if not isinstance((v.get("res") if isinstance(v.get("res"), dict)
+                                   else v).get("nonlinear_converged"), bool))
+            log.info("loaded %d cached FEM evals from %s (skipped %d unhealthy, "
+                     "%d predate the convergence gate — unverified, not proven "
+                     "converged)", len(_EVAL_CACHE), p, n_bad, n_unver)
     except Exception as _e:  # noqa: BLE001
         log.warning("could not load eval cache: %s", _e)
 
@@ -249,6 +264,13 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
         m = out.rfind("@@RESULT@@")
         if m >= 0:
             _res = json.loads(out[m + len("@@RESULT@@"):])
+            if not _res.get("ok") and "unconverged FEM frames" in str(_res.get("error", "")):
+                # Say it out loud and name the frames.  A rejected candidate that
+                # vanishes with a generic "eval failed" looks like a mesh problem;
+                # this one is the solver telling us the field is not usable.
+                log.warning("eval REJECTED (nonlinear solve): %s | I=%.3g A "
+                            "gamma=%.3g deg overrides=%s",
+                            _res.get("error"), current_a, gamma_deg, overrides)
             if _log:
                 _log_eval(overrides, current_a, gamma_deg, _res)   # accumulate surrogate dataset
             return _res

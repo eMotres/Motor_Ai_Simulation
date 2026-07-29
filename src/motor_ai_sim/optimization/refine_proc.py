@@ -161,6 +161,25 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         raise RuntimeError(_out.get("error") or "solver.em_transient failed")
     d = getattr(_out.get("result"), "raw", None) or {}
 
+    # ── nonlinear-solve honesty ──────────────────────────────────────────────
+    # The Simulation card already refuses to present a window containing a frame
+    # whose field never met its solver's convergence test (routes/simulation.py
+    # "nonlinear_converged").  The optimizer read the SAME dict and ignored the
+    # flag, so a candidate scored on an unconverged field could win a sweep, a
+    # Pareto front or a descent step — the numbers below are averages over that
+    # frame.  Treat it exactly like an infeasible build: raise, so the eval comes
+    # back {"ok": False, "error": ...} and the candidate is DROPPED, never ranked.
+    # The offending frame indices travel in the message so the run log names them
+    # instead of saying "eval failed".
+    if not bool(d.get("picard_converged", True)):
+        _bad = list(d.get("picard_unconverged_frames") or [])
+        raise RuntimeError(
+            "unconverged FEM frames {} of {} (max nonlinear resid {:.3g} vs tol "
+            "{:.1e}) — eval rejected".format(
+                _bad, int(d.get("n_steps", 0) or 0),
+                float(d.get("picard_resid_max") or 0.0),
+                float(d.get("picard_tol") or 0.0)))
+
     Tavg = float(d["T_avg_Nm"])
     cu = float(np.mean(d["P_cu_W"])); fe = float(np.mean(d["P_fe_W"]))
     mg = float(np.mean(d["P_mag_eddy_W"]))
@@ -228,6 +247,13 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         "THD_LL_pct": vh["THD_LL_pct"], "V1_LL_V": vh.get("V1_LL_V", 0.0),
         "Kt_Nm_per_Arms": (round(Tavg / float(current_a), 4)
                            if float(current_a or 0.0) > 1e-9 else 0.0),
+        # Convergence stamp, under the SAME names the Simulation summary uses.
+        # Always True here (an unconverged window raised above) — it is carried
+        # so a cached eval can be told apart from a pre-gate one, and so anything
+        # downstream can assert on it rather than assume.
+        "nonlinear_converged": True,
+        "nonlinear_resid_max": float(d.get("picard_resid_max") or 0.0),
+        "nonlinear_tol": float(d.get("picard_tol") or 0.0),
     }
 
 

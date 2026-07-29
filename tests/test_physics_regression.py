@@ -18,10 +18,11 @@ Design notes, in case a case starts failing for the wrong reason:
 * **Coarse on purpose.** 12 steps/period on a 1.4 mm mesh. These are not
   publication numbers; they only have to be *reproducible*. Keeping the suite
   near five minutes is what makes it get run.
-* **Both element orders.** P2 is the default basis, but P1 is still the only
-  path that implements the coupled eddy J-view solve, so it has to stay pinned
-  too. Demag and voltage drive now exist on BOTH orders and are pinned on both:
-  they are physics, and physics does not depend on the element order.
+* **Both element orders.** P2 is the default basis, but P1 is still the
+  reference implementation of several paths, so it has to stay pinned too.
+  Demag, voltage drive and the coupled sigma*dA/dt eddy solve now exist on BOTH
+  orders and are pinned on both: they are physics, and physics does not depend
+  on the element order.
 
 Regenerate the baseline deliberately, never casually — a diff here is the whole
 point of the file::
@@ -55,6 +56,10 @@ RTOL = 5e-3
 # absolute floor or the relative test divides noise by noise.
 ATOL = {"T_ripple_pct": 0.05, "P_shaft_W": 0.05, "P_solid_W": 0.05,
         "P_core_W": 0.05, "demag_br_min": 0.01, "demag_br_mean": 0.01,
+        # Coupled-eddy shaft loss: the shaft sits under the magnets and the
+        # back iron, so in the rotor frame it sees almost no AC field at all —
+        # milliwatts, i.e. a relative test on it divides noise by noise.
+        "P_shaft_solve_W": 0.05,
         # Voltage drive: these two are ~0 by construction (a settled orbit has
         # no DC current, a converged circuit has no residual), so a relative
         # test on them divides noise by noise.
@@ -127,6 +132,16 @@ CASES = {
     "p2_voltage": dict(COMMON, element_order=2, demag=False,
                        I_phase_rms=60.0, gamma_deg=0.0, drive="voltage",
                        v_phase_peak=7.0, v_delta_deg=10.0),
+    # The coupled sigma*dA/dt solve on P2: solid copper wires with their net
+    # current imposed per wire, magnets and shaft with zero net axial current,
+    # all inside the field solve.  This is the case that pins the LOSS numbers
+    # that stop being a model when it runs — P_cu_ac and P_mag come from
+    # sigma*int(E^2) of the solved field, so a change in the constraint set, the
+    # time discretisation or the conductor bookkeeping moves them immediately.
+    # rotor_eddy is ON (unlike every other case): it is what puts the magnet and
+    # shaft conductivity into the coupled system.
+    "p2_eddy": dict(COMMON, element_order=2, demag=False, eddy=True,
+                    rotor_eddy=True, I_phase_rms=60.0, gamma_deg=0.0),
 }
 
 MAGNET = "F45SH_120C"
@@ -169,6 +184,14 @@ def _metrics(d: Dict[str, Any]) -> Dict[str, float]:
         out["v_dc_residual_A"] = float(d.get("v_dc_residual_A") or 0.0)
         out["v_circuit_resid_max_V"] = float(
             max((d.get("v_drive_diag") or {}).get("resid") or [0.0]))
+    # Coupled eddy solve: pin the four numbers that only exist because it ran.
+    # Gated on the flag the P2 branch sets, so no other case grows a key (the
+    # suite fails a case whose metric set changes, which is the point).
+    if d.get("eddy_coupled"):
+        out["P_cu_total_solve_W"] = float(d.get("P_cu_total_solve_W") or 0.0)
+        out["P_cu_ac_solve_W"] = float(d.get("P_cu_ac_solve_W") or 0.0)
+        out["P_mag_solve_W"] = float(d.get("P_mag_solve_W") or 0.0)
+        out["P_shaft_solve_W"] = float(d.get("P_shaft_solve_W") or 0.0)
     f = d.get("demag_field")
     if f:
         br = np.asarray(f["demag_coef_per_tri"], float)

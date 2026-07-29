@@ -347,12 +347,12 @@ coupled σ∂A/∂t "J-view" solve is NOT the app loss path). The P2 branch:
   field is already smooth, so P1's savgol slip-jitter filter is unneeded);
 - **copper** = I²R (`copper_loss_W`, current drive).
 
-Why post-processing and not a σ∂A/∂t mass matrix in the main solve: P1's APP
+Why post-processing and not a σ∂A/∂t mass matrix in the DEFAULT solve: P1's APP
 transient is `eddy=False` (get_fem_transient never sets eddy=True) — it too is a
 magnetostatic field with the eddy LOSSES post-processed by the same honest rotor
 solve. So P2 matching that path IS "a full transient like P1". The coupled
-σ∂A/∂t bordered J-view solve (`eddy=True`) stays gated for P2 (it is an opt-in
-diagnostic the app does not use).
+σ∂A/∂t bordered solve is the OPT-IN `eddy=True` mode, and it now exists on P2 as
+well — see "Coupled eddy on P2" below.
 
 **Validation (40 mm 12s14p, I=30 γ=−20, n_sectors=2, rotor_eddy=True):**
 
@@ -605,15 +605,78 @@ mesh P1 needs — a fine-mesh P2 is both unnecessary (accuracy already there) an
 the slowest possible combination. The "P2 high-fidelity ripple" mode should be
 understood as "coarse mesh, high element order", not "fine mesh".
 
+## Coupled eddy on P2 (`eddy=True`) — σ·∂A/∂t in the field solve
+
+The last capability that existed only on P1. Every SOLID conductor is now meshed
+and solved as a solid bar carrying `J = σ(−∂A/∂t + U_b)`, with ONE unknown
+voltage per body and one integral constraint:
+
+- **copper** — one body per WIRE (`tag ≥ DOM_COIL_BASE`), each with its share of
+  the phase current imposed EXACTLY (`∫J dΩ = I_b`, `I_b` from the same `Iunit`
+  the P1 path uses) while the eddy reaction redistributes J inside the wire;
+- **magnets / shaft** (`rotor_eddy=True`) — zero net axial current per connected
+  body (`∫J dΩ = 0`). A body cut by the anti-periodic radial boundary takes
+  `U_b ≡ 0`, which is EXACT, not a shortcut: its image across the cut carries
+  −A, so the full body's ∮J vanishes identically. Same split as P1 (cut magnet
+  halves + the centred shaft), and the classification is read off P1's
+  `_rot_con` so the two orders cannot disagree about which body is which;
+- **laminated iron** stays σ = 0 → Bertotti. 2-D cannot resolve laminate-scale
+  eddies and pretending otherwise would be a fiction.
+
+Backward Euler; `A_prev` is per DOF and the rotor block of `mesh_all` IS the
+rotor's material frame, so ∂A/∂t needs no convective term. Solved by a BORDERED
+NEWTON on `[K(A)+Msig/dt, −G; −Gᵀ, S·dt]` with the same pointwise ν(|B|)
+residual + differential-reluctivity tangent as the magnetostatic Newton. If it
+fails to converge it RAISES — no fallback to a Picard that would silently solve
+different physics. Two eddy settling frames at θ<0 remove the `A_prev = 0`
+start-up so the reported window is clean on every frame.
+
+When it runs, the REPORTED `P_cu_ac` and `P_mag`/`P_shaft` come from ∫σE² of the
+solved field, not from the proximity/slab models — those are still computed and
+returned beside them (`P_cu_ac_prox_W`, `P_mag_honest_W`, `P_shaft_honest_W`)
+and logged as `EDDY-SOLVE(P2) …` for the cross-check. The copper split uses the
+2-D DC (`ΣI²/S`, the same bars at ∂A/∂t=0) as the reference, so the AC increment
+is added to the end-winding-corrected DC — P1 subtracts the k_end-inflated DC
+from a 2-D total and therefore reports a NEGATIVE copper AC at low current.
+
+**Validation (30 mm 12s14p, F45SH_120C, 32 A, 24 steps, n_sectors=2):**
+
+| quantity | P1 (`eddy=True`) | P2 (`eddy=True`) | Δ |
+|---|---|---|---|
+| copper coupled total, rotor_eddy OFF | 21.0 W | 20.75 W | −1.2 % |
+| all-conductor coupled total, rotor_eddy ON | 22.0 W | 21.73 W | −1.2 % |
+| magnet + shaft (P1 by difference) | 1.0 W | 0.987 W | −1.3 % |
+| T_avg | 0.22873 Nm | 0.23231 Nm | +1.6 % |
+
+Cost (same mesh, 17467 P2 dofs, 24 frames, back-to-back on a shared machine —
+two rounds because the machine was not quiet): **+6…13 % per frame**
+(1.64 vs 1.55 s and 1.60 vs 1.42 s), **+15…22 % wall** for a 24-step run once
+the two eddy settling frames are counted. The bordered system only adds 43 rows
+to a 17 k system, so the cost is the extra Newton work, not the border.
+
+Demag and frozen_nu stack on top and were exercised: `eddy + demag` at 60 A
+de-rates 232/490 magnet elements (min Br 0.228, against the 0.235 the
+eddy-free `p2_demag` pin records) with the warm-started re-solve running on the
+bordered Newton; `eddy + frozen_nu` takes the linear branch and lands at
+residual 6e-14.
+
+The line search is on the FIELD residual alone. Testing field and constraint
+together (max of the relative norms) looked more careful and was wrong: the
+constraint residual is ~1 by construction on the first sweep and the constraint
+block is LINEAR — a damped step scales it by exactly (1−λ) — so that merit let
+the constraint veto every field-reducing step and `eddy + demag` at 60 A stalled
+at rrel≈0.97 and raised. The conductor voltages are also seeded at their DC
+value I_b/S_b rather than 0, which is most of the answer.
+
 ### NOT done (raises NotImplementedError, documented in-code)
-1. **Coupled σ∂A/∂t J-view solve (`eddy=True`), voltage drive, demag pre-pass**
-   on P2 — the app transient uses none of these (they are opt-in diagnostics /
-   drive modes); the P2 magnetostatic-field + honest-eddy-loss path matches the
-   P1 app path.
+1. **`eddy=True` together with voltage drive** on P2 — the winding current
+   cannot be an integral constraint and a circuit unknown at the same time yet.
+   Both alone work. (P1 does not implement this either: its `if eddy: … elif
+   _vdrive:` chain silently SKIPS the circuit and reports a current-drive answer
+   as a voltage run, which is why P2 refuses instead of copying it.)
 2. **Moving / harmonic-macro band** on P2 (structured merged belt only for now).
 
 STATUS: P2 static solver = built + validated. **P2 full transient on the belt =
 DONE** — full ring AND anti-periodic sector, mesh-convergent, sector == full
-ring, and now with REAL rotor-eddy/iron/copper losses matching P1 to ~7 %.
-Remaining = the opt-in coupled-eddy J-view / voltage-drive / demag diagnostics
-(cleanly gated).
+ring, REAL rotor-eddy/iron/copper losses matching P1 to ~7 %, plus voltage
+drive, irreversible demag and the coupled σ∂A/∂t eddy solve.

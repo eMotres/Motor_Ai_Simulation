@@ -1517,9 +1517,10 @@ def fem_transient_sliding_band(
                                      # full ring (n_sectors≤1) AND anti-periodic sector wedge
                                      # (n_sectors≥2) — via edge-midpoint DOF stitching across
                                      # the moving slip cut and the radial cuts (see the P2
-                                     # branch below and P2_NOTES.md).  Still gated (raises
-                                     # NotImplementedError): the moving/harmonic-macro band and
-                                     # eddy/voltage/demag coupling on P2.
+                                     # branch below and P2_NOTES.md).  Voltage drive, irreversible
+                                     # demag and the coupled σ·∂A/∂t eddy solve all run on P2 too.
+                                     # Still gated (raises NotImplementedError): the moving /
+                                     # harmonic-macro band, and eddy + voltage drive TOGETHER.
 ) -> dict:
     """Sliding-band transient: mesh the stator + rotor halves ONCE, then sweep
     the rotor by shifting the slip-ring node pairing (no remeshing) so the
@@ -2000,6 +2001,9 @@ def fem_transient_sliding_band(
             dr = 1.0 if nm.endswith("+") else -1.0
             area_c = float(areas_s[idx].sum())
             _coil_con.append({
+                "tag": int(tag),          # domain tag — the P2 branch rebuilds g/S
+                                          # on ITS basis and needs the identity of
+                                          # the wire this (phase, Iunit) belongs to.
                 "g": np.concatenate([g_s, np.zeros(_nr0)]),
                 "S": float(g_s.sum()),
                 "Iunit": dr * n_wires * area_c / max(slot_area_m2, 1e-12),
@@ -2065,7 +2069,11 @@ def fem_transient_sliding_band(
             # ∫J=0 constraint row — used only by the coupled eddy J-VIEW mode.
             sb = Basis(half["r"]["mesh"], ElementTriP1(), elements=idx)
             g_r = np.asarray((asm(_massform, sb) * _sigma_mag_lib) @ _ones_r)
-            _rot_con.append({"g": np.concatenate([np.zeros(nsn), g_r]),
+            _rot_con.append({"tag": int(t),     # see _coil_con["tag"] — the P2
+                                                # branch reads the INTERIOR-magnet
+                                                # tag set from here (the cut halves
+                                                # are the complement, U = 0).
+                             "g": np.concatenate([np.zeros(nsn), g_r]),
                              "S": float(g_r.sum()),
                              "nodes": nds + nsn})
         _sh_idx = np.asarray(half["r"]["cells"].get(int(DOM_SHAFT),
@@ -2325,7 +2333,7 @@ def fem_transient_sliding_band(
     dt = (1.0 / max(f_elec, 1e-9)) * n_periods / n_total
 
     # ═══════════════════════════════════════════════════════════════════════
-    #  P2 (quadratic) SLIDING-BAND MAGNETOSTATIC PATH  (element_order == 2)
+    #  P2 (quadratic) SLIDING-BAND TRANSIENT PATH  (element_order == 2)
     # ═══════════════════════════════════════════════════════════════════════
     # B = curl A is LINEAR per element instead of piecewise-constant, so the
     # Arkkio air-gap torque is SMOOTH where P1 staircases.  The blocker solved
@@ -2338,8 +2346,10 @@ def fem_transient_sliding_band(
     # midpoints (and, for a SECTOR wedge, the radial-cut vertices + cut-edge
     # midpoints with the anti-periodic _bc_sign).  Works for the full ring AND
     # anti-periodic sector wedges (validated: sector T_avg == full-ring T_avg to
-    # 0.3 %).  Magnetostatic per frame (no σ∂A/∂t): for the cogging / ripple goal
-    # this is exactly the physics that matters; eddy on P2 is a refinement.
+    # 0.3 %).  Magnetostatic per frame by DEFAULT — that is the physics the
+    # cogging / ripple goal needs; eddy=True adds the coupled σ·∂A/∂t term on the
+    # solid conductors (see the two COUPLED EDDY blocks below) and the frame then
+    # solves a genuine magnetodynamic step instead.
     if element_order == 2:
         from skfem import ElementTriP2 as _P2E
         from scipy.sparse.linalg import splu as _splu2
@@ -2359,13 +2369,21 @@ def fem_transient_sliding_band(
             raise NotImplementedError(
                 "P2 + moving/harmonic-macro band not implemented; run the merged "
                 "structured belt (structured_gap=True, element_order=2).")
-        if eddy:
+        if eddy and _vdrive:
+            # The coupled eddy solve imposes each conductor's current as an
+            # integral CONSTRAINT; the voltage circuit needs those same currents
+            # as UNKNOWNS.  Both are solvable together (the ∂A/∂i columns become
+            # back-solves of the bordered matrix with the constraint rhs), but
+            # that solve is NOT written yet — and refusing is the only honest
+            # option, because the alternative is what the P1 path does: its
+            # `if eddy: … elif _vdrive:` chain silently SKIPS the circuit and
+            # marches the previous frame's currents, reporting a current-drive
+            # answer as a voltage run.
             raise NotImplementedError(
-                "P2 path supports current- AND voltage-drive magnetostatics + "
-                "post-processed rotor_eddy losses + irreversible demagnetisation; "
-                "the coupled sigma*dA/dt J-view solve (eddy=True) is not wired "
-                "for P2 yet. See P2_NOTES.md.")
-
+                "P2: coupled eddy (eddy=True) + voltage drive is not implemented "
+                "— the winding current cannot be an integral constraint and a "
+                "circuit unknown at the same time yet.  Run either eddy with "
+                "current drive, or voltage drive without eddy.")
         b2 = Basis(mesh_all, _P2E())
         b2_0 = b2.with_element(ElementTriP0())      # P0 for per-element ν interpolate
         N2 = b2.N
@@ -2493,6 +2511,94 @@ def fem_transient_sliding_band(
                  "%d cut-vertex + %d cut-edge midpoints paired",
                  N2, "full ring" if _full_ring else "sector",
                  Nring, _n_redge, len(_re_pairs), len(_cut_v), len(_cut_e))
+
+        # ═══════════════════════════════════════════════════════════════════
+        #  COUPLED EDDY-CURRENT DATA (σ·∂A/∂t) — SOLID CONDUCTORS, P2
+        # ═══════════════════════════════════════════════════════════════════
+        # Every SOLID (non-laminated) conductor is meshed and solved as a solid
+        # bar carrying  J = σ(−∂A/∂t + U_b), one unknown voltage U_b per body:
+        #
+        #   • stator copper — ONE body per WIRE (tags ≥ DOM_COIL_BASE), each with
+        #     its share of the phase current imposed exactly (∫J dΩ = I_b) while
+        #     the eddy reaction redistributes J inside the wire.  I_b uses the
+        #     SAME Iunit the P1 eddy path uses (read off _coil_con), so the two
+        #     orders drive identical ampere-turns.
+        #   • magnets / shaft (rotor_eddy) — net ZERO axial current per connected
+        #     body (∫J dΩ = 0).  A body CUT by the anti-periodic radial boundary
+        #     is exempt with U_b ≡ 0, and that is EXACT rather than a convenience:
+        #     its image across the cut carries −A, so the full body's ∮J already
+        #     vanishes identically and the constraint would over-determine the
+        #     wedge.  P1 makes the same split (cut magnet halves + the centred
+        #     shaft) and the interior/half classification is read off _rot_con so
+        #     the two orders never disagree about which body is which.
+        #   • laminated iron stays σ = 0 — a 2-D model cannot resolve eddies at
+        #     the laminate scale, so its loss is Bertotti (material data), not a
+        #     field solve.  Air is σ = 0 by construction.
+        #
+        # Assembled on the SAME stitched mesh as the field (stator elements
+        # 0…nst−1, rotor elements +nst), so no interpolation ever enters.
+        _ed_con = []             # constrained bodies: dicts(key, tag, g, S, …)
+        _Msig2 = _csr((N2, N2))  # Σ σ·∫u·v over ALL conductors (backward-Euler term)
+        _Msig_grp = {}           # loss split: "cu" / "mag" / "shaft" → σ-mass block
+        _Msd2 = _csr((N2, N2))   # Msig/dt
+        _G2 = _csr((N2, 0))      # columns g_b = σ·M_b·1  (∫σ·u over body b)
+        _Sdt2 = np.zeros(0)      # S_b·dt with S_b = ∫σ dΩ
+        if eddy:
+            from scipy.sparse import bmat as _bmat2, diags as _diags2
+            _ones_e = np.ones(N2)
+            _coil_meta = {int(c["tag"]): c for c in _coil_con}
+            _int_mag = {int(c["tag"]) for c in _rot_con} if rotor_eddy else set()
+            _bodies = []          # (group_key, tag, mesh_all element ids, σ)
+            for _tg, _ix in half["s"]["cells"].items():
+                _sg = _sigma_of_tag(int(_tg))
+                if _sg > 0.0:
+                    _bodies.append(("cu", int(_tg), np.asarray(_ix, int), _sg))
+            if rotor_eddy:
+                for _tg, _ix in half["r"]["cells"].items():
+                    _sg = _sigma_of_tag(int(_tg))
+                    if _sg <= 0.0:
+                        continue
+                    _bodies.append(
+                        ("shaft" if int(_tg) == int(DOM_SHAFT) else "mag",
+                         int(_tg), np.asarray(_ix, int) + nst, _sg))
+            _n_free_b = 0
+            _gcols = []
+            for _ky, _tg, _ids, _sg in _bodies:
+                _Mb = (asm(_massform, Basis(mesh_all, _P2E(), elements=_ids))
+                       * float(_sg)).tocsr()
+                _Msig2 = _Msig2 + _Mb
+                _Msig_grp[_ky] = (_Mb if _ky not in _Msig_grp
+                                  else _Msig_grp[_ky] + _Mb)
+                # U ≡ 0 bodies: cut by the anti-periodic boundary (their image
+                # cancels the net current identically) — no constraint row.
+                if _ky == "mag" and _tg not in _int_mag:
+                    _n_free_b += 1
+                    continue
+                if _ky == "shaft" and not _full_ring:
+                    _n_free_b += 1
+                    continue
+                _g = np.asarray(_Mb @ _ones_e).ravel()
+                _cm = _coil_meta.get(_tg) if _ky == "cu" else None
+                _ed_con.append({
+                    "key": _ky, "tag": _tg, "g": _g, "S": float(_g.sum()),
+                    "Iunit": float(_cm["Iunit"]) if _cm else 0.0,
+                    "phase": (_cm["phase"] if _cm else None),
+                })
+                _gcols.append(_g)
+            if _gcols:
+                _G2 = _csr(np.column_stack(_gcols))
+                _Sdt2 = np.array([c["S"] for c in _ed_con], float) * dt
+            _Msd2 = (_Msig2 * (1.0 / dt)).tocsr()
+            log.info("P2 eddy: %d constrained bodies (%d copper wires, %d rotor "
+                     "∫J=0), %d U=0 cut bodies | σ_cu=%.3g σ_mag=%.3g "
+                     "σ_shaft=%.3g S/m",
+                     len(_ed_con), sum(1 for c in _ed_con if c["key"] == "cu"),
+                     sum(1 for c in _ed_con if c["key"] != "cu"), _n_free_b,
+                     _sig_cu_T, _sigma_mag_lib, _sigma_shaft_lib)
+            if not _ed_con:
+                raise RuntimeError(
+                    "eddy=True but no solid conductor was found on the P2 mesh "
+                    "— nothing to constrain (check the coil domain tags).")
 
         def _ring_map(m_shift):
             # rotor ring node kk -> (stator node j, sign).  Full ring: periodic
@@ -2806,6 +2912,105 @@ def fem_transient_sliding_band(
                     _ok = 0
             return A2, iA, iB, nu, res, nit
 
+        # ═══════════════════════════════════════════════════════════════════
+        #  COUPLED EDDY-CURRENT SOLVE (σ·∂A/∂t) — BORDERED NEWTON, P2
+        # ═══════════════════════════════════════════════════════════════════
+        # Backward Euler on the magnetodynamic system, bordered by ONE integral
+        # constraint per current-carrying body:
+        #
+        #   [ K(A) + Msig/dt      −G  ] [A]   [ f_mag + (Msig/dt)·A_prev ]
+        #   [      −Gᵀ          S·dt  ] [U] = [ dt·I − Gᵀ·A_prev         ]
+        #
+        # Row 1 is  ∇·(ν∇A) = −σ(−∂A/∂t + U_b), row 2 is ∫σ(−∂A/∂t + U_b)dΩ = I_b
+        # (both scaled by dt so the block is symmetric).  The coil current is NOT
+        # a source term any more — it is the constraint, which is the whole point:
+        # J redistributes freely inside the conductor and only its NET value is
+        # imposed.  σ = 0 everywhere else, so air and laminated iron see exactly
+        # the magnetostatic operator they saw before.
+        #
+        # TIME: A_prev is the previous frame's field PER DOF.  The rotor block of
+        # mesh_all is the rotor's MATERIAL frame (the rotation lives entirely in
+        # the slip pairing Pro), so a dof tracks a material point on both halves
+        # and ∂A/∂t needs no convective term and no re-projection.  Only Pro
+        # changes per frame, and it is re-applied to G every frame below.
+        #
+        # NONLINEARITY: the SAME pointwise ν(|B|) residual + differential-
+        # reluctivity tangent the magnetostatic Newton uses (_Kpw/_tangent2), so
+        # the eddy solve converges on identical iron physics.  With ν frozen
+        # (frozen_nu / no saturable iron) the system is linear and one bordered
+        # solve is exact — there is no Picard variant, by design: this branch
+        # solves by Newton and code parked in the Picard fallback never runs.
+        def _eddy_solve(Pro, free, A_start, U_start, I_vec, Aprev, nu_fix,
+                        maxit):
+            """Bordered (A, U) Newton.  Returns (ok, A, U, rrel, nit)."""
+            Ae = A_start.copy(); Ue = U_start.copy()
+            cr = dt * np.asarray(I_vec, float) - np.asarray(_G2.T @ Aprev).ravel()
+            rhs_e = f_mag2 + _Msd2 @ Aprev
+            _rf0 = np.asarray(Pro.T @ rhs_e).ravel()[free]
+            _bn = max(float(np.linalg.norm(_rf0)), 1e-30)
+            _cn = max(float(np.linalg.norm(cr)), 1e-30)
+            Bf = (Pro.T @ _G2).tocsr()[free, :]
+            nit = 0; rrel = 1.0
+
+            def _res_e(Av, Uv, Km):
+                rf = np.asarray(Pro.T @ ((Km + _Msd2) @ Av - _G2 @ Uv
+                                         - rhs_e)).ravel()[free]
+                rc = _Sdt2 * Uv - np.asarray(_G2.T @ Av).ravel() - cr
+                return rf, rc, max(float(np.linalg.norm(rf)) / _bn,
+                                   float(np.linalg.norm(rc)) / _cn)
+
+            # DC seed for the conductor voltages: at ∂A/∂t = 0 the constraint
+            # gives U_b = I_b/S_b, which is the bulk of the answer (the eddy
+            # reaction is a correction to it).  Starting from U = 0 instead puts
+            # the whole ampere-turn drive in the first Newton step, and at 60 A
+            # that step lands past the BH knee from an unsaturated start.
+            if not np.any(Ue):
+                Ue = np.asarray(I_vec, float) * dt / np.maximum(_Sdt2, 1e-30)
+
+            for it in range(max(int(maxit), 2)):
+                nit = it + 1
+                if nu_fix is not None:
+                    Km = _asmK(nu_fix); info = None
+                else:
+                    Km, info = _Kpw(Ae)
+                rf, rc, rrel = _res_e(Ae, Ue, Km)
+                if rrel < 1e-7:
+                    return True, Ae, Ue, rrel, nit
+                J = Km
+                if info is not None:
+                    T = _tangent2(info)
+                    if T is not None:
+                        J = Km + T
+                Jff = (Pro.T @ (J + _Msd2) @ Pro).tocsr()[free][:, free]
+                Mb = _bmat2([[Jff, -Bf], [-Bf.T, _diags2(_Sdt2)]]).tocsc()
+                try:
+                    sol = _solve_ff(Mb, -np.concatenate([rf, rc]))
+                except Exception as _je:
+                    log.info("P2 eddy bordered solve failed (%s)", _je)
+                    return False, Ae, Ue, rrel, nit
+                dA = _pad2(Pro, free, sol[:free.size]); dU = sol[free.size:]
+                if nu_fix is not None:        # linear system: the step is exact
+                    Ae = Ae + dA; Ue = Ue + dU
+                    continue
+                # Backtracking line-search on the FIELD residual — the same test
+                # the magnetostatic Newton uses, and the only one that means
+                # anything here: the constraint block is LINEAR, so a damped step
+                # scales its residual by exactly (1−λ) and it can never be what
+                # blocks progress.  Testing the two together (max of the relative
+                # norms) made the constraint residual, which is ~1 by
+                # construction on the first sweep, veto every field-reducing step
+                # and the solve stalled at rrel≈0.97 at 60 A.
+                _f0 = float(np.linalg.norm(rf))
+                lam = 1.0; acc = False
+                for _ls in range(8):
+                    At = Ae + lam * dA; Ut = Ue + lam * dU
+                    if float(np.linalg.norm(_res_e(At, Ut, _Kpw(At)[0])[0])) < _f0:
+                        Ae = At; Ue = Ut; acc = True; break
+                    lam *= 0.5
+                if not acc:
+                    return False, Ae, Ue, rrel, nit
+            return False, Ae, Ue, rrel, nit
+
         if _vdrive:
             # ── dq phasor steady-state initialiser (P2) ──────────────────────
             # τ = L/R spans ~20 electrical periods on a low-R machine, so a
@@ -2918,9 +3123,23 @@ def fem_transient_sliding_band(
         # converged field A and ν (a near-perfect Newton initial guess).
         _use_newton = (_os_sb.environ.get("SB_NO_NEWTON") != "1")
         _A2_prev = None; _nu_conv2 = None
-        for k in range(n_total):
+        # ── coupled-eddy state ───────────────────────────────────────────────
+        # A_prev starts at ZERO, which is not a field the machine was ever in, so
+        # the first step carries a fake ∂A/∂t.  It decays fast — the diffusion
+        # time of a 2 mm copper wire at 120 °C is ~5 µs against a ~100 µs step —
+        # but "fast" is not "gone", so the eddy run is given its own SETTLING
+        # frames at negative rotor angles (real solves at θ<0, discarded) instead
+        # of averaging the transient away like the P1 path does.  The reported
+        # window is then a clean period on every frame.  Voltage drive already
+        # marches ten settling periods, so it needs none.
+        _eddy_warm = 2 if (eddy and not _vdrive) else 0
+        _Aed_prev = np.zeros(N2)              # previous-frame A per dof (material)
+        _Ued = np.zeros(len(_ed_con))         # per-body conductor voltages
+        _ed_cu = []; _ed_mag = []; _ed_sh = []   # σ∫E² per frame [W, machine]
+        _ed_dc2d = []                         # 2-D DC I²R of the same bars [W]
+        for k in range(-_eddy_warm, n_total):
             if progress_cb is not None:
-                try: progress_cb(k, n_total)
+                try: progress_cb(max(k, 0), n_total)
                 except Exception: pass
             theta = (k / n_total) * period_mech * n_periods
             m_shift = int(round(theta / spacing))
@@ -2944,8 +3163,11 @@ def fem_transient_sliding_band(
             else:
                 _Vt = None; _iv_prev = None
                 Ist = _currents(theta_eff)
-            f = (f_mag2 + Ist['A'] * f_coil2['A']
-                 + Ist['B'] * f_coil2['B'] + Ist['C'] * f_coil2['C'])
+            # eddy: the winding current is an integral CONSTRAINT, not a source —
+            # putting it in f as well would drive the ampere-turns twice.
+            f = f_mag2 if eddy else (f_mag2 + Ist['A'] * f_coil2['A']
+                                     + Ist['B'] * f_coil2['B']
+                                     + Ist['C'] * f_coil2['C'])
             Pro, outer_red = _build_Pro2(m_shift)
             # WARM-START ν across frames (perf): only frame 0 converges from the
             # unsaturated base (~60–70 sweeps cold); every later frame starts from
@@ -2958,8 +3180,8 @@ def fem_transient_sliding_band(
             # changes the PATH, never the fixed point.  The cap is raised so frame
             # 0 reaches _PIC_TOL2 from cold and warm-started frames have headroom.
             # Same strategy as the P1 main loop.
-            if k == 0:
-                nu_all2 = nu_base2.copy()          # frozen path: base at k=0
+            if k == -_eddy_warm:
+                nu_all2 = nu_base2.copy()          # frozen path: base at frame 0
             _Ptf = np.asarray(Pro.T @ f).ravel()
             # free (non-Dirichlet) reduced DOFs — CONSTANT within a frame (Pro and
             # the outer Dirichlet set are fixed), so precompute the slice once.
@@ -2993,6 +3215,35 @@ def fem_transient_sliding_band(
             _dm_pass = 0
             while True:
                 _res = 0.0; _nit = 0; _newton_ok = False
+                # ── COUPLED EDDY: bordered magnetodynamic Newton ──────────────────
+                # Replaces the magnetostatic solve for this frame; every other
+                # per-frame quantity (torque, ψ, B histories, demag) is taken from
+                # its A2 unchanged, so the eddy run differs from the magnetostatic
+                # one ONLY by the physics that was added.
+                if eddy:
+                    _I_vec = np.array(
+                        [Ist[c["phase"]] * c["Iunit"] if c["key"] == "cu" else 0.0
+                         for c in _ed_con], float)
+                    # ν frozen ⇒ the bordered system is LINEAR (one exact solve);
+                    # the first frame of a frozen_nu run still converges the
+                    # saturation, which is what "frozen at the reference frame"
+                    # means.  No saturable iron ⇒ always linear.
+                    _nu_fix = (nu_all2 if ((frozen_nu and _A2_prev is not None)
+                                           or not _sat2) else None)
+                    (_eok, A2, _Ued, _res, _nit) = _eddy_solve(
+                        Pro, _free2, _A_start, _Ued, _I_vec, _Aed_prev,
+                        _nu_fix, max(int(nonlinear_iterations), 20))
+                    if not _eok:
+                        # No silent fallback: the magnetostatic Picard below would
+                        # solve DIFFERENT physics (no σ·∂A/∂t, coil current back as
+                        # a source) and report it as an eddy run.
+                        raise RuntimeError(
+                            f"P2 coupled eddy: bordered Newton did not converge at "
+                            f"frame {k} ({_nit} its, rrel={_res:.2e})")
+                    _newton_ok = True
+                    if _nu_fix is None:
+                        # element-mean ν for the loss post-processing
+                        nu_all2 = _nu_of(_elemB(A2), nu_all2)
                 # ── VOLTAGE DRIVE: coupled field + circuit solve ──────────────────
                 # The phase currents are UNKNOWNS solved together with the field.
                 # Primary path: the coupled Newton (field residual + line-to-line
@@ -3039,7 +3290,8 @@ def fem_transient_sliding_band(
                 # per-element tangent T=2(dν/dB²)(∇A·∇u)(∇A·∇v).  Line-search on |R|
                 # globalises the BH knee; if it collapses, this frame falls back to
                 # damped Picard (never returns garbage).
-                if (not _vdrive) and _use_newton and not frozen_nu and _sat2:
+                if ((not _vdrive) and (not eddy) and _use_newton
+                        and not frozen_nu and _sat2):
                     # POINTWISE ν(|B|²) at quadrature points (_Kpw, hoisted above
                     # the frame loop) — the residual and the tangent then use the
                     # SAME nonlinearity, giving a TRUE (quadratic) Newton step.
@@ -3090,7 +3342,7 @@ def fem_transient_sliding_band(
                         log.info("P2 Newton not converged at frame %d (%d its, rrel=%.1e)"
                                  " — Picard fallback", k, _nit, _rrel)
                 # ── DAMPED PICARD (SB_NO_NEWTON, frozen_nu, or Newton fell back) ──
-                if (not _vdrive) and not _newton_ok:
+                if (not _vdrive) and (not eddy) and not _newton_ok:
                     if not frozen_nu:
                         nu_all2 = _nu_start.copy()     # warm-start (base at k=0)
                     if frozen_nu:
@@ -3204,8 +3456,9 @@ def fem_transient_sliding_band(
                         _my_all[nst:] = _My_glob * _br_glob
                         f_mag2 = asm(_msrc, b2, mx=b2_0.interpolate(_mx_all),
                                      my=b2_0.interpolate(_my_all))
-                        f = (f_mag2 + Ist['A'] * f_coil2['A']
-                             + Ist['B'] * f_coil2['B'] + Ist['C'] * f_coil2['C'])
+                        f = f_mag2 if eddy else (
+                            f_mag2 + Ist['A'] * f_coil2['A']
+                            + Ist['B'] * f_coil2['B'] + Ist['C'] * f_coil2['C'])
                         _bff2 = np.asarray(Pro.T @ f).ravel()[_free2]
                         _dm_pass += 1
                         # Re-solve from the field we just converged, not from the
@@ -3221,8 +3474,39 @@ def fem_transient_sliding_band(
                         continue                     # re-solve THIS frame
                 break
 
-            _pic_iters.append(_nit); _pic_res_max = max(_pic_res_max, _res)
             _A2_prev = A2.copy(); _nu_conv2 = nu_all2.copy()
+            if eddy:
+                # ── Joule loss straight from the coupled solution ─────────────
+                #   P = ∫σ E² = ∫σ(−∂A/∂t + U_b)²
+                #     = Ȧᵀ·M̃_b·Ȧ − 2·U_b·(g_b·Ȧ) + U_b²·S_b     per body,
+                # evaluated EXACTLY on the FEM field (M̃ = σ-weighted mass, g and S
+                # the same vectors the constraint rows use).  U_b ≡ 0 bodies keep
+                # only the first term — which is what U = 0 means.  Done per body
+                # rather than by smearing U onto nodes, so a node shared by two
+                # conductors cannot pick up the wrong voltage.
+                _dAe = (A2 - _Aed_prev) * (1.0 / dt)          # ∂A/∂t [V/m]
+                _pg = {_kk: float(_dAe @ (_Mg @ _dAe))
+                       for _kk, _Mg in _Msig_grp.items()}
+                for _ci, _c in enumerate(_ed_con):
+                    _u = float(_Ued[_ci])
+                    _pg[_c["key"]] += _u * (_u * _c["S"]
+                                            - 2.0 * float(_c["g"] @ _dAe))
+                _wsc = float(NS) * float(p.stack_length)   # sector·2-D → machine
+                _Aed_prev = A2.copy()
+                if k >= 0:
+                    _ed_cu.append(_pg.get("cu", 0.0) * _wsc)
+                    _ed_mag.append(_pg.get("mag", 0.0) * _wsc)
+                    _ed_sh.append(_pg.get("shaft", 0.0) * _wsc)
+                    # DC reference of the SAME bars: with ∂A/∂t = 0 the constraint
+                    # gives U_b = I_b/S_b and P = ΣI_b²/S_b — the 2-D (active
+                    # length only) I²R, so total − this is the honest AC increment
+                    # to add to the end-winding-corrected DC below.
+                    _ed_dc2d.append(float(np.sum(
+                        [(Ist[c["phase"]] * c["Iunit"]) ** 2 / max(c["S"], 1e-30)
+                         for c in _ed_con if c["key"] == "cu"])) * _wsc)
+            if k < 0:
+                continue          # eddy settling frame: solved, not reported
+            _pic_iters.append(_nit); _pic_res_max = max(_pic_res_max, _res)
             Tq = _arkkio_torque_p2(mesh_all, A2, b2, p.r_rotor_out,
                                    p.r_stator_in, p.stack_length) * NS
             _T2.append(Tq)
@@ -3288,12 +3572,32 @@ def fem_transient_sliding_band(
                 _histA_rot2.append(A2[_rot_vdof].copy())
             if return_field and ((field_first and k == 0)
                                  or (not field_first and k == n_total - 1)):
-                _Bx_all, _By_all = _p2_B_at_quad(
-                    Basis(mesh_all, _P2E()), A2)[:2]
+                # Same payload shape as the P1 snapshot (per-element B + domain
+                # tags beside A), so a viewer needs no second case.  _bx_el /
+                # _by_el above are already the element means over mesh_all.
                 _snap2 = {"P_mm": (mesh_all.p * 1e3).copy(),
                           "T": mesh_all.t.copy(),
                           "A": A2[vdof].copy(),
+                          "Bx": _bx_el.copy(), "By": _by_el.copy(),
+                          "tags": np.concatenate(
+                              [np.asarray(ts), np.asarray(tr)]).astype(int),
                           "nsn": int(nsn)}
+                if eddy:
+                    # J-VIEW: the eddy current density J = σ(−∂A/∂t + U_b) the
+                    # coupled solve produces, sampled at the mesh VERTICES (the
+                    # P1 snapshot is nodal too, so the viewer needs no new case).
+                    def _bdofs(ids):
+                        return np.concatenate([
+                            vdof[np.unique(mesh_all.t[:, ids])],
+                            fdof[np.unique(mesh_all.t2f[:, ids])]]).astype(int)
+                    _sig_n = np.zeros(N2); _u_n = np.zeros(N2)
+                    _elm = {}
+                    for _ky, _tg, _ids, _sg in _bodies:
+                        _elm[_tg] = _ids
+                        _sig_n[_bdofs(_ids)] = _sg
+                    for _ci, _c in enumerate(_ed_con):
+                        _u_n[_bdofs(_elm[_c["tag"]])] = float(_Ued[_ci])
+                    _snap2["Jeddy"] = (_sig_n * (-_dAe + _u_n))[vdof].copy()
         # ── Voltage drive: drop the SETTLING periods ─────────────────────────
         # The currents are STATE, so the run carries an electrical start-up
         # transient; _vskip frames were prepended for it (n_total/n_periods were
@@ -3308,6 +3612,7 @@ def fem_transient_sliding_band(
         _v2_lists = (_T2, _psiA, _psiB, _psiC, _IA, _IB, _IC, _tt,
                      _hsx2, _hsy2, _hrx2, _hry2, _hcx2, _hcy2,
                      _histA_rot2, _pic_iters,
+                     _ed_cu, _ed_mag, _ed_sh, _ed_dc2d,
                      _v_diag["iters"], _v_diag["resid"])
         if _vdrive and _vskip:
             n_total -= _vskip
@@ -3426,6 +3731,46 @@ def fem_transient_sliding_band(
                          P_shaft_avg2, len(_hf2), P_fe_avg2, P_cu_dc2)
             except Exception as _e2:
                 log.warning("P2 honest rotor eddy failed: %s", _e2)
+
+        # ── COUPLED EDDY: the solved σ∫E² REPLACES the modelled numbers ───────
+        # Everything above is a MODEL of a loss the magnetostatic field cannot
+        # produce: the copper AC term is the proximity/skin formula, magnet and
+        # shaft come from the frequency-domain rotor solve driven by a history.
+        # When the coupled solve ran, the loss is not modelled any more — it is
+        # ∫σE² of the field that was actually solved with σ·∂A/∂t in it, so that
+        # is what gets reported.  The modelled numbers stay computed and are
+        # returned + logged beside it: two independent routes to the same watts
+        # is the only cross-check this code has.
+        #
+        # COPPER SPLIT.  The 2-D solve knows nothing about end windings, so its
+        # total is the ACTIVE-LENGTH loss.  Subtracting the active-length DC
+        # (ΣI²/S, the same bars at ∂A/∂t = 0) leaves the pure AC increment,
+        # which is then added to the end-winding-corrected DC — instead of
+        # subtracting the k_end-inflated DC from a 2-D total, which is how the
+        # P1 path reports a NEGATIVE copper AC at low current.
+        P_cu_ac_prox_avg2 = float(P_cu_ac_avg2)
+        P_mag_prox_avg2 = float(P_mag_avg2); P_shaft_prox_avg2 = float(P_shaft_avg2)
+        P_cu_solve_avg2 = P_cu_dc2d_avg2 = 0.0
+        if eddy and _ed_cu:
+            P_cu_solve_avg2 = float(np.mean(_ed_cu))
+            P_cu_dc2d_avg2 = float(np.mean(_ed_dc2d))
+            P_cu_ac_ser2 = [t - d for t, d in zip(_ed_cu, _ed_dc2d)]
+            P_cu_ac_avg2 = float(np.mean(P_cu_ac_ser2))
+            P_cu_ser2 = [P_cu_dc2 + ac for ac in P_cu_ac_ser2]
+            _lm2 = ("field+coupled eddy (P2 sigma*dA/dt solve: copper"
+                    + (" + magnet/shaft)" if rotor_eddy else ")"))
+            log.info("EDDY-SOLVE(P2) copper total=%.2f W (2-D DC=%.2f + AC=%.2f) "
+                     "vs slab DC+AC=%.2f W (prox AC=%.2f); reported DC(+end "
+                     "winding)=%.2f W", P_cu_solve_avg2, P_cu_dc2d_avg2,
+                     P_cu_ac_avg2, P_cu_dc2 + P_cu_ac_prox_avg2,
+                     P_cu_ac_prox_avg2, P_cu_dc2)
+            if rotor_eddy:
+                P_mag_ser2 = list(_ed_mag); P_mag_avg2 = float(np.mean(_ed_mag))
+                P_shaft_ser2 = list(_ed_sh); P_shaft_avg2 = float(np.mean(_ed_sh))
+                log.info("EDDY-SOLVE(P2) magnet=%.3f shaft=%.3f W vs honest "
+                         "frequency-domain magnet=%.3f shaft=%.3f W",
+                         P_mag_avg2, P_shaft_avg2, P_mag_prox_avg2,
+                         P_shaft_prox_avg2)
         P_tot_ser2 = [c + f + m + s for c, f, m, s in
                       zip(P_cu_ser2, P_fe_ser2, P_mag_ser2, P_shaft_ser2)]
         P_loss_avg2 = float(np.mean(P_tot_ser2)) if P_tot_ser2 else 0.0
@@ -3522,8 +3867,20 @@ def fem_transient_sliding_band(
             "P_mag_eddy_W": P_mag_ser2, "P_shaft_eddy_W": P_shaft_ser2,
             "P_loss_total_W": P_tot_ser2,
             "P_cu_dc_W": P_cu_dc2, "P_cu_ac_W": P_cu_ac_ser2,
-            "P_mag_honest_W": round(float(P_mag_avg2), 3),
-            "P_shaft_honest_W": round(float(P_shaft_avg2), 3),
+            # Coupled σ·∂A/∂t solve (eddy=True) — the REPORTED copper AC / magnet
+            # / shaft above come from these when it ran; the modelled numbers are
+            # kept beside them as the cross-check (see the swap block).
+            "eddy_coupled": bool(eddy),
+            "P_cu_total_solve_W": round(float(P_cu_solve_avg2), 3),
+            "P_cu_dc_2d_solve_W": round(float(P_cu_dc2d_avg2), 3),
+            "P_cu_ac_solve_W": round(float(P_cu_ac_avg2), 3) if eddy else 0.0,
+            "P_cu_ac_prox_W": round(float(P_cu_ac_prox_avg2), 3),
+            "P_mag_solve_W": (round(float(P_mag_avg2), 3)
+                              if (eddy and rotor_eddy) else 0.0),
+            "P_shaft_solve_W": (round(float(P_shaft_avg2), 3)
+                                if (eddy and rotor_eddy) else 0.0),
+            "P_mag_honest_W": round(float(P_mag_prox_avg2), 3),
+            "P_shaft_honest_W": round(float(P_shaft_prox_avg2), 3),
             "P_fe_avg_W": round(float(P_fe_avg2), 3),
             "P_loss_total_avg_W": round(float(P_loss_avg2), 3),
             "P_airgap_W": P_airgap_avg2, "P_mech_avg_W": P_mech_avg2,

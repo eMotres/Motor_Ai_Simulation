@@ -17,7 +17,6 @@ import {
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
 import type { TransientSummary } from './SummaryTable';
-import DemagMap from './DemagMap';
 import { useMotorStore } from '../../stores/motorStore';
 
 interface TransientPayload {
@@ -1112,10 +1111,10 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
           </Box>
           )}
 
-          {/* Per-magnet demag warning banner removed — it over-flagged
-              "IRREVERSIBLE LOSS" (the demag model over-derates sharp corners).
-              The per-element demag %-map below stays as the honest view. */}
-          {data.demag_field && <DemagMap field={data.demag_field as any} />}
+          {/* The small per-element demag map that used to render here was
+              removed at the user's request (2026-07-29): the Field view's
+              Demag tab shows the same data on the full mesh with the
+              Ansys-style colour map — one honest view instead of two. */}
         </>
       )}
     </Paper>

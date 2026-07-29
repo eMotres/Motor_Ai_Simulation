@@ -2276,7 +2276,9 @@ def fem_transient_sliding_band(
     # solid conductors (see the two COUPLED EDDY blocks below) and the frame then
     # solves a genuine magnetodynamic step instead.
     from skfem import ElementTriP2 as _P2E
-    from scipy.sparse.linalg import splu as _splu2
+    from motor_ai_sim.simulation.p2_nonlinear import (
+        P2Nonlinear as _P2Nonlinear, stiff_nu2 as _stiff_nu2,
+    )
     # ONE persistent MKL PARDISO solver for the whole run: it caches the
     # symbolic factorization and reuses it across the same-pattern Picard
     # sweeps of a frame (re-analysing only when the pattern changes — new
@@ -2340,22 +2342,6 @@ def fem_transient_sliding_band(
     nst = int(Tts.shape[1])                      # rotor elems in mesh_all are +nst
     n_all_el = int(mesh_all.t.shape[1])
 
-    @BilinearForm
-    def _stiff_nu2(u, v, w):
-        return w["nu"] * _dot(_grad(u), _grad(v))
-
-    # Newton tangent (differential-reluctivity) term:  T(u,v) =
-    # 2·(dν/dB²)·(∇A·∇u)(∇A·∇v), with ∇A the current field gradient and
-    # dν/dB² per element.  Added to the secant stiffness K(ν) to form the
-    # Jacobian J = K + T of the magnetostatic residual R = K(ν(|B|))·A − f.
-    @BilinearForm
-    def _tang_nu2(u, v, w):
-        gA = w["gA"]                       # (2, nelem, nqp) current ∇A
-        gu = _grad(u); gv = _grad(v)
-        au = gA[0] * gu[0] + gA[1] * gu[1]
-        av = gA[0] * gv[0] + gA[1] * gv[1]
-        return w["c"] * au * av            # c = 2·dν/dB² (element-constant)
-
     # ── vertex & edge dof maps ───────────────────────────────────────────
     vdof = b2.nodal_dofs[0]                       # global vertex id -> P2 dof
     fdof = b2.facet_dofs[0]                       # facet (edge) id  -> P2 dof
@@ -2414,6 +2400,17 @@ def fem_transient_sliding_band(
     for _ids, _c in _sat2:
         _sb2 = Basis(mesh_all, _P2E(), elements=_ids)
         _sat_sub2.append((_sb2, _sb2.with_element(ElementTriP0()), _ids, _c))
+
+    # ── frame-independent solver helpers ─────────────────────────────────
+    # The saturable-iron assembly, the Newton tangent and the damped-Picard
+    # sweep — simulation/p2_nonlinear.py.  ONE object so the magnetostatic,
+    # voltage-drive, eddy and phasor paths below cannot end up on different
+    # nonlinearities; it owns the PARDISO handle for the same reason.
+    # These used to be defined INSIDE the frame loop; they close over nothing
+    # frame-specific (K_const2, _sat_sub2, _sat2, b2), and the voltage-drive
+    # phasor initialiser below has to call them BEFORE the loop starts.
+    _p2 = _P2Nonlinear(basis=b2, n_dof=N2, K_const=K_const2, sat=_sat2,
+                       sat_sub=_sat_sub2, pardiso=_pardiso2, log=log)
 
     # ── outer Dirichlet: facet-based so P2 edge midpoints are pinned too ──
     _out_fac2 = mesh_all.facets_satisfying(
@@ -2656,118 +2653,6 @@ def fem_transient_sliding_band(
             else:            pc += v_
         return _sc_psi2 * pa, _sc_psi2 * pb, _sc_psi2 * pc
 
-    # ── frame-independent solver helpers ─────────────────────────────────
-    # These used to be defined INSIDE the frame loop; they close over nothing
-    # frame-specific (K_const2, _sat_sub2, _sat2, b2), and the voltage-drive
-    # phasor initialiser below has to call them BEFORE the loop starts.
-    def _solve_ff(Mff, rhs):
-        """Solve Mff·x = rhs for a 1-D or 2-D (multi-column) rhs."""
-        nonlocal _pardiso2
-        if _pardiso2 is not None:
-            try:
-                return _pardiso2.solve(Mff, rhs)
-            except Exception as _pe2:
-                log.warning("pypardiso solve failed (%s) — SuperLU fallback",
-                            _pe2)
-                _pardiso2 = None
-        return _splu2(Mff).solve(rhs)
-
-    def _elemB(Avec):
-        bx, by, dq = _p2_B_at_quad(b2, Avec)
-        ar = dq.sum(axis=1)
-        return (np.sqrt(bx ** 2 + by ** 2) * dq).sum(axis=1) \
-            / np.maximum(ar, 1e-30)
-
-    def _nu_of(Bmag, base):
-        nu = base.copy()
-        for _ids, _c in _sat2:
-            nu[_ids] = 1.0 / (MU0 * np.maximum(
-                _mu_r_from_bh_vec(_c, Bmag[_ids]), 1.0))
-        return nu
-
-    def _asmK(nu):
-        K = K_const2.copy()
-        for _sb2, _sb02, _ids2, _c2 in _sat_sub2:
-            _nf2 = _sb02.zeros(); _nf2[_ids2] = nu[_ids2]
-            K = K + asm(_stiff_nu2, _sb2, nu=_sb02.interpolate(_nf2))
-        return K.tocsr()
-
-    def _Kpw(Avec):
-        """POINTWISE ν(|B|) secant stiffness + the per-element data the
-        Newton tangent needs.  Same nonlinearity in residual and tangent."""
-        K = K_const2.copy(); info = []
-        for _sb2, _sb02, _ids2, _c2 in _sat_sub2:
-            gA = _sb2.interpolate(Avec).grad            # (2,nel,nqp)
-            Bm = np.sqrt(np.maximum(gA[0] ** 2 + gA[1] ** 2, 1e-18))
-            mur = np.maximum(_mu_r_from_bh_vec(
-                _c2, Bm.ravel()).reshape(Bm.shape), 1.0)
-            nuq = 1.0 / (MU0 * mur)
-            K = K + asm(_stiff_nu2, _sb2, nu=nuq)
-            info.append((_sb2, _ids2, _c2, gA, Bm, nuq))
-        return K.tocsr(), info
-
-    def _tangent2(info):
-        """T = 2·(dν/dB²)·(∇A·∇u)(∇A·∇v), pointwise & consistent with _Kpw."""
-        T = None
-        for _sb2, _ids2, _c2, gA, Bm, nuq in info:
-            _dB = 1e-3 * Bm + 1e-6
-            nu1 = 1.0 / (MU0 * np.maximum(_mu_r_from_bh_vec(
-                _c2, (Bm + _dB).ravel()).reshape(Bm.shape), 1.0))
-            nup = np.maximum((nu1 - nuq) / _dB / (2.0 * Bm), 0.0)   # dν/dB²
-            Ti = asm(_tang_nu2, _sb2, gA=gA, c=2.0 * nup)
-            T = Ti if T is None else T + Ti
-        return T
-
-    def _pic2_sweeps(Pro, free, bff, nu_in, n_max, tol, linear_only=False):
-        """Damped (Irons–Tuck) successive substitution on ν — one linear solve
-        per sweep, ν refreshed from the element-mean |B| it produced.
-
-        Returns (A, ν, res, nit) with ``res`` the RELATIVE ν change of the last
-        sweep; stops early on two consecutive sweeps under ``tol`` (one sweep
-        can dip by luck, two is a fixed point).
-
-        This is the globally convergent method — it has no tangent to be wrong
-        about — which is why it does DOUBLE duty here: it SEEDS the cold
-        frame's Newton (see the frame loop) and it is the fallback if Newton
-        still fails.  It is not, and must not become, the primary solver: it
-        early-stops on a ν residual, which is a far weaker statement than the
-        Newton path's |R(A)|/|f| < 1e-7 on the field itself."""
-        nu = nu_in.copy()
-        A2 = np.zeros(N2); res = 0.0; nit = 0
-        _ok = 0; _rp = None; _om = 0.5           # Irons–Tuck state
-        for it in range(max(1, int(n_max))):
-            nit = it + 1
-            K = _asmK(nu)
-            Kff = (Pro.T @ K @ Pro).tocsr()[free][:, free].tocsc()
-            A2 = _pad2(Pro, free, _solve_ff(Kff, bff))
-            if linear_only or not _sat2:
-                break                            # frozen frame: 1 linear solve
-            Bmag_el = _elemB(A2)
-            _vo = np.concatenate([nu[_ids] for _ids, _ in _sat2])
-            _vn = np.concatenate([
-                1.0 / (MU0 * np.maximum(
-                    _mu_r_from_bh_vec(_c, Bmag_el[_ids]), 1.0))
-                for _ids, _c in _sat2])
-            _rr = _vn - _vo
-            res = float(np.linalg.norm(_rr) / max(np.linalg.norm(_vo), 1e-30))
-            if _rp is not None:
-                _dr = _rr - _rp; _den = float(_dr @ _dr)
-                if _den > 0.0:
-                    _om = float(np.clip(
-                        -_om * float(_rp @ _dr) / _den, 0.05, 1.0))
-            _rp = _rr
-            _vu = _vo + _om * _rr
-            _p0 = 0
-            for _ids, _c in _sat2:
-                nu[_ids] = _vu[_p0:_p0 + _ids.size]; _p0 += _ids.size
-            if res < tol:
-                _ok += 1
-                if _ok >= 2:
-                    break
-            else:
-                _ok = 0
-        return A2, nu, res, nit
-
     # ═══════════════════════════════════════════════════════════════════
     #  VOLTAGE DRIVE on P2 — field ↔ circuit coupled solve
     # ═══════════════════════════════════════════════════════════════════
@@ -2806,10 +2691,6 @@ def fem_transient_sliding_band(
     _v_anchor_tries = 0
     _v_anchor_applied = 0
 
-    def _pad2(Pro, free, xf):
-        _x = np.zeros(Pro.shape[1]); _x[free] = xf
-        return Pro @ _x
-
     # Line-to-line Crank–Nicolson circuit residual + its 2×2 Jacobian —
     # simulation/drive.py, shared with the P1 path below.  R_phase is the
     # only run-dependent term, so it is bound here rather than captured.
@@ -2836,7 +2717,7 @@ def fem_transient_sliding_band(
 
         def _state(Av, ia, ib):
             fv = f_mag2 + ia * _Pa2 + ib * _Pb2
-            Kv, iv = _Kpw(Av)
+            Kv, iv = _p2.Kpw(Av)
             rf = np.asarray(Pro.T @ (Kv @ Av - fv)).ravel()[free]
             bn = max(float(np.linalg.norm(
                 np.asarray(Pro.T @ fv).ravel()[free])), 1e-30)
@@ -2848,17 +2729,17 @@ def fem_transient_sliding_band(
             K, info, r_free, rrel, rc = _state(A2, iA, iB)
             if rrel < 1e-7 and float(np.max(np.abs(rc))) < 1e-6 * _vsc:
                 return True, A2, iA, iB, rrel, nit, rc
-            T = _tangent2(info)
+            T = _p2.tangent2(info)
             J = (K + T).tocsr() if T is not None else K
             Jff = (Pro.T @ J @ Pro).tocsr()[free][:, free].tocsc()
             try:
-                X = _solve_ff(Jff, np.column_stack([-r_free, _PtPa, _PtPb]))
+                X = _p2.solve_ff(Jff, np.column_stack([-r_free, _PtPa, _PtPb]))
             except Exception as _je:
                 log.info("P2 vdrive Newton solve failed (%s)", _je)
                 return False, A2, iA, iB, rrel, nit, rc
-            dA0 = _pad2(Pro, free, X[:, 0])
-            dAa = _pad2(Pro, free, X[:, 1])
-            dAb = _pad2(Pro, free, X[:, 2])
+            dA0 = _p2.pad2(Pro, free, X[:, 0])
+            dAa = _p2.pad2(Pro, free, X[:, 1])
+            dAb = _p2.pad2(Pro, free, X[:, 2])
             # ψ is a LINEAR functional of A, so the linearised flux of the
             # trial step is exact: ψ(A+δ) = ψ(A) + ψ(δ).
             q0 = _psi2(dA0); qa = _psi2(dAa); qb = _psi2(dAb)
@@ -2898,13 +2779,13 @@ def fem_transient_sliding_band(
         _ok = 0; _rp = None; _om = 0.5
         for it in range(max(1, npic)):
             nit = it + 1
-            K = _asmK(nu)
+            K = _p2.asmK(nu)
             Kff = (Pro.T @ K @ Pro).tocsr()[free][:, free].tocsc()
-            X = _solve_ff(Kff, np.column_stack(
+            X = _p2.solve_ff(Kff, np.column_stack(
                 [_Pt(f_mag2), _Pt(_Pa2), _Pt(_Pb2)]))
-            A_pm = _pad2(Pro, free, X[:, 0])
-            xa = _pad2(Pro, free, X[:, 1])
-            xb = _pad2(Pro, free, X[:, 2])
+            A_pm = _p2.pad2(Pro, free, X[:, 0])
+            xa = _p2.pad2(Pro, free, X[:, 1])
+            xb = _p2.pad2(Pro, free, X[:, 2])
             pm = _psi2(A_pm); qa = _psi2(xa); qb = _psi2(xb)
             _bcv = np.array([
                 (Vt['A'] - Vt['B'])
@@ -2918,7 +2799,7 @@ def fem_transient_sliding_band(
             A2 = A_pm + iA * xa + iB * xb
             if frozen_frame or not _sat2:
                 break
-            _Bm = _elemB(A2)
+            _Bm = _p2.elemB(A2)
             _vo = np.concatenate([nu[_ids] for _ids, _ in _sat2])
             _vn = np.concatenate([
                 1.0 / (MU0 * np.maximum(_mu_r_from_bh_vec(_c, _Bm[_ids]), 1.0))
@@ -2966,7 +2847,8 @@ def fem_transient_sliding_band(
     # changes per frame, and it is re-applied to G every frame below.
     #
     # NONLINEARITY: the SAME pointwise ν(|B|) residual + differential-
-    # reluctivity tangent the magnetostatic Newton uses (_Kpw/_tangent2), so
+    # reluctivity tangent the magnetostatic Newton uses (p2_nonlinear
+    # Kpw/tangent2), so
     # the eddy solve converges on identical iron physics.  With ν frozen
     # (frozen_nu / no saturable iron) the system is linear and one bordered
     # solve is exact — there is no Picard variant, by design: this branch
@@ -3001,25 +2883,25 @@ def fem_transient_sliding_band(
         for it in range(max(int(maxit), 2)):
             nit = it + 1
             if nu_fix is not None:
-                Km = _asmK(nu_fix); info = None
+                Km = _p2.asmK(nu_fix); info = None
             else:
-                Km, info = _Kpw(Ae)
+                Km, info = _p2.Kpw(Ae)
             rf, rc, rrel = _res_e(Ae, Ue, Km)
             if rrel < 1e-7:
                 return True, Ae, Ue, rrel, nit
             J = Km
             if info is not None:
-                T = _tangent2(info)
+                T = _p2.tangent2(info)
                 if T is not None:
                     J = Km + T
             Jff = (Pro.T @ (J + _Msd2) @ Pro).tocsr()[free][:, free]
             Mb = _bmat2([[Jff, -Bf], [-Bf.T, _diags2(_Sdt2)]]).tocsc()
             try:
-                sol = _solve_ff(Mb, -np.concatenate([rf, rc]))
+                sol = _p2.solve_ff(Mb, -np.concatenate([rf, rc]))
             except Exception as _je:
                 log.info("P2 eddy bordered solve failed (%s)", _je)
                 return False, Ae, Ue, rrel, nit
-            dA = _pad2(Pro, free, sol[:free.size]); dU = sol[free.size:]
+            dA = _p2.pad2(Pro, free, sol[:free.size]); dU = sol[free.size:]
             if nu_fix is not None:        # linear system: the step is exact
                 Ae = Ae + dA; Ue = Ue + dU
                 continue
@@ -3035,7 +2917,7 @@ def fem_transient_sliding_band(
             lam = 1.0; acc = False
             for _ls in range(8):
                 At = Ae + lam * dA; Ut = Ue + lam * dU
-                if float(np.linalg.norm(_res_e(At, Ut, _Kpw(At)[0])[0])) < _f0:
+                if float(np.linalg.norm(_res_e(At, Ut, _p2.Kpw(At)[0])[0])) < _f0:
                     Ae = At; Ue = Ut; acc = True; break
                 lam *= 0.5
             if not acc:
@@ -3146,15 +3028,15 @@ def fem_transient_sliding_band(
         for it in range(max(int(maxit), 2)):
             nit = it + 1
             if nu_fix is not None:
-                Km = _asmK(nu_fix); info = None
+                Km = _p2.asmK(nu_fix); info = None
             else:
-                Km, info = _Kpw(Ae)
+                Km, info = _p2.Kpw(Ae)
             rf, rc, rcc, rrel = _res_ve(Ae, Ue, iA, iB, Km)
             if rrel < 1e-7 and float(np.max(np.abs(rcc))) < 1e-6 * _vsc:
                 return True, Ae, Ue, iA, iB, rrel, nit, rcc
             J = Km
             if info is not None:
-                T = _tangent2(info)
+                T = _p2.tangent2(info)
                 if T is not None:
                     J = Km + T
             Jff = (Pro.T @ (J + Msd_k) @ Pro).tocsr()[free][:, free]
@@ -3165,16 +3047,16 @@ def fem_transient_sliding_band(
             #              inductance the circuit Jacobian needs.
             _z = np.zeros(free.size)
             try:
-                X = _solve_ff(Mb, np.column_stack([
+                X = _p2.solve_ff(Mb, np.column_stack([
                     -np.concatenate([rf, rc]),
                     np.concatenate([_z, dtk * _ed_ca]),
                     np.concatenate([_z, dtk * _ed_cb])]))
             except Exception as _je:
                 log.info("P2 eddy+vdrive bordered solve failed (%s)", _je)
                 return False, Ae, Ue, iA, iB, rrel, nit, rcc
-            dA0 = _pad2(Pro, free, X[:free.size, 0])
-            dAa = _pad2(Pro, free, X[:free.size, 1])
-            dAb = _pad2(Pro, free, X[:free.size, 2])
+            dA0 = _p2.pad2(Pro, free, X[:free.size, 0])
+            dAa = _p2.pad2(Pro, free, X[:free.size, 1])
+            dAb = _p2.pad2(Pro, free, X[:free.size, 2])
             dU0 = X[free.size:, 0]
             dUa = X[free.size:, 1]; dUb = X[free.size:, 2]
             q0 = _psi2(dA0); qa = _psi2(dAa); qb = _psi2(dAb)
@@ -3206,7 +3088,7 @@ def fem_transient_sliding_band(
                 At = Ae + lam * dA; Ut = Ue + lam * dU
                 _ia = iA + lam * float(di[0]); _ib = iB + lam * float(di[1])
                 if float(np.linalg.norm(
-                        _res_ve(At, Ut, _ia, _ib, _Kpw(At)[0])[0])) < _f0:
+                        _res_ve(At, Ut, _ia, _ib, _p2.Kpw(At)[0])[0])) < _f0:
                     Ae = At; Ue = Ut; iA = _ia; iB = _ib
                     acc = True; break
                 lam *= 0.5
@@ -3240,12 +3122,12 @@ def fem_transient_sliding_band(
         _psi_pm_d = 0.0; _Ldd = _Lqq = _Ldq = _Lqd = 1e-6
         _Aop = np.zeros(N2)
         for _it in range(max(int(nonlinear_iterations), 20)):
-            _Kph = _asmK(_nu_ph)
+            _Kph = _p2.asmK(_nu_ph)
             _Kff0 = (_Pro0v.T @ _Kph @ _Pro0v).tocsr()[_free0v][:, _free0v].tocsc()
-            _X0 = _solve_ff(_Kff0, _RHS0)
-            _A0 = _pad2(_Pro0v, _free0v, _X0[:, 0])
-            _xa = _pad2(_Pro0v, _free0v, _X0[:, 1])
-            _xb = _pad2(_Pro0v, _free0v, _X0[:, 2])
+            _X0 = _p2.solve_ff(_Kff0, _RHS0)
+            _A0 = _p2.pad2(_Pro0v, _free0v, _X0[:, 0])
+            _xa = _p2.pad2(_Pro0v, _free0v, _X0[:, 1])
+            _xb = _p2.pad2(_Pro0v, _free0v, _X0[:, 2])
             _pm = _psi2(_A0); _qa = _psi2(_xa); _qb = _psi2(_xb)
             _pd0, _pq0 = _park(_pm[0], _pm[1], _pm[2], _the0)
             _thal = _the0 + _m.atan2(_pq0, _pd0)
@@ -3273,7 +3155,7 @@ def fem_transient_sliding_band(
             _id0, _iq0 = float(_idq[0]), float(_idq[1])
             _iA0, _iB0, _iC0 = _ipark(_id0, _iq0, _thal)
             _Aop = _A0 + _iA0 * _xa + _iB0 * _xb
-            _nu_new = _nu_of(_elemB(_Aop), _nu_ph)
+            _nu_new = _p2.nu_of(_p2.elemB(_Aop), _nu_ph)
             _vo0 = np.concatenate([_nu_ph[_ids] for _ids, _ in _sat2]) \
                 if _sat2 else np.zeros(0)
             _vn0 = np.concatenate([_nu_new[_ids] for _ids, _ in _sat2]) \
@@ -3442,7 +3324,7 @@ def fem_transient_sliding_band(
                 # the overshoot back (see _PIC_SEED_MAX).  Cheaper than the
                 # fallback it replaces, and the frame is still ACCEPTED on the
                 # Newton field residual, never on the seed's ν residual.
-                _A_start, _nu_start, _sres, _snit = _pic2_sweeps(
+                _A_start, _nu_start, _sres, _snit = _p2.pic2_sweeps(
                     Pro, _free2, _bff2, _nu_start,
                     _PIC_SEED_MAX, _PIC_SEED_TOL)
                 log.debug("P2 frame %d: cold Newton seed, %d picard sweeps, "
@@ -3490,7 +3372,7 @@ def fem_transient_sliding_band(
                 _newton_ok = True
                 if _nu_fix is None:
                     # element-mean ν for the loss post-processing
-                    nu_all2 = _nu_of(_elemB(A2), nu_all2)
+                    nu_all2 = _p2.nu_of(_p2.elemB(A2), nu_all2)
             elif eddy and _vdrive:
                 # ── EDDY **AND** VOLTAGE DRIVE: one (A, U, i_A, i_B) Newton ──
                 # The winding current is the constraint VALUE and a circuit
@@ -3511,7 +3393,7 @@ def fem_transient_sliding_band(
                         f"{float(np.max(np.abs(_vrc))):.2e} V)")
                 _newton_ok = True
                 if _nu_fix is None:
-                    nu_all2 = _nu_of(_elemB(A2), nu_all2)
+                    nu_all2 = _p2.nu_of(_p2.elemB(A2), nu_all2)
                 # The solved currents ARE this frame's excitation from here on
                 # (torque, ψ, the I²R reference of the eddy loss split).  f is
                 # NOT rebuilt with them: under eddy the ampere-turns enter
@@ -3534,7 +3416,7 @@ def fem_transient_sliding_band(
                 if _vok:
                     A2 = _A2v; _newton_ok = True
                     # element-mean ν for the loss post-processing
-                    nu_all2 = _nu_of(_elemB(A2), nu_all2)
+                    nu_all2 = _p2.nu_of(_p2.elemB(A2), nu_all2)
                 else:
                     if _use_newton and not frozen_nu and _sat2:
                         log.info("P2 vdrive Newton not converged at frame %d "
@@ -3565,8 +3447,8 @@ def fem_transient_sliding_band(
             # says so, per frame, in picard_fallback_frames.
             if ((not _vdrive) and (not eddy) and _use_newton
                     and not frozen_nu and _sat2):
-                # POINTWISE ν(|B|²) at quadrature points (_Kpw, hoisted above
-                # the frame loop) — the residual and the tangent then use the
+                # POINTWISE ν(|B|²) at quadrature points (_p2.Kpw, in
+                # simulation/p2_nonlinear.py) — the residual and the tangent then use the
                 # SAME nonlinearity, giving a TRUE (quadratic) Newton step.
                 # (An element-mean ν residual with a pointwise tangent is
                 # inconsistent → no acceleration.)  For P2, B is linear per
@@ -3597,17 +3479,17 @@ def fem_transient_sliding_band(
                 _bnrm = max(float(np.linalg.norm(_bff2)), 1e-30)
                 for it in range(max(int(nonlinear_iterations), 20)):
                     _nit = it + 1
-                    K, _info = _Kpw(A2)
+                    K, _info = _p2.Kpw(A2)
                     r_free = _rfree_pw(A2, K)
                     _rrel = float(np.linalg.norm(r_free)) / _bnrm
                     if _rrel < 1e-7:
                         break
                     # tangent T = 2(dν/dB²)(∇A·∇u)(∇A·∇v), pointwise & consistent
-                    T = _tangent2(_info)
+                    T = _p2.tangent2(_info)
                     J = (K + T).tocsr() if T is not None else K
                     Jff = (Pro.T @ J @ Pro).tocsr()[_free2][:, _free2].tocsc()
                     try:
-                        _du = _solve_ff(Jff, -r_free)
+                        _du = _p2.solve_ff(Jff, -r_free)
                     except Exception as _je:
                         log.info("P2 Newton solve failed (%s) — Picard fallback", _je)
                         _fail = True; break
@@ -3617,7 +3499,7 @@ def fem_transient_sliding_band(
                     _r0 = float(np.linalg.norm(r_free)); _lam = 1.0; _acc = False
                     for _ls in range(6):
                         A_try = A2 + _lam * dA
-                        _Kt, _ = _Kpw(A_try)
+                        _Kt, _ = _p2.Kpw(A_try)
                         if float(np.linalg.norm(_rfree_pw(A_try, _Kt))) < _r0:
                             A2 = A_try; _acc = True; break
                         _lam *= 0.5
@@ -3628,7 +3510,7 @@ def fem_transient_sliding_band(
                     _newton_ok = True; _res = _rrel
                     # element-mean ν for the loss post-processing (loss code uses
                     # per-element ν); negligible vs the pointwise field solve.
-                    nu_all2 = _nu_of(_elemB(A2), nu_all2)
+                    nu_all2 = _p2.nu_of(_p2.elemB(A2), nu_all2)
                 else:
                     log.info("P2 Newton not converged at frame %d (%d its, rrel=%.1e)"
                              " — Picard fallback", k, _nit, _rrel)
@@ -3640,7 +3522,7 @@ def fem_transient_sliding_band(
                     _n_pic2 = max(nonlinear_iterations, 40) if k == 0 else 1
                 else:
                     _n_pic2 = max(nonlinear_iterations, 70 if k == 0 else 45)
-                A2, nu_all2, _res, _nit = _pic2_sweeps(
+                A2, nu_all2, _res, _nit = _p2.pic2_sweeps(
                     Pro, _free2, _bff2, nu_all2, _n_pic2, _PIC_TOL2,
                     linear_only=bool(frozen_nu and k > 0))
             # ── Irreversible demagnetisation ─────────────────────────────────

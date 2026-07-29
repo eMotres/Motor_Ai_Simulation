@@ -231,7 +231,12 @@ export function demagRange(dc: number[] | undefined,
   return [lo, hi];
 }
 
-export interface ViewOpts { logLoss?: boolean; eqTemp?: boolean; }
+export interface ViewOpts {
+  logLoss?: boolean;
+  eqTemp?: boolean;
+  /** Loss view: colour each material against its OWN range (reading aid). */
+  perMaterialLoss?: boolean;
+}
 
 function sourceFor(payload: FemPayload, mode: string, o: ViewOpts): Source | null {
   const dom = payload.domain_per_tri as unknown as number[];
@@ -293,8 +298,66 @@ function sourceFor(payload: FemPayload, mode: string, o: ViewOpts): Source | nul
     const vmax = Math.max(pctl(pos, 99.5), 1e-3);
     const vmin = Math.max(pctl(pos, 5), vmax * 1e-4);
     const label = (payload as any).loss_density_label as string | undefined;
+
+    // ── PER-MATERIAL scaling (opt-in) ────────────────────────────────────
+    // On the shared scale this machine's copper sits at 3.7e7 W/m³ mean and
+    // the magnets at 1.7e6 — 1.5 decades apart — so a LINEAR map puts every
+    // magnet element in band 0-1 and the whole rotor reads "no loss".  The
+    // log map is honest and does separate them (magnets land in bands 4-7 of
+    // 11), but the copper is pinned at the top and the eye calibrates on it.
+    //
+    // Per-material mode normalises each material class to its OWN 5/99.5
+    // percentiles, which is what "scale per body" does in Ansys and the only
+    // way to read structure inside the weakest component.  It buys that by
+    // giving up cross-material comparison entirely: the same colour means a
+    // different number in copper and in a magnet.  So it is OFF by default,
+    // it is a separate toggle, and the note below says so in those words —
+    // this is a reading aid, never the number.
+    if (o.perMaterialLoss) {
+      const rng = new Map<number, [number, number]>();
+      const byCls = new Map<number, number[]>();
+      for (let ti = 0; ti < nTri; ti++) {
+        if (dom[ti] === DOM.OUTER) continue;
+        const v = ti < ld.length ? ld[ti] : 0;
+        if (v <= 0) continue;
+        const c = classOf(dom[ti]);
+        const a = byCls.get(c); if (a) a.push(v); else byCls.set(c, [v]);
+      }
+      byCls.forEach((arr, c) => {
+        const hi = Math.max(pctl(arr, 99.5), 1e-3);
+        rng.set(c, [Math.max(pctl(arr, 5), hi * 1e-4), hi]);
+      });
+      const note = (label ? label : 'loss density')
+        + ' · PER-MATERIAL colour scale: every material spans its own'
+        + ' 5-99.5 % range, so a colour is NOT comparable between'
+        + ' materials — read structure here, read levels on the shared scale';
+      return {
+        // Normalised to PER CENT of the element's own class range right here
+        // (the shared FieldScale carries exactly one range by construction, so
+        // a per-class range cannot live in it).  The nodal average then runs on
+        // the already-normalised value — correct, because it never mixes
+        // classes anyway.
+        elem: (ti) => {
+          const v = ti < ld.length ? ld[ti] : 0;
+          if (v <= 0) return 0;
+          const r = rng.get(classOf(dom[ti]));
+          if (!r) return 0;
+          const [lo, hi] = r;
+          const t = o.logLoss
+            ? (Math.log10(v) - Math.log10(lo))
+              / Math.max(Math.log10(hi) - Math.log10(lo), 1e-9)
+            : v / hi;
+          return 100 * Math.max(0, Math.min(1, t));
+        },
+        include: interior,
+        // The bar can only be a fraction: there is no single W/m³ axis left.
+        scale: linScale(0, 100, '% of each material’s own range', note, fmt0),
+      };
+    }
+
     const note = (label ? label : 'loss density')
-      + (o.logLoss ? ' · log colour scale' : ' · linear colour scale');
+      + (o.logLoss ? ' · log colour scale' : ' · linear colour scale')
+      + ' · one shared scale across all materials';
     return {
       elem: (ti) => (ti < ld.length ? ld[ti] : 0),
       include: interior,

@@ -378,6 +378,11 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
   const [lossProbing, setLossProbing] = useState<boolean>(false);
   const [lossProbed,  setLossProbed]  = useState<boolean>(false);
   const [logLoss,     setLogLoss]     = useState<boolean>(true);   // log W/m³ map
+  // Loss view: one shared W/m³ axis (default, comparable) vs each material
+  // scaled to its own range (readable inside the weakest component, but a
+  // colour no longer means one number).  Default OFF — the shared axis is the
+  // number; this is a reading aid and the note under the view says so.
+  const [perMat,      setPerMat]      = useState<boolean>(false);
   const [eqTemp,      setEqTemp]      = useState<boolean>(true);   // histogram-equalised temp colours
   // Thermal (Temp view) — a steady-state conduction solve fed by the eddy
   // losses; lazily fetched, re-run when γ/I or the cooling inputs change.
@@ -420,8 +425,9 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
   // two used to derive their ranges independently and could disagree about
   // what a colour meant.
   const fieldView: FieldView = useMemo(
-    () => buildFieldView(payload, mode, { logLoss, eqTemp }),
-    [payload, mode, logLoss, eqTemp]);
+    () => buildFieldView(payload, mode, { logLoss, eqTemp,
+                                          perMaterialLoss: perMat }),
+    [payload, mode, logLoss, eqTemp, perMat]);
 
   const fetchFem = () => {
     if (payloadOverride) return;   // parent owns the data
@@ -757,6 +763,22 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
               sx={{ color: '#93c5fd', fontSize: 10, textTransform: 'none',
                 minWidth: 0, px: 1, border: '1px solid var(--line-soft)' }}>
               {logLoss ? 'log' : 'lin'}
+            </Button>
+          )}
+          {mode === 'Loss' && (
+            <Button size="small" onClick={() => setPerMat(v => !v)}
+              title={'Colour scale span. "shared" is the honest one: one W/m³ '
+                + 'axis for the whole cross-section, so copper (≈4e7 W/m³ here) '
+                + 'and the magnets (≈2e6) are directly comparable — and the '
+                + 'magnets sit low because they ARE low. "per-material" '
+                + 'rescales every material to its own range so the structure '
+                + 'inside the weakest one is readable; a colour then means a '
+                + 'different number in each material and levels cannot be '
+                + 'compared across them.'}
+              sx={{ color: perMat ? '#fbbf24' : '#93c5fd', fontSize: 10,
+                textTransform: 'none', minWidth: 0, px: 1,
+                border: '1px solid var(--line-soft)' }}>
+              {perMat ? 'per-material' : 'shared'}
             </Button>
           )}
           {mode === 'Temp' && (

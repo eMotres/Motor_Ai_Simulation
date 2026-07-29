@@ -327,10 +327,19 @@ function sourceFor(payload: FemPayload, mode: string, o: ViewOpts): Source | nul
         const hi = Math.max(pctl(arr, 99.5), 1e-3);
         rng.set(c, [Math.max(pctl(arr, 5), hi * 1e-4), hi]);
       });
+      // The log/lin state has to be IN the note here, not just on the button.
+      // Per-material + log compresses ratios hard: the spoke magnets' hub end
+      // is 29-36 % of their air-gap corner peak, and log puts that at band 6.7
+      // against 9.0 — it reads as "nearly as hot".  On linear the same 36 %
+      // reads as band 4 against 10, which is what it is.  A reader who cannot
+      // see which mapping is on cannot know which of those they are looking at.
       const note = (label ? label : 'loss density')
-        + ' · PER-MATERIAL colour scale: every material spans its own'
+        + (o.logLoss ? ' · log' : ' · linear')
+        + ' PER-MATERIAL colour scale: every material spans its own'
         + ' 5-99.5 % range, so a colour is NOT comparable between'
-        + ' materials — read structure here, read levels on the shared scale';
+        + ' materials — read structure here, read levels on the shared scale'
+        + (o.logLoss ? '; log compresses ratios, switch to lin to judge how'
+                       + ' much hotter one spot is than another' : '');
       return {
         // Normalised to PER CENT of the element's own class range right here
         // (the shared FieldScale carries exactly one range by construction, so

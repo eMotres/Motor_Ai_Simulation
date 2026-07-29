@@ -349,31 +349,45 @@ def honest_rotor_eddy(
         return 0.0, 0.0, []
     r = np.hypot(p[0], p[1]); rmax = float(r.max())
     bmask = r > 0.985 * rmax                       # air-gap (outer) ring = driving BC
-    # De-jitter the rotor-frame history BEFORE the FFT.  The sliding-band node-
-    # identification injects a broadband ~1-2-frame artifact (same one the production
-    # post-process savgol-smooths); raw, its high harmonics blow up sigma*omega^2*|A|^2.
-    # The PHYSICAL slot ripple is slow (period ~ Nframes*p/Nslots frames), so a savgol
-    # window well below it removes the jitter and keeps the physics.  NOT a tuning
-    # crutch — it's the documented numerical de-noising the existing solver already uses.
-    Nf = A_hist.shape[0]
-    if Nf >= 9:
-        try:
-            from scipy.signal import savgol_filter
-            # FIXED-ish small window (jitter is ~1-2 frames); CAP it so a long
-            # (multi-period) window never smooths the much slower slot ripple — the
-            # exact sample-vs-physical-width bug the production solver documents.
-            w = max(5, min(11, (int(round(Nf * 0.12)) | 1)))
-            A_hist = savgol_filter(A_hist, w, 3, axis=0, mode="interp")
-        except Exception:
-            pass
-    # Fixed PHYSICAL harmonic ceiling (independent of the frame count).  The
+    # ── the savgol pre-filter that used to sit here is DELETED ───────────────
+    # It claimed to de-jitter the rotor-frame history before the FFT (a
+    # broadband ~1-2-frame slip-band node-identification artifact).  Measured on
+    # p2_load + rotor_eddy (scripts/_filter_ablation.py, 2026-07-29):
+    #
+    #     steps/period   P_mag with savgol   without   delta
+    #        12               1.5035 W       1.5631 W  +3.96 %
+    #        36               2.1325 W       2.1367 W  +0.20 %
+    #
+    # At 36 frames — the first count at which this loss is even close to
+    # resolved — removing it moves the answer by 0.20 %, inside the physics
+    # regression's 0.5 % tolerance.  It only "works" at 12 frames, where the
+    # window it picked (w = 5) smooths 42 % of the electrical period: that is
+    # not de-jittering, it is destroying resolution.  And the 12-frame answer is
+    # 36 % BELOW the 36-frame one either way (1.50 vs 2.35 W unfiltered), so the
+    # filter was cosmetics on a number that is wrong for a different reason —
+    # removing it moves the 12-frame value TOWARD the resolved one, not away.
+    # A filter that only acts where the underlying result is unusable is a bias
+    # nobody is watching, which is exactly what it was.
+    #
+    # Fixed PHYSICAL harmonic ceiling — KEPT, and measured necessary.  The
     # rotor-frame drive physically contains only the low orders per electrical
     # period — armature MMF 6f/12f (k=6, 12) and stator-slotting multiples
     # (k = slots/pp ≈ 2.4, 4.8, … ≤ ~14.4 for 24s/20p) — while the slip-band
     # node-identification jitter is broadband.  Without the cap the rFFT's kmax
-    # grows with the step count (12 @ 24 frames → 36 @ 72), so the jitter band
-    # ADDED loss with resolution (honest mag 12.2 → 15.1 kW going 24 → 72 steps).
-    # n_harm=17 keeps k ≤ 16: every physical line, none of the resolution growth.
+    # grows with the step count, so the jitter band ADDS loss with resolution.
+    # Same ablation, p2_load + rotor_eddy at 36 steps/period:
+    #
+    #     n_harm=17 (k ≤ 16)   P_mag 2.1325 W
+    #     n_harm=80 (no cap)   P_mag 2.3504 W   +10.22 %
+    #
+    # i.e. the cap is worth 10 % of the magnet loss at a usable step count, and
+    # is inert at 12 steps (the rFFT only reaches k=6 there — measured 0.00 %),
+    # which is why the ablation had to be run at both.  The ceiling is a
+    # constant and NOT topology-derived: 17 comes from the 24s20p line list
+    # above (6 × 24/20 = 14.4), and for the active 12s14p the physical lines sit
+    # at 6 × 12/7 ≈ 10.3, so 17 is loose here rather than wrong.  Tightening it
+    # per topology is a change with its own measurement to make; it has not been
+    # made, so the number is documented rather than quietly re-derived.
     Pbod, freqs = region_eddy_from_history(p, t, nu, sig, bodies, bmask, A_hist,
                                            period_s, L, n_harm=n_harm)
     P_mag = float(np.sum(Pbod[:n_mag])) * NS

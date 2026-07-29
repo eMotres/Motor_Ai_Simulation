@@ -1758,6 +1758,25 @@ def fem_transient_sliding_band(
     # eddy loss (the same knob also sets the radial gap density above).  Calibrated so
     # gap_layers=1 -> 1008 (fast) and gap_layers=4 -> 2016 (= the retired hi-fidelity slip);
     # the _slip_per_period rounding below keeps the count pole-pair-divisible for any motor.
+    # MEASURED (scripts/_filter_ablation.py, 2026-07-29, p2_load, gap_layers=1 →
+    # 144 nodes/period, 505 in the 2-sector wedge).  Forcing a denser ring with
+    # SB_SLIP_PER_PERIOD:
+    #
+    #     ring/period   T_avg        T_ripple        P_fe
+    #        144 (dflt)  0.41740      0.53486 %      3.1226 W
+    #        216         +0.12 %      -8.55 %        +0.15 %
+    #        288         +0.09 %      -4.92 %        -0.04 %
+    #        432         +0.13 %      -10.86 %       +0.28 %
+    #
+    # Mean torque and iron loss are INSENSITIVE to the ring density (≤ 0.3 % over
+    # a 3× denser ring, inside the regression's 0.5 % tolerance), so the 1008
+    # calibration is not buying accuracy there and is not costing any either.
+    # The RIPPLE is a different story: it scatters -5 to -11 % and does not
+    # converge monotonically with density, so the reported T_ripple_pct carries a
+    # ~10 % ring-density uncertainty that nothing was stating.  Kept as-is
+    # (changing the default would move every pinned ripple with no accuracy
+    # argument to justify it) — but the number is now on the record instead of
+    # implied to be converged.
     _slip_base = int(round(1008.0 * (max(1.0, float(gap_layers)) + 2.0) / 3.0))
     _slip_per_period = 24 * max(5, math.ceil(_slip_base / (24 * pole_pairs)))
     n_slip_eff = pole_pairs * _slip_per_period
@@ -1801,9 +1820,18 @@ def fem_transient_sliding_band(
     else:
         n_steps_per_period = _snap_steps_to_nodes(_req_steps, _nodes_per_period)
         if n_steps_per_period != _req_steps:
-            log.info("SB: snapped steps/period %d -> %d (divisor of %d slip "
-                     "nodes/period -> whole-node rotor steps, periodic torque)",
-                     _req_steps, n_steps_per_period, _nodes_per_period)
+            # WARNING, not INFO: this is a silent substitution of the caller's
+            # time resolution.  A log line nobody reads is how "requested 40,
+            # ran 36" became invisible to the optimizer (refine_proc computes
+            # nspp = round(steps / n_periods), which lands off the divisor grid
+            # constantly) and to any API client that is not the Simulation tab
+            # (whose picker only offers divisors).  The substitution is also
+            # REPORTED in the result dict now — see n_steps_per_period_requested
+            # / steps_snapped at the bottom of this function.
+            log.warning("SB: snapped steps/period %d -> %d (divisor of %d slip "
+                        "nodes/period -> whole-node rotor steps, periodic "
+                        "torque); the run is at the SNAPPED resolution",
+                        _req_steps, n_steps_per_period, _nodes_per_period)
 
     # ── Build the two halves ONCE ────────────────────────────────────────
     motor = CadQueryMotor()
@@ -2771,6 +2799,12 @@ def fem_transient_sliding_band(
     _dt_k = dt
     _v_diag = {"iters": [], "resid": []}
     _v_bpsi = []             # period-boundary flux samples for the Aitken anchor
+    # How often the Δ²-anchor was TRIED vs actually APPLIED.  Reported, because
+    # the ablation (see drive.aitken_flux_anchor) found that on this machine the
+    # guards skip every single attempt — the anchor is a no-op here, and that was
+    # only discoverable by removing it and comparing.  Now it is a number.
+    _v_anchor_tries = 0
+    _v_anchor_applied = 0
 
     def _pad2(Pro, free, xf):
         _x = np.zeros(Pro.shape[1]); _x[free] = xf
@@ -3801,12 +3835,14 @@ def fem_transient_sliding_band(
                     # Δ²-extrapolation + its "already converged / unstable"
                     # guard: simulation/drive.py, shared with the P1 path.
                     _new, _corr, _drift = _aitken_flux_anchor(_v_bpsi)
+                    _v_anchor_tries += 1
                     if _new is None:
                         log.info("P2 vdrive Aitken anchor SKIPPED at period %d "
                                  "(drift %.3g, corr %.3g Wb — converged/unstable)",
                                  (k + 1) // _v_nspp, _drift, _corr)
                         _v_bpsi.clear()
                     else:
+                        _v_anchor_applied += 1
                         _psi_prev = _new
                         _v_bpsi.clear()   # fresh samples only after re-anchor
                         log.info("P2 vdrive Aitken anchor at period %d: psiA "
@@ -4243,6 +4279,14 @@ def fem_transient_sliding_band(
         "demag_report": _drep2,
         "demag_field": _dfield2,
         "n_steps": n_total, "n_steps_per_period": int(n_steps_per_period),
+        # What the caller ASKED for, beside what actually ran.  The whole-node
+        # snap silently changed the time resolution of every run whose requested
+        # count was not a divisor of the slip-node grid; a consumer can now say
+        # "requested 40 -> ran 36" instead of presenting 36 as if it were asked
+        # for.  ``slip_nodes_per_period`` is the grid that decides the snap.
+        "n_steps_per_period_requested": int(_req_steps),
+        "steps_snapped": bool(int(n_steps_per_period) != int(_req_steps)),
+        "slip_nodes_per_period": int(_nodes_per_period),
         "n_periods": float(n_periods), "rpm": rpm, "f_elec_Hz": f_elec,
         "dt_s": dt, "T_period_s": (1.0 / f_elec if f_elec > 1e-9 else 0.0),
         "time_s": _tt, "rotor_angle_deg": _ang,
@@ -4305,6 +4349,11 @@ def fem_transient_sliding_band(
         "drive": ("voltage" if _vdrive else "current"),
         "v_phase_peak_V": float(v_phase_peak) if _vdrive else None,
         "v_delta_deg": float(v_delta_deg) if _vdrive else None,
+        # Aitken settling anchor: attempts vs applications.  applied == 0 with
+        # attempts > 0 means the guards skipped every one and the anchor did
+        # nothing for this run — the measured state on the pinned machine.
+        "v_anchor_attempts": int(_v_anchor_tries),
+        "v_anchor_applied": int(_v_anchor_applied),
         # circuit-iteration convergence stats, one entry per frame of the
         # REPORTED window (settling frames stripped with every other series,
         # so the indices line up with I/psi/T) + the honest steady-state

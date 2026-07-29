@@ -57,6 +57,9 @@ RTOL = 5e-3
 # absolute floor or the relative test divides noise by noise.
 ATOL = {"T_ripple_pct": 0.05, "P_shaft_W": 0.05, "P_solid_W": 0.05,
         "P_core_W": 0.05, "demag_br_min": 0.01, "demag_br_mean": 0.01,
+        # Honest (frequency-domain) rotor eddy: the shaft term is sub-watt for
+        # the same reason P_shaft_solve_W is, so it needs an absolute floor.
+        "P_shaft_honest_W": 0.05,
         # Coupled-eddy shaft loss: the shaft sits under the magnets and the
         # back iron, so in the rotor frame it sees almost no AC field at all —
         # milliwatts, i.e. a relative test on it divides noise by noise.
@@ -198,6 +201,17 @@ def _metrics(d: Dict[str, Any]) -> Dict[str, float]:
         out["P_cu_ac_solve_W"] = float(d.get("P_cu_ac_solve_W") or 0.0)
         out["P_mag_solve_W"] = float(d.get("P_mag_solve_W") or 0.0)
         out["P_shaft_solve_W"] = float(d.get("P_shaft_solve_W") or 0.0)
+    # The frequency-domain "honest" rotor eddy solve (eddy_solver_2d.
+    # honest_rotor_eddy). It runs whenever rotor_eddy is on and is where the
+    # savgol prefilter and the k <= 16 harmonic ceiling live — and NOTHING here
+    # watched it: p2_load has rotor_eddy off, and in p2_eddy the coupled solve
+    # REPLACES the reported magnet/shaft numbers, so a change in that filter
+    # chain moved no pin at all. It does now. Gated on the honest path's own
+    # flag so no other case grows a key. (Its value is already computed in
+    # p2_eddy, so this pins it at zero extra runtime.)
+    if float(d.get("P_mag_honest_W") or 0.0) > 0.0:
+        out["P_mag_honest_W"] = float(d["P_mag_honest_W"])
+        out["P_shaft_honest_W"] = float(d.get("P_shaft_honest_W") or 0.0)
     f = d.get("demag_field")
     if f:
         br = np.asarray(f["demag_coef_per_tri"], float)

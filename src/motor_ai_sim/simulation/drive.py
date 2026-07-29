@@ -129,6 +129,29 @@ def aitken_flux_anchor(samples: List[Tuple[float, float]]
     converged (drift < 0.05 % of the PM flux) or when the extrapolation is
     unstable (|corr| ≫ drift).  Better to keep marching than to kick a converged
     orbit right before the reported window.
+
+    MEASURED (scripts/_filter_ablation.py, 2026-07-29, the p2_voltage recipe:
+    7.0 V pk, +10°, 12 steps/period, 30 mm 12s14p):
+
+        variant                          I_A_peak    T_avg     T_ripple   i_dc
+        baseline (guards on)             71.756 A    0.24005   1.2404 %   0 A
+        guards REMOVED (always anchor)   +1.03 %     +0.38 %   +275.36 %  0.424 A
+        anchor DISABLED (never anchor)    identical to baseline, every digit
+
+    Two findings, both worth keeping in view:
+
+    * The guards are LOAD-BEARING.  Force the extrapolation through on every
+      period boundary and the reported ripple nearly quadruples and the settled
+      orbit picks up a 0.42 A DC current — i.e. the Δ² correction, applied when
+      it should not be, is exactly the "kick a converged orbit" failure the
+      thresholds exist to prevent.  They stay.
+    * On THIS machine the anchor never actually fires: guards-on and
+      anchor-disabled agree to every printed digit, so every attempt is being
+      skipped.  The anchor is a settling accelerator that is currently a no-op
+      here — kept because it is a capability for machines that settle slowly,
+      not because it is doing anything for this one.  So that this no longer
+      needs an ablation to discover, the solver counts the skips and reports
+      them (``v_anchor_attempts`` / ``v_anchor_applied`` in the transient dict).
     """
     q0, q1, q2 = samples[-3:]
     new: Dict[str, float] = {}

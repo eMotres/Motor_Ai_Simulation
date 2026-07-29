@@ -3034,6 +3034,16 @@ def _build_transient_summary(
         "nonlinear_tol": float(sbres.get("picard_tol", 0.0) or 0.0),
         "nonlinear_unconverged_frames":
             list(sbres.get("picard_unconverged_frames") or []),
+        # ── time-resolution honesty ──────────────────────────────────────
+        # The solver snaps steps/period onto the slip-node divisor grid.  When
+        # it does, the run is NOT at the requested resolution, and the card has
+        # to say so rather than present the snapped number as the asked-for one.
+        "steps_snapped": bool(sbres.get("steps_snapped", False)),
+        "n_steps_per_period": int(sbres.get("n_steps_per_period", 0) or 0),
+        "n_steps_per_period_requested":
+            int(sbres.get("n_steps_per_period_requested",
+                          sbres.get("n_steps_per_period", 0)) or 0),
+        "slip_nodes_per_period": int(sbres.get("slip_nodes_per_period", 0) or 0),
         "coil_temp_C":  round(float(sbres.get("coil_temp_C", coil_temp_c)), 1),
         "end_winding_factor": round(float(sbres.get("end_winding_factor", 0.0)), 2),
         "mass_total_kg": round(_m_tot, 3),

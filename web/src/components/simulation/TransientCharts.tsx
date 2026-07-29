@@ -26,6 +26,12 @@ interface TransientPayload {
   _geoSig?: string;
   n_steps: number;
   n_steps_per_period: number;
+  // What the caller ASKED for, and whether the solver snapped it onto the
+  // slip-node divisor grid.  When it did, the run is NOT at the requested time
+  // resolution and the header says so instead of showing only what ran.
+  n_steps_per_period_requested?: number;
+  steps_snapped?: boolean;
+  slip_nodes_per_period?: number;
   n_periods: number;
   dt_s: number;
   T_period_s: number;
@@ -686,7 +692,12 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
             const loaded = Math.abs(data.T_avg_Nm) >= 1.0;
             return (
               <Typography sx={{ fontSize: 10, color: 'var(--text-4)' }}>
-                {data.n_steps_per_period} steps/period · dt = {(data.dt_s*1e6).toFixed(1)} µs ·
+                {data.steps_snapped && data.n_steps_per_period_requested
+                  ? <span style={{ color: '#fbbf24' }}
+                      title={`Requested ${data.n_steps_per_period_requested} steps/period; the rotor must land on whole slip-ring nodes (${data.slip_nodes_per_period ?? '?'} per period), so the solver snapped to the nearest divisor. The numbers below are at ${data.n_steps_per_period} steps/period.`}>
+                      requested {data.n_steps_per_period_requested} → ran {data.n_steps_per_period} steps/period
+                    </span>
+                  : <>{data.n_steps_per_period} steps/period</>} · dt = {(data.dt_s*1e6).toFixed(1)} µs ·
                 T_period = {(data.T_period_s*1e3).toFixed(2)} ms ({data.f_elec_Hz.toFixed(1)} Hz electrical) ·
                 T_avg = {data.T_avg_Nm.toFixed(2)} N·m · {loaded
                   ? `ripple = ${ripPct.toFixed(1)} %`

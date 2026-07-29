@@ -47,6 +47,12 @@ export interface TransientSummary {
   // was accepted without meeting its solver's convergence test, so everything
   // above is an average that includes an unconverged field.
   nonlinear_converged?:  boolean;
+  // Time resolution the run ACTUALLY used vs the one that was asked for: the
+  // solver snaps steps/period onto the slip-node divisor grid.
+  steps_snapped?:              boolean;
+  n_steps_per_period?:         number;
+  n_steps_per_period_requested?: number;
+  slip_nodes_per_period?:      number;
   nonlinear_resid_max?:  number;
   nonlinear_tol?:        number;
   nonlinear_unconverged_frames?: number[];
@@ -179,6 +185,19 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
               + 'dB/dt losses (core, AC copper) are the most affected.'} placement="top">
               <span style={{ marginLeft: 6, color: '#f87171', cursor: 'help',
                 fontWeight: 700 }}>⚠ not converged</span>
+            </Tooltip>
+          )}
+          {s.steps_snapped && (
+            <Tooltip title={
+              `Requested ${s.n_steps_per_period_requested} steps per electrical period; `
+              + `the rotor has to land on whole slip-ring nodes `
+              + `(${s.slip_nodes_per_period ?? '?'} per period), so the solver snapped to the `
+              + `nearest divisor and ran ${s.n_steps_per_period}. Every number on this card is `
+              + 'at the SNAPPED resolution. Pick a divisor of the slip-node count to get '
+              + 'exactly what you asked for.'} placement="top">
+              <span style={{ marginLeft: 6, color: '#fbbf24', cursor: 'help' }}>
+                ⚠ steps {s.n_steps_per_period_requested} → {s.n_steps_per_period}
+              </span>
             </Tooltip>
           )}
           {fromSweep && (

@@ -1516,6 +1516,13 @@ async def build_fem_mesh_2d_sliding_band(
 _fem_field_cache: Dict[tuple, Dict] = {}
 
 
+class _HaveSolverLossMap(Exception):
+    """Skip the analytic single-frame loss estimate — the transient supplied the
+    real map.  A sentinel rather than an `if` because the analytic block is one
+    long guarded stretch, and an early exit is the honest way to say "this
+    fallback does not apply" without duplicating its except-clause."""
+
+
 @router.get("/physics/fem_field2d")
 def get_fem_field2d(
     rotor_angle_deg:     float = 0.0,
@@ -1537,13 +1544,31 @@ def get_fem_field2d(
     airgap_macro:        bool  = False,   # harmonic gap coupling (moving band)
     gap_layers:          float = 2.0,     # radial gap rings (K of the macro ladder)
     geo:                 Optional[str] = None,  # per-request geometry override (multi-user)
+    # ── Multi-frame modes (J⟳ / Loss map / thermal source) ───────────────────
+    # These used to be a SECOND endpoint (/physics/fem_eddy_field2d) with its own
+    # mesh-flag defaults, so the J view solved a DIFFERENT motor than the A_z
+    # view beside it — free gmsh gap, no template iron, no geo-mesh — and drew a
+    # visibly different outline.  Two endpoints meshing "the same" geometry from
+    # two sets of defaults is a chimera by construction; there is one now, so a
+    # picture can only disagree with its neighbour if the physics does.
+    n_steps_per_period:  int   = 0,       # 0 = single-angle field (the A_z/|B|/J view);
+                                          #   >1 = run that many frames and snapshot the
+                                          #   LAST — needed for anything with a B(t)
+                                          #   history behind it (loss map, eddy J)
+    n_periods:           float = 1.0,
+    eddy:                bool  = False,   # coupled σ·∂A/∂t solve → the real eddy J⟳
+    rotor_eddy:          bool  = False,   # magnet/shaft eddy losses in the loss map
+    coil_temp_c:         float = 120.0,
 ):
-    """Field view at ONE rotor angle, computed by the SLIDING-BAND TRANSIENT
-    solver (1 step, rotor PHYSICALLY placed at rotor_angle_deg) — the SAME solver
-    that produces the transient torque/losses.  There is no separate magnetostatic
-    solver any more: the field picture is exactly the per-frame field the transient
-    sweeps, so it is guaranteed consistent with the results.  Slower than the old
-    static solve (it builds the sliding-band mesh); cached per (angle, γ, I, mesh).
+    """Field view computed by the SLIDING-BAND TRANSIENT solver (P2) — the SAME
+    solver that produces the transient torque/losses, so the field picture is
+    exactly the per-frame field the transient sweeps and is guaranteed consistent
+    with the results.  Cached per (angle, γ, I, mesh, frames, eddy).
+
+    Default (``n_steps_per_period=0``): ONE step with the rotor physically placed
+    at ``rotor_angle_deg`` — a true single-angle field.
+    ``n_steps_per_period>1``: a real transient whose LAST frame is snapshotted;
+    that is what the loss-density map (needs B(t)) and the coupled eddy J need.
     """
     import numpy as _np
     import time as _time
@@ -1575,6 +1600,8 @@ def get_fem_field2d(
         int(bool(demag)), int(bool(pole_copy)), int(bool(iron_template)), tuple(sorted(_comp_mesh.items())),
         int(bool(geo_mesh)), int(bool(structured_gap)), int(bool(airgap_macro)),
         round(float(gap_layers), 1), _cfp_f,
+        int(n_steps_per_period), round(float(n_periods), 2),
+        int(bool(eddy)), int(bool(rotor_eddy)), round(float(coil_temp_c), 1),
     )
     if _geo_ov:   # distinct cache entry per overridden geometry (no-geo key unchanged)
         key = key + (tuple(sorted(_geo_ov.items())),)
@@ -1621,16 +1648,22 @@ def get_fem_field2d(
         # 1 step (rotor pinned at the requested angle) → a true single-angle field
         # from the sliding-band machinery.  demag needs a short sweep for the
         # worst-case knee pre-pass, so use a few steps and snapshot the FIRST one.
-        _nsteps = 8 if demag else 1
+        # A caller that asked for a real transient (loss map, eddy J) gets its
+        # frame count and the LAST frame — the rotor has to have MOVED for a
+        # B(t)-derived quantity to mean anything.
+        _sweep = int(n_steps_per_period) > 1
+        _nsteps = int(n_steps_per_period) if _sweep else (8 if demag else 1)
         d = fem_transient_sliding_band(
-            n_steps_per_period=_nsteps, n_periods=1.0,
+            n_steps_per_period=_nsteps,
+            n_periods=float(n_periods) if _sweep else 1.0,
             gamma_deg=float(gamma_deg), I_phase_rms=float(I_phase_rms),
             mesh_size_mm=float(mesh_size_mm), min_size_mm=float(min_size_mm),
             outer_air_factor=float(outer_air_factor),
             n_sectors=_ns_eff,
             stator_fillet_mm=float(stator_fillet_mm),
-            eddy=False, rotor_eddy=False, demag=bool(demag),
-            return_field=True, field_first=True,
+            coil_temp_c=float(coil_temp_c),
+            eddy=bool(eddy), rotor_eddy=bool(rotor_eddy), demag=bool(demag),
+            return_field=True, field_first=not _sweep,
             rotor_angle0_deg=float(rotor_angle_deg),
             pole_copy=bool(pole_copy),
             iron_template=bool(iron_template),
@@ -1639,7 +1672,8 @@ def get_fem_field2d(
             airgap_macro=bool(airgap_macro),
             gap_layers=float(gap_layers),
             component_mesh_mm=_comp_mesh,
-            geo_override=_geo_ov)
+            geo_override=_geo_ov,
+            element_order=2)
     except Exception as e:
         log.exception("SB field solve failed")
         raise HTTPException(status_code=500, detail=f"FEM solve failed: {e}")
@@ -1652,7 +1686,13 @@ def get_fem_field2d(
     A  = _np.asarray(fld["A"])
     Bx = _np.asarray(fld["Bx"]); By = _np.asarray(fld["By"])
     Bmag = _np.sqrt(Bx ** 2 + By ** 2)
-    Jtri = _np.asarray(fld.get("Jtri_src", _np.zeros(T.shape[1])))
+    # J: the coupled solve's EDDY density σ(−∂A/∂t + U) when it ran, else the
+    # applied SOURCE density.  The eddy J is nodal (as it is in the solve) —
+    # average it onto elements so both cases hand the renderer the same shape.
+    if eddy and fld.get("Jeddy") is not None:
+        Jtri = _np.asarray(fld["Jeddy"], float)[T].mean(axis=0)
+    else:
+        Jtri = _np.asarray(fld.get("Jtri_src", _np.zeros(T.shape[1])))
     tags = _np.asarray(fld["tags"]).astype(int)
 
     # Collapse per-wire / per-magnet tags → renderer palette (rotor at angle).
@@ -1666,6 +1706,16 @@ def get_fem_field2d(
     for i, (mp, pol) in enumerate(polys.get("magnets", []) or []):
         tags_vis[tags == (DOM_MAG_BASE + i)] = (DOM_MAG_N if pol > 0 else DOM_MAG_S)
 
+    # ── Loss-density map [W/m³] ──────────────────────────────────────────────
+    # A real transient (n_steps_per_period>1) carries a B(t) history, so the
+    # solver's OWN map — the one normalised to the reported component watts —
+    # comes back in the snapshot and is used as-is.  Anything else is a single
+    # magnetostatic frame with no history, and falls back to the analytic
+    # estimate below.
+    _loss_dens = _np.zeros(int(T.shape[1]))
+    _ld_solver = _np.asarray(fld.get("loss_dens") or [], float)
+    if _ld_solver.size == int(T.shape[1]):
+        _loss_dens = _ld_solver
     # ── Single-frame ANALYTIC loss-density map [W/m³] ────────────────────────
     # The Loss view is ONE magnetostatic frame (like |B|): estimate the local loss
     # density from THIS frame's B / J — no multi-frame transient.  Frames are run
@@ -1675,8 +1725,9 @@ def get_fem_field2d(
     #   copper : resistive   p = ρ_Cu(T)·J²
     # Approximate (local instantaneous |B| as the amplitude proxy) but instant and
     # shows WHERE losses concentrate, matching the |B|/J views' 1-frame speed.
-    _loss_dens = _np.zeros(int(T.shape[1]))
     try:
+        if _ld_solver.size == int(T.shape[1]):
+            raise _HaveSolverLossMap
         from motor_ai_sim import materials as _ml2
         from motor_ai_sim.config import (get_config as _gcfg2,
                                           get_material_assignments as _gma2)
@@ -1717,6 +1768,8 @@ def get_fem_field2d(
         if _cmsk.any():
             _rho_cu = 1.724e-8 * (1.0 + 0.00393 * (_ctemp - 20.0))
             _loss_dens[_cmsk] = _rho_cu * (Jtri[_cmsk] ** 2)
+    except _HaveSolverLossMap:
+        pass                       # the transient's own map is already in place
     except Exception as _le:
         log.warning("field-view loss density failed: %s", _le)
         _loss_dens = _np.zeros(int(T.shape[1]))
@@ -1745,6 +1798,34 @@ def get_fem_field2d(
         "anti_periodic": bool(nsec > 1 and _poles and (_poles // nsec) % 2 == 1),
         "solve_time_s": round(_time.time() - _t0, 1), "total_time_s": 0.0,
     }
+    # A real transient also produces the machine numbers the J⟳ sidebar and the
+    # thermal solve read off this payload.  A single frame produces none of them
+    # honestly, so they are only added when the frames were actually swept.
+    if _sweep:
+        def _mean(kk):
+            s = d.get(kk) or [0.0]
+            return float(_np.mean(_np.asarray(s, float))) if len(s) else 0.0
+        # Copper: the coupled solve reports the SOLVED total; without it the
+        # transient's own DC+AC series is the honest number.
+        Pcu = (float(d.get("P_cu_total_solve_W", 0.0)) if eddy else _mean("P_cu_W"))
+        Pfe = _mean("P_fe_W"); Pmag = _mean("P_mag_eddy_W")
+        Tavg = float(d.get("T_avg_Nm", 0.0)); rpm = float(d.get("rpm", 0.0))
+        ploss = Pcu + Pfe + Pmag
+        # Energy conservation: P_mech = P_elec_in − P_loss (P_elec_in = ⟨Σ v·i⟩ = 0
+        # at no-load → P_mech = −P_loss, not the noisy cogging-mean torque × ω).
+        Pelec = float(d.get("P_elec_in_W", 0.0))
+        Pmech = Pelec - ploss
+        eff = (Pmech / Pelec) if (Pmech > 0 and Pelec > 1.0) else 0.0
+        result.update({
+            "eddy": bool(eddy),
+            "rpm": rpm, "freq_Hz": round(float(d.get("f_elec_Hz", 0.0)), 2),
+            "T_em_Nm": round(Tavg, 3),
+            "P_cu_W": round(Pcu, 1), "P_fe_W": round(Pfe, 1),
+            "P_mag_eddy_W": round(Pmag, 1), "P_loss_total_W": round(ploss, 1),
+            "P_mech_W": round(Pmech, 1), "efficiency": round(eff, 4),
+            "P_cu_ac_solve_W": round(float(d.get("P_cu_ac_solve_W", 0.0)), 1),
+            "V_peak": round(float(d.get("V_peak", 0.0)), 1),
+        })
     # Demag %-map + per-magnet knee report (only when demag modelling is on).
     _dc = d.get("demag_coef_per_tri")
     if _dc is not None and len(_dc) == int(T.shape[1]):
@@ -1752,153 +1833,7 @@ def get_fem_field2d(
     if d.get("demag_report"):
         result["demag_report"] = d["demag_report"]
 
-    _fem_field_cache[key] = result
-    return result
-
-
-@router.get("/physics/fem_eddy_field2d")
-def get_fem_eddy_field2d(
-    gamma_deg:          float = 0.0,
-    I_phase_rms:        float = 120.0,
-    n_steps_per_period: int   = 12,
-    n_periods:          float = 2.0,
-    mesh_size_mm:       float = 3.0,
-    min_size_mm:        float = 0.3,
-    outer_air_factor:   float = 1.3,
-    n_sectors:          int   = 4,
-    coil_temp_c:        float = 120.0,
-    component_mesh:     str   = "",
-    geo:                Optional[str] = None,  # per-request geometry override (multi-user)
-    coupled:            bool  = True,   # True = full time-coupled σ∂A/∂t solve (J⟳ view);
-                                        # False = FAST transient (no eddy coupling) — the
-                                        # Loss MAP is reconstructed from the transient's
-                                        # Bertotti/slab/DC losses and needs no coupled solve,
-                                        # so the Loss view runs ~2× faster with this off.
-):
-    """Return the LAST-frame field — A_z, |B|, copper eddy J = σ(−∂A/∂t + U_c) and
-    the per-element loss density — in the magnetostatic renderer's payload shape.
-    ``coupled=True`` runs the slow time-coupled eddy-current solve (needed for the
-    J⟳ current-crowding view, ~25 s); ``coupled=False`` skips it (the Loss map is
-    reconstructed from the transient losses regardless), so the Loss view is fast."""
-    import numpy as _np
-    import math as _math
-    _comp_mesh = _parse_component_mesh(component_mesh)
-    _geo_ov = _parse_geo_override(geo)   # per-request geometry override (multi-user)
-    key = ("eddyfld", round(gamma_deg, 1), round(I_phase_rms, 1),
-           int(n_steps_per_period), round(n_periods, 2), round(mesh_size_mm, 2),
-           round(min_size_mm, 2), round(outer_air_factor, 2), int(n_sectors),
-           round(coil_temp_c, 1), tuple(sorted(_comp_mesh.items())), bool(coupled))
-    if _geo_ov:   # distinct cache entry per overridden geometry (no-geo key unchanged)
-        key = key + (tuple(sorted(_geo_ov.items())),)
-    if key in _fem_field_cache:
-        return _fem_field_cache[key]
-    try:
-        from motor_ai_sim.simulation.fem_solver_2d import (
-            fem_transient_sliding_band, _simplify_polys,
-            DOM_MAG_BASE, DOM_COIL_BASE, DOM_MAG_N, DOM_MAG_S, DOM_COIL)
-        from motor_ai_sim.cadquery_geometry import CadQueryMotor
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"eddy solver unavailable: {e}")
-    import time as _time
-    # Snap n_sectors to a valid divisor of GCD(slots, poles) — override-aware
-    # (same rule as fem_field2d; a blind 4 breaks e.g. 12s14p).
-    motor = CadQueryMotor()
-    if _geo_ov:
-        motor.set_parameters(_geo_ov)
-    _mp = motor.parameters
-    _slots = int(_mp.get("num_slots") or 0)
-    _poles = int(_mp.get("num_poles") or 0)
-    _gcd = math.gcd(_slots, _poles) if (_slots and _poles) else 1
-    _ns_eff = -1
-    if int(n_sectors) > 1:
-        _valid = [dv for dv in range(2, _gcd + 1) if _gcd % dv == 0]
-        _ns_eff = max([dv for dv in _valid if dv <= int(n_sectors)], default=-1)
-    _t0 = _time.time()
-    try:
-        d = fem_transient_sliding_band(
-            n_steps_per_period=int(n_steps_per_period), n_periods=float(n_periods),
-            gamma_deg=float(gamma_deg), I_phase_rms=float(I_phase_rms),
-            mesh_size_mm=float(mesh_size_mm), min_size_mm=float(min_size_mm),
-            outer_air_factor=float(outer_air_factor),
-            n_sectors=_ns_eff,
-            coil_temp_c=float(coil_temp_c), eddy=bool(coupled), rotor_eddy=True,
-            return_field=True,
-            component_mesh_mm=_comp_mesh,
-            geo_override=_geo_ov)
-    except Exception as e:
-        log.exception("eddy field solve failed")
-        raise HTTPException(status_code=500, detail=f"eddy solve failed: {e}")
-    _solve_s = round(_time.time() - _t0, 1)
-    fld = d.get("field")
-    if not fld:
-        raise HTTPException(status_code=500, detail="eddy solve returned no field snapshot")
-
-    P = _np.asarray(fld["P_mm"]) * 1e-3        # nodes → metres
-    T = _np.asarray(fld["T"])                  # (3, ntri)
-    A = _np.asarray(fld["A"])
-    Bx = _np.asarray(fld["Bx"]); By = _np.asarray(fld["By"])
-    Jn = _np.asarray(fld["Jeddy"])             # nodal Cu eddy/total current density
-    tags = _np.asarray(fld["tags"]).astype(int)
-    Bmag = _np.sqrt(Bx ** 2 + By ** 2)
-    Jtri = Jn[T].mean(axis=0)                   # per-element J (nonzero in Cu)
-    Ld = _np.asarray(fld.get("loss_dens") or [], float)   # per-element loss density [W/m³]
-
-    # Collapse per-wire / per-magnet tags → renderer palette (rotor at angle 0).
-    # `motor` already carries the geo override (palette matches the request).
-    polys = _simplify_polys(motor.get_2d_polygons(rotor_angle_deg=0.0), tol_mm=0.005)
-    tags_vis = tags.copy()
-    tags_vis[tags >= DOM_COIL_BASE] = DOM_COIL
-    for i, (mp, pol) in enumerate(polys.get("magnets", []) or []):
-        tags_vis[tags == (DOM_MAG_BASE + i)] = (DOM_MAG_N if pol > 0 else DOM_MAG_S)
-
-    def _mean(kk):
-        s = d.get(kk) or [0.0]
-        return float(_np.mean(_np.asarray(s, float))) if len(s) else 0.0
-    nsec = _ns_eff if _ns_eff > 1 else 1
-    # Copper: the coupled solve reports P_cu_total_solve_W; the fast (coupled=False)
-    # path has no coupled solve, so use the transient's own DC+AC copper series.
-    Pcu = (float(d.get("P_cu_total_solve_W", 0.0)) if coupled
-           else _mean("P_cu_W"))
-    Pfe = _mean("P_fe_W"); Pmag = _mean("P_mag_eddy_W")
-    Tavg = float(d.get("T_avg_Nm", 0.0)); rpm = float(d.get("rpm", 0.0))
-    ploss = Pcu + Pfe + Pmag
-    # Energy conservation: P_mech = P_elec_in − P_loss (P_elec_in = ⟨Σ v·i⟩ = 0
-    # at no-load → P_mech = −P_loss, not the noisy cogging-mean torque × ω).
-    Pelec = float(d.get("P_elec_in_W", 0.0))
-    Pmech = Pelec - ploss
-    Pairgap = Tavg * 2 * _math.pi * rpm / 60.0
-    eff = (Pmech / Pelec) if (Pmech > 0 and Pelec > 1.0) else 0.0
-    result = {
-        "ok": True, "eddy": True,
-        "n_vertices": int(P.shape[1]), "n_triangles": int(T.shape[1]),
-        "vertices": P.T.tolist(), "triangles": T.T.tolist(),
-        "domain_per_tri": tags_vis.tolist(),
-        "A_z_per_node": A.tolist(),
-        "Bmag_per_tri": Bmag.tolist(),
-        "J_z_per_tri": Jtri.tolist(),           # eddy current density (A/m²) in Cu
-        "loss_density_per_tri": Ld.tolist(),    # cycle-avg loss density [W/m³] per element
-        "loss_dens_max": float(Ld.max()) if Ld.size else 0.0,
-        "extent": [float(P[0].min()), float(P[0].max()),
-                   float(P[1].min()), float(P[1].max())],
-        "outlines": _outlines_from_polys(polys),
-        "A_z_min": float(A.min()), "A_z_max": float(A.max()),
-        "B_mag_max": float(Bmag.max()),
-        "n_sectors": nsec, "symmetry_mult": nsec,
-        "poles_per_sector": (int(_poles // nsec) if nsec > 1 and _poles else 0),
-        # Anti-periodic radial-cut BC (A_z flips sign between adjacent sectors)
-        # ⇔ an ODD number of poles per sector.  The full-ring display tiling needs
-        # this to place each rotated copy with the right sign.
-        "anti_periodic": bool(nsec > 1 and _poles and (_poles // nsec) % 2 == 1),
-        "rpm": rpm, "freq_Hz": round(float(d.get("f_elec_Hz", 0.0)), 2),
-        "T_em_Nm": round(Tavg, 3),
-        "P_cu_W": round(Pcu, 1), "P_fe_W": round(Pfe, 1),
-        "P_mag_eddy_W": round(Pmag, 1), "P_loss_total_W": round(ploss, 1),
-        "P_mech_W": round(Pmech, 1), "efficiency": round(eff, 4),
-        "P_cu_ac_solve_W": round(float(d.get("P_cu_ac_solve_W", 0.0)), 1),
-        "V_peak": round(float(d.get("V_peak", 0.0)), 1),
-        "solve_time_s": _solve_s,
-        "total_time_s": _solve_s,
-    }
+    result["total_time_s"] = result["solve_time_s"]
     _fem_field_cache[key] = result
     return result
 
@@ -2087,10 +2022,14 @@ def get_thermal_field2d(
     if key in _thermal_field_cache:
         return _thermal_field_cache[key]
 
-    # 1. EM losses on the mesh (reuses the eddy-field cache → cheap on repeat)
-    em = get_fem_eddy_field2d(
+    # 1. EM losses on the mesh (reuses the field cache → cheap on repeat).
+    # Same endpoint as every other field view, so the thermal map is solved on
+    # the SAME mesh the user is looking at — it used to come from the separate
+    # eddy endpoint, whose mesh defaults differed.
+    em = get_fem_field2d(
         gamma_deg=gamma_deg, I_phase_rms=I_phase_rms,
         n_steps_per_period=n_steps_per_period, n_periods=n_periods,
+        eddy=True, rotor_eddy=True,
         mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm,
         outer_air_factor=outer_air_factor, n_sectors=n_sectors,
         coil_temp_c=coil_temp_c, component_mesh=component_mesh, geo=geo)
@@ -2950,6 +2889,16 @@ def get_fem_transient(
                                 torque_filter=bool(torque_filter),
                                 pole_copy=bool(pole_copy),
                                 iron_template=bool(iron_template),
+                                # The reference must be the SAME machine, meshed
+                                # and discretised the same way — its only allowed
+                                # difference from the voltage run is the drive.
+                                # geo_mesh and element_order were both omitted
+                                # here, so the reference silently fell back to the
+                                # gmsh mesh and to P1: ΔP_harm was then a
+                                # cross-mesh, cross-element-order difference with
+                                # the harmonic cost buried in it.
+                                geo_mesh=bool(geo_mesh),
+                                element_order=int(element_order),
                                 component_mesh_mm=_comp_mesh, geo_override=_geo_ov,
                                 hi_fidelity=bool(hi_fidelity),
                                 structured_gap=bool(structured_gap),

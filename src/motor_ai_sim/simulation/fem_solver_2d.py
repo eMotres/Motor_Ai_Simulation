@@ -3268,6 +3268,7 @@ def fem_transient_sliding_band(
         _histA_rot2 = []                              # (N, n_rotor_nodes) rotor A
         _hsx2 = []; _hsy2 = []; _hrx2 = []; _hry2 = []  # stator/rotor iron B(t)
         _hcx2 = []; _hcy2 = []                        # coil B(t) for AC copper
+        _hmx2 = []; _hmy2 = []                        # magnet B(t) — loss-density map
         # FROZEN PERMEABILITY (frozen_nu): converge the saturation ONCE at frame
         # 0 (extended Picard) then hold the per-element ν fixed for every rotor
         # position — the industry-standard honest cogging/ripple method.  It
@@ -3763,6 +3764,9 @@ def fem_transient_sliding_band(
             _hry2.append(_by_el[_iron_r_idx + nst])
             if _coil_idx.size:                     # coil B for AC copper loss
                 _hcx2.append(_bx_el[_coil_idx]); _hcy2.append(_by_el[_coil_idx])
+            if _mag_idx.size:                      # magnet B for the loss-density map
+                _hmx2.append(_bx_el[_mag_idx + nst])
+                _hmy2.append(_by_el[_mag_idx + nst])
             if rotor_eddy:
                 # rotor-frame nodal A (magnet/shaft eddy via honest_rotor_eddy)
                 _histA_rot2.append(A2[_rot_vdof].copy())
@@ -3794,6 +3798,18 @@ def fem_transient_sliding_band(
                     for _ci, _c in enumerate(_ed_con):
                         _u_n[_bdofs(_elm[_c["tag"]])] = float(_Ued[_ci])
                     _snap2["Jeddy"] = (_sig_n * (-_dAe + _u_n))[vdof].copy()
+                else:
+                    # Magnetostatic view: the APPLIED per-element source current
+                    # density, so the "J" view shows the winding currents at this
+                    # rotor position.  Same key and same construction as the P1
+                    # snapshot — a viewer must not need a per-order case, and the
+                    # J view rendered EMPTY on P2 for exactly as long as this key
+                    # was missing here.
+                    _Js2 = np.zeros(int(mesh_all.t.shape[1]))
+                    for _ix, _ar, _dir, _ph in coil_info:
+                        _Js2[_ix] = (_dir * Ist[_ph] * n_wires
+                                     / max(slot_area_m2, 1e-12))
+                    _snap2["Jtri_src"] = _Js2
         # ── Voltage drive: drop the SETTLING periods ─────────────────────────
         # The currents are STATE, so the run carries an electrical start-up
         # transient; _vskip frames were prepended for it (n_total/n_periods were
@@ -3806,7 +3822,7 @@ def fem_transient_sliding_band(
         # I/psi/T and the reported max residual is the SETTLING residual, not
         # the steady-state one.
         _v2_lists = (_T2, _psiA, _psiB, _psiC, _IA, _IB, _IC, _tt,
-                     _hsx2, _hsy2, _hrx2, _hry2, _hcx2, _hcy2,
+                     _hsx2, _hsy2, _hrx2, _hry2, _hcx2, _hcy2, _hmx2, _hmy2,
                      _histA_rot2, _pic_iters,
                      _ed_cu, _ed_mag, _ed_sh, _ed_dc2d,
                      _v_diag["iters"], _v_diag["resid"])
@@ -3971,6 +3987,39 @@ def fem_transient_sliding_band(
                       zip(P_cu_ser2, P_fe_ser2, P_mag_ser2, P_shaft_ser2)]
         P_loss_avg2 = float(np.mean(P_tot_ser2)) if P_tot_ser2 else 0.0
 
+        # ── Per-element loss DENSITY (W/m³) for the Loss map ──────────────────
+        # simulation/losses.py, the SAME map the field views render.  It lives
+        # in the snapshot (not the top-level result) because it is per-ELEMENT
+        # data whose ordering is the snapshot's [stator-half | rotor-half].
+        # The derivative operator is the only element-order difference: the P2
+        # field is smooth in time, so the plain central difference the P2 loss
+        # totals already use is enough (P1 needed the slip-jitter smoother).
+        # The map self-normalises each component to the reported watts above, so
+        # a 1-frame view (no B history) yields zeros rather than a wrong picture.
+        if _snap2 is not None:
+            try:
+                _cd2 = _central_difference(dt)
+                _cc2 = ((half["s"]["mesh"].p[:, half["s"]["mesh"].t].mean(axis=1))
+                        [:, _coil_idx] if _coil_idx.size else np.zeros((2, 0)))
+                _snap2["loss_dens"] = _loss_density_map(
+                    n_stator_elems=int(Tts.shape[1]),
+                    n_elems=int(mesh_all.t.shape[1]),
+                    hist_sx=_hsx2, hist_sy=_hsy2, hist_rx=_hrx2, hist_ry=_hry2,
+                    hist_mx=_hmx2, hist_my=_hmy2, hist_cx=_hcx2, hist_cy=_hcy2,
+                    iron_s_idx=_iron_s_idx, iron_r_idx=_iron_r_idx,
+                    mag_idx=_mag_idx, coil_idx=_coil_idx,
+                    areas_s=areas_s, areas_r=areas_r, coil_centroids=_cc2,
+                    steel_s=_steel_s, steel_r=_steel_r,
+                    bertotti=_mat_lib.effective_bertotti,
+                    f_elec_hz=f_elec, stack_length_m=p.stack_length,
+                    sector_scale=NS,
+                    P_fe_avg=P_fe_avg2, P_mag_avg=P_mag_avg2,
+                    P_cu_dc=P_cu_dc2, P_cu_ac_avg=P_cu_ac_avg2,
+                    sigma_cu=_sig_cu2, d_cu_r=_w_cu2, d_cu_t=_h_cu2,
+                    ddt=lambda X, qp=None: _cd2(X)).tolist()
+            except Exception as _lde:
+                log.warning("P2 loss-density map failed: %s", _lde)
+
         # ── metrics ──────────────────────────────────────────────────────────
         # Raw Maxwell-stress (Arkkio) torque — kept as a DIAGNOSTIC only.  On the
         # node-repaired sliding band the gap field is contaminated UNDER LOAD, so
@@ -4019,6 +4068,17 @@ def fem_transient_sliding_band(
         VB = [R_phase * i + e for i, e in zip(_IB, _ddt(_psiB))]
         VC = [R_phase * i + e for i, e in zip(_IC, _ddt(_psiC))]
         Vpk = float(np.max(np.abs(VA + VB + VC))) if _psiA else 0.0
+        # Terminal electrical input ⟨Σ v·i⟩ (EXACTLY 0 at no-load).  IA/IB/IC are
+        # PER-BRANCH conductor currents, so one branch per phase is what ⟨Σ v·i⟩
+        # measures and the machine total carries the n_parallel factor — the same
+        # correction the P1 path has.  The P2 return simply did not have this key,
+        # so every consumer that computes efficiency as (P_elec−P_loss)/P_elec —
+        # the field view's sidebar among them — read a missing 0.0 and reported
+        # 0 % efficiency for a machine doing real work.
+        P_elec_in2 = (float(np.mean(np.asarray(VA) * np.asarray(_IA)
+                                    + np.asarray(VB) * np.asarray(_IB)
+                                    + np.asarray(VC) * np.asarray(_IC)))
+                      * float(n_parallel) if _IA else 0.0)
         _ang = [(k / n_total) * period_mech * n_periods for k in range(n_total)]
         log.info("P2 belt transient done: %d frames, T_avg=%.5f Nm, "
                  "ripple_raw=%.2f%%, picard_max_res=%.2e", n_total, Tavg,
@@ -4080,6 +4140,7 @@ def fem_transient_sliding_band(
             "P_fe_avg_W": round(float(P_fe_avg2), 3),
             "P_loss_total_avg_W": round(float(P_loss_avg2), 3),
             "P_airgap_W": P_airgap_avg2, "P_mech_avg_W": P_mech_avg2,
+            "P_elec_in_W": P_elec_in2,               # ⟨Σ v·i⟩ (0 at no-load)
             "R_phase_ohm": R_phase, "n_slip_nodes": int(Nring),
             "n_parallel": int(n_parallel),
             "picard_iters_mean": (round(float(np.mean(_pic_iters)), 1)

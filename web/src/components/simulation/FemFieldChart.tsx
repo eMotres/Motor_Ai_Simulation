@@ -968,26 +968,37 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
     if (payloadOverride) return;
     setEddyLoading(true); setEddyErr(null);
     const comp = JSON.stringify(readMeshSetting<Record<string, number>>('componentMesh', {}));
-    const base = `${API}/api/simulation/physics/fem_eddy_field2d`;
+    // SAME endpoint as the A_z / |B| / J views, with the SAME mesh-pipeline
+    // toggles. It used to be a separate /fem_eddy_field2d whose defaults left
+    // out template iron, the geo mesh and the structured belt, so the J⟳ view
+    // solved a DIFFERENT mesh and drew a visibly different outline next to the
+    // A_z view. Every mesh setting below must stay in step with fetchFem — that
+    // is the whole reason the two share one endpoint now.
+    const base = `${API}/api/simulation/physics/fem_field2d`;
     const qs = new URLSearchParams({
       gamma_deg:        String(gamma_deg),
       I_phase_rms:      String(eddyCurrent),
-      // The Loss/J⟳ views run a full nonlinear transient; the loss-density MAP is a
+      // The J⟳ view runs a full nonlinear transient; the loss-density MAP is a
       // VISUAL and does not need the dashboard's 24 frames.  10 frames / 1 period
       // (≥9 keeps the de-jitter savgol; still resolves the 6f loss harmonic) ≈ 2.4×
       // fewer nonlinear solves → ~2.4× faster, and the result caches so a repeat
       // view of the same operating point is instant.
       n_steps_per_period: '10',
       n_periods:          '1',
+      // The true time-coupled σ(−∂A/∂t+U) currents — that IS this view.
+      eddy:             'true',
+      rotor_eddy:       'true',
       mesh_size_mm:     String(readMeshSetting('meshSize', 4.0)),
       min_size_mm:      String(readMeshSetting('minSize',  0.3)),
       outer_air_factor: String(readMeshSetting('outerAir', 1.3)),
       n_sectors:        String(readMeshSetting('nSectors', 1)),
       component_mesh:   comp,
       pole_copy:        String(readMeshSetting('poleCopy', false)),
-      // Loss only needs the reconstructed loss-density map (no coupled solve) → FAST.
-      // The J⟳ current-crowding view needs the true time-coupled eddy currents.
-      coupled:          String(mode === 'Jeddy'),
+      iron_template:    String(readMeshSetting('ironTemplate', true)),
+      geo_mesh:         String(readMeshSetting('geoMesh', true)),
+      structured_gap:   String(readMeshSetting('structuredGap', false) || readMeshSetting('ironTemplate', true)),
+      airgap_macro:     String(readMeshSetting('harmonicGap', false)),
+      gap_layers:       String(readMeshSetting('gapLayers', 2)),
     }).toString();
     fetch(`${base}?${qs}`, { cache: 'no-store' })
       .then(async r => {
@@ -1395,9 +1406,9 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
 
       {isEddy ? (
         <Typography sx={{ fontSize: 9, color: 'var(--text-3)', mt: 0.5 }}>
-          {mode === 'Loss'
-            ? `Cycle-averaged loss density [W/m³] from the eddy-current transient — iron Bertotti + copper (DC I²R + AC proximity) + magnet eddy, each normalised so the map integrates to the reported component losses. ${logLoss ? 'Log' : 'Linear'} scale (toggle top-right).`
-            : 'Real current density σ(−∂A/∂t+U) from the eddy solve — current crowds toward the slot opening (proximity). Compare with the uniform magnetostatic "J".'}
+          Real current density σ(−∂A/∂t+U) from the eddy solve — current crowds
+          toward the slot opening (proximity). Compare with the uniform
+          magnetostatic &quot;J&quot;.
           {eddyNoLoad && ' No winding current (I=0): the copper loss shown is ONLY eddy/proximity induced by the spinning magnets (concentrated near the slot opening) — there is no I²R. Set a load current to see I²R copper loss and current crowding.'}
         </Typography>
       ) : (

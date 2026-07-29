@@ -136,9 +136,13 @@ _PIC_TOL = 1e-3
 # RECALIBRATE only if the pole/slot/winding TOPOLOGY changes (dimension sweeps
 # don't move it): run fem_transient_sliding_band(I_phase_rms=0); θ* = rotor angle
 # of max psi_A_Wb; DAXIS_SHIFT_DEG = (90 − θ*·pole_pairs) mod 360.
-DAXIS_SHIFT_DEG = 108.0   # LEGACY FALLBACK ONLY — the transient now AUTO-calibrates
-                          # this per motor topology (see _resolve_daxis_shift); this
-                          # hard value is used only if the no-load calibration fails.
+DAXIS_SHIFT_DEG = 108.0   # LEGACY CONSTANT for the 20p/24s topology ONLY.  The
+                          # transient AUTO-calibrates per topology
+                          # (_resolve_daxis_shift) and RAISES if that fails — this
+                          # value is NOT a fallback for other machines: it is ~48°
+                          # wrong for 12s14p, and silently answering with it puts
+                          # the whole run at a load angle the user never asked for.
+                          # Still read by the legacy static field path below.
 
 # ── Per-motor d-axis auto-calibration ────────────────────────────────────────
 # The geometric rotor-d-axis-vs-phase-A offset is TOPOLOGY-dependent (pole/slot/
@@ -193,12 +197,14 @@ def _resolve_daxis_shift(p, geo, wind, pole_pairs, geo_override, n_sectors) -> f
         except Exception:
             pass
     daxis = None                      # None ⇒ calibration did not succeed
+    _cal_err = None
     try:
         _DAXIS_CALIBRATING = True
         # Cheapest possible calibration: θ* (the ψ_A peak angle) is a bulk
         # geometric quantity → a COARSE mesh + the smallest natural symmetry
-        # sector + few P1 steps localise it fine, and keep the extra geometry
-        # build well inside the sweep's per-design budget.
+        # sector localise it fine, and keep the extra geometry build well
+        # inside the sweep's per-design budget.  The mesh stays coarse; only
+        # the basis moved to P2 with the rest of the solver.
         import math as _mth
         _cal_ns = _mth.gcd(int((geo or {}).get("num_slots") or 1),
                            int(getattr(p, "num_poles", 1) or 1)) or 1
@@ -209,7 +215,7 @@ def _resolve_daxis_shift(p, geo, wind, pole_pairs, geo_override, n_sectors) -> f
             n_sectors=_cal_ns if _cal_ns >= 2 else -1,
             coil_temp_c=120.0, rotor_eddy=False,
             iron_template=False, geo_mesh=True,
-            geo_override=geo_override, element_order=1)
+            geo_override=geo_override, element_order=2)
         psi = np.asarray(cal.get("psi_A_Wb") or [], float)
         ang = np.asarray(cal.get("rotor_angle_deg") or [], float)
         if psi.size >= 4 and ang.size == psi.size:
@@ -224,15 +230,25 @@ def _resolve_daxis_shift(p, geo, wind, pole_pairs, geo_override, n_sectors) -> f
             log.info("d-axis auto-cal: theta*=%.2f deg mech -> DAXIS=%.1f deg "
                      "(topology poles=%d slots=%d)", theta_star, daxis, key[0], key[1])
         else:
-            log.warning("d-axis auto-cal: no ψ_A from calibration run -> fallback %.1f",
-                        DAXIS_SHIFT_DEG)
+            _cal_err = (f"calibration run returned no usable ψ_A "
+                        f"(psi {psi.size} samples, angles {ang.size})")
     except Exception as _e:
-        log.warning("d-axis auto-calibration failed (%s) -> fallback %.1f",
-                    _e, DAXIS_SHIFT_DEG)
+        _cal_err = repr(_e)
     finally:
         _DAXIS_CALIBRATING = False
-    if daxis is None:                 # calibration failed → use fallback, DON'T
-        return float(DAXIS_SHIFT_DEG) # cache it (so a later request can retry)
+    if daxis is None:
+        # NO FALLBACK.  This used to return DAXIS_SHIFT_DEG (108°), which is the
+        # calibrated value for 20p/24s and ~48° wrong for 12s14p — so a failed
+        # calibration silently ran the WHOLE simulation at a load angle the user
+        # never asked for, and every torque/efficiency number downstream was for
+        # a different operating point than the one on screen.  A γ that is 48°
+        # off is not a degraded answer, it is a wrong one; say so.
+        raise RuntimeError(
+            f"d-axis auto-calibration failed for topology "
+            f"poles={key[0]} slots={key[1]} layers={key[2]} conn={key[3]!r}: "
+            f"{_cal_err}.  γ=0 cannot be placed on the q-axis without it, and "
+            f"the legacy {DAXIS_SHIFT_DEG:.0f}° constant is only correct for "
+            f"20p/24s.")
     _DAXIS_CACHE[key] = daxis
     if _dp:                           # persist so sweep subprocesses reuse it
         try:
@@ -1510,18 +1526,23 @@ def fem_transient_sliding_band(
                                      # parasitic harmonic currents (FOC-drive verification mode).
     v_phase_peak: float = 0.0,       # voltage drive: phase-voltage amplitude [V, peak]
     v_delta_deg: float = 0.0,        # voltage drive: voltage angle [°el] in the SAME frame as γ
-    element_order: int = 1,          # 1 = P1 linear (default, unchanged); 2 = P2 quadratic
-                                     # elements (B linear per element → smooth Arkkio torque,
-                                     # no P1 staircase).  P2 runs the FULL magnetostatic
-                                     # sliding-band transient on the merged structured belt —
-                                     # full ring (n_sectors≤1) AND anti-periodic sector wedge
-                                     # (n_sectors≥2) — via edge-midpoint DOF stitching across
-                                     # the moving slip cut and the radial cuts (see the P2
+    element_order: int = 2,          # 2 = P2 quadratic elements — THE basis.  B is linear per
+                                     # element → smooth Arkkio torque, an energy-consistent mean
+                                     # AND a mesh-convergent ripple.  P2 runs the FULL
+                                     # magnetostatic sliding-band transient on the merged
+                                     # structured belt — full ring (n_sectors≤1) AND anti-periodic
+                                     # sector wedge (n_sectors≥2) — via edge-midpoint DOF stitching
+                                     # across the moving slip cut and the radial cuts (see the P2
                                      # branch below and P2_NOTES.md).  Voltage drive, irreversible
-                                     # demag and the coupled σ·∂A/∂t eddy solve all run on P2 too,
+                                     # demag and the coupled σ·∂A/∂t eddy solve all run on P2,
                                      # INCLUDING eddy + voltage drive together (one bordered
                                      # (A, U, i_A, i_B) Newton).  Still gated (raises
                                      # NotImplementedError): the moving / harmonic-macro band.
+                                     # 1 = P1 linear.  Nothing in the codebase asks for it any
+                                     # more: it over-read the mean torque ~35 % (its Maxwell
+                                     # integral is radius-inconsistent under load) and its ripple
+                                     # was a mesh staircase, so every P1 number needed a correction
+                                     # nobody could state.  The branch is deleted next commit.
 ) -> dict:
     """Sliding-band transient: mesh the stator + rotor halves ONCE, then sweep
     the rotor by shifting the slip-ring node pairing (no remeshing) so the
@@ -5582,7 +5603,7 @@ def em_transient_eval(
     drive: str = "current",
     v_phase_peak: float = 0.0,
     v_delta_deg: float = 0.0,
-    element_order: int = 1,          # 1 = P1 (default); 2 = P2 (see fem_transient_sliding_band)
+    element_order: int = 2,          # 2 = P2, the only basis (see fem_transient_sliding_band)
 ) -> Dict:
     """THE single canonical sliding-band transient invocation.
 

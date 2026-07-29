@@ -318,14 +318,10 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
       // P2 is the calculation basis (Mesh-tab toggle, default ON): quadratic
       // elements → B linear per element → smooth Arkkio torque, no P1 staircase,
       // and the forbidden-order noise floor converges to 0 with mesh refinement.
-      // Irreversible demagnetisation runs on P2 now too.
-      //
-      // Voltage drive runs natively on P2 since 4e316b9 (coupled Newton
-      // circuit, verified against P1 at the same operating point), and the
-      // route stopped coercing drive/demag on P2 in e16c3ad — the old
-      // "voltage forces P1" fallback here would now silently DOWNGRADE the
-      // solve instead of protecting it.
-      element_order:      (readMeshSetting('p2HiFi', true) ? 2 : 1),
+      // Irreversible demagnetisation, the voltage drive and the coupled eddy
+      // solve all run on P2. P1 is deleted, so this is a constant now — sending
+      // anything else raises in the solver rather than silently downgrading.
+      element_order:      2,
       // Deterministic template iron mesh (Mesh-tab "Template iron" toggle).
       iron_template:      readMeshSetting('ironTemplate', true),
       // Geometry-driven CDT mesh (Mesh-tab "Geometry-driven mesh" toggle, default ON).

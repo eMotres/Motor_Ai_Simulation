@@ -448,7 +448,7 @@ class ScanRequest(BaseModel):
     airgap_macro: bool = False              # harmonic gap coupling — SINGLE SOURCE: Mesh tab "Harmonic gap"; RAW ripple step-independent (full ring + sectors)
     iron_template: bool = True              # deterministic template iron mesh (fallback: gmsh)
     geo_mesh: bool = True                   # geometry-driven CDT mesh — SINGLE SOURCE: Mesh tab (same build as Simulation)
-    element_order: int = 2                  # 2 = P2 (DEFAULT — the only trustworthy basis: energy-consistent mean torque + mesh-convergent ripple) | 1 = P1, kept ONLY for what P2 cannot do (irreversible demag, coupled eddy, voltage drive)
+    element_order: int = 2                  # 2 = P2 — the only basis: energy-consistent mean torque + mesh-convergent ripple.  P1 is deleted; any other value raises.
     seed: int = 12345
     run_id: str = ""
 
@@ -504,7 +504,7 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                  pole_copy=None, torque_filter=False, n_sectors=1, gap_layers=3.0,
                  end_winding=0.0, rotor_eddy=False, hi_fidelity=False,
                  structured_gap=False, airgap_macro=False, iron_template=True,
-                 geo_mesh=True, element_order=1) -> None:
+                 geo_mesh=True, element_order=2) -> None:
     import numpy as np  # noqa: F401
     from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
     from motor_ai_sim.optimization.optimizer import _pareto_front
@@ -1445,7 +1445,7 @@ def _recenter_specs(specs, best_x):
 
 
 def _mtpa_gamma_sweep(geom, ref_I, steps, coil_temp, mesh_size, min_size, n_sectors,
-                      lo=-50.0, hi=0.0, step=5.0, element_order=1):
+                      lo=-50.0, hi=0.0, step=5.0, element_order=2):
     """Find the load angle γ that MAXIMISES torque (MTPA) for ONE geometry at a
     reference current — a coarse PARALLEL sweep + parabolic refine.  Run once
     before the geometry search so the whole optimization uses the best phase."""
@@ -1483,7 +1483,7 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                   torque_filter=False, end_winding=0.0, rotor_eddy=True,
                   gap_layers=2.0, objective="baseline_line",
                   current_bump_pct=10.0, structured_gap=False, airgap_macro=False,
-                  iron_template=True, geo_mesh=True, element_order=1) -> None:
+                  iron_template=True, geo_mesh=True, element_order=2) -> None:
     # NOTE: server-side box-walking (auto_expand) is implemented for CMA-ES only;
     # the gradient path runs a single round, then the UI flags boundary variables
     # for a manual one-click continue.
@@ -1843,7 +1843,7 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                   torque_filter=False, end_winding=0.0, rotor_eddy=True,
                   gap_layers=2.0, objective="baseline_line",
                   current_bump_pct=10.0, structured_gap=False, airgap_macro=False,
-                  iron_template=True, geo_mesh=True, element_order=1) -> None:
+                  iron_template=True, geo_mesh=True, element_order=2) -> None:
     """Covariance-Matrix-Adaptation Evolution Strategy — derivative-free,
     noise-robust geometry search.  Same penalised cost as the gradient descent
     (−(eff/eff0)^w_eff·(td/td0)^w_td + λ·max(0, ripple−ripple_max)), evaluated on

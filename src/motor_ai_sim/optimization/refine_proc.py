@@ -144,7 +144,7 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         "airgap_macro": bool(_am),
         "iron_template": bool(iron_template),   # harmonic gap coupling (full ring): step-independent RAW ripple
         "geo_mesh": bool(geo_mesh),   # geometry-driven CDT mesh (Mesh tab) — same build as Simulation
-        "element_order": int(_eo),   # 1 = P1 (default); 2 = P2 quadratic "high-fidelity ripple"
+        "element_order": int(_eo),   # 2 = P2 quadratic — the only basis
 
         # Ambient mesh/sim params the Simulation tab passes but the optimizer used to
         # omit (so get_fem_transient fell back to ITS defaults — e.g. outer_air 1.3 vs

@@ -714,10 +714,11 @@ export const useMotorStore = create<MotorState>()(
         // Geometry-driven CDT mesh — SINGLE SOURCE: Mesh tab (same build as Simulation).
         let geo_mesh = true;
         try { geo_mesh = JSON.parse(localStorage.getItem('mesh.geoMesh') ?? 'true') !== false; } catch { /* default */ }
-        // P2 "high-fidelity ripple" — SINGLE SOURCE: Mesh tab "P2 elements" (mesh.p2HiFi).
-        // Scores each candidate on the honest P2 ripple (no P1 staircase). ~2× slower/eval.
-        let element_order = 1;
-        try { element_order = (JSON.parse(localStorage.getItem('mesh.p2HiFi') ?? 'true') === true) ? 2 : 1; } catch { /* default */ }
+        // P2 — the only basis. Scores every candidate on the honest P2 ripple
+        // (the retired P1 basis reported a mesh staircase as ripple and
+        // over-read the mean torque ~35 %, so the optimizer ranked designs on
+        // a number that did not exist).
+        const element_order = 2;
 
         set({ descentRunning: true, descentError: null, descentState: null });
         try {
@@ -789,8 +790,7 @@ export const useMotorStore = create<MotorState>()(
         // Geometry-driven CDT mesh — SINGLE SOURCE: Mesh tab (same build as Simulation).
         let geo_mesh = true;
         try { geo_mesh = JSON.parse(localStorage.getItem('mesh.geoMesh') ?? 'true') !== false; } catch { /* default */ }
-        let element_order = 1;
-        try { element_order = (JSON.parse(localStorage.getItem('mesh.p2HiFi') ?? 'true') === true) ? 2 : 1; } catch { /* default */ }
+        const element_order = 2;   // P2 — the only basis (see runDescent)
         set({ baselineBusy: true, baselineError: null });
         try {
           const res = await fetch(`${API_BASE_URL}/api/optimization/descent/baseline`, {

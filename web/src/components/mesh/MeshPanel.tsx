@@ -360,13 +360,11 @@ const MeshPanel: React.FC = () => {
   // constant) because the toggles below still set it and the request builders
   // still read it.
   const [structuredGap,  setStructuredGap]  = usePersisted<boolean>('structuredGap', true);
-  // High-fidelity ripple: second-order (P2) elements → B linear per element, so
-  // the torque is smooth like ANSYS instead of carrying the P1 sliding-band
-  // staircase. DEFAULT ON: P2 is the project's calculation basis — it is the
-  // only order with an energy-consistent mean torque AND a mesh-convergent
-  // ripple. Turning it off drops to P1, which is still the only path that
-  // implements irreversible demagnetisation.
-  const [p2HiFi,         setP2HiFi]         = usePersisted<boolean>('p2HiFi', true);
+  // (There is no element-order toggle any more. Second-order (P2) elements are
+  // the calculation basis — B linear per element, so the torque is smooth like
+  // ANSYS instead of carrying the P1 sliding-band staircase, and the mean is
+  // energy-consistent. P1 was deleted: it over-read the mean torque ~35 % and
+  // its ripple was a mesh artefact, so "off" meant "give me the wrong number".)
   // Deterministic template iron: stator/rotor iron meshed by the structured
   // slot/pole unit templates (real CadQuery contours via tags + node snap)
   // instead of gmsh free triangulation — build-to-build deterministic results.
@@ -826,14 +824,13 @@ const MeshPanel: React.FC = () => {
                 letterSpacing: '0.08em', textTransform: 'uppercase', mb: 0.5 }}>
                 Air-gap mesh
               </Typography>
-              <Tooltip placement="right" title="Second-order (P2) finite elements — the flux density B is linear inside each element instead of piecewise-constant, so the torque is smooth like ANSYS Maxwell (2nd-order). Kills the P1 sliding-band staircase / forbidden-order noise at the source (measured ~55x lower non-6k noise floor), so RAW ripple is honest with NO filter. Magnetostatic per frame; auto-forces the Structured belt; ~4-6x slower; loss/voltage/demag fall back to P1.">
+              {/* Element order is no longer a choice: every solve is P2. The
+                  switch that used to sit here selected P1, whose mean torque
+                  over-read ~35 % and whose ripple was a mesh staircase. */}
+              <Tooltip placement="right" title="Every solve uses second-order (P2) finite elements — the flux density B is linear inside each element instead of piecewise-constant, so the torque is smooth like ANSYS Maxwell (2nd-order) and the mean is energy-consistent. RAW ripple is honest with NO filter (measured ~55x lower non-6k noise floor than the retired P1 basis). Requires the structured belt, which is always on.">
                 <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mt: 0.75 }}>
-                  <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>High-fidelity ripple — P2 (like ANSYS)</Typography>
-                  <Switch size="small" checked={p2HiFi}
-                    onChange={(e) => {
-                      setP2HiFi(e.target.checked);
-                      if (e.target.checked) setStructuredGap(true);   // P2 needs the gap-resolving belt
-                    }} />
+                  <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>Elements</Typography>
+                  <Typography sx={{ fontSize: 12, color: 'var(--text-4)' }}>P2 (2nd order)</Typography>
                 </Box>
               </Tooltip>
               <Tooltip placement="right" title="Stator/rotor iron meshed by structured slot/pole unit templates on the real CadQuery contours (pocket fillets, vent, OD fillet) — build-to-build deterministic mesh and ripple. Works on the full disk and 1/2, 1/4, 1/6 sectors. Requires the Structured (rings) air gap (auto-enabled); falls back to gmsh when the topology doesn't fit the units.">

@@ -80,21 +80,12 @@ app.include_router(modules_router)
 app.include_router(kernel_router)
 
 
-@app.on_event("startup")
-def _warm_fem_pool_on_startup() -> None:
-    """Spin up the persistent FEM worker pool in the background at server
-    start so its ~5 s-per-worker cold-import (gmsh + scikit-fem) is paid
-    while the server boots, not on the user's first 'Run Simulation'."""
-    import threading
-
-    def _bg():
-        try:
-            from motor_ai_sim.routes.simulation import warm_fem_pool
-            warm_fem_pool()
-        except Exception:
-            pass
-
-    threading.Thread(target=_bg, daemon=True).start()
+# (There is no FEM worker pool to warm any more.  It existed to hide the
+# remesh-per-frame transient's ~11 s-per-frame gmsh build behind N processes,
+# each paying a ~5 s cold-import of gmsh + scikit-fem at server start.  The
+# sliding band meshes ONCE and solves every frame on that mesh, so the pool —
+# and the couple of dozen idle python processes it kept alive for the server's
+# lifetime — went with the remesh path.)
 
 
 @app.get("/")

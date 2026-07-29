@@ -781,11 +781,11 @@ def scan_designs(req: ScanRequest):
         # gmsh moving mesh under airgap_macro (template+macro raises) and its
         # assembly noise read as 58-75% ripple vs the Simulation's honest value.
         geo_mesh = bool(getattr(req, 'geo_mesh', True))
-        # P2 "high-fidelity ripple" — SINGLE SOURCE: Mesh tab "P2 elements"
-        # (mesh.p2HiFi).  refine_proc.run_one applies the same P2 coercions the
+        # P2 elements.  refine_proc.run_one applies the same coercions the
         # Simulation route does (force belt, auto natural-symmetry sector, keep
-        # rotor_eddy), so an element_order=2 sweep point matches a Simulation P2
-        # run at the SAME geometry/operating point.  Default 1 = P1 (unchanged).
+        # rotor_eddy), so a sweep point matches a Simulation run at the SAME
+        # geometry/operating point.  P2 is the only basis, so this is a constant
+        # in all but name; kept as a field because the request carries it.
         element_order = int(getattr(req, 'element_order', 2) or 2)
         _scan_state.update({"running": True, "done": 0, "total": 0, "result": None,
                             "points": [], "run_id": req.run_id, "error": None, "cancel": False,
@@ -1145,11 +1145,10 @@ class DescentRequest(BaseModel):
     iron_template: bool = True
     # Geometry-driven CDT mesh — SINGLE SOURCE: Mesh tab (same build as Simulation).
     geo_mesh: bool = True
-    # P2 "high-fidelity ripple" — SINGLE SOURCE: Mesh tab "P2 elements" (mesh.p2HiFi).
-    # 1 = P1 (default); 2 = P2 quadratic → each candidate is SCORED on the honest
-    # low ripple (no P1 staircase), so a ripple-gated optimization actually targets
-    # the real ripple.  run_one applies the P2 belt + natural-symmetry-sector
-    # coercions per eval.  ~2× slower/eval.
+    # P2 quadratic elements — the only basis.  Each candidate is SCORED on the
+    # honest ripple, so a ripple-gated optimization targets the real ripple and
+    # not the retired P1 basis's mesh staircase.  run_one applies the P2 belt +
+    # natural-symmetry-sector coercions per eval.
     element_order: int = 2
     # Pole/slot mesh mode from the UI (Mesh tab "Periodic (identical poles)").
     # None = solver env default; the optimizer must mesh the SAME way Simulation does.

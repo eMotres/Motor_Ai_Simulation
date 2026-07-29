@@ -49,7 +49,6 @@ from motor_ai_sim.simulation.sb_domains import (  # noqa: F401  (re-export)
 # Physics primitives on a solved field (torque integrals, per-element B, B-H
 # lookups, winding helpers).  Pure functions, no solver state — re-exported so
 # existing imports off fem_solver_2d keep working.
-from motor_ai_sim.simulation.angle_ddt import make_angle_ddt as _make_angle_ddt
 from motor_ai_sim.simulation.demag import MagnetDemag as _MagnetDemag
 from motor_ai_sim.simulation.drive import (
     Excitation as _Excitation,
@@ -67,7 +66,6 @@ from motor_ai_sim.simulation.losses import (
     TWO_PI_SQ as _TWO_PI_SQ,
     central_difference as _central_difference,
     iron_loss_series as _iron_loss_series,
-    declip as _declip,
     loss_density_map as _loss_density_map,
 )
 from motor_ai_sim.simulation.sb_postproc import (
@@ -75,10 +73,7 @@ from motor_ai_sim.simulation.sb_postproc import (
     hybrid_torque as _hybrid_torque,
     torque_harmonics as _torque_harmonics,
 )
-from motor_ai_sim.simulation.moving_band import (
-    MovingBand as _MovingBand,
-    slip_ring_nodes as _slip_ring_nodes,
-)
+from motor_ai_sim.simulation.moving_band import slip_ring_nodes as _slip_ring_nodes
 from motor_ai_sim.simulation.field_ops import (  # noqa: F401  (re-export)
     MU0, RHO_CU_20, ALPHA_CU,
     _snap_steps_to_nodes, _build_magnet_bh_curve_payload, _b_from_bh_at_H,
@@ -1486,6 +1481,14 @@ def fem_transient_sliding_band(
     demag: bool = False,         # opt-in: per-element irreversible demagnetisation
     component_mesh_mm: dict = None,  # per-part target element size {comp: mm}
     return_field: bool = False,  # also return a field snapshot for the viewer
+    return_frames: int = 0,      # >0: ALSO return that many evenly-spaced per-frame
+                                 # field snapshots for the animation viewer.  The
+                                 # sliding band solves every frame on ONE mesh, so
+                                 # the frames share it and each carries only A(t),
+                                 # B(t) and the rotor angle — the remesh-per-frame
+                                 # path this replaces built a full gmsh mesh per
+                                 # frame (~11 s of ~15 s) and needed a 24-process
+                                 # worker pool to hide it.
     field_first: bool = False,   # snapshot the FIRST frame (rotor at angle0) instead
                                  # of the last — used by the magnetostatic field view
                                  # so the picture matches the requested rotor angle
@@ -1538,11 +1541,10 @@ def fem_transient_sliding_band(
                                      # INCLUDING eddy + voltage drive together (one bordered
                                      # (A, U, i_A, i_B) Newton).  Still gated (raises
                                      # NotImplementedError): the moving / harmonic-macro band.
-                                     # 1 = P1 linear.  Nothing in the codebase asks for it any
-                                     # more: it over-read the mean torque ~35 % (its Maxwell
-                                     # integral is radius-inconsistent under load) and its ripple
-                                     # was a mesh staircase, so every P1 number needed a correction
-                                     # nobody could state.  The branch is deleted next commit.
+                                     # P1 (1) is GONE and passing it RAISES: it over-read the mean
+                                     # torque ~35 % (its Maxwell integral is radius-inconsistent
+                                     # under load) and its ripple was a mesh staircase, so every P1
+                                     # number needed a correction nobody could state.
 ) -> dict:
     """Sliding-band transient: mesh the stator + rotor halves ONCE, then sweep
     the rotor by shifting the slip-ring node pairing (no remeshing) so the
@@ -1559,9 +1561,9 @@ def fem_transient_sliding_band(
     """
     import time as _t
     from skfem import (Basis, ElementTriP1, ElementTriP0, BilinearForm,
-                       LinearForm, asm, condense, solve as _sksolve, MeshTri)
+                       LinearForm, asm, MeshTri)
     from skfem.helpers import dot as _dot, grad as _grad
-    from scipy.sparse import csr_matrix as _csr, coo_matrix as _coo, block_diag as _bd
+    from scipy.sparse import csr_matrix as _csr, coo_matrix as _coo
     from motor_ai_sim.cadquery_geometry import CadQueryMotor
     from motor_ai_sim.simulation.geometry_2d import params_from_config, MotorDomains2D
     from motor_ai_sim.config import get_config
@@ -1577,16 +1579,23 @@ def fem_transient_sliding_band(
     # faster.  Defaults (mesh 4 mm clamped→… no: now literally 4 mm; gap_layers
     # 3) reproduce the previous behaviour closely; drag to mesh≈2 mm / gap≈3-4
     # for the cleanest torque.
+    # P2 is the only basis.  This used to accept 1 as well and branch on it;
+    # the P1 branch is gone, so an explicit 1 must FAIL rather than be quietly
+    # promoted to 2 — a caller that asks for P1 is asking for the ~35 % torque
+    # over-read and the staircase ripple, and it needs to hear that it cannot
+    # have them, not receive different numbers than it asked for.
     element_order = int(element_order)
-    if element_order not in (1, 2):
-        raise ValueError(f"element_order must be 1 or 2, got {element_order}")
-    # NOTE: element_order == 2 (P2) is handled by a dedicated magnetostatic
-    # sliding-band branch further down (just after `dt` is defined), once the
-    # stitched mesh + belt ring/cut data have been built.  It implements the
-    # moving-cut edge-midpoint DOF stitching (the historical blocker) for the
-    # merged, full-ring structured belt.  The guard there raises
-    # NotImplementedError for the still-unsupported sub-cases (moving/macro band,
-    # sector wedge, eddy/voltage/demag).  See P2_NOTES.md, Stage 2/3.
+    if element_order != 2:
+        raise ValueError(
+            f"element_order must be 2 (P2); got {element_order}. The P1 basis "
+            f"was removed: its Maxwell-stress mean torque is radius-"
+            f"inconsistent under load (~35 % high) and its ripple is a mesh "
+            f"staircase.")
+    # The whole transient below is the P2 magnetostatic sliding band on the
+    # merged structured belt: moving-cut edge-midpoint DOF stitching (the
+    # historical blocker) for the full ring AND anti-periodic sector wedges.
+    # See P2_NOTES.md.  The one thing it still refuses is the moving /
+    # harmonic-macro air-gap band (raised where the band radii are read).
     mesh_size_mm = float(mesh_size_mm)
     min_size_mm = float(min_size_mm)
     cfg = get_config(); sim = cfg.get("simulation", {})
@@ -1691,7 +1700,8 @@ def fem_transient_sliding_band(
 
     # Imposed excitation (both drives) — simulation/drive.py.  One object carries
     # the electrical frame both the current and the voltage waveform live in, so
-    # they cannot drift apart; the P1 and P2 branches below share it.
+    # they cannot drift apart.  It was written TWICE, once per element order, and
+    # the two copies disagreed (see simulation/drive.py) — one definition now.
     _exc = _Excitation(pole_pairs=pole_pairs, daxis_deg=daxis_eff,
                        i_peak=float(I_phase_rms) / n_parallel * math.sqrt(2),
                        gamma_deg=gamma_deg,
@@ -1835,26 +1845,28 @@ def fem_transient_sliding_band(
     Ps, Tts = ms.p.copy(), ms.t.copy(); Pr, Ttr = mr.p.copy(), mr.t.copy()
     nsn = Ps.shape[1]
     Pall = np.hstack([Ps, Pr]); Tall = np.hstack([Tts, Ttr + nsn])
-    n = Pall.shape[1]
     mesh_all = MeshTri(Pall, Tall)
 
     def _ring(P, r_at):
         # Slip-ring node selection — simulation/moving_band.py.
         return _slip_ring_nodes(P, r_at, n_slip_eff)
-    # MOVING BAND: the halves end at two DIFFERENT uniform rings — rotor at
-    # R1 = mid−δ (rotates rigidly with the rotor mesh), stator at R2 = mid+δ
-    # (stationary).  The annulus between them is re-stitched every frame in
-    # closed form.  Legacy (merged single ring at mid) kept as fallback.
+    # MOVING BAND: the halves would end at two DIFFERENT uniform rings — rotor
+    # at R1 = mid−δ (rotating rigidly with the rotor mesh), stator at R2 = mid+δ
+    # (stationary) — with the annulus between them re-stitched every frame in
+    # closed form, or replaced by the analytic harmonic macroelement.
+    # NOT IMPLEMENTED ON P2, and P2 is the only basis: the macroelement's
+    # per-harmonic rotor↔stator coupling has no edge-midpoint counterpart yet,
+    # so there is nothing to stitch the P2 belt's edge DOFs across.  Raised HERE,
+    # before the ring selection, rather than after a full mesh build — the answer
+    # is the same and it costs nothing to find out.
     _band_radii = polys.get("band_radii_mm")
-    _moving = bool(_band_radii) and len(_band_radii) == 2
-    if _moving:
-        _r1_m = float(_band_radii[0]) * 1e-3   # metres
-        _r2_m = float(_band_radii[1]) * 1e-3
-        rring = _ring(Pr, _r1_m)
-        sring = _ring(Ps, _r2_m)
-    else:
-        rring = _ring(Pr, mid)
-        sring = _ring(Ps, mid)
+    if bool(_band_radii) and len(_band_radii) == 2:
+        raise NotImplementedError(
+            "the moving / harmonic-macro air-gap band is not implemented on P2 "
+            "(element_order=2, the only basis); run the merged structured belt "
+            "instead: structured_gap=True, airgap_macro=False.")
+    rring = _ring(Pr, mid)
+    sring = _ring(Ps, mid)
     Nring = min(sring.size, rring.size)
     if sring.size != rring.size:
         log.warning("band ring node counts differ: stator=%d rotor=%d — "
@@ -1954,8 +1966,6 @@ def fem_transient_sliding_band(
     # Built from a PER-ELEMENT magnetisation field (P0) so it can be de-rated
     # element-by-element by the demag pass below (_br_glob, 1.0 = full Br).
     # With _br_glob ≡ 1 this is numerically identical to the old per-tag sum.
-    _rb  = Basis(half["r"]["mesh"], ElementTriP1())
-    _rb0 = _rb.with_element(ElementTriP0())     # P0: dof == rotor element id
     _nt_r = half["r"]["mesh"].t.shape[1]
     _Mx_glob = np.zeros(_nt_r); _My_glob = np.zeros(_nt_r)
     for tag, idx in half["r"]["cells"].items():
@@ -1963,14 +1973,9 @@ def fem_transient_sliding_band(
         if m is None or (abs(m.Mx) + abs(m.My)) <= 0:
             continue
         _Mx_glob[idx] = m.Mx; _My_glob[idx] = m.My
-    def _build_fmag(_br):
-        return asm(_msrc, _rb,
-                   mx=_rb0.interpolate(_Mx_glob * _br),
-                   my=_rb0.interpolate(_My_glob * _br))
     # magnet_scale lets the torque decomposition turn the PMs OFF (=0 →
     # reluctance-only torque) or weaken them, without touching geometry.
     _br_glob = np.full(_nt_r, float(magnet_scale))   # per-element Br factor (demag de-rating × magnet_scale)
-    f_mag = _build_fmag(_br_glob)
     # per-phase unit-current stator source vectors
     f_coil = {'A': np.zeros(half["s"]["n"]), 'B': np.zeros(half["s"]["n"]),
               'C': np.zeros(half["s"]["n"])}
@@ -2041,23 +2046,19 @@ def fem_transient_sliding_band(
     # bisected by the sector cut take U = 0 — their (anti)periodic image
     # cancels the net axial current by symmetry.
     #
-    # IMPLEMENTATION: post-processing on the magnetostatic A(t) histories with
-    # the SAME smoothed angle-derivative the B-field losses use.  An in-loop
-    # coupled solve was tried first and rejected: the raw frame-to-frame ∂A/∂t
-    # rides on the slip-ring node-merge jitter, and the σ|∂A/∂t|² integral
-    # AMPLIFIES that noise with the step count (P_mag tripled going 24→72
-    # steps).  _angle_ddt_2d low-pass-filters A(θ) over the unique slip-node
-    # positions before differentiating — physics (slot ripple, 1–2 cycles per
-    # period) passes, merge jitter dies.  The resistance-limited approximation
-    # (no eddy-reaction skin effect) is good for the magnets: skin depth at the
-    # slot-passing frequency ≈ 12 mm vs ~14 mm magnet width, and neglecting the
-    # reaction errs conservative (slightly over-reports the loss).
+    # IMPLEMENTATION: the rotor-frame A(t) history is post-processed by
+    # eddy_solver_2d.honest_rotor_eddy — a frequency-domain solve that INCLUDES
+    # the eddy reaction.  A naive in-loop σ|∂A/∂t|² integral was tried first and
+    # rejected: the raw frame-to-frame ∂A/∂t rides on the slip-ring node-merge
+    # jitter and the square AMPLIFIES it with the step count (P_mag tripled
+    # going 24→72 steps).  The retired P1 path answered that with a smoothed
+    # angle-derivative over the unique slip-node positions (simulation/
+    # angle_ddt.py); on P2 the field is smooth enough in time that the harmonic
+    # solve is driven directly.
     # σ comes from the ASSIGNED magnet material (library), not a constant.
     _rot_con = []            # bordered ∫J=0 rows — only for the eddy J-VIEW mode
     _rot_sig_nodes = []      # (nodes_global, σ) per rotor group — J snapshot
     _mag_groups = []         # per magnet: element triplets/areas for the loss
-    _magnode_glob = np.array([], int)   # global DOF ids of all magnet nodes
-    _shaft_group = None                 # field-based shaft eddy group (rotor frame)
     _shaftnode_glob = np.array([], int) # global DOF ids of the shaft nodes
     if rotor_eddy:
         _ones_r = np.ones(half["r"]["n"])
@@ -2071,7 +2072,6 @@ def fem_transient_sliding_band(
         _magnode_loc = (np.unique(np.concatenate(
             [half["r"]["mesh"].t[:, half["r"]["cells"][t]].ravel()
              for t in _mag_tags])) if _mag_tags else np.array([], int))
-        _magnode_glob = _magnode_loc + nsn
         _n_interior = _n_halves = 0
         for t in _mag_tags:
             idx = np.asarray(half["r"]["cells"][t], int)
@@ -2105,83 +2105,11 @@ def fem_transient_sliding_band(
             _shaftnode_loc = np.unique(_sh_tri)
             _shaftnode_glob = _shaftnode_loc + nsn
             _rot_sig_nodes.append((_shaftnode_glob, _sigma_shaft_lib))
-            # Field-based shaft eddy group (rotor frame, ∫J=0): the shaft co-rotates
-            # with the magnets, so the magnet field is DC in its frame → no loss;
-            # only the AC coil-current / slot-ripple field dissipates.  Same
-            # treatment as the magnets (replaces the lab-frame slab estimate).
-            _shaft_group = {
-                "tri":   np.searchsorted(_shaftnode_loc, _sh_tri),
-                "areas": _areas_r_re[_sh_idx].astype(float),
-            }
         log.info("rotor-eddy: %d interior magnets (∫J=0), %d edge halves (U=0) | "
                  "σ_mag=%.3g σ_shaft=%.3g S/m (library)",
                  _n_interior, _n_halves, _sigma_mag_lib, _sigma_shaft_lib)
 
-    # ── EXACT edge data for the magnet A-histories (pole-shift symmetry) ─────
-    # The loss window spans whole electrical periods, but the ROTOR-frame
-    # signal is NOT periodic over it (the stator structure passes a non-integer
-    # number of times), so any wrap at the window edge is wrong.  The missing
-    # samples beyond the edges exist EXACTLY inside the window: after one
-    # electrical period the whole solution repeats with the rotor advanced two
-    # pole pitches, so  A(node n, t±T) = A(node n∓, t)  where n∓ is the node
-    # rotated ∓2 pole pitches in the (pole-periodic) rotor mesh — a pure node
-    # permutation, no approximation.  Crossing a sector cut multiplies A by the
-    # anti-periodic sign.  Built here once; used to pad the magnet histories so
-    # the loss derivative has REAL data at both window ends.
-    # The pole meshes share IDENTICAL boundaries (setPeriodic) but gmsh meshes
-    # each pole INTERIOR independently (measured node mismatch ≈ 0.9 mm), so a
-    # pure node permutation does not exist.  The identity is continuous though:
-    # the value at the rotated POINT exists in the same solve — so the map is a
-    # P1 barycentric INTERPOLATION matrix over the magnet triangles (the same
-    # accuracy class as the FEM field itself).
-    _pp2 = None                       # (W_fwd, sign_fwd, W_bwd, sign_bwd)
-    if rotor_eddy and _magnode_loc.size:
-        try:
-            from scipy.spatial import Delaunay as _Del, cKDTree as _KD
-            _theta2 = math.radians(2.0 * 360.0 / max(1, p.num_poles))  # 2 pole pitches
-            _Pn = half["r"]["mesh"].p[:, _magnode_loc]    # (2, Nn) node coords [m]
-            _Nn = _Pn.shape[1]
-            _sec_rad = math.radians(sector_deg)
-            _dt2 = _Del(_Pn.T)
-            _kd2 = _KD(_Pn.T)
-
-            def _pole_map(_dir):
-                c, s = math.cos(_dir * _theta2), math.sin(_dir * _theta2)
-                x = c * _Pn[0] - s * _Pn[1]; y = s * _Pn[0] + c * _Pn[1]
-                sg = np.ones(_Nn)
-                if not _full_ring:
-                    ang = np.mod(np.arctan2(y, x), 2.0 * math.pi)
-                    # wrap rotated points back into the wedge; every cut crossing
-                    # flips A by the (anti-)periodic boundary sign.  k and k−NS
-                    # wraps give the same sign because _bc_sign**NS == +1.
-                    for _ in range(int(NS)):
-                        _ov = ang > _sec_rad + 1e-9
-                        if not _ov.any():
-                            break
-                        ang = np.where(_ov, ang - _sec_rad, ang)
-                        sg = np.where(_ov, sg * _bc_sign, sg)
-                    r = np.hypot(x, y)
-                    x = r * np.cos(ang); y = r * np.sin(ang)
-                _tgt = np.column_stack([x, y])
-                _sx = _dt2.find_simplex(_tgt)
-                _out = _sx < 0
-                _d, _near = _kd2.query(_tgt)
-                if _out.any() and float(np.max(_d[_out])) > 0.5 * float(min_size_mm) * 1e-3:
-                    raise ValueError(
-                        f"{int(_out.sum())} targets {float(np.max(_d[_out]))*1e3:.3f} mm "
-                        "outside the magnet hull")
-                return _tgt, sg, _near.astype(int)
-            _tgF, _sgF, _nrF = _pole_map(+1.0)   # n's position one period LATER
-            _tgB, _sgB, _nrB = _pole_map(-1.0)   # … one period EARLIER
-            _pp2 = (_dt2, _tgF, _sgF, _nrF, _tgB, _sgB, _nrB)
-            log.info("magnet-history edge pads: 2-pole-pitch C1 interpolation map OK "
-                     "(%d nodes)", _Nn)
-        except Exception as _pe:
-            log.warning("magnet-history edge pads unavailable (%s) — "
-                        "falling back to C0-detrend edges", _pe)
-            _pp2 = None
-
-    # ── Loss bookkeeping — iron Bertotti + magnet eddy from the ACTUAL B(t) ──
+    # ── Loss bookkeeping — iron Bertotti from the ACTUAL B(t) ────────────────
     # The sliding-band run gives a clean B(t) per element over a full electrical
     # period, so instead of the remesh path's single-snapshot Bertotti we use
     # the genuine time-derivative of the field:
@@ -2189,23 +2117,15 @@ def fem_transient_sliding_band(
     #     slot ripple included — because faster flux ⇒ larger dB/dt ⇒ ∝ f²)
     #   • hysteresis      ∝ f·B_ac²     (B_ac = AC excursion, so a DC-biased
     #     rotor tooth contributes only its ripple, not its standing flux)
-    #   • magnet eddy     = σ·d²/12·⟨(dB/dt)²⟩  (honest slab loss, no empirical
-    #     ripple-fraction fudge)
     # The Bertotti coefficients (kh,kc,ke) are FITTED to the material's measured
     # loss-vs-frequency curves at runtime (materials.effective_bertotti), so this
     # IS the real frequency-dependent loss model.  (Steel/magnet materials were
     # already fetched above, before the σ-mass assembly.)
-    _sigma_mag = float(getattr(_magnet_mat, "sigma", 0.0)) if _magnet_mat else 0.0
-    # Magnet eddy slab dimension d: the AC field the magnet sees is the SLOT
-    # RIPPLE, which varies TANGENTIALLY, so the eddy-current loop is limited by
-    # the magnet's TANGENTIAL WIDTH (pole-pitch × fill) — NOT its radial
-    # thickness.  P_eddy ∝ d², so using the (smaller) tangential width instead
-    # of the 16 mm radial height drops the loss ~3× into the physical range
-    # (the radial-thickness slab over-counted the un-segmented eddy).
-    _r_mag_mid = 0.5 * (p.r_rotor_in + p.r_rotor_out)
-    _mag_frac = float(getattr(p, "magnet_fill_fraction", 0.85) or 0.85)
-    _d_mag_m = max(1e-3, (2.0 * math.pi * _r_mag_mid
-                          / max(p.num_poles, 1)) * _mag_frac)
+    # The MAGNET eddy slab model (σ·d²/12·⟨(dB/dt)²⟩ over the magnet's tangential
+    # width) went with the P1 loss chain: magnet and shaft loss come from the
+    # reaction-included rotor solve (eddy_solver_2d.honest_rotor_eddy) or, with
+    # eddy=True, from ∫σE² of the coupled field — both measure the loss instead
+    # of estimating it, so there is no slab dimension left to choose.
     areas_r = _triangle_areas(half["r"]["mesh"])
     _iron_s_idx = np.asarray(half["s"]["cells"].get(int(DOM_STATOR), np.array([], int)), int)
     _iron_r_idx = np.asarray(half["r"]["cells"].get(int(DOM_ROTOR),  np.array([], int)), int)
@@ -2231,12 +2151,6 @@ def fem_transient_sliding_band(
     _coil_parts = [np.asarray(_i, int) for _t, _i in half["s"]["cells"].items()
                    if int(_t) >= DOM_COIL_BASE or int(_t) == int(DOM_COIL)]
     _coil_idx = np.concatenate(_coil_parts) if _coil_parts else np.array([], int)
-    _shaft_idx = np.asarray(half["r"]["cells"].get(int(DOM_SHAFT),
-                                                   np.array([], int)), int)
-    # Per-frame B histories for the loss elements only (keeps memory small).
-    _hist_sx = []; _hist_sy = []; _hist_rx = []; _hist_ry = []
-    _hist_mx = []; _hist_my = []; _mshift_hist = []
-    _hist_cx = []; _hist_cy = []; _hist_shx = []; _hist_shy = []
 
     SAT = {DOM_STATOR, DOM_ROTOR, DOM_SHAFT}
     # Per-tag base μ_r (air=1, coil=1, magnet=μ_rec, iron=μ_steel) + BH curves
@@ -2273,44 +2187,6 @@ def fem_transient_sliding_band(
         K_const[hn] = Kc.tocsr()
 
     r_all = np.hypot(Pall[0], Pall[1])
-    outer_nodes = np.where(r_all >= r_all.max() - 5e-4)[0]
-
-    # ── Moving-band machinery ─────────────────────────────────────────────
-    # The annulus R1..R2 is re-stitched EVERY frame; see _simplify_polys: each
-    # ring is a UNIFORM N-gon, so the stitch pattern is IDENTICAL at every
-    # shift m — two congruent triangle shapes whose local stiffness (air) and
-    # torque vectors are computed ONCE; per frame only the index mapping
-    # (rotor k ↔ stator k+m, anti-periodic sign on wrap) changes.  This
-    # replaces the node-merge slip coupling whose frozen irregular fans
-    # produced the order-6 parasitic cogging.
-    if _moving:
-        _use_macro = bool(_SB_AIRGAP_MACRO) or bool(airgap_macro)
-        # Ring coupling + gap torque: simulation/moving_band.py.  The closed-form
-        # triangle strip and the harmonic air-gap macroelement (Davat) are two
-        # implementations of ONE interface — K(m) and torque(m, A) — so the frame
-        # loops below choose a band once instead of re-deciding `macro or strip`
-        # at each of the four call sites.
-        _band = _MovingBand(n_dof=n, rring=rring, sring=sring, nsn=nsn,
-                            n_ring=Nring, spacing_deg=spacing,
-                            full_ring=_full_ring, bc_sign=_bc_sign,
-                            r1_m=_r1_m, r2_m=_r2_m,
-                            stack_length_m=p.stack_length,
-                            use_macro=_use_macro)
-
-        # Cut pairing is m-INDEPENDENT now (no slip merge) → constant Pro.
-        _suf0 = _SignedUF(n)
-        for a, b in zip(Mn, Sn):
-            _suf0.union(int(b), int(a), _bc_sign)
-        _roots0 = [_suf0.find(i) for i in range(n)]
-        _rid0 = np.array([r for r, _ in _roots0])
-        _rsg0 = np.array([s for _, s in _roots0], float)
-        _uniq0, _inv0 = np.unique(_rid0, return_inverse=True)
-        Pro_const = _coo((_rsg0, (np.arange(n), _inv0)),
-                         shape=(n, _uniq0.size)).tocsr()
-        outer_red_const = np.unique(_inv0[outer_nodes])
-        log.info("moving band: %d quads (%s), r1=%.3f r2=%.3f mm, Δφ=%.4f°",
-                 _band.n_quads, "full ring" if _full_ring else "sector",
-                 _r1_m * 1e3, _r2_m * 1e3, spacing)
 
     # ── Frame loop ───────────────────────────────────────────────────────
     n_total = max(1, int(round(n_steps_per_period * n_periods)))
@@ -2350,16 +2226,15 @@ def fem_transient_sliding_band(
         n_periods = float(n_periods) + 1.0
         n_total += _dmskip
     period_mech = 360.0 / pole_pairs                      # one electrical period [deg mech]
-    T_series = []; psiA = []; psiB = []; psiC = []
-    IA = []; IB = []; IC = []; tt = []
     dt = (1.0 / max(f_elec, 1e-9)) * n_periods / n_total
 
     # ═══════════════════════════════════════════════════════════════════════
-    #  P2 (quadratic) SLIDING-BAND TRANSIENT PATH  (element_order == 2)
+    #  SLIDING-BAND TRANSIENT — P2 (quadratic) elements
     # ═══════════════════════════════════════════════════════════════════════
     # B = curl A is LINEAR per element instead of piecewise-constant, so the
-    # Arkkio air-gap torque is SMOOTH where P1 staircases.  The blocker solved
-    # here is the moving-cut EDGE-MIDPOINT DOF stitching: P2 puts a dof on every
+    # Arkkio air-gap torque is SMOOTH where the retired P1 basis staircased.
+    # The blocker solved here is the moving-cut EDGE-MIDPOINT DOF stitching:
+    # P2 puts a dof on every
     # element edge, including the belt's rotor/stator interface edges, so the
     # signed union-find that welds the slip cut must pair those edge midpoints
     # (not just the vertices) as the rotor shifts by m slip nodes.  Assembled on
@@ -2372,3092 +2247,1850 @@ def fem_transient_sliding_band(
     # cogging / ripple goal needs; eddy=True adds the coupled σ·∂A/∂t term on the
     # solid conductors (see the two COUPLED EDDY blocks below) and the frame then
     # solves a genuine magnetodynamic step instead.
-    if element_order == 2:
-        from skfem import ElementTriP2 as _P2E
-        from scipy.sparse.linalg import splu as _splu2
-        # ONE persistent MKL PARDISO solver for the whole run: it caches the
-        # symbolic factorization and reuses it across the same-pattern Picard
-        # sweeps of a frame (re-analysing only when the pattern changes — new
-        # frame / new slip pairing).  None ⇒ pypardiso unavailable ⇒ SuperLU.
-        try:
-            if _os_sb.environ.get("SB_NO_PARDISO") == "1":
-                raise ImportError("disabled via SB_NO_PARDISO")
-            import pypardiso as _pypard2
-            _pardiso2 = _pypard2.PyPardisoSolver()
-        except Exception as _pae:
-            log.info("pypardiso unavailable (%s) — using SuperLU for P2", _pae)
-            _pardiso2 = None
-        if _moving:
-            raise NotImplementedError(
-                "P2 + moving/harmonic-macro band not implemented; run the merged "
-                "structured belt (structured_gap=True, element_order=2).")
-        b2 = Basis(mesh_all, _P2E())
-        b2_0 = b2.with_element(ElementTriP0())      # P0 for per-element ν interpolate
-        N2 = b2.N
-        # Picard early-stop tolerance for the P2 branch.  On a COARSE belt mesh a
-        # handful of BH-knee iron elements plateau above the P1 module tol (1e-3)
-        # — the fixed point of the TORQUE/loss is reached far earlier (measured:
-        # T_avg is flat to <0.3 % between residual 0.03 and 0.007), so chasing
-        # 1e-3 just burns ~30 extra sweeps per frame for no physics change.  A
-        # reachable tol lets warm-started frames early-stop in a handful of sweeps.
-        _PIC_TOL2 = 6e-3
-        nst = int(Tts.shape[1])                      # rotor elems in mesh_all are +nst
-        n_all_el = int(mesh_all.t.shape[1])
+    from skfem import ElementTriP2 as _P2E
+    from scipy.sparse.linalg import splu as _splu2
+    # ONE persistent MKL PARDISO solver for the whole run: it caches the
+    # symbolic factorization and reuses it across the same-pattern Picard
+    # sweeps of a frame (re-analysing only when the pattern changes — new
+    # frame / new slip pairing).  None ⇒ pypardiso unavailable ⇒ SuperLU.
+    try:
+        if _os_sb.environ.get("SB_NO_PARDISO") == "1":
+            raise ImportError("disabled via SB_NO_PARDISO")
+        import pypardiso as _pypard2
+        _pardiso2 = _pypard2.PyPardisoSolver()
+    except Exception as _pae:
+        log.info("pypardiso unavailable (%s) — using SuperLU for P2", _pae)
+        _pardiso2 = None
+    b2 = Basis(mesh_all, _P2E())
+    b2_0 = b2.with_element(ElementTriP0())      # P0 for per-element ν interpolate
+    N2 = b2.N
+    # Picard early-stop tolerance for the P2 branch.  On a COARSE belt mesh a
+    # handful of BH-knee iron elements plateau above the P1 module tol (1e-3)
+    # — the fixed point of the TORQUE/loss is reached far earlier (measured:
+    # T_avg is flat to <0.3 % between residual 0.03 and 0.007), so chasing
+    # 1e-3 just burns ~30 extra sweeps per frame for no physics change.  A
+    # reachable tol lets warm-started frames early-stop in a handful of sweeps.
+    _PIC_TOL2 = 6e-3
+    nst = int(Tts.shape[1])                      # rotor elems in mesh_all are +nst
+    n_all_el = int(mesh_all.t.shape[1])
 
-        @BilinearForm
-        def _stiff_nu2(u, v, w):
-            return w["nu"] * _dot(_grad(u), _grad(v))
+    @BilinearForm
+    def _stiff_nu2(u, v, w):
+        return w["nu"] * _dot(_grad(u), _grad(v))
 
-        # Newton tangent (differential-reluctivity) term:  T(u,v) =
-        # 2·(dν/dB²)·(∇A·∇u)(∇A·∇v), with ∇A the current field gradient and
-        # dν/dB² per element.  Added to the secant stiffness K(ν) to form the
-        # Jacobian J = K + T of the magnetostatic residual R = K(ν(|B|))·A − f.
-        @BilinearForm
-        def _tang_nu2(u, v, w):
-            gA = w["gA"]                       # (2, nelem, nqp) current ∇A
-            gu = _grad(u); gv = _grad(v)
-            au = gA[0] * gu[0] + gA[1] * gu[1]
-            av = gA[0] * gv[0] + gA[1] * gv[1]
-            return w["c"] * au * av            # c = 2·dν/dB² (element-constant)
+    # Newton tangent (differential-reluctivity) term:  T(u,v) =
+    # 2·(dν/dB²)·(∇A·∇u)(∇A·∇v), with ∇A the current field gradient and
+    # dν/dB² per element.  Added to the secant stiffness K(ν) to form the
+    # Jacobian J = K + T of the magnetostatic residual R = K(ν(|B|))·A − f.
+    @BilinearForm
+    def _tang_nu2(u, v, w):
+        gA = w["gA"]                       # (2, nelem, nqp) current ∇A
+        gu = _grad(u); gv = _grad(v)
+        au = gA[0] * gu[0] + gA[1] * gu[1]
+        av = gA[0] * gv[0] + gA[1] * gv[1]
+        return w["c"] * au * av            # c = 2·dν/dB² (element-constant)
 
-        # ── vertex & edge dof maps ───────────────────────────────────────────
-        vdof = b2.nodal_dofs[0]                       # global vertex id -> P2 dof
-        fdof = b2.facet_dofs[0]                       # facet (edge) id  -> P2 dof
-        _fac = mesh_all.facets
-        _fa = np.minimum(_fac[0], _fac[1]); _fb = np.maximum(_fac[0], _fac[1])
-        _emap = {(int(_fa[i]), int(_fb[i])): i for i in range(_fac.shape[1])}
+    # ── vertex & edge dof maps ───────────────────────────────────────────
+    vdof = b2.nodal_dofs[0]                       # global vertex id -> P2 dof
+    fdof = b2.facet_dofs[0]                       # facet (edge) id  -> P2 dof
+    _fac = mesh_all.facets
+    _fa = np.minimum(_fac[0], _fac[1]); _fb = np.maximum(_fac[0], _fac[1])
+    _emap = {(int(_fa[i]), int(_fb[i])): i for i in range(_fac.shape[1])}
 
-        def _edge_dof(va, vb):
-            fi = _emap.get((va, vb) if va < vb else (vb, va))
-            return None if fi is None else int(fdof[fi])
+    def _edge_dof(va, vb):
+        fi = _emap.get((va, vb) if va < vb else (vb, va))
+        return None if fi is None else int(fdof[fi])
 
-        # ── P2 sources on the stitched mesh ──────────────────────────────────
-        # magnet: per-element M over ALL elements (rotor block offset by nst)
-        _mx_all = np.zeros(n_all_el); _my_all = np.zeros(n_all_el)
-        _mx_all[nst:] = _Mx_glob * _br_glob          # _br_glob folds magnet_scale
-        _my_all[nst:] = _My_glob * _br_glob
-        f_mag2 = asm(_msrc, b2, mx=b2_0.interpolate(_mx_all),
-                     my=b2_0.interpolate(_my_all))
-        # per-phase UNIT-current stator coil sources
-        f_coil2 = {'A': np.zeros(N2), 'B': np.zeros(N2), 'C': np.zeros(N2)}
-        for _ph in ('A', 'B', 'C'):
-            _Iu = {'A': 0.0, 'B': 0.0, 'C': 0.0}; _Iu[_ph] = 1.0
-            _mu = build_materials(_Iu, dom.winding_layout,
-                                  getattr(cs, "polys", polys), 0.0,
-                                  slot_area_m2, n_wires)
-            for tag, idx in half["s"]["cells"].items():
-                m_ = _mu.get(int(tag))
-                if m_ is None or m_.J_z == 0.0:
-                    continue
-                sb = Basis(mesh_all, _P2E(), elements=np.asarray(idx, int))
-                f_coil2[_ph] += asm(_f1, sb) * m_.J_z
+    # ── P2 sources on the stitched mesh ──────────────────────────────────
+    # magnet: per-element M over ALL elements (rotor block offset by nst)
+    _mx_all = np.zeros(n_all_el); _my_all = np.zeros(n_all_el)
+    _mx_all[nst:] = _Mx_glob * _br_glob          # _br_glob folds magnet_scale
+    _my_all[nst:] = _My_glob * _br_glob
+    f_mag2 = asm(_msrc, b2, mx=b2_0.interpolate(_mx_all),
+                 my=b2_0.interpolate(_my_all))
+    # per-phase UNIT-current stator coil sources
+    f_coil2 = {'A': np.zeros(N2), 'B': np.zeros(N2), 'C': np.zeros(N2)}
+    for _ph in ('A', 'B', 'C'):
+        _Iu = {'A': 0.0, 'B': 0.0, 'C': 0.0}; _Iu[_ph] = 1.0
+        _mu = build_materials(_Iu, dom.winding_layout,
+                              getattr(cs, "polys", polys), 0.0,
+                              slot_area_m2, n_wires)
+        for tag, idx in half["s"]["cells"].items():
+            m_ = _mu.get(int(tag))
+            if m_ is None or m_.J_z == 0.0:
+                continue
+            sb = Basis(mesh_all, _P2E(), elements=np.asarray(idx, int))
+            f_coil2[_ph] += asm(_f1, sb) * m_.J_z
 
-        # ── per-element base ν + saturable element sets (mesh_all element ids) ─
-        nu_base2 = np.empty(n_all_el)
-        for _hn, _off in (("s", 0), ("r", nst)):
-            for tag, idx in half[_hn]["cells"].items():
-                nu_base2[np.asarray(idx, int) + _off] = 1.0 / (
-                    MU0 * max(mu0[_hn].get(int(tag), 1.0), 1.0))
-        _sat2 = []          # (elem_ids_in_mesh_all, bh_curve)
-        for _hn, _off in (("s", 0), ("r", nst)):
-            for tag, curve in sat_bh[_hn].items():
-                _sat2.append((np.asarray(half[_hn]["cells"][tag], int) + _off, curve))
+    # ── per-element base ν + saturable element sets (mesh_all element ids) ─
+    nu_base2 = np.empty(n_all_el)
+    for _hn, _off in (("s", 0), ("r", nst)):
+        for tag, idx in half[_hn]["cells"].items():
+            nu_base2[np.asarray(idx, int) + _off] = 1.0 / (
+                MU0 * max(mu0[_hn].get(int(tag), 1.0), 1.0))
+    _sat2 = []          # (elem_ids_in_mesh_all, bh_curve)
+    for _hn, _off in (("s", 0), ("r", nst)):
+        for tag, curve in sat_bh[_hn].items():
+            _sat2.append((np.asarray(half[_hn]["cells"][tag], int) + _off, curve))
 
-        # ── CONSTANT/VARIABLE stiffness split (perf) ─────────────────────────
-        # The non-saturable ν (air, magnet, coil, shaft, non-iron) never changes
-        # across frames OR Picard sweeps → assemble that whole-mesh stiffness ONCE
-        # (K_const2, iron elements zeroed).  Each Picard sweep then re-assembles
-        # ONLY the saturable-iron tags on their element sub-bases and adds them —
-        # exactly like the P1 K_const + per-tag path.  Cuts the per-sweep assembly
-        # from the whole mesh to the iron fraction.
-        _nu_const2 = nu_base2.copy()
-        for _ids, _c in _sat2:
-            _nu_const2[_ids] = 0.0
-        K_const2 = asm(_stiff_nu2, b2, nu=b2_0.interpolate(_nu_const2)).tocsr()
-        _sat_sub2 = []       # (sub_basis, sub_P0_basis, elem_ids, bh_curve)
-        for _ids, _c in _sat2:
-            _sb2 = Basis(mesh_all, _P2E(), elements=_ids)
-            _sat_sub2.append((_sb2, _sb2.with_element(ElementTriP0()), _ids, _c))
+    # ── CONSTANT/VARIABLE stiffness split (perf) ─────────────────────────
+    # The non-saturable ν (air, magnet, coil, shaft, non-iron) never changes
+    # across frames OR Picard sweeps → assemble that whole-mesh stiffness ONCE
+    # (K_const2, iron elements zeroed).  Each Picard sweep then re-assembles
+    # ONLY the saturable-iron tags on their element sub-bases and adds them —
+    # exactly like the P1 K_const + per-tag path.  Cuts the per-sweep assembly
+    # from the whole mesh to the iron fraction.
+    _nu_const2 = nu_base2.copy()
+    for _ids, _c in _sat2:
+        _nu_const2[_ids] = 0.0
+    K_const2 = asm(_stiff_nu2, b2, nu=b2_0.interpolate(_nu_const2)).tocsr()
+    _sat_sub2 = []       # (sub_basis, sub_P0_basis, elem_ids, bh_curve)
+    for _ids, _c in _sat2:
+        _sb2 = Basis(mesh_all, _P2E(), elements=_ids)
+        _sat_sub2.append((_sb2, _sb2.with_element(ElementTriP0()), _ids, _c))
 
-        # ── outer Dirichlet: facet-based so P2 edge midpoints are pinned too ──
-        _out_fac2 = mesh_all.facets_satisfying(
-            lambda x: np.hypot(x[0], x[1]) >= r_all.max() - 5e-4)
-        _D2_ids = np.asarray(b2.get_dofs(facets=_out_fac2).flatten(), int)
+    # ── outer Dirichlet: facet-based so P2 edge midpoints are pinned too ──
+    _out_fac2 = mesh_all.facets_satisfying(
+        lambda x: np.hypot(x[0], x[1]) >= r_all.max() - 5e-4)
+    _D2_ids = np.asarray(b2.get_dofs(facets=_out_fac2).flatten(), int)
 
-        # ── per-frame P2 projection: weld ring + (for sector) radial-cut, both
-        #    VERTICES and EDGE midpoints, with the anti-periodic sign ──────────
-        # Ring edges are between angularly-consecutive ring nodes: for the FULL
-        # ring the ring is CLOSED (Nring edges, kk→(kk+1)%Nring); for a SECTOR
-        # wedge it is OPEN (Nring−1 edges, kk→kk+1).  rring/sring are index-
-        # aligned (both sorted by grid slot 0..Nring−1).
-        if _full_ring:
-            _re_pairs = [(kk, (kk + 1) % Nring) for kk in range(Nring)]
-        else:
-            _re_pairs = [(kk, kk + 1) for kk in range(Nring - 1)]
-        # rotor ring-edge midpoint dof for each segment (constant across frames)
-        _re_dofs = [_edge_dof(int(rring[a]) + nsn, int(rring[b]) + nsn)
-                    for a, b in _re_pairs]
-        _n_redge = int(sum(x is not None for x in _re_dofs))
+    # ── per-frame P2 projection: weld ring + (for sector) radial-cut, both
+    #    VERTICES and EDGE midpoints, with the anti-periodic sign ──────────
+    # Ring edges are between angularly-consecutive ring nodes: for the FULL
+    # ring the ring is CLOSED (Nring edges, kk→(kk+1)%Nring); for a SECTOR
+    # wedge it is OPEN (Nring−1 edges, kk→kk+1).  rring/sring are index-
+    # aligned (both sorted by grid slot 0..Nring−1).
+    if _full_ring:
+        _re_pairs = [(kk, (kk + 1) % Nring) for kk in range(Nring)]
+    else:
+        _re_pairs = [(kk, kk + 1) for kk in range(Nring - 1)]
+    # rotor ring-edge midpoint dof for each segment (constant across frames)
+    _re_dofs = [_edge_dof(int(rring[a]) + nsn, int(rring[b]) + nsn)
+                for a, b in _re_pairs]
+    _n_redge = int(sum(x is not None for x in _re_dofs))
 
-        # Anti-periodic RADIAL-CUT welds (sector only) — VERTICES and the cut-
-        # boundary EDGE midpoints.  Mn/Sn are matched master/slave cut vertices
-        # sorted by radius, so consecutive entries (i, i+1) delimit a cut edge on
-        # each side; the slave DOF = _bc_sign · master DOF, same as P1's vertex BC.
-        _cut_v = []          # (slave_dof, master_dof, sign) for vertices
-        _cut_e = []          # (slave_edge_dof, master_edge_dof, sign) for edges
-        if not _full_ring and Mn.size:
-            for i in range(Mn.size):
-                _cut_v.append((int(vdof[int(Sn[i])]), int(vdof[int(Mn[i])]),
-                               float(_bc_sign)))
-            for i in range(Mn.size - 1):
-                em = _edge_dof(int(Mn[i]), int(Mn[i + 1]))
-                es = _edge_dof(int(Sn[i]), int(Sn[i + 1]))
-                if em is not None and es is not None:
-                    _cut_e.append((int(es), int(em), float(_bc_sign)))
-        log.info("P2 belt: N2=%d dofs, %s, ring=%d nodes, %d/%d ring-edge + "
-                 "%d cut-vertex + %d cut-edge midpoints paired",
-                 N2, "full ring" if _full_ring else "sector",
-                 Nring, _n_redge, len(_re_pairs), len(_cut_v), len(_cut_e))
+    # Anti-periodic RADIAL-CUT welds (sector only) — VERTICES and the cut-
+    # boundary EDGE midpoints.  Mn/Sn are matched master/slave cut vertices
+    # sorted by radius, so consecutive entries (i, i+1) delimit a cut edge on
+    # each side; the slave DOF = _bc_sign · master DOF, same as P1's vertex BC.
+    _cut_v = []          # (slave_dof, master_dof, sign) for vertices
+    _cut_e = []          # (slave_edge_dof, master_edge_dof, sign) for edges
+    if not _full_ring and Mn.size:
+        for i in range(Mn.size):
+            _cut_v.append((int(vdof[int(Sn[i])]), int(vdof[int(Mn[i])]),
+                           float(_bc_sign)))
+        for i in range(Mn.size - 1):
+            em = _edge_dof(int(Mn[i]), int(Mn[i + 1]))
+            es = _edge_dof(int(Sn[i]), int(Sn[i + 1]))
+            if em is not None and es is not None:
+                _cut_e.append((int(es), int(em), float(_bc_sign)))
+    log.info("P2 belt: N2=%d dofs, %s, ring=%d nodes, %d/%d ring-edge + "
+             "%d cut-vertex + %d cut-edge midpoints paired",
+             N2, "full ring" if _full_ring else "sector",
+             Nring, _n_redge, len(_re_pairs), len(_cut_v), len(_cut_e))
 
-        # ═══════════════════════════════════════════════════════════════════
-        #  COUPLED EDDY-CURRENT DATA (σ·∂A/∂t) — SOLID CONDUCTORS, P2
-        # ═══════════════════════════════════════════════════════════════════
-        # Every SOLID (non-laminated) conductor is meshed and solved as a solid
-        # bar carrying  J = σ(−∂A/∂t + U_b), one unknown voltage U_b per body:
-        #
-        #   • stator copper — ONE body per WIRE (tags ≥ DOM_COIL_BASE), each with
-        #     its share of the phase current imposed exactly (∫J dΩ = I_b) while
-        #     the eddy reaction redistributes J inside the wire.  I_b uses the
-        #     SAME Iunit the P1 eddy path uses (read off _coil_con), so the two
-        #     orders drive identical ampere-turns.
-        #   • magnets / shaft (rotor_eddy) — net ZERO axial current per connected
-        #     body (∫J dΩ = 0).  A body CUT by the anti-periodic radial boundary
-        #     is exempt with U_b ≡ 0, and that is EXACT rather than a convenience:
-        #     its image across the cut carries −A, so the full body's ∮J already
-        #     vanishes identically and the constraint would over-determine the
-        #     wedge.  P1 makes the same split (cut magnet halves + the centred
-        #     shaft) and the interior/half classification is read off _rot_con so
-        #     the two orders never disagree about which body is which.
-        #   • laminated iron stays σ = 0 — a 2-D model cannot resolve eddies at
-        #     the laminate scale, so its loss is Bertotti (material data), not a
-        #     field solve.  Air is σ = 0 by construction.
-        #
-        # Assembled on the SAME stitched mesh as the field (stator elements
-        # 0…nst−1, rotor elements +nst), so no interpolation ever enters.
-        _ed_con = []             # constrained bodies: dicts(key, tag, g, S, …)
-        _Msig2 = _csr((N2, N2))  # Σ σ·∫u·v over ALL conductors (backward-Euler term)
-        _Msig_grp = {}           # loss split: "cu" / "mag" / "shaft" → σ-mass block
-        _Msd2 = _csr((N2, N2))   # Msig/dt
-        _G2 = _csr((N2, 0))      # columns g_b = σ·M_b·1  (∫σ·u over body b)
-        _Sdt2 = np.zeros(0)      # S_b·dt with S_b = ∫σ dΩ
-        if eddy:
-            from scipy.sparse import bmat as _bmat2, diags as _diags2
-            _ones_e = np.ones(N2)
-            _coil_meta = {int(c["tag"]): c for c in _coil_con}
-            _int_mag = {int(c["tag"]) for c in _rot_con} if rotor_eddy else set()
-            _bodies = []          # (group_key, tag, mesh_all element ids, σ)
-            for _tg, _ix in half["s"]["cells"].items():
-                _sg = _sigma_of_tag(int(_tg))
-                if _sg > 0.0:
-                    _bodies.append(("cu", int(_tg), np.asarray(_ix, int), _sg))
-            if rotor_eddy:
-                for _tg, _ix in half["r"]["cells"].items():
-                    _sg = _sigma_of_tag(int(_tg))
-                    if _sg <= 0.0:
-                        continue
-                    _bodies.append(
-                        ("shaft" if int(_tg) == int(DOM_SHAFT) else "mag",
-                         int(_tg), np.asarray(_ix, int) + nst, _sg))
-            _n_free_b = 0
-            _gcols = []
-            for _ky, _tg, _ids, _sg in _bodies:
-                _Mb = (asm(_massform, Basis(mesh_all, _P2E(), elements=_ids))
-                       * float(_sg)).tocsr()
-                _Msig2 = _Msig2 + _Mb
-                _Msig_grp[_ky] = (_Mb if _ky not in _Msig_grp
-                                  else _Msig_grp[_ky] + _Mb)
-                # U ≡ 0 bodies: cut by the anti-periodic boundary (their image
-                # cancels the net current identically) — no constraint row.
-                if _ky == "mag" and _tg not in _int_mag:
-                    _n_free_b += 1
-                    continue
-                if _ky == "shaft" and not _full_ring:
-                    _n_free_b += 1
-                    continue
-                _g = np.asarray(_Mb @ _ones_e).ravel()
-                _cm = _coil_meta.get(_tg) if _ky == "cu" else None
-                _ed_con.append({
-                    "key": _ky, "tag": _tg, "g": _g, "S": float(_g.sum()),
-                    "Iunit": float(_cm["Iunit"]) if _cm else 0.0,
-                    "phase": (_cm["phase"] if _cm else None),
-                })
-                _gcols.append(_g)
-            if _gcols:
-                _G2 = _csr(np.column_stack(_gcols))
-                _Sdt2 = np.array([c["S"] for c in _ed_con], float) * dt
-            _Msd2 = (_Msig2 * (1.0 / dt)).tocsr()
-            log.info("P2 eddy: %d constrained bodies (%d copper wires, %d rotor "
-                     "∫J=0), %d U=0 cut bodies | σ_cu=%.3g σ_mag=%.3g "
-                     "σ_shaft=%.3g S/m",
-                     len(_ed_con), sum(1 for c in _ed_con if c["key"] == "cu"),
-                     sum(1 for c in _ed_con if c["key"] != "cu"), _n_free_b,
-                     _sig_cu_T, _sigma_mag_lib, _sigma_shaft_lib)
-            if not _ed_con:
-                raise RuntimeError(
-                    "eddy=True but no solid conductor was found on the P2 mesh "
-                    "— nothing to constrain (check the coil domain tags).")
-
-        def _ring_map(m_shift):
-            # rotor ring node kk -> (stator node j, sign).  Full ring: periodic
-            # mod Nring, sign +1.  Sector: open wedge of Nring nodes, wrap period
-            # Nring−1 with a _bc_sign flip per wrap (identical to the P1 loop).
-            if _full_ring:
-                j = (np.arange(Nring) + int(m_shift)) % Nring
-                return j.astype(int), np.ones(Nring)
-            j = np.empty(Nring, int); sg = np.ones(Nring)
-            for kk in range(Nring):
-                jj = kk + int(m_shift); s = 1.0
-                while jj > Nring - 1: jj -= (Nring - 1); s *= _bc_sign
-                while jj < 0:         jj += (Nring - 1); s *= _bc_sign
-                j[kk] = jj; sg[kk] = s
-            return j, sg
-
-        def _build_Pro2(m_shift):
-            suf = _SignedUF(N2)
-            # radial-cut anti-periodic welds (sector) — m-independent
-            for sd, md, sgn in _cut_v:
-                suf.union(sd, md, sgn)
-            for sd, md, sgn in _cut_e:
-                suf.union(sd, md, sgn)
-            # slip-ring welds (vertices + edge midpoints), rotor shifted by m
-            j, sg = _ring_map(m_shift)
-            for kk in range(Nring):
-                suf.union(int(vdof[int(rring[kk]) + nsn]),
-                          int(vdof[int(sring[j[kk]])]), float(sg[kk]))
-            for e, (a, b) in enumerate(_re_pairs):
-                re = _re_dofs[e]
-                if re is None:
-                    continue
-                # the rotor edge (a,b) maps to the stator edge (j[a], j[b]); it is
-                # a real mesh edge only when the two endpoints stay angularly
-                # consecutive with the SAME sign (i.e. no wrap between them).
-                if sg[a] != sg[b]:
-                    continue
-                se = _edge_dof(int(sring[j[a]]), int(sring[j[b]]))
-                if se is not None:
-                    suf.union(int(re), int(se), float(sg[a]))
-            roots = [suf.find(i) for i in range(N2)]
-            rid = np.array([r for r, _ in roots])
-            rsg = np.array([s for _, s in roots], float)
-            uniq, inv = np.unique(rid, return_inverse=True)
-            Pro = _coo((rsg, (np.arange(N2), inv)),
-                       shape=(N2, uniq.size)).tocsr()
-            return Pro, np.unique(inv[_D2_ids])
-
-        # ── P2 flux linkage (EXACT area-average per stator coil element) ─────
-        # A P2 field's area average over a triangle is the mean of its three
-        # EDGE-MIDPOINT dofs, NOT the mean of its vertex dofs: the quadratic
-        # vertex shape function N_i = λ_i(2λ_i−1) integrates to EXACTLY ZERO over
-        # the element, while each edge bubble 4λ_jλ_k integrates to area/3.  So
-        #     (1/Ω)∫A dΩ = (A_e1 + A_e2 + A_e3)/3.
-        # Using the P1 centroid formula (vertex mean) on a P2 field is not an
-        # approximation, it is the wrong quadrature (checked against a 6th-order
-        # quadrature on an analytic quadratic: the edge rule is exact to 4e-16
-        # relative, the vertex rule is off by ~5 % even on a uniform mesh).
-        #
-        # This is also the ONLY choice that keeps ψ energy-consistent with the
-        # circuit: f_coil2 = ∫ N_i J_z dΩ puts EXACTLY ZERO on the vertex dofs
-        # (asm of the unit load on ElementTriP2 returns 3e-17 there) and area/3
-        # on each edge dof, so f_coil2·A ≡ J_z·Σ_e area_e·(edge mean).  ψ and the
-        # coil source therefore integrate the SAME functional; the old ψ was
-        # built from precisely the dofs the source cannot excite.
-        _As_e = fdof[mesh_all.t2f[:, :nst]]            # (3, nst) stator edge dofs
-        _sc_psi2 = p.stack_length * NS / float(n_parallel)
-
-        def _psi2(A2):
-            Ae_ = A2[_As_e]
-            A_tri = (Ae_[0] + Ae_[1] + Ae_[2]) / 3.0
-            pa = pb = pc = 0.0
-            for idx_, ar_, dir_, ph_ in coil_info:
-                sa_ = float(np.sum(ar_))
-                if sa_ <= 0:
-                    continue
-                v_ = dir_ * float(np.sum(A_tri[idx_] * ar_)) / sa_
-                if ph_ == 'A':   pa += v_
-                elif ph_ == 'B': pb += v_
-                else:            pc += v_
-            return _sc_psi2 * pa, _sc_psi2 * pb, _sc_psi2 * pc
-
-        # ── frame-independent solver helpers ─────────────────────────────────
-        # These used to be defined INSIDE the frame loop; they close over nothing
-        # frame-specific (K_const2, _sat_sub2, _sat2, b2), and the voltage-drive
-        # phasor initialiser below has to call them BEFORE the loop starts.
-        def _solve_ff(Mff, rhs):
-            """Solve Mff·x = rhs for a 1-D or 2-D (multi-column) rhs."""
-            nonlocal _pardiso2
-            if _pardiso2 is not None:
-                try:
-                    return _pardiso2.solve(Mff, rhs)
-                except Exception as _pe2:
-                    log.warning("pypardiso solve failed (%s) — SuperLU fallback",
-                                _pe2)
-                    _pardiso2 = None
-            return _splu2(Mff).solve(rhs)
-
-        def _elemB(Avec):
-            bx, by, dq = _p2_B_at_quad(b2, Avec)
-            ar = dq.sum(axis=1)
-            return (np.sqrt(bx ** 2 + by ** 2) * dq).sum(axis=1) \
-                / np.maximum(ar, 1e-30)
-
-        def _nu_of(Bmag, base):
-            nu = base.copy()
-            for _ids, _c in _sat2:
-                nu[_ids] = 1.0 / (MU0 * np.maximum(
-                    _mu_r_from_bh_vec(_c, Bmag[_ids]), 1.0))
-            return nu
-
-        def _asmK(nu):
-            K = K_const2.copy()
-            for _sb2, _sb02, _ids2, _c2 in _sat_sub2:
-                _nf2 = _sb02.zeros(); _nf2[_ids2] = nu[_ids2]
-                K = K + asm(_stiff_nu2, _sb2, nu=_sb02.interpolate(_nf2))
-            return K.tocsr()
-
-        def _Kpw(Avec):
-            """POINTWISE ν(|B|) secant stiffness + the per-element data the
-            Newton tangent needs.  Same nonlinearity in residual and tangent."""
-            K = K_const2.copy(); info = []
-            for _sb2, _sb02, _ids2, _c2 in _sat_sub2:
-                gA = _sb2.interpolate(Avec).grad            # (2,nel,nqp)
-                Bm = np.sqrt(np.maximum(gA[0] ** 2 + gA[1] ** 2, 1e-18))
-                mur = np.maximum(_mu_r_from_bh_vec(
-                    _c2, Bm.ravel()).reshape(Bm.shape), 1.0)
-                nuq = 1.0 / (MU0 * mur)
-                K = K + asm(_stiff_nu2, _sb2, nu=nuq)
-                info.append((_sb2, _ids2, _c2, gA, Bm, nuq))
-            return K.tocsr(), info
-
-        def _tangent2(info):
-            """T = 2·(dν/dB²)·(∇A·∇u)(∇A·∇v), pointwise & consistent with _Kpw."""
-            T = None
-            for _sb2, _ids2, _c2, gA, Bm, nuq in info:
-                _dB = 1e-3 * Bm + 1e-6
-                nu1 = 1.0 / (MU0 * np.maximum(_mu_r_from_bh_vec(
-                    _c2, (Bm + _dB).ravel()).reshape(Bm.shape), 1.0))
-                nup = np.maximum((nu1 - nuq) / _dB / (2.0 * Bm), 0.0)   # dν/dB²
-                Ti = asm(_tang_nu2, _sb2, gA=gA, c=2.0 * nup)
-                T = Ti if T is None else T + Ti
-            return T
-
-        # ═══════════════════════════════════════════════════════════════════
-        #  VOLTAGE DRIVE on P2 — field ↔ circuit coupled solve
-        # ═══════════════════════════════════════════════════════════════════
-        # A circuit is physics: it cannot depend on the element order, so this is
-        # a PORT of the P1 formulation, not a second model.  Everything that was
-        # paid for in P1 debugging is kept verbatim in form:
-        #   * LINE-TO-LINE equations (floating neutral).  Phase-voltage equations
-        #     pin the machine neutral to the source's, short the zero-sequence
-        #     back-EMF (large on this concentrated winding) through the tiny
-        #     zero-sequence inductance and produce ~43 % fake triplen current.
-        #   * Crank–Nicolson in ROTOR TIME: Δt_k = Δθ_eff/ω with V sampled at the
-        #     midpoint of the ACTUAL (slip-node-snapped) motion.
-        #   * A dq phasor initialiser whose inductances are measured AT the
-        #     operating point (Lq moves ~5× from no-load to full load).
-        #   * 10 settling periods with iterated Aitken anchoring of the
-        #     period-boundary flux.
-        # What is NEW here is only the field solve: P1 gets the exact
-        # superposition A = A_pm + i_A·xa + i_B·xb for free because its Picard
-        # freezes ν within a sweep.  P2 solves by POINTWISE Newton, where that
-        # superposition is not exact, so the circuit is closed on the ACTUAL
-        # ψ(A) of the converged field and (A, i_A, i_B) are solved as ONE coupled
-        # Newton system:  ∂A/∂i is the tangent back-solve J⁻¹·P, i.e. the
-        # DIFFERENTIAL inductance — which is the correct Jacobian of ψ(A(i)).
-        _Pa2 = f_coil2['A'] - f_coil2['C']    # unit-i_A source column (i_C folded)
-        _Pb2 = f_coil2['B'] - f_coil2['C']    # unit-i_B source column
-        _iv_state = {'A': 0.0, 'B': 0.0, 'C': 0.0}
-        _psi_prev = None
-        _th_eff_prev = None      # previous frame's SNAPPED rotor angle (rotor time)
-        _dt_k = dt
-        _v_diag = {"iters": [], "resid": []}
-        _v_bpsi = []             # period-boundary flux samples for the Aitken anchor
-
-        def _pad2(Pro, free, xf):
-            _x = np.zeros(Pro.shape[1]); _x[free] = xf
-            return Pro @ _x
-
-        # Line-to-line Crank–Nicolson circuit residual + its 2×2 Jacobian —
-        # simulation/drive.py, shared with the P1 path below.  R_phase is the
-        # only run-dependent term, so it is bound here rather than captured.
-        def _circ_r(psi, iA, iB, iv_prev, psi_prev, Vt, dtk):
-            return _circ_r_ll(psi, iA, iB, iv_prev, psi_prev, Vt, dtk, R_phase)
-
-        def _circ_M(qa, qb, dtk):
-            return _circ_M_ll(qa, qb, dtk, R_phase)
-
-        def _v_newton(Pro, free, A_start, i_start, Vt, dtk, iv_prev, psi_prev,
-                      maxit):
-            """Coupled (A, i_A, i_B) Newton.  One Jacobian factorization per
-            iteration, three back-solves: the field correction and the two
-            ∂A/∂i columns.  Returns (ok, A2, iA, iB, rrel, nit, rc)."""
-            iA = float(i_start[0]); iB = float(i_start[1])
-            A2 = A_start.copy()
-            _PtPa = np.asarray(Pro.T @ _Pa2).ravel()[free]
-            _PtPb = np.asarray(Pro.T @ _Pb2).ravel()[free]
-            # voltage scale for the circuit residual test: the driving line-to-
-            # line amplitude (never the instantaneous value, which passes 0).
-            _vsc = max(math.sqrt(3.0) * abs(float(v_phase_peak)), 1e-3)
-            nit = 0; rrel = 1.0
-            rc = np.array([np.inf, np.inf])
-
-            def _state(Av, ia, ib):
-                fv = f_mag2 + ia * _Pa2 + ib * _Pb2
-                Kv, iv = _Kpw(Av)
-                rf = np.asarray(Pro.T @ (Kv @ Av - fv)).ravel()[free]
-                bn = max(float(np.linalg.norm(
-                    np.asarray(Pro.T @ fv).ravel()[free])), 1e-30)
-                rcv = _circ_r(_psi2(Av), ia, ib, iv_prev, psi_prev, Vt, dtk)
-                return Kv, iv, rf, float(np.linalg.norm(rf)) / bn, rcv
-
-            for it in range(maxit):
-                nit = it + 1
-                K, info, r_free, rrel, rc = _state(A2, iA, iB)
-                if rrel < 1e-7 and float(np.max(np.abs(rc))) < 1e-6 * _vsc:
-                    return True, A2, iA, iB, rrel, nit, rc
-                T = _tangent2(info)
-                J = (K + T).tocsr() if T is not None else K
-                Jff = (Pro.T @ J @ Pro).tocsr()[free][:, free].tocsc()
-                try:
-                    X = _solve_ff(Jff, np.column_stack([-r_free, _PtPa, _PtPb]))
-                except Exception as _je:
-                    log.info("P2 vdrive Newton solve failed (%s)", _je)
-                    return False, A2, iA, iB, rrel, nit, rc
-                dA0 = _pad2(Pro, free, X[:, 0])
-                dAa = _pad2(Pro, free, X[:, 1])
-                dAb = _pad2(Pro, free, X[:, 2])
-                # ψ is a LINEAR functional of A, so the linearised flux of the
-                # trial step is exact: ψ(A+δ) = ψ(A) + ψ(δ).
-                q0 = _psi2(dA0); qa = _psi2(dAa); qb = _psi2(dAb)
-                try:
-                    di = np.linalg.solve(
-                        _circ_M(qa, qb, dtk),
-                        np.array([rc[0] - (q0[0] - q0[1]) / dtk,
-                                  rc[1] - (q0[1] - q0[2]) / dtk]))
-                except np.linalg.LinAlgError:
-                    return False, A2, iA, iB, rrel, nit, rc
-                # backtracking line-search on the COMBINED merit (field residual
-                # + circuit residual) — the BH knee needs globalising and a step
-                # that fixes the field while wrecking the circuit is no step.
-                _m0 = rrel + float(np.max(np.abs(rc))) / _vsc
-                _lam = 1.0; _acc = False
-                for _ls in range(8):
-                    _At = A2 + _lam * (dA0 + di[0] * dAa + di[1] * dAb)
-                    _ia = iA + _lam * di[0]; _ib = iB + _lam * di[1]
-                    _, _, _, _rr, _rcv = _state(_At, _ia, _ib)
-                    if _rr + float(np.max(np.abs(_rcv))) / _vsc < _m0:
-                        A2 = _At; iA = _ia; iB = _ib; _acc = True
-                        break
-                    _lam *= 0.5
-                if not _acc:
-                    return False, A2, iA, iB, rrel, nit, rc
-            return False, A2, iA, iB, rrel, nit, rc
-
-        def _v_picard(Pro, free, nu_start, Vt, dtk, iv_prev, psi_prev, npic,
-                      frozen_frame):
-            """Damped-Picard fallback — this IS the P1 recipe: ν frozen inside a
-            sweep makes A = A_pm + i_A·xa + i_B·xb exact, so the 2×2 circuit is
-            solved directly on the apparent inductance.  Returns
-            (A2, iA, iB, nu, res, nit)."""
-            nu = nu_start.copy()
-            _Pt = lambda v: np.asarray(Pro.T @ v).ravel()[free]      # noqa: E731
-            A2 = np.zeros(N2); iA = iB = 0.0; res = 0.0; nit = 0
-            _ok = 0; _rp = None; _om = 0.5
-            for it in range(max(1, npic)):
-                nit = it + 1
-                K = _asmK(nu)
-                Kff = (Pro.T @ K @ Pro).tocsr()[free][:, free].tocsc()
-                X = _solve_ff(Kff, np.column_stack(
-                    [_Pt(f_mag2), _Pt(_Pa2), _Pt(_Pb2)]))
-                A_pm = _pad2(Pro, free, X[:, 0])
-                xa = _pad2(Pro, free, X[:, 1])
-                xb = _pad2(Pro, free, X[:, 2])
-                pm = _psi2(A_pm); qa = _psi2(xa); qb = _psi2(xb)
-                _bcv = np.array([
-                    (Vt['A'] - Vt['B'])
-                    - ((pm[0] - pm[1]) - (psi_prev['A'] - psi_prev['B'])) / dtk
-                    - 0.5 * R_phase * (iv_prev['A'] - iv_prev['B']),
-                    (Vt['B'] - Vt['C'])
-                    - ((pm[1] - pm[2]) - (psi_prev['B'] - psi_prev['C'])) / dtk
-                    - 0.5 * R_phase * (iv_prev['B'] - iv_prev['C'])])
-                _iab = np.linalg.solve(_circ_M(qa, qb, dtk), _bcv)
-                iA = float(_iab[0]); iB = float(_iab[1])
-                A2 = A_pm + iA * xa + iB * xb
-                if frozen_frame or not _sat2:
-                    break
-                _Bm = _elemB(A2)
-                _vo = np.concatenate([nu[_ids] for _ids, _ in _sat2])
-                _vn = np.concatenate([
-                    1.0 / (MU0 * np.maximum(_mu_r_from_bh_vec(_c, _Bm[_ids]), 1.0))
-                    for _ids, _c in _sat2])
-                _rr = _vn - _vo
-                res = float(np.linalg.norm(_rr) / max(np.linalg.norm(_vo), 1e-30))
-                if _rp is not None:
-                    _dr = _rr - _rp; _den = float(_dr @ _dr)
-                    if _den > 0.0:
-                        _om = float(np.clip(-_om * float(_rp @ _dr) / _den,
-                                            0.05, 1.0))
-                _rp = _rr
-                _vu = _vo + _om * _rr
-                _p0 = 0
-                for _ids, _c in _sat2:
-                    nu[_ids] = _vu[_p0:_p0 + _ids.size]; _p0 += _ids.size
-                if res < _PIC_TOL2:
-                    _ok += 1
-                    if _ok >= 2:
-                        break
-                else:
-                    _ok = 0
-            return A2, iA, iB, nu, res, nit
-
-        # ═══════════════════════════════════════════════════════════════════
-        #  COUPLED EDDY-CURRENT SOLVE (σ·∂A/∂t) — BORDERED NEWTON, P2
-        # ═══════════════════════════════════════════════════════════════════
-        # Backward Euler on the magnetodynamic system, bordered by ONE integral
-        # constraint per current-carrying body:
-        #
-        #   [ K(A) + Msig/dt      −G  ] [A]   [ f_mag + (Msig/dt)·A_prev ]
-        #   [      −Gᵀ          S·dt  ] [U] = [ dt·I − Gᵀ·A_prev         ]
-        #
-        # Row 1 is  ∇·(ν∇A) = −σ(−∂A/∂t + U_b), row 2 is ∫σ(−∂A/∂t + U_b)dΩ = I_b
-        # (both scaled by dt so the block is symmetric).  The coil current is NOT
-        # a source term any more — it is the constraint, which is the whole point:
-        # J redistributes freely inside the conductor and only its NET value is
-        # imposed.  σ = 0 everywhere else, so air and laminated iron see exactly
-        # the magnetostatic operator they saw before.
-        #
-        # TIME: A_prev is the previous frame's field PER DOF.  The rotor block of
-        # mesh_all is the rotor's MATERIAL frame (the rotation lives entirely in
-        # the slip pairing Pro), so a dof tracks a material point on both halves
-        # and ∂A/∂t needs no convective term and no re-projection.  Only Pro
-        # changes per frame, and it is re-applied to G every frame below.
-        #
-        # NONLINEARITY: the SAME pointwise ν(|B|) residual + differential-
-        # reluctivity tangent the magnetostatic Newton uses (_Kpw/_tangent2), so
-        # the eddy solve converges on identical iron physics.  With ν frozen
-        # (frozen_nu / no saturable iron) the system is linear and one bordered
-        # solve is exact — there is no Picard variant, by design: this branch
-        # solves by Newton and code parked in the Picard fallback never runs.
-        def _eddy_solve(Pro, free, A_start, U_start, I_vec, Aprev, nu_fix,
-                        maxit):
-            """Bordered (A, U) Newton.  Returns (ok, A, U, rrel, nit)."""
-            Ae = A_start.copy(); Ue = U_start.copy()
-            cr = dt * np.asarray(I_vec, float) - np.asarray(_G2.T @ Aprev).ravel()
-            rhs_e = f_mag2 + _Msd2 @ Aprev
-            _rf0 = np.asarray(Pro.T @ rhs_e).ravel()[free]
-            _bn = max(float(np.linalg.norm(_rf0)), 1e-30)
-            _cn = max(float(np.linalg.norm(cr)), 1e-30)
-            Bf = (Pro.T @ _G2).tocsr()[free, :]
-            nit = 0; rrel = 1.0
-
-            def _res_e(Av, Uv, Km):
-                rf = np.asarray(Pro.T @ ((Km + _Msd2) @ Av - _G2 @ Uv
-                                         - rhs_e)).ravel()[free]
-                rc = _Sdt2 * Uv - np.asarray(_G2.T @ Av).ravel() - cr
-                return rf, rc, max(float(np.linalg.norm(rf)) / _bn,
-                                   float(np.linalg.norm(rc)) / _cn)
-
-            # DC seed for the conductor voltages: at ∂A/∂t = 0 the constraint
-            # gives U_b = I_b/S_b, which is the bulk of the answer (the eddy
-            # reaction is a correction to it).  Starting from U = 0 instead puts
-            # the whole ampere-turn drive in the first Newton step, and at 60 A
-            # that step lands past the BH knee from an unsaturated start.
-            if not np.any(Ue):
-                Ue = np.asarray(I_vec, float) * dt / np.maximum(_Sdt2, 1e-30)
-
-            for it in range(max(int(maxit), 2)):
-                nit = it + 1
-                if nu_fix is not None:
-                    Km = _asmK(nu_fix); info = None
-                else:
-                    Km, info = _Kpw(Ae)
-                rf, rc, rrel = _res_e(Ae, Ue, Km)
-                if rrel < 1e-7:
-                    return True, Ae, Ue, rrel, nit
-                J = Km
-                if info is not None:
-                    T = _tangent2(info)
-                    if T is not None:
-                        J = Km + T
-                Jff = (Pro.T @ (J + _Msd2) @ Pro).tocsr()[free][:, free]
-                Mb = _bmat2([[Jff, -Bf], [-Bf.T, _diags2(_Sdt2)]]).tocsc()
-                try:
-                    sol = _solve_ff(Mb, -np.concatenate([rf, rc]))
-                except Exception as _je:
-                    log.info("P2 eddy bordered solve failed (%s)", _je)
-                    return False, Ae, Ue, rrel, nit
-                dA = _pad2(Pro, free, sol[:free.size]); dU = sol[free.size:]
-                if nu_fix is not None:        # linear system: the step is exact
-                    Ae = Ae + dA; Ue = Ue + dU
-                    continue
-                # Backtracking line-search on the FIELD residual — the same test
-                # the magnetostatic Newton uses, and the only one that means
-                # anything here: the constraint block is LINEAR, so a damped step
-                # scales its residual by exactly (1−λ) and it can never be what
-                # blocks progress.  Testing the two together (max of the relative
-                # norms) made the constraint residual, which is ~1 by
-                # construction on the first sweep, veto every field-reducing step
-                # and the solve stalled at rrel≈0.97 at 60 A.
-                _f0 = float(np.linalg.norm(rf))
-                lam = 1.0; acc = False
-                for _ls in range(8):
-                    At = Ae + lam * dA; Ut = Ue + lam * dU
-                    if float(np.linalg.norm(_res_e(At, Ut, _Kpw(At)[0])[0])) < _f0:
-                        Ae = At; Ue = Ut; acc = True; break
-                    lam *= 0.5
-                if not acc:
-                    return False, Ae, Ue, rrel, nit
-            return False, Ae, Ue, rrel, nit
-
-        # ═══════════════════════════════════════════════════════════════════
-        #  COUPLED EDDY **AND** VOLTAGE DRIVE — ONE (A, U, i_A, i_B) NEWTON
-        # ═══════════════════════════════════════════════════════════════════
-        # The two features look mutually exclusive — the eddy solve imposes each
-        # wire's current as an integral CONSTRAINT, the circuit needs those same
-        # currents as UNKNOWNS — but they are not.  The constraint VALUE simply
-        # becomes a function of the circuit state:
-        #
-        #     I_b(i) = Iunit_b · i_phase(b),     i_C = −i_A − i_B
-        #
-        # so the winding current still never appears as a source term (it must
-        # not: under eddy the ampere-turns enter through the constraint row and
-        # putting them in f as well drives the machine twice), and the bordered
-        # system keeps its exact structure.  Only the constraint RHS moves:
-        #
-        #   [ K(A)+Msig/dt   −G  ] [A]   [ f_mag + (Msig/dt)·A_prev            ]
-        #   [    −Gᵀ        S·dt ] [U] = [ dt·(i_A·c_a + i_B·c_b) − Gᵀ·A_prev  ]
-        #        └──────── M_b ───────┘
-        #   plus the two LINE-TO-LINE circuit equations on ψ(A), i.
-        #
-        # with c_a = ∂I_vec/∂i_A, c_b = ∂I_vec/∂i_B (zero on the ∫J=0 rotor
-        # bodies — magnets and shaft carry no terminal current).
-        #
-        # The Newton step is therefore the SAME shape as the magnetostatic
-        # voltage drive (_v_newton): one factorization of M_b per iteration and
-        # three back-solves — the field/voltage correction and the two ∂(A,U)/∂i
-        # columns.  Those columns are back-solves of the BORDERED matrix with a
-        # pure CONSTRAINT rhs [0; dt·c], i.e. "inject one more ampere into that
-        # wire and let the eddy reaction redistribute it", which is exactly the
-        # differential inductance the circuit Jacobian needs — now including the
-        # eddy reaction, which is the whole point of running the two together.
-        #
-        # ψ is a linear functional of A, so the linearised flux of a trial step
-        # is exact and the 2×2 circuit reduction is identical to _v_newton's.
-        #
-        # NOTHING here is a fallback path: if this does not converge the frame
-        # RAISES (see the call site).  Reporting a current-drive answer as a
-        # voltage run — what the P1 `if eddy: … elif _vdrive:` chain does — is
-        # the failure mode this whole function exists to avoid.
-        #
-        # TIME STEP: the eddy history term is discretised on the SAME Δt_k the
-        # circuit uses — the ACTUAL (slip-node-snapped) rotor time, not the
-        # nominal dt.  Under current drive the two are interchangeable because
-        # nothing else in the frame carries a time scale; here the circuit
-        # already divides Δψ by Δt_k, and feeding σ·∂A/∂t a different Δt would
-        # reintroduce exactly the node-quantisation sawtooth the rotor-time step
-        # exists to remove — into the eddy loss this time instead of the current.
-        # (On the pinned geometries Δt_k == dt to the last bit: a frame spans a
-        # whole number of slip nodes.  The rescale is a scalar on a fixed matrix,
-        # so it costs nothing and it stays right when it stops being exact.)
-        _S_raw = np.array([c["S"] for c in _ed_con], float)   # S_b = ∫σ dΩ
-        _ed_ca = np.zeros(len(_ed_con)); _ed_cb = np.zeros(len(_ed_con))
-        for _ci, _c in enumerate(_ed_con):
-            if _c["key"] != "cu":
-                continue                       # ∫J = 0 body: no terminal current
-            _iu = float(_c["Iunit"])
-            if _c["phase"] == 'A':
-                _ed_ca[_ci] = _iu
-            elif _c["phase"] == 'B':
-                _ed_cb[_ci] = _iu
-            else:                              # i_C = −i_A − i_B
-                _ed_ca[_ci] = -_iu; _ed_cb[_ci] = -_iu
-
-        def _ve_newton(Pro, free, A_start, U_start, i_start, Aprev, Vt, dtk,
-                       iv_prev, psi_prev, nu_fix, maxit):
-            """Bordered (A, U, i_A, i_B) Newton: coupled σ·∂A/∂t eddy solve WITH
-            the line-to-line voltage circuit.  Returns
-            (ok, A, U, iA, iB, rrel, nit, rc_circ)."""
-            Ae = A_start.copy(); Ue = U_start.copy()
-            iA = float(i_start[0]); iB = float(i_start[1])
-            Msd_k = (_Msig2 * (1.0 / dtk)).tocsr()   # backward Euler on Δt_k
-            Sdt_k = _S_raw * dtk
-            rhs_e = f_mag2 + Msd_k @ Aprev
-            _GtAp = np.asarray(_G2.T @ Aprev).ravel()
-            _rf0 = np.asarray(Pro.T @ rhs_e).ravel()[free]
-            _bn = max(float(np.linalg.norm(_rf0)), 1e-30)
-            Bf = (Pro.T @ _G2).tocsr()[free, :]
-            # constraint-residual scale: the ampere-seconds the terminal current
-            # imposes at the DRIVING amplitude, never the instantaneous value.
-            _cn = max(float(np.linalg.norm(dtk * (_ed_ca + _ed_cb))),
-                      float(np.linalg.norm(_GtAp)), 1e-30)
-            # voltage scale for the circuit residual test — the driving line-to-
-            # line amplitude (the instantaneous value passes through 0).
-            _vsc = max(math.sqrt(3.0) * abs(float(v_phase_peak)), 1e-3)
-            nit = 0; rrel = 1.0
-            rcc = np.array([np.inf, np.inf])
-
-            def _res_ve(Av, Uv, ia, ib, Km):
-                rf = np.asarray(Pro.T @ ((Km + Msd_k) @ Av - _G2 @ Uv
-                                         - rhs_e)).ravel()[free]
-                rc = (Sdt_k * Uv - np.asarray(_G2.T @ Av).ravel()
-                      - (dtk * (ia * _ed_ca + ib * _ed_cb) - _GtAp))
-                rcv = _circ_r(_psi2(Av), ia, ib, iv_prev, psi_prev, Vt, dtk)
-                return rf, rc, rcv, max(float(np.linalg.norm(rf)) / _bn,
-                                        float(np.linalg.norm(rc)) / _cn)
-
-            # DC seed for the conductor voltages (same as the current-drive eddy
-            # solve): at ∂A/∂t = 0 the constraint gives U_b = I_b/S_b.
-            if not np.any(Ue):
-                Ue = ((iA * _ed_ca + iB * _ed_cb) / np.maximum(_S_raw, 1e-30))
-
-            for it in range(max(int(maxit), 2)):
-                nit = it + 1
-                if nu_fix is not None:
-                    Km = _asmK(nu_fix); info = None
-                else:
-                    Km, info = _Kpw(Ae)
-                rf, rc, rcc, rrel = _res_ve(Ae, Ue, iA, iB, Km)
-                if rrel < 1e-7 and float(np.max(np.abs(rcc))) < 1e-6 * _vsc:
-                    return True, Ae, Ue, iA, iB, rrel, nit, rcc
-                J = Km
-                if info is not None:
-                    T = _tangent2(info)
-                    if T is not None:
-                        J = Km + T
-                Jff = (Pro.T @ (J + Msd_k) @ Pro).tocsr()[free][:, free]
-                Mb = _bmat2([[Jff, -Bf], [-Bf.T, _diags2(Sdt_k)]]).tocsc()
-                # column 0: the (A, U) correction at frozen current
-                # columns 1,2: ∂(A, U)/∂i_A and ∂(A, U)/∂i_B — a pure CONSTRAINT
-                #              rhs, the eddy-reaction-included differential
-                #              inductance the circuit Jacobian needs.
-                _z = np.zeros(free.size)
-                try:
-                    X = _solve_ff(Mb, np.column_stack([
-                        -np.concatenate([rf, rc]),
-                        np.concatenate([_z, dtk * _ed_ca]),
-                        np.concatenate([_z, dtk * _ed_cb])]))
-                except Exception as _je:
-                    log.info("P2 eddy+vdrive bordered solve failed (%s)", _je)
-                    return False, Ae, Ue, iA, iB, rrel, nit, rcc
-                dA0 = _pad2(Pro, free, X[:free.size, 0])
-                dAa = _pad2(Pro, free, X[:free.size, 1])
-                dAb = _pad2(Pro, free, X[:free.size, 2])
-                dU0 = X[free.size:, 0]
-                dUa = X[free.size:, 1]; dUb = X[free.size:, 2]
-                q0 = _psi2(dA0); qa = _psi2(dAa); qb = _psi2(dAb)
-                try:
-                    di = np.linalg.solve(
-                        _circ_M(qa, qb, dtk),
-                        np.array([rcc[0] - (q0[0] - q0[1]) / dtk,
-                                  rcc[1] - (q0[1] - q0[2]) / dtk]))
-                except np.linalg.LinAlgError:
-                    return False, Ae, Ue, iA, iB, rrel, nit, rcc
-                dA = dA0 + di[0] * dAa + di[1] * dAb
-                dU = dU0 + di[0] * dUa + di[1] * dUb
-                if nu_fix is not None:        # linear system: the step is exact
-                    Ae = Ae + dA; Ue = Ue + dU
-                    iA += float(di[0]); iB += float(di[1])
-                    continue
-                # Backtracking line-search on the FIELD residual only — for the
-                # same reason the current-drive eddy solve uses it: the ONLY
-                # nonlinearity in this system is K(A).  Both the constraint rows
-                # and the circuit rows are exactly LINEAR in (A, U, i), so a
-                # damped step scales their residuals by exactly (1−λ) and they
-                # can never be what blocks progress; including them in the merit
-                # instead lets a residual that is ~1 by construction on the first
-                # sweep veto every field-reducing step (measured: stall at
-                # rrel≈0.97 on the current-drive path at 60 A).
-                _f0 = float(np.linalg.norm(rf))
-                lam = 1.0; acc = False
-                for _ls in range(8):
-                    At = Ae + lam * dA; Ut = Ue + lam * dU
-                    _ia = iA + lam * float(di[0]); _ib = iB + lam * float(di[1])
-                    if float(np.linalg.norm(
-                            _res_ve(At, Ut, _ia, _ib, _Kpw(At)[0])[0])) < _f0:
-                        Ae = At; Ue = Ut; iA = _ia; iB = _ib
-                        acc = True; break
-                    lam *= 0.5
-                if not acc:
-                    return False, Ae, Ue, iA, iB, rrel, nit, rcc
-            return False, Ae, Ue, iA, iB, rrel, nit, rcc
-
-        if _vdrive:
-            # ── dq phasor steady-state initialiser (P2) ──────────────────────
-            # τ = L/R spans ~20 electrical periods on a low-R machine, so a
-            # marched start-up would need ~100 periods to shed its DC.  Measure
-            # the PM flux and the dq inductances AT the operating point (coupled
-            # phasor↔saturation Picard) and place i(0), ψ(−dt) directly on the
-            # periodic orbit.  Lq changes ~5× between i=0 and full load, so an
-            # i=0 estimate would leave a large DC for the settling to grind off.
-            import math as _m
-            _Pro0v, _out0v = _build_Pro2(0)
-            _free0v = np.setdiff1d(np.arange(_Pro0v.shape[1]), _out0v)
-            _Pt0 = lambda v: np.asarray(_Pro0v.T @ v).ravel()[_free0v]  # noqa: E731
-            _RHS0 = np.column_stack([_Pt0(f_mag2), _Pt0(_Pa2), _Pt0(_Pb2)])
-            _nu_ph = nu_base2.copy()
-            _w = 2.0 * _m.pi * f_elec
-            _V0 = _voltages(0.0)
-            # θ_eff = 0 electrical.  The absolute offset CANCELS: _align below
-            # measures the PM-flux angle relative to it, so _thal is the true
-            # PM-flux angle in the ABC frame whatever reference is used here.
-            _the0 = _m.radians(0.0 * pole_pairs + daxis_eff)
-
-            _park = _park_dq; _ipark = _ipark_dq   # simulation/drive.py
-            _id0 = _iq0 = 0.0; _thal = _the0
-            _psi_pm_d = 0.0; _Ldd = _Lqq = _Ldq = _Lqd = 1e-6
-            _Aop = np.zeros(N2)
-            for _it in range(max(int(nonlinear_iterations), 20)):
-                _Kph = _asmK(_nu_ph)
-                _Kff0 = (_Pro0v.T @ _Kph @ _Pro0v).tocsr()[_free0v][:, _free0v].tocsc()
-                _X0 = _solve_ff(_Kff0, _RHS0)
-                _A0 = _pad2(_Pro0v, _free0v, _X0[:, 0])
-                _xa = _pad2(_Pro0v, _free0v, _X0[:, 1])
-                _xb = _pad2(_Pro0v, _free0v, _X0[:, 2])
-                _pm = _psi2(_A0); _qa = _psi2(_xa); _qb = _psi2(_xb)
-                _pd0, _pq0 = _park(_pm[0], _pm[1], _pm[2], _the0)
-                _thal = _the0 + _m.atan2(_pq0, _pd0)
-                _psi_pm_d = _m.hypot(_pd0, _pq0)
-                _Laa, _Lba = _qa[0], _qa[1]
-                _Lab, _Lbb = _qb[0], _qb[1]
-                _idA, _idB, _idC = _ipark(1.0, 0.0, _thal)
-                _iqA, _iqB, _iqC = _ipark(0.0, 1.0, _thal)
-                _Ldd, _Lqd = _park(_Laa * _idA + _Lab * _idB,
-                                   _Lba * _idA + _Lbb * _idB,
-                                   -((_Laa + _Lba) * _idA + (_Lab + _Lbb) * _idB),
-                                   _thal)
-                _Ldq, _Lqq = _park(_Laa * _iqA + _Lab * _iqB,
-                                   _Lba * _iqA + _Lbb * _iqB,
-                                   -((_Laa + _Lba) * _iqA + (_Lab + _Lbb) * _iqB),
-                                   _thal)
-                _Vd, _Vq = _park(_V0['A'], _V0['B'], _V0['C'], _thal)
-                _Mdq = np.array([[R_phase - _w * _Lqd, -_w * _Lqq],
-                                 [_w * _Ldd, R_phase + _w * _Ldq]])
-                try:
-                    _idq = np.linalg.solve(
-                        _Mdq, np.array([_Vd, _Vq - _w * _psi_pm_d]))
-                except np.linalg.LinAlgError:
-                    _idq = np.array([0.0, 0.0])
-                _id0, _iq0 = float(_idq[0]), float(_idq[1])
-                _iA0, _iB0, _iC0 = _ipark(_id0, _iq0, _thal)
-                _Aop = _A0 + _iA0 * _xa + _iB0 * _xb
-                _nu_new = _nu_of(_elemB(_Aop), _nu_ph)
-                _vo0 = np.concatenate([_nu_ph[_ids] for _ids, _ in _sat2]) \
-                    if _sat2 else np.zeros(0)
-                _vn0 = np.concatenate([_nu_new[_ids] for _ids, _ in _sat2]) \
-                    if _sat2 else np.zeros(0)
-                _pres0 = (float(np.linalg.norm(_vn0 - _vo0)
-                                / max(np.linalg.norm(_vo0), 1e-30))
-                          if _vo0.size else 0.0)
-                _al = 0.5 if _it < 6 else max(0.05, 3.0 / (_it + 1))
-                _nu_ph = (1.0 - _al) * _nu_ph + _al * _nu_new
-                if _pres0 < _PIC_TOL2:
-                    break
-            _iA0, _iB0, _iC0 = _ipark(_id0, _iq0, _thal)
-            _iv_state = {'A': _iA0, 'B': _iB0, 'C': _iC0}
-            # ψ at t = −dt on the orbit: dq are constant in steady state, so the
-            # previous-step flux is the SAME dq vector mapped one FRAME back —
-            # the park angle rotated by ω·dt (NOT one slip node; a frame spans
-            # many).  Getting this wrong injects a spurious rotational EMF at
-            # frame 0 → a decaying DC current.
-            _psd = _psi_pm_d + _Ldd * _id0 + _Ldq * _iq0
-            _psq = _Lqd * _id0 + _Lqq * _iq0
-            _psi_prev = dict(zip(('A', 'B', 'C'),
-                                 _ipark(_psd, _psq, _thal - _w * dt)))
-            log.info("P2 vdrive phasor init: Ld=%.4g Lq=%.4g H |psi_pm|=%.4g Wb "
-                     "i_dq=(%.1f, %.1f) A i0=(%.1f, %.1f, %.1f)",
-                     _Ldd, _Lqq, _psi_pm_d, _id0, _iq0, _iA0, _iB0, _iC0)
-
-        # ── frame loop ───────────────────────────────────────────────────────
-        _T2 = []; _psiA = []; _psiB = []; _psiC = []; _tt = []
-        _IA = []; _IB = []; _IC = []
-        _pic_iters = []; _pic_res_max = 0.0
-        _snap2 = None
-        # ── rotor-eddy / iron-loss histories (post-processed after the loop,
-        #    exactly as the P1 path does — magnetostatic field + honest coupled
-        #    rotor-eddy solve + Bertotti iron; no σ∂A/∂t in the main solve) ─────
-        _nr2 = int(half["r"]["n"])                    # rotor vertex count
-        _rot_vdof = vdof[nsn:nsn + _nr2]              # rotor vertex -> P2 dof
-        _histA_rot2 = []                              # (N, n_rotor_nodes) rotor A
-        _hsx2 = []; _hsy2 = []; _hrx2 = []; _hry2 = []  # stator/rotor iron B(t)
-        _hcx2 = []; _hcy2 = []                        # coil B(t) for AC copper
-        _hmx2 = []; _hmy2 = []                        # magnet B(t) — loss-density map
-        # FROZEN PERMEABILITY (frozen_nu): converge the saturation ONCE at frame
-        # 0 (extended Picard) then hold the per-element ν fixed for every rotor
-        # position — the industry-standard honest cogging/ripple method.  It
-        # removes the per-frame saturation-Picard jitter (which does NOT converge
-        # to _PIC_TOL on a coarse mesh and otherwise MASKS the discretisation
-        # ripple that P2 actually fixes), so the remaining T(θ) variation is
-        # purely geometric: P1 staircases, P2 is smooth.
-        nu_all2 = nu_base2.copy()      # persists across frames when frozen_nu
-        # NEWTON–RAPHSON for the BH nonlinearity (default; SB_NO_NEWTON=1 forces
-        # the damped-Picard path).  Cross-frame warm starts: the previous frame's
-        # converged field A and ν (a near-perfect Newton initial guess).
-        _use_newton = (_os_sb.environ.get("SB_NO_NEWTON") != "1")
-        _A2_prev = None; _nu_conv2 = None
-        # ── coupled-eddy state ───────────────────────────────────────────────
-        # A_prev starts at ZERO, which is not a field the machine was ever in, so
-        # the first step carries a fake ∂A/∂t.  It decays fast — the diffusion
-        # time of a 2 mm copper wire at 120 °C is ~5 µs against a ~100 µs step —
-        # but "fast" is not "gone", so the eddy run is given its own SETTLING
-        # frames at negative rotor angles (real solves at θ<0, discarded) instead
-        # of averaging the transient away like the P1 path does.  The reported
-        # window is then a clean period on every frame.  Voltage drive already
-        # marches ten settling periods, so it needs none.
-        _eddy_warm = 2 if (eddy and not _vdrive) else 0
-        # previous-frame A per dof (material frame).  Zero is not a field the
-        # machine was ever in, so under voltage drive — where the phasor
-        # initialiser already produced the operating-point field at θ_eff = 0 —
-        # seed it with that instead of a fake step from nothing.  Either seed is
-        # inside the discarded settling window; this one just does not spend the
-        # first frames unwinding an ∂A/∂t that never happened.
-        _Aed_prev = (_Aop.copy() if (eddy and _vdrive) else np.zeros(N2))
-        _Ued = np.zeros(len(_ed_con))         # per-body conductor voltages
-        _ed_cu = []; _ed_mag = []; _ed_sh = []   # σ∫E² per frame [W, machine]
-        _ed_dc2d = []                         # 2-D DC I²R of the same bars [W]
-        for k in range(-_eddy_warm, n_total):
-            if progress_cb is not None:
-                try: progress_cb(max(k, 0), n_total)
-                except Exception: pass
-            theta = (k / n_total) * period_mech * n_periods
-            m_shift = int(round(theta / spacing))
-            theta_eff = m_shift * spacing
-            # Voltage drive: Crank–Nicolson in ROTOR TIME.  The field only exists
-            # at SNAPPED slip-node angles θ_eff, so Δt_k = Δθ_eff/ω and V is
-            # sampled at the midpoint of the ACTUAL motion.  Dividing a snapped
-            # Δψ by the UNIFORM dt instead modulates dψ/dt by the node-
-            # quantisation sawtooth (fake volts ≫ |V−E|) and CN rings undamped
-            # at Nyquist → monster harmonic currents.
-            _dth_frame = period_mech * n_periods / n_total     # mech deg / frame
-            if _vdrive:
-                if _th_eff_prev is None:        # very first frame: nominal step
-                    _th_eff_prev = theta_eff - _dth_frame
-                _dth_eff = theta_eff - _th_eff_prev
-                _dt_k = dt * (_dth_eff / _dth_frame) if _dth_eff > 1e-12 else dt
-                _Vt = _voltages(0.5 * (theta_eff + _th_eff_prev))
-                _th_eff_prev = theta_eff
-                _iv_prev = dict(_iv_state)      # i_{k−1} for the R/2 term
-                Ist = dict(_iv_state)           # warm start for the coupled solve
-            else:
-                _Vt = None; _iv_prev = None
-                Ist = _currents(theta_eff)
-            # eddy: the winding current is an integral CONSTRAINT, not a source —
-            # putting it in f as well would drive the ampere-turns twice.
-            f = f_mag2 if eddy else (f_mag2 + Ist['A'] * f_coil2['A']
-                                     + Ist['B'] * f_coil2['B']
-                                     + Ist['C'] * f_coil2['C'])
-            Pro, outer_red = _build_Pro2(m_shift)
-            # WARM-START ν across frames (perf): only frame 0 converges from the
-            # unsaturated base (~60–70 sweeps cold); every later frame starts from
-            # the PREVIOUS frame's CONVERGED ν and reaches the fixed point in ~40
-            # sweeps instead of a full cold ~70.  (The BH-knee Picard is genuinely
-            # slow — P1's main loop needs ~55 sweeps too — so warm-start trims the
-            # cold-start tax, it does not make it "a few".)  This is SOUND and does
-            # NOT bias the mean torque because the Picard early-stops on the
-            # residual (_PIC_TOL2, two consecutive sweeps): the initial guess
-            # changes the PATH, never the fixed point.  The cap is raised so frame
-            # 0 reaches _PIC_TOL2 from cold and warm-started frames have headroom.
-            # Same strategy as the P1 main loop.
-            if k == -_eddy_warm:
-                nu_all2 = nu_base2.copy()          # frozen path: base at frame 0
-            _Ptf = np.asarray(Pro.T @ f).ravel()
-            # free (non-Dirichlet) reduced DOFs — CONSTANT within a frame (Pro and
-            # the outer Dirichlet set are fixed), so precompute the slice once.
-            _free2 = np.setdiff1d(np.arange(Pro.shape[1]), outer_red)
-            _bff2 = _Ptf[_free2]
-            # cross-frame warm starts (previous converged field + ν).  The slip
-            # pairing (Pro) changes every frame, so the previous field A_prev lives
-            # on the PREVIOUS constraint manifold range(Pro_prev); PROJECT it onto
-            # the current range(Pro) (least-squares, average each paired group) so
-            # the Newton start is constraint-consistent — otherwise Newton drifts
-            # off-manifold and diverges frame-to-frame.
-            if _A2_prev is None or _nu_conv2 is None:
-                _nu_start = nu_base2.copy()
-                # Voltage drive: the phasor initialiser already produced the
-                # operating-point field at θ_eff=0 — that IS frame 0's warm start.
-                _A_start = (_Aop.copy() if (_vdrive and k == 0)
-                            else np.zeros(N2))
-                if _vdrive and k == 0:
-                    _nu_start = _nu_ph.copy()
-            else:
-                _nu_start = _nu_conv2.copy()
-                _pd = np.asarray(Pro.multiply(Pro).sum(axis=0)).ravel()
-                _A_start = Pro @ (np.asarray(Pro.T @ _A2_prev).ravel()
-                                  / np.maximum(_pd, 1.0))
-
-            # Demag makes the frame re-enterable: solve, check the magnet, and
-            # if it weakened, rebuild its source and solve again.  The de-rating
-            # is monotone and self-arresting — a weaker magnet makes a weaker
-            # demagnetising field — so this settles in a few passes; the cap is a
-            # backstop, not a schedule.
-            _dm_pass = 0
-            while True:
-                _res = 0.0; _nit = 0; _newton_ok = False
-                # ── COUPLED EDDY: bordered magnetodynamic Newton ──────────────────
-                # Replaces the magnetostatic solve for this frame; every other
-                # per-frame quantity (torque, ψ, B histories, demag) is taken from
-                # its A2 unchanged, so the eddy run differs from the magnetostatic
-                # one ONLY by the physics that was added.
-                if eddy:
-                    # ν frozen ⇒ the bordered system is LINEAR (one exact solve);
-                    # the first frame of a frozen_nu run still converges the
-                    # saturation, which is what "frozen at the reference frame"
-                    # means.  No saturable iron ⇒ always linear.
-                    _nu_fix = (nu_all2 if ((frozen_nu and _A2_prev is not None)
-                                           or not _sat2) else None)
-                if eddy and not _vdrive:
-                    _I_vec = np.array(
-                        [Ist[c["phase"]] * c["Iunit"] if c["key"] == "cu" else 0.0
-                         for c in _ed_con], float)
-                    (_eok, A2, _Ued, _res, _nit) = _eddy_solve(
-                        Pro, _free2, _A_start, _Ued, _I_vec, _Aed_prev,
-                        _nu_fix, max(int(nonlinear_iterations), 20))
-                    if not _eok:
-                        # No silent fallback: the magnetostatic Picard below would
-                        # solve DIFFERENT physics (no σ·∂A/∂t, coil current back as
-                        # a source) and report it as an eddy run.
-                        raise RuntimeError(
-                            f"P2 coupled eddy: bordered Newton did not converge at "
-                            f"frame {k} ({_nit} its, rrel={_res:.2e})")
-                    _newton_ok = True
-                    if _nu_fix is None:
-                        # element-mean ν for the loss post-processing
-                        nu_all2 = _nu_of(_elemB(A2), nu_all2)
-                elif eddy and _vdrive:
-                    # ── EDDY **AND** VOLTAGE DRIVE: one (A, U, i_A, i_B) Newton ──
-                    # The winding current is the constraint VALUE and a circuit
-                    # unknown at once — see _ve_newton.  There is deliberately NO
-                    # fallback: the magnetostatic Picard solves different physics
-                    # and the current-drive eddy solve ignores the circuit, so
-                    # either one would report a different machine as this run.
-                    (_eok, A2, _Ued, _viA, _viB, _res, _nit,
-                     _vrc) = _ve_newton(
-                        Pro, _free2, _A_start, _Ued, (Ist['A'], Ist['B']),
-                        _Aed_prev, _Vt, _dt_k, _iv_prev, _psi_prev,
-                        _nu_fix, max(int(nonlinear_iterations), 25))
-                    if not _eok:
-                        raise RuntimeError(
-                            f"P2 coupled eddy + voltage drive: bordered (A, U, i) "
-                            f"Newton did not converge at frame {k} ({_nit} its, "
-                            f"rrel={_res:.2e}, circuit resid="
-                            f"{float(np.max(np.abs(_vrc))):.2e} V)")
-                    _newton_ok = True
-                    if _nu_fix is None:
-                        nu_all2 = _nu_of(_elemB(A2), nu_all2)
-                    # The solved currents ARE this frame's excitation from here on
-                    # (torque, ψ, the I²R reference of the eddy loss split).  f is
-                    # NOT rebuilt with them: under eddy the ampere-turns enter
-                    # through the constraint rows only.
-                    Ist = {'A': _viA, 'B': _viB, 'C': -_viA - _viB}
-                # ── VOLTAGE DRIVE: coupled field + circuit solve ──────────────────
-                # The phase currents are UNKNOWNS solved together with the field.
-                # Primary path: the coupled Newton (field residual + line-to-line
-                # circuit residual on the ACTUAL ψ(A), Jacobian = the tangent
-                # back-solve ∂A/∂i).  Fallback: the frozen-ν superposition Picard,
-                # which is exactly the P1 recipe.
-                if _vdrive and not eddy:
-                    _vok = False
-                    if _use_newton and not frozen_nu and _sat2:
-                        (_vok, _A2v, _viA, _viB, _res, _nit,
-                         _vrc) = _v_newton(
-                            Pro, _free2, _A_start, (Ist['A'], Ist['B']),
-                            _Vt, _dt_k, _iv_prev, _psi_prev,
-                            max(int(nonlinear_iterations), 20))
-                    if _vok:
-                        A2 = _A2v; _newton_ok = True
-                        # element-mean ν for the loss post-processing
-                        nu_all2 = _nu_of(_elemB(A2), nu_all2)
-                    else:
-                        if _use_newton and not frozen_nu and _sat2:
-                            log.info("P2 vdrive Newton not converged at frame %d "
-                                     "(%d its, rrel=%.1e) — Picard fallback",
-                                     k, _nit, _res)
-                        if frozen_nu:
-                            _n_pic2 = (max(nonlinear_iterations, 40) if k == 0
-                                       else 1)
-                            _nu_in = nu_all2
-                        else:
-                            _n_pic2 = max(nonlinear_iterations,
-                                          70 if k == 0 else 45)
-                            _nu_in = _nu_start
-                        (A2, _viA, _viB, nu_all2, _res,
-                         _nit) = _v_picard(
-                            Pro, _free2, _nu_in, _Vt, _dt_k, _iv_prev,
-                            _psi_prev, _n_pic2, bool(frozen_nu and k > 0))
-                    Ist = {'A': _viA, 'B': _viB, 'C': -_viA - _viB}
-                    f = (f_mag2 + Ist['A'] * f_coil2['A']
-                         + Ist['B'] * f_coil2['B'] + Ist['C'] * f_coil2['C'])
-                    _bff2 = np.asarray(Pro.T @ f).ravel()[_free2]
-                # ── NEWTON–RAPHSON (differential-reluctivity tangent) ─────────────
-                # Residual R(A)=K(ν(elem-mean|B|))·A−f is IDENTICAL to the Picard fixed
-                # point (element-mean ν per iron element), so Newton converges to the
-                # SAME physics — just far fewer sweeps.  Jacobian J=K+T with the
-                # per-element tangent T=2(dν/dB²)(∇A·∇u)(∇A·∇v).  Line-search on |R|
-                # globalises the BH knee; if it collapses, this frame falls back to
-                # damped Picard (never returns garbage).
-                if ((not _vdrive) and (not eddy) and _use_newton
-                        and not frozen_nu and _sat2):
-                    # POINTWISE ν(|B|²) at quadrature points (_Kpw, hoisted above
-                    # the frame loop) — the residual and the tangent then use the
-                    # SAME nonlinearity, giving a TRUE (quadratic) Newton step.
-                    # (An element-mean ν residual with a pointwise tangent is
-                    # inconsistent → no acceleration.)  For P2, B is linear per
-                    # element, so pointwise ν is also the more accurate model; it
-                    # is validated to match the element-mean Picard fixed point below.
-                    def _rfree_pw(Avec, K):
-                        return np.asarray(Pro.T @ (K @ Avec - f)).ravel()[_free2]
-
-                    A2 = _A_start.copy(); _fail = False; _rrel = 1.0
-                    _bnrm = max(float(np.linalg.norm(_bff2)), 1e-30)
-                    for it in range(max(int(nonlinear_iterations), 20)):
-                        _nit = it + 1
-                        K, _info = _Kpw(A2)
-                        r_free = _rfree_pw(A2, K)
-                        _rrel = float(np.linalg.norm(r_free)) / _bnrm
-                        if _rrel < 1e-7:
-                            break
-                        # tangent T = 2(dν/dB²)(∇A·∇u)(∇A·∇v), pointwise & consistent
-                        T = _tangent2(_info)
-                        J = (K + T).tocsr() if T is not None else K
-                        Jff = (Pro.T @ J @ Pro).tocsr()[_free2][:, _free2].tocsc()
-                        try:
-                            _du = _solve_ff(Jff, -r_free)
-                        except Exception as _je:
-                            log.info("P2 Newton solve failed (%s) — Picard fallback", _je)
-                            _fail = True; break
-                        _duf = np.zeros(Pro.shape[1]); _duf[_free2] = _du
-                        dA = Pro @ _duf
-                        # backtracking line-search on the residual norm (BH-knee safety)
-                        _r0 = float(np.linalg.norm(r_free)); _lam = 1.0; _acc = False
-                        for _ls in range(6):
-                            A_try = A2 + _lam * dA
-                            _Kt, _ = _Kpw(A_try)
-                            if float(np.linalg.norm(_rfree_pw(A_try, _Kt))) < _r0:
-                                A2 = A_try; _acc = True; break
-                            _lam *= 0.5
-                        if not _acc:
-                            _fail = True; break
-                    # accept only if the field residual actually reached tol
-                    if (not _fail) and (_rrel < 1e-7):
-                        _newton_ok = True; _res = _rrel
-                        # element-mean ν for the loss post-processing (loss code uses
-                        # per-element ν); negligible vs the pointwise field solve.
-                        nu_all2 = _nu_of(_elemB(A2), nu_all2)
-                    else:
-                        log.info("P2 Newton not converged at frame %d (%d its, rrel=%.1e)"
-                                 " — Picard fallback", k, _nit, _rrel)
-                # ── DAMPED PICARD (SB_NO_NEWTON, frozen_nu, or Newton fell back) ──
-                if (not _vdrive) and (not eddy) and not _newton_ok:
-                    if not frozen_nu:
-                        nu_all2 = _nu_start.copy()     # warm-start (base at k=0)
-                    if frozen_nu:
-                        _n_pic2 = max(nonlinear_iterations, 40) if k == 0 else 1
-                    else:
-                        _n_pic2 = max(nonlinear_iterations, 70 if k == 0 else 45)
-                    A2 = np.zeros(N2)
-                    _res = 0.0; _nit = 0
-                    _pic_ok = 0; _pic_r_prev = None; _pic_om = 0.5   # Irons–Tuck state
-                    for it in range(_n_pic2):
-                        _nit = it + 1
-                        K = _asmK(nu_all2)
-                        Kff = (Pro.T @ K @ Pro).tocsr()[_free2][:, _free2].tocsc()
-                        _xf2 = _solve_ff(Kff, _bff2)
-                        _xred2 = np.zeros(Pro.shape[1]); _xred2[_free2] = _xf2
-                        A2 = Pro @ _xred2
-                        if (frozen_nu and k > 0) or not _sat2:
-                            break                      # frozen frame: 1 linear solve
-                        Bmag_el = _elemB(A2)
-                        _vo = np.concatenate([nu_all2[_ids] for _ids, _ in _sat2])
-                        _vn = np.concatenate([
-                            1.0 / (MU0 * np.maximum(_mu_r_from_bh_vec(_c, Bmag_el[_ids]), 1.0))
-                            for _ids, _c in _sat2])
-                        _rr = _vn - _vo
-                        _res = float(np.linalg.norm(_rr) / max(np.linalg.norm(_vo), 1e-30))
-                        if _pic_r_prev is not None:
-                            _dr = _rr - _pic_r_prev; _den = float(_dr @ _dr)
-                            if _den > 0.0:
-                                _pic_om = float(np.clip(
-                                    -_pic_om * float(_pic_r_prev @ _dr) / _den, 0.05, 1.0))
-                        _pic_r_prev = _rr
-                        _vu = _vo + _pic_om * _rr
-                        _p0 = 0
-                        for _ids, _c in _sat2:
-                            nu_all2[_ids] = _vu[_p0:_p0 + _ids.size]; _p0 += _ids.size
-                        if _res < _PIC_TOL2:
-                            _pic_ok += 1
-                            if _pic_ok >= 2:
-                                break
-                        else:
-                            _pic_ok = 0
-                # ── Irreversible demagnetisation ─────────────────────────────────
-                # HERE, after the frame's nonlinear solve has converged by EITHER
-                # path — the pointwise Newton (primary) or the damped Picard
-                # (fallback).  Putting it inside the Picard was wrong: Newton
-                # converges on this machine, so the fallback never runs and the hook
-                # never fired.  It must also never see an intermediate iterate: the
-                # early sweeps start from unsaturated iron and pass through fields
-                # that are numerical transients, and a monotone irreversible rule
-                # burns those in permanently.
-                #
-                # If the magnet moved, its own field must be re-solved with the
-                # weaker source, so the frame is redone.  The de-rating is monotone
-                # and self-arresting (a weaker magnet makes a weaker demagnetising
-                # field), so this converges in a handful of passes; the cap is a
-                # backstop, not a schedule.
-                #
-                # ── DO NOT move this rule inside the Newton loop ─────────────────
-                # Tried on branch `demag-in-newton` (3aaf8d1, 2acdeb5), reverted in
-                # ece72ea, and then measured to a conclusion.  30 mm 12s14p, 60 A,
-                # F45SH_120C, P2, 24 frames — the pinned p2_demag case:
-                #
-                #   judged at        restart   de-rated  Br_mean   T_avg     s
-                #   rrel<1e-7 (here) cold        241/490  0.85383  0.40562  798
-                #   rrel<1e-7        warm A2     241/490  0.85383  0.40562  288
-                #   rrel<1e-6 in-loop warm       219/490  0.87037  0.41756  190
-                #   rrel<1e-6, cap 60 warm       219/490  0.86958  0.41756  244
-                #
-                # It is NOT path dependence and NOT the cold restart.  Warm-starting
-                # the re-solve from the field just converged (see below) reproduces
-                # this code to 5e-8 on the whole Br map, with the SAME 277 rule
-                # evaluations — so where the re-solve starts provably cannot reach
-                # the answer.  Nor is either number a cap artefact on the magnet
-                # side: the in-loop scheme gives the same 219 at a settling cap of
-                # 24 and of 60.
-                #
-                # What moves the answer is WHEN the rule is allowed to look.  A
-                # GLOBAL relative residual of 1e-6 is not a converged field INSIDE a
-                # magnet corner — the corner is the last place Newton resolves.
-                # Measured at the FIRST look of each frame, which is the look that
-                # decides everything, because the magnet is still at its strongest
-                # there and that is where the frame's worst demagnetising field is:
-                #
-                #   frame   worst H, rrel<1e-7   worst H, rrel 3e-7..1e-6
-                #     1        -1072 kA/m            -993 kA/m
-                #     6         -934                 -669
-                #     8         -853                 -650
-                #    11         -858                 -728
-                #
-                # Same rotor position, same incoming magnet (Br_mean agrees to
-                # 0.2 %), 8-30 % less demagnetising field — always in that
-                # direction, because a warm-started Newton builds the armature
-                # reaction UP toward the answer and an early iterate has not got
-                # there yet.  The rule is monotone: a worst-case field missed at the
-                # first look is missed for good, since every later pass of that
-                # frame sees an already-weakened magnet and therefore a milder
-                # field.  That is the whole of the "in-Newton reports less
-                # demagnetisation and more torque", and why it grows with load
-                # (3 elements at 32 A, 24 at 60 A).
-                #
-                # So the rule may only see a field that has passed the frame's OWN
-                # convergence test.  The 3.3x that change bought is available
-                # without it, from the warm start below.
-                if _dmst is not None:
-                    _bxq_d, _byq_d, _dxq_d = _p2_B_at_quad(b2, A2)
-                    _ar_d = _dxq_d.sum(axis=1)
-                    _bxe_d = (_bxq_d * _dxq_d).sum(axis=1) / np.maximum(_ar_d, 1e-30)
-                    _bye_d = (_byq_d * _dxq_d).sum(axis=1) / np.maximum(_ar_d, 1e-30)
-                    if _dmst.update(_bxe_d[nst:], _bye_d[nst:]) and _dm_pass < 11:
-                        _mx_all[nst:] = _Mx_glob * _br_glob
-                        _my_all[nst:] = _My_glob * _br_glob
-                        f_mag2 = asm(_msrc, b2, mx=b2_0.interpolate(_mx_all),
-                                     my=b2_0.interpolate(_my_all))
-                        f = f_mag2 if eddy else (
-                            f_mag2 + Ist['A'] * f_coil2['A']
-                            + Ist['B'] * f_coil2['B'] + Ist['C'] * f_coil2['C'])
-                        _bff2 = np.asarray(Pro.T @ f).ravel()[_free2]
-                        _dm_pass += 1
-                        # Re-solve from the field we just converged, not from the
-                        # previous FRAME's.  The magnet moved by a fraction of a
-                        # per cent, so this start is far closer than _A_start and
-                        # Newton needs 3-5 iterations instead of 12-19.  The rule
-                        # still only ever judges a field that passed the frame's
-                        # convergence test, so the judging sequence is untouched —
-                        # measured identical to the cold restart (max |dBr| 5e-8
-                        # over 490 elements, same 241/490, T_avg to 8 digits) at
-                        # 288 s against 798 s.
-                        _A_start = A2.copy()
-                        continue                     # re-solve THIS frame
-                break
-
-            _A2_prev = A2.copy(); _nu_conv2 = nu_all2.copy()
-            if eddy:
-                # ── Joule loss straight from the coupled solution ─────────────
-                #   P = ∫σ E² = ∫σ(−∂A/∂t + U_b)²
-                #     = Ȧᵀ·M̃_b·Ȧ − 2·U_b·(g_b·Ȧ) + U_b²·S_b     per body,
-                # evaluated EXACTLY on the FEM field (M̃ = σ-weighted mass, g and S
-                # the same vectors the constraint rows use).  U_b ≡ 0 bodies keep
-                # only the first term — which is what U = 0 means.  Done per body
-                # rather than by smearing U onto nodes, so a node shared by two
-                # conductors cannot pick up the wrong voltage.
-                # Δt of the step that was actually SOLVED: the rotor-time Δt_k
-                # under voltage drive (see _ve_newton), the nominal dt otherwise.
-                # Dividing by a different Δt than the solve used would put the
-                # slip-node sawtooth straight into E = −∂A/∂t + U.
-                _dt_e = _dt_k if _vdrive else dt
-                _dAe = (A2 - _Aed_prev) * (1.0 / _dt_e)       # ∂A/∂t [V/m]
-                _pg = {_kk: float(_dAe @ (_Mg @ _dAe))
-                       for _kk, _Mg in _Msig_grp.items()}
-                for _ci, _c in enumerate(_ed_con):
-                    _u = float(_Ued[_ci])
-                    _pg[_c["key"]] += _u * (_u * _c["S"]
-                                            - 2.0 * float(_c["g"] @ _dAe))
-                _wsc = float(NS) * float(p.stack_length)   # sector·2-D → machine
-                _Aed_prev = A2.copy()
-                if k >= 0:
-                    _ed_cu.append(_pg.get("cu", 0.0) * _wsc)
-                    _ed_mag.append(_pg.get("mag", 0.0) * _wsc)
-                    _ed_sh.append(_pg.get("shaft", 0.0) * _wsc)
-                    # DC reference of the SAME bars: with ∂A/∂t = 0 the constraint
-                    # gives U_b = I_b/S_b and P = ΣI_b²/S_b — the 2-D (active
-                    # length only) I²R, so total − this is the honest AC increment
-                    # to add to the end-winding-corrected DC below.
-                    _ed_dc2d.append(float(np.sum(
-                        [(Ist[c["phase"]] * c["Iunit"]) ** 2 / max(c["S"], 1e-30)
-                         for c in _ed_con if c["key"] == "cu"])) * _wsc)
-            if k < 0:
-                continue          # eddy settling frame: solved, not reported
-            _pic_iters.append(_nit); _pic_res_max = max(_pic_res_max, _res)
-            Tq = _arkkio_torque_p2(mesh_all, A2, b2, p.r_rotor_out,
-                                   p.r_stator_in, p.stack_length) * NS
-            _T2.append(Tq)
-            _pa, _pb, _pc = _psi2(A2)
-            _psiA.append(_pa); _psiB.append(_pb); _psiC.append(_pc)
-            _IA.append(Ist['A']); _IB.append(Ist['B']); _IC.append(Ist['C'])
-            _tt.append(k * dt)
-            if _vdrive:
-                # ── circuit bookkeeping on the CONVERGED field ───────────────
-                # Residual of the line-to-line equations evaluated with the
-                # ACTUAL ψ(A) of the converged frame (health check: ~0 when the
-                # coupled solve converged).  The phase-A equation alone is
-                # legitimately non-zero — that is the zero-sequence EMF the
-                # floating neutral absorbs.
-                _rc_c = _circ_r((_pa, _pb, _pc), Ist['A'], Ist['B'],
-                                _iv_prev, _psi_prev, _Vt, _dt_k)
-                _v_diag["iters"].append(int(_nit))
-                _v_diag["resid"].append(float(np.max(np.abs(_rc_c))))
-                _psi_prev = {'A': _pa, 'B': _pb, 'C': _pc}
-                _iv_state = dict(Ist)
-                # ITERATED Aitken DC-mode removal: the period-boundary flux
-                # converges geometrically toward the steady orbit; sample it at
-                # each period end and Δ²-extrapolate the limit whenever 3 fresh
-                # samples exist since the last anchor (anchors at periods 3, 6,
-                # 9 inside the settling window — each cuts the residual DC ~3×).
-                # Samples must share the cycle phase (period spacing) so the
-                # periodic flux content cancels exactly in the differences.
-                if _v_nspp > 0 and ((k + 1) % _v_nspp == 0) and (k + 1) < _vskip:
-                    _v_bpsi.append((_pa, _pb))
-                    if len(_v_bpsi) >= 3:
-                        # Δ²-extrapolation + its "already converged / unstable"
-                        # guard: simulation/drive.py, shared with the P1 path.
-                        _new, _corr, _drift = _aitken_flux_anchor(_v_bpsi)
-                        if _new is None:
-                            log.info("P2 vdrive Aitken anchor SKIPPED at period %d "
-                                     "(drift %.3g, corr %.3g Wb — converged/unstable)",
-                                     (k + 1) // _v_nspp, _drift, _corr)
-                            _v_bpsi.clear()
-                        else:
-                            _psi_prev = _new
-                            _v_bpsi.clear()   # fresh samples only after re-anchor
-                            log.info("P2 vdrive Aitken anchor at period %d: psiA "
-                                     "%.4g -> %.4g (|corr| %.3g Wb)",
-                                     (k + 1) // _v_nspp, _pa, _new['A'], _corr)
-            # Element-mean B in the iron and the coils, captured on EVERY frame —
-            # the same thing the P1 path does unconditionally.  This used to sit
-            # inside `if rotor_eddy:`, which meant P2 reported ZERO core loss and
-            # zero AC copper loss whenever that flag was off, and overstated the
-            # efficiency by exactly those terms.  `rotor_eddy` means "magnet and
-            # shaft eddy losses" — it has no business gating the iron.  Harmless
-            # while P1 was the default; a silent error the moment P2 became it.
-            _bx_q, _by_q, _dxq = _p2_B_at_quad(b2, A2)
-            _ar_el = _dxq.sum(axis=1)
-            _bx_el = (_bx_q * _dxq).sum(axis=1) / np.maximum(_ar_el, 1e-30)
-            _by_el = (_by_q * _dxq).sum(axis=1) / np.maximum(_ar_el, 1e-30)
-            _hsx2.append(_bx_el[_iron_s_idx]); _hsy2.append(_by_el[_iron_s_idx])
-            _hrx2.append(_bx_el[_iron_r_idx + nst])
-            _hry2.append(_by_el[_iron_r_idx + nst])
-            if _coil_idx.size:                     # coil B for AC copper loss
-                _hcx2.append(_bx_el[_coil_idx]); _hcy2.append(_by_el[_coil_idx])
-            if _mag_idx.size:                      # magnet B for the loss-density map
-                _hmx2.append(_bx_el[_mag_idx + nst])
-                _hmy2.append(_by_el[_mag_idx + nst])
-            if rotor_eddy:
-                # rotor-frame nodal A (magnet/shaft eddy via honest_rotor_eddy)
-                _histA_rot2.append(A2[_rot_vdof].copy())
-            if return_field and ((field_first and k == 0)
-                                 or (not field_first and k == n_total - 1)):
-                # Same payload shape as the P1 snapshot (per-element B + domain
-                # tags beside A), so a viewer needs no second case.  _bx_el /
-                # _by_el above are already the element means over mesh_all.
-                _snap2 = {"P_mm": (mesh_all.p * 1e3).copy(),
-                          "T": mesh_all.t.copy(),
-                          "A": A2[vdof].copy(),
-                          "Bx": _bx_el.copy(), "By": _by_el.copy(),
-                          "tags": np.concatenate(
-                              [np.asarray(ts), np.asarray(tr)]).astype(int),
-                          "nsn": int(nsn)}
-                if eddy:
-                    # J-VIEW: the eddy current density J = σ(−∂A/∂t + U_b) the
-                    # coupled solve produces, sampled at the mesh VERTICES (the
-                    # P1 snapshot is nodal too, so the viewer needs no new case).
-                    def _bdofs(ids):
-                        return np.concatenate([
-                            vdof[np.unique(mesh_all.t[:, ids])],
-                            fdof[np.unique(mesh_all.t2f[:, ids])]]).astype(int)
-                    _sig_n = np.zeros(N2); _u_n = np.zeros(N2)
-                    _elm = {}
-                    for _ky, _tg, _ids, _sg in _bodies:
-                        _elm[_tg] = _ids
-                        _sig_n[_bdofs(_ids)] = _sg
-                    for _ci, _c in enumerate(_ed_con):
-                        _u_n[_bdofs(_elm[_c["tag"]])] = float(_Ued[_ci])
-                    _snap2["Jeddy"] = (_sig_n * (-_dAe + _u_n))[vdof].copy()
-                else:
-                    # Magnetostatic view: the APPLIED per-element source current
-                    # density, so the "J" view shows the winding currents at this
-                    # rotor position.  Same key and same construction as the P1
-                    # snapshot — a viewer must not need a per-order case, and the
-                    # J view rendered EMPTY on P2 for exactly as long as this key
-                    # was missing here.
-                    _Js2 = np.zeros(int(mesh_all.t.shape[1]))
-                    for _ix, _ar, _dir, _ph in coil_info:
-                        _Js2[_ix] = (_dir * Ist[_ph] * n_wires
-                                     / max(slot_area_m2, 1e-12))
-                    _snap2["Jtri_src"] = _Js2
-        # ── Voltage drive: drop the SETTLING periods ─────────────────────────
-        # The currents are STATE, so the run carries an electrical start-up
-        # transient; _vskip frames were prepended for it (n_total/n_periods were
-        # bumped by the same amount before this branch, so dt is unchanged).
-        # This is a SEPARATE, longer skip from the demag one below — they are
-        # applied in sequence, never double-counted: each strips its OWN prefix
-        # and decrements n_total/n_periods by its own amount.
-        # v_drive_diag is per-FRAME like every other series here, so it must be
-        # trimmed with them — otherwise its indices are offset by _vskip against
-        # I/psi/T and the reported max residual is the SETTLING residual, not
-        # the steady-state one.
-        _v2_lists = (_T2, _psiA, _psiB, _psiC, _IA, _IB, _IC, _tt,
-                     _hsx2, _hsy2, _hrx2, _hry2, _hcx2, _hcy2, _hmx2, _hmy2,
-                     _histA_rot2, _pic_iters,
-                     _ed_cu, _ed_mag, _ed_sh, _ed_dc2d,
-                     _v_diag["iters"], _v_diag["resid"])
-        if _vdrive and _vskip:
-            n_total -= _vskip
-            n_periods = float(n_periods) - float(_v_settle_periods)
-            _drop_settling_frames(_v2_lists, _vskip, _tt)
-        # ── Demag: drop the SETTLING period ──────────────────────────────────
-        # The P1 path has done this since the settling pass was added; the P2
-        # branch returns before that code and never got it.  The magnet weakens
-        # THROUGH the run, so reporting both periods measures a machine whose
-        # magnets are still dying: Fe16N2 came out at 69.5 % ripple against P1's
-        # 9.3 % on identical physics, which is the decay, not an oscillation.
-        # The magnet KEEPS its de-rated state (_br_glob is cumulative) — only the
-        # frames are discarded, so the reported window is one clean period.
-        if _dmskip and demag and _dmst is not None:
-            n_total -= _dmskip
-            n_periods = float(n_periods) - 1.0
-            _drop_settling_frames(_v2_lists, _dmskip, _tt)
-
-        # ── Voltage drive: copper loss from the SOLVED current ───────────────
-        # `copper_loss_W` ran near the top of this function on the CONFIG
-        # I_phase_rms — but under voltage drive the current is the ANSWER, not
-        # the input, and nothing recomputed it.  P_cu (and through it
-        # P_loss_total_W and the efficiency) was wrong by (I_solved/I_config)².
-        # Recompute on the SETTLED reported window through the same
-        # ρ(T)·J²·V_cu·k_end model.  Same fix, same guard, as the P1 path below:
-        # CURRENT drive is untouched, so those results stay bit-identical.  Only
-        # the DC I²R part is config-dependent; the AC (proximity) part is taken
-        # from the SOLVED coil field and was already right.
-        if _vdrive and _IA:
-            _P_cu_old = float(P_cu)
-            P_cu, _k_end_used, _R_solved, _I_ph_solved = _vdrive_copper_loss(
-                p, geo, _IA, _IB, _IC, n_parallel, coil_temp_c,
-                end_winding_factor)
-            log.info("P2 vdrive copper: I_phase_solved=%.2f A rms (config %.2f) "
-                     "-> P_cuDC %.1f -> %.1f W (R_phase=%.6g ohm)",
-                     _I_ph_solved, float(I_phase_rms), _P_cu_old, float(P_cu),
-                     _R_solved)
-
-        # ── LOSS post-processing (rotor_eddy) ─────────────────────────────────
-        # Same architecture as the P1 app path: the field is magnetostatic per
-        # frame; the eddy-current LOSSES come from post-processing the A(t)/B(t)
-        # histories — magnet + shaft via the honest (reaction-included) frequency-
-        # domain rotor solve `honest_rotor_eddy`, iron via Bertotti on dB/dt.
-        # (P1's default transient uses eddy=False too — the coupled σ∂A/∂t J-view
-        # solve is NOT the app loss path.)  Current drive → copper = I²R (DC).
-        # Iron (Bertotti) and AC copper are always in; rotor_eddy only adds the
-        # coupled magnet/shaft term, which upgrades this label below.
-        _lm2 = "field (P2 magnetostatic + Bertotti iron + AC copper)"
-        P_cu_dc2 = float(P_cu)                              # from copper_loss_W (I²R)
-        P_cu_ac_ser2 = [0.0] * n_total; P_cu_ac_avg2 = 0.0
-        P_cu_ser2 = [P_cu_dc2] * n_total
-        P_fe_ser2 = [0.0] * n_total; P_fe_avg2 = 0.0
-        P_mag_ser2 = [0.0] * n_total; P_mag_avg2 = 0.0
-        P_shaft_ser2 = [0.0] * n_total; P_shaft_avg2 = 0.0
-        # Losses from the captured B(t).  Copper AC and iron are computed
-        # UNCONDITIONALLY, matching the P1 path — they do not depend on the
-        # rotor-eddy model.  The magnet/shaft eddy below is the part rotor_eddy
-        # actually selects, and it is already gated by `if _histA_rot2:`, which
-        # is only populated when the flag is on.
-
-        # ── AC copper (proximity/skin) — MUST match P1: DC I²R is already
-        #    element-order-independent (same copper_loss_W); the AC part is the
-        #    coil proximity loss σ/12·Σ(d_r²·dBr² + d_t²·dBt²), field split into
-        #    radial/tangential (same _prox_eddy_split model P1 uses).  Periodic
-        #    central-difference dB/dt (P2 field is smooth).
-        _sig_cu2, _w_cu2, _h_cu2 = _copper_ac_dims(
-            geo, coil_temp_c, f_elec, RHO_CU_20, ALPHA_CU, MU0)
-        if _coil_idx.size and _hcx2:
-            _smp = half["s"]["mesh"]
-            _cc = (_smp.p[:, _smp.t].mean(axis=1))[:, _coil_idx]
-            P_cu_ac_ser2, P_cu_ac_avg2 = _proximity_loss_series(
-                _hcx2, _hcy2, _coil_idx, _cc, areas_s, _sig_cu2,
-                _w_cu2, _h_cu2, p.stack_length, n_total,
-                _central_difference(dt), scale=NS)
-        P_cu_ser2 = [P_cu_dc2 + ac for ac in P_cu_ac_ser2]
-
-        # Iron loss: ONE implementation (simulation/losses.py) for both element
-        # orders.  The only genuine difference is the dB/dt estimator — the P2
-        # field is smooth in time, so a plain central difference is enough.
-        def _iron_p2(hx, hy, idx, areas_half, mat):
-            return _iron_loss_series(
-                hx, hy, idx, areas_half, mat, p.stack_length, f_elec, n_total,
-                _central_difference(dt), _mat_lib.effective_bertotti)
-
-        _pcl_s, _ph_s = _iron_p2(_hsx2, _hsy2, _iron_s_idx, areas_s, _steel_s)
-        _pcl_r, _ph_r = _iron_p2(_hrx2, _hry2, _iron_r_idx, areas_r, _steel_r)
-        _P_fe_t = (_pcl_s + _pcl_r) * NS + (_ph_s + _ph_r) * NS
-        _P_fe_t = np.maximum(_P_fe_t, 0.0)
-        P_fe_ser2 = _P_fe_t.tolist(); P_fe_avg2 = float(np.mean(_P_fe_t))
-        # magnet + shaft eddy: honest (reaction-included) rotor solve on the
-        # rotor-frame A(t) history — the SAME function the P1 path uses.
-        if _histA_rot2:
-            try:
-                from motor_ai_sim.simulation.eddy_solver_2d import (
-                    honest_rotor_eddy as _hre2)
-                _rm = half["r"]["mesh"]
-                # Tags + magnet list + mu lookup: shared with P1 (losses.py).
-                _tags_r2, _magt2 = _rotor_eddy_tags(
-                    half["r"]["cells"], _rm.t.shape[1], DOM_MAG_BASE)
-                # rotor back-iron μ_r from the CONVERGED P2 ν (last frame)
-                _rir = half["r"]["cells"].get(int(DOM_ROTOR))
-                _mur_bi = (1.0 / (MU0 * float(np.mean(
-                    nu_all2[np.asarray(_rir, int) + nst])))
-                    if _rir is not None and np.size(_rir) else 1000.0)
-                _muf2 = _rotor_mu_lookup(_mur_bi, DOM_MAG_BASE, DOM_ROTOR)
-                P_mag_avg2, P_shaft_avg2, _hf2 = _hre2(
-                    np.asarray(_rm.p, float), np.asarray(_rm.t, int), _tags_r2,
-                    _muf2, _sigma_of_tag, _magt2, DOM_SHAFT,
-                    np.asarray(_histA_rot2, float), float(n_total) * dt,
-                    float(p.stack_length), float(NS))
-                P_mag_ser2 = [float(P_mag_avg2)] * n_total
-                P_shaft_ser2 = [float(P_shaft_avg2)] * n_total
-                _lm2 = "field+honest (P2 magnetostatic + coupled rotor eddy)"
-                log.info("P2 rotor eddy: mag=%.3f shaft=%.3f W (%d harmonics); "
-                         "iron=%.3f W, copper(dc)=%.1f W", P_mag_avg2,
-                         P_shaft_avg2, len(_hf2), P_fe_avg2, P_cu_dc2)
-            except Exception as _e2:
-                log.warning("P2 honest rotor eddy failed: %s", _e2)
-
-        # ── COUPLED EDDY: the solved σ∫E² REPLACES the modelled numbers ───────
-        # Everything above is a MODEL of a loss the magnetostatic field cannot
-        # produce: the copper AC term is the proximity/skin formula, magnet and
-        # shaft come from the frequency-domain rotor solve driven by a history.
-        # When the coupled solve ran, the loss is not modelled any more — it is
-        # ∫σE² of the field that was actually solved with σ·∂A/∂t in it, so that
-        # is what gets reported.  The modelled numbers stay computed and are
-        # returned + logged beside it: two independent routes to the same watts
-        # is the only cross-check this code has.
-        #
-        # COPPER SPLIT.  The 2-D solve knows nothing about end windings, so its
-        # total is the ACTIVE-LENGTH loss.  Subtracting the active-length DC
-        # (ΣI²/S, the same bars at ∂A/∂t = 0) leaves the pure AC increment,
-        # which is then added to the end-winding-corrected DC — instead of
-        # subtracting the k_end-inflated DC from a 2-D total, which is how the
-        # P1 path reports a NEGATIVE copper AC at low current.
-        P_cu_ac_prox_avg2 = float(P_cu_ac_avg2)
-        P_mag_prox_avg2 = float(P_mag_avg2); P_shaft_prox_avg2 = float(P_shaft_avg2)
-        P_cu_solve_avg2 = P_cu_dc2d_avg2 = 0.0
-        if eddy and _ed_cu:
-            P_cu_solve_avg2 = float(np.mean(_ed_cu))
-            P_cu_dc2d_avg2 = float(np.mean(_ed_dc2d))
-            P_cu_ac_ser2 = [t - d for t, d in zip(_ed_cu, _ed_dc2d)]
-            P_cu_ac_avg2 = float(np.mean(P_cu_ac_ser2))
-            P_cu_ser2 = [P_cu_dc2 + ac for ac in P_cu_ac_ser2]
-            _lm2 = ("field+coupled eddy (P2 sigma*dA/dt solve: copper"
-                    + (" + magnet/shaft)" if rotor_eddy else ")"))
-            log.info("EDDY-SOLVE(P2) copper total=%.2f W (2-D DC=%.2f + AC=%.2f) "
-                     "vs slab DC+AC=%.2f W (prox AC=%.2f); reported DC(+end "
-                     "winding)=%.2f W", P_cu_solve_avg2, P_cu_dc2d_avg2,
-                     P_cu_ac_avg2, P_cu_dc2 + P_cu_ac_prox_avg2,
-                     P_cu_ac_prox_avg2, P_cu_dc2)
-            if rotor_eddy:
-                P_mag_ser2 = list(_ed_mag); P_mag_avg2 = float(np.mean(_ed_mag))
-                P_shaft_ser2 = list(_ed_sh); P_shaft_avg2 = float(np.mean(_ed_sh))
-                log.info("EDDY-SOLVE(P2) magnet=%.3f shaft=%.3f W vs honest "
-                         "frequency-domain magnet=%.3f shaft=%.3f W",
-                         P_mag_avg2, P_shaft_avg2, P_mag_prox_avg2,
-                         P_shaft_prox_avg2)
-        P_tot_ser2 = [c + f + m + s for c, f, m, s in
-                      zip(P_cu_ser2, P_fe_ser2, P_mag_ser2, P_shaft_ser2)]
-        P_loss_avg2 = float(np.mean(P_tot_ser2)) if P_tot_ser2 else 0.0
-
-        # ── Per-element loss DENSITY (W/m³) for the Loss map ──────────────────
-        # simulation/losses.py, the SAME map the field views render.  It lives
-        # in the snapshot (not the top-level result) because it is per-ELEMENT
-        # data whose ordering is the snapshot's [stator-half | rotor-half].
-        # The derivative operator is the only element-order difference: the P2
-        # field is smooth in time, so the plain central difference the P2 loss
-        # totals already use is enough (P1 needed the slip-jitter smoother).
-        # The map self-normalises each component to the reported watts above, so
-        # a 1-frame view (no B history) yields zeros rather than a wrong picture.
-        if _snap2 is not None:
-            try:
-                _cd2 = _central_difference(dt)
-                _cc2 = ((half["s"]["mesh"].p[:, half["s"]["mesh"].t].mean(axis=1))
-                        [:, _coil_idx] if _coil_idx.size else np.zeros((2, 0)))
-                _snap2["loss_dens"] = _loss_density_map(
-                    n_stator_elems=int(Tts.shape[1]),
-                    n_elems=int(mesh_all.t.shape[1]),
-                    hist_sx=_hsx2, hist_sy=_hsy2, hist_rx=_hrx2, hist_ry=_hry2,
-                    hist_mx=_hmx2, hist_my=_hmy2, hist_cx=_hcx2, hist_cy=_hcy2,
-                    iron_s_idx=_iron_s_idx, iron_r_idx=_iron_r_idx,
-                    mag_idx=_mag_idx, coil_idx=_coil_idx,
-                    areas_s=areas_s, areas_r=areas_r, coil_centroids=_cc2,
-                    steel_s=_steel_s, steel_r=_steel_r,
-                    bertotti=_mat_lib.effective_bertotti,
-                    f_elec_hz=f_elec, stack_length_m=p.stack_length,
-                    sector_scale=NS,
-                    P_fe_avg=P_fe_avg2, P_mag_avg=P_mag_avg2,
-                    P_cu_dc=P_cu_dc2, P_cu_ac_avg=P_cu_ac_avg2,
-                    sigma_cu=_sig_cu2, d_cu_r=_w_cu2, d_cu_t=_h_cu2,
-                    ddt=lambda X, qp=None: _cd2(X)).tolist()
-            except Exception as _lde:
-                log.warning("P2 loss-density map failed: %s", _lde)
-
-        # ── metrics ──────────────────────────────────────────────────────────
-        # Raw Maxwell-stress (Arkkio) torque — kept as a DIAGNOSTIC only.  On the
-        # node-repaired sliding band the gap field is contaminated UNDER LOAD, so
-        # the volume-weighted Maxwell integral is radius-INCONSISTENT (measured
-        # 0.78..1.30 Nm across integration bands for one converged frame) and
-        # over-reads the mean torque ~35 % vs the energy method / ANSYS.
-        _T2raw = list(_T2)                       # preserve the Maxwell series (diag)
-        T_arr = np.asarray(_T2, float)
-        T_maxwell_avg = float(T_arr.mean()) if T_arr.size else 0.0
-        # HYBRID torque (energy-consistent MEAN + Maxwell-stress RIPPLE):
-        # simulation/sb_postproc.py — ONE definition, shared with the P1 path.
-        _torque_method = "maxwell_stress"
-        try:
-            _T2, _torque_method = _hybrid_torque(
-                _psiA, _psiB, _psiC, _IA, _IB, _IC, _T2raw, pole_pairs)
-        except Exception as _te:
-            log.warning("P2 hybrid torque failed (%s) — using Maxwell series", _te)
-        T_arr = np.asarray(_T2, float)
-        Tavg = float(T_arr.mean()) if T_arr.size else 0.0
-        _Tf, Trip, Trip_raw, Tnoise = band_limit_torque(
-            _T2, int(n_steps_per_period), int(round(n_periods)))
-        _omega_m2 = 2.0 * math.pi * rpm / 60.0
-        P_airgap_avg2 = float(Tavg * _omega_m2)
-        P_mech_avg2 = P_airgap_avg2 - (P_fe_avg2 + P_mag_avg2 + P_shaft_avg2)
-        # Terminal voltage V = R·i + dψ/dt — the SAME two-term formula and the
-        # SAME spectral estimator the P1 path uses.  Two reporting-only bugs
-        # lived here, and together they made the two element orders disagree on
-        # V_peak by ~11-13 % for runs whose FIELDS agree to ~1.5 %:
-        #   • np.gradient is NOT periodic — it drops to a one-sided difference
-        #     at the first and last frame, and V_peak is a max over the series,
-        #     so those two edge frames set the reported peak.  The spectral
-        #     derivative (`_spectral_ddt_series`, shared with P1) is periodic by
-        #     construction and truncates the slip-node quantisation jitter.
-        #   • the R·i drop was in the comment but never in the code, so P2
-        #     reported the back-EMF where P1 reports the terminal voltage.
-        # ψ and I are per-branch on BOTH paths (identical sc_psi = L·NS/n_par),
-        # so the two are directly comparable.  Reporting only: the circuit solve
-        # closes on its own residual and never reads this series.
-        _Kv2 = max(1, min(5, (int(n_total) // 2) - 1))
-
-        def _ddt(arr):
-            a = np.asarray(arr, float)
-            return (_spectral_ddt_series(a, _Kv2, dt).tolist() if a.size > 1
-                    else [0.0] * a.size)
-        VA = [R_phase * i + e for i, e in zip(_IA, _ddt(_psiA))]
-        VB = [R_phase * i + e for i, e in zip(_IB, _ddt(_psiB))]
-        VC = [R_phase * i + e for i, e in zip(_IC, _ddt(_psiC))]
-        Vpk = float(np.max(np.abs(VA + VB + VC))) if _psiA else 0.0
-        # Terminal electrical input ⟨Σ v·i⟩ (EXACTLY 0 at no-load).  IA/IB/IC are
-        # PER-BRANCH conductor currents, so one branch per phase is what ⟨Σ v·i⟩
-        # measures and the machine total carries the n_parallel factor — the same
-        # correction the P1 path has.  The P2 return simply did not have this key,
-        # so every consumer that computes efficiency as (P_elec−P_loss)/P_elec —
-        # the field view's sidebar among them — read a missing 0.0 and reported
-        # 0 % efficiency for a machine doing real work.
-        P_elec_in2 = (float(np.mean(np.asarray(VA) * np.asarray(_IA)
-                                    + np.asarray(VB) * np.asarray(_IB)
-                                    + np.asarray(VC) * np.asarray(_IC)))
-                      * float(n_parallel) if _IA else 0.0)
-        _ang = [(k / n_total) * period_mech * n_periods for k in range(n_total)]
-        log.info("P2 belt transient done: %d frames, T_avg=%.5f Nm, "
-                 "ripple_raw=%.2f%%, picard_max_res=%.2e", n_total, Tavg,
-                 Trip_raw, _pic_res_max)
-        # Demag map + per-magnet report — the SAME payload the P1 path returns,
-        # built by the same code, so a P2 demag run can be compared against a P1
-        # one without also comparing two renderings.
-        _dcoef2 = _dfield2 = None
-        _drep2 = []
-        if demag and _dmst is not None:
-            _dcoef2, _dfield2, _rep2 = _dmst.payload(
-                int(Tts.shape[1]), mesh_all.p * 1e3, mesh_all.t,
-                np.concatenate([np.asarray(ts), np.asarray(tr)]),
-                dump_H=_os_sb.environ.get("SB_DEMAG_H_DUMP") == "1")
-            for _row in _rep2:
-                _row["magnet_index"] = int(_row["magnet_index"] - DOM_MAG_BASE)
-                _drep2.append(_row)
-            log.warning("P2 demag: %d/%d magnet elems de-rated, min Br_factor %.3f",
-                        int(np.sum(_br_glob < 0.999)), int(_mag_idx.size),
-                        float(_br_glob.min()))
-        return {
-            "method": "sliding_band_p2", "element_order": 2,
-            "loss_model": _lm2,
-            "demag_coef_per_tri": (_dcoef2.tolist() if _dcoef2 is not None else None),
-            "demag_report": _drep2,
-            "demag_field": _dfield2,
-            "n_steps": n_total, "n_steps_per_period": int(n_steps_per_period),
-            "n_periods": float(n_periods), "rpm": rpm, "f_elec_Hz": f_elec,
-            "dt_s": dt, "T_period_s": (1.0 / f_elec if f_elec > 1e-9 else 0.0),
-            "time_s": _tt, "rotor_angle_deg": _ang,
-            "T_em_Nm": _T2, "T_avg_Nm": Tavg, "T_ripple_pct": Trip_raw,
-            "T_ripple_raw_pct": Trip_raw, "T_ripple_filt_pct": Trip,
-            "T_noise_floor_pct": round(float(Tnoise), 2),
-            "T_em_raw_Nm": list(_T2), "T_em_filt_Nm": _Tf,
-            "torque_method": _torque_method,
-            "T_avg_maxwell_Nm": round(T_maxwell_avg, 4),
-            "T_em_maxwell_Nm": list(_T2raw),
-            "psi_A_Wb": _psiA, "psi_B_Wb": _psiB, "psi_C_Wb": _psiC,
-            "V_A": VA, "V_B": VB, "V_C": VC, "V_peak": Vpk,
-            "I_A": _IA, "I_B": _IB, "I_C": _IC,
-            "P_cu_W": P_cu_ser2, "P_fe_W": P_fe_ser2,
-            "P_mag_eddy_W": P_mag_ser2, "P_shaft_eddy_W": P_shaft_ser2,
-            "P_loss_total_W": P_tot_ser2,
-            "P_cu_dc_W": P_cu_dc2, "P_cu_ac_W": P_cu_ac_ser2,
-            # Coupled σ·∂A/∂t solve (eddy=True) — the REPORTED copper AC / magnet
-            # / shaft above come from these when it ran; the modelled numbers are
-            # kept beside them as the cross-check (see the swap block).
-            "eddy_coupled": bool(eddy),
-            "P_cu_total_solve_W": round(float(P_cu_solve_avg2), 3),
-            "P_cu_dc_2d_solve_W": round(float(P_cu_dc2d_avg2), 3),
-            "P_cu_ac_solve_W": round(float(P_cu_ac_avg2), 3) if eddy else 0.0,
-            "P_cu_ac_prox_W": round(float(P_cu_ac_prox_avg2), 3),
-            "P_mag_solve_W": (round(float(P_mag_avg2), 3)
-                              if (eddy and rotor_eddy) else 0.0),
-            "P_shaft_solve_W": (round(float(P_shaft_avg2), 3)
-                                if (eddy and rotor_eddy) else 0.0),
-            "P_mag_honest_W": round(float(P_mag_prox_avg2), 3),
-            "P_shaft_honest_W": round(float(P_shaft_prox_avg2), 3),
-            "P_fe_avg_W": round(float(P_fe_avg2), 3),
-            "P_loss_total_avg_W": round(float(P_loss_avg2), 3),
-            "P_airgap_W": P_airgap_avg2, "P_mech_avg_W": P_mech_avg2,
-            "P_elec_in_W": P_elec_in2,               # ⟨Σ v·i⟩ (0 at no-load)
-            "R_phase_ohm": R_phase, "n_slip_nodes": int(Nring),
-            "n_parallel": int(n_parallel),
-            "picard_iters_mean": (round(float(np.mean(_pic_iters)), 1)
-                                  if _pic_iters else 0.0),
-            "picard_iters_max": (int(max(_pic_iters)) if _pic_iters else 0),
-            "picard_resid_max": round(float(_pic_res_max), 6),
-            "picard_tol": float(_PIC_TOL2),
-            "picard_converged": bool(_pic_res_max < _PIC_TOL2),
-            "coil_temp_C": float(coil_temp_c),
-            "end_winding_factor": float(_k_end_used),
-            # Drive mode: "current" (imposed sinusoidal I) or "voltage" (imposed
-            # sinusoidal V — the currents above are the machine's own response).
-            "drive": ("voltage" if _vdrive else "current"),
-            "v_phase_peak_V": float(v_phase_peak) if _vdrive else None,
-            "v_delta_deg": float(v_delta_deg) if _vdrive else None,
-            # circuit-iteration convergence stats, one entry per frame of the
-            # REPORTED window (settling frames stripped with every other series,
-            # so the indices line up with I/psi/T) + the honest steady-state
-            # quality gauge: mean phase current over that window (≈0 A on a
-            # converged periodic orbit).
-            "v_drive_diag": (_v_diag if _vdrive else None),
-            "v_dc_residual_A": (round(float(np.mean(np.asarray(_IA, float))), 3)
-                                if (_vdrive and _IA) else None),
-            "field": _snap2,
-        }
-
-    # Eddy-current (magnetodynamic) coupling: backward-Euler adds (Msig/dt) to the
-    # stiffness and (Msig/dt)·A_prev to the RHS.  Msig is 0 outside solid
-    # conductors, so air/iron are unaffected.  A_prev follows the material points
-    # (rotor mesh rotates rigidly), so it IS the previous-step field per DOF.
+    # ═══════════════════════════════════════════════════════════════════
+    #  COUPLED EDDY-CURRENT DATA (σ·∂A/∂t) — SOLID CONDUCTORS, P2
+    # ═══════════════════════════════════════════════════════════════════
+    # Every SOLID (non-laminated) conductor is meshed and solved as a solid
+    # bar carrying  J = σ(−∂A/∂t + U_b), one unknown voltage U_b per body:
+    #
+    #   • stator copper — ONE body per WIRE (tags ≥ DOM_COIL_BASE), each with
+    #     its share of the phase current imposed exactly (∫J dΩ = I_b) while
+    #     the eddy reaction redistributes J inside the wire.  I_b uses the
+    #     SAME Iunit the P1 eddy path uses (read off _coil_con), so the two
+    #     orders drive identical ampere-turns.
+    #   • magnets / shaft (rotor_eddy) — net ZERO axial current per connected
+    #     body (∫J dΩ = 0).  A body CUT by the anti-periodic radial boundary
+    #     is exempt with U_b ≡ 0, and that is EXACT rather than a convenience:
+    #     its image across the cut carries −A, so the full body's ∮J already
+    #     vanishes identically and the constraint would over-determine the
+    #     wedge.  P1 makes the same split (cut magnet halves + the centred
+    #     shaft) and the interior/half classification is read off _rot_con so
+    #     the two orders never disagree about which body is which.
+    #   • laminated iron stays σ = 0 — a 2-D model cannot resolve eddies at
+    #     the laminate scale, so its loss is Bertotti (material data), not a
+    #     field solve.  Air is σ = 0 by construction.
+    #
+    # Assembled on the SAME stitched mesh as the field (stator elements
+    # 0…nst−1, rotor elements +nst), so no interpolation ever enters.
+    _ed_con = []             # constrained bodies: dicts(key, tag, g, S, …)
+    _Msig2 = _csr((N2, N2))  # Σ σ·∫u·v over ALL conductors (backward-Euler term)
+    _Msig_grp = {}           # loss split: "cu" / "mag" / "shaft" → σ-mass block
+    _Msd2 = _csr((N2, N2))   # Msig/dt
+    _G2 = _csr((N2, 0))      # columns g_b = σ·M_b·1  (∫σ·u over body b)
+    _Sdt2 = np.zeros(0)      # S_b·dt with S_b = ∫σ dΩ
     if eddy:
-        # Bordered magnetodynamic system (the coupled eddy J-VIEW mode).
-        #   stator copper → SOLID bars with imposed current (∫J dA = I_c);
-        #   + rotor magnets/shaft σ when rotor_eddy (∫J = 0 per interior
-        #     magnet; shaft + cut halves U = 0 by symmetry) so the J view
-        #     shows the rotor eddy currents too.
-        # The TRANSIENT loss path does NOT use this solve — magnet losses come
-        # from smoothed post-processing (see the rotor-eddy stage above).
-        from scipy.sparse import bmat as _bmat, diags as _diags
-        from scipy.sparse.linalg import spsolve as _spsolve
-        _Ms_s = half["s"]["Msig"]
-        _Ms_r = half["r"]["Msig"] if rotor_eddy else _csr(half["r"]["Msig"].shape)
-        _Minv_dt = _bd([_Ms_s, _Ms_r]).tocsr() * (1.0 / dt)
-        A_prev = np.zeros(n)
-        _eddy_P = []          # field-based dissipation ∫σ(∂A/∂t)² per frame [W, sector]
-        _cons = _coil_con + (_rot_con if rotor_eddy else [])
-        _Gfull = _csr(np.column_stack([c["g"] for c in _cons])) if _cons else _csr((n, 0))
-        _Sdt   = np.array([c["S"] for c in _cons]) * dt
-        _n_coil_con = len(_coil_con)
-        _Iunit = np.array([c["Iunit"] for c in _coil_con])
-        _phase = [c["phase"] for c in _coil_con]
+        from scipy.sparse import bmat as _bmat2, diags as _diags2
+        _ones_e = np.ones(N2)
+        _coil_meta = {int(c["tag"]): c for c in _coil_con}
+        _int_mag = {int(c["tag"]) for c in _rot_con} if rotor_eddy else set()
+        _bodies = []          # (group_key, tag, mesh_all element ids, σ)
+        for _tg, _ix in half["s"]["cells"].items():
+            _sg = _sigma_of_tag(int(_tg))
+            if _sg > 0.0:
+                _bodies.append(("cu", int(_tg), np.asarray(_ix, int), _sg))
+        if rotor_eddy:
+            for _tg, _ix in half["r"]["cells"].items():
+                _sg = _sigma_of_tag(int(_tg))
+                if _sg <= 0.0:
+                    continue
+                _bodies.append(
+                    ("shaft" if int(_tg) == int(DOM_SHAFT) else "mag",
+                     int(_tg), np.asarray(_ix, int) + nst, _sg))
+        _n_free_b = 0
+        _gcols = []
+        for _ky, _tg, _ids, _sg in _bodies:
+            _Mb = (asm(_massform, Basis(mesh_all, _P2E(), elements=_ids))
+                   * float(_sg)).tocsr()
+            _Msig2 = _Msig2 + _Mb
+            _Msig_grp[_ky] = (_Mb if _ky not in _Msig_grp
+                              else _Msig_grp[_ky] + _Mb)
+            # U ≡ 0 bodies: cut by the anti-periodic boundary (their image
+            # cancels the net current identically) — no constraint row.
+            if _ky == "mag" and _tg not in _int_mag:
+                _n_free_b += 1
+                continue
+            if _ky == "shaft" and not _full_ring:
+                _n_free_b += 1
+                continue
+            _g = np.asarray(_Mb @ _ones_e).ravel()
+            _cm = _coil_meta.get(_tg) if _ky == "cu" else None
+            _ed_con.append({
+                "key": _ky, "tag": _tg, "g": _g, "S": float(_g.sum()),
+                "Iunit": float(_cm["Iunit"]) if _cm else 0.0,
+                "phase": (_cm["phase"] if _cm else None),
+            })
+            _gcols.append(_g)
+        if _gcols:
+            _G2 = _csr(np.column_stack(_gcols))
+            _Sdt2 = np.array([c["S"] for c in _ed_con], float) * dt
+        _Msd2 = (_Msig2 * (1.0 / dt)).tocsr()
+        log.info("P2 eddy: %d constrained bodies (%d copper wires, %d rotor "
+                 "∫J=0), %d U=0 cut bodies | σ_cu=%.3g σ_mag=%.3g "
+                 "σ_shaft=%.3g S/m",
+                 len(_ed_con), sum(1 for c in _ed_con if c["key"] == "cu"),
+                 sum(1 for c in _ed_con if c["key"] != "cu"), _n_free_b,
+                 _sig_cu_T, _sigma_mag_lib, _sigma_shaft_lib)
+        if not _ed_con:
+            raise RuntimeError(
+                "eddy=True but no solid conductor was found on the P2 mesh "
+                "— nothing to constrain (check the coil domain tags).")
 
-        def _solve_eddy_constrained(Keff, rhs_field, Pro, outer_red, I_vec, A_prv):
-            m = Pro.shape[1]
-            KK = (Pro.T @ Keff @ Pro).tocsr()
-            rf = np.asarray(Pro.T @ rhs_field).ravel()      # m
-            free = np.setdiff1d(np.arange(m), outer_red)
-            KKff = KK[np.ix_(free, free)].tocsr()
-            if _Gfull.shape[1] == 0:                  # no conductors constrained
-                sol = _spsolve(KKff, rf[free])
-                A_red = np.zeros(m); A_red[free] = sol
-                return Pro @ A_red, np.zeros(0)
-            Bred = (Pro.T @ _Gfull).tocsr()                 # m × nc
-            Bf = Bred[free, :].tocsr()
-            cr = dt * I_vec - np.asarray(_Gfull.T @ A_prv).ravel()   # nc
-            Mb = _bmat([[KKff, -Bf], [-Bf.T, _diags(_Sdt)]]).tocsr()
-            sol = _spsolve(Mb, np.concatenate([rf[free], cr]))
-            A_red = np.zeros(m); A_red[free] = sol[:free.size]
-            return Pro @ A_red, sol[free.size:]      # A , per-conductor voltages U_c
+    def _ring_map(m_shift):
+        # rotor ring node kk -> (stator node j, sign).  Full ring: periodic
+        # mod Nring, sign +1.  Sector: open wedge of Nring nodes, wrap period
+        # Nring−1 with a _bc_sign flip per wrap (identical to the P1 loop).
+        if _full_ring:
+            j = (np.arange(Nring) + int(m_shift)) % Nring
+            return j.astype(int), np.ones(Nring)
+        j = np.empty(Nring, int); sg = np.ones(Nring)
+        for kk in range(Nring):
+            jj = kk + int(m_shift); s = 1.0
+            while jj > Nring - 1: jj -= (Nring - 1); s *= _bc_sign
+            while jj < 0:         jj += (Nring - 1); s *= _bc_sign
+            j[kk] = jj; sg[kk] = s
+        return j, sg
 
-    # ── Demagnetisation pre-pass (opt-in) ────────────────────────────────
-    # Sweep the rotor over the WHOLE period at full Br, tracking the worst
-    # (most negative) demagnetising field H·M̂ at EVERY magnet element.  Any
-    # element whose worst H crosses the material BH-curve knee is de-rated
-    # along the recoil line (irreversible) → _br_glob.  The measurement loop
-    # below then runs with the weakened magnets, so the reported torque /
-    # back-EMF / losses carry the demag penalty — Ansys-style, per element.
-    _demag_coef = None
-    _demag_field = None
-    _demag_report = []
-    if demag and _mag_idx.size:
-        # Irreversible demagnetisation: state + rule live in simulation/demag.py.
-        # It was a closure over eight locals here and could not be exercised
-        # without a full solve; as an object the load-line construction is
-        # checked against a hand calculation in tests/test_demag.py.
-        #
-        # br is passed by REFERENCE — the magnet source term below reads the same
-        # buffer, so there is one state and not two that can disagree.
-        _dmst = _MagnetDemag(half["r"]["cells"], matr0, half["r"]["mesh"], _br_glob)
-        _dm = _dmst.mags
+    def _build_Pro2(m_shift):
+        suf = _SignedUF(N2)
+        # radial-cut anti-periodic welds (sector) — m-independent
+        for sd, md, sgn in _cut_v:
+            suf.union(sd, md, sgn)
+        for sd, md, sgn in _cut_e:
+            suf.union(sd, md, sgn)
+        # slip-ring welds (vertices + edge midpoints), rotor shifted by m
+        j, sg = _ring_map(m_shift)
+        for kk in range(Nring):
+            suf.union(int(vdof[int(rring[kk]) + nsn]),
+                      int(vdof[int(sring[j[kk]])]), float(sg[kk]))
+        for e, (a, b) in enumerate(_re_pairs):
+            re = _re_dofs[e]
+            if re is None:
+                continue
+            # the rotor edge (a,b) maps to the stator edge (j[a], j[b]); it is
+            # a real mesh edge only when the two endpoints stay angularly
+            # consecutive with the SAME sign (i.e. no wrap between them).
+            if sg[a] != sg[b]:
+                continue
+            se = _edge_dof(int(sring[j[a]]), int(sring[j[b]]))
+            if se is not None:
+                suf.union(int(re), int(se), float(sg[a]))
+        roots = [suf.find(i) for i in range(N2)]
+        rid = np.array([r for r, _ in roots])
+        rsg = np.array([s for _, s in roots], float)
+        uniq, inv = np.unique(rid, return_inverse=True)
+        Pro = _coo((rsg, (np.arange(N2), inv)),
+                   shape=(N2, uniq.size)).tocsr()
+        return Pro, np.unique(inv[_D2_ids])
 
-        def _demag_derate(_Bxr_f, _Byr_f) -> bool:
-            return _dmst.update(_Bxr_f, _Byr_f)
+    # ── P2 flux linkage (EXACT area-average per stator coil element) ─────
+    # A P2 field's area average over a triangle is the mean of its three
+    # EDGE-MIDPOINT dofs, NOT the mean of its vertex dofs: the quadratic
+    # vertex shape function N_i = λ_i(2λ_i−1) integrates to EXACTLY ZERO over
+    # the element, while each edge bubble 4λ_jλ_k integrates to area/3.  So
+    #     (1/Ω)∫A dΩ = (A_e1 + A_e2 + A_e3)/3.
+    # Using the P1 centroid formula (vertex mean) on a P2 field is not an
+    # approximation, it is the wrong quadrature (checked against a 6th-order
+    # quadrature on an analytic quadratic: the edge rule is exact to 4e-16
+    # relative, the vertex rule is off by ~5 % even on a uniform mesh).
+    #
+    # This is also the ONLY choice that keeps ψ energy-consistent with the
+    # circuit: f_coil2 = ∫ N_i J_z dΩ puts EXACTLY ZERO on the vertex dofs
+    # (asm of the unit load on ElementTriP2 returns 3e-17 there) and area/3
+    # on each edge dof, so f_coil2·A ≡ J_z·Σ_e area_e·(edge mean).  ψ and the
+    # coil source therefore integrate the SAME functional; the old ψ was
+    # built from precisely the dofs the source cannot excite.
+    _As_e = fdof[mesh_all.t2f[:, :nst]]            # (3, nst) stator edge dofs
+    _sc_psi2 = p.stack_length * NS / float(n_parallel)
 
-
-        f_mag = _build_fmag(_br_glob)
-
-    _field_snap = None       # eddy last-frame field snapshot (if return_field)
-    _hist_Am = []            # per-frame A on magnet nodes (loss post-processing)
-    _hist_Ash = []           # per-frame A on shaft nodes (field-based shaft loss)
-    _hist_A_rotor = []       # per-frame A on ALL rotor nodes (honest coupled eddy)
-    # When the demag pre-pass ran, the measurement pass is the SECOND half of
-    # the work — continue the progress counter so the UI bar doesn't reset.
-    _prog_off = 0
-    _prog_tot = n_total   # single pass: demag is applied inside this loop
-
-    # Per-phase flux linkage of a solution — used INSIDE the voltage-drive
-    # circuit iteration and for the ψ series (single implementation).
-    sc_psi = p.stack_length * NS / float(n_parallel)
-
-    def _psi_of(Avec):
-        As_ = Avec[:nsn]
-        A_tri_ = (As_[Tts[0]] + As_[Tts[1]] + As_[Tts[2]]) / 3.0
-        pa_ = pb_ = pc_ = 0.0
+    def _psi2(A2):
+        Ae_ = A2[_As_e]
+        A_tri = (Ae_[0] + Ae_[1] + Ae_[2]) / 3.0
+        pa = pb = pc = 0.0
         for idx_, ar_, dir_, ph_ in coil_info:
             sa_ = float(np.sum(ar_))
             if sa_ <= 0:
                 continue
-            val_ = dir_ * float(np.sum(A_tri_[idx_] * ar_)) / sa_
-            if ph_ == 'A':
-                pa_ += val_
-            elif ph_ == 'B':
-                pb_ += val_
-            else:
-                pc_ += val_
-        return pa_, pb_, pc_
+            v_ = dir_ * float(np.sum(A_tri[idx_] * ar_)) / sa_
+            if ph_ == 'A':   pa += v_
+            elif ph_ == 'B': pb += v_
+            else:            pc += v_
+        return _sc_psi2 * pa, _sc_psi2 * pb, _sc_psi2 * pc
 
-    # Voltage-drive circuit state: the phase currents are UNKNOWNS solved with
-    # the field (strong field↔circuit coupling — see the Picard loop).  Warm-
-    # start from the previous frame + the previous-step flux for backward-Euler.
-    from scipy.sparse.linalg import splu as _splu
+    # ── frame-independent solver helpers ─────────────────────────────────
+    # These used to be defined INSIDE the frame loop; they close over nothing
+    # frame-specific (K_const2, _sat_sub2, _sat2, b2), and the voltage-drive
+    # phasor initialiser below has to call them BEFORE the loop starts.
+    def _solve_ff(Mff, rhs):
+        """Solve Mff·x = rhs for a 1-D or 2-D (multi-column) rhs."""
+        nonlocal _pardiso2
+        if _pardiso2 is not None:
+            try:
+                return _pardiso2.solve(Mff, rhs)
+            except Exception as _pe2:
+                log.warning("pypardiso solve failed (%s) — SuperLU fallback",
+                            _pe2)
+                _pardiso2 = None
+        return _splu2(Mff).solve(rhs)
+
+    def _elemB(Avec):
+        bx, by, dq = _p2_B_at_quad(b2, Avec)
+        ar = dq.sum(axis=1)
+        return (np.sqrt(bx ** 2 + by ** 2) * dq).sum(axis=1) \
+            / np.maximum(ar, 1e-30)
+
+    def _nu_of(Bmag, base):
+        nu = base.copy()
+        for _ids, _c in _sat2:
+            nu[_ids] = 1.0 / (MU0 * np.maximum(
+                _mu_r_from_bh_vec(_c, Bmag[_ids]), 1.0))
+        return nu
+
+    def _asmK(nu):
+        K = K_const2.copy()
+        for _sb2, _sb02, _ids2, _c2 in _sat_sub2:
+            _nf2 = _sb02.zeros(); _nf2[_ids2] = nu[_ids2]
+            K = K + asm(_stiff_nu2, _sb2, nu=_sb02.interpolate(_nf2))
+        return K.tocsr()
+
+    def _Kpw(Avec):
+        """POINTWISE ν(|B|) secant stiffness + the per-element data the
+        Newton tangent needs.  Same nonlinearity in residual and tangent."""
+        K = K_const2.copy(); info = []
+        for _sb2, _sb02, _ids2, _c2 in _sat_sub2:
+            gA = _sb2.interpolate(Avec).grad            # (2,nel,nqp)
+            Bm = np.sqrt(np.maximum(gA[0] ** 2 + gA[1] ** 2, 1e-18))
+            mur = np.maximum(_mu_r_from_bh_vec(
+                _c2, Bm.ravel()).reshape(Bm.shape), 1.0)
+            nuq = 1.0 / (MU0 * mur)
+            K = K + asm(_stiff_nu2, _sb2, nu=nuq)
+            info.append((_sb2, _ids2, _c2, gA, Bm, nuq))
+        return K.tocsr(), info
+
+    def _tangent2(info):
+        """T = 2·(dν/dB²)·(∇A·∇u)(∇A·∇v), pointwise & consistent with _Kpw."""
+        T = None
+        for _sb2, _ids2, _c2, gA, Bm, nuq in info:
+            _dB = 1e-3 * Bm + 1e-6
+            nu1 = 1.0 / (MU0 * np.maximum(_mu_r_from_bh_vec(
+                _c2, (Bm + _dB).ravel()).reshape(Bm.shape), 1.0))
+            nup = np.maximum((nu1 - nuq) / _dB / (2.0 * Bm), 0.0)   # dν/dB²
+            Ti = asm(_tang_nu2, _sb2, gA=gA, c=2.0 * nup)
+            T = Ti if T is None else T + Ti
+        return T
+
+    # ═══════════════════════════════════════════════════════════════════
+    #  VOLTAGE DRIVE on P2 — field ↔ circuit coupled solve
+    # ═══════════════════════════════════════════════════════════════════
+    # A circuit is physics: it cannot depend on the element order, so this is
+    # a PORT of the P1 formulation, not a second model.  Everything that was
+    # paid for in P1 debugging is kept verbatim in form:
+    #   * LINE-TO-LINE equations (floating neutral).  Phase-voltage equations
+    #     pin the machine neutral to the source's, short the zero-sequence
+    #     back-EMF (large on this concentrated winding) through the tiny
+    #     zero-sequence inductance and produce ~43 % fake triplen current.
+    #   * Crank–Nicolson in ROTOR TIME: Δt_k = Δθ_eff/ω with V sampled at the
+    #     midpoint of the ACTUAL (slip-node-snapped) motion.
+    #   * A dq phasor initialiser whose inductances are measured AT the
+    #     operating point (Lq moves ~5× from no-load to full load).
+    #   * 10 settling periods with iterated Aitken anchoring of the
+    #     period-boundary flux.
+    # What is NEW here is only the field solve: P1 gets the exact
+    # superposition A = A_pm + i_A·xa + i_B·xb for free because its Picard
+    # freezes ν within a sweep.  P2 solves by POINTWISE Newton, where that
+    # superposition is not exact, so the circuit is closed on the ACTUAL
+    # ψ(A) of the converged field and (A, i_A, i_B) are solved as ONE coupled
+    # Newton system:  ∂A/∂i is the tangent back-solve J⁻¹·P, i.e. the
+    # DIFFERENTIAL inductance — which is the correct Jacobian of ψ(A(i)).
+    _Pa2 = f_coil2['A'] - f_coil2['C']    # unit-i_A source column (i_C folded)
+    _Pb2 = f_coil2['B'] - f_coil2['C']    # unit-i_B source column
     _iv_state = {'A': 0.0, 'B': 0.0, 'C': 0.0}
     _psi_prev = None
-    _th_eff_prev = None     # previous frame's SNAPPED rotor angle (rotor-time dt)
-    _dt_k = dt              # per-frame rotor-time step (uniform when nodes align)
-    _v_diag = {"iters": [], "resid": []}   # circuit convergence stats per frame
-    _v_bpsi = []            # period-boundary flux samples (psiA, psiB) for Aitken
-    _v_aitken_done = False
+    _th_eff_prev = None      # previous frame's SNAPPED rotor angle (rotor time)
+    _dt_k = dt
+    _v_diag = {"iters": [], "resid": []}
+    _v_bpsi = []             # period-boundary flux samples for the Aitken anchor
+
+    def _pad2(Pro, free, xf):
+        _x = np.zeros(Pro.shape[1]); _x[free] = xf
+        return Pro @ _x
+
+    # Line-to-line Crank–Nicolson circuit residual + its 2×2 Jacobian —
+    # simulation/drive.py, shared with the P1 path below.  R_phase is the
+    # only run-dependent term, so it is bound here rather than captured.
+    def _circ_r(psi, iA, iB, iv_prev, psi_prev, Vt, dtk):
+        return _circ_r_ll(psi, iA, iB, iv_prev, psi_prev, Vt, dtk, R_phase)
+
+    def _circ_M(qa, qb, dtk):
+        return _circ_M_ll(qa, qb, dtk, R_phase)
+
+    def _v_newton(Pro, free, A_start, i_start, Vt, dtk, iv_prev, psi_prev,
+                  maxit):
+        """Coupled (A, i_A, i_B) Newton.  One Jacobian factorization per
+        iteration, three back-solves: the field correction and the two
+        ∂A/∂i columns.  Returns (ok, A2, iA, iB, rrel, nit, rc)."""
+        iA = float(i_start[0]); iB = float(i_start[1])
+        A2 = A_start.copy()
+        _PtPa = np.asarray(Pro.T @ _Pa2).ravel()[free]
+        _PtPb = np.asarray(Pro.T @ _Pb2).ravel()[free]
+        # voltage scale for the circuit residual test: the driving line-to-
+        # line amplitude (never the instantaneous value, which passes 0).
+        _vsc = max(math.sqrt(3.0) * abs(float(v_phase_peak)), 1e-3)
+        nit = 0; rrel = 1.0
+        rc = np.array([np.inf, np.inf])
+
+        def _state(Av, ia, ib):
+            fv = f_mag2 + ia * _Pa2 + ib * _Pb2
+            Kv, iv = _Kpw(Av)
+            rf = np.asarray(Pro.T @ (Kv @ Av - fv)).ravel()[free]
+            bn = max(float(np.linalg.norm(
+                np.asarray(Pro.T @ fv).ravel()[free])), 1e-30)
+            rcv = _circ_r(_psi2(Av), ia, ib, iv_prev, psi_prev, Vt, dtk)
+            return Kv, iv, rf, float(np.linalg.norm(rf)) / bn, rcv
+
+        for it in range(maxit):
+            nit = it + 1
+            K, info, r_free, rrel, rc = _state(A2, iA, iB)
+            if rrel < 1e-7 and float(np.max(np.abs(rc))) < 1e-6 * _vsc:
+                return True, A2, iA, iB, rrel, nit, rc
+            T = _tangent2(info)
+            J = (K + T).tocsr() if T is not None else K
+            Jff = (Pro.T @ J @ Pro).tocsr()[free][:, free].tocsc()
+            try:
+                X = _solve_ff(Jff, np.column_stack([-r_free, _PtPa, _PtPb]))
+            except Exception as _je:
+                log.info("P2 vdrive Newton solve failed (%s)", _je)
+                return False, A2, iA, iB, rrel, nit, rc
+            dA0 = _pad2(Pro, free, X[:, 0])
+            dAa = _pad2(Pro, free, X[:, 1])
+            dAb = _pad2(Pro, free, X[:, 2])
+            # ψ is a LINEAR functional of A, so the linearised flux of the
+            # trial step is exact: ψ(A+δ) = ψ(A) + ψ(δ).
+            q0 = _psi2(dA0); qa = _psi2(dAa); qb = _psi2(dAb)
+            try:
+                di = np.linalg.solve(
+                    _circ_M(qa, qb, dtk),
+                    np.array([rc[0] - (q0[0] - q0[1]) / dtk,
+                              rc[1] - (q0[1] - q0[2]) / dtk]))
+            except np.linalg.LinAlgError:
+                return False, A2, iA, iB, rrel, nit, rc
+            # backtracking line-search on the COMBINED merit (field residual
+            # + circuit residual) — the BH knee needs globalising and a step
+            # that fixes the field while wrecking the circuit is no step.
+            _m0 = rrel + float(np.max(np.abs(rc))) / _vsc
+            _lam = 1.0; _acc = False
+            for _ls in range(8):
+                _At = A2 + _lam * (dA0 + di[0] * dAa + di[1] * dAb)
+                _ia = iA + _lam * di[0]; _ib = iB + _lam * di[1]
+                _, _, _, _rr, _rcv = _state(_At, _ia, _ib)
+                if _rr + float(np.max(np.abs(_rcv))) / _vsc < _m0:
+                    A2 = _At; iA = _ia; iB = _ib; _acc = True
+                    break
+                _lam *= 0.5
+            if not _acc:
+                return False, A2, iA, iB, rrel, nit, rc
+        return False, A2, iA, iB, rrel, nit, rc
+
+    def _v_picard(Pro, free, nu_start, Vt, dtk, iv_prev, psi_prev, npic,
+                  frozen_frame):
+        """Damped-Picard fallback — this IS the P1 recipe: ν frozen inside a
+        sweep makes A = A_pm + i_A·xa + i_B·xb exact, so the 2×2 circuit is
+        solved directly on the apparent inductance.  Returns
+        (A2, iA, iB, nu, res, nit)."""
+        nu = nu_start.copy()
+        _Pt = lambda v: np.asarray(Pro.T @ v).ravel()[free]      # noqa: E731
+        A2 = np.zeros(N2); iA = iB = 0.0; res = 0.0; nit = 0
+        _ok = 0; _rp = None; _om = 0.5
+        for it in range(max(1, npic)):
+            nit = it + 1
+            K = _asmK(nu)
+            Kff = (Pro.T @ K @ Pro).tocsr()[free][:, free].tocsc()
+            X = _solve_ff(Kff, np.column_stack(
+                [_Pt(f_mag2), _Pt(_Pa2), _Pt(_Pb2)]))
+            A_pm = _pad2(Pro, free, X[:, 0])
+            xa = _pad2(Pro, free, X[:, 1])
+            xb = _pad2(Pro, free, X[:, 2])
+            pm = _psi2(A_pm); qa = _psi2(xa); qb = _psi2(xb)
+            _bcv = np.array([
+                (Vt['A'] - Vt['B'])
+                - ((pm[0] - pm[1]) - (psi_prev['A'] - psi_prev['B'])) / dtk
+                - 0.5 * R_phase * (iv_prev['A'] - iv_prev['B']),
+                (Vt['B'] - Vt['C'])
+                - ((pm[1] - pm[2]) - (psi_prev['B'] - psi_prev['C'])) / dtk
+                - 0.5 * R_phase * (iv_prev['B'] - iv_prev['C'])])
+            _iab = np.linalg.solve(_circ_M(qa, qb, dtk), _bcv)
+            iA = float(_iab[0]); iB = float(_iab[1])
+            A2 = A_pm + iA * xa + iB * xb
+            if frozen_frame or not _sat2:
+                break
+            _Bm = _elemB(A2)
+            _vo = np.concatenate([nu[_ids] for _ids, _ in _sat2])
+            _vn = np.concatenate([
+                1.0 / (MU0 * np.maximum(_mu_r_from_bh_vec(_c, _Bm[_ids]), 1.0))
+                for _ids, _c in _sat2])
+            _rr = _vn - _vo
+            res = float(np.linalg.norm(_rr) / max(np.linalg.norm(_vo), 1e-30))
+            if _rp is not None:
+                _dr = _rr - _rp; _den = float(_dr @ _dr)
+                if _den > 0.0:
+                    _om = float(np.clip(-_om * float(_rp @ _dr) / _den,
+                                        0.05, 1.0))
+            _rp = _rr
+            _vu = _vo + _om * _rr
+            _p0 = 0
+            for _ids, _c in _sat2:
+                nu[_ids] = _vu[_p0:_p0 + _ids.size]; _p0 += _ids.size
+            if res < _PIC_TOL2:
+                _ok += 1
+                if _ok >= 2:
+                    break
+            else:
+                _ok = 0
+        return A2, iA, iB, nu, res, nit
+
+    # ═══════════════════════════════════════════════════════════════════
+    #  COUPLED EDDY-CURRENT SOLVE (σ·∂A/∂t) — BORDERED NEWTON, P2
+    # ═══════════════════════════════════════════════════════════════════
+    # Backward Euler on the magnetodynamic system, bordered by ONE integral
+    # constraint per current-carrying body:
+    #
+    #   [ K(A) + Msig/dt      −G  ] [A]   [ f_mag + (Msig/dt)·A_prev ]
+    #   [      −Gᵀ          S·dt  ] [U] = [ dt·I − Gᵀ·A_prev         ]
+    #
+    # Row 1 is  ∇·(ν∇A) = −σ(−∂A/∂t + U_b), row 2 is ∫σ(−∂A/∂t + U_b)dΩ = I_b
+    # (both scaled by dt so the block is symmetric).  The coil current is NOT
+    # a source term any more — it is the constraint, which is the whole point:
+    # J redistributes freely inside the conductor and only its NET value is
+    # imposed.  σ = 0 everywhere else, so air and laminated iron see exactly
+    # the magnetostatic operator they saw before.
+    #
+    # TIME: A_prev is the previous frame's field PER DOF.  The rotor block of
+    # mesh_all is the rotor's MATERIAL frame (the rotation lives entirely in
+    # the slip pairing Pro), so a dof tracks a material point on both halves
+    # and ∂A/∂t needs no convective term and no re-projection.  Only Pro
+    # changes per frame, and it is re-applied to G every frame below.
+    #
+    # NONLINEARITY: the SAME pointwise ν(|B|) residual + differential-
+    # reluctivity tangent the magnetostatic Newton uses (_Kpw/_tangent2), so
+    # the eddy solve converges on identical iron physics.  With ν frozen
+    # (frozen_nu / no saturable iron) the system is linear and one bordered
+    # solve is exact — there is no Picard variant, by design: this branch
+    # solves by Newton and code parked in the Picard fallback never runs.
+    def _eddy_solve(Pro, free, A_start, U_start, I_vec, Aprev, nu_fix,
+                    maxit):
+        """Bordered (A, U) Newton.  Returns (ok, A, U, rrel, nit)."""
+        Ae = A_start.copy(); Ue = U_start.copy()
+        cr = dt * np.asarray(I_vec, float) - np.asarray(_G2.T @ Aprev).ravel()
+        rhs_e = f_mag2 + _Msd2 @ Aprev
+        _rf0 = np.asarray(Pro.T @ rhs_e).ravel()[free]
+        _bn = max(float(np.linalg.norm(_rf0)), 1e-30)
+        _cn = max(float(np.linalg.norm(cr)), 1e-30)
+        Bf = (Pro.T @ _G2).tocsr()[free, :]
+        nit = 0; rrel = 1.0
+
+        def _res_e(Av, Uv, Km):
+            rf = np.asarray(Pro.T @ ((Km + _Msd2) @ Av - _G2 @ Uv
+                                     - rhs_e)).ravel()[free]
+            rc = _Sdt2 * Uv - np.asarray(_G2.T @ Av).ravel() - cr
+            return rf, rc, max(float(np.linalg.norm(rf)) / _bn,
+                               float(np.linalg.norm(rc)) / _cn)
+
+        # DC seed for the conductor voltages: at ∂A/∂t = 0 the constraint
+        # gives U_b = I_b/S_b, which is the bulk of the answer (the eddy
+        # reaction is a correction to it).  Starting from U = 0 instead puts
+        # the whole ampere-turn drive in the first Newton step, and at 60 A
+        # that step lands past the BH knee from an unsaturated start.
+        if not np.any(Ue):
+            Ue = np.asarray(I_vec, float) * dt / np.maximum(_Sdt2, 1e-30)
+
+        for it in range(max(int(maxit), 2)):
+            nit = it + 1
+            if nu_fix is not None:
+                Km = _asmK(nu_fix); info = None
+            else:
+                Km, info = _Kpw(Ae)
+            rf, rc, rrel = _res_e(Ae, Ue, Km)
+            if rrel < 1e-7:
+                return True, Ae, Ue, rrel, nit
+            J = Km
+            if info is not None:
+                T = _tangent2(info)
+                if T is not None:
+                    J = Km + T
+            Jff = (Pro.T @ (J + _Msd2) @ Pro).tocsr()[free][:, free]
+            Mb = _bmat2([[Jff, -Bf], [-Bf.T, _diags2(_Sdt2)]]).tocsc()
+            try:
+                sol = _solve_ff(Mb, -np.concatenate([rf, rc]))
+            except Exception as _je:
+                log.info("P2 eddy bordered solve failed (%s)", _je)
+                return False, Ae, Ue, rrel, nit
+            dA = _pad2(Pro, free, sol[:free.size]); dU = sol[free.size:]
+            if nu_fix is not None:        # linear system: the step is exact
+                Ae = Ae + dA; Ue = Ue + dU
+                continue
+            # Backtracking line-search on the FIELD residual — the same test
+            # the magnetostatic Newton uses, and the only one that means
+            # anything here: the constraint block is LINEAR, so a damped step
+            # scales its residual by exactly (1−λ) and it can never be what
+            # blocks progress.  Testing the two together (max of the relative
+            # norms) made the constraint residual, which is ~1 by
+            # construction on the first sweep, veto every field-reducing step
+            # and the solve stalled at rrel≈0.97 at 60 A.
+            _f0 = float(np.linalg.norm(rf))
+            lam = 1.0; acc = False
+            for _ls in range(8):
+                At = Ae + lam * dA; Ut = Ue + lam * dU
+                if float(np.linalg.norm(_res_e(At, Ut, _Kpw(At)[0])[0])) < _f0:
+                    Ae = At; Ue = Ut; acc = True; break
+                lam *= 0.5
+            if not acc:
+                return False, Ae, Ue, rrel, nit
+        return False, Ae, Ue, rrel, nit
+
+    # ═══════════════════════════════════════════════════════════════════
+    #  COUPLED EDDY **AND** VOLTAGE DRIVE — ONE (A, U, i_A, i_B) NEWTON
+    # ═══════════════════════════════════════════════════════════════════
+    # The two features look mutually exclusive — the eddy solve imposes each
+    # wire's current as an integral CONSTRAINT, the circuit needs those same
+    # currents as UNKNOWNS — but they are not.  The constraint VALUE simply
+    # becomes a function of the circuit state:
+    #
+    #     I_b(i) = Iunit_b · i_phase(b),     i_C = −i_A − i_B
+    #
+    # so the winding current still never appears as a source term (it must
+    # not: under eddy the ampere-turns enter through the constraint row and
+    # putting them in f as well drives the machine twice), and the bordered
+    # system keeps its exact structure.  Only the constraint RHS moves:
+    #
+    #   [ K(A)+Msig/dt   −G  ] [A]   [ f_mag + (Msig/dt)·A_prev            ]
+    #   [    −Gᵀ        S·dt ] [U] = [ dt·(i_A·c_a + i_B·c_b) − Gᵀ·A_prev  ]
+    #        └──────── M_b ───────┘
+    #   plus the two LINE-TO-LINE circuit equations on ψ(A), i.
+    #
+    # with c_a = ∂I_vec/∂i_A, c_b = ∂I_vec/∂i_B (zero on the ∫J=0 rotor
+    # bodies — magnets and shaft carry no terminal current).
+    #
+    # The Newton step is therefore the SAME shape as the magnetostatic
+    # voltage drive (_v_newton): one factorization of M_b per iteration and
+    # three back-solves — the field/voltage correction and the two ∂(A,U)/∂i
+    # columns.  Those columns are back-solves of the BORDERED matrix with a
+    # pure CONSTRAINT rhs [0; dt·c], i.e. "inject one more ampere into that
+    # wire and let the eddy reaction redistribute it", which is exactly the
+    # differential inductance the circuit Jacobian needs — now including the
+    # eddy reaction, which is the whole point of running the two together.
+    #
+    # ψ is a linear functional of A, so the linearised flux of a trial step
+    # is exact and the 2×2 circuit reduction is identical to _v_newton's.
+    #
+    # NOTHING here is a fallback path: if this does not converge the frame
+    # RAISES (see the call site).  Reporting a current-drive answer as a
+    # voltage run — what the P1 `if eddy: … elif _vdrive:` chain does — is
+    # the failure mode this whole function exists to avoid.
+    #
+    # TIME STEP: the eddy history term is discretised on the SAME Δt_k the
+    # circuit uses — the ACTUAL (slip-node-snapped) rotor time, not the
+    # nominal dt.  Under current drive the two are interchangeable because
+    # nothing else in the frame carries a time scale; here the circuit
+    # already divides Δψ by Δt_k, and feeding σ·∂A/∂t a different Δt would
+    # reintroduce exactly the node-quantisation sawtooth the rotor-time step
+    # exists to remove — into the eddy loss this time instead of the current.
+    # (On the pinned geometries Δt_k == dt to the last bit: a frame spans a
+    # whole number of slip nodes.  The rescale is a scalar on a fixed matrix,
+    # so it costs nothing and it stays right when it stops being exact.)
+    _S_raw = np.array([c["S"] for c in _ed_con], float)   # S_b = ∫σ dΩ
+    _ed_ca = np.zeros(len(_ed_con)); _ed_cb = np.zeros(len(_ed_con))
+    for _ci, _c in enumerate(_ed_con):
+        if _c["key"] != "cu":
+            continue                       # ∫J = 0 body: no terminal current
+        _iu = float(_c["Iunit"])
+        if _c["phase"] == 'A':
+            _ed_ca[_ci] = _iu
+        elif _c["phase"] == 'B':
+            _ed_cb[_ci] = _iu
+        else:                              # i_C = −i_A − i_B
+            _ed_ca[_ci] = -_iu; _ed_cb[_ci] = -_iu
+
+    def _ve_newton(Pro, free, A_start, U_start, i_start, Aprev, Vt, dtk,
+                   iv_prev, psi_prev, nu_fix, maxit):
+        """Bordered (A, U, i_A, i_B) Newton: coupled σ·∂A/∂t eddy solve WITH
+        the line-to-line voltage circuit.  Returns
+        (ok, A, U, iA, iB, rrel, nit, rc_circ)."""
+        Ae = A_start.copy(); Ue = U_start.copy()
+        iA = float(i_start[0]); iB = float(i_start[1])
+        Msd_k = (_Msig2 * (1.0 / dtk)).tocsr()   # backward Euler on Δt_k
+        Sdt_k = _S_raw * dtk
+        rhs_e = f_mag2 + Msd_k @ Aprev
+        _GtAp = np.asarray(_G2.T @ Aprev).ravel()
+        _rf0 = np.asarray(Pro.T @ rhs_e).ravel()[free]
+        _bn = max(float(np.linalg.norm(_rf0)), 1e-30)
+        Bf = (Pro.T @ _G2).tocsr()[free, :]
+        # constraint-residual scale: the ampere-seconds the terminal current
+        # imposes at the DRIVING amplitude, never the instantaneous value.
+        _cn = max(float(np.linalg.norm(dtk * (_ed_ca + _ed_cb))),
+                  float(np.linalg.norm(_GtAp)), 1e-30)
+        # voltage scale for the circuit residual test — the driving line-to-
+        # line amplitude (the instantaneous value passes through 0).
+        _vsc = max(math.sqrt(3.0) * abs(float(v_phase_peak)), 1e-3)
+        nit = 0; rrel = 1.0
+        rcc = np.array([np.inf, np.inf])
+
+        def _res_ve(Av, Uv, ia, ib, Km):
+            rf = np.asarray(Pro.T @ ((Km + Msd_k) @ Av - _G2 @ Uv
+                                     - rhs_e)).ravel()[free]
+            rc = (Sdt_k * Uv - np.asarray(_G2.T @ Av).ravel()
+                  - (dtk * (ia * _ed_ca + ib * _ed_cb) - _GtAp))
+            rcv = _circ_r(_psi2(Av), ia, ib, iv_prev, psi_prev, Vt, dtk)
+            return rf, rc, rcv, max(float(np.linalg.norm(rf)) / _bn,
+                                    float(np.linalg.norm(rc)) / _cn)
+
+        # DC seed for the conductor voltages (same as the current-drive eddy
+        # solve): at ∂A/∂t = 0 the constraint gives U_b = I_b/S_b.
+        if not np.any(Ue):
+            Ue = ((iA * _ed_ca + iB * _ed_cb) / np.maximum(_S_raw, 1e-30))
+
+        for it in range(max(int(maxit), 2)):
+            nit = it + 1
+            if nu_fix is not None:
+                Km = _asmK(nu_fix); info = None
+            else:
+                Km, info = _Kpw(Ae)
+            rf, rc, rcc, rrel = _res_ve(Ae, Ue, iA, iB, Km)
+            if rrel < 1e-7 and float(np.max(np.abs(rcc))) < 1e-6 * _vsc:
+                return True, Ae, Ue, iA, iB, rrel, nit, rcc
+            J = Km
+            if info is not None:
+                T = _tangent2(info)
+                if T is not None:
+                    J = Km + T
+            Jff = (Pro.T @ (J + Msd_k) @ Pro).tocsr()[free][:, free]
+            Mb = _bmat2([[Jff, -Bf], [-Bf.T, _diags2(Sdt_k)]]).tocsc()
+            # column 0: the (A, U) correction at frozen current
+            # columns 1,2: ∂(A, U)/∂i_A and ∂(A, U)/∂i_B — a pure CONSTRAINT
+            #              rhs, the eddy-reaction-included differential
+            #              inductance the circuit Jacobian needs.
+            _z = np.zeros(free.size)
+            try:
+                X = _solve_ff(Mb, np.column_stack([
+                    -np.concatenate([rf, rc]),
+                    np.concatenate([_z, dtk * _ed_ca]),
+                    np.concatenate([_z, dtk * _ed_cb])]))
+            except Exception as _je:
+                log.info("P2 eddy+vdrive bordered solve failed (%s)", _je)
+                return False, Ae, Ue, iA, iB, rrel, nit, rcc
+            dA0 = _pad2(Pro, free, X[:free.size, 0])
+            dAa = _pad2(Pro, free, X[:free.size, 1])
+            dAb = _pad2(Pro, free, X[:free.size, 2])
+            dU0 = X[free.size:, 0]
+            dUa = X[free.size:, 1]; dUb = X[free.size:, 2]
+            q0 = _psi2(dA0); qa = _psi2(dAa); qb = _psi2(dAb)
+            try:
+                di = np.linalg.solve(
+                    _circ_M(qa, qb, dtk),
+                    np.array([rcc[0] - (q0[0] - q0[1]) / dtk,
+                              rcc[1] - (q0[1] - q0[2]) / dtk]))
+            except np.linalg.LinAlgError:
+                return False, Ae, Ue, iA, iB, rrel, nit, rcc
+            dA = dA0 + di[0] * dAa + di[1] * dAb
+            dU = dU0 + di[0] * dUa + di[1] * dUb
+            if nu_fix is not None:        # linear system: the step is exact
+                Ae = Ae + dA; Ue = Ue + dU
+                iA += float(di[0]); iB += float(di[1])
+                continue
+            # Backtracking line-search on the FIELD residual only — for the
+            # same reason the current-drive eddy solve uses it: the ONLY
+            # nonlinearity in this system is K(A).  Both the constraint rows
+            # and the circuit rows are exactly LINEAR in (A, U, i), so a
+            # damped step scales their residuals by exactly (1−λ) and they
+            # can never be what blocks progress; including them in the merit
+            # instead lets a residual that is ~1 by construction on the first
+            # sweep veto every field-reducing step (measured: stall at
+            # rrel≈0.97 on the current-drive path at 60 A).
+            _f0 = float(np.linalg.norm(rf))
+            lam = 1.0; acc = False
+            for _ls in range(8):
+                At = Ae + lam * dA; Ut = Ue + lam * dU
+                _ia = iA + lam * float(di[0]); _ib = iB + lam * float(di[1])
+                if float(np.linalg.norm(
+                        _res_ve(At, Ut, _ia, _ib, _Kpw(At)[0])[0])) < _f0:
+                    Ae = At; Ue = Ut; iA = _ia; iB = _ib
+                    acc = True; break
+                lam *= 0.5
+            if not acc:
+                return False, Ae, Ue, iA, iB, rrel, nit, rcc
+        return False, Ae, Ue, iA, iB, rrel, nit, rcc
 
     if _vdrive:
-        # ── Phasor steady-state initialiser ──────────────────────────────────
-        # The electrical time constant tau = L/R spans ~20 electrical periods on
-        # a low-R machine, so a marched start-up would need ~100 periods to shed
-        # its DC transient — impractical.  Instead measure the PM flux + the dq
-        # inductances once at theta=0 and place the current DIRECTLY on the
-        # periodic orbit (i(0), psi(-dt)); the march then only has to develop the
-        # small saturation/slotting harmonics on top of a DC-free fundamental.
+        # ── dq phasor steady-state initialiser (P2) ──────────────────────
+        # τ = L/R spans ~20 electrical periods on a low-R machine, so a
+        # marched start-up would need ~100 periods to shed its DC.  Measure
+        # the PM flux and the dq inductances AT the operating point (coupled
+        # phasor↔saturation Picard) and place i(0), ψ(−dt) directly on the
+        # periodic orbit.  Lq changes ~5× between i=0 and full load, so an
+        # i=0 estimate would leave a large DC for the settling to grind off.
         import math as _m
-        _pp = pole_pairs
-        # m_shift = 0 periodicity setup
-        if _moving:
-            _Pro0, _out0 = Pro_const, outer_red_const
-            _Kb0 = _band.K(0)
-        else:
-            _suf = _SignedUF(n)
-            for _a, _b in zip(Mn, Sn):
-                _suf.union(int(_b), int(_a), _bc_sign)
-            for _kk in range(Nring):
-                _suf.union(int(rring[_kk] + nsn), int(sring[_kk]), 1)
-            _rt = [_suf.find(_ii) for _ii in range(n)]
-            _rid = np.array([_r for _r, _ in _rt]); _rsg = np.array([_s for _, _s in _rt], float)
-            _uq, _iv = np.unique(_rid, return_inverse=True)
-            _Pro0 = _coo((_rsg, (np.arange(n), _iv)), shape=(n, _uq.size)).tocsr()
-            _out0 = np.unique(_iv[outer_nodes]); _Kb0 = None
-        _Pmag0 = np.concatenate([np.zeros(nsn), f_mag])
-        _Pa0 = np.concatenate([f_coil['A'] - f_coil['C'], np.zeros(half["r"]["n"])])
-        _Pb0 = np.concatenate([f_coil['B'] - f_coil['C'], np.zeros(half["r"]["n"])])
-        for _hn in ("s", "r"):
-            for _tg in sb_sat[_hn]:
-                nu_el[_hn][_tg][:] = 1.0 / (MU0 * max(mu0[_hn].get(_tg, 1.0), 1.0))
-
-        def _assemble0():
-            _bl = []
-            for _hn in ("s", "r"):
-                _h = half[_hn]; _K = K_const[_hn].copy()
-                for _tg, _sbi in sb_sat[_hn].items():
-                    _b0 = b0_sat[_hn][_tg]; _nf = _b0.zeros()
-                    _nf[_h["cells"][_tg]] = nu_el[_hn][_tg]
-                    _K = _K + asm(_stiff_nu, _sbi, nu=_b0.interpolate(_nf))
-                _bl.append(_K)
-            _K = _bd(_bl).tocsr()
-            if _Kb0 is not None:
-                _K = (_K + _Kb0).tocsr()
-            return _K
-
-        def _fac0(_K):
-            _Kg = (_Pro0.T @ _K @ _Pro0).tocsr()
-            _mk = np.ones(_Kg.shape[0], bool); _mk[_out0] = False
-            _fr = np.flatnonzero(_mk)
-            _lu = _splu(_Kg[_fr][:, _fr].tocsc())
-            _N = _Kg.shape[0]
-
-            def _bs(_ff):
-                _r = (_Pro0.T @ _ff)[_fr]
-                _x = np.zeros(_N); _x[_fr] = _lu.solve(_r)
-                return _Pro0 @ _x
-            return _bs
-
-        # θ_eff = 0 electrical, in the SAME frame `_currents`/`_voltages` use —
-        # the per-topology AUTO-calibrated offset, not the legacy hard-coded
-        # DAXIS_SHIFT_DEG (which is only right for one motor).  The absolute
-        # offset cancels (`_align` below measures the PM-flux angle relative to
-        # it), so this is a consistency fix, not a numerical one; the P2
-        # initialiser already used daxis_eff.
-        _the0 = _m.radians(0.0 * _pp + daxis_eff)
-
-        _park = _park_dq; _ipark = _ipark_dq   # simulation/drive.py
+        _Pro0v, _out0v = _build_Pro2(0)
+        _free0v = np.setdiff1d(np.arange(_Pro0v.shape[1]), _out0v)
+        _Pt0 = lambda v: np.asarray(_Pro0v.T @ v).ravel()[_free0v]  # noqa: E731
+        _RHS0 = np.column_stack([_Pt0(f_mag2), _Pt0(_Pa2), _Pt0(_Pb2)])
+        _nu_ph = nu_base2.copy()
         _w = 2.0 * _m.pi * f_elec
         _V0 = _voltages(0.0)
-        # Coupled phasor Picard: solve the dq STEADY-STATE circuit and the
-        # saturated field TOGETHER at theta=0, so the inductances used for the
-        # operating point are measured AT that operating point (Lq changes ~5x
-        # between i=0 and full load -> an i=0 estimate leaves a large DC).
-        _id0 = _iq0 = 0.0; _thal = _the0; _align = 0.0
+        # θ_eff = 0 electrical.  The absolute offset CANCELS: _align below
+        # measures the PM-flux angle relative to it, so _thal is the true
+        # PM-flux angle in the ABC frame whatever reference is used here.
+        _the0 = _m.radians(0.0 * pole_pairs + daxis_eff)
+
+        _park = _park_dq; _ipark = _ipark_dq   # simulation/drive.py
+        _id0 = _iq0 = 0.0; _thal = _the0
         _psi_pm_d = 0.0; _Ldd = _Lqq = _Ldq = _Lqd = 1e-6
-        for _it in range(nonlinear_iterations):
-            _K0 = _assemble0(); _bs = _fac0(_K0)
-            _A0 = _bs(_Pmag0); _xa = _bs(_Pa0); _xb = _bs(_Pb0)
-            _pm = _psi_of(_A0); _qa = _psi_of(_xa); _qb = _psi_of(_xb)
-            _ppmA, _ppmB, _ppmC = _pm[0] * sc_psi, _pm[1] * sc_psi, _pm[2] * sc_psi
-            # align d on the PM flux, measure the dq inductances there
-            _pd0, _pq0 = _park(_ppmA, _ppmB, _ppmC, _the0)
-            _align = _m.atan2(_pq0, _pd0); _thal = _the0 + _align
+        _Aop = np.zeros(N2)
+        for _it in range(max(int(nonlinear_iterations), 20)):
+            _Kph = _asmK(_nu_ph)
+            _Kff0 = (_Pro0v.T @ _Kph @ _Pro0v).tocsr()[_free0v][:, _free0v].tocsc()
+            _X0 = _solve_ff(_Kff0, _RHS0)
+            _A0 = _pad2(_Pro0v, _free0v, _X0[:, 0])
+            _xa = _pad2(_Pro0v, _free0v, _X0[:, 1])
+            _xb = _pad2(_Pro0v, _free0v, _X0[:, 2])
+            _pm = _psi2(_A0); _qa = _psi2(_xa); _qb = _psi2(_xb)
+            _pd0, _pq0 = _park(_pm[0], _pm[1], _pm[2], _the0)
+            _thal = _the0 + _m.atan2(_pq0, _pd0)
             _psi_pm_d = _m.hypot(_pd0, _pq0)
-            _Laa, _Lba = _qa[0] * sc_psi, _qa[1] * sc_psi
-            _Lab, _Lbb = _qb[0] * sc_psi, _qb[1] * sc_psi
+            _Laa, _Lba = _qa[0], _qa[1]
+            _Lab, _Lbb = _qb[0], _qb[1]
             _idA, _idB, _idC = _ipark(1.0, 0.0, _thal)
             _iqA, _iqB, _iqC = _ipark(0.0, 1.0, _thal)
-            _Ldd, _Lqd = _park(_Laa * _idA + _Lab * _idB, _Lba * _idA + _Lbb * _idB,
-                               -((_Laa + _Lba) * _idA + (_Lab + _Lbb) * _idB), _thal)
-            _Ldq, _Lqq = _park(_Laa * _iqA + _Lab * _iqB, _Lba * _iqA + _Lbb * _iqB,
-                               -((_Laa + _Lba) * _iqA + (_Lab + _Lbb) * _iqB), _thal)
-            # dq steady state: V_d = R i_d - w psi_q ; V_q = R i_q + w psi_d
+            _Ldd, _Lqd = _park(_Laa * _idA + _Lab * _idB,
+                               _Lba * _idA + _Lbb * _idB,
+                               -((_Laa + _Lba) * _idA + (_Lab + _Lbb) * _idB),
+                               _thal)
+            _Ldq, _Lqq = _park(_Laa * _iqA + _Lab * _iqB,
+                               _Lba * _iqA + _Lbb * _iqB,
+                               -((_Laa + _Lba) * _iqA + (_Lab + _Lbb) * _iqB),
+                               _thal)
             _Vd, _Vq = _park(_V0['A'], _V0['B'], _V0['C'], _thal)
-            _M = np.array([[R_phase - _w * _Lqd, -_w * _Lqq],
-                           [_w * _Ldd, R_phase + _w * _Ldq]])
+            _Mdq = np.array([[R_phase - _w * _Lqd, -_w * _Lqq],
+                             [_w * _Ldd, R_phase + _w * _Ldq]])
             try:
-                _idq = np.linalg.solve(_M, np.array([_Vd, _Vq - _w * _psi_pm_d]))
+                _idq = np.linalg.solve(
+                    _Mdq, np.array([_Vd, _Vq - _w * _psi_pm_d]))
             except np.linalg.LinAlgError:
                 _idq = np.array([0.0, 0.0])
             _id0, _iq0 = float(_idq[0]), float(_idq[1])
-            # operating-point field: A = A_pm + iA*xa + iB*xb (i_C folded in),
-            # then update the iron saturation from it for the next iterate.
             _iA0, _iB0, _iC0 = _ipark(_id0, _iq0, _thal)
             _Aop = _A0 + _iA0 * _xa + _iB0 * _xb
-            _pres0 = 0.0
-            for _hn, _off in (("s", 0), ("r", nsn)):
-                _h = half[_hn]
-                _Bx, _By = _per_triangle_B(_h["mesh"], _Aop[_off:_off + _h["n"]])
-                _Bm = np.sqrt(_Bx ** 2 + _By ** 2)
-                for _tg, _cv in sat_bh[_hn].items():
-                    _ix = _h["cells"][_tg]
-                    if _ix.size == 0:
-                        continue
-                    _mn = _mu_r_from_bh_vec(_cv, _Bm[_ix])
-                    _nn = 1.0 / (MU0 * np.maximum(_mn, 1.0))
-                    # same decaying damping + honest residual stop as the main
-                    # frame loop (this only SEEDS the transient's initial state,
-                    # but there is no reason for it to use a different recipe)
-                    _al = 0.5 if _it < 6 else max(0.05, 3.0 / (_it + 1))
-                    _pres0 = max(_pres0, float(
-                        np.linalg.norm(_nn - nu_el[_hn][_tg])
-                        / max(np.linalg.norm(nu_el[_hn][_tg]), 1e-30)))
-                    nu_el[_hn][_tg] = (1.0 - _al) * nu_el[_hn][_tg] + _al * _nn
-            if _pres0 < _PIC_TOL:
+            _nu_new = _nu_of(_elemB(_Aop), _nu_ph)
+            _vo0 = np.concatenate([_nu_ph[_ids] for _ids, _ in _sat2]) \
+                if _sat2 else np.zeros(0)
+            _vn0 = np.concatenate([_nu_new[_ids] for _ids, _ in _sat2]) \
+                if _sat2 else np.zeros(0)
+            _pres0 = (float(np.linalg.norm(_vn0 - _vo0)
+                            / max(np.linalg.norm(_vo0), 1e-30))
+                      if _vo0.size else 0.0)
+            _al = 0.5 if _it < 6 else max(0.05, 3.0 / (_it + 1))
+            _nu_ph = (1.0 - _al) * _nu_ph + _al * _nu_new
+            if _pres0 < _PIC_TOL2:
                 break
         _iA0, _iB0, _iC0 = _ipark(_id0, _iq0, _thal)
         _iv_state = {'A': _iA0, 'B': _iB0, 'C': _iC0}
-        # psi at t=-dt on the orbit: dq are constant in steady state, so the
-        # previous-step flux is just the SAME dq vector mapped one FRAME back —
-        # i.e. the park angle rotated by the per-frame electrical step w*dt (NOT
-        # one slip-node; a frame spans many slip nodes).  Getting this wrong
-        # injects a spurious rotational EMF at frame 0 -> a decaying DC current.
+        # ψ at t = −dt on the orbit: dq are constant in steady state, so the
+        # previous-step flux is the SAME dq vector mapped one FRAME back —
+        # the park angle rotated by ω·dt (NOT one slip node; a frame spans
+        # many).  Getting this wrong injects a spurious rotational EMF at
+        # frame 0 → a decaying DC current.
         _psd = _psi_pm_d + _Ldd * _id0 + _Ldq * _iq0
         _psq = _Lqd * _id0 + _Lqq * _iq0
-        _thal_m1 = _thal - _w * dt
-        _psi_prev = dict(zip(('A', 'B', 'C'), _ipark(_psd, _psq, _thal_m1)))
-        log.info("vdrive phasor init: Ld=%.4g Lq=%.4g H |psi_pm|=%.4g Wb "
+        _psi_prev = dict(zip(('A', 'B', 'C'),
+                             _ipark(_psd, _psq, _thal - _w * dt)))
+        log.info("P2 vdrive phasor init: Ld=%.4g Lq=%.4g H |psi_pm|=%.4g Wb "
                  "i_dq=(%.1f, %.1f) A i0=(%.1f, %.1f, %.1f)",
                  _Ldd, _Lqq, _psi_pm_d, _id0, _iq0, _iA0, _iB0, _iC0)
 
-    # Saturation-Picard convergence diagnostics (per frame): iterations actually
-    # used and the final fixed-point residual — reported in the result dict so
-    # the honesty of every run is visible, never assumed.
-    _pic_iters_hist: List[int] = []
-    _pic_resid_hist: List[float] = []
-    for k in range(n_total):
+    # ── frame loop ───────────────────────────────────────────────────────
+    _T2 = []; _psiA = []; _psiB = []; _psiC = []; _tt = []
+    _IA = []; _IB = []; _IC = []
+    _pic_iters = []; _pic_res_max = 0.0
+    _snap2 = None
+    # Animation keyframes: n evenly-spaced frames across the marched window.
+    # Settling frames (voltage drive / demag) are stripped from them afterwards
+    # like every other per-frame series, so they stay index-aligned with T/I/psi.
+    _frames2 = []
+    _anim_idx = set()
+    _anim_k0 = 0                 # first REPORTED frame index (settling stripped)
+    if int(return_frames) > 0 and n_total > 1:
+        # Span the REPORTED window only.  The voltage drive and demag prepend
+        # settling frames to n_total; animating those would show the machine
+        # starting up, not running.  Picked here rather than trimmed later
+        # because _frames2 holds keyframes, not one entry per frame, so the
+        # settling-frame strip has nothing to line it up against.
+        _anim_k0 = int(_vskip) + int(_dmskip)
+        _nf = max(2, min(int(return_frames), n_total - _anim_k0))
+        _anim_idx = {_anim_k0 + int(round(i * (n_total - 1 - _anim_k0) / (_nf - 1)))
+                     for i in range(_nf)}
+    # ── rotor-eddy / iron-loss histories (post-processed after the loop,
+    #    exactly as the P1 path does — magnetostatic field + honest coupled
+    #    rotor-eddy solve + Bertotti iron; no σ∂A/∂t in the main solve) ─────
+    _nr2 = int(half["r"]["n"])                    # rotor vertex count
+    _rot_vdof = vdof[nsn:nsn + _nr2]              # rotor vertex -> P2 dof
+    _histA_rot2 = []                              # (N, n_rotor_nodes) rotor A
+    _hsx2 = []; _hsy2 = []; _hrx2 = []; _hry2 = []  # stator/rotor iron B(t)
+    _hcx2 = []; _hcy2 = []                        # coil B(t) for AC copper
+    _hmx2 = []; _hmy2 = []                        # magnet B(t) — loss-density map
+    # FROZEN PERMEABILITY (frozen_nu): converge the saturation ONCE at frame
+    # 0 (extended Picard) then hold the per-element ν fixed for every rotor
+    # position — the industry-standard honest cogging/ripple method.  It
+    # removes the per-frame saturation-Picard jitter (which does NOT converge
+    # to _PIC_TOL on a coarse mesh and otherwise MASKS the discretisation
+    # ripple that P2 actually fixes), so the remaining T(θ) variation is
+    # purely geometric: P1 staircases, P2 is smooth.
+    nu_all2 = nu_base2.copy()      # persists across frames when frozen_nu
+    # NEWTON–RAPHSON for the BH nonlinearity (default; SB_NO_NEWTON=1 forces
+    # the damped-Picard path).  Cross-frame warm starts: the previous frame's
+    # converged field A and ν (a near-perfect Newton initial guess).
+    _use_newton = (_os_sb.environ.get("SB_NO_NEWTON") != "1")
+    _A2_prev = None; _nu_conv2 = None
+    # ── coupled-eddy state ───────────────────────────────────────────────
+    # A_prev starts at ZERO, which is not a field the machine was ever in, so
+    # the first step carries a fake ∂A/∂t.  It decays fast — the diffusion
+    # time of a 2 mm copper wire at 120 °C is ~5 µs against a ~100 µs step —
+    # but "fast" is not "gone", so the eddy run is given its own SETTLING
+    # frames at negative rotor angles (real solves at θ<0, discarded) instead
+    # of averaging the transient away like the P1 path does.  The reported
+    # window is then a clean period on every frame.  Voltage drive already
+    # marches ten settling periods, so it needs none.
+    _eddy_warm = 2 if (eddy and not _vdrive) else 0
+    # previous-frame A per dof (material frame).  Zero is not a field the
+    # machine was ever in, so under voltage drive — where the phasor
+    # initialiser already produced the operating-point field at θ_eff = 0 —
+    # seed it with that instead of a fake step from nothing.  Either seed is
+    # inside the discarded settling window; this one just does not spend the
+    # first frames unwinding an ∂A/∂t that never happened.
+    _Aed_prev = (_Aop.copy() if (eddy and _vdrive) else np.zeros(N2))
+    _Ued = np.zeros(len(_ed_con))         # per-body conductor voltages
+    _ed_cu = []; _ed_mag = []; _ed_sh = []   # σ∫E² per frame [W, machine]
+    _ed_dc2d = []                         # 2-D DC I²R of the same bars [W]
+    for k in range(-_eddy_warm, n_total):
         if progress_cb is not None:
-            try:
-                progress_cb(_prog_off + k, _prog_tot)
-            except Exception:
-                pass
+            try: progress_cb(max(k, 0), n_total)
+            except Exception: pass
         theta = (k / n_total) * period_mech * n_periods
-        if _moving and _macro_free_m:
-            m_shift = theta / spacing                # FRACTIONAL node shift
-            _mi = round(m_shift)                     # kill fp dust on whole-node
-            if abs(m_shift - _mi) < 1e-9:            # runs (exact-pad gate keys
-                m_shift = float(_mi)                 # on consecutive-int m)
-        else:
-            m_shift = int(round(theta / spacing))
+        m_shift = int(round(theta / spacing))
         theta_eff = m_shift * spacing
-        # Voltage drive uses a Crank–Nicolson circuit: (ψ_k − ψ_{k−1})/dt is the
-        # EXACT centred derivative at the mid-step time, so V must be sampled
-        # there too and R split between i_k and i_{k−1} — this removes the
-        # backward-Euler phase lag (ωΔt/2, 15°el at 12 steps/period) that
-        # otherwise skews the whole operating point when |V| ≈ |E|.
-        #
-        # CRITICAL: the field only exists at SNAPPED slip-node angles θ_eff, so
-        # the circuit must live in "rotor time": Δt_k = Δθ_eff/ω with V sampled
-        # at the midpoint of the ACTUAL motion.  Dividing the snapped-rotor Δψ
-        # by the UNIFORM dt instead modulates dψ/dt by the node-quantisation
-        # sawtooth (±33 % at 48 steps vs 72 nodes/period — fake volts ≫ |V−E|)
-        # and Crank–Nicolson rings undamped at Nyquist → monster harmonic
-        # currents (THD_I ~110 % observed).  Rotor-time stepping removes the
-        # artifact exactly; over a period Σ Δt_k = the nominal period.
-        _dth_frame = period_mech * n_periods / n_total     # mech deg per frame
+        # Voltage drive: Crank–Nicolson in ROTOR TIME.  The field only exists
+        # at SNAPPED slip-node angles θ_eff, so Δt_k = Δθ_eff/ω and V is
+        # sampled at the midpoint of the ACTUAL motion.  Dividing a snapped
+        # Δψ by the UNIFORM dt instead modulates dψ/dt by the node-
+        # quantisation sawtooth (fake volts ≫ |V−E|) and CN rings undamped
+        # at Nyquist → monster harmonic currents.
+        _dth_frame = period_mech * n_periods / n_total     # mech deg / frame
         if _vdrive:
-            if _th_eff_prev is None:            # very first frame: nominal step
+            if _th_eff_prev is None:        # very first frame: nominal step
                 _th_eff_prev = theta_eff - _dth_frame
             _dth_eff = theta_eff - _th_eff_prev
             _dt_k = dt * (_dth_eff / _dth_frame) if _dth_eff > 1e-12 else dt
             _Vt = _voltages(0.5 * (theta_eff + _th_eff_prev))
             _th_eff_prev = theta_eff
+            _iv_prev = dict(_iv_state)      # i_{k−1} for the R/2 term
+            Ist = dict(_iv_state)           # warm start for the coupled solve
         else:
-            _Vt = None
-        _iv_prev = dict(_iv_state) if _vdrive else None    # i_{k−1} for the R/2 term
-        if not _vdrive:
+            _Vt = None; _iv_prev = None
             Ist = _currents(theta_eff)
+        # eddy: the winding current is an integral CONSTRAINT, not a source —
+        # putting it in f as well would drive the ampere-turns twice.
+        f = f_mag2 if eddy else (f_mag2 + Ist['A'] * f_coil2['A']
+                                 + Ist['B'] * f_coil2['B']
+                                 + Ist['C'] * f_coil2['C'])
+        Pro, outer_red = _build_Pro2(m_shift)
+        # WARM-START ν across frames (perf): only frame 0 converges from the
+        # unsaturated base (~60–70 sweeps cold); every later frame starts from
+        # the PREVIOUS frame's CONVERGED ν and reaches the fixed point in ~40
+        # sweeps instead of a full cold ~70.  (The BH-knee Picard is genuinely
+        # slow — P1's main loop needs ~55 sweeps too — so warm-start trims the
+        # cold-start tax, it does not make it "a few".)  This is SOUND and does
+        # NOT bias the mean torque because the Picard early-stops on the
+        # residual (_PIC_TOL2, two consecutive sweeps): the initial guess
+        # changes the PATH, never the fixed point.  The cap is raised so frame
+        # 0 reaches _PIC_TOL2 from cold and warm-started frames have headroom.
+        # Same strategy as the P1 main loop.
+        if k == -_eddy_warm:
+            nu_all2 = nu_base2.copy()          # frozen path: base at frame 0
+        _Ptf = np.asarray(Pro.T @ f).ravel()
+        # free (non-Dirichlet) reduced DOFs — CONSTANT within a frame (Pro and
+        # the outer Dirichlet set are fixed), so precompute the slice once.
+        _free2 = np.setdiff1d(np.arange(Pro.shape[1]), outer_red)
+        _bff2 = _Ptf[_free2]
+        # cross-frame warm starts (previous converged field + ν).  The slip
+        # pairing (Pro) changes every frame, so the previous field A_prev lives
+        # on the PREVIOUS constraint manifold range(Pro_prev); PROJECT it onto
+        # the current range(Pro) (least-squares, average each paired group) so
+        # the Newton start is constraint-consistent — otherwise Newton drifts
+        # off-manifold and diverges frame-to-frame.
+        if _A2_prev is None or _nu_conv2 is None:
+            _nu_start = nu_base2.copy()
+            # Voltage drive: the phasor initialiser already produced the
+            # operating-point field at θ_eff=0 — that IS frame 0's warm start.
+            _A_start = (_Aop.copy() if (_vdrive and k == 0)
+                        else np.zeros(N2))
+            if _vdrive and k == 0:
+                _nu_start = _nu_ph.copy()
         else:
-            Ist = dict(_iv_state)   # warm start (only seeds the saturation Picard)
-        if _moving:
-            # Moving band: the rotor<->stator coupling is the closed-form strip
-            # stiffness K_band(m) (added to K below); the only node-pairing
-            # constraints left are the m-INDEPENDENT sector cuts -> constant Pro.
-            Pro = Pro_const
-            outer_red = outer_red_const
-            _Kband_f = _band.K(m_shift)
-        else:
-            # legacy: signed union-find merges ring nodes (slip) + cut pairs.
-            suf = _SignedUF(n)
-            for a, b in zip(Mn, Sn):
-                suf.union(int(b), int(a), _bc_sign)
-            for kk in range(Nring):
-                j = kk + m_shift; sg = 1
-                while j > Nring - 1: j -= (Nring - 1); sg *= _bc_sign
-                while j < 0:         j += (Nring - 1); sg *= _bc_sign
-                suf.union(int(rring[kk] + nsn), int(sring[j]), sg)
-            roots = [suf.find(i) for i in range(n)]
-            rid = np.array([r for r, _ in roots]); rsg = np.array([s for _, s in roots], float)
-            uniq, inv = np.unique(rid, return_inverse=True)
-            Pro = _coo((rsg, (np.arange(n), inv)), shape=(n, uniq.size)).tocsr()
-            outer_red = np.unique(inv[outer_nodes])
-            _Kband_f = None
-        # Source vectors.  Current drive: one fixed load vector f (Ist known).
-        # Voltage drive: the winding "unit-current" columns so the field can be
-        # written A = A_pm + i_A*xa + i_B*xb with i_C = -i_A-i_B (coil C folded
-        # in), and the currents solved from the circuit.
-        _n_rot = half["r"]["n"]
-        if not _vdrive:
-            f_cur_s = (Ist['A'] * f_coil['A'] + Ist['B'] * f_coil['B']
-                       + Ist['C'] * f_coil['C'])
-            f = np.concatenate([f_cur_s, f_mag])
-        else:
-            _Pmag = np.concatenate([np.zeros(nsn), f_mag])
-            _Pa = np.concatenate([f_coil['A'] - f_coil['C'], np.zeros(_n_rot)])
-            _Pb = np.concatenate([f_coil['B'] - f_coil['C'], np.zeros(_n_rot)])
-        # WARM-START nu across frames: adjacent rotor positions differ in their
-        # saturation pattern by well under a percent, so the previous frame's
-        # converged nu is an excellent initial guess (~4-5x fewer sweeps).
-        # HONESTY NOTE: under the OLD fixed-iteration recipe (14 sweeps, no
-        # residual test) warm-starting was UNSOUND — every frame stopped at a
-        # different stage of non-convergence and the start-dependence showed up
-        # as extra ripple, so the reset was load-bearing.  With residual-based
-        # stopping (_PIC_TOL) the fixed point is start-independent by
-        # construction: the initial guess changes the PATH, never the answer
-        # (to within tol).  Frame 0 still starts from the unsaturated base.
-        # FROZEN-NU: frame 0 converges once (extended Picard below); later frames
-        # keep that nu untouched — no reset, no update, one linear solve each.
-        if k == 0 and not (frozen_nu and not _vdrive and k > 0):
-            for hn in ("s", "r"):
-                for tag in sb_sat[hn]:
-                    nu_el[hn][tag][:] = 1.0 / (MU0 * max(mu0[hn].get(tag, 1.0), 1.0))
-        A = np.zeros(n)
-        # Voltage drive changes the current every Picard step, so the saturation
-        # state moves more than at fixed current -> a few extra iterations.
-        # SETTLING frames (all but the last discarded period) only need the DC
-        # trajectory roughly right -> a shallow Picard is ~3× cheaper; the last
-        # settling period + the whole reported window run at full depth.
-        if _vdrive and _vskip and k < (_vskip - _v_nspp):
-            _n_pic = max(6, nonlinear_iterations // 2)
-        else:
-            _n_pic = nonlinear_iterations + (6 if _vdrive else 0)
-        if frozen_nu and not _vdrive:
-            # reference frame: extended convergence; frozen frames: 1 linear solve
-            _n_pic = max(nonlinear_iterations, 40) if k == 0 else 1
-        _pic_ok = 0; _pic_res = 0.0
-        _pic_r_prev = None; _pic_om = 0.5   # Irons–Tuck relaxation state (per frame)
-        for it in range(_n_pic):
-            blocks = []
-            for hn in ("s", "r"):
-                h = half[hn]; K = K_const[hn].copy()
-                for tag, _sbi in sb_sat[hn].items():
-                    b0 = b0_sat[hn][tag]; nf = b0.zeros()
-                    nf[h["cells"][tag]] = nu_el[hn][tag]   # P0 dof = global elem id
-                    K = K + asm(_stiff_nu, _sbi, nu=b0.interpolate(nf))
-                blocks.append(K)
-            K = _bd(blocks).tocsr()
-            if _Kband_f is not None:
-                K = (K + _Kband_f).tocsr()   # moving-band strip coupling
+            _nu_start = _nu_conv2.copy()
+            _pd = np.asarray(Pro.multiply(Pro).sum(axis=0)).ravel()
+            _A_start = Pro @ (np.asarray(Pro.T @ _A2_prev).ravel()
+                              / np.maximum(_pd, 1.0))
+
+        # Demag makes the frame re-enterable: solve, check the magnet, and
+        # if it weakened, rebuild its source and solve again.  The de-rating
+        # is monotone and self-arresting — a weaker magnet makes a weaker
+        # demagnetising field — so this settles in a few passes; the cap is a
+        # backstop, not a schedule.
+        _dm_pass = 0
+        while True:
+            _res = 0.0; _nit = 0; _newton_ok = False
+            # ── COUPLED EDDY: bordered magnetodynamic Newton ──────────────────
+            # Replaces the magnetostatic solve for this frame; every other
+            # per-frame quantity (torque, ψ, B histories, demag) is taken from
+            # its A2 unchanged, so the eddy run differs from the magnetostatic
+            # one ONLY by the physics that was added.
             if eddy:
-                Keff = (K + _Minv_dt).tocsr()
-                # Solid-bar coils: current imposed via the integral J=I constraint,
-                # NOT a source -- the RHS carries magnets + eddy history.
-                rhs_field = (np.concatenate([np.zeros(nsn), f_mag])
-                             + _Minv_dt @ A_prev)
-                I_vec = np.concatenate([
-                    np.array([Ist[ph] for ph in _phase]) * _Iunit,
-                    np.zeros(len(_cons) - _n_coil_con)])
-                A, U_cons = _solve_eddy_constrained(Keff, rhs_field, Pro,
-                                                    outer_red, I_vec, A_prev)
-            elif _vdrive:
-                # ---- STRONG field + circuit coupling ------------------------
-                # The phase currents are unknowns solved WITH the field on the
-                # EXACT inductance of the current saturation state:
-                #   A = A_pm + i_A*xa + i_B*xb   (i_C = -i_A - i_B), where
-                #     A_pm = K^-1 * f_mag                 (PM flux, i = 0)
-                #     xa   = K^-1 * (coilA - coilC),  xb = K^-1 * (coilB - coilC)
-                # so K*A reproduces the imposed winding source exactly.  The
-                # per-phase flux linkages give the PM flux + the 2x2 inductance
-                # L; the circuit (backward Euler)
-                #   (R*I2 + L/dt) * i = V - (psi_pm - psi_prev)/dt
-                # is solved directly for i.  No outer iteration, no frozen
-                # Jacobian -- L is re-measured EVERY Picard step, so saturation
-                # and the circuit converge together.  Factor K once, reuse the
-                # LU for all three back-solves.
-                Kg = (Pro.T @ K @ Pro).tocsr()
-                _msk = np.ones(Kg.shape[0], bool); _msk[outer_red] = False
-                _free = np.flatnonzero(_msk)
-                _lu = _splu(Kg[_free][:, _free].tocsc())
+                # ν frozen ⇒ the bordered system is LINEAR (one exact solve);
+                # the first frame of a frozen_nu run still converges the
+                # saturation, which is what "frozen at the reference frame"
+                # means.  No saturable iron ⇒ always linear.
+                _nu_fix = (nu_all2 if ((frozen_nu and _A2_prev is not None)
+                                       or not _sat2) else None)
+            if eddy and not _vdrive:
+                _I_vec = np.array(
+                    [Ist[c["phase"]] * c["Iunit"] if c["key"] == "cu" else 0.0
+                     for c in _ed_con], float)
+                (_eok, A2, _Ued, _res, _nit) = _eddy_solve(
+                    Pro, _free2, _A_start, _Ued, _I_vec, _Aed_prev,
+                    _nu_fix, max(int(nonlinear_iterations), 20))
+                if not _eok:
+                    # No silent fallback: the magnetostatic Picard below would
+                    # solve DIFFERENT physics (no σ·∂A/∂t, coil current back as
+                    # a source) and report it as an eddy run.
+                    raise RuntimeError(
+                        f"P2 coupled eddy: bordered Newton did not converge at "
+                        f"frame {k} ({_nit} its, rrel={_res:.2e})")
+                _newton_ok = True
+                if _nu_fix is None:
+                    # element-mean ν for the loss post-processing
+                    nu_all2 = _nu_of(_elemB(A2), nu_all2)
+            elif eddy and _vdrive:
+                # ── EDDY **AND** VOLTAGE DRIVE: one (A, U, i_A, i_B) Newton ──
+                # The winding current is the constraint VALUE and a circuit
+                # unknown at once — see _ve_newton.  There is deliberately NO
+                # fallback: the magnetostatic Picard solves different physics
+                # and the current-drive eddy solve ignores the circuit, so
+                # either one would report a different machine as this run.
+                (_eok, A2, _Ued, _viA, _viB, _res, _nit,
+                 _vrc) = _ve_newton(
+                    Pro, _free2, _A_start, _Ued, (Ist['A'], Ist['B']),
+                    _Aed_prev, _Vt, _dt_k, _iv_prev, _psi_prev,
+                    _nu_fix, max(int(nonlinear_iterations), 25))
+                if not _eok:
+                    raise RuntimeError(
+                        f"P2 coupled eddy + voltage drive: bordered (A, U, i) "
+                        f"Newton did not converge at frame {k} ({_nit} its, "
+                        f"rrel={_res:.2e}, circuit resid="
+                        f"{float(np.max(np.abs(_vrc))):.2e} V)")
+                _newton_ok = True
+                if _nu_fix is None:
+                    nu_all2 = _nu_of(_elemB(A2), nu_all2)
+                # The solved currents ARE this frame's excitation from here on
+                # (torque, ψ, the I²R reference of the eddy loss split).  f is
+                # NOT rebuilt with them: under eddy the ampere-turns enter
+                # through the constraint rows only.
+                Ist = {'A': _viA, 'B': _viB, 'C': -_viA - _viB}
+            # ── VOLTAGE DRIVE: coupled field + circuit solve ──────────────────
+            # The phase currents are UNKNOWNS solved together with the field.
+            # Primary path: the coupled Newton (field residual + line-to-line
+            # circuit residual on the ACTUAL ψ(A), Jacobian = the tangent
+            # back-solve ∂A/∂i).  Fallback: the frozen-ν superposition Picard,
+            # which is exactly the P1 recipe.
+            if _vdrive and not eddy:
+                _vok = False
+                if _use_newton and not frozen_nu and _sat2:
+                    (_vok, _A2v, _viA, _viB, _res, _nit,
+                     _vrc) = _v_newton(
+                        Pro, _free2, _A_start, (Ist['A'], Ist['B']),
+                        _Vt, _dt_k, _iv_prev, _psi_prev,
+                        max(int(nonlinear_iterations), 20))
+                if _vok:
+                    A2 = _A2v; _newton_ok = True
+                    # element-mean ν for the loss post-processing
+                    nu_all2 = _nu_of(_elemB(A2), nu_all2)
+                else:
+                    if _use_newton and not frozen_nu and _sat2:
+                        log.info("P2 vdrive Newton not converged at frame %d "
+                                 "(%d its, rrel=%.1e) — Picard fallback",
+                                 k, _nit, _res)
+                    if frozen_nu:
+                        _n_pic2 = (max(nonlinear_iterations, 40) if k == 0
+                                   else 1)
+                        _nu_in = nu_all2
+                    else:
+                        _n_pic2 = max(nonlinear_iterations,
+                                      70 if k == 0 else 45)
+                        _nu_in = _nu_start
+                    (A2, _viA, _viB, nu_all2, _res,
+                     _nit) = _v_picard(
+                        Pro, _free2, _nu_in, _Vt, _dt_k, _iv_prev,
+                        _psi_prev, _n_pic2, bool(frozen_nu and k > 0))
+                Ist = {'A': _viA, 'B': _viB, 'C': -_viA - _viB}
+                f = (f_mag2 + Ist['A'] * f_coil2['A']
+                     + Ist['B'] * f_coil2['B'] + Ist['C'] * f_coil2['C'])
+                _bff2 = np.asarray(Pro.T @ f).ravel()[_free2]
+            # ── NEWTON–RAPHSON (differential-reluctivity tangent) ─────────────
+            # Residual R(A)=K(ν(elem-mean|B|))·A−f is IDENTICAL to the Picard fixed
+            # point (element-mean ν per iron element), so Newton converges to the
+            # SAME physics — just far fewer sweeps.  Jacobian J=K+T with the
+            # per-element tangent T=2(dν/dB²)(∇A·∇u)(∇A·∇v).  Line-search on |R|
+            # globalises the BH knee; if it collapses, this frame falls back to
+            # damped Picard (never returns garbage).
+            if ((not _vdrive) and (not eddy) and _use_newton
+                    and not frozen_nu and _sat2):
+                # POINTWISE ν(|B|²) at quadrature points (_Kpw, hoisted above
+                # the frame loop) — the residual and the tangent then use the
+                # SAME nonlinearity, giving a TRUE (quadratic) Newton step.
+                # (An element-mean ν residual with a pointwise tangent is
+                # inconsistent → no acceleration.)  For P2, B is linear per
+                # element, so pointwise ν is also the more accurate model; it
+                # is validated to match the element-mean Picard fixed point below.
+                def _rfree_pw(Avec, K):
+                    return np.asarray(Pro.T @ (K @ Avec - f)).ravel()[_free2]
 
-                def _bsolve(_ffull, _lu=_lu, _free=_free, _Ncol=Kg.shape[0]):
-                    _fr = (Pro.T @ _ffull)[_free]
-                    _xr = np.zeros(_Ncol); _xr[_free] = _lu.solve(_fr)
-                    return Pro @ _xr
+                A2 = _A_start.copy(); _fail = False; _rrel = 1.0
+                _bnrm = max(float(np.linalg.norm(_bff2)), 1e-30)
+                for it in range(max(int(nonlinear_iterations), 20)):
+                    _nit = it + 1
+                    K, _info = _Kpw(A2)
+                    r_free = _rfree_pw(A2, K)
+                    _rrel = float(np.linalg.norm(r_free)) / _bnrm
+                    if _rrel < 1e-7:
+                        break
+                    # tangent T = 2(dν/dB²)(∇A·∇u)(∇A·∇v), pointwise & consistent
+                    T = _tangent2(_info)
+                    J = (K + T).tocsr() if T is not None else K
+                    Jff = (Pro.T @ J @ Pro).tocsr()[_free2][:, _free2].tocsc()
+                    try:
+                        _du = _solve_ff(Jff, -r_free)
+                    except Exception as _je:
+                        log.info("P2 Newton solve failed (%s) — Picard fallback", _je)
+                        _fail = True; break
+                    _duf = np.zeros(Pro.shape[1]); _duf[_free2] = _du
+                    dA = Pro @ _duf
+                    # backtracking line-search on the residual norm (BH-knee safety)
+                    _r0 = float(np.linalg.norm(r_free)); _lam = 1.0; _acc = False
+                    for _ls in range(6):
+                        A_try = A2 + _lam * dA
+                        _Kt, _ = _Kpw(A_try)
+                        if float(np.linalg.norm(_rfree_pw(A_try, _Kt))) < _r0:
+                            A2 = A_try; _acc = True; break
+                        _lam *= 0.5
+                    if not _acc:
+                        _fail = True; break
+                # accept only if the field residual actually reached tol
+                if (not _fail) and (_rrel < 1e-7):
+                    _newton_ok = True; _res = _rrel
+                    # element-mean ν for the loss post-processing (loss code uses
+                    # per-element ν); negligible vs the pointwise field solve.
+                    nu_all2 = _nu_of(_elemB(A2), nu_all2)
+                else:
+                    log.info("P2 Newton not converged at frame %d (%d its, rrel=%.1e)"
+                             " — Picard fallback", k, _nit, _rrel)
+            # ── DAMPED PICARD (SB_NO_NEWTON, frozen_nu, or Newton fell back) ──
+            if (not _vdrive) and (not eddy) and not _newton_ok:
+                if not frozen_nu:
+                    nu_all2 = _nu_start.copy()     # warm-start (base at k=0)
+                if frozen_nu:
+                    _n_pic2 = max(nonlinear_iterations, 40) if k == 0 else 1
+                else:
+                    _n_pic2 = max(nonlinear_iterations, 70 if k == 0 else 45)
+                A2 = np.zeros(N2)
+                _res = 0.0; _nit = 0
+                _pic_ok = 0; _pic_r_prev = None; _pic_om = 0.5   # Irons–Tuck state
+                for it in range(_n_pic2):
+                    _nit = it + 1
+                    K = _asmK(nu_all2)
+                    Kff = (Pro.T @ K @ Pro).tocsr()[_free2][:, _free2].tocsc()
+                    _xf2 = _solve_ff(Kff, _bff2)
+                    _xred2 = np.zeros(Pro.shape[1]); _xred2[_free2] = _xf2
+                    A2 = Pro @ _xred2
+                    if (frozen_nu and k > 0) or not _sat2:
+                        break                      # frozen frame: 1 linear solve
+                    Bmag_el = _elemB(A2)
+                    _vo = np.concatenate([nu_all2[_ids] for _ids, _ in _sat2])
+                    _vn = np.concatenate([
+                        1.0 / (MU0 * np.maximum(_mu_r_from_bh_vec(_c, Bmag_el[_ids]), 1.0))
+                        for _ids, _c in _sat2])
+                    _rr = _vn - _vo
+                    _res = float(np.linalg.norm(_rr) / max(np.linalg.norm(_vo), 1e-30))
+                    if _pic_r_prev is not None:
+                        _dr = _rr - _pic_r_prev; _den = float(_dr @ _dr)
+                        if _den > 0.0:
+                            _pic_om = float(np.clip(
+                                -_pic_om * float(_pic_r_prev @ _dr) / _den, 0.05, 1.0))
+                    _pic_r_prev = _rr
+                    _vu = _vo + _pic_om * _rr
+                    _p0 = 0
+                    for _ids, _c in _sat2:
+                        nu_all2[_ids] = _vu[_p0:_p0 + _ids.size]; _p0 += _ids.size
+                    if _res < _PIC_TOL2:
+                        _pic_ok += 1
+                        if _pic_ok >= 2:
+                            break
+                    else:
+                        _pic_ok = 0
+            # ── Irreversible demagnetisation ─────────────────────────────────
+            # HERE, after the frame's nonlinear solve has converged by EITHER
+            # path — the pointwise Newton (primary) or the damped Picard
+            # (fallback).  Putting it inside the Picard was wrong: Newton
+            # converges on this machine, so the fallback never runs and the hook
+            # never fired.  It must also never see an intermediate iterate: the
+            # early sweeps start from unsaturated iron and pass through fields
+            # that are numerical transients, and a monotone irreversible rule
+            # burns those in permanently.
+            #
+            # If the magnet moved, its own field must be re-solved with the
+            # weaker source, so the frame is redone.  The de-rating is monotone
+            # and self-arresting (a weaker magnet makes a weaker demagnetising
+            # field), so this converges in a handful of passes; the cap is a
+            # backstop, not a schedule.
+            #
+            # ── DO NOT move this rule inside the Newton loop ─────────────────
+            # Tried on branch `demag-in-newton` (3aaf8d1, 2acdeb5), reverted in
+            # ece72ea, and then measured to a conclusion.  30 mm 12s14p, 60 A,
+            # F45SH_120C, P2, 24 frames — the pinned p2_demag case:
+            #
+            #   judged at        restart   de-rated  Br_mean   T_avg     s
+            #   rrel<1e-7 (here) cold        241/490  0.85383  0.40562  798
+            #   rrel<1e-7        warm A2     241/490  0.85383  0.40562  288
+            #   rrel<1e-6 in-loop warm       219/490  0.87037  0.41756  190
+            #   rrel<1e-6, cap 60 warm       219/490  0.86958  0.41756  244
+            #
+            # It is NOT path dependence and NOT the cold restart.  Warm-starting
+            # the re-solve from the field just converged (see below) reproduces
+            # this code to 5e-8 on the whole Br map, with the SAME 277 rule
+            # evaluations — so where the re-solve starts provably cannot reach
+            # the answer.  Nor is either number a cap artefact on the magnet
+            # side: the in-loop scheme gives the same 219 at a settling cap of
+            # 24 and of 60.
+            #
+            # What moves the answer is WHEN the rule is allowed to look.  A
+            # GLOBAL relative residual of 1e-6 is not a converged field INSIDE a
+            # magnet corner — the corner is the last place Newton resolves.
+            # Measured at the FIRST look of each frame, which is the look that
+            # decides everything, because the magnet is still at its strongest
+            # there and that is where the frame's worst demagnetising field is:
+            #
+            #   frame   worst H, rrel<1e-7   worst H, rrel 3e-7..1e-6
+            #     1        -1072 kA/m            -993 kA/m
+            #     6         -934                 -669
+            #     8         -853                 -650
+            #    11         -858                 -728
+            #
+            # Same rotor position, same incoming magnet (Br_mean agrees to
+            # 0.2 %), 8-30 % less demagnetising field — always in that
+            # direction, because a warm-started Newton builds the armature
+            # reaction UP toward the answer and an early iterate has not got
+            # there yet.  The rule is monotone: a worst-case field missed at the
+            # first look is missed for good, since every later pass of that
+            # frame sees an already-weakened magnet and therefore a milder
+            # field.  That is the whole of the "in-Newton reports less
+            # demagnetisation and more torque", and why it grows with load
+            # (3 elements at 32 A, 24 at 60 A).
+            #
+            # So the rule may only see a field that has passed the frame's OWN
+            # convergence test.  The 3.3x that change bought is available
+            # without it, from the warm start below.
+            if _dmst is not None:
+                _bxq_d, _byq_d, _dxq_d = _p2_B_at_quad(b2, A2)
+                _ar_d = _dxq_d.sum(axis=1)
+                _bxe_d = (_bxq_d * _dxq_d).sum(axis=1) / np.maximum(_ar_d, 1e-30)
+                _bye_d = (_byq_d * _dxq_d).sum(axis=1) / np.maximum(_ar_d, 1e-30)
+                if _dmst.update(_bxe_d[nst:], _bye_d[nst:]) and _dm_pass < 11:
+                    _mx_all[nst:] = _Mx_glob * _br_glob
+                    _my_all[nst:] = _My_glob * _br_glob
+                    f_mag2 = asm(_msrc, b2, mx=b2_0.interpolate(_mx_all),
+                                 my=b2_0.interpolate(_my_all))
+                    f = f_mag2 if eddy else (
+                        f_mag2 + Ist['A'] * f_coil2['A']
+                        + Ist['B'] * f_coil2['B'] + Ist['C'] * f_coil2['C'])
+                    _bff2 = np.asarray(Pro.T @ f).ravel()[_free2]
+                    _dm_pass += 1
+                    # Re-solve from the field we just converged, not from the
+                    # previous FRAME's.  The magnet moved by a fraction of a
+                    # per cent, so this start is far closer than _A_start and
+                    # Newton needs 3-5 iterations instead of 12-19.  The rule
+                    # still only ever judges a field that passed the frame's
+                    # convergence test, so the judging sequence is untouched —
+                    # measured identical to the cold restart (max |dBr| 5e-8
+                    # over 490 elements, same 241/490, T_avg to 8 digits) at
+                    # 288 s against 798 s.
+                    _A_start = A2.copy()
+                    continue                     # re-solve THIS frame
+            break
 
-                A_pm = _bsolve(_Pmag); xa = _bsolve(_Pa); xb = _bsolve(_Pb)
-                _pm = _psi_of(A_pm); _qa = _psi_of(xa); _qb = _psi_of(xb)
-                _psi_pmA = _pm[0] * sc_psi; _psi_pmB = _pm[1] * sc_psi
-                _psi_pmC = _pm[2] * sc_psi
-                _Laa = _qa[0] * sc_psi; _Lba = _qa[1] * sc_psi; _Lca = _qa[2] * sc_psi
-                _Lab = _qb[0] * sc_psi; _Lbb = _qb[1] * sc_psi; _Lcb = _qb[2] * sc_psi
-                if _psi_prev is None:   # first (discarded settling) frame bootstrap
-                    _psi_prev = {'A': _psi_pmA, 'B': _psi_pmB, 'C': _psi_pmC}
-                # Crank–Nicolson circuit at the mid-step time of the ACTUAL
-                # rotor motion (Δt_k = Δθ_eff/ω — see the frame-top comment),
-                # in the LINE-TO-LINE (floating-neutral wye) formulation:
-                #   V_AB = R·(Δi_k + Δi_{k−1})/2 + (Δψ_k − Δψ_{k−1})/Δt_k  (Δ = A−B)
-                #   V_BC likewise (B−C), with i_C = −i_A − i_B.
-                # A real FOC inverter drives an ISOLATED-neutral machine: the
-                # zero-sequence back-EMF (triplen harmonics — large on this
-                # concentrated winding) falls on the floating neutral and drives
-                # NO current.  Applying phase voltages to the phase equations
-                # directly pins the machine's neutral to the source's and shorts
-                # that zero-sequence EMF through the tiny zero-seq inductance →
-                # monster fake triplen currents (measured h3 ≈ 43 % of I₁,
-                # THD_I ≈ 110 %).  Line-to-line differences kill the zero
-                # sequence exactly — as the physical isolated neutral does.
-                _dpmA = _psi_pmA - _psi_prev['A']
-                _dpmB = _psi_pmB - _psi_prev['B']
-                _dpmC = _psi_pmC - _psi_prev['C']
-                _Mc = _circ_M_ll((_Laa, _Lba, _Lca), (_Lab, _Lbb, _Lcb),
-                                 _dt_k, R_phase)
-                _bc = np.array([
-                    (_Vt['A'] - _Vt['B']) - (_dpmA - _dpmB) / _dt_k
-                    - 0.5 * R_phase * (_iv_prev['A'] - _iv_prev['B']),
-                    (_Vt['B'] - _Vt['C']) - (_dpmB - _dpmC) / _dt_k
-                    - 0.5 * R_phase * (_iv_prev['B'] - _iv_prev['C'])])
-                _iab = np.linalg.solve(_Mc, _bc)
-                _iA = float(_iab[0]); _iB = float(_iab[1])
-                Ist = {'A': _iA, 'B': _iB, 'C': -_iA - _iB}
-                A = A_pm + _iA * xa + _iB * xb
-            else:
-                A = Pro @ _sksolve(*condense((Pro.T @ K @ Pro).tocsr(),
-                                              Pro.T @ f, D=outer_red))
-            if frozen_nu and not _vdrive and k > 0:
-                continue                      # frozen frames: nu stays untouched
-            # PER-ELEMENT reluctivity: each iron triangle gets its own mu(|B|)
-            # from the B-H curve.  Gather the WHOLE saturable nu state into one
-            # vector so the relaxation and the residual see the global field.
-            _nu_old_v = []; _nu_new_v = []; _nu_slices = []
-            for hn, off in (("s", 0), ("r", nsn)):
-                h = half[hn]
-                Bx, By = _per_triangle_B(h["mesh"], A[off:off + h["n"]])
-                Bm = np.sqrt(Bx ** 2 + By ** 2)
-                for tag, curve in sat_bh[hn].items():
-                    idx = h["cells"][tag]
-                    if idx.size == 0:
-                        continue
-                    mu_new = _mu_r_from_bh_vec(curve, Bm[idx])
-                    _nu_old_v.append(nu_el[hn][tag])
-                    _nu_new_v.append(1.0 / (MU0 * np.maximum(mu_new, 1.0)))
-                    _nu_slices.append((hn, tag))
-            if _nu_slices:
-                _vo = np.concatenate(_nu_old_v)
-                _r = np.concatenate(_nu_new_v) - _vo
-                # honest fixed-point residual (relative L2, BEFORE relaxation —
-                # the relaxed step size would fake convergence)
-                _pic_res = float(np.linalg.norm(_r)
-                                 / max(np.linalg.norm(_vo), 1e-30))
-                # IRONS–TUCK (vector Aitken Δ²) adaptive relaxation: the fixed
-                # 0.5 step OSCILLATES around the fixed point (THE source of the
-                # old 5–8 Nm no-load torque floor); a 1/it decay converges but
-                # crawls (~100 sweeps to 1e-3).  Aitken measures the actual
-                # contraction from consecutive residuals and picks the step —
-                # no tuned schedules.  (Anderson(m=4) was tried and THRASHES on
-                # this map — the B-H knee makes the residual non-smooth and the
-                # secant model misfires.)  omega clamped to (0, 1]: the update
-                # stays a convex combination of old and new nu, so it can never
-                # leave the physical range the B-H curve produced.
-                if _pic_r_prev is not None:
-                    _dr = _r - _pic_r_prev
-                    _den = float(_dr @ _dr)
-                    if _den > 0.0:
-                        _pic_om = float(np.clip(
-                            -_pic_om * float(_pic_r_prev @ _dr) / _den,
-                            0.05, 1.0))
-                _pic_r_prev = _r
-                _vu = _vo + _pic_om * _r
-                _p0 = 0
-                for (_hn2, _tg2), _arr in zip(_nu_slices, _nu_old_v):
-                    nu_el[_hn2][_tg2] = _vu[_p0:_p0 + _arr.size]
-                    _p0 += _arr.size
-            # HONEST stopping: two consecutive sweeps with the worst relative
-            # nu residual under _PIC_TOL end this frame's Picard.  Lightly
-            # saturated frames exit in a handful of iterations; deep saturation
-            # runs to the cap.  No fixed-recipe iteration counts anywhere.
-            if _pic_res < _PIC_TOL:
-                _pic_ok += 1
-                if _pic_ok >= 2:
-                    # Saturation has converged FOR THE PRESENT MAGNET STATE, so
-                    # this is the only place the irreversible demag rule may be
-                    # evaluated.  Applying it to an intermediate Picard iterate
-                    # is wrong and destructive: the early sweeps start from
-                    # unsaturated iron and pass through fields that are pure
-                    # numerical transients (measured H ≈ −880 kA/m against a
-                    # converged −550), and a monotone irreversible rule burns
-                    # that artefact into the magnet permanently — it wiped NdFeB
-                    # to Br 0.03 and cost a third of the torque.
-                    #
-                    # Weakening the magnet moves the saturation state, so the
-                    # Picard is re-entered and the frame only ends when the
-                    # field and the magnet agree.
-                    if demag and _mag_idx.size:
-                        _Bxr_p, _Byr_p = _per_triangle_B(half["r"]["mesh"],
-                                                         A[nsn:])
-                        if _demag_derate(_Bxr_p, _Byr_p):
-                            f_mag = _build_fmag(_br_glob)
-                            if _vdrive:
-                                _Pmag = np.concatenate([np.zeros(nsn), f_mag])
-                            else:
-                                f = np.concatenate([f_cur_s, f_mag])
-                            _pic_ok = 0
-                            continue
-                    break
-            else:
-                _pic_ok = 0
-        if (demag and _mag_idx.size and frozen_nu and not _vdrive and k > 0):
-            # Frozen-nu frames run a single linear solve and never reach the
-            # convergence test above; with nu fixed that solve IS the converged
-            # field, so the same rule applies to it directly.
-            _Bxr_p, _Byr_p = _per_triangle_B(half["r"]["mesh"], A[nsn:])
-            if _demag_derate(_Bxr_p, _Byr_p):
-                f_mag = _build_fmag(_br_glob)
-                f = np.concatenate([f_cur_s, f_mag])
-        _pic_iters_hist.append(it + 1); _pic_resid_hist.append(_pic_res)
-        # per-phase flux linkage of the converged solution (also used below).
-        pa, pb, pc = _psi_of(A)
+        _A2_prev = A2.copy(); _nu_conv2 = nu_all2.copy()
+        if eddy:
+            # ── Joule loss straight from the coupled solution ─────────────
+            #   P = ∫σ E² = ∫σ(−∂A/∂t + U_b)²
+            #     = Ȧᵀ·M̃_b·Ȧ − 2·U_b·(g_b·Ȧ) + U_b²·S_b     per body,
+            # evaluated EXACTLY on the FEM field (M̃ = σ-weighted mass, g and S
+            # the same vectors the constraint rows use).  U_b ≡ 0 bodies keep
+            # only the first term — which is what U = 0 means.  Done per body
+            # rather than by smearing U onto nodes, so a node shared by two
+            # conductors cannot pick up the wrong voltage.
+            # Δt of the step that was actually SOLVED: the rotor-time Δt_k
+            # under voltage drive (see _ve_newton), the nominal dt otherwise.
+            # Dividing by a different Δt than the solve used would put the
+            # slip-node sawtooth straight into E = −∂A/∂t + U.
+            _dt_e = _dt_k if _vdrive else dt
+            _dAe = (A2 - _Aed_prev) * (1.0 / _dt_e)       # ∂A/∂t [V/m]
+            _pg = {_kk: float(_dAe @ (_Mg @ _dAe))
+                   for _kk, _Mg in _Msig_grp.items()}
+            for _ci, _c in enumerate(_ed_con):
+                _u = float(_Ued[_ci])
+                _pg[_c["key"]] += _u * (_u * _c["S"]
+                                        - 2.0 * float(_c["g"] @ _dAe))
+            _wsc = float(NS) * float(p.stack_length)   # sector·2-D → machine
+            _Aed_prev = A2.copy()
+            if k >= 0:
+                _ed_cu.append(_pg.get("cu", 0.0) * _wsc)
+                _ed_mag.append(_pg.get("mag", 0.0) * _wsc)
+                _ed_sh.append(_pg.get("shaft", 0.0) * _wsc)
+                # DC reference of the SAME bars: with ∂A/∂t = 0 the constraint
+                # gives U_b = I_b/S_b and P = ΣI_b²/S_b — the 2-D (active
+                # length only) I²R, so total − this is the honest AC increment
+                # to add to the end-winding-corrected DC below.
+                _ed_dc2d.append(float(np.sum(
+                    [(Ist[c["phase"]] * c["Iunit"]) ** 2 / max(c["S"], 1e-30)
+                     for c in _ed_con if c["key"] == "cu"])) * _wsc)
+        if k < 0:
+            continue          # eddy settling frame: solved, not reported
+        _pic_iters.append(_nit); _pic_res_max = max(_pic_res_max, _res)
+        Tq = _arkkio_torque_p2(mesh_all, A2, b2, p.r_rotor_out,
+                               p.r_stator_in, p.stack_length) * NS
+        _T2.append(Tq)
+        _pa, _pb, _pc = _psi2(A2)
+        _psiA.append(_pa); _psiB.append(_pb); _psiC.append(_pc)
+        _IA.append(Ist['A']); _IB.append(Ist['B']); _IC.append(Ist['C'])
+        _tt.append(k * dt)
         if _vdrive:
-            # circuit residual on the CONVERGED solution (health check: ~0 when
-            # the coupled Picard converged).
-            _psiA_c = pa * sc_psi; _psiB_c = pb * sc_psi; _psiC_c = pc * sc_psi
-            # line-to-line residuals (the phase-A equation alone is legitimately
-            # nonzero by the zero-sequence EMF the floating neutral absorbs)
-            _resA = ((_Vt['A'] - _Vt['B'])
-                     - 0.5 * R_phase * (Ist['A'] - Ist['B']
-                                        + _iv_prev['A'] - _iv_prev['B'])
-                     - ((_psiA_c - _psiB_c)
-                        - (_psi_prev['A'] - _psi_prev['B'])) / _dt_k)
-            _resB = ((_Vt['B'] - _Vt['C'])
-                     - 0.5 * R_phase * (Ist['B'] - Ist['C']
-                                        + _iv_prev['B'] - _iv_prev['C'])
-                     - ((_psiB_c - _psiC_c)
-                        - (_psi_prev['B'] - _psi_prev['C'])) / _dt_k)
-            _v_diag["iters"].append(int(_n_pic))
-            _v_diag["resid"].append(float(max(abs(_resA), abs(_resB))))
-            _psi_prev = {'A': _psiA_c, 'B': _psiB_c, 'C': pc * sc_psi}
+            # ── circuit bookkeeping on the CONVERGED field ───────────────
+            # Residual of the line-to-line equations evaluated with the
+            # ACTUAL ψ(A) of the converged frame (health check: ~0 when the
+            # coupled solve converged).  The phase-A equation alone is
+            # legitimately non-zero — that is the zero-sequence EMF the
+            # floating neutral absorbs.
+            _rc_c = _circ_r((_pa, _pb, _pc), Ist['A'], Ist['B'],
+                            _iv_prev, _psi_prev, _Vt, _dt_k)
+            _v_diag["iters"].append(int(_nit))
+            _v_diag["resid"].append(float(np.max(np.abs(_rc_c))))
+            _psi_prev = {'A': _pa, 'B': _pb, 'C': _pc}
             _iv_state = dict(Ist)
-            # ITERATED Aitken DC-mode removal: the period-boundary flux converges
-            # geometrically toward the steady orbit; sample it at each period
-            # end and Δ²-extrapolate the limit whenever 3 fresh samples exist
-            # since the last anchor (anchors at periods 3, 6, 9 within the
-            # settling window — each application cuts the residual DC ~3×).
+            # ITERATED Aitken DC-mode removal: the period-boundary flux
+            # converges geometrically toward the steady orbit; sample it at
+            # each period end and Δ²-extrapolate the limit whenever 3 fresh
+            # samples exist since the last anchor (anchors at periods 3, 6,
+            # 9 inside the settling window — each cuts the residual DC ~3×).
             # Samples must share the cycle phase (period spacing) so the
             # periodic flux content cancels exactly in the differences.
             if _v_nspp > 0 and ((k + 1) % _v_nspp == 0) and (k + 1) < _vskip:
-                _v_bpsi.append((_psiA_c, _psiB_c))
+                _v_bpsi.append((_pa, _pb))
                 if len(_v_bpsi) >= 3:
                     # Δ²-extrapolation + its "already converged / unstable"
-                    # guard: simulation/drive.py, shared with the P2 path.
+                    # guard: simulation/drive.py, shared with the P1 path.
                     _new, _corr, _drift = _aitken_flux_anchor(_v_bpsi)
                     if _new is None:
-                        log.info("vdrive Aitken anchor SKIPPED at period %d "
+                        log.info("P2 vdrive Aitken anchor SKIPPED at period %d "
                                  "(drift %.3g, corr %.3g Wb — converged/unstable)",
                                  (k + 1) // _v_nspp, _drift, _corr)
                         _v_bpsi.clear()
                     else:
                         _psi_prev = _new
-                        _v_bpsi.clear()   # fresh samples only after the re-anchor
-                        log.info("vdrive Aitken anchor at period %d: psiA %.4g -> "
-                                 "%.4g (|corr| %.3g Wb)", (k + 1) // _v_nspp,
-                                 _psiA_c, _new['A'], _corr)
-        if eddy:
-            # Joule loss = ∫σ J²/σ² = ∫σ(−∂A/∂t + U_c)² over the conductors.
-            # The conductor voltage U_c cancels the large inductive −∂A/∂t,
-            # leaving the real dissipation.  Constrained conductors get their
-            # solved U_c; U=0 conductors (shaft, cut magnet halves) are pure
-            # J = −σ∂A/∂t by symmetry.
-            Uvec = np.zeros(n)
-            for _ci, _c in enumerate(_cons):
-                Uvec[_c["nodes"]] = U_cons[_ci]
-            Ffld = -(A - A_prev) / dt + Uvec
-            _eddy_P.append(float(Ffld @ (_Minv_dt @ Ffld)) * dt)   # ∫σ F² [W, sector]
-            A_prev = A.copy()        # previous-step field for the σ·∂A/∂t term
-        if rotor_eddy and _magnode_glob.size:
-            # Magnet-node A history → smoothed post-processed eddy loss below.
-            _hist_Am.append(A[_magnode_glob].copy())
-        if rotor_eddy and _shaftnode_glob.size:
-            # Shaft-node A history → field-based (rotor-frame) shaft eddy loss.
-            _hist_Ash.append(A[_shaftnode_glob].copy())
-        if honest_eddy or rotor_eddy:
-            # ALL rotor-node A history → coupled (reaction-included) rotor eddy.
-            # With rotor_eddy this is now the PRODUCTION magnet/shaft loss (the
-            # history-based post-process is jitter-dominated for screened bodies
-            # — see the honest-swap block below); honest_eddy alone keeps the
-            # old diagnostic behaviour.  ~N·n_rotor_nodes·8 B ≈ 10-20 MB.
-            _hist_A_rotor.append(A[nsn:nsn + half["r"]["n"]].copy())
-        # capture the converged per-element B for the loss integrals
-        _Bxs, _Bys = _per_triangle_B(half["s"]["mesh"], A[:nsn])
-        _Bxr, _Byr = _per_triangle_B(half["r"]["mesh"], A[nsn:])
-        # field_first snapshots the FIRST frame of the MEASUREMENT pass — frame 0
-        # is now a settling frame with a magnet that has not yet de-rated, and
-        # showing that as "the demag map" would report a pristine magnet.
-        if return_field and ((field_first and k == _dmskip)
+                        _v_bpsi.clear()   # fresh samples only after re-anchor
+                        log.info("P2 vdrive Aitken anchor at period %d: psiA "
+                                 "%.4g -> %.4g (|corr| %.3g Wb)",
+                                 (k + 1) // _v_nspp, _pa, _new['A'], _corr)
+        # Element-mean B in the iron and the coils, captured on EVERY frame —
+        # the same thing the P1 path does unconditionally.  This used to sit
+        # inside `if rotor_eddy:`, which meant P2 reported ZERO core loss and
+        # zero AC copper loss whenever that flag was off, and overstated the
+        # efficiency by exactly those terms.  `rotor_eddy` means "magnet and
+        # shaft eddy losses" — it has no business gating the iron.  Harmless
+        # while P1 was the default; a silent error the moment P2 became it.
+        _bx_q, _by_q, _dxq = _p2_B_at_quad(b2, A2)
+        _ar_el = _dxq.sum(axis=1)
+        _bx_el = (_bx_q * _dxq).sum(axis=1) / np.maximum(_ar_el, 1e-30)
+        _by_el = (_by_q * _dxq).sum(axis=1) / np.maximum(_ar_el, 1e-30)
+        _hsx2.append(_bx_el[_iron_s_idx]); _hsy2.append(_by_el[_iron_s_idx])
+        _hrx2.append(_bx_el[_iron_r_idx + nst])
+        _hry2.append(_by_el[_iron_r_idx + nst])
+        if _coil_idx.size:                     # coil B for AC copper loss
+            _hcx2.append(_bx_el[_coil_idx]); _hcy2.append(_by_el[_coil_idx])
+        if _mag_idx.size:                      # magnet B for the loss-density map
+            _hmx2.append(_bx_el[_mag_idx + nst])
+            _hmy2.append(_by_el[_mag_idx + nst])
+        if rotor_eddy:
+            # rotor-frame nodal A (magnet/shaft eddy via honest_rotor_eddy)
+            _histA_rot2.append(A2[_rot_vdof].copy())
+        if _anim_idx and k in _anim_idx:
+            # Animation keyframe.  The band encodes rotation in the slip
+            # PAIRING, not in coordinates, so the rotor half sits at angle 0 in
+            # mesh_all on EVERY frame; rotate its node block by this frame's
+            # SNAPPED angle θ_eff for display, or the field would animate under
+            # a rotor that never moves.  θ_eff, not θ — that is the angle the
+            # field was actually solved at.
+            _c_a = math.cos(math.radians(theta_eff))
+            _s_a = math.sin(math.radians(theta_eff))
+            _Pf = mesh_all.p.copy()
+            _xr = _Pf[0, nsn:].copy(); _yr = _Pf[1, nsn:].copy()
+            _Pf[0, nsn:] = _c_a * _xr - _s_a * _yr
+            _Pf[1, nsn:] = _s_a * _xr + _c_a * _yr
+            _frames2.append({
+                # Index within the REPORTED window, so it addresses the trimmed
+                # T/I/psi series directly.  A global k would be off by the
+                # settling prefix on voltage-drive and demag runs and the
+                # animation would label each frame with someone else's torque.
+                "step_idx": int(k - _anim_k0),
+                "time_s": float((k - _anim_k0) * dt),
+                "rotor_angle_deg": float(theta_eff),
+                "P_mm": _Pf * 1e3,
+                "A": A2[vdof].copy(),
+                "Bx": _bx_el.copy(), "By": _by_el.copy(),
+            })
+        if return_field and ((field_first and k == 0)
                              or (not field_first and k == n_total - 1)):
-            # Field snapshot for the viewer: A_z, per-element B, and a current
-            # density J.  eddy=True → the EDDY density J = σ(−∂A/∂t + U_c) on the
-            # solid conductors (the genuinely-new field the eddy solve produces).
-            # eddy=False (magnetostatic field view, run at 1 step + rotor_angle0)
-            # → the per-element SOURCE current density so the J view still shows
-            # the applied winding currents at this rotor position.
-            _sig_node = np.zeros(n)
+            # Same payload shape as the P1 snapshot (per-element B + domain
+            # tags beside A), so a viewer needs no second case.  _bx_el /
+            # _by_el above are already the element means over mesh_all.
+            _snap2 = {"P_mm": (mesh_all.p * 1e3).copy(),
+                      "T": mesh_all.t.copy(),
+                      "A": A2[vdof].copy(),
+                      "Bx": _bx_el.copy(), "By": _by_el.copy(),
+                      "tags": np.concatenate(
+                          [np.asarray(ts), np.asarray(tr)]).astype(int),
+                      "nsn": int(nsn)}
             if eddy:
-                for _c in _coil_con:
-                    _sig_node[_c["nodes"]] = _sig_cu_T
-            for _nds, _sg in _rot_sig_nodes:
-                _sig_node[_nds] = _sg
-            _Jnodal = _sig_node * (Ffld if eddy else 0.0)
-            _field_snap = {
-                "P_mm": (mesh_all.p * 1e3).copy(),                 # node coords [mm]
-                "T":    mesh_all.t.copy(),                         # triangles (3,nel)
-                "A":    A.copy(),                                  # nodal A_z [Wb/m]
-                "Bx":   np.concatenate([_Bxs, _Bxr]),              # per-elem B [T]
-                "By":   np.concatenate([_Bys, _Byr]),
-                "Jeddy": _Jnodal,                          # nodal eddy J [A/m^2]
-                "tags": np.concatenate([np.asarray(ts), np.asarray(tr)]).astype(int),
-                "nsn":  int(nsn),
-            }
-            if not eddy:
-                # per-element source current density J_z = dir·I_phase·n_wires/area
-                # (coil elements live in the stator half = first block of the mesh)
-                _Js = np.zeros(_Bxs.size + _Bxr.size)
+                # J-VIEW: the eddy current density J = σ(−∂A/∂t + U_b) the
+                # coupled solve produces, sampled at the mesh VERTICES (the
+                # P1 snapshot is nodal too, so the viewer needs no new case).
+                def _bdofs(ids):
+                    return np.concatenate([
+                        vdof[np.unique(mesh_all.t[:, ids])],
+                        fdof[np.unique(mesh_all.t2f[:, ids])]]).astype(int)
+                _sig_n = np.zeros(N2); _u_n = np.zeros(N2)
+                _elm = {}
+                for _ky, _tg, _ids, _sg in _bodies:
+                    _elm[_tg] = _ids
+                    _sig_n[_bdofs(_ids)] = _sg
+                for _ci, _c in enumerate(_ed_con):
+                    _u_n[_bdofs(_elm[_c["tag"]])] = float(_Ued[_ci])
+                _snap2["Jeddy"] = (_sig_n * (-_dAe + _u_n))[vdof].copy()
+            else:
+                # Magnetostatic view: the APPLIED per-element source current
+                # density, so the "J" view shows the winding currents at this
+                # rotor position.  Same key and same construction as the P1
+                # snapshot — a viewer must not need a per-order case, and the
+                # J view rendered EMPTY on P2 for exactly as long as this key
+                # was missing here.
+                _Js2 = np.zeros(int(mesh_all.t.shape[1]))
                 for _ix, _ar, _dir, _ph in coil_info:
-                    _Js[_ix] = _dir * Ist[_ph] * n_wires / max(slot_area_m2, 1e-12)
-                _field_snap["Jtri_src"] = _Js
-        _hist_sx.append(_Bxs[_iron_s_idx]); _hist_sy.append(_Bys[_iron_s_idx])
-        _hist_rx.append(_Bxr[_iron_r_idx]); _hist_ry.append(_Byr[_iron_r_idx])
-        _hist_mx.append(_Bxr[_mag_idx]);    _hist_my.append(_Byr[_mag_idx])
-        if _coil_idx.size:
-            _hist_cx.append(_Bxs[_coil_idx]); _hist_cy.append(_Bys[_coil_idx])
-        if _shaft_idx.size:
-            _hist_shx.append(_Bxr[_shaft_idx]); _hist_shy.append(_Byr[_shaft_idx])
-        _mshift_hist.append(m_shift)
-        # torque: sector → Arkkio over the whole gap.  Moving band → Arkkio over
-        # the coupled STRIP only (the half-mesh gap fields are sheared and carry
-        # a spurious DC torque; the strip is the consistent rotor↔stator join).
-        if _moving:
-            Tq_sec = _band.torque(m_shift, A)
-        else:
-            Tq_sec = _arkkio_torque(mesh_all, A, p.r_rotor_out, p.r_stator_in,
-                                    p.stack_length)
-        Tq = Tq_sec * NS
-        if _TORQUE_DIAG["on"]:
-            _mr = 0.5 * (p.r_rotor_out + p.r_stator_in)
-            _gw = (p.r_stator_in - p.r_rotor_out)
-            _ak = lambda a, b: _arkkio_torque(mesh_all, A, a, b, p.stack_length) * NS
-            _TORQUE_DIAG["full"].append(Tq)                                 # reported torque (strip for moving)
-            _TORQUE_DIAG.setdefault("arkkio_full", []).append(_ak(p.r_rotor_out, p.r_stator_in))  # sheared half-mesh Arkkio
-            _TORQUE_DIAG.setdefault("tband", []).append(_band.T_band(m_shift, A) * NS if _moving else 0.0)  # strip Arkkio
-            _TORQUE_DIAG["rotor"].append(_ak(p.r_rotor_out, _mr))          # whole rotor half
-            _TORQUE_DIAG["stator"].append(_ak(_mr, p.r_stator_in))         # whole stator half
-            _TORQUE_DIAG["iface"].append(_ak(_mr - 0.25 * _gw, _mr + 0.25 * _gw))  # straddles slip ring
-            _TORQUE_DIAG["rinner"].append(_ak(p.r_rotor_out, p.r_rotor_out + 0.3 * _gw))   # rotor surface, far from ring
-            _TORQUE_DIAG["router"].append(_ak(p.r_stator_in - 0.3 * _gw, p.r_stator_in))   # stator surface, far from ring
-            # angular profile of the torque integrand over the gap band
-            _Bx, _By = _per_triangle_B(mesh_all, A)
-            _Pq = mesh_all.p; _Tq2 = mesh_all.t
-            _cx = (_Pq[0, _Tq2[0]] + _Pq[0, _Tq2[1]] + _Pq[0, _Tq2[2]]) / 3.0
-            _cy = (_Pq[1, _Tq2[0]] + _Pq[1, _Tq2[1]] + _Pq[1, _Tq2[2]]) / 3.0
-            _rc = np.hypot(_cx, _cy)
-            _msk = (_rc >= p.r_rotor_out) & (_rc <= p.r_stator_in)
-            _ar = _triangle_areas(mesh_all)
-            _cp = _cx / _rc; _sp = _cy / _rc
-            _Brq = _Bx * _cp + _By * _sp
-            _Bpq = -_Bx * _sp + _By * _cp
-            _itg = (_ar * _rc * _Brq * _Bpq) * (p.stack_length / (MU0 * (p.r_stator_in - p.r_rotor_out))) * NS
-            _phi = np.degrees(np.arctan2(_cy, _cx)) % 360.0
-            _nst_tris = Tts.shape[1]
-            _is_rot = np.arange(_Tq2.shape[1]) >= _nst_tris
-            _phi_phys = np.where(_is_rot, (_phi + theta_eff) % 360.0, _phi)   # theta_eff is in degrees
-            if _TORQUE_DIAG.get("capture_A") is not None:
-                _TORQUE_DIAG["capture_A"].append(
-                    dict(A=A.copy(), m=int(m_shift), Mn=Mn.copy(), Sn=Sn.copy(),
-                         nsn=int(nsn)))
-            _nb = int(_TORQUE_DIAG["ang_bins"])
-            _prof = np.zeros(_nb)
-            _sec = 360.0 / NS
-            # wrap rotated rotor elements past the sector edge back into the
-            # sector (Br·Bφ is invariant under the anti-periodic map)
-            _bi = np.clip(((_phi_phys[_msk] % _sec) / _sec * _nb).astype(int), 0, _nb - 1)
-            np.add.at(_prof, _bi, _itg[_msk])
-            _TORQUE_DIAG["ang_prof"].append(_prof)
-        # flux linkage: pa/pb/pc were computed by _psi_of(A) inside the frame
-        # solve (single implementation — the voltage drive needs them in-loop).
-        T_series.append(float(Tq))
-        psiA.append(pa * sc_psi); psiB.append(pb * sc_psi); psiC.append(pc * sc_psi)
-        IA.append(Ist['A']); IB.append(Ist['B']); IC.append(Ist['C'])
-        tt.append(k * dt)
-
-    # ── Voltage drive: drop the settling period — every series below is
-    #    steady-state.  n_total/n_periods return to the REQUESTED window so all
-    #    per-period post-processing (spectra, band-limit, summaries) is unchanged.
-    #    v_drive_diag is per-FRAME too, so it is trimmed WITH the rest: left
-    #    untrimmed its indices were offset by _vskip against I/psi/T and the
-    #    reported max residual was the SETTLING one, not the steady-state one.
+                    _Js2[_ix] = (_dir * Ist[_ph] * n_wires
+                                 / max(slot_area_m2, 1e-12))
+                _snap2["Jtri_src"] = _Js2
+    # ── Voltage drive: drop the SETTLING periods ─────────────────────────
+    # The currents are STATE, so the run carries an electrical start-up
+    # transient; _vskip frames were prepended for it (n_total/n_periods were
+    # bumped by the same amount before this branch, so dt is unchanged).
+    # This is a SEPARATE, longer skip from the demag one below — they are
+    # applied in sequence, never double-counted: each strips its OWN prefix
+    # and decrements n_total/n_periods by its own amount.
+    # v_drive_diag is per-FRAME like every other series here, so it must be
+    # trimmed with them — otherwise its indices are offset by _vskip against
+    # I/psi/T and the reported max residual is the SETTLING residual, not
+    # the steady-state one.
+    _v2_lists = (_T2, _psiA, _psiB, _psiC, _IA, _IB, _IC, _tt,
+                 _hsx2, _hsy2, _hrx2, _hry2, _hcx2, _hcy2, _hmx2, _hmy2,
+                 _histA_rot2, _pic_iters,
+                 _ed_cu, _ed_mag, _ed_sh, _ed_dc2d,
+                 _v_diag["iters"], _v_diag["resid"])
     if _vdrive and _vskip:
         n_total -= _vskip
         n_periods = float(n_periods) - float(_v_settle_periods)
-        _slice_lists = [T_series, psiA, psiB, psiC, IA, IB, IC, tt, _mshift_hist,
-                        _hist_sx, _hist_sy, _hist_rx, _hist_ry, _hist_mx, _hist_my,
-                        _hist_cx, _hist_cy, _hist_shx, _hist_shy,
-                        _hist_Am, _hist_Ash, _hist_A_rotor,
-                        _v_diag["iters"], _v_diag["resid"]]
-        try:
-            _slice_lists.append(_eddy_P)   # exists only when eddy=True
-        except NameError:
-            pass
-        _drop_settling_frames(_slice_lists, _vskip, tt)
-    # ── Demag: drop the settling period.  The magnets keep their de-rated state
-    #    (_br_glob is cumulative), only the FRAMES are discarded, so the reported
-    #    window is one full period of a machine whose magnets have settled.
-    if _dmskip:
+        _drop_settling_frames(_v2_lists, _vskip, _tt)
+    # ── Demag: drop the SETTLING period ──────────────────────────────────
+    # The P1 path has done this since the settling pass was added; the P2
+    # branch returns before that code and never got it.  The magnet weakens
+    # THROUGH the run, so reporting both periods measures a machine whose
+    # magnets are still dying: Fe16N2 came out at 69.5 % ripple against P1's
+    # 9.3 % on identical physics, which is the decay, not an oscillation.
+    # The magnet KEEPS its de-rated state (_br_glob is cumulative) — only the
+    # frames are discarded, so the reported window is one clean period.
+    if _dmskip and demag and _dmst is not None:
         n_total -= _dmskip
         n_periods = float(n_periods) - 1.0
-        _slice_lists = [T_series, psiA, psiB, psiC, IA, IB, IC, tt, _mshift_hist,
-                        _hist_sx, _hist_sy, _hist_rx, _hist_ry, _hist_mx, _hist_my,
-                        _hist_cx, _hist_cy, _hist_shx, _hist_shy,
-                        _hist_Am, _hist_Ash, _hist_A_rotor,
-                        _v_diag["iters"], _v_diag["resid"]]
-        try:
-            _slice_lists.append(_eddy_P)   # exists only when eddy=True
-        except NameError:
-            pass
-        _drop_settling_frames(_slice_lists, _dmskip, tt)
-    # ── Voltage drive: copper loss from the SOLVED current ───────────────────
+        _drop_settling_frames(_v2_lists, _dmskip, _tt)
+
+    # ── Voltage drive: copper loss from the SOLVED current ───────────────
     # `copper_loss_W` ran near the top of this function on the CONFIG
-    # I_phase_rms — but under voltage drive the current is the ANSWER, not the
-    # input, and nothing recomputed it.  P_cu (and through it P_loss_total_W,
-    # P_mech and the efficiency) was therefore wrong by (I_solved/I_config)²:
-    # a run drawing 134 A rms still reported the 60 A number.  Recompute here,
-    # on the SETTLED reported window, through the same ρ(T)·J²·V_cu·k_end model.
-    # CURRENT drive is untouched (the config current IS the current), so this is
-    # strictly guarded by `_vdrive` — the current-drive results are bit-identical.
-    # Only the DC I²R part is config-dependent; the AC (proximity) part below is
-    # computed from the SOLVED coil field and was already correct.
-    if _vdrive and IA:
+    # I_phase_rms — but under voltage drive the current is the ANSWER, not
+    # the input, and nothing recomputed it.  P_cu (and through it
+    # P_loss_total_W and the efficiency) was wrong by (I_solved/I_config)².
+    # Recompute on the SETTLED reported window through the same
+    # ρ(T)·J²·V_cu·k_end model.  Same fix, same guard, as the P1 path below:
+    # CURRENT drive is untouched, so those results stay bit-identical.  Only
+    # the DC I²R part is config-dependent; the AC (proximity) part is taken
+    # from the SOLVED coil field and was already right.
+    if _vdrive and _IA:
         _P_cu_old = float(P_cu)
         P_cu, _k_end_used, _R_solved, _I_ph_solved = _vdrive_copper_loss(
-            p, geo, IA, IB, IC, n_parallel, coil_temp_c, end_winding_factor)
-        log.info("vdrive copper: I_phase_solved=%.2f A rms (config %.2f) -> "
-                 "P_cuDC %.1f -> %.1f W (R_phase=%.6g ohm)",
+            p, geo, _IA, _IB, _IC, n_parallel, coil_temp_c,
+            end_winding_factor)
+        log.info("P2 vdrive copper: I_phase_solved=%.2f A rms (config %.2f) "
+                 "-> P_cuDC %.1f -> %.1f W (R_phase=%.6g ohm)",
                  _I_ph_solved, float(I_phase_rms), _P_cu_old, float(P_cu),
                  _R_solved)
-    # ── Spectral periodic time-derivative (truncated to K harmonics) ─────────
-    # The rotor advances in DISCRETE slip-node steps, so ψ(t) and B(t) carry a
-    # tiny frame-to-frame quantisation jitter.  A raw finite-difference dψ/dt
-    # amplifies that jitter into a jagged back-EMF (worse at small dt → the 24-
-    # step run looked torn).  Reconstruct the derivative from the LOW harmonics
-    # only: that keeps the genuine fundamental + slot-ripple content but drops
-    # the quantisation noise floor near Nyquist, giving a clean V(t) and a
-    # physically-rippling (not noisy, not flat) loss(t).
 
-    def _spectral_ddt(x, kmax):
-        # module-level `_spectral_ddt_series` — ONE implementation, now shared
-        # with the P2 branch (which used np.gradient and reported a V_peak
-        # ~11 % off P1 on the same physics).
-        return _spectral_ddt_series(x, kmax, dt)
+    # ── LOSS post-processing (rotor_eddy) ─────────────────────────────────
+    # Same architecture as the P1 app path: the field is magnetostatic per
+    # frame; the eddy-current LOSSES come from post-processing the A(t)/B(t)
+    # histories — magnet + shaft via the honest (reaction-included) frequency-
+    # domain rotor solve `honest_rotor_eddy`, iron via Bertotti on dB/dt.
+    # (P1's default transient uses eddy=False too — the coupled σ∂A/∂t J-view
+    # solve is NOT the app loss path.)  Current drive → copper = I²R (DC).
+    # Iron (Bertotti) and AC copper are always in; rotor_eddy only adds the
+    # coupled magnet/shaft term, which upgrades this label below.
+    _lm2 = "field (P2 magnetostatic + Bertotti iron + AC copper)"
+    P_cu_dc2 = float(P_cu)                              # from copper_loss_W (I²R)
+    P_cu_ac_ser2 = [0.0] * n_total; P_cu_ac_avg2 = 0.0
+    P_cu_ser2 = [P_cu_dc2] * n_total
+    P_fe_ser2 = [0.0] * n_total; P_fe_avg2 = 0.0
+    P_mag_ser2 = [0.0] * n_total; P_mag_avg2 = 0.0
+    P_shaft_ser2 = [0.0] * n_total; P_shaft_avg2 = 0.0
+    # Losses from the captured B(t).  Copper AC and iron are computed
+    # UNCONDITIONALLY, matching the P1 path — they do not depend on the
+    # rotor-eddy model.  The magnet/shaft eddy below is the part rotor_eddy
+    # actually selects, and it is already gated by `if _histA_rot2:`, which
+    # is only populated when the flag is on.
 
-    # The rotor can only sit on DISCRETE slip nodes (≈ N_slip/4 ≈ 72 positions
-    # per electrical period), so B depends only on the quantised angle m_shift.
-    # When n_steps > that node count the rotor advances <1 node/step and
-    # STUTTERS (m_shift jumps 0,1,1,0,1…); a frame-to-frame dB/dt of that
-    # stutter is meaningless noise.  So differentiate B against the UNIQUE
-    # rotor node-positions (smooth, ~72 pts) and map the result back onto the
-    # time frames — gives a clean dB/dt at any n_steps.
-    # float: macro mode advances a FRACTIONAL node count per step (free m);
-    # integer-m runs are unchanged (whole numbers survive the float dtype, and
-    # the pole-shift exact-pad gate simply stays on its consecutive-int check).
-    _m_arr = np.asarray(_mshift_hist, float)
-    _spacing_rad = math.radians(spacing)
-    _omega_mech = 2.0 * math.pi * rpm / 60.0
+    # ── AC copper (proximity/skin) — MUST match P1: DC I²R is already
+    #    element-order-independent (same copper_loss_W); the AC part is the
+    #    coil proximity loss σ/12·Σ(d_r²·dBr² + d_t²·dBt²), field split into
+    #    radial/tangential (same _prox_eddy_split model P1 uses).  Periodic
+    #    central-difference dB/dt (P2 field is smooth).
+    _sig_cu2, _w_cu2, _h_cu2 = _copper_ac_dims(
+        geo, coil_temp_c, f_elec, RHO_CU_20, ALPHA_CU, MU0)
+    if _coil_idx.size and _hcx2:
+        _smp = half["s"]["mesh"]
+        _cc = (_smp.p[:, _smp.t].mean(axis=1))[:, _coil_idx]
+        P_cu_ac_ser2, P_cu_ac_avg2 = _proximity_loss_series(
+            _hcx2, _hcy2, _coil_idx, _cc, areas_s, _sig_cu2,
+            _w_cu2, _h_cu2, p.stack_length, n_total,
+            _central_difference(dt), scale=NS)
+    P_cu_ser2 = [P_cu_dc2 + ac for ac in P_cu_ac_ser2]
 
-    # Smoothed slip-grid derivative — simulation/angle_ddt.py.  The run's
-    # slip schedule is now an explicit argument instead of a capture.
-    _angle_ddt_2d = _make_angle_ddt(_mshift_hist, _spacing_rad, _omega_mech,
-                                    dt, n_periods, period_mech)
+    # Iron loss: ONE implementation (simulation/losses.py) for both element
+    # orders.  The only genuine difference is the dB/dt estimator — the P2
+    # field is smooth in time, so a plain central difference is enough.
+    def _iron_p2(hx, hy, idx, areas_half, mat):
+        return _iron_loss_series(
+            hx, hy, idx, areas_half, mat, p.stack_length, f_elec, n_total,
+            _central_difference(dt), _mat_lib.effective_bertotti)
 
-    # Single-frame outlier clip (median±5·MAD): simulation/losses.py.
-    _Kv = max(1, min(5, (n_total // 2) - 1))     # back-EMF: keep it smooth
+    _pcl_s, _ph_s = _iron_p2(_hsx2, _hsy2, _iron_s_idx, areas_s, _steel_s)
+    _pcl_r, _ph_r = _iron_p2(_hrx2, _hry2, _iron_r_idx, areas_r, _steel_r)
+    _P_fe_t = (_pcl_s + _pcl_r) * NS + (_ph_s + _ph_r) * NS
+    _P_fe_t = np.maximum(_P_fe_t, 0.0)
+    P_fe_ser2 = _P_fe_t.tolist(); P_fe_avg2 = float(np.mean(_P_fe_t))
+    # magnet + shaft eddy: honest (reaction-included) rotor solve on the
+    # rotor-frame A(t) history — the SAME function the P1 path uses.
+    if _histA_rot2:
+        try:
+            from motor_ai_sim.simulation.eddy_solver_2d import (
+                honest_rotor_eddy as _hre2)
+            _rm = half["r"]["mesh"]
+            # Tags + magnet list + mu lookup: shared with P1 (losses.py).
+            _tags_r2, _magt2 = _rotor_eddy_tags(
+                half["r"]["cells"], _rm.t.shape[1], DOM_MAG_BASE)
+            # rotor back-iron μ_r from the CONVERGED P2 ν (last frame)
+            _rir = half["r"]["cells"].get(int(DOM_ROTOR))
+            _mur_bi = (1.0 / (MU0 * float(np.mean(
+                nu_all2[np.asarray(_rir, int) + nst])))
+                if _rir is not None and np.size(_rir) else 1000.0)
+            _muf2 = _rotor_mu_lookup(_mur_bi, DOM_MAG_BASE, DOM_ROTOR)
+            P_mag_avg2, P_shaft_avg2, _hf2 = _hre2(
+                np.asarray(_rm.p, float), np.asarray(_rm.t, int), _tags_r2,
+                _muf2, _sigma_of_tag, _magt2, DOM_SHAFT,
+                np.asarray(_histA_rot2, float), float(n_total) * dt,
+                float(p.stack_length), float(NS))
+            P_mag_ser2 = [float(P_mag_avg2)] * n_total
+            P_shaft_ser2 = [float(P_shaft_avg2)] * n_total
+            _lm2 = "field+honest (P2 magnetostatic + coupled rotor eddy)"
+            log.info("P2 rotor eddy: mag=%.3f shaft=%.3f W (%d harmonics); "
+                     "iron=%.3f W, copper(dc)=%.1f W", P_mag_avg2,
+                     P_shaft_avg2, len(_hf2), P_fe_avg2, P_cu_dc2)
+        except Exception as _e2:
+            log.warning("P2 honest rotor eddy failed: %s", _e2)
 
-    # voltage V = R·I + dψ/dt  (spectrally smoothed back-EMF)
-    eA = _spectral_ddt(psiA, _Kv); eB = _spectral_ddt(psiB, _Kv)
-    eC = _spectral_ddt(psiC, _Kv)
-    VA = [R_phase * i + e for i, e in zip(IA, eA.tolist())]
-    VB = [R_phase * i + e for i, e in zip(IB, eB.tolist())]
-    VC = [R_phase * i + e for i, e in zip(IC, eC.tolist())]
-
-    # ── HYBRID torque: energy-consistent MEAN + Maxwell-stress RIPPLE ─────────
-    # IDENTICAL to the P2 branch above — one torque definition for the whole
-    # solver, not two.  It is now literally the same function
-    # (simulation/sb_postproc.hybrid_torque), which is the only way "identical"
-    # stays true.  P1 reported the raw Arkkio/Maxwell mean, which on the
-    # node-repaired sliding band over-reads ~35 % under load: measured 0.181 N*m
-    # here against 0.130 in ANSYS for the same design, and 0.181/1.35 = 0.134.
-    # That gap was never physics, only this missing correction.
+    # ── COUPLED EDDY: the solved σ∫E² REPLACES the modelled numbers ───────
+    # Everything above is a MODEL of a loss the magnetostatic field cannot
+    # produce: the copper AC term is the proximity/skin formula, magnet and
+    # shaft come from the frequency-domain rotor solve driven by a history.
+    # When the coupled solve ran, the loss is not modelled any more — it is
+    # ∫σE² of the field that was actually solved with σ·∂A/∂t in it, so that
+    # is what gets reported.  The modelled numbers stay computed and are
+    # returned + logged beside it: two independent routes to the same watts
+    # is the only cross-check this code has.
     #
-    # P1 is still reachable for the things P2 cannot do (irreversible demag,
-    # coupled eddy, voltage drive), so it has to report the same number as P2 or
-    # every demag result is silently inflated.
-    _torque_method_p1 = "maxwell_stress"
-    _mx_raw_p1 = list(T_series)          # keep the Maxwell series as a diagnostic
-    try:
-        T_series, _torque_method_p1 = _hybrid_torque(
-            psiA, psiB, psiC, IA, IB, IC, _mx_raw_p1, pole_pairs)
-    except Exception as _te1:
-        log.warning("P1 hybrid torque failed (%s) — using Maxwell series", _te1)
-    Tavg = float(np.mean(T_series)) if T_series else 0.0
+    # COPPER SPLIT.  The 2-D solve knows nothing about end windings, so its
+    # total is the ACTIVE-LENGTH loss.  Subtracting the active-length DC
+    # (ΣI²/S, the same bars at ∂A/∂t = 0) leaves the pure AC increment,
+    # which is then added to the end-winding-corrected DC — instead of
+    # subtracting the k_end-inflated DC from a 2-D total, which is how the
+    # P1 path reports a NEGATIVE copper AC at low current.
+    P_cu_ac_prox_avg2 = float(P_cu_ac_avg2)
+    P_mag_prox_avg2 = float(P_mag_avg2); P_shaft_prox_avg2 = float(P_shaft_avg2)
+    P_cu_solve_avg2 = P_cu_dc2d_avg2 = 0.0
+    if eddy and _ed_cu:
+        P_cu_solve_avg2 = float(np.mean(_ed_cu))
+        P_cu_dc2d_avg2 = float(np.mean(_ed_dc2d))
+        P_cu_ac_ser2 = [t - d for t, d in zip(_ed_cu, _ed_dc2d)]
+        P_cu_ac_avg2 = float(np.mean(P_cu_ac_ser2))
+        P_cu_ser2 = [P_cu_dc2 + ac for ac in P_cu_ac_ser2]
+        _lm2 = ("field+coupled eddy (P2 sigma*dA/dt solve: copper"
+                + (" + magnet/shaft)" if rotor_eddy else ")"))
+        log.info("EDDY-SOLVE(P2) copper total=%.2f W (2-D DC=%.2f + AC=%.2f) "
+                 "vs slab DC+AC=%.2f W (prox AC=%.2f); reported DC(+end "
+                 "winding)=%.2f W", P_cu_solve_avg2, P_cu_dc2d_avg2,
+                 P_cu_ac_avg2, P_cu_dc2 + P_cu_ac_prox_avg2,
+                 P_cu_ac_prox_avg2, P_cu_dc2)
+        if rotor_eddy:
+            P_mag_ser2 = list(_ed_mag); P_mag_avg2 = float(np.mean(_ed_mag))
+            P_shaft_ser2 = list(_ed_sh); P_shaft_avg2 = float(np.mean(_ed_sh))
+            log.info("EDDY-SOLVE(P2) magnet=%.3f shaft=%.3f W vs honest "
+                     "frequency-domain magnet=%.3f shaft=%.3f W",
+                     P_mag_avg2, P_shaft_avg2, P_mag_prox_avg2,
+                     P_shaft_prox_avg2)
+    P_tot_ser2 = [c + f + m + s for c, f, m, s in
+                  zip(P_cu_ser2, P_fe_ser2, P_mag_ser2, P_shaft_ser2)]
+    P_loss_avg2 = float(np.mean(P_tot_ser2)) if P_tot_ser2 else 0.0
 
-    # ── Band-limit the torque to the physical 6·k electrical orders ──────────
-    # The sliding band steps the rotor across DISCRETE slip nodes, injecting
-    # broadband torque ripple at orders a balanced 3-φ machine CANNOT produce
-    # (1,2,3,4,5,7,…) that does NOT converge with mesh refinement → purely
-    # numerical.  Measured at no-load: the real order-6 cogging dominates, but
-    # ~41 % of the ripple ENERGY sits in those forbidden orders (raw pk-pk
-    # 10.0 → 6·k-only 4.8 N·m).  Keep DC + every 6·k order (real cogging + load
-    # ripple) and drop the rest; the mean is preserved exactly.  torque_filter
-    # (UI toggle, default ON) switches back to the raw per-frame torque for
-    # inspecting the unfiltered solve.
-    # Always compute BOTH the raw per-frame torque and the band-limited (6·k)
-    # reconstruction, and return both — band-limiting is pure post-processing
-    # (FFT → keep DC + 6·k → inverse), so the UI can toggle between them
-    # INSTANTLY without a 30 s re-solve.  band_limit_torque preserves the mean
-    # exactly, so T_avg is identical for raw and filtered.
-    _T_raw = list(T_series)
-    _T_filt, Trip_filt, Trip_raw, Tnoise_pct = band_limit_torque(
-        T_series, n_steps_per_period, n_periods)
-    # T_em_Nm follows the toggle for back-compat (saved sims + server summary);
-    # the UI uses the explicit T_em_raw_Nm / T_em_filt_Nm fields below to flip
-    # client-side without re-running.
-    if torque_filter:
-        T_series = list(_T_filt); Trip = Trip_filt
-    else:
-        T_series = list(_T_raw);  Trip = Trip_raw
-    Tavg = float(np.mean(_T_raw)) if _T_raw else Tavg
-    Vpk = float(max(max(map(abs, VA)), max(map(abs, VB)), max(map(abs, VC)))) if VA else 0.0
-    # P_cu already computed physically (ρ(T)·J²·V·k_end) near the top — and, on
-    # a VOLTAGE drive, re-computed above from the solved current.
+    # ── Per-element loss DENSITY (W/m³) for the Loss map ──────────────────
+    # simulation/losses.py, the SAME map the field views render.  It lives
+    # in the snapshot (not the top-level result) because it is per-ELEMENT
+    # data whose ordering is the snapshot's [stator-half | rotor-half].
+    # The derivative operator is the only element-order difference: the P2
+    # field is smooth in time, so the plain central difference the P2 loss
+    # totals already use is enough (P1 needed the slip-jitter smoother).
+    # The map self-normalises each component to the reported watts above, so
+    # a 1-frame view (no B history) yields zeros rather than a wrong picture.
+    if _snap2 is not None:
+        try:
+            _cd2 = _central_difference(dt)
+            _cc2 = ((half["s"]["mesh"].p[:, half["s"]["mesh"].t].mean(axis=1))
+                    [:, _coil_idx] if _coil_idx.size else np.zeros((2, 0)))
+            _snap2["loss_dens"] = _loss_density_map(
+                n_stator_elems=int(Tts.shape[1]),
+                n_elems=int(mesh_all.t.shape[1]),
+                hist_sx=_hsx2, hist_sy=_hsy2, hist_rx=_hrx2, hist_ry=_hry2,
+                hist_mx=_hmx2, hist_my=_hmy2, hist_cx=_hcx2, hist_cy=_hcy2,
+                iron_s_idx=_iron_s_idx, iron_r_idx=_iron_r_idx,
+                mag_idx=_mag_idx, coil_idx=_coil_idx,
+                areas_s=areas_s, areas_r=areas_r, coil_centroids=_cc2,
+                steel_s=_steel_s, steel_r=_steel_r,
+                bertotti=_mat_lib.effective_bertotti,
+                f_elec_hz=f_elec, stack_length_m=p.stack_length,
+                sector_scale=NS,
+                P_fe_avg=P_fe_avg2, P_mag_avg=P_mag_avg2,
+                P_cu_dc=P_cu_dc2, P_cu_ac_avg=P_cu_ac_avg2,
+                sigma_cu=_sig_cu2, d_cu_r=_w_cu2, d_cu_t=_h_cu2,
+                ddt=lambda X, qp=None: _cd2(X)).tolist()
+        except Exception as _lde:
+            log.warning("P2 loss-density map failed: %s", _lde)
 
+    # ── metrics ──────────────────────────────────────────────────────────
+    # Raw Maxwell-stress (Arkkio) torque — kept as a DIAGNOSTIC only.  On the
+    # node-repaired sliding band the gap field is contaminated UNDER LOAD, so
+    # the volume-weighted Maxwell integral is radius-INCONSISTENT (measured
+    # 0.78..1.30 Nm across integration bands for one converged frame) and
+    # over-reads the mean torque ~35 % vs the energy method / ANSYS.
+    _T2raw = list(_T2)                       # preserve the Maxwell series (diag)
     # ── Torque harmonic spectrum over ONE electrical period ──────────────────
     # The single most telling diagnostic for "is this periodic or chaotic": a
     # clean ripple shows a few DISCRETE peaks (the cogging / 6·k 3-phase orders);
     # broadband noise spreads across all orders.  Orders are multiples of the
     # ELECTRICAL fundamental; amplitude is the single-sided FFT magnitude [N·m].
-    # Spectrum is ALWAYS the RAW per-frame torque (not the band-limited series),
-    # so the UI shows every order and the user can SEE which bars the 6·k filter
-    # keeps (orange) vs drops (the broadband slip-node noise).
-    T_harm_order, T_harm_amp = _torque_harmonics(_T_raw, n_steps_per_period)
-
-    # ── Losses from the captured B(t) — PER-FRAME instantaneous series ────────
-    # iron(t)  = hysteresis baseline (per-cycle quantity, flat) + classical
-    #            eddy from the smooth |dB/dt|²(t) → ripples as the teeth pass.
-    # magnet(t)= σ·d²/12·|dB/dt|²(t)  → ripples likewise.
-    def _iron_series(hx, hy, idx, areas_half, mat, qp=None):
-        # Same one implementation as the P2 branch.  P1 needs the SMOOTHED angle
-        # derivative: the sliding band re-pairs nodes every frame, and a raw
-        # difference amplifies that jitter — the loss tripled going 24 -> 72 steps.
-        return _iron_loss_series(
-            hx, hy, idx, areas_half, mat, p.stack_length, f_elec, n_total,
-            lambda X: _angle_ddt_2d(X, qp), _mat_lib.effective_bertotti)
-
-    _pcl_s, _ph_s = _iron_series(_hist_sx, _hist_sy, _iron_s_idx, areas_s, _steel_s)
-    _pcl_r, _ph_r = _iron_series(_hist_rx, _hist_ry, _iron_r_idx, areas_r, _steel_r)
-    _P_hyst = (_ph_s + _ph_r) * NS
-    _P_fe_t = _declip((_pcl_s + _pcl_r) * NS + _P_hyst)  # classical ripple + flat hyst
-    P_fe_series = _P_fe_t.tolist()
-    P_fe_avg = float(np.mean(_P_fe_t))
-
-    if rotor_eddy and _hist_Am and _mag_groups:
-        # FIELD-BASED magnet eddy from the A(t) DISTRIBUTION (post-processed):
-        #   J_e = σ(−dA/dt|material + U_m),  U_m = per-magnet area-mean (∫J=0),
-        #   U = 0 for sector-cut halves (symmetry).  dA/dt uses the SAME
-        # smoothed angle-derivative as the B-field losses (_angle_ddt_2d), so
-        # the slip-merge jitter is filtered and the loss CONVERGES with step
-        # count — the raw in-loop derivative tripled going 24→72 steps.
-        # P(t) = Σ_magnets σ Σ_e (dA/dt_e − U_m)²·area_e × stack × NS.
-        _Am = np.asarray(_hist_Am, float)            # (N, n_magnodes)
-        # Exact edge pads from the pole-shift symmetry:  A(n, m±M_per) =
-        # A(n∓, m), n∓ = the node 2 pole pitches away (see the _pp2 block).
-        # Requires the electrical period to be an integer number of slip nodes
-        # and frames to map 1:1 onto consecutive nodes — both true for the
-        # standard runs; otherwise the C0-detrend edges are used.
-        _pads = (None, None)
-        _M_per = period_mech / spacing               # slip nodes per elec. period
-        if (_pp2 is not None and abs(_M_per - round(_M_per)) < 1e-6):
-            _Mp = int(round(_M_per))
-            if (_Am.shape[0] >= _Mp and _m_arr.size == _Am.shape[0]
-                    and np.array_equal(_m_arr,
-                                       np.arange(_m_arr[0], _m_arr[0] + _m_arr.size))):
-                _dt2c, _tgF, _sgF, _nrF, _tgB, _sgB, _nrB = _pp2
-                _K = min(24, _Mp - 1)
-
-                def _ct_rows(_rows, _tg, _sg, _nr):
-                    # C1 (Clough–Tocher) interpolation of each frame's A at the
-                    # ±2-pole-pitch image points; nearest-node fallback for
-                    # boundary-rounding stragglers outside the hull.
-                    from scipy.interpolate import CloughTocher2DInterpolator as _CTI
-                    _o = np.empty((_rows.shape[0], _tg.shape[0]))
-                    for _i in range(_rows.shape[0]):
-                        _w = np.asarray(_CTI(_dt2c, _rows[_i])(_tg), float)
-                        _bad = ~np.isfinite(_w)
-                        if _bad.any():
-                            _w[_bad] = _rows[_i][_nr[_bad]]
-                        _o[_i] = _w * _sg
-                    return _o
-                # post (m = m_max+1 … m_max+K): rows N−M_per … N−M_per+K−1,
-                # values at each node's +2-pole-pitch image; pre mirrors it.
-                _post = _ct_rows(_Am[_Am.shape[0] - _Mp:_Am.shape[0] - _Mp + _K],
-                                 _tgF, _sgF, _nrF)
-                _pre = _ct_rows(_Am[_Mp - _K:_Mp], _tgB, _sgB, _nrB)
-                _pads = (_pre, _post)
-        _dAm = _angle_ddt_2d(_Am, pre=_pads[0], post=_pads[1])   # material dA/dt
-        _Pt = np.zeros(n_total)
-        for _mg in _mag_groups:
-            _dA_e = _dAm[:, _mg["tri"]].mean(axis=1)        # (N, E) elem-mean
-            _ar = _mg["areas"]
-            if _mg["half"]:
-                _F = _dA_e                                   # U = 0 (symmetry)
-            else:
-                _w = _ar / max(_ar.sum(), 1e-30)
-                _F = _dA_e - (_dA_e * _w[None, :]).sum(axis=1, keepdims=True)
-            _Pt += _sigma_mag_lib * np.sum(_F ** 2 * _ar[None, :], axis=1)
-        _P_mag_t = _declip(_Pt * p.stack_length * NS)
-        P_mag_series = _P_mag_t.tolist()
-        P_mag_avg = float(np.mean(_P_mag_t))
-    elif (_sigma_mag > 0.0 and _mag_idx.size and _hist_mx
-            and np.asarray(_hist_mx[0]).size):
-        Xm = np.asarray(_hist_mx); Ym = np.asarray(_hist_my)
-        dXm = _angle_ddt_2d(Xm); dYm = _angle_ddt_2d(Ym)
-        vol_m = areas_r[_mag_idx] * p.stack_length
-        _P_mag_t = _declip(_sigma_mag * (_d_mag_m ** 2 / 12.0)
-                    * np.sum((dXm ** 2 + dYm ** 2) * vol_m[None, :], axis=1) * NS)
-        P_mag_series = _P_mag_t.tolist()
-        P_mag_avg = float(np.mean(_P_mag_t))
-    else:
-        P_mag_series = [0.0] * n_total; P_mag_avg = 0.0
-
-    # ── AC eddy / proximity losses in the SOLID (non-laminated) conductors ────
-    # (The classical σ·d²/12 slab estimate that once lived here was superseded
-    # in e310d62: coils use the proximity split below, the shaft uses the
-    # geometry-exact σ·∫(∂A/∂t)² integral — no shape factor, no fudge.)
-    def _prox_eddy_split(hx, hy, idx, cen, areas_half, sigma, d_for_Br, d_for_Bt):
-        # ONE implementation, shared with the P2 branch (simulation/losses.py).
-        # P1 keeps its smoothed angle-derivative and its outlier clip; the model
-        # itself is the same, and now provably so.
-        return _proximity_loss_series(
-            hx, hy, idx, cen, areas_half, sigma, d_for_Br, d_for_Bt,
-            p.stack_length, n_total, _angle_ddt_2d, scale=NS, post=_declip)
-
-    # Copper winding bar (SOLID, one strand): proximity loss from the rotating
-    # field, split into radial/tangential and each capped at 2·skin-depth.
-    # Conductor dimensions + conductivity: wire_split and the 2*skin-depth cap,
-    # one helper shared with P2 (see losses.copper_ac_dims).
-    _sigma_cu, _w_cu, _h_cu = _copper_ac_dims(
-        geo, coil_temp_c, f_elec, RHO_CU_20, ALPHA_CU, MU0)
-    _sm = half["s"]["mesh"]
-    _coil_cen = ((_sm.p[:, _sm.t].mean(axis=1))[:, _coil_idx]
-                 if _coil_idx.size else np.zeros((2, 0)))
-    P_cu_ac_series, P_cu_ac_avg = _prox_eddy_split(
-        _hist_cx, _hist_cy, _coil_idx, _coil_cen, areas_s, _sigma_cu, _w_cu, _h_cu)
-    # Shaft eddy (any SOLID conductor, e.g. aluminium).  Computed the SAME geometry-
-    # exact field way as the magnets — NO slab/cylinder shape factor, NO skin-depth
-    # cap, NO fudge:
-    #     P = σ · ∫ (∂A/∂t − ⟨∂A/∂t⟩_body)² dA · L · NS
-    # integrated over the REAL shaft element areas, with the area-mean ∂A/∂t removed so
-    # the net axial current ∮J dA = 0 over the single connected shaft body.  Because it
-    # integrates the actual E = −∂A/∂t over the actual geometry, it reproduces the exact
-    # solid-cylinder loss with no shape correction.  The co-rotating shaft sees the
-    # magnet field as DC → only the AC slot-ripple / armature reaction dissipates; ∂A/∂t
-    # is the slip-jitter-smoothed material derivative (same _angle_ddt_2d as the
-    # magnets).  UNIVERSAL: every σ>0 domain (magnet, shaft, …) uses this identical
-    # formula; laminated iron (σ=0) contributes nothing here (its loss is in CoreLoss).
-    _sigma_shaft = _sigma_shaft_lib
-    if (_shaft_group is not None and _hist_Ash
-            and np.asarray(_hist_Ash[0]).size and _sigma_shaft > 0.0):
-        _Ash  = np.asarray(_hist_Ash, float)                      # (N, n_shaftnodes)
-        _dAsh = _angle_ddt_2d(_Ash)                               # material ∂A/∂t = −E
-        _dA_e = _dAsh[:, _shaft_group["tri"]].mean(axis=1)        # (N, E) per element
-        _ar_sh = _shaft_group["areas"]
-        _w_sh  = _ar_sh / max(_ar_sh.sum(), 1e-30)
-        _F_sh  = _dA_e - (_dA_e * _w_sh[None, :]).sum(axis=1, keepdims=True)   # ∮J=0
-        _Psh_t = _declip(_sigma_shaft
-                         * np.sum(_F_sh ** 2 * _ar_sh[None, :], axis=1)
-                         * p.stack_length * NS)
-        P_shaft_series = _Psh_t.tolist()
-        P_shaft_avg    = float(np.mean(_Psh_t))
-    else:
-        P_shaft_series = [0.0] * n_total
-        P_shaft_avg    = 0.0
-
-    # ── HONEST (coupled) rotor eddy — PRODUCTION magnet/shaft loss when rotor_eddy ──
-    # Frequency-domain multi-body solve on the REAL rotor mesh (eddy_solver_2d),
-    # driven by the captured rotor-node A history: per-harmonic screening + skin
-    # reaction are SOLVED, and the fixed harmonic ceiling (k ≤ 16) band-limits the
-    # drive to the physical rotor-frame orders.  The history post-process above
-    # squares ∂A/∂t, so the slip-band node-identification jitter — which does NOT
-    # decay with depth the way physical field harmonics do — dominates SCREENED
-    # bodies: the 450 mm shaft (under 50 mm magnet + 5 mm back-iron; physical
-    # reach ~e⁻⁹) read 32→45 kW of pure jitter (GROWING with step count) vs a
-    # stable 0.5-0.6 kW here.  So with rotor_eddy the honest values REPLACE the
-    # history-based magnet/shaft averages: the magnet series keeps its (physical
-    # slot-ripple) shape rescaled to the honest mean; the shaft series — whose
-    # shape is jitter, not physics — is flattened to the honest mean.
-    # honest_eddy alone keeps the old additive-diagnostic behaviour.
-    # Fail-safe: any error → the history-based values stand (as before).
-    P_mag_honest = P_shaft_honest = 0.0
-    P_mag_hist_avg = float(P_mag_avg); P_shaft_hist_avg = float(P_shaft_avg)
-    _honest_ok = False
-    if (honest_eddy or rotor_eddy) and _hist_A_rotor:
-        try:
-            from motor_ai_sim.simulation.eddy_solver_2d import honest_rotor_eddy as _hre
-            _rm = half["r"]["mesh"]
-            _tags_r, _mag_tags_h = _rotor_eddy_tags(
-                half["r"]["cells"], _rm.t.shape[1], DOM_MAG_BASE)
-            try:
-                _n_bi = nu_el.get("r", {}).get(DOM_ROTOR)
-                _mur_bi1 = (1.0 / (MU0 * float(np.mean(_n_bi)))
-                            if _n_bi is not None and np.size(_n_bi) else 1000.0)
-            except Exception:
-                _mur_bi1 = 1000.0
-            _muf = _rotor_mu_lookup(_mur_bi1, DOM_MAG_BASE, DOM_ROTOR)
-            P_mag_honest, P_shaft_honest, _hfreqs = _hre(
-                np.asarray(_rm.p, float), np.asarray(_rm.t, int), _tags_r,
-                _muf, _sigma_of_tag, _mag_tags_h, DOM_SHAFT,
-                np.asarray(_hist_A_rotor, float), float(n_total) * dt,
-                float(p.stack_length), float(NS))
-            _honest_ok = True
-            log.info("HONEST rotor eddy: mag=%.3f shaft=%.3f W (%d harmonics) | "
-                     "resistance-limited mag=%.3f shaft=%.3f W",
-                     P_mag_honest, P_shaft_honest, len(_hfreqs), P_mag_avg, P_shaft_avg)
-        except Exception as _e:
-            log.warning("honest rotor eddy failed (history-based values stand): %s", _e)
-            P_mag_honest = P_shaft_honest = 0.0
-    if rotor_eddy and _honest_ok:
-        _mh = float(P_mag_honest)
-        if P_mag_avg > 1e-9:
-            _kh = _mh / P_mag_avg
-            P_mag_series = [v * _kh for v in P_mag_series]
-        else:
-            P_mag_series = [_mh] * n_total
-        P_mag_avg = _mh
-        P_shaft_series = [float(P_shaft_honest)] * n_total
-        P_shaft_avg = float(P_shaft_honest)
-
-    # ── AXIAL magnet lamination (magnet_lamination, mm; 0 = solid) ──────────
-    # Slicing the magnets ALONG THE STACK (per Vadim: the 450's 180 mm magnets
-    # laminated at 10 mm = 18 slices) cannot be meshed in this 2-D model — the
-    # J_z formulation assumes infinitely long conductors (loss ∝ w_eff², the
-    # in-plane loop width, with free loop closure at z = ±∞).  A finite axial
-    # slice of length l forces the loop to close within the slice, adding the
-    # return-path resistance; in the resistance-limited regime (NdFeB skin
-    # depth ≈ 16 mm @ 1.8 kHz > l = 10 mm) the classical rectangular-plate
-    # result rescales the eddy loss by
-    #     k_ax = l² / (l² + w_eff²),   w_eff = magnet area / longest extent
-    # (limits: l→∞ → 1 = the 2-D value; l ≪ w → (l/w)², loops close axially).
-    # Field / torque / mass are untouched — insulated cuts do not change the
-    # magnetostatics.  Applied to the PRODUCTION magnet numbers (series + avg +
-    # the reported honest value); P_mag_hist_W stays the raw-2D diagnostic.
-    # lam=0 keeps k=1 (pure 2-D, back-compat); a real 180 mm solid magnet is
-    # itself k(180) ≈ 0.97 — negligible.  Shaft: not affected by this param.
+    # ALWAYS the RAW per-frame torque (not the band-limited series), so the UI
+    # shows every order and the user can SEE which bars the 6·k filter keeps
+    # (orange) vs drops.  Computed on the P1 path only until now, so the UI's
+    # harmonic chart went blank the day P2 became the default — the helper is
+    # element-order-agnostic and belongs beside the ripple it explains.
+    T_harm_order, T_harm_amp = _torque_harmonics(_T2raw, n_steps_per_period)
+    T_arr = np.asarray(_T2, float)
+    T_maxwell_avg = float(T_arr.mean()) if T_arr.size else 0.0
+    # HYBRID torque (energy-consistent MEAN + Maxwell-stress RIPPLE):
+    # simulation/sb_postproc.py — ONE definition, shared with the P1 path.
+    _torque_method = "maxwell_stress"
     try:
-        _lam_mm = float((geo or {}).get("magnet_lamination", 0.0) or 0.0)
-    except Exception:
-        _lam_mm = 0.0
-    if _lam_mm > 0.1 and P_mag_avg > 0.0:
-        try:
-            _mp0 = (polys.get("magnets") or [(None, 0)])[0][0]
-            _xy0 = list(_mp0.exterior.coords)
-            _rr0 = [math.hypot(_x, _y) for _x, _y in _xy0]
-            _c0 = _mp0.centroid
-            _ca0 = math.atan2(_c0.y, _c0.x)
-            _an0 = [((math.atan2(_y, _x) - _ca0 + math.pi) % (2.0 * math.pi)) - math.pi
-                    for _x, _y in _xy0]
-            _rad0 = max(_rr0) - min(_rr0)
-            _tan0 = (max(_an0) - min(_an0)) * 0.5 * (max(_rr0) + min(_rr0))
-            _w_eff = _mp0.area / max(max(_rad0, _tan0), 1e-9)
-            _l_ax = min(_lam_mm, float(p.stack_length) * 1e3)   # can't exceed the stack
-            _k_ax = (_l_ax * _l_ax) / (_l_ax * _l_ax + _w_eff * _w_eff)
-            P_mag_series = [v * _k_ax for v in P_mag_series]
-            P_mag_avg = float(P_mag_avg) * _k_ax
-            P_mag_honest = float(P_mag_honest) * _k_ax
-            log.info("magnet AXIAL lamination: l=%.1f mm, w_eff=%.1f mm -> k_ax=%.4f, "
-                     "P_mag=%.0f W", _l_ax, _w_eff, _k_ax, P_mag_avg)
-        except Exception as _e:
-            log.warning("magnet lamination factor skipped: %s", _e)
+        _T2, _torque_method = _hybrid_torque(
+            _psiA, _psiB, _psiC, _IA, _IB, _IC, _T2raw, pole_pairs)
+    except Exception as _te:
+        log.warning("P2 hybrid torque failed (%s) — using Maxwell series", _te)
+    T_arr = np.asarray(_T2, float)
+    Tavg = float(T_arr.mean()) if T_arr.size else 0.0
+    _Tf, Trip, Trip_raw, Tnoise = band_limit_torque(
+        _T2, int(n_steps_per_period), int(round(n_periods)))
+    _omega_m2 = 2.0 * math.pi * rpm / 60.0
+    P_airgap_avg2 = float(Tavg * _omega_m2)
+    P_mech_avg2 = P_airgap_avg2 - (P_fe_avg2 + P_mag_avg2 + P_shaft_avg2)
+    # Terminal voltage V = R·i + dψ/dt — the SAME two-term formula and the
+    # SAME spectral estimator the P1 path uses.  Two reporting-only bugs
+    # lived here, and together they made the two element orders disagree on
+    # V_peak by ~11-13 % for runs whose FIELDS agree to ~1.5 %:
+    #   • np.gradient is NOT periodic — it drops to a one-sided difference
+    #     at the first and last frame, and V_peak is a max over the series,
+    #     so those two edge frames set the reported peak.  The spectral
+    #     derivative (`_spectral_ddt_series`, shared with P1) is periodic by
+    #     construction and truncates the slip-node quantisation jitter.
+    #   • the R·i drop was in the comment but never in the code, so P2
+    #     reported the back-EMF where P1 reports the terminal voltage.
+    # ψ and I are per-branch on BOTH paths (identical sc_psi = L·NS/n_par),
+    # so the two are directly comparable.  Reporting only: the circuit solve
+    # closes on its own residual and never reads this series.
+    _Kv2 = max(1, min(5, (int(n_total) // 2) - 1))
 
-    # ── Field-based rotor eddy loss from the magnetodynamic solve (Stage 1) ──
-    # ∫σ(∂A/∂t)² straight from the eddy field — NO slab/d/cap.  Compare against
-    # the slab estimate above.  Skip the first electrical period (eddy warmup).
-    P_cu_total_solve_W = 0.0; P_cu_ac_solve_W = 0.0
-    if eddy and '_eddy_P' in dir() and len(_eddy_P) > 1:
-        _warm = max(1, len(_eddy_P) // 2)
-        # _eddy_P entries are ∫σF² dA over the 2-D sector mesh [W per metre of
-        # stack] — × stack_length for watts (was missing → reported 22× high,
-        # which is why the UI note called this value "inflated").
-        P_cu_total_solve_W = float(np.mean(_eddy_P[_warm:]) * NS * p.stack_length)
-        P_cu_ac_solve_W = P_cu_total_solve_W - float(P_cu)    # total − DC I²R
-        log.info("EDDY-SOLVE copper total=%.1f W (DC=%.0f + AC=%.1f) vs slab DC+AC=%.1f W",
-                 P_cu_total_solve_W, float(P_cu), P_cu_ac_solve_W, float(P_cu) + P_cu_ac_avg)
-
-    log.info("SB transient: %d frames, %d slip nodes, P_fe=%.1f P_mag=%.1f "
-             "P_cuDC=%.1f P_cuAC=%.1f P_shaft=%.1f, %.1fs",
-             n_total, Nring, P_fe_avg, P_mag_avg, float(P_cu), P_cu_ac_avg,
-             P_shaft_avg, _t.time() - t0)
-    # Copper total = DC I²R (flat) + AC eddy/proximity (rotor-position dependent).
-    P_cu_dc = float(P_cu)
-    P_cu_series = [P_cu_dc + ac for ac in P_cu_ac_series]
-    P_tot_series = [c + f + m + s for c, f, m, s
-                    in zip(P_cu_series, P_fe_series, P_mag_series, P_shaft_series)]
-    # ── Mechanical/shaft power from GLOBAL energy conservation ───────────────
-    # P_elec_in = ⟨Σ v·i⟩ over the period (EXACTLY 0 at no-load, I=0).  Energy
-    # balance P_in = P_mech + P_loss gives the physically-correct shaft power
-    #     P_mech = P_elec_in − P_loss_total
-    # — at no-load this equals −P_loss (the drive overcomes every loss), and it
-    # never relies on the numerically-noisy cogging-mean torque (T_avg·ω gave a
-    # spurious −620 W at I=0 against 325 W of loss, violating conservation).
-    #
-    # ⚠ PER-BRANCH → TOTAL:  VA/VB/VC are the PER-BRANCH terminal voltages (ψ was
-    # divided by n_parallel to get one branch's linkage — see the ψ scaling and
-    # the legacy-path comment) and IA/IB/IC are the PER-BRANCH conductor currents
-    # (I_phase ÷ n_parallel, see `_currents`).  So ⟨Σ v·i⟩ is the power of ONE
-    # parallel branch per phase.  The phase has n_parallel such branches in
-    # parallel (same terminal V, currents add), so the machine's TOTAL electrical
-    # input is n_parallel × ⟨Σ v·i⟩.  WITHOUT this factor P_elec_in — and hence
-    # the energy-balance shaft power and efficiency — came out ÷n_parallel too
-    # small (129 kW / η 92.8 % vs the 557 kW / η 98 % the airgap torque T·ω=563 kW
-    # implies at n_parallel=4).  Losses (P_cu via copper_loss_W, iron/magnet from
-    # the ×NS field integrals) are already whole-machine totals, so only the ⟨v·i⟩
-    # terminal power carried the per-branch scale.
-    _omega_m = 2.0 * math.pi * rpm / 60.0
-    P_elec_in = (float(np.mean(np.asarray(VA) * np.asarray(IA)
-                               + np.asarray(VB) * np.asarray(IB)
-                               + np.asarray(VC) * np.asarray(IC)))
-                 * float(n_parallel)
-                 if IA else 0.0)
-    P_loss_total_avg = float(np.mean(P_tot_series)) if P_tot_series else 0.0
-    P_airgap_avg = float(Tavg * _omega_m)        # electromagnetic (Arkkio) power
-    P_mech_avg = P_elec_in - P_loss_total_avg     # energy-conserving shaft power
-
-    # Per-element loss DENSITY (W/m³) for the Ansys-style spatial map:
-    # simulation/losses.py.  Four more closures over the whole loss state lived
-    # here; the model is unchanged, only its inputs are now named.
-    if _field_snap is not None:
-        _field_snap["loss_dens"] = _loss_density_map(
-            n_stator_elems=int(_Bxs.size),
-            n_elems=int(_Bxs.size + _Bxr.size),
-            hist_sx=_hist_sx, hist_sy=_hist_sy,
-            hist_rx=_hist_rx, hist_ry=_hist_ry,
-            hist_mx=_hist_mx, hist_my=_hist_my,
-            hist_cx=_hist_cx, hist_cy=_hist_cy,
-            iron_s_idx=_iron_s_idx, iron_r_idx=_iron_r_idx,
-            mag_idx=_mag_idx, coil_idx=_coil_idx,
-            areas_s=areas_s, areas_r=areas_r, coil_centroids=_coil_cen,
-            steel_s=_steel_s, steel_r=_steel_r,
-            bertotti=_mat_lib.effective_bertotti,
-            f_elec_hz=f_elec, stack_length_m=p.stack_length, sector_scale=NS,
-            P_fe_avg=P_fe_avg, P_mag_avg=P_mag_avg,
-            P_cu_dc=P_cu_dc, P_cu_ac_avg=P_cu_ac_avg,
-            sigma_cu=_sigma_cu, d_cu_r=_w_cu, d_cu_t=_h_cu,
-            ddt=_angle_ddt_2d).tolist()
-
-    # (The honest coupled rotor-eddy solve moved ABOVE the loss-series assembly —
-    # it is now the production magnet/shaft loss when rotor_eddy is on.)
-
-    # Demag payload is built HERE, after the run: with per-step de-rating the
-    # coefficients only reach their final value once the last step is done, so
-    # snapshotting them before the loop (as the old pre-pass did) would have
-    # captured the pristine magnet.
+    def _ddt(arr):
+        a = np.asarray(arr, float)
+        return (_spectral_ddt_series(a, _Kv2, dt).tolist() if a.size > 1
+                else [0.0] * a.size)
+    VA = [R_phase * i + e for i, e in zip(_IA, _ddt(_psiA))]
+    VB = [R_phase * i + e for i, e in zip(_IB, _ddt(_psiB))]
+    VC = [R_phase * i + e for i, e in zip(_IC, _ddt(_psiC))]
+    Vpk = float(np.max(np.abs(VA + VB + VC))) if _psiA else 0.0
+    # Terminal electrical input ⟨Σ v·i⟩ (EXACTLY 0 at no-load).  IA/IB/IC are
+    # PER-BRANCH conductor currents, so one branch per phase is what ⟨Σ v·i⟩
+    # measures and the machine total carries the n_parallel factor — the same
+    # correction the P1 path has.  The P2 return simply did not have this key,
+    # so every consumer that computes efficiency as (P_elec−P_loss)/P_elec —
+    # the field view's sidebar among them — read a missing 0.0 and reported
+    # 0 % efficiency for a machine doing real work.
+    P_elec_in2 = (float(np.mean(np.asarray(VA) * np.asarray(_IA)
+                                + np.asarray(VB) * np.asarray(_IB)
+                                + np.asarray(VC) * np.asarray(_IC)))
+                  * float(n_parallel) if _IA else 0.0)
+    _ang = [(k / n_total) * period_mech * n_periods for k in range(n_total)]
+    log.info("P2 belt transient done: %d frames in %.1f s, T_avg=%.5f Nm, "
+             "ripple_raw=%.2f%%, picard_max_res=%.2e", n_total,
+             _t.time() - t0, Tavg, Trip_raw, _pic_res_max)
+    # Demag map + per-magnet report.
+    _dcoef2 = _dfield2 = None
+    _drep2 = []
     if demag and _dmst is not None:
-        _demag_coef, _demag_field, _rep = _dmst.payload(
+        _dcoef2, _dfield2, _rep2 = _dmst.payload(
             int(Tts.shape[1]), mesh_all.p * 1e3, mesh_all.t,
             np.concatenate([np.asarray(ts), np.asarray(tr)]),
             dump_H=_os_sb.environ.get("SB_DEMAG_H_DUMP") == "1")
-        for _row in _rep:
+        for _row in _rep2:
             _row["magnet_index"] = int(_row["magnet_index"] - DOM_MAG_BASE)
-            _demag_report.append(_row)
-        log.warning("demag (per-step): %d/%d magnet elems de-rated, min Br_factor %.3f",
-                    int(np.sum(_br_glob < 0.999)), int(_mag_idx.size), float(_br_glob.min()))
-
+            _drep2.append(_row)
+        log.warning("P2 demag: %d/%d magnet elems de-rated, min Br_factor %.3f",
+                    int(np.sum(_br_glob < 0.999)), int(_mag_idx.size),
+                    float(_br_glob.min()))
     return {
-        "method": "sliding_band",
-        # 'field+honest' = magnet/shaft loss from the coupled frequency-domain
-        # rotor solve (screening + skin reaction, k≤16 physical band) — the
-        # production model with rotor_eddy; 'field' = its history-based σ·∂A/∂t
-        # fallback; 'slab' = classical d²/12 estimate.
-        "loss_model": ("field+honest" if (rotor_eddy and _honest_ok)
-                        else ("field" if rotor_eddy else "slab")),
+        "method": "sliding_band_p2", "element_order": 2,
+        "loss_model": _lm2,
+        "demag_coef_per_tri": (_dcoef2.tolist() if _dcoef2 is not None else None),
+        "demag_report": _drep2,
+        "demag_field": _dfield2,
         "n_steps": n_total, "n_steps_per_period": int(n_steps_per_period),
         "n_periods": float(n_periods), "rpm": rpm, "f_elec_Hz": f_elec,
         "dt_s": dt, "T_period_s": (1.0 / f_elec if f_elec > 1e-9 else 0.0),
-        "time_s": tt, "rotor_angle_deg": [
-            (k / n_total) * period_mech * n_periods for k in range(n_total)],
-        "T_em_Nm": T_series, "T_avg_Nm": Tavg, "T_ripple_pct": Trip,
-        # Which torque definition produced the number above, plus the raw
-        # Maxwell-stress series it was re-centred from — same transparency the
-        # P2 branch already provides, so an inflated mean can never hide again.
-        "torque_method": _torque_method_p1,
-        "T_avg_maxwell_Nm": round(float(np.mean(_mx_raw_p1)) if _mx_raw_p1 else 0.0, 4),
-        "T_em_maxwell_Nm": list(_mx_raw_p1),
-        "T_ripple_raw_pct": Trip_raw, "T_ripple_filt_pct": Trip_filt,
-        # RMS of the forbidden (non-6·k) torque orders as % of mean torque —
-        # the mesh-noise floor the 6·k gate removed.  ~0 on a converged mesh.
-        "T_noise_floor_pct": round(float(Tnoise_pct), 2),
-        # Both reconstructions — the UI toggles between them client-side (no
-        # re-solve) when the "Torque filter" checkbox is flipped.
-        "T_em_raw_Nm": _T_raw, "T_em_filt_Nm": _T_filt,
-        "psi_A_Wb": psiA, "psi_B_Wb": psiB, "psi_C_Wb": psiC,
+        "time_s": _tt, "rotor_angle_deg": _ang,
+        "T_em_Nm": _T2, "T_avg_Nm": Tavg, "T_ripple_pct": Trip_raw,
+        "T_ripple_raw_pct": Trip_raw, "T_ripple_filt_pct": Trip,
+        "T_noise_floor_pct": round(float(Tnoise), 2),
+        "T_em_raw_Nm": list(_T2), "T_em_filt_Nm": _Tf,
+        "torque_method": _torque_method,
+        "T_avg_maxwell_Nm": round(T_maxwell_avg, 4),
+        "T_harm_order": T_harm_order, "T_harm_amp": T_harm_amp,
+        "T_em_maxwell_Nm": list(_T2raw),
+        "psi_A_Wb": _psiA, "psi_B_Wb": _psiB, "psi_C_Wb": _psiC,
         "V_A": VA, "V_B": VB, "V_C": VC, "V_peak": Vpk,
-        "I_A": IA, "I_B": IB, "I_C": IC,
-        "P_cu_W": P_cu_series, "P_fe_W": P_fe_series,
-        "P_mag_eddy_W": P_mag_series, "P_loss_total_W": P_tot_series,
-        "P_cu_dc_W": P_cu_dc, "P_cu_ac_W": P_cu_ac_series,
-        "P_shaft_eddy_W": P_shaft_series,
-        "P_mag_honest_W": round(float(P_mag_honest), 3),    # coupled (reaction) eddy — production w/ rotor_eddy
-        "P_shaft_honest_W": round(float(P_shaft_honest), 3),
-        "P_mag_hist_W": round(float(P_mag_hist_avg), 3),    # pre-swap history-based avgs (diagnostic:
-        "P_shaft_hist_W": round(float(P_shaft_hist_avg), 3),  # jitter-dominated for screened bodies)
-        "P_cu_ac_solve_W": round(P_cu_ac_solve_W, 1),       # field-based copper AC (eddy solve)
-        "P_cu_total_solve_W": round(P_cu_total_solve_W, 1),  # field-based copper total
-        "P_mech_avg_W": P_mech_avg,                          # energy-conserving shaft power
-        "P_elec_in_W": P_elec_in,                            # ⟨Σ v·i⟩ (0 at no-load)
-        "P_airgap_W": P_airgap_avg,                          # electromagnetic T_avg·ω
-        "P_loss_total_avg_W": P_loss_total_avg,
+        "I_A": _IA, "I_B": _IB, "I_C": _IC,
+        "P_cu_W": P_cu_ser2, "P_fe_W": P_fe_ser2,
+        "P_mag_eddy_W": P_mag_ser2, "P_shaft_eddy_W": P_shaft_ser2,
+        "P_loss_total_W": P_tot_ser2,
+        "P_cu_dc_W": P_cu_dc2, "P_cu_ac_W": P_cu_ac_ser2,
+        # Coupled σ·∂A/∂t solve (eddy=True) — the REPORTED copper AC / magnet
+        # / shaft above come from these when it ran; the modelled numbers are
+        # kept beside them as the cross-check (see the swap block).
+        "eddy_coupled": bool(eddy),
+        "P_cu_total_solve_W": round(float(P_cu_solve_avg2), 3),
+        "P_cu_dc_2d_solve_W": round(float(P_cu_dc2d_avg2), 3),
+        "P_cu_ac_solve_W": round(float(P_cu_ac_avg2), 3) if eddy else 0.0,
+        "P_cu_ac_prox_W": round(float(P_cu_ac_prox_avg2), 3),
+        "P_mag_solve_W": (round(float(P_mag_avg2), 3)
+                          if (eddy and rotor_eddy) else 0.0),
+        "P_shaft_solve_W": (round(float(P_shaft_avg2), 3)
+                            if (eddy and rotor_eddy) else 0.0),
+        "P_mag_honest_W": round(float(P_mag_prox_avg2), 3),
+        "P_shaft_honest_W": round(float(P_shaft_prox_avg2), 3),
+        "P_fe_avg_W": round(float(P_fe_avg2), 3),
+        "P_loss_total_avg_W": round(float(P_loss_avg2), 3),
+        "P_airgap_W": P_airgap_avg2, "P_mech_avg_W": P_mech_avg2,
+        "P_elec_in_W": P_elec_in2,               # ⟨Σ v·i⟩ (0 at no-load)
         "R_phase_ohm": R_phase, "n_slip_nodes": int(Nring),
         "n_parallel": int(n_parallel),
-        # Saturation-Picard honesty report: iterations actually used per frame
-        # (early-stop on the nu fixed-point residual < _PIC_TOL, cap =
-        # nonlinear_iterations) and the worst final residual over all frames.
-        # picard_converged=False means some frame hit the cap without meeting
-        # the tolerance — treat ripple from such a run with suspicion.
-        "picard_iters_mean": (round(float(np.mean(_pic_iters_hist)), 1)
-                              if _pic_iters_hist else 0.0),
-        "picard_iters_max": (int(max(_pic_iters_hist)) if _pic_iters_hist else 0),
-        "picard_resid_max": (round(float(max(_pic_resid_hist)), 6)
-                             if _pic_resid_hist else 0.0),
-        "picard_tol": float(_PIC_TOL),
-        "picard_converged": bool(_pic_resid_hist
-                                 and max(_pic_resid_hist) < _PIC_TOL),
+        "picard_iters_mean": (round(float(np.mean(_pic_iters)), 1)
+                              if _pic_iters else 0.0),
+        "picard_iters_max": (int(max(_pic_iters)) if _pic_iters else 0),
+        "picard_resid_max": round(float(_pic_res_max), 6),
+        "picard_tol": float(_PIC_TOL2),
+        "picard_converged": bool(_pic_res_max < _PIC_TOL2),
         "coil_temp_C": float(coil_temp_c),
         "end_winding_factor": float(_k_end_used),
         # Drive mode: "current" (imposed sinusoidal I) or "voltage" (imposed
@@ -5466,24 +4099,24 @@ def fem_transient_sliding_band(
         "v_phase_peak_V": float(v_phase_peak) if _vdrive else None,
         "v_delta_deg": float(v_delta_deg) if _vdrive else None,
         # circuit-iteration convergence stats, one entry per frame of the
-        # REPORTED window (settling frames stripped with every other series, so
-        # the indices line up with I/psi/T) + the honest steady-state quality
-        # gauge: mean phase current over that window (≈0 A on a converged
-        # periodic orbit).
+        # REPORTED window (settling frames stripped with every other series,
+        # so the indices line up with I/psi/T) + the honest steady-state
+        # quality gauge: mean phase current over that window (≈0 A on a
+        # converged periodic orbit).
         "v_drive_diag": (_v_diag if _vdrive else None),
-        "v_dc_residual_A": (round(float(np.mean(np.asarray(IA, float))), 3)
-                            if (_vdrive and IA) else None),
-        "T_harm_order": T_harm_order, "T_harm_amp": T_harm_amp,
-        "field": _field_snap,
-        # Demagnetisation (populated only when demag=True): per-element Br
-        # factor over the FULL stitched mesh (1.0 = full strength), plus the
-        # per-magnet worst-cell report consumed by the UI panel/% map.
-        "demag_coef_per_tri": (_demag_coef.tolist() if _demag_coef is not None else None),
-        "demag_report": _demag_report,
-        "demag_field": _demag_field,     # full mesh + per-element Br factor for the %-map
+        "v_dc_residual_A": (round(float(np.mean(np.asarray(_IA, float))), 3)
+                            if (_vdrive and _IA) else None),
+        "field": _snap2,
+        # Animation keyframes (empty unless return_frames>0).  ONE mesh for the
+        # whole run — that is the whole point of the sliding band — so the
+        # topology travels ONCE in frames_mesh and each frame carries only what
+        # actually changes: its rotor-rotated node coordinates and its field.
+        "frames": _frames2,
+        "frames_mesh": ({"T": mesh_all.t.copy(),
+                         "tags": np.concatenate(
+                             [np.asarray(ts), np.asarray(tr)]).astype(int),
+                         "nsn": int(nsn)} if _frames2 else None),
     }
-
-
 
 
 def _build_full_disk_from_halves(polys, rotor_angle_deg, mesh_size_mm,
@@ -5604,6 +4237,7 @@ def em_transient_eval(
     v_phase_peak: float = 0.0,
     v_delta_deg: float = 0.0,
     element_order: int = 2,          # 2 = P2, the only basis (see fem_transient_sliding_band)
+    return_frames: int = 0,          # >0: also return N animation keyframes
 ) -> Dict:
     """THE single canonical sliding-band transient invocation.
 
@@ -5630,654 +4264,5 @@ def em_transient_eval(
         structured_gap=bool(structured_gap), airgap_macro=bool(airgap_macro),
         frozen_nu=bool(frozen_nu),
         drive=str(drive or "current"), v_phase_peak=float(v_phase_peak),
-        v_delta_deg=float(v_delta_deg), element_order=int(element_order))
-
-
-def fem_quasistatic_transient(
-    n_steps_per_period: int = 24,
-    n_periods: float = 1.0,
-    gamma_deg: float = 0.0,
-    I_phase_rms: float = 85.0,
-    mesh_size_mm: float = 4.0,
-    min_size_mm: float = 0.3,
-    outer_air_factor: float = 1.3,
-    motion_band: bool = True,
-    band_thickness_mm: float = 0.4,
-    n_sectors: int = 4,
-    stator_fillet_mm: float = 0.0,
-    coil_temp_c: float = 120.0,
-    end_winding_factor: float = 0.0,
-    component_mesh_mm: dict = None,
-) -> dict:
-    """GENUINE quasi-static transient — ONE algorithm for every symmetry.
-
-    Sweeps ``fem_solve_for_sim`` over one electrical period at the REQUESTED
-    symmetry: Full (n_sectors=1) uses the real stitched 360° disk, 1/2 & 1/4 use
-    the clipped sectors with the correct (anti)periodic BC.  NOTHING is forced to
-    1/4 — so the full disk shows its own honest result.  Each frame is a real
-    magnetostatic solve; back-EMF = R·I + dψ/dt (central differences); per-frame
-    losses (Bertotti core + I²R copper + slab magnet eddy) already carry the
-    n_sectors multiplier.  Returns the same dict shape the transient endpoint and
-    summary builder expect (so the frontend is unchanged).
-    """
-    import time as _t
-    import numpy as _np
-    import math as _math
-    from motor_ai_sim.simulation.geometry_2d import params_from_config
-    from motor_ai_sim.config import get_config
-
-    t0 = _t.time()
-    cfg = get_config(); sim = cfg.get("simulation", {}); geo = dict(cfg.get("geometry", {}))
-    wind = cfg.get("winding", {})
-    p = params_from_config()
-    pole_pairs = p.num_poles // 2
-    n_parallel = wind.get("n_parallel", 2)
-    # rpm is the master; the electrical frequency is DERIVED (see the
-    # sliding-band path for why — stale config pairs scaled losses wrong).
-    rpm = float(sim.get("rpm", 3950))
-    f_elec = rpm * pole_pairs / 60.0
-    n_total = max(2, int(round(n_steps_per_period * n_periods)))
-    period_mech = 360.0 / pole_pairs                       # one electrical period [deg mech]
-    dt = (1.0 / max(f_elec, 1e-9)) * n_periods / n_total
-    Ipk = float(I_phase_rms) / n_parallel * _math.sqrt(2)
-    # Temperature-consistent phase resistance for the R·I voltage drop.
-    _P_cu_dc, _k_end_used, R_phase = copper_loss_W(
-        p, geo, float(I_phase_rms), n_parallel,
-        coil_temp_c=coil_temp_c, end_winding_factor=end_winding_factor)
-
-    T = []; psiA = []; psiB = []; psiC = []
-    Pcu = []; Pfe = []; Pmag = []; IA = []; IB = []; IC = []; tt = []; ang_list = []
-    for k in range(n_total):
-        ang = (k / n_total) * period_mech * n_periods
-        r = fem_solve_for_sim(
-            rotor_angle_deg=float(ang), gamma_deg=float(gamma_deg),
-            mesh_size_mm=float(mesh_size_mm), min_size_mm=float(min_size_mm),
-            outer_air_factor=float(outer_air_factor), motion_band=motion_band,
-            band_thickness_mm=float(band_thickness_mm), n_sectors=int(n_sectors),
-            stator_fillet_mm=float(stator_fillet_mm), I_phase_rms=float(I_phase_rms),
-            component_mesh_mm=component_mesh_mm)
-        T.append(float(r.get("T_em_Nm", 0.0)))
-        psiA.append(float(r.get("psi_A_Wb", 0.0)))
-        psiB.append(float(r.get("psi_B_Wb", 0.0)))
-        psiC.append(float(r.get("psi_C_Wb", 0.0)))
-        Pcu.append(float(r.get("P_cu_W", 0.0)))
-        Pfe.append(float(r.get("P_fe_W", 0.0)))
-        Pmag.append(float(r.get("P_mag_eddy_W", 0.0)))
-        te = _math.radians(ang * pole_pairs + gamma_deg + DAXIS_SHIFT_DEG)
-        IA.append(Ipk * _math.cos(te))
-        IB.append(Ipk * _math.cos(te - 2 * _math.pi / 3))
-        IC.append(Ipk * _math.cos(te + 2 * _math.pi / 3))
-        tt.append(k * dt); ang_list.append(ang)
-        log.info("QS transient: frame %d/%d ang=%.2f T=%.2f", k + 1, n_total, ang, T[-1])
-
-    # Back-EMF e = dψ/dt via a SPECTRAL derivative (keep the fundamental + a few
-    # low harmonics).  Each frame is meshed independently, so ψ(t) carries a tiny
-    # frame-to-frame remesh jitter; a raw finite difference amplifies that into a
-    # spurious V-peak (and differently per symmetry).  Differentiating the low
-    # harmonics of the periodic ψ removes the jitter and gives the genuine,
-    # symmetry-consistent back-EMF.  (Same denoising the sliding-band path used.)
-    _Kv = max(1, min(6, n_total // 2 - 1))
-    def _ddt(arr):
-        a = _np.asarray(arr, float); N = a.size
-        if N < 4:
-            return _np.array([(a[(i + 1) % N] - a[(i - 1) % N]) / (2 * dt) for i in range(N)])
-        Fc = _np.fft.rfft(a)
-        if _Kv + 1 < Fc.size:
-            Fc[_Kv + 1:] = 0.0
-        return _np.fft.irfft(Fc * (1j * 2 * _np.pi * _np.fft.rfftfreq(N, d=dt)), n=N)
-    VA = [R_phase * i + e for i, e in zip(IA, _ddt(psiA).tolist())]
-    VB = [R_phase * i + e for i, e in zip(IB, _ddt(psiB).tolist())]
-    VC = [R_phase * i + e for i, e in zip(IC, _ddt(psiC).tolist())]
-    Vpk = float(max(max(map(abs, VA)), max(map(abs, VB)), max(map(abs, VC)))) if VA else 0.0
-    Ta = _np.asarray(T, float)
-    Tavg = float(Ta.mean()) if Ta.size else 0.0
-    Tpp = float(Ta.max() - Ta.min()) if Ta.size else 0.0
-    Trip = float(100.0 * Tpp / abs(Tavg)) if Tavg else 0.0
-    # torque spectrum (orders = × electrical frequency) for the harmonics bar chart
-    T_harm_order = []; T_harm_amp = []
-    if Ta.size >= 4:
-        F = _np.fft.rfft(Ta - Ta.mean())
-        scale = 2.0 / Ta.size
-        for kk in range(1, len(F)):
-            T_harm_order.append(round(kk / max(n_periods, 1e-9), 2))
-            T_harm_amp.append(float(abs(F[kk]) * scale))
-    Ptot = [c + f + m for c, f, m in zip(Pcu, Pfe, Pmag)]
-    Pmech = float(Tavg * 2.0 * _math.pi * rpm / 60.0)
-    log.info("QS transient DONE: n=%d sectors=%d T_avg=%.2f ripple=%.1f%% V_peak=%.1f (%.1fs)",
-             n_total, int(n_sectors), Tavg, Trip, Vpk, _t.time() - t0)
-    return {
-        "method": "quasistatic",
-        "n_steps": n_total, "n_steps_per_period": int(n_steps_per_period),
-        "n_periods": float(n_periods), "rpm": rpm, "f_elec_Hz": f_elec, "dt_s": dt,
-        "T_period_s": (1.0 / f_elec if f_elec > 1e-9 else 0.0),
-        "time_s": tt, "rotor_angle_deg": ang_list,
-        "T_em_Nm": T, "T_avg_Nm": Tavg, "T_ripple_pct": round(Trip, 2),
-        "T_ripple_raw_pct": round(Trip, 2),
-        "psi_A_Wb": psiA, "psi_B_Wb": psiB, "psi_C_Wb": psiC,
-        "V_A": VA, "V_B": VB, "V_C": VC, "V_peak": Vpk,
-        "I_A": IA, "I_B": IB, "I_C": IC,
-        "P_cu_W": Pcu, "P_fe_W": Pfe, "P_mag_eddy_W": Pmag, "P_loss_total_W": Ptot,
-        "P_mech_avg_W": Pmech, "R_phase_ohm": R_phase, "coil_temp_C": float(coil_temp_c),
-        "end_winding_factor": float(_k_end_used),
-        "T_harm_order": T_harm_order, "T_harm_amp": T_harm_amp, "field": None,
-    }
-
-
-def fem_solve_for_sim(
-    rotor_angle_deg: float = 0.0,
-    gamma_deg:       float = 0.0,
-    mesh_size_mm:    float = 3.0,
-    min_size_mm:     float = 0.3,
-    outer_air_factor:float = 1.3,
-    motion_band:     bool  = True,
-    band_thickness_mm: float = 0.4,
-    n_sectors:       int   = 4,
-    stator_fillet_mm:float = 0.0,
-    I_phase_rms:     Optional[float] = None,
-    component_mesh_mm: Optional[dict] = None,
-) -> dict:
-    """End-to-end FEM solve: build mesh on (possibly clipped) geometry,
-    solve magnetostatics, compute Maxwell-stress torque and Steinmetz iron
-    losses + I²R copper losses, return everything the Simulation tab needs.
-
-    Multiplies INTEGRAL quantities (torque + iron + magnet eddy losses)
-    by n_sectors so the values represent the full motor.  Copper loss is
-    derived from phase currents directly (no mesh integration) so it's
-    already a full-motor number.
-    """
-    import time as _t
-    from motor_ai_sim.cadquery_geometry import CadQueryMotor
-    from motor_ai_sim.simulation.geometry_2d import (
-        params_from_config, MotorDomains2D,
-    )
-    from motor_ai_sim.config import get_config
-
-    t_start = _t.time()
-    cfg  = get_config()
-    sim  = cfg.get("simulation", {})
-    geo  = cfg.get("geometry",   {})
-    wind = cfg.get("winding",    {})
-
-    p = params_from_config()
-    d = MotorDomains2D(p)
-    pole_pairs   = p.num_poles // 2
-    # I_phase_rms = 0 must be honoured (zero-current solve = magnet field only).
-    # `None` means "use whatever the operating-point config says".
-    if I_phase_rms is None:
-        I_phase_rms  = sim.get("max_current", 85.0)
-    I_phase_rms = float(I_phase_rms)
-    n_parallel   = wind.get("n_parallel", 2)
-    n_wires      = int(geo.get("num_wires_per_slot", 14))
-    I_coil_peak  = I_phase_rms / n_parallel * math.sqrt(2)
-    # d-axis convention for SPOKE-PM:
-    #   The effective N pole of the rotor sits at the CENTRE OF THE IRON
-    #   TOOTH between two adjacent magnets — half a pole pitch (= 90° elec)
-    #   offset from the magnet centre.  Empirical γ-sweep with the actual
-    #   mesh + nonlinear iron + corrected (half-pitch) slot_idx mapping
-    #   determines this constant so γ = 0 lands on the q-axis (max torque).
-    # Geometry: rotor d-axis tooth at math 90° (+Y axis), aligned with the
-    #   first stator tooth (also at math 90°), exactly as in the Ansys
-    #   reference image.
-    # Shared module constant so every solve path uses the SAME phase shift.
-    SPOKE_PM_DAXIS_SHIFT_DEG = DAXIS_SHIFT_DEG
-    theta_e      = math.radians(rotor_angle_deg * pole_pairs
-                                 + gamma_deg + SPOKE_PM_DAXIS_SHIFT_DEG)
-    I_ph = {
-        'A': I_coil_peak * math.cos(theta_e),
-        'B': I_coil_peak * math.cos(theta_e - 2 * math.pi / 3),
-        'C': I_coil_peak * math.cos(theta_e + 2 * math.pi / 3),
-    }
-
-    motor = CadQueryMotor()
-    polys = motor.get_2d_polygons(rotor_angle_deg=rotor_angle_deg)
-    polys = _simplify_polys(polys, tol_mm=0.005,
-                             stator_fillet_mm=stator_fillet_mm)
-
-    log.info("FEM-sim: building mesh (h=%.2f, n_sectors=%d, outer×%.2f, band=%s)",
-             mesh_size_mm, n_sectors, outer_air_factor, motion_band)
-    if int(n_sectors) == 1:
-        # FULL DISK: OCC fragment can't cleanly mesh the closed 360° geometry
-        # (it double-meshes the iron).  Build it from two clean 1/2 sector
-        # meshes stitched together instead.
-        mesh, cell_tags, classify_fn = _build_full_disk_from_halves(
-            polys, rotor_angle_deg, mesh_size_mm, min_size_mm, outer_air_factor,
-            motion_band, band_thickness_mm, motor.parameters, component_mesh_mm)
-    else:
-        mesh, cell_tags, classify_fn = build_mesh_from_polygons(
-            polys, rotor_angle_deg, mesh_size_mm,
-            min_size_mm=min_size_mm,
-            outer_air_factor=outer_air_factor,
-            motion_band=motion_band,
-            band_thickness_mm=band_thickness_mm,
-            n_sectors=n_sectors,
-            geo_cfg=motor.parameters,
-            component_mesh_mm=component_mesh_mm,
-        )
-    # int16 — per-magnet tags reach DOM_MAG_BASE + 27 = 127, well within int16
-    # but right at the edge of int8.  Stay in int16 to be safe.
-    cell_tags = cell_tags.astype(np.int16)
-
-    slot_area = p.slot_width_m * p.slot_height_m * p.fill_factor
-    # build_mesh_from_polygons attached the FINAL (post-clip + air-injected)
-    # polys to classify_fn.  Per-magnet material indices must match the
-    # mesh's per-magnet tags, so we build materials from that same dict.
-    polys_meshed = getattr(classify_fn, "polys", polys)
-    mats = build_materials(I_ph, d.winding_layout, polys_meshed,
-                            rotor_angle_deg, slot_area, n_wires)
-
-    t_solve_start = _t.time()
-    poles_per_sector = p.num_poles // max(int(n_sectors), 1)
-    anti_periodic = (poles_per_sector % 2 == 1)
-    A = solve_magnetostatics(mesh, cell_tags, mats,
-                              n_sectors=int(n_sectors),
-                              pole_pairs_per_sector_is_half_integer=anti_periodic)
-    t_solve = _t.time() - t_solve_start
-
-    # ── Demagnetisation post-check (after the converged solve) ───────────
-    Bx_post, By_post = _per_triangle_B(mesh, A)
-    demag_report: List[dict] = []
-    magnet_op_points: List[dict] = []
-    # PER-TRIANGLE demagnetisation coefficient (0..1) for the field map —
-    # all triangles default to 1.0 (no demag); magnet cells get the actual
-    # ratio of remaining B / Br at their operating point.
-    demag_coef_per_tri = np.ones(mesh.t.shape[1], dtype=np.float32)
-    for tag in sorted([t for t in mats if t >= DOM_MAG_BASE]):
-        mat_t = mats[tag]
-        if abs(mat_t.Mx) + abs(mat_t.My) < 1e-9:
-            continue
-        idx = np.where(cell_tags == tag)[0]
-        if idx.size == 0:
-            continue
-        Mmag = math.hypot(mat_t.Mx, mat_t.My)
-        # H projected on +M̂, accounting for the iteration's br_factor.
-        H_M = (Bx_post[idx] * mat_t.Mx + By_post[idx] * mat_t.My) \
-                / (MU0 * Mmag + 1e-30) - Mmag
-        # B projected on +M̂
-        B_M = (Bx_post[idx] * mat_t.Mx + By_post[idx] * mat_t.My) / Mmag
-        H_min = float(np.min(H_M))
-        H_mean = float(np.mean(H_M))
-        B_at_min = float(B_M[int(np.argmin(H_M))])
-        magnet_op_points.append({
-            "magnet_index": int(tag - DOM_MAG_BASE),
-            "H_op_kA_per_m":  round(H_min  * 1e-3, 1),
-            "H_mean_kA_per_m": round(H_mean * 1e-3, 1),
-            "B_op_T":         round(B_at_min, 4),
-        })
-        if not mat_t.bh_curve or len(mat_t.bh_curve) < 2:
-            continue
-        H_knee = mat_t.bh_curve[1][0] if mat_t.bh_curve[0][1] <= 0 \
-                   else mat_t.bh_curve[0][0]
-        # Per-cell demag coefficient.  Above the knee (H ≥ H_knee, i.e.
-        # less negative) the magnet operates linearly → DC = 1.  Below
-        # the knee the coefficient drops linearly with H, hitting 0 at
-        # 2·H_knee (a deeply demagnetised cell).
-        for j, c in enumerate(idx):
-            h = H_M[j]
-            if h >= H_knee:
-                dc = 1.0
-            else:
-                dc = 1.0 - (H_knee - h) / abs(H_knee)
-            demag_coef_per_tri[c] = max(0.0, min(1.0, float(dc)))
-        ratio = H_min / H_knee if H_knee < 0 else 0.0
-        if ratio > 0.85:
-            demag_report.append({
-                "tag": int(tag),
-                "magnet_index": int(tag - DOM_MAG_BASE),
-                "H_min_kA_per_m": round(H_min * 1e-3, 1),
-                "H_knee_kA_per_m": round(H_knee * 1e-3, 1),
-                "knee_proximity": round(ratio, 2),
-                "demagnetised": bool(ratio > 1.0),
-            })
-    # Sanitize any NaN/Inf so the response stays JSON-compliant.  Bad nodes
-    # become zero — they show up as background-coloured spots in the canvas
-    # but don't crash the whole render.
-    A = np.nan_to_num(A, nan=0.0, posinf=0.0, neginf=0.0)
-    n_bad = int(np.sum(~np.isfinite(A))) if A.size else 0
-    if n_bad:
-        log.warning("FEM: %d non-finite A values clamped to 0", n_bad)
-
-    # ── Per-triangle B, |B| ───────────────────────────────────────────────
-    Bx_tri, By_tri = _per_triangle_B(mesh, A)
-    Bmag_tri = np.sqrt(Bx_tri ** 2 + By_tri ** 2)
-    Bx_tri = np.nan_to_num(Bx_tri, nan=0.0, posinf=0.0, neginf=0.0)
-    By_tri = np.nan_to_num(By_tri, nan=0.0, posinf=0.0, neginf=0.0)
-    Bmag_tri = np.nan_to_num(Bmag_tri, nan=0.0, posinf=0.0, neginf=0.0)
-    areas    = _triangle_areas(mesh)               # m² for unit stack
-
-    # ── Torque via Arkkio (air-gap annulus average) — mesh-robust ─────────
-    # The old single-circle Maxwell stress was wildly mesh-dependent (23→37 N·m)
-    # because the gap was under-meshed; with the air-gap size field the gap is
-    # now resolved and Arkkio (averaging the stress over the whole annulus)
-    # converges to ~26-27 N·m.  Single-circle kept only for the debug log.
-    r_ag_m = 0.5 * (p.r_rotor_out + p.r_stator_in)      # mid-air-gap
-    theta_end = 2 * math.pi if n_sectors <= 1 else (2 * math.pi / n_sectors)
-    T_sector = _arkkio_torque(mesh, A, p.r_rotor_out, p.r_stator_in, p.stack_length)
-    T_em_Nm = T_sector * (n_sectors if n_sectors > 1 else 1)
-    try:
-        T_circle = _maxwell_stress_torque(mesh, A, r_ag_m, p.stack_length,
-                                          0.0, theta_end, 720) \
-                   * (n_sectors if n_sectors > 1 else 1)
-        log.info("torque: Arkkio=%.2f N·m  (single-circle=%.2f N·m)",
-                 T_em_Nm, T_circle)
-    except Exception:
-        pass
-
-    # ── Per-phase flux linkage ψ_A, ψ_B, ψ_C ─────────────────────────────
-    # ψ_per_slot = N_turns · L_stack · ⟨A_z⟩_slot  (signed by winding dir).
-    # ⟨A_z⟩_slot is the AREA-WEIGHTED mean A_z over the slot's triangles
-    # (linear P1 element, so per-tri mean = nodal mean).  Summing the
-    # signed per-slot contributions over all slots belonging to a phase
-    # gives the phase flux linkage in Wb.  Multiplied by the symmetry
-    # multiplier to recover the full-motor value.
-    psi_A = psi_B = psi_C = 0.0
-    coil_polys_clipped = polys_meshed.get("coils", [])
-    n_slot_layout = len(d.winding_layout)
-    if n_slot_layout > 0 and coil_polys_clipped:
-        slot_pitch_deg_layout = 360.0 / n_slot_layout
-        # Same half-pitch offset fix as build_materials: slot CENTRES sit
-        # midway between adjacent coil polygons, so the two halves of each
-        # wide tooth land on ADJACENT slot_idx values with OPPOSITE direction
-        # signs.  Without this offset both halves collapse onto the same
-        # slot_idx and inherit the SAME direction → ψ_phase becomes
-        # ⟨A_z_left⟩ + ⟨A_z_right⟩ ≈ 2⟨A_z_tooth⟩ instead of the proper
-        # ⟨A_z_left⟩ − ⟨A_z_right⟩ = flux LINKED by the coil loop, which
-        # over-estimates the back-EMF voltage by 10–50× (user-reported
-        # V_peak ≈ 5 kV vs. expected ≈ 140 V).
-        half_pitch_layout = slot_pitch_deg_layout * 0.5
-        A_tri_mean = (A[mesh.t[0]] + A[mesh.t[1]] + A[mesh.t[2]]) / 3.0
-        for i, cp in enumerate(coil_polys_clipped):
-            if cp is None or cp.is_empty:
-                continue
-            try:
-                cx, cy = cp.centroid.x, cp.centroid.y
-            except Exception:
-                continue
-            ang = math.degrees(math.atan2(cy, cx))
-            if ang < 0: ang += 360.0
-            slot_idx = int((ang - half_pitch_layout)
-                            / slot_pitch_deg_layout + 0.5) % n_slot_layout
-            phase, direction = d.winding_layout[slot_idx]
-            tag = DOM_COIL_BASE + i
-            idx = np.where(cell_tags == tag)[0]
-            if idx.size == 0:
-                continue
-            slot_area = float(np.sum(areas[idx]))
-            if slot_area <= 0:
-                continue
-            mean_Az = float(np.sum(A_tri_mean[idx] * areas[idx])) / slot_area
-            psi_slot = direction * mean_Az      # signed Wb/m  per turn
-            if   phase == 'A': psi_A += psi_slot
-            elif phase == 'B': psi_B += psi_slot
-            elif phase == 'C': psi_C += psi_slot
-        # ⟨A_z⟩ has units Wb/m.  Critical scaling note:
-        #   _clip_polys_to_sector unpacks each slot's MultiPolygon
-        #   (= union of N_wires disjoint wire rectangles) into N_wires
-        #   INDIVIDUAL polygons in `coils`.  The loop above therefore
-        #   already SUMS direction × ⟨A_z⟩ over all N_wires wires per
-        #   slot, so we MUST NOT multiply by N_wires again — that
-        #   would over-count flux linkage by N_wires (= 14 for this
-        #   motor, producing the ~5 kV phase-voltage artefact the user
-        #   pointed out).  Divide by n_parallel to convert the SUMMED
-        #   phase flux linkage into PER-BRANCH ψ, which is what the
-        #   phase-terminal voltage equation uses.
-        sym = (n_sectors if n_sectors > 1 else 1)
-        scale = p.stack_length * sym / float(n_parallel)
-        psi_A *= scale
-        psi_B *= scale
-        psi_C *= scale
-
-    # ── Losses ────────────────────────────────────────────────────────────
-    # Iron loss: per-cell Bertotti formula using the material's actual
-    # kh / kc / ke coefficients from materials_library.yaml.  The Bertotti
-    # model splits hysteresis, classical eddy and excess losses and
-    # encodes BOTH frequency and B dependence per material grade:
-    #
-    #   P/V  =  k_h · f · B²   +   k_c · f² · B²   +   k_e · f^1.5 · B^1.5
-    #
-    # Lamination stacking_factor (≈0.97) discounts the geometric volume
-    # to account for the inter-laminate insulation thickness.
-    #
-    # Copper: 3-phase I²R from R_phase in config.
-    freq = sim.get("rpm", 3950) / 60 * pole_pairs       # electrical Hz
-
-    # Pull material objects directly from the library to get Bertotti
-    # coefficients, density and stacking factor.
-    try:
-        from motor_ai_sim import materials as _mat_lib
-        from motor_ai_sim.config import get_material_assignments as _gma
-        _ma = _gma() or {}
-        _stator_mat = _mat_lib.get_steel(_ma.get("stator_core", "20SW1200"))
-        _rotor_mat  = _mat_lib.get_steel(_ma.get("rotor_core",  "20SW1200"))
-    except Exception as e:
-        log.warning("Steel material lookup failed (%s) — falling back to hardcoded Bertotti", e)
-        _stator_mat = _rotor_mat = None
-
-    # Per-triangle volumes [m³].  Stacking factor applied at loss step.
-    vol = areas * p.stack_length
-
-    def _domain_iron_loss_bertotti(tag: int, mat) -> float:
-        """Per-cell Bertotti core loss summed over a domain."""
-        mask = cell_tags == tag
-        idx = np.where(mask)[0]
-        if idx.size == 0 or mat is None:
-            return 0.0
-        # Maxwell-style: coefficients fitted from the material's MEASURED loss
-        # curves when present (see materials.fit_bertotti_from_curves), else YAML.
-        kh, kc, ke = _mat_lib.effective_bertotti(mat)
-        sf = float(getattr(mat, "stacking_factor", 0.97))
-        f  = freq
-        B  = Bmag_tri[idx]
-        # W/m³ per cell
-        p_dens = kh * f * B**2 + kc * f**2 * B**2 + ke * f**1.5 * B**1.5
-        # Apply lamination stacking factor to the geometric volume
-        return float(np.sum(p_dens * vol[idx] * sf))
-
-    P_fe_stator = _domain_iron_loss_bertotti(DOM_STATOR, _stator_mat)
-    P_fe_rotor  = _domain_iron_loss_bertotti(DOM_ROTOR,  _rotor_mat)
-
-    # ── Magnet eddy losses — slot-ripple slab model ──────────────────────
-    # In a SYNCHRONOUS machine the fundamental armature reaction rotates
-    # with the rotor, so in the magnet's frame it is DC — no eddy loss.
-    # The dominant AC field a magnet sees is the SLOT RIPPLE, at frequency
-    #     f_slot = num_slots × n_mech     [Hz]
-    # whose amplitude inside the magnet is a few percent of the local B.
-    # The classical conducting-slab result for losses is
-    #     P/V = σ · (2π f_slot)² · (η·B)² · d² / 12      [W/m³]
-    # with η ≈ 0.10 the empirical "ripple fraction" for unsegmented
-    # rotors in concentrated-winding machines (Bianchi & Fornasiero,
-    # IEEE TIA 2009).  Segmenting axially reduces this by N_seg²
-    # (out of scope for this 2-D solver).
-    #
-    # Naively plugging the FULL B and electrical f into the slab formula
-    # (as a static FEM might suggest) over-estimates the loss by ~3-4
-    # orders of magnitude — see the rotor-frame argument above.
-    #
-    # An exact "finite-difference of A_z over transient frames" turns
-    # out to be poisoned by gauge / sector-clipping noise (A_z FLIPS sign
-    # by anti-periodicity once per pole pitch even though B stays the
-    # same), so for a robust unattended answer we use the slot-ripple
-    # slab model.  Per-snapshot A_z mean / per-magnet volume / σ are
-    # still surfaced in the response for downstream tooling that does a
-    # gauge-aware finite difference (e.g. a full-motor moving-band run).
-    try:
-        mag_name = _ma.get("magnet")
-        _magnet_mat = _mat_lib.get_magnet(mag_name) if mag_name else None
-    except Exception:
-        _magnet_mat = None
-    rho_magnet = float(getattr(_magnet_mat, "density", 7500.0)) if _magnet_mat else 7500.0
-    sigma_mag  = float(getattr(_magnet_mat, "sigma",   0.0))    if _magnet_mat else 0.0
-
-    # Per-magnet mean A_z, volume, and ROTOR-FRAME centroid angle for the
-    # downstream time-differentiation in /fem_transient.  The rotor-frame
-    # angle (= lab centroid angle minus the current rotor_angle_deg) is a
-    # stable identifier — the SAME physical magnet has the SAME rotor-frame
-    # angle across all transient frames, even though sector clipping may
-    # reorder it in the per-frame magnet list.
-    A_z_mean_per_magnet:  List[float] = []
-    Bmag_mean_per_magnet: List[float] = []
-    vol_per_magnet:       List[float] = []
-    mag_rotor_angle_deg:  List[float] = []
-    A_tri_mean_all = (A[mesh.t[0]] + A[mesh.t[1]] + A[mesh.t[2]]) / 3.0
-    for i, (mp, _pol) in enumerate(polys_meshed.get("magnets", [])):
-        tag = DOM_MAG_BASE + i
-        idx = np.where(cell_tags == tag)[0]
-        try:
-            lab_ang = math.degrees(math.atan2(mp.centroid.y, mp.centroid.x))
-        except Exception:
-            lab_ang = 0.0
-        rotor_frame_ang = (lab_ang - rotor_angle_deg) % 360.0
-        if idx.size == 0:
-            A_z_mean_per_magnet.append(0.0)
-            Bmag_mean_per_magnet.append(0.0)
-            vol_per_magnet.append(0.0)
-            mag_rotor_angle_deg.append(rotor_frame_ang)
-            continue
-        a_w = float(np.sum(areas[idx]))
-        A_z_mean_per_magnet.append(
-            float(np.sum(A_tri_mean_all[idx] * areas[idx])) / max(a_w, 1e-30))
-        # |B|² area-weighted mean — gauge-INVARIANT, unlike ⟨A_z⟩
-        Bmag_mean_per_magnet.append(
-            float(np.sum(Bmag_tri[idx] * areas[idx])) / max(a_w, 1e-30))
-        vol_per_magnet.append(a_w * p.stack_length)
-        mag_rotor_angle_deg.append(rotor_frame_ang)
-
-    # ── Magnet eddy losses — slot-ripple slab model on local B ───────────
-    #
-    # The honest computation would be a sliding-band moving-mesh FEM
-    # (rotor mesh rigidly rotates, stator mesh stays fixed, anti-periodic
-    # BC on the radial cuts handles the wedge — exactly what Ansys does
-    # with its "Dependent Boundary / Bdep = −Bind" master-slave pairing).
-    # In our pipeline the mesh is rebuilt from scratch every frame, so
-    # neither ∂A_z/∂t (gauge-ambiguous) nor ∂|B|/∂t (mesh-noise
-    # dominated) of the per-frame ⟨...⟩-over-magnet gives a stable
-    # answer — 24 frames → 1.5 kW, 48 frames → 25 kW peak.  See git
-    # commit history for the gauge-and-noise analysis.
-    #
-    # Pending the sliding-band rewrite we use the classical conducting-
-    # slab formula on the LOCAL per-cell B with a small empirical
-    # ripple fraction η:
-    #     P/V = σ · (2π f_slot)² · (η · B_local)² · d² / 12   [W/m³]
-    # with
-    #     f_slot = num_slots × n_mech      (slot-ripple in rotor frame)
-    #     η      = 0.03                    (typical 24-slot/14-pp FSCW
-    #                                       SPMSM — 3 % of local B
-    #                                       varies at slot frequency)
-    #     B_local = per-cell |B|           (gauge-stable)
-    #     d      = magnet radial thickness
-    #
-    # This is calibrated to match the typical 1–3 % of P_in published
-    # value for unsegmented NdFeB in FSCW machines (Bianchi & Fornasiero,
-    # IEEE TIA 2009).
-    n_mech_solver = sim.get("rpm", 3950) / 60.0
-    f_slot_solver = float(p.num_slots) * n_mech_solver
-    omega_slot    = 2.0 * math.pi * f_slot_solver
-    d_mag_m       = float(p.r_rotor_out - p.r_rotor_in - 0.0012) \
-                    if (p.r_rotor_out - p.r_rotor_in) > 0.002 else 0.016
-    RIPPLE_FRACTION = 0.03
-
-    P_mag_eddy = 0.0
-    for i, _ in enumerate(polys_meshed.get("magnets", [])):
-        tag = DOM_MAG_BASE + i
-        idx = np.where(cell_tags == tag)[0]
-        if idx.size == 0:
-            continue
-        B_cells = Bmag_tri[idx]
-        p_dens = (sigma_mag * omega_slot**2
-                  * (RIPPLE_FRACTION * B_cells) ** 2
-                  * d_mag_m ** 2 / 12.0)
-        P_mag_eddy += float(np.sum(p_dens * vol[idx]))
-
-    mult = n_sectors if n_sectors > 1 else 1
-    P_fe_total = (P_fe_stator + P_fe_rotor) * mult
-    P_mag_total = P_mag_eddy * mult
-
-    # Copper loss — phase currents × R_phase  (×3 phases).  Uses the
-    # I_phase_rms passed in (NOT the config value) so the simulation
-    # actually reflects user-set current changes.
-    R_phase = float(wind.get("phase_resistance_ohm", 0.018))
-    P_cu = 3 * I_phase_rms ** 2 * R_phase
-
-    P_loss_total = P_fe_total + P_mag_total + P_cu
-    rpm = sim.get("rpm", 3950)
-    P_mech = T_em_Nm * 2 * math.pi * rpm / 60
-    eff = P_mech / max(P_mech + P_loss_total, 1e-6) if P_mech > 0 else 0.0
-
-    # ── Outlines (for the renderer; matches /mesh/build2d format) ─────────
-    polys_for_outlines = getattr(classify_fn, "polys", polys)
-
-    # Remap per-magnet + per-coil tags back to the visualisation ids
-    # (DOM_MAG_N / DOM_MAG_S / DOM_COIL) that the frontend already knows
-    # how to colour.
-    polarities = [pol for _mp, pol in polys_meshed.get("magnets", [])]
-    cell_tags_vis = cell_tags.copy()
-    mask_coil = cell_tags_vis >= DOM_COIL_BASE
-    if np.any(mask_coil):
-        cell_tags_vis[mask_coil] = DOM_COIL
-    mask = (cell_tags_vis >= DOM_MAG_BASE) & (cell_tags_vis < DOM_COIL_BASE)
-    if np.any(mask):
-        idx = (cell_tags_vis[mask] - DOM_MAG_BASE).astype(int)
-        cell_tags_vis[mask] = np.array(
-            [DOM_MAG_N if (j < len(polarities) and polarities[j] > 0) else DOM_MAG_S
-             for j in idx], dtype=cell_tags_vis.dtype)
-
-    # ── Per-triangle J_z [A/m²] for the field renderer (J mode) ───────────
-    # Each coil cell carries the J_z of its per-coil material entry;
-    # everything else is zero.  Used by FemFieldChart's "J" mode to draw
-    # the Ansys-style red/blue/green current-density map.
-    J_z_per_tri = np.zeros(cell_tags.shape[0], dtype=np.float32)
-    coil_tags = np.where(cell_tags >= DOM_COIL_BASE)[0]
-    if coil_tags.size:
-        for tag in np.unique(cell_tags[coil_tags]):
-            mat_t = mats.get(int(tag))
-            if mat_t is None:
-                continue
-            J_z_per_tri[cell_tags == tag] = float(mat_t.J_z)
-
-    return {
-        "ok": True,
-        "rotor_angle_deg": rotor_angle_deg,
-        "gamma_deg":       gamma_deg,
-        "n_sectors":       n_sectors,
-        "symmetry_mult":   mult,
-        "n_vertices":      int(mesh.p.shape[1]),
-        "n_triangles":     int(mesh.t.shape[1]),
-        "vertices":        mesh.p.T.tolist(),       # metres
-        "triangles":       mesh.t.T.tolist(),
-        "domain_per_tri":  cell_tags_vis.tolist(),
-        "A_z_per_node":    A.tolist(),               # Wb/m
-        "Bmag_per_tri":    Bmag_tri.tolist(),
-        "J_z_per_tri":     J_z_per_tri.tolist(),     # A/m² — coils only
-        # ── Per-magnet bulk quantities for transient-mode honest eddy ─────
-        "A_z_mean_per_magnet":   A_z_mean_per_magnet,   # Wb/m per magnet
-        "Bmag_mean_per_magnet":  Bmag_mean_per_magnet,  # T per magnet (gauge-invariant)
-        "vol_per_magnet":        vol_per_magnet,        # m³ per magnet
-        "mag_rotor_angle_deg":   mag_rotor_angle_deg,   # rotor-frame ID (deg)
-        "sigma_magnet":          float(sigma_mag),      # S/m
-        "extent": [
-            float(mesh.p[0].min()), float(mesh.p[0].max()),
-            float(mesh.p[1].min()), float(mesh.p[1].max()),
-        ],
-        "polys_for_outlines": polys_for_outlines,
-        # ── Physics quantities (with n_sectors multiplier already applied) ──
-        "T_em_Nm":       round(T_em_Nm, 4),
-        "P_cu_W":        round(P_cu, 1),
-        "P_fe_W":        round(P_fe_total, 1),
-        "P_mag_eddy_W":  round(P_mag_total, 1),
-        "P_loss_total_W":round(P_loss_total, 1),
-        "P_mech_W":      round(P_mech, 1),
-        "efficiency":    round(eff, 4),
-        "freq_Hz":       round(freq, 2),
-        "rpm":           rpm,
-        "solve_time_s":  round(t_solve, 2),
-        "total_time_s":  round(_t.time() - t_start, 2),
-        # Demagnetisation report — each entry is a magnet whose worst-cell
-        # H came within 15 % of the BH-curve knee.  demagnetised=True means
-        # the magnet has crossed the knee and is irreversibly weakened.
-        "demag_report":      demag_report,
-        "demag_coef_per_tri": demag_coef_per_tri.tolist(),
-        # Per-phase flux linkages [Wb].  Used by the transient endpoint
-        # to derive V_phase(t) = R·I + dψ/dt across the period.
-        "psi_A_Wb":          float(psi_A),
-        "psi_B_Wb":          float(psi_B),
-        "psi_C_Wb":          float(psi_C),
-    }
+        v_delta_deg=float(v_delta_deg), element_order=int(element_order),
+        return_frames=int(return_frames))

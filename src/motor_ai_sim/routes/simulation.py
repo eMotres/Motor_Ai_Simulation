@@ -1575,6 +1575,19 @@ def get_fem_field2d(
 
     _comp_mesh = _parse_component_mesh(component_mesh)
     _geo_ov = _parse_geo_override(geo)   # per-request geometry override (multi-user)
+    # P2 self-consistency, the SAME two coercions get_fem_transient applies (and
+    # for the same reason): the solver refuses the moving / harmonic-macro band
+    # on P2 and needs the merged structured belt. This is a substitution, so it
+    # is LOGGED — but the alternative is worse than logging it: the field view
+    # would 500 with "Harmonic gap" on while the Simulation tab beside it
+    # quietly solved the merged belt, i.e. the picture and the numbers would
+    # come from different models with nothing on screen saying so.
+    if airgap_macro or not structured_gap:
+        log.info("fem_field2d: forcing structured_gap=True, airgap_macro=False "
+                 "(P2 runs the merged belt; the transient route coerces the "
+                 "same way, so the picture matches the numbers)")
+        structured_gap = True
+        airgap_macro = False
     # Fingerprint what the SOLVE depends on but the URL doesn't carry: the shared
     # config (geometry / winding / material assignment) and this request's per-user
     # material override.  Without it the field view kept serving a picture built
@@ -1620,6 +1633,7 @@ def get_fem_field2d(
 
     if I_phase_rms is None:
         I_phase_rms = float(_gc().get("simulation", {}).get("max_current", 85.0))
+
 
     # Effective (override-aware) motor: the SAME geometry the solver will build.
     # Used to (a) snap n_sectors to a VALID divisor of GCD(slots, poles) — the
@@ -2206,60 +2220,6 @@ def get_thermal_field2d(
     return result
 
 
-_daxis_sweep_cache: Dict[tuple, Dict] = {}
-
-
-@router.get("/physics/daxis_sweep")
-def get_daxis_sweep(
-    lo:           float = -30.0,
-    hi:           float = 30.0,
-    step:         float = 2.0,
-    I_phase_rms:  float = 120.0,
-    rotor_angle_deg: float = 0.0,
-    mesh_size_mm: float = 4.0,
-    n_sectors:    int   = 4,
-):
-    """Sweep the load angle γ over [lo, hi] (step°) and return the magnetostatic
-    torque at each — a 1-parameter optimisation of the d-axis angle.  Returns the
-    full list of (angle, torque) plus the optimum (max-torque angle)."""
-    import numpy as _np
-    _ghash, _ = _current_geom_hash_and_params()
-    key = ("daxis", _ghash, round(lo, 1), round(hi, 1), round(step, 2),
-           round(I_phase_rms, 1), round(rotor_angle_deg, 1),
-           round(mesh_size_mm, 2), int(n_sectors))
-    if key in _daxis_sweep_cache:
-        return _daxis_sweep_cache[key]
-    try:
-        from motor_ai_sim.simulation.fem_solver_2d import fem_solve_for_sim
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"FEM solver unavailable: {e}")
-
-    angles = [round(float(a), 2) for a in
-              _np.arange(float(lo), float(hi) + 1e-6, float(step))]
-    pts: List[Dict] = []
-    for g in angles:
-        try:
-            r = fem_solve_for_sim(
-                rotor_angle_deg=float(rotor_angle_deg), gamma_deg=float(g),
-                mesh_size_mm=float(mesh_size_mm), n_sectors=int(n_sectors),
-                I_phase_rms=float(I_phase_rms))
-            pts.append({"angle": g, "torque": round(float(r["T_em_Nm"]), 3)})
-        except Exception as e:
-            log.warning("daxis_sweep gamma=%s failed: %s", g, e)
-            pts.append({"angle": g, "torque": None})
-
-    valid = [p for p in pts if p["torque"] is not None]
-    best = max(valid, key=lambda p: p["torque"]) if valid else {"angle": None, "torque": None}
-    out = {
-        "points": pts,
-        "optimal_angle": best["angle"],
-        "optimal_torque": best["torque"],
-        "I_phase_rms": I_phase_rms, "lo": lo, "hi": hi, "step": step,
-    }
-    _daxis_sweep_cache[key] = out
-    return out
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # 7d. FEM Transient — N steps per electrical period
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2327,11 +2287,6 @@ def _load_last_transient_into_cache() -> None:
 
 _load_last_transient_into_cache()   # repopulate the cache at import (startup)
 
-# Per-FRAME cache keyed by (frame_param_key, k).  Lets a transient that
-# was Stopped mid-way be resumed: a re-run with the same params reuses
-# every frame already solved and only computes the missing ones.  The
-# "Start fresh" path clears the entries for that param set first.
-_fem_frame_cache: Dict[tuple, Dict] = {}
 
 # Serializes transient computes so concurrent identical requests (the
 # animation viewer + transient charts both fire on Simulation-tab mount)
@@ -2350,210 +2305,11 @@ def clear_simulation_caches() -> None:
     geometry is treated as a global), so they must be flushed explicitly.
     """
     for _c in (_motor_geom_cache, _fem_mesh_cache, _fem_mesh_sb_cache,
-               _fem_field_cache, _fem_transient_cache, _fem_frame_cache):
+               _fem_field_cache, _fem_transient_cache):
         try:
             _c.clear()
         except Exception:
             pass
-
-# Scalar keys a non-keyframe step needs — returning only these from a
-# worker process slashes the pickle payload (no mesh / A_z arrays).
-_TRANSIENT_SCALAR_KEYS = (
-    "T_em_Nm", "P_cu_W", "P_fe_W", "P_mag_eddy_W",
-    "psi_A_Wb", "psi_B_Wb", "psi_C_Wb", "symmetry_mult", "n_sectors",
-)
-
-
-def _transient_frame_worker(task):
-    """Picklable worker: solve ONE rotor angle in a SEPARATE process.
-
-    Per-frame gmsh meshing dominates the cost (~11 s of ~15 s) and the
-    in-process _GMSH_LOCK serialises gmsh calls within a process, so the
-    only way to use the box's many cores is to fan the frames out across
-    processes.  Each worker has its own gmsh state — no shared lock.
-
-    task = (k, rot_deg, solve_kwargs, want_full)
-    Returns (k, result_dict_or_None).  Non-keyframes are slimmed to the
-    scalar series keys to keep the pickled payload tiny.
-    """
-    k, rot_deg, kw, want_full = task
-    try:
-        import logging as _lg
-        _lg.disable(_lg.WARNING)
-    except Exception:
-        pass
-    from motor_ai_sim.simulation.fem_solver_2d import fem_solve_for_sim
-    # A magnet edge landing exactly on the sector cut makes gmsh reject the
-    # mesh; a sub-FEM-resolution angular jitter dodges it without changing
-    # the physics.
-    for jitter in (0.0, +0.05, -0.05, +0.13, -0.13, +0.21, -0.21):
-        try:
-            r = fem_solve_for_sim(rotor_angle_deg=rot_deg + jitter, **kw)
-            if want_full:
-                return (k, r)
-            return (k, {key: r.get(key) for key in _TRANSIENT_SCALAR_KEYS})
-        except Exception:
-            continue
-    return (k, None)
-
-
-# ── Persistent, pre-warmed worker pool ──────────────────────────────────
-# On Windows every ProcessPoolExecutor worker is spawned (not forked) and
-# pays the full ~5 s cold-import of gmsh + scikit-fem + motor_ai_sim before
-# it can solve a single frame.  Re-creating the pool per request therefore
-# burned ~5-10 s of pure startup on EVERY transient run.  Keep ONE pool
-# alive for the process lifetime and warm each worker once via initializer,
-# so the import cost is paid a single time and amortised across all runs.
-import concurrent.futures as _cf  # noqa: E402  (kept local to this section)
-import os as _os  # noqa: E402
-
-_fem_pool: "Optional[_cf.ProcessPoolExecutor]" = None
-_fem_pool_lock = _threading.Lock()
-
-# numpy/OpenBLAS, gmsh/OpenMP and friends each default to spawning ONE thread
-# PER LOGICAL CORE.  With a process pool that is catastrophic: N worker
-# processes × 24 BLAS threads each = hundreds of threads fighting over the
-# cores, so adding workers barely helped (and an unpinned 24-worker pool
-# crashed outright).  Pin every numeric backend to a single thread so the
-# process pool — not the libraries — owns the parallelism: N processes → N
-# cores, clean linear scaling.
-_THREAD_ENV_KEYS = (
-    "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
-    "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "BLIS_NUM_THREADS",
-)
-
-
-def _pin_single_thread_env() -> None:
-    """Force every numeric backend to 1 thread in THIS process's env.  Set
-    in the parent right before the pool is created so spawned workers inherit
-    it before they import numpy/gmsh (OpenBLAS reads the var at import time).
-    The parent's own already-loaded BLAS is unaffected."""
-    for k in _THREAD_ENV_KEYS:
-        _os.environ.setdefault(k, "1")
-
-
-def _fem_pool_workers() -> int:
-    """Number of worker processes.
-
-    The box reports 24 *logical* CPUs but only 12 *physical* cores (Hyper-
-    Threading).  FEM meshing is CPU/cache/memory-bandwidth bound, so the
-    hyper-threads add no real throughput — measured scaling peaks at the
-    physical-core count and *regresses* past it (18-22 workers were slower
-    than 12, and 24 unpinned crashed).  Default to the physical-core count
-    (≈ logical/2).  Override with the FEM_POOL_WORKERS env var to experiment.
-    """
-    env = _os.environ.get("FEM_POOL_WORKERS")
-    if env:
-        try:
-            return max(1, int(env))
-        except ValueError:
-            pass
-    logical = _os.cpu_count() or 8
-    # Assume SMT/Hyper-Threading on an even, >4-core box → physical ≈ logical/2.
-    physical = logical // 2 if logical > 4 else logical
-    return max(2, physical)
-
-
-def _fem_worker_init():
-    """Runs ONCE per worker when the pool starts a process.  Pins numeric
-    threads (belt-and-suspenders alongside the inherited env) and forces the
-    heavy imports up-front so the first real frame each worker handles no
-    longer pays the ~5 s cold-import."""
-    try:
-        import os as _o
-        for _k in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
-                   "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "BLIS_NUM_THREADS"):
-            _o.environ.setdefault(_k, "1")
-    except Exception:
-        pass
-    try:
-        import logging as _lg
-        _lg.disable(_lg.WARNING)
-    except Exception:
-        pass
-    try:
-        # Touch the solver module so gmsh / skfem / numpy are imported and
-        # cached inside this worker before any frame arrives.
-        from motor_ai_sim.simulation.fem_solver_2d import fem_solve_for_sim  # noqa: F401
-    except Exception:
-        pass
-
-
-def get_fem_pool() -> "_cf.ProcessPoolExecutor":
-    """Lazily create (and reuse) the shared warm worker pool.  Rebuilds it
-    if a previous pool was broken (e.g. a worker crashed)."""
-    global _fem_pool
-    with _fem_pool_lock:
-        if _fem_pool is None:
-            # Pin threads in the parent env BEFORE spawning so every worker
-            # inherits single-thread numeric backends from process start.
-            _pin_single_thread_env()
-            _fem_pool = _cf.ProcessPoolExecutor(
-                max_workers=_fem_pool_workers(),
-                initializer=_fem_worker_init,
-            )
-        return _fem_pool
-
-
-def _reset_fem_pool() -> None:
-    """Drop the shared pool (next call to get_fem_pool rebuilds it).  Used
-    after a BrokenProcessPool so one crashed worker doesn't wedge every
-    subsequent transient run.
-
-    HARD-KILLS the old workers.  On Windows the spawned workers routinely
-    SURVIVE shutdown(wait=False), so every OOM-driven reset used to leak a
-    whole pool's worth of processes — that is how 60+ zombie pythons piled up
-    and starved the box into still more OOM crashes (the "process pool
-    terminated abruptly" the user hit).  Grab the worker handles first, then
-    terminate any that linger so a reset can never accumulate workers."""
-    global _fem_pool
-    with _fem_pool_lock:
-        _p, _fem_pool = _fem_pool, None
-    if _p is None:
-        return
-    _procs = list(getattr(_p, "_processes", {}).values())
-    try:
-        _p.shutdown(wait=False, cancel_futures=True)
-    except Exception:
-        pass
-    for _w in _procs:
-        try:
-            if _w.is_alive():
-                _w.terminate()
-        except Exception:
-            pass
-
-
-import atexit as _atexit
-
-
-@_atexit.register
-def _shutdown_fem_pool_atexit() -> None:
-    """Tear the worker pool down on a graceful interpreter exit so workers
-    don't outlive the server (best-effort; a SIGKILL still orphans them)."""
-    try:
-        _reset_fem_pool()
-    except Exception:
-        pass
-
-
-def warm_fem_pool() -> None:
-    """Kick the pool into existence and run a no-op on every worker so the
-    cold-import is paid in the background at server startup, not on the
-    user's first Run.  Safe to call repeatedly."""
-    try:
-        pool = get_fem_pool()
-        for _ in range(_fem_pool_workers() * 2):
-            pool.submit(_fem_worker_warmup)
-    except Exception:
-        pass
-
-
-def _fem_worker_warmup(_=None):
-    """Trivial task whose only purpose is to occupy a worker so its
-    initializer (heavy imports) runs."""
-    return True
-
 
 # Cooperative cancel keyed by run-id.  The "Stop" button POSTs the id of
 # the run it wants stopped; the parallel solve loop (and any duplicate
@@ -2644,8 +2400,14 @@ def get_fem_transient(
     include_frames:      bool  = False,   # ← if true, accumulate per-step field
     n_frames:            int   = 12,      # ← #frames sampled for the animation
     run_id:              str   = "",      # ← Stop-button cancellation token
-    fresh:               bool  = False,   # ← "Start fresh" wipes the frame cache
-    sliding_band:        bool  = False,   # ← mesh-once sliding band (smooth T, clean V)
+    fresh:               bool  = False,   # ← "Start fresh" recomputes instead of serving the cache
+    sliding_band:        bool  = True,    # ← accepted for URL compat and IGNORED: there is
+                                          #   only the mesh-once sliding band now.  The
+                                          #   remesh-per-frame alternative it used to select
+                                          #   solved each frame on the legacy static P1 solver
+                                          #   at a hard-coded 108° d-axis, so a caller that
+                                          #   omitted this flag silently got a different
+                                          #   operating point than one that sent it.
     coil_temp_c:         float = 120.0,   # ← copper temperature → ρ_Cu(T)
     end_winding_factor:  float = 0.0,     # ← 0 = auto-estimate from geometry
     component_mesh:      str   = "",      # ← JSON {comp: size_mm} per-part mesh size
@@ -2660,20 +2422,15 @@ def get_fem_transient(
     hi_fidelity:         bool  = False,   # ← 2× slip nodes + finer mesh → smoother raw torque (slower)
     structured_gap:      bool  = False,   # ← ANSYS-style concentric-ring air-gap mesh (experimental)
     airgap_macro:        bool  = False,   # ← harmonic air-gap macroelement (honest RAW ripple; full ring + sectors)
-    element_order:       int   = 2,       # ← 2 = P2 quadratic (DEFAULT) | 1 = P1 linear "high-fidelity
-                                          #   ripple": B linear per element → smooth Arkkio torque (no P1
-                                          #   staircase; noise floor →0 with mesh refinement).  Requires the
-                                          #   structured belt (forced on below when 2); magnetostatic per
-                                          #   frame (current drive).
-                                          #   P2 is the default because it is the only basis good for both
-                                          #   halves of the answer at once: an energy-consistent mean torque
-                                          #   and a mesh-convergent ripple.  This list used to say P1 was
-                                          #   still needed for irreversible demag, the coupled σ∂A/∂t eddy
-                                          #   solve and the voltage drive — that stopped being true in
-                                          #   a1aedad / 11e1469 / 4e316b9, and eddy + voltage drive TOGETHER
-                                          #   landed too.  P2 now implements every one of them; the only
-                                          #   thing left raising NotImplementedError on P2 is the moving /
-                                          #   harmonic-macro band.
+    element_order:       int   = 2,       # ← 2 = P2 quadratic, the ONLY basis.  B is linear per
+                                          #   element → smooth Arkkio torque, an energy-consistent
+                                          #   mean AND a mesh-convergent ripple (noise floor →0 with
+                                          #   mesh refinement).  Requires the structured belt, forced
+                                          #   on below.  Irreversible demag, the coupled σ∂A/∂t eddy
+                                          #   solve, the voltage drive and eddy+voltage TOGETHER all
+                                          #   run on it (a1aedad / 11e1469 / 4e316b9); the only thing
+                                          #   still raising NotImplementedError is the moving /
+                                          #   harmonic-macro air-gap band.  Anything but 2 raises.
     restore:             bool  = False,   # ← on open: return the LAST saved transient (stale if params differ) instead of recomputing
     geo:                 Optional[str] = None,  # ← per-request geometry override (multi-user); absent = global config
     drive:               str   = "current",  # ← "current" (imposed sinusoidal I) | "voltage"
@@ -2700,742 +2457,349 @@ def get_fem_transient(
     through one electrical period.
     """
     import numpy as _np
-    import math as _math
 
-    # ── Sliding-band path: mesh once + rotate rotor → smooth T(t), clean V(t).
-    # Bypasses the parallel remesh-per-frame machinery entirely.
-    if sliding_band:
-        _comp_mesh = _parse_component_mesh(component_mesh)
-        _geo_ov = _parse_geo_override(geo)   # per-request geometry override (multi-user)
-        # P2 "high-fidelity ripple": needs the merged structured belt.
-        # rotor_eddy (post-processed magnet/shaft/iron losses) IS supported on
-        # P2 — keep it.  Coerce only the still-unsupported options (coupled
-        # σ∂A/∂t J-view, harmonic macro) so the mode is self-consistent.
-        #
-        # HISTORY: this block used to coerce demag=False and drive="current"
-        # too.  Both became stale silently — P2 demag landed in a1aedad and the
-        # P2 voltage drive in 4e316b9 — and the leftover coercion turned the
-        # user's Demagnetisation checkbox into a no-op on P2: the run came back
-        # at no-demag speed with a uniform (single-colour) Br map and nothing
-        # on screen saying why.  A route-side coercion is a silent substitution;
-        # if an option is genuinely unsupported the solver must raise, not have
-        # the route quietly answer a different question.  P1 path untouched.
-        if int(element_order) == 2:
-            structured_gap = True
-            airgap_macro = False
-            # SPEED: P2 is a high-fidelity RIPPLE mode, and its anti-periodic
-            # sector solve gives the SAME torque/ripple/losses as the full motor
-            # (validated to 0.3%) at ~S× lower cost (S× fewer DOFs → the direct
-            # factorization, which dominates P2 wall-time, shrinks steeply).  So
-            # if the caller left n_sectors at the full motor (≤1), auto-use the
-            # machine's natural rotational symmetry gcd(slots, poles) = num_seg.
-            if int(n_sectors) <= 1:
-                try:
-                    from math import gcd as _gcd
-                    from motor_ai_sim.config import get_config as _gc2
-                    _g = dict((_gc2().get("geometry", {})) or {})
-                    if _geo_ov:
-                        _g = {**_g, **_geo_ov}
-                    _sym = int(_g.get("num_seg")
-                               or _gcd(int(_g.get("num_slots", 1)),
-                                       int(_g.get("num_poles", 1))) or 1)
-                    if _sym >= 2:
-                        n_sectors = _sym
-                except Exception:
-                    pass
-        # Config fingerprint of the base physics a solve depends on but that is
-        # NOT in the request signature (num_wires_per_slot, the whole geometry,
-        # winding connection, materials/magnet/steel).  WITHOUT this, editing a
-        # geometry field (e.g. wires 9→7) and re-running returned the STALE
-        # cached result — the reported "it didn't change immediately" bug — because
-        # the operating-point key was unchanged.  A per-request geo override is
-        # still appended below (it changes the effective geometry on top of this).
-        try:
-            import hashlib as _hl, json as _jl
-            from motor_ai_sim.config import get_config as _gc_fp
-            from motor_ai_sim.material_context import get_request_materials as _grm_fp
-            _cfg_all = _gc_fp() or {}
-            # A signed-in user's material choice lives ONLY in this request's `mat=`
-            # override (per-user, never written to the shared config).  Leaving it
-            # out of the key meant "assign a different magnet, press Run" replayed
-            # the previous material's cached solve — same torque, same losses, no
-            # hint anything was stale.
-            _cfp = _hl.md5(_jl.dumps(
-                {"g": _cfg_all.get("geometry"), "w": _cfg_all.get("winding"),
-                 "m": _cfg_all.get("materials"), "mag": _cfg_all.get("magnet"),
-                 "req_mat": _grm_fp()},
-                sort_keys=True, default=str).encode()).hexdigest()[:16]
-        except Exception:
-            _cfp = "nofp"
-        _sb_key = ("sb", int(n_steps_per_period), round(n_periods, 2),
-                   round(gamma_deg, 1), round(I_phase_rms, 1),
-                   round(mesh_size_mm, 2), round(min_size_mm, 2),
-                   round(outer_air_factor, 2), int(n_sectors),
-                   round(stator_fillet_mm, 2),
-                   round(coil_temp_c, 1), round(end_winding_factor, 3),
-                   int(bool(rotor_eddy)), round(gap_layers, 1),
-                   int(bool(demag)), int(bool(torque_filter)),
-                   int(bool(pole_copy)), int(bool(iron_template)), int(bool(hi_fidelity)), int(bool(structured_gap)),
-                   int(bool(airgap_macro)), int(bool(geo_mesh)),
-                   tuple(sorted(_comp_mesh.items())),
-                   str(drive or "current"), round(float(v_phase_peak), 2),
-                   round(float(v_delta_deg), 1), int(bool(harm_ref)),
-                   int(element_order), _cfp)
-        if _geo_ov:   # distinct cache entry per overridden geometry (no-geo key unchanged)
-            _sb_key = _sb_key + (tuple(sorted(_geo_ov.items())),)
+    # Mesh once, rotate the rotor by re-pairing the slip ring → smooth T(t),
+    # clean V(t), and one mesh for every frame including the animation's.
+    _comp_mesh = _parse_component_mesh(component_mesh)
+    _geo_ov = _parse_geo_override(geo)   # per-request geometry override (multi-user)
+    # P2 needs the merged structured belt.  rotor_eddy (post-processed
+    # magnet/shaft/iron losses) IS supported — keep it.  Coerce only the
+    # still-unsupported options (harmonic macro) so the mode is self-consistent.
+    #
+    # HISTORY: this block used to coerce demag=False and drive="current"
+    # too.  Both became stale silently — P2 demag landed in a1aedad and the
+    # P2 voltage drive in 4e316b9 — and the leftover coercion turned the
+    # user's Demagnetisation checkbox into a no-op on P2: the run came back
+    # at no-demag speed with a uniform (single-colour) Br map and nothing
+    # on screen saying why.  A route-side coercion is a silent substitution;
+    # if an option is genuinely unsupported the solver must raise, not have
+    # the route quietly answer a different question.
+    if int(element_order) == 2:
+        structured_gap = True
+        airgap_macro = False
+        # SPEED: P2 is a high-fidelity RIPPLE mode, and its anti-periodic
+        # sector solve gives the SAME torque/ripple/losses as the full motor
+        # (validated to 0.3%) at ~S× lower cost (S× fewer DOFs → the direct
+        # factorization, which dominates P2 wall-time, shrinks steeply).  So
+        # if the caller left n_sectors at the full motor (≤1), auto-use the
+        # machine's natural rotational symmetry gcd(slots, poles) = num_seg.
+        if int(n_sectors) <= 1:
+            try:
+                from math import gcd as _gcd
+                from motor_ai_sim.config import get_config as _gc2
+                _g = dict((_gc2().get("geometry", {})) or {})
+                if _geo_ov:
+                    _g = {**_g, **_geo_ov}
+                _sym = int(_g.get("num_seg")
+                           or _gcd(int(_g.get("num_slots", 1)),
+                                   int(_g.get("num_poles", 1))) or 1)
+                if _sym >= 2:
+                    n_sectors = _sym
+            except Exception:
+                pass
+    # Config fingerprint of the base physics a solve depends on but that is
+    # NOT in the request signature (num_wires_per_slot, the whole geometry,
+    # winding connection, materials/magnet/steel).  WITHOUT this, editing a
+    # geometry field (e.g. wires 9→7) and re-running returned the STALE
+    # cached result — the reported "it didn't change immediately" bug — because
+    # the operating-point key was unchanged.  A per-request geo override is
+    # still appended below (it changes the effective geometry on top of this).
+    try:
+        import hashlib as _hl, json as _jl
+        from motor_ai_sim.config import get_config as _gc_fp
+        from motor_ai_sim.material_context import get_request_materials as _grm_fp
+        _cfg_all = _gc_fp() or {}
+        # A signed-in user's material choice lives ONLY in this request's `mat=`
+        # override (per-user, never written to the shared config).  Leaving it
+        # out of the key meant "assign a different magnet, press Run" replayed
+        # the previous material's cached solve — same torque, same losses, no
+        # hint anything was stale.
+        _cfp = _hl.md5(_jl.dumps(
+            {"g": _cfg_all.get("geometry"), "w": _cfg_all.get("winding"),
+             "m": _cfg_all.get("materials"), "mag": _cfg_all.get("magnet"),
+             "req_mat": _grm_fp()},
+            sort_keys=True, default=str).encode()).hexdigest()[:16]
+    except Exception:
+        _cfp = "nofp"
+    _sb_key = ("sb", int(n_steps_per_period), round(n_periods, 2),
+               round(gamma_deg, 1), round(I_phase_rms, 1),
+               round(mesh_size_mm, 2), round(min_size_mm, 2),
+               round(outer_air_factor, 2), int(n_sectors),
+               round(stator_fillet_mm, 2),
+               round(coil_temp_c, 1), round(end_winding_factor, 3),
+               int(bool(rotor_eddy)), round(gap_layers, 1),
+               int(bool(demag)), int(bool(torque_filter)),
+               int(bool(pole_copy)), int(bool(iron_template)), int(bool(hi_fidelity)), int(bool(structured_gap)),
+               int(bool(airgap_macro)), int(bool(geo_mesh)),
+               tuple(sorted(_comp_mesh.items())),
+               str(drive or "current"), round(float(v_phase_peak), 2),
+               round(float(v_delta_deg), 1), int(bool(harm_ref)),
+               int(element_order), _cfp,
+               int(n_frames) if include_frames else 0)
+    if _geo_ov:   # distinct cache entry per overridden geometry (no-geo key unchanged)
+        _sb_key = _sb_key + (tuple(sorted(_geo_ov.items())),)
+    if not fresh and _sb_key in _fem_transient_cache:
+        return _fem_transient_cache[_sb_key]
+    # RESTORE path (page open / tab switch): NEVER recompute.  Hand back the
+    # last saved transient — flagged stale if its params differ from those
+    # requested — or signal that nothing has ever been computed so the UI can
+    # show "press Run" instead of spinning up a solve.
+    if restore:
+        _ref_res = _last_transient_ref.get("result")
+        if _ref_res is not None:
+            _out = dict(_ref_res)
+            _out["restored"] = True
+            _out["stale"] = (_last_transient_ref.get("key") != _sb_key)
+            return _out
+        return {"restored": False, "stale": False}
+    # Serialise concurrent identical solves.  A duplicate request (shares the
+    # run_id) or a React dev double-invoke would otherwise run a SECOND full
+    # sliding-band solve in parallel AND clobber the shared progress global
+    # (the "Solving frame 0 / N" flash mid-run).  Acquire BEFORE touching
+    # progress; a twin waiting on the lock wakes straight into the
+    # freshly-populated cache instead of re-solving.
+    _fem_transient_lock.acquire()
+    try:
+        # Re-check under the lock: a twin that finished while we waited has
+        # already populated the cache → return its result, don't re-solve.
         if not fresh and _sb_key in _fem_transient_cache:
             return _fem_transient_cache[_sb_key]
-        # RESTORE path (page open / tab switch): NEVER recompute.  Hand back the
-        # last saved transient — flagged stale if its params differ from those
-        # requested — or signal that nothing has ever been computed so the UI can
-        # show "press Run" instead of spinning up a solve.
-        if restore:
-            _ref_res = _last_transient_ref.get("result")
-            if _ref_res is not None:
-                _out = dict(_ref_res)
-                _out["restored"] = True
-                _out["stale"] = (_last_transient_ref.get("key") != _sb_key)
-                return _out
-            return {"restored": False, "stale": False}
-        # Serialise concurrent identical solves.  A duplicate request (shares the
-        # run_id) or a React dev double-invoke would otherwise run a SECOND full
-        # sliding-band solve in parallel AND clobber the shared progress global
-        # (the "Solving frame 0 / N" flash mid-run).  Acquire BEFORE touching
-        # progress; a twin waiting on the lock wakes straight into the
-        # freshly-populated cache instead of re-solving.
-        _fem_transient_lock.acquire()
-        try:
-            # Re-check under the lock: a twin that finished while we waited has
-            # already populated the cache → return its result, don't re-solve.
-            if not fresh and _sb_key in _fem_transient_cache:
-                return _fem_transient_cache[_sb_key]
-            # FAST sliding-band for EVERY symmetry (mesh once, slide the rotor).
-            # Full (n_sectors=1) has no clean 360° slip mesh here, so it computes
-            # the symmetry-EXACT sector (n=4) — which equals the full motor exactly
-            # (×4), verified within 0.7% of the literal full disk.  Quasi-static
-            # (genuine literal full disk) exists in fem_quasistatic_transient but is
-            # ~10× slower (re-meshes per frame) — not used by default.
-            from motor_ai_sim.simulation.fem_solver_2d import em_transient_eval
-            import time as _t
-            # Per-frame progress so the web UI's "Solving frame X of N" + ETA
-            # advance during a sliding-band run.  The remesh path used to drive
-            # this global; now that the field animation is opt-in, the solve
-            # itself must report.  The callback fires at the TOP of each frame
-            # with the solver's true (snapped) frame count.
-            _est_total = max(1, int(round(float(n_steps_per_period) * float(n_periods))))
-            if demag:
-                _est_total *= 2     # demag adds a pre-pass sweep over the period
-            _fem_transient_progress["current"] = {
-                "running": True, "step": 0, "total": _est_total,
-                "elapsed_s": 0.0, "eta_s": 0.0, "ts_start": _t.time(),
-                "phase": ("fem-solve (sliding-band, demag)" if demag
-                          else "fem-solve (sliding-band)"),
-            }
-            def _sb_progress(_done, _total):
-                _cur = _fem_transient_progress["current"]
-                _cur["step"] = int(_done)
-                _cur["total"] = int(_total)
-            try:
-                # ONE canonical solve — shared with the optimizer (refine_proc) and
-                # the solver.em_transient module via em_transient_eval, so they can
-                # never diverge.  'Full' (n_sectors<=1) solves the full ring (matches
-                # the Mesh tab); 1/4 1/2 solve the sector (1/4 is the UI default).
-                _sbres = em_transient_eval(
-                    n_steps_per_period=int(n_steps_per_period), n_periods=float(n_periods),
-                    gamma_deg=float(gamma_deg), I_phase_rms=float(I_phase_rms),
-                    mesh_size_mm=float(mesh_size_mm), min_size_mm=float(min_size_mm),
-                    outer_air_factor=float(outer_air_factor), gap_layers=float(gap_layers),
-                    n_sectors=int(n_sectors), stator_fillet_mm=float(stator_fillet_mm),
-                    coil_temp_c=float(coil_temp_c), end_winding_factor=float(end_winding_factor),
-                    rotor_eddy=bool(rotor_eddy), demag=bool(demag),
-                    torque_filter=bool(torque_filter), pole_copy=bool(pole_copy),
-                    iron_template=bool(iron_template), geo_mesh=bool(geo_mesh),
-                    component_mesh_mm=_comp_mesh, geo_override=_geo_ov,
-                    progress_cb=_sb_progress, hi_fidelity=bool(hi_fidelity),
-                    structured_gap=bool(structured_gap),
-                    airgap_macro=bool(airgap_macro),
-                    drive=str(drive or "current"),
-                    v_phase_peak=float(v_phase_peak),
-                    v_delta_deg=float(v_delta_deg),
-                    element_order=int(element_order))
-                # ── ΔP_harm (voltage drive): current-drive REFERENCE at the
-                # extracted fundamental (I₁, γ₁), so the comparison runs at a
-                # MATCHED fundamental current — the loss difference is then
-                # purely the parasitic harmonic currents' watt cost.
-                if str(drive or "").lower().startswith("v") and harm_ref:
-                    try:
-                        from motor_ai_sim.simulation.postproc import fundamental_current
-                        _fc = fundamental_current(_sbres)
-                        if _fc["I1_phase_rms_A"] > 1e-3:
-                            _fem_transient_progress["current"]["phase"] = \
-                                "fem-solve (harm-ref, sinusoidal current)"
-                            _ref = em_transient_eval(
-                                n_steps_per_period=int(n_steps_per_period),
-                                n_periods=float(n_periods),
-                                gamma_deg=float(_fc["gamma1_deg"]),
-                                I_phase_rms=float(_fc["I1_phase_rms_A"]),
-                                mesh_size_mm=float(mesh_size_mm),
-                                min_size_mm=float(min_size_mm),
-                                outer_air_factor=float(outer_air_factor),
-                                gap_layers=float(gap_layers),
-                                n_sectors=int(n_sectors),
-                                stator_fillet_mm=float(stator_fillet_mm),
-                                coil_temp_c=float(coil_temp_c),
-                                end_winding_factor=float(end_winding_factor),
-                                # eddy is unsupported (and force-dropped) in the
-                                # voltage solve — the reference must match its
-                                # physics or ΔP_harm absorbs the whole P_mag.
-                                rotor_eddy=False, demag=bool(demag),
-                                torque_filter=bool(torque_filter),
-                                pole_copy=bool(pole_copy),
-                                iron_template=bool(iron_template),
-                                # The reference must be the SAME machine, meshed
-                                # and discretised the same way — its only allowed
-                                # difference from the voltage run is the drive.
-                                # geo_mesh and element_order were both omitted
-                                # here, so the reference silently fell back to the
-                                # gmsh mesh and to P1: ΔP_harm was then a
-                                # cross-mesh, cross-element-order difference with
-                                # the harmonic cost buried in it.
-                                geo_mesh=bool(geo_mesh),
-                                element_order=int(element_order),
-                                component_mesh_mm=_comp_mesh, geo_override=_geo_ov,
-                                hi_fidelity=bool(hi_fidelity),
-                                structured_gap=bool(structured_gap),
-                                airgap_macro=bool(airgap_macro))
-                            import numpy as _np_hr
-                            _pl_v = float(_np_hr.mean(_sbres.get(
-                                "P_loss_total_W") or [0.0]))
-                            _pl_r = float(_np_hr.mean(_ref.get(
-                                "P_loss_total_W") or [0.0]))
-                            _sbres["harm_ref"] = {
-                                "I1_phase_rms_A": round(_fc["I1_phase_rms_A"], 2),
-                                "gamma1_deg": round(_fc["gamma1_deg"], 1),
-                                "P_loss_ref_W": round(_pl_r, 1),
-                                "P_loss_v_W": round(_pl_v, 1),
-                                "T_ref_Nm": round(float(_ref.get("T_avg_Nm", 0.0)), 3),
-                            }
-                            _sbres["dP_harm_W"] = round(_pl_v - _pl_r, 1)
-                    except Exception:
-                        log.exception("harm_ref reference run failed (non-fatal)")
-            finally:
-                _fem_transient_progress["current"]["running"] = False
-            # ── Summary block (masses, loss split, KV, efficiency, specific
-            # torque/power) so the Simulation values table renders.  Built by the
-            # Stamp WHEN this run was solved — the UI shows it in the header so
-            # "is this the fresh result?" is answerable at a glance (a stale
-            # background tab was indistinguishable from a failed update).
-            from datetime import datetime as _dtm
-            _sbres["computed_at"] = _dtm.now().isoformat(timespec="seconds")
-            # SHARED helper (_build_transient_summary) so the direct route, the
-            # legacy remesh path AND the kernel/solver.em_transient path all use the
-            # SAME formula and every run returns a populated `summary`.
-            try:
-                _sbres["summary"] = _build_transient_summary(
-                    _sbres, I_phase_rms=I_phase_rms, gamma_deg=gamma_deg,
-                    coil_temp_c=coil_temp_c, geo_override=_geo_ov)
-            except Exception as _se:
-                # A summary-build failure MUST be visible (not a silently frozen
-                # card set): log it AND attach an error marker so the frontend can
-                # surface it instead of keeping stale numbers.
-                log.exception("SB summary build failed")
-                _sbres["summary_error"] = f"{type(_se).__name__}: {_se}"
-            _fem_transient_cache[_sb_key] = _sbres
-            # Persist for "restore last simulation" on reload — but ONLY the user's
-            # MAIN motor. Per-candidate evals (optimizer / kernel runs with a geo
-            # override) must never clobber the saved simulation, and parallel
-            # optimizer subprocesses must not race on the shared store file.
-            if not _geo_ov:
-                _save_last_transient(_sb_key, _sbres)   # survive a back-end restart
-            return _sbres
-        except HTTPException:
-            raise
-        except Exception as _e:
-            log.exception("sliding-band transient failed")
-            raise HTTPException(status_code=500,
-                                detail=f"sliding-band transient failed: {_e}")
-        finally:
-            _fem_transient_lock.release()
-
-    key = (
-        int(n_steps_per_period), round(n_periods, 2),
-        round(gamma_deg, 1), round(I_phase_rms, 1),
-        round(mesh_size_mm, 2), round(min_size_mm, 2),
-        round(outer_air_factor, 2), bool(motion_band),
-        round(band_thickness_mm, 2), int(n_sectors),
-        round(stator_fillet_mm, 2),
-        bool(include_frames), int(n_frames), bool(torque_filter),
-    )
-
-    # Per-frame cache key (omits include_frames/n_frames — a single frame's
-    # physics is identical whichever caller asked for it).  Used to resume
-    # a Stopped run.
-    _frame_pkey = (
-        int(n_steps_per_period), round(n_periods, 2),
-        round(gamma_deg, 1), round(I_phase_rms, 1),
-        round(mesh_size_mm, 2), round(min_size_mm, 2),
-        round(outer_air_factor, 2), bool(motion_band),
-        round(band_thickness_mm, 2), int(n_sectors),
-        round(stator_fillet_mm, 2),
-    )
-    if fresh:
-        # "Start fresh" → drop the cached full run AND every cached frame
-        # for this param set, so the whole period is recomputed.
-        _fem_transient_cache.pop(key, None)
-        for _ck in [c for c in _fem_frame_cache if c[0] == _frame_pkey]:
-            _fem_frame_cache.pop(_ck, None)
-
-    if key in _fem_transient_cache:
-        return _fem_transient_cache[key]
-
-    try:
-        from motor_ai_sim.simulation.fem_solver_2d import fem_solve_for_sim
-        from motor_ai_sim.simulation.geometry_2d import params_from_config
-        from motor_ai_sim.config import get_config
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"FEM unavailable: {e}")
-
-    p_sim = params_from_config()
-    cfg   = get_config()
-    rpm   = cfg.get("simulation", {}).get("rpm", 3950)
-    wind  = cfg.get("winding", {})
-    R_phase = float(wind.get("phase_resistance_ohm", 0.018))
-    pole_pairs = p_sim.num_poles // 2
-    f_elec  = rpm / 60 * pole_pairs            # Hz
-    T_elec  = 1.0 / max(f_elec, 1e-9)
-    n_total = max(2, int(round(n_steps_per_period * n_periods)))
-    dt      = T_elec / n_steps_per_period
-    omega_m = 2 * _math.pi * rpm / 60          # mech angular vel
-    rad_per_step = omega_m * dt                # mech rad per step
-
-    # Time series
-    t_series      = _np.linspace(0.0, dt * (n_total - 1), n_total)
-    rotor_deg     = _np.degrees(rad_per_step) * _np.arange(n_total)
-    # Optional: wrap rotor angle to electrical period
-    rotor_deg = rotor_deg % (360.0 / pole_pairs)
-
-    T_em_series   : List[float] = []
-    P_cu_series   : List[float] = []
-    P_fe_series   : List[float] = []
-    P_eddy_series : List[float] = []
-    psi_A         : List[float] = []
-    psi_B         : List[float] = []
-    psi_C         : List[float] = []
-    I_A_series    : List[float] = []
-    I_B_series    : List[float] = []
-    I_C_series    : List[float] = []
-
-    # When the user requested an animation, we keep N keyframes spread
-    # evenly across the simulated window — index of each frame in the
-    # full step sequence.  The first call also captures the full FEM
-    # payload (mesh, A_z, |B|, demag) so the field-animation viewer can
-    # scrub through the rotor positions client-side.
-    frames: List[Dict] = []
-    if include_frames and n_frames > 0:
-        n_frames = max(2, min(int(n_frames), n_total))
-        frame_idxs = set(int(round(i * (n_total - 1) / (n_frames - 1)))
-                          for i in range(n_frames))
-    else:
-        frame_idxs = set()
-
-    # Shapely → outline list helper (same as /fem_field2d).  Only needed
-    # for the FIRST animation frame; rotor outlines reference each frame's
-    # mesh fill so we don't need a per-frame outline transform.
-    def _polys_to_outlines(pfo):
-        from shapely.geometry import MultiPolygon as _SMP
-        def _conv(poly):
-            if poly is None or poly.is_empty: return []
-            geoms = list(poly.geoms) if isinstance(poly, _SMP) else [poly]
-            rings = []
-            for g in geoms:
-                if g.is_empty or g.area < 1e-6: continue
-                rings.append([[x * 1e-3, y * 1e-3] for x, y in g.exterior.coords])
-                for h in g.interiors:
-                    rings.append([[x * 1e-3, y * 1e-3] for x, y in h.coords])
-            return rings
-        out = []
-        for k, dom in (("stator", 1), ("rotor", 5), ("shaft", 6),
-                        ("air_gap", 3), ("airgap_band", 7), ("air_outer", 8)):
-            if pfo.get(k) is not None:
-                out.append({"domain": dom, "loops": _conv(pfo[k])})
-        for mag_poly, polarity in pfo.get("magnets", []) or []:
-            out.append({"domain": 4 if polarity > 0 else 44,
-                        "loops": _conv(mag_poly)})
-        for coil_poly in pfo.get("coils", []) or []:
-            out.append({"domain": 2, "loops": _conv(coil_poly)})
-        return out
-
-    import time as _time
-    import os as _os
-    import concurrent.futures as _cf
-
-    # Serialize transient computes: the animation viewer and the transient
-    # charts both hit this endpoint on mount with identical params, so
-    # without a guard they would each spawn a worker pool and double the
-    # CPU storm.  Acquire BEFORE touching the shared progress state so the
-    # waiting caller doesn't clobber the running one's progress; once it
-    # wakes it falls straight through to the freshly-populated cache.
-    def _cancelled() -> bool:
-        return bool(run_id) and _fem_transient_cancelled_run.get("id") == run_id
-
-    _fem_transient_lock.acquire()
-    if key in _fem_transient_cache:
-        _fem_transient_lock.release()
-        return _fem_transient_cache[key]
-    # A duplicate request (animation + transient share a run_id) that was
-    # waiting on the lock while its twin got cancelled must NOT start a
-    # fresh solve — bail immediately.
-    if _cancelled():
-        _fem_transient_lock.release()
-        raise HTTPException(status_code=499, detail="FEM transient cancelled by user")
-
-    _t_loop_start = _time.time()
-    _fem_transient_progress["current"] = {
-        "running":   True,
-        "step":      0,
-        "total":     n_total,
-        "elapsed_s": 0.0,
-        "eta_s":     0.0,
-        "ts_start":  _t_loop_start,
-        "phase":     "fem-solve",
-    }
-
-    # ── Parallel frame solve across processes ───────────────────────────
-    # Each rotor angle is independent and per-frame gmsh meshing dominates
-    # (~11 s of ~15 s); fan the frames out across processes so the box's
-    # many cores actually get used (the in-process _GMSH_LOCK can't).
-    _solve_kw = dict(
-        gamma_deg=gamma_deg, mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm,
-        outer_air_factor=outer_air_factor, motion_band=motion_band,
-        band_thickness_mm=band_thickness_mm, n_sectors=int(n_sectors),
-        stator_fillet_mm=stator_fillet_mm, I_phase_rms=I_phase_rms,
-    )
-    results: List[Optional[Dict]] = [None] * n_total
-    # Resume support: fill in any frames already cached from a prior
-    # (Stopped) run, and only submit the missing ones.
-    _todo = []
-    for k in range(n_total):
-        cached = _fem_frame_cache.get((_frame_pkey, k))
-        if cached is not None:
-            results[k] = cached
-        else:
-            _todo.append((k, float(rotor_deg[k]), _solve_kw, (k in frame_idxs)))
-    _n_cached = n_total - len(_todo)
-    # Cap workers WELL below the core count.  Each worker is a full gmsh
-    # process that pegs a core; using all cores starved the uvicorn event
-    # loop so /progress polling timed out and the browser showed
-    # "Failed to fetch" / a frozen UI.  ~1/4 of the cores keeps the box
-    # responsive even if the animation + transient solves overlap.
-    _was_cancelled = False
-    try:
-        _done = _n_cached
-        _fem_transient_progress["current"]["step"] = _done
-        if _todo:
-            # Reuse the PERSISTENT warm pool (workers already imported gmsh +
-            # skfem once via the initializer) instead of paying ~5 s of
-            # cold-import per worker on every run.
-            try:
-                _ex = get_fem_pool()
-                _fut_to_task = {
-                    _ex.submit(_transient_frame_worker, t): t for t in _todo
-                }
-            except _cf.process.BrokenProcessPool:
-                # A worker died — rebuild the pool and retry once.
-                _reset_fem_pool()
-                _ex = get_fem_pool()
-                _fut_to_task = {
-                    _ex.submit(_transient_frame_worker, t): t for t in _todo
-                }
-            _futs = list(_fut_to_task.keys())
-            try:
-                for _fut in _cf.as_completed(_futs):
-                    _kk, _rr = _fut.result()
-                    results[_kk] = _rr
-                    # Stash the completed frame so a later resume reuses it.
-                    if _rr is not None:
-                        _fem_frame_cache[(_frame_pkey, _kk)] = _rr
-                    _done += 1
-                    _el = _time.time() - _t_loop_start
-                    _solved = max(1, _done - _n_cached)
-                    _fem_transient_progress["current"]["step"] = _done
-                    _fem_transient_progress["current"]["elapsed_s"] = _el
-                    _fem_transient_progress["current"]["per_step_s"] = _el / _solved
-                    _fem_transient_progress["current"]["eta_s"] = \
-                        (_el / _solved) * (n_total - _done)
-                    # Cooperative cancel: the Stop button flagged THIS run.
-                    # The pool is SHARED across runs, so don't shut it down —
-                    # just cancel the queued (not-yet-started) frames and stop
-                    # collecting.  Already-running workers finish their current
-                    # frame and return to the pool idle for the next run.
-                    if _cancelled():
-                        _was_cancelled = True
-                        for _pf in _futs:
-                            _pf.cancel()
-                        break
-            except _cf.process.BrokenProcessPool as _bpp:
-                _reset_fem_pool()
-                raise _bpp
-    except Exception as e:
-        log.exception("parallel FEM transient failed")
-        _fem_transient_lock.release()
-        raise HTTPException(status_code=500, detail=f"FEM transient failed: {e}")
-
-    if _was_cancelled:
+        # Sliding band for EVERY symmetry (mesh once, slide the rotor).
+        # Full (n_sectors=1) has no clean 360° slip mesh here, so it computes
+        # the symmetry-EXACT sector — which equals the full motor exactly
+        # (×N), verified within 0.7 % of the literal full disk.  The remesh-
+        # per-frame quasi-static alternative that used to sit beside this is
+        # gone: ~10× slower AND it solved on the legacy static P1 solver.
+        from motor_ai_sim.simulation.fem_solver_2d import em_transient_eval
+        import time as _t
+        # Per-frame progress so the web UI's "Solving frame X of N" + ETA
+        # advance during a sliding-band run.  The remesh path used to drive
+        # this global; now that the field animation is opt-in, the solve
+        # itself must report.  The callback fires at the TOP of each frame
+        # with the solver's true (snapped) frame count.
+        _est_total = max(1, int(round(float(n_steps_per_period) * float(n_periods))))
+        if demag:
+            _est_total *= 2     # demag adds a pre-pass sweep over the period
         _fem_transient_progress["current"] = {
-            **_fem_transient_progress["current"],
-            "running": False, "phase": "cancelled",
+            "running": True, "step": 0, "total": _est_total,
+            "elapsed_s": 0.0, "eta_s": 0.0, "ts_start": _t.time(),
+            "phase": ("fem-solve (sliding-band, demag)" if demag
+                      else "fem-solve (sliding-band)"),
         }
-        _fem_transient_lock.release()
-        raise HTTPException(status_code=499, detail="FEM transient cancelled by user")
-
-    # Backfill any frame whose every jittered solve failed with the nearest
-    # successful neighbour so the series stays continuous.
-    _first_good = next((r for r in results if r is not None), None)
-    if _first_good is None:
-        _fem_transient_lock.release()
-        raise HTTPException(status_code=500,
-                            detail="FEM transient: every frame failed to mesh/solve")
-    _lastg = _first_good
-    for _i in range(n_total):
-        if results[_i] is None:
-            results[_i] = _lastg
-        else:
-            _lastg = results[_i]
-
-    try:
-        for k in range(n_total):
-            rot_deg = float(rotor_deg[k])
-            r = results[k]
-            T_em_series.append(float(r.get("T_em_Nm", 0.0)))
-            P_cu_series.append(float(r.get("P_cu_W", 0.0)))
-            P_fe_series.append(float(r.get("P_fe_W", 0.0)))
-            P_eddy_series.append(float(r.get("P_mag_eddy_W", 0.0)))
-            # ── Capture full field for the animation keyframes ───────────
-            # Guard against a backfilled (slim, scalar-only) result landing
-            # on a keyframe index — skip the frame rather than KeyError.
-            if k in frame_idxs and r.get("vertices") is not None:
-                # Strip the bulky polys_for_outlines field on all but the
-                # FIRST frame: stator outlines are identical across the
-                # period and the rotor outline rotates with rotor_angle_deg,
-                # which the viewer applies as a transform.
-                frame = {
-                    "step_idx":         k,
-                    "time_s":           float(t_series[k]),
-                    "rotor_angle_deg":  rot_deg,
-                    "T_em_Nm":          float(r.get("T_em_Nm", 0.0)),
-                    "vertices":         r["vertices"],
-                    "triangles":        r["triangles"],
-                    "domain_per_tri":   r["domain_per_tri"],
-                    "A_z_per_node":     r["A_z_per_node"],
-                    "Bmag_per_tri":     r["Bmag_per_tri"],
-                    "J_z_per_tri":      r.get("J_z_per_tri", []),
-                    "demag_coef_per_tri": r.get("demag_coef_per_tri", []),
-                    "extent":           r["extent"],
-                    "n_vertices":       r["n_vertices"],
-                    "n_triangles":      r["n_triangles"],
-                    "A_z_min":          float(min(r["A_z_per_node"]) if r["A_z_per_node"] else 0),
-                    "A_z_max":          float(max(r["A_z_per_node"]) if r["A_z_per_node"] else 0),
-                    "B_mag_max":        float(max(r["Bmag_per_tri"]) if r["Bmag_per_tri"] else 0),
-                }
-                # Outlines per frame — splits into "static" (stator/coils
-                # baked once on frame[0]) and "rotor-attached" (magnets +
-                # rotor body, sent every frame at their actual rotated
-                # positions so the overlay aligns with the mesh fill).
-                pfo = r.get("polys_for_outlines") or {}
-                if not frames:
-                    # Full first-frame outlines + sym multiplier
-                    frame["outlines"]       = _polys_to_outlines(pfo)
-                    frame["symmetry_mult"]  = r.get("symmetry_mult", 1)
-                    frame["n_sectors"]      = r.get("n_sectors", 1)
-                else:
-                    # Only rotor-attached outlines on later frames — the
-                    # static stator / coil outlines are reused from
-                    # frame[0] in the client.
-                    rotor_pfo = {
-                        "rotor":   pfo.get("rotor"),
-                        "magnets": pfo.get("magnets", []),
+        def _sb_progress(_done, _total):
+            _cur = _fem_transient_progress["current"]
+            _cur["step"] = int(_done)
+            _cur["total"] = int(_total)
+        try:
+            # ONE canonical solve — shared with the optimizer (refine_proc) and
+            # the solver.em_transient module via em_transient_eval, so they can
+            # never diverge.  'Full' (n_sectors<=1) solves the full ring (matches
+            # the Mesh tab); 1/4 1/2 solve the sector (1/4 is the UI default).
+            _sbres = em_transient_eval(
+                n_steps_per_period=int(n_steps_per_period), n_periods=float(n_periods),
+                gamma_deg=float(gamma_deg), I_phase_rms=float(I_phase_rms),
+                mesh_size_mm=float(mesh_size_mm), min_size_mm=float(min_size_mm),
+                outer_air_factor=float(outer_air_factor), gap_layers=float(gap_layers),
+                n_sectors=int(n_sectors), stator_fillet_mm=float(stator_fillet_mm),
+                coil_temp_c=float(coil_temp_c), end_winding_factor=float(end_winding_factor),
+                rotor_eddy=bool(rotor_eddy), demag=bool(demag),
+                torque_filter=bool(torque_filter), pole_copy=bool(pole_copy),
+                iron_template=bool(iron_template), geo_mesh=bool(geo_mesh),
+                component_mesh_mm=_comp_mesh, geo_override=_geo_ov,
+                progress_cb=_sb_progress, hi_fidelity=bool(hi_fidelity),
+                structured_gap=bool(structured_gap),
+                airgap_macro=bool(airgap_macro),
+                drive=str(drive or "current"),
+                v_phase_peak=float(v_phase_peak),
+                v_delta_deg=float(v_delta_deg),
+                element_order=int(element_order),
+                return_frames=int(n_frames) if include_frames else 0)
+            # ── ΔP_harm (voltage drive): current-drive REFERENCE at the
+            # extracted fundamental (I₁, γ₁), so the comparison runs at a
+            # MATCHED fundamental current — the loss difference is then
+            # purely the parasitic harmonic currents' watt cost.
+            if str(drive or "").lower().startswith("v") and harm_ref:
+                try:
+                    from motor_ai_sim.simulation.postproc import fundamental_current
+                    _fc = fundamental_current(_sbres)
+                    if _fc["I1_phase_rms_A"] > 1e-3:
+                        _fem_transient_progress["current"]["phase"] = \
+                            "fem-solve (harm-ref, sinusoidal current)"
+                        _ref = em_transient_eval(
+                            n_steps_per_period=int(n_steps_per_period),
+                            n_periods=float(n_periods),
+                            gamma_deg=float(_fc["gamma1_deg"]),
+                            I_phase_rms=float(_fc["I1_phase_rms_A"]),
+                            mesh_size_mm=float(mesh_size_mm),
+                            min_size_mm=float(min_size_mm),
+                            outer_air_factor=float(outer_air_factor),
+                            gap_layers=float(gap_layers),
+                            n_sectors=int(n_sectors),
+                            stator_fillet_mm=float(stator_fillet_mm),
+                            coil_temp_c=float(coil_temp_c),
+                            end_winding_factor=float(end_winding_factor),
+                            # eddy is unsupported (and force-dropped) in the
+                            # voltage solve — the reference must match its
+                            # physics or ΔP_harm absorbs the whole P_mag.
+                            rotor_eddy=False, demag=bool(demag),
+                            torque_filter=bool(torque_filter),
+                            pole_copy=bool(pole_copy),
+                            iron_template=bool(iron_template),
+                            # The reference must be the SAME machine, meshed
+                            # and discretised the same way — its only allowed
+                            # difference from the voltage run is the drive.
+                            # geo_mesh and element_order were both omitted
+                            # here, so the reference silently fell back to the
+                            # gmsh mesh and to P1: ΔP_harm was then a
+                            # cross-mesh, cross-element-order difference with
+                            # the harmonic cost buried in it.
+                            geo_mesh=bool(geo_mesh),
+                            element_order=int(element_order),
+                            component_mesh_mm=_comp_mesh, geo_override=_geo_ov,
+                            hi_fidelity=bool(hi_fidelity),
+                            structured_gap=bool(structured_gap),
+                            airgap_macro=bool(airgap_macro))
+                        import numpy as _np_hr
+                        _pl_v = float(_np_hr.mean(_sbres.get(
+                            "P_loss_total_W") or [0.0]))
+                        _pl_r = float(_np_hr.mean(_ref.get(
+                            "P_loss_total_W") or [0.0]))
+                        _sbres["harm_ref"] = {
+                            "I1_phase_rms_A": round(_fc["I1_phase_rms_A"], 2),
+                            "gamma1_deg": round(_fc["gamma1_deg"], 1),
+                            "P_loss_ref_W": round(_pl_r, 1),
+                            "P_loss_v_W": round(_pl_v, 1),
+                            "T_ref_Nm": round(float(_ref.get("T_avg_Nm", 0.0)), 3),
+                        }
+                        _sbres["dP_harm_W"] = round(_pl_v - _pl_r, 1)
+                except Exception:
+                    log.exception("harm_ref reference run failed (non-fatal)")
+        finally:
+            _fem_transient_progress["current"]["running"] = False
+        # ── Animation keyframes → the viewer's payload shape ──────────────────
+        # The solver hands back ONE mesh topology plus, per keyframe, the
+        # rotor-rotated node coordinates and that frame's field.  This replaces
+        # the remesh-per-frame path, which built a full gmsh mesh per keyframe
+        # (~11 s of ~15 s each) across a 24-process pool AND solved it on the
+        # legacy static P1 solver — at the hard-coded 108 deg d-axis, i.e. ~48
+        # deg off the q-axis for this 12s14p machine, so the animation showed a
+        # DIFFERENT operating point than the charts beside it.
+        _fr_raw = _sbres.pop("frames", None) or []
+        _fr_mesh = _sbres.pop("frames_mesh", None)
+        if include_frames and _fr_raw and _fr_mesh:
+            try:
+                from motor_ai_sim.simulation.fem_solver_2d import (
+                    _simplify_polys as _sp_a, DOM_MAG_BASE as _DMB_a,
+                    DOM_COIL_BASE as _DCB_a, DOM_MAG_N as _DMN_a,
+                    DOM_MAG_S as _DMS_a, DOM_COIL as _DC_a)
+                from motor_ai_sim.cadquery_geometry import CadQueryMotor as _CQM_a
+                _mot_a = _CQM_a()
+                if _geo_ov:
+                    _mot_a.set_parameters(_geo_ov)
+                _T_a = _np.asarray(_fr_mesh["T"])
+                _tags_a = _np.asarray(_fr_mesh["tags"]).astype(int)
+                _tri_a = _T_a.T.tolist()
+                # n_sectors already carries the P2 auto-symmetry sector chosen
+                # above, so this is the wedge the solve actually ran on.
+                _nsec_a = int(n_sectors) if int(n_sectors) > 1 else 1
+                _T_ser = _sbres.get("T_em_Nm") or []
+                _frames_out = []
+                for _fi, _f in enumerate(_fr_raw):
+                    _ang_a = float(_f["rotor_angle_deg"])
+                    _P_a = _np.asarray(_f["P_mm"]) * 1e-3         # mm → m
+                    _A_a = _np.asarray(_f["A"], float)
+                    _Bm_a = _np.hypot(_np.asarray(_f["Bx"], float),
+                                      _np.asarray(_f["By"], float))
+                    # Palette tags are rotor-angle-independent (the domains do
+                    # not change), so collapse them once against frame 0's polys.
+                    _polys_a = _sp_a(_mot_a.get_2d_polygons(rotor_angle_deg=_ang_a),
+                                     tol_mm=0.005)
+                    if _fi == 0:
+                        _tv_a = _tags_a.copy()
+                        _tv_a[_tags_a >= _DCB_a] = _DC_a
+                        for _mi, (_mp_a, _pol_a) in enumerate(
+                                _polys_a.get("magnets", []) or []):
+                            _tv_a[_tags_a == (_DMB_a + _mi)] = (
+                                _DMN_a if _pol_a > 0 else _DMS_a)
+                        _tv_list = _tv_a.tolist()
+                    _fr_out = {
+                        "step_idx": int(_f["step_idx"]),
+                        "time_s": float(_f["time_s"]),
+                        "rotor_angle_deg": _ang_a,
+                        "T_em_Nm": float(_T_ser[int(_f["step_idx"])])
+                                   if int(_f["step_idx"]) < len(_T_ser) else 0.0,
+                        "vertices": _P_a.T.tolist(),
+                        "triangles": _tri_a,
+                        "domain_per_tri": _tv_list,
+                        "A_z_per_node": _A_a.tolist(),
+                        "Bmag_per_tri": _Bm_a.tolist(),
+                        "J_z_per_tri": [],
+                        "demag_coef_per_tri": [],
+                        "extent": [float(_P_a[0].min()), float(_P_a[0].max()),
+                                   float(_P_a[1].min()), float(_P_a[1].max())],
+                        "n_vertices": int(_P_a.shape[1]),
+                        "n_triangles": int(_T_a.shape[1]),
+                        "A_z_min": float(_A_a.min()), "A_z_max": float(_A_a.max()),
+                        "B_mag_max": float(_Bm_a.max()),
                     }
-                    frame["outlines_rotor"] = _polys_to_outlines(rotor_pfo)
-                frames.append(frame)
-            # Reconstruct currents at this time-step (same convention as solver)
-            theta_e = (rot_deg * pole_pairs + gamma_deg + 270.0) * _math.pi/180
-            I_peak = I_phase_rms / float(wind.get("n_parallel", 2)) * _math.sqrt(2)
-            iA = I_peak * _math.cos(theta_e)
-            iB = I_peak * _math.cos(theta_e - 2*_math.pi/3)
-            iC = I_peak * _math.cos(theta_e + 2*_math.pi/3)
-            I_A_series.append(iA); I_B_series.append(iB); I_C_series.append(iC)
-            # Use the most asymmetric ψ from FEM as the canonical phase
-            # waveform.  Sector-mode (1/4 motor + anti-periodic BC) makes
-            # the per-phase slot distribution unbalanced — phase A has
-            # 2 slots with the SAME sign while B/C have 2 slots with
-            # opposite signs.  This produces an asymmetric set of FEM
-            # ψ values that don't translate to a balanced 3-phase
-            # back-EMF.
-            #
-            # Workaround: take the largest-amplitude phase from FEM as
-            # the canonical ψ(t) shape; ψ for the other two phases is
-            # generated by ±120° elec phase-shifting in time.
-            psi_A.append(float(r.get("psi_A_Wb", 0.0)))
-            psi_B.append(float(r.get("psi_B_Wb", 0.0)))
-            psi_C.append(float(r.get("psi_C_Wb", 0.0)))
-        # placeholder — will be overwritten below after the loop
-    except Exception as e:
-        log.exception("FEM transient failed")
+                    if _fi == 0:
+                        _fr_out["outlines"] = _outlines_from_polys(_polys_a)
+                        _fr_out["symmetry_mult"] = _nsec_a
+                        _fr_out["n_sectors"] = _nsec_a
+                        # Anti-periodic radial cut (A_z flips sign between
+                        # adjacent sectors) ⇔ an ODD pole count per sector.
+                        # The client tiles the wedge to the full ring and needs
+                        # this to place each copy with the right sign.
+                        _pol_n = int(_mot_a.parameters.get("num_poles") or 0)
+                        _fr_out["anti_periodic"] = bool(
+                            _nsec_a > 1 and _pol_n and (_pol_n // _nsec_a) % 2 == 1)
+                    else:
+                        # Rotor-attached outlines only; the client reuses the
+                        # static stator/coil outlines from frame 0.
+                        _fr_out["outlines_rotor"] = _outlines_from_polys(
+                            {"rotor": _polys_a.get("rotor"),
+                             "magnets": _polys_a.get("magnets", [])})
+                    _frames_out.append(_fr_out)
+                _sbres["frames"] = _frames_out
+                _sbres["n_frames_returned"] = len(_frames_out)
+            except Exception:
+                log.exception("animation keyframe payload build failed")
+        # ── Summary block (masses, loss split, KV, efficiency, specific
+        # torque/power) so the Simulation values table renders.  Built by the
+        # Stamp WHEN this run was solved — the UI shows it in the header so
+        # "is this the fresh result?" is answerable at a glance (a stale
+        # background tab was indistinguishable from a failed update).
+        from datetime import datetime as _dtm
+        _sbres["computed_at"] = _dtm.now().isoformat(timespec="seconds")
+        # SHARED helper (_build_transient_summary) so the direct route, the
+        # legacy remesh path AND the kernel/solver.em_transient path all use the
+        # SAME formula and every run returns a populated `summary`.
+        try:
+            _sbres["summary"] = _build_transient_summary(
+                _sbres, I_phase_rms=I_phase_rms, gamma_deg=gamma_deg,
+                coil_temp_c=coil_temp_c, geo_override=_geo_ov)
+        except Exception as _se:
+            # A summary-build failure MUST be visible (not a silently frozen
+            # card set): log it AND attach an error marker so the frontend can
+            # surface it instead of keeping stale numbers.
+            log.exception("SB summary build failed")
+            _sbres["summary_error"] = f"{type(_se).__name__}: {_se}"
+        _fem_transient_cache[_sb_key] = _sbres
+        # Persist for "restore last simulation" on reload — but ONLY the user's
+        # MAIN motor. Per-candidate evals (optimizer / kernel runs with a geo
+        # override) must never clobber the saved simulation, and parallel
+        # optimizer subprocesses must not race on the shared store file.
+        if not _geo_ov:
+            _save_last_transient(_sb_key, _sbres)   # survive a back-end restart
+        return _sbres
+    except HTTPException:
+        raise
+    except Exception as _e:
+        log.exception("sliding-band transient failed")
+        raise HTTPException(status_code=500,
+                            detail=f"sliding-band transient failed: {_e}")
+    finally:
         _fem_transient_lock.release()
-        raise HTTPException(status_code=500, detail=f"FEM transient failed: {e}")
-
-    # ── Balanced 3-phase ψ via ±120° elec time shift ───────────────────
-    # With the corrected half-pitch slot_idx mapping the FEM-derived ψ for
-    # each phase should be intrinsically balanced (same amplitude, 120°
-    # apart).  In 1/4-sector mode some asymmetry can remain because the
-    # six-slot sector doesn't divide cleanly across 3 phases, so we still
-    # PICK the largest-amplitude phase as the canonical reference and
-    # generate the other two by time-shifting.  We also DC-balance so the
-    # back-EMF (= dψ/dt) integrates around zero.
-    def _ptp(arr): a = _np.asarray(arr); return float(a.max() - a.min())
-    psi_arr = [_np.asarray(psi_A), _np.asarray(psi_B), _np.asarray(psi_C)]
-    canon_idx = max(range(3), key=lambda i: _ptp(psi_arr[i]))
-    psi_canon = psi_arr[canon_idx]
-    # Remove DC offset so the back-EMF integrates around zero.
-    psi_canon = psi_canon - float(_np.mean(psi_canon))
-    n_per = max(1, int(n_steps_per_period))
-    shift_B = -n_per // 3                  # -120° elec
-    shift_C = +n_per // 3                  # +120° elec
-    psi_A_arr = _np.roll(psi_canon,           0)
-    psi_B_arr = _np.roll(psi_canon, shift_B)
-    psi_C_arr = _np.roll(psi_canon, shift_C)
-    psi_A = psi_A_arr.tolist()
-    psi_B = psi_B_arr.tolist()
-    psi_C = psi_C_arr.tolist()
-
-    # ── V_phase(t) = R·I + dψ/dt (central differences) ───────────────────
-    def _ddt(arr: List[float]) -> List[float]:
-        a = _np.asarray(arr)
-        d = _np.zeros_like(a)
-        d[1:-1] = (a[2:] - a[:-2]) / (2 * dt)
-        d[0]    = (a[1]  - a[0])   / dt
-        d[-1]   = (a[-1] - a[-2])  / dt
-        return d.tolist()
-
-    dpsiA_dt = _ddt(psi_A)
-    dpsiB_dt = _ddt(psi_B)
-    dpsiC_dt = _ddt(psi_C)
-    V_A = [R_phase * iA + e for iA, e in zip(I_A_series, dpsiA_dt)]
-    V_B = [R_phase * iB + e for iB, e in zip(I_B_series, dpsiB_dt)]
-    V_C = [R_phase * iC + e for iC, e in zip(I_C_series, dpsiC_dt)]
-
-    # ── Honest magnet eddy loss via J = -σ · ∂A_z/∂t ──────────────────────
-    # Each frame's mean A_z over a magnet's cells is the rotor-frame A_z of
-    # that magnet at time t_k (because the FEM rebuilds the mesh with the
-    # magnet at its rotated lab position, so the same physical magnet's
-    # cells appear at each frame's rotated coordinates).  We central-
-    # difference per magnet, square, multiply by σ × magnet-volume, then
-    # sum across magnets × n_sectors to get the full-motor P_mag_eddy(t).
-    # (Magnet eddy comes per-frame from the solver — slot-ripple slab
-    # model on local B with η = 0.03, calibrated for FSCW SPMSM.  See
-    # fem_solver_2d.fem_solve_for_sim for the physics + sliding-band
-    # limitation that prevents a fully ab-initio calc in the current
-    # rebuild-per-frame pipeline.)
-
-    P_total_series = [c + f + e for c, f, e
-                       in zip(P_cu_series, P_fe_series, P_eddy_series)]
-
-    # ── Band-limit the torque to the physical 6·k electrical orders ───────────
-    # The remesh-per-frame pipeline meshes every rotor angle INDEPENDENTLY, so
-    # frame-to-frame discretisation differences inject broadband torque ripple at
-    # orders a balanced 3-phase drive cannot produce.  Reconstruct T(t) from its
-    # 6·k content (mean preserved) — same denoising as the sliding-band path.
-    from motor_ai_sim.simulation.fem_solver_2d import band_limit_torque as _blt
-    if torque_filter:
-        T_em_series, _Trip_phys, _Trip_raw = _blt(
-            T_em_series, n_steps_per_period, n_periods)
-    else:
-        _arrT = _np.asarray(T_em_series, float)
-        _aT = float(_arrT.mean()) if _arrT.size else 0.0
-        _Trip_phys = _Trip_raw = (
-            100.0 * (float(_arrT.max()) - float(_arrT.min())) / abs(_aT)
-            if _arrT.size and abs(_aT) > 1e-9 else 0.0)
-
-    # ── Energy-conserving shaft power (same convention as the sliding-band path)
-    # P_elec_in = ⟨Σ v·i⟩ (0 at no-load), and P_mech = P_elec_in − P_loss so that
-    # at no-load the shaft power equals −P_loss (drive overcomes the losses) —
-    # NOT the numerically-noisy cogging-mean torque × ω.
-    _omega_m = 2 * _math.pi * rpm / 60
-    _Pelec_in = (float(_np.mean(
-        _np.asarray(V_A) * _np.asarray(I_A_series)
-        + _np.asarray(V_B) * _np.asarray(I_B_series)
-        + _np.asarray(V_C) * _np.asarray(I_C_series))) if I_A_series else 0.0)
-    _Ploss_avg = float(_np.mean(P_total_series)) if P_total_series else 0.0
-    _Pmech_shaft = _Pelec_in - _Ploss_avg
-    _Pairgap = float(_np.mean(T_em_series)) * _omega_m
-
-    payload = {
-        "n_steps":            n_total,
-        "n_steps_per_period": int(n_steps_per_period),
-        "n_periods":          float(n_periods),
-        "dt_s":               dt,
-        "T_period_s":         T_elec,
-        "f_elec_Hz":          f_elec,
-        "rpm":                rpm,
-        "rotor_angle_deg":    rotor_deg.tolist(),
-        "time_s":             t_series.tolist(),
-        "T_em_Nm":            T_em_series,
-        "T_avg_Nm":           float(_np.mean(T_em_series)),
-        "T_ripple_pct":       round(_Trip_phys, 2),
-        "T_ripple_raw_pct":   round(_Trip_raw, 2),
-        "P_cu_W":             P_cu_series,
-        "P_fe_W":             P_fe_series,
-        "P_mag_eddy_W":       P_eddy_series,
-        "P_loss_total_W":     P_total_series,
-        "P_mech_avg_W":       _Pmech_shaft,        # energy-conserving shaft power
-        "P_elec_in_W":        _Pelec_in,           # ⟨Σ v·i⟩ (0 at no-load)
-        "P_airgap_W":         _Pairgap,            # electromagnetic T_avg·ω
-        "I_A":                I_A_series,
-        "I_B":                I_B_series,
-        "I_C":                I_C_series,
-        "V_A":                V_A,
-        "V_B":                V_B,
-        "V_C":                V_C,
-        "V_peak":             float(max(max(map(abs, V_A)),
-                                         max(map(abs, V_B)),
-                                         max(map(abs, V_C)))),
-        "psi_A_Wb":           psi_A,
-        "psi_B_Wb":           psi_B,
-        "psi_C_Wb":           psi_C,
-        "R_phase_ohm":        R_phase,
-    }
-
-    # ── Summary block: masses, loss breakdown, KV, specific torque/power ──
-    # Built by the SHARED helper (_build_transient_summary) so this legacy remesh
-    # path uses the SAME formula as the sliding-band path and the kernel — every
-    # run returns a populated `summary`.  (This path builds masses from the global
-    # config; it has never honored a per-request geo override, so pass None.)
-    try:
-        payload["summary"] = _build_transient_summary(
-            payload, I_phase_rms=I_phase_rms, gamma_deg=gamma_deg,
-            coil_temp_c=coil_temp_c, geo_override=None)
-    except Exception as _se:
-        log.exception("remesh summary build failed")
-        payload["summary_error"] = f"{type(_se).__name__}: {_se}"
-
-    if include_frames:
-        payload["frames"] = frames
-        payload["n_frames_returned"] = len(frames)
-    _fem_transient_cache[key] = payload
-    # Mark the run finished so the progress endpoint stops reporting
-    # "running".  Keep the step count so the final state is visible
-    # for one more poll on the frontend.
-    _fem_transient_progress["current"] = {
-        **_fem_transient_progress["current"],
-        "running": False,
-        "phase":   "done",
-        "step":    n_total,
-        "total":   n_total,
-        "elapsed_s": round(_time.time() - _t_loop_start, 1),
-        "eta_s":   0.0,
-    }
-    _fem_transient_lock.release()
-    return payload
 
 
 # ─────────────────────────────────────────────────────────────────────────────

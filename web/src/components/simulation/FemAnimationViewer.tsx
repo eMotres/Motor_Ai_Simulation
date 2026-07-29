@@ -22,6 +22,7 @@ import PauseIcon from '@mui/icons-material/Pause';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
 import DownloadIcon from '@mui/icons-material/Download';
 import FemFieldChart from './FemFieldChart';
+import { tileFullRing } from './fem-types';
 import type { FemPayload } from './fem-types';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
@@ -48,6 +49,7 @@ interface FrameRaw {
   outlines?:       { domain: number; loops: [number, number][][] }[];
   symmetry_mult?:  number;
   n_sectors?:      number;
+  anti_periodic?:  boolean;
   // On every frame ≥ 1: rotor / magnet outlines at the current rotation.
   outlines_rotor?: { domain: number; loops: [number, number][][] }[];
 }
@@ -130,6 +132,19 @@ const FemAnimationViewer: React.FC<Props> = ({
       stator_fillet_mm:   '0',   // native geometry — extra smoothing removed
       // Same per-part mesh sizes as TransientCharts → shared backend cache key.
       component_mesh:     JSON.stringify(readMeshSetting<Record<string, number>>('componentMesh', {})),
+      // The sliding band, like every other panel. This request used to omit the
+      // flag and fall through to the remesh-per-frame path, which meshed and
+      // solved each keyframe on the legacy static solver at a HARD-CODED 108°
+      // d-axis — ~48° off the q-axis for a 12s14p machine — so the animation
+      // showed a different operating point than the charts beside it. These
+      // mesh toggles must stay in step with TransientCharts: same params, same
+      // backend cache key, one solve for both panels.
+      sliding_band:       'true',
+      gap_layers:         String(readMeshSetting('gapLayers', 2)),
+      iron_template:      String(readMeshSetting('ironTemplate', true)),
+      geo_mesh:           String(readMeshSetting('geoMesh', true)),
+      structured_gap:     String(readMeshSetting('structuredGap', false) || readMeshSetting('ironTemplate', true)),
+      airgap_macro:       String(readMeshSetting('harmonicGap', false)),
       include_frames:     'true',
       n_frames:           String(n_frames),
       run_id:             String(runNonce),
@@ -178,20 +193,25 @@ const FemAnimationViewer: React.FC<Props> = ({
   useEffect(() => { setNFrames(n_frames_default); }, [n_frames_default]);
 
   // ── Field animation is OPT-IN — it does NOT auto-run on "Run Simulation".
-  // Rebuilding the FULL field map per frame is slow (~12 s/frame on the remesh
-  // path), so "Run Simulation" now computes only the fast sliding-band transient
+  // It is its OWN transient at its own frame count, and shipping a full field
+  // map per keyframe is a large payload, so "Run Simulation" computes only the
   // CHARTS at the full "Steps per electrical period".  Click "Run animation"
   // below to compute the scrubable field video on demand.
   // (Was: useEffect(() => { if (runNonce > 0) runAnimation(); }, [runNonce]); —
-  //  that made every Run also fire this slow 24-frame remesh, whose progress bar
-  //  read "0/24" and looked like the transient was ignoring the 72-step setting.)
+  //  that made every Run also fire the animation solve, whose progress bar read
+  //  "0/24" and looked like the transient was ignoring the 72-step setting.)
 
   // ── build a FemPayload-shaped object for FemFieldChart ─────────────────
   const currentFrame = data?.frames[idx];
   const baseFrame = data?.frames[0];      // outlines / symmetry_mult live here
   const payloadForChart: FemPayload | null = useMemo(() => {
     if (!currentFrame || !baseFrame || !data) return null;
-    return {
+    // Tile the anti-periodic wedge out to the full ring, exactly as every other
+    // field view does. The sliding band solves the machine's natural symmetry
+    // sector on P2, so without this the animation would show a fraction of the
+    // motor — the retired remesh path happened to build the full disk, which is
+    // the only reason this was never needed here before.
+    return tileFullRing({
       n_vertices:      currentFrame.n_vertices,
       n_triangles:     currentFrame.n_triangles,
       vertices:        currentFrame.vertices,
@@ -239,7 +259,8 @@ const FemAnimationViewer: React.FC<Props> = ({
       B_mag_max:       currentFrame.B_mag_max,
       demag_coef_per_tri: currentFrame.demag_coef_per_tri,
       J_z_per_tri:     currentFrame.J_z_per_tri,
-    } as FemPayload;
+      anti_periodic:   baseFrame.anti_periodic ?? false,
+    } as FemPayload);
   }, [currentFrame, baseFrame, data]);
 
   // ── UI ─────────────────────────────────────────────────────────────────
@@ -259,7 +280,7 @@ const FemAnimationViewer: React.FC<Props> = ({
         <Box>
           <Typography sx={{ fontSize: 13, color: 'var(--text-1)', fontWeight: 700 }}>
             Field Animation — rotor through one electrical period
-            <Tooltip title="Runs the transient FEM N_frames times (one solve per keyframe), capturing the full field map at each rotor angle. Use the slider to scrub through the period — rotor moves in real geometry, fields update with it. Each fetch takes ~n_frames × 3 s for mesh_size_mm=4." placement="top">
+            <Tooltip title="Runs the sliding-band transient over one electrical period and keeps the full field map at N_frames rotor angles. Use the slider to scrub — the rotor turns, the field follows it. The mesh is built ONCE for the whole run (the band encodes rotation in the slip pairing, not in coordinates), so the cost is one transient plus the payload, not one mesh+solve per frame." placement="top">
               <span style={{ color: 'var(--text-4)', marginLeft: 6, fontSize: 11, cursor: 'help' }}>ⓘ</span>
             </Tooltip>
           </Typography>

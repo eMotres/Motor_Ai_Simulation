@@ -2,9 +2,9 @@
 
 This suite does NOT judge whether a number is physically right — it judges
 whether a code change moved it. That is the gate every refactoring step needs:
-the solver is one 3400-line function full of closures over mesh, slip pairing
-and saturation state, and the only reason the ~35 % torque inflation on the P1
-path survived so long is that nothing was watching the numbers.
+the solver is one very long function full of closures over mesh, slip pairing
+and saturation state, and the only reason the ~35 % torque inflation on the
+retired P1 path survived so long is that nothing was watching the numbers.
 
 Design notes, in case a case starts failing for the wrong reason:
 
@@ -18,11 +18,12 @@ Design notes, in case a case starts failing for the wrong reason:
 * **Coarse on purpose.** 12 steps/period on a 1.4 mm mesh. These are not
   publication numbers; they only have to be *reproducible*. Keeping the suite
   near five minutes is what makes it get run.
-* **Both element orders.** P2 is the default basis, but P1 is still the
-  reference implementation of several paths, so it has to stay pinned too.
-  Demag, voltage drive and the coupled sigma*dA/dt eddy solve now exist on BOTH
-  orders and are pinned on both: they are physics, and physics does not depend
-  on the element order.
+* **One element order.** P2 is the only basis. P1 was deleted (its
+  Maxwell-stress mean torque is radius-inconsistent under load, ~35 % high, and
+  its ripple is a mesh staircase), so the p1_* cases went with it. What they
+  were guarding did not: every capability they pinned — cogging, demag, voltage
+  drive, the coupled sigma*dA/dt eddy solve, and eddy+voltage together — has a
+  p2_* case here.
 
 Regenerate the baseline deliberately, never casually — a diff here is the whole
 point of the file::
@@ -91,32 +92,20 @@ CASES = {
     # The default basis: energy-consistent mean torque, mesh-convergent ripple.
     "p2_load": dict(COMMON, element_order=2, demag=False,
                     I_phase_rms=60.0, gamma_deg=0.0),
-    # P1 under load. Pins the hybrid torque that P1 was missing — if someone
-    # removes it, this case jumps ~35 % and the suite says so immediately.
-    "p1_load": dict(COMMON, element_order=1, demag=False,
-                    I_phase_rms=60.0, gamma_deg=0.0),
-    # No-load cogging: the one number the flux-linkage torque cannot see, so it
-    # comes from the raw Maxwell series and guards that path separately.
-    "p1_noload": dict(COMMON, element_order=1, demag=False,
-                      I_phase_rms=0.0, gamma_deg=0.0),
-    # ...and the same guard on P2.  The raw-Maxwell cogging path had exactly ONE
-    # watcher (p1_noload) — an element_order that no longer exists cannot guard
-    # anything, so this case was pinned BEFORE P1 was deleted, never after.
-    # It is not a duplicate of p2_load: at I=0 the flux-linkage (energy) torque
-    # is identically zero, so T_avg/T_ripple here come from the raw Maxwell
-    # series alone. Nothing else in the suite exercises that path unloaded.
+    # No-load cogging: the one number the flux-linkage torque cannot see. At
+    # I=0 the energy torque is identically zero, so T_avg/T_ripple here come
+    # from the raw Maxwell series alone — nothing else in the suite exercises
+    # that path unloaded. Pinned BEFORE P1 was deleted (the retired p1_noload
+    # used to be its only watcher), never after.
     "p2_noload": dict(COMMON, element_order=2, demag=False,
                       I_phase_rms=0.0, gamma_deg=0.0),
-    # Irreversible demagnetisation on P1 — pins the load-line construction AND
-    # the settling pass.
-    "p1_demag": dict(COMMON, element_order=1, demag=True,
-                     I_phase_rms=60.0, gamma_deg=0.0),
-    # ...and on P2, which could not do it at all until the hook was moved to
-    # where the frame actually converges (P2 solves by Newton; the hook sat in
-    # the Picard fallback, which never runs). Pinned because THREE separate
-    # improvements — iron loss, demag, the settling pass — were added to P1 and
-    # silently missed P2, each time because the P2 branch returns before that
-    # code. Demag is physics: the two orders must agree on the magnet.
+    # Irreversible demagnetisation — pins the load-line construction AND the
+    # settling pass. P2 could not do it at all until the hook was moved to where
+    # the frame actually converges (P2 solves by Newton; the hook sat in the
+    # Picard fallback, which never runs). Pinned because THREE separate
+    # improvements — iron loss, demag, the settling pass — were added to the P1
+    # path and silently missed P2, each time because the P2 branch returned
+    # before that code.
     # This case is slow (demag on P2 re-solves a frame until the magnet settles)
     # and coarsening it does NOT help — but not for the reason first suspected.
     # Measured: 1.4 mm and 2.2 mm both give 8195 triangles, while 0.9 mm gives
@@ -126,17 +115,10 @@ CASES = {
     # The cost is the demag outer loop, not the mesh.
     "p2_demag": dict(COMMON, element_order=2, demag=True,
                      I_phase_rms=60.0, gamma_deg=0.0),
-    # Voltage drive, BOTH orders, at the SAME operating point. A circuit is
-    # physics: it cannot depend on the element order, so these two cases only
-    # mean anything as a pair — pinning one alone would not catch the failure
-    # they exist for (a change that quietly moves one basis and not the other).
-    # (7.0 V pk, +10 deg) puts this machine near i_d = 0 at ~90 A pk, i.e. the
-    # same loaded, saturated, gamma~0 corner the current-drive cases use.
-    # These are the slowest cases in the suite: the currents are STATE, so each
-    # run marches 10 settling periods before the reported one.
-    "p1_voltage": dict(COMMON, element_order=1, demag=False,
-                       I_phase_rms=60.0, gamma_deg=0.0, drive="voltage",
-                       v_phase_peak=7.0, v_delta_deg=10.0),
+    # Voltage drive. (7.0 V pk, +10 deg) puts this machine near i_d = 0 at
+    # ~90 A pk, i.e. the same loaded, saturated, gamma~0 corner the current-drive
+    # cases use. These are the slowest cases in the suite: the currents are
+    # STATE, so each run marches 10 settling periods before the reported one.
     "p2_voltage": dict(COMMON, element_order=2, demag=False,
                        I_phase_rms=60.0, gamma_deg=0.0, drive="voltage",
                        v_phase_peak=7.0, v_delta_deg=10.0),
@@ -154,9 +136,9 @@ CASES = {
     # constraint rows IMPOSE each wire's current, driven by the voltage circuit,
     # for which those same currents are UNKNOWNS. They are solved as one
     # bordered (A, U, i_A, i_B) Newton. This case is the guard against the exact
-    # regression the P1 path shipped for years -- an `if eddy: ... elif vdrive:`
-    # chain that skips the circuit and reports a CURRENT-drive answer as a
-    # voltage run. If that ever comes back, the pinned currents here move to the
+    # regression the retired P1 path shipped for years -- an `if eddy: ... elif
+    # vdrive:` chain that skips the circuit and reports a CURRENT-drive answer
+    # as a voltage run. If that ever comes back, the pinned currents move to the
     # imposed 60 A rms sinusoid and the suite says so. The paired diagnostics are
     # what make it airtight: v_circuit_resid_max_V is ~0 only if the circuit was
     # actually solved on the converged field, and P_cu_ac_solve_W is nonzero only

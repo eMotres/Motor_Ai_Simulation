@@ -701,30 +701,33 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
               <span style={{ color: 'var(--text-4)', marginLeft: 6, fontSize: 11, cursor: 'help' }}>ⓘ</span>
             </Tooltip>
           </Typography>
-          <Typography sx={{ fontSize: 10, color: payload?.from_transient ? '#38bdf8' : 'var(--text-4)' }}>
-            {payload
-              ? (subHeader
-                   ? subHeader
-                   : `${payload.n_triangles.toLocaleString()} triangles · ×${payload.symmetry_mult} symmetry`
-                     + `${payload.from_transient ? '' : ` · solve ${payload.solve_time_s}s`}`
-                     + `${(isEddy || isLoss) ? ` · @ ${eddyCurrent.toFixed(0)} A` : ''}`
-                     // WHERE the picture came from, verbatim from the backend:
-                     // replayed from the simulation run, or solved here just now.
-                     + `${payload.source_label ? ` · ${payload.source_label}` : ''}`)
-              : (isEddy
-                   ? (eddySolving
-                        ? 'No matching simulation run — solving this view on demand…'
-                        : 'Looking for the last simulation run\'s field…')
-                   : isLoss ? 'Checking the last simulation run\'s loss map…'
-                   : 'Solving…')}
-          </Typography>
-          {/* WHAT the colours are — from the view's own scale, so it changes
-              with the mode and (for Loss) names each component's source. */}
-          {fieldView.scale && (
-            <Typography sx={{ fontSize: 9.5, color: 'var(--text-4)', mt: 0.2 }}>
-              {fieldView.scale.note} · {fieldView.scale.bands} bands
+          {/* One SHORT visible line (user rule: no walls of text in the web —
+              details live in the tooltip).  Visible: where the picture came
+              from + the operating current.  Hover ⓘ: mesh size, solve time,
+              per-component provenance and the colour-scale semantics. */}
+          <Tooltip placement="bottom-start" title={payload ? (
+              `${payload.n_triangles.toLocaleString()} triangles · ×${payload.symmetry_mult} symmetry`
+              + `${payload.from_transient ? '' : ` · solve ${payload.solve_time_s}s`}`
+              + `${payload.source_label ? ` · ${payload.source_label}` : ''}`
+              + `${fieldView.scale ? ` — ${fieldView.scale.note} · ${fieldView.scale.bands} bands` : ''}`
+            ) : ''}>
+            <Typography sx={{ fontSize: 10, cursor: payload ? 'help' : 'default',
+                              color: payload?.from_transient ? '#38bdf8' : 'var(--text-4)' }}>
+              {payload
+                ? (subHeader
+                     ? subHeader
+                     : `${payload.from_transient ? 'from last simulation run'
+                                                 : 'computed on demand'}`
+                       + `${(isEddy || isLoss) ? ` · @ ${eddyCurrent.toFixed(0)} A` : ''}`
+                       + ' · ⓘ')
+                : (isEddy
+                     ? (eddySolving
+                          ? 'No matching simulation run — solving this view on demand…'
+                          : 'Looking for the last simulation run\'s field…')
+                     : isLoss ? 'Checking the last simulation run\'s loss map…'
+                     : 'Solving…')}
             </Typography>
-          )}
+          </Tooltip>
         </Box>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <ToggleButtonGroup value={mode} exclusive size="small"

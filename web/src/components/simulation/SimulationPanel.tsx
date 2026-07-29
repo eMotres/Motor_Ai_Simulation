@@ -340,7 +340,9 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // Band-limit the transient torque to the physical 6·k electrical orders
   // (drops the broadband slip-node noise a balanced 3-phase machine cannot
   // produce).  ON by default; turn off to inspect the raw per-frame torque.
-  const [torqueFilter, setTorqueFilter] = usePersisted('torqueFilter', false);
+  // Always raw torque — the filter checkbox is gone, and a stale persisted
+  // `true` must not keep silently filtering, so this is a constant, not state.
+  const torqueFilter = false;
   // Auto-save EVERY simulation change into the active motor ("my copy").
   // syncActiveMotor is internally debounced, so firing on each change is fine.
   useEffect(() => {
@@ -863,26 +865,12 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               }
             />
           </Tooltip>
-          {/* Torque band-limit filter: keep only the physical 6·k electrical
-              orders.  The sliding band steps the rotor across discrete slip
-              nodes, injecting broadband ripple a balanced 3-phase machine
-              cannot produce — ON drops it (mean preserved), OFF shows raw. */}
-          <Tooltip title="Band-limit the torque waveform to the physical 6·k electrical orders (6, 12, 18…). A balanced 3-phase machine can only produce torque ripple at these orders; everything else is numerical slip-node noise that does not converge with mesh refinement. The average torque is preserved exactly. Turn off to inspect the raw per-frame solver torque." placement="right">
-            <FormControlLabel
-              sx={{ mt: -0.5, mb: 0.75, ml: 0.25 }}
-              control={
-                <Checkbox size="small" checked={torqueFilter}
-                  onChange={e => setTorqueFilter(e.target.checked)}
-                  disabled={simBusy}
-                  sx={{ p: 0.5, color: 'var(--text-4)', '&.Mui-checked': { color: '#34d399' } }} />
-              }
-              label={
-                <Typography variant="caption" sx={{ color: torqueFilter ? '#34d399' : 'var(--text-2)' }}>
-                  Torque filter — physical 6·k orders only
-                </Typography>
-              }
-            />
-          </Tooltip>
+          {/* The torque band-limit checkbox that lived here was removed at the
+              user's request (2026-07-29): it was a P1-era crutch — P2's raw
+              ripple is mesh-convergent and honest, so the headline is ALWAYS
+              the raw torque now.  The backend still returns both series and
+              T_noise_floor_pct, so the 6·k decomposition remains inspectable
+              in the harmonic chart without a mode switch. */}
           {simBusy ? (
             <Button
               fullWidth

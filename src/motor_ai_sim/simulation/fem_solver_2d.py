@@ -4523,20 +4523,9 @@ def fem_transient_sliding_band(
         P_mag_series = [0.0] * n_total; P_mag_avg = 0.0
 
     # ── AC eddy / proximity losses in the SOLID (non-laminated) conductors ────
-    # Same classical slab loss as the magnets, σ·(d²/12)·⟨(dB/dt)²⟩, applied to
-    # the COILS (solid copper bars) and the SHAFT (solid steel).  d is the
-    # conductor dimension capped at twice the skin depth (for d≫δ the field is
-    # surface-limited, so the d² slab law alone would over-count).
-    def _slab_eddy(hx, hy, idx, areas_half, sigma, d_m, qp=None):
-        if sigma <= 0.0 or idx.size == 0 or not hx or np.asarray(hx[0]).size == 0:
-            return [0.0] * n_total, 0.0
-        X = np.asarray(hx); Y = np.asarray(hy)
-        dX = _angle_ddt_2d(X, qp); dY = _angle_ddt_2d(Y, qp)
-        vol = areas_half[idx] * p.stack_length
-        Pt = _declip(sigma * (d_m ** 2 / 12.0)
-                     * np.sum((dX ** 2 + dY ** 2) * vol[None, :], axis=1) * NS)
-        return Pt.tolist(), float(np.mean(Pt))
-
+    # (The classical σ·d²/12 slab estimate that once lived here was superseded
+    # in e310d62: coils use the proximity split below, the shaft uses the
+    # geometry-exact σ·∫(∂A/∂t)² integral — no shape factor, no fudge.)
     def _prox_eddy_split(hx, hy, idx, cen, areas_half, sigma, d_for_Br, d_for_Bt):
         # ONE implementation, shared with the P2 branch (simulation/losses.py).
         # P1 keeps its smoothed angle-derivative and its outlier clip; the model

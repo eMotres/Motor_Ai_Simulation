@@ -1,4 +1,9 @@
-"""The optimizer must not score a candidate on a field that never converged.
+"""Honesty tests for the optimizer's two inputs: the FEM eval and the surrogate.
+
+Part 1 — the optimizer must not score a candidate on a field that never
+converged.  Part 2 — the analytic surrogate that seeds Pareto/DoE ranking must
+read its topology and materials from the DESIGN, reproduce the pinned FEM at its
+calibration anchor, and carry its own measured uncertainty.
 
 ``refine_proc.run_one`` is the ONE path every FEM eval takes — the Pareto search,
 the DoE sweep and the descent all reach the solver through it (via
@@ -18,6 +23,7 @@ import types
 
 import pytest
 
+from motor_ai_sim.material_context import set_request_materials
 from motor_ai_sim.optimization import refine_proc
 from motor_ai_sim.routes.optimization import _eval_healthy
 
@@ -92,6 +98,82 @@ def test_converged_eval_carries_the_stamp(fake_solver):
     assert res["nonlinear_converged"] is True
     assert res["nonlinear_resid_max"] == pytest.approx(1.2e-7, rel=1e-6)
     assert res["nonlinear_tol"] == pytest.approx(1e-4, rel=1e-6)
+
+
+def test_surrogate_reproduces_its_anchor():
+    """The four calibration scalars are DERIVED from the pinned FEM cases, so at
+    the anchor the surrogate must land ON the pins — not near them.
+
+    What this catches: the calibration forces the anchor's magnet and steel,
+    while evaluate_design resolves them from the request/config context — so if
+    the material-resolution path breaks, or the two paths stop agreeing, the
+    surrogate stops landing on the pin and this fails immediately.
+
+    What it does NOT catch (stated so nobody reads more into a green tick): the
+    scalars are k = pin / raw(anchor), so torque/iron/magnet/cogging reproduce
+    the pin by construction. In particular it cannot detect that _ANCHOR_OP's
+    rpm has drifted from the config rpm the baseline was generated at — the
+    regression suite takes rpm from config, which is a fragility of that suite,
+    not something this test can see. Independent accuracy is measured, not
+    asserted: scripts/_surrogate_uncertainty.py."""
+    from motor_ai_sim.optimization import design_eval as de
+
+    set_request_materials({"assignment": {"magnet": de._ANCHOR_MAGNET},
+                           "materials": {}})
+    try:
+        m = de.evaluate_design(dict(de._ANCHOR_GEO), dict(de._ANCHOR_WIND), {},
+                               de._ANCHOR_OP["gamma_deg"],
+                               de._ANCHOR_OP["current_a"],
+                               de._ANCHOR_OP["rpm"],
+                               coil_temp_c=de._ANCHOR_OP["coil_temp_c"])
+    finally:
+        set_request_materials(None)
+    pins = de._anchor_pins()
+    assert m.T_em_Nm == pytest.approx(pins["T_avg_Nm"], rel=1e-6)
+    assert m.P_fe_W == pytest.approx(pins["P_fe_W"], rel=1e-6)
+    assert m.P_mag_W == pytest.approx(pins["P_mag_W"], rel=1e-6)
+    assert m.T_ripple_pct == pytest.approx(pins["T_ripple_pct"], rel=1e-4)
+    # Copper is NOT calibrated — it shares the solver's formula — so its
+    # agreement with the pin is an independent check that the shared physics
+    # still lines up.  91.17 W pinned vs ~87.7 W here: 3.8 %, end-winding model.
+    assert m.P_cu_W == pytest.approx(91.166, rel=0.05)
+
+
+def test_surrogate_reads_topology_and_materials_from_the_design():
+    """k_w and Br must come from the machine, not from a retired machine's literal."""
+    from motor_ai_sim.optimization import design_eval as de
+
+    # Star of slots on the real layout, cross-checked against published FSCW
+    # winding factors.  The old literal was 0.933 (the double-layer value).
+    assert de._winding_factor(12, 8, True) == pytest.approx(0.866, abs=1e-3)
+    assert de._winding_factor(12, 14, True) == pytest.approx(0.966, abs=1e-3)
+    assert de._winding_factor(12, 10, True) == pytest.approx(0.966, abs=1e-3)
+    assert abs(de._winding_factor(12, 14, True) - 0.933) > 0.02
+
+    set_request_materials({"assignment": {"magnet": de._ANCHOR_MAGNET},
+                           "materials": {}})
+    try:
+        Br, mu_rec, sigma, src = de._magnet_props()
+    finally:
+        set_request_materials(None)
+    assert src == de._ANCHOR_MAGNET
+    assert Br == pytest.approx(1.19, abs=1e-6)   # the old literal was 1.23
+    assert mu_rec == pytest.approx(1.05, abs=1e-3)
+    assert sigma > 0
+
+
+def test_surrogate_reports_its_own_uncertainty():
+    """An absolute number from this model has to arrive with its error bar."""
+    from motor_ai_sim.optimization import design_eval as de
+
+    m = de.evaluate_design(dict(de._ANCHOR_GEO), dict(de._ANCHOR_WIND), {},
+                           0.0, 60.0, 15000.0)
+    assert m.cal_anchor and "12s14p" in m.cal_anchor
+    assert "WARNING" not in m.cal_anchor          # anchor materials resolved
+    assert m.T_em_uncertainty_pct > 0             # measured, not a sentinel
+    assert m.T_ripple_uncertainty_pct > m.T_em_uncertainty_pct
+    assert m.k_w > 0 and m.Br_T > 0 and m.material_source
+    assert "T_em_uncertainty_pct" in m.to_dict()  # survives into the API payload
 
 
 def test_eval_cache_rejects_an_unconverged_result():

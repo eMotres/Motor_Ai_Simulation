@@ -2264,13 +2264,51 @@ def fem_transient_sliding_band(
     b2 = Basis(mesh_all, _P2E())
     b2_0 = b2.with_element(ElementTriP0())      # P0 for per-element ν interpolate
     N2 = b2.N
-    # Picard early-stop tolerance for the P2 branch.  On a COARSE belt mesh a
-    # handful of BH-knee iron elements plateau above the P1 module tol (1e-3)
-    # — the fixed point of the TORQUE/loss is reached far earlier (measured:
-    # T_avg is flat to <0.3 % between residual 0.03 and 0.007), so chasing
-    # 1e-3 just burns ~30 extra sweeps per frame for no physics change.  A
-    # reachable tol lets warm-started frames early-stop in a handful of sweeps.
-    _PIC_TOL2 = 6e-3
+    # Early-stop tolerance on the ν fixed point for every successive-
+    # substitution loop in this branch: the magnetostatic Picard FALLBACK, the
+    # voltage-drive _v_picard fallback, and the dq phasor initialiser.
+    #
+    # It was 6e-3, six times looser than the retired P1 module's 1e-3, on the
+    # argument that "T_avg is flat to <0.3 % between residual 0.03 and 0.007".
+    # That was true and beside the point: T_avg is an integral of B, while the
+    # RIPPLE and the dB/dt-derived losses are differences of B, and differences
+    # do not inherit an integral's insensitivity.  MEASURED — the pinned
+    # p2_load case (30 mm 12s14p, 60 A, F45SH_120C, 12 steps, 1.4 mm mesh) with
+    # SB_NO_NEWTON=1 so this loop IS the solver on every frame, each row read
+    # against the converged 1e-4 column:
+    #
+    #   tol     T_avg [Nm]   ripple [%]   P_fe [W]   P_cu_ac [W]  sweeps  s
+    #   6e-3    0.419736     1.2349       3.18078    3.42931       41.0   53
+    #   1e-3    0.419978     1.1286       3.17800    3.44071       60.7   72
+    #   3e-4    0.420014     1.1223       3.17917    3.44250       81.5   92
+    #   1e-4    0.420020     1.1268       3.17959    3.44283       95.5  111
+    #
+    #   error vs 1e-4:  T_avg    ripple    P_fe      P_cu_ac
+    #     6e-3          -0.063 %  +9.60 %  +0.037 %  -0.394 %
+    #     1e-3          -0.010 %  +0.16 %  -0.050 %  -0.061 %
+    #     3e-4          -0.002 %  -0.40 %  -0.013 %  -0.009 %
+    #
+    # So 6e-3 costs ~10 % of the TORQUE RIPPLE — the quantity every design run
+    # here is optimised against — and 0.4 % of the AC copper, for 20 saved
+    # sweeps on a path that (since the cold-frame Newton seed below) no longer
+    # runs on a healthy magnetostatic solve at all.  1e-3 buys ripple back to
+    # 0.2 % and every loss to 0.06 %, and still finishes inside the iteration
+    # cap (max 75 sweeps of 100); 3e-4 does NOT — it hits the cap and reports
+    # picard_converged=False, which is the opposite of the point.  Hence 1e-3,
+    # and the number is now measured rather than asserted.
+    _PIC_TOL2 = 1e-3
+    # COLD-FRAME NEWTON SEED.  Frame 0 starts from A = 0, where ∇A = 0 makes
+    # the Newton tangent identically zero — so its first "Newton" step IS the
+    # unsaturated linear solve, a ~30× residual overshoot into deep saturation
+    # that six backtracks cannot walk back (measured at 32 A: it1 accepted
+    # λ=1/32 for rrel 1.00→0.96, it2 exhausted the line search and the frame
+    # fell into the Picard fallback at 5.1e-3 while every warm-started frame
+    # reached 1e-7).  A handful of damped-Picard sweeps — globally convergent,
+    # no tangent to be wrong about — puts the guess inside Newton's basin for
+    # LESS work than the fallback it replaces.  The seed is a starting point
+    # only: the frame is still accepted on the Newton field residual.
+    _PIC_SEED_MAX = 12          # sweeps; the seed does not have to converge
+    _PIC_SEED_TOL = 5e-2        # ...it only has to reach Newton's basin
     nst = int(Tts.shape[1])                      # rotor elems in mesh_all are +nst
     n_all_el = int(mesh_all.t.shape[1])
 
@@ -2651,6 +2689,56 @@ def fem_transient_sliding_band(
             Ti = asm(_tang_nu2, _sb2, gA=gA, c=2.0 * nup)
             T = Ti if T is None else T + Ti
         return T
+
+    def _pic2_sweeps(Pro, free, bff, nu_in, n_max, tol, linear_only=False):
+        """Damped (Irons–Tuck) successive substitution on ν — one linear solve
+        per sweep, ν refreshed from the element-mean |B| it produced.
+
+        Returns (A, ν, res, nit) with ``res`` the RELATIVE ν change of the last
+        sweep; stops early on two consecutive sweeps under ``tol`` (one sweep
+        can dip by luck, two is a fixed point).
+
+        This is the globally convergent method — it has no tangent to be wrong
+        about — which is why it does DOUBLE duty here: it SEEDS the cold
+        frame's Newton (see the frame loop) and it is the fallback if Newton
+        still fails.  It is not, and must not become, the primary solver: it
+        early-stops on a ν residual, which is a far weaker statement than the
+        Newton path's |R(A)|/|f| < 1e-7 on the field itself."""
+        nu = nu_in.copy()
+        A2 = np.zeros(N2); res = 0.0; nit = 0
+        _ok = 0; _rp = None; _om = 0.5           # Irons–Tuck state
+        for it in range(max(1, int(n_max))):
+            nit = it + 1
+            K = _asmK(nu)
+            Kff = (Pro.T @ K @ Pro).tocsr()[free][:, free].tocsc()
+            A2 = _pad2(Pro, free, _solve_ff(Kff, bff))
+            if linear_only or not _sat2:
+                break                            # frozen frame: 1 linear solve
+            Bmag_el = _elemB(A2)
+            _vo = np.concatenate([nu[_ids] for _ids, _ in _sat2])
+            _vn = np.concatenate([
+                1.0 / (MU0 * np.maximum(
+                    _mu_r_from_bh_vec(_c, Bmag_el[_ids]), 1.0))
+                for _ids, _c in _sat2])
+            _rr = _vn - _vo
+            res = float(np.linalg.norm(_rr) / max(np.linalg.norm(_vo), 1e-30))
+            if _rp is not None:
+                _dr = _rr - _rp; _den = float(_dr @ _dr)
+                if _den > 0.0:
+                    _om = float(np.clip(
+                        -_om * float(_rp @ _dr) / _den, 0.05, 1.0))
+            _rp = _rr
+            _vu = _vo + _om * _rr
+            _p0 = 0
+            for _ids, _c in _sat2:
+                nu[_ids] = _vu[_p0:_p0 + _ids.size]; _p0 += _ids.size
+            if res < tol:
+                _ok += 1
+                if _ok >= 2:
+                    break
+            else:
+                _ok = 0
+        return A2, nu, res, nit
 
     # ═══════════════════════════════════════════════════════════════════
     #  VOLTAGE DRIVE on P2 — field ↔ circuit coupled solve
@@ -3182,6 +3270,8 @@ def fem_transient_sliding_band(
     _T2 = []; _psiA = []; _psiB = []; _psiC = []; _tt = []
     _IA = []; _IB = []; _IC = []
     _pic_iters = []; _pic_res_max = 0.0
+    _pic_fallback = []      # frames Newton did not solve (fell back to Picard)
+    _pic_unconv = []        # frames that met NEITHER path's tolerance
     _snap2 = None
     # Animation keyframes: n evenly-spaced frames across the marched window.
     # Settling frames (voltage drive / demag) are stripped from them afterwards
@@ -3311,6 +3401,18 @@ def fem_transient_sliding_band(
                         else np.zeros(N2))
             if _vdrive and k == 0:
                 _nu_start = _nu_ph.copy()
+            elif (not eddy) and _use_newton and not frozen_nu and _sat2:
+                # COLD FRAME → seed Newton with damped-Picard sweeps.  A = 0
+                # has ∇A = 0, i.e. a ZERO Newton tangent, so the first step is
+                # the unsaturated linear solve and the line search cannot walk
+                # the overshoot back (see _PIC_SEED_MAX).  Cheaper than the
+                # fallback it replaces, and the frame is still ACCEPTED on the
+                # Newton field residual, never on the seed's ν residual.
+                _A_start, _nu_start, _sres, _snit = _pic2_sweeps(
+                    Pro, _free2, _bff2, _nu_start,
+                    _PIC_SEED_MAX, _PIC_SEED_TOL)
+                log.debug("P2 frame %d: cold Newton seed, %d picard sweeps, "
+                          "nu-res=%.2e", k, _snit, _sres)
         else:
             _nu_start = _nu_conv2.copy()
             _pd = np.asarray(Pro.multiply(Pro).sum(axis=0)).ravel()
@@ -3421,12 +3523,12 @@ def fem_transient_sliding_band(
                      + Ist['B'] * f_coil2['B'] + Ist['C'] * f_coil2['C'])
                 _bff2 = np.asarray(Pro.T @ f).ravel()[_free2]
             # ── NEWTON–RAPHSON (differential-reluctivity tangent) ─────────────
-            # Residual R(A)=K(ν(elem-mean|B|))·A−f is IDENTICAL to the Picard fixed
-            # point (element-mean ν per iron element), so Newton converges to the
-            # SAME physics — just far fewer sweeps.  Jacobian J=K+T with the
-            # per-element tangent T=2(dν/dB²)(∇A·∇u)(∇A·∇v).  Line-search on |R|
-            # globalises the BH knee; if it collapses, this frame falls back to
-            # damped Picard (never returns garbage).
+            # Residual R(A)=K(ν(|B|))·A−f driven to |R|/|f| < 1e-7 — a statement
+            # about the FIELD, not about how much ν moved on the last sweep.
+            # Jacobian J=K+T with the tangent T=2(dν/dB²)(∇A·∇u)(∇A·∇v).
+            # Line-search on |R| globalises the BH knee; if it collapses, this
+            # frame falls back to damped Picard (never returns garbage) — and
+            # says so, per frame, in picard_fallback_frames.
             if ((not _vdrive) and (not eddy) and _use_newton
                     and not frozen_nu and _sat2):
                 # POINTWISE ν(|B|²) at quadrature points (_Kpw, hoisted above
@@ -3434,8 +3536,26 @@ def fem_transient_sliding_band(
                 # SAME nonlinearity, giving a TRUE (quadratic) Newton step.
                 # (An element-mean ν residual with a pointwise tangent is
                 # inconsistent → no acceleration.)  For P2, B is linear per
-                # element, so pointwise ν is also the more accurate model; it
-                # is validated to match the element-mean Picard fixed point below.
+                # element, so pointwise ν is also the more accurate model.
+                #
+                # It is a DIFFERENT model from the element-mean ν the Picard
+                # fallback iterates, not merely a faster route to the same
+                # answer — an earlier version of this comment claimed the two
+                # fixed points coincide, and they do not.  Measured on the
+                # pinned p2_load case (60 A, 12 steps), Newton at 1e-7 against
+                # the same case run with SB_NO_NEWTON=1 and the Picard driven
+                # to 1e-4, i.e. both converged:
+                #
+                #             T_avg [Nm]  ripple [%]  P_fe [W]  P_cu_ac [W]
+                #   pointwise   0.417401     0.535     3.1226      3.4960
+                #   elem-mean   0.420020     1.127     3.1796      3.4428
+                #
+                # The gap (0.6 % of torque, 2× of ripple) is the element-mean
+                # ν smearing the BH knee across an element, which on a coarse
+                # belt mesh is exactly where the ripple lives.  Pointwise is
+                # the primary path because it is the better model; the Picard
+                # is a fallback for when Newton cannot start, and a run that
+                # used it is flagged frame by frame in the result dict.
                 def _rfree_pw(Avec, K):
                     return np.asarray(Pro.T @ (K @ Avec - f)).ravel()[_free2]
 
@@ -3486,41 +3606,9 @@ def fem_transient_sliding_band(
                     _n_pic2 = max(nonlinear_iterations, 40) if k == 0 else 1
                 else:
                     _n_pic2 = max(nonlinear_iterations, 70 if k == 0 else 45)
-                A2 = np.zeros(N2)
-                _res = 0.0; _nit = 0
-                _pic_ok = 0; _pic_r_prev = None; _pic_om = 0.5   # Irons–Tuck state
-                for it in range(_n_pic2):
-                    _nit = it + 1
-                    K = _asmK(nu_all2)
-                    Kff = (Pro.T @ K @ Pro).tocsr()[_free2][:, _free2].tocsc()
-                    _xf2 = _solve_ff(Kff, _bff2)
-                    _xred2 = np.zeros(Pro.shape[1]); _xred2[_free2] = _xf2
-                    A2 = Pro @ _xred2
-                    if (frozen_nu and k > 0) or not _sat2:
-                        break                      # frozen frame: 1 linear solve
-                    Bmag_el = _elemB(A2)
-                    _vo = np.concatenate([nu_all2[_ids] for _ids, _ in _sat2])
-                    _vn = np.concatenate([
-                        1.0 / (MU0 * np.maximum(_mu_r_from_bh_vec(_c, Bmag_el[_ids]), 1.0))
-                        for _ids, _c in _sat2])
-                    _rr = _vn - _vo
-                    _res = float(np.linalg.norm(_rr) / max(np.linalg.norm(_vo), 1e-30))
-                    if _pic_r_prev is not None:
-                        _dr = _rr - _pic_r_prev; _den = float(_dr @ _dr)
-                        if _den > 0.0:
-                            _pic_om = float(np.clip(
-                                -_pic_om * float(_pic_r_prev @ _dr) / _den, 0.05, 1.0))
-                    _pic_r_prev = _rr
-                    _vu = _vo + _pic_om * _rr
-                    _p0 = 0
-                    for _ids, _c in _sat2:
-                        nu_all2[_ids] = _vu[_p0:_p0 + _ids.size]; _p0 += _ids.size
-                    if _res < _PIC_TOL2:
-                        _pic_ok += 1
-                        if _pic_ok >= 2:
-                            break
-                    else:
-                        _pic_ok = 0
+                A2, nu_all2, _res, _nit = _pic2_sweeps(
+                    Pro, _free2, _bff2, nu_all2, _n_pic2, _PIC_TOL2,
+                    linear_only=bool(frozen_nu and k > 0))
             # ── Irreversible demagnetisation ─────────────────────────────────
             # HERE, after the frame's nonlinear solve has converged by EITHER
             # path — the pointwise Newton (primary) or the damped Picard
@@ -3663,6 +3751,23 @@ def fem_transient_sliding_band(
         if k < 0:
             continue          # eddy settling frame: solved, not reported
         _pic_iters.append(_nit); _pic_res_max = max(_pic_res_max, _res)
+        # HONEST per-frame convergence bookkeeping.  The two paths measure
+        # DIFFERENT residuals — Newton the field residual |R(A)|/|f| against
+        # 1e-7, the Picard fallback a ν fixed-point change against _PIC_TOL2 —
+        # so a frame is judged against the tolerance of the path that actually
+        # solved it, and the ones that failed are listed by INDEX.  A single
+        # scalar max over two different metrics cannot say which frame was
+        # unconverged, and an unconverged frame inside a reported window is
+        # not an honest average.
+        if not _newton_ok:
+            _pic_fallback.append(k)
+            if not (_res < _PIC_TOL2):
+                _pic_unconv.append(k)
+        # Per-frame convergence trace.  picard_resid_max alone says only THAT
+        # some frame was the worst; when it lands near the tol you need to know
+        # WHICH frame and by WHICH path, so log it (DEBUG — one line per frame).
+        log.debug("P2 frame %d: %s, %d its, res=%.3e",
+                  k, "newton" if _newton_ok else "picard", _nit, _res)
         Tq = _arkkio_torque_p2(mesh_all, A2, b2, p.r_rotor_out,
                                p.r_stator_in, p.stack_length) * NS
         _T2.append(Tq)
@@ -4107,8 +4212,16 @@ def fem_transient_sliding_band(
                   * float(n_parallel) if _IA else 0.0)
     _ang = [(k / n_total) * period_mech * n_periods for k in range(n_total)]
     log.info("P2 belt transient done: %d frames in %.1f s, T_avg=%.5f Nm, "
-             "ripple_raw=%.2f%%, picard_max_res=%.2e", n_total,
-             _t.time() - t0, Tavg, Trip_raw, _pic_res_max)
+             "ripple_raw=%.2f%%, max nonlinear resid=%.2e, picard-fallback "
+             "frames=%s", n_total, _t.time() - t0, Tavg, Trip_raw,
+             _pic_res_max, _pic_fallback or "none")
+    if _pic_unconv:
+        # Loud, because it means the reported window contains a frame whose
+        # field never met a convergence test — the averages below are then an
+        # average over one unconverged sample.
+        log.warning("P2: %d frame(s) NOT converged (%s) — max resid %.2e "
+                    "against tol %.1e", len(_pic_unconv), _pic_unconv,
+                    _pic_res_max, _PIC_TOL2)
     # Demag map + per-magnet report.
     _dcoef2 = _dfield2 = None
     _drep2 = []
@@ -4171,9 +4284,20 @@ def fem_transient_sliding_band(
         "picard_iters_mean": (round(float(np.mean(_pic_iters)), 1)
                               if _pic_iters else 0.0),
         "picard_iters_max": (int(max(_pic_iters)) if _pic_iters else 0),
-        "picard_resid_max": round(float(_pic_res_max), 6),
+        # 3 significant figures, not 6 DECIMALS: a Newton-solved window sits at
+        # ~1e-7 and round(...,6) reported that as a flat 0.0 — a convergence
+        # gauge that cannot show convergence.
+        "picard_resid_max": float("%.3g" % _pic_res_max),
         "picard_tol": float(_PIC_TOL2),
-        "picard_converged": bool(_pic_res_max < _PIC_TOL2),
+        # True only if EVERY reported frame met the tolerance of the path that
+        # solved it (Newton 1e-7 on the field residual, Picard _PIC_TOL2 on the
+        # ν fixed point) — see the per-frame bookkeeping in the frame loop.
+        "picard_converged": not _pic_unconv,
+        "picard_unconverged_frames": list(_pic_unconv),
+        # Frames the Newton path did not solve.  Not an error by itself (the
+        # fallback has its own tolerance), but it IS the thing to look at when
+        # one frame's numbers sit apart from its neighbours'.
+        "picard_fallback_frames": list(_pic_fallback),
         "coil_temp_C": float(coil_temp_c),
         "end_winding_factor": float(_k_end_used),
         # Drive mode: "current" (imposed sinusoidal I) or "voltage" (imposed

@@ -43,6 +43,13 @@ export interface TransientSummary {
   torque_per_mass_Nm_kg: number;
   power_per_mass_W_kg:   number;
   loss_density_W_kg:     number;
+  // Nonlinear-solve honesty: false = at least one frame of the reported window
+  // was accepted without meeting its solver's convergence test, so everything
+  // above is an average that includes an unconverged field.
+  nonlinear_converged?:  boolean;
+  nonlinear_resid_max?:  number;
+  nonlinear_tol?:        number;
+  nonlinear_unconverged_frames?: number[];
 }
 
 interface Props {
@@ -157,6 +164,21 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
               + `${dG > 0.05 && Number.isFinite(liveG as number) ? `, γ = ${fmt(liveG as number, 0)}°` : ''}. `
               + 'Run Simulation to recompute at the current point.'} placement="top">
               <span style={{ marginLeft: 6, cursor: 'help' }}>⚠</span>
+            </Tooltip>
+          )}
+          {s.nonlinear_converged === false && (
+            <Tooltip title={
+              'Nonlinear solve did NOT converge on '
+              + `${s.nonlinear_unconverged_frames?.length
+                    ? `frame(s) ${s.nonlinear_unconverged_frames.join(', ')}`
+                    : 'at least one frame'}`
+              + ` — worst residual ${(s.nonlinear_resid_max ?? 0).toExponential(2)}`
+              + ` against tol ${(s.nonlinear_tol ?? 0).toExponential(0)}. `
+              + 'Every number on this card is an average that includes that frame, '
+              + 'so treat it as indicative, not as a result. Torque ripple and the '
+              + 'dB/dt losses (core, AC copper) are the most affected.'} placement="top">
+              <span style={{ marginLeft: 6, color: '#f87171', cursor: 'help',
+                fontWeight: 700 }}>⚠ not converged</span>
             </Tooltip>
           )}
           {fromSweep && (

@@ -3982,6 +3982,16 @@ def _build_transient_summary(
         "P_stranded_W": round(_Pcu, 1),            # copper
         "P_solid_W":    round(_Pmag + _Pshaft, 1), # magnet + shaft eddy
         "efficiency":   round(_eff, 4),
+        # ── nonlinear-solve honesty ──────────────────────────────────────
+        # Every frame of the reported window has to have met its solver's
+        # convergence test; if one did not, these numbers are an average over
+        # a field that was never converged, and the card says so instead of
+        # leaving it in a log line nobody reads.
+        "nonlinear_converged": bool(sbres.get("picard_converged", True)),
+        "nonlinear_resid_max": float(sbres.get("picard_resid_max", 0.0) or 0.0),
+        "nonlinear_tol": float(sbres.get("picard_tol", 0.0) or 0.0),
+        "nonlinear_unconverged_frames":
+            list(sbres.get("picard_unconverged_frames") or []),
         "coil_temp_C":  round(float(sbres.get("coil_temp_C", coil_temp_c)), 1),
         "end_winding_factor": round(float(sbres.get("end_winding_factor", 0.0)), 2),
         "mass_total_kg": round(_m_tot, 3),

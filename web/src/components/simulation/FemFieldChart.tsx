@@ -358,63 +358,83 @@ const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode; logLoss: boole
       // density spans orders of magnitude (copper ≫ iron ≫ air-gap), so the
       // default is a LOG map (logLoss) — every component stays legible; a
       // linear map matches Ansys's default look but buries the iron.
-      // SMOOTH, nodal-averaged loss density (like Ansys) — the same per-vertex
-      // gradient trick the |B| view uses.  loss is constant per P1 element, so a
-      // flat per-triangle fill looks faceted; we area-weight each element's loss
-      // onto its 3 nodes and colour PER-VERTEX so Three.js interpolates a smooth
-      // gradient.  (Minor softening across material edges; the part outlines
-      // drawn on top keep the boundaries crisp.)
+      // SMOOTH, nodal-averaged loss density — but averaged ONLY WITHIN one
+      // material class, never across a boundary.  The old shared-vertex
+      // average leaked copper's ~1e7 W/m³ onto slot-air vertices (a boundary
+      // vertex read half the coil density), and on the 4-decade log scale
+      // half a decade is visually the same colour — the whole slot air
+      // rendered "as lossy as the coils", which is not physics.  Ansys keeps
+      // boundaries crisp for the same reason: loss density is discontinuous
+      // at material edges by nature.  So: vertices are duplicated per
+      // (vertex, material-class) and each triangle corner reads the average
+      // of ITS class only.  Air/gap/band/shaft carry exactly zero and render
+      // flat at the bottom of the scale.
       const ld = payload.loss_density_per_tri ?? [];
       const dom = domain_per_tri;
       const nTri = triangles.length;
-      const nV = vertices.length;
-      const lSum = new Float64Array(nV);
-      const wSum = new Float64Array(nV);
+      // material class: 0 air-like (zero loss), 1 stator iron, 2 rotor iron,
+      // 3 magnets, 4 copper
+      const clsOf = (d: number): number => {
+        if (d === 2 || d >= 200) return 4;                   // coils
+        if (d === 4 || d === 44 || (d >= 100 && d < 200)) return 3;  // magnets
+        if (d === 1) return 1;                               // stator core
+        if (d === 5) return 2;                               // rotor core
+        return 0;                                            // air/gap/band/shaft
+      };
+      const lSum = new Map<number, number>();
+      const wSum = new Map<number, number>();
       const posv: number[] = [];
       for (let ti = 0; ti < nTri; ti++) {
         if (dom[ti] === DOM_OUTER) continue;
         const v = ti < ld.length ? ld[ti] : 0;
         if (v > 0) posv.push(v);
+        const cls = clsOf(dom[ti]);
         const [ia, ib, ic] = triangles[ti];
         const ax = vertices[ia][0], ay = vertices[ia][1];
         const bx = vertices[ib][0], by = vertices[ib][1];
         const cx = vertices[ic][0], cy = vertices[ic][1];
         const area = Math.abs((bx - ax) * (cy - ay) - (cx - ax) * (by - ay)) * 0.5 || 1e-12;
-        lSum[ia] += v * area; wSum[ia] += area;
-        lSum[ib] += v * area; wSum[ib] += area;
-        lSum[ic] += v * area; wSum[ic] += area;
+        for (const iv of [ia, ib, ic]) {
+          const k = iv * 8 + cls;
+          lSum.set(k, (lSum.get(k) ?? 0) + v * area);
+          wSum.set(k, (wSum.get(k) ?? 0) + area);
+        }
       }
       const vmax = Math.max(pctl(posv, 99.5), 1e-3);
       const vminPos = Math.max(pctl(posv, 5), vmax * 1e-4);   // log-floor
       const lgMax = Math.log10(vmax), lgMin = Math.log10(vminPos);
-      const keep = triangles.map((_, ti) => dom[ti] !== DOM_OUTER);
-      const positions = new Float32Array(nV * 3);
-      const colors    = new Float32Array(nV * 3);
-      for (let i = 0; i < nV; i++) {
-        positions[3 * i]     = vertices[i][0] * S;
-        positions[3 * i + 1] = vertices[i][1] * S;
-        positions[3 * i + 2] = 0;
-        const v = wSum[i] > 0 ? lSum[i] / wSum[i] : 0;
-        let t: number;
-        if (logLoss) {
-          t = v <= 0 ? 0 : (Math.log10(v) - lgMin) / Math.max(lgMax - lgMin, 1e-9);
-        } else {
-          t = v / vmax;
+      // non-indexed: 3 corners per kept triangle, each coloured by the nodal
+      // average of its OWN material class — boundaries stay discontinuous.
+      const kept: number[] = [];
+      for (let ti = 0; ti < nTri; ti++) if (dom[ti] !== DOM_OUTER) kept.push(ti);
+      const positions = new Float32Array(kept.length * 9);
+      const colors    = new Float32Array(kept.length * 9);
+      let w = 0;
+      for (const ti of kept) {
+        const cls = clsOf(dom[ti]);
+        for (const iv of triangles[ti]) {
+          positions[3 * w]     = vertices[iv][0] * S;
+          positions[3 * w + 1] = vertices[iv][1] * S;
+          positions[3 * w + 2] = 0;
+          const k = iv * 8 + cls;
+          const ws = wSum.get(k) ?? 0;
+          const v = ws > 0 ? (lSum.get(k) ?? 0) / ws : 0;
+          let t: number;
+          if (logLoss) {
+            t = v <= 0 ? 0 : (Math.log10(v) - lgMin) / Math.max(lgMax - lgMin, 1e-9);
+          } else {
+            t = v / vmax;
+          }
+          const [rr, gg, bb] = jet01(Math.max(0, Math.min(1, t)));
+          colors[3 * w]     = rr / 255;
+          colors[3 * w + 1] = gg / 255;
+          colors[3 * w + 2] = bb / 255;
+          w++;
         }
-        const [rr, gg, bb] = jet01(Math.max(0, Math.min(1, t)));
-        colors[3 * i]     = rr / 255;
-        colors[3 * i + 1] = gg / 255;
-        colors[3 * i + 2] = bb / 255;
-      }
-      const indexArr: number[] = [];
-      for (let i = 0; i < nTri; i++) {
-        if (!keep[i]) continue;
-        indexArr.push(triangles[i][0], triangles[i][1], triangles[i][2]);
       }
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', new THREE.BufferAttribute(positions, 3));
       g.setAttribute('color',    new THREE.BufferAttribute(colors, 3));
-      g.setIndex(new THREE.BufferAttribute(new Uint32Array(indexArr), 1));
       (g as any).userData = { loss_vmax: vmax, loss_vmin: vminPos };
       return g;
     }

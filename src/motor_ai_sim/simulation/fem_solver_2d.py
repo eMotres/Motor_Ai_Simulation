@@ -1330,29 +1330,6 @@ def solve_magnetostatics_p2(mesh, cell_tags: np.ndarray,
 
 
 
-class _SignedUF:
-    """Signed union-find for combining anti-periodic + slip master-slave
-    constraints.  union(a,b,s) means dof_a == s·dof_b; find returns (root, sign)."""
-    __slots__ = ("par", "sgn")
-
-    def __init__(self, n):
-        self.par = list(range(n)); self.sgn = [1] * n
-
-    def find(self, x):
-        p = self.par[x]
-        if p == x:
-            return x, 1
-        r, s = self.find(p)
-        self.par[x] = r; self.sgn[x] *= s
-        return r, self.sgn[x]
-
-    def union(self, a, b, sign):
-        ra, sa = self.find(a); rb, sb = self.find(b)
-        if ra == rb:
-            return
-        self.par[ra] = rb; self.sgn[ra] = sign * sa * sb
-
-
 # Copper electrical properties (annealed Cu, IEC 60028) — see field_ops.
 
 # Conductivities of the SOLID (non-laminated) conductor regions for the
@@ -2278,6 +2255,9 @@ def fem_transient_sliding_band(
         P2Nonlinear as _P2Nonlinear, stiff_nu2 as _stiff_nu2,
     )
     from motor_ai_sim.simulation.p2_drive import P2Drive as _P2Drive
+    from motor_ai_sim.simulation.p2_projection import (
+        SlipProjection as _SlipProjection,
+    )
     # ONE persistent MKL PARDISO solver for the whole run: it caches the
     # symbolic factorization and reuses it across the same-pattern Picard
     # sweeps of a frame (re-analysing only when the pattern changes — new
@@ -2344,14 +2324,6 @@ def fem_transient_sliding_band(
     # ── vertex & edge dof maps ───────────────────────────────────────────
     vdof = b2.nodal_dofs[0]                       # global vertex id -> P2 dof
     fdof = b2.facet_dofs[0]                       # facet (edge) id  -> P2 dof
-    _fac = mesh_all.facets
-    _fa = np.minimum(_fac[0], _fac[1]); _fb = np.maximum(_fac[0], _fac[1])
-    _emap = {(int(_fa[i]), int(_fb[i])): i for i in range(_fac.shape[1])}
-
-    def _edge_dof(va, vb):
-        fi = _emap.get((va, vb) if va < vb else (vb, va))
-        return None if fi is None else int(fdof[fi])
-
     # ── P2 sources on the stitched mesh ──────────────────────────────────
     # magnet: per-element M over ALL elements (rotor block offset by nst)
     _mx_all = np.zeros(n_all_el); _my_all = np.zeros(n_all_el)
@@ -2416,40 +2388,19 @@ def fem_transient_sliding_band(
         lambda x: np.hypot(x[0], x[1]) >= r_all.max() - 5e-4)
     _D2_ids = np.asarray(b2.get_dofs(facets=_out_fac2).flatten(), int)
 
-    # ── per-frame P2 projection: weld ring + (for sector) radial-cut, both
-    #    VERTICES and EDGE midpoints, with the anti-periodic sign ──────────
-    # Ring edges are between angularly-consecutive ring nodes: for the FULL
-    # ring the ring is CLOSED (Nring edges, kk→(kk+1)%Nring); for a SECTOR
-    # wedge it is OPEN (Nring−1 edges, kk→kk+1).  rring/sring are index-
-    # aligned (both sorted by grid slot 0..Nring−1).
-    if _full_ring:
-        _re_pairs = [(kk, (kk + 1) % Nring) for kk in range(Nring)]
-    else:
-        _re_pairs = [(kk, kk + 1) for kk in range(Nring - 1)]
-    # rotor ring-edge midpoint dof for each segment (constant across frames)
-    _re_dofs = [_edge_dof(int(rring[a]) + nsn, int(rring[b]) + nsn)
-                for a, b in _re_pairs]
-    _n_redge = int(sum(x is not None for x in _re_dofs))
-
-    # Anti-periodic RADIAL-CUT welds (sector only) — VERTICES and the cut-
-    # boundary EDGE midpoints.  Mn/Sn are matched master/slave cut vertices
-    # sorted by radius, so consecutive entries (i, i+1) delimit a cut edge on
-    # each side; the slave DOF = _bc_sign · master DOF, same as P1's vertex BC.
-    _cut_v = []          # (slave_dof, master_dof, sign) for vertices
-    _cut_e = []          # (slave_edge_dof, master_edge_dof, sign) for edges
-    if not _full_ring and Mn.size:
-        for i in range(Mn.size):
-            _cut_v.append((int(vdof[int(Sn[i])]), int(vdof[int(Mn[i])]),
-                           float(_bc_sign)))
-        for i in range(Mn.size - 1):
-            em = _edge_dof(int(Mn[i]), int(Mn[i + 1]))
-            es = _edge_dof(int(Sn[i]), int(Sn[i + 1]))
-            if em is not None and es is not None:
-                _cut_e.append((int(es), int(em), float(_bc_sign)))
+    # The slip pairing and the per-frame projection Pro live in
+    # simulation/p2_projection.py: the rotor moves in exactly one place in this
+    # solver, and a sign or an off-by-one in the weld is indistinguishable
+    # downstream from a physics error.
+    _proj = _SlipProjection(
+        n_dof=N2, facets=mesh_all.facets, vdof=vdof, fdof=fdof, rring=rring,
+        sring=sring, nsn=nsn, n_ring=Nring, full_ring=_full_ring,
+        bc_sign=_bc_sign, Mn=Mn, Sn=Sn, dirichlet_dofs=_D2_ids)
     log.info("P2 belt: N2=%d dofs, %s, ring=%d nodes, %d/%d ring-edge + "
              "%d cut-vertex + %d cut-edge midpoints paired",
              N2, "full ring" if _full_ring else "sector",
-             Nring, _n_redge, len(_re_pairs), len(_cut_v), len(_cut_e))
+             Nring, _proj.n_redge, _proj.n_re_pairs, _proj.n_cut_v,
+             _proj.n_cut_e)
 
     # ═══════════════════════════════════════════════════════════════════
     #  COUPLED EDDY-CURRENT DATA (σ·∂A/∂t) — SOLID CONDUCTORS, P2
@@ -2571,53 +2522,6 @@ def fem_transient_sliding_band(
         _ed_uloc = [_ed_loc_by_tag[int(_c["tag"])] for _c in _ed_con]
         _ed_gmask = {_k: (_ed_key_e == _k) for _k in ("cu", "mag", "shaft")}
 
-    def _ring_map(m_shift):
-        # rotor ring node kk -> (stator node j, sign).  Full ring: periodic
-        # mod Nring, sign +1.  Sector: open wedge of Nring nodes, wrap period
-        # Nring−1 with a _bc_sign flip per wrap (identical to the P1 loop).
-        if _full_ring:
-            j = (np.arange(Nring) + int(m_shift)) % Nring
-            return j.astype(int), np.ones(Nring)
-        j = np.empty(Nring, int); sg = np.ones(Nring)
-        for kk in range(Nring):
-            jj = kk + int(m_shift); s = 1.0
-            while jj > Nring - 1: jj -= (Nring - 1); s *= _bc_sign
-            while jj < 0:         jj += (Nring - 1); s *= _bc_sign
-            j[kk] = jj; sg[kk] = s
-        return j, sg
-
-    def _build_Pro2(m_shift):
-        suf = _SignedUF(N2)
-        # radial-cut anti-periodic welds (sector) — m-independent
-        for sd, md, sgn in _cut_v:
-            suf.union(sd, md, sgn)
-        for sd, md, sgn in _cut_e:
-            suf.union(sd, md, sgn)
-        # slip-ring welds (vertices + edge midpoints), rotor shifted by m
-        j, sg = _ring_map(m_shift)
-        for kk in range(Nring):
-            suf.union(int(vdof[int(rring[kk]) + nsn]),
-                      int(vdof[int(sring[j[kk]])]), float(sg[kk]))
-        for e, (a, b) in enumerate(_re_pairs):
-            re = _re_dofs[e]
-            if re is None:
-                continue
-            # the rotor edge (a,b) maps to the stator edge (j[a], j[b]); it is
-            # a real mesh edge only when the two endpoints stay angularly
-            # consecutive with the SAME sign (i.e. no wrap between them).
-            if sg[a] != sg[b]:
-                continue
-            se = _edge_dof(int(sring[j[a]]), int(sring[j[b]]))
-            if se is not None:
-                suf.union(int(re), int(se), float(sg[a]))
-        roots = [suf.find(i) for i in range(N2)]
-        rid = np.array([r for r, _ in roots])
-        rsg = np.array([s for _, s in roots], float)
-        uniq, inv = np.unique(rid, return_inverse=True)
-        Pro = _coo((rsg, (np.arange(N2), inv)),
-                   shape=(N2, uniq.size)).tocsr()
-        return Pro, np.unique(inv[_D2_ids])
-
     # ── P2 flux linkage (EXACT area-average per stator coil element) ─────
     # A P2 field's area average over a triangle is the mean of its three
     # EDGE-MIDPOINT dofs, NOT the mean of its vertex dofs: the quadratic
@@ -2711,7 +2615,7 @@ def fem_transient_sliding_band(
         # periodic orbit.  Lq changes ~5× between i=0 and full load, so an
         # i=0 estimate would leave a large DC for the settling to grind off.
         import math as _m
-        _Pro0v, _out0v = _build_Pro2(0)
+        _Pro0v, _out0v = _proj.build(0)
         _free0v = np.setdiff1d(np.arange(_Pro0v.shape[1]), _out0v)
         _Pt0 = lambda v: np.asarray(_Pro0v.T @ v).ravel()[_free0v]  # noqa: E731
         _RHS0 = np.column_stack([_Pt0(f_mag2), _Pt0(_Pa2), _Pt0(_Pb2)])
@@ -2890,7 +2794,7 @@ def fem_transient_sliding_band(
         f = f_mag2 if eddy else (f_mag2 + Ist['A'] * f_coil2['A']
                                  + Ist['B'] * f_coil2['B']
                                  + Ist['C'] * f_coil2['C'])
-        Pro, outer_red = _build_Pro2(m_shift)
+        Pro, outer_red = _proj.build(m_shift)
         # WARM-START ν across frames (perf): only frame 0 converges from the
         # unsaturated base (~60–70 sweeps cold); every later frame starts from
         # the PREVIOUS frame's CONVERGED ν and reaches the fixed point in ~40

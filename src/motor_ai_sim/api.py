@@ -5,8 +5,25 @@ Usage:
     python -m motor_ai_sim.api
 """
 
+import logging
 import re
 from pathlib import Path
+
+# ── the solver's own log has to REACH the backend log ─────────────────────
+# uvicorn configures its `uvicorn.*` loggers and leaves the root logger alone
+# at WARNING, so everything this project logs at INFO — the torque method, the
+# eddy-solve loss split, the loss map's volume-integral cross-check, why a
+# field-view snapshot probe missed — was written and then dropped on the floor.
+# Every one of those lines exists to be READ when a number looks wrong; a
+# cross-check nobody can see is not a cross-check.
+#
+# skfem is pinned back to WARNING: it logs two INFO lines per assembly, which
+# is thousands of lines per transient and would bury exactly what this is for.
+if not logging.getLogger().handlers:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logging.getLogger("skfem").setLevel(logging.WARNING)
 
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware

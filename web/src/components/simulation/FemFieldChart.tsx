@@ -32,96 +32,16 @@ import type { FemPayload } from './fem-types';
 import { tileFullRing } from './fem-types';
 export type { FemPayload } from './fem-types';
 
-// ── colour maps ───────────────────────────────────────────────────────────
-// Viridis — sequential, no near-white midpoint, reads cleanly on dark canvas.
-function viridis01(t: number): [number, number, number] {
-  const c0 = [68,  1,   84];
-  const c1 = [59,  82,  139];
-  const c2 = [33,  145, 140];
-  const c3 = [94,  201, 98];
-  const c4 = [253, 231, 37];
-  const pts = [c0, c1, c2, c3, c4];
-  const s = Math.max(0, Math.min(1, t)) * (pts.length - 1);
-  const i = Math.min(Math.floor(s), pts.length - 2);
-  const f = s - i;
-  return [
-    pts[i][0] + f * (pts[i + 1][0] - pts[i][0]),
-    pts[i][1] + f * (pts[i + 1][1] - pts[i][1]),
-    pts[i][2] + f * (pts[i + 1][2] - pts[i][2]),
-  ];
-}
-// Classic Ansys-style rainbow LUT (blue → cyan → green → yellow → red).
-function jet01(t: number): [number, number, number] {
-  const x = Math.max(0, Math.min(1, t));
-  const r = Math.max(0, Math.min(1, 1.5 - Math.abs(4 * x - 3))) * 255;
-  const g = Math.max(0, Math.min(1, 1.5 - Math.abs(4 * x - 2))) * 255;
-  const b = Math.max(0, Math.min(1, 1.5 - Math.abs(4 * x - 1))) * 255;
-  return [r, g, b];
-}
+// ── ONE renderer for every view ───────────────────────────────────────────
+// Geometry, colour ramp, banding and the legend's range all come out of
+// ./fieldView — see the header there for why they had to stop being seven
+// hand-written copies.  Nothing in this file may build a field colour of its
+// own: that is exactly how the views drifted apart.
+import {
+  buildFieldView, bandColor, BAND_VERT, BAND_FRAG, N_BANDS,
+  type FieldView, type FieldScale,
+} from './fieldView';
 
-// Discrete-banded rainbow for the LEGEND (and anything drawn on the CPU).
-// The field fill itself bands in the fragment shader below — see BAND_FRAG.
-function bandLut(t: number, n: number): [number, number, number] {
-  return jet01((Math.floor(Math.max(0, Math.min(1, t)) * n) + 0.5) / n);
-}
-
-// Ansys-style banded fill.  The band edges must be evaluated PER PIXEL from the
-// interpolated SCALAR — quantising at the vertices and letting the GPU blend the
-// resulting RGB mixes neighbouring band colours and turns the field into
-// blotches.  So the shader carries the scalar through and quantises in the
-// fragment stage, which puts every band edge exactly on an iso-line.
-const BAND_VERT = `
-  attribute float aVal;
-  varying float vVal;
-  void main() {
-    vVal = aVal;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-  }
-`;
-const BAND_FRAG = `
-  uniform float uBands;          // 0 = continuous
-  varying float vVal;
-  vec3 jet(float x) {
-    x = clamp(x, 0.0, 1.0);
-    return vec3(clamp(1.5 - abs(4.0 * x - 3.0), 0.0, 1.0),
-                clamp(1.5 - abs(4.0 * x - 2.0), 0.0, 1.0),
-                clamp(1.5 - abs(4.0 * x - 1.0), 0.0, 1.0));
-  }
-  void main() {
-    float t = clamp(vVal, 0.0, 1.0);
-    if (uBands > 0.5) t = (floor(t * uBands) + 0.5) / uBands;   // band centre
-    gl_FragColor = vec4(jet(t), 1.0);
-  }
-`;
-// Bands per mode — mirrors what the legend draws.
-const MODE_BANDS: Record<string, number> = { Az: 20, Bmag: 13, Demag: 11 };
-
-/**
- * Colour range for the Demag map: [worst, best] remaining Br over the magnet
- * triangles only. Auto-ranged at BOTH ends — with the top pinned at 100 % a
- * magnet that sits between 15 % and 31 % gets the bottom sixth of the palette
- * and reads as one flat colour. Shared by the fill and the legend so the two
- * cannot drift apart. Degenerate spans are widened around their centre.
- */
-function demagRange(
-  dc: number[] | undefined, dom: number[] | Int32Array,
-  nTri: number, magN: number, magS: number,
-): [number, number] {
-  let lo = Infinity, hi = -Infinity;
-  for (let i = 0; i < nTri; i++) {
-    if (dom[i] !== magN && dom[i] !== magS) continue;
-    const cc = dc ? Math.max(0, Math.min(1, dc[i])) : 1;
-    if (cc < lo) lo = cc;
-    if (cc > hi) hi = cc;
-  }
-  if (!isFinite(lo) || !isFinite(hi)) return [0, 1];
-  if (hi - lo < 0.02) {                       // uniform map: widen, stay in [0,1]
-    const mid = 0.5 * (lo + hi);
-    lo = Math.max(0, mid - 0.01);
-    hi = Math.min(1, Math.max(lo + 0.02, mid + 0.01));
-  }
-  return [lo, hi];
-}
 // ── helpers: read mesh params persisted by MeshPanel ──────────────────────
 function readMeshSetting<T>(key: string, def: T): T {
   try {
@@ -151,26 +71,6 @@ type FieldMode = 'Az' | 'Bmag' | 'J' | 'Jeddy' | 'Loss' | 'Demag' | 'Temp';
 // here — and the header then says so.  Loss otherwise falls back to the
 // single-frame analytic density (fast, like |B|).
 const EDDY_MODES = new Set<FieldMode>(['Jeddy']);
-
-// Diverging blue→green→red colormap for signed J_z (Ansys "J" style:
-// red = +max, blue = −max, green = 0).
-function jetSigned(t: number): [number, number, number] {
-  // t ∈ [-1, +1].  Build 11 stops mirroring the Ansys J legend:
-  //   −1 .. −0.6 blue family,   −0.6 .. −0.2 cyan,   −0.2 .. +0.2 green,
-  //   +0.2 .. +0.6 yellow,      +0.6 .. +1 red.
-  const u = Math.max(-1, Math.min(1, t));
-  if (u <= -0.6) return [0, 0, 255];                // dark blue
-  if (u <= -0.4) return [0, 80, 255];               // blue
-  if (u <= -0.2) return [0, 200, 230];              // cyan
-  if (u <= -0.05) return [80, 230, 80];             // bright green
-  if (u <= +0.05) return [40, 200, 40];             // green (zero)
-  if (u <= +0.2) return [220, 240, 30];             // yellow-green
-  if (u <= +0.4) return [255, 220, 0];              // yellow
-  if (u <= +0.6) return [255, 120, 0];              // orange
-  return [255, 0, 0];                                // red
-}
-
-const N_BANDS = 20;           // # of discrete colour bands / iso-A levels
 
 /** Extract iso-A_z contour line segments via per-triangle linear
  *  interpolation (marching-segments on tris).
@@ -231,418 +131,35 @@ function buildIsoLines(
   return new Float32Array(pos);
 }
 
-const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode; logLoss: boolean; eqTemp?: boolean; showFlux?: boolean }>
-  = ({ payload, mode, logLoss, eqTemp = true, showFlux }) => {
-  // Fill geometry — per-vertex Ansys-style banded rainbow for A_z, or
-  // per-triangle flat jet for |B|.  We SKIP DOM_OUTER (8) triangles so
-  // the outer far-field air ring (visible only for the BC) doesn't eat
-  // most of the canvas with a uniform near-zero band.
-  const fillGeo = useMemo(() => {
-    const { vertices, triangles, domain_per_tri,
-            A_z_per_node, A_z_min, A_z_max,
-            Bmag_per_tri, B_mag_max } = payload;
-    const S = 1000;
-    const DOM_OUTER = 8;
+const FieldMesh: React.FC<{
+  payload: FemPayload; mode: FieldMode; view: FieldView; showFlux?: boolean;
+}> = ({ payload, mode, view, showFlux }) => {
+  // The fill geometry + its scale are built ONCE, by the parent, through
+  // fieldView.buildFieldView — the same object feeds this mesh and the colour
+  // bar, so the legend cannot describe a range the picture does not use.  Every
+  // mode goes through it: nodal smoothing within material class, ~11 bands
+  // quantised per pixel, iso-lines on the band edges.
+  const fillGeo = view.geometry;
 
-    // ── helper: percentile of an array (in-place sort) ───────────────
-    const pctl = (arr: number[], p: number): number => {
-      if (!arr.length) return 0;
-      const a = Float64Array.from(arr).sort();
-      const i = Math.max(0, Math.min(a.length - 1,
-        Math.floor((p / 100) * (a.length - 1))));
-      return a[i];
-    };
-
-    if (mode === 'Temp') {
-      // Temperature field [°C] — nodal colour on the thermal SOLID sub-mesh
-      // (this payload carries its own vertices/triangles; outer air + gap are
-      // already removed, so render EVERY triangle).  Ansys-style rainbow
-      // (blue→red).  A motor under steady cooling is a tight hot PLATEAU — most
-      // of the structure sits in a few °C — so a linear scale maps it all to one
-      // colour.  Default = histogram-EQUALISED: colour by each node's RANK among
-      // all nodes, so the full blue→red spectrum lands on the real distribution
-      // (the vivid Fusion look).  eqTemp=false → faithful linear scale.
-      const Tn = payload.temperature_per_node ?? [];
-      const tmin = payload.T_min ?? (Tn.length ? Math.min(...Tn) : 0);
-      const tmax = payload.T_max ?? (Tn.length ? Math.max(...Tn) : 1);
-      const rng = Math.max(tmax - tmin, 1e-6);
-      // rank fraction per node (histogram equalisation)
-      const N = Tn.length;
-      const rankFrac = new Float64Array(N);
-      if (eqTemp && N > 1) {
-        const order = Array.from({ length: N }, (_, i) => i).sort((a, b) => (Tn[a] - Tn[b]));
-        for (let r = 0; r < N; r++) rankFrac[order[r]] = r / (N - 1);
-      }
-      const positions = new Float32Array(vertices.length * 3);
-      const colors = new Float32Array(vertices.length * 3);
-      for (let i = 0; i < vertices.length; i++) {
-        positions[3 * i] = vertices[i][0] * S;
-        positions[3 * i + 1] = vertices[i][1] * S;
-        positions[3 * i + 2] = 0;
-        const t = eqTemp ? rankFrac[i] : (((Tn[i] ?? tmin) - tmin) / rng);
-        const [r, g2, b] = jet01(t);
-        colors[3 * i] = r / 255; colors[3 * i + 1] = g2 / 255; colors[3 * i + 2] = b / 255;
-      }
-      const indexArr: number[] = [];
-      for (let i = 0; i < triangles.length; i++)
-        indexArr.push(triangles[i][0], triangles[i][1], triangles[i][2]);
-      const g = new THREE.BufferGeometry();
-      g.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-      g.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-      g.setIndex(new THREE.BufferAttribute(new Uint32Array(indexArr), 1));
-      (g as any).userData = { T_lo: tmin, T_hi: tmax };
-      return g;
-    }
-
-    if (mode === 'Az') {
-      // LINEAR mapping of A_z → colormap (no compression) so the iso-line
-      // density inside each magnet stays UNIFORM — A_z varies linearly
-      // with position inside a uniformly-magnetised magnet, and the user
-      // expects identical band spacing across the whole magnet body.
-      const interior = new Set<number>();
-      for (let ti = 0; ti < triangles.length; ti++) {
-        if (domain_per_tri[ti] === DOM_OUTER) continue;
-        for (const vi of triangles[ti]) interior.add(vi);
-      }
-      const interiorAbs: number[] = [];
-      interior.forEach(vi => interiorAbs.push(Math.abs(A_z_per_node[vi])));
-      const amax = Math.max(pctl(interiorAbs, 99), 1e-12);
-      const lo = -amax, hi = +amax;
-      const range = 2 * amax;
-      const compress = (a: number): number => {
-        // Linear normalisation A_z → [-1, +1]
-        return Math.max(-1, Math.min(1, a / amax));
-      };
-
-      // Only triangles NOT in DOM_OUTER get filled
-      const keep = triangles.map((_, ti) => domain_per_tri[ti] !== DOM_OUTER);
-      const positions = new Float32Array(vertices.length * 3);
-      const colors    = new Float32Array(vertices.length * 3);
-      const vals      = new Float32Array(vertices.length);   // scalar for the shader
-      for (let i = 0; i < vertices.length; i++) {
-        positions[3 * i]     = vertices[i][0] * S;
-        positions[3 * i + 1] = vertices[i][1] * S;
-        positions[3 * i + 2] = 0;
-        // map A_z → [-1, 1] via signed log, then to [0, 1] for the colour map.
-        // CONTINUOUS: these are VERTEX colours that the GPU interpolates across
-        // each triangle, so quantising here banded the nodes and then blended the
-        // bands — neither clean iso-bands nor a smooth field, just blotches.  The
-        // iso-lines are drawn separately and still mark the levels.
-        const tc = compress(A_z_per_node[i]);
-        const t  = 0.5 + 0.5 * tc;
-        vals[i] = Math.max(0, Math.min(1, t));
-        const [r, g, b] = jet01(vals[i]);
-        colors[3 * i]     = r / 255;
-        colors[3 * i + 1] = g / 255;
-        colors[3 * i + 2] = b / 255;
-      }
-      const indexArr: number[] = [];
-      for (let i = 0; i < triangles.length; i++) {
-        if (!keep[i]) continue;
-        indexArr.push(triangles[i][0], triangles[i][1], triangles[i][2]);
-      }
-      const g = new THREE.BufferGeometry();
-      g.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-      g.setAttribute('color',    new THREE.BufferAttribute(colors, 3));
-      g.setAttribute('aVal',     new THREE.BufferAttribute(vals, 1));
-      g.setIndex(new THREE.BufferAttribute(new Uint32Array(indexArr), 1));
-      // Stash the symmetric percentile-clipped range so isoGeo and the
-      // colour bar can re-use the EXACT same scale.
-      (g as any).userData = { Az_lo: lo, Az_hi: hi };
-      return g;
-    }
-    // NOTE: lo/hi defined here is referenced by isoGeo + colour bar via
-    // fillGeo.userData (see below).
-
-    if (mode === 'Loss') {
-      // Ansys-style "Total Loss" density [W/m³]: a flat per-triangle rainbow
-      // fill over every non-air element, coloured by the cycle-averaged loss
-      // density (iron Bertotti + copper DC+proximity + magnet eddy).  The
-      // density spans orders of magnitude (copper ≫ iron ≫ air-gap), so the
-      // default is a LOG map (logLoss) — every component stays legible; a
-      // linear map matches Ansys's default look but buries the iron.
-      // SMOOTH, nodal-averaged loss density — but averaged ONLY WITHIN one
-      // material class, never across a boundary.  The old shared-vertex
-      // average leaked copper's ~1e7 W/m³ onto slot-air vertices (a boundary
-      // vertex read half the coil density), and on the 4-decade log scale
-      // half a decade is visually the same colour — the whole slot air
-      // rendered "as lossy as the coils", which is not physics.  Ansys keeps
-      // boundaries crisp for the same reason: loss density is discontinuous
-      // at material edges by nature.  So: vertices are duplicated per
-      // (vertex, material-class) and each triangle corner reads the average
-      // of ITS class only.  Air/gap/band/shaft carry exactly zero and render
-      // flat at the bottom of the scale.
-      const ld = payload.loss_density_per_tri ?? [];
-      const dom = domain_per_tri;
-      const nTri = triangles.length;
-      // material class: 0 air-like (zero loss), 1 stator iron, 2 rotor iron,
-      // 3 magnets, 4 copper
-      const clsOf = (d: number): number => {
-        if (d === 2 || d >= 200) return 4;                   // coils
-        if (d === 4 || d === 44 || (d >= 100 && d < 200)) return 3;  // magnets
-        if (d === 1) return 1;                               // stator core
-        if (d === 5) return 2;                               // rotor core
-        return 0;                                            // air/gap/band/shaft
-      };
-      const lSum = new Map<number, number>();
-      const wSum = new Map<number, number>();
-      const posv: number[] = [];
-      for (let ti = 0; ti < nTri; ti++) {
-        if (dom[ti] === DOM_OUTER) continue;
-        const v = ti < ld.length ? ld[ti] : 0;
-        if (v > 0) posv.push(v);
-        const cls = clsOf(dom[ti]);
-        const [ia, ib, ic] = triangles[ti];
-        const ax = vertices[ia][0], ay = vertices[ia][1];
-        const bx = vertices[ib][0], by = vertices[ib][1];
-        const cx = vertices[ic][0], cy = vertices[ic][1];
-        const area = Math.abs((bx - ax) * (cy - ay) - (cx - ax) * (by - ay)) * 0.5 || 1e-12;
-        for (const iv of [ia, ib, ic]) {
-          const k = iv * 8 + cls;
-          lSum.set(k, (lSum.get(k) ?? 0) + v * area);
-          wSum.set(k, (wSum.get(k) ?? 0) + area);
-        }
-      }
-      const vmax = Math.max(pctl(posv, 99.5), 1e-3);
-      const vminPos = Math.max(pctl(posv, 5), vmax * 1e-4);   // log-floor
-      const lgMax = Math.log10(vmax), lgMin = Math.log10(vminPos);
-      // non-indexed: 3 corners per kept triangle, each coloured by the nodal
-      // average of its OWN material class — boundaries stay discontinuous.
-      const kept: number[] = [];
-      for (let ti = 0; ti < nTri; ti++) if (dom[ti] !== DOM_OUTER) kept.push(ti);
-      const positions = new Float32Array(kept.length * 9);
-      const colors    = new Float32Array(kept.length * 9);
-      let w = 0;
-      for (const ti of kept) {
-        const cls = clsOf(dom[ti]);
-        for (const iv of triangles[ti]) {
-          positions[3 * w]     = vertices[iv][0] * S;
-          positions[3 * w + 1] = vertices[iv][1] * S;
-          positions[3 * w + 2] = 0;
-          const k = iv * 8 + cls;
-          const ws = wSum.get(k) ?? 0;
-          const v = ws > 0 ? (lSum.get(k) ?? 0) / ws : 0;
-          let t: number;
-          if (logLoss) {
-            t = v <= 0 ? 0 : (Math.log10(v) - lgMin) / Math.max(lgMax - lgMin, 1e-9);
-          } else {
-            t = v / vmax;
-          }
-          const [rr, gg, bb] = jet01(Math.max(0, Math.min(1, t)));
-          colors[3 * w]     = rr / 255;
-          colors[3 * w + 1] = gg / 255;
-          colors[3 * w + 2] = bb / 255;
-          w++;
-        }
-      }
-      const g = new THREE.BufferGeometry();
-      g.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-      g.setAttribute('color',    new THREE.BufferAttribute(colors, 3));
-      (g as any).userData = { loss_vmax: vmax, loss_vmin: vminPos };
-      return g;
-    }
-
-    if (mode === 'J' || mode === 'Jeddy') {
-      // J_z mode — Ansys "J [A/m²]" style.  Coil triangles get a diverging
-      // blue→green→red colormap based on signed J_z, scaled to the 99-pct
-      // absolute value across all coil cells in the current frame.  Iron
-      // / magnet / air cells are not coloured.  In 'Jeddy' (eddy-solve) mode
-      // the J is the REAL current density σ(−∂A/∂t+U) — it crowds towards the
-      // slot opening (proximity effect); the magnetostatic 'J' is uniform.
-      const jz = payload.J_z_per_tri ?? [];
-      const dom = domain_per_tri;
-      const DOM_COIL = 2;
-      const nTri = triangles.length;
-      let vmaxAbs = 1e-12;
-      const sample: number[] = [];
-      for (let i = 0; i < nTri; i++) {
-        if (dom[i] !== DOM_COIL) continue;
-        if (i < jz.length) sample.push(Math.abs(jz[i]));
-      }
-      if (sample.length) {
-        const sorted = Float64Array.from(sample).sort();
-        const k = Math.floor(0.99 * (sorted.length - 1));
-        vmaxAbs = Math.max(sorted[k], 1e-12);
-      }
-      const positions = new Float32Array(nTri * 3 * 3);
-      const colors    = new Float32Array(nTri * 3 * 3);
-      let p = 0, c = 0;
-      for (let i = 0; i < nTri; i++) {
-        if (dom[i] !== DOM_COIL) continue;
-        const tt = triangles[i];
-        const v  = i < jz.length ? jz[i] : 0;
-        const tNorm = Math.max(-1, Math.min(1, v / vmaxAbs));
-        const [rr, gg, bb] = jetSigned(tNorm);
-        for (const vi of tt) {
-          positions[p++] = vertices[vi][0] * S;
-          positions[p++] = vertices[vi][1] * S;
-          positions[p++] = 0;
-          colors[c++] = rr / 255;
-          colors[c++] = gg / 255;
-          colors[c++] = bb / 255;
-        }
-      }
-      const g = new THREE.BufferGeometry();
-      g.setAttribute('position',
-        new THREE.BufferAttribute(positions.subarray(0, p), 3));
-      g.setAttribute('color',
-        new THREE.BufferAttribute(colors.subarray(0, c), 3));
-      (g as any).userData = { J_z_vmax: vmaxAbs };
-      return g;
-    }
-
-    if (mode === 'Demag') {
-      // Demag map, ANSYS-style: show ONLY magnet triangles, coloured by the % of
-      // Br REMAINING  = Br_factor·100.  100 % = full strength (the magnet body) →
-      // RED (top of the legend); the demagnetised corners fall to the low end →
-      // BLUE.  The legend AUTO-RANGES to the real span [min remaining … 100 %]
-      // instead of a fixed 0-100, so a few-% demag is actually visible.
-      const dc = (payload as any).demag_coef_per_tri as number[] | undefined;
-      const dom = domain_per_tri;
-      const DOM_MAG_N = 4, DOM_MAG_S = 44;
-      const nTri = triangles.length;
-      // Auto-range BOTH ends to the real span [worst … best remaining].  Pinning
-      // the top at 100 % wastes the whole upper half of the palette whenever no
-      // element is still at full strength — a magnet sitting between 15 % and
-      // 31 % rendered as one flat blue.
-      const [coefLo, coefHi] = demagRange(dc, dom, nTri, DOM_MAG_N, DOM_MAG_S);
-      const coefSpan = coefHi - coefLo;
-      // SMOOTH, nodal-averaged — same treatment as |B| below, and what Ansys
-      // shows.  Br_factor is constant per element, so a flat per-triangle fill
-      // renders a corner-localised loss as hard-edged blocks; averaging onto the
-      // NODES (area-weighted) and colouring per-vertex lets the GPU interpolate
-      // across each triangle, so the gradient into the demagnetised corner reads
-      // the way the physics actually varies.
-      const dSum = new Float64Array(vertices.length);
-      const dW   = new Float64Array(vertices.length);
-      for (let i = 0; i < nTri; i++) {
-        if (dom[i] !== DOM_MAG_N && dom[i] !== DOM_MAG_S) continue;
-        const [ia, ib, ic] = triangles[i];
-        const ax = vertices[ia][0], ay = vertices[ia][1];
-        const bx = vertices[ib][0], by = vertices[ib][1];
-        const cx = vertices[ic][0], cy = vertices[ic][1];
-        const area = Math.abs((bx - ax) * (cy - ay) - (cx - ax) * (by - ay)) * 0.5 || 1e-12;
-        const cc = dc ? Math.max(0, Math.min(1, dc[i])) : 1;
-        dSum[ia] += cc * area; dW[ia] += area;
-        dSum[ib] += cc * area; dW[ib] += area;
-        dSum[ic] += cc * area; dW[ic] += area;
-      }
-      const positions = new Float32Array(nTri * 3 * 3);
-      const colors    = new Float32Array(nTri * 3 * 3);
-      const vals = new Float32Array(nTri * 3);             // scalar for the shader
-      let p = 0, c = 0, q = 0;
-      for (let i = 0; i < nTri; i++) {
-        if (dom[i] !== DOM_MAG_N && dom[i] !== DOM_MAG_S) continue;
-        for (const vi of triangles[i]) {
-          const coefV = dW[vi] > 0 ? dSum[vi] / dW[vi] : 1;
-          // top of the span = best remaining → red;  bottom = worst → blue.
-          const tCol = Math.max(0, Math.min(1, (coefV - coefLo) / coefSpan));
-          vals[q++] = tCol;
-          const [rr, gg, bb] = jet01(tCol);   // continuous: the vertex colours are
-                                              // what get interpolated, so banding
-                                              // here would quantise the gradient
-          positions[p++] = vertices[vi][0] * S;
-          positions[p++] = vertices[vi][1] * S;
-          positions[p++] = 0;
-          colors[c++] = rr / 255;
-          colors[c++] = gg / 255;
-          colors[c++] = bb / 255;
-        }
-      }
-      const g = new THREE.BufferGeometry();
-      g.setAttribute('position',
-        new THREE.BufferAttribute(positions.subarray(0, p), 3));
-      g.setAttribute('color',
-        new THREE.BufferAttribute(colors.subarray(0, c), 3));
-      g.setAttribute('aVal', new THREE.BufferAttribute(vals.subarray(0, q), 1));
-      return g;
-    }
-
-    // |B| — SMOOTH, nodal-averaged jet (like Ansys).  B = ∇A_z is constant per
-    // P1 triangle, so a flat per-triangle fill looks faceted ("scary").  Instead
-    // we average each triangle's |B| onto its 3 nodes (AREA-WEIGHTED) and colour
-    // PER-VERTEX, exactly like the A_z field — Three.js then interpolates the
-    // colour smoothly across every triangle (blue→red, continuous — banding the
-    // vertex colours quantised the nodes and then blended the bands, which read
-    // as blotches rather than a field).
-    // vmax = 99.5-percentile of the interior |B|, capped at 4 T — wide enough to
-    // show the real air-gap/tooth-tip field (~3.3 T, like Ansys), while the
-    // percentile keeps 1/4-sector sharp-corner spikes from squashing the LUT.
-    const nV = vertices.length;
-    const bSum = new Float64Array(nV);
-    const wSum = new Float64Array(nV);
-    const interiorB: number[] = [];
-    for (let ti = 0; ti < triangles.length; ti++) {
-      if (domain_per_tri[ti] === DOM_OUTER) continue;
-      const [ia, ib, ic] = triangles[ti];
-      const ax = vertices[ia][0], ay = vertices[ia][1];
-      const bx = vertices[ib][0], by = vertices[ib][1];
-      const cx = vertices[ic][0], cy = vertices[ic][1];
-      const area = Math.abs((bx - ax) * (cy - ay) - (cx - ax) * (by - ay)) * 0.5 || 1e-12;
-      const bm = Bmag_per_tri[ti];
-      interiorB.push(bm);
-      bSum[ia] += bm * area; wSum[ia] += area;
-      bSum[ib] += bm * area; wSum[ib] += area;
-      bSum[ic] += bm * area; wSum[ic] += area;
-    }
-    const vmaxPct = pctl(interiorB, 99.5);
-    const vmax = Math.min(Math.max(vmaxPct, 0.05), 4.0);
-
-    const keep = triangles.map((_, ti) => domain_per_tri[ti] !== DOM_OUTER);
-    const positions = new Float32Array(nV * 3);
-    const colors    = new Float32Array(nV * 3);
-    const vals      = new Float32Array(nV);                  // scalar for the shader
-    for (let i = 0; i < nV; i++) {
-      positions[3 * i]     = vertices[i][0] * S;
-      positions[3 * i + 1] = vertices[i][1] * S;
-      positions[3 * i + 2] = 0;
-      const bnode = wSum[i] > 0 ? bSum[i] / wSum[i] : 0;
-      const t = Math.min(1, Math.max(0, bnode / vmax));
-      vals[i] = t;
-      const [rr, gg, bb] = jet01(t);
-      colors[3 * i]     = rr / 255;
-      colors[3 * i + 1] = gg / 255;
-      colors[3 * i + 2] = bb / 255;
-    }
-    const indexArr: number[] = [];
-    for (let i = 0; i < triangles.length; i++) {
-      if (!keep[i]) continue;
-      indexArr.push(triangles[i][0], triangles[i][1], triangles[i][2]);
-    }
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    g.setAttribute('color',    new THREE.BufferAttribute(colors, 3));
-    g.setAttribute('aVal',     new THREE.BufferAttribute(vals, 1));
-    g.setIndex(new THREE.BufferAttribute(new Uint32Array(indexArr), 1));
-    (g as any).userData = { Bmag_vmax: vmax };
-    return g;
-  }, [payload, mode, logLoss, eqTemp]);
-
-  // Iso-A contour lines (only in A_z mode) — drawn as crisp DARK lines on
-  // top of the rainbow fill, like the "flux lines" in FEMM / FEMAG.  We
-  // emit them at finer level than the colour bands (N_BANDS × 3) so the
-  // line pattern is dense enough to read everywhere — even in regions
-  // where A_z varies slowly (outer air, stator iron).
+  // FLUX lines (A_z view only).  Every view already gets iso-lines for free —
+  // the shader draws one on each band edge, which IS an iso-level of whatever
+  // is being plotted.  A_z gets a second, DENSER set (2× the bands) on top,
+  // because for the vector potential the iso-lines are the flux lines and they
+  // are the point of the picture, not a decoration on it.
   const isoGeo = useMemo(() => {
-    if (mode !== 'Az') return null;
+    if (mode !== 'Az' || !view.scale) return null;
     const { vertices, triangles, domain_per_tri, A_z_per_node } = payload;
-    // Pick the same symmetric 2/98 range the fill uses so contour lines
-    // are visible across the whole motor (stator iron included), not just
-    // inside the magnets where A_z peaks.
-    const ud = (fillGeo as any).userData ?? {};
-    const lo = ud.Az_lo ?? payload.A_z_min;
-    const hi = ud.Az_hi ?? payload.A_z_max;
-    // More iso lines than fill bands — gives a denser FEMM/Ansys-style
-    // flux-line pattern in the iron + airgap regions.
+    // EXACTLY the range the fill bands over (view.scale is in mWb/m) — so the
+    // lines land on the band edges instead of near them.
     const positions = buildIsoLines(
       vertices, triangles, domain_per_tri, A_z_per_node,
-      lo, hi, N_BANDS * 2, 1000, 1.0,
+      view.scale.vmin * 1e-3, view.scale.vmax * 1e-3, N_BANDS * 2, 1000, 1.0,
     );
     if (positions.length === 0) return null;
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     return g;
-  }, [payload, mode, fillGeo]);
+  }, [payload, mode, view]);
 
   // Outlines for crisp boundaries on top of the field
   const outGeo = useMemo(() => {
@@ -702,21 +219,22 @@ const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode; logLoss: boole
 
   return (
     <group>
-      <mesh geometry={fillGeo}>
-        {/* Modes that carry the raw scalar band it per-pixel (Ansys look); the
-            rest keep the CPU-side vertex colours they already compute. */}
-        {fillGeo?.getAttribute('aVal') ? (
+      {fillGeo && (
+        <mesh geometry={fillGeo}>
+          {/* EVERY view: the interpolated scalar is banded per PIXEL and the
+              band edge is drawn as an iso-line.  Quantising at the vertices
+              instead would let the GPU blend two band colours across each
+              triangle — blotches, not bands. */}
           <shaderMaterial
             key={`band-${mode}`}
             side={THREE.DoubleSide}
             vertexShader={BAND_VERT}
             fragmentShader={BAND_FRAG}
-            uniforms={{ uBands: { value: MODE_BANDS[mode] ?? 0 } }}
+            uniforms={{ uBands: { value: view.scale?.bands ?? N_BANDS },
+                        uIso:   { value: 0.85 } }}
           />
-        ) : (
-          <meshBasicMaterial vertexColors side={THREE.DoubleSide}/>
-        )}
-      </mesh>
+        </mesh>
+      )}
       {isoGeo && (
         <lineSegments geometry={isoGeo}>
           <lineBasicMaterial color={0x0b1220} transparent opacity={0.85}/>
@@ -763,43 +281,36 @@ const FitView: React.FC<{
   return null;
 };
 
-// ── colour-bar component (vertical) ───────────────────────────────────────
-const ColorBar: React.FC<{
-  vmin: number; vmax: number; unit: string;
-  lut: (t: number) => [number, number, number];
-  log?: boolean;                     // log-spaced tick labels (fill is still 0..1 LUT)
-  fmt?: (v: number) => string;       // custom number format (e.g. large W/m³)
-  tickValues?: number[];             // explicit tick labels (bottom→top), e.g. quantiles for an equalised scale
-}> = ({ vmin, vmax, unit, lut, log = false, fmt, tickValues }) => {
-  const linTicks = useMemo(() => {
-    const n = 5;
-    if (log && vmin > 0 && vmax > 0) {
-      const a = Math.log10(vmin), b = Math.log10(vmax);
-      return Array.from({ length: n },
-        (_, i) => Math.pow(10, a + (b - a) * (i / (n - 1))));
-    }
-    return Array.from({ length: n }, (_, i) => vmin + (vmax - vmin) * (i / (n - 1)));
-  }, [vmin, vmax, log]);
-  const ticks = (tickValues && tickValues.length) ? tickValues : linTicks;
-  const f = fmt ?? ((v: number) => v.toFixed(2));
-  const stops = Array.from({ length: 11 }, (_, k) => {
-    const [r, g, b] = lut(k / 10);
-    return `rgb(${r|0},${g|0},${b|0}) ${(k * 10).toFixed(0)}%`;
-  });
+// ── banded colour bar (vertical) ──────────────────────────────────────────
+// Ansys's legend, and for the same reason: a BANDED plot's legend has to show
+// the band EDGES, because "which band is this colour" is the only question the
+// picture asks.  A smooth gradient bar under a banded fill is a legend for a
+// different plot.  It reads its whole range off the SAME FieldScale the fill
+// bands with, so the two cannot disagree.
+const ColorBar: React.FC<{ scale: FieldScale }> = ({ scale }) => {
+  const { bands, unit, fmt } = scale;
+  const H = 220;
+  const rowH = H / bands;
   return (
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5,
+    <Box sx={{ display: 'flex', alignItems: 'stretch', gap: 0.5,
       pl: 1, pr: 1, py: 1 }}>
-      <Box sx={{
-        width: 12, height: 200,
-        background: `linear-gradient(to top, ${stops.join(', ')})`,
-        border: '1px solid var(--line-soft)',
-      }}/>
       <Box sx={{ display: 'flex', flexDirection: 'column-reverse',
-        justifyContent: 'space-between', height: 200 }}>
-        {ticks.map((t, i) => (
-          <Typography key={i} sx={{ fontSize: 9, color: 'var(--text-2)',
-            fontFamily: 'monospace', lineHeight: 1 }}>
-            {f(t)} {unit}
+        height: H, width: 14, border: '1px solid var(--line-soft)' }}>
+        {Array.from({ length: bands }, (_, k) => {
+          const [r, g, b] = bandColor(k, bands);
+          return <Box key={k} sx={{ flex: 1,
+            background: `rgb(${r | 0},${g | 0},${b | 0})` }}/>;
+        })}
+      </Box>
+      {/* One label per band EDGE (bands+1 of them), aligned with the band
+          boundaries rather than spread evenly over the bar. */}
+      <Box sx={{ position: 'relative', height: H, minWidth: 62 }}>
+        {Array.from({ length: bands + 1 }, (_, k) => (
+          <Typography key={k} sx={{
+            position: 'absolute', bottom: k * rowH - 5, left: 0,
+            fontSize: 8.5, lineHeight: 1, whiteSpace: 'nowrap',
+            color: 'var(--text-2)', fontFamily: 'monospace' }}>
+            {fmt(scale.edge(k))}{k === bands ? ` ${unit}` : ''}
           </Typography>
         ))}
       </Box>
@@ -903,6 +414,14 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
   })();
   useEffect(() => { if (!demagOn && mode === 'Demag') setMode('Az'); }, [demagOn, mode]);
   const controlsRef = useRef<any>(null);
+
+  // THE field view — geometry AND colour scale, for whichever mode is showing.
+  // Built once, here, and handed to both the 3-D mesh and the colour bar; the
+  // two used to derive their ranges independently and could disagree about
+  // what a colour meant.
+  const fieldView: FieldView = useMemo(
+    () => buildFieldView(payload, mode, { logLoss, eqTemp }),
+    [payload, mode, logLoss, eqTemp]);
 
   const fetchFem = () => {
     if (payloadOverride) return;   // parent owns the data
@@ -1193,6 +712,13 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
                    : isLoss ? 'Checking the last simulation run\'s loss map…'
                    : 'Solving…')}
           </Typography>
+          {/* WHAT the colours are — from the view's own scale, so it changes
+              with the mode and (for Loss) names each component's source. */}
+          {fieldView.scale && (
+            <Typography sx={{ fontSize: 9.5, color: 'var(--text-4)', mt: 0.2 }}>
+              {fieldView.scale.note} · {fieldView.scale.bands} bands
+            </Typography>
+          )}
         </Box>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <ToggleButtonGroup value={mode} exclusive size="small"
@@ -1381,7 +907,7 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
                 near={0.1} far={5000}/>
               <FitView payload={payload} controlsRef={controlsRef}/>
               <ambientLight intensity={1}/>
-              <FieldMesh payload={payload} mode={mode} logLoss={logLoss} eqTemp={eqTemp} showFlux={showFlux}/>
+              <FieldMesh payload={payload} mode={mode} view={fieldView} showFlux={showFlux}/>
               <OrbitControls ref={controlsRef} enableDamping={false}
                 enableRotate enablePan enableZoom zoomSpeed={1.2}/>
               {/* Drive + follow the overlay Viewcube (same as Geometry). */}
@@ -1393,100 +919,11 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
           {payload && <Viewcube/>}
         </Box>
 
-        {/* Colour bar — recompute the same 2/98 percentile-based vmin/vmax
-            the fill geometry uses, so the bar labels line up with the
-            actual rendered colours. */}
-        {payload && (() => {
-          const DOM_OUTER = 8;
-          const dom  = payload.domain_per_tri;
-          const tris = payload.triangles;
-          const pct = (arr: number[], p: number) => {
-            if (!arr.length) return 0;
-            const a = Float64Array.from(arr).sort();
-            const i = Math.max(0, Math.min(a.length - 1,
-              Math.floor((p / 100) * (a.length - 1))));
-            return a[i];
-          };
-          if (mode === 'Temp') {
-            // Equalised scale → label the bar at the temperature QUANTILES (the
-            // °C at each 25% of the colour range), so a colour still reads as a
-            // real temperature even though the spacing is non-linear.
-            const Ts = (payload.temperature_per_node ?? []).slice().sort((a, b) => a - b);
-            const q = (f: number) => Ts.length ? Ts[Math.min(Ts.length - 1, Math.round(f * (Ts.length - 1)))] : 0;
-            const qticks = Ts.length ? [q(0), q(0.25), q(0.5), q(0.75), q(1)] : undefined;
-            return <ColorBar vmin={payload.T_min ?? 0} vmax={payload.T_max ?? 1}
-              unit="°C" lut={(t) => jet01(t)} fmt={(v) => v.toFixed(0)}
-              tickValues={eqTemp ? qticks : undefined}/>;
-          }
-          if (mode === 'Bmag') {
-            const Bs: number[] = [];
-            for (let ti = 0; ti < tris.length; ti++) {
-              if (dom[ti] === DOM_OUTER) continue;
-              Bs.push(payload.Bmag_per_tri[ti]);
-            }
-            const vmax = Math.min(Math.max(pct(Bs, 99.5), 0.05), 4.0);
-            return <ColorBar vmin={0} vmax={vmax * 1000} unit="mT"
-              fmt={(v) => v.toFixed(0)} lut={(t) => bandLut(t, MODE_BANDS.Bmag)}/>;
-          }
-          if (mode === 'Demag') {
-            // % of Br REMAINING, auto-ranged at BOTH ends to the real span: the
-            // best magnet element sets the top → red, the worst the bottom →
-            // blue.  Must use the SAME range helper as the fill or the legend
-            // stops describing the colours.
-            const dc = (payload as any).demag_coef_per_tri as number[] | undefined;
-            const [lo, hi] = demagRange(dc, dom, tris.length, 4, 44);
-            return <ColorBar vmin={lo * 100} vmax={hi * 100} unit="% Br"
-              fmt={(v) => v.toFixed(1)} lut={(t) => bandLut(t, MODE_BANDS.Demag)}/>;
-          }
-          if (mode === 'Loss') {
-            // Loss-density bar [W/m³] — log or linear to match the fill.
-            const ld = payload.loss_density_per_tri ?? [];
-            const posv: number[] = [];
-            for (let ti = 0; ti < tris.length; ti++) {
-              if (dom[ti] === DOM_OUTER) continue;
-              const v = ti < ld.length ? ld[ti] : 0;
-              if (v > 0) posv.push(v);
-            }
-            const vmax = Math.max(pct(posv, 99.5), 1e-3);
-            const vminPos = Math.max(pct(posv, 5), vmax * 1e-4);
-            const fmtWm3 = (v: number) =>
-              v >= 1e6 ? `${(v / 1e6).toFixed(1)}M`
-              : v >= 1e3 ? `${(v / 1e3).toFixed(0)}k`
-              : v.toFixed(0);
-            return <ColorBar vmin={logLoss ? vminPos : 0} vmax={vmax}
-              unit="W/m³" log={logLoss} fmt={fmtWm3} lut={(t) => jet01(t)}/>;
-          }
-          if (mode === 'J' || mode === 'Jeddy') {
-            // Signed J_z bar — find vmax across coil triangles only.
-            const DOM_COIL = 2;
-            const jz = payload.J_z_per_tri ?? [];
-            const Js: number[] = [];
-            for (let ti = 0; ti < tris.length; ti++) {
-              if (dom[ti] !== DOM_COIL) continue;
-              if (ti < jz.length) Js.push(Math.abs(jz[ti]));
-            }
-            const vmax = pct(Js, 99) || 1;
-            // Display in A/mm² for readability (matches Ansys legend scale).
-            return <ColorBar vmin={-vmax} vmax={+vmax}
-              unit="A/m²"
-              lut={(t) => jetSigned(2 * t - 1)}/>;
-          }
-          // A_z mode — 2/98 percentile of interior node values, symmetrised.
-          const used = new Set<number>();
-          for (let ti = 0; ti < tris.length; ti++) {
-            if (dom[ti] === DOM_OUTER) continue;
-            for (const vi of tris[ti]) used.add(vi);
-          }
-          const As: number[] = [];
-          used.forEach(vi => As.push(payload.A_z_per_node[vi]));
-          const lo = pct(As, 2);
-          const hi = pct(As, 98);
-          const amax = Math.max(Math.abs(lo), Math.abs(hi), 1e-12);
-          return (
-            <ColorBar vmin={-amax} vmax={+amax} unit="Wb/m"
-              lut={(t) => bandLut(t, MODE_BANDS.Az)}/>
-          );
-        })()}
+        {/* Colour bar — the SAME FieldScale object the fill bands with, so
+            the labels are the band edges of the picture beside them and can
+            never drift from it (they used to be recomputed here, with a
+            second copy of the percentile code). */}
+        {fieldView.scale && <ColorBar scale={fieldView.scale}/>}
 
       </Box>
 

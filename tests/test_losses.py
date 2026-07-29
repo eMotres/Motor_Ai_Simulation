@@ -231,3 +231,115 @@ class TestRotorEddyInputs:
         machine than the transient that produced the field."""
         from motor_ai_sim.simulation.losses import rotor_mu_lookup
         assert rotor_mu_lookup(1234.0, 100, 5)(5) == pytest.approx(1234.0)
+
+
+class TestLossDensityMap:
+    """The spatial map: which component is MEASURED and which is a normalised
+    model, and whether each still integrates to the watts the sidebar reports.
+
+    The magnet term used to be the slab |dB/dt|² shape scaled to P_mag_avg —
+    smooth by construction, so the map could never show the corner/edge
+    crowding an Ansys Total-Loss plot shows.  When the coupled σ·∂A/∂t solve
+    ran, the per-element σE² it produced IS the density and must be taken
+    unrenormalised; these tests pin both halves of that rule.
+    """
+
+    @staticmethod
+    def _kw(n_st, n_el, **over):
+        """A map call with every component switched off, so each test turns on
+        exactly the one it is about."""
+        z = np.zeros((0, 0))
+        kw = dict(
+            n_stator_elems=n_st, n_elems=n_el,
+            hist_sx=[], hist_sy=[], hist_rx=[], hist_ry=[],
+            hist_mx=[], hist_my=[], hist_cx=[], hist_cy=[],
+            iron_s_idx=np.array([], int), iron_r_idx=np.array([], int),
+            mag_idx=np.array([], int), coil_idx=np.array([], int),
+            areas_s=np.ones(n_st), areas_r=np.ones(n_el - n_st),
+            coil_centroids=z, steel_s=None, steel_r=None, bertotti=_bertotti,
+            f_elec_hz=100.0, stack_length_m=0.05, sector_scale=4.0,
+            P_fe_avg=0.0, P_mag_avg=0.0, P_cu_dc=0.0, P_cu_ac_avg=0.0,
+            sigma_cu=5.8e7, d_cu_r=1e-3, d_cu_t=1e-3,
+            ddt=lambda X, qp=None: central_difference(1e-4)(X),
+        )
+        kw.update(over)
+        return kw
+
+    def test_solved_magnet_density_is_copied_not_renormalised(self):
+        """σE² IS the density.  A map that rescaled it to the reported watts
+        would flatten exactly the corner peak the solve was run to find."""
+        from motor_ai_sim.simulation.losses import loss_density_map
+        n_st, n_el = 2, 5
+        mag_local = np.array([0, 1])            # rotor-half elements 0,1
+        mag_glob = n_st + mag_local
+        solved = np.zeros(n_el)
+        solved[mag_glob] = [10.0, 1000.0]       # a 100:1 corner peak
+        dens, label = loss_density_map(**self._kw(
+            n_st, n_el, mag_idx=mag_local,
+            # a DIFFERENT reported number — the map must ignore it
+            P_mag_avg=999.0,
+            solved_dens=solved, solved_groups=("mag",),
+            solved_elems={"mag": mag_glob}))
+        assert dens[mag_glob].tolist() == [10.0, 1000.0]
+        assert "solved" in label and "unrenormalised" in label
+
+    def test_solved_map_integrates_to_its_own_watts(self):
+        """∫ρ dV over the machine = Σ dens·area·L·n_sectors."""
+        from motor_ai_sim.simulation.losses import loss_density_map
+        n_st, n_el = 2, 5
+        mag_local = np.array([0, 1])
+        mag_glob = n_st + mag_local
+        solved = np.zeros(n_el)
+        solved[mag_glob] = [10.0, 1000.0]
+        lines = []
+        dens, _ = loss_density_map(**self._kw(
+            n_st, n_el, mag_idx=mag_local, P_mag_avg=1.0,
+            solved_dens=solved, solved_groups=("mag",),
+            solved_elems={"mag": mag_glob}, log_line=lines.append))
+        # areas_r are 1.0, stack 0.05 m, sector_scale 4
+        assert float(np.sum(dens[mag_glob])) * 0.05 * 4.0 == pytest.approx(202.0)
+        assert any("magnet" in ln for ln in lines), "the cross-check must be logged"
+
+    def test_modelled_magnet_shape_is_normalised_to_the_reported_watts(self):
+        """With no coupled solve the slab shape stays — and stays normalised,
+        so the picture still integrates to the sidebar number."""
+        from motor_ai_sim.simulation.losses import loss_density_map
+        n_st, n_el = 2, 4
+        mag_local = np.array([0, 1])
+        X, Y = _sine_history(16, 1.0, n_elem=2)
+        X[:, 1] *= 3.0                       # element 1 sees 3x the dB/dt
+        dens, label = loss_density_map(**self._kw(
+            n_st, n_el, mag_idx=mag_local, hist_mx=X, hist_my=Y,
+            P_mag_avg=2.0))
+        integ = float(np.sum(dens[n_st + mag_local])) * 0.05 * 4.0
+        assert integ == pytest.approx(2.0, rel=1e-9)
+        assert "slab" in label and "normalised" in label
+        # the SHAPE survives: 3x dB/dt is 9x the density
+        assert dens[n_st + 1] / dens[n_st + 0] == pytest.approx(9.0, rel=1e-9)
+
+    def test_end_winding_copper_is_uniform_and_declared(self):
+        """The end turns are real watts outside the modelled plane.  They are
+        spread uniformly and SAID so — never folded into the solved shape."""
+        from motor_ai_sim.simulation.losses import loss_density_map
+        n_st, n_el = 2, 3
+        coil = np.array([0, 1])
+        solved = np.zeros(n_el)
+        solved[coil] = [100.0, 300.0]
+        dens, label = loss_density_map(**self._kw(
+            n_st, n_el, coil_idx=coil, solved_dens=solved,
+            solved_groups=("cu",), solved_elems={"cu": coil},
+            P_cu_end_winding_W=0.4))
+        # V_cu = 2 elems * 1 m2 * 0.05 m * 4 = 0.4 m3  ->  +1.0 W/m3 each
+        assert dens[coil].tolist() == pytest.approx([101.0, 301.0])
+        assert "end-winding" in label
+
+    def test_no_solved_groups_leaves_the_modelled_path_untouched(self):
+        """A run with the coupled solve OFF must behave exactly as before."""
+        from motor_ai_sim.simulation.losses import loss_density_map
+        n_st, n_el = 2, 4
+        coil = np.array([0, 1])
+        dens, label = loss_density_map(**self._kw(
+            n_st, n_el, coil_idx=coil, P_cu_dc=1.0))
+        # uniform DC over V_cu = 0.4 m3
+        assert dens[coil].tolist() == pytest.approx([2.5, 2.5])
+        assert "uniform DC" in label and "solved" not in label

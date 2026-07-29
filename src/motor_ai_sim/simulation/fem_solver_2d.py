@@ -2476,6 +2476,38 @@ def fem_transient_sliding_band(
             raise RuntimeError(
                 "eddy=True but no solid conductor was found on the P2 mesh "
                 "— nothing to constrain (check the coil domain tags).")
+        # ── PER-ELEMENT σE² — the loss MAP's copper/magnet/shaft ─────────────
+        # The block above collapses the Joule loss to ONE number per body
+        # group; the Loss map needs the same integrand kept per element.  The
+        # eddy current does not fill a conductor uniformly — it crowds at the
+        # corners and edges facing the changing field, which is what an Ansys
+        # Total-Loss plot shows at every magnet corner and what the slab
+        # |dB/dt|² model, normalised to an average, can never show: that model
+        # is smooth by construction.
+        #
+        # SAME quadrature and SAME σ as the mass matrix above, so the per-
+        # element numbers sum EXACTLY to the per-body watts (cross-checked in a
+        # log line after the loop) — this is the same integral, not a second
+        # model of it.
+        _ed_elems = np.sort(np.unique(np.concatenate(
+            [_ids for _ky, _tg, _ids, _sg in _bodies])))
+        _ed_basis = Basis(mesh_all, _P2E(), elements=_ed_elems)
+        _ed_dx = _ed_basis.dx                       # (n_cond_elem, n_qp)
+        _ed_area = _ed_dx.sum(axis=1)
+        _ed_sig_e = np.zeros(_ed_elems.size)
+        _ed_key_e = np.empty(_ed_elems.size, dtype=object)
+        _ed_loc_by_tag = {}
+        for _ky, _tg, _ids, _sg in _bodies:
+            _loc = np.searchsorted(_ed_elems, np.asarray(_ids, int))
+            _ed_loc_by_tag[int(_tg)] = _loc
+            _ed_sig_e[_loc] = float(_sg)
+            _ed_key_e[_loc] = _ky
+        # For each constraint, WHICH rows of the conductor-element arrays carry
+        # its U_b.  A body with no constraint row (a magnet half cut by the
+        # anti-periodic boundary) appears in no list, so its U stays 0 — which
+        # is exactly what "U ≡ 0 cut body" means.
+        _ed_uloc = [_ed_loc_by_tag[int(_c["tag"])] for _c in _ed_con]
+        _ed_gmask = {_k: (_ed_key_e == _k) for _k in ("cu", "mag", "shaft")}
 
     def _ring_map(m_shift):
         # rotor ring node kk -> (stator node j, sign).  Full ring: periodic
@@ -3209,6 +3241,12 @@ def fem_transient_sliding_band(
     _Ued = np.zeros(len(_ed_con))         # per-body conductor voltages
     _ed_cu = []; _ed_mag = []; _ed_sh = []   # σ∫E² per frame [W, machine]
     _ed_dc2d = []                         # 2-D DC I²R of the same bars [W]
+    # Per-frame per-element σE² over the conductor elements [W/m³] — the Loss
+    # map's copper/magnet/shaft.  A LIST (one array per frame), not a running
+    # sum, so the settling-frame trim below drops its frames with everyone
+    # else's: averaging over a window that still contains the start-up ∂A/∂t
+    # would put the transient straight into the picture.
+    _ed_dens_hist = []
     for k in range(-_eddy_warm, n_total):
         if progress_cb is not None:
             try: progress_cb(max(k, 0), n_total)
@@ -3596,6 +3634,20 @@ def fem_transient_sliding_band(
                 _pg[_c["key"]] += _u * (_u * _c["S"]
                                         - 2.0 * float(_c["g"] @ _dAe))
             _wsc = float(NS) * float(p.stack_length)   # sector·2-D → machine
+            # ── the SAME integrand, kept per element (Loss map) ───────────
+            # E = −∂A/∂t + U_b at this element's quadrature points; σE²
+            # integrated over the element and divided by its area is the
+            # element's loss DENSITY [W/m³] — intensive, so no sector or
+            # stack-length factor belongs here (the volume integral below
+            # puts them back).
+            if _ed_elems.size and k >= 0:
+                _Uel = np.zeros(_ed_elems.size)
+                for _ci, _c in enumerate(_ed_con):
+                    _Uel[_ed_uloc[_ci]] = float(_Ued[_ci])
+                _Eq = -np.asarray(_ed_basis.interpolate(_dAe)) + _Uel[:, None]
+                _ed_dens_hist.append(
+                    _ed_sig_e * np.sum(_Eq ** 2 * _ed_dx, axis=1)
+                    / np.maximum(_ed_area, 1e-30))
             _Aed_prev = A2.copy()
             if k >= 0:
                 _ed_cu.append(_pg.get("cu", 0.0) * _wsc)
@@ -3756,7 +3808,7 @@ def fem_transient_sliding_band(
     _v2_lists = (_T2, _psiA, _psiB, _psiC, _IA, _IB, _IC, _tt,
                  _hsx2, _hsy2, _hrx2, _hry2, _hcx2, _hcy2, _hmx2, _hmy2,
                  _histA_rot2, _pic_iters,
-                 _ed_cu, _ed_mag, _ed_sh, _ed_dc2d,
+                 _ed_cu, _ed_mag, _ed_sh, _ed_dc2d, _ed_dens_hist,
                  _v_diag["iters"], _v_diag["resid"])
     if _vdrive and _vskip:
         n_total -= _vskip
@@ -3926,14 +3978,33 @@ def fem_transient_sliding_band(
     # The derivative operator is the only element-order difference: the P2
     # field is smooth in time, so the plain central difference the P2 loss
     # totals already use is enough (P1 needed the slip-jitter smoother).
-    # The map self-normalises each component to the reported watts above, so
-    # a 1-frame view (no B history) yields zeros rather than a wrong picture.
+    # The map self-normalises each MODELLED component to the reported watts
+    # above, so a 1-frame view (no B history) yields zeros rather than a wrong
+    # picture.  The components the COUPLED eddy solve produced are not modelled
+    # and not normalised: they are the per-element σE² of the field that was
+    # actually solved, cycle-averaged over the SAME reported window the watts
+    # come from.
     if _snap2 is not None:
         try:
             _cd2 = _central_difference(dt)
             _cc2 = ((half["s"]["mesh"].p[:, half["s"]["mesh"].t].mean(axis=1))
                     [:, _coil_idx] if _coil_idx.size else np.zeros((2, 0)))
-            _snap2["loss_dens"] = _loss_density_map(
+            # Cycle-averaged per-element σE², expanded to the snapshot's global
+            # element order (zero wherever σ = 0 — air and laminated iron carry
+            # no solved eddy current by construction).
+            _sol_dens = None; _sol_groups = (); _sol_elems = {}
+            if eddy and _ed_dens_hist:
+                _sol_dens = np.zeros(int(mesh_all.t.shape[1]))
+                _sol_dens[_ed_elems] = np.mean(
+                    np.asarray(_ed_dens_hist, float), axis=0)
+                _sol_elems = {_k: _ed_elems[_m]
+                              for _k, _m in _ed_gmask.items() if _m.any()}
+                _sol_groups = tuple(_sol_elems.keys())
+                log.info("P2 loss map: solved σE² covers %s (%d conductor "
+                         "elements, %d frames averaged)",
+                         "+".join(_sol_groups) or "nothing",
+                         int(_ed_elems.size), len(_ed_dens_hist))
+            _snap2["loss_dens"], _snap2["loss_dens_label"] = _loss_density_map(
                 n_stator_elems=int(Tts.shape[1]),
                 n_elems=int(mesh_all.t.shape[1]),
                 hist_sx=_hsx2, hist_sy=_hsy2, hist_rx=_hrx2, hist_ry=_hry2,
@@ -3948,7 +4019,19 @@ def fem_transient_sliding_band(
                 P_fe_avg=P_fe_avg2, P_mag_avg=P_mag_avg2,
                 P_cu_dc=P_cu_dc2, P_cu_ac_avg=P_cu_ac_avg2,
                 sigma_cu=_sig_cu2, d_cu_r=_w_cu2, d_cu_t=_h_cu2,
-                ddt=lambda X, qp=None: _cd2(X)).tolist()
+                ddt=lambda X, qp=None: _cd2(X),
+                solved_dens=_sol_dens, solved_groups=_sol_groups,
+                solved_elems=_sol_elems,
+                # The end turns are copper the 2-D plane does not contain: the
+                # reported DC includes them (k_end), the solved active-length
+                # σE² cannot.  Pass the DIFFERENCE so the map's copper integral
+                # still closes on the reported watts without pretending the end
+                # turns crowd like the slot copper does.
+                P_cu_end_winding_W=(max(0.0, P_cu_dc2 - P_cu_dc2d_avg2)
+                                    if (eddy and _ed_cu) else 0.0),
+                log_line=log.info)
+            _snap2["loss_dens"] = _snap2["loss_dens"].tolist()
+            log.info("P2 loss map label: %s", _snap2["loss_dens_label"])
         except Exception as _lde:
             log.warning("P2 loss-density map failed: %s", _lde)
 

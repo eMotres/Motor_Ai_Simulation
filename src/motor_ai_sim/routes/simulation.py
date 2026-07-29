@@ -1539,41 +1539,233 @@ _transient_field_snap: "OrderedDict[tuple, Dict]" = OrderedDict()
 _TRANSIENT_SNAP_MAX = 3
 
 
-def _field_snap_key(*, gamma_deg, I_phase_rms, mesh_size_mm, min_size_mm,
-                    outer_air_factor, n_sectors, stator_fillet_mm, gap_layers,
-                    coil_temp_c, comp_mesh, pole_copy, iron_template, geo_mesh,
-                    structured_gap, airgap_macro, n_steps_per_period, n_periods,
-                    eddy, rotor_eddy, demag, drive, element_order,
-                    cfg_fingerprint, geo_ov, rotor_angle0_deg=0.0) -> tuple:
+def _geo_ov_for_key(geo_ov) -> object:
+    """Normalise a geo override for the snapshot key.
+
+    The Field view always sends the FULL geometry as a `geo=` override (the
+    live store state), while Re-run Simulation sends none and solves the saved
+    config — the SAME machine, expressed two ways.  Compared verbatim they can
+    never match, so the run's snapshot was unreachable from the view that
+    exists to display it (measured: every probe MISSed on geo alone).  An
+    override that agrees with the current config geometry — value-for-value
+    within float round-trip noise, extra derived keys ignored — is therefore
+    keyed as None, i.e. "the config machine".  A override that actually
+    DIFFERS keeps its tuple and misses, as it must.
+
+    The reference is `get_current_geometry().to_dict()` — the LIVE parameter
+    set, with every derived radius/pitch recomputed — and NOT the raw
+    `geometry:` block of motor_config.yaml.  That block keeps whatever derived
+    values were last written to it, and they go stale the moment a base
+    parameter changes: this machine's YAML still carried stator_outer_radius
+    20 mm (a 40 mm design) beside stator_diameter 30, while the frontend sends
+    the recomputed 15.  Compared against the YAML the override then "differed"
+    on five derived keys and every probe missed — the SAME machine, one side
+    reading a stale copy.  `_current_geom_hash_and_params` already overlays the
+    override onto exactly this live dict before building the motor, so this is
+    also the set the solve is actually made of.
+    """
+    if not geo_ov:
+        return None
+    try:
+        try:
+            from motor_ai_sim.services.geometry_service import (
+                get_current_geometry as _gcg)
+            _cfg_geo = dict(_gcg().to_dict() or {})
+        except Exception:
+            from motor_ai_sim.config import get_config as _gc
+            _cfg_geo = dict((_gc().get("geometry", {})) or {})
+        for _k, _v in geo_ov.items():
+            if _k not in _cfg_geo:
+                continue          # key the geometry model does not carry
+            try:
+                # Float round-trip noise: the frontend sends JSON doubles for
+                # values the backend computed, so an exact compare fails on the
+                # last bit of e.g. 8.899999999999999.
+                if abs(float(_v) - float(_cfg_geo[_k])) > 1e-6:
+                    return tuple(sorted(geo_ov.items()))
+            except (TypeError, ValueError):
+                if _v != _cfg_geo[_k]:
+                    return tuple(sorted(geo_ov.items()))
+        return None               # override == the live machine
+    except Exception:
+        return tuple(sorted(geo_ov.items()))
+
+
+def _get_request_materials_safe():
+    """This request's `mat=` override, or None — never raising."""
+    try:
+        from motor_ai_sim.material_context import get_request_materials
+        return get_request_materials()
+    except Exception:
+        return None
+
+
+def _mat_ov_tuple(mat_ov) -> tuple:
+    """Stable, hashable rendering of a material override that genuinely differs."""
+    import json as _jm
+    return ("mat", _jm.dumps(mat_ov, sort_keys=True, default=str))
+
+
+def _mat_ov_for_key(mat_ov) -> object:
+    """Normalise a per-request material override for the snapshot key.
+
+    Exactly the `geo=` disease, one field over: the Field view goes through the
+    fetch interceptor, which appends `mat=<assignment+props>` to every
+    /api/simulation/physics request, while Re-run Simulation posts to
+    /api/kernel/run — a URL the interceptor does not match — so the RUN solves
+    with no override at all and reads the shared config.  The SAME machine
+    therefore produced two fingerprints and the view could never find the run's
+    snapshot (measured: MISS on cfg_fingerprint alone, every time, for a signed-in
+    user with any assignment at all — which is everyone).
+
+    An override is keyed as None ("the config machine") when it changes nothing
+    the solver would do: every assigned part names the material the config
+    already assigns, AND every shipped prop-set resolves to the same material
+    object `materials.get_material` builds from the library.  An override that
+    genuinely names a different magnet, or ships custom props, keeps its own key
+    and misses — as it must.
+    """
+    if not mat_ov:
+        return None
+    try:
+        import dataclasses as _dc
+        from motor_ai_sim.config import get_material_assignments as _gma
+        from motor_ai_sim import materials as _ml
+        _cfg_assign = _gma() or {}
+        _assign = mat_ov.get("assignment") or {}
+        for _k, _v in _assign.items():
+            if str(_cfg_assign.get(_k) or "") != str(_v or ""):
+                return _mat_ov_tuple(mat_ov)
+        # Props only matter for a material that is actually ASSIGNED — the
+        # frontend ships the whole "non-builtin in use" set, and an unused entry
+        # never reaches the solve.
+        _used = {str(_v) for _v in {**_cfg_assign, **_assign}.values() if _v}
+        for _name, _pr in (mat_ov.get("materials") or {}).items():
+            if _name not in _used:
+                continue
+            _cat = (_pr or {}).get("category")
+            try:
+                _a = _ml.material_from_dict(_cat, _name, _pr)
+                _b = _ml.get_material(_cat, _name)
+            except Exception:
+                return _mat_ov_tuple(mat_ov)
+            if _b is None or _dc.asdict(_a) != _dc.asdict(_b):
+                return _mat_ov_tuple(mat_ov)
+        return None            # override == the config machine
+    except Exception:
+        return _mat_ov_tuple(mat_ov)
+
+
+def _config_physics_fingerprint(*, with_request_materials: bool) -> str:
+    """md5 of the shared config the SOLVE depends on but the URL doesn't carry.
+
+    ONE definition for both routes (it was copy-pasted twice, and the copies were
+    already the place the two keys could drift).  `with_request_materials=True`
+    folds in this request's `mat=` override verbatim — right for a per-request
+    CACHE key, wrong for the cross-request snapshot key, where the same machine
+    arrives spelled two ways (see `_mat_ov_for_key`).
+    """
+    try:
+        import hashlib as _hl, json as _jl
+        from motor_ai_sim.config import get_config as _gc
+        from motor_ai_sim.material_context import get_request_materials as _grm
+        _cfg = _gc() or {}
+        _d = {"g": _cfg.get("geometry"), "w": _cfg.get("winding"),
+              "m": _cfg.get("materials"), "mag": _cfg.get("magnet")}
+        if with_request_materials:
+            _d["req_mat"] = _grm()
+        return _hl.md5(_jl.dumps(_d, sort_keys=True,
+                                 default=str).encode()).hexdigest()[:16]
+    except Exception:
+        return "nofp"
+
+
+def _field_snap_key_fields(*, gamma_deg, I_phase_rms, mesh_size_mm, min_size_mm,
+                           outer_air_factor, n_sectors, stator_fillet_mm,
+                           gap_layers, coil_temp_c, comp_mesh, pole_copy,
+                           iron_template, geo_mesh, structured_gap, airgap_macro,
+                           n_steps_per_period, n_periods, eddy, rotor_eddy,
+                           demag, drive, element_order, cfg_fingerprint, geo_ov,
+                           mat_ov, rotor_angle0_deg=0.0) -> "OrderedDict":
+    """The snapshot key as NAMED fields, in key order.
+
+    Named because the key is the thing that decides "is this the run the user
+    just did?", and when it says no the only useful answer is WHICH field
+    disagreed — a bare 26-tuple diff is unreadable, and the two bugs found here
+    (geo, materials) both hid behind exactly that unreadability.
+    """
+    return OrderedDict((
+        ("kind", "tfield"),
+        ("gamma_deg", round(float(gamma_deg), 1)),
+        ("I_phase_rms", round(float(I_phase_rms), 2)),
+        ("mesh_size_mm", round(float(mesh_size_mm), 2)),
+        ("min_size_mm", round(float(min_size_mm), 2)),
+        ("outer_air_factor", round(float(outer_air_factor), 2)),
+        ("n_sectors", int(n_sectors) if int(n_sectors) > 1 else -1),
+        ("stator_fillet_mm", round(float(stator_fillet_mm), 2)),
+        ("gap_layers", round(float(gap_layers), 1)),
+        ("coil_temp_c", round(float(coil_temp_c), 1)),
+        ("comp_mesh", tuple(sorted((comp_mesh or {}).items()))),
+        ("pole_copy", int(bool(pole_copy))),
+        ("iron_template", int(bool(iron_template))),
+        ("geo_mesh", int(bool(geo_mesh))),
+        ("structured_gap", int(bool(structured_gap))),
+        ("airgap_macro", int(bool(airgap_macro))),
+        ("n_steps_per_period", int(n_steps_per_period)),
+        ("n_periods", round(float(n_periods), 2)),
+        ("eddy", int(bool(eddy))),
+        ("rotor_eddy", int(bool(rotor_eddy))),
+        ("demag", int(bool(demag))),
+        ("drive", str(drive or "current")),
+        ("element_order", int(element_order)),
+        ("cfg_fingerprint", str(cfg_fingerprint)),
+        ("geo_ov", _geo_ov_for_key(geo_ov)),
+        ("mat_ov", _mat_ov_for_key(mat_ov)),
+        # The rotor's CAD start angle.  The transient always meshes at 0; a field
+        # view asking for a physically rotated rotor is a different mesh and must
+        # never be answered from the run's snapshot.
+        ("rotor_angle0_deg", round(float(rotor_angle0_deg), 3)),
+    ))
+
+
+def _field_snap_key(**kw) -> tuple:
     """THE key both routes build — the transient when it stores its snapshot and
     the field view when it looks one up.  One function so the two can never drift
     into "almost the same key" (which would silently serve the wrong picture, or
     silently never hit).
 
-    Everything the SOLVE depends on is in here, including the shared-config /
-    per-request-material fingerprint.  `n_sectors` is normalised to the effective
-    wedge (>1 = sector, -1 = full ring) because the two routes reach it by
-    different routes (auto-symmetry vs GCD snapping).
+    Everything the SOLVE depends on is in here, including the shared-config
+    fingerprint and the normalised per-request geometry / material overrides.
+    `n_sectors` is normalised to the effective wedge (>1 = sector, -1 = full ring)
+    because the two routes reach it by different routes (auto-symmetry vs GCD
+    snapping).
     """
-    return (
-        "tfield",
-        round(float(gamma_deg), 1), round(float(I_phase_rms), 2),
-        round(float(mesh_size_mm), 2), round(float(min_size_mm), 2),
-        round(float(outer_air_factor), 2),
-        int(n_sectors) if int(n_sectors) > 1 else -1,
-        round(float(stator_fillet_mm), 2), round(float(gap_layers), 1),
-        round(float(coil_temp_c), 1), tuple(sorted((comp_mesh or {}).items())),
-        int(bool(pole_copy)), int(bool(iron_template)), int(bool(geo_mesh)),
-        int(bool(structured_gap)), int(bool(airgap_macro)),
-        int(n_steps_per_period), round(float(n_periods), 2),
-        int(bool(eddy)), int(bool(rotor_eddy)), int(bool(demag)),
-        str(drive or "current"), int(element_order), str(cfg_fingerprint),
-        tuple(sorted((geo_ov or {}).items())) if geo_ov else None,
-        # The rotor's CAD start angle.  The transient always meshes at 0; a field
-        # view asking for a physically rotated rotor is a different mesh and must
-        # never be answered from the run's snapshot.
-        round(float(rotor_angle0_deg), 3),
-    )
+    return tuple(_field_snap_key_fields(**kw).values())
+
+
+def _log_snap_key_miss(probe: "OrderedDict") -> None:
+    """Say WHICH field made the probe miss, against every stored run.
+
+    A miss is a user-visible failure ("No matching simulation run" after the run
+    they just did), and it has now been caused twice by one field out of 27
+    carrying the same machine in a different spelling.  Logging the diff is how
+    the next one is found in a minute instead of a day.
+    """
+    try:
+        _names = list(probe.keys())
+        _pv = list(probe.values())
+        if not _transient_field_snap:
+            log.info("field snapshot MISS: the store is EMPTY (no run has "
+                     "stored a snapshot since the backend started)")
+            return
+        for _i, _stored in enumerate(_transient_field_snap.keys()):
+            _d = ["%s: run=%r view=%r" % (_n, _s, _p)
+                  for _n, _s, _p in zip(_names, _stored, _pv) if _s != _p]
+            log.info("field snapshot MISS vs stored run #%d — %d differing "
+                     "field(s): %s", _i, len(_d),
+                     "; ".join(_d) or "(none — length/shape mismatch)")
+    except Exception as _e:
+        log.warning("snapshot-key diff logging failed: %s", _e)
 
 
 def _store_transient_field_snapshot(key: tuple, field: Dict, sbres: Dict,
@@ -1696,18 +1888,7 @@ def get_fem_field2d(
     # material override.  Without it the field view kept serving a picture built
     # from a different design — a changed magnet or a config-side geometry edit
     # left the cached image in place.
-    try:
-        import hashlib as _hl_f, json as _jl_f
-        from motor_ai_sim.config import get_config as _gc_f
-        from motor_ai_sim.material_context import get_request_materials as _grm_f
-        _cfg_f = _gc_f() or {}
-        _cfp_f = _hl_f.md5(_jl_f.dumps(
-            {"g": _cfg_f.get("geometry"), "w": _cfg_f.get("winding"),
-             "m": _cfg_f.get("materials"), "mag": _cfg_f.get("magnet"),
-             "req_mat": _grm_f()},
-            sort_keys=True, default=str).encode()).hexdigest()[:16]
-    except Exception:
-        _cfp_f = "nofp"
+    _cfp_f = _config_physics_fingerprint(with_request_materials=True)
     key = (
         "sbfield", round(rotor_angle_deg * 2) / 2, round(gamma_deg, 1),
         round(mesh_size_mm, 2), round(min_size_mm, 2), round(outer_air_factor, 2),
@@ -1805,7 +1986,7 @@ def get_fem_field2d(
     # no B(t) history) and never comes from here.
     _snap = None
     if _sweep and use_transient_snapshot:
-        _snap = _transient_field_snap.get(_field_snap_key(
+        _probe_fields = _field_snap_key_fields(
             gamma_deg=gamma_deg, I_phase_rms=I_phase_rms,
             mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm,
             outer_air_factor=outer_air_factor, n_sectors=_ns_eff,
@@ -1815,8 +1996,14 @@ def get_fem_field2d(
             structured_gap=structured_gap, airgap_macro=airgap_macro,
             n_steps_per_period=_nsteps, n_periods=float(n_periods),
             eddy=eddy, rotor_eddy=rotor_eddy, demag=demag,
-            drive="current", element_order=2, cfg_fingerprint=_cfp_f,
-            geo_ov=_geo_ov, rotor_angle0_deg=float(rotor_angle_deg)))
+            drive="current", element_order=2,
+            cfg_fingerprint=_config_physics_fingerprint(
+                with_request_materials=False),
+            geo_ov=_geo_ov, mat_ov=_get_request_materials_safe(),
+            rotor_angle0_deg=float(rotor_angle_deg))
+        _snap = _transient_field_snap.get(tuple(_probe_fields.values()))
+        if _snap is None:
+            _log_snap_key_miss(_probe_fields)
 
     _t0 = _time.time()
     if _snap is not None:
@@ -1903,8 +2090,20 @@ def get_fem_field2d(
     # estimate below.
     _loss_dens = _np.zeros(int(T.shape[1]))
     _ld_solver = _np.asarray(fld.get("loss_dens") or [], float)
+    # WHAT the picture is, in the picture's own words — the solver writes it
+    # component by component (which came from the coupled σE² solve, which from
+    # a normalised model), and the view prints it verbatim.  A map whose magnet
+    # term is a smeared model and one whose magnet term is the solved eddy
+    # current look different and ARE different; the label is how the user can
+    # tell without reading the backend log.
+    _loss_label = ""
     if _ld_solver.size == int(T.shape[1]):
         _loss_dens = _ld_solver
+        _loss_label = str(fld.get("loss_dens_label") or
+                          "cycle-averaged loss density from the transient")
+    else:
+        _loss_label = ("single-frame analytic estimate — Bertotti(|B|) iron, "
+                       "slab-eddy magnets, ρ·J² copper (no B(t) history)")
     # ── Single-frame ANALYTIC loss-density map [W/m³] ────────────────────────
     # The Loss view is ONE magnetostatic frame (like |B|): estimate the local loss
     # density from THIS frame's B / J — no multi-frame transient.  Frames are run
@@ -1962,12 +2161,14 @@ def get_fem_field2d(
     except Exception as _le:
         log.warning("field-view loss density failed: %s", _le)
         _loss_dens = _np.zeros(int(T.shape[1]))
+        _loss_label = "loss density unavailable (%s)" % _le
 
     nsec = _ns_eff if _ns_eff > 1 else 1      # ACTUAL model symmetry (full = 1)
     result = {
         "ok": True,
         "loss_density_per_tri": _loss_dens.tolist(),
         "loss_dens_max": float(_loss_dens.max()) if _loss_dens.size else 0.0,
+        "loss_density_label": _loss_label,
         "n_vertices": int(P.shape[1]), "n_triangles": int(T.shape[1]),
         "vertices": P.T.tolist(), "triangles": T.T.tolist(),
         "domain_per_tri": tags_vis.tolist(),
@@ -2714,23 +2915,12 @@ def get_fem_transient(
     # cached result — the reported "it didn't change immediately" bug — because
     # the operating-point key was unchanged.  A per-request geo override is
     # still appended below (it changes the effective geometry on top of this).
-    try:
-        import hashlib as _hl, json as _jl
-        from motor_ai_sim.config import get_config as _gc_fp
-        from motor_ai_sim.material_context import get_request_materials as _grm_fp
-        _cfg_all = _gc_fp() or {}
-        # A signed-in user's material choice lives ONLY in this request's `mat=`
-        # override (per-user, never written to the shared config).  Leaving it
-        # out of the key meant "assign a different magnet, press Run" replayed
-        # the previous material's cached solve — same torque, same losses, no
-        # hint anything was stale.
-        _cfp = _hl.md5(_jl.dumps(
-            {"g": _cfg_all.get("geometry"), "w": _cfg_all.get("winding"),
-             "m": _cfg_all.get("materials"), "mag": _cfg_all.get("magnet"),
-             "req_mat": _grm_fp()},
-            sort_keys=True, default=str).encode()).hexdigest()[:16]
-    except Exception:
-        _cfp = "nofp"
+    # A signed-in user's material choice lives ONLY in this request's `mat=`
+    # override (per-user, never written to the shared config).  Leaving it out
+    # of the CACHE key meant "assign a different magnet, press Run" replayed the
+    # previous material's cached solve — same torque, same losses, no hint
+    # anything was stale.
+    _cfp = _config_physics_fingerprint(with_request_materials=True)
     _sb_key = ("sb", int(n_steps_per_period), round(n_periods, 2),
                round(gamma_deg, 1), round(I_phase_rms, 1),
                round(mesh_size_mm, 2), round(min_size_mm, 2),
@@ -2768,7 +2958,17 @@ def get_fem_transient(
         n_steps_per_period=n_steps_per_period, n_periods=n_periods,
         eddy=eddy, rotor_eddy=rotor_eddy, demag=demag,
         drive=str(drive or "current"), element_order=element_order,
-        cfg_fingerprint=_cfp, geo_ov=_geo_ov)
+        # The snapshot key must be spelling-independent: this route is reached
+        # through POST /api/kernel/run (no `mat=`, no `geo=` — the interceptor
+        # does not match that URL) while the field view that looks the snapshot
+        # up goes through /api/simulation/physics WITH both.  Same machine, two
+        # spellings; the fingerprint therefore carries the shared config only and
+        # the two overrides are normalised against it (`_geo_ov_for_key`,
+        # `_mat_ov_for_key`) instead of being hashed verbatim.
+        cfg_fingerprint=_config_physics_fingerprint(
+            with_request_materials=False),
+        geo_ov=_geo_ov,
+        mat_ov=_get_request_materials_safe())
 
     def _with_live_snapshot_flag(res: Dict) -> Dict:
         """A cached result was solved in some earlier request — possibly in an

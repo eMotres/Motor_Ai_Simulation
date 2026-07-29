@@ -46,6 +46,11 @@ export interface FemPayload {
   // Ansys-style "Total Loss" spatial map.  Non-zero in iron / copper / magnets.
   loss_density_per_tri?: number[];
   loss_dens_max?:        number;
+  // WHAT that map is, component by component — written by the solver (which
+  // component is the SOLVED per-element σE² of the coupled eddy run and which
+  // is a model normalised to the reported watts).  Printed verbatim under the
+  // view: a smeared model and a solved field look different and ARE different.
+  loss_density_label?:   string;
   // True when this payload came from the time-coupled eddy-current solve
   // (J⟳ / Loss views) rather than the fast magnetostatic snapshot.
   eddy?:                 boolean;

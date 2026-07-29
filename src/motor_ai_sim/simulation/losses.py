@@ -194,17 +194,63 @@ def loss_density_map(
     P_fe_avg: float, P_mag_avg: float, P_cu_dc: float, P_cu_ac_avg: float,
     sigma_cu: float, d_cu_r: float, d_cu_t: float,
     ddt: Callable,
-) -> np.ndarray:
+    solved_dens: Optional[np.ndarray] = None,
+    solved_groups: Sequence[str] = (),
+    solved_elems: Optional[dict] = None,
+    P_cu_end_winding_W: float = 0.0,
+    log_line: Optional[Callable[[str], None]] = None,
+) -> Tuple[np.ndarray, str]:
     """Per-element loss DENSITY (W/m³) for the Ansys-style spatial map.
 
-    Same per-element loss math as the totals above, kept per-element instead
-    of summed, then each component NORMALISED so its volume-integral equals
-    the reported (physically-trusted) component loss — the map both shows the
-    spatial distribution AND integrates back to the sidebar numbers.  Element
-    order matches the field snapshot: [stator-half | rotor-half].
+    Returns ``(density, label)`` — the label says, in the picture's own words,
+    which component came from where.
+
+    TWO sources, never mixed inside one component:
+
+    * ``solved_dens`` — the cycle-averaged per-element σE² of the COUPLED
+      σ·∂A/∂t solve, for whichever of ``solved_groups`` ⊆ {cu, mag, shaft} the
+      run actually solved.  This is the density itself, not a shape: it is
+      taken UNRENORMALISED, because renormalising a measured quantity to a
+      number derived from it can only add error.  It is also the only way the
+      map can show the corner/edge crowding an Ansys Total-Loss plot shows —
+      the eddy current concentrates where the conductor faces the changing
+      field, and no per-body average knows that.
+    * everything else — the modelled shapes (Bertotti for iron always; the slab
+      |dB/dt|² magnet term and the proximity copper term when the coupled solve
+      did not run), each NORMALISED so its volume-integral equals the reported
+      component loss.  A shape normalised to a total is smooth by construction;
+      the label says so.
+
+    ``P_cu_end_winding_W`` is the DC copper loss OUTSIDE the modelled plane
+    (the end turns).  It is real, the sidebar reports it, and the 2-D map has
+    nowhere honest to put it — so it is spread uniformly over the copper and
+    called out in the label, rather than being folded into the solved σE²
+    shape as if the end turns crowded like the active length does.
+
+    Element order matches the field snapshot: [stator-half | rotor-half].
     """
     _nst_e = int(n_stator_elems)
     _dens = np.zeros(int(n_elems))
+    _solved = {str(g) for g in (solved_groups or ())}
+    _sel = solved_elems or {}
+    _parts = []                       # label fragments, in draw order
+
+    def _log(msg: str) -> None:
+        if log_line is not None:
+            log_line(msg)
+
+    # Element areas in the SNAPSHOT's global order, so a cross-check can be
+    # written once against global element ids instead of once per half.
+    _areas_all = np.concatenate([np.asarray(areas_s, float),
+                                 np.asarray(areas_r, float)])
+
+    def _integ_glob(glob_idx) -> float:
+        """Volume integral [W, machine] of the map over global element ids."""
+        if glob_idx is None or np.size(glob_idx) == 0:
+            return 0.0
+        gi = np.asarray(glob_idx, int)
+        return float(np.sum(_dens[gi] * _areas_all[gi])) \
+            * stack_length_m * sector_scale
 
     def _mean_sq_ddt(hx, hy, qp=None):              # time-avg |dB/dt|² per elem
         dX = ddt(np.asarray(hx), qp)
@@ -225,7 +271,8 @@ def loss_density_map(
 
     # Iron — stator + rotor share one Bertotti total (P_fe_avg).
     def _iron_shape(hx, hy, idx, mat, qp=None):
-        if mat is None or idx.size == 0 or not hx or np.asarray(hx[0]).size == 0:
+        if (mat is None or idx.size == 0 or not np.size(hx)
+                or np.asarray(hx[0]).size == 0):
             return np.zeros(idx.size)
         kh, kc, ke = bertotti(mat)
         b2 = _bac2(hx, hy)
@@ -241,28 +288,98 @@ def loss_density_map(
         _kfe = P_fe_avg / _integ_fe
         if iron_s_idx.size: _dens[iron_s_idx] += _sh_is * _kfe
         if iron_r_idx.size: _dens[_nst_e + iron_r_idx] += _sh_ir * _kfe
+        _parts.append("iron: Bertotti shape normalised to %.3g W" % P_fe_avg)
+        _fe_glob = np.concatenate([np.asarray(iron_s_idx, int),
+                                   _nst_e + np.asarray(iron_r_idx, int)])
+        _fe_int = _integ_glob(_fe_glob)
+        _log("loss map | iron   : ∫ = %.4g W vs reported %.4g W (%+.3f %%) "
+             "[Bertotti shape, normalised]"
+             % (_fe_int, P_fe_avg,
+                100.0 * (_fe_int / max(P_fe_avg, 1e-30) - 1.0)))
 
-    # Magnets — slab |dB/dt|² shape, normalised to P_mag_avg.
-    if mag_idx.size and hist_mx and np.asarray(hist_mx[0]).size:
-        _norm_into(mag_idx, _mean_sq_ddt(hist_mx, hist_my),
+    # ── Magnets ───────────────────────────────────────────────────────────
+    _mag_glob = ((_nst_e + np.asarray(mag_idx, int)) if np.size(mag_idx)
+                 else np.array([], int))
+    if "mag" in _solved and solved_dens is not None:
+        _gi = np.asarray(_sel.get("mag", _mag_glob), int)
+        _dens[_gi] += np.asarray(solved_dens, float)[_gi]
+        _parts.append("magnets: solved σE² (coupled σ·∂A/∂t), unrenormalised")
+        _log("loss map | magnet : ∫ = %.4g W vs reported %.4g W (%+.3f %%) "
+             "[per-element σE², NOT renormalised]"
+             % (_integ_glob(_gi), P_mag_avg,
+                100.0 * (_integ_glob(_gi) / max(P_mag_avg, 1e-30) - 1.0)))
+    elif np.size(mag_idx) and np.size(hist_mx) and np.asarray(hist_mx[0]).size:
+        _norm_into(np.asarray(mag_idx, int), _mean_sq_ddt(hist_mx, hist_my),
                    areas_r, _nst_e, P_mag_avg)
+        _parts.append("magnets: slab |dB/dt|² shape normalised to %.3g W" % P_mag_avg)
+        _log("loss map | magnet : ∫ = %.4g W vs reported %.4g W (%+.3f %%) "
+             "[slab |dB/dt|² shape, normalised — smooth by construction]"
+             % (_integ_glob(_mag_glob), P_mag_avg,
+                100.0 * (_integ_glob(_mag_glob) / max(P_mag_avg, 1e-30) - 1.0)))
 
-    # Copper — uniform DC ohmic + crowded AC proximity (radial/tangential).
-    if coil_idx.size:
-        _vol_cu = float(np.sum(areas_s[coil_idx])) * stack_length_m * sector_scale
-        if _vol_cu > 1e-30 and P_cu_dc > 0:
-            _dens[coil_idx] += P_cu_dc / _vol_cu
-        if hist_cx and np.asarray(hist_cx[0]).size and P_cu_ac_avg > 0:
-            _Xc = np.asarray(hist_cx); _Yc = np.asarray(hist_cy)
-            _rc = np.hypot(coil_centroids[0], coil_centroids[1])
-            _rc = np.where(_rc < 1e-9, 1e-9, _rc)
-            _uxc = (coil_centroids[0] / _rc)[None, :]; _uyc = (coil_centroids[1] / _rc)[None, :]
-            _dBrc = ddt(_Xc * _uxc + _Yc * _uyc)
-            _dBtc = ddt(-_Xc * _uyc + _Yc * _uxc)
-            _sh_cu = (sigma_cu / 12.0) * np.mean(
-                d_cu_r ** 2 * _dBrc ** 2 + d_cu_t ** 2 * _dBtc ** 2, axis=0)
-            _norm_into(coil_idx, _sh_cu, areas_s, 0, P_cu_ac_avg)
-    return _dens
+    # ── Shaft ─────────────────────────────────────────────────────────────
+    # Only the coupled solve produces a shaft map at all: the frequency-domain
+    # rotor solve reports a shaft WATT with no per-element field behind it, so
+    # before this there was simply no shaft component in the picture.
+    if "shaft" in _solved and solved_dens is not None and _sel.get("shaft") is not None:
+        _gi = np.asarray(_sel["shaft"], int)
+        if _gi.size:
+            _dens[_gi] += np.asarray(solved_dens, float)[_gi]
+            _parts.append("shaft: solved σE²")
+            _log("loss map | shaft  : ∫ = %.4g W [per-element σE², "
+                 "NOT renormalised]" % _integ_glob(_gi))
+
+    # ── Copper ────────────────────────────────────────────────────────────
+    _cu_glob = np.asarray(coil_idx, int)
+    if _cu_glob.size:
+        _vol_cu = float(np.sum(areas_s[_cu_glob])) * stack_length_m * sector_scale
+        if "cu" in _solved and solved_dens is not None:
+            _gi = np.asarray(_sel.get("cu", _cu_glob), int)
+            _dens[_gi] += np.asarray(solved_dens, float)[_gi]
+            _p_act = _integ_glob(_gi)
+            # End turns: real watts, outside the modelled plane.  Uniform over
+            # the copper and SAID so — not smeared into the solved shape.
+            if _vol_cu > 1e-30 and P_cu_end_winding_W > 0:
+                _dens[_cu_glob] += P_cu_end_winding_W / _vol_cu
+            _parts.append(
+                "copper: solved σE² (active length)"
+                + (" + uniform end-winding DC %.3g W"
+                   % P_cu_end_winding_W if P_cu_end_winding_W > 0 else ""))
+            _log("loss map | copper : ∫ = %.4g W = solved active-length σE² "
+                 "%.4g W + uniform end-winding %.4g W; reported copper %.4g W "
+                 "(%+.3f %%)"
+                 % (_integ_glob(_cu_glob), _p_act, P_cu_end_winding_W,
+                    P_cu_dc + P_cu_ac_avg,
+                    100.0 * (_integ_glob(_cu_glob)
+                             / max(P_cu_dc + P_cu_ac_avg, 1e-30) - 1.0)))
+        else:
+            # Uniform DC ohmic + crowded AC proximity (radial/tangential).
+            if _vol_cu > 1e-30 and P_cu_dc > 0:
+                _dens[_cu_glob] += P_cu_dc / _vol_cu
+            if (np.size(hist_cx) and np.asarray(hist_cx[0]).size
+                    and P_cu_ac_avg > 0):
+                _Xc = np.asarray(hist_cx); _Yc = np.asarray(hist_cy)
+                _rc = np.hypot(coil_centroids[0], coil_centroids[1])
+                _rc = np.where(_rc < 1e-9, 1e-9, _rc)
+                _uxc = (coil_centroids[0] / _rc)[None, :]; _uyc = (coil_centroids[1] / _rc)[None, :]
+                _dBrc = ddt(_Xc * _uxc + _Yc * _uyc)
+                _dBtc = ddt(-_Xc * _uyc + _Yc * _uxc)
+                _sh_cu = (sigma_cu / 12.0) * np.mean(
+                    d_cu_r ** 2 * _dBrc ** 2 + d_cu_t ** 2 * _dBtc ** 2, axis=0)
+                _norm_into(_cu_glob, _sh_cu, areas_s, 0, P_cu_ac_avg)
+            _parts.append("copper: uniform DC I²R + proximity AC shape "
+                          "normalised to %.3g W" % P_cu_ac_avg)
+            _log("loss map | copper : ∫ = %.4g W vs reported %.4g W (%+.3f %%) "
+                 "[uniform DC + normalised proximity AC]"
+                 % (_integ_glob(_cu_glob), P_cu_dc + P_cu_ac_avg,
+                    100.0 * (_integ_glob(_cu_glob)
+                             / max(P_cu_dc + P_cu_ac_avg, 1e-30) - 1.0)))
+
+    _label = ("cycle-averaged loss density — " + "; ".join(_parts)) if _parts \
+        else "loss density unavailable (no loss component could be built)"
+    _log("loss map | TOTAL  : ∫ = %.4g W over the whole map"
+         % _integ_glob(np.arange(int(n_elems))))
+    return _dens, _label
 
 
 def rotor_eddy_tags(cells: dict, n_tri: int, dom_mag_base: int

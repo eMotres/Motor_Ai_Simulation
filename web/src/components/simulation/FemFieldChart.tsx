@@ -141,12 +141,15 @@ function readSimSetting<T>(key: string, def: T): T {
 
 // ── R3F mesh component ────────────────────────────────────────────────────
 type FieldMode = 'Az' | 'Bmag' | 'J' | 'Jeddy' | 'Loss' | 'Demag' | 'Temp';
-// Modes powered by the (slow) time-coupled eddy-current transient rather than
-// the fast magnetostatic snapshot: J⟳ (real current crowding / proximity) and
-// Loss (Ansys-style W/m³ density map).  Selecting either lazily runs the eddy
-// solve (~25 s) and caches its last-frame field + cycle-averaged loss density.
-// Only J⟳ (eddy-current crowding) needs the slow time-coupled solve.  Loss now
-// comes from the single magnetostatic frame (analytic loss density) like |B|.
+// Only J⟳ (eddy-current crowding) needs the time-coupled σ(−∂A/∂t+U) solve.
+//
+// It does NOT necessarily need a NEW one: the Simulation run keeps its own last
+// frame server-side (mesh + A + B + Jeddy + cycle-averaged loss density), so when
+// the run solved this operating point with the coupled eddy on, J⟳ and Loss are
+// replayed from it instantly.  Only a miss (different operating point / mesh /
+// frame count, coupled eddy off in the run, or a back-end restart) runs a solve
+// here — and the header then says so.  Loss otherwise falls back to the
+// single-frame analytic density (fast, like |B|).
 const EDDY_MODES = new Set<FieldMode>(['Jeddy']);
 
 // Diverging blue→green→red colormap for signed J_z (Ansys "J" style:
@@ -852,7 +855,17 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
   // one, lazily fetched on first selection and re-fetched when γ / I change.
   const [eddyPayload, setEddyPayload] = useState<FemPayload | null>(null);
   const [eddyLoading, setEddyLoading] = useState<boolean>(false);
+  // TRUE only once the snapshot probe has come back empty and this view is
+  // actually running its own transient — so the spinner never claims to be
+  // "fetching" while it is solving, or the other way round.
+  const [eddySolving, setEddySolving] = useState<boolean>(false);
   const [eddyErr,     setEddyErr]     = useState<string | null>(null);
+  // Loss view: the Simulation run's OWN cycle-averaged loss-density map, if that
+  // run's snapshot matches this operating point.  Probed without solving
+  // (snapshot_only); a miss leaves the single-frame analytic map in place.
+  const [lossSnap,    setLossSnap]    = useState<FemPayload | null>(null);
+  const [lossProbing, setLossProbing] = useState<boolean>(false);
+  const [lossProbed,  setLossProbed]  = useState<boolean>(false);
   const [logLoss,     setLogLoss]     = useState<boolean>(true);   // log W/m³ map
   const [eqTemp,      setEqTemp]      = useState<boolean>(true);   // histogram-equalised temp colours
   // Thermal (Temp view) — a steady-state conduction solve fed by the eddy
@@ -870,9 +883,16 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
   const [showFlux, setShowFlux] = useState<boolean>(true);
   const isEddy = !payloadOverride && EDDY_MODES.has(mode);
   const isThermal = !payloadOverride && mode === 'Temp';
+  const isLoss = !payloadOverride && mode === 'Loss';
   const payload = payloadOverride
-    ?? (isThermal ? thermalPayload : isEddy ? eddyPayload : fetchedPayload);
-  const busy = isThermal ? thermalLoading : isEddy ? eddyLoading : loading;
+    ?? (isThermal ? thermalPayload
+       : isEddy ? eddyPayload
+       : (isLoss && lossSnap) ? lossSnap
+       : fetchedPayload);
+  const busy = isThermal ? thermalLoading
+             : isEddy ? eddyLoading
+             : (isLoss && lossProbing) ? true
+             : loading;
   const errMsg = isThermal ? thermalErr : isEddy ? eddyErr : error;
   // The static solver always computes a demag map (a check at full Br), but if
   // the user has demag modelling OFF the map (all 0 % at no-load) is just
@@ -964,62 +984,141 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
   const eddyCurrent = (I_phase_rms !== undefined && I_phase_rms > 0) ? I_phase_rms : 0;
   const eddyNoLoad = !(eddyCurrent > 0);
 
+  // The Simulation tab's own run settings.  The multi-frame views are asked for
+  // with EXACTLY these so the backend can recognise the request as the run it
+  // already solved and hand back that run's field instead of solving again.
+  // (Same localStorage keys the Simulation panel writes and TransientCharts
+  // sends — one source, or the keys would never match.)
+  const simSteps    = () => Number(readSimSetting('stepsPP', 24)) || 24;
+  const simCoilTemp = () => Number(readSimSetting('coilTemp', 120.0));
+  const simEddy     = () => readSimSetting<boolean>('eddyCoupled', true) !== false;
+
+  /** Query shared by the J⟳ / Loss requests and the run itself.  `eddy` and the
+   *  frame count differ per caller, everything else is the run's own settings. */
+  const multiFrameParams = (eddy: boolean, steps: number): Record<string, string> => ({
+    gamma_deg:        String(gamma_deg),
+    I_phase_rms:      String(eddyCurrent),
+    n_steps_per_period: String(steps),
+    n_periods:          '1',
+    eddy:             String(eddy),
+    rotor_eddy:       'true',
+    // Demag and coil temperature change the SOLVE, so they are part of what
+    // makes a request "the same run" — omitting them meant the view asked for a
+    // motor the simulation never solved and could never be served from it.
+    demag:            String(demagOn),
+    coil_temp_c:      String(simCoilTemp()),
+    mesh_size_mm:     String(readMeshSetting('meshSize', 4.0)),
+    min_size_mm:      String(readMeshSetting('minSize',  0.3)),
+    outer_air_factor: String(readMeshSetting('outerAir', 1.3)),
+    n_sectors:        String(readMeshSetting('nSectors', 1)),
+    component_mesh:   JSON.stringify(readMeshSetting<Record<string, number>>('componentMesh', {})),
+    pole_copy:        String(readMeshSetting('poleCopy', false)),
+    iron_template:    String(readMeshSetting('ironTemplate', true)),
+    geo_mesh:         String(readMeshSetting('geoMesh', true)),
+    structured_gap:   String(readMeshSetting('structuredGap', false) || readMeshSetting('ironTemplate', true)),
+    airgap_macro:     String(readMeshSetting('harmonicGap', false)),
+    gap_layers:       String(readMeshSetting('gapLayers', 2)),
+  });
+
   const fetchEddy = () => {
     if (payloadOverride) return;
-    setEddyLoading(true); setEddyErr(null);
-    const comp = JSON.stringify(readMeshSetting<Record<string, number>>('componentMesh', {}));
+    setEddyLoading(true); setEddyErr(null); setEddySolving(false);
     // SAME endpoint as the A_z / |B| / J views, with the SAME mesh-pipeline
     // toggles. It used to be a separate /fem_eddy_field2d whose defaults left
     // out template iron, the geo mesh and the structured belt, so the J⟳ view
     // solved a DIFFERENT mesh and drew a visibly different outline next to the
-    // A_z view. Every mesh setting below must stay in step with fetchFem — that
+    // A_z view. Every mesh setting must stay in step with fetchFem — that
     // is the whole reason the two share one endpoint now.
     const base = `${API}/api/simulation/physics/fem_field2d`;
+    const coupled = simEddy();
+    // STEP 1 — ask whether the Simulation run already solved this exact thing
+    // (snapshot_only: the backend answers from its store or says no; it never
+    // starts a solve behind this request).  Two steps rather than one so the
+    // spinner can tell the truth: "fetching" and "solving" are different waits,
+    // and a single request that might do either has to guess which to claim.
+    // With the coupled eddy off in the run there is nothing to find, so skip it.
+    const probe: Promise<FemPayload> = coupled
+      ? fetch(`${base}?${new URLSearchParams({
+            ...multiFrameParams(true, simSteps()), snapshot_only: 'true',
+          }).toString()}`, { cache: 'no-store' })
+          .then(r => (r.ok ? r.json() : { no_snapshot: true }))
+          .catch(() => ({ no_snapshot: true }))
+      : Promise.resolve({ no_snapshot: true } as FemPayload);
+    probe.then((d: FemPayload) => {
+      if (d && !d.no_snapshot && d.vertices) {         // the run's own field
+        setEddyPayload(tileFullRing(d)); setEddyLoading(false);
+        return;
+      }
+      // STEP 2 — nothing to replay: solve it here, at the cheap 10 frames /
+      // period this view always used (≥9 keeps the de-jitter savgol and still
+      // resolves the 6f loss harmonic).  The payload labels itself as an
+      // on-demand solve, and the spinner now says so too.
+      setEddySolving(true);
+      return fetch(`${base}?${new URLSearchParams(multiFrameParams(true, 10)).toString()}`,
+                   { cache: 'no-store' })
+        .then(async r => {
+          if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
+          return r.json();
+        })
+        .then((d2: FemPayload) => {
+          setEddyPayload(tileFullRing(d2));
+          setEddyLoading(false); setEddySolving(false);
+        });
+    }).catch(e => { setEddyErr(String(e)); setEddyLoading(false); setEddySolving(false); });
+  };
+
+  /** Loss view: ask ONLY for the simulation run's own cycle-averaged map
+   *  (snapshot_only → the backend never starts a solve for this).  A hit
+   *  replaces the single-frame analytic estimate with the real transient map;
+   *  a miss leaves the analytic one, which is what this view showed before. */
+  const probeLossSnapshot = () => {
+    if (payloadOverride) return;
+    setLossProbing(true);
+    const base = `${API}/api/simulation/physics/fem_field2d`;
     const qs = new URLSearchParams({
-      gamma_deg:        String(gamma_deg),
-      I_phase_rms:      String(eddyCurrent),
-      // The J⟳ view runs a full nonlinear transient; the loss-density MAP is a
-      // VISUAL and does not need the dashboard's 24 frames.  10 frames / 1 period
-      // (≥9 keeps the de-jitter savgol; still resolves the 6f loss harmonic) ≈ 2.4×
-      // fewer nonlinear solves → ~2.4× faster, and the result caches so a repeat
-      // view of the same operating point is instant.
-      n_steps_per_period: '10',
-      n_periods:          '1',
-      // The true time-coupled σ(−∂A/∂t+U) currents — that IS this view.
-      eddy:             'true',
-      rotor_eddy:       'true',
-      mesh_size_mm:     String(readMeshSetting('meshSize', 4.0)),
-      min_size_mm:      String(readMeshSetting('minSize',  0.3)),
-      outer_air_factor: String(readMeshSetting('outerAir', 1.3)),
-      n_sectors:        String(readMeshSetting('nSectors', 1)),
-      component_mesh:   comp,
-      pole_copy:        String(readMeshSetting('poleCopy', false)),
-      iron_template:    String(readMeshSetting('ironTemplate', true)),
-      geo_mesh:         String(readMeshSetting('geoMesh', true)),
-      structured_gap:   String(readMeshSetting('structuredGap', false) || readMeshSetting('ironTemplate', true)),
-      airgap_macro:     String(readMeshSetting('harmonicGap', false)),
-      gap_layers:       String(readMeshSetting('gapLayers', 2)),
+      ...multiFrameParams(simEddy(), simSteps()),
+      snapshot_only: 'true',
     }).toString();
     fetch(`${base}?${qs}`, { cache: 'no-store' })
-      .then(async r => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
-        return r.json();
+      .then(async r => (r.ok ? r.json() : { no_snapshot: true }))
+      .then((d: FemPayload) => {
+        setLossSnap(d && d.no_snapshot ? null : tileFullRing(d));
+        setLossProbing(false); setLossProbed(true);
       })
-      .then((d: FemPayload) => { setEddyPayload(tileFullRing(d)); setEddyLoading(false); })
-      .catch(e => { setEddyErr(String(e)); setEddyLoading(false); });
+      .catch(() => { setLossSnap(null); setLossProbing(false); setLossProbed(true); });
   };
 
   // γ / I changed → the cached eddy solve is stale (rotor angle does NOT
   // matter — the eddy run sweeps a whole period — so we don't invalidate on it).
   useEffect(() => {
     setEddyPayload(null); setEddyErr(null);
+    setLossSnap(null); setLossProbed(false);
   }, [gamma_deg, I_phase_rms, mode]);   // Loss (fast) vs J⟳ (coupled) need different solves
 
-  // Lazily run the (slow) eddy solve the first time a J⟳ / Loss view is shown.
+  // A finished simulation run has just produced a field snapshot → drop what
+  // these views are holding so the next look comes from the RUN, not from a
+  // solve of an older operating point.
+  useEffect(() => {
+    const onRun = () => {
+      setEddyPayload(null); setEddyErr(null);
+      setLossSnap(null); setLossProbed(false);
+    };
+    window.addEventListener('sim-transient-done', onRun);
+    return () => window.removeEventListener('sim-transient-done', onRun);
+  }, []);
+
+  // Lazily fetch the first time a J⟳ view is shown (from the run's snapshot when
+  // it matches, otherwise a solve here).
   useEffect(() => {
     if (isEddy && !eddyPayload && !eddyLoading && !eddyErr) fetchEddy();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isEddy, eddyPayload, eddyLoading, eddyErr]);
+
+  // Loss: probe the run's snapshot once per operating point (no solve).
+  useEffect(() => {
+    if (isLoss && !lossSnap && !lossProbed && !lossProbing) probeLossSnapshot();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLoss, lossSnap, lossProbed, lossProbing]);
 
   // ── Thermal (Temp view) ───────────────────────────────────────────────────
   const thermalCurrent = (I_phase_rms !== undefined && I_phase_rms > 0) ? I_phase_rms : 0;
@@ -1065,22 +1164,34 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
             {mode === 'Temp'
               ? <>Temperature — °C (steady-state thermal solve)</>
               : mode === 'Loss'
-              ? <>Loss density — W/m³ (eddy-current transient)</>
+              ? (lossSnap
+                   ? <>Loss density — W/m³ (simulation run, cycle-averaged)</>
+                   : <>Loss density — W/m³ (single frame, analytic)</>)
               : mode === 'Jeddy'
-                ? <>Current density J — eddy solve (proximity)</>
+                ? <>Current density J — coupled eddy solve (proximity)</>
                 : <>Magnetic potential A<sub>z</sub> — real scikit-fem solve</>}
-            <Tooltip title={isEddy
-              ? "Time-coupled eddy-current solve over a full electrical period. J⟳ shows the real current density σ(−∂A/∂t+U) crowding toward the slot mouth (proximity effect); Loss is the cycle-averaged dissipation density [W/m³] — iron Bertotti + copper DC+AC + magnet eddy, normalised so the map integrates to the reported component losses."
+            <Tooltip title={(isEddy || isLoss)
+              ? "Time-coupled eddy-current solve over a full electrical period. J⟳ shows the real current density σ(−∂A/∂t+U) crowding toward the slot mouth (proximity effect); Loss is the cycle-averaged dissipation density [W/m³] — iron Bertotti + copper DC+AC + magnet eddy, normalised so the map integrates to the reported component losses. When the last Simulation run solved this same operating point (with the coupled eddy solve on), these views replay THAT run's final frame — no second solve. Otherwise they compute here, and the line below says so."
               : "2-D magnetostatic field at the current rotor angle — the same per-frame field the sliding-band transient sweeps. Torque + losses are ×n_sectors for the full motor."} placement="top">
               <span style={{ color: 'var(--text-4)', marginLeft: 6, fontSize: 11, cursor: 'help' }}>ⓘ</span>
             </Tooltip>
           </Typography>
-          <Typography sx={{ fontSize: 10, color: 'var(--text-4)' }}>
+          <Typography sx={{ fontSize: 10, color: payload?.from_transient ? '#38bdf8' : 'var(--text-4)' }}>
             {payload
               ? (subHeader
                    ? subHeader
-                   : `${payload.n_triangles.toLocaleString()} triangles · ×${payload.symmetry_mult} symmetry · solve ${payload.solve_time_s}s${isEddy ? ` · eddy @ ${eddyCurrent.toFixed(0)} A` : ''}`)
-              : (isEddy ? 'Running eddy-current transient (~25 s)…' : 'Solving…')}
+                   : `${payload.n_triangles.toLocaleString()} triangles · ×${payload.symmetry_mult} symmetry`
+                     + `${payload.from_transient ? '' : ` · solve ${payload.solve_time_s}s`}`
+                     + `${(isEddy || isLoss) ? ` · @ ${eddyCurrent.toFixed(0)} A` : ''}`
+                     // WHERE the picture came from, verbatim from the backend:
+                     // replayed from the simulation run, or solved here just now.
+                     + `${payload.source_label ? ` · ${payload.source_label}` : ''}`)
+              : (isEddy
+                   ? (eddySolving
+                        ? 'No matching simulation run — solving this view on demand…'
+                        : 'Looking for the last simulation run\'s field…')
+                   : isLoss ? 'Checking the last simulation run\'s loss map…'
+                   : 'Solving…')}
           </Typography>
         </Box>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -1096,13 +1207,13 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
             <ToggleButton value="J">J</ToggleButton>
             {!payloadOverride && (
               <ToggleButton value="Jeddy"
-                title="Eddy-solve current density — shows the proximity crowding the uniform 'J' view can't (slow, ~25 s)">
+                title="Coupled eddy-current density σ(−∂A/∂t+U) — the proximity crowding the uniform 'J' view cannot show. Instant when the last Simulation run solved this operating point with the coupled eddy solve on (it replays that run's final frame); otherwise it runs a 10-frame transient here (~25 s) and says so.">
                 J⟳
               </ToggleButton>
             )}
             {!payloadOverride && (
               <ToggleButton value="Loss"
-                title="Ansys-style loss-density map [W/m³] (slow, ~25 s)">
+                title="Ansys-style loss-density map [W/m³]. Uses the last Simulation run's own cycle-averaged map when it matches this operating point; otherwise the single-frame analytic estimate (fast). The header says which one you are looking at.">
                 Loss
               </ToggleButton>
             )}
@@ -1212,7 +1323,12 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
           )}
           {!hideRefresh && (
             <Button size="small" startIcon={<RefreshIcon fontSize="small"/>}
-              onClick={isThermal ? fetchThermal : isEddy ? fetchEddy : fetchFem}
+              onClick={isThermal ? fetchThermal
+                       : isEddy ? fetchEddy
+                       // Loss: re-check the run's snapshot AND refresh the
+                       // single-frame map it falls back to.
+                       : isLoss ? (() => { setLossSnap(null); setLossProbed(false); fetchFem(); })
+                       : fetchFem}
               disabled={busy}
               sx={{ color: '#93c5fd', fontSize: 11, textTransform: 'none' }}>
               Re-solve
@@ -1239,11 +1355,22 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               bgcolor: 'rgba(6,13,23,0.7)', zIndex: 5, gap: 1 }}>
               <CircularProgress size={32}/>
-              {(isEddy || isThermal) && (
-                <Typography sx={{ fontSize: 11, color: 'var(--text-2)' }}>
+              {(isEddy || isThermal || isLoss) && (
+                <Typography sx={{ fontSize: 11, color: 'var(--text-2)', textAlign: 'center', maxWidth: 320 }}>
                   {isThermal
                     ? 'Running thermal solve (EM losses + conduction, ~25 s)…'
-                    : 'Running eddy-current transient (~25 s)…'}
+                    : isLoss
+                      ? 'Looking for the last simulation run\'s loss map (no solve)…'
+                      : !eddySolving
+                        // Still the snapshot probe — a lookup, not a solve.
+                        ? 'Looking for the last simulation run\'s eddy field…'
+                        : (simEddy()
+                            ? 'The last simulation run does not cover this operating '
+                              + 'point, so this view is solving its own 10-frame eddy '
+                              + 'transient (~25 s).'
+                            : 'Coupled eddy solve is OFF in the Simulation run, so this '
+                              + 'view has to solve its own 10-frame eddy transient (~25 s). '
+                              + 'Turn it on in the Simulation panel to get this instantly.')}
                 </Typography>
               )}
             </Box>

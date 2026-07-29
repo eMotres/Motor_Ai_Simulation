@@ -71,6 +71,20 @@ export interface FemPayload {
 
   poles_per_sector?: number;
   anti_periodic?:    boolean;
+
+  // ── Provenance: WHERE this picture came from ────────────────────────────
+  // "transient-snapshot" = the last simulation run's own final frame, replayed
+  // (no solve).  "on-demand solve" = this view ran its own solve just now.
+  // The header prints source_label verbatim, so a view always states which one
+  // it is instead of leaving the user to guess whether the wait was real work.
+  source?:        'transient-snapshot' | 'on-demand solve' | string;
+  from_transient?: boolean;
+  source_label?:   string;
+  transient_steps_per_period?: number | null;
+  transient_computed_at?:      string | null;
+  // snapshot_only=true probe that found nothing cached — no solve was run.
+  no_snapshot?:   boolean;
+  reason?:        string;
 }
 
 /**

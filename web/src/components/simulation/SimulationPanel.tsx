@@ -329,6 +329,15 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // de-rates Br along the recoil line (Ansys-style) so the transient torque /
   // back-EMF reflect the weakened magnets.  Opt-in (adds a pre-pass sweep).
   const [demag, setDemag] = usePersisted('demag', false);
+  // Coupled σ·∂A/∂t eddy-current solve (P2): the currents induced in copper,
+  // magnets and shaft are solved TOGETHER with the field instead of estimated
+  // afterwards, so the run reports the SOLVED copper loss (DC + the real AC /
+  // proximity part) and its field snapshot carries the true eddy J⟳.  That
+  // snapshot is what makes the J⟳ / Loss field views instant: they replay this
+  // run's own last frame instead of launching a second transient.  Turning it
+  // OFF is honest too — the run is then magnetostatic and those views solve on
+  // demand, exactly as they used to (and say so in their header).
+  const [eddyCoupled, setEddyCoupled] = usePersisted('eddyCoupled', true);
   // Band-limit the transient torque to the physical 6·k electrical orders
   // (drops the broadband slip-node noise a balanced 3-phase machine cannot
   // produce).  ON by default; turn off to inspect the raw per-frame torque.
@@ -339,7 +348,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
     if (!simReady.current) return;
     syncActiveMotor();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [current, frequency, rpm, phaseOffset, steps, coilTemp, endWinding, demag, torqueFilter, connection]);
+  }, [current, frequency, rpm, phaseOffset, steps, coilTemp, endWinding, demag, eddyCoupled, torqueFilter, connection]);
   const [stepsStr, setStepsStr] = useState(String(steps));
   useEffect(() => { setStepsStr(String(steps)); }, [steps]);
   // HARD upper bound: the sliding-band rotor can only sit on slip-ring nodes,
@@ -835,6 +844,26 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               }
             />
           </Tooltip>
+          {/* Coupled σ·∂A/∂t eddy-current solve.  Solved WITH the field (one
+              Newton system), so the copper loss is the solved 2-D value and
+              the run's last frame carries the real eddy J⟳ — which the J⟳ /
+              Loss field views then render without solving anything. */}
+          <Tooltip title="Solve the induced (eddy) currents together with the field: σ(−∂A/∂t + U) in copper, magnets and shaft becomes part of the same Newton system instead of a post-process. The run then reports the SOLVED copper loss (DC + the real AC/proximity part), and its last frame carries the true eddy current density — so the J⟳ and Loss field views render THIS run's field instantly instead of launching a second ~25 s transient. Costs extra solve time per frame. Off = magnetostatic run; the J⟳ view then solves on demand as before and says so." placement="right">
+            <FormControlLabel
+              sx={{ mt: -0.5, mb: 0.75, ml: 0.25 }}
+              control={
+                <Checkbox size="small" checked={eddyCoupled}
+                  onChange={e => setEddyCoupled(e.target.checked)}
+                  disabled={simBusy}
+                  sx={{ p: 0.5, color: 'var(--text-4)', '&.Mui-checked': { color: '#38bdf8' } }} />
+              }
+              label={
+                <Typography variant="caption" sx={{ color: eddyCoupled ? '#38bdf8' : 'var(--text-2)' }}>
+                  Coupled eddy solve — solved copper loss + instant J⟳ view
+                </Typography>
+              }
+            />
+          </Tooltip>
           {/* Torque band-limit filter: keep only the physical 6·k electrical
               orders.  The sliding band steps the rotor across discrete slip
               nodes, injecting broadband ripple a balanced 3-phase machine
@@ -1148,6 +1177,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
           steps={steps}
           fieldLosses={fieldLosses}
           demag={demag}
+          eddyCoupled={eddyCoupled}
           torqueFilter={torqueFilter}
           drive={drive}
           vPeak={vPeak}

@@ -16,6 +16,7 @@ import logging
 import math
 import time
 import uuid
+from collections import OrderedDict
 from typing import Dict, Optional
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Depends, Query
@@ -1516,6 +1517,98 @@ async def build_fem_mesh_2d_sliding_band(
 _fem_field_cache: Dict[tuple, Dict] = {}
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Field snapshot produced BY the main transient (Re-run Simulation)
+# ─────────────────────────────────────────────────────────────────────────────
+# The sliding-band transient already computes, for its LAST frame, exactly the
+# payload the field views draw: mesh + A + B + domain tags + the coupled eddy
+# Jeddy (when the eddy solve is on) + the cycle-averaged loss density.  It used
+# to throw that away, so selecting J⟳ / Loss ran a SECOND full transient and the
+# user waited ~25 s for a field the run had already produced.
+#
+# get_fem_transient now asks for it (return_field=True — a snapshot of the frame
+# it just solved, NOT an extra solve) and parks it here; get_fem_field2d serves
+# the multi-frame (J⟳ / Loss) views straight out of it when the key matches.
+# The key is the physics the snapshot depends on, so a different operating point
+# / mesh / geometry can never be served from here — it misses and re-solves.
+#
+# Memory-only and deliberately small (the last few runs): each entry holds full
+# per-node / per-element arrays.  A back-end restart empties it, so the first
+# J⟳ view after a restart computes on demand and SAYS so.
+_transient_field_snap: "OrderedDict[tuple, Dict]" = OrderedDict()
+_TRANSIENT_SNAP_MAX = 3
+
+
+def _field_snap_key(*, gamma_deg, I_phase_rms, mesh_size_mm, min_size_mm,
+                    outer_air_factor, n_sectors, stator_fillet_mm, gap_layers,
+                    coil_temp_c, comp_mesh, pole_copy, iron_template, geo_mesh,
+                    structured_gap, airgap_macro, n_steps_per_period, n_periods,
+                    eddy, rotor_eddy, demag, drive, element_order,
+                    cfg_fingerprint, geo_ov, rotor_angle0_deg=0.0) -> tuple:
+    """THE key both routes build — the transient when it stores its snapshot and
+    the field view when it looks one up.  One function so the two can never drift
+    into "almost the same key" (which would silently serve the wrong picture, or
+    silently never hit).
+
+    Everything the SOLVE depends on is in here, including the shared-config /
+    per-request-material fingerprint.  `n_sectors` is normalised to the effective
+    wedge (>1 = sector, -1 = full ring) because the two routes reach it by
+    different routes (auto-symmetry vs GCD snapping).
+    """
+    return (
+        "tfield",
+        round(float(gamma_deg), 1), round(float(I_phase_rms), 2),
+        round(float(mesh_size_mm), 2), round(float(min_size_mm), 2),
+        round(float(outer_air_factor), 2),
+        int(n_sectors) if int(n_sectors) > 1 else -1,
+        round(float(stator_fillet_mm), 2), round(float(gap_layers), 1),
+        round(float(coil_temp_c), 1), tuple(sorted((comp_mesh or {}).items())),
+        int(bool(pole_copy)), int(bool(iron_template)), int(bool(geo_mesh)),
+        int(bool(structured_gap)), int(bool(airgap_macro)),
+        int(n_steps_per_period), round(float(n_periods), 2),
+        int(bool(eddy)), int(bool(rotor_eddy)), int(bool(demag)),
+        str(drive or "current"), int(element_order), str(cfg_fingerprint),
+        tuple(sorted((geo_ov or {}).items())) if geo_ov else None,
+        # The rotor's CAD start angle.  The transient always meshes at 0; a field
+        # view asking for a physically rotated rotor is a different mesh and must
+        # never be answered from the run's snapshot.
+        round(float(rotor_angle0_deg), 3),
+    )
+
+
+def _store_transient_field_snapshot(key: tuple, field: Dict, sbres: Dict,
+                                    *, eddy: bool, n_steps_per_period: int,
+                                    n_periods: float, solve_time_s: float) -> None:
+    """Park the transient's last-frame field + the handful of machine scalars the
+    field-view sidebar reads.  Only the scalars get copied — the full transient
+    result stays where it is (the transient cache), so this store holds one
+    field snapshot, not a second copy of the run."""
+    try:
+        _transient_field_snap[key] = {
+            "field": field,
+            # EXACTLY the keys the field-view payload builder reads off the
+            # solver result `d`.  Copied (not referenced) so the snapshot cannot
+            # be mutated from under the view by a later trim of the transient.
+            "scalars": {k: sbres.get(k) for k in (
+                "P_cu_total_solve_W", "P_cu_W", "P_fe_W", "P_mag_eddy_W",
+                "T_avg_Nm", "rpm", "P_elec_in_W", "f_elec_Hz",
+                "P_cu_ac_solve_W", "V_peak", "demag_coef_per_tri",
+                "demag_report")},
+            "meta": {
+                "eddy": bool(eddy),
+                "n_steps_per_period": int(n_steps_per_period),
+                "n_periods": float(n_periods),
+                "computed_at": sbres.get("computed_at"),
+                "solve_time_s": round(float(solve_time_s), 1),
+            },
+        }
+        _transient_field_snap.move_to_end(key)
+        while len(_transient_field_snap) > _TRANSIENT_SNAP_MAX:
+            _transient_field_snap.popitem(last=False)
+    except Exception as _e:      # never let a viewer convenience break a solve
+        log.warning("could not store transient field snapshot: %s", _e)
+
+
 class _HaveSolverLossMap(Exception):
     """Skip the analytic single-frame loss estimate — the transient supplied the
     real map.  A sentinel rather than an `if` because the analytic block is one
@@ -1559,6 +1652,16 @@ def get_fem_field2d(
     eddy:                bool  = False,   # coupled σ·∂A/∂t solve → the real eddy J⟳
     rotor_eddy:          bool  = False,   # magnet/shaft eddy losses in the loss map
     coil_temp_c:         float = 120.0,
+    use_transient_snapshot: bool = True,  # serve the multi-frame views from the LAST
+                                          # simulation run's own field snapshot when its
+                                          # key matches (see _field_snap_key).  Set false
+                                          # to force a fresh solve.
+    snapshot_only:       bool  = False,   # PROBE: return the snapshot if one matches,
+                                          # otherwise answer {"ok": false, "no_snapshot":
+                                          # true} WITHOUT solving.  The Loss view uses it
+                                          # to prefer the run's real cycle-averaged map and
+                                          # fall back to its own single-frame estimate,
+                                          # instead of silently starting a ~25 s solve.
 ):
     """Field view computed by the SLIDING-BAND TRANSIENT solver (P2) — the SAME
     solver that produces the transient torque/losses, so the field picture is
@@ -1615,6 +1718,10 @@ def get_fem_field2d(
         round(float(gap_layers), 1), _cfp_f,
         int(n_steps_per_period), round(float(n_periods), 2),
         int(bool(eddy)), int(bool(rotor_eddy)), round(float(coil_temp_c), 1),
+        # A payload built from the simulation run's snapshot and one solved here
+        # are labelled differently, so they are different cache entries — asking
+        # for a fresh solve must not replay a snapshot-sourced picture.
+        int(bool(use_transient_snapshot)),
     )
     if _geo_ov:   # distinct cache entry per overridden geometry (no-geo key unchanged)
         key = key + (tuple(sorted(_geo_ov.items())),)
@@ -1656,44 +1763,112 @@ def get_fem_field2d(
             log.info("fem_field2d: n_sectors=%d invalid for %ds%dp (GCD %d) — using %s",
                      _ns_req, _slots, _poles, _gcd,
                      "full disk" if _ns_eff < 0 else f"1/{_ns_eff}")
+    else:
+        # P2 AUTO-SYMMETRY — the SAME rule get_fem_transient applies when the
+        # caller leaves n_sectors at "full" (see its element_order==2 block):
+        # solve the machine's natural anti-periodic wedge num_seg =
+        # gcd(slots, poles).  This is not a speed default: the transient beside
+        # this view already does it, so a full-disk field view was solving a
+        # DIFFERENT model than the numbers next to it — and could never be
+        # served from the run's own snapshot.  The wedge is tiled back to the
+        # full ring for display (symmetry_mult / anti_periodic below).
+        try:
+            from motor_ai_sim.config import get_config as _gc_sym
+            _g_sym = dict((_gc_sym().get("geometry", {})) or {})
+            if _geo_ov:
+                _g_sym = {**_g_sym, **_geo_ov}
+            _sym = int(_g_sym.get("num_seg")
+                       or math.gcd(int(_g_sym.get("num_slots", 1)),
+                                   int(_g_sym.get("num_poles", 1))) or 1)
+        except Exception:
+            _sym = _gcd
+        if _sym >= 2:
+            _ns_eff = _sym
+            log.info("fem_field2d: n_sectors<=1 → P2 auto-symmetry 1/%d "
+                     "(same wedge the transient solves)", _sym)
+
+    # 1 step (rotor pinned at the requested angle) → a true single-angle field
+    # from the sliding-band machinery.  demag needs a short sweep for the
+    # worst-case knee pre-pass, so use a few steps and snapshot the FIRST one.
+    # A caller that asked for a real transient (loss map, eddy J) gets its
+    # frame count and the LAST frame — the rotor has to have MOVED for a
+    # B(t)-derived quantity to mean anything.
+    _sweep = int(n_steps_per_period) > 1
+    _nsteps = int(n_steps_per_period) if _sweep else (8 if demag else 1)
+
+    # ── Serve the multi-frame views from the LAST SIMULATION RUN ──────────────
+    # A J⟳ / Loss request IS a sliding-band transient — the same one the
+    # Simulation tab just ran.  If that run's snapshot matches this request's
+    # physics key exactly, use it: the field is already computed, and re-solving
+    # it made the user wait ~25 s for a picture the machine already had.
+    # A single-angle view (_sweep False) is NOT the same physics (rotor pinned,
+    # no B(t) history) and never comes from here.
+    _snap = None
+    if _sweep and use_transient_snapshot:
+        _snap = _transient_field_snap.get(_field_snap_key(
+            gamma_deg=gamma_deg, I_phase_rms=I_phase_rms,
+            mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm,
+            outer_air_factor=outer_air_factor, n_sectors=_ns_eff,
+            stator_fillet_mm=stator_fillet_mm, gap_layers=gap_layers,
+            coil_temp_c=coil_temp_c, comp_mesh=_comp_mesh,
+            pole_copy=pole_copy, iron_template=iron_template, geo_mesh=geo_mesh,
+            structured_gap=structured_gap, airgap_macro=airgap_macro,
+            n_steps_per_period=_nsteps, n_periods=float(n_periods),
+            eddy=eddy, rotor_eddy=rotor_eddy, demag=demag,
+            drive="current", element_order=2, cfg_fingerprint=_cfp_f,
+            geo_ov=_geo_ov, rotor_angle0_deg=float(rotor_angle_deg)))
 
     _t0 = _time.time()
-    try:
-        # 1 step (rotor pinned at the requested angle) → a true single-angle field
-        # from the sliding-band machinery.  demag needs a short sweep for the
-        # worst-case knee pre-pass, so use a few steps and snapshot the FIRST one.
-        # A caller that asked for a real transient (loss map, eddy J) gets its
-        # frame count and the LAST frame — the rotor has to have MOVED for a
-        # B(t)-derived quantity to mean anything.
-        _sweep = int(n_steps_per_period) > 1
-        _nsteps = int(n_steps_per_period) if _sweep else (8 if demag else 1)
-        d = fem_transient_sliding_band(
-            n_steps_per_period=_nsteps,
-            n_periods=float(n_periods) if _sweep else 1.0,
-            gamma_deg=float(gamma_deg), I_phase_rms=float(I_phase_rms),
-            mesh_size_mm=float(mesh_size_mm), min_size_mm=float(min_size_mm),
-            outer_air_factor=float(outer_air_factor),
-            n_sectors=_ns_eff,
-            stator_fillet_mm=float(stator_fillet_mm),
-            coil_temp_c=float(coil_temp_c),
-            eddy=bool(eddy), rotor_eddy=bool(rotor_eddy), demag=bool(demag),
-            return_field=True, field_first=not _sweep,
-            rotor_angle0_deg=float(rotor_angle_deg),
-            pole_copy=bool(pole_copy),
-            iron_template=bool(iron_template),
-            geo_mesh=bool(geo_mesh),
-            structured_gap=bool(structured_gap),
-            airgap_macro=bool(airgap_macro),
-            gap_layers=float(gap_layers),
-            component_mesh_mm=_comp_mesh,
-            geo_override=_geo_ov,
-            element_order=2)
-    except Exception as e:
-        log.exception("SB field solve failed")
-        raise HTTPException(status_code=500, detail=f"FEM solve failed: {e}")
-    fld = d.get("field")
-    if not fld:
-        raise HTTPException(status_code=500, detail="SB field solve returned no snapshot")
+    if _snap is not None:
+        d = dict(_snap["scalars"])
+        fld = _snap["field"]
+        _src = "transient-snapshot"
+        _meta = _snap["meta"]
+        log.info("fem_field2d: served from the last simulation run's field "
+                 "snapshot (%d steps/period, eddy=%s, computed %s) — no solve",
+                 _meta.get("n_steps_per_period"), _meta.get("eddy"),
+                 _meta.get("computed_at"))
+    elif snapshot_only:
+        # Probe with nothing to serve: say so, do NOT start a solve behind it.
+        return {
+            "ok": False, "no_snapshot": True,
+            "reason": ("no field snapshot from a simulation run matches this "
+                       "operating point / mesh / frame count"
+                       + ("" if _sweep else " (single-angle views are never "
+                                            "served from a transient snapshot)")),
+        }
+    else:
+        _src = "on-demand solve"
+        _meta = {}
+        try:
+            d = fem_transient_sliding_band(
+                n_steps_per_period=_nsteps,
+                n_periods=float(n_periods) if _sweep else 1.0,
+                gamma_deg=float(gamma_deg), I_phase_rms=float(I_phase_rms),
+                mesh_size_mm=float(mesh_size_mm), min_size_mm=float(min_size_mm),
+                outer_air_factor=float(outer_air_factor),
+                n_sectors=_ns_eff,
+                stator_fillet_mm=float(stator_fillet_mm),
+                coil_temp_c=float(coil_temp_c),
+                eddy=bool(eddy), rotor_eddy=bool(rotor_eddy), demag=bool(demag),
+                return_field=True, field_first=not _sweep,
+                rotor_angle0_deg=float(rotor_angle_deg),
+                pole_copy=bool(pole_copy),
+                iron_template=bool(iron_template),
+                geo_mesh=bool(geo_mesh),
+                structured_gap=bool(structured_gap),
+                airgap_macro=bool(airgap_macro),
+                gap_layers=float(gap_layers),
+                component_mesh_mm=_comp_mesh,
+                geo_override=_geo_ov,
+                element_order=2)
+        except Exception as e:
+            log.exception("SB field solve failed")
+            raise HTTPException(status_code=500, detail=f"FEM solve failed: {e}")
+        fld = d.get("field")
+        if not fld:
+            raise HTTPException(status_code=500,
+                                detail="SB field solve returned no snapshot")
 
     P  = _np.asarray(fld["P_mm"]) * 1e-3
     T  = _np.asarray(fld["T"])
@@ -1811,6 +1986,24 @@ def get_fem_field2d(
         # this to place each rotated copy with the right sign.
         "anti_periodic": bool(nsec > 1 and _poles and (_poles // nsec) % 2 == 1),
         "solve_time_s": round(_time.time() - _t0, 1), "total_time_s": 0.0,
+        # WHERE this picture came from.  A view that re-solves and a view that
+        # replays the simulation run's own last frame are not the same claim,
+        # so the payload says which one it is and the header prints it.
+        "source": _src,
+        "from_transient": bool(_snap is not None),
+        "source_label": (
+            (f"from last simulation run — its own last frame "
+             f"({_meta.get('n_steps_per_period')} steps/period"
+             + (", coupled eddy solve" if _meta.get("eddy") else "")
+             + (f", solved in {_meta.get('solve_time_s')} s at "
+                f"{_meta.get('computed_at')}" if _meta.get("computed_at") else "")
+             + ")")
+            if _snap is not None else
+            (f"computed on demand — a {_nsteps}-step transient run for this view"
+             if _sweep else "computed on demand — single-angle field")),
+        # The run this snapshot came from (absent on the on-demand path).
+        "transient_steps_per_period": _meta.get("n_steps_per_period"),
+        "transient_computed_at": _meta.get("computed_at"),
     }
     # A real transient also produces the machine numbers the J⟳ sidebar and the
     # thermal solve read off this payload.  A single frame produces none of them
@@ -2305,7 +2498,7 @@ def clear_simulation_caches() -> None:
     geometry is treated as a global), so they must be flushed explicitly.
     """
     for _c in (_motor_geom_cache, _fem_mesh_cache, _fem_mesh_sb_cache,
-               _fem_field_cache, _fem_transient_cache):
+               _fem_field_cache, _fem_transient_cache, _transient_field_snap):
         try:
             _c.clear()
         except Exception:
@@ -2411,6 +2604,23 @@ def get_fem_transient(
     coil_temp_c:         float = 120.0,   # ← copper temperature → ρ_Cu(T)
     end_winding_factor:  float = 0.0,     # ← 0 = auto-estimate from geometry
     component_mesh:      str   = "",      # ← JSON {comp: size_mm} per-part mesh size
+    eddy:                bool  = False,   # ← coupled σ·∂A/∂t eddy-current solve (P2, 11e1469):
+                                          #   the currents in copper/magnets/shaft become part of
+                                          #   the Newton system instead of a post-process, so the
+                                          #   run reports the SOLVED copper loss and its field
+                                          #   snapshot carries the real eddy J⟳.  Costs solve time;
+                                          #   OFF unless the caller asks (the Simulation tab has a
+                                          #   checkbox — never enabled behind the user's back).
+    field_snapshot:      bool  = False,   # ← keep the LAST frame's field (mesh+A+B+tags+Jeddy+
+                                          #   loss_dens) for the field views.  NOT an extra solve:
+                                          #   it is the frame just solved, kept instead of dropped.
+                                          #   It is stripped from the HTTP payload (megabytes) and
+                                          #   parked server-side in _transient_field_snap.
+                                          #   OPT-IN (the Simulation tab asks; a sweep / optimizer
+                                          #   point does not) — it does add the cycle-averaged
+                                          #   loss-density map to the post-processing, and a batch
+                                          #   of candidate evals would only evict each other's
+                                          #   snapshots without anyone ever looking at them.
     rotor_eddy:          bool  = True,    # ← field-based magnet/shaft eddy losses
     demag:               bool  = False,   # ← per-element irreversible demagnetisation (de-rates Br → torque)
     torque_filter:       bool  = False,   # ← band-limit T(t) to physical 6·k orders (off = raw; honest default)
@@ -2535,11 +2745,47 @@ def get_fem_transient(
                str(drive or "current"), round(float(v_phase_peak), 2),
                round(float(v_delta_deg), 1), int(bool(harm_ref)),
                int(element_order), _cfp,
-               int(n_frames) if include_frames else 0)
+               int(n_frames) if include_frames else 0,
+               # The coupled eddy solve is DIFFERENT physics (solved copper loss,
+               # reaction currents in the magnets/shaft) — it must not share a
+               # cache entry with the magnetostatic run.  field_snapshot is NOT
+               # in the key: it changes nothing about the numbers, only whether
+               # the last frame's field is kept for the viewer.
+               int(bool(eddy)))
     if _geo_ov:   # distinct cache entry per overridden geometry (no-geo key unchanged)
         _sb_key = _sb_key + (tuple(sorted(_geo_ov.items())),)
+    # Key of the field snapshot this run's last frame belongs under — built ONCE
+    # here and used both to store it after the solve and to tell a cache hit
+    # whether that snapshot is still in memory.
+    _fsnap_key = _field_snap_key(
+        gamma_deg=gamma_deg, I_phase_rms=I_phase_rms,
+        mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm,
+        outer_air_factor=outer_air_factor, n_sectors=n_sectors,
+        stator_fillet_mm=stator_fillet_mm, gap_layers=gap_layers,
+        coil_temp_c=coil_temp_c, comp_mesh=_comp_mesh,
+        pole_copy=pole_copy, iron_template=iron_template, geo_mesh=geo_mesh,
+        structured_gap=structured_gap, airgap_macro=airgap_macro,
+        n_steps_per_period=n_steps_per_period, n_periods=n_periods,
+        eddy=eddy, rotor_eddy=rotor_eddy, demag=demag,
+        drive=str(drive or "current"), element_order=element_order,
+        cfg_fingerprint=_cfp, geo_ov=_geo_ov)
+
+    def _with_live_snapshot_flag(res: Dict) -> Dict:
+        """A cached result was solved in some earlier request — possibly in an
+        earlier PROCESS (the last transient is restored from disk at startup).
+        Its stored field_snapshot flag says what that run did, not what is in
+        memory now, and the J⟳ / Loss views act on this flag.  Report the LIVE
+        answer instead of a remembered one."""
+        _have = _fsnap_key in _transient_field_snap
+        if res.get("field_snapshot") == _have:
+            return res
+        out = dict(res)
+        out["field_snapshot"] = _have
+        out["field_snapshot_eddy"] = bool(eddy) and _have
+        return out
+
     if not fresh and _sb_key in _fem_transient_cache:
-        return _fem_transient_cache[_sb_key]
+        return _with_live_snapshot_flag(_fem_transient_cache[_sb_key])
     # RESTORE path (page open / tab switch): NEVER recompute.  Hand back the
     # last saved transient — flagged stale if its params differ from those
     # requested — or signal that nothing has ever been computed so the UI can
@@ -2550,6 +2796,12 @@ def get_fem_transient(
             _out = dict(_ref_res)
             _out["restored"] = True
             _out["stale"] = (_last_transient_ref.get("key") != _sb_key)
+            # The persisted result remembers that ITS run kept a field snapshot;
+            # that snapshot lives in memory only, and a stale restore is not even
+            # the same run.  Report what is actually available now.
+            _out["field_snapshot"] = bool(
+                not _out["stale"] and _fsnap_key in _transient_field_snap)
+            _out["field_snapshot_eddy"] = bool(_out["field_snapshot"] and eddy)
             return _out
         return {"restored": False, "stale": False}
     # Serialise concurrent identical solves.  A duplicate request (shares the
@@ -2563,7 +2815,7 @@ def get_fem_transient(
         # Re-check under the lock: a twin that finished while we waited has
         # already populated the cache → return its result, don't re-solve.
         if not fresh and _sb_key in _fem_transient_cache:
-            return _fem_transient_cache[_sb_key]
+            return _with_live_snapshot_flag(_fem_transient_cache[_sb_key])
         # Sliding band for EVERY symmetry (mesh once, slide the rotor).
         # Full (n_sectors=1) has no clean 360° slip mesh here, so it computes
         # the symmetry-EXACT sector — which equals the full motor exactly
@@ -2613,7 +2865,12 @@ def get_fem_transient(
                 v_phase_peak=float(v_phase_peak),
                 v_delta_deg=float(v_delta_deg),
                 element_order=int(element_order),
-                return_frames=int(n_frames) if include_frames else 0)
+                return_frames=int(n_frames) if include_frames else 0,
+                # Coupled σ·∂A/∂t solve — only when the caller asked for it.
+                eddy=bool(eddy),
+                # Keep the last frame's field for the J⟳ / Loss views.  Free:
+                # the frame is already solved; this stops it being discarded.
+                return_field=bool(field_snapshot))
             # ── ΔP_harm (voltage drive): current-drive REFERENCE at the
             # extracted fundamental (I₁, γ₁), so the comparison runs at a
             # MATCHED fundamental current — the loss difference is then
@@ -2771,6 +3028,35 @@ def get_fem_transient(
         # background tab was indistinguishable from a failed update).
         from datetime import datetime as _dtm
         _sbres["computed_at"] = _dtm.now().isoformat(timespec="seconds")
+        # ── Park the last frame's field for the J⟳ / Loss views ───────────────
+        # It leaves the HTTP payload here (megabytes of per-node arrays the
+        # charts never read, and _save_last_transient would write them to disk)
+        # and goes into the server-side snapshot store instead, keyed by the
+        # physics that produced it.  Selecting J⟳ / Loss for THIS operating
+        # point then renders the run's own field instead of re-solving it.
+        # A per-candidate eval (optimizer / kernel run with a geo override) is
+        # NOT the motor on screen — same rule as _save_last_transient below.
+        # Storing those would evict the user's own run from a 3-deep store while
+        # nobody ever looks at them.
+        _fld_snap = _sbres.pop("field", None)
+        if _geo_ov:
+            _fld_snap = None
+        if _fld_snap is not None:
+            _store_transient_field_snapshot(
+                _fsnap_key,
+                _fld_snap, _sbres, eddy=bool(eddy),
+                n_steps_per_period=int(n_steps_per_period),
+                n_periods=float(n_periods),
+                solve_time_s=(_t.time()
+                              - _fem_transient_progress["current"].get("ts_start",
+                                                                       _t.time())))
+            log.info("transient: kept last-frame field snapshot for the field "
+                     "views (eddy=%s, %d steps/period) — J⟳/Loss will render "
+                     "without re-solving", bool(eddy), int(n_steps_per_period))
+        # Say it in the payload too: the Simulation tab can tell the user the
+        # J⟳ / Loss views are ready, and WHY they are (or are not).
+        _sbres["field_snapshot"] = bool(_fld_snap is not None)
+        _sbres["field_snapshot_eddy"] = bool(eddy) if _fld_snap is not None else False
         # SHARED helper (_build_transient_summary) so the direct route, the
         # legacy remesh path AND the kernel/solver.em_transient path all use the
         # SAME formula and every run returns a populated `summary`.

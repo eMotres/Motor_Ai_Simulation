@@ -110,6 +110,11 @@ interface Props {
   torqueFilter?: boolean;
   // Per-element irreversible demagnetisation — de-rates Br → torque/EMF + %-map.
   demag?: boolean;
+  // Coupled σ·∂A/∂t eddy-current solve (P2): the induced currents in copper /
+  // magnets / shaft become part of the Newton system, so the run reports the
+  // SOLVED copper loss and its field snapshot carries the real eddy J⟳ — which
+  // is what makes the J⟳ field view instant instead of a second transient.
+  eddyCoupled?: boolean;
   // A design was just applied from the Sweep tab (summary numbers reused) — the
   // shown waveforms are still the PREVIOUS design's, so flag them stale.
   appliedFromSweep?: boolean;
@@ -173,7 +178,7 @@ function loadLastTransient(): TransientPayload | null {
 }
 
 // (live recompute progress strip: elapsed + points, driven by busy + /progress)
-const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onSummary, runNonce = 0, onBusyChange, steps = 12, fresh = false, fieldLosses = true, demag = false, torqueFilter = false, appliedFromSweep = false, drive = 'current', vPeak = 0, vDelta = 0 }) => {
+const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onSummary, runNonce = 0, onBusyChange, steps = 12, fresh = false, fieldLosses = true, demag = false, torqueFilter = false, appliedFromSweep = false, drive = 'current', vPeak = 0, vDelta = 0, eddyCoupled = true }) => {
   // `steps` (n_steps_per_period) is controlled from the left panel and
   // matches the animation viewer's n_frames so both hit the same backend
   // cache key (one solve, not two).
@@ -304,6 +309,17 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
       sliding_band:       true,
       // Field-based magnet/shaft eddy losses (σ·∂A/∂t solve) vs the slab estimate.
       rotor_eddy:         fieldLosses,
+      // Coupled σ·∂A/∂t eddy-current solve (Simulation-tab checkbox).  ON: the
+      // induced currents are solved WITH the field (copper loss is the solved
+      // 2-D value, not a post-process) and the run's field snapshot carries the
+      // real eddy J⟳, so the J⟳ / Loss views render it instead of running a
+      // second transient.  OFF: magnetostatic run, and those views solve on
+      // demand exactly as before.  Never forced on here — it costs solve time
+      // and it changes which copper-loss number the run reports.
+      eddy:               eddyCoupled,
+      // Keep the last frame's field server-side for the J⟳ / Loss views.  Not
+      // an extra solve — it is the frame this run just finished.
+      field_snapshot:     true,
       // Per-element irreversible demagnetisation: de-rates Br → torque/EMF + %-map.
       demag,
       // Band-limit T(t) to the physical 6·k orders (UI toggle, default ON).
@@ -387,6 +403,16 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
         setData(stamped); setBusy(false);
         setError(null);
         persistLastTransient(stamped);      // remember it (+ stamp) across reloads
+        // This run kept its last frame's field server-side (field_snapshot), so
+        // the J⟳ / Loss views can now render THIS run's field instead of solving
+        // their own.  Tell them the snapshot moved; whatever they are holding is
+        // from an older operating point.  `field_snapshot` says whether the
+        // backend actually kept one (a RESTORED result carries no fresh field).
+        if (!restoreOnly) {
+          window.dispatchEvent(new CustomEvent('sim-transient-done', {
+            detail: { field_snapshot: (d as any).field_snapshot === true,
+                      eddy: (d as any).field_snapshot_eddy === true } }));
+        }
         // summary is emitted by the effect below (so its ripple matches the
         // current filter toggle, and flips with it without a re-solve).
       } catch (e: any) {

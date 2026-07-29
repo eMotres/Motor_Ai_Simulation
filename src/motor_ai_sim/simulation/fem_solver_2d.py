@@ -4238,6 +4238,13 @@ def em_transient_eval(
     v_delta_deg: float = 0.0,
     element_order: int = 2,          # 2 = P2, the only basis (see fem_transient_sliding_band)
     return_frames: int = 0,          # >0: also return N animation keyframes
+    eddy: bool = False,              # coupled sigma*dA/dt eddy-current solve (the J-view physics)
+    return_field: bool = False,      # ALSO return the LAST frame's field snapshot
+                                     # (mesh + A + B + tags + Jeddy + loss_dens) under
+                                     # result["field"].  No extra solve: it is the frame
+                                     # the transient just finished, kept instead of thrown
+                                     # away, so the field views can render the run's own
+                                     # field instead of re-solving it.
 ) -> Dict:
     """THE single canonical sliding-band transient invocation.
 
@@ -4265,4 +4272,9 @@ def em_transient_eval(
         frozen_nu=bool(frozen_nu),
         drive=str(drive or "current"), v_phase_peak=float(v_phase_peak),
         v_delta_deg=float(v_delta_deg), element_order=int(element_order),
-        return_frames=int(return_frames))
+        return_frames=int(return_frames),
+        eddy=bool(eddy),
+        # field_first is NOT set: the snapshot is the LAST frame, the one whose
+        # B(t) history is complete, which is what the loss map and the coupled
+        # eddy J are derived from.
+        return_field=bool(return_field))

@@ -2765,17 +2765,22 @@ def get_fem_transient(
     if sliding_band:
         _comp_mesh = _parse_component_mesh(component_mesh)
         _geo_ov = _parse_geo_override(geo)   # per-request geometry override (multi-user)
-        # P2 "high-fidelity ripple": needs the merged structured belt and is
-        # current-drive.  rotor_eddy (post-processed magnet/shaft/iron losses) IS
-        # supported on P2 — keep it.  Coerce only the still-unsupported options
-        # (coupled σ∂A/∂t J-view, voltage drive, demag pre-pass, harmonic macro)
-        # so the mode is self-consistent — otherwise the solver raises
-        # NotImplementedError.  P1 path untouched.
+        # P2 "high-fidelity ripple": needs the merged structured belt.
+        # rotor_eddy (post-processed magnet/shaft/iron losses) IS supported on
+        # P2 — keep it.  Coerce only the still-unsupported options (coupled
+        # σ∂A/∂t J-view, harmonic macro) so the mode is self-consistent.
+        #
+        # HISTORY: this block used to coerce demag=False and drive="current"
+        # too.  Both became stale silently — P2 demag landed in a1aedad and the
+        # P2 voltage drive in 4e316b9 — and the leftover coercion turned the
+        # user's Demagnetisation checkbox into a no-op on P2: the run came back
+        # at no-demag speed with a uniform (single-colour) Br map and nothing
+        # on screen saying why.  A route-side coercion is a silent substitution;
+        # if an option is genuinely unsupported the solver must raise, not have
+        # the route quietly answer a different question.  P1 path untouched.
         if int(element_order) == 2:
             structured_gap = True
             airgap_macro = False
-            demag = False
-            drive = "current"
             # SPEED: P2 is a high-fidelity RIPPLE mode, and its anti-periodic
             # sector solve gives the SAME torque/ripple/losses as the full motor
             # (validated to 0.3%) at ~S× lower cost (S× fewer DOFs → the direct

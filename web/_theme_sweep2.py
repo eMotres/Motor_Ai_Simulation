@@ -15,7 +15,6 @@ FILES = [
     "mesh/FemMeshViewer3D.tsx",
     "mesh/MeshPanel.tsx",
     "simulation/FemFieldChart.tsx",
-    "simulation/MotorField2D.tsx",
     "sweep/Scatter3D.tsx",
 ]
 

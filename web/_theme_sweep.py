@@ -14,7 +14,6 @@ EXCLUDE = {
     "components/mesh/FemMeshViewer3D.tsx",
     "components/mesh/MeshPanel.tsx",
     "components/simulation/FemFieldChart.tsx",
-    "components/simulation/MotorField2D.tsx",
     "components/sweep/Scatter3D.tsx",
     "components/viewer3d/ApiMotorMesh.tsx",
     "components/viewer3d/MagnetMesh.tsx",

@@ -67,7 +67,6 @@ _TIER_RANK = {"anon": -1, "free": 0, "pro": 1, "team": 2, "admin": 3}
 _GATED: dict[tuple[str, str], str] = {
     ("GET",  "/api/simulation/physics/fem_transient"): "pro",
     ("GET",  "/api/simulation/physics/fem_field2d"): "pro",
-    ("GET",  "/api/simulation/physics/torque_sweep"): "pro",
     ("GET",  "/api/simulation/mesh/build2d"): "pro",
     ("GET",  "/api/simulation/mesh/build2d_sliding_band"): "pro",
     ("POST", "/api/optimization/run"): "pro",

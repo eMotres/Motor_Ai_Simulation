@@ -1,4 +1,4 @@
-﻿# Motor AI Simulator — Project Guide
+# Motor AI Simulator — Project Guide
 
 ## Overview
 
@@ -42,165 +42,142 @@ Visit: **http://localhost:5173**
 
 ## Project Structure
 
-\\\
+```
 motor_ai_sim/
 ├── CLAUDE.md                          ← Project guide
 ├── config/motor_config.yaml           ← Single source of truth
+├── tests/physics_baseline.json        ← Pinned FEM numbers (the regression gate)
 ├── src/motor_ai_sim/
-│   ├── api.py                         ← FastAPI routes
+│   ├── api.py                         ← FastAPI app
 │   ├── cadquery_geometry.py           ← CadQueryMotor class
-│   ├── materials.py                   ← Material library
+│   ├── materials.py                   ← Material library (BH, Bertotti, magnets)
+│   ├── simulation/
+│   │   ├── fem_solver_2d.py           ← THE solver: P2 sliding-band transient
+│   │   ├── eddy_solver_2d.py          ← coupled σ·∂A/∂t eddy solve
+│   │   └── drive.py                   ← voltage-drive circuit coupling
+│   ├── optimization/
+│   │   ├── design_eval.py             ← analytic surrogate (anchored on the pins)
+│   │   └── refine_proc.py             ← the ONE FEM eval path for every optimizer
 │   └── routes/
-│       └── simulation.py              ← Physics endpoints (torque_sweep, field2d)
+│       └── simulation.py              ← FEM endpoints (fem_transient, fem_field2d)
 └── web/
     └── src/components/simulation/
-        ├── MotorField2D.tsx           ← 2D field canvas
-        ├── TorqueWaveformChart.tsx    ← T(θ) graph
-        └── LossWaveformChart.tsx      ← Loss breakdown
-\\\
+        ├── PhysicsDashboard.tsx       ← the Simulation tab's FEM view
+        ├── FemFieldChart.tsx          ← A_z / |B| / J / loss / temp field inspector
+        ├── FemAnimationViewer.tsx     ← frames across one electrical period
+        └── TransientCharts.tsx        ← T(t), P(t), V(t) from the transient
+```
 
 ---
 
-## Motor Specs
+## Motor Specs (active design)
 
-\\\
-Stator:        24 slots, Ø300mm outer, Ø150mm inner, T-shaped teeth
-Rotor:         28 poles, trapezoidal magnets, Ø120mm, 35mm stack
-Magnets:       NdFeB, 16mm height, radially magnetized
-Windings:      2P·2S (2 parallel, 2 series per phase)
-Operating:     3950 rpm, 85 Arms phase, 921.67 Hz
-\\\
+```
+Stator:        12 slots, Ø30 mm outer, T-shaped teeth, single-layer winding
+Rotor:         14 poles, spoke magnets, 10 mm stack
+Magnets:       F45SH NdFeB (Br 1.19 T @120 °C)
+Windings:      2S·1P, 6 wires/slot
+Operating:     read it off the Simulation tab — never from this file
+```
+
+The pinned regression machine (`tests/test_physics_regression.py GEO_30MM`) is a
+30 mm 12s14p of the same family; it is what the surrogate calibration and every
+pinned number are anchored to.
 
 ---
 
 ## What's Implemented ✅
 
 ### Backend Physics
-- ✅ Analytical A_z field via Green's function superposition
-- ✅ Maxwell stress tensor torque T(θ) (captures cogging ripple: 12 periods/elec)
-- ✅ Real motor geometry from CadQuery → PIL rasterization (fast domain classification)
-- ✅ Torque sweep endpoint (60 points/elec period, 1.9s warm time)
-- ✅ Field 2D endpoint (A_z, B_x, B_y, |B|, J_z, domain map)
-- ✅ Loss calculations (copper, iron Steinmetz, magnet eddy)
+- ✅ P2 (quadratic) sliding-band transient — the ONLY basis; P1 was deleted
+  (radius-inconsistent Maxwell mean torque, ~35 % high under load)
+- ✅ Energy / flux-linkage mean torque, with the raw Maxwell series kept beside
+  it as the diagnostic
+- ✅ Coupled σ·∂A/∂t eddy solve (copper AC, magnet, shaft) — losses from the
+  solved field, not a model
+- ✅ Voltage drive (currents are the ANSWER) solved as one bordered Newton
+- ✅ Per-element irreversible demagnetisation
+- ✅ Iron loss from the assigned steel's own Bertotti coefficients
+- ✅ Steady-state thermal, coupled EM↔thermal
+- ✅ Every optimizer eval goes through `refine_proc` and is REJECTED if any frame
+  of its window failed its nonlinear convergence test
 
 ### Frontend UI
-- ✅ TorqueWaveformChart — T(θ) with T_avg/max/min, cogging ripple %, CSV export
-- ✅ LossWaveformChart — Cu/Fe/Mg losses over one period
-- ✅ MotorField2D canvas — |B|, A_z, J_z, domain visualization with rotor slider
-- ✅ Flux line contours (marching squares on A_z)
+- ✅ PhysicsDashboard — the Simulation tab, FEM only
+- ✅ FemFieldChart — A_z / |B| / J / J⟳ / loss density / temperature / demag maps
+- ✅ FemAnimationViewer — one FEM solve per keyframe across the period
+- ✅ TransientCharts — T(t), P(t), V(t), summary card
 
----
-
-## Current Task 🔄
-
-**User request**: "почему ты рисуешь здесь приближенную геомерию нужно везде выводить реальную и на ней рисовать все поля не забудь сделать поляризацию для магнитов в доль нижней грани"
-
-Translation: "Why approximate geometry? Display REAL geometry everywhere. Add magnet polarization vectors."
-
-### Tasks:
-1. **✅ Real geometry** — Backend uses real Shapely polygons from \get_2d_polygons()\
-2. ❌ **Verify in UI** — Ensure MotorField2D displays T-shaped teeth + trapezoidal magnets
-3. ❌ **Magnet polarization** — Draw Br direction arrows on each magnet
+### Deleted, on purpose
+The analytic Green's-function endpoints (`/physics`, `/physics/field2d`,
+`/physics/torque_sweep`, `/physics/sweep`) and their UI (`MotorField2D`,
+`TorqueWaveformChart`, `LossWaveformChart`, `ModelCompare`, `SimulationCharts`)
+are gone. They were free-space superposition with μ_r = 1 steel, an amplitude
+scaled ×8-10 to look plausible, and Steinmetz constants fitted to a lamination
+this project does not use. Every one of their panels had been rendered into
+`display: none` or never mounted at all. Do not bring them back as a "fast
+screen" without a visible label saying it is not the FEM result.
 
 ---
 
 ## API Endpoints
 
-### Physics
-\\\
-GET  /api/simulation/physics/torque_sweep?gamma_deg=90&n_rotor=60&n_ag=720
-     → Returns: T(θ), T_avg, T_ripple, cogging analysis
-
-GET  /api/simulation/physics/field2d?rotor_angle_deg=0&grid_size=150
-     → Returns: A_z, B_x, B_y, |B|, J_z, domain_map (150×150 grid)
-\\\
+### Physics (all FEM)
+```
+GET  /api/simulation/physics/fem_transient      ← T(t), losses, voltages, summary
+GET  /api/simulation/physics/fem_field2d        ← solved field on the real mesh
+GET  /api/simulation/physics/thermal_field2d    ← steady-state temperature
+GET  /api/simulation/physics/harm_screening     ← honestly labelled fast screen
+GET  /api/simulation/mesh/build2d[_sliding_band]
+```
 
 ### Configuration
-\\\
-GET/PATCH /api/simulation/config
-         → rpm, I_phase, gamma_deg
-
-GET/PATCH /api/winding/config
-         → Connection: 2P2S / 4S / 4P
-\\\
+```
+GET/PATCH /api/simulation/config    → rpm, I_phase, gamma_deg
+GET/PATCH /api/winding/config       → connection (2S / 4S / 4P …)
+```
 
 ---
 
 ## Physics Model
 
-### Magnetic Field (Analytical)
-- Linear superposition of dipole moments from each magnet
-- Free-space Green's function: A_z ∝ M/r²
-- **Scale factor ×9.02** (corrects for iron permeability, ~8–10× underestimate)
-- Clamped saturation: B_max = 1.75 T (steel)
+### Field
+Nonlinear magnetostatics on a gmsh/CDT mesh, P2 elements, sliding band across the
+air gap. Steel from the material library's measured BH curve; magnets carry Br
+and μ_rec from the assigned material.
 
 ### Torque
-\\\
-T(θ) = (L/μ₀) · r² · ∮ B_r(φ) · B_φ(φ) dφ
-
-Captures:
-- Cogging ripple: 12 periods per electrical period
-- Load-angle effect via γ phase offset
-\\\
+Energy / flux-linkage mean torque (matches ANSYS). Maxwell stress on the sliding
+band over-reads ~37 % under load and is kept only as `T_avg_maxwell_Nm`, the
+diagnostic that distinguishes a hybrid regression from a field-solve regression.
 
 ### Losses
-- **Copper**: I²R (constant for balanced 3Φ)
-- **Iron**: Steinmetz k_st × f^1.5 × B^2
-- **Magnet eddy**: α × f² × B² × σ
+- **Copper**: ρ(T)·J²·V·k_end for DC, plus the coupled solve's σ∫E² for AC
+- **Iron**: the assigned steel's Bertotti kh/kc/ke (fitted from its loss curves)
+- **Magnet / shaft**: from the coupled σ·∂A/∂t solve when `rotor_eddy` is on
 
 ---
 
-## Key Technical Decisions
+## Working Rules
 
-### Why Analytical First?
-- **Instant feedback**: 1.9s warm response
-- **Validates physics**: Cogging shape correct; amplitude scaled empirically
-- **FEA comparison**: results cross-checked against ANSYS FEA
-
-### Why Real Geometry?
-- **User requirement**: "везде выводить реальную" (output REAL everywhere)
-- **Accuracy**: T-shaped teeth, trapezoidal magnets with fillets
-- **CadQuery**: Parametric, auto-updates when specs change
-
-### Why PIL for Domain Classification?
-- **Speed**: 2× faster than Shapely
-- **Caching**: Rotor angle quantized to 0.5° steps → 1.9s warm
-- **Simple**: Rasterize once, classify grid in <100ms
-
----
-
-## Known Issues
-
-| Issue | Status | Impact |
-|-------|--------|--------|
-| Magnet polarization not drawn | ❌ Pending | User explicitly requested |
-| Voltage chart approximate | 🟡 Medium | Uses R + X_L, no back-EMF |
-
----
-
-## Next: Magnet Polarization
-
-**To implement in MotorField2D.tsx**:
-
-1. Extract magnet info from \get_2d_polygons()\
-2. For each magnet:
-   - Compute center (X, Y)
-   - Get polarity: +1 (N, blue) or -1 (S, red)
-   - Draw arrow along radial direction
-3. Scale arrow length to magnet size
-4. Overlay on canvas with field visualization
-
-**File**: \web/src/components/simulation/MotorField2D.tsx\
+- **Operating point comes from the Simulation tab.** Never from
+  `config/motor_config.yaml`.
+- **`tests/test_physics_regression.py` is the gate.** A diff there is the whole
+  point of the file — regenerate deliberately and justify every moved line in the
+  commit message.
+- **No silent substitutions.** If a number is an estimate, the UI says so where
+  the user reads it.
+- Backend on **8001** (restart after backend changes), vite on **5173**.
 
 ---
 
 ## References
 
-- Config: \config/motor_config.yaml\
-- Geometry: \src/motor_ai_sim/cadquery_geometry.py\
-- Physics routes: \src/motor_ai_sim/routes/simulation.py\
-- Field UI: \web/src/components/simulation/MotorField2D.tsx\
+- Config: `config/motor_config.yaml`
+- Solver: `src/motor_ai_sim/simulation/fem_solver_2d.py`
+- FEM routes: `src/motor_ai_sim/routes/simulation.py`
+- Simulation UI: `web/src/components/simulation/PhysicsDashboard.tsx`
 
 ---
 
-**Updated**: 2026-05-30 | **Phase**: 4 (Magnet polarization)
+**Updated**: 2026-07-29

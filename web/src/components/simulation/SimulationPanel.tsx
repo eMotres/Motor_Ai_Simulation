@@ -21,7 +21,6 @@ import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import CheckCircleIcon  from '@mui/icons-material/CheckCircle';
 import ErrorIcon        from '@mui/icons-material/Error';
 import BoltIcon         from '@mui/icons-material/Bolt';
-import SimulationCharts from './SimulationCharts';
 import PhysicsDashboard from './PhysicsDashboard';
 import CoupledEmThermal from './CoupledEmThermal';
 import HelpTip from '../common/HelpTip';
@@ -1156,9 +1155,12 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
             controls to the Physics Dashboard, which auto-runs the FEM
             transient on mount.  No manual Run button needed. */}
 
-        {/* Analytical SimulationCharts (currents / voltages / losses) removed —
+        {/* Analytical SimulationCharts (currents / voltages / losses) deleted —
             the FEM transient panel inside PhysicsDashboard below shows all
-            three waveforms computed from the actual mesh solve. */}
+            three waveforms computed from the actual mesh solve.  (It had been
+            un-rendered but still imported; with it went TorqueWaveformChart,
+            whose Maxwell-stress-on-free-space torque was scaled ×8-10 by an
+            analytic flux-linkage formula to look plausible.) */}
 
         {/* ── Multiphysics: coupled EM↔thermal (on/off, slow — runs the
             solver.em_thermal module: losses ↔ temperature to equilibrium). ── */}
@@ -1167,10 +1169,8 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
         {/* ── Physics dashboard (the standard FEM interface) — FIRST so the
             FEM results + fields + transient are the prominent view ── */}
         <PhysicsDashboard
-          rotorAngle_deg={rotorAngle}
           gamma_deg={phaseOffset}
           I_phase_rms={current}
-          pinnLosses={job?.result ?? null}
           runNonce={runNonce}
           fresh={freshRun}
           onBusyChange={setSimBusy}

@@ -28,7 +28,7 @@ import logging
 import math
 import threading
 from dataclasses import dataclass
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Mapping, Tuple, Optional
 
 import numpy as np
 
@@ -748,6 +748,92 @@ def sample_to_grid(
 # 4.  Top-level convenience: build materials dict, solve, sample
 # ─────────────────────────────────────────────────────────────────────────────
 
+def coil_slot_index(cp, n_slot: int) -> Optional[int]:
+    """Which SLOT does this coil polygon belong to (by centroid angle)?
+
+    ONE definition, shared by the material build and by every consumer that has
+    to reproduce the same grouping (the imposed-current eddy constraints, the
+    J-view snapshot).  The cadquery layout places the copper of one slot on the
+    +x / −x side of the neighbouring teeth, so slot CENTRES sit at the half-pitch
+    offset; rounding to the slot pitch WITHOUT that offset collapses the two
+    halves of a concentrated coil onto the same slot index and forces them to
+    carry the same sign (that is the go/return pattern gone).
+    """
+    if cp is None or n_slot <= 0:
+        return None
+    try:
+        if cp.is_empty:
+            return None
+        cx, cy = cp.centroid.x, cp.centroid.y
+    except Exception:
+        return None
+    ang = math.degrees(math.atan2(cy, cx))
+    if ang < 0:
+        ang += 360.0
+    pitch = 360.0 / n_slot
+    return int((ang - pitch * 0.5) / pitch + 0.5) % n_slot
+
+
+def coil_copper_areas(
+    polys: dict,
+    n_slot: int,
+    coil_area_m2: Optional[Mapping[int, float]] = None,
+) -> Dict[int, Tuple[float, float]]:
+    """Per coil domain tag → (own copper area, copper area of its whole SLOT) [m²].
+
+    This is the quantity the winding source must be normalised by.  The source
+    is a current DENSITY applied over the copper the mesh actually carries, so
+    the ampere-turns the field is excited with are ∫J dA over that copper — not
+    over any nominal rectangle.  Dividing by the slot's real copper area makes
+
+        Σ_{tags of one slot} J·A  ==  direction · I_coil · n_wires
+
+    true BY CONSTRUCTION, for any way the CAD chooses to cut the copper up (this
+    geometry emits ONE POLYGON PER WIRE — 72 of them for 12 slots × 6 wires —
+    so a per-polygon normalisation would be wrong by n_wires).
+
+    ``coil_area_m2`` maps a coil domain tag to the area the MESH gives it; pass
+    it whenever the mesh exists, because that is the area the assembled source
+    is integrated over.  A tag missing from that map has no elements in this
+    mesh (sector clipping) and is left out of its slot's total — the copper that
+    IS meshed then carries the full n_wires·I.  Without the map the polygon area
+    is used, which for the rectangular wire sections is the same number.
+
+    Historically this whole quantity was `slot_width_m·slot_height_m·0.6`, where
+    the 0.6 was a MotorDomainParams dataclass default no config path ever set
+    and slot_width came from the wire pitch.  The ratio of the real copper to
+    that rectangle ran 0.909…1.265 across the machines this repo stores, i.e.
+    the solver silently excited every machine at k·N·I and T_maxwell/T_energy
+    was exactly k (docs/SOLVER_TRIALS_2026-07-30.md, F4+F5).
+    """
+    coil_list = polys.get("coils") or []
+    if not coil_list or n_slot <= 0:
+        return {}
+    own: Dict[int, float] = {}
+    slot_of: Dict[int, int] = {}
+    per_slot: Dict[int, float] = {}
+    for i, cp in enumerate(coil_list):
+        s = coil_slot_index(cp, n_slot)
+        if s is None:
+            continue
+        tag = DOM_COIL_BASE + i
+        if coil_area_m2 is not None:
+            a = float(coil_area_m2.get(tag, 0.0) or 0.0)
+            if a <= 0.0:
+                continue          # not in this mesh — contributes no source
+        else:
+            try:
+                a = float(cp.area) * 1e-6      # polygons are in mm → m²
+            except Exception:
+                continue
+            if a <= 0.0:
+                continue
+        own[tag] = a
+        slot_of[tag] = s
+        per_slot[s] = per_slot.get(s, 0.0) + a
+    return {tag: (a, per_slot[slot_of[tag]]) for tag, a in own.items()}
+
+
 def build_materials(
     I_ph: Dict[str, float],
     winding_layout: List[Tuple[str, int]],
@@ -757,12 +843,19 @@ def build_materials(
     n_wires: int,
     Br: float = 1.19,
     mu_r_steel: float = 5000.0,
+    coil_area_m2: Optional[Mapping[int, float]] = None,
 ) -> Dict[int, FEMMaterial]:
     """Build the per-domain material map for the FEM solve.
 
     Each magnet (DOM_MAG_BASE+i) and each coil (DOM_COIL_BASE+i) gets its
     own material entry with the polygon-specific source term.  Bulk
     materials (air, iron, etc.) share fixed ids.
+
+    ``coil_area_m2`` (coil domain tag → MESHED copper area [m²]) is how a caller
+    that already has the mesh hands over the area the source will actually be
+    integrated over; see ``coil_copper_areas``.  ``slot_area_m2`` is no longer
+    the winding normaliser — it is kept only as the last-resort divisor for a
+    geometry that carries no usable coil polygons at all.
     """
     n_slot = len(winding_layout)
     # Tangential M magnitude (alternating per pole)
@@ -1007,34 +1100,31 @@ def build_materials(
     # any clipping / re-ordering done downstream.
     coil_list = polys.get("coils", [])
     if coil_list and n_slot > 0:
-        slot_pitch_deg = 360.0 / n_slot
-        # The cadquery layout places TWO coil polygons per wide tooth — one
-        # on either side of the tooth (e.g. at math 83.64° and 96.36° for
-        # the tooth at math 90°).  Slot CENTRES sit at the half-pitch
-        # offset (math 7.5°, 22.5°, 37.5°, …) so the two halves map to
-        # ADJACENT slot indices: 5 and 6 for the example above.  Those two
-        # neighbouring slot_idx values carry OPPOSITE direction signs in
-        # the winding layout — which gives the go / return current pattern
-        # of the concentrated coil (one side red = +J, the other blue = −J,
-        # matching the Ansys reference).  Rounding to slot_pitch directly
-        # (without the half-pitch offset) collapses both halves onto the
-        # SAME slot_idx and forces them to carry the same sign — that's
-        # the bug the user spotted in the field render.
-        half_pitch_deg = slot_pitch_deg * 0.5
+        # The copper area each slot ACTUALLY has — meshed when the caller knows
+        # the mesh, polygon otherwise.  Dividing by it is what makes the field be
+        # excited at exactly n_wires·I_coil ampere-turns per slot instead of
+        # k·n_wires·I_coil with k = A_copper/(slot_w·slot_h·0.6) ∈ 0.909…1.265.
+        _areas = coil_copper_areas(polys, n_slot, coil_area_m2)
         for i, cp in enumerate(coil_list):
-            if cp is None or cp.is_empty:
+            slot_idx = coil_slot_index(cp, n_slot)
+            if slot_idx is None:
                 continue
-            try:
-                cx, cy = cp.centroid.x, cp.centroid.y
-            except Exception:
-                continue
-            ang = math.degrees(math.atan2(cy, cx))
-            if ang < 0: ang += 360.0
-            slot_idx = int((ang - half_pitch_deg) / slot_pitch_deg + 0.5) % n_slot
+            tag = DOM_COIL_BASE + i
+            _a = _areas.get(tag)
+            if _a is None:
+                # No copper for this tag in this mesh (sector clipping): it has
+                # no elements to carry a source, so it gets no material entry.
+                # A geometry with no usable coil polygons at all falls back to
+                # the nominal slot rectangle — the only remaining use of it.
+                if coil_area_m2 is not None or _areas:
+                    continue
+                a_slot = max(float(slot_area_m2), 1e-12)
+            else:
+                a_slot = _a[1]
             phase, direction = winding_layout[slot_idx]
-            # J_z = direction · I_phase_peak · n_wires_per_slot / slot_area
-            J_z = float(direction) * I_ph[phase] * n_wires / max(slot_area_m2, 1e-12)
-            mats[DOM_COIL_BASE + i] = FEMMaterial(
+            # J_z = direction · I_coil_peak · n_wires_per_slot / A_copper_of_slot
+            J_z = float(direction) * I_ph[phase] * n_wires / max(a_slot, 1e-12)
+            mats[tag] = FEMMaterial(
                 name=f"coil_{i}_slot{slot_idx}_{phase}{'+' if direction>0 else '-'}",
                 mu_r=1.0, J_z=J_z,
             )
@@ -1085,6 +1175,11 @@ def _field2d_static_inputs(
     motor = CadQueryMotor()
     polys = _simplify_polys(motor.get_2d_polygons(rotor_angle_deg=rotor_angle_deg), tol_mm=0.3)
 
+    # The winding is normalised by the COIL POLYGONS' own copper area inside
+    # build_materials (this path has no mesh yet).  The coil sections are
+    # rectangles, so a conforming triangulation reproduces that area exactly and
+    # the static viewer is excited at the same n_wires·I as the transient solve.
+    # The nominal rectangle below is only the no-coil-polygons fallback.
     slot_area = p.slot_width_m * p.slot_height_m * p.fill_factor
     mats = build_materials(I_ph, d.winding_layout, polys, rotor_angle_deg, slot_area, n_wires)
     return polys, mats, p
@@ -2054,12 +2149,32 @@ def fem_transient_sliding_band(
     # per-phase unit-current stator source vectors
     f_coil = {'A': np.zeros(half["s"]["n"]), 'B': np.zeros(half["s"]["n"]),
               'C': np.zeros(half["s"]["n"])}
-    coil_info = []   # (idx, areas, dir, phase) for ψ
+    coil_info = []   # (idx, areas, dir, phase, slot_copper_area_m2) for ψ / J-view
     areas_s = _triangle_areas(half["s"]["mesh"])
+    # ── The copper the source is ACTUALLY integrated over ────────────────
+    # Per coil domain tag, the area its elements cover in THIS mesh.  Handed to
+    # build_materials so J_z = dir·I·n_wires / A_copper_of_slot and the machine
+    # is excited at exactly n_wires·I ampere-turns per slot.  Until this, the
+    # divisor was slot_width_m·slot_height_m·0.6 (a wire-pitch rectangle times a
+    # dataclass default no config path set), so every solve ran at k·N·I with
+    # k = A_copper/that ∈ 0.909…1.265 and T_maxwell/T_energy was exactly k
+    # (docs/SOLVER_TRIALS_2026-07-30.md, F4+F5).
+    _coil_area_meshed = {int(tag): float(areas_s[idx].sum())
+                         for tag, idx in half["s"]["cells"].items()
+                         if int(tag) >= DOM_COIL_BASE}
+    _coil_areas = coil_copper_areas(getattr(cs, "polys", polys),
+                                    len(dom.winding_layout), _coil_area_meshed)
+    if _coil_areas:
+        _a_slot_max = max(s for _, s in _coil_areas.values())
+        log.info("winding excitation: %d meshed coil tags, slot copper "
+                 "%.4g mm² (nominal rectangle %.4g mm², old k=%.4f)",
+                 len(_coil_areas), 1e6 * _a_slot_max, 1e6 * slot_area_m2,
+                 _a_slot_max / max(slot_area_m2, 1e-12))
     for ph in ('A', 'B', 'C'):
         Iunit = {'A': 0.0, 'B': 0.0, 'C': 0.0}; Iunit[ph] = 1.0
         mats_u = build_materials(Iunit, dom.winding_layout,
-                                 getattr(cs, "polys", polys), 0.0, slot_area_m2, n_wires)
+                                 getattr(cs, "polys", polys), 0.0, slot_area_m2,
+                                 n_wires, coil_area_m2=_coil_area_meshed)
         for tag, idx in half["s"]["cells"].items():
             mu = mats_u.get(int(tag))
             if mu is None or mu.J_z == 0.0:
@@ -2068,7 +2183,8 @@ def fem_transient_sliding_band(
             f_coil[ph] += asm(_f1, sb) * mu.J_z
     # ψ coil map (phase, dir) per coil tag — from a full-current material build
     mats_full = build_materials(_currents(0.0), dom.winding_layout,
-                                getattr(cs, "polys", polys), 0.0, slot_area_m2, n_wires)
+                                getattr(cs, "polys", polys), 0.0, slot_area_m2,
+                                n_wires, coil_area_m2=_coil_area_meshed)
     for tag, idx in half["s"]["cells"].items():
         _mt = mats_full.get(int(tag))
         if _mt is None:
@@ -2082,13 +2198,18 @@ def fem_transient_sliding_band(
         ph = nm[-2] if nm[-1] in "+-" else nm[-1]
         direction = 1.0 if nm.endswith("+") else -1.0
         if ph in "ABC":
-            coil_info.append((idx, areas_s[idx], direction, ph))
+            coil_info.append((idx, areas_s[idx], direction, ph,
+                              (_coil_areas.get(int(tag))
+                               or (0.0, float(areas_s[idx].sum())))[1]))
 
     # ── Stage 2: solid-copper current-constrained eddy data ──────────────────
     # Each coil is a SOLID bar: J = σ(−∂A/∂t + U_c) with ∫J dA = I_c imposed.
     # Per coil store: g_c (σ-lumped load, full DOF space), S_c = ∫σ dA, and the
-    # imposed-current coefficient I_c_unit = dir·n_wires·(area/slot_area) so that
-    # I_c = Ist[phase]·I_c_unit exactly matches the magnetostatic ampere-turns.
+    # imposed-current coefficient I_c_unit = dir·n_wires·(area_c/A_copper_of_slot)
+    # so that I_c = Ist[phase]·I_c_unit exactly matches the magnetostatic
+    # ampere-turns — the SAME divisor build_materials normalises J_z by, so the
+    # two excitation channels cannot drift apart (they did: both carried the
+    # nominal slot rectangle and were therefore both off by k).
     _coil_con = []
     if eddy:
         _ones_s = np.ones(half["s"]["n"])
@@ -2102,13 +2223,14 @@ def fem_transient_sliding_band(
             ph = nm[-2] if nm.endswith(("+", "-")) else "A"
             dr = 1.0 if nm.endswith("+") else -1.0
             area_c = float(areas_s[idx].sum())
+            _a_slot_c = (_coil_areas.get(int(tag)) or (area_c, area_c))[1]
             _coil_con.append({
                 "tag": int(tag),          # domain tag — the P2 branch rebuilds g/S
                                           # on ITS basis and needs the identity of
                                           # the wire this (phase, Iunit) belongs to.
                 "g": np.concatenate([g_s, np.zeros(_nr0)]),
                 "S": float(g_s.sum()),
-                "Iunit": dr * n_wires * area_c / max(slot_area_m2, 1e-12),
+                "Iunit": dr * n_wires * area_c / max(_a_slot_c, 1e-12),
                 "phase": ph,
                 "nodes": np.unique(half["s"]["mesh"].t[:, idx]),   # stator-local node ids
             })
@@ -2409,7 +2531,8 @@ def fem_transient_sliding_band(
         _Iu = {'A': 0.0, 'B': 0.0, 'C': 0.0}; _Iu[_ph] = 1.0
         _mu = build_materials(_Iu, dom.winding_layout,
                               getattr(cs, "polys", polys), 0.0,
-                              slot_area_m2, n_wires)
+                              slot_area_m2, n_wires,
+                              coil_area_m2=_coil_area_meshed)
         for tag, idx in half["s"]["cells"].items():
             m_ = _mu.get(int(tag))
             if m_ is None or m_.J_z == 0.0:
@@ -2618,7 +2741,7 @@ def fem_transient_sliding_band(
         Ae_ = A2[_As_e]
         A_tri = (Ae_[0] + Ae_[1] + Ae_[2]) / 3.0
         pa = pb = pc = 0.0
-        for idx_, ar_, dir_, ph_ in coil_info:
+        for idx_, ar_, dir_, ph_, _as_ in coil_info:
             sa_ = float(np.sum(ar_))
             if sa_ <= 0:
                 continue
@@ -3412,9 +3535,11 @@ def fem_transient_sliding_band(
                 # J view rendered EMPTY on P2 for exactly as long as this key
                 # was missing here.
                 _Js2 = np.zeros(int(mesh_all.t.shape[1]))
-                for _ix, _ar, _dir, _ph in coil_info:
-                    _Js2[_ix] = (_dir * Ist[_ph] * n_wires
-                                 / max(slot_area_m2, 1e-12))
+                for _ix, _ar, _dir, _ph, _as in coil_info:
+                    # Same divisor as the assembled source (the slot's REAL
+                    # copper area), so the J card reads the density the solve
+                    # actually used, not a nominal-rectangle one.
+                    _Js2[_ix] = (_dir * Ist[_ph] * n_wires / max(_as, 1e-12))
                 _snap2["Jtri_src"] = _Js2
     # ── Voltage drive: drop the SETTLING periods ─────────────────────────
     # The currents are STATE, so the run carries an electrical start-up

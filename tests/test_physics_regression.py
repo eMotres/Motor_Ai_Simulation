@@ -299,6 +299,63 @@ def _run(case: str) -> Dict[str, float]:
     return _metrics(d)
 
 
+def test_winding_carries_exactly_n_wires_times_i():
+    """The winding source integrates to n_wires·I_coil per slot. By construction.
+
+    This is the invariant the pins above are only meaningful under, and it is
+    cheap (polygons only, no mesh, no solve) so it runs in the fast suite.
+
+    It was FALSE for as long as the source was J = dir·I·n_wires / (slot_width ·
+    slot_height · fill_factor): that rectangle comes from the WIRE pitch and the
+    fill factor was a MotorDomainParams dataclass default (0.6) that no config
+    path ever set, while J was applied over the real copper. Every machine was
+    solved at k·N·I with k = A_copper_per_slot / that rectangle ∈ 0.909…1.265,
+    and T_maxwell/T_energy was exactly k (docs/SOLVER_TRIALS_2026-07-30.md,
+    F4+F5). On this geometry k was 1.0111 — the whole 30 mm design line was
+    optimised against a Maxwell torque 1.1 % too high.
+
+    Note the trap this checks past: the CAD emits ONE POLYGON PER WIRE (72 for
+    12 slots × 6 wires), so normalising each polygon by its OWN area would be
+    wrong by n_wires. The divisor has to be the SLOT's copper.
+    """
+    from motor_ai_sim.cadquery_geometry import CadQueryMotor
+    from motor_ai_sim.simulation.fem_solver_2d import (
+        build_materials, coil_copper_areas, coil_slot_index, _params_from_geo_dict)
+    from motor_ai_sim.simulation.geometry_2d import MotorDomains2D
+
+    p = _params_from_geo_dict(dict(GEO_30MM))
+    layout = MotorDomains2D(p).winding_layout
+    n_slot = len(layout)
+    motor = CadQueryMotor()
+    motor.set_parameters(dict(GEO_30MM))
+    polys = motor.get_2d_polygons(rotor_angle_deg=0.0)
+
+    n_wires = int(GEO_30MM["num_wires_per_slot"])
+    I_ph = {"A": 37.0, "B": -11.0, "C": -26.0}     # any unbalanced triple
+    mats = build_materials(I_ph, layout, polys, 0.0,
+                           p.slot_width_m * p.slot_height_m * p.fill_factor,
+                           n_wires)
+    areas = coil_copper_areas(polys, n_slot)
+    assert areas, "no coil polygons — the invariant below would be vacuous"
+
+    at = {}
+    for i, cp in enumerate(polys.get("coils") or []):
+        s = coil_slot_index(cp, n_slot)
+        tag = 200 + i                                     # DOM_COIL_BASE + i
+        if s is None or tag not in areas or tag not in mats:
+            continue
+        at[s] = at.get(s, 0.0) + mats[tag].J_z * areas[tag][0]
+
+    assert len(at) == n_slot, f"only {len(at)} of {n_slot} slots carry copper"
+    for s, got in sorted(at.items()):
+        phase, direction = layout[s]
+        want = direction * I_ph[phase] * n_wires
+        assert math.isclose(got, want, rel_tol=1e-9, abs_tol=1e-9), (
+            f"slot {s} ({'+' if direction > 0 else '-'}{phase}) is excited at "
+            f"{got:.6f} At, asked for {want:.6f} At "
+            f"(k = {got / want if want else float('nan'):.4f})")
+
+
 @pytest.fixture(scope="module")
 def baseline() -> Dict[str, Dict[str, float]]:
     if BASELINE.exists():

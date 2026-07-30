@@ -533,20 +533,15 @@ class MotorDomains2D:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 5.  Current-density helper
+# 5.  Current-density helper — REMOVED
 # ─────────────────────────────────────────────────────────────────────────────
-
-def winding_current_density(
-    I_peak: float,
-    n_turns: int,
-    slot_area_m2: float,
-    fill_factor: float = 0.6,
-    phase_angle_rad: float = 0.0,
-) -> Tuple[float, float]:
-    """Return (J_pos, J_neg) current densities for a coil pair [A/m²]."""
-    J_peak = I_peak * n_turns / (slot_area_m2 * fill_factor)
-    J = J_peak * math.sin(phase_angle_rad)
-    return J, -J
+# `winding_current_density(I, N, slot_area_m2, fill_factor=0.6)` lived here with
+# no callers.  It is the exact formula that made the solver excite every machine
+# at k·N·I: a nominal slot rectangle times a fill factor nothing sets, used as
+# the divisor for a source applied over the REAL copper.  The winding source is
+# normalised by the meshed copper area of the slot now
+# (fem_solver_2d.coil_copper_areas); leaving the old formula here as a helper
+# invites it back.
 
 
 # ─────────────────────────────────────────────────────────────────────────────

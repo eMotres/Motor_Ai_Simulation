@@ -15,6 +15,13 @@ Design notes
   point is inherited from it.  rpm and the winding connection were config reads
   with no per-request channel until F2/F3 fixed that; entries that store no
   connection still fall back to the config's ``winding`` block.
+* Every motor is VALIDATED (``geometry_validation.validate_geometry``) before it
+  is solved, and the verdict — ok / violations / min air-gap clearance — goes
+  into the record and into the report's ``VALID`` column.  An invalid machine is
+  NOT skipped (what an unbuildable cross-section does to the solver is worth
+  measuring) but it is marked, so its torque and efficiency are never read as a
+  machine.  Before this, a geometry the validator calls unbuildable produced a
+  full campaign record with five green gates and nothing saying so.
 * Each motor runs in its OWN subprocess (``--only KEY``) so a segfault in the
   FEM stack, an exception or a >30 min hang costs one motor, not the campaign.
   Results are appended as JSON lines to ``scripts/_solver_trials_results.jsonl``
@@ -399,6 +406,38 @@ def _gates(e: Dict[str, Any], op: Dict[str, Any], d: Dict[str, Any],
     return g
 
 
+def validate_entry(geo: Dict[str, Any]) -> Dict[str, Any]:
+    """Run the geometry validator on this entry's cross-section.
+
+    The campaign used to run no validation at all, so a machine the validator
+    calls UNBUILDABLE (conductors crossing the stator bore, magnets overlapping
+    the rotor, a winding that lost turns) produced a full record — torque,
+    ripple, efficiency, five green gates — with nothing in it saying the
+    cross-section does not exist.  Every record carries this now.
+
+    The invalid machine is still RUN: a trial is a measurement campaign, and
+    what an impossible geometry does to the solver is exactly the kind of thing
+    it exists to record.  It is only MARKED, so nobody reads its numbers as a
+    machine.  ``geometry_validation`` is imported, never modified — it is the
+    same validator the solve routes use (``validate_geometry`` → the same
+    ``CadQueryMotor.get_2d_polygons`` the mesher calls, so what is validated is
+    what gets meshed).
+    """
+    try:
+        from motor_ai_sim.geometry_validation import validate_geometry
+        res = validate_geometry(dict(geo))
+    except BaseException as exc:  # noqa: BLE001 — the validator must never kill a trial
+        return {"status": "validator_error", "ok": None,
+                "error": f"{type(exc).__name__}: {exc}"}
+    d = res.to_dict()
+    d["status"] = "validated"
+    # the one-glance summary the report table prints
+    d["error_codes"] = sorted({v.code for v in res.errors})
+    d["warning_codes"] = sorted({v.code for v in res.warnings})
+    d["summary"] = res.summary()
+    return d
+
+
 def run_one(key: str) -> Dict[str, Any]:
     """Evaluate ONE motor and append the record to the results jsonl."""
     motors = {m["key"]: m for m in build_motor_set()}
@@ -450,6 +489,9 @@ def run_one(key: str) -> Dict[str, Any]:
         "diameter_mm": e["diameter_mm"], "length_mm": e["length_mm"],
         "slots": e["slots"], "poles": e["poles"], "n_sectors": e["n_sectors"],
         "air_gap_mm": e["air_gap_mm"],
+        # Is this cross-section buildable at all?  Recorded BEFORE the solve, so
+        # a run that crashes still says whether the geometry was the reason.
+        "geometry_validation": validate_entry(e["geometry"]),
         "operating_point": op,
         "protocol": {
             "n_steps_per_period": STEPS_PER_PERIOD, "n_periods": N_PERIODS,
@@ -668,6 +710,7 @@ def drive(keys: Optional[List[str]] = None, timeout_s: int = TIMEOUT_S) -> None:
                 _append({"key": m["key"], "name": m["name"], "ok": False,
                          "diameter_mm": m["diameter_mm"], "slots": m["slots"],
                          "poles": m["poles"], "wall_s": round(dt, 1),
+                         "geometry_validation": validate_entry(m["geometry"]),
                          "failure_mode": "subprocess_exit",
                          "returncode": pr.returncode,
                          "stderr_tail": (pr.stderr or "")[-3000:]})
@@ -679,6 +722,7 @@ def drive(keys: Optional[List[str]] = None, timeout_s: int = TIMEOUT_S) -> None:
             _append({"key": m["key"], "name": m["name"], "ok": False,
                      "diameter_mm": m["diameter_mm"], "slots": m["slots"],
                      "poles": m["poles"], "wall_s": round(dt, 1),
+                     "geometry_validation": validate_entry(m["geometry"]),
                      "failure_mode": "timeout", "timeout_s": timeout_s})
 
 
@@ -724,6 +768,24 @@ def coil_audit() -> None:
             print(f"{m['key']:30s} ERROR {type(exc).__name__}: {exc}")
 
 
+def _valid_cell(r: Dict[str, Any]) -> str:
+    """The VALID column: what the geometry validator said about this record.
+
+    ``—`` is a record written BEFORE the campaign validated anything, and says
+    so rather than pretending the geometry was checked.
+    """
+    v = r.get("geometry_validation")
+    if not isinstance(v, dict):
+        return "—"
+    if v.get("status") == "validator_error":
+        return "**validator ERROR**"
+    n_e = int(v.get("n_errors") or 0)
+    n_w = int(v.get("n_warnings") or 0)
+    if n_e:
+        return f"**INVALID {n_e}E" + (f"/{n_w}W" if n_w else "") + "**"
+    return "ok" + (f" ({n_w}W)" if n_w else "")
+
+
 def report() -> None:
     """Print the results table + the gate/severity summary from the jsonl."""
     if not RESULTS.exists():
@@ -731,17 +793,19 @@ def report() -> None:
     recs = [json.loads(ln) for ln in io.open(RESULTS, encoding="utf-8") if ln.strip()]
     recs.sort(key=lambda r: (float(r.get("diameter_mm") or 0), r.get("key") or ""))
 
-    hdr = ("| motor | size | slots/poles | operating point | T_avg N·m | ripple % | "
+    hdr = ("| motor | size | slots/poles | VALID | operating point | T_avg N·m | ripple % | "
            "eta % | gates a/b/c/d/e | wall s |")
     print(hdr)
-    print("|---|---|---|---|---|---|---|---|---|")
+    print("|---|---|---|---|---|---|---|---|---|---|")
     for r in recs:
         op = r.get("operating_point") or {}
         m = r.get("metrics") or {}
         g = r.get("gates") or {}
+        val = _valid_cell(r)
         if not r.get("ok"):
             print(f"| `{r['key']}` | {r.get('diameter_mm')} mm | "
-                  f"{r.get('slots')}s/{r.get('poles')}p | — | **{r.get('failure_mode') or 'ERROR'}** "
+                  f"{r.get('slots')}s/{r.get('poles')}p | {val} | — | "
+                  f"**{r.get('failure_mode') or 'ERROR'}** "
                   f"| — | — | — | {r.get('wall_s')} |")
             continue
 
@@ -753,12 +817,27 @@ def report() -> None:
                                           "e_no_exception"))
         print(f"| `{r['key']}` | {r.get('diameter_mm'):.0f}×{r.get('length_mm'):.0f} mm | "
               f"{r.get('slots')}s/{r.get('poles')}p (NS={r.get('n_sectors')}) | "
+              f"{val} | "
               f"{op.get('I_phase_rms_A'):.0f} A, {op.get('rpm'):.0f} rpm, "
               f"γ={op.get('gamma_deg'):+.0f}° | {m.get('T_avg_Nm')} | "
               f"{(m.get('T_ripple_raw_pct') or 0):.2f} | "
               f"{(m.get('efficiency') or 0) * 100:.2f} | {gates} | {r.get('wall_s')} |")
 
     print("\n### severity feed\n")
+    for r in recs:
+        v = r.get("geometry_validation")
+        if not isinstance(v, dict):
+            continue
+        if v.get("status") == "validator_error":
+            print(f"GEOM  {r['key']}: validator failed — {v.get('error')}")
+            continue
+        if v.get("n_errors"):
+            print(f"GEOM  {r['key']}: NOT BUILDABLE — {v.get('error_codes')} "
+                  f"({v.get('n_errors')} errors, {v.get('n_warnings')} warnings); "
+                  f"the numbers below describe a cross-section that does not exist")
+        elif v.get("n_warnings"):
+            print(f"GEOM  {r['key']}: buildable, {v.get('n_warnings')} warning(s) "
+                  f"{v.get('warning_codes')}")
     for r in recs:
         if not r.get("ok"):
             print(f"HARD  {r['key']}: {r.get('failure_mode')} {r.get('error', '')}")

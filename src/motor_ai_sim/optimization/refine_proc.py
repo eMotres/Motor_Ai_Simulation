@@ -55,7 +55,9 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
             rotor_eddy: bool = False, hi_fidelity: bool = False,
             structured_gap: bool = False, airgap_macro: bool = False,
             iron_template: bool = True, geo_mesh: bool = True,
-            element_order: int = 2, rpm: float | None = None) -> Dict[str, Any]:
+            element_order: int = 2, rpm: float | None = None,
+            n_parallel: int | None = None,
+            connection: str | None = None) -> Dict[str, Any]:
     """Run the sliding-band transient for one candidate and return mean
     performance metrics (torque, efficiency, ripple, losses, mass).
 
@@ -141,6 +143,11 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
     _out = _kernel().run("solver.em_transient", {
         "n_steps_per_period": nspp, "n_periods": nper, "gamma_deg": float(gamma_deg),
         "I_phase_rms": float(current_a), "rpm": float(rpm),
+        # WINDING: omitted (None) = the active config's connection, exactly as
+        # before.  Passed, the candidate is driven at ITS parallel paths — the
+        # FEM only ever sees I_coil = I_phase / n_parallel (F3).
+        **({} if n_parallel is None else {"n_parallel": int(n_parallel)}),
+        **({} if connection is None else {"connection": str(connection)}),
         "mesh_size_mm": float(mesh_size_mm),
         "min_size_mm": float(min_size_mm), "n_sectors": int(_ns),
         "coil_temp_c": float(coil_temp_c), "gap_layers": float(gap_layers),
@@ -210,7 +217,16 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
     # summary does (routes/simulation.py): J = I_rms / n_parallel over ONE strand's
     # section, KV from the fundamental line voltage phasor.  Same formula → an
     # optimizer design and a Simulation run of it report the same number.
-    _npar = max(1, int((cfg.get("winding", {}) or {}).get("n_parallel", 1) or 1))
+    # The SAME parallel-path count the solve used — argument first, then the
+    # connection label, then the config.  Reading the config here while the
+    # solver honoured an argument would report a J the run never had.
+    if n_parallel is not None:
+        _npar = max(1, int(n_parallel))
+    elif connection is not None:
+        from motor_ai_sim.winding import parse_connection as _pc
+        _npar = max(1, _pc(connection)[0])
+    else:
+        _npar = max(1, int((cfg.get("winding", {}) or {}).get("n_parallel", 1) or 1))
     _a_cond_mm2 = float(geo.get("wire_width", 0.0)) * float(geo.get("wire_height", 0.0))
     j_coil = (float(current_a) / _npar / _a_cond_mm2) if _a_cond_mm2 > 1e-9 else 0.0
     kv_line = (rpm / (vh["V1_LL_V"] / math.sqrt(2))) if vh.get("V1_LL_V", 0.0) > 1 else 0.0
@@ -286,7 +302,9 @@ if __name__ == "__main__":
                       iron_template=spec.get("iron_template", True),
                       geo_mesh=spec.get("geo_mesh", True),
                       element_order=spec.get("element_order", 2),
-                      rpm=spec.get("rpm"))
+                      rpm=spec.get("rpm"),
+                      n_parallel=spec.get("n_parallel"),
+                      connection=spec.get("connection"))
         sys.stdout.write("@@RESULT@@" + json.dumps({"ok": True, "res": res}))
     except Exception as e:  # noqa: BLE001
         sys.stdout.write("@@RESULT@@" + json.dumps({"ok": False, "error": str(e)}))

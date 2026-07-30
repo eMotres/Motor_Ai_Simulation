@@ -1439,6 +1439,19 @@ def fem_transient_sliding_band(
                                  # the shared config held — measured cost on the
                                  # 30 mm control: P_fe -20 %, V_peak -12.5 %,
                                  # eta -0.86 pp (docs/SOLVER_TRIALS_2026-07-30.md F2).
+    n_parallel: Optional[int] = None,   # PARALLEL PATHS of the winding.  None = the
+                                 # global config's winding.n_parallel.  The FEM only
+                                 # ever sees I_coil = I_phase / n_parallel, so a wrong
+                                 # value is a factor-n_parallel error in the coil MMF:
+                                 # measured +95.7 % torque on ciano20_150_35 (stored
+                                 # 2S-2P, unapplied) and -1.1 % against its own stored
+                                 # torque once applied (F3).
+    connection: Optional[str] = None,   # WINDING CONNECTION label ("4S" / "2S-2P" /
+                                 # "4P").  Supplies n_parallel when that is not given
+                                 # explicitly, AND enters the d-axis calibration
+                                 # topology key — so a stored machine is evaluated on
+                                 # its OWN connection, not the shared config's.  An
+                                 # unreadable label RAISES (motor_ai_sim.winding).
     mesh_size_mm: float = 3.0,
     min_size_mm: float = 0.3,
     outer_air_factor: float = 1.3,
@@ -1585,7 +1598,22 @@ def fem_transient_sliding_band(
     mesh_size_mm = float(mesh_size_mm)
     min_size_mm = float(min_size_mm)
     cfg = get_config(); sim = cfg.get("simulation", {})
-    geo = dict(cfg.get("geometry", {})); wind = cfg.get("winding", {})
+    geo = dict(cfg.get("geometry", {}))
+    # The winding block is COPIED, never referenced: the per-request connection /
+    # n_parallel overlay it below, and evaluating a catalog machine must not move
+    # the user's shared config (F3).
+    wind = dict(cfg.get("winding", {}) or {})
+    if connection is not None:
+        from motor_ai_sim.winding import parse_connection as _parse_conn
+        _np_conn, _ns_conn = _parse_conn(connection)   # raises on an unreadable label
+        wind["connection"] = str(connection)
+        wind["n_series"] = _ns_conn
+        if n_parallel is None:
+            n_parallel = _np_conn
+    if n_parallel is not None:
+        if int(n_parallel) < 1:
+            raise ValueError(f"n_parallel must be >= 1; got {n_parallel!r}")
+        wind["n_parallel"] = int(n_parallel)
     # Candidate-design evaluation (optimization refine): overlay a geometry
     # override in-memory so the global config / Simulation state is untouched.
     if geo_override:
@@ -3633,7 +3661,8 @@ def fem_transient_sliding_band(
     _torque_method = "maxwell_stress"
     try:
         _T2, _torque_method = _hybrid_torque(
-            _psiA, _psiB, _psiC, _IA, _IB, _IC, _T2raw, pole_pairs)
+            _psiA, _psiB, _psiC, _IA, _IB, _IC, _T2raw, pole_pairs,
+            n_parallel=int(n_parallel))
     except Exception as _te:
         log.warning("P2 hybrid torque failed (%s) — using Maxwell series", _te)
     T_arr = np.asarray(_T2, float)
@@ -3903,6 +3932,10 @@ def em_transient_eval(
     rpm: Optional[float] = None,     # mechanical speed [rpm]; None = the global
                                      # config's simulation.rpm (see
                                      # fem_transient_sliding_band)
+    n_parallel: Optional[int] = None,   # winding parallel paths; None = the global
+                                     # config's winding.n_parallel
+    connection: Optional[str] = None,   # winding connection label ("2S-2P"); supplies
+                                     # n_parallel and the d-axis topology key
     mesh_size_mm: float = 4.0,
     min_size_mm: float = 0.3,
     outer_air_factor: float = 1.3,
@@ -3950,6 +3983,8 @@ def em_transient_eval(
         n_steps_per_period=int(n_steps_per_period), n_periods=float(n_periods),
         gamma_deg=float(gamma_deg), I_phase_rms=float(I_phase_rms),
         rpm=(None if rpm is None else float(rpm)),
+        n_parallel=(None if n_parallel is None else int(n_parallel)),
+        connection=(None if connection is None else str(connection)),
         mesh_size_mm=float(mesh_size_mm), min_size_mm=float(min_size_mm),
         outer_air_factor=float(outer_air_factor), gap_layers=float(gap_layers),
         n_sectors=int(n_sectors) if int(n_sectors) > 1 else -1,

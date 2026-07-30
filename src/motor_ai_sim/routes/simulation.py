@@ -1137,13 +1137,40 @@ def _effective_rpm(rpm=None) -> float:
         return 3950.0
 
 
+def _effective_winding(n_parallel=None, connection=None) -> tuple:
+    """(n_parallel, connection) a solve will ACTUALLY use — explicit arguments
+    first, then the connection label, then the shared config.
+
+    Same reasoning as ``_effective_rpm``: an explicit ``2S-2P`` and a config that
+    already says ``2S-2P`` are the same solve and must share a cache entry.
+    Raises ValueError on an unreadable connection label (the route turns that
+    into a 400) — never a silent fallback to one parallel path."""
+    from motor_ai_sim.winding import parse_connection as _pc
+    _cfgw = {}
+    try:
+        from motor_ai_sim.config import get_config as _gc
+        _cfgw = dict((_gc().get("winding") or {}))
+    except Exception:
+        pass
+    conn = connection if connection is not None else _cfgw.get("connection")
+    npar = n_parallel
+    if npar is None and connection is not None:
+        npar = _pc(connection)[0]
+    elif connection is not None:
+        _pc(connection)                       # validate even when npar is explicit
+    if npar is None:
+        npar = _cfgw.get("n_parallel", 1)
+    return int(max(1, int(npar or 1))), (str(conn) if conn else "")
+
+
 def _field_snap_key_fields(*, gamma_deg, I_phase_rms, mesh_size_mm, min_size_mm,
                            outer_air_factor, n_sectors, stator_fillet_mm,
                            gap_layers, coil_temp_c, comp_mesh, pole_copy,
                            iron_template, geo_mesh, structured_gap, airgap_macro,
                            n_steps_per_period, n_periods, eddy, rotor_eddy,
                            demag, drive, element_order, cfg_fingerprint, geo_ov,
-                           mat_ov, rotor_angle0_deg=0.0, rpm=None) -> "OrderedDict":
+                           mat_ov, rotor_angle0_deg=0.0, rpm=None,
+                           n_parallel=None, connection=None) -> "OrderedDict":
     """The snapshot key as NAMED fields, in key order.
 
     Named because the key is the thing that decides "is this the run the user
@@ -1198,6 +1225,10 @@ def _field_snap_key_fields(*, gamma_deg, I_phase_rms, mesh_size_mm, min_size_mm,
         # the snapshot CARRIES beside it is not: the loss-density map, the eddy
         # J and the back-EMF all scale with f_elec = rpm*pp/60.
         ("rpm", round(_effective_rpm(rpm), 3)),
+        # Winding: n_parallel divides the coil current, so it changes the FIELD;
+        # the connection label changes the d-axis calibration key.  Resolved, so
+        # explicit and config-default spellings of the same machine collide.
+        ("winding", _effective_winding(n_parallel, connection)),
     ))
 
 
@@ -2409,6 +2440,14 @@ def get_fem_transient(
                                           #   eddy and back-EMF all follow THIS number
                                           #   instead of whatever the shared config holds
                                           #   (docs/SOLVER_TRIALS_2026-07-30.md F2).
+    n_parallel:  Optional[int] = None,    # ← WINDING PARALLEL PATHS.  Omitted = the shared
+                                          #   config's winding.n_parallel.  The FEM only ever
+                                          #   sees I_coil = I_phase / n_parallel, so a stored
+                                          #   machine evaluated without its own value is driven
+                                          #   at n_parallel x its intended coil MMF (F3).
+    connection:  Optional[str] = None,    # ← WINDING CONNECTION label ("4S" / "2S-2P" / "4P").
+                                          #   Supplies n_parallel when that is absent and enters
+                                          #   the d-axis topology key.  Unreadable label -> 400.
     mesh_size_mm:        float = 4.0,
     min_size_mm:         float = 0.3,
     outer_air_factor:    float = 1.3,
@@ -2495,6 +2534,20 @@ def get_fem_transient(
     """
     import numpy as _np
 
+    # Winding connection: validate BEFORE anything else touches it.  An
+    # unreadable label is a request error (400 naming the label and the forms
+    # that parse), never a silent fall-back to one parallel path — that
+    # fall-back is a factor-n_parallel error in the coil MMF (F3).
+    if connection is not None:
+        from motor_ai_sim.winding import parse_connection as _pc_route
+        try:
+            _pc_route(connection)
+        except ValueError as _ce:
+            raise HTTPException(status_code=400, detail=str(_ce))
+    if n_parallel is not None and int(n_parallel) < 1:
+        raise HTTPException(status_code=400,
+                            detail=f"n_parallel must be >= 1; got {n_parallel!r}")
+
     # Mesh once, rotate the rotor by re-pairing the slip ring → smooth T(t),
     # clean V(t), and one mesh for every frame including the animation's.
     _comp_mesh = _parse_component_mesh(component_mesh)
@@ -2565,6 +2618,7 @@ def get_fem_transient(
                # rpm change invalidates the entry — the config's speed used to
                # be in NO key at all.
                round(_effective_rpm(rpm), 3),
+               _effective_winding(n_parallel, connection),
                int(n_frames) if include_frames else 0,
                # The coupled eddy solve is DIFFERENT physics (solved copper loss,
                # reaction currents in the magnets/shaft) — it must not share a
@@ -2579,6 +2633,7 @@ def get_fem_transient(
     # whether that snapshot is still in memory.
     _fsnap_fields = _field_snap_key_fields(
         gamma_deg=gamma_deg, I_phase_rms=I_phase_rms, rpm=rpm,
+        n_parallel=n_parallel, connection=connection,
         mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm,
         outer_air_factor=outer_air_factor, n_sectors=n_sectors,
         stator_fillet_mm=stator_fillet_mm, gap_layers=gap_layers,
@@ -2682,6 +2737,8 @@ def get_fem_transient(
                 n_steps_per_period=int(n_steps_per_period), n_periods=float(n_periods),
                 gamma_deg=float(gamma_deg), I_phase_rms=float(I_phase_rms),
                 rpm=(None if rpm is None else float(rpm)),
+                n_parallel=(None if n_parallel is None else int(n_parallel)),
+                connection=(None if connection is None else str(connection)),
                 mesh_size_mm=float(mesh_size_mm), min_size_mm=float(min_size_mm),
                 outer_air_factor=float(outer_air_factor), gap_layers=float(gap_layers),
                 n_sectors=int(n_sectors), stator_fillet_mm=float(stator_fillet_mm),
@@ -2723,6 +2780,10 @@ def get_fem_transient(
                             # only allowed difference from the voltage run is
                             # the drive.
                             rpm=(None if rpm is None else float(rpm)),
+                            n_parallel=(None if n_parallel is None
+                                        else int(n_parallel)),
+                            connection=(None if connection is None
+                                        else str(connection)),
                             mesh_size_mm=float(mesh_size_mm),
                             min_size_mm=float(min_size_mm),
                             outer_air_factor=float(outer_air_factor),

@@ -58,7 +58,6 @@ from typing import Any, Dict
 import numpy as np
 import pytest
 
-from motor_ai_sim.config import get_config
 from motor_ai_sim.material_context import set_request_materials
 from motor_ai_sim.simulation.fem_solver_2d import fem_transient_sliding_band
 
@@ -195,6 +194,12 @@ MAGNET = "F45SH_120C"
 # Passed as the solver's ``rpm=`` argument (F2).
 RPM = 15000.0
 
+# The winding connection every pin was generated at: 2 coils per phase in
+# series, so ONE parallel path. Passed as the solver's ``connection=`` argument
+# (F3) — it sets n_parallel (which divides the coil current) and the d-axis
+# calibration key.
+CONNECTION = "2S"
+
 
 def _scalar(v: Any) -> float:
     """T_em_Nm comes back as a per-frame series; the pinned value is its mean."""
@@ -270,24 +275,25 @@ def _run(case: str) -> Dict[str, float]:
     # silently drops an in-process mutation. That made this suite pass alone and
     # fail in a batch, which is worse than failing outright.
     set_request_materials({"assignment": {"magnet": MAGNET}, "materials": {}})
-    # Speed: an ARGUMENT now (F2). It used to have to go through the cached
-    # config because fem_transient_sliding_band read simulation.rpm itself; the
-    # explicit parameter makes the pin independent of the user's file with no
-    # patching at all. Same number, same physics — this is a channel change.
-    cfg = get_config()
-    # The winding CONNECTION is part of the d-axis calibration topology key
-    # (fem_solver_2d._daxis_topology_key). The pins were generated at 2S; when
-    # the user toggled the live config to 4S, the calibration re-ran on the new
-    # key and the re-measured d-axis moved by its numerical noise — amplitude
-    # metrics stayed inside tolerance but I_A_thd_pct drifted +1.1-1.2 % on
-    # BOTH voltage cases with every other number byte-identical. Same leak
-    # class as rpm: pin it on the cached dict, never touch the user's file.
-    cfg.setdefault("winding", {})
-    cfg["winding"]["connection"] = "2S"
-    cfg["winding"]["n_series"] = 2
+    # Speed and the winding connection are ARGUMENTS now (F2/F3). They used to
+    # have to go through the cached config because the solver read
+    # simulation.rpm and the winding block itself; the explicit parameters make
+    # the pins independent of the user's file with no patching at all. Same
+    # numbers, same physics — this is a channel change.
     kw = dict(CASES[case])
     try:
-        d = fem_transient_sliding_band(geo_override=dict(GEO_30MM), rpm=RPM, **kw)
+        # The winding CONNECTION is an ARGUMENT now (F3), like rpm. It is part
+        # of the d-axis calibration topology key (fem_solver_2d.
+        # _daxis_topology_key) AND it sets n_parallel, which divides the coil
+        # current. The pins were generated at 2S (n_parallel 1); when the user
+        # toggled the live config to 4S, the calibration re-ran on the new key
+        # and the re-measured d-axis moved by its numerical noise — amplitude
+        # metrics stayed inside tolerance but I_A_thd_pct drifted +1.1-1.2 % on
+        # BOTH voltage cases with every other number byte-identical. It used to
+        # be pinned by patching the cached config dict; passing it removes the
+        # last shared-config read this suite depended on.
+        d = fem_transient_sliding_band(geo_override=dict(GEO_30MM), rpm=RPM,
+                                       connection=CONNECTION, **kw)
     finally:
         set_request_materials(None)
     return _metrics(d)

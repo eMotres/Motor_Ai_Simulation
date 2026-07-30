@@ -420,14 +420,10 @@ def get_full_config(geo: Optional[str] = None):
 
 # ── Winding connection ────────────────────────────────────────────────────────
 
-def _conn_label(n_series: int, n_parallel: int) -> str:
-    """Canonical connection label: all-series '{C}S', all-parallel '{C}P',
-    else '{nS}S-{nP}P'."""
-    if n_parallel <= 1:
-        return f"{n_series}S"
-    if n_series <= 1:
-        return f"{n_parallel}P"
-    return f"{n_series}S-{n_parallel}P"
+# ONE definition of the label and its parser, in motor_ai_sim.winding — the
+# solver needs them too (it takes a per-request `connection=` now) and cannot
+# import FastAPI to get them.
+from motor_ai_sim.winding import connection_label as _conn_label  # noqa: E402
 
 
 def _winding_connections(num_slots: int):
@@ -507,25 +503,7 @@ def get_winding_config():
     }
 
 
-def _parse_connection(conn: str):
-    """Parse a connection label → (n_parallel, n_series).
-    New: '2S-2P' (series-parallel) ; '4S' (all series) ; '4P' (all parallel).
-    Back-compat: '2P2S' (old parallel-series form)."""
-    import re as _re
-    conn = (conn or "").strip()
-    m = _re.match(r'^(\d+)S-(\d+)P$', conn)        # nS S - nP P  (new)
-    if m:
-        return int(m.group(2)), int(m.group(1))
-    m = _re.match(r'^(\d+)P(\d+)S$', conn)          # nP P nS S  (old)
-    if m:
-        return int(m.group(1)), int(m.group(2))
-    m = _re.match(r'^(\d+)S$', conn)                # all series
-    if m:
-        return 1, int(m.group(1))
-    m = _re.match(r'^(\d+)P$', conn)                # all parallel
-    if m:
-        return int(m.group(1)), 1
-    raise ValueError(f"Unknown connection '{conn}'")
+from motor_ai_sim.winding import parse_connection as _parse_connection  # noqa: E402
 
 
 @app.patch("/api/winding/config")

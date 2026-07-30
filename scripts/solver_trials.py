@@ -10,10 +10,11 @@ the solver degrades.  It changes no physics and writes nothing into ``src/``.
 Design notes
 ------------
 * Every motor is evaluated through ``geo_override`` (+ an explicit
-  ``set_request_materials``), so the user's global config / Simulation state is
-  never mutated.  The only thing the run inherits from the global config is the
-  ``winding`` block (n_parallel / n_series) — the solver API has NO per-request
-  channel for it; see FINDING-WINDING in the report.
+  ``set_request_materials``, ``rpm=`` and ``connection=``), so the user's global
+  config / Simulation state is never mutated and nothing about the operating
+  point is inherited from it.  rpm and the winding connection were config reads
+  with no per-request channel until F2/F3 fixed that; entries that store no
+  connection still fall back to the config's ``winding`` block.
 * Each motor runs in its OWN subprocess (``--only KEY``) so a segfault in the
   FEM stack, an exception or a >30 min hang costs one motor, not the campaign.
   Results are appended as JSON lines to ``scripts/_solver_trials_results.jsonl``
@@ -105,14 +106,14 @@ def _mesh_size_for(diameter_mm: float) -> float:
 
 
 def _n_parallel_from_connection(conn: Optional[str]) -> Optional[int]:
-    import re
-    c = (conn or "").strip()
-    for pat, grp in ((r"^(\d+)S-(\d+)P$", 2), (r"^(\d+)P(\d+)S$", 1),
-                     (r"^(\d+)S$", None), (r"^(\d+)P$", 1)):
-        m = re.match(pat, c)
-        if m:
-            return 1 if grp is None else int(m.group(grp))
-    return None
+    """Parallel paths in a stored connection label, or None if the entry has
+    none / stores something unreadable.  ONE parser (motor_ai_sim.winding) —
+    this used to be a private copy, and the solver had no parser at all."""
+    from motor_ai_sim.winding import parse_connection
+    try:
+        return parse_connection(conn or "")[0]
+    except ValueError:
+        return None
 
 
 def build_motor_set() -> List[Dict[str, Any]]:
@@ -487,14 +488,40 @@ def run_one(key: str) -> Dict[str, Any]:
         "f_elec_expected_Hz": round(float(op["rpm"]) * (e["poles"] // 2) / 60.0, 3),
     }
 
+    # ── WINDING CONNECTION (F3, now FIXED — the argument exists) ─────────────
+    # The FEM only ever sees I_coil = I_phase / n_parallel.  n_parallel used to
+    # come from the GLOBAL config with no per-request channel, so an entry stored
+    # as "2S-2P" or "4P" was driven with n_parallel times its intended coil MMF
+    # (measured: ciano20_150_35 +95.7 %, and -1.1 % against its own catalog
+    # torque once the connection is applied).  The entry's own connection string
+    # is an argument now; the solver derives n_parallel from it and uses it for
+    # the d-axis topology key too.
+    conn_entry = op.get("connection_entry")
+    n_par_entry = op.get("n_parallel_entry")
     wind = dict(cfg.get("winding") or {})
-    n_par_used = max(1, int(wind.get("n_parallel", 1) or 1))
+    if e.get("i_divide_by"):
+        # The @coilI variant PRE-divides the current by hand — that WAS the
+        # workaround for the missing channel.  Keep it reproducing exactly what
+        # it always did (n_parallel = 1 in the solver) so the historical records
+        # stay comparable; the BASE run is the one that now applies the
+        # connection, and its coil current equals this variant's.
+        conn_arg, n_par_arg, n_par_used = None, 1, 1
+        _conn_src = "forced n_parallel=1 (@coilI pre-divides the current)"
+    elif conn_entry and n_par_entry:
+        conn_arg, n_par_arg = str(conn_entry), None   # n_parallel derived from it
+        n_par_used = int(n_par_entry)
+        _conn_src = "entry, via connection= argument (F3 fixed)"
+    else:
+        conn_arg, n_par_arg = None, None
+        n_par_used = max(1, int(wind.get("n_parallel", 1) or 1))
+        _conn_src = "global config (entry stores no connection)"
     rec["winding_used"] = {
         "n_parallel": n_par_used, "n_series": wind.get("n_series"),
-        "connection": wind.get("connection"), "layers": wind.get("layers"),
-        "source": "global config (no per-request winding override exists)",
-        "matches_entry": (op["n_parallel_entry"] is None
-                          or op["n_parallel_entry"] == n_par_used),
+        "connection": conn_arg or wind.get("connection"),
+        "connection_entry": conn_entry, "layers": wind.get("layers"),
+        "source": _conn_src,
+        "matches_entry": bool(n_par_entry is None or n_par_entry == n_par_used
+                              or e.get("i_divide_by")),
     }
     # Per-request materials.  No preset/catalog entry stores a material
     # assignment, so the plain trials pass the explicit "no override" and run on
@@ -519,7 +546,7 @@ def run_one(key: str) -> Dict[str, Any]:
         d = em_transient_eval(
             n_steps_per_period=STEPS_PER_PERIOD, n_periods=N_PERIODS,
             gamma_deg=op["gamma_deg"], I_phase_rms=op["I_phase_rms_A"],
-            rpm=op["rpm"],
+            rpm=op["rpm"], connection=conn_arg, n_parallel=n_par_arg,
             mesh_size_mm=e["mesh_size_mm"], min_size_mm=MIN_SIZE_MM,
             outer_air_factor=OUTER_AIR, gap_layers=GAP_LAYERS,
             n_sectors=e["n_sectors"], stator_fillet_mm=0.0,

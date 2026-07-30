@@ -233,7 +233,9 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
                      structured_gap: bool = False, airgap_macro: bool = False,
                      iron_template: bool = True, geo_mesh: bool = True,
                      element_order: int = 2,
-                     rpm: Optional[float] = None) -> Dict[str, Any]:
+                     rpm: Optional[float] = None,
+                     n_parallel: Optional[int] = None,
+                     connection: Optional[str] = None) -> Dict[str, Any]:
     """Evaluate ONE (geometry, current, γ) with the real sliding-band transient
     in an isolated subprocess (FEM/LLVM crash → failed design, not a dead API).
     Rebuilds the CadQuery geometry + gmsh mesh for the candidate in-memory.
@@ -259,7 +261,13 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
                        # the active config, exactly as before.  Passed, it pins
                        # the eval's speed so the solver's f_elec cannot drift
                        # from the operating point the caller means (F2).
-                       **({} if rpm is None else {"rpm": float(rpm)})})
+                       **({} if rpm is None else {"rpm": float(rpm)}),
+                       # WINDING: same rule — omitted = the candidate subprocess
+                       # reads the active config's connection (F3).
+                       **({} if n_parallel is None
+                          else {"n_parallel": int(n_parallel)}),
+                       **({} if connection is None
+                          else {"connection": str(connection)})})
     try:
         proc = subprocess.run(
             [sys.executable, "-m", "motor_ai_sim.optimization.refine_proc"],

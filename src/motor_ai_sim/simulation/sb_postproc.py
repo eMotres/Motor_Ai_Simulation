@@ -44,9 +44,20 @@ def drop_settling_frames(series: Iterable[list], n_skip: int,
 def hybrid_torque(psi_a: Sequence[float], psi_b: Sequence[float],
                   psi_c: Sequence[float], i_a: Sequence[float],
                   i_b: Sequence[float], i_c: Sequence[float],
-                  t_maxwell: Sequence[float], pole_pairs: int
-                  ) -> Tuple[List[float], str]:
+                  t_maxwell: Sequence[float], pole_pairs: int,
+                  n_parallel: int = 1) -> Tuple[List[float], str]:
     """Energy-consistent MEAN + Maxwell-stress RIPPLE.  Returns (T(t), method).
+
+    ``psi_*`` and ``i_*`` are PER-BRANCH (one parallel path), which is how the
+    solver carries them everywhere — ``_sc_psi2`` divides psi by n_parallel and
+    the excitation's i_peak is ``I_phase / n_parallel``.  The virtual-work
+    identity is in PHASE quantities, so ``n_parallel`` restores the phase
+    current (n_parallel branches carry the phase current between them, each at
+    the same flux linkage).  Omitting it reported ``T_true / n_parallel``; it
+    was invisible while every config in the repo had one parallel path, and it
+    surfaced the moment the per-request winding channel let a stored ``2S-2P``
+    machine be evaluated on its own connection (F3).  ``P_elec_in`` in the
+    solver already carried exactly this factor for exactly this reason.
 
     Two physical facts, each measured by the method that is right for it:
      • MEAN — the ANSYS energy method (virtual work) via the terminal flux
@@ -73,7 +84,8 @@ def hybrid_torque(psi_a: Sequence[float], psi_b: Sequence[float],
         _s = 2.0 / 3.0; _kc = math.sqrt(3.0) / 2.0
         _psial = _s * (_pa - 0.5 * _pb - 0.5 * _pc); _psibe = _s * _kc * (_pb - _pc)
         _ial = _s * (_ea - 0.5 * _eb - 0.5 * _ec); _ibe = _s * _kc * (_eb - _ec)
-        _Te = (1.5 * float(pole_pairs) * (_psial * _ibe - _psibe * _ial))
+        _Te = (1.5 * float(pole_pairs) * float(max(1, int(n_parallel)))
+               * (_psial * _ibe - _psibe * _ial))
         _emean = float(_Te.mean())
         _mx = np.asarray(t_maxwell, float)     # raw Maxwell σ_rθ series
         # real Maxwell ripple, DC re-centred on the energy-consistent mean:

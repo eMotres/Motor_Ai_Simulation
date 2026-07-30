@@ -230,3 +230,89 @@ class TestPipelineStatus:
         assert "fusion360_available" in data
         assert "cache_enabled" in data
         assert isinstance(data["cache_enabled"], bool)
+
+
+class TestUnknownMaterialIsVisible:
+    """F6: an assigned material nobody can resolve must FAIL, not fall back.
+
+    The path this guards used to log one WARNING and drop to the analytic
+    magnet — no BH curve and no demag knee — which returned an empty demag map
+    and a shaft eddy loss of 63.9 W where the real magnet gives 7.0 W, a factor
+    9 with every number on screen looking plausible
+    (docs/SOLVER_TRIALS_2026-07-30.md F6).
+    """
+
+    def test_request_material_override_with_unknown_name_is_400(self):
+        import json
+        bad = json.dumps({"assignment": {"magnet": "N42SH"}})
+        r = client.get("/api/simulation/physics/fem_transient",
+                       params={"mat": bad, "restore": "true"})
+        assert r.status_code == 400
+        # the offending name AND what is available, or the message is useless
+        assert "N42SH" in r.json()["detail"]
+        assert "F45SH_120C" in r.json()["detail"]
+
+    def test_material_assigned_to_the_wrong_part_is_400(self):
+        import json
+        bad = json.dumps({"assignment": {"magnet": "copper"}})
+        r = client.get("/api/simulation/physics/fem_transient",
+                       params={"mat": bad, "restore": "true"})
+        assert r.status_code == 400
+        assert "copper" in r.json()["detail"]
+
+    def test_override_carrying_its_own_props_is_accepted(self):
+        """A name the library never heard of is fine when the request BRINGS it."""
+        import json
+        ov = json.dumps({"assignment": {"magnet": "MyLabMagnet"},
+                         "materials": {"MyLabMagnet": {"category": "magnet",
+                                                       "Br": 1.2}}})
+        r = client.get("/api/simulation/physics/fem_transient",
+                       params={"mat": ov, "restore": "true"})
+        assert r.status_code == 200
+
+    def test_build_materials_raises_on_an_unknown_assignment(self):
+        """The EVAL paths (optimizer, trials, regression) have no HTTP layer —
+        they must see an exception, not a warning."""
+        from motor_ai_sim.materials import UnknownMaterialError
+        from motor_ai_sim.material_context import set_request_materials
+        from motor_ai_sim.simulation.fem_solver_2d import build_materials
+        set_request_materials({"assignment": {"magnet": "N42SH"},
+                               "materials": {}})
+        try:
+            with pytest.raises(UnknownMaterialError):
+                build_materials({"A": 0.0, "B": 0.0, "C": 0.0}, [],
+                                {"magnets": [], "coils": []}, 0.0, 1e-6, 6)
+        finally:
+            set_request_materials(None)
+
+    def test_live_config_assignment_resolves(self):
+        """The shared config's own assignment must be valid — this is the check
+        that turns a stale name in motor_config.yaml into a red test instead of
+        a plausible-looking wrong answer."""
+        from motor_ai_sim.config import get_material_assignments
+        from motor_ai_sim.materials import validate_assignment
+        validate_assignment(get_material_assignments())
+
+
+class TestWindingConnectionArgument:
+    """F3: the per-request winding channel, and its refusal to guess."""
+
+    def test_unreadable_connection_is_400(self):
+        r = client.get("/api/simulation/physics/fem_transient",
+                       params={"connection": "N42SH", "restore": "true"})
+        assert r.status_code == 400
+        assert "N42SH" in r.json()["detail"]
+
+    def test_readable_connection_is_accepted(self):
+        r = client.get("/api/simulation/physics/fem_transient",
+                       params={"connection": "2S-2P", "restore": "true"})
+        assert r.status_code == 200
+
+    def test_connection_parses_to_the_right_parallel_paths(self):
+        from motor_ai_sim.winding import parse_connection
+        assert parse_connection("4S") == (1, 4)
+        assert parse_connection("4P") == (4, 1)
+        assert parse_connection("2S-2P") == (2, 2)
+        assert parse_connection("2P2S") == (2, 2)      # legacy spelling
+        with pytest.raises(ValueError):
+            parse_connection("nonsense")

@@ -27,6 +27,7 @@ logging.getLogger("skfem").setLevel(logging.WARNING)
 
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from typing import Optional
 
 from pydantic import BaseModel
@@ -47,6 +48,7 @@ from motor_ai_sim.routes.modules import router as modules_router
 from motor_ai_sim.routes.kernel import router as kernel_router
 from motor_ai_sim.services.geometry_service import get_current_geometry, params_to_dict
 from motor_ai_sim import materials as mat_lib
+from motor_ai_sim.materials import UnknownMaterialError
 from motor_ai_sim import materials_store
 from motor_ai_sim.auth import require_admin
 
@@ -81,6 +83,19 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# An unresolvable material ASSIGNMENT is a bad request, not a server fault: the
+# name came from the shared config or from the request's own `mat=` override,
+# and the only useful answer names it.  Registered app-wide so every physics
+# route reports it the same way instead of a 500 stack trace — the failure it
+# replaces was a log.warning nobody saw plus silently different physics (a 9x
+# wrong shaft eddy loss; docs/SOLVER_TRIALS_2026-07-30.md F6).
+@app.exception_handler(UnknownMaterialError)
+async def _unknown_material_handler(request, exc: UnknownMaterialError):
+    return JSONResponse(status_code=400,
+                        content={"detail": f"unknown material: {exc}"})
+
 
 app.include_router(geometry_router)
 app.include_router(pipeline_router)

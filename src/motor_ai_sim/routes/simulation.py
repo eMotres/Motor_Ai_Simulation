@@ -51,9 +51,22 @@ async def _material_override_dep(mat: Optional[str] = Query(default=None)):
     """Router-level (multi-user, Stage 2b): set THIS request's material override
     from `mat` before the sync handler runs, so build_materials uses the signed-in
     user's own materials. Per-task context → no cross-request leak; absent/malformed
-    clears it (None) so the solve falls back to the shared config exactly as before."""
+    clears it (None) so the solve falls back to the shared config exactly as before.
+
+    An override that ASSIGNS a name nobody can resolve — not in the library, not
+    carried in the override's own `materials` block — is a 400 right here, with
+    the name in the message. It used to be a log.warning inside the solve and a
+    silent fall-back to the analytic defaults (F6)."""
     from motor_ai_sim.material_context import set_request_materials
-    set_request_materials(_parse_mat_override(mat))
+    _ov = _parse_mat_override(mat)
+    if _ov and _ov.get("assignment"):
+        from motor_ai_sim.materials import (validate_assignment as _va,
+                                            UnknownMaterialError as _ume)
+        try:
+            _va(_ov["assignment"], known_extra=set(_ov.get("materials") or ()))
+        except _ume as _me:
+            raise HTTPException(status_code=400, detail=str(_me))
+    set_request_materials(_ov)
 
 
 router = APIRouter(

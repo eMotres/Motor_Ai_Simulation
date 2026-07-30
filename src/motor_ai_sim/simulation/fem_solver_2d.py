@@ -793,6 +793,21 @@ def build_materials(
     if _ov_assign:
         assignments = {**assignments, **{k: v for k, v in _ov_assign.items() if v}}
 
+    # ── Every assigned name must RESOLVE, or the solve fails here ────────────
+    # A name the library does not have used to log one WARNING and fall through
+    # to the analytic defaults — no BH curve and, for a magnet, no demag knee.
+    # Measured (docs/SOLVER_TRIALS_2026-07-30.md F6): a config holding the
+    # non-existent `magnet: N42SH` returned an EMPTY demag map and a shaft eddy
+    # loss of 63.9 W against the 7.0 W the real magnet gives — a factor 9, with
+    # every number on screen looking plausible.  Silently answering a different
+    # question is the one thing this solver must not do, so it raises: the route
+    # turns it into a 400 naming the material, and every eval path (optimizer,
+    # trials harness, regression) fails the candidate instead of scoring it.
+    # Names carried by the per-request override are real by definition — their
+    # props travel with the request and never go through the library.
+    from motor_ai_sim.materials import validate_assignment as _validate_assign
+    _validate_assign(assignments, known_extra=set(_ov_mats or ()))
+
     def _resolve_mat(category: str, name: str):
         """Material dataclass: per-request override props first, else the library."""
         from motor_ai_sim import materials as _ml
@@ -920,8 +935,15 @@ def build_materials(
             if bh and len(bh) >= 2:
                 bh_magnet = [(float(h), float(b)) for (h, b) in bh]
         except Exception as e:
-            log.warning("Magnet material '%s' lookup failed: %s", mag_name, e)
-            mu_rec = 1.05
+            # The assignment already passed validate_assignment above, so
+            # reaching here means the entry exists but cannot be PARSED as a
+            # magnet.  Either way the fallback is the analytic magnet with no
+            # BH curve and no demag knee — different physics under the same
+            # name.  Raise (F6): the old log.warning is what let a 9x wrong
+            # shaft eddy loss out of the door looking plausible.
+            from motor_ai_sim.materials import UnknownMaterialError
+            raise UnknownMaterialError(
+                f"magnet material {mag_name!r} could not be resolved: {e}") from e
     else:
         mu_rec = 1.05
 

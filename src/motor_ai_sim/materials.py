@@ -22,7 +22,7 @@ import logging
 import time
 from dataclasses import dataclass, field, fields as dataclass_fields
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Literal
+from typing import Dict, Iterable, List, Optional, Tuple, Literal
 
 import yaml
 
@@ -430,6 +430,86 @@ def get_material(
         available = list(cat_data.keys())
         raise KeyError(f"Material '{name}' not found in '{category}'. Available: {available}")
     return _PARSERS[category](name, raw)
+
+
+class UnknownMaterialError(ValueError):
+    """An assigned material name that resolves to nothing usable.
+
+    Raised where the ASSIGNMENT is read, not where a property is wanted, so a
+    typo'd or stale name fails the request instead of quietly changing the
+    physics.  Measured cost of the silent path it replaces: a config holding
+    ``magnet: N42SH`` (not in the library) logged one WARNING, fell back to the
+    analytic magnet — no BH curve and, crucially, no demag knee — and returned
+    an EMPTY demag map with the shaft eddy loss at 63.9 W instead of 7.0 W, a
+    factor 9 (docs/SOLVER_TRIALS_2026-07-30.md F6).  Every number in that run
+    looked plausible.
+    """
+
+
+# Which library categories a motor part's material may legitimately come from.
+# A part not listed here is checked against every category (the name just has to
+# exist somewhere).
+PART_CATEGORIES: Dict[str, tuple] = {
+    "stator_core":     ("steel",),
+    "rotor_core":      ("steel",),
+    "magnet":          ("magnet",),
+    "slot":            ("conductor",),
+    # The shaft is aluminium on this machine and solid steel on others.
+    "shaft":           ("conductor", "steel"),
+    "slot_insulation": ("insulator",),
+    "wire_insulation": ("insulator",),
+    "air_gap":         ("coolant",),
+    "in_band":         ("coolant",),
+    "out_band":        ("coolant",),
+}
+
+_ALL_CATEGORIES = ("steel", "magnet", "conductor", "insulator", "coolant")
+
+
+def resolve_assigned(part: str, name: str):
+    """The material assigned to ``part``, or raise ``UnknownMaterialError``.
+
+    Searches the categories the part may legitimately use (``PART_CATEGORIES``),
+    falling back to every category for an unknown part key.
+    """
+    cats = PART_CATEGORIES.get(part) or _ALL_CATEGORIES
+    for cat in cats:
+        try:
+            return get_material(cat, name)  # type: ignore[arg-type]
+        except Exception:  # noqa: BLE001 - wrong category / missing entry
+            continue
+    # Not where it belongs. Say whether it exists at all, because "typo" and
+    # "assigned to the wrong part" need different fixes.
+    elsewhere = [c for c in _ALL_CATEGORIES
+                 if c not in cats and name in list_materials(c).get(c, [])]
+    if elsewhere:
+        raise UnknownMaterialError(
+            f"material {name!r} is assigned to {part!r}, which takes a "
+            f"{'/'.join(cats)} material, but {name!r} exists only in "
+            f"{'/'.join(elsewhere)}")
+    avail = sorted({n for c in cats for n in list_materials(c).get(c, [])})
+    raise UnknownMaterialError(
+        f"unknown material {name!r} assigned to {part!r}. "
+        f"Available {'/'.join(cats)}: {avail}")
+
+
+def validate_assignment(assignments: Optional[dict],
+                        known_extra: Optional[Iterable[str]] = None) -> None:
+    """Raise ``UnknownMaterialError`` naming EVERY assignment that resolves to
+    nothing.  ``known_extra`` are names supplied verbatim by a per-request
+    material override, which are real by definition (their props travel with
+    the request and never go through the library)."""
+    extra = {str(n) for n in (known_extra or ())}
+    bad: List[str] = []
+    for part, name in (assignments or {}).items():
+        if not name or not isinstance(name, str) or name in extra:
+            continue
+        try:
+            resolve_assigned(str(part), name)
+        except UnknownMaterialError as exc:
+            bad.append(str(exc))
+    if bad:
+        raise UnknownMaterialError("; ".join(bad))
 
 
 def get_steel(name: str) -> SteelMaterial:

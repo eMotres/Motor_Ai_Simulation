@@ -410,7 +410,11 @@ def get_full_config(geo: Optional[str] = None):
         try:
             from motor_ai_sim.simulation.geometry_2d import params_from_config as _pfc
             from motor_ai_sim.simulation.fem_solver_2d import end_winding_factor_geom as _ewf
-            _kgeo = {**config.get("geometry", {}), **(_ov or {})}
+            from motor_ai_sim.simulation.geometry_2d import merge_geo_override as _mgo
+            # merge_geo_override, not a dict-update — same reason as everywhere
+            # else the two tiers meet: the config's DERIVED fields must not
+            # survive next to the override's primaries.
+            _kgeo = _mgo(dict(config.get("geometry", {})), _ov)
             _kend = round(float(_ewf(_pfc(geo_override=_ov), _kgeo)), 3)
         except Exception:
             _kend = 0.0

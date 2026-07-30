@@ -68,6 +68,13 @@ try:  # keep in lock-step with the service that strips them on write
 except Exception:  # pragma: no cover - the literal set above is the fallback
     pass
 
+try:  # and with the DERIVATION itself (geometry.motor_geometry.derived_geometry)
+    from motor_ai_sim.geometry.motor_geometry import DERIVED_GEOMETRY_FIELDS
+    DERIVED_GEOMETRY_NAMES = frozenset(
+        DERIVED_GEOMETRY_NAMES | set(DERIVED_GEOMETRY_FIELDS))
+except Exception:  # pragma: no cover - the literal set above is the fallback
+    pass
+
 
 #: Parameters the solver cannot run without.  Seeded from every key
 #: ``params_from_config`` (src/motor_ai_sim/simulation/geometry_2d.py:140) reads

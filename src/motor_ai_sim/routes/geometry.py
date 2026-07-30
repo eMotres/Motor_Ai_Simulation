@@ -507,9 +507,13 @@ def _resolve_geo_dict(geo: Optional[str]) -> dict:
     """
     params_dict = get_current_geometry().to_dict()
     override = parse_geo_override(geo)
-    if override:
-        params_dict = {**params_dict, **override}
-    return params_dict
+    # merge_geo_override, not a dict-update: ``to_dict`` carries the DERIVED
+    # fields (counts, slot_width, radii, angles) and the override carries
+    # PRIMARIES, so an update returns one motor's primaries under another's
+    # derived values — and this dict is both hashed for the mesh cache and handed
+    # to the CAD.
+    from motor_ai_sim.simulation.geometry_2d import merge_geo_override
+    return merge_geo_override(params_dict, override)
 
 
 @router.get("/mesh")

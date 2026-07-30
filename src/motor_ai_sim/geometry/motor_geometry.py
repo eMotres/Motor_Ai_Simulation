@@ -35,6 +35,102 @@ _FROM_YAML_CACHE: Dict[str, Any] = {}
 HAS_MODULUS = False  # NVIDIA Modulus path removed
 
 
+#: The geometry names this module DERIVES from primaries, in the form they are
+#: stored in a geometry dict (motor_config.yaml `geometry:` carries all nine).
+#: Mirrored by ``routes._validation.DERIVED_GEOMETRY_NAMES`` and
+#: ``services.geometry_service._DERIVED_PARAMS``, which additionally list
+#: num_slots / num_poles and the read-only radius PROPERTIES; those are not here
+#: on purpose — see ``derived_geometry``.
+DERIVED_GEOMETRY_FIELDS = (
+    "stator_outer_radius", "stator_inner_radius",
+    "rotor_outer_radius", "rotor_inner_radius",
+    "angle_slot", "angle_pole", "slot_pitch", "pole_pitch",
+    "slot_width",
+)
+
+
+def derived_geometry(g: Dict[str, Any]) -> Dict[str, float]:
+    """Every derived geometry field, computed from the PRIMARIES in ``g``.
+
+    THE one implementation.  A derived field is a function of the primaries and
+    must never be *read back* from wherever it happens to be stored, because the
+    place it is stored is the SHARED global config: ``motor_config.yaml`` carries
+    all nine of these, the app rewrites them whenever the user edits a geometry,
+    and a per-request ``geo_override`` supplies primaries only.  Reading one back
+    on an override path therefore pairs one motor's derived value with another
+    motor's geometry — the config-leak family (rpm, winding connection, and this).
+
+    It bit for real: ``fem_transient_sliding_band`` sized its mesh from
+    ``geo["slot_width"]``, so the 30 mm regression machine was meshed at
+    slot_width/2 = 1.25 mm while the user's config held the 40 mm design (2.5 mm)
+    and at 1.15 mm after it moved to the 30 mm one (2.3 mm) — the same request,
+    two different meshes, every pinned physics case red with nothing wrong in the
+    code.
+
+    Contract: compute a field only when every primary it needs is present and
+    numeric, so a PARTIAL dict (a test fixture, a half-built override) yields a
+    partial answer instead of raising.  Callers decide what to do with the
+    result: ``_compute_derived`` assigns all of it, ``merge_geo_override`` and
+    ``CadQueryMotor._map_api_to_cadquery`` refresh only the keys their dict
+    already carries.
+
+    Deliberately NOT computed here:
+
+    * ``num_slots`` / ``num_poles`` — derived in three different tiers (config =
+      segment form; override = explicit counts first; CadQuery = the override's
+      counts, then the override's segment form, then the config's), and each
+      caller owns its tier.  Every caller resolves them BEFORE calling this, so
+      the angles and pitches below are computed on the resolved counts.
+    * ``shaft_radius`` — the codebase holds two conflicting definitions
+      (``MotorGeometryParams.shaft_radius`` = rotor_inner_radius; CadQuery's
+      ``shaft_radius`` = rotor_inner_radius − shaft_height).  Unifying them
+      moves CAD geometry and is not this fix.
+    * ``stator_slot_radius`` / ``rotor_core_radius`` — read-only properties, never
+      dict fields, so there is nothing to leak.
+    """
+    def _num(key: str) -> Optional[float]:
+        v = g.get(key)
+        if v is None or isinstance(v, bool) or not isinstance(v, (int, float)):
+            return None
+        return float(v)
+
+    out: Dict[str, float] = {}
+
+    sd = _num("stator_diameter")
+    if sd is not None:
+        r_so = sd / 2.0
+        out["stator_outer_radius"] = r_so
+        ct, sh = _num("core_thickness"), _num("slot_height")
+        if ct is not None and sh is not None:
+            r_si = r_so - ct - sh
+            out["stator_inner_radius"] = r_si
+            ag = _num("air_gap")
+            if ag is not None:
+                r_ro = r_si - ag
+                out["rotor_outer_radius"] = r_ro
+                mh, rh = _num("magnet_height"), _num("rotor_house_height")
+                if mh is not None and rh is not None:
+                    out["rotor_inner_radius"] = r_ro - mh - rh
+
+    # Tangential slot width = the WIRE PITCH the slot has to accept.
+    ww, wsx, ins = (_num("wire_width"), _num("wire_spacing_x"),
+                    _num("insulation_thickness"))
+    if ww is not None and wsx is not None and ins is not None:
+        out["slot_width"] = ww + 2.0 * wsx + 2.0 * ins
+
+    # Angles / pitches from the RESOLVED counts (see the contract above).
+    n_slots = _num("num_slots")
+    if n_slots and n_slots > 0:
+        out["angle_slot"] = 360.0 / n_slots
+        out["slot_pitch"] = 2 * np.pi / n_slots
+    n_poles = _num("num_poles")
+    if n_poles and n_poles > 0:
+        out["angle_pole"] = 360.0 / n_poles
+        out["pole_pitch"] = 2 * np.pi / n_poles
+
+    return out
+
+
 class MotorGeometryParams:
     """Parameters defining the motor geometry.
     
@@ -144,37 +240,21 @@ class MotorGeometryParams:
     
     def _compute_derived(self) -> None:
         """Compute derived parameters from formulas in config."""
-        # Standard derived parameters (computed from geometry)
-        self.stator_outer_radius = self.stator_diameter / 2.0
-        self.stator_inner_radius = (
-            self.stator_outer_radius - self.core_thickness - self.slot_height
-        )
-        
-        # Slot and pole counts
+        # Slot and pole counts FIRST — this class's tier is the SEGMENT form
+        # (num_seg x *_per_segment), which the CAD meshes; explicit counts in the
+        # config can be stale leftovers of a half-applied preset.  The angles and
+        # pitches below are then computed on these resolved counts.
         self.num_slots = int(self.num_seg * self.num_slots_per_segment)
         self.num_poles = int(self.num_seg * self.num_poles_per_segment)
-        
-        # Angles in degrees
-        self.angle_slot = 360.0 / self.num_slots
-        self.angle_pole = 360.0 / self.num_poles
-        
-        # Angular pitches in radians
-        self.slot_pitch = 2 * np.pi / self.num_slots
-        self.pole_pitch = 2 * np.pi / self.num_poles
-        
-        # Rotor radii
-        self.rotor_outer_radius = (
-            self.stator_outer_radius - self.core_thickness - self.slot_height - self.air_gap
-        )
-        self.rotor_inner_radius = (
-            self.rotor_outer_radius - self.magnet_height - self.rotor_house_height
-        )
-        
-        # Slot width (computed from wire dimensions)
-        self.slot_width = (
-            self.wire_width + 2 * self.wire_spacing_x + 2 * self.insulation_thickness
-        )
-        
+
+        # Everything else comes from the ONE derivation (module-level
+        # `derived_geometry`), shared with simulation.geometry_2d.
+        # merge_geo_override and CadQueryMotor._map_api_to_cadquery so a
+        # per-request geometry can never be paired with the config's derived
+        # values.  Radii, angles, pitches and slot_width, unchanged formulas.
+        for key, value in derived_geometry(self.__dict__).items():
+            setattr(self, key, value)
+
         # Validate
         self._validate()
     

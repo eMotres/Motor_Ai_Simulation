@@ -42,7 +42,16 @@ def generate_passport(
     from motor_ai_sim.routes.simulation import get_fem_transient
 
     cfg = get_config()
-    g = cfg.get("geometry", {}) or {}
+    # The passport REPORTS slot_width and the four radii (the `fit` / `geo`
+    # blocks below).  Those are DERIVED fields that the config STORES, and a
+    # stored derived value can lag the primaries it comes from — HEAD's config
+    # carried slot_width 2.5 next to a 2.3 mm wire pitch.  A passport is a
+    # client-facing datasheet, so it must publish the machine the config
+    # DESCRIBES, not whatever number was last written next to it.  No override
+    # here: merge_geo_override(g, None) is exactly "recompute this dict's own
+    # derived fields from its own primaries".
+    from motor_ai_sim.simulation.geometry_2d import merge_geo_override
+    g = merge_geo_override(cfg.get("geometry", {}) or {}, None)
     wind = cfg.get("winding", {}) or {}
     sim = cfg.setdefault("simulation", {})
     # Operating point from the motor itself (its loaded preset), not hard-coded:

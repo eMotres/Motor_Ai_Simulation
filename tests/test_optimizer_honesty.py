@@ -135,8 +135,10 @@ def test_surrogate_reproduces_its_anchor():
     assert m.T_ripple_pct == pytest.approx(pins["T_ripple_pct"], rel=1e-4)
     # Copper is NOT calibrated — it shares the solver's formula — so its
     # agreement with the pin is an independent check that the shared physics
-    # still lines up.  91.17 W pinned vs ~87.7 W here: 3.8 %, end-winding model.
-    assert m.P_cu_W == pytest.approx(91.166, rel=0.05)
+    # still lines up.  91.14 W pinned vs ~87.7 W here: 3.8 %, end-winding model.
+    # (Both now size the conductor on the CAD polygons, so this gap is the
+    # end-winding model alone — it is no longer partly a copper-area mismatch.)
+    assert m.P_cu_W == pytest.approx(91.135, rel=0.05)
 
 
 def test_surrogate_reads_topology_and_materials_from_the_design():
@@ -174,6 +176,52 @@ def test_surrogate_reports_its_own_uncertainty():
     assert m.T_ripple_uncertainty_pct > m.T_em_uncertainty_pct
     assert m.k_w > 0 and m.Br_T > 0 and m.material_source
     assert "T_em_uncertainty_pct" in m.to_dict()  # survives into the API payload
+
+
+def test_surrogate_copper_uses_the_copper_the_cad_builds():
+    """P_cu must be sized on the MEASURED conductor section, not the nominal
+    rectangle the design asked for.
+
+    ``wire_width x wire_height x num_wires_per_slot`` is design INTENT; the CAD
+    clips the stack to what the slot can hold.  The surrogate used the intent, so
+    it under-reported copper loss by the square of the shortfall — hardest on
+    exactly the candidates an optimizer is drawn to, the ones that pack more
+    copper in than fits.  The solver has measured the polygons since 293de43;
+    this is the same measurement on the same helper.
+
+    The anchor is the control (its CAD delivers the nominal section to 3 ulp, so
+    the number must not move at all) and the over-packed slot is the case that
+    used to lie.
+    """
+    from motor_ai_sim.optimization import design_eval as de
+
+    nom = lambda g: (12 * float(g["num_wires_per_slot"])
+                     * float(g["wire_width"]) * 1e-3
+                     * float(g["wire_height"]) * 1e-3)
+
+    # Control: 6 wires fit, so measured == nominal and nothing moves.
+    anchor = dict(de._ANCHOR_GEO)
+    a6 = de._measured_copper_area_m2(anchor)
+    assert a6 == pytest.approx(nom(anchor), rel=1e-12)
+
+    # Over-packed: ask for 12 wires in the same slot.  The CAD returns the SAME
+    # copper it returned for 6 — the extra six wires do not exist.
+    packed = dict(de._ANCHOR_GEO, num_wires_per_slot=12)
+    a12 = de._measured_copper_area_m2(packed)
+    assert a12 == pytest.approx(a6, rel=1e-9)
+    assert a12 == pytest.approx(0.5 * nom(packed), rel=1e-9)
+
+    # P = N^2 rho L k_end I^2 / A_cu: same A_cu, twice the turns → 4x the loss.
+    # The nominal rectangle would have reported 2x, i.e. half the real number.
+    m6 = de.evaluate_design(anchor, dict(de._ANCHOR_WIND), {}, 0.0, 60.0, 15000.0,
+                            coil_temp_c=120.0)
+    m12 = de.evaluate_design(packed, dict(de._ANCHOR_WIND), {}, 0.0, 60.0, 15000.0,
+                             coil_temp_c=120.0)
+    assert m12.P_cu_W == pytest.approx(4.0 * m6.P_cu_W, rel=1e-9)
+
+    # Provenance travels with the number, and into the API payload.
+    assert "CAD polygons" in m12.copper_area_source
+    assert "copper_area_source" in m12.to_dict()
 
 
 def test_eval_cache_rejects_an_unconverged_result():

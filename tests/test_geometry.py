@@ -260,3 +260,108 @@ class TestMergeGeoOverride:
         assert (g["num_slots"], g["num_poles"]) == (12, 14)
         g = merge_geo_override(base, {"air_gap": 0.3})
         assert (g["num_slots"], g["num_poles"]) == (12, 14)
+
+
+class TestDerivedFieldsFollowTheOverride:
+    """A DERIVED field must describe the merged motor, never the base config.
+
+    The counts were only the first member of this family.  ``motor_config.yaml``
+    also stores ``slot_width``, the four radii and the four angles/pitches — and a
+    per-request override supplies PRIMARIES only, so a plain merge left all nine
+    describing the base.
+
+    That was live: ``fem_transient_sliding_band`` sizes its mesh from
+    ``geo["slot_width"]`` (element = slot_width/2), so the SAME candidate request
+    was meshed at 1.25 mm while the user's config held the 40 mm design
+    (slot_width 2.5) and at 1.15 mm after it moved to the 30 mm one (2.3) — six
+    pinned physics cases red with nothing wrong in the code.  A per-request
+    evaluation whose MESH depends on somebody else's saved design is not an
+    evaluation of the design that was asked for.
+    """
+
+    # A full base config, carrying the derived fields exactly as the app writes
+    # them — and describing a DIFFERENT machine from the override below.
+    BASE_40MM = {
+        "stator_diameter": 40.0, "core_thickness": 3.0, "slot_height": 6.0,
+        "air_gap": 0.3, "magnet_height": 5.0, "rotor_house_height": 1.0,
+        "wire_width": 2.4, "wire_spacing_x": 0.1, "insulation_thickness": 0.05,
+        "num_seg": 4, "num_slots_per_segment": 6, "num_poles_per_segment": 5,
+        "num_slots": 24, "num_poles": 20,
+        # derived, as stored
+        "slot_width": 2.7, "stator_outer_radius": 20.0,
+        "stator_inner_radius": 11.0, "rotor_outer_radius": 10.7,
+        "rotor_inner_radius": 4.7, "angle_slot": 15.0, "angle_pole": 18.0,
+        "slot_pitch": 0.2617993877991494, "pole_pitch": 0.3141592653589793,
+    }
+    # The 30 mm 12s14p machine, primaries only — what a geo= override looks like.
+    OV_30MM = {
+        "stator_diameter": 30.0, "core_thickness": 1.5, "slot_height": 4.3,
+        "air_gap": 0.2, "magnet_height": 4.5, "rotor_house_height": 0.8,
+        "wire_width": 2.0, "wire_spacing_x": 0.1, "insulation_thickness": 0.05,
+        "num_seg": 2, "num_slots_per_segment": 6, "num_poles_per_segment": 7,
+    }
+
+    def test_slot_width_follows_the_override_not_the_config(self):
+        from motor_ai_sim.simulation.geometry_2d import merge_geo_override
+        g = merge_geo_override(self.BASE_40MM, self.OV_30MM)
+        # 2.0 + 2*0.1 + 2*0.05, from the OVERRIDE's wire pitch — not the 2.7 the
+        # base stored, and not the base's own 2.4-derived 2.7 either.
+        assert g["slot_width"] == pytest.approx(2.3, abs=1e-12)
+
+    def test_every_derived_field_follows_the_override(self):
+        from motor_ai_sim.simulation.geometry_2d import merge_geo_override
+        g = merge_geo_override(self.BASE_40MM, self.OV_30MM)
+        assert g["stator_outer_radius"] == pytest.approx(15.0)
+        assert g["stator_inner_radius"] == pytest.approx(9.2)
+        assert g["rotor_outer_radius"] == pytest.approx(9.0)
+        assert g["rotor_inner_radius"] == pytest.approx(3.7)
+        assert (g["num_slots"], g["num_poles"]) == (12, 14)
+        assert g["angle_slot"] == pytest.approx(30.0)
+        assert g["angle_pole"] == pytest.approx(360.0 / 14)
+        assert g["slot_pitch"] == pytest.approx(2 * np.pi / 12)
+        assert g["pole_pitch"] == pytest.approx(2 * np.pi / 14)
+
+    def test_result_is_independent_of_the_base_config(self):
+        """THE acceptance property, in one cheap assertion.
+
+        Two completely different saved configs, the same override → byte-identical
+        geometry.  This is what makes a pinned physics run reproducible while the
+        user edits their design in another tab.
+        """
+        from motor_ai_sim.simulation.geometry_2d import merge_geo_override
+        other = dict(self.BASE_40MM, stator_diameter=200.0, wire_width=5.0,
+                     slot_width=5.5, num_seg=6, num_slots_per_segment=6,
+                     num_poles_per_segment=7, num_slots=36, num_poles=42,
+                     stator_outer_radius=100.0, angle_slot=10.0)
+        assert (merge_geo_override(self.BASE_40MM, self.OV_30MM)
+                == merge_geo_override(other, self.OV_30MM))
+
+    def test_stale_derived_in_the_base_is_refreshed_with_no_override(self):
+        """No override at all is still a leak: the file's stored derived value
+        can lag its own primaries (HEAD's config stored slot_width 2.5 next to a
+        wire pitch of 2.3), and the solver meshed the config's OWN machine at the
+        stale size."""
+        from motor_ai_sim.simulation.geometry_2d import merge_geo_override
+        base = dict(self.BASE_40MM, slot_width=2.5)     # 2.4 + 0.2 + 0.1 = 2.7
+        assert merge_geo_override(base, None)["slot_width"] == pytest.approx(2.7)
+
+    def test_absent_derived_fields_are_not_invented(self):
+        """Refresh what the dict CARRIES; do not grow fields nobody asked for."""
+        from motor_ai_sim.simulation.geometry_2d import merge_geo_override
+        bare = {"stator_diameter": 30.0, "num_slots": 12, "num_poles": 14,
+                "num_seg": 2, "num_slots_per_segment": 6,
+                "num_poles_per_segment": 7}
+        assert merge_geo_override(bare, None) == bare
+
+    def test_cadquery_parameters_do_not_leak_the_config_slot_width(self):
+        """The Mesh tab sizes its element from ``motor.parameters['slot_width']``
+        so it can draw the mesh the solver builds; that dict is seeded from the
+        shared config, and slot_width was the one derived field the mapping did
+        not recompute."""
+        from motor_ai_sim.cadquery_geometry import CadQueryMotor
+        motor = CadQueryMotor()
+        motor.set_parameters(dict(self.OV_30MM))
+        assert motor.parameters["slot_width"] == pytest.approx(2.3, abs=1e-12)
+        assert motor.parameters["stator_outer_radius"] == pytest.approx(15.0)
+        assert (motor.parameters["num_slots"],
+                motor.parameters["num_poles"]) == (12, 14)

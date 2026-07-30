@@ -228,20 +228,6 @@ class CadQueryMotor:
             if value is not None:
                 mapped[key] = value
         
-        # Compute derived parameters from config formulas
-        # These formulas are defined in config/motor_config.yaml derived_params
-        if 'stator_diameter' in mapped:
-            mapped['stator_outer_radius'] = mapped['stator_diameter'] / 2
-        
-        if 'stator_outer_radius' in mapped and 'core_thickness' in mapped and 'slot_height' in mapped:
-            mapped['stator_inner_radius'] = mapped['stator_outer_radius'] - mapped['core_thickness'] - mapped['slot_height']
-        
-        if 'stator_inner_radius' in mapped and 'air_gap' in mapped:
-            mapped['rotor_outer_radius'] = mapped['stator_inner_radius'] - mapped['air_gap']
-        
-        if 'rotor_outer_radius' in mapped and 'magnet_height' in mapped and 'rotor_house_height' in mapped:
-            mapped['rotor_inner_radius'] = mapped['rotor_outer_radius'] - mapped['magnet_height'] - mapped['rotor_house_height']
-        
         # Pole/slot COUNT is defined by the geometry's magnets/slots: num_poles and
         # num_slots are AUTHORITATIVE.  The segment view (num_seg × *_per_segment) is
         # the winding-periodicity representation DERIVED from them (num_seg = the
@@ -275,12 +261,35 @@ class CadQueryMotor:
             mapped['num_poles_per_segment'] = _P // _seg
             mapped['num_slots_per_segment'] = _S // _seg
         
+        # Derived fields, from the MERGED primaries — the ONE derivation shared
+        # with MotorGeometryParams._compute_derived and merge_geo_override.  It
+        # runs AFTER the count resolution above so angle_slot/angle_pole/
+        # slot_pitch/pole_pitch land on the counts this motor is actually built
+        # with, and it replaces the four hand-written radius lines that used to
+        # sit above the count block (same formulas, one copy).
+        #
+        # `mapped` is seeded from the SHARED CONFIG, so every derived name the
+        # config stores arrives here describing the CONFIG's motor; an api_params
+        # override supplies primaries only.  The radii were already recomputed —
+        # `slot_width` was NOT, and the Mesh tab sizes its element from
+        # `motor.parameters['slot_width']` (routes/simulation.py) to show the mesh
+        # the solver builds.  It therefore drew a DIFFERENT mesh whenever the
+        # config held a different design than the request.  Same leak as the
+        # solver's own (see derived_geometry), same fix.
+        from motor_ai_sim.geometry.motor_geometry import derived_geometry
+        mapped.update(derived_geometry(mapped))
+
+        # shaft_radius is NOT part of that shared derivation: CadQuery means
+        # "the radius of the shaft hole under the rotor bore" (rotor_inner_radius
+        # − shaft_height) while MotorGeometryParams.shaft_radius means the bore
+        # itself.  Two different quantities under one name; unifying them moves
+        # CAD geometry and is not this fix.
         if 'rotor_inner_radius' in mapped and 'shaft_height' in mapped:
             mapped['shaft_radius'] = mapped['rotor_inner_radius'] - mapped['shaft_height']
-        
+
         if 'rotor_inner_radius' in mapped and 'shaft_height' in mapped:
             mapped['shaft_inner_radius'] = mapped['rotor_inner_radius'] - mapped['shaft_height']
-        
+
         # Ensure magnet parameters exist
         for key in ['magnet_fill_down', 'magnet_fill_up', 'magnet_fill_radius', 'magnet_up_gap', 'magnet_down_height',
                     'magnet_lamination',        # AXIAL slice length, mm (loss factor in solver); 0 = solid

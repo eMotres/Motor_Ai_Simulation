@@ -1657,14 +1657,22 @@ def fem_transient_sliding_band(
         wind["n_parallel"] = int(n_parallel)
     # Candidate-design evaluation (optimization refine): overlay a geometry
     # override in-memory so the global config / Simulation state is untouched.
+    #
+    # The merge runs UNCONDITIONALLY, override or not.  It is what makes this
+    # dict self-consistent: the slot/pole counts must describe the SAME motor the
+    # CAD meshes (override explicit counts > override segment form > config
+    # segment form — the exact CadQueryMotor resolution), so the winding layout,
+    # pole-pair drive and sector BC sign are phased against the meshed magnets;
+    # and every DERIVED field it carries (slot_width, the radii, the angles) must
+    # be recomputed from the primaries it ended up with.  Both halves are
+    # leaks in the no-override direction too: motor_config.yaml stores those
+    # derived values and the app rewrites them, so a file whose stored
+    # slot_width has not caught up with its own wire_width (HEAD's config: 2.5
+    # stored, 2.3 derived) meshed the config's OWN machine at the wrong element
+    # size.  See merge_geo_override / geometry.motor_geometry.derived_geometry.
+    from motor_ai_sim.simulation.geometry_2d import merge_geo_override
+    geo = merge_geo_override(geo, geo_override)
     if geo_override:
-        # Topology-aware merge: the resulting slot/pole counts must describe the
-        # SAME motor the CAD meshes (override explicit counts > override segment
-        # form > config segment form — the exact CadQueryMotor resolution), so
-        # the winding layout, pole-pair drive and sector BC sign are phased
-        # against the meshed magnets.  See merge_geo_override.
-        from motor_ai_sim.simulation.geometry_2d import merge_geo_override
-        geo = merge_geo_override(geo, geo_override)
         p = _params_from_geo_dict(geo)
     else:
         p = params_from_config()
@@ -1680,6 +1688,10 @@ def fem_transient_sliding_band(
     # This only ever REFINES (min) — motors with large features (e.g. 200 mm)
     # keep their coarser mesh.  Radial air-gap resolution is separate
     # (gap_layers).  No operating-point tuning — pure geometric element sizing.
+    # slot_width is DERIVED (wire pitch); it is honest here only because `geo`
+    # went through merge_geo_override above, which recomputes it from THIS
+    # request's primaries.  Read it off an unmerged config dict and the element
+    # size becomes a function of whatever design the shared config holds.
     try:
         _feat_mm = min(float(geo.get("slot_width", 1e9) or 1e9),
                        float(geo.get("tooth_width", 1e9) or 1e9))

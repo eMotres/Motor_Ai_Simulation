@@ -176,7 +176,11 @@ def _enrich_card_entry(entry: dict, geo: dict, sim: dict, met: dict) -> None:
             from motor_ai_sim.masses import compute_masses as _cm
             _p = _pfc(geo_override=geo)
             from motor_ai_sim.config import get_config as _gc
-            _gcfg = {**dict(_gc().get("geometry", {})), **geo}
+            from motor_ai_sim.simulation.geometry_2d import merge_geo_override as _mgo
+            # merge_geo_override, not a dict-update: the preset supplies
+            # primaries, the config supplies the DERIVED fields, and a plain
+            # merge would mass a preset against the active design's counts.
+            _gcfg = _mgo(dict(_gc().get("geometry", {})), geo)
             mass = float(_cm(_p, _gcfg, k_end=0.0)["total"])
         except Exception:
             mass = None

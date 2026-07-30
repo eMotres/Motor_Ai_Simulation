@@ -3,8 +3,17 @@
 A *design* = a geometry dict (subset of config["geometry"], overlaid on the
 baseline) + an operating point (gamma, current, rpm).  ``evaluate_design``
 returns the performance metrics used as optimization objectives — torque,
-torque density, efficiency, losses, masses — in well under a millisecond, so a
-Pareto search can evaluate thousands of candidates in a couple of seconds.
+torque density, efficiency, losses, masses.
+
+COST, measured: the analytical physics is ~0.1 ms, but a geometry not seen
+before also costs ONE CadQuery polygon build (~35 ms) to measure the conductor
+section — see the copper-loss bullet below.  The measurement is memoised per
+geometry, and ``run_pareto_search`` re-evaluates each geometry at every operating
+point, so a default 600-geometry / 2-operating-point search pays 600 builds —
+about 20 s of CAD on top of a search that used to be dominated by its own
+overhead.  That is the price of a copper loss that is not up to 4x optimistic on
+an over-packed slot, and the whole search still costs less than ONE FEM
+evaluation of a single candidate.
 
 PHYSICS
 -------
@@ -15,11 +24,26 @@ PHYSICS
 * Iron loss from the ASSIGNED steel's own Bertotti coefficients (the same
   kh/kc/ke the FEM solver uses), not a power law fitted to some other lamination.
 * Copper loss and the masses replicate the validated formulas used by the
-  Simulation tab (``masses.compute_masses``, ``fem_solver_2d.copper_loss_W``), so
+  Simulation tab (``masses.compute_masses``, ``field_ops.copper_loss_W``), so
   the optimizer and the simulator agree by construction — no factor needed.
+  Including the conductor SECTION: it is MEASURED on the CAD conductor polygons
+  (``field_ops.coil_copper_area_total_m2``), not taken as
+  ``wire_width·wire_height``, because the CAD does not always deliver the nominal
+  rectangle — it clips the stack to fit the slot (motor_40mm keeps 74.17 % of
+  nominal) or lays the wires down interpenetrating (the 37 mm 24s/28p design's
+  union is 91.54 % of the sum).  Wherever the CAD delivers LESS copper than the
+  design asked for, the nominal rectangle understates P_cu by the square of that
+  ratio — and it understates it hardest on exactly the candidates an optimizer is
+  most tempted by, the ones that pack more copper into the slot than fits.  (Ask
+  this surrogate for 12 wires in the anchor's 6-wire slot and the CAD returns the
+  SAME 72 mm² it returned for 6: measured P_cu 350.7 W against the nominal
+  rectangle's 175.3 W.)  The measurement costs one CAD polygon build (~35 ms,
+  memoised per geometry); a candidate the CAD refuses falls back to the nominal
+  rectangle and says so in ``DesignMetrics.copper_area_source``.
 * Imports only math/numpy at module level.  The material library, the winding
-  layout and the mass helper are imported lazily inside functions, so this module
-  still cannot pull in the FEM stack or perturb Simulation.
+  layout, the mass helper and the CAD conductor measurement are imported lazily
+  inside functions, so this module still cannot pull in the FEM solver or perturb
+  Simulation.
 
 WHERE THE NUMBERS COME FROM  (read before trusting an ABSOLUTE value)
 ---------------------------------------------------------------------
@@ -137,18 +161,28 @@ _ANCHOR_STEEL  = "B15AHV950M"     # config assignment at baseline generation
 # file when it is present so a regenerated pin propagates; these literals are the
 # fallback for an installed package with no tests/ directory.
 _ANCHOR_FEM: Dict[str, float] = {
-    "T_avg_Nm":     0.4179404695543498,    # p2_load
-    "P_fe_W":       3.115317377410235,     # p2_load
-    "P_mag_W":      1.365,                 # p2_eddy P_mag_solve_W (rotor_eddy on)
-    "T_ripple_pct": 0.5455305639835336,    # p2_load
+    "T_avg_Nm":     0.41833452147451106,   # p2_load
+    "P_fe_W":       3.1381597698358714,    # p2_load
+    "P_mag_W":      1.363,                 # p2_eddy P_mag_solve_W (rotor_eddy on)
+    "T_ripple_pct": 0.5422475717448143,    # p2_load
 }
-# Re-anchored when the winding ampere-turn normalisation was fixed (F4+F5): the
-# solver used to excite this machine at k = 1.0111 times the requested MMF, so
-# the scalars derived from the old pins carried that error into every surrogate
-# evaluation.  Derived, not edited: torque 1.377638 -> 1.379419 (+0.13 %),
-# iron 0.601091 -> 0.599691 (-0.23 %), magnet 0.269662 -> 0.266344 (-1.23 %),
-# cog 1.96478e-4 -> 2.00656e-4 (+2.13 %).  Every raw_* is byte-identical: the
-# surrogate physics did not change, only the FEM it is anchored to.
+# Re-anchored TWICE, both times because the FEM under the anchor moved, never
+# because a scalar was edited:
+#
+# 1. The winding ampere-turn normalisation (F4+F5): the solver used to excite
+#    this machine at k = 1.0111 times the requested MMF, so the scalars derived
+#    from the old pins carried that error into every surrogate evaluation.
+#    torque 1.377638 -> 1.379419 (+0.13 %), iron 0.601091 -> 0.599691 (-0.23 %),
+#    magnet 0.269662 -> 0.266344 (-1.23 %), cog 1.96478e-4 -> 2.00656e-4 (+2.13 %).
+# 2. The slot_width config leak: the pins had been generated with the mesh sized
+#    from the CONFIG's stored slot_width (2.5 mm -> element 1.25 mm) instead of
+#    the request's own (2.3 -> 1.15).  The honest, config-independent mesh is
+#    finer, which mostly shows up in the iron loss.
+#    torque 1.379419 -> 1.380719 (+0.09 %), iron 0.599691 -> 0.604088 (+0.73 %),
+#    magnet 0.266344 -> 0.265954 (-0.15 %), cog 2.00656e-4 -> 1.99637e-4 (-0.51 %).
+#
+# Every raw_* is byte-identical across both: the surrogate physics did not
+# change, only the FEM it is anchored to.
 
 # Measured uncertainty of the anchored surrogate.  Not a guess and not a zero:
 # ``scripts/_surrogate_uncertainty.py`` runs the FULL p2_load P2 transient on
@@ -401,20 +435,95 @@ def _end_winding_factor(p: _P, geo: Dict[str, Any]) -> float:
     return end_winding_factor(p, geo)
 
 
+#: Measured conductor sections, keyed by the geometry that produced them.  The
+#: CAD build is ~35 ms and a Pareto search re-evaluates the same candidate at
+#: several operating points, so the measurement is memoised rather than repeated.
+_CU_AREA_CACHE: Dict[Tuple[Tuple[str, Optional[float]], ...], Optional[float]] = {}
+
+#: The geometry that decides how much copper the CAD lays down.  Anything outside
+#: this set cannot move the conductor polygons, so it must not split the cache
+#: (rpm/current are not here at all — the section is geometry).
+_CU_AREA_KEYS = (
+    "num_seg", "num_slots_per_segment", "num_poles_per_segment",
+    "num_slots", "num_poles",
+    "stator_diameter", "core_thickness", "slot_height", "tooth_width",
+    "tooth2_width", "cut_width", "slot_hs", "stator_fillet_r",
+    "stator_fillet_r1", "wire_width", "wire_height", "wire_spacing_x",
+    "wire_spacing_y", "wire_split", "insulation_thickness",
+    "num_wires_per_slot", "motor_length",
+)
+
+
+def _measured_copper_area_m2(geo: Dict[str, Any]) -> Optional[float]:
+    """ACTIVE copper cross-section [m²] MEASURED on the CAD conductor polygons.
+
+    The SAME measurement the solver's DC copper loss uses
+    (``field_ops.coil_copper_area_total_m2`` — the UNION of the conductor
+    polygons handed to the mesher), so the surrogate and the FEM describe the
+    same amount of copper on every machine, not just the ones whose CAD happens
+    to deliver the nominal ``wire_width·wire_height`` rectangle.
+
+    Returns None when the CAD cannot build this candidate (a geometry the
+    optimizer is entitled to propose and the caller is entitled to know about);
+    the caller then falls back to the nominal rectangle and records that it did.
+    """
+    key = tuple((k, None if geo.get(k) is None else float(geo[k]))
+                for k in _CU_AREA_KEYS)
+    if key in _CU_AREA_CACHE:
+        return _CU_AREA_CACHE[key]
+    area: Optional[float] = None
+    try:
+        from motor_ai_sim.cadquery_geometry import CadQueryMotor
+        from motor_ai_sim.simulation.field_ops import coil_copper_area_total_m2
+        motor = CadQueryMotor()
+        motor.set_parameters(dict(geo))
+        a = float(coil_copper_area_total_m2(motor.get_2d_polygons(rotor_angle_deg=0.0)))
+        if a > 0.0:
+            area = a
+    except Exception:  # noqa: BLE001 — an unbuildable candidate is data, not an error
+        area = None
+    if len(_CU_AREA_CACHE) > 4096:        # a long search must not grow without bound
+        _CU_AREA_CACHE.clear()
+    _CU_AREA_CACHE[key] = area
+    return area
+
+
 def _copper_loss(p: _P, geo: Dict[str, Any], I_phase_rms: float,
-                 n_parallel: float, coil_temp_c: float) -> float:
-    """ρ_Cu(T)·J²·V_cu·k_end (replicates fem_solver_2d.copper_loss_W)."""
+                 n_parallel: float, coil_temp_c: float) -> Tuple[float, str]:
+    """ρ_Cu(T)·J²·V_cu·k_end (replicates field_ops.copper_loss_W).
+
+    The strand section is MEASURED on the CAD conductor polygons, exactly as the
+    solver does it since 293de43 — the nominal rectangle
+    ``wire_width·wire_height`` is what the design ASKS for, not what the CAD
+    builds: it clips the stack to fit the slot (motor_40mm keeps 74.17 %) or
+    interpenetrates the wires (the 37 mm 24s/28p design, union 91.54 % of the
+    sum).  On the machines of that class the nominal rectangle understates P_cu
+    by exactly that ratio — up to ×1.35 — which is the difference between a
+    candidate that looks efficient and one that is.
+
+    The conductor COUNT stays num_slots·num_wires_per_slot, so the measured area
+    is shared over the same conductors the winding is excited with and
+    P = N²·ρ·L·k_end·I_coil²/A_cu, identical to the solver.
+
+    Returns (P_cu_W, source) where ``source`` names which section was used.
+    """
     n_wires = float(geo.get("num_wires_per_slot", 14))
     wire_area = p.wire_width_m * p.wire_height_m
+    source = "nominal(wire_width·wire_height)"
+    n_cond = float(p.num_slots) * n_wires
+    a_cu = _measured_copper_area_m2(geo)
+    if a_cu and n_cond > 0.0:
+        wire_area = a_cu / n_cond
+        source = "CAD polygons (coil_copper_area_total_m2)"
     n_par = max(float(n_parallel), 1.0)
     if wire_area <= 0 or I_phase_rms <= 0:
-        return 0.0
+        return 0.0, source
     V_cu_slot = p.num_slots * wire_area * n_wires * p.stack_length
     k_end = _end_winding_factor(p, geo)
     rho = RHO_CU_20 * (1.0 + ALPHA_CU * (coil_temp_c - 20.0))
     I_coil = I_phase_rms / n_par
     J = I_coil / wire_area
-    return rho * J * J * V_cu_slot * k_end
+    return rho * J * J * V_cu_slot * k_end, source
 
 
 def _masses(p: _P, geo: Dict[str, Any]) -> Dict[str, float]:
@@ -517,8 +626,9 @@ def _raw_physics(geo: Dict[str, Any], wind: Dict[str, Any], sim: Dict[str, Any],
              * p.stack_length * p.magnet_fill_fraction)
     P_mag_raw = sigma_mag * omega_slot ** 2 * B_mag_ac ** 2 * d_eff ** 2 * V_mag / 24.0
 
-    # ── Copper loss — no calibration, same formula as the solver ──────────────
-    P_cu = _copper_loss(p, geo, I_rms, n_parallel, coil_temp_c)
+    # ── Copper loss — no calibration, same formula AND same measured conductor
+    #    section as the solver ──────────────────────────────────────────────────
+    P_cu, cu_area_source = _copper_loss(p, geo, I_rms, n_parallel, coil_temp_c)
 
     # ── Cogging / slot-ripple INDEX (dimensionless, calibrated below) ─────────
     slot_opening = max(slot_pitch - tooth_w, 0.5e-3)
@@ -532,6 +642,7 @@ def _raw_physics(geo: Dict[str, Any], wind: Dict[str, Any], sim: Dict[str, Any],
         "B_g": B_g, "B_tooth_raw": B_tooth_raw, "B_back_raw": B_back_raw,
         "slot_pitch": slot_pitch, "tooth_w": tooth_w,
         "k_w": k_w, "Br": Br, "magnet_source": mag_src, "steel_source": steel_src,
+        "copper_area_source": cu_area_source,
     }
 
 
@@ -670,6 +781,11 @@ class DesignMetrics:
     k_w: float = 0.0                     # winding factor actually used
     Br_T: float = 0.0                    # magnet remanence actually used
     material_source: str = ""            # "<magnet> / <steel>"
+    # Which conductor section P_cu was computed on: the CAD polygons the mesher
+    # receives, or the nominal wire rectangle when the CAD refused the candidate.
+    # They differ by up to x1.35 on the machines whose CAD clips or interpenetrates
+    # the wire stack, so a P_cu quoted from the fallback is quoting a design intent.
+    copper_area_source: str = ""
     cal_anchor: str = ""
     T_em_uncertainty_pct: float = -1.0       # -1 = not measured
     T_ripple_uncertainty_pct: float = -1.0   # -1 = not measured
@@ -685,8 +801,10 @@ def evaluate_design(geo: Dict[str, Any], wind: Dict[str, Any], sim: Dict[str, An
                     coil_temp_c: float = 120.0,
                     overrides: Dict[str, float] | None = None) -> DesignMetrics:
     """Evaluate one design. ``geo`` is the FULL geometry dict (baseline already
-    overlaid with the candidate's overrides). Pure in-memory, ~0.1 ms after the
-    first call (which derives the calibration)."""
+    overlaid with the candidate's overrides).  ~0.1 ms once the calibration is
+    derived (first call) AND this geometry's conductor section has been measured;
+    a geometry seen for the first time costs one CadQuery polygon build, ~35 ms.
+    Still in-memory — nothing here touches the config or Simulation state."""
     raw = _raw_physics(geo, wind, sim, gamma_deg, current_a, rpm, coil_temp_c)
     if raw is None:
         return DesignMetrics(feasible=False, reason="invalid geometry (radii)",
@@ -739,6 +857,7 @@ def evaluate_design(geo: Dict[str, Any], wind: Dict[str, Any], sim: Dict[str, An
         current_a=float(current_a), rpm=float(rpm),
         k_w=raw["k_w"], Br_T=raw["Br"],
         material_source=f"{raw['magnet_source']} / {raw['steel_source']}",
+        copper_area_source=str(raw.get("copper_area_source") or ""),
         cal_anchor=_anchor_line(),
         T_em_uncertainty_pct=_UNCERTAINTY["T_em_pct"],
         T_ripple_uncertainty_pct=_UNCERTAINTY["T_ripple_pct"],

@@ -2048,9 +2048,11 @@ def get_thermal_field2d(
     # Target ~4 elements across the slot width so the winding gradient resolves.
     try:
         from motor_ai_sim.config import get_config as _get_cfg
-        _g0 = dict(_get_cfg().get("geometry", {}))
-        if _geo_ov:
-            _g0.update(_geo_ov)
+        from motor_ai_sim.simulation.geometry_2d import merge_geo_override as _merge_geo
+        # merge_geo_override, not a dict-update: slot_width is DERIVED and the
+        # override carries primaries only, so the update sized the thermal coil
+        # mesh from whatever design the shared config held.
+        _g0 = _merge_geo(dict(_get_cfg().get("geometry", {})), _geo_ov)
         _slot_w = float(_g0.get("slot_width", 3.0) or 3.0)
         _cm0 = _parse_component_mesh(component_mesh)
         if "coil" not in _cm0:
@@ -2094,9 +2096,11 @@ def get_thermal_field2d(
     # 2. geometry: housing radius + copper volume (for the copper heat density)
     from motor_ai_sim.config import get_config
     cfg = get_config()
-    g = dict(cfg.get("geometry", {}))
-    if _geo_ov:
-        g.update(_geo_ov)
+    # merge_geo_override, not a dict-update: the winding thermal model below
+    # reads the DERIVED slot_width (copper fill, bulk transverse k), which the
+    # override does not carry — a plain update left the config's value in place.
+    from motor_ai_sim.simulation.geometry_2d import merge_geo_override as _merge_geo
+    g = _merge_geo(dict(cfg.get("geometry", {})), _geo_ov)
     R_house = float(g.get("stator_diameter", 200.0)) / 2.0 * 1e-3
     stator_inner_m = R_house - float(g.get("core_thickness", 5.0)) * 1e-3 \
         - float(g.get("slot_height", 18.0)) * 1e-3
@@ -3215,9 +3219,11 @@ def _build_transient_summary(
     # Masses for the CURRENT operating geometry (respect a per-request override so
     # an applied design's specific torque/power is billed against its own mass).
     _p = _pfc(geo_override=geo_override)
-    _geo_cfg = dict(_gc().get("geometry", {}))
-    if geo_override:
-        _geo_cfg = {**_geo_cfg, **geo_override}
+    # merge_geo_override, not a dict-update: the update kept the CONFIG's counts
+    # and derived fields (slot_width, radii, pitches) next to the override's
+    # primaries, so an applied design was billed against a chimera's mass.
+    from motor_ai_sim.simulation.geometry_2d import merge_geo_override as _merge_geo
+    _geo_cfg = _merge_geo(dict(_gc().get("geometry", {})), geo_override)
     _masses = _compute_masses(_p, _geo_cfg,
                               k_end=float(sbres.get("end_winding_factor", 0.0) or 0.0))
     _m_tot = float(_masses["total_active_kg"])

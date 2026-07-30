@@ -110,7 +110,25 @@ def merge_geo_override(base: dict, override) -> dict:
     pole-pair drive are mis-phased against the meshed magnets, so the
     fundamental never couples (ψ ≈ 0, zero-mean torque on the full ring) and
     sector models pick the wrong (anti-)periodic BC sign (unbalanced phases).
+
+    The counts are not the only DERIVED field with that problem.  The config
+    also stores slot_width, the four radii and the four angles/pitches, and an
+    override supplies PRIMARIES only — so every one of them survived the merge
+    describing the base motor.  ``fem_transient_sliding_band`` read one of them
+    (``slot_width``, to size its mesh: element = slot_width/2), which made a
+    candidate evaluation's MESH a function of whatever design the user's shared
+    config happened to hold — 1.25 mm while it held the 40 mm machine, 1.15 mm
+    after it moved to the 30 mm one, for byte-identical requests.  So after the
+    merge every derived field the dict CARRIES is recomputed from the merged
+    primaries (``geometry.motor_geometry.derived_geometry``, the same derivation
+    MotorGeometryParams and the CAD use).
+
+    Only keys already present are refreshed: the merge's job is to make the dict
+    describe one motor, not to grow fields its consumers never asked for (a bare
+    fixture stays bare).
     """
+    from motor_ai_sim.geometry.motor_geometry import derived_geometry
+
     base = base or {}
     g = dict(base)
     if override:
@@ -134,6 +152,11 @@ def merge_geo_override(base: dict, override) -> dict:
         g["num_poles"] = int(round(P))
     if S:
         g["num_slots"] = int(round(S))
+    # Counts are resolved above, so the angles/pitches below land on THIS
+    # motor's counts.  Refresh in place, present keys only.
+    for k, v in derived_geometry(g).items():
+        if k in g:
+            g[k] = v
     return g
 
 

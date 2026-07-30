@@ -9,6 +9,22 @@
   "demag_br_mean": 0.8544472037506466,
   "demag_br_min": 0.23541555841131293
  },
+ "p2_demag_eddy": {
+  "P_cu_W": 91.00289260256886,
+  "P_cu_ac_solve_W": 3.333,
+  "P_cu_total_solve_W": 66.988,
+  "P_fe_W": 3.0355546187030167,
+  "P_mag_honest_W": 1.455,
+  "P_mag_solve_W": 1.332,
+  "P_shaft_honest_W": 0.651,
+  "P_shaft_solve_W": 0.021,
+  "T_avg_Nm": 0.4060695254898488,
+  "T_avg_maxwell_Nm": 0.4071,
+  "T_ripple_pct": 0.39018723203610595,
+  "V_peak": 7.66510179849476,
+  "demag_br_mean": 0.852316150222505,
+  "demag_br_min": 0.23448310573619557
+ },
  "p2_eddy": {
   "P_cu_W": 91.17933566708354,
   "P_cu_ac_solve_W": 3.509,

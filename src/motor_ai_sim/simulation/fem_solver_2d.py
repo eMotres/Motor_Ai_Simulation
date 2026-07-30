@@ -3111,6 +3111,23 @@ def fem_transient_sliding_band(
                         f_mag2 + Ist['A'] * f_coil2['A']
                         + Ist['B'] * f_coil2['B'] + Ist['C'] * f_coil2['C'])
                     _bff2 = np.asarray(Pro.T @ f).ravel()[_free2]
+                    # ── and into the OTHER solvers' magnet source ────────────
+                    # _bff2 is the RHS of the plain magnetostatic system only.
+                    # The bordered eddy Newton, the voltage-drive Newton and its
+                    # Picard fallback all build their own right-hand side from
+                    # _drv.f_mag (eddy: rhs = f_mag + (Msig/dt)·A_prev, with the
+                    # coil current entering as a CONSTRAINT, so f_mag is the
+                    # whole of the magnet drive there).  _drv was constructed
+                    # once, before the frame loop, with the PRISTINE f_mag2 —
+                    # rebinding the local name here left it holding the strong
+                    # magnet for the rest of the run.  Effect, measured on the
+                    # 40 mm Fe16N2 machine (docs/SOLVER_TRIALS_2026-07-30.md
+                    # F1): with eddy on, demag on/off moved the torque by 0.0 %
+                    # while the demag map reported 98 % of the magnet de-rated;
+                    # with eddy off the same de-rating costs 69 % of the torque.
+                    # One assignment, because the re-entry below already re-runs
+                    # whichever solver this frame uses, warm-started.
+                    _drv.f_mag = f_mag2
                     _dm_pass += 1
                     # Re-solve from the field we just converged, not from the
                     # previous FRAME's.  The magnet moved by a fraction of a

@@ -22,7 +22,7 @@ repo stores**, to find where it breaks or degrades.
 | **F2** | no rpm argument | **fixed** — `ca735c8`, rpm is an argument end to end |
 | **F3** | no winding-connection argument | **fixed** — `connection=` / `n_parallel=` end to end; it also uncovered and fixed an energy torque reported as `T_true / n_parallel` |
 | **F6** | unknown material name changes the physics silently | **fixed** — the assignment is validated where it is read; HTTP 400 from the routes, an exception on every eval path |
-| **F4 + F5** | copper-DC 0.83…2.14× and energy-vs-Maxwell 0.2…19.4 % | **diagnosed, ONE root cause, NOT fixed** — see the section below. Both are the coil ampere-turn normalisation; the fix moves every number this repo has ever stored, so it is written up rather than half-applied |
+| **F4 + F5** | copper-DC 0.83…2.14× and energy-vs-Maxwell 0.2…19.4 % | **fixed** — one root cause, the coil ampere-turn normalisation. The winding source is divided by the slot's REAL copper area now, so the machine is excited at exactly `n_wires·I` (`k ≡ 1`). Pins, catalog references and the surrogate anchor were all re-baselined on it; see “F4+F5 — fixed” below |
 | **F7** | stored reference performance not reproducible | catalog re-baselined with F2/F3 in place — `reference_*` fields, old values kept as `legacy_reference_*` |
 
 ---
@@ -428,17 +428,17 @@ with `k < 1`, and `k_nom ≠ k_cad` on exactly the two designs whose CAD clips t
 wire rectangles (`motor_40mm` 0.742, `m200_20kw_lowripple` 0.748), which is the
 `--coil-audit` result.
 
-**The fix, and why it is not applied here.** The physically correct statement is
-that each wire domain carries the branch current, so its current density is
-`I_branch / A_that_wire_meshed`, and the slot's ampere-turns are `n_wires ·
-I_branch` by construction regardless of what the mesher produced. Both gates
-then collapse to their honest residuals. It is a small edit and a very large
-consequence: it moves **every** number this repo has ever stored — the pinned
-regression baseline (k = 1.011 there, so ~1 %), every catalog and preset
-reference, the analytic surrogate that is calibrated against the pins, the
-256-entry optimizer eval cache, and any optimization in flight — by up to 21 %
-(`m200_20kw_lowripple`) and in both directions. It is written up here instead of
-being half-applied, so it can be done as its own deliberate re-baseline.
+**The fix, and why it was written up before being applied.** The physically
+correct statement is that a slot carries `n_wires · I_branch` ampere-turns by
+construction, regardless of what the mesher produced. Both gates then collapse
+to their honest residuals. It is a small edit and a very large consequence: it
+moves **every** number this repo has ever stored — the pinned regression
+baseline (k = 1.011 there, so ~1 %), every catalog and preset reference, the
+analytic surrogate that is calibrated against the pins, the 256-entry optimizer
+eval cache, and any optimization in flight — by up to 21 %
+(`m200_20kw_lowripple`) and in both directions. It was written up first so it
+could be done as its own deliberate re-baseline, which is what the section
+below is.
 
 Reproducers:
 
@@ -450,6 +450,117 @@ python scripts/solver_trials.py --coil-audit
 # fem_solver_2d._params_from_geo_dict to set p.fill_factor and re-run
 # tests/test_physics_regression.GEO_30MM at 0.6 / 0.3 / 1.2 -> the table above.
 ```
+
+### F4+F5 — fixed 2026-07-30 (`94510e3`), and the repo re-baselined on it
+
+The winding source is normalised by the slot's REAL copper area:
+
+```
+J_z = direction · I_coil · n_wires / A_copper_of_slot
+```
+
+`A_copper_of_slot` is the area the MESH gives that slot's coil domains
+(`fem_solver_2d.coil_copper_areas`, fed `areas_s` summed per tag), so
+`Σ J·A = direction · I_coil · n_wires` over every slot **by construction** and
+`k ≡ 1` on every geometry. The nominal `slot_width·slot_height·fill_factor`
+rectangle is out of the physics; `p.fill_factor` no longer reaches the solver at
+all, and `geometry_2d.winding_current_density` — the same formula kept as an
+uncalled helper — was deleted so it cannot come back.
+
+One detail worth recording, because the obvious version of the fix is wrong
+here: the CAD emits **one polygon per wire** (72 for 12 slots × 6 wires;
+`n_poly == n_slots·n_wires` on all 15 machines, per `--coil-audit`).
+Normalising each polygon by its OWN area would have been wrong by `n_wires`. The
+slot is the thing that carries N turns, so the slot's copper is the divisor. The
+same divisor now feeds the two places that re-derived the excitation
+independently and were off by the same `k`: the imposed-current eddy constraint
+`Iunit` (what makes the coupled σ∂A/∂t solve agree with the magnetostatic
+ampere-turns) and the P2 J-view.
+
+`tests/test_physics_regression.py::test_winding_carries_exactly_n_wires_times_i`
+asserts the invariant per slot from the polygons alone — no mesh, no solve, ~2 s
+— so it runs in the fast suite. It fails on the old formula by exactly `k`.
+
+**What moved in the pinned baseline** (`GEO_30MM`, `k` = 1.0111, so `1/k` −1.10 %
+and `1/k²` −2.19 % are the two yardsticks). 23 pinned lines moved; every one of
+them fits:
+
+| pin | move | why |
+|---|---|---|
+| `p2_noload` — everything | **0.00 %**, bit-identical | `I` = 0: no winding source to renormalise. The control. |
+| `T_avg_maxwell_Nm` (4 current-drive cases) | −0.88…−1.00 % | this is the quantity that tracked `k` linearly |
+| `T_avg_Nm` (energy) | +0.13…+0.22 %, inside the gate | `1.5p⟨ψ×i⟩` at the REQUESTED current — invariant to first order |
+| `P_cu_total_solve_W` (eddy cases) | −2.16 % | coupled DC is `Σ I_b²/S_b`, every `I_b` carried `k` → `1/k²` |
+| `P_cu_ac_solve_W`, `P_mag_solve_W`, `P_mag_honest_W` | −0.63…−1.48 % | field-square quantities on the ARMATURE field only; the PM part is unchanged |
+| voltage cases: `I_A_fund`, `I_A_peak`, THD, `T_avg` | +0.86…+1.29 % | the current is the ANSWER: 1.1 % fewer ampere-turns → less armature reaction → the same 7.0 V pk draws more current |
+| voltage cases: `P_cu_W` | +1.67 % | = `I²`, i.e. 2 × 0.87 % |
+
+`T_maxwell/T_energy` on `GEO_30MM` is **0.9999** now (it was 1.0110, and `k` is
+1.0111) — this machine's sliding-band Maxwell residual is ~0.
+
+#### The whole catalog, re-measured on the fixed excitation
+
+All 15 trials machines re-run (`scripts/solver_trials.py`, same protocol, same
+frozen input dir). The `k (old)` column is **recovered from the FEM**, as
+`(M/E)_pre / (M/E)_post` — it reproduces the CAD-polygon `k` of the table above
+to 3–4 decimals on every machine, which is the fix and the diagnosis agreeing
+from two independent directions:
+
+| machine | `k` (old) | T_energy pre → post | T_maxwell pre → post | M/E pre → post | gate (c) pre → post |
+|---|---|---|---|---|---|
+| `ciano14_40_12_fe₁₆n₂` | 0.9284 | 0.023 → **0.0236** (+2.61 %) | 0.0095 → 0.0105 (+10.53 %) | 0.4130 → **0.4449** | 0.9495 → **1.0926** |
+| `ciano20_150_35` | 1.0241 | 30.23 → **30.23** (−0.00 %) | 30.49 → 29.77 (−2.35 %) | 1.0085 → **0.9847** | 1.0487 → **0.9999** |
+| `ciano20_150_35@coilI` | 1.0241 | 30.23 → **30.23** (−0.00 %) | 30.49 → 29.77 (−2.35 %) | 1.0085 → **0.9847** | 1.0487 → **0.9999** |
+| `m200_20kw_base` | 1.1684 | 205.5 → **200.5** (−2.44 %) | 227.0 → 189.6 (−16.50 %) | 1.1045 → **0.9453** | 1.3660 → **1.0001** |
+| `m200_20kw_base@coilI` | 1.1688 | 123.5 → **124.3** (+0.59 %) | 136.9 → 117.8 (−13.94 %) | 1.1082 → **0.9481** | 1.3660 → **1.0001** |
+| `m200_20kw_lowripple` | 1.2633 | 180.1 → **187.6** (+4.17 %) | 215.0 → 177.3 (−17.54 %) | 1.1937 → **0.9449** | 2.1390 → **1.3376** |
+| `m200_20kw_opt` | 1.1676 | 185.5 → **192.1** (+3.55 %) | 206.3 → 183.0 (−11.31 %) | 1.1123 → **0.9526** | 1.3660 → **1.0001** |
+| `motor_100mm` | 1.0137 | 4.743 → **4.749** (+0.12 %) | 4.702 → 4.644 (−1.24 %) | 0.9914 → **0.9779** | 1.0275 → **1.0000** |
+| `motor_40mm` | 0.9559 | 0.3089 → **0.3082** (−0.23 %) | 0.2835 → 0.2959 (+4.37 %) | 0.9178 → **0.9601** | 1.2339 → **1.3493** |
+| `my_baseline` | 0.9083 | 14.12 → **14.10** (−0.07 %) | 12.59 → 13.85 (+10.02 %) | 0.8918 → **0.9818** | 0.8265 → **1.0000** |
+| `my_baseline@coilI` | 0.9084 | 14.12 → **14.09** (−0.15 %) | 12.59 → 13.84 (+9.92 %) | 0.8918 → **0.9817** | 0.8265 → **1.0000** |
+| `my_motor` | 1.0349 | 0.2119 → **0.2121** (+0.09 %) | 0.2161 → 0.2090 (−3.29 %) | 1.0198 → **0.9854** | 1.0716 → **1.0001** |
+| `my_motor_40mm` | 1.0115 | 0.2285 → **0.2286** (+0.04 %) | 0.2280 → 0.2255 (−1.10 %) | 0.9978 → **0.9864** | 1.0226 → **0.9998** |
+
+(`ACTIVE_config` and `ciano14_40_12_fe₁₆n₂@Fe16N2_lab_best` ran post-fix too but
+their geometry moved between the two campaigns — `geometry_sha256` differs — so
+they carry no comparison. Their post-fix numbers are in the jsonl.)
+
+**Three things this table settles.**
+
+1. **`T_avg` (energy) was the trustworthy number, as claimed.** It moves −0.23…
+   +0.59 % on every machine with `k` within 3 % of 1. The 200 mm designs move
+   +3.6…+4.2 % — they are the `k` = 1.17…1.26 machines, where the wrong
+   excitation had really moved the saturation state.
+2. **`T_maxwell` moves by `1/k`,** −11…−17 % on the 200 mm designs. Any ranking
+   that used the Maxwell mean on those machines was ranking `k`.
+3. **Gate (c) collapses to 1.0000** on 10 of 13 comparable machines — the
+   copper-DC identity the campaign opened with is now an identity. The three
+   that do not are not excitation errors and do not go away:
+   * `motor_40mm` **1.3493** and `m200_20kw_lowripple` **1.3376** — exactly
+     `1/0.7417` and `1/0.7476`, the `--coil-audit` ratios. Their CAD **clips the
+     wire rectangles**, so the analytic DC (nominal `n_wires·w·h`) describes more
+     copper than the geometry has. A geometry inconsistency, now isolated.
+   * `ciano14_40_12_fe₁₆n₂` **1.0926** — here the CAD copper matches the nominal
+     (audit 1.0000) but the **MESH** carries 8.5 % less of it. Pre-fix the same
+     factor read 0.9495 (`k_nom·k_meshed`) and post-fix reads `k_nom/k_meshed`;
+     both give `k_meshed` = 0.9322, which is how we know it is the mesher and not
+     the source. Worth its own ticket.
+
+**Energy-vs-Maxwell after the fix.** M/E lands at 0.9449…0.9864 on every
+load-carrying machine — **one sign, −1.4…−5.5 %**, exactly the residual band
+4072ccc predicted once `k` is removed, and inside the 5 % gate (b) asks for. The
+outlier is `ciano14_40_12_fe₁₆n₂` at 0.4449, which is the demag-collapsed design
+(0.023 N·m, 92 % ripple) — its torque is dominated by the collapse, not by the
+torque method.
+
+**Catalog.** `scripts/catalog_rebaseline.py --write` re-wrote 8 entries against
+the post-fix runs (1 left un-measured, `cat_200_working`, whose preset does not
+exist). The stored `reference_T_avg_Nm` moves −0.23…+2.61 %, because the catalog
+stores the ENERGY torque — the trustworthy one. `reference_T_avg_maxwell_Nm` is
+the field that moved, by `1/k`. Each entry's `reference_provenance` now carries
+`ampere_turn_scale_k: 1.0` plus `legacy_ampere_turn_scale_k`, which is how far
+that entry's previous Maxwell/ripple numbers were off.
 
 ### F7 — stored reference performance is largely not reproducible (data, not solver)
 

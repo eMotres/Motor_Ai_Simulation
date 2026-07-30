@@ -93,12 +93,19 @@ def _latest_ok(key: str, after_ts: float = 0.0) -> Optional[Dict[str, Any]]:
 
 
 def _ampere_turn_scale(geo: Dict[str, Any]) -> Optional[float]:
-    """k = A_copper_meshed_per_slot / (slot_width_m*slot_height_m*fill_factor).
+    """k_legacy = A_copper_per_slot / (slot_width_m*slot_height_m*0.6).
 
-    The factor by which the solved machine's coil MMF differs from the one that
-    was requested (docs/SOLVER_TRIALS_2026-07-30.md, F4+F5). k = 1 means the
-    solve was excited exactly as asked; the reported Maxwell torque over-reads by
-    k and the reported ripple % carries the same factor."""
+    HISTORICAL ONLY. This used to be the factor by which the solved machine's
+    coil MMF differed from the one that was requested — the solver normalised
+    the winding source by that nominal rectangle while applying it over the real
+    copper (docs/SOLVER_TRIALS_2026-07-30.md, F4+F5). The source is normalised
+    by the slot's actual copper area now, so the excitation is exactly n_wires·I
+    on every geometry and the live k is 1 by construction.
+
+    It is still recorded per entry because it is exactly how far this entry's
+    PREVIOUS `reference_*` numbers were off: the old Maxwell torque and ripple %
+    over-read by this factor. Keeping it makes the re-baseline auditable instead
+    of a silent jump."""
     try:
         from motor_ai_sim.cadquery_geometry import CadQueryMotor
         mot = CadQueryMotor()
@@ -194,13 +201,17 @@ def write(after_ts: float = 0.0, dry: bool = False) -> None:
             "speed_channel": (rec.get("speed_handling") or {}).get("channel"),
             "gates": {g: (v or {}).get("pass") for g, v in gates.items()},
             "energy_vs_maxwell_pct": (gates.get("b_energy_vs_maxwell") or {}).get("rel_diff_pct"),
-            "ampere_turn_scale_k": k,
+            "ampere_turn_scale_k": 1.0,
+            "legacy_ampere_turn_scale_k": k,
             "caveat": (
-                "T_avg is the energy/flux-linkage mean and is the trustworthy "
-                "number; T_avg_maxwell over-reads by the ampere-turn scale k, "
-                "and the ripple % carries the same factor. k != 1 means the "
-                "solved coil MMF differs from the requested one - see "
-                "docs/SOLVER_TRIALS_2026-07-30.md, F4+F5 (open)."),
+                "The winding source is normalised by the slot's real copper "
+                "area, so this run was excited at exactly n_wires*I "
+                "ampere-turns (k = 1). legacy_ampere_turn_scale_k is how far "
+                "this entry's PREVIOUS reference numbers were off: the old "
+                "T_avg_maxwell and ripple % over-read by that factor. T_avg is "
+                "still the energy/flux-linkage mean; what is left between it "
+                "and T_avg_maxwell is the sliding-band Maxwell residual - see "
+                "docs/SOLVER_TRIALS_2026-07-30.md, F4+F5 (fixed)."),
         }
         n_done += 1
 

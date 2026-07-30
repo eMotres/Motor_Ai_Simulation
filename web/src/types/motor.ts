@@ -212,3 +212,42 @@ export interface OptimizationResult {
   ripple_max_pct: number;
   objective: string;
 }
+
+// ── Geometry validation (backend: motor_ai_sim/geometry_validation.py) ───────
+// Region-level check of the SAME 2-D polygons the mesher consumes: which
+// domains overlap, what escaped its host, what collapsed.  `severity: 'error'`
+// means a solve is refused with HTTP 422 — saving the geometry is still
+// allowed, because the user may be mid-edit.
+export interface GeometryViolation {
+  code: string;                 // e.g. "coil_overlaps_coil"
+  severity: 'error' | 'warning';
+  part_a: string;               // "Magnet 3 (θ=25.7°)"
+  part_b: string;               // "" for single-part defects
+  message: string;              // full engineer-readable sentence
+  overlap_area_mm2: number;
+  location_mm?: { x: number; y: number };
+  likely_params: string[];      // geometry knobs most likely responsible
+  measured_mm?: number;
+  limit_mm?: number;
+}
+
+export interface GeometryValidation {
+  ok: boolean;                  // false ⇒ solving is blocked
+  n_errors: number;
+  n_warnings: number;
+  min_air_gap_mm: number | null;
+  violations: GeometryViolation[];
+  hidden: Record<string, number>;   // code → how many more of the same kind
+  checks_run: string[];
+  unavailable?: string;         // validator itself failed; nothing was checked
+}
+
+/** A PUT /api/geometry rejected with 422 — the value never reached the config. */
+export interface GeometryParamError {
+  field: string;
+  value: unknown;
+  kind: 'field' | 'derived';
+  message: string;
+  min?: number;
+  max?: number;
+}

@@ -6,6 +6,7 @@ import {
   Divider,
   CircularProgress,
   Alert,
+  AlertTitle,
   Button,
   IconButton,
   Tooltip,
@@ -18,6 +19,11 @@ import {
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { useMotorStore } from '../../stores/motorStore';
 import HelpTip from '../common/HelpTip';
+import type {
+  GeometryValidation,
+  GeometryViolation,
+  GeometryParamError,
+} from '../../types/motor';
 
 /**
  * Free-typing numeric field.
@@ -118,20 +124,107 @@ const NumberField: React.FC<NumberFieldProps> = ({
  * 2. Add metadata to geometry_schema section
  * 3. The form will automatically show the new parameter
  */
+/**
+ * Region-level geometry problems, in red, above the form.
+ *
+ * The backend validates the SAME 2-D polygons the mesher consumes
+ * (motor_ai_sim/geometry_validation.py), so this list is what would actually be
+ * solved — not a re-derivation that can drift.  An `error` here means a solve is
+ * refused with HTTP 422; the geometry is still saved, because the user is often
+ * mid-edit (widen the tooth, then the wire).  Each row names the two parts, the
+ * overlap area, where it is, and which parameters most likely caused it.
+ */
+const GeometryIssues: React.FC<{ v: GeometryValidation | null }> = ({ v }) => {
+  if (!v || v.unavailable || !v.violations || v.violations.length === 0) return null;
+  const errs = v.violations.filter(x => x.severity === 'error');
+  const warns = v.violations.filter(x => x.severity === 'warning');
+
+  const row = (x: GeometryViolation, i: number) => (
+    <Box component="li" key={`${x.code}-${i}`} sx={{ mb: 0.75 }}>
+      <Typography variant="body2" component="span">{x.message}</Typography>
+      {x.likely_params.length > 0 && (
+        <Typography variant="caption" component="div" sx={{ opacity: 0.85 }}>
+          Check: {x.likely_params.join(', ')}
+        </Typography>
+      )}
+    </Box>
+  );
+
+  const more = (sev: 'error' | 'warning') => {
+    const codes = new Set(v.violations.filter(x => x.severity === sev).map(x => x.code));
+    const n = Object.entries(v.hidden || {})
+      .filter(([code]) => codes.has(code))
+      .reduce((s, [, k]) => s + (k as number), 0);
+    return n > 0 ? (
+      <Typography variant="caption" sx={{ display: 'block', mt: 0.5, opacity: 0.85 }}>
+        … and {n} more of the same kind.
+      </Typography>
+    ) : null;
+  };
+
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+      {errs.length > 0 && (
+        <Alert severity="error">
+          <AlertTitle>
+            {errs.length} geometry {errs.length === 1 ? 'problem' : 'problems'} — this
+            cross-section cannot be solved
+          </AlertTitle>
+          <Box component="ul" sx={{ m: 0, pl: 2.5 }}>{errs.map(row)}</Box>
+          {more('error')}
+          <Typography variant="caption" sx={{ display: 'block', mt: 1, opacity: 0.85 }}>
+            The values are saved so you can keep editing, but Run will be refused
+            until the regions no longer intersect.
+          </Typography>
+        </Alert>
+      )}
+      {warns.length > 0 && (
+        <Alert severity="warning">
+          <AlertTitle>
+            {warns.length} geometry {warns.length === 1 ? 'note' : 'notes'}
+          </AlertTitle>
+          <Box component="ul" sx={{ m: 0, pl: 2.5 }}>{warns.map(row)}</Box>
+          {more('warning')}
+        </Alert>
+      )}
+    </Box>
+  );
+};
+
+/** Values the server refused outright (422) — nothing was saved. */
+const GeometryParamErrors: React.FC<{ errs: GeometryParamError[] | null }> = ({ errs }) => {
+  if (!errs || errs.length === 0) return null;
+  return (
+    <Alert severity="error">
+      <AlertTitle>Value not accepted — nothing was saved</AlertTitle>
+      <Box component="ul" sx={{ m: 0, pl: 2.5 }}>
+        {errs.map((e, i) => (
+          <Box component="li" key={`${e.field}-${i}`}>
+            <Typography variant="body2">{e.message}</Typography>
+          </Box>
+        ))}
+      </Box>
+    </Alert>
+  );
+};
+
 const GeometryForm: React.FC = () => {
-  const { 
-    geometry, 
-    parameterSchema, 
-    parameterGroups, 
-    isLoading, 
+  const {
+    geometry,
+    parameterSchema,
+    parameterGroups,
+    isLoading,
     error,
     connectedToApi,
     fetchSchemaFromApi,
     fetchGeometryFromApi,
     updateGeometryViaApi,
     updateGeometry,
+    geometryValidation,
+    geometryParamErrors,
+    fetchGeometryValidation,
   } = useMotorStore();
-  
+
   // Debounce timer ref
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   
@@ -144,8 +237,11 @@ const GeometryForm: React.FC = () => {
     if (connectedToApi) {
       fetchSchemaFromApi();
       fetchGeometryFromApi();
+      // The design on screen may already be invalid from an earlier session —
+      // show that on open, not only after the next edit.
+      fetchGeometryValidation();
     }
-  }, [connectedToApi, fetchSchemaFromApi, fetchGeometryFromApi]);
+  }, [connectedToApi, fetchSchemaFromApi, fetchGeometryFromApi, fetchGeometryValidation]);
   
   // Handle reload schema from API
   const handleReloadSchema = async () => {
@@ -229,6 +325,9 @@ const GeometryForm: React.FC = () => {
   
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+      <GeometryParamErrors errs={geometryParamErrors} />
+      <GeometryIssues v={geometryValidation} />
+
       {/* Reload Schema Button */}
       <Box sx={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 1 }}>
         <Typography variant="caption" color="text.secondary">

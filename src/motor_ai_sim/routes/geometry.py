@@ -45,6 +45,31 @@ def get_geometry():
 
 @router.put("")
 def update_geometry(update: GeometryUpdateModel):
+    # ── Input guard: reject unusable VALUES before anything is written ───────
+    # A zero / negative / non-finite dimension does not produce an interesting
+    # cross-section, it produces a crash several layers down in the mesher (or,
+    # worse, a mirrored polygon that meshes fine and solves to nonsense).  422
+    # names the field so the client can highlight it, and nothing is persisted.
+    # Judged on the MERGED geometry, but only the fields this request actually
+    # touched are held against it — plus every multi-parameter ("derived") rule,
+    # since a bore radius that comes out negative is broken regardless of which
+    # knob was the last one typed.
+    try:
+        from motor_ai_sim.geometry_validation import validate_parameter_values
+        _submitted = {k: v for k, v in update.model_dump().items() if v is not None}
+        _merged = {**get_current_geometry().to_dict(), **_submitted}
+        _bad = [r for r in validate_parameter_values(_merged)
+                if r.get("kind") == "derived" or r.get("field") in _submitted]
+    except HTTPException:
+        raise
+    except Exception:
+        _bad = []   # the guard must never be the reason an edit cannot be saved
+    if _bad:
+        raise HTTPException(status_code=422, detail={
+            "error": "invalid geometry parameter value",
+            "invalid_parameters": _bad,
+        })
+
     try:
         from motor_ai_sim.cadquery_geometry import CadQueryCache
         CadQueryCache().clear_all()
@@ -130,6 +155,25 @@ def update_geometry(update: GeometryUpdateModel):
             result["constraints_applied"] = [
                 {"target": a["target"], "clamped_to": a["clamped_to"],
                  "bound": a["bound"], "label": a["label"]} for a in applied]
+
+        # ── Real geometry validation, AFTER the clamp ───────────────────────
+        # The clamp fixes ONE knob at a time against an analytic bound; it can
+        # not see where the finished regions land.  Build the same 2-D polygons
+        # the mesher consumes and check them for overlaps / escapes / collapses.
+        #
+        # The result travels as WARNINGS: the user may well be mid-edit (change
+        # tooth_width, then wire_width), and refusing to save the intermediate
+        # state would make the form unusable.  Solving is what gets blocked —
+        # see the gate in routes/simulation.get_fem_transient.
+        try:
+            from motor_ai_sim.geometry_validation import validate_geometry
+            _vres = validate_geometry(dict(get_config().get("geometry", {})))
+            result["geometry_validation"] = _vres.to_dict()
+        except Exception as _ve:      # never block a save on the validator
+            result["geometry_validation"] = {
+                "ok": True, "n_errors": 0, "n_warnings": 0, "violations": [],
+                "hidden": {}, "checks_run": [], "min_air_gap_mm": None,
+                "unavailable": str(_ve)}
         return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -146,6 +190,22 @@ def get_geometry_constraints():
         from motor_ai_sim.geometry_constraints import bounds, evaluate
         geo = dict(get_config().get("geometry", {}))
         return {"bounds": bounds(geo), "checks": evaluate(geo)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/validation")
+def get_geometry_validation(geo: Optional[str] = None):
+    """Region-level validation of the CURRENT cross-section (or of a per-request
+    ``geo`` override): which domains overlap, where, and by how much.
+
+    Same polygons the mesher consumes, so what is reported here is what would be
+    solved.  The Geometry tab calls this on load; a PUT returns the same payload
+    under ``geometry_validation`` so an edit updates the list without a refetch.
+    """
+    try:
+        from motor_ai_sim.geometry_validation import validate_geometry
+        return validate_geometry(_resolve_geo_dict(geo)).to_dict()
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

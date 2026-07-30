@@ -89,6 +89,21 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         raise ValueError(
             f"infeasible winding: {n_req} turns cannot fit the slot even clamped")
 
+    # REAL geometry check — the clamp above bounds one scalar at a time and
+    # _coil_fit only counts wires; neither can see whether the finished regions
+    # overlap.  A candidate whose magnets cut into the rotor iron, or whose two
+    # coil sides share the same copper, still meshes and still returns a torque
+    # — and that torque would be ranked against honest ones and could WIN the
+    # descent.  Reject it here, before the subprocess pays for a mesh + N FEM
+    # solves: the eval comes back {"ok": False, "error": ...} and the candidate
+    # is dropped, exactly like an unconverged frame.  (The route-side gate in
+    # get_fem_transient would also catch it; this is the cheap early exit and it
+    # names the violations in the run log.)
+    from motor_ai_sim.geometry_validation import validate_geometry as _vgeo
+    _vres = _vgeo(geo)
+    if not _vres.ok:
+        raise ValueError(_vres.summary())
+
     # A parameter SWEEP / optimization explores GEOMETRY, and k_end is a FUNCTION of the
     # geometry (tooth_width, slot_width, …).  Pinning ONE k_end across changing geometry
     # would freeze the end-winding copper loss — yet a wider tooth has a longer end-turn

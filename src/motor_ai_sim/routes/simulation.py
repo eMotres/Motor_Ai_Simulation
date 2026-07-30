@@ -2703,6 +2703,46 @@ def get_fem_transient(
             _out["field_snapshot_eddy"] = bool(_out["field_snapshot"] and eddy)
             return _out
         return {"restored": False, "stale": False}
+
+    # ── GEOMETRY GATE — refuse to solve a cross-section that cannot exist ────
+    # geometry_constraints.clamp guards ONE scalar knob at a time; it cannot see
+    # where the finished regions land.  Here the real 2-D polygons (the same
+    # ones build_mesh_from_polygons consumes) are checked for overlapping
+    # domains, parts escaping their host and collapsed regions.  If any of that
+    # is true, the mesher will still mesh it and the FEM will still return
+    # torque, losses and efficiency — for a machine nobody could build.  That is
+    # the silent-wrong-answer class this gate exists to close.
+    #
+    # Placed AFTER the cache / restore returns so a warm hit and a page-open
+    # restore cost nothing, and BEFORE the lock so nothing is serialised behind
+    # a solve that is not going to happen.  It lives route-side on purpose:
+    # fem_solver_2d stays untouched, and every caller that reaches a solve does
+    # so through this function (the Simulation tab, the kernel module
+    # solver.em_transient, the optimizer's refine_proc, torque_sweep, passport).
+    #
+    # WARNINGS DO NOT BLOCK — only errors do.  The Mesh and Geometry previews
+    # deliberately still render an invalid machine, because that picture is how
+    # the user fixes it.
+    try:
+        from motor_ai_sim.geometry_validation import validate_geometry as _vgeo
+        from motor_ai_sim.config import get_config as _gc_gate
+        _gate_geo = dict((_gc_gate().get("geometry", {})) or {})
+        if _geo_ov:
+            _gate_geo = {**_gate_geo, **_geo_ov}
+        _gate = _vgeo(_gate_geo)
+    except HTTPException:
+        raise
+    except Exception as _ge:
+        # The validator itself failing must not take the solver down with it.
+        log.warning("geometry validation unavailable — solving unguarded: %s", _ge)
+        _gate = None
+    if _gate is not None and not _gate.ok:
+        log.error("refusing to solve an invalid cross-section:\n%s", _gate.summary())
+        raise HTTPException(status_code=422, detail={
+            "error": _gate.summary(),
+            "geometry_validation": _gate.to_dict(),
+        })
+
     # Serialise concurrent identical solves.  A duplicate request (shares the
     # run_id) or a React dev double-invoke would otherwise run a SECOND full
     # sliding-band solve in parallel AND clobber the shared progress global

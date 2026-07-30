@@ -14,6 +14,8 @@ import type {
   VariationConfig,
   OperatingPoint,
   ParameterVariation,
+  GeometryValidation,
+  GeometryParamError,
 } from '../types/motor';
 import {
   defaultGeometryParams,
@@ -99,7 +101,18 @@ interface MotorState {
   stlMeshes: Record<string, { vertices: number[]; faces: number[] }>;
   validationData: any | null;
   geometryMismatch: boolean;
-  
+
+  /** Region-level geometry validation of the CURRENT cross-section: which
+   *  domains overlap, where, and by how much.  Filled from PUT /api/geometry
+   *  (returned as `geometry_validation`) and from GET /api/geometry/validation.
+   *  Errors here mean a solve is refused with HTTP 422 — the Geometry tab shows
+   *  them in red so the user can see WHAT intersects WHERE before pressing Run. */
+  geometryValidation: GeometryValidation | null;
+  /** Field-level rejections from a PUT that came back 422 (negative dimension,
+   *  a bore radius that works out negative, …).  Nothing was saved. */
+  geometryParamErrors: GeometryParamError[] | null;
+  fetchGeometryValidation: () => Promise<void>;
+
   // Actions
   setGeometryUpdating: (v: boolean) => void;
   updateGeometry: (params: Partial<MotorGeometryParams>) => void;
@@ -198,6 +211,8 @@ export const useMotorStore = create<MotorState>()(
       pipelineStatus: null,
       stlMeshes: {},
       validationData: null,
+      geometryValidation: null,
+      geometryParamErrors: null,
       geometryMismatch: false,
 
       // Sweep config initial state — two operating points ~10 % apart in
@@ -327,6 +342,27 @@ export const useMotorStore = create<MotorState>()(
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(params),
           });
+          // 422 = the VALUE itself is unusable (negative dimension, a bore
+          // radius that works out negative, …).  Nothing was written; surface
+          // the named fields instead of the generic "HTTP error" so the user
+          // knows which box to fix.
+          if (response.status === 422) {
+            let bad: GeometryParamError[] = [];
+            try {
+              const body = await response.json();
+              bad = (body?.detail?.invalid_parameters ?? []) as GeometryParamError[];
+            } catch { /* non-JSON body */ }
+            set({
+              isLoading: false,
+              isGeometryUpdating: false,
+              connectedToApi: true,
+              geometryParamErrors: bad.length ? bad : [{
+                field: '', value: null, kind: 'field',
+                message: 'The value was rejected by the server and not saved.',
+              }],
+            });
+            return;
+          }
           if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
           }
@@ -334,6 +370,10 @@ export const useMotorStore = create<MotorState>()(
           const viewMode = get().viewMode;
           set({
             geometry: data as MotorGeometryParams,
+            geometryParamErrors: null,
+            // The PUT already ran the region check on the saved cross-section,
+            // so the red list updates without a second round-trip.
+            geometryValidation: (data?.geometry_validation ?? null) as GeometryValidation | null,
             isLoading: false,
             connectedToApi: true,
             // In STL mode the mesh won't auto-reload, so clear indicator immediately
@@ -357,6 +397,16 @@ export const useMotorStore = create<MotorState>()(
         }
       },
       
+      fetchGeometryValidation: async () => {
+        try {
+          const response = await fetch(`${API_BASE_URL}/api/geometry/validation`);
+          if (!response.ok) return;
+          set({ geometryValidation: (await response.json()) as GeometryValidation });
+        } catch {
+          /* the validator is advisory in the form — never break the tab over it */
+        }
+      },
+
       resetGeometryViaApi: async () => {
         set({ isLoading: true, error: null });
         try {

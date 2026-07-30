@@ -137,11 +137,18 @@ _ANCHOR_STEEL  = "B15AHV950M"     # config assignment at baseline generation
 # file when it is present so a regenerated pin propagates; these literals are the
 # fallback for an installed package with no tests/ directory.
 _ANCHOR_FEM: Dict[str, float] = {
-    "T_avg_Nm":     0.41740098476923165,   # p2_load
-    "P_fe_W":       3.1225884334434255,    # p2_load
-    "P_mag_W":      1.382,                 # p2_eddy P_mag_solve_W (rotor_eddy on)
-    "T_ripple_pct": 0.5348607680815186,    # p2_load
+    "T_avg_Nm":     0.4179404695543498,    # p2_load
+    "P_fe_W":       3.115317377410235,     # p2_load
+    "P_mag_W":      1.365,                 # p2_eddy P_mag_solve_W (rotor_eddy on)
+    "T_ripple_pct": 0.5455305639835336,    # p2_load
 }
+# Re-anchored when the winding ampere-turn normalisation was fixed (F4+F5): the
+# solver used to excite this machine at k = 1.0111 times the requested MMF, so
+# the scalars derived from the old pins carried that error into every surrogate
+# evaluation.  Derived, not edited: torque 1.377638 -> 1.379419 (+0.13 %),
+# iron 0.601091 -> 0.599691 (-0.23 %), magnet 0.269662 -> 0.266344 (-1.23 %),
+# cog 1.96478e-4 -> 2.00656e-4 (+2.13 %).  Every raw_* is byte-identical: the
+# surrogate physics did not change, only the FEM it is anchored to.
 
 # Measured uncertainty of the anchored surrogate.  Not a guess and not a zero:
 # ``scripts/_surrogate_uncertainty.py`` runs the FULL p2_load P2 transient on
@@ -170,6 +177,15 @@ _ANCHOR_FEM: Dict[str, float] = {
 # The ripple column is why the ripple estimate carries its own (large) number:
 # the surrogate's ripple is a slot-opening/air-gap cogging index and cannot see
 # load harmonics, saturation or the sector sub-harmonic.
+#
+# STALE BY ~0.1 %, KNOWINGLY. The FEM column was measured before the winding
+# ampere-turn fix (F4+F5), i.e. against a solve excited at k = 1.0111 times the
+# requested MMF. The energy torque these points report is the quantity that
+# moved LEAST under that fix (+0.13 % at the anchor), and the surrogate column
+# is unchanged apart from the re-anchored scalars, so the errors above are still
+# the right order and the two blind spots below are structural, not numerical.
+# Re-run scripts/_surrogate_uncertainty.py to put it back on the fixed solver;
+# it is 8 full P2 transients.
 _UNCERTAINTY: Dict[str, float] = {
     # p90 of |surrogate − FEM| / FEM over the perturbation set, in percent.
     "T_em_pct": 9.4,         # -1 would mean "not measured"

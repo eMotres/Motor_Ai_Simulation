@@ -1428,6 +1428,17 @@ def fem_transient_sliding_band(
     n_periods: float = 1.0,
     gamma_deg: float = 0.0,
     I_phase_rms: float = 85.0,
+    rpm: Optional[float] = None,  # MECHANICAL SPEED [rpm].  None = read the global
+                                 # config's simulation.rpm (so nothing that omits it
+                                 # changes).  Give it explicitly and the solve is
+                                 # speed-independent of the shared config: f_elec,
+                                 # dB/dt, iron loss, magnet/shaft eddy and the
+                                 # back-EMF all follow THIS number.  Before this
+                                 # existed, geo_override could move the geometry to
+                                 # another machine while the speed stayed whatever
+                                 # the shared config held — measured cost on the
+                                 # 30 mm control: P_fe -20 %, V_peak -12.5 %,
+                                 # eta -0.86 pp (docs/SOLVER_TRIALS_2026-07-30.md F2).
     mesh_size_mm: float = 3.0,
     min_size_mm: float = 0.3,
     outer_air_factor: float = 1.3,
@@ -1658,9 +1669,20 @@ def fem_transient_sliding_band(
     # — and using the mismatched rpm in ω_mech scaled dB/dt (→ iron/magnet
     # losses) by the wrong speed (×4 at 3950-vs-2000).  rpm is the master
     # (it's what presets/UI write); the frequency is DERIVED, never read.
-    rpm = float(sim.get("rpm", 3950))
-    _f_cfg = float(sim.get("frequency", 0.0) or 0.0)
+    # An explicit rpm= argument WINS over the config: that is the per-request
+    # channel a candidate/catalog/preset evaluation needs so it does not inherit
+    # the shared config's speed (F2).  rpm is read ONCE, here, before the frame
+    # loop, so a config reload mid-solve cannot move it.
+    _rpm_from_arg = rpm is not None
+    rpm = float(rpm) if _rpm_from_arg else float(sim.get("rpm", 3950))
+    if rpm <= 0.0:
+        raise ValueError(f"rpm must be > 0; got {rpm!r}")
     f_elec = rpm * (p.num_poles // 2) / 60.0
+    # The stored frequency is only a cross-check on the CONFIG's own pair.  When
+    # the caller passed rpm explicitly, the config's frequency describes a
+    # different operating point and comparing against it would warn on every
+    # per-request evaluation.
+    _f_cfg = 0.0 if _rpm_from_arg else float(sim.get("frequency", 0.0) or 0.0)
     if _f_cfg > 0 and abs(_f_cfg - f_elec) / max(f_elec, 1e-9) > 0.01:
         log.warning("config frequency=%.2f Hz inconsistent with rpm=%.0f "
                     "(→ %.2f Hz); using the rpm-derived frequency",
@@ -3878,6 +3900,9 @@ def em_transient_eval(
     n_periods: float,
     gamma_deg: float,
     I_phase_rms: float,
+    rpm: Optional[float] = None,     # mechanical speed [rpm]; None = the global
+                                     # config's simulation.rpm (see
+                                     # fem_transient_sliding_band)
     mesh_size_mm: float = 4.0,
     min_size_mm: float = 0.3,
     outer_air_factor: float = 1.3,
@@ -3924,6 +3949,7 @@ def em_transient_eval(
     return fem_transient_sliding_band(
         n_steps_per_period=int(n_steps_per_period), n_periods=float(n_periods),
         gamma_deg=float(gamma_deg), I_phase_rms=float(I_phase_rms),
+        rpm=(None if rpm is None else float(rpm)),
         mesh_size_mm=float(mesh_size_mm), min_size_mm=float(min_size_mm),
         outer_air_factor=float(outer_air_factor), gap_layers=float(gap_layers),
         n_sectors=int(n_sectors) if int(n_sectors) > 1 else -1,

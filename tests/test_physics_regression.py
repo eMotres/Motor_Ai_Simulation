@@ -16,20 +16,19 @@ Design notes, in case a case starts failing for the wrong reason:
   file now, so a live API server autosaving mid-run reloaded it and dropped the
   override — the suite passed alone and failed in a batch.
 
-  Speed is the exception that has to go through the config, because
-  ``fem_transient_sliding_band`` takes no rpm argument and reads
-  ``simulation.rpm`` itself (docs/SOLVER_TRIALS_2026-07-30.md F2). That leak was
-  live and it bit: the pins were generated at 15000 rpm (this machine's own
+  Speed used to be the exception that had to go through the config, because
+  ``fem_transient_sliding_band`` took no rpm argument and read
+  ``simulation.rpm`` itself (docs/SOLVER_TRIALS_2026-07-30.md F2). It is an
+  explicit ``rpm=`` argument now, so ``_run`` passes it like everything else.
+  Keeping the story here because the leak was live and it bit: the pins were
+  generated at 15000 rpm (this machine's own
   stored speed), the user's config moved to 13000 for the 40 mm design, and ALL
   SIX cases went red at once with nothing wrong in the code —
   ``p2_noload`` V_peak -13.33 % (= 13000/15000 exactly), its P_cu -24.89 %
   (= the same ratio squared, the AC term is proportional to f^2), P_fe -19.8 %,
   and the voltage cases +109 % in current because a fixed 7.0 V pk against a
   smaller back-EMF draws whatever the impedance allows. A gate that goes red
-  when the user edits an unrelated field is not a gate, so ``_run`` pins the
-  speed the same way the trials harness does: patch the in-memory config only,
-  never the file. rpm is read ONCE per solve (fem_solver_2d.py:1661, before the
-  frame loop), so the patch cannot be lost mid-solve.
+  when the user edits an unrelated field is not a gate.
 * **Coarse on purpose.** 12 steps/period on a 1.4 mm mesh. These are not
   publication numbers; they only have to be *reproducible*. Keeping the suite
   near five minutes is what makes it get run.
@@ -192,9 +191,8 @@ CASES = {
 MAGNET = "F45SH_120C"
 
 # The speed every pin was generated at, and the 30 mm machine's OWN stored
-# operating speed (config/motor_presets.json `my_motor`: 32 A, 15000 rpm). It has
-# to be pinned here rather than passed as an argument because the solver has no
-# rpm parameter — see the docstring.
+# operating speed (config/motor_presets.json `my_motor`: 32 A, 15000 rpm).
+# Passed as the solver's ``rpm=`` argument (F2).
 RPM = 15000.0
 
 
@@ -272,11 +270,11 @@ def _run(case: str) -> Dict[str, float]:
     # silently drops an in-process mutation. That made this suite pass alone and
     # fail in a batch, which is worse than failing outright.
     set_request_materials({"assignment": {"magnet": MAGNET}, "materials": {}})
-    # Speed: the ONE input with no argument channel (see the docstring). Patch the
-    # cached dict, never the YAML — the file is the user's, and a live backend is
-    # often writing it. Read once per solve, so this cannot be dropped mid-solve.
+    # Speed: an ARGUMENT now (F2). It used to have to go through the cached
+    # config because fem_transient_sliding_band read simulation.rpm itself; the
+    # explicit parameter makes the pin independent of the user's file with no
+    # patching at all. Same number, same physics — this is a channel change.
     cfg = get_config()
-    cfg["simulation"]["rpm"] = RPM
     # The winding CONNECTION is part of the d-axis calibration topology key
     # (fem_solver_2d._daxis_topology_key). The pins were generated at 2S; when
     # the user toggled the live config to 4S, the calibration re-ran on the new
@@ -289,7 +287,7 @@ def _run(case: str) -> Dict[str, float]:
     cfg["winding"]["n_series"] = 2
     kw = dict(CASES[case])
     try:
-        d = fem_transient_sliding_band(geo_override=dict(GEO_30MM), **kw)
+        d = fem_transient_sliding_band(geo_override=dict(GEO_30MM), rpm=RPM, **kw)
     finally:
         set_request_materials(None)
     return _metrics(d)

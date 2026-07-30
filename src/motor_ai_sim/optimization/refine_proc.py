@@ -55,7 +55,7 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
             rotor_eddy: bool = False, hi_fidelity: bool = False,
             structured_gap: bool = False, airgap_macro: bool = False,
             iron_template: bool = True, geo_mesh: bool = True,
-            element_order: int = 2) -> Dict[str, Any]:
+            element_order: int = 2, rpm: float | None = None) -> Dict[str, Any]:
     """Run the sliding-band transient for one candidate and return mean
     performance metrics (torque, efficiency, ripple, losses, mass).
 
@@ -95,7 +95,13 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
     # sent.  This keeps the copper LOSS and the copper MASS (mass uses auto k_end via
     # _masses below) on the SAME per-point k_end — consistent and tooth-dependent.
     end_winding_factor = 0.0
-    rpm = float(cfg.get("simulation", {}).get("rpm", 3950.0))
+    # SPEED — one number for this eval, used BOTH for our own omega and by the
+    # solver.  It used to be read here for omega while the solver read the same
+    # global key for itself; correct only as long as nothing moved the config
+    # between the two reads, and silently a different operating point when the
+    # caller meant a candidate's own speed (docs/SOLVER_TRIALS_2026-07-30.md F2).
+    # None = the active config's speed, so an omitted argument changes nothing.
+    rpm = float(cfg.get("simulation", {}).get("rpm", 3950.0)) if rpm is None else float(rpm)
     omega = 2 * math.pi * rpm / 60.0
 
     # n_total ≈ n_steps_per_period · n_periods → pick n_steps_per_period so the
@@ -134,7 +140,8 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
     # touch the user's saved simulation. result.raw is the sliding-band dict.
     _out = _kernel().run("solver.em_transient", {
         "n_steps_per_period": nspp, "n_periods": nper, "gamma_deg": float(gamma_deg),
-        "I_phase_rms": float(current_a), "mesh_size_mm": float(mesh_size_mm),
+        "I_phase_rms": float(current_a), "rpm": float(rpm),
+        "mesh_size_mm": float(mesh_size_mm),
         "min_size_mm": float(min_size_mm), "n_sectors": int(_ns),
         "coil_temp_c": float(coil_temp_c), "gap_layers": float(gap_layers),
         "end_winding_factor": float(end_winding_factor), "rotor_eddy": bool(rotor_eddy),
@@ -278,7 +285,8 @@ if __name__ == "__main__":
                       airgap_macro=spec.get("airgap_macro", False),
                       iron_template=spec.get("iron_template", True),
                       geo_mesh=spec.get("geo_mesh", True),
-                      element_order=spec.get("element_order", 2))
+                      element_order=spec.get("element_order", 2),
+                      rpm=spec.get("rpm"))
         sys.stdout.write("@@RESULT@@" + json.dumps({"ok": True, "res": res}))
     except Exception as e:  # noqa: BLE001
         sys.stdout.write("@@RESULT@@" + json.dumps({"ok": False, "error": str(e)}))

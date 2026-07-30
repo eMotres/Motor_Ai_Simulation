@@ -471,28 +471,19 @@ def run_one(key: str) -> Dict[str, Any]:
 
     cfg = get_config()
 
-    # ── SPEED (see FINDING-RPM in docs/SOLVER_TRIALS_2026-07-30.md) ──────────
-    # ``em_transient_eval`` takes the current and the load angle as arguments but
-    # NOT the speed: fem_transient_sliding_band reads ``rpm`` from the GLOBAL
-    # config's simulation block (f_elec = rpm*poles/2/60 is derived from it).  So
-    # geo_override can move the geometry but not the operating speed, and every
-    # trial would otherwise run at whatever speed the shared config happens to
-    # hold — mis-scaling f_elec, iron loss, magnet/shaft eddy, back-EMF and
-    # efficiency (torque is magnetostatic and unaffected).  The trial needs each
-    # entry's OWN speed, so the child process patches the in-memory config dict
-    # only.  Nothing is written: the YAML's sha256 is checked below, and each
-    # motor runs in a throwaway subprocess.
+    # ── SPEED (F2, now FIXED — the argument exists) ──────────────────────────
+    # ``em_transient_eval`` gained an explicit ``rpm`` parameter, so the entry's
+    # OWN speed is passed as an argument instead of being smuggled in through
+    # the shared config.  Nothing is patched and nothing is written: the YAML's
+    # sha256 is checked below and stays unchanged.
     import hashlib
     _cfg_path = ROOT / "config" / "motor_config.yaml"
     _sha_before = hashlib.sha256(_cfg_path.read_bytes()).hexdigest()
     rpm_global = float(cfg.get("simulation", {}).get("rpm", 0.0) or 0.0)
-    cfg["simulation"]["rpm"] = float(op["rpm"])
-    cfg["simulation"]["frequency"] = float(op["rpm"]) * (e["poles"] // 2) / 60.0
     rec["speed_handling"] = {
         "rpm_entry": float(op["rpm"]), "rpm_global_config": rpm_global,
-        "in_memory_patch_applied": True,
-        "reason": "em_transient_eval has no rpm parameter — speed is read from "
-                  "the global config (FINDING-RPM)",
+        "in_memory_patch_applied": False,
+        "channel": "em_transient_eval(rpm=...) argument (F2 fixed)",
         "f_elec_expected_Hz": round(float(op["rpm"]) * (e["poles"] // 2) / 60.0, 3),
     }
 
@@ -528,6 +519,7 @@ def run_one(key: str) -> Dict[str, Any]:
         d = em_transient_eval(
             n_steps_per_period=STEPS_PER_PERIOD, n_periods=N_PERIODS,
             gamma_deg=op["gamma_deg"], I_phase_rms=op["I_phase_rms_A"],
+            rpm=op["rpm"],
             mesh_size_mm=e["mesh_size_mm"], min_size_mm=MIN_SIZE_MM,
             outer_air_factor=OUTER_AIR, gap_layers=GAP_LAYERS,
             n_sectors=e["n_sectors"], stator_fillet_mm=0.0,

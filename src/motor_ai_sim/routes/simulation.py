@@ -1118,13 +1118,32 @@ def _config_physics_fingerprint(*, with_request_materials: bool) -> str:
         return "nofp"
 
 
+def _effective_rpm(rpm=None) -> float:
+    """The speed a solve will ACTUALLY run at: the explicit argument when the
+    caller passed one, else the shared config's ``simulation.rpm``.
+
+    Both physics keys resolve it through here rather than storing the raw
+    argument, for two reasons: an explicit 13000 and a config-default 13000 are
+    the same solve and must share a cache entry, and — the older hole — the
+    config's speed was in NEITHER key, so editing rpm and pressing Run replayed
+    a cached result computed at the previous speed (torque unmoved, but P_fe,
+    V_peak and eta all belong to a different operating point)."""
+    if rpm is not None:
+        return float(rpm)
+    try:
+        from motor_ai_sim.config import get_config as _gc
+        return float((_gc().get("simulation") or {}).get("rpm", 3950.0) or 3950.0)
+    except Exception:
+        return 3950.0
+
+
 def _field_snap_key_fields(*, gamma_deg, I_phase_rms, mesh_size_mm, min_size_mm,
                            outer_air_factor, n_sectors, stator_fillet_mm,
                            gap_layers, coil_temp_c, comp_mesh, pole_copy,
                            iron_template, geo_mesh, structured_gap, airgap_macro,
                            n_steps_per_period, n_periods, eddy, rotor_eddy,
                            demag, drive, element_order, cfg_fingerprint, geo_ov,
-                           mat_ov, rotor_angle0_deg=0.0) -> "OrderedDict":
+                           mat_ov, rotor_angle0_deg=0.0, rpm=None) -> "OrderedDict":
     """The snapshot key as NAMED fields, in key order.
 
     Named because the key is the thing that decides "is this the run the user
@@ -1175,6 +1194,10 @@ def _field_snap_key_fields(*, gamma_deg, I_phase_rms, mesh_size_mm, min_size_mm,
         # view asking for a physically rotated rotor is a different mesh and must
         # never be answered from the run's snapshot.
         ("rotor_angle0_deg", round(float(rotor_angle0_deg), 3)),
+        # Speed.  The magnetostatic field is speed-independent, but everything
+        # the snapshot CARRIES beside it is not: the loss-density map, the eddy
+        # J and the back-EMF all scale with f_elec = rpm*pp/60.
+        ("rpm", round(_effective_rpm(rpm), 3)),
     ))
 
 
@@ -2378,6 +2401,14 @@ def get_fem_transient(
     n_periods:           float = 1.0,  # how many electrical periods to sim
     gamma_deg:           float = 0.0,
     I_phase_rms:         float = 85.0,
+    rpm:       Optional[float] = None,    # ← MECHANICAL SPEED [rpm].  Omitted (the UI's
+                                          #   case) = the shared config's simulation.rpm,
+                                          #   so nothing that never sent it changes.  Sent
+                                          #   explicitly (a preset/catalog/candidate eval),
+                                          #   the solve's f_elec, iron loss, magnet/shaft
+                                          #   eddy and back-EMF all follow THIS number
+                                          #   instead of whatever the shared config holds
+                                          #   (docs/SOLVER_TRIALS_2026-07-30.md F2).
     mesh_size_mm:        float = 4.0,
     min_size_mm:         float = 0.3,
     outer_air_factor:    float = 1.3,
@@ -2530,6 +2561,10 @@ def get_fem_transient(
                str(drive or "current"), round(float(v_phase_peak), 2),
                round(float(v_delta_deg), 1), int(bool(harm_ref)),
                int(element_order), _cfp,
+               # Speed: resolved (explicit argument or the config's), so an
+               # rpm change invalidates the entry — the config's speed used to
+               # be in NO key at all.
+               round(_effective_rpm(rpm), 3),
                int(n_frames) if include_frames else 0,
                # The coupled eddy solve is DIFFERENT physics (solved copper loss,
                # reaction currents in the magnets/shaft) — it must not share a
@@ -2543,7 +2578,7 @@ def get_fem_transient(
     # here and used both to store it after the solve and to tell a cache hit
     # whether that snapshot is still in memory.
     _fsnap_fields = _field_snap_key_fields(
-        gamma_deg=gamma_deg, I_phase_rms=I_phase_rms,
+        gamma_deg=gamma_deg, I_phase_rms=I_phase_rms, rpm=rpm,
         mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm,
         outer_air_factor=outer_air_factor, n_sectors=n_sectors,
         stator_fillet_mm=stator_fillet_mm, gap_layers=gap_layers,
@@ -2646,6 +2681,7 @@ def get_fem_transient(
             _sbres = em_transient_eval(
                 n_steps_per_period=int(n_steps_per_period), n_periods=float(n_periods),
                 gamma_deg=float(gamma_deg), I_phase_rms=float(I_phase_rms),
+                rpm=(None if rpm is None else float(rpm)),
                 mesh_size_mm=float(mesh_size_mm), min_size_mm=float(min_size_mm),
                 outer_air_factor=float(outer_air_factor), gap_layers=float(gap_layers),
                 n_sectors=int(n_sectors), stator_fillet_mm=float(stator_fillet_mm),
@@ -2683,6 +2719,10 @@ def get_fem_transient(
                             n_periods=float(n_periods),
                             gamma_deg=float(_fc["gamma1_deg"]),
                             I_phase_rms=float(_fc["I1_phase_rms_A"]),
+                            # Same machine at the same SPEED — the reference's
+                            # only allowed difference from the voltage run is
+                            # the drive.
+                            rpm=(None if rpm is None else float(rpm)),
                             mesh_size_mm=float(mesh_size_mm),
                             min_size_mm=float(min_size_mm),
                             outer_air_factor=float(outer_air_factor),

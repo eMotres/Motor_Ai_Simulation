@@ -475,6 +475,32 @@ result (`motor_40mm` measures 35.2 % raw ripple at its own operating point, with
 a clean order-6 spectrum and a 0.00 % numerical noise floor — real ripple, not
 solver hash).
 
+#### F7 — re-baselined 2026-07-30, with F2/F3 in place
+
+`scripts/catalog_rebaseline.py` re-measures every catalog entry through the
+trials harness (7 runs, 2380 s, frozen input dir) and writes `reference_*`
+beside `legacy_reference_*` in `config/motor_catalog.json`, with a
+`reference_provenance` block per entry (trial key + timestamp, geometry sha256,
+protocol, operating-point source, the winding connection that was applied and
+where it came from, all six gates, the energy-vs-Maxwell %, and the ampere-turn
+scale `k`). The display fields are untouched.
+
+| entry | stored | measured | Δ | reading |
+|---|---|---|---|---|
+| `cat_ciano20_150_35` | 30.574 | **30.2347** | **−1.1 %** | its `2S-2P` applied BY THE SOLVER, no manual `I/n_parallel` — 59.844 (+95.7 %) before F3 |
+| `cat_my_motor` | 0.212 | 0.2119 | −0.0 % | the pinned control |
+| `cat_ciano14_30_10` | 0.242 | 0.2119 | −12.4 % | byte-identical geometry to `my_motor`; the catalog stored two numbers for one machine |
+| `cat_motor_100mm` | 6.0 | 4.7433 | −20.9 % | gate (b) passes, so the reference is the odd one |
+| `cat_motor_40mm` | 0.444 | 0.3089 | −30.4 % | γ=−42°, a different operating point from the 2026-06-28 validation |
+| `cat_my_baseline` | 25.28 | 14.1152 | −44.2 % | its stored `4P` is now honoured; the entry's connection and its torque are mutually inconsistent |
+| `cat_my_motor_40mm` | 0.444 | 0.2285 | −48.5 % | the known copy-paste (a 30 mm design carrying the 40 mm entry's numbers) |
+| `cat_ciano14_40_12_fe₁₆n₂` | 0.747 | 0.0230 | −96.9 % | **the preset has since become a 37 mm 24s/28p machine** whose demag pre-pass de-rates 655/728 magnet elements (Br_min 0.207) → 91.7 % ripple, 23 % efficiency. Its catalog metadata was updated to 37 mm/24s/28p while its torque was left at the old 40 mm 12s/14p value. Worth knowing: with F1 fixed, a demag-collapsing design now REPORTS its collapse instead of hiding it |
+| `cat_200_working` | 78.7 | — | — | preset `200_mm` is not in `motor_presets.json`; recorded as not re-measured, with the reason |
+
+`ciano20_150_35` is the headline. It is the only entry whose stored connection
+is both present and self-consistent, and it reproduces its catalog torque to
+1.1 % with nothing applied by hand — which is what F3 was for.
+
 ### F8 — timing
 
 Total 2 h 0 min for 23 runs; per-run 102 – 987 s. Wall time tracks the number of

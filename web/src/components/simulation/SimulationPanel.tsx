@@ -22,6 +22,7 @@ import CheckCircleIcon  from '@mui/icons-material/CheckCircle';
 import ErrorIcon        from '@mui/icons-material/Error';
 import BoltIcon         from '@mui/icons-material/Bolt';
 import PhysicsDashboard from './PhysicsDashboard';
+import SolveProgressStrip from './SolveProgressStrip';
 import CoupledEmThermal from './CoupledEmThermal';
 import HelpTip from '../common/HelpTip';
 import { syncActiveMotor } from '../common/motorSettings';
@@ -936,6 +937,9 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
 
       {/* ── RIGHT: results ── */}
       <Box sx={{ flex: 1, overflowY: 'auto', p: 3, display: 'flex', flexDirection: 'column', gap: 3 }}>
+        {/* Live solve progress — PINNED to the very top of the page (sticky),
+            visible without scrolling wherever the solve was launched from. */}
+        <SolveProgressStrip />
 
         {/* Header + Physics overview card removed by user request.
             • The "2D Magnetostatics / Governing equation / Rotor

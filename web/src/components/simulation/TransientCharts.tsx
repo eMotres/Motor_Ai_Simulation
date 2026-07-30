@@ -747,39 +747,9 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
           gated on the first backend poll), so the user always sees the solve
           running: a live-ticking elapsed clock, the number of points computed
           so far, and a fill bar. */}
-      {solving && (() => {
-        const total = (progress && progress.total > 0) ? progress.total : steps;
-        const step  = progress ? Math.min(progress.step, total) : 0;
-        const pct   = Math.min(100, 100 * step / Math.max(1, total));
-        const eta   = (progress && progress.eta_s) ? progress.eta_s : 0;
-        const perPt = (progress && progress.per_step_s) ? progress.per_step_s
-                    : (step > 0 ? solveElapsed / step : 0);
-        return (
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.6,
-          px: 1.25, py: 0.9, bgcolor: 'var(--panel-2)', border: '1px solid var(--line-accent)',
-          borderRadius: 1, fontFamily: 'monospace',
-          boxShadow: '0 0 10px rgba(37,99,235,0.15)' }}>
-          <Box sx={{ display: 'flex', justifyContent: 'space-between',
-            alignItems: 'baseline', fontSize: 12, color: 'var(--text-2)' }}>
-            <span>
-              <CircularProgress size={11} thickness={6}
-                sx={{ color: 'var(--brand)', mr: 0.8, verticalAlign: 'middle' }}/>
-              Computing&nbsp;<b style={{ color: 'var(--text-0)' }}>{step}</b>&nbsp;/&nbsp;<b>{total}</b>&nbsp;points
-              {perPt ? `   ·   ${perPt.toFixed(2)} s/pt` : ''}
-            </span>
-            <span style={{ color: 'var(--text-3)' }}>
-              elapsed&nbsp;<b style={{ color: 'var(--text-0)' }}>{solveElapsed.toFixed(1)} s</b>
-              {eta ? `   ·   ETA ${eta.toFixed(0)} s` : ''}
-            </span>
-          </Box>
-          <Box sx={{ width: '100%', height: 6, bgcolor: 'var(--line-soft)',
-            borderRadius: 3, overflow: 'hidden' }}>
-            <Box sx={{ width: `${pct.toFixed(1)}%`, height: '100%',
-              bgcolor: 'var(--brand)', transition: 'width 0.3s ease' }}/>
-          </Box>
-        </Box>
-        );
-      })()}
+      {/* The strip itself moved to SolveProgressStrip at the TOP of the page
+          (user request: a running solve must be visible without scrolling).
+          The "Point X/N" counter in this panel's header stays. */}
 
       {error && (
         <Typography sx={{ fontSize: 11, color: '#fca5a5', p: 1,

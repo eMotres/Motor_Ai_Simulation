@@ -79,6 +79,7 @@ from motor_ai_sim.simulation.field_ops import (  # noqa: F401  (re-export)
     _per_triangle_B, _triangle_areas, _maxwell_stress_torque,
     _arkkio_torque, _p2_B_at_quad, _arkkio_torque_p2,
     band_limit_torque, end_winding_factor_geom, copper_loss_W,
+    coil_slot_index, coil_copper_areas, coil_copper_area_total_m2,
 )
 
 from motor_ai_sim.simulation.mesher import (  # noqa: F401  (re-export)
@@ -746,93 +747,13 @@ def sample_to_grid(
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 4.  Top-level convenience: build materials dict, solve, sample
+#
+# ``coil_slot_index`` / ``coil_copper_areas`` (and the whole-machine copper
+# section ``coil_copper_area_total_m2``) moved to simulation/field_ops.py — the
+# DC copper loss needs the same measurement and the physics layer must not
+# import the solver.  They are re-exported above, so `from ...fem_solver_2d
+# import coil_copper_areas` still resolves.
 # ─────────────────────────────────────────────────────────────────────────────
-
-def coil_slot_index(cp, n_slot: int) -> Optional[int]:
-    """Which SLOT does this coil polygon belong to (by centroid angle)?
-
-    ONE definition, shared by the material build and by every consumer that has
-    to reproduce the same grouping (the imposed-current eddy constraints, the
-    J-view snapshot).  The cadquery layout places the copper of one slot on the
-    +x / −x side of the neighbouring teeth, so slot CENTRES sit at the half-pitch
-    offset; rounding to the slot pitch WITHOUT that offset collapses the two
-    halves of a concentrated coil onto the same slot index and forces them to
-    carry the same sign (that is the go/return pattern gone).
-    """
-    if cp is None or n_slot <= 0:
-        return None
-    try:
-        if cp.is_empty:
-            return None
-        cx, cy = cp.centroid.x, cp.centroid.y
-    except Exception:
-        return None
-    ang = math.degrees(math.atan2(cy, cx))
-    if ang < 0:
-        ang += 360.0
-    pitch = 360.0 / n_slot
-    return int((ang - pitch * 0.5) / pitch + 0.5) % n_slot
-
-
-def coil_copper_areas(
-    polys: dict,
-    n_slot: int,
-    coil_area_m2: Optional[Mapping[int, float]] = None,
-) -> Dict[int, Tuple[float, float]]:
-    """Per coil domain tag → (own copper area, copper area of its whole SLOT) [m²].
-
-    This is the quantity the winding source must be normalised by.  The source
-    is a current DENSITY applied over the copper the mesh actually carries, so
-    the ampere-turns the field is excited with are ∫J dA over that copper — not
-    over any nominal rectangle.  Dividing by the slot's real copper area makes
-
-        Σ_{tags of one slot} J·A  ==  direction · I_coil · n_wires
-
-    true BY CONSTRUCTION, for any way the CAD chooses to cut the copper up (this
-    geometry emits ONE POLYGON PER WIRE — 72 of them for 12 slots × 6 wires —
-    so a per-polygon normalisation would be wrong by n_wires).
-
-    ``coil_area_m2`` maps a coil domain tag to the area the MESH gives it; pass
-    it whenever the mesh exists, because that is the area the assembled source
-    is integrated over.  A tag missing from that map has no elements in this
-    mesh (sector clipping) and is left out of its slot's total — the copper that
-    IS meshed then carries the full n_wires·I.  Without the map the polygon area
-    is used, which for the rectangular wire sections is the same number.
-
-    Historically this whole quantity was `slot_width_m·slot_height_m·0.6`, where
-    the 0.6 was a MotorDomainParams dataclass default no config path ever set
-    and slot_width came from the wire pitch.  The ratio of the real copper to
-    that rectangle ran 0.909…1.265 across the machines this repo stores, i.e.
-    the solver silently excited every machine at k·N·I and T_maxwell/T_energy
-    was exactly k (docs/SOLVER_TRIALS_2026-07-30.md, F4+F5).
-    """
-    coil_list = polys.get("coils") or []
-    if not coil_list or n_slot <= 0:
-        return {}
-    own: Dict[int, float] = {}
-    slot_of: Dict[int, int] = {}
-    per_slot: Dict[int, float] = {}
-    for i, cp in enumerate(coil_list):
-        s = coil_slot_index(cp, n_slot)
-        if s is None:
-            continue
-        tag = DOM_COIL_BASE + i
-        if coil_area_m2 is not None:
-            a = float(coil_area_m2.get(tag, 0.0) or 0.0)
-            if a <= 0.0:
-                continue          # not in this mesh — contributes no source
-        else:
-            try:
-                a = float(cp.area) * 1e-6      # polygons are in mm → m²
-            except Exception:
-                continue
-            if a <= 0.0:
-                continue
-        own[tag] = a
-        slot_of[tag] = s
-        per_slot[s] = per_slot.get(s, 0.0) + a
-    return {tag: (a, per_slot[slot_of[tag]]) for tag, a in own.items()}
-
 
 def build_materials(
     I_ph: Dict[str, float],
@@ -1516,7 +1437,7 @@ def _spectral_ddt_series(x, kmax, dt):
 
 
 def _vdrive_copper_loss(p, geo, IA, IB, IC, n_parallel, coil_temp_c,
-                        end_winding_factor):
+                        end_winding_factor, copper_area_m2=None):
     """DC copper loss from the SOLVED phase currents (voltage drive only).
 
     Under voltage drive the current is the ANSWER, not the input: the
@@ -1527,7 +1448,9 @@ def _vdrive_copper_loss(p, geo, IA, IB, IC, n_parallel, coil_temp_c,
     reported window, through the SAME physical model (rho(T)*J^2*V_cu*k_end).
 
     IA/IB/IC are the PER-BRANCH conductor currents (see `_currents`), so the
-    phase rms is the branch rms times n_parallel.  Returns
+    phase rms is the branch rms times n_parallel.  ``copper_area_m2`` is the
+    MEASURED conductor section (see `copper_loss_W`) — the same one the current-
+    drive call used, so the two differ only in the current.  Returns
     (P_cu_W, k_end, R_phase_solved, I_phase_rms_solved).
     """
     _a = np.asarray(IA, float); _b = np.asarray(IB, float)
@@ -1536,7 +1459,8 @@ def _vdrive_copper_loss(p, geo, IA, IB, IC, n_parallel, coil_temp_c,
     _I_ph = _rms_branch * float(max(n_parallel, 1))
     _P, _k_end, _R = copper_loss_W(
         p, geo, _I_ph, n_parallel,
-        coil_temp_c=coil_temp_c, end_winding_factor=end_winding_factor)
+        coil_temp_c=coil_temp_c, end_winding_factor=end_winding_factor,
+        copper_area_m2=copper_area_m2)
     return float(_P), float(_k_end), float(_R), float(_I_ph)
 
 
@@ -1803,12 +1727,13 @@ def fem_transient_sliding_band(
     _bc_sign = -1 if (_poles_per_sector % 2 == 1) else 1
     n_parallel = wind.get("n_parallel", 2)
     n_wires = int(geo.get("num_wires_per_slot", 14))
-    # Physical copper loss: ρ_Cu(coil_temp)·J²·V_cu·k_end (end-winding the 2-D
-    # field never sees).  R_phase is derived from it so the R·I voltage drop is
-    # temperature-consistent — no hard-coded resistance.
-    P_cu, _k_end_used, R_phase = copper_loss_W(
-        p, geo, float(I_phase_rms), n_parallel,
-        coil_temp_c=coil_temp_c, end_winding_factor=end_winding_factor)
+    # Physical copper loss (ρ_Cu(coil_temp)·J²·V_cu·k_end, end-winding the 2-D
+    # field never sees) is computed a few dozen lines DOWN, right after the CAD
+    # polygons exist: the conductor section it divides by is MEASURED on those
+    # polygons, not taken from num_wires·wire_width·wire_height, which the CAD
+    # does not always deliver (clipped stacks, interpenetrating wires — see
+    # `coil_copper_area_total_m2`).  Nothing between here and there reads P_cu
+    # or R_phase.
     # Synchronous machine: rpm and f_elec are LOCKED (f = rpm·pp/60).  The
     # config can carry a stale pair (preset-apply wrote rpm but not frequency)
     # — and using the mismatched rpm in ω_mech scaled dB/dt (→ iron/magnet
@@ -1980,6 +1905,33 @@ def fem_transient_sliding_band(
     if geo_override:
         motor.set_parameters(geo_override)   # in-memory candidate geometry
     polys = motor.get_2d_polygons(rotor_angle_deg=float(rotor_angle0_deg))
+    # ── Physical copper loss, on the copper the CAD actually built ───────
+    # The conductor section comes from THESE polygons (the union — the mesher
+    # gives every triangle to exactly one wire), so P_cu_dc and the R_phase
+    # derived from it describe the same copper the winding source, R_2d and the
+    # AC loss run on.  The nominal num_wires·wire_width·wire_height is only the
+    # fallback: this CAD clips the stack to fit the slot on some machines
+    # (motor_40mm keeps 74.17 %) and lets the wires interpenetrate on others
+    # (the 37 mm 24s/28p: union 91.54 % of the sum), and the DC arithmetic used
+    # to be wrong by exactly that factor (gate (c),
+    # docs/SOLVER_TRIALS_2026-07-30.md).  R_phase stays derived from P_cu so the
+    # R·I voltage drop is temperature-consistent — no hard-coded resistance.
+    _cu_area_m2 = coil_copper_area_total_m2(polys)
+    P_cu, _k_end_used, R_phase = copper_loss_W(
+        p, geo, float(I_phase_rms), n_parallel,
+        coil_temp_c=coil_temp_c, end_winding_factor=end_winding_factor,
+        copper_area_m2=_cu_area_m2)
+    _cu_area_nom_m2 = (float(p.num_slots) * float(n_wires)
+                       * float(geo.get("wire_width", 0.0) or 0.0) * 1e-3
+                       * float(geo.get("wire_height", 0.0) or 0.0) * 1e-3)
+    if _cu_area_nom_m2 > 0 and _cu_area_m2 > 0 and abs(
+            _cu_area_m2 / _cu_area_nom_m2 - 1.0) > 1e-3:
+        log.warning("conductor section measured on the CAD polygons is %.2f %% "
+                    "of nominal (%.4f vs %.4f mm2) -> P_cu_dc / R_phase scale by "
+                    "%.4f; the machine that was BUILT has less copper than the "
+                    "parameters describe",
+                    100.0 * _cu_area_m2 / _cu_area_nom_m2, _cu_area_m2 * 1e6,
+                    _cu_area_nom_m2 * 1e6, _cu_area_nom_m2 / _cu_area_m2)
     # STRUCTURED (mapped) gap uses the MERGED band: the route-A cells own the
     # whole gap r_ro→mid→r_si with the SINGLE shared slip ring at mid_r (uniform
     # S·M grid).  The moving-band split (mid±δ, empty re-stitched strip) is
@@ -3588,7 +3540,7 @@ def fem_transient_sliding_band(
         _P_cu_old = float(P_cu)
         P_cu, _k_end_used, _R_solved, _I_ph_solved = _vdrive_copper_loss(
             p, geo, _IA, _IB, _IC, n_parallel, coil_temp_c,
-            end_winding_factor)
+            end_winding_factor, copper_area_m2=_cu_area_m2)
         log.info("P2 vdrive copper: I_phase_solved=%.2f A rms (config %.2f) "
                  "-> P_cuDC %.1f -> %.1f W (R_phase=%.6g ohm)",
                  _I_ph_solved, float(I_phase_rms), _P_cu_old, float(P_cu),

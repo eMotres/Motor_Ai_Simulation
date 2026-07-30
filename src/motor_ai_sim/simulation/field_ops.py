@@ -13,7 +13,9 @@ What lives here:
                   area-weighted nodal smoothing of the demagnetising field
   * materials   — mu_r from a B-H curve (scalar and vectorised), B at a given H,
                   the magnet demag-curve payload the UI plots
-  * windings    — end-winding factor from the geometry, copper loss with the
+  * windings    — end-winding factor from the geometry, the conductor section
+                  measured on the CAD polygons (ONE implementation, shared by
+                  the winding source and the DC loss), copper loss with the
                   temperature-corrected resistivity
 
 Re-exported from ``fem_solver_2d`` so existing imports keep working.
@@ -21,11 +23,11 @@ Re-exported from ``fem_solver_2d`` so existing imports keep working.
 from __future__ import annotations
 
 import math
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Mapping, Optional, Tuple
 
 import numpy as np
 
-from motor_ai_sim.simulation.sb_domains import DOM_MAG_BASE
+from motor_ai_sim.simulation.sb_domains import DOM_COIL_BASE, DOM_MAG_BASE
 
 # Vacuum permeability and the copper constants the winding helpers need.
 MU0 = 4e-7 * math.pi
@@ -360,18 +362,173 @@ def end_winding_factor_geom(p, geo_cfg) -> float:
     from motor_ai_sim.masses import end_winding_factor
     return end_winding_factor(p, geo_cfg)
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Conductor cross-section measured on the CAD polygons
+#
+# ONE implementation of "how much copper is there", shared by everything that
+# needs it: the winding SOURCE normalisation (fem_solver_2d.build_materials, via
+# ``coil_copper_areas``) and the DC copper LOSS below.  These used to live in
+# fem_solver_2d; they are here so ``copper_loss_W`` can use them without the
+# physics layer importing the solver.  fem_solver_2d re-exports them, so every
+# existing ``from ...fem_solver_2d import coil_copper_areas`` keeps working.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def coil_slot_index(cp, n_slot: int) -> Optional[int]:
+    """Which SLOT does this coil polygon belong to (by centroid angle)?
+
+    ONE definition, shared by the material build and by every consumer that has
+    to reproduce the same grouping (the imposed-current eddy constraints, the
+    J-view snapshot).  The cadquery layout places the copper of one slot on the
+    +x / −x side of the neighbouring teeth, so slot CENTRES sit at the half-pitch
+    offset; rounding to the slot pitch WITHOUT that offset collapses the two
+    halves of a concentrated coil onto the same slot index and forces them to
+    carry the same sign (that is the go/return pattern gone).
+    """
+    if cp is None or n_slot <= 0:
+        return None
+    try:
+        if cp.is_empty:
+            return None
+        cx, cy = cp.centroid.x, cp.centroid.y
+    except Exception:
+        return None
+    ang = math.degrees(math.atan2(cy, cx))
+    if ang < 0:
+        ang += 360.0
+    pitch = 360.0 / n_slot
+    return int((ang - pitch * 0.5) / pitch + 0.5) % n_slot
+
+
+def coil_copper_areas(
+    polys: dict,
+    n_slot: int,
+    coil_area_m2: Optional[Mapping[int, float]] = None,
+) -> Dict[int, Tuple[float, float]]:
+    """Per coil domain tag → (own copper area, copper area of its whole SLOT) [m²].
+
+    This is the quantity the winding source must be normalised by.  The source
+    is a current DENSITY applied over the copper the mesh actually carries, so
+    the ampere-turns the field is excited with are ∫J dA over that copper — not
+    over any nominal rectangle.  Dividing by the slot's real copper area makes
+
+        Σ_{tags of one slot} J·A  ==  direction · I_coil · n_wires
+
+    true BY CONSTRUCTION, for any way the CAD chooses to cut the copper up (this
+    geometry emits ONE POLYGON PER WIRE — 72 of them for 12 slots × 6 wires —
+    so a per-polygon normalisation would be wrong by n_wires).
+
+    ``coil_area_m2`` maps a coil domain tag to the area the MESH gives it; pass
+    it whenever the mesh exists, because that is the area the assembled source
+    is integrated over.  A tag missing from that map has no elements in this
+    mesh (sector clipping) and is left out of its slot's total — the copper that
+    IS meshed then carries the full n_wires·I.  Without the map the polygon area
+    is used, which for the rectangular wire sections is the same number.
+
+    Historically this whole quantity was `slot_width_m·slot_height_m·0.6`, where
+    the 0.6 was a MotorDomainParams dataclass default no config path ever set
+    and slot_width came from the wire pitch.  The ratio of the real copper to
+    that rectangle ran 0.909…1.265 across the machines this repo stores, i.e.
+    the solver silently excited every machine at k·N·I and T_maxwell/T_energy
+    was exactly k (docs/SOLVER_TRIALS_2026-07-30.md, F4+F5).
+    """
+    coil_list = polys.get("coils") or []
+    if not coil_list or n_slot <= 0:
+        return {}
+    own: Dict[int, float] = {}
+    slot_of: Dict[int, int] = {}
+    per_slot: Dict[int, float] = {}
+    for i, cp in enumerate(coil_list):
+        s = coil_slot_index(cp, n_slot)
+        if s is None:
+            continue
+        tag = DOM_COIL_BASE + i
+        if coil_area_m2 is not None:
+            a = float(coil_area_m2.get(tag, 0.0) or 0.0)
+            if a <= 0.0:
+                continue          # not in this mesh — contributes no source
+        else:
+            try:
+                a = float(cp.area) * 1e-6      # polygons are in mm → m²
+            except Exception:
+                continue
+            if a <= 0.0:
+                continue
+        own[tag] = a
+        slot_of[tag] = s
+        per_slot[s] = per_slot.get(s, 0.0) + a
+    return {tag: (a, per_slot[slot_of[tag]]) for tag, a in own.items()}
+
+
+def coil_copper_area_total_m2(polys: dict) -> float:
+    """ACTIVE copper cross-section [m²] of the WHOLE geometry — the UNION of the
+    conductor polygons handed to the mesher.
+
+    UNION, not the sum of the per-wire areas, because the two are not the same
+    number on every machine this repo stores, and where they differ the SUM is
+    the wrong one:
+
+      * the CAD clips / shrinks the wire rectangles so the stack fits the slot
+        (``motor_40mm`` keeps 74.17 % of num_wires·wire_width·wire_height,
+        ``m200_20kw_lowripple`` 74.76 %) — sum == union, both below nominal;
+      * the wire rectangles INTERPENETRATE (the 37 mm 24s/28p design: 96
+        overlapping pairs, 221.760 mm² of rectangles covering 203.005 mm² of
+        plane) — sum == nominal while the copper that EXISTS is the union.
+
+    The mesher gives every triangle to exactly one conductor, so the union is
+    the copper the field, R_2d and the AC loss run on (verified to 0.02 %
+    against the assembled stator mesh, commit 8e1f41b).  On a machine whose CAD
+    delivers the nominal section this returns exactly it, so nothing moves.
+
+    Returns 0.0 when there are no coil polygons (or shapely cannot union them,
+    in which case the caller falls back to the nominal rectangle).
+    """
+    coil_list = polys.get("coils") or []
+    if not coil_list:
+        return 0.0
+    try:
+        from shapely.ops import unary_union
+        a_mm2 = float(unary_union(list(coil_list)).area)
+    except Exception:
+        try:
+            a_mm2 = float(sum(float(c.area) for c in coil_list))
+        except Exception:
+            return 0.0
+    return a_mm2 * 1e-6 if a_mm2 > 0.0 else 0.0
+
+
 def copper_loss_W(p, geo_cfg, I_phase_rms, n_parallel,
-                  coil_temp_c=120.0, end_winding_factor=0.0):
+                  coil_temp_c=120.0, end_winding_factor=0.0,
+                  copper_area_m2: Optional[float] = None):
     """Physical 3-phase copper (stranded) loss = ρ_Cu(T)·J²·V_cu·k_end.
 
     ρ_Cu(T) rises with coil temperature; J is the conductor current density
     (branch current / strand area); V_cu is the ACTIVE in-slot copper volume;
     k_end scales it up for the end-turns the 2-D field never sees.  Returns
-    (P_cu_total_W, k_end_used, R_phase_eff_ohm)."""
+    (P_cu_total_W, k_end_used, R_phase_eff_ohm).
+
+    ``copper_area_m2`` is the copper cross-section of the whole machine, MEASURED
+    on the conductor polygons the mesher receives (``coil_copper_area_total_m2``).
+    Pass it whenever the polygons exist — it is the same copper the coupled solve
+    computes its own I²R from.  Without it the strand section falls back to the
+    NOMINAL rectangle ``wire_width·wire_height``, which the CAD does not always
+    deliver: it clips the stack to fit the slot (motor_40mm keeps 74.17 %,
+    m200_20kw_lowripple 74.76 %) or lays the wires down interpenetrating (the
+    37 mm 24s/28p design, union = 91.54 % of the sum).  P_cu_dc and the R_phase
+    derived from it then disagreed with the coupled solve by exactly that factor
+    — gate (c) of docs/SOLVER_TRIALS_2026-07-30.md.  On a machine whose CAD
+    delivers the nominal section the two paths give the identical number.
+
+    The conductor COUNT stays num_slots·num_wires_per_slot — the turns the
+    winding is excited with — so the measured area is shared out over the same
+    conductors the field sees, and P = N²·ρ·L·k_end·I_coil²/A_cu.
+    """
     mm = 1e-3
     n_wires = float(geo_cfg.get("num_wires_per_slot", 14))
     wire_area = (float(geo_cfg.get("wire_width", 5.0)) * mm
                  * float(geo_cfg.get("wire_height", 0.6)) * mm)
+    n_cond = float(p.num_slots) * n_wires        # conductors in the cross-section
+    if copper_area_m2 and float(copper_area_m2) > 0.0 and n_cond > 0.0:
+        wire_area = float(copper_area_m2) / n_cond    # MEASURED strand section
     n_par = max(float(n_parallel), 1.0)
     if wire_area <= 0 or I_phase_rms <= 0:
         return 0.0, 1.0, 0.0

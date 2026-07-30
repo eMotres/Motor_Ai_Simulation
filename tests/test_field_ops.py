@@ -14,6 +14,7 @@ import pytest
 from motor_ai_sim.simulation.field_ops import (
     ALPHA_CU, MU0, RHO_CU_20, _b_from_bh_at_H, _mu_r_from_bh,
     _mu_r_from_bh_vec, _snap_steps_to_nodes, band_limit_torque,
+    coil_copper_area_total_m2, copper_loss_W,
 )
 
 
@@ -104,6 +105,72 @@ class TestCopperConstants:
         rho120 = RHO_CU_20 * (1.0 + ALPHA_CU * (120.0 - 20.0))
         assert rho120 > rho20
         assert rho120 / rho20 == pytest.approx(1.393, rel=1e-3)
+
+
+class _P:
+    """The two MotorDomainParams fields the copper loss reads."""
+    num_slots = 2
+    stack_length = 0.010          # 10 mm
+
+
+class TestCopperSection:
+    """The DC copper runs on the copper the CAD BUILT, not on the nominal
+    rectangle — the two are different numbers on the machines this repo stores
+    (clipped stacks, interpenetrating wires)."""
+
+    # 1 mm x 1 mm conductors, 2 slots x 2 wires => 4 mm^2 nominal.
+    GEO = {"num_wires_per_slot": 2, "wire_width": 1.0, "wire_height": 1.0}
+
+    @staticmethod
+    def _rect(x0, y0, w=1.0, h=1.0):
+        from shapely.geometry import Polygon
+        return Polygon([(x0, y0), (x0 + w, y0), (x0 + w, y0 + h), (x0, y0 + h)])
+
+    def test_disjoint_conductors_measure_their_own_area(self):
+        polys = {"coils": [self._rect(3 * i, 0.0) for i in range(4)]}
+        assert coil_copper_area_total_m2(polys) == pytest.approx(4e-6, rel=1e-12)
+
+    def test_overlapping_conductors_are_counted_once(self):
+        """The wire rectangles of the 37 mm design interpenetrate: their areas
+        sum to the nominal while the copper that EXISTS is the union, and the
+        mesher gives the shared plane to exactly one of them."""
+        polys = {"coils": [self._rect(0.0, 0.0), self._rect(0.5, 0.0),
+                           self._rect(10.0, 0.0), self._rect(20.0, 0.0)]}
+        # sum = 4 mm^2, union = 3.5 mm^2
+        assert coil_copper_area_total_m2(polys) == pytest.approx(3.5e-6, rel=1e-12)
+
+    def test_no_coils_measures_nothing(self):
+        assert coil_copper_area_total_m2({"coils": []}) == 0.0
+
+    def test_loss_is_the_nominal_one_when_the_cad_delivers_it(self):
+        """A machine whose polygons ARE the nominal rectangles must not move —
+        that is the gate the 30 mm control run stands on."""
+        p = _P()
+        nominal = copper_loss_W(p, self.GEO, 10.0, 1, coil_temp_c=20.0,
+                                end_winding_factor=1.0)
+        measured = copper_loss_W(p, self.GEO, 10.0, 1, coil_temp_c=20.0,
+                                 end_winding_factor=1.0, copper_area_m2=4e-6)
+        assert measured[0] == pytest.approx(nominal[0], rel=1e-12)
+        assert measured[2] == pytest.approx(nominal[2], rel=1e-12)
+
+    def test_less_copper_costs_more_loss_by_exactly_the_area_ratio(self):
+        """P = N^2*rho*L*k_end*I_coil^2 / A_cu — halve the copper and the DC
+        loss (and the R_phase derived from it) double."""
+        p = _P()
+        nominal = copper_loss_W(p, self.GEO, 10.0, 1, coil_temp_c=20.0,
+                                end_winding_factor=1.0)
+        clipped = copper_loss_W(p, self.GEO, 10.0, 1, coil_temp_c=20.0,
+                                end_winding_factor=1.0, copper_area_m2=2e-6)
+        assert clipped[0] / nominal[0] == pytest.approx(2.0, rel=1e-12)
+        assert clipped[2] / nominal[2] == pytest.approx(2.0, rel=1e-12)
+
+    def test_three_i2r_reproduces_the_loss(self):
+        """R_phase is DERIVED from P, so the identity gate (c) checks must hold
+        for the measured section exactly as it did for the nominal one."""
+        p = _P()
+        P, _k, R = copper_loss_W(p, self.GEO, 12.5, 2, coil_temp_c=95.0,
+                                 end_winding_factor=1.2, copper_area_m2=2.9e-6)
+        assert 3.0 * 12.5 ** 2 * R == pytest.approx(P, rel=1e-12)
 
 
 class TestStepSnapping:

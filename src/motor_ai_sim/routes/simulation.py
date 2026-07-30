@@ -1218,11 +1218,32 @@ def _log_snap_key_miss(probe: "OrderedDict") -> None:
         log.warning("snapshot-key diff logging failed: %s", _e)
 
 
-# Fields that describe WHICH MACHINE was solved, as opposed to at what operating
-# point / mesh resolution.  The relaxed lookup below will cross an operating-point
-# difference and SAY so; it will never cross one of these, because a picture of a
-# different motor is not a near-miss, it is the wrong answer.
-_SNAP_MACHINE_FIELDS = ("cfg_fingerprint", "geo_ov", "mat_ov", "element_order")
+# Fields the relaxed lookup will NEVER cross, because the result would not be a
+# near-miss but a picture of a different object.  Geometry is the hard one: the
+# outline, the mesh and every element index change, so a snapshot of another
+# cross-section is simply the wrong motor on screen.
+#
+# `mat_ov` is deliberately NOT in here.  A different magnet is the SAME mesh with
+# different physics: the picture is of the user's motor, the levels belong to
+# another material, and that is a difference a label can carry honestly (it is
+# reported in `transient_param_diffs` like any other).  Refusing it would send the
+# view back to the analytic fallback, which is the failure this whole mechanism
+# exists to remove.  cfg_fingerprint covers the CONFIG-side material assignment
+# together with the geometry, so a config material swap is still a hard mismatch —
+# only a per-request `mat=` override is soft.
+_SNAP_MACHINE_FIELDS = ("geo_ov", "element_order")
+
+
+def _snap_geometry_fields(kf: dict) -> tuple:
+    """The part of cfg_fingerprint's job that must stay hard: same machine."""
+    return (kf.get("cfg_fingerprint"), kf.get("geo_ov"))
+
+
+def _abbrev(v):
+    """A key field short enough to print in a label — the material override is a
+    whole assignment dict and would otherwise be a paragraph."""
+    _t = repr(v)
+    return _t if len(_t) <= 60 else _t[:57] + "…"
 
 
 def _latest_run_snapshot(probe: "OrderedDict"):
@@ -1249,7 +1270,14 @@ def _latest_run_snapshot(probe: "OrderedDict"):
                 continue
             if any(_kf.get(_f) != probe.get(_f) for _f in _SNAP_MACHINE_FIELDS):
                 continue                      # a different motor — never serve it
-            _diffs = ["%s: run=%r view=%r" % (_n, _kf.get(_n), _p)
+            if _snap_geometry_fields(_kf) != _snap_geometry_fields(probe):
+                # cfg_fingerprint carries the geometry (raw + live) AND the
+                # config-side material assignment.  Either differing means the
+                # run was of a different machine: fall through to a solve rather
+                # than show one motor's field on another motor's outline.
+                continue
+            _diffs = ["%s: run=%r view=%r"
+                      % (_n, _abbrev(_kf.get(_n)), _abbrev(_p))
                       for _n, _p in zip(_names, _pv)
                       if _n not in _SNAP_MACHINE_FIELDS and _kf.get(_n) != _p]
             return _entry, _diffs

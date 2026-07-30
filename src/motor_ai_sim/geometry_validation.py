@@ -44,6 +44,12 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 TOL_MM = 1e-3            # 1 µm — shared-boundary tolerance
 AREA_TOL_MM2 = 1e-4      # 0.0001 mm² — below this nothing is worth reporting
 AREA_FLOOR_MM2 = 1e-3    # a solid part smaller than this is a degenerate sliver
+# Conductor cross-section is PHYSICS: R_dc, J, the I²R loss and the AC/proximity
+# loss all scale with it, and the winding source is normalised by the copper the
+# MESH carries.  A conductor polygon is only flagged as short of its nominal
+# rectangle when it misses by more than this — round-off and the ~1 µm seams the
+# coil corners share with the liner are not a copper defect.
+COPPER_TOL = 5e-3        # 0.5 % of the nominal conductor area
 
 _SEV_ERROR = "error"
 _SEV_WARNING = "warning"
@@ -289,6 +295,12 @@ _CAUSES: Dict[str, List[str]] = {
     "winding_does_not_fit": [
         "num_wires_per_slot", "wire_height", "wire_spacing_y", "slot_height",
         "insulation_thickness"],
+    "winding_clipped_by_slot": [
+        "wire_width", "wire_height", "slot_hs", "num_wires_per_slot",
+        "slot_height", "wire_spacing_y", "insulation_thickness"],
+    "winding_copper_double_counted": [
+        "wire_width", "wire_spacing_x", "tooth_width", "tooth2_width",
+        "num_slots_per_segment", "num_seg"],
     "rotor_crosses_air_gap": [
         "air_gap", "magnet_up_gap", "rotor_fill_r"],
     "stator_crosses_air_gap": [
@@ -472,6 +484,79 @@ def validate_polygons(polys: Dict[str, Any],
                         n_fit, n_req, n_req - n_fit),
             measured_mm=None, likely_params=_CAUSES["winding_does_not_fit"]))
 
+    # ── 1b. conductor cross-section actually delivered ───────────────────────
+    # ``winding_does_not_fit`` only catches a stack that would CROSS THE BORE —
+    # i.e. turns dropped whole.  Two other ways to lose copper leave the turn
+    # count intact and are invisible without measuring the area:
+    #
+    #   (a) the builder shrinks the section so the stack fits.  get_2d_polygons
+    #       clamps wire_height to (slot_height − 2·insulation)/num_wires −
+    #       wire_spacing_y, silently, with no report anywhere.  Measured:
+    #       motor_40mm keeps 74.2 % of wire_width·wire_height, m200_20kw_lowripple
+    #       74.8 % — every conductor, uniformly.
+    #   (b) the conductor polygons INTERPENETRATE.  Their areas then sum to the
+    #       nominal while the copper that exists is the UNION, which is less.
+    #       Measured: the 37 mm 24s/28p design draws 221.760 mm² of rectangles
+    #       covering 203.005 mm² of plane — 8.46 % of the nominal copper is the
+    #       same plane counted twice.  The mesher gives each triangle to exactly
+    #       one conductor, so the meshed copper is the union (verified to 0.02 %
+    #       against the assembled stator mesh), and the winding source, R_2d and
+    #       the AC loss all run on that — while copper_loss_W's DC arithmetic
+    #       still uses num_wires·wire_width·wire_height.  The two disagree by
+    #       exactly this factor.
+    #
+    # Both are WARNINGS: the cross-section is buildable and the solve is sound
+    # for the machine that was BUILT — it is just not the machine the parameters
+    # describe.  (b) always comes with the ``coil_overlaps_coil`` ERROR, which
+    # names the individual pairs; this one carries the single number the physics
+    # depends on, which a capped list of 6 out of 96 pairs cannot show.
+    checks.append("winding_copper_area")
+    coil_union = _u(coils)
+    _w_w = _num(p.get("wire_width"))
+    _w_h = _num(p.get("wire_height"))
+    if coils and _w_w and _w_h and _w_w > 0.0 and _w_h > 0.0:
+        a_nom_1 = _w_w * _w_h
+        a_nom = a_nom_1 * len(coils)
+        a_poly = sum(float(c.area) for c in coils)
+        a_real = float(coil_union.area) if coil_union is not None else a_poly
+        if a_nom > AREA_TOL_MM2 and a_poly < a_nom * (1.0 - COPPER_TOL):
+            worst = min(coils, key=lambda c: c.area)
+            q = worst.representative_point()
+            col.add(Violation(
+                code="winding_clipped_by_slot", severity=_SEV_WARNING,
+                part_a="The winding", part_b="the slot",
+                message="Winding clipped by slot: kept {:.1f}% of nominal "
+                        "conductor area. The {} conductor polygons handed to "
+                        "the mesher total {:.3f} mm², against a nominal "
+                        "wire_width × wire_height = {:.4f} mm² each "
+                        "({:.3f} mm² in all); the smallest keeps {:.1f}% near "
+                        "({:.2f}, {:.2f}) mm. Resistance, current density and "
+                        "copper loss taken from the nominal rectangle are then "
+                        "off by 1/{:.4f} = {:.3f}×."
+                        .format(100.0 * a_poly / a_nom, len(coils), a_poly,
+                                a_nom_1, a_nom,
+                                100.0 * float(worst.area) / a_nom_1,
+                                float(q.x), float(q.y),
+                                a_poly / a_nom, a_nom / a_poly),
+                overlap_area_mm2=a_nom - a_poly,
+                x_mm=float(q.x), y_mm=float(q.y),
+                likely_params=_CAUSES["winding_clipped_by_slot"]))
+        if a_poly > AREA_TOL_MM2 and a_real < a_poly * (1.0 - COPPER_TOL):
+            col.add(Violation(
+                code="winding_copper_double_counted", severity=_SEV_WARNING,
+                part_a="The winding", part_b="itself",
+                message="Conductors interpenetrate: only {:.1f}% of the "
+                        "{:.3f} mm² of conductor rectangles is distinct copper "
+                        "({:.3f} mm² of plane) — {:.3f} mm² is the same area "
+                        "counted twice. The mesh gives each element to one "
+                        "conductor, so the winding is meshed, excited and "
+                        "resisted as the {:.3f} mm² union, while the DC copper "
+                        "arithmetic uses the {:.3f} mm² sum."
+                        .format(100.0 * a_real / a_poly, a_poly, a_real,
+                                a_poly - a_real, a_real, a_poly),
+                overlap_area_mm2=a_poly - a_real,
+                likely_params=_CAUSES["winding_copper_double_counted"]))
+
     # ── 2. pairwise disjointness between solid domains ───────────────────────
     checks.append("solid_overlaps")
     mag_union = _u(magnets)
@@ -502,7 +587,6 @@ def validate_polygons(polys: Dict[str, Any],
     _pair("rotor_overlaps_stator", _ROTOR.capitalize(), rotor, _STATOR, stator,
           "The rotor and the stator interfere — the air gap is closed.")
 
-    coil_union = _u(coils)
     _pair("coil_overlaps_stator", "The winding", coil_union, _STATOR, stator,
           "Copper and stator lamination share space; the current density the "
           "solver applies there is applied to iron.")

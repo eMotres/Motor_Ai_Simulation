@@ -66,6 +66,24 @@ GEO_37MM_BAD = {
     "motor_length": 12,
 }
 
+# The `motor_40mm` preset.  Buildable and non-overlapping, but 8 conductors of
+# 0.6 mm cannot be stacked in a 5 mm slot at 0.13 mm spacing behind 0.2 mm of
+# liner, so get_2d_polygons quietly draws them 0.445 mm tall instead — the
+# winding it meshes carries 74.2 % of the section the parameters ask for.
+GEO_40MM_CLIPPED = {
+    "stator_diameter": 40, "slot_height": 5.0, "core_thickness": 2.0,
+    "num_seg": 2, "num_slots_per_segment": 6, "num_poles_per_segment": 7,
+    "air_gap": 0.25, "tooth_width": 3.0, "tooth2_width": 1.8, "cut_width": 1.0,
+    "insulation_thickness": 0.2, "wire_width": 2.5, "wire_height": 0.6,
+    "wire_spacing_x": 0.1, "wire_spacing_y": 0.13, "num_wires_per_slot": 8,
+    "wire_split": 1, "slot_hs": 0.267, "magnet_height": 5.0,
+    "rotor_house_height": 1.0, "shaft_height": 2.0, "magnet_fill_down": 0.9,
+    "magnet_fill_up": 0.8, "magnet_fill_radius": 1.0, "magnet_up_gap": 0.7,
+    "rotor_hole": 0.6, "magnet_down_height": 1.0, "magnet_lamination": 0,
+    "stator_fillet_r": 0.0, "stator_fillet_r1": 0.0, "rotor_fill_r": 0.2,
+    "motor_length": 12,
+}
+
 
 class TestValidGeometryPasses:
     def test_30mm_design_is_clean(self):
@@ -131,6 +149,71 @@ class TestOverlapsAreCaught:
         msg = next(v for v in res.errors
                    if v.code == "winding_does_not_fit").message
         assert "200" in msg  # says how many were asked for
+
+
+class TestConductorAreaIsMeasured:
+    """Copper section is physics: R_dc, J and the I²R / AC loss all scale with
+    it, and the winding source is normalised by the copper the MESH carries.
+    Two ways to lose it keep the turn count intact, so ``winding_does_not_fit``
+    stays silent and only an AREA measurement finds them."""
+
+    def _winding_codes(self, res) -> set:
+        return {v.code for v in res.violations if v.code.startswith("winding_")}
+
+    def test_shrunken_conductor_section_is_reported(self):
+        """``get_2d_polygons`` clamps wire_height to
+        (slot_height − 2·insulation)/num_wires − wire_spacing_y so the stack
+        fits, silently.  Here 0.6 mm is clamped to (5.0 − 0.4)/8 − 0.13 =
+        0.445 mm, i.e. every conductor keeps 74.2 % of its section."""
+        res = validate_geometry(GEO_40MM_CLIPPED)
+        assert "winding_clipped_by_slot" in _codes(res)
+        v = next(x for x in res.violations
+                 if x.code == "winding_clipped_by_slot")
+        # a WARNING: the cross-section is buildable, it is just not the one the
+        # parameters describe — it must not block a solve.
+        assert v.severity == "warning"
+        assert res.ok, res.summary()
+        assert v.code not in _error_codes(res)
+        # says the phrase, and the number
+        assert "winding clipped by slot" in v.message.lower()
+        assert "kept 74.2% of nominal conductor area" in v.message
+        # 0.445/0.6 — the exact clamp
+        assert v.overlap_area_mm2 == pytest.approx(144.0 - 106.8, rel=1e-3)
+        assert v.x_mm is not None and v.y_mm is not None
+        # points at the knobs that set the section and the space it must fit
+        for knob in ("wire_width", "wire_height", "slot_hs"):
+            assert knob in v.likely_params
+
+    def test_interpenetrating_conductors_report_the_double_count(self):
+        """The 37 mm design draws full rectangles that OVERLAP: their areas sum
+        to the nominal while the copper that exists is the union.  The mesher
+        gives each element to one conductor, so the solve runs on the union —
+        8.5 % less copper than the DC arithmetic assumes."""
+        res = validate_geometry(GEO_37MM_BAD)
+        assert "winding_copper_double_counted" in _codes(res)
+        v = next(x for x in res.violations
+                 if x.code == "winding_copper_double_counted")
+        assert v.severity == "warning"
+        # 221.760 mm² of rectangles over 203.005 mm² of plane
+        assert v.overlap_area_mm2 == pytest.approx(18.755, rel=2e-3)
+        assert "91.5%" in v.message
+        assert "wire_width" in v.likely_params
+        # the per-pair ERROR is still there — this one only adds the total
+        assert "coil_overlaps_coil" in _error_codes(res)
+        # …and the rectangles themselves are NOT clipped, so the other warning
+        # must stay quiet: the two defects are distinguishable.
+        assert "winding_clipped_by_slot" not in _codes(res)
+
+    def test_a_healthy_winding_says_nothing(self):
+        assert self._winding_codes(validate_geometry(GEO_30MM)) == set()
+
+    def test_check_is_skipped_without_a_nominal_section(self):
+        """No wire_width/wire_height in params → nothing to compare against.
+        The check must abstain, not guess."""
+        res = validate_polygons(TestSyntheticDefects._polys(),
+                                params=TestSyntheticDefects._PARAMS)
+        assert self._winding_codes(res) == set()
+        assert "winding_copper_area" in res.checks_run
 
 
 class TestSyntheticDefects:

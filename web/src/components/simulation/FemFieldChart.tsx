@@ -30,6 +30,7 @@ const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 // ── types ─────────────────────────────────────────────────────────────────
 import type { FemPayload } from './fem-types';
 import { tileFullRing } from './fem-types';
+import { useMotorStore } from '../../stores/motorStore';
 export type { FemPayload } from './fem-types';
 
 // ── ONE renderer for every view ───────────────────────────────────────────
@@ -397,6 +398,20 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
   const [coolOpen,  setCoolOpen]  = useState(false);   // cooling dropdown open
   const [coolHover, setCoolHover] = useState(false);   // cooling tooltip hover-intent
   const [showFlux, setShowFlux] = useState<boolean>(true);
+  // Signature of the machine this view is drawing.  The fetch interceptor sends
+  // exactly these numbers as `geo=` on every request, so when they change the
+  // picture on screen is of a different motor and has to be re-fetched.  Same
+  // construction TransientCharts uses to flag a stale run — one definition of
+  // "the geometry changed" for both panels.
+  const storeGeometry = useMotorStore(s => s.geometry);
+  const geoSig = useMemo(() => {
+    try {
+      return Object.entries(storeGeometry || {})
+        .filter(([, v]) => typeof v === 'number')
+        .sort(([a], [b]) => (a < b ? -1 : 1))
+        .map(([k, v]) => `${k}:${v}`).join('|');
+    } catch { return ''; }
+  }, [storeGeometry]);
   const isEddy = !payloadOverride && EDDY_MODES.has(mode);
   const isThermal = !payloadOverride && mode === 'Temp';
   const isLoss = !payloadOverride && mode === 'Loss';
@@ -488,7 +503,25 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
     }
     fetchFem();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gamma_deg, rotor_angle_deg, I_phase_rms, payloadOverride]);
+  }, [gamma_deg, rotor_angle_deg, I_phase_rms, payloadOverride, geoSig]);
+
+  // ── the picture depends on the GEOMETRY, so the geometry is a dependency ──
+  // `geoSig` above is in that list, and this is the whole fix for "I edited the
+  // geometry, saved it, re-ran, and every field view still shows the old
+  // motor".  The back end was innocent: its keys already discriminate (a
+  // config-side edit changes cfg_fingerprint, a per-request `geo=` is appended
+  // to the field cache key).  What went wrong was up here — this view only ever
+  // re-fetched on γ / rotor angle / current and on the `sim-design-applied`
+  // event, and the Geometry tab's save path (motorStore.updateGeometryViaApi)
+  // does not fire that event: only applying a design from Sweep / Compare does.
+  // So the store's geometry became the new machine, every request would have
+  // carried it — and no request was made.  The stale payload stayed on screen,
+  // and Re-run Simulation did not help either: `sim-transient-done` only drops
+  // the eddy/loss snapshots, so Loss then fell back to this same stale payload.
+  //
+  // Keying on the geometry itself rather than on an event covers EVERY way the
+  // machine can change — Geometry tab, Sweep apply, Compare apply, a preset,
+  // a catalog load — including the ones that do not exist yet.
 
   // Assigning a different magnet/steel changes the solve but NOT the URL, so this
   // view has no way to notice on its own — re-fetch on the same event a material
@@ -562,12 +595,16 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
     // spinner can tell the truth: "fetching" and "solving" are different waits,
     // and a single request that might do either has to guess which to claim.
     // With the coupled eddy off in the run there is nothing to find, so skip it.
+    const askJ = (relaxed: boolean) => fetch(
+      `${base}?${new URLSearchParams({
+          ...multiFrameParams(true, simSteps()), snapshot_only: 'true',
+          latest_run_field: relaxed ? 'true' : 'false',
+        }).toString()}`, { cache: 'no-store' })
+      .then(r => (r.ok ? r.json() : { no_snapshot: true }))
+      .catch(() => ({ no_snapshot: true }));
+    // Exact key, then the same-machine fallback (see the Loss probe below).
     const probe: Promise<FemPayload> = coupled
-      ? fetch(`${base}?${new URLSearchParams({
-            ...multiFrameParams(true, simSteps()), snapshot_only: 'true',
-          }).toString()}`, { cache: 'no-store' })
-          .then(r => (r.ok ? r.json() : { no_snapshot: true }))
-          .catch(() => ({ no_snapshot: true }))
+      ? askJ(false).then((d: any) => (d && d.no_snapshot) ? askJ(true) : d)
       : Promise.resolve({ no_snapshot: true } as FemPayload);
     probe.then((d: FemPayload) => {
       if (d && !d.no_snapshot && d.vertices) {         // the run's own field
@@ -600,12 +637,22 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
     if (payloadOverride) return;
     setLossProbing(true);
     const base = `${API}/api/simulation/physics/fem_field2d`;
-    const qs = new URLSearchParams({
-      ...multiFrameParams(simEddy(), simSteps()),
-      snapshot_only: 'true',
-    }).toString();
-    fetch(`${base}?${qs}`, { cache: 'no-store' })
-      .then(async r => (r.ok ? r.json() : { no_snapshot: true }))
+    const P = multiFrameParams(simEddy(), simSteps());
+    const ask = (relaxed: boolean) => fetch(
+      `${base}?${new URLSearchParams({
+        ...P, snapshot_only: 'true',
+        latest_run_field: relaxed ? 'true' : 'false',
+      }).toString()}`, { cache: 'no-store' })
+      .then(async r => (r.ok ? r.json() : { no_snapshot: true }));
+    // EXACT key first.  On a miss, ask for the last run of the SAME machine —
+    // the backend crosses an operating-point / mesh difference but never a
+    // geometry or material one, and it reports every difference in
+    // `source_label`, which the header prints.  Three separate one-field
+    // spelling mismatches have sent this view to its single-frame analytic
+    // fallback (whose magnet term is ZERO), so a labelled real map beats an
+    // unlabelled fake one.
+    ask(false)
+      .then((d: FemPayload) => (d && d.no_snapshot) ? ask(true) : d)
       .then((d: FemPayload) => {
         setLossSnap(d && d.no_snapshot ? null : tileFullRing(d));
         setLossProbing(false); setLossProbed(true);
@@ -618,7 +665,9 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
   useEffect(() => {
     setEddyPayload(null); setEddyErr(null);
     setLossSnap(null); setLossProbed(false);
-  }, [gamma_deg, I_phase_rms, mode]);   // Loss (fast) vs J⟳ (coupled) need different solves
+    // geoSig: a different machine invalidates these just as surely as a
+    // different operating point does — and the thermal solve is fed by them.
+  }, [gamma_deg, I_phase_rms, mode, geoSig]);   // Loss (fast) vs J⟳ (coupled) need different solves
 
   // A finished simulation run has just produced a field snapshot → drop what
   // these views are holding so the next look comes from the RUN, not from a
@@ -716,8 +765,14 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
               {payload
                 ? (subHeader
                      ? subHeader
-                     : `${payload.from_transient ? 'from last simulation run'
-                                                 : 'computed on demand'}`
+                     : `${payload.from_transient
+                            ? ('from last simulation run'
+                               // A relaxed match is the user's MOTOR but not the
+                               // panel's numbers.  That has to be visible, not
+                               // hover-only; the diff itself is in the tooltip.
+                               + ((payload as any).from_transient_relaxed
+                                    ? ' (≠ panel)' : ''))
+                            : 'computed on demand'}`
                        + `${(isEddy || isLoss) ? ` · @ ${eddyCurrent.toFixed(0)} A` : ''}`
                        + ' · ⓘ')
                 : (isEddy

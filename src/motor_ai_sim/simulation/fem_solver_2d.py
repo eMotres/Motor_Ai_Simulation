@@ -3537,7 +3537,8 @@ def fem_transient_sliding_band(
                          "elements, %d frames averaged)",
                          "+".join(_sol_groups) or "nothing",
                          int(_ed_elems.size), len(_ed_dens_hist))
-            _snap2["loss_dens"], _snap2["loss_dens_label"] = _loss_density_map(
+            (_snap2["loss_dens"], _snap2["loss_dens_label"],
+             _snap2["loss_dens_unmodelled"]) = _loss_density_map(
                 n_stator_elems=int(Tts.shape[1]),
                 n_elems=int(mesh_all.t.shape[1]),
                 hist_sx=_hsx2, hist_sy=_hsy2, hist_rx=_hrx2, hist_ry=_hry2,

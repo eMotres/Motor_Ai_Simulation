@@ -51,6 +51,11 @@ export interface FemPayload {
   // is a model normalised to the reported watts).  Printed verbatim under the
   // view: a smeared model and a solved field look different and ARE different.
   loss_density_label?:   string;
+  // Material classes NO loss model produced a value for ("magnets", "copper",
+  // "iron").  The Loss view leaves them BLANK rather than colouring them the
+  // bottom of the scale — on a loss map that is what air looks like, so an
+  // unmodelled magnet would read as "no loss in the magnets".
+  loss_density_unmodelled?: string[];
   // True when this payload came from the time-coupled eddy-current solve
   // (J⟳ / Loss views) rather than the fast magnetostatic snapshot.
   eddy?:                 boolean;

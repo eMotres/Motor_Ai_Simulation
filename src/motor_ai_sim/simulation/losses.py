@@ -199,11 +199,14 @@ def loss_density_map(
     solved_elems: Optional[dict] = None,
     P_cu_end_winding_W: float = 0.0,
     log_line: Optional[Callable[[str], None]] = None,
-) -> Tuple[np.ndarray, str]:
+) -> Tuple[np.ndarray, str, list]:
     """Per-element loss DENSITY (W/m³) for the Ansys-style spatial map.
 
-    Returns ``(density, label)`` — the label says, in the picture's own words,
-    which component came from where.
+    Returns ``(density, label, unmodelled)`` — the label says, in the picture's
+    own words, which component came from where, and ``unmodelled`` lists the
+    material classes no model produced a value for, so the view can leave them
+    BLANK instead of painting them the bottom of the scale (which on a loss map
+    is what air looks like, i.e. "no loss here").
 
     TWO sources, never mixed inside one component:
 
@@ -375,11 +378,34 @@ def loss_density_map(
                     100.0 * (_integ_glob(_cu_glob)
                              / max(P_cu_dc + P_cu_ac_avg, 1e-30) - 1.0)))
 
+    # ── components that are NOT IN THIS MAP ──────────────────────────────
+    # A component whose model produced nothing — the magnet term when the run
+    # had neither the coupled eddy solve nor the frequency-domain rotor solve,
+    # so P_mag_avg came through as 0 — used to be normalised to zero watts and
+    # painted at the bottom of the scale.  On a loss map the bottom of the scale
+    # is what AIR looks like, so "we did not model this" rendered as "there is
+    # no loss here", three times in a row, in the one component the user was
+    # looking for.  Naming it here lets the view grey the material out and say
+    # what is missing instead of quietly showing a zero.
+    _unmodelled = []
+    if np.size(mag_idx) and not float(np.sum(_dens[_mag_glob])) > 0.0:
+        _unmodelled.append("magnets")
+    if _cu_glob.size and not float(np.sum(_dens[_cu_glob])) > 0.0:
+        _unmodelled.append("copper")
+    if (np.size(iron_s_idx) or np.size(iron_r_idx)) and not (
+            P_fe_avg > 0 and _integ_fe > 1e-30):
+        _unmodelled.append("iron")
+    for _u in _unmodelled:
+        _parts.append("%s: NOT MODELLED in this run — nothing is drawn there"
+                      % _u)
+        _log("loss map | %-6s : NOT MODELLED (no loss model produced a value; "
+             "the map leaves it blank rather than showing zero)" % _u)
+
     _label = ("cycle-averaged loss density — " + "; ".join(_parts)) if _parts \
         else "loss density unavailable (no loss component could be built)"
     _log("loss map | TOTAL  : ∫ = %.4g W over the whole map"
          % _integ_glob(np.arange(int(n_elems))))
-    return _dens, _label
+    return _dens, _label, _unmodelled
 
 
 def rotor_eddy_tags(cells: dict, n_tri: int, dom_mag_base: int

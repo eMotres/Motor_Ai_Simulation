@@ -274,7 +274,7 @@ class TestLossDensityMap:
         mag_glob = n_st + mag_local
         solved = np.zeros(n_el)
         solved[mag_glob] = [10.0, 1000.0]       # a 100:1 corner peak
-        dens, label = loss_density_map(**self._kw(
+        dens, label, unmod = loss_density_map(**self._kw(
             n_st, n_el, mag_idx=mag_local,
             # a DIFFERENT reported number — the map must ignore it
             P_mag_avg=999.0,
@@ -292,7 +292,7 @@ class TestLossDensityMap:
         solved = np.zeros(n_el)
         solved[mag_glob] = [10.0, 1000.0]
         lines = []
-        dens, _ = loss_density_map(**self._kw(
+        dens, _, unmod = loss_density_map(**self._kw(
             n_st, n_el, mag_idx=mag_local, P_mag_avg=1.0,
             solved_dens=solved, solved_groups=("mag",),
             solved_elems={"mag": mag_glob}, log_line=lines.append))
@@ -308,7 +308,7 @@ class TestLossDensityMap:
         mag_local = np.array([0, 1])
         X, Y = _sine_history(16, 1.0, n_elem=2)
         X[:, 1] *= 3.0                       # element 1 sees 3x the dB/dt
-        dens, label = loss_density_map(**self._kw(
+        dens, label, unmod = loss_density_map(**self._kw(
             n_st, n_el, mag_idx=mag_local, hist_mx=X, hist_my=Y,
             P_mag_avg=2.0))
         integ = float(np.sum(dens[n_st + mag_local])) * 0.05 * 4.0
@@ -325,7 +325,7 @@ class TestLossDensityMap:
         coil = np.array([0, 1])
         solved = np.zeros(n_el)
         solved[coil] = [100.0, 300.0]
-        dens, label = loss_density_map(**self._kw(
+        dens, label, unmod = loss_density_map(**self._kw(
             n_st, n_el, coil_idx=coil, solved_dens=solved,
             solved_groups=("cu",), solved_elems={"cu": coil},
             P_cu_end_winding_W=0.4))
@@ -338,7 +338,7 @@ class TestLossDensityMap:
         from motor_ai_sim.simulation.losses import loss_density_map
         n_st, n_el = 2, 4
         coil = np.array([0, 1])
-        dens, label = loss_density_map(**self._kw(
+        dens, label, unmod = loss_density_map(**self._kw(
             n_st, n_el, coil_idx=coil, P_cu_dc=1.0))
         # uniform DC over V_cu = 0.4 m3
         assert dens[coil].tolist() == pytest.approx([2.5, 2.5])

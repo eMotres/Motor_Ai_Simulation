@@ -1095,6 +1095,21 @@ def _config_physics_fingerprint(*, with_request_materials: bool) -> str:
         _cfg = _gc() or {}
         _d = {"g": _cfg.get("geometry"), "w": _cfg.get("winding"),
               "m": _cfg.get("materials"), "mag": _cfg.get("magnet")}
+        # The LIVE geometry object as well as the raw `geometry:` block.  They
+        # are not the same thing: the YAML keeps whatever derived radii/pitches
+        # were last written to it and only num_poles/num_slots/angle_* get
+        # recomputed on save, so the block can sit internally inconsistent
+        # (measured: stator_outer_radius 20 beside stator_diameter 30, while the
+        # live object said 15) — and it is the LIVE object that every builder on
+        # this path actually reads (`_current_geom_hash_and_params`,
+        # `_geo_ov_for_key`, CadQueryMotor).  A key that fingerprints the raw
+        # block alone is tracking a document, not the machine.
+        try:
+            from motor_ai_sim.services.geometry_service import (
+                get_current_geometry as _gcg)
+            _d["glive"] = _gcg().to_dict()
+        except Exception:
+            _d["glive"] = None
         if with_request_materials:
             _d["req_mat"] = _grm()
         return _hl.md5(_jl.dumps(_d, sort_keys=True,
@@ -1203,9 +1218,51 @@ def _log_snap_key_miss(probe: "OrderedDict") -> None:
         log.warning("snapshot-key diff logging failed: %s", _e)
 
 
+# Fields that describe WHICH MACHINE was solved, as opposed to at what operating
+# point / mesh resolution.  The relaxed lookup below will cross an operating-point
+# difference and SAY so; it will never cross one of these, because a picture of a
+# different motor is not a near-miss, it is the wrong answer.
+_SNAP_MACHINE_FIELDS = ("cfg_fingerprint", "geo_ov", "mat_ov", "element_order")
+
+
+def _latest_run_snapshot(probe: "OrderedDict"):
+    """The most recent stored snapshot OF THE SAME MACHINE, plus what differs.
+
+    The exact key has ~27 fields and both sides have to spell all of them the
+    same way.  That has now failed three times in a row for the user — geometry,
+    materials, and whatever the next one would have been — and each time the
+    symptom was the same: "No matching simulation run" moments after a run that
+    matched, and a silent fall back to a single-frame analytic map.  The key is
+    still the primary lookup and still exact.  This is the honest fallback: same
+    machine, possibly a different operating point or mesh, and the caller is
+    handed the LIST of differences so the label can print them.
+
+    Returns ``(entry, diffs)`` or ``(None, [])``.
+    """
+    try:
+        _names = list(probe.keys())
+        _pv = list(probe.values())
+        for _key in reversed(list(_transient_field_snap.keys())):
+            _entry = _transient_field_snap[_key]
+            _kf = (_entry.get("meta") or {}).get("key_fields")
+            if not _kf:
+                continue
+            if any(_kf.get(_f) != probe.get(_f) for _f in _SNAP_MACHINE_FIELDS):
+                continue                      # a different motor — never serve it
+            _diffs = ["%s: run=%r view=%r" % (_n, _kf.get(_n), _p)
+                      for _n, _p in zip(_names, _pv)
+                      if _n not in _SNAP_MACHINE_FIELDS and _kf.get(_n) != _p]
+            return _entry, _diffs
+    except Exception as _e:
+        log.warning("relaxed snapshot lookup failed: %s", _e)
+    return None, []
+
+
 def _store_transient_field_snapshot(key: tuple, field: Dict, sbres: Dict,
                                     *, eddy: bool, n_steps_per_period: int,
-                                    n_periods: float, solve_time_s: float) -> None:
+                                    n_periods: float, solve_time_s: float,
+                                    key_fields: "Optional[OrderedDict]" = None
+                                    ) -> None:
     """Park the transient's last-frame field + the handful of machine scalars the
     field-view sidebar reads.  Only the scalars get copied — the full transient
     result stays where it is (the transient cache), so this store holds one
@@ -1227,6 +1284,12 @@ def _store_transient_field_snapshot(key: tuple, field: Dict, sbres: Dict,
                 "n_periods": float(n_periods),
                 "computed_at": sbres.get("computed_at"),
                 "solve_time_s": round(float(solve_time_s), 1),
+                # The run's OWN key, field by field.  Kept so a view that could
+                # not match the key exactly can still ask for "the last run's
+                # field, whatever it was solved at" and be TOLD what differs
+                # (see `latest_run_field`).  Without this the only honest answer
+                # to a near-miss was to throw the run away and re-solve.
+                "key_fields": (dict(key_fields) if key_fields else None),
             },
         }
         _transient_field_snap.move_to_end(key)
@@ -1289,6 +1352,20 @@ def get_fem_field2d(
                                           # to prefer the run's real cycle-averaged map and
                                           # fall back to its own single-frame estimate,
                                           # instead of silently starting a ~25 s solve.
+    latest_run_field:    bool  = True,    # RELAXED fallback: when the exact key misses,
+                                          # serve the most recent snapshot OF THE SAME
+                                          # MACHINE and report every field that differs in
+                                          # `source_label`.  ON by default — three separate
+                                          # one-field spelling mismatches have sent this
+                                          # view to a single-frame analytic map whose
+                                          # magnet term is ZERO, and the user hit it on
+                                          # every click.  A labelled real field beats an
+                                          # unlabelled fake one.  The exact key is still
+                                          # tried FIRST and still wins when it hits, and
+                                          # this NEVER crosses a machine boundary
+                                          # (geometry / materials / element order) — a
+                                          # different motor falls through to a solve.
+                                          # Pass false to demand an exact match.
 ):
     """Field view computed by the SLIDING-BAND TRANSIENT solver (P2) — the SAME
     solver that produces the transient torque/losses, so the field picture is
@@ -1338,6 +1415,12 @@ def get_fem_field2d(
         # are labelled differently, so they are different cache entries — asking
         # for a fresh solve must not replay a snapshot-sourced picture.
         int(bool(use_transient_snapshot)),
+        # Same reason, one step further: a caller that DEMANDS an exact key match
+        # and one that accepts the last run of this machine can get different
+        # payloads with different labels, so they cannot share an entry.  Caught
+        # by its own acceptance test — the exact-only probe was being handed the
+        # relaxed payload the previous call had just cached.
+        int(bool(latest_run_field)),
     )
     if _geo_ov:   # distinct cache entry per overridden geometry (no-geo key unchanged)
         key = key + (tuple(sorted(_geo_ov.items())),)
@@ -1420,6 +1503,7 @@ def get_fem_field2d(
     # A single-angle view (_sweep False) is NOT the same physics (rotor pinned,
     # no B(t) history) and never comes from here.
     _snap = None
+    _relaxed_diffs: list = []
     if _sweep and use_transient_snapshot:
         _probe_fields = _field_snap_key_fields(
             gamma_deg=gamma_deg, I_phase_rms=I_phase_rms,
@@ -1439,13 +1523,32 @@ def get_fem_field2d(
         _snap = _transient_field_snap.get(tuple(_probe_fields.values()))
         if _snap is None:
             _log_snap_key_miss(_probe_fields)
+        # RELAXED fallback, only when the caller asked for it: the last run of
+        # the SAME machine, with every difference reported.  This exists because
+        # the exact key has 27 fields that two independent request paths must
+        # spell identically, and the alternative to a near-miss was a silent
+        # fall back to a single-frame analytic map whose magnet term is zero.
+        if _snap is None and latest_run_field:
+            _snap, _relaxed_diffs = _latest_run_snapshot(_probe_fields)
+            if _snap is not None:
+                log.info("fem_field2d: exact key missed — serving the last run "
+                         "of the SAME machine (%d differing field(s): %s)",
+                         len(_relaxed_diffs), "; ".join(_relaxed_diffs) or "none")
 
     _t0 = _time.time()
     if _snap is not None:
         d = dict(_snap["scalars"])
         fld = _snap["field"]
-        _src = "transient-snapshot"
+        _src = ("transient-snapshot" if not _relaxed_diffs
+                else "transient-snapshot (relaxed match)")
         _meta = _snap["meta"]
+        _kf_run = (_meta.get("key_fields") or {})
+        _snap_desc = {
+            "I": ("%.4g A" % _kf_run["I_phase_rms"]
+                  if _kf_run.get("I_phase_rms") is not None else "? A"),
+            "gamma": ("gamma %.4g deg" % _kf_run["gamma_deg"]
+                      if _kf_run.get("gamma_deg") is not None else "gamma ?"),
+        }
         log.info("fem_field2d: served from the last simulation run's field "
                  "snapshot (%d steps/period, eddy=%s, computed %s) — no solve",
                  _meta.get("n_steps_per_period"), _meta.get("eddy"),
@@ -1532,10 +1635,17 @@ def get_fem_field2d(
     # current look different and ARE different; the label is how the user can
     # tell without reading the backend log.
     _loss_label = ""
+    # Material classes NO loss model produced a value for.  The view leaves them
+    # BLANK: on a loss map the bottom of the colour scale is what air looks like,
+    # so painting an unmodelled magnet there says "no loss in the magnets", which
+    # is not what "we did not model it" means.
+    _loss_unmodelled: list = []
     if _ld_solver.size == int(T.shape[1]):
         _loss_dens = _ld_solver
         _loss_label = str(fld.get("loss_dens_label") or
                           "cycle-averaged loss density from the transient")
+        _loss_unmodelled = [str(x) for x in (fld.get("loss_dens_unmodelled")
+                                             or [])]
     else:
         _loss_label = ("single-frame analytic estimate — Bertotti(|B|) iron, "
                        "slab-eddy magnets, ρ·J² copper (no B(t) history)")
@@ -1604,6 +1714,7 @@ def get_fem_field2d(
         "loss_density_per_tri": _loss_dens.tolist(),
         "loss_dens_max": float(_loss_dens.max()) if _loss_dens.size else 0.0,
         "loss_density_label": _loss_label,
+        "loss_density_unmodelled": _loss_unmodelled,
         "n_vertices": int(P.shape[1]), "n_triangles": int(T.shape[1]),
         "vertices": P.T.tolist(), "triangles": T.T.tolist(),
         "domain_per_tri": tags_vis.tolist(),
@@ -1627,13 +1738,24 @@ def get_fem_field2d(
         # so the payload says which one it is and the header prints it.
         "source": _src,
         "from_transient": bool(_snap is not None),
+        "from_transient_relaxed": bool(_relaxed_diffs),
+        "transient_param_diffs": list(_relaxed_diffs),
         "source_label": (
             (f"from last simulation run — its own last frame "
              f"({_meta.get('n_steps_per_period')} steps/period"
              + (", coupled eddy solve" if _meta.get("eddy") else "")
              + (f", solved in {_meta.get('solve_time_s')} s at "
                 f"{_meta.get('computed_at')}" if _meta.get("computed_at") else "")
-             + ")")
+             + ")"
+             # A relaxed match is the same MACHINE but not the same request, so
+             # the label states the run's OWN operating point and then every
+             # field that differs.  Naming both is the whole licence for serving
+             # it: the user has to be able to see, without opening a log, that
+             # this picture is of their motor but not of the panel's numbers.
+             + ((" — solved at %s, %s"
+                 % (_snap_desc.get("I"), _snap_desc.get("gamma"))
+                 + "; DIFFERS from this view: " + "; ".join(_relaxed_diffs))
+                if _relaxed_diffs else ""))
             if _snap is not None else
             (f"computed on demand — a {_nsteps}-step transient run for this view"
              if _sweep else "computed on demand — single-angle field")),
@@ -2130,8 +2252,18 @@ def clear_simulation_caches() -> None:
     Called whenever the motor GEOMETRY changes (PUT /api/geometry) so the
     Mesh tab and the Simulation field/transient re-derive everything from
     the new cross-section instead of serving stale, old-geometry results.
-    Keys on these caches intentionally omit the geometry parameters (the
-    geometry is treated as a global), so they must be flushed explicitly.
+
+    This is a belt, not the braces, and the docstring used to say otherwise
+    ("keys on these caches intentionally omit the geometry parameters … so they
+    must be flushed explicitly").  They do not omit it any more: the field and
+    transient keys both carry `_config_physics_fingerprint`, which hashes the
+    config geometry AND the live geometry object, and the field key appends any
+    per-request `geo=` override.  So a geometry change invalidates them even
+    when it arrives by a route that never calls this function — an optimizer
+    subprocess writing the YAML, a text editor, `git checkout`.  Verified on the
+    live stack: after a PUT the no-`geo=` field view returns a different outline
+    and element count.  Flushing here is still worth doing (it frees the memory
+    and makes the first request after a save cheap to reason about).
     """
     for _c in (_motor_geom_cache, _fem_mesh_cache, _fem_mesh_sb_cache,
                _fem_field_cache, _fem_transient_cache, _transient_field_snap):
@@ -2382,7 +2514,7 @@ def get_fem_transient(
     # Key of the field snapshot this run's last frame belongs under — built ONCE
     # here and used both to store it after the solve and to tell a cache hit
     # whether that snapshot is still in memory.
-    _fsnap_key = _field_snap_key(
+    _fsnap_fields = _field_snap_key_fields(
         gamma_deg=gamma_deg, I_phase_rms=I_phase_rms,
         mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm,
         outer_air_factor=outer_air_factor, n_sectors=n_sectors,
@@ -2404,6 +2536,7 @@ def get_fem_transient(
             with_request_materials=False),
         geo_ov=_geo_ov,
         mat_ov=_get_request_materials_safe())
+    _fsnap_key = tuple(_fsnap_fields.values())
 
     def _with_live_snapshot_flag(res: Dict) -> Dict:
         """A cached result was solved in some earlier request — possibly in an
@@ -2678,8 +2811,8 @@ def get_fem_transient(
             _fld_snap = None
         if _fld_snap is not None:
             _store_transient_field_snapshot(
-                _fsnap_key,
-                _fld_snap, _sbres, eddy=bool(eddy),
+                _fsnap_key, key_fields=_fsnap_fields,
+                field=_fld_snap, sbres=_sbres, eddy=bool(eddy),
                 n_steps_per_period=int(n_steps_per_period),
                 n_periods=float(n_periods),
                 solve_time_s=(_t.time()

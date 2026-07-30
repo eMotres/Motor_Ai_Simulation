@@ -289,9 +289,22 @@ function sourceFor(payload: FemPayload, mode: string, o: ViewOpts): Source | nul
 
   if (mode === 'Loss') {
     const ld = payload.loss_density_per_tri ?? [];
+    // Classes no model produced a value for are NOT DRAWN.  Painting them the
+    // bottom of the scale is indistinguishable from air, i.e. from "no loss
+    // here" — and the magnets are exactly the component that kept coming back
+    // unmodelled (a run without the coupled eddy solve leaves P_mag at 0) and
+    // exactly the one the user was looking at.
+    const unmod = new Set<number>();
+    for (const n of (payload.loss_density_unmodelled ?? [])) {
+      if (n === 'magnets') unmod.add(3);
+      else if (n === 'copper') unmod.add(4);
+      else if (n === 'iron') { unmod.add(1); unmod.add(2); }
+    }
+    const drawn = (_ti: number, d: number) =>
+      d !== DOM.OUTER && !unmod.has(classOf(d));
     const pos: number[] = [];
     for (let ti = 0; ti < nTri; ti++) {
-      if (dom[ti] === DOM.OUTER) continue;
+      if (!drawn(ti, dom[ti])) continue;
       const v = ti < ld.length ? ld[ti] : 0;
       if (v > 0) pos.push(v);
     }
@@ -317,7 +330,7 @@ function sourceFor(payload: FemPayload, mode: string, o: ViewOpts): Source | nul
       const rng = new Map<number, [number, number]>();
       const byCls = new Map<number, number[]>();
       for (let ti = 0; ti < nTri; ti++) {
-        if (dom[ti] === DOM.OUTER) continue;
+        if (!drawn(ti, dom[ti])) continue;
         const v = ti < ld.length ? ld[ti] : 0;
         if (v <= 0) continue;
         const c = classOf(dom[ti]);
@@ -358,7 +371,7 @@ function sourceFor(payload: FemPayload, mode: string, o: ViewOpts): Source | nul
             : v / hi;
           return 100 * Math.max(0, Math.min(1, t));
         },
-        include: interior,
+        include: drawn,
         // The bar can only be a fraction: there is no single W/m³ axis left.
         scale: linScale(0, 100, '% of each material’s own range', note, fmt0),
       };
@@ -369,7 +382,7 @@ function sourceFor(payload: FemPayload, mode: string, o: ViewOpts): Source | nul
       + ' · one shared scale across all materials';
     return {
       elem: (ti) => (ti < ld.length ? ld[ti] : 0),
-      include: interior,
+      include: drawn,
       scale: o.logLoss ? logScale(vmin, vmax, 'W/m³', note)
                        : linScale(0, vmax, 'W/m³', note, fmtSI),
     };

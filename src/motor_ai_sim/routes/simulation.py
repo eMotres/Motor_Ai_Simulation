@@ -27,24 +27,15 @@ log = logging.getLogger(__name__)
 
 def _parse_mat_override(mat: Optional[str]) -> Optional[dict]:
     """Parse a per-request `mat` JSON override -> {'assignment':{region:name},
-    'materials':{name:props}} or None if absent/malformed. Defensive: only the two
-    known keys, dict-typed; assignment values stringified."""
-    if not mat:
-        return None
-    import json
-    try:
-        ov = json.loads(mat)
-    except Exception:
-        return None
-    if not isinstance(ov, dict):
-        return None
-    out: dict = {}
-    a, m = ov.get("assignment"), ov.get("materials")
-    if isinstance(a, dict) and a:
-        out["assignment"] = {str(k): str(v) for k, v in a.items() if v}
-    if isinstance(m, dict) and m:
-        out["materials"] = {str(k): v for k, v in m.items() if isinstance(v, dict)}
-    return out or None
+    'materials':{name:props}}, or None when absent.
+
+    MALFORMED IS A 422, not None.  Returning None meant "no override", i.e. the
+    solve silently fell back to the shared config's materials and reported the
+    resulting torque/losses as the signed-in user's own — the same class of bug
+    as the `geo=` fallback below, one field over.  See routes/_validation.
+    """
+    from motor_ai_sim.routes._validation import parse_mat_override
+    return parse_mat_override(mat)
 
 
 async def _material_override_dep(mat: Optional[str] = Query(default=None)):
@@ -153,16 +144,17 @@ def _outlines_from_polys(pfo: dict) -> list:
 
 
 def _parse_geo_override(geo: Optional[str]) -> Optional[dict]:
-    """Parse a per-request `geo` JSON override into a geometry dict, or None if
-    absent/malformed (so callers fall back to the global config)."""
-    if not geo:
-        return None
-    import json
-    try:
-        ov = json.loads(geo)
-        return ov if (isinstance(ov, dict) and ov) else None
-    except Exception:
-        return None
+    """Parse a per-request `geo` JSON override into a geometry dict, or None when
+    absent.
+
+    A MALFORMED override is a 422 naming `geo` and quoting the parser.  It used
+    to return None, which meant every caller fell back to the SHARED GLOBAL
+    CONFIG: a client whose override was truncated, double-encoded or built from a
+    stale schema got somebody else's design solved, labelled with its own name,
+    with a 200 and no way to notice.  See routes/_validation.
+    """
+    from motor_ai_sim.routes._validation import parse_geo_override
+    return parse_geo_override(geo)
 
 
 def _current_geom_hash_and_params(geo: Optional[str] = None):
@@ -172,22 +164,20 @@ def _current_geom_hash_and_params(geo: Optional[str] = None):
     override (a JSON dict of geometry params) is supplied it is overlaid on top —
     step toward stateless, per-user endpoints (docs/MULTI_USER_PLAN.md): a
     signed-in client computes against ITS OWN design without mutating the shared
-    config. Absent/malformed ``geo`` → just the global config (back-compat).
+    config. Absent ``geo`` → just the global config (back-compat); a MALFORMED
+    one raises 422 through ``_parse_geo_override`` instead of quietly returning
+    the shared machine (that fallback is the bug, not the feature).
 
     Falls back to (None, None) if the geometry service is unavailable, in which
     case CadQueryMotor() reads config defaults.
     """
     import hashlib, json
+    ov = _parse_geo_override(geo)        # 422 on garbage — outside the catch-all
     try:
         from motor_ai_sim.services.geometry_service import get_current_geometry
         pd = get_current_geometry().to_dict()
-        if geo:
-            try:
-                ov = json.loads(geo)
-                if isinstance(ov, dict) and ov:
-                    pd = {**pd, **ov}
-            except Exception:
-                pass  # malformed → global config (back-compat)
+        if ov:
+            pd = {**pd, **ov}
         h = hashlib.md5(json.dumps(pd, sort_keys=True, default=str).encode()).hexdigest()[:12]
         return h, pd
     except Exception:

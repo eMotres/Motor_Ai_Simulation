@@ -242,12 +242,24 @@ export interface GeometryValidation {
   unavailable?: string;         // validator itself failed; nothing was checked
 }
 
-/** A PUT /api/geometry rejected with 422 — the value never reached the config. */
+/** A request rejected with 422 — nothing reached the config.
+ *
+ *  One shape for every rejection the routes raise (`detail.invalid_parameters`):
+ *  an unusable VALUE (`field` / `derived`), a key the server does not know
+ *  (`unknown_field`, carrying the nearest real name in `suggestion`), a value
+ *  outside the schema's own min/max (`out_of_range`), a malformed `geo=` / `mat=`
+ *  override, or a parameter that may not be created/deleted.  `message` is
+ *  always renderable on its own — it names the field and says what to do. */
 export interface GeometryParamError {
   field: string;
   value: unknown;
-  kind: 'field' | 'derived';
+  kind: 'field' | 'derived' | 'unknown_field' | 'out_of_range' | 'reserved'
+      | 'already_exists' | 'protected' | 'malformed_json' | 'not_a_number'
+      | 'not_finite' | 'bad_range' | 'bad_value' | 'bad_identifier'
+      | 'wrong_type' | 'empty';
   message: string;
   min?: number;
   max?: number;
+  /** `unknown_field`: the closest real parameter name, if there is one. */
+  suggestion?: string;
 }

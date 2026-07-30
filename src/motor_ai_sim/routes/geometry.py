@@ -1,4 +1,6 @@
+import math
 import os
+import re
 from pathlib import Path
 from typing import Any, Optional
 
@@ -7,6 +9,17 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict
 
 from motor_ai_sim.config import get_config, clear_config_cache, DEFAULT_CONFIG_PATH
+from motor_ai_sim.routes._validation import (
+    DERIVED_GEOMETRY_NAMES,
+    MAX_POINTCLOUD_POINTS,
+    SOLVER_REQUIRED_PARAMS,
+    check_schema_bounds,
+    check_unknown_geometry_keys,
+    known_geometry_keys,
+    param_error,
+    parse_geo_override,
+    reject,
+)
 from motor_ai_sim.services.geometry_service import (
     generate_synthetic_pointcloud,
     get_current_geometry,
@@ -33,6 +46,13 @@ class AddParameterRequest(BaseModel):
     step: float = 0.1
     default_value: float = 0.0
     description: str = ""
+    #: Opt-in for overwriting a parameter that already exists.  Absent (the
+    #: default) an existing name is a 422 — creating "wire_width" a second time
+    #: used to silently overwrite the real one's bounds and value.
+    update: bool = False
+
+
+_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
 @router.get("")
@@ -45,7 +65,26 @@ def get_geometry():
 
 @router.put("")
 def update_geometry(update: GeometryUpdateModel):
-    # ── Input guard: reject unusable VALUES before anything is written ───────
+    # ── Input guard 1: the NAME has to be a parameter this server knows ──────
+    # An unknown key was accepted twice over and applied zero times: the live
+    # geometry object got the attribute, the YAML writer (`if key in
+    # geometry_section`) dropped it, and the next restart silently reverted the
+    # "saved" edit.  A typo therefore looked like it worked, and the process and
+    # the file disagreed in between.  422 with the nearest real name.
+    _submitted_raw = {k: v for k, v in update.model_dump().items() if v is not None}
+    _unknown = check_unknown_geometry_keys(_submitted_raw)
+    if _unknown:
+        raise reject("unknown geometry field", _unknown)
+
+    # ── Input guard 2: the schema's OWN min/max, enforced server-side ────────
+    # The frontend clamps its sliders to these numbers (GET /api/geometry/schema
+    # serves them); anything that is not the frontend did not.  GEO_UNBOUNDED=1
+    # is the documented escape hatch and logs a warning while it is on.
+    _out_of_range = check_schema_bounds(_submitted_raw)
+    if _out_of_range:
+        raise reject("geometry parameter out of range", _out_of_range)
+
+    # ── Input guard 3: reject unusable VALUES before anything is written ─────
     # A zero / negative / non-finite dimension does not produce an interesting
     # cross-section, it produces a crash several layers down in the mesher (or,
     # worse, a mirrored polygon that meshes fine and solves to nonsense).  422
@@ -56,7 +95,7 @@ def update_geometry(update: GeometryUpdateModel):
     # knob was the last one typed.
     try:
         from motor_ai_sim.geometry_validation import validate_parameter_values
-        _submitted = {k: v for k, v in update.model_dump().items() if v is not None}
+        _submitted = _submitted_raw
         _merged = {**get_current_geometry().to_dict(), **_submitted}
         _bad = [r for r in validate_parameter_values(_merged)
                 if r.get("kind") == "derived" or r.get("field") in _submitted]
@@ -206,19 +245,89 @@ def get_geometry_validation(geo: Optional[str] = None):
     try:
         from motor_ai_sim.geometry_validation import validate_geometry
         return validate_geometry(_resolve_geo_dict(geo)).to_dict()
+    except HTTPException:
+        raise          # a 422 from `geo=` must not be laundered into a 500
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/parameter")
 def add_parameter(req: AddParameterRequest):
-    """Add a new parameter to motor_config.yaml and reload the schema."""
+    """Add a new parameter to motor_config.yaml and reload the schema.
+
+    Everything below the first ``try`` used to run unconditionally: ``min=10,
+    max=1`` produced a slider with no reachable value, ``name="num_slots"``
+    created a schema entry for a number the code DERIVES (silently overwritten
+    on the next reload, so the field did nothing), and re-adding an existing
+    name overwrote the real parameter's bounds and value with the defaults of
+    this request.  All three now 422 with the offending field named.
+    """
+    name = req.name.strip().lower().replace(" ", "_").replace("-", "_")
+    bad: list = []
+
+    # ── name ────────────────────────────────────────────────────────────────
+    if not name:
+        bad.append(param_error("name", req.name, "empty",
+                               "name must not be empty."))
+    elif not _NAME_RE.match(name):
+        bad.append(param_error(
+            "name", req.name, "bad_identifier",
+            f"'{name}' is not a usable parameter name: it must start with a "
+            f"letter and contain only lowercase letters, digits and "
+            f"underscores (it becomes a YAML key and a Python attribute)."))
+    elif name in DERIVED_GEOMETRY_NAMES:
+        bad.append(param_error(
+            "name", name, "reserved",
+            f"'{name}' is DERIVED by the geometry code (see "
+            f"MotorGeometryParams._compute_derived) — a parameter of that name "
+            f"is recomputed and overwritten on every reload, so it would never "
+            f"do anything. Reserved names: "
+            f"{', '.join(sorted(DERIVED_GEOMETRY_NAMES))}.",
+            reserved_names=sorted(DERIVED_GEOMETRY_NAMES)))
+    elif not req.update and name in known_geometry_keys():
+        bad.append(param_error(
+            "name", name, "already_exists",
+            f"'{name}' already exists — adding it again would overwrite the "
+            f"live parameter's bounds and value. Pass \"update\": true to "
+            f"change it deliberately."))
+
+    # ── type ────────────────────────────────────────────────────────────────
+    if req.type not in ("float", "int"):
+        bad.append(param_error("type", req.type, "bad_value",
+                               f"type must be 'float' or 'int', got "
+                               f"'{req.type}'."))
+
+    # ── range ───────────────────────────────────────────────────────────────
+    for _f, _v in (("min", req.min), ("max", req.max), ("step", req.step),
+                   ("default_value", req.default_value)):
+        if not math.isfinite(float(_v)):
+            bad.append(param_error(_f, _v, "not_finite",
+                                   f"{_f} must be a finite number, got {_v!r}."))
+    if math.isfinite(req.min) and math.isfinite(req.max) and req.min >= req.max:
+        bad.append(param_error(
+            "min", req.min, "bad_range",
+            f"min ({req.min:g}) must be strictly less than max ({req.max:g}) — "
+            f"otherwise the parameter has no value it is allowed to take.",
+            min=req.min, max=req.max))
+    if math.isfinite(req.step) and req.step <= 0:
+        bad.append(param_error("step", req.step, "bad_value",
+                               f"step must be > 0, got {req.step:g}."))
+    if (math.isfinite(req.default_value) and math.isfinite(req.min)
+            and math.isfinite(req.max) and req.min < req.max
+            and not (req.min <= req.default_value <= req.max)):
+        bad.append(param_error(
+            "default_value", req.default_value, "out_of_range",
+            f"default_value ({req.default_value:g}) is outside the range this "
+            f"same request declares [{req.min:g}, {req.max:g}].",
+            min=req.min, max=req.max))
+
+    if bad:
+        raise reject("invalid parameter definition", bad)
+
     try:
         config_path = Path(DEFAULT_CONFIG_PATH)
         with open(config_path, "r", encoding="utf-8") as f:
             config = yaml.safe_load(f)
-
-        name = req.name.strip().lower().replace(" ", "_").replace("-", "_")
 
         # Add to geometry section with default value
         value = int(req.default_value) if req.type == "int" else float(req.default_value)
@@ -261,7 +370,24 @@ def add_parameter(req: AddParameterRequest):
 
 @router.delete("/parameter/{name}")
 def delete_parameter(name: str):
-    """Remove a parameter from motor_config.yaml."""
+    """Remove a parameter from motor_config.yaml.
+
+    A parameter the solver reads is NOT deletable: the endpoint used to return
+    ``{"success": true}`` for ``DELETE /api/geometry/parameter/air_gap`` and the
+    next solve died with a KeyError three layers down in
+    ``params_from_config`` — with nothing to connect the crash to the delete.
+    """
+    if name in SOLVER_REQUIRED_PARAMS or name in DERIVED_GEOMETRY_NAMES:
+        _why = ("is DERIVED from other parameters and is recreated on every "
+                "reload" if (name in DERIVED_GEOMETRY_NAMES
+                             and name not in SOLVER_REQUIRED_PARAMS)
+                else "is required by the solver")
+        raise reject(f"'{name}' is required by the solver", [param_error(
+            name, None, "protected",
+            f"'{name}' {_why} — it cannot be deleted. Removing it would break "
+            f"the next mesh build and FEM solve (params_from_config reads it "
+            f"directly). Change its value instead.",
+            protected=True)])
     try:
         config_path = Path(DEFAULT_CONFIG_PATH)
         with open(config_path, "r", encoding="utf-8") as f:
@@ -372,18 +498,17 @@ def _resolve_geo_dict(geo: Optional[str]) -> dict:
 
     Step 1 of the multi-user migration (docs/MULTI_USER_PLAN.md): a signed-in
     client can compute the mesh for ITS OWN design by passing ``geo``, without
-    mutating the shared global config.  Absent or malformed ``geo`` falls back to
-    the global config, so existing callers are unaffected.
+    mutating the shared global config.
+
+    A MALFORMED ``geo`` is a 422, not a fallback.  It used to be
+    ``except Exception: pass``, which handed the client the shared global
+    config — someone else's design — rendered as its own mesh, with a 200 and no
+    way to tell.  Absent ``geo`` still means "the global config", as before.
     """
-    import json
     params_dict = get_current_geometry().to_dict()
-    if geo:
-        try:
-            override = json.loads(geo)
-            if isinstance(override, dict) and override:
-                params_dict = {**params_dict, **override}
-        except Exception:
-            pass  # malformed → use the global config (back-compat)
+    override = parse_geo_override(geo)
+    if override:
+        params_dict = {**params_dict, **override}
     return params_dict
 
 
@@ -439,6 +564,8 @@ def get_geometry_mesh(geo: Optional[str] = None):
         _mesh_cache["data"] = data
         _mesh_cache["build_time_s"] = round(build_time, 3)
         return data
+    except HTTPException:
+        raise          # a 422 from `geo=` must not be laundered into a 500
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -465,6 +592,8 @@ def get_geometry_mesh2d(geo: Optional[str] = None):
         _mesh2d_cache["data"] = data
         _mesh2d_cache["build_time_s"] = round(build_time, 3)
         return data
+    except HTTPException:
+        raise          # a 422 from `geo=` must not be laundered into a 500
     except Exception as e:
         import traceback
         raise HTTPException(status_code=500, detail=f"{e}\n{traceback.format_exc()}")
@@ -508,6 +637,8 @@ def get_geometry_mesh_extruded(depth: Optional[float] = None, geo: Optional[str]
         _mesh_extruded_cache["data"] = data
         _mesh_extruded_cache["build_time_s"] = build_time
         return data
+    except HTTPException:
+        raise          # a 422 from `geo=` must not be laundered into a 500
     except Exception as e:
         import traceback
         raise HTTPException(status_code=500, detail=f"{e}\n{traceback.format_exc()}")
@@ -515,6 +646,21 @@ def get_geometry_mesh_extruded(depth: Optional[float] = None, geo: Optional[str]
 
 @router.get("/pointcloud")
 def get_geometry_pointcloud(n_points: int = 20000):
+    # ``n_points`` sizes five numpy allocations and the JSON body directly.  It
+    # was passed through unchecked: n_points=0 returned five empty regions with a
+    # 200 (an empty viewer nobody could explain), a negative value made
+    # np.random.uniform raise a 500, and n_points=1e9 asked the server for ~24 GB
+    # and a multi-GB response — one URL, one process gone.  Bounded and named.
+    if n_points < 1 or n_points > MAX_POINTCLOUD_POINTS:
+        raise reject(
+            "n_points out of range",
+            [param_error(
+                "n_points", n_points, "out_of_range",
+                f"n_points must be between 1 and {MAX_POINTCLOUD_POINTS:,} "
+                f"(got {n_points:,}). Above that the point cloud is larger "
+                f"than any viewer can draw and the response would not fit in "
+                f"memory.",
+                min=1, max=MAX_POINTCLOUD_POINTS)])
     try:
         params = get_current_geometry(reload=True)
 

@@ -281,3 +281,39 @@ class TestNoSideEffects:
         _plan(3.0)
         client.post("/api/optimization/auto/plan", json={"max_ripple_pct": -1})
         assert hashlib.sha256(p.read_bytes()).hexdigest() == before
+
+
+class TestAutoStatusEndpoint:
+    """/auto/status is the name anyone probing this API reaches for first."""
+
+    def test_status_serves_the_finished_run(self):
+        r = client.get("/api/optimization/auto/status")
+        # 404 only when this server has never run an auto optimization; the
+        # message must then say where progress DOES live, not just "Not Found".
+        if r.status_code == 404:
+            assert "descent/progress" in r.json()["detail"]
+            return
+        assert r.status_code == 200, r.text
+        b = r.json()
+        assert b["objective"] == "baseline_line"
+        assert b["progress_channel"] == "/api/optimization/descent/progress"
+
+    def test_status_states_the_verdict_instead_of_leaving_it_to_the_reader(self):
+        r = client.get("/api/optimization/auto/status")
+        if r.status_code == 404:
+            return
+        b = r.json()
+        if b.get("F") is None:
+            return
+        # F is the signed perpendicular distance above the current-only line.
+        # A run that did NOT beat simply raising the current must say so.
+        assert b["above_baseline_line"] is (b["F"] > 0)
+        assert isinstance(b["verdict"], str) and b["verdict"]
+        if b["F"] <= 0:
+            assert "does NOT beat" in b["verdict"]
+
+    def test_the_shared_progress_channel_still_serves(self):
+        # The auto run deliberately reports on the optimizer's existing channel
+        # so every chart and the Apply path keep working; if that 404s, the UI
+        # goes blind mid-run.
+        assert client.get("/api/optimization/descent/progress").status_code == 200

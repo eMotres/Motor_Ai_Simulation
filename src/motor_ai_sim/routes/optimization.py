@@ -3187,6 +3187,13 @@ def _auto_compare_point(bucket: str, name: str, plan: Dict[str, Any],
         "src_ripple_lambda": plan["ripple_penalty_lambda"],
         "src_n_evals": result.get("n_evals"),
         "src_rejected": (result.get("rejects") or {}).get("rejected"),
+        # The objective's own verdict on this row, stored WITH it: F is the
+        # signed perpendicular distance above the current-only baseline line, so
+        # F < 0 means this design does not beat simply raising the current.  A
+        # stored point that outlives the session must carry that judgement, or
+        # it will later be read as "the optimizer's answer" with no sign attached.
+        "src_F_above_baseline": result.get("best", {}).get("F"),
+        "src_beats_current_only": bool((result.get("best", {}).get("F") or 0) > 0),
         "src_variables": ",".join(v["name"] for v in plan["variables"]),
         "src_baseline_T_em_Nm": b.get("T_em_Nm"),
         "src_baseline_ripple_pct": b.get("T_ripple_pct"),
@@ -3284,6 +3291,60 @@ def auto_start(req: AutoOptRequest, request: Request):
     threading.Thread(target=_auto_worker, args=(plan, req.run_id, bucket, name),
                      daemon=True).start()
     return {"started": True, "run_id": req.run_id, "plan": plan, "point_name": name}
+
+
+@router.get("/auto/status")
+def auto_status():
+    """The auto run's state.
+
+    An auto run reports on the SHARED optimizer channel (/descent/progress) so
+    that every existing chart, the Apply path and the eval-param restore keep
+    working unchanged — but /auto/plan and /auto exist, so /auto/status is the
+    name anyone probing this API will reach for first, and a bare 404 there
+    reads as "the run vanished".  Same state, plus the one judgement a caller
+    should not have to derive: `above_baseline_line`.
+
+    F is the signed perpendicular distance above the current-only baseline line.
+    F < 0 means the winner does NOT beat simply raising the current — the
+    constraint cost more than the objective bought.  That is a legitimate answer
+    to "hold ripple under X", and it must be stated, not left as a number the
+    reader is expected to interpret."""
+    with _descent_lock:
+        if not _descent_state.get("running"):
+            _refresh_descent_state_from_disk()
+        st = _json_sane(dict(_descent_state))
+    auto = st.get("auto") or {}
+    if not auto.get("objective"):
+        raise HTTPException(status_code=404, detail=(
+            "no auto-optimization has been run on this server yet — POST "
+            "/api/optimization/auto to start one, or GET "
+            "/api/optimization/descent/progress for a manual optimizer run"))
+    F = ((st.get("best") or {}).get("F")
+         if st.get("best") else ((st.get("result") or {}).get("best") or {}).get("F"))
+    verdict = None
+    if isinstance(F, (int, float)):
+        verdict = (
+            "beats the current-only trade-off (above the baseline line)" if F > 0 else
+            "does NOT beat simply raising the current: the design sits BELOW the "
+            "current-only baseline line, so the ripple gate cost more than the "
+            "objective bought")
+    return {
+        "running": st.get("running"), "phase": st.get("phase"),
+        "iter": st.get("iter"), "generations": auto.get("generations"),
+        "n_evals": st.get("n_evals"), "budget_evals": auto.get("budget_evals"),
+        "max_ripple_pct": auto.get("max_ripple_pct"),
+        "objective": auto.get("objective"),
+        "operating_point": auto.get("operating_point"),
+        "cost": auto.get("cost"), "rejects": auto.get("rejects"),
+        "point_name": auto.get("point_name"),
+        "compare_point": auto.get("compare_point"),
+        "baseline": st.get("baseline"),
+        "best": st.get("best"), "F": F,
+        "above_baseline_line": (None if F is None else bool(F > 0)),
+        "verdict": verdict,
+        "error": st.get("error"),
+        "progress_channel": "/api/optimization/descent/progress",
+    }
 
 
 class AutoPointRequest(BaseModel):

@@ -200,8 +200,13 @@ const MotorsCatalog: React.FC = () => {
               </span>
             </Tooltip>
           )}
-          {isAdmin && (
-            <Tooltip title="Delete from catalog (admin)">
+          {/* Same ownership rule as rename: your own motors are yours to
+              delete; factory/catalog motors stay admin-only. The old
+              admin-only gate hid the button entirely for a signed-out user —
+              "I can't delete my motor" with nothing on screen saying why. */}
+          {(isAdmin || m.owner === 'user') && (
+            <Tooltip title={isAdmin ? 'Delete from catalog (admin)'
+                                    : 'Delete this motor (yours)'}>
               <span>
                 <IconButton size="small" disabled={!!busy} onClick={() => deleteMotor(m)}
                   sx={{ color: '#f87171', border: '1px solid #7f1d1d', borderRadius: 1,

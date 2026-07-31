@@ -126,16 +126,29 @@ _PIC_TOL = 1e-3
 # instead of peaking at a small-+ MTPA.
 # Calibrated 2026-06-16 for the 20p/24s topology via a no-load (I=0) run:
 # psi_A(θ) peaks at θ*=34.2° mech (342° el) ⇒ DAXIS = (90 − 342) ≡ 108° (mod 360).
-# Now γ=0 = q-axis and MTPA sits at a small + γ (~+20° for this motor).
+# ...AND THAT CALIBRATION WAS ITSELF WRONG.  Re-measured 2026-07-31 on a solve
+# that CONVERGED (ciano20_150_35, 24s/20p, structured gap, 24/24 frames, worst
+# residual 8.9e-08): θ* = 32.999° mech, i.e. 33.0 = pole pitch 18° + slot pitch
+# 15° exactly ⇒ DAXIS = 120.000°, not 108°.  The 1.2° error in θ* is 12° of
+# electrical angle, so the constant below was ~12° off even for the ONE topology
+# it was ever meant for.  Same root cause as the auto-calibration bug fixed in
+# `_resolve_daxis_shift`: a no-load solve that had not converged.
 # RECALIBRATE only if the pole/slot/winding TOPOLOGY changes (dimension sweeps
 # don't move it): run fem_transient_sliding_band(I_phase_rms=0); θ* = rotor angle
-# of max psi_A_Wb; DAXIS_SHIFT_DEG = (90 − θ*·pole_pairs) mod 360.
-DAXIS_SHIFT_DEG = 108.0   # LEGACY CONSTANT for the 20p/24s topology ONLY.  The
-                          # transient AUTO-calibrates per topology
+# of max psi_A_Wb; DAXIS_SHIFT_DEG = (90 − θ*·pole_pairs) mod 360.  Converged
+# values measured 2026-07-31, each on its own cross-section:
+#     12s/14p  θ* = 30/7  mech ⇒ DAXIS =  60.000°   (three cross-sections,
+#                                          59.9996 / 60.0107 / 60.0145)
+#     24s/28p  θ* = 30/14 mech ⇒ DAXIS =  60.000°   (59.9468 / 59.9319)
+#     24s/20p  θ* = 33    mech ⇒ DAXIS = 120.000°   (120.0096)
+DAXIS_SHIFT_DEG = 108.0   # LEGACY CONSTANT, and wrong for EVERY topology
+                          # including 20p/24s (see above: that one is 120°).  The
+                          # transient AUTO-calibrates per machine
                           # (_resolve_daxis_shift) and RAISES if that fails — this
-                          # value is NOT a fallback for other machines: it is ~48°
-                          # wrong for 12s14p, and silently answering with it puts
-                          # the whole run at a load angle the user never asked for.
+                          # value is NOT a fallback: it is ~48° wrong for 12s14p
+                          # and 24s28p and ~12° wrong for 24s20p, and silently
+                          # answering with it puts the whole run at a load angle
+                          # the user never asked for.
                           # Still read by the legacy static field path below.
 
 # ── Per-motor d-axis auto-calibration ────────────────────────────────────────
@@ -160,21 +173,63 @@ def _daxis_disk_path():
     except Exception:
         return None
 
-def _daxis_topology_key(p, geo, wind) -> tuple:
+def _daxis_geo_fingerprint(geo) -> str:
+    """md5 of the MERGED geometry this solve actually builds on.
+
+    The same question `routes.simulation._geometry_fingerprint` answers ("is
+    this still the same MOTOR?"), asked of the dict in hand rather than of the
+    shared config: by the time the calibration runs, `geo` has already been
+    through `merge_geo_override`, so it IS the machine — including a per-request
+    `geo=` override that the process-global config knows nothing about.  A
+    fingerprint taken off the live config would collapse every candidate of a
+    sweep onto whatever the config happened to hold.
+    """
+    try:
+        import hashlib as _hl, json as _jl
+        return _hl.md5(_jl.dumps(dict(geo or {}), sort_keys=True,
+                                 default=str).encode()).hexdigest()[:16]
+    except Exception:
+        return "nofp"
+
+
+def _daxis_topology_key(p, geo, wind, geo_fp=None) -> tuple:
+    """Cache key for the calibrated d-axis: topology AND cross-section.
+
+    The topology tuple alone (poles/slots/layers/connection) was the key until
+    it was caught sharing ONE entry between two different 12s14p cross-sections
+    — a value measured on one machine was then handed to the other, and γ=0
+    landed off that machine's q-axis with nothing on screen to say so.  θ* is
+    ARGUED to be a symmetry property (invariant to dimensions), and the measured
+    12s14p angles do sit on 60.0° across three cross-sections — but an argument
+    is not a licence for a cache to answer for a machine it never measured, so
+    the geometry fingerprint is part of the key and a new cross-section
+    re-calibrates.
+    """
     return (int(getattr(p, "num_poles", 0) or 0),
             int((geo or {}).get("num_slots") or 0),
             int((wind or {}).get("layers", 1) or 1),
-            str((wind or {}).get("connection", "")))
+            str((wind or {}).get("connection", "")),
+            str(geo_fp or _daxis_geo_fingerprint(geo)))
 
 def _resolve_daxis_shift(p, geo, wind, pole_pairs, geo_override, n_sectors) -> float:
-    """DAXIS (elec deg) that makes γ=0 the true q-axis for THIS motor topology.
-    Computed from a cheap no-load (I=0) run — ψ_A(θ) peaks at the d-axis, so
-    DAXIS = (90 − θ*·pole_pairs) mod 360.  Cached per topology; recursion-guarded
-    (the I=0 calibration run has no current, so DAXIS is irrelevant inside it)."""
+    """DAXIS (elec deg) that makes γ=0 the true q-axis for THIS machine.
+
+    Computed from a no-load (I=0) run — ψ_A(θ) peaks at the d-axis, so
+    DAXIS = (90 − θ*·pole_pairs) mod 360.  Recursion-guarded (the I=0
+    calibration run has no current, so DAXIS is irrelevant inside it).
+
+    Two things this used to get wrong, both of which put γ on the wrong axis
+    with nothing on screen to say so, and both fixed here:
+      * it accepted the ANSWER OF AN UNCONVERGED SOLVE (see the gate below);
+      * it cached that answer under a key that named only the TOPOLOGY, so one
+        cross-section's angle was served to a different machine with the same
+        pole/slot/layer/connection counts (see `_daxis_topology_key`).
+    """
     global _DAXIS_CALIBRATING
     if _DAXIS_CALIBRATING:
         return DAXIS_SHIFT_DEG
-    key = _daxis_topology_key(p, geo, wind)
+    _geo_fp = _daxis_geo_fingerprint(geo)
+    key = _daxis_topology_key(p, geo, wind, _geo_fp)
     if key in _DAXIS_CACHE:
         return _DAXIS_CACHE[key]
     skey = "_".join(str(x) for x in key)
@@ -194,25 +249,70 @@ def _resolve_daxis_shift(p, geo, wind, pole_pairs, geo_override, n_sectors) -> f
     _cal_err = None
     try:
         _DAXIS_CALIBRATING = True
-        # Cheapest possible calibration: θ* (the ψ_A peak angle) is a bulk
-        # geometric quantity → a COARSE mesh + the smallest natural symmetry
-        # sector localise it fine, and keep the extra geometry build well
-        # inside the sweep's per-design budget.  The mesh stays coarse; only
-        # the basis moved to P2 with the rest of the solver.
+        # THE CALIBRATION SOLVE MUST CONVERGE.  It used to be run on the
+        # cheapest mesh that would build — 2.5 mm elements, min 0.7 mm, ONE
+        # layer across a 0.2 mm air gap, unstructured band — on the argument
+        # that θ* is "a bulk geometric quantity".  Measured on the user's 40 mm
+        # 12s14p (scratch cal_probe.py, variant A_current): Newton's line search
+        # collapsed on ALL 24 frames, the damped-Picard fallback then hit its
+        # 100-sweep cap on 19 of them, worst ν residual 2.8e-1 against a 1e-3
+        # tolerance — and the θ* read off that garbage field gave DAXIS 47.45°
+        # instead of 60.00°, i.e. γ=0 sat 12.7° off the q-axis on every solve
+        # that inherited the cached value.  The sliver elements a 2.5 mm mesh
+        # leaves across a 0.2 mm gap are what break the Newton tangent; the fix
+        # is a mesh the solve can actually converge on, not a looser gate.
+        #
+        # These are the solver_trials protocol's mesh settings (the ones 15
+        # machines were re-baselined on, all with gate a_nonlinear_converged
+        # true): structured gap + iron template + geo mesh, the 1.4 mm·D/150
+        # rule clamped to [0.5, 2.0], 2 layers per half-gap.  Same case,
+        # variant P_ship: Newton converged on every frame, ZERO fallbacks,
+        # worst residual ~1e-7 — and it is FASTER than the coarse run it
+        # replaces (129 s vs 342 s), because 19 Newton iterations cost less
+        # than 100 stalled Picard sweeps.
+        #
+        # These settings are deliberately FIXED rather than inherited from the
+        # caller: the cache key names the machine, not the mesh, so a value
+        # computed under one caller's mesh must not be handed to another's.
+        # `connection` is likewise NOT forwarded even though it is in the key:
+        # it only sets n_parallel, which scales ψ_A by a constant and cannot
+        # move the ANGLE of its peak.  Measured, on the pre-fix cache: the same
+        # 12s14p came out 60.0219 at 2S and 60.0168 at 2P — mesh noise, not a
+        # winding effect.  It stays in the key because the key is a promise
+        # about the machine, not because θ* depends on it.
         import math as _mth
         _cal_ns = _mth.gcd(int((geo or {}).get("num_slots") or 1),
                            int(getattr(p, "num_poles", 1) or 1)) or 1
+        _cal_D = float((geo or {}).get("stator_diameter") or 0.0) or 40.0
+        _cal_mesh = round(min(2.0, max(0.5, 1.4 * _cal_D / 150.0)), 2)
         cal = em_transient_eval(
             n_steps_per_period=24, n_periods=1.0, gamma_deg=0.0,
-            I_phase_rms=0.0, mesh_size_mm=2.5, min_size_mm=0.7,
-            outer_air_factor=1.2, gap_layers=1.0,
+            I_phase_rms=0.0, mesh_size_mm=_cal_mesh, min_size_mm=0.3,
+            outer_air_factor=1.2, gap_layers=2.0,
             n_sectors=_cal_ns if _cal_ns >= 2 else -1,
             coil_temp_c=120.0, rotor_eddy=False,
-            iron_template=False, geo_mesh=True,
+            iron_template=True, structured_gap=True, geo_mesh=True,
             geo_override=geo_override, element_order=2)
         psi = np.asarray(cal.get("psi_A_Wb") or [], float)
         ang = np.asarray(cal.get("rotor_angle_deg") or [], float)
-        if psi.size >= 4 and ang.size == psi.size:
+        # CONVERGENCE GATE.  ψ_A of an unconverged field is not a measurement of
+        # anything, and the peak of it is not θ*.  The solver already reports,
+        # per frame, whether the path that solved it met that path's tolerance
+        # (Newton 1e-7 on the field residual, Picard _PIC_TOL2 on the ν fixed
+        # point) — read it, and treat a MISSING flag as failure rather than as
+        # consent.
+        _cal_conv = bool(cal.get("picard_converged", False))
+        _cal_unconv = list(cal.get("picard_unconverged_frames") or [])
+        _cal_fb = len(cal.get("picard_fallback_frames") or [])
+        if not _cal_conv:
+            _cal_err = (
+                f"the no-load calibration solve did NOT converge — "
+                f"{len(_cal_unconv)} of {int(psi.size) or '?'} frames "
+                f"{_cal_unconv} above tolerance {cal.get('picard_tol')}, worst "
+                f"residual {cal.get('picard_resid_max')} "
+                f"(mesh {_cal_mesh} mm, {_cal_fb} Newton fallbacks).  "
+                f"θ* read off an unconverged field is not θ*")
+        elif psi.size >= 4 and ang.size == psi.size:
             n = psi.size
             k0 = int(np.argmax(psi))
             ym1, y0, yp1 = psi[(k0 - 1) % n], psi[k0], psi[(k0 + 1) % n]
@@ -221,8 +321,10 @@ def _resolve_daxis_shift(p, geo, wind, pole_pairs, geo_override, n_sectors) -> f
             dstep = float(ang[1] - ang[0]) if n > 1 else 0.0
             theta_star = (k0 + frac) * dstep            # mech deg of ψ_A peak
             daxis = (90.0 - theta_star * float(pole_pairs)) % 360.0
-            log.info("d-axis auto-cal: theta*=%.2f deg mech -> DAXIS=%.1f deg "
-                     "(topology poles=%d slots=%d)", theta_star, daxis, key[0], key[1])
+            log.info("d-axis auto-cal: theta*=%.4f deg mech -> DAXIS=%.4f deg "
+                     "(poles=%d slots=%d conn=%s geo=%s, converged: %d frames, "
+                     "worst resid %s)", theta_star, daxis, key[0], key[1],
+                     key[3], _geo_fp, int(psi.size), cal.get("picard_resid_max"))
         else:
             _cal_err = (f"calibration run returned no usable ψ_A "
                         f"(psi {psi.size} samples, angles {ang.size})")
@@ -238,11 +340,12 @@ def _resolve_daxis_shift(p, geo, wind, pole_pairs, geo_override, n_sectors) -> f
         # a different operating point than the one on screen.  A γ that is 48°
         # off is not a degraded answer, it is a wrong one; say so.
         raise RuntimeError(
-            f"d-axis auto-calibration failed for topology "
-            f"poles={key[0]} slots={key[1]} layers={key[2]} conn={key[3]!r}: "
+            f"d-axis auto-calibration failed for poles={key[0]} slots={key[1]} "
+            f"layers={key[2]} conn={key[3]!r} geometry={_geo_fp}: "
             f"{_cal_err}.  γ=0 cannot be placed on the q-axis without it, and "
-            f"the legacy {DAXIS_SHIFT_DEG:.0f}° constant is only correct for "
-            f"20p/24s.")
+            f"the legacy {DAXIS_SHIFT_DEG:.0f}° constant is not a fallback: it "
+            f"is wrong for every topology measured so far, including the "
+            f"20p/24s one it was written for (that machine calibrates to 120°).")
     _DAXIS_CACHE[key] = daxis
     if _dp:                           # persist so sweep subprocesses reuse it
         try:
@@ -254,6 +357,14 @@ def _resolve_daxis_shift(p, geo, wind, pole_pairs, geo_override, n_sectors) -> f
                         _disk = json.load(_f) or {}
                 except Exception:
                     _disk = {}
+            # Drop any PRE-FINGERPRINT entry on the way past.  Those keys have
+            # 4 fields (poles_slots_layers_conn) and no geometry, i.e. they are
+            # exactly the entries that answered for machines they were never
+            # measured on.  They are already unreachable — the lookup builds a
+            # 5-field key — but leaving them in the file leaves a wrong number
+            # sitting somewhere a human might read it as a record.
+            _disk = {_k: _v for _k, _v in _disk.items()
+                     if len(str(_k).split("_")) >= 5}
             _disk[skey] = float(daxis)
             with open(_dp, "w") as _f:
                 json.dump(_disk, _f)

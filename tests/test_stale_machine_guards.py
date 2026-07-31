@@ -222,3 +222,89 @@ def test_card_metrics_refuse_a_run_from_another_machine(tmp_path, monkeypatch):
 
     monkeypatch.setattr(sim, "_geometry_fingerprint", lambda *a, **k: "machine_A_fp")
     assert pr._last_transient_summary()["T_avg_Nm"] == pytest.approx(9.99)
+
+
+# ── 3. The d-axis calibration answers for the machine it measured ────────────
+#
+# Same class of bug, in the one cache whose value is not a number ON the screen
+# but the FRAME the screen's γ is read in.  Two ways it used to hand back an
+# angle it had no right to:
+#   * the calibration solve had NOT converged and its ψ_A peak was accepted
+#     anyway (measured on the user's 40 mm 12s14p: 19 of 24 frames above tol,
+#     worst residual 2.8e-1 against 1e-3 → DAXIS 47.45° instead of 60.00°, i.e.
+#     γ=0 sitting 12.7° off the q-axis on every solve that inherited it);
+#   * the cache key named only the topology, so a value measured on one
+#     cross-section was served to any other machine with the same
+#     pole/slot/layer/connection counts.
+# These touch no solver: `em_transient_eval` is stubbed.
+
+def _daxis_env(monkeypatch):
+    from motor_ai_sim.simulation import fem_solver_2d as F
+    monkeypatch.setattr(F, "_daxis_disk_path", lambda: None)
+    F._DAXIS_CACHE.clear()
+
+    class _P:
+        num_poles = 14
+    return F, _P, {"num_slots": 12, "stator_diameter": 40.0}, \
+        {"layers": 1, "connection": "2S"}
+
+
+def _cal_result(converged, unconv=()):
+    """A four-frame no-load run whose ψ_A peaks at index 1."""
+    d = {"psi_A_Wb": [1.0, 3.0, 2.0, 1.0], "rotor_angle_deg": [0.0, 1.0, 2.0, 3.0]}
+    if converged is not None:
+        d.update(picard_converged=converged,
+                 picard_unconverged_frames=list(unconv),
+                 picard_tol=1e-3, picard_resid_max=(9e-8 if converged else 0.28),
+                 picard_fallback_frames=([] if converged else [0, 1, 2, 3]))
+    return d
+
+
+def test_daxis_calibration_refuses_an_unconverged_solve(monkeypatch):
+    """θ* read off a field that did not converge is not θ*, and a γ that is
+    tens of degrees off is not a degraded answer — it is a wrong one."""
+    F, P, geo, wind = _daxis_env(monkeypatch)
+    monkeypatch.setattr(F, "em_transient_eval",
+                        lambda **k: _cal_result(False, unconv=[1, 2]))
+    with pytest.raises(RuntimeError, match="did NOT converge"):
+        F._resolve_daxis_shift(P, geo, wind, 7, None, 2)
+    assert not F._DAXIS_CACHE, "an unconverged angle was cached"
+
+
+def test_daxis_calibration_refuses_a_missing_convergence_flag(monkeypatch):
+    """A result that does not SAY it converged is not consent to assume it did."""
+    F, P, geo, wind = _daxis_env(monkeypatch)
+    monkeypatch.setattr(F, "em_transient_eval", lambda **k: _cal_result(None))
+    with pytest.raises(RuntimeError, match="did NOT converge"):
+        F._resolve_daxis_shift(P, geo, wind, 7, None, 2)
+
+
+def test_daxis_cache_does_not_serve_one_cross_section_to_another(monkeypatch):
+    """Same topology, different machine → its OWN calibration, not the other's."""
+    F, P, geo_a, wind = _daxis_env(monkeypatch)
+    geo_b = dict(geo_a, stator_diameter=30.0, tooth_width=2.6)
+    assert F._daxis_topology_key(P, geo_a, wind) \
+        != F._daxis_topology_key(P, geo_b, wind), \
+        "two cross-sections share one d-axis cache key"
+
+    calls = []
+
+    def _stub(**kw):
+        calls.append(kw.get("geo_override"))
+        # machine B's ψ_A peaks one frame later → a different θ*, so a wrongly
+        # shared entry shows up as an equal angle rather than as a near miss.
+        peak = 1 if len(calls) == 1 else 2
+        psi = [1.0, 1.0, 1.0, 1.0]
+        psi[peak] = 3.0
+        d = _cal_result(True)
+        d["psi_A_Wb"] = psi
+        return d
+
+    monkeypatch.setattr(F, "em_transient_eval", _stub)
+    a = F._resolve_daxis_shift(P, geo_a, wind, 7, geo_a, 2)
+    b = F._resolve_daxis_shift(P, geo_b, wind, 7, geo_b, 2)
+    assert len(calls) == 2, "the second machine reused the first one's angle"
+    assert a != b
+    # ...and each is then cached for ITSELF.
+    assert F._resolve_daxis_shift(P, geo_a, wind, 7, geo_a, 2) == a
+    assert len(calls) == 2

@@ -152,8 +152,18 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
   return (
     <Paper sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', p: 2,
       display: 'flex', flexDirection: 'column', gap: 1 }}>
+      {/* A stale headline number is worse than none: the user read a saved
+          0.02 N·m from a previous (broken) machine as "the solver is garbage".
+          The tiny gray ⚠ did exist — it whispered. This banner shouts. */}
+      {stale && (
+        <Box sx={{ px: 1.25, py: 0.75, borderRadius: 1, bgcolor: 'rgba(239,68,68,0.10)',
+          border: '1px solid #b91c1c', color: '#f87171', fontSize: 12, fontWeight: 700 }}>
+          ⚠ STALE — these numbers were computed at I = {s.I_phase_rms_A} A, γ = {s.gamma_deg}°,
+          not the current panel settings (possibly a previous machine). Press Re-run Simulation.
+        </Box>
+      )}
       <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 2,
-        flexWrap: 'wrap' }}>
+        flexWrap: 'wrap', opacity: stale ? 0.55 : 1 }}>
         <Typography sx={{ fontSize: 13, color: 'var(--text-1)', fontWeight: 700 }}>
           Simulation summary — real FEM results
         </Typography>

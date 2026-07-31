@@ -278,6 +278,12 @@ class SavePresetRequest(BaseModel):
     # restores the ENTIRE working setup, not just the geometry.
     mesh: Optional[dict] = None
     simulation: Optional[dict] = None
+    # Explicit geometry for the new preset.  When present it is saved AS SENT;
+    # only when absent does the endpoint snapshot the current config.  It used
+    # to be ignored entirely — a client saying "save THIS machine" got whatever
+    # happened to be in the editor, with a 200 (the silent-substitution class;
+    # it mislabelled two 40 mm presets with 30 mm geometry).
+    geometry: Optional[dict] = None
 
 
 class SettingsPatch(BaseModel):
@@ -398,8 +404,10 @@ def save_current_as_preset(req: SavePresetRequest):
     """Snapshot the CURRENT config geometry + the UI's mesh/sim as a new motor."""
     from motor_ai_sim.config import get_config
     cfg = get_config()
-    geo = dict(cfg.get("geometry", {}))
     sim = cfg.get("simulation", {})
+    # Explicit geometry wins; the config snapshot is only the no-geometry
+    # fallback (see SavePresetRequest.geometry).
+    geo = dict(req.geometry) if req.geometry else dict(cfg.get("geometry", {}))
     # keep only plain numeric geometry keys (drop nested schema/groups)
     geometry = {k: v for k, v in geo.items() if isinstance(v, (int, float))}
     # Prefer the FULL simulation/mesh the UI sent (it has the browser-only

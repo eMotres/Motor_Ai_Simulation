@@ -68,11 +68,26 @@ const MotorsCatalog: React.FC = () => {
     .catch(() => setCat(null)).finally(() => setLoading(false));
   useEffect(() => { load(); }, []);
 
-  const deleteMotor = async (m: Motor) => {
-    if (!window.confirm(`Delete "${m.name}" from the catalog?\nThis removes the card and its underlying preset.`)) return;
+  // Confirm through a proper dialog — window.confirm is silently suppressed
+  // by Chrome once "prevent additional dialogs" was ever ticked (the exact
+  // failure that made the rename pencil look dead), so the trash icon
+  // clicked and nothing visibly happened.
+  const [deleteTarget, setDeleteTarget] = useState<Motor | null>(null);
+  const [deleteErr, setDeleteErr] = useState<string | null>(null);
+  const deleteMotor = (m: Motor) => { setDeleteTarget(m); setDeleteErr(null); };
+  const submitDelete = async () => {
+    const m = deleteTarget;
+    if (!m) return;
     setBusy(m.id);
     try {
-      await fetch(`${API}/api/catalog/${encodeURIComponent(m.id)}`, { method: 'DELETE' });
+      const r = await fetch(`${API}/api/catalog/${encodeURIComponent(m.id)}`,
+                            { method: 'DELETE' });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        setDeleteErr(String((j as any).detail || `HTTP ${r.status}`));
+        return;
+      }
+      setDeleteTarget(null);
       await load();
     } finally { setBusy(null); }
   };
@@ -312,6 +327,31 @@ const MotorsCatalog: React.FC = () => {
             onClick={() => void submitRename()}
             sx={{ textTransform: 'none' }}>
             {busy ? <CircularProgress size={14} /> : 'Save'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* ── Delete confirm dialog (window.confirm is unreliable the same way) ── */}
+      <Dialog open={!!deleteTarget} onClose={() => setDeleteTarget(null)}
+        PaperProps={{ sx: { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 2, minWidth: 360 } }}>
+        <DialogTitle sx={{ color: 'var(--text-0)', fontSize: '0.95rem', fontWeight: 700 }}>
+          Delete "{deleteTarget?.name}"?
+        </DialogTitle>
+        <DialogContent>
+          <Box sx={{ fontSize: 12.5, color: 'var(--text-2)' }}>
+            This removes the card and its underlying preset. It cannot be undone.
+          </Box>
+          {deleteErr && (
+            <Box sx={{ fontSize: 12, color: '#f87171', mt: 1 }}>{deleteErr}</Box>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDeleteTarget(null)}
+            sx={{ textTransform: 'none', color: 'var(--text-2)' }}>Cancel</Button>
+          <Button variant="contained" color="error" disabled={!!busy}
+            onClick={() => void submitDelete()}
+            sx={{ textTransform: 'none' }}>
+            {busy ? <CircularProgress size={14} /> : 'Delete'}
           </Button>
         </DialogActions>
       </Dialog>

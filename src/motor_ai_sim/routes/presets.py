@@ -8,12 +8,15 @@ whole app (Geometry, Mesh, Simulation) switches to that motor.
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Optional
 
 import yaml
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/presets", tags=["presets"])
 
@@ -507,4 +510,25 @@ def delete_preset(preset_id: str):
         raise HTTPException(status_code=404, detail=f"preset '{preset_id}' not found")
     del presets[preset_id]
     _save_presets(presets)
-    return {"status": "ok", "deleted": preset_id}
+    # The Motors-tab card lives in the CATALOG under cat_<preset_id> —
+    # _upsert_catalog_entry creates/updates it on every save and rename, but
+    # delete used to leave it behind, so the user deleted a preset and kept
+    # seeing its card ("I can't delete this motor"). Remove the card too.
+    _removed_card = False
+    try:
+        if _CATALOG_PATH.exists():
+            cat = json.loads(_CATALOG_PATH.read_text(encoding="utf-8"))
+            _cid = f"cat_{preset_id}"
+            _before = len(cat.get("motors", []))
+            cat["motors"] = [m for m in cat.get("motors", [])
+                             if m.get("id") != _cid]
+            if len(cat["motors"]) != _before:
+                _CATALOG_PATH.write_text(
+                    json.dumps(cat, ensure_ascii=False, indent=1),
+                    encoding="utf-8")
+                _removed_card = True
+    except Exception as _e:
+        log.warning("preset '%s' deleted but its catalog card was not (%s)",
+                    preset_id, _e)
+    return {"status": "ok", "deleted": preset_id,
+            "catalog_card_removed": _removed_card}

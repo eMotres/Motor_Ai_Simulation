@@ -185,3 +185,48 @@ class TestStepSnapping:
     def test_exact_divisor_is_left_alone(self):
         for d in (12, 16, 18, 24, 36, 48, 72, 144):
             assert _snap_steps_to_nodes(d, 144) == d
+
+
+class TestGradAtQuad:
+    """``_grad_at_quad`` is a PERF shortcut around ``Basis.interpolate``.
+
+    It exists only to skip the VALUE half of the DiscreteField that the P2
+    nonlinear path never reads. That makes it a pure-performance change, and
+    "pure" here has to mean bitwise — the Newton residual, ν(|B|) and the
+    differential-reluctivity tangent are all built on this gradient, so a
+    last-bit difference would ripple into every pinned number in
+    tests/test_physics_regression.py. Hence array_equal, not allclose.
+    """
+
+    @staticmethod
+    def _basis(elem):
+        from skfem import Basis, MeshTri
+        return Basis(MeshTri().refined(3), elem())
+
+    @pytest.mark.parametrize("order", [1, 2])
+    def test_bit_identical_to_interpolate_grad(self, order):
+        from skfem import ElementTriP1, ElementTriP2
+        from motor_ai_sim.simulation.field_ops import _grad_at_quad
+
+        b = self._basis(ElementTriP1 if order == 1 else ElementTriP2)
+        rng = np.random.default_rng(20260731)
+        w = rng.standard_normal(b.N)
+        want = b.interpolate(w).grad
+        got = _grad_at_quad(b, w)
+        assert got.shape == np.shape(want)
+        assert np.array_equal(got, np.asarray(want)), (
+            "grad differs from skfem's own interpolate().grad by "
+            f"{np.max(np.abs(got - np.asarray(want))):.3e}")
+
+    def test_on_an_element_subset(self):
+        """The P2 solver only ever asks on saturable-iron SUB-bases."""
+        from skfem import Basis, ElementTriP2, MeshTri
+        from motor_ai_sim.simulation.field_ops import _grad_at_quad
+
+        m = MeshTri().refined(3)
+        sub = np.arange(0, m.t.shape[1], 3)
+        b = Basis(m, ElementTriP2(), elements=sub)
+        rng = np.random.default_rng(7)
+        w = rng.standard_normal(b.N)
+        assert np.array_equal(_grad_at_quad(b, w),
+                              np.asarray(b.interpolate(w).grad))

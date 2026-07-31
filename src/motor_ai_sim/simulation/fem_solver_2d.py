@@ -3970,6 +3970,10 @@ def fem_transient_sliding_band(
              "nonlinear resid=%.2e, picard-fallback frames=%s",
              n_total, _n_solved, _t.time() - t0, Tavg, Trip_raw,
              _pic_res_max, _pic_fallback or "none")
+    # What the Kpw memo actually saved, so a slow run can be read instead of
+    # guessed: a healthy run serves ~45 % of its Kpw calls from the memo.
+    log.info("P2 cost: Kpw %d assembled + %d memo hits",
+             _p2.kpw_calls, _p2.kpw_hits)
     if _pic_unconv:
         # Loud, because it means the reported window contains a frame whose
         # field never met a convergence test — the averages below are then an

@@ -269,13 +269,37 @@ def _arkkio_torque(mesh, A_nodal: np.ndarray, r_in_m: float, r_out_m: float,
 #  where P1 staircases.  Additive: the P1 path above is untouched; callers opt in
 #  via element_order=2.  Validated by p2_cogging_proof.py (see P2_NOTES.md).
 # ─────────────────────────────────────────────────────────────────────────────
+def _grad_at_quad(basis, w):
+    """∇w at the quadrature points — the GRADIENT ONLY.
+
+    ``Basis.interpolate(w)`` returns a full ``DiscreteField``: it evaluates the
+    VALUE as well as the gradient, and for a scalar P2 field the value is a
+    third of that work which every caller here then throws away (∇A is the only
+    thing B, ν(|B|) and the Newton tangent ever look at).
+
+    This reproduces skfem's own ``linear_combination(1)`` operation for
+    operation — the same ``np.einsum`` call, over the same basis functions, in
+    the same order — so the result is BIT-IDENTICAL to
+    ``basis.interpolate(w).grad``, which ``tests/test_field_ops.py`` asserts.
+    The only thing dropped is the arithmetic nobody consumes.  (skfem's leading
+    ``0. * einsum(...)`` zero-array is also dropped: it is a whole extra einsum
+    to produce an array of zeros.)
+    """
+    edofs = basis.element_dofs
+    g0 = basis.basis[0][0].get(1)             # (dim, n_elem, n_qp)
+    out = np.zeros(np.shape(g0), dtype=np.result_type(g0, w))
+    for i in range(basis.Nbfun):
+        out += np.einsum('...,...j->...j', w[edofs[i]],
+                         basis.basis[i][0].get(1))
+    return out
+
+
 def _p2_B_at_quad(basis, A_vec):
     """B = (∂A/∂y, −∂A/∂x) at every element's quadrature points for a P2 field,
     plus the integration measure dx.  Each returned array is (n_elem, n_qp).
     Because A is quadratic, ∇A (hence B) is LINEAR within each element — the
     physical origin of P2's smooth torque."""
-    Af = basis.interpolate(A_vec)
-    g = Af.grad                        # (2, n_elem, n_qp) global gradient
+    g = _grad_at_quad(basis, A_vec)    # (2, n_elem, n_qp) global gradient
     return g[1], -g[0], basis.dx       # B_x, B_y, dx
 
 def _arkkio_torque_p2(mesh, A_vec, basis, r_in_m: float, r_out_m: float,

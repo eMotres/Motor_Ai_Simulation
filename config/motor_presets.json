@@ -166,7 +166,8 @@
     "metrics": {
       "T_avg_Nm": 25.28,
       "ripple_pct": 17.6,
-      "gamma_deg": 0.0
+      "gamma_deg": 48,
+      "legacy_gamma_deg": 0.0
     },
     "geometry": {
       "stator_diameter": 150,

@@ -103,7 +103,11 @@ const NumberField: React.FC<NumberFieldProps> = ({
           (e.target as HTMLInputElement).blur();
         }
       }}
-      inputProps={{ inputMode: 'decimal', step }}
+      {/* step="any": the schema step belongs to the SLIDER's coarse detents.
+          On the typed cell it made off-step values (0.15 at step 0.1) invalid
+          — the browser refused the commit and the user couldn't see why. Any
+          decimal inside min/max is legitimate here. */}
+      inputProps={{ inputMode: 'decimal', step: 'any' }}
       InputProps={{ endAdornment: helperText ? <HelpTip title={helperText} /> : undefined }}
       error={invalid}
       helperText={invalid ? `Allowed: ${min ?? '−∞'} … ${max ?? '∞'}` : undefined}

@@ -6,6 +6,7 @@
  * would not.  ComparePanel renders these rows.
  */
 import { readMeshSettings, readSimSettings } from '../common/motorSettings';
+import { liveGeoSig } from '../common/geoSig';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
 
@@ -46,6 +47,17 @@ async function buildParams(): Promise<Record<string, unknown>> {
   } catch { /* best-effort — a point without materials is still comparable */ }
   return {
     ...materials,
+    // The machine stamp rides WITH the point, exactly as the geometry fields do
+    // — one string that says "this row's numbers were solved on this motor", so
+    // a stored point can be checked instead of assumed.  `geo_sig` is the
+    // geometry captured above; `geo_sig_solved` is the stamp of the RUN whose
+    // results this row carries.  They differ when the user edited the machine
+    // and did not re-run, which is precisely the row that must not be believed.
+    // Both read in the STORE's dialect (`liveGeoSig` / the run's own stamp), so
+    // the two are comparable with `===`; the flat geometry fields below stay in
+    // the config's dialect because they are display columns, not identity.
+    geo_sig:        liveGeoSig(),
+    geo_sig_solved: (s._geoSig as string) ?? '',
     // operating point
     I_phase_rms:        solved(s.I_phase_rms_A, sim.max_current),
     gamma_deg:          solved(s.gamma_deg,     sim.phase_offset_deg),
@@ -96,6 +108,17 @@ export function defaultPointName(): string {
 export async function addCurrentPointToCompare(name: string): Promise<void> {
   const params  = await buildParams();
   const results = readShownSummary();
+  // A comparison row pairing one machine's geometry with another machine's
+  // results is not a data-quality nit — it is the whole point of the table
+  // being wrong, permanently, in a store that outlives the session.  Refuse.
+  const solved = String(params.geo_sig_solved || '');
+  const live   = String(params.geo_sig || '');
+  if (solved && live && solved !== live) {
+    throw new Error(
+      'These results were solved on a DIFFERENT machine than the one loaded — '
+      + 'the point would pair this geometry with another motor\'s numbers. '
+      + 'Run Simulation on the current geometry first, then add the point.');
+  }
   const r = await fetch(`${API}/api/sims/saved`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name, params, results }),

@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { syncActiveMotor } from '../components/common/motorSettings';
 import { setGeoGetter } from '../lib/apiAuth';
+import { geoSignature, setGeoSigGetter } from '../components/common/geoSig';
 import type {
   MotorGeometryParams,
   MaterialAssignments,
@@ -1118,6 +1119,12 @@ setGeoGetter(() => {
     return Object.keys(num).length ? JSON.stringify(num) : null;
   } catch { return null; }
 });
+
+// …and feed the SAME numbers to the stale-stamp checker, so "which machine is
+// this result from?" is answered against exactly the geometry that was sent to
+// the solver — not against a second reading of the config that can lag it.
+setGeoSigGetter(() => geoSignature(
+  useMotorStore.getState().geometry as Record<string, unknown> | undefined));
 
 export const useUIStore = create<UIState>()(
   persist(

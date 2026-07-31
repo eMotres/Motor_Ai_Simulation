@@ -18,12 +18,21 @@ const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
 import type { TransientSummary } from './SummaryTable';
 import { useMotorStore } from '../../stores/motorStore';
+import { geoSignature } from '../common/geoSig';
 
 interface TransientPayload {
   // Frontend-only stamp: the geometry signature this run was computed for.
   // Lets us flag the shown result stale when the live geometry changes (the
   // backend transient cache key omits geometry, so it can't detect this).
   _geoSig?: string;
+  // The BACKEND's own verdict, returned by the restore path: it stamps every
+  // solve with a fingerprint of the machine (`geo_fingerprint`) and compares it
+  // against the live one when handing the saved run back.  true = the saved run
+  // belongs to a different motor; null/undefined = the run predates the stamp,
+  // i.e. UNKNOWN — which is reported as unknown, never as "fine".
+  geo_fingerprint?: string;
+  stale_geometry?: boolean | null;
+  stale_reason?: 'geometry' | 'inputs' | null;
   n_steps: number;
   n_steps_per_period: number;
   // What the caller ASKED for, and whether the solver snapped it onto the
@@ -32,6 +41,15 @@ interface TransientPayload {
   n_steps_per_period_requested?: number;
   steps_snapped?: boolean;
   slip_nodes_per_period?: number;
+  // What the run actually COST.  n_steps above is the REPORTED window; the
+  // solver also solves a full extra settling period when demagnetisation is on
+  // and two warm-up frames at θ<0 when the coupled eddy solve is on, and those
+  // frames are stripped before the result is returned — so `n_steps` understated
+  // the work by up to 2× and nothing on screen said so.  n_frames_solved is the
+  // honest count and solve_wall_s the honest wall time; together they give the
+  // s/frame the Run panel uses for its pre-run estimate.
+  n_frames_solved?: number;
+  solve_wall_s?: number;
   n_periods: number;
   dt_s: number;
   T_period_s: number;
@@ -197,19 +215,19 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
 
   // GEOMETRY staleness.  The shown result is stamped (in run()) with the
   // geometry it was solved for.  When the live geometry differs — e.g. after
-  // applying a design from the Sweep/Optimization tab — the result is stale
-  // even though the operating point is unchanged.  The backend can't catch
-  // this (its transient cache key omits geometry), so we detect it here.
+  // applying a design from the Sweep/Optimization tab, or after loading another
+  // preset and reloading the page — the result is stale even though the
+  // operating point is unchanged.  TWO independent witnesses now, because the
+  // restore path has two mouths: the localStorage copy carries `_geoSig` (this
+  // client's own stamp) and the backend's persisted last transient carries
+  // `stale_geometry` (its own fingerprint of the machine it solved).  Either one
+  // saying "different motor" is enough — a stale machine must never need both.
   const geometry = useMotorStore(s => s.geometry);
-  const geoSig = useMemo(() => {
-    try {
-      return Object.entries(geometry || {})
-        .filter(([, v]) => typeof v === 'number')
-        .sort(([a], [b]) => (a < b ? -1 : 1))
-        .map(([k, v]) => `${k}:${v}`).join('|');
-    } catch { return ''; }
-  }, [geometry]);
-  const geoStale = !!data && data._geoSig != null && data._geoSig !== geoSig;
+  const geoSig = useMemo(() => geoSignature(geometry as Record<string, unknown>),
+                         [geometry]);
+  const geoStale = !!data && (
+    (data._geoSig != null && data._geoSig !== geoSig)
+    || data.stale_geometry === true);
 
   // Poll the backend /progress endpoint so we can show a live "Computing X/N
   // points — Ys elapsed" strip.  Polled CONTINUOUSLY while mounted — NOT gated
@@ -405,9 +423,28 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
         // RESTORED result keeps whatever stamp it was saved with.
         const stamped: TransientPayload = restoreOnly ? d : { ...d, _geoSig: geoSig };
         setStale(!!d.stale);
+        if (restoreOnly && d.stale_geometry === true) {
+          // Loud in the console too: a restored run from another machine is the
+          // exact situation where the user reads the numbers before the banner.
+          console.warn('[stale] restored transient was solved on a DIFFERENT '
+            + 'machine (backend fingerprint mismatch) — shown flagged, press Run '
+            + 'to recompute on the current geometry');
+        }
         setData(stamped); setBusy(false);
         setError(null);
         persistLastTransient(stamped);      // remember it (+ stamp) across reloads
+        // ── What this run COST, measured, for the Run panel's estimate ──────
+        // Only from a FRESH solve: a restored/cached result reports the wall
+        // time of the run it was saved from, and reusing that as "seconds per
+        // frame" would quote the user a rate no solve on this machine produced.
+        if (!restoreOnly && (d.n_frames_solved ?? 0) > 0 && (d.solve_wall_s ?? 0) > 0) {
+          const cost = { frames: d.n_frames_solved as number,
+                         wall_s: d.solve_wall_s as number,
+                         at: Date.now() };
+          try { localStorage.setItem('sim.lastSolveCost', JSON.stringify(cost)); }
+          catch { /* quota — the estimate just falls back to "no history yet" */ }
+          window.dispatchEvent(new CustomEvent('sim:solve-cost', { detail: cost }));
+        }
         // This run kept its last frame's field server-side (field_snapshot), so
         // the J⟳ / Loss views can now render THIS run's field instead of solving
         // their own.  Tell them the snapshot moved; whatever they are holding is
@@ -548,7 +585,15 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
   // means only the empty-panel state (data null): correctly a no-op, not a freeze.
   useEffect(() => {
     if (!data?.summary || !onSummary) return;
-    onSummary({ ...data.summary, T_ripple_pct: ripplePct });
+    // The summary travels FURTHER than this panel: PhysicsDashboard persists it
+    // to `sim.lastSummary`, from where it becomes a motor card's metrics and a
+    // Compare point's results.  So it carries the machine stamp with it — the
+    // number that says which motor these values describe.  `_geoSig` is the
+    // stamp of the run itself (restored runs keep theirs; a run from before the
+    // stamp existed carries none and is reported as unknown downstream).
+    onSummary({ ...data.summary, T_ripple_pct: ripplePct,
+                _geoSig: data._geoSig ?? undefined,
+                _geoStaleBackend: data.stale_geometry === true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, torqueFilter, ripplePct]);
 
@@ -656,12 +701,23 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
   return (
     <Paper sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', p: 2,
       display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-      {/* Stale-graph marker — the shown waveforms were computed for different
-          inputs/geometry (e.g. a design was just applied from Sweep).  Kept to
-          a compact chip (details on hover) — no text walls in the UI. */}
-      {(stale || geoStale || appliedFromSweep) && (
-        <Tooltip title={`The waveforms below were computed ${geoStale || appliedFromSweep
-            ? 'for the PREVIOUS geometry' : 'for different inputs'} — run Simulation to recompute.`}
+      {/* Stale-graph marker.  TWO severities, because they are not the same
+          mistake.  A different OPERATING POINT is a hint: same motor, other
+          conditions — an amber chip is proportionate.  A different GEOMETRY
+          means these curves belong to a motor that is no longer loaded, and a
+          quiet chip is how a 30 mm machine's torque got read as the 40 mm's.
+          That one shouts, in the same red as the summary card's banner
+          (a174253) — one visual language for "these numbers are not yours". */}
+      {geoStale ? (
+        <Box sx={{ px: 1.25, py: 0.75, borderRadius: 1, bgcolor: 'rgba(239,68,68,0.10)',
+          border: '1px solid #b91c1c', color: '#f87171', fontSize: 12, fontWeight: 700 }}>
+          ⚠ STALE — these waveforms were solved on a DIFFERENT MACHINE than the one
+          now loaded{data?.computed_at ? ` (run of ${data.computed_at})` : ''}.
+          Nothing below describes the current geometry. Press Run Simulation.
+        </Box>
+      ) : (stale || appliedFromSweep) && (
+        <Tooltip title={`The waveforms below were computed ${appliedFromSweep
+            ? 'before the Sweep design was applied' : 'for different inputs'} — run Simulation to recompute.`}
           placement="top">
           <Box sx={{ alignSelf: 'flex-start', px: 1, py: 0.25, borderRadius: 1,
             bgcolor: 'rgba(251,191,36,0.12)', border: '1px solid #b45309',

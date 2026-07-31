@@ -9,6 +9,8 @@
 import React from 'react';
 import { Box, Paper, Typography, Tooltip } from '@mui/material';
 import AddToCompareButton from '../compare/AddToCompareButton';
+import { geoSignature } from '../common/geoSig';
+import { useMotorStore } from '../../stores/motorStore';
 
 export interface TransientSummary {
   rpm:                 number;
@@ -56,6 +58,16 @@ export interface TransientSummary {
   nonlinear_resid_max?:  number;
   nonlinear_tol?:        number;
   nonlinear_unconverged_frames?: number[];
+  // WHICH MACHINE these numbers describe.  Stamped by TransientCharts from the
+  // run that produced them and carried through PhysicsDashboard into
+  // `sim.lastSummary`, so a summary that outlives its motor (preset switch,
+  // page reload, applied Sweep design) can be recognised as belonging to
+  // another machine instead of being read as the current one.  Absent = a run
+  // from before the stamp existed: unknown, and reported as unknown.
+  _geoSig?:              string;
+  // The backend's independent verdict on a RESTORED run (its own fingerprint of
+  // the machine it solved vs the machine loaded now).  Either witness is enough.
+  _geoStaleBackend?:     boolean;
 }
 
 interface Props {
@@ -106,6 +118,12 @@ const Cell: React.FC<{
 };
 
 const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) => {
+  // Hook FIRST — the empty-state early-return below must not sit between the
+  // component entry and a hook call.
+  const geometry = useMotorStore(s => s.geometry);
+  const liveSig = React.useMemo(
+    () => geoSignature(geometry as Record<string, unknown>), [geometry]);
+
   if (!summary) {
     // Keep the header (and the disabled "+ Compare") in place even with nothing to
     // show: the button vanishing entirely before the first run made it impossible
@@ -147,7 +165,19 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
   const liveI = liveOp?.current, liveG = liveOp?.gamma;
   const dI = Number.isFinite(liveI as number) ? Math.abs((liveI as number) - s.I_phase_rms_A) : 0;
   const dG = Number.isFinite(liveG as number) ? Math.abs((liveG as number) - s.gamma_deg)     : 0;
-  const stale = dI > 0.05 || dG > 0.05;
+  const opStale = dI > 0.05 || dG > 0.05;
+  // …and the OTHER way a card goes stale, which used to slip through entirely:
+  // the machine changed under it.  Loading another preset (or reloading with a
+  // persisted `sim.lastSummary` from the previous session) leaves I and γ
+  // untouched, so the operating-point check above says "current" about torque
+  // and mass measured on a motor that is no longer loaded — precisely the
+  // "0.02 N·m from a previous machine" reading this banner exists to stop.
+  // Two independent witnesses: this client's stamp, and the backend's own
+  // fingerprint verdict on a restored run.  Unknown (unstamped legacy run) is
+  // NOT treated as fresh — it simply cannot raise this flag on its own.
+  const geoStale = (!!s._geoSig && !!liveSig && s._geoSig !== liveSig)
+                   || s._geoStaleBackend === true;
+  const stale = opStale || geoStale;
 
   return (
     <Paper sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', p: 2,
@@ -158,8 +188,13 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
       {stale && (
         <Box sx={{ px: 1.25, py: 0.75, borderRadius: 1, bgcolor: 'rgba(239,68,68,0.10)',
           border: '1px solid #b91c1c', color: '#f87171', fontSize: 12, fontWeight: 700 }}>
-          ⚠ STALE — these numbers were computed at I = {s.I_phase_rms_A} A, γ = {s.gamma_deg}°,
-          not the current panel settings (possibly a previous machine). Press Re-run Simulation.
+          {geoStale
+            ? <>⚠ STALE — these numbers were computed on a DIFFERENT MACHINE than the
+                one now loaded. Torque, mass and efficiency below belong to the previous
+                geometry{opStale ? <> (and to I = {s.I_phase_rms_A} A, γ = {s.gamma_deg}°)</> : null}.
+                Press Re-run Simulation.</>
+            : <>⚠ STALE — these numbers were computed at I = {s.I_phase_rms_A} A, γ = {s.gamma_deg}°,
+                not the current panel settings (possibly a previous machine). Press Re-run Simulation.</>}
         </Box>
       )}
       <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 2,

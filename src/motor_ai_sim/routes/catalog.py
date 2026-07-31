@@ -6,10 +6,12 @@ subscription tiers.  Loading a catalog motor applies its underlying preset
 """
 from __future__ import annotations
 
-import json
 from pathlib import Path
+from typing import Callable
 
 from fastapi import APIRouter, HTTPException
+
+from motor_ai_sim.json_store import mutate_json as _mutate_json, read_json as _read_json
 
 router = APIRouter(prefix="/api/catalog", tags=["catalog"])
 
@@ -17,13 +19,20 @@ _CATALOG_PATH = Path(__file__).parent.parent.parent.parent / "config" / "motor_c
 
 
 def _load() -> dict:
-    if not _CATALOG_PATH.exists():
-        return {"tiers": [], "diameters_mm": [], "motors": []}
-    return json.loads(_CATALOG_PATH.read_text(encoding="utf-8"))
+    return _read_json(_CATALOG_PATH, {"tiers": [], "diameters_mm": [], "motors": []})
 
 
-def _save(cat: dict) -> None:
-    _CATALOG_PATH.write_text(json.dumps(cat, ensure_ascii=False, indent=2), encoding="utf-8")
+def _mutate(fn: Callable[[dict], None]) -> dict:
+    """Apply `fn` to the catalog as it stands ON DISK, then write atomically.
+
+    presets.py writes this same file (every motor save upserts a card), so the
+    old load-mutate-save could drop a card that appeared while this request was
+    running — thumbnail generation and passport extraction both hold the gap
+    open for seconds to minutes.  `mutate_json` keys its lock by path, so both
+    modules serialise on the same lock without knowing about each other.
+    """
+    return _mutate_json(_CATALOG_PATH, fn,
+                        default={"tiers": [], "diameters_mm": [], "motors": []})
 
 
 @router.get("")
@@ -63,21 +72,20 @@ def delete_motor(motor_id: str, drop_preset: bool = True):
     target = next((m for m in motors if m.get("id") == motor_id), None)
     if not target:
         raise HTTPException(status_code=404, detail=f"motor '{motor_id}' not found")
-    cat["motors"] = [m for m in motors if m.get("id") != motor_id]
-    # prune now-empty diameter buckets so the section header disappears too
-    remaining_d = {m.get("diameter_mm") for m in cat["motors"]}
-    cat["diameters_mm"] = [d for d in cat.get("diameters_mm", []) if d in remaining_d]
-    _save(cat)
+    def _m(d: dict) -> None:
+        d["motors"] = [m for m in d.get("motors", []) if m.get("id") != motor_id]
+        # prune now-empty diameter buckets so the section header disappears too
+        remaining_d = {m.get("diameter_mm") for m in d["motors"]}
+        d["diameters_mm"] = [x for x in d.get("diameters_mm", []) if x in remaining_d]
+    _mutate(_m)
 
     preset_id = target.get("preset")
     dropped_preset = False
     if drop_preset and preset_id:
         try:
-            from motor_ai_sim.routes.presets import _load_presets, _save_presets
-            presets = _load_presets()
-            if preset_id in presets:
-                del presets[preset_id]
-                _save_presets(presets)
+            from motor_ai_sim.routes.presets import _drop_preset, _load_presets
+            if preset_id in _load_presets():
+                _drop_preset(preset_id)
                 dropped_preset = True
         except Exception:
             pass
@@ -112,8 +120,17 @@ def generate_motor_passport(motor_id: str, coarse: bool = False):
         result = generate_passport(**kw)
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"passport generation failed: {e}")
-    motor["passport"] = result
-    _save(cat)
+
+    # Minutes have passed inside generate_passport.  Attach the passport to the
+    # card as it exists NOW — writing back the whole document we read before the
+    # run would undo every catalog edit made while it was running.
+    def _m(d: dict) -> None:
+        for m in d.get("motors", []):
+            if m.get("id") == motor_id:
+                m["passport"] = result
+                return
+        d.setdefault("motors", []).append({**motor, "passport": result})
+    _mutate(_m)
     return {"status": "ok", "motor": motor_id, "coarse": coarse, "passport": result}
 
 

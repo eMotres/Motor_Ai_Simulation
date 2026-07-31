@@ -48,9 +48,13 @@ def _load_all() -> Dict[str, list]:
 
 
 def _save_all(store: Dict[str, list]) -> None:
+    """Atomic (temp + replace).  Every caller already re-reads under `_LOCK`, so
+    the merge is right; what was missing was that a plain `write_text` truncates
+    in place, and `_load_all` answers `{}` to a parse error — so a reader landing
+    inside that window reads an empty library and the next save persists it."""
     try:
-        _STORE.write_text(json.dumps(store, indent=2, ensure_ascii=False),
-                          encoding="utf-8")
+        from motor_ai_sim.json_store import atomic_write_json
+        atomic_write_json(_STORE, store)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"failed to write store: {e}")
 

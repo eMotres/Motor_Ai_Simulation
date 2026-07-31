@@ -1121,6 +1121,40 @@ def _config_physics_fingerprint(*, with_request_materials: bool) -> str:
         return "nofp"
 
 
+def _geometry_fingerprint(geo_override: Optional[dict] = None) -> str:
+    """md5 of the MACHINE alone — no operating point, no materials.
+
+    `_config_physics_fingerprint` mixes geometry, winding, materials and the
+    request's material override into one hash, which is right for a cache key
+    (any of them changes the answer) and useless for the question a restored
+    result has to answer: "is this still the same MOTOR?".  A user who switched
+    presets and one who nudged the coil temperature both get "key differs", and
+    the UI could only say "stale" without saying stale *how* — so the geometry
+    case, the one that silently shows the previous machine's torque, looked
+    exactly like a harmless input tweak.
+
+    Hashes the live geometry object (what every builder actually reads) plus the
+    raw config block, and folds in a per-request `geo=` override, so a candidate
+    eval is never mistaken for the motor on screen.
+    """
+    try:
+        import hashlib as _hl, json as _jl
+        from motor_ai_sim.config import get_config as _gc
+        _d = {"g": (_gc() or {}).get("geometry")}
+        try:
+            from motor_ai_sim.services.geometry_service import (
+                get_current_geometry as _gcg)
+            _d["glive"] = _gcg().to_dict()
+        except Exception:
+            _d["glive"] = None
+        if geo_override:
+            _d["ov"] = dict(sorted(geo_override.items()))
+        return _hl.md5(_jl.dumps(_d, sort_keys=True,
+                                 default=str).encode()).hexdigest()[:16]
+    except Exception:
+        return "nofp"
+
+
 def _effective_rpm(rpm=None) -> float:
     """The speed a solve will ACTUALLY run at: the explicit argument when the
     caller passed one, else the shared config's ``simulation.rpm``.
@@ -2689,6 +2723,26 @@ def get_fem_transient(
             _out = dict(_ref_res)
             _out["restored"] = True
             _out["stale"] = (_last_transient_ref.get("key") != _sb_key)
+            # WHY it is stale, not just THAT it is.  The restored run carries the
+            # fingerprint of the machine it was solved on; compare it with the
+            # machine loaded right now.  A geometry mismatch is the dangerous
+            # case (the numbers describe a motor that is no longer on screen) and
+            # the UI escalates it to a red banner — an operating-point tweak only
+            # earns the amber "press Run" hint.  A run saved before this stamp
+            # existed reports `None`: unknown, never a silent "fine".
+            _live_geo_fp = _geometry_fingerprint(_geo_ov)
+            _saved_geo_fp = _out.get("geo_fingerprint")
+            _out["geo_fingerprint_live"] = _live_geo_fp
+            _out["stale_geometry"] = (
+                None if not _saved_geo_fp else bool(_saved_geo_fp != _live_geo_fp))
+            _out["stale_reason"] = (
+                "geometry" if _out["stale_geometry"]
+                else ("inputs" if _out["stale"] else None))
+            if _out["stale_geometry"]:
+                log.warning(
+                    "restore: the saved transient was solved on a DIFFERENT "
+                    "machine (geo %s -> %s) — returning it flagged stale, not "
+                    "as the current result", _saved_geo_fp, _live_geo_fp)
             # The persisted result remembers that ITS run kept a field snapshot;
             # that snapshot lives in memory only, and a stale restore is not even
             # the same run.  Report what is actually available now.
@@ -2972,6 +3026,11 @@ def get_fem_transient(
         # background tab was indistinguishable from a failed update).
         from datetime import datetime as _dtm
         _sbres["computed_at"] = _dtm.now().isoformat(timespec="seconds")
+        # …and stamp WHICH MACHINE produced it.  This rides with the result into
+        # the cache AND onto disk (.last_transient.json), so a restore after a
+        # preset switch / a YAML edit / a back-end restart can be compared
+        # against the live machine instead of being served as if it were current.
+        _sbres["geo_fingerprint"] = _geometry_fingerprint(_geo_ov)
         # ── Park the last frame's field for the J⟳ / Loss views ───────────────
         # It leaves the HTTP payload here (megabytes of per-node arrays the
         # charts never read, and _save_last_transient would write them to disk)

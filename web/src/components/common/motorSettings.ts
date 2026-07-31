@@ -8,6 +8,8 @@
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
+import { geoSignature, liveGeoSig } from './geoSig';
+
 // [localStorage suffix, preset key].  localStorage values are JSON-encoded.
 const MESH_MAP: [string, string][] = [
   ['meshSize', 'mesh_size_mm'], ['minSize', 'min_size_mm'],
@@ -54,6 +56,19 @@ export function readSimMetrics(): Record<string, number> | undefined {
   try {
     const s = JSON.parse(localStorage.getItem('sim.lastSummary') || 'null');
     if (!s || typeof s !== 'object') return undefined;
+    // …but ONLY if those numbers belong to the machine being saved.  This entry
+    // outlives its motor: it is written once per run and then sits in
+    // localStorage across preset switches and reloads, so "Save as new motor"
+    // could stamp a brand-new card with the torque and mass of whatever was
+    // solved last — a wrong number wearing the right label, on a card nothing
+    // later re-checks.  A stamp mismatch means "not this machine": drop the
+    // metrics and let the backend fall back to a deterministic recompute.
+    const live = liveGeoSig();
+    if (s._geoSig && live && s._geoSig !== live) {
+      console.warn('[stale] sim.lastSummary was solved on a different machine — '
+        + 'saving this motor WITHOUT metrics rather than with another motor\'s');
+      return undefined;
+    }
     const m: Record<string, number> = {};
     const set = (k: string, v: unknown) => { const n = Number(v); if (Number.isFinite(n)) m[k] = n; };
     set('T_avg_Nm', s.T_em_avg_Nm); set('efficiency', s.efficiency);
@@ -78,6 +93,7 @@ export function setActiveMotor(m: ActiveMotor | null): void {
     if (m) localStorage.setItem('motor.active', JSON.stringify(m));
     else localStorage.removeItem('motor.active');
   } catch { /* ignore */ }
+  resetSyncSignature();   // a different motor: the autosave's memory is void
   try { window.dispatchEvent(new CustomEvent('motor:active-changed', { detail: m })); } catch { /* ignore */ }
 }
 
@@ -110,8 +126,19 @@ export async function ensureActiveMotor(): Promise<ActiveMotor | null> {
 }
 
 /** Auto-save the current geometry + mesh + simulation into the active motor
- *  (debounced).  Called on every mesh / sim / geometry edit. */
+ *  (debounced).  Called on every mesh / sim / geometry edit.
+ *
+ *  WRITES ONLY WHAT CHANGED.  It used to POST unconditionally on every fire —
+ *  including the burst of "changes" a preset LOAD produces as each panel
+ *  re-seeds itself from the newly applied config.  Those writes carry whatever
+ *  the panels happen to hold at that instant, which during a restore is not yet
+ *  the loaded motor; that is how a half-restored state got written back into the
+ *  preset and resurrected the machine the user had just left.  A payload
+ *  identical to the last one we sent is not an edit — it is an echo, and echoes
+ *  are exactly the writes that did the damage.  The signature covers geometry,
+ *  mesh AND simulation, so a genuine mesh-only or sim-only edit still saves. */
 let _syncTimer: ReturnType<typeof setTimeout> | null = null;
+let _lastSyncSig: string | null = null;
 export function syncActiveMotor(): void {
   const active = getActiveMotor();
   if (!active) return;
@@ -121,13 +148,26 @@ export function syncActiveMotor(): void {
       const cfg = await fetch(`${API}/api/config`).then(r => r.json()).catch(() => null);
       const geometry: Record<string, number> = {};
       if (cfg?.geometry) for (const [k, v] of Object.entries(cfg.geometry)) if (typeof v === 'number') geometry[k] = v;
+      const mesh = readMeshSettings(), simulation = readSimSettings();
+      // The geometry hash the preset gets stamped with — the same construction
+      // every other stamp in the app uses, so a consumer can compare a preset's
+      // geometry against a result's without translating between two dialects.
+      const geo_sig = geoSignature(geometry);
+      const sig = JSON.stringify([active.id, geo_sig, mesh, simulation]);
+      if (sig === _lastSyncSig) return;          // nothing moved — do not write
+      _lastSyncSig = sig;
       await fetch(`${API}/api/presets/${encodeURIComponent(active.id)}/settings`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ geometry, mesh: readMeshSettings(), simulation: readSimSettings() }),
+        body: JSON.stringify({ geometry, mesh, simulation, geo_sig }),
       });
     } catch { /* ignore — config.yaml + localStorage still hold the live state */ }
   }, 900);
 }
+
+/** Forget the autosave's "already saved this" memory.  Called when the ACTIVE
+ *  motor changes: the next edit then writes even if its payload happens to
+ *  match the previous motor's — a different preset is a different file. */
+export function resetSyncSignature(): void { _lastSyncSig = null; }
 
 /** Open a motor as the user's editable copy (forks a template), seed the
  *  browser settings + mark active.  Caller reloads after. */

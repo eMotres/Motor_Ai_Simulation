@@ -31,6 +31,7 @@ const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 import type { FemPayload } from './fem-types';
 import { tileFullRing } from './fem-types';
 import { useMotorStore } from '../../stores/motorStore';
+import { geoSignature } from '../common/geoSig';
 export type { FemPayload } from './fem-types';
 
 // ── ONE renderer for every view ───────────────────────────────────────────
@@ -404,14 +405,8 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
   // construction TransientCharts uses to flag a stale run — one definition of
   // "the geometry changed" for both panels.
   const storeGeometry = useMotorStore(s => s.geometry);
-  const geoSig = useMemo(() => {
-    try {
-      return Object.entries(storeGeometry || {})
-        .filter(([, v]) => typeof v === 'number')
-        .sort(([a], [b]) => (a < b ? -1 : 1))
-        .map(([k, v]) => `${k}:${v}`).join('|');
-    } catch { return ''; }
-  }, [storeGeometry]);
+  const geoSig = useMemo(
+    () => geoSignature(storeGeometry as Record<string, unknown>), [storeGeometry]);
   const isEddy = !payloadOverride && EDDY_MODES.has(mode);
   const isThermal = !payloadOverride && mode === 'Temp';
   const isLoss = !payloadOverride && mode === 'Loss';

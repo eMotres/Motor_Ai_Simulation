@@ -7,6 +7,7 @@ whole app (Geometry, Mesh, Simulation) switches to that motor.
 """
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import logging
 from pathlib import Path
@@ -15,6 +16,11 @@ from typing import Optional
 import yaml
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+
+from motor_ai_sim.json_store import (
+    mutate_json as _mutate_json,
+    read_json as _read_json,
+)
 
 log = logging.getLogger(__name__)
 
@@ -87,14 +93,35 @@ def _mat_name(mid) -> str:
 def _last_transient_summary():
     """The most recent FEM transient result (config/.last_transient.json) so a
     just-saved motor's card carries real torque / power / efficiency / voltage
-    (the user simulates a motor, then saves it)."""
+    (the user simulates a motor, then saves it).
+
+    ONLY if that run was solved on the machine that is loaded now.  This file is
+    the last run of ANY motor: simulate the 40 mm, load the 30 mm, save it, and
+    the new card was stamped with the 40 mm's torque — a wrong number, on a card,
+    presented as measured.  The run carries a fingerprint of its machine since
+    the stale-machine sweep; a mismatch (or an unstamped older run, which cannot
+    prove anything) means the caller falls back to the deterministic recompute
+    instead."""
     try:
         p = _ROOT / "config" / ".last_transient.json"
         if not p.exists():
             return None
         blob = json.loads(p.read_text(encoding="utf-8"))
         r = blob.get("result")
-        return r if isinstance(r, dict) else None
+        if not isinstance(r, dict):
+            return None
+        try:
+            from motor_ai_sim.routes.simulation import _geometry_fingerprint
+            live = _geometry_fingerprint()
+            saved = r.get("geo_fingerprint")
+            if saved != live:
+                log.info("card metrics: ignoring the last transient — it was "
+                         "solved on %s, the loaded machine is %s",
+                         saved or "an unstamped machine", live)
+                return None
+        except Exception:
+            return None      # cannot prove it is this machine -> do not use it
+        return r
     except Exception:
         return None
 
@@ -195,12 +222,28 @@ def _enrich_card_entry(entry: dict, geo: dict, sim: dict, met: dict) -> None:
 
 def _upsert_catalog_entry(preset_id: str, preset: dict, gen_thumb: bool = True) -> None:
     """Add/update a Motors-catalog card for this preset so saved motors show
-    up in the Motors tab and can be re-loaded."""
-    try:
-        cat = (json.loads(_CATALOG_PATH.read_text(encoding="utf-8"))
-               if _CATALOG_PATH.exists() else {})
-    except Exception:
-        return
+    up in the Motors tab and can be re-loaded.
+
+    The card is built here but MERGED into the catalog at write time (see the
+    `_mutate_json` at the bottom): generating a thumbnail runs CadQuery and can
+    take seconds, and a whole-file write from a document read before that is a
+    window in which another motor saved concurrently disappears.  Only this
+    card's row is replaced; every other row comes from the file as it stands at
+    the moment of writing.
+    """
+    if _CATALOG_PATH.exists():
+        try:
+            cat = json.loads(_CATALOG_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            # A catalog that does not parse must not be REPLACED by a fresh one
+            # holding this single card — that turns an unreadable file into a
+            # confidently wrong one.  Leave it alone and say so.
+            log.error("motor_catalog.json does not parse — card for '%s' not "
+                      "written; fix the file rather than let a save rebuild it",
+                      preset_id)
+            return
+    else:
+        cat = {}
     geo = preset.get("geometry", {}) or {}
     sim = preset.get("simulation", {}) or {}
     met = preset.get("metrics", {}) or {}
@@ -234,27 +277,79 @@ def _upsert_catalog_entry(preset_id: str, preset: dict, gen_thumb: bool = True) 
     if thumb:
         entry["thumb_svg"] = thumb
     _enrich_card_entry(entry, geo, sim, met)   # power/eff/voltage/magnet/steel/length/wire
-    cat.setdefault("tiers", []); cat.setdefault("diameters_mm", []); cat.setdefault("motors", [])
-    if dia and dia not in cat["diameters_mm"]:
-        cat["diameters_mm"] = sorted(set([*cat["diameters_mm"], dia]))
-    cat["motors"] = [m for m in cat["motors"] if m.get("id") != cid] + [entry]
+    # The card carries the machine it was built from, so a card and a preset can
+    # be checked against each other instead of trusted to have stayed in step.
+    entry["geo_sig"] = _geo_sig(geo)
+    entry["updated_at"] = _dt.datetime.now().isoformat(timespec="seconds")
+
+    def _m(d: dict) -> None:
+        d.setdefault("tiers", []); d.setdefault("diameters_mm", []); d.setdefault("motors", [])
+        if dia and dia not in d["diameters_mm"]:
+            d["diameters_mm"] = sorted(set([*d["diameters_mm"], dia]))
+        d["motors"] = [m for m in d["motors"] if m.get("id") != cid] + [entry]
     try:
-        _CATALOG_PATH.write_text(json.dumps(cat, indent=2, ensure_ascii=False), encoding="utf-8")
+        _mutate_json(_CATALOG_PATH, _m, default={})
     except Exception:
-        pass
+        log.warning("catalog card for '%s' was not written", preset_id, exc_info=True)
 
 
 def _load_presets() -> dict:
-    if not _PRESETS_PATH.exists():
-        return {}
+    return _read_json(_PRESETS_PATH, {}) or {}
+
+
+# There is deliberately no `_save_presets(whole_dict)` any more.  Every write
+# goes through `_put_preset` / `_drop_preset`, which re-read the store at write
+# time and touch ONE entry: a whole-document write built from a copy read
+# earlier does not merge with a concurrent writer, it erases them.
+
+
+def _put_preset(pid: str, preset: dict) -> dict:
+    """Write ONE motor into the store, merging with whatever is on disk NOW.
+
+    The preset is stamped with the hash of its own geometry and the time it was
+    written, so any consumer (the Motors card, an autosave, a later reader) can
+    ask "is this still the machine I think it is?" instead of assuming.
+    """
+    preset = dict(preset)
+    preset["geo_sig"] = _geo_sig(preset.get("geometry") or {})
+    preset["updated_at"] = _dt.datetime.now().isoformat(timespec="seconds")
+
+    def _m(d: dict) -> None:
+        d[pid] = preset
+    _mutate_json(_PRESETS_PATH, _m, default={})
+    return preset
+
+
+def _drop_preset(pid: str) -> None:
+    """Remove ONE motor, preserving every other entry as it stands on disk now."""
+    def _m(d: dict) -> None:
+        d.pop(pid, None)
+    _mutate_json(_PRESETS_PATH, _m, default={})
+
+
+def _fmt_num(v) -> str:
+    """JS-style number text, so 3.0 and 3 spell the same on both sides."""
+    f = float(v)
+    return str(int(f)) if f == int(f) else repr(f)
+
+
+def _geo_sig(geometry: dict) -> str:
+    """Stamp identifying a machine: `key:value|…` over the numeric geometry
+    fields, sorted by key.
+
+    Deliberately the SAME construction as the frontend's `geoSignature`
+    (web/src/components/common/geoSig.ts), spelled out rather than hashed — one
+    dialect for "which motor is this?" on both sides of the wire, so a stamp
+    written here can be compared against one made in the browser with `==` and
+    no translation step to get subtly wrong.  It is also readable in the file,
+    which matters when the question is "why does this card show that torque?".
+    """
     try:
-        return json.loads(_PRESETS_PATH.read_text(encoding="utf-8"))
+        return "|".join(f"{k}:{_fmt_num(v)}"
+                        for k, v in sorted((geometry or {}).items())
+                        if isinstance(v, (int, float)) and not isinstance(v, bool))
     except Exception:
-        return {}
-
-
-def _save_presets(d: dict) -> None:
-    _PRESETS_PATH.write_text(json.dumps(d, indent=2, ensure_ascii=False), encoding="utf-8")
+        return ""
 
 
 def _summary(p: dict) -> dict:
@@ -293,6 +388,11 @@ class SettingsPatch(BaseModel):
     mesh: Optional[dict] = None
     simulation: Optional[dict] = None
     geometry: Optional[dict] = None
+    # The client's own signature of the geometry it believes it is sending.
+    # Accepted so the request is self-describing (and so a client can be told it
+    # disagrees), but NEVER stored as the stamp: the stored stamp is recomputed
+    # from the geometry that actually landed on disk.
+    geo_sig: Optional[str] = None
 
 
 @router.get("")
@@ -420,14 +520,13 @@ def save_current_as_preset(req: SavePresetRequest):
     presets = _load_presets()
     pid = req.id or req.name.lower().replace(" ", "_").replace("/", "_")
     order = 1 + max([p.get("order", 0) for p in presets.values()] or [0])
-    presets[pid] = {
+    saved = _put_preset(pid, {
         "id": pid, "name": req.name, "description": req.description,
         "order": order, "metrics": req.metrics or {}, "owner": "user",
         "geometry": geometry, "simulation": simulation, "mesh": mesh,
-    }
-    _save_presets(presets)
-    _upsert_catalog_entry(pid, presets[pid])   # show it in the Motors tab
-    return {**_summary(presets[pid]), "id": pid}
+    })
+    _upsert_catalog_entry(pid, saved)   # show it in the Motors tab
+    return {**_summary(saved), "id": pid}
 
 
 @router.post("/{preset_id}/settings")
@@ -437,23 +536,41 @@ def save_motor_settings(preset_id: str, patch: SettingsPatch):
     This is the "Save mesh/simulation to motor" button: it stamps the current
     UI settings onto the motor we loaded, WITHOUT touching its geometry.
     """
-    presets = _load_presets()
-    p = presets.get(preset_id)
-    if not p:
+    if preset_id not in _load_presets():
         raise HTTPException(status_code=404, detail=f"motor '{preset_id}' not found")
-    if patch.geometry is not None:
-        p["geometry"] = {**(p.get("geometry") or {}), **patch.geometry}
-    if patch.mesh is not None:
-        p["mesh"] = {**(p.get("mesh") or {}), **patch.mesh}
-    if patch.simulation is not None:
-        p["simulation"] = {**(p.get("simulation") or {}), **patch.simulation}
-    presets[preset_id] = p
-    _save_presets(presets)
+    # Read-latest → patch → write, all inside the store lock: the patch is
+    # applied to the entry AS IT IS ON DISK, not to a copy read before the
+    # request did its other work.  This is the autosave path — it fires on every
+    # edit — so it is the one most likely to race another writer.
+    saved: dict = {}
+
+    def _m(d: dict) -> None:
+        nonlocal saved
+        p = dict(d.get(preset_id) or {})
+        if not p:
+            return
+        if patch.geometry is not None:
+            p["geometry"] = {**(p.get("geometry") or {}), **patch.geometry}
+        if patch.mesh is not None:
+            p["mesh"] = {**(p.get("mesh") or {}), **patch.mesh}
+        if patch.simulation is not None:
+            p["simulation"] = {**(p.get("simulation") or {}), **patch.simulation}
+        # Stamp from the geometry that ended up stored — not from what the
+        # client claimed it was sending.  A stamp a consumer cannot trust is
+        # worse than none, because it is believed.
+        p["geo_sig"] = _geo_sig(p.get("geometry") or {})
+        p["updated_at"] = _dt.datetime.now().isoformat(timespec="seconds")
+        d[preset_id] = p
+        saved = p
+    _mutate_json(_PRESETS_PATH, _m, default={})
+    if not saved:
+        raise HTTPException(status_code=404, detail=f"motor '{preset_id}' not found")
     # keep the Motors-tab card in sync for user motors; only rebuild the
     # geometry thumbnail when the geometry actually changed (else reuse it).
-    if p.get("owner") == "user":
-        _upsert_catalog_entry(preset_id, p, gen_thumb=(patch.geometry is not None))
+    if saved.get("owner") == "user":
+        _upsert_catalog_entry(preset_id, saved, gen_thumb=(patch.geometry is not None))
     return {"status": "ok", "id": preset_id,
+            "geo_sig": saved.get("geo_sig"), "updated_at": saved.get("updated_at"),
             "saved": [k for k in ("geometry", "mesh", "simulation")
                       if getattr(patch, k) is not None]}
 
@@ -482,8 +599,7 @@ def open_motor(preset_id: str):
             c["id"] = target
             c["owner"] = "user"
             c["order"] = 1 + max([p.get("order", 0) for p in presets.values()] or [0])
-            presets[target] = c
-            _save_presets(presets)
+            _put_preset(target, c)
     return apply_preset(target)
 
 
@@ -496,45 +612,50 @@ class RenamePresetRequest(BaseModel):
 def rename_preset(preset_id: str, req: RenamePresetRequest):
     """Rename a saved motor (display name only — the id stays stable, so the
     catalog card, apply/open flows and any geometry links keep working)."""
-    presets = _load_presets()
-    if preset_id not in presets:
+    if preset_id not in _load_presets():
         raise HTTPException(status_code=404, detail=f"preset '{preset_id}' not found")
     new_name = (req.name or "").strip()
     if not new_name:
         raise HTTPException(status_code=422, detail="name must not be empty")
-    presets[preset_id]["name"] = new_name
-    if req.description is not None:
-        presets[preset_id]["description"] = req.description
-    _save_presets(presets)
+    renamed: dict = {}
+
+    def _m(d: dict) -> None:
+        nonlocal renamed
+        p = d.get(preset_id)
+        if not p:
+            return
+        p["name"] = new_name
+        if req.description is not None:
+            p["description"] = req.description
+        p["updated_at"] = _dt.datetime.now().isoformat(timespec="seconds")
+        renamed = p
+    _mutate_json(_PRESETS_PATH, _m, default={})
+    if not renamed:
+        raise HTTPException(status_code=404, detail=f"preset '{preset_id}' not found")
     # Refresh the Motors-tab card in place; keep its thumbnail (no CadQuery run).
-    _upsert_catalog_entry(preset_id, presets[preset_id], gen_thumb=False)
+    _upsert_catalog_entry(preset_id, renamed, gen_thumb=False)
     return {"status": "ok", "id": preset_id, "name": new_name}
 
 
 @router.delete("/{preset_id}")
 def delete_preset(preset_id: str):
-    presets = _load_presets()
-    if preset_id not in presets:
+    if preset_id not in _load_presets():
         raise HTTPException(status_code=404, detail=f"preset '{preset_id}' not found")
-    del presets[preset_id]
-    _save_presets(presets)
+    _drop_preset(preset_id)
     # The Motors-tab card lives in the CATALOG under cat_<preset_id> —
     # _upsert_catalog_entry creates/updates it on every save and rename, but
     # delete used to leave it behind, so the user deleted a preset and kept
     # seeing its card ("I can't delete this motor"). Remove the card too.
     _removed_card = False
     try:
-        if _CATALOG_PATH.exists():
-            cat = json.loads(_CATALOG_PATH.read_text(encoding="utf-8"))
-            _cid = f"cat_{preset_id}"
-            _before = len(cat.get("motors", []))
-            cat["motors"] = [m for m in cat.get("motors", [])
-                             if m.get("id") != _cid]
-            if len(cat["motors"]) != _before:
-                _CATALOG_PATH.write_text(
-                    json.dumps(cat, ensure_ascii=False, indent=1),
-                    encoding="utf-8")
-                _removed_card = True
+        _cid = f"cat_{preset_id}"
+
+        def _m(d: dict) -> None:
+            nonlocal _removed_card
+            _before = len(d.get("motors", []))
+            d["motors"] = [m for m in d.get("motors", []) if m.get("id") != _cid]
+            _removed_card = len(d["motors"]) != _before
+        _mutate_json(_CATALOG_PATH, _m, default={})
     except Exception as _e:
         log.warning("preset '%s' deleted but its catalog card was not (%s)",
                     preset_id, _e)

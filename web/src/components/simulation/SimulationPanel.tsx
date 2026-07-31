@@ -700,10 +700,20 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 'the current is extremely sensitive to V — like the real machine open-loop.'} />
             </Box>
             {drive === 'current' ? (
-            <TextField label="I phase RMS (Arms)" type="number" size="small" fullWidth
-              value={current} onChange={e => setCurrent(+e.target.value)}
-              inputProps={{ step: 5, min: 0, max: 500 }} disabled={isRunning}
-              InputProps={{ endAdornment: <HelpTip title={`I coil peak = ${I_coil_peak.toFixed(1)} A → sent to solver`} /> }}/>
+            /* RMS ↔ peak are mutually locked (peak = rms·√2), same pattern as
+               Speed ↔ Frequency below: edit either, the other recomputes.
+               The SOLVER input stays the RMS value — peak is a pure UI view. */
+            <Box sx={{ display: 'flex', gap: 1 }}>
+              <TextField label="I phase RMS (Arms)" type="number" size="small" fullWidth
+                value={Number(current.toFixed(2))} onChange={e => setCurrent(+e.target.value)}
+                inputProps={{ step: 5, min: 0, max: 500 }} disabled={isRunning}
+                InputProps={{ endAdornment: <HelpTip title={`I coil peak = ${I_coil_peak.toFixed(1)} A → sent to solver`} /> }}/>
+              <TextField label="I phase peak (A)" type="number" size="small" fullWidth
+                value={Number((current * Math.SQRT2).toFixed(2))}
+                onChange={e => setCurrent(+e.target.value / Math.SQRT2)}
+                inputProps={{ step: 5, min: 0, max: 707 }} disabled={isRunning}
+                InputProps={{ endAdornment: <HelpTip title={'Peak of the sinusoidal phase current = RMS·√2. Editing this recomputes the RMS — the solver always receives RMS.'} /> }}/>
+            </Box>
             ) : (<>
             <TextField label="V phase peak (V)" type="number" size="small" fullWidth
               value={vPeak} onChange={e => setVPeak(+e.target.value)}

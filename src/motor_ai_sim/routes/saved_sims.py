@@ -80,6 +80,37 @@ class RenameRequest(BaseModel):
     name: str
 
 
+def bucket_for(request: Request) -> str:
+    """Public alias of the per-user bucket key, for server-side writers (the
+    auto-optimizer stores its result point in the SAME library the Compare tab
+    reads, and must file it under the user who launched the run)."""
+    return _bucket(request)
+
+
+def append_sim(bucket: str, name: str, params: Dict[str, Any],
+               results: Dict[str, Any]) -> Dict[str, Any]:
+    """Append a snapshot to ``bucket``'s library and return the stored entry.
+
+    Same store, same lock and same id scheme as the POST route — so a point a
+    background job files is indistinguishable from one the user saved by hand,
+    and the two can never interleave into a lost write."""
+    with _LOCK:
+        store = _load_all()
+        items = store.get(bucket, [])
+        sid = "sim_%d_%d" % (int(time.time() * 1000), len(items))
+        entry = {
+            "id": sid,
+            "name": (name or "untitled").strip()[:80] or "untitled",
+            "created": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "params": params or {},
+            "results": results or {},
+        }
+        items.insert(0, entry)
+        store[bucket] = items
+        _save_all(store)
+    return entry
+
+
 @router.get("/saved")
 def list_saved(request: Request):
     """This user's saved simulation snapshots (newest first)."""

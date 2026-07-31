@@ -23,7 +23,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from motor_ai_sim.config import get_config
@@ -223,6 +223,92 @@ def _scan_worker_count() -> int:
 _SCAN_WORKERS = _scan_worker_count()   # e.g. 10 on a 12-physical-core box
 
 
+# ── Measured eval cost ───────────────────────────────────────────────────────
+# Project rule: a run says what it COSTS before it starts.  The only honest
+# number is one this machine measured, so every subprocess eval is timed and the
+# MEDIAN is kept (median, not mean: one 300 s timeout must not triple the
+# quote).  Persisted next to the config so the estimate survives a restart, and
+# the sample count travels with it — a quote from 3 evals is labelled as such.
+_EVAL_SECS: List[float] = []
+_eval_secs_lock = threading.Lock()
+_EVAL_SECS_MAX = 200          # rolling window
+_EVAL_RATE_FLUSH_EVERY = 10   # persist at most every N evals
+
+
+def _eval_rate_path() -> str:
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..",
+                                        "config", ".eval_rate.json"))
+
+
+def _load_eval_rate() -> None:
+    try:
+        p = _eval_rate_path()
+        if os.path.exists(p):
+            with open(p, encoding="utf-8") as fh:
+                blob = json.load(fh)
+            secs = [float(x) for x in (blob.get("samples") or []) if float(x) > 0]
+            with _eval_secs_lock:
+                _EVAL_SECS.extend(secs[-_EVAL_SECS_MAX:])
+    except Exception as _e:  # noqa: BLE001
+        log.debug("no persisted eval rate: %s", _e)
+
+
+def _save_eval_rate() -> None:
+    try:
+        with _eval_secs_lock:
+            samples = list(_EVAL_SECS)
+        tmp = _eval_rate_path() + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump({"samples": samples[-_EVAL_SECS_MAX:]}, fh)
+        os.replace(tmp, _eval_rate_path())
+    except Exception as _e:  # noqa: BLE001
+        log.debug("could not persist eval rate: %s", _e)
+
+
+def _record_eval_seconds(dt: float) -> None:
+    """Time ONE subprocess eval.  Best-effort; never breaks an eval."""
+    try:
+        if not (math.isfinite(dt) and dt > 0):
+            return
+        with _eval_secs_lock:
+            _EVAL_SECS.append(float(dt))
+            if len(_EVAL_SECS) > _EVAL_SECS_MAX:
+                del _EVAL_SECS[:-_EVAL_SECS_MAX]
+            n = len(_EVAL_SECS)
+        if n % _EVAL_RATE_FLUSH_EVERY == 0:
+            _save_eval_rate()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+# Fallback quote when this machine has never measured an eval.  A P2 honest eval
+# is ~2× a plain transient at the same frame count; the perf work put a warm
+# frame at ~1.2 s, so ~2.4 s/frame is the standing estimate.
+_EVAL_S_PER_FRAME_DEFAULT = 2.4
+
+
+def measured_eval_seconds(steps_per_period: int = 36) -> Dict[str, Any]:
+    """Median measured seconds per FEM eval + how many samples back it.
+
+    Returns ``{"s_per_eval", "n_samples", "source"}``.  source='measured' when
+    this machine has timed evals, 'estimate' when the frame-count fallback is
+    used — the caller SHOWS which, because a quote nobody measured is a guess
+    and must not be printed as a measurement."""
+    with _eval_secs_lock:
+        samples = sorted(_EVAL_SECS)
+    if samples:
+        mid = len(samples) // 2
+        med = (samples[mid] if len(samples) % 2
+               else 0.5 * (samples[mid - 1] + samples[mid]))
+        return {"s_per_eval": round(float(med), 2), "n_samples": len(samples),
+                "source": "measured"}
+    return {"s_per_eval": round(_EVAL_S_PER_FRAME_DEFAULT * max(4, int(steps_per_period)), 2),
+            "n_samples": 0, "source": "estimate"}
+
+
+_load_eval_rate()
+
+
 def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
                      coil_temp_c: float, n_periods: float = 1.0,
                      gamma_deg: float = 0.0, mesh_size_mm: float = 4.0,
@@ -268,12 +354,15 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
                           else {"n_parallel": int(n_parallel)}),
                        **({} if connection is None
                           else {"connection": str(connection)})})
+    import time as _t_eval
+    _t0_eval = _t_eval.monotonic()
     try:
         proc = subprocess.run(
             [sys.executable, "-m", "motor_ai_sim.optimization.refine_proc"],
             # 300 s cap: a healthy eval (even P2 full-ring) finishes in ~1-2 min;
             # a longer run is a hang → let it die so it can't tie up a worker.
             input=spec, capture_output=True, text=True, timeout=300)
+        _record_eval_seconds(_t_eval.monotonic() - _t0_eval)
         out = proc.stdout or ""
         m = out.rfind("@@RESULT@@")
         if m >= 0:
@@ -2472,3 +2561,754 @@ def delete_saved(sid: str):
     if f.exists():
         f.unlink()
     return {"deleted": sid}
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ONE-CLICK AUTO OPTIMIZATION — the user types ONE number (max torque ripple %)
+# and presses Run.  Everything else is assembled HERE, from this project's
+# standing conventions, so there is no way to launch a run that quietly
+# disagrees with them:
+#
+#   OPERATING POINT  the Simulation tab's current settings (current / rpm / γ /
+#                    coil temp), read from the persisted simulation config —
+#                    never a raw default.  The user checks the point in
+#                    Simulation first; the optimizer must optimise THAT machine
+#                    at THAT point.
+#   OBJECTIVE        objective="baseline_line" — the signed perpendicular
+#                    distance above the current-only baseline line.  Standing
+#                    rule: no other single-metric objective is offered here.
+#   CONSTRAINT       ripple ≤ the user's number, through the existing penalty
+#                    machinery (λ starts at 2 and the continuation ramp
+#                    escalates it while the incumbent still breaches the gate).
+#   VARIABLES        config sweep_whitelist — the curated set (incl. rotor_hole).
+#   EVALS            refine_proc: P2, geometry validation, unconverged rejects,
+#                    d-axis per cross-section.  The one honest eval path.
+#
+# SEARCH RANGE.  The whitelist says WHICH knobs move, not how far.  The window
+# is NOT clamped to the schema min/max and not to any UI range: a candidate that
+# the geometry validator accepts is a legitimate candidate no matter how far it
+# wandered.  The only fence below is physical positivity; everything else is
+# decided by validate_geometry (cheap, pre-mesh, inside refine_proc) and by the
+# objective itself.  Because there is no box, the step size cannot come from a
+# range — it comes from the MACHINE's scale (see _auto_sigma), so a parameter
+# sitting at 0.0 (a fillet, a small hole) is still genuinely explorable instead
+# of being frozen by a percentage of zero.
+# ═════════════════════════════════════════════════════════════════════════════
+
+# Ripple-penalty weight this route starts at.  Deliberately soft: the
+# continuation ramp in _ripple_ramp_step doubles it (up to 16×) whenever the
+# round's best still breaches the gate, so the search begins free to explore and
+# is progressively forced under the limit.
+_AUTO_RIPPLE_LAMBDA = 2.0
+_AUTO_DEFAULT_BUDGET = 120        # FEM evals, hard cap (the quote is a promise)
+_AUTO_BUDGET_MAX = 2000
+_AUTO_CURRENT_BUMP_PCT = 10.0     # 2nd baseline sim at I·1.10 → the baseline line
+
+# Sigma (initial CMA-ES step) per variable.  Two floors, because one is not
+# enough:
+#   • a fraction of the variable's OWN value — the right scale for a knob that
+#     is already large;
+#   • a fraction of the MOTOR's size (or an absolute, for dimensionless knobs) —
+#     because 25 % of a fillet sitting at 0.0 mm is 0.0, and a variable whose
+#     step is zero never moves again.  The machine's own diameter is the honest
+#     yardstick for "how far may a millimetre-scale knob jump".
+_AUTO_SIGMA_SELF_FRAC = 0.25
+_AUTO_SIGMA_SIZE_FRAC = 0.015     # of stator_diameter, for unit=mm variables
+_AUTO_SIGMA_DIMLESS_FLOOR = 0.05  # absolute, for dimensionless variables
+
+
+def _auto_sigma(x: float, unit: str, is_int: bool, stator_diameter: float) -> float:
+    """Initial CMA-ES step for ONE variable — see the block comment above."""
+    self_term = _AUTO_SIGMA_SELF_FRAC * abs(float(x))
+    if is_int:
+        # An integer knob (turns/slot) whose step rounds below 1 cannot change.
+        return max(self_term, 1.0)
+    if str(unit).strip().lower() == "mm":
+        return max(self_term, _AUTO_SIGMA_SIZE_FRAC * max(1.0, float(stator_diameter)))
+    return max(self_term, _AUTO_SIGMA_DIMLESS_FLOOR)
+
+
+def _auto_classify_error(err: Any) -> str:
+    """Which fence stopped this candidate.  Counted per run and reported: a run
+    that fences 90 % of what it samples is not converging, it is thrashing, and
+    that has to be VISIBLE rather than hidden behind a flat 'eval failed'."""
+    e = str(err or "").lower()
+    if "geometry violation" in e or "not buildable" in e or "infeasible winding" in e:
+        return "geometry"
+    if "unconverged" in e:
+        return "unconverged"
+    if "timeout" in e:
+        return "timeout"
+    return "other"
+
+
+def _js_number(v: float) -> str:
+    """Format a float the way JavaScript's template literal does, so a signature
+    computed here compares `===` against the frontend's geoSignature()."""
+    f = float(v)
+    if f == int(f) and abs(f) < 1e21:
+        return str(int(f))
+    return repr(f)
+
+
+def _geo_signature(geo: Dict[str, Any]) -> str:
+    """The frontend's geoSignature(), server-side: numeric fields only, sorted by
+    key, ``name:value`` joined by '|'.  This is the machine stamp the stale-result
+    guards compare — a stored point whose stamp does not match the loaded machine
+    is a row pairing one motor's geometry with another motor's numbers."""
+    parts = []
+    for k in sorted(geo.keys()):
+        v = geo[k]
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            continue
+        parts.append("{}:{}".format(k, _js_number(v)))
+    return "|".join(parts)
+
+
+def _auto_population(n_vars: int) -> int:
+    """CMA-ES default population λ = 4 + ⌊3·ln N⌋ — the same rule the library
+    uses, restated here so the cost quote can be computed before the run."""
+    return int(4 + math.floor(3.0 * math.log(max(2, int(n_vars)))))
+
+
+def _auto_assemble(max_ripple_pct: float, budget_evals: int = 0) -> Dict[str, Any]:
+    """Build the FULL optimization request from the standing conventions.
+
+    Raises HTTPException(422) with an engineer-readable message when the input
+    or the project state cannot produce a runnable optimization — external
+    clients are coming, so an impossible machine is refused loudly rather than
+    solved quietly."""
+    try:
+        r = float(max_ripple_pct)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail=(
+            "max_ripple_pct must be a number in percent (e.g. 5 for 5 %); "
+            "got {!r}".format(max_ripple_pct)))
+    if not math.isfinite(r):
+        raise HTTPException(status_code=422, detail=(
+            "max_ripple_pct must be a finite number in percent; "
+            "got {!r}".format(max_ripple_pct)))
+    if r <= 0.0:
+        raise HTTPException(status_code=422, detail=(
+            "max_ripple_pct must be > 0 %; got {:g} %. A zero or negative ripple "
+            "limit has no feasible design — every real machine has some torque "
+            "ripple.".format(r)))
+    if r > 100.0:
+        raise HTTPException(status_code=422, detail=(
+            "max_ripple_pct must be <= 100 %; got {:g} %. Ripple is peak-to-peak "
+            "torque as a percentage of the mean, so a limit above 100 % is not a "
+            "constraint at all.".format(r)))
+
+    cfg = get_config()
+    geo = dict(cfg.get("geometry", {}))
+    sim = dict(cfg.get("simulation", {}))
+    mesh = dict(cfg.get("mesh", {}))
+    schema = dict(cfg.get("geometry_schema", {}))
+    wl = cfg.get("sweep_whitelist") or []
+    if not wl:
+        raise HTTPException(status_code=422, detail=(
+            "config sweep_whitelist is empty — there is nothing to optimize. "
+            "Add the geometry parameters the optimizer may vary."))
+
+    # ── OPERATING POINT: the Simulation tab's settings, not raw defaults ──────
+    # max_current / phase_offset_deg are what the Simulation panel PATCHes; the
+    # mirrored current_a / gamma_deg are accepted as a fallback for older configs.
+    def _sim_num(*keys):
+        for k in keys:
+            v = sim.get(k)
+            if isinstance(v, (int, float)) and not isinstance(v, bool) \
+                    and math.isfinite(float(v)):
+                return float(v)
+        return None
+
+    I = _sim_num("max_current", "current_a")
+    rpm = _sim_num("rpm")
+    gamma = _sim_num("phase_offset_deg", "gamma_deg")
+    coil_temp = _sim_num("coil_temp_c")
+    steps = _sim_num("steps_per_period")
+    if I is None or I <= 0.0:
+        raise HTTPException(status_code=422, detail=(
+            "the Simulation tab has no usable phase current (simulation."
+            "max_current) — set the operating point in Simulation first; the "
+            "optimizer never invents one."))
+    if rpm is None or rpm <= 0.0:
+        raise HTTPException(status_code=422, detail=(
+            "the Simulation tab has no usable speed (simulation.rpm) — set the "
+            "operating point in Simulation first."))
+    if gamma is None:
+        gamma = 0.0
+    if coil_temp is None or coil_temp <= -273.0:
+        coil_temp = 120.0
+    steps_pp = int(steps) if (steps and steps >= 8) else 36
+    steps_pp = max(8, min(180, steps_pp))
+    # RIPPLE IS THE CONSTRAINT HERE, so it may not be aliased.  The 12s14p
+    # cogging sits at the 12th electrical harmonic; below ~48 frames/period the
+    # sampling folds it, geometry-dependently, and the optimizer "finds" ripple
+    # minima that do not survive a converged re-solve (the same reasoning that
+    # floors the sweep route).  A run whose whole job is holding ripple under a
+    # number cannot be allowed to measure that number wrong — so floor the frame
+    # count and SAY that we did.  Applying the result pins 48 back into the
+    # Simulation tab (eval_params), so the re-solve reproduces what was reported.
+    steps_requested = steps_pp
+    steps_pp = max(steps_pp, 48)
+
+    # ── EVAL PARAMS: the Mesh tab's persisted settings + the P2 honest path ───
+    n_sectors = int(mesh.get("n_sectors", 1) or 1)
+    n_sectors = -1 if n_sectors <= 1 else n_sectors
+    ev = {
+        "steps_per_period": steps_pp,
+        # What the Simulation tab asked for, when the ripple floor raised it —
+        # so the card can explain the difference instead of silently disagreeing.
+        "steps_per_period_requested": steps_requested,
+        "coil_temp_c": float(coil_temp),
+        "mesh_size_mm": max(1.0, min(float(mesh.get("mesh_size_mm", 4.0) or 4.0), 12.0)),
+        "min_size_mm": max(0.1, min(float(mesh.get("min_size_mm", 0.3) or 0.3), 3.0)),
+        "gap_layers": max(1.0, min(float(mesh.get("gap_layers", 2.0) or 2.0), 8.0)),
+        "n_sectors": n_sectors,
+        # P2 is the only basis; refine_proc coerces the belt gap + natural
+        # symmetry sector per eval, exactly as the Simulation route does.
+        "element_order": 2,
+        "structured_gap": True,
+        "airgap_macro": False,
+        "iron_template": True,
+        "geo_mesh": True,
+        # Loss model: the same one the Simulation tab runs, so the optimizer's
+        # efficiency is the efficiency the user will re-measure.
+        "rotor_eddy": True,
+        "end_winding_factor": 0.0,   # 0 = per-candidate auto k_end (refine_proc)
+        "torque_filter": False,      # honest RAW ripple
+        "pole_copy": None,
+    }
+
+    # ── VARIABLES: the whitelist, at the machine's own scale, UNBOXED ─────────
+    stator_d = float(geo.get("stator_diameter", 0.0) or 0.0)
+    if stator_d <= 0.0:
+        stator_d = 2.0 * float(geo.get("stator_outer_radius", 20.0) or 20.0)
+    variables = []
+    for name in wl:
+        cur = geo.get(name)
+        if isinstance(cur, bool) or not isinstance(cur, (int, float)):
+            continue
+        meta = schema.get(name, {}) or {}
+        unit = str(meta.get("unit", "") or "")
+        is_int = str(meta.get("type", "float")) == "int"
+        x0 = float(cur)
+        sigma = _auto_sigma(x0, unit, is_int, stator_d)
+        # The ONLY bound is physical positivity.  A dimension may go to zero
+        # (that is a real design — no fillet, no hole); it may not go negative,
+        # because a negative length is not a machine.  Integers additionally
+        # floor at 1: zero turns is not a winding.
+        lo = 1.0 if is_int else 0.0
+        variables.append({
+            "name": name, "x0": x0, "sigma": round(float(sigma), 4),
+            "lo": lo, "hi": None,             # explicitly UNBOUNDED above
+            "unit": unit, "is_int": is_int,
+            # Manufacturable grid, not a bound: mm knobs land on 0.1 mm.
+            "quant": 0.1 if unit.strip().lower() == "mm" else 0.0,
+        })
+    if not variables:
+        raise HTTPException(status_code=422, detail=(
+            "none of the sweep_whitelist parameters exist as numbers in the "
+            "current geometry — the whitelist and the loaded motor disagree."))
+
+    pop = _auto_population(len(variables))
+    budget = int(budget_evals) if int(budget_evals or 0) > 0 else _AUTO_DEFAULT_BUDGET
+    budget = max(pop + 2, min(budget, _AUTO_BUDGET_MAX))
+    # 2 evals go to the baseline pair (A at I, B at I·1.1) that defines the line.
+    generations = max(1, int((budget - 2) // pop))
+
+    rate = measured_eval_seconds(steps_pp)
+    workers = max(1, min(_SCAN_WORKERS, pop))
+    waves = int(math.ceil(pop / float(workers)))
+    est_wall = 2.0 * rate["s_per_eval"] + generations * waves * rate["s_per_eval"]
+
+    return {
+        "objective": "baseline_line",          # STANDING RULE — not configurable
+        "ripple_max_pct": r,
+        "ripple_penalty_lambda": _AUTO_RIPPLE_LAMBDA,
+        "current_bump_pct": _AUTO_CURRENT_BUMP_PCT,
+        "operating_point": {"current_a": I, "rpm": rpm, "gamma_deg": gamma},
+        "eval": ev,
+        "variables": variables,
+        "stator_diameter": stator_d,
+        "budget_evals": budget,
+        "population": pop,
+        "generations": generations,
+        "cost": {
+            "s_per_eval": rate["s_per_eval"],
+            "s_per_eval_source": rate["source"],
+            "n_samples": rate["n_samples"],
+            "n_evals_max": budget,
+            "parallel_workers": workers,
+            "est_wall_seconds": int(round(est_wall)),
+            "est_cpu_seconds": int(round(budget * rate["s_per_eval"])),
+        },
+    }
+
+
+def _auto_worker(plan: Dict[str, Any], run_id: str, bucket: str,
+                 point_name: str) -> None:
+    """CMA-ES over the whitelist in PHYSICAL units with a per-variable sigma.
+
+    Differs from _cmaes_worker in exactly one way that matters: the search is
+    NOT normalised into a [0,1] box.  x lives in millimetres and fractions, the
+    initial step comes from the machine's scale (_auto_sigma) and CMA's own
+    covariance adapts it outward as it learns — so an optimum outside whatever
+    range a human would have typed is reachable.  The fence is the geometry
+    validator inside refine_proc, and every candidate it rejects is counted."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    try:
+        import cma
+    except Exception as e:  # noqa: BLE001
+        with _descent_lock:
+            _descent_state.update(error="cma package not installed: {}".format(e),
+                                  running=False, phase="done")
+        return
+
+    specs = plan["variables"]
+    names = [v["name"] for v in specs]
+    x0 = [float(v["x0"]) for v in specs]
+    sigmas = [float(v["sigma"]) for v in specs]
+    lows = [float(v["lo"]) for v in specs]
+    ev = plan["eval"]
+    op = plan["operating_point"]
+    I = float(op["current_a"]); rpm = float(op["rpm"]); g = float(op["gamma_deg"])
+    ripple_max = float(plan["ripple_max_pct"])
+    budget = int(plan["budget_evals"])
+    pop = int(plan["population"])
+
+    counts = {"ok": 0, "geometry": 0, "unconverged": 0, "timeout": 0, "other": 0}
+
+    def _fit(i, val):
+        v = specs[i]
+        x = max(float(v["lo"]), float(val))
+        if v["is_int"]:
+            return float(max(1, int(round(x))))
+        q = float(v.get("quant") or 0.0)
+        return round(x / q) * q if q > 0 else float(x)
+
+    def to_geom(xv):
+        return {names[i]: _fit(i, float(xv[i])) for i in range(len(names))}
+
+    def _eval_at(d, cur):
+        o = _subprocess_eval(
+            d, cur, int(ev["steps_per_period"]), float(ev["coil_temp_c"]),
+            n_periods=1.0, gamma_deg=g,
+            mesh_size_mm=float(ev["mesh_size_mm"]), min_size_mm=float(ev["min_size_mm"]),
+            n_sectors=int(ev["n_sectors"]), pole_copy=ev["pole_copy"],
+            torque_filter=bool(ev["torque_filter"]), gap_layers=float(ev["gap_layers"]),
+            end_winding_factor=float(ev["end_winding_factor"]),
+            rotor_eddy=bool(ev["rotor_eddy"]), structured_gap=bool(ev["structured_gap"]),
+            airgap_macro=bool(ev["airgap_macro"]), iron_template=bool(ev["iron_template"]),
+            geo_mesh=bool(ev["geo_mesh"]), element_order=int(ev["element_order"]),
+            rpm=rpm)
+        if o.get("ok") and isinstance(o.get("res"), dict):
+            o["res"]["current_a"] = float(cur)
+        if isinstance(o, dict):
+            o["overrides"] = dict(d)
+        if o.get("ok"):
+            counts["ok"] += 1
+        else:
+            counts[_auto_classify_error(o.get("error"))] += 1
+        return o
+
+    def _reject_block():
+        tried = sum(counts.values())
+        rejected = tried - counts["ok"]
+        return {"evaluated": tried, "ok": counts["ok"], "rejected": rejected,
+                "rejected_geometry": counts["geometry"],
+                "rejected_unconverged": counts["unconverged"],
+                "rejected_timeout": counts["timeout"],
+                "rejected_other": counts["other"],
+                "reject_pct": (round(100.0 * rejected / tried, 1) if tried else 0.0)}
+
+    try:
+        # The sigma vector is the run's most consequential hidden choice — print
+        # it so a run can be audited from the log alone.
+        log.info("AUTO optimization | ripple <= %.2f%% | %d vars | pop %d | budget %d evals\n"
+                 "  operating point: %.4g A - %.4g rpm - gamma %.4g deg - coil %.4g C - %d steps/T\n"
+                 "  sigma (initial CMA step, physical units): %s",
+                 ripple_max, len(names), pop, budget, I, rpm, g,
+                 float(ev["coil_temp_c"]), int(ev["steps_per_period"]),
+                 ", ".join("{}={:g}".format(n, s) for n, s in zip(names, sigmas)))
+
+        _RIPPLE_PEN_LAM["v"] = _AUTO_RIPPLE_LAMBDA
+        _RIPPLE_PEN_LAM["v0"] = _AUTO_RIPPLE_LAMBDA
+        _THD_PEN["lam"] = 0.0
+
+        n_evals = 0
+        all_pts = []
+        history = []
+
+        with _descent_lock:
+            _descent_state["phase"] = "baseline"
+        _save_descent_state()
+
+        b = _eval_at(to_geom(x0), I); n_evals += 1
+        if not b.get("ok"):
+            with _descent_lock:
+                _descent_state.update(
+                    error=("baseline eval failed — the CURRENT design does not "
+                           "evaluate at this operating point: {}".format(b.get("error"))),
+                    running=False, phase="done")
+            _save_descent_state()
+            return
+        base = b["res"]
+        bump = float(plan["current_bump_pct"])
+        bb = _eval_at(to_geom(x0), I * (1.0 + bump / 100.0))
+        n_evals += 1
+        if bb.get("ok"):
+            base["_bline"] = _make_bline(base, bb["res"], bump)
+            with _descent_lock:
+                _descent_state["baseline_line"] = dict(base["_bline"])
+        else:
+            # Without point B there is no line, hence no perpendicular metric —
+            # and the standing rule forbids silently falling back to another
+            # objective.  Stop and say why.
+            with _descent_lock:
+                _descent_state.update(
+                    error=("baseline LINE failed — the second reference sim at "
+                           "I x {:.2f} did not evaluate ({}), so the perpendicular-"
+                           "distance objective has no reference to measure against."
+                           .format(1.0 + bump / 100.0, bb.get("error"))),
+                    running=False, phase="done")
+            _save_descent_state()
+            return
+
+        cost0, F0 = _descent_cost(base, base, ripple_max, 1.0, 1.0, 1.0, 1e9)
+        best = {"x": to_geom(x0), "metrics": base, "cost": cost0, "F": F0}
+        history.append({"iter": 0, **_msum(base), "cost": round(cost0, 5),
+                        "F": round(F0, 5),
+                        "x": {k: round(float(v), 4) for k, v in best["x"].items()}})
+        _bp = _pt(b, "baseline")
+        if _bp:
+            all_pts.append(_bp)
+
+        def _bstate():
+            return {"metrics": _msum(best["metrics"]), "cost": round(best["cost"], 5),
+                    "F": round(best["F"], 5), "x": dict(best["x"])}
+
+        with _descent_lock:
+            _descent_state.update(
+                running=True, iter=0, phase="optimizing", n_evals=n_evals,
+                baseline=_msum(base), best=_bstate(), current=_msum(base),
+                history=list(history), points=list(all_pts), grad={}, error=None,
+                variables=[{"name": v["name"], "lo": v["lo"], "hi": v["hi"],
+                            "step": v["sigma"]} for v in specs])
+            _descent_state["auto"] = dict(_descent_state.get("auto") or {},
+                                          rejects=_reject_block())
+
+        es = cma.CMAEvolutionStrategy(
+            list(x0), 1.0,
+            {"CMA_stds": list(sigmas), "bounds": [list(lows), None],
+             "popsize": pop, "maxiter": int(plan["generations"]),
+             "verbose": -9, "seed": 12345})
+
+        it = 0
+        while not es.stop():
+            with _descent_lock:
+                if _descent_state["cancel"]:
+                    break
+            if n_evals >= budget:
+                log.info("AUTO: eval budget reached (%d/%d) — stopping as quoted",
+                         n_evals, budget)
+                break
+            sols = es.ask()
+            cost_by_i = {}
+            with ThreadPoolExecutor(max_workers=_SCAN_WORKERS) as pool:
+                futs = {pool.submit(_eval_at, to_geom(s), I): i
+                        for i, s in enumerate(sols)}
+                for fut in as_completed(futs):
+                    i = futs[fut]
+                    out = fut.result()
+                    n_evals += 1
+                    if out and out.get("ok"):
+                        c, Fv = _descent_cost(out["res"], base, ripple_max,
+                                              1.0, 1.0, 1.0, 1e9)
+                        cost_by_i[i] = c
+                        p = _pt(out, "cmaes")
+                        if p:
+                            all_pts.append(p)
+                        if c < best["cost"] - 1e-9:
+                            best = {"x": to_geom(sols[i]), "metrics": out["res"],
+                                    "cost": c, "F": Fv}
+                    else:
+                        cost_by_i[i] = 1e6      # fenced candidate → repelled
+                    with _descent_lock:
+                        _descent_state["n_evals"] = n_evals
+                        _descent_state["points"] = list(all_pts)
+                        _descent_state["best"] = _bstate()
+                        _descent_state["current"] = _msum(best["metrics"])
+                        _descent_state["auto"] = dict(_descent_state.get("auto") or {},
+                                                      rejects=_reject_block())
+            es.tell(sols, [cost_by_i.get(i, 1e6) for i in range(len(sols))])
+            it += 1
+            history.append({"iter": it, **_msum(best["metrics"]),
+                            "cost": round(best["cost"], 5), "F": round(best["F"], 5),
+                            "x": {k: round(float(v), 4) for k, v in best["x"].items()}})
+            with _descent_lock:
+                _descent_state.update(iter=it, history=list(history))
+            _save_descent_state()
+            rj = _reject_block()
+            log.info("AUTO gen %d/%d | evals %d/%d | best F=%.5g ripple=%.3g%% "
+                     "T=%.4g Nm | fenced %d/%d (%.0f%%: geom %d, unconv %d)",
+                     it, plan["generations"], n_evals, budget, best["F"],
+                     float(best["metrics"].get("T_ripple_pct") or 0.0),
+                     float(best["metrics"].get("T_em_Nm") or 0.0),
+                     rj["rejected"], rj["evaluated"], rj["reject_pct"],
+                     rj["rejected_geometry"], rj["rejected_unconverged"])
+            # Penalty continuation: still over the gate → make the next
+            # generation feel it harder (λ ×2, capped at 16× the start).
+            ramp = _ripple_ramp_step(best["metrics"], ripple_max, it)
+            if ramp is not None:
+                best["cost"], best["F"] = _descent_cost(
+                    best["metrics"], base, ripple_max, 1.0, 1.0, 1.0, 1e9)
+                with _descent_lock:
+                    _descent_state.setdefault("range_events", []).append(dict(ramp))
+                    _descent_state["best"] = _bstate()
+
+        rj = _reject_block()
+        result = {
+            "best": {"x": best["x"],
+                     "overrides": {k: round(float(v), 4) for k, v in best["x"].items()},
+                     "metrics": _msum(best["metrics"]), "cost": round(best["cost"], 5),
+                     "F": round(best["F"], 5)},
+            "baseline": _msum(base), "history": list(history), "n_evals": n_evals,
+            "operating_point": op, "ripple_max_pct": ripple_max,
+            "baseline_line": base.get("_bline"),
+            "algorithm": "cmaes_auto", "auto": True, "rejects": rj,
+            "sigma": dict(zip(names, sigmas)),
+        }
+        with _descent_lock:
+            _descent_state["result"] = result
+            _descent_state["auto"] = dict(_descent_state.get("auto") or {},
+                                          rejects=rj, n_evals=n_evals)
+        log.info("AUTO done | %d evals, %d fenced (%.0f%%) | best ripple %.3g%% "
+                 "(gate %.3g%%) T=%.4g Nm eff=%.4g",
+                 n_evals, rj["rejected"], rj["reject_pct"],
+                 float(best["metrics"].get("T_ripple_pct") or 0.0), ripple_max,
+                 float(best["metrics"].get("T_em_Nm") or 0.0),
+                 float(best["metrics"].get("efficiency") or 0.0))
+
+        # ── Persist the result as a Compare point (with provenance) ───────────
+        try:
+            pt = _auto_compare_point(bucket, point_name, plan, result)
+            with _descent_lock:
+                _descent_state["auto"] = dict(
+                    _descent_state.get("auto") or {},
+                    compare_point={"id": pt.get("id"), "name": pt.get("name")})
+        except Exception as _e:   # noqa: BLE001 — a failed save must not lose the run
+            log.warning("auto: could not save the compare point: %s", _e)
+            with _descent_lock:
+                _descent_state["auto"] = dict(_descent_state.get("auto") or {},
+                                              compare_point_error=str(_e))
+    except Exception as e:  # noqa: BLE001
+        log.exception("auto optimization failed")
+        with _descent_lock:
+            _descent_state["error"] = str(e)
+    finally:
+        with _descent_lock:
+            _descent_state["running"] = False
+            _descent_state["phase"] = "done"
+        _save_descent_state()
+        _save_eval_rate()
+
+
+def _auto_result_metrics(m: Dict[str, Any], rpm: float, geo_sig: str) -> Dict[str, Any]:
+    """Optimizer metrics re-keyed into the Compare tab's result vocabulary (the
+    one PhysicsDashboard writes), so an auto point renders in the same columns
+    as a hand-saved simulation instead of showing blanks."""
+    out = {
+        "T_em_avg_Nm": m.get("T_em_Nm"),
+        "efficiency": m.get("efficiency"),
+        "torque_per_mass_Nm_kg": m.get("torque_per_mass"),
+        "T_ripple_pct": m.get("T_ripple_pct"),
+        "mass_total_kg": m.get("mass_total_kg"),
+        "P_loss_total_W": m.get("P_loss_total_W"),
+        "P_core_W": m.get("P_core_W"),
+        "P_stranded_W": m.get("P_stranded_W"),
+        "P_solid_W": m.get("P_solid_W"),
+        "P_mech_W": m.get("P_mech_W"),
+        "J_coil_A_per_mm2": m.get("J_coil_A_per_mm2"),
+        "KV_rpm_per_V_line": m.get("KV_rpm_per_V_line"),
+        "power_per_mass_W_kg": m.get("power_per_mass_W_kg"),
+        "loss_density_W_kg": m.get("loss_density_W_kg"),
+        "V_phase_peak_V": m.get("V_peak"),
+        "V_line_peak_V": m.get("V_line_peak_V"),
+        "I_phase_rms_A": m.get("I_phase_rms_A") or m.get("current_a"),
+        "THD_LL_pct": m.get("THD_LL_pct"),
+        "Kt_Nm_per_Arms": m.get("Kt_Nm_per_Arms"),
+        "rpm": rpm,
+        # The machine stamp travels WITH the numbers (stale-machine doctrine):
+        # these results were solved on THIS cross-section and no other.
+        "_geoSig": geo_sig,
+    }
+    return {k: v for k, v in out.items() if v is not None}
+
+
+def _auto_compare_point(bucket: str, name: str, plan: Dict[str, Any],
+                        result: Dict[str, Any]) -> Dict[str, Any]:
+    """File the optimized design in the Compare library: full geometry, the
+    metrics it was scored on, and the provenance that says where it came from.
+
+    Stamped with the geometry signature of the OPTIMIZED cross-section — both
+    `geo_sig` and `geo_sig_solved`, because for this row they are by construction
+    the same machine (the numbers came from evaluating exactly this geometry)."""
+    from motor_ai_sim.routes.saved_sims import append_sim
+
+    cfg = get_config()
+    geo = {k: v for k, v in (cfg.get("geometry") or {}).items()
+           if isinstance(v, (int, float)) and not isinstance(v, bool)}
+    geo.update({k: float(v) for k, v in (result["best"]["overrides"] or {}).items()})
+    sig = _geo_signature(geo)
+    op = plan["operating_point"]
+    ev = plan["eval"]
+    m = result["best"]["metrics"]
+    b = result.get("baseline") or {}
+
+    params = {}
+    for part, mat in (cfg.get("materials") or {}).items():
+        if isinstance(mat, str) and mat:
+            params["mat_{}".format(part)] = mat
+    params.update({
+        "geo_sig": sig, "geo_sig_solved": sig,
+        "I_phase_rms": m.get("current_a", op["current_a"]),
+        "gamma_deg": op["gamma_deg"], "rpm": op["rpm"],
+        "coil_temp_c": ev["coil_temp_c"],
+        "end_winding_factor": ev["end_winding_factor"],
+        "connection": (cfg.get("simulation") or {}).get("connection"),
+        "steps_per_period": ev["steps_per_period"],
+        "n_sectors": ev["n_sectors"], "mesh_size_mm": ev["mesh_size_mm"],
+        "min_size_mm": ev["min_size_mm"],
+        # ── provenance: what produced this row ──────────────────────────────
+        "src": "auto_optimizer",
+        "src_objective": plan["objective"],
+        "src_ripple_max_pct": plan["ripple_max_pct"],
+        "src_ripple_lambda": plan["ripple_penalty_lambda"],
+        "src_n_evals": result.get("n_evals"),
+        "src_rejected": (result.get("rejects") or {}).get("rejected"),
+        "src_variables": ",".join(v["name"] for v in plan["variables"]),
+        "src_baseline_T_em_Nm": b.get("T_em_Nm"),
+        "src_baseline_ripple_pct": b.get("T_ripple_pct"),
+        "src_element_order": ev["element_order"],
+        "src_created": datetime.now().isoformat(timespec="seconds"),
+    })
+    params.update(geo)
+    return append_sim(bucket, name, params,
+                      _auto_result_metrics(m, float(op["rpm"]), sig))
+
+
+class AutoOptRequest(BaseModel):
+    """The whole user-facing surface of a one-click optimization: ONE number."""
+    max_ripple_pct: float
+    # Everything below is an escape hatch, not a knob the simple card shows.
+    budget_evals: int = 0        # 0 = the standing default
+    point_name: str = ""         # override the auto_ripple<NN>_<date> name
+    run_id: str = ""
+
+
+def _auto_point_name(req: "AutoOptRequest") -> str:
+    if (req.point_name or "").strip():
+        return req.point_name.strip()[:80]
+    return "auto_ripple{:02d}_{}".format(
+        int(round(float(req.max_ripple_pct))), datetime.now().strftime("%Y%m%d"))
+
+
+@router.post("/auto/plan")
+def auto_plan(req: AutoOptRequest):
+    """Assemble the run WITHOUT launching it and quote what it will cost.
+
+    Project rule: a run says what it costs before it starts.  This is the
+    pre-flight the Run button shows — the assembled operating point, objective,
+    variables with their initial steps, and n_evals x measured s/eval."""
+    plan = _auto_assemble(req.max_ripple_pct, req.budget_evals)
+    return {"plan": plan, "point_name": _auto_point_name(req)}
+
+
+@router.post("/auto")
+def auto_start(req: AutoOptRequest, request: Request):
+    """One-click optimization: the user gives the max torque ripple, this route
+    assembles the rest from the project's standing conventions and launches the
+    existing CMA-ES machinery.  Progress on the existing optimizer channel
+    (GET /api/optimization/descent/progress)."""
+    with _descent_lock:
+        if _descent_state["running"]:
+            raise HTTPException(status_code=409,
+                                detail="an optimization is already running")
+
+    plan = _auto_assemble(req.max_ripple_pct, req.budget_evals)
+    name = _auto_point_name(req)
+    try:
+        from motor_ai_sim.routes.saved_sims import bucket_for
+        bucket = bucket_for(request)
+    except Exception:   # noqa: BLE001
+        bucket = "local"
+
+    with _descent_lock:
+        _descent_state.update({
+            "running": True, "iter": 0, "max_iters": int(plan["generations"]),
+            "n_evals": 0, "best": None, "current": None, "history": [],
+            "baseline": None, "baseline_line": None, "result": None,
+            "phase": "starting", "points": [], "grad": {}, "mtpa_gamma_deg": None,
+            "variables": [], "boundary": [], "walk_round": 1, "walk_rounds": 1,
+            "converged": False, "range_events": [], "seeded_from_surrogate": False,
+            # Pinned so applying the result RESTORES the eval settings into the
+            # Simulation tab — else re-running the Sim would not reproduce it.
+            "eval_params": {
+                "steps_per_period": plan["eval"]["steps_per_period"],
+                "n_sectors": plan["eval"]["n_sectors"],
+                "gap_layers": plan["eval"]["gap_layers"],
+                "coil_temp_c": plan["eval"]["coil_temp_c"],
+                "pole_copy": plan["eval"]["pole_copy"],
+                "torque_filter": plan["eval"]["torque_filter"],
+                "rotor_eddy": plan["eval"]["rotor_eddy"],
+                "end_winding_factor": plan["eval"]["end_winding_factor"],
+                "structured_gap": plan["eval"]["structured_gap"],
+                "airgap_macro": plan["eval"]["airgap_macro"],
+                "iron_template": plan["eval"]["iron_template"],
+                "geo_mesh": plan["eval"]["geo_mesh"],
+                "mesh_size_mm": plan["eval"]["mesh_size_mm"],
+                "min_size_mm": plan["eval"]["min_size_mm"]},
+            "auto": {"max_ripple_pct": plan["ripple_max_pct"],
+                     "objective": plan["objective"],
+                     "budget_evals": plan["budget_evals"],
+                     "population": plan["population"],
+                     "generations": plan["generations"],
+                     "operating_point": plan["operating_point"],
+                     "cost": plan["cost"],
+                     "point_name": name,
+                     "sigma": {v["name"]: v["sigma"] for v in plan["variables"]},
+                     "rejects": None},
+            "run_id": req.run_id, "error": None, "cancel": False})
+
+    threading.Thread(target=_auto_worker, args=(plan, req.run_id, bucket, name),
+                     daemon=True).start()
+    return {"started": True, "run_id": req.run_id, "plan": plan, "point_name": name}
+
+
+class AutoPointRequest(BaseModel):
+    name: str = ""
+
+
+@router.post("/auto/compare_point")
+def auto_save_compare_point(req: AutoPointRequest, request: Request):
+    """Re-file the last auto result as a Compare point (the panel's explicit
+    'Save as Compare point' button).  Same builder the run uses on completion,
+    so a manual save and an automatic one are the same row."""
+    with _descent_lock:
+        result = dict(_descent_state.get("result") or {})
+        auto = dict(_descent_state.get("auto") or {})
+    if not result or not result.get("auto"):
+        raise HTTPException(status_code=404,
+                            detail="no finished auto-optimization to save")
+    plan = _auto_assemble(float(auto.get("max_ripple_pct", 5.0)),
+                          int(auto.get("budget_evals", 0) or 0))
+    plan["operating_point"] = auto.get("operating_point") or plan["operating_point"]
+    try:
+        from motor_ai_sim.routes.saved_sims import bucket_for
+        bucket = bucket_for(request)
+    except Exception:   # noqa: BLE001
+        bucket = "local"
+    pt = _auto_compare_point(bucket, (req.name or auto.get("point_name") or "auto"),
+                             plan, result)
+    return {"saved": True, "id": pt.get("id"), "name": pt.get("name")}

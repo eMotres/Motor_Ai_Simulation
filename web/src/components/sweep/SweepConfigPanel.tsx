@@ -16,12 +16,17 @@ import {
   InputLabel,
   ToggleButton,
   ToggleButtonGroup,
+  Accordion,
+  AccordionSummary,
+  AccordionDetails,
 } from '@mui/material';
 import ShowChartIcon from '@mui/icons-material/ShowChart';
 import CloseIcon     from '@mui/icons-material/Close';
 import TuneIcon      from '@mui/icons-material/Tune';
 import RefreshIcon   from '@mui/icons-material/Refresh';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { useMotorStore } from '../../stores/motorStore';
+import AutoOptimizePanel from './AutoOptimizePanel';
 import DescentPanel from './DescentPanel';
 import SweepStudyPanel from './SweepStudyPanel';
 import DOEPanel from './DOEPanel';
@@ -501,8 +506,29 @@ const SweepConfigPanel: React.FC = () => {
        </Box>
        )}
 
-        {/* Optimize = CMA-ES/Gradient (+ box-walking, surrogate seed) */}
-        {algoTab === 'optimize' && <DescentPanel />}
+        {/* Optimize — the ONE-NUMBER card first: max ripple → Run.  The full
+            manual optimizer is not removed, only demoted: it lives under the
+            collapsed "Advanced" section, because every knob it exposes now has a
+            standing convention behind it and re-deciding them per run is how
+            runs stop being comparable. */}
+        {algoTab === 'optimize' && (
+          <>
+            <AutoOptimizePanel />
+            <Accordion disableGutters elevation={0}
+              sx={{ bgcolor: 'transparent', '&:before': { display: 'none' },
+                    border: '1px solid var(--border-1, rgba(255,255,255,0.12))', borderRadius: 1 }}>
+              <AccordionSummary expandIcon={<ExpandMoreIcon sx={{ fontSize: 18 }} />}
+                sx={{ minHeight: 36, '& .MuiAccordionSummary-content': { my: 0.5 } }}>
+                <Typography variant="caption" sx={{ fontWeight: 700, letterSpacing: 0.4 }}>
+                  ADVANCED — manual optimizer (algorithm, weights, ranges, box-walking)
+                </Typography>
+              </AccordionSummary>
+              <AccordionDetails sx={{ pt: 0 }}>
+                <DescentPanel />
+              </AccordionDetails>
+            </Accordion>
+          </>
+        )}
         {/* Sweep study = current × γ grid → η-vs-N·m/kg performance map */}
         {algoTab === 'sweep' && <SweepStudyPanel />}
         {/* DOE = Latin-Hypercube screening → unbiased variable importance */}

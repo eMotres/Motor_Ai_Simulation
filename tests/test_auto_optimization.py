@@ -1,0 +1,283 @@
+"""The one-click auto-optimization route.
+
+The whole point of ``POST /api/optimization/auto`` is that the user supplies ONE
+number and the server assembles a run that already obeys this project's standing
+conventions.  That promise is only worth something if it is TESTED, because the
+failure mode is silent: a run that quietly optimises the wrong objective, at the
+wrong operating point, inside a box the user never asked for, still returns a
+plausible-looking motor.
+
+These tests exercise the ASSEMBLY (cheap, no FEM).  Launching is covered only to
+the extent that garbage input is refused before any solve is paid for.
+"""
+
+import math
+
+import pytest
+from fastapi.testclient import TestClient
+
+from motor_ai_sim.api import app
+from motor_ai_sim.routes import optimization as O
+
+client = TestClient(app)
+
+
+@pytest.fixture
+def no_rate_flush(monkeypatch):
+    """Fake eval timings must never reach the PERSISTED rate file.
+
+    _record_eval_seconds flushes to config/.eval_rate.json every 10 samples, so
+    a test feeding it synthetic 2 s and 300 s evals would leave the real backend
+    quoting a made-up cost to the real user — a test that lies to production."""
+    monkeypatch.setattr(O, "_save_eval_rate", lambda: None)
+
+
+def _plan(max_ripple=5.0, budget=0):
+    r = client.post("/api/optimization/auto/plan",
+                    json={"max_ripple_pct": max_ripple, "budget_evals": budget})
+    assert r.status_code == 200, r.text
+    return r.json()["plan"]
+
+
+class TestAssemblyFromSimulationSettings:
+    """The operating point comes from the Simulation tab, never from a default."""
+
+    def test_operating_point_matches_the_simulation_config(self):
+        from motor_ai_sim.config import get_config
+        sim = get_config().get("simulation", {})
+        op = _plan()["operating_point"]
+        assert op["current_a"] == pytest.approx(float(sim["max_current"]))
+        assert op["rpm"] == pytest.approx(float(sim["rpm"]))
+        assert op["gamma_deg"] == pytest.approx(float(sim["phase_offset_deg"]))
+
+    def test_coil_temperature_comes_from_the_simulation_config(self):
+        from motor_ai_sim.config import get_config
+        sim = get_config().get("simulation", {})
+        assert _plan()["eval"]["coil_temp_c"] == pytest.approx(float(sim["coil_temp_c"]))
+
+    def test_variables_are_exactly_the_sweep_whitelist(self):
+        from motor_ai_sim.config import get_config
+        cfg = get_config()
+        wl = [n for n in cfg["sweep_whitelist"]
+              if isinstance(cfg["geometry"].get(n), (int, float))]
+        assert [v["name"] for v in _plan()["variables"]] == wl
+
+    def test_rotor_hole_is_in_the_curated_set(self):
+        # Named in the brief because it was the one that kept getting dropped.
+        assert "rotor_hole" in {v["name"] for v in _plan()["variables"]}
+
+    def test_every_variable_starts_at_the_current_design_value(self):
+        from motor_ai_sim.config import get_config
+        geo = get_config()["geometry"]
+        for v in _plan()["variables"]:
+            assert v["x0"] == pytest.approx(float(geo[v["name"]]))
+
+
+class TestStandingObjective:
+    """objective='baseline_line' is a rule, not a preference."""
+
+    def test_objective_is_the_perpendicular_baseline_metric(self):
+        assert _plan()["objective"] == "baseline_line"
+
+    def test_the_objective_cannot_be_overridden_by_the_request(self):
+        # An extra field must not steer the objective; pydantic ignores unknown
+        # keys, and the assembled plan must still be the standing one.
+        r = client.post("/api/optimization/auto/plan",
+                        json={"max_ripple_pct": 5.0, "objective": "product",
+                              "w_eff": 3, "w_td": 0})
+        assert r.status_code == 200, r.text
+        assert r.json()["plan"]["objective"] == "baseline_line"
+
+    def test_the_ripple_gate_is_enforced_in_the_cost_not_only_on_the_chart(self):
+        p = _plan(max_ripple=4.0)
+        assert p["ripple_max_pct"] == pytest.approx(4.0)
+        assert p["ripple_penalty_lambda"] > 0.0
+
+    def test_the_eval_path_is_the_honest_p2_one(self):
+        ev = _plan()["eval"]
+        assert ev["element_order"] == 2          # P2 is the only basis
+        assert ev["structured_gap"] is True      # belt gap mesh (honest ripple)
+        assert ev["torque_filter"] is False      # RAW ripple, not band-limited
+        assert ev["rotor_eddy"] is True          # same loss model as Simulation
+
+    def test_ripple_is_not_sampled_below_the_aliasing_floor(self):
+        # A run whose constraint IS ripple may not measure ripple on an aliased
+        # window, whatever the Simulation tab's frame count happens to be.
+        assert _plan()["eval"]["steps_per_period"] >= 48
+
+
+class TestSearchRangeIsNotBoxed:
+    """The whitelist says WHICH knobs move — the schema does not say how far."""
+
+    def test_no_upper_bound_is_imposed(self):
+        assert all(v["hi"] is None for v in _plan()["variables"])
+
+    def test_lower_bound_is_physical_positivity_not_the_schema_minimum(self):
+        from motor_ai_sim.config import get_config
+        schema = get_config().get("geometry_schema", {})
+        for v in _plan()["variables"]:
+            assert v["lo"] == (1.0 if v["is_int"] else 0.0)
+            s_min = (schema.get(v["name"]) or {}).get("min")
+            if s_min is not None and float(s_min) > 0 and not v["is_int"]:
+                # The schema floor is a UI convenience; the validator is the fence.
+                assert v["lo"] < float(s_min)
+
+    def test_a_variable_sitting_at_zero_still_gets_a_usable_step(self):
+        zeros = [v for v in _plan()["variables"] if v["x0"] == 0.0]
+        for v in zeros:
+            assert v["sigma"] > 0.0, (
+                f"{v['name']} starts at 0 and would be frozen by a "
+                "percentage-of-value step")
+
+    def test_millimetre_sigma_scales_with_the_motor_not_only_the_value(self):
+        p = _plan()
+        d = p["stator_diameter"]
+        for v in p["variables"]:
+            if v["unit"].strip().lower() == "mm":
+                # 1e-4 slack: sigma is rounded to 4 decimals for the wire.
+                assert v["sigma"] >= max(0.25 * abs(v["x0"]), 0.015 * d) - 1e-4
+
+    def test_dimensionless_sigma_has_an_absolute_floor(self):
+        for v in _plan()["variables"]:
+            if v["unit"].strip() == "" and not v["is_int"]:
+                assert v["sigma"] >= max(0.25 * abs(v["x0"]), 0.05) - 1e-4
+
+    def test_integer_sigma_can_actually_move_the_integer(self):
+        for v in _plan()["variables"]:
+            if v["is_int"]:
+                assert v["sigma"] >= 1.0
+
+
+class TestSigmaUnit:
+    """_auto_sigma in isolation — the rule, stated once, checked directly."""
+
+    def test_mm_variable_at_zero_uses_the_machine_scale(self):
+        assert O._auto_sigma(0.0, "mm", False, 40.0) == pytest.approx(0.6)
+
+    def test_mm_variable_that_is_large_uses_its_own_scale(self):
+        assert O._auto_sigma(20.0, "mm", False, 40.0) == pytest.approx(5.0)
+
+    def test_dimensionless_at_zero_uses_the_absolute_floor(self):
+        assert O._auto_sigma(0.0, "", False, 40.0) == pytest.approx(0.05)
+
+    def test_integer_never_falls_below_one(self):
+        assert O._auto_sigma(1.0, "", True, 40.0) == pytest.approx(1.0)
+
+
+class TestGarbageRippleIsRefused:
+    """Client-facing validation: loud, engineer-readable, before any FEM."""
+
+    @pytest.mark.parametrize("bad", [0, -1, -0.001, 100.1, 1e9])
+    def test_out_of_range_ripple_is_rejected(self, bad):
+        r = client.post("/api/optimization/auto/plan", json={"max_ripple_pct": bad})
+        assert r.status_code == 422, r.text
+        assert "max_ripple_pct" in r.text
+
+    @pytest.mark.parametrize("bad", ["five", None, [], {}])
+    def test_non_numeric_ripple_is_rejected(self, bad):
+        r = client.post("/api/optimization/auto/plan", json={"max_ripple_pct": bad})
+        assert r.status_code == 422, r.text
+
+    def test_nan_ripple_is_rejected(self):
+        # NaN survives pydantic's float coercion and would compare False against
+        # every gate — i.e. an unconstrained run wearing a constraint's name.
+        with pytest.raises(Exception) as ei:
+            O._auto_assemble(float("nan"))
+        assert "finite" in str(ei.value).lower()
+
+    def test_the_message_names_the_field_and_the_value(self):
+        r = client.post("/api/optimization/auto/plan", json={"max_ripple_pct": -3})
+        body = r.json()["detail"]
+        assert "max_ripple_pct" in body and "-3" in body
+
+    def test_a_rejected_request_never_starts_a_run(self):
+        before = dict(O._descent_state)
+        r = client.post("/api/optimization/auto", json={"max_ripple_pct": 0})
+        assert r.status_code == 422
+        assert O._descent_state.get("running") == before.get("running")
+
+
+class TestCostHonesty:
+    """A run says what it costs before it starts."""
+
+    def test_the_plan_quotes_evals_and_seconds_per_eval(self):
+        c = _plan(budget=60)["cost"]
+        assert c["n_evals_max"] == 60
+        assert c["s_per_eval"] > 0
+        assert c["est_wall_seconds"] > 0
+
+    def test_the_quote_says_whether_it_was_measured_or_estimated(self):
+        assert _plan()["cost"]["s_per_eval_source"] in ("measured", "estimate")
+
+    def test_the_budget_is_a_hard_cap_the_generations_respect(self):
+        p = _plan(budget=60)
+        assert 2 + p["generations"] * p["population"] <= p["budget_evals"]
+
+    def test_measured_rate_is_used_once_evals_have_been_timed(self, no_rate_flush):
+        saved = list(O._EVAL_SECS)
+        try:
+            O._EVAL_SECS.clear()
+            assert O.measured_eval_seconds(48)["source"] == "estimate"
+            for _ in range(5):
+                O._record_eval_seconds(3.0)
+            m = O.measured_eval_seconds(48)
+            assert m["source"] == "measured"
+            assert m["s_per_eval"] == pytest.approx(3.0)
+            assert m["n_samples"] == 5
+        finally:
+            O._EVAL_SECS.clear()
+            O._EVAL_SECS.extend(saved)
+
+    def test_one_slow_outlier_does_not_inflate_the_quote(self, no_rate_flush):
+        # Median, not mean: a single 300 s timeout must not triple the price.
+        saved = list(O._EVAL_SECS)
+        try:
+            O._EVAL_SECS.clear()
+            for _ in range(9):
+                O._record_eval_seconds(2.0)
+            O._record_eval_seconds(300.0)
+            assert O.measured_eval_seconds(48)["s_per_eval"] == pytest.approx(2.0)
+        finally:
+            O._EVAL_SECS.clear()
+            O._EVAL_SECS.extend(saved)
+
+
+class TestRejectionAccounting:
+    """A run that fences most of what it samples must SAY so."""
+
+    @pytest.mark.parametrize("err,kind", [
+        ("3 geometry violations — the cross-section is not buildable", "geometry"),
+        ("infeasible winding: 40 turns cannot fit the slot even clamped", "geometry"),
+        ("2 unconverged FEM frames in the window", "unconverged"),
+        ("timeout", "timeout"),
+        ("subprocess crashed", "other"),
+    ])
+    def test_errors_are_classified_by_which_fence_stopped_them(self, err, kind):
+        assert O._auto_classify_error(err) == kind
+
+
+class TestGeometryStamp:
+    """The Compare point carries a machine stamp the frontend can compare with."""
+
+    def test_signature_matches_the_frontend_dialect(self):
+        # geoSignature(): numeric fields only, sorted by key, `k:v` joined by '|',
+        # numbers formatted the way a JS template literal formats them.
+        sig = O._geo_signature({"b": 2.0, "a": 1.5, "z": "steel", "c": True})
+        assert sig == "a:1.5|b:2"
+
+    def test_integral_floats_lose_their_trailing_zero_like_javascript(self):
+        assert O._js_number(12.0) == "12"
+        assert O._js_number(5.6) == "5.6"
+
+
+class TestNoSideEffects:
+    """Assembling (and refusing) must never touch the user's design."""
+
+    def test_planning_does_not_write_the_config(self):
+        from pathlib import Path
+        import hashlib
+        p = Path(O.__file__).resolve().parents[3] / "config" / "motor_config.yaml"
+        before = hashlib.sha256(p.read_bytes()).hexdigest()
+        _plan(3.0)
+        client.post("/api/optimization/auto/plan", json={"max_ripple_pct": -1})
+        assert hashlib.sha256(p.read_bytes()).hexdigest() == before

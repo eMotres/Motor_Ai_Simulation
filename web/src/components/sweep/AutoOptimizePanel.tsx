@@ -1,0 +1,421 @@
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  Box, Button, Card, CardContent, Chip, CircularProgress, Divider,
+  LinearProgress, Table, TableBody, TableCell, TableHead, TableRow, TextField,
+  Tooltip, Typography,
+} from '@mui/material';
+import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
+import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import StopIcon from '@mui/icons-material/Stop';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import BookmarkAddIcon from '@mui/icons-material/BookmarkAdd';
+import HelpTip from '../common/HelpTip';
+import { useMotorStore } from '../../stores/motorStore';
+
+/**
+ * One-click optimization.
+ *
+ * The user types ONE number — the maximum torque ripple they will accept — and
+ * presses Run.  Everything else (operating point, objective, variables, eval
+ * fidelity) is assembled by the BACKEND from this project's standing
+ * conventions, so this card cannot be the place where a run quietly disagrees
+ * with them.  It shows what was assembled and what the run will cost, then the
+ * live progress, then the result next to the design it started from.
+ *
+ * The full manual optimizer is not gone — it lives under "Advanced" below.
+ */
+const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
+
+const fmt = (v: unknown, d = 2) =>
+  (typeof v === 'number' && Number.isFinite(v) ? v.toFixed(d) : '—');
+const pct = (v: unknown, d = 2) =>
+  (typeof v === 'number' && Number.isFinite(v) ? `${(v * 100).toFixed(d)}%` : '—');
+
+/** "1 h 12 m" / "4 m 30 s" / "18 s" — a duration a person can plan around. */
+function humanSeconds(s: number): string {
+  if (!Number.isFinite(s) || s <= 0) return '—';
+  const t = Math.round(s);
+  if (t < 90) return `${t} s`;
+  const m = Math.round(t / 60);
+  if (m < 90) return `${m} m`;
+  return `${Math.floor(m / 60)} h ${m % 60} m`;
+}
+
+/** Signed delta with its sign always shown — a "+0.02 Nm" reads as a gain. */
+function delta(now?: number, was?: number, d = 3, unit = ''): string {
+  if (!Number.isFinite(Number(now)) || !Number.isFinite(Number(was))) return '';
+  const x = Number(now) - Number(was);
+  return `${x >= 0 ? '+' : ''}${x.toFixed(d)}${unit}`;
+}
+
+type Plan = {
+  objective: string;
+  ripple_max_pct: number;
+  ripple_penalty_lambda: number;
+  operating_point: { current_a: number; rpm: number; gamma_deg: number };
+  eval: Record<string, any>;
+  variables: { name: string; x0: number; sigma: number; unit: string }[];
+  budget_evals: number; population: number; generations: number;
+  cost: {
+    s_per_eval: number; s_per_eval_source: string; n_samples: number;
+    n_evals_max: number; parallel_workers: number;
+    est_wall_seconds: number; est_cpu_seconds: number;
+  };
+};
+
+const AutoOptimizePanel: React.FC = () => {
+  const { connectedToApi, descentState, loadLastDescent, applyDescentBest, cancelDescent } =
+    useMotorStore();
+
+  const [maxRipple, setMaxRipple] = useState<number>(() => {
+    try { return Math.max(0.1, Number(JSON.parse(localStorage.getItem('auto.maxRipple') ?? '5')) || 5); }
+    catch { return 5; }
+  });
+  const [plan, setPlan] = useState<Plan | null>(null);
+  const [planError, setPlanError] = useState<string | null>(null);
+  const [planBusy, setPlanBusy] = useState(false);
+  const [launchError, setLaunchError] = useState<string | null>(null);
+  const [applied, setApplied] = useState(false);
+  const [savedPoint, setSavedPoint] = useState<string | null>(null);
+  const startedAt = useRef<number | null>(null);
+
+  const st: any = descentState || {};
+  const auto = st.auto || {};
+  const isAuto = !!auto.objective;             // this state came from an auto run
+  const running = !!st.running;
+  const result = st.result;
+  const best = st.best?.metrics;
+  const base = st.baseline;
+
+  const updRipple = (v: number) => {
+    const x = Math.max(0.1, Math.min(100, v || 0));
+    setMaxRipple(x);
+    try { localStorage.setItem('auto.maxRipple', JSON.stringify(x)); } catch { /* quota */ }
+  };
+
+  // ── Pre-flight: assemble + quote, WITHOUT launching ────────────────────────
+  // Project rule: a run says what it costs before it starts.  So the card fetches
+  // the plan as soon as the number changes and shows it next to the Run button —
+  // the estimate is not an afterthought printed once the FEM is already burning.
+  const fetchPlan = useCallback(async (ripple: number) => {
+    if (!connectedToApi) return;
+    setPlanBusy(true); setPlanError(null);
+    try {
+      const r = await fetch(`${API}/api/optimization/auto/plan`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ max_ripple_pct: ripple }),
+      });
+      const j = await r.json().catch(() => null);
+      if (!r.ok) throw new Error(j?.detail ?? `HTTP ${r.status}`);
+      setPlan(j.plan as Plan);
+    } catch (e: any) {
+      setPlan(null); setPlanError(String(e?.message ?? e));
+    } finally {
+      setPlanBusy(false);
+    }
+  }, [connectedToApi]);
+
+  useEffect(() => {
+    const t = setTimeout(() => { void fetchPlan(maxRipple); }, 350);
+    return () => clearTimeout(t);
+  }, [maxRipple, fetchPlan]);
+
+  // ── Live progress ─────────────────────────────────────────────────────────
+  // Poll here rather than leaning on the Advanced panel's mirror: this card is
+  // usable with Advanced collapsed, and a progress bar that only moves when
+  // another component happens to be mounted is worse than no progress bar.
+  useEffect(() => {
+    if (!connectedToApi) return;
+    let alive = true;
+    let timer: ReturnType<typeof setTimeout>;
+    const tick = async () => {
+      if (!alive) return;
+      await loadLastDescent();
+      if (!alive) return;
+      const on = (useMotorStore.getState().descentState as any)?.running;
+      timer = setTimeout(tick, on ? 2000 : 5000);
+    };
+    timer = setTimeout(tick, 500);
+    return () => { alive = false; clearTimeout(timer); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connectedToApi]);
+
+  const launch = async () => {
+    setLaunchError(null); setApplied(false); setSavedPoint(null);
+    startedAt.current = Date.now();
+    try {
+      const r = await fetch(`${API}/api/optimization/auto`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ max_ripple_pct: maxRipple }),
+      });
+      const j = await r.json().catch(() => null);
+      if (!r.ok) throw new Error(j?.detail ?? `HTTP ${r.status}`);
+      await loadLastDescent();
+    } catch (e: any) {
+      setLaunchError(String(e?.message ?? e));
+    }
+  };
+
+  const savePoint = async () => {
+    try {
+      const r = await fetch(`${API}/api/optimization/auto/compare_point`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: '' }),
+      });
+      const j = await r.json().catch(() => null);
+      if (!r.ok) throw new Error(j?.detail ?? `HTTP ${r.status}`);
+      setSavedPoint(j?.name ?? 'saved');
+      try { window.dispatchEvent(new CustomEvent('compare-points-changed')); } catch { /* SSR */ }
+    } catch (e: any) {
+      setLaunchError(String(e?.message ?? e));
+    }
+  };
+
+  // ── ETA from the MEASURED rate of THIS run ────────────────────────────────
+  // The pre-flight quote uses the median of past evals; once the run is going,
+  // its own elapsed/eval is the better number, so switch to it.
+  const nEvals = Number(st.n_evals) || 0;
+  const budget = Number(auto.budget_evals) || Number(plan?.budget_evals) || 0;
+  const workers = Number(auto.cost?.parallel_workers) || Number(plan?.cost?.parallel_workers) || 1;
+  const elapsed = startedAt.current ? (Date.now() - startedAt.current) / 1000 : NaN;
+  const liveSPer = (Number.isFinite(elapsed) && nEvals > 1)
+    ? (elapsed * workers) / nEvals
+    : Number(auto.cost?.s_per_eval) || Number(plan?.cost?.s_per_eval) || NaN;
+  const remaining = Math.max(0, budget - nEvals);
+  const etaS = Number.isFinite(liveSPer) ? (remaining / Math.max(1, workers)) * liveSPer : NaN;
+  const progPct = budget > 0 ? Math.min(99, Math.round((100 * nEvals) / budget)) : 0;
+
+  const rj = auto.rejects || result?.rejects;
+  const op = auto.operating_point || plan?.operating_point;
+  const cost = plan?.cost;
+
+  return (
+    <Card variant="outlined" sx={{ mb: 2, borderColor: 'rgba(34,197,94,0.45)' }}>
+      <CardContent sx={{ py: 1.5, '&:last-child': { pb: 1.5 } }}>
+        {/* ── The whole input: one number and a button ── */}
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
+          <AutoAwesomeIcon sx={{ fontSize: 20, color: '#22c55e' }} />
+          <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+            One-click optimization
+          </Typography>
+          <TextField
+            label="Max torque ripple" type="number" size="small" value={maxRipple}
+            onChange={(e) => updRipple(+e.target.value)}
+            disabled={running}
+            InputProps={{ endAdornment: <Typography sx={{ fontSize: 12, ml: 0.5 }}>%</Typography> }}
+            inputProps={{ min: 0.1, max: 100, step: 0.5, style: { fontSize: 14, width: 64 } }}
+            InputLabelProps={{ sx: { fontSize: 12 } }}
+          />
+          {running ? (
+            <Button variant="contained" color="error" size="small" startIcon={<StopIcon />}
+              onClick={() => cancelDescent()}>
+              Stop
+            </Button>
+          ) : (
+            <Button variant="contained" color="success" size="small" startIcon={<PlayArrowIcon />}
+              disabled={!connectedToApi || !plan} onClick={launch}>
+              Run
+            </Button>
+          )}
+          <HelpTip title={
+            'You give the ripple limit; everything else follows this project\'s standing rules. '
+            + 'Operating point: the Simulation tab\'s current settings (check the point there first). '
+            + 'Objective: maximum perpendicular distance above the current-only baseline line — '
+            + 'a design that beats simply cranking current. Variables: the config sweep whitelist, '
+            + 'searched with NO artificial range box: the geometry validator is the only fence, so '
+            + 'a knob may leave the range a human would have typed. Every evaluation is a real P2 '
+            + 'sliding-band transient; candidates whose cross-section is not buildable, or whose '
+            + 'nonlinear solve did not converge, are rejected, not scored.'} />
+        </Box>
+
+        {/* ── Cost quote + what was assembled (BEFORE launching) ── */}
+        {planError && (
+          <Typography color="error" variant="caption" sx={{ display: 'block', mt: 1 }}>
+            {planError}
+          </Typography>
+        )}
+        {launchError && (
+          <Typography color="error" variant="caption" sx={{ display: 'block', mt: 1 }}>
+            {launchError}
+          </Typography>
+        )}
+        {planBusy && !plan && (
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+            Assembling the run…
+          </Typography>
+        )}
+
+        {plan && !running && (
+          <Box sx={{ mt: 1.25, display: 'flex', gap: 0.75, flexWrap: 'wrap', alignItems: 'center' }}>
+            <Chip size="small" variant="outlined" sx={{ height: 22, fontSize: 10.5 }}
+              label={`${fmt(plan.operating_point.current_a, 1)} A · ${fmt(plan.operating_point.rpm, 0)} rpm · γ ${fmt(plan.operating_point.gamma_deg, 1)}°`} />
+            <Chip size="small" variant="outlined" sx={{ height: 22, fontSize: 10.5 }}
+              label={`${plan.variables.length} vars · unboxed`} />
+            <Chip size="small" variant="outlined" sx={{ height: 22, fontSize: 10.5 }}
+              label={`obj: above baseline · ripple ≤ ${fmt(plan.ripple_max_pct, 1)}% (λ ${plan.ripple_penalty_lambda})`} />
+            <Chip size="small" variant="outlined" sx={{ height: 22, fontSize: 10.5 }}
+              label={`P2 · ${plan.eval.steps_per_period} steps/T · ${plan.eval.n_sectors <= 0 ? 'full ring' : `1/${plan.eval.n_sectors}`}`} />
+            {plan.eval.steps_per_period_requested
+              && plan.eval.steps_per_period_requested < plan.eval.steps_per_period && (
+              <Tooltip placement="top" title={
+                `The Simulation tab is set to ${plan.eval.steps_per_period_requested} frames per electrical period. `
+                + 'Torque ripple is a high-harmonic quantity: below ~48 frames it aliases, and a run whose '
+                + 'constraint IS ripple would then be holding a number it measured wrong. The optimizer uses 48 '
+                + 'and pins that back into the Simulation tab when you apply the result, so the re-solve matches.'}>
+                <Chip size="small" variant="outlined" sx={{ height: 22, fontSize: 10.5, color: '#f59e0b', borderColor: 'rgba(245,158,11,0.6)' }}
+                  label={`frames raised ${plan.eval.steps_per_period_requested} → ${plan.eval.steps_per_period} (anti-aliasing)`} />
+              </Tooltip>
+            )}
+          </Box>
+        )}
+
+        {cost && !running && (
+          <Typography variant="caption" sx={{ display: 'block', mt: 0.75, color: 'text.secondary' }}>
+            <strong>Cost:</strong> up to {cost.n_evals_max} FEM evals ×{' '}
+            {fmt(cost.s_per_eval, 1)} s/eval{' '}
+            {cost.s_per_eval_source === 'measured'
+              ? `(measured on this machine, ${cost.n_samples} evals)`
+              : '(estimated — this machine has not timed an eval yet)'}{' '}
+            → ≈ <strong>{humanSeconds(cost.est_wall_seconds)}</strong> wall clock on{' '}
+            {cost.parallel_workers} parallel workers ({humanSeconds(cost.est_cpu_seconds)} CPU).
+            The budget is a hard cap, not a guess.
+          </Typography>
+        )}
+
+        {/* ── Live progress ── */}
+        {running && (
+          <Box sx={{ mt: 1.25 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5, flexWrap: 'wrap' }}>
+              <CircularProgress size={14} />
+              <Typography variant="caption" sx={{ fontWeight: 600 }}>
+                {st.phase === 'baseline' ? 'baseline + reference line…'
+                  : st.phase === 'starting' ? 'starting…'
+                  : `generation ${st.iter ?? 0}/${auto.generations ?? '?'}`}
+              </Typography>
+              <Chip size="small" variant="outlined" sx={{ height: 20, fontSize: 10 }}
+                label={`${nEvals}/${budget || '?'} evals`} />
+              {best && (
+                <Chip size="small" variant="outlined" color="success" sx={{ height: 20, fontSize: 10 }}
+                  label={`best ${fmt(best.T_em_Nm, 3)} N·m · ripple ${fmt(best.T_ripple_pct, 2)}%`} />
+              )}
+              {Number.isFinite(etaS) && remaining > 0 && (
+                <Chip size="small" variant="outlined" sx={{ height: 20, fontSize: 10 }}
+                  label={`ETA ≈ ${humanSeconds(etaS)}`} />
+              )}
+              {rj && rj.rejected > 0 && (
+                <Tooltip placement="top" title={
+                  `Candidates the fences stopped: ${rj.rejected_geometry} not buildable (geometry validator), `
+                  + `${rj.rejected_unconverged} whose nonlinear solve did not converge, `
+                  + `${rj.rejected_timeout} timed out, ${rj.rejected_other} other. `
+                  + 'The search is unboxed on purpose, so some rejection is expected — but a run fencing most '
+                  + 'of what it samples is thrashing, not converging.'}>
+                  <Chip size="small" variant="outlined"
+                    sx={{ height: 20, fontSize: 10,
+                          color: rj.reject_pct > 70 ? '#ef4444' : '#f59e0b',
+                          borderColor: rj.reject_pct > 70 ? 'rgba(239,68,68,0.6)' : 'rgba(245,158,11,0.6)' }}
+                    label={`${rj.rejected} fenced (${fmt(rj.reject_pct, 0)}%)`} />
+                </Tooltip>
+              )}
+            </Box>
+            <LinearProgress
+              variant={st.phase === 'baseline' || st.phase === 'starting' ? 'indeterminate' : 'determinate'}
+              value={progPct} sx={{ height: 6, borderRadius: 3 }} />
+          </Box>
+        )}
+
+        {st.error && !running && (
+          <Typography color="error" variant="caption" sx={{ display: 'block', mt: 1 }}>
+            {st.error}
+          </Typography>
+        )}
+
+        {/* ── Result: the optimized design NEXT TO the one it started from ── */}
+        {isAuto && !running && best && base && (
+          <Box sx={{ mt: 1.5 }}>
+            <Divider sx={{ mb: 1 }} />
+            <Table size="small" sx={{ mb: 1, width: 'auto', '& td, & th': { py: 0.3, px: 1 } }}>
+              <TableHead>
+                <TableRow>
+                  <TableCell sx={{ fontSize: 10, color: 'text.secondary' }}>—</TableCell>
+                  <TableCell align="right" sx={{ fontSize: 10, color: 'text.secondary' }}>Torque</TableCell>
+                  <TableCell align="right" sx={{ fontSize: 10, color: 'text.secondary' }}>Ripple</TableCell>
+                  <TableCell align="right" sx={{ fontSize: 10, color: 'text.secondary' }}>Efficiency</TableCell>
+                  <TableCell align="right" sx={{ fontSize: 10, color: 'text.secondary' }}>N·m/kg</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                <TableRow>
+                  <TableCell sx={{ fontSize: 11 }}>Current design</TableCell>
+                  <TableCell align="right" sx={{ fontSize: 11 }}>{fmt(base.T_em_Nm, 3)}</TableCell>
+                  <TableCell align="right" sx={{ fontSize: 11 }}>{fmt(base.T_ripple_pct, 2)}%</TableCell>
+                  <TableCell align="right" sx={{ fontSize: 11 }}>{pct(base.efficiency)}</TableCell>
+                  <TableCell align="right" sx={{ fontSize: 11 }}>{fmt(base.torque_per_mass, 3)}</TableCell>
+                </TableRow>
+                <TableRow>
+                  <TableCell sx={{ fontSize: 11, fontWeight: 700 }}>Optimized</TableCell>
+                  <TableCell align="right" sx={{ fontSize: 11, fontWeight: 700 }}>
+                    {fmt(best.T_em_Nm, 3)}
+                    <Typography component="span" sx={{ fontSize: 10, ml: 0.5, color: 'text.secondary' }}>
+                      {delta(best.T_em_Nm, base.T_em_Nm, 3)}
+                    </Typography>
+                  </TableCell>
+                  <TableCell align="right" sx={{ fontSize: 11, fontWeight: 700,
+                    color: (best.T_ripple_pct ?? 1e9) <= (auto.max_ripple_pct ?? 1e9) ? '#22c55e' : '#f59e0b' }}>
+                    {fmt(best.T_ripple_pct, 2)}%
+                    <Typography component="span" sx={{ fontSize: 10, ml: 0.5, color: 'text.secondary' }}>
+                      {delta(best.T_ripple_pct, base.T_ripple_pct, 2)}
+                    </Typography>
+                  </TableCell>
+                  <TableCell align="right" sx={{ fontSize: 11, fontWeight: 700 }}>
+                    {pct(best.efficiency)}
+                    <Typography component="span" sx={{ fontSize: 10, ml: 0.5, color: 'text.secondary' }}>
+                      {delta((best.efficiency ?? 0) * 100, (base.efficiency ?? 0) * 100, 2, ' pp')}
+                    </Typography>
+                  </TableCell>
+                  <TableCell align="right" sx={{ fontSize: 11, fontWeight: 700 }}>
+                    {fmt(best.torque_per_mass, 3)}
+                    <Typography component="span" sx={{ fontSize: 10, ml: 0.5, color: 'text.secondary' }}>
+                      {delta(best.torque_per_mass, base.torque_per_mass, 3)}
+                    </Typography>
+                  </TableCell>
+                </TableRow>
+              </TableBody>
+            </Table>
+
+            <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
+              <Button variant="outlined" color="success" size="small"
+                startIcon={applied ? <CheckCircleIcon /> : <PlayArrowIcon />} disabled={applied}
+                onClick={async () => { await applyDescentBest(); setApplied(true); }}>
+                {applied ? 'Applied to design' : 'Apply to design'}
+              </Button>
+              <Button variant="outlined" size="small" startIcon={<BookmarkAddIcon />}
+                onClick={savePoint}>
+                Save as Compare point
+              </Button>
+              {(auto.compare_point?.name || savedPoint) && (
+                <Typography variant="caption" sx={{ color: '#22c55e' }}>
+                  saved as “{savedPoint ?? auto.compare_point?.name}”
+                </Typography>
+              )}
+              {auto.compare_point_error && (
+                <Typography variant="caption" color="error">
+                  compare point not saved: {auto.compare_point_error}
+                </Typography>
+              )}
+            </Box>
+
+            <Typography variant="caption" sx={{ display: 'block', mt: 0.75, color: 'text.secondary' }}>
+              {result?.n_evals ?? nEvals} FEM evals
+              {rj ? ` · ${rj.rejected} rejected by the fences (${rj.rejected_geometry} not buildable, `
+                    + `${rj.rejected_unconverged} unconverged)` : ''}
+              {op ? ` · solved at ${fmt(op.current_a, 1)} A / ${fmt(op.rpm, 0)} rpm / γ ${fmt(op.gamma_deg, 1)}°` : ''}
+              . The result is filed as a Compare point with its full geometry, metrics and provenance.
+            </Typography>
+          </Box>
+        )}
+      </CardContent>
+    </Card>
+  );
+};
+
+export default AutoOptimizePanel;

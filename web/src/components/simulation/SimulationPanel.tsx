@@ -338,6 +338,23 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // OFF is honest too — the run is then magnetostatic and those views solve on
   // demand, exactly as they used to (and say so in their header).
   const [eddyCoupled, setEddyCoupled] = usePersisted('eddyCoupled', true);
+  // ── Measured cost of the LAST solve, for the pre-run line below ──────────
+  // TransientCharts stores {frames, wall_s} from every FRESH run (never from a
+  // restored/cached one — that would quote a rate no solve on this machine
+  // produced).  Seeded from localStorage so the estimate survives a reload.
+  const [solveCost, setSolveCost] =
+    useState<{ frames: number; wall_s: number } | null>(() => {
+      try {
+        const s = localStorage.getItem('sim.lastSolveCost');
+        return s ? JSON.parse(s) as { frames: number; wall_s: number } : null;
+      } catch { return null; }
+    });
+  useEffect(() => {
+    const onCost = (e: Event) =>
+      setSolveCost((e as CustomEvent).detail as { frames: number; wall_s: number });
+    window.addEventListener('sim:solve-cost', onCost);
+    return () => window.removeEventListener('sim:solve-cost', onCost);
+  }, []);
   // Band-limit the transient torque to the physical 6·k electrical orders
   // (drops the broadband slip-node noise a balanced 3-phase machine cannot
   // produce).  ON by default; turn off to inspect the raw per-frame torque.
@@ -840,7 +857,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               sweeps the period at full Br, finds the worst demag field at every
               magnet element, and de-rates Br on the recoil line → the torque /
               back-EMF reflect the weakened magnets, plus a Demag-% map. */}
-          <Tooltip title="Account for irreversible magnet demagnetisation. A pre-pass sweeps the whole period at full strength, finds the worst demagnetising field H at EVERY magnet element, and permanently de-rates Br along the recoil line where H crosses the BH-curve knee (per element, like Ansys). The torque and back-EMF then reflect the weakened magnets, and a Demag-% map is produced. Adds a pre-pass sweep (the one-time mesh build dominates, so overhead is modest)." placement="right">
+          <Tooltip title="Account for irreversible magnet demagnetisation. A pre-pass sweeps the whole period at full strength, finds the worst demagnetising field H at EVERY magnet element, and permanently de-rates Br along the recoil line where H crosses the BH-curve knee (per element, like Ansys). The torque and back-EMF then reflect the weakened magnets, and a Demag-% map is produced. COST — measured, not modest: the pre-pass is a WHOLE EXTRA PERIOD of FEM frames, so the run solves twice the steps you asked for, and each frame re-solves while the magnet is still moving. On the 40 mm 12s/14p at 0.6 mm mesh, 4 steps/period: 37 s off → 86 s on (2.3×). The line under the Run button shows the frame count your current settings imply." placement="right">
             <FormControlLabel
               sx={{ mt: -0.5, mb: 0.75, ml: 0.25 }}
               control={
@@ -860,7 +877,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               Newton system), so the copper loss is the solved 2-D value and
               the run's last frame carries the real eddy J⟳ — which the J⟳ /
               Loss field views then render without solving anything. */}
-          <Tooltip title="Solve the induced (eddy) currents together with the field: σ(−∂A/∂t + U) in copper, magnets and shaft becomes part of the same Newton system instead of a post-process. The run then reports the SOLVED copper loss (DC + the real AC/proximity part), and its last frame carries the true eddy current density — so the J⟳ and Loss field views render THIS run's field instantly instead of launching a second ~25 s transient. Costs extra solve time per frame. Off = magnetostatic run; the J⟳ view then solves on demand as before and says so." placement="right">
+          <Tooltip title="Solve the induced (eddy) currents together with the field: σ(−∂A/∂t + U) in copper, magnets and shaft becomes part of the same Newton system instead of a post-process. The run then reports the SOLVED copper loss (DC + the real AC/proximity part), and its last frame carries the true eddy current density — so the J⟳ and Loss field views render THIS run's field instantly instead of launching a second ~25 s transient. COST: two extra warm-up frames at negative rotor angle (the σ·∂A/∂t history starts from a field the machine was never in, and those frames are discarded), plus a bordered Newton per frame instead of the magnetostatic one — measured on the 40 mm 12s/14p at 0.6 mm mesh, 4 steps/period: 37 s off → 38 s on, so the frames it adds cost more than the physics does. Off = magnetostatic run; the J⟳ view then solves on demand as before and says so." placement="right">
             <FormControlLabel
               sx={{ mt: -0.5, mb: 0.75, ml: 0.25 }}
               control={
@@ -882,6 +899,48 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               the raw torque now.  The backend still returns both series and
               T_noise_floor_pct, so the 6·k decomposition remains inspectable
               in the harmonic chart without a mode switch. */}
+          {/* ── What this run will actually SOLVE, before it is launched ──────
+              A run does not solve `steps` frames.  fem_transient_sliding_band
+              prepends a whole extra period when demag is on (_dmskip, the
+              settling pass whose frames are stripped from the result) and two
+              warm-up frames at θ<0 when the coupled eddy solve is on
+              (_eddy_warm) — so with both ticked at 36 steps it solves 74, and
+              nothing on screen said so.  The rule is mirrored here (same shape
+              as SLIP_PER_PERIOD above) and RECONCILED after every run against
+              the solver's own n_frames_solved, so the seconds-per-frame quoted
+              is one this machine actually produced.  No history yet → the frame
+              count only; a made-up time is worse than no time. */}
+          {(() => {
+            const vdrive    = drive === 'voltage';
+            // _vskip: ten settling PERIODS, because the currents are state.
+            const vSettle   = vdrive ? 10 * Math.max(2, steps) : 0;
+            const dmSettle  = demag ? steps : 0;              // _dmskip
+            const eddyWarm  = (eddyCoupled && !vdrive) ? 2 : 0;  // _eddy_warm
+            // Voltage drive also runs the matched-fundamental CURRENT-drive
+            // reference for ΔP_harm (harm_ref): a second transient, same steps
+            // and same demag, no eddy, no settling prefix.
+            const refFrames = vdrive ? steps + dmSettle : 0;
+            const framesSolved = steps + vSettle + dmSettle + eddyWarm + refFrames;
+            const rate = (solveCost && solveCost.frames > 0)
+              ? solveCost.wall_s / solveCost.frames : 0;
+            const est = rate * framesSolved;
+            const hhmm = (s: number) => (s >= 90
+              ? `${Math.floor(s / 60)} min ${Math.round(s % 60)} s`
+              : `${Math.round(s)} s`);
+            return (
+              <Typography sx={{ fontSize: 9.5, lineHeight: 1.35, mb: 0.75,
+                color: framesSolved > steps ? '#b45309' : 'var(--text-3)' }}>
+                Solves <b>{framesSolved}</b> FEM frames: {steps} reported
+                {vSettle  ? ` + ${vSettle} voltage settling` : ''}
+                {dmSettle ? ` + ${dmSettle} demag settling` : ''}
+                {eddyWarm ? ' + 2 eddy warm-up' : ''}
+                {refFrames ? ` + ${refFrames} ΔP_harm reference` : ''}
+                {rate > 0
+                  ? ` · ≈ ${hhmm(est)} at the last run's ${rate.toFixed(1)} s/frame`
+                  : ' · no timed run yet — the strip at the top shows s/pt live'}
+              </Typography>
+            );
+          })()}
           {simBusy ? (
             <Button
               fullWidth

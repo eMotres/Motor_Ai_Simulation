@@ -2424,6 +2424,27 @@ def fem_transient_sliding_band(
         if _os_sb.environ.get("SB_NO_PARDISO") == "1":
             raise ImportError("disabled via SB_NO_PARDISO")
         import pypardiso as _pypard2
+        # PERF — 12.5 s per transient, spent looking for a file.
+        # PyPardisoSolver.__init__ locates mkl_rt with ctypes.util.find_library
+        # and, when that returns None (it does on this Windows/CPython layout —
+        # measured, both 'mkl_rt' and 'mkl_rt.1' come back None in 0.01 s), it
+        # falls back to a RECURSIVE glob of sys.prefix/[Ll]ib*/**.  cProfile on
+        # a 4-step demag+eddy run: 211 290 directory reads, 12.5 s, on EVERY
+        # solve, before one element is assembled — 30 % of a short run and
+        # 12.5 s × N of any optimizer batch that evaluates in-process.
+        # The library path is a process constant, and the module-level solver
+        # pypardiso builds at import time has already paid for the search, so
+        # publish its answer through the env var __init__ consults FIRST.  Every
+        # later construction then goes straight to ctypes.CDLL (measured 0.00 s).
+        # Nothing about the solve changes: same class, same one-instance-per-run
+        # lifetime, same MKL library — only the search for it is skipped.
+        if not _os_sb.environ.get("PYPARDISO_MKL_RT"):
+            try:
+                _mkl_rt_path = _pypard2.scipy_aliases.pypardiso_solver.libmkl._name
+                if _mkl_rt_path:
+                    _os_sb.environ["PYPARDISO_MKL_RT"] = str(_mkl_rt_path)
+            except Exception:   # older/rearranged pypardiso — just pay the glob
+                pass
         _pardiso2 = _pypard2.PyPardisoSolver()
     except Exception as _pae:
         log.info("pypardiso unavailable (%s) — using SuperLU for P2", _pae)
@@ -3505,6 +3526,20 @@ def fem_transient_sliding_band(
                     # actually used, not a nominal-rectangle one.
                     _Js2[_ix] = (_dir * Ist[_ph] * n_wires / max(_as, 1e-12))
                 _snap2["Jtri_src"] = _Js2
+    # ── What the run COST, captured before the settling frames are stripped ──
+    # `n_total` is about to be decremented back to the REPORTED window, and both
+    # the log line and the result dict below read it — so both understated the
+    # work by every settling frame that was actually solved.  A demag run solves
+    # a WHOLE EXTRA PERIOD (_dmskip), a voltage run ten of them (_vskip), and an
+    # eddy run two warm-up frames at negative rotor angle (_eddy_warm): "36
+    # frames in 419.7 s" was really 74 frames solved, and nothing on the way to
+    # the user's screen could say why a 36-step run takes seven minutes.  The
+    # Simulation tab quotes n_frames_solved / solve_wall_s back as seconds-per-
+    # frame in its pre-run cost line, so the estimate is a rate THIS machine
+    # produced rather than a guess.  Captured HERE, where n_total is still the
+    # loop bound that ran.
+    _n_solved = int(n_total) + int(_eddy_warm)
+
     # ── Voltage drive: drop the SETTLING periods ─────────────────────────
     # The currents are STATE, so the run carries an electrical start-up
     # transient; _vskip frames were prepended for it (n_total/n_periods were
@@ -3819,9 +3854,10 @@ def fem_transient_sliding_band(
                                 + np.asarray(VC) * np.asarray(_IC)))
                   * float(n_parallel) if _IA else 0.0)
     _ang = [(k / n_total) * period_mech * n_periods for k in range(n_total)]
-    log.info("P2 belt transient done: %d frames in %.1f s, T_avg=%.5f Nm, "
-             "ripple_raw=%.2f%%, max nonlinear resid=%.2e, picard-fallback "
-             "frames=%s", n_total, _t.time() - t0, Tavg, Trip_raw,
+    log.info("P2 belt transient done: %d frames reported (%d SOLVED incl. "
+             "settling) in %.1f s, T_avg=%.5f Nm, ripple_raw=%.2f%%, max "
+             "nonlinear resid=%.2e, picard-fallback frames=%s",
+             n_total, _n_solved, _t.time() - t0, Tavg, Trip_raw,
              _pic_res_max, _pic_fallback or "none")
     if _pic_unconv:
         # Loud, because it means the reported window contains a frame whose
@@ -3851,6 +3887,14 @@ def fem_transient_sliding_band(
         "demag_report": _drep2,
         "demag_field": _dfield2,
         "n_steps": n_total, "n_steps_per_period": int(n_steps_per_period),
+        # What the run COST.  n_steps is the REPORTED window; these two are the
+        # frames actually solved (settling included) and the wall seconds they
+        # took, which is what the Simulation tab turns into its pre-run estimate.
+        # Solver time only — the route's summary build and JSON serialisation
+        # sit outside it, so this UNDERSTATES the click-to-chart wait slightly
+        # and can never overstate it.
+        "n_frames_solved": int(_n_solved),
+        "solve_wall_s": round(float(_t.time() - t0), 1),
         # What the caller ASKED for, beside what actually ran.  The whole-node
         # snap silently changed the time resolution of every run whose requested
         # count was not a divisor of the slip-node grid; a consumer can now say

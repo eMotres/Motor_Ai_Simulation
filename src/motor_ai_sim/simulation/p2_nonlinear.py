@@ -23,6 +23,7 @@ that moves.
 """
 from __future__ import annotations
 
+import os as _os
 from typing import Sequence
 
 import numpy as np
@@ -172,18 +173,110 @@ class P2Nonlinear:
         self._kpw_memo = None
         self.kpw_calls = 0          # Kpw bodies actually executed
         self.kpw_hits = 0           # ...and calls served from the memo
+        # PARDISO symbolic-factorization reuse — see solve_ff.
+        self._pat = None            # (key, indptr, indices) last ANALYSED
+        self._reuse = _os.environ.get("SB_NO_PARDISO_REUSE") != "1"
+        self.pardiso_analyses = 0   # phase-11 calls
+        self.pardiso_solves = 0     # phase-23 calls
+        self.pardiso_perturbed = 0  # frames PARDISO had to perturb a pivot on
 
     # ── linear algebra ───────────────────────────────────────────────────────
     def solve_ff(self, Mff, rhs):
-        """Solve Mff·x = rhs for a 1-D or 2-D (multi-column) rhs."""
+        """Solve Mff·x = rhs for a 1-D or 2-D (multi-column) rhs.
+
+        REUSES THE SYMBOLIC FACTORIZATION while the sparsity pattern holds.
+        ``pypardiso.solve`` runs MKL PARDISO **phase 13** — reordering +
+        symbolic factorization + numeric factorization + back-solve — on every
+        call, because it only skips the analysis when the matrix it is handed
+        is byte-identical to the one it factorized last.  Inside a Newton
+        sweep, or a Picard sweep, or the bordered eddy iteration, the matrix
+        changes in its VALUES on every iteration and never in its PATTERN: the
+        mesh, the dof numbering, the constraint projection and the free set are
+        all fixed for the duration.  Reordering a 23 k-dof, 275 k-nnz Jacobian
+        that was already reordered one iteration ago is the single largest line
+        item in a P2 frame.
+
+        Measured on one such Jacobian dumped out of the 40 mm frame loop
+        (median of 7, 12 MKL threads):
+
+            phase 13 (analysis+numeric+solve)   165 ms   <- every call today
+            phase 23 (numeric+solve)             22 ms   <- analysis reused
+            phase 33 (solve only)                 8 ms
+
+        so ~87 % of every linear solve in this solver was re-deriving a
+        permutation it already had.
+
+        The pattern is CHECKED, not assumed: ``indptr``/``indices`` are
+        compared against the analysed ones (a ~0.2 ms memcmp against a 20 ms
+        solve) and a mismatch re-runs the analysis.  It has to be checked —
+        skfem's assembler calls ``eliminate_zeros()`` on the COO before the
+        CSR conversion, so an element matrix that happens to come out exactly
+        zero (the Newton tangent's ``max(dν/dB², 0)`` makes whole unsaturated
+        blocks exactly zero) drops structure, and the slip pairing ``Pro``
+        changes shape between frames.
+
+        NOT BIT-IDENTICAL, and neither is the code it replaces.  Phase 11
+        computes the weighted matching and the scaling vectors from the
+        matrix's VALUES, so an analysis inherited from the previous iterate
+        pivots differently and the answer moves in its last digits.  That is
+        only meaningful against the floor this solver already has: MKL's
+        threaded numeric factorization is not run-to-run reproducible here
+        either — the SAME matrix solved twice in one process differs by
+        ~6e-14 relative, and two full runs of the pinned ``p2_load`` case on
+        unmodified HEAD differ by 1.1e-14 in T_avg and 2.4e-12 in ripple.
+        The reused analysis moves a single solve by ~6e-13 relative, i.e. the
+        same order as the noise that was always there.  See the commit message
+        for the whole-run numbers; ``SB_NO_PARDISO_REUSE=1`` turns it off.
+        """
         if self._pardiso is not None:
             try:
+                if self._reuse:
+                    return self._solve_reuse(Mff, rhs)
                 return self._pardiso.solve(Mff, rhs)
             except Exception as _pe2:
                 self._log.warning(
                     "pypardiso solve failed (%s) — SuperLU fallback", _pe2)
                 self._pardiso = None
+                self._pat = None
         return _splu(Mff).solve(rhs)
+
+    def _solve_reuse(self, A, rhs):
+        """phase 11 only when the pattern moved, then phase 23 (numeric+solve).
+
+        Everything pypardiso's own ``solve`` does to the inputs is done here
+        too, through its own helpers, so the matrix and the right-hand side
+        reach MKL in exactly the state they reach it in today: ``_check_A``
+        sets the transposed flag for CSC, sorts the indices and rejects an
+        empty row; ``_check_b`` makes the rhs Fortran-ordered float64 and
+        preserves its rank, which is what makes the return shape (1-D for a
+        1-D rhs, 2-D for the multi-column back-solves) unchanged.
+        """
+        s = self._pardiso
+        s._check_A(A)
+        b = s._check_b(A, rhs)
+        key = (A.format, int(A.shape[0]), int(A.nnz))
+        _p = self._pat
+        if not (_p is not None and _p[0] == key
+                and np.array_equal(_p[1], A.indptr)
+                and np.array_equal(_p[2], A.indices)):
+            s.set_phase(11)
+            s._call_pardiso(A, np.zeros((A.shape[0], 1)))
+            self._pat = (key, A.indptr.copy(), A.indices.copy())
+            self.pardiso_analyses += 1
+        s.set_phase(23)
+        self.pardiso_solves += 1
+        x = s._call_pardiso(A, b)
+        # iparm[13] (0-based) = number of perturbed pivots.  A reused ordering
+        # is a valid ordering, not necessarily the best one for THIS matrix, so
+        # this is the number that would say so.  Counted, and said once.
+        if int(s.iparm[13]) > 0:
+            self.pardiso_perturbed += 1
+            if self.pardiso_perturbed == 1:
+                self._log.info(
+                    "PARDISO perturbed %d pivot(s) on a reused ordering "
+                    "(n=%d); set SB_NO_PARDISO_REUSE=1 to re-analyse every "
+                    "solve", int(s.iparm[13]), A.shape[0])
+        return x
 
     def pad2(self, Pro, free, xf):
         _x = np.zeros(Pro.shape[1]); _x[free] = xf

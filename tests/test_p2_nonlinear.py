@@ -8,6 +8,8 @@ goes with it, and the failure would look like physics.
 """
 from __future__ import annotations
 
+import os
+
 import numpy as np
 import pytest
 
@@ -184,6 +186,110 @@ class TestSkeletonAssembly:
         assert np.array_equal(K.indptr, want.indptr)
         assert np.array_equal(K.indices, want.indices)
         assert np.array_equal(K.data, want.data)
+
+
+class TestPardisoPatternReuse:
+    """The symbolic factorization is reused only while the PATTERN holds.
+
+    The risk this guards is not slowness, it is a wrong answer: reuse the
+    ordering of one matrix for a matrix with different structure and PARDISO
+    is solving something else. Every assertion below is on the SOLUTION, not
+    on the bookkeeping.
+    """
+
+    @staticmethod
+    def _solver():
+        pypardiso = pytest.importorskip("pypardiso")
+        # Same trick fem_solver_2d uses: publish the mkl_rt path the module
+        # level solver already found, or every construction here pays a
+        # recursive glob of sys.prefix (~6 s warm, ~12 s cold).
+        if not os.environ.get("PYPARDISO_MKL_RT"):
+            try:
+                os.environ["PYPARDISO_MKL_RT"] = str(
+                    pypardiso.scipy_aliases.pypardiso_solver.libmkl._name)
+            except Exception:
+                pass
+        p, _ = _p2()
+        p._pardiso = pypardiso.PyPardisoSolver()
+        return p
+
+    @staticmethod
+    def _spd(n, seed, extra=False):
+        """A small symmetric positive-definite system with a controllable
+        sparsity pattern."""
+        import scipy.sparse as sp
+        rng = np.random.default_rng(seed)
+        d = 4.0 + rng.random(n)
+        off = -1.0 - 0.1 * rng.random(n - 1)
+        A = sp.diags([off, d, off], [-1, 0, 1], format="lil")
+        if extra:                       # a different PATTERN, same size
+            A[0, n - 1] = A[n - 1, 0] = -0.5
+        return sp.csc_matrix(A), rng.standard_normal(n)
+
+    def test_second_solve_reuses_the_analysis_and_is_still_right(self):
+        p = self._solver()
+        A1, b1 = self._spd(400, 1)
+        A2, b2 = self._spd(400, 2)          # same pattern, different values
+        x1 = p.solve_ff(A1, b1)
+        x2 = p.solve_ff(A2, b2)
+        assert p.pardiso_solves == 2 and p.pardiso_analyses == 1
+        assert np.max(np.abs(A1 @ x1 - b1)) < 1e-10 * np.max(np.abs(b1))
+        assert np.max(np.abs(A2 @ x2 - b2)) < 1e-10 * np.max(np.abs(b2))
+
+    def test_a_changed_pattern_forces_a_fresh_analysis(self):
+        p = self._solver()
+        A1, b1 = self._spd(400, 3)
+        A2, b2 = self._spd(400, 3, extra=True)   # SAME size, different pattern
+        assert A1.nnz != A2.nnz
+        p.solve_ff(A1, b1)
+        x2 = p.solve_ff(A2, b2)
+        assert p.pardiso_analyses == 2
+        assert np.max(np.abs(A2 @ x2 - b2)) < 1e-10 * np.max(np.abs(b2))
+
+    def test_pattern_check_looks_at_indices_not_just_the_count(self):
+        """Same shape AND same nnz, different structure — the case a cheap
+        `nnz` check would wave through."""
+        import scipy.sparse as sp
+        p = self._solver()
+        A1, b = self._spd(400, 4)
+        A2 = A1.tolil()
+        A2[0, 1] = 0.0; A2[1, 0] = 0.0          # move two entries elsewhere
+        A2[0, 200] = -0.7; A2[200, 0] = -0.7
+        A2 = sp.csc_matrix(A2)
+        A2.eliminate_zeros()
+        assert A2.nnz == A1.nnz and A2.shape == A1.shape
+        p.solve_ff(A1, b)
+        x2 = p.solve_ff(A2, b)
+        assert p.pardiso_analyses == 2, "an index change slipped past the check"
+        assert np.max(np.abs(A2 @ x2 - b)) < 1e-10 * np.max(np.abs(b))
+
+    def test_multi_column_rhs_keeps_its_rank(self):
+        """The voltage/eddy Newtons back-solve three columns at once and index
+        the result as X[:, 0]; a 1-D rhs must still come back 1-D."""
+        p = self._solver()
+        A, b = self._spd(300, 5)
+        X = p.solve_ff(A, np.column_stack([b, 2.0 * b, -b]))
+        assert X.shape == (300, 3)
+        assert np.max(np.abs(A @ X[:, 1] - 2.0 * b)) < 1e-10 * np.max(np.abs(b))
+        assert p.solve_ff(A, b).ndim == 1
+
+    def test_kill_switch_restores_pypardiso_solve(self, monkeypatch):
+        monkeypatch.setenv("SB_NO_PARDISO_REUSE", "1")
+        p = self._solver()
+        p._reuse = False
+        A, b = self._spd(300, 6)
+        x = p.solve_ff(A, b)
+        assert p.pardiso_analyses == 0 and p.pardiso_solves == 0
+        assert np.max(np.abs(A @ x - b)) < 1e-10 * np.max(np.abs(b))
+
+    def test_reuse_and_no_reuse_agree_to_solver_precision(self):
+        """The two routes are not bit-identical (phase 11 reads the VALUES for
+        matching/scaling) — they are the same answer."""
+        A1, b1 = self._spd(500, 7)
+        A2, b2 = self._spd(500, 8)
+        pa = self._solver(); pa.solve_ff(A1, b1); xa = pa.solve_ff(A2, b2)
+        pb = self._solver(); pb._reuse = False; xb = pb.solve_ff(A2, b2)
+        assert np.max(np.abs(xa - xb)) < 1e-11 * np.max(np.abs(xb))
 
 
 class TestAsmKConstMatrix:

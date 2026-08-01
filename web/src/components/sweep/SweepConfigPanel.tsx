@@ -349,6 +349,11 @@ const SweepConfigPanel: React.FC = () => {
           <ToggleButton value="sweep" sx={{ textTransform: 'none', fontSize: 12 }}>Sweep study</ToggleButton>
           <ToggleButton value="doe" sx={{ textTransform: 'none', fontSize: 12 }}>DOE / Importance</ToggleButton>
         </ToggleButtonGroup>
+        {/* One-click card FIRST — the user opens Optimize to run it, not to
+            scroll past 18 variable cards looking for it ("не вижу графика").
+            The variables block below belongs to the manual flow. */}
+        {algoTab === 'optimize' && <Box sx={{ mb: 2 }}><AutoOptimizePanel /></Box>}
+
        {algoTab !== 'doe' && (
         <Box sx={{ display: 'flex', gap: 3, alignItems: 'flex-start' }}>
 
@@ -513,7 +518,6 @@ const SweepConfigPanel: React.FC = () => {
             runs stop being comparable. */}
         {algoTab === 'optimize' && (
           <>
-            <AutoOptimizePanel />
             <Accordion disableGutters elevation={0}
               sx={{ bgcolor: 'transparent', '&:before': { display: 'none' },
                     border: '1px solid var(--border-1, rgba(255,255,255,0.12))', borderRadius: 1 }}>

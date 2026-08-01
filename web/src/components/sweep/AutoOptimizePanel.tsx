@@ -10,6 +10,10 @@ import StopIcon from '@mui/icons-material/Stop';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import BookmarkAddIcon from '@mui/icons-material/BookmarkAdd';
 import HelpTip from '../common/HelpTip';
+import {
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip,
+  ResponsiveContainer, ReferenceLine,
+} from 'recharts';
 import { useMotorStore } from '../../stores/motorStore';
 
 /**
@@ -320,6 +324,37 @@ const AutoOptimizePanel: React.FC = () => {
             <LinearProgress
               variant={st.phase === 'baseline' || st.phase === 'starting' ? 'indeterminate' : 'determinate'}
               value={progPct} sx={{ height: 6, borderRadius: 3 }} />
+          </Box>
+        )}
+
+        {/* Trajectory chart — user request: the run's history must be visible
+            HERE, not only inside the collapsed Advanced panel. Same store
+            history the DescentPanel charts read (st.history), compact form:
+            torque + ripple per accepted eval, with the ripple gate line. */}
+        {(st.history || []).length > 1 && (
+          <Box sx={{ mt: 1.5, height: 180 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={(st.history || []).map((h: any, i: number) => ({
+                  i, torque: h.torque ?? h.T_avg_Nm,
+                  ripple: h.ripple ?? h.T_ripple_pct }))}
+                margin={{ top: 6, right: 12, left: 0, bottom: 0 }}>
+                <CartesianGrid stroke="var(--panel)" strokeDasharray="2 4" />
+                <XAxis dataKey="i" tick={{ fontSize: 10, fill: 'var(--text-2)' }}
+                  label={{ value: 'eval', position: 'insideBottomRight', fontSize: 10, fill: 'var(--text-3)' }} />
+                <YAxis yAxisId="t" tick={{ fontSize: 10, fill: 'var(--text-2)' }}
+                  width={44} domain={['auto', 'auto']} />
+                <YAxis yAxisId="r" orientation="right" width={40}
+                  tick={{ fontSize: 10, fill: 'var(--text-2)' }} domain={[0, 'auto']} />
+                <RTooltip contentStyle={{ background: 'var(--app-bg)',
+                  border: '1px solid var(--line-soft)', fontSize: 11 }} />
+                <ReferenceLine yAxisId="r" y={maxRipple} stroke="#f59e0b"
+                  strokeDasharray="4 3" label={{ value: `≤${maxRipple}%`, fontSize: 10, fill: '#f59e0b' }} />
+                <Line yAxisId="t" dataKey="torque" name="T [N·m]" dot={false}
+                  stroke="#60a5fa" strokeWidth={2} isAnimationActive={false} />
+                <Line yAxisId="r" dataKey="ripple" name="ripple [%]" dot={false}
+                  stroke="#f87171" strokeWidth={1.5} isAnimationActive={false} />
+              </LineChart>
+            </ResponsiveContainer>
           </Box>
         )}
 

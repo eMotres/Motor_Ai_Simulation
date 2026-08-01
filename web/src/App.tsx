@@ -222,6 +222,20 @@ function App() {
     loadServerSweepConfig();
   }, [fetchGeometryFromApi, fetchSchemaFromApi, loadServerSweepConfig]);
 
+  // RECONNECT: the boot probe above runs once, and a backend that was merely
+  // slow to wake (first request after a restart imports the whole solver
+  // stack) left the app stuck in "Local Mode" until a manual reload — a
+  // one-shot connectivity check is a silent-failure trap. While disconnected,
+  // retry every 5 s; the effect re-arms whenever connectivity flips.
+  useEffect(() => {
+    if (connectedToApi) return;
+    const t = setInterval(() => {
+      fetchGeometryFromApi();
+      fetchSchemaFromApi();
+    }, 5000);
+    return () => clearInterval(t);
+  }, [connectedToApi, fetchGeometryFromApi, fetchSchemaFromApi]);
+
   // There's always a working motor ("my copy"): a brand-new user with none gets
   // one created from the current state, so every later edit has somewhere to
   // auto-save.  A short delay lets the panels seed localStorage first.

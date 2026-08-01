@@ -12,7 +12,7 @@ import BookmarkAddIcon from '@mui/icons-material/BookmarkAdd';
 import HelpTip from '../common/HelpTip';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip,
-  ResponsiveContainer, ReferenceLine,
+  ResponsiveContainer, ReferenceLine, ScatterChart, Scatter,
 } from 'recharts';
 import { useMotorStore } from '../../stores/motorStore';
 
@@ -310,6 +310,7 @@ const AutoOptimizePanel: React.FC = () => {
                 <Tooltip placement="top" title={
                   `Candidates the fences stopped: ${rj.rejected_geometry} not buildable (geometry validator), `
                   + `${rj.rejected_unconverged} whose nonlinear solve did not converge, `
+                  + `${rj.rejected_mesh ?? 0} whose mesh would be pathologically fine (mesh budget — rejected in seconds instead of timing out), `
                   + `${rj.rejected_timeout} timed out, ${rj.rejected_other} other. `
                   + 'The search is unboxed on purpose, so some rejection is expected — but a run fencing most '
                   + 'of what it samples is thrashing, not converging.'}>
@@ -331,32 +332,73 @@ const AutoOptimizePanel: React.FC = () => {
             HERE, not only inside the collapsed Advanced panel. Same store
             history the DescentPanel charts read (st.history), compact form:
             torque + ripple per accepted eval, with the ripple gate line. */}
-        {(st.history || []).length > 1 && (
-          <Box sx={{ mt: 1.5, height: 180 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={(st.history || []).map((h: any, i: number) => ({
-                  i, torque: h.torque ?? h.T_avg_Nm,
-                  ripple: h.ripple ?? h.T_ripple_pct }))}
-                margin={{ top: 6, right: 12, left: 0, bottom: 0 }}>
-                <CartesianGrid stroke="var(--panel)" strokeDasharray="2 4" />
-                <XAxis dataKey="i" tick={{ fontSize: 10, fill: 'var(--text-2)' }}
-                  label={{ value: 'eval', position: 'insideBottomRight', fontSize: 10, fill: 'var(--text-3)' }} />
-                <YAxis yAxisId="t" tick={{ fontSize: 10, fill: 'var(--text-2)' }}
-                  width={44} domain={['auto', 'auto']} />
-                <YAxis yAxisId="r" orientation="right" width={40}
-                  tick={{ fontSize: 10, fill: 'var(--text-2)' }} domain={[0, 'auto']} />
-                <RTooltip contentStyle={{ background: 'var(--app-bg)',
-                  border: '1px solid var(--line-soft)', fontSize: 11 }} />
-                <ReferenceLine yAxisId="r" y={maxRipple} stroke="#f59e0b"
-                  strokeDasharray="4 3" label={{ value: `≤${maxRipple}%`, fontSize: 10, fill: '#f59e0b' }} />
-                <Line yAxisId="t" dataKey="torque" name="T [N·m]" dot={false}
-                  stroke="#60a5fa" strokeWidth={2} isAnimationActive={false} />
-                <Line yAxisId="r" dataKey="ripple" name="ripple [%]" dot={false}
-                  stroke="#f87171" strokeWidth={1.5} isAnimationActive={false} />
-              </LineChart>
-            </ResponsiveContainer>
+        {(st.history || []).length > 1 && (() => {
+          const hist = (st.history || []).map((h: any, i: number) => ({
+            // The persisted history rows name the fields T_em_Nm / T_ripple_pct
+            // (checked against the live /descent/progress payload — do not
+            // guess field names, they burned this chart once already).
+            i, torque: h.torque ?? h.T_em_Nm ?? h.T_avg_Nm,
+            ripple: h.ripple ?? h.T_ripple_pct,
+          })).filter((p: any) => Number.isFinite(p.torque) && Number.isFinite(p.ripple));
+          const bestPt = best && Number.isFinite(best.T_em_Nm)
+            ? [{ ripple: best.T_ripple_pct, torque: best.T_em_Nm }] : [];
+          const basePt = base && Number.isFinite(base.T_em_Nm)
+            ? [{ ripple: base.T_ripple_pct, torque: base.T_em_Nm }] : [];
+          return (
+          <Box sx={{ mt: 1.5, display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+            {/* Trajectory: what the search did over time */}
+            <Box sx={{ flex: 1, minWidth: 320, height: 200 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={hist} margin={{ top: 6, right: 12, left: 0, bottom: 0 }}>
+                  <CartesianGrid stroke="var(--panel)" strokeDasharray="2 4" />
+                  <XAxis dataKey="i" tick={{ fontSize: 10, fill: 'var(--text-2)' }}
+                    label={{ value: 'eval', position: 'insideBottomRight', fontSize: 10, fill: 'var(--text-3)' }} />
+                  <YAxis yAxisId="t" tick={{ fontSize: 10, fill: 'var(--text-2)' }}
+                    width={44} domain={['auto', 'auto']} />
+                  <YAxis yAxisId="r" orientation="right" width={40}
+                    tick={{ fontSize: 10, fill: 'var(--text-2)' }} domain={[0, 'auto']} />
+                  <RTooltip contentStyle={{ background: 'var(--app-bg)',
+                    border: '1px solid var(--line-soft)', fontSize: 11 }} />
+                  <ReferenceLine yAxisId="r" y={maxRipple} stroke="#f59e0b"
+                    strokeDasharray="4 3" label={{ value: `≤${maxRipple}%`, fontSize: 10, fill: '#f59e0b' }} />
+                  <Line yAxisId="t" dataKey="torque" name="T [N·m]" dot={false}
+                    stroke="#60a5fa" strokeWidth={2} isAnimationActive={false} />
+                  <Line yAxisId="r" dataKey="ripple" name="ripple [%]" dot={false}
+                    stroke="#f87171" strokeWidth={1.5} isAnimationActive={false} />
+                </LineChart>
+              </ResponsiveContainer>
+            </Box>
+            {/* Points cloud: every accepted candidate as torque×ripple, the
+                ripple gate as the vertical fence, the current design and the
+                best point called out — the user's "график с точками". */}
+            <Box sx={{ flex: 1, minWidth: 320, height: 200 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <ScatterChart margin={{ top: 6, right: 12, left: 0, bottom: 0 }}>
+                  <CartesianGrid stroke="var(--panel)" strokeDasharray="2 4" />
+                  <XAxis type="number" dataKey="ripple" name="ripple"
+                    tick={{ fontSize: 10, fill: 'var(--text-2)' }} domain={[0, 'auto']}
+                    label={{ value: 'ripple %', position: 'insideBottomRight', fontSize: 10, fill: 'var(--text-3)' }} />
+                  <YAxis type="number" dataKey="torque" name="T"
+                    tick={{ fontSize: 10, fill: 'var(--text-2)' }} width={44}
+                    domain={['auto', 'auto']}
+                    label={{ value: 'T [N·m]', angle: -90, position: 'insideLeft', fontSize: 10, fill: 'var(--text-3)' }} />
+                  <RTooltip cursor={{ strokeDasharray: '3 3' }}
+                    contentStyle={{ background: 'var(--app-bg)',
+                      border: '1px solid var(--line-soft)', fontSize: 11 }} />
+                  <ReferenceLine x={maxRipple} stroke="#f59e0b" strokeDasharray="4 3"
+                    label={{ value: `≤${maxRipple}%`, fontSize: 10, fill: '#f59e0b' }} />
+                  <Scatter name="evals" data={hist} fill="#60a5fa"
+                    opacity={0.55} isAnimationActive={false} />
+                  <Scatter name="current design" data={basePt} fill="#34d399"
+                    shape="diamond" isAnimationActive={false} />
+                  <Scatter name="best" data={bestPt} fill="#f87171"
+                    shape="star" isAnimationActive={false} />
+                </ScatterChart>
+              </ResponsiveContainer>
+            </Box>
           </Box>
-        )}
+          );
+        })()}
 
         {st.error && !running && (
           <Typography color="error" variant="caption" sx={{ display: 'block', mt: 1 }}>
@@ -470,7 +512,9 @@ const AutoOptimizePanel: React.FC = () => {
             <Typography variant="caption" sx={{ display: 'block', mt: 0.75, color: 'text.secondary' }}>
               {result?.n_evals ?? nEvals} FEM evals
               {rj ? ` · ${rj.rejected} rejected by the fences (${rj.rejected_geometry} not buildable, `
-                    + `${rj.rejected_unconverged} unconverged)` : ''}
+                    + `${rj.rejected_unconverged} unconverged`
+                    + `${rj.rejected_mesh ? `, ${rj.rejected_mesh} mesh budget` : ''}`
+                    + `${rj.rejected_timeout ? `, ${rj.rejected_timeout} timed out` : ''})` : ''}
               {op ? ` · solved at ${fmt(op.current_a, 1)} A / ${fmt(op.rpm, 0)} rpm / γ ${fmt(op.gamma_deg, 1)}°` : ''}
               . The result is filed as a Compare point with its full geometry, metrics and provenance.
             </Typography>

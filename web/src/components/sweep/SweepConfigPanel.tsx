@@ -354,7 +354,17 @@ const SweepConfigPanel: React.FC = () => {
             The variables block below belongs to the manual flow. */}
         {algoTab === 'optimize' && <Box sx={{ mb: 2 }}><AutoOptimizePanel /></Box>}
 
-       {algoTab !== 'doe' && (
+       {/* The manual flow (variable cards + operating-point column) is HIDDEN
+           on the Optimize tab for now — user decision 2026-08-01: debug ONLY
+           the automatic optimizer; every knob it needs is assembled server-side.
+           The cards still serve the Sweep tab, which grids them. Set
+           localStorage 'opt.showManual' = "1" to bring the manual flow back
+           without a rebuild (escape hatch for debugging the debugger). */}
+       {(algoTab === 'sweep'
+         || (algoTab === 'optimize' && (() => {
+              try { return localStorage.getItem('opt.showManual') === '1'; }
+              catch { return false; }
+            })())) && (
         <Box sx={{ display: 'flex', gap: 3, alignItems: 'flex-start' }}>
 
         {/* Left: optimization variable cards */}
@@ -516,22 +526,26 @@ const SweepConfigPanel: React.FC = () => {
             collapsed "Advanced" section, because every knob it exposes now has a
             standing convention behind it and re-deciding them per run is how
             runs stop being comparable. */}
-        {algoTab === 'optimize' && (
-          <>
-            <Accordion disableGutters elevation={0}
-              sx={{ bgcolor: 'transparent', '&:before': { display: 'none' },
-                    border: '1px solid var(--border-1, rgba(255,255,255,0.12))', borderRadius: 1 }}>
-              <AccordionSummary expandIcon={<ExpandMoreIcon sx={{ fontSize: 18 }} />}
-                sx={{ minHeight: 36, '& .MuiAccordionSummary-content': { my: 0.5 } }}>
-                <Typography variant="caption" sx={{ fontWeight: 700, letterSpacing: 0.4 }}>
-                  ADVANCED — manual optimizer (algorithm, weights, ranges, box-walking)
-                </Typography>
-              </AccordionSummary>
-              <AccordionDetails sx={{ pt: 0 }}>
-                <DescentPanel />
-              </AccordionDetails>
-            </Accordion>
-          </>
+        {/* Same gate as the variables block above: manual optimizer hidden
+            while the automatic one is being debugged (opt.showManual = "1"
+            to restore). DescentPanel stays in the bundle untouched. */}
+        {algoTab === 'optimize' && (() => {
+          try { return localStorage.getItem('opt.showManual') === '1'; }
+          catch { return false; }
+        })() && (
+          <Accordion disableGutters elevation={0}
+            sx={{ bgcolor: 'transparent', '&:before': { display: 'none' },
+                  border: '1px solid var(--border-1, rgba(255,255,255,0.12))', borderRadius: 1 }}>
+            <AccordionSummary expandIcon={<ExpandMoreIcon sx={{ fontSize: 18 }} />}
+              sx={{ minHeight: 36, '& .MuiAccordionSummary-content': { my: 0.5 } }}>
+              <Typography variant="caption" sx={{ fontWeight: 700, letterSpacing: 0.4 }}>
+                ADVANCED — manual optimizer (algorithm, weights, ranges, box-walking)
+              </Typography>
+            </AccordionSummary>
+            <AccordionDetails sx={{ pt: 0 }}>
+              <DescentPanel />
+            </AccordionDetails>
+          </Accordion>
         )}
         {/* Sweep study = current × γ grid → η-vs-N·m/kg performance map */}
         {algoTab === 'sweep' && <SweepStudyPanel />}

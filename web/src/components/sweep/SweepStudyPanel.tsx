@@ -10,7 +10,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Box, Typography, Button, LinearProgress, Divider, TextField,
-  FormControl, InputLabel, Select, MenuItem,
+  FormControl, InputLabel, Select, MenuItem, Chip,
 } from '@mui/material';
 import {
   ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -186,6 +186,11 @@ const SweepStudyPanel: React.FC = () => {
   const [selected, setSelected] = useState<any>(null);   // hand-picked best point
   const [applyMsg, setApplyMsg] = useState<string | null>(null);
   const [zoom, setZoom] = useState<{ x: [number, number]; y: [number, number] } | null>(null);   // mouse-wheel zoom
+
+  // A stale zoom window survives into the NEXT result set and shows a sliver
+  // of the new data ("а где график?" — the curves ran off the clipped view).
+  // New series → full view, always.
+  useEffect(() => { setZoom(null); }, [series]);
   const chartBoxRef = useRef<HTMLDivElement>(null);
 
   const [running, setRunning] = useState(false);
@@ -392,6 +397,10 @@ const SweepStudyPanel: React.FC = () => {
     const el = chartBoxRef.current;
     if (!el || !extent) return;
     const onWheel = (e: WheelEvent) => {
+      // Ctrl+wheel zooms; a PLAIN wheel keeps scrolling the page. Without
+      // this gate, scrolling past the chart silently zoomed it into a corner
+      // and the next visit found "no chart" — a sliver of the old view.
+      if (!e.ctrlKey) return;
       e.preventDefault();
       const box = el.getBoundingClientRect();
       const padL = 54, padR = 24, padT = 8, padB = 40;   // ≈ plot area inside axes/margins
@@ -540,11 +549,21 @@ const SweepStudyPanel: React.FC = () => {
       {(running || series.length > 0) && (
         <>
           <Divider sx={{ borderColor: 'var(--panel)', my: 1 }} />
-          <Typography sx={{ fontSize: 11, color: 'var(--text-3)', mb: 0.5 }}>
-            {running
-              ? `computing… ${nFeasible} point${nFeasible === 1 ? '' : 's'} so far`
-              : `${nFeasible} feasible point${nFeasible === 1 ? '' : 's'} · ${series.length} curve${series.length === 1 ? '' : 's'} · click a point to pick & save it`}
-          </Typography>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
+            <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>
+              {running
+                ? `computing… ${nFeasible} point${nFeasible === 1 ? '' : 's'} so far`
+                : `${nFeasible} feasible point${nFeasible === 1 ? '' : 's'} · ${series.length} curve${series.length === 1 ? '' : 's'} · click a point to pick & save it`}
+            </Typography>
+            {/* A zoomed view MUST say so and offer the way back — double-click
+                was the only reset and nothing on screen mentioned it. */}
+            {zoom && (
+              <Chip size="small" onClick={() => setZoom(null)} onDelete={() => setZoom(null)}
+                label="zoomed — reset view"
+                sx={{ height: 20, fontSize: 10, color: '#f59e0b',
+                      border: '1px solid rgba(245,158,11,0.6)', bgcolor: 'transparent' }} />
+            )}
+          </Box>
           {buildFails && (
             <Typography sx={{ fontSize: 11, color: '#fbbf24', mb: 0.5, lineHeight: 1.4 }}>
               ⚠ {buildFails.n} of {buildFails.total} design{buildFails.n === 1 ? '' : 's'} couldn’t be built

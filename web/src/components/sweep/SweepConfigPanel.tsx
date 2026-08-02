@@ -352,7 +352,15 @@ const SweepConfigPanel: React.FC = () => {
         {/* One-click card FIRST — the user opens Optimize to run it, not to
             scroll past 18 variable cards looking for it ("не вижу графика").
             The variables block below belongs to the manual flow. */}
-        {algoTab === 'optimize' && <Box sx={{ mb: 2 }}><AutoOptimizePanel /></Box>}
+        {algoTab === 'optimize' && (
+          <Box sx={{ mb: 2 }}>
+            <AutoOptimizePanel />
+            {/* The classic optimizer charts (metrics table, convergence, the
+                objective cloud with the baseline line) — user request: back on
+                the tab, without the manual controls. Same store as the auto run. */}
+            <DescentPanel chartsOnly />
+          </Box>
+        )}
 
        {/* The manual flow (variable cards + operating-point column) is HIDDEN
            on the Optimize tab for now — user decision 2026-08-01: debug ONLY

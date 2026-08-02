@@ -76,7 +76,7 @@ const Group: React.FC<{ label: string; children: React.ReactNode }> = ({ label, 
   </Box>
 );
 
-const DescentPanel: React.FC = () => {
+const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }) => {
   const {
     sweepConfig, connectedToApi, parameterSchema, materials,
     descentRunning, descentState, descentError,
@@ -469,9 +469,16 @@ const DescentPanel: React.FC = () => {
   );
 
   return (
-    <Box sx={{ mt: 4 }}>
-      <Divider sx={{ mb: 2 }} />
+    <Box sx={{ mt: chartsOnly ? 1 : 4 }}>
+      {!chartsOnly && <Divider sx={{ mb: 2 }} />}
 
+      {/* chartsOnly: the Optimize tab shows ONLY the auto card by default, but
+          the user wants the classic charts (metrics table, convergence, the
+          objective cloud with the baseline line) back under it — WITHOUT the
+          manual controls. Everything from the header through the toolbars is
+          skipped; the data sections below read the same store the auto run
+          writes, so they visualise auto runs too. */}
+      {!chartsOnly && (<>
       {/* ── Header: title + Run ── */}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5 }}>
         <TrendingDownIcon sx={{ fontSize: 18 }} />
@@ -749,6 +756,8 @@ const DescentPanel: React.FC = () => {
           )}
         </Box>
       )}
+
+      </>)}
 
       {/* Metrics table: baseline / current / best */}
       {base && (

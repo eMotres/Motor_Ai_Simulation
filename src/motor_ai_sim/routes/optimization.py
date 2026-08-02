@@ -309,6 +309,39 @@ def measured_eval_seconds(steps_per_period: int = 36) -> Dict[str, Any]:
 _load_eval_rate()
 
 
+def _nonphysical_result(res: Any) -> Optional[str]:
+    """Reason the metrics of an 'ok' eval are physically impossible, else None.
+
+    Bounds are deliberately loose — orders of magnitude, not engineering
+    judgement: this gate must never veto a merely BAD design (the optimizer is
+    entitled to explore those), only a broken postprocess.  For scale, the best
+    aerospace machines sit near ~50 Nm/kg; the cap leaves two orders of
+    headroom before calling a number impossible."""
+    if not isinstance(res, dict):
+        return "result payload is not a dict"
+    checks = (
+        ("T_em_Nm",               lambda v: abs(v) < 1e4),
+        ("mass_total_kg",         lambda v: 0.0 < v < 1e4),
+        ("efficiency",            lambda v: 0.0 < v <= 1.0),
+        ("torque_per_mass_Nm_kg", lambda v: abs(v) < 5e3),
+        ("T_ripple_pct",          lambda v: 0.0 <= v < 1e4),
+        ("P_loss_total_W",        lambda v: 0.0 <= v < 1e7),
+    )
+    for key, ok_fn in checks:
+        v = res.get(key)
+        if v is None:
+            continue                    # absent metric is the consumer's problem
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return "{} is not a number: {!r}".format(key, v)
+        if not math.isfinite(f):
+            return "{} is not finite: {!r}".format(key, v)
+        if not ok_fn(f):
+            return "{} = {:g} is outside any physical range".format(key, f)
+    return None
+
+
 def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
                      coil_temp_c: float, n_periods: float = 1.0,
                      gamma_deg: float = 0.0, mesh_size_mm: float = 4.0,
@@ -377,6 +410,20 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
         m = out.rfind("@@RESULT@@")
         if m >= 0:
             _res = json.loads(out[m + len("@@RESULT@@"):])
+            if _res.get("ok"):
+                # Output sanity gate.  A degenerate-but-buildable candidate can
+                # solve and still produce garbage metrics (seen live: a wafer
+                # machine reported ok with td = -7.7e9 Nm/kg and efficiency
+                # exactly 0.0 — the point then stretched every chart axis).
+                # A non-physical RESULT is a rejected eval, said out loud —
+                # never data.
+                _bad = _nonphysical_result(_res.get("res"))
+                if _bad:
+                    log.warning("eval REJECTED (non-physical result): %s | "
+                                "I=%.3g A gamma=%.3g deg overrides=%s",
+                                _bad, current_a, gamma_deg, overrides)
+                    _res = {"ok": False,
+                            "error": "non-physical result: " + _bad}
             if not _res.get("ok") and "unconverged FEM frames" in str(_res.get("error", "")):
                 # Say it out loud and name the frames.  A rejected candidate that
                 # vanishes with a generic "eval failed" looks like a mesh problem;

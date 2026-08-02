@@ -358,12 +358,20 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
   const effCut = displayCut ?? sliderMax;
   const toXY = (p: any) => ({ td: p.td, eff: (p.eff ?? 0) * 100, ripple: p.ripple, z: 1,
                               overrides: p.overrides, current_a: p.current_a, gamma_deg: p.gamma_deg });
+  // Display fence against non-physical points persisted before the backend's
+  // output sanity gate existed (seen live: td = -7.7e9, eff = 0 — one such
+  // point stretched the axis to 3e8 and crushed the real cloud into a sliver).
+  // Bounds are orders-of-magnitude loose: this hides broken numbers, not bad
+  // designs.
+  const physical = (p: any) =>
+    Number.isFinite(p.td) && p.td > 0 && p.td < 5e3 &&
+    Number.isFinite(p.eff ?? 0) && (p.eff ?? 0) > 0 && (p.eff ?? 0) <= 1;
   // One series of every evaluated design; the slider visually cuts by ripple.
-  const shownPts = points.filter((p) => p.td != null && p.ripple != null && p.ripple <= effCut).map(toXY);
+  const shownPts = points.filter((p) => physical(p) && p.ripple != null && p.ripple <= effCut).map(toXY);
   // Unfiltered count — gates the scatter section so the on-chart ripple slider
   // stays mounted even when the cut hides most points (else dragging down would
   // unmount the slider itself).
-  const totalValidPts = points.filter((p: any) => p.td != null && p.ripple != null).length;
+  const totalValidPts = points.filter((p: any) => physical(p) && p.ripple != null).length;
   const trajPts = history
     .filter((h: any) => h.torque_per_mass != null)
     .map((h: any) => ({ td: h.torque_per_mass, eff: (h.efficiency ?? 0) * 100, ripple: h.T_ripple_pct, iter: h.iter, z: 2 }));

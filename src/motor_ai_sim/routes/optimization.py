@@ -357,11 +357,21 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
     import time as _t_eval
     _t0_eval = _t_eval.monotonic()
     try:
+        # Adaptive hang cap: 4x the MEASURED median eval, floored at 300 s and
+        # capped at 30 min.  A fixed 300 s assumed "healthy = 1-2 min", but with
+        # 10 concurrent evals the same solve stretches to a 231 s median (CPU
+        # contention), and the fixed cap then rejected healthy candidates as
+        # hangs — 8 of 12 in one generation, which starved CMA-ES into a false
+        # flat-fitness stop.  Pathological meshes no longer need the cap anyway:
+        # the mesh triangle budget kills them in seconds.
+        try:
+            _med = float(measured_eval_seconds().get("s_per_eval") or 0.0)
+        except Exception:  # noqa: BLE001
+            _med = 0.0
+        _cap = min(1800.0, max(300.0, 4.0 * _med))
         proc = subprocess.run(
             [sys.executable, "-m", "motor_ai_sim.optimization.refine_proc"],
-            # 300 s cap: a healthy eval (even P2 full-ring) finishes in ~1-2 min;
-            # a longer run is a hang → let it die so it can't tie up a worker.
-            input=spec, capture_output=True, text=True, timeout=300)
+            input=spec, capture_output=True, text=True, timeout=_cap)
         _record_eval_seconds(_t_eval.monotonic() - _t0_eval)
         out = proc.stdout or ""
         m = out.rfind("@@RESULT@@")
@@ -3054,7 +3064,18 @@ def _auto_worker(plan: Dict[str, Any], run_id: str, bucket: str,
                             best = {"x": to_geom(sols[i]), "metrics": out["res"],
                                     "cost": c, "F": Fv}
                     else:
-                        cost_by_i[i] = 1e6      # fenced candidate → repelled
+                        # Graded fence.  A constant 1e6 made an ALL-fenced
+                        # generation perfectly flat, and CMA-ES read the flat
+                        # fitness as convergence (tolfun) — a 10 % run died
+                        # after generation 1 "successfully".  The penalty now
+                        # grows with the sigma-normalised distance from the
+                        # known-good baseline, so a fenced generation still
+                        # slopes back toward feasibility.
+                        _d = math.sqrt(sum(
+                            ((float(sols[i][k]) - float(x0[k]))
+                             / max(float(sigmas[k]), 1e-9)) ** 2
+                            for k in range(len(x0))))
+                        cost_by_i[i] = 1e6 * (1.0 + _d)
                     with _descent_lock:
                         _descent_state["n_evals"] = n_evals
                         _descent_state["points"] = list(all_pts)

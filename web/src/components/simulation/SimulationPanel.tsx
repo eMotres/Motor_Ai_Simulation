@@ -10,7 +10,8 @@ import {
   Box, Typography, TextField, Button, Chip, Divider,
   LinearProgress, Alert, Tooltip, IconButton, Paper,
   CircularProgress, Dialog, DialogTitle, DialogContent, DialogActions,
-  Checkbox, FormControlLabel,
+  Checkbox, FormControlLabel, FormControl, InputLabel, Select, MenuItem,
+  InputAdornment,
 } from '@mui/material';
 import ShowChartIcon from '@mui/icons-material/ShowChart';
 import { useMotorStore } from '../../stores/motorStore';
@@ -316,9 +317,9 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // persisted or the backend cache key missed.)
   useEffect(() => { void active; void simBusy; }, [active]);
   // Steps per electrical period (transient time resolution).  Persisted.
-  // The text field edits a free string (stepsStr) and only commits a
-  // clamped integer on blur / Enter, so typing "12" over "6" works
-  // naturally instead of producing "62".
+  // A Select over the divisors of stepsMax — the set is fixed, so free typing
+  // only produced snap surprises (user, 2026-08-01: "если фиксированные
+  // значения — давай выбор только их из списка").
   const [steps,    setSteps]    = usePersisted('stepsPP', 24);   // transient frames/period — single source (optimizer reads this too)
   // Magnet/shaft eddy losses ALWAYS come from the real field solve
   // (J = σ(−∂A/∂t + U), per-magnet ∫J=0, assigned-material σ — the Ansys way),
@@ -368,8 +369,6 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
     syncActiveMotor();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [current, frequency, rpm, phaseOffset, steps, coilTemp, endWinding, demag, eddyCoupled, torqueFilter, connection]);
-  const [stepsStr, setStepsStr] = useState(String(steps));
-  useEffect(() => { setStepsStr(String(steps)); }, [steps]);
   // HARD upper bound: the sliding-band rotor can only sit on slip-ring nodes,
   // so steps/period must DIVIDE the nodes-per-electrical-period count.  The
   // backend (fem_solver_2d.fem_transient_sliding_band) makes that count adaptive:
@@ -396,25 +395,14 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
           || (Math.abs(d - v) === Math.abs(best - v) && d > best))) best = d;
     return best;
   };
-  // Snap the committed steps onto the valid grid whenever it changes (motor /
-  // gap_layers change) or on mount, so the FIELD shows exactly what the solver
-  // runs — no "typed 60, ran 72" surprise.
+  // Snap the persisted steps onto the valid grid whenever it changes (motor /
+  // gap_layers change) or on mount — the divisor set depends on the machine, so
+  // a stored value can fall off the list.
   useEffect(() => {
     const s = snapSteps(steps);
-    if (s !== steps) { setSteps(s); setStepsStr(String(s)); }
+    if (s !== steps) setSteps(s);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stepsMax]);
-  // Set when the typed value was moved onto the valid grid — the snap used to be
-  // silent, so "typed 40, got 36" read as the field resetting itself.
-  const [stepsSnapped, setStepsSnapped] = useState<number | null>(null);
-  const commitSteps = () => {
-    const v = Math.round(Number(stepsStr));
-    const clamped = Number.isFinite(v)
-      ? snapSteps(Math.max(6, Math.min(stepsMax, v))) : steps;
-    setSteps(clamped);
-    setStepsStr(String(clamped));
-    setStepsSnapped(Number.isFinite(v) && v !== clamped ? v : null);
-  };
   // ── rotor angle / PINN training settings removed ──────────────────────
   // FEM auto-run now sweeps the rotor through the full electrical period,
   // and the PINN run button is gone (no Modulus dependency).  Kept as
@@ -836,23 +824,22 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               above (the panel scrolls if needed); no bottom-pin, which used to
               leave a big empty gap now that the cooling/PINN sections are gone. ── */}
         <Box sx={{ pt: 1 }}>
-          <TextField
-            label="Steps per electrical period"
-            type="text" size="small" fullWidth
-            value={stepsStr}
-            onChange={e => setStepsStr(e.target.value.replace(/[^0-9]/g, ''))}
-            onBlur={commitSteps}
-            onKeyDown={e => { if (e.key === 'Enter') { commitSteps(); (e.target as HTMLInputElement).blur(); } }}
-            inputProps={{ inputMode: 'numeric', pattern: '[0-9]*' }}
-            disabled={simBusy}
-            helperText={stepsSnapped != null
-              ? `${stepsSnapped} is not a divisor of ${stepsMax} — snapped to ${steps}. Valid: ${validSteps.join(', ')}`
-              : `Valid: ${validSteps.join(', ')}`}
-            FormHelperTextProps={{ sx: { fontSize: 9.5, mx: 0, mt: 0.25, lineHeight: 1.3,
-              color: stepsSnapped != null ? '#b45309' : 'var(--text-3)' } }}
-            InputProps={{ endAdornment: <HelpTip title={`Transient time resolution. Valid = divisors of ${stepsMax} (slip nodes per electrical period): ${validSteps.join(', ')}. Other values snap to the nearest so the rotor lands on whole mesh nodes.`} /> }}
-            sx={{ mb: 1.25 }}
-          />
+          <FormControl size="small" fullWidth sx={{ mb: 1.25 }} disabled={simBusy}>
+            <InputLabel id="steps-pp-label">Steps per electrical period</InputLabel>
+            <Select
+              labelId="steps-pp-label"
+              label="Steps per electrical period"
+              value={validSteps.includes(steps) ? steps : snapSteps(steps)}
+              onChange={e => setSteps(Number(e.target.value))}
+              endAdornment={
+                <InputAdornment position="end" sx={{ mr: 2.5 }}>
+                  <HelpTip title={`Transient time resolution. The list holds the only possible values — divisors of ${stepsMax} (slip-ring nodes per electrical period for THIS machine), so the rotor always lands on whole mesh nodes.`} />
+                </InputAdornment>
+              }
+            >
+              {validSteps.map(v => <MenuItem key={v} value={v}>{v}</MenuItem>)}
+            </Select>
+          </FormControl>
           {/* Per-element irreversible demagnetisation (Ansys-style).  A pre-pass
               sweeps the period at full Br, finds the worst demag field at every
               magnet element, and de-rates Br on the recoil line → the torque /
@@ -960,7 +947,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
             <Button
               fullWidth
               variant="contained"
-              onClick={() => { commitSteps(); if (cancelledRun) setAskResume(true); else launchRun(true); }}
+              onClick={() => { if (cancelledRun) setAskResume(true); else launchRun(true); }}
               startIcon={<PlayArrowIcon />}
               sx={{
                 py: 1.2, fontWeight: 700, fontSize: 13, letterSpacing: 0.5,

@@ -438,26 +438,31 @@ const AutoOptimizePanel: React.FC = () => {
                 raising the current — the ripple gate cost more than it bought.
                 Leaving that to be inferred from the deltas is how a run that
                 answered "no" gets read as "here is your optimized motor". */}
+            {/* Verdict is ONE line; the reasoning lives in the tooltip — the
+                standing UI rule (no text walls, details on hover). The first
+                version was a paragraph and the user rightly objected. */}
             {typeof st.best?.F === 'number' && st.best.F <= 0 && (
-              <Box sx={{ mb: 1, p: 1, borderRadius: 1, border: '1px solid #f59e0b',
-                         bgcolor: 'rgba(245,158,11,0.08)' }}>
-                <Typography variant="caption" sx={{ display: 'block', fontWeight: 700, color: '#f59e0b' }}>
-                  ⚠ This design does NOT beat your current one.
+              <Tooltip placement="top" title={
+                `Below the current-only baseline line: every point on that line is reachable by `
+                + `just raising current. The ripple limit ${fmt(auto.max_ripple_pct, 2)}% sits below the `
+                + `current design's own ${fmt(base.T_ripple_pct, 2)}%, so the optimizer had to buy ripple `
+                + `with torque. Raise the limit, or accept the trade on purpose.`}>
+                <Typography variant="caption" sx={{ display: 'inline-block', mb: 1, px: 1, py: 0.4,
+                    borderRadius: 1, border: '1px solid #f59e0b', color: '#f59e0b',
+                    fontWeight: 700, cursor: 'help', bgcolor: 'rgba(245,158,11,0.08)' }}>
+                  ⚠ не лучше текущего (F = {fmt(st.best.F, 3)}) · ⓘ
                 </Typography>
-                <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary', mt: 0.25 }}>
-                  It sits <strong>below the current-only baseline line</strong> (F ={' '}
-                  {fmt(st.best.F, 4)}): every point on that line is reachable by just raising
-                  current. The ripple limit of {fmt(auto.max_ripple_pct, 2)}% is below your current
-                  design&apos;s own {fmt(base.T_ripple_pct, 2)}%, so the optimizer had to buy ripple
-                  with torque. Raise the limit, or accept the trade below on purpose.
-                </Typography>
-              </Box>
+              </Tooltip>
             )}
             {typeof st.best?.F === 'number' && st.best.F > 0 && (
-              <Typography variant="caption" sx={{ display: 'block', mb: 1, color: '#22c55e', fontWeight: 600 }}>
-                ✓ Above the current-only baseline line (F = {fmt(st.best.F, 4)}) — this design beats
-                what you would get by simply raising the current.
-              </Typography>
+              <Tooltip placement="top" title={
+                `Above the current-only baseline line — this design beats what simply raising `
+                + `the current would give.`}>
+                <Typography variant="caption" sx={{ display: 'inline-block', mb: 1, color: '#22c55e',
+                    fontWeight: 700, cursor: 'help' }}>
+                  ✓ лучше текущего (F = {fmt(st.best.F, 3)}) · ⓘ
+                </Typography>
+              </Tooltip>
             )}
             <Table size="small" sx={{ mb: 1, width: 'auto', '& td, & th': { py: 0.3, px: 1 } }}>
               <TableHead>

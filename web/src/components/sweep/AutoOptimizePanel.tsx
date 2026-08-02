@@ -335,6 +335,9 @@ const AutoOptimizePanel: React.FC = () => {
                   + `${rj.rejected_unconverged} whose nonlinear solve did not converge, `
                   + `${rj.rejected_mesh ?? 0} whose mesh would be pathologically fine (mesh budget — rejected in seconds instead of timing out), `
                   + `${rj.rejected_timeout} timed out, ${rj.rejected_other} other. `
+                  + `Before any of that, ${rj.resampled_geometry ?? 0} unbuildable candidates were caught in-process `
+                  + `and re-drawn from the same distribution at no eval cost (${rj.prefenced_geometry ?? 0} stayed `
+                  + 'unbuildable and took the penalty instead). '
                   + 'The search is unboxed on purpose, so some rejection is expected — but a run fencing most '
                   + 'of what it samples is thrashing, not converging.'}>
                   <Chip size="small" variant="outlined"
@@ -548,6 +551,7 @@ const AutoOptimizePanel: React.FC = () => {
                   + `${rj.rejected_unconverged} unconverged`
                   + `${rj.rejected_mesh ? `, ${rj.rejected_mesh} mesh budget` : ''}`
                   + `${rj.rejected_timeout ? `, ${rj.rejected_timeout} timed out` : ''}. `
+                  + `${rj.resampled_geometry ? `${rj.resampled_geometry} more were caught before the FEM and re-drawn at no eval cost. ` : ''}`
                 : '')
                 + (op ? `Solved at ${fmt(op.current_a, 1)} A / ${fmt(op.rpm, 0)} rpm / γ ${fmt(op.gamma_deg, 1)}°. ` : '')
                 + 'The result is filed as a Compare point with its full geometry, metrics and provenance.'} />

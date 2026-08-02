@@ -1170,6 +1170,15 @@ def _log_eval(overrides, current_a, gamma_deg, result) -> None:
             "p_loss": r.get("P_loss_total_W"),
             # Waveform quality (CIANO FOC spec) — lets the surrogate screen THD.
             "thd_ll": r.get("THD_LL_pct"), "kt": r.get("Kt_Nm_per_Arms"),
+            # WHICH MACHINE produced this row.  ``overrides`` is a DELTA on the
+            # active baseline geometry, so without the baseline's fingerprint a
+            # row from a 40 mm motor is indistinguishable from a 30 mm one — and
+            # warm-starting a search from another machine's optimum is exactly
+            # the stale-machine failure this repo refuses everywhere else.  Same
+            # fingerprint the FEM eval cache is keyed by (geometry + winding +
+            # materials + magnet + speed; operating point deliberately excluded,
+            # it travels next to it as current_a / gamma_deg).
+            "cfg_fp": _config_fingerprint(),
         }
         import json as _json_o
         with _dataset_lock:
@@ -2611,6 +2620,7 @@ def delete_saved(sid: str):
 # is progressively forced under the limit.
 _AUTO_RIPPLE_LAMBDA = 2.0
 _AUTO_DEFAULT_BUDGET = 120        # FEM evals, hard cap (the quote is a promise)
+_AUTO_BUDGET_PER_VAR = 24         # …and at least this many per search dimension
 _AUTO_BUDGET_MAX = 2000
 _AUTO_CURRENT_BUMP_PCT = 10.0     # 2nd baseline sim at I·1.10 → the baseline line
 
@@ -2629,6 +2639,10 @@ _AUTO_SIGMA_SIZE_FRAC = 0.015     # of stator_diameter, for unit=mm variables
 # search should never open that small.
 _AUTO_SIGMA_MM_FLOOR = 0.1        # absolute [mm], for unit=mm variables
 _AUTO_SIGMA_DIMLESS_FLOOR = 0.01  # absolute, for dimensionless variables
+# Reject-pressure adaptation of the RUNNING spread (es.sigma, the scalar
+# multiplier on the per-variable steps above — not those steps themselves).
+_AUTO_SIGMA_SHRINK = 0.7          # ×per generation that draws >50 % unbuildable
+_AUTO_SIGMA_SHRINK_FLOOR = 0.2    # never below this fraction of the initial
 
 
 def _auto_sigma(x: float, unit: str, is_int: bool, stator_diameter: float) -> float:
@@ -2664,19 +2678,161 @@ def _auto_classify_error(err: Any) -> str:
     return "other"
 
 
+_AUTO_FEM_FENCES = ("ok", "geometry", "unconverged", "mesh", "timeout", "other")
+
+
 def _auto_reject_block(counts: Dict[str, int]) -> Dict[str, Any]:
     """The per-fence reject accounting the status endpoint and the UI chips
     render.  Module-level so the accounting contract is testable without
-    running a CMA generation."""
-    tried = sum(counts.values())
-    rejected = tried - counts["ok"]
-    return {"evaluated": tried, "ok": counts["ok"], "rejected": rejected,
-            "rejected_geometry": counts["geometry"],
-            "rejected_unconverged": counts["unconverged"],
-            "rejected_mesh": counts["mesh"],
-            "rejected_timeout": counts["timeout"],
-            "rejected_other": counts["other"],
+    running a CMA generation.
+
+    ``evaluated`` / ``rejected`` count FEM EVALS ONLY — the budget the user was
+    quoted.  The two in-process pre-fence counters are reported alongside and
+    deliberately NOT folded into that total: a candidate rejected before the
+    subprocess cost nothing, and adding it to "evaluated" would make the run
+    look like it burned a budget it never spent."""
+    tried = sum(int(counts.get(k, 0) or 0) for k in _AUTO_FEM_FENCES)
+    ok = int(counts.get("ok", 0) or 0)
+    rejected = tried - ok
+    return {"evaluated": tried, "ok": ok, "rejected": rejected,
+            "rejected_geometry": int(counts.get("geometry", 0) or 0),
+            "rejected_unconverged": int(counts.get("unconverged", 0) or 0),
+            "rejected_mesh": int(counts.get("mesh", 0) or 0),
+            "rejected_timeout": int(counts.get("timeout", 0) or 0),
+            "rejected_other": int(counts.get("other", 0) or 0),
+            # Pre-fence (no FEM eval spent): candidates whose cross-section was
+            # rejected in-process and REPLACED by a fresh draw from the same CMA
+            # distribution, and those that stayed invalid after the retry cap and
+            # took the graded fence instead.
+            "resampled_geometry": int(counts.get("resampled", 0) or 0),
+            "prefenced_geometry": int(counts.get("prefenced", 0) or 0),
             "reject_pct": (round(100.0 * rejected / tried, 1) if tried else 0.0)}
+
+
+# ── In-process geometry pre-fence ────────────────────────────────────────────
+# Measured on a real 18-variable run: ~45 % of the FEM budget was spent on
+# candidates that died in the eval subprocess on GEOMETRY validation — 4 minutes
+# of process startup, CAD build, mesh and solve to learn something a millisecond
+# of polygon arithmetic already knew.  With a 120-eval budget that left ~56
+# informative points for an 18-dimensional covariance, which CMA-ES cannot
+# learn from.
+#
+# So run the SAME gates here, before the subprocess is spawned.  "The same" is
+# literal: this imports the identical functions refine_proc.run_one calls, in
+# the identical order, on the identical dict (active config geometry + the
+# candidate's overrides) — geometry_constraints.clamp, refine_proc._coil_fit,
+# geometry_validation.validate_geometry.  Nothing is re-derived, so the verdicts
+# cannot drift apart when one of them changes.
+#
+# HONESTY: a false "valid" costs one FEM eval and is fine.  A false "invalid"
+# silently deletes a reachable design from the search and is NOT.  So anything
+# this screen cannot decide — a mesh that cascades, a nonlinear solve that will
+# not converge, an exception raised while building the polygons — is deferred to
+# the subprocess by returning None (valid).
+_AUTO_RESAMPLE_TRIES = 100        # replacement draws per invalid slot, then fence
+
+
+def _auto_prefence(overrides: Dict[str, float]) -> Optional[str]:
+    """None if this candidate passes every geometry gate the eval subprocess
+    applies before the FEM; otherwise the message the subprocess would raise."""
+    try:
+        cfg = get_config()
+        geo = {**dict(cfg.get("geometry", {})), **dict(overrides)}
+        # 1:1 with refine_proc.run_one — clamp first (the eval scores the CLAMPED
+        # cross-section, so the fence must judge the clamped one too).
+        from motor_ai_sim.geometry_constraints import clamp as _clamp_geo
+        geo, _applied = _clamp_geo(geo)
+        from motor_ai_sim.optimization.refine_proc import _coil_fit
+        n_fit, n_req = _coil_fit(geo)
+        if n_fit < n_req:
+            return ("infeasible winding: {} turns cannot fit the slot even "
+                    "clamped".format(n_req))
+        from motor_ai_sim.geometry_validation import validate_geometry as _vgeo
+        res = _vgeo(geo)
+        if not res.ok:
+            return res.summary()
+        return None
+    except Exception as _e:   # noqa: BLE001
+        # Cannot decide → not a reject.  Let the subprocess spend the eval and
+        # give the real verdict (see the HONESTY note above).
+        log.debug("auto pre-fence could not screen a candidate (%s) — deferring "
+                  "to the eval subprocess", _e)
+        return None
+
+
+# ── Warm start from the accumulated eval cache ───────────────────────────────
+_AUTO_WARM_MIN_POINTS = 3         # fewer than this is not evidence, it is noise
+_AUTO_WARM_I_RTOL = 0.01          # operating current must match within 1 %
+_AUTO_WARM_GAMMA_TOL = 0.5        # load angle within half a degree
+
+
+def _auto_warm_start(recs, specs, cfg_fp: str, current_a: float, gamma_deg: float,
+                     ripple_max: float, base: Dict[str, Any],
+                     accept=None, min_n: int = _AUTO_WARM_MIN_POINTS):
+    """Pick the CMA start mean from evals this project has ALREADY paid for.
+
+    ``recs`` are ``_log_eval`` rows (config/.opt_dataset.jsonl).  A row is
+    eligible only if it carries THIS machine's config fingerprint and was solved
+    at THIS operating point — a row from another cross-section, or the same
+    cross-section at another current, is a different problem and seeding from it
+    would start the search at a point that was never good HERE.  Rows written
+    before the fingerprint stamp existed carry none and are skipped rather than
+    assumed (same rule the eval cache applies to its pre-convergence lines).
+
+    Eligible rows are ranked by the run's OWN objective — the signed
+    perpendicular distance above the freshly measured baseline line — so the seed
+    is the best point by the metric the run will be judged on, not by a proxy.
+
+    Returns ``{"x": [...], "n": n_eligible, "F": F_best, "overrides": {...}}``
+    or None (too few points / none acceptable), in which case the caller starts
+    from the current design exactly as before."""
+    names = [v["name"] for v in specs]
+    x_cur = [float(v["x0"]) for v in specs]
+    lows = [float(v.get("lo", 0.0) or 0.0) for v in specs]
+    scored = []
+    for r in recs or []:
+        if not isinstance(r, dict):
+            continue
+        if str(r.get("cfg_fp") or "") != str(cfg_fp or ""):
+            continue                              # other machine, or unstamped
+        ov = r.get("overrides")
+        if not isinstance(ov, dict):
+            continue
+        try:
+            ia = float(r.get("current_a"))
+            ga = float(r.get("gamma_deg", 0.0) or 0.0)
+            rip = float(r.get("ripple"))
+            td = float(r.get("td"))
+            eff = float(r.get("eff"))
+        except (TypeError, ValueError):
+            continue
+        if not all(math.isfinite(v) for v in (ia, ga, rip, td, eff)):
+            continue
+        if abs(ia - float(current_a)) > _AUTO_WARM_I_RTOL * max(1e-9, abs(float(current_a))):
+            continue
+        if abs(ga - float(gamma_deg)) > _AUTO_WARM_GAMMA_TOL:
+            continue
+        if rip > float(ripple_max):
+            continue                              # infeasible: over the gate
+        cost, F = _descent_cost(
+            {"torque_per_mass_Nm_kg": td, "efficiency": eff, "T_ripple_pct": rip,
+             "V_peak": r.get("v_peak") or 0.0},
+            base, float(ripple_max), 1.0, 1.0, 1.0, 1e9)
+        scored.append((cost, F, ov))
+    if len(scored) < int(min_n):
+        return None
+    scored.sort(key=lambda t: t[0])
+    for cost, F, ov in scored:
+        x = [max(lows[i], float(ov.get(nm, x_cur[i])))
+             for i, nm in enumerate(names)]
+        if accept is not None and not accept({nm: x[i] for i, nm in enumerate(names)}):
+            # The best cached point's variables, merged onto TODAY's design for
+            # the variables it does not carry, need not be a buildable machine.
+            # Fall through to the next-best rather than seeding an invalid mean.
+            continue
+        return {"x": x, "n": len(scored), "F": float(F),
+                "overrides": {nm: x[i] for i, nm in enumerate(names)}}
+    return None
 
 
 def _js_number(v: float) -> str:
@@ -2849,10 +3005,28 @@ def _auto_assemble(max_ripple_pct: float, budget_evals: int = 0) -> Dict[str, An
             "current geometry — the whitelist and the loaded motor disagree."))
 
     pop = _auto_population(len(variables))
-    budget = int(budget_evals) if int(budget_evals or 0) > 0 else _AUTO_DEFAULT_BUDGET
-    budget = max(pop + 2, min(budget, _AUTO_BUDGET_MAX))
-    # 2 evals go to the baseline pair (A at I, B at I·1.1) that defines the line.
-    generations = max(1, int((budget - 2) // pop))
+    _asked = int(budget_evals or 0)
+    if _asked > 0:
+        # An explicit budget is a HARD cap the user typed — floor to whole
+        # generations, never round past the number they were quoted.
+        budget = max(pop + 2, min(_asked, _AUTO_BUDGET_MAX))
+        # 2 evals go to the baseline pair (A at I, B at I·1.1) that defines the line.
+        generations = max(1, int((budget - 2) // pop))
+    else:
+        # The DEFAULT scales with the dimension.  A flat 120 evals is a fine
+        # budget for 5 variables and a fiction for 18: CMA-ES has to estimate an
+        # N×N covariance, and the literature's rule of thumb is O(N²)/O(10·N)
+        # evaluations before the distribution carries any shape at all.  At 18
+        # variables the flat budget delivered ~56 informative points after the
+        # geometry fence — fewer than the 171 free parameters of the covariance —
+        # so the run could not beat its own baseline no matter how it was tuned.
+        budget = max(_AUTO_DEFAULT_BUDGET, _AUTO_BUDGET_PER_VAR * len(variables))
+        budget = max(pop + 2, min(budget, _AUTO_BUDGET_MAX))
+        # Round UP to a whole number of generations: a half-finished generation
+        # tells CMA-ES nothing (the distribution updates once per generation), so
+        # the quote pays for the last one instead of abandoning it.
+        generations = max(1, int(math.ceil((budget - 2) / float(pop))))
+        budget = 2 + generations * pop
 
     rate = measured_eval_seconds(steps_pp)
     workers = max(1, min(_SCAN_WORKERS, pop))
@@ -2892,7 +3066,11 @@ def _auto_worker(plan: Dict[str, Any], run_id: str, bucket: str,
     initial step comes from the machine's scale (_auto_sigma) and CMA's own
     covariance adapts it outward as it learns — so an optimum outside whatever
     range a human would have typed is reachable.  The fence is the geometry
-    validator inside refine_proc, and every candidate it rejects is counted."""
+    validator — run IN-PROCESS first (_auto_prefence, milliseconds) so an
+    unbuildable candidate is replaced by a fresh draw from the same distribution
+    instead of spending four minutes of FEM to be told it is unbuildable, and
+    again inside refine_proc for everything the cheap screen cannot decide.
+    Every candidate either fence rejects is counted."""
     from concurrent.futures import ThreadPoolExecutor, as_completed
     try:
         import cma
@@ -2915,7 +3093,9 @@ def _auto_worker(plan: Dict[str, Any], run_id: str, bucket: str,
     pop = int(plan["population"])
 
     counts = {"ok": 0, "geometry": 0, "unconverged": 0, "mesh": 0,
-              "timeout": 0, "other": 0}
+              "timeout": 0, "other": 0,
+              # in-process pre-fence (no FEM eval spent) — see _auto_reject_block
+              "resampled": 0, "prefenced": 0}
 
     def _fit(i, val):
         v = specs[i]
@@ -3029,11 +3209,60 @@ def _auto_worker(plan: Dict[str, Any], run_id: str, bucket: str,
             _descent_state["auto"] = dict(_descent_state.get("auto") or {},
                                           rejects=_reject_block())
 
+        # ── WARM START ───────────────────────────────────────────────────────
+        # Every FEM eval this project ever ran is on disk.  If some of them were
+        # run on THIS machine at THIS operating point, starting the search at the
+        # best of them instead of at the current design hands CMA-ES a head start
+        # that costs nothing.  The seed only moves the START MEAN — every number
+        # this run reports is still measured fresh, so a stale or lucky cached
+        # point cannot leak into the result.
+        x_start = list(x0)
+        try:
+            from motor_ai_sim.optimization import surrogate as _surr
+            _recs = _surr.load_dataset(_dataset_path())
+        except Exception as _e:   # noqa: BLE001
+            log.warning("auto: eval cache unreadable (%s) — no warm start", _e)
+            _recs = []
+        _seed = _auto_warm_start(_recs, specs, _config_fingerprint(), I, g,
+                                 ripple_max, base,
+                                 accept=lambda d: _auto_prefence(d) is None)
+        if _seed:
+            x_start = list(_seed["x"])
+            log.info("AUTO: seeded from %d cached evals (this machine, this "
+                     "operating point) | seed F=%+.5g vs baseline 0 | %s",
+                     _seed["n"], _seed["F"],
+                     ", ".join("{}={:g}".format(k, v)
+                               for k, v in _seed["overrides"].items()))
+            with _descent_lock:
+                _descent_state["seeded_from_surrogate"] = True
+                _descent_state["auto"] = dict(
+                    _descent_state.get("auto") or {},
+                    seeded_from_cache={"n_points": _seed["n"],
+                                       "F": round(float(_seed["F"]), 6)})
+        else:
+            log.info("AUTO: no compatible cached evals (need >=%d for this "
+                     "machine fingerprint at %.4g A / gamma %.4g deg) — starting "
+                     "from the current design", _AUTO_WARM_MIN_POINTS, I, g)
+
         es = cma.CMAEvolutionStrategy(
-            list(x0), 1.0,
+            list(x_start), 1.0,
             {"CMA_stds": list(sigmas), "bounds": [list(lows), None],
              "popsize": pop, "maxiter": int(plan["generations"]),
              "verbose": -9, "seed": 12345})
+        _sigma_init = float(es.sigma)          # 1.0 — the per-variable scale
+        _sigma_floor = _AUTO_SIGMA_SHRINK_FLOOR * _sigma_init   # lives in CMA_stds
+
+        # Graded fence.  A constant 1e6 made an ALL-fenced generation perfectly
+        # flat, and CMA-ES read the flat fitness as convergence (tolfun) — a 10 %
+        # run died after generation 1 "successfully".  The penalty grows with the
+        # sigma-normalised distance from the known-good baseline (the CURRENT
+        # design — the one point proven buildable), so a fenced generation still
+        # slopes back toward feasibility.
+        def _fence_cost(sol):
+            _d = math.sqrt(sum(
+                ((float(sol[k]) - float(x0[k])) / max(float(sigmas[k]), 1e-9)) ** 2
+                for k in range(len(x0))))
+            return 1e6 * (1.0 + _d)
 
         it = 0
         while not es.stop():
@@ -3045,10 +3274,46 @@ def _auto_worker(plan: Dict[str, Any], run_id: str, bucket: str,
                          n_evals, budget)
                 break
             sols = es.ask()
+
+            # ── PRE-FENCE + RESAMPLING ───────────────────────────────────────
+            # Screen every candidate in-process (milliseconds) with the exact
+            # gates the eval subprocess applies, and replace each unbuildable one
+            # with a fresh draw from the SAME CMA distribution.  es.ask(1) is
+            # pycma's documented way to top up a population mid-generation (see
+            # ask_geno's docstring: "X = es.ask(); X.append(es.ask(1)[0]); ...;
+            # es.tell(X, ...)"), and because the replacement came from ask() it
+            # lands in es.sent_solutions, so tell() takes its genotype from there
+            # and does NOT treat it as a foreign point to be repaired.
             cost_by_i = {}
+            gen_invalid = 0            # candidates whose FIRST draw was invalid
+            gen_resampled = 0          # …of those, how many found a replacement
+            for i in range(len(sols)):
+                why = _auto_prefence(to_geom(sols[i]))
+                if why is None:
+                    continue
+                gen_invalid += 1
+                for _try in range(_AUTO_RESAMPLE_TRIES):
+                    cand = es.ask(1)[0]
+                    if _auto_prefence(to_geom(cand)) is None:
+                        sols[i] = cand
+                        gen_resampled += 1
+                        break
+                else:
+                    # The distribution's whole neighbourhood is unbuildable here.
+                    # Keep the original point and give it the graded fence — the
+                    # same treatment a subprocess-rejected candidate gets, minus
+                    # the four minutes.  It is NOT dropped: CMA still needs a
+                    # ranked value for every slot it asked for.
+                    cost_by_i[i] = _fence_cost(sols[i])
+                    log.info("AUTO: slot %d stayed unbuildable after %d "
+                             "resamples — graded fence, no FEM eval spent (%s)",
+                             i, _AUTO_RESAMPLE_TRIES, str(why)[:120])
+            counts["resampled"] += gen_resampled
+            counts["prefenced"] += (gen_invalid - gen_resampled)
+
             with ThreadPoolExecutor(max_workers=_SCAN_WORKERS) as pool:
                 futs = {pool.submit(_eval_at, to_geom(s), I): i
-                        for i, s in enumerate(sols)}
+                        for i, s in enumerate(sols) if i not in cost_by_i}
                 for fut in as_completed(futs):
                     i = futs[fut]
                     out = fut.result()
@@ -3064,18 +3329,10 @@ def _auto_worker(plan: Dict[str, Any], run_id: str, bucket: str,
                             best = {"x": to_geom(sols[i]), "metrics": out["res"],
                                     "cost": c, "F": Fv}
                     else:
-                        # Graded fence.  A constant 1e6 made an ALL-fenced
-                        # generation perfectly flat, and CMA-ES read the flat
-                        # fitness as convergence (tolfun) — a 10 % run died
-                        # after generation 1 "successfully".  The penalty now
-                        # grows with the sigma-normalised distance from the
-                        # known-good baseline, so a fenced generation still
-                        # slopes back toward feasibility.
-                        _d = math.sqrt(sum(
-                            ((float(sols[i][k]) - float(x0[k]))
-                             / max(float(sigmas[k]), 1e-9)) ** 2
-                            for k in range(len(x0))))
-                        cost_by_i[i] = 1e6 * (1.0 + _d)
+                        # Geometry-valid in-process, still died in the FEM
+                        # (cascading mesh, unconverged field, crash) — the
+                        # graded fence, exactly as before.
+                        cost_by_i[i] = _fence_cost(sols[i])
                     with _descent_lock:
                         _descent_state["n_evals"] = n_evals
                         _descent_state["points"] = list(all_pts)
@@ -3094,13 +3351,41 @@ def _auto_worker(plan: Dict[str, Any], run_id: str, bucket: str,
             rj = _reject_block()
             log.info("AUTO gen %d/%d | evals %d/%d | best F=%.5g ripple=%.3g%% "
                      "T=%.4g Nm | fenced %d/%d (%.0f%%: geom %d, unconv %d, "
-                     "mesh %d, timeout %d)",
+                     "mesh %d, timeout %d) | pre-fenced %d/%d this gen "
+                     "(%d resampled, %d graded)",
                      it, plan["generations"], n_evals, budget, best["F"],
                      float(best["metrics"].get("T_ripple_pct") or 0.0),
                      float(best["metrics"].get("T_em_Nm") or 0.0),
                      rj["rejected"], rj["evaluated"], rj["reject_pct"],
                      rj["rejected_geometry"], rj["rejected_unconverged"],
-                     rj["rejected_mesh"], rj["rejected_timeout"])
+                     rj["rejected_mesh"], rj["rejected_timeout"],
+                     gen_invalid, len(sols), gen_resampled,
+                     gen_invalid - gen_resampled)
+
+            # ── SIGMA SELF-ADAPTATION ON REJECT PRESSURE ─────────────────────
+            # More than half the generation drawn unbuildable means the sampling
+            # cloud straddles the feasible region's wall: most of its volume is
+            # outside the machine.  CMA's own step-size control cannot see this
+            # (the fenced points look merely bad, not impossible), so pull the
+            # spread in explicitly.  Floored at a fifth of the initial step so a
+            # run can never collapse to a point — and note this is the RUNNING
+            # spread, not the per-variable initial steps in CMA_stds, which are
+            # the user's standing sigma floors and stay untouched.
+            if gen_invalid > 0.5 * max(1, len(sols)):
+                _before = float(es.sigma)
+                es.sigma = max(_before * _AUTO_SIGMA_SHRINK, _sigma_floor)
+                if es.sigma < _before - 1e-12:
+                    log.info("AUTO: %d/%d candidates unbuildable this generation "
+                             "— shrinking the sampling spread %.4g -> %.4g "
+                             "(floor %.4g)", gen_invalid, len(sols), _before,
+                             float(es.sigma), _sigma_floor)
+                    with _descent_lock:
+                        _descent_state.setdefault("range_events", []).append({
+                            "iter": it, "event": "sigma_shrink",
+                            "why": ("{}/{} candidates were geometry-rejected "
+                                    "before the FEM".format(gen_invalid, len(sols))),
+                            "sigma_before": round(_before, 6),
+                            "sigma_after": round(float(es.sigma), 6)})
             # Penalty continuation: still over the gate → make the next
             # generation feel it harder (λ ×2, capped at 16× the start).
             ramp = _ripple_ramp_step(best["metrics"], ripple_max, it)

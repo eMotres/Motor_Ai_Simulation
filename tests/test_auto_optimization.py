@@ -437,3 +437,336 @@ class TestAutoStatusEndpoint:
         # so every chart and the Apply path keep working; if that 404s, the UI
         # goes blind mid-run.
         assert client.get("/api/optimization/descent/progress").status_code == 200
+
+
+class TestBudgetScalesWithDimension:
+    """A flat eval budget is a fiction in high dimensions.
+
+    CMA-ES estimates an N x N covariance; with 18 variables that is 171 free
+    parameters, and a 120-eval run that fences half of what it samples leaves
+    fewer informative points than parameters.  The default budget therefore
+    scales with the number of variables the whitelist actually opens."""
+
+    def test_the_default_budget_scales_with_the_number_of_variables(self):
+        p = _plan()
+        n = len(p["variables"])
+        assert p["budget_evals"] >= max(O._AUTO_DEFAULT_BUDGET,
+                                        O._AUTO_BUDGET_PER_VAR * n)
+
+    def test_the_default_budget_is_a_whole_number_of_generations(self):
+        # CMA-ES only learns at a generation boundary, so a half-funded final
+        # generation buys nothing - the quote pays for it or does not start it.
+        p = _plan()
+        assert 2 + p["generations"] * p["population"] == p["budget_evals"]
+
+    def test_a_small_whitelist_still_gets_the_standing_floor(self):
+        # 24/var must never REDUCE the budget below the 120 it has always been.
+        assert (max(O._AUTO_DEFAULT_BUDGET, O._AUTO_BUDGET_PER_VAR * 2)
+                == O._AUTO_DEFAULT_BUDGET)
+
+    def test_an_explicit_budget_is_still_a_hard_cap(self):
+        # The dimension rule applies to the DEFAULT only: a number the user typed
+        # is a promise, and rounding it up would spend evals they did not agree to.
+        p = _plan(budget=60)
+        assert p["budget_evals"] == 60
+        assert 2 + p["generations"] * p["population"] <= 60
+
+    def test_the_quote_reflects_the_scaled_budget(self):
+        p = _plan()
+        c = p["cost"]
+        assert c["n_evals_max"] == p["budget_evals"]
+        assert c["est_cpu_seconds"] == int(round(p["budget_evals"] * c["s_per_eval"]))
+
+
+class _FEMReached(Exception):
+    """The eval subprocess got past every geometry gate to the FEM call."""
+
+
+@pytest.fixture
+def subprocess_geometry_verdict(monkeypatch):
+    """The eval subprocess's OWN geometry verdict, with the FEM short-circuited.
+
+    ``refine_proc.run_one`` is exactly what ``python -m ...refine_proc`` calls on
+    the decoded stdin spec, and every geometry gate runs before the kernel call,
+    so stubbing the kernel yields the subprocess's verdict for the price of the
+    polygon build.  Returns None when the candidate would have reached the FEM,
+    else the error string the subprocess would have reported."""
+    from motor_ai_sim.optimization import refine_proc as RP
+    from motor_ai_sim.simulation import geo_mesh as GM
+
+    class _Stub:
+        def run(self, *a, **k):
+            raise _FEMReached()
+
+    monkeypatch.setattr(RP, "_kernel", lambda: _Stub())
+
+    def verdict(overrides):
+        try:
+            RP.run_one(dict(overrides), 10.0, 8, 120.0)
+        except _FEMReached:
+            return None
+        except Exception as e:      # noqa: BLE001 - the subprocess catches this too
+            return str(e)
+        finally:
+            GM.set_tri_budget(None)   # run_one's disarm is skipped when we raise
+        return None
+
+    try:
+        yield verdict
+    finally:
+        GM.set_tri_budget(None)
+
+
+def _random_candidates(n, seed=20260802):
+    """n candidates drawn the way the CMA loop draws them: the current design
+    perturbed by the run's own per-variable sigma, unbounded above, floored at
+    the variable's physical lower bound."""
+    import random
+    rng = random.Random(seed)
+    specs = _plan()["variables"]
+    out = []
+    for _ in range(n):
+        d = {}
+        for v in specs:
+            # 2.5 sigma so the sample straddles the feasible wall - a screen that
+            # only ever sees valid candidates proves nothing.
+            x = float(v["x0"]) + 2.5 * float(v["sigma"]) * rng.gauss(0.0, 1.0)
+            x = max(float(v["lo"]), x)
+            if v["is_int"]:
+                x = float(max(1, int(round(x))))
+            elif v.get("quant"):
+                x = round(x / float(v["quant"])) * float(v["quant"])
+            d[v["name"]] = x
+        out.append(d)
+    return out
+
+
+class TestGeometryPreFence:
+    """The in-process screen must agree with the subprocess it replaces.
+
+    A false 'valid' costs one FEM eval and is harmless.  A false 'invalid'
+    silently deletes a reachable design from the search - the whole point of an
+    unboxed range is that the validator, and only the validator, decides what is
+    reachable.  So the screen is allowed to be incomplete, never wrong."""
+
+    N_DRAWS = 24
+
+    def test_the_current_design_passes(self):
+        assert O._auto_prefence({}) is None
+
+    def test_verdicts_agree_with_the_eval_subprocess(self, subprocess_geometry_verdict):
+        disagreements = []
+        n_invalid = 0
+        for cand in _random_candidates(self.N_DRAWS):
+            mine = O._auto_prefence(cand)
+            theirs = subprocess_geometry_verdict(cand)
+            n_invalid += int(theirs is not None)
+            if (mine is None) != (theirs is None):
+                disagreements.append((cand, mine, theirs))
+        # A FALSE INVALID is the fatal one: the screen rejected something the
+        # subprocess would have evaluated.
+        false_invalid = [d for d in disagreements if d[1] is not None and d[2] is None]
+        assert not false_invalid, (
+            "pre-fence rejected {} candidate(s) the eval subprocess accepts - "
+            "these designs would silently vanish from the search: {}".format(
+                len(false_invalid), false_invalid[:1]))
+        # And in practice the screen is exact, not merely conservative.
+        assert not disagreements, disagreements[:1]
+        # The draw has to actually exercise the fence, or this proves nothing.
+        assert n_invalid > 0, ("no candidate in {} draws was invalid - widen the "
+                               "draw, this test is asleep".format(self.N_DRAWS))
+
+    def test_an_unbuildable_candidate_is_named_the_way_the_run_log_names_it(self):
+        cfg = O.get_config()
+        geo = dict(cfg.get("geometry", {}))
+        why = O._auto_prefence({"magnet_height": float(geo["magnet_height"]) * 6.0})
+        assert why, "a 6x magnet must not pass the screen"
+        # The message has to land in the SAME class the reject chips count, or a
+        # pre-fenced candidate would be filed under 'other'.
+        assert O._auto_classify_error(why) == "geometry"
+
+    def test_a_screen_that_cannot_decide_defers_instead_of_rejecting(self, monkeypatch):
+        # If the validator itself blows up, the honest answer is "cannot tell",
+        # and that must cost one FEM eval - not a silent deletion.
+        import motor_ai_sim.geometry_validation as GV
+
+        def _boom(*a, **k):
+            raise RuntimeError("polygon build exploded")
+
+        monkeypatch.setattr(GV, "validate_geometry", _boom)
+        assert O._auto_prefence({}) is None
+
+    def test_the_screen_judges_the_clamped_cross_section(self):
+        # refine_proc clamps the winding knobs and scores the CLAMPED geometry,
+        # so a candidate that is only invalid BEFORE clamping is not a reject.
+        cfg = O.get_config()
+        geo = dict(cfg.get("geometry", {}))
+        from motor_ai_sim.geometry_constraints import clamp
+        over = {"wire_height": float(geo["slot_height"])}   # absurd, but clampable
+        clamped, applied = clamp({**geo, **over})
+        assert applied, "this fixture must actually trigger the clamp"
+        assert O._auto_prefence(over) == O._auto_prefence(
+            {"wire_height": clamped["wire_height"]})
+
+
+class TestResamplingUsesTheDocumentedPycmaPath:
+    """Replacement draws must be first-class members of the generation.
+
+    pycma's ask_geno docstring blesses ``X.append(es.ask(1)[0])`` before
+    ``es.tell(X, ...)``; because the extra point came from ask() it sits in
+    ``es.sent_solutions``, so tell() takes its genotype from there instead of
+    treating it as a foreign point to repair."""
+
+    def test_tell_accepts_points_that_came_from_ask_one(self):
+        cma = pytest.importorskip("cma")
+        es = cma.CMAEvolutionStrategy([1.0, 1.0, 1.0], 0.5,
+                                      {"popsize": 6, "verbose": -9, "seed": 7})
+        sols = es.ask()
+        sols[2] = es.ask(1)[0]          # the resampling move, verbatim
+        sols[5] = es.ask(1)[0]
+        assert all(es.sent_solutions.get(s) is not None for s in sols), (
+            "a resampled point is not in sent_solutions - tell() would repair it "
+            "as a foreign point instead of using its true genotype")
+        es.tell(sols, [float(sum(x * x for x in s)) for s in sols])
+        assert es.countiter == 1
+
+    def test_the_running_spread_is_settable_and_floored(self):
+        cma = pytest.importorskip("cma")
+        es = cma.CMAEvolutionStrategy([1.0, 1.0], 1.0,
+                                      {"popsize": 4, "verbose": -9, "seed": 7})
+        s0 = float(es.sigma)
+        floor = O._AUTO_SIGMA_SHRINK_FLOOR * s0
+        for _ in range(20):
+            es.sigma = max(es.sigma * O._AUTO_SIGMA_SHRINK, floor)
+        assert es.sigma == pytest.approx(floor)
+        assert O._AUTO_SIGMA_SHRINK < 1.0 and 0.0 < O._AUTO_SIGMA_SHRINK_FLOOR < 1.0
+
+
+def _fake_specs():
+    return [{"name": "tooth_width", "x0": 5.0, "sigma": 0.5, "lo": 0.0,
+             "is_int": False, "quant": 0.1},
+            {"name": "slot_height", "x0": 18.0, "sigma": 0.5, "lo": 0.0,
+             "is_int": False, "quant": 0.1},
+            {"name": "magnet_height", "x0": 4.0, "sigma": 0.3, "lo": 0.0,
+             "is_int": False, "quant": 0.1}]
+
+
+def _fake_base():
+    # A baseline line whose weights are 1 on td and 1 on eff, so F is a simple
+    # (and hand-checkable) function of the two metrics.
+    return {"torque_per_mass_Nm_kg": 10.0, "efficiency": 0.90,
+            "_bline": {"td_a": 10.0, "eff_a": 0.90, "w_td": 1.0, "w_eff": 1.0,
+                       "norm": 1.0}}
+
+
+def _rec(fp="FP", I=100.0, gamma=0.0, ripple=3.0, td=11.0, eff=0.91, **ov):
+    return {"cfg_fp": fp, "current_a": I, "gamma_deg": gamma, "ripple": ripple,
+            "td": td, "eff": eff, "torque": 50.0,
+            "overrides": ov or {"tooth_width": 5.5}}
+
+
+class TestWarmStartSelection:
+    """Seeding the search from evals already paid for - but only from evals that
+    describe THIS machine at THIS operating point.  Everything else is the
+    stale-machine failure wearing a helpful face."""
+
+    ARGS = dict(cfg_fp="FP", current_a=100.0, gamma_deg=0.0, ripple_max=5.0)
+
+    def _pick(self, recs, **kw):
+        a = dict(self.ARGS)
+        a.update(kw)
+        return O._auto_warm_start(recs, _fake_specs(), base=_fake_base(), **a)
+
+    def test_too_few_points_is_not_evidence(self):
+        assert self._pick([_rec(), _rec()]) is None
+
+    def test_three_matching_points_seed_the_run(self):
+        s = self._pick([_rec(), _rec(), _rec()])
+        assert s is not None and s["n"] == 3
+        assert len(s["x"]) == 3
+
+    def test_another_machines_evals_are_never_used(self):
+        # Same schema, different cross-section: overrides are a DELTA on a
+        # baseline geometry, so these numbers describe a different motor.
+        assert self._pick([_rec(fp="OTHER") for _ in range(9)]) is None
+
+    def test_rows_written_before_the_fingerprint_existed_are_skipped(self):
+        old = _rec()
+        old.pop("cfg_fp")
+        assert self._pick([old, old, old, old]) is None
+
+    def test_a_different_operating_point_is_a_different_problem(self):
+        assert self._pick([_rec(I=140.0) for _ in range(5)]) is None
+        assert self._pick([_rec(gamma=25.0) for _ in range(5)]) is None
+
+    def test_points_over_the_ripple_gate_are_not_feasible(self):
+        assert self._pick([_rec(ripple=9.0) for _ in range(5)]) is None
+
+    def test_it_seeds_from_the_best_point_by_the_runs_own_objective(self):
+        recs = [_rec(td=10.5, eff=0.905, tooth_width=5.1),
+                _rec(td=12.0, eff=0.930, tooth_width=6.4),   # best F
+                _rec(td=11.0, eff=0.910, tooth_width=5.8)]
+        s = self._pick(recs)
+        assert s["x"][0] == pytest.approx(6.4)
+        # F = w_td*(td-td_a) + w_eff*(eff-eff_a) over norm=1
+        assert s["F"] == pytest.approx(2.0 + 0.03)
+
+    def test_variables_the_cached_point_does_not_carry_come_from_todays_design(self):
+        s = self._pick([_rec(tooth_width=6.0) for _ in range(3)])
+        assert s["x"][0] == pytest.approx(6.0)
+        assert s["x"][1] == pytest.approx(18.0)   # spec x0
+        assert s["x"][2] == pytest.approx(4.0)
+
+    def test_the_seed_never_lands_below_a_variables_physical_floor(self):
+        s = self._pick([_rec(tooth_width=-3.0) for _ in range(3)])
+        assert s["x"][0] >= 0.0
+
+    def test_an_unbuildable_seed_falls_through_to_the_next_best(self):
+        recs = [_rec(td=12.0, eff=0.93, tooth_width=6.4),    # best, but rejected
+                _rec(td=11.5, eff=0.92, tooth_width=5.9),
+                _rec(td=11.0, eff=0.91, tooth_width=5.2)]
+        assert self._pick(recs)["x"][0] == pytest.approx(6.4)
+        s2 = O._auto_warm_start(recs, _fake_specs(), base=_fake_base(),
+                                accept=lambda d: d["tooth_width"] < 6.0,
+                                **self.ARGS)
+        assert s2["x"][0] == pytest.approx(5.9)
+
+    def test_no_acceptable_point_means_no_seed(self):
+        recs = [_rec() for _ in range(5)]
+        assert O._auto_warm_start(recs, _fake_specs(), base=_fake_base(),
+                                  accept=lambda d: False, **self.ARGS) is None
+
+    def test_garbage_rows_do_not_crash_the_selection(self):
+        bad = [None, "nonsense", {}, {"cfg_fp": "FP"},
+               {"cfg_fp": "FP", "overrides": {}, "current_a": "x"},
+               {"cfg_fp": "FP", "overrides": {}, "current_a": 100.0,
+                "gamma_deg": 0.0, "ripple": float("nan"), "td": 1.0, "eff": 1.0}]
+        assert self._pick(bad) is None
+        assert self._pick(bad + [_rec(), _rec(), _rec()])["n"] == 3
+
+    def test_the_live_logger_stamps_the_fingerprint_the_selection_reads(self):
+        # The selection is only as honest as the stamp; if _log_eval stopped
+        # writing cfg_fp, every future warm start would silently be disabled.
+        import inspect
+        assert "cfg_fp" in inspect.getsource(O._log_eval)
+        assert O._config_fingerprint()
+
+
+class TestPreFenceAccounting:
+    """Pre-fenced candidates cost no FEM eval - and the numbers must say so."""
+
+    def test_resamples_are_reported_without_inflating_the_eval_count(self):
+        counts = {"ok": 4, "geometry": 1, "unconverged": 0, "mesh": 0,
+                  "timeout": 0, "other": 0, "resampled": 17, "prefenced": 3}
+        rj = O._auto_reject_block(counts)
+        assert rj["resampled_geometry"] == 17
+        assert rj["prefenced_geometry"] == 3
+        # 17 resamples + 3 fences were never submitted to a subprocess, so the
+        # budget the user was quoted must not appear to have been spent on them.
+        assert rj["evaluated"] == 5
+        assert rj["rejected"] == 1
+
+    def test_the_block_still_reads_a_counts_dict_without_the_new_keys(self):
+        rj = O._auto_reject_block({"ok": 1, "geometry": 1, "unconverged": 0,
+                                   "mesh": 0, "timeout": 0, "other": 0})
+        assert rj["resampled_geometry"] == 0 and rj["prefenced_geometry"] == 0

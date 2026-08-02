@@ -2614,7 +2614,11 @@ _AUTO_CURRENT_BUMP_PCT = 10.0     # 2nd baseline sim at I·1.10 → the baseline
 #     yardstick for "how far may a millimetre-scale knob jump".
 _AUTO_SIGMA_SELF_FRAC = 0.25
 _AUTO_SIGMA_SIZE_FRAC = 0.015     # of stator_diameter, for unit=mm variables
-_AUTO_SIGMA_DIMLESS_FLOOR = 0.05  # absolute, for dimensionless variables
+# Absolute floors, set by the user (2026-08-01): a step below 0.1 mm on a
+# length, or below 0.01 on a dimensionless knob, is manufacturing noise — the
+# search should never open that small.
+_AUTO_SIGMA_MM_FLOOR = 0.1        # absolute [mm], for unit=mm variables
+_AUTO_SIGMA_DIMLESS_FLOOR = 0.01  # absolute, for dimensionless variables
 
 
 def _auto_sigma(x: float, unit: str, is_int: bool, stator_diameter: float) -> float:
@@ -2624,7 +2628,9 @@ def _auto_sigma(x: float, unit: str, is_int: bool, stator_diameter: float) -> fl
         # An integer knob (turns/slot) whose step rounds below 1 cannot change.
         return max(self_term, 1.0)
     if str(unit).strip().lower() == "mm":
-        return max(self_term, _AUTO_SIGMA_SIZE_FRAC * max(1.0, float(stator_diameter)))
+        return max(self_term,
+                   _AUTO_SIGMA_SIZE_FRAC * max(1.0, float(stator_diameter)),
+                   _AUTO_SIGMA_MM_FLOOR)
     return max(self_term, _AUTO_SIGMA_DIMLESS_FLOOR)
 
 
@@ -2637,9 +2643,30 @@ def _auto_classify_error(err: Any) -> str:
         return "geometry"
     if "unconverged" in e:
         return "unconverged"
+    # Before the generic "timeout": a mesh-budget reject IS the pre-empted
+    # timeout (geo_mesh.MeshBudgetExceeded, message "mesh budget: ...") — a
+    # candidate whose cross-section is buildable but meshes pathologically,
+    # rejected in seconds instead of burning the full subprocess cap.
+    if "mesh budget" in e:
+        return "mesh"
     if "timeout" in e:
         return "timeout"
     return "other"
+
+
+def _auto_reject_block(counts: Dict[str, int]) -> Dict[str, Any]:
+    """The per-fence reject accounting the status endpoint and the UI chips
+    render.  Module-level so the accounting contract is testable without
+    running a CMA generation."""
+    tried = sum(counts.values())
+    rejected = tried - counts["ok"]
+    return {"evaluated": tried, "ok": counts["ok"], "rejected": rejected,
+            "rejected_geometry": counts["geometry"],
+            "rejected_unconverged": counts["unconverged"],
+            "rejected_mesh": counts["mesh"],
+            "rejected_timeout": counts["timeout"],
+            "rejected_other": counts["other"],
+            "reject_pct": (round(100.0 * rejected / tried, 1) if tried else 0.0)}
 
 
 def _js_number(v: float) -> str:
@@ -2877,7 +2904,8 @@ def _auto_worker(plan: Dict[str, Any], run_id: str, bucket: str,
     budget = int(plan["budget_evals"])
     pop = int(plan["population"])
 
-    counts = {"ok": 0, "geometry": 0, "unconverged": 0, "timeout": 0, "other": 0}
+    counts = {"ok": 0, "geometry": 0, "unconverged": 0, "mesh": 0,
+              "timeout": 0, "other": 0}
 
     def _fit(i, val):
         v = specs[i]
@@ -2913,14 +2941,7 @@ def _auto_worker(plan: Dict[str, Any], run_id: str, bucket: str,
         return o
 
     def _reject_block():
-        tried = sum(counts.values())
-        rejected = tried - counts["ok"]
-        return {"evaluated": tried, "ok": counts["ok"], "rejected": rejected,
-                "rejected_geometry": counts["geometry"],
-                "rejected_unconverged": counts["unconverged"],
-                "rejected_timeout": counts["timeout"],
-                "rejected_other": counts["other"],
-                "reject_pct": (round(100.0 * rejected / tried, 1) if tried else 0.0)}
+        return _auto_reject_block(counts)
 
     try:
         # The sigma vector is the run's most consequential hidden choice — print
@@ -3051,12 +3072,14 @@ def _auto_worker(plan: Dict[str, Any], run_id: str, bucket: str,
             _save_descent_state()
             rj = _reject_block()
             log.info("AUTO gen %d/%d | evals %d/%d | best F=%.5g ripple=%.3g%% "
-                     "T=%.4g Nm | fenced %d/%d (%.0f%%: geom %d, unconv %d)",
+                     "T=%.4g Nm | fenced %d/%d (%.0f%%: geom %d, unconv %d, "
+                     "mesh %d, timeout %d)",
                      it, plan["generations"], n_evals, budget, best["F"],
                      float(best["metrics"].get("T_ripple_pct") or 0.0),
                      float(best["metrics"].get("T_em_Nm") or 0.0),
                      rj["rejected"], rj["evaluated"], rj["reject_pct"],
-                     rj["rejected_geometry"], rj["rejected_unconverged"])
+                     rj["rejected_geometry"], rj["rejected_unconverged"],
+                     rj["rejected_mesh"], rj["rejected_timeout"])
             # Penalty continuation: still over the gate → make the next
             # generation feel it harder (λ ×2, capped at 16× the start).
             ramp = _ripple_ramp_step(best["metrics"], ripple_max, it)

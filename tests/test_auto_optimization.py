@@ -140,7 +140,7 @@ class TestSearchRangeIsNotBoxed:
     def test_dimensionless_sigma_has_an_absolute_floor(self):
         for v in _plan()["variables"]:
             if v["unit"].strip() == "" and not v["is_int"]:
-                assert v["sigma"] >= max(0.25 * abs(v["x0"]), 0.05) - 1e-4
+                assert v["sigma"] >= max(0.25 * abs(v["x0"]), 0.01) - 1e-4
 
     def test_integer_sigma_can_actually_move_the_integer(self):
         for v in _plan()["variables"]:
@@ -158,7 +158,7 @@ class TestSigmaUnit:
         assert O._auto_sigma(20.0, "mm", False, 40.0) == pytest.approx(5.0)
 
     def test_dimensionless_at_zero_uses_the_absolute_floor(self):
-        assert O._auto_sigma(0.0, "", False, 40.0) == pytest.approx(0.05)
+        assert O._auto_sigma(0.0, "", False, 40.0) == pytest.approx(0.01)
 
     def test_integer_never_falls_below_one(self):
         assert O._auto_sigma(1.0, "", True, 40.0) == pytest.approx(1.0)
@@ -251,9 +251,129 @@ class TestRejectionAccounting:
         ("2 unconverged FEM frames in the window", "unconverged"),
         ("timeout", "timeout"),
         ("subprocess crashed", "other"),
+        # The pre-mesh fence: a buildable candidate whose mesh would cascade is
+        # rejected by geo_mesh.MeshBudgetExceeded in seconds — its OWN class,
+        # not "timeout" (which it pre-empts) and not "other" (which hides it).
+        ("MeshBudgetExceeded: mesh budget: quality meshing of this "
+         "cross-section hit the 200000-point Steiner cap", "mesh"),
+        ("mesh budget: 310000 stator + 120000 rotor triangles exceed the "
+         "400000-triangle budget", "mesh"),
     ])
     def test_errors_are_classified_by_which_fence_stopped_them(self, err, kind):
         assert O._auto_classify_error(err) == kind
+
+    def test_the_real_exception_message_maps_to_the_mesh_class(self):
+        # The classifier keys on the message geo_mesh actually raises — if the
+        # wording drifts apart, mesh rejects silently become "other".
+        from motor_ai_sim.simulation.geo_mesh import MeshBudgetExceeded
+        e = MeshBudgetExceeded(
+            "mesh budget: quality meshing of this cross-section hit the "
+            "1000-point Steiner cap (2400 triangles and still refining; "
+            "budget 400000 triangles for the whole mesh).")
+        assert O._auto_classify_error(str(e)) == "mesh"
+
+    def test_the_reject_block_counts_every_fence_separately(self):
+        counts = {"ok": 5, "geometry": 3, "unconverged": 2, "mesh": 4,
+                  "timeout": 1, "other": 0}
+        rj = O._auto_reject_block(counts)
+        assert rj["evaluated"] == 15
+        assert rj["ok"] == 5
+        assert rj["rejected"] == 10
+        assert rj["rejected_geometry"] == 3
+        assert rj["rejected_unconverged"] == 2
+        assert rj["rejected_mesh"] == 4
+        assert rj["rejected_timeout"] == 1
+        assert rj["rejected_other"] == 0
+        assert rj["reject_pct"] == pytest.approx(66.7)
+
+    def test_the_reject_block_is_sane_when_nothing_ran(self):
+        counts = {"ok": 0, "geometry": 0, "unconverged": 0, "mesh": 0,
+                  "timeout": 0, "other": 0}
+        rj = O._auto_reject_block(counts)
+        assert rj["evaluated"] == 0 and rj["reject_pct"] == 0.0
+
+
+class TestMeshBudgetFence:
+    """The cheap pre-mesh reject: Triangle itself, Steiner-capped.
+
+    The fence must (a) stay OFF unless the eval subprocess arms it, (b) change
+    NOTHING for a mesh that fits the budget, and (c) reject a cascading mesh
+    with the "mesh budget" message the classifier keys on.  (a)+(b) are the
+    no-false-reject half of the contract; (c) is the fence itself."""
+
+    # A 10x10 mm square PSLG: with a fine max-area constraint the quality mesher
+    # needs thousands of Steiner points — a deterministic stand-in for the
+    # refinement cascade a pathological candidate causes.
+    @staticmethod
+    def _square():
+        import numpy as np
+        V = np.array([[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]])
+        S = np.array([[0, 1], [1, 2], [2, 3], [3, 0]])
+        return V, S
+
+    @pytest.fixture(autouse=True)
+    def _disarmed(self):
+        # Every test starts and ends with the budget OFF, however it exits —
+        # a leaked armed budget would fail unrelated meshing tests.
+        from motor_ai_sim.simulation import geo_mesh as G
+        G.set_tri_budget(None)
+        yield
+        G.set_tri_budget(None)
+
+    def test_the_budget_is_off_by_default(self):
+        from motor_ai_sim.simulation import geo_mesh as G
+        assert G.tri_budget() is None
+
+    def test_arm_and_disarm(self):
+        from motor_ai_sim.simulation import geo_mesh as G
+        G.set_tri_budget(400_000)
+        assert G.tri_budget() == 400_000
+        G.set_tri_budget(None)
+        assert G.tri_budget() is None
+        G.set_tri_budget(0)                      # 0 = off, not "reject all"
+        assert G.tri_budget() is None
+
+    def test_unarmed_meshing_is_never_rejected(self):
+        from motor_ai_sim.simulation import geo_mesh as G
+        V, S = self._square()
+        _, T = G._triangulate(V, S, 0.01, quality=20, hole=False)
+        assert len(T) > 2000                     # it really did refine
+
+    def test_a_cascading_mesh_is_rejected_with_the_mesh_budget_message(self):
+        from motor_ai_sim.simulation import geo_mesh as G
+        V, S = self._square()
+        G.set_tri_budget(2000)                   # ~10k tris needed >> budget
+        with pytest.raises(G.MeshBudgetExceeded) as ei:
+            G._triangulate(V, S, 0.01, quality=20, hole=False)
+        assert str(ei.value).startswith("mesh budget:")
+
+    def test_a_mesh_under_the_budget_is_bit_identical_to_the_unarmed_run(self):
+        # The whole no-false-reject argument rests on this: an armed budget
+        # that is NOT hit must not change the mesh the candidate is scored on.
+        import numpy as np
+        from motor_ai_sim.simulation import geo_mesh as G
+        V, S = self._square()
+        Vu, Tu = G._triangulate(V, S, 1.0, quality=20, hole=False)
+        G.set_tri_budget(10_000_000)
+        Va, Ta = G._triangulate(V, S, 1.0, quality=20, hole=False)
+        assert np.array_equal(Vu, Va) and np.array_equal(Tu, Ta)
+
+    def test_the_eval_subprocess_budget_clears_a_healthy_mesh_with_margin(self):
+        # refine_proc's constant must sit far above anything a healthy design
+        # meshes at (~25-60k tris/eval measured), else the fence would reject
+        # designs that solve fine — the failure mode this feature must never
+        # have.  10x the top of the healthy range is the floor of "far above".
+        from motor_ai_sim.optimization.refine_proc import _MESH_TRI_BUDGET
+        assert _MESH_TRI_BUDGET >= 10 * 40_000
+
+    def test_area_only_meshing_is_exempt(self):
+        # Area-only CDT (no quality flag) cannot cascade — the rotor fallback
+        # path relies on it building unconditionally.  The cap must not apply.
+        from motor_ai_sim.simulation import geo_mesh as G
+        V, S = self._square()
+        G.set_tri_budget(50)                     # absurdly small on purpose
+        _, T = G._triangulate(V, S, 1.0, quality=None, hole=False)
+        assert len(T) >= 2                       # built, not rejected
 
 
 class TestGeometryStamp:

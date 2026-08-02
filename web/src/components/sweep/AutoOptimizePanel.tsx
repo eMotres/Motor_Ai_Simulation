@@ -273,6 +273,27 @@ const AutoOptimizePanel: React.FC = () => {
           </Box>
         )}
 
+        {/* The FULL variable list, up front — user request: what exactly the
+            run will search, with the starting value and the machine-scaled
+            initial step (sigma) per variable. Same data the backend logs at
+            run start, so screen and log cannot disagree. */}
+        {plan && !running && plan.variables?.length > 0 && (
+          <Box sx={{ mt: 1, display: 'grid', gap: '2px 14px',
+                     gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))' }}>
+            {plan.variables.map(v => (
+              <Box key={v.name} sx={{ display: 'flex', justifyContent: 'space-between',
+                                      fontSize: 11, color: 'var(--text-2)',
+                                      borderBottom: '1px dashed var(--panel)', py: 0.2 }}>
+                <span>{v.name}</span>
+                <span style={{ color: 'var(--text-1)', fontVariantNumeric: 'tabular-nums' }}>
+                  {fmt(v.x0, v.unit === 'mm' ? 2 : 3)}{v.unit === 'mm' ? ' mm' : ''}
+                  <span style={{ color: 'var(--text-4)' }}> · σ {fmt(v.sigma, 2)}</span>
+                </span>
+              </Box>
+            ))}
+          </Box>
+        )}
+
         {cost && !running && (
           <Typography variant="caption" sx={{ display: 'block', mt: 0.75, color: 'text.secondary' }}>
             <strong>Cost:</strong> up to {cost.n_evals_max} FEM evals ×{' '}

@@ -26,6 +26,7 @@ import PlayArrowIcon     from '@mui/icons-material/PlayArrow';
 import { useAuth } from '../../contexts/AuthContext';
 import { useMotorStore, useUIStore } from '../../stores/motorStore';
 import ViewColumnIcon    from '@mui/icons-material/ViewColumn';
+import HelpTip from '../common/HelpTip';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
 
@@ -569,10 +570,12 @@ const ComparePanel: React.FC = () => {
         <Box sx={{ flex: 1, overflow: 'auto', px: 2, pb: 1 }}>
           {loading && <CircularProgress size={18} sx={{ color: '#3b82f6', m: 2 }} />}
           {!loading && sims.length === 0 && (
-            <Typography sx={{ fontSize: 12, color: 'var(--text-3)', m: 2 }}>
-              No comparison points yet. In the <b>Simulation</b> tab, run a solve and press
-              <b> + Add to Compare</b> on the summary card to snapshot the design here.
-            </Typography>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, m: 2 }}>
+              <Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>
+                No comparison points yet.
+              </Typography>
+              <HelpTip title="In the Simulation tab, run a solve and press + Add to Compare on the summary card to snapshot the design here." />
+            </Box>
           )}
           {sims.length > 0 && (
             <Box component="table" sx={{ borderCollapse: 'collapse', width: '100%' }}>
@@ -629,8 +632,9 @@ const ComparePanel: React.FC = () => {
           <CompareArrowsIcon sx={{ color: '#60a5fa', fontSize: 18 }} />
           <Typography sx={{ fontSize: 13, fontWeight: 700, color: 'var(--text-0)' }}>Comparison</Typography>
           <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>
-            {selected.length} selected · {diffKeys.length} differing input{diffKeys.length === 1 ? '' : 's'} (amber) · green = best / red = worst · Δ% row = deviation from the column maximum
+            {selected.length} selected · {diffKeys.length} differing input{diffKeys.length === 1 ? '' : 's'}
           </Typography>
+          <HelpTip title="Amber = a differing input. Green = best, red = worst across the selected columns. The Δ% row is each value's deviation from the column maximum." />
         </Box>
         <Box sx={{ flex: 1, overflow: 'auto', px: 2, pb: 2 }}>
           {selected.length < 2 ? (

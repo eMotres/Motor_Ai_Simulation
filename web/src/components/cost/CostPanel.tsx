@@ -11,6 +11,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Box, Paper, Typography, Button, TextField, CircularProgress, Divider } from '@mui/material';
 import { useMotorStore } from '../../stores/motorStore';
 import SectionLabel from '../common/SectionLabel';
+import HelpTip from '../common/HelpTip';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 
@@ -75,17 +76,13 @@ const CostPanel: React.FC = () => {
       <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1.5, mb: 0.5, flexWrap: 'wrap' }}>
         <Typography sx={{ fontSize: 20, fontWeight: 800, color: 'var(--text-0)' }}>Material Cost</Typography>
         <Typography sx={{ fontSize: 12, color: 'var(--text-3)', fontFamily: 'monospace' }}>via modules: geometry.2d → cost</Typography>
+        <HelpTip title="Active-material cost of the configured motor: region area × stack length × density × unit price, plus a flat labor line. Computed through the modular kernel (no FEM) — it re-estimates as the geometry or prices change." />
         <Box sx={{ flex: 1 }} />
         <Button size="small" variant="contained" onClick={run} disabled={busy} sx={{ textTransform: 'none' }}>
           {busy ? 'Computing…' : 'Re-estimate'}
         </Button>
       </Box>
-      <Typography sx={{ fontSize: 12.5, color: 'var(--text-2)', mb: 2, maxWidth: 760 }}>
-        Active-material cost of the configured motor: region area × stack length × density × unit price, plus a flat
-        labor line. Computed through the modular kernel (no FEM) — it re-estimates as the geometry or prices change.
-      </Typography>
-
-      {err && <Typography sx={{ fontSize: 12.5, color: '#fca5a5', mb: 1 }}>Cost pipeline failed: {err}</Typography>}
+      {err &&<Typography sx={{ fontSize: 12.5, color: '#fca5a5', mb: 1 }}>Cost pipeline failed: {err}</Typography>}
 
       <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'flex-start' }}>
         {/* ── Price assumptions ── */}

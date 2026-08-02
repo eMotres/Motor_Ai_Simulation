@@ -377,13 +377,10 @@ const SweepConfigPanel: React.FC = () => {
 
         {/* Left: optimization variable cards */}
         <Box sx={{ flex: 1, minWidth: 0 }}>
-          <SectionLabel sx={{ mb: 1 }}>Optimization Variables</SectionLabel>
-          <Typography variant="caption" color="text.disabled" sx={{ display: 'block', mb: 1.5 }}>
-            Add a parameter (geometry, load angle γ, or phase current) and set its
-            <strong> range (min · max)</strong> and <strong>step</strong>. Each algorithm keeps
-            its <strong>own set</strong> — switch the menu above and these cards follow it
-            (Optimize searches them, Sweep grids them). DOE has its own screening inputs.
-          </Typography>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 1.5 }}>
+            <SectionLabel>Optimization Variables</SectionLabel>
+            <HelpTip title="Add a parameter (geometry, load angle γ, or phase current) and set its range (min · max) and step. Each algorithm keeps its own set — switch the menu above and these cards follow it (Optimize searches them, Sweep grids them). DOE has its own screening inputs." />
+          </Box>
 
           <FormControl size="small" fullWidth sx={{ mb: 2 }}>
             <InputLabel sx={{ fontSize: 12 }}>+ Add optimization variable</InputLabel>

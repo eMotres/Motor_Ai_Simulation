@@ -9,6 +9,7 @@
 import React from 'react';
 import { Box, Paper, Typography, Tooltip } from '@mui/material';
 import AddToCompareButton from '../compare/AddToCompareButton';
+import HelpTip from '../common/HelpTip';
 import { geoSignature } from '../common/geoSig';
 import { useMotorStore } from '../../stores/motorStore';
 
@@ -186,15 +187,20 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
           0.02 N·m from a previous (broken) machine as "the solver is garbage".
           The tiny gray ⚠ did exist — it whispered. This banner shouts. */}
       {stale && (
-        <Box sx={{ px: 1.25, py: 0.75, borderRadius: 1, bgcolor: 'rgba(239,68,68,0.10)',
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5,
+          px: 1.25, py: 0.75, borderRadius: 1, bgcolor: 'rgba(239,68,68,0.10)',
           border: '1px solid #b91c1c', color: '#f87171', fontSize: 12, fontWeight: 700 }}>
+          {/* One-line verdict; the "why" lives in the ⓘ (UI rule). */}
           {geoStale
-            ? <>⚠ STALE — these numbers were computed on a DIFFERENT MACHINE than the
-                one now loaded. Torque, mass and efficiency below belong to the previous
-                geometry{opStale ? <> (and to I = {s.I_phase_rms_A} A, γ = {s.gamma_deg}°)</> : null}.
-                Press Re-run Simulation.</>
-            : <>⚠ STALE — these numbers were computed at I = {s.I_phase_rms_A} A, γ = {s.gamma_deg}°,
-                not the current panel settings (possibly a previous machine). Press Re-run Simulation.</>}
+            ? <>⚠ STALE — DIFFERENT MACHINE · Re-run Simulation</>
+            : <>⚠ STALE — I = {s.I_phase_rms_A} A, γ = {s.gamma_deg}° · Re-run Simulation</>}
+          <HelpTip title={geoStale
+            ? ('These numbers were computed on a different machine than the one now loaded. Torque, mass and '
+              + 'efficiency below belong to the previous geometry'
+              + (opStale ? ` (and to I = ${s.I_phase_rms_A} A, γ = ${s.gamma_deg}°)` : '')
+              + '. Press Re-run Simulation.')
+            : (`These numbers were computed at I = ${s.I_phase_rms_A} A, γ = ${s.gamma_deg}°, not the current `
+              + 'panel settings (possibly a previous machine). Press Re-run Simulation.')} />
         </Box>
       )}
       <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 2,

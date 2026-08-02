@@ -18,6 +18,7 @@ import {
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import { useMotorStore } from '../../stores/motorStore';
 import SectionLabel from '../common/SectionLabel';
+import HelpTip from '../common/HelpTip';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
 
@@ -187,10 +188,8 @@ const SweepStudyPanel: React.FC = () => {
   const [applyMsg, setApplyMsg] = useState<string | null>(null);
   const [zoom, setZoom] = useState<{ x: [number, number]; y: [number, number] } | null>(null);   // mouse-wheel zoom
 
-  // A stale zoom window survives into the NEXT result set and shows a sliver
-  // of the new data ("а где график?" — the curves ran off the clipped view).
-  // New series → full view, always.
-  useEffect(() => { setZoom(null); }, [series]);
+  // (The "reset zoom on new series" effect lives BELOW `series` — referencing it
+  //  from a dep array up here hit the const TDZ and crashed the panel on open.)
   const chartBoxRef = useRef<HTMLDivElement>(null);
 
   const [running, setRunning] = useState(false);
@@ -339,6 +338,11 @@ const SweepStudyPanel: React.FC = () => {
       .map(([key, g]) => ({ key, label: g.label, rows: g.rows.sort((a, b) => a._c - b._c) }));
   }, [result, sentOps, connectBy]);
 
+  // A stale zoom window survives into the NEXT result set and shows a sliver
+  // of the new data ("а где график?" — the curves ran off the clipped view).
+  // New series → full view, always.
+  useEffect(() => { setZoom(null); }, [series]);
+
   const nFeasible = series.reduce((s, c) => s + c.rows.length, 0);
 
   // Build failures: some geometries can't be meshed (e.g. teeth too wide for the
@@ -485,13 +489,10 @@ const SweepStudyPanel: React.FC = () => {
 
   return (
     <Box sx={{ mt: 2 }}>
-      <SectionLabel sx={{ mb: 0.5 }}>Sweep study — efficiency vs torque/mass</SectionLabel>
-      <Typography sx={{ fontSize: 11, color: 'var(--text-3)', mb: 1.25 }}>
-        Sweeps the <strong>variables you added above</strong> (current/γ → operating points,
-        geometry → a grid). Each point is a real transient built exactly like Simulation —
-        sector, gap mesh and the Structured (belt) toggle all come from the Mesh tab.
-        For honest ripple use Structured; ¼ sector then matches the full disk and is ~4× faster.
-      </Typography>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 1.25 }}>
+        <SectionLabel>Sweep study — efficiency vs torque/mass</SectionLabel>
+        <HelpTip title="Sweeps the variables you added above (current/γ → operating points, geometry → a grid). Each point is a real transient built exactly like Simulation — sector, gap mesh and the Structured (belt) toggle all come from the Mesh tab. For honest ripple use Structured; ¼ sector then matches the full disk and is ~4× faster." />
+      </Box>
 
       <Box sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1, p: 1, mb: 1.25 }}>
         <VarLine on={!!cV} label="Phase current" v={cV} fixedVal={readLS('sim.current', 85)} />

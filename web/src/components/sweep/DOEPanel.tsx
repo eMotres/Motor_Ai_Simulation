@@ -7,6 +7,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import React, { useEffect, useRef, useState } from 'react';
 import { Box, Typography, TextField, Button, LinearProgress, Divider } from '@mui/material';
+import HelpTip from '../common/HelpTip';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
 
@@ -104,12 +105,12 @@ const DOEPanel: React.FC = () => {
 
   return (
     <Box>
-      <Typography sx={{ fontSize: 11, color: 'var(--text-3)', mb: 1.5 }}>
-        Latin-Hypercube screening at a <strong>fixed current</strong> — samples the whole design box
-        (±band per variable), FEM-evaluates each, and ranks which variables drive
-        ripple / torque / efficiency (unbiased global importance, RandomForest). Fixed current →
-        torque varies → modelable. Separate dataset; doesn't touch the optimizer's surrogate.
-      </Typography>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 1.5 }}>
+        <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>
+          Latin-Hypercube screening at a fixed current
+        </Typography>
+        <HelpTip title="Samples the whole design box (±band per variable), FEM-evaluates each, and ranks which variables drive ripple / torque / efficiency (unbiased global importance, RandomForest). Fixed current → torque varies → modelable. Separate dataset; doesn't touch the optimizer's surrogate." />
+      </Box>
       <Box sx={{ display: 'flex', gap: 1, mb: 1 }}>
         <NumField label="samples" value={n} onChange={setN} disabled={running} />
         <TextField label="current (A) · Sim" size="small" value={current} disabled

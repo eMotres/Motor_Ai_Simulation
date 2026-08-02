@@ -12,6 +12,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import MyDesigns from './MyDesigns';
 import MotorThumbnail from './MotorThumbnail';
 import { openMotor } from '../common/motorSettings';
+import HelpTip from '../common/HelpTip';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
@@ -238,12 +239,15 @@ const MotorsCatalog: React.FC = () => {
 
   return (
     <Box sx={{ p: 3, overflowY: 'auto', height: '100%' }}>
-      <Typography variant="h5" sx={{ fontWeight: 800, color: 'var(--text-0)', mb: 0.5 }}>
-        Motor Catalog
-      </Typography>
-      <Typography sx={{ color: 'var(--text-2)', mb: 3, fontSize: '0.9rem' }}>
-        Proven motor designs for <b>aerospace, robotics, EV and marine</b> drivetrains. Pick one, tune it to your spec (stack length, winding, wire), see the price, and request manufacturing — click <b>Load</b> to open one as your own editable copy.
-      </Typography>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mb: 3 }}>
+        <Typography variant="h5" sx={{ fontWeight: 800, color: 'var(--text-0)' }}>
+          Motor Catalog
+        </Typography>
+        <Typography sx={{ color: 'var(--text-2)', fontSize: '0.9rem' }}>
+          — aerospace, robotics, EV, marine
+        </Typography>
+        <HelpTip title="Proven motor designs. Pick one, tune it to your spec (stack length, winding, wire), see the price, and request manufacturing — click Load to open one as your own editable copy." />
+      </Box>
 
       {/* ── User's saved designs ──────────────────────────────────── */}
       <MyDesigns />

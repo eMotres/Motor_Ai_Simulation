@@ -19,6 +19,7 @@ const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 import type { TransientSummary } from './SummaryTable';
 import { useMotorStore } from '../../stores/motorStore';
 import { geoSignature } from '../common/geoSig';
+import HelpTip from '../common/HelpTip';
 
 interface TransientPayload {
   // Frontend-only stamp: the geometry signature this run was computed for.
@@ -709,11 +710,13 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
           That one shouts, in the same red as the summary card's banner
           (a174253) — one visual language for "these numbers are not yours". */}
       {geoStale ? (
-        <Box sx={{ px: 1.25, py: 0.75, borderRadius: 1, bgcolor: 'rgba(239,68,68,0.10)',
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5,
+          px: 1.25, py: 0.75, borderRadius: 1, bgcolor: 'rgba(239,68,68,0.10)',
           border: '1px solid #b91c1c', color: '#f87171', fontSize: 12, fontWeight: 700 }}>
-          ⚠ STALE — these waveforms were solved on a DIFFERENT MACHINE than the one
-          now loaded{data?.computed_at ? ` (run of ${data.computed_at})` : ''}.
-          Nothing below describes the current geometry. Press Run Simulation.
+          ⚠ STALE — DIFFERENT MACHINE · Run Simulation
+          <HelpTip title={'These waveforms were solved on a different machine than the one now loaded'
+            + (data?.computed_at ? ` (run of ${data.computed_at})` : '')
+            + '. Nothing below describes the current geometry. Press Run Simulation.'} />
         </Box>
       ) : (stale || appliedFromSweep) && (
         <Tooltip title={`The waveforms below were computed ${appliedFromSweep

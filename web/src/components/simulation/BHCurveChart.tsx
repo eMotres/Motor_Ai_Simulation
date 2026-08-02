@@ -11,6 +11,7 @@
  */
 import React, { useMemo } from 'react';
 import { Box, Paper, Typography } from '@mui/material';
+import HelpTip from '../common/HelpTip';
 import {
   ResponsiveContainer, ComposedChart, Line, Scatter, XAxis, YAxis,
   CartesianGrid, ReferenceLine, Tooltip, Cell,
@@ -85,15 +86,13 @@ const BHCurveChart: React.FC<Props> = ({
   return (
     <Paper sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', p: 2,
       display: 'flex', flexDirection: 'column', gap: 1 }}>
-      <Box>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
         <Typography sx={{ fontSize: 13, color: 'var(--text-1)', fontWeight: 700 }}>
           Magnet B–H demagnetisation curve · per-magnet operating points
         </Typography>
-        <Typography sx={{ fontSize: 10, color: 'var(--text-4)' }}>
-          Black line: measured BH curve of the magnet grade assigned in the Materials
-          tab.  Each dot = one magnet's worst-cell operating point (H projected on +M̂,
-          B along the same axis).  Dots below the knee are in irreversible demag.
-        </Typography>
+        <HelpTip title={"Black line: measured BH curve of the magnet grade assigned in the Materials tab. "
+          + "Each dot = one magnet's worst-cell operating point (H projected on +M̂, B along the same axis). "
+          + 'Dots below the knee are in irreversible demag.'} />
       </Box>
       <Box sx={{ height: 320 }}>
         <ResponsiveContainer width="100%" height="100%">

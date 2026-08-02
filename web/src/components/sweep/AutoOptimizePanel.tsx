@@ -295,16 +295,18 @@ const AutoOptimizePanel: React.FC = () => {
         )}
 
         {cost && !running && (
-          <Typography variant="caption" sx={{ display: 'block', mt: 0.75, color: 'text.secondary' }}>
-            <strong>Cost:</strong> up to {cost.n_evals_max} FEM evals ×{' '}
-            {fmt(cost.s_per_eval, 1)} s/eval{' '}
-            {cost.s_per_eval_source === 'measured'
-              ? `(measured on this machine, ${cost.n_samples} evals)`
-              : '(estimated — this machine has not timed an eval yet)'}{' '}
-            → ≈ <strong>{humanSeconds(cost.est_wall_seconds)}</strong> wall clock on{' '}
-            {cost.parallel_workers} parallel workers ({humanSeconds(cost.est_cpu_seconds)} CPU).
-            The budget is a hard cap, not a guess.
-          </Typography>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.75 }}>
+            <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+              <strong>Cost:</strong> ≤ {cost.n_evals_max} evals → ≈{' '}
+              <strong>{humanSeconds(cost.est_wall_seconds)}</strong>
+            </Typography>
+            <HelpTip title={`Up to ${cost.n_evals_max} FEM evals × ${fmt(cost.s_per_eval, 1)} s/eval `
+              + (cost.s_per_eval_source === 'measured'
+                ? `(measured on this machine, ${cost.n_samples} evals)`
+                : '(estimated — this machine has not timed an eval yet)')
+              + ` → ≈ ${humanSeconds(cost.est_wall_seconds)} wall clock on ${cost.parallel_workers} parallel `
+              + `workers (${humanSeconds(cost.est_cpu_seconds)} CPU). The budget is a hard cap, not a guess.`} />
+          </Box>
         )}
 
         {/* ── Live progress ── */}
@@ -535,15 +537,21 @@ const AutoOptimizePanel: React.FC = () => {
               )}
             </Box>
 
-            <Typography variant="caption" sx={{ display: 'block', mt: 0.75, color: 'text.secondary' }}>
-              {result?.n_evals ?? nEvals} FEM evals
-              {rj ? ` · ${rj.rejected} rejected by the fences (${rj.rejected_geometry} not buildable, `
-                    + `${rj.rejected_unconverged} unconverged`
-                    + `${rj.rejected_mesh ? `, ${rj.rejected_mesh} mesh budget` : ''}`
-                    + `${rj.rejected_timeout ? `, ${rj.rejected_timeout} timed out` : ''})` : ''}
-              {op ? ` · solved at ${fmt(op.current_a, 1)} A / ${fmt(op.rpm, 0)} rpm / γ ${fmt(op.gamma_deg, 1)}°` : ''}
-              . The result is filed as a Compare point with its full geometry, metrics and provenance.
-            </Typography>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.75 }}>
+              <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                {result?.n_evals ?? nEvals} FEM evals
+                {rj ? ` · ${rj.rejected} rejected` : ''}
+                {op ? ` · ${fmt(op.current_a, 1)} A / ${fmt(op.rpm, 0)} rpm / γ ${fmt(op.gamma_deg, 1)}°` : ''}
+              </Typography>
+              <HelpTip title={(rj
+                ? `${rj.rejected} candidates rejected by the fences: ${rj.rejected_geometry} not buildable, `
+                  + `${rj.rejected_unconverged} unconverged`
+                  + `${rj.rejected_mesh ? `, ${rj.rejected_mesh} mesh budget` : ''}`
+                  + `${rj.rejected_timeout ? `, ${rj.rejected_timeout} timed out` : ''}. `
+                : '')
+                + (op ? `Solved at ${fmt(op.current_a, 1)} A / ${fmt(op.rpm, 0)} rpm / γ ${fmt(op.gamma_deg, 1)}°. ` : '')
+                + 'The result is filed as a Compare point with its full geometry, metrics and provenance.'} />
+            </Box>
           </Box>
         )}
       </CardContent>

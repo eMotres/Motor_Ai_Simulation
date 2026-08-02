@@ -280,7 +280,7 @@ const FemAnimationViewer: React.FC<Props> = ({
         <Box>
           <Typography sx={{ fontSize: 13, color: 'var(--text-1)', fontWeight: 700 }}>
             Field Animation — rotor through one electrical period
-            <Tooltip title="Runs the sliding-band transient over one electrical period and keeps the full field map at N_frames rotor angles. Use the slider to scrub — the rotor turns, the field follows it. The mesh is built ONCE for the whole run (the band encodes rotation in the slip pairing, not in coordinates), so the cost is one transient plus the payload, not one mesh+solve per frame." placement="top">
+            <Tooltip title="Runs the sliding-band transient over one electrical period and keeps the full field map at N_frames rotor angles. Use the slider to scrub — the rotor turns, the field follows it. The mesh is built ONCE for the whole run (the band encodes rotation in the slip pairing, not in coordinates), so the cost is one transient plus the payload, not one mesh+solve per frame. Each keyframe is a separate FEM solve at the actual rotor angle; stator iron + slot positions stay fixed. Iso-lines and the colour-bar rescale per frame to the local A_z range." placement="top">
               <span style={{ color: 'var(--text-4)', marginLeft: 6, fontSize: 11, cursor: 'help' }}>ⓘ</span>
             </Tooltip>
           </Typography>
@@ -383,13 +383,6 @@ const FemAnimationViewer: React.FC<Props> = ({
           </Box>
         </Box>
       )}
-
-      <Typography sx={{ fontSize: 9, color: 'var(--line)' }}>
-        Each keyframe is a separate FEM solve at the actual rotor angle — magnets,
-        rotor body and air-gap field reflect the physical state at that moment.
-        Stator iron + slot positions stay fixed.  Iso-lines and the colour-bar
-        rescale per frame to the local A_z range.
-      </Typography>
     </Paper>
   );
 };

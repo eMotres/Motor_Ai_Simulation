@@ -987,9 +987,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
           <DialogTitle sx={{ fontSize: 15, color: 'var(--text-0)' }}>Resume the stopped run?</DialogTitle>
           <DialogContent>
             <Typography sx={{ fontSize: 13, color: 'var(--text-2)' }}>
-              The previous transient was stopped part-way.  <b>Continue</b> keeps the
-              frames already solved and only computes the missing ones.
-              <b> Start fresh</b> discards them and recomputes the whole period.
+              <b>Continue</b> keeps the solved frames · <b>Start fresh</b> recomputes the period.
             </Typography>
           </DialogContent>
           <DialogActions sx={{ px: 3, pb: 2, gap: 1 }}>

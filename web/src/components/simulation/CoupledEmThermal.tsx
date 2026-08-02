@@ -14,6 +14,7 @@ import React, { useState } from 'react';
 import { Box, Paper, Typography, Button, Switch, FormControlLabel, CircularProgress, Chip } from '@mui/material';
 import { useMotorStore } from '../../stores/motorStore';
 import { getCoolingPayload } from './CoolingControls';
+import HelpTip from '../common/HelpTip';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 const CARD = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5, p: 2 } as const;
@@ -68,14 +69,9 @@ const CoupledEmThermal: React.FC<Props> = ({ I_phase_rms = 85, gamma_deg = 0, st
           label={<Typography sx={{ fontSize: 12, color: enabled ? '#60a5fa' : 'var(--text-2)' }}>{enabled ? 'On' : 'Off'}</Typography>}
           sx={{ mr: 0 }}
         />
+        <HelpTip title={'Off — torque/losses use a fixed coil temperature. Turn on to iterate losses ↔ temperature '
+          + 'to the self-consistent operating point (slower: each step is a full EM + thermal solve).'} />
       </Box>
-
-      {!enabled && (
-        <Typography sx={{ fontSize: 11.5, color: 'var(--text-3)', mt: 0.5 }}>
-          Off — torque/losses use a fixed coil temperature. Turn on to iterate losses ↔ temperature to the
-          self-consistent operating point (slower: each step is a full EM + thermal solve).
-        </Typography>
-      )}
 
       {enabled && (
         <Box sx={{ mt: 1.5 }}>
@@ -113,10 +109,12 @@ const CoupledEmThermal: React.FC<Props> = ({ I_phase_rms = 85, gamma_deg = 0, st
               </Box>
 
               {runaway ? (
-                <Typography sx={{ fontSize: 12.5, color: '#fca5a5', fontWeight: 600 }}>
-                  ⚠ Thermal runaway — no stable equilibrium at this operating point. Increase cooling (h_conv)
-                  or reduce current.
-                </Typography>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                  <Typography sx={{ fontSize: 12.5, color: '#fca5a5', fontWeight: 600 }}>
+                    ⚠ Thermal runaway
+                  </Typography>
+                  <HelpTip title="No stable equilibrium at this operating point — the loss ↔ temperature loop diverges. Increase cooling (h_conv) or reduce current." />
+                </Box>
               ) : (
                 <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 1 }}>
                   <Metric label="Equilibrium copper" value={`${raw.coil_temp_converged_C} °C`} hot />

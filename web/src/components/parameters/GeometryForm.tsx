@@ -103,10 +103,10 @@ const NumberField: React.FC<NumberFieldProps> = ({
           (e.target as HTMLInputElement).blur();
         }
       }}
-      {/* step="any": the schema step belongs to the SLIDER's coarse detents.
-          On the typed cell it made off-step values (0.15 at step 0.1) invalid
-          — the browser refused the commit and the user couldn't see why. Any
-          decimal inside min/max is legitimate here. */}
+      /* step="any": the schema step belongs to the SLIDER's coarse detents.
+         On the typed cell it made off-step values (0.15 at step 0.1) invalid
+         — the browser refused the commit and the user couldn't see why. Any
+         decimal inside min/max is legitimate here. */
       inputProps={{ inputMode: 'decimal', step: 'any' }}
       InputProps={{ endAdornment: helperText ? <HelpTip title={helperText} /> : undefined }}
       error={invalid}
@@ -170,16 +170,12 @@ const GeometryIssues: React.FC<{ v: GeometryValidation | null }> = ({ v }) => {
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
       {errs.length > 0 && (
         <Alert severity="error">
-          <AlertTitle>
-            {errs.length} geometry {errs.length === 1 ? 'problem' : 'problems'} — this
-            cross-section cannot be solved
+          <AlertTitle sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+            {errs.length} geometry {errs.length === 1 ? 'problem' : 'problems'} — cannot be solved
+            <HelpTip title="This cross-section cannot be solved. The values are saved so you can keep editing, but Run will be refused until the regions no longer intersect." />
           </AlertTitle>
           <Box component="ul" sx={{ m: 0, pl: 2.5 }}>{errs.map(row)}</Box>
           {more('error')}
-          <Typography variant="caption" sx={{ display: 'block', mt: 1, opacity: 0.85 }}>
-            The values are saved so you can keep editing, but Run will be refused
-            until the regions no longer intersect.
-          </Typography>
         </Alert>
       )}
       {warns.length > 0 && (

@@ -17,6 +17,7 @@ import {
   Table, TableBody, TableCell, TableHead, TableRow, FormControlLabel, Checkbox,
 } from '@mui/material';
 import BoltIcon from '@mui/icons-material/Bolt';
+import HelpTip from '../common/HelpTip';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 const PANEL = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5 } as const;
@@ -64,15 +65,12 @@ const PassportManager: React.FC = () => {
       <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1, mt: 3, mb: 1, flexWrap: 'wrap' }}>
         <Typography sx={{ fontSize: 15, fontWeight: 800, color: 'var(--text-0)' }}>References &amp; passports</Typography>
         <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>{done}/{motors.length} characterised</Typography>
+        <HelpTip title="Generating a passport runs a FEM sweep on the motor (minutes) and publishes it to the catalog, so the Configurator can scale it instantly. Switches the active motor while it runs." />
         <Box sx={{ flex: 1 }} />
         <FormControlLabel
           control={<Checkbox size="small" checked={coarse} onChange={(e) => setCoarse(e.target.checked)} sx={{ color: 'var(--text-4)', '&.Mui-checked': { color: '#60a5fa' } }} />}
           label={<Typography sx={{ fontSize: 11, color: 'var(--text-2)' }}>coarse (fast)</Typography>} />
       </Box>
-      <Typography sx={{ fontSize: 11, color: 'var(--text-4)', mb: 1 }}>
-        Generating a passport runs a FEM sweep on the motor (minutes) and publishes it to the catalog, so the
-        Configurator can scale it instantly. Switches the active motor while it runs.
-      </Typography>
       {msg && (
         <Typography sx={{ fontSize: 12, color: msg.startsWith('✓') ? '#4ade80' : '#f87171', mb: 1 }}>{msg}</Typography>
       )}

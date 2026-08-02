@@ -681,16 +681,14 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
               ))}
             </TableBody>
           </Table>
-          {best && (
-            <Typography variant="caption" sx={{ display: 'block', fontSize: 10, color: 'text.secondary', mb: 0.5 }}>
-              Warm-start re-uses the last best geometry (η {fmtPct(best.efficiency)}); the rated current is re-derived for the new conditions (γ from Simulation).
-            </Typography>
-          )}
-          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center' }}>
             <Button variant="contained" color="warning" size="small" startIcon={<PlayArrowIcon />}
               disabled={!connectedToApi || !best} onClick={continueWalk}>
               Re-optimize (warm-start)
             </Button>
+            {best && (
+              <HelpTip title={`Warm-start re-uses the last best geometry (η ${fmtPct(best.efficiency)}); the rated current is re-derived for the new conditions (γ from Simulation).`} />
+            )}
             <Button variant="outlined" size="small" disabled={!connectedToApi} onClick={reoptScratch}>
               From scratch
             </Button>
@@ -842,7 +840,7 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
               <span style={{ color: '#ef4444' }}>ripple&gt;limit</span> ·{' '}
               <span style={{ color: '#3b82f6' }}>descent path</span> ·{' '}
               <span style={{ color: '#fbbf24' }}>★ best</span>
-              {bline && <> · <span style={{ color: '#f59e0b' }}>— baseline (current-only)</span></>}
+              {bline && <> · <span style={{ color: '#f59e0b' }}>— baseline</span></>}
             </Typography>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap' }}>
               <Tooltip title="2-D = efficiency vs torque/mass. 3-D lifts ripple onto the height (z) axis, with a translucent plane at the ripple gate — see the eff×td-vs-ripple trade-off at a glance. Drag to rotate." placement="top">
@@ -882,11 +880,13 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
             </Box>
           </Box>
           {bline && (
-            <Typography variant="caption" sx={{ display: 'block', color: '#f59e0b', mb: 0.5, lineHeight: 1.5 }}>
-              Baseline +{bline.bump_pct}% current: T/mass {blA!.td.toFixed(2)}→{blB!.td.toFixed(2)} Nm/kg,
-              η {blA!.eff.toFixed(2)}→{blB!.eff.toFixed(2)}% · auto-weights — η ×{blWeffNmKg.toFixed(2)} (Nm/kg gained per +I),
-              T/mass ×{blWtdPct.toFixed(2)} (% lost per +I) · score = ⟂ distance above the line
-            </Typography>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.5 }}>
+              <Typography variant="caption" sx={{ color: '#f59e0b' }}>
+                Baseline +{bline.bump_pct}% I: T/mass {blA!.td.toFixed(2)}→{blB!.td.toFixed(2)} Nm/kg ·
+                η {blA!.eff.toFixed(2)}→{blB!.eff.toFixed(2)}% · w {blWeffNmKg.toFixed(2)} / {blWtdPct.toFixed(2)}
+              </Typography>
+              <HelpTip title={`Auto-weights derived from the baseline current bump: η ×${blWeffNmKg.toFixed(2)} (Nm/kg gained per +I), T/mass ×${blWtdPct.toFixed(2)} (% lost per +I). The optimizer's score is the perpendicular distance above this baseline line.`} />
+            </Box>
           )}
           {showLoadLines && loadLineDesigns.some(([, a]) => a.length > 1) && (
             <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: '12px', mb: 0.5 }}>
@@ -1002,10 +1002,13 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
       {/* Descent direction per variable (−∂cost/∂var) — the optimizer at work */}
       {gradData.length > 0 && (
         <Box sx={{ mb: 2 }}>
-          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
-            Descent direction (−∂cost/∂var): <span style={{ color: '#22c55e' }}>green ↑ raises</span>{' '}
-            the variable, <span style={{ color: '#ef4444' }}>red ↓ lowers</span> it — length = sensitivity
-          </Typography>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.5 }}>
+            <Typography variant="caption" color="text.secondary">
+              Descent direction (−∂cost/∂var) · <span style={{ color: '#22c55e' }}>↑</span>
+              {' / '}<span style={{ color: '#ef4444' }}>↓</span>
+            </Typography>
+            <HelpTip title="Green ↑ = raise the variable, red ↓ = lower it; bar length = sensitivity (−∂cost/∂var)." />
+          </Box>
           <Box sx={{ height: Math.max(120, gradData.length * 24) }}>
             <ResponsiveContainer width="100%" height="100%">
               <BarChart layout="vertical" data={gradData} margin={{ top: 4, right: 12, left: 8, bottom: 0 }}>

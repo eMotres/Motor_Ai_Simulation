@@ -23,6 +23,7 @@ import { Canvas, useThree } from '@react-three/fiber';
 import { OrbitControls, OrthographicCamera } from '@react-three/drei';
 import Viewcube from '../viewer3d/Viewcube';
 import { ViewcubeNavigation, CameraSync } from '../viewer3d/MotorScene';
+import HelpTip from '../common/HelpTip';
 import * as THREE from 'three';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
@@ -1043,21 +1044,27 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
         </Box>
       )}
 
-      {isEddy ? (
-        <Typography sx={{ fontSize: 9, color: 'var(--text-3)', mt: 0.5 }}>
-          Real current density σ(−∂A/∂t+U) from the eddy solve — current crowds
-          toward the slot opening (proximity). Compare with the uniform
-          magnetostatic &quot;J&quot;.
-          {eddyNoLoad && ' No winding current (I=0): the copper loss shown is ONLY eddy/proximity induced by the spinning magnets (concentrated near the slot opening) — there is no I²R. Set a load current to see I²R copper loss and current crowding.'}
+      {/* Footer prose folded into a single ⓘ chip (UI rule: no always-visible
+          explanation paragraphs — the line carries the label, the tooltip the
+          reasoning). */}
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.5 }}>
+        <Typography sx={{ fontSize: 9, color: isEddy ? 'var(--text-3)' : 'var(--line)' }}>
+          {isEddy
+            ? (eddyNoLoad ? 'σ(−∂A/∂t+U) · no winding current (I = 0)' : 'σ(−∂A/∂t+U) · proximity crowding')
+            : 'Mesh & BC: same as the Mesh tab'}
         </Typography>
-      ) : (
-        <Typography sx={{ fontSize: 9, color: 'var(--line)', mt: 0.5 }}>
-          Same mesh + Solver-Domain settings as the Mesh tab (read from
-          localStorage). Sector mode uses anti-periodic Dirichlet BC on the
-          radial cuts so torque, |B| and flux linkages are physically correct
-          and multiplied by n_sectors to represent the full motor.
-        </Typography>
-      )}
+        <HelpTip title={isEddy
+          ? ('Real current density σ(−∂A/∂t+U) from the eddy solve — current crowds toward the slot opening '
+            + '(proximity). Compare with the uniform magnetostatic "J".'
+            + (eddyNoLoad
+              ? ' No winding current (I=0): the copper loss shown is ONLY eddy/proximity induced by the spinning'
+                + ' magnets (concentrated near the slot opening) — there is no I²R. Set a load current to see I²R'
+                + ' copper loss and current crowding.'
+              : ''))
+          : ('Same mesh + Solver-Domain settings as the Mesh tab (read from localStorage). Sector mode uses '
+            + 'anti-periodic Dirichlet BC on the radial cuts so torque, |B| and flux linkages are physically '
+            + 'correct and multiplied by n_sectors to represent the full motor.')} />
+      </Box>
       {/* Demag warning banner removed — the per-magnet knee report over-flagged
           (the demag model over-derates sharp corners); the demag % map above is
           the honest per-element view. */}

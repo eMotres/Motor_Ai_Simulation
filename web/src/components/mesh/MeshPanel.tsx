@@ -28,6 +28,7 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import FemMeshViewer3D from './FemMeshViewer3D';
 import FemMeshViewer2D from './FemMeshViewer2D';
 import { syncActiveMotor } from '../common/motorSettings';
+import HelpTip from '../common/HelpTip';
 
 // WebGL is unavailable in some embedded / sandboxed browser panels
 // ("GL_VENDOR = Disabled, Sandboxed = yes") → the 3-D (WebGL) viewer renders
@@ -727,7 +728,11 @@ const MeshPanel: React.FC = () => {
                 Preview only — does not affect results
               </Typography>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-                <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>Rotor angle</Typography>
+                <Typography sx={{ fontSize: 12, color: 'var(--text-2)', display: 'flex',
+                  alignItems: 'center', gap: 0.5 }}>
+                  Rotor angle
+                  <HelpTip title="0…25.71° mech = one electrical period. Rotates the mesh view only — the transient always starts the rotor at 0 and sweeps a full period, so this cannot change a result." />
+                </Typography>
                 <Chip label={`${rotorAngle.toFixed(1)}°`} size="small"
                   sx={{ fontSize: 11, height: 20, bgcolor: 'var(--panel)', color: 'var(--text-2)' }}/>
               </Box>
@@ -736,9 +741,6 @@ const MeshPanel: React.FC = () => {
                 onChange={(_, v) => setRotorAngle(v as number)}
                 sx={{ color: '#3b82f6' }}
               />
-              <Typography sx={{ fontSize: 9, color: 'var(--line)' }}>
-                0…25.71° mech = one electrical period · rotates the mesh view only
-              </Typography>
             </Box>
 
             <Divider sx={{ borderColor: 'var(--panel)' }}/>
@@ -976,15 +978,12 @@ const MeshPanel: React.FC = () => {
 
         {view === 'pinn' && (
           <>
-        <Box>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
           <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, color: 'var(--text-4)',
-            letterSpacing: '0.1em', textTransform: 'uppercase', mb: 0.5 }}>
+            letterSpacing: '0.1em', textTransform: 'uppercase' }}>
             Collocation Points
           </Typography>
-          <Typography sx={{ fontSize: 11, color: 'var(--line)' }}>
-            PINN samples random points inside each domain. Higher density →
-            better accuracy, slower training.
-          </Typography>
+          <HelpTip title="PINN samples random points inside each domain. Higher density → better accuracy, slower training." />
         </Box>
 
         <Divider sx={{ borderColor: 'var(--panel)' }}/>
@@ -1200,10 +1199,16 @@ const MeshPanel: React.FC = () => {
           )}
         </Paper>
 
-        {view === 'fem' && femMesh && (
-          <Typography sx={{ fontSize: 10, color: 'var(--text-4)', textAlign: 'center' }}>
-            {femMesh.note}
-          </Typography>
+        {/* The backend's mesh `note` is a full paragraph — show only its first
+            clause inline and hang the rest off the ⓘ (UI rule: no always-visible
+            explanation prose). */}
+        {view === 'fem' && femMesh?.note && (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, justifyContent: 'center' }}>
+            <Typography sx={{ fontSize: 10, color: 'var(--text-4)' }}>
+              {String(femMesh.note).split('.')[0]}
+            </Typography>
+            <HelpTip title={femMesh.note} />
+          </Box>
         )}
       </Box>
     </Box>

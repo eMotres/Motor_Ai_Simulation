@@ -10,6 +10,7 @@ import {
   Divider,
 } from '@mui/material';
 import { useMotorStore } from '../../stores/motorStore';
+import HelpTip from '../common/HelpTip';
 
 const OperatingPointsPanel: React.FC = () => {
   const { sweepConfig, updateOperatingPoint, updateRippleThreshold } = useMotorStore();
@@ -17,10 +18,10 @@ const OperatingPointsPanel: React.FC = () => {
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-      <Typography variant="subtitle2" color="primary">Operating Points</Typography>
-      <Typography variant="caption" color="text.secondary">
-        Each geometry variant is evaluated at both operating points, forming a segment in the Pareto space (Torque/mass vs Efficiency).
-      </Typography>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+        <Typography variant="subtitle2" color="primary">Operating Points</Typography>
+        <HelpTip title="Each geometry variant is evaluated at both operating points, forming a segment in the Pareto space (Torque/mass vs Efficiency)." />
+      </Box>
 
       <Box sx={{ display: 'flex', gap: 2 }}>
         {([0, 1] as const).map(i => (
@@ -58,10 +59,10 @@ const OperatingPointsPanel: React.FC = () => {
       <Divider />
 
       <Box>
-        <Typography variant="subtitle2" color="primary" sx={{ mb: 1 }}>Torque Ripple Constraint</Typography>
-        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
-          Max allowed (T_max − T_min) / T_mean per electrical cycle
-        </Typography>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 1 }}>
+          <Typography variant="subtitle2" color="primary">Torque Ripple Constraint</Typography>
+          <HelpTip title="Max allowed (T_max − T_min) / T_mean per electrical cycle." />
+        </Box>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
           <Slider
             value={rippleThreshold * 100}

@@ -7,6 +7,7 @@
 import React, { useEffect, useState } from 'react';
 import { Box, Paper, Typography, Chip, CircularProgress, Button } from '@mui/material';
 import { useUIStore } from '../../stores/motorStore';
+import HelpTip from '../common/HelpTip';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 
@@ -82,11 +83,8 @@ const ModulesPanel: React.FC = () => {
       <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1, mb: 1 }}>
         <Typography sx={{ fontSize: 14, fontWeight: 700, color: 'var(--text-0)' }}>Platform Modules</Typography>
         {data && <Chip size="small" label={`${data.count} registered`} sx={{ height: 20, fontSize: 11 }} />}
+        <HelpTip title="Read live from /api/modules — the portal builds itself from these manifests (web interfaces are modules too: each declares its UI panel)." />
       </Box>
-      <Typography sx={{ fontSize: 11.5, color: 'var(--text-3)', mb: 1.5 }}>
-        Read live from <code>/api/modules</code> — the portal builds itself from these manifests
-        (web interfaces are modules too: each declares its UI panel).
-      </Typography>
 
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75, mb: 1.5 }}>
         {/* geometry.2d -> cost */}

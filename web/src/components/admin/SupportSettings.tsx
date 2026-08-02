@@ -13,6 +13,7 @@ import React, { useState } from 'react';
 import {
   Box, Paper, Typography, Chip, Select, MenuItem, TextField, Button, CircularProgress,
 } from '@mui/material';
+import HelpTip from '../common/HelpTip';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 
@@ -35,6 +36,7 @@ const CURATED: Record<Provider, string[]> = {
 
 const PANEL = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5, p: 2 } as const;
 const STEP = { fontSize: 11, color: 'var(--text-3)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em', mb: 0.75 } as const;
+
 
 const SupportSettings: React.FC<{ cfg: SupportCfg; onSaved: () => void }> = ({ cfg, onSaved }) => {
   const initial: Provider = (cfg.providerOverride === 'anthropic' || cfg.provider === 'anthropic') ? 'anthropic' : 'gemini';
@@ -113,10 +115,10 @@ const SupportSettings: React.FC<{ cfg: SupportCfg; onSaved: () => void }> = ({ c
       </Box>
 
       {/* Step 4 — assistant knowledge (system prompt), full width */}
-      <Typography sx={{ ...STEP, mt: 2.5 }}>4 · Assistant knowledge {cfg.promptIsCustom ? '· customised' : '· default'}</Typography>
-      <Typography sx={{ fontSize: 10.5, color: 'var(--text-3)', mb: 0.75 }}>
-        This is what the assistant knows about the app. Edit it to fix wrong answers — it applies immediately on Save. Clear the box and Save to reset to the built-in default.
-      </Typography>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 2.5, mb: 0.75 }}>
+        <Typography sx={STEP}>4 · Assistant knowledge {cfg.promptIsCustom ? '· customised' : '· default'}</Typography>
+        <HelpTip title="This is what the assistant knows about the app. Edit it to fix wrong answers — it applies immediately on Save. Clear the box and Save to reset to the built-in default." />
+      </Box>
       <TextField value={prompt} onChange={(e) => setPrompt(e.target.value)} size="small" fullWidth multiline minRows={8} maxRows={22}
         inputProps={{ style: { fontSize: 12, fontFamily: 'ui-monospace, SFMono-Regular, monospace', lineHeight: 1.5 } }}
         sx={{ '& .MuiInputBase-root': { bgcolor: 'var(--panel-2)' } }} />
@@ -131,12 +133,15 @@ const SupportSettings: React.FC<{ cfg: SupportCfg; onSaved: () => void }> = ({ c
         <Typography sx={{ fontSize: 10, color: 'var(--text-3)' }}>store: {cfg.store}</Typography>
       </Box>
 
-      <Typography sx={{ fontSize: 10.5, color: 'var(--text-3)', mt: 1.5, lineHeight: 1.5 }}>
-        Keys are stored on the server and never shown again — only a masked hint.
-        {envOnly
-          ? ' This server has no settings store (Firebase Admin SDK not configured), so saving is disabled here — set keys via Cloud Run env vars.'
-          : ' ⚠️ Make sure your Firestore rules deny client reads on the /config collection (see firestore.rules).'}
-      </Typography>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 1.5 }}>
+        <Typography sx={{ fontSize: 10.5, color: 'var(--text-3)' }}>
+          {envOnly ? 'Saving disabled — env-var keys only' : '⚠️ Check your Firestore rules'}
+        </Typography>
+        <HelpTip title={'Keys are stored on the server and never shown again — only a masked hint.'
+          + (envOnly
+            ? ' This server has no settings store (Firebase Admin SDK not configured), so saving is disabled here — set keys via Cloud Run env vars.'
+            : ' Make sure your Firestore rules deny client reads on the /config collection (see firestore.rules).')} />
+      </Box>
     </Paper>
   );
 };

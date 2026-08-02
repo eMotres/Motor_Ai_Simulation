@@ -10,6 +10,7 @@ import React, { useEffect, useReducer } from 'react';
 import { Box, Paper, Typography } from '@mui/material';
 import CoolingControls, { getCoolingPayload, airH, liqH } from '../simulation/CoolingControls';
 import { estimateThermal, type ThermalGeom, type ThermalLosses } from '../../lib/thermalEstimate';
+import HelpTip from '../common/HelpTip';
 
 const CARD = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5, p: 2 } as const;
 
@@ -42,6 +43,7 @@ const ConfiguratorThermal: React.FC<{ geom: ThermalGeom; losses: ThermalLosses }
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', mb: 0.5 }}>
         <Typography sx={{ fontSize: 14, fontWeight: 700, color: 'var(--text-0)' }}>Thermal — analytical estimate</Typography>
         <Typography sx={{ fontSize: 10.5, color: 'var(--text-3)', fontFamily: 'monospace' }}>lumped · no FEM · instant</Typography>
+        <HelpTip title="Steady-state lumped estimate: all loss leaves the outer surface by convection (h·A); winding & magnet hot-spots add conduction rise. A fast approximation — for an accurate temperature map, run the FEM thermal solve in Simulation." />
       </Box>
 
       {/* same cooling inputs as Simulation (shared) */}
@@ -58,18 +60,17 @@ const ConfiguratorThermal: React.FC<{ geom: ThermalGeom; losses: ThermalLosses }
       </Box>
 
       {(windHot || magHot) && (
-        <Typography sx={{ fontSize: 11.5, color: '#fca5a5', mt: 1 }}>
-          ⚠ {windHot ? `Winding ${t.T_winding_C.toFixed(0)} °C exceeds ~155 °C (class F). ` : ''}
-          {magHot ? `Magnet ${t.T_magnet_C.toFixed(0)} °C risks demagnetisation. ` : ''}
-          Use stronger cooling (liquid / higher flow or air speed) or reduce current.
-        </Typography>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 1 }}>
+          <Typography sx={{ fontSize: 11.5, color: '#fca5a5' }}>
+            ⚠ {windHot ? `Winding ${t.T_winding_C.toFixed(0)} °C` : ''}
+            {windHot && magHot ? ' · ' : ''}
+            {magHot ? `Magnet ${t.T_magnet_C.toFixed(0)} °C` : ''}
+          </Typography>
+          <HelpTip title={(windHot ? `Winding ${t.T_winding_C.toFixed(0)} °C exceeds ~155 °C (class F). ` : '')
+            + (magHot ? `Magnet ${t.T_magnet_C.toFixed(0)} °C risks demagnetisation. ` : '')
+            + 'Use stronger cooling (liquid / higher flow or air speed) or reduce current.'} />
+        </Box>
       )}
-
-      <Typography sx={{ fontSize: 10.5, color: 'var(--text-4)', mt: 1 }}>
-        Steady-state lumped estimate: all loss leaves the outer surface by convection (h·A); winding & magnet
-        hot-spots add conduction rise. A fast approximation — for an accurate temperature map, run the FEM
-        thermal solve in Simulation.
-      </Typography>
     </Paper>
   );
 };

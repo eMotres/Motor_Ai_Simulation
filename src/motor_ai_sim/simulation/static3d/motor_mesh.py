@@ -258,6 +258,8 @@ def build_section_mesh_2d(section: MotorSection,
             sect.r_box_mm = r_box
             sect.meta = dict(h_gap=h_gap, h_solid=h_solid, h_far=h_far,
                              r_box_mm=r_box, n_periodic_curves=n_per,
+                             n_sectors=int(section.n_sectors),
+                             sector_deg=float(section.sector_deg),
                              mesh_time_s=time.perf_counter() - t0)
         finally:
             try:
@@ -297,6 +299,10 @@ def _set_curve_periodicity(gmsh, a_sec: float, r_box: float) -> int:
             "cross-section is not periodic at this angle")
     n = 0
     for (r1, cm_), (r2, cs) in zip(masters, slaves):
+        # Deliberately tight.  A 0.8 um mismatch here was NOT round-off: it was
+        # the two cut lines genuinely being split at different points, and
+        # loosening the bound to accept it only moved the failure downstream to
+        # the node pairing, with a worse message.
         if abs(r1 - r2) > 1e-4:
             raise RuntimeError(
                 f"sector cut curve radii mismatch: {r1:.6f} vs {r2:.6f} mm")
@@ -395,8 +401,8 @@ def _extract_section(gmsh, section: MotorSection,
 
 
 def mirror_to_full_ring(sect: Section2D, full: MotorSection) -> Section2D:
-    """A FULL-RING cross-section mesh, by rotating a 180 deg sector mesh onto
-    itself and welding the seam.
+    """A FULL-RING cross-section mesh, by rotating the sector mesh around and
+    welding the seams.
 
     The direct 360 deg OCC build does not work on this cross-section: the
     fragment comes back with overlapping duplicate faces (measured: 22 faces
@@ -406,7 +412,7 @@ def mirror_to_full_ring(sect: Section2D, full: MotorSection) -> Section2D:
     double-meshes / mis-classifies (dead field)" — and it takes the same way out.
 
     The weld needs no search: the sector's own master/slave node pairing already
-    says which node of the rotated copy is which node of the original.
+    says which node of copy k is which node of copy k-1.
 
     This exists for VALIDATION.  The full ring solved on it carries no
     periodicity constraint at all, so comparing it against the sector solve tests
@@ -414,20 +420,35 @@ def mirror_to_full_ring(sect: Section2D, full: MotorSection) -> Section2D:
     pattern really is anti-periodic.  What it cannot test is mesh bias, since the
     two meshes are the same mesh.
     """
-    if abs(sect.p.shape[0] - 2) or sect.masters.size == 0:
+    if sect.masters.size == 0:
         raise ValueError("mirroring needs a sector mesh with a paired cut")
     if full.n_sectors != 1:
         raise ValueError("the target section must be the full ring")
-    n = sect.p.shape[1]
-    p = np.hstack([sect.p, -sect.p])              # 180 deg rotation = negation
-    t = np.hstack([sect.t, sect.t + n])
+    n_sec = int(round(360.0 / max(sect.meta.get("sector_deg", 0.0)
+                                  or (360.0 / max(full.n_sectors, 1)), 1e-9))) \
+        if sect.meta.get("sector_deg") else 0
+    if not n_sec:
+        n_sec = int(round(2.0 * math.pi
+                          / _sector_angle_of(sect)))
+    a = 2.0 * math.pi / n_sec
 
-    remap = np.arange(2 * n, dtype=np.int64)
-    remap[n + sect.masters] = sect.slaves          # rotated theta=0 line IS the
-    remap[n + sect.slaves] = sect.masters          # theta=180 line, and vice versa
+    n = sect.p.shape[1]
+    copies = []
+    for k in range(n_sec):
+        c, s_ = math.cos(k * a), math.sin(k * a)
+        copies.append(np.vstack([c * sect.p[0] - s_ * sect.p[1],
+                                 s_ * sect.p[0] + c * sect.p[1]]))
+    p = np.hstack(copies)
+    t = np.hstack([sect.t + k * n for k in range(n_sec)])
+
+    # Copy k's theta=0 line is copy k-1's theta=a line, all the way round.
+    remap = np.arange(n_sec * n, dtype=np.int64)
+    for k in range(1, n_sec):
+        remap[k * n + sect.masters] = remap[(k - 1) * n + sect.slaves]
+    remap[(n_sec - 1) * n + sect.slaves] = remap[sect.masters]
     t = remap[t]
     used = np.unique(t)
-    back = -np.ones(2 * n, dtype=np.int64)
+    back = -np.ones(n_sec * n, dtype=np.int64)
     back[used] = np.arange(used.size, dtype=np.int64)
     p = p[:, used]
     t = back[t]
@@ -444,7 +465,8 @@ def mirror_to_full_ring(sect: Section2D, full: MotorSection) -> Section2D:
                      masters=np.empty(0, dtype=np.int64),
                      slaves=np.empty(0, dtype=np.int64),
                      r_box_mm=sect.r_box_mm,
-                     meta=dict(sect.meta, mirrored_from_sector=True))
+                     meta=dict(sect.meta, n_sectors=1,
+                               mirrored_from_sector=n_sec))
 
 
 def _tri_area(p2: np.ndarray, t: np.ndarray) -> float:

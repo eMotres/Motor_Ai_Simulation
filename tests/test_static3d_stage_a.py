@@ -38,9 +38,29 @@ requires_full = pytest.mark.skipif(not FULL,
 # fixtures — one coarse cross-section shared by the fast tests
 # --------------------------------------------------------------------------
 
+# The tests are pinned to a SAVED preset, never to config/motor_config.yaml.
+# That file is live: the backend and the optimizer both write it, and during
+# this work it moved 40 mm -> 30 mm -> 150 mm between runs.  A test suite whose
+# subject changes under it is not a test suite.
+PRESET = "my_40mm_last"
+
+
+def _preset_geometry(name: str = PRESET) -> dict:
+    import json
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    with (root / "config" / "motor_presets.json").open(encoding="utf-8") as fh:
+        return dict(json.load(fh)[name]["geometry"])
+
+
 @pytest.fixture(scope="module")
-def section():
-    return load_motor_section()
+def geo():
+    return _preset_geometry()
+
+
+@pytest.fixture(scope="module")
+def section(geo):
+    return load_motor_section(geo_override=geo)
 
 
 @pytest.fixture(scope="module")
@@ -204,11 +224,16 @@ def test_sector_equals_full_ring(section, coarse2d, sector_solve):
     all.  Get any of those wrong and the sector solve collapses toward zero
     field rather than differing by a few percent.
     """
-    full = load_motor_section(n_sectors=1)
+    full = load_motor_section(geo_override=_preset_geometry(), n_sectors=1)
     f2d = MMESH.mirror_to_full_ring(coarse2d, full)
     assert f2d.t.shape[1] == 2 * coarse2d.t.shape[1]
     for r in full.regions:
-        assert f2d.region_area_mm2(r.name) == pytest.approx(r.area_mm2, rel=2e-6), r.name
+        # 1e-4, not the 2e-6 the sector build is held to: the sector's cut-line
+        # vertices are snapped to a 10 um radial grid so the two cuts are exact
+        # rotations of each other (motor_geometry._snap_cut_vertices), which
+        # moves the boundary ON the cut by up to 5 um.  The full-ring polygon
+        # has no cut and no snap, so the two areas cannot agree to round-off.
+        assert f2d.region_area_mm2(r.name) == pytest.approx(r.area_mm2, rel=1e-4), r.name
 
     ss_full = _linear_sector_solve(full, f2d)
     assert ss_full.periodic is None
@@ -223,7 +248,7 @@ def test_sector_equals_full_ring(section, coarse2d, sector_solve):
 def test_full_ring_solution_is_anti_periodic(section, coarse2d):
     """...and the unconstrained full ring finds the anti-periodicity by itself,
     which is what makes imposing it on the sector legitimate."""
-    full = load_motor_section(n_sectors=1)
+    full = load_motor_section(geo_override=_preset_geometry(), n_sectors=1)
     ss = _linear_sector_solve(full, MMESH.mirror_to_full_ring(coarse2d, full))
     th = np.linspace(0.0, 2 * math.pi, 180, endpoint=False)
     r = full.mid_r_m
@@ -314,9 +339,12 @@ def test_passport_round_trips():
     assert isinstance(json.dumps(back), str)
 
 
-def test_passport_fingerprint_matches_the_project_helper(section):
+def test_passport_fingerprint_matches_the_project_helper(section, geo):
+    """The passport's fingerprint is the project's own, over the SAME geometry
+    override the section was built from — that is what lets a stored passport be
+    matched against a design later."""
     from motor_ai_sim.routes.simulation import _geometry_fingerprint
-    assert section.fingerprint == _geometry_fingerprint(None)
+    assert section.fingerprint == _geometry_fingerprint(geo)
 
 
 # --------------------------------------------------------------------------
@@ -324,7 +352,7 @@ def test_passport_fingerprint_matches_the_project_helper(section):
 # --------------------------------------------------------------------------
 
 @requires_full
-def test_long_stack_limit_matches_2d(section):
+def test_long_stack_limit_matches_2d(section, geo):
     """The honesty test: at 4x the real stack the mid-plane gap fundamental must
     converge onto the 2D solver's answer.  A 3D model that does NOT reduce to 2D
     in the long-stack limit is not correcting 2D, it is disagreeing with it."""
@@ -343,7 +371,8 @@ def test_long_stack_limit_matches_2d(section):
 
 @requires_full
 def test_full_stage_a_runs_and_writes(tmp_path):
-    pp = EE.run_stage_a(l_factors=(1.0, 2.0), do_bracket=True, do_2d=True,
+    pp = EE.run_stage_a(geo_override=_preset_geometry(),
+                        l_factors=(1.0, 2.0), do_bracket=True, do_2d=True,
                         verbose=False)
     out = EE.write_passport(pp, str(tmp_path / "end_effect_3d.json"))
     back = EE.read_passport(out)

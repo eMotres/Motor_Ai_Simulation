@@ -143,10 +143,21 @@ def airgap_B1(ss: SectorSolve, z_m: Sequence[float], n_theta: int = 180
     """(|B1|, phase) of the pole-pair harmonic of B_r at each z station."""
     s = ss.section
     p = s.pole_pairs
-    if s.antiperiodic and p % 2 == 0:
+    # Taking the order-p coefficient from ONE anti-periodic sector instead of
+    # the full ring is exact only when the missing sectors are the algebraic
+    # twins of the one that is there.  Summing the full ring,
+    #   sum_j (-1)^j exp(-i 2 pi p j / N)  =  N   iff   2p/N is an ODD integer,
+    # and 2p/N is exactly the pole count per sector — which is odd precisely
+    # when the sector is anti-periodic.  So the condition is already implied,
+    # and it is asserted rather than assumed because getting it wrong would
+    # silently return a coefficient that is not the machine's.
+    per_sector = s.num_poles / max(s.n_sectors, 1)
+    if s.antiperiodic and (per_sector != int(per_sector)
+                           or int(per_sector) % 2 == 0):
         raise ValueError(
-            "an anti-periodic half sector cannot carry an even-order harmonic: "
-            f"pole_pairs={p} contradicts the sector choice")
+            f"an anti-periodic {s.sector_deg:.1f} deg sector carries "
+            f"{per_sector} poles; the order-{p} coefficient can only be read off "
+            "one sector when that count is an ODD integer")
     span = math.radians(s.sector_deg)
     th = np.linspace(0.0, span, int(n_theta), endpoint=False)
     r = s.mid_r_m
@@ -457,16 +468,22 @@ def run_stage_a(geo_override: Optional[dict] = None,
     # in front of work that did not depend on it.
     two_d = None
     if do_2d:
-        from .ref2d import solve_2d_reference
+        from .ref2d import solve_2d_reference_on_section_mesh
         if verbose:
             print("\n[4] 2D reference (full ring, I=0, P2)", flush=True)
-        r2 = solve_2d_reference(section)
+        # The project's own 2D SOLVER (weak form in A_z, its materials, its B-H
+        # Picard) on the cross-section mirrored to a full ring.  Its mesh
+        # GENERATOR is not used: mesher.build_mesh_from_polygons at n_sectors=1
+        # is the documented closed-360 OCC pathology and did not complete in
+        # over an hour on this machine.  See ref2d for the full reasoning.
+        r2 = solve_2d_reference_on_section_mesh(
+            load_motor_section(geo_override=geo_override, n_sectors=1), sect2d)
         two_d = dict(B1_T=r2.B1_T,
                      harmonics={str(k): v for k, v in r2.harmonics.items()},
                      n_tri=r2.n_tri, ndofs=r2.ndofs, wall_s=r2.wall_s,
                      outer_r_mm=r2.outer_r_mm,
-                     coil_elements_solved_as_air=r2.n_coil_elements_as_air,
-                     solver="fem_solver_2d.solve_magnetostatics_fem (P2, full ring)",
+                     solver=("fem_solver_2d.solve_magnetostatics_fem (P2, full "
+                             "ring, static3d cross-section mirrored)"),
                      ratio_3d_mid_over_2d=prof["B1_mid_T"] / r2.B1_T)
         if verbose:
             print(f"    2D B1 = {r2.B1_T:.5f} T, 3D mid / 2D = "

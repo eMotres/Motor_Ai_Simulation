@@ -71,6 +71,87 @@ def gap_fundamental(theta: np.ndarray, Br: np.ndarray, p: int
     return float(abs(c)), float(np.angle(c))
 
 
+def _dom_tags_for(section: MotorSection, sect) -> np.ndarray:
+    """Per-triangle DOM_* tags for a static3d ``Section2D``.
+
+    The magnet tag must be ``DOM_MAG_BASE + i`` with i the index in the FULL
+    ring's ``polys['magnets']`` list, because that is the index
+    ``build_materials`` keyed its per-magnet magnetisation on.  The region names
+    on a full-ring MotorSection are ``magnet_<i>`` with exactly that i.
+    """
+    from motor_ai_sim.simulation.fem_solver_2d import (DOM_AIR, DOM_MAG_BASE,
+                                                       DOM_ROTOR, DOM_SHAFT,
+                                                       DOM_STATOR)
+    tags = np.full(sect.t.shape[1], DOM_AIR, dtype=np.int32)
+    simple = {"stator": DOM_STATOR, "rotor": DOM_ROTOR, "shaft": DOM_SHAFT}
+    for name, rid in sect.names.items():
+        sel = sect.tri_region == rid
+        if name in simple:
+            tags[sel] = simple[name]
+        elif name.startswith("magnet_"):
+            tags[sel] = DOM_MAG_BASE + int(name.split("_")[1])
+    return tags
+
+
+def solve_2d_reference_on_section_mesh(section_full: MotorSection,
+                                       sect_sector,
+                                       nonlinear_iterations: int = 16,
+                                       element_order: int = 2,
+                                       n_theta: int = 720) -> Ref2D:
+    """2D reference on the static3d cross-section mesh, mirrored to a full ring.
+
+    Why not ``mesher.build_mesh_from_polygons`` (see ``solve_2d_reference``):
+    on this machine that call is the project's documented closed-360 OCC
+    pathology and did not complete in over an hour under the compute budget for
+    this task.  What is actually needed for the honesty check is the project's
+    2D SOLVER — its weak form in A_z, its materials, its B-H Picard — run on the
+    same cross-section.  That is what this does; only the mesh generator differs,
+    and a check whose two legs share a mesh generator is a weaker check, not a
+    stronger one.
+
+    ``sect_sector`` is a :class:`motor_mesh.Section2D` of the 180 deg sector;
+    ``section_full`` must be the ``n_sectors=1`` MotorSection whose magnet
+    numbering the tags key on.
+    """
+    from motor_ai_sim.simulation.fem_solver_2d import (build_materials,
+                                                       solve_magnetostatics_fem)
+    from motor_ai_sim.simulation.geometry_2d import build_winding_layout
+    from skfem import MeshTri
+
+    from .motor_mesh import mirror_to_full_ring
+
+    t0 = time.perf_counter()
+    full = mirror_to_full_ring(sect_sector, section_full)
+    mesh = MeshTri(np.ascontiguousarray(full.p * 1e-3),
+                   np.ascontiguousarray(full.t))
+    tags = _dom_tags_for(section_full, full)
+
+    geo = section_full.geo
+    layout = build_winding_layout(section_full.num_slots,
+                                  section_full.num_poles // 2)
+    mats = build_materials({"A": 0.0, "B": 0.0, "C": 0.0}, layout,
+                           section_full.polys_full, 0.0, 1e-5,
+                           int(round(geo["num_wires_per_slot"])))
+    A, basis = solve_magnetostatics_fem(mesh, tags, mats,
+                                        element_order=element_order,
+                                        nonlinear_iterations=nonlinear_iterations)
+    wall = time.perf_counter() - t0
+
+    r = section_full.mid_r_m
+    th = np.linspace(0.0, 2.0 * math.pi, int(n_theta), endpoint=False)
+    g = _grad_at_points_tri(mesh, basis, A,
+                            np.vstack([r * np.cos(th), r * np.sin(th)]))
+    Br = g[1] * np.cos(th) - g[0] * np.sin(th)
+    p = section_full.pole_pairs
+    amp, ph = gap_fundamental(th, Br, p)
+    return Ref2D(B1_T=amp, B1_phase_rad=ph, Br_theta=Br, theta=th,
+                 n_tri=int(mesh.t.shape[1]), ndofs=int(basis.N), wall_s=wall,
+                 r_gap_m=r, pole_pairs=p,
+                 outer_r_mm=full.r_box_mm,
+                 harmonics={int(k): gap_fundamental(th, Br, k)[0]
+                            for k in (p, 3 * p, 5 * p)})
+
+
 def solve_2d_reference(section: MotorSection,
                        n_theta: int = 720,
                        mesh_size_mm: Optional[float] = None,

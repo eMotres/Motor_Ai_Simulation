@@ -91,6 +91,7 @@ class MotorSection:
     mu_rec: float
     fingerprint: str = ""
     materials: Dict[str, str] = field(default_factory=dict)
+    pocket_sliver_mm2: float = 0.0
     polys_full: Optional[dict] = None
 
     # -- convenience in metres --------------------------------------------
@@ -162,13 +163,111 @@ def sector_choice(num_slots: int, num_poles: int,
 # loader
 # --------------------------------------------------------------------------
 
+CUT_SNAP_MM = 0.01          # 10 um — see _snap_cut_vertices
+POCKET_SLIVER_MM2 = 0.01    # see _recut_rotor_pockets
+
+
+def _recut_rotor_pockets(polys: dict, tol_mm2: float = POCKET_SLIVER_MM2
+                         ) -> Tuple[dict, float]:
+    """Subtract the magnets out of the rotor iron, and check how much came off.
+
+    Returns the repaired polygon dict and the removed area in mm^2.  Above
+    ``tol_mm2`` (and above 0.1 % of the rotor) the overlap is a real design
+    error, not a discretisation sliver, and it raises.
+    """
+    from shapely.ops import unary_union
+
+    rotor = polys.get("rotor")
+    mags = [mp for mp, _pol in polys.get("magnets", []) if mp is not None]
+    if rotor is None or rotor.is_empty or not mags:
+        return polys, 0.0
+    cut = rotor.difference(unary_union(mags))
+    if not cut.is_valid:
+        cut = cut.buffer(0)
+    removed = float(rotor.area - cut.area)
+    if removed <= 1e-12:
+        return polys, 0.0
+    if removed > tol_mm2 or removed > 1e-3 * rotor.area:
+        raise ValueError(
+            f"magnets and rotor iron overlap by {removed:.4f} mm^2 "
+            f"({100*removed/rotor.area:.3f} % of the rotor) — that is a real "
+            "overlap, not a CAD discretisation sliver; the cross-section is "
+            "not buildable")
+    out = dict(polys)
+    out["rotor"] = cut
+    return out, removed
+
+
+def _snap_cut_vertices(poly, a_sec: float, tol: float = CUT_SNAP_MM):
+    """Put every vertex ON a sector cut line exactly on it, at a QUANTISED radius.
+
+    The sector model needs the two radial cuts to be each other's rotation
+    EXACTLY, because gmsh pairs them curve by curve before meshing.  The
+    cross-section builder does not guarantee that to the last nanometre: its
+    coincident-point weld picks one representative per cluster, and for two
+    features related by the sector rotation it can pick differently.  Measured
+    on this machine: one cut carried a breakpoint at r = 12.600783 mm and the
+    other the same breakpoint at 12.600000 mm — 783 nm, enough for gmsh to
+    refuse to pair the curves, and (if the pairing is loosened instead) enough
+    to leave the two cut lines with different node counts, which silently
+    destroys the symmetry the whole sector solve rests on.
+
+    So vertices within ``tol`` of a cut line are snapped onto it and their
+    radius quantised to ``tol``.  The largest move is half a quantum, 5 um,
+    along a straight radial line, against a smallest real feature of 200 um (the
+    air gap).  It cannot change the machine; it can only make the two cuts agree.
+    """
+    from shapely.geometry import Polygon as _SPoly
+
+    ca, sa = math.cos(a_sec), math.sin(a_sec)
+
+    def _fix(coords):
+        out = []
+        for x, y in coords:
+            r = math.hypot(x, y)
+            if r > 1e-12:
+                if abs(y) <= tol and x > 0:                    # theta = 0 cut
+                    out.append((round(r / tol) * tol, 0.0))
+                    continue
+                if abs(x * sa - y * ca) <= tol and (x * ca + y * sa) > 0:
+                    rq = round(r / tol) * tol
+                    out.append((rq * ca, rq * sa))             # theta = a_sec
+                    continue
+            out.append((x, y))
+        return out
+
+    parts = list(poly.geoms) if hasattr(poly, "geoms") else [poly]
+    fixed = []
+    for p in parts:
+        g = _SPoly(_fix(list(p.exterior.coords)[:-1]),
+                   [_fix(list(h.coords)[:-1]) for h in p.interiors])
+        if not g.is_valid:
+            g = g.buffer(0)
+        if not g.is_empty and g.area > 1e-9:
+            fixed.append(g)
+    if not fixed:
+        return poly
+    if len(fixed) == 1:
+        return fixed[0]
+    from shapely.geometry import MultiPolygon as _SMPoly
+    return _SMPoly(fixed)
+
+
 def _clip_to_sector(polys: dict, n_sectors: int) -> dict:
     """Clip via the 2D mesher's OWN clipper (read-only import) so the sector the
-    3D model meshes is bit-for-bit the sector the 2D model meshes."""
+    3D model meshes is the sector the 2D model meshes, then snap the cut-line
+    vertices so the two cuts are exact rotations of each other."""
     if n_sectors <= 1:
         return polys
     from motor_ai_sim.simulation.mesher import _clip_polys_to_sector
-    return _clip_polys_to_sector(polys, n_sectors)
+    out = dict(_clip_polys_to_sector(polys, n_sectors))
+    a = 2.0 * math.pi / n_sectors
+    for k in ("stator", "rotor", "shaft"):
+        if out.get(k) is not None and not out[k].is_empty:
+            out[k] = _snap_cut_vertices(out[k], a)
+    out["magnets"] = [(_snap_cut_vertices(mp, a), pol)
+                      for mp, pol in out.get("magnets", [])]
+    return out
 
 
 def load_motor_section(geo_override: Optional[dict] = None,
@@ -191,8 +290,17 @@ def load_motor_section(geo_override: Optional[dict] = None,
     p = dict(motor.parameters)
     polys = motor.get_2d_polygons(rotor_angle_deg=0.0)
 
-    # The cross-section must be buildable before anything is meshed — a solve of
-    # an impossible machine is never an answer (client-facing validation rule).
+    # A magnet lives in a rotor POCKET, so the two must be disjoint.  The CAD
+    # builder's arc discretisation leaves slivers of overlap at the pocket walls
+    # — measured on this machine, 0.001 mm^2 against a 13.88 mm^2 magnet, i.e.
+    # 7e-5 of it.  Meshing that is not possible (whichever region wins, the
+    # other loses material), so the pocket is re-cut here.  How much was cut is
+    # CHECKED, not assumed: anything above a tolerance is a real overlap in the
+    # design and still raises, because a solve of an impossible machine is never
+    # an answer.
+    polys, sliver = _recut_rotor_pockets(polys)
+
+    # ...and then the cross-section is validated as usual.
     from motor_ai_sim.geometry_validation import validate_polygons, GeometryInvalid
     vres = validate_polygons(polys, params=p)
     if not vres.ok:
@@ -276,4 +384,5 @@ def load_motor_section(geo_override: Optional[dict] = None,
         Br_T=Br, mu_rec=mu_rec, fingerprint=fp,
         materials={k: v for k, v in assigns.items()
                    if k in ("stator_core", "rotor_core", "magnet", "shaft")},
+        pocket_sliver_mm2=float(sliver),
         polys_full=polys)

@@ -122,6 +122,8 @@ class Solution:
     solver: str
     assemble_time: float = 0.0
     picard: dict = field(default_factory=dict)
+    mu_converged: Optional[np.ndarray] = None
+    _finder_cache: Optional[tuple] = None
 
     # -- field recovery ----------------------------------------------------
     def B_elementwise(self) -> np.ndarray:
@@ -161,8 +163,15 @@ class Solution:
         P2 evaluation is the genuine quadratic field at that point and not a
         centroid stand-in.  Points outside the mesh come back as NaN."""
         pts = np.asarray(pts, dtype=float)
-        mapping = self.mesh._mapping()
-        finder = self.mesh.element_finder(mapping)
+        # The element finder builds a KD-tree over every element; on a 170k-tet
+        # motor mesh that is ~1 s, and the gap profile calls this once per axial
+        # station.  Cache it — the mesh does not move.
+        cached = getattr(self, "_finder_cache", None)
+        if cached is None:
+            mapping = self.mesh._mapping()
+            cached = (mapping, self.mesh.element_finder(mapping))
+            self._finder_cache = cached
+        mapping, finder = cached
         tind = finder(pts[0], pts[1], pts[2]).astype(np.int64)
 
         X = mapping.invF(pts[:, :, None], tind=tind)   # (3, npts, 1) local
@@ -257,18 +266,39 @@ def _region_arrays(mesh, regions: Sequence[Region], mu_r_override=None):
 
 def solve_static3d(mesh, regions: Sequence[Region], order: int = 1,
                    mu_el: Optional[np.ndarray] = None,
-                   neumann_outer: bool = False) -> Solution:
+                   neumann_outer: bool = False,
+                   basis: Optional[object] = None,
+                   periodic: Optional[object] = None,
+                   dirichlet_dofs: Optional[np.ndarray] = None,
+                   linear_solver: Optional[str] = None) -> Solution:
     """Linear magnetostatic solve.  ``order`` is 1 (ElementTetP1) or 2 (P2).
 
     ``mu_el`` lets the nonlinear driver inject a per-element permeability that
     came out of a B-H curve; ``neumann_outer`` swaps the phi=0 truncation for a
     flux-tight box (pinned at one node to fix the constant), which is the other
     half of the truncation study.
+
+    Stage A additions, all optional and all no-ops when omitted:
+
+    ``basis``
+        a prebuilt ``Basis`` to reuse.  Building the P2 basis of a 300k-element
+        mesh is seconds; a Picard loop rebuilding it every sweep is minutes.
+    ``periodic``
+        a :class:`periodic.Periodic` — eliminate ``phi_slave = sign*phi_master``
+        so a symmetry sector may be solved instead of the full ring.
+    ``dirichlet_dofs``
+        clamp exactly these dofs instead of the whole mesh boundary.  Required
+        for any model whose boundary is not all truncation surface (mirror
+        planes, periodic cuts).
+    ``linear_solver``
+        ``"direct"`` (default) or ``"cg"`` — diagonally preconditioned CG for
+        systems past what a direct factorisation will hold.
     """
     if order not in (1, 2):
         raise ValueError(f"order must be 1 or 2, got {order}")
     elem = ElementTetP1() if order == 1 else ElementTetP2()
-    basis = Basis(mesh, elem)
+    if basis is None:
+        basis = Basis(mesh, elem)
 
     mu_default, M_el = _region_arrays(mesh, regions)
     mu_used = mu_default if mu_el is None else np.asarray(mu_el, dtype=float)
@@ -288,21 +318,86 @@ def solve_static3d(mesh, regions: Sequence[Region], order: int = 1,
         # Pure Neumann: the potential is defined up to a constant.  Pin ONE dof
         # (the node nearest the outer corner) instead of adding a Lagrange
         # multiplier, which would break the SPD structure PARDISO exploits.
-        corner = int(np.argmax(np.abs(basis.doflocs).sum(axis=0)))
-        D = np.array([corner], dtype=np.int64)
+        # An ANTI-periodic constraint already removes the constant (a nonzero
+        # constant is not anti-periodic), so pinning on top of it would clamp a
+        # real dof to a value the physics did not choose.
+        if periodic is not None and getattr(periodic, "kills_constant", False):
+            D = np.empty(0, dtype=np.int64)
+        else:
+            corner = int(np.argmax(np.abs(basis.doflocs).sum(axis=0)))
+            D = np.array([corner], dtype=np.int64)
+    elif dirichlet_dofs is not None:
+        D = np.asarray(dirichlet_dofs, dtype=np.int64)
     else:
         D = basis.get_dofs().all()
 
     name, fac = _linear_solver()
     t0 = time.perf_counter()
-    A, b, x, I = condense(K, f, D=D)
-    solve = fac(A)
-    x[I] = solve(b)
+    if periodic is not None and getattr(periodic, "masters", np.empty(0)).size:
+        from .periodic import elimination
+        T, full2red = elimination(int(basis.N), periodic)
+        Kr = (T.T @ K @ T).tocsr()
+        fr = T.T @ f
+        Dr = full2red[D]
+        Dr = np.unique(Dr[Dr >= 0])
+        if Dr.size:
+            A, b, xr, I = condense(Kr, fr, D=Dr)
+        else:
+            A, b, xr, I = Kr, fr, np.zeros(Kr.shape[0]), np.arange(Kr.shape[0])
+        if linear_solver == "cg":
+            name, xI = _solve_cg(A, b)
+        else:
+            xI = fac(A)(b)
+        xr = np.asarray(xr, dtype=float)
+        xr[I] = xI
+        x = T @ xr
+    else:
+        A, b, x, I = condense(K, f, D=D)
+        if linear_solver == "cg":
+            name, xI = _solve_cg(A, b)
+        else:
+            xI = fac(A)(b)
+        x[I] = xI
     t_solve = time.perf_counter() - t0
 
     return Solution(phi=x, basis=basis, mesh=mesh, regions=list(regions),
                     mu_el=mu_used, M_el=M_el, order=order, ndofs=int(basis.N),
                     solve_time=t_solve, assemble_time=t_asm, solver=name)
+
+
+def _solve_cg(A, b, tol: float = 1e-10, maxiter: int = 20000):
+    """Diagonally preconditioned CG — the fallback past a direct factorisation.
+
+    pyamg would be the right preconditioner and is tried first; without it this
+    is Jacobi-CG, which converges but slowly on a graded magnetostatic mesh, so
+    the iteration count is reported rather than hidden.
+    """
+    import scipy.sparse as sp
+    from scipy.sparse.linalg import LinearOperator, cg
+
+    Ac = A.tocsr()
+    name = "scipy.cg(jacobi)"
+    Mop = None
+    try:
+        import pyamg
+        ml = pyamg.smoothed_aggregation_solver(Ac)
+        Mop = ml.aspreconditioner()
+        name = "scipy.cg(pyamg-SA)"
+    except Exception:
+        d = Ac.diagonal()
+        d[np.abs(d) < 1e-300] = 1.0
+        Mop = LinearOperator(Ac.shape, matvec=lambda v: v / d)
+    it = [0]
+
+    def _cb(_x):
+        it[0] += 1
+    try:
+        x, info = cg(Ac, b, rtol=tol, atol=0.0, maxiter=maxiter, M=Mop, callback=_cb)
+    except TypeError:                                # scipy < 1.12
+        x, info = cg(Ac, b, tol=tol, atol=0.0, maxiter=maxiter, M=Mop, callback=_cb)
+    if info != 0:
+        raise RuntimeError(f"CG did not converge (info={info}, {it[0]} iters)")
+    return f"{name}[{it[0]} it]", x
 
 
 # --------------------------------------------------------------------------
@@ -312,7 +407,13 @@ def solve_static3d(mesh, regions: Sequence[Region], order: int = 1,
 def solve_static3d_nonlinear(mesh, regions: Sequence[Region], order: int = 1,
                              tol: float = 1e-3, max_iter: int = 60,
                              damping: float = 0.5,
-                             verbose: bool = False) -> Solution:
+                             verbose: bool = False,
+                             basis: Optional[object] = None,
+                             periodic: Optional[object] = None,
+                             dirichlet_dofs: Optional[np.ndarray] = None,
+                             neumann_outer: bool = False,
+                             linear_solver: Optional[str] = None,
+                             mu_init: Optional[np.ndarray] = None) -> Solution:
     """Damped Picard on mu_r(|B|) for every region carrying a ``bh_curve``.
 
     The permeability update reuses the 2D solver's OWN B-H inversion
@@ -352,12 +453,24 @@ def solve_static3d_nonlinear(mesh, regions: Sequence[Region], order: int = 1,
     """
     from motor_ai_sim.simulation.field_ops import _mu_r_from_bh_vec
 
+    kw = dict(basis=basis, periodic=periodic, dirichlet_dofs=dirichlet_dofs,
+              neumann_outer=neumann_outer, linear_solver=linear_solver)
     nl = [r for r in regions if r.nonlinear]
     if not nl:
-        return solve_static3d(mesh, regions, order=order)
+        return solve_static3d(mesh, regions, order=order, **kw)
     nlidx = np.concatenate([np.asarray(r.elements, dtype=np.int64) for r in nl])
 
     mu_el, _ = _region_arrays(mesh, regions)
+    if mu_init is not None:
+        # Warm start: a converged permeability from a NEARBY model (the previous
+        # stack length in the L-sweep) is a far better first guess than mu_r of
+        # the curve's initial slope, and cuts the sweep from ~15 sweeps per point
+        # to ~4.  It cannot change the answer: the loop still converges on the
+        # constitutive residual, which does not know where it started.
+        mu_init = np.asarray(mu_init, dtype=float)
+        if mu_init.shape != mu_el.shape:
+            raise ValueError("mu_init must be one value per element")
+        mu_el = mu_init.copy()
     hist: List[float] = []
     mu_hist: List[float] = []
     dB_hist: List[float] = []
@@ -367,9 +480,12 @@ def solve_static3d_nonlinear(mesh, regions: Sequence[Region], order: int = 1,
     converged = False
     d_cur = float(damping)
     d_floor = 0.02
+    good = 0
     prev_rel = float("inf")
     for it in range(max_iter):
-        sol = solve_static3d(mesh, regions, order=order, mu_el=mu_el)
+        sol = solve_static3d(mesh, regions, order=order, mu_el=mu_el, **kw)
+        basis = sol.basis
+        kw["basis"] = basis
         B = sol.B_elementwise()
         Bmag = np.linalg.norm(B, axis=0)
         w = sol.basis.dx.sum(axis=1)[nlidx]
@@ -406,6 +522,21 @@ def solve_static3d_nonlinear(mesh, regions: Sequence[Region], order: int = 1,
 
         if rel > prev_rel:                 # overshot — back the step off
             d_cur = max(0.5 * d_cur, d_floor)
+            good = 0
+        else:
+            # ...and give it back once the loop has proved it is descending.
+            # Halving ONLY is a ratchet: the saturating rotor bridges of a spoke
+            # rotor (mu_r 4600 -> ~5 across a 0.4 mm bridge) make the residual
+            # bounce for a dozen sweeps, and the d that survives that transient
+            # is far too small for the smooth descent afterwards — measured on
+            # the 30 mm machine, d collapsed to 0.044 and the loop then needed
+            # ~60 more sweeps for a factor 5 in residual.  Recovering d after
+            # three clean sweeps cuts that to single digits and cannot change
+            # the fixed point, only how fast it is reached.
+            good += 1
+            if good >= 3:
+                d_cur = min(1.6 * d_cur, float(damping))
+                good = 0
         prev_rel = rel
         mu_el = np.exp((1.0 - d_cur) * np.log(mu_el)
                        + d_cur * np.log(mu_new))
@@ -413,9 +544,11 @@ def solve_static3d_nonlinear(mesh, regions: Sequence[Region], order: int = 1,
     # one final solve on the converged permeability so the returned field and
     # the returned mu are the same state (a Picard loop that reports the field
     # from the PREVIOUS mu is the classic way to publish a non-solution)
-    sol = solve_static3d(mesh, regions, order=order, mu_el=mu_el)
+    sol = solve_static3d(mesh, regions, order=order, mu_el=mu_el, **kw)
     sol.picard = dict(iterations=len(hist), history=hist, mu_history=mu_hist,
                       dB_history=dB_hist, converged=converged, tol=tol,
                       damping=damping, damping_final=d_cur,
+                      warm_started=bool(mu_init is not None),
                       wall_time=time.perf_counter() - t_start)
+    sol.mu_converged = mu_el
     return sol

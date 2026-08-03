@@ -490,6 +490,21 @@ def run_stage_a(geo_override: Optional[dict] = None,
                   f"{two_d['ratio_3d_mid_over_2d']:.4f}", flush=True)
     ratio = two_d["ratio_3d_mid_over_2d"] if two_d else 1.0
     k_vs2d = k_self * ratio
+    if two_d is not None:
+        # The consistency check is only passed if the two models agree at the
+        # mid-plane.  When they do not, k_flux (which multiplies a 2D result by
+        # a number derived from BOTH models) inherits the disagreement, and
+        # publishing it would dress a modelling difference up as an end effect.
+        # k_flux_self — a ratio taken entirely inside the 3D model — does not.
+        off = abs(ratio - 1.0)
+        two_d["agreement_tolerance"] = 0.02
+        two_d["verdict"] = "PASS" if off <= 0.02 else "FAIL"
+        two_d["k_flux_usable"] = bool(off <= 0.02)
+        if off > 0.02:
+            two_d["warning"] = (
+                f"3D mid-plane and 2D differ by {100*off:.2f} % on the same "
+                "cross-section. Use k_flux_self and the spill profile; do NOT "
+                "use k_flux until the two models are reconciled.")
     for row in curve:
         row["k_flux"] = row["k_flux_self"] * ratio
 

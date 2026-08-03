@@ -196,51 +196,76 @@ def _sanitize_ring(coords, eps: float, label: str = ""):
       neighbours — tolerance eps/10000, i.e. ~4e-6 mm, so real geometry is never
       simplified away,
     * logs every drop with coordinates.
+
+    The merge is deliberately ORDER-INDEPENDENT.  Adjacent domains carry their
+    own copy of a shared boundary (out_band's hole IS the stator ring, in_band's
+    hole IS the rotor), traversed from a different vertex and in the opposite
+    direction.  A "keep the first, drop the follower" sweep resolves a 3-point
+    cluster differently depending on where the traversal starts, which would
+    leave the two copies of the same edge a few microns apart — and OCC's
+    fragment turns a mismatched shared boundary into exactly the sliver faces
+    this fix exists to remove.  So each maximal run of within-eps consecutive
+    points (a rotation- and direction-invariant set) collapses to its
+    lexicographically smallest member, which both copies agree on.
     """
     P = [(float(c[0]), float(c[1])) for c in coords]
     if len(P) > 1 and hypot(P[0][0] - P[-1][0], P[0][1] - P[-1][1]) <= eps:
         P = P[:-1]                                     # shapely's closing repeat
 
-    merged = []
+    n = len(P)
     dropped_dups = []
-    for pt in P:
-        if merged and hypot(pt[0] - merged[-1][0], pt[1] - merged[-1][1]) <= eps:
-            dropped_dups.append(pt)
-            continue
-        merged.append(pt)
-    while len(merged) >= 2 and hypot(merged[0][0] - merged[-1][0],
-                                     merged[0][1] - merged[-1][1]) <= eps:
-        dropped_dups.append(merged.pop())
+    if n >= 2:
+        close = [hypot(P[i][0] - P[(i + 1) % n][0],
+                       P[i][1] - P[(i + 1) % n][1]) <= eps for i in range(n)]
+        if all(close):
+            dropped_dups = list(P[1:])
+            merged = [min(P)]
+        else:
+            merged = []
+            for s in range(n):
+                if close[(s - 1) % n]:
+                    continue                       # not the start of a run
+                run = [P[s]]
+                k = s
+                while close[k]:
+                    k = (k + 1) % n
+                    if k == s:
+                        break
+                    run.append(P[k])
+                rep = min(run)                     # order-independent representative
+                merged.append(rep)
+                dropped_dups.extend(q for q in run if q != rep)
+    else:
+        merged = list(P)
     if dropped_dups:
         log.warning("geometry sanitize [%s]: merged %d coincident point(s) "
                     "(gap <= %.3g mm weld tol), first at (%.4f, %.4f)",
                     label, len(dropped_dups), eps,
                     dropped_dups[0][0], dropped_dups[0][1])
 
-    # exactly-collinear interior points (never a simplification: eps_col is float
-    # noise, ~4e-6 mm on a 150 mm machine)
+    # Exactly-collinear interior points (never a simplification: eps_col is float
+    # noise, ~4e-6 mm on a 150 mm machine).  Like the weld above this is a PURE
+    # LOCAL predicate on the ORIGINAL neighbours — never on a running "last kept"
+    # cursor — so it gives the same answer whichever vertex a copy of this
+    # boundary happens to start at and whichever way it is wound.  Collinearity
+    # of (a, b, c) is symmetric, so reversal is covered too.
     eps_col = eps * 1e-4
     if len(merged) > 3:
-        keep = []
         n = len(merged)
-        dropped_col = 0
+        drop = [False] * n
         for i in range(n):
-            a = keep[-1] if keep else merged[(i - 1) % n]
-            b = merged[i]
-            c = merged[(i + 1) % n]
+            a, b, c = merged[(i - 1) % n], merged[i], merged[(i + 1) % n]
             ux, uy = c[0] - a[0], c[1] - a[1]
             ul = hypot(ux, uy)
-            if ul > eps:
-                t = ((b[0] - a[0]) * ux + (b[1] - a[1]) * uy) / (ul * ul)
-                perp = abs((b[0] - a[0]) * uy - (b[1] - a[1]) * ux) / ul
-                if perp <= eps_col and 0.0 <= t <= 1.0 and len(keep) + (n - i - 1) >= 3:
-                    dropped_col += 1
-                    continue
-            keep.append(b)
-        if dropped_col:
+            if ul <= eps:
+                continue
+            t = ((b[0] - a[0]) * ux + (b[1] - a[1]) * uy) / (ul * ul)
+            perp = abs((b[0] - a[0]) * uy - (b[1] - a[1]) * ux) / ul
+            drop[i] = perp <= eps_col and 0.0 <= t <= 1.0
+        if any(drop) and n - sum(drop) >= 3:
             log.warning("geometry sanitize [%s]: dropped %d exactly-collinear "
-                        "point(s)", label, dropped_col)
-        merged = keep
+                        "point(s)", label, sum(drop))
+            merged = [q for q, d in zip(merged, drop) if not d]
 
     if len(merged) < 3:
         log.warning("geometry sanitize [%s]: DROPPED degenerate ring — only %d "
@@ -278,7 +303,7 @@ def _sanitize_geom(geom, scale_mm: float, label: str = ""):
     def _one(g, tag):
         ext = _sanitize_ring(list(g.exterior.coords), eps, tag)
         if ext is None:
-            return None
+            return []
         holes = []
         for j, h in enumerate(g.interiors):
             hr = _sanitize_ring(list(h.coords), eps, f"{tag}.hole{j}")
@@ -287,7 +312,15 @@ def _sanitize_geom(geom, scale_mm: float, label: str = ""):
         q = _SP(ext, holes)
         if not q.is_valid:
             q = q.buffer(0)
-        return None if (q.is_empty or q.area < _DEGEN_AREA_MM2) else q
+        if q.is_empty or q.area < _DEGEN_AREA_MM2:
+            return []
+        # buffer(0) on a self-touching ring can hand back a MultiPolygon; those
+        # must be FLATTENED, never nested — MultiPolygon([MultiPolygon]) raises
+        # "Sequences of multi-polygons are not valid arguments".
+        if hasattr(q, "geoms"):
+            return [g for g in q.geoms
+                    if hasattr(g, "exterior") and g.area >= _DEGEN_AREA_MM2]
+        return [q]
 
     subs = list(geom.geoms) if hasattr(geom, "geoms") else [geom]
     out = []
@@ -297,9 +330,7 @@ def _sanitize_geom(geom, scale_mm: float, label: str = ""):
                 log.warning("geometry sanitize [%s]: DROPPED non-areal fragment %s",
                             label, g.geom_type)
             continue
-        q = _one(g, f"{label}[{i}]" if len(subs) > 1 else label)
-        if q is not None:
-            out.append(q)
+        out.extend(_one(g, f"{label}[{i}]" if len(subs) > 1 else label))
     if not out:
         if getattr(geom, "area", 0.0) > _DEGEN_AREA_MM2:
             log.error("geometry sanitize [%s]: refusing to drop a body with area "
@@ -467,9 +498,28 @@ def _fillet_ring_corners(poly, r, select, ang_min_deg=8.0, ang_max_deg=168.0,
                 [_ring(list(h.coords)) for h in p.interiors])
         return q if q.is_valid else q.buffer(0)
 
+    def _assemble(parts):
+        """Flatten to Polygon / MultiPolygon.  `buffer(0)` on a self-touching
+        filleted ring can itself return a MultiPolygon, and feeding those to
+        MultiPolygon() raises 'Sequences of multi-polygons are not valid
+        arguments' — which the callers only see as "keeping sharp rotor" while
+        an optimiser subprocess reports it as a geometry verdict."""
+        flat = []
+        for q in parts:
+            if q is None or getattr(q, "is_empty", True):
+                continue
+            if hasattr(q, "geoms"):
+                flat.extend(g for g in q.geoms
+                            if hasattr(g, "exterior") and g.area > 0.0)
+            elif hasattr(q, "exterior") and q.area > 0.0:
+                flat.append(q)
+        if not flat:
+            return poly
+        return flat[0] if len(flat) == 1 else _SMP(flat)
+
     if poly.geom_type == "MultiPolygon":
-        return _SMP([_one(g) for g in poly.geoms])
-    return _one(poly)
+        return _assemble([_one(g) for g in poly.geoms])
+    return _assemble([_one(poly)])
 
 
 def _round_corners_vertex(poly, r, ang_min_deg=8.0, ang_max_deg=168.0,

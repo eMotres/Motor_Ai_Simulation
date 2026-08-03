@@ -58,6 +58,7 @@ from motor_ai_sim.cadquery_geometry import (
     CadQueryMotor,
     _arc_n_segments,
     _arc_points,
+    _sanitize_ring,
 )
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -203,6 +204,64 @@ def test_arc_helper_survives_a_degenerate_radius():
     assert _arc_n_segments(-0.7, 2 * np.pi, 40.0) >= 8
     assert _arc_n_segments(0.0, 2 * np.pi, 40.0) >= 8
     assert len(_arc_points(0.0, 0.0, -0.7, 0.0, 2 * np.pi, 40.0)) >= 9
+
+
+# ───────────────────── the weld must not depend on traversal ──────────────────
+
+def test_weld_is_order_and_direction_independent():
+    """The subtle one, and the reason the weld is run-based rather than a
+    "keep the first, drop the follower" sweep.
+
+    Adjacent domains carry their OWN copy of a shared boundary — out_band's hole
+    is the stator ring, in_band's hole is the rotor — and shapely hands them back
+    starting at a different vertex and wound the other way.  A sweep resolves a
+    3-point cluster differently depending on where it starts, so the two copies
+    of the same edge would end up microns apart and OCC's fragment would turn
+    the mismatch into precisely the sliver faces this whole fix removes.
+    """
+    eps = 0.02
+    # a ring with a 3-point cluster (a-b-c all within eps of the next) plus a
+    # lone duplicate pair, so both the chain and the simple case are covered
+    base = [(0.0, 0.0), (5.0, 0.0), (5.0, 5.0),
+            (2.0, 5.0), (2.0 + 0.9 * eps, 5.0), (2.0 + 1.8 * eps, 5.0),
+            (0.0, 5.0), (0.0, 2.0), (0.0 + 0.5 * eps, 2.0)]
+    def closed(ring):                     # shapely always repeats the first point
+        return list(ring) + [ring[0]]
+
+    ref = _sanitize_ring(closed(base), eps, "ref")
+    assert ref is not None
+    ref_set = {(round(x, 12), round(y, 12)) for x, y in ref}
+
+    for shift in range(len(base)):
+        rot = base[shift:] + base[:shift]
+        for rev in (False, True):
+            ring = list(reversed(rot)) if rev else rot
+            got = _sanitize_ring(closed(ring), eps, "perm")
+            assert got is not None
+            assert {(round(x, 12), round(y, 12)) for x, y in got} == ref_set, (
+                f"weld result depends on traversal (shift={shift}, "
+                f"reversed={rev}): {got} != {ref}")
+
+
+@pytest.mark.parametrize("name,geo", _cases(), ids=[c[0] for c in _cases()])
+def test_shared_boundaries_stay_point_identical(name, geo):
+    """Every stator boundary point must still be a point of out_band.
+
+    out_band is the annulus MINUS the stator, so the two share that boundary
+    exactly — they did before this fix (0 of 1497 stator points missing on the
+    150 mm machine) and they must after, or gmsh's OCC fragment sees two
+    almost-coincident curves instead of one.
+    """
+    polys, _diameter = _build(geo)
+    stator = {(round(x, 9), round(y, 9))
+              for _l, P in _rings(polys["stator"], "s") for x, y in P}
+    out_band = {(round(x, 9), round(y, 9))
+                for _l, P in _rings(polys["out_band"], "o") for x, y in P}
+    missing = stator - out_band
+    assert not missing, (
+        f"{name}: {len(missing)} of {len(stator)} stator boundary points are not "
+        f"in out_band — the shared boundary drifted; first "
+        f"{sorted(missing)[:3]}")
 
 
 # ───────────────────────────── the ring survey ────────────────────────────────

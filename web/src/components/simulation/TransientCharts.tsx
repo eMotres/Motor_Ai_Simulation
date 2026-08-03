@@ -44,13 +44,18 @@ interface TransientPayload {
   slip_nodes_per_period?: number;
   // What the run actually COST.  n_steps above is the REPORTED window; the
   // solver also solves a full extra settling period when demagnetisation is on
-  // and two warm-up frames at θ<0 when the coupled eddy solve is on, and those
-  // frames are stripped before the result is returned — so `n_steps` understated
-  // the work by up to 2× and nothing on screen said so.  n_frames_solved is the
-  // honest count and solve_wall_s the honest wall time; together they give the
-  // s/frame the Run panel uses for its pre-run estimate.
+  // and however many warm-up frames at θ<0 the coupled eddy solve needed to
+  // settle its σ·∂A/∂t history, and those frames are stripped before the result
+  // is returned — so `n_steps` understated the work by up to 2× and nothing on
+  // screen said so.  n_frames_solved is the honest count and solve_wall_s the
+  // honest wall time; together they give the s/frame the Run panel uses for its
+  // pre-run estimate.  eddy_warmup_frames is how many of them were warm-up, so
+  // the estimate can quote a count this machine actually needed instead of a
+  // constant (the reported series NEVER contain those frames — every chart
+  // below indexes data.time_s, which starts at the first REPORTED frame).
   n_frames_solved?: number;
   solve_wall_s?: number;
+  eddy_warmup_frames?: number;
   n_periods: number;
   dt_s: number;
   T_period_s: number;
@@ -449,6 +454,10 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
         if (!restoreOnly && (d.n_frames_solved ?? 0) > 0 && (d.solve_wall_s ?? 0) > 0) {
           const cost = { frames: d.n_frames_solved as number,
                          wall_s: d.solve_wall_s as number,
+                         // Warm-up is ADAPTIVE (settle-until-quiet), so the
+                         // pre-run estimate cannot compute it — it quotes the
+                         // count this machine last needed.
+                         warm: d.eddy_warmup_frames ?? 0,
                          at: Date.now() };
           try { localStorage.setItem('sim.lastSolveCost', JSON.stringify(cost)); }
           catch { /* quota — the estimate just falls back to "no history yet" */ }

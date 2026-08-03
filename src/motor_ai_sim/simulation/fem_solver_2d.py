@@ -68,6 +68,7 @@ from motor_ai_sim.simulation.losses import (
 )
 from motor_ai_sim.simulation.sb_postproc import (
     drop_settling_frames as _drop_settling_frames,
+    eddy_settle_resid as _eddy_settle_resid,
     hybrid_torque as _hybrid_torque,
     torque_harmonics as _torque_harmonics,
 )
@@ -3030,14 +3031,55 @@ def fem_transient_sliding_band(
     _A2_prev = None; _nu_conv2 = None
     # ── coupled-eddy state ───────────────────────────────────────────────
     # A_prev starts at ZERO, which is not a field the machine was ever in, so
-    # the first step carries a fake ∂A/∂t.  It decays fast — the diffusion
-    # time of a 2 mm copper wire at 120 °C is ~5 µs against a ~100 µs step —
-    # but "fast" is not "gone", so the eddy run is given its own SETTLING
-    # frames at negative rotor angles (real solves at θ<0, discarded) instead
-    # of averaging the transient away like the P1 path does.  The reported
-    # window is then a clean period on every frame.  Voltage drive already
+    # the first step carries a fake ∂A/∂t.  The eddy run therefore gets its own
+    # SETTLING frames at negative rotor angles (real solves at θ<0, discarded)
+    # instead of averaging the transient away like the P1 path does, so the
+    # reported window is a clean period on every frame.  Voltage drive already
     # marches ten settling periods, so it needs none.
-    _eddy_warm = 2 if (eddy and not _vdrive) else 0
+    #
+    # HOW MANY is NOT a constant.  It used to be 2, tuned on a 40 mm machine
+    # whose only slow conductor is a 5 mm shaft: measured cold-start solid
+    # σE² there is 4488 → 14.1 → 2.49 W, i.e. gone by the second frame.  The
+    # 150 mm 24s28p machine has a 78 mm-diameter solid rotor/shaft assembly,
+    # whose diffusion time τ ~ σ·μ·r² is ~1500× longer: 2776 → 1628 → 1089 →
+    # … → 70 W, still decaying 22 frames in.  With a FIXED 2 the un-settled
+    # tail sat INSIDE the reported window and the cycle mean of the solid
+    # loss read 262 W against a settled 68 W — a reporting-window bug, not a
+    # physics one, but it poisons P_shaft/P_mag and through them η.
+    #
+    # So: SETTLE UNTIL QUIET.  The PROBE is the same 2 frames as before, and
+    # the THIRD sample it needs is the first reported frame itself — three
+    # samples is the minimum that can separate the settled LEVEL from the
+    # decay, and taking the third one for free is what keeps every machine
+    # that was already settled bit-identical to before this became adaptive.
+    # If _eddy_settle_resid says the transient is above _EDDY_SETTLE_TOL, that
+    # first frame is thrown away, a WHOLE electrical period of warm-up (the
+    # hard cap) is spliced in front of it, and the residual is measured again
+    # at the new handoff.  The abort happens BEFORE anything is recorded for
+    # the frame, so there is nothing to un-append.
+    #
+    # Why the extension is a whole period and not "as many as it takes": a
+    # march must END at θ = −dθ to hand frame 0 a field exactly one dt old, so
+    # its LENGTH has to be known before it starts.  It cannot be discovered on
+    # the way, and it cannot be extrapolated either — the probe's early decay
+    # ratio on the 150 mm is 0.59 while its tail runs at 0.9, so a fit off the
+    # first frames under-warms by 3×.  n_warmup and the measured residual
+    # travel out in the result dict either way.
+    _EDDY_SETTLE_TOL = 0.02
+    _eddy_probe = 2 if (eddy and not _vdrive) else 0
+    _eddy_cap = int(n_steps_per_period) if (eddy and not _vdrive) else 0
+    # Benchmarks / tests: pin the warm-up to a fixed count and take whatever
+    # it gives (SB_EDDY_WARM=2 is the pre-adaptive behaviour, =0 the raw cold
+    # start).  The residual is still measured and still reported.
+    _ew_env = _os_sb.environ.get("SB_EDDY_WARM")
+    if _ew_env not in (None, "") and eddy and not _vdrive:
+        _eddy_probe = max(0, int(_ew_env)); _eddy_cap = 0
+    _warm_solid: List[float] = []   # solid σE² per frame of the CURRENT march
+    _n_warm = 0                     # warm-up frames actually solved (all marches)
+    _warm_resid = None              # remaining transient at the handoff [rel]
+    _warm_tau_s = None              # fitted settling time constant [s], if clean
+    _warm_extended = False          # the probe was not enough → cap march ran
+    _warm_done = not (eddy and not _vdrive)     # handoff accepted
     # previous-frame A per dof (material frame).  Zero is not a field the
     # machine was ever in, so under voltage drive — where the phasor
     # initialiser already produced the operating-point field at θ_eff = 0 —
@@ -3054,7 +3096,14 @@ def fem_transient_sliding_band(
     # else's: averaging over a window that still contains the start-up ∂A/∂t
     # would put the transient straight into the picture.
     _ed_dens_hist = []
-    for k in range(-_eddy_warm, n_total):
+    # The frame ORDER is a list, not a range, because the warm-up can grow: a
+    # march that did not settle splices a longer one in front of the reported
+    # window (see the handoff test at the end of the loop).  Every march ends
+    # at k = −1 so the field handed to frame 0 is always exactly one dt old.
+    _fseq = list(range(-_eddy_probe, 0)) + list(range(n_total))
+    _fi = 0
+    while _fi < len(_fseq):
+        k = _fseq[_fi]; _fi += 1
         if progress_cb is not None:
             try: progress_cb(max(k, 0), n_total)
             except Exception: pass
@@ -3097,7 +3146,7 @@ def fem_transient_sliding_band(
         # changes the PATH, never the fixed point.  The cap is raised so frame
         # 0 reaches _PIC_TOL2 from cold and warm-started frames have headroom.
         # Same strategy as the P1 main loop.
-        if k == -_eddy_warm:
+        if _fi == 1:
             nu_all2 = nu_base2.copy()          # frozen path: base at frame 0
         _Ptf = np.asarray(Pro.T @ f).ravel()
         # free (non-Dirichlet) reduced DOFs — CONSTANT within a frame (Pro and
@@ -3456,6 +3505,65 @@ def fem_transient_sliding_band(
                 _pg[_c["key"]] += _u * (_u * _c["S"]
                                         - 2.0 * float(_c["g"] @ _dAe))
             _wsc = float(NS) * float(p.stack_length)   # sector·2-D → machine
+            # ── has the σ·∂A/∂t start-up transient gone quiet? ─────────────
+            # Gauge = the SOLID conductors (magnet + shaft): the slow ones, and
+            # the ones whose cycle mean the un-settled tail corrupts.  With
+            # rotor_eddy off they are not in the system at all and the copper —
+            # which settles inside one step — is all there is to watch.
+            # This sits BEFORE every per-frame append below, so the abort path
+            # can throw this frame away without un-recording anything.
+            if not _warm_done:
+                if k < 0:
+                    _n_warm += 1          # every frame at θ<0 is warm-up
+                _warm_solid.append(
+                    (_pg.get("mag", 0.0) + _pg.get("shaft", 0.0)
+                     if ("mag" in _Msig_grp or "shaft" in _Msig_grp)
+                     else _pg.get("cu", 0.0)) * _wsc)
+                # Decision point: the probe's third sample IS frame 0; an
+                # extension march decides at its own last frame (θ = −dθ),
+                # where it already has a whole period of samples.
+                if (k == -1) if _warm_extended else (k >= 0):
+                    _warm_resid, _warm_tau_s = _eddy_settle_resid(
+                        _warm_solid, int(n_steps_per_period), dt)
+                    _quiet = _warm_resid <= _EDDY_SETTLE_TOL
+                    log.info("P2 eddy warm-up: %d frame(s) solved, remaining "
+                             "start-up transient %.3g %% of the settled solid "
+                             "loss (tol %.1f %%)%s", _n_warm,
+                             100.0 * _warm_resid, 100.0 * _EDDY_SETTLE_TOL,
+                             "" if _warm_tau_s is None
+                             # LOCAL slope of the three samples this decision
+                             # saw — not the settling time (the decay is
+                             # multi-mode: 35 us at the head, 680 us at the
+                             # tail, ~0.4 ms end to end on the 150 mm).
+                             else ", local tail fit tau=%.3g s" % _warm_tau_s)
+                    if (not _quiet) and (not _warm_extended) and _eddy_cap >= 3:
+                        # Not settled → THIS frame is warm-up too, and a whole
+                        # electrical period of warm-up goes in front of the
+                        # window before frame 0 is solved again.  The eddy
+                        # history is NOT reset: everything solved so far keeps
+                        # its settling; the march only repositions the rotor.
+                        _warm_extended = True
+                        _n_warm += 1
+                        _fseq[_fi:_fi] = list(range(-_eddy_cap, 0)) + [0]
+                        _warm_solid = []
+                        _Aed_prev = A2.copy()
+                        log.info("P2 eddy warm-up: not settled — extending by "
+                                 "one electrical period (%d frames)", _eddy_cap)
+                        continue
+                    _warm_done = True
+                    if not _quiet:
+                        # Loud: the reported window still contains start-up
+                        # decay, so the solid-loss cycle means below — and the
+                        # efficiency built on them — are over-read by about
+                        # this much.  Nothing left to spend: the cap is a whole
+                        # electrical period.
+                        log.warning(
+                            "P2 eddy warm-up: STILL NOT SETTLED after %d "
+                            "frame(s) — %.3g %% of the solid loss at the "
+                            "handoff is decaying start-up transient (tol "
+                            "%.1f %%).  P_mag / P_shaft and the efficiency are "
+                            "over-read by roughly that much.", _n_warm,
+                            100.0 * _warm_resid, 100.0 * _EDDY_SETTLE_TOL)
             # ── the SAME integrand, kept per element (Loss map) ───────────
             # E = −∂A/∂t + U_b at this element's quadrature points; σE²
             # integrated over the element and divided by its area is the
@@ -3483,7 +3591,8 @@ def fem_transient_sliding_band(
                     [(Ist[c["phase"]] * c["Iunit"]) ** 2 / max(c["S"], 1e-30)
                      for c in _ed_con if c["key"] == "cu"])) * _wsc)
         if k < 0:
-            continue          # eddy settling frame: solved, not reported
+            continue          # eddy warm-up frame: solved, not reported (it
+                              # was counted where the settling gauge read it)
         _pic_iters.append(_nit); _pic_res_max = max(_pic_res_max, _res)
         # HONEST per-frame convergence bookkeeping.  The two paths measure
         # DIFFERENT residuals — Newton the field residual |R(A)|/|f| against
@@ -3642,14 +3751,15 @@ def fem_transient_sliding_band(
     # the log line and the result dict below read it — so both understated the
     # work by every settling frame that was actually solved.  A demag run solves
     # a WHOLE EXTRA PERIOD (_dmskip), a voltage run ten of them (_vskip), and an
-    # eddy run two warm-up frames at negative rotor angle (_eddy_warm): "36
-    # frames in 419.7 s" was really 74 frames solved, and nothing on the way to
-    # the user's screen could say why a 36-step run takes seven minutes.  The
-    # Simulation tab quotes n_frames_solved / solve_wall_s back as seconds-per-
-    # frame in its pre-run cost line, so the estimate is a rate THIS machine
-    # produced rather than a guess.  Captured HERE, where n_total is still the
-    # loop bound that ran.
-    _n_solved = int(n_total) + int(_eddy_warm)
+    # eddy run as many warm-up frames at negative rotor angle as it took to
+    # settle (_n_warm — the probe, plus a whole electrical period if the probe
+    # was not enough): "36 frames in 419.7 s" was really 74 frames solved, and
+    # nothing on the way to the user's screen could say why a 36-step run takes
+    # seven minutes.  The Simulation tab quotes n_frames_solved / solve_wall_s
+    # back as seconds-per-frame in its pre-run cost line, so the estimate is a
+    # rate THIS machine produced rather than a guess.  Captured HERE, where
+    # n_total is still the loop bound that ran.
+    _n_solved = int(n_total) + int(_n_warm)
 
     # ── Voltage drive: drop the SETTLING periods ─────────────────────────
     # The currents are STATE, so the run carries an electrical start-up
@@ -4045,6 +4155,29 @@ def fem_transient_sliding_band(
         # / shaft above come from these when it ran; the modelled numbers are
         # kept beside them as the cross-check (see the swap block).
         "eddy_coupled": bool(eddy),
+        # ── coupled-eddy warm-up honesty ─────────────────────────────────
+        # How many discarded frames at θ<0 it took to settle the σ·∂A/∂t
+        # history, and how much start-up transient was STILL left when the
+        # reported window started (as a fraction of the settled solid loss).
+        # A run whose residual is above eddy_warmup_tol has its P_mag/P_shaft
+        # cycle means — and its efficiency — over-read by roughly that much,
+        # and says so here instead of only in a log line.
+        "eddy_warmup_frames": int(_n_warm),
+        # None (not inf/NaN — this dict is serialised to JSON) when the march
+        # was too short to say anything, which only happens if SB_EDDY_WARM
+        # pinned it below the probe length.
+        "eddy_warmup_resid": (None if (_warm_resid is None
+                                       or not math.isfinite(_warm_resid))
+                              else float("%.3g" % _warm_resid)),
+        "eddy_warmup_tol": float(_EDDY_SETTLE_TOL),
+        # NO tau here on purpose.  The decay is not one exponential: on the
+        # 150 mm the fit off the first frames reads 35 us and the fit off the
+        # settled tail reads 680 us, while the transient actually needed ~0.4
+        # ms to die — so a single "tau_est" would under-read the settling time
+        # by 10x in exactly the direction that makes a run look trustworthy
+        # when it is not.  The frame count and the residual are measured, not
+        # fitted; those are what ship.  (The local fit is still logged, where
+        # it is labelled for what it is.)
         "P_cu_total_solve_W": round(float(P_cu_solve_avg2), 3),
         "P_cu_dc_2d_solve_W": round(float(P_cu_dc2d_avg2), 3),
         "P_cu_ac_solve_W": round(float(P_cu_ac_avg2), 3) if eddy else 0.0,

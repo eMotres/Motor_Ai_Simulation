@@ -41,6 +41,53 @@ def drop_settling_frames(series: Iterable[list], n_skip: int,
         time_series[:] = [t - t0 for t in time_series]
 
 
+def eddy_settle_resid(p_solid: Sequence[float], n_steps_per_period: int,
+                      dt: float) -> Tuple[float, Optional[float]]:
+    """How much START-UP TRANSIENT is LEFT at the end of an eddy warm-up march.
+
+    ``p_solid`` is the solid-conductor sigma*E^2 power [W], one entry per warm-up
+    frame, chronological; the last entry is the handoff frame (theta = -dtheta).
+    Returns ``(residual, tau_s)`` — the residual as a FRACTION of the settled
+    level, and the fitted decay time constant when the decay is clean enough to
+    read one off (else ``None``).
+
+    Two traps this exists to avoid:
+
+    * "the last frame barely moved" is NOT settled.  A geometric decay with
+      ratio q leaves q/(1-q) times the last step still to come: at q = 0.9 a
+      2 % per-frame move means a 18 % transient is still running.  So the last
+      three samples are Aitken-extrapolated to the geometric tail and what is
+      REPORTED is that tail, not the step.
+    * the solid loss RIPPLES with rotor position — 20 % frame to frame on a 30 mm
+      machine that settled in one step, because a 3-phase machine's loss carries
+      the 6th electrical harmonic.  Reading a per-frame difference as decay would
+      call every machine un-settled forever.  So the samples are averaged in
+      blocks of one ripple period (n_steps_per_period / 6) before the tail is
+      fitted, and a "decay" whose two steps do not both point down, or whose
+      ratio is not in (0, 1), is read as ripple (no decay detected) rather than
+      extrapolated into a number.
+    """
+    p = [float(x) for x in p_solid]
+    n = len(p)
+    if n < 3:
+        return float("inf"), None            # nothing to say yet
+    w = max(1, min(int(round(n_steps_per_period / 6.0)), n // 3))
+    m = [float(np.mean(p[n - (j + 1) * w: n - j * w])) for j in (2, 1, 0)]
+    ref = max(abs(m[2]), 1e-30)
+    d1 = m[1] - m[0]
+    d2 = m[2] - m[1]
+    if d1 < 0.0 and d2 < 0.0:
+        q = d2 / d1
+        if 0.0 < q < 1.0:
+            tau = (-(w * float(dt)) / math.log(q)) if (dt and q > 0.0) else None
+            # q is capped for the EXTRAPOLATION only: three block means cannot
+            # tell q = 0.99 from ripple, and 1/(1-q) explodes there.  Capped, a
+            # very slow decay still reports ~9x the last step, i.e. "not settled".
+            qq = min(q, 0.9)
+            return abs(d2) * qq / (1.0 - qq) / ref, tau
+    return abs(d2) / ref, None
+
+
 def hybrid_torque(psi_a: Sequence[float], psi_b: Sequence[float],
                   psi_c: Sequence[float], i_a: Sequence[float],
                   i_b: Sequence[float], i_c: Sequence[float],

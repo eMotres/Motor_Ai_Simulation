@@ -3476,6 +3476,12 @@ def _build_transient_summary(
         "P_core_W":     round(_Pfe, 1),            # laminated iron
         "P_stranded_W": round(_Pcu, 1),            # copper
         "P_solid_W":    round(_Pmag + _Pshaft, 1), # magnet + shaft eddy
+        # How many discarded frames at θ<0 the coupled eddy solve needed before
+        # the σ·∂A/∂t start-up transient was quiet enough to start reporting.
+        # It belongs beside P_solid_W because that is the number an un-settled
+        # window corrupts first (measured 262 W against a settled 68 W on the
+        # 150 mm), so the card that shows it can say what it cost to be honest.
+        "eddy_warmup_frames": int(sbres.get("eddy_warmup_frames") or 0),
         "efficiency":   round(_eff, 4),
         # ── nonlinear-solve honesty ──────────────────────────────────────
         # Every frame of the reported window has to have met its solver's

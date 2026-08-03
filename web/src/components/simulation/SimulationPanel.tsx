@@ -870,7 +870,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               Newton system), so the copper loss is the solved 2-D value and
               the run's last frame carries the real eddy J⟳ — which the J⟳ /
               Loss field views then render without solving anything. */}
-          <Tooltip title="Solve the induced (eddy) currents together with the field: σ(−∂A/∂t + U) in copper, magnets and shaft becomes part of the same Newton system instead of a post-process. The run then reports the SOLVED copper loss (DC + the real AC/proximity part), and its last frame carries the true eddy current density — so the J⟳ and Loss field views render THIS run's field instantly instead of launching a second ~25 s transient. COST: extra warm-up frames at negative rotor angle — the σ·∂A/∂t history starts from a field the machine was never in, so the solver keeps solving discarded frames until that start-up transient is quiet (3 on a small shaft, up to a whole electrical period on a big solid one) — plus a bordered Newton per frame instead of the magnetostatic one — measured on the 40 mm 12s/14p at 0.6 mm mesh, 4 steps/period: 37 s off → 38 s on, so the frames it adds cost more than the physics does. Off = magnetostatic run; the J⟳ view then solves on demand as before and says so." placement="right">
+          <Tooltip title="Solve the induced (eddy) currents together with the field: σ(−∂A/∂t + U) in copper, magnets and shaft becomes part of the same Newton system instead of a post-process. The run then reports the SOLVED copper loss (DC + the real AC/proximity part), and its last frame carries the true eddy current density — so the J⟳ and Loss field views render THIS run's field instantly instead of launching a second ~25 s transient. COST: extra warm-up frames at negative rotor angle — the σ·∂A/∂t history starts from a field the machine was never in, so the solver keeps solving discarded frames until that start-up transient is quiet (2 on a small shaft, a whole electrical period on a big solid one — measured, and reported per run) — plus a bordered Newton per frame instead of the magnetostatic one — measured on the 40 mm 12s/14p at 0.6 mm mesh, 4 steps/period: 37 s off → 38 s on, so the frames it adds cost more than the physics does. Off = magnetostatic run; the J⟳ view then solves on demand as before and says so." placement="right">
             <FormControlLabel
               sx={{ mt: -0.5, mb: 0.75, ml: 0.25 }}
               control={
@@ -906,7 +906,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               The eddy warm-up is ADAPTIVE (the solver keeps solving discarded
               frames until the σ·∂A/∂t start-up transient is quiet, up to one
               electrical period), so it CANNOT be computed here: a big solid
-              shaft needs a whole period where a small one needs 3.  Quote the
+              shaft needs a whole period where a small one needs 2.  Quote the
               count the last run on this machine actually needed, and the probe
               length when there is no history — never a constant that the
               solver stopped honouring. */}
@@ -916,7 +916,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
             const vSettle   = vdrive ? 10 * Math.max(2, steps) : 0;
             const dmSettle  = demag ? steps : 0;              // _dmskip
             const eddyWarm  = (eddyCoupled && !vdrive)
-              ? Math.max(3, solveCost?.warm ?? 0) : 0;        // adaptive, measured
+              ? Math.max(2, solveCost?.warm ?? 0) : 0;   // adaptive: >= the probe
             // Voltage drive also runs the matched-fundamental CURRENT-drive
             // reference for ΔP_harm (harm_ref): a second transient, same steps
             // and same demag, no eddy, no settling prefix.

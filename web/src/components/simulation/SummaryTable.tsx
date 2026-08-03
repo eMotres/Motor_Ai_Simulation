@@ -40,6 +40,9 @@ export interface TransientSummary {
   P_core_W:            number;
   P_stranded_W:        number;
   P_solid_W:           number;
+  // Discarded frames at θ<0 the coupled eddy solve needed before its σ·∂A/∂t
+  // start-up transient was quiet — 0 when the solve did not run.
+  eddy_warmup_frames?: number;
   efficiency:          number;
   mass_total_kg:       number;
   mass_components:     Array<{ name: string; mass_kg: number; volume_cm3?: number; material?: string }>;
@@ -299,7 +302,14 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
         <Cell label="Stranded (copper)" value={fmtK(s.P_stranded_W)} unit="W"
           tooltip="I²R (DC) + AC eddy/proximity share in the coil windings, incl. end-winding resistance (k_end) and ρ_Cu(T)"/>
         <Cell label="Solid (magnets)" value={fmtK(s.P_solid_W)} unit="W"
-          tooltip="Magnet + shaft eddy from the coupled conducting-rotor field solve (with per-magnet ∫J=0 and lamination factor); the d²/12 slab estimate is used only when field losses are off"/>
+          tooltip={"Magnet + shaft eddy from the coupled conducting-rotor field solve "
+                 + "(with per-magnet ∫J=0 and lamination factor); the d²/12 slab estimate "
+                 + "is used only when field losses are off."
+                 + (s.eddy_warmup_frames
+                    ? `  Cycle mean over a SETTLED window: ${s.eddy_warmup_frames} warm-up `
+                      + `frame(s) at θ<0 were solved and discarded first, so no σ·∂A/∂t `
+                      + `start-up transient is averaged into it.`
+                    : '')}/>
         <Cell label="Loss density" value={fmt(s.loss_density_W_kg, 1)} unit="W/kg"
           tooltip="P_loss / mass — thermal stress indicator"/>
         <Cell label="Efficiency η" value={fmt(s.efficiency * 100, 2)} unit="%"

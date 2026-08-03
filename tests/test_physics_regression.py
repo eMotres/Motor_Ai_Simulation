@@ -394,6 +394,119 @@ def test_case_matches_baseline(case: str, baseline: Dict[str, Dict[str, float]])
         "UPDATE_PHYSICS_BASELINE=1 and justify every line above in the commit.")
 
 
+# ── coupled-eddy warm-up: settle until quiet ────────────────────────────────
+# The reported window has to start on a machine that is already running. The
+# sigma*dA/dt history starts from A_prev = 0 — a field the machine was never in
+# — so the first frames carry a decaying start-up transient, and it is the SOLID
+# conductors (magnet, shaft) that carry it longest: their diffusion time is
+# sigma*mu*r^2, which on a 78 mm rotor assembly is ~1500x a 5 mm one's. With the
+# warm-up pinned at 2 frames (tuned on the 40 mm), the 150 mm 24s28p machine
+# reported a solid loss of 262 W whose settled value is 68 W — the average of a
+# transient, not of a machine. The fix is to keep solving discarded frames until
+# the transient is quiet; these tests pin that it IS quiet, and that the run says
+# how it got there.
+
+def _eddy_run(**over: Any) -> Dict[str, Any]:
+    """One coupled-eddy transient on the 30 mm machine (raw solver dict)."""
+    kw = dict(CASES["p2_eddy"]); kw.update(over)
+    set_request_materials({"assignment": {"magnet": MAGNET}, "materials": {}})
+    try:
+        return fem_transient_sliding_band(geo_override=dict(GEO_30MM), rpm=RPM,
+                                          connection=CONNECTION, **kw)
+    finally:
+        set_request_materials(None)
+
+
+def _solid_series(d: Dict[str, Any]) -> np.ndarray:
+    """Per-frame magnet + shaft sigma*E^2 of the REPORTED window [W]."""
+    return (np.asarray(d.get("P_mag_eddy_W") or [], float)
+            + np.asarray(d.get("P_shaft_eddy_W") or [], float))
+
+
+def test_eddy_settle_resid_reports_the_tail_not_the_last_step():
+    """The settling gauge measures what is LEFT, and ripple is not decay.
+
+    The three sequences below are MEASURED cold-start solid-loss series (W) from
+    the three machines this fix was developed on, run with SB_EDDY_WARM=0 so
+    every frame is a warm-up frame. They are the whole reason the criterion is
+    not the naive "|dP|/P between the last two frames":
+
+    * the 30 mm drops 199 -> 1.5 W in ONE step, so the naive test reads 13000 %
+      and calls a settled machine un-settled forever;
+    * the settled 30 mm then RIPPLES 20 % frame to frame (a 3-phase machine's
+      loss carries the 6th electrical harmonic), so no per-frame tolerance below
+      that can ever be met;
+    * the 150 mm decays with ratio ~0.9 in the tail, where a per-frame move of
+      2 % means 18 % of transient is still to come.
+    """
+    from motor_ai_sim.simulation.sb_postproc import eddy_settle_resid
+
+    # 30 mm 12s14p (12 steps/period): gone after one frame.  (Two warm-up
+    # frames plus the first reported frame — the probe as the solver runs it.)
+    r, _ = eddy_settle_resid([199.104, 1.501, 1.248], 12, 4.76e-5)
+    assert r < 0.02, f"30 mm probe read as un-settled ({r:.4f})"
+    # 40 mm 12s14p (36 steps/period): gone after two.
+    r, _ = eddy_settle_resid([4487.788, 14.140, 2.494], 36, 1.83e-5)
+    assert r < 0.02, f"40 mm probe read as un-settled ({r:.4f})"
+    # 150 mm 24s28p (40 steps/period): 44 % of the solid loss is still transient.
+    r, tau = eddy_settle_resid([2775.5, 1627.9, 1089.0], 40, 2.68e-5)
+    assert r > 0.20, f"150 mm probe read as settled ({r:.4f})"
+    assert tau is not None and tau > 0.0, "no time constant off a clean decay"
+    # Pure rotor-position ripple, no decay: settled, whatever its amplitude.
+    ripple = [1.24, 1.49, 1.24, 1.49, 1.24, 1.49, 1.24, 1.49, 1.24]
+    r, _ = eddy_settle_resid(ripple, 12, 1e-5)
+    assert r < 0.02, f"steady ripple read as a decay ({r:.4f})"
+    # A SLOW decay whose per-frame move is small: not settled, because the tail
+    # is not (0.98 per frame -> 2 % steps, ~100 % of the level still to come).
+    slow = [100.0 * (0.98 ** i) for i in range(12)]
+    r, _ = eddy_settle_resid(slow, 12, 1e-5)
+    assert r > 0.10, f"a 0.98-per-frame decay read as settled ({r:.4f})"
+
+
+@pytest.mark.slow
+def test_eddy_warmup_leaves_no_start_up_transient_in_the_window(monkeypatch):
+    """No reported frame may sit above the settled band, and the run says so.
+
+    The assertion is "the first reported frame is inside the band the rest of the
+    window occupies", NOT "within x % of the median": the solid loss legitimately
+    ripples ~20 % frame to frame on this machine, so a tolerance tight enough to
+    catch a start-up transient would be tripped by physics. A contaminated first
+    frame is not near the band — it is 130x its top (measured below).
+    """
+    tol = 0.02
+
+    # The bug, reproduced: no warm-up at all -> frame 0 IS the cold start.
+    monkeypatch.setenv("SB_EDDY_WARM", "0")
+    cold = _solid_series(_eddy_run())
+    monkeypatch.delenv("SB_EDDY_WARM")
+    assert cold.size > 3
+    assert cold[0] > 10.0 * cold[1:].max(), (
+        "the cold-start leg no longer shows a start-up transient, so the test "
+        f"below cannot prove the warm-up removes one (first {cold[0]:.4g} W, "
+        f"rest max {cold[1:].max():.4g} W)")
+
+    d = _eddy_run()
+    sol = _solid_series(d)
+    assert sol.size > 3
+    assert sol[0] <= sol[1:].max() * (1.0 + 2.0 * tol), (
+        f"the reported window starts on a start-up transient: first frame "
+        f"{sol[0]:.4g} W against a settled band of {sol[1:].min():.4g}.."
+        f"{sol[1:].max():.4g} W")
+
+    # ── the run carries HOW it got there ────────────────────────────────
+    assert d["eddy_warmup_frames"] >= 2, d["eddy_warmup_frames"]
+    assert d["eddy_warmup_tol"] == pytest.approx(tol)
+    assert d["eddy_warmup_resid"] is not None
+    assert d["eddy_warmup_resid"] <= d["eddy_warmup_tol"], (
+        f"handed off with {d['eddy_warmup_resid']:.3g} of transient left "
+        f"against a tolerance of {d['eddy_warmup_tol']}")
+    # Solved frames = reported window + the warm-up it actually needed.
+    assert (d["n_frames_solved"]
+            == d["n_steps"] + d["eddy_warmup_frames"]), (
+        f"{d['n_frames_solved']} solved vs {d['n_steps']} reported + "
+        f"{d['eddy_warmup_frames']} warm-up")
+
+
 def regenerate_baseline() -> None:
     """Recompute every case and write the baseline file, printing the diff."""
     old = (json.loads(BASELINE.read_text(encoding="utf-8"))

@@ -268,8 +268,12 @@ def test_spill_profile_shape_and_k_flux(sector_solve):
     # OUTSIDE the iron the fundamental must fall away, whatever the model:
     # there is no source out there for it to come from.
     outside = pr["z_over_half"] > 1.0
-    assert np.all(np.diff(pr["B1_T"][outside]) < 0)
-    assert pr["profile"][outside][-1] < 0.5 * pr["profile"][0]
+    tail = pr["B1_T"][outside]
+    assert tail[0] < pr["B1_T"][0]
+    # ...to nothing.  Not asserted monotone: past a couple of stack lengths the
+    # fundamental is three orders below the mid-plane value and is discretisation
+    # noise, so a strict ordering there would test the mesh, not the physics.
+    assert tail[-1] < 0.02 * pr["B1_T"][0]
     # k_flux is NOT asserted below 1 here: this fixture solves LINEAR iron,
     # where the spoke rotor's bridges short most of the magnet flux and the
     # small remainder reaching the gap is a difference of large numbers with no

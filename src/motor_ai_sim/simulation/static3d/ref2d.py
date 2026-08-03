@@ -40,6 +40,7 @@ class Ref2D:
     r_gap_m: float
     pole_pairs: int
     outer_r_mm: float
+    n_coil_elements_as_air: int = 0
     harmonics: Dict[int, float] = field(default_factory=dict)
 
 
@@ -73,7 +74,7 @@ def gap_fundamental(theta: np.ndarray, Br: np.ndarray, p: int
 def solve_2d_reference(section: MotorSection,
                        n_theta: int = 720,
                        mesh_size_mm: Optional[float] = None,
-                       min_size_mm: float = 0.06,
+                       min_size_mm: float = 0.15,
                        gap_layers: float = 3.0,
                        outer_air_factor: Optional[float] = None,
                        nonlinear_iterations: int = 14,
@@ -105,6 +106,22 @@ def solve_2d_reference(section: MotorSection,
     layout = build_winding_layout(section.num_slots, section.num_poles // 2)
     mats = build_materials({"A": 0.0, "B": 0.0, "C": 0.0}, layout, polys,
                            0.0, 1e-5, int(round(geo["num_wires_per_slot"])))
+    # Collapse every COIL / insulation tag onto plain air before solving.
+    #
+    # Two reasons, and neither is a shortcut.  Physically, at I = 0 copper and
+    # insulation are mu_r = 1 with no source: they ARE air, and the 3D model does
+    # not mesh them as anything else, so collapsing them here is what makes the
+    # two models solve the same material distribution.  Practically,
+    # solve_magnetostatics_fem builds one sub-Basis per distinct tag, and this
+    # winding emits ~170 per-wire coil polygons; on the full-ring mesh that setup
+    # alone ran past an hour before the first Picard sweep.
+    from motor_ai_sim.simulation.fem_solver_2d import (DOM_AIR, DOM_COIL,
+                                                       DOM_COIL_BASE)
+    tags = np.asarray(tags).copy()
+    coil = (tags == DOM_COIL) | (tags >= DOM_COIL_BASE)
+    tags[coil] = DOM_AIR
+    n_coil = int(coil.sum())
+
     A, basis = solve_magnetostatics_fem(mesh, tags, mats,
                                         element_order=element_order,
                                         nonlinear_iterations=nonlinear_iterations)
@@ -125,5 +142,6 @@ def solve_2d_reference(section: MotorSection,
         harm[int(k)] = gap_fundamental(th, Br, k)[0]
     return Ref2D(B1_T=amp, B1_phase_rad=ph, Br_theta=Br, theta=th,
                  n_tri=int(mesh.t.shape[1]), ndofs=int(basis.N), wall_s=wall,
+                 n_coil_elements_as_air=n_coil,
                  r_gap_m=r, pole_pairs=p,
                  outer_r_mm=oaf * section.r_stator_out_mm, harmonics=harm)

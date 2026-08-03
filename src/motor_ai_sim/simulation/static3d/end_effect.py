@@ -389,30 +389,13 @@ def run_stage_a(geo_override: Optional[dict] = None,
               f"k_flux_self = {prof['k_flux_self']:.5f}, "
               f"{ss.sol.ndofs} dofs, {ss.wall_s:.1f} s", flush=True)
 
-    # ---- 2D reference ----------------------------------------------------
-    two_d = None
-    if do_2d:
-        from .ref2d import solve_2d_reference
-        if verbose:
-            print("\n[2] 2D reference (full ring, I=0, P2)", flush=True)
-        r2 = solve_2d_reference(section)
-        two_d = dict(B1_T=r2.B1_T, harmonics={str(k): v for k, v in r2.harmonics.items()},
-                     n_tri=r2.n_tri, ndofs=r2.ndofs, wall_s=r2.wall_s,
-                     outer_r_mm=r2.outer_r_mm,
-                     solver="fem_solver_2d.solve_magnetostatics_fem (P2, full ring)",
-                     ratio_3d_mid_over_2d=prof["B1_mid_T"] / r2.B1_T)
-        if verbose:
-            print(f"    2D B1 = {r2.B1_T:.5f} T, 3D mid / 2D = "
-                  f"{two_d['ratio_3d_mid_over_2d']:.4f}", flush=True)
-
     k_self = prof["k_flux_self"]
-    k_vs2d = k_self * (two_d["ratio_3d_mid_over_2d"] if two_d else 1.0)
 
     # ---- truncation bracket ---------------------------------------------
     bracket = None
     if do_bracket:
         if verbose:
-            print("\n[3] Dirichlet / Neumann truncation bracket", flush=True)
+            print("\n[2] Dirichlet / Neumann truncation bracket", flush=True)
         ssn = solve_sector(section, sect2d, stack_mm=section.stack_mm,
                            order=order, n_stack=n_stack, n_cap=n_cap, tol=tol,
                            max_iter=max_iter, neumann_outer=True,
@@ -440,7 +423,7 @@ def run_stage_a(geo_override: Optional[dict] = None,
     # ---- L sweep ---------------------------------------------------------
     curve: List[dict] = []
     if verbose:
-        print("\n[4] k_flux vs stack length", flush=True)
+        print("\n[3] k_flux vs stack length", flush=True)
     mu_prev = mu_ref
     for fct in l_factors:
         Lm = float(fct) * section.stack_mm
@@ -457,8 +440,7 @@ def run_stage_a(geo_override: Optional[dict] = None,
         row = dict(factor=float(fct), stack_mm=Lm,
                    B1_mid_T=p_i["B1_mid_T"],
                    k_flux_self=p_i["k_flux_self"],
-                   k_flux=p_i["k_flux_self"]
-                   * (two_d["ratio_3d_mid_over_2d"] if two_d else 1.0),
+                   k_flux=p_i["k_flux_self"],   # rescaled once 2D is known
                    ndofs=ss_i.sol.ndofs, elements=ss_i.tm.n_elements,
                    wall_s=ss_i.wall_s,
                    picard_converged=(ss_i.sol.picard or {}).get("converged"))
@@ -467,6 +449,32 @@ def run_stage_a(geo_override: Optional[dict] = None,
             print(f"    L = {Lm:6.2f} mm  k_self = {row['k_flux_self']:.5f}  "
                   f"k_flux = {row['k_flux']:.5f}  ({ss_i.wall_s:.0f} s)",
                   flush=True)
+
+    # ---- 2D reference, LAST ---------------------------------------------
+    # Deliberately after the 3D legs.  It is a consistency CHECK, not an input
+    # to any of them, and it runs in someone else's solver whose cost this
+    # module does not control — putting it first once cost an hour of wall time
+    # in front of work that did not depend on it.
+    two_d = None
+    if do_2d:
+        from .ref2d import solve_2d_reference
+        if verbose:
+            print("\n[4] 2D reference (full ring, I=0, P2)", flush=True)
+        r2 = solve_2d_reference(section)
+        two_d = dict(B1_T=r2.B1_T,
+                     harmonics={str(k): v for k, v in r2.harmonics.items()},
+                     n_tri=r2.n_tri, ndofs=r2.ndofs, wall_s=r2.wall_s,
+                     outer_r_mm=r2.outer_r_mm,
+                     coil_elements_solved_as_air=r2.n_coil_elements_as_air,
+                     solver="fem_solver_2d.solve_magnetostatics_fem (P2, full ring)",
+                     ratio_3d_mid_over_2d=prof["B1_mid_T"] / r2.B1_T)
+        if verbose:
+            print(f"    2D B1 = {r2.B1_T:.5f} T, 3D mid / 2D = "
+                  f"{two_d['ratio_3d_mid_over_2d']:.4f}", flush=True)
+    ratio = two_d["ratio_3d_mid_over_2d"] if two_d else 1.0
+    k_vs2d = k_self * ratio
+    for row in curve:
+        row["k_flux"] = row["k_flux_self"] * ratio
 
     passport = dict(
         version=PASSPORT_VERSION,

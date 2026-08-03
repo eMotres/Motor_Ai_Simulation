@@ -1276,6 +1276,11 @@ _load_descent_state()   # repopulate at import (startup)
 
 # mtime of the checkpoint the in-memory state was last taken from
 _descent_disk_mtime = [0.0]
+# True while the in-memory `running` flag was ADOPTED from the checkpoint file
+# (a run hosted outside this process) rather than owned by a worker thread in
+# this process.  An adopted flag must expire with the file — see
+# _refresh_descent_state_from_disk.
+_descent_external = [False]
 
 
 def _refresh_descent_state_from_disk() -> None:
@@ -1294,7 +1299,25 @@ def _refresh_descent_state_from_disk() -> None:
         m = _os_o.path.getmtime(p)
     except Exception:      # noqa: BLE001 — no checkpoint yet
         return
+    fresh = (_t.time() - m) < 300.0
     if m <= _descent_disk_mtime[0]:
+        # No new checkpoint since the last look.  An ADOPTED `running` must
+        # expire with the file: the hosting process checkpoints every
+        # generation, so a silent file means that process is gone.  Without
+        # this, a crashed run's last checkpoint (written with running=True)
+        # latched the flag forever — the refresh that would correct it only
+        # ran while running was False.  Seen live: a backend restart mid-run
+        # reported "running, iter 9/9" for a day.
+        if _descent_external[0] and not fresh and _descent_state.get("running"):
+            _descent_state["running"] = False
+            _descent_external[0] = False
+            if not _descent_state.get("error"):
+                _descent_state["error"] = (
+                    "the optimizer process stopped without finishing — its "
+                    "checkpoint went silent. The numbers shown are the last "
+                    "generation it completed, not a final result.")
+            log.warning("adopted optimizer run declared dead: checkpoint %s "
+                        "silent for %.0f s", p, _t.time() - m)
         return
     _descent_disk_mtime[0] = m
     try:
@@ -1306,7 +1329,8 @@ def _refresh_descent_state_from_disk() -> None:
     if not isinstance(blob, dict):
         return
     _descent_state.update(blob)
-    _descent_state["running"] = bool(blob.get("running")) and (_t.time() - m) < 300.0
+    _descent_state["running"] = bool(blob.get("running")) and fresh
+    _descent_external[0] = bool(_descent_state["running"])
     _descent_state["cancel"] = False
 
 
@@ -1865,6 +1889,7 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                     "x": {k: round(float(v), 4) for k, v in x.items()}}]
         all_pts = [p for p in [_pt(b, "baseline")] if p]   # every eval → objective-space point
         with _descent_lock:
+            _descent_external[0] = False   # this process owns the flag now
             _descent_state.update(running=True, iter=0, max_iters=max_iters, phase="optimizing",
                                   n_evals=n_evals, baseline=_msum(base),
                                   best=_best_state(),
@@ -2190,6 +2215,7 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                     all_pts.append(_bp)
 
             with _descent_lock:
+                _descent_external[0] = False   # this process owns the flag now
                 _descent_state.update(running=True, iter=0, max_iters=max_iters, phase="optimizing",
                                       walk_round=rnd + 1, walk_rounds=rounds, n_evals=n_evals,
                                       baseline=_msum(base), best=_bstate(), current=_msum(best["metrics"]),
@@ -2433,6 +2459,7 @@ def descent_start(req: DescentRequest):
     boundary_margin = min(0.3, max(0.01, float(req.boundary_margin)))
 
     with _descent_lock:
+        _descent_external[0] = False   # this process owns the flag now
         _descent_state.update({"running": True, "iter": 0, "max_iters": max_iters,
                                "n_evals": 0, "best": None, "current": None,
                                "history": [], "baseline": None, "baseline_line": None,
@@ -2525,7 +2552,9 @@ def descent_progress():
     with _descent_lock:
         # Nothing in flight HERE does not mean nothing is in flight: a run may be
         # hosted in its own process.  Pick up its checkpoint so the UI tracks it.
-        if not _descent_state.get("running"):
+        # An externally ADOPTED running flag must keep being re-checked too —
+        # that is how it expires when the hosting process dies.
+        if not _descent_state.get("running") or _descent_external[0]:
             _refresh_descent_state_from_disk()
         return _json_sane(dict(_descent_state))
 
@@ -3628,6 +3657,7 @@ def auto_start(req: AutoOptRequest, request: Request):
         bucket = "local"
 
     with _descent_lock:
+        _descent_external[0] = False   # this process owns the flag now
         _descent_state.update({
             "running": True, "iter": 0, "max_iters": int(plan["generations"]),
             "n_evals": 0, "best": None, "current": None, "history": [],
@@ -3686,7 +3716,7 @@ def auto_status():
     to "hold ripple under X", and it must be stated, not left as a number the
     reader is expected to interpret."""
     with _descent_lock:
-        if not _descent_state.get("running"):
+        if not _descent_state.get("running") or _descent_external[0]:
             _refresh_descent_state_from_disk()
         st = _json_sane(dict(_descent_state))
     auto = st.get("auto") or {}

@@ -150,6 +150,14 @@ const FemAnimationViewer: React.FC<Props> = ({
       run_id:             String(runNonce),
       fresh:              String(fresh),
     };
+    // WINDING — same rule as TransientCharts: the SELECTED connection rides in
+    // the request, so this panel can never render a solve of a different
+    // winding than the selector shows (and both panels keep sharing one
+    // backend cache key).
+    try {
+      const _conn = JSON.parse(localStorage.getItem('sim.connection') ?? '""');
+      if (_conn) params.connection = String(_conn);
+    } catch { /* config fallback */ }
     // Auto-retry against transient backend hiccups (uvicorn supervisor
     // sometimes respawns the worker mid-request during a heavy FEM solve).
     const attempt = async (i = 0): Promise<void> => {

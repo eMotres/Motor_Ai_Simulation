@@ -370,6 +370,14 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
       // (0 = auto-estimate from geometry) for the copper the 2-D field misses.
       coil_temp_c:        readSimSetting('coilTemp',   120.0),
       end_winding_factor: readSimSetting('endWinding',   0.0),
+      // WINDING — send the SELECTED connection explicitly.  The selector
+      // buttons write the shared config through a debounced sync, and the
+      // auto-run raced it: the run computed with the OLD winding while the UI
+      // labelled it with the new one (measured live: a 4S run and a 2S-2P run
+      // both returned 32.11 Nm).  With the label in the request the backend
+      // resolves n_parallel from exactly what the selector shows.
+      ...(readSimSetting<string>('connection', '')
+        ? { connection: readSimSetting<string>('connection', '') } : {}),
       // Per-part mesh size from the Mesh tab (same localStorage key).
       component_mesh:     JSON.stringify(readMeshSetting<Record<string, number>>('componentMesh', {})),
       // SAME include_frames/n_frames as the FemAnimationViewer so both panels hit

@@ -343,3 +343,137 @@ class TestLossDensityMap:
         # uniform DC over V_cu = 0.4 m3
         assert dens[coil].tolist() == pytest.approx([2.5, 2.5])
         assert "uniform DC" in label and "solved" not in label
+
+
+class TestAirCarriesNoLoss:
+    """Air is not a material with a small loss — it has NO loss model at all.
+
+    σ=0 (no eddy current), no hysteresis loop, and windage is not part of a 2-D
+    magnetic solve.  So every element that is not iron / magnet / copper / shaft
+    must be EXACTLY zero in the map, and must be flagged so the view can leave
+    it blank: on the log colour scale the view uses, zero is a colour (band 0),
+    and an air gap painted band 0 is indistinguishable from a measured small
+    loss.  That is what put a coloured ring in the gap of the 150 mm 24s28p
+    machine.
+    """
+
+    # the same "everything off, switch on one component" builder
+    _kw = staticmethod(TestLossDensityMap._kw)
+
+    def test_every_element_outside_a_modelled_material_is_exactly_zero(self):
+        """The full map with all four components on: everything else is 0.0."""
+        from motor_ai_sim.simulation.losses import loss_density_map
+        n_st, n_el = 6, 12
+        iron_s = np.array([0, 1])            # stator half: iron 0-1, coil 2-3
+        coil = np.array([2, 3])              #              air    4-5
+        iron_r = np.array([0, 1])            # rotor half : iron, then magnets
+        mag = np.array([2, 3])               #              air    4-5
+        Xs, Ys = _sine_history(16, 1.0, n_elem=2)
+        Xm, Ym = _sine_history(16, 0.5, n_elem=2)
+        solved = np.zeros(n_el)
+        solved[coil] = [100.0, 300.0]
+        dens, label, unmod = loss_density_map(**self._kw(
+            n_st, n_el,
+            iron_s_idx=iron_s, iron_r_idx=iron_r, hist_sx=Xs, hist_sy=Ys,
+            hist_rx=Xs, hist_ry=Ys, steel_s=_steel(1.0), steel_r=_steel(1.0),
+            P_fe_avg=3.0,
+            mag_idx=mag, hist_mx=Xm, hist_my=Ym, P_mag_avg=1.0,
+            coil_idx=coil, solved_dens=solved, solved_groups=("cu",),
+            solved_elems={"cu": coil}))
+        modelled = np.concatenate([iron_s, coil, n_st + iron_r, n_st + mag])
+        air = np.setdiff1d(np.arange(n_el), modelled)
+        assert air.size == 4                          # the test means to have air
+        # EXACTLY zero — not "small", not "below the legend floor".
+        assert dens[air].tolist() == [0.0] * air.size
+        assert np.all(dens[modelled] > 0.0)
+
+    def test_air_is_always_declared_unmodelled(self):
+        """So the renderer can draw it blank instead of band 0 of the scale."""
+        from motor_ai_sim.simulation.losses import loss_density_map
+        dens, label, unmod = loss_density_map(**self._kw(2, 4))
+        assert "air" in unmod
+        assert "no loss model" in label and "BLANK" in label
+
+    def test_an_unsolved_shaft_is_unmodelled_not_zero_loss(self):
+        """Without the coupled solve there is no shaft term to draw at all."""
+        from motor_ai_sim.simulation.losses import loss_density_map
+        n_st, n_el = 2, 4
+        _, _, unmod = loss_density_map(**self._kw(n_st, n_el, coil_idx=np.array([0]),
+                                                  P_cu_dc=1.0))
+        assert "shaft" in unmod
+        # ...and a SOLVED one is not flagged
+        solved = np.zeros(n_el); solved[3] = 7.0
+        _, _, unmod2 = loss_density_map(**self._kw(
+            n_st, n_el, solved_dens=solved, solved_groups=("shaft",),
+            solved_elems={"shaft": np.array([3])}))
+        assert "shaft" not in unmod2
+
+    def test_a_misindexed_solved_set_cannot_leak_into_air(self):
+        """The failure mode this guards: solved σE² ids that miss their material
+        (a half-mesh offset applied once too often) used to be copied straight
+        in, painting loss into air.  Zeroed, and said out loud in the log."""
+        from motor_ai_sim.simulation.losses import loss_density_map
+        n_st, n_el = 4, 8
+        mag_local = np.array([0, 1])             # true magnets = global 4, 5
+        solved = np.zeros(n_el)
+        solved[[2, 3]] = [10.0, 1000.0]          # ...but the ids say 2, 3 (air)
+        lines: list = []
+        dens, _, unmod = loss_density_map(**self._kw(
+            n_st, n_el, mag_idx=mag_local, P_mag_avg=1.0,
+            solved_dens=solved, solved_groups=("mag",),
+            solved_elems={"mag": np.array([2, 3])}, log_line=lines.append))
+        assert dens.tolist() == [0.0] * n_el
+        assert any("OUTSIDE every modelled material" in ln for ln in lines)
+        # and the magnets, having received nothing, are declared unmodelled
+        assert "magnets" in unmod
+
+
+class TestServedLossMapDeclaresItsBlanks:
+    """The field-view payload's ``loss_density_unmodelled``, which is the only
+    thing telling the renderer apart a modelled zero from an absent model.
+
+    Both loss paths funnel through this: the transient's own normalised map and
+    the single-frame analytic estimate, which has never had a shaft term or an
+    air term.  Air is in the list unconditionally — there is no air-loss model
+    to run — and any loss found in an air element is a bug, so it is zeroed
+    here rather than served and painted.
+    """
+
+    @staticmethod
+    def _tags():
+        from motor_ai_sim.simulation.sb_domains import (
+            DOM_AIRGAP, DOM_COIL_BASE, DOM_MAG_BASE, DOM_ROTOR, DOM_SHAFT,
+            DOM_STATOR)
+        return np.array([DOM_STATOR, DOM_ROTOR, DOM_MAG_BASE, DOM_COIL_BASE,
+                         DOM_SHAFT, DOM_AIRGAP, DOM_AIRGAP], int)
+
+    def test_air_is_declared_even_when_every_material_is_modelled(self):
+        from motor_ai_sim.routes.simulation import _unmodelled_loss_classes
+        t = self._tags()
+        d = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 0.0, 0.0])
+        out = _unmodelled_loss_classes(t, d)
+        assert out == ["air"]
+
+    def test_a_class_with_no_value_anywhere_is_declared_blank(self):
+        from motor_ai_sim.routes.simulation import _unmodelled_loss_classes
+        t = self._tags()
+        d = np.array([1.0, 2.0, 0.0, 4.0, 0.0, 0.0, 0.0])   # no magnet, no shaft
+        out = _unmodelled_loss_classes(t, d)
+        assert set(out) == {"magnets", "shaft", "air"}
+        assert "iron" not in out and "copper" not in out
+
+    def test_loss_in_air_is_zeroed_before_it_can_be_painted(self):
+        """An air element with a value is an index bug — never a small loss."""
+        from motor_ai_sim.routes.simulation import _unmodelled_loss_classes
+        t = self._tags()
+        d = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 7.7e3, 9.9e3])
+        _unmodelled_loss_classes(t, d)
+        assert d[-2:].tolist() == [0.0, 0.0]
+        assert d[:5].tolist() == [1.0, 2.0, 3.0, 4.0, 5.0]
+
+    def test_the_solvers_own_declaration_is_kept(self):
+        from motor_ai_sim.routes.simulation import _unmodelled_loss_classes
+        t = self._tags()
+        d = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 0.0, 0.0])
+        out = _unmodelled_loss_classes(t, d, ["magnets", "air"])
+        assert set(out) == {"magnets", "air"} and out.count("air") == 1

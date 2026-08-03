@@ -299,9 +299,26 @@ function sourceFor(payload: FemPayload, mode: string, o: ViewOpts): Source | nul
       if (n === 'magnets') unmod.add(3);
       else if (n === 'copper') unmod.add(4);
       else if (n === 'iron') { unmod.add(1); unmod.add(2); }
+      else if (n === 'shaft') unmod.add(5);
+      else if (n === 'air') unmod.add(0);
     }
+    // AIR IS NEVER DRAWN ON A LOSS MAP — unconditionally, not only when the
+    // backend remembered to say so.  There is no air-loss model to run (σ=0,
+    // no hysteresis, windage is not a magnetic solve), so every air element is
+    // exactly 0 — and 0 on a LOG scale is a COLOUR, band 0, the same deep blue
+    // a genuinely-measured tiny loss gets.  That is what painted the air gap
+    // as a smooth ring and put contour bands through the rotor's air pockets
+    // and the bore: not a smear, just zero being coloured in.  A payload from
+    // an older backend (or the single-frame analytic estimate) never carries
+    // the flag, so the rule lives here, where the picture is made.
+    unmod.add(0);
     const drawn = (_ti: number, d: number) =>
       d !== DOM.OUTER && !unmod.has(classOf(d));
+    // The colour range — and so the legend's floor — is built from MODELLED,
+    // NON-ZERO elements only: `drawn` drops air and every unmodelled class,
+    // then v > 0 drops the genuine zeros inside a material that IS modelled.
+    // So the bottom of the log scale is a real density somebody computed, and
+    // nothing sits below it except the blanks.
     const pos: number[] = [];
     for (let ti = 0; ti < nTri; ti++) {
       if (!drawn(ti, dom[ti])) continue;
@@ -379,7 +396,10 @@ function sourceFor(payload: FemPayload, mode: string, o: ViewOpts): Source | nul
 
     const note = (label ? label : 'loss density')
       + (o.logLoss ? ' · log colour scale' : ' · linear colour scale')
-      + ' · one shared scale across all materials';
+      + ' · one shared scale across all materials'
+      + ' · air and any unmodelled material are left BLANK — every coloured'
+      + ' element is a modelled one, and the scale floor is the 5th percentile'
+      + ' of the modelled NON-ZERO densities';
     return {
       elem: (ti) => (ti < ld.length ? ld[ti] : 0),
       include: drawn,

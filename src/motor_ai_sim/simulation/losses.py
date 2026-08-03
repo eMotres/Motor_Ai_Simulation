@@ -206,7 +206,9 @@ def loss_density_map(
     own words, which component came from where, and ``unmodelled`` lists the
     material classes no model produced a value for, so the view can leave them
     BLANK instead of painting them the bottom of the scale (which on a loss map
-    is what air looks like, i.e. "no loss here").
+    is what air looks like, i.e. "no loss here").  ``"air"`` is ALWAYS in that
+    list — there is no air-loss model in a 2-D magnetic solve (σ=0, no
+    hysteresis, no windage), so the air gap must be blank, never band 0.
 
     TWO sources, never mixed inside one component:
 
@@ -387,6 +389,38 @@ def loss_density_map(
     # no loss here", three times in a row, in the one component the user was
     # looking for.  Naming it here lets the view grey the material out and say
     # what is missing instead of quietly showing a zero.
+    # ── invariant: nothing outside a modelled MATERIAL carries loss ───────
+    # Every write above is indexed by a material's element ids, so this can
+    # only fire on an index bug — the [stator-half | rotor-half] offset being
+    # applied twice, or a solved-σE² id set from a different mesh.  It is
+    # checked rather than assumed because the failure is silent and PRETTY:
+    # loss landing in air paints a gradient across the air gap that looks like
+    # physics.  Zeroed AND logged, so the picture stays honest even when the
+    # indexing is not — and zeroed BEFORE the "what is missing" pass below, so
+    # a stray write cannot make an unmodelled material look modelled.
+    #
+    # The mask is built from the MATERIAL index arrays, deliberately NOT from
+    # ``solved_elems``: a solved-σE² id set that has drifted off the material it
+    # claims to be is precisely the bug this is here to catch, so it cannot also
+    # be the thing that declares itself legitimate.  (The shaft is the one
+    # exception — the coupled solve is its only source, so there is nothing else
+    # to check it against.)
+    _shaft_glob = np.asarray(_sel.get("shaft") if _sel.get("shaft") is not None
+                             else [], int)
+    _mod_mask = np.zeros(int(n_elems), bool)
+    for _ids in (np.asarray(iron_s_idx, int),
+                 _nst_e + np.asarray(iron_r_idx, int),
+                 _mag_glob, _cu_glob, _shaft_glob):
+        if _ids.size:
+            _mod_mask[_ids] = True
+    _stray = np.flatnonzero((~_mod_mask) & (_dens != 0.0))
+    if _stray.size:
+        _log("loss map | ERROR : %d element(s) OUTSIDE every modelled material "
+             "(air / gap / band) carried loss, max %.4g W/m³ — zeroed.  This is "
+             "an element-index bug in the map, not physics."
+             % (int(_stray.size), float(np.max(np.abs(_dens[_stray])))))
+        _dens[_stray] = 0.0
+
     _unmodelled = []
     if np.size(mag_idx) and not float(np.sum(_dens[_mag_glob])) > 0.0:
         _unmodelled.append("magnets")
@@ -395,7 +429,23 @@ def loss_density_map(
     if (np.size(iron_s_idx) or np.size(iron_r_idx)) and not (
             P_fe_avg > 0 and _integ_fe > 1e-30):
         _unmodelled.append("iron")
+    # The SHAFT has exactly one source — the coupled σ·∂A/∂t solve.  Without it
+    # there is no shaft term at all, and a shaft drawn at the bottom of the
+    # scale says "no loss in the shaft", which is a claim this run cannot make.
+    if not (_shaft_glob.size and float(np.sum(_dens[_shaft_glob])) > 0.0):
+        _unmodelled.append("shaft")
+    # AIR is never modelled, in any run.  σ = 0 → no eddy current, no
+    # hysteresis, and windage is not part of a 2-D magnetic solve — so there is
+    # no air loss to draw, ever.  It is listed here (rather than left to be
+    # inferred from a zero) because on a LOG map the bottom of the scale is a
+    # COLOUR: the air gap came out painted as a smooth blue-to-cyan ring, which
+    # reads as a real, small, measured loss.  Blank is the only honest fill.
+    _unmodelled.append("air")
     for _u in _unmodelled:
+        if _u == "air":
+            _parts.append("air: no loss model exists (σ=0, no hysteresis, "
+                          "windage not modelled) — left BLANK, not coloured")
+            continue
         _parts.append("%s: NOT MODELLED in this run — nothing is drawn there"
                       % _u)
         _log("loss map | %-6s : NOT MODELLED (no loss model produced a value; "

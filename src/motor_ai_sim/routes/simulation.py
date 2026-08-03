@@ -1425,6 +1425,64 @@ class _HaveSolverLossMap(Exception):
     fallback does not apply" without duplicating its except-clause."""
 
 
+def _unmodelled_loss_classes(tags, loss_dens, declared=()) -> list:
+    """Material classes the loss map contains NO value for → drawn blank.
+
+    The renderer has exactly two things it can do with a zero: paint it (band 0
+    of the colour scale — which on a loss map means "measured, and it is zero
+    here") or leave it blank ("no model produced a number for this material").
+    Those are different statements and only this list can tell them apart, so it
+    is derived from the map that is actually being served rather than trusted
+    from upstream: a class every one of whose elements is 0 was written by
+    nobody, whichever code path built the array.
+
+    AIR is always in the result, and not by the all-zero rule alone: there IS no
+    air-loss model to run.  σ=0 kills eddy current, air has no hysteresis loop,
+    and windage is not part of a 2-D magnetic solve — so a coloured air gap is
+    always a lie, and this is the flag that stops it being drawn.
+
+    ``declared`` is the solver's own list (``loss_dens_unmodelled``), unioned in:
+    it knows things the array cannot show, e.g. that a magnet term came out
+    non-zero but from a model this run had no business running.
+
+    ``loss_dens`` must be a float ndarray: any loss found in an air element is
+    zeroed IN PLACE (and logged) before the map is served.
+    """
+    import numpy as _np
+    from motor_ai_sim.simulation.sb_domains import (
+        DOM_AIR, DOM_AIRGAP, DOM_BAND, DOM_COIL, DOM_COIL_BASE, DOM_MAG_BASE,
+        DOM_MAG_N, DOM_MAG_S, DOM_ROTOR, DOM_SHAFT, DOM_STATOR)
+    t = _np.asarray(tags, int)
+    d = _np.asarray(loss_dens, float)
+    out = [str(x) for x in (declared or [])]
+    if t.size != d.size:                       # nothing trustworthy to say
+        return out if "air" in out else out + ["air"]
+    _mag = ((t >= DOM_MAG_BASE) & (t < DOM_COIL_BASE)) | (t == DOM_MAG_N) \
+        | (t == DOM_MAG_S)
+    for name, mask in (
+            ("iron",    (t == DOM_STATOR) | (t == DOM_ROTOR)),
+            ("magnets", _mag),
+            ("copper",  (t >= DOM_COIL_BASE) | (t == DOM_COIL)),
+            ("shaft",   t == DOM_SHAFT)):
+        if name in out:
+            continue
+        if mask.any() and not _np.any(d[mask] != 0.0):
+            out.append(name)
+    if "air" not in out:
+        out.append("air")
+    # The invariant the picture rests on: air carries no loss.  A non-zero here
+    # is an element-index bug upstream, and it is exactly the bug that paints a
+    # smooth gradient across the air gap — so it is zeroed and said out loud.
+    _air = (t == DOM_AIR) | (t == DOM_AIRGAP) | (t == DOM_BAND)
+    _bad = int(_np.count_nonzero(d[_air] != 0.0)) if _air.any() else 0
+    if _bad:
+        log.error("loss map: %d AIR element(s) carried loss (max %.4g W/m³) — "
+                  "zeroed before serving; this is an element-index bug, not "
+                  "physics", _bad, float(_np.max(_np.abs(d[_air]))))
+        d[_air] = 0.0
+    return out
+
+
 @router.get("/physics/fem_field2d")
 def get_fem_field2d(
     rotor_angle_deg:     float = 0.0,
@@ -1826,6 +1884,19 @@ def get_fem_field2d(
         log.warning("field-view loss density failed: %s", _le)
         _loss_dens = _np.zeros(int(T.shape[1]))
         _loss_label = "loss density unavailable (%s)" % _le
+
+    # ── which material classes this map does NOT contain ─────────────────────
+    # Derived from the map itself (a class with no non-zero element anywhere is
+    # a class no model wrote into), UNIONED with whatever the solver declared.
+    # Both loss paths run through here — the transient's own map and the
+    # single-frame analytic estimate, which has never had a shaft or an air
+    # term either — so the view gets the same guarantee from both: a class in
+    # this list is drawn BLANK, and a zero inside a class NOT in this list is a
+    # real, modelled zero.  Air is in it by construction: σ=0, no hysteresis,
+    # windage is not a magnetic solve, so there is nothing to draw in the gap.
+    _loss_dens = _np.asarray(_loss_dens, float)      # zeroed in place below
+    _loss_unmodelled = _unmodelled_loss_classes(tags, _loss_dens,
+                                                _loss_unmodelled)
 
     nsec = _ns_eff if _ns_eff > 1 else 1      # ACTUAL model symmetry (full = 1)
     result = {

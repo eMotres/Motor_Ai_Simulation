@@ -344,15 +344,15 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // restored/cached one — that would quote a rate no solve on this machine
   // produced).  Seeded from localStorage so the estimate survives a reload.
   const [solveCost, setSolveCost] =
-    useState<{ frames: number; wall_s: number } | null>(() => {
+    useState<{ frames: number; wall_s: number; warm?: number } | null>(() => {
       try {
         const s = localStorage.getItem('sim.lastSolveCost');
-        return s ? JSON.parse(s) as { frames: number; wall_s: number } : null;
+        return s ? JSON.parse(s) as { frames: number; wall_s: number; warm?: number } : null;
       } catch { return null; }
     });
   useEffect(() => {
     const onCost = (e: Event) =>
-      setSolveCost((e as CustomEvent).detail as { frames: number; wall_s: number });
+      setSolveCost((e as CustomEvent).detail as { frames: number; wall_s: number; warm?: number });
     window.addEventListener('sim:solve-cost', onCost);
     return () => window.removeEventListener('sim:solve-cost', onCost);
   }, []);
@@ -712,7 +712,13 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               <TextField label="I phase RMS (Arms)" type="number" size="small" fullWidth
                 value={Number(current.toFixed(2))} onChange={e => setCurrent(+e.target.value)}
                 inputProps={{ step: 5, min: 0, max: 500 }} disabled={isRunning}
-                InputProps={{ endAdornment: <HelpTip title={`I coil peak = ${I_coil_peak.toFixed(1)} A → sent to solver`} /> }}/>
+                InputProps={{ endAdornment: <HelpTip title={
+                  `TERMINAL phase current. With ${connection} (${nParallel} parallel `
+                  + `path${nParallel > 1 ? 's' : ''}) each coil carries I/${nParallel}: `
+                  + `I coil = ${I_coil_rms.toFixed(1)} Arms (${I_coil_peak.toFixed(1)} A peak) → sent to solver. `
+                  + `Comparing with ANSYS Maxwell: its winding must have Number of Parallel `
+                  + `Branches = ${nParallel}, else Maxwell drives every coil at the full `
+                  + `phase current and reports ~${nParallel}x the torque for the same input.`} /> }}/>
               <TextField label="I phase peak (A)" type="number" size="small" fullWidth
                 value={Number((current * Math.SQRT2).toFixed(2))}
                 onChange={e => setCurrent(+e.target.value / Math.SQRT2)}
@@ -864,7 +870,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               Newton system), so the copper loss is the solved 2-D value and
               the run's last frame carries the real eddy J⟳ — which the J⟳ /
               Loss field views then render without solving anything. */}
-          <Tooltip title="Solve the induced (eddy) currents together with the field: σ(−∂A/∂t + U) in copper, magnets and shaft becomes part of the same Newton system instead of a post-process. The run then reports the SOLVED copper loss (DC + the real AC/proximity part), and its last frame carries the true eddy current density — so the J⟳ and Loss field views render THIS run's field instantly instead of launching a second ~25 s transient. COST: two extra warm-up frames at negative rotor angle (the σ·∂A/∂t history starts from a field the machine was never in, and those frames are discarded), plus a bordered Newton per frame instead of the magnetostatic one — measured on the 40 mm 12s/14p at 0.6 mm mesh, 4 steps/period: 37 s off → 38 s on, so the frames it adds cost more than the physics does. Off = magnetostatic run; the J⟳ view then solves on demand as before and says so." placement="right">
+          <Tooltip title="Solve the induced (eddy) currents together with the field: σ(−∂A/∂t + U) in copper, magnets and shaft becomes part of the same Newton system instead of a post-process. The run then reports the SOLVED copper loss (DC + the real AC/proximity part), and its last frame carries the true eddy current density — so the J⟳ and Loss field views render THIS run's field instantly instead of launching a second ~25 s transient. COST: extra warm-up frames at negative rotor angle — the σ·∂A/∂t history starts from a field the machine was never in, so the solver keeps solving discarded frames until that start-up transient is quiet (3 on a small shaft, up to a whole electrical period on a big solid one) — plus a bordered Newton per frame instead of the magnetostatic one — measured on the 40 mm 12s/14p at 0.6 mm mesh, 4 steps/period: 37 s off → 38 s on, so the frames it adds cost more than the physics does. Off = magnetostatic run; the J⟳ view then solves on demand as before and says so." placement="right">
             <FormControlLabel
               sx={{ mt: -0.5, mb: 0.75, ml: 0.25 }}
               control={
@@ -889,20 +895,28 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
           {/* ── What this run will actually SOLVE, before it is launched ──────
               A run does not solve `steps` frames.  fem_transient_sliding_band
               prepends a whole extra period when demag is on (_dmskip, the
-              settling pass whose frames are stripped from the result) and two
-              warm-up frames at θ<0 when the coupled eddy solve is on
-              (_eddy_warm) — so with both ticked at 36 steps it solves 74, and
-              nothing on screen said so.  The rule is mirrored here (same shape
-              as SLIP_PER_PERIOD above) and RECONCILED after every run against
-              the solver's own n_frames_solved, so the seconds-per-frame quoted
-              is one this machine actually produced.  No history yet → the frame
-              count only; a made-up time is worse than no time. */}
+              settling pass whose frames are stripped from the result) and
+              warm-up frames at θ<0 when the coupled eddy solve is on — so with
+              both ticked at 36 steps it solves 74+, and nothing on screen said
+              so.  The rule is mirrored here (same shape as SLIP_PER_PERIOD
+              above) and RECONCILED after every run against the solver's own
+              n_frames_solved, so the seconds-per-frame quoted is one this
+              machine actually produced.  No history yet → the frame count only;
+              a made-up time is worse than no time.
+              The eddy warm-up is ADAPTIVE (the solver keeps solving discarded
+              frames until the σ·∂A/∂t start-up transient is quiet, up to one
+              electrical period), so it CANNOT be computed here: a big solid
+              shaft needs a whole period where a small one needs 3.  Quote the
+              count the last run on this machine actually needed, and the probe
+              length when there is no history — never a constant that the
+              solver stopped honouring. */}
           {(() => {
             const vdrive    = drive === 'voltage';
             // _vskip: ten settling PERIODS, because the currents are state.
             const vSettle   = vdrive ? 10 * Math.max(2, steps) : 0;
             const dmSettle  = demag ? steps : 0;              // _dmskip
-            const eddyWarm  = (eddyCoupled && !vdrive) ? 2 : 0;  // _eddy_warm
+            const eddyWarm  = (eddyCoupled && !vdrive)
+              ? Math.max(3, solveCost?.warm ?? 0) : 0;        // adaptive, measured
             // Voltage drive also runs the matched-fundamental CURRENT-drive
             // reference for ΔP_harm (harm_ref): a second transient, same steps
             // and same demag, no eddy, no settling prefix.
@@ -920,7 +934,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 Solves <b>{framesSolved}</b> FEM frames: {steps} reported
                 {vSettle  ? ` + ${vSettle} voltage settling` : ''}
                 {dmSettle ? ` + ${dmSettle} demag settling` : ''}
-                {eddyWarm ? ' + 2 eddy warm-up' : ''}
+                {eddyWarm ? ` + ${eddyWarm} eddy warm-up (adaptive)` : ''}
                 {refFrames ? ` + ${refFrames} ΔP_harm reference` : ''}
                 {rate > 0
                   ? ` · ≈ ${hhmm(est)} at the last run's ${rate.toFixed(1)} s/frame`

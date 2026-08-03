@@ -13,11 +13,14 @@ This module provides:
 from __future__ import annotations
 import os
 import json
+import logging
 import hashlib
 from pathlib import Path
 from typing import Dict, Optional, List, Tuple, Any
-from math import sin, cos, tan, radians, degrees, pi, acos, atan2
+from math import sin, cos, tan, radians, degrees, pi, acos, atan2, hypot, ceil
 #import math
+
+log = logging.getLogger(__name__)
 
 
 def _safe_union(a, b):
@@ -61,10 +64,272 @@ def _import_cadquery():
         return False
 
 
-def _round_corners_vertex(poly, r, n_arc=8, ang_min_deg=8.0, ang_max_deg=168.0,
-                          surface_band=1.5):
-    """Round the SHARP corners of a Shapely (Multi)Polygon with a true tangent-arc
-    fillet of radius r at EVERY corner — UNIFORMLY.
+# ═══════════════════════════════════════════════════════════════════════════
+#  Arc discretisation — ONE shared helper for EVERY arc/fillet in this module
+# ═══════════════════════════════════════════════════════════════════════════
+# Root cause of the "fan of microscopic triangles" artefact: every fillet used a
+# FIXED point count (n_arc = 8 / 12 / 16, slot-mouth circles 32/64-gons), so the
+# chord length scaled with the RADIUS.  A 0.2 mm rotor-tip fillet was cut into 8
+# chords of 0.0196 mm while the ring it lives on has 0.30 mm edges — gmsh honours
+# every boundary point, so those 15x-too-fine chords seeded a fan of degenerate
+# elements.  The fix is sagitta-based: choose the angular step from the geometric
+# error we are willing to accept, not from a magic count.
+#
+#   sagitta  s = r*(1 - cos(dtheta/2))   (max chord-to-arc deviation)
+#   tol      = min(machine_diameter/8000, r/50)
+#
+# The absolute term ties the tolerance to the machine scale: 0.019 mm on a 150 mm
+# machine, 0.005 mm on a 40 mm one.  It is deliberately calibrated so the rule
+# NEVER refines anything relative to the fixed counts it replaces — the old
+# 32-gon slot-mouth circle on the 30 mm machine already accepted a 0.0034 mm
+# chord error, so a scale-proportional tolerance at that level only ever removes
+# points.  A geometry fix must not silently make every mesh denser.
+# The r/50 term is what saves the tiny fillets: with tol = r/50 the step is a
+# CONSTANT 0.4 rad however small r gets, so a 0.2 mm fillet gets 2-3 chords
+# instead of 8 microscopic ones.
+_ARC_SAG_SCALE = 8000.0    # absolute sagitta tolerance = machine diameter / this
+_ARC_SAG_REL   = 50.0      # ... but never finer than r / this
+_ARC_MIN_SEGS  = 2         # a fillet is never less than 2 chords (still an arc)
+_ARC_PTS_FULL  = 8         # >= 8 points on a full 360 deg arc
+_ARC_MAX_SEGS  = 256       # cap: one arc can never explode a ring
+_DEFAULT_SCALE_MM = 150.0  # fallback machine diameter when a caller has none
+
+
+def _arc_n_segments(r: float, sweep: float, scale_mm: float = _DEFAULT_SCALE_MM) -> int:
+    """Chord count for an arc of radius `r` spanning |`sweep`| radians.
+
+    Sagitta-based (see the block comment above).  Additionally no chord may be
+    shorter than `scale_mm/2000` (0.075 mm at 150 mm, 0.02 mm at 40 mm) unless
+    the WHOLE arc is shorter than that — that floor is what forbids the micro
+    segments the mesher chokes on, and it can only ever bind on tiny radii where
+    the sagitta is already far below tolerance anyway.
+    """
+    sweep = abs(float(sweep))
+    # A NEGATIVE radius reaches here from infeasible designs (fill_r2 goes < 0
+    # when the slot mouth cannot be rounded) — the caller then draws a mirrored
+    # circle of |r| and the validator reports the violation.  Size it off |r| so
+    # the ring is still a ring and validation, not shapely, does the complaining.
+    r = abs(float(r))
+    # floor: >= _ARC_PTS_FULL chords on a full turn, >= _ARC_MIN_SEGS on any arc
+    n_floor = max(_ARC_MIN_SEGS, int(ceil(sweep / (2.0 * pi) * _ARC_PTS_FULL)))
+    if r <= 0.0 or sweep <= 0.0:
+        return n_floor
+    scale_mm = float(scale_mm) if scale_mm and scale_mm > 0 else _DEFAULT_SCALE_MM
+    tol = min(scale_mm / _ARC_SAG_SCALE, r / _ARC_SAG_REL)
+    ratio = max(-1.0, min(1.0, 1.0 - tol / r))
+    dtheta = 2.0 * acos(ratio)                       # step meeting the sagitta tol
+    n = max(int(ceil(sweep / dtheta)) if dtheta > 0 else n_floor, n_floor)
+    # min-chord floor — kills micro chords at their source
+    min_chord = scale_mm / 2000.0
+    n_chord_cap = int((sweep * r) // min_chord)
+    if n_chord_cap >= n_floor:
+        n = min(n, n_chord_cap)
+    else:
+        n = n_floor
+    return int(max(_ARC_MIN_SEGS, min(n, _ARC_MAX_SEGS)))
+
+
+def _arc_points(cx: float, cy: float, r: float, a0: float, sweep: float,
+                scale_mm: float = _DEFAULT_SCALE_MM, include_start: bool = True):
+    """Points along an arc, sagitta-discretised.  Start and end are exact."""
+    n = _arc_n_segments(r, sweep, scale_mm)
+    k0 = 0 if include_start else 1
+    return [(float(cx + r * cos(a0 + sweep * k / n)),
+             float(cy + r * sin(a0 + sweep * k / n))) for k in range(k0, n + 1)]
+
+
+def _circle_points(r: float, n: int = 256):
+    """Full-circle polygon.  Deliberately a FIXED 256-gon, NOT sagitta-driven:
+    these are the air-gap / OD / bore domain boundaries and their density is a
+    SOLVER requirement (torque accuracy across the sliding band), not a CAD
+    tolerance.  They are uniform and produce no micro chords, so they are not
+    part of the defect this helper set fixes — sagitta rules would only coarsen
+    the air gap and move the pinned physics."""
+    return [(r * cos(2 * pi * i / n), r * sin(2 * pi * i / n)) for i in range(n)]
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  Ring sanitising — no duplicate points, no degenerate rings, ever
+# ═══════════════════════════════════════════════════════════════════════════
+_DEGEN_AREA_MM2 = 1e-8      # (1e-4 mm)^2 — below this a ring is not geometry
+
+# Weld (point-merge) tolerance = machine_diameter / _WELD_DIV.
+#   150 mm machine -> 0.0375 mm ;  40 mm machine -> 0.010 mm
+#
+# Why this and not "1e-6 of the diameter" (which only catches EXACT duplicates):
+# after the arc discretisation is fixed, every remaining short edge in the output
+# is a GEOS artefact of a tangency, not geometry —
+#   * shapely's union/difference nodes the slot-mouth circle against the slot
+#     wedge it is tangent to and emits both an exact duplicate AND a node a few
+#     microns off an existing vertex,
+#   * a fillet's tangent point lands at an arbitrary arc distance along the
+#     boundary, so the leftover stub to the next retained vertex is a uniformly
+#     distributed remainder that can be arbitrarily small.
+# Neither is something this builder ever DECIDED to emit: the arc helper's
+# min-chord floor is diameter/2000, so _WELD_DIV = 4000 is exactly HALF the
+# shortest chord we ever produce deliberately — a merge can never eat a real arc
+# point, and it moves a boundary by at most 0.037 mm on a 150 mm machine (the
+# solver's own mesher already runs a 0.3 mm Douglas-Peucker on these rings, i.e.
+# 8x looser).  Every merge is logged with coordinates.
+_WELD_DIV = 4000.0
+
+
+def _ring_signed_area(P) -> float:
+    a = 0.0
+    n = len(P)
+    for i in range(n):
+        x1, y1 = P[i]
+        x2, y2 = P[(i + 1) % n]
+        a += x1 * y2 - x2 * y1
+    return 0.5 * a
+
+
+def _sanitize_ring(coords, eps: float, label: str = ""):
+    """Clean ONE closed ring.  Returns the open coordinate list, or None if the
+    ring is degenerate (< 3 distinct points, or area below (1e-4 mm)^2).
+
+    * merges consecutive points closer than `eps` (the weld tolerance — see
+      `_WELD_DIV`; shapely booleans emit exact duplicates at noded slot-mouth
+      corners, and those zero-length segments are what made gmsh build a fan of
+      microscopic triangles),
+    * drops a vertex ONLY when it is EXACTLY collinear with (and between) its
+      neighbours — tolerance eps/10000, i.e. ~4e-6 mm, so real geometry is never
+      simplified away,
+    * logs every drop with coordinates.
+    """
+    P = [(float(c[0]), float(c[1])) for c in coords]
+    if len(P) > 1 and hypot(P[0][0] - P[-1][0], P[0][1] - P[-1][1]) <= eps:
+        P = P[:-1]                                     # shapely's closing repeat
+
+    merged = []
+    dropped_dups = []
+    for pt in P:
+        if merged and hypot(pt[0] - merged[-1][0], pt[1] - merged[-1][1]) <= eps:
+            dropped_dups.append(pt)
+            continue
+        merged.append(pt)
+    while len(merged) >= 2 and hypot(merged[0][0] - merged[-1][0],
+                                     merged[0][1] - merged[-1][1]) <= eps:
+        dropped_dups.append(merged.pop())
+    if dropped_dups:
+        log.warning("geometry sanitize [%s]: merged %d coincident point(s) "
+                    "(gap <= %.3g mm weld tol), first at (%.4f, %.4f)",
+                    label, len(dropped_dups), eps,
+                    dropped_dups[0][0], dropped_dups[0][1])
+
+    # exactly-collinear interior points (never a simplification: eps_col is float
+    # noise, ~4e-6 mm on a 150 mm machine)
+    eps_col = eps * 1e-4
+    if len(merged) > 3:
+        keep = []
+        n = len(merged)
+        dropped_col = 0
+        for i in range(n):
+            a = keep[-1] if keep else merged[(i - 1) % n]
+            b = merged[i]
+            c = merged[(i + 1) % n]
+            ux, uy = c[0] - a[0], c[1] - a[1]
+            ul = hypot(ux, uy)
+            if ul > eps:
+                t = ((b[0] - a[0]) * ux + (b[1] - a[1]) * uy) / (ul * ul)
+                perp = abs((b[0] - a[0]) * uy - (b[1] - a[1]) * ux) / ul
+                if perp <= eps_col and 0.0 <= t <= 1.0 and len(keep) + (n - i - 1) >= 3:
+                    dropped_col += 1
+                    continue
+            keep.append(b)
+        if dropped_col:
+            log.warning("geometry sanitize [%s]: dropped %d exactly-collinear "
+                        "point(s)", label, dropped_col)
+        merged = keep
+
+    if len(merged) < 3:
+        log.warning("geometry sanitize [%s]: DROPPED degenerate ring — only %d "
+                    "distinct point(s): %s", label, len(merged),
+                    [(round(x, 4), round(y, 4)) for x, y in merged])
+        return None
+    if abs(_ring_signed_area(merged)) < _DEGEN_AREA_MM2:
+        log.warning("geometry sanitize [%s]: DROPPED degenerate ring — %d points, "
+                    "area %.3g mm^2 < %.3g, first point (%.4f, %.4f)",
+                    label, len(merged), abs(_ring_signed_area(merged)),
+                    _DEGEN_AREA_MM2, merged[0][0], merged[0][1])
+        return None
+    return merged
+
+
+def _sanitize_geom(geom, scale_mm: float, label: str = ""):
+    """Apply `_sanitize_ring` to EVERY ring of a shapely (Multi)Polygon.
+
+    Degenerate sub-polygons (the 3-coincident-point sliver shapely's rotor
+    difference leaves behind) and degenerate holes are dropped, loudly.  If
+    sanitising would delete a body that actually had area, the ORIGINAL is kept
+    and the problem is logged as an error — we never silently lose a domain.
+    """
+    if geom is None:
+        return geom
+    try:
+        from shapely.geometry import Polygon as _SP, MultiPolygon as _SMP
+    except ImportError:
+        return geom
+    if getattr(geom, "is_empty", False):
+        return geom
+    _s = float(scale_mm) if scale_mm and scale_mm > 0 else _DEFAULT_SCALE_MM
+    eps = _s / _WELD_DIV
+
+    def _one(g, tag):
+        ext = _sanitize_ring(list(g.exterior.coords), eps, tag)
+        if ext is None:
+            return None
+        holes = []
+        for j, h in enumerate(g.interiors):
+            hr = _sanitize_ring(list(h.coords), eps, f"{tag}.hole{j}")
+            if hr is not None:
+                holes.append(hr)
+        q = _SP(ext, holes)
+        if not q.is_valid:
+            q = q.buffer(0)
+        return None if (q.is_empty or q.area < _DEGEN_AREA_MM2) else q
+
+    subs = list(geom.geoms) if hasattr(geom, "geoms") else [geom]
+    out = []
+    for i, g in enumerate(subs):
+        if not hasattr(g, "exterior"):        # LineString/Point debris
+            if getattr(g, "length", 0.0) > 0 or not getattr(g, "is_empty", True):
+                log.warning("geometry sanitize [%s]: DROPPED non-areal fragment %s",
+                            label, g.geom_type)
+            continue
+        q = _one(g, f"{label}[{i}]" if len(subs) > 1 else label)
+        if q is not None:
+            out.append(q)
+    if not out:
+        if getattr(geom, "area", 0.0) > _DEGEN_AREA_MM2:
+            log.error("geometry sanitize [%s]: refusing to drop a body with area "
+                      "%.6g mm^2 — keeping the ORIGINAL rings", label, geom.area)
+            return geom
+        return geom
+    return out[0] if len(out) == 1 else _SMP(out)
+
+
+def _sanitize_polys_dict(polys: Dict, scale_mm: float) -> Dict:
+    """Sanitize every ring of every domain in a get_2d_polygons()-shaped dict."""
+    for key in ('stator', 'rotor', 'shaft', 'air_gap', 'in_band', 'out_band'):
+        if key in polys and polys[key] is not None:
+            polys[key] = _sanitize_geom(polys[key], scale_mm, key)
+    if 'magnets' in polys:
+        polys['magnets'] = [(_sanitize_geom(mp, scale_mm, f"magnet[{i}]"), pol)
+                            for i, (mp, pol) in enumerate(polys['magnets'])]
+    for key in ('coils', 'wire_insulation', 'slot_insulation'):
+        if key in polys and polys[key]:
+            polys[key] = [_sanitize_geom(g, scale_mm, f"{key}[{i}]")
+                          for i, g in enumerate(polys[key])]
+    return polys
+
+
+def _fillet_ring_corners(poly, r, select, ang_min_deg=8.0, ang_max_deg=168.0,
+                         scale_mm=_DEFAULT_SCALE_MM):
+    """THE vertex-fillet core — every rounded corner in this module goes through it.
+
+    Rounds the SHARP corners of a Shapely (Multi)Polygon that `select` accepts,
+    with a true tangent-arc fillet of radius r — UNIFORMLY.
 
     The tangent length needed for radius r is t = r/tan(half-angle).  Earlier this
     was clamped to 45 % of the single ADJACENT edge, so on the 256-gon rotor
@@ -77,7 +342,20 @@ def _round_corners_vertex(poly, r, n_arc=8, ang_min_deg=8.0, ang_max_deg=168.0,
     at that arc-distance (so a discretised arc is handled exactly).  t is only
     capped at 49 % of the run to the next corner so two fillets sharing an edge
     can't overlap.  Result: every corner with room gets the SAME radius r; only a
-    genuinely tight neck (e.g. a thin bridge) auto-reduces.  Topology preserved."""
+    genuinely tight neck (e.g. a thin bridge) auto-reduces.  Topology preserved.
+
+    Crucially the vertices the fillet SWALLOWS are removed (`consumed`): a naive
+    "replace the corner vertex by an arc" leaves the swallowed discretisation
+    points in place right next to the arc's tangent point, which is what produced
+    the 0.005 mm slivers on the stator OD.  The arc itself is emitted through the
+    shared sagitta helper, so its chords scale with its radius.
+
+    Parameters
+    ----------
+    select : callable(radii: ndarray, P: list) -> bool ndarray
+        Per-vertex mask of which corners are candidates (radius band, target
+        radius, ...).  Called once per ring.
+    """
     import numpy as _np
     import math as _m
     from shapely.geometry import Polygon as _SP, MultiPolygon as _SMP
@@ -101,13 +379,8 @@ def _round_corners_vertex(poly, r, n_arc=8, ang_min_deg=8.0, ang_max_deg=168.0,
         is_corner = (ang >= a_lo) & (ang <= a_hi)        # candidate to be filleted
         bound = ang < a_hi                                # any real turn bounds a run
 
-        # Round ONLY the outer "top row" corners — those within surface_band of the
-        # ring's max radius (from origin).  Those are the pole tips at the air gap;
-        # the deeper rows (shoulders ~2.3 mm in, inner corners) stay SHARP.  The
-        # rotor is centred at origin, so |vertex| is its air-gap distance.
         radii = _np.array([float(_np.hypot(P[i][0], P[i][1])) for i in range(n)])
-        maxR = float(radii.max()) if n else 0.0
-        at_surface = radii >= (maxR - surface_band) if surface_band else _np.ones(n, bool)
+        at_surface = _np.asarray(select(radii, P), bool)
 
         def run(i, step):
             L = 0.0; k = i
@@ -146,12 +419,26 @@ def _round_corners_vertex(poly, r, n_arc=8, ang_min_deg=8.0, ang_max_deg=168.0,
                 out.append(tuple(P[i])); continue
             V = P[i]; reff = t * th
             Pa, Pb = walk(i, -1, t), walk(i, 1, t)
-            # mark the smooth vertices the fillet swallows on each side
+            # Mark the smooth vertices the fillet swallows on each side.
+            #
+            # The tangent point lands at an ARBITRARY arc distance along the
+            # discretised boundary, so the stub from it to the next surviving
+            # vertex is a uniformly distributed remainder — it can be arbitrarily
+            # short (that is where the 0.014 mm edges on the 40 mm bore came
+            # from).  If the tangent point ate more than _STUB_KEEP of the chord
+            # it landed in, swallow that vertex too: the boundary then runs
+            # straight from the tangent point to the vertex AFTER it, which on a
+            # smooth run costs ~4x the (already sub-micron) local sagitta.
+            _STUB_KEEP = 0.6
             for step in (-1, 1):
                 k = i; rem = t
                 for _ in range(n):
                     e = k if step > 0 else (k - 1) % n
                     if seg[e] >= rem:
+                        if rem > _STUB_KEEP * seg[e]:      # stub too short — snap
+                            nxt = (k + step) % n
+                            if nxt != i and not bound[nxt]:
+                                consumed[nxt] = True
                         break
                     rem -= seg[e]; k = (k + step) % n
                     if k != i:
@@ -171,8 +458,8 @@ def _round_corners_vertex(poly, r, n_arc=8, ang_min_deg=8.0, ang_max_deg=168.0,
             d = a1 - a0
             while d > _m.pi:  d -= 2 * _m.pi
             while d < -_m.pi: d += 2 * _m.pi
-            out.extend((C[0] + reff * _m.cos(a0 + d * k / n_arc),
-                        C[1] + reff * _m.sin(a0 + d * k / n_arc)) for k in range(n_arc + 1))
+            # sagitta-based arc — chord count follows reff, NOT a magic constant
+            out.extend(_arc_points(C[0], C[1], reff, a0, d, scale_mm))
         return out
 
     def _one(p):
@@ -183,6 +470,43 @@ def _round_corners_vertex(poly, r, n_arc=8, ang_min_deg=8.0, ang_max_deg=168.0,
     if poly.geom_type == "MultiPolygon":
         return _SMP([_one(g) for g in poly.geoms])
     return _one(poly)
+
+
+def _round_corners_vertex(poly, r, ang_min_deg=8.0, ang_max_deg=168.0,
+                          surface_band=1.5, scale_mm=_DEFAULT_SCALE_MM):
+    """Rotor pole-tip rounding: fillet only the corners within `surface_band` of
+    the ring's max radius (the air-gap tips).  The deeper rows (shoulders, inner
+    corners, magnet-side pocket corners) stay SHARP.  The rotor is centred at the
+    origin, so |vertex| is its air-gap distance."""
+    def _sel(radii, P):
+        if not surface_band:
+            import numpy as _np
+            return _np.ones(len(radii), bool)
+        return radii >= (float(radii.max()) - surface_band)
+    return _fillet_ring_corners(poly, r, _sel, ang_min_deg, ang_max_deg, scale_mm)
+
+
+def _round_corners_at_radius(poly, target_r, r_tol, r_fillet, scale_mm,
+                             min_angle_deg=20.0):
+    """Stator slot-corner rounding: fillet the sharp corners that sit within
+    `r_tol` of `target_r` (the OD band for stator_fillet_r, the bore band for
+    stator_fillet_r1) — the 2-D mirror of the 3-D `.fillet()` edge selectors.
+
+    Replaces the old per-corner `_fillet_corner` walk, which placed the tangent
+    point at t = r/tan(half) along the STRAIGHT line to the immediately preceding
+    vertex.  On a discretised boundary that tangent length routinely exceeded the
+    neighbouring chord, so the arc start jumped BACKWARDS past a vertex that was
+    then left in the ring — a spike that `buffer(0)` repaired into 0.005-0.08 mm
+    sliver edges on the stator OD.  Walking the real boundary and consuming the
+    swallowed vertices removes the defect at its source."""
+    import numpy as _np
+
+    def _sel(radii, P):
+        return _np.abs(radii - float(target_r)) < float(r_tol)
+    return _fillet_ring_corners(poly, r_fillet, _sel,
+                                ang_min_deg=0.0,
+                                ang_max_deg=180.0 - float(min_angle_deg),
+                                scale_mm=scale_mm)
 
 
 class CadQueryMotor:
@@ -973,9 +1297,11 @@ class CadQueryMotor:
         # ── rotor pocket params ────────────────────────────────────────────
         magnet_hole = p['rotor_hole']
 
-        # helper: circle polygon
-        def _circle(r: float, n: int = 256) -> list:
-            return [(r * cos(2*pi*i/n), r * sin(2*pi*i/n)) for i in range(n)]
+        # Machine scale — every arc tolerance in this build is tied to it.
+        scale_mm = 2.0 * outer_r
+
+        # helper: circle polygon (see _circle_points for why this stays a 256-gon)
+        _circle = _circle_points
 
         # helper: rotate 2-D point
         def _rot(x, y, a_rad):
@@ -1062,8 +1388,9 @@ class CadQueryMotor:
         # The same rounded polygon is used for BOTH the rotor pocket holes and
         # the magnet so there is no dark gap at the corners.
 
-        def _fillet_corner(p_prev, p_corner, p_next, r, n_arc=16):
-            """Arc points (T1→T2 inclusive) for filleting one convex corner."""
+        def _fillet_corner(p_prev, p_corner, p_next, r):
+            """Arc points (T1→T2 inclusive) for filleting one convex corner
+            between two LONG straight edges (magnet hexagon)."""
             V  = np.array(p_corner, float)
             dA = np.array(p_prev,  float) - V;  dA /= np.linalg.norm(dA)
             dB = np.array(p_next,  float) - V;  dB /= np.linalg.norm(dB)
@@ -1081,9 +1408,7 @@ class CadQueryMotor:
             da = a2 - a1
             if da >  pi: da -= 2 * pi
             elif da < -pi: da += 2 * pi
-            return [(float(center[0] + r * cos(a1 + da * k / n_arc)),
-                     float(center[1] + r * sin(a1 + da * k / n_arc)))
-                    for k in range(n_arc + 1)]
+            return _arc_points(center[0], center[1], r, a1, da, scale_mm)
 
         def _build_mag_poly(pts, fillet_r):
             """Hexagon with only the two top corners (indices 2,3) filleted."""
@@ -1161,7 +1486,8 @@ class CadQueryMotor:
                 # sub-bridge surface band: round the air-gap tips only, keep the
                 # magnet-side pole corners sharp (see get_2d_polygons for why).
                 _band = min(1.5, 0.6 * float(self.parameters.get('magnet_up_gap', 1.5) or 1.5))
-                _f = _round_corners_vertex(rotor_poly, _rfr, surface_band=_band)
+                _f = _round_corners_vertex(rotor_poly, _rfr, surface_band=_band,
+                                           scale_mm=scale_mm)
                 if not _f.is_valid: _f = _f.buffer(0)
                 if (_f.is_valid and not _f.is_empty
                         and _f.area >= 0.85 * rotor_poly.area
@@ -1169,6 +1495,7 @@ class CadQueryMotor:
                     rotor_poly = _f
             except Exception as _e:
                 print(f"rotor_fill_r (mesh) failed ({_e}) -- keeping sharp rotor")
+        rotor_poly = _sanitize_geom(rotor_poly, scale_mm, "mesh.rotor")
         r = _tri(rotor_poly, z=Z_ROTOR)
         if r: result['rotor_core'] = r
 
@@ -1200,8 +1527,7 @@ class CadQueryMotor:
             trap_p = SPoly([_rot(*p1s, a), _rot(*p2s, a),
                              _rot(*p3s, a), _rot(*p4s, a)])
             cx, cy = _rot(p3s[0], p3s[1], a)
-            circ_p = SPoly([(cx + fill_r * cos(2*pi*k/64),
-                              cy + fill_r * sin(2*pi*k/64)) for k in range(64)])
+            circ_p = SPoly(_arc_points(cx, cy, fill_r, 0.0, 2*pi, scale_mm)[:-1])
             m_p = _safe_union(trap_p, circ_p)
             cutters.append(m_p if m_p.is_valid else m_p.buffer(0))
 
@@ -1211,8 +1537,7 @@ class CadQueryMotor:
             trap_n = SPoly([_rot(*mp1n, a), _rot(*mp2n, a),
                              _rot(*mp3n, a), _rot(*mp4n, a)])
             cxn, cyn = _rot(-p3s[0], p3s[1], a)
-            circ_n = SPoly([(cxn + fill_r * cos(2*pi*k/64),
-                              cyn + fill_r * sin(2*pi*k/64)) for k in range(64)])
+            circ_n = SPoly(_arc_points(cxn, cyn, fill_r, 0.0, 2*pi, scale_mm)[:-1])
             m_n = _safe_union(trap_n, circ_n)
             cutters.append(m_n if m_n.is_valid else m_n.buffer(0))
 
@@ -1246,49 +1571,17 @@ class CadQueryMotor:
         fillet_r  = p.get('stator_fillet_r',  0.0)
         fillet_r1 = p.get('stator_fillet_r1', 0.0)
 
-        def _fillet_coords(coords, target_r, r_tol, fillet_radius, min_angle_deg=20.0):
-            """Round only SHARP corners near target_r in a coordinate ring."""
-            n = len(coords)
-            new_coords = []
-            for i in range(n):
-                p_prev   = coords[(i - 1) % n]
-                p_corner = coords[i]
-                p_next   = coords[(i + 1) % n]
-                rc = (p_corner[0]**2 + p_corner[1]**2) ** 0.5
-                if abs(rc - target_r) < r_tol:
-                    dA = np.array(p_prev) - np.array(p_corner); la = np.linalg.norm(dA)
-                    dB = np.array(p_next) - np.array(p_corner); lb = np.linalg.norm(dB)
-                    if la > 1e-9 and lb > 1e-9:
-                        cos_t = float(np.clip(np.dot(dA/la, dB/lb), -1.0, 1.0))
-                        angle_deg = degrees(acos(cos_t))
-                        if angle_deg < (180.0 - min_angle_deg):
-                            arc = _fillet_corner(p_prev, p_corner, p_next, fillet_radius)
-                            new_coords.extend(arc)
-                            continue
-                new_coords.append(p_corner)
-            return new_coords
-
-        def _fillet_ring_corners(poly, target_r, r_tol, fillet_radius, min_angle_deg=20.0):
-            """Round sharp corners near target_r on BOTH exterior and interior rings."""
-            if not hasattr(poly, 'exterior'):
-                return poly
-            new_ext  = _fillet_coords(list(poly.exterior.coords[:-1]),
-                                      target_r, r_tol, fillet_radius, min_angle_deg)
-            new_ints = [_fillet_coords(list(h.coords[:-1]),
-                                       target_r, r_tol, fillet_radius, min_angle_deg)
-                        for h in poly.interiors]
-            result = SPoly(new_ext, new_ints)
-            if not result.is_valid:
-                result = result.buffer(0)
-            return result
-
         # Outer band = 0.45·core_thickness (cap 1.5) so it can't reach the slot-bottom
         # corners on small motors (see [[slot_fillet_root_cause]]).
+        # Same shared corner-fillet core as get_2d_polygons — one implementation.
         _out_tol = min(1.5, 0.45 * core_h)
         if fillet_r > 0 and hasattr(stator_poly, 'exterior'):
-            stator_poly = _fillet_ring_corners(stator_poly, outer_r, _out_tol, fillet_r)
+            stator_poly = _round_corners_at_radius(stator_poly, outer_r, _out_tol,
+                                                   fillet_r, scale_mm)
         if fillet_r1 > 0 and hasattr(stator_poly, 'exterior'):
-            stator_poly = _fillet_ring_corners(stator_poly, inner_r, 1.0, fillet_r1)
+            stator_poly = _round_corners_at_radius(stator_poly, inner_r, 1.0,
+                                                   fillet_r1, scale_mm)
+        stator_poly = _sanitize_geom(stator_poly, scale_mm, "mesh.stator")
 
         r = _tri(stator_poly, z=Z_STATOR)
         if r: result['stator_core'] = r
@@ -1588,14 +1881,19 @@ class CadQueryMotor:
         ZERO_OFFSET_DEG  = -(90.0 - _pole_pitch_deg * 0.5) + _DAXIS_ALIGN_MECH
         theta_r = radians(rotor_angle_deg + ZERO_OFFSET_DEG)
 
-        def _circle(r, n=256):
-            return [(r*cos(2*pi*i/n), r*sin(2*pi*i/n)) for i in range(n)]
+        # Machine scale — every arc tolerance in this build is tied to it.
+        scale_mm = 2.0 * outer_r
+
+        _circle = _circle_points
 
         def _rot(x, y, a):
             c, s = cos(a), sin(a)
             return x*c - y*s, x*s + y*c
 
-        def _fillet_corner(p_prev, p_corner, p_next, r, n_arc=12):
+        def _fillet_corner(p_prev, p_corner, p_next, r):
+            """Tangent-arc fillet of ONE convex corner between two LONG straight
+            edges (magnet hexagon).  Safe here because tan_len is far shorter than
+            the adjacent edges; discretised through the shared sagitta helper."""
             V  = np.array(p_corner, float)
             dA = np.array(p_prev, float) - V; dA /= max(np.linalg.norm(dA), 1e-9)
             dB = np.array(p_next, float) - V; dB /= max(np.linalg.norm(dB), 1e-9)
@@ -1612,9 +1910,7 @@ class CadQueryMotor:
             da = a2 - a1
             if da >  pi: da -= 2*pi
             elif da < -pi: da += 2*pi
-            return [(float(center[0] + r*cos(a1 + da*k/n_arc)),
-                     float(center[1] + r*sin(a1 + da*k/n_arc)))
-                    for k in range(n_arc + 1)]
+            return _arc_points(center[0], center[1], r, a1, da, scale_mm)
 
         # ── Magnet local polygon ──────────────────────────────────────────────
         pole_angle_r = 2*pi / num_poles
@@ -1713,7 +2009,8 @@ class CadQueryMotor:
                 # Air-gap-side tips are AT max radius → a sub-bridge band keeps
                 # them rounded while every magnet-side corner stays sharp.
                 _band = min(1.5, 0.6 * float(p.get('magnet_up_gap', 1.5) or 1.5))
-                _f = _round_corners_vertex(rotor_poly, _rfr, surface_band=_band)
+                _f = _round_corners_vertex(rotor_poly, _rfr, surface_band=_band,
+                                           scale_mm=scale_mm)
                 if not _f.is_valid:
                     _f = _f.buffer(0)
                 if (_f.is_valid and not _f.is_empty
@@ -1755,8 +2052,8 @@ class CadQueryMotor:
             a = i * radians(slot_angle_deg)
             trap_p = SPoly([_rot(*p1s,a), _rot(*p2s,a), _rot(*p3s,a), _rot(*p4s,a)])
             cx, cy = _rot(p3s[0], p3s[1], a)
-            circ_p = SPoly([(cx + fill_r2*cos(2*pi*k/32), cy + fill_r2*sin(2*pi*k/32))
-                             for k in range(32)])
+            # slot-mouth rounding circle — sagitta-discretised like every other arc
+            circ_p = SPoly(_arc_points(cx, cy, fill_r2, 0.0, 2*pi, scale_mm)[:-1])
             m_p = _safe_union(trap_p, circ_p)
             cutters.append(m_p if m_p.is_valid else m_p.buffer(0))
 
@@ -1764,8 +2061,7 @@ class CadQueryMotor:
             mp3n=(-p3s[0],p3s[1]); mp4n=(-p4s[0],p4s[1])
             trap_n = SPoly([_rot(*mp1n,a), _rot(*mp2n,a), _rot(*mp3n,a), _rot(*mp4n,a)])
             cxn,cyn = _rot(-p3s[0],p3s[1],a)
-            circ_n = SPoly([(cxn + fill_r2*cos(2*pi*k/32), cyn + fill_r2*sin(2*pi*k/32))
-                             for k in range(32)])
+            circ_n = SPoly(_arc_points(cxn, cyn, fill_r2, 0.0, 2*pi, scale_mm)[:-1])
             m_n = _safe_union(trap_n, circ_n)
             cutters.append(m_n if m_n.is_valid else m_n.buffer(0))
 
@@ -1791,44 +2087,6 @@ class CadQueryMotor:
         # `.fillet(stator_fillet_r1)` to inner-ring edges via _OuterRingSelector /
         # _InnerRingSelector.  We mirror that on the 2-D polygon here so the
         # Mesh tab (which only sees this dict) renders the SAME corners.
-        import numpy as _np
-        from math import acos as _acos, degrees as _degrees
-
-        def _fillet_coords_2d(coords, target_r, r_tol, fr, min_angle_deg=20.0):
-            n = len(coords)
-            new_coords = []
-            for i in range(n):
-                p_prev   = coords[(i - 1) % n]
-                p_corner = coords[i]
-                p_next   = coords[(i + 1) % n]
-                rc = (p_corner[0]**2 + p_corner[1]**2) ** 0.5
-                if abs(rc - target_r) < r_tol:
-                    dA = _np.array(p_prev) - _np.array(p_corner)
-                    dB = _np.array(p_next) - _np.array(p_corner)
-                    la = _np.linalg.norm(dA); lb = _np.linalg.norm(dB)
-                    if la > 1e-9 and lb > 1e-9:
-                        cos_t = float(_np.clip(_np.dot(dA/la, dB/lb), -1.0, 1.0))
-                        angle_deg = _degrees(_acos(cos_t))
-                        if angle_deg < (180.0 - min_angle_deg):
-                            arc = _fillet_corner(p_prev, p_corner, p_next, fr)
-                            new_coords.extend(arc)
-                            continue
-                new_coords.append(p_corner)
-            return new_coords
-
-        def _fillet_ring_corners_2d(poly, target_r, r_tol, fr, min_angle_deg=20.0):
-            if not hasattr(poly, 'exterior'):
-                return poly
-            new_ext  = _fillet_coords_2d(list(poly.exterior.coords[:-1]),
-                                          target_r, r_tol, fr, min_angle_deg)
-            new_ints = [_fillet_coords_2d(list(h.coords[:-1]),
-                                           target_r, r_tol, fr, min_angle_deg)
-                        for h in poly.interiors]
-            result = SPoly(new_ext, new_ints)
-            if not result.is_valid:
-                result = result.buffer(0)
-            return result
-
         # Outer-ring fillet (fillet_r) + air-gap-side fillet (fillet_r1). [[slot_fillet_root_cause]]
         # The outer band must stay in the OUTER part of the back-iron so it can NEVER
         # reach the slot-bottom (yoke-side) corners — on small motors those sit only
@@ -1838,9 +2096,11 @@ class CadQueryMotor:
         fillet_r1 = p.get('stator_fillet_r1', 0.0)
         _out_tol = min(1.5, 0.45 * core_h)
         if fillet_r > 0 and hasattr(stator_poly, 'exterior'):
-            stator_poly = _fillet_ring_corners_2d(stator_poly, outer_r, _out_tol, fillet_r)
+            stator_poly = _round_corners_at_radius(stator_poly, outer_r, _out_tol,
+                                                   fillet_r, scale_mm)
         if fillet_r1 > 0 and hasattr(stator_poly, 'exterior'):
-            stator_poly = _fillet_ring_corners_2d(stator_poly, inner_r, 1.0, fillet_r1)
+            stator_poly = _round_corners_at_radius(stator_poly, inner_r, 1.0,
+                                                   fillet_r1, scale_mm)
 
         # ── Coils (winding rectangles in slots) ──────────────────────────────
         # The cadquery iteration places wires on BOTH sides of each central
@@ -1931,7 +2191,7 @@ class CadQueryMotor:
         except Exception:
             pass
 
-        return {
+        out = {
             'stator':   stator_poly,      # Shapely Polygon in mm
             'magnets':  mag_polys,        # list of (Polygon, polarity)
             'rotor':    rotor_poly,       # Shapely Polygon in mm
@@ -1950,6 +2210,14 @@ class CadQueryMotor:
             'n_wires_fit':    int(getattr(self, '_n_wires_fit', num_wires)),
             'n_wires_requested': int(num_wires),
         }
+
+        # ── Final ring sanitize — NOTHING defective leaves this builder ───────
+        # Shapely's boolean noding emits exact duplicate points at slot-mouth
+        # corners and can leave a 3-coincident-point sliver "polygon" behind the
+        # rotor difference.  Both are junk the mesher must never see: gmsh
+        # honours every boundary point, so a zero-length edge becomes a fan of
+        # microscopic triangles.  Every drop is logged with coordinates.
+        return _sanitize_polys_dict(out, scale_mm)
 
     def get_extruded_mesh_data(self, depth: float = None) -> Dict[str, Dict]:
         """

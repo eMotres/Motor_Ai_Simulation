@@ -34,13 +34,15 @@ def end_winding_factor(p: Any, geo: Dict[str, Any] | None = None) -> float:
     solver's loss/R use the exact same number.
 
     Tooth-coil (fractional-slot concentrated) winding: each axial end-turn is a
-    half-loop hugging the wound tooth.  Its diameter is the tooth width, so the loop
-    length per side = π·tooth_width/2 and
-        k_end = (π·tooth_width/2 + L_stack) / L_stack.
-    (Per Vadim, 2026-07-02: the half-loop wraps the TOOTH, span = tooth_width — NOT
-    the full slot pitch tooth_width + slot_width.)  It still GROWS with ``tooth_width``
-    (slope π/2L per mm), so a wider tooth costs more copper mass / R / loss —
-    penalising over-wide teeth in the torque-density sweep, matching Ansys."""
+    half-loop around the wound tooth, and its CENTRELINE runs through the middle
+    of the wire bundle sitting on each side of the tooth — so the loop radius is
+    tooth_width/2 + wire_width/2, and
+        k_end = (π·(wire_width/2 + tooth_width/2) + L_stack) / L_stack.
+    (Per Vadim, 2026-08-04 — replaces the 2026-07-02 tooth-only span, which was
+    a lower bound: on the 40 mm it read 1.406 while the Ansys model's measured
+    factor is 1.76; with the wire term it reads 1.733.)  Grows with both
+    tooth_width and wire_width, so wide teeth AND thick wire cost copper
+    mass / R / loss in the torque-density sweep."""
     L = float(p.stack_length)
     if L <= 0:
         return 1.0
@@ -50,7 +52,9 @@ def end_winding_factor(p: Any, geo: Dict[str, Any] | None = None) -> float:
         r_mid = p.r_stator_in + p.slot_height_m * 0.5
         tau   = 2.0 * math.pi * r_mid / max(int(p.num_slots), 1)
         tooth_w = max(tau - slot_w, 0.3 * tau)
-    span = tooth_w                           # end-turn half-loop hugs the tooth (diameter = tooth_width)
+    wire_w = float((geo or {}).get("wire_width", 0.0)) * 1e-3        # 0 if unknown
+    # half-loop centreline diameter = tooth + one wire width (wire/2 each side)
+    span = tooth_w + max(wire_w, 0.0)
     return (math.pi * span / 2.0 + L) / L
 
 

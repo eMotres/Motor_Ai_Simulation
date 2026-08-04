@@ -223,7 +223,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   const [endWinding,    setEndWinding]    = usePersisted('endWinding', 0.0);  // k_end (editable)
   // Last geometry-derived k_end we seeded the cell with — shown in the tooltip.
   const [endWindingGeo, setEndWindingGeo] = usePersisted('endWindingGeo', 0.0);
-  // k_end = (π·tooth_w/2 + L_stack)/L_stack, so it moves with every tooth_width /
+  // k_end = (π·(wire_w/2 + tooth_w/2) + L_stack)/L_stack, so it moves with every tooth/wire /
   // stack-length edit.  Re-seeding is keyed on this signature instead of running
   // once on mount, which used to leave a stale (or bare 0) factor behind in every
   // consumer that reads `sim.endWinding` (TransientCharts, motorStore, sweep).
@@ -800,7 +800,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               onChange={e => setEndWinding(+e.target.value)}
               inputProps={{ step: 0.05, min: 0, max: 6 }}
               InputProps={{ endAdornment: <HelpTip title={`End-winding copper: scales the coil resistance/loss by the end-turn length.` +
-                          ` k_end = (π·tooth_w/2 + L_stack)/L_stack = ${endWindingGeo ? endWindingGeo.toFixed(3) : '—'} for THIS geometry.` +
+                          ` k_end = (π·(wire_w/2 + tooth_w/2) + L_stack)/L_stack = ${endWindingGeo ? endWindingGeo.toFixed(3) : '—'} for THIS geometry.` +
                           ` Re-derived on EVERY geometry change and used in all simulations AND optimizations —` +
                           ` it scales the copper loss and phase resistance for the end-turns a 2-D solve can't see.` +
                           ` Type a value to override it until the geometry changes again.`} /> }}

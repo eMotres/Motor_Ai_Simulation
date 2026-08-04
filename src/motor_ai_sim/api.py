@@ -405,7 +405,7 @@ def get_full_config(geo: Optional[str] = None):
                     geo_dict = {**geo_dict, **_o}
             except Exception:
                 pass
-        # Geometry-derived end-winding factor k_end = (π·tooth_w/2 + L)/L,
+        # Geometry-derived end-winding factor k_end = (π·(wire_w/2+tooth_w/2) + L)/L,
         # recomputed from the (possibly overridden) geometry so the UI cell stays in sync.
         try:
             from motor_ai_sim.simulation.geometry_2d import params_from_config as _pfc

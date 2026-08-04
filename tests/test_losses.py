@@ -89,17 +89,73 @@ class TestIronLoss:
         want = KC / TWO_PI_SQ * (amp * w) ** 2 / 2.0 * vol
         assert float(np.mean(cl)) == pytest.approx(want, rel=2e-3)
 
-    def test_stacking_factor_scales_the_volume(self):
-        """Only the steel dissipates; the insulation is dead volume."""
+    def test_kf_one_is_plain_bertotti(self):
+        """k_f = 1 (no insulation): the closed form with no lamination algebra.
+
+        P_hyst = k_h*f*B^2*V, and the classical term is the analytic
+        k_c/(2*pi^2)*(A*w)^2/2*V.  Anchors the whole k_f family below to a
+        number computable on paper.
+        """
+        n, amp, dt, f = 256, 1.3, 1e-5, 100.0
+        X, Y = _sine_history(n, amp, n_elem=1)
+        vol = 0.02 * 0.01                              # area * stack, k_f = 1
+        w = 2 * np.pi / (n * dt)
+        cl, pc = iron_loss_series(X, Y, np.array([0]), np.array([0.02]),
+                                  _steel(1.0), 0.01, f, n,
+                                  central_difference(dt), _bertotti)
+        assert pc == pytest.approx(KH * f * amp ** 2 * vol, rel=1e-9)
+        assert float(np.mean(cl)) == pytest.approx(
+            KC / TWO_PI_SQ * (amp * w) ** 2 / 2.0 * vol, rel=2e-3)
+
+    def test_kf_algebra_is_the_closed_form_ratio(self):
+        """The steel carries B/k_f over a volume k_f*V, so against k_f = 1:
+
+            B^2 terms (hysteresis, classical eddy)  ->  1/k_f
+            excess term (B^1.5)                     ->  1/sqrt(k_f)
+
+        This is the bug that made the core loss read low: the old code billed
+        the reduced steel VOLUME but evaluated Bertotti at the homogenised
+        B — i.e. k_f applied once, downwards, instead of k_f up-and-down.  It
+        scaled the loss BY k_f (0.92 -> -8 %) where the physics says 1/k_f
+        (+8.7 %): a factor 1/k_f^2 = 1.182 wrong.
+        """
+        n, amp, dt, f = 128, 1.0, 1e-4, 100.0
+        X, Y = _sine_history(n, amp)
+
+        def _run(kf, ke):
+            def _b(_m):
+                return KH, KC, ke
+            cl, pc = iron_loss_series(X, Y, np.arange(3), np.ones(3), _steel(kf),
+                                      0.01, f, n, central_difference(dt), _b)
+            return float(np.mean(cl)), pc
+
+        for kf in (0.925, 0.92, 0.5):
+            # B^2 terms: hysteresis (ke = 0) and the classical eddy series.
+            eddy1, hyst1 = _run(1.0, 0.0)
+            eddyk, hystk = _run(kf, 0.0)
+            assert hystk == pytest.approx(hyst1 / kf, rel=1e-12)
+            assert eddyk == pytest.approx(eddy1 / kf, rel=1e-12)
+            # excess term alone (kh = 0 via a coefficient set with only ke):
+            _, exc1 = _run(1.0, 7.0)
+            _, exck = _run(kf, 7.0)
+            exc1 -= hyst1
+            exck -= hystk
+            assert exck == pytest.approx(exc1 / math.sqrt(kf), rel=1e-12)
+
+    def test_kf_terms_breakdown_sums_to_the_reported_loss(self):
+        """The reported per-term split IS the number, not a parallel estimate."""
         n = 64
-        X, Y = _sine_history(n, 1.0)
-        loss = {}
-        for sf in (1.0, 0.5):
-            cl, pc = iron_loss_series(X, Y, np.arange(3), np.ones(3), _steel(sf),
-                                      0.01, 100.0, n, central_difference(1e-4), _bertotti)
-            loss[sf] = (float(np.mean(cl)), pc)
-        assert loss[0.5][0] == pytest.approx(loss[1.0][0] * 0.5, rel=1e-9)
-        assert loss[0.5][1] == pytest.approx(loss[1.0][1] * 0.5, rel=1e-9)
+        X, Y = _sine_history(n, 1.1)
+
+        def _b(_m):
+            return KH, KC, 3.0
+        terms: dict = {}
+        cl, pc = iron_loss_series(X, Y, np.arange(3), np.ones(3), _steel(0.92),
+                                  0.01, 100.0, n, central_difference(1e-4), _b,
+                                  terms=terms)
+        assert terms["k_f"] == 0.92
+        assert terms["hysteresis_W"] + terms["excess_W"] == pytest.approx(pc, rel=1e-12)
+        assert terms["eddy_W"] == pytest.approx(float(np.mean(cl)), rel=1e-12)
 
     def test_missing_stacking_factor_uses_one_documented_default(self):
         """The same constant used to be 0.95 in two places and 0.97 in a third.

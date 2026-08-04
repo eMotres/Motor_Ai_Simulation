@@ -3512,6 +3512,10 @@ def _build_transient_summary(
         "J_coil_A_per_mm2": round(_j_coil, 1),   # I_rms/parallel over one strand's copper section
         "P_loss_total_W": round(_ploss, 1),
         "P_core_W":     round(_Pfe, 1),            # laminated iron
+        # Which Bertotti TERM the core loss is, stator vs rotor.  "The core loss
+        # reads low" is only answerable by the split, and the card had no way to
+        # show it.  {stator|rotor: hysteresis_W, eddy_W, excess_W, k_f}.
+        "P_core_terms": sbres.get("P_fe_terms") or {},
         "P_stranded_W": round(_Pcu, 1),            # copper
         "P_solid_W":    round(_Pmag + _Pshaft, 1), # magnet + shaft eddy
         # How many discarded frames at θ<0 the coupled eddy solve needed before

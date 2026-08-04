@@ -227,6 +227,7 @@ def get_materials_library():
                 "sigma": m.sigma,
                 "density": m.density,
                 "stacking_factor": m.stacking_factor,
+                "thickness_mm": m.thickness_mm,
                 "core_loss_model": m.core_loss_model,
                 "core_loss_kh": m.core_loss_kh,
                 "core_loss_kc": m.core_loss_kc,

@@ -3881,16 +3881,43 @@ def fem_transient_sliding_band(
     # Iron loss: ONE implementation (simulation/losses.py) for both element
     # orders.  The only genuine difference is the dB/dt estimator — the P2
     # field is smooth in time, so a plain central difference is enough.
-    def _iron_p2(hx, hy, idx, areas_half, mat):
+    _fe_terms_s: dict = {}
+    _fe_terms_r: dict = {}
+
+    def _iron_p2(hx, hy, idx, areas_half, mat, terms=None):
         return _iron_loss_series(
             hx, hy, idx, areas_half, mat, p.stack_length, f_elec, n_total,
-            _central_difference(dt), _mat_lib.effective_bertotti)
+            _central_difference(dt), _mat_lib.effective_bertotti, terms=terms)
 
-    _pcl_s, _ph_s = _iron_p2(_hsx2, _hsy2, _iron_s_idx, areas_s, _steel_s)
-    _pcl_r, _ph_r = _iron_p2(_hrx2, _hry2, _iron_r_idx, areas_r, _steel_r)
+    _pcl_s, _ph_s = _iron_p2(_hsx2, _hsy2, _iron_s_idx, areas_s, _steel_s,
+                             _fe_terms_s)
+    _pcl_r, _ph_r = _iron_p2(_hrx2, _hry2, _iron_r_idx, areas_r, _steel_r,
+                             _fe_terms_r)
     _P_fe_t = (_pcl_s + _pcl_r) * NS + (_ph_s + _ph_r) * NS
     _P_fe_t = np.maximum(_P_fe_t, 0.0)
     P_fe_ser2 = _P_fe_t.tolist(); P_fe_avg2 = float(np.mean(_P_fe_t))
+    # Per-term, per-half split of the iron loss (scaled to the whole machine).
+    # Reported rather than re-derived: "the core loss looks low" is answerable
+    # only by which TERM is low, and until now nothing downstream could see the
+    # hysteresis/eddy/excess split or the k_f each half was billed at.
+    _fe_break = {}
+    for _half, _tm in (("stator", _fe_terms_s), ("rotor", _fe_terms_r)):
+        if _tm:
+            _fe_break[_half] = {
+                "hysteresis_W": round(_tm["hysteresis_W"] * NS, 3),
+                "eddy_W": round(_tm["eddy_W"] * NS, 3),
+                "excess_W": round(_tm["excess_W"] * NS, 3),
+                "k_f": _tm["k_f"],
+            }
+    if _fe_break:
+        log.info("iron loss | %s | total %.2f W",
+                 " | ".join("%s: hyst %.2f + eddy %.2f + excess %.2f = %.2f W "
+                            "(k_f %.3f)"
+                            % (_h, _v["hysteresis_W"], _v["eddy_W"],
+                               _v["excess_W"],
+                               _v["hysteresis_W"] + _v["eddy_W"] + _v["excess_W"],
+                               _v["k_f"])
+                            for _h, _v in _fe_break.items()), P_fe_avg2)
     # magnet + shaft eddy: honest (reaction-included) rotor solve on the
     # rotor-frame A(t) history — the SAME function the P1 path uses.
     if _histA_rot2:
@@ -4215,6 +4242,7 @@ def fem_transient_sliding_band(
         "P_mag_honest_W": round(float(P_mag_prox_avg2), 3),
         "P_shaft_honest_W": round(float(P_shaft_prox_avg2), 3),
         "P_fe_avg_W": round(float(P_fe_avg2), 3),
+        "P_fe_terms": _fe_break,          # {stator|rotor: hyst/eddy/excess/k_f}
         "P_loss_total_avg_W": round(float(P_loss_avg2), 3),
         "P_airgap_W": P_airgap_avg2, "P_mech_avg_W": P_mech_avg2,
         "P_elec_in_W": P_elec_in2,               # ⟨Σ v·i⟩ (0 at no-load)

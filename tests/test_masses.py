@@ -91,26 +91,26 @@ def m40():
 # ── per-component pins ───────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("part,kg", [
-    ("stator", 1.2141),   # 4934.4 mm² CAD section × 35 mm × 0.925 × 7600
-    ("rotor",  0.5412),   # 2199.5 mm² — the holder AND the ribs between magnets
+    ("stator", 1.20755),  # 4934.4 mm² CAD section × 35 mm × k_f 0.92 × 7600
+    ("rotor",  0.53826),  # 2199.5 mm² — the holder AND the ribs between magnets
     ("cu",     0.5160),   # 1008 mm² measured copper × 35 mm × k_end 1.6373 × 8933
     ("mag",    0.7225),   # 2752.3 mm² of CAD magnet polygons (28 × 98.3 mm²)
     ("shaft",  0.0670),   # hollow 3 mm tube, 708.7 mm² — not a solid disc
-    ("active", 2.9938),   # iron + copper + magnets: the ANSYS basis (3.0975 kg)
-    ("total",  3.0608),   # active + shaft: the torque-per-mass divisor
+    ("active", 2.98430),  # iron + copper + magnets: the ANSYS basis
+    ("total",  3.05127),  # active + shaft: the torque-per-mass divisor
 ])
 def test_150mm_component_masses(m150, part, kg):
     assert m150[part] == pytest.approx(kg, abs=5e-4)
 
 
 @pytest.mark.parametrize("part,kg", [
-    ("stator", 0.032530),
-    ("rotor",  0.014554),
+    ("stator", 0.0323544),
+    ("rotor",  0.0144743),
     ("cu",     0.023406),
     ("mag",    0.017486),
     ("shaft",  0.001547),
-    ("active", 0.087976),
-    ("total",  0.089523),
+    ("active", 0.0877226),
+    ("total",  0.0892696),
 ])
 def test_40mm_component_masses(m40, part, kg):
     assert m40[part] == pytest.approx(kg, abs=5e-6)

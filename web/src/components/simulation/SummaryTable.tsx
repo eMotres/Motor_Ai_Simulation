@@ -38,6 +38,9 @@ export interface TransientSummary {
   J_coil_A_per_mm2?:   number;   // coil current density = I_rms/parallel over one strand's copper section
   P_loss_total_W:      number;
   P_core_W:            number;
+  // Bertotti split behind P_core_W, per half — what the core loss is MADE of.
+  P_core_terms?: Record<string, { hysteresis_W: number; eddy_W: number;
+                                  excess_W: number; k_f: number }>;
   P_stranded_W:        number;
   P_solid_W:           number;
   // Discarded frames at θ<0 the coupled eddy solve needed before its σ·∂A/∂t
@@ -88,6 +91,19 @@ interface Props {
   // the Optimize tab already uses the new point), flag the result as stale so the
   // Sim numbers aren't mistaken for the current point.
   liveOp?: { current?: number; gamma?: number };
+}
+
+/** "  stator 67.3 W (hyst 33.9 / eddy 17.6 / excess 15.8, k_f 0.92); rotor …"
+ *  — the Bertotti split behind the Core tile, appended to its HelpTip.  Empty
+ *  string when the run predates the split, so old stored summaries still read. */
+function coreSplit(t?: TransientSummary['P_core_terms']): string {
+  const parts = Object.entries(t ?? {}).map(([half, v]) => {
+    const tot = v.hysteresis_W + v.eddy_W + v.excess_W;
+    return `${half} ${tot.toFixed(1)} W (hyst ${v.hysteresis_W.toFixed(1)}`
+         + ` / eddy ${v.eddy_W.toFixed(1)} / excess ${v.excess_W.toFixed(1)},`
+         + ` k_f ${v.k_f.toFixed(3)})`;
+  });
+  return parts.length ? `  Split: ${parts.join('; ')}.` : '';
 }
 
 const Cell: React.FC<{
@@ -306,7 +322,15 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
           accent="amber"
           tooltip="Cu + Fe (Bertotti) + magnet eddy + shaft eddy — period means"/>
         <Cell label="Core (lamination)" value={fmtK(s.P_core_W)} unit="W"
-          tooltip="Bertotti loss in stator + rotor steel — kh·f·B² + kc·(f·B)² + ke·(f·B)^1.5, period mean"/>
+          tooltip={'Bertotti loss in stator + rotor steel — kh·f·B² + kc·(f·B)² + '
+                 + 'ke·(f·B)^1.5, period mean.  Coefficients are fitted to the '
+                 + 'material\'s measured loss curves at every frequency; the steel '
+                 + 'carries B/k_f over k_f of the section (lamination).'
+                 + coreSplit(s.P_core_terms)
+                 + '  Alternating-axis basis: a rotating B locus (tooth roots) '
+                 + 'reads low, and manufacturing degradation (punching, stacking, '
+                 + 'welding — typically 1.5-2×) is NOT included.  This is the raw '
+                 + 'calculation, with no correction coefficient.'}/>
         <Cell label="Stranded (copper)" value={fmtK(s.P_stranded_W)} unit="W"
           tooltip="I²R (DC) + AC eddy/proximity share in the coil windings, incl. end-winding resistance (k_end) and ρ_Cu(T)"/>
         <Cell label="Solid (magnets)" value={fmtK(s.P_solid_W)} unit="W"

@@ -19,9 +19,10 @@ import numpy as np
 TWO_PI_SQ = 2.0 * math.pi ** 2
 
 # Fill factor used when a steel declares none. Every steel in the shipped library
-# declares its own (B15AHV950M is 0.925), so this is a guard, not a knob — and it
-# is ONE value: the same constant appeared as 0.95 in two places and 0.97 in a
-# third, which is the sort of split that quietly moves numbers.
+# declares its own (B15AHV950M is 0.92, the datasheet's guaranteed minimum), so
+# this is a guard, not a knob — and it is ONE value: the same constant appeared
+# as 0.95 in two places and 0.97 in a third, which is the sort of split that
+# quietly moves numbers.
 DEFAULT_STACKING_FACTOR = 0.97
 
 
@@ -36,17 +37,68 @@ def iron_loss_series(
     n_frames: int,
     ddt: Callable[[np.ndarray], np.ndarray],
     bertotti: Callable[[Any], Tuple[float, float, float]],
+    terms: Optional[dict] = None,
 ) -> Tuple[np.ndarray, float]:
     """Bertotti iron loss from a per-element B(t) history.
 
     Returns ``(P_classical(t), P_hysteresis_and_excess)`` — the first ripples
     with the teeth passing, the second is a per-cycle quantity and therefore flat.
 
-        P/V = k_h*f*B^2  +  k_c/(2*pi^2) * <(dB/dt)^2>  +  k_e*f^1.5*B^1.5
+        P/V_steel = k_h*f*B_s^2 + k_c/(2*pi^2)*<(dB_s/dt)^2> + k_e*f^1.5*B_s^1.5
 
     The coefficients come from the material's MEASURED loss curves when it has
     them (relative-error-weighted NNLS over every (f, B) point), falling back to
     the YAML k_h/k_c/k_e. Real curves give real loss.
+
+    LAMINATION (k_f) — the one place the homogenised field and the measured
+    coefficients have to be reconciled, and it was wrong before this:
+
+      * The magnetic solve runs on HOMOGENISED iron (``fem_solver_2d``,
+        "lamination in the magnetic model"): steel and inter-laminate insulation
+        are smeared into one medium over the GEOMETRIC section the 2-D model
+        draws. Flux only crosses the steel, so what the solve reports is
+        ``B_homog = k_f * B_steel`` — the steel inside carries ``B/k_f``, i.e.
+        +8.7 % at the shipped k_f = 0.92.
+      * The datasheet coefficients are W per m^3 OF STEEL at the peak
+        polarisation IN the steel. So the loss must be evaluated at ``B/k_f``
+        and billed on the steel volume ``k_f * V_geom``:
+
+            P = k_f*V * [ k_h*f*(B/k_f)^2
+                        + k_c/(2*pi^2)*<(dB/dt)^2>/k_f^2
+                        + k_e*f^1.5*(B/k_f)^1.5 ]
+              = V * [ k_h*f*B^2 / k_f
+                    + k_c/(2*pi^2)*<(dB/dt)^2> / k_f
+                    + k_e*f^1.5*B^1.5 / sqrt(k_f) ]
+
+        Against plain Bertotti at B_homog over the geometric volume that is
+        1/k_f (+8.7 % at k_f = 0.92) on the two B^2 terms and 1/sqrt(k_f)
+        (+4.3 %) on the excess term. Against what this function used to compute
+        — Bertotti at B_homog over the STEEL volume, i.e. the k_f applied to the
+        volume and NOT to the field — it is 1/k_f^2 = +18.2 % and
+        1/k_f^1.5 = +13.3 %.
+        The old form was the worst of both: it removed the insulation from the
+        mass but never put the flux it displaces back into the steel.
+
+    WAVEFORM. The classical term is the true per-element ``dB/dt`` TIME SERIES
+    of BOTH components — every harmonic the solve resolved (slot ripple, minor
+    loops) is in it by construction, no sinusoidal equivalent anywhere. The
+    per-cycle terms (hysteresis, excess) are MAJOR-LOOP ONLY: each component's
+    amplitude is half its peak-to-peak over the captured period and is counted
+    once per electrical cycle. There is no rainflow minor-loop count — a tooth
+    whose flux dips and recovers within the cycle pays for that dip in the eddy
+    term but not in the hysteresis term. That is a deliberate (and stated)
+    modelling choice, matching the classical Bertotti separation; it makes the
+    hysteresis term a LOWER bound on machines with strong slot ripple.
+
+    ROTATIONAL. The two field components are treated as two independent
+    alternating loci and their hysteresis contributions SUMMED (the standard
+    axis-decomposition approximation). Elements at a tooth root, where B rotates
+    rather than alternates, are therefore under-read — classically by up to
+    ~1.5-2x locally. Correcting it needs a measured rotational-loss surface the
+    material records do not carry, so it stays an UNDER-READ that is reported as
+    such. Nothing here multiplies the computed loss by a correction coefficient:
+    the number this returns is the raw calculation, and the difference to a
+    measured core is a difference, not a coefficient to be tuned away.
 
     ``ddt`` is the caller's time-derivative operator, and it is the ONLY thing
     that differs between element orders: P1 needs a smoothed angle-derivative
@@ -56,6 +108,11 @@ def iron_loss_series(
 
     ``bertotti`` is injected rather than imported so this module stays free of
     the materials library and can be tested with hand-written coefficients.
+
+    ``terms``, when a dict is passed, is filled with the cycle-mean watts of
+    each Bertotti term (``hysteresis_W`` / ``eddy_W`` / ``excess_W``) and the
+    ``k_f`` used — the CORE tile's breakdown, so the split is reported instead
+    of being re-derived by whoever asks.
     """
     if material is None or idx.size == 0 or len(hist_x) == 0:
         return np.zeros(n_frames), 0.0
@@ -65,22 +122,29 @@ def iron_loss_series(
         return np.zeros(n_frames), 0.0
 
     kh, kc, ke = bertotti(material)
-    sf = float(getattr(material, "stacking_factor", DEFAULT_STACKING_FACTOR))
-    # Only the steel carries loss; the inter-laminate insulation is dead volume.
-    vol = areas[idx] * stack_length_m * sf
+    kf = float(getattr(material, "stacking_factor", DEFAULT_STACKING_FACTOR))
+    kf = kf if kf > 0 else 1.0
+    # Only the steel dissipates; the inter-laminate insulation is dead volume.
+    vol_steel = areas[idx] * stack_length_m * kf
+    # …and the flux the insulation cannot carry is crowded into that steel.
+    inv_kf = 1.0 / kf
 
-    dX = ddt(X)
-    dY = ddt(Y)
-    classical = (kc / TWO_PI_SQ) * np.sum((dX ** 2 + dY ** 2) * vol[None, :], axis=1)
+    dX = ddt(X) * inv_kf
+    dY = ddt(Y) * inv_kf
+    classical = (kc / TWO_PI_SQ) * np.sum(
+        (dX ** 2 + dY ** 2) * vol_steel[None, :], axis=1)
 
     # Peak-to-peak / 2 per element over the captured window — the AC amplitude
-    # the per-cycle terms are defined on.
-    Bac2 = (((X.max(0) - X.min(0)) * 0.5) ** 2
-            + ((Y.max(0) - Y.min(0)) * 0.5) ** 2)
-    per_cycle = float(np.sum(
-        (kh * f_elec_hz * Bac2
-         + ke * f_elec_hz ** 1.5 * np.power(np.maximum(Bac2, 0.0), 0.75)) * vol))
-    return classical, per_cycle
+    # the per-cycle terms are defined on, in the STEEL.
+    Bac2 = ((((X.max(0) - X.min(0)) * 0.5) ** 2
+             + ((Y.max(0) - Y.min(0)) * 0.5) ** 2)) * inv_kf ** 2
+    hyst = float(np.sum(kh * f_elec_hz * Bac2 * vol_steel))
+    excess = float(np.sum(
+        ke * f_elec_hz ** 1.5 * np.power(np.maximum(Bac2, 0.0), 0.75) * vol_steel))
+    if terms is not None:
+        terms.update({"hysteresis_W": hyst, "excess_W": excess,
+                      "eddy_W": float(np.mean(classical)), "k_f": kf})
+    return classical, hyst + excess
 
 
 def central_difference(dt_s: float) -> Callable[[np.ndarray], np.ndarray]:
@@ -275,15 +339,23 @@ def loss_density_map(
             _dens[base + local_idx] += shape_e * (P_target_W / integ)
 
     # Iron — stator + rotor share one Bertotti total (P_fe_avg).
+    # Per GEOMETRIC volume, with the same k_f algebra ``iron_loss_series`` uses:
+    # the steel carries B/k_f and occupies k_f of the section, so the B^2 terms
+    # carry 1/k_f and the excess term 1/sqrt(k_f).  The shape is normalised to
+    # the reported watts, so this does not move the total — it moves the SPLIT
+    # between stator and rotor whenever the two halves are different steels
+    # (different k_f), which is exactly what the picture is read for.
     def _iron_shape(hx, hy, idx, mat, qp=None):
         if (mat is None or idx.size == 0 or not np.size(hx)
                 or np.asarray(hx[0]).size == 0):
             return np.zeros(idx.size)
         kh, kc, ke = bertotti(mat)
-        b2 = _bac2(hx, hy)
-        return (kh * f_elec_hz * b2
-                + ke * f_elec_hz ** 1.5 * np.power(np.maximum(b2, 0.0), 0.75)
-                + (kc / TWO_PI_SQ) * _mean_sq_ddt(hx, hy, qp))
+        kf = float(getattr(mat, "stacking_factor", DEFAULT_STACKING_FACTOR))
+        kf = kf if kf > 0 else 1.0
+        b2 = _bac2(hx, hy) / kf ** 2
+        return kf * (kh * f_elec_hz * b2
+                     + ke * f_elec_hz ** 1.5 * np.power(np.maximum(b2, 0.0), 0.75)
+                     + (kc / TWO_PI_SQ) * _mean_sq_ddt(hx, hy, qp) / kf ** 2)
     _sh_is = _iron_shape(hist_sx, hist_sy, iron_s_idx, steel_s)
     _sh_ir = _iron_shape(hist_rx, hist_ry, iron_r_idx, steel_r)
     _integ_fe = ((float(np.sum(_sh_is * areas_s[iron_s_idx])) if iron_s_idx.size else 0.0)

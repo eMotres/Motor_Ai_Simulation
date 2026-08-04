@@ -95,6 +95,12 @@ class SteelMaterial:
     thermal_conductivity: Optional[float] = None   # W/(m·K)
     specific_heat: Optional[float] = None          # J/(kg·K)
     stacking_factor: float = 0.97
+    # Strip thickness [mm] as the datasheet states it.  Not used by the solve —
+    # the classical eddy term rides on the fitted k_c, which already carries
+    # d²σ/12 — but it is the spec that EXPLAINS k_f and k_c, and a record whose
+    # loss curves cannot be traced back to a thickness is a record nobody can
+    # check.  Optional: the older library entries do not carry it.
+    thickness_mm: Optional[float] = None
 
     # Bertotti model
     core_loss_model: str = "bertotti"
@@ -249,6 +255,8 @@ def _parse_steel(name: str, raw: dict) -> SteelMaterial:
         thermal_conductivity=raw.get("thermal_conductivity"),
         specific_heat=raw.get("specific_heat"),
         stacking_factor=float(raw.get("stacking_factor", 0.97)),
+        thickness_mm=(float(raw["thickness_mm"])
+                      if raw.get("thickness_mm") is not None else None),
         core_loss_model=raw.get("core_loss_model", "bertotti"),
         core_loss_kh=float(raw.get("core_loss_kh") or 0),
         core_loss_kc=float(raw.get("core_loss_kc") or 0),
@@ -373,17 +381,29 @@ def material_from_dict(category: Category, name: str, d: dict):
     """Build a material dataclass from a GET-library-format dict (the shape served
     by /api/materials/library — i.e. the admin-managed GLOBAL layer). Robust to
     extra/missing keys; pure properties (resistivity, energy_product, mu_r_initial)
-    are not fields and are ignored. core_loss_curves (display-only) is dropped — the
-    solver uses the Bertotti kh/kc/ke + bh_curve."""
+    are not fields and are ignored.
+
+    ``core_loss_curves`` is CARRIED, not dropped. It used to be skipped as
+    "display-only, the solver uses kh/kc/ke" — which stopped being true when
+    ``effective_bertotti`` started preferring a fit over the measured curves. A
+    steel served from the global layer arrived with no curves, the fit returned
+    None, and the run silently fell back to the stored kh/kc/ke: on B15AHV950M
+    those were the hand-set values, +11 % on the iron loss at the 933 Hz
+    operating point versus the fit, with nothing in the output saying which set
+    was used. Same record, two answers, depending on which layer served it."""
     cls = _DATACLASS_BY_CAT[category]
     names = {f.name for f in dataclass_fields(cls)}
     kwargs: dict = {}
     for k, v in (d or {}).items():
-        if k == "name" or k == "core_loss_curves" or k not in names:
+        if k == "name" or k not in names:
             continue
         if k == "bh_curve" and isinstance(v, list):
             kwargs[k] = [(float(p[0]), float(p[1])) for p in v
                          if isinstance(p, (list, tuple)) and len(p) >= 2]
+        elif k == "core_loss_curves" and isinstance(v, dict):
+            kwargs[k] = {str(fk): [(float(p[0]), float(p[1])) for p in curve
+                                   if isinstance(p, (list, tuple)) and len(p) >= 2]
+                         for fk, curve in v.items() if isinstance(curve, list)}
         else:
             kwargs[k] = v
     return cls(name=name, **kwargs)

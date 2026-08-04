@@ -107,7 +107,10 @@ const RESULT_COLS: { key: string; label: string; unit?: string; d?: number;
   { key: 'power_per_mass_W_kg',  label: 'PD',          unit: 'kW/kg',  d: 2, scale: 1e-3, better: 'hi',
     derive: r => Number(r.T_em_avg_Nm) * 2 * Math.PI * Number(r.rpm) / 60 / Number(r.mass_total_kg) },
   { key: 'T_ripple_pct',         label: 'Ripple',      unit: '%',      d: 2, better: 'lo' },
+  // Mass (total = EM-active + shaft) is what TD/PD above divide by; EM-active
+  // drops the shaft and is the basis an Ansys active-mass expression quotes.
   { key: 'mass_total_kg',        label: 'Mass',        unit: 'kg',     d: 3, better: 'lo' },
+  { key: 'mass_active_kg',       label: 'EM-active',   unit: 'kg',     d: 3, better: 'lo' },
   { key: 'J_coil_A_per_mm2',     label: 'J coil',      unit: 'A/mm²',  d: 1, better: 'lo' },
   { key: 'P_loss_total_W',       label: 'Loss total',  unit: 'W',      d: 1, better: 'lo' },
   // Drive-side trio, kept together right after the loss total: the bus voltage a

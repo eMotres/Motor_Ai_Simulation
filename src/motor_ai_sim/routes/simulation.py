@@ -3288,34 +3288,52 @@ def _compute_masses(p, geo_cfg: dict, k_end: float = 0.0) -> dict:
     geometric auto value or a user pin.  0 → ``compute_masses`` derives it from the
     geometry (matching the solver's own auto path).
 
-    Materials and densities:
-      20SW1200 silicon steel : 7650 kg/m³
-      Copper windings        : 8900 kg/m³
-      F45SH NdFeB magnets    : 7500 kg/m³
-      Rotor back-iron (steel): 7650 kg/m³
-      Al6061 shaft           : 2700 kg/m³
+    Every density and lamination fill factor comes from the material ASSIGNED to
+    that part (config `materials:` / the per-request override) — the same records
+    the field solve reads — and every cross-section is measured on the CAD
+    polygons the mesher receives.  Nothing here is hard-coded.
     """
     # SINGLE SOURCE: motor_ai_sim.masses.compute_masses — identical mass to the sweep
-    # and all three optimizers (stator iron = back-iron yoke + teeth ∝ tooth_width).
-    from motor_ai_sim.masses import compute_masses, RHO_STEEL, RHO_CU, RHO_MAG, RHO_AL
+    # and all three optimizers (CAD sections × stack × k_f × assigned density).
+    from motor_ai_sim.masses import compute_masses
     m = compute_masses(p, geo_cfg, k_end=k_end)
     m_total = m["total"]
+    _mat = m["MAT"]
+    _rho = m["RHO"]
+    _lam = ", lamination k_f={:.3f}"
     return {
         "components": [
-            {"name": "Stator core (20SW1200)",  "material": "silicon steel", "density_kg_m3": RHO_STEEL,
+            {"name": f"Stator core ({_mat['stator_core'] or 'steel'})", "material": "electrical steel",
+             "density_kg_m3": _rho["steel"],
              "volume_cm3": round(m["V_stator"]*1e6, 1), "mass_kg": round(m["stator"], 3),
-             "note": f"yoke {round(m['V_yoke']*1e6,1)}cm3 + teeth {round(m['V_teeth']*1e6,1)}cm3 (∝ tooth_width)"},
-            {"name": "Copper windings (Cu)",    "material": "copper",        "density_kg_m3": RHO_CU,
-             "volume_cm3": round(m["V_cu"]*1e6, 1), "mass_kg": round(m["cu"], 3)},
-            {"name": "Magnets (F45SH NdFeB)",  "material": "NdFeB",          "density_kg_m3": RHO_MAG,
-             "volume_cm3": round(m["V_mag"]*1e6, 1), "mass_kg": round(m["mag"], 3)},
-            {"name": "Rotor back-iron (steel)", "material": "silicon steel",  "density_kg_m3": RHO_STEEL,
-             "volume_cm3": round(m["V_rotor"]*1e6, 1), "mass_kg": round(m["rotor"], 3)},
-            {"name": "Shaft (Al6061)",          "material": "aluminium",      "density_kg_m3": RHO_AL,
-             "volume_cm3": round(m["V_shaft"]*1e6, 1), "mass_kg": round(m["shaft"], 3)},
+             "note": f"CAD section {m['A_stator']*1e6:.0f} mm² × stack"
+                     + _lam.format(m["k_f_stator"])},
+            {"name": "Copper windings (Cu)",    "material": _mat["slot"] or "copper",
+             "density_kg_m3": _rho["cu"],
+             "volume_cm3": round(m["V_cu"]*1e6, 1), "mass_kg": round(m["cu"], 3),
+             "note": f"measured copper section {m['A_cu']*1e6:.0f} mm² × stack × k_end {m['k_end']:.3f}"},
+            {"name": f"Magnets ({_mat['magnet'] or 'PM'})",  "material": "NdFeB",
+             "density_kg_m3": _rho["mag"],
+             "volume_cm3": round(m["V_mag"]*1e6, 1), "mass_kg": round(m["mag"], 3),
+             "note": f"CAD magnet polygons {m['A_mag']*1e6:.0f} mm² × stack"},
+            {"name": f"Rotor back-iron ({_mat['rotor_core'] or 'steel'})", "material": "electrical steel",
+             "density_kg_m3": _rho["steel_rotor"],
+             "volume_cm3": round(m["V_rotor"]*1e6, 1), "mass_kg": round(m["rotor"], 3),
+             "note": f"CAD section {m['A_rotor']*1e6:.0f} mm² × stack"
+                     + _lam.format(m["k_f_rotor"])},
+            {"name": f"Shaft ({_mat['shaft'] or 'shaft'})",  "material": "shaft",
+             "density_kg_m3": _rho["al"],
+             "volume_cm3": round(m["V_shaft"]*1e6, 1), "mass_kg": round(m["shaft"], 3),
+             "note": f"hollow shaft tube {m['A_shaft']*1e6:.0f} mm² × stack — NOT in active mass"},
         ],
-        "total_active_kg": round(m_total, 3),
-        "note": "Active components only (no housing/frame/bearings). Typical frame adds 30-50% mass.",
+        # ACTIVE = the EM-active mass (iron + copper + magnets), the basis ANSYS
+        # quotes; TOTAL = active + shaft, the historical divisor of torque-per-mass
+        # (unchanged, so stored Compare points keep their meaning).
+        "mass_active_kg": round(m["active"], 3),
+        "mass_total_kg": round(m_total, 3),
+        "total_active_kg": round(m_total, 3),   # legacy name = TOTAL, kept for old readers
+        "area_source": m["area_source"],
+        "note": "Active section only (no housing/frame/bearings). Typical frame adds 30-50% mass.",
         "estimated_total_with_frame_kg": round(m_total * 1.4, 2),
     }
 
@@ -3359,7 +3377,13 @@ def _build_transient_summary(
     _geo_cfg = _merge_geo(dict(_gc().get("geometry", {})), geo_override)
     _masses = _compute_masses(_p, _geo_cfg,
                               k_end=float(sbres.get("end_winding_factor", 0.0) or 0.0))
-    _m_tot = float(_masses["total_active_kg"])
+    # TOTAL (active + shaft) stays the divisor of torque/power/loss density — the
+    # basis every stored Compare point and optimizer objective was built on.
+    # ACTIVE (iron + copper + magnets, no shaft) is reported alongside: it is the
+    # number an ANSYS "active mass" expression quotes, and the tile the user
+    # cross-checks against it.
+    _m_tot = float(_masses["mass_total_kg"])
+    _m_active = float(_masses["mass_active_kg"])
 
     _rpm = float(sbres.get("rpm", 3950.0))
     _Tavg = float(sbres.get("T_avg_Nm", 0.0))
@@ -3526,6 +3550,8 @@ def _build_transient_summary(
         "coil_temp_C":  round(float(sbres.get("coil_temp_C", coil_temp_c)), 1),
         "end_winding_factor": round(float(sbres.get("end_winding_factor", 0.0)), 2),
         "mass_total_kg": round(_m_tot, 3),
+        "mass_active_kg": round(_m_active, 3),
+        "mass_area_source": _masses.get("area_source", ""),
         "mass_components": _masses["components"],
         "torque_per_mass_Nm_kg": round(_Tavg / max(_m_tot, 1e-6), 3),
         "power_per_mass_W_kg":   round(_Pmech / max(_m_tot, 1e-6), 1),

@@ -435,23 +435,9 @@ def _end_winding_factor(p: _P, geo: Dict[str, Any]) -> float:
     return end_winding_factor(p, geo)
 
 
-#: Measured conductor sections, keyed by the geometry that produced them.  The
-#: CAD build is ~35 ms and a Pareto search re-evaluates the same candidate at
-#: several operating points, so the measurement is memoised rather than repeated.
-_CU_AREA_CACHE: Dict[Tuple[Tuple[str, Optional[float]], ...], Optional[float]] = {}
-
-#: The geometry that decides how much copper the CAD lays down.  Anything outside
-#: this set cannot move the conductor polygons, so it must not split the cache
-#: (rpm/current are not here at all — the section is geometry).
-_CU_AREA_KEYS = (
-    "num_seg", "num_slots_per_segment", "num_poles_per_segment",
-    "num_slots", "num_poles",
-    "stator_diameter", "core_thickness", "slot_height", "tooth_width",
-    "tooth2_width", "cut_width", "slot_hs", "stator_fillet_r",
-    "stator_fillet_r1", "wire_width", "wire_height", "wire_spacing_x",
-    "wire_spacing_y", "wire_split", "insulation_thickness",
-    "num_wires_per_slot", "motor_length",
-)
+#: The measured sections (copper, iron, magnets) and their memo live in
+#: ``motor_ai_sim.masses`` — one cached CAD build per geometry serves both the
+#: loss and the mass, so they can never be measured on different polygons.
 
 
 def _measured_copper_area_m2(geo: Dict[str, Any]) -> Optional[float]:
@@ -466,26 +452,15 @@ def _measured_copper_area_m2(geo: Dict[str, Any]) -> Optional[float]:
     Returns None when the CAD cannot build this candidate (a geometry the
     optimizer is entitled to propose and the caller is entitled to know about);
     the caller then falls back to the nominal rectangle and records that it did.
+
+    Delegates to ``masses.cad_areas_m2``, which measures the conductor, iron and
+    magnet sections in ONE cached CAD build — the same build the candidate's mass
+    needs, so a candidate costs one build, not two, and its loss and its mass can
+    never be measured on different polygons.
     """
-    key = tuple((k, None if geo.get(k) is None else float(geo[k]))
-                for k in _CU_AREA_KEYS)
-    if key in _CU_AREA_CACHE:
-        return _CU_AREA_CACHE[key]
-    area: Optional[float] = None
-    try:
-        from motor_ai_sim.cadquery_geometry import CadQueryMotor
-        from motor_ai_sim.simulation.field_ops import coil_copper_area_total_m2
-        motor = CadQueryMotor()
-        motor.set_parameters(dict(geo))
-        a = float(coil_copper_area_total_m2(motor.get_2d_polygons(rotor_angle_deg=0.0)))
-        if a > 0.0:
-            area = a
-    except Exception:  # noqa: BLE001 — an unbuildable candidate is data, not an error
-        area = None
-    if len(_CU_AREA_CACHE) > 4096:        # a long search must not grow without bound
-        _CU_AREA_CACHE.clear()
-    _CU_AREA_CACHE[key] = area
-    return area
+    from motor_ai_sim.masses import cad_areas_m2
+    a = (cad_areas_m2(geo) or {}).get("copper")
+    return float(a) if a and a > 0.0 else None
 
 
 def _copper_loss(p: _P, geo: Dict[str, Any], I_phase_rms: float,
@@ -526,14 +501,20 @@ def _copper_loss(p: _P, geo: Dict[str, Any], I_phase_rms: float,
     return rho * J * J * V_cu_slot * k_end, source
 
 
-def _masses(p: _P, geo: Dict[str, Any]) -> Dict[str, float]:
+def _masses(p: _P, geo: Dict[str, Any], magnet: Optional[str] = None,
+            steel: Optional[str] = None) -> Dict[str, Any]:
     """Component masses — delegates to the SINGLE SOURCE
-    ``motor_ai_sim.masses.compute_masses`` (stator iron = back-iron yoke + teeth∝
-    tooth_width), so the sweep / all three optimizers use the exact same mass — and
-    therefore torque-density — as Simulation.  (The old local copy parametrised the
-    stator iron by slot_width only, so a tooth-width sweep left the mass constant.)"""
+    ``motor_ai_sim.masses.compute_masses`` (CAD sections × stack × lamination k_f ×
+    the assigned material's density), so the sweep / all three optimizers use the
+    exact same mass — and therefore torque-density — as Simulation.
+
+    A candidate scored with a DIFFERENT steel / magnet than the saved config is
+    massed with that material's density too: the same names the physics above uses
+    are handed to the mass, so a heavier magnet cannot look free."""
     from motor_ai_sim.masses import compute_masses
-    return compute_masses(p, geo)
+    mats = {k: v for k, v in (("magnet", magnet), ("stator_core", steel),
+                              ("rotor_core", steel)) if v}
+    return compute_masses(p, geo, materials=mats or None)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -594,7 +575,7 @@ def _raw_physics(geo: Dict[str, Any], wind: Dict[str, Any], sim: Dict[str, Any],
     B_tooth = min(2.0, B_tooth_raw)          # clamped for the LOSS only
     B_back = min(2.0, B_back_raw)
     B_stat_eff = math.sqrt((B_tooth ** 2 + B_back ** 2) / 2.0)
-    masses = _masses(p, geo)
+    masses = _masses(p, geo, magnet=magnet, steel=steel)
     f_slot = freq * N_slots / pole_pairs
     B_rotor = min(1.4, B_g * 0.6)
 
@@ -766,7 +747,12 @@ class DesignMetrics:
     P_cu_W: float = 0.0
     P_fe_W: float = 0.0
     P_mag_W: float = 0.0
+    # TOTAL = iron + copper + magnets + shaft.  It is what torque_per_mass and
+    # power_per_mass divide by, unchanged, so every stored Compare point keeps
+    # meaning the same thing.  ACTIVE drops the shaft (iron + copper + magnets)
+    # — the EM-active mass an ANSYS "active mass" expression quotes.
     mass_total_kg: float = 0.0
+    mass_active_kg: float = 0.0
     B_gap_T: float = 0.0
     B_tooth_T: float = 0.0
     B_back_T: float = 0.0
@@ -851,7 +837,8 @@ def evaluate_design(geo: Dict[str, Any], wind: Dict[str, Any], sim: Dict[str, An
         power_per_mass_W_kg=(P_mech / m_tot if m_tot > 0 else 0.0),
         P_mech_W=P_mech, P_loss_total_W=P_loss,
         P_cu_W=P_cu, P_fe_W=P_fe, P_mag_W=P_mag,
-        mass_total_kg=m_tot, B_gap_T=raw["B_g"],
+        mass_total_kg=m_tot, mass_active_kg=float(masses.get("active", 0.0)),
+        B_gap_T=raw["B_g"],
         B_tooth_T=B_tooth_raw, B_back_T=B_back_raw,
         T_cog_Nm=T_cog, T_ripple_pct=ripple_pct,
         current_a=float(current_a), rpm=float(rpm),

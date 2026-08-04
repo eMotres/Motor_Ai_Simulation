@@ -44,7 +44,12 @@ export interface TransientSummary {
   // start-up transient was quiet — 0 when the solve did not run.
   eddy_warmup_frames?: number;
   efficiency:          number;
+  // TOTAL = iron + copper + magnets + shaft (the divisor of every density below);
+  // ACTIVE = the EM-active mass without the shaft — the basis an ANSYS active-mass
+  // expression quotes, so it is the tile a user cross-checks against Ansys.
   mass_total_kg:       number;
+  mass_active_kg?:     number;
+  mass_area_source?:   string;
   mass_components:     Array<{ name: string; mass_kg: number; volume_cm3?: number; material?: string }>;
   torque_per_mass_Nm_kg: number;
   power_per_mass_W_kg:   number;
@@ -274,12 +279,15 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
         {/* 3 decimals: a 30 mm machine weighs ~0.05 kg, so 2 decimals showed a
             single significant digit and hid every change during optimization.
             Matches the per-component breakdown below, which already uses 3. */}
-        <Cell label="Active mass" value={fmt(s.mass_total_kg, 3)} unit="kg"
-          tooltip="Sum of stator iron + copper + magnets + rotor iron + shaft (active section, no housing)"/>
+        <Cell label="EM-active mass"
+          value={fmt(s.mass_active_kg ?? s.mass_total_kg, 3)} unit="kg"
+          tooltip={"IN: stator iron + rotor iron (× lamination k_f) + copper (× k_end) + magnets. "
+                 + "OUT: shaft, housing, bearings. CAD sections × stack × the assigned material's density "
+                 + `— the same basis an Ansys active-mass expression uses. With shaft: ${fmt(s.mass_total_kg, 3)} kg.`}/>
         <Cell label="Torque density" value={fmt(s.torque_per_mass_Nm_kg, 2)} unit="N·m/kg"
-          tooltip="T_em / mass_active — figure of merit for motor compactness"/>
+          tooltip="T_em / total mass (EM-active + shaft) — figure of merit for motor compactness"/>
         <Cell label="Power density" value={fmt(s.power_per_mass_W_kg / 1000, 2)} unit="kW/kg"
-          tooltip="P_mech / mass_active"/>
+          tooltip="P_mech / total mass (EM-active + shaft)"/>
         <Cell label="T ripple" value={fmt(s.T_ripple_pct, 1)} unit="%"
           accent={accentRipple}
           tooltip={`Physical torque ripple (T_max − T_min)/|T_avg| over one electrical period, ` +

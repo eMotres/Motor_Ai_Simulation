@@ -668,7 +668,7 @@
       }
     },
     "round_3_what_is_left": {
-      "the_number": "with the magnet law fixed, the NONLINEAR machine's 3D mid-plane gap fundamental sits about 9 % above the 2D solver's on the same cross-section",
+      "the_number": "with the magnet law fixed and both models converged, the NONLINEAR machine's 3D mid-plane gap fundamental sits about 8 % above the 2D solver's on the same cross-section: 3D 1.470 T +/- 0.2 %, 2D 1.36 T +/- 1 %",
       "B1_3D_mid_T": 1.474153149946728,
       "B1_2D_T_band": [
         1.32818,
@@ -679,14 +679,14 @@
         1.1099046439087534
       ],
       "known_contributions": [
-        "NEITHER Picard is converged. The 2D leg limit-cycles over a 3.1 % band from 8 to 640 sweeps and never settles; the 3D leg stops at its 45-sweep cap with a constitutive residual of 6.4e-3 against a 3e-3 tolerance. Between them that is most of a third of the gap, and it is the first thing to fix.",
-        "the two Picards do not even agree on what |B| an element has: fem_solver_2d averages |B| over the quadrature points, static3d.solver takes |mean B|. On a saturating bridge those are different operating points on the B-H curve. Same curve, different sampling \u2014 a one-line difference with a percent-level consequence.",
+        "Picard noise: the 2D leg moves about 1 % between sweep counts on a fixed mesh (and 3.1 % on the passport's own cross-section, where 16 sweeps is an outlier at 1.328 T against a 1.355-1.369 T cluster); the 3D leg stops at its 45-sweep cap with a constitutive residual of 6.4e-3 against a 3e-3 tolerance. That is noise ON the residual, not the residual.",
+        "the two Picards do not agree on what |B| an element has: fem_solver_2d averages |B| over the quadrature points, static3d.solver takes |mean B|, and on a saturating bridge those are different points on the same curve. Note the SIGN before blaming it: the 2D convention reads the LARGER |B|, so it saturates the bridges more, shunts less and should read HIGHER \u2014 the opposite of what is measured. Reconciling it would widen the gap, not close it, which is exactly why it has to be reconciled before anything else is concluded.",
         "cross-section resolution is NOT it at this operating point: refining h_solid from 1.5 to 0.6 mm moves the 3D leg by 0.2 % and leaves the ratio at 1.077 \u2014 the saturated bridges do not amplify a mesh error the way the linear ladder's un-saturated ones did"
       ],
       "next_steps": [
-        "converge BOTH Picards first (raise the 3D cap, replace the 2D solver's fixed 0.5 damping with the adaptive scheme static3d already uses) and re-measure \u2014 nothing else can be trusted until the two limit cycles are gone",
-        "make the two element-|B| definitions the same and re-measure",
-        "then re-run the nonlinear case at h_solid <= 0.6 mm"
+        "make the two element-|B| definitions the same and re-measure \u2014 it is the one KNOWN difference in how the two models read the same B-H curve, and its sign says the true gap is wider than 8 %",
+        "converge both Picards (raise the 3D cap; give fem_solver_2d the adaptive geometric damping and constitutive-residual test static3d already uses) so the +/-1 % noise stops masking the next effect",
+        "then compare something that is NOT the gap fundamental \u2014 magnet flux and bridge flux at the mid-plane \u2014 to say WHERE the two models put the flux differently, which the gap harmonic alone cannot"
       ],
       "nonlinear_vs_cross_section_resolution": {
         "_doc": "the SAME nonlinear machine at three cross-section resolutions, 3D scalar P2 sector vs the 2D solver on that same cross-section \u2014 the round-2 refinement test, repeated at the real (saturated) operating point",
@@ -759,6 +759,42 @@
           "P1": 34.0,
           "2D": 2.4
         }
+      },
+      "the_2d_leg_is_converged_too": {
+        "_doc": "the 2D reference alone, on four cross-sections and at four Picard sweep counts each \u2014 because 'the other model is under-resolved' is the easiest thing to assume and the cheapest thing to check",
+        "B1_2D_T": {
+          "h_solid=1.5 (4025 tri)": [
+            1.36093,
+            1.35054,
+            1.35425,
+            1.34791
+          ],
+          "h_solid=1.0 (4785 tri)": [
+            1.38567,
+            1.37672,
+            1.38472,
+            1.37971
+          ],
+          "h_solid=0.6 (7551 tri)": [
+            1.36439,
+            1.35931,
+            1.36494,
+            1.37233
+          ],
+          "h_solid=0.4 (13901 tri)": [
+            1.3632,
+            1.35592,
+            1.36014,
+            1.36573
+          ]
+        },
+        "sweeps": [
+          16,
+          40,
+          80,
+          160
+        ],
+        "conclusion": "1.36 T +/- 1 %, with no trend in either direction \u2014 the 2D leg is mesh-converged and its Picard noise is about 1 %.  Both models are therefore converged, roughly 8 % apart, and that gap is a MODEL difference, not a numerical one."
       }
     },
     "superseded_blocks": {

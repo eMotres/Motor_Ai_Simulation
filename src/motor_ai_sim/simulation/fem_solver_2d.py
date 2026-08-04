@@ -9,10 +9,26 @@ Domain-specific data (matches the CadQuery polygon classes):
     stator steel   ν = 1/(μ₀·5000)              (silicon steel, linear)
     rotor steel    ν = 1/(μ₀·5000)
     shaft          ν = 1/(μ₀·1000)              (aluminium-ish)
-    magnets        ν = 1/(μ₀·1.05),  M = ±Br·φ̂   (tangential, alternating)
+    magnets        ν = 1/(μ₀·1.05),  M = ±(Br/μ₀)·φ̂   (tangential, alternating)
     coils          ν = 1/μ₀,  J_z = direction · I_phase · n_wires / area
 
 Boundary: A_z = 0 on the outer stator circle.
+
+The magnet constitutive law
+---------------------------
+    B = μ₀·μ_rec·H + μ₀·M ,     remanence  Br = μ₀·M ,   M = Br/μ₀
+
+That is what ``build_materials`` stores in ``Mx``/``My``, what this file's own
+demag pass and ``simulation/demag.py`` read the full-strength remanence back as
+(``Br0 = μ₀·|M|``), and what the 3D solver in ``simulation/static3d`` is handed.
+Substituting it into curl H = J gives  H = ν·B − ν·μ₀·M = ν·B − M/μ_rec, so the
+SOURCE this weak form integrates is M/μ_rec — the equivalent coercivity
+H_c = Br/(μ₀·μ_rec) — NOT M.  Assembling M itself models a magnet of remanence
+μ_rec·Br, i.e. 5 % strong for NdFeB.  It did, until the 3D end-effect work
+measured a flat 4.71 % disagreement on an iron-free cross-section and
+``tests/test_static3d_stage_a.py`` pinned the law against the closed-form field
+of a transversely magnetised cylinder.  Every benchmark that had ever exercised
+a magnet here ran at μ_r = 1, the one value where the two conventions agree.
 
 Method: linear FE on a P1-triangle mesh; gmsh builds a conforming mesh from
 the real CadQuery exterior+interior contours so the same geometry the
@@ -667,11 +683,13 @@ def solve_magnetostatics(
 
     def _assemble_f() -> np.ndarray:
         f = f_current.copy()
+        # 1/μ_r: the A-formulation source is the equivalent coercivity
+        # H_c = Br/(μ₀·μ_rec) = M/μ_rec, not M.  See the module docstring.
         for tag, fMx in tag_fMx.items():
-            scale = br_factor.get(tag, 1.0)
+            scale = br_factor.get(tag, 1.0) / max(tag_mat[tag].mu_r, 1.0)
             f += fMx * (tag_mat[tag].Mx * scale)
         for tag, fMy in tag_fMy.items():
-            scale = br_factor.get(tag, 1.0)
+            scale = br_factor.get(tag, 1.0) / max(tag_mat[tag].mu_r, 1.0)
             f -= fMy * (tag_mat[tag].My * scale)
         return f
 
@@ -1331,7 +1349,8 @@ def solve_magnetostatics_fem(mesh, cell_tags: np.ndarray,
                              nonlinear_iterations: int = 8):
     """Magnetostatic solve on ElementTriP1 (order 1) or ElementTriP2 (order 2).
 
-    Same weak form  ∫ ν ∇A·∇v = ∫ J_z v + ∫(Mx ∂v/∂y − My ∂v/∂x) and the same
+    Same weak form  ∫ ν ∇A·∇v = ∫ J_z v + ∫(Hcx ∂v/∂y − Hcy ∂v/∂x),
+    Hc = M/μ_rec (module docstring), and the same
     per-element BH Picard (_mu_r_from_bh_vec, 0.5 damping) for BOTH orders — the
     ONLY difference is the element (order 2 ⇒ A quadratic ⇒ B linear per element,
     smooth torque; order 1 ⇒ A linear ⇒ B piecewise-constant, staircase).  Using
@@ -1418,10 +1437,13 @@ def solve_magnetostatics_fem(mesh, cell_tags: np.ndarray,
 
     def _assemble_f():
         f = f_current.copy()
+        # 1/μ_r: source is H_c = M/μ_rec, not M (module docstring).
         for tag, fMx in tag_fMx.items():
-            f += fMx * (tag_mat[tag].Mx * br_factor.get(tag, 1.0))
+            f += fMx * (tag_mat[tag].Mx * br_factor.get(tag, 1.0)
+                        / max(tag_mat[tag].mu_r, 1.0))
         for tag, fMy in tag_fMy.items():
-            f -= fMy * (tag_mat[tag].My * br_factor.get(tag, 1.0))
+            f -= fMy * (tag_mat[tag].My * br_factor.get(tag, 1.0)
+                        / max(tag_mat[tag].mu_r, 1.0))
         return f
 
     # Dirichlet DOFs on the outer circle — P2 must include EDGE-MIDPOINT dofs,
@@ -2218,7 +2240,11 @@ def fem_transient_sliding_band(
         m = matr0.get(int(tag))
         if m is None or (abs(m.Mx) + abs(m.My)) <= 0:
             continue
-        _Mx_glob[idx] = m.Mx; _My_glob[idx] = m.My
+        # Stored as the A-formulation SOURCE, i.e. the equivalent coercivity
+        # H_c = M/μ_rec = Br/(μ₀·μ_rec) — not M.  See the module docstring;
+        # _Mx_glob/_My_glob feed nothing but ``_msrc``.
+        _inv_mu = 1.0 / max(float(m.mu_r), 1.0)
+        _Mx_glob[idx] = m.Mx * _inv_mu; _My_glob[idx] = m.My * _inv_mu
     # magnet_scale lets the torque decomposition turn the PMs OFF (=0 →
     # reluctance-only torque) or weaken them, without touching geometry.
     _br_glob = np.full(_nt_r, float(magnet_scale))   # per-element Br factor (demag de-rating × magnet_scale)

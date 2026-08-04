@@ -315,11 +315,6 @@ def _magnetised_disc_mesh(a_m: float, r_box_m: float, n_in: int = 14,
                    np.ascontiguousarray(np.array(t).T))
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "fem_solver_2d assembles the magnet source as M rather than M/mu_rec, so "
-    "its magnets have remanence mu_rec*Br. The fix is a physics change to "
-    "every 2D simulation in the project and is not this module's to make — "
-    "DELETE THIS MARKER when it lands."))
 def test_the_2d_reference_leg_uses_the_same_magnet_law_as_3d():
     """k_flux crosses two solvers, so they must agree on what a magnet IS.
 

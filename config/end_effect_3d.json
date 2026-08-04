@@ -681,7 +681,7 @@
       "known_contributions": [
         "NEITHER Picard is converged. The 2D leg limit-cycles over a 3.1 % band from 8 to 640 sweeps and never settles; the 3D leg stops at its 45-sweep cap with a constitutive residual of 6.4e-3 against a 3e-3 tolerance. Between them that is most of a third of the gap, and it is the first thing to fix.",
         "the two Picards do not even agree on what |B| an element has: fem_solver_2d averages |B| over the quadrature points, static3d.solver takes |mean B|. On a saturating bridge those are different operating points on the B-H curve. Same curve, different sampling \u2014 a one-line difference with a percent-level consequence.",
-        "cross-section resolution of the saturating bridges, per round 2 \u2014 smaller here than in the linear ladder because a saturated bridge does not amplify, but not zero"
+        "cross-section resolution is NOT it at this operating point: refining h_solid from 1.5 to 0.6 mm moves the 3D leg by 0.2 % and leaves the ratio at 1.077 \u2014 the saturated bridges do not amplify a mesh error the way the linear ladder's un-saturated ones did"
       ],
       "next_steps": [
         "converge BOTH Picards first (raise the 3D cap, replace the 2D solver's fixed 0.5 damping with the adaptive scheme static3d already uses) and re-measure \u2014 nothing else can be trusted until the two limit cycles are gone",
@@ -706,9 +706,17 @@
             "B1_2D_T": 1.385668688273379,
             "ratio": 1.0624995300557825,
             "tets": 129195
+          },
+          {
+            "h_gap_mm": 0.35,
+            "h_solid_mm": 0.6,
+            "B1_3D_T": 1.4694258002292706,
+            "B1_2D_T": 1.364386843034635,
+            "ratio": 1.0769861991347047,
+            "tets": 203877
           }
         ],
-        "note": "the residual falls with refinement here too, but far more slowly than in the linear ladder \u2014 a saturated bridge does not amplify a mesh error the way an un-saturated one does, so what is left over is mostly the two unconverged Picards"
+        "note": "this does NOT converge the way the linear ladder did, and the reason is visible in the columns: the 3D leg is steady to 0.2 % across the three meshes (1.46937 / 1.47227 / 1.46943 T) while the 2D leg wanders by 1.8 % (1.36093 / 1.38567 / 1.36439 T) and the ratio wanders with it.  A saturated bridge does not amplify a mesh error the way an un-saturated one does, so at the REAL operating point the mesh is no longer the story: the 3D answer is converged, and what is left is a genuine ~7-8 % model disagreement with 1-3 % of 2D Picard limit-cycle noise on top"
       },
       "three_way_on_a_coarser_cross_section": {
         "_doc": "the same nonlinear machine solved three ways on ONE mesh (h_gap 0.45 mm, h_solid 1.5 mm, box 60.0 mm, 108675 tets) with the 2D leg on the same cross-section \u2014 the three-way the Nedelec spike was commissioned to produce",
@@ -762,6 +770,6 @@
       "python -m motor_ai_sim.simulation.static3d.benchmarks --avsphi --coil",
       "STATIC3D_FULL=1 pytest tests/test_static3d_nedelec.py"
     ],
-    "updated_utc": "2026-08-04T08:14:50Z"
+    "updated_utc": "2026-08-04T08:33:06Z"
   }
 }

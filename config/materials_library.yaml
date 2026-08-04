@@ -2492,6 +2492,37 @@ magnet:
       - [-638000,  0.317]
       - [-634000,  0.327]
       - [0,        1.190]
+  F52SH_120C:
+    Br: 1.27
+    Hc: 962525
+    bh_curve:
+    - - -652000
+      - -0.739
+    - - -649300
+      - 0.0
+    - - -649000
+      - 0.08
+    - - -647000
+      - 0.249
+    - - -643000
+      - 0.367
+    - - -638000
+      - 0.397
+    - - -634000
+      - 0.407
+    - - 0
+      - 1.27
+    density: 7500
+    description: Sintered NdFeB magnet, F52SH grade - operating point 120 C. Same SH
+      temperature class as F45SH_120C (J-knee at the same demagnetising field); Br
+      scaled from the N52SH 20 C typical 1.445 T by the SH class factor 0.8815 measured
+      on the F45SH record (1.35 -> 1.19). Hc = Br/(mu0*mu_rec).
+    grade: F52SH
+    mu_rec: 1.05
+    sigma: 6.25e5
+    specific_heat: 460
+    temperature_c: 120
+    thermal_conductivity: 7.6
 
 
 # ── CONDUCTORS (windings) ────────────────────────────────────

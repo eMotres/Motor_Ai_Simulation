@@ -7,6 +7,8 @@ import BoltIcon from '@mui/icons-material/Bolt';
 import CheckIcon from '@mui/icons-material/Check';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import DriveFileRenameOutlineIcon from '@mui/icons-material/DriveFileRenameOutline';
+import LockIcon from '@mui/icons-material/Lock';
+import LockOpenIcon from '@mui/icons-material/LockOpen';
 import { useUIStore } from '../../stores/motorStore';
 import { useAuth } from '../../contexts/AuthContext';
 import MyDesigns from './MyDesigns';
@@ -21,7 +23,13 @@ interface Motor {
   slots: number; poles: number; rpm: number; current_a: number;
   T_avg_Nm: number; ripple_pct: number | null; gamma_deg: number;
   tier: string; description: string; preset?: string;
-  owner?: string;       // "user" for saved motors (renamable), absent for curated
+  // Who this motor belongs to (an account, or "admin" for everything created
+  // before ownership existed).  Only the owner or an admin may write it.
+  owner?: string;
+  // Admin lock: read-only for EVERYONE but an admin — the owner included.
+  locked?: boolean;
+  // Computed per request for the CALLER: may you rename / delete this motor?
+  can_write?: boolean;
   thumb_svg?: string;   // inline real-geometry cross-section (user-saved motors)
   // enriched (optional) — shown when present
   power_w?: number; efficiency_pct?: number; voltage_pk_v?: number;
@@ -51,6 +59,8 @@ const fmtP = (w: number) => (w >= 1000 ? `${(w / 1000).toFixed(2)} kW` : `${Math
 // the highlighted pricing tier uses, so the card reads as emphasised, not as
 // a different kind of card.
 const ACTIVE = '#60a5fa';
+// The colour of "protected" — the padlock chip and the admin's lock toggle.
+const LOCKED = '#fbbf24';
 
 /** "2 h ago" for an ISO instant, floored (never rounded UP into a time that has
  *  not happened yet).  `now` is passed in so the label re-renders on the clock
@@ -184,6 +194,26 @@ const MotorsCatalog: React.FC = () => {
     } finally { setBusy(null); }
   };
 
+  // Lock / unlock — admin only (the backend enforces it with require_admin;
+  // this just keeps the control out of everyone else's way).
+  const [lockErr, setLockErr] = useState<{ id: string; msg: string } | null>(null);
+  const toggleLock = async (m: Motor) => {
+    if (!m.preset) return;
+    setBusy(m.id); setLockErr(null);
+    try {
+      const r = await fetch(`${API}/api/presets/${encodeURIComponent(m.preset)}/lock`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ locked: !m.locked }),
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        setLockErr({ id: m.id, msg: String((j as any).detail || `HTTP ${r.status}`) });
+        return;
+      }
+      await load();
+    } finally { setBusy(null); }
+  };
+
   const loadMotor = async (m: Motor) => {
     // Browsing is open to everyone; WORKING with a motor requires sign-in.
     // Anonymous visitors get the Google sign-in prompt instead of a broken load.
@@ -214,6 +244,12 @@ const MotorsCatalog: React.FC = () => {
       : (m.T_avg_Nm > 0 && m.rpm > 0 ? m.T_avg_Nm * 2 * Math.PI * m.rpm / 60 : null);
     const active = m.is_active === true;
     const rel = m.saved_at ? relTime(m.saved_at, nowTs) : null;
+    // The backend computes this per request for THIS caller; an older backend
+    // that doesn't send it leaves every action enabled (it enforces anyway).
+    const writable = m.can_write !== false;
+    const cannotWhy = m.locked
+      ? `Locked by an admin — ask an admin to unlock it (owner: ${m.owner ?? '—'}).`
+      : `This motor belongs to ${m.owner ?? 'another account'} — ask them or an admin.`;
     return (
       <Box key={m.id} sx={{
         flex: '1 1 290px', maxWidth: 360, display: 'flex', flexDirection: 'column',
@@ -237,6 +273,15 @@ const MotorsCatalog: React.FC = () => {
                   <Chip size="small" label="in editor"
                     sx={{ height: 18, fontSize: '0.58rem', fontWeight: 700,
                       bgcolor: `${ACTIVE}22`, color: ACTIVE }} />
+                </Tooltip>
+              )}
+              {m.locked && (
+                <Tooltip title={`Locked by an admin — read-only for everyone, its owner (${m.owner ?? '—'}) included. Load it and "Save as new…" to work from it.`}>
+                  <Chip size="small" icon={<LockIcon sx={{ fontSize: 11, ml: '4px' }} />}
+                    label="locked"
+                    sx={{ height: 18, fontSize: '0.58rem', fontWeight: 700,
+                      bgcolor: `${LOCKED}22`, color: LOCKED,
+                      '& .MuiChip-icon': { color: LOCKED } }} />
                 </Tooltip>
               )}
             </Box>
@@ -272,9 +317,16 @@ const MotorsCatalog: React.FC = () => {
           <Typography sx={{ color: 'var(--text-3)', fontSize: '0.64rem' }}>
             {rel ? `saved ${rel}` : 'saved —'}
           </Typography>
-          <HelpTip title={rel
-            ? `Last saved ${exactLocal(m.saved_at!)}`
-            : 'Saved before timestamps existed — this motor has no recorded save time.'} />
+          {/* Owner lives HERE, in the tip of the save line — the cards are
+              already dense, and "who may write this" is the same question as
+              "when was this last written". */}
+          <HelpTip title={<>
+            {rel ? `Last saved ${exactLocal(m.saved_at!)}`
+                 : 'Saved before timestamps existed — this motor has no recorded save time.'}
+            <br />Owner: {m.owner ?? '—'}
+            {m.locked ? ' · locked (admin only)'
+                      : (m.can_write === false ? ' · read-only for you' : '')}
+          </>} />
         </Box>
 
         <Box sx={{ flex: 1 }} />
@@ -287,10 +339,14 @@ const MotorsCatalog: React.FC = () => {
             sx={{ textTransform: 'none', fontSize: '0.74rem', py: 0.4, flex: 1 }}>
             {needsSignIn ? 'Sign in to load' : 'Load into editor'}
           </Button>
-          {m.preset && (isAdmin || m.owner === 'user') && (
-            <Tooltip title="Rename">
+          {/* Rename / delete are SHOWN to everyone and DISABLED for anyone who
+              may not write this motor, with the reason (and the owner) in the
+              tooltip. Hiding them was the old "I can't delete my motor" with
+              nothing on screen saying why. */}
+          {m.preset && (
+            <Tooltip title={writable ? 'Rename' : cannotWhy}>
               <span>
-                <IconButton size="small" disabled={!!busy} onClick={() => openRename(m)}
+                <IconButton size="small" disabled={!!busy || !writable} onClick={() => openRename(m)}
                   sx={{ color: 'var(--text-2)', border: '1px solid var(--line)', borderRadius: 1,
                     '&:hover': { bgcolor: 'var(--panel)', borderColor: 'var(--text-3)' } }}>
                   <DriveFileRenameOutlineIcon sx={{ fontSize: 16 }} />
@@ -298,23 +354,36 @@ const MotorsCatalog: React.FC = () => {
               </span>
             </Tooltip>
           )}
-          {/* Same ownership rule as rename: your own motors are yours to
-              delete; factory/catalog motors stay admin-only. The old
-              admin-only gate hid the button entirely for a signed-out user —
-              "I can't delete my motor" with nothing on screen saying why. */}
-          {(isAdmin || m.owner === 'user') && (
-            <Tooltip title={isAdmin ? 'Delete from catalog (admin)'
-                                    : 'Delete this motor (yours)'}>
+          <Tooltip title={writable
+            ? (isAdmin ? 'Delete from catalog (admin)' : 'Delete this motor (yours)')
+            : cannotWhy}>
+            <span>
+              <IconButton size="small" disabled={!!busy || !writable} onClick={() => deleteMotor(m)}
+                sx={{ color: '#f87171', border: '1px solid #7f1d1d', borderRadius: 1,
+                  '&:hover': { bgcolor: '#7f1d1d33', borderColor: '#ef4444' } }}>
+                <DeleteOutlineIcon sx={{ fontSize: 16 }} />
+              </IconButton>
+            </span>
+          </Tooltip>
+          {/* The lock itself is an admin control — everyone else never sees it. */}
+          {isAdmin && m.preset && (
+            <Tooltip title={m.locked
+              ? `Unlock — restore write access to ${m.owner ?? 'its owner'}`
+              : `Lock — make this read-only for everyone but an admin (owner: ${m.owner ?? '—'})`}>
               <span>
-                <IconButton size="small" disabled={!!busy} onClick={() => deleteMotor(m)}
-                  sx={{ color: '#f87171', border: '1px solid #7f1d1d', borderRadius: 1,
-                    '&:hover': { bgcolor: '#7f1d1d33', borderColor: '#ef4444' } }}>
-                  <DeleteOutlineIcon sx={{ fontSize: 16 }} />
+                <IconButton size="small" disabled={!!busy} onClick={() => void toggleLock(m)}
+                  sx={{ color: m.locked ? LOCKED : 'var(--text-2)',
+                    border: `1px solid ${m.locked ? LOCKED : 'var(--line)'}`, borderRadius: 1,
+                    '&:hover': { bgcolor: 'var(--panel)', borderColor: LOCKED } }}>
+                  {m.locked ? <LockIcon sx={{ fontSize: 16 }} /> : <LockOpenIcon sx={{ fontSize: 16 }} />}
                 </IconButton>
               </span>
             </Tooltip>
           )}
         </Box>
+        {lockErr?.id === m.id && (
+          <Box sx={{ fontSize: 10.5, color: '#f87171', mt: 0.5 }}>{lockErr.msg}</Box>
+        )}
       </Box>
     );
   };

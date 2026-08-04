@@ -6,7 +6,9 @@ import { Box, Button, TextField, Tooltip, CircularProgress } from '@mui/material
 import SaveIcon from '@mui/icons-material/Save';
 import CheckIcon from '@mui/icons-material/Check';
 import BoltIcon from '@mui/icons-material/Bolt';
+import LockOutlinedIcon from '@mui/icons-material/LockOutlined';
 import { getActiveMotor, createMotorFromCurrent, overwriteActiveMotor } from './motorSettings';
+import HelpTip from './HelpTip';
 
 interface Props { disabled?: boolean; }
 
@@ -46,9 +48,23 @@ const SaveToMotorButton: React.FC<Props> = ({ disabled }) => {
     finally { setOvrBusy(false); }
   };
 
+  // Someone else's motor (or a locked one) is loaded as a WORKING COPY: the
+  // editor drives it normally, but nothing auto-saves into it. ONE short chip
+  // says so; the owner's name lives in the tip, not in a paragraph on the panel.
+  const ro = !!active?.readOnly;
+
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
-      {active && (
+      {active && (ro ? (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, fontSize: 11, color: 'var(--text-2)' }}>
+          <LockOutlinedIcon sx={{ fontSize: 13, color: '#fbbf24' }} />
+          <span>Motor:&nbsp;<b style={{ color: 'var(--text-0)' }}>{active.name}</b></span>
+          <span style={{ color: '#fbbf24' }}>· read-only — working copy</span>
+          <HelpTip title={`${active.locked
+            ? 'This motor is locked by an admin'
+            : `This motor belongs to ${active.owner ?? 'another account'}`}, so your edits are NOT auto-saved into it. Tune it freely here, then "Save as new…" to keep the result as your own motor.`} />
+        </Box>
+      ) : (
         <Tooltip title={`Every geometry / mesh / simulation change auto-saves into "${active.name}". Use "Save as new motor" to keep a separate named copy in the Motors tab.`} placement="top">
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, fontSize: 11, color: 'var(--text-2)' }}>
             <BoltIcon sx={{ fontSize: 13, color: '#34d399' }} />
@@ -56,7 +72,7 @@ const SaveToMotorButton: React.FC<Props> = ({ disabled }) => {
             <span style={{ color: 'var(--text-4)' }}>· auto-saved</span>
           </Box>
         </Tooltip>
-      )}
+      ))}
       {naming ? (
         <Box sx={{ display: 'flex', gap: 0.5 }}>
           <TextField size="small" autoFocus placeholder="New motor name…" value={name}
@@ -71,7 +87,7 @@ const SaveToMotorButton: React.FC<Props> = ({ disabled }) => {
         </Box>
       ) : (
         <Box sx={{ display: 'flex', gap: 0.5 }}>
-          {active && (
+          {active && !ro && (
             <Tooltip title={`Overwrite "${active.name}" in place with the current geometry / mesh / simulation (updates its Motors-tab card). Use "Save as new" to keep the original and fork a copy.`} placement="top">
               <span style={{ flex: 1 }}>
                 <Button size="small" variant="contained" fullWidth disableElevation disabled={disabled || ovrBusy}
@@ -86,7 +102,7 @@ const SaveToMotorButton: React.FC<Props> = ({ disabled }) => {
           <Button size="small" variant="outlined" disableElevation disabled={disabled}
             startIcon={done ? <CheckIcon sx={{ fontSize: 15 }} /> : <SaveIcon sx={{ fontSize: 15 }} />}
             onClick={() => setNaming(true)}
-            sx={{ flex: active ? 'unset' : 1, whiteSpace: 'nowrap', textTransform: 'none', fontSize: 11, borderColor: 'var(--line)',
+            sx={{ flex: (active && !ro) ? 'unset' : 1, whiteSpace: 'nowrap', textTransform: 'none', fontSize: 11, borderColor: 'var(--line)',
               color: done ? '#34d399' : '#a5b4fc', '&:hover': { borderColor: '#6366f1', bgcolor: '#1e1b4b' } }}>
             {done ? 'Saved ✓' : active ? 'Save as new…' : 'Save as new motor…'}
           </Button>

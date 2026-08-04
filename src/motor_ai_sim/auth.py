@@ -213,6 +213,45 @@ def account_info(authorization: Optional[str]) -> dict:
     }
 
 
+# The owner string stamped on entries created by an admin (including the
+# local-dev admin, who has no Firebase account and therefore no email).  Legacy
+# entries — written before ownership existed — are back-filled to this, because
+# the person who created them is the account that has been running this app.
+ADMIN_OWNER = "admin"
+# Every caller we cannot name.  Anonymous callers share this one identity: it
+# protects a NAMED owner's motors from them, but it cannot tell two anonymous
+# visitors apart.  Sign-in is what makes a motor yours alone.
+ANON_OWNER = "anonymous"
+
+
+def caller_identity(authorization: Optional[str] = None) -> dict:
+    """Who is asking — `{"id": str, "is_admin": bool}`.
+
+    The id is the SAME dialect the stores spell in an entry's `owner` field, so
+    "is this mine?" is one string comparison and not a translation step. It is
+    the signed-in account's email (lower-cased, the form ADMIN_EMAILS is matched
+    in), falling back to the Firebase uid for an account without one.
+
+    Admin-ness is `_is_admin_caller`'s answer and nothing else — one definition
+    of admin for the whole backend, including the local/unconfigured dev case
+    where the developer IS the admin (otherwise every write on a laptop would
+    have to be signed in to a Firebase project that local dev does not have).
+    """
+    # A route handler called DIRECTLY (tests, internal call paths) still carries
+    # FastAPI's unresolved `Header(...)` default in this slot.  Anything that is
+    # not a string is "no credentials presented", never an object we probe for
+    # `.lower()` — an in-process call must not raise where an HTTP one resolves.
+    if not isinstance(authorization, str):
+        authorization = None
+    is_admin, user = _is_admin_caller(authorization)
+    ident = ""
+    if user:
+        ident = (user.get("email") or "").strip().lower() or (user.get("uid") or "")
+    if not ident:
+        ident = ADMIN_OWNER if is_admin else ANON_OWNER
+    return {"id": ident, "is_admin": is_admin}
+
+
 def require_admin(authorization: Optional[str] = Header(default=None)) -> dict:
     """FastAPI dependency: allow only admin callers (see _is_admin_caller).
     A non-admin gets 403, an anonymous caller 401."""

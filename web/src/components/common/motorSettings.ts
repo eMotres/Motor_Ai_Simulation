@@ -82,7 +82,20 @@ export function readSimMetrics(): Record<string, number> | undefined {
   } catch { return undefined; }
 }
 
-export interface ActiveMotor { id: string; name: string; }
+export interface ActiveMotor {
+  id: string;
+  name: string;
+  /** True when this motor is loaded as a WORKING COPY: it is someone else's (or
+   *  locked), so the editor may drive it, solve it and tune it, but the 0.9 s
+   *  auto-save is suspended — the backend would refuse every one of those writes,
+   *  and a 403 every 0.9 s is not a UI, it is a stutter.  The first explicit Save
+   *  is "Save as new", under your own ownership. */
+  readOnly?: boolean;
+  /** Who owns it (shown in the read-only chip's tip, so "ask them" has a name). */
+  owner?: string;
+  /** Admin-set lock: read-only for everyone but an admin, the owner included. */
+  locked?: boolean;
+}
 
 export function getActiveMotor(): ActiveMotor | null {
   try { const raw = localStorage.getItem('motor.active'); return raw ? JSON.parse(raw) as ActiveMotor : null; }
@@ -98,12 +111,21 @@ export function setActiveMotor(m: ActiveMotor | null): void {
 }
 
 /** Seed the browser-side mesh + sim from a loaded preset, and mark it active.
- *  Call right BEFORE window.location.reload() in a Load handler. */
-export function seedSettingsFromPreset(preset: any, name?: string): void {
+ *  Call right BEFORE window.location.reload() in a Load handler.
+ *  `access` carries what the backend said about writing this motor (from the
+ *  apply/open response) — absent means "writable", the pre-ownership default. */
+export function seedSettingsFromPreset(
+  preset: any, name?: string,
+  access?: { writable?: boolean; owner?: string; locked?: boolean },
+): void {
   if (!preset) return;
   applyBlock('mesh', MESH_MAP, preset.mesh);
   applyBlock('sim', SIM_MAP, preset.simulation);
-  if (preset.id) setActiveMotor({ id: preset.id, name: name ?? preset.name ?? preset.id });
+  if (preset.id) setActiveMotor({
+    id: preset.id, name: name ?? preset.name ?? preset.id,
+    readOnly: access?.writable === false,
+    owner: access?.owner, locked: access?.locked,
+  });
 }
 
 /** Make sure there's always a working motor.  A brand-new user (no active
@@ -117,7 +139,14 @@ export async function ensureActiveMotor(): Promise<ActiveMotor | null> {
       body: JSON.stringify({ id: 'my_motor', name: 'My motor',
         mesh: readMeshSettings(), simulation: readSimSettings() }),
     });
-    if (!r.ok) return null;
+    // 403 = "my_motor" already exists and belongs to someone else (or is
+    // locked).  Leaving NO active motor is the honest outcome: nothing
+    // auto-saves anywhere, and the Save button offers "Save as new motor…",
+    // which creates one under this account's own ownership.
+    if (!r.ok) {
+      if (r.status === 403) console.warn('[motor] no working motor: ' + (await r.text()));
+      return null;
+    }
     const d = await r.json();
     const m = { id: d.id ?? 'my_motor', name: 'My motor' };
     setActiveMotor(m);
@@ -142,6 +171,11 @@ let _lastSyncSig: string | null = null;
 export function syncActiveMotor(): void {
   const active = getActiveMotor();
   if (!active) return;
+  // A WORKING COPY (someone else's motor, or a locked one) never auto-saves.
+  // The backend would refuse each write, and retrying every 0.9 s would turn a
+  // clear "this isn't yours" into a stream of failures nobody reads.  The
+  // editor still works; the Save button offers "Save as new" instead.
+  if (active.readOnly) return;
   if (_syncTimer) clearTimeout(_syncTimer);
   _syncTimer = setTimeout(async () => {
     try {
@@ -156,10 +190,18 @@ export function syncActiveMotor(): void {
       const sig = JSON.stringify([active.id, geo_sig, mesh, simulation]);
       if (sig === _lastSyncSig) return;          // nothing moved — do not write
       _lastSyncSig = sig;
-      await fetch(`${API}/api/presets/${encodeURIComponent(active.id)}/settings`, {
+      const r = await fetch(`${API}/api/presets/${encodeURIComponent(active.id)}/settings`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ geometry, mesh, simulation, geo_sig }),
       });
+      // Belt and braces: a motor can become un-writable while it is open (an
+      // admin locks it, ownership was never resolved on this path).  The FIRST
+      // refusal turns the session into a working copy, so there is no second.
+      if (r.status === 403) {
+        const detail = await r.json().then((j) => String(j?.detail ?? '')).catch(() => '');
+        console.warn('[motor] auto-save suspended — ' + (detail || 'not yours to write'));
+        setActiveMotor({ ...active, readOnly: true });
+      }
     } catch { /* ignore — config.yaml + localStorage still hold the live state */ }
   }, 900);
 }
@@ -175,7 +217,15 @@ export async function openMotor(presetId: string, name: string): Promise<boolean
   try {
     const res = await fetch(`${API}/api/presets/${encodeURIComponent(presetId)}/open`,
       { method: 'POST' }).then(r => r.json()).catch(() => null);
-    if (res?.preset) { seedSettingsFromPreset(res.preset, name); return true; }
+    // The response says which motor you actually got (your own fork, or the
+    // original read-only) and whether you may write it — carried into the
+    // active-motor record so the editor knows before the first edit.
+    if (res?.preset) {
+      seedSettingsFromPreset(res.preset, name, {
+        writable: res.writable, owner: res.owner, locked: res.locked,
+      });
+      return true;
+    }
   } catch { /* ignore */ }
   return false;
 }
@@ -201,11 +251,22 @@ export async function createMotorFromCurrent(name: string): Promise<ActiveMotor>
 export async function overwriteActiveMotor(): Promise<ActiveMotor> {
   const active = getActiveMotor();
   if (!active) throw new Error('No active motor to overwrite');
+  if (active.readOnly) {
+    throw new Error(active.locked
+      ? `"${active.name}" is locked — only an admin can change it. Use "Save as new…".`
+      : `"${active.name}" belongs to ${active.owner ?? 'someone else'} — use "Save as new…".`);
+  }
   const r = await fetch(`${API}/api/presets`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ id: active.id, name: active.name,
       mesh: readMeshSettings(), simulation: readSimSettings(), metrics: readSimMetrics() }),
   });
-  if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
+  if (!r.ok) {
+    // A 403 carries the owner's name — show THAT, not "HTTP 403", and switch
+    // the session to a working copy so the auto-save stops trying too.
+    const detail = await r.json().then((j) => String(j?.detail ?? '')).catch(() => '');
+    if (r.status === 403) setActiveMotor({ ...active, readOnly: true });
+    throw new Error(detail || `HTTP ${r.status}`);
+  }
   return active;
 }

@@ -7,10 +7,11 @@ subscription tiers.  Loading a catalog motor applies its underlying preset
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 
+from motor_ai_sim.auth import caller_identity as _caller_identity
 from motor_ai_sim.json_store import mutate_json as _mutate_json, read_json as _read_json
 
 router = APIRouter(prefix="/api/catalog", tags=["catalog"])
@@ -69,9 +70,40 @@ def _mark_active(motors: list) -> None:
         m["is_active"] = bool(live and sig and sig == live)
 
 
+def _backing_entry(card: dict) -> dict:
+    """The motor a card describes.  The PRESET is the authority on ownership —
+    the card is a projection of it, and if the two ever disagree the padlock
+    must follow the thing a write would actually land on."""
+    try:
+        from motor_ai_sim.routes.presets import _load_presets
+        pid = card.get("preset")
+        if pid:
+            p = _load_presets().get(pid)
+            if p:
+                return p
+    except Exception:  # noqa: BLE001
+        pass
+    return card
+
+
+def _mark_access(motors: list, authorization: Optional[str]) -> None:
+    """Stamp each card with its owner, its lock, and whether THIS caller may
+    write it.  Computed per request like `is_active` and never stored: it is a
+    fact about who is asking, and a stored copy would be another visitor's."""
+    from motor_ai_sim.routes.presets import _can_write, _is_locked, _owner_of
+    ident = _caller_identity(authorization)
+    for m in motors:
+        entry = _backing_entry(m)
+        m["owner"] = _owner_of(entry)
+        m["locked"] = _is_locked(entry)
+        m["can_write"] = _can_write(entry, ident)
+
+
 @router.get("")
-def get_catalog():
+def get_catalog(authorization: Optional[str] = Header(default=None)):
     """Return the full catalog: tiers, the diameter buckets, and every motor."""
+    from motor_ai_sim.routes.presets import _backfill_owners
+    _backfill_owners()
     cat = _load()
     # group motor ids by diameter for convenience
     by_d: dict = {d: [] for d in cat.get("diameters_mm", [])}
@@ -82,11 +114,13 @@ def get_catalog():
     # the editor's current state, and a stored copy would be wrong the moment the
     # user nudged a dimension.
     _mark_active(cat.get("motors", []))
+    _mark_access(cat.get("motors", []), authorization)
     return cat
 
 
 @router.post("/{motor_id}/load")
-def load_motor(motor_id: str):
+def load_motor(motor_id: str,
+               authorization: Optional[str] = Header(default=None)):
     """Load a catalog motor into the app by applying its underlying preset."""
     cat = _load()
     motor = next((m for m in cat.get("motors", []) if m.get("id") == motor_id), None)
@@ -96,20 +130,28 @@ def load_motor(motor_id: str):
     if not preset_id:
         raise HTTPException(status_code=400, detail=f"motor '{motor_id}' has no preset to load")
     from motor_ai_sim.routes.presets import apply_preset
-    result = apply_preset(preset_id)
+    result = apply_preset(preset_id, authorization)
     result["motor"] = motor_id
     return result
 
 
 @router.delete("/{motor_id}")
-def delete_motor(motor_id: str, drop_preset: bool = True):
-    """Remove a motor from the catalog (admin).  Drops the card and, by default,
-    its underlying preset too.  No-op-safe: 404 only if the id isn't present."""
+def delete_motor(motor_id: str, drop_preset: bool = True,
+                 authorization: Optional[str] = Header(default=None)):
+    """Remove a motor from the catalog.  Drops the card and, by default, its
+    underlying preset too — so it is gated by the same ownership rule as
+    deleting the preset directly: the owner or an admin, and never a locked
+    motor.  No-op-safe: 404 only if the id isn't present."""
+    from motor_ai_sim.routes.presets import _backfill_owners, _require_write_access
+    _backfill_owners()
     cat = _load()
     motors = cat.get("motors", [])
     target = next((m for m in motors if m.get("id") == motor_id), None)
     if not target:
         raise HTTPException(status_code=404, detail=f"motor '{motor_id}' not found")
+    _require_write_access(_backing_entry(target), motor_id,
+                          _caller_identity(authorization))
+
     def _m(d: dict) -> None:
         d["motors"] = [m for m in d.get("motors", []) if m.get("id") != motor_id]
         # prune now-empty diameter buckets so the section header disappears too
@@ -133,7 +175,8 @@ def delete_motor(motor_id: str, drop_preset: bool = True):
 # ── Passport: characterise a motor via FEM so the Configurator can scale it ──
 
 @router.post("/{motor_id}/passport")
-def generate_motor_passport(motor_id: str, coarse: bool = False):
+def generate_motor_passport(motor_id: str, coarse: bool = False,
+                            authorization: Optional[str] = Header(default=None)):
     """Admin: FEM-characterise a catalog motor and store its passport.
 
     Applies the motor's preset (so its geometry + operating point become the
@@ -142,11 +185,18 @@ def generate_motor_passport(motor_id: str, coarse: bool = False):
     `coarse=true` uses fewer steps/rpms for a quick smoke test.
 
     Side effect: switches the active motor to the one being characterised.
+
+    Writes the passport onto the card, so it is gated like any other write to
+    that motor: the owner or an admin.
     """
+    from motor_ai_sim.routes.presets import _backfill_owners, _require_write_access
+    _backfill_owners()
     cat = _load()
     motor = next((m for m in cat.get("motors", []) if m.get("id") == motor_id), None)
     if not motor:
         raise HTTPException(status_code=404, detail=f"motor '{motor_id}' not found")
+    _require_write_access(_backing_entry(motor), motor_id,
+                          _caller_identity(authorization))
     preset_id = motor.get("preset")
     if not preset_id:
         raise HTTPException(status_code=400, detail=f"motor '{motor_id}' has no preset to characterise")

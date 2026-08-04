@@ -14,9 +14,14 @@ from pathlib import Path
 from typing import Optional
 
 import yaml
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
 
+from motor_ai_sim.auth import (
+    ADMIN_OWNER as _ADMIN_OWNER,
+    caller_identity as _caller_identity,
+    require_admin as _require_admin,
+)
 from motor_ai_sim.json_store import (
     mutate_json as _mutate_json,
     read_json as _read_json,
@@ -284,7 +289,11 @@ def _upsert_catalog_entry(preset_id: str, preset: dict, gen_thumb: bool = True) 
         "T_avg_Nm": met.get("T_avg_Nm", 0), "ripple_pct": met.get("ripple_pct", 0),
         "gamma_deg": sim.get("phase_offset_deg", 0), "tier": "free",
         "description": preset.get("description") or f"Your saved motor — {preset.get('name', preset_id)}.",
-        "preset": preset_id, "owner": "user",
+        "preset": preset_id,
+        # The card MIRRORS the motor's ownership — a card that named a different
+        # owner than the motor it describes would put a padlock on the wrong
+        # thing (or leave one off).
+        "owner": _owner_of(preset), "locked": _is_locked(preset),
     }
     if thumb:
         entry["thumb_svg"] = thumb
@@ -318,6 +327,124 @@ def _upsert_catalog_entry(preset_id: str, preset: dict, gen_thumb: bool = True) 
 
 def _load_presets() -> dict:
     return _read_json(_PRESETS_PATH, {}) or {}
+
+
+# ── Ownership: who may WRITE a motor ────────────────────────────────────────
+#
+# Every entry carries an `owner` (the identity dialect of `auth.caller_identity`)
+# and an optional `locked` flag.  A mutating request must belong to the owner or
+# be an admin; a locked entry is read-only for everyone but an admin.
+#
+# `owner` used to mean something else entirely: the literal string "user" marked
+# "a copy the user opened for themselves" (as opposed to a curated template),
+# and its ABSENCE marked a template.  That is a different question — "does
+# opening this fork it?" — and it now lives in its own field, `template`, so the
+# owner field can answer only "whose is it?".  `_backfill_owners` performs that
+# split once, in place, preserving the fork behaviour every existing entry has
+# today.  A legacy entry must never end up unowned: unowned means unprotected.
+
+_LEGACY_USER_OWNER = "user"
+
+
+def _owner_of(entry: dict) -> str:
+    """The identity that owns this entry.  Legacy/blank/'user' -> the admin, who
+    is the account that created everything written before ownership existed."""
+    o = str((entry or {}).get("owner") or "").strip()
+    return _ADMIN_OWNER if (not o or o == _LEGACY_USER_OWNER) else o
+
+
+def _is_template(entry: dict) -> bool:
+    """True when opening this motor should FORK it (a curated template) rather
+    than edit it in place.  Falls back to the legacy dialect for an entry the
+    back-fill has not reached yet, so the answer never changes mid-migration."""
+    t = (entry or {}).get("template")
+    if isinstance(t, bool):
+        return t
+    return str((entry or {}).get("owner") or "").strip() != _LEGACY_USER_OWNER
+
+
+def _is_locked(entry: dict) -> bool:
+    return (entry or {}).get("locked") is True
+
+
+def _can_write(entry: Optional[dict], ident: dict) -> bool:
+    """May this caller overwrite / rename / delete this entry?"""
+    if not entry:
+        return True                       # nothing there to protect
+    if _is_locked(entry):
+        return bool(ident.get("is_admin"))
+    return bool(ident.get("is_admin")) or _owner_of(entry) == ident.get("id")
+
+
+def _label(entry: dict, fallback: str) -> str:
+    return str((entry or {}).get("name") or fallback)
+
+
+def _require_write_access(entry: Optional[dict], fallback_id: str, ident: dict) -> None:
+    """Refuse — loudly, naming the owner — a write the caller is not entitled to.
+
+    The message says WHO to ask, because "403 Forbidden" on someone else's motor
+    is a dead end for the engineer reading it: the only useful next step is the
+    owner's name (or an admin, for a locked motor)."""
+    if not entry or _can_write(entry, ident):
+        return
+    name = _label(entry, fallback_id)
+    if _is_locked(entry):
+        raise HTTPException(
+            status_code=403,
+            detail=(f"motor '{name}' is locked (owner {_owner_of(entry)}); "
+                    f"only an admin can unlock it."),
+        )
+    raise HTTPException(
+        status_code=403,
+        detail=(f"motor '{name}' belongs to {_owner_of(entry)}; "
+                f"ask them or an admin."),
+    )
+
+
+def _needs_backfill(entry: dict) -> bool:
+    o = str((entry or {}).get("owner") or "").strip()
+    return (not o) or o == _LEGACY_USER_OWNER or not isinstance(
+        (entry or {}).get("template"), bool)
+
+
+def _backfill_owners() -> None:
+    """Stamp `owner` + `template` on entries written before ownership existed.
+
+    Runs ONCE per store (it re-reads first and writes nothing when every entry
+    is already stamped), and is idempotent: a second call over a back-filled
+    store is two small reads.  Presets and their catalog cards are migrated
+    together so a card can never claim a different owner than its motor.
+    """
+    try:
+        presets = _read_json(_PRESETS_PATH, {}) or {}
+        if any(_needs_backfill(p) for p in presets.values() if isinstance(p, dict)):
+            def _mp(d: dict) -> None:
+                for pid, p in list(d.items()):
+                    if not isinstance(p, dict) or not _needs_backfill(p):
+                        continue
+                    # Read the fork behaviour BEFORE overwriting owner — that is
+                    # the fact the legacy field was really carrying.
+                    tpl = _is_template(p)
+                    p["owner"] = _owner_of(p)
+                    p["template"] = tpl
+                    d[pid] = p
+            _mutate_json(_PRESETS_PATH, _mp, default={})
+    except Exception:  # noqa: BLE001
+        log.warning("preset ownership back-fill failed", exc_info=True)
+    try:
+        cat = _read_json(_CATALOG_PATH, {}) or {}
+        cards = cat.get("motors") or []
+        if any(isinstance(m, dict)
+               and str(m.get("owner") or "").strip() in ("", _LEGACY_USER_OWNER)
+               for m in cards):
+            def _mc(d: dict) -> None:
+                for m in d.get("motors", []):
+                    if isinstance(m, dict):
+                        m["owner"] = _owner_of(m)
+            _mutate_json(_CATALOG_PATH, _mc, default={})
+    except Exception:  # noqa: BLE001
+        log.warning("catalog ownership back-fill failed", exc_info=True)
 
 
 # There is deliberately no `_save_presets(whole_dict)` any more.  Every write
@@ -401,6 +528,8 @@ def _summary(p: dict) -> dict:
         # Absent on motors written before timestamps existed — reported as None
         # rather than back-filled from a file mtime that belongs to the store.
         "saved_at": p.get("saved_at"),
+        "owner": _owner_of(p),
+        "locked": _is_locked(p),
     }
 
 
@@ -440,6 +569,7 @@ class SettingsPatch(BaseModel):
 @router.get("")
 def list_presets():
     """List all saved motor presets (sorted by order)."""
+    _backfill_owners()
     presets = _load_presets()
     items = [_summary(p) for p in presets.values()]
     items.sort(key=lambda x: (x["order"], x["name"]))
@@ -455,9 +585,15 @@ def get_preset(preset_id: str):
 
 
 @router.post("/{preset_id}/apply")
-def apply_preset(preset_id: str):
+def apply_preset(preset_id: str,
+                 authorization: Optional[str] = Header(default=None)):
     """Apply a preset: write its geometry + operating point into config.yaml and
-    flush all caches so the app switches to that motor."""
+    flush all caches so the app switches to that motor.
+
+    LOADING is open to everyone — you may study any motor.  The response says
+    whether you may WRITE to it (`writable`), so the editor can open someone
+    else's motor as a read-only working copy instead of auto-saving into it and
+    collecting a 403 every 0.9 s."""
     p = _load_presets().get(preset_id)
     if not p:
         raise HTTPException(status_code=404, detail=f"preset '{preset_id}' not found")
@@ -536,14 +672,22 @@ def apply_preset(preset_id: str):
     # Return the FULL preset (geometry + mesh + simulation) so the loader can
     # seed the browser-only settings (per-part sizes, steps, demag…) that
     # config.yaml does not hold.
+    _ident = _caller_identity(authorization)
     return {"status": "ok", "applied": preset_id,
             "geometry": geometry, "simulation": simulation, "mesh": mesh,
-            "preset": p}
+            "preset": p,
+            "writable": _can_write(p, _ident),
+            "owner": _owner_of(p), "locked": _is_locked(p)}
 
 
 @router.post("")
-def save_current_as_preset(req: SavePresetRequest):
-    """Snapshot the CURRENT config geometry + the UI's mesh/sim as a new motor."""
+def save_current_as_preset(req: SavePresetRequest,
+                           authorization: Optional[str] = Header(default=None)):
+    """Snapshot the CURRENT config geometry + the UI's mesh/sim as a new motor.
+
+    With an id that already exists this is an OVERWRITE — the same write a
+    rename or a delete is, and gated the same way: only the owner or an admin.
+    """
     from motor_ai_sim.config import get_config
     cfg = get_config()
     sim = cfg.get("simulation", {})
@@ -559,12 +703,23 @@ def save_current_as_preset(req: SavePresetRequest):
         if sim.get(k) is not None}
     mesh = dict(req.mesh) if req.mesh else dict(cfg.get("mesh", {}))
 
+    _backfill_owners()
     presets = _load_presets()
     pid = req.id or req.name.lower().replace(" ", "_").replace("/", "_")
+    ident = _caller_identity(authorization)
+    existing = presets.get(pid)
+    # An id that is already taken means "republish that motor", not "make a new
+    # one" — so it is the existing motor's owner who decides, and ownership does
+    # NOT transfer to whoever saved last (an admin fixing a client's motor must
+    # not quietly become its owner).
+    _require_write_access(existing, pid, ident)
     order = 1 + max([p.get("order", 0) for p in presets.values()] or [0])
     saved = _put_preset(pid, {
         "id": pid, "name": req.name, "description": req.description,
-        "order": order, "metrics": req.metrics or {}, "owner": "user",
+        "order": order, "metrics": req.metrics or {},
+        "owner": _owner_of(existing) if existing else ident["id"],
+        "locked": _is_locked(existing or {}),
+        "template": _is_template(existing) if existing else False,
         "geometry": geometry, "simulation": simulation, "mesh": mesh,
     })
     _upsert_catalog_entry(pid, saved)   # show it in the Motors tab
@@ -572,14 +727,21 @@ def save_current_as_preset(req: SavePresetRequest):
 
 
 @router.post("/{preset_id}/settings")
-def save_motor_settings(preset_id: str, patch: SettingsPatch):
+def save_motor_settings(preset_id: str, patch: SettingsPatch,
+                        authorization: Optional[str] = Header(default=None)):
     """Update an EXISTING motor's saved mesh and/or simulation settings.
 
-    This is the "Save mesh/simulation to motor" button: it stamps the current
-    UI settings onto the motor we loaded, WITHOUT touching its geometry.
+    This is the "Save mesh/simulation to motor" button — and the editor's 0.9 s
+    auto-save.  It is a write like any other, so it is gated like any other: the
+    auto-save of a motor you do not own is refused, not applied.  The editor is
+    told at LOAD time (`apply`/`open` -> `writable: false`) so it opens a
+    read-only working copy rather than driving into this 403 every 0.9 s.
     """
-    if preset_id not in _load_presets():
+    _backfill_owners()
+    _existing = _load_presets().get(preset_id)
+    if not _existing:
         raise HTTPException(status_code=404, detail=f"motor '{preset_id}' not found")
+    _require_write_access(_existing, preset_id, _caller_identity(authorization))
     # Read-latest → patch → write, all inside the store lock: the patch is
     # applied to the entry AS IT IS ON DISK, not to a copy read before the
     # request did its other work.  This is the autosave path — it fires on every
@@ -610,7 +772,7 @@ def save_motor_settings(preset_id: str, patch: SettingsPatch):
         raise HTTPException(status_code=404, detail=f"motor '{preset_id}' not found")
     # keep the Motors-tab card in sync for user motors; only rebuild the
     # geometry thumbnail when the geometry actually changed (else reuse it).
-    if saved.get("owner") == "user":
+    if not _is_template(saved):
         _upsert_catalog_entry(preset_id, saved, gen_thumb=(patch.geometry is not None))
     return {"status": "ok", "id": preset_id,
             "geo_sig": saved.get("geo_sig"), "updated_at": saved.get("updated_at"),
@@ -619,31 +781,47 @@ def save_motor_settings(preset_id: str, patch: SettingsPatch):
 
 
 @router.post("/{preset_id}/open")
-def open_motor(preset_id: str):
-    """Open a motor as the user's EDITABLE copy.
+def open_motor(preset_id: str,
+               authorization: Optional[str] = Header(default=None)):
+    """Open a motor as the user's EDITABLE copy — or, when it isn't theirs to
+    edit, as a read-only working copy.
 
-    A template (owner != "user", e.g. a curated catalog motor) is forked into
-    "my_<id>" first so the shared template stays pristine and the user's edits
-    auto-save into their own copy.  A user motor opens in place.  Then the copy
-    is applied to config and returned (full) so the loader can seed the browser
-    settings + mark it the active working motor.
+    A template (a curated catalog motor) is forked into "my_<id>" first so the
+    shared template stays pristine and the user's edits auto-save into their own
+    copy.  Their own motor opens in place.
+
+    Someone ELSE'S motor (or a locked one) opens as a WORKING COPY: it is
+    applied to the editor exactly as before — you can load it, study it, run it,
+    tune it — but the response says `writable: false`, and the editor then
+    suspends its auto-save for that preset instead of pushing an edit the
+    backend would refuse every 0.9 s.  The first explicit Save is "save as new",
+    under the caller's own ownership.  The same happens when the fork target
+    "my_<id>" exists but belongs to someone else — forking into another
+    account's motor would be the very overwrite this feature exists to prevent.
     """
     import copy as _copy
+    _backfill_owners()
     presets = _load_presets()
     src = presets.get(preset_id)
     if not src:
         raise HTTPException(status_code=404, detail=f"motor '{preset_id}' not found")
-    if src.get("owner") == "user":
+    ident = _caller_identity(authorization)
+    if not _is_template(src) and _can_write(src, ident):
         target = preset_id
     else:
         target = f"my_{preset_id}"
-        if target not in presets:
+        fork = presets.get(target)
+        if fork is None:
             c = _copy.deepcopy(src)
             c["id"] = target
-            c["owner"] = "user"
+            c["owner"] = ident["id"]      # the fork is the CALLER's motor
+            c["template"] = False
+            c.pop("locked", None)         # a fork of a locked motor is not locked
             c["order"] = 1 + max([p.get("order", 0) for p in presets.values()] or [0])
             _put_preset(target, c)
-    return apply_preset(target)
+        elif not _can_write(fork, ident):
+            target = preset_id            # nowhere writable — open read-only
+    return apply_preset(target, authorization)
 
 
 class RenamePresetRequest(BaseModel):
@@ -652,11 +830,15 @@ class RenamePresetRequest(BaseModel):
 
 
 @router.patch("/{preset_id}")
-def rename_preset(preset_id: str, req: RenamePresetRequest):
+def rename_preset(preset_id: str, req: RenamePresetRequest,
+                  authorization: Optional[str] = Header(default=None)):
     """Rename a saved motor (display name only — the id stays stable, so the
     catalog card, apply/open flows and any geometry links keep working)."""
-    if preset_id not in _load_presets():
+    _backfill_owners()
+    _existing = _load_presets().get(preset_id)
+    if not _existing:
         raise HTTPException(status_code=404, detail=f"preset '{preset_id}' not found")
+    _require_write_access(_existing, preset_id, _caller_identity(authorization))
     new_name = (req.name or "").strip()
     if not new_name:
         raise HTTPException(status_code=422, detail="name must not be empty")
@@ -681,10 +863,52 @@ def rename_preset(preset_id: str, req: RenamePresetRequest):
     return {"status": "ok", "id": preset_id, "name": new_name}
 
 
-@router.delete("/{preset_id}")
-def delete_preset(preset_id: str):
+class LockRequest(BaseModel):
+    locked: bool = True
+
+
+@router.post("/{preset_id}/lock")
+def set_preset_lock(preset_id: str, req: LockRequest,
+                    _admin: dict = Depends(_require_admin)):
+    """Lock / unlock a motor — ADMIN ONLY.
+
+    A lock sits ON TOP of ownership: a locked motor is read-only for EVERYONE
+    but an admin, its owner included.  That is the point — the owner asks for
+    the lock precisely so that no later edit of theirs (or of anyone borrowing
+    their session) can overwrite the design.  Only an admin can lift it.
+    """
+    _backfill_owners()
     if preset_id not in _load_presets():
+        raise HTTPException(status_code=404, detail=f"motor '{preset_id}' not found")
+    locked = bool(req.locked)
+
+    def _m(d: dict) -> None:
+        p = d.get(preset_id)
+        if p:
+            p["locked"] = locked
+    _mutate_json(_PRESETS_PATH, _m, default={})
+
+    # Mirror the flag onto the card so the padlock shows in the Motors tab.
+    try:
+        def _mc(d: dict) -> None:
+            for m in d.get("motors", []):
+                if m.get("preset") == preset_id or m.get("id") == f"cat_{preset_id}":
+                    m["locked"] = locked
+        _mutate_json(_CATALOG_PATH, _mc, default={})
+    except Exception:  # noqa: BLE001
+        log.warning("lock flag for '%s' was not mirrored onto its card",
+                    preset_id, exc_info=True)
+    return {"status": "ok", "id": preset_id, "locked": locked}
+
+
+@router.delete("/{preset_id}")
+def delete_preset(preset_id: str,
+                  authorization: Optional[str] = Header(default=None)):
+    _backfill_owners()
+    _existing = _load_presets().get(preset_id)
+    if not _existing:
         raise HTTPException(status_code=404, detail=f"preset '{preset_id}' not found")
+    _require_write_access(_existing, preset_id, _caller_identity(authorization))
     _drop_preset(preset_id)
     # The Motors-tab card lives in the CATALOG under cat_<preset_id> —
     # _upsert_catalog_entry creates/updates it on every save and rename, but

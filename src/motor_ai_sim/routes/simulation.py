@@ -3455,15 +3455,14 @@ def _build_transient_summary(
         "V_phase_rms_V": round(_Vrms, 1),
         "V_line_peak_V": round(_Vlpk, 1),
         "V_line_rms_V": round(_Vlrms, 1),
-        # KV from the FUNDAMENTAL voltage phasor (rms) at THIS load point —
-        # the harmonic content that used to sit in the full-waveform rms does
-        # not belong in a speed constant.  NB this is still the LOADED voltage:
-        # at field-weakening γ it differs from the no-load back-EMF KV; a true
-        # no-load KV needs an I=0 run (harm_screening reports E1 for that).
-        "KV_rpm_per_V_phase": (round(_rpm / (_vh["V1_phase_V"] / _math.sqrt(2)), 2)
-                               if _vh["V1_phase_V"] > 1 else 0.0),
-        "KV_rpm_per_V_line": (round(_rpm / (_vh["V1_LL_V"] / _math.sqrt(2)), 2)
-                              if _vh.get("V1_LL_V", 0.0) > 1 else 0.0),
+        # KV = rpm / V_peak — the user's (and their Ansys table's) convention:
+        # max(rpm)/max(voltage), i.e. the PEAK of the waveform shown right next
+        # to this tile, not the fundamental rms (which read ~sqrt(2) higher and
+        # contradicted a by-hand rpm/V_line_peak check, 2026-08-04).  NB this is
+        # the LOADED voltage: at field-weakening γ it differs from the no-load
+        # back-EMF KV; a true no-load KV needs an I=0 run (harm_screening E1).
+        "KV_rpm_per_V_phase": (round(_rpm / _Vpk, 2) if _Vpk > 1 else 0.0),
+        "KV_rpm_per_V_line": (round(_rpm / _Vlpk, 2) if _Vlpk > 1 else 0.0),
         "V1_LL_V":        _vh.get("V1_LL_V", 0.0),
         "V1_phase_V":     _vh["V1_phase_V"],
         "THD_pct":        _vh["THD_pct"],

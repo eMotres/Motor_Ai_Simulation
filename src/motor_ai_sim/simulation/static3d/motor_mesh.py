@@ -453,6 +453,26 @@ def mirror_to_full_ring(sect: Section2D, full: MotorSection) -> Section2D:
     p = p[:, used]
     t = back[t]
 
+    # A ROTATION-EQUIVARIANT split key for the extrusion.
+    #
+    # ``extrude_section`` picks each prism's three tets by ordering the base
+    # triangle's nodes by a key, so two triangles that are rotations of each
+    # other are split the same way only if their keys are.  Plain node ids are
+    # not: on the ring, copy k's nodes are numbered after copy k-1's, so a
+    # triangle and its 180 deg twin get opposite diagonals and the discrete
+    # operator stops being rotation-symmetric even though the mesh is.  Measured
+    # on the coarse validation ring, that alone breaks the anti-periodicity of
+    # the solved field by 1.6 % with isotropic iron and 5.7 % with laminated
+    # iron (an anisotropic mu weights the two diagonals differently) — i.e. the
+    # sharpest test in this suite was measuring its own mesh.
+    #
+    # Giving every copy of a node the SAME key removes it, exactly as the
+    # sector's own master/slave trick does inside a wedge.
+    base_key = np.arange(n, dtype=np.int64)
+    if sect.slaves.size:
+        base_key[sect.slaves] = base_key[sect.masters]
+    rot_key = np.tile(base_key, n_sec)[used]
+
     tri_region, names = _classify_triangles(p, t, full)
     a = p[:, t[0]]
     e1 = p[:, t[1]] - a
@@ -466,7 +486,8 @@ def mirror_to_full_ring(sect: Section2D, full: MotorSection) -> Section2D:
                      slaves=np.empty(0, dtype=np.int64),
                      r_box_mm=sect.r_box_mm,
                      meta=dict(sect.meta, n_sectors=1,
-                               mirrored_from_sector=n_sec))
+                               mirrored_from_sector=n_sec,
+                               rot_key=rot_key))
 
 
 def _tri_area(p2: np.ndarray, t: np.ndarray) -> float:
@@ -611,8 +632,13 @@ def extrude_section(sect: Section2D, z_levels_mm: Sequence[float],
     P[2] = np.repeat(z, nn)
 
     # rotation-equivariant split key: a slave cut node borrows its master's key
+    # (on a mirrored FULL RING the same job is done by the key the mirror left
+    # behind — every copy of a node shares one key, see mirror_to_full_ring)
     key = np.arange(nn, dtype=np.int64)
-    if sect.slaves.size:
+    _rk = sect.meta.get("rot_key")
+    if _rk is not None and len(_rk) == nn:
+        key = np.asarray(_rk, dtype=np.int64)
+    elif sect.slaves.size:
         key[sect.slaves] = key[sect.masters]
 
     # order each base triangle by ascending key -> (a, b, c) with ka < kb < kc

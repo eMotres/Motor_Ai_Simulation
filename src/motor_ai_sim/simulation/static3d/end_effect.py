@@ -77,7 +77,8 @@ class SectorSolve:
 
 
 def _regions_for(tm, section: MotorSection, linear_iron: bool = False,
-                 iron_mu_r: Optional[float] = None) -> List[Region]:
+                 iron_mu_r: Optional[float] = None,
+                 laminated_iron: bool = True) -> List[Region]:
     """3D regions from the machine's own materials.
 
     ``iron_mu_r`` replaces the permeability of the IRON regions only (never the
@@ -86,6 +87,14 @@ def _regions_for(tm, section: MotorSection, linear_iron: bool = False,
     experiment: the same mu_r goes into this model and into
     ``ref2d.solve_2d_reference_on_section_mesh(..., linear_iron_mu_r=...)``, and
     nothing else moves between the rungs.
+
+    ``laminated_iron`` (default) gives the cores the transverse-isotropic
+    permeability of a stack — in-plane as homogenised by the 2D materials,
+    across the stack the series average the insulation dominates
+    (``solver.axial_mu``).  Setting it False solves the same machine as a SOLID
+    block of the homogenised iron, which is what every revision before this one
+    did and what the 2D model is obliged to assume; it is kept so the difference
+    is one flag and can be measured rather than argued about.
     """
     if iron_mu_r is not None:
         linear_iron = True
@@ -98,7 +107,8 @@ def _regions_for(tm, section: MotorSection, linear_iron: bool = False,
         if iron_mu_r is not None and r.kind == "iron":
             mu = float(iron_mu_r)
         regs.append(Region(name=r.name, elements=el, mu_r=mu, M=r.M,
-                           bh_curve=None if linear_iron else r.bh_curve))
+                           bh_curve=None if linear_iron else r.bh_curve,
+                           stack_kf=float(r.stack_kf) if laminated_iron else 1.0))
     air = tm.elements("air")
     if air.size == 0:
         raise ValueError("no air elements — the mesh has no field region")
@@ -120,6 +130,7 @@ def solve_sector(section: MotorSection,
                  iron_mu_r: Optional[float] = None,
                  linear_solver: Optional[str] = None,
                  mu_init: Optional[np.ndarray] = None,
+                 laminated_iron: bool = True,
                  verbose: bool = False) -> SectorSolve:
     """Mesh + solve one stack length on a prebuilt cross-section."""
     from skfem import Basis, ElementTetP1, ElementTetP2
@@ -128,7 +139,7 @@ def solve_sector(section: MotorSection,
     tm, _ = build_motor_mesh(section, stack_mm=stack_mm, sect=sect2d,
                              n_stack=n_stack, n_cap=n_cap)
     regs = _regions_for(tm, section, linear_iron=linear_iron,
-                        iron_mu_r=iron_mu_r)
+                        iron_mu_r=iron_mu_r, laminated_iron=laminated_iron)
     linear_iron = linear_iron or iron_mu_r is not None
     basis = Basis(tm.mesh, ElementTetP2() if order == 2 else ElementTetP1())
     per = None
@@ -315,7 +326,7 @@ def demag_exposure(ss: SectorSolve, n_slices: int = 6) -> dict:
     sol = ss.sol
     tm = ss.tm
     B = sol.B_elementwise()
-    H = (B - MU0 * sol.M_el) / sol.mu_el[None]
+    H = (B - MU0 * sol.M_el) / sol.mu_diag()   # per-direction: laminated iron
     vol = sol.basis.dx.sum(axis=1)
     zc = tm.mesh.p[2, tm.mesh.t].mean(axis=0)
     zh = ss.stack_half_m
@@ -438,6 +449,7 @@ def run_stage_a(geo_override: Optional[dict] = None,
                 l_factors: Sequence[float] = (0.5, 0.75, 1.0, 1.5, 2.0),
                 do_bracket: bool = True,
                 do_2d: bool = True,
+                laminated_iron: bool = True,
                 n_theta: int = 180,
                 linear_solver: Optional[str] = None,
                 verbose: bool = True) -> dict:
@@ -483,6 +495,7 @@ def run_stage_a(geo_override: Optional[dict] = None,
         print(f"\n[1] reference stack {section.stack_mm:.2f} mm", flush=True)
     ss = solve_sector(section, sect2d, stack_mm=section.stack_mm, order=order,
                       n_stack=n_stack, n_cap=n_cap, tol=tol, max_iter=max_iter,
+                      laminated_iron=laminated_iron,
                       linear_solver=linear_solver, verbose=verbose)
     _record("reference", ss)
     mu_ref = getattr(ss.sol, "mu_converged", None)
@@ -503,8 +516,8 @@ def run_stage_a(geo_override: Optional[dict] = None,
         ssn = solve_sector(section, sect2d, stack_mm=section.stack_mm,
                            order=order, n_stack=n_stack, n_cap=n_cap, tol=tol,
                            max_iter=max_iter, neumann_outer=True,
-                           mu_init=mu_ref, linear_solver=linear_solver,
-                           verbose=False)
+                           mu_init=mu_ref, laminated_iron=laminated_iron,
+                           linear_solver=linear_solver, verbose=False)
         _record("neumann_outer", ssn)
         pn = spill_profile(ssn, n_theta=n_theta)
         bracket = dict(
@@ -537,6 +550,7 @@ def run_stage_a(geo_override: Optional[dict] = None,
             ss_i = solve_sector(section, sect2d, stack_mm=Lm, order=order,
                                 n_stack=n_stack, n_cap=n_cap, tol=tol,
                                 max_iter=max_iter, mu_init=mu_prev,
+                                laminated_iron=laminated_iron,
                                 linear_solver=linear_solver, verbose=False)
             _record(f"L={Lm:g}mm", ss_i)
             mu_prev = getattr(ss_i.sol, "mu_converged", mu_prev)
@@ -561,26 +575,49 @@ def run_stage_a(geo_override: Optional[dict] = None,
     # in front of work that did not depend on it.
     two_d = None
     if do_2d:
-        from .ref2d import solve_2d_reference_on_section_mesh
+        from .ref2d import (solve_2d_reference_converged,
+                            solve_2d_reference_on_section_mesh)
         if verbose:
             print("\n[4] 2D reference (full ring, I=0, P2)", flush=True)
-        # The project's own 2D SOLVER (weak form in A_z, its materials, its B-H
-        # Picard) on the cross-section mirrored to a full ring.  Its mesh
-        # GENERATOR is not used: mesher.build_mesh_from_polygons at n_sectors=1
-        # is the documented closed-360 OCC pathology and did not complete in
-        # over an hour on this machine.  See ref2d for the full reasoning.
-        r2 = solve_2d_reference_on_section_mesh(
-            load_motor_section(geo_override=geo_override, n_sectors=1), sect2d)
+        # The project's own 2D weak form in A_z, its materials, its B-H curve, on
+        # the cross-section mirrored to a full ring.  Its mesh GENERATOR is not
+        # used: mesher.build_mesh_from_polygons at n_sectors=1 is the documented
+        # closed-360 OCC pathology and did not complete in over an hour on this
+        # machine.  See ref2d for the full reasoning.
+        #
+        # CONVERGED, and the shipped relaxation alongside it.  The shipped one
+        # limit-cycles at a constitutive residual of ~0.8 on this machine and
+        # its answer is 11 % low; quoting only it is what made this check fail
+        # for three rounds.  Both are recorded so the difference stays visible.
+        sec_full = load_motor_section(geo_override=geo_override, n_sectors=1)
+        r2 = solve_2d_reference_converged(sec_full, sect2d)
+        r2s = solve_2d_reference_on_section_mesh(sec_full, sect2d,
+                                                 nonlinear_iterations=80)
         two_d = dict(B1_T=r2.B1_T,
                      harmonics={str(k): v for k, v in r2.harmonics.items()},
                      n_tri=r2.n_tri, ndofs=r2.ndofs, wall_s=r2.wall_s,
                      outer_r_mm=r2.outer_r_mm,
-                     solver=("fem_solver_2d.solve_magnetostatics_fem (P2, full "
-                             "ring, static3d cross-section mirrored)"),
+                     solver=("fem_solver_2d weak form (P2, full ring, static3d "
+                             "cross-section mirrored), converged Picard"),
+                     relaxation=r2.relaxation,
+                     picard_sweeps=r2.picard_sweeps,
+                     picard_residual=r2.picard_residual,
+                     picard_converged=r2.picard_converged,
+                     antiperiodicity_even_over_odd=r2.even_over_odd,
+                     shipped_relaxation=dict(
+                         B1_T=r2s.B1_T, sweeps=80,
+                         solver="fem_solver_2d.solve_magnetostatics_fem",
+                         note=("its Picard does not converge on this machine — "
+                               "constitutive residual ~0.8, 3 % violation of an "
+                               "exact anti-periodicity, 3 % band over sweep "
+                               "counts; kept for the before/after only")),
                      ratio_3d_mid_over_2d=prof["B1_mid_T"] / r2.B1_T)
         if verbose:
-            print(f"    2D B1 = {r2.B1_T:.5f} T, 3D mid / 2D = "
-                  f"{two_d['ratio_3d_mid_over_2d']:.4f}", flush=True)
+            print(f"    2D B1 = {r2.B1_T:.5f} T (converged, resid "
+                  f"{r2.picard_residual:.1e}, {r2.picard_sweeps} sweeps; "
+                  f"shipped relaxation says {r2s.B1_T:.5f} T), "
+                  f"3D mid / 2D = {two_d['ratio_3d_mid_over_2d']:.4f}",
+                  flush=True)
     ratio = two_d["ratio_3d_mid_over_2d"] if two_d else 1.0
     k_vs2d = k_self * ratio
     if two_d is not None:
@@ -634,7 +671,14 @@ def run_stage_a(geo_override: Optional[dict] = None,
             axial_layers=ss.tm.meta["n_layers"],
             z_levels_mm=ss.tm.meta["z_levels_mm"],
             n_theta_samples=n_theta,
-            iron_bh="laminated B-H from fem_solver_2d.build_materials"),
+            iron_bh="laminated B-H from fem_solver_2d.build_materials",
+            iron_lamination=(
+                "transverse-isotropic: the 2D materials' homogenised curve IN "
+                "PLANE, the insulation-limited series average ACROSS the stack "
+                "(solver.axial_mu, k_f from the same material)"
+                if laminated_iron else
+                "isotropic (solid block of the in-plane homogenised iron) — the "
+                "only thing a 2D model can assume")),
         k_flux=float(k_vs2d),
         k_flux_self=float(k_self),
         spill_profile=dict(

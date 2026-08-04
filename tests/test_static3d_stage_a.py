@@ -365,6 +365,104 @@ def test_the_2d_reference_leg_uses_the_same_magnet_law_as_3d():
         "than M/mu_rec, i.e. a magnet of remanence mu_rec*Br.")
 
 
+def test_the_two_models_laminate_the_iron_from_the_same_k_f(section):
+    """The 3D iron must BE the 2D iron, in-plane, bit for bit.
+
+    ``fem_solver_2d.build_materials`` folds the stacking factor into the B-H
+    curve (``_laminate``: B_geom(H) = k_f B_steel(H) + (1-k_f) mu0 H) and into
+    the linear mu_r.  ``motor_geometry`` takes its regions from that same call,
+    so the two models cannot disagree about it — and this pins that they do not,
+    because a 3D leg quietly running the RAW steel curve would put ~8 % more
+    flux in the gap and look exactly like a 3D effect.
+    """
+    from motor_ai_sim.materials import get_material
+    from motor_ai_sim.simulation.static3d.solver import MU0
+
+    reg = {r.name: r for r in section.regions}
+    raw = get_material("steel", section.materials["stator_core"])
+    kf = float(raw.stacking_factor)
+    assert 0.5 < kf <= 1.0
+    lam = [(float(h), kf * float(b) + (1.0 - kf) * MU0 * float(h))
+           for h, b in raw.bh_curve]
+    got = [(float(h), float(b)) for h, b in reg["stator"].bh_curve]
+    assert len(got) == len(lam)
+    assert max(abs(b - c) for (_, b), (_, c) in zip(got, lam)) < 1e-12
+    if kf < 1.0:
+        # ...and it is NOT the raw curve — the two differ by enough to matter
+        assert max(abs(b - float(c)) for (_, b), c in
+                   zip(got, [x[1] for x in raw.bh_curve])) > 1e-3
+    # the k_f the 3D anisotropy will use is the one the 2D curve was built with
+    assert reg["stator"].stack_kf == pytest.approx(kf, abs=1e-6)
+    assert reg["rotor"].stack_kf == pytest.approx(kf, abs=1e-6)
+    assert reg["shaft"].stack_kf == 1.0, "a solid shaft is not a stack"
+
+
+def test_axial_permeability_of_a_stack(section, coarse2d):
+    """The across-stack permeability, its asymptotics, and the k_f = 1 identity.
+
+    A lamination is steel and insulation in PARALLEL in the sheet plane and in
+    SERIES across it, so the two homogenisations are different numbers and only
+    coincide when there is no insulation.  At k_f = 1 the model must collapse
+    onto the isotropic one exactly — not approximately — because that is the
+    model every earlier revision solved.
+    """
+    from motor_ai_sim.simulation.static3d.solver import MU0, axial_mu
+
+    # k_f = 1: identity, elementwise, over a wide range
+    mu = MU0 * np.array([1.0, 10.0, 1e3, 4600.0, 1e6])
+    assert np.allclose(axial_mu(mu, np.ones_like(mu)), mu, rtol=0, atol=0)
+    # the insulation sets the ceiling: mu_z/mu0 -> 1/(1-k_f) however good the
+    # steel is
+    kf = 0.92
+    assert axial_mu(MU0 * 1e6, kf) / MU0 == pytest.approx(1.0 / (1.0 - kf),
+                                                          rel=1e-3)
+    assert axial_mu(MU0 * 4600.0, kf) / MU0 == pytest.approx(12.47, rel=1e-3)
+    # air stays air, and mu_z is never above the in-plane value nor below mu0
+    assert axial_mu(MU0, kf) == pytest.approx(MU0, rel=1e-12)
+    for k in (0.8, 0.9, 0.95, 0.99, 1.0):
+        mz = axial_mu(MU0 * 4600.0, k)
+        assert MU0 <= mz <= MU0 * 4600.0 + 1e-30
+    # ...and monotone in k_f: less insulation, more axial permeability
+    seq = [float(axial_mu(MU0 * 4600.0, k)) for k in (0.8, 0.9, 0.95, 0.99)]
+    assert all(a < b for a, b in zip(seq, seq[1:]))
+
+    # the SOLVER path: k_f = 1 must reproduce the isotropic assembly exactly
+    from motor_ai_sim.simulation.static3d.solver import solve_static3d
+    tm, _ = MMESH.build_motor_mesh(section, stack_mm=8.0, sect=coarse2d,
+                                   n_stack=2, n_cap=2)
+    regs = EE._regions_for(tm, section, iron_mu_r=200.0, laminated_iron=False)
+    ref = solve_static3d(tm.mesh, regs, order=1)
+    lam1 = [type(r)(name=r.name, elements=r.elements, mu_r=r.mu_r, M=r.M,
+                    bh_curve=r.bh_curve, stack_kf=1.0) for r in regs]
+    same = solve_static3d(tm.mesh, lam1, order=1)
+    assert same.mu_z_el is None
+    assert np.allclose(same.phi, ref.phi, rtol=0, atol=0)
+
+
+def test_the_converged_2d_leg_is_the_shipped_weak_form(section, coarse2d, geo):
+    """Only the RELAXATION differs, never the physics.
+
+    ``ref2d.solve_2d_reference_converged`` exists because
+    ``fem_solver_2d.solve_magnetostatics_fem``'s Picard does not converge on a
+    saturating machine (constitutive residual ~0.8, a 3 % violation of an exact
+    anti-periodicity, an 11 % error in the gap fundamental).  It carries its own
+    loop, which would be worthless if it also carried its own weak form.  At
+    ZERO nonlinear sweeps both reduce to one linear solve at the materials' own
+    mu_r, and there the two must return the SAME field.
+    """
+    from motor_ai_sim.simulation.static3d.ref2d import (
+        solve_2d_reference_converged, solve_2d_reference_on_section_mesh)
+
+    full = load_motor_section(geo_override=geo, n_sectors=1)
+    a = solve_2d_reference_converged(full, coarse2d, max_sweeps=0, n_theta=360)
+    b = solve_2d_reference_on_section_mesh(full, coarse2d,
+                                           nonlinear_iterations=1, n_theta=360)
+    assert a.n_tri == b.n_tri
+    assert a.B1_T == pytest.approx(b.B1_T, rel=1e-9), (
+        "the converged 2D leg is not assembling fem_solver_2d's weak form")
+    assert np.allclose(a.Br_theta, b.Br_theta, rtol=1e-9, atol=1e-12)
+
+
 def test_spill_profile_shape_and_k_flux(sector_solve):
     ss = sector_solve
     pr = EE.spill_profile(ss, n_in=9, n_out=3, n_theta=126)

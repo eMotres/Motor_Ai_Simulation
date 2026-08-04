@@ -60,6 +60,12 @@ class Ref2D:
     outer_r_mm: float
     n_coil_elements_as_air: int = 0
     harmonics: Dict[int, float] = field(default_factory=dict)
+    # -- how the nonlinear fixed point was found, and whether it WAS found ----
+    relaxation: str = "fem_solver_2d (arithmetic in nu, damping 0.5)"
+    picard_sweeps: int = 0
+    picard_residual: Optional[float] = None    # constitutive residual in H
+    picard_converged: Optional[bool] = None
+    even_over_odd: Optional[float] = None      # anti-periodicity violation
 
 
 def _grad_at_points_tri(mesh, basis, A: np.ndarray, pts: np.ndarray) -> np.ndarray:
@@ -132,26 +138,20 @@ def solve_2d_reference_on_section_mesh(section_full: MotorSection,
     ``sect_sector`` is a :class:`motor_mesh.Section2D` of the 180 deg sector;
     ``section_full`` must be the ``n_sectors=1`` MotorSection whose magnet
     numbering the tags key on.
-    """
-    from motor_ai_sim.simulation.fem_solver_2d import (build_materials,
-                                                       solve_magnetostatics_fem)
-    from motor_ai_sim.simulation.geometry_2d import build_winding_layout
-    from skfem import MeshTri
 
-    from .motor_mesh import mirror_to_full_ring
+    NONLINEAR CAVEAT: on a saturating machine the Picard inside
+    ``solve_magnetostatics_fem`` does not reach a fixed point (measured: a
+    constitutive residual of ~0.8 that no sweep count leaves, and a 3 %
+    violation of an exact anti-periodicity).  Use
+    :func:`solve_2d_reference_converged` for anything that has to be TRUE rather
+    than merely produced by the shipped code path; this function stays because
+    "what does the shipped 2D solver say" is its own question — the linear-iron
+    ladder above, and the before/after in the passport.
+    """
+    from motor_ai_sim.simulation.fem_solver_2d import solve_magnetostatics_fem
 
     t0 = time.perf_counter()
-    full = mirror_to_full_ring(sect_sector, section_full)
-    mesh = MeshTri(np.ascontiguousarray(full.p * 1e-3),
-                   np.ascontiguousarray(full.t))
-    tags = _dom_tags_for(section_full, full)
-
-    geo = section_full.geo
-    layout = build_winding_layout(section_full.num_slots,
-                                  section_full.num_poles // 2)
-    mats = build_materials({"A": 0.0, "B": 0.0, "C": 0.0}, layout,
-                           section_full.polys_full, 0.0, 1e-5,
-                           int(round(geo["num_wires_per_slot"])))
+    mesh, tags, mats, full = _ring_problem(section_full, sect_sector)
     if linear_iron_mu_r is not None:
         # A LINEAR-iron ladder: the same machine with the B-H curve replaced by a
         # fixed permeability, in BOTH models, so that "how does the 3D-vs-2D
@@ -183,6 +183,183 @@ def solve_2d_reference_on_section_mesh(section_full: MotorSection,
                  outer_r_mm=full.r_box_mm,
                  harmonics={int(k): gap_fundamental(th, Br, k)[0]
                             for k in (p, 3 * p, 5 * p)})
+
+
+def _ring_problem(section_full: MotorSection, sect_sector):
+    """(mesh, tags, materials) for the full-ring 2D problem — the pieces both 2D
+    drivers below share, built exactly once and exactly the same way."""
+    from motor_ai_sim.simulation.fem_solver_2d import build_materials
+    from motor_ai_sim.simulation.geometry_2d import build_winding_layout
+    from skfem import MeshTri
+
+    from .motor_mesh import mirror_to_full_ring
+
+    full = mirror_to_full_ring(sect_sector, section_full)
+    mesh = MeshTri(np.ascontiguousarray(full.p * 1e-3),
+                   np.ascontiguousarray(full.t))
+    tags = _dom_tags_for(section_full, full)
+    layout = build_winding_layout(section_full.num_slots,
+                                  section_full.num_poles // 2)
+    mats = build_materials({"A": 0.0, "B": 0.0, "C": 0.0}, layout,
+                           section_full.polys_full, 0.0, 1e-5,
+                           int(round(section_full.geo["num_wires_per_slot"])))
+    return mesh, tags, mats, full
+
+
+def solve_2d_reference_converged(section_full: MotorSection,
+                                 sect_sector,
+                                 tol: float = 3e-3,
+                                 max_sweeps: int = 140,
+                                 damping: float = 0.35,
+                                 n_theta: int = 720,
+                                 element_order: int = 2) -> Ref2D:
+    """The 2D reference at a CONVERGED nonlinear fixed point.
+
+    Why this exists
+    ---------------
+    ``solve_magnetostatics_fem`` relaxes its B-H Picard arithmetically in nu with
+    a fixed 0.5 and stops when the STEP is small.  On this spoke rotor that loop
+    does not converge: measured on the 40 mm machine, at 16 / 40 / 80 / 160
+    sweeps the constitutive residual — how far the returned state violates the
+    B-H curve it was handed, ``|| |B|(nu_curve - nu_used) || / || |B| nu_curve ||``
+    — sits at 0.87 / 0.79 / 0.84 / 0.79.  Not 1 % out: 80 % out, in a limit cycle
+    that no sweep count leaves.  Two independent symptoms confirm it.  The gap
+    fundamental wanders over a 3 % band with no trend, and the returned field
+    breaks the machine's EXACT anti-periodicity (7 poles per 180 deg sector) by
+    3 % — the even harmonics of B_r, which must be zero, are 3 % of the odd ones.
+    A monotone magnetostatic problem has a unique solution, so that is not a
+    solution.
+
+    The same weak form, same mesh, same materials, relaxed GEOMETRICALLY in
+    log(mu) with an adaptive step and stopped on the constitutive residual — the
+    loop ``static3d.solver.solve_static3d_nonlinear`` already uses — converges to
+    3e-3 in ~50 sweeps, restores the anti-periodicity to 0.03 %, is stable to
+    0.1 % across four cross-sections from 4 000 to 12 800 triangles, and lands
+    12 % HIGHER: 1.515 T against 1.354-1.385 T.  That 12 % was the whole of the
+    "3D is 8 % above 2D" disagreement this module's honesty check kept failing on.
+
+    Only the relaxation differs.  The weak form assembled here is
+    ``solve_magnetostatics_fem``'s, term for term, and
+    ``tests/test_static3d_stage_a.py::test_the_converged_2d_leg_is_the_shipped_
+    weak_form`` pins that: at equal permeability the two return the same B1 to
+    the last bit.  The fix belongs in ``fem_solver_2d`` itself — this module may
+    not edit it, so it carries its own loop and says so.
+    """
+    from skfem import (Basis, BilinearForm, ElementTriP0, ElementTriP1,
+                       ElementTriP2, LinearForm, asm, condense, solve)
+    from skfem.helpers import dot, grad
+
+    from motor_ai_sim.simulation.fem_solver_2d import (DOM_ROTOR, DOM_SHAFT,
+                                                       DOM_STATOR)
+    from motor_ai_sim.simulation.field_ops import (MU0, _mu_r_from_bh_vec,
+                                                   _p2_B_at_quad)
+
+    t0 = time.perf_counter()
+    mesh, tags, mats, full = _ring_problem(section_full, sect_sector)
+    elem = ElementTriP2() if int(element_order) == 2 else ElementTriP1()
+    basis = Basis(mesh, elem)
+    b0 = basis.with_element(ElementTriP0())
+
+    @BilinearForm
+    def _stiff(u, v, w):
+        return w["nu"] * dot(grad(u), grad(v))
+
+    @LinearForm
+    def _dvdy(v, w):
+        return grad(v)[1]
+
+    @LinearForm
+    def _dvdx(v, w):
+        return grad(v)[0]
+
+    # source: H_c = M / mu_rec, the equivalent coercivity (see the docstring)
+    f_src = np.zeros(basis.N)
+    for tag in np.unique(tags):
+        m = mats.get(int(tag))
+        if m is None or (abs(m.Mx) == 0.0 and abs(m.My) == 0.0):
+            continue
+        idx = np.where(tags == tag)[0]
+        if idx.size == 0:
+            continue
+        sub = Basis(mesh, elem, elements=idx)
+        if abs(m.Mx) > 0:
+            f_src += asm(_dvdy, sub) * (m.Mx / max(m.mu_r, 1.0))
+        if abs(m.My) > 0:
+            f_src -= asm(_dvdx, sub) * (m.My / max(m.mu_r, 1.0))
+    rmax = float(np.sqrt(mesh.p[0] ** 2 + mesh.p[1] ** 2).max())
+    D = basis.get_dofs(facets=mesh.facets_satisfying(
+        lambda x: np.sqrt(x[0] ** 2 + x[1] ** 2) >= rmax - 5e-4))
+
+    def _linear(nu):
+        nf = b0.zeros()
+        nf[:] = nu
+        K = asm(_stiff, basis, nu=b0.interpolate(nf)).tocsr()
+        return solve(*condense(K, f_src, D=D))
+
+    nl_tags = [t for t in (DOM_STATOR, DOM_ROTOR, DOM_SHAFT)
+               if (tags == t).any() and mats.get(t) is not None
+               and mats[t].bh_curve and len(mats[t].bh_curve) >= 2]
+    nu = np.empty(mesh.t.shape[1])
+    for tag in np.unique(tags):
+        m = mats.get(int(tag))
+        nu[tags == tag] = 1.0 / (MU0 * max(m.mu_r if m else 1.0, 1.0))
+
+    A = _linear(nu)
+    d_cur, good, prev, sweeps, resid = float(damping), 0, float("inf"), 0, None
+    converged = False
+    for it in range(int(max_sweeps)):
+        sweeps = it + 1
+        Bx, By, dx = _p2_B_at_quad(basis, A)
+        area = dx.sum(axis=1)
+        Bm = ((np.sqrt(Bx ** 2 + By ** 2) * dx).sum(axis=1)
+              / np.maximum(area, 1e-30))
+        nu_new = nu.copy()
+        num = den = 0.0
+        for tag in nl_tags:
+            idx = np.where(tags == tag)[0]
+            nu_c = 1.0 / (MU0 * np.maximum(
+                _mu_r_from_bh_vec(mats[tag].bh_curve, Bm[idx]), 1.0))
+            nu_new[idx] = nu_c
+            h_c, h_u = Bm[idx] * nu_c, Bm[idx] * nu[idx]
+            num += float((((h_c - h_u) ** 2) * area[idx]).sum())
+            den += float(((h_c ** 2) * area[idx]).sum())
+        resid = math.sqrt(num / max(den, 1e-300))
+        if resid < tol:
+            converged = True
+            break
+        if resid > prev:                       # overshot — back the step off
+            d_cur, good = max(0.5 * d_cur, 0.02), 0
+        else:
+            good += 1
+            if good >= 3:
+                d_cur, good = min(1.6 * d_cur, float(damping)), 0
+        prev = resid
+        nu = np.exp((1.0 - d_cur) * np.log(nu) + d_cur * np.log(nu_new))
+        A = _linear(nu)
+
+    r = section_full.mid_r_m
+    th = np.linspace(0.0, 2.0 * math.pi, int(n_theta), endpoint=False)
+    g = _grad_at_points_tri(mesh, basis, A,
+                            np.vstack([r * np.cos(th), r * np.sin(th)]))
+    Br = g[1] * np.cos(th) - g[0] * np.sin(th)
+    p = section_full.pole_pairs
+    amp, ph = gap_fundamental(th, Br, p)
+    # the anti-periodicity the machine HAS: B_r(theta+pi) = -B_r(theta), so every
+    # even harmonic is a pure numerical artefact and their norm is a free error
+    # bar on the whole solution
+    c = np.abs(np.fft.rfft(Br)) * (2.0 / int(n_theta))
+    ev = float(np.sqrt((c[2::2] ** 2).sum())
+               / max(np.sqrt((c[1::2] ** 2).sum()), 1e-30))
+    return Ref2D(B1_T=amp, B1_phase_rad=ph, Br_theta=Br, theta=th,
+                 n_tri=int(mesh.t.shape[1]), ndofs=int(basis.N),
+                 wall_s=time.perf_counter() - t0, r_gap_m=r, pole_pairs=p,
+                 outer_r_mm=full.r_box_mm,
+                 harmonics={int(k): gap_fundamental(th, Br, k)[0]
+                            for k in (p, 3 * p, 5 * p)},
+                 relaxation="geometric in log(mu), adaptive, constitutive-residual stop",
+                 picard_sweeps=int(sweeps),
+                 picard_residual=None if resid is None else float(resid),
+                 picard_converged=bool(converged), even_over_odd=ev)
 
 
 def solve_2d_reference(section: MotorSection,

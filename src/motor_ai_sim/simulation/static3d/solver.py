@@ -14,6 +14,15 @@ The constitutive law, region by region, is
 
 with M the permanent magnetisation in A/m (zero outside the magnets) and mu_r
 the recoil permeability in a magnet, the B-H permeability in iron, 1 in air.
+
+In a LAMINATED core mu is not a scalar: the stack is steel and insulation in
+parallel in the sheet plane and in series across it, so mu = diag(mu, mu, mu_z)
+with mu_z bounded by mu0/(1 - k_f) — 12.5 mu0 at k_f = 0.92, against an in-plane
+4600.  A 2D model cannot represent that quantity at all (it has no z), which is
+one of the few places where 3D is not just a refinement of 2D but a different
+constitutive law.  See :func:`axial_mu`; ``Region.stack_kf = 1`` recovers the
+isotropic model exactly.
+
 Feeding that into div B = 0:
 
     div( mu grad phi ) = div( mu0 M )
@@ -84,9 +93,62 @@ def _stiff(u, v, w):
     return w["mu"] * dot(grad(u), grad(v))
 
 
+@BilinearForm
+def _stiff_aniso(u, v, w):
+    """The same operator with a DIAGONAL permeability diag(mu, mu, mu_z).
+
+    A lamination stack is isotropic in the sheet plane and something else
+    entirely across it, and the scalar potential takes the tensor for free: the
+    weak form is grad(v) . mu . grad(u), so a diagonal mu is one extra term.
+    """
+    gu, gv = grad(u), grad(v)
+    return (w["mu"] * (gu[0] * gv[0] + gu[1] * gv[1])
+            + w["muz"] * gu[2] * gv[2])
+
+
 @LinearForm
 def _magsrc(v, w):
     return MU0 * dot(w["M"], grad(v))
+
+
+# --------------------------------------------------------------------------
+# lamination
+# --------------------------------------------------------------------------
+
+def axial_mu(mu_inplane, kf):
+    """Permeability ACROSS a lamination stack, from the in-plane homogenised one.
+
+    The 2D magnetic model (``fem_solver_2d.build_materials._laminate``) already
+    folds the stacking factor into the B-H curve the IN-PLANE way: steel and
+    insulation side by side at the same H, so their flux densities add in
+    proportion to area,
+
+        mu_t = k_f * mu_steel + (1 - k_f) * mu0                       (parallel)
+
+    Across the stack the two are in SERIES at the same B, and it is the
+    insulation that decides:
+
+        1 / mu_z = k_f / mu_steel + (1 - k_f) / mu0                   (series)
+
+    so mu_z / mu0 -> 1 / (1 - k_f) as the steel saturates or not — 12.5 at
+    k_f = 0.92, against an in-plane 4600.  A 3D model that uses the in-plane
+    value in z lets flux cross the insulation as if it were steel, which is a
+    factor of a few hundred too easy.  A 2D model cannot have this quantity at
+    all, which is exactly why it belongs here.
+
+    ``mu_inplane`` is the homogenised (laminated) permeability the rest of the
+    code already carries, so the steel's own mu is backed out of it first.  At
+    k_f = 1 the two inversions cancel and this returns ``mu_inplane`` exactly —
+    the isotropic model is the k_f = 1 member of this family, not a special
+    case.
+    """
+    mu_t = np.asarray(mu_inplane, dtype=float)
+    k = np.asarray(kf, dtype=float)
+    solid = k >= 1.0
+    ks = np.where(solid, 1.0, k)
+    mu_s = np.maximum((mu_t - (1.0 - ks) * MU0) / ks, MU0)
+    mu_z = 1.0 / (ks / mu_s + (1.0 - ks) / MU0)
+    return np.where(solid, mu_t, mu_z)
 
 
 # --------------------------------------------------------------------------
@@ -100,16 +162,26 @@ class Region:
     ``bh_curve`` (a list of (H [A/m], B [T]) pairs, exactly the format the 2D
     solver's materials carry) makes the region NONLINEAR; ``mu_r`` is then only
     the starting guess for the Picard sweep.
+
+    ``stack_kf`` < 1 makes the region a LAMINATION STACK normal to z: ``mu_r``
+    and ``bh_curve`` are then the in-plane (homogenised) material, and the
+    permeability in z is derived from them by :func:`axial_mu`.  1.0 is solid
+    material and the isotropic model of every earlier revision.
     """
     name: str
     elements: np.ndarray
     mu_r: float = 1.0
     M: Tuple[float, float, float] = (0.0, 0.0, 0.0)
     bh_curve: Optional[Sequence[Tuple[float, float]]] = None
+    stack_kf: float = 1.0
 
     @property
     def nonlinear(self) -> bool:
         return bool(self.bh_curve) and len(self.bh_curve) >= 2
+
+    @property
+    def laminated(self) -> bool:
+        return 0.0 < float(self.stack_kf) < 1.0
 
 
 # --------------------------------------------------------------------------
@@ -132,9 +204,21 @@ class Solution:
     assemble_time: float = 0.0
     picard: dict = field(default_factory=dict)
     mu_converged: Optional[np.ndarray] = None
+    mu_z_el: Optional[np.ndarray] = None   # (nelem,) axial mu, laminated regions
     _finder_cache: Optional[tuple] = None
 
     # -- field recovery ----------------------------------------------------
+    def mu_diag(self, idx: Optional[np.ndarray] = None) -> np.ndarray:
+        """(3, n) permeability per direction — the constitutive law's diagonal.
+
+        Isotropic (``mu_z_el is None``) repeats ``mu_el`` three times, so every
+        recovery below is written once and reads the same either way."""
+        mu = self.mu_el if idx is None else self.mu_el[idx]
+        if self.mu_z_el is None:
+            return np.broadcast_to(mu, (3,) + mu.shape)
+        mz = self.mu_z_el if idx is None else self.mu_z_el[idx]
+        return np.vstack([mu, mu, mz])
+
     def B_elementwise(self) -> np.ndarray:
         """Element-mean B (3, nelem), from B = -mu grad(phi) + mu0 M.
 
@@ -146,7 +230,7 @@ class Solution:
         wq = self.basis.dx                             # (nelem, nqp)
         vol = wq.sum(axis=1)
         gmean = (gp * wq[None]).sum(axis=2) / vol[None]
-        return -self.mu_el[None] * gmean + MU0 * self.M_el
+        return -self.mu_diag() * gmean + MU0 * self.M_el
 
     def B_quadrature(self, elements: Optional[np.ndarray] = None):
         """B at every quadrature point of (a subset of) the elements, with the
@@ -161,9 +245,9 @@ class Solution:
             idx = np.asarray(elements, dtype=np.int64)
             b = Basis(self.mesh, self.basis.elem, elements=idx)
         gp = b.interpolate(self.phi).grad
-        mu = self.mu_el[idx][:, None]
+        mu = self.mu_diag(idx)[:, :, None]
         M = self.M_el[:, idx][:, :, None]
-        return -mu[None] * gp + MU0 * M, b.dx
+        return -mu * gp + MU0 * M, b.dx
 
     def B_at_points(self, pts: np.ndarray) -> np.ndarray:
         """B at arbitrary points (3, N) -> (3, N).
@@ -191,9 +275,9 @@ class Solution:
             f = elem.gbasis(mapping, X, i, tind=tind)[0]
             gphi += f.grad[:, :, 0] * self.phi[edofs[i]]
 
-        mu = self.mu_el[tind]
+        mu = self.mu_diag(tind)
         M = self.M_el[:, tind]
-        return -mu[None] * gphi + MU0 * M
+        return -mu * gphi + MU0 * M
 
     # -- integrals ---------------------------------------------------------
     def region_basis(self, name: str) -> object:
@@ -223,9 +307,9 @@ class Solution:
         fb = FacetBasis(self.mesh, self.basis.elem)
         gp = fb.interpolate(self.phi).grad              # (3, nfacet, nqp)
         tind = fb.tind
-        mu = self.mu_el[tind][:, None]
+        mu = self.mu_diag(tind)[:, :, None]
         M = self.M_el[:, tind][:, :, None]
-        B = -mu[None] * gp + MU0 * M
+        B = -mu * gp + MU0 * M
         n = fb.normals                                  # (3, nfacet, nqp)
         return float(((B * n).sum(axis=0) * fb.dx).sum())
 
@@ -273,8 +357,18 @@ def _region_arrays(mesh, regions: Sequence[Region], mu_r_override=None):
     return mu, M
 
 
+def _kf_array(mesh, regions: Sequence[Region]) -> np.ndarray:
+    """Per-element lamination fill factor (1.0 = solid)."""
+    kf = np.ones(mesh.t.shape[1])
+    for r in regions:
+        if r.laminated:
+            kf[np.asarray(r.elements, dtype=np.int64)] = float(r.stack_kf)
+    return kf
+
+
 def solve_static3d(mesh, regions: Sequence[Region], order: int = 1,
                    mu_el: Optional[np.ndarray] = None,
+                   mu_z_el: Optional[np.ndarray] = None,
                    neumann_outer: bool = False,
                    basis: Optional[object] = None,
                    periodic: Optional[object] = None,
@@ -314,12 +408,28 @@ def solve_static3d(mesh, regions: Sequence[Region], order: int = 1,
     if mu_used.shape != (mesh.t.shape[1],):
         raise ValueError("mu_el must be one value per element")
 
+    # Axial permeability: given, derived from the stacking factor, or absent
+    # (isotropic).  Deriving it from ``mu_used`` is what keeps the nonlinear
+    # driver simple — it only ever updates the in-plane permeability, and the
+    # axial one follows the same state automatically.
+    if mu_z_el is not None:
+        mu_z_used = np.asarray(mu_z_el, dtype=float)
+        if mu_z_used.shape != mu_used.shape:
+            raise ValueError("mu_z_el must be one value per element")
+    else:
+        kf = _kf_array(mesh, regions)
+        mu_z_used = axial_mu(mu_used, kf) if np.any(kf < 1.0) else None
+
     nqp = basis.dx.shape[1]
     mu_qp = np.repeat(mu_used[:, None], nqp, axis=1)
     M_qp = np.repeat(M_el[:, :, None], nqp, axis=2)
 
     t0 = time.perf_counter()
-    K = asm(_stiff, basis, mu=mu_qp)
+    if mu_z_used is None:
+        K = asm(_stiff, basis, mu=mu_qp)
+    else:
+        K = asm(_stiff_aniso, basis, mu=mu_qp,
+                muz=np.repeat(mu_z_used[:, None], nqp, axis=1))
     f = asm(_magsrc, basis, M=M_qp)
     t_asm = time.perf_counter() - t0
 
@@ -370,8 +480,9 @@ def solve_static3d(mesh, regions: Sequence[Region], order: int = 1,
     t_solve = time.perf_counter() - t0
 
     return Solution(phi=x, basis=basis, mesh=mesh, regions=list(regions),
-                    mu_el=mu_used, M_el=M_el, order=order, ndofs=int(basis.N),
-                    solve_time=t_solve, assemble_time=t_asm, solver=name)
+                    mu_el=mu_used, mu_z_el=mu_z_used, M_el=M_el, order=order,
+                    ndofs=int(basis.N), solve_time=t_solve,
+                    assemble_time=t_asm, solver=name)
 
 
 def _solve_cg(A, b, tol: float = 1e-10, maxiter: int = 20000):
@@ -430,14 +541,18 @@ def solve_static3d_nonlinear(mesh, regions: Sequence[Region], order: int = 1,
     2D iron are the same iron by construction — if the curve handling is ever
     fixed, both move together.
 
-    One thing that is NOT yet the same, and it is worth a percent on a saturating
-    bridge: the |B| each element is looked up at.  This driver takes the norm of
-    the element-mean B; ``fem_solver_2d`` takes the mean of |B| over the
-    quadrature points.  Where B swings in direction inside an element the second
-    is larger, so the two models put the same element at different points on the
-    same curve.  Reconciling them is on the list in
-    ``config/end_effect_3d.json::consistency_investigation``; it is recorded here
-    because this is where the choice is made.
+    Two things are NOT the same, both worth a percent on a saturating bridge and
+    both measured rather than argued about (round 4 of
+    ``config/end_effect_3d.json::consistency_investigation``):
+
+    * the |B| each element is looked up at.  This driver takes the norm of the
+      element-mean B; ``fem_solver_2d`` takes the mean of |B| over the quadrature
+      points, which is the larger of the two wherever B swings inside an element.
+      Sign-tested: the 2D convention saturates the bridges HARDER, so it cannot
+      explain a 2D answer that came out low — and once the 2D leg's Picard was
+      actually converged, the disagreement it was invoked for was gone.
+    * for a LAMINATED region the curve is read at the IN-PLANE |B| (see below):
+      the sheet's own B-H curve is about flux in the sheet.
 
     Two choices here were forced by measurement, not taste:
 
@@ -506,18 +621,28 @@ def solve_static3d_nonlinear(mesh, regions: Sequence[Region], order: int = 1,
         kw["basis"] = basis
         B = sol.B_elementwise()
         Bmag = np.linalg.norm(B, axis=0)
+        # A laminated region's B-H curve is the SHEET's: what saturates the steel
+        # is the flux in the plane of the sheet, and the little that crosses the
+        # stack rides on the insulation's mu0.  Reading the curve at the full |B|
+        # there would saturate the sheet with flux the sheet never carries.  At
+        # k_f = 1 (solid) the two are the same quantity by construction.
+        Bref = Bmag.copy()
+        for r in nl:
+            if r.laminated:
+                idx = np.asarray(r.elements, dtype=np.int64)
+                Bref[idx] = np.hypot(B[0][idx], B[1][idx])
         w = sol.basis.dx.sum(axis=1)[nlidx]
 
         mu_new = mu_el.copy()
         for r in nl:
             idx = np.asarray(r.elements, dtype=np.int64)
-            mur = np.maximum(_mu_r_from_bh_vec(r.bh_curve, Bmag[idx]), 1.0)
+            mur = np.maximum(_mu_r_from_bh_vec(r.bh_curve, Bref[idx]), 1.0)
             mu_new[idx] = MU0 * mur
         mu_hist.append(float(np.max(np.abs(mu_new[nlidx] - mu_el[nlidx])
                                     / np.maximum(mu_el[nlidx], 1e-30))))
 
         # constitutive residual in H (damping independent — see the docstring)
-        bm = Bmag[nlidx]
+        bm = Bref[nlidx]
         h_curve = bm / mu_new[nlidx]
         h_used = bm / mu_el[nlidx]
         num = float((((h_curve - h_used) ** 2) * w).sum())

@@ -62,6 +62,7 @@ class RegionSpec:
     M: Tuple[float, float, float] = (0.0, 0.0, 0.0)
     bh_curve: Optional[List[Tuple[float, float]]] = None
     kind: str = "air"            # "iron" | "magnet" | "shaft" | "air"
+    stack_kf: float = 1.0        # lamination fill factor along z (1 = solid)
 
     @property
     def area_mm2(self) -> float:
@@ -165,6 +166,47 @@ def sector_choice(num_slots: int, num_poles: int,
 
 CUT_SNAP_MM = 0.01          # 10 um — see _snap_cut_vertices
 POCKET_SLIVER_MM2 = 0.01    # see _recut_rotor_pockets
+
+
+def _stack_factor(part_key: str, built_mu_r: float) -> float:
+    """The lamination fill factor of a laminated core, two ways, cross-checked.
+
+    ``fem_solver_2d.build_materials`` has already used k_f twice: it folded it
+    into the B-H curve (``_laminate``) and into the linear permeability
+    (``mu_r = k_f*mu_r_steel + (1-k_f)``).  The second is invertible, so the k_f
+    the 2D materials were ACTUALLY built with can be recovered from the material
+    object this module was handed, and compared with the one the library says.
+    They can only differ if the two modules resolved different materials, which
+    is exactly the silent mismatch worth catching: the recovered value wins,
+    because it is the one the iron in the solve really has.
+    """
+    kf_lib = None
+    mu_raw = None
+    try:
+        from motor_ai_sim.config import get_material_assignments
+        from motor_ai_sim.materials import get_material
+        name = (get_material_assignments() or {}).get(part_key)
+        if name:
+            m = get_material("steel", name)
+            kf = float(getattr(m, "stacking_factor", 1.0) or 1.0)
+            kf_lib = kf if 0.0 < kf <= 1.0 else 1.0
+            mu_raw = float(getattr(m, "mu_r", 0.0) or 0.0)
+    except Exception:
+        pass
+    kf_rec = None
+    if mu_raw and mu_raw > 1.5 and built_mu_r > 1.0:
+        kf_rec = (float(built_mu_r) - 1.0) / (mu_raw - 1.0)
+        if not (0.0 < kf_rec <= 1.0 + 1e-9):
+            kf_rec = None
+    if kf_rec is not None and kf_lib is not None and abs(kf_rec - kf_lib) > 1e-6:
+        import logging
+        logging.getLogger(__name__).warning(
+            "lamination k_f mismatch for %s: the 2D materials were built with "
+            "%.4f, the library says %.4f — using the built one", part_key,
+            kf_rec, kf_lib)
+    if kf_rec is not None:
+        return float(min(max(kf_rec, 1e-3), 1.0))
+    return float(kf_lib if kf_lib is not None else 1.0)
 
 
 def _recut_rotor_pockets(polys: dict, tol_mm2: float = POCKET_SLIVER_MM2
@@ -339,10 +381,21 @@ def load_motor_section(geo_override: Optional[dict] = None,
             return
         regions.append(RegionSpec(name=name, polygon=poly, **kw))
 
+    # The stacking factor the 2D magnetic model already folded INTO the curve
+    # above (fem_solver_2d.build_materials._laminate: B_geom(H) = k_f B_steel(H)
+    # + (1-k_f) mu0 H).  That homogenisation is the IN-PLANE one and it is all a
+    # 2D model can have; in 3D the same k_f also fixes the permeability ACROSS
+    # the stack, which is a different (series) average — see solver.axial_mu.
+    # Same material, same number, one place: whatever k_f the 2D curve was built
+    # with is the k_f the 3D anisotropy uses.
+    kf_stator = _stack_factor("stator_core", float(m_stator.mu_r))
+    kf_rotor = _stack_factor("rotor_core", float(m_rotor.mu_r))
     _add("stator", clipped.get("stator"), mu_r=float(m_stator.mu_r),
-         bh_curve=list(m_stator.bh_curve or []) or None, kind="iron")
+         bh_curve=list(m_stator.bh_curve or []) or None, kind="iron",
+         stack_kf=kf_stator)
     _add("rotor", clipped.get("rotor"), mu_r=float(m_rotor.mu_r),
-         bh_curve=list(m_rotor.bh_curve or []) or None, kind="iron")
+         bh_curve=list(m_rotor.bh_curve or []) or None, kind="iron",
+         stack_kf=kf_rotor)
     _add("shaft", clipped.get("shaft"), mu_r=float(m_shaft.mu_r),
          bh_curve=list(m_shaft.bh_curve or []) or None,
          kind="iron" if m_shaft.bh_curve else "shaft")

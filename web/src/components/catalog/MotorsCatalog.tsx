@@ -27,6 +27,14 @@ interface Motor {
   power_w?: number; efficiency_pct?: number; voltage_pk_v?: number;
   magnet?: string; steel?: string; length_mm?: number; wire?: string;
   mass_kg?: number;     // active mass (stator+Cu+magnets+rotor+shaft)
+  // When this motor was last written (tz-aware ISO-8601 UTC).  ABSENT on motors
+  // saved before the field existed — those show "—", never a fabricated time.
+  saved_at?: string;
+  // Computed per request by the backend: this card's geometry IS the geometry
+  // loaded in the editor right now (compared by stamp, not by name).  None
+  // active is a legitimate state — it means the geometry was edited since the
+  // last save and matches nothing saved.
+  is_active?: boolean;
 }
 interface Tier {
   id: string; name: string; price_usd: number; highlight: boolean;
@@ -38,6 +46,38 @@ const tierColor: Record<string, string> = { free: '#10b981', pro: '#3b82f6', tea
 
 const fmtT = (t: number) => (t >= 10 ? t.toFixed(1) : t.toFixed(2));
 const fmtP = (w: number) => (w >= 1000 ? `${(w / 1000).toFixed(2)} kW` : `${Math.round(w)} W`);
+
+// The colour that means "this is the machine in your editor" — the same accent
+// the highlighted pricing tier uses, so the card reads as emphasised, not as
+// a different kind of card.
+const ACTIVE = '#60a5fa';
+
+/** "2 h ago" for an ISO instant, floored (never rounded UP into a time that has
+ *  not happened yet).  `now` is passed in so the label re-renders on the clock
+ *  tick instead of freezing at whatever it said when the page was opened.
+ *  Returns null for anything unparseable — a bad stamp shows as no stamp. */
+function relTime(iso: string, now: number): string | null {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return null;
+  // A stamp slightly in the future (server/browser clock skew) is not "in -3
+  // minutes"; it is as recent as it gets.
+  const s = Math.max(0, Math.floor((now - t) / 1000));
+  if (s < 60) return 'just now';
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} min ago`;
+  const h = Math.floor(s / 3600);
+  if (h < 24) return `${h} h ago`;
+  const d = Math.floor(s / 86400);
+  if (d < 31) return `${d} d ago`;
+  const mo = Math.floor(d / 30);
+  return mo < 12 ? `${mo} mo ago` : `${Math.floor(d / 365)} y ago`;
+}
+
+/** Exact local wall-clock time behind the relative label. */
+function exactLocal(iso: string): string {
+  const t = new Date(iso);
+  return Number.isNaN(t.getTime()) ? iso : t.toLocaleString();
+}
 
 // one headline stat (big number + caption)
 const Stat: React.FC<{ value: string; unit?: string; label: string; color?: string }> = ({ value, unit, label, color }) => (
@@ -68,6 +108,27 @@ const MotorsCatalog: React.FC = () => {
   const load = () => fetch(`${API}/api/catalog`).then((r) => r.json()).then(setCat)
     .catch(() => setCat(null)).finally(() => setLoading(false));
   useEffect(() => { load(); }, []);
+
+  // The "saved N ago" labels are relative to NOW, so they rot while the tab sits
+  // open — a card that said "just now" an hour ago is simply wrong.  One clock
+  // for the whole list, ticking every 60 s (the finest granularity any label
+  // shows), re-renders every label without refetching anything.
+  const [nowTs, setNowTs] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNowTs(Date.now()), 60_000);
+    return () => clearInterval(id);
+  }, []);
+
+  // `is_active` is a fact about the editor, computed server-side per request.
+  // Loading a motor from a card reloads the page (so the highlight moves by
+  // remount), but the active motor can also change from elsewhere in the app —
+  // that path announces itself with `motor:active-changed`, so listen and
+  // refetch rather than showing a highlight that has moved on.
+  useEffect(() => {
+    const onActiveChanged = () => { void load(); };
+    window.addEventListener('motor:active-changed', onActiveChanged);
+    return () => window.removeEventListener('motor:active-changed', onActiveChanged);
+  }, []);
 
   // Confirm through a proper dialog — window.confirm is silently suppressed
   // by Chrome once "prevent additional dialogs" was ever ticked (the exact
@@ -151,12 +212,16 @@ const MotorsCatalog: React.FC = () => {
     const powerW = typeof m.power_w === 'number'
       ? m.power_w
       : (m.T_avg_Nm > 0 && m.rpm > 0 ? m.T_avg_Nm * 2 * Math.PI * m.rpm / 60 : null);
+    const active = m.is_active === true;
+    const rel = m.saved_at ? relTime(m.saved_at, nowTs) : null;
     return (
       <Box key={m.id} sx={{
         flex: '1 1 290px', maxWidth: 360, display: 'flex', flexDirection: 'column',
-        p: 1.5, borderRadius: 2, border: '1px solid var(--line-soft)', bgcolor: 'var(--panel-2)',
+        p: 1.5, borderRadius: 2, bgcolor: 'var(--panel-2)',
+        border: `1px solid ${active ? ACTIVE : 'var(--line-soft)'}`,
+        boxShadow: active ? `0 0 0 1px ${ACTIVE}55` : 'none',
         transition: 'border-color .15s, box-shadow .15s',
-        '&:hover': { borderColor: '#334a6b', boxShadow: '0 0 0 1px var(--line-accent)55' },
+        '&:hover': active ? {} : { borderColor: '#334a6b', boxShadow: '0 0 0 1px var(--line-accent)55' },
       }}>
         {/* header: thumbnail + identity */}
         <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center', mb: 1 }}>
@@ -167,6 +232,13 @@ const MotorsCatalog: React.FC = () => {
               <Chip size="small" label={`Ø ${m.diameter_mm} mm`} sx={{ height: 18, fontSize: '0.6rem', bgcolor: 'var(--panel-2)', color: '#60a5fa', fontWeight: 700 }} />
               <Chip size="small" label={`${m.slots}s / ${m.poles}p`} sx={{ height: 18, fontSize: '0.6rem', bgcolor: 'var(--panel-2)', color: 'var(--text-2)' }} />
               <Chip size="small" label={m.tier} sx={{ height: 18, fontSize: '0.58rem', textTransform: 'capitalize', bgcolor: `${tierColor[m.tier] ?? 'var(--line)'}22`, color: tierColor[m.tier] ?? 'var(--text-2)' }} />
+              {active && (
+                <Tooltip title="This motor's geometry is the one loaded in the editor right now.">
+                  <Chip size="small" label="in editor"
+                    sx={{ height: 18, fontSize: '0.58rem', fontWeight: 700,
+                      bgcolor: `${ACTIVE}22`, color: ACTIVE }} />
+                </Tooltip>
+              )}
             </Box>
           </Box>
         </Box>
@@ -193,6 +265,16 @@ const MotorsCatalog: React.FC = () => {
           <Detail k="Mass" v={typeof m.mass_kg === 'number' ? `${m.mass_kg} kg` : '—'} />
           <Detail k="Torque/kg" v={typeof m.mass_kg === 'number' && m.mass_kg > 0 && m.T_avg_Nm > 0
             ? `${(m.T_avg_Nm / m.mass_kg).toFixed(1)} N·m/kg` : '—'} />
+        </Box>
+
+        {/* when this motor was last written — ONE line, exact time in the tip */}
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.75 }}>
+          <Typography sx={{ color: 'var(--text-3)', fontSize: '0.64rem' }}>
+            {rel ? `saved ${rel}` : 'saved —'}
+          </Typography>
+          <HelpTip title={rel
+            ? `Last saved ${exactLocal(m.saved_at!)}`
+            : 'Saved before timestamps existed — this motor has no recorded save time.'} />
         </Box>
 
         <Box sx={{ flex: 1 }} />

@@ -35,6 +35,40 @@ def _mutate(fn: Callable[[dict], None]) -> dict:
                         default={"tiers": [], "diameters_mm": [], "motors": []})
 
 
+def _mark_active(motors: list) -> None:
+    """Flag the card whose motor IS the geometry currently loaded in the editor.
+
+    Identity is the project's geometry stamp (`presets._geo_sig` — the same
+    `key:value|…` dialect the browser spells in `geoSig.ts`), never the name: two
+    cards can share a name, and the name says nothing about whether loading the
+    card would reproduce what is on screen.
+
+    Comparison order per card: the underlying PRESET's geometry (that is what a
+    Load applies), falling back to the stamp stored on the card for a card whose
+    preset is gone.  No stamp on either side -> `is_active` is False: unprovable
+    is not the same as true.  And when the user has edited the geometry since the
+    last save, NO card matches — which is the honest answer, not a bug.
+    """
+    try:
+        from motor_ai_sim.routes.presets import (
+            _geo_sig, _load_presets, active_geo_sig,
+        )
+        live = active_geo_sig()
+    except Exception:
+        for m in motors:
+            m["is_active"] = False
+        return
+    presets = _load_presets() if live else {}
+    for m in motors:
+        sig = ""
+        p = presets.get(m.get("preset") or "") or {}
+        if p.get("geometry"):
+            sig = _geo_sig(p["geometry"])
+        elif m.get("geo_sig"):
+            sig = str(m["geo_sig"])
+        m["is_active"] = bool(live and sig and sig == live)
+
+
 @router.get("")
 def get_catalog():
     """Return the full catalog: tiers, the diameter buckets, and every motor."""
@@ -44,6 +78,10 @@ def get_catalog():
     for m in cat.get("motors", []):
         by_d.setdefault(m.get("diameter_mm"), []).append(m["id"])
     cat["by_diameter"] = by_d
+    # `is_active` is COMPUTED per request and never stored: it is a fact about
+    # the editor's current state, and a stored copy would be wrong the moment the
+    # user nudged a dimension.
+    _mark_active(cat.get("motors", []))
     return cat
 
 

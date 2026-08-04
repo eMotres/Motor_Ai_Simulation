@@ -32,6 +32,18 @@ _CONFIG_PATH = _ROOT / "config" / "motor_config.yaml"
 _CATALOG_PATH = _ROOT / "config" / "motor_catalog.json"
 
 
+def _now_utc_iso() -> str:
+    """The moment of a save, as a tz-aware ISO-8601 UTC string.
+
+    `updated_at` next to it is a NAIVE local timestamp (kept for the readers that
+    already parse it), which a browser cannot place on a timeline: "2026-08-04T07:36:33"
+    is a different instant on every machine that reads it.  `saved_at` carries the
+    offset, so "saved 2 h ago" on a card is a fact rather than a guess about the
+    server's timezone.
+    """
+    return _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
+
+
 def _thumb_path_d(geom, c: float, s: float) -> str:
     """Shapely Polygon/MultiPolygon -> SVG path 'd' (mm->view units, y flipped)."""
     if geom is None or getattr(geom, "is_empty", True):
@@ -281,6 +293,17 @@ def _upsert_catalog_entry(preset_id: str, preset: dict, gen_thumb: bool = True) 
     # be checked against each other instead of trusted to have stayed in step.
     entry["geo_sig"] = _geo_sig(geo)
     entry["updated_at"] = _dt.datetime.now().isoformat(timespec="seconds")
+    # The card MIRRORS the preset's save time rather than stamping its own: the
+    # card is a projection of the preset, and a second clock reading here would
+    # let "saved 2 h ago" on the card disagree with the motor it describes.  A
+    # preset written before saved_at existed leaves the field absent — the card
+    # then shows "—" instead of a manufactured time (the file's mtime is the
+    # whole store's, not this motor's).
+    _sa = preset.get("saved_at")
+    if _sa:
+        entry["saved_at"] = _sa
+    else:
+        entry.pop("saved_at", None)
 
     def _m(d: dict) -> None:
         d.setdefault("tiers", []); d.setdefault("diameters_mm", []); d.setdefault("motors", [])
@@ -313,6 +336,7 @@ def _put_preset(pid: str, preset: dict) -> dict:
     preset = dict(preset)
     preset["geo_sig"] = _geo_sig(preset.get("geometry") or {})
     preset["updated_at"] = _dt.datetime.now().isoformat(timespec="seconds")
+    preset["saved_at"] = _now_utc_iso()
 
     def _m(d: dict) -> None:
         d[pid] = preset
@@ -352,6 +376,21 @@ def _geo_sig(geometry: dict) -> str:
         return ""
 
 
+def active_geo_sig() -> str:
+    """`_geo_sig` of the geometry the editor is on RIGHT NOW (config.yaml).
+
+    Same construction as the stamp stored on every preset, so "is this saved
+    motor the one I am working with?" is one string comparison.  Empty string
+    when the config cannot be read — an unknown live machine must make every
+    card "not active", never accidentally match one.
+    """
+    try:
+        from motor_ai_sim.config import get_config
+        return _geo_sig((get_config() or {}).get("geometry") or {})
+    except Exception:
+        return ""
+
+
 def _summary(p: dict) -> dict:
     return {
         "id": p.get("id"),
@@ -359,6 +398,9 @@ def _summary(p: dict) -> dict:
         "description": p.get("description", ""),
         "metrics": p.get("metrics", {}),
         "order": p.get("order", 999),
+        # Absent on motors written before timestamps existed — reported as None
+        # rather than back-filled from a file mtime that belongs to the store.
+        "saved_at": p.get("saved_at"),
     }
 
 
@@ -560,6 +602,7 @@ def save_motor_settings(preset_id: str, patch: SettingsPatch):
         # worse than none, because it is believed.
         p["geo_sig"] = _geo_sig(p.get("geometry") or {})
         p["updated_at"] = _dt.datetime.now().isoformat(timespec="seconds")
+        p["saved_at"] = _now_utc_iso()
         d[preset_id] = p
         saved = p
     _mutate_json(_PRESETS_PATH, _m, default={})
@@ -628,6 +671,7 @@ def rename_preset(preset_id: str, req: RenamePresetRequest):
         if req.description is not None:
             p["description"] = req.description
         p["updated_at"] = _dt.datetime.now().isoformat(timespec="seconds")
+        p["saved_at"] = _now_utc_iso()      # a rename IS a write to this motor
         renamed = p
     _mutate_json(_PRESETS_PATH, _m, default={})
     if not renamed:

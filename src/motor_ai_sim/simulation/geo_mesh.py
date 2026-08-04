@@ -786,6 +786,30 @@ def _mesh_stator_half(polys: Dict, r_bore: float, r_out_iron: float,
     return V, T
 
 
+def _shaft_bore_r(polys: Dict, r_shaft: float) -> float:
+    """Inner radius (mm) of the CadQuery shaft TUBE — 0.0 for a solid shaft.
+
+    The shaft CadQuery builds is a hollow tube (rotor_inner_radius −
+    shaft_height .. rotor_inner_radius); the bore inside it is AIR.  Meshing the
+    whole inner disk as ONE DOM_SHAFT region handed the eddy solve ~7x the
+    conductive section the machine has (150 mm: 5425 mm² of "aluminium" for a
+    756 mm² tube), so the shaft eddy tile billed metal that does not exist.
+
+    The bore is read off the polygon rather than off `shaft_inner_radius` so the
+    meshed conductor is exactly the section the mass model bills (masses.py
+    measures the same polygon)."""
+    g = (polys or {}).get("shaft")
+    if g is None or getattr(g, "is_empty", True):
+        return 0.0
+    r_in = 0.0
+    for sub in getattr(g, "geoms", [g]):
+        for h in getattr(sub, "interiors", []):
+            c = np.asarray(h.coords, float)
+            if len(c):
+                r_in = max(r_in, float(np.hypot(c[:, 0], c[:, 1]).max()))
+    return r_in if 1e-6 < r_in < r_shaft - 1e-3 else 0.0
+
+
 def _mesh_rotor_half(polys: Dict, r_od: float, r_shaft: float,
                      n_slip: int, area: float, air_mm: float, quality: int,
                      r1_band: float = 0.0, part_area: Optional[Dict] = None):
@@ -812,6 +836,16 @@ def _mesh_rotor_half(polys: Dict, r_od: float, r_shaft: float,
     # shaft seam is internal (not a belt boundary) → discretise at the air size
     n_sh = max(48, int(2 * math.pi * r_shaft / max(0.35, air_mm)))
     iron = _resample(iron, r_shaft, n_sh)                       # shaft → own grid
+    # HOLLOW shaft (see _shaft_bore_r): mesh the tube wall as its own region and
+    # leave the bore inside it to the coarse air size — _tag_rotor then tags the
+    # bore DOM_AIR, so sigma = 0 there.
+    r_bore = _shaft_bore_r(polys, r_shaft)
+    a_tube = air_area
+    n_bore = 0
+    if r_bore > 0.0:
+        t_tube = r_shaft - r_bore
+        a_tube = max(1e-3, min(air_area, 0.4330 * (0.5 * t_tube) ** 2))
+        n_bore = max(48, int(2 * math.pi * r_bore / max(0.35, 0.5 * t_tube)))
     mags = [mg for mg, _pol in (polys.get("magnets") or [])]
     mags = [_weld_outline(mg, iron, 0.01) for mg in mags]  # см. sector (zipper)
 
@@ -835,10 +869,15 @@ def _mesh_rotor_half(polys: Dict, r_od: float, r_shaft: float,
     if r1_band > r_od + 1e-6:
         add(_grid_circle(r1_band, n_slip))                      # moving-band R1
     add(_grid_circle(r_shaft, n_sh))                            # iron|shaft seam
+    if r_bore > 0.0:
+        add(_grid_circle(r_bore, n_bore))                       # shaft tube bore
     V, S = _build_pslg(lines)
 
-    # region seeds: steel + each magnet fine; shaft core + flux barriers coarse
-    _air_reg = [[r_shaft * 0.5, 0.0, 7, air_area]]              # solid shaft core
+    # region seeds: steel + each magnet fine; shaft bore + flux barriers coarse
+    _core_r = 0.5 * (r_bore if r_bore > 0.0 else r_shaft)
+    _air_reg = [[_core_r, 0.0, 7, air_area]]                   # inside the tube
+    if r_bore > 0.0:                                           # the tube wall
+        _air_reg += [[0.5 * (r_bore + r_shaft), 0.0, 10, a_tube]]
     ann = Polygon(_grid_circle(r_od, n_slip)[:-1]).difference(
           Polygon(_grid_circle(r_shaft, n_sh)[:-1]))
     _air_reg += [[*a.representative_point().coords[0], 8, air_area]
@@ -1118,6 +1157,17 @@ def _mesh_rotor_sector(polys, r_od, r_shaft, n_slip, span, area, air_mm, quality
     n_sh = max(48, int(2 * math.pi * r_shaft / max(0.35, air_mm)))
     if cell_copies > 0:                       # grid nodes exactly on the rays
         n_sh = int(math.ceil(n_sh / cell_copies)) * cell_copies
+    # HOLLOW shaft (see _shaft_bore_r): the tube wall is a region of its own,
+    # the bore inside it stays coarse air.
+    r_bore = _shaft_bore_r(polys, r_shaft)
+    a_tube = air_area
+    n_bore = 0
+    if r_bore > 0.0:
+        t_tube = r_shaft - r_bore
+        a_tube = max(1e-3, min(air_area, 0.4330 * (0.5 * t_tube) ** 2))
+        n_bore = max(48, int(2 * math.pi * r_bore / max(0.35, 0.5 * t_tube)))
+        if cell_copies > 0:
+            n_bore = int(math.ceil(n_bore / cell_copies)) * cell_copies
     iron = _resample(steel, r_od, n_slip)
     iron = _resample(iron, r_shaft, n_sh)
     _rout = r1_band if r1_band > r_od + 1e-6 else r_od
@@ -1140,7 +1190,9 @@ def _mesh_rotor_sector(polys, r_od, r_shaft, n_slip, span, area, air_mm, quality
     rk = _graded_radii(_rk_segs)
     # shaft-core cut nodes from the ORIGIN out (the pie tip must close at r=0,
     # else near-centre nodes are left isolated → singular matrix).
-    rk_sh = _graded_radii([(0.0, r_shaft, air_mm)])
+    rk_sh = _graded_radii(
+        [(0.0, r_bore, air_mm), (r_bore, r_shaft, 0.5 * (r_shaft - r_bore))]
+        if r_bore > 0.0 else [(0.0, r_shaft, air_mm)])
     rk_all = np.array(sorted(set(np.round(np.concatenate([rk_sh, rk]), 4))))
 
     lines = []
@@ -1162,12 +1214,23 @@ def _mesh_rotor_sector(polys, r_od, r_shaft, n_slip, span, area, air_mm, quality
     add(_grid_arc(r_od, n_slip, span))
     if r1_band > r_od + 1e-6:
         add(_grid_arc(r1_band, n_slip, span))           # moving-band R1
+    if r_bore > 0.0:                                    # shaft tube bore
+        # _lin_arc, not _grid_arc: the bore is not a slip circle, so its
+        # endpoints must land EXACTLY on the two cut rays or the tiled copies
+        # leave a ragged seam.
+        add(_lin_arc(r_bore, max(2, int(round(n_bore * span / (2.0 * math.pi)))),
+                     span))
     add(_cut_pts(0.0, rk_all)); add(_cut_pts(span, rk_all))
     V, S = _build_pslg(lines)
     V, S = _symmetrize_cuts(V, S, span)                 # clone-identical seam
 
-    _air_reg = [[0.5 * r_shaft * math.cos(span / 2),
-                 0.5 * r_shaft * math.sin(span / 2), 7, air_area]]  # shaft core
+    _core_r = 0.5 * (r_bore if r_bore > 0.0 else r_shaft)
+    _air_reg = [[_core_r * math.cos(span / 2),
+                 _core_r * math.sin(span / 2), 7, air_area]]   # inside the tube
+    if r_bore > 0.0:                                           # the tube wall
+        _rt = 0.5 * (r_bore + r_shaft)
+        _air_reg += [[_rt * math.cos(span / 2), _rt * math.sin(span / 2),
+                      10, a_tube]]
     ann = W.intersection(Polygon(_grid_circle(r_od, n_slip)[:-1]).difference(
                          Polygon(_grid_circle(r_shaft, n_sh)[:-1])))
     _air_reg += [[*a.representative_point().coords[0], 8, air_area]
@@ -1223,7 +1286,15 @@ def _tag_rotor(V, T, polys, r_shaft):
     cx, cy = C[:, 0], C[:, 1]
     tags = np.full(len(T), DOM_AIR, np.int16)
     tags[contains_xy(steel, cx, cy)] = DOM_ROTOR
-    tags[np.hypot(cx, cy) < r_shaft - 1e-6] = DOM_SHAFT       # (hole; usually empty)
+    _rr = np.hypot(cx, cy)
+    tags[_rr < r_shaft - 1e-6] = DOM_SHAFT
+    # HOLLOW shaft: only the tube WALL is metal.  The bore inside it is air —
+    # tagging the whole inner disk DOM_SHAFT gave _sigma_of_tag() the shaft's
+    # sigma over ~7x the CAD section, inflating the shaft eddy tile (and the
+    # free-run decomposition's computed shaft leg) by the same factor.
+    _r_bore = _shaft_bore_r(polys, r_shaft)
+    if _r_bore > 0.0:
+        tags[_rr < _r_bore - 1e-6] = DOM_AIR
     mags = polys.get("magnets") or []
     if mags:
         in_mag = np.zeros(len(T), bool)
@@ -1400,7 +1471,10 @@ def geo_mesh_halves(p: Dict, polys: Dict, outer_air_factor: float = 1.2,
     # FEM assembly — collapse them, protecting the slip/shaft grid rings that
     # the belt welds BY node identity.
     Vs, Ts = _collapse_slivers(Vs, Ts, keep_r=(r_bore,))
-    Vr, Tr = _collapse_slivers(Vr, Tr, keep_r=(r_od, r_sh))
+    _r_bore = _shaft_bore_r(polys, r_sh)
+    Vr, Tr = _collapse_slivers(Vr, Tr,
+                               keep_r=((r_od, r_sh, _r_bore) if _r_bore > 0.0
+                                       else (r_od, r_sh)))
     Vs, Ts = _prune(Vs, Ts)
     Vr, Tr = _prune(Vr, Tr)
 

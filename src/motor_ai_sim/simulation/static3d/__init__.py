@@ -32,18 +32,29 @@ from motor_ai_sim.simulation.static3d.meshes import (
     sphere_with_iron_shell, tube_in_box,
 )
 from motor_ai_sim.simulation.static3d.nedelec import (
-    ASolution, azimuthal_J, solve_static3d_A, solve_static3d_A_nonlinear,
+    ASolution, axial_nu, azimuthal_J, solve_static3d_A,
+    solve_static3d_A_nonlinear,
 )
 from motor_ai_sim.simulation.static3d.solver import (
     Region, Solution, solve_static3d, solve_static3d_nonlinear,
 )
+# Stage B — the machine under load.  ``winding3d`` closes the coil (a source
+# field T with curl T = J, so the discrete load is consistent to round-off);
+# ``loaded`` drives one loaded sector solve and reads flux linkage and
+# demagnetisation off it.  Neither exports a torque: that needs a rotatable
+# rotor with unchanged mesh connectivity, which does not exist yet — see
+# ``config/end_effect_3d.json::stage_b.blockers``.
+from motor_ai_sim.simulation.static3d.winding3d import (
+    WindingT, build_winding_T, phase_currents, solenoid_T,
+)
 
 __all__ = [
-    "ASolution", "MU0", "Region", "Solution", "TaggedTetMesh",
-    "azimuthal_J", "cylinder_axis_Bz", "cylinder_end_to_mid_ratio",
-    "cylinder_in_box", "cylinder_with_iron_ring", "solve_static3d",
-    "solve_static3d_A", "solve_static3d_A_nonlinear",
-    "solve_static3d_nonlinear", "sphere_B", "sphere_B_inside", "sphere_in_box",
-    "sphere_in_shell_B", "sphere_in_shell_B_inside", "sphere_with_iron_shell",
+    "ASolution", "MU0", "Region", "Solution", "TaggedTetMesh", "WindingT",
+    "axial_nu", "azimuthal_J", "build_winding_T", "cylinder_axis_Bz",
+    "cylinder_end_to_mid_ratio", "cylinder_in_box", "cylinder_with_iron_ring",
+    "phase_currents", "solenoid_T", "solve_static3d", "solve_static3d_A",
+    "solve_static3d_A_nonlinear", "solve_static3d_nonlinear", "sphere_B",
+    "sphere_B_inside", "sphere_in_box", "sphere_in_shell_B",
+    "sphere_in_shell_B_inside", "sphere_with_iron_shell",
     "thick_solenoid_axis_Bz", "tube_in_box",
 ]

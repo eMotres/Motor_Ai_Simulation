@@ -567,18 +567,36 @@ def _pair_cut_nodes(p: np.ndarray, a_sec: float, tol: float = 1e-5
 
 def axial_levels(stack_half_mm: float, z_box_mm: float,
                  n_stack: int = 8, n_cap: int = 12,
-                 end_bias: float = 3.0) -> np.ndarray:
+                 end_bias: float = 3.0,
+                 h_ew_mm: Optional[float] = None,
+                 n_ew: int = 4) -> np.ndarray:
     """z levels from 0 (mirror plane) to ``z_box_mm``, with a node EXACTLY on
     ``stack_half_mm``.
 
     Inside the stack the spacing tightens toward the end face (that is where the
     axial gradient lives); outside it grows geometrically to the truncation
     radius (that is where nothing happens and dofs are wasted).
+
+    ``h_ew_mm`` adds a resolved END-WINDING BAND immediately above the stack,
+    from ``stack_half_mm`` to ``stack_half_mm + h_ew_mm``, in ``n_ew`` layers,
+    with a node exactly on the far edge.  Under load that band is where the
+    tangential end-turn current lives (``winding3d``); leaving it to the
+    geometric cap would put the entire end winding inside one or two elements
+    whose height is comparable to the whole bundle, and the end-winding leakage
+    the 3D model exists to see would be a discretisation of nothing.  Omitted
+    (``None``) the levels are exactly the Stage A ones, bit for bit.
     """
     s = np.linspace(0.0, 1.0, int(n_stack) + 1)
     inside = stack_half_mm * (1.0 - (1.0 - s) ** end_bias)
     inside[-1] = stack_half_mm
-    span = float(z_box_mm) - float(stack_half_mm)
+    if h_ew_mm and float(h_ew_mm) > 0.0 and int(n_ew) > 0:
+        top = float(stack_half_mm) + float(h_ew_mm)
+        if top < float(z_box_mm):
+            ew = stack_half_mm + float(h_ew_mm) * (
+                np.arange(1, int(n_ew) + 1) / float(int(n_ew)))
+            ew[-1] = top
+            inside = np.concatenate([inside, ew])
+    span = float(z_box_mm) - float(inside[-1])
     if span <= 0:
         return np.unique(np.round(inside, 12))
     # geometric growth: first cap layer ~ the last stack layer
@@ -594,7 +612,7 @@ def axial_levels(stack_half_mm: float, z_box_mm: float,
         else:
             hi = q
     q = 0.5 * (lo + hi)
-    outside, z, h = [], float(stack_half_mm), h0
+    outside, z, h = [], float(inside[-1]), h0
     for _ in range(n):
         h *= q
         z += h
@@ -704,13 +722,22 @@ def build_motor_mesh(section: MotorSection,
                      n_stack: int = 8,
                      n_cap: int = 12,
                      sect: Optional[Section2D] = None,
+                     h_ew_mm: Optional[float] = None,
+                     n_ew: int = 4,
                      verbose: bool = False) -> Tuple[TaggedTetMesh, Section2D]:
-    """One call: cross-section (or a cached one) + axial levels + extrusion."""
+    """One call: cross-section (or a cached one) + axial levels + extrusion.
+
+    ``h_ew_mm`` / ``n_ew`` resolve an END-WINDING BAND immediately above the
+    stack — see :func:`axial_levels`.  Omitted, the levels are Stage A's."""
     if sect is None:
         sect = build_section_mesh_2d(section, box_factor=box_factor,
                                      h_gap=h_gap, h_solid=h_solid,
                                      verbose=verbose)
     L = float(stack_mm if stack_mm else section.stack_mm)
     z_box = sect.r_box_mm
-    zl = axial_levels(0.5 * L, z_box, n_stack=n_stack, n_cap=n_cap)
-    return extrude_section(sect, zl, 0.5 * L, section), sect
+    zl = axial_levels(0.5 * L, z_box, n_stack=n_stack, n_cap=n_cap,
+                      h_ew_mm=h_ew_mm, n_ew=n_ew)
+    tm = extrude_section(sect, zl, 0.5 * L, section)
+    tm.meta["h_ew_mm"] = None if h_ew_mm is None else float(h_ew_mm)
+    tm.meta["n_ew"] = int(n_ew) if h_ew_mm else 0
+    return tm, sect

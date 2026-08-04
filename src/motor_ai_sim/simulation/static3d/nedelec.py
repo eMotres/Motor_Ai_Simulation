@@ -139,10 +139,48 @@ def _curlcurl(u, v, w):
     return w["nu"] * dot(curl(u), curl(v))
 
 
+@BilinearForm
+def _curlcurl_aniso(u, v, w):
+    """The same operator with a DIAGONAL reluctivity diag(nu, nu, nu_z).
+
+    A lamination stack normal to z is one material in the sheet plane and
+    another across it, and in this formulation the anisotropy is carried by the
+    FLUX, not the field: the unknown's curl IS B, so
+
+        H = nu . B ,     nu = diag(nu_t, nu_t, nu_z) ,
+        nu_t = 1 / (mu0 mu_r,in-plane) ,   nu_z = 1 / axial_mu(...)
+
+    and the weak form integral(curl(v) . nu . curl(u)) picks the components
+    apart exactly the way ``solver._stiff_aniso`` picks apart grad(phi).  Note
+    which index gets which: it is B_z that has to cross the insulation, so nu_z
+    multiplies curl(A)_z.  Swapping the two would model a stack laminated in the
+    wrong plane and would still converge, which is why the test suite pins the
+    axial and in-plane limits separately.
+    """
+    cu, cv = curl(u), curl(v)
+    return (w["nu"] * (cu[0] * cv[0] + cu[1] * cv[1])
+            + w["nuz"] * cu[2] * cv[2])
+
+
 @LinearForm
 def _magsrc(v, w):
     # (M / mu_r) . curl(v) — the equivalent coercivity, see the module docstring
     return dot(w["Hc"], curl(v))
+
+
+@LinearForm
+def _tsrc(v, w):
+    """integral( T . curl(v) ) for a SOURCE FIELD T with curl(T) = J.
+
+    Algebraically identical to ``_magsrc`` — a coil and a magnet enter the
+    A-formulation through the same door — and that identity is the whole reason
+    this term exists.  A load assembled as integral(J . v) is consistent only up
+    to the quadrature's opinion of div J; a load assembled as
+    integral(T . curl v) is consistent to ROUND-OFF for any T whatsoever,
+    because curl(grad(psi)) is exactly zero in the Nedelec space.  See
+    ``winding3d`` for the T of a real closed coil.
+    """
+    return dot(w["T"], curl(v))
 
 
 @LinearForm
@@ -165,6 +203,11 @@ def _region_arrays(mesh, regions: Sequence[Region]):
     Deliberately built from the SAME ``Region`` objects the scalar solver takes,
     so a benchmark can hand both formulations one list and no reading of the
     material data can differ between them.
+
+    A LAMINATED region contributes its in-plane reluctivity here; the axial one
+    is derived from it by :func:`kf_array` + ``solver.axial_mu`` at assembly
+    time, exactly as the scalar solver does, so the nonlinear driver only ever
+    has to update one number per element.
     """
     n = mesh.t.shape[1]
     nu = np.full(n, 1.0 / MU0)
@@ -175,18 +218,6 @@ def _region_arrays(mesh, regions: Sequence[Region]):
         mu_r = float(r.mu_r)
         if mu_r <= 0.0:
             raise ValueError(f"region {r.name!r} has mu_r = {mu_r}")
-        if getattr(r, "laminated", False):
-            # This assembly carries a SCALAR nu.  Silently dropping stack_kf
-            # would solve a solid block and then be compared against a scalar
-            # solve of a laminated one — and on this machine that difference is
-            # 2.5 % of the gap fundamental, i.e. bigger than the disagreement
-            # the two formulations exist to bracket.
-            raise NotImplementedError(
-                f"region {r.name!r} is a lamination stack (k_f = "
-                f"{r.stack_kf:.3f}) and the A-formulation here assembles an "
-                "ISOTROPIC nu. Solve it with the scalar potential, or make "
-                "this weak form carry the diagonal nu too — do not compare a "
-                "solid-iron A-solve against a laminated scalar solve.")
         nu[idx] = 1.0 / (MU0 * mu_r)
         Hc[:, idx] = (np.asarray(r.M, dtype=float) / mu_r)[:, None]
         covered[idx] = True
@@ -196,6 +227,34 @@ def _region_arrays(mesh, regions: Sequence[Region]):
             "every element must carry a material or the field it sees is a "
             "silent guess")
     return nu, Hc
+
+
+def kf_array(mesh, regions: Sequence[Region]) -> np.ndarray:
+    """Per-element lamination fill factor (1.0 = solid).
+
+    The A-formulation twin of ``solver._kf_array``, and deliberately the same
+    three lines: if the two formulations ever disagreed about WHICH elements are
+    laminated, the anisotropy cross-check between them would be measuring that
+    instead of the discretisation.
+    """
+    kf = np.ones(mesh.t.shape[1])
+    for r in regions:
+        if getattr(r, "laminated", False):
+            kf[np.asarray(r.elements, dtype=np.int64)] = float(r.stack_kf)
+    return kf
+
+
+def axial_nu(nu_inplane: np.ndarray, kf: np.ndarray) -> np.ndarray:
+    """Reluctivity ACROSS the stack, from the in-plane one.
+
+    A thin wrapper on ``solver.axial_mu`` so that the two formulations cannot
+    drift apart: the series/parallel homogenisation lives in exactly one place
+    and this module inverts it, nothing more.  ``k_f = 1`` returns the input
+    bit for bit, so the isotropic model is the solid member of the family and
+    not a branch.
+    """
+    from .solver import axial_mu
+    return 1.0 / axial_mu(1.0 / np.asarray(nu_inplane, dtype=float), kf)
 
 
 # --------------------------------------------------------------------------
@@ -209,7 +268,7 @@ class ASolution:
     basis: object
     mesh: object
     regions: List[Region]
-    nu_el: np.ndarray               # (nelem,) reluctivity actually used
+    nu_el: np.ndarray               # (nelem,) in-plane reluctivity actually used
     Hc_el: np.ndarray               # (3, nelem) equivalent coercivity used
     ndofs: int
     solve_time: float
@@ -219,10 +278,26 @@ class ASolution:
     iterations: Optional[int] = None
     source_residual: float = 0.0
     source_residual_projected: float = 0.0
+    source_removed_norm: float = 0.0
+    load_norm: float = 0.0
     picard: dict = field(default_factory=dict)
     mu_converged: Optional[np.ndarray] = None
+    nu_z_el: Optional[np.ndarray] = None   # (nelem,) axial nu, laminated only
     _cache: Optional[tuple] = None
     _Bel: Optional[np.ndarray] = None
+
+    # -- constitutive law --------------------------------------------------
+    def nu_diag(self, idx: Optional[np.ndarray] = None) -> np.ndarray:
+        """(3, n) reluctivity per direction — the constitutive law's diagonal.
+
+        Isotropic (``nu_z_el is None``) repeats ``nu_el`` three times so every
+        recovery below reads the same either way, exactly as
+        ``solver.Solution.mu_diag`` does on the other side."""
+        nu = self.nu_el if idx is None else self.nu_el[idx]
+        if self.nu_z_el is None:
+            return np.broadcast_to(nu, (3,) + nu.shape)
+        nz = self.nu_z_el if idx is None else self.nu_z_el[idx]
+        return np.vstack([nu, nu, nz])
 
     # -- field recovery ----------------------------------------------------
     def B_elementwise(self) -> np.ndarray:
@@ -240,8 +315,14 @@ class ASolution:
         return self._Bel
 
     def H_elementwise(self) -> np.ndarray:
-        """H = nu (B - mu0 M) = nu B - Hc, elementwise."""
-        return self.nu_el[None] * self.B_elementwise() - self.Hc_el
+        """H = nu . (B - mu0 M) = nu . B - Hc, elementwise.
+
+        ``nu`` is the DIAGONAL, so in a lamination stack the axial component of
+        H is the one the insulation decides.  Reading H back through the scalar
+        ``nu_el`` in a laminated region would understate H_z by the anisotropy
+        ratio (~370x on this machine's stator) — which is exactly the number a
+        demagnetisation margin is made of."""
+        return self.nu_diag() * self.B_elementwise() - self.Hc_el
 
     def B_quadrature(self, elements: Optional[np.ndarray] = None):
         """(B, dx) at every quadrature point of (a subset of) the elements."""
@@ -564,6 +645,7 @@ def _direct(A, b):
 
 def solve_static3d_A(mesh, regions: Sequence[Region],
                      J: JSource = None,
+                     T: JSource = None,
                      basis: Optional[object] = None,
                      dirichlet_dofs: Optional[np.ndarray] = None,
                      natural_outer: bool = False,
@@ -571,6 +653,7 @@ def solve_static3d_A(mesh, regions: Sequence[Region],
                      gauge: str = "tree",
                      linear_solver: Optional[str] = None,
                      nu_el: Optional[np.ndarray] = None,
+                     nu_z_el: Optional[np.ndarray] = None,
                      project: bool = True,
                      cg_tol: float = 1e-10,
                      cg_maxiter: int = 40000) -> ASolution:
@@ -581,6 +664,11 @@ def solve_static3d_A(mesh, regions: Sequence[Region],
                   constant array, or ``f(x) -> (3, nelem, nqp)`` evaluated at the
                   quadrature points (which is what an azimuthal coil needs, since
                   e_phi is not piecewise constant).
+    ``T``         optional SOURCE FIELD with curl(T) = J, in the same three
+                  shapes.  Assembled as integral(T . curl v), which is
+                  consistent to round-off for ANY T — no projection has anything
+                  to remove.  Use this for a closed winding; ``J`` is only worth
+                  its inconsistency when the current really is given pointwise.
     ``dirichlet_dofs``  clamp exactly these dofs (A.t = 0, i.e. B.n = 0 there).
                   Default: the whole mesh boundary.
     ``natural_outer``   clamp NOTHING on the outer boundary, i.e. n x H = 0,
@@ -615,23 +703,48 @@ def solve_static3d_A(mesh, regions: Sequence[Region],
     if nu_used.shape != (mesh.t.shape[1],):
         raise ValueError("nu_el must be one value per element")
 
+    # Axial reluctivity: given, derived from the stacking factor, or absent
+    # (isotropic).  Deriving it from ``nu_used`` is what keeps the Picard driver
+    # simple — it updates only the in-plane state and the axial one follows.
+    if nu_z_el is not None:
+        nu_z_used = np.asarray(nu_z_el, dtype=float)
+        if nu_z_used.shape != nu_used.shape:
+            raise ValueError("nu_z_el must be one value per element")
+    else:
+        kf = kf_array(mesh, regions)
+        nu_z_used = axial_nu(nu_used, kf) if np.any(kf < 1.0) else None
+
     nqp = basis.dx.shape[1]
     nu_qp = np.repeat(nu_used[:, None], nqp, axis=1)
+
+    def _at_qp(src, what):
+        if callable(src):
+            q = np.asarray(src(np.asarray(basis.global_coordinates())),
+                           dtype=float)
+        else:
+            q = np.repeat(np.asarray(src, dtype=float)[:, :, None], nqp, axis=2)
+        if q.shape != (3, mesh.t.shape[1], nqp):
+            raise ValueError(
+                f"{what} must evaluate to (3, {mesh.t.shape[1]}, {nqp}), got "
+                f"{q.shape}")
+        return q
+
     t0 = time.perf_counter()
-    K = asm(_curlcurl, basis, nu=nu_qp)
+    if nu_z_used is None:
+        K = asm(_curlcurl, basis, nu=nu_qp)
+    else:
+        K = asm(_curlcurl_aniso, basis, nu=nu_qp,
+                nuz=np.repeat(nu_z_used[:, None], nqp, axis=1))
+    # The preconditioner's mass term only has to carry the problem's SCALE, so
+    # it uses the in-plane nu in all three directions on purpose: making it
+    # anisotropic too would not change the answer (CG still iterates on the true
+    # operator) and would make the regularised matrix worse conditioned.
     Mm = asm(_mass, basis, nu=nu_qp) if gauge == "none" else None
     f = asm(_magsrc, basis, Hc=np.repeat(Hc_el[:, :, None], nqp, axis=2))
+    if T is not None:
+        f = f + asm(_tsrc, basis, T=_at_qp(T, "T"))
     if J is not None:
-        if callable(J):
-            Jq = np.asarray(J(np.asarray(basis.global_coordinates())),
-                            dtype=float)
-        else:
-            Jq = np.repeat(np.asarray(J, dtype=float)[:, :, None], nqp, axis=2)
-        if Jq.shape != (3, mesh.t.shape[1], nqp):
-            raise ValueError(
-                f"J must evaluate to (3, {mesh.t.shape[1]}, {nqp}), got "
-                f"{Jq.shape}")
-        f = f + asm(_cursrc, basis, J=Jq)
+        f = f + asm(_cursrc, basis, J=_at_qp(J, "J"))
     t_asm = time.perf_counter() - t0
 
     if natural_outer:
@@ -642,8 +755,12 @@ def solve_static3d_A(mesh, regions: Sequence[Region],
         D = basis.get_dofs().all()
 
     resid = source_consistency(f, mesh, D)
+    f_norm = float(np.linalg.norm(f))
+    removed = 0.0
     if project and resid > 1e-12:
-        f = project_source(f, mesh, D)
+        f_new = project_source(f, mesh, D)
+        removed = float(np.linalg.norm(f_new - f))
+        f = f_new
         resid_after = source_consistency(f, mesh, D)
     else:
         resid_after = resid
@@ -715,7 +832,9 @@ def solve_static3d_A(mesh, regions: Sequence[Region],
                      nu_el=nu_used, Hc_el=Hc_el, ndofs=int(basis.N),
                      solve_time=t_solve, assemble_time=t_asm, solver=name,
                      gauge=gauge, iterations=iters, source_residual=resid,
-                     source_residual_projected=resid_after)
+                     source_residual_projected=resid_after,
+                     source_removed_norm=removed, load_norm=f_norm,
+                     nu_z_el=nu_z_used)
 
 
 # --------------------------------------------------------------------------
@@ -763,18 +882,29 @@ def solve_static3d_A_nonlinear(mesh, regions: Sequence[Region],
     for it in range(max_iter):
         sol = solve_static3d_A(mesh, regions, nu_el=1.0 / mu_el, **kw)
         kw["basis"] = sol.basis
-        Bmag = np.linalg.norm(sol.B_elementwise(), axis=0)
+        B = sol.B_elementwise()
+        Bmag = np.linalg.norm(B, axis=0)
+        # A laminated region's B-H curve is the SHEET's — the same rule, and the
+        # same reason, as ``solver.solve_static3d_nonlinear``: what saturates the
+        # steel is the in-plane flux, and the little that crosses the stack rides
+        # on the insulation's mu0.  At k_f = 1 the two are the same quantity, so
+        # this is not a branch in the physics, only in what is read.
+        Bref = Bmag.copy()
+        for r in nl:
+            if getattr(r, "laminated", False):
+                idx = np.asarray(r.elements, dtype=np.int64)
+                Bref[idx] = np.hypot(B[0][idx], B[1][idx])
         w = sol.basis.dx.sum(axis=1)[nlidx]
 
         mu_new = mu_el.copy()
         for r in nl:
             idx = np.asarray(r.elements, dtype=np.int64)
-            mur = np.maximum(_mu_r_from_bh_vec(r.bh_curve, Bmag[idx]), 1.0)
+            mur = np.maximum(_mu_r_from_bh_vec(r.bh_curve, Bref[idx]), 1.0)
             mu_new[idx] = MU0 * mur
         mu_hist.append(float(np.max(np.abs(mu_new[nlidx] - mu_el[nlidx])
                                     / np.maximum(mu_el[nlidx], 1e-30))))
 
-        bm = Bmag[nlidx]
+        bm = Bref[nlidx]
         h_curve = bm / mu_new[nlidx]
         h_used = bm / mu_el[nlidx]
         num = float((((h_curve - h_used) ** 2) * w).sum())

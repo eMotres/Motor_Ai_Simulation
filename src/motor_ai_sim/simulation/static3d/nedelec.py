@@ -175,6 +175,18 @@ def _region_arrays(mesh, regions: Sequence[Region]):
         mu_r = float(r.mu_r)
         if mu_r <= 0.0:
             raise ValueError(f"region {r.name!r} has mu_r = {mu_r}")
+        if getattr(r, "laminated", False):
+            # This assembly carries a SCALAR nu.  Silently dropping stack_kf
+            # would solve a solid block and then be compared against a scalar
+            # solve of a laminated one — and on this machine that difference is
+            # 2.5 % of the gap fundamental, i.e. bigger than the disagreement
+            # the two formulations exist to bracket.
+            raise NotImplementedError(
+                f"region {r.name!r} is a lamination stack (k_f = "
+                f"{r.stack_kf:.3f}) and the A-formulation here assembles an "
+                "ISOTROPIC nu. Solve it with the scalar potential, or make "
+                "this weak form carry the diagonal nu too — do not compare a "
+                "solid-iron A-solve against a laminated scalar solve.")
         nu[idx] = 1.0 / (MU0 * mu_r)
         Hc[:, idx] = (np.asarray(r.M, dtype=float) / mu_r)[:, None]
         covered[idx] = True

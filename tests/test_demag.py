@@ -38,11 +38,17 @@ def _magnet(Br: float, Hc_knee: float, n_tri: int = 4, mu_rec: float = 1.0):
     Shaped like the library's own entries (F45SH holds J to -649 kA/m then
     collapses within 3 kA/m), so the test exercises the same geometry of curve
     the solver meets in practice.
+
+    ``mu_rec`` sets BOTH the declared recoil permeability and the slope of the
+    curve's reversible branch (B = mu0*mu_rec*H + Br), so the material is
+    self-consistent: the law the solver assembles and the curve the rule reads
+    are the same magnet. At mu_rec = 1 the curve is bit-identical to the one
+    every case below was written against.
     """
     H_end = Hc_knee * 1.05
     bh = [
-        (H_end, Br + MU0 * H_end - Br),        # J = 0 at the far end
-        (Hc_knee, Br + MU0 * Hc_knee),         # J = Br at the knee
+        (H_end, MU0 * H_end),                        # J = 0 at the far end
+        (Hc_knee, Br + MU0 * mu_rec * Hc_knee),      # reversible branch, at the knee
         (0.0, Br),
     ]
     mat = SimpleNamespace(Mx=Br / MU0, My=0.0, mu_r=mu_rec, bh_curve=bh)
@@ -112,6 +118,98 @@ class TestLoadLine:
             dm.update(np.full(4, bpar * 1.2), np.zeros(4))
             out.append(float(dm.br.mean()))
         assert out[0] >= out[1] >= out[2] - 1e-12, f"non-monotonic: {out}"
+
+
+class TestFieldExtraction:
+    """H is INVERTED out of B, so it must be inverted out of the law that was
+    solved: B = mu0*mu_rec*H + Br_vec*br.
+
+    Reading it back as if the magnet were air (H = B/mu0 - M*br) is the mu_rec=1
+    special case; on a real NdFeB (mu_rec 1.05) it over-reads |H| by exactly
+    mu_rec and pushes every element that much closer to its knee than the solved
+    field puts it.
+    """
+
+    @staticmethod
+    def _hand_H(B_par, Br0, br, mu_rec):
+        return (B_par - Br0 * br) / (MU0 * mu_rec)
+
+    @pytest.mark.parametrize("mu_rec", [1.0, 1.05, 1.083, 1.2])
+    def test_h_matches_the_hand_inversion_of_the_solver_law(self, mu_rec):
+        """One element, one number, computed on paper.
+
+        B_par = 0.30 T along M on a Br0 = 1.20 T pristine magnet:
+            mu_rec 1.00 -> H = (0.30 - 1.20)/mu0        = -716.20 kA/m
+            mu_rec 1.05 -> H = (0.30 - 1.20)/(mu0*1.05) = -682.09 kA/m
+        The knee is far away (-2 MA/m) so nothing de-rates and H_first is the
+        pristine extraction, untouched by the load-line construction.
+        """
+        Br0 = 1.2
+        cells, mats, mesh = _magnet(Br=Br0, Hc_knee=-2.0e6, mu_rec=mu_rec)
+        dm = MagnetDemag(cells, mats, mesh, np.ones(4))
+        dm.update(np.full(4, 0.30), np.zeros(4))
+        want = self._hand_H(0.30, Br0, 1.0, mu_rec)
+        assert np.allclose(dm.H_first, want, rtol=1e-12, atol=0.0)
+        # the smoothing is a spatial filter on a uniform field: a no-op
+        assert float(dm.H_worst.min()) == pytest.approx(want, rel=1e-12)
+        # ...and the old air-magnet reading is exactly mu_rec times deeper
+        assert self._hand_H(0.30, Br0, 1.0, 1.0) == pytest.approx(want * mu_rec,
+                                                                  rel=1e-12)
+
+    def test_the_derated_remanence_is_what_scales_not_the_field(self):
+        """br multiplies Br_vec INSIDE the inversion, so a half-strength magnet
+        in the same B sees a different H — the term that scales is the source,
+        not the whole expression."""
+        Br0, mu_rec = 1.2, 1.05
+        cells, mats, mesh = _magnet(Br=Br0, Hc_knee=-2.0e6, mu_rec=mu_rec)
+        dm = MagnetDemag(cells, mats, mesh, np.full(4, 0.5))
+        dm.update(np.full(4, 0.30), np.zeros(4))
+        assert np.allclose(dm.H_first,
+                           self._hand_H(0.30, Br0, 0.5, mu_rec), rtol=1e-12)
+
+    def test_a_recoil_permeability_moves_the_knee_margin_the_safe_way(self):
+        """Same field, same curve, mu_rec 1 vs 1.05: the honest inversion must
+        report a SHALLOWER H and therefore a smaller knee proximity.
+
+        Direction matters as much as size — the old reading was pessimistic, so
+        anything that came out of it was a margin the machine actually had."""
+        Br0 = 1.2
+        got = {}
+        for mu_rec in (1.0, 1.05):
+            cells, mats, mesh = _magnet(Br=Br0, Hc_knee=-700e3, mu_rec=mu_rec)
+            dm = MagnetDemag(cells, mats, mesh, np.ones(4))
+            dm.update(np.full(4, 0.30), np.zeros(4))
+            rep = dm.report()
+            got[mu_rec] = (float(dm.H_first.min()), rep[0]["knee_proximity"])
+        assert got[1.05][0] > got[1.0][0]                     # shallower H
+        assert got[1.05][0] == pytest.approx(got[1.0][0] / 1.05, rel=1e-9)
+        assert got[1.05][1] < got[1.0][1]                     # more margin
+
+    def test_the_load_line_carries_the_recoil_polarisation(self):
+        """J at the operating point is Br0*br + mu0*(mu_rec-1)*H, not Br0*br.
+
+        A magnet driven to a load line that lands ON the knee must settle at the
+        knee's own intrinsic polarisation; getting J wrong by the recoil term
+        moves the crossing and therefore the permanent loss. Checked as an
+        identity the construction has to satisfy: at mu_rec = 1 the whole rule
+        reduces to the pre-existing one, element for element.
+        """
+        Br0 = 1.2
+        cells, mats, mesh = _magnet(Br=Br0, Hc_knee=-300e3, mu_rec=1.0)
+        dm = MagnetDemag(cells, mats, mesh, np.ones(4))
+        dm.update(np.full(4, 0.42 * Br0), np.zeros(4))
+        # the pre-change formula, hand-rolled: alpha = B/(mu0*M*br), k = mu0/(a-1)
+        H = 0.42 * Br0 / MU0 - Br0 / MU0
+        alpha = (H + Br0 / MU0) / (Br0 / MU0)
+        k_old = MU0 / min(alpha - 1.0, -1e-9)
+        k_new = (Br0 * 1.0 + MU0 * (1.0 - 1.0) * H) / min(H, -1e-9)
+        assert k_new == pytest.approx(k_old, rel=1e-12)
+        # ...and the crossing that follows, on paper: k = Br0/H = -2.1667e-6,
+        # which misses the flat top (it would want H = -554 kA/m) and lands on
+        # the collapsing segment [-315, -300] kA/m, slope 8e-5 T/(A/m):
+        #   8e-5*(H + 315e3) = k*H  ->  H_op = -306.69 kA/m,  J_op = 0.6645 T
+        # and with mu_rec_c = 1 the recoil intercept IS J_op, so br = 0.5537.
+        assert float(dm.br.mean()) == pytest.approx(0.5537, rel=2e-4)
 
 
 class TestDiagnostics:

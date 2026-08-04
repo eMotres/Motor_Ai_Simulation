@@ -25,6 +25,19 @@ point back to H = 0. An element that never left the reversible upper branch
 lands exactly on Br0 and keeps its full strength. Taking J at the operating
 point instead books the curve's own recoil slope as permanent damage and costs
 every healthy element about 5 %.
+
+The H the rule reads is not measured, it is INVERTED out of B — so it has to be
+inverted out of the same constitutive law the field was solved under. The solver
+gives the magnet domain ``mu_r = mu_rec`` and divides its coercivity source by
+that same mu_rec (``fem_solver_2d._assemble_f`` and the P2 magnet source), i.e.
+
+    B = mu0 * mu_rec * H + Br_vec * br         =>   H = (B - Br_vec*br) / (mu0*mu_rec)
+
+This module used to read it back as if the magnet were air, H = B/mu0 - M*br,
+which is the mu_rec = 1 special case and over-reads |H| by exactly mu_rec —
+about 5 % for NdFeB. That is a 5 % error on the one number the knee margin is a
+margin OF, and it always errs toward reporting a magnet as more demagnetised
+than the solved field says it is.
 """
 from __future__ import annotations
 
@@ -114,10 +127,18 @@ class MagnetDemag:
         moved = False
         for d in self.mags:
             ix = d["idx"]
+            cur = self.br[ix]
             BdotM = Bx[ix] * d["Mx"] + By[ix] * d["My"]
-            # H along M at the magnet's CURRENT strength: B_par/mu0 - M(now).
-            # Only the magnetisation term scales with the de-rating.
-            H_raw = BdotM / (MU0 * d["Mm"]) - d["Mm"] * self.br[ix]
+            # H along M, by INVERTING the solver's own magnet law
+            #     B = mu0*mu_rec*H + Br_vec*br      (see the module docstring)
+            # projected on M-hat:  H = (B.Mhat - Br0*br) / (mu0*mu_rec).
+            # Only the remanence term scales with the de-rating.  mu_rec here is
+            # the material's DECLARED recoil mu_r, because that is the number the
+            # FEM assembled the magnet's reluctivity from — reading it back with
+            # the curve's own slope (``mu_rec_c``) would invert a law nothing
+            # solved.  The two differ by a few percent and that difference belongs
+            # to the recoil intercept below, not to this inversion.
+            H_raw = (BdotM / d["Mm"] - d["Br0"] * cur) / (MU0 * d["mu_r"])
             H = _smooth_demag_H(self.mesh, ix, H_raw)
 
             fresh = np.isnan(self.H_first[ix])
@@ -128,11 +149,18 @@ class MagnetDemag:
             if hmin < self.seen.get(d["tag"], np.inf):
                 self.seen[d["tag"]] = hmin
 
-            cur = self.br[ix]
-            Bpar_mu0 = H + d["Mm"] * cur                      # A/m
-            alpha = Bpar_mu0 / np.maximum(d["Mm"] * cur, 1e-9)
-            # alpha >= 1 means the element is not being demagnetised at all.
-            k = MU0 / np.minimum(alpha - 1.0, -1e-9)          # load-line slope < 0
+            # The load line is the straight line through the origin and the
+            # element's present operating point in (H, J).  J is the INTRINSIC
+            # polarisation, which under the same law is
+            #     J = B - mu0*H = Br0*br + mu0*(mu_rec - 1)*H,
+            # i.e. it is NOT simply Br0*br once mu_rec > 1 — the recoil term is
+            # worth ~2.4 % of Br at a knee-deep -500 kA/m.  At mu_rec = 1 this
+            # collapses to the previous k = mu0/(alpha - 1) exactly.
+            # H >= 0 means the element is not being demagnetised at all; the clip
+            # makes its load line vertical, which crosses the curve at H = 0 and
+            # leaves it at full strength.
+            J_now = d["Br0"] * cur + MU0 * (d["mu_r"] - 1.0) * H
+            k = J_now / np.minimum(H, -1e-9)                  # load-line slope < 0
             H_op, J_op = self._cross(d, k)
             # Recoil intercept at H = 0 — the irreversible part alone.
             Br_new = J_op - (d["mu_rec_c"] - 1.0) * MU0 * H_op

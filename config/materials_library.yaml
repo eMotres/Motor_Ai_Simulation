@@ -377,7 +377,13 @@ steel:
     thermal_conductivity: null
     specific_heat: null
     saturation_B: 1.997     # T
-    core_loss_model: bertotti
+    # Direct interpolation of the MEASURED P(B, f) table below, not the three
+    # coefficients: a fixed B^2 cannot follow this steel's saturation upturn, and
+    # the fit reads ~16 % low integrated over a machine that works above 1.5 T.
+    # kh/kc/ke stay — they are the OUT-OF-ENVELOPE fallback the surface blends
+    # into (B above the table's top point, f outside its range). Opt-in per
+    # record, so a steel whose table has not been audited keeps the Bertotti path.
+    core_loss_model: measured_surface
     core_loss_kh: 111.000608208
     core_loss_kc: 0.0529897322947
     core_loss_ke: 2.07580547851
@@ -677,7 +683,13 @@ steel:
     thermal_conductivity: null
     specific_heat: null
     saturation_B: 2.021     # T
-    core_loss_model: bertotti
+    # Direct interpolation of the MEASURED P(B, f) table below, not the three
+    # coefficients: a fixed B^2 cannot follow this steel's saturation upturn, and
+    # the fit reads ~16 % low integrated over a machine that works above 1.5 T.
+    # kh/kc/ke stay — they are the OUT-OF-ENVELOPE fallback the surface blends
+    # into (B above the table's top point, f outside its range). Opt-in per
+    # record, so a steel whose table has not been audited keeps the Bertotti path.
+    core_loss_model: measured_surface
     core_loss_kh: 120.330302188
     core_loss_kc: 0.0363884755764
     core_loss_ke: 1.64957179318
@@ -1164,7 +1176,13 @@ steel:
     thermal_conductivity: null
     specific_heat: null
     saturation_B: 2.214     # T
-    core_loss_model: bertotti
+    # Direct interpolation of the MEASURED P(B, f) table below, not the three
+    # coefficients: a fixed B^2 cannot follow this steel's saturation upturn, and
+    # the fit reads ~16 % low integrated over a machine that works above 1.5 T.
+    # kh/kc/ke stay — they are the OUT-OF-ENVELOPE fallback the surface blends
+    # into (B above the table's top point, f outside its range). Opt-in per
+    # record, so a steel whose table has not been audited keeps the Bertotti path.
+    core_loss_model: measured_surface
     core_loss_kh: 119.141685724
     core_loss_kc: 0.107796912237
     core_loss_ke: 5.94803856686

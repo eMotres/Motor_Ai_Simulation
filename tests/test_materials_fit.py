@@ -180,16 +180,25 @@ class TestB15AtTheOperatingPoint:
             assert abs(_p_wkg(s, f0, b0) - p_meas) / p_meas < 0.10
 
     def test_the_fit_under_reads_the_measured_surface_in_saturation(self):
-        """The KNOWN, REPORTED limitation, pinned so it cannot drift silently.
+        """The three-coefficient FIT's saturation under-read, still pinned.
 
-        Above ~1.5 T the measured curve turns up and a fixed B^2 cannot follow
-        it, so the fit reads LOW exactly where 43 % of this machine's stator
-        loss sits.  Pinned as a bracket, not an equality: it is a real gap
-        (-10 to -15 % at 1.5 T, 933 Hz), it is the largest single piece of the
-        remaining difference to the customer's Ansys figure, and no correction
-        coefficient is applied to hide it.  A change that closes it (measured
-        P(B, f) interpolation, or a free B exponent) is expected to break this
-        test — that is what it is for.
+        This test no longer describes what the solver bills. B15AHV950M was
+        moved to ``core_loss_model: measured_surface``, so the iron loss comes
+        from the measured P(B, f) table interpolated directly and the -13 %
+        below is CLOSED in the model actually in use — see
+        tests/test_core_loss_surface.py, TestAnchors.
+
+        It is kept, unchanged, because the fit did not go away: it is the
+        OUT-OF-ENVELOPE fallback the surface blends into above the table's top
+        measured induction and past the ends of its frequency range. Knowing
+        how far that fallback sits below the measurement AT the boundary is
+        exactly what makes the blend readable — and if a refit ever moved this
+        gap, the blended region would move with it and nothing else would say
+        so.
+
+        The gap: above ~1.5 T the measured curve turns up and a fixed B^2
+        cannot follow it, so the fit reads LOW (-10 to -15 % at 1.5 T, 933 Hz)
+        exactly where 43 % of the 150 mm's stator loss sits.
         """
         s = get_steel("B15AHV950M")
         f0 = 933.33

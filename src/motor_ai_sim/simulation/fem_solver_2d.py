@@ -3960,9 +3960,15 @@ def fem_transient_sliding_band(
     _fe_terms_r: dict = {}
 
     def _iron_p2(hx, hy, idx, areas_half, mat, terms=None):
+        # n_periods: the DFT behind the measured-surface path needs to know how
+        # many electrical periods the captured window spans, or it puts every
+        # harmonic at the wrong frequency.  n_total/n_periods are the TRIMMED
+        # values here — the voltage settling and demag prefixes were already
+        # dropped above, and both were decremented with them.
         return _iron_loss_series(
             hx, hy, idx, areas_half, mat, p.stack_length, f_elec, n_total,
-            _central_difference(dt), _mat_lib.effective_bertotti, terms=terms)
+            _central_difference(dt), _mat_lib.effective_bertotti, terms=terms,
+            n_periods=float(n_periods))
 
     _pcl_s, _ph_s = _iron_p2(_hsx2, _hsy2, _iron_s_idx, areas_s, _steel_s,
                              _fe_terms_s)
@@ -3983,6 +3989,13 @@ def fem_transient_sliding_band(
                 "eddy_W": round(_tm["eddy_W"] * NS, 3),
                 "excess_W": round(_tm["excess_W"] * NS, 3),
                 "k_f": _tm["k_f"],
+                # WHICH loss model produced the number above.  Carried to the
+                # view because the Core tile's tooltip names the model, and it
+                # must not say "Bertotti" for a steel whose measured P(B, f)
+                # surface was interpolated directly.  On the surface path the
+                # hysteresis/excess pair is the fit's PROPORTION of the
+                # measured remainder, not a separately measured split.
+                "model": _tm.get("model", "bertotti"),
             }
     if _fe_break:
         log.info("iron loss | %s | total %.2f W",
@@ -4111,6 +4124,10 @@ def fem_transient_sliding_band(
                 steel_s=_steel_s, steel_r=_steel_r,
                 bertotti=_mat_lib.effective_bertotti,
                 f_elec_hz=f_elec, stack_length_m=p.stack_length,
+                # Same reason as `_iron_p2`: the map's iron shape is the SAME
+                # loss model as the reported watts, so it needs the same
+                # harmonic frequencies.
+                n_periods=float(n_periods),
                 sector_scale=NS,
                 P_fe_avg=P_fe_avg2, P_mag_avg=P_mag_avg2,
                 P_cu_dc=P_cu_dc2, P_cu_ac_avg=P_cu_ac_avg2,
@@ -4317,7 +4334,7 @@ def fem_transient_sliding_band(
         "P_mag_honest_W": round(float(P_mag_prox_avg2), 3),
         "P_shaft_honest_W": round(float(P_shaft_prox_avg2), 3),
         "P_fe_avg_W": round(float(P_fe_avg2), 3),
-        "P_fe_terms": _fe_break,          # {stator|rotor: hyst/eddy/excess/k_f}
+        "P_fe_terms": _fe_break,   # {stator|rotor: hyst/eddy/excess/k_f/model}
         "P_loss_total_avg_W": round(float(P_loss_avg2), 3),
         "P_airgap_W": P_airgap_avg2, "P_mech_avg_W": P_mech_avg2,
         "P_elec_in_W": P_elec_in2,               # ⟨Σ v·i⟩ (0 at no-load)

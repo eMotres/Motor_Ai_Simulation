@@ -10,13 +10,28 @@ difference and removes the copy.
 """
 from __future__ import annotations
 
+import logging
 import math
 from typing import Any, Callable, Optional, Sequence, Tuple
 
 import numpy as np
 
+from motor_ai_sim.core_loss_surface import get_surface as _get_surface
+
+log = logging.getLogger(__name__)
+
 # 2*pi^2 — the classical-eddy denominator in the Bertotti form below.
 TWO_PI_SQ = 2.0 * math.pi ** 2
+
+# Harmonics whose amplitude is below this ANYWHERE in the half are skipped in
+# the measured-surface sum. 1 mT against a ~1 T fundamental is a 1e-6 relative
+# loss contribution — below the noise of the field snapshot it came from — and
+# skipping them is what keeps the per-harmonic surface evaluation cheap.
+HARMONIC_FLOOR_T = 1e-3
+
+# Leakage guard taper on |end-to-start step| / peak-to-peak: nothing removed
+# below the first, all of it above the second. See ``harmonic_amplitudes``.
+WRAP_TAPER = (0.15, 0.30)
 
 # Fill factor used when a steel declares none. Every steel in the shipped library
 # declares its own (B15AHV950M is 0.92, the datasheet's guaranteed minimum), so
@@ -24,6 +39,146 @@ TWO_PI_SQ = 2.0 * math.pi ** 2
 # as 0.95 in two places and 0.97 in a third, which is the sort of split that
 # quietly moves numbers.
 DEFAULT_STACKING_FACTOR = 0.97
+
+
+def harmonic_amplitudes(H: np.ndarray, f_elec_hz: float, n_periods: float,
+                        wrap: Optional[dict] = None
+                        ) -> Tuple[np.ndarray, np.ndarray]:
+    """(amplitudes, frequencies) of one field COMPONENT's per-element history.
+
+    ``H`` is (n_frames, n_elements) over a window of ``n_periods`` electrical
+    periods. Returns PEAK amplitudes (not RMS, not peak-to-peak): bin ``m`` of a
+    real DFT carries amplitude ``2|C_m|`` except at Nyquist, where the single
+    real cosine carries ``|C_m|``. The DC bin is dropped — a static offset
+    stores energy, it does not dissipate it. Bin ``m`` sits at
+    ``m·f_elec/n_periods``; content above Nyquist aliases down, exactly as it
+    does in every other quantity taken from this snapshot (a 40-step capture
+    resolves 20 harmonics and nothing above).
+
+    LEAKAGE GUARD — the part that is not boilerplate. The DFT assumes the
+    window closes on itself, and on the STATOR half it does: the field there is
+    periodic in one electrical period by construction. On the ROTOR half it
+    does NOT. A 24-slot / 14-pole-pair machine slides 24/14 = 1.71 slot pitches
+    past a rotor point per electrical period, so the slot-passing waveform the
+    rotor iron actually sees is incommensurate with the capture window and the
+    window ends mid-cycle. A rectangular DFT of that reads the end-to-start STEP
+    as broadband content, and because loss rises with frequency the spurious
+    tail is billed at up to 19 kHz. Measured on the 150 mm: 30 % of the raw
+    rotor harmonic sum sat in bins k ≥ 8, RISING toward Nyquist — the signature
+    of a step, not of physics.
+
+    So the step is estimated and removed as a linear ramp before the transform,
+    PER ELEMENT and TAPERED — a clean capture must not be touched at all:
+
+    * the jump is the periodic-extension step ``x[N] − x[0]``, with ``x[N]``
+      extrapolated one sample past the end by the quadratic through the last
+      three (the naive ``x[N−1] − x[0]`` is one sample of slope, not a step:
+      on a sampled sinusoid it reads 1.2 e-2 of the amplitude where the
+      quadratic reads 9 e-4, and subtracting THAT as a ramp corrupts a signal
+      that was periodic all along — measured, it cost 2 % of the stator loss);
+    * it is removed with weight ``smoothstep`` of ``|jump|/peak-to-peak``
+      between ``WRAP_TAPER`` = (0.15, 0.30). Below 15 % nothing is removed;
+      above 30 % all of it is. The taper is C1 in the data, so no element
+      crosses a threshold and hands the optimizer a step.
+
+    Measured on both machines: mean guard weight 0.00 (150 mm) and 0.06 (40 mm)
+    on the STATOR half — i.e. it does nothing there, and the stator total moves
+    by <0.01 % — against 0.75 and 0.81 on the ROTOR half, where it removes 37 %
+    of the raw harmonic sum and drops the k ≥ 8 tail from 30 % to 8 %. Moving
+    the taper band to (0.10, 0.25) or (0.20, 0.40) changes the 150 mm total by
+    0.2 %, so the thresholds are not a tuning knob.
+
+    What it costs: the removed ramp is real flux excursion, sitting below the
+    electrical fundamental (it is the beat of an incommensurate frequency
+    against the window). Dropping it makes the rotor harmonic sum a LOWER
+    bracket; the raw sum is the upper one — 10.8 W against 17.1 W on the
+    150 mm rotor. Closing that gap needs a capture window commensurate with
+    slot passing — seven electrical periods on this machine — not a change here.
+
+    ``wrap``, when a dict is passed, receives the measured jump statistics so
+    the run can say which half it was talking about.
+    """
+    n = int(H.shape[0])
+    if n >= 4:
+        jump = 3.0 * H[-1] - 3.0 * H[-2] + H[-3] - H[0]
+        ptp = np.maximum(H.max(0) - H.min(0), 1e-12)
+        r = np.abs(jump) / ptp
+        u = np.clip((r - WRAP_TAPER[0]) / (WRAP_TAPER[1] - WRAP_TAPER[0]),
+                    0.0, 1.0)
+        w = u * u * (3.0 - 2.0 * u)
+        if wrap is not None:
+            live = ptp > 1e-3
+            if live.any():
+                wrap["frac"] = max(wrap.get("frac", 0.0),
+                                   float(np.median(r[live])))
+                wrap["p90"] = max(wrap.get("p90", 0.0),
+                                  float(np.percentile(r[live], 90)))
+                wrap["weight"] = max(wrap.get("weight", 0.0),
+                                     float(np.mean(w[live])))
+        H = H - np.outer(np.arange(n, dtype=float) / n, jump * w)
+    C = np.fft.rfft(H, axis=0) / max(n, 1)
+    amp = 2.0 * np.abs(C)
+    if n % 2 == 0 and amp.shape[0] > 1:
+        amp[-1] = np.abs(C[-1])
+    freqs = np.arange(amp.shape[0]) * (float(f_elec_hz) / max(float(n_periods), 1e-9))
+    return amp[1:], freqs[1:]
+
+
+def surface_loss_density(
+    X: np.ndarray, Y: np.ndarray, surface: Any, inv_kf: float,
+    f_elec_hz: float, n_periods: float,
+    weight: Optional[np.ndarray] = None,
+    excursion: Optional[dict] = None,
+    fundamental_only: Optional[list] = None,
+    wrap: Optional[dict] = None,
+) -> np.ndarray:
+    """Per-element iron loss density [W/m³ of STEEL] from the measured surface.
+
+    HARMONIC SUPERPOSITION — stated, because it is an assumption and not a
+    theorem. A measured P(B, f) point is the loss of a SINUSOIDAL excitation of
+    peak induction B at frequency f. A machine's B(t) is not sinusoidal, so the
+    locus is decomposed into its harmonics and the surface is evaluated at each
+    (amplitude, frequency) and SUMMED:
+
+        P = Σ_axes Σ_{m≥1} P_meas(B_m / k_f, m·f_elec/n_periods)
+
+    This is the standard engineering treatment (Ansys Maxwell's own harmonic
+    core-loss option does the same thing) and it is imperfect in a known
+    direction: hysteresis is a memory process, so the loss of a sum of
+    harmonics is not exactly the sum of their losses — a superimposed ripple
+    that creates a MINOR LOOP costs more than its own sinusoid would, and one
+    that merely distorts the major loop costs less. It is nonetheless a strict
+    improvement on the alternative (evaluating one equivalent amplitude at the
+    fundamental), which cannot see slot ripple at all. See Bertotti,
+    *Hysteresis in Magnetism* (1998) ch. 12 on loss separation, and IEC 60404-2
+    for what the table underneath actually measured.
+
+    Exactness that survives: the classical (eddy) part of the loss IS additive
+    over harmonics by Parseval, so the eddy content of this sum equals the
+    ⟨(dB/dt)²⟩ time-series integral of the same waveform. Only the hysteresis
+    and excess parts carry the superposition assumption.
+
+    The two field components are decomposed and summed SEPARATELY — the axis
+    decomposition of the Bertotti path, unchanged: rotating loci still read low.
+
+    ``fundamental_only``, when a list is passed, receives the m = 1 term alone,
+    so the harmonic content's contribution can be reported rather than assumed.
+    """
+    out = np.zeros(X.shape[1], float)
+    fund = np.zeros(X.shape[1], float)
+    for H in (X, Y):
+        amp, freqs = harmonic_amplitudes(H, f_elec_hz, n_periods, wrap)
+        for m in range(amp.shape[0]):
+            A = amp[m] * inv_kf
+            if not A.size or float(A.max()) < HARMONIC_FLOOR_T:
+                continue
+            p = surface.w_per_m3(A, float(freqs[m]), excursion, weight)
+            out += p
+            if m == 0:                     # m is 0-based over harmonics 1, 2, …
+                fund += p
+    if fundamental_only is not None:
+        fundamental_only.append(fund)
+    return out
 
 
 def iron_loss_series(
@@ -38,8 +193,14 @@ def iron_loss_series(
     ddt: Callable[[np.ndarray], np.ndarray],
     bertotti: Callable[[Any], Tuple[float, float, float]],
     terms: Optional[dict] = None,
+    n_periods: float = 1.0,
 ) -> Tuple[np.ndarray, float]:
-    """Bertotti iron loss from a per-element B(t) history.
+    """Iron loss from a per-element B(t) history — measured surface, or Bertotti.
+
+    TWO models, chosen by the RECORD (see MEASURED SURFACE below). The Bertotti
+    form is described first because it is still the fallback, still what every
+    non-opted-in steel gets, and still what the surface blends into outside the
+    measured envelope.
 
     Returns ``(P_classical(t), P_hysteresis_and_excess)`` — the first ripples
     with the teeth passing, the second is a per-cycle quantity and therefore flat.
@@ -79,7 +240,7 @@ def iron_loss_series(
         The old form was the worst of both: it removed the insulation from the
         mass but never put the flux it displaces back into the steel.
 
-    WAVEFORM. The classical term is the true per-element ``dB/dt`` TIME SERIES
+    WAVEFORM (Bertotti path). The classical term is the true per-element ``dB/dt`` TIME SERIES
     of BOTH components — every harmonic the solve resolved (slot ripple, minor
     loops) is in it by construction, no sinusoidal equivalent anywhere. The
     per-cycle terms (hysteresis, excess) are MAJOR-LOOP ONLY: each component's
@@ -88,7 +249,11 @@ def iron_loss_series(
     whose flux dips and recovers within the cycle pays for that dip in the eddy
     term but not in the hysteresis term. That is a deliberate (and stated)
     modelling choice, matching the classical Bertotti separation; it makes the
-    hysteresis term a LOWER bound on machines with strong slot ripple.
+    hysteresis term a LOWER bound on machines with strong slot ripple. The
+    SURFACE path does not have this limitation — it decomposes the locus and
+    bills each harmonic at its own frequency, so a ripple that makes a minor
+    loop is paid for. It has a different one instead: loss superposition over
+    harmonics (see ``surface_loss_density``).
 
     ROTATIONAL. The two field components are treated as two independent
     alternating loci and their hysteresis contributions SUMMED (the standard
@@ -107,12 +272,36 @@ def iron_loss_series(
     while the P2 field is smooth enough for a plain central difference.
 
     ``bertotti`` is injected rather than imported so this module stays free of
-    the materials library and can be tested with hand-written coefficients.
+    the materials library and can be tested with hand-written coefficients. The
+    surface comes off the ``material`` OBJECT through ``core_loss_surface``,
+    which is pure interpolation with no library dependency of its own, so that
+    property survives.
+
+    MEASURED SURFACE. A steel whose record says ``core_loss_model:
+    measured_surface`` does NOT go through the three coefficients at all: its
+    measured P(B, f) table is interpolated directly (``core_loss_surface``),
+    per harmonic of the per-element locus, per axis. The three-coefficient fit
+    survives only as the out-of-envelope fallback the surface blends into, and
+    as the SHAPE of the reported hysteresis/excess split. Every other steel is
+    on exactly the code path it was on before — the surface activates per
+    record, not per library.
+
+    Why it was worth doing: a fixed B² cannot follow the saturation upturn, and
+    on the 150 mm 24s28p at 933 Hz, 43 % of the stator loss sits above 1.5 T
+    where the fit reads 10-15 % low. Integrated over that machine the fit
+    returned 53.6 W per cycle against the measured surface's 62.3 W.
 
     ``terms``, when a dict is passed, is filled with the cycle-mean watts of
     each Bertotti term (``hysteresis_W`` / ``eddy_W`` / ``excess_W``) and the
     ``k_f`` used — the CORE tile's breakdown, so the split is reported instead
-    of being re-derived by whoever asks.
+    of being re-derived by whoever asks. On the surface path the TOTAL is the
+    measured surface and ``eddy_W`` is still the honest ⟨(dB/dt)²⟩ series
+    integral; the hysteresis/excess pair is what is left over, divided in the
+    Bertotti fit's proportion, and ``terms['model']`` says so.
+
+    ``n_periods`` is how many electrical periods the captured window spans —
+    the DFT needs it to put harmonic ``m`` at ``m·f_elec/n_periods`` instead of
+    at ``m·f_elec``. It only matters on the surface path.
     """
     if material is None or idx.size == 0 or len(hist_x) == 0:
         return np.zeros(n_frames), 0.0
@@ -141,10 +330,116 @@ def iron_loss_series(
     hyst = float(np.sum(kh * f_elec_hz * Bac2 * vol_steel))
     excess = float(np.sum(
         ke * f_elec_hz ** 1.5 * np.power(np.maximum(Bac2, 0.0), 0.75) * vol_steel))
+    model = "bertotti"
+    # What the three coefficients would have said, kept whole — it is the
+    # reported comparison on the surface path, not an intermediate.
+    P_bert = float(np.mean(classical)) + hyst + excess
+
+    # ── MEASURED SURFACE — replaces the total, keeps the eddy series ──────
+    surface = _get_surface(material, (kh, kc, ke))
+    if surface is not None:
+        model = "measured_surface"
+        exc: dict = {}
+        fund: list = []
+        wrap: dict = {}
+        # X/Y are ALREADY restricted to this half's iron elements — the
+        # classical term above broadcasts them straight against vol_steel.
+        dens = surface_loss_density(
+            X, Y, surface, inv_kf, f_elec_hz, n_periods,
+            weight=vol_steel, excursion=exc, fundamental_only=fund, wrap=wrap)
+        P_surf = float(np.sum(dens * vol_steel))
+        P_fund = float(np.sum(fund[0] * vol_steel)) if fund else 0.0
+        P_eddy = float(np.mean(classical))
+        # The time RIPPLE of the iron loss is the classical term — it is the
+        # only part that is instantaneous.  Keep that series as the shape and
+        # put the rest of the measured total in the per-cycle bucket, so the
+        # reported total IS the surface and P_fe(t) still ripples with the
+        # teeth passing.  If the surface came out below the honest eddy
+        # integral (it should not — a real steel has hysteresis), rescale the
+        # series instead of reporting a negative remainder, and say so.
+        if P_surf <= 0.0:
+            # Every harmonic of this half is below HARMONIC_FLOOR_T — a half
+            # with no resolvable AC field at all. Nothing to bill on top of the
+            # (equally negligible) eddy series; the alternative is a NEGATIVE
+            # per-cycle remainder.
+            rest = 0.0
+        elif P_eddy > P_surf:
+            log.warning(
+                "core loss | %s: the measured surface (%.4g W) came out BELOW "
+                "the classical dB/dt integral (%.4g W) — the eddy series is "
+                "scaled to the surface total and the per-cycle remainder is 0. "
+                "Check k_c against the table.",
+                getattr(material, "name", "?"), P_surf, P_eddy)
+            classical = classical * (P_surf / P_eddy)
+            P_eddy, rest = P_surf, 0.0
+        else:
+            rest = P_surf - P_eddy
+        # hysteresis / excess are not separable from a measured TOTAL; the
+        # split shown is the fit's proportion of the remainder, and terms
+        # ['model'] carries that caveat downstream.
+        share = hyst / (hyst + excess) if (hyst + excess) > 0 else 1.0
+        hyst, excess = rest * share, rest * (1.0 - share)
+        _log_surface(material, surface, exc, P_surf, P_fund, P_bert, wrap)
+        if terms is not None:
+            terms.update({
+                "hysteresis_W": hyst, "excess_W": excess, "eddy_W": P_eddy,
+                "k_f": kf, "model": model,
+                "surface_W": P_surf, "fundamental_only_W": P_fund,
+                "bertotti_W": P_bert,
+                "wrap_jump_frac": wrap.get("frac", 0.0),
+                "wrap_guard_weight": wrap.get("weight", 0.0),
+                "envelope_out_frac": (exc.get("w_out", 0.0)
+                                      / max(exc.get("w_all", 0.0), 1e-30))})
+        return classical, rest
+
     if terms is not None:
         terms.update({"hysteresis_W": hyst, "excess_W": excess,
-                      "eddy_W": float(np.mean(classical)), "k_f": kf})
+                      "eddy_W": float(np.mean(classical)), "k_f": kf,
+                      "model": model})
     return classical, hyst + excess
+
+
+def _log_surface(material: Any, surface: Any, exc: dict, P_surf: float,
+                 P_fund: float, P_bert: float, wrap: dict) -> None:
+    """ONE line per half per solve: what the surface did, and what left it.
+
+    Loud on purpose when a solve leaves the measured envelope — outside it the
+    answer is a blend into an extrapolation, which is a different epistemic
+    object from an interpolated measurement, and the user is entitled to know
+    which one their watts came from.
+    """
+    frac = exc.get("w_out", 0.0) / max(exc.get("w_all", 0.0), 1e-30)
+    head = ("core loss | %s: measured P(B,f) surface, %d points over %d "
+            "frequency curves | %.4g W (harmonic sum) vs %.4g W (fundamental "
+            "only, %+.1f %%) vs %.4g W (3-coefficient Bertotti, %+.1f %%)"
+            % (getattr(material, "name", "?"), surface.n_points,
+               surface.f.size, P_surf, P_fund,
+               100.0 * (P_surf / max(P_fund, 1e-30) - 1.0), P_bert,
+               100.0 * (P_surf / max(P_bert, 1e-30) - 1.0)))
+    # The capture window's own periodicity — the rotor half's is poor by
+    # construction (slot passing is incommensurate with the electrical period),
+    # and the number below says how much ramp the leakage guard had to remove.
+    if wrap.get("weight", 0.0) > 0.02:
+        log.warning(
+            "core loss | %s: the captured window does NOT close on itself — "
+            "end-to-start step is %.0f %% of peak-to-peak (p90 %.0f %%), so "
+            "the leakage guard removed it as a ramp on %.0f %% of the field "
+            "(mean weight). That makes this half's harmonic sum a LOWER "
+            "bracket: the removed drift is real flux the window is too short "
+            "to resolve. Slot passing is incommensurate with the electrical "
+            "period on a rotor half — this is expected there and nowhere else.",
+            getattr(material, "name", "?"), 100.0 * wrap.get("frac", 0.0),
+            100.0 * wrap.get("p90", 0.0), 100.0 * wrap["weight"])
+    if frac <= 0.0:
+        log.info("%s | entirely INSIDE the measured envelope", head)
+        return
+    log.warning(
+        "%s | OUTSIDE the measured envelope: %.2f %% of these WATTS came from "
+        "the extrapolation, not the table; the worst point is B = %.3f T at "
+        "f = %.4g Hz where the table reaches %.3f T (measured %.4g-%.4g Hz) — "
+        "blended into the three-coefficient Bertotti extrapolation there",
+        head, 100.0 * frac, exc.get("B", 0.0), exc.get("f", 0.0),
+        exc.get("B_env", 0.0), exc.get("f_lo", 0.0), exc.get("f_hi", 0.0))
 
 
 def central_difference(dt_s: float) -> Callable[[np.ndarray], np.ndarray]:
@@ -263,6 +558,7 @@ def loss_density_map(
     solved_elems: Optional[dict] = None,
     P_cu_end_winding_W: float = 0.0,
     log_line: Optional[Callable[[str], None]] = None,
+    n_periods: float = 1.0,
 ) -> Tuple[np.ndarray, str, list]:
     """Per-element loss DENSITY (W/m³) for the Ansys-style spatial map.
 
@@ -352,6 +648,16 @@ def loss_density_map(
         kh, kc, ke = bertotti(mat)
         kf = float(getattr(mat, "stacking_factor", DEFAULT_STACKING_FACTOR))
         kf = kf if kf > 0 else 1.0
+        surface = _get_surface(mat, (kh, kc, ke))
+        if surface is not None:
+            # Same model as the reported watts, so the PICTURE and the NUMBER
+            # are one thing.  The shape is normalised to the total below, so
+            # this cannot move P_fe — it moves the stator/rotor split and the
+            # tooth-vs-yoke contrast, which is what the map is read for, and
+            # those DO change when a saturating tooth stops obeying B².
+            return kf * surface_loss_density(
+                np.asarray(hx, float), np.asarray(hy, float), surface,
+                1.0 / kf, f_elec_hz, n_periods)
         b2 = _bac2(hx, hy) / kf ** 2
         return kf * (kh * f_elec_hz * b2
                      + ke * f_elec_hz ** 1.5 * np.power(np.maximum(b2, 0.0), 0.75)

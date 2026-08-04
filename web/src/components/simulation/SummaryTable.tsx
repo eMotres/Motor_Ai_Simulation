@@ -38,9 +38,14 @@ export interface TransientSummary {
   J_coil_A_per_mm2?:   number;   // coil current density = I_rms/parallel over one strand's copper section
   P_loss_total_W:      number;
   P_core_W:            number;
-  // Bertotti split behind P_core_W, per half — what the core loss is MADE of.
+  // Split behind P_core_W, per half — what the core loss is MADE of.  `model`
+  // says WHICH loss model produced it: 'measured_surface' (the manufacturer's
+  // P(B, f) table interpolated directly, summed over the locus's harmonics) or
+  // 'bertotti' (the three fitted coefficients).  Absent on runs that predate
+  // the split.
   P_core_terms?: Record<string, { hysteresis_W: number; eddy_W: number;
-                                  excess_W: number; k_f: number }>;
+                                  excess_W: number; k_f: number;
+                                  model?: string }>;
   P_stranded_W:        number;
   P_solid_W:           number;
   // Discarded frames at θ<0 the coupled eddy solve needed before its σ·∂A/∂t
@@ -94,8 +99,8 @@ interface Props {
 }
 
 /** "  stator 67.3 W (hyst 33.9 / eddy 17.6 / excess 15.8, k_f 0.92); rotor …"
- *  — the Bertotti split behind the Core tile, appended to its HelpTip.  Empty
- *  string when the run predates the split, so old stored summaries still read. */
+ *  — the split behind the Core tile, appended to its HelpTip.  Empty string
+ *  when the run predates the split, so old stored summaries still read. */
 function coreSplit(t?: TransientSummary['P_core_terms']): string {
   const parts = Object.entries(t ?? {}).map(([half, v]) => {
     const tot = v.hysteresis_W + v.eddy_W + v.excess_W;
@@ -104,6 +109,39 @@ function coreSplit(t?: TransientSummary['P_core_terms']): string {
          + ` k_f ${v.k_f.toFixed(3)})`;
   });
   return parts.length ? `  Split: ${parts.join('; ')}.` : '';
+}
+
+/** True when any half of this run went through the measured P(B, f) surface.
+ *  The tile must not describe the model it did not use. */
+function usesSurface(t?: TransientSummary['P_core_terms']): boolean {
+  return Object.values(t ?? {}).some(v => v.model === 'measured_surface');
+}
+
+/** The Core tile's HelpTip — one text per loss model, because the two differ in
+ *  what they claim: the surface path IS the manufacturer's measurement inside
+ *  the measured (B, f) envelope, the Bertotti path is three coefficients fitted
+ *  to it.  Both carry the same stated under-reads (alternating-axis basis,
+ *  no manufacturing degradation, no correction coefficient anywhere). */
+function coreTooltip(t?: TransientSummary['P_core_terms']): string {
+  const head = usesSurface(t)
+    ? 'Core loss in stator + rotor steel from the manufacturer\'s MEASURED '
+      + 'P(B, f) table, interpolated directly and summed over the harmonics of '
+      + 'each element\'s flux locus — no B² law, so the saturation upturn is '
+      + 'followed.  Past the table\'s edge it blends into the fitted Bertotti '
+      + 'extrapolation; the run log says how much of the answer came from '
+      + 'there.  The steel carries B/k_f over k_f of the section (lamination).  '
+      + 'In the split below only eddy is separately computed (from the true '
+      + 'dB/dt series) — hysteresis/excess are the fit\'s proportion of the '
+      + 'measured total.'
+    : 'Bertotti loss in stator + rotor steel — kh·f·B² + kc·(f·B)² + '
+      + 'ke·(f·B)^1.5, period mean.  Coefficients are fitted to the material\'s '
+      + 'measured loss curves at every frequency; the steel carries B/k_f over '
+      + 'k_f of the section (lamination).';
+  return head + coreSplit(t)
+       + '  Alternating-axis basis: a rotating B locus (tooth roots) reads low, '
+       + 'and manufacturing degradation (punching, stacking, welding — '
+       + 'typically 1.5-2×) is NOT included.  This is the raw calculation, with '
+       + 'no correction coefficient.';
 }
 
 const Cell: React.FC<{
@@ -322,15 +360,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
           accent="amber"
           tooltip="Cu + Fe (Bertotti) + magnet eddy + shaft eddy — period means"/>
         <Cell label="Core (lamination)" value={fmtK(s.P_core_W)} unit="W"
-          tooltip={'Bertotti loss in stator + rotor steel — kh·f·B² + kc·(f·B)² + '
-                 + 'ke·(f·B)^1.5, period mean.  Coefficients are fitted to the '
-                 + 'material\'s measured loss curves at every frequency; the steel '
-                 + 'carries B/k_f over k_f of the section (lamination).'
-                 + coreSplit(s.P_core_terms)
-                 + '  Alternating-axis basis: a rotating B locus (tooth roots) '
-                 + 'reads low, and manufacturing degradation (punching, stacking, '
-                 + 'welding — typically 1.5-2×) is NOT included.  This is the raw '
-                 + 'calculation, with no correction coefficient.'}/>
+          tooltip={coreTooltip(s.P_core_terms)}/>
         <Cell label="Stranded (copper)" value={fmtK(s.P_stranded_W)} unit="W"
           tooltip="I²R (DC) + AC eddy/proximity share in the coil windings, incl. end-winding resistance (k_end) and ρ_Cu(T)"/>
         <Cell label="Solid (magnets)" value={fmtK(s.P_solid_W)} unit="W"

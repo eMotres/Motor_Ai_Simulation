@@ -73,6 +73,7 @@ def _load() -> dict:
     _library = parsed
     _lib_mtime = mtime
     _bertotti_fit_cache.clear()      # derived fits belong to the old file
+    _clear_surface_cache()           # …and so do the interpolated P(B,f) surfaces
     return _library
 
 
@@ -595,6 +596,21 @@ def reload() -> None:
     _lib_checked = 0.0
     _load()
     _bertotti_fit_cache.clear()
+    _clear_surface_cache()
+
+
+def _clear_surface_cache() -> None:
+    """Drop the interpolated P(B, f) surfaces built from the OLD file.
+
+    Imported inside the function: ``core_loss_surface`` is pure math with no
+    library dependency, and keeping the import one-way means the solver can
+    take the surface without dragging the YAML loader in with it.
+    """
+    try:
+        from motor_ai_sim.core_loss_surface import clear_cache
+        clear_cache()
+    except Exception:                             # noqa: BLE001
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -668,6 +684,18 @@ def effective_bertotti(steel: Optional["SteelMaterial"]) -> Tuple[float, float, 
     if fit is not None:
         return fit[0], fit[1], fit[2]
     return steel.core_loss_kh, steel.core_loss_kc, steel.core_loss_ke
+
+
+def effective_loss_surface(steel: Optional["SteelMaterial"]):
+    """The record's MEASURED P(B, f) surface, or ``None`` for the Bertotti path.
+
+    One place where "does this steel go through the surface?" is answered, so a
+    test, the solver and a report cannot each decide differently. The surface
+    carries ``effective_bertotti``'s coefficients with it — they are what it
+    blends into outside the measured envelope.
+    """
+    from motor_ai_sim.core_loss_surface import get_surface
+    return get_surface(steel, effective_bertotti(steel))
 
 
 # ---------------------------------------------------------------------------

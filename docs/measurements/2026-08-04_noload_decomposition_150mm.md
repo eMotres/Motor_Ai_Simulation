@@ -373,3 +373,24 @@ Ordered by how much the answer moves the split.
   conditional: a free-run test cannot tell iron from magnets from end
   structure. What it measures cleanly is **C₂ = 1.534e-5 W/rpm² of unmodelled
   classical eddy loss** and **k = 1 on everything we already compute**.
+
+## Resolution (user's answers, 2026-08-04)
+
+The stack is genuine 0.15 mm B15AHV950M, GLUED (no welds/interlocks), profile cut
+by wire EDM from the glued block, and the free-run was driven by an external
+motor (PWM ruled out in hardware, matching the statistical rejection above).
+
+That identifies the missing 245 W: the EDM recast ("white") layer is conductive
+and bridges the laminations along EVERY cut edge — and this profile is all cut
+edge (P/A: stator 0.348 /mm, rotor 0.754 /mm). Inter-laminar shorting at the
+edges is exactly the classical-eddy n^2 signature and the effective-thickness
+x3.3 the fit demands. It is a property of THIS prototype's manufacturing route,
+not of the steel or the loss model.
+
+Actions available: acid-etch the cut surfaces (removes the recast layer; the
+standard remedy for EDM-cut cores), verify with an ohmmeter across adjacent
+laminations on a cut face (healthy: MOhm; shorted: Ohm), and expect a punched
+or laser+etch series stack to sit near the computed curve. The Ansys-practice
+x2 coefficient under-reads this prototype above ~2000 rpm: the measured factor
+is 2.15 at 1000 rpm rising to 4.05 at 4000, because the mechanism is n^2, not
+a constant multiplier.

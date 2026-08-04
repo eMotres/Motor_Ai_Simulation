@@ -639,3 +639,27 @@ class TestTheViewIsServedABlankAir:
         # over those is what made the shaft read as filled-in air and the copper
         # (the hottest thing on the map) read as black.
         assert "t > 0.0 && t < 1.0" in text
+
+    def test_only_one_frontend_renderer_consumes_the_loss_map(self):
+        """A second renderer is a second chance to paint the air.
+
+        The blank-air contract lives in exactly one file.  It has already been
+        looked for twice in a "3-D viewer" that does not exist — the field view
+        IS a three.js scene and borrows the view-cube from viewer3d/, which is
+        why it reads as one.  If a genuine second consumer of the loss map ever
+        appears, it starts life without the contract, and the only way to notice
+        is here: every file that touches the per-triangle loss array must either
+        be the renderer that applies the rule or the type/tiling module that
+        carries the array through untouched.
+        """
+        import pathlib
+        web = pathlib.Path(__file__).resolve().parents[1] / "web" / "src"
+        consumers = {
+            p.name for p in web.rglob("*.ts*")
+            if "loss_density_per_tri" in p.read_text(encoding="utf-8",
+                                                     errors="ignore")}
+        assert consumers <= {"fem-types.ts", "fieldView.ts"}, (
+            "new consumer(s) of the loss map — port the air-blank contract "
+            "(skip class 0 + every unmodelled class, no iso-line on clamped "
+            "values) or route them through buildFieldView: "
+            + str(consumers - {"fem-types.ts", "fieldView.ts"}))

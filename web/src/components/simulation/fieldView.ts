@@ -101,7 +101,18 @@ export const BAND_FRAG = `
     // Iso-line: the band edges ARE iso-levels of the field, so drawing them
     // costs one fwidth().  Screen-space width => the line stays one pixel at
     // every zoom instead of fattening as the user zooms in.
-    if (uBands > 0.5 && uIso > 0.0) {
+    //
+    // NOT at the CLAMPED ends.  vmin and vmax are percentiles, so whole regions
+    // sit outside them and clamp to t = 0 or t = 1 exactly — where fract(s) = 0
+    // and this drew a full-strength iso-line over every one of those pixels.
+    // On this machine that is 52 % of the shaft (its σE² runs 6 decades below
+    // the 5-percentile floor) painted a flat dark wash instead of the bottom
+    // blue, which reads as "something is filled in here that should be empty",
+    // and 1.5 % of the copper — the hottest material on the map — rendered near
+    // BLACK instead of red, i.e. the one component the picture exists to show
+    // looked cold.  t = 0 and t = 1 are the edges of the DOMAIN, not band
+    // edges; there is no iso-level there to draw.
+    if (uBands > 0.5 && uIso > 0.0 && t > 0.0 && t < 1.0) {
       float s = t * uBands;
       float d = min(fract(s), 1.0 - fract(s)) / max(fwidth(s), 1e-6);
       col = mix(col, col * 0.30, uIso * (1.0 - smoothstep(0.0, 1.0, d)));

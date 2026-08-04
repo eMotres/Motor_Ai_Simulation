@@ -533,3 +533,109 @@ class TestServedLossMapDeclaresItsBlanks:
         d = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 0.0, 0.0])
         out = _unmodelled_loss_classes(t, d, ["magnets", "air"])
         assert set(out) == {"magnets", "air"} and out.count("air") == 1
+
+
+class TestTheViewIsServedABlankAir:
+    """END TO END on the path the Loss view actually eats after a run.
+
+    The builder can be right and the payload still wrong: the view is fed by
+    ``/physics/fem_field2d`` replaying the last simulation run's field snapshot,
+    and that hand-off — snapshot dict → per-triangle payload — is its own layer
+    with its own chance to lose the air flag.  The earlier tests covered the map
+    builder and the helper; this one covers the wire, with a snapshot that has
+    loss sitting in the air on purpose.
+    """
+
+    @staticmethod
+    def _snapshot(loss_in_air: float):
+        """A 6-triangle machine: one element per material, air last."""
+        from motor_ai_sim.simulation.sb_domains import (
+            DOM_AIRGAP, DOM_COIL_BASE, DOM_MAG_BASE, DOM_ROTOR, DOM_SHAFT,
+            DOM_STATOR)
+        n = 6
+        # 6 disjoint triangles in a row — geometry is irrelevant here, tags are not.
+        P = np.array([[float(i // 2) for i in range(2 * (n + 1))],
+                      [float(i % 2) for i in range(2 * (n + 1))]])
+        T = np.array([[i, i + 1, i + 2] for i in range(n)]).T
+        tags = np.array([DOM_STATOR, DOM_ROTOR, DOM_MAG_BASE, DOM_COIL_BASE,
+                         DOM_SHAFT, DOM_AIRGAP], int)
+        return {
+            "P_mm": P, "T": T,
+            "A": np.zeros(P.shape[1]),
+            "Bx": np.full(n, 0.5), "By": np.zeros(n),
+            "tags": tags,
+            "Jtri_src": np.zeros(n),
+            # iron / rotor / magnet / copper / shaft all modelled — and the AIR
+            # element carrying loss it cannot have.
+            "loss_dens": [1e5, 2e5, 3e5, 4e5, 5e5, float(loss_in_air)],
+            "loss_dens_label": "test map",
+            "loss_dens_unmodelled": [],
+        }
+
+    def _serve(self, monkeypatch, loss_in_air: float):
+        from motor_ai_sim.routes import simulation as sim
+        from motor_ai_sim.simulation import fem_solver_2d as fs
+        from motor_ai_sim import cadquery_geometry as cq
+
+        snap = {"field": self._snapshot(loss_in_air),
+                "scalars": {}, "meta": {"eddy": True, "n_steps_per_period": 24,
+                                        "n_periods": 1.0, "computed_at": "now",
+                                        "solve_time_s": 1.0,
+                                        "key_fields": {"I_phase_rms": 90.0,
+                                                       "gamma_deg": 0.0}}}
+
+        class _AlwaysHit(dict):
+            def get(self, *a, **k):
+                return snap
+        monkeypatch.setattr(sim, "_transient_field_snap", _AlwaysHit())
+        monkeypatch.setattr(sim, "_fem_field_cache", {})
+        # No CAD in a unit test: outlines and the magnet palette are not what is
+        # being checked, and building them costs a geometry rebuild.
+        monkeypatch.setattr(cq.CadQueryMotor, "get_2d_polygons",
+                            lambda self, **kw: {"magnets": []})
+        monkeypatch.setattr(fs, "_simplify_polys", lambda polys, **kw: polys)
+        return sim.get_fem_field2d(n_steps_per_period=24, n_periods=1.0,
+                                   eddy=True, rotor_eddy=True,
+                                   I_phase_rms=90.0, snapshot_only=True)
+
+    def test_the_served_payload_flags_air_and_zeroes_it(self, monkeypatch):
+        out = self._serve(monkeypatch, loss_in_air=0.0)
+        assert out["ok"] and out.get("from_transient")
+        ld = out["loss_density_per_tri"]
+        assert ld[-1] == 0.0                       # the air element
+        assert all(v > 0 for v in ld[:5])          # every modelled material kept
+        # The flag the renderer blanks on — without it, that 0.0 is painted band 0.
+        assert "air" in out["loss_density_unmodelled"]
+
+    def test_loss_that_lands_in_air_is_scrubbed_on_the_way_out(self, monkeypatch):
+        """The index-bug failure mode, end to end: it never reaches the view."""
+        out = self._serve(monkeypatch, loss_in_air=1.234e5)
+        assert out["loss_density_per_tri"][-1] == 0.0
+        assert "air" in out["loss_density_unmodelled"]
+        assert out["loss_dens_max"] == max(out["loss_density_per_tri"])
+
+    def test_the_flag_names_are_the_ones_the_renderer_blanks_on(self):
+        """A rename on either side silently un-blanks a material.
+
+        The contract is three lines of TypeScript deep in fieldView.ts; the
+        backend can emit five names.  Neither file can see the other, so the
+        only thing that keeps them in step is this test.
+        """
+        import pathlib, re
+        src = pathlib.Path(__file__).resolve().parents[1] / "web" / "src" \
+            / "components" / "simulation" / "fieldView.ts"
+        text = src.read_text(encoding="utf-8")
+        block = text[text.index("loss_density_unmodelled"):]
+        block = block[:block.index("const drawn")]
+        known = set(re.findall(r"n === '([a-z]+)'", block))
+        assert {"air", "iron", "magnets", "copper", "shaft"} <= known, (
+            "fieldView.ts does not blank on: "
+            + str({"air", "iron", "magnets", "copper", "shaft"} - known))
+        # ...and air is blanked whether or not the payload says so.
+        assert "unmod.add(0)" in text
+        # The band shader must not draw its iso-line on the CLAMPED ends.
+        # vmin/vmax are percentiles, so whole materials sit outside them at
+        # t = 0 / t = 1 where fract(t*bands) = 0 — and a full-strength dark wash
+        # over those is what made the shaft read as filled-in air and the copper
+        # (the hottest thing on the map) read as black.
+        assert "t > 0.0 && t < 1.0" in text

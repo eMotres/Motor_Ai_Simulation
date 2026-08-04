@@ -413,7 +413,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
           tooltip="P_loss / mass — thermal stress indicator"/>
         <Cell label="Efficiency η" value={fmt(s.efficiency * 100, 2)} unit="%"
           accent={accentEff}
-          tooltip="P_mech / P_elec_in (energy balance; equals P_mech/(P_mech+P_loss) when the input power isn't reported)"/>
+          tooltip="P_mech / (P_mech + every loss on this card), with P_mech = T·ω. The solved terminal power carries only the losses inside the field solve (no analytic iron, no end-winding copper), so it is reported separately as a balance diagnostic rather than used here."/>
       </Box>
 
       {/* ── Row 3 — voltage + KV ───────────────────────────────────────── */}
@@ -433,7 +433,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
                   : s.J_coil_A_per_mm2 <= 40 ? 'amber' : 'red'}
           tooltip="Coil current density = I_phase RMS / (a_parallel × strand copper section, wire_width × wire_height). The thermal-loading figure of merit: ~5–15 A/mm² continuous (natural/liquid cooling), 20–40+ for short peak / forced cooling."/>
         <Cell label="KV (line)" value={fmt(s.KV_rpm_per_V_line, 1)} unit="rpm/V"
-          tooltip="rpm / (V₁_LL RMS) — fundamental line-to-line at this load point"/>
+          tooltip="rpm / V_LINE PEAK — the max/max convention, the same peak shown in the cell beside it (and the one an Ansys induced-voltage table reports). Loaded voltage: at field-weakening γ it differs from the no-load back-EMF KV."/>
       </Box>
 
       {/* ── Mass component breakdown ───────────────────────────────────── */}

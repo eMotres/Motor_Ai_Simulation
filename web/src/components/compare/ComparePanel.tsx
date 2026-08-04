@@ -15,6 +15,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import {
   Box, Typography, Button, Checkbox, IconButton, Tooltip, Alert,
   CircularProgress, TextField, Popover, FormControlLabel, Divider,
+  Dialog, DialogTitle, DialogContent, DialogActions,
 } from '@mui/material';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import RefreshIcon       from '@mui/icons-material/Refresh';
@@ -317,10 +318,15 @@ const ComparePanel: React.FC = () => {
 
   const del = (id: string) =>
     mutate(`${API}/api/sims/saved/${id}`, { method: 'DELETE' }, 'Delete');
-  const clearAll = () => {
-    if (!window.confirm('Delete ALL saved simulations?')) return;
-    mutate(`${API}/api/sims/saved`, { method: 'DELETE' }, 'Delete all');
-  };
+
+  // Confirmation is a REAL dialog, never window.confirm.  Chrome's "prevent
+  // this page from creating additional dialogs" makes every later confirm()
+  // return false silently — the bin then does nothing, forever, with no error
+  // and no way to tell it apart from a broken button (user-caught, twice in
+  // this project).  A rendered dialog cannot be suppressed.
+  const [confirmDel, setConfirmDel] =
+    useState<{ ids: string[]; all: boolean } | null>(null);
+  const clearAll = () => setConfirmDel({ ids: [], all: true });
 
   // The per-row Delete lives in the "Actions" column — the LAST one, behind every
   // result and input column, so on a wide table it is off-screen and effectively
@@ -329,15 +335,24 @@ const ComparePanel: React.FC = () => {
   // the bin looked like a broken button. So the toolbar bin now acts on the
   // SELECTION when there is one, and only falls back to wiping the library when
   // nothing is ticked.
-  const delSelected = async () => {
+  const delSelected = () => {
     const ids = [...sel];
     if (!ids.length) return clearAll();
-    const shown = selected.slice(0, 6).map(s => `  • ${s.name}`).join('\n');
-    const more = ids.length > 6 ? `\n  … and ${ids.length - 6} more` : '';
-    if (!window.confirm(`Delete ${ids.length} selected simulation(s)?\n\n${shown}${more}`)) return;
+    setConfirmDel({ ids, all: false });
+  };
+
+  /** Runs what the dialog just confirmed. */
+  const runConfirmedDelete = async () => {
+    const req = confirmDel;
+    setConfirmDel(null);
+    if (!req) return;
+    if (req.all) {
+      mutate(`${API}/api/sims/saved`, { method: 'DELETE' }, 'Delete all');
+      return;
+    }
     setErr(null);
     const failed: string[] = [];
-    for (const id of ids) {
+    for (const id of req.ids) {
       try {
         const r = await fetch(`${API}/api/sims/saved/${id}`, { method: 'DELETE' });
         if (!r.ok) failed.push(`${id} (HTTP ${r.status})`);
@@ -699,6 +714,31 @@ const ComparePanel: React.FC = () => {
           )}
         </Box>
       </Box>
+
+      {/* Delete confirmation — a real dialog (see the note at clearAll). */}
+      <Dialog open={!!confirmDel} onClose={() => setConfirmDel(null)} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ fontSize: 15 }}>
+          {confirmDel?.all
+            ? 'Delete ALL saved simulations?'
+            : `Delete ${confirmDel?.ids.length ?? 0} selected simulation${
+                (confirmDel?.ids.length ?? 0) === 1 ? '' : 's'}?`}
+        </DialogTitle>
+        <DialogContent sx={{ pt: 0 }}>
+          {!confirmDel?.all && (
+            <Box component="ul" sx={{ m: 0, pl: 2.5, fontSize: 12, color: 'var(--text-2)' }}>
+              {sims.filter(s => confirmDel?.ids.includes(s.id)).slice(0, 8)
+                .map(s => <li key={s.id}>{s.name}</li>)}
+              {(confirmDel?.ids.length ?? 0) > 8 && (
+                <li>… and {(confirmDel?.ids.length ?? 0) - 8} more</li>)}
+            </Box>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button size="small" onClick={() => setConfirmDel(null)}>Cancel</Button>
+          <Button size="small" color="error" variant="contained"
+                  onClick={() => { void runConfirmedDelete(); }}>Delete</Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 };

@@ -14,6 +14,17 @@ exact.  A real NdFeB magnet has mu_rec ~ 1.05, which changes the answer by a few
 percent — so the benchmarks set mu_r = 1 in the magnet, and any deviation the
 solver reports is solver error, not modelling error.
 
+That convenience hid a bug for a whole stage.  mu_r = 1 is exactly the value at
+which the two candidate magnet conventions,
+
+    B = mu0*mu_r*H + mu0*M        (remanence mu0*M — the physical one)
+    B = mu0*mu_r*(H + M)          (remanence mu_r*mu0*M — off by mu_rec)
+
+give the SAME answer, so a whole benchmark suite at mu_r = 1 cannot tell them
+apart.  ``demag_body_B_inside`` below is the closed form at ARBITRARY mu_r and
+demagnetising factor, and it separates them by exactly mu_rec.  Use it, not the
+mu_r = 1 shortcuts, whenever a new solver or a new reference leg is wired in.
+
 Units: SI (meters, A/m, tesla).
 """
 from __future__ import annotations
@@ -24,6 +35,37 @@ from typing import Tuple
 import numpy as np
 
 MU0 = 4e-7 * math.pi
+
+
+# --------------------------------------------------------------------------
+# the constitutive law itself, at arbitrary recoil permeability
+# --------------------------------------------------------------------------
+
+#: demagnetising factor along the magnetisation, for the two bodies that have
+#: one in closed form.  ``cylinder_transverse`` is the 2D case: an infinite
+#: circular cylinder magnetised ACROSS its axis.
+DEMAG_FACTOR = {"sphere": 1.0 / 3.0, "cylinder_transverse": 0.5}
+
+
+def demag_body_B_inside(M: float, mu_r: float, N: float) -> float:
+    """|B| inside a uniformly magnetised ellipsoid-equivalent body, exactly.
+
+    The body obeys  B = mu0*mu_r*H + mu0*M  (permanent magnetisation M [A/m],
+    recoil permeability mu_r), and has demagnetising factor ``N`` along M.
+    Writing the total magnetisation M_tot = B/mu0 - H = (mu_r - 1)*H + M and
+    imposing the demagnetising relation H = -N*M_tot,
+
+        H    = -N*M / (1 + N*(mu_r - 1))
+        B_in = mu0*(mu_r*H + M) = mu0 * M * (1 - N) / (1 + N*(mu_r - 1))
+
+    Checks: N = 1/3, mu_r = 1 gives (2/3) mu0 M (the sphere); N = 1/2, mu_r = 1
+    gives (1/2) mu0 M (the transverse cylinder).  At mu_r = 1.05 the sphere is
+    2*mu0*M/(mu_r+2) and the cylinder mu0*M/(mu_r+1) — both LOWER than the
+    mu_r = 1 value, and a solver that instead scales UP by mu_r has the magnet
+    convention the wrong way round.
+    """
+    N = float(N)
+    return MU0 * float(M) * (1.0 - N) / (1.0 + N * (float(mu_r) - 1.0))
 
 
 # --------------------------------------------------------------------------

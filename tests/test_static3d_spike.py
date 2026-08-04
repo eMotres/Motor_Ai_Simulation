@@ -32,6 +32,7 @@ from motor_ai_sim.simulation.static3d.solver import (
 
 M_MAG = 1.0e6                      # A/m -> mu0*M = 1.257 T
 R_SPH = 0.01
+MU_REC = 1.05                      # a real NdFeB recoil permeability
 FULL = os.environ.get("STATIC3D_FULL") == "1"
 
 
@@ -202,6 +203,48 @@ def test_sphere_interior_field_P2(sphere_p2):
     # and pointwise at the centre, where the exact field is the same constant
     Bc = sphere_p2.B_at_points(np.zeros((3, 1)))[:, 0]
     assert abs(Bc[2] - Bex) / Bex < 0.015
+
+
+@pytest.fixture(scope="module")
+def sphere_p2_recoil(sphere_mesh):
+    """The same sphere, but with a REAL magnet's recoil permeability."""
+    return solve_static3d(
+        sphere_mesh.mesh,
+        [Region("air", sphere_mesh.elements("air")),
+         Region("magnet", sphere_mesh.elements("magnet"), mu_r=MU_REC,
+                M=(0.0, 0.0, M_MAG))],
+        order=2)
+
+
+def test_recoil_permeability_enters_the_constitutive_law(sphere_p2,
+                                                         sphere_p2_recoil):
+    """mu_rec = 1.05 must LOWER the interior field to 2*mu0*M/(mu_rec+2).
+
+    This is the test Stage A did not have.  Every benchmark in this file ran at
+    mu_r = 1, which is the one value where  B = mu0*mu_r*H + mu0*M  and
+    B = mu0*mu_r*(H + M)  agree — so a solver using the second (remanence
+    mu_rec*Br instead of Br, i.e. 5 % too strong a magnet) passed all of them.
+    The 2D solver did exactly that, and it is what made the Stage A 3D-vs-2D
+    check fail by a CONSTANT 4.7 % on the iron-free case.
+
+    The assertion is deliberately made twice: once absolutely against the closed
+    form, and once as a RATIO between the two solves on the SAME mesh, where the
+    discretisation error cancels and the only thing left is mu_rec.
+    """
+    N = exact.DEMAG_FACTOR["sphere"]
+    B1 = exact.demag_body_B_inside(M_MAG, 1.0, N)
+    Br = exact.demag_body_B_inside(M_MAG, MU_REC, N)
+    assert Br < B1                              # the law's direction, stated
+    got = sphere_p2_recoil.region_mean_B("magnet")[2]
+    # 2 % is what THIS coarse faceted sphere achieves (the mu_r = 1 twin above
+    # sits at 1.5 % on the same mesh); the sharp assertion is the ratio below.
+    assert abs(got - Br) / Br < 0.02
+    # mesh-error-free form: the ratio of the two solves is 3/(mu_rec+2) exactly
+    ratio = got / sphere_p2.region_mean_B("magnet")[2]
+    assert ratio == pytest.approx(Br / B1, rel=2e-3), (
+        f"mu_rec moved the interior field by {ratio:.5f}, the law says "
+        f"{Br / B1:.5f}; a factor {MU_REC:.3f} the other way means the source "
+        "is being read as mu0*mu_r*M instead of mu0*M")
 
 
 def test_sphere_P2_beats_P1_on_the_same_mesh(sphere_mesh, sphere_p1, sphere_p2):

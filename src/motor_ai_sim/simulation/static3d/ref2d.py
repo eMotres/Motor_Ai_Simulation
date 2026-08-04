@@ -15,6 +15,24 @@ place to spend a few seconds not having it.
 The comparable quantity is the FUNDAMENTAL of the radial flux density on the
 mid-gap cylinder — pole-pair order p, so the harmonic index is p.  Peak B_r is
 not comparable: it is a slot-harmonic artefact and moves with the mesh.
+
+The one thing the two legs MUST share
+-------------------------------------
+Both must mean the same thing by "a magnet".  The law is
+
+    B = mu0 * mu_rec * H + mu0 * M ,     remanence Br = mu0 * M ,
+
+which is what ``static3d.solver`` integrates directly and what
+``fem_solver_2d.build_materials`` means by ``Mx``/``My`` (``M = Br/mu0``) —
+its own demag pass reads the full-strength remanence back as ``mu0*|M|``.
+Feeding that law into the 2D A_z weak form gives a SOURCE of ``M/mu_rec``, the
+equivalent coercivity Br/(mu0*mu_rec), not M.  Assembling M itself models a
+magnet of remanence mu_rec*Br, i.e. 5 % strong for NdFeB — and because every
+benchmark in ``exact.py`` was written at mu_r = 1, where the two conventions
+coincide, nothing caught it until this comparison did.  Stage A's iron-free
+case measured that offset as a flat 4.71 %, independent of stack length.
+``tests/test_static3d_stage_a.py::
+test_the_2d_reference_leg_uses_the_same_magnet_law_as_3d`` pins it.
 """
 from __future__ import annotations
 

@@ -285,6 +285,91 @@ def test_gap_fundamental_recovers_a_known_harmonic():
     assert abs(off - 0.83) > 1e-4
 
 
+def _magnetised_disc_mesh(a_m: float, r_box_m: float, n_in: int = 14,
+                          n_out: int = 26, n_theta: int = 180,
+                          grade: float = 1.12):
+    """Structured polar MeshTri: a disc of radius ``a_m`` centred in a disc of
+    radius ``r_box_m``, CONFORMAL on both circles.
+
+    Structured on purpose.  The quantity under test is a 5 % constitutive
+    factor, so the mesh must not contribute anything near it: concentric rings
+    put every element boundary exactly on the magnet surface, and the only
+    geometric error left is the ``n_theta``-gon approximation of the circle,
+    which is 1.5e-4 at n_theta = 180.
+    """
+    from skfem import MeshTri
+    r_in = a_m * np.linspace(0.0, 1.0, n_in + 1)[1:]
+    g = np.cumsum(grade ** np.arange(n_out))
+    radii = np.concatenate([r_in, a_m + (r_box_m - a_m) * g / g[-1]])
+    th = np.linspace(0.0, 2 * math.pi, n_theta, endpoint=False)
+    pts = [np.array([[0.0], [0.0]])] + [
+        np.vstack([r * np.cos(th), r * np.sin(th)]) for r in radii]
+    p = np.hstack(pts)
+    t = [[0, 1 + j, 1 + (j + 1) % n_theta] for j in range(n_theta)]
+    for k in range(len(radii) - 1):
+        b0, b1 = 1 + k * n_theta, 1 + (k + 1) * n_theta
+        for j in range(n_theta):
+            jn = (j + 1) % n_theta
+            t += [[b0 + j, b1 + j, b1 + jn], [b0 + j, b1 + jn, b0 + jn]]
+    return MeshTri(np.ascontiguousarray(p),
+                   np.ascontiguousarray(np.array(t).T))
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "fem_solver_2d assembles the magnet source as M rather than M/mu_rec, so "
+    "its magnets have remanence mu_rec*Br. The fix is a physics change to "
+    "every 2D simulation in the project and is not this module's to make — "
+    "DELETE THIS MARKER when it lands."))
+def test_the_2d_reference_leg_uses_the_same_magnet_law_as_3d():
+    """k_flux crosses two solvers, so they must agree on what a magnet IS.
+
+    ``B = mu0*mu_rec*H + mu0*M`` (remanence mu0*M = Br) is what
+    ``static3d.solver`` implements and what ``build_materials`` means by ``Mx``
+    — ``fem_solver_2d``'s own demag pass reads the full-strength remanence back
+    as ``mu0*|M|``.  The A-formulation source for that law is the equivalent
+    coercivity M/mu_rec, not M.
+
+    Measured on an infinite circular cylinder magnetised across its axis
+    (demagnetising factor exactly 1/2), as a RATIO between two solves on the
+    SAME mesh so the discretisation error cancels and mu_rec is the only thing
+    the ratio can see.  Solving the same body twice is what makes a 0.2 %
+    tolerance meaningful on a 5 % effect.
+    """
+    from motor_ai_sim.simulation.fem_solver_2d import (DOM_AIR, DOM_MAG_BASE,
+                                                       FEMMaterial,
+                                                       _p2_B_at_quad,
+                                                       solve_magnetostatics_fem)
+    from motor_ai_sim.simulation.static3d import exact
+
+    a, r_box, M, mu_rec = 0.01, 0.30, 1.19 / exact.MU0, 1.05
+    mesh = _magnetised_disc_mesh(a, r_box)
+    cen = mesh.p[:, mesh.t].mean(axis=1)
+    tags = np.where(np.hypot(cen[0], cen[1]) < a,
+                    DOM_MAG_BASE, DOM_AIR).astype(np.int32)
+
+    def _B_in(mu_r):
+        mats = {DOM_AIR: FEMMaterial("air", mu_r=1.0),
+                DOM_MAG_BASE: FEMMaterial("mag", mu_r=mu_r, Mx=M, My=0.0)}
+        A, basis = solve_magnetostatics_fem(mesh, tags, mats, element_order=2,
+                                            nonlinear_iterations=1)
+        Bx, _By, dx = _p2_B_at_quad(basis, A)
+        sel = tags == DOM_MAG_BASE
+        w = dx[sel]
+        return float((Bx[sel] * w).sum() / w.sum())
+
+    N = exact.DEMAG_FACTOR["cylinder_transverse"]
+    b1, brec = _B_in(1.0), _B_in(mu_rec)
+    # the mu_r = 1 leg first: if THAT is off, the mesh is the problem, not mu_rec
+    assert b1 == pytest.approx(exact.demag_body_B_inside(M, 1.0, N), rel=5e-3)
+    want = (exact.demag_body_B_inside(M, mu_rec, N)
+            / exact.demag_body_B_inside(M, 1.0, N))
+    assert brec / b1 == pytest.approx(want, rel=2e-3), (
+        f"mu_rec moved the 2D interior field by {brec / b1:.5f}; the law says "
+        f"{want:.5f}. Getting {want * mu_rec:.5f} instead — a clean factor "
+        f"mu_rec = {mu_rec} too high — means the assembled source is M rather "
+        "than M/mu_rec, i.e. a magnet of remanence mu_rec*Br.")
+
+
 def test_spill_profile_shape_and_k_flux(sector_solve):
     ss = sector_solve
     pr = EE.spill_profile(ss, n_in=9, n_out=3, n_theta=126)

@@ -504,7 +504,13 @@ def run_stage_a(geo_override: Optional[dict] = None,
             two_d["warning"] = (
                 f"3D mid-plane and 2D differ by {100*off:.2f} % on the same "
                 "cross-section. Use k_flux_self and the spill profile; do NOT "
-                "use k_flux until the two models are reconciled.")
+                "use k_flux until the two models are reconciled. First two "
+                "things to check, in order: (1) the magnet constitutive law — "
+                "the 2D A_z source must be M/mu_rec, not M (see ref2d's "
+                "docstring); (2) the iron, by re-running this with "
+                "linear_iron=True at a ladder of mu_r: a residual that grows "
+                "with mu_r and vanishes with no iron is the total scalar "
+                "potential's cancellation, not a magnet error.")
     for row in curve:
         row["k_flux"] = row["k_flux_self"] * ratio
 

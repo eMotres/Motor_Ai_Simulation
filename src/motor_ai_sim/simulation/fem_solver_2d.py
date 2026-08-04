@@ -792,9 +792,18 @@ def solve_magnetostatics(
             idx = tag_cells.get(tag)
             if idx is None or idx.size == 0:
                 continue
-            # Per-cell H projected onto +M̂  (along magnetisation direction).
+            # Per-cell H projected onto +M̂  (along magnetisation direction),
+            # obtained by INVERTING the law this solve actually assembled:
+            # the magnet domain carries mu_r = mu_rec and `_assemble_f` divides
+            # its coercivity source by that same mu_rec, so
+            #     B = mu0*mu_rec*H + Br*br_factor
+            #  => H = (B.M̂ - Br*br_factor) / (mu0*mu_rec).
+            # Reading it back as B/mu0 - M*br treats the magnet as air and
+            # over-reads |H| by exactly mu_rec — ~5 %, always toward "more
+            # demagnetised".  Same inversion as simulation/demag.py.
             B_dot_M = (Bx_tri[idx] * mat_t.Mx + By_tri[idx] * mat_t.My)
-            H_along_M = B_dot_M / (MU0 * Mmag) - Mmag * br_factor[tag]
+            _mu_rec = max(float(mat_t.mu_r), 1.0)
+            H_along_M = (B_dot_M / Mmag - MU0 * Mmag * br_factor[tag]) / (MU0 * _mu_rec)
             H_worst = float(np.min(H_along_M))
             H_knee = mat_t.bh_curve[1][0] if mat_t.bh_curve[0][1] <= 0 \
                        else mat_t.bh_curve[0][0]

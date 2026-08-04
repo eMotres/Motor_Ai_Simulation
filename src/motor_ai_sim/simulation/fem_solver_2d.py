@@ -558,13 +558,46 @@ class FEMResult:
 
 
 
+# ---------------------------------------------------------------------------
+# the B-H fixed point
+# ---------------------------------------------------------------------------
+
+def _picard_relax(nu_old, nu_curve, d):
+    """One damped Picard step on the reluctivity, GEOMETRIC in nu.
+
+    Arithmetic damping averages nu = 1/mu, so a step that halves mu and one that
+    doubles it are not the same size; the iteration then crawls where the curve
+    is flat and overshoots at the knee.  Relaxing log(nu) makes the step
+    scale-free, which is what lets one fixed 0.35 work from mu_r 5000 down to
+    mu_r 5 without per-geometry tuning.
+    """
+    return np.exp((1.0 - d) * np.log(nu_old) + d * np.log(nu_curve))
+
+
+def _constitutive_residual(Bm, w, nu_used, nu_curve):
+    """|| |B| (nu_curve(|B|) - nu_used) || / || |B| nu_curve(|B|) ||.
+
+    The relative error in H between the B-H curve and the reluctivity the solve
+    actually used, area weighted.  It is a property of the STATE, not of the
+    step, so damping harder cannot make it small — which is precisely the
+    failure mode of the step-size test it replaces.  Measured on the 40 mm spoke
+    machine at I = 0: the step test stopped with this residual at 0.87, and no
+    sweep count from 16 to 640 left ~0.8, while the gap fundamental limit-cycled
+    over a 3 % band 11 % below the true fixed point (1.354 vs 1.515 T) and the
+    field broke an exact anti-periodicity by 3 %.
+    """
+    num = float((((Bm * (nu_curve - nu_used)) ** 2) * w).sum())
+    den = float((((Bm * nu_curve) ** 2) * w).sum())
+    return math.sqrt(num / max(den, 1e-300))
+
+
 def solve_magnetostatics(
     mesh,
     cell_tags: np.ndarray,
     materials: Dict[int, FEMMaterial],
     n_sectors: int = 1,
     pole_pairs_per_sector_is_half_integer: bool = True,
-    nonlinear_iterations: int = 8,
+    nonlinear_iterations: int = 60,
 ) -> np.ndarray:
     """Linear 2-D magnetostatics solve.
 
@@ -717,7 +750,8 @@ def solve_magnetostatics(
         # saturate correctly even though the domain average stays low.
         Bx_tri, By_tri = _per_triangle_B(mesh, A)
         Bmag_tri = np.sqrt(Bx_tri ** 2 + By_tri ** 2)
-        changed = False
+        _nu_curve = {}
+        _num = _den = 0.0
         for tag, sb in sat_basis.items():
             idx = tag_cells[tag]
             Bm = Bmag_tri[idx]
@@ -727,13 +761,16 @@ def solve_magnetostatics(
             else:
                 ratio = np.where(Bm > 1.8, (1.8 / np.maximum(Bm, 1e-9)) ** 3, 1.0)
                 mu_new = mat_t.mu_r * ratio + 5.0 * (1.0 - ratio)
-            nu_new = 1.0 / (MU0 * np.maximum(mu_new, 1.0))
-            nu_upd = 0.5 * nu_el[tag] + 0.5 * nu_new
-            rel = float(np.max(np.abs(nu_upd - nu_el[tag])
-                               / np.maximum(nu_el[tag], 1e-30)))
-            if rel > 0.02:
-                changed = True
-            nu_el[tag] = nu_upd
+            nu_c = 1.0 / (MU0 * np.maximum(mu_new, 1.0))
+            _nu_curve[tag] = nu_c
+            _num += float((((Bm * (nu_c - nu_el[tag])) ** 2)).sum())
+            _den += float((((Bm * nu_c) ** 2)).sum())
+        # the STATE's violation of the B-H curve, not the size of the last step
+        _res = math.sqrt(_num / max(_den, 1e-300))
+        changed = _res > _PIC_TOL
+        if changed:
+            for tag, nu_c in _nu_curve.items():
+                nu_el[tag] = _picard_relax(nu_el[tag], nu_c, 0.35)
             log.info("FEM iter %d: tag=%d B_max=%.2fT μ_r median %.0f (per-elem)",
                      it, tag, float(Bm.max()) if Bm.size else 0.0,
                      float(np.median(1.0 / (MU0 * nu_el[tag]))))
@@ -1346,7 +1383,7 @@ def solve_field2d_on_mesh(
 def solve_magnetostatics_fem(mesh, cell_tags: np.ndarray,
                              materials: Dict[int, FEMMaterial],
                              element_order: int = 2,
-                             nonlinear_iterations: int = 8):
+                             nonlinear_iterations: int = 60):
     """Magnetostatic solve on ElementTriP1 (order 1) or ElementTriP2 (order 2).
 
     Same weak form  ∫ ν ∇A·∇v = ∫ J_z v + ∫(Hcx ∂v/∂y − Hcy ∂v/∂x),
@@ -1456,6 +1493,7 @@ def solve_magnetostatics_fem(mesh, cell_tags: np.ndarray,
 
     A = np.zeros(n)
     it = 0
+    d_cur, good, prev_res, res = 0.35, 0, float("inf"), 0.0
     for it in range(max(1, nonlinear_iterations)):
         K = _assemble_K()
         f = _assemble_f()
@@ -1464,7 +1502,8 @@ def solve_magnetostatics_fem(mesh, cell_tags: np.ndarray,
         area = dx.sum(axis=1)
         Bmag_q = np.sqrt(Bx_q ** 2 + By_q ** 2)
         Bmag_el = (Bmag_q * dx).sum(axis=1) / np.maximum(area, 1e-30)
-        changed = False
+        nu_curve = nu_all.copy()
+        sat = []
         for tag in (DOM_STATOR, DOM_ROTOR, DOM_SHAFT):
             idx = tag_cells.get(tag)
             if idx is None:
@@ -1476,17 +1515,37 @@ def solve_magnetostatics_fem(mesh, cell_tags: np.ndarray,
             else:
                 ratio = np.where(Bm > 1.8, (1.8 / np.maximum(Bm, 1e-9)) ** 3, 1.0)
                 mu_new = mat.mu_r * ratio + 5.0 * (1.0 - ratio)
-            nu_new = 1.0 / (MU0 * np.maximum(mu_new, 1.0))
-            nu_upd = 0.5 * nu_all[idx] + 0.5 * nu_new
-            rel = float(np.max(np.abs(nu_upd - nu_all[idx])
-                               / np.maximum(nu_all[idx], 1e-30)))
-            if rel > 0.02:
-                changed = True
-            nu_all[idx] = nu_upd
-        if not changed and it > 0:
+            nu_curve[idx] = 1.0 / (MU0 * np.maximum(mu_new, 1.0))
+            sat.append(idx)
+        if not sat:
             break
-    log.info("FEM P%d solve: %d dofs, %d triangles, %d Picard iters, %.2fs",
-             int(element_order), n, n_tri, it + 1, _t.time() - t0)
+        sidx = np.concatenate(sat)
+        res = _constitutive_residual(Bmag_el[sidx], area[sidx],
+                                     nu_all[sidx], nu_curve[sidx])
+        if res < _PIC_TOL:
+            break
+        # adaptive step: back off on a worse residual, give it back after three
+        # clean sweeps (halving alone is a ratchet — the saturating bridges make
+        # the residual bounce early and strand the loop at d ~ 0.04 afterwards)
+        if res > prev_res:
+            d_cur, good = max(0.5 * d_cur, 0.02), 0
+        else:
+            good += 1
+            if good >= 3:
+                d_cur, good = min(1.6 * d_cur, 0.35), 0
+        prev_res = res
+        nu_all[sidx] = _picard_relax(nu_all[sidx], nu_curve[sidx], d_cur)
+    log.info("FEM P%d solve: %d dofs, %d triangles, %d Picard iters, "
+             "constitutive residual %.2e (tol %.1e), %.2fs",
+             int(element_order), n, n_tri, it + 1, res, _PIC_TOL, _t.time() - t0)
+    if res > _PIC_TOL:
+        log.warning("FEM P%d solve did NOT reach the B-H fixed point: residual "
+                    "%.2e against tol %.1e after %d sweeps. The saturation "
+                    "state is not a solution of the machine that was asked "
+                    "for; on a saturating spoke rotor the measured error in "
+                    "the gap fundamental is 8-11 %%. Raise "
+                    "nonlinear_iterations.",
+                    int(element_order), res, _PIC_TOL, it + 1)
     return A, basis
 
 

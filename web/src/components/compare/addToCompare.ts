@@ -88,16 +88,10 @@ export function hasSummaryToSave(): boolean {
   return Number.isFinite(Number((s as any).T_em_avg_Nm));
 }
 
-/** Default label — what tells two points apart at a glance; renameable in Compare.
- *  Leads with the MOTOR's name (user request): a library of rows that all begin
- *  with a current and a timestamp is unreadable once it holds two machines. */
+/** Default label: the MOTOR's name and when it was saved — nothing else (user
+ *  request, 2026-08-04).  The current and gamma are columns of the row already,
+ *  so repeating them in the name only crowded it.  Renameable in Compare. */
 export function defaultPointName(): string {
-  const sim = readSimSettings() as Record<string, unknown>;
-  const s = readShownSummary() as Record<string, unknown>;
-  // Same rule as buildParams: label the point by what was SOLVED, not by the
-  // panel's current setting, so the name matches the row's numbers.
-  const I = Number(Number.isFinite(Number(s.I_phase_rms_A)) ? s.I_phase_rms_A : sim.max_current);
-  const g = Number(Number.isFinite(Number(s.gamma_deg))     ? s.gamma_deg     : sim.phase_offset_deg);
   const when = new Date().toLocaleString(undefined,
     { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
   let motor = '';
@@ -105,13 +99,8 @@ export function defaultPointName(): string {
     const raw = localStorage.getItem('motor.active');
     const m = raw ? JSON.parse(raw) as { name?: string } : null;
     motor = String(m?.name ?? '').trim();
-  } catch { /* no active motor — fall back to the operating point alone */ }
-  return [
-    motor || null,
-    Number.isFinite(I) ? `${I} A` : null,
-    Number.isFinite(g) ? `γ ${g}°` : null,
-    when,
-  ].filter(Boolean).join(' · ');
+  } catch { /* no active motor — the timestamp alone still separates points */ }
+  return motor ? `${motor} · ${when}` : when;
 }
 
 export async function addCurrentPointToCompare(name: string): Promise<void> {

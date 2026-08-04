@@ -88,7 +88,9 @@ export function hasSummaryToSave(): boolean {
   return Number.isFinite(Number((s as any).T_em_avg_Nm));
 }
 
-/** Default label — what tells two points apart at a glance; renameable in Compare. */
+/** Default label — what tells two points apart at a glance; renameable in Compare.
+ *  Leads with the MOTOR's name (user request): a library of rows that all begin
+ *  with a current and a timestamp is unreadable once it holds two machines. */
 export function defaultPointName(): string {
   const sim = readSimSettings() as Record<string, unknown>;
   const s = readShownSummary() as Record<string, unknown>;
@@ -98,7 +100,14 @@ export function defaultPointName(): string {
   const g = Number(Number.isFinite(Number(s.gamma_deg))     ? s.gamma_deg     : sim.phase_offset_deg);
   const when = new Date().toLocaleString(undefined,
     { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+  let motor = '';
+  try {
+    const raw = localStorage.getItem('motor.active');
+    const m = raw ? JSON.parse(raw) as { name?: string } : null;
+    motor = String(m?.name ?? '').trim();
+  } catch { /* no active motor — fall back to the operating point alone */ }
   return [
+    motor || null,
     Number.isFinite(I) ? `${I} A` : null,
     Number.isFinite(g) ? `γ ${g}°` : null,
     when,

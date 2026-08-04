@@ -394,3 +394,52 @@ or laser+etch series stack to sit near the computed curve. The Ansys-practice
 x2 coefficient under-reads this prototype above ~2000 rpm: the measured factor
 is 2.15 at 1000 rpm rising to 4.05 at 4000, because the mechanism is n^2, not
 a constant multiplier.
+
+---
+
+## Addendum (2026-08-04, later the same day): the computed shaft leg, re-checked
+
+A mesher bug was found the same day that could have inflated or deflated the
+`P_shaft` column of §3, so it was checked. **It does not touch this document.**
+
+**The bug.** The geometry-driven mesher (`geo_mesh._tag_rotor`) tagged *every*
+rotor-half triangle inside `rotor_inner_radius` as `DOM_SHAFT`, i.e. the whole
+bore disc. The shaft this machine actually has is a **3 mm tube** —
+`shaft_inner_radius` 36.1 mm to `rotor_inner_radius` 39.1 mm, **708.7 mm²**, the
+same section `masses.compute_masses` bills for the 0.067 kg shaft in §4.1. The
+geo mesh handed the eddy solve **4802.9 mm²** of aluminium, **6.78×** the metal.
+
+**Why §3 is unaffected.** `scratch_perf/noload_fe_sweep.py` calls the solver
+without `structured_gap=True`, so the iron-template / geo path raises
+(`template iron needs the structured-gap belt`) and **all seven speeds fell back
+to the gmsh build** — visible seven times in `scratch_perf/noload_sweep72.log`.
+The gmsh path classifies the shaft from the CAD polygon, which is the ring. The
+4000 rpm point was re-run exactly as the sweep called it and reproduces bit for
+bit:
+
+| 4000 rpm, I = 0 | §3 as published | re-run today |
+|---|--:|--:|
+| P_fe [W] | 80.41 | 80.414 |
+| P_magnet [W] | 41.83 | 41.830 |
+| **P_shaft [W]** | **1.749** | **1.749** |
+| V̂_phase [V] | 72.79 | 72.792 |
+
+**What the bug would have cost, had the sweep used the geo mesher** (the
+Simulation tab's default). Same machine, same operating point, geo mesh +
+structured belt: **1.351 W before the fix, 1.803 W after**. The corrected geo
+mesh agrees with the gmsh mesh to **+3.1 %**; the buggy one was **23 % low**.
+
+Note the sign: removing the phantom metal makes the shaft loss go **up**, not
+down. The bore gave the shaft's floating eddy loop (∮J = 0) a large,
+low-resistance return path, which pushed the body into the screening-limited
+regime and *suppressed* ∫σE². Measured with a control that separates the two
+effects (same tube-resolved mesh, old solid-disc tagging) on the live 150 mm at
+load: coupled P_shaft 31.63 W (coarse solid) → 31.41 W (resolved solid) →
+39.47 W (tube only).
+
+**Consequence for §6 and for every conclusion here: none.** The shaft leg is
+1.749 W of the 555.5 W budget — 0.31 %. Even the full 23 % swing is 0.4 W,
+an eighth of the fit's own σ = 3.4 W residual. C₂, the 1.96 exponent, the
+bearing cross-check (0.387 vs 0.400 N·m), the k_hyst ≤ 1.28 bound and the
+EDM-recast resolution are all set by terms two to three orders of magnitude
+larger and do not move.

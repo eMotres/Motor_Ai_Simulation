@@ -170,7 +170,19 @@ const TD = {
 
 const ComparePanel: React.FC = () => {
   const [sims,    setSims]    = useState<SavedSim[]>([]);
-  const [sel,     setSel]     = useState<Set<string>>(new Set());
+  // Ticked rows persist across reloads and tab switches — the user picks what
+  // they are comparing, and it stays picked until they change it.
+  const [sel,     setSel]     = useState<Set<string>>(() => {
+    try {
+      const raw = localStorage.getItem('compare.selected');
+      const a = raw ? JSON.parse(raw) : null;
+      return new Set<string>(Array.isArray(a) ? a.map(String) : []);
+    } catch { return new Set<string>(); }
+  });
+  useEffect(() => {
+    try { localStorage.setItem('compare.selected', JSON.stringify([...sel])); }
+    catch { /* quota */ }
+  }, [sel]);
   const [loading, setLoading] = useState(false);
   const [err,     setErr]     = useState<string | null>(null);
   const [editId,  setEditId]  = useState<string | null>(null);
@@ -195,11 +207,13 @@ const ComparePanel: React.FC = () => {
       .then(d => {
         const list: SavedSim[] = d.sims || [];
         setSims(list);
+        // The selection is the USER's, and it survives reloads: no auto-ticking
+        // of "the first four" (that fought every attempt to compare a different
+        // pair, and reappeared after each refresh), and no clearing either.
+        // Only rows that no longer exist drop out.
         setSel(prev => {
           const ids = new Set(list.map(s => s.id));
-          const kept = new Set([...prev].filter(id => ids.has(id)));
-          if (kept.size === 0 && list.length) list.slice(0, Math.min(4, list.length)).forEach(s => kept.add(s.id));
-          return kept;
+          return new Set([...prev].filter(id => ids.has(id)));
         });
       })
       .catch(e => setErr(String(e)))

@@ -1206,6 +1206,11 @@ def _build_sliding_band_meshes(
                     log.info("iron template halves: stator %d tris, rotor %d tris",
                              mesh_s.t.shape[1], mesh_r.t.shape[1])
             except Exception as _te:
+                from motor_ai_sim.simulation.geo_mesh import MeshBudgetExceeded
+                if isinstance(_te, MeshBudgetExceeded):
+                    # An armed mesh budget is a verdict on the GEOMETRY — the
+                    # gmsh fallback would re-pay the same pathological build.
+                    raise
                 log.warning("iron template failed (%s) — gmsh build", _te)
                 mesh_s = tags_s = classify_s = None
                 mesh_r = tags_r = classify_r = None
@@ -1315,6 +1320,11 @@ def _build_sliding_band_meshes(
                 log.info("iron template wedge 1/%d: stator %d tris, rotor %d tris",
                          _ns_i, mesh_s.t.shape[1], mesh_r.t.shape[1])
         except Exception as _te:
+            from motor_ai_sim.simulation.geo_mesh import MeshBudgetExceeded
+            if isinstance(_te, MeshBudgetExceeded):
+                # Same rule as the full-ring branch: the budget verdict is
+                # about the geometry, not this particular build path.
+                raise
             log.warning("iron template wedge failed (%s) — gmsh build", _te)
             mesh_s = tags_s = classify_s = None
             mesh_r = tags_r = classify_r = None

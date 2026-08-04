@@ -14,6 +14,27 @@ from typing import Dict, Any
 
 _KERNEL = None
 
+# ── mesh budget for ONE candidate eval (triangles) ───────────────────────────
+# The optimizer samples the whitelist without a range box, so a candidate can be
+# buildable (passes validate_geometry) yet carry a DERIVED thin feature — a slot
+# opening squeezed to um, a tooth pared to a knife edge — that makes the stator
+# cell's q20 refinement cascade to 0.5-1 M triangles.  Measured on a real 230-
+# eval auto run: 38 candidates burned the full 300 s _subprocess_eval cap and
+# returned nothing.  Arming geo_mesh's process-scoped budget makes Triangle
+# terminate promptly at a Steiner cap instead, so the same candidate is rejected
+# in seconds with an error the run log and the reject chips can name ("mesh
+# budget: ...", classified as "mesh").
+#
+# The value is chosen so a rejected candidate PROVABLY could not have solved
+# inside the 300 s cap — a false reject silently removes a design from the
+# search, which is worse than a slow eval.  The measured healthy P2 eval on the
+# active design is ~25-60 k triangles in ~40 s for a 48-frame window, i.e.
+# ~0.8 s per frame at ~30 k tris; at 400 k tris the frames alone extrapolate
+# (linearly — FEM assembly+solve is superlinear, so this UNDERestimates) to
+# ~500 s before the mesh build is even paid.  Every refine_proc caller shares
+# the 300 s subprocess timeout, so the budget applies to all of them.
+_MESH_TRI_BUDGET = 400_000
+
 
 def _kernel():
     """Lazy singleton Kernel for this subprocess — build the module registry once."""
@@ -155,6 +176,13 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
     # module the Simulation tab uses), inside this isolated subprocess. The module
     # -> get_fem_transient -> em_transient_eval; the geo override means it won't
     # touch the user's saved simulation. result.raw is the sliding-band dict.
+    # Arm the mesh budget for THIS candidate (process == candidate here; the
+    # __main__ path below runs one eval per subprocess).  The kernel seam
+    # catches every exception and returns ok=False (ResultIR.failed), so the
+    # call below cannot raise past the disarm — an in-process caller (tests)
+    # gets the budget disarmed again either way.
+    from motor_ai_sim.simulation import geo_mesh as _geo_mesh_mod
+    _geo_mesh_mod.set_tri_budget(_MESH_TRI_BUDGET)
     _out = _kernel().run("solver.em_transient", {
         "n_steps_per_period": nspp, "n_periods": nper, "gamma_deg": float(gamma_deg),
         "I_phase_rms": float(current_a), "rpm": float(rpm),
@@ -186,6 +214,7 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         "component_mesh": json.dumps(cfg.get("mesh", {}).get("component_mesh") or {}),
         "sliding_band": True, "fresh": True, "geo": json.dumps(overrides),
     })
+    _geo_mesh_mod.set_tri_budget(None)
     if not _out.get("ok"):
         raise RuntimeError(_out.get("error") or "solver.em_transient failed")
     d = getattr(_out.get("result"), "raw", None) or {}

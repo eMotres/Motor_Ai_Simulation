@@ -83,6 +83,98 @@ GEO_PART_KEYS = frozenset(("stator", "rotor", "magnet", "coil", "outer", "air"))
 GEO_REGION_KEYS = ("stator", "rotor", "magnet", "coil")
 
 
+# ── optimizer mesh budget (process-scoped, OFF by default) ───────────────────
+# The optimizer explores the whitelist without a range box, so a candidate can
+# carry a derived thin feature (a slot opening squeezed to um, a tooth pared to
+# a knife edge) that is perfectly buildable yet makes the STATOR cell's q20
+# refinement cascade — the rotor cell already caps itself (_ROTOR_STEINER_CAP),
+# the stator cell had no cap and was measured at 0.5-1.1 M tris on such input.
+# Those cascades are Triangle refinement ARTIFACTS: no area/feature-width
+# arithmetic on the polygons predicts them (a knife edge contributes O(1) tris
+# per size scale analytically and 10^6 in practice), so the only faithful
+# pre-solve predictor is Triangle itself with a Steiner cap — capped, it
+# terminates promptly instead of cascading.
+#
+# `set_tri_budget` arms that cap for THIS PROCESS.  It is called only by the
+# optimizer's one-candidate eval subprocess (optimization/refine_proc), where
+# process scope == candidate scope; the API server never arms it, so
+# interactive meshing (Simulation / Mesh tabs) is bit-identical to before.
+# While armed, a mesh that stays under the budget is ALSO bit-identical to the
+# unarmed build — Triangle only inserts the Steiner points refinement asks for,
+# so a cap that is not reached changes nothing.  Hitting the cap raises
+# MeshBudgetExceeded, whose message starts with "mesh budget:" — the string the
+# optimizer's reject classifier keys on.
+_TRI_BUDGET: Dict[str, Optional[int]] = {"v": None}
+
+
+class MeshBudgetExceeded(RuntimeError):
+    """The armed triangle budget was hit — the candidate meshes pathologically.
+
+    Raised instead of letting the refinement cascade: an eval this size could
+    not have finished inside the optimizer's subprocess timeout anyway, so the
+    candidate is rejected in seconds, counted, and named — not silently burned
+    as a 300 s timeout."""
+
+
+def set_tri_budget(n: Optional[int]) -> None:
+    """Arm (int) or disarm (None/0) the process-scoped triangle budget."""
+    _TRI_BUDGET["v"] = int(n) if n else None
+
+
+def tri_budget() -> Optional[int]:
+    return _TRI_BUDGET["v"]
+
+
+def _steiner_cap_truncated(A: Dict, out: Dict, area: float) -> bool:
+    """Did a Steiner-CAPPED Triangle run stop BEFORE meeting its constraints?
+
+    Counting the points in the output cannot answer this.  Triangle spends its
+    -S budget on REJECTED insertions too (a circumcentre that encroaches on a
+    segment is discarded and the segment split instead), so when the cap binds
+    the output holds fewer added points than the cap — measured on the
+    cascading 10x10 square: 377/500, 847/1000, 2989/5000, 4551/7921.  An
+    `added >= cap` test therefore almost never fires, and the capped, HALF-
+    REFINED mesh is returned as if it were fine — the opposite of what the
+    fence is for.
+
+    What does answer it, exactly and independently of the input: a Triangle run
+    that finished satisfies its own max-area constraint on EVERY triangle; a
+    truncated one leaves triangles far above it (same square: max element area
+    25 mm^2 against a 0.01 mm^2 target).  So compare each triangle against the
+    area target it was meshed under — the per-region column 4 when the caller
+    passed `regions` (`Aa`), else the global `area` (`a<area>`).  Triangles in
+    no declared region, or in a region asking for area <= 0, are unconstrained
+    and are skipped.
+    """
+    T = np.asarray(out.get("triangles"), np.int64)
+    if T.size == 0:
+        return False
+    V = np.asarray(out.get("vertices"), float)
+    p = V[T]
+    a = 0.5 * np.abs((p[:, 1, 0] - p[:, 0, 0]) * (p[:, 2, 1] - p[:, 0, 1])
+                     - (p[:, 2, 0] - p[:, 0, 0]) * (p[:, 1, 1] - p[:, 0, 1]))
+    regions = A.get("regions")
+    if regions is None or not len(regions):
+        lim = np.full(len(T), float(area))
+    else:
+        attrs = out.get("triangle_attributes")
+        if attrs is None:
+            return False                      # cannot tell → never false-reject
+        marker = np.asarray(attrs, float)[:, 0]
+        # marker -> its target area; a marker seeded twice with different areas
+        # takes the LOOSEST, so an ambiguity can only ever spare a candidate.
+        tgt: Dict[float, float] = {}
+        for row in np.asarray(regions, float):
+            m, ta = float(row[2]), float(row[3])
+            tgt[m] = max(tgt.get(m, 0.0), ta)
+        lim = np.array([tgt.get(float(m), 0.0) for m in marker], float)
+        free = lim <= 0.0                     # unconstrained region
+        lim[free] = np.inf
+    # 2 % slack absorbs the float arithmetic; a truncated mesh misses by orders
+    # of magnitude, never by percent.
+    return bool(np.any(a > lim * 1.02))
+
+
 def _cell_area(edge_mm: float) -> float:
     """Target CDT cell area (mm^2) for a requested triangle EDGE length (mm):
     the equilateral relation area = 0.433*L^2.
@@ -404,6 +496,30 @@ def _triangulate(V, S, area: float, quality: int = _Q, hole: bool = True,
         return _repair_slivers(V0, T0, n_fixed=len(V), in_V=V, in_S=S, n_iter=60)
 
     _q = "" if quality is None else f"q{int(quality)}"
+    _cap = _TRI_BUDGET["v"]
+    if _cap and _q:
+        # Armed (optimizer eval subprocess): run the SAME quality refinement
+        # under a Steiner cap so a cascade terminates promptly instead of
+        # building 10^6 triangles.  ~2 triangles per point → capping the added
+        # points at budget/2 caps the triangle count at ~the budget.  A mesh
+        # that needs fewer points than the cap is bit-identical to the unarmed
+        # run; one that hits the cap was truncated mid-refinement — it would
+        # have blown past the budget, so reject it rather than solve on a
+        # half-refined mesh that matches nothing the Simulation tab would build.
+        _s = max(1000, int(_cap) // 2)
+        out = _tri.triangulate(A, f"p{_q}{_tail}S{_s}{_Y}")
+        Vo = np.asarray(out["vertices"], float)
+        To = np.asarray(out["triangles"], np.int64)
+        if _steiner_cap_truncated(A, out, area):
+            raise MeshBudgetExceeded(
+                "mesh budget: quality meshing of this cross-section hit the "
+                "{}-point Steiner cap ({} triangles and still refining; budget "
+                "{} triangles for the whole mesh). A feature of this candidate "
+                "is too thin for the mesher to resolve economically — an eval "
+                "this size cannot finish inside the optimizer's per-candidate "
+                "time cap, so it is rejected before any FEM time is spent."
+                .format(_s, len(To), int(_cap)))
+        return Vo, To
     out = _tri.triangulate(A, f"p{_q}{_tail}{_Y}")
     return (np.asarray(out["vertices"], float),
             np.asarray(out["triangles"], np.int64))
@@ -1230,6 +1346,11 @@ def geo_mesh_halves(p: Dict, polys: Dict, outer_air_factor: float = 1.2,
             log.info("geo tile: stator %d x pair-cell(%dtri) = %dtri, rotor "
                      "%d x cell(%dtri) = %dtri (1/%d)", _n_pairs // _ns,
                      len(Tc), len(Ts), _n_poles // _ns, len(Tcr), len(Tr), _ns)
+        except MeshBudgetExceeded:
+            # The whole-wedge fallback re-runs the SAME refinement on the same
+            # geometry — it would hit the same cap after burning another capped
+            # run.  The budget verdict is about the geometry, not the tiling.
+            raise
         except Exception as _te:
             log.warning("geo tile failed (%s) — whole-wedge fallback", _te)
             Vs = None
@@ -1248,6 +1369,17 @@ def geo_mesh_halves(p: Dict, polys: Dict, outer_air_factor: float = 1.2,
                                        r2_band=r2_band, part_area=part_area)
             Vr, Tr = _mesh_rotor_half(polys, r_od, r_sh, n_slip, area, air_mm, _Q,
                                       r1_band=r1_band, part_area=part_area)
+    # Armed budget, second gate: the per-cell Steiner cap bounds each Triangle
+    # RUN, but tiling multiplies a cell by its copy count and the two halves
+    # add — the number the FEM will actually assemble is checked here, before
+    # tagging/solving pays for it.
+    _cap = _TRI_BUDGET["v"]
+    if _cap and len(Ts) + len(Tr) > int(_cap):
+        raise MeshBudgetExceeded(
+            "mesh budget: {} stator + {} rotor triangles exceed the {}-triangle "
+            "budget. A mesh this size cannot finish inside the optimizer's "
+            "per-candidate time cap, so the candidate is rejected before any "
+            "FEM time is spent.".format(len(Ts), len(Tr), int(_cap)))
     # Prune UNREFERENCED vertices (Triangle keeps every input point in the output
     # even when no triangle uses it — seen on the sector cut chains in the outer
     # air).  An unreferenced vertex is a zero stiffness row; on the 200 mm they

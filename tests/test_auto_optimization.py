@@ -366,6 +366,53 @@ class TestMeshBudgetFence:
         from motor_ai_sim.optimization.refine_proc import _MESH_TRI_BUDGET
         assert _MESH_TRI_BUDGET >= 10 * 40_000
 
+    def test_counting_output_points_cannot_detect_the_cap(self):
+        """Why the fence tests constraint satisfaction, not the point count.
+
+        The first cut of this fence asked `added_points >= steiner_cap`.  It
+        never fired: Triangle spends its -S budget on REJECTED insertions too,
+        so a run that truly ran out of budget still reports FEWER added points
+        than the cap.  Pinning that here because the fence looks obviously
+        correct written the naive way, and silently returns half-refined meshes
+        when it is.
+        """
+        import numpy as np
+        import triangle as _tri
+        V, S = self._square()
+        A = dict(vertices=V, segments=S)
+        capped = _tri.triangulate(A, "pq20a0.0100S1000")
+        added = len(capped["vertices"]) - len(V)
+        assert added < 1000                      # the naive test would pass it
+        # ...yet the run plainly did not finish: elements far over the target.
+        P = np.asarray(capped["vertices"], float)[
+            np.asarray(capped["triangles"], np.int64)]
+        ar = 0.5 * np.abs((P[:, 1, 0] - P[:, 0, 0]) * (P[:, 2, 1] - P[:, 0, 1])
+                          - (P[:, 2, 0] - P[:, 0, 0]) * (P[:, 1, 1] - P[:, 0, 1]))
+        assert ar.max() > 10 * 0.01
+        from motor_ai_sim.simulation import geo_mesh as G
+        assert G._steiner_cap_truncated(A, capped, 0.01) is True
+
+    def test_a_finished_run_is_not_called_truncated(self):
+        # The other half: a cap that is never reached must read as CLEAN, both
+        # for a global max-area and for the per-region ('Aa') form every
+        # production call site uses.
+        import numpy as np
+        import triangle as _tri
+        from motor_ai_sim.simulation import geo_mesh as G
+        V, S = self._square()
+        A = dict(vertices=V, segments=S)
+        done = _tri.triangulate(A, "pq20a0.0100S1000000")
+        assert G._steiner_cap_truncated(A, done, 0.01) is False
+        # per-region: inner square fine, outer coarse
+        V2 = np.array([[0., 0.], [10., 0.], [10., 10.], [0., 10.],
+                       [1., 1.], [4., 1.], [4., 4.], [1., 4.]])
+        S2 = np.array([[0, 1], [1, 2], [2, 3], [3, 0],
+                       [4, 5], [5, 6], [6, 7], [7, 4]])
+        A2 = dict(vertices=V2, segments=S2,
+                  regions=np.array([[2., 2., 1., 0.05], [8., 8., 2., 1.0]]))
+        o2 = _tri.triangulate(A2, "pq20AaS1000000")
+        assert G._steiner_cap_truncated(A2, o2, 0.05) is False
+
     def test_area_only_meshing_is_exempt(self):
         # Area-only CDT (no quality flag) cannot cascade — the rotor fallback
         # path relies on it building unconditionally.  The cap must not apply.

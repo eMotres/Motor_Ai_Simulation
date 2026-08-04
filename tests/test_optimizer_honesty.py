@@ -100,6 +100,99 @@ def test_converged_eval_carries_the_stamp(fake_solver):
     assert res["nonlinear_tol"] == pytest.approx(1e-4, rel=1e-6)
 
 
+# ── the Compare row and the Simulation card must use ONE convention ─────────
+# Two numbers on every optimizer result were computed the way the Simulation
+# card computed them BEFORE 2026-08-04, and the card moved (bef2ed2 KV,
+# e08f4af efficiency) while this file could not be touched.  A design that is
+# picked in Optimize and re-run in Simulation has to report the same η and the
+# same KV, or the two tabs disagree about the machine they both just solved.
+
+_OMEGA = 2.0 * 3.141592653589793 * CFG["simulation"]["rpm"] / 60.0
+
+
+def test_efficiency_divides_by_every_loss_the_row_reports(fake_solver):
+    """η = T·ω / (T·ω + Σ losses) — reproducible from the row by hand.
+
+    It used to be P_mech_avg_W / P_elec_in_W.  The solved terminal power carries
+    only the losses that live INSIDE the field solve, so it flattered every
+    candidate by the post-processed remainder (analytic iron + end-winding
+    copper) — and it flattered them UNEQUALLY, because that remainder is a
+    different share of the total on a machine with more iron.
+    """
+    raw = _raw(converged=True)
+    # separated on purpose: the old formula would read 0.95 here, the new one
+    # ~0.65, so this cannot pass by coincidence.
+    raw.update({"P_elec_in_W": 200.0, "P_mech_avg_W": 190.0})
+    fake_solver(raw)
+    res = refine_proc.run_one({}, current_a=60.0, steps=12, coil_temp_c=120.0)
+    pmech = 0.4174 * _OMEGA
+    ploss = 91.2 + 3.12                     # cu + fe (+ mag/shaft, both 0 here)
+    assert res["efficiency"] == pytest.approx(pmech / (pmech + ploss), rel=1e-4)
+    assert res["P_loss_total_W"] == pytest.approx(ploss, abs=0.05)
+    # …and specifically NOT the old solved-terminal ratio.
+    assert abs(res["efficiency"] - 190.0 / 200.0) > 0.2
+
+
+def test_mech_power_is_torque_times_speed_and_the_balance_stays_as_a_diagnostic(
+        fake_solver):
+    """The row's power tile IS its torque tile times speed.
+
+    η above is only reproducible from the row if the power in it is the same
+    power η divided by.  The solver's energy-balanced P_mech_avg_W survives
+    beside it, named for what it is."""
+    fake_solver(_raw(converged=True))
+    res = refine_proc.run_one({}, current_a=60.0, steps=12, coil_temp_c=120.0)
+    pmech = 0.4174 * _OMEGA
+    assert res["P_mech_W"] == pytest.approx(pmech, abs=0.05)
+    assert res["P_mech_balance_W"] == pytest.approx(165.0, abs=0.05)
+    assert res["P_elec_in_solved_W"] == pytest.approx(260.0, abs=0.05)
+    # the row reproduces its own efficiency (to the rounding it is stored at)
+    assert res["efficiency"] == pytest.approx(
+        res["P_mech_W"] / (res["P_mech_W"] + res["P_loss_total_W"]), rel=5e-3)
+    assert res["power_per_mass_W_kg"] == pytest.approx(
+        res["P_mech_W"] / res["mass_total_kg"], rel=5e-3)
+
+
+def test_kv_divides_by_the_line_voltage_PEAK_the_row_shows(fake_solver):
+    """KV = rpm / V_line_peak — max/max, the convention of the cell beside it.
+
+    It divided by the FUNDAMENTAL line-to-line RMS, which reads ~√2 higher and
+    contradicted a by-hand rpm / V_LINE PEAK check off the same row.  With no
+    per-phase waveforms in the result the line peak falls back to √3·V_peak,
+    which is what this synthetic dict exercises."""
+    fake_solver(_raw(converged=True))
+    res = refine_proc.run_one({}, current_a=60.0, steps=12, coil_temp_c=120.0)
+    v_line_peak = 7.83 * 3 ** 0.5
+    assert res["V_line_peak_V"] == pytest.approx(v_line_peak, abs=0.05)
+    assert res["KV_rpm_per_V_line"] == pytest.approx(
+        CFG["simulation"]["rpm"] / v_line_peak, rel=1e-3)
+    # the row reproduces its own KV (to the 0.1 V the peak is stored at)
+    assert res["KV_rpm_per_V_line"] == pytest.approx(
+        CFG["simulation"]["rpm"] / res["V_line_peak_V"], rel=5e-3)
+
+
+def test_kv_uses_the_measured_line_waveform_when_the_run_carries_one(fake_solver):
+    """The real path: triplens cancel line-to-line, so the measured |V_A−V_B|
+    peak is BELOW √3·V_phase_peak and KV must be computed on the measured one."""
+    import numpy as np
+    n = 360                      # fine enough that the sampled peaks ARE the peaks
+    t = np.arange(n) / n * 2 * np.pi
+    raw = _raw(converged=True)
+    # a phase waveform with a fat triplen — the case the √3 shortcut gets wrong
+    va = 7.0 * np.sin(t) - 2.0 * np.sin(3 * t)
+    vb = 7.0 * np.sin(t - 2 * np.pi / 3) - 2.0 * np.sin(3 * t)
+    vc = 7.0 * np.sin(t + 2 * np.pi / 3) - 2.0 * np.sin(3 * t)
+    raw.update({"V_A": va.tolist(), "V_B": vb.tolist(), "V_C": vc.tolist(),
+                "V_peak": float(np.max(np.abs(va)))})
+    fake_solver(raw)
+    res = refine_proc.run_one({}, current_a=60.0, steps=12, coil_temp_c=120.0)
+    want = float(max(np.max(np.abs(p)) for p in (va - vb, vb - vc, vc - va)))
+    assert res["V_line_peak_V"] == pytest.approx(want, abs=0.05)
+    assert want < 3 ** 0.5 * raw["V_peak"], "the triplen has to actually cancel"
+    assert res["KV_rpm_per_V_line"] == pytest.approx(
+        CFG["simulation"]["rpm"] / want, rel=1e-3)
+
+
 def test_surrogate_reproduces_its_anchor():
     """The four calibration scalars are DERIVED from the pinned FEM cases, so at
     the anchor the surrogate must land ON the pins — not near them.

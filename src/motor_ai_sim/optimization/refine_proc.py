@@ -246,12 +246,20 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
     cu_dc = float(d.get("P_cu_dc_W", cu - cu_ac))
     ploss = cu + fe + mg + sh
     pmech = Tavg * omega
-    # Efficiency EXACTLY as the Simulation reports it (P_mech_avg / P_elec_in) when the
-    # solver gives the power split, so the optimizer's η matches the Simulation tab to
-    # the digit; fall back to P_mech / (P_mech + P_loss) only if those aren't present.
+    # Efficiency EXACTLY as the Simulation card reports it (e08f4af, 2026-08-04):
+    # shaft out over shaft out + EVERY loss reported, with shaft out = T_avg·ω so
+    # the row's own torque and power tiles reproduce its η by hand.  It used to
+    # divide P_mech_avg_W by the solved terminal power P_elec_in_W, and that is
+    # optimistic by construction: the 2-D circuit carries only the losses that
+    # live INSIDE the field solve (active-length copper + solved eddy), while the
+    # analytic iron loss and the end-winding copper are post-processed and never
+    # cross its terminals — measured 295 W of the 150 mm card's 500 W, i.e. η
+    # read 97.81 % where the same numbers say 96.34 %.  Compare rows and the
+    # Simulation card are read against each other; two conventions is one too
+    # many.  The solver's energy-balanced numbers stay below as diagnostics.
     _pe = float(d.get("P_elec_in_W", 0.0) or 0.0)
     _pm = float(d.get("P_mech_avg_W", 0.0) or 0.0)
-    eff = (_pm / _pe) if (_pe > 0.0 and _pm > 0.0) else (pmech / (pmech + ploss) if pmech > 0 else 0.0)
+    eff = (pmech / (pmech + ploss)) if (pmech > 0 and (pmech + ploss) > 0) else 0.0
     mass = float(_masses(build_params(geo), geo)["total"])
     # Voltage waveform quality — SAME helper as the Simulation summary, so the
     # optimizer's THD is byte-identical to the Simulation tab's.
@@ -273,7 +281,6 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         _npar = max(1, int((cfg.get("winding", {}) or {}).get("n_parallel", 1) or 1))
     _a_cond_mm2 = float(geo.get("wire_width", 0.0)) * float(geo.get("wire_height", 0.0))
     j_coil = (float(current_a) / _npar / _a_cond_mm2) if _a_cond_mm2 > 1e-9 else 0.0
-    kv_line = (rpm / (vh["V1_LL_V"] / math.sqrt(2))) if vh.get("V1_LL_V", 0.0) > 1 else 0.0
     # Peak LINE voltage — the DC-bus sizing number.  Taken from the actual
     # line-to-line waveforms like the Simulation summary does, falling back to the
     # sqrt(3)*V_phase_peak identity only when the phase waveforms aren't returned.
@@ -285,6 +292,13 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         v_line_peak = float(max(np.max(np.abs(p)) for p in (_va - _vb, _vb - _vc, _vc - _va)))
     else:
         v_line_peak = float(d["V_peak"]) * math.sqrt(3)
+    # KV = rpm / V_line_peak — the max/max convention the Simulation tile and the
+    # user's Ansys table use (bef2ed2, 2026-08-04).  It divided by the
+    # FUNDAMENTAL line-to-line rms, which reads ~sqrt(2) higher and contradicted
+    # a by-hand rpm / V_LINE PEAK check off the cell beside it (49.3 vs 34.7 on
+    # the 150 mm at 4000 rpm).  Computed HERE, below v_line_peak, because that is
+    # the number it now needs — it used to sit above the block that measures it.
+    kv_line = (rpm / v_line_peak) if v_line_peak > 1.0 else 0.0
     return {
         "T_em_Nm": round(Tavg, 3), "efficiency": round(eff, 5),
         "torque_per_mass_Nm_kg": round(Tavg / mass, 4) if mass > 0 else 0.0,
@@ -297,15 +311,20 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         "P_core_W": round(fe, 1),                 # laminated iron
         "P_stranded_W": round(cu, 1),             # copper
         "P_solid_W": round(mg + sh, 1),           # magnet + shaft eddy
-        # SHAFT power, defined exactly as the Simulation summary defines it
-        # (P_elec_in - all losses, energy-conserving).  `pmech` above is the
-        # AIRGAP product T*omega — the two differ by the rotor losses plus the
-        # energy-balance residual, so reporting the airgap figure under the name
-        # P_mech_W produced Compare rows whose power contradicted their torque.
-        "P_mech_W": round(_pm if _pm > 0.0 else pmech, 1),
+        # MECHANICAL power = T_avg·ω, the same convention the Simulation card
+        # adopted in e08f4af — the row's power tile IS its torque tile times
+        # speed, so the two agree by inspection and η above is reproducible from
+        # the row.  It used to report the solver's energy-balanced
+        # P_mech_avg_W (P_elec_in − all losses); that number stays, below, as the
+        # diagnostic it is.  The pair differ by the energy-balance residual
+        # (~1 % on the 150 mm), which is exactly the gap that made a Compare row
+        # contradict itself once η stopped dividing by the terminal power.
+        "P_mech_W": round(pmech, 1),
+        "P_mech_balance_W": round(_pm, 1),
+        "P_elec_in_solved_W": round(_pe, 1),
         "J_coil_A_per_mm2": round(j_coil, 1),
         "KV_rpm_per_V_line": round(kv_line, 2),
-        "power_per_mass_W_kg": round((_pm if _pm > 0.0 else pmech) / mass, 1) if mass > 0 else 0.0,
+        "power_per_mass_W_kg": round(pmech / mass, 1) if mass > 0 else 0.0,
         "loss_density_W_kg": round(ploss / mass, 1) if mass > 0 else 0.0,
         "mass_total_kg": round(mass, 3), "V_peak": round(float(d["V_peak"]), 1),
         "V_line_peak_V": round(v_line_peak, 1),

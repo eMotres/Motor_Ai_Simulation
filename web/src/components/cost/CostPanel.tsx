@@ -76,7 +76,7 @@ const CostPanel: React.FC = () => {
       <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1.5, mb: 0.5, flexWrap: 'wrap' }}>
         <Typography sx={{ fontSize: 20, fontWeight: 800, color: 'var(--text-0)' }}>Material Cost</Typography>
         <Typography sx={{ fontSize: 12, color: 'var(--text-3)', fontFamily: 'monospace' }}>via modules: geometry.2d → cost</Typography>
-        <HelpTip title="Active-material cost of the configured motor: region area × stack length × density × unit price, plus a flat labor line. Computed through the modular kernel (no FEM) — it re-estimates as the geometry or prices change." />
+        <HelpTip title="Active-material cost of the configured motor: component mass × unit price, plus the slot liner and a flat labor line. The masses are the SAME ones the Simulation card and torque-per-mass use — CAD sections × stack × lamination k_f × the density of the material each part is assigned, with the copper billed at its end-winding factor k_end. Computed through the modular kernel (no FEM) — it re-estimates as the geometry or prices change." />
         <Box sx={{ flex: 1 }} />
         <Button size="small" variant="contained" onClick={run} disabled={busy} sx={{ textTransform: 'none' }}>
           {busy ? 'Computing…' : 'Re-estimate'}

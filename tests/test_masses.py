@@ -222,3 +222,128 @@ def test_ansys_cross_check_150mm(m150):
     assert ansys_basis == pytest.approx(3.0975, rel=0.03)
     # and our number sits below it by the lamination + density difference only
     assert 0.95 < m150["active"] / 3.0975 < 1.0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The COST tab used to carry a SECOND mass model
+# ─────────────────────────────────────────────────────────────────────────────
+# ``modules/cost.py`` had its own density table (copper 8960 / magnet 7500 /
+# steel 7650 / shaft 7850) applied to each GeometryIR region's area × stack.
+# Three things that model could not know, all of which move a price:
+#   * end windings — the copper anyone BUYS is k_end × the in-slot copper;
+#   * the lamination fill factor — a laminated core is k_f steel by volume;
+#   * which material a part is actually ASSIGNED (the shaft is aluminium on both
+#     live machines, and was priced as 7850 kg/m³ steel).
+# It is folded into ``compute_masses`` now.  These tests pin that the fold is
+# EXACT — not "close" — because two mass models drifting apart is precisely the
+# failure the single source exists to prevent.
+
+def _cost_masses(G):
+    """The Cost tab's priced masses for geometry ``G``, through the real
+    geometry.2d → cost handoff (a GeometryIR, not a hand-made dict)."""
+    from motor_ai_sim.modules.cost import masses_from_geometry_ir
+    from motor_ai_sim.modules.geometry_2d.provider import AeroStatorGeometry2D
+    gir = AeroStatorGeometry2D().build(dict(G))
+    return masses_from_geometry_ir(gir), gir
+
+
+def _canonical_masses(gir):
+    """``compute_masses`` on the SAME geometry the GeometryIR was built from —
+    the numbers the Simulation card, torque-per-mass and every optimizer use."""
+    from motor_ai_sim.config import get_config
+    geo = dict(gir.parameters)
+    p = params_from_config(geo_override=geo)
+    g = merge_geo_override(dict(get_config().get("geometry", {}) or {}), geo)
+    return compute_masses(p, g)
+
+
+@pytest.mark.parametrize("G", [G150, G40], ids=["150mm", "40mm"])
+def test_cost_masses_are_the_compute_masses_masses(G):
+    """Every priced bucket IS a compute_masses component, to the kilogram it is
+    rounded at.  steel = stator + rotor; there is no fifth number anywhere."""
+    got, gir = _cost_masses(G)
+    m = _canonical_masses(gir)
+    assert got["steel"] == pytest.approx(m["stator"] + m["rotor"], abs=5e-5)
+    assert got["copper"] == pytest.approx(m["cu"], abs=5e-5)
+    assert got["magnet"] == pytest.approx(m["mag"], abs=5e-5)
+    assert got["shaft"] == pytest.approx(m["shaft"], abs=5e-5)
+    # …and the four of them are the whole machine, not a subset of it
+    structural = got["steel"] + got["copper"] + got["magnet"] + got["shaft"]
+    assert structural == pytest.approx(m["total"], abs=2e-4)
+
+
+@pytest.mark.parametrize("G", [G150, G40], ids=["150mm", "40mm"])
+def test_the_priced_copper_is_the_copper_with_its_end_turns_on(G):
+    """The old model billed the in-slot copper only — 29 % short on the 150 mm
+    and 42 % on the 40 mm, on the single most price-sensitive bucket after the
+    magnets."""
+    got, gir = _cost_masses(G)
+    m = _canonical_masses(gir)
+    assert m["k_end"] > 1.3, "this machine HAS end turns — the test is vacuous otherwise"
+    in_slot = m["A_cu"] * float(params_from_config(geo_override=dict(gir.parameters))
+                                .stack_length) * m["RHO"]["cu"]
+    assert got["copper"] == pytest.approx(in_slot * m["k_end"], rel=1e-3)
+    assert got["copper"] > in_slot * 1.25
+
+
+@pytest.mark.parametrize("G", [G150, G40], ids=["150mm", "40mm"])
+def test_the_priced_shaft_is_the_material_the_config_assigns(G):
+    """Not a 7850 kg/m³ literal.  On both live machines the shaft is aluminium,
+    so the old table over-priced its mass by ~2.9×."""
+    got, gir = _cost_masses(G)
+    m = _canonical_masses(gir)
+    rho = m["RHO"]["al"]
+    assert got["shaft"] == pytest.approx(m["A_shaft"] * float(
+        params_from_config(geo_override=dict(gir.parameters)).stack_length) * rho,
+        abs=5e-5)
+    assert rho < 7000.0, "the assigned shaft material is not steel on this machine"
+
+
+def test_the_cost_module_no_longer_carries_a_density_table():
+    """A private density table is a second mass model waiting to drift.  The
+    insulator densities stay — they come from the materials LIBRARY by name, and
+    no EM mass model carries a slot liner."""
+    import inspect
+    from motor_ai_sim.modules import cost as _cost
+    assert not hasattr(_cost, "_DENSITY")
+    assert not hasattr(_cost, "_ROLE_BUCKET")
+    # Scanned as CODE, not as text — the numbers are named in the docstring on
+    # purpose, and a test that cannot tell a literal from its own history is not
+    # a test.  Nothing executable in this module may carry a metal density: the
+    # only densities left are the insulator library lookup and its 1400 fallback.
+    import ast
+    tree = ast.parse(inspect.getsource(_cost))
+    nums = [n.value for n in ast.walk(tree)
+            if isinstance(n, ast.Constant) and isinstance(n.value, (int, float))
+            and not isinstance(n.value, bool)]
+    assert not [v for v in nums if 2000.0 <= float(v) <= 20000.0], (
+        "a metal-density literal is back in modules/cost.py: "
+        + str([v for v in nums if 2000.0 <= float(v) <= 20000.0]))
+
+
+@pytest.mark.parametrize("G", [G150, G40], ids=["150mm", "40mm"])
+def test_the_slot_liner_is_still_measured_on_the_geometry(G):
+    """The one mass this module SHOULD own: a purchased insulator, priced by
+    material name, that no EM mass model carries."""
+    got, _ = _cost_masses(G)
+    liners = {k: v for k, v in got.items()
+              if k not in ("steel", "copper", "magnet", "shaft")}
+    assert liners, "the slot liner disappeared with the density table"
+    assert all(v > 0.0 for v in liners.values())
+
+
+def test_an_explicit_stack_length_reaches_the_mass_model():
+    """``length_mm`` is the caller quoting a different machine length.  It used
+    to scale only the region integral; it has to scale the masses."""
+    from motor_ai_sim.modules.cost import masses_from_geometry_ir
+    from motor_ai_sim.modules.geometry_2d.provider import AeroStatorGeometry2D
+    gir = AeroStatorGeometry2D().build(dict(G150))
+    L = float(G150["motor_length"])
+    a = masses_from_geometry_ir(gir, length_mm=L)
+    b = masses_from_geometry_ir(gir, length_mm=2.0 * L)
+    for k in ("steel", "magnet", "shaft"):
+        assert b[k] == pytest.approx(2.0 * a[k], rel=1e-3), k
+    # copper is NOT exactly 2x: the end turns do not grow with the stack, so
+    # doubling the stack is LESS than doubling the copper.  That the two differ
+    # at all is the end-winding factor being alive in the price.
+    assert a["copper"] * 1.5 < b["copper"] < a["copper"] * 2.0

@@ -405,6 +405,23 @@ def test_axial_permeability_of_a_stack(section, coarse2d):
     coincide when there is no insulation.  At k_f = 1 the model must collapse
     onto the isotropic one exactly — not approximately — because that is the
     model every earlier revision solved.
+
+    "Exactly" is asserted where it is exact: on the ASSEMBLED SYSTEM.  ``mu_el``,
+    ``mu_z_el`` and ``M_el`` are the whole input to ``_stiff``/``_magsrc``, so
+    equal arrays on one mesh and one basis mean a bit-identical K and f — which
+    was checked directly while diagnosing this (K.data, f, and the condensed
+    (A, b) all ``np.array_equal`` True).
+
+    It is NOT asserted on the two solutions, and that is a fix rather than a
+    weakening.  This test used to demand ``np.allclose(same.phi, ref.phi,
+    rtol=0, atol=0)``, and MKL PARDISO does not offer bit-reproducibility: it
+    factorises on however many threads it picks (8 of 12 here) and the reduction
+    order rides the thread schedule.  Measured, solving the SAME condensed
+    system twice back to back: 8.9e-14 apart on a field of 33.3 — 2.7e-15
+    relative, ~12 ulp — and exactly 0 with MKL_NUM_THREADS=1.  So the old
+    assertion passed on an idle machine and failed under concurrent load,
+    reporting a thread schedule as a physics regression.  The tolerance below is
+    four orders above that noise and eleven below anything the model could do.
     """
     from motor_ai_sim.simulation.static3d.solver import MU0, axial_mu
 
@@ -435,8 +452,19 @@ def test_axial_permeability_of_a_stack(section, coarse2d):
     lam1 = [type(r)(name=r.name, elements=r.elements, mu_r=r.mu_r, M=r.M,
                     bh_curve=r.bh_curve, stack_kf=1.0) for r in regs]
     same = solve_static3d(tm.mesh, lam1, order=1)
-    assert same.mu_z_el is None
-    assert np.allclose(same.phi, ref.phi, rtol=0, atol=0)
+    # the anisotropic branch must not even be entered...
+    assert same.mu_z_el is None and ref.mu_z_el is None
+    # ...and the system it assembles instead must be the isotropic one, exactly
+    assert np.array_equal(same.mu_el, ref.mu_el)
+    assert np.array_equal(same.M_el, ref.M_el)
+    # a NaN field would satisfy any "identical" test vacuously; say it outright
+    assert np.all(np.isfinite(ref.phi)) and np.all(np.isfinite(same.phi))
+    scale = float(np.max(np.abs(ref.phi)))
+    assert scale > 0.0
+    assert np.allclose(same.phi, ref.phi, rtol=0, atol=1e-11 * scale), (
+        f"max |dphi| = {float(np.max(np.abs(same.phi - ref.phi))):.3e} on a "
+        f"field of {scale:.3e} — the k_f = 1 path is solving a different system, "
+        f"not merely summing it in a different order")
 
 
 def test_the_converged_2d_leg_is_the_shipped_weak_form(section, coarse2d, geo):
@@ -523,6 +551,90 @@ def test_passport_fingerprint_matches_the_project_helper(section, geo):
     matched against a design later."""
     from motor_ai_sim.routes.simulation import _geometry_fingerprint
     assert section.fingerprint == _geometry_fingerprint(geo)
+
+
+# --------------------------------------------------------------------------
+# the linear solver's guard
+# --------------------------------------------------------------------------
+
+class TestLinearSolverGuard:
+    """A solve that returns NaN has not solved anything.
+
+    ``PyPardisoSolver.solve``'s own finiteness check is commented out upstream,
+    and its factorization is CACHED on a module-global solver keyed by matrix
+    content — so one damaged factorization is handed to every later solve of the
+    same matrix.  That is why the Stage-A stack test's symptom was NaN out of
+    BOTH solves of a pair and never just one.  These pin the guard that turns
+    that into an immediate, readable failure.
+    """
+
+    @staticmethod
+    def _spd(n=40):
+        import scipy.sparse as sp
+        rng = np.random.default_rng(0)
+        A = sp.random(n, n, density=0.05, format="csr", random_state=1)
+        A = (A + A.T + sp.eye(n) * 10.0).tocsr()
+        A.sort_indices()
+        return A, rng.standard_normal(n)
+
+    def test_a_clean_system_is_solved_and_returned(self):
+        from motor_ai_sim.simulation.static3d.solver import _linear_solver
+        A, b = self._spd()
+        _name, fac = _linear_solver()
+        x = fac(A)(b)
+        assert np.all(np.isfinite(x))
+        assert np.allclose(A @ x, b, rtol=1e-8, atol=1e-10)
+
+    def test_a_non_finite_solution_raises_with_the_system_described(self):
+        from motor_ai_sim.simulation.static3d import solver as SOL
+        A, b = self._spd()
+        with pytest.raises(RuntimeError) as e:
+            SOL._finite_or_raise(np.full(A.shape[0], np.nan), A, "fake")
+        msg = str(e.value)
+        assert "non-finite" in msg and str(A.shape[0]) in msg
+        assert str(A.nnz) in msg
+
+    def test_a_transient_nan_is_retried_on_a_fresh_factorization(self,
+                                                                 monkeypatch):
+        """One bad factorization must not be the answer AND must not be kept.
+
+        The retry is what separates "MKL had a bad moment" from "this matrix is
+        singular": the second attempt runs against factors built from scratch,
+        and if it fails the same way the guard raises.
+        """
+        pytest.importorskip("pypardiso")
+        from motor_ai_sim.simulation.static3d import solver as SOL
+        A, b = self._spd()
+        real = __import__("pypardiso").spsolve
+        calls = {"n": 0}
+        dropped = {"n": 0}
+
+        def _flaky(Ac, bb, *a, **k):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return np.full(Ac.shape[0], np.nan)
+            return real(Ac, bb)
+
+        monkeypatch.setattr("pypardiso.spsolve", _flaky)
+        monkeypatch.setattr(SOL, "_drop_pardiso_factorization",
+                            lambda: dropped.__setitem__("n", dropped["n"] + 1))
+        _name, fac = SOL._linear_solver()
+        x = fac(A)(b)
+        assert calls["n"] == 2, "the NaN was accepted instead of retried"
+        assert dropped["n"] == 1, "the damaged factorization was left cached"
+        assert np.allclose(A @ x, b, rtol=1e-8, atol=1e-10)
+
+    def test_a_persistent_nan_is_not_papered_over_by_the_retry(self,
+                                                               monkeypatch):
+        pytest.importorskip("pypardiso")
+        from motor_ai_sim.simulation.static3d import solver as SOL
+        A, b = self._spd()
+        monkeypatch.setattr("pypardiso.spsolve",
+                            lambda Ac, bb, *a, **k: np.full(Ac.shape[0], np.inf))
+        monkeypatch.setattr(SOL, "_drop_pardiso_factorization", lambda: None)
+        _name, fac = SOL._linear_solver()
+        with pytest.raises(RuntimeError, match="non-finite"):
+            fac(A)(b)
 
 
 # --------------------------------------------------------------------------

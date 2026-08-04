@@ -314,26 +314,101 @@ class Solution:
         return float(((B * n).sum(axis=0) * fb.dx).sum())
 
 
+def _drop_pardiso_factorization() -> None:
+    """Forget pypardiso's cached factorization of whatever it last solved.
+
+    ``pypardiso.spsolve`` is backed by ONE module-global ``PyPardisoSolver`` and
+    it caches the factorization keyed on the matrix CONTENT: a second solve of a
+    numerically identical matrix skips phase 12 and runs phase 33 against the
+    factors the first solve produced.  That is a large speed-up and a real
+    hazard — if a factorization comes back damaged, every later solve of the
+    same matrix inherits the damage instead of re-computing it.  Dropping the
+    cache is what makes the retry below an actual second attempt.
+    """
+    try:
+        from pypardiso.scipy_aliases import pypardiso_solver as _ps
+        _ps.remove_stored_factorization()
+    except Exception:                                # not installed / renamed
+        pass
+
+
+def _finite_or_raise(x: np.ndarray, A, name: str) -> np.ndarray:
+    """A solve that returns NaN/Inf has not solved anything — say so, loudly.
+
+    ``PyPardisoSolver.solve`` used to check this and the check is COMMENTED OUT
+    upstream ("doesn't work consistently"), so a damaged factorization is handed
+    back as a silent array of NaN.  Downstream that surfaces as an
+    ``np.allclose`` that is False for a reason nobody can read — which is
+    exactly how the Stage-A stack test presented (docs: TASK 43).  Fail here,
+    where the matrix is still in scope and can be described.
+    """
+    x = np.asarray(x)
+    bad = int((~np.isfinite(x)).sum())
+    if bad:
+        raise RuntimeError(
+            f"{name} returned {bad} of {x.size} non-finite entries for a "
+            f"{A.shape[0]}x{A.shape[1]} system with {A.nnz} nonzeros. That is "
+            f"not a solution: either the matrix is singular (an empty row/"
+            f"column, a region with no material, a floating potential with no "
+            f"Dirichlet dof) or the factorization itself failed. It is NOT a "
+            f"result to compare against anything.")
+    return x
+
+
 def _linear_solver():
     """PARDISO if the project's pypardiso is importable, SuperLU otherwise.
 
-    Returns (name, factory) where factory(A) -> solve(b)."""
+    Returns (name, factory) where factory(A) -> solve(b).
+
+    Guarded, because MKL PARDISO here is neither bit-reproducible nor
+    fail-loud, and both bit us (TASK 43):
+
+    * **not bit-reproducible.** MKL runs the factorization on as many threads as
+      it feels like (measured on this machine: ``mkl_get_max_threads`` 12,
+      ``iparm[3]`` 8) and the reduction order follows the thread schedule.
+      Measured on the Stage-A 37k-tet stack: solving the SAME condensed system
+      twice back to back differs by 8.9e-14 absolute on a field of 33.3, i.e.
+      ~12 ulp, 2.7e-15 relative — and by exactly ZERO with MKL_NUM_THREADS=1.
+      So a test asserting two solves are equal to the last BIT is asserting a
+      property of the thread scheduler; under concurrent load the schedule
+      shifts and it fails on a machine where nothing is wrong.  Nothing here
+      pins the thread count (that would cost a large factor on every 3D solve);
+      callers compare fields to a tolerance instead.
+    * **not fail-loud.** See ``_finite_or_raise``.  A NaN out of a damaged
+      factorization is returned silently, and because the factorization is
+      CACHED on the shared global solver it is then reused — which is why the
+      symptom was NaN out of *both* solves of a pair rather than one.  The
+      guard raises, and one retry on a freshly built factorization separates a
+      transient MKL failure from a genuinely singular matrix.
+    """
     try:
         from pypardiso import spsolve as _pspsolve
 
         def _fac(A):
             Ac = A.tocsr()
+            name = "pypardiso(MKL PARDISO)"
 
             def _solve(b):
-                return _pspsolve(Ac, np.asarray(b, dtype=float))
+                bb = np.asarray(b, dtype=float)
+                x = np.asarray(_pspsolve(Ac, bb))
+                if not np.isfinite(x).all():
+                    # Do not let a damaged factorization be served twice.
+                    _drop_pardiso_factorization()
+                    x = np.asarray(_pspsolve(Ac, bb))
+                return _finite_or_raise(x, Ac, name)
             return _solve
         return "pypardiso(MKL PARDISO)", _fac
     except Exception:
         from scipy.sparse.linalg import splu
 
         def _fac(A):
-            lu = splu(A.tocsc())
-            return lu.solve
+            Ac = A.tocsc()
+            lu = splu(Ac)
+
+            def _solve(b):
+                return _finite_or_raise(lu.solve(np.asarray(b, dtype=float)),
+                                        Ac, "scipy.splu(SuperLU)")
+            return _solve
         return "scipy.splu(SuperLU)", _fac
 
 
@@ -517,7 +592,9 @@ def _solve_cg(A, b, tol: float = 1e-10, maxiter: int = 20000):
         x, info = cg(Ac, b, tol=tol, atol=0.0, maxiter=maxiter, M=Mop, callback=_cb)
     if info != 0:
         raise RuntimeError(f"CG did not converge (info={info}, {it[0]} iters)")
-    return f"{name}[{it[0]} it]", x
+    # info == 0 is scipy's word for "the residual test passed"; a breakdown that
+    # produced NaN can satisfy it vacuously.  Same rule as the direct path.
+    return f"{name}[{it[0]} it]", _finite_or_raise(x, Ac, name)
 
 
 # --------------------------------------------------------------------------

@@ -507,6 +507,80 @@ def test_eddy_warmup_leaves_no_start_up_transient_in_the_window(monkeypatch):
         f"{d['eddy_warmup_frames']} warm-up")
 
 
+# ── axial magnet segmentation reaches the magnet eddy loss ──────────────────
+# `magnet_lamination` (axial slice length, mm) reached the CAD, the masses and
+# the geometry validation and stopped there: BOTH routes to the magnet eddy loss
+# are 2-D, i.e. an axially infinite magnet whose induced current never has to
+# turn round.  This is the end-to-end pin that the parameter now MOVES the watts
+# — against the SOLID p2_eddy baseline above, which is the same run at the same
+# settings, so the two numbers are directly comparable and no second solve is
+# needed for the reference.
+
+@pytest.mark.slow
+def test_axial_slices_cut_the_magnet_eddy_loss_by_the_modelled_factor(
+        baseline: Dict[str, Dict[str, float]]):
+    """5 mm slices of this 10 mm stack, against the pinned solid magnet.
+
+    Checks three separate things, because a factor that is merely APPLIED
+    somewhere is not the same as a factor that is applied to the reported watts:
+
+      * the factor the run reports is the one ``losses`` computes from the loop
+        width the run measured (no second, drifted copy inside the solver);
+      * BOTH magnet routes — the coupled σ·∂A/∂t solve and the frequency-domain
+        ``honest_rotor_eddy`` — are scaled by it, since they are read against
+        each other and one scaled route would look like a physics disagreement;
+      * the SHAFT is untouched.  It is one continuous conductor; slicing the
+        magnets does not slice it, and a factor applied to "the solid losses"
+        instead of "the magnets" would show up exactly here.
+    """
+    from motor_ai_sim.simulation.losses import magnet_segmentation_factor
+    if UPDATE or "p2_eddy" not in baseline:
+        pytest.skip("needs the solid p2_eddy baseline as its reference")
+    geo = dict(GEO_30MM); geo["magnet_lamination"] = 5.0
+    kw = dict(CASES["p2_eddy"])
+    set_request_materials({"assignment": {"magnet": MAGNET}, "materials": {}})
+    try:
+        d = fem_transient_sliding_band(geo_override=geo, rpm=RPM,
+                                       connection=CONNECTION, **kw)
+    finally:
+        set_request_materials(None)
+
+    seg = d.get("magnet_segmentation") or {}
+    assert seg.get("slice_mm") == 5.0 and seg.get("n_bodies", 0) > 0, seg
+    assert seg["stack_mm"] == pytest.approx(GEO_30MM["motor_length"])
+    k = float(seg["factor"])
+    assert 0.0 < k < 1.0, seg
+    # the model, recomputed from the run's own measured width
+    assert k == pytest.approx(
+        magnet_segmentation_factor(5.0, seg["width_mm"],
+                                   GEO_30MM["motor_length"]), rel=1e-4), seg
+
+    want = baseline["p2_eddy"]
+    for key in ("P_mag_solve_W", "P_mag_honest_W"):
+        got = float(d[key])
+        assert got == pytest.approx(want[key] * k, rel=RTOL, abs=1e-4), (
+            f"{key}: {want[key]:.6g} W solid x {k:.4g} = "
+            f"{want[key] * k:.6g} W expected, got {got:.6g} W")
+    assert float(d["P_shaft_solve_W"]) == pytest.approx(
+        want["P_shaft_solve_W"], rel=RTOL, abs=ATOL["P_shaft_solve_W"]), \
+        "the shaft is one continuous conductor — slicing magnets cannot cut it"
+
+
+def test_a_solid_magnet_takes_the_segmentation_path_and_changes_nothing():
+    """The 0 marker has to be inert, not merely small.
+
+    The pins above are all magnet_lamination = 0 runs, so an off-by-a-percent
+    factor on the solid path would move every one of them.  This is the cheap
+    (no-solve) statement of the same thing, at the level the solver calls it.
+    """
+    from motor_ai_sim.simulation.losses import magnet_segmentation
+    block = np.vstack([np.linspace(-4e-3, 4e-3, 10).repeat(4),
+                       np.tile(np.linspace(-2e-3, 2e-3, 4), 10)])
+    for geo in (dict(GEO_30MM), {}, {"magnet_lamination": 0.0}):
+        k, rep = magnet_segmentation(geo, [block, block], 10e-3)
+        assert k == 1.0, (geo.get("magnet_lamination"), rep)
+
+
 def regenerate_baseline() -> None:
     """Recompute every case and write the baseline file, printing the diff."""
     old = (json.loads(BASELINE.read_text(encoding="utf-8"))

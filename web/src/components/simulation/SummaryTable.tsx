@@ -47,7 +47,17 @@ export interface TransientSummary {
                                   excess_W: number; k_f: number;
                                   model?: string }>;
   P_stranded_W:        number;
+  // wire_split subdivides the bar into insulated transposed strips — an
+  // ELECTRICAL subdivision the mesher never sees, so the coupled σ·∂A/∂t solve
+  // reports the AC copper of a SOLID bar.  True = the reported Cu AC assumes
+  // unsplit conductors and is an over-read.
+  wire_split?:                       number;
+  cu_ac_solved_ignores_wire_split?:  boolean;
   P_solid_W:           number;
+  // What `magnet_lamination` (axial slice length, mm) did to the 2-D magnet
+  // eddy loss.  factor 1.0 = solid magnet; {} = a run from before the model.
+  magnet_segmentation?: { slice_mm?: number; stack_mm?: number; width_mm?: number;
+                          factor?: number; n_bodies?: number; model?: string };
   // Discarded frames at θ<0 the coupled eddy solve needed before its σ·∂A/∂t
   // start-up transient was quiet — 0 when the solve did not run.
   eddy_warmup_frames?: number;
@@ -142,6 +152,22 @@ function coreTooltip(t?: TransientSummary['P_core_terms']): string {
        + 'and manufacturing degradation (punching, stacking, welding — '
        + 'typically 1.5-2×) is NOT included.  This is the raw calculation, with '
        + 'no correction coefficient.';
+}
+
+/** The sentence the Solid (magnets) tile appends when the magnets are SLICED
+ *  axially.  Both eddy routes are 2-D (axially infinite magnet), so the slicing
+ *  is a correction applied on top — and it is a MODEL, which the text says. */
+function magnetSegNote(m?: TransientSummary['magnet_segmentation']): string {
+  const f = m?.factor;
+  if (f == null || !(m?.slice_mm)) return '';
+  if (f >= 0.999) return '';
+  return `  Magnets are SLICED axially: ${m.slice_mm} mm slices of a `
+       + `${m.stack_mm} mm stack, eddy loop width ${m.width_mm} mm → the 2-D magnet `
+       + `eddy loss (which assumes an axially infinite magnet) is multiplied by `
+       + `${f.toPrecision(3)}. Russell-Norsworthy resistance-limited end effect, `
+       + `normalised to the solid stack so a solid magnet is unchanged. This is a `
+       + `MODEL pending 3-D validation and a LOWER bracket — inter-slice coupling `
+       + `and the return current's own reaction field are not in it.`;
 }
 
 const Cell: React.FC<{
@@ -362,11 +388,22 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
         <Cell label="Core (lamination)" value={fmtK(s.P_core_W)} unit="W"
           tooltip={coreTooltip(s.P_core_terms)}/>
         <Cell label="Stranded (copper)" value={fmtK(s.P_stranded_W)} unit="W"
-          tooltip="I²R (DC) + AC eddy/proximity share in the coil windings, incl. end-winding resistance (k_end) and ρ_Cu(T)"/>
+          tooltip={"I²R (DC) + AC eddy/proximity share in the coil windings, incl. "
+                 + "end-winding resistance (k_end) and ρ_Cu(T)"
+                 + (s.cu_ac_solved_ignores_wire_split
+                    ? `  NB the AC share here is the coupled σ·∂A/∂t solve, and it `
+                      + `assumes UNSPLIT conductors: wire_split = ${s.wire_split} is an `
+                      + `electrical subdivision into insulated transposed strips with no `
+                      + `CAD geometry, so the mesh carries the whole bar. The solved AC `
+                      + `copper is therefore an OVER-read (up to wire_split² on the `
+                      + `width-direction term). Modelling the split needs the strips in `
+                      + `the mesh.`
+                    : '')}/>
         <Cell label="Solid (magnets)" value={fmtK(s.P_solid_W)} unit="W"
           tooltip={"Magnet + shaft eddy from the coupled conducting-rotor field solve "
                  + "(with per-magnet ∫J=0 and lamination factor); the d²/12 slab estimate "
                  + "is used only when field losses are off."
+                 + magnetSegNote(s.magnet_segmentation)
                  + (s.eddy_warmup_frames
                     ? `  Cycle mean over a SETTLED window: ${s.eddy_warmup_frames} warm-up `
                       + `frame(s) at θ<0 were solved and discarded first, so no σ·∂A/∂t `

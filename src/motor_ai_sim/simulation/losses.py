@@ -449,6 +449,193 @@ def central_difference(dt_s: float) -> Callable[[np.ndarray], np.ndarray]:
     return _ddt
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# MAGNET AXIAL SEGMENTATION — the 3-D thing a 2-D magnet loss cannot know
+# ─────────────────────────────────────────────────────────────────────────────
+# ``magnet_lamination`` (mm) is the AXIAL slice length a magnet is cut into.
+# It reached the CAD, the masses and the validation and stopped there: BOTH
+# routes to the magnet eddy loss — the coupled σ·∂A/∂t solve and the
+# frequency-domain ``honest_rotor_eddy`` — are 2-D, i.e. they describe an
+# axially INFINITE magnet whose induced current closes at infinity.  Cutting the
+# magnet into slices is the single most effective way to kill that loss in a
+# real machine, and neither model could see it.  These two functions are the
+# correction, and they are a MODEL, not a solve (see below).
+
+#: Below this argument ``1 − tanh(x)/x`` loses its leading digits to
+#: cancellation, so the series x²/3 − 2x⁴/15 is used instead.
+_RN_SERIES_X = 1e-3
+
+
+def russell_norsworthy_factor(slice_len: float, width: float) -> float:
+    """Resistance-limited END-EFFECT factor of ONE axial slice.  Dimensionless.
+
+        k(l, w) = 1 − tanh(x)/x,      x = π·l / (2·w)
+
+    ``slice_len`` and ``width`` are any ONE consistent length unit (only their
+    ratio is used).
+
+    WHERE IT COMES FROM.  Russell & Norsworthy, "Eddy currents and wall losses
+    in screened-rotor induction motors", Proc. IEE 105A (1958) 163, derived for
+    a conducting sheet of finite axial length carrying an axial current sheet
+    that has to turn round and come back inside the sheet's own transverse
+    span.  With no end ring / overhang their factor collapses to the form above,
+    where the transverse span is the half-wavelength of the current pattern.  A
+    segmented magnet is the same electrical picture: inside one slice the eddy
+    current runs axially up one side of the block and back down the other, and
+    the return path across the block's WIDTH is pure added resistance the 2-D
+    model (l → ∞, return at infinity) never charged for.  The same expression is
+    the standard segmentation correction in the magnet-loss literature
+    (e.g. Ruoho et al., IEEE Trans. Magn. 45(10) 2009; Yamazaki & Fukushima,
+    IEEE Trans. Ind. Appl. 47(2) 2011).
+
+    ASYMPTOTES — the two ends this has to get right, and both are tested:
+
+      * ``l/w → ∞``  →  ``k → 1 − 2w/(πl) → 1``.  A long slice is the 2-D
+        answer: the end return path is a vanishing share of the loop.
+      * ``l/w → 0``  →  ``tanh(x)/x → 1 − x²/3``, so ``k → x²/3 =
+        (π·l/(2w))²/3``, i.e. k ∝ l².  Cut a magnet into N equal slices and the
+        loss falls as 1/N² — the well-known resistance-limited segmentation
+        scaling, recovered here rather than asserted.
+      * monotone increasing in ``l`` and never outside [0, 1].
+
+    RESISTANCE-LIMITED means the reaction field of the eddy current itself is
+    neglected in the END correction (the slice is assumed thin against the skin
+    depth in the axial sense).  The screening that DOES matter in-plane is
+    already in the field solve this factor multiplies, so the two do not
+    double-count; but on a very large, very conductive magnet at high frequency
+    this factor is an over-estimate of the reduction.
+    """
+    w = float(width)
+    l = float(slice_len)
+    if w <= 0.0 or l <= 0.0:
+        return 0.0
+    x = math.pi * l / (2.0 * w)
+    if x < _RN_SERIES_X:
+        return (x * x) / 3.0 - 2.0 * x ** 4 / 15.0
+    if x > 30.0:                       # tanh(30) = 1 to 1e-26
+        return 1.0 - 1.0 / x
+    return 1.0 - math.tanh(x) / x
+
+
+def magnet_segmentation_factor(slice_mm: float, width_mm: float,
+                               stack_mm: float) -> float:
+    """What the 2-D magnet eddy loss must be MULTIPLIED by for a sliced magnet.
+
+        factor = k(l, w) / k(L, w)          0 < l ≤ L
+        factor = 1                          l = 0  (the SOLID marker)
+
+    with ``k`` the Russell-Norsworthy factor above, ``l`` = ``magnet_lamination``
+    (the axial slice length, mm), ``L`` = the stack length (mm) and ``w`` = the
+    eddy loop's characteristic transverse width (see ``char_width_m``).
+
+    WHY THE RATIO AND NOT ``k(l)`` ALONE.  ``k(L)`` is the end-effect a SOLID
+    magnet of this stack already has — the 2-D solve does not apply it either,
+    so the reported solid loss carries a known 1/k(L) over-read (≈ 1.4× on the
+    150 mm's 16 mm-wide, 35 mm-long magnet).  Billing the segmented magnet at
+    ``k(l)`` while the solid one is billed at 1 would charge the end effect ONCE
+    on one design and TWICE on the other, and the ratio between two designs is
+    the number this product is read for.  Normalising by ``k(L)`` leaves the
+    SAME axially-infinite over-read on both, so:
+
+      * a solid magnet (``magnet_lamination = 0``) is bit-identical to what this
+        code reported before this function existed — deliberately, and pinned;
+      * one slice as long as the stack (``l = L``) also returns exactly 1, so
+        the marker and the physics agree at the boundary rather than stepping;
+      * the SEGMENTED/SOLID ratio is the honest one.
+
+    Correcting the remaining 1/k(L) is a 3-D end-effect question and belongs to
+    the 3-D static program, not here.
+
+    THIS IS A MODEL, PENDING 3-D VALIDATION.  Nothing in this repository has
+    solved a magnet's axial current return; the factor is a closed form fitted
+    to a rectangular sheet, applied to a bread-loaf polygon through one
+    characteristic width, and it neglects (a) the reaction field of the axial
+    return current, (b) the slice-to-slice coupling through the (small) gaps,
+    (c) any circulating current through a conductive bond line between slices,
+    and (d) the difference between the flux pattern over a wide magnet and the
+    single half-wavelength the derivation assumes.  Every one of those pushes
+    the true loss ABOVE this estimate, so the number is a LOWER bracket on a
+    segmented magnet's loss.  Treat it as the direction and the order of
+    magnitude, not the third digit, until a 3-D solve has been run against it.
+    """
+    l = float(slice_mm or 0.0)
+    L = float(stack_mm or 0.0)
+    w = float(width_mm or 0.0)
+    if l <= 0.0 or L <= 0.0 or w <= 0.0:
+        return 1.0                      # 0 = SOLID; no geometry = no claim
+    l = min(l, L)                       # a slice cannot be longer than the stack
+    k_L = russell_norsworthy_factor(L, w)
+    if k_L <= 0.0:
+        return 1.0
+    return min(russell_norsworthy_factor(l, w) / k_L, 1.0)
+
+
+def char_width_m(xy: np.ndarray) -> float:
+    """The eddy loop's characteristic transverse width of one magnet polygon.
+
+    ``xy`` is that magnet's point cloud, shape (2, N) — its mesh nodes or its
+    CAD polygon vertices, in metres.  Returns the LARGER of the two principal
+    in-plane extents, in the same unit.
+
+    Principal axes (the eigenvectors of the point cloud's covariance) rather
+    than a bounding box in x/y: a magnet sits at whatever angle its pole does,
+    and an axis-aligned box of a 45°-rotated block reads √2 too wide.  The
+    LARGER extent is taken because the eddy loop the axial current closes is the
+    one enclosing the most flux, and on both live machines (a bread-loaf surface
+    magnet) that is the long chord of the block.  A magnet whose two extents are
+    close makes the choice immaterial; one that is much deeper than it is wide
+    (a buried/spoke magnet) is served by the same rule for the same reason.
+    """
+    P = np.asarray(xy, float)
+    if P.ndim != 2 or P.shape[0] != 2 or P.shape[1] < 3:
+        return 0.0
+    Q = P - P.mean(axis=1, keepdims=True)
+    # 2x2 covariance -> orthonormal principal axes; eigh is exact enough here
+    # and cannot return complex axes for a symmetric matrix.
+    _, V = np.linalg.eigh(Q @ Q.T)
+    ext = [float(np.ptp(V[:, i] @ Q)) for i in (0, 1)]
+    return max(ext)
+
+
+def magnet_segmentation(geo: dict, points_by_body: Sequence[np.ndarray],
+                        stack_length_m: float) -> Tuple[float, dict]:
+    """(factor, report) for the whole magnet set — the solver's one entry point.
+
+    ``points_by_body`` is one (2, N) point cloud per magnet body (mesh nodes of
+    that body's elements, in metres).  Each body gets its OWN width and its own
+    factor; the returned factor is their AREA-BLIND arithmetic mean, because the
+    per-body loss split is not exposed by either eddy route and every magnet on
+    a symmetric rotor is the same block anyway.  The report carries the spread,
+    so a rotor with genuinely different magnets says so instead of hiding behind
+    a mean.
+
+    ``report`` is what the result dict and the card's tooltip quote: ``slice_mm``,
+    ``width_mm`` (mean), ``width_min_mm``/``width_max_mm``, ``factor``,
+    ``n_bodies``, and ``model``.
+    """
+    slice_mm = float(geo.get("magnet_lamination", 0.0) or 0.0)
+    L_mm = float(stack_length_m) * 1e3
+    widths = [char_width_m(P) * 1e3 for P in (points_by_body or [])]
+    widths = [w for w in widths if w > 0.0]
+    rep = {"slice_mm": slice_mm, "stack_mm": round(L_mm, 4),
+           "n_bodies": len(widths), "factor": 1.0,
+           "width_mm": 0.0, "width_min_mm": 0.0, "width_max_mm": 0.0,
+           "model": ("Russell-Norsworthy axial segmentation, normalised to the "
+                     "solid stack — MODEL, pending 3-D validation")}
+    if not widths:
+        return 1.0, rep
+    rep["width_mm"] = round(float(np.mean(widths)), 4)
+    rep["width_min_mm"] = round(float(np.min(widths)), 4)
+    rep["width_max_mm"] = round(float(np.max(widths)), 4)
+    if slice_mm <= 0.0:
+        rep["model"] = "solid magnet (magnet_lamination = 0) — 2-D loss unchanged"
+        return 1.0, rep
+    f = float(np.mean([magnet_segmentation_factor(slice_mm, w, L_mm)
+                       for w in widths]))
+    rep["factor"] = float("%.6g" % f)
+    return f, rep
+
+
 def copper_ac_dims(geo: dict, coil_temp_c: float, f_elec_hz: float,
                    rho_cu_20: float, alpha_cu: float, mu0: float
                    ) -> Tuple[float, float, float]:
@@ -463,6 +650,18 @@ def copper_ac_dims(geo: dict, coil_temp_c: float, f_elec_hz: float,
         current between strips).
       * two skin depths — beyond that the field does not reach the middle of the
         conductor and a larger dimension buys no extra loss.
+
+    ONLY THE MODELLED PATH SEES ``wire_split``.  These dimensions feed
+    ``proximity_loss_series``, i.e. the copper AC term reported when the coupled
+    σ·∂A/∂t solve did NOT run.  When it DID run, the reported Cu AC is the
+    solved ∫σE² of the conductor polygons the mesher was given — and the mesher
+    is given the whole bar, because ``wire_split`` is an electrical subdivision
+    (insulated, transposed strips) with no CAD geometry behind it.  So the
+    solved value models SOLID drawn conductors and is an OVER-read by up to
+    ``wire_split²`` on the width-direction term.  That is not fixed by changing
+    the number here — it needs the strips in the mesh — so it is REPORTED
+    instead: ``routes/simulation`` flags it on the summary and the Stranded
+    (copper) tile's tooltip says so.
     """
     rho = rho_cu_20 * (1.0 + alpha_cu * (float(coil_temp_c) - 20.0))
     omega = 2.0 * math.pi * max(1e-6, float(f_elec_hz))

@@ -256,6 +256,170 @@ class TestProximityLoss:
         assert avg == 0.0 and len(ser) == n
 
 
+class TestMagnetAxialSegmentation:
+    """`magnet_lamination` — the 3-D thing both 2-D magnet-loss routes miss.
+
+    The geometry parameter reached the CAD, the masses and the validation and
+    stopped there: the coupled σ·∂A/∂t solve and the frequency-domain
+    ``honest_rotor_eddy`` both describe an axially INFINITE magnet.  These tests
+    pin the correction's SHAPE (the two asymptotes and the 1/N² law that falls
+    out of them), its NEUTRALITY on a solid magnet, and the width measurement it
+    is driven by.  The end-to-end application is pinned in
+    test_physics_regression.
+    """
+
+    def test_long_slice_is_the_two_d_answer(self):
+        """l/w → ∞: the end return path is a vanishing share of the loop."""
+        from motor_ai_sim.simulation.losses import russell_norsworthy_factor as k
+        assert k(1e6, 1.0) == pytest.approx(1.0, abs=1e-5)
+        assert k(1e3, 1.0) < 1.0, "it approaches 1 from BELOW — never above"
+
+    def test_short_slice_falls_as_the_slice_squared(self):
+        """l/w → 0: k → (π·l/2w)²/3, the resistance-limited law."""
+        from motor_ai_sim.simulation.losses import russell_norsworthy_factor as k
+        for l in (1e-3, 1e-2, 1e-1):
+            x = math.pi * l / 2.0
+            assert k(l, 1.0) == pytest.approx(x * x / 3.0, rel=2e-2)
+        # …and the series branch has to agree with the closed form where they meet
+        assert k(1e-3, 1.0) == pytest.approx(1.0 - math.tanh(math.pi * 5e-4)
+                                             / (math.pi * 5e-4), rel=1e-9)
+
+    def test_factor_is_monotone_and_bounded(self):
+        from motor_ai_sim.simulation.losses import russell_norsworthy_factor as k
+        vals = [k(l, 16.0) for l in np.linspace(0.1, 400.0, 60)]
+        assert all(0.0 < v <= 1.0 for v in vals)
+        assert all(b > a for a, b in zip(vals, vals[1:]))
+
+    def test_zero_or_negative_geometry_makes_no_claim(self):
+        from motor_ai_sim.simulation.losses import russell_norsworthy_factor as k
+        assert k(0.0, 1.0) == 0.0 and k(1.0, 0.0) == 0.0
+
+    def test_solid_magnet_is_exactly_one(self):
+        """magnet_lamination = 0 is the SOLID marker — the 2-D loss stands."""
+        from motor_ai_sim.simulation.losses import magnet_segmentation_factor as f
+        assert f(0.0, 16.0, 35.0) == 1.0
+
+    def test_one_slice_per_stack_is_also_exactly_one(self):
+        """The marker and the physics must agree at the boundary, not step:
+        a single slice as long as the stack IS a solid magnet."""
+        from motor_ai_sim.simulation.losses import magnet_segmentation_factor as f
+        assert f(35.0, 16.0, 35.0) == pytest.approx(1.0, abs=1e-12)
+        assert f(1e6, 16.0, 35.0) == pytest.approx(1.0, abs=1e-12), \
+            "a slice longer than the stack is still one slice"
+
+    def test_slicing_only_ever_reduces_the_loss(self):
+        from motor_ai_sim.simulation.losses import magnet_segmentation_factor as f
+        prev = 0.0
+        for l in (0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 35.0):
+            v = f(l, 16.0, 35.0)
+            assert 0.0 < v <= 1.0 and v > prev
+            prev = v
+
+    def test_n_slices_approaches_the_one_over_n_squared_law(self):
+        """Halving the slice must quarter the loss once l << w — the property
+        the whole model exists to express."""
+        from motor_ai_sim.simulation.losses import magnet_segmentation_factor as f
+        r = [f(35.0 / n, 16.0, 35.0) for n in (32, 64)]
+        assert r[0] / r[1] == pytest.approx(4.0, rel=2e-2)
+
+    def test_char_width_is_the_long_side_whatever_the_pole_angle(self):
+        """A magnet sits at whatever angle its pole does; an axis-aligned box of
+        a rotated block reads up to √2 too wide."""
+        from motor_ai_sim.simulation.losses import char_width_m
+        xs = np.linspace(-6.0, 6.0, 40); ys = np.linspace(-2.5, 2.5, 20)
+        X, Y = np.meshgrid(xs, ys)
+        P = np.vstack([X.ravel(), Y.ravel()])
+        for th in (0.0, 0.3, 0.7, 1.2, 2.5):
+            R = np.array([[math.cos(th), -math.sin(th)],
+                          [math.sin(th), math.cos(th)]])
+            assert char_width_m(R @ P) == pytest.approx(12.0, rel=1e-9)
+
+    def test_degenerate_point_clouds_are_survivable(self):
+        from motor_ai_sim.simulation.losses import char_width_m
+        assert char_width_m(np.zeros((2, 0))) == 0.0
+        assert char_width_m(np.zeros((2, 2))) == 0.0
+
+    def test_report_names_the_model_and_the_solid_case(self):
+        from motor_ai_sim.simulation.losses import magnet_segmentation
+        block = np.vstack([np.linspace(-6e-3, 6e-3, 12).repeat(4),
+                           np.tile(np.linspace(-2.5e-3, 2.5e-3, 4), 12)])
+        k, rep = magnet_segmentation({"magnet_lamination": 0}, [block], 35e-3)
+        assert k == 1.0 and rep["factor"] == 1.0
+        assert "solid" in rep["model"].lower()
+        assert rep["width_mm"] == pytest.approx(12.0, rel=1e-6), \
+            "the width is measured even on a solid magnet — the card quotes it"
+        k5, rep5 = magnet_segmentation({"magnet_lamination": 5}, [block], 35e-3)
+        assert 0.0 < k5 < 1.0 and rep5["factor"] == pytest.approx(k5, rel=1e-5)
+        assert "MODEL" in rep5["model"], "the tooltip must be able to say so"
+
+    def test_no_magnet_bodies_makes_no_claim(self):
+        from motor_ai_sim.simulation.losses import magnet_segmentation
+        k, rep = magnet_segmentation({"magnet_lamination": 5}, [], 35e-3)
+        assert k == 1.0 and rep["n_bodies"] == 0
+
+    def test_the_solved_copper_ac_declares_what_it_ignores(self):
+        """wire_split has no CAD geometry, so the coupled solve cannot see it.
+        The docstring of the function that DOES divide by it has to say which
+        path is which, or the next reader assumes both do."""
+        from motor_ai_sim.simulation import losses
+        doc = losses.copper_ac_dims.__doc__ or ""
+        assert "wire_split" in doc and "SOLID" in doc
+
+
+class TestLossHonestyReachesTheCard:
+    """A caveat only the solver knows is a caveat nobody reads.
+
+    Both of these are things the reported watts DO NOT model — the solved copper
+    AC cannot see ``wire_split``, and the magnet eddy loss is corrected for axial
+    slicing by a MODEL, not a solve.  Neither can be fixed by changing a number,
+    so the contract is that the summary carries the flag and the tile's HelpTip
+    says it out loud.  These tests pin the whole chain: the route puts the field
+    in the payload, the card's type accepts it, and the tooltip text exists.
+    """
+
+    @staticmethod
+    def _summary_src() -> str:
+        import pathlib
+        return (pathlib.Path(__file__).resolve().parents[1] / "web" / "src"
+                / "components" / "simulation" / "SummaryTable.tsx"
+                ).read_text(encoding="utf-8")
+
+    def test_the_route_flags_a_split_wire_under_the_coupled_solve(self):
+        import inspect
+        from motor_ai_sim.routes import simulation as _sim
+        src = inspect.getsource(_sim._build_transient_summary)
+        assert '"cu_ac_solved_ignores_wire_split"' in src
+        assert '"wire_split"' in src
+        assert '"magnet_segmentation"' in src
+
+    def test_the_flag_only_fires_when_both_conditions_hold(self):
+        """wire_split alone is fine (the modelled proximity path divides by it);
+        the coupled solve alone is fine.  Only the PAIR is an over-read."""
+        import inspect
+        from motor_ai_sim.routes import simulation as _sim
+        src = inspect.getsource(_sim._build_transient_summary)
+        i = src.index('"cu_ac_solved_ignores_wire_split"')
+        block = src[i:i + 400]
+        assert 'eddy_coupled' in block and 'wire_split' in block and '> 1' in block
+
+    def test_the_stranded_tile_says_the_solved_value_assumes_unsplit_bars(self):
+        src = self._summary_src()
+        assert "cu_ac_solved_ignores_wire_split" in src, \
+            "the Stranded (copper) tooltip must be gated on the flag"
+        i = src.index("cu_ac_solved_ignores_wire_split", src.index("Stranded (copper)"))
+        tip = src[i:i + 900]
+        assert "UNSPLIT" in tip and "wire_split" in tip and "OVER-read" in tip
+
+    def test_the_solid_tile_says_the_segmentation_is_a_model(self):
+        src = self._summary_src()
+        assert "magnetSegNote" in src
+        i = src.index("function magnetSegNote")
+        tip = src[i:i + 1200]
+        assert "MODEL" in tip and "Russell-Norsworthy" in tip
+        assert "LOWER bracket" in tip, \
+            "the direction of the model's error belongs in the tooltip"
+
+
 class TestRotorEddyInputs:
     """Tag assembly for the coupled rotor-eddy solve — was written out twice."""
 

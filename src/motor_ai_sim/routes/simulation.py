@@ -3517,7 +3517,23 @@ def _build_transient_summary(
         # show it.  {stator|rotor: hysteresis_W, eddy_W, excess_W, k_f}.
         "P_core_terms": sbres.get("P_fe_terms") or {},
         "P_stranded_W": round(_Pcu, 1),            # copper
+        # ── copper-AC honesty: wire_split is NOT in the solved value ─────
+        # ``wire_split`` subdivides the bar into insulated, transposed strips.
+        # It is an ELECTRICAL subdivision with no CAD geometry behind it, so
+        # the mesher gets the whole bar and the coupled σ·∂A/∂t solve reports
+        # the AC loss of a SOLID drawn conductor — up to wire_split² too much on
+        # the width-direction term.  (The modelled proximity path does divide by
+        # it, simulation/losses.copper_ac_dims.)  Flagged rather than silently
+        # corrected: correcting it needs the strips in the mesh.
+        "wire_split": int(float(_geo_cfg.get("wire_split", 1) or 1)),
+        "cu_ac_solved_ignores_wire_split":
+            bool(sbres.get("eddy_coupled")
+                 and float(_geo_cfg.get("wire_split", 1) or 1) > 1),
         "P_solid_W":    round(_Pmag + _Pshaft, 1), # magnet + shaft eddy
+        # AXIAL magnet segmentation (`magnet_lamination`): the factor the 2-D
+        # magnet eddy loss was multiplied by, and the loop width it was derived
+        # from.  {} on a run that predates it; factor 1.0 on a solid magnet.
+        "magnet_segmentation": sbres.get("magnet_segmentation") or {},
         # How many discarded frames at θ<0 the coupled eddy solve needed before
         # the σ·∂A/∂t start-up transient was quiet enough to start reporting.
         # It belongs beside P_solid_W because that is the number an un-settled

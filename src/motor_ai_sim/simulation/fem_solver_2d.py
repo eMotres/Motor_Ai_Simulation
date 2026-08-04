@@ -81,6 +81,7 @@ from motor_ai_sim.simulation.losses import (
     central_difference as _central_difference,
     iron_loss_series as _iron_loss_series,
     loss_density_map as _loss_density_map,
+    magnet_segmentation as _magnet_segmentation,
 )
 from motor_ai_sim.simulation.sb_postproc import (
     drop_settling_frames as _drop_settling_frames,
@@ -4006,6 +4007,35 @@ def fem_transient_sliding_band(
                                _v["hysteresis_W"] + _v["eddy_W"] + _v["excess_W"],
                                _v["k_f"])
                             for _h, _v in _fe_break.items()), P_fe_avg2)
+    # ── AXIAL magnet segmentation (geo `magnet_lamination`, mm) ───────────
+    # BOTH routes to the magnet eddy loss below are 2-D, i.e. they solve an
+    # axially INFINITE magnet whose induced current never has to turn round.
+    # Slicing the magnet axially is the standard cure for that loss and nothing
+    # here could see it.  The factor is computed ONCE, from the magnet bodies'
+    # own mesh nodes, and applied to whichever route ends up reporting — see
+    # simulation/losses.magnet_segmentation for the model and its caveats.
+    # 0 (solid) returns exactly 1.0, so an unsegmented run is bit-identical.
+    _seg_k, _seg_rep = 1.0, {}
+    if half.get("r") is not None:
+        try:
+            _rm_seg = half["r"]["mesh"]
+            _pt_seg = np.asarray(_rm_seg.p, float)
+            _tt_seg = np.asarray(_rm_seg.t, int)
+            _bodies_seg = [_pt_seg[:, np.unique(_tt_seg[:, np.asarray(_e, int)])]
+                           for _tg, _e in half["r"]["cells"].items()
+                           if int(_tg) >= DOM_MAG_BASE and np.size(_e)]
+            _seg_k, _seg_rep = _magnet_segmentation(
+                geo, _bodies_seg, float(p.stack_length))
+            if _seg_k < 1.0:
+                log.info("magnet segmentation | %.4g mm slices of a %.4g mm "
+                         "stack, loop width %.4g mm (%d bodies) -> magnet eddy "
+                         "loss x %.4g (MODEL, pending 3-D validation)",
+                         _seg_rep.get("slice_mm", 0.0), _seg_rep.get("stack_mm", 0.0),
+                         _seg_rep.get("width_mm", 0.0), _seg_rep.get("n_bodies", 0),
+                         _seg_k)
+        except Exception as _e_seg:      # noqa: BLE001 — no factor, not no run
+            log.warning("magnet segmentation factor unavailable: %s", _e_seg)
+            _seg_k, _seg_rep = 1.0, {}
     # magnet + shaft eddy: honest (reaction-included) rotor solve on the
     # rotor-frame A(t) history — the SAME function the P1 path uses.
     if _histA_rot2:
@@ -4075,6 +4105,17 @@ def fem_transient_sliding_band(
                      "frequency-domain magnet=%.3f shaft=%.3f W",
                      P_mag_avg2, P_shaft_avg2, P_mag_prox_avg2,
                      P_shaft_prox_avg2)
+    # The segmentation factor multiplies whichever magnet number is REPORTED —
+    # coupled or frequency-domain — and the other one too, because they are two
+    # routes to the same physical watts and are read against each other.  The
+    # SHAFT is untouched: it is one continuous conductor, not a stack of slices.
+    if _seg_k < 1.0:
+        _P_mag_solid2 = float(P_mag_avg2)
+        P_mag_ser2 = [float(v) * _seg_k for v in P_mag_ser2]
+        P_mag_avg2 = float(P_mag_avg2) * _seg_k
+        P_mag_prox_avg2 = float(P_mag_prox_avg2) * _seg_k
+        log.info("magnet segmentation | P_mag %.4g -> %.4g W (x %.4g)",
+                 _P_mag_solid2, P_mag_avg2, _seg_k)
     P_tot_ser2 = [c + f + m + s for c, f, m, s in
                   zip(P_cu_ser2, P_fe_ser2, P_mag_ser2, P_shaft_ser2)]
     P_loss_avg2 = float(np.mean(P_tot_ser2)) if P_tot_ser2 else 0.0
@@ -4105,6 +4146,15 @@ def fem_transient_sliding_band(
                 _sol_dens = np.zeros(int(mesh_all.t.shape[1]))
                 _sol_dens[_ed_elems] = np.mean(
                     np.asarray(_ed_dens_hist, float), axis=0)
+                # Axial segmentation scales the magnet WATTS above; the map is
+                # the same watts per m³, so it has to carry the same factor or
+                # the picture stops integrating to the number beside it.  The
+                # SHAPE is left alone — this factor is a lumped end-resistance
+                # correction and knows nothing about where in the block the
+                # current crowds.
+                if _seg_k < 1.0 and _ed_gmask.get("mag") is not None \
+                        and _ed_gmask["mag"].any():
+                    _sol_dens[_ed_elems[_ed_gmask["mag"]]] *= _seg_k
                 _sol_elems = {_k: _ed_elems[_m]
                               for _k, _m in _ed_gmask.items() if _m.any()}
                 _sol_groups = tuple(_sol_elems.keys())
@@ -4333,6 +4383,11 @@ def fem_transient_sliding_band(
                             if (eddy and rotor_eddy) else 0.0),
         "P_mag_honest_W": round(float(P_mag_prox_avg2), 3),
         "P_shaft_honest_W": round(float(P_shaft_prox_avg2), 3),
+        # AXIAL magnet segmentation — what `magnet_lamination` did to the two
+        # magnet numbers above.  Always present (factor 1.0 + the measured loop
+        # width on a solid magnet), so the card can say "solid" rather than say
+        # nothing.  See simulation/losses.magnet_segmentation: it is a MODEL.
+        "magnet_segmentation": _seg_rep,
         "P_fe_avg_W": round(float(P_fe_avg2), 3),
         "P_fe_terms": _fe_break,   # {stator|rotor: hyst/eddy/excess/k_f/model}
         "P_loss_total_avg_W": round(float(P_loss_avg2), 3),

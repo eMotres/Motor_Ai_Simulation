@@ -97,7 +97,12 @@ def _regions_for(tm, section: MotorSection, linear_iron: bool = False,
     is one flag and can be measured rather than argued about.
     """
     if iron_mu_r is not None:
+        # A mu_r LADDER is a comparison against the 2D solver, and 2D has no z:
+        # it cannot carry an across-stack permeability at all.  So a ladder rung
+        # is solved with SOLID iron, or "the same mu_r in both models" would be
+        # false at the rung it is measured at.
         linear_iron = True
+        laminated_iron = False
     regs: List[Region] = []
     for r in section.regions:
         el = tm.elements(r.name)

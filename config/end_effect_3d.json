@@ -929,5 +929,623 @@
    "proposed_fix": "scratchpad/fem_solver_2d_picard.patch \u2014 geometric damping in log(nu), adaptive step, constitutive-residual stop, cap raised 8 -> 60, and a loud warning when the fixed point is not reached.  Verified on a patched COPY: 1.51952 T in 62 sweeps at residual 9.3e-4, against the shipped 1.38472 T on the same problem.  NOT committed \u2014 fem_solver_2d is change-controlled."
   }
  },
- "l_stack_curve_note": "ISOTROPIC iron and the OLD (unconverged) 2D leg \u2014 every k_flux in these rows is stale by the two corrections in consistency_investigation round 4. k_flux_self is the isotropic model's; the laminated model moves it by -1.6 %."
+ "l_stack_curve_note": "ISOTROPIC iron and the OLD (unconverged) 2D leg \u2014 every k_flux in these rows is stale by the two corrections in consistency_investigation round 4. k_flux_self is the isotropic model's; the laminated model moves it by -1.6 %.",
+ "stage_b": {
+  "version": "static3d-stageB-1",
+  "generated_utc": "2026-08-04T19:26:23Z",
+  "_schema": "documented in simulation/static3d/loaded.py (STAGE_B_SCHEMA_DOC)",
+  "_summary": "Blockers 1 and 2 are closed and measured.  Blocker 3 - a rotatable rotor with unchanged mesh connectivity - is NOT, so no torque and no k_T is quoted anywhere in this block.",
+  "machine": {
+   "preset": "my_40mm_last",
+   "materials_used": {
+    "stator_core": "B15AHV950M",
+    "rotor_core": "B15AHV950M",
+    "magnet": "F45SH_120C",
+    "shaft": "Aluminium_6061"
+   },
+   "materials_note": "config/motor_config.yaml is LIVE and its magnet assignment has moved to F52SH_120C since Stage A was measured.  Every number here was produced with the Stage A magnet (F45SH_120C) pinned IN-PROCESS - no file was written and the running backend was not touched - so it is comparable with the Stage A passport above.  A Stage B run that took the live assignment would be a different machine.  tests/test_static3d_stage_b.py pins Br = 1.19 T so this cannot drift silently."
+  },
+  "operating_point": {
+   "i_phase_rms": 43.840620433565945,
+   "n_parallel": 1,
+   "i_coil_peak": 62.0,
+   "gamma_deg": 10.0,
+   "daxis_deg": 60.00090966318485,
+   "rotor_angle_deg": 0.0,
+   "connection": "2S",
+   "source": "config/motor_presets.json::my_40mm_last.simulation",
+   "I_ph": {
+    "A": 21.204323896810546,
+    "B": 39.85358585161611,
+    "C": -61.05790974842665
+   },
+   "rpm": 13000,
+   "daxis_source": "fem_solver_2d._resolve_daxis_shift - auto-calibrated per topology, 60.0009 deg for this 12s/14p winding, NOT the legacy 108 deg constant"
+  },
+  "winding_model": {
+   "n_coil_polygons": 84,
+   "n_wires_per_slot": 7,
+   "layout": [
+    "A+",
+    "A-",
+    "C-",
+    "C+",
+    "B+",
+    "B-",
+    "A-",
+    "A+",
+    "C+",
+    "C-",
+    "B-",
+    "B+"
+   ],
+   "I_ph": {
+    "A": 21.204323896810546,
+    "B": 39.85358585161611,
+    "C": -61.05790974842665
+   },
+   "J_z_max": 40705273.165617764,
+   "source": "fem_solver_2d.build_materials (read-only)",
+   "stack_mm": 12.0,
+   "h_ew_mm": 2.8,
+   "ew_shape": "cosine",
+   "n_r": 121,
+   "n_theta": 5401,
+   "r_grid_mm": [
+    13.250228324404517,
+    18.50853421490867
+   ],
+   "closure_Psi_max": 9.073359697610963e-10,
+   "closure_scale": 104194.67134236939,
+   "ampere_turn_error_pct": 0.0012989412927478913,
+   "ampere_turns_intended": {
+    "0": 148.43026727767383,
+    "1": -148.43026727767383,
+    "2": 427.40536823898657,
+    "3": -427.40536823898657,
+    "4": 278.97510096131276,
+    "5": -278.97510096131276,
+    "6": -148.43026727767383,
+    "7": 148.43026727767383,
+    "8": -427.40536823898657,
+    "9": 427.40536823898657,
+    "10": -278.97510096131276,
+    "11": 278.97510096131276
+   },
+   "ampere_turns_delivered": {
+    "2": 427.3998164941711,
+    "3": -427.3998164941711,
+    "4": 278.97147723853175,
+    "5": -278.97147723852976,
+    "0": 148.42833925564176,
+    "1": -148.4283392556411
+   },
+   "h_ew_rule": "tooth_width/2 + wire_width/2 (the k_end half-loop)",
+   "formulation": "source field T = Psi(r,theta)*beta(z)*e_r,  curl(T) = J,  assembled as integral(T . curl v)",
+   "closure_relative": 8.708084185799818e-15,
+   "beta": "cosine: 1 inside the stack, 0.5*(1+cos(pi*u)) across the end-winding band, u = (|z|-L/2)/h_ew"
+  },
+  "load_consistency": {
+   "_doc": "Blocker 1, as two numbers on ONE mesh and ONE physics: the thick-solenoid benchmark (tube_in_box, 134697 tets, 161864 edge dofs), solved once with the current assembled as integral(J.v) and once as integral(T.curl v) with curl(T) = J.  The question is not whose residual is smaller.  It is whether the Helmholtz projection had anything to take: whatever it takes is the part of the load no magnetostatic field can satisfy, and for an extruded slot current that part IS the missing end turns.",
+   "J_source": {
+    "assembled_as": "integral(J . v)",
+    "consistency_before": 0.009629,
+    "consistency_after": 8.804e-17,
+    "projection_removed_norm": 47.173,
+    "load_norm": 11952.0,
+    "projection_removed_pct_of_load": 0.3947,
+    "verdict": "0.39 % of the load vector was deleted before solving, silently"
+   },
+   "T_source": {
+    "assembled_as": "integral(T . curl v)",
+    "consistency_before": 3.101e-16,
+    "consistency_after": 3.101e-16,
+    "projection_removed_norm": 0.0,
+    "load_norm": 12038.0,
+    "projection_removed_pct_of_load": 0.0,
+    "verdict": "EXACTLY zero removed \u00e2\u20ac\u201d curl(grad psi) vanishes identically in the Nedelec space, so the load is in the operator's range by construction and not by tolerance"
+   },
+   "held_across_refinement": {
+    "_doc": "the T source's consistency is a property of the weak form, not of the mesh",
+    "rows": [
+     {
+      "h_mm": 2.4,
+      "tets": 46047,
+      "consistency": 2.84e-16,
+      "removed": 0.0
+     },
+     {
+      "h_mm": 1.8,
+      "tets": 98365,
+      "consistency": 3.09e-16,
+      "removed": 0.0
+     },
+     {
+      "h_mm": 1.3,
+      "tets": 236992,
+      "consistency": 3.22e-16,
+      "removed": 0.0
+     }
+    ]
+   },
+   "gauge_independence": "the same numbers for gauge='tree' (direct) and gauge='none' (CG): 5-6 CG iterations with the regularised-mass preconditioner"
+  },
+  "winding_validation": {
+   "_doc": "Blocker 1's other half: the winding model put against an EXACT solution before it is trusted on a motor.  exact.thick_solenoid_axis_Bz is the field of the source ACTUALLY discretised (an annulus of finite thickness), so the error below is solver error and not a modelling gap.  Lowest-order Nedelec: B = curl(A) is piecewise CONSTANT, so first order is the expected rate and is what is seen.",
+   "geometry_m": {
+    "r_inner": 0.005,
+    "r_outer": 0.006,
+    "length": 0.02
+   },
+   "source": "winding3d.solenoid_T \u00e2\u20ac\u201d T = J*(r_outer - clamp(r, r_i, r_o)) e_z inside |z| < L/2",
+   "rows": [
+    {
+     "h_mm": 2.4,
+     "tets": 46047,
+     "B_mid_err_pct": 1.035,
+     "on_axis_L2_pct": 2.374,
+     "wall_s": 10.1
+    },
+    {
+     "h_mm": 1.8,
+     "tets": 98365,
+     "B_mid_err_pct": 0.448,
+     "on_axis_L2_pct": 1.156,
+     "wall_s": 21.6
+    },
+    {
+     "h_mm": 1.3,
+     "tets": 236992,
+     "B_mid_err_pct": 0.686,
+     "on_axis_L2_pct": 1.067,
+     "wall_s": 50.3
+    }
+   ],
+   "J_source_on_the_same_mesh": {
+    "h_mm": 1.6,
+    "B_mid_err_pct": 0.24,
+    "on_axis_L2_pct": 0.82,
+    "note": "the J source is MORE accurate here, and the reason is geometric rather than formulational: this solenoid's J is confined to a conformally meshed tube, while its T is nonzero across the whole bore and is interpolated on coarse air elements.  The motor winding's T is supported only in the copper's radial band, which is the well-resolved part of that cross-section.  The trade is stated because it is real: T buys exact consistency and pays a little interpolation."
+   },
+   "div_B_identity_Wb": -4.16e-23
+  },
+  "iron_anisotropy": {
+   "_doc": "Blocker 2: nedelec.py used to REFUSE a laminated Region rather than solve it as solid iron.  It now assembles the diagonal nu = diag(nu_t, nu_t, nu_z) with nu_z derived from solver.axial_mu \u00e2\u20ac\u201d one homogenisation, inverted, never re-derived.",
+   "kf_1_identity": {
+    "_doc": "the solid material must be a MEMBER of the lamination family, not a special case: forcing the anisotropic branch at k_f = 1 must reproduce the isotropic assembly",
+    "max_dA_over_A": {
+     "M_axial": 5.098e-12,
+     "M_in_plane": 4.238e-12
+    },
+    "pinned_by": "tests/test_static3d_stage_b.py::test_a_solid_region_takes_the_isotropic_path_bit_for_bit"
+   },
+   "direction_signature": {
+    "_doc": "the test that separates the correct tensor from the transposed one \u00e2\u20ac\u201d a swapped nu converges just as happily and gets both signs backwards.  Magnetised sphere in an iron shell, k_f = 0.92 against solid, A-formulation.",
+    "iron_B_change_in_plane_pct": 18.77,
+    "iron_B_change_axial_pct": -24.18,
+    "reading": "blocking the axial path keeps MORE of a transversely magnetised body's flux in the sheet plane and lets LESS of an axially magnetised one's cross the stack"
+   },
+   "cross_formulation": {
+    "_doc": "scalar P2 vs A/N0 on the RATIO laminated/solid, where the two elements' very different iron errors cancel.  benchmarks.iron_ladder already measured N0 ~6x less accurate than P2 inside iron, so an absolute comparison there measures the element.",
+    "mesh": "sphere_with_iron_shell, 78621 tets",
+    "M_axial": {
+     "gap_pct": 0.178,
+     "magnet_interior_pct": 0.254,
+     "iron_z_pct": 2.99,
+     "iron_pct": 4.96
+    },
+    "M_in_plane": {
+     "gap_pct": 0.003,
+     "iron_pct": 6.67,
+     "note": "the axial columns are ratios of quantities that are zero by symmetry for an in-plane magnet and carry no signal"
+    },
+    "verdict": "on the quantities with signal the two formulations agree on what lamination does to 0.003-0.25 %, inside the round-4 mesh bracket (~0.6 %)"
+   }
+  },
+  "end_winding_leakage": {
+   "status": "NOT COMPLETED in this pass",
+   "_doc": "what the 3D model sees that 2D cannot, as a split of ONE integral rather than a comparison of two models.  lambda = integral(T_1 . B) over the whole machine; split it at the stack-end plane and the inside part is what a 2D cross-section-times-a-length can represent, while the outside part - the axial fringing of the stack field PLUS the end turns' own flux - is invisible to 2D by construction.  The stack end is a mesh plane, so the split is exact and not approximate.",
+   "machinery_is_in_place": "loaded.unit_phase_windings + loaded.flux_linkage_axial_split + loaded.inductance_matrix; the identity they rest on (integral(T.B) == A^T f == integral(B.H) on a linear problem) is pinned by tests/test_static3d_stage_b.py::test_flux_linkage_from_T_equals_the_stored_energy_identity",
+   "how_to_run": "one phase at 1 A, magnets OFF, LINEAR iron (an inductance is a derivative and lambda/i on saturating iron is not one), over h_ew = 1.4 / 2.8 / 5.6 mm and over ew_shape cosine/linear, so the end-turn geometry's own influence is measured rather than assumed.",
+   "why_not_now": "the first solve of the sweep was still running when the user's optimizer took the machine (nine refine_proc workers); the run was stopped rather than compete with it.  One loaded solve at this mesh is ~76 s on a quiet machine, so the whole sweep is ~6 minutes when the box is free.",
+   "end_winding_factor_note": "the project's end_winding_factor = 1.406 for this preset is a RESISTANCE length factor.  These rows would be the INDUCTIVE counterpart it has never had, which is the quantity the user's ANSYS comparison (1.76 vs auto 1.41) is really about."
+  },
+  "long_stack_honesty_test": {
+   "status": "NOT RUN in this pass",
+   "_doc": "the torque form of this test needs blocker 3.  The form that a single rotor position CAN answer is the INDUCTANCE one: L_end lives in the air above the stack and is geometric, so at 4x stack it must barely move while L_stack scales with the stack and the end FRACTION falls like 1/L.  A split that failed that would not be measuring an end effect at all.",
+   "how_to_run": "three solves at stack_mm 12 / 24 / 48, one phase at 1 A, magnets off, linear iron, same cross-section mesh and the same h_ew = 2.8 mm band; compare L_stack/stack_mm (must be constant) against L_end (must be constant) - loaded.flux_linkage_axial_split returns both.",
+   "why_not_now": "the machine was needed by the user's own optimizer (nine refine_proc workers), and this study is three more minutes of sustained CPU for a check that qualifies the leakage split rather than establishing it."
+  },
+  "demag_under_load": {
+   "_doc": "H . M_hat inside the magnets, per axial slice; negative is demagnetising.  The loaded and no-load rows are the SAME mesh and the SAME (linear) iron, so the difference between them is the armature field and nothing else.  LINEAR iron is a stated limitation, not a convenience: this spoke rotor's bridges saturate at I = 0 already, so the absolute levels are not Stage A's nonlinear ones and a converged nonlinear loaded run would move them.",
+   "loaded_linear_iron": {
+    "slices": [
+     {
+      "z_lo_m": 0.0,
+      "z_hi_m": 0.001,
+      "z_mid_m": 0.0005,
+      "worst_H_A_per_m": -425858.82757371914,
+      "mean_H_A_per_m": -10695.601244690499
+     },
+     {
+      "z_lo_m": 0.001,
+      "z_hi_m": 0.002,
+      "z_mid_m": 0.0015,
+      "worst_H_A_per_m": -386652.53131226264,
+      "mean_H_A_per_m": -10386.810774345904
+     },
+     {
+      "z_lo_m": 0.002,
+      "z_hi_m": 0.003,
+      "z_mid_m": 0.0025,
+      "worst_H_A_per_m": -400155.15717728925,
+      "mean_H_A_per_m": -9349.754079610395
+     },
+     {
+      "z_lo_m": 0.003,
+      "z_hi_m": 0.004,
+      "z_mid_m": 0.0035,
+      "worst_H_A_per_m": -408836.68648907886,
+      "mean_H_A_per_m": -10425.450257210394
+     },
+     {
+      "z_lo_m": 0.004,
+      "z_hi_m": 0.005,
+      "z_mid_m": 0.0045000000000000005,
+      "worst_H_A_per_m": -404692.9941872313,
+      "mean_H_A_per_m": -9532.312817210732
+     },
+     {
+      "z_lo_m": 0.005,
+      "z_hi_m": 0.006,
+      "z_mid_m": 0.0055,
+      "worst_H_A_per_m": -442218.2664550206,
+      "mean_H_A_per_m": -9940.985812573148
+     }
+    ],
+    "mid_worst_H": -425858.82757371914,
+    "end_worst_H": -442218.2664550206,
+    "mid_mean_H": -10695.601244690499,
+    "end_mean_H": -9940.985812573148,
+    "worst_shift_A_per_m": -16359.438881301438,
+    "mean_shift_A_per_m": 754.6154321173508,
+    "I_ph": {
+     "A": 21.204323896810546,
+     "B": 39.85358585161611,
+     "C": -61.05790974842665
+    },
+    "note": "negative H.Mhat is demagnetising.  At I = 0 the end slice is LESS negative than the mid-plane one (the end flux spills into air instead of being pushed back through the magnet); under load the armature field adds to that, and the two do not have to have the same sign"
+   },
+   "no_load_linear_iron_same_mesh": {
+    "slices": [
+     {
+      "z_lo_m": 0.0,
+      "z_hi_m": 0.001,
+      "z_mid_m": 0.0005,
+      "worst_H_A_per_m": -20371.570875400364,
+      "mean_H_A_per_m": -10261.545279507678
+     },
+     {
+      "z_lo_m": 0.001,
+      "z_hi_m": 0.002,
+      "z_mid_m": 0.0015,
+      "worst_H_A_per_m": -18312.124079116038,
+      "mean_H_A_per_m": -9958.052032704136
+     },
+     {
+      "z_lo_m": 0.002,
+      "z_hi_m": 0.003,
+      "z_mid_m": 0.0025,
+      "worst_H_A_per_m": -19401.454210432155,
+      "mean_H_A_per_m": -9401.712982734925
+     },
+     {
+      "z_lo_m": 0.003,
+      "z_hi_m": 0.004,
+      "z_mid_m": 0.0035,
+      "worst_H_A_per_m": -19543.997036097884,
+      "mean_H_A_per_m": -9981.900309327277
+     },
+     {
+      "z_lo_m": 0.004,
+      "z_hi_m": 0.005,
+      "z_mid_m": 0.0045000000000000005,
+      "worst_H_A_per_m": -19392.134768386113,
+      "mean_H_A_per_m": -9503.859413296039
+     },
+     {
+      "z_lo_m": 0.005,
+      "z_hi_m": 0.006,
+      "z_mid_m": 0.0055,
+      "worst_H_A_per_m": -31167.12460494227,
+      "mean_H_A_per_m": -9647.702130580448
+     }
+    ],
+    "mid_worst_H": -20371.570875400364,
+    "end_worst_H": -31167.12460494227,
+    "mid_mean_H": -10261.545279507678,
+    "end_mean_H": -9647.702130580448,
+    "worst_shift_A_per_m": -10795.553729541905,
+    "mean_shift_A_per_m": 613.8431489272298,
+    "I_ph": {},
+    "note": "negative H.Mhat is demagnetising.  At I = 0 the end slice is LESS negative than the mid-plane one (the end flux spills into air instead of being pushed back through the magnet); under load the armature field adds to that, and the two do not have to have the same sign"
+   },
+   "nonlinear_loaded_capped": {
+    "slices": [
+     {
+      "z_lo_m": 0.0,
+      "z_hi_m": 0.001,
+      "z_mid_m": 0.0005,
+      "worst_H_A_per_m": -976254.4496632539,
+      "mean_H_A_per_m": -425079.24002203526
+     },
+     {
+      "z_lo_m": 0.001,
+      "z_hi_m": 0.002,
+      "z_mid_m": 0.0015,
+      "worst_H_A_per_m": -982103.5040963592,
+      "mean_H_A_per_m": -411959.07880618115
+     },
+     {
+      "z_lo_m": 0.002,
+      "z_hi_m": 0.003,
+      "z_mid_m": 0.0025,
+      "worst_H_A_per_m": -1036743.1799870809,
+      "mean_H_A_per_m": -421780.1708961777
+     },
+     {
+      "z_lo_m": 0.003,
+      "z_hi_m": 0.004,
+      "z_mid_m": 0.0035,
+      "worst_H_A_per_m": -962610.4349449517,
+      "mean_H_A_per_m": -395206.6271371279
+     },
+     {
+      "z_lo_m": 0.004,
+      "z_hi_m": 0.005,
+      "z_mid_m": 0.0045000000000000005,
+      "worst_H_A_per_m": -1010141.1801151439,
+      "mean_H_A_per_m": -388045.23203281243
+     },
+     {
+      "z_lo_m": 0.005,
+      "z_hi_m": 0.006,
+      "z_mid_m": 0.0055,
+      "worst_H_A_per_m": -1068083.4396253412,
+      "mean_H_A_per_m": -364493.738063465
+     }
+    ],
+    "mid_worst_H": -976254.4496632539,
+    "end_worst_H": -1068083.4396253412,
+    "mid_mean_H": -425079.24002203526,
+    "end_mean_H": -364493.738063465,
+    "worst_shift_A_per_m": -91828.98996208736,
+    "mean_shift_A_per_m": 60585.50195857027,
+    "I_ph": {
+     "A": 21.204323896810546,
+     "B": 39.85358585161611,
+     "C": -61.05790974842665
+    },
+    "note": "negative H.Mhat is demagnetising.  At I = 0 the end slice is LESS negative than the mid-plane one (the end flux spills into air instead of being pushed back through the magnet); under load the armature field adds to that, and the two do not have to have the same sign"
+   },
+   "stage_a_no_load_for_contrast": {
+    "_doc": "from the Stage A block above: CONVERGED nonlinear, but a different (finer) mesh and ISOTROPIC iron, so this is a contrast and not a subtraction.",
+    "mid_worst_H": -615640.0433883136,
+    "end_worst_H": -757529.9845196608,
+    "worst_shift_A_per_m": -141889.9411313472,
+    "mid_mean_H": -341245.18589158886,
+    "end_mean_H": -335711.35450086347,
+    "mean_shift_A_per_m": 5533.8313907253905
+   },
+   "reading": "Two statements, and they point opposite ways, which is why both are reported.  ON THE VOLUME MEAN the end slice is the SAFER one and load makes it safer still: the end-vs-mid mean shift goes from +5.5 kA/m at I = 0 (Stage A) to +60.6 kA/m under load.  AT THE WORST ELEMENT the end slice is the more exposed one at I = 0 already (-141.9 kA/m) and stays so under load (-91.8 kA/m) - the armature field does not rescue the corner, it just raises the whole level: the mid-plane worst goes from -616 kA/m to -976 kA/m and the end worst from -758 kA/m to -1068 kA/m.  So load costs this machine roughly 300 kA/m of margin everywhere, and the end region remains the place the worst element lives.  The nonlinear loaded state behind those numbers is NOT converged (constitutive residual 0.164 after 14 capped sweeps), so treat the loaded absolutes as indicative and the SIGNS and ORDER as the result."
+  },
+  "nonlinear_cost": {
+   "_doc": "the LOADED nonlinear A-formulation solve, cold-started from the linear permeability.  Capped at 14 sweeps ON PURPOSE and it did NOT converge.  The trace is recorded because the cost of converging it is the number Stage B planning actually needs.",
+   "history": [
+    {
+     "sweep": 0,
+     "constitutive_residual": 0.9997,
+     "damping": 0.35
+    },
+    {
+     "sweep": 1,
+     "constitutive_residual": 0.9954,
+     "damping": 0.35
+    },
+    {
+     "sweep": 2,
+     "constitutive_residual": 0.9682,
+     "damping": 0.35
+    },
+    {
+     "sweep": 3,
+     "constitutive_residual": 0.9501,
+     "damping": 0.35
+    },
+    {
+     "sweep": 4,
+     "constitutive_residual": 0.9538,
+     "damping": 0.35
+    },
+    {
+     "sweep": 5,
+     "constitutive_residual": 0.7832,
+     "damping": 0.175
+    },
+    {
+     "sweep": 6,
+     "constitutive_residual": 0.691,
+     "damping": 0.175
+    },
+    {
+     "sweep": 7,
+     "constitutive_residual": 0.5864,
+     "damping": 0.175
+    },
+    {
+     "sweep": 8,
+     "constitutive_residual": 0.7995,
+     "damping": 0.28
+    },
+    {
+     "sweep": 9,
+     "constitutive_residual": 0.3774,
+     "damping": 0.14
+    },
+    {
+     "sweep": 10,
+     "constitutive_residual": 0.3002,
+     "damping": 0.14
+    },
+    {
+     "sweep": 11,
+     "constitutive_residual": 0.2517,
+     "damping": 0.14
+    },
+    {
+     "sweep": 12,
+     "constitutive_residual": 0.4508,
+     "damping": 0.224
+    },
+    {
+     "sweep": 13,
+     "constitutive_residual": 0.1643,
+     "damping": 0.112
+    }
+   ],
+   "sweeps_run": 14,
+   "residual_reached": 0.1643,
+   "tail_contraction_per_sweep": 0.8179792593227151,
+   "sweeps_to_3e_3_extrapolated": 33,
+   "wall_s_per_sweep_approx": 75.0,
+   "comparison": "Stage A's SCALAR no-load solve of the same machine needed 58 sweeps to reach 2.9e-3 at the same damping, so the sweep COUNT is the machine's, not the formulation's.  What the A-formulation changes is the price of a sweep: ~75 s at 198834 edge dofs, because every sweep refactorises the regularised-mass preconditioner.",
+   "implication": "a converged loaded nonlinear 3D solve is of order an hour per rotor position at this mesh, so the energy-method torque - two or three positions per operating point - needs warm-starting from the previous angle (mu_init already exists in both drivers) before it is affordable."
+  },
+  "cost": {
+   "_doc": "What a loaded 3D solve costs, measured. Mesh: the my_40mm_last cross-section at h_gap 0.55 / h_solid 1.70 mm (3655 triangles), extruded on n_stack 5 + n_ew 4 + n_cap 6 axial layers with the stack end and the end-winding band both on mesh planes. Lowest-order Nedelec, so dofs = edges. MKL_NUM_THREADS=1 throughout, sequential, on a machine the user was also using.",
+   "rows": [
+    {
+     "label": "loaded, LINEAR iron, closed winding",
+     "tets": 164475,
+     "ndofs": 198834,
+     "cg_iterations": 24,
+     "picard_iterations": null,
+     "picard_converged": null,
+     "picard_residual": null,
+     "assemble_s": 4.462212,
+     "solve_s": 65.875906,
+     "wall_s": 75.9621,
+     "source_residual": 0.0,
+     "source_removed_norm": 0.0,
+     "load_norm": 11510.88853
+    },
+    {
+     "label": "loaded, NONLINEAR iron, capped at 14 Picard sweeps (NOT converged)",
+     "tets": 164475,
+     "ndofs": 198834,
+     "cg_iterations": 19,
+     "picard_iterations": 14,
+     "picard_converged": false,
+     "picard_residual": 0.164346,
+     "assemble_s": 2.038556,
+     "solve_s": 13.818232,
+     "wall_s": 613.002961,
+     "source_residual": 0.0,
+     "source_removed_norm": 0.0,
+     "load_norm": 11510.88853,
+     "note": "assemble_s/solve_s are the FINAL sweep only; wall_s is the whole Picard. ~44 s of solve per sweep on a quiet machine, ~75 s per sweep wall including the preconditioner refactorisation."
+    }
+   ],
+   "reading": [
+    "the closed winding costs NOTHING in consistency: source_residual is 0.0 and the Helmholtz projection removes 0.0 on the real cross-section, exactly as on the benchmark",
+    "a LINEAR loaded solve is ~76 s at 198834 edge dofs and 24 CG iterations - the regularised-mass preconditioner is doing its job (Stage A measured 17348 Jacobi iterations against 17 with it)",
+    "the NONLINEAR loaded solve is the expensive one and it is the Picard, not the linear algebra: 14 sweeps for 613 s and still at a constitutive residual of 0.164"
+   ],
+   "benchmark_costs_for_scale": [
+    {
+     "label": "thick solenoid, T source, gauge=tree",
+     "tets": 46047,
+     "wall_s": 10.1
+    },
+    {
+     "label": "thick solenoid, T source, gauge=tree",
+     "tets": 98365,
+     "wall_s": 21.6
+    },
+    {
+     "label": "thick solenoid, T source, gauge=tree",
+     "tets": 236992,
+     "wall_s": 50.3
+    },
+    {
+     "label": "thick solenoid, T source, gauge=none (CG, 5 it)",
+     "tets": 134697,
+     "wall_s": 96.0
+    },
+    {
+     "label": "thick solenoid, J source, gauge=none (CG, 6 it)",
+     "tets": 134697,
+     "wall_s": 91.1
+    }
+   ]
+  },
+  "torque": {
+   "status": "NOT MEASURED",
+   "k_T": null,
+   "reason": "torque by the energy method is dW'/dtheta and needs a second rotor position on a mesh with unchanged connectivity. That is blocker 3 and it is open (see blockers.rotatable_rotor_with_identical_topology). Nothing in this block is a torque, and this key stays null until the sliding band exists and passes its two proofs.",
+   "what_the_2d_leg_will_be": {
+    "_doc": "recorded NOW so the comparison is pinned before the 3D number exists, and so the 2D reference cannot be chosen after the fact",
+    "T_avg_Nm": 0.5863095394873835,
+    "T_ripple_pct": 4.813827787933513,
+    "source": "config/end_effect_3d.json::consistency_investigation.round_4_the_same_defect_in_the_production_paths.torque_path",
+    "who": "em_transient_eval -> fem_transient_sliding_band, element_order 2, Newton-converged (picard_resid_max 9.65e-8, no unconverged and no fallback frames)",
+    "method": "NOT Maxwell stress. fem_solver_2d's reported mean is sb_postproc.hybrid_torque: <T> = (3/2)*p*n_par*<psi_alpha*i_beta - psi_beta*i_alpha>, i.e. the flux-linkage/energy mean, with Maxwell supplying only the ripple SHAPE (method string 'energy_mean+maxwell_ripple'). So the 2D leg is already an energy-method number and k_T will be energy over energy, as the project's rule requires.",
+    "operating_point": "43.84 A phase rms, 13000 rpm, gamma 10 deg, connection 2S (n_parallel 1), i_coil_peak 62.0 A",
+    "frames": "one electrical period = 360 deg elec = 51.43 deg mech; the sliding band snaps the requested steps per period to a divisor of its slip nodes per period and reports the substitution"
+   },
+   "delta_sweep": null,
+   "long_stack_honesty_test": null
+  },
+  "blockers": {
+   "closed_winding": {
+    "status": "SOLVED",
+    "how": "simulation/static3d/winding3d.py - the coil is a SOURCE FIELD T = Psi(r,theta)*beta(z)*e_r with curl(T) = J, assembled as integral(T . curl v). Inside the stack (beta = 1) the axial current is exactly fem_solver_2d.build_materials' own J_z = dir*I*n_wires/A_copper; above the stack beta falls from 1 to 0 over h_ew = tooth_width/2 + wire_width/2 = 2.80 mm and the tangential end turn carries the return. Each radius closes its own loop, so div J = 0 is an identity, not a tolerance.",
+    "why_the_half_model_is_a_whole_loop": "the slot current is EVEN in z and the end-turn current is ODD in z, so B_z = 0 on the z = 0 mirror plane for the loaded machine exactly as for the no-load one. The modelled half is one half of a genuine closed loop; the current that leaves through z = 0 leaves through a Dirichlet boundary whose nodes the discrete-gradient projection has already contracted away, so nothing is absorbed there either.",
+    "evidence": [
+     "load consistency on the solenoid benchmark: 3.10e-16, and the Helmholtz projection removed EXACTLY 0.0 of a load of norm 1.2e4 (a J source on the same mesh: 9.63e-3, and 0.395 % of the load deleted)",
+     "load consistency on the REAL 40 mm cross-section under load, 164475 tets / 198834 edge dofs: source_residual = 0.0, removed = 0.0",
+     "validated against exact.thick_solenoid_axis_Bz: on-axis L2 2.37 % -> 1.16 % -> 1.07 % over three meshes (lowest-order Nedelec, B piecewise constant, first order)",
+     "the winding closes over the 180 deg sector to 5.8e-15 of its own scale, so T is anti-periodic and the sector solve is the machine",
+     "the sampled winding delivers the ampere-turns build_materials asked for to 0.0013 % (433.99 At against 434.00)"
+    ],
+    "modelling_choices_stated": [
+     "the end turn stays at its own radius and crosses tangentially over the tooth in a band above the stack; a real bundle also migrates radially. h_ew and the beta shape are parameters and their effect is measured, not assumed.",
+     "the copper outline is not a mesh line (slots are meshed as air, as in Stage A), so the ampere-turns are exact but their sub-slot distribution is resolved only to the element size."
+    ]
+   },
+   "anisotropic_iron_in_the_A_formulation": {
+    "status": "SOLVED",
+    "how": "nedelec.py now assembles nu = diag(nu_t, nu_t, nu_z) through _curlcurl_aniso, with nu_z = 1/axial_mu(1/nu_t, k_f) - the scalar solver's own homogenisation, inverted, never re-derived. The Picard reads the B-H curve at the IN-PLANE |B| in a laminated region, the same rule solver.solve_static3d_nonlinear uses. It no longer raises NotImplementedError on a laminated Region.",
+    "evidence": [
+     "k_f = 1 reproduces the isotropic assembly to 4-5e-12 of |A| - the solid material is a member of the family, not a branch",
+     "direction signature: laminating raises a transversely magnetised body's iron |B| by +18.8 % and lowers an axially magnetised one's by -24.2 %; a transposed tensor gets both signs backwards",
+     "scalar P2 vs A/N0 agree on the lamination RATIO to 0.003 % (gap, in-plane M) and 0.18-0.25 % (gap and magnet interior, axial M), inside the round-4 mesh bracket of ~0.6 %"
+    ]
+   },
+   "rotatable_rotor_with_identical_topology": {
+    "status": "NOT DONE - no k_T is quoted, by the project's own rule that a number nobody can reproduce is worse than no number",
+    "what_is_needed": "the energy method needs W'(theta) at two or three rotor angles on a mesh whose CONNECTIVITY does not change, or the mesh difference swamps the torque signal.",
+    "design_the_2d_solver_already_proves_works": {
+     "_doc": "mesher._weld_belt_into_half and p2_projection.SlipProjection do exactly this in 2D and were read in full for this pass. The 3D port is mechanical but not small.",
+     "1_geometry": "mesh the cross-section as THREE pieces instead of one: a stator part (r >= r_stator_in), a rotor part (r <= r_rotor_out), and a belt whose two halves each carry a UNIFORM ring of N nodes at the mid-gap radius. The slip is a node identification at that one radius, so no element is ever sheared and the element matrices never change.",
+     "2_rotation": "rotation is a RE-LABELLING, not a coordinate change: rotor ring node k is welded to stator ring node k+m. Legal angles are integer multiples of the ring pitch 2*pi/N. Element geometry is bit-identical at every m, which is the whole point.",
+     "3_the_sector": "the rotor is 180 deg anti-periodic at ANY rotor angle, so the anti-periodic cut constraint is untouched by rotation. A ring node pushed past theta = 180 deg reappears at theta = 0 carrying a factor bc_sign = -1; the 2D code does this in p2_projection.ring_map and the 3D version needs the same wrap-with-sign.",
+     "4_what_is_genuinely_new_in_3d": "the weld is on NEDELEC EDGE dofs, not nodes. The mid-gap cylinder's surface mesh must match under the shift - it does, because both sides are extruded from the same uniform ring on the same z levels and motor_mesh's prism split is already rotation-equivariant - and each welded edge pair carries TWO signs: its own orientation sign, which periodic.edge_dof_pairs already computes, and the anti-periodic wrap sign. The sector constraint and the slip constraint then have to be composed in ONE SIGNED UNION-FIND rather than applied in sequence, because a ring node on the cut plane belongs to both.",
+     "5_the_proof_it_must_pass": "rotate by one full pole pitch: the machine maps onto itself anti-periodically and the co-energy must return bit-identically. Then a magnet-only cogging sweep over many pitches must be smooth, with no sawtooth at the relabelling period."
+    },
+    "why_it_did_not_land_in_this_pass": "the cross-section mesher (motor_mesh.build_section_mesh_2d) produces ONE gmsh mesh of the whole wedge, with a free Delaunay gap. The three-piece build with two uniform rings, the edge-dof weld with two signs, and the composed signed union-find are a rewrite of the meshing and constraint layers, not an addition to them. The two blockers that WERE closed had to come first: without a consistent closed winding and without anisotropic iron, a torque from that band would have been a number produced by a load the projection had partly eaten, in solid iron.",
+    "cost_note": "the 2D band uses n_slip = 1008-1680 nodes per ring. A 3D ring at 180 nodes per 180 deg sector gives a 1 deg pitch, an 0.21 mm arc against the 0.20 mm gap - a sane aspect ratio and a usable delta for a central difference. That sizing is a measurement to make, not an assumption to carry."
+   }
+  }
+ }
 }

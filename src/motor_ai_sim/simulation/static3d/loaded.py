@@ -388,43 +388,44 @@ STAGE_B_VERSION = "static3d-stageB-1"
 #: The ``stage_b`` block written into ``config/end_effect_3d.json``.  Documented
 #: here rather than in the JSON because the JSON is generated and a schema that
 #: lives only in its own output cannot be checked against anything.
-#:
-#: stage_b
-#:   version              str    schema tag, ``static3d-stageB-1``
-#:   generated_utc        str
-#:   machine              dict   preset name, geometry fingerprint, MATERIALS
-#:                               ACTUALLY USED (Stage A's, pinned in-process)
-#:   operating_point      dict   I_phase_rms, connection, n_parallel,
-#:                               i_coil_peak, gamma_deg, daxis_deg, rpm,
-#:                               rotor_angle_deg, and the per-phase currents
-#:   winding_model        dict   how the coil was closed: formulation ("source
-#:                               field T, curl T = J"), h_ew_mm and the rule it
-#:                               came from, ew_shape, grid, the CLOSURE residual
-#:                               Psi(sector)/scale, the ampere-turn audit
-#:                               (intended vs delivered per slot, worst %)
-#:   load_consistency     dict   |G^T f|/|f| and the norm the Helmholtz
-#:                               projection REMOVED, for the T source and for a
-#:                               J source on the same benchmark — the whole
-#:                               point of blocker 1, as two numbers
-#:   winding_validation   dict   the T path against exact.thick_solenoid_axis_Bz,
-#:                               per mesh: tets, mid error, L2 error
-#:   iron_anisotropy      dict   the k_f = 1 identity, the in-plane/axial
-#:                               signature, and the scalar-vs-A lamination-ratio
-#:                               agreement
-#:   end_winding_leakage  dict   rows over h_ew and shape: L_self, L_stack,
-#:                               L_end, end fraction, mutuals — the split of the
-#:                               SAME integral at the stack end plane
-#:   demag_under_load     dict   per-slice H.M_hat, end vs mid, plus the I = 0
-#:                               Stage A numbers for contrast
-#:   cost                 list   one row per solve: tets, dofs, CG iterations,
-#:                               Picard iterations/residual, assemble/solve/wall
-#:   torque               dict   status and, while blocker 3 is open, the
-#:                               REASON no k_T is quoted.  This key must never
-#:                               carry a number the sliding band has not earned.
-#:   blockers             dict   one entry per Stage B blocker: status, the
-#:                               evidence that closed it, or the design and the
-#:                               measurement that is missing
-STAGE_B_SCHEMA_DOC = __doc__
+STAGE_B_SCHEMA_DOC = """\
+stage_b
+  version              str    schema tag, ``static3d-stageB-1``
+  generated_utc        str
+  machine              dict   preset name, geometry fingerprint, MATERIALS
+                              ACTUALLY USED (Stage A's, pinned in-process)
+  operating_point      dict   I_phase_rms, connection, n_parallel,
+                              i_coil_peak, gamma_deg, daxis_deg, rpm,
+                              rotor_angle_deg, and the per-phase currents
+  winding_model        dict   how the coil was closed: formulation ("source
+                              field T, curl T = J"), h_ew_mm and the rule it
+                              came from, ew_shape, grid, the CLOSURE residual
+                              Psi(sector)/scale, the ampere-turn audit
+                              (intended vs delivered per slot, worst %)
+  load_consistency     dict   |G^T f|/|f| and the norm the Helmholtz
+                              projection REMOVED, for the T source and for a
+                              J source on the same benchmark — the whole
+                              point of blocker 1, as two numbers
+  winding_validation   dict   the T path against exact.thick_solenoid_axis_Bz,
+                              per mesh: tets, mid error, L2 error
+  iron_anisotropy      dict   the k_f = 1 identity, the in-plane/axial
+                              signature, and the scalar-vs-A lamination-ratio
+                              agreement
+  end_winding_leakage  dict   rows over h_ew and shape: L_self, L_stack,
+                              L_end, end fraction, mutuals — the split of the
+                              SAME integral at the stack end plane
+  demag_under_load     dict   per-slice H.M_hat, end vs mid, plus the I = 0
+                              Stage A numbers for contrast
+  cost                 list   one row per solve: tets, dofs, CG iterations,
+                              Picard iterations/residual, assemble/solve/wall
+  torque               dict   status and, while blocker 3 is open, the
+                              REASON no k_T is quoted.  This key must never
+                              carry a number the sliding band has not earned.
+  blockers             dict   one entry per Stage B blocker: status, the
+                              evidence that closed it, or the design and the
+                              measurement that is missing
+"""
+
 
 
 def cost_row(ls: LoadedSolve, label: str) -> dict:

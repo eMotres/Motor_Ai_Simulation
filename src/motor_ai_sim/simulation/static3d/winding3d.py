@@ -265,29 +265,11 @@ class WindingT:
             return out
         return _T
 
-    def rotated(self, dtheta: float) -> "WindingT":
-        """The same winding with its Psi RE-SAMPLED at theta - dtheta.
-
-        Only needed when the rotor is rotated by moving the whole model instead
-        of the rotor: it is not used by the torque path (which turns the rotor,
-        not the stator) and exists so that sanity checks can rotate the machine
-        rigidly and confirm the energy does not move."""
-        th = self.th_grid - float(dtheta)
-        wrapped = np.mod(th, 2.0 * self.sector_rad)
-        sign = np.where(wrapped > self.sector_rad, -1.0, 1.0)
-        thw = np.where(wrapped > self.sector_rad,
-                       wrapped - self.sector_rad, wrapped)
-        i = np.clip(np.searchsorted(self.th_grid, thw) - 1, 0,
-                    self.th_grid.size - 2)
-        f = ((thw - self.th_grid[i])
-             / (self.th_grid[i + 1] - self.th_grid[i]))
-        P = (1 - f)[None] * self.Psi[:, i] + f[None] * self.Psi[:, i + 1]
-        out = WindingT(self.r_grid, self.th_grid, P * sign[None],
-                       self.stack_half_m, self.h_ew_m, self.ew_shape,
-                       self.sector_rad,
-                       dict(self.ampere_turns_per_slot), dict(self.meta))
-        out.meta["rotated_by_rad"] = float(dtheta)
-        return out
+    # NOTE deliberately no ``rotated()`` here.  The torque path turns the ROTOR,
+    # not the stator, so a rotated winding is not what the energy method needs;
+    # writing one now would ship an untested method that a later pass would
+    # reasonably assume had been checked.  When the sliding band lands
+    # (config/end_effect_3d.json::stage_b.blockers), the winding stays put.
 
 
 def build_winding_T(section: MotorSection,

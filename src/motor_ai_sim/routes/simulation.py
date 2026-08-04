@@ -1966,11 +1966,14 @@ def get_fem_field2d(
         Pfe = _mean("P_fe_W"); Pmag = _mean("P_mag_eddy_W")
         Tavg = float(d.get("T_avg_Nm", 0.0)); rpm = float(d.get("rpm", 0.0))
         ploss = Pcu + Pfe + Pmag
-        # Energy conservation: P_mech = P_elec_in − P_loss (P_elec_in = ⟨Σ v·i⟩ = 0
-        # at no-load → P_mech = −P_loss, not the noisy cogging-mean torque × ω).
+        # Same convention as the Simulation summary (2026-08-04): shaft out over
+        # (shaft out + every reported loss).  The solved-terminal P_elec_in
+        # lacks the post-processed losses (analytic iron, end-winding copper),
+        # so dividing by it read optimistic.  At no-load T·ω is cogging noise
+        # and Pmech<=0 → eff reports 0, same as before.
         Pelec = float(d.get("P_elec_in_W", 0.0))
-        Pmech = Pelec - ploss
-        eff = (Pmech / Pelec) if (Pmech > 0 and Pelec > 1.0) else 0.0
+        Pmech = Tavg * 2.0 * _np.pi * rpm / 60.0
+        eff = (Pmech / (Pmech + ploss)) if (Pmech > 0 and (Pmech + ploss) > 1.0) else 0.0
         result.update({
             "eddy": bool(eddy),
             "rpm": rpm, "freq_Hz": round(float(d.get("f_elec_Hz", 0.0)), 2),
@@ -3360,7 +3363,12 @@ def _build_transient_summary(
 
     _rpm = float(sbres.get("rpm", 3950.0))
     _Tavg = float(sbres.get("T_avg_Nm", 0.0))
-    _Pmech = float(sbres.get("P_mech_avg_W", _Tavg * 2 * _math.pi * _rpm / 60))
+    # The card's mechanical power IS its torque tile times speed — the two
+    # numbers must agree by inspection (T·ω).  The solver's energy-balanced
+    # P_mech_avg_W stays available below as a diagnostic; it differed by ~1 %
+    # and made the card contradict itself (user-caught, 2026-08-04).
+    _Pmech = _Tavg * 2 * _math.pi * _rpm / 60.0
+    _Pmech_balance = float(sbres.get("P_mech_avg_W", _Pmech))
 
     # Period-MEAN of each instantaneous loss series — NOT [0].  The iron/magnet
     # series ripple as the teeth pass; frame 0 sits near a peak, so [0] would
@@ -3403,9 +3411,16 @@ def _build_transient_summary(
     # Total INCLUDES shaft eddy so the breakdown sums to the same loss the solver's
     # energy-balanced P_mech subtracts (else the card's Mech-power ≠ Σ losses).
     _ploss = _Pcu + _Pfe + _Pmag + _Pshaft
-    # Energy conservation: P_mech = P_elec_in − P_loss.  Efficiency = shaft out /
-    # electrical in; 0 when not motoring.
-    _Pelec = float(sbres.get("P_elec_in_W", _Pmech + _ploss))
+    # Efficiency = shaft out / (shaft out + EVERY loss the card reports).  The
+    # solved-circuit P_elec_in_W is NOT the denominator: the 2-D circuit only
+    # carries the losses that live in the field solve (active-length copper +
+    # solved eddy — measured 295 W of the card's 500 W on the 150 mm), while
+    # the analytic iron loss and the end-winding copper are post-processed and
+    # never flow through its terminals.  Dividing by it showed 97.81 % where
+    # the card's own numbers said 96.3 % (user-caught, 2026-08-04).  The solved
+    # terminal power stays below as an energy-balance diagnostic.
+    _Pelec_solved = float(sbres.get("P_elec_in_W", 0.0) or 0.0)
+    _Pelec = _Pmech + _ploss
     _eff = (_Pmech / _Pelec) if (_Pmech > 0 and _Pelec > 1.0) else 0.0
 
     # Voltage waveform quality (CIANO THD spec): V₁ + phase/line-to-line THD +
@@ -3482,6 +3497,12 @@ def _build_transient_summary(
         # 150 mm), so the card that shows it can say what it cost to be honest.
         "eddy_warmup_frames": int(sbres.get("eddy_warmup_frames") or 0),
         "efficiency":   round(_eff, 4),
+        # Energy-balance diagnostics: the solved terminal power and the solver's
+        # balanced mech power.  P_elec_in_solved − P_mech_balance = the losses
+        # that live INSIDE the field solve; the gap to P_loss_total_W is the
+        # post-processed remainder (iron + end-winding copper).
+        "P_elec_in_solved_W": round(_Pelec_solved, 1),
+        "P_mech_balance_W":   round(_Pmech_balance, 1),
         # ── nonlinear-solve honesty ──────────────────────────────────────
         # Every frame of the reported window has to have met its solver's
         # convergence test; if one did not, these numbers are an average over

@@ -978,6 +978,61 @@ def _check_part_mesh_supported(user_cm: dict, use_geo: bool) -> None:
                          f"size for {_bad}")
 
 
+#: Tags the shaft-bore retag is allowed to overwrite — the air family only.
+#: Restricting it this way makes the pass provably label-only: it can never
+#: take metal off the mesh, whatever an upstream classifier did.
+_AIRLIKE_DOMS = frozenset((DOM_AIR, DOM_AIRGAP, DOM_BAND, DOM_OUTER))
+
+
+def _retag_shaft_bore_as_air(mesh, tags, polys_half):
+    """The bore inside the hollow shaft is AIR, not air-GAP.
+
+    The gmsh-built rotor half is painted with a DEFAULT domain of DOM_AIRGAP
+    (``_stitch_full_half(polys_r_for_mesh, DOM_AIRGAP, ...)``, and the
+    ``in_band -> "air_gap"`` remap the OCC classify goes through) and then
+    overwritten by the solid polygons.  The shaft CadQuery builds is a TUBE,
+    so no polygon covers the bore inside it and the bore kept the air-GAP
+    label — out through the served domain map, the Mesh tab and the field
+    view, drawing the machine as if its air gap reached the centre.
+
+    ``_sigma_of_tag`` gives both DOM_AIR and DOM_AIRGAP sigma = 0 and both get
+    mu_r = 1, so this is a LABEL fix: no solved quantity moves.  The
+    geometry-driven mesher (geo_mesh._tag_rotor) already tags the bore
+    DOM_AIR; this brings the gmsh fallback into line with it.
+
+    Returns the tags array (a copy if anything changed, the original if not).
+    """
+    if mesh is None or tags is None:
+        return tags
+    g = (polys_half or {}).get("shaft")
+    if g is None or getattr(g, "is_empty", True):
+        return tags                              # stator half, or no shaft
+    from motor_ai_sim.simulation.geo_mesh import _shaft_bore_r
+    r_out = 0.0
+    for sub in getattr(g, "geoms", [g]):
+        c = np.asarray(sub.exterior.coords, float)
+        if len(c):
+            r_out = max(r_out, float(np.hypot(c[:, 0], c[:, 1]).max()))
+    r_bore = _shaft_bore_r(polys_half, r_out)    # 0.0 = solid shaft, nothing to do
+    if r_bore <= 0.0:
+        return tags
+    tags = np.asarray(tags)
+    P, T = mesh.p, mesh.t
+    r = np.hypot(P[0][T].mean(0), P[1][T].mean(0)) * 1e3          # m -> mm
+    # 1 % clear of the bore circle: a triangle straddling it may put its
+    # centroid either side, and it belongs to whichever region already owns it.
+    hit = (r < r_bore * 0.99) & np.isin(tags, list(_AIRLIKE_DOMS)) \
+        & (tags != DOM_AIR)
+    n = int(hit.sum())
+    if not n:
+        return tags
+    tags = tags.copy()
+    tags[hit] = DOM_AIR
+    log.info("shaft bore: %d triangles inside r=%.3f mm retagged -> DOM_AIR",
+             n, r_bore)
+    return tags
+
+
 def _build_sliding_band_meshes(
         polys: dict,
         rotor_angle_deg: float,
@@ -1252,6 +1307,10 @@ def _build_sliding_band_meshes(
                 mesh_s, tags_s = _weld_belt_into_half(mesh_s, tags_s, _bs, "stator", 1)
             if _br and "r1" not in _br:
                 mesh_r, tags_r = _weld_belt_into_half(mesh_r, tags_r, _br, "rotor", 1)
+        # Label-only: the hollow shaft's bore is DOM_AIR, not DOM_AIRGAP.  The
+        # bore is centred on the origin, so this is rotation-invariant and may
+        # sit either side of the rigid rotation below.
+        tags_r = _retag_shaft_bore_as_air(mesh_r, tags_r, polys_r_for_mesh)
         if abs(rotor_angle_deg) > 1e-9:
             mesh_r = type(mesh_r)(_rotate_mesh_points(mesh_r.p, rotor_angle_deg),
                                    mesh_r.t)
@@ -1375,6 +1434,10 @@ def _build_sliding_band_meshes(
             mesh_s, tags_s = _weld_belt_into_half(mesh_s, tags_s, _bs, "stator", n_sectors)
         if _br and "r1" not in _br:
             mesh_r, tags_r = _weld_belt_into_half(mesh_r, tags_r, _br, "rotor", n_sectors)
+
+    # Label-only: the hollow shaft's bore is DOM_AIR, not DOM_AIRGAP (see
+    # _retag_shaft_bore_as_air).  Rotation-invariant — the bore is centred.
+    tags_r = _retag_shaft_bore_as_air(mesh_r, tags_r, polys_r_for_mesh)
 
     # Apply rotor rotation as a rigid body — node coords only, topology
     # unchanged.  This is the heart of sliding-band: every frame just

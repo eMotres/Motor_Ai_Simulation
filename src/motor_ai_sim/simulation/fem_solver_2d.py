@@ -3123,14 +3123,30 @@ def fem_transient_sliding_band(
     # marches ten settling periods, so it needs none.
     #
     # HOW MANY is NOT a constant.  It used to be 2, tuned on a 40 mm machine
-    # whose only slow conductor is a 5 mm shaft: measured cold-start solid
-    # σE² there is 4488 → 14.1 → 2.49 W, i.e. gone by the second frame.  The
-    # 150 mm 24s28p machine has a 78 mm-diameter solid rotor/shaft assembly,
-    # whose diffusion time τ ~ σ·μ·r² is ~1500× longer: 2776 → 1628 → 1089 →
-    # … → 70 W, still decaying 22 frames in.  With a FIXED 2 the un-settled
-    # tail sat INSIDE the reported window and the cycle mean of the solid
-    # loss read 262 W against a settled 68 W — a reporting-window bug, not a
-    # physics one, but it poisons P_shaft/P_mag and through them η.
+    # whose slow conductors are all small: measured cold-start solid σE² there
+    # is 4488 → 14.1 → 2.49 W, i.e. gone by the second frame.  The 150 mm
+    # 24s28p machine takes far longer: 2776 → 1628 → 1089 → … → 70 W, still
+    # decaying 22 frames in.  With a FIXED 2 the un-settled tail sat INSIDE the
+    # reported window and the cycle mean of the solid loss read 262 W against a
+    # settled 68 W — a reporting-window bug, not a physics one, but it poisons
+    # P_shaft/P_mag and through them η.
+    #
+    # WHY the big machine is slow.  This comment used to say "a 78 mm-diameter
+    # solid rotor/shaft assembly" — that object never existed.  It was the
+    # meshing bug fixed in 707d2a1: _tag_rotor gave the whole bore disc
+    # DOM_SHAFT, so the solve saw 7× the shaft metal the CAD builds, and the
+    # numbers above were measured under that phantom.  Nothing in this model
+    # conducts across a solid rotor body in any case — _sigma_of_tag gives σ to
+    # coils, magnets and the shaft tag ONLY; the rotor iron is σ = 0.
+    # The real mechanism is the slowest conducting LOOP in the cross-section.
+    # On the 150 mm that is the shaft tube: a closed ring at r ≈ 39 mm, whose
+    # L/R grows with the ring's RADIUS (and its axial length) rather than with
+    # its 3 mm wall — ~1.5 ms against ~0.2 ms for σ·μ·L² diffusion across a
+    # 16 mm magnet, and against a shaft ring an order of magnitude smaller in
+    # radius on the 40 mm.  That is also why removing the phantom disc RAISED
+    # the shaft leg (31.6 → 39.5 W): the disc was shorting the loop, not adding
+    # to it.  None of this has to be right for the code below to be right —
+    # which is the point of the next paragraph.
     #
     # So: SETTLE UNTIL QUIET.  The PROBE is the same 2 frames as before, and
     # the THIRD sample it needs is the first reported frame itself — three

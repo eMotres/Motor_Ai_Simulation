@@ -163,6 +163,123 @@ def _sigma_of_tag(tag: int) -> float:
     return 0.0
 
 
+class TestBoreIsAirNotAirGap:
+    """The bore's LABEL, not its physics — σ and μ_r are the same either way.
+
+    The gmsh-built rotor half starts life painted DOM_AIRGAP everywhere
+    (``_stitch_full_half(polys_r_for_mesh, DOM_AIRGAP, ...)``; the OCC path
+    remaps ``in_band`` to the ``air_gap`` key for the same effect) and is then
+    overwritten by the solid polygons.  The shaft is a TUBE, so nothing covers
+    the bore and it kept the air-GAP tag out through the served domain map and
+    the field view — the machine drawn with its air gap running to the centre.
+    ``mesher._retag_shaft_bore_as_air`` is the correction; these pin it.
+    """
+
+    def test_the_geo_mesh_rotor_half_calls_the_bore_air_gap_free(self, machine):
+        """The default (geometry-driven) mesher: no air-GAP inside the bore."""
+        from motor_ai_sim.simulation.sb_domains import DOM_AIRGAP
+        p, _polys, _area, r, tags = machine
+        inside = r < float(p["shaft_inner_radius"]) - 0.05
+        assert inside.any()
+        assert not (tags[inside] == DOM_AIRGAP).any()
+        assert (tags[inside] == DOM_AIR).all()
+
+    def test_the_retag_maps_air_gap_to_air_inside_the_bore_only(self, machine):
+        """The gmsh fallback's correction, driven by the real CAD shaft.
+
+        Built on a synthetic mesh rather than a gmsh run: the rule under test
+        is the tag mapping, and a gmsh half of these machines costs minutes.
+        """
+        from skfem import MeshTri
+        from motor_ai_sim.simulation.mesher import _retag_shaft_bore_as_air
+        from motor_ai_sim.simulation.sb_domains import (DOM_AIRGAP, DOM_ROTOR,
+                                                        DOM_SHAFT)
+        p, polys, _area, _r, _t = machine
+        r_in = float(p["shaft_inner_radius"])
+        r_out = float(p["rotor_inner_radius"])
+        # one degenerate-free triangle per sample radius, centroid at that r
+        radii = [0.3 * r_in, 0.9 * r_in, 0.5 * (r_in + r_out), 1.5 * r_out]
+        P = []
+        T = []
+        for k, rr in enumerate(radii):
+            d = 1e-3 * rr
+            P += [[rr - d, -d], [rr + d, -d], [rr, 2 * d]]
+            T.append([3 * k, 3 * k + 1, 3 * k + 2])
+        mesh = MeshTri(np.asarray(P, float).T * 1e-3,          # mm -> m
+                       np.asarray(T, np.int64).T.copy())
+        # deep in the bore, just inside it, the tube wall, outside the rotor
+        tags = np.array([DOM_AIRGAP, DOM_AIRGAP, DOM_SHAFT, DOM_ROTOR],
+                        np.int16)
+        got = _retag_shaft_bore_as_air(mesh, tags, polys)
+        assert list(got) == [DOM_AIR, DOM_AIR, DOM_SHAFT, DOM_ROTOR]
+
+    def test_the_retag_never_removes_metal(self, machine):
+        """A conducting tag inside the bore is left alone — the pass is a
+        relabel of the AIR family, not a licence to delete conductors."""
+        from skfem import MeshTri
+        from motor_ai_sim.simulation.mesher import _retag_shaft_bore_as_air
+        from motor_ai_sim.simulation.sb_domains import DOM_MAG_BASE, DOM_SHAFT
+        p, polys, _area, _r, _t = machine
+        rr = 0.5 * float(p["shaft_inner_radius"])
+        d = 1e-3 * rr
+        P = np.array([[rr - d, -d], [rr + d, -d], [rr, 2 * d],
+                      [rr - d, 4 * d], [rr + d, 4 * d], [rr, 7 * d]]) * 1e-3
+        mesh = MeshTri(P.T, np.array([[0, 1, 2], [3, 4, 5]], np.int64).T.copy())
+        tags = np.array([DOM_SHAFT, DOM_MAG_BASE], np.int16)
+        got = _retag_shaft_bore_as_air(mesh, tags, polys)
+        assert list(got) == [DOM_SHAFT, DOM_MAG_BASE]
+
+    def test_a_solid_shaft_is_left_untouched(self, machine):
+        """No interior ring on the shaft polygon -> nothing to retag."""
+        from shapely.geometry import Point
+        from skfem import MeshTri
+        from motor_ai_sim.simulation.mesher import _retag_shaft_bore_as_air
+        from motor_ai_sim.simulation.sb_domains import DOM_AIRGAP
+        p, _polys, _area, _r, _t = machine
+        r_out = float(p["rotor_inner_radius"])
+        solid = {"shaft": Point(0.0, 0.0).buffer(r_out, 128)}
+        rr = 0.3 * r_out
+        d = 1e-3 * rr
+        P = np.array([[rr - d, -d], [rr + d, -d], [rr, 2 * d]]) * 1e-3
+        mesh = MeshTri(P.T, np.array([[0, 1, 2]], np.int64).T.copy())
+        tags = np.array([DOM_AIRGAP], np.int16)
+        assert list(_retag_shaft_bore_as_air(mesh, tags, solid)) == [DOM_AIRGAP]
+
+    def test_the_gmsh_half_really_would_leave_the_bore_labelled_air_gap(
+            self, machine):
+        """The premise, so the retag is not guarding a hypothetical.
+
+        Asserted without running gmsh (a half of these machines costs minutes):
+        the rotor half is painted with DOM_AIRGAP as its DEFAULT domain, and
+        the only shapes that overwrite it are the solid polygons — of which the
+        shaft is a tube that does not cover its own bore.
+        """
+        import inspect
+        from shapely.geometry import Point
+        from motor_ai_sim.simulation import mesher as M
+        src = inspect.getsource(M)
+        assert "_stitch_full_half(\n                polys_r_for_mesh, DOM_AIRGAP," in src
+        assert 'polys_r_for_mesh["air_gap"] = polys_r_for_mesh.pop("in_band")' in src
+        p, polys, _area, _r, _t = machine
+        bore_pt = Point(0.5 * float(p["shaft_inner_radius"]), 0.0)
+        assert not polys["shaft"].contains(bore_pt)
+        for key in ("rotor", "stator"):
+            g = polys.get(key)
+            if g is not None and not g.is_empty:
+                assert not g.contains(bore_pt)
+
+    def test_the_two_air_tags_are_physically_the_same_material(self):
+        """Why this is a label fix and not a physics one — stated against the
+        solver's own material table, not asserted in prose."""
+        from motor_ai_sim.simulation import fem_solver_2d as f2
+        from motor_ai_sim.simulation.sb_domains import DOM_AIRGAP
+        assert _sigma_of_tag(int(DOM_AIR)) == _sigma_of_tag(int(DOM_AIRGAP)) == 0.0
+        import inspect
+        src = inspect.getsource(f2)
+        assert 'DOM_AIRGAP: FEMMaterial("airgap", mu_r=1.0)' in src
+        assert 'DOM_AIR:    FEMMaterial("air",    mu_r=1.0)' in src
+
+
 def test_sigma_rule_matches_the_solver():
     """The σ rule restated above must be the one fem_solver_2d applies."""
     import inspect

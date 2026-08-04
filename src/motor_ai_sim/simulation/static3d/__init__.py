@@ -24,18 +24,26 @@ READ-ONLY and modifies nothing in the 2D pipeline.
 """
 from motor_ai_sim.simulation.static3d.exact import (
     MU0, cylinder_axis_Bz, cylinder_end_to_mid_ratio, sphere_B,
-    sphere_B_inside,
+    sphere_B_inside, sphere_in_shell_B, sphere_in_shell_B_inside,
+    thick_solenoid_axis_Bz,
 )
 from motor_ai_sim.simulation.static3d.meshes import (
     TaggedTetMesh, cylinder_in_box, cylinder_with_iron_ring, sphere_in_box,
+    sphere_with_iron_shell, tube_in_box,
+)
+from motor_ai_sim.simulation.static3d.nedelec import (
+    ASolution, azimuthal_J, solve_static3d_A, solve_static3d_A_nonlinear,
 )
 from motor_ai_sim.simulation.static3d.solver import (
     Region, Solution, solve_static3d, solve_static3d_nonlinear,
 )
 
 __all__ = [
-    "MU0", "Region", "Solution", "TaggedTetMesh",
-    "cylinder_axis_Bz", "cylinder_end_to_mid_ratio", "cylinder_in_box",
-    "cylinder_with_iron_ring", "solve_static3d", "solve_static3d_nonlinear",
-    "sphere_B", "sphere_B_inside", "sphere_in_box",
+    "ASolution", "MU0", "Region", "Solution", "TaggedTetMesh",
+    "azimuthal_J", "cylinder_axis_Bz", "cylinder_end_to_mid_ratio",
+    "cylinder_in_box", "cylinder_with_iron_ring", "solve_static3d",
+    "solve_static3d_A", "solve_static3d_A_nonlinear",
+    "solve_static3d_nonlinear", "sphere_B", "sphere_B_inside", "sphere_in_box",
+    "sphere_in_shell_B", "sphere_in_shell_B_inside", "sphere_with_iron_shell",
+    "thick_solenoid_axis_Bz", "tube_in_box",
 ]

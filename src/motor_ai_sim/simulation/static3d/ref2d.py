@@ -115,7 +115,9 @@ def solve_2d_reference_on_section_mesh(section_full: MotorSection,
                                        sect_sector,
                                        nonlinear_iterations: int = 16,
                                        element_order: int = 2,
-                                       n_theta: int = 720) -> Ref2D:
+                                       n_theta: int = 720,
+                                       linear_iron_mu_r: Optional[float] = None
+                                       ) -> Ref2D:
     """2D reference on the static3d cross-section mesh, mirrored to a full ring.
 
     Why not ``mesher.build_mesh_from_polygons`` (see ``solve_2d_reference``):
@@ -150,6 +152,19 @@ def solve_2d_reference_on_section_mesh(section_full: MotorSection,
     mats = build_materials({"A": 0.0, "B": 0.0, "C": 0.0}, layout,
                            section_full.polys_full, 0.0, 1e-5,
                            int(round(geo["num_wires_per_slot"])))
+    if linear_iron_mu_r is not None:
+        # A LINEAR-iron ladder: the same machine with the B-H curve replaced by a
+        # fixed permeability, in BOTH models, so that "how does the 3D-vs-2D
+        # residual depend on mu_r" is a question with one variable in it.  A
+        # ladder run against nonlinear 2D would be measuring the Picard's
+        # operating point as well, and the two effects are not separable
+        # afterwards.
+        import dataclasses
+        mats = {k: dataclasses.replace(v, mu_r=float(linear_iron_mu_r),
+                                       bh_curve=None)
+                if (v.bh_curve or v.mu_r > 1.5) and not (v.Mx or v.My) else v
+                for k, v in mats.items()}
+        nonlinear_iterations = 1
     A, basis = solve_magnetostatics_fem(mesh, tags, mats,
                                         element_order=element_order,
                                         nonlinear_iterations=nonlinear_iterations)

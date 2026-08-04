@@ -299,6 +299,130 @@ def cylinder_in_box(radius: float = 0.005,
     return tm
 
 
+def sphere_with_iron_shell(radius: float = 0.01,
+                           shell_inner: float = 0.013,
+                           shell_outer: float = 0.016,
+                           box_factor: float = 6.0,
+                           h_magnet: float = 0.0025,
+                           h_far: Optional[float] = None,
+                           grade_dist: Optional[float] = None,
+                           optimize: bool = True,
+                           verbose: bool = False) -> TaggedTetMesh:
+    """Magnetised sphere inside a CONCENTRIC iron shell, in an air box.
+    Regions: ``air``, ``magnet``, ``iron``.
+
+    This is the geometry ``exact.sphere_in_shell_coeffs`` solves in closed form
+    at arbitrary shell permeability, which is what makes it the mu_r ladder: the
+    reference moves with mu_r and is exact at every rung, so a residual that
+    grows with mu_r is the FORMULATION and not a mesh artefact.
+
+    The size field is anchored on the magnet AND the shell surfaces, and both
+    ``h_magnet`` and the grading defaults are independent of ``box_factor``, so
+    sweeping mu_r or the box leaves the near-field mesh identical — the same
+    discipline the other builders follow.
+    """
+    if not (0.0 < radius < shell_inner < shell_outer):
+        raise ValueError("need 0 < radius < shell_inner < shell_outer")
+    L = box_factor * shell_outer
+    h_far = h_far if h_far is not None else max(L / 4.0, h_magnet)
+    grade = grade_dist if grade_dist is not None else 1.5 * shell_outer
+
+    with _GMSH_LOCK:
+        gmsh = _gmsh_start("sphere_iron_shell", verbose)
+        try:
+            occ = gmsh.model.occ
+            sph = occ.addSphere(0.0, 0.0, 0.0, radius)
+            so = occ.addSphere(0.0, 0.0, 0.0, shell_outer)
+            si = occ.addSphere(0.0, 0.0, 0.0, shell_inner)
+            shell, _ = occ.cut([(3, so)], [(3, si)])
+            shell_tags = [tag for (d, tag) in shell if d == 3]
+            box = occ.addBox(-L, -L, -L, 2 * L, 2 * L, 2 * L)
+            _, out_map = occ.fragment(
+                [(3, box)], [(3, sph)] + [(3, s) for s in shell_tags])
+            occ.synchronize()
+            air, tools = _split_fragment(out_map, 1)
+            mag = tools[0]
+            iron: List[int] = []
+            for tl in tools[1:]:
+                iron += tl
+            surf = [tag for (d, tag) in gmsh.model.getBoundary(
+                [(3, v) for v in mag + iron], oriented=False, combined=True)
+                if d == 2]
+            _size_field(gmsh, surf, h_magnet, h_far, grade,
+                        grade + 3.0 * shell_outer)
+            tm = _extract(gmsh, [("air", air), ("magnet", mag), ("iron", iron)],
+                          optimize)
+        finally:
+            try:
+                gmsh.finalize()
+            except Exception:
+                pass
+    tm.meta = dict(kind="sphere_with_iron_shell", radius=radius,
+                   shell_inner=shell_inner, shell_outer=shell_outer,
+                   box_half=L, box_factor=box_factor, h_magnet=h_magnet,
+                   h_far=h_far)
+    return tm
+
+
+def tube_in_box(r_inner: float = 0.005,
+                r_outer: float = 0.0055,
+                length: float = 0.02,
+                box_factor: float = 4.0,
+                h_tube: float = 0.0012,
+                h_far: Optional[float] = None,
+                grade_dist: Optional[float] = None,
+                optimize: bool = True,
+                verbose: bool = False) -> TaggedTetMesh:
+    """A hollow cylindrical SHELL (axis = z, centred on the origin) in an air
+    box.  Regions: ``air``, ``coil``.
+
+    Meshed as its own region so an azimuthal current density can be assembled in
+    it: with J_phi = K / (r_outer - r_inner) this is the finite-thickness stand-in
+    for the bound surface current K = M x n of a cylinder magnetised M*z_hat.
+    The exact on-axis field of what is actually meshed is
+    ``exact.thick_solenoid_axis_Bz``; the ideal sheet it approximates is
+    ``exact.cylinder_axis_Bz``.
+    """
+    if not (0.0 < r_inner < r_outer):
+        raise ValueError("need 0 < r_inner < r_outer")
+    scale = max(r_outer, 0.5 * length)
+    L = box_factor * scale
+    h_far = h_far if h_far is not None else max(L / 4.0, h_tube)
+    grade = grade_dist if grade_dist is not None else 2.0 * scale
+
+    with _GMSH_LOCK:
+        gmsh = _gmsh_start("tube_in_box", verbose)
+        try:
+            occ = gmsh.model.occ
+            co = occ.addCylinder(0.0, 0.0, -0.5 * length, 0.0, 0.0, length,
+                                 r_outer)
+            ci = occ.addCylinder(0.0, 0.0, -0.5 * length, 0.0, 0.0, length,
+                                 r_inner)
+            tube, _ = occ.cut([(3, co)], [(3, ci)])
+            tube_tags = [tag for (d, tag) in tube if d == 3]
+            box = occ.addBox(-L, -L, -L, 2 * L, 2 * L, 2 * L)
+            _, out_map = occ.fragment([(3, box)],
+                                      [(3, t) for t in tube_tags])
+            occ.synchronize()
+            air, tools = _split_fragment(out_map, 1)
+            coil: List[int] = []
+            for tl in tools:
+                coil += tl
+            surf = [tag for (d, tag) in gmsh.model.getBoundary(
+                [(3, v) for v in coil], oriented=False, combined=True) if d == 2]
+            _size_field(gmsh, surf, h_tube, h_far, grade, grade + 3.0 * scale)
+            tm = _extract(gmsh, [("air", air), ("coil", coil)], optimize)
+        finally:
+            try:
+                gmsh.finalize()
+            except Exception:
+                pass
+    tm.meta = dict(kind="tube_in_box", r_inner=r_inner, r_outer=r_outer,
+                   length=length, box_half=L, box_factor=box_factor,
+                   h_tube=h_tube, h_far=h_far)
+    return tm
+
+
 def cylinder_with_iron_ring(radius: float = 0.005,
                             length: float = 0.02,
                             ring_inner: float = 0.0058,

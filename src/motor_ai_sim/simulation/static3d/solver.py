@@ -39,9 +39,18 @@ potential:
   * the current-free condition makes the total potential single-valued, so the
     usual objection to it (multiply-connected current-carrying regions) does not
     apply to the magnet-only problem this spike is scoped to.
-The known weakness is cancellation inside HIGH mu_r iron, where B = -mu grad phi
-is a large permeability times a small gradient.  ``benchmarks.py`` exercises that
-case; the linear benchmarks (magnet in air) are free of it.
+The suspected weakness was cancellation inside HIGH mu_r iron, where B = -mu grad
+phi is a large permeability times a small gradient.  It was MEASURED and it is
+not there: ``benchmarks.iron_ladder`` puts this solver and the A-formulation
+(``nedelec.py``) on the same mesh against a closed-form magnetised-sphere-in-an-
+iron-shell solution from mu_r = 1 to 1e6, and every error is flat in mu_r — this
+solver's most of all, and roughly six times SMALLER in the iron than the lowest
+order edge element's.  The suspicion had the two scalar potentials the wrong way
+round: it is the REDUCED potential whose H must annihilate a large applied field
+and therefore cancels, which is exactly why the TOTAL potential is the standard
+cure for iron.  What this formulation genuinely cannot do is carry a CURRENT —
+curl H = J makes a single-valued total potential impossible around a current
+loop — and that, not iron, is what Stage B has to change formulation for.
 
 Boundary condition: phi = 0 on the outer box.  That is an equipotential, i.e. it
 forces B normal to the truncation surface.  The alternative natural condition
@@ -420,6 +429,15 @@ def solve_static3d_nonlinear(mesh, regions: Sequence[Region], order: int = 1,
     (``field_ops._mu_r_from_bh_vec``) rather than a private copy, so 3D iron and
     2D iron are the same iron by construction — if the curve handling is ever
     fixed, both move together.
+
+    One thing that is NOT yet the same, and it is worth a percent on a saturating
+    bridge: the |B| each element is looked up at.  This driver takes the norm of
+    the element-mean B; ``fem_solver_2d`` takes the mean of |B| over the
+    quadrature points.  Where B swings in direction inside an element the second
+    is larger, so the two models put the same element at different points on the
+    same curve.  Reconciling them is on the list in
+    ``config/end_effect_3d.json::consistency_investigation``; it is recorded here
+    because this is where the choice is made.
 
     Two choices here were forced by measurement, not taste:
 

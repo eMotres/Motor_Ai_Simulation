@@ -245,7 +245,24 @@
     "agreement_tolerance": 0.02,
     "verdict": "FAIL",
     "k_flux_usable": false,
-    "warning": "3D mid-plane and 2D differ by 4.65 % on the same cross-section. Use k_flux_self and the spill profile; do NOT use k_flux until the two models are reconciled."
+    "warning": "Do NOT use k_flux. The stored value 1.0196 was computed against the pre-40b7de7 2D leg; re-solved with the fix on this same cross-section the 3D mid-plane sits 9.3 % ABOVE 2D and k_flux would be 1.0651. That residual is NOT the formulation and NOT an end effect (both ruled out by measurement \u2014 see consistency_investigation). k_flux_self, the spill profile and the demag shift are ratios taken inside the 3D model and are unaffected.",
+    "superseded": {
+      "why": "two_d.B1_T (1.40869 T) was produced BEFORE commit 40b7de7, when fem_solver_2d assembled the magnet source as M instead of the equivalent coercivity M/mu_rec \u2014 i.e. every 2D magnet was mu_rec = 1.05 too strong.  Every number in this block that crosses the two models inherits that error and none of them are the current answer.",
+      "B1_2D_T_refixed": 1.3485999999999998,
+      "B1_2D_T_by_2D_picard_sweeps": {
+        "8": 1.35948,
+        "16": 1.32818,
+        "40": 1.35807,
+        "80": 1.36319,
+        "160": 1.36135,
+        "320": 1.35506,
+        "640": 1.36902
+      },
+      "B1_2D_picard_spread_pct": 3.0283256710662907,
+      "ratio_3d_mid_over_2d_refixed": 1.0930988802808306,
+      "k_flux_refixed": 1.0650657286184284,
+      "note": "the 2D leg's own Picard does NOT settle \u2014 it limit-cycles over a 3.1 % band from 8 to 640 sweeps \u2014 so the ratio is a band, not a number, and about a third of the residual below is that band"
+    }
   },
   "demag": {
     "slices": [
@@ -541,49 +558,210 @@
       "demag": "H.Mhat per axial magnet slice; negative is demagnetising.",
       "l_stack_curve": "k_flux (both normalisations) vs stack length.",
       "bracket": "Dirichlet vs Neumann outer boundary at the chosen box \u2014 a CONSERVATIVE bound on the truncation error, not an estimate.",
-      "solves": "dofs, elements, wall time and Picard state of every solve."
+      "solves": "dofs, elements, wall time and Picard state of every solve.",
+      "consistency_investigation": "why the two_d check fails, measured \u2014 one block per round of investigation, each naming what was ruled out and how. Read this before trusting or re-deriving k_flux."
     }
   },
   "consistency_investigation": {
-    "_doc": "Why the 3D-vs-2D check FAILS, measured. Every row is the same cross-section mesh in both models; the 2D leg is fem_solver_2d.solve_magnetostatics_fem (P2) on that mesh mirrored to a full ring, the 3D leg is the anti-periodic sector.",
-    "nonlinear_L12_3D_mid_over_2D": 1.0464727457401097,
-    "picard_2D_sweep_B1_T": {
-      "8": 1.40358,
-      "16": 1.40869,
-      "40": 1.40732,
-      "80": 1.40325,
-      "160": 1.3978,
-      "320": 1.38538
+    "_doc": "Why the 3D-vs-2D check fails, measured, in three rounds: the magnet law (fixed, 40b7de7), the mu_r ladder (RESOLVED here \u2014 it was the cross-section mesh, not the formulation), and what is left.",
+    "status": "PARTIALLY RESOLVED \u2014 the mu_r-dependent part is explained and removable; a mu_r-independent nonlinear residual survives",
+    "round_1_magnet_law": {
+      "commit": "40b7de7",
+      "finding": "fem_solver_2d assembled M where the law B = mu0*mu_r*H + mu0*M demands M/mu_rec; 2D magnets were 5 % strong",
+      "iron_free_case_after_the_fix": {
+        "B1_3D_T": 0.362877,
+        "B1_2D_T": 0.362684,
+        "ratio": 1.00053
+      }
     },
-    "picard_2D_note": "the 2D answer does not move toward the 3D one with more Picard sweeps, and does not settle either (it wanders ~1.7 % over 8..320 sweeps) \u2014 the disagreement is not the 2D solver being under-converged",
-    "mesh_2D_note": "halving the gap element size in 2D (h_gap 0.35 -> 0.20 mm, 8934 -> 16066 tri) moves B1_2D by 0.13 % \u2014 not the mesh",
-    "linear_iron_3D_over_2D_by_mu_r": {
-      "4625": 0.9151,
-      "1000": 0.9178,
-      "200": 0.9255,
-      "50": 0.9348,
-      "10": 0.9451
+    "round_2_the_mu_r_ladder": {
+      "the_hypothesis": "the residual grew with mu_r and vanished without iron, which is the signature of the TOTAL scalar potential cancelling inside high-mu iron (B = -mu grad phi, large times small)",
+      "verdict": "FALSIFIED, twice, by direct measurement",
+      "test_a_exact_iron_benchmark": {
+        "what": "magnetised sphere inside a concentric iron shell, which has a CLOSED-FORM solution at every mu_r (static3d.exact.sphere_in_shell_B).  One mesh, 56680 tets; three formulations; mu_r = 1 .. 1e6.  Reproduce with: python -m motor_ai_sim.simulation.static3d.benchmarks --ladder",
+        "L2_error_in_the_IRON_pct_by_mu_r": {
+          "scalar_P2": {
+            "1": 3.85,
+            "10": 4.38,
+            "200": 3.82,
+            "1000": 3.78,
+            "4625": 3.77,
+            "1e6": 3.77
+          },
+          "scalar_P1": {
+            "1": 21.49,
+            "10": 17.19,
+            "200": 15.14,
+            "1000": 15.04,
+            "4625": 15.02,
+            "1e6": 15.01
+          },
+          "nedelec_N0": {
+            "1": 14.3,
+            "10": 11.33,
+            "200": 10.2,
+            "1000": 10.17,
+            "4625": 10.16,
+            "1e6": 10.16
+          }
+        },
+        "conclusion": "every error is FLAT in mu_r (spread x1.11 to x1.16 over mu_r = 10..1e6), and the total scalar potential at P2 is the MOST accurate of the three in the iron \u2014 about 2.7x better than the lowest order edge element on the same mesh.  The hypothesis had the two scalar potentials swapped: it is the REDUCED potential that cancels in iron, which is why the TOTAL potential is the standard cure for it."
+      },
+      "test_b_the_residual_is_the_CROSS_SECTION_MESH": {
+        "what": "the machine itself, linear iron at mu_r = 4625, 3D scalar P2 sector vs the 2D solver on the SAME cross-section, refining the in-plane element size of the SOLID regions and nothing else",
+        "h_solid_mm_vs_ratio_3d_over_2d": {
+          "1.5": 0.9667,
+          "1.0": 0.985,
+          "0.6": 0.9964,
+          "0.4": 0.9997
+        },
+        "B1_3D_T": {
+          "1.5": 0.05673,
+          "1.0": 0.05725,
+          "0.6": 0.05753,
+          "0.4": 0.05759
+        },
+        "B1_2D_T": {
+          "1.5": 0.05868,
+          "1.0": 0.05812,
+          "0.6": 0.05774,
+          "0.4": 0.05761
+        },
+        "conclusion": "the residual converges MONOTONICALLY to zero with cross-section refinement \u2014 both legs converge onto B1 = 0.0576 T \u2014 so it is discretisation error, and it is in the thin rotor bridges.  The passport above was solved at h_solid = 1.2 mm, between the first two rungs.",
+        "why_it_looks_like_a_mu_r_effect": "with LINEAR iron at mu_r >~ 200 the un-saturated rotor bridges short ~96 % of the magnet flux, so the gap fundamental is the small remainder and is proportional to 1/mu_r (d ln B1 / d ln mu_r = -0.91 measured between mu_r = 1000 and 4625).  A sub-percent error in the bridge reluctance is then a several-percent error in B1.  The amplifier is the BRIDGE SHUNT, not the potential \u2014 and it is an artefact of running the iron linear: the real machine saturates those bridges (mu_r ~ 5) and B1 is 1.47 T, not 0.058 T."
+      },
+      "test_c_it_is_not_an_end_effect": {
+        "what": "the same linear mu_r = 4625 case at 1x, 2x and 4x the stack, against the same 2D reference",
+        "ratio_3d_over_2d": {
+          "L1x": 0.9667,
+          "L2x": 0.9675,
+          "L4x": 0.9633
+        },
+        "conclusion": "flat \u2014 a finite-stack effect would close as the stack grows, and this does not"
+      },
+      "test_d_the_nedelec_formulation_does_not_help": {
+        "what": "the same ladder solved in the A-formulation on Nedelec edge elements (static3d/nedelec.py), same mesh, same Region list, same post-processing",
+        "ratio_3d_over_2d_by_mu_r": {
+          "scalar_P2": {
+            "1": 1.0008,
+            "10": 0.9726,
+            "200": 0.9539,
+            "1000": 0.9631,
+            "4625": 0.9667
+          },
+          "nedelec_N0": {
+            "1": 0.9725,
+            "10": 0.9758,
+            "200": 1.0304,
+            "1000": 1.0732,
+            "4625": 1.0894
+          },
+          "scalar_P1": {
+            "1": 0.9776,
+            "10": 0.9183,
+            "200": 0.8779,
+            "1000": 0.8798,
+            "4625": 0.8804
+          }
+        },
+        "conclusion": "the edge element's residual grows with mu_r too, in the OPPOSITE direction, and the three formulations straddle the 2D answer by 20 % at mu_r = 4625.  That is what a mesh-limited quantity looks like, and it settles the Stage-B question: the vector potential is not a fix for this, and on the same mesh the lowest-order edge element is the least accurate of the three."
+      }
     },
-    "linear_note": "the offset does not vanish as mu_r falls, so it is NOT the total-scalar-potential's known cancellation in high-mu iron",
-    "no_iron_at_all": {
-      "B1_2D_T": 0.380819,
-      "B1_3D_L120_T": 0.362863,
-      "B1_3D_L240_T": 0.362855,
-      "ratio_3D_over_2D": 0.9528
+    "round_3_what_is_left": {
+      "the_number": "with the magnet law fixed, the NONLINEAR machine's 3D mid-plane gap fundamental sits about 9 % above the 2D solver's on the same cross-section",
+      "B1_3D_mid_T": 1.474153149946728,
+      "B1_2D_T_band": [
+        1.32818,
+        1.36902
+      ],
+      "ratio_band": [
+        1.0767944587710392,
+        1.1099046439087534
+      ],
+      "known_contributions": [
+        "NEITHER Picard is converged. The 2D leg limit-cycles over a 3.1 % band from 8 to 640 sweeps and never settles; the 3D leg stops at its 45-sweep cap with a constitutive residual of 6.4e-3 against a 3e-3 tolerance. Between them that is most of a third of the gap, and it is the first thing to fix.",
+        "the two Picards do not even agree on what |B| an element has: fem_solver_2d averages |B| over the quadrature points, static3d.solver takes |mean B|. On a saturating bridge those are different operating points on the B-H curve. Same curve, different sampling \u2014 a one-line difference with a percent-level consequence.",
+        "cross-section resolution of the saturating bridges, per round 2 \u2014 smaller here than in the linear ladder because a saturated bridge does not amplify, but not zero"
+      ],
+      "next_steps": [
+        "converge BOTH Picards first (raise the 3D cap, replace the 2D solver's fixed 0.5 damping with the adaptive scheme static3d already uses) and re-measure \u2014 nothing else can be trusted until the two limit cycles are gone",
+        "make the two element-|B| definitions the same and re-measure",
+        "then re-run the nonlinear case at h_solid <= 0.6 mm"
+      ],
+      "nonlinear_vs_cross_section_resolution": {
+        "_doc": "the SAME nonlinear machine at three cross-section resolutions, 3D scalar P2 sector vs the 2D solver on that same cross-section \u2014 the round-2 refinement test, repeated at the real (saturated) operating point",
+        "rows": [
+          {
+            "h_gap_mm": 0.45,
+            "h_solid_mm": 1.5,
+            "B1_3D_T": 1.4693672007908327,
+            "B1_2D_T": 1.360933188458837,
+            "ratio": 1.0796762201491976,
+            "tets": 108675
+          },
+          {
+            "h_gap_mm": 0.45,
+            "h_solid_mm": 1.0,
+            "B1_3D_T": 1.4722723301034777,
+            "B1_2D_T": 1.385668688273379,
+            "ratio": 1.0624995300557825,
+            "tets": 129195
+          }
+        ],
+        "note": "the residual falls with refinement here too, but far more slowly than in the linear ladder \u2014 a saturated bridge does not amplify a mesh error the way an un-saturated one does, so what is left over is mostly the two unconverged Picards"
+      },
+      "three_way_on_a_coarser_cross_section": {
+        "_doc": "the same nonlinear machine solved three ways on ONE mesh (h_gap 0.45 mm, h_solid 1.5 mm, box 60.0 mm, 108675 tets) with the 2D leg on the same cross-section \u2014 the three-way the Nedelec spike was commissioned to produce",
+        "B1_T": {
+          "P2": 1.4693672007908327,
+          "N0": 1.460975025553913,
+          "P1": 1.4116915275970043,
+          "2D": 1.360933188458837
+        },
+        "ratios": {
+          "ratio_P2": 1.0796762201491976,
+          "ratio_N0": 1.0735097343083877,
+          "ratio_P1": 1.0372967163771263
+        },
+        "picard": {
+          "P2": [
+            45,
+            false,
+            0.0064119675135466195
+          ],
+          "N0": [
+            45,
+            false,
+            0.0038260740922287555
+          ],
+          "P1": [
+            45,
+            false,
+            0.004963005579580126
+          ]
+        },
+        "ndofs": {
+          "P2": 154242,
+          "N0": 133772,
+          "P1": 20470
+        },
+        "wall_s": {
+          "P2": 800.7,
+          "N0": 868.9,
+          "P1": 34.0,
+          "2D": 2.4
+        }
+      }
     },
-    "no_iron_note": "magnets in air, no iron anywhere, stack 6x the machine diameter: the two models still differ by 4.7 %, and the 3D value is identical at L=120 and L=240 mm. So the offset is a CONSTANT multiplicative factor, independent of stack length and of the iron \u2014 which is why k_flux_self (a ratio taken at two z inside the same 3D model) is unaffected by it, and k_flux (which crosses the two models) is not.",
-    "axial_refinement_3D": {
-      "L12_n_stack_5_B1mid_T": 1.473245,
-      "L12_n_stack_8_B1mid_T": 1.473042,
-      "L12_n_stack_5_k_self": 0.974354,
-      "L12_n_stack_8_k_self": 0.975016,
-      "note": "k_flux_self is axially converged to 0.07 %"
+    "superseded_blocks": {
+      "linear_iron_3D_over_2D_by_mu_r": "the ladder recorded here in the first pass (0.9151 at mu_r = 4625 up to 0.9451 at mu_r = 10) was taken with the pre-40b7de7 2D leg; multiplied by the 4.94 % magnet-law factor it becomes the -3.9 % to -0.8 % ladder the round-2 tests above explain and remove",
+      "linear_note": "the original conclusion \u2014 'the offset does not vanish as mu_r falls, so it is NOT the total scalar potential's cancellation' \u2014 was right about the cancellation and wrong about the reason: the offset at low mu_r was the magnet law, and the growth with mu_r was the bridge-shunt amplification of the mesh error"
     },
-    "status": "UNRESOLVED \u2014 root cause not found; k_flux_self is unaffected",
-    "next_steps": [
-      "compare the magnet-region flux (not the gap flux) between the two models on the iron-free case: that separates a source-normalisation error from a leakage-path error",
-      "check the 3D air-gap element aspect ratio: the extruded tets are 0.35 mm in-plane by up to 29 mm axially, and B_r is read in that gap",
-      "run the iron-free case against the analytic field of a spoke magnet array \u2014 exact.py already carries closed-form references"
-    ]
+    "reproduce": [
+      "python -m motor_ai_sim.simulation.static3d.benchmarks --ladder",
+      "python -m motor_ai_sim.simulation.static3d.benchmarks --avsphi --coil",
+      "STATIC3D_FULL=1 pytest tests/test_static3d_nedelec.py"
+    ],
+    "updated_utc": "2026-08-04T08:14:50Z"
   }
 }

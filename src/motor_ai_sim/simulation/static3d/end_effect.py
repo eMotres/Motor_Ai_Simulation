@@ -76,14 +76,28 @@ class SectorSolve:
         return 0.5 * self.stack_mm * MM
 
 
-def _regions_for(tm, section: MotorSection, linear_iron: bool = False
-                 ) -> List[Region]:
+def _regions_for(tm, section: MotorSection, linear_iron: bool = False,
+                 iron_mu_r: Optional[float] = None) -> List[Region]:
+    """3D regions from the machine's own materials.
+
+    ``iron_mu_r`` replaces the permeability of the IRON regions only (never the
+    magnets' recoil mu_r, never the shaft, never air) and implies
+    ``linear_iron``.  It exists so that a mu_r LADDER is a one-variable
+    experiment: the same mu_r goes into this model and into
+    ``ref2d.solve_2d_reference_on_section_mesh(..., linear_iron_mu_r=...)``, and
+    nothing else moves between the rungs.
+    """
+    if iron_mu_r is not None:
+        linear_iron = True
     regs: List[Region] = []
     for r in section.regions:
         el = tm.elements(r.name)
         if el.size == 0:
             raise ValueError(f"region {r.name!r} has no elements in the 3D mesh")
-        regs.append(Region(name=r.name, elements=el, mu_r=r.mu_r, M=r.M,
+        mu = r.mu_r
+        if iron_mu_r is not None and r.kind == "iron":
+            mu = float(iron_mu_r)
+        regs.append(Region(name=r.name, elements=el, mu_r=mu, M=r.M,
                            bh_curve=None if linear_iron else r.bh_curve))
     air = tm.elements("air")
     if air.size == 0:
@@ -103,6 +117,7 @@ def solve_sector(section: MotorSection,
                  damping: float = 0.35,
                  neumann_outer: bool = False,
                  linear_iron: bool = False,
+                 iron_mu_r: Optional[float] = None,
                  linear_solver: Optional[str] = None,
                  mu_init: Optional[np.ndarray] = None,
                  verbose: bool = False) -> SectorSolve:
@@ -112,7 +127,9 @@ def solve_sector(section: MotorSection,
     t0 = time.perf_counter()
     tm, _ = build_motor_mesh(section, stack_mm=stack_mm, sect=sect2d,
                              n_stack=n_stack, n_cap=n_cap)
-    regs = _regions_for(tm, section, linear_iron=linear_iron)
+    regs = _regions_for(tm, section, linear_iron=linear_iron,
+                        iron_mu_r=iron_mu_r)
+    linear_iron = linear_iron or iron_mu_r is not None
     basis = Basis(tm.mesh, ElementTetP2() if order == 2 else ElementTetP1())
     per = None
     if section.n_sectors > 1:
@@ -128,6 +145,82 @@ def solve_sector(section: MotorSection,
         sol = solve_static3d_nonlinear(tm.mesh, regs, order=order, tol=tol,
                                        max_iter=max_iter, damping=damping,
                                        verbose=verbose, mu_init=mu_init, **kw)
+    return SectorSolve(sol=sol, tm=tm, section=section,
+                       stack_mm=float(stack_mm if stack_mm else section.stack_mm),
+                       basis=basis, periodic=per, dirichlet=D,
+                       wall_s=time.perf_counter() - t0)
+
+
+def solve_sector_A(section: MotorSection,
+                   sect2d: Section2D,
+                   stack_mm: Optional[float] = None,
+                   n_stack: int = 8,
+                   n_cap: int = 10,
+                   tol: float = 3e-3,
+                   max_iter: int = 45,
+                   damping: float = 0.35,
+                   flux_tight_outer: bool = True,
+                   linear_iron: bool = False,
+                   iron_mu_r: Optional[float] = None,
+                   mu_init: Optional[np.ndarray] = None,
+                   cg_tol: float = 1e-10,
+                   verbose: bool = False) -> SectorSolve:
+    """The same sector, solved in the A-formulation on Nedelec edges.
+
+    Deliberately built to be swappable with :func:`solve_sector`: it returns the
+    same :class:`SectorSolve`, so ``airgap_B1`` and ``spill_profile`` read the
+    two formulations through exactly one code path and a three-way comparison
+    cannot quietly be three different post-processors.
+
+    Boundary conditions are the DUALS of the scalar solver's, which is the one
+    thing that cannot be copied across (see ``nedelec``'s module docstring):
+
+      * z = 0 (the axial mirror plane) carries B_z = 0.  For the scalar potential
+        that is the natural condition and costs nothing; here it is A x n = 0 and
+        must be imposed, or the model is a machine with no mirror symmetry.
+      * the truncation surface: ``flux_tight_outer=True`` clamps A x n = 0 there
+        (B . n = 0), which is the scalar solver's NEUMANN case; False leaves it
+        natural, which is the scalar solver's phi = 0.  Stage A measured the two
+        scalar cases 0.007 % apart on this machine, so the choice is not what any
+        3D-vs-2D residual is made of — but it is stated rather than assumed.
+      * the two cut planes carry the anti-periodic constraint on EDGE dofs,
+        including the per-edge orientation sign — see ``periodic.edge_dof_pairs``.
+
+    The gauge is ``"none"`` (ungauged CG): tree-cotree is not available on a
+    periodically reduced system, and for a magnet-only source the load is
+    consistent to round-off, so CG is not a compromise here.
+    """
+    from skfem import Basis
+    from skfem.element import ElementTetN0
+
+    from .nedelec import (mirror_plane_dofs, solve_static3d_A,
+                          solve_static3d_A_nonlinear, truncation_dofs)
+    from .periodic import edge_dof_pairs
+
+    t0 = time.perf_counter()
+    tm, _ = build_motor_mesh(section, stack_mm=stack_mm, sect=sect2d,
+                             n_stack=n_stack, n_cap=n_cap)
+    regs = _regions_for(tm, section, linear_iron=linear_iron,
+                        iron_mu_r=iron_mu_r)
+    linear_iron = linear_iron or iron_mu_r is not None
+    basis = Basis(tm.mesh, ElementTetN0())
+    per = None
+    if section.n_sectors > 1:
+        per = edge_dof_pairs(basis, math.radians(section.sector_deg),
+                             -1.0 if section.antiperiodic else 1.0)
+    D = mirror_plane_dofs(basis, 0.0)
+    if flux_tight_outer:
+        D = np.unique(np.concatenate(
+            [D, truncation_dofs(basis, sect2d.r_box_mm * MM,
+                                tm.meta["z_box_mm"] * MM)]))
+    kw = dict(basis=basis, periodic=per, dirichlet_dofs=D, gauge="none",
+              cg_tol=cg_tol)
+    if linear_iron:
+        sol = solve_static3d_A(tm.mesh, regs, **kw)
+    else:
+        sol = solve_static3d_A_nonlinear(tm.mesh, regs, tol=tol,
+                                         max_iter=max_iter, damping=damping,
+                                         verbose=verbose, mu_init=mu_init, **kw)
     return SectorSolve(sol=sol, tm=tm, section=section,
                        stack_mm=float(stack_mm if stack_mm else section.stack_mm),
                        basis=basis, periodic=per, dirichlet=D,

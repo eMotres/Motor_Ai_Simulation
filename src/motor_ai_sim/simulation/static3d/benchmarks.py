@@ -445,8 +445,19 @@ def nedelec_probe(verbose: bool = True) -> dict:
         out["solved"] = bool(np.isfinite(x).all())
         out["curl_of_solution_ok"] = bool(
             np.isfinite(basis.interpolate(x).curl).all())
-        out["higher_order_edge"] = hasattr(
-            __import__("skfem.element", fromlist=["x"]), "ElementTetN1")
+        # "is there a HIGHER-order edge element" — and the honest answer needs
+        # more than hasattr('ElementTetN1'). In scikit-fem 12.0.1 that name
+        # exists and is the SAME class as ElementTetN0: one dof per edge,
+        # maxdeg 1. Believing the attribute is how a Stage-B plan ends up
+        # budgeting for second-order accuracy it cannot have.
+        import skfem.element as _el
+        alt = getattr(_el, "ElementTetN1", None)
+        out["ElementTetN1_is_a_distinct_class"] = bool(
+            alt is not None and alt is not ElementTetN0)
+        out["edge_dofs"] = int(getattr(e, "edge_dofs", 0))
+        out["maxdeg"] = int(getattr(e, "maxdeg", 0))
+        out["higher_order_edge"] = bool(
+            out["edge_dofs"] > 1 or out["maxdeg"] > 1)
         out["status"] = "usable"
     except Exception as exc:                          # pragma: no cover
         out["status"] = f"FAILED: {type(exc).__name__}: {exc}"
@@ -456,6 +467,242 @@ def nedelec_probe(verbose: bool = True) -> dict:
         for k, v in out.items():
             print(f"    {k:22s}: {v}")
     return out
+
+
+# --------------------------------------------------------------------------
+# (f) the A-formulation on Nedelec edges: accuracy and cost against the scalar
+#     potential, on the SAME meshes
+# --------------------------------------------------------------------------
+
+def _l2_vs_exact(B, dx, Bex) -> float:
+    d = ((B - Bex) ** 2).sum(axis=0)
+    n = (Bex ** 2).sum(axis=0)
+    return math.sqrt(float((d * dx).sum()) / max(float((n * dx).sum()), 1e-300))
+
+
+def nedelec_sphere_case(h: float, radius: float = 0.01, box_factor: float = 4.0,
+                        M: float = M_MAG, mu_r: float = 1.0) -> List[dict]:
+    """One sphere mesh, solved THREE ways, measured against the same exact field.
+
+    The comparison that matters is per-mesh, not per-dof and not per-second
+    alone: all three rows below see identical geometry, identical material data
+    (the same ``Region`` list) and identical error norms, so the only thing that
+    differs is the formulation.
+    """
+    from motor_ai_sim.simulation.static3d.nedelec import solve_static3d_A
+
+    tm = sphere_in_box(radius=radius, box_factor=box_factor, h_magnet=h)
+    mag = tm.elements("magnet")
+    regs = [Region("air", tm.elements("air")),
+            Region("magnet", mag, mu_r=mu_r, M=(0.0, 0.0, M))]
+    Bex_in = exact.demag_body_B_inside(M, mu_r, exact.DEMAG_FACTOR["sphere"])
+
+    rows = []
+    for tag in ("N0", "P1", "P2"):
+        t0 = time.perf_counter()
+        if tag == "N0":
+            sol = solve_static3d_A(tm.mesh, regs, gauge="tree")
+        else:
+            sol = solve_static3d(tm.mesh, regs, order=int(tag[1]))
+        wall = time.perf_counter() - t0
+        B = sol.B_elementwise()[:, mag]
+        dx = sol.basis.dx[mag].sum(axis=1)
+        Bex = np.zeros_like(B)
+        Bex[2] = Bex_in
+        mean = sol.region_mean_B("magnet")[2]
+        rows.append(dict(formulation=tag, h=h, tets=tm.n_elements,
+                         ndofs=sol.ndofs, l2=_l2_vs_exact(B, dx, Bex),
+                         mean_err=abs(mean - Bex_in) / abs(Bex_in),
+                         t_asm=sol.assemble_time, t_solve=sol.solve_time,
+                         wall=wall, solver=sol.solver))
+    return rows
+
+
+def nedelec_sphere_convergence(hs: Sequence[float] = (0.005, 0.0035, 0.0025),
+                               verbose: bool = True) -> List[dict]:
+    rows: List[dict] = []
+    for h in hs:
+        rows += nedelec_sphere_case(h)
+    for tag in ("N0", "P1", "P2"):
+        rs = [r for r in rows if r["formulation"] == tag]
+        for r, q in zip(rs, _rate([r["h"] for r in rs], [r["l2"] for r in rs])):
+            r["rate"] = q
+    if verbose:
+        pretty = [dict(form=r["formulation"], h_mm=f"{r['h']*1e3:.2f}",
+                       tets=r["tets"], ndofs=r["ndofs"],
+                       L2_pct=f"{100*r['l2']:.3f}", rate=_fmt(r.get("rate"), 2),
+                       mean_pct=f"{100*r['mean_err']:.3f}",
+                       t_asm=f"{r['t_asm']:.2f}", t_sol=f"{r['t_solve']:.2f}",
+                       wall=f"{r['wall']:.1f}")
+                  for r in sorted(rows, key=lambda r: (r["h"], r["formulation"]),
+                                  reverse=True)]
+        print(_table(pretty, ["form", "h_mm", "tets", "ndofs", "L2_pct", "rate",
+                              "mean_pct", "t_asm", "t_sol", "wall"],
+                     "(f) magnetised sphere — A-formulation (N0) vs total scalar "
+                     "potential (P1/P2), SAME meshes"))
+        print("    N0 is the LOWEST-order Nedelec element and it is the only one "
+              "scikit-fem 12.0.1 has:")
+        print("    ElementTetN1 IS ElementTetN0 there (one dof per edge, "
+              "maxdeg 1), so curl(A) is piecewise constant.")
+    return rows
+
+
+def nedelec_coil_case(h: float = 0.0016, r_inner: float = 0.005,
+                      r_outer: float = 0.006, length: float = 0.02,
+                      K: float = M_MAG, verbose: bool = True) -> dict:
+    """The CURRENT-carrying benchmark: a cylindrical sheet K = M x n.
+
+    A cylinder magnetised M*z_hat is EQUIVALENT to a bound surface current
+    K = M on its wall.  Here that current is assembled as a genuine J on the
+    edge-element right-hand side (``integral(J . v)``, not a magnet term), in a
+    shell of finite thickness carrying J_phi = K / thickness.  Two references,
+    and they answer different questions:
+
+      * ``exact.thick_solenoid_axis_Bz`` — the exact field of the source
+        ACTUALLY discretised.  Error against it is solver error.
+      * ``exact.cylinder_axis_Bz`` — the ideal sheet, i.e. the magnet.  The gap
+        between the two references is the shell's finite thickness and is a
+        MODELLING difference, reported separately so it cannot be mistaken for
+        either.
+    """
+    from motor_ai_sim.simulation.static3d.meshes import tube_in_box
+    from motor_ai_sim.simulation.static3d.nedelec import (azimuthal_J,
+                                                          solve_static3d_A)
+
+    J = K / (r_outer - r_inner)
+    tm = tube_in_box(r_inner=r_inner, r_outer=r_outer, length=length,
+                     box_factor=3.0, h_tube=h)
+    coil = tm.elements("coil")
+    regs = [Region("air", tm.elements("air")), Region("coil", coil)]
+    t0 = time.perf_counter()
+    sol = solve_static3d_A(tm.mesh, regs, gauge="tree",
+                           J=azimuthal_J(coil, tm.n_elements, J))
+    wall = time.perf_counter() - t0
+
+    # Sample on a small RING rather than exactly on the axis: curl(A) is
+    # elementwise constant, so a single on-axis point is one tet's opinion, and
+    # near the axis the tets are large.  Averaging a ring of radius 0.15 r_inner
+    # is a quadrature of a field that is smooth there, not a smoothing of the
+    # answer — and it is applied identically to the exact solution's own probe
+    # geometry (B_z on the axis, where the exact formula lives).
+    z = np.linspace(0.0, 1.4 * length, 15)
+    th = np.linspace(0.0, 2 * math.pi, 16, endpoint=False)
+    rp = 0.15 * r_inner
+    Bz = np.empty(z.size)
+    for i, zi in enumerate(z):
+        pts = np.vstack([rp * np.cos(th), rp * np.sin(th),
+                         np.full(th.shape, zi)])
+        Bz[i] = float(sol.B_at_points(pts)[2].mean())
+    ex_thick = exact.thick_solenoid_axis_Bz(z, J, r_inner, r_outer, length)
+    ex_sheet = exact.cylinder_axis_Bz(z, K, 0.5 * (r_inner + r_outer), length)
+    scale = abs(ex_thick[0])
+    err = np.abs(Bz - ex_thick) / scale
+    model_gap = float(np.abs(ex_thick - ex_sheet).max() / scale)
+
+    out = dict(h=h, tets=tm.n_elements, ndofs=sol.ndofs, wall=wall,
+               iterations=sol.iterations, solver=sol.solver,
+               source_residual=sol.source_residual,
+               source_residual_projected=sol.source_residual_projected,
+               mid=float(Bz[0]), mid_exact=float(ex_thick[0]),
+               mid_err=float(err[0]), l2=float(np.sqrt((err ** 2).mean())),
+               max_err=float(err.max()), sheet_vs_thick=model_gap,
+               boundary_flux=float(sol.boundary_flux()))
+    if verbose:
+        print("(f2) current sheet K = M x n — a genuine J on the edge RHS")
+        print("------------------------------------------------------------")
+        print(f"    mesh        : {out['tets']} tets, {out['ndofs']} edge dofs")
+        print(f"    source      : |G^T f|/|f| = {out['source_residual']:.2e} "
+              f"before the Helmholtz projection, "
+              f"{out['source_residual_projected']:.2e} after")
+        print(f"    B_z(mid)    : {out['mid']:.5f} T vs exact "
+              f"{out['mid_exact']:.5f} T  ({100*out['mid_err']:.2f} %)")
+        print(f"    on-axis     : L2 {100*out['l2']:.2f} %, "
+              f"max {100*out['max_err']:.2f} %")
+        print(f"    ideal sheet : the thick shell differs from K = M x n by "
+              f"{100*out['sheet_vs_thick']:.2f} % — that is the MODEL, not the "
+              "solver")
+        print(f"    wall        : {wall:.1f} s  ({out['solver']})")
+    return out
+
+
+def iron_ladder(mu_rs: Sequence[float] = (1.0, 10.0, 200.0, 1000.0, 4625.0),
+                h: float = 0.0028, radius: float = 0.01,
+                shell_inner: float = 0.013, shell_outer: float = 0.016,
+                M: float = M_MAG, verbose: bool = True) -> List[dict]:
+    """THE mu_r ladder: magnetised sphere in an iron shell, against the EXACT
+    solution at every rung (``exact.sphere_in_shell_B``).
+
+    The acceptance question this exists to answer: the total scalar potential is
+    supposed to lose accuracy in high-mu iron because B = -mu grad(phi) is a
+    large number times a small one, so its error should GROW with mu_r; the
+    A-formulation, whose unknown is B itself, should be flat.  Measured on a
+    reference that is exact at every mu_r, so neither the growth nor the flatness
+    can be an artefact of the reference.
+    """
+    from motor_ai_sim.simulation.static3d.meshes import sphere_with_iron_shell
+    from motor_ai_sim.simulation.static3d.nedelec import solve_static3d_A
+
+    tm = sphere_with_iron_shell(radius=radius, shell_inner=shell_inner,
+                                shell_outer=shell_outer, box_factor=3.0,
+                                h_magnet=h)
+    mesh = tm.mesh
+    cen = np.asarray(mesh.p)[:, np.asarray(mesh.t)].mean(axis=1)
+    rc = np.linalg.norm(cen, axis=0)
+    mag, iron, air = (tm.elements("magnet"), tm.elements("iron"),
+                      tm.elements("air"))
+    gap = air[(rc[air] > radius) & (rc[air] < shell_inner)]
+    outside = air[(rc[air] > shell_outer) & (rc[air] < 2.2 * shell_outer)]
+
+    rows: List[dict] = []
+    for mu_r in mu_rs:
+        regs = [Region("air", air),
+                Region("magnet", mag, mu_r=1.0, M=(0.0, 0.0, M)),
+                Region("iron", iron, mu_r=float(mu_r))]
+        Bex = exact.sphere_in_shell_B(cen, M, radius, shell_inner, shell_outer,
+                                      mu_r)
+        Bin = exact.sphere_in_shell_B_inside(M, radius, shell_inner,
+                                             shell_outer, mu_r)
+        for tag in ("N0", "P1", "P2"):
+            t0 = time.perf_counter()
+            if tag == "N0":
+                sol = solve_static3d_A(mesh, regs, gauge="none")
+                it = sol.iterations
+            else:
+                sol = solve_static3d(mesh, regs, order=int(tag[1]))
+                it = None
+            wall = time.perf_counter() - t0
+            B = sol.B_elementwise()
+            vol = sol.basis.dx.sum(axis=1)
+            rows.append(dict(
+                mu_r=float(mu_r), formulation=tag, ndofs=sol.ndofs,
+                iterations=it, wall=wall,
+                magnet=_l2_vs_exact(B[:, mag], vol[mag], Bex[:, mag]),
+                iron=_l2_vs_exact(B[:, iron], vol[iron], Bex[:, iron]),
+                gap=_l2_vs_exact(B[:, gap], vol[gap], Bex[:, gap]),
+                outside=_l2_vs_exact(B[:, outside], vol[outside],
+                                     Bex[:, outside]),
+                B_in_err=abs(sol.region_mean_B("magnet")[2] - Bin) / abs(Bin)))
+    if verbose:
+        pretty = [dict(mu_r=f"{r['mu_r']:.0f}", form=r["formulation"],
+                       ndofs=r["ndofs"], it=r["iterations"] or "-",
+                       Bin_pct=f"{100*r['B_in_err']:.3f}",
+                       magnet_pct=f"{100*r['magnet']:.2f}",
+                       iron_pct=f"{100*r['iron']:.2f}",
+                       gap_pct=f"{100*r['gap']:.2f}",
+                       out_pct=f"{100*r['outside']:.2f}",
+                       t=f"{r['wall']:.1f}") for r in rows]
+        print(_table(pretty, ["mu_r", "form", "ndofs", "it", "Bin_pct",
+                              "magnet_pct", "iron_pct", "gap_pct", "out_pct",
+                              "t"],
+                     f"(f3) iron ladder — sphere in an iron shell, {tm.n_elements}"
+                     " tets, vs the EXACT solution at each mu_r"))
+        for tag in ("N0", "P1", "P2"):
+            rs = [r for r in rows if r["formulation"] == tag and r["mu_r"] >= 10]
+            sp = max(r["iron"] for r in rs) / max(min(r["iron"] for r in rs),
+                                                  1e-300)
+            print(f"    {tag}: iron-region error spread over mu_r = 10..{rs[-1]['mu_r']:.0f}"
+                  f" is x{sp:.2f} (1.00 = perfectly flat)")
+    return rows
 
 
 # --------------------------------------------------------------------------
@@ -470,6 +717,12 @@ def main(argv=None) -> int:
     ap.add_argument("--truncation", action="store_true")
     ap.add_argument("--nonlinear", action="store_true")
     ap.add_argument("--nedelec", action="store_true")
+    ap.add_argument("--avsphi", action="store_true",
+                    help="A-formulation vs scalar potential on the same meshes")
+    ap.add_argument("--coil", action="store_true",
+                    help="the current-sheet benchmark (genuine J)")
+    ap.add_argument("--ladder", action="store_true",
+                    help="the mu_r iron ladder against the exact shell solution")
     ap.add_argument("--fine", action="store_true",
                     help="publication-grade sizes (minutes, not seconds)")
     ap.add_argument("--threads", type=int, default=1,
@@ -483,7 +736,8 @@ def main(argv=None) -> int:
 
     want = dict(sphere=args.sphere, cylinder=args.cylinder,
                 truncation=args.truncation, nonlinear=args.nonlinear,
-                nedelec=args.nedelec)
+                nedelec=args.nedelec, avsphi=args.avsphi, coil=args.coil,
+                ladder=args.ladder)
     if args.all or not any(want.values()):
         want = {k: True for k in want}
 
@@ -511,6 +765,17 @@ def main(argv=None) -> int:
         print()
     if want["nedelec"]:
         nedelec_probe()
+        print()
+    if want["avsphi"]:
+        nedelec_sphere_convergence((0.004, 0.0028, 0.002, 0.0014) if args.fine
+                                   else (0.005, 0.0035, 0.0025))
+        print()
+    if want["coil"]:
+        nedelec_coil_case(h=0.0011 if args.fine else 0.0016)
+        print()
+    if want["ladder"]:
+        iron_ladder(mu_rs=(1.0, 10.0, 200.0, 1000.0, 4625.0, 1.0e6),
+                    h=0.0022 if args.fine else 0.0032)
     return 0
 
 

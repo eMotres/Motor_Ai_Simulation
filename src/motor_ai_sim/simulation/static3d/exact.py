@@ -143,6 +143,42 @@ def cylinder_axis_Bz(z: np.ndarray, M: float, radius: float, length: float
                             - b / np.sqrt(b * b + radius * radius))
 
 
+def thick_solenoid_axis_Bz(z: np.ndarray, J: float, r_inner: float,
+                           r_outer: float, length: float) -> np.ndarray:
+    """Exact on-axis B_z of a finite THICK solenoid: an annulus r_inner..r_outer,
+    axial length ``length``, centred at z = 0, carrying a uniform azimuthal
+    current density ``J`` [A/m^2].
+
+        B_z(z) = (mu0 J / 2) [ x1 ln( (r_o + sqrt(r_o^2+x1^2))
+                                    / (r_i + sqrt(r_i^2+x1^2)) )
+                             - x2 ln( (r_o + sqrt(r_o^2+x2^2))
+                                    / (r_i + sqrt(r_i^2+x2^2)) ) ]
+
+    with x1 = z + L/2, x2 = z - L/2.  It is the radial integral of the thin
+    solenoid formula, so in the thin limit (r_outer -> r_inner = R, J*t -> K) it
+    collapses onto ``cylinder_axis_Bz`` with M = K:
+
+        ln((r_o + sqrt(r_o^2+x^2))/(r_i + sqrt(r_i^2+x^2)))  ->  t / sqrt(R^2+x^2)
+
+    That collapse is the whole point of this function.  A magnet of
+    magnetisation M is EQUIVALENT to a surface current K = M x n; a solver that
+    gets the magnet right and the current wrong (or vice versa) has a source
+    bug, not a physics disagreement, and the two formulas above are what
+    separate the two.  This one is the reference for the source ACTUALLY
+    discretised (a shell of finite thickness); ``cylinder_axis_Bz`` is the ideal
+    sheet the shell is standing in for.
+    """
+    z = np.asarray(z, dtype=float)
+    x1 = z + 0.5 * length
+    x2 = z - 0.5 * length
+
+    def _term(x):
+        return np.log((r_outer + np.sqrt(r_outer ** 2 + x ** 2))
+                      / (r_inner + np.sqrt(r_inner ** 2 + x ** 2)))
+
+    return 0.5 * MU0 * J * (x1 * _term(x1) - x2 * _term(x2))
+
+
 def cylinder_end_to_mid_ratio(radius: float, length: float) -> float:
     """B_z(end face) / B_z(mid-plane) on the axis — the analytic 'spill' number.
 
@@ -154,6 +190,141 @@ def cylinder_end_to_mid_ratio(radius: float, length: float) -> float:
     model is needed: a 2D solve reports the mid-plane value everywhere."""
     L, R = float(length), float(radius)
     return math.sqrt(0.25 * L * L + R * R) / math.sqrt(L * L + R * R)
+
+
+# --------------------------------------------------------------------------
+# magnetised sphere inside a concentric IRON SHELL — the iron ladder's exact
+# reference, at ARBITRARY mu_r
+# --------------------------------------------------------------------------
+
+def sphere_in_shell_coeffs(M: float, a: float, b: float, c: float,
+                           mu_r: float, mu_m: float = 1.0) -> dict:
+    """Legendre coefficients for a uniformly magnetised sphere inside a
+    concentric spherical iron shell, in free space.
+
+    Geometry (all radii in metres, concentric, a < b < c):
+
+        r < a        magnet, magnetisation M*z_hat, permeability mu0*mu_m
+        a < r < b    air
+        b < r < c    iron, permeability mu0*mu_r
+        r > c        air
+
+    Everything obeys ``B = mu0*mu_r*H + mu0*M`` with H = -grad(phi) and, because
+    M is uniform, div B = 0 reduces to Laplace's equation in EVERY region: the
+    magnet enters only through the jump conditions at r = a.  A uniform M along z
+    excites the l = 1 Legendre harmonic and nothing else, so the solution is
+    exactly
+
+        phi_1 = A1 r cos(t)                      r < a
+        phi_2 = (A2 r + B2/r^2) cos(t)           a < r < b
+        phi_3 = (A3 r + B3/r^2) cos(t)           b < r < c
+        phi_4 = (B4/r^2) cos(t)                  r > c
+
+    and the six unknowns follow from continuity of phi (tangential H) and of
+    B_r at r = a, b, c — a 6x6 linear system, solved here in closed form by
+    ``numpy.linalg.solve``.  Solving a 6x6 system is not a discretisation: this
+    IS the exact solution, evaluated.
+
+    Why this is the iron benchmark.  The known weakness of the TOTAL scalar
+    potential is cancellation inside high-mu iron, where B = -mu grad(phi) is a
+    huge permeability times a tiny gradient; the residual it leaves grows with
+    mu_r.  A benchmark whose reference is another mesh cannot separate that from
+    ordinary discretisation error.  This one has an exact answer at EVERY mu_r,
+    so the ladder mu_r = 10 / 200 / 1000 / 4625 is measured against the truth
+    rather than against a finer version of the same formulation.
+
+    Sanity: at mu_r = 1 the shell disappears and B_in falls back on
+    ``demag_body_B_inside(M, mu_m, 1/3)`` exactly.
+    """
+    a, b, c = float(a), float(b), float(c)
+    mu_r, mu_m = float(mu_r), float(mu_m)
+    if not (0.0 < a < b < c):
+        raise ValueError(f"need 0 < a < b < c, got {a}, {b}, {c}")
+    K = np.zeros((6, 6))
+    rhs = np.zeros(6)
+    # r = a : phi continuous
+    K[0] = [a, -a, -1.0 / a ** 2, 0.0, 0.0, 0.0]
+    # r = a : B_r continuous ->  -mu_m A1 + M = -(A2 - 2 B2/a^3)
+    K[1] = [-mu_m, 1.0, -2.0 / a ** 3, 0.0, 0.0, 0.0]
+    rhs[1] = -float(M)
+    # r = b : phi continuous
+    K[2] = [0.0, b, 1.0 / b ** 2, -b, -1.0 / b ** 2, 0.0]
+    # r = b : B_r continuous
+    K[3] = [0.0, -1.0, 2.0 / b ** 3, mu_r, -2.0 * mu_r / b ** 3, 0.0]
+    # r = c : phi continuous
+    K[4] = [0.0, 0.0, 0.0, c, 1.0 / c ** 2, -1.0 / c ** 2]
+    # r = c : B_r continuous
+    K[5] = [0.0, 0.0, 0.0, -mu_r, 2.0 * mu_r / c ** 3, -2.0 / c ** 3]
+    A1, A2, B2, A3, B3, B4 = np.linalg.solve(K, rhs)
+    return dict(A1=A1, A2=A2, B2=B2, A3=A3, B3=B3, B4=B4,
+                a=a, b=b, c=c, M=float(M), mu_r=mu_r, mu_m=mu_m)
+
+
+def sphere_in_shell_B_inside(M: float, a: float, b: float, c: float,
+                             mu_r: float, mu_m: float = 1.0) -> float:
+    """|B| inside the magnet (uniform, along M): mu0*(mu_m*H + M), H = -A1."""
+    co = sphere_in_shell_coeffs(M, a, b, c, mu_r, mu_m)
+    return MU0 * (-co["mu_m"] * co["A1"] + co["M"])
+
+
+def sphere_in_shell_B(points: np.ndarray, M: float, a: float, b: float,
+                      c: float, mu_r: float, mu_m: float = 1.0) -> np.ndarray:
+    """Exact B at arbitrary points (3, N) -> (3, N), all four regions.
+
+    In every region  B = -mu grad(phi) + mu0 M ,  with
+
+        grad( (A r + B/r^2) cos(t) )
+            = (A - 2B/r^3) cos(t) r_hat  -  (A + B/r^3) sin(t) t_hat
+
+    written back in cartesian components.  Points exactly on an interface are
+    assigned to the INNER region; B_r is continuous there but B_t is not, so a
+    benchmark should not probe an interface tangentially.
+    """
+    co = sphere_in_shell_coeffs(M, a, b, c, mu_r, mu_m)
+    p = np.asarray(points, dtype=float)
+    r = np.linalg.norm(p, axis=0)
+    r_safe = np.where(r > 0, r, 1.0)
+    ct = p[2] / r_safe                                   # cos(theta)
+    # rho_hat in the xy-plane (theta_hat = ct*rho_hat - st*z_hat)
+    rho = np.hypot(p[0], p[1])
+    rho_safe = np.where(rho > 0, rho, 1.0)
+    st = rho / r_safe
+    rhat = p / r_safe[None]
+    that = np.zeros_like(p)
+    that[0] = ct * p[0] / rho_safe
+    that[1] = ct * p[1] / rho_safe
+    that[2] = -st
+
+    A = np.zeros(r.shape)
+    Bc = np.zeros(r.shape)
+    mu = np.full(r.shape, MU0)
+    Mz = np.zeros(r.shape)
+    inner = r <= a
+    A[inner], Bc[inner] = co["A1"], 0.0
+    mu[inner] = MU0 * co["mu_m"]
+    Mz[inner] = co["M"]
+    mid = (r > a) & (r <= b)
+    A[mid], Bc[mid] = co["A2"], co["B2"]
+    iron = (r > b) & (r <= c)
+    A[iron], Bc[iron] = co["A3"], co["B3"]
+    mu[iron] = MU0 * co["mu_r"]
+    out = r > c
+    A[out], Bc[out] = 0.0, co["B4"]
+
+    dphi_dr = (A - 2.0 * Bc / r_safe ** 3) * ct
+    dphi_dt = -(A + Bc / r_safe ** 3) * st               # (1/r) dphi/dtheta
+    grad = dphi_dr[None] * rhat + dphi_dt[None] * that
+    # r = 0 is a coordinate singularity of the spherical form, not of the field:
+    # phi_1 = A1 r cos(t) IS A1*z, so grad(phi) = A1 z_hat there (and the limit
+    # of the expression above is the same, which is why only the exact origin
+    # needs saying).
+    org = r <= 1e-14 * max(c, 1.0)
+    if org.any():
+        grad[:, org] = 0.0
+        grad[2, org] = co["A1"]
+    B = -mu[None] * grad
+    B[2] += MU0 * Mz
+    return B
 
 
 def cylinder_axis_Bz_mid(M: float, radius: float, length: float) -> float:

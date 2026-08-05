@@ -934,7 +934,7 @@
   "version": "static3d-stageB-1",
   "generated_utc": "2026-08-05T17:23:25Z",
   "_schema": "documented in simulation/static3d/loaded.py (STAGE_B_SCHEMA_DOC)",
-  "_summary": "Blockers 1, 2 and 3 are closed and measured, and the sliding band is proven exact (stage_b.sliding_band.proofs).  TASK 46 settles the torque FUNCTIONAL question the previous pass left open and runs the two Stage B studies that were implemented but never executed.  SETTLED: the honest torque of a PM machine is the CO-ENERGY derivative dW'/dtheta at constant current.  The flux-linkage expression 1/2 sum_ph i_ph dpsi_ph/dtheta is a DIFFERENT functional - it keeps the reluctance term whole, keeps half the PM alignment term and drops the magnet's own co-energy - and the magnets-OFF identity proves both implementations are nevertheless correct, agreeing to 5e-11 N.m on a 3e-2 N.m torque.  MEASURED: the end-winding leakage sweep (the end turns add under 0.5 % of the phase inductance) and the long-stack honesty test, which passes and in passing delivers the INDUCTIVE end-effect factor k_L = 1.065 the project has never had.  STILL NOT DELIVERED: a k_T from the co-energy central difference, which needs two more converged nonlinear rotor positions.  The k_T that IS quoted (0.9645) is method-matched, and its method error is now bounded at 0.4 % rather than merely flagged.",
+  "_summary": "Blockers 1, 2 and 3 are closed and measured, and the sliding band is proven exact (stage_b.sliding_band.proofs).  TASK 46 settles the torque FUNCTIONAL question the previous pass left open and runs the two Stage B studies that were implemented but never executed.  SETTLED: the honest torque of a PM machine is the CO-ENERGY derivative dW'/dtheta at constant current.  The flux-linkage expression 1/2 sum_ph i_ph dpsi_ph/dtheta is a DIFFERENT functional - it keeps the reluctance term whole, keeps half the PM alignment term and drops the magnet's own co-energy - and the magnets-OFF identity proves both implementations are nevertheless correct, agreeing to 5e-11 N.m on a 3e-2 N.m torque.  MEASURED: the end-winding leakage sweep (the end turns add under 0.5 % of the phase inductance) and the long-stack honesty test, which passes and in passing delivers the INDUCTIVE end-effect factor k_L = 1.065 the project has never had.  [TASK 50] DELIVERED: the co-energy central difference itself, on four converged nonlinear rotor positions - the virtual-work torque of this machine, 0.573267 N.m over +/- 1 ring pitch and 0.567115 over +/- 2, with the step-size disagreement traced to the frozen-current window average and the winding functional measured at 49 % of it on the same solves.  STILL NOT DELIVERED: k_T itself, because the 2D leg it would be divided by is a period mean of a machine whose currents rotate, and the four defensible ways to line the two up span 0.967 to 1.002.  The k_T that IS quoted (0.9645) is method-matched, and its method error is now bounded at 0.4 % rather than merely flagged.",
   "machine": {
    "preset": "my_40mm_last",
    "materials_used": {
@@ -1978,7 +1978,7 @@
    ]
   },
   "torque": {
-   "status": "PARTIAL - the sliding band is proven, the torque FUNCTIONAL question is SETTLED (see functional_settlement: the co-energy derivative is the torque, the flux-linkage functional is blind to the magnet term), and one CONVERGED nonlinear rotor position exists.  The nonlinear co-energy CENTRAL DIFFERENCE still does not, so no k_T is quoted from the energy-difference route.",
+   "status": "PARTIAL - the sliding band is proven, the torque FUNCTIONAL question is SETTLED (see functional_settlement: the co-energy derivative is the torque, the flux-linkage functional is blind to the magnet term), and [TASK 50] the nonlinear co-energy CENTRAL DIFFERENCE now exists: four converged rotor positions give T = dW'/dtheta = 0.573267 N.m over +/- 1 ring pitch and 0.567115 over +/- 2 (co_energy_k_T).  k_T is still not quoted, and k_T_note says exactly why: the torque is measured, the RATIO is not defensible from one rotor window because the two legs are averaged differently, and the four defensible readings of it span 0.967 to 1.002.",
    "_doc": "Torque here is by the ENERGY METHOD only: T = dW'/dtheta at constant current, differenced over the sliding band's own legal angles so the two states sit on bit-identical meshes.  Maxwell stress appears nowhere.  torque3d.co_energy builds W' from the co-energy DENSITY, reading saturable iron off the same B-H curve the Picard converged on (1/2 nu |B|^2 with the frozen permeability is the co-energy of a different, linear material and on a saturated bridge differs by tens of percent).",
    "k_T": null,
    "mesh": {
@@ -2096,7 +2096,8 @@
     "RESOLVED": "The factor of ten is explained and measured: see stage_b.torque.functional_settlement.  The co-energy central difference IS the torque; the flux-linkage expression is a different functional that misses the magnet's own co-energy and half of the PM alignment term, and on this machine those two omissions are larger than the torque and cancel against the term it does keep."
    },
    "what_is_missing_and_why": [
-    "the nonlinear co-energy CENTRAL DIFFERENCE, and it is the only thing between this module and a virtual-work k_T.  One converged rotor position costs 52 Picard sweeps and 44 minutes at this mesh (converged_position); the second and third have never finished.  Warm-starting works and saves 30-40 % (warm_start), which is not enough on a shared box.",
+    "[TASK 50, DONE] the nonlinear co-energy CENTRAL DIFFERENCE.  Four converged positions (shifts -2, -1, +1, +2) at 36-48 Picard sweeps each, 3464 s of solver time in total with the warm start doing the work it was fixed to do; see co_energy_k_T for the torque, the step-size study and the cost, and k_T_note for why the ratio is still not quoted.",
+    "a like-for-like DENOMINATOR for k_T - either the 3D positions across one whole slot-pole beat period with the currents rotating WITH the rotor (a genuine 3D period mean), or a 2D co-energy central difference at the same frozen currents and the same rotor angles.  The second is far cheaper (the 2D sliding band already moves the rotor without remeshing) and cancels the window, the frozen current and the functional all at once.  This, and not another 3D solve, is what k_T is waiting for.",
     "a nonlinear magnet-only COGGING sweep, which is what would show the physical cogging line the linear sweep cannot resolve.  Its price is measured and recorded in sliding_band.noise_floor.nonlinear_cogging_sweep (~4.5 hours warm-started at this mesh); nothing blocks it but CPU.",
     "[TASK 46, DONE] the end-winding leakage rows and the long-stack honesty test - both were queued here and both have now been run; see stage_b.end_winding_leakage.measured and stage_b.long_stack_honesty_test.measured.",
     "[TASK 46, DONE] the functional disagreement itself - see stage_b.torque.functional_settlement."
@@ -2591,7 +2592,323 @@
     },
     "what_this_means_for_k_T": "The honest torque of a PM machine is the CO-ENERGY derivative dW'/dtheta at constant current, and it is the only torque this module reports.  dq_torque is a third expression again: sb_postproc.hybrid_torque states it is the air-gap power balance P = T omega, whose virtual-work identity holds for the MEAN over an electrical period with the currents rotating with the rotor.  Evaluated at ONE rotor angle with the currents frozen it is not that mean: on the linear machine it swings from -0.040 to +0.081 N.m over 7 ring pitches while the true torque stays near +1.9e-3.  The k_T = 0.9645 quoted below is therefore method-matched and NOT a virtual-work number; it is the same instantaneous formula applied to both legs, and it carries that caveat.  How big that caveat is has now been MEASURED on the real machine rather than left open: see how_wrong_the_instantaneous_dq_IS_on_the_real_machine - 0.35 % at rotor_angle 0, 0.90 % worst case over the cycle.  k_T = 0.9645 therefore stands, with a stated method error of order 0.4 %, and it is still NOT a virtual-work number: the co-energy central difference that would be one needs two more converged nonlinear rotor positions and remains unpaid."
    },
-   "k_T_note": "deliberately null.  k_T_flux_linkage = 0.9645 is the method-matched ratio and is quoted under that name so it can never be mistaken for a virtual-work number; this key stays empty until the co-energy central difference pays for it."
+   "k_T_note": "STILL DELIBERATELY NULL - but for a measured reason now, not a missing measurement. TASK 50 bought the thing this key was waiting for: the co-energy central difference on the REAL nonlinear machine, four converged rotor positions, T = dW'/dtheta = 0.573267 N.m over +/- 1 ring pitch and 0.567115 over +/- 2 (stage_b.torque.co_energy_k_T). What it did not buy is a defensible RATIO, and the reason is in that block's own numbers rather than in anyone's opinion. (1) The ratio is not one number: against the 2D leg's PERIOD MEAN it is 0.9777 at the smaller step and 0.9673 at the larger; against the 2D torque averaged over the SAME window it is 0.9971 and 0.9810. That 2 % spread is the 2D machine's own ripple plus the frozen-current window average, not an end effect, and picking any one of the four would be picking an answer. (2) The two legs are averaged differently and cannot be made comparable from one rotor window: the 3D number is an instantaneous virtual-work torque at frozen currents, averaged over 2.14 or 4.29 deg of rotor angle; two_d.T_avg is hybrid_torque's period MEAN with the currents rotating WITH the rotor. Correcting the 3D window means for the frozen-current torque-angle average (sin(x)/x, see reading) collapses them to 0.574908 and 0.573646 N.m, and those divided by the 2D leg's own value at the SAME rotor angle (0.573757 N.m, frame 0 of the same transient, where the 2D machine has exactly this rotor position and exactly these currents) give 1.0020 and 0.9998 - at this rotor angle the two legs agree to 0.2 % - while the same two over the 2D period mean give 0.9806 and 0.9784. Both are defensible readings of \"k_T\" and they are 2 % apart, which is the whole size of the effect k_T exists to carry.\n\nWhat IS now established, and is worth more than a fourth-significant-figure ratio: the virtual-work torque is ~1.4 % ABOVE the flux-linkage number this passport quotes as k_T_flux_linkage (0.565508 N.m at shift 0), so the end-effect factor on TORQUE is not 0.9645 and is not below 0.97 - it is between 0.98 and 1.00, and which end of that it sits on is an averaging question, not a solver question. The same four solves also settle the functional question on the real machine, where the linear machine could only settle it in principle: the WINDING functional 1/2 sum_ph i_ph psi_ph, central-differenced over the very same solves, reads 0.281899 N.m at dm_total = 2 and 0.275226 at dm_total = 4 - 49.2 % and 48.5 % of the co-energy torque, the factor of TWO the theory predicts when the PM alignment term dominates (torque3d's docstring: the winding functional keeps the whole reluctance term, exactly half of the PM alignment term, and none of the magnet's own co-energy). Backing that out gives a reluctance term of about -1.6 % of the alignment term for this machine.\n\nTwo ways to close it, both cheap next to what has been spent, and NEITHER is a new formulation: (a) solve the 3D positions across one whole slot-pole beat period with the currents rotating WITH the rotor, which turns the window mean into a genuine 3D period mean and makes the ratio against two_d.T_avg a ratio of like quantities; or (b) build the 2D CO-ENERGY central difference at the same frozen currents and the same rotor angles - the 2D sliding band already moves the rotor without remeshing, so the two legs would then differ by the third dimension and nothing else, and the window, the frozen current and the functional would all cancel in the ratio. (b) is the cheaper and the more honest of the two, and it is what this key is now waiting for.",
+   "co_energy_k_T": {
+    "_doc": "T = dW'/dtheta at CONSTANT CURRENT, central-differenced over the sliding band's own legal rotor angles, on the REAL nonlinear machine.  This is the virtual-work torque the module's docstring settles on; k_T_flux_linkage above is a different functional and is kept beside it on purpose.",
+    "method": "torque3d.co_energy (the volume integral of the Legendre transform of the SAME B-H curve the Picard converged on) at each rotor shift, differenced by torque3d.delta_sweep's arithmetic.  Every state is a converged nonlinear solve; the meshes at the two shifts are bit-identical (band.SlipWeld) so the only thing that changes between them is which edge dof is welded to which.",
+    "mesh": {
+     "n_ring": 336,
+     "h_gap_mm": 0.55,
+     "h_solid_mm": 1.7,
+     "box_factor": 2.5,
+     "n_stack": 4,
+     "n_cap": 4,
+     "n_ew": 3,
+     "n_tri": 3876,
+     "tets": 127908,
+     "ndofs": 161964,
+     "ring_pitch_deg": 1.0714285714285714
+    },
+    "ring_pitch_deg": 1.0714285714285714,
+    "tol": 0.003,
+    "max_iter": 70,
+    "operating_point": {
+     "i_phase_rms": 43.840620433565945,
+     "n_parallel": 1,
+     "i_coil_peak": 62.0,
+     "gamma_deg": 10.0,
+     "daxis_deg": 60.00090966318485,
+     "rotor_angle_deg": 0.0,
+     "connection": "2S",
+     "source": "simulation.drive.Excitation (read-only)"
+    },
+    "I_ph": {
+     "A": 21.204323896810546,
+     "B": 39.85358585161611,
+     "C": -61.05790974842665
+    },
+    "materials": "Stage A materials pinned in-process (F45SH_120C), as every Stage B number is",
+    "solve_order": [
+     -1,
+     1,
+     2,
+     -2
+    ],
+    "warm_from": {
+     "1": -1,
+     "2": 1,
+     "-2": -1
+    },
+    "positions": [
+     {
+      "shift": -2,
+      "angle_deg": -2.142857142857143,
+      "W_J": 0.7677164485043236,
+      "warm_from": -1,
+      "picard_sweeps": 36,
+      "picard_converged": true,
+      "picard_residual": 0.0029563609317370394,
+      "first_residual": 0.2863927664900257,
+      "damping_first": 0.10023746827150899,
+      "damping_final": 0.06726822625937015,
+      "cg_iterations": 20,
+      "wall_s": 315.5687557000201,
+      "T_dq_Nm": 0.5440150299504312,
+      "psi": {
+       "A": 0.0007804798658051445,
+       "B": -0.000625226060719052,
+       "C": -0.0002368419435549678
+      }
+     },
+     {
+      "shift": -1,
+      "angle_deg": -1.0714285714285714,
+      "W_J": 0.7780293556765905,
+      "warm_from": null,
+      "picard_sweeps": 48,
+      "picard_converged": true,
+      "picard_residual": 0.0029723061543208648,
+      "first_residual": 0.99974963770348,
+      "damping_first": 0.349912373196218,
+      "damping_final": 0.07516192768000002,
+      "cg_iterations": 20,
+      "wall_s": 781.8722347000148,
+      "T_dq_Nm": 0.5597688280203043,
+      "psi": {
+       "A": 0.0008284349997831544,
+       "B": -0.0005858274325905369,
+       "C": -0.00036016312174217254
+      }
+     },
+     {
+      "shift": 1,
+      "angle_deg": 1.0714285714285714,
+      "W_J": 0.7994694863630066,
+      "warm_from": -1,
+      "picard_sweeps": 43,
+      "picard_converged": true,
+      "picard_residual": 0.0027885781624679925,
+      "first_residual": 0.6930910876077744,
+      "damping_first": 0.24258188066272102,
+      "damping_final": 0.046976204800000004,
+      "cg_iterations": 20,
+      "wall_s": 1583.0764369000099,
+      "T_dq_Nm": 0.5618231201491641,
+      "psi": {
+       "A": 0.0008883244109484054,
+       "B": -0.0004631211907177396,
+       "C": -0.0006046159572312674
+      }
+     },
+     {
+      "shift": 2,
+      "angle_deg": 2.142857142857143,
+      "W_J": 0.8101365734936673,
+      "warm_from": 1,
+      "picard_sweeps": 38,
+      "picard_converged": true,
+      "picard_residual": 0.0028178491388013067,
+      "first_residual": 0.3691019710707053,
+      "damping_first": 0.12918568987474685,
+      "damping_final": 0.06935603914040454,
+      "cg_iterations": 20,
+      "wall_s": 722.6891672000056,
+      "T_dq_Nm": 0.5498192452449607,
+      "psi": {
+       "A": 0.0009059858448212297,
+       "B": -0.0003817580063987753,
+       "C": -0.0007086783501963847
+      }
+     }
+    ],
+    "central_differences": [
+     {
+      "dm_total": 2,
+      "d_theta_deg": 2.142857142857143,
+      "dW_J": 0.021440130686416148,
+      "rel_dW": 0.026817947466579176,
+      "T_coenergy_Nm": 0.5732668669189326,
+      "k_T": 0.9777546301227603,
+      "T_winding_functional_Nm": 0.28189875257448577,
+      "winding_over_coenergy": 0.4917408781874532,
+      "half_window_elec_deg": 7.500000000000001,
+      "frozen_current_sinc": 0.9971466573496369,
+      "T_at_centre_Nm": 0.5749072743648819,
+      "k_T_at_centre_over_2d_at_centre": 1.0020039437543913,
+      "k_T_at_centre_over_2d_period_mean": 0.9805524823415448,
+      "T_2d_window_mean_Nm": 0.574910146069539,
+      "k_T_window_matched": 0.9971416765526909
+     },
+     {
+      "dm_total": 4,
+      "d_theta_deg": 4.285714285714286,
+      "dW_J": 0.042420124989343666,
+      "rel_dW": 0.05236169601183331,
+      "T_coenergy_Nm": 0.5671152966049265,
+      "k_T": 0.967262611999732,
+      "T_winding_functional_Nm": 0.27522583856785915,
+      "winding_over_coenergy": 0.4853084376590033,
+      "half_window_elec_deg": 15.000000000000002,
+      "frozen_current_sinc": 0.9886159294653692,
+      "T_at_centre_Nm": 0.5736457199426426,
+      "k_T_at_centre_over_2d_at_centre": 0.9998051848193248,
+      "k_T_at_centre_over_2d_period_mean": 0.9784007956687639,
+      "T_2d_window_mean_Nm": 0.5781213714138941,
+      "k_T_window_matched": 0.9809623457059712
+     }
+    ],
+    "T_2d_Nm": 0.5863095394873835,
+    "T_2d_source": "stage_b.torque.two_d.T_avg_Nm - em_transient_eval -> fem_transient_sliding_band, P2, Newton-converged, the period MEAN",
+    "the_2d_leg_frame_by_frame": {
+     "_doc": "a central difference of co-energy is not a point value: [W'(+a) - W'(-a)] / 2a is EXACTLY the mean of T over [-a, +a], because T = dW'/dtheta.  So the honest 2D partner for each step size is the 2D torque averaged over the SAME window, and that is what k_T_window_matched divides by.  The 2D series is one electrical period of the same transient, Fourier-interpolated and integrated over the window.",
+     "n_frames": 36,
+     "period_deg": 51.42857142857143,
+     "T_avg_Nm": 0.5862904608528252,
+     "T_ripple_pct": 4.911783749327921,
+     "torque_method": "energy_mean+maxwell_ripple",
+     "reconstruction_max_err_Nm": 2.4537130982604793e-07,
+     "T_at_rotor_angle_0_Nm": 0.573757496613009,
+     "window_means": {
+      "2 rings": {
+       "half_width_deg": 1.0714285714285714,
+       "window_deg": 2.142857142857143,
+       "T_window_mean_Nm": 0.574910146069539
+      },
+      "4 rings": {
+       "half_width_deg": 2.142857142857143,
+       "window_deg": 4.285714285714286,
+       "T_window_mean_Nm": 0.5781213714138941
+      }
+     },
+     "beat_period_note": "360 / LCM(12, 14) = 4.2857 mech deg is the slot-pole beat period, and it is EXACTLY 4 ring pitches at n_ring = 336.  The dm_total = 4 window therefore spans exactly one beat period, so that harmonic of the co-energy cancels between its two ends; the dm_total = 2 window is half of one and does not."
+    },
+    "the_window_is_the_measurement": {
+     "_doc": "why the two step sizes do not agree, and what makes them agree.  [W'(+a) - W'(-a)] / 2a is EXACTLY the mean of T over [-a, +a]; the solve holds the currents at their rotor-angle-0 values, so a window of +/- a mechanical degrees is a window of +/- p*a ELECTRICAL degrees of torque angle, over which a torque sinusoidal in that angle reads sin(x)/x of its centre value.  The correction is a MODEL, stated as one; what recommends it is that it was predicted before it was applied and that it collapses a 1.07 % disagreement to 0.22 %.",
+     "raw_step_spread_pct": 1.0730727116793148,
+     "predicted_ratio_from_sinc": 0.9914448613738105,
+     "T_at_centre_Nm": [
+      0.5749072743648819,
+      0.5736457199426426
+     ],
+     "corrected_spread_pct": 0.21943615579277126,
+     "richardson_dm_to_zero_Nm": 0.5753173903569345,
+     "co_energy_noise_floor": {
+      "rel": 1.6612607198399003e-05,
+      "source": "stage_b.warm_start.the_fix_measured.the_answer_is_unmoved - two warm solves of the SAME state down different damping paths, 37 and 40 sweeps",
+      "as_torque_at_dm_total_2_pct": 0.08760467010247887,
+      "reading": "the cancellation noise is 0.09 % of T where the two step sizes differ by 1.07 %, so the disagreement between them is not the difference of two nearly equal numbers - it is the torque genuinely varying across the window"
+     }
+    },
+    "the_two_functionals_on_these_solves": {
+     "_doc": "the functional_settlement's prediction, on the REAL machine rather than the linear one: the winding functional 1/2 sum_ph i_ph psi_ph keeps the whole reluctance term, exactly HALF the PM alignment term and none of the magnet's own co-energy, so on a machine whose torque is PM alignment it must read about half.  Same solves, same central differences, same psi as the flux linkages above.",
+     "rows": [
+      {
+       "dm_total": 2,
+       "T_coenergy_Nm": 0.5732668669189326,
+       "T_winding_functional_Nm": 0.28189875257448577,
+       "ratio": 0.4917408781874532
+      },
+      {
+       "dm_total": 4,
+       "T_coenergy_Nm": 0.5671152966049265,
+       "T_winding_functional_Nm": 0.27522583856785915,
+       "ratio": 0.4853084376590033
+      }
+     ],
+     "reading": "49.2 % and 48.5 % - the factor of two, measured.  Backing it out (T = A + R, T_W = A/2 + R with the cogging term negligible) puts the reluctance term at about -1.6 % of the PM alignment term for this machine.  It is the cleanest statement available that k_T_flux_linkage is not a virtual-work quantity and never was."
+    },
+    "quoted_dm_total": 2,
+    "cost": {
+     "cold_position": {
+      "shift": -1,
+      "angle_deg": -1.0714285714285714,
+      "W_J": 0.7780293556765905,
+      "warm_from": null,
+      "picard_sweeps": 48,
+      "picard_converged": true,
+      "picard_residual": 0.0029723061543208648,
+      "first_residual": 0.99974963770348,
+      "damping_first": 0.349912373196218,
+      "damping_final": 0.07516192768000002,
+      "cg_iterations": 20,
+      "wall_s": 781.8722347000148,
+      "T_dq_Nm": 0.5597688280203043,
+      "psi": {
+       "A": 0.0008284349997831544,
+       "B": -0.0005858274325905369,
+       "C": -0.00036016312174217254
+      }
+     },
+     "warm_positions": [
+      {
+       "shift": -2,
+       "angle_deg": -2.142857142857143,
+       "W_J": 0.7677164485043236,
+       "warm_from": -1,
+       "picard_sweeps": 36,
+       "picard_converged": true,
+       "picard_residual": 0.0029563609317370394,
+       "first_residual": 0.2863927664900257,
+       "damping_first": 0.10023746827150899,
+       "damping_final": 0.06726822625937015,
+       "cg_iterations": 20,
+       "wall_s": 315.5687557000201,
+       "T_dq_Nm": 0.5440150299504312,
+       "psi": {
+        "A": 0.0007804798658051445,
+        "B": -0.000625226060719052,
+        "C": -0.0002368419435549678
+       }
+      },
+      {
+       "shift": 1,
+       "angle_deg": 1.0714285714285714,
+       "W_J": 0.7994694863630066,
+       "warm_from": -1,
+       "picard_sweeps": 43,
+       "picard_converged": true,
+       "picard_residual": 0.0027885781624679925,
+       "first_residual": 0.6930910876077744,
+       "damping_first": 0.24258188066272102,
+       "damping_final": 0.046976204800000004,
+       "cg_iterations": 20,
+       "wall_s": 1583.0764369000099,
+       "T_dq_Nm": 0.5618231201491641,
+       "psi": {
+        "A": 0.0008883244109484054,
+        "B": -0.0004631211907177396,
+        "C": -0.0006046159572312674
+       }
+      },
+      {
+       "shift": 2,
+       "angle_deg": 2.142857142857143,
+       "W_J": 0.8101365734936673,
+       "warm_from": 1,
+       "picard_sweeps": 38,
+       "picard_converged": true,
+       "picard_residual": 0.0028178491388013067,
+       "first_residual": 0.3691019710707053,
+       "damping_first": 0.12918568987474685,
+       "damping_final": 0.06935603914040454,
+       "cg_iterations": 20,
+       "wall_s": 722.6891672000056,
+       "T_dq_Nm": 0.5498192452449607,
+       "psi": {
+        "A": 0.0009059858448212297,
+        "B": -0.0003817580063987753,
+        "C": -0.0007086783501963847
+       }
+      }
+     ],
+     "total_wall_s": 3463.87632760001
+    },
+    "reading": "Four converged nonlinear positions (shifts -2, -1, +1, +2; every one at a constitutive residual of 2.8-3.0e-3 against a 3e-3 tolerance) give the virtual-work torque of this machine for the first time: T = dW'/dtheta = 0.573267 N.m over the +/- 1 ring pitch window and 0.567115 N.m over +/- 2. THERE IS NO PLATEAU BETWEEN THEM, and the interesting part is why not. It is not cancellation noise: dW is 2.7 % and 5.2 % of W' at the two steps, and the co-energy's own path noise at this tolerance is 1.7e-5 relative (warm_start.the_fix_measured, two warm solves of the same state down different damping paths), which is 0.09 % of T -- twelve times smaller than the 1.07 % the two steps differ by. It is physics, and it is the definition of the quantity: a central difference of co-energy is EXACTLY the mean of T over the window it spans, because T = dW'/dtheta, and the 3D solve holds the currents at their rotor-angle-0 values while the rotor turns. Seven pole pairs turn +/- 2.14 mechanical degrees into +/- 15 ELECTRICAL degrees off the operating angle, and a machine averaged over +/- x electrical degrees of torque angle reads sin(x)/x of its value there: 0.99715 at +/- 7.5 deg and 0.98862 at +/- 15, i.e. -0.85 % between the two windows against the -1.07 % measured. Dividing each window mean by its own sin(x)/x gives 0.574908 and 0.573646 N.m, which agree to 0.22 % where the raw numbers disagreed by 1.07 %; the Richardson dm -> 0 limit of the same two numbers is 0.575317 N.m. The 0.22 % that is left is the honest residual, and the slot-pole beat is where to look for it: 360 / LCM(12, 14) = 4.2857 mech deg is EXACTLY 4 ring pitches here, so the dm_total = 4 window spans one whole beat period and cancels that harmonic outright while the dm_total = 2 window spans half of one and does not.",
+    "reproduce": "scratch driver: one torque3d.BandedModel (my_40mm_last, Stage A materials, n_ring 336, box_factor 2.5, h_gap 0.55, h_solid 1.7, n_stack 4, n_cap 4, n_ew 3, linear_iron False, the Stage B operating point), then model.solve(m, mu_init=<the previous position's mu_converged>) at m = [-1, 1, 2, -2] with tol 0.003, max_iter 70; W' = model.co_energy(ls) at each; the differences are torque3d.delta_sweep's arithmetic.",
+    "updated_utc": "2026-08-05T22:00:00Z",
+    "killed_and_resumed": "the first run was killed by the harness at 70 minutes with two positions banked; the permeability of every position is dumped to disk as it converges, so the remaining two were resumed as separate jobs on the same model and the same mesh rather than re-paid for.  The +2 position reproduced the killed run sweep for sweep (0.2628, 0.2027, 0.1958, ... at every step), which is the determinism check that makes the resume legitimate.",
+    "quoted_dm_total_note": "NOTHING is quoted from this block yet - torque.k_T is null and k_T_note says why.  The key names the step a k_T would be built on when the denominator is fixed: the SMALLER window, because its frozen-current torque-angle average is 0.29 % against the larger one's 1.14 %, and because the co-energy noise floor (0.09 % of T) is nowhere near being the limit at either step."
+   }
   },
   "blockers": {
    "closed_winding": {

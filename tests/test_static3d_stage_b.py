@@ -437,3 +437,57 @@ def test_the_end_winding_profile_carries_all_of_the_current_across_the_band(
     # beta is monotone across the band: the end turn does not double back
     zz = np.linspace(zh, zh + h, 33)
     assert np.all(np.diff(wt.beta(zz)) <= 1e-15)
+
+
+# --------------------------------------------------------------------------
+# the passport's own arithmetic
+# --------------------------------------------------------------------------
+
+def _passport() -> dict:
+    root = Path(__file__).resolve().parents[1]
+    with (root / "config" / "end_effect_3d.json").open(encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def test_the_passport_never_quotes_a_k_T_it_cannot_reproduce():
+    """``torque.k_T`` has to be recomputable from the passport's OWN rows.
+
+    The honest failure mode for a number this expensive is not that it is wrong
+    — it is that it stops being connected to the solves that produced it: a
+    co-energy gets re-measured, a shift is dropped, a ratio is carried forward by
+    hand.  So the passport records the co-energy at every rotor shift it solved
+    and the step it quotes, and this recomputes ``T = dW'/dtheta`` and
+    ``k_T = T / T_2d`` from those and demands the stored values back.
+
+    ``k_T`` may legitimately be null (it was, for two Stage B passes).  What may
+    never happen is a number without its solves, or a number that its own solves
+    do not give.
+    """
+    torque = _passport()["stage_b"]["torque"]
+    ce = torque.get("co_energy_k_T")
+    if ce is None:
+        assert torque.get("k_T") is None, \
+            "k_T is quoted but co_energy_k_T (the solves behind it) is missing"
+        assert torque.get("k_T_note"), "a null k_T must say why"
+        return
+
+    W = {int(r["shift"]): float(r["W_J"]) for r in ce["positions"]}
+    pitch = math.radians(float(ce["ring_pitch_deg"]))
+    T_2d = float(ce["T_2d_Nm"])
+    for r in ce["positions"]:
+        assert r["picard_converged"], f"position {r['shift']} did not converge"
+        assert float(r["picard_residual"]) <= float(ce["tol"]), r
+
+    for row in ce["central_differences"]:
+        d = int(row["dm_total"]) // 2
+        dth = 2 * d * pitch
+        assert math.degrees(dth) == pytest.approx(row["d_theta_deg"], rel=1e-12)
+        T = (W[d] - W[-d]) / dth
+        assert T == pytest.approx(row["T_coenergy_Nm"], rel=1e-9), row
+        assert T / T_2d == pytest.approx(row["k_T"], rel=1e-9), row
+
+    quoted = [r for r in ce["central_differences"]
+              if int(r["dm_total"]) == int(ce["quoted_dm_total"])]
+    assert len(quoted) == 1, ce["quoted_dm_total"]
+    if torque.get("k_T") is not None:
+        assert torque["k_T"] == pytest.approx(quoted[0]["k_T"], rel=1e-12)

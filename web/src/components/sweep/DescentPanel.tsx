@@ -357,6 +357,11 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
   const sliderMax = Math.max(Math.ceil(_dataMaxRipple), 10);
   const effCut = displayCut ?? sliderMax;
   const toXY = (p: any) => ({ td: p.td, eff: (p.eff ?? 0) * 100, ripple: p.ripple, z: 1,
+                              torque: p.torque, mass: p.mass,
+                              // Pareto flags from the backend (optimization/pareto.py):
+                              // computed against THIS run's baseline at THIS run's
+                              // operating point — never across runs.
+                              dominates: !!p.dominates, front: !!p.pareto_front,
                               overrides: p.overrides, current_a: p.current_a, gamma_deg: p.gamma_deg });
   // Display fence against non-physical points persisted before the backend's
   // output sanity gate existed (seen live: td = -7.7e9, eff = 0 — one such
@@ -368,6 +373,16 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
     Number.isFinite(p.eff ?? 0) && (p.eff ?? 0) > 0 && (p.eff ?? 0) <= 1;
   // One series of every evaluated design; the slider visually cuts by ripple.
   const shownPts = points.filter((p) => physical(p) && p.ripple != null && p.ripple <= effCut).map(toXY);
+  // ── Pareto-dominance, next to F ──────────────────────────────────────────
+  // F (the perpendicular distance above the baseline line) is ~pure efficiency
+  // on this machine, so "F ≤ 0" and "found nothing better" are NOT the same
+  // statement.  The backend flags every candidate that is at least as good as
+  // the run's own baseline on torque, ripple AND efficiency — at the run's own
+  // operating point — and those are drawn apart from the cloud so they can be
+  // clicked and applied.
+  const pareto: any = st.pareto || null;
+  const domPts = shownPts.filter((p: any) => p.dominates);
+  const restPts = shownPts.filter((p: any) => !p.dominates);
   // Unfiltered count — gates the scatter section so the on-chart ripple slider
   // stays mounted even when the cut hides most points (else dragging down would
   // unmount the slider itself).
@@ -939,6 +954,25 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
                 <Button size="small" sx={{ minWidth: 0, px: 0.75, fontSize: 10 }}
                   onClick={() => setDisplayCut(null)}>all</Button>
               )}
+              {/* The Pareto answer, one line, next to the objective's own. */}
+              {pareto && (
+                <Tooltip placement="top" title={
+                  `F is the perpendicular distance above the baseline line; on this machine its `
+                  + `normal is 99.9998% along the efficiency axis (1 pp of η = 4.97 Nm/kg ≈ half this `
+                  + `machine's torque density) and ripple below the gate earns nothing — so F ≤ 0 does `
+                  + `NOT mean "nothing better". ▲ marks candidates at least as good as the starting `
+                  + `design on torque, ripple AND efficiency; ${pareto.n_front ?? 0} of `
+                  + `${pareto.n_candidates ?? 0} are on the non-dominated front. Only this run's own `
+                  + `evals at its own operating point (${Number(pareto.operating_point?.current_a ?? 0).toFixed(1)} A`
+                  + `${pareto.operating_point?.gamma_deg != null ? `, γ ${Number(pareto.operating_point.gamma_deg).toFixed(1)}°` : ''}) `
+                  + `are compared${pareto.n_other_op ? `; ${pareto.n_other_op} point(s) measured elsewhere are excluded` : ''}. `
+                  + `Click a ▲ to apply it.`}>
+                  <Typography variant="caption" sx={{ whiteSpace: 'nowrap', cursor: 'help',
+                      color: (pareto.n_dominating ?? 0) > 0 ? '#e879f9' : 'text.secondary' }}>
+                    ▲ {pareto.n_dominating ?? 0} beat all 3 axes · {pareto.n_front ?? 0} on front ⓘ
+                  </Typography>
+                </Tooltip>
+              )}
             </Box>
           )}
           <Box sx={{ height: 460, width: '100%' }}>
@@ -984,12 +1018,24 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
                     <LabelList dataKey="tag" position="top" fontSize={9} fill="#f59e0b" />
                   </Scatter>
                 )}
-                <Scatter name="designs" data={shownPts} fill="#22c55e" fillOpacity={0.55} isAnimationActive={false}
+                <Scatter name="designs" data={restPts} fill="#22c55e" fillOpacity={0.55} isAnimationActive={false}
                   shape={(p: any) => (
                     <g>
                       {/* invisible fat hit-area so the tiny dot stays clickable */}
                       <circle cx={p.cx} cy={p.cy} r={6} fill="transparent" />
                       <circle cx={p.cx} cy={p.cy} r={2.2} fill="#15803d" fillOpacity={0.9} />
+                    </g>
+                  )}
+                  cursor="pointer" onClick={(d: any) => d && setSelectedPt(d.payload ?? d)} />
+                {/* ▲ = beats the starting design on torque AND ripple AND
+                    efficiency. Same click-to-pick path as any other point, so
+                    one of these can be applied directly. */}
+                <Scatter name="▲ beats on all 3" data={domPts} fill="#e879f9" isAnimationActive={false}
+                  shape={(p: any) => (
+                    <g>
+                      <circle cx={p.cx} cy={p.cy} r={7} fill="transparent" />
+                      <polygon points={`${p.cx},${p.cy - 4.6} ${p.cx + 4.2},${p.cy + 3.2} ${p.cx - 4.2},${p.cy + 3.2}`}
+                        fill="#e879f9" stroke="#a21caf" strokeWidth={0.8} />
                     </g>
                   )}
                   cursor="pointer" onClick={(d: any) => d && setSelectedPt(d.payload ?? d)} />

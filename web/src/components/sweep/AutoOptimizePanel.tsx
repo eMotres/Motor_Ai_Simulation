@@ -45,6 +45,21 @@ function humanSeconds(s: number): string {
   return `${Math.floor(m / 60)} h ${m % 60} m`;
 }
 
+/**
+ * Shaft torque of a cloud point, DERIVED when it was not stored.
+ *
+ * Points published before the backend's `_pt` carried T_em_Nm hold only torque
+ * density and mass — and torque = td · mass exactly, it is the same measurement.
+ * Reading `p.torque` alone silently emptied this card's cloud for every run that
+ * finished before 2026-08-05.
+ */
+const ptTorque = (p: any): number => {
+  const t = Number(p?.torque);
+  if (Number.isFinite(t)) return t;
+  const td = Number(p?.td); const m = Number(p?.mass);
+  return (Number.isFinite(td) && Number.isFinite(m)) ? td * m : NaN;
+};
+
 /** Signed delta with its sign always shown — a "+0.02 Nm" reads as a gain. */
 function delta(now?: number, was?: number, d = 3, unit = ''): string {
   if (!Number.isFinite(Number(now)) || !Number.isFinite(Number(was))) return '';
@@ -103,6 +118,16 @@ const AutoOptimizePanel: React.FC = () => {
   const result = st.result;
   const best = st.best?.metrics;
   const base = st.baseline;
+  // Pareto-dominance over the run's OWN cloud, at the run's OWN operating point
+  // (backend: motor_ai_sim/optimization/pareto.py).
+  const pareto = st.pareto || null;
+  const nDom = Number(pareto?.n_dominating) || 0;
+  // THE GATE THE RUN USED — not the number currently typed in the form.  The
+  // card showed the form's 5 % over a run that was gated at 12.3 %, which makes
+  // the fence line, the "under the gate" count and the verdict describe a run
+  // that never happened.
+  const runGate = Number(auto.max_ripple_pct);
+  const gate = (isAuto && Number.isFinite(runGate)) ? runGate : maxRipple;
 
   const updRipple = (v: number) => {
     const x = Math.max(0.1, Math.min(100, v || 0));
@@ -455,11 +480,19 @@ const AutoOptimizePanel: React.FC = () => {
             ripple: h.ripple ?? h.T_ripple_pct,
           })).filter((p: any) => Number.isFinite(p.torque) && Number.isFinite(p.ripple));
           // Every eval with metrics, straight from the backend's `points` cloud.
+          // TORQUE IS DERIVED, NOT ASSUMED: points published before `_pt` carried
+          // T_em_Nm have only td (= T/mass) and mass, and keying blindly on
+          // p.torque made this chart drop EVERY point of the finished 110-eval
+          // run — the card read "0 designs measured" over a cloud of 87.
           const cloud = ((st.points || []) as any[])
-            .map((p) => ({ torque: p.torque, ripple: p.ripple, td: p.td,
-                           eff: (p.eff ?? 0) * 100, kind: p.kind }))
+            .map((p) => ({ torque: ptTorque(p), ripple: p.ripple, td: p.td,
+                           eff: (p.eff ?? 0) * 100, kind: p.kind,
+                           dominates: !!p.dominates, front: !!p.pareto_front }))
             .filter((p) => Number.isFinite(p.torque) && Number.isFinite(p.ripple));
-          const nUnderGate = cloud.filter((p) => p.ripple <= maxRipple).length;
+          const nUnderGate = cloud.filter((p) => p.ripple <= gate).length;
+          // Designs that beat the starting one on torque AND ripple AND
+          // efficiency — the answer F cannot give (see the verdict tooltip).
+          const domPts = cloud.filter((p) => p.dominates);
           const bestPt = best && Number.isFinite(best.T_em_Nm)
             ? [{ ripple: best.T_ripple_pct, torque: best.T_em_Nm }] : [];
           const basePt = base && Number.isFinite(base.T_em_Nm)
@@ -479,14 +512,27 @@ const AutoOptimizePanel: React.FC = () => {
                     tick={{ fontSize: 10, fill: 'var(--text-2)' }} domain={[0, 'auto']} />
                   <RTooltip contentStyle={{ background: 'var(--app-bg)',
                     border: '1px solid var(--line-soft)', fontSize: 11 }} />
-                  <ReferenceLine yAxisId="r" y={maxRipple} stroke="#f59e0b"
-                    strokeDasharray="4 3" label={{ value: `≤${maxRipple}%`, fontSize: 10, fill: '#f59e0b' }} />
+                  <ReferenceLine yAxisId="r" y={gate} stroke="#f59e0b"
+                    strokeDasharray="4 3" label={{ value: `≤${fmt(gate, 1)}%`, fontSize: 10, fill: '#f59e0b' }} />
                   <Line yAxisId="t" dataKey="torque" name="T [N·m]" dot={false}
                     stroke="#60a5fa" strokeWidth={2} isAnimationActive={false} />
                   <Line yAxisId="r" dataKey="ripple" name="ripple [%]" dot={false}
                     stroke="#f87171" strokeWidth={1.5} isAnimationActive={false} />
                 </LineChart>
               </ResponsiveContainer>
+              {/* This chart is the INCUMBENT, one row per generation — a flat
+                  line is the run saying no generation improved on the previous
+                  best, not a broken chart.  The spread of what it tried is the
+                  cloud on the right. */}
+              <Tooltip placement="top" title={
+                'The best-so-far design after each generation. A flat line means no generation '
+                + 'beat the previous best — the search measured many designs (right) and kept none '
+                + 'of them.'}>
+                <Typography variant="caption" sx={{ display: 'block', mt: -0.5,
+                    color: 'var(--text-3)', fontSize: 10, cursor: 'help' }}>
+                  best so far · {hist.length} generation{hist.length === 1 ? '' : 's'} ⓘ
+                </Typography>
+              </Tooltip>
             </Box>
             {/* Points cloud: EVERY measured design as torque×ripple, the ripple
                 gate as the vertical fence, the current design and the best point
@@ -510,10 +556,14 @@ const AutoOptimizePanel: React.FC = () => {
                   <RTooltip cursor={{ strokeDasharray: '3 3' }}
                     contentStyle={{ background: 'var(--app-bg)',
                       border: '1px solid var(--line-soft)', fontSize: 11 }} />
-                  <ReferenceLine x={maxRipple} stroke="#f59e0b" strokeDasharray="4 3"
-                    label={{ value: `≤${maxRipple}%`, fontSize: 10, fill: '#f59e0b' }} />
+                  <ReferenceLine x={gate} stroke="#f59e0b" strokeDasharray="4 3"
+                    label={{ value: `≤${fmt(gate, 1)}%`, fontSize: 10, fill: '#f59e0b' }} />
                   <Scatter name="evals" data={cloud} fill="#60a5fa"
                     opacity={0.55} isAnimationActive={false} />
+                  {/* Designs that beat the current one on ALL THREE axes — the
+                      set F cannot see, drawn so it cannot be missed. */}
+                  <Scatter name="beats on all 3" data={domPts} fill="#e879f9"
+                    shape="triangle" isAnimationActive={false} />
                   <Scatter name="current design" data={basePt} fill="#34d399"
                     shape="diamond" isAnimationActive={false} />
                   <Scatter name="best" data={bestPt} fill="#f87171"
@@ -523,11 +573,16 @@ const AutoOptimizePanel: React.FC = () => {
               {/* One line — what the gate line is separating. No text walls. */}
               <Tooltip placement="top" title={
                 `Every evaluated design is plotted, including the ones over the ripple gate — `
-                + `nothing is hidden server-side. Points left of the ${fmt(maxRipple, 1)}% line `
-                + `satisfy the ripple limit; points right of it do not.`}>
+                + `nothing is hidden server-side. Points left of the ${fmt(gate, 1)}% line `
+                + `satisfy the ripple limit; points right of it do not.`
+                + (nDom > 0
+                  ? ` ▲ = the ${nDom} design(s) at or better than the current one on torque, `
+                    + 'ripple AND efficiency at the same operating point.'
+                  : ' No design here beat the current one on all three axes at once.')}>
                 <Typography variant="caption" sx={{ display: 'block', mt: -0.5,
                     color: 'var(--text-3)', fontSize: 10, cursor: 'help' }}>
-                  {cloud.length} designs measured · {nUnderGate} under the ripple gate ⓘ
+                  {cloud.length} designs measured · {nUnderGate} under the ripple gate
+                  {pareto ? ` · ${nDom} beat all 3 axes` : ''} ⓘ
                 </Typography>
               </Tooltip>
             </Box>
@@ -555,16 +610,35 @@ const AutoOptimizePanel: React.FC = () => {
             {/* Verdict is ONE line; the reasoning lives in the tooltip — the
                 standing UI rule (no text walls, details on hover). The first
                 version was a paragraph and the user rightly objected. */}
+            {/* F ≤ 0 is not the whole answer.  On this machine the perpendicular
+                metric's normal is 99.9998 % along the EFFICIENCY axis (1 pp of η
+                = 4.97 Nm/kg = half the machine's torque density) and ripple below
+                the gate earns exactly nothing — so a run can score F ≤ 0 while its
+                own cloud holds designs that are better on torque, ripple AND
+                efficiency.  When it does, the card says so on the same line. */}
             {typeof st.best?.F === 'number' && st.best.F <= 0 && (
               <Tooltip placement="top" title={
                 `Below the current-only baseline line: every point on that line is reachable by `
                 + `just raising current. The ripple limit ${fmt(auto.max_ripple_pct, 2)}% sits below the `
                 + `current design's own ${fmt(base.T_ripple_pct, 2)}%, so the optimizer had to buy ripple `
-                + `with torque. Raise the limit, or accept the trade on purpose.`}>
+                + `with torque. Raise the limit, or accept the trade on purpose. `
+                + `F weighs efficiency ≈500× torque density on this machine (1 pp of η = 4.97 Nm/kg) `
+                + `and gives no credit for ripple below the gate, so it answers "did we beat raising `
+                + `the current", not "did we find anything better". `
+                + (nDom > 0
+                  ? `${nDom} of this run's own candidates, at its own operating point, are at least as `
+                    + 'good as the current design on torque, ripple AND efficiency — pick one from the '
+                    + 'cloud (▲) in Advanced and apply it.'
+                  : 'Pareto check: not one candidate of this run beat the current design on all three '
+                    + 'axes at once, so "nothing better" is the honest answer here.')}>
                 <Typography variant="caption" sx={{ display: 'inline-block', mb: 1, px: 1, py: 0.4,
-                    borderRadius: 1, border: '1px solid #f59e0b', color: '#f59e0b',
-                    fontWeight: 700, cursor: 'help', bgcolor: 'rgba(245,158,11,0.08)' }}>
-                  ⚠ не лучше текущего (F = {fmt(st.best.F, 3)}) · ⓘ
+                    borderRadius: 1, border: '1px solid', color: nDom > 0 ? '#e879f9' : '#f59e0b',
+                    borderColor: nDom > 0 ? '#e879f9' : '#f59e0b',
+                    fontWeight: 700, cursor: 'help',
+                    bgcolor: nDom > 0 ? 'rgba(232,121,249,0.08)' : 'rgba(245,158,11,0.08)' }}>
+                  {nDom > 0
+                    ? `F ${fmt(st.best.F, 3)} · но ${nDom} конструкц. лучше текущей по всем трём осям · ⓘ`
+                    : `⚠ не лучше текущего (F = ${fmt(st.best.F, 3)}) · ⓘ`}
                 </Typography>
               </Tooltip>
             )}

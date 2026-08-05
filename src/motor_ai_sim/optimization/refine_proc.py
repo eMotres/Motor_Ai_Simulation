@@ -215,9 +215,31 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         "sliding_band": True, "fresh": True, "geo": json.dumps(overrides),
     })
     _geo_mesh_mod.set_tri_budget(None)
+    # TWO failure carriers, and both must be read.  The kernel ENVELOPE's ok is
+    # False only when the module itself threw (Kernel.run's fault isolation);
+    # when the module caught the solver's exception and degraded gracefully it
+    # returns envelope ok=True carrying a ResultIR with ok=False + error — the
+    # contract's documented "graceful failure so a crashed module degrades the
+    # study instead of breaking it".  Reading only the envelope treated that as
+    # a SUCCESS with an empty payload: `raw` is None, `d` fell back to {}, and
+    # the first field access below died as a bare `KeyError: 'T_avg_Nm'`, which
+    # is what the whole run then reported ("10 of 10 designs couldn't be built
+    # ('T_avg_Nm')") — the real reason (a rejected mesh, an unbuildable
+    # cross-section, a d-axis calibration failure) was thrown away at this line.
     if not _out.get("ok"):
         raise RuntimeError(_out.get("error") or "solver.em_transient failed")
-    d = getattr(_out.get("result"), "raw", None) or {}
+    _res = _out.get("result")
+    if _res is not None and not getattr(_res, "ok", True):
+        raise RuntimeError(getattr(_res, "error", None)
+                           or "solver.em_transient returned a failed result")
+    d = getattr(_res, "raw", None) or {}
+    # Nothing below can produce a meaningful number without the sliding-band
+    # payload, and naming the missing key alone tells an engineer nothing about
+    # WHY it is missing.  Say what happened.
+    if not d:
+        raise RuntimeError(
+            "solver.em_transient returned no sliding-band payload (result.raw "
+            "is empty) — the transient produced no frames for this candidate")
 
     # ── nonlinear-solve honesty ──────────────────────────────────────────────
     # The Simulation card already refuses to present a window containing a frame
@@ -237,6 +259,20 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
                 _bad, int(d.get("n_steps", 0) or 0),
                 float(d.get("picard_resid_max") or 0.0),
                 float(d.get("picard_tol") or 0.0)))
+
+    # The four fields every scored metric below is built from.  Checking them
+    # together, by name, means a payload that is short of one says so in words
+    # instead of surfacing as a bare `KeyError: 'T_avg_Nm'` in the run log — the
+    # difference between "10 designs couldn't be built ('T_avg_Nm')" and a
+    # sentence an engineer can act on.
+    _need = ("T_avg_Nm", "P_cu_W", "P_fe_W", "P_mag_eddy_W")
+    _miss = [k for k in _need if k not in d]
+    if _miss:
+        raise RuntimeError(
+            "solver.em_transient returned a payload without {} — the transient "
+            "produced {} frame(s) but no {} for them; the candidate cannot be "
+            "scored.".format(", ".join(_miss), int(d.get("n_steps", 0) or 0),
+                             "torque" if "T_avg_Nm" in _miss else "losses"))
 
     Tavg = float(d["T_avg_Nm"])
     cu = float(np.mean(d["P_cu_W"])); fe = float(np.mean(d["P_fe_W"]))

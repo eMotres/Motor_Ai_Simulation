@@ -422,6 +422,132 @@ class TestMeshBudgetFence:
         _, T = G._triangulate(V, S, 1.0, quality=None, hole=False)
         assert len(T) >= 2                       # built, not rejected
 
+    def test_a_cap_that_was_barely_touched_cannot_have_truncated_the_run(self):
+        """The regression that blocked every sweep on the 40 mm machine.
+
+        The fence judged truncation from ONE signal — "some triangle is over its
+        region's max-area target".  That signal is not sufficient: with -Y (no
+        Steiner points on the input boundary, which every sector call site uses)
+        Triangle legitimately FINISHES leaving a boundary triangle it cannot
+        split.  Measured on the user's 24s/28p stator cell: the capped run and
+        the UNCAPPED run are the same mesh — 1969 points, 3718 triangles — and
+        both leave exactly one triangle 1.2x over target, so the fence rejected
+        a perfectly healthy candidate.  It had added 1580 points against a
+        200 000 cap: 0.8 % of an allowance it supposedly ran out of.
+
+        A cap can only have stopped a run that SPENT it, so that is now a
+        necessary condition.  Pinned with a synthetic payload so the numbers are
+        exact and no FEM is paid for.
+        """
+        import numpy as np
+        from motor_ai_sim.simulation import geo_mesh as G
+        # One triangle of area 0.5, in region marker 1 whose target is 0.01 —
+        # 50x over, the strongest possible form of the area signal.
+        A = dict(vertices=np.zeros((389, 2)),
+                 regions=np.array([[0.0, 0.0, 1.0, 0.01]]))
+        out = dict(vertices=np.zeros((1969, 2)),          # 1580 points ADDED
+                   triangles=np.array([[0, 1, 2]]),
+                   triangle_attributes=np.array([[1.0]]))
+        out["vertices"] = np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]
+                                   + [[0.0, 0.0]] * 1966)
+        A["vertices"] = np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]
+                                 + [[0.0, 0.0]] * 386)
+        # 1580 added of a 200 000 cap → the cap never bound → NOT truncated.
+        assert G._steiner_cap_truncated(A, out, 0.01, cap=200_000) is False
+        # The same mesh against a cap it really did exhaust → still rejected,
+        # so the fence has not been disabled, only made to ask both questions.
+        assert G._steiner_cap_truncated(A, out, 0.01, cap=2_000) is True
+
+    def test_the_cascading_square_is_still_rejected_with_its_cap_supplied(self):
+        # The fence's original purpose, re-verified through the new two-signal
+        # predicate: the cascade eats most of its cap AND misses its target.
+        import triangle as _tri
+        from motor_ai_sim.simulation import geo_mesh as G
+        V, S = self._square()
+        A = dict(vertices=V, segments=S)
+        capped = _tri.triangulate(A, "pq20a0.0100S1000")
+        added = len(capped["vertices"]) - len(V)
+        assert added >= G._CAP_BINDING_FRAC * 1000     # it did spend the cap
+        assert G._steiner_cap_truncated(A, capped, 0.01, cap=1000) is True
+
+
+class TestEvalPayloadContract:
+    """What refine_proc demands of solver.em_transient, and what it says when
+    the demand is not met.
+
+    Both halves are regressions.  A sweep on the 40 mm machine reported "10 of
+    10 designs couldn't be built ('T_avg_Nm')": the kernel had returned a
+    ResultIR carrying ok=False and a full explanation, refine_proc read only the
+    ENVELOPE's ok, fell through to an empty payload, and the first field access
+    surfaced as a bare KeyError whose message was the key name.  The user was
+    told a dictionary key.  Nothing else."""
+
+    @staticmethod
+    def _run_one_against(monkeypatch, result):
+        """Drive refine_proc.run_one with a stubbed kernel returning `result`."""
+        from motor_ai_sim.optimization import refine_proc as R
+
+        class _K:
+            def run(self, capability, payload):
+                return {"ok": True, "capability": capability, "result": result}
+
+        monkeypatch.setattr(R, "_kernel", lambda: _K())
+        return R.run_one({}, 50.0, 8, 100.0, n_periods=1.0, gamma_deg=0.0,
+                         mesh_size_mm=4.0, min_size_mm=0.3, n_sectors=4,
+                         element_order=2, rpm=3000.0)
+
+    def test_a_failed_ResultIR_surfaces_its_own_reason(self, monkeypatch):
+        from motor_ai_sim.contracts.result_ir import ResultIR
+        failed = ResultIR(physics="em_transient", ok=False,
+                          error="mesh budget: this candidate meshes pathologically")
+        with pytest.raises(Exception) as ei:
+            self._run_one_against(monkeypatch, failed)
+        msg = str(ei.value)
+        assert "mesh budget" in msg               # the REAL reason travels
+        assert msg.strip() != "'T_avg_Nm'"        # never the bare key again
+
+    def test_a_payload_missing_the_scored_fields_says_so_in_words(self, monkeypatch):
+        from motor_ai_sim.contracts.result_ir import ResultIR
+        # ok=True, but the sliding-band payload is short of the torque field.
+        thin = ResultIR(physics="em_transient", ok=True,
+                        raw={"n_steps": 8, "P_cu_W": [1.0], "P_fe_W": [1.0],
+                             "P_mag_eddy_W": [0.0]})
+        with pytest.raises(Exception) as ei:
+            self._run_one_against(monkeypatch, thin)
+        msg = str(ei.value)
+        assert "T_avg_Nm" in msg                  # names the field...
+        assert len(msg.split()) >= 8              # ...inside a sentence
+        assert msg.strip() != "'T_avg_Nm'"
+
+    def test_an_empty_payload_is_reported_as_an_empty_payload(self, monkeypatch):
+        from motor_ai_sim.contracts.result_ir import ResultIR
+        with pytest.raises(Exception) as ei:
+            self._run_one_against(
+                monkeypatch, ResultIR(physics="em_transient", ok=True, raw=None))
+        assert "no sliding-band payload" in str(ei.value)
+
+    @pytest.mark.slow
+    def test_a_real_candidate_eval_returns_every_field_refine_proc_consumes(self):
+        """End-to-end on the machine the regression was reported against.
+
+        The unit tests above pin the seam with stubs; this one pays for the FEM
+        and proves the candidate the user's sweep could not build now builds and
+        is scored.  It is the reported reproduction, verbatim."""
+        from motor_ai_sim.routes.optimization import _subprocess_eval
+        out = _subprocess_eval(
+            {"tooth_width": 9.1, "magnet_fill_radius": 2.3, "magnet_up_gap": 1.8},
+            92.0, 40, 120.0, n_periods=1.0, gamma_deg=16.0, mesh_size_mm=1.76,
+            min_size_mm=0.3, n_sectors=4, pole_copy=True, torque_filter=False,
+            gap_layers=1.0, end_winding_factor=0.0, rotor_eddy=True,
+            structured_gap=False, airgap_macro=False, iron_template=True,
+            geo_mesh=True, element_order=2, rpm=4000.0)
+        assert out.get("ok") is True, out.get("error")
+        res = out.get("res") or {}
+        for k in ("T_em_Nm", "T_ripple_pct", "efficiency", "P_cu_W", "P_fe_W",
+                  "mass_total_kg"):
+            assert k in res, "eval payload lost {}".format(k)
+        assert res["T_em_Nm"] > 0.0
+
 
 class TestGeometryStamp:
     """The Compare point carries a machine stamp the frontend can compare with."""

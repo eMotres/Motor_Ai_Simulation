@@ -125,30 +125,54 @@ def tri_budget() -> Optional[int]:
     return _TRI_BUDGET["v"]
 
 
-def _steiner_cap_truncated(A: Dict, out: Dict, area: float) -> bool:
+# A Triangle run that the -S cap actually TRUNCATED has spent most of that cap.
+# Measured on the cascading 10x10 square (the case the fence was written for):
+# 377/500, 847/1000, 2989/5000, 4551/7921 points added — i.e. 57-85 % of the
+# cap, never a sliver of it.  0.25 sits far below that floor and far above the
+# consumption of a run that simply finished (measured on the 40 mm 24s/28p
+# stator cell: 1580 points added against a 200 000 cap = 0.8 %).
+_CAP_BINDING_FRAC = 0.25
+
+
+def _steiner_cap_truncated(A: Dict, out: Dict, area: float,
+                           cap: Optional[int] = None) -> bool:
     """Did a Steiner-CAPPED Triangle run stop BEFORE meeting its constraints?
 
-    Counting the points in the output cannot answer this.  Triangle spends its
-    -S budget on REJECTED insertions too (a circumcentre that encroaches on a
-    segment is discarded and the segment split instead), so when the cap binds
-    the output holds fewer added points than the cap — measured on the
-    cascading 10x10 square: 377/500, 847/1000, 2989/5000, 4551/7921.  An
-    `added >= cap` test therefore almost never fires, and the capped, HALF-
-    REFINED mesh is returned as if it were fine — the opposite of what the
-    fence is for.
+    TWO conditions must hold, because either one alone gives a false verdict.
 
-    What does answer it, exactly and independently of the input: a Triangle run
-    that finished satisfies its own max-area constraint on EVERY triangle; a
-    truncated one leaves triangles far above it (same square: max element area
-    25 mm^2 against a 0.01 mm^2 target).  So compare each triangle against the
-    area target it was meshed under — the per-region column 4 when the caller
-    passed `regions` (`Aa`), else the global `area` (`a<area>`).  Triangles in
-    no declared region, or in a region asking for area <= 0, are unconstrained
-    and are skipped.
+    1. The cap must be able to have BOUND at all.  Triangle spends its -S budget
+       on REJECTED insertions too (a circumcentre that encroaches on a segment
+       is discarded and the segment split instead), so a truncated run holds
+       fewer added points than the cap — but it still holds MOST of it (see
+       `_CAP_BINDING_FRAC`).  A run that added 0.8 % of its allowance stopped
+       because its own constraints were met, not because it ran out.
+
+    2. The mesh must miss its own max-area constraint GROSSLY.  A finished run
+       is expected to satisfy the area target it was meshed under — the
+       per-region column 4 when the caller passed `regions` (`Aa`), else the
+       global `area` (`a<area>`); a truncated one leaves triangles far above it
+       (the cascading square: max element area 25 mm^2 against a 0.01 mm^2
+       target).  Triangles in no declared region, or in a region asking for
+       area <= 0, are unconstrained and are skipped.
+
+    Condition 2 was the whole test until it was measured against a CONVERGED
+    mesh: with -Y (no Steiner points on the input boundary) Triangle cannot
+    always split the last triangle down to its region target, and it legitimately
+    finishes leaving one 1.2x over.  That is a miss by PERCENT; truncation misses
+    by orders of magnitude, and only after eating the cap.  Requiring both
+    conditions keeps the fence firing on real cascades and stops it rejecting
+    every healthy candidate.
     """
     T = np.asarray(out.get("triangles"), np.int64)
     if T.size == 0:
         return False
+    if cap:
+        # Points Triangle ADDED to the input PSLG.  Its output always begins
+        # with the input vertices, so the difference is exactly the insertions.
+        _added = len(np.asarray(out.get("vertices"), float)) - \
+            len(np.asarray(A.get("vertices"), float))
+        if _added < _CAP_BINDING_FRAC * float(cap):
+            return False                      # the cap never bound → it finished
     V = np.asarray(out.get("vertices"), float)
     p = V[T]
     a = 0.5 * np.abs((p[:, 1, 0] - p[:, 0, 0]) * (p[:, 2, 1] - p[:, 0, 1])
@@ -510,7 +534,7 @@ def _triangulate(V, S, area: float, quality: int = _Q, hole: bool = True,
         out = _tri.triangulate(A, f"p{_q}{_tail}S{_s}{_Y}")
         Vo = np.asarray(out["vertices"], float)
         To = np.asarray(out["triangles"], np.int64)
-        if _steiner_cap_truncated(A, out, area):
+        if _steiner_cap_truncated(A, out, area, cap=_s):
             raise MeshBudgetExceeded(
                 "mesh budget: quality meshing of this cross-section hit the "
                 "{}-point Steiner cap ({} triangles and still refining; budget "

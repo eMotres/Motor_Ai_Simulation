@@ -451,6 +451,12 @@ const AutoOptimizePanel: React.FC = () => {
             i, torque: h.torque ?? h.T_em_Nm ?? h.T_avg_Nm,
             ripple: h.ripple ?? h.T_ripple_pct,
           })).filter((p: any) => Number.isFinite(p.torque) && Number.isFinite(p.ripple));
+          // Every eval with metrics, straight from the backend's `points` cloud.
+          const cloud = ((st.points || []) as any[])
+            .map((p) => ({ torque: p.torque, ripple: p.ripple, td: p.td,
+                           eff: (p.eff ?? 0) * 100, kind: p.kind }))
+            .filter((p) => Number.isFinite(p.torque) && Number.isFinite(p.ripple));
+          const nUnderGate = cloud.filter((p) => p.ripple <= maxRipple).length;
           const bestPt = best && Number.isFinite(best.T_em_Nm)
             ? [{ ripple: best.T_ripple_pct, torque: best.T_em_Nm }] : [];
           const basePt = base && Number.isFinite(base.T_em_Nm)
@@ -479,9 +485,14 @@ const AutoOptimizePanel: React.FC = () => {
                 </LineChart>
               </ResponsiveContainer>
             </Box>
-            {/* Points cloud: every accepted candidate as torque×ripple, the
-                ripple gate as the vertical fence, the current design and the
-                best point called out — the user's "график с точками". */}
+            {/* Points cloud: EVERY measured design as torque×ripple, the ripple
+                gate as the vertical fence, the current design and the best point
+                called out — the user's "график с точками".
+                It used to plot `hist` (st.history = one row per GENERATION, i.e.
+                the incumbent), so a 62-eval run drew 6 dots and read as "found
+                nothing".  It now plots st.points — every eval that produced
+                metrics — per the standing rule: publish all points, the user
+                filters by ripple on the chart. */}
             <Box sx={{ flex: 1, minWidth: 320, height: 200 }}>
               <ResponsiveContainer width="100%" height="100%">
                 <ScatterChart margin={{ top: 6, right: 12, left: 0, bottom: 0 }}>
@@ -498,7 +509,7 @@ const AutoOptimizePanel: React.FC = () => {
                       border: '1px solid var(--line-soft)', fontSize: 11 }} />
                   <ReferenceLine x={maxRipple} stroke="#f59e0b" strokeDasharray="4 3"
                     label={{ value: `≤${maxRipple}%`, fontSize: 10, fill: '#f59e0b' }} />
-                  <Scatter name="evals" data={hist} fill="#60a5fa"
+                  <Scatter name="evals" data={cloud} fill="#60a5fa"
                     opacity={0.55} isAnimationActive={false} />
                   <Scatter name="current design" data={basePt} fill="#34d399"
                     shape="diamond" isAnimationActive={false} />
@@ -506,6 +517,16 @@ const AutoOptimizePanel: React.FC = () => {
                     shape="star" isAnimationActive={false} />
                 </ScatterChart>
               </ResponsiveContainer>
+              {/* One line — what the gate line is separating. No text walls. */}
+              <Tooltip placement="top" title={
+                `Every evaluated design is plotted, including the ones over the ripple gate — `
+                + `nothing is hidden server-side. Points left of the ${fmt(maxRipple, 1)}% line `
+                + `satisfy the ripple limit; points right of it do not.`}>
+                <Typography variant="caption" sx={{ display: 'block', mt: -0.5,
+                    color: 'var(--text-3)', fontSize: 10, cursor: 'help' }}>
+                  {cloud.length} designs measured · {nUnderGate} under the ripple gate ⓘ
+                </Typography>
+              </Tooltip>
             </Box>
           </Box>
           );

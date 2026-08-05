@@ -1518,10 +1518,62 @@ def _pt(out: Dict[str, Any], kind: str):
     ov = out.get("overrides") or r.get("overrides") or {}
     return {"td": r.get("torque_per_mass_Nm_kg"), "eff": r.get("efficiency"),
             "ripple": r.get("T_ripple_pct"), "kind": kind,
+            # Shaft torque — the number the user judges a design by.  Without it
+            # the auto card's torque×ripple cloud could only plot the per-generation
+            # BEST history (6 rows), not the run's 50+ measured designs.
+            "torque": r.get("T_em_Nm"),
             "thd": r.get("THD_LL_pct"),      # line-to-line voltage THD (FOC quality)
             "overrides": {k: v for k, v in ov.items() if k != "gamma_deg"},
             "current_a": out.get("current_a") or r.get("current_a"),
             "gamma_deg": ov.get("gamma_deg")}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OBJECTIVE-SPACE CLOUD — publication policy.
+#
+# INVARIANT (Vadim, 2026-08-05: «надо выводить все точки я потом могу отфильтровать
+# их по пульсации там же есть ползунок»): EVERY eval that produced metrics is
+# published to `points`.  Nothing is filtered server-side — not by ripple, not by
+# the objective, not by "is it the incumbent".  The chart's ripple slider does the
+# trimming, visually, where the user can move it.  A run that shows the user 51 of
+# its 52 measured designs makes them conclude it found nothing.
+#
+# The only things NOT in the cloud are things that have no metrics to plot:
+#   • candidates the in-process geometry pre-fence rejected (no FEM ran),
+#   • evals that failed in the FEM (no `res`),
+#   • the MTPA γ-sweep, which is a DIFFERENT operating point — see _descent_cost's
+#     note: a design measured at another current/γ is another problem, and mixing
+#     it into this run's cloud is exactly the misreading that started this fix.
+#
+# BOUND: _POINTS_CAP points, ~200 bytes each → ≲1 MB of state, which is also what
+# /descent/progress serialises on every poll.  Above the cap the OLDEST ordinary
+# point is dropped; the two baseline anchors (A and the current-bumped B that
+# define the perpendicular reference line) are never evicted, or the chart loses
+# the line it measures everything against.  At ~10 min/eval, 4000 points is ~28
+# CPU-days of evaluation — no real run reaches it.
+_POINTS_CAP = 4000
+_PT_ANCHOR_KINDS = ("baseline", "baseline_bump")
+
+
+def _pub_pt(all_pts: List[Dict[str, Any]], out: Dict[str, Any],
+            kind: str, cap: int = _POINTS_CAP) -> Optional[Dict[str, Any]]:
+    """Publish ONE evaluated design into the run's objective-space cloud.
+
+    The single place a point may enter `points`, so the invariant above is
+    checkable in one function instead of at nine call sites.  Returns the point
+    (or None when the eval carries no metrics)."""
+    p = _pt(out, kind)
+    if p is None:
+        return None
+    all_pts.append(p)
+    while len(all_pts) > max(2, int(cap)):
+        for i, q in enumerate(all_pts):
+            if q.get("kind") not in _PT_ANCHOR_KINDS:
+                all_pts.pop(i)
+                break
+        else:                       # nothing but anchors — cannot happen, but
+            all_pts.pop(0)          # never loop forever if it does
+    return p
 
 
 def _make_bline(base_m: Dict[str, Any], bump_m: Dict[str, Any],
@@ -1815,6 +1867,8 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                 _descent_state.update(error=f"baseline eval failed: {b.get('error')}")
             return
         base = b["res"]
+        all_pts: List[Dict[str, Any]] = []   # every eval with metrics → a cloud point
+        _pub_pt(all_pts, b, "baseline")
         # ── Baseline (current-only) line: a 2nd FEM sim of THIS geometry at
         #    I·(1+bump) gives point B; A–B sets the perpendicular-distance weights. ──
         if str(objective) == "baseline_line":
@@ -1823,6 +1877,10 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                 n_evals += 1
                 if bb.get("ok"):
                     base["_bline"] = _make_bline(base, bb["res"], current_bump_pct)
+                    # Point B is a fully paid-for eval with metrics; it belongs in
+                    # the cloud like any other (it used to be the ONE design every
+                    # run measured and never showed).
+                    _pub_pt(all_pts, bb, "baseline_bump")
                     with _descent_lock:
                         _descent_state["baseline_line"] = dict(base["_bline"])
             except Exception:   # noqa: BLE001
@@ -1912,7 +1970,6 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
 
         history = [{"iter": 0, **_msum(base), "cost": round(cost0, 5), "F": round(F0, 5),
                     "x": {k: round(float(v), 4) for k, v in x.items()}}]
-        all_pts = [p for p in [_pt(b, "baseline")] if p]   # every eval → objective-space point
         with _descent_lock:
             _descent_external[0] = False   # this process owns the flag now
             _descent_state.update(running=True, iter=0, max_iters=max_iters, phase="optimizing",
@@ -1946,12 +2003,10 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                     outs[(nm, sg)] = out
                     n_evals += 1
                     _consider(pxx, out)                   # track global best
-                    p = _pt(out, "grad")                  # publish per-eval (real-time chart)
-                    if p:
-                        all_pts.append(p)
+                    _pub_pt(all_pts, out, "grad")         # publish per-eval (real-time chart)
                     with _descent_lock:
                         _descent_state["n_evals"] = n_evals
-                        _descent_state["points"] = list(all_pts[-1200:])
+                        _descent_state["points"] = list(all_pts)
                         _descent_state["best"] = _best_state()
             with _descent_lock:
                 if _descent_state["cancel"]:
@@ -1990,12 +2045,10 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                                          best["x"][v["name"]] + d * step_mult * v["step"])
                 out = evalx(xx); n_evals += 1
                 _consider(xx, out)                        # track global best
-                _lp = _pt(out, "line")
-                if _lp:
-                    all_pts.append(_lp)
+                _pub_pt(all_pts, out, "line")
                 with _descent_lock:
                     _descent_state["n_evals"] = n_evals
-                    _descent_state["points"] = list(all_pts[-1200:])
+                    _descent_state["points"] = list(all_pts)
                     _descent_state["best"] = _best_state()
                 if out.get("ok"):
                     c_new, F_new = _descent_cost(out["res"], base, ripple_max, w_eff, w_td, lam, v_peak_limit)
@@ -2218,6 +2271,7 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                         _descent_state.update(error=f"baseline eval failed: {b.get('error')}", running=False)
                     return
                 base = b["res"]
+                _bb_pub: Optional[Dict[str, Any]] = None
                 # ── Baseline (current-only) line: 2nd FEM sim of the START geometry
                 #    at I·(1+bump) → point B; A–B fixes the perpendicular-distance
                 #    weights for the whole search (kept across box-walking rounds). ──
@@ -2228,6 +2282,7 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                         n_evals += 1
                         if bb.get("ok"):
                             base["_bline"] = _make_bline(base, bb["res"], current_bump_pct)
+                            _bb_pub = bb          # published below, next to point A
                             with _descent_lock:
                                 _descent_state["baseline_line"] = dict(base["_bline"])
                     except Exception:   # noqa: BLE001
@@ -2235,9 +2290,9 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                 cost0, F0 = _descent_cost(base, base, ripple_max, w_eff, w_td, lam, v_peak_limit)
                 best = {"x": to_geom(x0n), "metrics": base, "cost": cost0, "F": F0}
                 history.append(_hrow(0, base, cost0, F0, best["x"]))
-                _bp = _pt(b, "baseline")
-                if _bp:
-                    all_pts.append(_bp)
+                _pub_pt(all_pts, b, "baseline")
+                if _bb_pub is not None:
+                    _pub_pt(all_pts, _bb_pub, "baseline_bump")
 
             with _descent_lock:
                 _descent_external[0] = False   # this process owns the flag now
@@ -2284,9 +2339,7 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                         if out and out.get("ok"):
                             c, Fv = _descent_cost(out["res"], base, ripple_max, w_eff, w_td, lam, v_peak_limit)
                             cost_by_i[i] = c
-                            p = _pt(out, "cmaes")
-                            if p:
-                                all_pts.append(p)
+                            _pub_pt(all_pts, out, "cmaes")
                             if c < best["cost"] - 1e-9:
                                 best = {"x": to_geom(sols[i]), "metrics": out["res"], "cost": c, "F": Fv}
                         else:
@@ -3576,11 +3629,13 @@ def _auto_worker(plan: Dict[str, Any], run_id: str, bucket: str,
             _save_descent_state()
             return
         base = b["res"]
+        _pub_pt(all_pts, b, "baseline")
         bump = float(plan["current_bump_pct"])
         bb = _eval_at(to_geom(x0), I * (1.0 + bump / 100.0))
         n_evals += 1
         if bb.get("ok"):
             base["_bline"] = _make_bline(base, bb["res"], bump)
+            _pub_pt(all_pts, bb, "baseline_bump")   # point B is a measured design too
             with _descent_lock:
                 _descent_state["baseline_line"] = dict(base["_bline"])
         else:
@@ -3602,9 +3657,6 @@ def _auto_worker(plan: Dict[str, Any], run_id: str, bucket: str,
         history.append({"iter": 0, **_msum(base), "cost": round(cost0, 5),
                         "F": round(F0, 5),
                         "x": {k: round(float(v), 4) for k, v in best["x"].items()}})
-        _bp = _pt(b, "baseline")
-        if _bp:
-            all_pts.append(_bp)
 
         def _bstate():
             return {"metrics": _msum(best["metrics"]), "cost": round(best["cost"], 5),
@@ -3733,9 +3785,7 @@ def _auto_worker(plan: Dict[str, Any], run_id: str, bucket: str,
                         c, Fv = _descent_cost(out["res"], base, ripple_max,
                                               1.0, 1.0, 1.0, 1e9)
                         cost_by_i[i] = c
-                        p = _pt(out, "cmaes")
-                        if p:
-                            all_pts.append(p)
+                        _pub_pt(all_pts, out, "cmaes")
                         if c < best["cost"] - 1e-9:
                             best = {"x": to_geom(sols[i]), "metrics": out["res"],
                                     "cost": c, "F": Fv}
@@ -4014,9 +4064,7 @@ def _screen_worker(plan: Dict[str, Any], run_id: str, bucket: str,
                 out = fut.result()
                 if out and out.get("ok"):
                     memo[k] = out["res"]
-                    p = _pt(out, "screen")
-                    if p:
-                        all_pts.append(p)
+                    _pub_pt(all_pts, out, "screen")
                     # A screening perturbation is a real, fully-paid-for design.
                     # If one of them is the best thing this run has seen, it IS
                     # the best thing this run has seen — the incumbent is not
@@ -4062,9 +4110,7 @@ def _screen_worker(plan: Dict[str, Any], run_id: str, bucket: str,
             return
         base = b["res"]
         memo[_pkey(x_cur)] = base
-        _bp = _pt(b, "baseline")
-        if _bp:
-            all_pts.append(_bp)
+        _pub_pt(all_pts, b, "baseline")
         bump = float(plan["current_bump_pct"])
         bb = _eval_at(x_cur, I * (1.0 + bump / 100.0))
         if not bb.get("ok"):
@@ -4078,6 +4124,7 @@ def _screen_worker(plan: Dict[str, Any], run_id: str, bucket: str,
             _save_descent_state()
             return
         base["_bline"] = _make_bline(base, bb["res"], bump)
+        _pub_pt(all_pts, bb, "baseline_bump")   # point B is a measured design too
         with _descent_lock:
             _descent_state["baseline_line"] = dict(base["_bline"])
 

@@ -372,6 +372,10 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
   // stays mounted even when the cut hides most points (else dragging down would
   // unmount the slider itself).
   const totalValidPts = points.filter((p: any) => physical(p) && p.ripple != null).length;
+  // What the two filters are each hiding, so the label can say it instead of
+  // leaving the user to read a shrinking count as "the run found nothing".
+  const hiddenByCut = totalValidPts - shownPts.length;
+  const nonPhysicalPts = points.length - totalValidPts;
   const trajPts = history
     .filter((h: any) => h.torque_per_mass != null)
     .map((h: any) => ({ td: h.torque_per_mass, eff: (h.efficiency ?? 0) * 100, ripple: h.T_ripple_pct, iter: h.iter, z: 2 }));
@@ -915,9 +919,22 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
               </Tooltip>
               <Slider size="small" min={0} max={sliderMax} step={0.1} value={effCut}
                 onChange={(_, v) => setDisplayCut(v as number)} sx={{ maxWidth: 320, flex: 1 }} />
-              <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>
-                {shownPts.length}/{points.length} shown
-              </Typography>
+              {/* Say what the cut is hiding, and what the chart drops for being
+                  unplottable — a count that silently shrinks reads as "the run
+                  found nothing". One line; the arithmetic lives in the tooltip. */}
+              <Tooltip placement="top" title={
+                `The backend publishes every evaluated design. `
+                + `${hiddenByCut} of them sit above the ${effCut.toFixed(1)}% cut and are hidden here — `
+                + `drag right to see them.`
+                + (nonPhysicalPts > 0
+                    ? ` A further ${nonPhysicalPts} carry non-physical numbers (η ≤ 0 or η > 1, `
+                      + `T/mass ≤ 0) and are never plotted.` : '')}>
+                <Typography variant="caption" color="text.secondary"
+                  sx={{ whiteSpace: 'nowrap', cursor: 'help' }}>
+                  {shownPts.length}/{points.length} shown
+                  {hiddenByCut > 0 ? ` · ${hiddenByCut} above the cut` : ''} ⓘ
+                </Typography>
+              </Tooltip>
               {displayCut != null && (
                 <Button size="small" sx={{ minWidth: 0, px: 0.75, fontSize: 10 }}
                   onClick={() => setDisplayCut(null)}>all</Button>

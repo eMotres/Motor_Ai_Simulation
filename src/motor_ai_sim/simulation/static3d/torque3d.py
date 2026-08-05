@@ -49,19 +49,19 @@ from __future__ import annotations
 
 import math
 import time
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Sequence, Tuple
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Sequence
 
 import numpy as np
 
 from .band import BandedSection, SlipWeld
-from .loaded import LoadedSolve, PHASES, _regions_for
+from .loaded import LoadedSolve, _regions_for
 from .motor_geometry import MM, MotorSection
 from .motor_mesh import build_motor_mesh
 from .nedelec import (mirror_plane_dofs, solve_static3d_A,
                       solve_static3d_A_nonlinear, truncation_dofs)
 from .solver import MU0, Region
-from .winding3d import WindingT, build_winding_T
+from .winding3d import build_winding_T
 
 
 # --------------------------------------------------------------------------
@@ -244,6 +244,7 @@ class BandedModel:
     # -- solve -------------------------------------------------------------
     def solve(self, m: int = 0, mu_init: Optional[np.ndarray] = None,
               tol: float = 3e-3, max_iter: int = 45, damping: float = 0.35,
+              damping_init: Optional[float] = None,
               cg_tol: float = 1e-10) -> LoadedSolve:
         t0 = time.perf_counter()
         P, Dcols = self.projection(m)
@@ -255,7 +256,8 @@ class BandedModel:
         else:
             sol = solve_static3d_A_nonlinear(
                 self.tm.mesh, self.regions, tol=tol, max_iter=max_iter,
-                damping=damping, verbose=self.verbose, mu_init=mu_init, **kw)
+                damping=damping, damping_init=damping_init,
+                verbose=self.verbose, mu_init=mu_init, **kw)
         return LoadedSolve(
             sol=sol, tm=self.tm, section=self.section,
             stack_mm=float(self.stack_mm if self.stack_mm
@@ -301,7 +303,6 @@ def torque_central_difference(model: BandedModel, m0: int, dm: int,
     """
     out = {}
     energies = {}
-    mus = {}
     cost = []
     mu = None
     for tag, m in (("minus", m0 - dm), ("plus", m0 + dm)):

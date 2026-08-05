@@ -350,8 +350,7 @@ def test_the_curve_co_energy_is_below_the_linear_one_on_a_saturating_curve():
     correspondingly larger than ``1/2 nu_initial |B|^2``.  Getting this backwards
     (using the frozen Picard nu instead of the curve) is the mistake this
     function exists to avoid, and on a saturated bridge it is tens of percent."""
-    from motor_ai_sim.simulation.static3d.solver import MU0
-    curve = [(50.0, 0.5), (200.0, 1.0), (2000.0, 1.5), (30000.0, 1.8)]
+    curve = [(50.0, 0.5), (200.0, 1.0), (2000.0, 1.5), (30000.0, 1.8)]  # noqa
     B = np.array([1.5])
     got = float(torque3d._curve_coenergy(curve, B)[0])
     nu_secant = 2000.0 / 1.5            # H/B at that point

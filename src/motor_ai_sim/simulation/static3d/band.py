@@ -75,12 +75,12 @@ from __future__ import annotations
 import math
 import time
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
 from .meshes import _GMSH_LOCK
-from .motor_geometry import MM, MotorSection
+from .motor_geometry import MotorSection
 from .motor_mesh import Section2D, _poly_parts, _shapely_rings, _tri_area
 
 _TOL_MM = 1e-6
@@ -715,8 +715,7 @@ class SlipWeld:
         self.verify = bool(verify)
 
         nn = int(tm.meta["n_nodes_2d"])
-        nz = len(tm.meta["z_levels_mm"])
-        self.nz = nz
+        self.nz = nz = len(tm.meta["z_levels_mm"])
         Nr = banded.n_sec_ring
         self.Nring = Nr
         self.n_cell = Nr - 1                      # ring edges in the open wedge
@@ -808,7 +807,7 @@ class SlipWeld:
     def build(self, m: int, dirichlet_dofs: Optional[np.ndarray] = None):
         from scipy.sparse import coo_matrix
 
-        nn, nz = self._nn, self.nz
+        nn = self._nn
         e, find, sr = self._e, self._find, self._sr
         jnode, sgnode = self.ring_map(m)
         jcell, sgcell = self.edge_map(m)

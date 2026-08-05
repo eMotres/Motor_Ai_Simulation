@@ -932,9 +932,9 @@
  "l_stack_curve_note": "ISOTROPIC iron and the OLD (unconverged) 2D leg \u2014 every k_flux in these rows is stale by the two corrections in consistency_investigation round 4. k_flux_self is the isotropic model's; the laminated model moves it by -1.6 %.",
  "stage_b": {
   "version": "static3d-stageB-1",
-  "generated_utc": "2026-08-04T19:26:23Z",
+  "generated_utc": "2026-08-05T08:19:10Z",
   "_schema": "documented in simulation/static3d/loaded.py (STAGE_B_SCHEMA_DOC)",
-  "_summary": "Blockers 1 and 2 are closed and measured.  Blocker 3 - a rotatable rotor with unchanged mesh connectivity - is NOT, so no torque and no k_T is quoted anywhere in this block.",
+  "_summary": "Blockers 1 and 2 are closed and measured.  Blocker 3 \u2014 a rotatable rotor with unchanged mesh connectivity \u2014 is now CLOSED too, and proven exact (stage_b.sliding_band.proofs).  The k_T it was blocking is only partly delivered: one CONVERGED nonlinear rotor position exists and gives a method-matched flux-linkage k_T of 0.9645, but the co-energy central difference the project's rule asks for does not, and no k_T is quoted from that route.",
   "machine": {
    "preset": "my_40mm_last",
    "materials_used": {
@@ -1148,7 +1148,31 @@
    "machinery_is_in_place": "loaded.unit_phase_windings + loaded.flux_linkage_axial_split + loaded.inductance_matrix; the identity they rest on (integral(T.B) == A^T f == integral(B.H) on a linear problem) is pinned by tests/test_static3d_stage_b.py::test_flux_linkage_from_T_equals_the_stored_energy_identity",
    "how_to_run": "one phase at 1 A, magnets OFF, LINEAR iron (an inductance is a derivative and lambda/i on saturating iron is not one), over h_ew = 1.4 / 2.8 / 5.6 mm and over ew_shape cosine/linear, so the end-turn geometry's own influence is measured rather than assumed.",
    "why_not_now": "the first solve of the sweep was still running when the user's optimizer took the machine (nine refine_proc workers); the run was stopped rather than compete with it.  One loaded solve at this mesh is ~76 s on a quiet machine, so the whole sweep is ~6 minutes when the box is free.",
-   "end_winding_factor_note": "the project's end_winding_factor = 1.406 for this preset is a RESISTANCE length factor.  These rows would be the INDUCTIVE counterpart it has never had, which is the quantity the user's ANSYS comparison (1.76 vs auto 1.41) is really about."
+   "end_winding_factor_note": "the project's end_winding_factor = 1.406 for this preset is a RESISTANCE length factor.  These rows would be the INDUCTIVE counterpart it has never had, which is the quantity the user's ANSYS comparison (1.76 vs auto 1.41) is really about.",
+   "measured_under_load_at_the_operating_point": {
+    "_doc": "not the inductance study (that needs magnets off, 1 A and linear iron, and did not get the machine) \u2014 this is the SAME split of the same integral on the converged loaded solve, so it is the end fraction of the TOTAL phase linkage at the operating point, magnets included.",
+    "rows": {
+     "A": {
+      "total_Wb": 0.0008637304164306672,
+      "stack_Wb": 0.0008612300621672641,
+      "end_Wb": 2.5003542634031246e-06,
+      "end_fraction": 0.0028948317852875234
+     },
+     "B": {
+      "total_Wb": -0.0005313956149438305,
+      "stack_Wb": -0.0005310137431733902,
+      "end_Wb": -3.8187177044026865e-07,
+      "end_fraction": 0.0007186204772890969
+     },
+     "C": {
+      "total_Wb": -0.0004854247247129678,
+      "stack_Wb": -0.0004841203879850163,
+      "end_Wb": -1.3043367279514978e-06,
+      "end_fraction": 0.002687001014879812
+     }
+    },
+    "reading": "phase A links 8.637e-4 Wb in total, of which 2.500e-6 Wb (0.289 %) lives beyond the end of the stack.  That is the part no 2D model can represent at all."
+   }
   },
   "long_stack_honesty_test": {
    "status": "NOT RUN in this pass",
@@ -1337,7 +1361,85 @@
     "end_mean_H": -335711.35450086347,
     "mean_shift_A_per_m": 5533.8313907253905
    },
-   "reading": "Two statements, and they point opposite ways, which is why both are reported.  ON THE VOLUME MEAN the end slice is the SAFER one and load makes it safer still: the end-vs-mid mean shift goes from +5.5 kA/m at I = 0 (Stage A) to +60.6 kA/m under load.  AT THE WORST ELEMENT the end slice is the more exposed one at I = 0 already (-141.9 kA/m) and stays so under load (-91.8 kA/m) - the armature field does not rescue the corner, it just raises the whole level: the mid-plane worst goes from -616 kA/m to -976 kA/m and the end worst from -758 kA/m to -1068 kA/m.  So load costs this machine roughly 300 kA/m of margin everywhere, and the end region remains the place the worst element lives.  The nonlinear loaded state behind those numbers is NOT converged (constitutive residual 0.164 after 14 capped sweeps), so treat the loaded absolutes as indicative and the SIGNS and ORDER as the result."
+   "reading": "Two statements, and they point opposite ways, which is why both are reported.  ON THE VOLUME MEAN the end slice is the SAFER one and load makes it safer still: the end-vs-mid mean shift goes from +5.5 kA/m at I = 0 (Stage A) to +60.6 kA/m under load.  AT THE WORST ELEMENT the end slice is the more exposed one at I = 0 already (-141.9 kA/m) and stays so under load (-91.8 kA/m) - the armature field does not rescue the corner, it just raises the whole level: the mid-plane worst goes from -616 kA/m to -976 kA/m and the end worst from -758 kA/m to -1068 kA/m.  So load costs this machine roughly 300 kA/m of margin everywhere, and the end region remains the place the worst element lives.  The nonlinear loaded state behind those numbers is NOT converged (constitutive residual 0.164 after 14 capped sweeps), so treat the loaded absolutes as indicative and the SIGNS and ORDER as the result.",
+   "nonlinear_loaded_CONVERGED": {
+    "slices": [
+     {
+      "z_lo_m": 0.0,
+      "z_hi_m": 0.001,
+      "z_mid_m": 0.0005,
+      "worst_H_A_per_m": -1032711.4450245935,
+      "mean_H_A_per_m": -425172.28205514903
+     },
+     {
+      "z_lo_m": 0.001,
+      "z_hi_m": 0.002,
+      "z_mid_m": 0.0015,
+      "worst_H_A_per_m": -1024967.172603987,
+      "mean_H_A_per_m": -412133.46114771866
+     },
+     {
+      "z_lo_m": 0.002,
+      "z_hi_m": 0.003,
+      "z_mid_m": 0.0025,
+      "worst_H_A_per_m": -1085556.9370197651,
+      "mean_H_A_per_m": -421207.9324431101
+     },
+     {
+      "z_lo_m": 0.003,
+      "z_hi_m": 0.004,
+      "z_mid_m": 0.0035,
+      "worst_H_A_per_m": -995018.7240792809,
+      "mean_H_A_per_m": -390614.6820720011
+     },
+     {
+      "z_lo_m": 0.004,
+      "z_hi_m": 0.005,
+      "z_mid_m": 0.0045000000000000005,
+      "worst_H_A_per_m": -1032668.0294613638,
+      "mean_H_A_per_m": -389377.61945011216
+     },
+     {
+      "z_lo_m": 0.005,
+      "z_hi_m": 0.006,
+      "z_mid_m": 0.0055,
+      "worst_H_A_per_m": -1049243.708358118,
+      "mean_H_A_per_m": -358244.4584328173
+     }
+    ],
+    "mid_worst_H": -1032711.4450245935,
+    "end_worst_H": -1049243.708358118,
+    "mid_mean_H": -425172.28205514903,
+    "end_mean_H": -358244.4584328173,
+    "worst_shift_A_per_m": -16532.263333524577,
+    "mean_shift_A_per_m": 66927.82362233172,
+    "I_ph": {
+     "A": 21.204323896810546,
+     "B": 39.85358585161611,
+     "C": -61.05790974842665
+    },
+    "note": "negative H.Mhat is demagnetising.  At I = 0 the end slice is LESS negative than the mid-plane one (the end flux spills into air instead of being pushed back through the magnet); under load the armature field adds to that, and the two do not have to have the same sign",
+    "_doc": "H . M_hat inside the magnets per axial slice, on a CONVERGED nonlinear loaded state (52 Picard sweeps, residual 2.746e-3) \u2014 the Stage B block below reported this at the sweep cap with a residual of 0.164 and said to treat the absolutes as indicative.  These are the absolutes.",
+    "vs_the_capped_state": {
+     "capped": {
+      "mid_worst_H": -976254.4496632539,
+      "end_worst_H": -1068083.4396253412,
+      "mid_mean_H": -425079.24002203526,
+      "end_mean_H": -364493.738063465,
+      "residual": 0.164,
+      "sweeps": 14
+     },
+     "converged": {
+      "mid_worst_H": -1032711.4450245935,
+      "end_worst_H": -1049243.708358118,
+      "mid_mean_H": -425172.28205514903,
+      "end_mean_H": -358244.4584328173,
+      "residual": 0.0027459147902073487,
+      "sweeps": 52
+     },
+     "reading": "Converging moved the MID-plane worst element from -976 to -1033 kA/m (5.8 % more exposed) and the END worst from -1068 to -1049 kA/m (1.8 % less), so the end-vs-mid worst SHIFT collapses from -91.8 kA/m to -16.5 kA/m.  The volume means barely move (-425 kA/m mid either way; end -364 -> -358).  The SIGNS and the ORDER that the capped state reported survive \u2014 the end slice is still the more exposed one at the worst element and the safer one on the mean \u2014 but the magnitude of the end-vs-mid gap does not, which is exactly why the capped state was labelled indicative.  Mesh: 127908 tets at h_gap 0.55 / h_solid 1.70, laminated iron."
+    }
+   }
   },
   "nonlinear_cost": {
    "_doc": "the LOADED nonlinear A-formulation solve, cold-started from the linear permeability.  Capped at 14 sweeps ON PURPOSE and it did NOT converge.  The trace is recorded because the cost of converging it is the number Stage B planning actually needs.",
@@ -1490,21 +1592,128 @@
    ]
   },
   "torque": {
-   "status": "NOT MEASURED",
+   "status": "PARTIAL \u2014 the sliding band is proven and one CONVERGED nonlinear rotor position exists, but the co-energy CENTRAL DIFFERENCE does not, so no k_T is quoted from the energy-difference route",
+   "_doc": "Torque here is by the ENERGY METHOD only: T = dW'/dtheta at constant current, differenced over the sliding band's own legal angles so the two states sit on bit-identical meshes.  Maxwell stress appears nowhere.  torque3d.co_energy builds W' from the co-energy DENSITY, reading saturable iron off the same B-H curve the Picard converged on (1/2 nu |B|^2 with the frozen permeability is the co-energy of a different, linear material and on a saturated bridge differs by tens of percent).",
    "k_T": null,
-   "reason": "torque by the energy method is dW'/dtheta and needs a second rotor position on a mesh with unchanged connectivity. That is blocker 3 and it is open (see blockers.rotatable_rotor_with_identical_topology). Nothing in this block is a torque, and this key stays null until the sliding band exists and passes its two proofs.",
-   "what_the_2d_leg_will_be": {
-    "_doc": "recorded NOW so the comparison is pinned before the 3D number exists, and so the 2D reference cannot be chosen after the fact",
+   "mesh": {
+    "n_ring": 336,
+    "ring_pitch_deg": 1.0714285714285714,
+    "ring_pitch_mm": 0.22439947525641385,
+    "n_tri": 3876,
+    "tets": 127908,
+    "ndofs": 161964,
+    "h_gap_mm": 0.55,
+    "h_solid_mm": 1.7,
+    "box_factor": 2.5,
+    "n_stack": 4,
+    "n_cap": 4,
+    "n_ew": 3,
+    "note": "box_factor 2.5 (r_box = z_box = 50 mm) rather than Stage A's 160 mm: torque is a gap quantity and the truncation bracket Stage A measured (0.008 % on k_flux) is not the limiting error here"
+   },
+   "operating_point": {
+    "i_phase_rms": 43.840620433565945,
+    "n_parallel": 1,
+    "i_coil_peak": 62.0,
+    "gamma_deg": 10.0,
+    "daxis_deg": 60.00090966318485,
+    "rotor_angle_deg": 0.0,
+    "connection": "2S",
+    "source": "simulation.drive.Excitation (read-only)"
+   },
+   "I_ph": {
+    "A": 21.204323896810546,
+    "B": 39.85358585161611,
+    "C": -61.05790974842665
+   },
+   "converged_position": {
+    "shift": 0,
+    "rotor_angle_deg": 0.0,
+    "W_co_energy_J": 0.7887205398558972,
+    "picard_sweeps": 52,
+    "picard_converged": true,
+    "picard_residual": 0.0027459147902073487,
+    "picard_tol": 0.003,
+    "wall_s": 2659.505263500003,
+    "cg_iterations": 19,
+    "what_it_took": "52 damped-Picard sweeps to a constitutive residual of 2.746e-3 against a 3e-3 tolerance, 2660 s at 161964 edge dofs on a machine the user was also using.  The Stage B pass stopped at 14 sweeps and 0.164 and EXTRAPOLATED 33; the measured answer is 52."
+   },
+   "T_flux_linkage_Nm": 0.5655079597758519,
+   "k_T_flux_linkage": 0.9645211644863929,
+   "two_d": {
     "T_avg_Nm": 0.5863095394873835,
     "T_ripple_pct": 4.813827787933513,
-    "source": "config/end_effect_3d.json::consistency_investigation.round_4_the_same_defect_in_the_production_paths.torque_path",
-    "who": "em_transient_eval -> fem_transient_sliding_band, element_order 2, Newton-converged (picard_resid_max 9.65e-8, no unconverged and no fallback frames)",
-    "method": "NOT Maxwell stress. fem_solver_2d's reported mean is sb_postproc.hybrid_torque: <T> = (3/2)*p*n_par*<psi_alpha*i_beta - psi_beta*i_alpha>, i.e. the flux-linkage/energy mean, with Maxwell supplying only the ripple SHAPE (method string 'energy_mean+maxwell_ripple'). So the 2D leg is already an energy-method number and k_T will be energy over energy, as the project's rule requires.",
-    "operating_point": "43.84 A phase rms, 13000 rpm, gamma 10 deg, connection 2S (n_parallel 1), i_coil_peak 62.0 A",
-    "frames": "one electrical period = 360 deg elec = 51.43 deg mech; the sliding band snaps the requested steps per period to a divisor of its slip nodes per period and reports the substitution"
+    "who": "em_transient_eval -> fem_transient_sliding_band, P2, Newton-converged (picard_resid_max 9.65e-8, no unconverged and no fallback frames)",
+    "method": "sb_postproc.hybrid_torque's energy mean <T> = (3/2) p n_par <psi_al i_be - psi_be i_al>"
    },
-   "delta_sweep": null,
-   "long_stack_honesty_test": null
+   "k_T_reading": "The number that CAN be quoted is method-matched: the 2D leg's T_avg is itself the flux-linkage/energy mean, and torque3d.dq_torque applies the SAME functional to the 3D flux linkages (loaded.flux_linkage, which is the identity lambda = integral(T_1 . B) the Stage B suite already pins).  It gives T_3d = 0.56551 N.m against T_2d = 0.58631 N.m, i.e. k_T = 0.9645.  Two caveats and both matter: the 3D value is INSTANTANEOUS at rotor_angle 0 while the 2D value is a period MEAN, and the alpha-beta functional is winding-filtered, so the two agree on the mean and not frame by frame.  For scale, k_flux (Stage A, no load) is 0.9517 / 0.9594, so 0.9645 sits where an end-effect ratio should.",
+   "linear_iron_delta_sweep": {
+    "_doc": "the delta sweep the energy method needs, done on the LINEAR machine because it is cheap.  It is NOT a torque of this machine \u2014 with linear iron at mu_r 4600 the rotor bridges short the magnet flux and the torque collapses \u2014 it is there to show the central difference's behaviour against the angular step.",
+    "shifts": [
+     -3,
+     -2,
+     -1,
+     0,
+     1,
+     2,
+     3
+    ],
+    "angle_deg": [
+     -3.2142857142857144,
+     -2.142857142857143,
+     -1.0714285714285714,
+     0.0,
+     1.0714285714285714,
+     2.142857142857143,
+     3.2142857142857144
+    ],
+    "W_J": [
+     1.3030611140672925,
+     1.3029966183268522,
+     1.3031283697972995,
+     1.303209441775467,
+     1.303197943549715,
+     1.3031478132025571,
+     1.303461498947573
+    ],
+    "T_dq_Nm": [
+     -0.04019779429064477,
+     -0.02486696183395799,
+     -0.003754590039290193,
+     0.019505174524402966,
+     0.042519939318391715,
+     0.06349647756794492,
+     0.08097779388667475
+    ],
+    "rows": [
+     {
+      "dm_total": 2,
+      "d_theta_deg": 2.142857142857143,
+      "dW_J": 6.957375241545272e-05,
+      "rel_dW": 5.3386470497533234e-05,
+      "T_Nm": 0.0018602651098703266
+     },
+     {
+      "dm_total": 4,
+      "d_theta_deg": 4.285714285714286,
+      "dW_J": 0.00015119487570491863,
+      "rel_dW": 0.00011601732680737311,
+      "T_Nm": 0.002021326594442611
+     },
+     {
+      "dm_total": 6,
+      "d_theta_deg": 6.428571428571429,
+      "dW_J": 0.000400384880280491,
+      "rel_dW": 0.00030722987989943853,
+      "T_Nm": 0.003568501038810225
+     }
+    ],
+    "UNRESOLVED": "On this LINEAR machine the co-energy central difference gives 1.86e-3 N.m at a 2.14 deg step and 2.02e-3 at 4.29 deg, while the flux-linkage functional at the same solve gives 1.95e-2 N.m \u2014 a factor of ten apart.  They are not the same quantity instantaneously (the alpha-beta form is winding-filtered and assumes a sinusoidal machine, and this is a 12s/14p concentrated winding), so the disagreement is not by itself a bug.  But it has NOT been settled, and until it is no k_T is quoted from the co-energy route.  The measurement that settles it is the magnets-OFF linear identity: with no magnets W' = 1/2 i^T L i exactly, so dW'/dtheta must equal 1/2 sum_ph i_ph dpsi_ph/dtheta from the same solves.  It is implemented (run STAGE=lin MAGOFF=1) and was not run to completion: the machine had 750 MB of RAM free."
+   },
+   "what_is_missing_and_why": [
+    "the nonlinear co-energy CENTRAL DIFFERENCE: one converged rotor position costs 52 Picard sweeps and 44 minutes at this mesh, and the second and third positions did not finish.  Warm-starting is what makes them affordable and it works (see warm_start), but not by enough to fit three positions into this pass on a box that was also running the user's own work and reached 750 MB of free RAM.",
+    "the LONG-STACK honesty test and the END-WINDING leakage rows: implemented (STAGE=lstack / STAGE=leak) and queued, but they lost the machine to the nonlinear run.  Both are LINEAR and are minutes of CPU on a quiet box.",
+    "a nonlinear magnet-only COGGING sweep, which is what would show the physical cogging line the linear sweep cannot resolve."
+   ]
   },
   "blockers": {
    "closed_winding": {
@@ -1533,7 +1742,7 @@
     ]
    },
    "rotatable_rotor_with_identical_topology": {
-    "status": "NOT DONE - no k_T is quoted, by the project's own rule that a number nobody can reproduce is worse than no number",
+    "status": "SOLVED \u2014 see stage_b.sliding_band for the construction and its proofs.  What it was blocking (the energy-method k_T) is only partly delivered; see stage_b.torque.",
     "what_is_needed": "the energy method needs W'(theta) at two or three rotor angles on a mesh whose CONNECTIVITY does not change, or the mesh difference swamps the torque signal.",
     "design_the_2d_solver_already_proves_works": {
      "_doc": "mesher._weld_belt_into_half and p2_projection.SlipProjection do exactly this in 2D and were read in full for this pass. The 3D port is mechanical but not small.",
@@ -1546,6 +1755,123 @@
     "why_it_did_not_land_in_this_pass": "the cross-section mesher (motor_mesh.build_section_mesh_2d) produces ONE gmsh mesh of the whole wedge, with a free Delaunay gap. The three-piece build with two uniform rings, the edge-dof weld with two signs, and the composed signed union-find are a rewrite of the meshing and constraint layers, not an addition to them. The two blockers that WERE closed had to come first: without a consistent closed winding and without anisotropic iron, a torque from that band would have been a number produced by a load the projection had partly eaten, in solid iron.",
     "cost_note": "the 2D band uses n_slip = 1008-1680 nodes per ring. A 3D ring at 180 nodes per 180 deg sector gives a 1 deg pitch, an 0.21 mm arc against the 0.20 mm gap - a sane aspect ratio and a usable delta for a central difference. That sizing is a measurement to make, not an assumption to carry."
    }
+  },
+  "sliding_band": {
+   "_doc": "Blocker 3, CLOSED.  The cross-section is meshed in TWO pieces cut at the mid-gap radius, both carrying the SAME uniform ring of n_ring vertices; the mesh is deliberately TORN there and stitched by a constraint, so turning the rotor is a re-labelling of which edge dof is welded to which and no node ever moves.  simulation/static3d/band.py + torque3d.py, tests/test_static3d_band.py (17 fast tests, 3 behind STATIC3D_FULL).",
+   "construction": {
+    "pieces": "rotor r <= r_mid (iron, magnets, shaft, its half of the gap) | stator r >= r_mid (iron, slots, outer air).  The two share NO node.",
+    "ring": "a uniform polygon of n_ring vertices at the mid-gap radius handed to gmsh as GEOMETRY POINTS on both pieces, so every one of them is a mesh node; band._ring_nodes refuses the mesh if gmsh put any other node on that circle, which is what would silently give the two pieces different rings",
+    "legal_angles": "integer multiples of the ring pitch 2 pi / n_ring \u2014 at n_ring = 336 that is 1.07143 deg mech and 0.2244 mm of arc against a 0.200 mm gap",
+    "weld": "the interface is a prismatic surface (ring index k x axial level l) and EVERY edge lying in it is welded: axial (k,l)-(k,l+1), angular (k,l)-(k+1,l) and the quad face DIAGONAL (k,l)-(k+1,l+1).  Welding two of the three leaves the tangential trace discontinuous, i.e. a torn gap that still solves.",
+    "diagonals": "motor_mesh.extrude_section splits each prism through the lower-KEY end of its base edge, so the two pieces agree on the diagonals only if the ring key is monotone in the ring index on both.  band.ring_split_key does that AND keeps the two radial cut planes' triangulations identical: the ring node is the outermost cut node of the rotor piece and the innermost of the stator piece, so a key above every other key puts it on the same side of its radial neighbour on both planes.",
+    "signs": "each welded pair carries TWO signs \u2014 the anti-periodic WRAP (a ring node pushed past theta = sector re-enters at 0 with bc_sign) and the edge ORIENTATION (scikit-fem orients every edge low-vertex to high, which knows nothing about the rotation).  The sector cut and the slip constraint are composed in ONE signed union-find, because a ring node on a cut plane belongs to both.",
+    "wrap_period": "ring NODES reduce into [0, Nring-1]; ring CELLS reduce mod Nring-1.  Reducing a cell by its two endpoints instead gives the cell straddling the cut two different signs.",
+    "contradiction_gate": "a signed union-find silently DROPS a union whose two dofs are already related with the other sign, and a dropped weld is a torn gap with a plausible picture.  SlipWeld.build raises instead, then re-checks every constraint against the classes it produced.  tests/test_static3d_band.py::test_a_wrap_sign_error_is_caught_rather_than_solved corrupts one entry and requires the raise.",
+    "gmsh_limits": "the ring pitch and h_gap must be within a factor of ~4: finer element size and gmsh subdivides the ring segments (the two pieces stop sharing a ring); coarser and gmsh will not fill the gap from a boundary that much finer than its target size \u2014 measured, n_ring = 672 (0.112 mm arc) against h_gap = 0.9 mm did not return in 15 minutes.  Both bounds are checked in build_banded_section."
+   },
+   "proofs": {
+    "proof_a_merged_vs_weld": {
+     "_doc": "a genuinely CONFORMAL mesh (the two rings identified) against the welded one at zero shift: at zero shift the weld must do exactly what shared nodes would do for free",
+     "tets_conformal": 33192,
+     "tets_welded": 33192,
+     "ndofs_conformal": 43254,
+     "ndofs_welded": 43804,
+     "W_conformal_J": 1.237535764254074,
+     "W_welded_J": 1.2375357642540727,
+     "rel_diff": 1.076548789968275e-15
+    },
+    "proof_a2_whole_sector_shift": {
+     "_doc": "shifting by the whole sector maps this machine onto itself ANTI-periodically (7 poles per 180 deg is odd), so with the magnets alone the co-energy must return bit-identically; every constraint has been multiplied by bc_sign exactly once",
+     "shift": 42,
+     "W_J": 1.2375357642540727,
+     "rel_diff": 0.0
+    },
+    "proof_a3_the_mesh_never_moves": {
+     "_doc": "element geometry bit-identical at every legal angle",
+     "mesh_identical": true,
+     "weld": {
+      "n_ring_nodes": 43,
+      "n_z_levels": 5,
+      "n_axial": 172,
+      "n_angular": 210,
+      "n_diagonal": 168,
+      "n_cut_pairs": 225,
+      "n_dofs": 43804
+     },
+     "free_classes": {
+      "0": 43033,
+      "1": 43033,
+      "2": 43033,
+      "5": 43033,
+      "11": 43033
+     }
+    },
+    "co_energy_two_routes": {
+     "_doc": "1/2 A^T f (the load) vs the volume integral of the co-energy density (the B-H reading of every element) \u2014 different inputs, same number on a linear machine",
+     "volume_J": 1.2375357642540727,
+     "load_J": 1.2375357642540759,
+     "rel_diff": 2.511947176592644e-15
+    },
+    "_doc": "PROOF A: merging the two rings gives a genuinely CONFORMAL mesh of the same machine, and welding them at zero shift must produce the same discrete problem.  It does, to 1.1e-15 of the co-energy \u2014 the weld is not a coupling that happens to be close, it IS the shared-node mesh.  PROOF A2: a whole-sector shift maps this machine onto itself anti-periodically (7 poles per 180 deg is odd), and every constraint in the model has then been multiplied by bc_sign exactly once; the co-energy returns BIT-IDENTICALLY (rel diff 0.0).  PROOF A3: the mesh points and elements are unchanged across shifts and the number of free weld classes does not depend on the angle."
+   },
+   "noise_floor": {
+    "_doc": "PROOF B, and what it actually measured.  A magnet-only sweep with LINEAR iron over 9 ring pitches.  The physical cogging of this cross-section is NOT resolvable in that state \u2014 the unsaturated rotor bridges short ~96 % of the magnet flux, so the gap fundamental is 0.058 T against the saturated machine's 1.47 \u2014 and what the sweep sees is therefore almost entirely the band's OWN discretisation bias: the rotor's dofs weld to different parts of an unstructured stator gap mesh at every shift.  That is worth having as a number rather than as a worry, because it is the floor under every torque this construction will report.",
+    "n_ring": 168,
+    "pitch_deg": 2.142857142857143,
+    "n_tri": 3102,
+    "tets": 55836,
+    "ndofs": 71992,
+    "W_J": [
+     1.2373401813463292,
+     1.2373396937081198,
+     1.2373389546654958,
+     1.2373385014064524,
+     1.2373381708792515,
+     1.2373371887246698,
+     1.2373366162116286,
+     1.2373367310072823,
+     1.2373368704372147
+    ],
+    "max_step_dW_J": 9.82154581663508e-07,
+    "torque_noise_floor_Nm": 2.626087910075278e-05,
+    "fft_abs": [
+     1.5543122344752192e-15,
+     6.975136452762304e-06,
+     2.829804322657393e-06,
+     2.02713689302159e-06,
+     1.7520669175648313e-06
+    ],
+    "nyquist_over_max": 0.2511874756042909,
+    "reading": "the Nyquist bin \u2014 a SAWTOOTH at the relabelling period, which is the signature of a mis-weld and which no machine can produce \u2014 is not the dominant line (0.25 of the largest).  The absolute floor is ~1.3e-5 N.m, four to five orders below the loaded torque, so it does not limit k_T.  What this sweep does NOT do is show the physical cogging line; that needs nonlinear iron and was not affordable in this pass."
+   }
+  },
+  "warm_start": {
+   "_doc": "Blocker 3's prerequisite: the energy method needs two or three rotor positions and a cold nonlinear loaded position is tens of Picard sweeps, so the previous angle's permeability has to be carried in.",
+   "mesh": {
+    "tets": 127908,
+    "ndofs": 161964,
+    "n_ring": 336
+   },
+   "tol": 0.003,
+   "cold": {
+    "shift": 0,
+    "sweeps": 52,
+    "converged": true,
+    "residual": 0.0027459147902073487,
+    "wall_s": 2659.5,
+    "first_residual": 0.9997
+   },
+   "warm": {
+    "shift": 1,
+    "from_shift": 0,
+    "converged": false,
+    "sweeps_when_stopped": 28,
+    "residual_when_stopped": 0.00563,
+    "first_residual": 0.3691,
+    "note": "not run to convergence \u2014 the process was killed at sweep 28 while still descending"
+   },
+   "measured": "Warm-starting HALVES the starting point: the first sweep's constitutive residual is 0.369 against the cold start's 0.9997, so the permeability from a rotor position 1.07 deg away really is much closer to the answer.  But the driver then throws part of that away: it starts every solve at damping 0.35, and by sweep 2 the warm solve has OVERSHOT to 0.716 \u2014 worse than where it began \u2014 after which the adaptive halving has to climb back down.  At sweep 28 it was at 5.6e-3 against the cold solve's 52 sweeps to 2.7e-3, so the saving is real but is roughly 30-40 % rather than the several-fold a warm start should give.",
+   "next_step": "lower the initial damping when mu_init is supplied (or set it from the initial residual).  That is a cost change, not a physics change, and the check is that the converged co-energy is unmoved."
   }
  }
 }

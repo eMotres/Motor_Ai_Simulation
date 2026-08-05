@@ -932,9 +932,9 @@
  "l_stack_curve_note": "ISOTROPIC iron and the OLD (unconverged) 2D leg \u2014 every k_flux in these rows is stale by the two corrections in consistency_investigation round 4. k_flux_self is the isotropic model's; the laminated model moves it by -1.6 %.",
  "stage_b": {
   "version": "static3d-stageB-1",
-  "generated_utc": "2026-08-05T08:19:10Z",
+  "generated_utc": "2026-08-05T17:23:25Z",
   "_schema": "documented in simulation/static3d/loaded.py (STAGE_B_SCHEMA_DOC)",
-  "_summary": "Blockers 1 and 2 are closed and measured.  Blocker 3 \u2014 a rotatable rotor with unchanged mesh connectivity \u2014 is now CLOSED too, and proven exact (stage_b.sliding_band.proofs).  The k_T it was blocking is only partly delivered: one CONVERGED nonlinear rotor position exists and gives a method-matched flux-linkage k_T of 0.9645, but the co-energy central difference the project's rule asks for does not, and no k_T is quoted from that route.",
+  "_summary": "Blockers 1, 2 and 3 are closed and measured, and the sliding band is proven exact (stage_b.sliding_band.proofs).  TASK 46 settles the torque FUNCTIONAL question the previous pass left open and runs the two Stage B studies that were implemented but never executed.  SETTLED: the honest torque of a PM machine is the CO-ENERGY derivative dW'/dtheta at constant current.  The flux-linkage expression 1/2 sum_ph i_ph dpsi_ph/dtheta is a DIFFERENT functional - it keeps the reluctance term whole, keeps half the PM alignment term and drops the magnet's own co-energy - and the magnets-OFF identity proves both implementations are nevertheless correct, agreeing to 5e-11 N.m on a 3e-2 N.m torque.  MEASURED: the end-winding leakage sweep (the end turns add under 0.5 % of the phase inductance) and the long-stack honesty test, which passes and in passing delivers the INDUCTIVE end-effect factor k_L = 1.065 the project has never had.  STILL NOT DELIVERED: a k_T from the co-energy central difference, which needs two more converged nonlinear rotor positions.  The k_T that IS quoted (0.9645) is method-matched, and its method error is now bounded at 0.4 % rather than merely flagged.",
   "machine": {
    "preset": "my_40mm_last",
    "materials_used": {
@@ -1143,12 +1143,10 @@
    }
   },
   "end_winding_leakage": {
-   "status": "NOT COMPLETED in this pass",
    "_doc": "what the 3D model sees that 2D cannot, as a split of ONE integral rather than a comparison of two models.  lambda = integral(T_1 . B) over the whole machine; split it at the stack-end plane and the inside part is what a 2D cross-section-times-a-length can represent, while the outside part - the axial fringing of the stack field PLUS the end turns' own flux - is invisible to 2D by construction.  The stack end is a mesh plane, so the split is exact and not approximate.",
    "machinery_is_in_place": "loaded.unit_phase_windings + loaded.flux_linkage_axial_split + loaded.inductance_matrix; the identity they rest on (integral(T.B) == A^T f == integral(B.H) on a linear problem) is pinned by tests/test_static3d_stage_b.py::test_flux_linkage_from_T_equals_the_stored_energy_identity",
    "how_to_run": "one phase at 1 A, magnets OFF, LINEAR iron (an inductance is a derivative and lambda/i on saturating iron is not one), over h_ew = 1.4 / 2.8 / 5.6 mm and over ew_shape cosine/linear, so the end-turn geometry's own influence is measured rather than assumed.",
-   "why_not_now": "the first solve of the sweep was still running when the user's optimizer took the machine (nine refine_proc workers); the run was stopped rather than compete with it.  One loaded solve at this mesh is ~76 s on a quiet machine, so the whole sweep is ~6 minutes when the box is free.",
-   "end_winding_factor_note": "the project's end_winding_factor = 1.406 for this preset is a RESISTANCE length factor.  These rows would be the INDUCTIVE counterpart it has never had, which is the quantity the user's ANSYS comparison (1.76 vs auto 1.41) is really about.",
+   "end_winding_factor_note": "the project's end_winding_factor = 1.406 for this preset is a RESISTANCE length factor.  The rows in `measured` are the INDUCTIVE counterpart it has never had, and the answer is that the two are not comparable quantities: the end TURNS add under 0.5 % of the phase inductance, while the inductive end effect that does exist for this machine is +6.5 % and lives INSIDE the stack near the end faces (long_stack_honesty_test.the_inductive_end_effect_factor).  The user's ANSYS comparison (1.76 vs auto 1.41) is about copper LENGTH and this study neither confirms nor contradicts it - it measures a different thing, and that is the finding.",
    "measured_under_load_at_the_operating_point": {
     "_doc": "not the inductance study (that needs magnets off, 1 A and linear iron, and did not get the machine) \u2014 this is the SAME split of the same integral on the converged loaded solve, so it is the end fraction of the TOTAL phase linkage at the operating point, magnets included.",
     "rows": {
@@ -1172,13 +1170,401 @@
      }
     },
     "reading": "phase A links 8.637e-4 Wb in total, of which 2.500e-6 Wb (0.289 %) lives beyond the end of the stack.  That is the part no 2D model can represent at all."
+   },
+   "measured": {
+    "_doc": "Blocker 1's payoff, RUN.  One phase at 1 A, magnets OFF, LINEAR iron - an inductance is a derivative and lambda/i on saturating iron is not one.  L_end is the part of the phase's own linkage that lives beyond the end of the stack: the axial fringing of the stack field PLUS the end turns' own flux, which is exactly what a 2D cross-section-times-a-length cannot represent.  The stack end is a mesh plane, so the split is exact rather than approximate.",
+    "mesh": {
+     "h_gap_mm": 0.55,
+     "h_solid_mm": 1.7,
+     "box_factor": 4.0,
+     "n_tri_section": 3619,
+     "r_box_mm": 80.0,
+     "n_stack": 5,
+     "n_cap": 6,
+     "n_ew": 4
+    },
+    "i_test_A": 1.0,
+    "rows": [
+     {
+      "h_ew_mm": 1.4,
+      "ew_shape": "cosine",
+      "stack_mm": 12.0,
+      "L_self_H": 2.652032654635486e-05,
+      "L_stack_H": 2.6524235650365512e-05,
+      "L_end_H": -3.909104010651511e-09,
+      "end_fraction": -0.0001474002970445628,
+      "M_BA_H": 3.446745484310782e-07,
+      "M_CA_H": 2.2898825376132436e-07,
+      "M_BA_end_H": 3.9880612743074695e-10,
+      "M_CA_end_H": 4.134600286046926e-10,
+      "tets": 162855,
+      "ndofs": 196936,
+      "cg_iterations": 28,
+      "source_residual": 3.054880461903569e-16,
+      "source_removed": 0.0,
+      "wall_s": 102.85719650000101
+     },
+     {
+      "h_ew_mm": 1.4,
+      "ew_shape": "linear",
+      "stack_mm": 12.0,
+      "L_self_H": 2.6513390979481546e-05,
+      "L_stack_H": 2.6527492764992705e-05,
+      "L_end_H": -1.4101785511158566e-08,
+      "end_fraction": -0.0005318740828765283,
+      "M_BA_H": 3.4469950768585864e-07,
+      "M_CA_H": 2.2901023471337778e-07,
+      "M_BA_end_H": 4.117863947019036e-10,
+      "M_CA_end_H": 4.2544874691949216e-10,
+      "tets": 162855,
+      "ndofs": 196936,
+      "cg_iterations": 28,
+      "source_residual": 2.9946941843923157e-16,
+      "source_removed": 0.0,
+      "wall_s": 97.13564339998993
+     },
+     {
+      "h_ew_mm": 2.8,
+      "ew_shape": "cosine",
+      "stack_mm": 12.0,
+      "L_self_H": 2.642029463087305e-05,
+      "L_stack_H": 2.6391650399813144e-05,
+      "L_end_H": 2.8644231059907324e-08,
+      "end_fraction": 0.0010841753076604801,
+      "M_BA_H": 3.4410515895928846e-07,
+      "M_CA_H": 2.2877881021378448e-07,
+      "M_BA_end_H": 1.0093264211684692e-09,
+      "M_CA_end_H": 1.0254083321096231e-09,
+      "tets": 162855,
+      "ndofs": 196936,
+      "cg_iterations": 25,
+      "source_residual": 3.113184130261238e-16,
+      "source_removed": 0.0,
+      "wall_s": 68.24409269998432
+     },
+     {
+      "h_ew_mm": 2.8,
+      "ew_shape": "linear",
+      "stack_mm": 12.0,
+      "L_self_H": 2.641051507457097e-05,
+      "L_stack_H": 2.6399872553664344e-05,
+      "L_end_H": 1.0642520906625557e-08,
+      "end_fraction": 0.0004029652915354375,
+      "M_BA_H": 3.4416168078376153e-07,
+      "M_CA_H": 2.2883095958263233e-07,
+      "M_BA_end_H": 1.0398766284689478e-09,
+      "M_CA_end_H": 1.0543529676929333e-09,
+      "tets": 162855,
+      "ndofs": 196936,
+      "cg_iterations": 25,
+      "source_residual": 3.1184157092101253e-16,
+      "source_removed": 0.0,
+      "wall_s": 32.52367910000612
+     },
+     {
+      "h_ew_mm": 5.6,
+      "ew_shape": "cosine",
+      "stack_mm": 12.0,
+      "L_self_H": 2.6323176019429492e-05,
+      "L_stack_H": 2.6191461146931764e-05,
+      "L_end_H": 1.317148724977281e-07,
+      "end_fraction": 0.005003760655648375,
+      "M_BA_H": 3.4403476688729054e-07,
+      "M_CA_H": 2.2917189230697796e-07,
+      "M_BA_end_H": 2.5939857783158395e-09,
+      "M_CA_end_H": 2.6055673768861795e-09,
+      "tets": 162855,
+      "ndofs": 196936,
+      "cg_iterations": 22,
+      "source_residual": 2.9850258629833415e-16,
+      "source_removed": 0.0,
+      "wall_s": 33.12855149997631
+     },
+     {
+      "h_ew_mm": 5.6,
+      "ew_shape": "linear",
+      "stack_mm": 12.0,
+      "L_self_H": 2.6305151966560836e-05,
+      "L_stack_H": 2.6206459244446002e-05,
+      "L_end_H": 9.869272211483318e-08,
+      "end_fraction": 0.003751840028914928,
+      "M_BA_H": 3.441243203901766e-07,
+      "M_CA_H": 2.2926492361043676e-07,
+      "M_BA_end_H": 2.6537526836023263e-09,
+      "M_CA_end_H": 2.6649883962578025e-09,
+      "tets": 162855,
+      "ndofs": 196936,
+      "cg_iterations": 22,
+      "source_residual": 3.12618627651766e-16,
+      "source_removed": 0.0,
+      "wall_s": 26.611958399997093
+     }
+    ],
+    "baseline": {
+     "h_ew_mm": 2.8,
+     "ew_shape": "cosine",
+     "stack_mm": 12.0,
+     "L_self_H": 2.642029463087305e-05,
+     "L_stack_H": 2.6391650399813144e-05,
+     "L_end_H": 2.8644231059907324e-08,
+     "end_fraction": 0.0010841753076604801,
+     "M_BA_H": 3.4410515895928846e-07,
+     "M_CA_H": 2.2877881021378448e-07,
+     "M_BA_end_H": 1.0093264211684692e-09,
+     "M_CA_end_H": 1.0254083321096231e-09,
+     "tets": 162855,
+     "ndofs": 196936,
+     "cg_iterations": 25,
+     "source_residual": 3.113184130261238e-16,
+     "source_removed": 0.0,
+     "wall_s": 68.24409269998432
+    },
+    "axial_resolution_check": {
+     "_doc": "every axial layer count DOUBLED (n_stack 5->8, n_ew 4->8, n_cap 6->8) on the same cross-section.  Asked because the h_ew = 1.4 mm rows come out NEGATIVE at the 0.01-0.05 % level, and a sign that is under the resolution of the split would be an artefact rather than a result.",
+     "mesh": {
+      "h_gap_mm": 0.55,
+      "h_solid_mm": 1.7,
+      "box_factor": 4.0,
+      "n_tri_section": 3619,
+      "r_box_mm": 80.0,
+      "n_stack": 8,
+      "n_cap": 8,
+      "n_ew": 8
+     },
+     "rows": [
+      {
+       "h_ew_mm": 1.4,
+       "ew_shape": "cosine",
+       "stack_mm": 12.0,
+       "L_self_H": 2.659879295290629e-05,
+       "L_stack_H": 2.6602497075481965e-05,
+       "L_end_H": -3.704122575674915e-09,
+       "end_fraction": -0.0001392590476655516,
+       "M_BA_H": 3.463670986052686e-07,
+       "M_CA_H": 2.3039712247443238e-07,
+       "M_BA_end_H": 3.94028111976504e-10,
+       "M_CA_end_H": 4.1099790380091526e-10,
+       "tets": 260568,
+       "ndofs": 311821,
+       "cg_iterations": 31,
+       "source_residual": 3.1967577172937576e-16,
+       "source_removed": 0.0,
+       "wall_s": 40.486284600017825
+      },
+      {
+       "h_ew_mm": 1.4,
+       "ew_shape": "linear",
+       "stack_mm": 12.0,
+       "L_self_H": 2.6591785919243523e-05,
+       "L_stack_H": 2.6605805097536876e-05,
+       "L_end_H": -1.4019178293353025e-08,
+       "end_fraction": -0.0005271995771900318,
+       "M_BA_H": 3.463925690718625e-07,
+       "M_CA_H": 2.3041954357487253e-07,
+       "M_BA_end_H": 4.0728897404458223e-10,
+       "M_CA_end_H": 4.231861844137001e-10,
+       "tets": 260568,
+       "ndofs": 311821,
+       "cg_iterations": 31,
+       "source_residual": 3.0385411387760106e-16,
+       "source_removed": 0.0,
+       "wall_s": 37.84481450001476
+      },
+      {
+       "h_ew_mm": 2.8,
+       "ew_shape": "cosine",
+       "stack_mm": 12.0,
+       "L_self_H": 2.6531262465597352e-05,
+       "L_stack_H": 2.650360650672724e-05,
+       "L_end_H": 2.7655958870112345e-08,
+       "end_fraction": 0.0010423913639983535,
+       "M_BA_H": 3.466911711071737e-07,
+       "M_CA_H": 2.3085015740570384e-07,
+       "M_BA_end_H": 9.90821980938875e-10,
+       "M_CA_end_H": 1.0118577445822412e-09,
+       "tets": 260568,
+       "ndofs": 311821,
+       "cg_iterations": 27,
+       "source_residual": 3.1741231638084874e-16,
+       "source_removed": 0.0,
+       "wall_s": 36.24427590001142
+      },
+      {
+       "h_ew_mm": 2.8,
+       "ew_shape": "linear",
+       "stack_mm": 12.0,
+       "L_self_H": 2.6521407272643787e-05,
+       "L_stack_H": 2.6511986233018792e-05,
+       "L_end_H": 9.42103962499517e-09,
+       "end_fraction": 0.00035522397164470046,
+       "M_BA_H": 3.467492308967867e-07,
+       "M_CA_H": 2.309036199902949e-07,
+       "M_BA_end_H": 1.0221763698709628e-09,
+       "M_CA_end_H": 1.0414328995121652e-09,
+       "tets": 260568,
+       "ndofs": 311821,
+       "cg_iterations": 27,
+       "source_residual": 3.1049223418780546e-16,
+       "source_removed": 0.0,
+       "wall_s": 37.01426530000754
+      },
+      {
+       "h_ew_mm": 5.6,
+       "ew_shape": "cosine",
+       "stack_mm": 12.0,
+       "L_self_H": 2.6482223949424355e-05,
+       "L_stack_H": 2.635609428459281e-05,
+       "L_end_H": 1.2612966483154366e-07,
+       "end_fraction": 0.0047628048562849395,
+       "M_BA_H": 3.475689173996588e-07,
+       "M_CA_H": 2.3201641384500758e-07,
+       "M_BA_end_H": 2.5279262516748803e-09,
+       "M_CA_end_H": 2.550717305062926e-09,
+       "tets": 260568,
+       "ndofs": 311821,
+       "cg_iterations": 24,
+       "source_residual": 3.086035426797151e-16,
+       "source_removed": 0.0,
+       "wall_s": 34.467497700010426
+      },
+      {
+       "h_ew_mm": 5.6,
+       "ew_shape": "linear",
+       "stack_mm": 12.0,
+       "L_self_H": 2.6464249028783596e-05,
+       "L_stack_H": 2.637158243091772e-05,
+       "L_end_H": 9.266659786587672e-08,
+       "end_fraction": 0.0035015767031623965,
+       "M_BA_H": 3.4766189723242344e-07,
+       "M_CA_H": 2.3211221790555035e-07,
+       "M_BA_end_H": 2.5893735850777122e-09,
+       "M_CA_end_H": 2.611473194580294e-09,
+       "tets": 260568,
+       "ndofs": 311821,
+       "cg_iterations": 24,
+       "source_residual": 3.1329236191487034e-16,
+       "source_removed": 0.0,
+       "wall_s": 33.632723999995505
+      }
+     ],
+     "verdict": "L_end moves by at most 6 % (0.1317 -> 0.1261 uH at h_ew = 5.6, 0.02864 -> 0.02770 at 2.8) and the NEGATIVE rows stay negative at the same size.  The sign is resolved.  L_self itself is the less converged of the two, moving 0.3-0.6 %."
+    },
+    "reading": "At the project's own h_ew = tooth_width/2 + wire_width/2 = 2.8 mm, the phase self-inductance is 26.42 uH and the part of it living BEYOND the end of the stack is 0.0286 uH - 0.11 %.  Over a 4x sweep of the end-turn height it goes from -0.0039 uH (-0.015 %, i.e. slightly NEGATIVE: for a short tooth end turn the axial fringing of the stack's own field, which subtracts here, is as large as the end turn's added flux) to +0.1317 uH (+0.50 %) at 5.6 mm, and the cosine and linear beta profiles differ by a factor of 2-3 on that small quantity while both stay under 0.5 %.  The mutuals (M_BA 0.344 uH, M_CA 0.229 uH) do not move with h_ew at all.  So the ANSWER to the question this study was commissioned for - what does the end winding add to the inductance - is: for this tooth-wound machine, under half a percent, against a RESISTANCE end-winding factor of 1.41-1.76.  The end turns cost copper length and almost no inductance.  What they do NOT explain is the 6.3 % inductive end effect the long-stack test finds, which is inside the stack - see stage_b.long_stack_honesty_test.",
+    "updated_utc": "2026-08-05T17:23:25Z"
    }
   },
   "long_stack_honesty_test": {
-   "status": "NOT RUN in this pass",
    "_doc": "the torque form of this test needs blocker 3.  The form that a single rotor position CAN answer is the INDUCTANCE one: L_end lives in the air above the stack and is geometric, so at 4x stack it must barely move while L_stack scales with the stack and the end FRACTION falls like 1/L.  A split that failed that would not be measuring an end effect at all.",
    "how_to_run": "three solves at stack_mm 12 / 24 / 48, one phase at 1 A, magnets off, linear iron, same cross-section mesh and the same h_ew = 2.8 mm band; compare L_stack/stack_mm (must be constant) against L_end (must be constant) - loaded.flux_linkage_axial_split returns both.",
-   "why_not_now": "the machine was needed by the user's own optimizer (nine refine_proc workers), and this study is three more minutes of sustained CPU for a check that qualifies the leakage split rather than establishing it."
+   "the_inductive_end_effect_factor": {
+    "_doc": "what the honesty test turned out to MEASURE, not just to check.  L_stack/L is not constant - it falls by 4.6 % from 1x to 4x stack - and it falls as a TEXTBOOK 1/L: the two successive differences are -0.06560 and -0.03275 uH/mm, a ratio of 0.4993 against the 0.5 a 1/L law demands, and the two-parameter fit a + b/L reproduces all three rows to 2e-5 uH/mm.  So a is the L -> infinity (i.e. 2D) per-unit-length inductance and b/L is the end effect.",
+    "fit_a_uH_per_mm": 2.0681591154368464,
+    "fit_b_uH": 1.5736615765277042,
+    "fit_residual_uH_per_mm": [
+     6.619836940391366e-06,
+     -1.9859510822062276e-05,
+     1.3239673881226821e-05
+    ],
+    "per_mm_uH_per_mm": [
+     2.1993041999844287,
+     2.1337084882813455,
+     2.100956971288388
+    ],
+    "total_per_mm_uH_per_mm": [
+     2.201691219239421,
+     2.134911469235998,
+     2.1015647085268574
+    ],
+    "k_L_stack_12mm": 1.0634115061886238,
+    "k_L_total_12mm": 1.0645656820144467,
+    "L_end_uH": [
+     0.028644231059907325,
+     0.028871542911652403,
+     0.02917138744652119
+    ],
+    "reading": "the 12 mm machine's phase self-inductance is 6.46 % above what an infinite stack of the same cross-section would give per unit length (k_L = 1.0646).  Of that end effect, only 1.8 % lives BEYOND the stack-end plane; the rest is inside the stack, near the end faces, where the field is not the 2D one.  That is the INDUCTIVE counterpart of the project's end_winding_factor (1.406), which is a RESISTANCE length factor and says nothing about this."
+   },
+   "measured": {
+    "_doc": "the inductance form, RUN: stack 12 / 24 / 48 mm, one phase at 1 A, magnets off, linear iron, the SAME cross-section mesh and the same h_ew = 2.8 mm band.  L_end lives in the air above the stack and is geometric, so it must barely move; L_stack must scale with the stack, so L_stack/L must be constant and the end FRACTION must fall like 1/L.",
+    "mesh": {
+     "h_gap_mm": 0.55,
+     "h_solid_mm": 1.7,
+     "box_factor": 4.0,
+     "n_tri_section": 3619,
+     "r_box_mm": 80.0,
+     "n_stack": 5,
+     "n_cap": 6,
+     "n_ew": 4
+    },
+    "rows": [
+     {
+      "h_ew_mm": 2.8,
+      "ew_shape": "cosine",
+      "stack_mm": 12.0,
+      "L_self_H": 2.642029463087305e-05,
+      "L_stack_H": 2.6391650399813144e-05,
+      "L_end_H": 2.8644231059907324e-08,
+      "end_fraction": 0.0010841753076604801,
+      "M_BA_H": 3.4410515895928846e-07,
+      "M_CA_H": 2.2877881021378448e-07,
+      "M_BA_end_H": 1.0093264211684692e-09,
+      "M_CA_end_H": 1.0254083321096231e-09,
+      "tets": 162855,
+      "ndofs": 196936,
+      "cg_iterations": 25,
+      "source_residual": 3.113184130261238e-16,
+      "source_removed": 0.0,
+      "wall_s": 25.772181699983776,
+      "factor": 1.0,
+      "L_stack_per_mm_H": 2.199304199984429e-06
+     },
+     {
+      "h_ew_mm": 2.8,
+      "ew_shape": "cosine",
+      "stack_mm": 24.0,
+      "L_self_H": 5.1237875261663945e-05,
+      "L_stack_H": 5.120900371875229e-05,
+      "L_end_H": 2.8871542911652404e-08,
+      "end_fraction": 0.0005634804871242196,
+      "M_BA_H": 6.535835668221071e-07,
+      "M_CA_H": 4.2618961847726333e-07,
+      "M_BA_end_H": 1.0325077113028443e-09,
+      "M_CA_end_H": 1.046778871320543e-09,
+      "tets": 162855,
+      "ndofs": 196936,
+      "cg_iterations": 25,
+      "source_residual": 3.054880461903569e-16,
+      "source_removed": 0.0,
+      "wall_s": 23.557582100009313,
+      "factor": 2.0,
+      "L_stack_per_mm_H": 2.1337084882813457e-06
+     },
+     {
+      "h_ew_mm": 2.8,
+      "ew_shape": "cosine",
+      "stack_mm": 48.0,
+      "L_self_H": 0.00010087510600928916,
+      "L_stack_H": 0.00010084593462184263,
+      "L_end_H": 2.917138744652119e-08,
+      "end_fraction": 0.00028918321477486156,
+      "M_BA_H": 1.2736856430390451e-06,
+      "M_CA_H": 8.216491008958302e-07,
+      "M_BA_end_H": 1.0439204363548927e-09,
+      "M_CA_end_H": 1.057076599714274e-09,
+      "tets": 162855,
+      "ndofs": 196936,
+      "cg_iterations": 25,
+      "source_residual": 3.0499030182984797e-16,
+      "source_removed": 0.0,
+      "wall_s": 18.467513900017366,
+      "factor": 4.0,
+      "L_stack_per_mm_H": 2.100956971288388e-06
+     }
+    ],
+    "L_stack_per_mm_spread": 0.04585686624275542,
+    "L_end_spread": 0.018243406912522856,
+    "updated_utc": "2026-08-05T17:23:25Z"
+   }
   },
   "demag_under_load": {
    "_doc": "H . M_hat inside the magnets, per axial slice; negative is demagnetising.  The loaded and no-load rows are the SAME mesh and the SAME (linear) iron, so the difference between them is the armature field and nothing else.  LINEAR iron is a stated limitation, not a convenience: this spoke rotor's bridges saturate at I = 0 already, so the absolute levels are not Stage A's nonlinear ones and a converged nonlinear loaded run would move them.",
@@ -1592,7 +1978,7 @@
    ]
   },
   "torque": {
-   "status": "PARTIAL \u2014 the sliding band is proven and one CONVERGED nonlinear rotor position exists, but the co-energy CENTRAL DIFFERENCE does not, so no k_T is quoted from the energy-difference route",
+   "status": "PARTIAL - the sliding band is proven, the torque FUNCTIONAL question is SETTLED (see functional_settlement: the co-energy derivative is the torque, the flux-linkage functional is blind to the magnet term), and one CONVERGED nonlinear rotor position exists.  The nonlinear co-energy CENTRAL DIFFERENCE still does not, so no k_T is quoted from the energy-difference route.",
    "_doc": "Torque here is by the ENERGY METHOD only: T = dW'/dtheta at constant current, differenced over the sliding band's own legal angles so the two states sit on bit-identical meshes.  Maxwell stress appears nowhere.  torque3d.co_energy builds W' from the co-energy DENSITY, reading saturable iron off the same B-H curve the Picard converged on (1/2 nu |B|^2 with the frozen permeability is the co-energy of a different, linear material and on a saturated bridge differs by tens of percent).",
    "k_T": null,
    "mesh": {
@@ -1645,7 +2031,7 @@
     "who": "em_transient_eval -> fem_transient_sliding_band, P2, Newton-converged (picard_resid_max 9.65e-8, no unconverged and no fallback frames)",
     "method": "sb_postproc.hybrid_torque's energy mean <T> = (3/2) p n_par <psi_al i_be - psi_be i_al>"
    },
-   "k_T_reading": "The number that CAN be quoted is method-matched: the 2D leg's T_avg is itself the flux-linkage/energy mean, and torque3d.dq_torque applies the SAME functional to the 3D flux linkages (loaded.flux_linkage, which is the identity lambda = integral(T_1 . B) the Stage B suite already pins).  It gives T_3d = 0.56551 N.m against T_2d = 0.58631 N.m, i.e. k_T = 0.9645.  Two caveats and both matter: the 3D value is INSTANTANEOUS at rotor_angle 0 while the 2D value is a period MEAN, and the alpha-beta functional is winding-filtered, so the two agree on the mean and not frame by frame.  For scale, k_flux (Stage A, no load) is 0.9517 / 0.9594, so 0.9645 sits where an end-effect ratio should.",
+   "k_T_reading": "The number that CAN be quoted is method-matched: the 2D leg's T_avg is itself the flux-linkage/energy mean, and torque3d.dq_torque applies the SAME functional to the 3D flux linkages (loaded.flux_linkage, which is the identity lambda = integral(T_1 . B) the Stage B suite already pins).  It gives T_3d = 0.56551 N.m against T_2d = 0.58631 N.m, i.e. k_T = 0.9645.  Two caveats and both matter: the 3D value is INSTANTANEOUS at rotor_angle 0 while the 2D value is a period MEAN, and the alpha-beta functional is winding-filtered, so the two agree on the mean and not frame by frame.  For scale, k_flux (Stage A, no load) is 0.9517 / 0.9594, so 0.9645 sits where an end-effect ratio should.  [TASK 46] The 'winding-filtered / agrees on the mean and not frame by frame' caveat is now quantified rather than asserted: on this machine the instantaneous expression is 0.35 % from its own period mean at rotor_angle 0 and never more than 0.90 % anywhere in the cycle (functional_settlement.how_wrong_the_instantaneous_dq_IS_on_the_real_machine).  What the same settlement also shows is that the expression is NOT a torque at all in general - on the linear machine it misses by 10x and by sign - so k_T = 0.9645 is a method-matched RATIO and must never be quoted as a virtual-work result.",
    "linear_iron_delta_sweep": {
     "_doc": "the delta sweep the energy method needs, done on the LINEAR machine because it is cheap.  It is NOT a torque of this machine \u2014 with linear iron at mu_r 4600 the rotor bridges short the magnet flux and the torque collapses \u2014 it is there to show the central difference's behaviour against the angular step.",
     "shifts": [
@@ -1707,13 +2093,505 @@
       "T_Nm": 0.003568501038810225
      }
     ],
-    "UNRESOLVED": "On this LINEAR machine the co-energy central difference gives 1.86e-3 N.m at a 2.14 deg step and 2.02e-3 at 4.29 deg, while the flux-linkage functional at the same solve gives 1.95e-2 N.m \u2014 a factor of ten apart.  They are not the same quantity instantaneously (the alpha-beta form is winding-filtered and assumes a sinusoidal machine, and this is a 12s/14p concentrated winding), so the disagreement is not by itself a bug.  But it has NOT been settled, and until it is no k_T is quoted from the co-energy route.  The measurement that settles it is the magnets-OFF linear identity: with no magnets W' = 1/2 i^T L i exactly, so dW'/dtheta must equal 1/2 sum_ph i_ph dpsi_ph/dtheta from the same solves.  It is implemented (run STAGE=lin MAGOFF=1) and was not run to completion: the machine had 750 MB of RAM free."
+    "RESOLVED": "The factor of ten is explained and measured: see stage_b.torque.functional_settlement.  The co-energy central difference IS the torque; the flux-linkage expression is a different functional that misses the magnet's own co-energy and half of the PM alignment term, and on this machine those two omissions are larger than the torque and cancel against the term it does keep."
    },
    "what_is_missing_and_why": [
-    "the nonlinear co-energy CENTRAL DIFFERENCE: one converged rotor position costs 52 Picard sweeps and 44 minutes at this mesh, and the second and third positions did not finish.  Warm-starting is what makes them affordable and it works (see warm_start), but not by enough to fit three positions into this pass on a box that was also running the user's own work and reached 750 MB of free RAM.",
-    "the LONG-STACK honesty test and the END-WINDING leakage rows: implemented (STAGE=lstack / STAGE=leak) and queued, but they lost the machine to the nonlinear run.  Both are LINEAR and are minutes of CPU on a quiet box.",
-    "a nonlinear magnet-only COGGING sweep, which is what would show the physical cogging line the linear sweep cannot resolve."
-   ]
+    "the nonlinear co-energy CENTRAL DIFFERENCE, and it is the only thing between this module and a virtual-work k_T.  One converged rotor position costs 52 Picard sweeps and 44 minutes at this mesh (converged_position); the second and third have never finished.  Warm-starting works and saves 30-40 % (warm_start), which is not enough on a shared box.",
+    "a nonlinear magnet-only COGGING sweep, which is what would show the physical cogging line the linear sweep cannot resolve.  Its price is measured and recorded in sliding_band.noise_floor.nonlinear_cogging_sweep (~4.5 hours warm-started at this mesh); nothing blocks it but CPU.",
+    "[TASK 46, DONE] the end-winding leakage rows and the long-stack honesty test - both were queued here and both have now been run; see stage_b.end_winding_leakage.measured and stage_b.long_stack_honesty_test.measured.",
+    "[TASK 46, DONE] the functional disagreement itself - see stage_b.torque.functional_settlement."
+   ],
+   "functional_settlement": {
+    "_doc": "WHICH functional is the torque, settled by measurement.  Three expressions were in play and only one of them is a torque.  The weak form gives, exactly and on the discrete solution, W' = 1/2 int((Hc + T).B) = W_Hc + W_T with W_Hc = 1/2 int(Hc.B) and W_T = 1/2 sum_ph i_ph psi_ph, psi_ph = int(T_1ph.B) = loaded.flux_linkage.  Splitting B into its magnet and armature parts and using reciprocity, W_Hc = W'_magnet_alone + 1/2 sum i psi_pm and W_T = 1/2 sum i psi_pm + 1/2 i^T L i.  So the WINDING functional keeps the whole reluctance term, keeps exactly HALF of the PM alignment term, and misses the magnet's own co-energy entirely.  It is not an approximation to the torque; it is a different functional with the same units.",
+    "status": "SETTLED",
+    "the_discriminating_measurement": "magnets OFF, LINEAR iron.  With M = 0 the Hc term vanishes and W' = W_T POINTWISE, so dW'/dtheta and 1/2 sum_ph i_ph dpsi_ph/dtheta are one number from one set of solves.  Any difference there would be an implementation error in torque3d.co_energy or in loaded.flux_linkage and nothing else.",
+    "magnets_off": {
+     "mesh": {
+      "n_ring": 336,
+      "h_gap_mm": 0.55,
+      "h_solid_mm": 1.7,
+      "box_factor": 2.5,
+      "n_stack": 4,
+      "n_cap": 4,
+      "n_ew": 3,
+      "tets": 127908,
+      "ndofs": 161964,
+      "pitch_deg": 1.0714285714285714
+     },
+     "I_ph": {
+      "A": 21.204323896810546,
+      "B": 39.85358585161611,
+      "C": -61.05790974842665
+     },
+     "rows": [
+      {
+       "shift": -2,
+       "angle_deg": -2.142857142857143,
+       "W_J": 0.06764238711158643,
+       "W_load_J": 0.06764238710905118,
+       "W_Hc_J": 0.0,
+       "W_T_J": 0.06764238710905146,
+       "psi": {
+        "A": 0.0005145927287920971,
+        "B": 0.0010893023849310225,
+        "C": -0.0013259637864972806
+       },
+       "T_dq_Nm": -0.05234439746821588,
+       "wall_s": 16.270350299979327,
+       "cg_iterations": 22,
+       "source_residual": 2.578362564550602e-16,
+       "source_removed": 0.0
+      },
+      {
+       "shift": -1,
+       "angle_deg": -1.0714285714285714,
+       "W_J": 0.06719337095714087,
+       "W_load_J": 0.0671933709542189,
+       "W_Hc_J": 0.0,
+       "W_T_J": 0.06719337095421918,
+       "psi": {
+        "A": 0.0005363881605544164,
+        "B": 0.0010558845776843203,
+        "C": -0.00132549914146994
+       },
+       "T_dq_Nm": -0.03238056359610978,
+       "wall_s": 12.045843400002923,
+       "cg_iterations": 22,
+       "source_residual": 2.578362564550602e-16,
+       "source_removed": 0.0
+      },
+      {
+       "shift": 0,
+       "angle_deg": 0.0,
+       "W_J": 0.06666984738985196,
+       "W_load_J": 0.06666984738879092,
+       "W_Hc_J": 0.0,
+       "W_T_J": 0.0666698473887912,
+       "psi": {
+        "A": 0.0005584157675315281,
+        "B": 0.0010158397829276627,
+        "C": -0.0013268388699704992
+       },
+       "T_dq_Nm": -0.00998284543770056,
+       "wall_s": 11.562032599991653,
+       "cg_iterations": 22,
+       "source_residual": 2.578362564550602e-16,
+       "source_removed": 0.0
+      },
+      {
+       "shift": 1,
+       "angle_deg": 1.0714285714285714,
+       "W_J": 0.06604834487159222,
+       "W_load_J": 0.06604834487061954,
+       "W_Hc_J": 0.0,
+       "W_T_J": 0.06604834487061981,
+       "psi": {
+        "A": 0.0005794426387276423,
+        "B": 0.0009740957343961512,
+        "C": -0.0013264258915065955
+       },
+       "T_dq_Nm": 0.012439573975118492,
+       "wall_s": 12.1330587999837,
+       "cg_iterations": 23,
+       "source_residual": 2.578362564550602e-16,
+       "source_removed": 0.0
+      },
+      {
+       "shift": 2,
+       "angle_deg": 2.142857142857143,
+       "W_J": 0.0653940721394612,
+       "W_load_J": 0.06539407213650696,
+       "W_Hc_J": 0.0,
+       "W_T_J": 0.06539407213650723,
+       "psi": {
+        "A": 0.0005969048469085152,
+        "B": 0.0009330811722957081,
+        "C": -0.0013257012939107758
+       },
+       "T_dq_Nm": 0.03314220960872405,
+       "wall_s": 11.946308800019324,
+       "cg_iterations": 23,
+       "source_residual": 2.578362564550602e-16,
+       "source_removed": 0.0
+      }
+     ],
+     "central_differences": [
+      {
+       "dm_total": 2,
+       "d_theta_deg": 2.142857142857143,
+       "T_coenergy_Nm": -0.030615742329350683,
+       "T_winding_functional_Nm": -0.030615742277230934,
+       "T_magnet_term_Nm": 0.0
+      },
+      {
+       "dm_total": 4,
+       "d_theta_deg": 4.285714285714286,
+       "T_coenergy_Nm": -0.03005775708106475,
+       "T_winding_functional_Nm": -0.03005775708666634,
+       "T_magnet_term_Nm": 0.0
+      }
+     ],
+     "identities": [
+      {
+       "shift": -2,
+       "rel_W_minus_load": 3.748019394555806e-11,
+       "rel_load_minus_split": 4.1032815076265925e-15
+      },
+      {
+       "shift": -1,
+       "rel_W_minus_load": 4.3485959720626376e-11,
+       "rel_load_minus_split": 4.130701469723809e-15
+      },
+      {
+       "shift": 0,
+       "rel_W_minus_load": 1.5914842858868858e-11,
+       "rel_load_minus_split": 4.163137715580763e-15
+      },
+      {
+       "shift": 1,
+       "rel_W_minus_load": 1.472679249651058e-11,
+       "rel_load_minus_split": 3.992196456474222e-15
+      },
+      {
+       "shift": 2,
+       "rel_W_minus_load": 4.5176081879042484e-11,
+       "rel_load_minus_split": 4.244356515631951e-15
+      }
+     ]
+    },
+    "pinned_by": [
+     "tests/test_static3d_band.py::test_with_the_magnets_off_the_two_torque_functionals_are_ONE_number",
+     "tests/test_static3d_band.py::test_with_the_magnets_ON_the_winding_functional_is_blind_to_the_magnet_term"
+    ],
+    "updated_utc": "2026-08-05T17:23:25Z",
+    "magnets_on": {
+     "mesh": {
+      "n_ring": 336,
+      "h_gap_mm": 0.55,
+      "h_solid_mm": 1.7,
+      "box_factor": 2.5,
+      "n_stack": 4,
+      "n_cap": 4,
+      "n_ew": 3,
+      "tets": 127908,
+      "ndofs": 161964,
+      "pitch_deg": 1.0714285714285714
+     },
+     "rows": [
+      {
+       "shift": -3,
+       "angle_deg": -3.2142857142857144,
+       "W_J": 1.3032840295092787,
+       "W_load_J": 1.3032840295068384,
+       "W_Hc_J": 1.2362858476934018,
+       "W_T_J": 0.06699818181343686,
+       "psi": {
+        "A": 0.0005224499204242223,
+        "B": 0.0010611358432586703,
+        "C": -0.0013205184749528174
+       },
+       "T_dq_Nm": -0.0401862045595833,
+       "wall_s": 12.024773500015726,
+       "cg_iterations": 21,
+       "source_residual": 1.7025422688970255e-16,
+       "source_removed": 0.0
+      },
+      {
+       "shift": -2,
+       "angle_deg": -2.142857142857143,
+       "W_J": 1.3032193207120781,
+       "W_load_J": 1.3032193207110294,
+       "W_Hc_J": 1.2365444162467683,
+       "W_T_J": 0.06667490446426151,
+       "psi": {
+        "A": 0.0005473635187162381,
+        "B": 0.0010437434708887143,
+        "C": -0.0013126295330852537
+       },
+       "T_dq_Nm": -0.02483805984721769,
+       "wall_s": 9.587148599995999,
+       "cg_iterations": 21,
+       "source_residual": 1.7025422688970255e-16,
+       "source_removed": 0.0
+      },
+      {
+       "shift": -1,
+       "angle_deg": -1.0714285714285714,
+       "W_J": 1.3033514898760374,
+       "W_load_J": 1.3033514898744598,
+       "W_Hc_J": 1.236835284265327,
+       "W_T_J": 0.0665162056091332,
+       "psi": {
+        "A": 0.0005729246965635131,
+        "B": 0.0010129025615939198,
+        "C": -0.001318684696508487
+       },
+       "T_dq_Nm": -0.0037037596599481405,
+       "wall_s": 8.969517799996538,
+       "cg_iterations": 21,
+       "source_residual": 1.7025422688970255e-16,
+       "source_removed": 0.0
+      },
+      {
+       "shift": 0,
+       "angle_deg": 0.0,
+       "W_J": 1.3034333416993857,
+       "W_load_J": 1.3034333416971857,
+       "W_Hc_J": 1.2371381118713574,
+       "W_T_J": 0.06629522982582854,
+       "psi": {
+        "A": 0.0005984770686150445,
+        "B": 0.0009760171521195366,
+        "C": -0.0013266483411081959
+       },
+       "T_dq_Nm": 0.019580339310165867,
+       "wall_s": 9.021755500027211,
+       "cg_iterations": 21,
+       "source_residual": 1.7025422688970255e-16,
+       "source_removed": 0.0
+      },
+      {
+       "shift": 1,
+       "angle_deg": 1.0714285714285714,
+       "W_J": 1.3034229243097228,
+       "W_load_J": 1.303422924307972,
+       "W_Hc_J": 1.2374435045136567,
+       "W_T_J": 0.06597941979431571,
+       "psi": {
+        "A": 0.0006226654399953223,
+        "B": 0.0009377956825105045,
+        "C": -0.0013328513784818892
+       },
+       "T_dq_Nm": 0.04261964720771132,
+       "wall_s": 8.92009010000038,
+       "cg_iterations": 21,
+       "source_residual": 1.7025422688970255e-16,
+       "source_removed": 0.0
+      },
+      {
+       "shift": 2,
+       "angle_deg": 2.142857142857143,
+       "W_J": 1.3033744595558532,
+       "W_load_J": 1.3033744595533883,
+       "W_Hc_J": 1.2377460340881963,
+       "W_T_J": 0.0656284254651926,
+       "psi": {
+        "A": 0.0006426986821518063,
+        "B": 0.0009005343592592856,
+        "C": -0.0013387182241203603
+       },
+       "T_dq_Nm": 0.06361982513426623,
+       "wall_s": 9.51738090001163,
+       "cg_iterations": 21,
+       "source_residual": 1.7025422688970255e-16,
+       "source_removed": 0.0
+      },
+      {
+       "shift": 3,
+       "angle_deg": 3.2142857142857144,
+       "W_J": 1.3036904459276575,
+       "W_load_J": 1.3036904459245995,
+       "W_Hc_J": 1.2380271580307867,
+       "W_T_J": 0.06566328789381298,
+       "psi": {
+        "A": 0.000653610995085864,
+        "B": 0.0008658089314921696,
+        "C": -0.0013587364242374385
+       },
+       "T_dq_Nm": 0.08112373204607858,
+       "wall_s": 9.012981200008653,
+       "cg_iterations": 21,
+       "source_residual": 1.7025422688970255e-16,
+       "source_removed": 0.0
+      }
+     ],
+     "central_differences": [
+      {
+       "dm_total": 2,
+       "d_theta_deg": 2.142857142857143,
+       "T_coenergy_Nm": 0.0019100160623043304,
+       "T_winding_functional_Nm": -0.01435259545604878,
+       "T_magnet_term_Nm": 0.016262611513723334
+      },
+      {
+       "dm_total": 4,
+       "d_theta_deg": 4.285714285714286,
+       "T_coenergy_Nm": 0.00207405356359827,
+       "T_winding_functional_Nm": -0.01399039366566884,
+       "T_magnet_term_Nm": 0.016064447210337427
+      }
+     ],
+     "identities": [
+      {
+       "shift": -3,
+       "rel_W_minus_load": 1.8724009140547216e-12,
+       "rel_load_minus_split": 1.7037314959583507e-16
+      },
+      {
+       "shift": -2,
+       "rel_W_minus_load": 8.047123399673854e-13,
+       "rel_load_minus_split": 3.407632182799208e-16
+      },
+      {
+       "shift": -1,
+       "rel_W_minus_load": 1.2104385733601276e-12,
+       "rel_load_minus_split": 3.407286624522428e-16
+      },
+      {
+       "shift": 0,
+       "rel_W_minus_load": 1.6878637941920978e-12,
+       "rel_load_minus_split": 1.7035363284163772e-16
+      },
+      {
+       "shift": 1,
+       "rel_W_minus_load": 1.3432491305621974e-12,
+       "rel_load_minus_split": 3.407099887289795e-16
+      },
+      {
+       "shift": 2,
+       "rel_W_minus_load": 1.8911811116144893e-12,
+       "rel_load_minus_split": 5.110839865646516e-16
+      },
+      {
+       "shift": 3,
+       "rel_W_minus_load": 2.3456475489099512e-12,
+       "rel_load_minus_split": 1.7032003695290832e-16
+      }
+     ]
+    },
+    "the_three_terms": {
+     "_doc": "the torque of the LINEAR machine split into the three terms it is made of.  Superposition is legal here and only here - the iron is LINEAR, so psi_pm = psi(magnets on) - psi(magnets off) is exact.  W' = W'_mm(theta) + sum_ph i_ph psi_pm,ph(theta) + 1/2 i^T L(theta) i, so T = dW'_mm/dtheta [cogging] + sum i dpsi_pm/dtheta [PM alignment] + 1/2 i^T dL/dtheta i [reluctance].",
+     "rows": [
+      {
+       "dm_total": 2,
+       "d_theta_deg": 2.142857142857143,
+       "T_coenergy_Nm": 0.0019100160623043304,
+       "T_winding_functional_Nm": -0.01435259545604878,
+       "T_magnet_term_Nm": 0.016262611513723334,
+       "reluctance_Nm": -0.030615742277230934,
+       "pm_alignment_Nm": 0.03252629364236441,
+       "cogging_Nm": -5.353074588702877e-07,
+       "sum_of_three_Nm": 0.0019100160576746052,
+       "closure_abs_Nm": 4.629725205637647e-12,
+       "magoff_T_coenergy_Nm": -0.030615742329350683,
+       "magoff_T_winding_Nm": -0.030615742277230934,
+       "magoff_identity_abs_Nm": 5.211974948848841e-11,
+       "T_dq_at_zero_Nm": 0.019580339310165867,
+       "T_dq_magoff_at_zero_Nm": -0.00998284543770056
+      },
+      {
+       "dm_total": 4,
+       "d_theta_deg": 4.285714285714286,
+       "T_coenergy_Nm": 0.00207405356359827,
+       "T_winding_functional_Nm": -0.01399039366566884,
+       "T_magnet_term_Nm": 0.016064447210337427,
+       "reluctance_Nm": -0.03005775708666634,
+       "pm_alignment_Nm": 0.03213472684199514,
+       "cogging_Nm": -2.9162106601442195e-06,
+       "sum_of_three_Nm": 0.0020740535446686567,
+       "closure_abs_Nm": 1.892961308536112e-11,
+       "magoff_T_coenergy_Nm": -0.03005775708106475,
+       "magoff_T_winding_Nm": -0.03005775708666634,
+       "magoff_identity_abs_Nm": 5.601592106829756e-12,
+       "T_dq_at_zero_Nm": 0.019580339310165867,
+       "T_dq_magoff_at_zero_Nm": -0.00998284543770056
+      }
+     ],
+     "reading": "At a 2.14 deg step: reluctance -3.061574e-02, PM alignment +3.252629e-02, cogging -5.35e-07 N.m, summing to +1.910016e-03 against the co-energy derivative's +1.910016e-03 - they close to 4.6e-12 N.m.  The WINDING functional is reluctance + HALF the alignment = -1.435260e-02: the two largest terms in this machine are the reluctance and the alignment, they are within 6 % of each other and OPPOSITE in sign, so dropping half of one of them does not perturb the answer, it replaces it.  The cogging term is 5.4e-07 N.m, which is under the band's own 2.6e-5 N.m noise floor and is consistent with the linear machine having no resolvable cogging at all.",
+     "and_dq_torque": "the magnets-OFF row is the cleanest statement about dq_torque: there the true torque is PURE reluctance, -3.061574e-02 N.m by both honest routes, while the instantaneous (3/2) p (psi_al i_be - psi_be i_al) reads -9.982845e-03 - a third of it, with no magnet anywhere in the problem.  That is what a fundamental-only, winding-filtered mean identity does to a 12s/14p concentrated winding when it is evaluated at one instant."
+    },
+    "the_ten_fold_disagreement_explained": {
+     "_doc": "the very sweep the Stage B pass recorded as UNRESOLVED, re-read with the SAME solves' flux linkages.  n_ring 336, h_gap 0.55 / h_solid 1.70, box 2.5, n_ew 2, 116280 tets, LINEAR iron, magnets ON, the Stage B operating point.",
+     "shifts": [
+      -3,
+      -2,
+      -1,
+      0,
+      1,
+      2,
+      3
+     ],
+     "W_J": [
+      1.3030611140672925,
+      1.3029966183268522,
+      1.3031283697972995,
+      1.303209441775467,
+      1.303197943549715,
+      1.3031478132025571,
+      1.303461498947573
+     ],
+     "W_T_J": [
+      0.06677384576644883,
+      0.06645147598880789,
+      0.06629311434067323,
+      0.06607215555924612,
+      0.06575607761470516,
+      0.06540422057407344,
+      0.06543756569625175
+     ],
+     "W_Hc_J": [
+      1.2362872683008437,
+      1.2365451423380442,
+      1.2368352554566262,
+      1.2371372862162209,
+      1.2374418659350097,
+      1.2377435926284837,
+      1.2380239332513212
+     ],
+     "T_dq_Nm": [
+      -0.04019779429064477,
+      -0.02486696183395799,
+      -0.003754590039290193,
+      0.019505174524402966,
+      0.042519939318391715,
+      0.06349647756794492,
+      0.08097779388667475
+     ],
+     "central_differences": [
+      {
+       "dm_total": 2,
+       "d_theta_deg": 2.142857142857143,
+       "T_coenergy_Nm": 0.0018602651098703266,
+       "T_winding_functional_Nm": -0.014359304326030551,
+       "T_magnet_term_Nm": 0.016219569435900506
+      },
+      {
+       "dm_total": 4,
+       "d_theta_deg": 4.285714285714286,
+       "T_coenergy_Nm": 0.002021326594442611,
+       "T_winding_functional_Nm": -0.014000773578518241,
+       "T_magnet_term_Nm": 0.01602210017296141
+      },
+      {
+       "dm_total": 6,
+       "d_theta_deg": 6.428571428571429,
+       "T_coenergy_Nm": 0.003568501038810225,
+       "T_winding_functional_Nm": -0.011909832397514806,
+       "T_magnet_term_Nm": 0.015478333436324659
+      }
+     ],
+     "reading": "at a 2.14 deg step the torque is dW'/dtheta = 1.860e-03 N.m, the winding functional is -1.436e-02 and the magnet term it cannot see is 1.622e-02.  The two large terms very nearly cancel, so the winding functional alone is wrong by an order of magnitude AND by sign.  That is the whole of the factor of ten."
+    },
+    "how_wrong_the_instantaneous_dq_IS_on_the_real_machine": {
+     "_doc": "the linear machine says the instantaneous dq expression is not a torque; it does NOT say how big the error is on the machine k_T is actually quoted for.  That is measurable without any new 3D work: the 2D transient already solves every frame of the real, NONLINEAR machine at this operating point, so its own psi and i series read back through the same formula give the instantaneous value frame by frame against the mean hybrid_torque reports.  Stage A materials pinned in-process (F45SH_120C), P2, Newton-converged (field residual 9.6e-8).",
+     "n_frames": 36,
+     "T_mean_Nm": 0.5862904608528252,
+     "T_min_Nm": 0.581002567579826,
+     "T_max_Nm": 0.5904501782197017,
+     "T_at_rotor_angle_0_Nm": 0.5842113061989038,
+     "swing_pct_of_mean": 1.6114215172685973,
+     "worst_frame_error_pct": 0.9019238118435925,
+     "error_at_rotor_angle_0_pct": -0.3546287706774259,
+     "T_avg_reproduces_the_passport": {
+      "here": 0.5862904608528252,
+      "passport": 0.5863095394873835
+     },
+     "wall_s": 159.8,
+     "reading": "On the REAL machine the instantaneous expression swings 1.61 % peak-to-peak about its own mean, the worst frame is 0.90 % off it, and at rotor_angle 0 - the angle the 3D solve sits at - it is -0.35 % off.  So the method error k_T = 0.9645 inherits from evaluating a MEAN identity at one instant is of order 0.4 % and bounded by 0.9 %, not the order of magnitude the linear machine shows.  The reason the two are so different is the physics, not the formula: on the linear machine the reluctance and alignment terms are 16x the net torque and nearly cancel, so any functional error is enormous relative to what is left; on the saturated machine the bridges stop shorting the magnet, the alignment term dominates and the machine behaves like the sinusoidal one the expression assumes.  This bounds the 2D leg's instantaneous error directly and the 3D leg's by inheritance - same machine, same winding filter - which is an assumption and is stated as one."
+    },
+    "what_this_means_for_k_T": "The honest torque of a PM machine is the CO-ENERGY derivative dW'/dtheta at constant current, and it is the only torque this module reports.  dq_torque is a third expression again: sb_postproc.hybrid_torque states it is the air-gap power balance P = T omega, whose virtual-work identity holds for the MEAN over an electrical period with the currents rotating with the rotor.  Evaluated at ONE rotor angle with the currents frozen it is not that mean: on the linear machine it swings from -0.040 to +0.081 N.m over 7 ring pitches while the true torque stays near +1.9e-3.  The k_T = 0.9645 quoted below is therefore method-matched and NOT a virtual-work number; it is the same instantaneous formula applied to both legs, and it carries that caveat.  How big that caveat is has now been MEASURED on the real machine rather than left open: see how_wrong_the_instantaneous_dq_IS_on_the_real_machine - 0.35 % at rotor_angle 0, 0.90 % worst case over the cycle.  k_T = 0.9645 therefore stands, with a stated method error of order 0.4 %, and it is still NOT a virtual-work number: the co-energy central difference that would be one needs two more converged nonlinear rotor positions and remains unpaid."
+   },
+   "k_T_note": "deliberately null.  k_T_flux_linkage = 0.9645 is the method-matched ratio and is quoted under that name so it can never be mistaken for a virtual-work number; this key stays empty until the co-energy central difference pays for it."
   },
   "blockers": {
    "closed_winding": {
@@ -1842,7 +2720,13 @@
      1.7520669175648313e-06
     ],
     "nyquist_over_max": 0.2511874756042909,
-    "reading": "the Nyquist bin \u2014 a SAWTOOTH at the relabelling period, which is the signature of a mis-weld and which no machine can produce \u2014 is not the dominant line (0.25 of the largest).  The absolute floor is ~1.3e-5 N.m, four to five orders below the loaded torque, so it does not limit k_T.  What this sweep does NOT do is show the physical cogging line; that needs nonlinear iron and was not affordable in this pass."
+    "reading": "the Nyquist bin \u2014 a SAWTOOTH at the relabelling period, which is the signature of a mis-weld and which no machine can produce \u2014 is not the dominant line (0.25 of the largest).  The absolute floor is ~1.3e-5 N.m, four to five orders below the loaded torque, so it does not limit k_T.  What this sweep does NOT do is show the physical cogging line; that needs nonlinear iron and was not affordable in this pass.",
+    "nonlinear_cogging_sweep": {
+     "status": "QUEUED \u2014 not affordable in this pass, and here is the price",
+     "_doc": "what would show the PHYSICAL cogging line the linear sweep cannot resolve: a magnet-only sweep with NONLINEAR iron over one slot pitch.  The linear sweep above measures the band's own discretisation floor (2.6e-5 N.m) and not cogging, because with unsaturated bridges the gap fundamental is 0.058 T against the saturated machine's 1.47.",
+     "cost_basis": "MEASURED, not guessed: one CONVERGED nonlinear position of this machine is 52 damped-Picard sweeps and 2660 s at 161964 edge dofs (stage_b.torque.converged_position), and warm-starting from the neighbouring angle saves 30-40 % (stage_b.warm_start).  A sweep needs at least 9 positions to resolve a line and its harmonics, so 9 x ~1800 s warm = ~4.5 hours of sustained single-core work, or ~1.5-2 hours on the coarser n_ring = 168 / 55836-tet mesh at a floor that is then the coarse mesh's, not this one's.",
+     "why_not_now": "this pass shared the box with the user's own optimizer; a 4-hour sustained run is not a background task.  Nothing blocks it technically \u2014 band + torque3d already do it (the driver's cog stage) \u2014 it is purely CPU."
+    }
    }
   },
   "warm_start": {

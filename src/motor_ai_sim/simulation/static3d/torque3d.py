@@ -38,6 +38,60 @@ that is for each material this machine has, because the temptation to use
   LAW THE SOLVER USED, which is what a virtual-work derivative needs, rather
   than of some other homogenisation.
 
+Why the flux-linkage functional is NOT the torque of a PM machine
+----------------------------------------------------------------
+Three expressions are in play in this module and only one of them is a torque.
+The weak form gives, exactly and on the discrete solution,
+
+    W'  =  1/2 integral((Hc + T) . B)  =  W_Hc  +  W_T,
+    W_Hc = 1/2 integral(Hc . B),     W_T = 1/2 sum_ph i_ph psi_ph
+
+with ``psi_ph = integral(T_1ph . B)`` — :func:`loaded.flux_linkage`.  Splitting
+``B`` into its magnet and armature parts and using reciprocity,
+
+    W_Hc = W'_magnet_alone  +  1/2 sum_ph i_ph psi_pm,ph
+    W_T  = 1/2 sum_ph i_ph psi_pm,ph  +  1/2 i^T L i
+
+so the WINDING functional ``dW_T/dtheta`` keeps the whole reluctance term, keeps
+exactly HALF of the PM alignment term, and misses the magnet's own co-energy
+(the cogging term) entirely.  It is not a torque and it is not an approximation
+to one — it is a different functional that happens to have the same units.
+
+Measured on this machine (linear iron, the Stage B operating point, a 2.14 deg
+central difference; the passport records both sweeps in full under
+``stage_b.torque.functional_settlement``):
+
+    T = dW'/dtheta      =  +1.910e-3 N.m     <-- the torque
+    dW_T/dtheta         =  -1.435e-2 N.m     <-- the winding functional
+    dW_Hc/dtheta        =  +1.626e-2 N.m     <-- what it cannot see
+
+and, because the iron is linear, that splits further into the three terms it is
+actually made of (psi_pm = psi(magnets on) - psi(magnets off) is exact here):
+
+    reluctance     1/2 i^T dL/dtheta i    =  -3.0616e-2 N.m
+    PM alignment   sum i dpsi_pm/dtheta   =  +3.2526e-2 N.m
+    cogging        dW'_mm/dtheta          =  -5.4e-7   N.m
+                                             ----------
+                                             +1.9100e-3 N.m   (closes to 5e-12)
+
+The two large terms are within 6 % of each other and opposite in sign, so
+dropping half of one of them does not perturb the answer — it replaces it.  That
+is the whole of the "factor of ten" the Stage B pass left unresolved.
+
+Neither implementation is wrong, and the measurement that proves it is the
+magnets-OFF one: with ``M = 0`` and linear iron ``W_Hc`` vanishes and
+``W' = W_T`` POINTWISE, so the two derivatives are one number from one set of
+solves — measured, -3.061574e-2 N.m by both, agreeing to 5e-11 N.m.  It is a
+test, not a script: ``tests/test_static3d_band.py::
+test_with_the_magnets_off_the_two_torque_functionals_are_ONE_number``, with the
+magnets-ON decomposition pinned beside it.
+
+:func:`dq_torque` is a third thing again: the ``(3/2) p (psi_al i_be - psi_be
+i_al)`` air-gap power balance, which ``sb_postproc.hybrid_torque`` uses and
+states is a MEAN identity over an electrical period.  Instantaneously it is not
+the torque either — with the magnets OFF, where the answer is pure reluctance
+and both honest routes say -3.06e-2 N.m, it reads -9.98e-3.
+
 Multipliers: the model is one anti-periodic sector of the machine's ``n_sectors``
 and the axial half ``z >= 0``, so every energy here is multiplied by
 ``2 * n_sectors``.  Both B and the sources change sign together between sectors,
@@ -186,6 +240,13 @@ class BandedModel:
     magnets_off: bool = False
     flux_tight_outer: bool = True
     verbose: bool = False
+    #: a PRE-BUILT source field, as ``loaded.solve_sector_loaded`` accepts one.
+    #: Sampling ``Psi`` is the expensive part of building a winding, and the
+    #: identity ``W' = 1/2 sum_ph i_ph psi_ph`` below is only exact when the
+    #: solve's T and the unit windings the linkages are read with come off the
+    #: SAME grid — so a caller that builds both has to be able to hand this one
+    #: in rather than have a second one built behind its back.
+    winding_field: Optional[object] = None
 
     def __post_init__(self):
         from skfem import Basis
@@ -203,8 +264,8 @@ class BandedModel:
                                     linear_iron=self.linear_iron,
                                     laminated_iron=self.laminated_iron,
                                     magnets_off=self.magnets_off)
-        self.winding = None
-        if self.I_ph is not None:
+        self.winding = self.winding_field
+        if self.I_ph is not None and self.winding is None:
             self.winding = build_winding_T(self.section, dict(self.I_ph),
                                            stack_mm=self.stack_mm,
                                            h_ew_mm=self.h_ew_mm,
@@ -392,9 +453,26 @@ def dq_torque(psi: Dict[str, float], I_ph: Dict[str, float], pole_pairs: int,
 
     Exactly the convention ``sb_postproc.hybrid_torque`` uses for the 2D mean,
     reproduced here so the 3D flux linkages can be read through the SAME formula.
-    It is a cross-check and nothing more: instantaneously it is the winding-
-    FILTERED torque and cannot see cogging, so it agrees with the co-energy
-    derivative on the mean and not frame by frame.
+
+    It is a METHOD-MATCHED comparison and nothing more.  ``hybrid_torque`` states
+    what it is: the air-gap power balance ``P = T omega``, whose virtual-work
+    identity holds for the MEAN ``<T> = (3/2) p <psi_al i_be - psi_be i_al>`` over
+    an electrical period with the currents rotating with the rotor.  Evaluated at
+    ONE rotor angle with the currents held fixed — which is all a static 3D solve
+    can offer — it is not that mean and it is not the torque.  Measured on the
+    linear machine over 7 ring pitches (the passport's
+    ``stage_b.torque.functional_settlement``) it swings from -0.040 to +0.081 N.m
+    while the true torque ``dW'/dtheta`` stays near +1.9e-3.
+
+    How big that error is on the machine ``k_T`` is quoted for is a separate
+    question and is answered separately, because the linear machine is a
+    pathological case (its reluctance and alignment terms are 16x the net torque
+    and nearly cancel).  On the REAL nonlinear machine, read frame by frame off
+    the 2D transient's own psi and i, this expression is within 0.35 % of its
+    period mean at rotor_angle 0 and never more than 0.90 % anywhere in the
+    cycle.  The torque is :func:`torque_central_difference`; this is here so a 3D
+    number can be laid against the 2D leg through the 2D leg's own formula, with
+    that measured caveat carried.
     """
     s, kc = 2.0 / 3.0, math.sqrt(3.0) / 2.0
     pa, pb, pc = psi["A"], psi["B"], psi["C"]

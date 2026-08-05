@@ -417,6 +417,11 @@ stage_b
   end_winding_leakage  dict   rows over h_ew and shape: L_self, L_stack,
                               L_end, end fraction, mutuals — the split of the
                               SAME integral at the stack end plane
+  long_stack_honesty_test
+                       dict   the same split at 1x / 2x / 4x stack.  L_end is
+                              geometric and must not move; L_stack must scale
+                              with the stack.  A split that failed this would
+                              not be measuring an end effect at all.
   demag_under_load     dict   per-slice H.M_hat, end vs mid, plus the I = 0
                               Stage A numbers for contrast
   cost                 list   one row per solve: tets, dofs, CG iterations,
@@ -429,7 +434,12 @@ stage_b
                               it is divided by, and k_T.  This key must never
                               carry a number the sliding band has not earned:
                               while a proof was open it carried the REASON
-                              instead, and it may do so again.
+                              instead, and it may do so again.  Its
+                              ``functional_settlement`` sub-block is the
+                              measurement that decides WHICH functional the
+                              torque is — the magnets-off identity and the
+                              magnets-on decomposition W' = W_Hc + W_T; read it
+                              before quoting any torque from this module.
   warm_start           dict   the measured cost of a nonlinear rotor position
                               with and without carrying the previous angle's
                               permeability in — sweeps, residual and wall time

@@ -42,6 +42,7 @@ import numpy as np
 import pytest
 
 from motor_ai_sim.simulation.static3d import band
+from motor_ai_sim.simulation.static3d import loaded as LD
 from motor_ai_sim.simulation.static3d import torque3d
 from motor_ai_sim.simulation.static3d.loaded import _regions_for
 from motor_ai_sim.simulation.static3d.motor_geometry import (MM,
@@ -309,6 +310,137 @@ def test_the_two_co_energy_routes_agree_on_a_linear_machine(model):
     a = model.co_energy(ls)
     b = model.co_energy_linear(ls)
     assert abs(a - b) / abs(a) < 1e-9, (a, b)
+
+
+# --------------------------------------------------------------------------
+# WHICH functional is the torque — the identity that settles it
+# --------------------------------------------------------------------------
+
+#: the Stage B operating point (``config/end_effect_3d.json``
+#: ``stage_b.operating_point.I_ph``).  Any balanced set would do for the
+#: identities below; this one is used so a failure is read against the numbers
+#: the passport quotes.
+I_OP = {"A": 21.204323896810546, "B": 39.85358585161611,
+        "C": -61.05790974842665}
+#: a COARSE Psi grid — the identities are algebraic, so what matters is that the
+#: solve's source field and the unit windings the linkages are read with come
+#: off the SAME grid, not how finely that grid resolves the copper's edges.
+PSI_GRID = dict(n_r=61, n_theta=1801)
+#: ``cg`` is called with ``rtol``, so the ungauged system's achievable residual
+#: floor moves with the LOAD — and a magnets-off load is the winding's alone,
+#: some forty times smaller than the magnet's.  ``CG_TOL`` = 1e-10 then sits
+#: UNDER that floor and grinds to the 40000-iteration cap: measured on this
+#: 63596-dof model, >20 minutes against 8 s at 1e-8.  1e-8 is not a weaker check
+#: of the identities below.  CG converges in the ENERGY norm and the energy is
+#: what is compared, so the identity comes out at 1.4e-11 at every tolerance
+#: from 1e-6 to 1e-8 (13, 14 and 15 iterations) — it is the residual that is
+#: unreachable, not the energy that is inaccurate.
+CG_TOL_LOADED = 1e-8
+
+
+def _loaded_model(section, banded, magnets_off: bool):
+    """The tiny model with a winding, plus the unit windings that read it."""
+    from motor_ai_sim.simulation.static3d.winding3d import build_winding_T
+
+    h_ew = (0.5 * float(section.geo["tooth_width"])
+            + 0.5 * float(section.geo["wire_width"]))
+    kw = dict(h_ew_mm=h_ew, **PSI_GRID)
+    wt = build_winding_T(section, dict(I_OP), **kw)
+    units = {ph: build_winding_T(section,
+                                 {p: (1.0 if p == ph else 0.0)
+                                  for p in LD.PHASES}, **kw)
+             for ph in LD.PHASES}
+    mdl = torque3d.BandedModel(section, banded, n_stack=N_STACK, n_cap=N_CAP,
+                               n_ew=2, h_ew_mm=h_ew, I_ph=dict(I_OP),
+                               winding_field=wt, linear_iron=True,
+                               magnets_off=magnets_off)
+    return mdl, units
+
+
+@pytest.fixture(scope="module")
+def loaded_model_magnets_off(section, banded):
+    return _loaded_model(section, banded, magnets_off=True)
+
+
+@pytest.fixture(scope="module")
+def loaded_model_magnets_on(section, banded):
+    return _loaded_model(section, banded, magnets_off=False)
+
+
+def _sweep(mdl, units, shifts=(-1, 0, 1)):
+    """W', the winding's own half-linkage energy, and the magnet term."""
+    W, W_T, W_Hc = [], [], []
+    for m in shifts:
+        ls = mdl.solve(m, cg_tol=CG_TOL_LOADED)
+        W.append(mdl.co_energy(ls))
+        psi = LD.flux_linkage(ls, units)
+        W_T.append(0.5 * sum(I_OP[p] * psi[p] for p in LD.PHASES))
+        W_Hc.append(torque3d.co_energy_from_load(ls.sol, mdl.section.n_sectors,
+                                                 T_field=None))
+    return np.array(W), np.array(W_T), np.array(W_Hc)
+
+
+def test_with_the_magnets_off_the_two_torque_functionals_are_ONE_number(
+        loaded_model_magnets_off):
+    """The measurement that settles which torque functional is which.
+
+    With no magnets and linear iron the whole co-energy is the winding's own,
+    ``W' = 1/2 i^T L i = 1/2 sum_ph i_ph psi_ph``, so
+
+        dW'/dtheta   and   1/2 sum_ph i_ph dpsi_ph/dtheta
+
+    are the SAME number computed from the SAME solves.  Any difference here is
+    an implementation error in one of the two — in ``torque3d.co_energy`` (the
+    B-H reading of every element) or in ``loaded.flux_linkage`` (the
+    ``integral(T_1 . B)`` pairing) — and not a modelling question.  The
+    pointwise form is asserted first because it is the stronger statement: the
+    derivative is a difference of two numbers that are already equal.
+
+    What this test does NOT say is that the two agree on a machine WITH magnets.
+    They do not, they must not, and the test below measures by how much."""
+    mdl, units = loaded_model_magnets_off
+    W, W_T, W_Hc = _sweep(mdl, units)
+    assert np.allclose(W_Hc, 0.0, atol=1e-14 * abs(W).max()), W_Hc.tolist()
+    rel = np.abs(W - W_T) / np.abs(W)
+    assert rel.max() < 1e-9, (W.tolist(), W_T.tolist(), rel.tolist())
+    dth = 2.0 * mdl.pitch_rad
+    T_energy = (W[2] - W[0]) / dth
+    T_winding = (W_T[2] - W_T[0]) / dth
+    # the derivative divides a difference of ~1e-5 J by the step, so a 1e-9
+    # relative agreement on W becomes ~1e-4 on T — stated rather than hidden
+    assert abs(T_energy - T_winding) <= 1e-3 * abs(T_energy), (T_energy,
+                                                               T_winding)
+
+
+def test_with_the_magnets_ON_the_winding_functional_is_blind_to_the_magnet_term(
+        loaded_model_magnets_on):
+    """And the blind spot is a NAMED, exact quantity, not a discrepancy.
+
+    The weak form gives ``W' = 1/2 integral((Hc + T) . B)`` exactly, so
+
+        W'  =  1/2 integral(Hc . B)  +  1/2 sum_ph i_ph psi_ph
+            =  [ W'_magnet_alone + 1/2 sum_ph i_ph psi_pm,ph ]  +  W_T
+
+    (the bracket splits by reciprocity).  The winding functional sees ``W_T``
+    and nothing else, so as a TORQUE it misses the magnet's own co-energy and
+    keeps only HALF of the PM alignment term.  This asserts the decomposition
+    to round-off and then asserts that the missing piece MOVES — a magnet term
+    that happened to be constant in theta would make the omission harmless, and
+    on this machine it is not."""
+    mdl, units = loaded_model_magnets_on
+    W, W_T, W_Hc = _sweep(mdl, units)
+    rel = np.abs(W - (W_Hc + W_T)) / np.abs(W)
+    assert rel.max() < 1e-9, (W.tolist(), W_Hc.tolist(), W_T.tolist(),
+                              rel.tolist())
+    dth = 2.0 * mdl.pitch_rad
+    T_energy = (W[2] - W[0]) / dth
+    T_winding = (W_T[2] - W_T[0]) / dth
+    T_magnet = (W_Hc[2] - W_Hc[0]) / dth
+    assert T_energy == pytest.approx(T_winding + T_magnet, rel=1e-6)
+    # the omitted term is not a rounding detail: it is the same size as the
+    # torque itself or larger, and on the real cross-section it carries the
+    # opposite sign to the winding term
+    assert abs(T_magnet) > 0.1 * abs(T_energy), (T_energy, T_magnet)
 
 
 # --------------------------------------------------------------------------

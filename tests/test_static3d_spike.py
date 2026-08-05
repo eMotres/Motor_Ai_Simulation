@@ -431,6 +431,69 @@ def test_picard_answer_does_not_depend_on_the_relaxation_path(ring_mesh):
     assert out[0] == pytest.approx(out[1], rel=0.02), out
 
 
+def test_a_warm_start_gets_a_first_step_scaled_to_how_warm_it_is(ring_mesh):
+    """The first damping is ``damping * r_0``, and that is a COST change only.
+
+    ``damping`` is a guess tuned for a cold state, where the first residual is
+    ~1 and the schedule hands it straight back; a warm start begins near the
+    fixed point, where a step sized for the cold problem overshoots and the
+    adaptive halving then has to spend sweeps discovering what the warm state
+    already knew.  Both halves are asserted here — that the scheduled step is
+    genuinely smaller when the start is genuinely warmer, and that the iron the
+    loop lands on is the same one either way.
+
+    The warm state is a NEARBY PHYSICAL solve (the same ring at 95 % of the
+    magnetisation), not a perturbation invented for the test, because that is
+    what the callers do: the L-sweep carries mu across stack lengths and the
+    torque difference carries it across rotor positions.  It lands at r_0 = 0.43
+    against the cold 0.99, which is the same order of warmth as the 40 mm
+    sector's 0.37 one ring pitch away."""
+    from motor_ai_sim.materials import all_steels
+    steels = all_steels()
+    bh = [tuple(p) for p in
+          steels["20SW1200" if "20SW1200" in steels else sorted(steels)[0]
+                 ].bh_curve]
+    tm = ring_mesh
+
+    def _regs(M):
+        return [Region("air", tm.elements("air")),
+                Region("magnet", tm.elements("magnet"), mu_r=1.0,
+                       M=(0.0, 0.0, M)),
+                Region("iron", tm.elements("iron"), mu_r=1000.0, bh_curve=bh)]
+
+    def _run(M, **kw):
+        s = solve_static3d_nonlinear(tm.mesh, _regs(M), order=1, tol=8e-3,
+                                     max_iter=40, damping=0.4, **kw)
+        assert s.picard["converged"], s.picard["history"]
+        return s
+
+    cold = _run(M_MAG)
+    near = _run(0.95 * M_MAG)
+    warm = _run(M_MAG, mu_init=near.mu_converged)
+    # ...and the same warm start under the OLD fixed first step, as the control
+    old = _run(M_MAG, mu_init=near.mu_converged, damping_init=0.4)
+
+    # the schedule is what it says it is, on both starts
+    for s in (cold, warm):
+        assert s.picard["damping_first"] == pytest.approx(
+            max(0.02, 0.4 * min(1.0, s.picard["history"][0])), rel=1e-12)
+    # a cold start is ~1 away and keeps the caller's guess; a warm one does not
+    assert cold.picard["history"][0] > 0.8, cold.picard["history"][0]
+    assert cold.picard["damping_first"] == pytest.approx(0.4, rel=0.25)
+    assert warm.picard["history"][0] < 0.5 * cold.picard["history"][0]
+    assert warm.picard["damping_first"] < 0.5 * cold.picard["damping_first"]
+    # the point of the whole thing: the warm start's advantage survives
+    assert warm.picard["iterations"] <= old.picard["iterations"], (
+        warm.picard["history"], old.picard["history"])
+
+    # and it is the SAME iron — the fixed point does not know the step size
+    def _iron_B(s):
+        return float(np.linalg.norm(
+            s.B_elementwise()[:, tm.elements("iron")], axis=0).mean())
+    assert _iron_B(warm) == pytest.approx(_iron_B(cold), rel=0.02)
+    assert _iron_B(warm) == pytest.approx(_iron_B(old), rel=0.02)
+
+
 # --------------------------------------------------------------------------
 # (e) Stage-B lookahead
 # --------------------------------------------------------------------------

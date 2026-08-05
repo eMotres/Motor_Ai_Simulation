@@ -864,19 +864,22 @@ def solve_static3d_A(mesh, regions: Sequence[Region],
 
 def solve_static3d_A_nonlinear(mesh, regions: Sequence[Region],
                                tol: float = 1e-3, max_iter: int = 60,
-                               damping: float = 0.5, verbose: bool = False,
+                               damping: float = 0.5,
+                               damping_init: Optional[float] = None,
+                               verbose: bool = False,
                                mu_init: Optional[np.ndarray] = None,
                                **kw) -> ASolution:
     """Damped Picard on mu_r(|B|), the A-formulation twin of
     ``solver.solve_static3d_nonlinear``.
 
     Same B-H inversion (the 2D solver's own ``_mu_r_from_bh_vec``), same
-    geometric damping with the same adaptive halving, and the same
-    damping-independent CONVERGENCE TEST — the constitutive residual in H, not
-    the step size.  The reasons are in ``solver.py``'s docstring and none of them
-    are formulation specific; what IS specific is that here the state carried
-    between sweeps is nu = 1/(mu0 mu_r), so a permeability handed in or out is
-    converted at the boundary and the two drivers can warm-start each other.
+    geometric damping with the same adaptive halving and the same
+    residual-scheduled FIRST step, and the same damping-independent CONVERGENCE
+    TEST — the constitutive residual in H, not the step size.  The reasons are in
+    ``solver.py``'s docstring and none of them are formulation specific; what IS
+    specific is that here the state carried between sweeps is nu = 1/(mu0 mu_r),
+    so a permeability handed in or out is converted at the boundary and the two
+    drivers can warm-start each other.
     """
     from motor_ai_sim.simulation.field_ops import _mu_r_from_bh_vec
 
@@ -898,8 +901,9 @@ def solve_static3d_A_nonlinear(mesh, regions: Sequence[Region],
     sol: Optional[ASolution] = None
     t_start = time.perf_counter()
     converged = False
-    d_cur = float(damping)
     d_floor, good, prev_rel = 0.02, 0, float("inf")
+    d_cur = float(damping if damping_init is None else damping_init)
+    d_first = d_cur
     for it in range(max_iter):
         sol = solve_static3d_A(mesh, regions, nu_el=1.0 / mu_el, **kw)
         kw["basis"] = sol.basis
@@ -932,6 +936,8 @@ def solve_static3d_A_nonlinear(mesh, regions: Sequence[Region],
         den = float(((h_curve ** 2) * w).sum())
         rel = math.sqrt(num / max(den, 1e-300))
         hist.append(rel)
+        if it == 0 and damping_init is None:
+            d_cur = d_first = max(d_floor, float(damping) * min(1.0, rel))
         if verbose:
             print(f"  picard {it:2d}  |dH|/|H| = {rel:.3e}   d = {d_cur:.3f}",
                   flush=True)
@@ -951,6 +957,7 @@ def solve_static3d_A_nonlinear(mesh, regions: Sequence[Region],
     sol = solve_static3d_A(mesh, regions, nu_el=1.0 / mu_el, **kw)
     sol.picard = dict(iterations=len(hist), history=hist, mu_history=mu_hist,
                       converged=converged, tol=tol, damping=damping,
+                      damping_init=damping_init, damping_first=d_first,
                       damping_final=d_cur,
                       warm_started=bool(mu_init is not None),
                       wall_time=time.perf_counter() - t_start)

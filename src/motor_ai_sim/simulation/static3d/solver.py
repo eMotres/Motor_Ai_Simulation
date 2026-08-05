@@ -604,6 +604,7 @@ def _solve_cg(A, b, tol: float = 1e-10, maxiter: int = 20000):
 def solve_static3d_nonlinear(mesh, regions: Sequence[Region], order: int = 1,
                              tol: float = 1e-3, max_iter: int = 60,
                              damping: float = 0.5,
+                             damping_init: Optional[float] = None,
                              verbose: bool = False,
                              basis: Optional[object] = None,
                              periodic: Optional[object] = None,
@@ -644,6 +645,43 @@ def solve_static3d_nonlinear(mesh, regions: Sequence[Region], order: int = 1,
       d = 0.15 converges in 16 sweeps and d = 0.20 locks into a 2-cycle at
       residual 0.98 — so the fixed d is a starting guess and the halving is what
       makes the loop usable without per-geometry tuning.
+
+      The FIRST step is scheduled off the first residual, ``d = damping * r_0``,
+      and that exists for the warm start.  ``damping`` is a guess tuned for a
+      COLD state, where ``r_0`` is ~1 and the schedule hands it straight back
+      (so no cold solve moves); a warm start begins near the fixed point, where
+      a step sized for the cold problem simply overshoots.  Measured on the
+      40 mm loaded 3D sector (``static3d/torque3d.py``, 125928 tets, tol 3e-3),
+      warm-started from the converged permeability one ring pitch (1.07 deg)
+      away, r_0 = 0.363:
+
+          cold, d = 0.35                 53 sweeps
+          warm, d = 0.35   (unscheduled) 40 sweeps, sweep 2 at 0.691
+          warm, d = 0.127  (scheduled)   37 sweeps, never above 0.283
+
+      The unscheduled warm run's second sweep lands at 0.691 — nearly twice the
+      residual it was HANDED — and the schedule removes that excursion.  What it
+      is worth is 3 sweeps of 40, and the reason it is not worth more is the
+      honest limit of this knob: halving is fast and the state is still far out,
+      so the overshoot is repaid by sweep 5 and both runs join the same tail.
+      The tail is where a warm solve's cost actually is (~35 of its 40 sweeps,
+      at d ~ 0.04-0.07, set by the stability edge rather than by the starting
+      point), which is why 53 -> 40 is all a perfect first step could ever buy.
+      Making THAT cheaper is a different change — acceleration or a true Newton
+      step, not a damping schedule.
+
+      Measured and rejected: capping the recovery below the smallest step ever
+      seen to overshoot (a trust region, ``min(1.6 d, damping, 0.7 d_bad)``).  It
+      does suppress the sawtooth — d locks at 0.070 from sweep 16 — but the
+      descent then crawls, 1.8e-2 to 6.3e-3 over the next twenty sweeps, and the
+      run takes 40, no better than doing nothing.  The two warm runs land on the
+      same co-energy to 1.7e-5 relative, so this is a cost knob and nothing else.
+      The sawtooth's "wasted" overshoots are what
+      push d down to the 0.035 the tail needs; the ratchet is not fighting the
+      loop, it is searching, and freezing it is worse than letting it search.
+
+      The floor is ``d_floor``: a warm start good enough to schedule below it is
+      one or two sweeps from converged anyway.
 
     * The convergence test is the CONSTITUTIVE residual, not the step size.
       The obvious test — "did B stop moving between sweeps" — is proportional to
@@ -688,8 +726,9 @@ def solve_static3d_nonlinear(mesh, regions: Sequence[Region], order: int = 1,
     sol: Optional[Solution] = None
     t_start = time.perf_counter()
     converged = False
-    d_cur = float(damping)
     d_floor = 0.02
+    d_cur = float(damping if damping_init is None else damping_init)
+    d_first = d_cur
     good = 0
     prev_rel = float("inf")
     for it in range(max_iter):
@@ -726,6 +765,10 @@ def solve_static3d_nonlinear(mesh, regions: Sequence[Region], order: int = 1,
         den = float(((h_curve ** 2) * w).sum())
         rel = math.sqrt(num / max(den, 1e-300))
         hist.append(rel)
+
+        # the first step is scheduled off the first residual — see the docstring
+        if it == 0 and damping_init is None:
+            d_cur = d_first = max(d_floor, float(damping) * min(1.0, rel))
 
         if B_prev is not None:
             n2 = float((((B - B_prev)[:, nlidx] ** 2).sum(axis=0) * w).sum())
@@ -767,7 +810,8 @@ def solve_static3d_nonlinear(mesh, regions: Sequence[Region], order: int = 1,
     sol = solve_static3d(mesh, regions, order=order, mu_el=mu_el, **kw)
     sol.picard = dict(iterations=len(hist), history=hist, mu_history=mu_hist,
                       dB_history=dB_hist, converged=converged, tol=tol,
-                      damping=damping, damping_final=d_cur,
+                      damping=damping, damping_init=damping_init,
+                      damping_first=d_first, damping_final=d_cur,
                       warm_started=bool(mu_init is not None),
                       wall_time=time.perf_counter() - t_start)
     sol.mu_converged = mu_el

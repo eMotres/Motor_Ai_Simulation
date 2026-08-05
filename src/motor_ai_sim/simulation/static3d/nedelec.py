@@ -650,6 +650,7 @@ def solve_static3d_A(mesh, regions: Sequence[Region],
                      dirichlet_dofs: Optional[np.ndarray] = None,
                      natural_outer: bool = False,
                      periodic: Optional[object] = None,
+                     projection: Optional[tuple] = None,
                      gauge: str = "tree",
                      linear_solver: Optional[str] = None,
                      nu_el: Optional[np.ndarray] = None,
@@ -675,6 +676,14 @@ def solve_static3d_A(mesh, regions: Sequence[Region],
                   i.e. B normal to it.  This is the dual of the scalar solver's
                   ``phi = 0`` and the two together bracket the truncation error
                   from opposite sides — see the module docstring.
+    ``projection``  ``(P, dirichlet_columns)``: solve the REDUCED system
+                  ``P^T K P x = P^T f`` and return ``A = P x``.  ``P`` carries
+                  exactly one +-1 per row, i.e. every dof is +- one free class —
+                  which is what ``periodic.elimination`` builds for a plain
+                  anti-periodic cut and what ``band.SlipWeld`` builds with the
+                  sliding-band weld composed into it.  Supplying this REPLACES
+                  ``periodic``; the two are the same algebra and the more
+                  general one wins.
     ``gauge``     ``"tree"`` (tree-cotree, nonsingular, direct factorisation) or
                   ``"none"`` (singular but consistent, CG).
     ``project``   remove the discrete-gradient component of the load before
@@ -768,13 +777,25 @@ def solve_static3d_A(mesh, regions: Sequence[Region],
     name = ""
     iters = None
     t0 = time.perf_counter()
-    if periodic is not None and getattr(periodic, "masters", np.empty(0)).size:
-        from .periodic import elimination
-        T, full2red = elimination(int(basis.N), periodic)
+    use_proj = projection is not None
+    if use_proj or (periodic is not None
+                    and getattr(periodic, "masters", np.empty(0)).size):
+        if use_proj:
+            # A GENERAL signed projection: one +-1 per row, columns = weld
+            # classes.  ``periodic.elimination`` produces exactly this shape for
+            # the plain anti-periodic case; ``band.SlipWeld`` produces it with
+            # the sliding-band constraint composed in.  The algebra below does
+            # not care which, and that is the point.
+            Tp, Dr = projection
+            Dr = np.asarray(Dr, dtype=np.int64)
+        else:
+            from .periodic import elimination
+            Tp, full2red = elimination(int(basis.N), periodic)
+            Dr = full2red[D] if D.size else np.empty(0, dtype=np.int64)
+            Dr = np.unique(Dr[Dr >= 0]) if Dr.size else Dr
+        T = Tp
         Kr = (T.T @ K @ T).tocsr()
         fr = T.T @ f
-        Dr = full2red[D] if D.size else np.empty(0, dtype=np.int64)
-        Dr = np.unique(Dr[Dr >= 0]) if Dr.size else Dr
         if gauge == "tree":
             raise NotImplementedError(
                 "tree-cotree on a periodically reduced system is not "

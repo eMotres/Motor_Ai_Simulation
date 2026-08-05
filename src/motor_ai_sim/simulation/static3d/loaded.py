@@ -11,12 +11,15 @@ one rotor position.  From one rotor position you can honestly read:
   * the demagnetising field inside the magnets, slice by slice, UNDER LOAD;
   * what a loaded solve costs.
 
-You cannot honestly read TORQUE from it.  Torque by the energy method is
+What it still does NOT do is torque.  Torque by the energy method is
 dW'/d(theta) and needs a second rotor position on a mesh whose connectivity has
-not changed; that is the sliding-band work, and until it exists this module
-deliberately offers no torque function at all rather than a plausible one.  See
-``config/end_effect_3d.json::stage_b`` for the measurements that stand and the
-blocker that does not.
+not changed; that is the sliding band, and it now exists — in ``band`` (the
+three-piece cross-section and the signed edge weld) and ``torque3d`` (the
+co-energy and the central difference).  This module still offers no torque
+function, and deliberately: it solves ONE rotor position and a torque read from
+one position would be a Maxwell-stress integral, which this project does not
+allow.  Use ``torque3d.BandedModel``, which returns the same
+:class:`LoadedSolve` so every post-processor below applies unchanged.
 
 Flux linkage without a surface to integrate over
 ------------------------------------------------
@@ -418,9 +421,19 @@ stage_b
                               Stage A numbers for contrast
   cost                 list   one row per solve: tets, dofs, CG iterations,
                               Picard iterations/residual, assemble/solve/wall
-  torque               dict   status and, while blocker 3 is open, the
-                              REASON no k_T is quoted.  This key must never
-                              carry a number the sliding band has not earned.
+  torque               dict   the energy-method result and what it rests on:
+                              the banded mesh and its ring pitch, the co-energy
+                              at every rotor shift solved, the DELTA SWEEP (T vs
+                              the angular step, showing the plateau between
+                              cancellation noise and curvature bias), the 2D leg
+                              it is divided by, and k_T.  This key must never
+                              carry a number the sliding band has not earned:
+                              while a proof was open it carried the REASON
+                              instead, and it may do so again.
+  warm_start           dict   the measured cost of a nonlinear rotor position
+                              with and without carrying the previous angle's
+                              permeability in — sweeps, residual and wall time
+                              for each, from the SAME process and load
   blockers             dict   one entry per Stage B blocker: status, the
                               evidence that closed it, or the design and the
                               measurement that is missing

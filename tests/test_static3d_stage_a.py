@@ -43,6 +43,11 @@ requires_full = pytest.mark.skipif(not FULL,
 # this work it moved 40 mm -> 30 mm -> 150 mm between runs.  A test suite whose
 # subject changes under it is not a test suite.
 PRESET = "my_40mm_last"
+# The magnet the Stage A passport was measured with.  config/motor_config.yaml
+# is live — it has since been reassigned to F52SH — and a Stage A number that
+# silently changed magnet grade would not be comparable with the passport at all.
+STAGE_A_MATERIALS = {"stator_core": "B15AHV950M", "rotor_core": "B15AHV950M",
+                     "magnet": "F45SH_120C", "shaft": "Aluminium_6061"}
 
 
 def _preset_geometry(name: str = PRESET) -> dict:
@@ -60,7 +65,27 @@ def geo():
 
 @pytest.fixture(scope="module")
 def section(geo):
+    """The Stage A machine, with the Stage A magnet pinned in-process.
+
+    ``load_motor_section`` reads the material ASSIGNMENTS from the live config,
+    and that file has been reassigned to a different magnet grade since Stage A
+    was measured.  Pinning here is a mutation of this process's cached config
+    only — no file is written and the running backend is untouched."""
+    from motor_ai_sim.config import get_config
+    mats = (get_config() or {}).get("materials", {})
+    for k, v in STAGE_A_MATERIALS.items():
+        mats[k] = v
     return load_motor_section(geo_override=geo)
+
+
+def test_the_machine_is_the_one_the_passport_measured(section):
+    """A guard, not a physics test: if the preset or the material assignment
+    moves, every Stage A number stops being comparable with the passport, and
+    that must fail loudly here rather than quietly downstream."""
+    assert section.num_slots == 12 and section.num_poles == 14
+    assert section.n_sectors == 2 and section.antiperiodic
+    assert abs(section.Br_T - 1.19) < 5e-3, section.Br_T
+    assert abs(section.mu_rec - 1.05) < 5e-3, section.mu_rec
 
 
 @pytest.fixture(scope="module")

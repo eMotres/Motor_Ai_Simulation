@@ -443,7 +443,10 @@ const AutoOptimizePanel: React.FC = () => {
             HERE, not only inside the collapsed Advanced panel. Same store
             history the DescentPanel charts read (st.history), compact form:
             torque + ripple per accepted eval, with the ripple gate line. */}
-        {(st.history || []).length > 1 && (() => {
+        {/* Gated on POINTS as well as history: a CMA-ES generation is 12 evals
+            long, so gating on history alone kept the cloud hidden for the first
+            ~2 hours of a run that already had a dozen measured designs. */}
+        {((st.history || []).length > 1 || (st.points || []).length > 1) && (() => {
           const hist = (st.history || []).map((h: any, i: number) => ({
             // The persisted history rows name the fields T_em_Nm / T_ripple_pct
             // (checked against the live /descent/progress payload — do not

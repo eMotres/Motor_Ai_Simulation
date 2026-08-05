@@ -309,6 +309,30 @@ def measured_eval_seconds(steps_per_period: int = 36) -> Dict[str, Any]:
 _load_eval_rate()
 
 
+# ── One eval = one core, for real this time ──────────────────────────────────
+# The pool above runs _SCAN_WORKERS eval subprocesses at once "each pinned to a
+# single core".  Nothing was actually pinning them: BLAS/LAPACK inside each
+# subprocess opened its own thread pool sized to the whole machine, so 10
+# concurrent evals asked for ~10x the cores that exist and every one of them ran
+# at a fraction of its solo speed.
+#
+# MEASURED (2026-08-05, 12 physical cores, 10 workers, the CIANO20 150_35 at
+# 48 frames): a screening wave of 10 evals had not returned a single result
+# after 18 minutes, while one eval running alongside it finished in 5.7 — the
+# pool was thrashing, not computing.  Pinning each subprocess to one thread and
+# letting the POOL provide the parallelism is what the design already claimed.
+#
+# It also buys reproducibility: a threaded BLAS reduction sums in whatever order
+# the threads finish, so the same solve can differ in the last few ulp run to
+# run.  At one thread the order is fixed and an eval is bit-identical to itself —
+# which is what lets the screening descent treat its finite differences as exact
+# and skip paying for replicate evaluations (docs/SCREENING_DESCENT.md).
+_EVAL_ENV = dict(os.environ)
+_EVAL_ENV.update({k: "1" for k in (
+    "MKL_NUM_THREADS", "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS",
+    "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS")})
+
+
 def _nonphysical_result(res: Any) -> Optional[str]:
     """Reason the metrics of an 'ok' eval are physically impossible, else None.
 
@@ -360,7 +384,7 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
     Rebuilds the CadQuery geometry + gmsh mesh for the candidate in-memory.
     ``steps`` frames over ``n_periods`` of the electrical period.  n_sectors=-1
     = full disk (accurate ripple); 4 = ¼ sector (≈3× faster, for quick debug)."""
-    import subprocess, sys, json
+    import subprocess, sys, json, os as _os
     spec = json.dumps({"overrides": overrides, "current_a": current_a,
                        "steps": int(steps), "coil_temp_c": float(coil_temp_c),
                        "n_periods": float(n_periods), "gamma_deg": float(gamma_deg),
@@ -404,7 +428,8 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
         _cap = min(1800.0, max(300.0, 4.0 * _med))
         proc = subprocess.run(
             [sys.executable, "-m", "motor_ai_sim.optimization.refine_proc"],
-            input=spec, capture_output=True, text=True, timeout=_cap)
+            input=spec, capture_output=True, text=True, timeout=_cap,
+            env=_EVAL_ENV)
         _record_eval_seconds(_t_eval.monotonic() - _t0_eval)
         out = proc.stdout or ""
         m = out.rfind("@@RESULT@@")
@@ -2700,6 +2725,11 @@ _AUTO_BUDGET_PER_VAR = 24         # …and at least this many per search dimensi
 _AUTO_BUDGET_MAX = 2000
 _AUTO_CURRENT_BUMP_PCT = 10.0     # 2nd baseline sim at I·1.10 → the baseline line
 
+# The two search algorithms this route can drive.  'cmaes' is the original
+# one-click behaviour; 'screen' is the engineer's method (see _screen_worker).
+_AUTO_MODES = ("cmaes", "screen")
+_AUTO_DEFAULT_MODE = "cmaes"
+
 # Sigma (initial CMA-ES step) per variable.  Two floors, because one is not
 # enough:
 #   • a fraction of the variable's OWN value — the right scale for a knob that
@@ -2940,7 +2970,233 @@ def _auto_population(n_vars: int) -> int:
     return int(4 + math.floor(3.0 * math.log(max(2, int(n_vars)))))
 
 
-def _auto_assemble(max_ripple_pct: float, budget_evals: int = 0) -> Dict[str, Any]:
+# ═════════════════════════════════════════════════════════════════════════════
+# SCREENING DESCENT — the engineer's method, mechanised
+#
+# WHY THIS EXISTS (measured, not hypothetical).  On the CIANO20 150_35 the
+# one-click CMA-ES run spent 434 evals (359 informative) and its best candidate
+# inside the ripple gate scored F = −0.0173 on the run's own perpendicular
+# baseline metric — i.e. it never beat the design it started from.  The USER then
+# beat it BY HAND at the same fixed operating point, reaching F = +0.00221 while
+# touching at most four parameters at a time.  A human beat 359 machine evals, so
+# the defect is in the SEARCH, not the physics.
+#
+# The user's method, in their words:
+#   «сначала сделал бы первоначальные отклонения по всем переменным в районе
+#    0.2 mm или 0.02 для безразмерных и понял бы какая куда отклоняет систему,
+#    а потом уже использовал самые влиятельные и доводку делал оставшимися»
+#
+#   1. SCREEN  — perturb EVERY variable by ±δ (δ = 0.2 mm for lengths, 0.02 for
+#      dimensionless, 1 for integers) and measure which way each one moves the
+#      objective.  2N evals, all independent, all parallel.
+#   2. DESCEND — move along the steepest-descent direction restricted to the few
+#      most influential variables, with a line search over step multipliers.
+#   3. POLISH  — once those stop paying, cycle the remaining variables in small
+#      groups (the user works in groups of ≤4) with the same fine δ.
+#
+# WHY IT BEATS CMA-ES HERE.  CMA-ES must estimate an N×N covariance — 171 free
+# parameters at N=18 — before its distribution carries any shape, and the eval
+# budget that costs is not available at ~10 min per FEM eval.  Finite differences
+# buy the gradient outright for 2N evals and spend everything after that moving.
+# The trade is real and stated in docs/SCREENING_DESCENT.md: this method finds the
+# nearest local optimum and cannot jump basins, so CMA-ES remains the right tool
+# for a genuinely unexplored design.
+# ═════════════════════════════════════════════════════════════════════════════
+
+# The screening deviations the user named.  Not tuned — quoted.
+_SCREEN_DELTA_MM = 0.2          # length variables [mm]
+_SCREEN_DELTA_DIMLESS = 0.02    # dimensionless variables (fill fractions, …)
+_SCREEN_DELTA_INT = 1.0         # integer knobs (turns/slot) — 1 is their quantum
+# Step multipliers evaluated IN PARALLEL along the descent direction.  They are
+# independent points, so a line search costs one wave, not four.
+_SCREEN_ALPHAS = (0.5, 1.0, 2.0, 4.0)
+# One variable IS a legitimate direction: when the screening says a single knob
+# dominates the next one by two orders of magnitude, moving anything else with it
+# only adds noise.  The cap at six is what keeps this a screening rather than
+# gradient descent on all N.
+_SCREEN_TOPK_MIN = 1
+_SCREEN_TOPK_MAX = 6
+_SCREEN_GAP_MIN = 1.5           # below this ratio there is no cliff to cut at
+_SCREEN_GROUP = 4               # polish group size — the user's own working set
+_SCREEN_SHRINK = 0.5            # δ ×= this when the whole line search fails
+# …and never below half, i.e. 0.1 mm on a length and 0.01 on a dimensionless
+# knob — the user's own floors (2026-08-01: a step below those is manufacturing
+# noise).  It is also the mm quantisation grid: a 0.05 mm perturbation rounds
+# straight back onto the design it started from, so it measures nothing at all.
+_SCREEN_MIN_SHRINK = 0.5
+_SCREEN_TOL = 1e-9              # cost improvement below this is not an improvement
+
+
+def _screen_delta(unit: str, is_int: bool, scale: float = 1.0) -> float:
+    """The screening deviation for ONE variable, at the user's own scale.
+
+    ``scale`` < 1 is the shrink applied after a failed line search.  Integers do
+    not shrink: their quantum is 1, and a step that rounds to zero is not a
+    perturbation, it is a wasted eval."""
+    if is_int:
+        return _SCREEN_DELTA_INT
+    base = (_SCREEN_DELTA_MM if str(unit).strip().lower() == "mm"
+            else _SCREEN_DELTA_DIMLESS)
+    return base * float(scale)
+
+
+def _screen_rows(names, deltas, c0, c_plus, c_minus,
+                 F_plus=None, F_minus=None) -> List[Dict[str, Any]]:
+    """Turn one screening pass into the ranked sensitivity table.
+
+    ``c_plus`` / ``c_minus`` map variable name → COST at x+δ / x−δ, with a
+    missing key meaning that side was not measurable (unbuildable cross-section,
+    failed solve, or a variable whose −δ would go negative).  Cost, not F: the
+    ripple penalty is part of what the search descends, so it must be part of
+    what the screening measures.
+
+    Per variable this reports
+      slope      dcost/dx        — central when both sides exist, one-sided else
+      slope_F    dF/dx           — the same derivative on the RAW objective,
+                 without the ripple penalty, so the two can be compared
+      influence  |Δcost| over ONE δ, the ranking key.  Scaled by δ, so a
+                 millimetre knob and a dimensionless one are comparable: it is
+                 the gradient in units of "one screening deviation".
+      direction  −1 / +1 — which way to MOVE this variable to lower the cost
+      jitter     |c₊ + c₋ − 2c₀| / 2 — how much the two one-sided slopes
+                 disagree.  Second-order curvature plus mesh discretisation
+                 noise; the median over all variables is the noise floor below
+                 which an "influence" is not evidence of anything.
+    Sorted by influence, descending.  Pure arithmetic — no FEM, so the ranking
+    math is testable on a function whose gradient is known."""
+    rows = []
+    for i, nm in enumerate(names):
+        d = float(deltas[i])
+        cp = c_plus.get(nm)
+        cm = c_minus.get(nm)
+        row = {"name": nm, "delta": d, "c_plus": cp, "c_minus": cm,
+               "one_sided": False, "measured": True}
+        fp = (F_plus or {}).get(nm)
+        fm = (F_minus or {}).get(nm)
+        if fp is not None:
+            row["F_plus"] = fp
+        if fm is not None:
+            row["F_minus"] = fm
+        # dF/dx alongside dcost/dx.  They differ by the ripple penalty, and the
+        # difference is the whole story on a constrained design: a variable that
+        # buys F while breaking the gate has slope_F and slope pointing OPPOSITE
+        # ways, and reporting only one of them hides that.
+        if fp is not None and fm is not None:
+            row["slope_F"] = (fp - fm) / (2.0 * d)
+        elif fp is not None or fm is not None:
+            row["slope_F"] = None      # one-sided: needs F at the centre, unowned here
+        if cp is not None and cm is not None:
+            row["slope"] = (cp - cm) / (2.0 * d)
+            row["influence"] = abs(cp - cm) / 2.0
+            row["jitter"] = abs(cp + cm - 2.0 * c0) / 2.0
+            row["direction"] = -1.0 if (cp - cm) > 0 else 1.0
+        elif cp is not None:
+            row["slope"] = (cp - c0) / d
+            row["influence"] = abs(cp - c0)
+            row["jitter"] = None
+            row["direction"] = -1.0 if (cp - c0) > 0 else 1.0
+            row["one_sided"] = True
+        elif cm is not None:
+            row["slope"] = (c0 - cm) / d
+            row["influence"] = abs(c0 - cm)
+            row["jitter"] = None
+            row["direction"] = -1.0 if (c0 - cm) > 0 else 1.0
+            row["one_sided"] = True
+        else:
+            # Neither side evaluated.  NOT "inert" — unmeasured.  Saying those
+            # two are the same thing is how a variable silently leaves a search.
+            row.update(slope=0.0, influence=0.0, jitter=None, direction=0.0,
+                       measured=False)
+        rows.append(row)
+    rows.sort(key=lambda r: (-float(r["influence"]), r["name"]))
+    return rows
+
+
+def _screen_noise_floor(rows) -> float:
+    """Below this |Δcost| a screening result is not evidence.
+
+    Evals here are deterministic (same inputs → same mesh → same numbers), so
+    there is no statistical noise to average away and replicating the unperturbed
+    point measures nothing.  What DOES limit the gradient is that the mesh is
+    rebuilt per candidate: the objective is piecewise-smooth with small jumps at
+    the remeshing seams.  The two one-sided slopes disagreeing by ``jitter`` is
+    exactly that effect (plus real curvature), so the MEDIAN jitter over all
+    two-sided variables is an honest floor — an influence smaller than the
+    typical disagreement between the two ways of measuring it is not a signal."""
+    j = sorted(float(r["jitter"]) for r in rows
+               if r.get("jitter") is not None and math.isfinite(float(r["jitter"])))
+    if not j:
+        return 0.0
+    mid = len(j) // 2
+    return j[mid] if len(j) % 2 else 0.5 * (j[mid - 1] + j[mid])
+
+
+def _screen_pick_k(rows, noise: float, k_min: int = _SCREEN_TOPK_MIN,
+                   k_max: int = _SCREEN_TOPK_MAX) -> Dict[str, Any]:
+    """Choose how many variables the descent moves — BY THE GAP, not by a
+    constant.  Among the variables whose influence clears the noise floor, cut at
+    the largest ratio drop between consecutive influences: that is where the
+    "influential" set visibly ends.  Returns the chosen names, k, and the gap
+    that justified it, so the choice is reportable rather than assumed."""
+    live = [r for r in rows if r.get("measured")
+            and float(r["influence"]) > float(noise)]
+    if not live:
+        return {"names": [], "k": 0, "gap": 0.0, "n_above_noise": 0,
+                "why": "no variable's influence clears the noise floor"}
+    hi = min(int(k_max), len(live))
+    lo = min(int(k_min), hi)
+    if hi <= lo or len(live) <= lo:
+        return {"names": [r["name"] for r in live[:hi]], "k": hi, "gap": 0.0,
+                "n_above_noise": len(live),
+                "why": "only {} variable(s) clear the noise floor".format(hi)}
+    # Only INTERIOR cuts are gaps.  "k = everything above the noise floor" has no
+    # variable after it to fall off to, and scoring that as an infinite drop is
+    # how a screening quietly turns back into gradient descent on all N.
+    best_k, best_gap = lo, 0.0
+    for k in range(lo, min(hi, len(live) - 1) + 1):
+        gap = float(live[k - 1]["influence"]) / max(float(live[k]["influence"]), 1e-30)
+        if gap > best_gap:
+            best_gap, best_k = gap, k
+    if best_gap < _SCREEN_GAP_MIN and len(live) <= hi:
+        # No cliff anywhere: the influences form a smooth ramp, so there is no
+        # honest place to cut and every variable above the floor is influential.
+        return {"names": [r["name"] for r in live], "k": len(live),
+                "gap": round(float(best_gap), 3), "n_above_noise": len(live),
+                "why": ("no gap above {:g}x anywhere — all {} variables above the "
+                        "noise floor are comparably influential"
+                        .format(_SCREEN_GAP_MIN, len(live)))}
+    return {"names": [r["name"] for r in live[:best_k]], "k": best_k,
+            "gap": round(float(best_gap), 3), "n_above_noise": len(live),
+            "why": ("influence drops {:.2f}x after #{} — the influential set ends "
+                    "there".format(best_gap, best_k))}
+
+
+def _screen_step(rows, active) -> Dict[str, float]:
+    """Steepest descent restricted to ``active``, in units of the screening δ.
+
+    In δ-scaled coordinates u_i = x_i/δ_i the gradient component is
+    slope_i·δ_i = ±influence_i, so steepest descent is du_i ∝ −sign(slope_i)·
+    influence_i.  Normalised so the MOST influential variable moves exactly one
+    δ (the user's own step), which makes the line-search multiplier read directly
+    as "how many screening deviations".  Returns Δx per variable in PHYSICAL
+    units."""
+    sel = [r for r in rows if r["name"] in set(active) and r.get("measured")]
+    if not sel:
+        return {}
+    top = max(float(r["influence"]) for r in sel) or 1.0
+    return {r["name"]: float(r["direction"]) * float(r["delta"])
+            * (float(r["influence"]) / top) for r in sel}
+
+
+def _screen_groups(names, size: int = _SCREEN_GROUP) -> List[List[str]]:
+    """Split the polish variables into the user's working groups of ≤ size,
+    keeping the screening order so the most promising leftovers go first."""
+    n = max(1, int(size))
+    return [list(names[i:i + n]) for i in range(0, len(names), n)]
+
+
+def _auto_assemble(max_ripple_pct: float, budget_evals: int = 0,
+                   mode: str = _AUTO_DEFAULT_MODE) -> Dict[str, Any]:
     """Build the FULL optimization request from the standing conventions.
 
     Raises HTTPException(422) with an engineer-readable message when the input
@@ -2967,6 +3223,13 @@ def _auto_assemble(max_ripple_pct: float, budget_evals: int = 0) -> Dict[str, An
             "max_ripple_pct must be <= 100 %; got {:g} %. Ripple is peak-to-peak "
             "torque as a percentage of the mean, so a limit above 100 % is not a "
             "constraint at all.".format(r)))
+    md = str(mode or _AUTO_DEFAULT_MODE).strip().lower()
+    if md not in _AUTO_MODES:
+        raise HTTPException(status_code=422, detail=(
+            "mode must be one of {}; got {!r}. 'cmaes' is the global population "
+            "search; 'screen' is the finite-difference screening descent "
+            "(perturb every variable, descend the influential ones, polish with "
+            "the rest).".format(", ".join(repr(m) for m in _AUTO_MODES), mode)))
 
     cfg = get_config()
     geo = dict(cfg.get("geometry", {}))
@@ -3063,6 +3326,7 @@ def _auto_assemble(max_ripple_pct: float, budget_evals: int = 0) -> Dict[str, An
         is_int = str(meta.get("type", "float")) == "int"
         x0 = float(cur)
         sigma = _auto_sigma(x0, unit, is_int, stator_d)
+        delta = _screen_delta(unit, is_int)
         # The ONLY bound is physical positivity.  A dimension may go to zero
         # (that is a real design — no fillet, no hole); it may not go negative,
         # because a negative length is not a machine.  Integers additionally
@@ -3070,6 +3334,9 @@ def _auto_assemble(max_ripple_pct: float, budget_evals: int = 0) -> Dict[str, An
         lo = 1.0 if is_int else 0.0
         variables.append({
             "name": name, "x0": x0, "sigma": round(float(sigma), 4),
+            # The SCREENING deviation (mode='screen'): the user's own numbers —
+            # 0.2 mm on a length, 0.02 on a dimensionless knob, 1 on an integer.
+            "delta": round(float(delta), 4),
             "lo": lo, "hi": None,             # explicitly UNBOUNDED above
             "unit": unit, "is_int": is_int,
             # Manufacturable grid, not a bound: mm knobs land on 0.1 mm.
@@ -3080,8 +3347,76 @@ def _auto_assemble(max_ripple_pct: float, budget_evals: int = 0) -> Dict[str, An
             "none of the sweep_whitelist parameters exist as numbers in the "
             "current geometry — the whitelist and the loaded motor disagree."))
 
-    pop = _auto_population(len(variables))
+    n_vars = len(variables)
+    rate = measured_eval_seconds(steps_pp)
     _asked = int(budget_evals or 0)
+
+    if md == "screen":
+        # ── SCREENING DESCENT ────────────────────────────────────────────────
+        # The budget default is the SAME rule CMA-ES gets, so the two modes are
+        # compared over the same money.  The difference is where it goes:
+        #   2      baseline pair (A at I, B at I·1.1) — the reference line
+        #   2N     the opening screen, every variable ±δ
+        #   then   descent steps (one line-search wave + a re-screen of the
+        #          active set) until the influential set stops paying, then
+        #          polish rounds over the rest in groups of ≤4.
+        # The run STOPS EARLY when a full round measures no improvement; the
+        # budget is a cap, not a target, and the log says which of the two ended
+        # the run.
+        n_screen = 2 * n_vars
+        budget = (max(_AUTO_DEFAULT_BUDGET, _AUTO_BUDGET_PER_VAR * n_vars)
+                  if _asked <= 0 else _asked)
+        budget = max(2 + n_screen + len(_SCREEN_ALPHAS),
+                     min(int(budget), _AUTO_BUDGET_MAX))
+        workers = max(1, min(_SCAN_WORKERS, n_screen))
+        # Wall-clock: the opening screen is fully parallel; after it, a "round"
+        # is one line-search wave (≤ workers, so one wave) plus a re-screen of
+        # the active set (k≈4 → 8 evals → one wave).  So ≈ 2 waves per
+        # (len(alphas)+2k) evals — worked with k = the max, i.e. pessimistic.
+        _k = _SCREEN_TOPK_MAX
+        _per_round = len(_SCREEN_ALPHAS) + 2 * _k
+        _rounds = max(1.0, (budget - 2 - n_screen) / float(_per_round))
+        est_wall = rate["s_per_eval"] * (
+            2.0                                              # baseline pair
+            + math.ceil(n_screen / float(workers))           # opening screen
+            + 2.0 * _rounds)                                 # descent + polish
+        return {
+            "objective": "baseline_line",      # STANDING RULE — not configurable
+            "mode": "screen",
+            "ripple_max_pct": r,
+            "ripple_penalty_lambda": _AUTO_RIPPLE_LAMBDA,
+            "current_bump_pct": _AUTO_CURRENT_BUMP_PCT,
+            "operating_point": {"current_a": I, "rpm": rpm, "gamma_deg": gamma},
+            "eval": ev,
+            "variables": variables,
+            "stator_diameter": stator_d,
+            "budget_evals": budget,
+            # Kept so every existing consumer of the plan (UI chips, progress,
+            # /auto/status) reads a number instead of undefined.  For a screening
+            # run "population" is the opening screen's wave and "generations" the
+            # cap on descent+polish rounds it could still afford.
+            "population": n_screen,
+            "generations": max(1, int(round(_rounds))),
+            "screen": {
+                "delta": {v["name"]: v["delta"] for v in variables},
+                "n_screen_evals": n_screen,
+                "alphas": list(_SCREEN_ALPHAS),
+                "top_k_min": _SCREEN_TOPK_MIN, "top_k_max": _SCREEN_TOPK_MAX,
+                "group_size": _SCREEN_GROUP,
+                "shrink": _SCREEN_SHRINK, "min_shrink": _SCREEN_MIN_SHRINK,
+            },
+            "cost": {
+                "s_per_eval": rate["s_per_eval"],
+                "s_per_eval_source": rate["source"],
+                "n_samples": rate["n_samples"],
+                "n_evals_max": budget,
+                "parallel_workers": workers,
+                "est_wall_seconds": int(round(est_wall)),
+                "est_cpu_seconds": int(round(budget * rate["s_per_eval"])),
+            },
+        }
+
+    pop = _auto_population(n_vars)
     if _asked > 0:
         # An explicit budget is a HARD cap the user typed — floor to whole
         # generations, never round past the number they were quoted.
@@ -3096,7 +3431,7 @@ def _auto_assemble(max_ripple_pct: float, budget_evals: int = 0) -> Dict[str, An
         # variables the flat budget delivered ~56 informative points after the
         # geometry fence — fewer than the 171 free parameters of the covariance —
         # so the run could not beat its own baseline no matter how it was tuned.
-        budget = max(_AUTO_DEFAULT_BUDGET, _AUTO_BUDGET_PER_VAR * len(variables))
+        budget = max(_AUTO_DEFAULT_BUDGET, _AUTO_BUDGET_PER_VAR * n_vars)
         budget = max(pop + 2, min(budget, _AUTO_BUDGET_MAX))
         # Round UP to a whole number of generations: a half-finished generation
         # tells CMA-ES nothing (the distribution updates once per generation), so
@@ -3104,13 +3439,13 @@ def _auto_assemble(max_ripple_pct: float, budget_evals: int = 0) -> Dict[str, An
         generations = max(1, int(math.ceil((budget - 2) / float(pop))))
         budget = 2 + generations * pop
 
-    rate = measured_eval_seconds(steps_pp)
     workers = max(1, min(_SCAN_WORKERS, pop))
     waves = int(math.ceil(pop / float(workers)))
     est_wall = 2.0 * rate["s_per_eval"] + generations * waves * rate["s_per_eval"]
 
     return {
         "objective": "baseline_line",          # STANDING RULE — not configurable
+        "mode": "cmaes",
         "ripple_max_pct": r,
         "ripple_penalty_lambda": _AUTO_RIPPLE_LAMBDA,
         "current_bump_pct": _AUTO_CURRENT_BUMP_PCT,
@@ -3519,6 +3854,560 @@ def _auto_worker(plan: Dict[str, Any], run_id: str, bucket: str,
         _save_eval_rate()
 
 
+def _screen_worker(plan: Dict[str, Any], run_id: str, bucket: str,
+                   point_name: str) -> None:
+    """Screening descent — the user's method, mechanised.  See the block comment
+    above _screen_delta for why it exists and what it trades away.
+
+    Phases, in order, all on the SAME fixed operating point and the SAME honest
+    eval path the CMA route uses:
+
+      baseline   A at I and B at I·1.1 → the perpendicular reference line.
+      screening  every variable ±δ (2N evals, one parallel wave).  Produces the
+                 ranked sensitivity table: slope, influence, sign, and the noise
+                 floor below which an influence is not evidence.
+      descent    steepest descent restricted to the top-k influential variables
+                 (k chosen by the gap in the table), line-searched over
+                 α ∈ {0.5, 1, 2, 4} × δ — four independent points, one wave.
+                 After each accepted step the ACTIVE set is re-screened (the
+                 gradient rotates as the design moves); when the active set
+                 stalls, everything is re-screened once before giving up on it.
+      polish     the remaining variables in groups of ≤ 4, same δ, same line
+                 search.  A polish round that improves something sends the run
+                 back to descent; a round that improves nothing ends it.
+
+    Costs are recomputed from stored METRICS on every comparison rather than
+    cached as numbers, so the ripple-penalty continuation ramp re-scores the
+    whole run consistently instead of leaving old costs measured at an old λ."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    specs = plan["variables"]
+    names = [v["name"] for v in specs]
+    spec_by = {v["name"]: v for v in specs}
+    x0 = {v["name"]: float(v["x0"]) for v in specs}
+    base_delta = {v["name"]: float(v["delta"]) for v in specs}
+    ev = plan["eval"]
+    op = plan["operating_point"]
+    I = float(op["current_a"]); rpm = float(op["rpm"]); g = float(op["gamma_deg"])
+    ripple_max = float(plan["ripple_max_pct"])
+    budget = int(plan["budget_evals"])
+
+    counts = {"ok": 0, "geometry": 0, "unconverged": 0, "mesh": 0,
+              "timeout": 0, "other": 0, "resampled": 0, "prefenced": 0}
+    state = {"n_evals": 0, "n_cache_pre": 0, "n_cache_self": 0}
+    memo: Dict[Any, Optional[Dict[str, Any]]] = {}   # point → metrics (None = rejected)
+    own_keys = set()          # persistent-cache keys THIS run wrote
+    all_pts: List[Dict[str, Any]] = []
+    history: List[Dict[str, Any]] = []
+    trajectory: List[Dict[str, Any]] = []
+
+    def _fit(nm: str, val: float) -> float:
+        v = spec_by[nm]
+        x = max(float(v["lo"]), float(val))
+        if v["is_int"]:
+            return float(max(1, int(round(x))))
+        q = float(v.get("quant") or 0.0)
+        return round(x / q) * q if q > 0 else float(x)
+
+    def to_geom(d: Dict[str, float]) -> Dict[str, float]:
+        return {nm: _fit(nm, d[nm]) for nm in names}
+
+    def _pkey(d: Dict[str, float]):
+        return tuple(round(float(d[nm]), 6) for nm in names)
+
+    def _cache_key(d: Dict[str, float], cur: float) -> str:
+        return _eval_cache_key(
+            d, cur, int(ev["steps_per_period"]), float(ev["coil_temp_c"]), 1.0, g,
+            float(ev["mesh_size_mm"]), float(ev["min_size_mm"]),
+            int(ev["n_sectors"]), ev["pole_copy"], bool(ev["torque_filter"]),
+            _config_fingerprint(), float(ev["gap_layers"]),
+            float(ev["end_winding_factor"]), bool(ev["rotor_eddy"]), False,
+            bool(ev["structured_gap"]), bool(ev["airgap_macro"]),
+            bool(ev["iron_template"]), bool(ev["geo_mesh"]),
+            int(ev["element_order"]))
+
+    def _eval_at(d: Dict[str, float], cur: float) -> Dict[str, Any]:
+        """One FEM eval, through the persistent cache.  A cache HIT is not
+        counted as an eval — it cost nothing, and folding it into the budget
+        would make the run look like it spent money it did not."""
+        ck = _cache_key(d, cur)
+        hit = _EVAL_CACHE.get(ck)
+        if hit is not None and _eval_healthy(hit):
+            out = dict(hit)
+            out["overrides"] = dict(d)
+            counts["ok"] += 1
+            if ck in own_keys:
+                state["n_cache_self"] += 1
+            else:
+                state["n_cache_pre"] += 1
+            return out
+        o = _subprocess_eval(
+            d, cur, int(ev["steps_per_period"]), float(ev["coil_temp_c"]),
+            n_periods=1.0, gamma_deg=g,
+            mesh_size_mm=float(ev["mesh_size_mm"]), min_size_mm=float(ev["min_size_mm"]),
+            n_sectors=int(ev["n_sectors"]), pole_copy=ev["pole_copy"],
+            torque_filter=bool(ev["torque_filter"]), gap_layers=float(ev["gap_layers"]),
+            end_winding_factor=float(ev["end_winding_factor"]),
+            rotor_eddy=bool(ev["rotor_eddy"]), structured_gap=bool(ev["structured_gap"]),
+            airgap_macro=bool(ev["airgap_macro"]), iron_template=bool(ev["iron_template"]),
+            geo_mesh=bool(ev["geo_mesh"]), element_order=int(ev["element_order"]),
+            rpm=rpm)
+        state["n_evals"] += 1
+        if o.get("ok") and isinstance(o.get("res"), dict):
+            o["res"]["current_a"] = float(cur)
+            _store_eval(ck, {"ok": True, "res": o["res"]})
+            own_keys.add(ck)
+            counts["ok"] += 1
+        else:
+            counts[_auto_classify_error(o.get("error"))] += 1
+        if isinstance(o, dict):
+            o["overrides"] = dict(d)
+        return o
+
+    def _reject_block():
+        blk = _auto_reject_block(counts)
+        blk["cache_hits"] = state["n_cache_pre"] + state["n_cache_self"]
+        blk["cache_hits_pre_run"] = state["n_cache_pre"]
+        blk["fem_evals"] = state["n_evals"]
+        return blk
+
+    # ── batch evaluation: memo → geometry pre-fence → parallel FEM ────────────
+    def _eval_batch(designs: List[Dict[str, float]]) -> None:
+        """Evaluate a wave of design points into ``memo``.  Points already in
+        memo cost nothing; points the in-process geometry screen rejects cost
+        nothing either and are memoised as None (rejected), so the same
+        unbuildable cross-section is never screened twice."""
+        todo: Dict[Any, Dict[str, float]] = {}
+        for d in designs:
+            k = _pkey(d)
+            if k in memo or k in todo:
+                continue
+            why = _auto_prefence(d)
+            if why is not None:
+                counts["prefenced"] += 1
+                memo[k] = None
+                log.info("SCREEN: candidate rejected before the FEM (%s)",
+                         str(why)[:140])
+                continue
+            todo[k] = d
+        if not todo:
+            return
+        # The budget is a PROMISE, not a target — enforce it inside the wave, not
+        # only between waves, or a 36-eval screening pass overruns a quote the
+        # user was given.  A trimmed screening pass simply leaves those variables
+        # one-sided or unmeasured, and the table SAYS so.
+        room = int(budget) - state["n_evals"]
+        if room < len(todo):
+            dropped = list(todo)[max(0, room):]
+            for k in dropped:
+                todo.pop(k, None)
+            log.info("SCREEN: eval budget nearly spent (%d/%d) — %d candidate(s) "
+                     "in this wave dropped, unmeasured rather than assumed",
+                     state["n_evals"], budget, len(dropped))
+        if not todo:
+            return
+        from concurrent.futures import as_completed
+        with ThreadPoolExecutor(max_workers=max(1, _SCAN_WORKERS)) as pool:
+            futs = {pool.submit(_eval_at, dict(d), I): k for k, d in todo.items()}
+            for fut in as_completed(futs):
+                k = futs[fut]
+                out = fut.result()
+                if out and out.get("ok"):
+                    memo[k] = out["res"]
+                    p = _pt(out, "screen")
+                    if p:
+                        all_pts.append(p)
+                    # A screening perturbation is a real, fully-paid-for design.
+                    # If one of them is the best thing this run has seen, it IS
+                    # the best thing this run has seen — the incumbent is not
+                    # allowed to be worse than a point already on the table just
+                    # because no line search happened to land on it.
+                    _keep_if_best(todo[k], out["res"])
+                else:
+                    memo[k] = None
+                with _descent_lock:
+                    _descent_state["n_evals"] = state["n_evals"]
+                    _descent_state["points"] = list(all_pts)
+                    _descent_state["auto"] = dict(_descent_state.get("auto") or {},
+                                                  rejects=_reject_block())
+
+    def _spent() -> int:
+        return state["n_evals"]
+
+    try:
+        log.info("SCREENING DESCENT | ripple <= %.2f%% | %d vars | budget %d evals\n"
+                 "  operating point: %.4g A - %.4g rpm - gamma %.4g deg - coil %.4g C - %d steps/T\n"
+                 "  screening deviations: %s",
+                 ripple_max, len(names), budget, I, rpm, g,
+                 float(ev["coil_temp_c"]), int(ev["steps_per_period"]),
+                 ", ".join("{}=±{:g}".format(n, base_delta[n]) for n in names))
+
+        _RIPPLE_PEN_LAM["v"] = _AUTO_RIPPLE_LAMBDA
+        _RIPPLE_PEN_LAM["v0"] = _AUTO_RIPPLE_LAMBDA
+        _THD_PEN["lam"] = 0.0
+
+        with _descent_lock:
+            _descent_state["phase"] = "baseline"
+        _save_descent_state()
+
+        x_cur = to_geom(x0)
+        b = _eval_at(x_cur, I)
+        if not b.get("ok"):
+            with _descent_lock:
+                _descent_state.update(
+                    error=("baseline eval failed — the CURRENT design does not "
+                           "evaluate at this operating point: {}".format(b.get("error"))),
+                    running=False, phase="done")
+            _save_descent_state()
+            return
+        base = b["res"]
+        memo[_pkey(x_cur)] = base
+        _bp = _pt(b, "baseline")
+        if _bp:
+            all_pts.append(_bp)
+        bump = float(plan["current_bump_pct"])
+        bb = _eval_at(x_cur, I * (1.0 + bump / 100.0))
+        if not bb.get("ok"):
+            with _descent_lock:
+                _descent_state.update(
+                    error=("baseline LINE failed — the second reference sim at "
+                           "I x {:.2f} did not evaluate ({}), so the perpendicular-"
+                           "distance objective has no reference to measure against."
+                           .format(1.0 + bump / 100.0, bb.get("error"))),
+                    running=False, phase="done")
+            _save_descent_state()
+            return
+        base["_bline"] = _make_bline(base, bb["res"], bump)
+        with _descent_lock:
+            _descent_state["baseline_line"] = dict(base["_bline"])
+
+        def _score(m: Optional[Dict[str, Any]]):
+            """(cost, F) for one evaluated point — computed NOW, at the current
+            ripple λ, so a penalty ramp re-scores every comparison at once."""
+            if m is None:
+                return None, None
+            return _descent_cost(m, base, ripple_max, 1.0, 1.0, 1.0, 1e9)
+
+        def _cost_of(d: Dict[str, float]):
+            c, _F = _score(memo.get(_pkey(d)))
+            return c
+
+        cost0, F0 = _score(base)
+        best = {"x": dict(x_cur), "metrics": base, "cost": cost0, "F": F0}
+        cur = {"x": dict(x_cur), "metrics": base, "cost": cost0, "F": F0}
+
+        def _bstate():
+            return {"metrics": _msum(best["metrics"]), "cost": round(best["cost"], 6),
+                    "F": round(best["F"], 6), "x": dict(best["x"])}
+
+        def _keep_if_best(d: Dict[str, float], m: Dict[str, Any]) -> None:
+            """Record any evaluated design that beats the incumbent.  Called for
+            every point the run pays for, screening perturbations included — a
+            run must never report a worse design than one it already measured."""
+            c, F = _score(m)
+            if c is not None and c < best["cost"] - _SCREEN_TOL:
+                best.update(x=dict(d), metrics=m, cost=c, F=F)
+                with _descent_lock:
+                    _descent_state["best"] = _bstate()
+
+        def _log_step(phase: str, note: str) -> None:
+            history.append({"iter": len(history), "phase": phase,
+                            **_msum(cur["metrics"]),
+                            "cost": round(cur["cost"], 6), "F": round(cur["F"], 6),
+                            "x": {k: round(float(v), 4) for k, v in cur["x"].items()}})
+            trajectory.append({"step": len(trajectory), "phase": phase, "note": note,
+                               "F": round(float(cur["F"]), 6),
+                               "cost": round(float(cur["cost"]), 6),
+                               "fem_evals": state["n_evals"],
+                               "cache_hits": state["n_cache_pre"] + state["n_cache_self"],
+                               "td": cur["metrics"].get("torque_per_mass_Nm_kg"),
+                               "eff": cur["metrics"].get("efficiency"),
+                               "ripple": cur["metrics"].get("T_ripple_pct"),
+                               "x": {k: round(float(v), 4) for k, v in cur["x"].items()}})
+            with _descent_lock:
+                _descent_state.update(iter=len(history), history=list(history),
+                                      best=_bstate(), current=_msum(cur["metrics"]),
+                                      n_evals=state["n_evals"])
+                _descent_state["auto"] = dict(
+                    _descent_state.get("auto") or {},
+                    rejects=_reject_block(), trajectory=list(trajectory))
+            _save_descent_state()
+            log.info("SCREEN %s | F=%+.6g cost=%.6g | td=%.4g eff=%.5g ripple=%.3g%% "
+                     "| %d FEM evals (%d cache hits) | %s",
+                     phase, cur["F"], cur["cost"],
+                     float(cur["metrics"].get("torque_per_mass_Nm_kg") or 0.0),
+                     float(cur["metrics"].get("efficiency") or 0.0),
+                     float(cur["metrics"].get("T_ripple_pct") or 0.0),
+                     state["n_evals"],
+                     state["n_cache_pre"] + state["n_cache_self"], note)
+
+        with _descent_lock:
+            _descent_state.update(
+                running=True, iter=0, phase="screening", n_evals=state["n_evals"],
+                baseline=_msum(base), best=_bstate(), current=_msum(base),
+                points=list(all_pts), grad={}, error=None,
+                variables=[{"name": v["name"], "lo": v["lo"], "hi": v["hi"],
+                            "step": v["delta"]} for v in specs])
+        _log_step("baseline", "start design, {:.4g} A".format(I))
+
+        def _cancelled() -> bool:
+            with _descent_lock:
+                return bool(_descent_state["cancel"])
+
+        # ── SCREEN ───────────────────────────────────────────────────────────
+        def screen(subset: List[str], scale: float) -> Dict[str, Any]:
+            """Perturb each variable in ``subset`` by ±δ·scale around the CURRENT
+            design and return the ranked sensitivity table."""
+            deltas = {nm: _screen_delta(spec_by[nm]["unit"], spec_by[nm]["is_int"],
+                                        scale) for nm in subset}
+            wave, side = [], {}
+            for nm in subset:
+                for sgn, tag in ((+1.0, "plus"), (-1.0, "minus")):
+                    d = dict(cur["x"])
+                    d[nm] = d[nm] + sgn * deltas[nm]
+                    if d[nm] < float(spec_by[nm]["lo"]) - 1e-12:
+                        continue          # −δ would leave the physical half-line
+                    d = to_geom(d)
+                    if _pkey(d) == _pkey(cur["x"]):
+                        continue          # quantised back onto the current point
+                    side[(nm, tag)] = d
+                    wave.append(d)
+            with _descent_lock:
+                _descent_state["phase"] = "screening"
+            _eval_batch(wave)
+            c_plus, c_minus, F_plus, F_minus = {}, {}, {}, {}
+            for (nm, tag), d in side.items():
+                c, F = _score(memo.get(_pkey(d)))
+                if c is None:
+                    continue
+                (c_plus if tag == "plus" else c_minus)[nm] = c
+                (F_plus if tag == "plus" else F_minus)[nm] = F
+            rows = _screen_rows(subset, [deltas[nm] for nm in subset], cur["cost"],
+                                c_plus, c_minus, F_plus, F_minus)
+            noise = _screen_noise_floor(rows)
+            tab = {"rows": rows, "noise_floor": noise, "scale": scale,
+                   "n_vars": len(subset), "at_F": cur["F"]}
+            log.info("SCREEN table (delta x%.3g, noise floor %.3g):\n%s", scale, noise,
+                     "\n".join(
+                         "  {:<22} influence {:>10.3g}  slope {:>11.4g}  move {:+.0f}"
+                         "  jitter {:>9}  {}".format(
+                             r["name"], r["influence"], r["slope"], r["direction"],
+                             ("{:.3g}".format(r["jitter"]) if r["jitter"] is not None
+                              else "—"),
+                             ("UNMEASURED" if not r["measured"] else
+                              "one-sided" if r["one_sided"] else
+                              "inert" if r["influence"] <= noise else ""))
+                         for r in rows))
+            with _descent_lock:
+                _descent_state["auto"] = dict(
+                    _descent_state.get("auto") or {},
+                    sensitivity={"noise_floor": noise, "scale": scale,
+                                 "rows": [{k: r.get(k) for k in
+                                           ("name", "influence", "slope", "slope_F",
+                                            "direction", "jitter", "one_sided",
+                                            "measured")}
+                                          for r in rows]})
+            return tab
+
+        # ── LINE SEARCH ──────────────────────────────────────────────────────
+        def line_search(step: Dict[str, float], phase: str, label: str) -> bool:
+            """Try α·step for every α in _SCREEN_ALPHAS — independent points, one
+            parallel wave — and ACCEPT the best if it lowers the cost.  Returns
+            whether the design moved."""
+            if not step:
+                return False
+            cand = {}
+            for a in _SCREEN_ALPHAS:
+                d = dict(cur["x"])
+                for nm, s in step.items():
+                    d[nm] = d[nm] + a * s
+                d = to_geom(d)
+                if _pkey(d) != _pkey(cur["x"]):
+                    cand[a] = d
+            if not cand:
+                log.info("SCREEN: %s — every step quantised back onto the current "
+                         "design (0.1 mm manufacturing grid); nothing to try", label)
+                return False
+            with _descent_lock:
+                _descent_state["phase"] = phase
+            _eval_batch(list(cand.values()))
+            scored = []
+            for a, d in cand.items():
+                c, F = _score(memo.get(_pkey(d)))
+                if c is not None:
+                    scored.append((c, a, d, F))
+            if not scored:
+                log.info("SCREEN: %s — no candidate on the line evaluated", label)
+                return False
+            scored.sort(key=lambda t: t[0])
+            c, a, d, F = scored[0]
+            if c >= cur["cost"] - _SCREEN_TOL:
+                log.info("SCREEN: %s — best on the line (alpha %.2g) costs %.6g, "
+                         "not better than %.6g; rejected", label, a, c, cur["cost"])
+                return False
+            moves = ", ".join("{} {:+.3g}".format(nm, d[nm] - cur["x"][nm])
+                              for nm in sorted(step)
+                              if abs(d[nm] - cur["x"][nm]) > 1e-9)
+            cur.update(x=dict(d), metrics=memo[_pkey(d)], cost=c, F=F)
+            if c < best["cost"] - _SCREEN_TOL:
+                best.update(x=dict(d), metrics=memo[_pkey(d)], cost=c, F=F)
+            _log_step(phase, "{} | alpha {:g} | {}".format(label, a, moves or "—"))
+            # Penalty continuation — the same machinery the CMA route uses.
+            ramp = _ripple_ramp_step(cur["metrics"], ripple_max, len(history))
+            if ramp is not None:
+                cur["cost"], cur["F"] = _score(cur["metrics"])
+                best["cost"], best["F"] = _score(best["metrics"])
+                with _descent_lock:
+                    _descent_state.setdefault("range_events", []).append(dict(ramp))
+                    _descent_state["best"] = _bstate()
+            return True
+
+        # ── the run ──────────────────────────────────────────────────────────
+        scale = 1.0
+        active: List[str] = []
+        table = screen(list(names), scale)
+        _log_step("screening", "opening screen over all {} variables, {} FEM evals"
+                  .format(len(names), state["n_evals"]))
+        stop_reason = "budget"
+
+        while True:
+            if _cancelled():
+                stop_reason = "cancelled"
+                break
+            if _spent() >= budget:
+                stop_reason = "budget"
+                break
+
+            # DESCENT on the influential set ─────────────────────────────────
+            pick = _screen_pick_k(table["rows"], table["noise_floor"])
+            active = list(pick["names"])
+            log.info("SCREEN: descending on %d of %d variables — %s (%s)",
+                     pick["k"], len(names), ", ".join(active) or "none", pick["why"])
+            with _descent_lock:
+                _descent_state["auto"] = dict(_descent_state.get("auto") or {},
+                                              active_set=list(active),
+                                              active_why=pick["why"])
+            while active and _spent() < budget and not _cancelled():
+                if not line_search(_screen_step(table["rows"], active), "descent",
+                                   "descent on " + "+".join(active)):
+                    break
+                # The gradient ROTATES as the design moves — re-screen the active
+                # set (2k evals) before taking another step along a stale one.
+                if _spent() >= budget:
+                    break
+                table = screen(active, scale)
+
+            # The active set stalled.  Before abandoning it, re-screen EVERYTHING
+            # once: the influential set at the new point may not be the old one.
+            if _spent() < budget and not _cancelled():
+                table = screen(list(names), scale)
+                pick2 = _screen_pick_k(table["rows"], table["noise_floor"])
+                if set(pick2["names"]) != set(active) and pick2["names"]:
+                    log.info("SCREEN: full re-screen moved the influential set to "
+                             "%s — descending again", ", ".join(pick2["names"]))
+                    if line_search(_screen_step(table["rows"], pick2["names"]),
+                                   "descent", "descent on " + "+".join(pick2["names"])):
+                        active = list(pick2["names"])
+                        continue
+
+            # POLISH the rest, in the user's groups of ≤4 ─────────────────────
+            rest = [r["name"] for r in table["rows"]
+                    if r["name"] not in set(active) and r.get("measured")]
+            polished = False
+            with _descent_lock:
+                _descent_state["phase"] = "polish"
+            for grp in _screen_groups(rest, _SCREEN_GROUP):
+                if _spent() >= budget or _cancelled():
+                    break
+                gt = screen(grp, scale)
+                if line_search(_screen_step(gt["rows"], grp), "polish",
+                               "polish " + "+".join(grp)):
+                    polished = True
+            if polished:
+                # Polish paid — the influential set may have shifted, so go back
+                # and descend from the new point rather than declaring victory.
+                if _spent() < budget and not _cancelled():
+                    table = screen(list(names), scale)
+                continue
+
+            # Neither the influential set nor the polish groups paid at this δ.
+            # (There is no point lapping again at the same deviation: the descent
+            # inner loop already ran to exhaustion, the full re-screen already
+            # retried, and every point is memoised — a repeat lap would measure
+            # the identical numbers.)  So halve δ once, down to the floor, and
+            # try the whole cycle again — the user's «доводка», finer.
+            if scale * _SCREEN_SHRINK >= _SCREEN_MIN_SHRINK - 1e-12 \
+                    and _spent() < budget and not _cancelled():
+                scale *= _SCREEN_SHRINK
+                log.info("SCREEN: no improvement at this deviation — shrinking "
+                         "delta to x%.3g of the screening value", scale)
+                with _descent_lock:
+                    _descent_state.setdefault("range_events", []).append({
+                        "iter": len(history), "name": "screen_delta", "side": "shrink",
+                        "to": round(scale, 4),
+                        "why": "a full descent+polish round measured no improvement"})
+                table = screen(list(names), scale)
+                continue
+            stop_reason = "converged"
+            break
+
+        if _cancelled():
+            stop_reason = "cancelled"
+        log.info("SCREEN: stopping — %s", stop_reason)
+
+        rj = _reject_block()
+        result = {
+            "best": {"x": best["x"],
+                     "overrides": {k: round(float(v), 4) for k, v in best["x"].items()},
+                     "metrics": _msum(best["metrics"]), "cost": round(best["cost"], 6),
+                     "F": round(best["F"], 6)},
+            "baseline": _msum(base), "history": list(history),
+            "n_evals": state["n_evals"], "cache_hits": rj["cache_hits"],
+            "operating_point": op, "ripple_max_pct": ripple_max,
+            "baseline_line": base.get("_bline"),
+            "algorithm": "screening_descent", "auto": True, "mode": "screen",
+            "rejects": rj, "stop_reason": stop_reason,
+            "trajectory": list(trajectory),
+            "sensitivity": {"noise_floor": table["noise_floor"],
+                            "scale": table["scale"], "rows": table["rows"]},
+            "active_set": list(active),
+            "delta": dict(base_delta),
+        }
+        with _descent_lock:
+            _descent_state["result"] = result
+            _descent_state["auto"] = dict(_descent_state.get("auto") or {},
+                                          rejects=rj, n_evals=state["n_evals"],
+                                          stop_reason=stop_reason)
+        log.info("SCREEN done | %d FEM evals + %d cache hits | %d fenced | best "
+                 "F=%+.6g ripple %.3g%% (gate %.3g%%) td=%.4g eff=%.5g",
+                 state["n_evals"], rj["cache_hits"], rj["rejected"], best["F"],
+                 float(best["metrics"].get("T_ripple_pct") or 0.0), ripple_max,
+                 float(best["metrics"].get("torque_per_mass_Nm_kg") or 0.0),
+                 float(best["metrics"].get("efficiency") or 0.0))
+
+        try:
+            pt = _auto_compare_point(bucket, point_name, plan, result)
+            with _descent_lock:
+                _descent_state["auto"] = dict(
+                    _descent_state.get("auto") or {},
+                    compare_point={"id": pt.get("id"), "name": pt.get("name")})
+        except Exception as _e:   # noqa: BLE001 — a failed save must not lose the run
+            log.warning("screen: could not save the compare point: %s", _e)
+            with _descent_lock:
+                _descent_state["auto"] = dict(_descent_state.get("auto") or {},
+                                              compare_point_error=str(_e))
+    except Exception as e:  # noqa: BLE001
+        log.exception("screening descent failed")
+        with _descent_lock:
+            _descent_state["error"] = str(e)
+    finally:
+        with _descent_lock:
+            _descent_state["running"] = False
+            _descent_state["phase"] = "done"
+        _save_descent_state()
+        _save_eval_rate()
+
+
 def _auto_result_metrics(m: Dict[str, Any], rpm: float, geo_sig: str) -> Dict[str, Any]:
     """Optimizer metrics re-keyed into the Compare tab's result vocabulary (the
     one PhysicsDashboard writes), so an auto point renders in the same columns
@@ -3587,6 +4476,8 @@ def _auto_compare_point(bucket: str, name: str, plan: Dict[str, Any],
         "min_size_mm": ev["min_size_mm"],
         # ── provenance: what produced this row ──────────────────────────────
         "src": "auto_optimizer",
+        "src_mode": plan.get("mode", _AUTO_DEFAULT_MODE),
+        "src_algorithm": result.get("algorithm"),
         "src_objective": plan["objective"],
         "src_ripple_max_pct": plan["ripple_max_pct"],
         "src_ripple_lambda": plan["ripple_penalty_lambda"],
@@ -3611,8 +4502,16 @@ def _auto_compare_point(bucket: str, name: str, plan: Dict[str, Any],
 
 
 class AutoOptRequest(BaseModel):
-    """The whole user-facing surface of a one-click optimization: ONE number."""
+    """The whole user-facing surface of a one-click optimization: ONE number —
+    plus WHICH SEARCH runs it, because the two available searches answer
+    different questions and only the engineer knows which one is being asked."""
     max_ripple_pct: float
+    # 'cmaes'  — global population search; explores, can change basin, needs
+    #            O(N²) evals before its covariance means anything.
+    # 'screen' — the engineer's method: screen every variable by ±δ, descend the
+    #            influential ones, polish with the rest.  Local, but it starts
+    #            paying after 2N evals.  See docs/SCREENING_DESCENT.md.
+    mode: str = _AUTO_DEFAULT_MODE
     # Everything below is an escape hatch, not a knob the simple card shows.
     budget_evals: int = 0        # 0 = the standing default
     point_name: str = ""         # override the auto_ripple<NN>_<date> name
@@ -3622,7 +4521,12 @@ class AutoOptRequest(BaseModel):
 def _auto_point_name(req: "AutoOptRequest") -> str:
     if (req.point_name or "").strip():
         return req.point_name.strip()[:80]
-    return "auto_ripple{:02d}_{}".format(
+    # The mode is part of the NAME, not just the provenance: two rows in Compare
+    # that differ only in which search produced them must be tellable apart at a
+    # glance, or a comparison of the two algorithms cannot be read off the table.
+    md = str(getattr(req, "mode", _AUTO_DEFAULT_MODE) or _AUTO_DEFAULT_MODE).lower()
+    return "auto{}_ripple{:02d}_{}".format(
+        "" if md == "cmaes" else "_" + md,
         int(round(float(req.max_ripple_pct))), datetime.now().strftime("%Y%m%d"))
 
 
@@ -3633,22 +4537,23 @@ def auto_plan(req: AutoOptRequest):
     Project rule: a run says what it costs before it starts.  This is the
     pre-flight the Run button shows — the assembled operating point, objective,
     variables with their initial steps, and n_evals x measured s/eval."""
-    plan = _auto_assemble(req.max_ripple_pct, req.budget_evals)
+    plan = _auto_assemble(req.max_ripple_pct, req.budget_evals, req.mode)
     return {"plan": plan, "point_name": _auto_point_name(req)}
 
 
 @router.post("/auto")
 def auto_start(req: AutoOptRequest, request: Request):
-    """One-click optimization: the user gives the max torque ripple, this route
-    assembles the rest from the project's standing conventions and launches the
-    existing CMA-ES machinery.  Progress on the existing optimizer channel
-    (GET /api/optimization/descent/progress)."""
+    """One-click optimization: the user gives the max torque ripple and the
+    search mode, this route assembles the rest from the project's standing
+    conventions and launches it.  Progress on the existing optimizer channel
+    (GET /api/optimization/descent/progress) for BOTH modes, so every chart, the
+    Apply path and the eval-param restore keep working unchanged."""
     with _descent_lock:
         if _descent_state["running"]:
             raise HTTPException(status_code=409,
                                 detail="an optimization is already running")
 
-    plan = _auto_assemble(req.max_ripple_pct, req.budget_evals)
+    plan = _auto_assemble(req.max_ripple_pct, req.budget_evals, req.mode)
     name = _auto_point_name(req)
     try:
         from motor_ai_sim.routes.saved_sims import bucket_for
@@ -3684,6 +4589,7 @@ def auto_start(req: AutoOptRequest, request: Request):
                 "min_size_mm": plan["eval"]["min_size_mm"]},
             "auto": {"max_ripple_pct": plan["ripple_max_pct"],
                      "objective": plan["objective"],
+                     "mode": plan["mode"],
                      "budget_evals": plan["budget_evals"],
                      "population": plan["population"],
                      "generations": plan["generations"],
@@ -3691,10 +4597,12 @@ def auto_start(req: AutoOptRequest, request: Request):
                      "cost": plan["cost"],
                      "point_name": name,
                      "sigma": {v["name"]: v["sigma"] for v in plan["variables"]},
+                     "delta": {v["name"]: v["delta"] for v in plan["variables"]},
                      "rejects": None},
             "run_id": req.run_id, "error": None, "cancel": False})
 
-    threading.Thread(target=_auto_worker, args=(plan, req.run_id, bucket, name),
+    worker = _screen_worker if plan["mode"] == "screen" else _auto_worker
+    threading.Thread(target=worker, args=(plan, req.run_id, bucket, name),
                      daemon=True).start()
     return {"started": True, "run_id": req.run_id, "plan": plan, "point_name": name}
 
@@ -3740,6 +4648,13 @@ def auto_status():
         "n_evals": st.get("n_evals"), "budget_evals": auto.get("budget_evals"),
         "max_ripple_pct": auto.get("max_ripple_pct"),
         "objective": auto.get("objective"),
+        "mode": auto.get("mode") or _AUTO_DEFAULT_MODE,
+        # Screening-mode extras — absent for a CMA run, and absent is the honest
+        # answer there (a CMA run never measured a sensitivity table).
+        "sensitivity": auto.get("sensitivity"),
+        "active_set": auto.get("active_set"),
+        "trajectory": auto.get("trajectory"),
+        "stop_reason": auto.get("stop_reason"),
         "operating_point": auto.get("operating_point"),
         "cost": auto.get("cost"), "rejects": auto.get("rejects"),
         "point_name": auto.get("point_name"),
@@ -3769,7 +4684,8 @@ def auto_save_compare_point(req: AutoPointRequest, request: Request):
         raise HTTPException(status_code=404,
                             detail="no finished auto-optimization to save")
     plan = _auto_assemble(float(auto.get("max_ripple_pct", 5.0)),
-                          int(auto.get("budget_evals", 0) or 0))
+                          int(auto.get("budget_evals", 0) or 0),
+                          str(auto.get("mode") or _AUTO_DEFAULT_MODE))
     plan["operating_point"] = auto.get("operating_point") or plan["operating_point"]
     try:
         from motor_ai_sim.routes.saved_sims import bucket_for

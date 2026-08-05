@@ -15,7 +15,10 @@ browser workbench.
 - 🧮 **FEM electromagnetics** — magnetostatic field, time-stepped transient with a
   sliding air-gap band (torque, back-EMF, iron/copper/magnet losses, demagnetisation)
 - 🌡️ Steady-state **thermal** map (scikit-fem conduction; air / liquid cooling models)
-- 📈 **Optimization** (CMA-ES / descent) + DOE sweeps over geometry and operating point
+- 📈 **Optimization** — two searches on one button: *Explore* (CMA-ES) and
+  *Refine* (screening descent: deviate every variable, descend the influential
+  few, polish with the rest — see `docs/SCREENING_DESCENT.md`) + DOE sweeps over
+  geometry and operating point
 - 💶 **Cost estimation** — material masses × prices + labour, by line item
 - 🧊 3-D viewer, field/loss/temperature colour maps, saved-motor catalog
 

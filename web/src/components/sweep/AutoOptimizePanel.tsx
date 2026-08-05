@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Box, Button, Card, CardContent, Chip, CircularProgress, Divider,
   LinearProgress, Table, TableBody, TableCell, TableHead, TableRow, TextField,
-  Tooltip, Typography,
+  ToggleButton, ToggleButtonGroup, Tooltip, Typography,
 } from '@mui/material';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
@@ -54,12 +54,14 @@ function delta(now?: number, was?: number, d = 3, unit = ''): string {
 
 type Plan = {
   objective: string;
+  mode: 'cmaes' | 'screen';
   ripple_max_pct: number;
   ripple_penalty_lambda: number;
   operating_point: { current_a: number; rpm: number; gamma_deg: number };
   eval: Record<string, any>;
-  variables: { name: string; x0: number; sigma: number; unit: string }[];
+  variables: { name: string; x0: number; sigma: number; delta: number; unit: string }[];
   budget_evals: number; population: number; generations: number;
+  screen?: { n_screen_evals: number; group_size: number; alphas: number[] };
   cost: {
     s_per_eval: number; s_per_eval_source: string; n_samples: number;
     n_evals_max: number; parallel_workers: number;
@@ -74,6 +76,17 @@ const AutoOptimizePanel: React.FC = () => {
   const [maxRipple, setMaxRipple] = useState<number>(() => {
     try { return Math.max(0.1, Number(JSON.parse(localStorage.getItem('auto.maxRipple') ?? '5')) || 5); }
     catch { return 5; }
+  });
+  // WHICH SEARCH runs it.  Not cosmetic: on the CIANO20 150_35 the population
+  // search spent 434 evals without beating its own baseline, and the engineer
+  // beat it by hand with the screening method in a dozen solves.  Only the
+  // person looking at the machine knows which question is being asked, so the
+  // choice is theirs — and it is remembered.
+  const [mode, setMode] = useState<'cmaes' | 'screen'>(() => {
+    try {
+      const v = JSON.parse(localStorage.getItem('auto.mode') ?? '"cmaes"');
+      return v === 'screen' ? 'screen' : 'cmaes';
+    } catch { return 'cmaes'; }
   });
   const [plan, setPlan] = useState<Plan | null>(null);
   const [planError, setPlanError] = useState<string | null>(null);
@@ -97,17 +110,23 @@ const AutoOptimizePanel: React.FC = () => {
     try { localStorage.setItem('auto.maxRipple', JSON.stringify(x)); } catch { /* quota */ }
   };
 
+  const updMode = (m: 'cmaes' | 'screen' | null) => {
+    if (!m) return;                       // the group must always have a choice
+    setMode(m);
+    try { localStorage.setItem('auto.mode', JSON.stringify(m)); } catch { /* quota */ }
+  };
+
   // ── Pre-flight: assemble + quote, WITHOUT launching ────────────────────────
   // Project rule: a run says what it costs before it starts.  So the card fetches
   // the plan as soon as the number changes and shows it next to the Run button —
   // the estimate is not an afterthought printed once the FEM is already burning.
-  const fetchPlan = useCallback(async (ripple: number) => {
+  const fetchPlan = useCallback(async (ripple: number, m: string) => {
     if (!connectedToApi) return;
     setPlanBusy(true); setPlanError(null);
     try {
       const r = await fetch(`${API}/api/optimization/auto/plan`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ max_ripple_pct: ripple }),
+        body: JSON.stringify({ max_ripple_pct: ripple, mode: m }),
       });
       const j = await r.json().catch(() => null);
       if (!r.ok) throw new Error(j?.detail ?? `HTTP ${r.status}`);
@@ -120,9 +139,9 @@ const AutoOptimizePanel: React.FC = () => {
   }, [connectedToApi]);
 
   useEffect(() => {
-    const t = setTimeout(() => { void fetchPlan(maxRipple); }, 350);
+    const t = setTimeout(() => { void fetchPlan(maxRipple, mode); }, 350);
     return () => clearTimeout(t);
-  }, [maxRipple, fetchPlan]);
+  }, [maxRipple, mode, fetchPlan]);
 
   // ── Live progress ─────────────────────────────────────────────────────────
   // Poll here rather than leaning on the Advanced panel's mirror: this card is
@@ -150,7 +169,7 @@ const AutoOptimizePanel: React.FC = () => {
     try {
       const r = await fetch(`${API}/api/optimization/auto`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ max_ripple_pct: maxRipple }),
+        body: JSON.stringify({ max_ripple_pct: maxRipple, mode }),
       });
       const j = await r.json().catch(() => null);
       if (!r.ok) throw new Error(j?.detail ?? `HTTP ${r.status}`);
@@ -210,6 +229,28 @@ const AutoOptimizePanel: React.FC = () => {
             inputProps={{ min: 0.1, max: 100, step: 0.5, style: { fontSize: 14, width: 64 } }}
             InputLabelProps={{ sx: { fontSize: 12 } }}
           />
+          {/* WHICH search. One short label each; the reasoning lives in the
+              tooltip, not on the card. */}
+          <ToggleButtonGroup exclusive size="small" value={mode} disabled={running}
+            onChange={(_e, m) => updMode(m)}
+            sx={{ '& .MuiToggleButton-root': { py: 0.35, px: 1, fontSize: 11,
+                                               textTransform: 'none' } }}>
+            <Tooltip placement="top" title={
+              'Explore: CMA-ES draws a whole population per generation and adapts its own '
+              + 'covariance. It can leave the basin the current design sits in, which is what '
+              + 'you want for a machine nobody has optimised yet — but it needs O(N²) evals '
+              + 'before that covariance means anything.'}>
+              <ToggleButton value="cmaes">Explore</ToggleButton>
+            </Tooltip>
+            <Tooltip placement="top" title={
+              'Refine: deviate every variable by ±0.2 mm (0.02 for dimensionless ones), rank '
+              + 'what actually moves the machine, descend the most influential few, then polish '
+              + 'with the rest in groups of four. Starts paying after 2×N evals, and it is the '
+              + 'method that beat a 434-eval CMA-ES run by hand on this motor. Local: it finds '
+              + 'the nearest optimum, it does not change basin.'}>
+              <ToggleButton value="screen">Refine</ToggleButton>
+            </Tooltip>
+          </ToggleButtonGroup>
           {running ? (
             <Button variant="contained" color="error" size="small" startIcon={<StopIcon />}
               onClick={() => cancelDescent()}>
@@ -254,7 +295,9 @@ const AutoOptimizePanel: React.FC = () => {
             <Chip size="small" variant="outlined" sx={{ height: 22, fontSize: 10.5 }}
               label={`${fmt(plan.operating_point.current_a, 1)} A · ${fmt(plan.operating_point.rpm, 0)} rpm · γ ${fmt(plan.operating_point.gamma_deg, 1)}°`} />
             <Chip size="small" variant="outlined" sx={{ height: 22, fontSize: 10.5 }}
-              label={`${plan.variables.length} vars · unboxed`} />
+              label={plan.mode === 'screen'
+                ? `${plan.variables.length} vars · screen ${plan.screen?.n_screen_evals ?? 0} evals`
+                : `${plan.variables.length} vars · unboxed`} />
             <Chip size="small" variant="outlined" sx={{ height: 22, fontSize: 10.5 }}
               label={`obj: above baseline · ripple ≤ ${fmt(plan.ripple_max_pct, 1)}% (λ ${plan.ripple_penalty_lambda})`} />
             <Chip size="small" variant="outlined" sx={{ height: 22, fontSize: 10.5 }}
@@ -287,7 +330,11 @@ const AutoOptimizePanel: React.FC = () => {
                 <span>{v.name}</span>
                 <span style={{ color: 'var(--text-1)', fontVariantNumeric: 'tabular-nums' }}>
                   {fmt(v.x0, v.unit === 'mm' ? 2 : 3)}{v.unit === 'mm' ? ' mm' : ''}
-                  <span style={{ color: 'var(--text-4)' }}> · σ {fmt(v.sigma, 2)}</span>
+                  <span style={{ color: 'var(--text-4)' }}>
+                    {plan.mode === 'screen'
+                      ? ` · ±${fmt(v.delta, 2)}`
+                      : ` · σ ${fmt(v.sigma, 2)}`}
+                  </span>
                 </span>
               </Box>
             ))}
@@ -317,7 +364,11 @@ const AutoOptimizePanel: React.FC = () => {
               <Typography variant="caption" sx={{ fontWeight: 600 }}>
                 {st.phase === 'baseline' ? 'baseline + reference line…'
                   : st.phase === 'starting' ? 'starting…'
-                  : `generation ${st.iter ?? 0}/${auto.generations ?? '?'}`}
+                  : auto.mode === 'screen'
+                    ? (st.phase === 'screening' ? 'screening every variable…'
+                      : st.phase === 'polish' ? 'polishing the rest…'
+                      : `descending · step ${st.iter ?? 0}`)
+                    : `generation ${st.iter ?? 0}/${auto.generations ?? '?'}`}
               </Typography>
               <Chip size="small" variant="outlined" sx={{ height: 20, fontSize: 10 }}
                 label={`${nEvals}/${budget || '?'} evals`} />
@@ -351,6 +402,40 @@ const AutoOptimizePanel: React.FC = () => {
             <LinearProgress
               variant={st.phase === 'baseline' || st.phase === 'starting' ? 'indeterminate' : 'determinate'}
               value={progPct} sx={{ height: 6, borderRadius: 3 }} />
+          </Box>
+        )}
+
+        {/* What the screening actually measured: which knobs move this machine.
+            The most useful thing a screening run produces is not the winner —
+            it is the ranked list, because the engineer keeps it after the run.
+            One line of chips; the numbers live in the tooltip. */}
+        {auto.mode === 'screen' && auto.sensitivity?.rows?.length > 0 && (
+          <Box sx={{ mt: 1, display: 'flex', gap: 0.6, flexWrap: 'wrap',
+                     alignItems: 'center' }}>
+            <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+              Most influential:
+            </Typography>
+            {auto.sensitivity.rows.slice(0, 6).map((r: any) => {
+              const inert = !r.measured
+                || Math.abs(r.influence) <= (auto.sensitivity.noise_floor ?? 0);
+              const on = (auto.active_set ?? []).includes(r.name);
+              return (
+                <Tooltip key={r.name} placement="top" title={
+                  `${r.name}: moving it by one screening deviation changes the objective by `
+                  + `${fmt(r.influence, 5)}; the design wants it to go `
+                  + `${r.direction < 0 ? 'DOWN' : 'UP'}. `
+                  + (r.one_sided ? 'Only one side was buildable, so this is a one-sided slope. ' : '')
+                  + (inert ? 'Under the noise floor — not evidence of anything. ' : '')
+                  + `Noise floor ${fmt(auto.sensitivity.noise_floor, 5)}.`}>
+                  <Chip size="small" variant={on ? 'filled' : 'outlined'}
+                    sx={{ height: 20, fontSize: 10,
+                          opacity: inert ? 0.45 : 1,
+                          borderColor: on ? 'rgba(34,197,94,0.6)' : undefined }}
+                    label={`${r.name} ${r.direction < 0 ? '↓' : '↑'}`} />
+                </Tooltip>
+              );
+            })}
+            {auto.active_why && <HelpTip title={String(auto.active_why)} />}
           </Box>
         )}
 

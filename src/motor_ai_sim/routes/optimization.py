@@ -28,6 +28,7 @@ from pydantic import BaseModel, Field
 
 from motor_ai_sim.config import get_config
 from motor_ai_sim.optimization import run_pareto_search
+from motor_ai_sim.optimization import pareto as _pareto
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/optimization", tags=["optimization"])
@@ -1281,6 +1282,85 @@ def _save_descent_state() -> None:
         log.warning("could not persist descent state: %s", _e)
 
 
+def _ov_sig(ov: Dict[str, Any]) -> tuple:
+    """Identity of a geometry: its override map, γ excluded (γ is the operating
+    point, and it travels next to the design, not inside it)."""
+    out = []
+    for k, v in (ov or {}).items():
+        if k == "gamma_deg":
+            continue
+        f = _pareto._f(v)
+        if f is None:
+            continue
+        out.append((str(k), round(f, 9)))
+    return tuple(sorted(out))
+
+
+def _backfill_point_metrics(points: List[Dict[str, Any]]) -> int:
+    """Restore `torque` / `mass` on cloud points published before `_pt` carried
+    them (runs started before 2026-08-05 — including the 110-eval run whose card
+    then drew ZERO dots, because the chart keys on torque).
+
+    Where from: `config/.opt_dataset.jsonl`, which logs every FEM eval with its
+    overrides, current AND torque/mass.  That file is the CROSS-RUN accumulator,
+    so it is used here for ONE thing only — filling two missing fields on a point
+    that is already in this run's own array.  The match key is exact: same
+    override map, same current, and the eff / td / ripple it already carries must
+    agree to 1e-9.  No new point is ever added, and a point that does not match
+    is left alone.  Returns how many were repaired."""
+    need = [p for p in points or []
+            if isinstance(p, dict) and p.get("overrides")
+            and (p.get("torque") is None or p.get("mass") is None)]
+    if not need:
+        return 0
+    try:
+        path = _dataset_path()
+        if not _os_o.path.exists(path):
+            return 0
+        idx: Dict[tuple, List[Dict[str, Any]]] = {}
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    r = _json_o.loads(line)
+                except Exception:      # noqa: BLE001 — a torn last line
+                    continue
+                cur = _pareto._f(r.get("current_a"))
+                if cur is None:
+                    continue
+                idx.setdefault((_ov_sig(r.get("overrides") or {}), round(cur, 6)),
+                               []).append(r)
+    except Exception as _e:            # noqa: BLE001
+        log.debug("point backfill unavailable: %s", _e)
+        return 0
+    fixed = 0
+    for p in need:
+        cur = _pareto._f(p.get("current_a"))
+        if cur is None:
+            continue
+        rows = idx.get((_ov_sig(p.get("overrides") or {}), round(cur, 6))) or []
+        hit = None
+        for r in rows:
+            same = True
+            for pk, rk in (("eff", "eff"), ("td", "td"), ("ripple", "ripple")):
+                a, b = _pareto._f(p.get(pk)), _pareto._f(r.get(rk))
+                if a is None or b is None or abs(a - b) > 1e-9:
+                    same = False
+                    break
+            if same:
+                hit = r
+                break
+        if hit is None:
+            continue
+        if p.get("torque") is None and _pareto._f(hit.get("torque")) is not None:
+            p["torque"] = _pareto._f(hit.get("torque"))
+        if p.get("mass") is None and _pareto._f(hit.get("mass")) is not None:
+            p["mass"] = _pareto._f(hit.get("mass"))
+        fixed += 1
+    if fixed:
+        log.info("restored torque/mass on %d cloud point(s) from the eval log", fixed)
+    return fixed
+
+
 def _load_descent_state() -> None:
     try:
         p = _descent_store_path()
@@ -1289,6 +1369,7 @@ def _load_descent_state() -> None:
         with open(p, encoding="utf-8") as fh:
             blob = _json_o.load(fh)
         if isinstance(blob, dict):
+            _backfill_point_metrics(blob.get("points") or [])
             _descent_state.update(blob)
             _descent_state["running"] = False   # a reloaded run is not in flight
             _descent_state["cancel"] = False
@@ -1353,6 +1434,7 @@ def _refresh_descent_state_from_disk() -> None:
         return
     if not isinstance(blob, dict):
         return
+    _backfill_point_metrics(blob.get("points") or [])
     _descent_state.update(blob)
     _descent_state["running"] = bool(blob.get("running")) and fresh
     _descent_external[0] = bool(_descent_state["running"])
@@ -1522,6 +1604,11 @@ def _pt(out: Dict[str, Any], kind: str):
             # the auto card's torque×ripple cloud could only plot the per-generation
             # BEST history (6 rows), not the run's 50+ measured designs.
             "torque": r.get("T_em_Nm"),
+            # Mass travels with the point too: torque and torque density differ
+            # ONLY by it, so with all three present the Pareto report can state
+            # both axes for the same design (and a point that somehow lost one
+            # of them can still be reconstructed instead of dropped).
+            "mass": r.get("mass_total_kg"),
             "thd": r.get("THD_LL_pct"),      # line-to-line voltage THD (FOC quality)
             "overrides": {k: v for k, v in ov.items() if k != "gamma_deg"},
             "current_a": out.get("current_a") or r.get("current_a"),
@@ -2625,6 +2712,27 @@ def descent_baseline(req: BaselineRequest):
     return {"baseline_line": _make_bline(a["res"], b["res"], bump)}
 
 
+def _with_pareto(st: Dict[str, Any]) -> Dict[str, Any]:
+    """Annotate a state SNAPSHOT with Pareto-dominance flags + a summary.
+
+    Computed at READ time, from the run's OWN points array, so it also answers
+    for runs that finished before this code existed (and cannot drift out of
+    sync with the cloud the same payload carries).  See
+    motor_ai_sim.optimization.pareto for the predicate, the tolerance and the
+    operating-point rule that keeps a candidate from another current/γ out of
+    both sets."""
+    try:
+        pts = st.get("points")
+        if not isinstance(pts, list) or not pts:
+            return st
+        rep = _pareto.report(pts, st.get("baseline") or {}, _pareto.resolve_op(st))
+        st["points"] = rep["points"]
+        st["pareto"] = rep["summary"]
+    except Exception as _e:      # noqa: BLE001 — reporting must never break progress
+        log.warning("pareto report failed: %s", _e)
+    return st
+
+
 @router.get("/descent/progress")
 def descent_progress():
     with _descent_lock:
@@ -2634,7 +2742,7 @@ def descent_progress():
         # that is how it expires when the hosting process dies.
         if not _descent_state.get("running") or _descent_external[0]:
             _refresh_descent_state_from_disk()
-        return _json_sane(dict(_descent_state))
+        return _json_sane(_with_pareto(dict(_descent_state)))
 
 
 @router.post("/descent/cancel")
@@ -4673,7 +4781,7 @@ def auto_status():
     with _descent_lock:
         if not _descent_state.get("running") or _descent_external[0]:
             _refresh_descent_state_from_disk()
-        st = _json_sane(dict(_descent_state))
+        st = _json_sane(_with_pareto(dict(_descent_state)))
     auto = st.get("auto") or {}
     if not auto.get("objective"):
         raise HTTPException(status_code=404, detail=(
@@ -4682,6 +4790,7 @@ def auto_status():
             "/api/optimization/descent/progress for a manual optimizer run"))
     F = ((st.get("best") or {}).get("F")
          if st.get("best") else ((st.get("result") or {}).get("best") or {}).get("F"))
+    pareto = st.get("pareto") or None
     verdict = None
     if isinstance(F, (int, float)):
         verdict = (
@@ -4689,6 +4798,16 @@ def auto_status():
             "does NOT beat simply raising the current: the design sits BELOW the "
             "current-only baseline line, so the ripple gate cost more than the "
             "objective bought")
+    # F answers ONE question — "did we beat raising the current". It is, on this
+    # machine, ~pure efficiency (1 pp of η = 4.97 Nm/kg), so an F ≤ 0 run can
+    # still hold designs that are better on torque AND ripple AND efficiency.
+    # That second answer travels next to the first instead of being derived by
+    # whoever reads it.
+    if pareto and pareto.get("n_dominating"):
+        n = int(pareto["n_dominating"])
+        verdict = ((verdict + " — but ") if verdict else "") + (
+            f"{n} of this run's own candidates beat the starting design on all "
+            f"three axes (torque, ripple, efficiency) at the same operating point")
     return {
         "running": st.get("running"), "phase": st.get("phase"),
         "iter": st.get("iter"), "generations": auto.get("generations"),
@@ -4709,6 +4828,10 @@ def auto_status():
         "baseline": st.get("baseline"),
         "best": st.get("best"), "F": F,
         "above_baseline_line": (None if F is None else bool(F > 0)),
+        # Pareto-dominance over the run's own cloud, at the run's own operating
+        # point (counts only — the flagged points themselves ride on
+        # /descent/progress, where the cloud already lives).
+        "pareto": pareto,
         "verdict": verdict,
         "error": st.get("error"),
         "progress_channel": "/api/optimization/descent/progress",

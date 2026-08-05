@@ -59,14 +59,24 @@ Produces the ranked sensitivity table: for each variable the slope dcost/dx, the
 dimensionless one are comparable), the direction that lowers the cost, and the
 **jitter**, |c₊ + c₋ − 2c₀| / 2.
 
-*On the noise floor.* Evals here are deterministic — same inputs, same mesh, same
-numbers — so replicating the unperturbed point measures nothing and this mode
-does not pay for replicates. What actually limits the gradient is that the mesh
-is rebuilt per candidate, so the objective is piecewise-smooth with small jumps
-at the remeshing seams. The disagreement between the two one-sided slopes
-(`jitter`) is exactly that effect plus real curvature, and the **median jitter
-over all variables** is the floor: an influence smaller than the typical
-disagreement between the two ways of measuring it is not evidence.
+*On the noise floor.* **Measured, not assumed** (2026-08-05): the same
+cross-section solved twice in two separate subprocesses at the production eval
+settings returned **bit-identical** metrics on all twelve reported quantities
+(torque, torque density, efficiency, ripple, mass, every loss term, V_peak,
+THD, Kt). So there is no statistical noise to average away, replicating the
+unperturbed point measures nothing, and this mode does not pay for replicates.
+(Determinism depends on the single-thread pinning of the eval subprocess — a
+threaded BLAS reduction sums in thread-completion order. That pinning is in
+`_subprocess_eval`; if it is ever removed, this claim goes with it.)
+
+What actually limits the gradient is that the mesh is rebuilt per candidate, so
+the objective is piecewise-smooth with small jumps at the remeshing seams. The
+disagreement between the two one-sided slopes (`jitter`) is exactly that effect
+plus real curvature, and the **median jitter over all variables** is the floor:
+an influence smaller than the typical disagreement between the two ways of
+measuring it is not evidence. On the CIANO20 150_35 the opening screen put that
+floor at 6.4e-06, which correctly marked `stator_fillet_r`, `cut_width` and
+`rotor_fill_r` inert while keeping variables three orders of magnitude above it.
 
 A variable whose −δ would leave the physical half-line, or whose cross-section
 will not build on one side, is screened one-sided rather than dropped. A variable
@@ -172,3 +182,71 @@ unmeasured, and the table says so.
 - `F` and `above_baseline_line` — unchanged in meaning. F < 0 still means the
   design does not beat simply raising the current, and that verdict is stated,
   not left as a number to interpret.
+
+## The acceptance run (2026-08-05)
+
+Same starting point as the CMA-ES run that failed — the CIANO20 150_35 as saved
+in the Compare row of 08/04 — same fixed operating point (78.49 A / 4000 rpm /
+γ 10°), same 5 % ripple gate, same honest eval path (P2, 48 frames/period,
+n_sectors 4, geometry mesh, template iron, rotor eddy, per-candidate auto
+`k_end`).
+
+| | Nm/kg | efficiency | ripple | **F** |
+|---|---|---|---|---|
+| baseline, 08/04 | 9.9168 | 96.410 % | 4.76 % | 0 |
+| the user, by hand | 10.5086 | 96.505 % | 5.04 % | +0.002213 |
+| CMA-ES, 434 evals | — | — | — | −0.0173 |
+| **screening descent, 220 evals** | **10.8075** | **96.451 %** | **4.30 %** | **+0.002311** |
+
+**It beats the hand-tuned design** — by 4.4 % on F, with 0.30 Nm/kg more torque
+density and, unlike the hand design, comfortably *inside* the ripple gate
+(4.30 % against 5.04 %, which was marginally over). 220 FEM evals, 90 minutes
+wall clock on 10 workers, unattended. 22 of 222 candidates were rejected (9.9 %,
+all in the FEM — 4 more were caught by the in-process geometry pre-fence at no
+eval cost). The run stopped on the **budget**, not on convergence: it was still
+accepting steps when the quota ran out, so the number above is a floor.
+
+Honest accounting of the cost: the user reached their point in roughly a dozen
+solves. The machine needed ~18× more. What it bought is that nobody had to be
+in the room, and it kept going past where the human stopped.
+
+### Three things the run showed that are worth keeping
+
+**1. The polish phase did all the work; the descent phase did none.** Every one
+of the ten accepted steps came from a group of ≤ 4, not from the steepest-descent
+direction on the influential set. The opening screen ranked `wire_height`
+(influence 0.041) and `wire_width` (0.037) two to three times above anything
+else — but both were **one-sided**: the other side of each is unbuildable (the
+winding no longer fits), so their "gradient" was a forward difference taken at a
+wall, and every line search along it was rejected. Meanwhile the leftovers, each
+individually an order of magnitude weaker, paid every round when moved together
+in fours. The lesson is not to distrust the ranking; it is that a large
+one-sided influence at a feasibility boundary is not the same evidence as a
+large two-sided one, and the group cycling is what rescues the run when the top
+of the table is standing on a wall.
+
+**2. The local gradient pointed the opposite way to the user on `tooth_width`.**
+At the baseline the screening says increase it (dcost/dx < 0 going up); the user
+decreased it by a full millimetre. Both are right: at 9.2 mm the ripple jumps
+from 4.76 % to 6.82 %, so the penalty repels the descent from exactly the
+direction the human took by eye. The run reached 9.2 mm eventually, from the
+other side, once the rest of the cross-section had moved. A local method cannot
+step over a constraint ridge; it can only walk around it, and here that was
+enough.
+
+**3. The best design came from a screening perturbation, not from an accepted
+step.** The last accepted line search left F at +0.002186; the reported best is
++0.002311, found in the final (budget-truncated) screening wave. Screening
+points are fully-paid-for designs, and the rule that the incumbent may never be
+worse than something already evaluated is what turned a measurement into the
+result.
+
+### What it agreed with the user about
+
+Of the 18 variables, the algorithm reproduced the user's value on 3
+(`slot_height`, `wire_width`, `wire_height` — all left at the baseline) and
+chose differently on 15. It is a genuinely different machine of slightly better
+merit, not a rediscovery of the same one: notably it went the *other* way on
+`stator_fillet_r1` (0.4 vs the user's 1.8), `magnet_fill_radius` (1.4 vs 0.6)
+and `cut_width` (7.5 vs 6.0), and added a turn (`num_wires_per_slot` 17 → 18)
+that the user never touched.

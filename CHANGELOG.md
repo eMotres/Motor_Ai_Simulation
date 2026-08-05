@@ -8,6 +8,36 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
 ## [Unreleased]
 
 ### Added
+- **A second optimizer search: screening descent** (`POST /api/optimization/auto`
+  with `mode: "screen"`; the Optimize card's **Explore / Refine** switch). The
+  one-click CMA-ES run spent 434 evals on the CIANO20 150_35 and its best
+  candidate inside the 5 % ripple gate scored **F = −0.0173** on the run's own
+  perpendicular-baseline metric — it never beat the design it started from. The
+  user then beat it **by hand** at the same fixed operating point, touching at
+  most four parameters at a time, reaching **F = +0.00221**. The defect is in
+  the search, not the physics: CMA-ES must estimate an N×N covariance (171 free
+  parameters at N = 18) before its distribution carries any shape, and at ~10 min
+  per honest FEM eval that budget does not exist. So the new mode does what the
+  engineer does — perturb **every** variable by ±δ (0.2 mm on a length, 0.02
+  dimensionless, 1 on an integer) to see which way each one moves the machine,
+  descend the most influential few (k chosen by the gap in the table, line
+  search over α ∈ {0.5, 1, 2, 4} in one parallel wave), then polish with the
+  rest in groups of ≤ 4. Everything that decides whether a number is honest is
+  shared with the CMA route: the same eval subprocess, the same in-process
+  geometry pre-fence, the same ripple penalty and continuation ramp, the same
+  eval cache and the same progress channel. The run publishes its **ranked
+  sensitivity table** with a measured noise floor — which knobs matter, which
+  way, and which are inert — which outlives the run and is something CMA-ES
+  never produces. **Acceptance run, from the same 08/04 baseline the CMA-ES run
+  started from and at the same fixed operating point**: F = **+0.002311** in 220
+  evals (10.808 Nm/kg, 96.451 %, ripple **4.30 %**) — it beats the user's
+  hand-tuned design (+0.002213, 10.509 Nm/kg, ripple 5.04 %) by 4.4 % on F while
+  sitting comfortably *inside* the ripple gate the hand design was marginally
+  over, and it stopped on the eval budget while still improving. 90 min wall
+  clock on 10 workers, unattended. Honest limitation, stated in
+  `docs/SCREENING_DESCENT.md`: it finds the nearest local optimum and cannot
+  change basin, so *Explore* remains the right tool for a design nobody has
+  optimised yet.
 - **P2 (second-order / quadratic) elements now run the full sliding-band
   transient** on the gap-resolving structured belt (`element_order=2`,
   `structured_gap=True`, full ring `n_sectors=-1`). B = curl A is LINEAR per
@@ -102,6 +132,19 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
   too).
 
 ### Fixed
+- **Optimizer eval subprocesses are now actually pinned to one core**, as the
+  design has always claimed. The pool runs `FEM_SCAN_WORKERS` evals at once,
+  but nothing was limiting the BLAS/LAPACK thread pool inside each subprocess,
+  so every one of them sized itself to the whole machine and N concurrent evals
+  asked for ~N× the cores that exist. Measured on a 12-physical-core box with
+  10 workers (CIANO20 150_35, 48 frames): a 10-eval wave returned **nothing in
+  18 minutes** while a single eval running alongside it finished in 5.7 — the
+  pool was thrashing, not computing. With `MKL/OMP/OPENBLAS/NUMEXPR_NUM_THREADS
+  = 1` in the eval subprocess and the parallelism left to the pool, the same
+  eval takes ~2 min. It also makes an eval **bit-reproducible** — a threaded
+  BLAS reduction sums in thread-completion order, so the same solve could differ
+  in the last few ulp run to run — which is what lets the screening descent
+  treat its finite differences as exact instead of paying for replicates.
 - **Geo mesh honours "Max element size" as the actual element edge.** The CDT
   cell area was derived LINEARLY from the requested size (0.3·L instead of
   0.433·L²), so iron interiors always meshed ~2× finer than the slider said.

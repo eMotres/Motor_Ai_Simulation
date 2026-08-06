@@ -411,6 +411,15 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
         if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
         const j = await r.json();
         if (!j.ok) throw new Error(j.error || 'kernel solve failed');
+        // TWO envelopes, and only the outer one was checked.  A refused solve —
+        // a 422 from the buildability gate, a solver exception — comes back as
+        // HTTP 200 with j.ok TRUE and the failure inside j.result.ok/.error.
+        // The panel then read `raw` (null), fell through to the "no waveform"
+        // branch or simply left the old numbers on screen: pressing Run looked
+        // like nothing happened at all.  The reason has to reach the user.
+        if (j.result && j.result.ok === false) {
+          throw new Error(String(j.result.error || 'solve refused').replace(/^HTTPException: \d+: /, ''));
+        }
         const d: TransientPayload & { restored?: boolean; stale?: boolean } =
           (j.result && j.result.raw) || {};
         // restore=true with nothing ever saved → backend returns {restored:false}.

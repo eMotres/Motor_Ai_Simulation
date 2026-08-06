@@ -47,6 +47,11 @@ const CoupledEmThermal: React.FC<Props> = ({ I_phase_rms = 85, gamma_deg = 0, st
       if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || 'coupled solve failed');
+      // The inner envelope carries the refusal (see TransientCharts): j.ok can
+      // be true while the module itself failed.
+      if (j.result && j.result.ok === false) {
+        throw new Error(String(j.result.error || 'solve refused').replace(/^HTTPException: \d+: /, ''));
+      }
       setRes(j.result);
     } catch (e) { setErr(String(e)); }
     setBusy(false);

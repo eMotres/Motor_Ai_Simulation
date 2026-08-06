@@ -489,5 +489,61 @@ def test_the_passport_never_quotes_a_k_T_it_cannot_reproduce():
     quoted = [r for r in ce["central_differences"]
               if int(r["dm_total"]) == int(ce["quoted_dm_total"])]
     assert len(quoted) == 1, ce["quoted_dm_total"]
+
+
+def test_the_quoted_k_T_is_the_matched_window_ratio_and_recomputes_from_it():
+    """``torque.k_T`` must come from the MATCHED-window block and from nowhere
+    else, and must recompute from that block's own stored energies.
+
+    ``co_energy_k_T`` carries four k_T columns and not one of them is quotable:
+    each divides a frozen-current 3D window mean by some reading of a 2D leg
+    that is a different quantity, and they span 0.967 to 1.002.  The number the
+    passport quotes is ``matched_2d_window``'s — a co-energy central difference
+    over a co-energy central difference, same window, same frozen currents,
+    same functional, same cross-section — so this test rebuilds BOTH legs from
+    the stored ``W'`` rows and demands the stored ratio back.
+
+    ``k_T`` may still legitimately be null.  What may never happen is a k_T
+    that its own two legs do not give, or one taken from the superseded block."""
+    torque = _passport()["stage_b"]["torque"]
+    mw = torque.get("matched_2d_window")
+    if mw is None:
+        assert torque.get("k_T") is None, \
+            "k_T is quoted but matched_2d_window (the denominator) is missing"
+        assert torque.get("k_T_note"), "a null k_T must say why"
+        return
+
+    ce = torque["co_energy_k_T"]
+    pitch = math.radians(float(ce["ring_pitch_deg"]))
+    assert float(mw["mesh"]["n_tri"]) == float(ce["mesh"]["n_tri"]), \
+        "the two legs are not on the same cross-section"
+    assert int(mw["element_order"]) == 1, \
+        "the 2D leg must be P1 — see matched_2d_window.why_the_2d_leg_is_P1"
+
+    W3 = {int(r["shift"]): float(r["W_J"]) for r in ce["positions"]}
+    W2 = {int(s): float(w) for s, w in zip(mw["shifts"], mw["W_2d_J"])}
+    for row in mw["rows"]:
+        d = int(row["dm_total"]) // 2
+        dth = 2 * d * pitch
+        assert math.degrees(dth) == pytest.approx(row["d_theta_deg"], rel=1e-12)
+        T3 = (W3[d] - W3[-d]) / dth
+        T2 = (W2[d] - W2[-d]) / dth
+        assert T3 == pytest.approx(row["T_3d_Nm"], rel=1e-9), row
+        assert T2 == pytest.approx(row["T_2d_Nm"], rel=1e-9), row
+        assert T3 / T2 == pytest.approx(row["k_T"], rel=1e-9), row
+
+    ks = [float(r["k_T"]) for r in mw["rows"]]
+    assert len(ks) >= 2, "k_T needs at least two step sizes to be dm-independent"
+    spread = 100.0 * (max(ks) - min(ks)) / (sum(ks) / len(ks))
+    assert spread == pytest.approx(float(mw["k_T_spread_pct"]), rel=1e-9)
+
+    quoted = [r for r in mw["rows"]
+              if int(r["dm_total"]) == int(mw["quoted_dm_total"])]
+    assert len(quoted) == 1, mw["quoted_dm_total"]
+    assert mw["k_T"] == pytest.approx(quoted[0]["k_T"], rel=1e-12)
     if torque.get("k_T") is not None:
-        assert torque["k_T"] == pytest.approx(quoted[0]["k_T"], rel=1e-12)
+        assert torque["k_T"] == pytest.approx(mw["k_T"], rel=1e-12)
+        assert float(torque["k_T_error_pct"]) == pytest.approx(spread, rel=1e-9)
+        # a k_T that is not dm-independent is not an end effect, whatever else
+        # it is; the bound is the one k_T_note names and measures
+        assert spread < 0.5, ks

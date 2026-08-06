@@ -280,27 +280,19 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
     // permanent across sessions/browsers (same principle as Rebuild mesh).
     fetch(`${API}/api/simulation/config`, {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        max_current: current, frequency, rpm, phase_offset_deg: phaseOffset,
-      }),
+      // EVERY physics switch this tab owns goes into the shared config, not
+      // just the operating point.  The sweep / optimizer / descent read that
+      // config for anything the request does not name, and the optimizer's eval
+      // cache is keyed by a hash of the same block — so a switch kept in
+      // localStorage meant swept points solved different physics AND reused
+      // results from before it was flipped.  The backend flushes the simulation
+      // caches on every one of these writes.
+      body: JSON.stringify(simPhysicsPatch()),
     }).catch(() => {});
     setRunNonce(n => n + 1);
   };
 
-  // Persist the operating point to config.yaml on ANY change (debounced), not
-  // only on Run — config wins on mount (so presets / Reset apply), so it must
-  // stay current or a change made without pressing Run would be lost on reload.
   const simReady = useRef(false);   // gate: persist only AFTER the mount load populated state
-  useEffect(() => {
-    if (!simReady.current) return;   // skip until the operating point is loaded from config
-    const id = setTimeout(() => {
-      fetch(`${API}/api/simulation/config`, {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ max_current: current, frequency, rpm, phase_offset_deg: phaseOffset }),
-      }).catch(() => {});
-    }, 700);
-    return () => clearTimeout(id);
-  }, [current, frequency, rpm, phaseOffset]);
 
   // Auto-run ONCE when the Simulation tab first becomes visible (on the first
   // open or after an F5). The runNonce===0 guard means it computes exactly one
@@ -362,6 +354,34 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // Always raw torque — the filter checkbox is gone, and a stale persisted
   // `true` must not keep silently filtering, so this is a constant, not state.
   const torqueFilter = false;
+
+  // ONE body for both config writes (Run and the debounced auto-save), so the
+  // two can never disagree about what the shared physics is.
+  const simPhysicsPatch = () => ({
+    max_current: current, frequency, rpm, phase_offset_deg: phaseOffset,
+    coil_temp_c: coilTemp, steps_per_period: steps,
+    end_winding_factor: endWinding, connection,
+    demag, eddy: eddyCoupled, rotor_eddy: fieldLosses, torque_filter: torqueFilter,
+    drive, v_phase_peak: vPeak, v_delta_deg: vDelta,
+  });
+
+  // Persist the operating point to config.yaml on ANY change (debounced), not
+  // only on Run — config wins on mount (so presets / Reset apply), so it must
+  // stay current or a change made without pressing Run would be lost on reload.
+  // (`simReady` is declared with the other mount state above — the gate has to
+  //  exist before the effect that SETS it, which runs earlier in the file.)
+  useEffect(() => {
+    if (!simReady.current) return;   // skip until the operating point is loaded from config
+    const id = setTimeout(() => {
+      fetch(`${API}/api/simulation/config`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(simPhysicsPatch()),
+      }).catch(() => {});
+    }, 700);
+    return () => clearTimeout(id);
+  }, [current, frequency, rpm, phaseOffset, demag, eddyCoupled, fieldLosses,
+      coilTemp, steps, endWinding, connection, drive, vPeak, vDelta]);
+
   // Auto-save EVERY simulation change into the active motor ("my copy").
   // syncActiveMotor is internally debounced, so firing on each change is fine.
   useEffect(() => {

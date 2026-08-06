@@ -8,7 +8,7 @@ geometry:
   air_gap: 0.5
   tooth_width: 9.8
   tooth2_width: 4.8
-  cut_width: 6
+  cut_width: 5.8
   insulation_thickness: 0.15
   wire_width: 5
   wire_height: 0.6
@@ -17,19 +17,19 @@ geometry:
   num_wires_per_slot: 14
   wire_split: 1
   slot_hs: 0.2
-  magnet_height: 12
+  magnet_height: 10.8
   rotor_house_height: 1.2
   shaft_height: 3
   magnet_fill_down: 0.9
-  magnet_fill_up: 0.24
+  magnet_fill_up: 0.26
   magnet_fill_radius: 2
-  magnet_up_gap: 0.2
+  magnet_up_gap: 1.2
   rotor_hole: 0.9
-  magnet_down_height: 1.8
-  magnet_lamination: 10
-  stator_fillet_r: 3.5
+  magnet_down_height: 0.6
+  magnet_lamination: 0
+  stator_fillet_r: 3.7
   stator_fillet_r1: 1
-  rotor_fill_r: 0.7
+  rotor_fill_r: 0.2
   motor_length: 35
   stator_outer_radius: 15
   stator_inner_radius: 9.2
@@ -428,14 +428,20 @@ winding:
   n_series: 2
   layers: 1
 simulation:
-  max_current: 79.19595949289332
+  max_current: 79.0
   frequency: 933.33
   rpm: 4000.0
   phase_offset_deg: 16.0
   steps_per_period: 40
-  demag: false
-  coil_temp_c: 120
+  demag: True
+  coil_temp_c: 120.0
   end_winding_factor: 1.664
   connection: 2S-2P
-  current_a: 79.19595949289332
+  eddy: True
+  rotor_eddy: True
+  torque_filter: False
+  drive: current
+  v_phase_peak: 30.0
+  v_delta_deg: 0.0
+  current_a: 79.0
   gamma_deg: 16.0

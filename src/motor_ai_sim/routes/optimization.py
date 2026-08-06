@@ -109,6 +109,19 @@ def _config_fingerprint() -> str:
         return "nofp"
 
 
+def _effective_demag(demag: Optional[bool]) -> bool:
+    """The demag flag an eval will actually run with: the caller's, or the
+    active config's when the caller left it unset (which is what refine_proc's
+    run_one does)."""
+    if demag is not None:
+        return bool(demag)
+    try:
+        from motor_ai_sim.config import get_config
+        return bool(get_config().get("simulation", {}).get("demag", False))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _eval_cache_key(overrides: Dict[str, float], current_a: float, steps: int,
                     coil_temp_c: float, n_periods: float, gamma_deg: float,
                     mesh_size_mm: float, min_size_mm: float, n_sectors: int,
@@ -117,7 +130,7 @@ def _eval_cache_key(overrides: Dict[str, float], current_a: float, steps: int,
                     rotor_eddy: bool = False, hi_fidelity: bool = False,
                     structured_gap: bool = False, airgap_macro: bool = False,
                     iron_template: bool = True, geo_mesh: bool = True,
-                    element_order: int = 2) -> str:
+                    element_order: int = 2, demag: Optional[bool] = None) -> str:
     payload = {
         "ov": {k: round(float(v), 6) for k, v in sorted(overrides.items())},
         "I": round(float(current_a), 4), "steps": int(steps),
@@ -129,6 +142,11 @@ def _eval_cache_key(overrides: Dict[str, float], current_a: float, steps: int,
         "re": bool(rotor_eddy), "hf": bool(hi_fidelity),
         "sg": bool(structured_gap), "am": bool(airgap_macro), "it": bool(iron_template),
         "gm": bool(geo_mesh), "eo": int(element_order),
+        # Demag de-rates Br, so a demag point and a full-strength point are
+        # DIFFERENT physics and must not share a cache entry.  None means the
+        # eval will fall back to the config, so the KEY has to resolve the same
+        # way — otherwise a demag run is served full-strength cached points.
+        "dm": bool(_effective_demag(demag)),
     }
     return hashlib.md5(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
 
@@ -379,7 +397,8 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
                      element_order: int = 2,
                      rpm: Optional[float] = None,
                      n_parallel: Optional[int] = None,
-                     connection: Optional[str] = None) -> Dict[str, Any]:
+                     connection: Optional[str] = None,
+                     demag: Optional[bool] = None) -> Dict[str, Any]:
     """Evaluate ONE (geometry, current, γ) with the real sliding-band transient
     in an isolated subprocess (FEM/LLVM crash → failed design, not a dead API).
     Rebuilds the CadQuery geometry + gmsh mesh for the candidate in-memory.
@@ -401,6 +420,10 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
                        "iron_template": bool(iron_template),
                        "geo_mesh": bool(geo_mesh),
                        "element_order": int(element_order),
+                       # DEMAG: omitted (None) = the candidate subprocess falls
+                       # back to the active config's simulation.demag, exactly
+                       # as before.  Passed, the caller's flag wins.
+                       **({} if demag is None else {"demag": bool(demag)}),
                        # SPEED: omitted (None) = the candidate subprocess reads
                        # the active config, exactly as before.  Passed, it pins
                        # the eval's speed so the solver's f_elec cannot drift
@@ -657,6 +680,7 @@ class ScanRequest(BaseModel):
     iron_template: bool = True              # deterministic template iron mesh (fallback: gmsh)
     geo_mesh: bool = True                   # geometry-driven CDT mesh — SINGLE SOURCE: Mesh tab (same build as Simulation)
     element_order: int = 2                  # 2 = P2 — the only basis: energy-consistent mean torque + mesh-convergent ripple.  P1 is deleted; any other value raises.
+    demag: bool = False                     # per-element irreversible demagnetisation — SINGLE SOURCE: Simulation (de-rates Br → torque/EMF; doubles the frames per point)
     seed: int = 12345
     run_id: str = ""
 
@@ -712,7 +736,7 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                  pole_copy=None, torque_filter=False, n_sectors=1, gap_layers=3.0,
                  end_winding=0.0, rotor_eddy=False, hi_fidelity=False,
                  structured_gap=False, airgap_macro=False, iron_template=True,
-                 geo_mesh=True, element_order=2) -> None:
+                 geo_mesh=True, element_order=2, demag=False) -> None:
     import numpy as np  # noqa: F401
     from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
     from motor_ai_sim.optimization.optimizer import _pareto_front
@@ -739,7 +763,7 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                                  mesh_size_mm, min_size_mm, n_sectors, pole_copy, torque_filter, _cfg_fp,
                                  gap_layers, end_winding, rotor_eddy, hi_fidelity, structured_gap, airgap_macro,
                                  iron_template=iron_template, geo_mesh=geo_mesh,
-                                 element_order=element_order)
+                                 element_order=element_order, demag=demag)
 
         def _mk_point(out, ov, I, gi, oi, g):
             pt = _point_from_eval(out, ov, I, gi, oi, ripple_max)
@@ -762,7 +786,7 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                                    hi_fidelity=hi_fidelity, structured_gap=structured_gap,
                                    airgap_macro=airgap_macro,
                                    iron_template=iron_template, geo_mesh=geo_mesh,
-                                   element_order=element_order)
+                                   element_order=element_order, demag=demag)
             if out and out.get("ok"):
                 _store_eval(_cache_key(geo_ov, I, g), out)   # cache successful evals only
             return i, _mk_point(out, ov, I, gi, oi, g)
@@ -850,7 +874,7 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                                    mesh_size_mm, min_size_mm, n_sectors, pole_copy, torque_filter, _cfg_fp,
                                    gap_layers, end_winding, rotor_eddy, hi_fidelity, structured_gap, airgap_macro,
                                  iron_template=iron_template, geo_mesh=geo_mesh,
-                                 element_order=element_order)
+                                 element_order=element_order, demag=demag)
             base_out = _EVAL_CACHE.get(_bck)
             if base_out is None:
                 base_out = _subprocess_eval({}, _bI, steps, coil_temp_c, n_periods=_NPER,
@@ -861,7 +885,7 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                                             hi_fidelity=hi_fidelity, structured_gap=structured_gap,
                                        airgap_macro=airgap_macro,
                                        iron_template=iron_template, geo_mesh=geo_mesh,
-                                       element_order=element_order)
+                                       element_order=element_order, demag=demag)
                 if base_out and base_out.get("ok"):
                     _store_eval(_bck, base_out)
             baseline = _point_from_eval(base_out, {}, _bI, -1, 0, ripple_max)
@@ -995,6 +1019,12 @@ def scan_designs(req: ScanRequest):
         # geometry/operating point.  P2 is the only basis, so this is a constant
         # in all but name; kept as a field because the request carries it.
         element_order = int(getattr(req, 'element_order', 2) or 2)
+        # Per-element irreversible demagnetisation — single source: the
+        # Simulation tab's toggle.  It de-rates Br, i.e. it changes the machine,
+        # so a sweep that ignores it ranks full-strength designs against a
+        # Simulation the user is reading de-rated.  Costs a whole extra period
+        # of frames per point.
+        demag = bool(getattr(req, 'demag', False))
         _scan_state.update({"running": True, "done": 0, "total": 0, "result": None,
                             "points": [], "run_id": req.run_id, "error": None, "cancel": False,
                             "cached": 0})
@@ -1004,7 +1034,7 @@ def scan_designs(req: ScanRequest):
                            mesh_size, min_size, req.pole_copy, bool(req.torque_filter),
                            n_sectors, gap_layers, end_winding, rotor_eddy, hi_fidelity,
                            structured_gap, airgap_macro, iron_template, geo_mesh,
-                           element_order),
+                           element_order, demag),
                      daemon=True)
     _scan_thread.start()
     return {"started": True, "steps_per_period": steps, "max_geometries": max_geom,

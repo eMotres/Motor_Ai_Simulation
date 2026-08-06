@@ -78,7 +78,8 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
             iron_template: bool = True, geo_mesh: bool = True,
             element_order: int = 2, rpm: float | None = None,
             n_parallel: int | None = None,
-            connection: str | None = None) -> Dict[str, Any]:
+            connection: str | None = None,
+            demag: bool | None = None) -> Dict[str, Any]:
     """Run the sliding-band transient for one candidate and return mean
     performance metrics (torque, efficiency, ripple, losses, mass).
 
@@ -155,7 +156,14 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
     # sector gcd(slots, poles) = num_seg when the caller left the full motor.
     _eo = int(element_order)
     _sg = bool(structured_gap); _am = bool(airgap_macro)
-    _demag = bool(cfg.get("simulation", {}).get("demag", False))
+    # DEMAG — SINGLE SOURCE: the caller (the Simulation tab's toggle rides in
+    # the sweep/optimize request, like the winding connection).  None = fall
+    # back to the active config, which is what a bare in-process call means.
+    # It used to read ONLY the config, and the checkbox never writes there: the
+    # Simulation tab solved a de-rated machine while every sweep point solved a
+    # full-strength one, and the two were compared as if they were the same.
+    _sim = dict(cfg.get("simulation", {}) or {})
+    _demag = bool(_sim.get("demag", False)) if demag is None else bool(demag)
     _ns = int(n_sectors)
     if _eo == 2:
         # NOTE: this used to also force _demag = False — stale since P2 demag
@@ -210,7 +218,20 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         # reproduces exactly when re-run in the Simulation tab.
         "outer_air_factor": float(cfg.get("mesh", {}).get("outer_air_factor", 1.2)),
         "stator_fillet_mm": 0.0,   # Simulation hardcodes 0 (native geometry, no tooth-tip smoothing)
-        "demag": bool(_demag),   # forced off for P2 (demag pre-pass not wired on P2)
+
+        # ── the remaining PHYSICS switches, from the shared config ───────────
+        # These have route defaults (eddy=False, drive="current"), and a
+        # candidate that takes the default while the Simulation tab runs the
+        # coupled eddy solve is a DIFFERENT machine: the coupled solve reports
+        # the SOLVED copper loss (proximity crowding) instead of the analytic
+        # one, which moves the efficiency the optimizer is ranking on.  Read
+        # them from the config, which is where the Simulation tab now persists
+        # every one of its switches.
+        "eddy": bool(_sim.get("eddy", False)),
+        "drive": str(_sim.get("drive", "current") or "current"),
+        "v_phase_peak": float(_sim.get("v_phase_peak", 0.0) or 0.0),
+        "v_delta_deg": float(_sim.get("v_delta_deg", 0.0) or 0.0),
+        "demag": bool(_demag),   # per-element irreversible demag (doubles the frames)
         "component_mesh": json.dumps(cfg.get("mesh", {}).get("component_mesh") or {}),
         "sliding_band": True, "fresh": True, "geo": json.dumps(overrides),
     })
@@ -403,7 +424,8 @@ if __name__ == "__main__":
                       element_order=spec.get("element_order", 2),
                       rpm=spec.get("rpm"),
                       n_parallel=spec.get("n_parallel"),
-                      connection=spec.get("connection"))
+                      connection=spec.get("connection"),
+                      demag=spec.get("demag"))
         sys.stdout.write("@@RESULT@@" + json.dumps({"ok": True, "res": res}))
     except Exception as e:  # noqa: BLE001
         sys.stdout.write("@@RESULT@@" + json.dumps({"ok": False, "error": str(e)}))

@@ -233,6 +233,25 @@ class SimConfigPatch(BaseModel):
     frequency:        Optional[float] = None
     rpm:              Optional[float] = None
     phase_offset_deg: Optional[float] = None
+    # ── the rest of the PHYSICS the Simulation tab controls ─────────────────
+    # These lived ONLY in the browser's localStorage.  Everything that solves a
+    # candidate off-tab — the sweep, the optimizer, the descent — reads the
+    # SHARED config, and `_config_fingerprint` (routes/optimization.py) hashes
+    # this same block to decide whether a cached eval is still valid.  A switch
+    # the browser kept to itself therefore did two silent things at once: swept
+    # points solved DIFFERENT physics than the Simulation tab showed, and the
+    # eval cache happily served results from before the switch was flipped.
+    demag:              Optional[bool]  = None   # per-element irreversible demag (de-rates Br)
+    eddy:               Optional[bool]  = None   # coupled sigma*dA/dt solve (solved copper loss)
+    rotor_eddy:         Optional[bool]  = None   # field-based magnet/shaft eddy (vs slab estimate)
+    torque_filter:      Optional[bool]  = None   # band-limit T(t) to the 6k orders
+    drive:              Optional[str]   = None   # "current" | "voltage"
+    v_phase_peak:       Optional[float] = None   # voltage drive: phase amplitude [V peak]
+    v_delta_deg:        Optional[float] = None   # voltage drive: angle [deg el]
+    coil_temp_c:        Optional[float] = None   # copper temperature -> rho_Cu(T)
+    steps_per_period:   Optional[int]   = None   # transient frames per electrical period
+    end_winding_factor: Optional[float] = None   # k_end (0 = auto from geometry)
+    connection:         Optional[str]   = None   # winding: "4S" | "2S-2P" | "4P"
 
 
 class JobStatus(BaseModel):
@@ -445,6 +464,17 @@ def update_sim_config(patch: SimConfigPatch):
                     detail="config file is locked by another process — retry")
             _time.sleep(0.05 * (_attempt + 1))
     clear_config_cache()
+    # A simulation parameter IS the machine's operating physics: anything solved
+    # under the previous value is stale the moment it changes.  Drop every
+    # simulation-side cache (2-D polys, meshes, field, transient, frame) here
+    # rather than trusting each consumer's own key — the optimizer's eval cache
+    # is keyed by `_config_fingerprint`, which hashes this block, so it
+    # invalidates itself in the same instant.
+    try:
+        clear_simulation_caches()
+    except Exception:  # noqa: BLE001
+        log.warning("simulation caches were not flushed after a config patch",
+                    exc_info=True)
     return {"status": "ok", "updated": updates}
 
 

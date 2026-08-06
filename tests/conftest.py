@@ -47,5 +47,9 @@ def _assert_the_live_config_is_untouched():
     yield
     after = _REAL_CONFIG.read_bytes() if _REAL_CONFIG.exists() else None
     assert before == after, (
-        "config/motor_config.yaml changed during the test session — something "
-        "bypassed MOTOR_AI_SIM_CONFIG and wrote the machine the user has loaded")
+        "config/motor_config.yaml changed during the test session — either a "
+        "test bypassed MOTOR_AI_SIM_CONFIG and wrote the machine the user has "
+        "loaded, or something OUTSIDE the suite (the running backend, a PATCH "
+        "from the UI) edited it while the run was in flight.  Both are worth "
+        "knowing; check the audit trail in logs/geometry_audit.jsonl and rerun "
+        "with the app idle before treating it as a test bug.")

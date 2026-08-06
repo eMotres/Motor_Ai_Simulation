@@ -286,6 +286,10 @@ const SweepStudyPanel: React.FC = () => {
           geo_mesh: readBool('mesh.geoMesh', true),   // Mesh tab "Geometry-driven mesh" — SAME build as Simulation (cell-tiled iron)
           end_winding_factor: readLS('sim.endWinding', 0),   // sent for parity, but a sweep RECOMPUTES k_end per-point from each candidate's geometry (backend refine_proc forces auto) — you can't pin one k_end across changing tooth_width/slot geometry
           rotor_eddy: readBool('sim.fieldLosses', true),   // single source: Simulation — field vs slab magnet eddy (drives eff)
+          // Irreversible demagnetisation — single source: Simulation. It de-rates
+          // Br, so a sweep without it ranks machines the Simulation tab is not
+          // showing. Costs a whole extra period of frames per point.
+          demag: readBool('sim.demag', false),
           run_id: `sweep_${nPts}`,
         }),
       });

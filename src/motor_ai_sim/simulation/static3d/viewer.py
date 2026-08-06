@@ -259,16 +259,96 @@ def _decimate(n: int, max_n: int) -> Optional[np.ndarray]:
 # payloads
 # --------------------------------------------------------------------------
 
+#: The scale bound: a drawn triangle lives at the mesh's element size, so its
+#: edges may not be a multiple of the extracted faces' own edges.  Loose on
+#: purpose — this is the bound that would still hold if the emitted surface
+#: were legitimately re-tessellated one day.
+_EDGE_MEDIAN_FACTOR = 3.0
+_EDGE_MAX_FACTOR = 4.0
+
+#: The identity bound: today the emitted surface is a pure RELABELLING of the
+#: extracted faces, so its edge lengths are the same numbers, and anything past
+#: a micrometre is a remap error.  Tight on purpose — the scale bound alone
+#: misses a scrambled small region (a magnet 12 mm across scrambles to only
+#: ~2.3x its own median, which slips under any honest factor).
+_EDGE_IDENTITY_MM = 1e-3
+
+
+def _edge_stats(verts: np.ndarray, faces: np.ndarray) -> Dict[str, float]:
+    """min / median / max triangle edge length for (nv, 3) verts, (nf, 3) faces.
+
+    The one number that tells you whether a surface is a surface: a triangle on
+    a body meshed at h has edges of order h, and a triangle whose edge is the
+    size of the whole machine is not a triangle of that mesh at all.
+    """
+    if faces.size == 0:
+        return {"min": 0.0, "median": 0.0, "max": 0.0}
+    a, b, c = verts[faces[:, 0]], verts[faces[:, 1]], verts[faces[:, 2]]
+    e = np.concatenate([np.linalg.norm(b - a, axis=1),
+                        np.linalg.norm(c - b, axis=1),
+                        np.linalg.norm(a - c, axis=1)])
+    return {"min": float(e.min()), "median": float(np.median(e)),
+            "max": float(e.max())}
+
+
+def check_edge_scale(name: str, src: Dict[str, float], got: Dict[str, float],
+                     n_faces: int) -> None:
+    """Raise unless the drawn triangles are still the triangles they came from.
+
+    ``src`` are the edge lengths of the extracted faces read through the GLOBAL
+    node array; ``got`` are the edge lengths of what the payload actually
+    carries.  Re-indexing is a relabelling, so these must agree; a drawn median
+    twenty times the source's is a surface that spans the machine.
+    """
+    why = None
+    if (got["median"] > _EDGE_MEDIAN_FACTOR * src["median"] + 1e-6
+            or got["max"] > _EDGE_MAX_FACTOR * src["max"] + 1e-6):
+        why = ("drawn triangles are far larger than the mesh's own elements")
+    elif (abs(got["median"] - src["median"]) > _EDGE_IDENTITY_MM
+            or abs(got["max"] - src["max"]) > _EDGE_IDENTITY_MM
+            or abs(got["min"] - src["min"]) > _EDGE_IDENTITY_MM):
+        why = ("drawn triangles are not the extracted faces relabelled")
+    if why is None:
+        return
+    raise ValueError(
+        f"surface payload for region {name!r} is not the surface it was built "
+        f"from — {why}: emitted edge min {got['min']:.3f} / median "
+        f"{got['median']:.3f} / max {got['max']:.3f} mm against source "
+        f"{src['min']:.3f} / {src['median']:.3f} / {src['max']:.3f} mm over "
+        f"{n_faces} faces — the vertex indices do not match the positions")
+
+
 def _emit_region(p_mm: np.ndarray, tri: np.ndarray,
-                 tri_values: Optional[np.ndarray]) -> dict:
-    """Indexed positions + triangle list for one region, ready for JSON."""
-    used, inv = np.unique(tri.reshape(-1), return_inverse=True)
+                 tri_values: Optional[np.ndarray],
+                 name: str = "?") -> dict:
+    """Indexed positions + triangle list for one region, ready for JSON.
+
+    ``tri`` is (3, nface) — one COLUMN per triangle — and the wire format is a
+    flat list of consecutive triples, so the flattening has to run down the
+    columns.  Flattening in C order instead builds each emitted triangle from
+    the first corner of three DIFFERENT faces, which draws a web of strands
+    across the interior of the model; that shipped once and is what the
+    invariant below exists to stop.
+    """
+    used, inv = np.unique(tri.T.reshape(-1), return_inverse=True)
     verts = p_mm[:, used]
+    idx = inv.astype(np.int32).reshape(-1, 3)
+
+    # INVARIANT: the emitted surface is a re-indexing of the same triangles, so
+    # its edge lengths must be the source faces' edge lengths.  Cheap (three
+    # norms per triangle) and it catches every remap error there is: a wrong
+    # order, a wrong compaction, positions and indices written out of step.
+    src = _edge_stats(p_mm.T, tri.T)
+    got = _edge_stats(verts.T, idx)
+    check_edge_scale(name, src, got, int(tri.shape[1]))
+
     return {
         "positions": np.round(verts.T.reshape(-1), _ROUND).tolist(),
-        "indices": inv.astype(np.int32).tolist(),
+        "indices": idx.reshape(-1).tolist(),
         "tri_count": int(tri.shape[1]),
         "vertex_count": int(used.size),
+        "edge_mm": {k: round(v, 6) for k, v in got.items()},
+        "edge_src_mm": {k: round(v, 6) for k, v in src.items()},
         "values": (None if tri_values is None
                    else np.round(tri_values, 6).tolist()),
     }
@@ -328,7 +408,7 @@ def surface_payload(tm,
             decimated = True
             sel = sel[pick]
         vals = None if values_el is None else np.asarray(values_el)[owner[sel]]
-        d = _emit_region(p_mm, tri[:, sel], vals)
+        d = _emit_region(p_mm, tri[:, sel], vals, name=name)
         d["name"] = name
         d["kind"] = kind_of.get(name, "air" if name == "air" else "unknown")
         d["material"] = mat_of.get(name)
@@ -341,6 +421,16 @@ def surface_payload(tm,
         "regions": regions_out,
         "faces_total": total,
         "faces_shown": int(shown),
+        "edge_mm": {
+            "median": (round(float(np.median(
+                [r["edge_mm"]["median"] for r in regions_out])), 6)
+                if regions_out else 0.0),
+            "max": (round(max(r["edge_mm"]["max"] for r in regions_out), 6)
+                    if regions_out else 0.0),
+            "note": ("triangle edge lengths of the DRAWN surface — they are the "
+                     "mesh's own element size, and a payload where they are not "
+                     "is refused rather than served"),
+        },
         "decimated": bool(decimated),
         "max_tris": int(max_tris),
         "cut": {"z_mm": cut_z_mm, "theta_deg": cut_theta_deg,

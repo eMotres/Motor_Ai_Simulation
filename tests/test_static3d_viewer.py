@@ -154,6 +154,115 @@ def test_every_solid_region_reaches_the_surface(tagged_mesh, section):
         assert max(r["indices"]) < r["vertex_count"]
 
 
+def _tri_edges(positions, indices):
+    """min / median / max edge length of the payload AS THE BROWSER READS IT.
+
+    Deliberately re-derived here from the flat lists, with three.js' own
+    contract — ``setIndex`` consumes CONSECUTIVE TRIPLES — rather than through
+    the viewer's helpers.  A test that reuses the code under test's idea of the
+    layout cannot catch the code under test getting the layout wrong.
+    """
+    P = np.asarray(positions, dtype=float).reshape(-1, 3)
+    I = np.asarray(indices, dtype=np.int64).reshape(-1, 3)
+    a, b, c = P[I[:, 0]], P[I[:, 1]], P[I[:, 2]]
+    e = np.concatenate([np.linalg.norm(b - a, axis=1),
+                        np.linalg.norm(c - b, axis=1),
+                        np.linalg.norm(a - c, axis=1)])
+    return float(e.min()), float(np.median(e)), float(e.max())
+
+
+@pytest.mark.parametrize("cut", [
+    {},
+    {"cut_z_mm": 3.0},
+    {"cut_theta_deg": 90.0},
+])
+def test_drawn_triangles_are_element_sized_not_machine_sized(
+        tagged_mesh, section, cut):
+    """The spaghetti guard, uncut and on both cut planes.
+
+    SHIPPED ONCE: ``_emit_region`` flattened its (3, nface) triangle array in C
+    order, so each emitted triangle was built from the FIRST corner of three
+    different faces.  The face set was right and the counts were plausible
+    (4276 stator triangles either way), which is why nothing caught it — what
+    was wrong was only visible as geometry.  The witness, measured on this
+    preset at the coarse rung:
+
+        stator    emitted edge median 9.5 mm, MAX 38.7 mm  (min 0.000)
+        magnet_0  emitted edge median 1.8 mm, MAX  7.7 mm  (min 0.000)
+
+    against a stator whose whole bounding radius is 20 mm and a mesh whose own
+    faces have median edge 0.50 mm and max 4.6 mm.  So: every drawn edge must
+    be the MESH's element size, not the machine's size.  A cut re-extracts
+    faces, so each cut is checked too.
+    """
+    tm = tagged_mesh
+    reg = np.asarray(tm.cell_region)
+    p_mm = np.asarray(tm.mesh.p) / 1e-3
+    air = int(dict(tm.names)["air"])
+
+    out = V.surface_payload(tm, section, max_tris=10 ** 6, **cut)
+
+    # the element size of THIS mesh, read off the extracted faces through the
+    # global node array — the scale every drawn triangle has to live at.
+    keep = V.cut_mask(tm.mesh, cut.get("cut_z_mm"), cut.get("cut_theta_deg"))
+    tri, owner, opp = V.surface_faces(tm.mesh, reg, keep=keep, air_id=air)
+    src = V._edge_stats(p_mm.T, tri.T)
+    # a fixture sanity bound, not the test: the coarse rung's faces run ~0.5 mm
+    # uncut and ~1.2 mm on a cut (a cut exposes whole interior tets), never the
+    # 9.5 mm the broken payload drew.
+    assert 0.1 < src["median"] < 2.0 and src["max"] < 8.0, src
+
+    assert out["regions"]
+    for r in out["regions"]:
+        lo, med, hi = _tri_edges(r["positions"], r["indices"])
+        assert med <= 3.0 * src["median"], (r["name"], med, src)
+        assert hi <= 4.0 * src["max"], (r["name"], hi, src)
+        assert lo > 0.0, (r["name"], "degenerate zero-length edge")
+        # the payload's own published numbers must be those numbers
+        assert abs(r["edge_mm"]["max"] - hi) < 1e-3, r["name"]
+        assert abs(r["edge_mm"]["median"] - med) < 1e-3, r["name"]
+
+    assert out["edge_mm"]["max"] == max(r["edge_mm"]["max"]
+                                        for r in out["regions"])
+
+
+def test_a_field_payload_draws_the_same_sane_surface(tagged_mesh, section):
+    """The field view colours the very same triangles, so it inherits the very
+    same failure — and it is the view the eye trusts most."""
+    ne = tagged_mesh.n_elements
+    fake = np.arange(ne, dtype=float)
+    out = V.surface_payload(tagged_mesh, section, values_el=fake,
+                            cut_z_mm=3.0, max_tris=10 ** 6)
+    for r in out["regions"]:
+        lo, med, hi = _tri_edges(r["positions"], r["indices"])
+        assert hi < 6.0 and med < 1.5 and lo > 0.0, (r["name"], lo, med, hi)
+        assert len(r["values"]) == r["tri_count"]
+
+
+def test_the_shipped_witness_numbers_are_rejected_by_the_guard():
+    """The regression witness itself, fed to the invariant: the numbers that
+    shipped must be a refusal, not a payload.  Without this the guard could be
+    quietly loosened until it passes anything again."""
+    witness = [
+        # region,   what the mesh's own faces measure,      what shipped
+        ("stator", {"min": 0.014, "median": 0.495, "max": 4.624},
+                   {"min": 0.000, "median": 9.535, "max": 38.688}),
+        ("magnet_0", {"min": 0.007, "median": 0.762, "max": 4.494},
+                     {"min": 0.000, "median": 1.769, "max": 7.705}),
+    ]
+    for name, src, got in witness:
+        with pytest.raises(ValueError, match="do not match the positions"):
+            V.check_edge_scale(name, src, got, 4276)
+        # and the honest case passes untouched
+        V.check_edge_scale(name, src, dict(src), 4276)
+
+    # the magnet is the reason the guard is not a factor alone: scrambling a
+    # body only 12 mm across barely moves its median, and 1.769 mm is well
+    # inside 3x 0.762 mm.  It is caught because a relabelling cannot change a
+    # length at all.
+    assert witness[1][2]["median"] < 3.0 * witness[1][1]["median"]
+
+
 def test_the_reported_counts_are_the_volume_mesh_not_the_drawn_surface(
         tagged_mesh, section):
     """The number beside the picture must describe the model, not the picture.

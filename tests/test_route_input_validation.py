@@ -35,7 +35,9 @@ from fastapi.testclient import TestClient
 from motor_ai_sim.api import app
 
 _ROOT = Path(__file__).resolve().parents[1]
-_CONFIG = _ROOT / "config" / "motor_config.yaml"
+# The file the APP writes — tests/conftest.py redirects it to a sandbox copy,
+# and restoring the wrong path would let one test's edits leak into the next.
+from motor_ai_sim.config import DEFAULT_CONFIG_PATH as _CONFIG
 
 
 @pytest.fixture(autouse=True)

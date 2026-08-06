@@ -10,6 +10,7 @@ from __future__ import annotations
 import datetime as _dt
 import json
 import logging
+import os as _os
 from pathlib import Path
 from typing import Optional
 
@@ -22,6 +23,7 @@ from motor_ai_sim.auth import (
     caller_identity as _caller_identity,
     require_admin as _require_admin,
 )
+from motor_ai_sim.config import DEFAULT_CONFIG_PATH as _DEFAULT_CONFIG_PATH
 from motor_ai_sim.json_store import (
     mutate_json as _mutate_json,
     read_json as _read_json,
@@ -32,8 +34,12 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/presets", tags=["presets"])
 
 _ROOT = Path(__file__).parent.parent.parent.parent
-_PRESETS_PATH = _ROOT / "config" / "motor_presets.json"
-_CONFIG_PATH = _ROOT / "config" / "motor_config.yaml"
+# MOTOR_AI_SIM_PRESETS / MOTOR_AI_SIM_CONFIG redirect the two stores that decide
+# WHICH machine is loaded, so a test run cannot overwrite the user's motors —
+# see motor_ai_sim/config.py for what happened when it could.
+_PRESETS_PATH = Path(_env).expanduser().resolve() if (_env := _os.environ.get(
+    "MOTOR_AI_SIM_PRESETS", "").strip()) else _ROOT / "config" / "motor_presets.json"
+_CONFIG_PATH = _DEFAULT_CONFIG_PATH
 _CATALOG_PATH = _ROOT / "config" / "motor_catalog.json"
 
 

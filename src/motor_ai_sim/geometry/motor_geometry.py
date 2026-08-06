@@ -25,8 +25,11 @@ try:
 except ImportError:
     HAS_OMEGACONF = False
 
-# Default config path - go up from geometry/ to project root
-DEFAULT_CONFIG_PATH = Path(__file__).parent.parent.parent.parent / "config" / "motor_config.yaml"
+# Default config path — the SAME one motor_ai_sim.config resolves (it honours
+# MOTOR_AI_SIM_CONFIG).  A second, independently derived copy of this path meant
+# a redirected config was read here from the real file: the API wrote one file
+# and reloaded another.
+from motor_ai_sim.config import DEFAULT_CONFIG_PATH  # noqa: E402  (path, not logic)
 
 # mtime-keyed cache for from_yaml(): { resolved_path: (mtime_ns, geo_dict, derived_dict) }
 # Auto-invalidates when the YAML is rewritten (geometry edit bumps mtime).

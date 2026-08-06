@@ -9,6 +9,7 @@ Example:
     >>> params = get_geometry_params()  # Get geometry parameters
 """
 
+import os
 from pathlib import Path
 from typing import Optional, Union
 
@@ -20,8 +21,18 @@ except ImportError:
     HAS_OMEGACONF = False
     DictConfig = dict  # type: ignore
 
-# Default config file path (relative to project root)
-DEFAULT_CONFIG_PATH = Path(__file__).parent.parent.parent / "config" / "motor_config.yaml"
+# Default config file path (relative to project root).
+#
+# MOTOR_AI_SIM_CONFIG redirects it.  This exists because the test suite drives
+# the REAL API (`client.put("/api/geometry", ...)`) and every one of those calls
+# wrote the live design: on 2026-08-06 a test run replaced the user's 150 mm
+# CIANO28 with the 30 mm fixture WHILE THEY WERE WORKING, and the next preset
+# save stored the fixture under their motor's name.  A test must never be able
+# to reach the machine the user has loaded — tests/conftest.py points this at a
+# throwaway copy before anything is imported.
+_ENV_CONFIG = os.environ.get("MOTOR_AI_SIM_CONFIG", "").strip()
+DEFAULT_CONFIG_PATH = (Path(_ENV_CONFIG).expanduser().resolve() if _ENV_CONFIG
+                       else Path(__file__).parent.parent.parent / "config" / "motor_config.yaml")
 
 # Global config cache
 _cached_config: Optional[Union[DictConfig, dict]] = None

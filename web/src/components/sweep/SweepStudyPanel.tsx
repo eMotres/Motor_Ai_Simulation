@@ -191,6 +191,7 @@ const SweepStudyPanel: React.FC = () => {
   // Where the applied point was ARCHIVED (its own motor) — or why it was not.
   const [saveRes, setSaveRes] = useState<AppliedSaveResult | null>(null);
   const [zoom, setZoom] = useState<{ x: [number, number]; y: [number, number] } | null>(null);   // mouse-wheel zoom
+  const [showAll, setShowAll] = useState(false);   // include the outliers the robust view clips
 
   // (The "reset zoom on new series" effect lives BELOW `series` — referencing it
   //  from a dep array up here hit the const TDZ and crashed the panel on open.)
@@ -345,7 +346,7 @@ const SweepStudyPanel: React.FC = () => {
   // A stale zoom window survives into the NEXT result set and shows a sliver
   // of the new data ("а где график?" — the curves ran off the clipped view).
   // New series → full view, always.
-  useEffect(() => { setZoom(null); }, [series]);
+  useEffect(() => { setZoom(null); setShowAll(false); }, [series]);
 
   const nFeasible = series.reduce((s, c) => s + c.rows.length, 0);
 
@@ -388,6 +389,47 @@ const SweepStudyPanel: React.FC = () => {
     return { x: pad(Math.min(...xs), Math.max(...xs)), y: pad(Math.min(...ys), Math.max(...ys)) };
   }, [series]);
 
+  // ONE runaway point (a design that lands at 0.2 N·m/kg while the rest sit
+  // around 5) sets the axis for everybody: the other 20 collapse into a dot in
+  // the corner and the sweep is unreadable.  So the DEFAULT view is the robust
+  // range (Tukey, q1/q3 ± 1.5·IQR) and the outliers are clipped, not deleted —
+  // the chip below says how many are outside and puts the full view one click
+  // away.  Only used when it actually changes something: an extent that is not
+  // at least 1.5x wider than the robust box is shown whole.
+  const robust = useMemo(() => {
+    const xs: number[] = [], ys: number[] = [];
+    series.forEach(s => s.rows.forEach((r: any) => { xs.push(r.x); ys.push(r.y); }));
+    if (xs.length < 5 || !extent) return null;
+    const box = (v: number[]): [number, number] => {
+      const s = [...v].sort((a, b) => a - b);
+      const q = (f: number) => s[Math.min(s.length - 1, Math.max(0, Math.round(f * (s.length - 1))))];
+      const q1 = q(0.25), q3 = q(0.75), iqr = q3 - q1;
+      const lo = Math.max(s[0], q1 - 1.5 * iqr), hi = Math.min(s[s.length - 1], q3 + 1.5 * iqr);
+      const d = (hi - lo) || Math.abs(hi) * 0.05 || 1;
+      return [lo - d * 0.05, hi + d * 0.05];
+    };
+    const bx = box(xs), by = box(ys);
+    const tighter = (b: [number, number], e: [number, number]) => (e[1] - e[0]) > 1.5 * (b[1] - b[0]);
+    if (!tighter(bx, extent.x) && !tighter(by, extent.y)) return null;   // no runaway — show everything
+    return { x: tighter(bx, extent.x) ? bx : extent.x, y: tighter(by, extent.y) ? by : extent.y };
+  }, [series, extent]);
+
+  // The window the axes actually use: an explicit wheel-zoom wins, else the
+  // robust view, else the full extent.
+  const view = zoom ?? ((!showAll && robust) ? robust : extent);
+  // The wheel listener is attached once per extent; this keeps it reading the
+  // window currently on screen without re-attaching on every zoom step.
+  const viewRef = useRef(view);
+  viewRef.current = view;
+  const nOutside = useMemo(() => {
+    if (!view || (!robust && !zoom)) return 0;
+    let n = 0;
+    series.forEach(s => s.rows.forEach((r: any) => {
+      if (r.x < view.x[0] || r.x > view.x[1] || r.y < view.y[0] || r.y > view.y[1]) n++;
+    }));
+    return n;
+  }, [series, view, robust, zoom]);
+
   // Keep a zoom window INSIDE the data extent: stops repeated zoom-out from blowing
   // the axis up to ~1e8, and snaps back to the full view once zoomed all the way out.
   const clampDom = (d: [number, number], ext: [number, number]): [number, number] => {
@@ -405,18 +447,23 @@ const SweepStudyPanel: React.FC = () => {
     const el = chartBoxRef.current;
     if (!el || !extent) return;
     const onWheel = (e: WheelEvent) => {
-      // Ctrl+wheel zooms; a PLAIN wheel keeps scrolling the page. Without
-      // this gate, scrolling past the chart silently zoomed it into a corner
-      // and the next visit found "no chart" — a sliver of the old view.
-      if (!e.ctrlKey) return;
-      e.preventDefault();
+      // A PLAIN wheel over the PLOT AREA zooms (Ctrl+wheel too) — requiring Ctrl
+      // read as "the zoom is broken", which is worse than the problem the gate
+      // was for.  Outside the plot rectangle (axis labels, the margins) the
+      // wheel still scrolls the page, and a zoomed view always shows the
+      // "zoomed — reset view" chip; double-click resets as well.
       const box = el.getBoundingClientRect();
       const padL = 54, padR = 24, padT = 8, padB = 40;   // ≈ plot area inside axes/margins
-      const fx = Math.min(1, Math.max(0, (e.clientX - box.left - padL) / Math.max(1, box.width - padL - padR)));
-      const fy = Math.min(1, Math.max(0, (e.clientY - box.top - padT) / Math.max(1, box.height - padT - padB)));
+      const px = e.clientX - box.left, py = e.clientY - box.top;
+      if (px < padL || px > box.width - padR || py < padT || py > box.height - padB) return;
+      e.preventDefault();
+      const fx = Math.min(1, Math.max(0, (px - padL) / Math.max(1, box.width - padL - padR)));
+      const fy = Math.min(1, Math.max(0, (py - padT) / Math.max(1, box.height - padT - padB)));
       const f = e.deltaY < 0 ? 0.85 : 1 / 0.85;
       setZoom(prev => {
-        const cur = prev ?? extent;
+        // Zoom out from whatever is on screen — the robust view, not the full
+        // extent, or the first notch would jump back to the outlier's scale.
+        const cur = prev ?? viewRef.current ?? extent;
         const cx = cur.x[0] + fx * (cur.x[1] - cur.x[0]);
         const cy = cur.y[1] - fy * (cur.y[1] - cur.y[0]);   // y pixels grow downward
         return {
@@ -580,6 +627,21 @@ const SweepStudyPanel: React.FC = () => {
                 sx={{ height: 20, fontSize: 10, color: '#f59e0b',
                       border: '1px solid rgba(245,158,11,0.6)', bgcolor: 'transparent' }} />
             )}
+            {/* Clipped points are never silently dropped: say how many and let
+                one click widen the axes to include them. */}
+            {!zoom && nOutside > 0 && (
+              <Chip size="small" onClick={() => setShowAll(true)}
+                label={`${nOutside} outlier${nOutside === 1 ? '' : 's'} off view — show all`}
+                title="The axes follow the bulk of the points (q1/q3 ± 1.5·IQR); click to include the outliers"
+                sx={{ height: 20, fontSize: 10, color: '#f59e0b', cursor: 'pointer',
+                      border: '1px solid rgba(245,158,11,0.6)', bgcolor: 'transparent' }} />
+            )}
+            {!zoom && showAll && robust && (
+              <Chip size="small" onClick={() => setShowAll(false)}
+                label="all points — fit to bulk"
+                sx={{ height: 20, fontSize: 10, color: 'var(--text-3)', cursor: 'pointer',
+                      border: '1px solid var(--panel)', bgcolor: 'transparent' }} />
+            )}
           </Box>
           {buildFails && (
             <Typography sx={{ fontSize: 11, color: '#fbbf24', mb: 0.5, lineHeight: 1.4 }}>
@@ -595,11 +657,13 @@ const SweepStudyPanel: React.FC = () => {
               <ScatterChart margin={{ top: 8, right: 24, left: 8, bottom: 24 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--panel)" />
                 <XAxis type="number" dataKey="x" name="Nm/kg" tick={{ fontSize: 10 }}
-                  domain={extent ? (zoom ? clampDom(zoom.x, extent.x) : extent.x) : ['auto', 'auto']} allowDataOverflow={!!zoom}
+                  domain={view ? (zoom && extent ? clampDom(zoom.x, extent.x) : view.x) : ['auto', 'auto']}
+                  allowDataOverflow={!!zoom || view !== extent}
                   tickFormatter={(v: number) => v.toFixed(2)}
                   label={{ value: 'Torque / mass (N·m/kg)', position: 'insideBottom', offset: -12, fontSize: 11, fill: 'var(--text-3)' }} />
                 <YAxis type="number" dataKey="y" name="Eff %" tick={{ fontSize: 10 }} width={52}
-                  domain={extent ? (zoom ? clampDom(zoom.y, extent.y) : extent.y) : ['auto', 'auto']} allowDataOverflow={!!zoom}
+                  domain={view ? (zoom && extent ? clampDom(zoom.y, extent.y) : view.y) : ['auto', 'auto']}
+                  allowDataOverflow={!!zoom || view !== extent}
                   tickFormatter={(v: number) => v.toFixed(2)}
                   label={{ value: 'Efficiency (%)', angle: -90, position: 'insideLeft', fontSize: 11, fill: 'var(--text-3)' }} />
                 <Tooltip content={<SweepTooltip />} />

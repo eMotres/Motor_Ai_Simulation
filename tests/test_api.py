@@ -11,7 +11,8 @@ from motor_ai_sim.api import app
 
 client = TestClient(app)
 
-_CONFIG = Path(__file__).resolve().parents[1] / "config" / "motor_config.yaml"
+# The file the APP writes (tests/conftest.py points it at a sandbox copy).
+from motor_ai_sim.config import DEFAULT_CONFIG_PATH as _CONFIG
 
 
 @pytest.fixture(autouse=True, scope="module")

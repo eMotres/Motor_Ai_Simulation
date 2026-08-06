@@ -3164,11 +3164,22 @@
       ]
      }
     },
+    "in_plane_mesh_control": {
+     "status": "OPEN \u2014 the one thing the matched cross-section does not make common",
+     "_doc": "The two legs share a cross-section by construction, but the same triangulation is NOT the same discretisation error: the 3D leg is the lowest-order Nedelec element on the tets that triangulation was extruded into, the 2D leg is P1 on the triangles themselves.  Measured, the 2D leg alone moves 1.83 % between h_solid 1.7 (the quoted cross-section, and the coarsest) and 0.8: 0.585285 -> 0.574770 N.m at dm_total = 2, non-monotonically (0.572510 at 1.2 in between), which is mesh noise on a torque rather than a convergence trend.  Whether the 3D leg carries the same noise on the same mesh \u2014 in which case it cancels in the ratio and k_T is what it says \u2014 is a question about two FORMULATIONS and cannot be answered from the 2D leg alone.",
+     "what_is_already_known": [
+      "the magnets-off LINEAR control (magnets_off_identity_in_2d.and_the_same_rows_in_3d) is the same comparison with no B-H curve and no Picard in either leg, on the quoted cross-section: 1.0002 against P1 and 1.0250 against P2.  A 2.5 % GAIN of reluctance torque from adding the third dimension is not an end effect, so that row already says P1 is the right partner and that the matched-mesh ratio is not obviously carrying a large offset.",
+      "it does NOT yet say that the offset is zero at the loaded nonlinear operating point, where the saturated bridges are what the mesh has to resolve."
+     ],
+     "the_measurement_that_would_close_it": "the same magnets-off linear comparison on a SECOND cross-section (h_solid 0.8, n_tri 5630): if the 3D/2D ratio does not move, the in-plane error is common-mode and k_T's error bar stays the 0.31 % dm spread; if it moves, the size of the move IS what k_T is still carrying.",
+     "cost": "the 2D half is seconds.  The 3D half is the price: a LINEAR magnets-off banded solve at 161964 edge dofs is ~11-16 s when MKL PARDISO has the box to itself (cost rows in functional_settlement.magnets_off) and was measured at over 14 minutes per solve at MKL_NUM_THREADS=1 on a contended machine, which is why this pass did not buy it."
+    },
     "quoted_dm_total": 2,
     "quoted_dm_total_note": "The SMALLER window, for the reason co_energy_k_T.quoted_dm_total_note already committed to before this block existed: its frozen-current torque-angle average is 0.29 % against the larger one's 1.14 %, and the co-energy noise floor (0.09 % of T) is nowhere near being the limit at either step.",
     "k_T": 0.979466095656663,
     "updated_utc": "2026-08-06T05:10:00Z",
-    "reproduce": "scratch driver: band.build_banded_section(section, n_ring=336, box_factor=2.5, h_gap=0.55, h_solid=1.7) \u2014 the SAME call the 3D leg was built from \u2014 then band2d.Banded2D(section, banded, element_order=1, I_ph=<the Stage B currents>, winding=<the same WindingT the 3D solve used>) and band2d.co_energy_curve(model, [-2,-1,0,1,2], units=loaded.unit_phase_windings(...), tol=3e-4, max_iter=120); the rows are band2d.central_differences(curve, 2)."
+    "reproduce": "scratch driver: band.build_banded_section(section, n_ring=336, box_factor=2.5, h_gap=0.55, h_solid=1.7) \u2014 the SAME call the 3D leg was built from \u2014 then band2d.Banded2D(section, banded, element_order=1, I_ph=<the Stage B currents>, winding=<the same WindingT the 3D solve used>) and band2d.co_energy_curve(model, [-2,-1,0,1,2], units=loaded.unit_phase_windings(...), tol=3e-4, max_iter=120); the rows are band2d.central_differences(curve, 2).",
+    "reproduced": "Re-run end to end in a FRESH process: n_tri 3876 again, and every W_2d_J and every T_2d_Nm came back BIT-IDENTICAL (relative difference exactly 0.0, not 'to round-off').  That is not a courtesy check \u2014 the whole matched-cross-section argument rests on band.build_banded_section being a function of its arguments and not of a gmsh seed, and this is what makes 'the same cross-section as the 3D leg' a property of the method rather than of one process."
    },
    "k_T_method": "co-energy central difference / co-energy central difference, matched window (dm_total = 2), matched frozen currents, matched functional, matched cross-section \u2014 stage_b.torque.matched_2d_window",
    "k_T_error_pct": 0.3107653299935086

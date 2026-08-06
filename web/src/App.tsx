@@ -52,6 +52,7 @@ import type { SelectedMaterial, MaterialCategory } from './components/materials/
 import { saveGlobal, blankMaterial, type Cat } from './lib/materialsActions';
 import { useMotorStore, useUIStore } from './stores/motorStore';
 import SimulationPanel from './components/simulation/SimulationPanel';
+import Static3DPanel from './components/static3d/Static3DPanel';
 import CompareTab from './components/compare/CompareTab';
 import ComparePanel from './components/compare/ComparePanel';
 import MeshPanel from './components/mesh/MeshPanel';
@@ -313,6 +314,12 @@ function App() {
       render: () => <MeshPanel /> },
     { id: 'simulation', label: 'Simulation', order: 50, panelId: 'simulation', gate: 'fullUI', showViewer: true, keepMounted: true,
       render: () => <SimulationPanel active={activeTab === 'simulation'} /> },
+    // The 3D end-effect model gets its own scene (its own camera fit, its own
+    // cut planes), so it does NOT take the AppBar's viewer cluster — those
+    // controls drive MotorScene, and wiring them to a second canvas would make
+    // the grid/axes toggles lie about which scene they act on.
+    { id: 'static3d', label: '3D', order: 55, gate: 'fullUI', showViewer: false,
+      render: () => <Static3DPanel /> },
     { id: 'sweep', label: 'Optimization', order: 60, panelId: 'optimization', gate: 'fullUI', showViewer: false,
       render: () => <SweepConfigPanel /> },
     { id: 'comparePoints', label: 'Compare', order: 65, gate: 'fullUI', showViewer: false,

@@ -106,3 +106,8 @@ smoke.out
 sweep.out
 quick.out
 config/.daxis_cache.json
+
+# runtime: solved 3D static fields for the "3D" tab, one .npz + .json per
+# (machine fingerprint, fidelity, solve kind).  Megabytes each, and every one
+# of them is reproducible from `POST /api/static3d/solve`.
+config/.static3d_cache/

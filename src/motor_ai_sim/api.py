@@ -36,6 +36,7 @@ from motor_ai_sim.config import get_config, get_material_assignments, clear_conf
 from motor_ai_sim.routes.geometry import router as geometry_router
 from motor_ai_sim.routes.pipeline import router as pipeline_router
 from motor_ai_sim.routes.simulation import router as simulation_router
+from motor_ai_sim.routes.static3d import router as static3d_router
 from motor_ai_sim.routes.optimization import router as optimization_router
 from motor_ai_sim.routes.presets import router as presets_router
 from motor_ai_sim.routes.catalog import router as catalog_router
@@ -100,6 +101,7 @@ async def _unknown_material_handler(request, exc: UnknownMaterialError):
 app.include_router(geometry_router)
 app.include_router(pipeline_router)
 app.include_router(simulation_router)
+app.include_router(static3d_router)
 app.include_router(optimization_router)
 app.include_router(presets_router)
 app.include_router(catalog_router)

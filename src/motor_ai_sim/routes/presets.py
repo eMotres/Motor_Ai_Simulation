@@ -465,7 +465,23 @@ def _put_preset(pid: str, preset: dict) -> dict:
     preset["updated_at"] = _dt.datetime.now().isoformat(timespec="seconds")
     preset["saved_at"] = _now_utc_iso()
 
+    # A save that lands on the WRONG entry is how a day of optimization
+    # disappears: the store keeps no history, so the previous cross-section is
+    # simply gone.  Copy the file aside first and log what this write changed —
+    # both fail-open, neither can block the save.  See motor_ai_sim/audit.py.
+    try:
+        from motor_ai_sim import audit as _audit_mod
+        _audit_mod.snapshot_presets(_PRESETS_PATH, note=pid)
+    except Exception:  # noqa: BLE001
+        _audit_mod = None
+
     def _m(d: dict) -> None:
+        if _audit_mod is not None:
+            _audit_mod.record_write(
+                f"preset:{pid}",
+                (d.get(pid) or {}).get("geometry") if isinstance(d.get(pid), dict) else None,
+                preset.get("geometry"),
+                note="new entry" if pid not in d else "overwrite")
         d[pid] = preset
     _mutate_json(_PRESETS_PATH, _m, default={})
     return preset
@@ -473,7 +489,18 @@ def _put_preset(pid: str, preset: dict) -> dict:
 
 def _drop_preset(pid: str) -> None:
     """Remove ONE motor, preserving every other entry as it stands on disk now."""
+    try:
+        from motor_ai_sim import audit as _audit_mod
+        _audit_mod.snapshot_presets(_PRESETS_PATH, note=f"del_{pid}")
+    except Exception:  # noqa: BLE001
+        _audit_mod = None
+
     def _m(d: dict) -> None:
+        if _audit_mod is not None:
+            _audit_mod.record_write(
+                f"preset:{pid}",
+                (d.get(pid) or {}).get("geometry") if isinstance(d.get(pid), dict) else None,
+                None, note="delete")
         d.pop(pid, None)
     _mutate_json(_PRESETS_PATH, _m, default={})
 

@@ -1,47 +1,47 @@
 geometry:
-  stator_diameter: 30
-  slot_height: 4.3
-  core_thickness: 1.5
-  num_seg: 2
+  stator_diameter: 150
+  slot_height: 13.6
+  core_thickness: 4.8
+  num_seg: 4
   num_slots_per_segment: 6
   num_poles_per_segment: 7
-  air_gap: 0.2
-  tooth_width: 2.6
-  tooth2_width: 1.4
-  cut_width: 1.5
-  insulation_thickness: 0.05
-  wire_width: 2
-  wire_height: 0.5
+  air_gap: 0.5
+  tooth_width: 9.8
+  tooth2_width: 4.8
+  cut_width: 6
+  insulation_thickness: 0.15
+  wire_width: 5
+  wire_height: 0.6
   wire_spacing_x: 0.1
-  wire_spacing_y: 0.1
-  num_wires_per_slot: 6
+  wire_spacing_y: 0.13
+  num_wires_per_slot: 14
   wire_split: 1
-  slot_hs: 0.267
-  magnet_height: 4.5
-  rotor_house_height: 0.8
-  shaft_height: 2
+  slot_hs: 0.2
+  magnet_height: 12
+  rotor_house_height: 1.2
+  shaft_height: 3
   magnet_fill_down: 0.9
-  magnet_fill_up: 0.3
-  magnet_fill_radius: 0.1
-  magnet_up_gap: 0.1
-  rotor_hole: 0.7
-  magnet_down_height: 1.4
-  magnet_lamination: 0
-  stator_fillet_r: 1.2
-  stator_fillet_r1: 0
-  rotor_fill_r: 0.2
-  motor_length: 10
-  stator_outer_radius: 20
-  stator_inner_radius: 12.400000000000002
-  num_slots: 12
-  num_poles: 14
-  angle_slot: 30.0
-  angle_pole: 25.714285714285715
+  magnet_fill_up: 0.24
+  magnet_fill_radius: 2
+  magnet_up_gap: 0.2
+  rotor_hole: 0.9
+  magnet_down_height: 1.8
+  magnet_lamination: 10
+  stator_fillet_r: 3.5
+  stator_fillet_r1: 1
+  rotor_fill_r: 0.7
+  motor_length: 35
+  stator_outer_radius: 15
+  stator_inner_radius: 9.2
+  num_slots: 24
+  num_poles: 28
+  angle_slot: 15.0
+  angle_pole: 12.857142857142858
   slot_pitch: 0.5235987755982988
   pole_pitch: 0.4487989505128276
-  rotor_outer_radius: 12.200000000000003
-  rotor_inner_radius: 5.100000000000003
-  slot_width: 2.5000000000000004
+  rotor_outer_radius: 9
+  rotor_inner_radius: 3.7
+  slot_width: 2.3000000000000003
   shaft_diameter: 5
 derived_params:
   stator_outer_radius: stator_diameter / 2
@@ -403,12 +403,12 @@ mesh:
   n_radial: 11
   n_angular: 104
   n_angular_slots: 20
-  mesh_size_mm: 0.6
+  mesh_size_mm: 1.76
   outer_air_factor: 1.2
-  gap_layers: 1.0
-  normal_deviation: 6.0
+  gap_layers: 1
+  normal_deviation: 8.0
   min_size_mm: 0.3
-  n_sectors: 2
+  n_sectors: 4
 materials:
   stator_core: B15AHV950M
   slot: copper
@@ -416,26 +416,26 @@ materials:
   in_band: air
   out_band: air
   rotor_core: B15AHV950M
-  magnet: F45SH_120C
+  magnet: F52SH_120C
   shaft: Aluminium_6061
   slot_insulation: Nomex
   wire_insulation: polyimide
 custom_materials: {}
 winding:
   n_coils_per_phase: 4
-  connection: 2S
-  n_parallel: 1
+  connection: 2S-2P
+  n_parallel: 2
   n_series: 2
   layers: 1
 simulation:
-  max_current: 32.0
-  frequency: 1750.0
-  rpm: 15000.0
-  phase_offset_deg: 10.0
-  steps_per_period: 36
-  demag: true
+  max_current: 79.19595949289332
+  frequency: 933.33
+  rpm: 4000.0
+  phase_offset_deg: 16.0
+  steps_per_period: 40
+  demag: false
   coil_temp_c: 120
-  end_winding_factor: 1.45
-  connection: 2S
-  current_a: 32.0
-  gamma_deg: 10.0
+  end_winding_factor: 1.664
+  connection: 2S-2P
+  current_a: 79.19595949289332
+  gamma_deg: 16.0

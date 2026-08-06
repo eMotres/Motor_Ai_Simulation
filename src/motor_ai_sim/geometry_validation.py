@@ -41,7 +41,20 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 # intersection of non-zero area.  A pair only counts as overlapping when the
 # intersection survives eroding by TOL_MM/2 — i.e. it is a real region, not a
 # ~1 µm seam.
-TOL_MM = 1e-3            # 1 µm — shared-boundary tolerance
+TOL_MM = 1e-3            # 1 µm — floor for the shared-boundary tolerance
+# …but 1 µm is FINER THAN THE POLYGONS THEMSELVES.  `get_2d_polygons` ends with
+# a ring sanitize whose point-weld may move a boundary by up to
+# machine_diameter / _WELD_DIV (0.0375 mm on a 150 mm machine, 0.010 mm on a
+# 40 mm one).  Two domains that came out of a shapely *difference* — the magnets
+# and the rotor-side air band are exactly that, so their overlap is zero by
+# construction — are welded SEPARATELY, and the few-µm disagreement that leaves
+# behind is not a design defect: it is the resolution of the representation.
+# Judged at 1 µm it looked like one, and a sweep threw away 10 of 32 CIANO28
+# designs for ~0.03 mm² of it (≈1e-5 of the magnet area, ~4 µm deep).  So the
+# default tolerance is the builder's own weld tolerance, and anything thinner
+# than that is not geometry this pipeline can even express.  (The mesher then
+# runs a 0.3 mm Douglas–Peucker on the same rings — 8x looser again.)
+_WELD_DIV_FALLBACK = 4000.0
 AREA_TOL_MM2 = 1e-4      # 0.0001 mm² — below this nothing is worth reporting
 AREA_FLOOR_MM2 = 1e-3    # a solid part smaller than this is a degenerate sliver
 # Conductor cross-section is PHYSICS: R_dc, J, the I²R loss and the AC/proximity
@@ -361,17 +374,48 @@ def _overlap_violation(code: str, name_a: str, name_b: str, inter,
         likely_params=_CAUSES.get(code, []))
 
 
+def weld_tol_mm(params: Optional[Dict[str, Any]] = None,
+                polys: Optional[Dict[str, Any]] = None) -> float:
+    """The tolerance the polygons were BUILT to — machine diameter / _WELD_DIV.
+
+    Same number `cadquery_geometry._sanitize_geom` welds with, so validation
+    judges the rings at the accuracy they actually carry.  Falls back to the
+    stator OD read off the polygons, then to TOL_MM.
+    """
+    try:
+        from motor_ai_sim.cadquery_geometry import _WELD_DIV as _div
+    except Exception:
+        _div = _WELD_DIV_FALLBACK
+    scale = 0.0
+    try:
+        scale = 2.0 * float((params or {}).get("stator_outer_radius", 0.0) or 0.0)
+        if scale <= 0.0:
+            scale = float((params or {}).get("stator_diameter", 0.0) or 0.0)
+        if scale <= 0.0 and polys is not None:
+            st = polys.get("stator")
+            if st is not None and not st.is_empty:
+                scale = 2.0 * _radii(st)[1]
+    except Exception:
+        scale = 0.0
+    return max(TOL_MM, scale / _div) if scale > 0.0 else TOL_MM
+
+
 def validate_polygons(polys: Dict[str, Any],
                       params: Optional[Dict[str, Any]] = None,
-                      tol_mm: float = TOL_MM,
+                      tol_mm: Optional[float] = None,
                       max_per_code: int = 6) -> ValidationResult:
     """Validate the polygon dict returned by ``CadQueryMotor.get_2d_polygons``.
 
     ``params`` is the resolved geometry parameter dict (``motor.parameters``);
     it supplies the nominal radii used by the containment checks.  Absent, those
     radii are inferred from the polygons themselves.
+
+    ``tol_mm`` defaults to the builder's weld tolerance (see ``TOL_MM``) — pass
+    a number only to judge the rings finer or coarser than they were built.
     """
     p = dict(params or {})
+    if tol_mm is None:
+        tol_mm = weld_tol_mm(p, polys)
     col = _Collector(max_per_code)
     checks: List[str] = []
 
@@ -779,7 +823,7 @@ def validate_polygons(polys: Dict[str, Any],
 
 def validate_geometry(geo: Optional[Dict[str, Any]] = None,
                       rotor_angle_deg: float = 0.0,
-                      tol_mm: float = TOL_MM,
+                      tol_mm: Optional[float] = None,
                       max_per_code: int = 6) -> ValidationResult:
     """Build the 2-D polygons for ``geo`` (the active config when omitted) and
     validate them.

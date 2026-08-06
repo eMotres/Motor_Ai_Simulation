@@ -110,6 +110,15 @@ def update_geometry(update: GeometryUpdateModel):
         })
 
     try:
+        # Who is changing the live machine, and into what.  Cheap, write-only,
+        # and the only thing that can answer "the motor changed under me — who
+        # did it?" after the fact.  See motor_ai_sim/audit.py.
+        try:
+            from motor_ai_sim.audit import record_write as _audit
+            _geo_before = dict(get_current_geometry().to_dict())
+        except Exception:
+            _audit, _geo_before = None, {}
+
         from motor_ai_sim.cadquery_geometry import CadQueryCache
         CadQueryCache().clear_all()
         _mesh_cache["hash"] = None
@@ -153,6 +162,10 @@ def update_geometry(update: GeometryUpdateModel):
             pass
         with open(config_path, "w", encoding="utf-8") as f:
             yaml.dump(config, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+
+        if _audit is not None:
+            _audit("live_geometry", _geo_before, geometry_section,
+                   note="PUT /api/geometry")
 
         # Flush the config cache so get_config()-based consumers (the analytical
         # torque_sweep, params_from_config, winding calc, …) read the NEW

@@ -437,3 +437,76 @@ class TestResultShape:
             code="iron_disconnected", severity="warning", part_a="The rotor core",
             part_b="", message="two pieces")])
         assert r.ok and r.warnings and not r.errors
+
+
+# ── the tolerance the polygons are actually built to ─────────────────────────
+# The 150 mm 24s/28p (CIANO28) the user sweeps.  `magnet_fill_up`/`rotor_hole`
+# combinations off this design were rejected as "not buildable" for ~0.03 mm² of
+# magnet-in-rotor-air overlap — 1e-5 of the magnet area, ~4 µm deep, and ZERO
+# before `get_2d_polygons`' closing ring sanitize (in_band is that same magnet
+# union subtracted from a disk, so the true overlap is nil by construction).
+# The weld the sanitizer is allowed to make is 0.0375 mm on this machine; judged
+# at 1 µm, its own output looked illegal and a sweep threw away 10 of 32 designs.
+GEO_150MM_CIANO28 = {
+    "stator_diameter": 150, "slot_height": 13.6, "core_thickness": 4.8,
+    "num_seg": 4, "num_slots_per_segment": 6, "num_poles_per_segment": 7,
+    "air_gap": 0.5, "tooth_width": 9.8, "tooth2_width": 4.8, "cut_width": 6,
+    "insulation_thickness": 0.15, "wire_width": 5, "wire_height": 0.6,
+    "wire_spacing_x": 0.1, "wire_spacing_y": 0.13, "num_wires_per_slot": 14,
+    "wire_split": 1, "slot_hs": 0.2, "magnet_height": 12,
+    "rotor_house_height": 1.2, "shaft_height": 3, "magnet_fill_down": 0.9,
+    "magnet_fill_up": 0.24, "magnet_fill_radius": 2, "magnet_up_gap": 0.2,
+    "rotor_hole": 0.9, "magnet_down_height": 1.8, "magnet_lamination": 10,
+    "stator_fillet_r": 3.5, "stator_fillet_r1": 1, "rotor_fill_r": 0.7,
+    "motor_length": 35,
+}
+
+
+class TestWeldToleranceIsTheJudgingTolerance:
+    @pytest.mark.parametrize("magnet_height,magnet_fill_up", [
+        (11.8, 0.22), (11.8, 0.24), (12.0, 0.22),
+    ])
+    def test_sanitizer_slivers_are_not_violations(self, magnet_height, magnet_fill_up):
+        """Sweep points that the builder itself produced must be buildable."""
+        geo = dict(GEO_150MM_CIANO28, slot_height=13.4, rotor_hole=0.95,
+                   magnet_height=magnet_height, magnet_fill_up=magnet_fill_up)
+        res = validate_geometry(geo)
+        assert res.ok, [v.message for v in res.errors]
+
+    def test_the_overlap_is_zero_before_the_sanitize(self):
+        """Why the tolerance is right: in_band = disk − (rotor ∪ shaft ∪ magnets),
+        so the magnets cannot overlap it — every mm² measured afterwards is the
+        weld, not the design."""
+        import motor_ai_sim.cadquery_geometry as cg
+        from shapely.ops import unary_union
+        geo = dict(GEO_150MM_CIANO28, slot_height=13.4, rotor_hole=0.95,
+                   magnet_height=12.0, magnet_fill_up=0.22)
+
+        def _overlap(sanitize: bool) -> float:
+            orig = cg._sanitize_polys_dict
+            if not sanitize:
+                cg._sanitize_polys_dict = lambda polys, scale_mm: polys
+            try:
+                m = cg.CadQueryMotor()
+                m.set_parameters(dict(geo))
+                p = m.get_2d_polygons(rotor_angle_deg=0.0)
+                mag = unary_union([t[0] for t in p["magnets"]])
+                return float(mag.intersection(p["in_band"]).area)
+            finally:
+                cg._sanitize_polys_dict = orig
+
+        assert _overlap(sanitize=False) == pytest.approx(0.0, abs=1e-9)
+        assert _overlap(sanitize=True) < 0.1          # the weld, and only the weld
+
+    def test_tolerance_follows_the_machine_size(self):
+        from motor_ai_sim.geometry_validation import weld_tol_mm
+        assert weld_tol_mm({"stator_outer_radius": 75.0}) == pytest.approx(0.0375)
+        assert weld_tol_mm({"stator_outer_radius": 20.0}) == pytest.approx(0.010)
+
+    def test_a_real_intrusion_is_still_refused(self):
+        """The relaxation is the builder's resolution, not an amnesty: a magnet
+        driven through the air gap is still not buildable."""
+        geo = dict(GEO_150MM_CIANO28, magnet_height=20.0, magnet_up_gap=-0.5)
+        res = validate_geometry(geo)
+        assert not res.ok
+        assert "rotor_crosses_air_gap" in _error_codes(res)

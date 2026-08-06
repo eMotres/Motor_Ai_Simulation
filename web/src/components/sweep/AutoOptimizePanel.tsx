@@ -15,6 +15,7 @@ import {
   ResponsiveContainer, ReferenceLine, ScatterChart, Scatter,
 } from 'recharts';
 import { useMotorStore } from '../../stores/motorStore';
+import { appliedSaveLine } from '../../lib/appliedAutoSave';
 
 /**
  * One-click optimization.
@@ -85,8 +86,8 @@ type Plan = {
 };
 
 const AutoOptimizePanel: React.FC = () => {
-  const { connectedToApi, descentState, loadLastDescent, applyDescentBest, cancelDescent } =
-    useMotorStore();
+  const { connectedToApi, descentState, loadLastDescent, applyDescentBest, cancelDescent,
+          appliedSave } = useMotorStore();
 
   const [maxRipple, setMaxRipple] = useState<number>(() => {
     try { return Math.max(0.1, Number(JSON.parse(localStorage.getItem('auto.maxRipple') ?? '5')) || 5); }
@@ -722,6 +723,30 @@ const AutoOptimizePanel: React.FC = () => {
                 </Typography>
               )}
             </Box>
+
+            {/* WHERE THE APPLIED DESIGN WENT.  Applying now archives the design
+                as its own motor, so a restart cannot take it; this line says
+                which motor, or — loudly — that the archiving failed. */}
+            {appliedSave && (
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.5 }}>
+                <Typography variant="caption"
+                  sx={{ color: appliedSave.busy ? 'text.secondary'
+                        : appliedSave.ok ? '#22c55e' : '#ef4444',
+                        fontWeight: appliedSave.ok ? 400 : 700 }}>
+                  {appliedSave.busy ? 'saving the applied design…' : appliedSaveLine(appliedSave)}
+                </Typography>
+                {!appliedSave.busy && (
+                  <HelpTip title={appliedSave.ok
+                    ? 'Every apply from this tab is archived as a NEW motor in the Motors tab — '
+                      + 'the design you are editing can no longer be lost to a restart. The source '
+                      + 'motor is not touched, and the new motor\'s description carries the run '
+                      + 'that produced it: mode, run id, operating point, ripple gate, F and its metrics.'
+                    : 'The design IS applied — the editor holds it — but it was NOT archived, so a '
+                      + 'backend restart would lose it. Save it by hand (Motors → Save as new motor) '
+                      + 'or fix the reason above.'} />
+                )}
+              </Box>
+            )}
 
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.75 }}>
               <Typography variant="caption" sx={{ color: 'text.secondary' }}>

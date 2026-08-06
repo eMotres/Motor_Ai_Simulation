@@ -16,6 +16,7 @@ import {
 } from 'recharts';
 import Scatter3D from './Scatter3D';
 import { useMotorStore } from '../../stores/motorStore';
+import { appliedSaveLine } from '../../lib/appliedAutoSave';
 
 /**
  * Gradient / coordinate descent panel.
@@ -82,7 +83,7 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
     descentRunning, descentState, descentError,
     baselineLine, baselineBusy, baselineError, computeBaselineLine,
     runDescent, cancelDescent, applyDescentBest, applyDescentPoint, loadLastDescent,
-    updateSweepConstraints, lastOptSnapshot, setLastOptSnapshot,
+    updateSweepConstraints, lastOptSnapshot, setLastOptSnapshot, appliedSave,
   } = useMotorStore();
 
   // Re-hydrate the last run's charts from the backend on mount (survives reload).
@@ -1155,6 +1156,26 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
               onClick={async () => { await applyDescentBest(); setApplied(true); }}>
               {applied ? 'Applied to geometry' : 'Apply best to geometry'}
             </Button>
+          )}
+          {/* Where the applied design was archived — one line, same wording as
+              the one-click card. An apply that was NOT archived says so in red:
+              the design then exists only in the editor. */}
+          {appliedSave && (
+            <>
+              <Typography variant="caption"
+                sx={{ color: appliedSave.busy ? 'text.secondary'
+                      : appliedSave.ok ? '#22c55e' : '#ef4444',
+                      fontWeight: appliedSave.ok ? 400 : 700 }}>
+                {appliedSave.busy ? 'saving the applied design…' : appliedSaveLine(appliedSave)}
+              </Typography>
+              {!appliedSave.busy && (
+                <HelpTip title={appliedSave.ok
+                  ? 'Every apply is archived as a NEW motor in the Motors tab, with the run that '
+                    + 'produced it in its description — the source motor is not touched.'
+                  : 'The design IS applied, but it was NOT archived: a backend restart would lose '
+                    + 'it. Save it by hand (Motors → Save as new motor) or fix the reason shown.'} />
+              )}
+            </>
           )}
         </Box>
       )}

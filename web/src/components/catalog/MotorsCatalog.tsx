@@ -137,7 +137,14 @@ const MotorsCatalog: React.FC = () => {
   useEffect(() => {
     const onActiveChanged = () => { void load(); };
     window.addEventListener('motor:active-changed', onActiveChanged);
-    return () => window.removeEventListener('motor:active-changed', onActiveChanged);
+    // Applying a design from the Optimization tab files it here as a new motor
+    // (lib/appliedAutoSave).  The card that card-line promises ("saved as X ·
+    // Motors") has to actually be here when the user looks, tab mounted or not.
+    window.addEventListener('applied-design-saved', onActiveChanged);
+    return () => {
+      window.removeEventListener('motor:active-changed', onActiveChanged);
+      window.removeEventListener('applied-design-saved', onActiveChanged);
+    };
   }, []);
 
   // Confirm through a proper dialog — window.confirm is silently suppressed

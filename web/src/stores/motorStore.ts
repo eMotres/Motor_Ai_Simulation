@@ -2,6 +2,8 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { syncActiveMotor } from '../components/common/motorSettings';
 import { setGeoGetter } from '../lib/apiAuth';
+import { autoSaveAppliedDesign } from '../lib/appliedAutoSave';
+import type { AppliedSaveResult, ApplyMode } from '../lib/appliedAutoSave';
 import { geoSignature, setGeoSigGetter } from '../components/common/geoSig';
 import type {
   MotorGeometryParams,
@@ -59,6 +61,53 @@ async function refreshEndWindingFactor(): Promise<void> {
     const k = Number(d?.end_winding_factor);
     if (Number.isFinite(k) && k > 0) localStorage.setItem('sim.endWinding', JSON.stringify(+k.toFixed(3)));
   } catch { /* non-fatal: the Simulation panel also re-seeds on the geometry change */ }
+}
+
+// WHICH search produced the design being applied — the word that ends up in the
+// saved motor's name and in its provenance.  A run launched from the one-click
+// card carries `auto` (with its own mode); a manual optimizer run carries none,
+// and 'descent' is the honest label for it rather than borrowing 'auto'.
+function descentApplyMode(st: any, picked: boolean): ApplyMode {
+  if (picked) return 'picked';
+  const m = String(st?.auto?.mode ?? '').toLowerCase();
+  if (m === 'screen') return 'screen';
+  if (m === 'cmaes') return 'auto';
+  return 'descent';
+}
+
+// The provenance of an applied optimizer design: mode, run, operating point,
+// ripple gate, F and the point's own metrics.  Read from the SAME descent state
+// the cards read, so a saved motor's description cannot disagree with the card
+// that was on screen when it was applied.
+function descentProvenance(st: any, pt: any | null) {
+  const picked = !!pt;
+  const m = picked ? pt : (st?.best?.metrics || st?.result?.best || {});
+  const op = st?.auto?.operating_point || {};
+  const I = Number(picked ? pt?.current_a : m?.current_a);
+  const g = Number(
+    picked ? pt?.gamma_deg
+      : (typeof st?.mtpa_gamma_deg === 'number' ? st.mtpa_gamma_deg : m?.gamma_deg));
+  const rpm = Number(op?.rpm ?? st?.rpm);
+  return {
+    mode: descentApplyMode(st, picked),
+    runId: String(st?.run_id ?? ''),
+    objective: String(st?.auto?.objective ?? ''),
+    operatingPoint: {
+      current_a: Number.isFinite(I) ? I : Number(op?.current_a),
+      rpm: Number.isFinite(rpm) ? rpm : undefined,
+      gamma_deg: Number.isFinite(g) ? g : Number(op?.gamma_deg),
+    },
+    rippleMaxPct: Number(st?.auto?.max_ripple_pct),
+    // A picked point is not the run's best, so it does not carry the run's F.
+    F: picked ? undefined : Number(st?.best?.F),
+    metrics: picked
+      ? { T_avg_Nm: pt?.torque, T_ripple_pct: pt?.ripple, efficiency: pt?.eff,
+          torque_per_mass: pt?.td, mass_total_kg: pt?.mass }
+      : { T_avg_Nm: m?.T_em_Nm, T_ripple_pct: m?.T_ripple_pct,
+          efficiency: m?.efficiency, torque_per_mass: m?.torque_per_mass,
+          mass_total_kg: m?.mass_total_kg },
+    overrides: (picked ? pt?.overrides : (st?.best?.x || st?.result?.best?.overrides)) || {},
+  };
 }
 
 // Applying a design swaps the geometry under the Simulation tab: drop the previous
@@ -172,6 +221,11 @@ interface MotorState {
   cancelDescent: () => Promise<void>;
   applyDescentBest: () => Promise<void>;
   applyDescentPoint: (pt: any) => Promise<void>;   // apply a USER-PICKED scatter point
+  /** Outcome of the AUTO-ARCHIVE that every apply performs (see
+   *  lib/appliedAutoSave): the new motor's name, or the reason it was not
+   *  saved.  The panels show it as one line — an apply whose archiving failed
+   *  must never look like an apply that was archived. */
+  appliedSave: (AppliedSaveResult & { busy?: boolean }) | null;
   loadLastDescent: () => Promise<void>;   // re-hydrate the last run's charts from the backend
   computeBaselineLine: (opts: { currentBumpPct: number; steps: number; nSectors: number }) => Promise<void>;
 
@@ -722,6 +776,7 @@ export const useMotorStore = create<MotorState>()(
       baselineBusy: false,
       baselineError: null,
       lastOptSnapshot: null,
+      appliedSave: null,
       setLastOptSnapshot: (s) => set({ lastOptSnapshot: s }),
       runDescent: async ({ rippleMax, maxIters, wEff, wTd, steps, algorithm, nSectors, targetTorque, vPeakLimit, optimizeGamma, autoExpand, maxRounds, surrogateSeed, objective, currentBumpPct, ripplePenaltyLambda, thdPenaltyLambda, thdMaxPct }) => {
         const { sweepConfig } = get();
@@ -902,6 +957,11 @@ export const useMotorStore = create<MotorState>()(
         }
         await refreshEndWindingFactor();
         announceAppliedDesign();
+        // ARCHIVE IT.  An applied design that lives only in the editor is one
+        // backend restart from gone — that is how a day of optimization was
+        // lost.  Saved as a NEW motor; the source motor is not touched.
+        set({ appliedSave: { ok: false, busy: true } });
+        set({ appliedSave: await autoSaveAppliedDesign(descentProvenance(st, null)) });
       },
       // Apply a USER-PICKED scatter point (click-to-select on the descent chart) —
       // same geometry + operating-point write as applyDescentBest, but for an
@@ -932,6 +992,11 @@ export const useMotorStore = create<MotorState>()(
         }
         await refreshEndWindingFactor();
         announceAppliedDesign();
+        // Same archive as the best-point apply: a hand-picked design is exactly
+        // as easy to lose, and it is usually the one the engineer chose on purpose.
+        set({ appliedSave: { ok: false, busy: true } });
+        set({ appliedSave: await autoSaveAppliedDesign(
+          descentProvenance(get().descentState, pt)) });
       },
       loadLastDescent: async () => {
         // The backend keeps the last descent in memory — re-hydrate it so the

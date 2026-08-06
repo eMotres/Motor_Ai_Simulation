@@ -19,6 +19,8 @@ import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import { useMotorStore } from '../../stores/motorStore';
 import SectionLabel from '../common/SectionLabel';
 import HelpTip from '../common/HelpTip';
+import { autoSaveAppliedDesign, appliedSaveLine } from '../../lib/appliedAutoSave';
+import type { AppliedSaveResult } from '../../lib/appliedAutoSave';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
 
@@ -186,6 +188,8 @@ const SweepStudyPanel: React.FC = () => {
   const [connectBy, setConnectBy] = useLS<'current_a' | 'gamma_deg'>('connectBy', 'current_a');
   const [selected, setSelected] = useState<any>(null);   // hand-picked best point
   const [applyMsg, setApplyMsg] = useState<string | null>(null);
+  // Where the applied point was ARCHIVED (its own motor) — or why it was not.
+  const [saveRes, setSaveRes] = useState<AppliedSaveResult | null>(null);
   const [zoom, setZoom] = useState<{ x: [number, number]; y: [number, number] } | null>(null);   // mouse-wheel zoom
 
   // (The "reset zoom on new series" effect lives BELOW `series` — referencing it
@@ -429,7 +433,7 @@ const SweepStudyPanel: React.FC = () => {
   // operating point (current/γ) → config + Simulation (same as "apply best").
   const applyPoint = async (p: any) => {
     if (!p) return;
-    setApplyMsg('applying…');
+    setApplyMsg('applying…'); setSaveRes(null);
     try {
       if (p.overrides && Object.keys(p.overrides).length) await updateGeometryViaApi(p.overrides);
       await fetch(`${API}/api/simulation/config`, {
@@ -476,6 +480,18 @@ const SweepStudyPanel: React.FC = () => {
       } catch { /* SSR/no-window */ }
       const ovStr = Object.entries(p.overrides || {}).map(([k, v]) => `${k}=${v}`).join(', ');
       setApplyMsg(`✓ applied${ovStr ? ': ' + ovStr : ' (base geometry)'} · I=${p.I} A · γ=${p.g}° — numbers shown in Simulation (Run there only for waveforms)`);
+      // ARCHIVE IT — a picked sweep design is applied into the editor and would
+      // otherwise live only there until someone remembered to save it.  New
+      // motor, never the source one; the failure (if any) is shown, not swallowed.
+      setSaveRes(await autoSaveAppliedDesign({
+        mode: 'sweep',
+        runId: String(result?.run_id ?? ''),
+        operatingPoint: { current_a: Number(p.I), gamma_deg: Number(p.g),
+                          rpm: readLS('sim.rpm', 4000) },
+        metrics: { T_avg_Nm: p.T, T_ripple_pct: p.ripple, efficiency: p.eff,
+                   torque_per_mass: p.td, mass_total_kg: p.mass },
+        overrides: p.overrides || {},
+      }));
     } catch (e: any) { setApplyMsg('✗ apply FAILED (' + String(e?.message ?? e) + ') — nothing was changed; try again'); }
   };
 
@@ -627,6 +643,22 @@ const SweepStudyPanel: React.FC = () => {
                   color: applyMsg.startsWith('✓') ? '#4ade80' : applyMsg.startsWith('✗') ? '#fca5a5' : 'var(--text-3)' }}>
                   {applyMsg}</Typography>}
               </Box>
+              {/* Where it was archived — an applied point is saved as its own
+                  motor so a restart cannot take it. */}
+              {saveRes && (
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.4 }}>
+                  <Typography sx={{ fontSize: 11, fontWeight: saveRes.ok ? 400 : 700,
+                                    color: saveRes.ok ? '#4ade80' : '#fca5a5' }}>
+                    {appliedSaveLine(saveRes)}
+                  </Typography>
+                  <HelpTip title={saveRes.ok
+                    ? 'Applying a picked point archives it as a NEW motor in the Motors tab, with '
+                      + 'the sweep, operating point and metrics that produced it in its description. '
+                      + 'The motor you are editing is not touched.'
+                    : 'The point IS applied, but it was NOT archived — a backend restart would lose '
+                      + 'it. Save it by hand (Motors → Save as new motor) or fix the reason shown.'} />
+                </Box>
+              )}
             </Box>
           )}
           <SweepTable points={result?.points || []} rpm={readLS('sim.rpm', 4000)}

@@ -726,6 +726,291 @@ def save_current_as_preset(req: SavePresetRequest,
     return {**_summary(saved), "id": pid}
 
 
+class ArchiveAppliedRequest(BaseModel):
+    """"I just applied an optimizer result to the editor — file it as a motor."
+
+    Every apply out of the Optimization tab calls this.  A design that exists
+    only in the editor is one backend restart away from gone: that happened, a
+    day of optimization went with it, and "the user will press Save" is not a
+    mechanism.  So the apply itself archives — into a NEW motor, never into the
+    source motor and never into whatever preset the editor has open.
+    """
+    #: Which apply produced it: auto | cmaes | screen | descent | sweep | picked.
+    mode: str = ""
+    #: The motor the design was applied ON TOP of (name shown, id traced).
+    source_name: str = ""
+    source_id: str = ""
+    run_id: str = ""
+    objective: str = ""
+    #: {current_a, rpm, gamma_deg} — the point the design was SOLVED at, which
+    #: is not necessarily the one the Simulation tab happened to hold.
+    operating_point: Optional[dict] = None
+    ripple_max_pct: Optional[float] = None
+    #: The objective's own verdict on this design (signed distance above the
+    #: current-only baseline line), stored with it — see optimization.py.
+    f_above_baseline: Optional[float] = None
+    metrics: Optional[dict] = None
+    #: The knobs the apply wrote.  Not the geometry that is saved — that is
+    #: snapshotted from the config the apply landed in — but checked against it,
+    #: so a value the geometry validator clamped is REPORTED rather than filed
+    #: silently as if it were what the optimizer asked for.
+    overrides: Optional[dict] = None
+    #: Only for a caller that knows the full cross-section itself (tests, and a
+    #: client applying a design it holds in hand).  Absent → config snapshot.
+    geometry: Optional[dict] = None
+    mesh: Optional[dict] = None
+    simulation: Optional[dict] = None
+
+
+#: What produced a design, in the one word that goes in its NAME.  A card is
+#: read at a glance; "opt"/"refine"/"sweep"/"pick" is the difference between
+#: four motors called the same thing and four you can tell apart.
+_APPLY_LABELS = {"auto": "opt", "cmaes": "opt", "descent": "opt",
+                 "screen": "refine", "sweep": "sweep", "picked": "pick"}
+
+
+def _num_or_none(v):
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if f == f and f not in (float("inf"), float("-inf")) else None
+
+
+def _applied_name(source_name: str, mode: str, when: _dt.datetime) -> str:
+    """"CIANO28 150_35 · opt 12:47" — the source, what produced it, when."""
+    label = _APPLY_LABELS.get(str(mode or "").strip().lower(), "opt")
+    base = str(source_name or "").strip() or "design"
+    if len(base) > 40:
+        base = base[:39].rstrip() + "…"
+    return f"{base} · {label} {when:%H:%M}"
+
+
+def _applied_id(taken, mode: str, when: _dt.datetime) -> str:
+    """A NEW id, always.  The whole point of this path is that it cannot land on
+    an existing motor, so the id is minted here (from the clock, then a counter)
+    and checked against the store rather than derived from a name two applies a
+    minute apart would spell the same."""
+    label = _APPLY_LABELS.get(str(mode or "").strip().lower(), "opt")
+    stem = f"applied_{label}_{when:%Y%m%d_%H%M%S}"
+    pid, n = stem, 1
+    while pid in taken:
+        pid = f"{stem}_{n}"
+        n += 1
+    return pid
+
+
+def _applied_description(req: "ArchiveAppliedRequest", when: _dt.datetime,
+                         deviations: list) -> str:
+    """One line naming WHAT produced this motor, so it can be traced back to its
+    run months later: mode, run id, operating point, ripple gate, F, the metrics
+    of the applied point, and the motor it was applied on top of."""
+    m = dict(req.metrics or {})
+
+    def _pick(*keys):
+        for k in keys:
+            v = _num_or_none(m.get(k))
+            if v is not None:
+                return v
+        return None
+
+    op = dict(req.operating_point or {})
+    bits = ["auto-saved on apply from the Optimization tab"]
+    mode = str(req.mode or "").strip().lower()
+    if mode:
+        bits.append(f"mode={mode}")
+    if (req.run_id or "").strip():
+        bits.append(f"run={req.run_id.strip()}")
+    if (req.objective or "").strip():
+        bits.append(f"objective={req.objective.strip()}")
+    cur, rpm, gam = (_num_or_none(op.get("current_a")), _num_or_none(op.get("rpm")),
+                     _num_or_none(op.get("gamma_deg")))
+    if cur is not None or rpm is not None or gam is not None:
+        bits.append("op {} A / {} rpm / gamma {}deg".format(
+            "?" if cur is None else f"{cur:.1f}",
+            "?" if rpm is None else f"{rpm:.0f}",
+            "?" if gam is None else f"{gam:.1f}"))
+    gate = _num_or_none(req.ripple_max_pct)
+    if gate is not None:
+        bits.append(f"ripple gate <= {gate:.2f}%")
+    fval = _num_or_none(req.f_above_baseline)
+    if fval is not None:
+        bits.append("F={:+.4f} ({} the current-only baseline line)".format(
+            fval, "above" if fval > 0 else "below"))
+    t = _pick("T_avg_Nm", "T_em_Nm", "torque")
+    if t is not None:
+        bits.append(f"T {t:.3f} N*m")
+    rip = _pick("T_ripple_pct", "ripple_pct", "ripple")
+    if rip is not None:
+        bits.append(f"ripple {rip:.2f}%")
+    eff = _pick("efficiency", "efficiency_pct")
+    if eff is not None:
+        bits.append("eff {:.2f}%".format(eff * 100.0 if eff <= 1.0 else eff))
+    td = _pick("torque_per_mass", "torque_per_mass_Nm_kg", "td")
+    if td is not None:
+        bits.append(f"{td:.3f} N*m/kg")
+    if (req.source_name or req.source_id):
+        bits.append('from "{}"{}'.format(
+            req.source_name or req.source_id,
+            f" ({req.source_id})" if req.source_id else ""))
+    if deviations:
+        # A clamp is not a footnote: the saved machine is then NOT the one the
+        # optimizer scored, and whoever reads this card must be told on the card.
+        bits.append("clamped by the geometry validator: " + ", ".join(
+            f"{d['field']} {d['applied']:g}->{d['saved']:g}" for d in deviations))
+    bits.append(f"applied {when:%Y-%m-%d %H:%M}")
+    return " · ".join(bits)
+
+
+def _applied_metrics(raw: Optional[dict]) -> dict:
+    """The applied point's numbers in the dialect the Motors card reads, so the
+    new card shows the design's OWN metrics instead of falling back to whatever
+    the last FEM run happened to be."""
+    m = dict(raw or {})
+
+    def _pick(*keys):
+        for k in keys:
+            v = _num_or_none(m.get(k))
+            if v is not None:
+                return v
+        return None
+
+    out: dict = {}
+    for key, names in (
+        ("T_avg_Nm", ("T_avg_Nm", "T_em_Nm", "torque")),
+        ("T_ripple_pct", ("T_ripple_pct", "ripple_pct", "ripple")),
+        ("efficiency", ("efficiency",)),
+        ("mass_total_kg", ("mass_total_kg", "mass_kg", "mass")),
+        ("torque_per_mass", ("torque_per_mass", "torque_per_mass_Nm_kg", "td")),
+        ("V_line_peak_V", ("V_line_peak_V", "v_line_peak_v")),
+        ("P_mech_W", ("P_mech_W", "P_mech_avg_W")),
+    ):
+        v = _pick(*names)
+        if v is not None:
+            out[key] = v
+    # The card's own key for ripple (it reads `ripple_pct`), kept in step with
+    # the solver dialect above rather than left for a reader to translate.
+    if "T_ripple_pct" in out:
+        out["ripple_pct"] = out["T_ripple_pct"]
+    # Efficiency is stored as a FRACTION, always.  The clients that call this
+    # read it from two different charts — one holds 0.942, the other 94.2 — and a
+    # stored field whose unit depends on which button was pressed is a number
+    # nobody downstream can use.  Nothing sits between 1.5 % and 1.5×.
+    e = out.get("efficiency")
+    if e is not None and e > 1.5:
+        out["efficiency"] = e / 100.0
+    return out
+
+
+@router.post("/from_applied")
+def archive_applied_design(req: ArchiveAppliedRequest,
+                           authorization: Optional[str] = Header(default=None)):
+    """Archive the design that was JUST applied from the optimizer as a NEW motor.
+
+    Three things this is careful about:
+
+    * it writes a new id, minted here — it can never overwrite the source motor,
+      the editor's active preset, or anything else in the store;
+    * the geometry it files is the one that ACTUALLY LANDED (the config the apply
+      wrote), not the overrides the client asked for.  Those are compared field
+      by field and any difference — a value the geometry validator clamped — is
+      returned and written into the description, because a saved machine that is
+      not the one that was scored must say so;
+    * it either saves or fails loudly.  There is no path through here that
+      returns 200 without a motor in the store.
+    """
+    from motor_ai_sim.config import get_config
+    cfg = get_config() or {}
+    src_geo = dict(req.geometry) if req.geometry else dict(cfg.get("geometry", {}) or {})
+    geometry = {k: v for k, v in src_geo.items()
+                if isinstance(v, (int, float)) and not isinstance(v, bool)}
+    if not geometry:
+        # Nothing to save is not a save.  Silence here is exactly the failure
+        # this endpoint exists to prevent.
+        raise HTTPException(
+            status_code=422,
+            detail=("the applied design carries no geometry to save — "
+                    "config/motor_config.yaml holds no numeric geometry section"))
+
+    # Did what we are about to file match what the apply asked for?
+    deviations = []
+    for k, v in (req.overrides or {}).items():
+        want = _num_or_none(v)
+        got = _num_or_none(geometry.get(k))
+        if want is None:
+            continue
+        if got is None or abs(got - want) > max(1e-6, 1e-6 * abs(want)):
+            deviations.append({"field": k, "applied": want,
+                               "saved": got if got is not None else float("nan")})
+
+    sim_cfg = cfg.get("simulation", {}) or {}
+    simulation = dict(req.simulation) if req.simulation else {
+        k: sim_cfg.get(k) for k in ("max_current", "rpm", "phase_offset_deg")
+        if sim_cfg.get(k) is not None}
+    # The OPERATING POINT the design was solved at wins over both: a motor saved
+    # with the Simulation tab's idle current re-solves at the wrong point and
+    # reads as a far worse machine than the one the optimizer measured.
+    op = dict(req.operating_point or {})
+    for key, field in (("current_a", "max_current"), ("rpm", "rpm"),
+                       ("gamma_deg", "phase_offset_deg")):
+        v = _num_or_none(op.get(key))
+        if v is not None:
+            simulation[field] = v
+    mesh = dict(req.mesh) if req.mesh else dict(cfg.get("mesh", {}) or {})
+
+    _backfill_owners()
+    presets = _load_presets()
+    when = _dt.datetime.now()
+    pid = _applied_id(set(presets), req.mode, when)
+    ident = _caller_identity(authorization)
+    name = _applied_name(req.source_name, req.mode, when)
+    order = 1 + max([p.get("order", 0) for p in presets.values()] or [0])
+    entry = {
+        "id": pid, "name": name,
+        "description": _applied_description(req, when, deviations),
+        "order": order, "metrics": _applied_metrics(req.metrics),
+        "owner": ident["id"], "locked": False, "template": False,
+        "geometry": geometry, "simulation": simulation, "mesh": mesh,
+        # The same provenance, machine-readable, so a later reader can filter or
+        # re-run instead of parsing the sentence a human reads.
+        "provenance": {
+            "src": "optimizer_apply", "mode": req.mode or None,
+            "run_id": req.run_id or None, "objective": req.objective or None,
+            "operating_point": {k: _num_or_none(op.get(k))
+                                for k in ("current_a", "rpm", "gamma_deg")},
+            "ripple_max_pct": _num_or_none(req.ripple_max_pct),
+            "F_above_baseline": _num_or_none(req.f_above_baseline),
+            "metrics": _applied_metrics(req.metrics),
+            "overrides": {k: _num_or_none(v) for k, v in (req.overrides or {}).items()},
+            "deviations": deviations,
+            "source_id": req.source_id or None,
+            "source_name": req.source_name or None,
+            "applied_at": when.isoformat(timespec="seconds"),
+        },
+    }
+    try:
+        saved = _put_preset(pid, entry)
+    except Exception as e:  # noqa: BLE001
+        # The apply STANDS — the editor already holds the design.  What failed is
+        # the archiving, and the caller is told exactly that, with the reason, so
+        # the engineer knows the design is currently unsaved.
+        log.error("applied design was NOT archived (%s)", e, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=(f"the applied design was not saved: {e}. The design IS "
+                    f"applied in the editor — save it by hand before restarting "
+                    f"the backend."))
+    try:
+        _upsert_catalog_entry(pid, saved)   # its card in the Motors tab
+    except Exception:  # noqa: BLE001
+        # The motor itself is safe on disk; only its card is missing.  Never turn
+        # a successful archive into a reported failure.
+        log.warning("motor '%s' saved but its Motors card was not written",
+                    pid, exc_info=True)
+    return {**_summary(saved), "id": pid, "deviations": deviations,
+            "geometry_fields": len(geometry)}
+
+
 @router.post("/{preset_id}/settings")
 def save_motor_settings(preset_id: str, patch: SettingsPatch,
                         authorization: Optional[str] = Header(default=None)):

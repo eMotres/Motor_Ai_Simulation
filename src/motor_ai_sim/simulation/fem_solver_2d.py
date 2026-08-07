@@ -353,7 +353,13 @@ def _resolve_daxis_shift(p, geo, wind, pole_pairs, geo_override, n_sectors) -> f
             # curvature, and a runner-up that is not within the solve's own
             # noise.  A calibration that cannot be trusted stops the run; it
             # never quietly rotates the current vector.
-            _rel = float(max(ym1, yp1) / y0) if y0 > 0 else 1.0
+            # Margin against the curve's OWN swing, not against y0: ψ_A is a
+            # signed flux linkage, so a ratio is meaningless where it crosses
+            # zero (and division by y0≈0 turns a healthy triangular peak into a
+            # "flat" one — which is exactly how this guard first broke the
+            # estimator tests).
+            _span = float(np.max(psi) - np.min(psi))
+            _margin = (float(y0 - max(ym1, yp1)) / _span) if _span > 0 else 0.0
             _elec_step = abs(dstep) * float(pole_pairs)
             if not (y0 > ym1 and y0 > yp1):
                 _cal_err = ("ψ_A has no interior maximum at the sampled "
@@ -365,20 +371,20 @@ def _resolve_daxis_shift(p, geo, wind, pole_pairs, geo_override, n_sectors) -> f
                             "sample k={}: frac={:+.3f} (must be within ±0.5), "
                             "curvature={:.3e} (must be < 0)".format(k0, frac, den))
                 daxis = None
-            elif _rel > 0.999:
+            elif _margin < 1e-3:
                 _cal_err = ("the ψ_A peak is flat to the solve's own noise: the "
-                            "better neighbour is {:.4f} % of the peak, so which "
-                            "sample wins is numerical luck — and one sample is "
-                            "{:.1f}° electrical of load angle"
-                            .format(100.0 * _rel, _elec_step))
+                            "runner-up sample is within {:.4f} % of the peak-to-"
+                            "peak swing, so which sample wins is numerical luck "
+                            "— and one sample is {:.1f}° electrical of load angle"
+                            .format(100.0 * _margin, _elec_step))
                 daxis = None
             if daxis is not None:
                 log.info("d-axis auto-cal: theta*=%.4f deg mech -> DAXIS=%.4f deg "
                          "(poles=%d slots=%d conn=%s geo=%s, converged: %d frames, "
-                         "worst resid %s; peak margin %.3f %%)",
+                         "worst resid %s; peak margin %.3f %% of swing)",
                          theta_star, daxis, key[0], key[1], key[3], _geo_fp,
                          int(psi.size), cal.get("picard_resid_max"),
-                         100.0 * (1.0 - _rel))
+                         100.0 * _margin)
         else:
             _cal_err = (f"calibration run returned no usable ψ_A "
                         f"(psi {psi.size} samples, angles {ang.size})")

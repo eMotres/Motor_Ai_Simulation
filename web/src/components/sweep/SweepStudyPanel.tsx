@@ -223,15 +223,38 @@ const SweepStudyPanel: React.FC = () => {
     try { localStorage.setItem('sweepStudy.lastResult', JSON.stringify(r)); } catch { /* quota */ }
   };
 
+  // The run this panel is waiting for.  ONE endpoint answers both "is my run
+  // done?" and "here is a result", and those were only the same thing by luck:
+  // the backend restores the last completed sweep at startup with running=false,
+  // so the first poll after pressing Run — fired before the worker flips the
+  // flag, or after a restart — read a FOREIGN result as its own.  A sweep of
+  // magnet_height/rotor_hole came back showing a table of slot_height points.
+  // Every result now names its run; anything else is not an answer to us.
+  const runIdRef = useRef<string>('');
+
   // shared poll loop — used by both run() and the resume-on-mount effect.
-  const poll = async () => {
+  const poll = async (myRunId?: string) => {
+    const want = myRunId ?? runIdRef.current;
+    let waitedForStart = 0;
     while (!stopRef.current) {
       await new Promise(r => setTimeout(r, 1500));
       let st: any;
       try { st = await (await fetch(`${API}/api/optimization/scan/progress`)).json(); } catch { continue; }
-      setProgress({ done: st.done ?? 0, total: st.total ?? 1, cached: st.cached ?? 0 });
-      if (Array.isArray(st.points) && st.points.length) saveResult({ points: st.points });   // live points
-      if (!st.running) { if (st.result) saveResult(st.result); if (st.error) setErr(st.error); break; }
+      const mine = !want || String(st.run_id ?? '') === want;
+      if (mine) setProgress({ done: st.done ?? 0, total: st.total ?? 1, cached: st.cached ?? 0 });
+      if (mine && Array.isArray(st.points) && st.points.length) saveResult({ points: st.points });
+      if (st.running) { waitedForStart = 0; continue; }
+      if (st.error && mine) { setErr(st.error); break; }
+      const res = st.result;
+      const resMine = res && (!want || String(res.run_id ?? '') === want);
+      if (resMine && Array.isArray(res.points)) { saveResult(res); break; }
+      // Not running, and what is on the server is somebody else's run (or the
+      // one restored from disk).  Do NOT display it — wait for ours to appear.
+      if (++waitedForStart > 20) {
+        setErr('the sweep did not start on the backend — nothing was computed, '
+             + 'and the chart still shows the previous run');
+        break;
+      }
     }
   };
 
@@ -247,11 +270,16 @@ const SweepStudyPanel: React.FC = () => {
       try {
         const st = await (await fetch(`${API}/api/optimization/scan/progress`)).json();
         if (st.running) {
+          // Adopt the RUNNING run's id: on a page reload this panel did not
+          // start it, but it is the one whose points belong on this chart.
+          runIdRef.current = String(st.run_id ?? '');
           stopRef.current = false; setRunning(true);
           if (Array.isArray(st.points)) saveResult({ points: st.points });
           setProgress({ done: st.done ?? 0, total: st.total ?? 1, cached: st.cached ?? 0 });
-          await poll(); setRunning(false);
+          await poll(runIdRef.current); setRunning(false);
         } else if (st.result && Array.isArray(st.result.points)) {
+          // History, not the answer to anything this session asked for.
+          runIdRef.current = String(st.result.run_id ?? '');
           saveResult(st.result);
         }
       } catch { /* ignore */ }
@@ -261,6 +289,10 @@ const SweepStudyPanel: React.FC = () => {
 
   const run = async () => {
     setErr(null); setResult(null); setRunning(true); setProgress(null); stopRef.current = false;
+    // UNIQUE per launch.  It used to be `sweep_${nPts}`, which two runs of the
+    // same size share — so even a stamped result could not tell them apart.
+    const myRunId = `sweep_${nPts}_${Date.now()}`;
+    runIdRef.current = myRunId;
     const rpm = readLS('sim.rpm', 4000);
     const ops: any[] = [];
     for (const g of gammas) for (const I of currents) ops.push({ current_a: I, gamma_deg: g, rpm });
@@ -290,11 +322,11 @@ const SweepStudyPanel: React.FC = () => {
           // Br, so a sweep without it ranks machines the Simulation tab is not
           // showing. Costs a whole extra period of frames per point.
           demag: readBool('sim.demag', false),
-          run_id: `sweep_${nPts}`,
+          run_id: myRunId,
         }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
-      await poll();
+      await poll(myRunId);
     } catch (e: any) { setErr(String(e?.message ?? e)); }
     finally { setRunning(false); }
   };

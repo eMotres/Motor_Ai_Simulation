@@ -68,8 +68,15 @@ def _load_last_scan() -> None:
         p = _scan_store_path()
         if os.path.exists(p):
             with open(p, encoding="utf-8") as fh:
-                _scan_state["result"] = json.load(fh)
-            log.info("restored last scan from %s", p)
+                _restored = json.load(fh)
+            # It belongs to whatever run produced it, and to no request made
+            # after this process started: mark it so the client can show it as
+            # history but never adopt it as the result of a run it just fired.
+            if isinstance(_restored, dict):
+                _restored["restored_from_disk"] = True
+            _scan_state["result"] = _restored
+            log.info("restored last scan from %s (run_id=%s)", p,
+                     (_restored or {}).get("run_id") if isinstance(_restored, dict) else None)
     except Exception as _e:  # noqa: BLE001
         log.warning("could not restore last scan: %s", _e)
 
@@ -903,6 +910,14 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
             "operating_points": operating_points, "ripple_max_pct": float(ripple_max),
             "objective": "pareto_torque_density_vs_efficiency_FEM",
             "steps_per_period": int(steps), "fem": True,
+            # WHICH RUN THIS IS.  The panel polls one endpoint for "is my run
+            # done" and "here is the result", and those were only ever the same
+            # thing by luck: after a restart the state holds the RESTORED last
+            # scan with running=False, so a poll that arrives before the new run
+            # flips the flag reads someone else's result as its own — a sweep of
+            # magnet_height/rotor_hole showed a table of slot_height points.
+            # Stamped here so the client can refuse a result it did not ask for.
+            "run_id": str(run_id or ""),
             # solver params for this scan → lets the cache be re-seeded from this
             # result later with the exact same key inputs (see /scan/seed_cache).
             "scan_params": {"coil_temp_c": float(coil_temp_c), "mesh_size_mm": float(mesh_size_mm),

@@ -69,10 +69,13 @@ const PhysicsDashboard: React.FC<Props> = ({ gamma_deg, I_phase_rms, runNonce = 
   // FEM summary here so the card shows those exact numbers WITHOUT a re-run.
   // A fresh Run (runNonce increments) supersedes it.
   const [appliedSummary, setAppliedSummary] = React.useState<TransientSummary | null>(null);
+  // Kept even after a Run supersedes it, so the Run can be REPORTED against the
+  // point it was supposed to reproduce instead of silently replacing it.
+  const appliedRef = React.useRef<TransientSummary | null>(null);
   React.useEffect(() => {
     const onApply = (e: Event) => {
       const s = (e as CustomEvent).detail?.summary;
-      if (s) setAppliedSummary(s as TransientSummary);
+      if (s) { setAppliedSummary(s as TransientSummary); appliedRef.current = s as TransientSummary; }
     };
     window.addEventListener('sim-apply-summary', onApply as EventListener);
     return () => window.removeEventListener('sim-apply-summary', onApply as EventListener);
@@ -97,6 +100,21 @@ const PhysicsDashboard: React.FC<Props> = ({ gamma_deg, I_phase_rms, runNonce = 
     if (runPending && transientSummary) { setAppliedSummary(null); setRunPending(false); }
   }, [runPending, transientSummary]);
   const shownSummary = appliedSummary ?? transientSummary;
+  // A solve that lands on different numbers than the applied point is a FINDING,
+  // not a screen update: on 2026-08-07 an auto-recompute replaced a swept 27.33
+  // N·m with 12.65 and nothing said the two disagreed.  Report the gap.
+  const deltaVsApplied = React.useMemo(() => {
+    const a = appliedRef.current, t = transientSummary;
+    if (!a || !t || appliedSummary) return null;
+    const rel = (x?: number, y?: number) =>
+      (Number.isFinite(x as number) && Number.isFinite(y as number) && (y as number) !== 0)
+        ? 100 * ((x as number) - (y as number)) / (y as number) : null;
+    const dT = rel(t.T_em_avg_Nm, a.T_em_avg_Nm);
+    const dEff = (Number.isFinite(t.efficiency as number) && Number.isFinite(a.efficiency as number))
+      ? 100 * ((t.efficiency as number) - (a.efficiency as number)) : null;
+    if (dT == null && dEff == null) return null;
+    return { dT, dEff };
+  }, [transientSummary, appliedSummary]);
   // Forward the shown summary to the parent (for the Save-simulation snapshot) and
   // persist it, so "Save as new motor" stamps the card with the numbers the user
   // actually SEES here — not a stale .last_transient on disk.
@@ -125,6 +143,7 @@ const PhysicsDashboard: React.FC<Props> = ({ gamma_deg, I_phase_rms, runNonce = 
       {/* ── Top-of-tab summary card — populated by TransientCharts, or by a
            design applied from the Sweep tab (numbers reused, no re-run) ── */}
       <SummaryTable summary={shownSummary} fromSweep={!!appliedSummary}
+        deltaVsApplied={deltaVsApplied}
         liveOp={{ current: I_phase_rms, gamma: gamma_deg }}/>
 
       {/* ── Field viewer / animation — one widget covers both the static

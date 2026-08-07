@@ -320,9 +320,10 @@ const ComparePanel: React.FC = () => {
       // next look rebuilds. Best-effort: a stale cache is a cosmetic problem,
       // failing the whole apply over it is not.
       try { await clearStlCache(); } catch { /* cosmetic only */ }
+      // Applying a SAVED design does not solve it again — see motorStore's
+      // announceAppliedDesign for why the automatic recompute was removed.
       window.dispatchEvent(new CustomEvent('sim-design-applied'));
-      window.dispatchEvent(new CustomEvent('sim-rerun'));
-      setApplyMsg(`✓ "${s.name}" applied${matNote} — geometry rebuilt, recomputing in Simulation`);
+      setApplyMsg(`✓ "${s.name}" applied${matNote} — geometry rebuilt; press Run in Simulation to solve it`);
       setActiveTab('simulation');
     } catch (e: any) {
       setApplyMsg(null);

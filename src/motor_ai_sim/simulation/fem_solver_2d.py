@@ -339,10 +339,46 @@ def _resolve_daxis_shift(p, geo, wind, pole_pairs, geo_override, n_sectors) -> f
             dstep = float(ang[1] - ang[0]) if n > 1 else 0.0
             theta_star = (k0 + frac) * dstep            # mech deg of ψ_A peak
             daxis = (90.0 - theta_star * float(pole_pairs)) % 360.0
-            log.info("d-axis auto-cal: theta*=%.4f deg mech -> DAXIS=%.4f deg "
-                     "(poles=%d slots=%d conn=%s geo=%s, converged: %d frames, "
-                     "worst resid %s)", theta_star, daxis, key[0], key[1],
-                     key[3], _geo_fp, int(psi.size), cal.get("picard_resid_max"))
+            # ── the peak has to BE a peak ────────────────────────────────────
+            # One sample of this curve is 15° ELECTRICAL on a 28-pole machine
+            # (24 samples over one electrical period).  Landing one sample off
+            # puts γ 15° from where the user set it; three samples off puts it
+            # 45° away — a different operating point, not a rounding error.  A
+            # run of the 150 mm machine reported 12.65 N·m where the same
+            # geometry, current and mesh give 27.33: fitting T and V_peak
+            # against a γ sweep placed that run at ~61° effective, i.e. exactly
+            # three samples.  So refuse anything that is not an unambiguous
+            # interior maximum — both neighbours strictly below, the parabolic
+            # vertex inside the sample it was fitted around, real negative
+            # curvature, and a runner-up that is not within the solve's own
+            # noise.  A calibration that cannot be trusted stops the run; it
+            # never quietly rotates the current vector.
+            _rel = float(max(ym1, yp1) / y0) if y0 > 0 else 1.0
+            _elec_step = abs(dstep) * float(pole_pairs)
+            if not (y0 > ym1 and y0 > yp1):
+                _cal_err = ("ψ_A has no interior maximum at the sampled "
+                            "resolution: k={} is not above both neighbours "
+                            "({:.6e}, {:.6e}, {:.6e})".format(k0, ym1, y0, yp1))
+                daxis = None
+            elif den >= 0.0 or abs(frac) > 0.5:
+                _cal_err = ("the parabolic vertex of ψ_A does not sit inside "
+                            "sample k={}: frac={:+.3f} (must be within ±0.5), "
+                            "curvature={:.3e} (must be < 0)".format(k0, frac, den))
+                daxis = None
+            elif _rel > 0.999:
+                _cal_err = ("the ψ_A peak is flat to the solve's own noise: the "
+                            "better neighbour is {:.4f} % of the peak, so which "
+                            "sample wins is numerical luck — and one sample is "
+                            "{:.1f}° electrical of load angle"
+                            .format(100.0 * _rel, _elec_step))
+                daxis = None
+            if daxis is not None:
+                log.info("d-axis auto-cal: theta*=%.4f deg mech -> DAXIS=%.4f deg "
+                         "(poles=%d slots=%d conn=%s geo=%s, converged: %d frames, "
+                         "worst resid %s; peak margin %.3f %%)",
+                         theta_star, daxis, key[0], key[1], key[3], _geo_fp,
+                         int(psi.size), cal.get("picard_resid_max"),
+                         100.0 * (1.0 - _rel))
         else:
             _cal_err = (f"calibration run returned no usable ψ_A "
                         f"(psi {psi.size} samples, angles {ang.size})")
@@ -4316,6 +4352,15 @@ def fem_transient_sliding_band(
                     float(_br_glob.min()))
     return {
         "method": "sliding_band_p2", "element_order": 2,
+        # WHICH ELECTRICAL FRAME THIS RUN WAS SOLVED IN.  gamma is measured
+        # from the q-axis, and the q-axis is wherever the d-axis calibration
+        # put it — so a run whose calibration landed on the wrong sample of
+        # psi_A solves a DIFFERENT operating point than the gamma on screen,
+        # with nothing in the result to say so.  It cost an hour of bisection
+        # to recover this number for one run by fitting T and V_peak against a
+        # gamma sweep; it is one float, and it belongs in every payload.
+        "daxis_deg": round(float(daxis_eff), 4),
+        "gamma_effective_deg": round(float(gamma_deg), 4),
         "loss_model": _lm2,
         "demag_coef_per_tri": (_dcoef2.tolist() if _dcoef2 is not None else None),
         "demag_report": _drep2,

@@ -111,13 +111,19 @@ function descentProvenance(st: any, pt: any | null) {
 }
 
 // Applying a design swaps the geometry under the Simulation tab: drop the previous
-// design's numbers ('sim-design-applied') and kick off the recompute that fills the
-// dashboard with this design's ('sim-rerun').  An already-known summary pushed via
-// 'sim-apply-summary' stays on screen until that solve reports its own.
+// design's numbers ('sim-design-applied').  It does NOT solve.
+//
+// It used to also fire 'sim-rerun'.  That was wrong twice over: the design being
+// applied WAS ALREADY SOLVED — its numbers are what the user picked it on, and
+// they are pushed here via 'sim-apply-summary' — so the recompute spent minutes
+// re-deriving them, and when it finished it REPLACED them.  On 2026-08-07 that
+// replacement put 12.65 N·m on screen for a point the sweep had measured at
+// 27.33, and nothing said which number belonged to what.  A solve is now
+// something the user asks for with the Run button; when they do, the panel
+// reports the delta against the applied point instead of quietly overwriting it.
 function announceAppliedDesign(): void {
   try {
     window.dispatchEvent(new CustomEvent('sim-design-applied'));
-    window.dispatchEvent(new CustomEvent('sim-rerun'));
   } catch { /* SSR/no-window */ }
 }
 

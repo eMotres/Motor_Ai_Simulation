@@ -523,14 +523,16 @@ const SweepStudyPanel: React.FC = () => {
         const k = Number(dc?.end_winding_factor);
         if (Number.isFinite(k) && k > 0) localStorage.setItem('sim.endWinding', JSON.stringify(+k.toFixed(3)));
       } catch { /* non-fatal — the Simulation panel re-seeds on the geometry change */ }
-      // Recompute the dashboard for THIS design; the summary above stands in until
-      // the solve reports its own numbers, so nothing stale is ever shown as current.
+      // NO recompute.  This point is already solved — the summary pushed above IS
+      // its FEM result, at the settings it was computed with.  Re-solving it cost
+      // minutes and then overwrote those numbers with a run at the Simulation
+      // tab's own settings; press Run there when you want waveforms, fields or an
+      // independent check, and the panel will report the delta.
       try {
         window.dispatchEvent(new CustomEvent('sim-design-applied'));
-        window.dispatchEvent(new CustomEvent('sim-rerun'));
       } catch { /* SSR/no-window */ }
       const ovStr = Object.entries(p.overrides || {}).map(([k, v]) => `${k}=${v}`).join(', ');
-      setApplyMsg(`✓ applied${ovStr ? ': ' + ovStr : ' (base geometry)'} · I=${p.I} A · γ=${p.g}° — numbers shown in Simulation (Run there only for waveforms)`);
+      setApplyMsg(`✓ applied${ovStr ? ': ' + ovStr : ' (base geometry)'} · I=${p.I} A · γ=${p.g}° — its own FEM numbers are shown in Simulation; Run there only for waveforms or a re-check`);
       // ARCHIVE IT — a picked sweep design is applied into the editor and would
       // otherwise live only there until someone remembered to save it.  New
       // motor, never the source one; the failure (if any) is shown, not swallowed.

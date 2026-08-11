@@ -256,19 +256,31 @@ interface SolidsProps {
   modelledHalfOnly: boolean;
   sectorDeg: number;
   polaritySign: number;
+  /** Mesh / field views: draw the WINDING only.  The iron and the magnets are
+   *  already on screen as meshed surfaces, and drawing the CAD solid on top of
+   *  its own mesh is two pictures of one part fighting for the same pixels. */
+  coilsOnly?: boolean;
 }
 
 const Solids: React.FC<SolidsProps> = ({
   geom, showCoils, showEndTurns, showMagnetArrows, modelledHalfOnly, sectorDeg,
-  polaritySign,
+  polaritySign, coilsOnly = false,
 }) => {
-  const zLo = modelledHalfOnly ? geom.extrusion.modelled_z_lo_mm : geom.extrusion.z_lo_mm;
-  const zHi = modelledHalfOnly ? geom.extrusion.modelled_z_hi_mm : geom.extrusion.z_hi_mm;
+  // WHAT IS ON SCREEN DECIDES THE EXTENT.  Beside a mesh (coilsOnly) the drawn
+  // machine is the MODELLED HALF, 0..stack/2 — the mesh has nothing below z = 0,
+  // and the mirror switch is what puts the other half there.  The copper used to
+  // ignore that and extrude the full -6..+6 stack, so it ran straight through
+  // the mirror plane and out the far end of a half-length mesh: conductors that
+  // "the mirror does not cut", because they were never the half in the first
+  // place.  In the geometry view (no mesh) the switch still rules.
+  const halfOnly = coilsOnly || modelledHalfOnly;
+  const zLo = halfOnly ? geom.extrusion.modelled_z_lo_mm : geom.extrusion.z_lo_mm;
+  const zHi = halfOnly ? geom.extrusion.modelled_z_hi_mm : geom.extrusion.z_hi_mm;
   const depth = Math.max(zHi - zLo, 1e-6);
 
   const bodies = useMemo(() => {
     const out: { key: string; geo: THREE.BufferGeometry; color: string; op: number }[] = [];
-    geom.regions.forEach((r) => {
+    if (!coilsOnly) geom.regions.forEach((r) => {
       r.parts.forEach((p, i) => {
         const g = new THREE.ExtrudeGeometry(shapeOf(p), { depth, bevelEnabled: false });
         g.translate(0, 0, zLo);
@@ -283,12 +295,17 @@ const Solids: React.FC<SolidsProps> = ({
         c.parts.forEach((p, i) => {
           const g = new THREE.ExtrudeGeometry(shapeOf(p), { depth, bevelEnabled: false });
           g.translate(0, 0, zLo);
-          out.push({ key: `coil_${c.index}_${i}`, geo: g, color: PART_COLORS.copper, op: 0.95 });
+          // Translucent beside a field map: the copper is NOT in the mesh (the
+          // scalar-potential model carries the current as a source field, not
+          // as a meshed conductor), so a solid opaque bar would read as a
+          // region whose field came out zero.
+          out.push({ key: `coil_${c.index}_${i}`, geo: g, color: PART_COLORS.copper,
+                     op: coilsOnly ? 0.45 : 0.95 });
         });
       });
     }
     return out;
-  }, [geom, depth, zLo, showCoils, polaritySign]);
+  }, [geom, depth, zLo, showCoils, polaritySign, coilsOnly]);
 
   useEffect(() => () => { bodies.forEach((b) => b.geo.dispose()); }, [bodies]);
 
@@ -479,7 +496,8 @@ const Static3DScene: React.FC<SceneProps> = ({
       {geom && (
         <Solids geom={geom} showCoils={showCoils} showEndTurns={showEndTurns}
           sectorDeg={sectorDeg} showMagnetArrows={showMagnetArrows}
-          modelledHalfOnly={modelledHalfOnly} polaritySign={sign} />
+          modelledHalfOnly={modelledHalfOnly} polaritySign={sign}
+          coilsOnly={!!surface} />
       )}
       {surface && (
         <Surfaces payload={surface} scale={scale} wireframe={wireframe}

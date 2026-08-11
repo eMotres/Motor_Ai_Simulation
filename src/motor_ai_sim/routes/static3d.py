@@ -664,6 +664,7 @@ def mesh(preset: str = Query(DEFAULT_PRESET),
          cut_z_mm: Optional[float] = Query(None),
          cut_theta_deg: Optional[float] = Query(None),
          air: bool = Query(False),
+         air_r_factor: float = Query(1.2, ge=1.0, le=8.0),
          max_tris: int = Query(V.MAX_TRIS_DEFAULT, ge=200, le=200000)):
     """The SURFACE of the tet mesh — the volume mesh is never shipped.
 
@@ -679,7 +680,12 @@ def mesh(preset: str = Query(DEFAULT_PRESET),
         out = V.surface_payload(
             tm, section, cut_z_mm=cut_z_mm, cut_theta_deg=cut_theta_deg,
             draw_air=bool(air),
-            air_r_max_mm=1.6 * float(section.r_stator_out_mm),
+            # How far out the DRAWN air reaches, as a multiple of the stator
+            # radius.  1.6 was still a slab that buried the machine (the mesh is
+            # 69 % air by element count), so the default is now 1.2 — just
+            # enough to see the gap and the end region — and it is a knob
+            # because "show me more air" is a legitimate thing to ask for.
+            air_r_max_mm=float(air_r_factor) * float(section.r_stator_out_mm),
             max_tris=int(max_tris))
     except HTTPException:
         raise

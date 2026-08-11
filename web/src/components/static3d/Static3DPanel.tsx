@@ -182,6 +182,9 @@ const Static3DPanel: React.FC = () => {
   const radius = (sector?.stator_od_mm ?? 40) / 2;
   const stackHalf = (sector?.stack_mm ?? 12) / 2;
   const zBox = surface?.counts?.z_box_mm ?? field?.counts?.z_box_mm ?? stackHalf * 4;
+  // What the cut slider is allowed to reach: the modelled half-stack plus the
+  // end-turn band — i.e. the part of z that HAS a machine in it.
+  const cutZMax = Math.max(1, Math.round(10 * (stackHalf + (geom?.coils.end_turn_band_mm ?? 0))) / 10);
 
   const shown: SurfacePayload | null = panel === 'fields' ? field : panel === 'mesh' ? surface : null;
   const scale = panel === 'fields' && field ? { vmin: field.scale.vmin, vmax: field.scale.vmax } : null;
@@ -282,11 +285,19 @@ const Static3DPanel: React.FC = () => {
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, minWidth: 210 }}>
             <Typography sx={lbl}>cut z</Typography>
-            <Slider size="small" min={0} max={Math.round(zBox)} step={0.25}
-              value={cutZ ?? Math.round(zBox)}
-              onChange={(_, v) => setCutZ(Number(v) >= Math.round(zBox) ? null : Number(v))}
+            {/* Range is the MACHINE, not the box.  It used to run to z_box
+                (40 mm on this motor) while the modelled half-stack ends at
+                6 mm and the end-turn band at 8.8 — so five sixths of the
+                travel cut nothing but far-field air, and the slider read as
+                broken ("cut z не работает" at 27.5 mm, which is 4.5 stack
+                halves above the iron).  Full-box travel is not useful: there
+                is nothing out there to cut. */}
+            <Slider size="small" min={0} max={cutZMax} step={0.1}
+              value={cutZ ?? cutZMax}
+              onChange={(_, v) => setCutZ(Number(v) >= cutZMax ? null : Number(v))}
               sx={{ width: 110 }} />
             <Typography sx={val}>{cutZ === null ? 'off' : `${cutZ} mm`}</Typography>
+            <HelpTip title={`Keeps only the tets whose centroid sits below this z. The model spans 0 (mirror plane) to ${cutZMax.toFixed(1)} mm — the half stack plus the end-turn band — so that is the whole travel; above it there is only air. Full right = off.`} />
           </Box>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, minWidth: 210 }}>
             <Typography sx={lbl}>cut θ</Typography>
@@ -302,10 +313,11 @@ const Static3DPanel: React.FC = () => {
               <FormControlLabel sx={{ m: 0 }} control={
                 <Switch size="small" checked={wireframe} onChange={(e) => setWireframe(e.target.checked)} />
               } label={<Typography sx={lbl}>edges</Typography>} />
+              <HelpTip title="Draws the triangle EDGES of the surface being shown — the mesh lines themselves, so you can see element size and shape rather than infer it from the shading. It is the drawn surface only (the boundary faces of the tets), not the interior of the volume mesh. With air on it also outlines the air elements, which is what turns the picture into a web of lines." />
               <FormControlLabel sx={{ m: 0 }} control={
                 <Switch size="small" checked={showAir} onChange={(e) => setShowAir(e.target.checked)} />
               } label={<Typography sx={lbl}>air</Typography>} />
-              <HelpTip title="Air is off by default: the air box is 40–160 mm of nothing and drawn whole it hides the machine. Switched on, only the air within 1.6 × the stator radius is drawn." />
+              <HelpTip title="Air is off by default: the mesh is ~69 % air by element count and drawn whole it buries the machine. Switched on, only the air within 1.2 × the stator radius is drawn — the gap and the end region, not the far field." />
             </>
           )}
         </Box>
@@ -365,8 +377,15 @@ const Static3DPanel: React.FC = () => {
 
       {/* ── the canvas ───────────────────────────────────────────────────── */}
       <Box sx={{ position: 'relative', flex: 1, minHeight: 320, border: '1px solid var(--line)', borderRadius: 1, overflow: 'hidden' }}>
+        {/* The winding travels into EVERY view now.  It used to be dropped
+            outside the geometry panel, so the mesh and the field showed a
+            machine with no copper in it — when the answer is that the copper
+            is real but NOT MESHED: the scalar-potential model carries the
+            current as a source field (curl T = J), so there is no conductor
+            region to colour.  Drawn translucent beside a field map, and the
+            note under the view says so. */}
         <Static3DScene
-          geom={panel === 'geometry' ? geom : null}
+          geom={geom}
           surface={shown}
           scale={scale}
           vectors={panel === 'fields' && showVectors && field?.vectors ? field.vectors : null}
@@ -406,6 +425,12 @@ const Static3DPanel: React.FC = () => {
         {panel === 'geometry' && geom && (
           <Stat k="bodies" v={`${geom.regions.length} regions · ${geom.coils.n_sides_sector} of ${geom.coils.n_sides_full_ring} conductors`}
             tip={`the CAD cross-section clipped to the sector — the same polygons the 2D solver meshes. ${geom.coils.note}`} />
+        )}
+        {/* Why the copper carries no mesh lines, said where the question gets
+            asked instead of left to be discovered by looking. */}
+        {panel !== 'geometry' && geom && showCoils && (
+          <Stat k="copper" v={`${geom.coils.n_sides_sector} conductors · not meshed`}
+            tip={"There are ZERO copper elements in this model — the mesh is stator, rotor, shaft, magnets and air. A total-scalar-potential formulation cannot carry a current as a conducting region: the winding enters as a SOURCE FIELD T with curl T = J (simulation/static3d/winding3d.py), assembled as the integral of T · curl v. So the copper you see is the CAD solid, drawn for position and scale, and it has no mesh to show. It is translucent beside a field map for the same reason: nothing was solved inside it."} />
         )}
         {counts && (
           <>

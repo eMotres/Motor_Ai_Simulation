@@ -1,0 +1,63 @@
+{
+ "version": "static3d-stageC-longstack-1",
+ "generated_utc": "2026-08-09T22:40:35Z",
+ "geometry_fingerprint": "bb30c0242629c6ea",
+ "model": {
+  "laminated_iron": true,
+  "two_d_leg": "converged Picard (ref2d)",
+  "element_order": 2,
+  "note": "same model Stage A quotes k_flux from"
+ },
+ "rows": [
+  {
+   "stack_mm": 12.0,
+   "k_flux": 0.9514107797855299,
+   "k_flux_self": 0.9639661234867153,
+   "B1_mid_T": 1.5462668541675493,
+   "picard_converged": false,
+   "wall_s": 1795.646406999993
+  },
+  {
+   "stack_mm": 24.0,
+   "k_flux": 0.9614074699911742,
+   "k_flux_self": 0.9740947355541599,
+   "B1_mid_T": 1.571081035507659,
+   "picard_converged": true,
+   "wall_s": 1181.5872859000083
+  },
+  {
+   "stack_mm": 48.0,
+   "k_flux": 0.9752926638895728,
+   "k_flux_self": 0.988163166163195,
+   "B1_mid_T": 1.5688682590552328,
+   "picard_converged": true,
+   "wall_s": 1033.1622572000051
+  }
+ ],
+ "wall_s": 4260.4,
+ "fit_k_flux": {
+  "a_L_to_infinity": 0.9802910089923947,
+  "b_end_effect": -0.36179734841765243,
+  "residuals": [
+   0.0012695498279394757,
+   -0.003808649483818316,
+   0.0025390996558791734
+  ],
+  "_doc": "k(L) = a + b/L.  a is what the 3D model says an infinitely long machine is worth against the same 2D reference, so a == 1 is the convergence claim; b is the end effect in k-units-times-mm and must be NEGATIVE (a deficit)."
+ },
+ "fit_k_flux_self": {
+  "a_L_to_infinity": 0.9932274721969171,
+  "b_end_effect": -0.3665718266515347,
+  "residuals": [
+   0.0012863035107594234,
+   -0.003858910532276605,
+   0.0025726070215181807
+  ],
+  "_doc": "k(L) = a + b/L.  a is what the 3D model says an infinitely long machine is worth against the same 2D reference, so a == 1 is the convergence claim; b is the end effect in k-units-times-mm and must be NEGATIVE (a deficit)."
+ },
+ "verdict": {
+  "a_k_flux_self": 0.9932274721969171,
+  "converges_to_2d": true,
+  "reading": "k_flux_self extrapolates to 0.9932 at L -> infinity; the 3D model and the 2D reference describe the same machine to 0.68 % once the ends stop mattering."
+ }
+}

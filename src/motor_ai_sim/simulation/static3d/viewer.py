@@ -52,7 +52,7 @@ from motor_ai_sim.simulation.static3d.solver import MU0
 
 FIDELITY: Dict[str, dict] = {
     "coarse": dict(
-        box_factor=2.0, h_gap=0.35, h_solid=2.0, n_stack=3, n_cap=3, order=1,
+        box_factor=2.0, h_gap=0.35, h_solid=2.0, n_stack=3, n_cap=3, end_bias=1.0, order=1,
         tol=3e-3, max_iter=90, damping=0.35,
         label="coarse",
         note="P1, 3 axial layers — 77 k tets, 15 k dofs, and it converges. "
@@ -62,7 +62,7 @@ FIDELITY: Dict[str, dict] = {
              "absolute field is not",
     ),
     "medium": dict(
-        box_factor=2.0, h_gap=0.35, h_solid=1.4, n_stack=4, n_cap=4, order=2,
+        box_factor=2.0, h_gap=0.35, h_solid=1.4, n_stack=4, n_cap=4, end_bias=1.0, order=2,
         tol=3e-3, max_iter=90, damping=0.35,
         label="medium",
         note="P2 — 107 k tets, 152 k dofs. MEASURED against the passport: gap "
@@ -318,6 +318,40 @@ def check_edge_scale(name: str, src: Dict[str, float], got: Dict[str, float],
         f"{n_faces} faces — the vertex indices do not match the positions")
 
 
+def _nodal_average(verts: np.ndarray, idx: np.ndarray,
+                   tri_values: np.ndarray) -> np.ndarray:
+    """Element values averaged onto the shared vertices, weighted by triangle
+    area — the "nodal solution" every FEA post-processor draws.
+
+    It is an INTERPOLATION, not a solve: the field is piecewise constant per
+    tet, and averaging it at a node invents the gradient between two elements.
+    That is exactly what ANSYS's nodal plot does and why ANSYS keeps the
+    element plot beside it — the jump between neighbours is the discretisation
+    error, and smoothing hides it.  So this is offered ALONGSIDE the per-face
+    values, never instead of them, and the viewer says which one is on screen.
+
+    Area weighting rather than a plain count: a sliver triangle at a corner
+    carries as little of the average as it carries of the surface.
+    """
+    a = verts[:, idx[:, 0]]
+    b = verts[:, idx[:, 1]]
+    c = verts[:, idx[:, 2]]
+    area = 0.5 * np.linalg.norm(np.cross((b - a).T, (c - a).T), axis=1)
+    n_v = verts.shape[1]
+    num = np.zeros(n_v)
+    den = np.zeros(n_v)
+    finite = np.isfinite(tri_values)
+    w = np.where(finite, area, 0.0)
+    v = np.where(finite, tri_values, 0.0)
+    for k in range(3):
+        np.add.at(num, idx[:, k], w * v)
+        np.add.at(den, idx[:, k], w)
+    out = np.full(n_v, np.nan)
+    nz = den > 0
+    out[nz] = num[nz] / den[nz]
+    return out
+
+
 def _emit_region(p_mm: np.ndarray, tri: np.ndarray,
                  tri_values: Optional[np.ndarray],
                  name: str = "?") -> dict:
@@ -351,6 +385,13 @@ def _emit_region(p_mm: np.ndarray, tri: np.ndarray,
         "edge_src_mm": {k: round(v, 6) for k, v in src.items()},
         "values": (None if tri_values is None
                    else np.round(tri_values, 6).tolist()),
+        # The same field read the other way: one value per VERTEX, so the
+        # renderer can interpolate across the face (the smooth/"nodal" plot).
+        # Both travel together — the viewer chooses, and says which it drew.
+        "values_node": (None if tri_values is None else
+                        np.round(_nodal_average(verts, idx,
+                                                np.asarray(tri_values, float)),
+                                 6).tolist()),
     }
 
 
@@ -367,9 +408,11 @@ def surface_payload(tm,
 
     ``values_el`` (nelem,) is carried through per TRIANGLE — the owning
     element's own value, piecewise constant, because that is what the element
-    actually holds.  Nothing is smoothed across a face: a P1 gradient is
-    constant per tet and a P2 one is averaged per tet by ``B_elementwise``, and
-    interpolating between them would draw a field neither solve computed.
+    actually holds.  Each region ALSO carries ``values_node``: the same numbers
+    area-averaged onto the shared vertices, which is what a smooth (nodal) plot
+    needs and what ANSYS shows by default.  Both are emitted because they say
+    different things — the per-face one is the solved field, the nodal one is an
+    interpolation of it — and the viewer labels whichever it draws.
     """
     mesh = tm.mesh
     p_mm = np.asarray(mesh.p) / MM

@@ -201,8 +201,8 @@ def _knob_tag(fidelity: str) -> str:
     """
     f = V.FIDELITY.get(fidelity) or {}
     k = {kk: f.get(kk) for kk in
-         ("box_factor", "h_gap", "h_solid", "n_stack", "n_cap", "order",
-          "tol", "max_iter", "damping")}
+         ("box_factor", "h_gap", "h_solid", "n_stack", "n_cap", "end_bias",
+          "order", "tol", "max_iter", "damping")}
     return hashlib.md5(json.dumps(k, sort_keys=True).encode()).hexdigest()[:4]
 
 
@@ -349,8 +349,15 @@ def _build_mesh(section, fid: dict):
                                                              build_section_mesh_2d)
     sect = build_section_mesh_2d(section, box_factor=fid["box_factor"],
                                  h_gap=fid["h_gap"], h_solid=fid["h_solid"])
+    # end_bias 1.0 = EQUAL layers through the stack — a plain extrusion of the
+    # cross-section.  The solver's default (3.0) tightens toward the end face,
+    # which at the viewer's 3-4 layers means 4.22/1.56/0.22 mm: the picture then
+    # shows a mesh that is 19x finer at one end than the other and reads as an
+    # error in the model.  The VIEW should show the machine; the grading belongs
+    # to the solve, where it is measured.
     tm, _ = build_motor_mesh(section, sect=sect, n_stack=fid["n_stack"],
-                             n_cap=fid["n_cap"])
+                             n_cap=fid["n_cap"],
+                             end_bias=float(fid.get("end_bias", 3.0)))
     return tm, sect
 
 
@@ -358,8 +365,9 @@ def _mesh_meta(tm, fid: dict, fname: str) -> dict:
     m = dict(tm.meta or {})
     return {
         "fidelity": fname,
-        "knobs": {k: fid[k] for k in
-                  ("box_factor", "h_gap", "h_solid", "n_stack", "n_cap", "order")},
+        "knobs": {k: fid.get(k) for k in
+                  ("box_factor", "h_gap", "h_solid", "n_stack", "n_cap",
+                   "end_bias", "order")},
         "mesh_meta": {k: m.get(k) for k in
                       ("n_layers", "z_levels_mm", "stack_half_mm", "r_box_mm",
                        "z_box_mm", "n_tri_2d", "n_nodes_2d", "sector_deg",

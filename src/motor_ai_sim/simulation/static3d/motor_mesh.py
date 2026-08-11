@@ -573,6 +573,17 @@ def axial_levels(stack_half_mm: float, z_box_mm: float,
     """z levels from 0 (mirror plane) to ``z_box_mm``, with a node EXACTLY on
     ``stack_half_mm``.
 
+    ``end_bias`` is the power in that tightening; 1.0 gives EQUAL layers (a
+    plain extrusion of the 2-D cross-section, which is what the eye expects and
+    what the viewer draws).  The default 3.0 is a strong grading and its cost
+    grows as the layer count falls: on the 12 mm machine the inside layers come
+    out 2.00/1.49/1.07/0.71/0.43/0.22/0.08/0.01 mm at n_stack=8 (169x between
+    thickest and thinnest, and a final 0.01 mm sliver against ~0.35-1.2 mm
+    in-plane elements) and 4.22/1.56/0.22 mm at n_stack=3.  Grading toward the
+    end face is right — that is where the axial gradient is — but a sliver is
+    not resolution, and the aspect ratio it creates is a suspect in the 0.32 %
+    axial sensitivity Stage C measured.
+
     Inside the stack the spacing tightens toward the end face (that is where the
     axial gradient lives); outside it grows geometrically to the truncation
     radius (that is where nothing happens and dofs are wasted).
@@ -721,6 +732,7 @@ def build_motor_mesh(section: MotorSection,
                      h_solid: float = 0.70,
                      n_stack: int = 8,
                      n_cap: int = 12,
+                     end_bias: float = 3.0,
                      sect: Optional[Section2D] = None,
                      h_ew_mm: Optional[float] = None,
                      n_ew: int = 4,
@@ -736,7 +748,7 @@ def build_motor_mesh(section: MotorSection,
     L = float(stack_mm if stack_mm else section.stack_mm)
     z_box = sect.r_box_mm
     zl = axial_levels(0.5 * L, z_box, n_stack=n_stack, n_cap=n_cap,
-                      h_ew_mm=h_ew_mm, n_ew=n_ew)
+                      end_bias=end_bias, h_ew_mm=h_ew_mm, n_ew=n_ew)
     tm = extrude_section(sect, zl, 0.5 * L, section)
     tm.meta["h_ew_mm"] = None if h_ew_mm is None else float(h_ew_mm)
     tm.meta["n_ew"] = int(n_ew) if h_ew_mm else 0

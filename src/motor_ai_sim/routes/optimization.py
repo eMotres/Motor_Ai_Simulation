@@ -456,7 +456,29 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
             _med = float(measured_eval_seconds().get("s_per_eval") or 0.0)
         except Exception:  # noqa: BLE001
             _med = 0.0
-        _cap = min(1800.0, max(300.0, 4.0 * _med))
+        # …and a floor that KNOWS WHAT THIS EVAL COSTS.  The measured median is
+        # empty on the first generation, and the 300 s floor was sized for a
+        # magnetostatic 24-step point.  Turning on the switches the Simulation
+        # tab uses changes that by an order of magnitude: demag prepends a whole
+        # settling period and the coupled eddy solve adds its warm-up, so a
+        # 40-step point solves ~123 frames, and ten of those run concurrently on
+        # the same cores.  With the flat floor every single point of a sweep came
+        # back "timeout" — 10 of 10 — and the chart was empty with nothing saying
+        # why.  Estimate the frames this eval will actually solve, price them at
+        # the measured per-frame rate (or a conservative 2 s), and let the
+        # concurrency stretch that.
+        _frames = float(steps) * float(n_periods)
+        if demag:
+            _frames += float(steps)          # full-period settling pre-pass
+        _frames += 43.0 if rotor_eddy else 0.0   # eddy warm-up, measured
+        _per_frame = float(_EVAL_S_PER_FRAME_DEFAULT)
+        # Contention, not worker count: each eval is pinned to one thread and the
+        # POOL provides the parallelism, so ten workers do not make one eval ten
+        # times slower — the measured stretch on this machine was ~4x (60 s solo
+        # -> 231 s median at 10 concurrent).
+        _contention = min(4.0, max(1.0, float(_scan_worker_count()) / 2.5))
+        _expect = _frames * _per_frame * _contention
+        _cap = min(3600.0, max(300.0, 4.0 * _med, 3.0 * _expect))
         proc = subprocess.run(
             [sys.executable, "-m", "motor_ai_sim.optimization.refine_proc"],
             input=spec, capture_output=True, text=True, timeout=_cap,
@@ -738,6 +760,21 @@ def _point_from_eval(out: Dict[str, Any], ov: Dict[str, float], I: float,
             "error": out.get("error", "eval failed")}
 
 
+def _scan_owns(run_id) -> bool:
+    """True while THIS run still owns the shared scan state.
+
+    There is ONE `_scan_state` and it was written by whoever was running.  Stop
+    + Run starts run B while run A is still winding down (A only notices the
+    cancel between tasks, and with ten concurrent evals that can be minutes), and
+    then A's `finally` cleared `running` for B: the panel saw running=False with
+    `done` still climbing, stopped waiting, and showed nothing at all while 10 of
+    13 points had already been computed.  Progress, points, the result and the
+    running flag now belong to a named run, and a run that no longer owns the
+    state keeps its hands off it.  Caller holds `_scan_lock`.
+    """
+    return str(_scan_state.get("run_id") or "") == str(run_id or "")
+
+
 def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                  max_geom, seed, run_id, mesh_size_mm=4.0, min_size_mm=0.3,
                  pole_copy=None, torque_filter=False, n_sectors=1, gap_layers=3.0,
@@ -755,6 +792,8 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                 tasks.append((gi, oi, ov, float(op.get("current_a", 85.0)),
                               float(op.get("gamma_deg", 0.0))))
         with _scan_lock:
+            if not _scan_owns(run_id):
+                return                      # superseded before we even started
             _scan_state.update(total=len(tasks) + 1, done=0)
         points: List[Any] = [None] * len(tasks)
 
@@ -815,9 +854,10 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                 misses.append((i, t))
         n_cached = sum(1 for p in points if p is not None)
         with _scan_lock:
-            _scan_state["cached"] = n_cached
-            _scan_state["done"] = n_cached
-            _scan_state["points"] = [p for p in points if p is not None]   # instant plot
+            if _scan_owns(run_id):
+                _scan_state["cached"] = n_cached
+                _scan_state["done"] = n_cached
+                _scan_state["points"] = [p for p in points if p is not None]   # instant plot
 
         # Manual executor so a Stop can cancel the not-yet-started tasks (the
         # ~5 already-running subprocesses just finish in the background); the
@@ -848,10 +888,12 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                     points[i] = pt
                     done += 1
                 with _scan_lock:
-                    _scan_state["done"] = done
+                    if _scan_owns(run_id):
+                        _scan_state["done"] = done
                     # live-stream the points computed so far so the chart fills in
                     # as the sweep runs (not only at the end).
-                    _scan_state["points"] = [p for p in points if p is not None]
+                    if _scan_owns(run_id):
+                        _scan_state["points"] = [p for p in points if p is not None]
         finally:
             ex.shutdown(wait=False, cancel_futures=True)
         points = [p for p in points if p is not None]
@@ -897,7 +939,8 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                     _store_eval(_bck, base_out)
             baseline = _point_from_eval(base_out, {}, _bI, -1, 0, ripple_max)
         with _scan_lock:
-            _scan_state["done"] = len(tasks) + 1
+            if _scan_owns(run_id):
+                _scan_state["done"] = len(tasks) + 1
 
         n_built = sum(1 for p in points if p.get("feasible"))
         result = {
@@ -925,15 +968,20 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                             "torque_filter": bool(torque_filter)},
         }
         with _scan_lock:
-            _scan_state["result"] = result
+            if _scan_owns(run_id):
+                _scan_state["result"] = result
         _save_last_scan(result)   # persist so it survives reload / restart
     except Exception as e:  # noqa: BLE001
         log.exception("FEM scan failed")
         with _scan_lock:
-            _scan_state["error"] = str(e)
+            if _scan_owns(run_id):
+                _scan_state["error"] = str(e)
     finally:
         with _scan_lock:
-            _scan_state["running"] = False
+            # ONLY if we are still the current run — otherwise this clears the
+            # flag for the run that superseded us, which is the bug above.
+            if _scan_owns(run_id):
+                _scan_state["running"] = False
 
 
 @router.post("/scan")

@@ -22,7 +22,7 @@ import { OrbitControls, OrthographicCamera, Grid } from '@react-three/drei';
 import * as THREE from 'three';
 import { ViewcubeNavigation, CameraSync } from '../viewer3d/MotorScene';
 import { PART_COLORS } from '../../lib/partColors';
-import { jet01, bandColor, N_BANDS } from '../simulation/fieldView';
+import { jet01, bandColor, N_BANDS, BAND_VERT, BAND_FRAG } from '../simulation/fieldView';
 import type { GeometryPayload, SurfacePayload, SurfaceRegion } from './api';
 
 /** Region name → the project's single source of truth for part colour.
@@ -45,16 +45,41 @@ export function partColor(name: string, kind: string, polarity = 1): string {
 // surface geometry (mesh + field panels)
 // --------------------------------------------------------------------------
 
-/** Indexed positions + per-TRIANGLE values → a non-indexed coloured geometry.
+/** Indexed positions + values → geometry, in one of TWO honest readings.
  *
- * Non-indexed on purpose.  A value belongs to one tet, so painting it onto
- * shared vertices would average two elements' fields into a gradient neither
- * solve computed — the same reason the 2D field view expands its triangles.
+ * ELEMENT (smooth = false): non-indexed, one flat colour per triangle.  A value
+ * belongs to one tet; painting it on shared vertices would average two
+ * elements' fields into a gradient neither solve computed.  This is the field
+ * as solved, and the facets ARE the discretisation.
+ *
+ * NODAL (smooth = true): indexed, one value per shared vertex (area-averaged
+ * server-side), interpolated across the face by the GPU and banded per PIXEL by
+ * the same shader the 2D field view uses — so the bands are true iso-levels of
+ * the interpolated field rather than a per-triangle staircase.  This is what
+ * ANSYS shows by default, and like ANSYS the element view stays one click away:
+ * the jump between neighbours is the discretisation error, and smoothing hides
+ * it.
  */
 function buildSurfaceGeometry(
   r: SurfaceRegion,
   colorFor: ((v: number, tri: number) => [number, number, number]) | null,
+  smooth = false,
+  norm: ((v: number) => number) | null = null,
 ): THREE.BufferGeometry {
+  if (smooth && r.values_node && norm) {
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(r.positions, 3));
+    geo.setIndex(r.indices);
+    const nv = r.values_node.length;
+    const a = new Float32Array(nv);
+    for (let i = 0; i < nv; i++) {
+      const v = r.values_node[i];
+      a[i] = Number.isFinite(v) ? norm(v) : 0;
+    }
+    geo.setAttribute('aVal', new THREE.BufferAttribute(a, 1));
+    geo.computeVertexNormals();
+    return geo;
+  }
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.Float32BufferAttribute(r.positions, 3));
   geo.setIndex(r.indices);
@@ -85,10 +110,12 @@ interface SurfaceProps {
   opacity: number;
   /** -1 in an anti-periodic copy: every magnet in it is reversed. */
   polaritySign: number;
+  /** true → nodal (interpolated) field; false → the per-element field solved. */
+  smooth?: boolean;
 }
 
 const Surfaces: React.FC<SurfaceProps> = ({
-  payload, scale, wireframe, opacity, polaritySign,
+  payload, scale, wireframe, opacity, polaritySign, smooth = true,
 }) => {
   const built = useMemo(() => {
     // BANDED, not a continuous ramp — N_BANDS of them, exactly as the 2D field
@@ -104,14 +131,22 @@ const Surfaces: React.FC<SurfaceProps> = ({
           return [r / 255, g / 255, b / 255] as [number, number, number];
         }
       : null;
+    // The shader wants 0..1; the CPU path wants the raw value.  ONE normaliser
+    // for both so a colour cannot mean two things on the same screen.
+    const norm = scale
+      ? (v: number) => Math.max(0, Math.min(1,
+          (v - scale.vmin) / Math.max(scale.vmax - scale.vmin, 1e-12)))
+      : null;
+    const useSmooth = !!scale && smooth;
     return payload.regions.map((r) => ({
       name: r.name,
       kind: r.kind,
-      geo: buildSurfaceGeometry(r, colorFor),
+      geo: buildSurfaceGeometry(r, colorFor, useSmooth, norm),
+      smooth: useSmooth && !!r.values_node,
       color: partColor(r.name, r.kind, (r.polarity ?? 1) * polaritySign),
       isAir: r.name === 'air',
     }));
-  }, [payload, scale, polaritySign]);
+  }, [payload, scale, polaritySign, smooth]);
 
   useEffect(() => () => { built.forEach((b) => b.geo.dispose()); }, [built]);
 
@@ -120,11 +155,31 @@ const Surfaces: React.FC<SurfaceProps> = ({
       {built.map((b) => (
         <group key={b.name}>
           <mesh geometry={b.geo}>
-            {/* metalness 0: there is no environment map in this scene, and a
+            {/* NODAL: band the INTERPOLATED value per pixel with the same
+                shader the 2D field view uses, so a band edge is a true
+                iso-level of the field instead of a triangle boundary, and the
+                colours match the other screen exactly.  Unlit on purpose — a
+                contour plot that is also shaded reads its own shadows as field
+                gradient, which is the one thing this picture must not do. */}
+            {b.smooth ? (
+              <shaderMaterial
+                key={`band_${b.name}`}
+                vertexShader={BAND_VERT}
+                fragmentShader={BAND_FRAG}
+                uniforms={{ uBands: { value: N_BANDS }, uIso: { value: 0.55 } }}
+                side={THREE.DoubleSide}
+                transparent={opacity < 1 || b.isAir}
+                opacity={b.isAir ? Math.min(opacity, 0.25) : opacity}
+                polygonOffset
+                polygonOffsetFactor={1}
+                polygonOffsetUnits={1}
+              />
+            ) : (
+            /* metalness 0: there is no environment map in this scene, and a
                 metallic surface without one renders black — which is how a
                 perfectly good mesh ends up looking like an empty screen.
                 polygonOffset pushes the fill a hair back so the wireframe sits
-                on it instead of z-fighting it. */}
+                on it instead of z-fighting it. */
             <meshStandardMaterial
               vertexColors={!!scale}
               color={scale ? '#ffffff' : b.color}
@@ -140,6 +195,7 @@ const Surfaces: React.FC<SurfaceProps> = ({
               polygonOffsetUnits={1}
               flatShading
             />
+            )}
           </mesh>
           {/* Edges are LIGHT on purpose: the part palette is dark slate, and a
               dark wireframe over dark iron is a mesh view that shows no mesh. */}

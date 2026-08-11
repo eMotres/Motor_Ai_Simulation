@@ -82,7 +82,12 @@ export interface SurfaceRegion {
   indices: number[];
   tri_count: number;
   vertex_count: number;
-  values: number[] | null;      // one per triangle
+  values: number[] | null;      // one per triangle — the SOLVED, per-element field
+  // One per VERTEX: the same numbers area-averaged onto the shared nodes, so a
+  // renderer can interpolate across the face (the smooth / "nodal" plot every
+  // FEA post-processor draws).  It is an interpolation of `values`, not another
+  // solve — which is why both travel and the view says which one it drew.
+  values_node: number[] | null;
 }
 
 export interface MeshCounts {

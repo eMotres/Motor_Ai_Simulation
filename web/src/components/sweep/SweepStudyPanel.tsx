@@ -648,14 +648,19 @@ const SweepStudyPanel: React.FC = () => {
         value={progress ? (100 * progress.done) / Math.max(1, progress.total) : 0}
         sx={{ mb: 1.5, height: 4, borderRadius: 2 }} />}
 
-      {(running || series.length > 0) && (
+      {/* …or when every point failed: a sweep whose points all timed out plotted
+          NOTHING and said nothing — the user asked "where is the sweep result?"
+          and the answer (10 of 10 timed out) was on screen nowhere. */}
+      {(running || series.length > 0 || (result?.points?.length ?? 0) > 0) && (
         <>
           <Divider sx={{ borderColor: 'var(--panel)', my: 1 }} />
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
             <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>
               {running
                 ? `computing… ${nFeasible} point${nFeasible === 1 ? '' : 's'} so far`
-                : `${nFeasible} feasible point${nFeasible === 1 ? '' : 's'} · ${series.length} curve${series.length === 1 ? '' : 's'} · click a point to pick & save it`}
+                : nFeasible === 0
+                  ? `no point survived — ${result?.points?.length ?? 0} evaluated, none usable (see below)`
+                  : `${nFeasible} feasible point${nFeasible === 1 ? '' : 's'} · ${series.length} curve${series.length === 1 ? '' : 's'} · click a point to pick & save it`}
             </Typography>
             {/* A zoomed view MUST say so and offer the way back — double-click
                 was the only reset and nothing on screen mentioned it. */}
@@ -683,8 +688,12 @@ const SweepStudyPanel: React.FC = () => {
           </Box>
           {buildFails && (
             <Typography sx={{ fontSize: 11, color: '#fbbf24', mb: 0.5, lineHeight: 1.4 }}>
-              ⚠ {buildFails.n} of {buildFails.total} design{buildFails.n === 1 ? '' : 's'} couldn’t be built
-              {buildFails.reason ? ` (${buildFails.reason})` : ' (invalid geometry)'} — skipped.
+              ⚠ {buildFails.n} of {buildFails.total} design{buildFails.n === 1 ? '' : 's'}{' '}
+              {/^timeout/i.test(buildFails.reason)
+                ? 'ran out of time — the eval budget was reached before the solve finished. '
+                  + 'These settings (steps/period, demag, coupled eddy, mesh size) cost far more '
+                  + 'per point than a plain sweep; lower them or expect long runs.'
+                : `couldn’t be built${buildFails.reason ? ` (${buildFails.reason})` : ' (invalid geometry)'} — skipped.`}
               {buildFails.culprits.length
                 ? ` Always fails at: ${buildFails.culprits.join('; ')} — narrow that range.`
                 : ''}

@@ -994,15 +994,47 @@ def archive_applied_design(req: ArchiveAppliedRequest,
     _backfill_owners()
     presets = _load_presets()
     when = _dt.datetime.now()
-    pid = _applied_id(set(presets), req.mode, when)
     ident = _caller_identity(authorization)
-    name = _applied_name(req.source_name, req.mode, when)
-    order = 1 + max([p.get("order", 0) for p in presets.values()] or [0])
+
+    # ── SAVE INTO THE MOTOR, NOT BESIDE IT ──────────────────────────────────
+    # This used to mint a NEW motor on every apply, and the reasoning ("never
+    # overwrite the source") was the wrong half of the trade: 31 auto-saved
+    # copies of one 150 mm machine buried the catalog in a week, and the user's
+    # own motors were harder to find than the litter.  An apply is an EDIT of the
+    # design being worked on, so it belongs in that motor — as long as it is safe
+    # to write it:
+    #   * the target must be the motor the apply came FROM (source_id), and
+    #   * it must not be locked, and the caller must be allowed to write it, and
+    #   * the geometry must actually have CHANGED (an identical apply is not an
+    #     edit and must not touch saved_at).
+    # Anything that fails those falls back to a new entry, which is the old
+    # behaviour and still the only safe answer for a locked or foreign motor.
+    _target = str(req.source_id or "").strip()
+    _tgt = presets.get(_target) if _target else None
+    _reuse = False
+    if isinstance(_tgt, dict) and not _is_locked(_tgt) and _can_write(_tgt, ident):
+        _old_geo = {k: _num_or_none(v) for k, v in (_tgt.get("geometry") or {}).items()
+                    if _num_or_none(v) is not None}
+        _new_geo = {k: _num_or_none(v) for k, v in geometry.items()
+                    if _num_or_none(v) is not None}
+        _changed = any(abs(_new_geo[k] - _old_geo.get(k, float("inf"))) >
+                       max(1e-9, 1e-9 * abs(_new_geo[k])) for k in _new_geo)
+        _reuse = bool(_changed)
+    if _reuse:
+        pid = _target
+        name = _tgt.get("name") or _applied_name(req.source_name, req.mode, when)
+        order = _tgt.get("order", 0)
+    else:
+        pid = _applied_id(set(presets), req.mode, when)
+        name = _applied_name(req.source_name, req.mode, when)
+        order = 1 + max([p.get("order", 0) for p in presets.values()] or [0])
     entry = {
         "id": pid, "name": name,
         "description": _applied_description(req, when, deviations),
         "order": order, "metrics": _applied_metrics(req.metrics),
-        "owner": ident["id"], "locked": False, "template": False,
+        "owner": (_tgt.get("owner") if _reuse else ident["id"]),
+        "locked": bool(_tgt.get("locked")) if _reuse else False,
+        "template": bool(_tgt.get("template")) if _reuse else False,
         "geometry": geometry, "simulation": simulation, "mesh": mesh,
         # The same provenance, machine-readable, so a later reader can filter or
         # re-run instead of parsing the sentence a human reads.
@@ -1041,7 +1073,13 @@ def archive_applied_design(req: ArchiveAppliedRequest,
         log.warning("motor '%s' saved but its Motors card was not written",
                     pid, exc_info=True)
     return {**_summary(saved), "id": pid, "deviations": deviations,
-            "geometry_fields": len(geometry)}
+            "geometry_fields": len(geometry),
+            # Which of the two happened, so the UI can say "saved into X" rather
+            # than leaving the user to find out from the motors list.
+            "updated_in_place": bool(_reuse),
+            "target": ("the motor the design came from" if _reuse
+                       else "a new motor (source locked, foreign, unchanged or "
+                            "not identified)")}
 
 
 @router.post("/{preset_id}/settings")

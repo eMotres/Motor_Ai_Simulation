@@ -134,6 +134,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
 
   // ── winding LAYOUT (per-slot phase + sign = coil currents) ─────────────────
   const [windCfg, setWindCfg]       = useState<any>(null);     // /api/winding/config
+  const [windErr, setWindErr]       = useState<string | null>(null);  // refused winding change
   // connection options + the selected connection's parallel-path count come from
   // the backend (slot-derived). I_coil = I_phase / n_parallel.
   // Prefer the backend's slot-derived options; fall back to deriving them locally
@@ -157,7 +158,15 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   }, []);
   useEffect(() => { loadWinding(); }, [loadWinding]);
 
+  // A REFUSED winding change used to be swallowed here (`.catch(() => {})`):
+  // the button lit up, the backend kept the old connection, and every number
+  // afterwards belonged to a winding the panel was no longer showing — "I
+  // change the connection and nothing happens", with nothing on screen to say
+  // why.  The backend refuses for real reasons (a label that is not valid for
+  // this slot count, a config whose winding block lacks the key), so the reason
+  // is shown and the selection snaps back to what the backend actually holds.
   const applyWinding = useCallback((patch: Record<string, any>) => {
+    setWindErr(null);
     fetch(`${API}/api/winding/config`, {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(patch),
@@ -166,14 +175,28 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
         if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.detail || `HTTP ${r.status}`); }
       })
       .then(() => loadWinding())
-      .catch(() => {});
+      .catch((e) => {
+        setWindErr(String(e?.message || e));
+        loadWinding();          // re-adopt the connection the backend really has
+      });
   }, [loadWinding]);
 
   // Phase → colour for the slot map (A=red, B=green, C=blue); +full, −faded.
   // self-heal: if the persisted connection isn't valid for THIS motor's slot count
   // (e.g. a 4-coil connection inherited on a 12-slot motor), switch to the first valid one.
+  //
+  // ONLY against the BACKEND's option list (windCfg loaded).  It used to run on
+  // the local fallback too, and on first mount that fallback is derived from
+  // num_slots = 0 — a one-entry list ('1S') that no real connection is in.  So
+  // every page load "healed" the user's 4P to 1S: the PATCH was refused (1S is
+  // invalid for 24 slots, and the refusal was swallowed), but the panel's own
+  // connection had already become 1S, and a Run pressed in that window solved
+  // ONE parallel path while the buttons — re-adopted from the backend a moment
+  // later — showed 4P.  That is the "I change the connection and nothing
+  // changes" report: 4x the coil MMF, under the wrong name.
   useEffect(() => {
-    if (windConns.length && !windConns.some((c) => c.label === connection)) {
+    if (!windCfg || !Array.isArray(windCfg.connections) || !windCfg.connections.length) return;
+    if (!windConns.some((c) => c.label === connection)) {
       setConnection(windConns[0].label);
       applyWinding({ connection: windConns[0].label });
     }
@@ -634,6 +657,13 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               </Tooltip>
             ))}
           </Box>
+
+          {/* The backend refused the change — one line, the reason it gave. */}
+          {windErr && (
+            <Typography sx={{ fontSize: 10.5, color: '#f87171', mt: -0.75, mb: 1 }}>
+              ⚠ winding not changed — {windErr}
+            </Typography>
+          )}
 
         </Box>
 
@@ -1251,6 +1281,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
         <PhysicsDashboard
           gamma_deg={phaseOffset}
           I_phase_rms={current}
+          connection={connection}
           runNonce={runNonce}
           fresh={freshRun}
           onBusyChange={setSimBusy}

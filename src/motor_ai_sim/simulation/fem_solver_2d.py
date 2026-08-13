@@ -1983,6 +1983,19 @@ def fem_transient_sliding_band(
     _poles_per_sector = p.num_poles // NS
     _bc_sign = -1 if (_poles_per_sector % 2 == 1) else 1
     n_parallel = wind.get("n_parallel", 2)
+    # The connection LABEL this run is entitled to be reported under: only the
+    # one whose parallel-path count matches the paths actually solved.  An
+    # explicit n_parallel overrides the label (above), and a stale config label
+    # left over from a previous selection would otherwise travel out with the
+    # result and name the wrong winding on the summary card.
+    _conn_label_used = ""
+    try:
+        from motor_ai_sim.winding import parse_connection as _pc_lbl
+        _lbl = str(wind.get("connection") or "")
+        if _lbl and int(_pc_lbl(_lbl)[0]) == int(n_parallel):
+            _conn_label_used = _lbl
+    except Exception:
+        _conn_label_used = ""
     n_wires = int(geo.get("num_wires_per_slot", 14))
     # Physical copper loss (ρ_Cu(coil_temp)·J²·V_cu·k_end, end-winding the 2-D
     # field never sees) is computed a few dozen lines DOWN, right after the CAD
@@ -4455,6 +4468,14 @@ def fem_transient_sliding_band(
         "P_elec_in_W": P_elec_in2,               # ⟨Σ v·i⟩ (0 at no-load)
         "R_phase_ohm": R_phase, "n_slip_nodes": int(Nring),
         "n_parallel": int(n_parallel),
+        # The LABEL the paths came from, carried with them.  n_parallel alone
+        # cannot be read back to a connection (2S-2P and 1S-2P both say 2), and
+        # the card that shows these numbers has to name the winding they belong
+        # to — "changed the connection, nothing moved" is unanswerable without
+        # it.  Empty = no label, or a label that disagrees with the paths that
+        # were actually solved (an explicit n_parallel wins over it) — naming it
+        # then would be a lie, and no name is the honest answer.
+        "connection": _conn_label_used,
         "picard_iters_mean": (round(float(np.mean(_pic_iters)), 1)
                               if _pic_iters else 0.0),
         "picard_iters_max": (int(max(_pic_iters)) if _pic_iters else 0),

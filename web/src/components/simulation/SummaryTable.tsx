@@ -17,6 +17,11 @@ export interface TransientSummary {
   rpm:                 number;
   I_phase_rms_A:       number;
   gamma_deg:           number;
+  // The winding the run was solved with.  Torque, voltage and R_phase all scale
+  // with it, so it is part of the operating point, not a setting on the side.
+  // Absent on runs saved before it was stamped — unknown, never assumed.
+  connection?:         string;
+  n_parallel?:         number;
   T_em_avg_Nm:         number;
   T_ripple_pct:        number;
   T_ripple_raw_pct?:   number;
@@ -108,7 +113,7 @@ interface Props {
   // computed at a DIFFERENT current / γ (e.g. the user changed it after the run, and
   // the Optimize tab already uses the new point), flag the result as stale so the
   // Sim numbers aren't mistaken for the current point.
-  liveOp?: { current?: number; gamma?: number };
+  liveOp?: { current?: number; gamma?: number; connection?: string };
 }
 
 /** "  stator 67.3 W (hyst 33.9 / eddy 17.6 / excess 15.8, k_f 0.92); rotor …"
@@ -257,7 +262,16 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, deltaVsApp
   const liveI = liveOp?.current, liveG = liveOp?.gamma;
   const dI = Number.isFinite(liveI as number) ? Math.abs((liveI as number) - s.I_phase_rms_A) : 0;
   const dG = Number.isFinite(liveG as number) ? Math.abs((liveG as number) - s.gamma_deg)     : 0;
-  const opStale = dI > 0.05 || dG > 0.05;
+  // The winding is the third half of the operating point.  Switching 4S → 4P
+  // divides the coil current by four: torque, V_peak and R_phase all move, and
+  // until the run is repeated the card shows the OTHER winding's numbers with
+  // nothing saying so — which reads as "I changed the connection and nothing
+  // happened".  Only compare when BOTH labels are known (a run saved before the
+  // stamp existed cannot raise this flag).
+  const liveC = String(liveOp?.connection || '');
+  const ranC  = String(s.connection || '');
+  const connStale = !!liveC && !!ranC && liveC !== ranC;
+  const opStale = dI > 0.05 || dG > 0.05 || connStale;
   // …and the OTHER way a card goes stale, which used to slip through entirely:
   // the machine changed under it.  Loading another preset (or reloading with a
   // persisted `sim.lastSummary` from the previous session) leaves I and γ
@@ -284,14 +298,21 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, deltaVsApp
           {/* One-line verdict; the "why" lives in the ⓘ (UI rule). */}
           {geoStale
             ? <>⚠ STALE — DIFFERENT MACHINE · Re-run Simulation</>
-            : <>⚠ STALE — I = {s.I_phase_rms_A} A, γ = {s.gamma_deg}° · Re-run Simulation</>}
+            : connStale
+              ? <>⚠ STALE — WINDING {ranC}, panel is on {liveC} · Re-run Simulation</>
+              : <>⚠ STALE — I = {s.I_phase_rms_A} A, γ = {s.gamma_deg}° · Re-run Simulation</>}
           <HelpTip title={geoStale
             ? ('These numbers were computed on a different machine than the one now loaded. Torque, mass and '
               + 'efficiency below belong to the previous geometry'
               + (opStale ? ` (and to I = ${s.I_phase_rms_A} A, γ = ${s.gamma_deg}°)` : '')
               + '. Press Re-run Simulation.')
-            : (`These numbers were computed at I = ${s.I_phase_rms_A} A, γ = ${s.gamma_deg}°, not the current `
-              + 'panel settings (possibly a previous machine). Press Re-run Simulation.')} />
+            : connStale
+              ? (`Solved with the winding in ${ranC}${s.n_parallel ? ` (${s.n_parallel} parallel path`
+                  + `${s.n_parallel > 1 ? 's' : ''})` : ''}; the panel now selects ${liveC}. The coil current is `
+                 + 'the phase current divided by the parallel paths, so torque, V_peak and R_phase all change '
+                 + 'with it. Press Re-run Simulation.')
+              : (`These numbers were computed at I = ${s.I_phase_rms_A} A, γ = ${s.gamma_deg}°, not the current `
+                 + 'panel settings (possibly a previous machine). Press Re-run Simulation.')} />
         </Box>
       )}
       <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 2,
@@ -306,6 +327,9 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, deltaVsApp
         </Box>
         <Typography sx={{ fontSize: 10, color: stale ? '#f59e0b' : 'var(--text-4)' }}>
           @ {s.rpm} rpm · I_ph = {s.I_phase_rms_A} A_rms · γ = {s.gamma_deg}°
+          {/* The winding these numbers were solved with — same line as the rest
+              of the operating point, because it moves them just as much. */}
+          {!!ranC && ` · ${ranC}`}
           {stale && (
             <Tooltip title={`Computed at I = ${s.I_phase_rms_A} A, γ = ${s.gamma_deg}° — the panel is now set to `
               + `${Number.isFinite(liveI as number) ? `I = ${fmt(liveI as number, 2)} A` : ''}`

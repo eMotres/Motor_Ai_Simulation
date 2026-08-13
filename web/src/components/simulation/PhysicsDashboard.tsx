@@ -26,6 +26,10 @@ import type { FemPayload } from './fem-types';
 interface Props {
   gamma_deg:      number;
   I_phase_rms?:   number;
+  // Winding connection currently SELECTED in the left panel.  Part of the
+  // operating point (it divides the coil current), so the summary card has to
+  // be able to tell it apart from the one its numbers were solved with.
+  connection?:    string;
   // Ticks on each "Run Simulation" press; forwarded to the FEM panels
   // which only (re)solve on that signal.
   runNonce?:      number;
@@ -58,7 +62,7 @@ interface Props {
 
 
 // ── main component ────────────────────────────────────────────────────────────
-const PhysicsDashboard: React.FC<Props> = ({ gamma_deg, I_phase_rms, runNonce = 0, onBusyChange, steps = 12, fresh = false, onSummary, fieldLosses = true, demag = false, torqueFilter = false, eddyCoupled = true, drive = 'current', vPeak = 0, vDelta = 0 }) => {
+const PhysicsDashboard: React.FC<Props> = ({ gamma_deg, I_phase_rms, connection = '', runNonce = 0, onBusyChange, steps = 12, fresh = false, onSummary, fieldLosses = true, demag = false, torqueFilter = false, eddyCoupled = true, drive = 'current', vPeak = 0, vDelta = 0 }) => {
   // Latest FEM solve payload — kept around so future siblings can reuse it.
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [_femPayload, setFemPayload] = React.useState<FemPayload | null>(null);
@@ -144,7 +148,7 @@ const PhysicsDashboard: React.FC<Props> = ({ gamma_deg, I_phase_rms, runNonce = 
            design applied from the Sweep tab (numbers reused, no re-run) ── */}
       <SummaryTable summary={shownSummary} fromSweep={!!appliedSummary}
         deltaVsApplied={deltaVsApplied}
-        liveOp={{ current: I_phase_rms, gamma: gamma_deg }}/>
+        liveOp={{ current: I_phase_rms, gamma: gamma_deg, connection }}/>
 
       {/* ── Field viewer / animation — one widget covers both the static
             initial snapshot (frame[0] at rotor_angle = 0) AND the full

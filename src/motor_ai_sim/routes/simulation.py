@@ -3034,7 +3034,16 @@ def get_fem_transient(
                 except Exception:
                     log.exception("harm_ref reference run failed (non-fatal)")
         finally:
-            _fem_transient_progress["current"]["running"] = False
+            # NOT done yet — what follows (animation keyframes, CAD masses, the
+            # summary block, the disk save) is seconds to tens of seconds on a
+            # big machine, and the panel is still waiting on this response the
+            # whole time.  Reporting "finished" here made a run that was still
+            # working look like a run that had finished and changed nothing:
+            # progress at 40/40, the button still on Stop, the old numbers still
+            # on the cards.  Stay running, say what is happening; the flag is
+            # cleared in the route's own finally, so no error path can hang it.
+            _fem_transient_progress["current"]["phase"] = \
+                "post-processing (frames, masses, summary)"
         # ── Animation keyframes → the viewer's payload shape ──────────────────
         # The solver hands back ONE mesh topology plus, per keyframe, the
         # rotor-rotated node coordinates and that frame's field.  This replaces
@@ -3192,6 +3201,10 @@ def get_fem_transient(
         raise HTTPException(status_code=500,
                             detail=f"sliding-band transient failed: {_e}")
     finally:
+        # The run is over HERE — after the post-processing, not after the last
+        # frame (see the phase note above).  Unconditional: an exception on any
+        # path must not leave the progress endpoint reporting a live solve.
+        _fem_transient_progress["current"]["running"] = False
         _fem_transient_lock.release()
 
 
@@ -3502,8 +3515,16 @@ def _build_transient_summary(
     # (turns are in series within a path); its cross-section is one strand
     # (wire_width × wire_height).  This is the standard machine J [A/mm²] — the
     # thermal-loading figure of merit ("Irms / phase conductor section").
+    # n_parallel comes from THE RUN, not from the shared config: a solve driven
+    # by an explicit connection label (a catalog eval, an optimizer candidate,
+    # or the Simulation panel in the window between the click and the config
+    # sync) uses paths the config has not been told about, and dividing by the
+    # config's value quoted a J_coil the machine never saw.
     _wind = _gc().get("winding", {})
-    _npar = max(1, int(_wind.get("n_parallel", 1) or 1))
+    _npar = max(1, int(sbres.get("n_parallel") or _wind.get("n_parallel", 1) or 1))
+    # …and the label those paths belong to, so the card can name the winding it
+    # is reporting (empty when the run carried no consistent label).
+    _conn = str(sbres.get("connection") or "")
     _a_cond_mm2 = float(_geo_cfg.get("wire_width", 0.0)) * float(_geo_cfg.get("wire_height", 0.0))
     _j_coil = (float(I_phase_rms) / _npar / _a_cond_mm2) if _a_cond_mm2 > 1e-9 else 0.0
 
@@ -3511,6 +3532,12 @@ def _build_transient_summary(
         "rpm": _rpm,
         "I_phase_rms_A": round(float(I_phase_rms), 2),
         "gamma_deg": round(float(gamma_deg), 2),
+        # The winding these numbers belong to.  Torque, voltage and R_phase all
+        # move with the connection, so a card that does not name it cannot be
+        # checked against the selector — which is exactly how "I changed the
+        # connection and nothing moved" became unanswerable.
+        "connection": _conn,
+        "n_parallel": _npar,
         "T_em_avg_Nm": round(_Tavg, 3),
         "T_ripple_pct": round(float(sbres.get("T_ripple_pct", 0.0)), 1),
         "T_ripple_raw_pct": round(float(sbres.get("T_ripple_raw_pct", 0.0)), 1),

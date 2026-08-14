@@ -28,6 +28,7 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { useMotorStore } from '../../stores/motorStore';
 import AutoOptimizePanel from './AutoOptimizePanel';
 import DescentPanel from './DescentPanel';
+import AutoPointsTable from './AutoPointsTable';
 import SweepStudyPanel from './SweepStudyPanel';
 import DOEPanel from './DOEPanel';
 import HelpTip from '../common/HelpTip';
@@ -359,6 +360,10 @@ const SweepConfigPanel: React.FC = () => {
                 objective cloud with the baseline line) — user request: back on
                 the tab, without the manual controls. Same store as the auto run. */}
             <DescentPanel chartsOnly />
+            {/* EVERY EVALUATED DESIGN — last thing on the tab, under all the
+                charts (user placement).  It reads the run state itself, so it
+                works during a run as well as after it. */}
+            <AutoPointsTable />
           </Box>
         )}
 

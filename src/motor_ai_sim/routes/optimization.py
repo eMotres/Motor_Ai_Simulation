@@ -1375,6 +1375,40 @@ def _save_descent_state() -> None:
         log.warning("could not persist descent state: %s", _e)
 
 
+def _archive_descent_run(state: Dict[str, Any]) -> Optional[str]:
+    """Keep a FINISHED run's whole state — its cloud above all — under its own
+    name, because the live store holds exactly one run.
+
+    A nine-hour free search produced 383 evaluated designs; starting the next
+    run overwrote every one of them, and the eval cache cannot bring them back
+    (it stores metrics under a hash, not the geometry that made them).  The
+    finished cloud IS the deliverable of a stage-1 search — the whole two-stage
+    method is "look at the cloud, then descend from its best points" — so it
+    outlives the run that produced it.
+
+    Best-effort: an archive that fails must never take a completed run with it.
+    """
+    try:
+        import re as _re_a
+        import time as _time_o
+        name = str(((state.get("auto") or {}).get("point_name")) or "run")
+        name = _re_a.sub(r"[^A-Za-z0-9_.-]+", "_", name)[:60] or "run"
+        stamp = _time_o.strftime("%Y%m%d_%H%M%S", _time_o.gmtime())
+        d = _os_o.path.join(_os_o.path.dirname(_descent_store_path()),
+                            ".descent_runs")
+        _os_o.makedirs(d, exist_ok=True)
+        p = _os_o.path.join(d, "%s__%s.json" % (name, stamp))
+        snap = {k: v for k, v in state.items() if k != "cancel"}
+        with open(p, "w", encoding="utf-8") as fh:
+            _json_o.dump(snap, fh, default=_descent_json_default)
+        log.info("archived finished run to %s (%d points)",
+                 p, len(state.get("points") or []))
+        return p
+    except Exception as _e:   # noqa: BLE001
+        log.warning("could not archive the finished run: %s", _e)
+        return None
+
+
 def _ov_sig(ov: Dict[str, Any]) -> tuple:
     """Identity of a geometry: its override map, γ excluded (γ is the operating
     point, and it travels next to the design, not inside it)."""
@@ -2300,7 +2334,9 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
         with _descent_lock:
             _descent_state["running"] = False
             _descent_state["phase"] = "done"
+            _final = dict(_descent_state)
         _save_descent_state()   # persist so the optimization survives a reload/restart
+        _archive_descent_run(_final)     # …and survives the NEXT run (see the archive)
 
 
 def _surrogate_seed_overrides(var_specs, ripple_max, min_n=20):
@@ -2652,7 +2688,9 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
         with _descent_lock:
             _descent_state["running"] = False
             _descent_state["phase"] = "done"
+            _final = dict(_descent_state)
         _save_descent_state()   # persist so the optimization survives a reload/restart
+        _archive_descent_run(_final)     # …and survives the NEXT run (see the archive)
 
 
 @router.post("/descent/start")
@@ -4205,7 +4243,13 @@ def _auto_worker(plan: Dict[str, Any], run_id: str, bucket: str,
         with _descent_lock:
             _descent_state["running"] = False
             _descent_state["phase"] = "done"
+            _final = dict(_descent_state)
         _save_descent_state()
+        # …and keep this run under its own name.  The live store holds ONE run:
+        # without this, launching the next search destroys the finished cloud,
+        # which is the deliverable of a stage-1 free search (measured: 383
+        # designs gone the moment stage 2 started).
+        _archive_descent_run(_final)
         _save_eval_rate()
 
 
@@ -4778,7 +4822,13 @@ def _screen_worker(plan: Dict[str, Any], run_id: str, bucket: str,
         with _descent_lock:
             _descent_state["running"] = False
             _descent_state["phase"] = "done"
+            _final = dict(_descent_state)
         _save_descent_state()
+        # …and keep this run under its own name.  The live store holds ONE run:
+        # without this, launching the next search destroys the finished cloud,
+        # which is the deliverable of a stage-1 free search (measured: 383
+        # designs gone the moment stage 2 started).
+        _archive_descent_run(_final)
         _save_eval_rate()
 
 

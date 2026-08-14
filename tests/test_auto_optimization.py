@@ -1016,3 +1016,36 @@ class TestSchemaFenceOnAutoVariables:
                 if x < float(v["lo"]):
                     x += q
             assert float(v["lo"]) - 1e-9 <= x <= float(v["hi"]) + 1e-9
+
+
+class TestFinishedRunsAreArchived:
+    """A finished run's cloud outlives the next run.
+
+    The live store holds exactly ONE optimization.  On 2026-08-14 a nine-hour
+    free search produced 383 evaluated designs and starting stage 2 overwrote
+    every one of them; the eval cache could not bring them back, because it
+    stores metrics under a hash and not the geometry that produced them.  The
+    cloud IS the deliverable of a stage-1 search — the two-stage method reads it
+    to choose seeds — so each finished run is also written under its own name.
+    """
+
+    def test_archive_writes_a_named_file_with_the_points(self, tmp_path, monkeypatch):
+        from motor_ai_sim.routes import optimization as opt
+        import json
+        store = tmp_path / ".last_descent.json"
+        monkeypatch.setattr(opt, "_descent_store_path", lambda: str(store))
+        state = {"auto": {"point_name": "stage1 free/2026"}, "cancel": True,
+                 "points": [{"td": 1.0, "eff": 0.9, "ripple": 3.0}],
+                 "n_evals": 1}
+        p = opt._archive_descent_run(state)
+        assert p and (tmp_path / ".descent_runs").is_dir()
+        got = json.loads(open(p, encoding="utf-8").read())
+        assert got["points"] == state["points"]
+        assert "cancel" not in got            # a live flag is not run history
+        assert "stage1_free_2026" in p        # the name is sanitised, not dropped
+
+    def test_a_broken_archive_never_takes_the_run_with_it(self, monkeypatch):
+        from motor_ai_sim.routes import optimization as opt
+        monkeypatch.setattr(opt, "_descent_store_path",
+                            lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+        assert opt._archive_descent_run({"points": []}) is None

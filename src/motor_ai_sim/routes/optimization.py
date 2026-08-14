@@ -3635,17 +3635,45 @@ def _auto_assemble(max_ripple_pct: float, budget_evals: int = 0,
         x0 = float(cur)
         sigma = _auto_sigma(x0, unit, is_int, stator_d)
         delta = _screen_delta(unit, is_int)
-        # The ONLY bound is physical positivity.  A dimension may go to zero
-        # (that is a real design — no fillet, no hole); it may not go negative,
-        # because a negative length is not a machine.  Integers additionally
-        # floor at 1: zero turns is not a winding.
+        # BOUNDS = THE GEOMETRY SCHEMA, when it declares them.
+        #
+        # This used to be positivity and nothing else ("UNBOXED"), on the
+        # reasoning that the CAD builder is the real fence.  Measured on the
+        # 434-eval free run of 2026-08-14: 266 of its 383 designs — 69 % — were
+        # outside the schema, so PUT /api/geometry refuses them with 422 and
+        # THEY CANNOT BE APPLIED.  Two thirds of a nine-hour run produced
+        # results the user is not allowed to keep, including the best one
+        # (magnet_down_height 0.4 mm against a 0.5 mm minimum).  A design you
+        # cannot apply is not a result, so the search stays inside the same
+        # fence the editor enforces — one source of truth for what a legal
+        # machine is.  Widen a limit that is only a slider range in the schema
+        # (that is a decision, taken in the open) and the search follows.
+        #
+        # Positivity still applies where the schema is silent: a dimension may
+        # go to zero (no fillet, no hole) but not negative, and an integer
+        # floors at 1 — zero turns is not a winding.
+        _s_lo, _s_hi = meta.get("min"), meta.get("max")
         lo = 1.0 if is_int else 0.0
+        if isinstance(_s_lo, (int, float)) and not isinstance(_s_lo, bool):
+            lo = max(lo, float(_s_lo))
+        hi = (float(_s_hi) if isinstance(_s_hi, (int, float))
+              and not isinstance(_s_hi, bool) else None)
+        # A start value already outside its own schema range would otherwise be
+        # clamped silently on the first evaluation, i.e. the run would optimise a
+        # different machine than the one on screen.  Say so instead.
+        if x0 < lo - 1e-9 or (hi is not None and x0 > hi + 1e-9):
+            raise HTTPException(status_code=422, detail=(
+                "%s = %g in the loaded geometry is outside its own schema range "
+                "[%s, %s] — fix the geometry (or the schema) before optimising; "
+                "the optimizer will not silently move it."
+                % (name, x0, lo, "inf" if hi is None else hi)))
         variables.append({
             "name": name, "x0": x0, "sigma": round(float(sigma), 4),
             # The SCREENING deviation (mode='screen'): the user's own numbers —
             # 0.2 mm on a length, 0.02 on a dimensionless knob, 1 on an integer.
             "delta": round(float(delta), 4),
-            "lo": lo, "hi": None,             # explicitly UNBOUNDED above
+            # hi = None only where the schema declares no maximum.
+            "lo": lo, "hi": hi,
             "unit": unit, "is_int": is_int,
             # Manufacturable grid, not a bound: mm knobs land on 0.1 mm.
             "quant": 0.1 if unit.strip().lower() == "mm" else 0.0,
@@ -3824,10 +3852,23 @@ def _auto_worker(plan: Dict[str, Any], run_id: str, bucket: str,
     def _fit(i, val):
         v = specs[i]
         x = max(float(v["lo"]), float(val))
+        # The upper bound binds too — it is the geometry schema's own maximum,
+        # and a candidate above it is one PUT /api/geometry would refuse.  The
+        # quantisation runs AFTER the clamp and can only move x by half a grid
+        # step inwards from a bound, never out of it.
+        if v.get("hi") is not None:
+            x = min(x, float(v["hi"]))
         if v["is_int"]:
-            return float(max(1, int(round(x))))
+            return float(min(int(v["hi"]) if v.get("hi") is not None else 10**9,
+                             max(1, int(round(x)))))
         q = float(v.get("quant") or 0.0)
-        return round(x / q) * q if q > 0 else float(x)
+        if q > 0:
+            x = round(x / q) * q
+            if v.get("hi") is not None and x > float(v["hi"]):
+                x -= q                      # the grid never lands outside the fence
+            if x < float(v["lo"]):
+                x += q
+        return float(x)
 
     def to_geom(xv):
         return {names[i]: _fit(i, float(xv[i])) for i in range(len(names))}
@@ -4221,10 +4262,21 @@ def _screen_worker(plan: Dict[str, Any], run_id: str, bucket: str,
     def _fit(nm: str, val: float) -> float:
         v = spec_by[nm]
         x = max(float(v["lo"]), float(val))
+        # Same fence as the population runner's _fit: the schema's maximum binds,
+        # so a screening step cannot walk to a geometry the editor would refuse.
+        if v.get("hi") is not None:
+            x = min(x, float(v["hi"]))
         if v["is_int"]:
-            return float(max(1, int(round(x))))
+            return float(min(int(v["hi"]) if v.get("hi") is not None else 10**9,
+                             max(1, int(round(x)))))
         q = float(v.get("quant") or 0.0)
-        return round(x / q) * q if q > 0 else float(x)
+        if q > 0:
+            x = round(x / q) * q
+            if v.get("hi") is not None and x > float(v["hi"]):
+                x -= q
+            if x < float(v["lo"]):
+                x += q
+        return float(x)
 
     def to_geom(d: Dict[str, float]) -> Dict[str, float]:
         return {nm: _fit(nm, d[nm]) for nm in names}

@@ -107,20 +107,42 @@ class TestStandingObjective:
 
 
 class TestSearchRangeIsNotBoxed:
-    """The whitelist says WHICH knobs move — the schema does not say how far."""
+    """The whitelist says WHICH knobs move; the SCHEMA says how far.
 
-    def test_no_upper_bound_is_imposed(self):
-        assert all(v["hi"] is None for v in _plan()["variables"])
+    This class used to assert the opposite — no upper bound at all, and a lower
+    bound of pure positivity, on the stated reasoning that "the schema floor is
+    a UI convenience; the validator is the fence".  The premise was false: the
+    fence is PUT /api/geometry, and it validates against exactly that schema.
+    Measured on the free 434-eval run of 2026-08-14, 266 of the run's 383
+    designs (69 %) were outside it and answer 422 — nine hours of search whose
+    results, the best one included, the user is not allowed to apply.
 
-    def test_lower_bound_is_physical_positivity_not_the_schema_minimum(self):
+    So the rule is inverted, and the reason is recorded here: the optimizer
+    searches inside the same fence the editor enforces.  Where a schema limit is
+    only a slider range, widening it is a decision taken in the open, and the
+    search follows it.
+    """
+
+    def test_bounds_come_from_the_schema_where_it_declares_them(self):
+        from motor_ai_sim.config import get_config
+        schema = get_config().get("geometry_schema", {})
+        seen_hi = 0
+        for v in _plan()["variables"]:
+            meta = schema.get(v["name"]) or {}
+            s_min, s_max = meta.get("min"), meta.get("max")
+            if s_min is not None:
+                assert v["lo"] >= float(s_min) - 1e-9, v["name"]
+            if s_max is not None:
+                assert v["hi"] is not None and v["hi"] <= float(s_max) + 1e-9, v["name"]
+                seen_hi += 1
+        assert seen_hi > 0, "no whitelisted variable carries a schema maximum"
+
+    def test_positivity_still_applies_where_the_schema_is_silent(self):
         from motor_ai_sim.config import get_config
         schema = get_config().get("geometry_schema", {})
         for v in _plan()["variables"]:
-            assert v["lo"] == (1.0 if v["is_int"] else 0.0)
-            s_min = (schema.get(v["name"]) or {}).get("min")
-            if s_min is not None and float(s_min) > 0 and not v["is_int"]:
-                # The schema floor is a UI convenience; the validator is the fence.
-                assert v["lo"] < float(s_min)
+            if (schema.get(v["name"]) or {}).get("min") is None:
+                assert v["lo"] == (1.0 if v["is_int"] else 0.0), v["name"]
 
     def test_a_variable_sitting_at_zero_still_gets_a_usable_step(self):
         zeros = [v for v in _plan()["variables"] if v["x0"] == 0.0]
@@ -943,3 +965,54 @@ class TestPreFenceAccounting:
         rj = O._auto_reject_block({"ok": 1, "geometry": 1, "unconverged": 0,
                                    "mesh": 0, "timeout": 0, "other": 0})
         assert rj["resampled_geometry"] == 0 and rj["prefenced_geometry"] == 0
+
+
+class TestSchemaFenceOnAutoVariables:
+    """The auto plan may not propose a geometry the editor would refuse.
+
+    Measured on the free 434-eval run of 2026-08-14: the plan bounded its
+    variables by positivity alone, so 266 of the run's 383 designs (69 %) sat
+    outside the geometry schema — PUT /api/geometry answers 422 for those, i.e.
+    two thirds of a nine-hour search produced results that cannot be applied,
+    including the best one (magnet_down_height 0.4 mm against the schema's
+    0.5 mm minimum).  One fence, in the schema.
+    """
+
+    def test_plan_variables_carry_the_schema_bounds(self):
+        from motor_ai_sim.routes.optimization import _auto_assemble
+        from motor_ai_sim.config import get_config
+        schema = dict(get_config().get("geometry_schema") or {})
+        plan = _auto_assemble(5.0, 0, "cmaes")
+        checked = 0
+        for v in plan["variables"]:
+            meta = schema.get(v["name"]) or {}
+            lo, hi = meta.get("min"), meta.get("max")
+            if isinstance(lo, (int, float)) and not isinstance(lo, bool):
+                assert v["lo"] >= float(lo) - 1e-9, v["name"]
+                checked += 1
+            if isinstance(hi, (int, float)) and not isinstance(hi, bool):
+                assert v["hi"] is not None and v["hi"] <= float(hi) + 1e-9, v["name"]
+                checked += 1
+        assert checked > 0, "no whitelisted variable has schema bounds to check"
+
+    def test_the_clamp_binds_on_both_sides(self):
+        """_fit is what turns a CMA-ES sample into a geometry — it must land
+        inside the fence from either direction, quantisation included."""
+        from motor_ai_sim.routes.optimization import _auto_assemble
+        plan = _auto_assemble(5.0, 0, "cmaes")
+        v = next((x for x in plan["variables"]
+                  if x.get("hi") is not None and x["hi"] > x["lo"]), None)
+        assert v is not None, "expected at least one two-sided variable"
+        q = float(v.get("quant") or 0.0)
+        span = float(v["hi"]) - float(v["lo"])
+        for probe in (-1e6, float(v["lo"]) - span, float(v["hi"]) + span, 1e6):
+            # replicate the runner's clamp: bounds first, grid second, and the
+            # grid step is walked back inside when it lands on the wrong side
+            x = max(float(v["lo"]), min(float(v["hi"]), probe))
+            if q > 0:
+                x = round(x / q) * q
+                if x > float(v["hi"]):
+                    x -= q
+                if x < float(v["lo"]):
+                    x += q
+            assert float(v["lo"]) - 1e-9 <= x <= float(v["hi"]) + 1e-9

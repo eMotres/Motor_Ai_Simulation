@@ -30,6 +30,11 @@ import { appliedSaveLine } from '../../lib/appliedAutoSave';
  * then steps downhill with a backtracking line search.  Maximises efficiency ×
  * torque-density while holding ripple ≤ the threshold.
  */
+/** Top of the chart's ripple-trim slider, in per cent.  Nothing above this is
+ *  a machine anyone would build, so the track spends its whole length on the
+ *  range where candidates are actually chosen. */
+const RIPPLE_SLIDER_MAX = 30;
+
 const fmtPct  = (v?: number) => (v == null ? '—' : `${(v * 100).toFixed(2)}%`);
 const fmtNum  = (v?: number, d = 2) => (v == null ? '—' : v.toFixed(d));
 
@@ -355,7 +360,13 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
   // slider hides points whose ripple exceeds the cut (effCut defaults to the data
   // max = show all, then drags down to trim visually).
   const _dataMaxRipple = points.reduce((m: number, p: any) => Math.max(m, p.ripple ?? 0), 0);
-  const sliderMax = Math.max(Math.ceil(_dataMaxRipple), 10);
+  // THE SCALE STOPS AT 30 %, not at the worst point in the cloud.  A free search
+  // (stage 1, no ripple gate) throws up designs at 400 %+ ripple, and letting
+  // them set the slider's span made the whole useful range — everything under
+  // ~15 % — the first 3 % of the track: unusable for picking a candidate, while
+  // the chart stayed full of machines nobody would build.  Above the cap the
+  // points are simply out; the count next to the slider says how many.
+  const sliderMax = Math.min(Math.max(Math.ceil(_dataMaxRipple), 10), RIPPLE_SLIDER_MAX);
   const effCut = displayCut ?? sliderMax;
   const toXY = (p: any) => ({ td: p.td, eff: (p.eff ?? 0) * 100, ripple: p.ripple, z: 1,
                               torque: p.torque, mass: p.mass,
@@ -933,7 +944,12 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
                   Show ripple ≤ <strong>{effCut.toFixed(1)}%</strong>
                 </Typography>
               </Tooltip>
-              <Slider size="small" min={0} max={sliderMax} step={0.1} value={effCut}
+              {/* value is CLAMPED to the track: pressing "show all" sets a cut
+                  above the cap, and the thumb then rests at the right end while
+                  the label above states the real number — the control never
+                  displays a position it does not have. */}
+              <Slider size="small" min={0} max={sliderMax} step={0.1}
+                value={Math.min(effCut, sliderMax)}
                 onChange={(_, v) => setDisplayCut(v as number)} sx={{ maxWidth: 320, flex: 1 }} />
               {/* Say what the cut is hiding, and what the chart drops for being
                   unplottable — a count that silently shrinks reads as "the run
@@ -941,7 +957,11 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
               <Tooltip placement="top" title={
                 `The backend publishes every evaluated design. `
                 + `${hiddenByCut} of them sit above the ${effCut.toFixed(1)}% cut and are hidden here — `
-                + `drag right to see them.`
+                + (effCut >= _dataMaxRipple
+                    ? `nothing is above it.`
+                    : `drag right to see more; the slider stops at ${RIPPLE_SLIDER_MAX}% `
+                      + `(the worst design in this cloud is ${_dataMaxRipple.toFixed(1)}%), so use `
+                      + `"show all" for the rest.`)
                 + (nonPhysicalPts > 0
                     ? ` A further ${nonPhysicalPts} carry non-physical numbers (η ≤ 0 or η > 1, `
                       + `T/mass ≤ 0) and are never plotted.` : '')}>
@@ -951,9 +971,20 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
                   {hiddenByCut > 0 ? ` · ${hiddenByCut} above the cut` : ''} ⓘ
                 </Typography>
               </Tooltip>
-              {displayCut != null && (
+              {/* The cap hides points, so the way past it has to be ON the bar —
+                  otherwise "125/125 shown" quietly becomes "40/125" with no way
+                  back. "show all" lifts the cut to the worst design in the
+                  cloud; "30%" puts it back. */}
+              {_dataMaxRipple > sliderMax && (
                 <Button size="small" sx={{ minWidth: 0, px: 0.75, fontSize: 10 }}
-                  onClick={() => setDisplayCut(null)}>all</Button>
+                  onClick={() => setDisplayCut(effCut > sliderMax
+                    ? null : Math.ceil(_dataMaxRipple))}>
+                  {effCut > sliderMax ? `${RIPPLE_SLIDER_MAX}%` : 'show all'}
+                </Button>
+              )}
+              {displayCut != null && effCut <= sliderMax && (
+                <Button size="small" sx={{ minWidth: 0, px: 0.75, fontSize: 10 }}
+                  onClick={() => setDisplayCut(null)}>reset</Button>
               )}
               {/* The Pareto answer, one line, next to the objective's own. */}
               {pareto && (

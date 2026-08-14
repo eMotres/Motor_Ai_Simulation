@@ -3510,6 +3510,31 @@ def _auto_assemble(max_ripple_pct: float, budget_evals: int = 0,
     I = _sim_num("max_current", "current_a")
     rpm = _sim_num("rpm")
     gamma = _sim_num("phase_offset_deg", "gamma_deg")
+    # THE WINDING IS PART OF THE OPERATING POINT.  The coil sees I_phase divided
+    # by the parallel paths, so 4S and 4P are two different machines at the same
+    # "353 A" — different saturation, different optimum.  It was the one piece of
+    # the point the plan did not carry: every candidate re-read the live config
+    # instead, so a connection changed while a 12-hour run was in flight silently
+    # changed the physics mid-search, and the finished run could not say which
+    # winding it had optimised.  Read it HERE, from the Simulation tab (the
+    # panel writes it through /api/winding/config), pin it into the plan, and
+    # hand it to every eval.
+    # THE WINDING BLOCK IS THE SOURCE, not simulation.connection: the solver
+    # reads cfg["winding"], the connection buttons PATCH cfg["winding"], and the
+    # simulation mirror is written by a different path — read the mirror first
+    # and a 4S selected in the panel plans a 2S-2P run (measured, first try).
+    _conn = str((cfg.get("winding") or {}).get("connection")
+                or sim.get("connection") or "").strip()
+    _npar = None
+    if _conn:
+        from motor_ai_sim.winding import parse_connection as _pc_plan
+        try:
+            _npar = int(_pc_plan(_conn)[0])
+        except ValueError as _ce:
+            raise HTTPException(status_code=422, detail=(
+                "the Simulation tab's winding connection %r is unreadable (%s) — "
+                "fix it there; the optimizer never guesses a winding."
+                % (_conn, _ce)))
     coil_temp = _sim_num("coil_temp_c")
     steps = _sim_num("steps_per_period")
     if I is None or I <= 0.0:
@@ -3640,7 +3665,8 @@ def _auto_assemble(max_ripple_pct: float, budget_evals: int = 0,
             "ripple_max_pct": r,
             "ripple_penalty_lambda": _AUTO_RIPPLE_LAMBDA,
             "current_bump_pct": _AUTO_CURRENT_BUMP_PCT,
-            "operating_point": {"current_a": I, "rpm": rpm, "gamma_deg": gamma},
+            "operating_point": {"current_a": I, "rpm": rpm, "gamma_deg": gamma,
+                                "connection": _conn, "n_parallel": _npar},
             "eval": ev,
             "variables": variables,
             "stator_diameter": stator_d,
@@ -3703,7 +3729,8 @@ def _auto_assemble(max_ripple_pct: float, budget_evals: int = 0,
         "ripple_max_pct": r,
         "ripple_penalty_lambda": _AUTO_RIPPLE_LAMBDA,
         "current_bump_pct": _AUTO_CURRENT_BUMP_PCT,
-        "operating_point": {"current_a": I, "rpm": rpm, "gamma_deg": gamma},
+        "operating_point": {"current_a": I, "rpm": rpm, "gamma_deg": gamma,
+                                "connection": _conn, "n_parallel": _npar},
         "eval": ev,
         "variables": variables,
         "stator_diameter": stator_d,
@@ -3753,6 +3780,9 @@ def _auto_worker(plan: Dict[str, Any], run_id: str, bucket: str,
     ev = plan["eval"]
     op = plan["operating_point"]
     I = float(op["current_a"]); rpm = float(op["rpm"]); g = float(op["gamma_deg"])
+    # The winding the PLAN pinned (from the Simulation tab), passed to every
+    # eval so the search cannot drift onto another one mid-run.
+    conn = (op.get("connection") or None)
     ripple_max = float(plan["ripple_max_pct"])
     budget = int(plan["budget_evals"])
     pop = int(plan["population"])
@@ -3784,7 +3814,7 @@ def _auto_worker(plan: Dict[str, Any], run_id: str, bucket: str,
             rotor_eddy=bool(ev["rotor_eddy"]), structured_gap=bool(ev["structured_gap"]),
             airgap_macro=bool(ev["airgap_macro"]), iron_template=bool(ev["iron_template"]),
             geo_mesh=bool(ev["geo_mesh"]), element_order=int(ev["element_order"]),
-            rpm=rpm)
+            rpm=rpm, connection=conn)
         if o.get("ok") and isinstance(o.get("res"), dict):
             o["res"]["current_a"] = float(cur)
         if isinstance(o, dict):
@@ -4140,6 +4170,9 @@ def _screen_worker(plan: Dict[str, Any], run_id: str, bucket: str,
     ev = plan["eval"]
     op = plan["operating_point"]
     I = float(op["current_a"]); rpm = float(op["rpm"]); g = float(op["gamma_deg"])
+    # The winding the PLAN pinned (from the Simulation tab), passed to every
+    # eval so the search cannot drift onto another one mid-run.
+    conn = (op.get("connection") or None)
     ripple_max = float(plan["ripple_max_pct"])
     budget = int(plan["budget_evals"])
 
@@ -4202,7 +4235,7 @@ def _screen_worker(plan: Dict[str, Any], run_id: str, bucket: str,
             rotor_eddy=bool(ev["rotor_eddy"]), structured_gap=bool(ev["structured_gap"]),
             airgap_macro=bool(ev["airgap_macro"]), iron_template=bool(ev["iron_template"]),
             geo_mesh=bool(ev["geo_mesh"]), element_order=int(ev["element_order"]),
-            rpm=rpm)
+            rpm=rpm, connection=conn)
         state["n_evals"] += 1
         if o.get("ok") and isinstance(o.get("res"), dict):
             o["res"]["current_a"] = float(cur)
@@ -4718,7 +4751,10 @@ def _auto_compare_point(bucket: str, name: str, plan: Dict[str, Any],
         "gamma_deg": op["gamma_deg"], "rpm": op["rpm"],
         "coil_temp_c": ev["coil_temp_c"],
         "end_winding_factor": ev["end_winding_factor"],
-        "connection": (cfg.get("simulation") or {}).get("connection"),
+        # The winding the RUN was planned with, not whatever the config says by
+        # the time the result is written — a 12-hour run outlives the panel.
+        "connection": (op.get("connection")
+                       or (cfg.get("simulation") or {}).get("connection")),
         "steps_per_period": ev["steps_per_period"],
         "n_sectors": ev["n_sectors"], "mesh_size_mm": ev["mesh_size_mm"],
         "min_size_mm": ev["min_size_mm"],

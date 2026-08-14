@@ -577,14 +577,30 @@ def update_winding_config(patch: WindingConfigPatch):
     content = _CONFIG_PATH.read_text(encoding="utf-8")
     lines   = content.splitlines(keepends=True)
     in_winding = False
+    in_sim     = False
     result     = []
     replaced   = set()
 
     for line in lines:
         if re.match(r'^winding\s*:', line):
             in_winding = True
-        elif in_winding and re.match(r'^\S', line):
+            in_sim = False
+        elif re.match(r'^simulation\s*:', line):
+            in_sim = True
             in_winding = False
+        elif (in_winding or in_sim) and re.match(r'^\S', line):
+            in_winding = in_sim = False
+
+        # simulation.connection is a MIRROR of the winding block's — nothing in
+        # the physics reads it (the solver reads cfg["winding"]), but the
+        # optimizer's plan and the Stage-D script did, and a mirror that is only
+        # written by the other path goes stale: 4S selected here, a 12-hour
+        # optimization planned at the 2S-2P the mirror still held.  Keep them
+        # equal at the only place the connection changes.
+        if in_sim and "connection" in updates:
+            m = re.match(r'^(\s+connection\s*:\s*)(.*)$', line)
+            if m:
+                line = m.group(1) + updates["connection"] + '\n'
 
         if in_winding:
             for key, val in updates.items():

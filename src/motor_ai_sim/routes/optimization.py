@@ -1703,6 +1703,14 @@ def _pt(out: Dict[str, Any], kind: str):
             # of them can still be reconstructed instead of dropped).
             "mass": r.get("mass_total_kg"),
             "thd": r.get("THD_LL_pct"),      # line-to-line voltage THD (FOC quality)
+            # The columns the run's own table shows.  A cloud point used to carry
+            # only what the 2-D scatter plots, so the table under it could not
+            # say WHY a design scored well — losses, terminal voltage and current
+            # density are the first things an engineer asks of a candidate, and
+            # they are already in the eval result.  ~40 bytes more per point.
+            "p_loss_w": r.get("P_loss_total_W"),
+            "v_peak": r.get("V_peak"),
+            "j_coil": r.get("J_coil_A_per_mm2"),
             "overrides": {k: v for k, v in ov.items() if k != "gamma_deg"},
             "current_a": out.get("current_a") or r.get("current_a"),
             "gamma_deg": ov.get("gamma_deg")}
@@ -1736,7 +1744,8 @@ _PT_ANCHOR_KINDS = ("baseline", "baseline_bump")
 
 
 def _pub_pt(all_pts: List[Dict[str, Any]], out: Dict[str, Any],
-            kind: str, cap: int = _POINTS_CAP) -> Optional[Dict[str, Any]]:
+            kind: str, cap: int = _POINTS_CAP,
+            F: Optional[float] = None) -> Optional[Dict[str, Any]]:
     """Publish ONE evaluated design into the run's objective-space cloud.
 
     The single place a point may enter `points`, so the invariant above is
@@ -1745,6 +1754,11 @@ def _pub_pt(all_pts: List[Dict[str, Any]], out: Dict[str, Any],
     p = _pt(out, kind)
     if p is None:
         return None
+    # The objective's verdict ON THIS ROW, stored with it.  Without it the table
+    # of evaluated designs can show what a candidate measured but not what the
+    # search thought of it — and "what is it optimising" is exactly that column.
+    if F is not None and math.isfinite(float(F)):
+        p["F"] = round(float(F), 6)
     all_pts.append(p)
     while len(all_pts) > max(2, int(cap)):
         for i, q in enumerate(all_pts):
@@ -3583,11 +3597,26 @@ def _auto_assemble(max_ripple_pct: float, budget_evals: int = 0,
         "airgap_macro": False,
         "iron_template": True,
         "geo_mesh": True,
-        # Loss model: the same one the Simulation tab runs, so the optimizer's
-        # efficiency is the efficiency the user will re-measure.
-        "rotor_eddy": True,
-        "end_winding_factor": 0.0,   # 0 = per-candidate auto k_end (refine_proc)
-        "torque_filter": False,      # honest RAW ripple
+        # ── LOSS MODEL: WHATEVER THE SIMULATION TAB IS SET TO ────────────────
+        # Standing rule (user, 2026-08-14): every physics value of a run comes
+        # from the Simulation tab.  These three used to be constants here, and
+        # the comment above them claimed they were "the same one the Simulation
+        # tab runs" — k_end was hardcoded to 0.0 (per-candidate auto) while the
+        # panel held 1.11, so the optimizer's baseline efficiency could not be
+        # reproduced by pressing Run, which is exactly how "why is the
+        # efficiency different?" starts.  A pinned k_end IS a constant across
+        # candidates whose end-turn length changes with the geometry — that is
+        # the engineer's call, made in the panel, not ours to make here.
+        "rotor_eddy": bool(sim.get("rotor_eddy", True)),
+        "end_winding_factor": float(sim.get("end_winding_factor", 0.0) or 0.0),
+        "torque_filter": bool(sim.get("torque_filter", False)),
+        # The coupled sigma*dA/dt solve and the demag de-rate are read by the
+        # candidate subprocess from this same block (refine_proc.run_one), so
+        # they are carried here for the RECORD — the run states which physics it
+        # bought, instead of the reader having to guess.
+        "eddy": bool(sim.get("eddy", False)),
+        "demag": bool(sim.get("demag", False)),
+        "drive": str(sim.get("drive") or "current"),
         "pole_copy": None,
     }
 
@@ -3814,7 +3843,11 @@ def _auto_worker(plan: Dict[str, Any], run_id: str, bucket: str,
             rotor_eddy=bool(ev["rotor_eddy"]), structured_gap=bool(ev["structured_gap"]),
             airgap_macro=bool(ev["airgap_macro"]), iron_template=bool(ev["iron_template"]),
             geo_mesh=bool(ev["geo_mesh"]), element_order=int(ev["element_order"]),
-            rpm=rpm, connection=conn)
+            rpm=rpm, connection=conn,
+            # Pinned from the plan (= the Simulation tab at launch), not re-read
+            # per candidate: a switch toggled mid-run must not change the physics
+            # under a search that is already half-converged.
+            demag=bool(ev.get("demag", False)))
         if o.get("ok") and isinstance(o.get("res"), dict):
             o["res"]["current_a"] = float(cur)
         if isinstance(o, dict):
@@ -4016,7 +4049,7 @@ def _auto_worker(plan: Dict[str, Any], run_id: str, bucket: str,
                         c, Fv = _descent_cost(out["res"], base, ripple_max,
                                               1.0, 1.0, 1.0, 1e9)
                         cost_by_i[i] = c
-                        _pub_pt(all_pts, out, "cmaes")
+                        _pub_pt(all_pts, out, "cmaes", F=Fv)
                         if c < best["cost"] - 1e-9:
                             best = {"x": to_geom(sols[i]), "metrics": out["res"],
                                     "cost": c, "F": Fv}
@@ -4235,7 +4268,11 @@ def _screen_worker(plan: Dict[str, Any], run_id: str, bucket: str,
             rotor_eddy=bool(ev["rotor_eddy"]), structured_gap=bool(ev["structured_gap"]),
             airgap_macro=bool(ev["airgap_macro"]), iron_template=bool(ev["iron_template"]),
             geo_mesh=bool(ev["geo_mesh"]), element_order=int(ev["element_order"]),
-            rpm=rpm, connection=conn)
+            rpm=rpm, connection=conn,
+            # Pinned from the plan (= the Simulation tab at launch), not re-read
+            # per candidate: a switch toggled mid-run must not change the physics
+            # under a search that is already half-converged.
+            demag=bool(ev.get("demag", False)))
         state["n_evals"] += 1
         if o.get("ok") and isinstance(o.get("res"), dict):
             o["res"]["current_a"] = float(cur)
@@ -4298,7 +4335,11 @@ def _screen_worker(plan: Dict[str, Any], run_id: str, bucket: str,
                 out = fut.result()
                 if out and out.get("ok"):
                     memo[k] = out["res"]
-                    _pub_pt(all_pts, out, "screen")
+                    # Same call the screening run's own _score uses, so the
+                    # column and the search agree on what a row is worth.
+                    _pub_pt(all_pts, out, "screen",
+                            F=_descent_cost(out["res"], base, ripple_max,
+                                            1.0, 1.0, 1.0, 1e9)[1])
                     # A screening perturbation is a real, fully-paid-for design.
                     # If one of them is the best thing this run has seen, it IS
                     # the best thing this run has seen — the incumbent is not

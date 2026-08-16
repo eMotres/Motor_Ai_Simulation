@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import yaml
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
 
 from motor_ai_sim.config import get_config, clear_config_cache, DEFAULT_CONFIG_PATH
@@ -64,7 +64,7 @@ def get_geometry():
 
 
 @router.put("")
-def update_geometry(update: GeometryUpdateModel):
+def update_geometry(update: GeometryUpdateModel, request: Request = None):
     # ── Input guard 1: the NAME has to be a parameter this server knows ──────
     # An unknown key was accepted twice over and applied zero times: the live
     # geometry object got the attribute, the YAML writer (`if key in
@@ -164,8 +164,25 @@ def update_geometry(update: GeometryUpdateModel):
             yaml.dump(config, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
 
         if _audit is not None:
+            # WHO and WHAT, not just the diff.  Two machine-identity clobbers
+            # (2026-08-16 14:14 and 19:27, both 200 mm -> 30 mm) reached this
+            # route from 127.0.0.1 and the audit could not name the sender —
+            # every legitimate UI path edits single keys or loads motors
+            # server-side, so a multi-key PUT that changes poles/slots is
+            # exactly the write that must arrive with its origin attached.
+            try:
+                _cli = "%s:%s" % (request.client.host, request.client.port)                        if request is not None and request.client else ""
+                _ua = (request.headers.get("user-agent", "")[:60]
+                       if request is not None else "")
+                _ref = (request.headers.get("referer", "")[:60]
+                        if request is not None else "")
+            except Exception:
+                _cli = _ua = _ref = ""
             _audit("live_geometry", _geo_before, geometry_section,
-                   note="PUT /api/geometry")
+                   note="PUT /api/geometry keys=%d [%s] ua=%s ref=%s"
+                        % (len(_submitted_raw),
+                           ",".join(sorted(_submitted_raw)[:12]), _ua, _ref),
+                   client=_cli)
 
         # Flush the config cache so get_config()-based consumers (the analytical
         # torque_sweep, params_from_config, winding calc, …) read the NEW

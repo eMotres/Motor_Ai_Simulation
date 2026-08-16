@@ -2929,10 +2929,18 @@ def get_fem_transient(
             "phase": ("fem-solve (sliding-band, demag)" if demag
                       else "fem-solve (sliding-band)"),
         }
-        def _sb_progress(_done, _total):
+        def _sb_progress(_done, _total, _phase=None):
             _cur = _fem_transient_progress["current"]
             _cur["step"] = int(_done)
             _cur["total"] = int(_total)
+            # The solver names the stage it is in (the eddy warm-up counts its
+            # own frames against its own, moving, total).  None = back to the
+            # reported window, so the label returns to the solve's own.
+            if _phase:
+                _cur["phase"] = str(_phase)
+            elif _cur.get("phase", "").startswith("eddy warm-up"):
+                _cur["phase"] = ("fem-solve (sliding-band, coupled eddy)"
+                                 if eddy else "fem-solve (sliding-band)")
         try:
             # ONE canonical solve — shared with the optimizer (refine_proc) and
             # the solver.em_transient module via em_transient_eval, so they can

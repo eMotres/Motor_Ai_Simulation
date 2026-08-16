@@ -229,7 +229,8 @@ def _daxis_topology_key(p, geo, wind, geo_fp=None) -> tuple:
             str((wind or {}).get("connection", "")),
             str(geo_fp or _daxis_geo_fingerprint(geo)))
 
-def _resolve_daxis_shift(p, geo, wind, pole_pairs, geo_override, n_sectors) -> float:
+def _resolve_daxis_shift(p, geo, wind, pole_pairs, geo_override, n_sectors,
+                         progress_cb=None) -> float:
     """DAXIS (elec deg) that makes γ=0 the true q-axis for THIS machine.
 
     Computed from a no-load (I=0) run — ψ_A(θ) peaks at the d-axis, so
@@ -303,8 +304,24 @@ def _resolve_daxis_shift(p, geo, wind, pole_pairs, geo_override, n_sectors) -> f
                            int(getattr(p, "num_poles", 1) or 1)) or 1
         _cal_D = float((geo or {}).get("stator_diameter") or 0.0) or 40.0
         _cal_mesh = round(min(2.0, max(0.5, 1.4 * _cal_D / 150.0)), 2)
+        # The bar says WHICH stage is running.  Its own frame count, its own
+        # label; the caller's `total` belongs to the reported window and would
+        # be a lie here.
+        _CAL_FRAMES = 24
+        def _cal_progress(_done, _total, _phase=None):
+            if progress_cb is None:
+                return
+            try:
+                progress_cb(int(_done), _CAL_FRAMES,
+                            "calibrating the d-axis reference (no-load, "
+                            "%d frames) — once per geometry" % _CAL_FRAMES)
+            except TypeError:
+                pass                      # a caller from before the phase arg
+            except Exception:
+                pass
         cal = em_transient_eval(
-            n_steps_per_period=24, n_periods=1.0, gamma_deg=0.0,
+            progress_cb=_cal_progress,
+            n_steps_per_period=_CAL_FRAMES, n_periods=1.0, gamma_deg=0.0,
             I_phase_rms=0.0, mesh_size_mm=_cal_mesh, min_size_mm=0.3,
             outer_air_factor=1.2, gap_layers=2.0,
             n_sectors=_cal_ns if _cal_ns >= 2 else -1,
@@ -2033,7 +2050,13 @@ def fem_transient_sliding_band(
     # d-axis phase offset AUTO-CALIBRATED for this motor topology so γ=0 is the
     # true q-axis and γ equals the physical current angle from the q-axis (=ANSYS
     # el_deg).  Cached per topology; the I=0 calibration run is recursion-guarded.
-    daxis_eff = _resolve_daxis_shift(p, geo, wind, pole_pairs, geo_override, n_sectors)
+    # …and it is REPORTED while it runs.  On a geometry the cache has not seen
+    # it is a 24-frame no-load solve — measured 39 s on the 200 mm 24s/28p —
+    # during which the progress bar showed nothing at all, so pressing Run
+    # looked like pressing nothing.  It is not overhead to hide: it is what
+    # gives the user's γ a zero to be measured from.
+    daxis_eff = _resolve_daxis_shift(p, geo, wind, pole_pairs, geo_override,
+                                     n_sectors, progress_cb=progress_cb)
 
     # Imposed excitation (both drives) — simulation/drive.py.  One object carries
     # the electrical frame both the current and the voltage waveform live in, so
@@ -3271,7 +3294,28 @@ def fem_transient_sliding_band(
     while _fi < len(_fseq):
         k = _fseq[_fi]; _fi += 1
         if progress_cb is not None:
-            try: progress_cb(max(k, 0), n_total)
+            # THE WARM-UP IS WORK, AND IT MUST LOOK LIKE WORK.  Its frames carry
+            # NEGATIVE k, and this used to report max(k, 0) — so the bar stood at
+            # 0/40 for as long as the σ·∂A/∂t transient took to go quiet
+            # (measured on the 200 mm 24s/28p: 73 s of "nothing happening"
+            # before the counter moved, i.e. 43 real solved frames reported as
+            # zero).  A progress bar that does not move is read as a hung run.
+            # The warm-up gets its own counter and its own phase; its total is
+            # honestly a moving target, because a march that has not settled
+            # splices a longer one in front (the count grows, the bar steps
+            # back — that IS what adaptive means).
+            _warm_n = sum(1 for _x in _fseq if _x < 0)
+            try:
+                if k < 0:
+                    progress_cb(_warm_n + k, _warm_n,
+                                "eddy warm-up (adaptive) — settling the "
+                                "start-up transient")
+                else:
+                    progress_cb(k, n_total, None)
+            except TypeError:
+                # a caller from before the phase argument (refine_proc, tests)
+                try: progress_cb(max(k, 0), n_total)
+                except Exception: pass
             except Exception: pass
         theta = (k / n_total) * period_mech * n_periods
         m_shift = int(round(theta / spacing))

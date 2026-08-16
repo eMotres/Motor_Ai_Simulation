@@ -291,3 +291,92 @@ def test_repeated_cold_calibration_of_one_machine_lands_on_one_number(monkeypatc
         f"ripple ~16 %, cogging ~50 %")
     # ...and this topology's exact answer is pole pitch + slot pitch = 60 deg.
     assert got[0] == pytest.approx(60.0, abs=0.1), got
+
+
+class TestTheGuardGuardsRecursionNotOtherSolves:
+    """A solve running next to a calibration must not get the 108° constant.
+
+    The recursion guard was a module-global flag.  The no-load calibration IS a
+    transient, so the flag has to suppress the d-axis lookup inside that nested
+    solve — but a process-wide flag suppressed it for every OTHER solve running
+    at the same time, and those silently took DAXIS_SHIFT_DEG.
+
+    Measured on the 200 mm 24s/28p, two threads on the same cold machine:
+    thread A calibrated for 54 s and got 60.0000°, thread B got 108.0000° in
+    0.0 s.  Downstream that is γ 48° off the q-axis — the user saw the torque
+    halve (821.5 → 401.9 N·m) after changing one wire dimension, with the panel
+    open and its field view solving in the background.
+    """
+
+    def test_a_concurrent_caller_waits_and_gets_the_calibrated_angle(self, monkeypatch):
+        import threading, time
+        from motor_ai_sim.simulation import fem_solver_2d as F
+
+        calls = []
+
+        def fake_eval(**kw):
+            calls.append(kw)
+            time.sleep(0.25)                     # the calibration takes a while
+            import numpy as np
+            n = 24
+            ang = np.arange(n) * (360.0 / n)
+            psi = np.cos(np.radians(ang * 14.0))   # peak at theta* = 0
+            return {"psi_A_Wb": list(psi), "rotor_angle_deg": list(ang),
+                    "picard_converged": True, "picard_resid_max": 1e-9,
+                    "picard_tol": 1e-3}
+
+        monkeypatch.setattr(F, "em_transient_eval", fake_eval)
+        monkeypatch.setattr(F, "_DAXIS_CACHE", {})
+        monkeypatch.setattr(F, "_daxis_disk_path", lambda: None)
+
+        class _P:
+            num_poles = 28
+        geo = {"num_slots": 24, "stator_diameter": 200.0, "wire_width": 7.5}
+        wind = {"layers": 1, "connection": "4P"}
+        out = {}
+
+        def worker(name, delay):
+            time.sleep(delay)
+            out[name] = F._resolve_daxis_shift(_P(), geo, wind, 14, None, 4)
+
+        ts = [threading.Thread(target=worker, args=("A", 0.0)),
+              threading.Thread(target=worker, args=("B", 0.05))]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join(timeout=30)
+
+        assert set(out) == {"A", "B"}, "a thread never returned"
+        assert out["A"] == out["B"], (
+            "the two threads disagree about the d-axis: %r" % (out,))
+        assert abs(out["B"] - F.DAXIS_SHIFT_DEG) > 1e-6, (
+            "the concurrent caller took the legacy constant instead of waiting")
+        assert len(calls) == 1, (
+            "the machine was calibrated %d times; the runner-up should read the "
+            "cache the winner filled" % len(calls))
+
+    def test_the_nested_no_load_solve_still_skips_the_lookup(self, monkeypatch):
+        """The guard must still do its actual job: inside its own calibration,
+        the recursive lookup returns the constant instead of recursing."""
+        from motor_ai_sim.simulation import fem_solver_2d as F
+        seen = {}
+
+        def fake_eval(**kw):
+            # this is the nested solve: ask for the d-axis from THIS thread
+            seen["nested"] = F._resolve_daxis_shift(object(), {}, {}, 14, None, 4)
+            import numpy as np
+            n = 24
+            ang = np.arange(n) * (360.0 / n)
+            return {"psi_A_Wb": list(np.cos(np.radians(ang * 14.0))),
+                    "rotor_angle_deg": list(ang), "picard_converged": True,
+                    "picard_resid_max": 1e-9, "picard_tol": 1e-3}
+
+        monkeypatch.setattr(F, "em_transient_eval", fake_eval)
+        monkeypatch.setattr(F, "_DAXIS_CACHE", {})
+        monkeypatch.setattr(F, "_daxis_disk_path", lambda: None)
+
+        class _P:
+            num_poles = 28
+        F._resolve_daxis_shift(_P(), {"num_slots": 24, "stator_diameter": 200.0},
+                               {"layers": 1}, 14, None, 4)
+        assert seen.get("nested") == F.DAXIS_SHIFT_DEG

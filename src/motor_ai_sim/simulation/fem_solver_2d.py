@@ -179,7 +179,24 @@ DAXIS_SHIFT_DEG = 108.0   # LEGACY CONSTANT, and wrong for EVERY topology
 # q-axis (identical to ANSYS's el_deg).  Cached per topology; θ* is invariant to
 # dimension sweeps.
 _DAXIS_CACHE: Dict[tuple, float] = {}
-_DAXIS_CALIBRATING = False
+# RECURSION GUARD — PER THREAD, and a lock so two threads cannot calibrate at
+# once.  It was a plain module global, which made it a guard against the wrong
+# thing: the no-load calibration is itself a transient, so the flag has to
+# suppress the d-axis lookup INSIDE that nested solve — but a process-wide flag
+# suppresses it for every OTHER solve running at the same time too, and those
+# get the legacy 108° constant instead of their own q-axis.
+#
+# Measured on the 200 mm 24s/28p with the panel open (its field view solves on
+# its own): change wire_width 8.1 -> 8.0, and the runs after the calibration
+# came back at daxis 108.0000 and T = 401.88 Nm against the correct 59.99 and
+# 821.52 — the torque halves because γ sits 48° off the q-axis, and nothing on
+# screen says so.  One user-visible symptom, two solves racing.
+#
+# Thread-local: only the thread that IS calibrating skips the lookup.  The lock:
+# a second thread that wants the same machine waits and then reads the cache
+# the first one filled, instead of starting a duplicate 39-second calibration.
+_DAXIS_TLS = threading.local()
+_DAXIS_LOCK = threading.RLock()
 
 def _daxis_disk_path():
     """Shared on-disk DAXIS cache so sweep subprocesses (fresh interpreters, empty
@@ -244,13 +261,31 @@ def _resolve_daxis_shift(p, geo, wind, pole_pairs, geo_override, n_sectors,
         cross-section's angle was served to a different machine with the same
         pole/slot/layer/connection counts (see `_daxis_topology_key`).
     """
-    global _DAXIS_CALIBRATING
-    if _DAXIS_CALIBRATING:
+    # Only the thread that is INSIDE its own calibration skips the lookup (the
+    # no-load solve has no current, so its d-axis is irrelevant).  A solve on
+    # another thread waits at the lock below and gets the real answer.
+    if getattr(_DAXIS_TLS, "calibrating", False):
         return DAXIS_SHIFT_DEG
     _geo_fp = _daxis_geo_fingerprint(geo)
     key = _daxis_topology_key(p, geo, wind, _geo_fp)
     if key in _DAXIS_CACHE:
         return _DAXIS_CACHE[key]
+    # ONE CALIBRATION AT A TIME, and the runner-up reads the answer instead of
+    # repeating it.  Two solves that arrive together on a machine the cache has
+    # not seen would otherwise each spend 39 s measuring the same angle.  The
+    # lock is re-entrant, so the nested no-load solve (same thread) walks
+    # straight through it.
+    with _DAXIS_LOCK:
+        if key in _DAXIS_CACHE:       # filled while this thread waited
+            return _DAXIS_CACHE[key]
+        return _calibrate_daxis(p, geo, wind, pole_pairs, geo_override,
+                                n_sectors, key, _geo_fp, progress_cb)
+
+
+def _calibrate_daxis(p, geo, wind, pole_pairs, geo_override, n_sectors,
+                     key, _geo_fp, progress_cb=None) -> float:
+    """The measurement itself — called with _DAXIS_LOCK held and the cache
+    already checked twice (before the lock and after it)."""
     skey = "_".join(str(x) for x in key)
     _dp = _daxis_disk_path()
     if _dp:                           # shared disk cache (across sweep subprocesses)
@@ -267,7 +302,7 @@ def _resolve_daxis_shift(p, geo, wind, pole_pairs, geo_override, n_sectors,
     daxis = None                      # None ⇒ calibration did not succeed
     _cal_err = None
     try:
-        _DAXIS_CALIBRATING = True
+        _DAXIS_TLS.calibrating = True
         # THE CALIBRATION SOLVE MUST CONVERGE.  It used to be run on the
         # cheapest mesh that would build — 2.5 mm elements, min 0.7 mm, ONE
         # layer across a 0.2 mm air gap, unstructured band — on the argument
@@ -408,7 +443,7 @@ def _resolve_daxis_shift(p, geo, wind, pole_pairs, geo_override, n_sectors,
     except Exception as _e:
         _cal_err = repr(_e)
     finally:
-        _DAXIS_CALIBRATING = False
+        _DAXIS_TLS.calibrating = False
     if daxis is None:
         # NO FALLBACK.  This used to return DAXIS_SHIFT_DEG (108°), which is the
         # calibrated value for 20p/24s and ~48° wrong for 12s14p — so a failed

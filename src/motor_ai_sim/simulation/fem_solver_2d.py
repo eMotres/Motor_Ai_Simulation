@@ -1777,6 +1777,17 @@ def fem_transient_sliding_band(
                                  # the shared config held — measured cost on the
                                  # 30 mm control: P_fe -20 %, V_peak -12.5 %,
                                  # eta -0.86 pp (docs/SOLVER_TRIALS_2026-07-30.md F2).
+    daxis_deg: Optional[float] = None,  # ← THE D-AXIS REFERENCE, GIVEN.  None = measure
+                                 # it (a 24-frame no-load solve, ~39 s, cached per
+                                 # geometry).  A number is taken AS IS and nothing
+                                 # is solved for it: on a topology whose zero is
+                                 # already known — 24s/28p sits on 60.000° across
+                                 # every cross-section measured — re-deriving it
+                                 # per geometry buys nothing.  It is the user's
+                                 # number then, and the result says so
+                                 # (`daxis_source`), because a reference nobody
+                                 # can see is how γ ends up measured from the
+                                 # wrong place.
     n_parallel: Optional[int] = None,   # PARALLEL PATHS of the winding.  None = the
                                  # global config's winding.n_parallel.  The FEM only
                                  # ever sees I_coil = I_phase / n_parallel, so a wrong
@@ -2090,8 +2101,16 @@ def fem_transient_sliding_band(
     # during which the progress bar showed nothing at all, so pressing Run
     # looked like pressing nothing.  It is not overhead to hide: it is what
     # gives the user's γ a zero to be measured from.
-    daxis_eff = _resolve_daxis_shift(p, geo, wind, pole_pairs, geo_override,
-                                     n_sectors, progress_cb=progress_cb)
+    if daxis_deg is not None:
+        if not (isinstance(daxis_deg, (int, float)) and math.isfinite(float(daxis_deg))):
+            raise ValueError("daxis_deg must be a finite angle in degrees; got %r"
+                             % (daxis_deg,))
+        daxis_eff = float(daxis_deg) % 360.0
+        _daxis_src = "manual"
+    else:
+        daxis_eff = _resolve_daxis_shift(p, geo, wind, pole_pairs, geo_override,
+                                         n_sectors, progress_cb=progress_cb)
+        _daxis_src = "calibrated"
 
     # Imposed excitation (both drives) — simulation/drive.py.  One object carries
     # the electrical frame both the current and the voltage waveform live in, so
@@ -4458,6 +4477,7 @@ def fem_transient_sliding_band(
         # to recover this number for one run by fitting T and V_peak against a
         # gamma sweep; it is one float, and it belongs in every payload.
         "daxis_deg": round(float(daxis_eff), 4),
+        "daxis_source": _daxis_src,
         "gamma_effective_deg": round(float(gamma_deg), 4),
         "loss_model": _lm2,
         "demag_coef_per_tri": (_dcoef2.tolist() if _dcoef2 is not None else None),
@@ -4701,6 +4721,8 @@ def em_transient_eval(
     rpm: Optional[float] = None,     # mechanical speed [rpm]; None = the global
                                      # config's simulation.rpm (see
                                      # fem_transient_sliding_band)
+    daxis_deg: Optional[float] = None,  # d-axis reference, GIVEN (None = measured;
+                                     # see fem_transient_sliding_band)
     n_parallel: Optional[int] = None,   # winding parallel paths; None = the global
                                      # config's winding.n_parallel
     connection: Optional[str] = None,   # winding connection label ("2S-2P"); supplies
@@ -4752,6 +4774,7 @@ def em_transient_eval(
         n_steps_per_period=int(n_steps_per_period), n_periods=float(n_periods),
         gamma_deg=float(gamma_deg), I_phase_rms=float(I_phase_rms),
         rpm=(None if rpm is None else float(rpm)),
+        daxis_deg=(None if daxis_deg is None else float(daxis_deg)),
         n_parallel=(None if n_parallel is None else int(n_parallel)),
         connection=(None if connection is None else str(connection)),
         mesh_size_mm=float(mesh_size_mm), min_size_mm=float(min_size_mm),

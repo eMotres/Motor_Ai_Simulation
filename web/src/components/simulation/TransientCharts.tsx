@@ -375,6 +375,14 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
       // (0 = auto-estimate from geometry) for the copper the 2-D field misses.
       coil_temp_c:        readSimSetting('coilTemp',   120.0),
       end_winding_factor: readSimSetting('endWinding',   0.0),
+      // D-AXIS: sent only when PINNED.  Blank means "measure it", and the
+      // backend's own resolver decides that from the shared config — sending
+      // a 0 for "blank" would pin the reference to zero degrees instead.
+      ...(() => {
+        const _d = String(readSimSetting<string>('daxisDeg', '') ?? '').trim();
+        return _d === '' || !Number.isFinite(Number(_d))
+          ? {} : { daxis_deg: Number(_d) };
+      })(),
       // WINDING — send the SELECTED connection explicitly.  The selector
       // buttons write the shared config through a debounced sync, and the
       // auto-run raced it: the run computed with the OLD winding while the UI

@@ -244,6 +244,11 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
       : { mode: 'fixed' });
   const [coilTemp,      setCoilTemp]      = usePersisted('coilTemp',  120.0); // °C
   const [endWinding,    setEndWinding]    = usePersisted('endWinding', 0.0);  // k_end (editable)
+  // D-AXIS REFERENCE, electrical degrees.  '' = measure it (a 24-frame
+  // no-load solve, ~39 s, once per geometry); a number is used AS IS and
+  // nothing is solved to find it.  Stored as a STRING so 'empty' is a
+  // state the user can type — 0 is a legal angle and cannot mean 'auto'.
+  const [daxisDeg,      setDaxisDeg]      = usePersisted<string>('daxisDeg', '');
   // Last geometry-derived k_end we seeded the cell with — shown in the tooltip.
   const [endWindingGeo, setEndWindingGeo] = usePersisted('endWindingGeo', 0.0);
   // k_end = (π·(wire_w/2 + tooth_w/2) + L_stack)/L_stack, so it moves with every tooth/wire /
@@ -262,6 +267,16 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // result reappears WITHOUT recomputing. It only changes when the user presses
   // Run for a new simulation. (Was useState(0) → every reload wiped it.)
   const [runNonce, setRunNonce] = usePersisted('runNonce', 0);
+  // What the LAST run actually solved at — shown as the placeholder, so the
+  // number to pin is the one on screen instead of something to go hunting for.
+  const lastDaxis = React.useMemo<number | null>(() => {
+    try {
+      const t = JSON.parse(localStorage.getItem('sim.lastTransient') || '{}');
+      const v = Number(t?.daxis_deg);
+      return Number.isFinite(v) ? v : null;
+    } catch { return null; }
+  }, [runNonce]);
+
   // Active magnet + the two numbers that decide how it behaves: Br sets the flux,
   // the BH-curve knee sets how much demagnetising field it survives.  Refreshed on
   // the same event a material change fires, so it never lags the assignment.
@@ -384,6 +399,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
     max_current: current, frequency, rpm, phase_offset_deg: phaseOffset,
     coil_temp_c: coilTemp, steps_per_period: steps,
     end_winding_factor: endWinding, connection,
+    daxis_deg: daxisDeg.trim() === '' ? '' : Number(daxisDeg),
     demag, eddy: eddyCoupled, rotor_eddy: fieldLosses, torque_filter: torqueFilter,
     drive, v_phase_peak: vPeak, v_delta_deg: vDelta,
   });
@@ -403,7 +419,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
     }, 700);
     return () => clearTimeout(id);
   }, [current, frequency, rpm, phaseOffset, demag, eddyCoupled, fieldLosses,
-      coilTemp, steps, endWinding, connection, drive, vPeak, vDelta]);
+      coilTemp, steps, endWinding, connection, daxisDeg, drive, vPeak, vDelta]);
 
   // Auto-save EVERY simulation change into the active motor ("my copy").
   // syncActiveMotor is internally debounced, so firing on each change is fine.
@@ -411,7 +427,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
     if (!simReady.current) return;
     syncActiveMotor();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [current, frequency, rpm, phaseOffset, steps, coilTemp, endWinding, demag, eddyCoupled, torqueFilter, connection]);
+  }, [current, frequency, rpm, phaseOffset, steps, coilTemp, endWinding, demag, eddyCoupled, torqueFilter, connection, daxisDeg]);
   // HARD upper bound: the sliding-band rotor can only sit on slip-ring nodes,
   // so steps/period must DIVIDE the nodes-per-electrical-period count.  The
   // backend (fem_solver_2d.fem_transient_sliding_band) makes that count adaptive:
@@ -854,6 +870,24 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                           ` Re-derived on EVERY geometry change and used in all simulations AND optimizations —` +
                           ` it scales the copper loss and phase resistance for the end-turns a 2-D solve can't see.` +
                           ` Type a value to override it until the geometry changes again.`} /> }}
+              disabled={isRunning}
+            />
+            <TextField
+              label="d-axis DAXIS (°) — empty = measure"
+              type="text" size="small" fullWidth
+              value={daxisDeg}
+              placeholder={lastDaxis != null ? `${lastDaxis.toFixed(4)} (measured)` : 'auto'}
+              onChange={e => setDaxisDeg(e.target.value)}
+              InputProps={{ endAdornment: <HelpTip title={
+                'The zero γ is measured FROM. γ is the angle from the q-axis, so the solver has to know'
+                + ' where the q-axis sits in this cross-section — it finds it by holding the current still,'
+                + ' turning the rotor and taking the peak of the phase-A flux linkage (a 24-frame no-load'
+                + ' solve, ~39 s, cached per geometry).'
+                + (lastDaxis != null ? ` Last run solved at ${lastDaxis.toFixed(4)}°.` : '')
+                + ' Type a number to PIN it: the calibration is then skipped entirely and your value is used'
+                + ' as is — right when the zero of this topology is already known (24s/28p sits on 60.000° across'
+                + ' every cross-section measured here). Clear the box to measure it again. Every result says'
+                + ' which of the two it used.'} /> }}
               disabled={isRunning}
             />
 

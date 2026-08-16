@@ -17,7 +17,7 @@ import math
 import time
 import uuid
 from collections import OrderedDict
-from typing import Dict, Optional
+from typing import Dict, Optional, Union
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Depends, Query
 from pydantic import BaseModel, Field
@@ -252,6 +252,13 @@ class SimConfigPatch(BaseModel):
     steps_per_period:   Optional[int]   = None   # transient frames per electrical period
     end_winding_factor: Optional[float] = None   # k_end (0 = auto from geometry)
     connection:         Optional[str]   = None   # winding: "4S" | "2S-2P" | "4P"
+    # D-AXIS REFERENCE, electrical degrees.  A number PINS it and nothing is
+    # solved to find it (the 24-frame no-load calibration is skipped entirely);
+    # "" or "auto" clears the pin and the measurement runs again.  Both are
+    # states the user chose explicitly — what this must never become is a stale
+    # angle nobody can see, so it lives in the config the panel shows and is
+    # stamped into every result as `daxis_source`.
+    daxis_deg:          Optional[Union[float, str]] = None
 
 
 class JobStatus(BaseModel):
@@ -430,7 +437,13 @@ def update_sim_config(patch: SimConfigPatch):
             for key, val in updates.items():
                 m = re.match(rf'^(\s+{re.escape(key)}\s*:\s*)(.*)$', line)
                 if m:
-                    line = m.group(1) + str(val) + '\n'
+                    # "" / "auto" is how a PINNED value is cleared (the d-axis
+                    # goes back to being measured).  yaml's null reads back as
+                    # None, which is exactly what the resolvers call "auto".
+                    _out = ("null" if (isinstance(val, str)
+                                       and val.strip().lower() in ("", "auto"))
+                            else str(val))
+                    line = m.group(1) + _out + '\n'
                     replaced.add(key)
                     break
 
@@ -1228,6 +1241,41 @@ def _effective_winding(n_parallel=None, connection=None) -> tuple:
     if npar is None:
         npar = _cfgw.get("n_parallel", 1)
     return int(max(1, int(npar or 1))), (str(conn) if conn else "")
+
+
+def _effective_daxis(daxis_deg=None):
+    """The d-axis reference a solve will ACTUALLY use, or None for "measure it".
+
+    Same rule as the rest of the operating point (standing rule, 2026-08-14):
+    the value comes from the Simulation tab.  An explicit argument wins; then
+    simulation.daxis_deg; a blank/absent setting means the calibration runs.
+    A stored value that is not a finite number is a REFUSAL, not a fallback —
+    γ measured from a garbage zero is the failure this whole path exists to
+    prevent."""
+    if daxis_deg is not None:
+        _v = float(daxis_deg)
+        if not math.isfinite(_v):
+            raise HTTPException(status_code=422, detail=(
+                "daxis_deg must be a finite angle in degrees; got %r" % (daxis_deg,)))
+        return _v % 360.0
+    try:
+        from motor_ai_sim.config import get_config as _gc
+        _raw = (_gc().get("simulation") or {}).get("daxis_deg", None)
+    except Exception:
+        _raw = None
+    if _raw is None or (isinstance(_raw, str) and not _raw.strip()):
+        return None                      # blank = measure it
+    try:
+        _v = float(_raw)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail=(
+            "the Simulation tab's d-axis (simulation.daxis_deg = %r) is not a "
+            "number — clear it to measure the reference, or set a real angle; "
+            "the solver will not guess one." % (_raw,)))
+    if not math.isfinite(_v):
+        raise HTTPException(status_code=422, detail=(
+            "the Simulation tab's d-axis is not finite (%r)" % (_raw,)))
+    return _v % 360.0
 
 
 def _field_snap_key_fields(*, gamma_deg, I_phase_rms, mesh_size_mm, min_size_mm,
@@ -2590,6 +2638,11 @@ def get_fem_transient(
                                           #   sees I_coil = I_phase / n_parallel, so a stored
                                           #   machine evaluated without its own value is driven
                                           #   at n_parallel x its intended coil MMF (F3).
+    daxis_deg:   Optional[float] = None,  # ← D-AXIS REFERENCE, GIVEN.  Omitted = the
+                                          #   Simulation tab's simulation.daxis_deg if it
+                                          #   holds one, else MEASURED (a 24-frame no-load
+                                          #   solve, ~39 s, cached per geometry).  Given, it
+                                          #   is used as is and nothing is solved for it.
     connection:  Optional[str] = None,    # ← WINDING CONNECTION label ("4S" / "2S-2P" / "4P").
                                           #   Supplies n_parallel when that is absent and enters
                                           #   the d-axis topology key.  Unreadable label -> 400.
@@ -2764,6 +2817,10 @@ def get_fem_transient(
                # be in NO key at all.
                round(_effective_rpm(rpm), 3),
                _effective_winding(n_parallel, connection),
+               # The d-axis reference: a run pinned to a given angle and a run
+               # that measured its own are different operating points whenever
+               # the two numbers differ, so they may not share a cache entry.
+               _effective_daxis(daxis_deg),
                int(n_frames) if include_frames else 0,
                # The coupled eddy solve is DIFFERENT physics (solved copper loss,
                # reaction currents in the magnets/shaft) — it must not share a
@@ -2952,6 +3009,7 @@ def get_fem_transient(
                 rpm=(None if rpm is None else float(rpm)),
                 n_parallel=(None if n_parallel is None else int(n_parallel)),
                 connection=(None if connection is None else str(connection)),
+                daxis_deg=_effective_daxis(daxis_deg),
                 mesh_size_mm=float(mesh_size_mm), min_size_mm=float(min_size_mm),
                 outer_air_factor=float(outer_air_factor), gap_layers=float(gap_layers),
                 n_sectors=int(n_sectors), stator_fillet_mm=float(stator_fillet_mm),

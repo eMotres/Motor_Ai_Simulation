@@ -1,36 +1,36 @@
 geometry:
-  stator_diameter: 150
-  slot_height: 13.6
-  core_thickness: 4.8
+  stator_diameter: 200
+  slot_height: 24.200000000000003
+  core_thickness: 5.4
   num_seg: 4
   num_slots_per_segment: 6
   num_poles_per_segment: 7
-  air_gap: 0.5
-  tooth_width: 9.8
-  tooth2_width: 4.8
-  cut_width: 5.8
-  insulation_thickness: 0.15
-  wire_width: 5
-  wire_height: 0.6
+  air_gap: 0.65
+  tooth_width: 10.3
+  tooth2_width: 4.9
+  cut_width: 4.5
+  insulation_thickness: 0.2
+  wire_width: 8.0
+  wire_height: 0.8
   wire_spacing_x: 0.1
   wire_spacing_y: 0.13
-  num_wires_per_slot: 14
+  num_wires_per_slot: 20
   wire_split: 1
   slot_hs: 0.2
-  magnet_height: 10.8
-  rotor_house_height: 1.2
+  magnet_height: 18.900000000000002
+  rotor_house_height: 1.7
   shaft_height: 3
-  magnet_fill_down: 0.9
-  magnet_fill_up: 0.26
-  magnet_fill_radius: 2
-  magnet_up_gap: 1.2
-  rotor_hole: 0.9
-  magnet_down_height: 0.6
+  magnet_fill_down: 0.8247274657826457
+  magnet_fill_up: 0.4400444505566912
+  magnet_fill_radius: 2.8000000000000003
+  magnet_up_gap: 1
+  rotor_hole: 0.82251681854043
+  magnet_down_height: 3.4000000000000004
   magnet_lamination: 0
-  stator_fillet_r: 3.7
-  stator_fillet_r1: 1
-  rotor_fill_r: 0.2
-  motor_length: 35
+  stator_fillet_r: 3.9000000000000004
+  stator_fillet_r1: 0
+  rotor_fill_r: 1.1
+  motor_length: 250
   stator_outer_radius: 15
   stator_inner_radius: 9.2
   num_slots: 24
@@ -405,17 +405,17 @@ mesh:
   n_angular_slots: 20
   mesh_size_mm: 1.76
   outer_air_factor: 1.2
-  gap_layers: 1
+  gap_layers: 1.0
   normal_deviation: 8.0
   min_size_mm: 0.3
   n_sectors: 4
 materials:
-  stator_core: B15AHV950M
+  stator_core: 20RSW175
   slot: copper
   air_gap: air
   in_band: air
   out_band: air
-  rotor_core: B15AHV950M
+  rotor_core: 20RSW175
   magnet: F52SH_120C
   shaft: Aluminium_6061
   slot_insulation: Nomex
@@ -423,25 +423,26 @@ materials:
 custom_materials: {}
 winding:
   n_coils_per_phase: 4
-  connection: 2S-2P
-  n_parallel: 2
-  n_series: 2
+  connection: 4P
+  n_parallel: 4
+  n_series: 1
   layers: 1
 simulation:
-  max_current: 79.0
-  frequency: 933.33
-  rpm: 4000.0
+  max_current: 362.0386719675123
+  frequency: 466.67
+  rpm: 2000.0
   phase_offset_deg: 16.0
   steps_per_period: 40
-  demag: True
+  demag: false
   coil_temp_c: 120.0
-  end_winding_factor: 1.664
-  connection: 2S-2P
-  eddy: True
-  rotor_eddy: True
-  torque_filter: False
+  end_winding_factor: 1.115
+  connection: 4P
+  eddy: true
+  rotor_eddy: true
+  torque_filter: false
   drive: current
   v_phase_peak: 30.0
   v_delta_deg: 0.0
-  current_a: 79.0
+  current_a: 362.0386719675123
   gamma_deg: 16.0
+  daxis_deg: null

@@ -380,3 +380,67 @@ class TestTheGuardGuardsRecursionNotOtherSolves:
         F._resolve_daxis_shift(_P(), {"num_slots": 24, "stator_diameter": 200.0},
                                {"layers": 1}, 14, None, 4)
         assert seen.get("nested") == F.DAXIS_SHIFT_DEG
+
+
+class TestTheDAxisCanBePinned:
+    """A given d-axis is used AS IS and costs nothing to obtain.
+
+    The reference is a property of the topology, not of the dimensions — the
+    24s/28p measures 60.000° across every cross-section tried — so re-deriving
+    it per geometry buys nothing once it is known.  Pinning it skips the
+    24-frame no-load solve entirely (measured on a cold geometry: 83 s auto vs
+    31 s pinned) and the result says which of the two it used, because a
+    reference nobody can see is how γ ends up measured from the wrong place.
+    """
+
+    def test_a_pinned_angle_skips_the_calibration_and_is_used_verbatim(self, monkeypatch):
+        from motor_ai_sim.simulation import fem_solver_2d as F
+        called = []
+        monkeypatch.setattr(F, "_resolve_daxis_shift",
+                            lambda *a, **k: called.append(1) or 123.0)
+        seen = {}
+
+        class _Exc:
+            def __init__(self, **kw):
+                seen.update(kw)
+                raise _Stop()
+
+        class _Stop(Exception):
+            pass
+
+        monkeypatch.setattr(F, "_Excitation", _Exc)
+        try:
+            F.fem_transient_sliding_band(daxis_deg=45.5, n_steps_per_period=4)
+        except _Stop:
+            pass
+        except Exception as e:               # any other failure is a real one
+            if not isinstance(e, _Stop):
+                assert "daxis" not in str(e).lower(), e
+        assert seen.get("daxis_deg") == 45.5, seen.get("daxis_deg")
+        assert not called, "the calibration ran even though the angle was given"
+
+    def test_a_pinned_angle_must_be_a_finite_number(self):
+        import pytest
+        from motor_ai_sim.simulation import fem_solver_2d as F
+        for bad in (float("nan"), float("inf"), "sixty"):
+            with pytest.raises((ValueError, TypeError)):
+                F.fem_transient_sliding_band(daxis_deg=bad, n_steps_per_period=4)
+
+    def test_the_route_reads_the_pin_from_the_simulation_tab(self, monkeypatch):
+        """Standing rule: the value comes from Simulation.  Blank = measure."""
+        from motor_ai_sim.routes import simulation as S
+        import pytest
+        from fastapi import HTTPException
+
+        def _cfg(block):
+            return lambda: {"simulation": block}
+
+        monkeypatch.setattr("motor_ai_sim.config.get_config", _cfg({"daxis_deg": None}))
+        assert S._effective_daxis(None) is None                 # blank = measure
+        monkeypatch.setattr("motor_ai_sim.config.get_config", _cfg({"daxis_deg": 60.0}))
+        assert S._effective_daxis(None) == 60.0                 # pinned in the tab
+        assert S._effective_daxis(45.0) == 45.0                 # argument wins
+        assert S._effective_daxis(-300.0) == 60.0               # wrapped into [0,360)
+        monkeypatch.setattr("motor_ai_sim.config.get_config", _cfg({"daxis_deg": "sixty"}))
+        with pytest.raises(HTTPException):                      # never a guess
+            S._effective_daxis(None)

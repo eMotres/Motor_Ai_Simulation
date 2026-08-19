@@ -424,6 +424,23 @@ export const useMotorStore = create<MotorState>()(
             });
             return;
           }
+          // 423 = the field is LOCKED by the active die/configuration (family
+          // catalog).  Same surfacing as 422: name the fields and the lock, so
+          // the user sees WHY the box refuses instead of a silent revert.
+          if (response.status === 423) {
+            let det: any = null;
+            try { det = (await response.json())?.detail; } catch { /* non-JSON */ }
+            const bad = (det?.invalid_parameters ?? []) as GeometryParamError[];
+            set({
+              isLoading: false,
+              isGeometryUpdating: false,
+              connectedToApi: true,
+              geometryParamErrors: bad.length ? bad : [{
+                field: '(geometry)', reason: String(det?.hint ?? 'locked'),
+              } as GeometryParamError],
+            });
+            return;
+          }
           if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
           }

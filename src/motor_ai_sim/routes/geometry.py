@@ -109,6 +109,21 @@ def update_geometry(update: GeometryUpdateModel, request: Request = None):
             "invalid_parameters": _bad,
         })
 
+    # ── Input guard 4: family locks ──────────────────────────────────────────
+    # The machine on screen may BE a stamped product (die) or a frozen build
+    # (configuration).  Locked keys refuse changes loudly — writing the
+    # canonical value back is still allowed, which is exactly how loading the
+    # configuration itself passes.  423 Locked, with the fields named.
+    try:
+        from motor_ai_sim.routes.family import geometry_lock_check
+        _locked = geometry_lock_check(_submitted_raw)
+    except HTTPException:
+        raise
+    except Exception:
+        _locked = None   # the guard must never be the reason a solve breaks
+    if _locked:
+        raise HTTPException(status_code=423, detail=_locked)
+
     try:
         # Who is changing the live machine, and into what.  Cheap, write-only,
         # and the only thing that can answer "the motor changed under me — who

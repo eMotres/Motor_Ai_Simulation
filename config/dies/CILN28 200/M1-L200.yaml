@@ -54,3 +54,4 @@ materials:
   magnet: F52SH_120C
   stator_core: B15AHV950M
   rotor_core: B15AHV950M
+locked: false

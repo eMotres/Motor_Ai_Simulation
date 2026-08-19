@@ -27,7 +27,7 @@ interface Duty {
   note: string; result?: DutyResult | null;
 }
 interface Cfg {
-  name: string; role: string; stack_mm: number | null;
+  name: string; role: string; locked?: boolean; stack_mm: number | null;
   wire_height_mm: number | null; wire_width_mm: number | null;
   turns: number | null; connection: string | null;
   magnet?: string | null; steel?: string | null;
@@ -153,6 +153,20 @@ const FamilyCatalog: React.FC<{
         body: JSON.stringify({ name }),
       }));
   };
+  const toggleDieLock = (d: Die) => {
+    mutate(`die '${d.name}' ${d.locked ? 'unlocked' : 'locked'}`, () =>
+      fetch(`${API}/api/family/die/${encodeURIComponent(d.name)}/lock`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ locked: !d.locked }),
+      }));
+  };
+  const toggleCfgLock = (dieName: string, c: Cfg) => {
+    mutate(`configuration '${c.name}' ${c.locked ? 'unlocked' : 'locked'}`, () =>
+      fetch(`${API}/api/family/config/${encodeURIComponent(dieName)}/${encodeURIComponent(c.name)}/lock`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ locked: !c.locked }),
+      }));
+  };
   const deleteDuty = (die: string, cfg: string, duty: string) => {
     if (!window.confirm(`Delete duty '${duty}' from ${die}/${cfg}?`)) return;
     mutate(`duty '${duty}' deleted`, () =>
@@ -198,6 +212,13 @@ const FamilyCatalog: React.FC<{
         + `${encodeURIComponent(cfg)}?duty=${encodeURIComponent(duty)}`);
       if (!r.ok) throw new Error((await r.json()).detail ?? `HTTP ${r.status}`);
       const p = await r.json();
+      // 0) mark WHICH die/config the editor is about to become — the geometry
+      //    route enforces the locks against this context, and applying the
+      //    configuration's own canonical values passes by construction.
+      await fetch(`${API}/api/family/activate`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ die, config: cfg }),
+      });
       // 1) geometry — the die's stamped section + this configuration's stack/wire
       await updateGeometryViaApi(p.geometry);
       // 2) winding connection (authoritative endpoint; validates against layout)
@@ -293,6 +314,20 @@ const FamilyCatalog: React.FC<{
                 </span>
               </Tooltip>
             )}
+            {canWrite && (
+              <Tooltip title={die.locked
+                ? 'Unlock die — stamped geometry becomes editable'
+                : 'Lock die — stamped geometry becomes read-only (stack/wire/turns stay editable)'}>
+                <span>
+                  <IconButton size="small" disabled={!!busy}
+                    onClick={() => toggleDieLock(die)}
+                    sx={{ fontSize: 11, p: 0.2,
+                          color: die.locked ? '#fbbf24' : 'var(--text-4)' }}>
+                    {die.locked ? '🔓' : '🔒'}
+                  </IconButton>
+                </span>
+              </Tooltip>
+            )}
             <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>
               {die.configs.length} configuration{die.configs.length === 1 ? '' : 's'}
             </Typography>
@@ -322,12 +357,29 @@ const FamilyCatalog: React.FC<{
                                   minWidth: 84 }}>
                   {c.name}
                 </Typography>
+                {c.locked && !canWrite && (
+                  <Typography component="span" sx={{ fontSize: 11 }}>🔒</Typography>
+                )}
                 {canWrite && (
                   <Tooltip title="Rename configuration">
                     <span>
                       <IconButton size="small" disabled={!!busy}
                         onClick={() => renameCfg(die.name, c.name)}
                         sx={{ fontSize: 11, p: 0.2, color: 'var(--text-4)' }}>✎</IconButton>
+                    </span>
+                  </Tooltip>
+                )}
+                {canWrite && (
+                  <Tooltip title={c.locked
+                    ? 'Unlock configuration — stack/wire/turns become editable'
+                    : 'Lock configuration — with a locked die the geometry becomes fully read-only'}>
+                    <span>
+                      <IconButton size="small" disabled={!!busy}
+                        onClick={() => toggleCfgLock(die.name, c)}
+                        sx={{ fontSize: 11, p: 0.2,
+                              color: c.locked ? '#fbbf24' : 'var(--text-4)' }}>
+                        {c.locked ? '🔓' : '🔒'}
+                      </IconButton>
                     </span>
                   </Tooltip>
                 )}

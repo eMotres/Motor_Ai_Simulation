@@ -186,6 +186,7 @@ def tree(authorization: str = Header(default=None)):
             cfgs.append({
                 "name": cf.stem,
                 "role": c.get("role", "motor"),
+                "locked": bool(c.get("locked", False)),
                 "stack_mm": ov.get("motor_length"),
                 "wire_height_mm": ov.get("wire_height"),
                 "wire_width_mm": ov.get("wire_width"),
@@ -481,6 +482,137 @@ def delete_duty(die: str, cfg: str, duty: str, _admin: dict = Depends(require_ad
     c["duties"] = after
     _save_yaml(p, c)
     return {"ok": True}
+
+
+# ── locks & the active family context ────────────────────────────────────────
+# WHICH die/configuration the live machine currently is — written when a duty
+# is loaded, read by the geometry route to enforce the locks.  A sidecar file,
+# not motor_config.yaml, so this layer still never rewrites the live config.
+_CTX_FILE = Path(DEFAULT_CONFIG_PATH).parent / ".family_context.json"
+
+
+def _read_ctx() -> Optional[dict]:
+    try:
+        import json
+        d = json.loads(_CTX_FILE.read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) and d.get("die") else None
+    except Exception:
+        return None
+
+
+class Activate(BaseModel):
+    die: str
+    config: str
+
+
+@router.post("/activate")
+def activate(req: Activate):
+    """Mark die/config as the machine now loaded in the editor.  Open to every
+    caller — it is part of LOADING, not of editing the catalog."""
+    die = _check_name(req.die, "die")
+    cfg = _check_name(req.config, "configuration")
+    d = _load_yaml(_die_file(die), "die")
+    c = _load_yaml(_cfg_file(die, cfg), "configuration")
+    import json
+    _CTX_FILE.write_text(json.dumps({"die": die, "config": cfg,
+                                     "at": datetime.now().isoformat(timespec="seconds")}),
+                         encoding="utf-8")
+    return {"ok": True, "die_locked": bool(d.get("locked", True)),
+            "config_locked": bool(c.get("locked", False))}
+
+
+class LockPatch(BaseModel):
+    locked: bool
+
+
+@router.patch("/die/{die}/lock")
+def lock_die(die: str, req: LockPatch, _admin: dict = Depends(require_admin)):
+    die = _check_name(die, "die")
+    d = _load_yaml(_die_file(die), "die")
+    d["locked"] = bool(req.locked)
+    _save_yaml(_die_file(die), d)
+    log.info("family: die '%s' %s", die, "locked" if req.locked else "UNLOCKED")
+    return {"ok": True, "locked": bool(req.locked)}
+
+
+@router.patch("/config/{die}/{cfg}/lock")
+def lock_config(die: str, cfg: str, req: LockPatch,
+                _admin: dict = Depends(require_admin)):
+    die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
+    c = _load_yaml(_cfg_file(die, cfg), "configuration")
+    c["locked"] = bool(req.locked)
+    _save_yaml(_cfg_file(die, cfg), c)
+    log.info("family: configuration '%s/%s' %s", die, cfg,
+             "locked" if req.locked else "UNLOCKED")
+    return {"ok": True, "locked": bool(req.locked)}
+
+
+def _num_eq(a, b) -> bool:
+    try:
+        fa, fb = float(a), float(b)
+        return abs(fa - fb) <= 1e-9 * max(1.0, abs(fa), abs(fb))
+    except (TypeError, ValueError):
+        return a == b
+
+
+def geometry_lock_check(update: dict) -> Optional[dict]:
+    """Called by the geometry PUT route.  Returns a refusal detail when the
+    ACTIVE die/configuration locks forbid this update, else None.
+
+    Lock levels (user-defined):
+      die+config locked -> geometry untouchable (only Simulation params move);
+      die locked only   -> only the FREE keys (stack length, wire, turns) move;
+      nothing locked    -> everything moves.
+    A locked key still ACCEPTS its canonical value — that is how loading the
+    configuration itself passes."""
+    ctx = _read_ctx()
+    if not ctx:
+        return None
+    die, cfg = str(ctx.get("die") or ""), str(ctx.get("config") or "")
+    try:
+        d = _load_yaml(_die_file(die), "die")
+    except HTTPException:
+        return None                       # stale context — die is gone
+    try:
+        c = _load_yaml(_cfg_file(die, cfg), "configuration")
+    except HTTPException:
+        c = {}
+    die_locked = bool(d.get("locked", True))
+    cfg_locked = bool(c.get("locked", False))
+    if not die_locked and not cfg_locked:
+        return None
+    die_geo = d.get("geometry") or {}
+    ov = c.get("geometry_overrides") or {}
+    bad = []
+    for k, v in update.items():
+        free = k in FREE_GEO_KEYS
+        if free:
+            if not cfg_locked:
+                continue                  # die-lock alone leaves free keys open
+            canon = ov.get(k, die_geo.get(k))
+            lock_name = f"configuration '{cfg}'"
+        else:
+            if not die_locked:
+                continue
+            canon = die_geo.get(k)
+            lock_name = f"die '{die}'"
+        if canon is not None and _num_eq(v, canon):
+            continue                      # writing the canonical value is a no-op
+        bad.append({"field": k, "reason": f"locked by {lock_name}",
+                    "locked_value": canon})
+    if not bad:
+        return None
+    lvl = ("die and configuration are locked — geometry is read-only, only "
+           "Simulation parameters may change"
+           if (die_locked and cfg_locked) else
+           "die is locked — only stack length, wire size and turn count may change")
+    return {
+        "error": "geometry is locked",
+        "die": die, "config": cfg,
+        "die_locked": die_locked, "config_locked": cfg_locked,
+        "invalid_parameters": bad,
+        "hint": lvl + ". Unlock in the Motors catalog (admin) or load another configuration.",
+    }
 
 
 # ── apply payload ────────────────────────────────────────────────────────────

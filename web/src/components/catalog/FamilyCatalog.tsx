@@ -179,108 +179,6 @@ const FamilyCatalog: React.FC<{
       del(`/api/family/duty/${encodeURIComponent(die)}/${encodeURIComponent(cfg)}/${encodeURIComponent(duty)}`));
   };
 
-  // Record the LAST finished Simulation run's numbers onto a duty — but only
-  // when that run actually was this duty's operating point.  Recording a run
-  // from a different point would be a quietly wrong passport.
-  const recordResult = (die: string, cfg: string, d: Duty) => {
-    const s = readLS('lastSummary', null);
-    if (!s || !Number.isFinite(Number(s.I_phase_rms_A))) {
-      setMsg('✗ no finished Simulation run to record — apply the duty, Run, then record');
-      return;
-    }
-    const iOk = Math.abs(Number(s.I_phase_rms_A) - d.current_arms)
-                <= Math.max(0.5, 0.002 * d.current_arms);
-    const rOk = Math.abs(Number(s.rpm) - d.rpm) <= 1;
-    const mOk = (s.op_mode ?? 'motor') === d.mode;
-    if (!iOk || !rOk || !mOk) {
-      setMsg(`✗ last run is ${s.I_phase_rms_A} A @ ${s.rpm} rpm (${s.op_mode ?? 'motor'}) `
-           + `— not '${d.name}' (${d.current_arms} A @ ${d.rpm} rpm ${d.mode}); `
-           + 'apply the duty, Run, then record');
-      return;
-    }
-    mutate(`result recorded on '${d.name}'`, () => post('/api/family/duty_result', {
-      die, config: cfg, duty: d.name, result: {
-        efficiency_pct: Number(s.efficiency) * 100,
-        ripple_pct: s.T_ripple_pct,
-        v_ll_peak_v: s.V_line_peak_V,
-        loss_w: s.P_loss_total_W,
-        mass_kg: s.mass_total_kg,
-      },
-    }));
-  };
-
-  // ── apply a duty: geometry + winding + operating point, existing endpoints ─
-  const applyDuty = async (die: string, cfg: string, duty: string) => {
-    const label = `${cfg} / ${duty}`;
-    setBusy(label); setMsg(null);
-    try {
-      const r = await fetch(`${API}/api/family/payload/${encodeURIComponent(die)}/`
-        + `${encodeURIComponent(cfg)}?duty=${encodeURIComponent(duty)}`);
-      if (!r.ok) throw new Error((await r.json()).detail ?? `HTTP ${r.status}`);
-      const p = await r.json();
-      // 0) mark WHICH die/config the editor is about to become — the geometry
-      //    route enforces the locks against this context, and applying the
-      //    configuration's own canonical values passes by construction.
-      await fetch(`${API}/api/family/activate`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ die, config: cfg, duty }),
-      });
-      // 1) geometry — the die's stamped section + this configuration's stack/wire
-      await updateGeometryViaApi(p.geometry);
-      // 2) winding connection (authoritative endpoint; validates against layout)
-      if (p.sim.connection) {
-        const wr = await fetch(`${API}/api/winding/config`, {
-          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ connection: p.sim.connection,
-                                 layers: p.winding?.layers }),
-        });
-        if (!wr.ok) throw new Error((await wr.json()).detail ?? `winding HTTP ${wr.status}`);
-      }
-      // 2b) the build's materials (magnet grade / core steel) — a configuration
-      //     is a physical product; loading it must load what it is made of.
-      for (const part of ['magnet', 'stator_core', 'rotor_core']) {
-        const mat = p.materials?.[part];
-        if (!mat) continue;
-        const mr = await fetch(`${API}/api/materials`, {
-          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ part, material: mat }),
-        });
-        if (!mr.ok) throw new Error((await mr.json()).detail ?? `materials HTTP ${mr.status}`);
-      }
-      // 3) shared simulation config — what the sweep/optimizer read off-tab
-      const simPatch: any = {
-        max_current: p.sim.current_a, rpm: p.sim.rpm, frequency: p.sim.frequency,
-        phase_offset_deg: p.sim.gamma_deg, mode: p.sim.mode,
-        coil_temp_c: p.sim.coil_temp_c, connection: p.sim.connection,
-      };
-      if (p.sim.daxis_deg != null) simPatch.daxis_deg = p.sim.daxis_deg;
-      Object.keys(simPatch).forEach(k => simPatch[k] == null && delete simPatch[k]);
-      const sr = await fetch(`${API}/api/simulation/config`, {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(simPatch),
-      });
-      if (!sr.ok) throw new Error((await sr.json()).detail ?? `sim HTTP ${sr.status}`);
-      // 4) panel-owned persisted values + live nudge for the mounted panel
-      const set = (k: string, v: any) => {
-        try { localStorage.setItem('sim.' + k, JSON.stringify(v)); } catch { /* quota */ }
-      };
-      set('current', p.sim.current_a); set('gamma', p.sim.gamma_deg);
-      set('rpm', p.sim.rpm); set('frequency', p.sim.frequency);
-      set('opMode', p.sim.mode);
-      if (p.sim.connection) set('connection', p.sim.connection);
-      if (p.sim.daxis_deg != null) set('daxisDeg', String(p.sim.daxis_deg));
-      window.dispatchEvent(new CustomEvent('sim-operating-point', {
-        detail: { current: p.sim.current_a, gamma: p.sim.gamma_deg, rpm: p.sim.rpm,
-                  mode: p.sim.mode, connection: p.sim.connection } }));
-      window.dispatchEvent(new CustomEvent('sim-design-applied'));
-      window.dispatchEvent(new CustomEvent('family-changed'));
-      setMsg(`✓ applied ${label} — press Run in Simulation`);
-      // Straight to the machine the user just loaded (user request).
-      setActiveTab('geometry');
-    } catch (e: any) { setMsg(`✗ apply ${label}: ${e?.message ?? e}`); }
-    setBusy(null);
-  };
-
   const roleColor = (role: string) =>
     role === 'generator' ? '#38bdf8' : '#f59e0b';
 
@@ -484,15 +382,6 @@ const FamilyCatalog: React.FC<{
                                 </IconButton>
                               </span>
                             </Tooltip>
-                            {canWrite && (
-                              <Tooltip title="Record the LAST finished run here (must be at this duty's point)">
-                                <span>
-                                  <IconButton size="small" disabled={!!busy}
-                                    onClick={() => recordResult(die.name, c.name, d)}
-                                    sx={{ fontSize: 12, p: 0.2, color: 'var(--text-3)' }}>📥</IconButton>
-                                </span>
-                              </Tooltip>
-                            )}
                             {canWrite && (
                               <Tooltip title="Delete duty">
                                 <span>

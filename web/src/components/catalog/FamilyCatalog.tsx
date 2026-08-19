@@ -29,7 +29,9 @@ interface Duty {
 interface Cfg {
   name: string; role: string; stack_mm: number | null;
   wire_height_mm: number | null; wire_width_mm: number | null;
-  turns: number | null; connection: string | null; duties: Duty[];
+  turns: number | null; connection: string | null;
+  magnet?: string | null; steel?: string | null;
+  duties: Duty[];
 }
 interface Die {
   name: string; locked: boolean; created?: string;
@@ -45,7 +47,12 @@ const readLS = (k: string, d: any) => {
   catch { return d; }
 };
 
-const FamilyCatalog: React.FC = () => {
+const FamilyCatalog: React.FC<{
+  /** Show only dies of this stator diameter (the page groups by Ø). */
+  diameter?: number;
+  /** Render bare die blocks (no panel, no header) for embedding in a Ø group. */
+  embedded?: boolean;
+}> = ({ diameter, embedded }) => {
   const { updateGeometryViaApi } = useMotorStore();
   const [dies, setDies] = useState<Die[]>([]);
   const [busy, setBusy] = useState<string | null>(null);   // what is being applied/created
@@ -58,6 +65,13 @@ const FamilyCatalog: React.FC = () => {
     } catch (e) { setMsg(`catalog load failed: ${e}`); }
   };
   useEffect(() => { load(); }, []);
+  // The page-level "+ die" button (and sibling Ø sections) announce family
+  // mutations with this event — every embedded instance refetches.
+  useEffect(() => {
+    const onChanged = () => { void load(); };
+    window.addEventListener('family-changed', onChanged);
+    return () => window.removeEventListener('family-changed', onChanged);
+  }, []);
 
   // Every mutation goes through here: run it, surface the backend's own error
   // text (they are written for engineers), reload the tree.
@@ -75,6 +89,7 @@ const FamilyCatalog: React.FC = () => {
     } catch (e) { setMsg(`✗ ${label}: ${e}`); }
     setBusy(null);
     await load();
+    try { window.dispatchEvent(new CustomEvent('family-changed')); } catch { /* SSR */ }
   };
 
   const post = (path: string, body: any) => fetch(`${API}${path}`, {
@@ -170,6 +185,17 @@ const FamilyCatalog: React.FC = () => {
         });
         if (!wr.ok) throw new Error((await wr.json()).detail ?? `winding HTTP ${wr.status}`);
       }
+      // 2b) the build's materials (magnet grade / core steel) — a configuration
+      //     is a physical product; loading it must load what it is made of.
+      for (const part of ['magnet', 'stator_core', 'rotor_core']) {
+        const mat = p.materials?.[part];
+        if (!mat) continue;
+        const mr = await fetch(`${API}/api/materials`, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ part, material: mat }),
+        });
+        if (!mr.ok) throw new Error((await mr.json()).detail ?? `materials HTTP ${mr.status}`);
+      }
       // 3) shared simulation config — what the sweep/optimizer read off-tab
       const simPatch: any = {
         max_current: p.sim.current_a, rpm: p.sim.rpm, frequency: p.sim.frequency,
@@ -204,35 +230,24 @@ const FamilyCatalog: React.FC = () => {
   const roleColor = (role: string) =>
     role === 'generator' ? '#38bdf8' : '#f59e0b';
 
-  return (
-    <Paper sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)',
-                 p: 2, mb: 2, display: 'flex', flexDirection: 'column', gap: 1 }}>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-        <Typography sx={{ fontSize: 14, fontWeight: 700, color: 'var(--text-1)' }}>
-          Families — die / configuration / duty
-          <Tooltip placement="top" title="One stamped lamination (die) is frozen geometry. A configuration changes only what the stamp does not fix: stack length, wire and winding. A duty is a named operating point (mode, current, rpm, γ). Click a duty to load the whole machine into Simulation; ＋ buttons snapshot the CURRENT state at each level.">
-            <span style={{ color: 'var(--text-4)', marginLeft: 6, fontSize: 11, cursor: 'help' }}>ⓘ</span>
-          </Tooltip>
-        </Typography>
-        <Box sx={{ flex: 1 }} />
-        {busy && <CircularProgress size={14} />}
-        <Button size="small" variant="outlined" onClick={createDie}
-          sx={{ textTransform: 'none', fontSize: 11 }}>
-          ＋ die from current geometry
-        </Button>
-      </Box>
+  const shown = dies.filter(d =>
+    diameter == null || Number(d.stator_diameter) === Number(diameter));
+  if (embedded && shown.length === 0 && !msg) return null;
+
+  const body = (
+    <>
       {msg && (
         <Typography sx={{ fontSize: 11,
           color: msg.startsWith('✗') ? '#fca5a5' : '#34d399' }}>{msg}</Typography>
       )}
 
-      {dies.length === 0 && !msg && (
+      {!embedded && shown.length === 0 && !msg && (
         <Typography sx={{ fontSize: 11, color: 'var(--text-4)' }}>
           no dies yet — freeze the current geometry with the button above
         </Typography>
       )}
 
-      {dies.map(die => (
+      {shown.map(die => (
         <Box key={die.name} sx={{ border: '1px solid var(--line-soft)',
           borderRadius: 1, p: 1.2, display: 'flex', flexDirection: 'column', gap: 0.8 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2 }}>
@@ -274,6 +289,8 @@ const FamilyCatalog: React.FC = () => {
                 <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>
                   {c.stack_mm} mm · wire {c.wire_height_mm}×{c.wire_width_mm} mm
                   {' '}· {c.turns} turns · {c.connection}
+                  {c.steel ? ` · ${c.steel}` : ''}
+                  {c.magnet ? ` · ${c.magnet}` : ''}
                 </Typography>
                 <Box sx={{ flex: 1 }} />
                 <Tooltip title="Save the CURRENT Simulation point as a new duty here">
@@ -373,6 +390,30 @@ const FamilyCatalog: React.FC = () => {
           ))}
         </Box>
       ))}
+    </>
+  );
+
+  if (embedded) {
+    return <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>{body}</Box>;
+  }
+  return (
+    <Paper sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)',
+                 p: 2, mb: 2, display: 'flex', flexDirection: 'column', gap: 1 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+        <Typography sx={{ fontSize: 14, fontWeight: 700, color: 'var(--text-1)' }}>
+          Families — die / configuration / duty
+          <Tooltip placement="top" title="One stamped lamination (die) is frozen geometry. A configuration changes only what the stamp does not fix: stack length, wire and winding. A duty is a named operating point (mode, current, rpm, γ). Click a duty to load the whole machine into Simulation; ＋ buttons snapshot the CURRENT state at each level.">
+            <span style={{ color: 'var(--text-4)', marginLeft: 6, fontSize: 11, cursor: 'help' }}>ⓘ</span>
+          </Tooltip>
+        </Typography>
+        <Box sx={{ flex: 1 }} />
+        {busy && <CircularProgress size={14} />}
+        <Button size="small" variant="outlined" onClick={createDie}
+          sx={{ textTransform: 'none', fontSize: 11 }}>
+          ＋ die from current geometry
+        </Button>
+      </Box>
+      {body}
     </Paper>
   );
 };

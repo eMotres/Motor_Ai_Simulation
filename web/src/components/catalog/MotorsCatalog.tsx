@@ -10,6 +10,7 @@ import { useUIStore } from '../../stores/motorStore';
 import { useAuth } from '../../contexts/AuthContext';
 import MyDesigns from './MyDesigns';
 import MotorThumbnail from './MotorThumbnail';
+import FamilyCatalog from './FamilyCatalog';
 import { openMotor } from '../common/motorSettings';
 import HelpTip from '../common/HelpTip';
 
@@ -94,6 +95,38 @@ const MotorsCatalog: React.FC = () => {
   const load = () => fetch(`${API}/api/catalog`).then((r) => r.json()).then(setCat)
     .catch(() => setCat(null)).finally(() => setLoading(false));
   useEffect(() => { load(); }, []);
+
+  // Diameters that have DIES but no catalog motors still need a Ø section —
+  // the page groups EVERYTHING by diameter, families included.
+  const [familyDiams, setFamilyDiams] = useState<number[]>([]);
+  const loadFamilyDiams = () =>
+    fetch(`${API}/api/family/tree`).then(r => r.json())
+      .then(t => setFamilyDiams(((t.dies || []) as { stator_diameter: number }[])
+        .map(d => Number(d.stator_diameter)).filter(Number.isFinite)))
+      .catch(() => setFamilyDiams([]));
+  useEffect(() => {
+    loadFamilyDiams();
+    const onChanged = () => { void loadFamilyDiams(); };
+    window.addEventListener('family-changed', onChanged);
+    return () => window.removeEventListener('family-changed', onChanged);
+  }, []);
+
+  // Page-level "+ die": freeze the CURRENT geometry as a new stamped die.
+  const [dieMsg, setDieMsg] = useState<string | null>(null);
+  const createDie = async () => {
+    const name = window.prompt('New die name (snapshot of the CURRENT geometry):');
+    if (!name) return;
+    setDieMsg(null);
+    try {
+      const r = await fetch(`${API}/api/family/die`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+      if (!r.ok) { setDieMsg(`✗ ${(await r.json()).detail ?? `HTTP ${r.status}`}`); return; }
+      setDieMsg(`✓ die '${name}' created`);
+      window.dispatchEvent(new CustomEvent('family-changed'));
+    } catch (e) { setDieMsg(`✗ ${e}`); }
+  };
 
   // The "saved N ago" labels are relative to NOW, so they rot while the tab sits
   // open — a card that said "just now" an hour ago is simply wrong.  One clock
@@ -328,25 +361,39 @@ const MotorsCatalog: React.FC = () => {
     );
   };
 
+  // ONE hierarchy for the whole tab: Ø diameter → dies (with their
+  // configurations and duty tables) → catalog motors of that diameter.
+  const allDiams = Array.from(new Set([
+    ...cat.diameters_mm.map(Number), ...familyDiams,
+  ])).filter(Number.isFinite).sort((a, b) => a - b);
+
   return (
     <Box>
       {/* ── User's saved designs ──────────────────────────────────── */}
       <MyDesigns />
 
-      {/* ── Catalog by diameter (cards) — ONE section, same style as the
-             Families and My Motors panels above it ─────────────────── */}
-      <Box sx={{ p: 2, borderRadius: 2, border: '1px solid var(--line-soft)',
-                 bgcolor: 'var(--panel-2)' }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mb: 1.5 }}>
         <Typography sx={{ fontSize: 14, fontWeight: 700, color: 'var(--text-1)' }}>
-          Motor catalog
+          Catalog
         </Typography>
-        <HelpTip title="Proven motor designs — aerospace, robotics, EV, marine. Pick one, tune it to your spec (stack length, winding, wire), see the price, and request manufacturing — click Load to open one as your own editable copy." />
+        <HelpTip title="Everything grouped by stator diameter. A 🔒 die is a stamped lamination: its configurations (stack, wire, winding) and their duty tables live right under it — click ▶ on a duty to load the whole machine into Simulation. Below the dies: proven catalog motors of that diameter — click ▶ to open one as your own editable copy." />
+        <Box sx={{ flex: 1 }} />
+        {dieMsg && (
+          <Typography sx={{ fontSize: 11,
+            color: dieMsg.startsWith('✗') ? '#fca5a5' : '#34d399' }}>{dieMsg}</Typography>
+        )}
+        <Button size="small" variant="outlined" onClick={() => void createDie()}
+          sx={{ textTransform: 'none', fontSize: 11 }}>
+          ＋ die from current geometry
+        </Button>
       </Box>
-      {cat.diameters_mm.map((d) => {
+
+      {allDiams.map((d) => {
         const motors = byDiameter(d);
         return (
-          <Box key={d} sx={{ mb: 3 }}>
+          <Box key={d} sx={{ p: 2, mb: 2, borderRadius: 2,
+                             border: '1px solid var(--line-soft)',
+                             bgcolor: 'var(--panel-2)' }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.25 }}>
               <Typography sx={{ fontWeight: 800, color: '#60a5fa', fontSize: '1rem' }}>
                 Ø {d} mm
@@ -355,13 +402,19 @@ const MotorsCatalog: React.FC = () => {
               <Chip size="small" label={`${motors.length} motor${motors.length === 1 ? '' : 's'}`}
                 sx={{ height: 18, fontSize: '0.62rem', bgcolor: 'var(--panel-2)', color: 'var(--text-3)' }} />
             </Box>
+
+            {/* stamped dies of this diameter, with configurations + duties */}
+            <FamilyCatalog embedded diameter={d} />
+
             {motors.length === 0 ? (
-              <Typography sx={{ color: 'var(--text-4)', fontSize: '0.78rem', fontStyle: 'italic', pl: 1, py: 0.5 }}>
-                — no motors yet (spec coming) —
-              </Typography>
+              familyDiams.includes(d) ? null : (
+                <Typography sx={{ color: 'var(--text-4)', fontSize: '0.78rem', fontStyle: 'italic', pl: 1, py: 0.5 }}>
+                  — no motors yet (spec coming) —
+                </Typography>
+              )
             ) : (
               <Box component="table" sx={{
-                width: '100%', borderCollapse: 'collapse',
+                width: '100%', mt: 1, borderCollapse: 'collapse',
                 '& th': { fontSize: 10, fontWeight: 600, color: 'var(--text-4)',
                           textAlign: 'right', p: '2px 6px', whiteSpace: 'nowrap' },
                 '& td': { fontSize: 11.5, color: 'var(--text-2)', textAlign: 'right',
@@ -385,7 +438,6 @@ const MotorsCatalog: React.FC = () => {
           </Box>
         );
       })}
-      </Box>
 
       {/* ── Rename dialog (window.prompt is unreliable — Chrome suppresses it) ── */}
       <Dialog open={!!renameTarget} onClose={() => setRenameTarget(null)}

@@ -35,7 +35,6 @@ import { buildAppTheme, loadThemeMode, saveThemeMode, type AppMode } from './the
 import MotorScene from './components/viewer3d/MotorScene';
 import ParameterVariationTable from './components/sweep/ParameterVariationTable';
 import MotorsCatalog from './components/catalog/MotorsCatalog';
-import FamilyCatalog from './components/catalog/FamilyCatalog';
 import AuthButton from './components/auth/AuthButton';
 import { VersionBadge } from './components/VersionBadge';
 import { useAuth } from './contexts/AuthContext';
@@ -274,7 +273,6 @@ function App() {
     { id: 'motors', label: 'Motors', order: 0, gate: 'always', showViewer: false,
       render: () => (
         <Box sx={{ p: 3, overflowY: 'auto', height: '100%' }}>
-          <FamilyCatalog />
           <MotorsCatalog />
         </Box>
       ) },

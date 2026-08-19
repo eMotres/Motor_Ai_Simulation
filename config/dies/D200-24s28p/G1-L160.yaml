@@ -35,3 +35,7 @@ duties:
   note: gamma not optimized yet
   torque_nm: 363.0
   power_kw: 95.0
+materials:
+  magnet: F52SH_120C
+  stator_core: B15AHV950M
+  rotor_core: B15AHV950M

@@ -183,6 +183,8 @@ def tree():
                 "wire_width_mm": ov.get("wire_width"),
                 "turns": ov.get("num_wires_per_slot"),
                 "connection": w.get("connection"),
+                "magnet": (c.get("materials") or {}).get("magnet"),
+                "steel": (c.get("materials") or {}).get("stator_core"),
                 "duties": [
                     {"name": d.get("name"), "mode": d.get("mode", "motor"),
                      "current_arms": d.get("current_arms"), "rpm": d.get("rpm"),
@@ -279,6 +281,7 @@ def create_config(req: ConfigCreate):
     live = _live_cfg()
     geo = _plain(live.get("geometry")) or {}
     sim = _sim_of(live)
+    mat = _plain(live.get("materials")) or {}
     _save_yaml(_cfg_file(die, name), {
         "name": name,
         "die": die,
@@ -287,6 +290,11 @@ def create_config(req: ConfigCreate):
         "geometry_overrides": {k: geo.get(k) for k in FREE_GEO_KEYS
                                if geo.get(k) is not None},
         "winding": _plain(live.get("winding")) or {},
+        # The build's ACTIVE materials — a configuration is a physical product,
+        # and its magnet grade / core steel are part of what was built.
+        "materials": {k: mat.get(k)
+                      for k in ("magnet", "stator_core", "rotor_core")
+                      if mat.get(k)},
         # Coil temperature deliberately NOT snapshotted: it is an operating
         # condition the Simulation tab owns, not a property of the build.
         "end_winding_factor": sim.get("end_winding_factor"),
@@ -424,6 +432,7 @@ def payload(die: str, cfg: str, duty: Optional[str] = None):
         "die": die, "config": cfg,
         "geometry": geo,
         "winding": c.get("winding") or {},
+        "materials": c.get("materials") or {},
         "sim": {
             "end_winding_factor": c.get("end_winding_factor"),
             "daxis_deg": d.get("daxis_deg"),

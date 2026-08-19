@@ -35,3 +35,7 @@ duties:
   note: sheet wire 0.6; gamma not optimized yet
   torque_nm: 59.0
   power_kw: 13.5
+materials:
+  magnet: F52SH_120C
+  stator_core: B15AHV950M
+  rotor_core: B15AHV950M

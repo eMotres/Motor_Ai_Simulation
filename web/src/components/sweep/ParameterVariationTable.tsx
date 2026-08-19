@@ -142,9 +142,14 @@ const ParameterVariationTable: React.FC = () => {
     load();
     window.addEventListener('family-changed', load);
     window.addEventListener('sim-design-applied', load);
+    // Locks can be toggled from ANOTHER tab (the Motors catalog) or another
+    // browser window entirely — a light poll keeps the greying honest even
+    // when no event reaches this window.
+    const id = setInterval(load, 10_000);
     return () => {
       window.removeEventListener('family-changed', load);
       window.removeEventListener('sim-design-applied', load);
+      clearInterval(id);
     };
   }, []);
   const paramLocked = (name: string): string | null => {

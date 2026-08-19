@@ -261,7 +261,23 @@ const SweepConfigPanel: React.FC = () => {
     else { min = Math.round(min * 100) / 100; max = Math.round(max * 100) / 100; }
     return { min, max, step };
   };
-  const addVariable = (name: string) => { if (name) updateVariation(name, { mode: 'optimize', ...defaultWindow(name) }); };
+  // A variable REMEMBERS the range it last ran with.  Removing it from the
+  // set only flips mode to 'fixed' — min/max/step stay in the store (and the
+  // store survives reloads and follows the user across browsers) — so
+  // re-adding restores the numbers the user last typed instead of clobbering
+  // them with the default window.  The default is only for a variable that was
+  // never configured: the schema seeds min === max (a degenerate stamp, not a
+  // usable range), which is exactly the test.
+  const addVariable = (name: string) => {
+    if (!name) return;
+    const prev = sweepConfig.variations[name];
+    const remembered = !!prev
+      && Number.isFinite(Number(prev.min)) && Number.isFinite(Number(prev.max))
+      && Number(prev.max) > Number(prev.min) && Number(prev.step) > 0;
+    updateVariation(name, remembered
+      ? { mode: 'optimize' }
+      : { mode: 'optimize', ...defaultWindow(name) });
+  };
   const activeNames   = new Set(sweepEntries.map(([n]) => n));
   // Only params MARKED for optimization (schema.optimizable !== false) — same
   // whitelist the geometry table + the optimizer use — not the whole schema.

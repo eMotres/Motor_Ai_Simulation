@@ -1088,9 +1088,24 @@ def scan_designs(req: ScanRequest):
         # Simulation the user is reading de-rated.  Costs a whole extra period
         # of frames per point.
         demag = bool(getattr(req, 'demag', False))
+        # THE RUN SHOWS A PULSE FROM SECOND ONE.  A sweep point with the
+        # panel's physics is minutes of silent subprocess work, and "0/7" for
+        # ten minutes reads as a hang ("что-то не подаёт жизни") — so the
+        # progress carries when the scan started, how many workers solve, and
+        # the measured per-point rate, and the panel can render a живой
+        # elapsed/ETA line while the first point is still cooking.
+        import time as _t_scan
+        _rate0 = {}
+        try:
+            _rate0 = measured_eval_seconds(int(steps))
+        except Exception:
+            pass
         _scan_state.update({"running": True, "done": 0, "total": 0, "result": None,
                             "points": [], "run_id": req.run_id, "error": None, "cancel": False,
-                            "cached": 0})
+                            "cached": 0,
+                            "ts_start": _t_scan.time(),
+                            "workers": int(_scan_worker_count()),
+                            "s_per_eval": float(_rate0.get("s_per_eval", 0.0) or 0.0)})
     _scan_thread = threading.Thread(target=_scan_worker,
                      args=(variables, ops, steps, float(req.coil_temp_c),
                            float(req.ripple_max_pct), max_geom, int(req.seed), req.run_id,

@@ -198,7 +198,16 @@ const SweepStudyPanel: React.FC = () => {
   const chartBoxRef = useRef<HTMLDivElement>(null);
 
   const [running, setRunning] = useState(false);
-  const [progress, setProgress] = useState<{ done: number; total: number; cached: number } | null>(null);
+  const [progress, setProgress] = useState<{ done: number; total: number; cached: number;
+    ts_start?: number; workers?: number; s_per_eval?: number } | null>(null);
+  // A ticking clock so the elapsed line moves even while the backend number
+  // (done/total) stands still — a sweep point is MINUTES of silent subprocess
+  // work, and a frozen line reads as a hang.
+  const [nowS, setNowS] = useState(() => Date.now() / 1000);
+  useEffect(() => {
+    const id = setInterval(() => setNowS(Date.now() / 1000), 1000);
+    return () => clearInterval(id);
+  }, []);
   const [result, setResult] = useState<any>(null);
   const [sentOps, setSentOps] = useState<any[]>([]);
   const [err, setErr] = useState<string | null>(null);
@@ -241,7 +250,7 @@ const SweepStudyPanel: React.FC = () => {
       let st: any;
       try { st = await (await fetch(`${API}/api/optimization/scan/progress`)).json(); } catch { continue; }
       const mine = !want || String(st.run_id ?? '') === want;
-      if (mine) setProgress({ done: st.done ?? 0, total: st.total ?? 1, cached: st.cached ?? 0 });
+      if (mine) setProgress({ done: st.done ?? 0, total: st.total ?? 1, cached: st.cached ?? 0, ts_start: st.ts_start, workers: st.workers, s_per_eval: st.s_per_eval });
       if (mine && Array.isArray(st.points) && st.points.length) saveResult({ points: st.points });
       if (st.running) { waitedForStart = 0; continue; }
       if (st.error && mine) { setErr(st.error); break; }
@@ -275,7 +284,7 @@ const SweepStudyPanel: React.FC = () => {
           runIdRef.current = String(st.run_id ?? '');
           stopRef.current = false; setRunning(true);
           if (Array.isArray(st.points)) saveResult({ points: st.points });
-          setProgress({ done: st.done ?? 0, total: st.total ?? 1, cached: st.cached ?? 0 });
+          setProgress({ done: st.done ?? 0, total: st.total ?? 1, cached: st.cached ?? 0, ts_start: st.ts_start, workers: st.workers, s_per_eval: st.s_per_eval });
           await poll(runIdRef.current); setRunning(false);
         } else if (st.result && Array.isArray(st.result.points)) {
           // History, not the answer to anything this session asked for.
@@ -638,10 +647,24 @@ const SweepStudyPanel: React.FC = () => {
             Clear result
           </Button>
         )}
-        {progress && running && (
-          <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>
-            {progress.done}/{progress.total}{progress.cached ? ` · ${progress.cached} reused` : ''}</Typography>
-        )}
+        {progress && running && (() => {
+          const el = progress.ts_start ? Math.max(0, nowS - progress.ts_start) : null;
+          const mmss = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
+          const per = progress.s_per_eval || 0;
+          const w = Math.max(1, progress.workers || 1);
+          const left = per > 0 ? Math.max(0, ((progress.total - progress.done) / w) * per
+                                             - (progress.done === 0 && el ? Math.min(el, per) : 0)) : null;
+          return (
+            <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>
+              {progress.done}/{progress.total}
+              {progress.cached ? ` · ${progress.cached} reused` : ''}
+              {el != null && ` · solving ${mmss(el)}`}
+              {progress.workers ? ` · ${progress.workers} workers` : ''}
+              {per > 0 && ` · ~${Math.round(per)} s/point`}
+              {left != null && left > 0 && ` · ~${mmss(left)} left`}
+            </Typography>
+          );
+        })()}
         {err && <Typography sx={{ fontSize: 11, color: '#fca5a5' }}>✗ {err}</Typography>}
       </Box>
       {running && <LinearProgress variant={progress ? 'determinate' : 'indeterminate'}

@@ -698,20 +698,27 @@ const MeshPanel: React.FC = () => {
               />
             </Box>
 
-            {/* min_size_mm */}
-            <Box>
+            {/* min_size_mm — a LEGACY gmsh parameter.  The geometry-driven
+                mesh (the solver's default) never reads it: its floor is set
+                by the wire outlines + the q20 quality bound.  A live slider
+                that provably does nothing reads as a broken mesh pipeline
+                (user hit exactly that), so it is disabled while geo mesh is
+                on, with the reason on the ⓘ. */}
+            <Box sx={{ opacity: geoMesh ? 0.45 : 1 }}>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
                 <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>
                   Min element size
-                  <Tooltip title="Lower bound on triangle size at fillets / thin features" placement="right">
+                  <Tooltip placement="right" title={geoMesh
+                    ? 'Not used by the geometry-driven mesh — its minimum size is set by the wire outlines and the q20 quality bound. This slider only affects the legacy gmsh mesher (Geometry-driven mesh OFF).'
+                    : 'Lower bound on triangle size at fillets / thin features (gmsh mesher)'}>
                     <span style={{ color: 'var(--text-4)', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
                   </Tooltip>
                 </Typography>
-                <Chip label={`${minSizeMm.toFixed(2)} mm`} size="small"
+                <Chip label={geoMesh ? 'not used' : `${minSizeMm.toFixed(2)} mm`} size="small"
                   sx={{ fontSize: 11, height: 20, bgcolor: 'var(--panel)', color: 'var(--text-2)' }}/>
               </Box>
               <Slider
-                value={minSizeMm} min={0.1} max={2.0} step={0.05}
+                value={minSizeMm} min={0.1} max={2.0} step={0.05} disabled={geoMesh}
                 onChange={(_, v) => setMinSizeMm(v as number)}
                 sx={{ color: '#3b82f6' }}
               />

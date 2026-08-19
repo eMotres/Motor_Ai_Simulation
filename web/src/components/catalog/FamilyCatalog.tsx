@@ -179,6 +179,80 @@ const FamilyCatalog: React.FC<{
       del(`/api/family/duty/${encodeURIComponent(die)}/${encodeURIComponent(cfg)}/${encodeURIComponent(duty)}`));
   };
 
+  // ── apply a duty: geometry + winding + materials + operating point, all
+  //    through the EXISTING endpoints (this panel owns no write-path of its
+  //    own into the live config) ─────────────────────────────────────────────
+  const applyDuty = async (die: string, cfg: string, duty: string) => {
+    const label = `${cfg} / ${duty}`;
+    setBusy(label); setMsg(null);
+    try {
+      const r = await fetch(`${API}/api/family/payload/${encodeURIComponent(die)}/`
+        + `${encodeURIComponent(cfg)}?duty=${encodeURIComponent(duty)}`);
+      if (!r.ok) throw new Error((await r.json()).detail ?? `HTTP ${r.status}`);
+      const p = await r.json();
+      // 0) mark WHICH die/config/duty the editor is about to become — the
+      //    geometry route enforces the locks against this context, and
+      //    applying the configuration's own canonical values passes.
+      await fetch(`${API}/api/family/activate`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ die, config: cfg, duty }),
+      });
+      // 1) geometry — the die's stamped section + this configuration's stack/wire
+      await updateGeometryViaApi(p.geometry);
+      // 2) winding connection (authoritative endpoint; validates against layout)
+      if (p.sim.connection) {
+        const wr = await fetch(`${API}/api/winding/config`, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ connection: p.sim.connection,
+                                 layers: p.winding?.layers }),
+        });
+        if (!wr.ok) throw new Error((await wr.json()).detail ?? `winding HTTP ${wr.status}`);
+      }
+      // 2b) the build's materials — a configuration is a physical product;
+      //     loading it must load what it is made of.
+      for (const part of ['magnet', 'stator_core', 'rotor_core']) {
+        const mat = p.materials?.[part];
+        if (!mat) continue;
+        const mr = await fetch(`${API}/api/materials`, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ part, material: mat }),
+        });
+        if (!mr.ok) throw new Error((await mr.json()).detail ?? `materials HTTP ${mr.status}`);
+      }
+      // 3) shared simulation config — what the sweep/optimizer read off-tab
+      const simPatch: any = {
+        max_current: p.sim.current_a, rpm: p.sim.rpm, frequency: p.sim.frequency,
+        phase_offset_deg: p.sim.gamma_deg, mode: p.sim.mode,
+        connection: p.sim.connection,
+      };
+      if (p.sim.daxis_deg != null) simPatch.daxis_deg = p.sim.daxis_deg;
+      Object.keys(simPatch).forEach(k => simPatch[k] == null && delete simPatch[k]);
+      const sr = await fetch(`${API}/api/simulation/config`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(simPatch),
+      });
+      if (!sr.ok) throw new Error((await sr.json()).detail ?? `sim HTTP ${sr.status}`);
+      // 4) panel-owned persisted values + live nudge for the mounted panel
+      const set = (k: string, v: any) => {
+        try { localStorage.setItem('sim.' + k, JSON.stringify(v)); } catch { /* quota */ }
+      };
+      set('current', p.sim.current_a); set('gamma', p.sim.gamma_deg);
+      set('rpm', p.sim.rpm); set('frequency', p.sim.frequency);
+      set('opMode', p.sim.mode);
+      if (p.sim.connection) set('connection', p.sim.connection);
+      if (p.sim.daxis_deg != null) set('daxisDeg', String(p.sim.daxis_deg));
+      window.dispatchEvent(new CustomEvent('sim-operating-point', {
+        detail: { current: p.sim.current_a, gamma: p.sim.gamma_deg, rpm: p.sim.rpm,
+                  mode: p.sim.mode, connection: p.sim.connection } }));
+      window.dispatchEvent(new CustomEvent('sim-design-applied'));
+      window.dispatchEvent(new CustomEvent('family-changed'));
+      setMsg(`✓ applied ${label} — press Run in Simulation`);
+      // Straight to the machine the user just loaded (user request).
+      setActiveTab('geometry');
+    } catch (e: any) { setMsg(`✗ apply ${label}: ${e?.message ?? e}`); }
+    setBusy(null);
+  };
+
   const roleColor = (role: string) =>
     role === 'generator' ? '#38bdf8' : '#f59e0b';
 

@@ -3835,6 +3835,20 @@ def fem_transient_sliding_band(
                     # over 490 elements, same 241/490, T_avg to 8 digits) at
                     # 288 s against 798 s.
                     _A_start = A2.copy()
+                    # ── WHERE the re-solve happens is a question of whose
+                    # numbers the frame feeds.  A WARM-UP frame's numbers are
+                    # DISCARDED — re-solving it buys nothing the reported
+                    # window ever sees — so there the weakening simply carries
+                    # into the next frame, exactly the Maxwell convention the
+                    # user described (and judging on the pre-weakening field is
+                    # the conservative side: the stronger magnet drives the
+                    # stronger demagnetising field).  A REPORTED frame's
+                    # numbers ARE the result, so a trip there still re-solves:
+                    # torque and losses may not be billed on a magnet that no
+                    # longer exists.  After a settled warm-up such trips are
+                    # rare, so the honest path costs almost nothing.
+                    if not _warm_done:
+                        break                    # carry into the NEXT frame
                     continue                     # re-solve THIS frame
             break
 

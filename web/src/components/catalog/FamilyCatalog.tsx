@@ -306,8 +306,9 @@ const FamilyCatalog: React.FC = () => {
                 }}>
                   <thead>
                     <tr>
-                      <th>duty</th><th>kW</th><th>Nm</th><th>rpm</th><th>A</th>
-                      <th>γ°</th><th>η %</th><th>ripple %</th><th>V L-L</th>
+                      <th>duty</th><th>kW</th><th>Nm</th><th>rpm</th>
+                      <th>A</th><th>V L-L</th>
+                      <th>γ°</th><th>η %</th><th>ripple %</th>
                       <th>loss W</th><th>kg</th><th style={{ textAlign: 'center' }} />
                     </tr>
                   </thead>
@@ -331,10 +332,10 @@ const FamilyCatalog: React.FC = () => {
                           <td>{fmt(d.torque_nm)}</td>
                           <td>{fmt(d.rpm, 0)}</td>
                           <td>{fmt(d.current_arms)}</td>
+                          <td>{fmt(r.v_ll_peak_v, 0)}</td>
                           <td>{fmt(d.gamma_deg)}</td>
                           <td>{fmt(r.efficiency_pct, 2)}</td>
                           <td>{fmt(r.ripple_pct)}</td>
-                          <td>{fmt(r.v_ll_peak_v, 0)}</td>
                           <td>{fmt(r.loss_w, 0)}</td>
                           <td>{fmt(r.mass_kg, 2)}</td>
                           <td style={{ textAlign: 'center' }}>

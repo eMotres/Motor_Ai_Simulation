@@ -272,7 +272,12 @@ function App() {
     render: () => React.ReactNode;
   }> = [
     { id: 'motors', label: 'Motors', order: 0, gate: 'always', showViewer: false,
-      render: () => <><FamilyCatalog /><MotorsCatalog /></> },
+      render: () => (
+        <Box sx={{ p: 3, overflowY: 'auto', height: '100%' }}>
+          <FamilyCatalog />
+          <MotorsCatalog />
+        </Box>
+      ) },
     { id: 'geometry', label: 'Geometry', order: 20, panelId: 'geometry', gate: 'fullUI', showViewer: true,
       render: () => (
         <Box sx={{ display: 'flex', height: '100%' }}>

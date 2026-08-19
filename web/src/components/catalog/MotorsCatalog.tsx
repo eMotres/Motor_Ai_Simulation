@@ -4,7 +4,6 @@ import {
   Dialog, DialogTitle, DialogContent, DialogActions, TextField,
 } from '@mui/material';
 import BoltIcon from '@mui/icons-material/Bolt';
-import CheckIcon from '@mui/icons-material/Check';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import DriveFileRenameOutlineIcon from '@mui/icons-material/DriveFileRenameOutline';
 import LockIcon from '@mui/icons-material/Lock';
@@ -49,8 +48,6 @@ interface Tier {
   tagline: string; features: string[];
 }
 interface Catalog { tiers: Tier[]; diameters_mm: number[]; motors: Motor[]; }
-
-const tierColor: Record<string, string> = { free: '#10b981', pro: '#3b82f6', team: '#a855f7' };
 
 const fmtT = (t: number) => (t >= 10 ? t.toFixed(1) : t.toFixed(2));
 const fmtP = (w: number) => (w >= 1000 ? `${(w / 1000).toFixed(2)} kW` : `${Math.round(w)} W`);
@@ -274,7 +271,6 @@ const MotorsCatalog: React.FC = () => {
             <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
               <Chip size="small" label={`Ø ${m.diameter_mm} mm`} sx={{ height: 18, fontSize: '0.6rem', bgcolor: 'var(--panel-2)', color: '#60a5fa', fontWeight: 700 }} />
               <Chip size="small" label={`${m.slots}s / ${m.poles}p`} sx={{ height: 18, fontSize: '0.6rem', bgcolor: 'var(--panel-2)', color: 'var(--text-2)' }} />
-              <Chip size="small" label={m.tier} sx={{ height: 18, fontSize: '0.58rem', textTransform: 'capitalize', bgcolor: `${tierColor[m.tier] ?? 'var(--line)'}22`, color: tierColor[m.tier] ?? 'var(--text-2)' }} />
               {active && (
                 <Tooltip title="This motor's geometry is the one loaded in the editor right now.">
                   <Chip size="small" label="in editor"
@@ -396,53 +392,20 @@ const MotorsCatalog: React.FC = () => {
   };
 
   return (
-    <Box sx={{ p: 3, overflowY: 'auto', height: '100%' }}>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mb: 3 }}>
-        <Typography variant="h5" sx={{ fontWeight: 800, color: 'var(--text-0)' }}>
-          Motor Catalog
-        </Typography>
-        <Typography sx={{ color: 'var(--text-2)', fontSize: '0.9rem' }}>
-          — aerospace, robotics, EV, marine
-        </Typography>
-        <HelpTip title="Proven motor designs. Pick one, tune it to your spec (stack length, winding, wire), see the price, and request manufacturing — click Load to open one as your own editable copy." />
-      </Box>
-
+    <Box>
       {/* ── User's saved designs ──────────────────────────────────── */}
       <MyDesigns />
 
-      {/* ── Pricing tiers ─────────────────────────────────────────── */}
-      <Box sx={{ display: 'flex', gap: 2, mb: 4, flexWrap: 'wrap' }}>
-        {cat.tiers.map((t) => (
-          <Box key={t.id} sx={{
-            flex: '1 1 220px', maxWidth: 300, p: 2, borderRadius: 2,
-            border: `1px solid ${t.highlight ? tierColor[t.id] : 'var(--panel)'}`,
-            bgcolor: t.highlight ? 'var(--panel-2)' : 'var(--panel-2)',
-            boxShadow: t.highlight ? `0 0 0 1px ${tierColor[t.id]}55` : 'none',
-          }}>
-            <Box sx={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
-              <Typography sx={{ fontWeight: 700, color: tierColor[t.id] }}>{t.name}</Typography>
-              <Typography sx={{ color: 'var(--text-0)', fontWeight: 700 }}>
-                {t.price_usd === 0 ? 'Free' : `$${t.price_usd}/mo`}
-              </Typography>
-            </Box>
-            <Typography sx={{ color: 'var(--text-3)', fontSize: '0.7rem', mb: 1 }}>{t.tagline}</Typography>
-            {t.features.map((f, i) => (
-              <Box key={i} sx={{ display: 'flex', gap: 0.5, alignItems: 'flex-start', mb: 0.25 }}>
-                <CheckIcon sx={{ fontSize: 14, color: tierColor[t.id], mt: '2px' }} />
-                <Typography sx={{ color: 'var(--text-1)', fontSize: '0.72rem' }}>{f}</Typography>
-              </Box>
-            ))}
-            <Button size="small" fullWidth disabled={t.price_usd === 0}
-              variant={t.highlight ? 'contained' : 'outlined'}
-              sx={{ mt: 1.5, textTransform: 'none', fontSize: '0.72rem',
-                ...(t.price_usd === 0 ? { color: 'var(--text-3)' } : {}) }}>
-              {t.price_usd === 0 ? 'Current plan' : 'Upgrade (soon)'}
-            </Button>
-          </Box>
-        ))}
+      {/* ── Catalog by diameter (cards) — ONE section, same style as the
+             Families and My Motors panels above it ─────────────────── */}
+      <Box sx={{ p: 2, borderRadius: 2, border: '1px solid var(--line-soft)',
+                 bgcolor: 'var(--panel-2)' }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mb: 1.5 }}>
+        <Typography sx={{ fontSize: 14, fontWeight: 700, color: 'var(--text-1)' }}>
+          Motor catalog
+        </Typography>
+        <HelpTip title="Proven motor designs — aerospace, robotics, EV, marine. Pick one, tune it to your spec (stack length, winding, wire), see the price, and request manufacturing — click Load to open one as your own editable copy." />
       </Box>
-
-      {/* ── Catalog by diameter (cards) ───────────────────────────── */}
       {cat.diameters_mm.map((d) => {
         const motors = byDiameter(d);
         return (
@@ -467,6 +430,7 @@ const MotorsCatalog: React.FC = () => {
           </Box>
         );
       })}
+      </Box>
 
       {/* ── Rename dialog (window.prompt is unreliable — Chrome suppresses it) ── */}
       <Dialog open={!!renameTarget} onClose={() => setRenameTarget(null)}

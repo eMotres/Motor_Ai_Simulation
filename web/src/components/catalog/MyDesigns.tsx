@@ -64,8 +64,8 @@ const MyDesigns: React.FC = () => {
   };
 
   return (
-    <Box sx={{ mb: 4, p: 2, borderRadius: 2, border: '1px solid var(--line-soft)', bgcolor: 'var(--panel-2)' }}>
-      <Typography sx={{ fontWeight: 800, color: 'var(--text-0)', fontSize: '1rem', mb: 1 }}>My Motors</Typography>
+    <Box sx={{ mb: 2, p: 2, borderRadius: 2, border: '1px solid var(--line-soft)', bgcolor: 'var(--panel-2)' }}>
+      <Typography sx={{ fontSize: 14, fontWeight: 700, color: 'var(--text-1)', mb: 1 }}>My Motors</Typography>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 1.5, flexWrap: 'wrap' }}>
         <TextField size="small" placeholder="Name this design…" value={name}
           onChange={(e) => setName(e.target.value)}

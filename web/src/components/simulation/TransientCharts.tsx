@@ -499,12 +499,22 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
         // User pressed Stop → don't retry, don't surface as an error.
         if (ctrl.signal.aborted || /abort/i.test(msg)) { setBusy(false); return; }
         const isNetwork = /Failed to fetch|NetworkError|TypeError/i.test(msg);
-        if (isNetwork && i < 4) {
-          // wait 2 s for the supervisor to bring uvicorn back up, then retry
-          setError(`Backend hiccup — retrying (attempt ${i+2}/5)…`);
-          setTimeout(() => attempt(i+1), 2000);
+        // A backend restart takes ~15-20 s to come back (watchdog task), and a
+        // solve that died with it is NOT recoverable — the retry re-submits
+        // and the backend re-solves from scratch (cache miss), which is the
+        // honest recovery.  The old 4×2 s retry window was SHORTER than a
+        // restart, so the user got a permanent "Failed to fetch" and a summary
+        // silently frozen on the previous run — reported many times.
+        if (isNetwork && i < 8) {
+          setError(`Backend connection lost — the running solve died with it; `
+                 + `reconnecting and re-solving (attempt ${i + 2}/9)…`);
+          setTimeout(() => attempt(i + 1), Math.min(15000, 2000 + i * 2000));
         } else {
-          setError(msg); setBusy(false);
+          setError(isNetwork
+            ? 'Backend connection lost mid-solve — the run DIED with a server '
+            + 'restart and nothing was updated. Press Re-run Simulation.'
+            : msg);
+          setBusy(false);
         }
       }
     };

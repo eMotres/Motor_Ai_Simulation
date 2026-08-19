@@ -17,18 +17,21 @@ winding:
   n_parallel: 2
   n_series: 2
   layers: 1
-coil_temp_c: 120.0
 end_winding_factor: 1.144
 duties:
 - name: peak
   mode: generator
-  current_arms: 208.0
+  current_arms: 294.0
   rpm: 3800.0
   gamma_deg: 10.0
-  note: 387 Nm / 154 kW target (sheet); gamma not optimized yet
+  note: gamma not optimized yet
+  torque_nm: 387.0
+  power_kw: 145.0
 - name: optimal
   mode: generator
-  current_arms: 194.0
+  current_arms: 275.0
   rpm: 2500.0
   gamma_deg: 10.0
-  note: 363 Nm / 95 kW target (sheet); gamma not optimized yet
+  note: gamma not optimized yet
+  torque_nm: 363.0
+  power_kw: 95.0

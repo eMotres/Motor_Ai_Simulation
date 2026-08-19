@@ -13,21 +13,34 @@ import {
   Box, Paper, Typography, Button, Chip, Tooltip, IconButton, CircularProgress,
 } from '@mui/material';
 import { useMotorStore } from '../../stores/motorStore';
+import MotorThumbnail from './MotorThumbnail';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
 interface Duty {
   name: string; mode: string; current_arms: number; rpm: number;
-  gamma_deg: number; note: string;
+  gamma_deg: number; torque_nm?: number | null; power_kw?: number | null;
+  note: string;
 }
 interface Cfg {
-  name: string; role: string; stack_mm: number | null; wire: string;
-  connection: string | null; coil_temp_c: number | null; duties: Duty[];
+  name: string; role: string; stack_mm: number | null;
+  wire_height_mm: number | null; wire_width_mm: number | null;
+  turns: number | null; connection: string | null; duties: Duty[];
 }
 interface Die {
   name: string; locked: boolean; created?: string;
-  slots: number; poles: number; stator_diameter: number; configs: Cfg[];
+  slots: number; poles: number; stator_diameter: number;
+  thumb_svg?: string | null; configs: Cfg[];
 }
+
+/** "peak · 145 kW · 387 Nm · 3800 rpm · 294 A" — the card IS the spec line. */
+const dutyLabel = (d: Duty) => [
+  d.name,
+  d.power_kw != null ? `${d.power_kw} kW` : null,
+  d.torque_nm != null ? `${d.torque_nm} Nm` : null,
+  `${d.rpm} rpm`,
+  `${d.current_arms} A`,
+].filter(Boolean).join(' · ');
 
 const readLS = (k: string, d: any) => {
   try { const v = localStorage.getItem('sim.' + k); return v == null ? d : JSON.parse(v); }
@@ -148,13 +161,12 @@ const FamilyCatalog: React.FC = () => {
       };
       set('current', p.sim.current_a); set('gamma', p.sim.gamma_deg);
       set('rpm', p.sim.rpm); set('frequency', p.sim.frequency);
-      set('opMode', p.sim.mode); set('coilTemp', p.sim.coil_temp_c);
+      set('opMode', p.sim.mode);
       if (p.sim.connection) set('connection', p.sim.connection);
       if (p.sim.daxis_deg != null) set('daxisDeg', String(p.sim.daxis_deg));
       window.dispatchEvent(new CustomEvent('sim-operating-point', {
         detail: { current: p.sim.current_a, gamma: p.sim.gamma_deg, rpm: p.sim.rpm,
-                  mode: p.sim.mode, coilTemp: p.sim.coil_temp_c,
-                  connection: p.sim.connection } }));
+                  mode: p.sim.mode, connection: p.sim.connection } }));
       window.dispatchEvent(new CustomEvent('sim-design-applied'));
       setMsg(`✓ applied ${label} — open Simulation and press Run`);
     } catch (e: any) { setMsg(`✗ apply ${label}: ${e?.message ?? e}`); }
@@ -195,7 +207,11 @@ const FamilyCatalog: React.FC = () => {
       {dies.map(die => (
         <Box key={die.name} sx={{ border: '1px solid var(--line-soft)',
           borderRadius: 1, p: 1.2, display: 'flex', flexDirection: 'column', gap: 0.8 }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2 }}>
+            <Box sx={{ flexShrink: 0, lineHeight: 0 }}>
+              <MotorThumbnail slots={die.slots} poles={die.poles} size={56}
+                thumbSvg={die.thumb_svg ?? undefined} />
+            </Box>
             <Typography sx={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>
               {die.locked ? '🔒 ' : ''}{die.name}
             </Typography>
@@ -230,8 +246,8 @@ const FamilyCatalog: React.FC = () => {
                 sx={{ height: 18, fontSize: 10, color: roleColor(c.role),
                       bgcolor: 'transparent', border: `1px solid ${roleColor(c.role)}55` }} />
               <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>
-                L={c.stack_mm} · {c.wire} · {c.connection}
-                {c.coil_temp_c != null ? ` · ${c.coil_temp_c}°C` : ''}
+                {c.stack_mm} mm · wire {c.wire_height_mm}×{c.wire_width_mm} mm
+                {' '}· {c.turns} turns · {c.connection}
               </Typography>
               <Box sx={{ flex: 1 }} />
               {c.duties.map(d => (
@@ -240,7 +256,7 @@ const FamilyCatalog: React.FC = () => {
                          + (d.note ? ` — ${d.note}` : '')
                          + ' · click = load into Simulation'}>
                   <Chip size="small" clickable
-                    label={busy === `${c.name} / ${d.name}` ? '…' : d.name}
+                    label={busy === `${c.name} / ${d.name}` ? '…' : dutyLabel(d)}
                     onClick={() => applyDuty(die.name, c.name, d.name)}
                     onDelete={() => deleteDuty(die.name, c.name, d.name)}
                     sx={{ height: 22, fontSize: 11,

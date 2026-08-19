@@ -122,6 +122,8 @@ class DutySpec(BaseModel):
     current_arms: Optional[float] = None  # None + from_current → read Simulation
     rpm: Optional[float] = None
     gamma_deg: Optional[float] = None
+    torque_nm: Optional[float] = None    # target/rated torque — shown on the card
+    power_kw: Optional[float] = None     # target/rated power — shown on the card
     note: str = ""
     from_current: bool = False           # fill the Nones from the live Simulation
 
@@ -165,15 +167,16 @@ def tree():
                 "name": cf.stem,
                 "role": c.get("role", "motor"),
                 "stack_mm": ov.get("motor_length"),
-                "wire": "%gx%g n%s" % (ov.get("wire_height", 0),
-                                       ov.get("wire_width", 0),
-                                       ov.get("num_wires_per_slot", "?")),
+                "wire_height_mm": ov.get("wire_height"),
+                "wire_width_mm": ov.get("wire_width"),
+                "turns": ov.get("num_wires_per_slot"),
                 "connection": w.get("connection"),
-                "coil_temp_c": c.get("coil_temp_c"),
                 "duties": [
                     {"name": d.get("name"), "mode": d.get("mode", "motor"),
                      "current_arms": d.get("current_arms"), "rpm": d.get("rpm"),
-                     "gamma_deg": d.get("gamma_deg"), "note": d.get("note", "")}
+                     "gamma_deg": d.get("gamma_deg"),
+                     "torque_nm": d.get("torque_nm"), "power_kw": d.get("power_kw"),
+                     "note": d.get("note", "")}
                     for d in (c.get("duties") or [])
                 ],
             })
@@ -183,6 +186,7 @@ def tree():
             "created": die.get("created"),
             "slots": geo.get("num_slots"), "poles": geo.get("num_poles"),
             "stator_diameter": geo.get("stator_diameter"),
+            "thumb_svg": die.get("thumb_svg"),
             "configs": cfgs,
         })
     return {"dies": out}
@@ -201,12 +205,21 @@ def create_die(req: DieCreate):
     if not geo:
         raise HTTPException(500, detail="live config has no geometry block")
     sim = _sim_of(live)
+    # The card's picture is the REAL stamped cross-section — same generator the
+    # motor catalog uses; None (unbuildable) just means the card falls back to
+    # a schematic, never a failed die creation.
+    try:
+        from motor_ai_sim.routes.presets import _gen_thumb_svg
+        thumb = _gen_thumb_svg(dict(geo))
+    except Exception:
+        thumb = None
     _save_yaml(_die_file(name), {
         "name": name,
         "locked": True,
         "created": datetime.now().isoformat(timespec="seconds"),
         # d-axis is a property of the stamped topology — snapshot the pin.
         "daxis_deg": sim.get("daxis_deg"),
+        "thumb_svg": thumb,
         "geometry": dict(geo),
     })
     log.info("family: die '%s' created from the live geometry (%d keys)",
@@ -262,7 +275,8 @@ def create_config(req: ConfigCreate):
         "geometry_overrides": {k: geo.get(k) for k in FREE_GEO_KEYS
                                if geo.get(k) is not None},
         "winding": _plain(live.get("winding")) or {},
-        "coil_temp_c": sim.get("coil_temp_c"),
+        # Coil temperature deliberately NOT snapshotted: it is an operating
+        # condition the Simulation tab owns, not a property of the build.
         "end_winding_factor": sim.get("end_winding_factor"),
         "duties": [],
     })
@@ -313,11 +327,16 @@ def upsert_duty(req: DutyCreate):
     if not (float(d.current_arms) > 0 and float(d.rpm) > 0):
         raise HTTPException(422, detail="current_arms and rpm must be positive")
     duties = [x for x in (c.get("duties") or []) if x.get("name") != dname]
-    duties.append({"name": dname, "mode": d.mode,
-                   "current_arms": round(float(d.current_arms), 3),
-                   "rpm": round(float(d.rpm), 1),
-                   "gamma_deg": round(float(d.gamma_deg), 3),
-                   "note": d.note or ""})
+    entry = {"name": dname, "mode": d.mode,
+             "current_arms": round(float(d.current_arms), 3),
+             "rpm": round(float(d.rpm), 1),
+             "gamma_deg": round(float(d.gamma_deg), 3),
+             "note": d.note or ""}
+    if d.torque_nm is not None:
+        entry["torque_nm"] = round(float(d.torque_nm), 2)
+    if d.power_kw is not None:
+        entry["power_kw"] = round(float(d.power_kw), 2)
+    duties.append(entry)
     c["duties"] = duties
     _save_yaml(p, c)
     log.info("family: duty '%s/%s/%s' saved (%s, %.1f Arms @ %.0f rpm, γ=%.2f°)",
@@ -357,7 +376,6 @@ def payload(die: str, cfg: str, duty: Optional[str] = None):
         "geometry": geo,
         "winding": c.get("winding") or {},
         "sim": {
-            "coil_temp_c": c.get("coil_temp_c"),
             "end_winding_factor": c.get("end_winding_factor"),
             "daxis_deg": d.get("daxis_deg"),
             "connection": (c.get("winding") or {}).get("connection"),

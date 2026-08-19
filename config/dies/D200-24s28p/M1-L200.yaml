@@ -17,7 +17,6 @@ winding:
   n_parallel: 2
   n_series: 2
   layers: 1
-coil_temp_c: 120.0
 end_winding_factor: 1.144
 duties:
 - name: take-off
@@ -25,16 +24,22 @@ duties:
   current_arms: 404.465
   rpm: 850.0
   gamma_deg: 10.0
-  note: 850 Nm @ 850 rpm - the validated point
+  note: ANSYS-validated point
+  torque_nm: 850.0
+  power_kw: 75.7
 - name: cruise
   mode: motor
   current_arms: 46.0
   rpm: 1400.0
   gamma_deg: 10.0
-  note: 116 Nm target (sheet); gamma not optimized yet
+  note: sheet target; gamma not optimized yet
+  torque_nm: 116.0
+  power_kw: 17.0
 - name: top-speed
   mode: motor
   current_arms: 107.0
   rpm: 2600.0
   gamma_deg: 10.0
-  note: 275.5 Nm target (sheet); gamma not optimized yet
+  note: sheet target; gamma not optimized yet
+  torque_nm: 275.5
+  power_kw: 75.0

@@ -13,11 +13,10 @@ geometry_overrides:
   insulation_thickness: 0.2
 winding:
   n_coils_per_phase: 4
-  connection: 4S
-  n_parallel: 1
-  n_series: 4
+  connection: 4P
+  n_parallel: 4
+  n_series: 1
   layers: 1
-coil_temp_c: 120.0
 end_winding_factor: 1.144
 duties:
 - name: peak
@@ -25,10 +24,14 @@ duties:
   current_arms: 36.0
   rpm: 3000.0
   gamma_deg: 10.0
-  note: 59 Nm / 18.5 kW target (sheet, wire 0.6); gamma not optimized yet
+  note: sheet wire 0.6; gamma not optimized yet
+  torque_nm: 59.0
+  power_kw: 18.5
 - name: optimal
   mode: generator
   current_arms: 31.0
   rpm: 2200.0
   gamma_deg: 10.0
-  note: 59 Nm / 13.5 kW target (sheet, wire 0.6); gamma not optimized yet
+  note: sheet wire 0.6; gamma not optimized yet
+  torque_nm: 59.0
+  power_kw: 13.5

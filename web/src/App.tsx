@@ -25,8 +25,6 @@ import {
   ViewInAr as ViewInArIcon,
   Build as BuildIcon,
   Square as SquareIcon,
-  BubbleChart as BubbleChartIcon,
-  Layers as LayersIcon,
   DeleteSweep as DeleteSweepIcon,
   LightMode as LightModeIcon,
   DarkMode as DarkModeIcon,
@@ -218,6 +216,14 @@ function App() {
     loadServerSweepConfig,
   } = useMotorStore();
 
+  // Point-cloud and hybrid render modes were retired from the toolbar (user
+  // decision) — a stored selection of either would leave the viewer in a mode
+  // with no button, so coerce it to solid once on load.
+  useEffect(() => {
+    if (viewMode === 'pointcloud' || viewMode === 'hybrid') setViewMode('solid');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     fetchGeometryFromApi();
     fetchSchemaFromApi();
@@ -314,14 +320,8 @@ function App() {
                 <ToggleButton value="solid" sx={{ px: 1 }}>
                   <Tooltip title="Solid Mesh"><SquareIcon fontSize="small" /></Tooltip>
                 </ToggleButton>
-                <ToggleButton value="pointcloud" sx={{ px: 1 }}>
-                  <Tooltip title="Point Cloud"><BubbleChartIcon fontSize="small" /></Tooltip>
-                </ToggleButton>
                 <ToggleButton value="stl" sx={{ px: 1 }}>
                   <Tooltip title="STL (CadQuery)"><ViewInArIcon fontSize="small" /></Tooltip>
-                </ToggleButton>
-                <ToggleButton value="hybrid" sx={{ px: 1 }}>
-                  <Tooltip title="Hybrid"><LayersIcon fontSize="small" /></Tooltip>
                 </ToggleButton>
               </ToggleButtonGroup>
               <Tooltip title="Generate STL from CadQuery">

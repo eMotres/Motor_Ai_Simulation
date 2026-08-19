@@ -27,6 +27,7 @@ PSLG is derived deterministically from the polygons.
 from __future__ import annotations
 import logging
 import math
+import os as _os_gm
 import os
 from typing import Dict, List, Optional, Tuple
 
@@ -1351,6 +1352,30 @@ def geo_mesh_halves(p: Dict, polys: Dict, outer_air_factor: float = 1.2,
     belt — the stator bore lives on an INTERIOR ring (the polygon exterior min
     is the yoke, not the bore), so _radius_span would grid the wrong circle."""
     from skfem import MeshTri
+
+    # ── SB_WIRE_SIMPLIFY_MM (study knob, default off): Douglas-Peucker the
+    # wire outlines before meshing.  Keeps every true corner (rectangles stay
+    # rectangles), drops fillet-arc points within the tolerance — the wire
+    # boundary is what pins the mesh density floor (measured: max element
+    # size saturates at ~4 mm because of it).  Physics topology untouched:
+    # every strand keeps its own region, only its outline gets fewer chords.
+    _wsimp = 0.0
+    try:
+        _wsimp = float(_os_gm.environ.get("SB_WIRE_SIMPLIFY_MM", "0") or 0.0)
+    except ValueError:
+        _wsimp = 0.0
+    if _wsimp > 0 and polys.get("coils"):
+        polys = dict(polys)
+        _n0 = sum(len(w.exterior.coords) for w in polys["coils"]
+                  if w is not None and not w.is_empty)
+        polys["coils"] = [
+            (w.simplify(_wsimp, preserve_topology=True)
+             if w is not None and not w.is_empty else w)
+            for w in polys["coils"]]
+        _n1 = sum(len(w.exterior.coords) for w in polys["coils"]
+                  if w is not None and not w.is_empty)
+        log.info("SB_WIRE_SIMPLIFY_MM=%.3g: coil outline points %d -> %d",
+                 _wsimp, _n0, _n1)
 
     # gap-facing radii: belt spec first, else the geometry params (NEVER the
     # polygon span — the stator bore is an interior ring).

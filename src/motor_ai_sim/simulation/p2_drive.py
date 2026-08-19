@@ -28,9 +28,21 @@ arguments on every call.
 from __future__ import annotations
 
 import math
+import os as _os
 
 import numpy as np
 from scipy.sparse import bmat as _bmat, diags as _diags
+
+# Fixed-pattern linear algebra in the bordered Newton: nothing whose
+# sparsity pattern holds for the frame is re-merged or re-converted inside
+# the iteration loop.  Algebraically identical (same matrices, same solves);
+# floating-point sums re-associate at the eps level — measured on the
+# validated take-off point (12 steps, eddy+demag, 27 frames): x1.62 wall
+# (680.8 s -> 421.2 s), T_avg rel 7.7e-14, ripple 6.3e-13, V_peak 7.8e-14,
+# P_cu identical — the same class of noise as MKL's own threaded
+# nondeterminism (~1e-14 run to run).  SB_NO_FAST_LA=1 is the escape hatch,
+# mirroring SB_NO_PARDISO_REUSE.
+_SB_FAST_LA = _os.environ.get("SB_NO_FAST_LA") != "1"
 
 from motor_ai_sim.simulation.drive import (
     circuit_residual_ll, circuit_jacobian_ll,
@@ -245,10 +257,25 @@ class P2Drive:
         _cn = max(float(np.linalg.norm(cr)), 1e-30)
         Bf = (Pro.T @ self.G).tocsr()[free, :]
         nit = 0; rrel = 1.0
+        # ── SB_FAST_LA per-FRAME precompute ──────────────────────────────
+        # Everything here has a pattern fixed for the whole frame: the
+        # projection restricted to the free set, and Msd in that basis.
+        # Doing it once kills the per-iteration (J+Msd) N-sized merge, the
+        # [free][:, free] slicing (a CSR→CSC conversion each) and one of the
+        # two big projection products.
+        if _SB_FAST_LA:
+            _Pt = Pro.T.tocsr()
+            _Pf = Pro.tocsc()[:, free].tocsr()
+            _PfT = _Pf.T.tocsr()
+            _Msd_ff = (_PfT @ (self.Msd @ _Pf)).tocsr()
 
         def _res_e(Av, Uv, Km):
-            rf = np.asarray(Pro.T @ ((Km + self.Msd) @ Av - self.G @ Uv
-                                     - rhs_e)).ravel()[free]
+            if _SB_FAST_LA:
+                _t = Km @ Av + self.Msd @ Av - self.G @ Uv - rhs_e
+                rf = np.asarray(_Pt @ _t).ravel()[free]
+            else:
+                rf = np.asarray(Pro.T @ ((Km + self.Msd) @ Av - self.G @ Uv
+                                         - rhs_e)).ravel()[free]
             rc = self.Sdt * Uv - np.asarray(self.G.T @ Av).ravel() - cr
             return rf, rc, max(float(np.linalg.norm(rf)) / _bn,
                                float(np.linalg.norm(rc)) / _cn)
@@ -276,7 +303,10 @@ class P2Drive:
                 T = self.p2.tangent2(info)
                 if T is not None:
                     J = Km + T
-            Jff = (Pro.T @ (J + self.Msd) @ Pro).tocsr()[free][:, free]
+            if _SB_FAST_LA:
+                Jff = ((_PfT @ (J @ _Pf)) + _Msd_ff).tocsr()
+            else:
+                Jff = (Pro.T @ (J + self.Msd) @ Pro).tocsr()[free][:, free]
             Mb = _bmat([[Jff, -Bf], [-Bf.T, _diags(self.Sdt)]]).tocsc()
             try:
                 sol = self.p2.solve_ff(Mb, -np.concatenate([rf, rc]))

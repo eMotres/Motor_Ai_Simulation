@@ -73,6 +73,10 @@ def main() -> int:
                "picard_converged": row.get("picard_converged"),
                "wall_s": round(time.perf_counter() - t0, 1)}
         out["rows"].append(rec)
+        # Written after EVERY row, not at the end: this run is hours long and the
+        # last attempt at it was killed with nothing on disk.  A partial curve is
+        # worth something; an empty file after three hours is worth nothing.
+        Path(args.out).write_text(json.dumps(out, indent=1), encoding="utf-8")
         print("  -> k_flux=%.5f  k_self=%.5f  mid/2D=%.5f  conv=%s  (%.0f s)"
               % (rec["k_flux"] or 0, rec["k_flux_self"] or 0, rec["mid_over_2d"] or 0,
                  rec["picard_converged"], rec["wall_s"]), flush=True)

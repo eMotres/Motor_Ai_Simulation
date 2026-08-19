@@ -128,7 +128,7 @@ class DutySpec(BaseModel):
     gamma_deg: Optional[float] = None
     torque_nm: Optional[float] = None    # target/rated torque — shown on the card
     power_kw: Optional[float] = None     # target/rated power — shown on the card
-    note: str = ""
+    note: Optional[str] = None           # None = keep the previous note on upsert
     from_current: bool = False           # fill the Nones from the live Simulation
 
 
@@ -416,18 +416,23 @@ def upsert_duty(req: DutyCreate, _admin: dict = Depends(require_admin)):
     if not (float(d.current_arms) > 0 and float(d.rpm) > 0):
         raise HTTPException(422, detail="current_arms and rpm must be positive")
     duties = [x for x in (c.get("duties") or []) if x.get("name") != dname]
+    prev = next((x for x in (c.get("duties") or []) if x.get("name") == dname), None)
     entry = {"name": dname, "mode": d.mode,
              "current_arms": round(float(d.current_arms), 3),
              "rpm": round(float(d.rpm), 1),
              "gamma_deg": round(float(d.gamma_deg), 3),
-             "note": d.note or ""}
-    if d.torque_nm is not None:
-        entry["torque_nm"] = round(float(d.torque_nm), 2)
-    if d.power_kw is not None:
-        entry["power_kw"] = round(float(d.power_kw), 2)
+             # Fields NOT sent inherit from the previous entry: re-saving the
+             # operating point must not silently erase targets or the note.
+             "note": (d.note if d.note is not None
+                      else (prev or {}).get("note", "") or "")}
+    tq = d.torque_nm if d.torque_nm is not None else (prev or {}).get("torque_nm")
+    pw = d.power_kw if d.power_kw is not None else (prev or {}).get("power_kw")
+    if tq is not None:
+        entry["torque_nm"] = round(float(tq), 2)
+    if pw is not None:
+        entry["power_kw"] = round(float(pw), 2)
     # An upsert of the operating point KEEPS a previously recorded result —
     # results die only with the duty (or when overwritten by a new record).
-    prev = next((x for x in (c.get("duties") or []) if x.get("name") == dname), None)
     if prev and prev.get("result"):
         entry["result"] = prev["result"]
     duties.append(entry)
@@ -503,22 +508,57 @@ def _read_ctx() -> Optional[dict]:
 class Activate(BaseModel):
     die: str
     config: str
+    duty: Optional[str] = None
 
 
 @router.post("/activate")
 def activate(req: Activate):
-    """Mark die/config as the machine now loaded in the editor.  Open to every
-    caller — it is part of LOADING, not of editing the catalog."""
+    """Mark die/config/duty as the machine now loaded in the editor.  Open to
+    every caller — it is part of LOADING, not of editing the catalog."""
     die = _check_name(req.die, "die")
     cfg = _check_name(req.config, "configuration")
     d = _load_yaml(_die_file(die), "die")
     c = _load_yaml(_cfg_file(die, cfg), "configuration")
     import json
     _CTX_FILE.write_text(json.dumps({"die": die, "config": cfg,
+                                     "duty": req.duty,
                                      "at": datetime.now().isoformat(timespec="seconds")}),
                          encoding="utf-8")
     return {"ok": True, "die_locked": bool(d.get("locked", True)),
             "config_locked": bool(c.get("locked", False))}
+
+
+@router.get("/context")
+def context(authorization: str = Header(default=None)):
+    """WHAT is loaded in the editor right now — die / configuration / duty —
+    plus the duty's stored operating point so the header strip can flag when
+    the panel has drifted off it."""
+    who = caller_identity(authorization)
+    ctx = _read_ctx()
+    if not ctx:
+        return {"active": False, "can_write": bool(who["is_admin"])}
+    die, cfg = str(ctx.get("die") or ""), str(ctx.get("config") or "")
+    duty = ctx.get("duty")
+    try:
+        d = _load_yaml(_die_file(die), "die")
+        c = _load_yaml(_cfg_file(die, cfg), "configuration")
+    except HTTPException:
+        return {"active": False, "can_write": bool(who["is_admin"]),
+                "note": "context points at a deleted die/configuration"}
+    point = None
+    if duty:
+        point = next((x for x in (c.get("duties") or [])
+                      if x.get("name") == duty), None)
+    return {
+        "active": True, "die": die, "config": cfg, "duty": duty,
+        "die_locked": bool(d.get("locked", True)),
+        "config_locked": bool(c.get("locked", False)),
+        "can_write": bool(who["is_admin"]),
+        "duty_point": (None if point is None else {
+            "current_arms": point.get("current_arms"), "rpm": point.get("rpm"),
+            "gamma_deg": point.get("gamma_deg"), "mode": point.get("mode", "motor"),
+        }),
+    }
 
 
 class LockPatch(BaseModel):

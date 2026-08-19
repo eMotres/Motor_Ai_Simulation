@@ -63,11 +63,17 @@ const FamilyCatalog: React.FC<{
   // decides whether the editing controls are drawn at all.
   const [canWrite, setCanWrite] = useState(false);
 
+  // What is loaded in the editor — its die/config/duty rows get highlighted.
+  const [active, setActive] = useState<{ die?: string; config?: string;
+                                         duty?: string | null } | null>(null);
+
   const load = async () => {
     try {
       const t = await (await fetch(`${API}/api/family/tree`)).json();
       setDies(t.dies || []);
       setCanWrite(t.can_write === true);
+      const c = await (await fetch(`${API}/api/family/context`)).json();
+      setActive(c?.active ? c : null);
     } catch (e) { setMsg(`catalog load failed: ${e}`); }
   };
   useEffect(() => { load(); }, []);
@@ -217,7 +223,7 @@ const FamilyCatalog: React.FC<{
       //    configuration's own canonical values passes by construction.
       await fetch(`${API}/api/family/activate`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ die, config: cfg }),
+        body: JSON.stringify({ die, config: cfg, duty }),
       });
       // 1) geometry — the die's stamped section + this configuration's stack/wire
       await updateGeometryViaApi(p.geometry);
@@ -267,6 +273,7 @@ const FamilyCatalog: React.FC<{
         detail: { current: p.sim.current_a, gamma: p.sim.gamma_deg, rpm: p.sim.rpm,
                   mode: p.sim.mode, connection: p.sim.connection } }));
       window.dispatchEvent(new CustomEvent('sim-design-applied'));
+      window.dispatchEvent(new CustomEvent('family-changed'));
       setMsg(`✓ applied ${label} — press Run in Simulation`);
       // Straight to the machine the user just loaded (user request).
       setActiveTab('geometry');
@@ -295,7 +302,8 @@ const FamilyCatalog: React.FC<{
       )}
 
       {shown.map(die => (
-        <Box key={die.name} sx={{ border: '1px solid var(--line-soft)',
+        <Box key={die.name} sx={{
+          border: `1px solid ${active?.die === die.name ? '#60a5fa88' : 'var(--line-soft)'}`,
           borderRadius: 1, p: 1.2, display: 'flex', flexDirection: 'column', gap: 0.8 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2 }}>
             <Box sx={{ flexShrink: 0, lineHeight: 0 }}>
@@ -353,9 +361,12 @@ const FamilyCatalog: React.FC<{
           {die.configs.map(c => (
             <Box key={c.name} sx={{ pl: 1, py: 0.3, borderTop: '1px solid var(--panel)' }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, flexWrap: 'wrap' }}>
-                <Typography sx={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-2)',
-                                  minWidth: 84 }}>
+                <Typography sx={{ fontSize: 12.5, fontWeight: 600, minWidth: 84,
+                  color: (active?.die === die.name && active?.config === c.name)
+                    ? '#60a5fa' : 'var(--text-2)' }}>
                   {c.name}
+                  {(active?.die === die.name && active?.config === c.name)
+                    ? ' ●' : ''}
                 </Typography>
                 {c.locked && !canWrite && (
                   <Typography component="span" sx={{ fontSize: 11 }}>🔒</Typography>
@@ -438,8 +449,11 @@ const FamilyCatalog: React.FC<{
                     {c.duties.map(d => {
                       const r = d.result || {};
                       const applying = busy === `${c.name} / ${d.name}`;
+                      const isActive = active?.die === die.name
+                        && active?.config === c.name && active?.duty === d.name;
                       return (
-                        <tr key={d.name}>
+                        <tr key={d.name}
+                          style={isActive ? { background: '#60a5fa14' } : undefined}>
                           <td>
                             <Tooltip placement="top-start"
                               title={`${d.mode}${d.note ? ` — ${d.note}` : ''}`

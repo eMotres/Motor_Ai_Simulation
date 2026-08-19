@@ -35,6 +35,7 @@ import { buildAppTheme, loadThemeMode, saveThemeMode, type AppMode } from './the
 import MotorScene from './components/viewer3d/MotorScene';
 import ParameterVariationTable from './components/sweep/ParameterVariationTable';
 import MotorsCatalog from './components/catalog/MotorsCatalog';
+import ActiveFamilyStrip from './components/common/ActiveFamilyStrip';
 import AuthButton from './components/auth/AuthButton';
 import { VersionBadge } from './components/VersionBadge';
 import { useAuth } from './contexts/AuthContext';
@@ -286,6 +287,54 @@ function App() {
           <Box onMouseDown={onDividerMouseDown} sx={{ width: 5, flexShrink: 0, cursor: 'col-resize',
             bgcolor: 'divider', transition: 'background-color 0.15s', '&:hover': { bgcolor: 'primary.main' }, userSelect: 'none' }} />
           <Box sx={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
+            {/* Viewer controls live WITH the viewer they drive (moved out of
+                the AppBar — user request): grid, axes, render mode, STL
+                build, cache rebuild. */}
+            <Box sx={{ position: 'absolute', top: 8, right: 8, zIndex: 12,
+                       display: 'flex', alignItems: 'center', gap: 0.5,
+                       bgcolor: 'background.paper', border: '1px solid',
+                       borderColor: 'divider', borderRadius: 1, px: 0.5, py: 0.25 }}>
+              <Tooltip title={showGrid ? 'Hide Grid' : 'Show Grid'}>
+                <IconButton size="small" color={showGrid ? 'primary' : 'default'} onClick={toggleGrid}>
+                  <GridOnIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+              <Tooltip title={showAxes ? 'Hide Axes' : 'Show Axes'}>
+                <IconButton size="small" color={showAxes ? 'primary' : 'default'} onClick={toggleAxes}>
+                  <ThreeDRotationIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+              <ToggleButtonGroup
+                value={viewMode}
+                exclusive
+                onChange={(_, m) => m && setViewMode(m)}
+                size="small"
+                sx={{ mx: 0.5 }}
+              >
+                <ToggleButton value="solid" sx={{ px: 1 }}>
+                  <Tooltip title="Solid Mesh"><SquareIcon fontSize="small" /></Tooltip>
+                </ToggleButton>
+                <ToggleButton value="pointcloud" sx={{ px: 1 }}>
+                  <Tooltip title="Point Cloud"><BubbleChartIcon fontSize="small" /></Tooltip>
+                </ToggleButton>
+                <ToggleButton value="stl" sx={{ px: 1 }}>
+                  <Tooltip title="STL (CadQuery)"><ViewInArIcon fontSize="small" /></Tooltip>
+                </ToggleButton>
+                <ToggleButton value="hybrid" sx={{ px: 1 }}>
+                  <Tooltip title="Hybrid"><LayersIcon fontSize="small" /></Tooltip>
+                </ToggleButton>
+              </ToggleButtonGroup>
+              <Tooltip title="Generate STL from CadQuery">
+                <IconButton size="small" onClick={() => runPipeline(geometry)}>
+                  <BuildIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+              <Tooltip title="Clear Cache & Rebuild">
+                <IconButton size="small" onClick={async () => { await clearStlCache(); runPipeline(geometry); }}>
+                  <DeleteSweepIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            </Box>
             <MaterialControls /><MotorScene /><GeometryBuildTimer />
           </Box>
         </Box>
@@ -374,52 +423,6 @@ function App() {
 
             <AuthButton />
 
-            {/* 3D view controls — only relevant when viewer is visible */}
-            {showViewer && (
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                <Tooltip title={showGrid ? 'Hide Grid' : 'Show Grid'}>
-                  <IconButton size="small" color={showGrid ? 'primary' : 'default'} onClick={toggleGrid}>
-                    <GridOnIcon fontSize="small" />
-                  </IconButton>
-                </Tooltip>
-                <Tooltip title={showAxes ? 'Hide Axes' : 'Show Axes'}>
-                  <IconButton size="small" color={showAxes ? 'primary' : 'default'} onClick={toggleAxes}>
-                    <ThreeDRotationIcon fontSize="small" />
-                  </IconButton>
-                </Tooltip>
-                <ToggleButtonGroup
-                  value={viewMode}
-                  exclusive
-                  onChange={(_, m) => m && setViewMode(m)}
-                  size="small"
-                  sx={{ mx: 0.5 }}
-                >
-                  <ToggleButton value="solid" sx={{ px: 1 }}>
-                    <Tooltip title="Solid Mesh"><SquareIcon fontSize="small" /></Tooltip>
-                  </ToggleButton>
-                  <ToggleButton value="pointcloud" sx={{ px: 1 }}>
-                    <Tooltip title="Point Cloud"><BubbleChartIcon fontSize="small" /></Tooltip>
-                  </ToggleButton>
-                  <ToggleButton value="stl" sx={{ px: 1 }}>
-                    <Tooltip title="STL (CadQuery)"><ViewInArIcon fontSize="small" /></Tooltip>
-                  </ToggleButton>
-                  <ToggleButton value="hybrid" sx={{ px: 1 }}>
-                    <Tooltip title="Hybrid"><LayersIcon fontSize="small" /></Tooltip>
-                  </ToggleButton>
-                </ToggleButtonGroup>
-                <Tooltip title="Generate STL from CadQuery">
-                  <IconButton size="small" onClick={() => runPipeline(geometry)}>
-                    <BuildIcon fontSize="small" />
-                  </IconButton>
-                </Tooltip>
-                <Tooltip title="Clear Cache & Rebuild">
-                  <IconButton size="small" onClick={async () => { await clearStlCache(); runPipeline(geometry); }}>
-                    <DeleteSweepIcon fontSize="small" />
-                  </IconButton>
-                </Tooltip>
-              </Box>
-            )}
-
             <Tooltip title={themeMode === 'light' ? 'Dark theme' : 'Light theme'}>
               <IconButton size="small"
                 onClick={() => setThemeMode(m => (m === 'light' ? 'dark' : 'light'))}>
@@ -452,6 +455,9 @@ function App() {
             ))}
           </Tabs>
         </Box>
+
+        {/* ── What is loaded: die / configuration / duty + save-back ── */}
+        <ActiveFamilyStrip />
 
         {/* ── Main Content ── */}
         <Box sx={{ flex: 1, overflow: 'hidden' }}>

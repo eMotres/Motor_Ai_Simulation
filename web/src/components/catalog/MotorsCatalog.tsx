@@ -3,8 +3,6 @@ import {
   Box, Typography, Chip, CircularProgress, Button, Tooltip, IconButton,
   Dialog, DialogTitle, DialogContent, DialogActions, TextField,
 } from '@mui/material';
-import BoltIcon from '@mui/icons-material/Bolt';
-import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import DriveFileRenameOutlineIcon from '@mui/icons-material/DriveFileRenameOutline';
 import LockIcon from '@mui/icons-material/Lock';
 import LockOpenIcon from '@mui/icons-material/LockOpen';
@@ -50,7 +48,6 @@ interface Tier {
 interface Catalog { tiers: Tier[]; diameters_mm: number[]; motors: Motor[]; }
 
 const fmtT = (t: number) => (t >= 10 ? t.toFixed(1) : t.toFixed(2));
-const fmtP = (w: number) => (w >= 1000 ? `${(w / 1000).toFixed(2)} kW` : `${Math.round(w)} W`);
 
 // The colour that means "this is the machine in your editor" — the same accent
 // the highlighted pricing tier uses, so the card reads as emphasised, not as
@@ -85,24 +82,6 @@ function exactLocal(iso: string): string {
   const t = new Date(iso);
   return Number.isNaN(t.getTime()) ? iso : t.toLocaleString();
 }
-
-// one headline stat (big number + caption)
-const Stat: React.FC<{ value: string; unit?: string; label: string; color?: string }> = ({ value, unit, label, color }) => (
-  <Box sx={{ textAlign: 'center', flex: 1, minWidth: 0 }}>
-    <Typography sx={{ fontWeight: 800, color: color ?? 'var(--text-0)', fontSize: '0.98rem', lineHeight: 1.1, whiteSpace: 'nowrap' }}>
-      {value}{unit && <span style={{ fontSize: '0.62rem', color: 'var(--text-2)', fontWeight: 600 }}> {unit}</span>}
-    </Typography>
-    <Typography sx={{ color: 'var(--text-3)', fontSize: '0.58rem', textTransform: 'uppercase', letterSpacing: '0.04em', mt: 0.2 }}>{label}</Typography>
-  </Box>
-);
-
-// one detail key/value row cell
-const Detail: React.FC<{ k: string; v: React.ReactNode }> = ({ k, v }) => (
-  <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1, minWidth: 0 }}>
-    <Typography sx={{ color: 'var(--text-3)', fontSize: '0.68rem', whiteSpace: 'nowrap' }}>{k}</Typography>
-    <Typography sx={{ color: 'var(--text-1)', fontSize: '0.68rem', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{v}</Typography>
-  </Box>
-);
 
 const MotorsCatalog: React.FC = () => {
   const { isAdmin, user, signIn, enforced } = useAuth();
@@ -239,120 +218,82 @@ const MotorsCatalog: React.FC = () => {
 
   const byDiameter = (d: number) => cat.motors.filter((m) => m.diameter_mm === d);
 
-  const renderCard = (m: Motor) => {
-    // UNIFORM card layout: every motor shows the same stats and the same
-    // detail rows in the same places; a missing value renders as a dash.
-    const hasEff = typeof m.efficiency_pct === 'number';
+  // One motor = ONE table row, same table style as the Families duty tables —
+  // the whole tab reads as one system.  Missing values render as a dash.
+  const renderRow = (m: Motor) => {
     const powerW = typeof m.power_w === 'number'
       ? m.power_w
       : (m.T_avg_Nm > 0 && m.rpm > 0 ? m.T_avg_Nm * 2 * Math.PI * m.rpm / 60 : null);
     const active = m.is_active === true;
     const rel = m.saved_at ? relTime(m.saved_at, nowTs) : null;
-    // The backend computes this per request for THIS caller; an older backend
-    // that doesn't send it leaves every action enabled (it enforces anyway).
     const writable = m.can_write !== false;
     const cannotWhy = m.locked
       ? `Locked by an admin — ask an admin to unlock it (owner: ${m.owner ?? '—'}).`
       : `This motor belongs to ${m.owner ?? 'another account'} — ask them or an admin.`;
+    const dash = '—';
+    const num = (v: number | null | undefined, digits = 1, ok = true) =>
+      ok && v != null && Number.isFinite(Number(v))
+        ? Number(v).toFixed(digits).replace(/\.0+$/, '') : dash;
     return (
-      <Box key={m.id} sx={{
-        flex: '1 1 290px', maxWidth: 360, display: 'flex', flexDirection: 'column',
-        p: 1.5, borderRadius: 2, bgcolor: 'var(--panel-2)',
-        border: `1px solid ${active ? ACTIVE : 'var(--line-soft)'}`,
-        boxShadow: active ? `0 0 0 1px ${ACTIVE}55` : 'none',
-        transition: 'border-color .15s, box-shadow .15s',
-        '&:hover': active ? {} : { borderColor: '#334a6b', boxShadow: '0 0 0 1px var(--line-accent)55' },
-      }}>
-        {/* header: thumbnail + identity */}
-        <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center', mb: 1 }}>
-          <Box sx={{ flexShrink: 0, lineHeight: 0 }}><MotorThumbnail motorId={m.id} thumbSvg={m.thumb_svg} slots={m.slots} poles={m.poles} size={84} /></Box>
-          <Box sx={{ minWidth: 0, flex: 1 }}>
-            <Typography sx={{ fontWeight: 700, color: 'var(--text-0)', fontSize: '0.86rem', lineHeight: 1.2, mb: 0.6 }}>{m.name}</Typography>
-            <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
-              <Chip size="small" label={`Ø ${m.diameter_mm} mm`} sx={{ height: 18, fontSize: '0.6rem', bgcolor: 'var(--panel-2)', color: '#60a5fa', fontWeight: 700 }} />
-              <Chip size="small" label={`${m.slots}s / ${m.poles}p`} sx={{ height: 18, fontSize: '0.6rem', bgcolor: 'var(--panel-2)', color: 'var(--text-2)' }} />
-              {active && (
-                <Tooltip title="This motor's geometry is the one loaded in the editor right now.">
-                  <Chip size="small" label="in editor"
-                    sx={{ height: 18, fontSize: '0.58rem', fontWeight: 700,
-                      bgcolor: `${ACTIVE}22`, color: ACTIVE }} />
-                </Tooltip>
-              )}
-              {m.locked && (
-                <Tooltip title={`Locked by an admin — read-only for everyone, its owner (${m.owner ?? '—'}) included. Load it and "Save as new…" to work from it.`}>
-                  <Chip size="small" icon={<LockIcon sx={{ fontSize: 11, ml: '4px' }} />}
-                    label="locked"
-                    sx={{ height: 18, fontSize: '0.58rem', fontWeight: 700,
-                      bgcolor: `${LOCKED}22`, color: LOCKED,
-                      '& .MuiChip-icon': { color: LOCKED } }} />
-                </Tooltip>
-              )}
+      <tr key={m.id} style={active ? { background: `${ACTIVE}14` } : undefined}>
+        <td>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, minWidth: 0 }}>
+            <Box sx={{ flexShrink: 0, lineHeight: 0 }}>
+              <MotorThumbnail motorId={m.id} thumbSvg={m.thumb_svg}
+                slots={m.slots} poles={m.poles} size={34} />
             </Box>
+            <Tooltip placement="top-start" title={<>
+              {m.slots}s/{m.poles}p · {m.wire ? `wire ${m.wire} · ` : ''}
+              {typeof m.gamma_deg === 'number' ? `γ=${m.gamma_deg}° · ` : ''}
+              {rel ? `saved ${rel} (${exactLocal(m.saved_at!)})` : 'no recorded save time'}
+              <br />Owner: {m.owner ?? '—'}
+              {m.locked ? ' · locked (admin only)'
+                        : (m.can_write === false ? ' · read-only for you' : '')}
+            </>}>
+              <span style={{ fontWeight: 600, color: 'var(--text-1)', cursor: 'help',
+                             overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {m.name}
+              </span>
+            </Tooltip>
+            {active && (
+              <Chip size="small" label="in editor"
+                sx={{ height: 16, fontSize: '0.56rem', fontWeight: 700,
+                      bgcolor: `${ACTIVE}22`, color: ACTIVE }} />
+            )}
+            {m.locked && (
+              <LockIcon sx={{ fontSize: 12, color: LOCKED, flexShrink: 0 }} />
+            )}
           </Box>
-        </Box>
-
-        {/* headline stats — SAME three slots on every card */}
-        <Box sx={{ display: 'flex', gap: 0.5, py: 1, my: 0.5, borderTop: '1px solid var(--line-soft)', borderBottom: '1px solid var(--line-soft)' }}>
-          <Stat value={m.T_avg_Nm > 0 ? fmtT(m.T_avg_Nm) : '—'}
-            unit={m.T_avg_Nm > 0 ? 'N·m' : undefined} label="torque" color="#86efac" />
-          <Stat value={powerW != null ? fmtP(powerW) : '—'} label="power" color="#7dd3fc" />
-          <Stat value={hasEff ? m.efficiency_pct!.toFixed(1) : '—'}
-            unit={hasEff ? '%' : undefined} label="efficiency" color="#fcd34d" />
-        </Box>
-
-        {/* detail grid — SAME eight rows on every card; missing value = dash */}
-        <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 1.5, rowGap: 0.35, mb: 1 }}>
-          <Detail k="Speed" v={m.rpm > 0 ? `${m.rpm} rpm` : '—'} />
-          <Detail k="Current" v={m.current_a > 0 ? `${Math.round(m.current_a)} A` : '—'} />
-          <Detail k="Voltage" v={typeof m.voltage_pk_v === 'number' ? `${m.voltage_pk_v} V pk LL` : '—'} />
-          <Detail k="Length" v={typeof m.length_mm === 'number' ? `${m.length_mm} mm` : '—'} />
-          <Detail k="Magnet" v={m.magnet || '—'} />
-          <Detail k="Steel" v={m.steel || '—'} />
-          <Detail k="Wire" v={m.wire || '—'} />
-          <Detail k="MTPA γ" v={typeof m.gamma_deg === 'number' ? `${m.gamma_deg}°` : '—'} />
-          <Detail k="Mass" v={typeof m.mass_kg === 'number' ? `${m.mass_kg} kg` : '—'} />
-          <Detail k="Torque/kg" v={typeof m.mass_kg === 'number' && m.mass_kg > 0 && m.T_avg_Nm > 0
-            ? `${(m.T_avg_Nm / m.mass_kg).toFixed(1)} N·m/kg` : '—'} />
-        </Box>
-
-        {/* when this motor was last written — ONE line, exact time in the tip */}
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.75 }}>
-          <Typography sx={{ color: 'var(--text-3)', fontSize: '0.64rem' }}>
-            {rel ? `saved ${rel}` : 'saved —'}
-          </Typography>
-          {/* Owner lives HERE, in the tip of the save line — the cards are
-              already dense, and "who may write this" is the same question as
-              "when was this last written". */}
-          <HelpTip title={<>
-            {rel ? `Last saved ${exactLocal(m.saved_at!)}`
-                 : 'Saved before timestamps existed — this motor has no recorded save time.'}
-            <br />Owner: {m.owner ?? '—'}
-            {m.locked ? ' · locked (admin only)'
-                      : (m.can_write === false ? ' · read-only for you' : '')}
-          </>} />
-        </Box>
-
-        <Box sx={{ flex: 1 }} />
-
-        {/* action */}
-        <Box sx={{ display: 'flex', gap: 0.5 }}>
-          <Button size="small" fullWidth variant="outlined"
-            startIcon={busy === m.id ? <CircularProgress size={12} /> : <BoltIcon sx={{ fontSize: 15 }} />}
-            disabled={!!busy} onClick={() => loadMotor(m)}
-            sx={{ textTransform: 'none', fontSize: '0.74rem', py: 0.4, flex: 1 }}>
-            {needsSignIn ? 'Sign in to load' : 'Load into editor'}
-          </Button>
-          {/* Rename / delete are SHOWN to everyone and DISABLED for anyone who
-              may not write this motor, with the reason (and the owner) in the
-              tooltip. Hiding them was the old "I can't delete my motor" with
-              nothing on screen saying why. */}
+        </td>
+        <td>{num(powerW != null ? powerW / 1000 : null)}</td>
+        <td>{m.T_avg_Nm > 0 ? fmtT(m.T_avg_Nm) : dash}</td>
+        <td>{num(m.rpm, 0, m.rpm > 0)}</td>
+        <td>{num(m.current_a, 0, m.current_a > 0)}</td>
+        <td>{num(m.voltage_pk_v, 0)}</td>
+        <td>{num(m.efficiency_pct, 1)}</td>
+        <td>{num(m.ripple_pct)}</td>
+        <td>{num(m.mass_kg, 2)}</td>
+        <td>{typeof m.mass_kg === 'number' && m.mass_kg > 0 && m.T_avg_Nm > 0
+             ? (m.T_avg_Nm / m.mass_kg).toFixed(1) : dash}</td>
+        <td>{num(m.length_mm, 0)}</td>
+        <td>{m.magnet || dash}</td>
+        <td>{m.steel || dash}</td>
+        <td style={{ textAlign: 'center' }}>
+          <Tooltip title={needsSignIn ? 'Sign in to load' : 'Load into editor'}>
+            <span>
+              <IconButton size="small" disabled={!!busy} onClick={() => loadMotor(m)}
+                sx={{ fontSize: 12, p: 0.2, color: '#34d399' }}>
+                {busy === m.id ? <CircularProgress size={11} /> : '▶'}
+              </IconButton>
+            </span>
+          </Tooltip>
           {m.preset && (
             <Tooltip title={writable ? 'Rename' : cannotWhy}>
               <span>
-                <IconButton size="small" disabled={!!busy || !writable} onClick={() => openRename(m)}
-                  sx={{ color: 'var(--text-2)', border: '1px solid var(--line)', borderRadius: 1,
-                    '&:hover': { bgcolor: 'var(--panel)', borderColor: 'var(--text-3)' } }}>
-                  <DriveFileRenameOutlineIcon sx={{ fontSize: 16 }} />
+                <IconButton size="small" disabled={!!busy || !writable}
+                  onClick={() => openRename(m)}
+                  sx={{ p: 0.2, color: 'var(--text-3)' }}>
+                  <DriveFileRenameOutlineIcon sx={{ fontSize: 14 }} />
                 </IconButton>
               </span>
             </Tooltip>
@@ -361,33 +302,29 @@ const MotorsCatalog: React.FC = () => {
             ? (isAdmin ? 'Delete from catalog (admin)' : 'Delete this motor (yours)')
             : cannotWhy}>
             <span>
-              <IconButton size="small" disabled={!!busy || !writable} onClick={() => deleteMotor(m)}
-                sx={{ color: '#f87171', border: '1px solid #7f1d1d', borderRadius: 1,
-                  '&:hover': { bgcolor: '#7f1d1d33', borderColor: '#ef4444' } }}>
-                <DeleteOutlineIcon sx={{ fontSize: 16 }} />
-              </IconButton>
+              <IconButton size="small" disabled={!!busy || !writable}
+                onClick={() => deleteMotor(m)}
+                sx={{ fontSize: 12, p: 0.2, color: 'var(--text-4)' }}>✕</IconButton>
             </span>
           </Tooltip>
-          {/* The lock itself is an admin control — everyone else never sees it. */}
           {isAdmin && m.preset && (
             <Tooltip title={m.locked
               ? `Unlock — restore write access to ${m.owner ?? 'its owner'}`
               : `Lock — make this read-only for everyone but an admin (owner: ${m.owner ?? '—'})`}>
               <span>
                 <IconButton size="small" disabled={!!busy} onClick={() => void toggleLock(m)}
-                  sx={{ color: m.locked ? LOCKED : 'var(--text-2)',
-                    border: `1px solid ${m.locked ? LOCKED : 'var(--line)'}`, borderRadius: 1,
-                    '&:hover': { bgcolor: 'var(--panel)', borderColor: LOCKED } }}>
-                  {m.locked ? <LockIcon sx={{ fontSize: 16 }} /> : <LockOpenIcon sx={{ fontSize: 16 }} />}
+                  sx={{ p: 0.2, color: m.locked ? LOCKED : 'var(--text-3)' }}>
+                  {m.locked ? <LockIcon sx={{ fontSize: 14 }} />
+                            : <LockOpenIcon sx={{ fontSize: 14 }} />}
                 </IconButton>
               </span>
             </Tooltip>
           )}
-        </Box>
-        {lockErr?.id === m.id && (
-          <Box sx={{ fontSize: 10.5, color: '#f87171', mt: 0.5 }}>{lockErr.msg}</Box>
-        )}
-      </Box>
+          {lockErr?.id === m.id && (
+            <Box sx={{ fontSize: 10, color: '#f87171' }}>{lockErr.msg}</Box>
+          )}
+        </td>
+      </tr>
     );
   };
 
@@ -423,8 +360,26 @@ const MotorsCatalog: React.FC = () => {
                 — no motors yet (spec coming) —
               </Typography>
             ) : (
-              <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'stretch' }}>
-                {motors.map(renderCard)}
+              <Box component="table" sx={{
+                width: '100%', borderCollapse: 'collapse',
+                '& th': { fontSize: 10, fontWeight: 600, color: 'var(--text-4)',
+                          textAlign: 'right', p: '2px 6px', whiteSpace: 'nowrap' },
+                '& td': { fontSize: 11.5, color: 'var(--text-2)', textAlign: 'right',
+                          p: '2px 6px', whiteSpace: 'nowrap',
+                          fontVariantNumeric: 'tabular-nums',
+                          borderTop: '1px solid var(--panel)' },
+                '& th:first-of-type, & td:first-of-type': { textAlign: 'left' },
+              }}>
+                <thead>
+                  <tr>
+                    <th>motor</th><th>kW</th><th>Nm</th><th>rpm</th>
+                    <th>A</th><th>V L-L</th><th>η %</th><th>ripple %</th>
+                    <th>kg</th><th>Nm/kg</th><th>L mm</th>
+                    <th>magnet</th><th>steel</th>
+                    <th style={{ textAlign: 'center' }} />
+                  </tr>
+                </thead>
+                <tbody>{motors.map(renderRow)}</tbody>
               </Box>
             )}
           </Box>

@@ -69,7 +69,9 @@ const DOMAIN_RGBA: Record<number, [number, number, number, number]> = {
   5:  [55,  68,  82,  230],   // rotor          dark slate
   6:  [180, 180, 190, 210],   // shaft          grey
   7:  [115, 217, 204, 230],   // band           teal
-  8:  [56,  102, 140, 200],   // outer air      deep blue
+  8:  [80,  90,  110, 200],   // outer air — SAME colour as air: it is the same
+                              // substance, and two blues implied two materials
+                              // (user request)
   9:  [63,  174, 90,  240],   // slot liner     green   (Nomex/ceramic)
   10: [217, 138, 58,  240],   // wire enamel    orange  (polyimide)
   44: [239, 68,  68,  240],   // magnet S       red

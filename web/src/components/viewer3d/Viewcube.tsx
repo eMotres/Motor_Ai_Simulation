@@ -198,7 +198,7 @@ const Viewcube: React.FC<{ size?: number }> = ({ size = 100 }) => {
   }, []);
 
   return (
-    <div style={{ position: 'absolute', top: 48, right: 16, zIndex: 100, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+    <div style={{ position: 'absolute', top: 84, right: 16, zIndex: 100, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
 
       {/* Home button */}
       <button

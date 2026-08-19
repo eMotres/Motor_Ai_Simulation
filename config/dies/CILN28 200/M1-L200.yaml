@@ -44,19 +44,19 @@ duties:
   power_kw: 17.0
 - name: top-speed
   mode: motor
-  current_arms: 103.24
+  current_arms: 103.945
   rpm: 2600.0
   gamma_deg: 10.0
   note: sheet target 275.5 Nm / 75 kW; current tuned by user 2026-08-19
-  torque_nm: 273.62
-  power_kw: 74.5
+  torque_nm: 275.46
+  power_kw: 75.0
   result:
     efficiency_pct: 97.23
-    ripple_pct: 6.7
-    v_ll_peak_v: 597.4
-    loss_w: 2119.7
+    ripple_pct: 6.637
+    v_ll_peak_v: 597.6
+    loss_w: 2133.5
     mass_kg: 27.722
-    recorded_at: '2026-08-19T20:04:55'
+    recorded_at: '2026-08-19T20:21:37'
 materials:
   magnet: F52SH_120C
   stator_core: B15AHV950M

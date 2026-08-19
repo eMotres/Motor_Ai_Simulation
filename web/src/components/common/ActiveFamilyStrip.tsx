@@ -76,16 +76,26 @@ const ActiveFamilyStrip: React.FC = () => {
     if (!ctx.duty) return;
     setBusy(true); setMsg(null);
     try {
+      // Does the LAST finished run sit on the point being saved?  Then its
+      // MEASURED torque/power replace the duty's stored kW/Nm (an old target
+      // must not outlive a real run at the new point), and its results are
+      // recorded right after.
+      const s = readLS('lastSummary', null);
+      const runMatches = !!(s
+        && near(Number(s.I_phase_rms_A), cur, Math.max(0.5, 0.002 * cur))
+        && near(Number(s.rpm), rpm, 1) && (s.op_mode ?? 'motor') === mode);
+      const dutyBody: any = { name: ctx.duty, mode, from_current: true };
+      if (runMatches) {
+        dutyBody.torque_nm = Math.abs(Number(s.T_em_avg_Nm)) || undefined;
+        dutyBody.power_kw = Math.abs(Number(s.P_mech_W)) / 1000 || undefined;
+      }
       const r = await fetch(`${API}/api/family/duty`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ die: ctx.die, config: ctx.config,
-          duty: { name: ctx.duty, mode, from_current: true } }),
+        body: JSON.stringify({ die: ctx.die, config: ctx.config, duty: dutyBody }),
       });
       if (!r.ok) throw new Error((await r.json()).detail ?? `HTTP ${r.status}`);
       let extra = '';
-      const s = readLS('lastSummary', null);
-      if (s && near(Number(s.I_phase_rms_A), cur, Math.max(0.5, 0.002 * cur))
-            && near(Number(s.rpm), rpm, 1) && (s.op_mode ?? 'motor') === mode) {
+      if (runMatches) {
         const rr = await fetch(`${API}/api/family/duty_result`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ die: ctx.die, config: ctx.config, duty: ctx.duty,

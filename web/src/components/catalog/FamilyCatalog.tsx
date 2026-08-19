@@ -12,7 +12,7 @@ import React, { useEffect, useState } from 'react';
 import {
   Box, Paper, Typography, Button, Chip, Tooltip, IconButton, CircularProgress,
 } from '@mui/material';
-import { useMotorStore } from '../../stores/motorStore';
+import { useMotorStore, useUIStore } from '../../stores/motorStore';
 import MotorThumbnail from './MotorThumbnail';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
@@ -54,6 +54,7 @@ const FamilyCatalog: React.FC<{
   embedded?: boolean;
 }> = ({ diameter, embedded }) => {
   const { updateGeometryViaApi } = useMotorStore();
+  const setActiveTab = useUIStore((s) => s.setActiveTab);
   const [dies, setDies] = useState<Die[]>([]);
   const [busy, setBusy] = useState<string | null>(null);   // what is being applied/created
   const [msg,  setMsg]  = useState<string | null>(null);   // last outcome (ok or error)
@@ -240,7 +241,9 @@ const FamilyCatalog: React.FC<{
         detail: { current: p.sim.current_a, gamma: p.sim.gamma_deg, rpm: p.sim.rpm,
                   mode: p.sim.mode, connection: p.sim.connection } }));
       window.dispatchEvent(new CustomEvent('sim-design-applied'));
-      setMsg(`✓ applied ${label} — open Simulation and press Run`);
+      setMsg(`✓ applied ${label} — press Run in Simulation`);
+      // Straight to the machine the user just loaded (user request).
+      setActiveTab('geometry');
     } catch (e: any) { setMsg(`✗ apply ${label}: ${e?.message ?? e}`); }
     setBusy(null);
   };

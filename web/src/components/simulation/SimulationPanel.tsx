@@ -512,10 +512,20 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
       const d = (e as CustomEvent).detail || {};
       if (typeof d.current === 'number') setCurrent(d.current);
       if (typeof d.gamma === 'number') setPhaseOffset(d.gamma);
+      // A family DUTY is a whole operating point — rpm / mode / coil temp /
+      // connection arrive with it (the Sweep apply keeps sending just I and γ).
+      if (typeof d.rpm === 'number' && d.rpm > 0) {
+        setRpm(d.rpm);
+        setFrequency(+((d.rpm * polePairs) / 60).toFixed(2));
+      }
+      if (d.mode === 'motor' || d.mode === 'generator') setOpMode(d.mode);
+      if (typeof d.coilTemp === 'number') setCoilTemp(d.coilTemp);
+      if (typeof d.connection === 'string' && d.connection) setConnection(d.connection);
     };
     window.addEventListener('sim-operating-point', onOp as EventListener);
     return () => window.removeEventListener('sim-operating-point', onOp as EventListener);
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [polePairs]);
 
   // Pin: when a descent design is applied, adopt the run's eval params so re-running
   // the Simulation reproduces the picked point (mesh params are read fresh from

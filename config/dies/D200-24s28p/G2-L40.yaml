@@ -1,0 +1,34 @@
+name: G2-L40
+die: D200-24s28p
+role: generator
+created: '2026-08-19T18:07:03'
+geometry_overrides:
+  motor_length: 40
+  wire_width: 7
+  wire_height: 0.6
+  wire_spacing_x: 0.1
+  wire_spacing_y: 0.13
+  num_wires_per_slot: 21
+  wire_split: 1
+  insulation_thickness: 0.2
+winding:
+  n_coils_per_phase: 4
+  connection: 4S
+  n_parallel: 1
+  n_series: 4
+  layers: 1
+coil_temp_c: 120.0
+end_winding_factor: 1.144
+duties:
+- name: peak
+  mode: generator
+  current_arms: 36.0
+  rpm: 3000.0
+  gamma_deg: 10.0
+  note: 59 Nm / 18.5 kW target (sheet, wire 0.6); gamma not optimized yet
+- name: optimal
+  mode: generator
+  current_arms: 31.0
+  rpm: 2200.0
+  gamma_deg: 10.0
+  note: 59 Nm / 13.5 kW target (sheet, wire 0.6); gamma not optimized yet

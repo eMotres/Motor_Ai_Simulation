@@ -1,0 +1,34 @@
+name: G1-L160
+die: D200-24s28p
+role: generator
+created: '2026-08-19T18:07:03'
+geometry_overrides:
+  motor_length: 160
+  wire_width: 7
+  wire_height: 0.9
+  wire_spacing_x: 0.1
+  wire_spacing_y: 0.13
+  num_wires_per_slot: 12
+  wire_split: 1
+  insulation_thickness: 0.2
+winding:
+  n_coils_per_phase: 4
+  connection: 2S-2P
+  n_parallel: 2
+  n_series: 2
+  layers: 1
+coil_temp_c: 120.0
+end_winding_factor: 1.144
+duties:
+- name: peak
+  mode: generator
+  current_arms: 208.0
+  rpm: 3800.0
+  gamma_deg: 10.0
+  note: 387 Nm / 154 kW target (sheet); gamma not optimized yet
+- name: optimal
+  mode: generator
+  current_arms: 194.0
+  rpm: 2500.0
+  gamma_deg: 10.0
+  note: 363 Nm / 95 kW target (sheet); gamma not optimized yet

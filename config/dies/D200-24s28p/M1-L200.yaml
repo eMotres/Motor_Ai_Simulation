@@ -1,0 +1,40 @@
+name: M1-L200
+die: D200-24s28p
+role: motor
+created: '2026-08-19T18:07:02'
+geometry_overrides:
+  motor_length: 200
+  wire_width: 7
+  wire_height: 0.9
+  wire_spacing_x: 0.1
+  wire_spacing_y: 0.13
+  num_wires_per_slot: 14
+  wire_split: 1
+  insulation_thickness: 0.2
+winding:
+  n_coils_per_phase: 4
+  connection: 2S-2P
+  n_parallel: 2
+  n_series: 2
+  layers: 1
+coil_temp_c: 120.0
+end_winding_factor: 1.144
+duties:
+- name: take-off
+  mode: motor
+  current_arms: 404.465
+  rpm: 850.0
+  gamma_deg: 10.0
+  note: 850 Nm @ 850 rpm - the validated point
+- name: cruise
+  mode: motor
+  current_arms: 46.0
+  rpm: 1400.0
+  gamma_deg: 10.0
+  note: 116 Nm target (sheet); gamma not optimized yet
+- name: top-speed
+  mode: motor
+  current_arms: 107.0
+  rpm: 2600.0
+  gamma_deg: 10.0
+  note: 275.5 Nm target (sheet); gamma not optimized yet

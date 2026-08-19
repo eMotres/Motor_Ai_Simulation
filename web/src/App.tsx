@@ -35,6 +35,7 @@ import { buildAppTheme, loadThemeMode, saveThemeMode, type AppMode } from './the
 import MotorScene from './components/viewer3d/MotorScene';
 import ParameterVariationTable from './components/sweep/ParameterVariationTable';
 import MotorsCatalog from './components/catalog/MotorsCatalog';
+import FamilyCatalog from './components/catalog/FamilyCatalog';
 import AuthButton from './components/auth/AuthButton';
 import { VersionBadge } from './components/VersionBadge';
 import { useAuth } from './contexts/AuthContext';
@@ -271,7 +272,7 @@ function App() {
     render: () => React.ReactNode;
   }> = [
     { id: 'motors', label: 'Motors', order: 0, gate: 'always', showViewer: false,
-      render: () => <MotorsCatalog /> },
+      render: () => <><FamilyCatalog /><MotorsCatalog /></> },
     { id: 'geometry', label: 'Geometry', order: 20, panelId: 'geometry', gate: 'fullUI', showViewer: true,
       render: () => (
         <Box sx={{ display: 'flex', height: '100%' }}>

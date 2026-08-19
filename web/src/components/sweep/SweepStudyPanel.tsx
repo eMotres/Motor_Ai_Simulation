@@ -208,6 +208,20 @@ const SweepStudyPanel: React.FC = () => {
     const id = setInterval(() => setNowS(Date.now() / 1000), 1000);
     return () => clearInterval(id);
   }, []);
+  // Client-side liveness, independent of what the backend stamps: when the run
+  // started as WE observed it, and when done/total last moved.  From those two
+  // clocks the panel derives a per-point stopwatch, a measured points/second
+  // rate and a bar that creeps INSIDE a point — so the screen visibly lives
+  // even when the server number stands still for minutes.
+  const liveRef = useRef({ t0: 0, lastDone: -1, lastDoneT: 0 });
+  const adoptProgress = (st: any) => {
+    const now = Date.now() / 1000;
+    const lv = liveRef.current;
+    if (!lv.t0) { lv.t0 = Number(st.ts_start) || now; lv.lastDone = st.done ?? 0; lv.lastDoneT = now; }
+    if ((st.done ?? 0) !== lv.lastDone) { lv.lastDone = st.done ?? 0; lv.lastDoneT = now; }
+    setProgress({ done: st.done ?? 0, total: st.total ?? 1, cached: st.cached ?? 0,
+                  ts_start: st.ts_start, workers: st.workers, s_per_eval: st.s_per_eval });
+  };
   const [result, setResult] = useState<any>(null);
   const [sentOps, setSentOps] = useState<any[]>([]);
   const [err, setErr] = useState<string | null>(null);
@@ -250,7 +264,7 @@ const SweepStudyPanel: React.FC = () => {
       let st: any;
       try { st = await (await fetch(`${API}/api/optimization/scan/progress`)).json(); } catch { continue; }
       const mine = !want || String(st.run_id ?? '') === want;
-      if (mine) setProgress({ done: st.done ?? 0, total: st.total ?? 1, cached: st.cached ?? 0, ts_start: st.ts_start, workers: st.workers, s_per_eval: st.s_per_eval });
+      if (mine) adoptProgress(st);
       if (mine && Array.isArray(st.points) && st.points.length) saveResult({ points: st.points });
       if (st.running) { waitedForStart = 0; continue; }
       if (st.error && mine) { setErr(st.error); break; }
@@ -284,7 +298,7 @@ const SweepStudyPanel: React.FC = () => {
           runIdRef.current = String(st.run_id ?? '');
           stopRef.current = false; setRunning(true);
           if (Array.isArray(st.points)) saveResult({ points: st.points });
-          setProgress({ done: st.done ?? 0, total: st.total ?? 1, cached: st.cached ?? 0, ts_start: st.ts_start, workers: st.workers, s_per_eval: st.s_per_eval });
+          adoptProgress(st);
           await poll(runIdRef.current); setRunning(false);
         } else if (st.result && Array.isArray(st.result.points)) {
           // History, not the answer to anything this session asked for.
@@ -298,6 +312,8 @@ const SweepStudyPanel: React.FC = () => {
 
   const run = async () => {
     setErr(null); setResult(null); setRunning(true); setProgress(null); stopRef.current = false;
+    // fresh liveness clocks: this run starts NOW as far as the user can see
+    liveRef.current = { t0: Date.now() / 1000, lastDone: 0, lastDoneT: Date.now() / 1000 };
     // UNIQUE per launch.  It used to be `sweep_${nPts}`, which two runs of the
     // same size share — so even a stamped result could not tell them apart.
     const myRunId = `sweep_${nPts}_${Date.now()}`;
@@ -647,29 +663,73 @@ const SweepStudyPanel: React.FC = () => {
             Clear result
           </Button>
         )}
-        {progress && running && (() => {
-          const el = progress.ts_start ? Math.max(0, nowS - progress.ts_start) : null;
+        {running && (() => {
+          // All clocks below tick every second from CLIENT time — a sweep point
+          // is minutes of silent subprocess FEM, and a frozen line reads as a
+          // hang.  Backend stamps (ts_start/workers/s_per_eval) only sharpen
+          // the estimates when the API provides them.
+          const lv = liveRef.current;
+          const done = progress?.done ?? 0;
+          const total = Math.max(1, progress?.total ?? 1);
+          const w = Math.max(1, progress?.workers ?? 1);
+          const t0 = (progress?.ts_start || lv.t0) || nowS;
+          const el = Math.max(0, nowS - t0);                       // whole-run stopwatch
+          const sinceLast = Math.max(0, nowS - (lv.lastDoneT || nowS)); // current-point stopwatch
+          // points per second: measured from THIS run once a point landed,
+          // else from the backend's measured s/point rate.  Cache-reused points
+          // arrive for free at t=0 — counting them would fake a blazing rate
+          // and a bogus ETA, so only points actually SOLVED here count.
+          const solved = Math.max(0, done - (progress?.cached ?? 0));
+          const rate = solved > 0 && el > 1 ? solved / el
+                     : progress?.s_per_eval ? w / progress.s_per_eval : 0;
+          const left = rate > 0 ? Math.max(0, (total - done) / rate - sinceLast) : null;
           const mmss = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
-          const per = progress.s_per_eval || 0;
-          const w = Math.max(1, progress.workers || 1);
-          const left = per > 0 ? Math.max(0, ((progress.total - progress.done) / w) * per
-                                             - (progress.done === 0 && el ? Math.min(el, per) : 0)) : null;
           return (
-            <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>
-              {progress.done}/{progress.total}
-              {progress.cached ? ` · ${progress.cached} reused` : ''}
-              {el != null && ` · solving ${mmss(el)}`}
-              {progress.workers ? ` · ${progress.workers} workers` : ''}
-              {per > 0 && ` · ~${Math.round(per)} s/point`}
-              {left != null && left > 0 && ` · ~${mmss(left)} left`}
-            </Typography>
+            <>
+              <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: '#3b82f6', flex: 'none',
+                animation: 'sweep-pulse 1.4s ease-in-out infinite',
+                '@keyframes sweep-pulse': {
+                  '0%, 100%': { opacity: 0.25, transform: 'scale(0.75)' },
+                  '50%': { opacity: 1, transform: 'scale(1.2)' },
+                } }} />
+              <Typography sx={{ fontSize: 11, color: 'var(--text-3)', fontVariantNumeric: 'tabular-nums' }}>
+                {done}/{total}
+                {progress?.cached ? ` · ${progress.cached} reused` : ''}
+                {` · solving ${mmss(el)}`}
+                {done > 0 && sinceLast >= 1 && ` · this point ${mmss(sinceLast)}`}
+                {progress?.workers ? ` · ${progress.workers} workers` : ''}
+                {rate > 0 && ` · ~${Math.round(w / rate)} s/point`}
+                {left != null && left > 0 && ` · ~${mmss(left)} left`}
+              </Typography>
+            </>
           );
         })()}
         {err && <Typography sx={{ fontSize: 11, color: '#fca5a5' }}>✗ {err}</Typography>}
       </Box>
-      {running && <LinearProgress variant={progress ? 'determinate' : 'indeterminate'}
-        value={progress ? (100 * progress.done) / Math.max(1, progress.total) : 0}
-        sx={{ mb: 1.5, height: 4, borderRadius: 2 }} />}
+      {running && (() => {
+        const lv = liveRef.current;
+        const done = progress?.done ?? 0;
+        const total = Math.max(1, progress?.total ?? 1);
+        const w = Math.max(1, progress?.workers ?? 1);
+        const t0 = (progress?.ts_start || lv.t0) || nowS;
+        const el = Math.max(0, nowS - t0);
+        const sinceLast = Math.max(0, nowS - (lv.lastDoneT || nowS));
+        const solved = Math.max(0, done - (progress?.cached ?? 0));
+        const rate = solved > 0 && el > 1 ? solved / el
+                   : progress?.s_per_eval ? w / progress.s_per_eval : 0;
+        if (!progress || rate <= 0) {
+          return <LinearProgress variant="indeterminate" sx={{ mb: 1.5, height: 4, borderRadius: 2 }} />;
+        }
+        // The bar CREEPS inside a point: estimated in-flight work since the last
+        // landed point, saturating at 90% of the remaining gap so it can never
+        // claim a point that has not actually finished.  The buffer marks the
+        // points currently on workers; MUI animates the region beyond it.
+        const creep = Math.min((total - done) * 0.9, sinceLast * rate * 0.9);
+        const pct = Math.min(99.5, (100 * (done + creep)) / total);
+        const buf = Math.min(100, (100 * Math.min(total, done + w)) / total);
+        return <LinearProgress variant="buffer" value={pct} valueBuffer={buf}
+          sx={{ mb: 1.5, height: 4, borderRadius: 2 }} />;
+      })()}
 
       {/* …or when every point failed: a sweep whose points all timed out plotted
           NOTHING and said nothing — the user asked "where is the sweep result?"

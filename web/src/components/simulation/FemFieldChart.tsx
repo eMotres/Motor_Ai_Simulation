@@ -411,14 +411,20 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
   const isEddy = !payloadOverride && EDDY_MODES.has(mode);
   const isThermal = !payloadOverride && mode === 'Temp';
   const isLoss = !payloadOverride && mode === 'Loss';
+  // Demag rides the SAME run-snapshot probe as Loss: the honest map is the
+  // transient's worst-over-period ratchet, not this view's single-frame
+  // full-Br check.  A run that de-rated a magnet to Br 0.12 rendered here as
+  // a uniform 99.9 % "nothing happened" because only the static payload was
+  // ever consulted.
+  const isDemagV = !payloadOverride && mode === 'Demag';
   const payload = payloadOverride
     ?? (isThermal ? thermalPayload
        : isEddy ? eddyPayload
-       : (isLoss && lossSnap) ? lossSnap
+       : ((isLoss || isDemagV) && lossSnap) ? lossSnap
        : fetchedPayload);
   const busy = isThermal ? thermalLoading
              : isEddy ? eddyLoading
-             : (isLoss && lossProbing) ? true
+             : ((isLoss || isDemagV) && lossProbing) ? true
              : loading;
   const errMsg = isThermal ? thermalErr : isEddy ? eddyErr : error;
   // The static solver always computes a demag map (a check at full Br), but if
@@ -684,11 +690,12 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isEddy, eddyPayload, eddyLoading, eddyErr]);
 
-  // Loss: probe the run's snapshot once per operating point (no solve).
+  // Loss AND Demag: probe the run's snapshot once per operating point (no
+  // solve) — both maps only mean anything as the run's own cycle history.
   useEffect(() => {
-    if (isLoss && !lossSnap && !lossProbed && !lossProbing) probeLossSnapshot();
+    if ((isLoss || isDemagV) && !lossSnap && !lossProbed && !lossProbing) probeLossSnapshot();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isLoss, lossSnap, lossProbed, lossProbing]);
+  }, [isLoss, isDemagV, lossSnap, lossProbed, lossProbing]);
 
   // ── Thermal (Temp view) ───────────────────────────────────────────────────
   const thermalCurrent = (I_phase_rms !== undefined && I_phase_rms > 0) ? I_phase_rms : 0;
@@ -737,6 +744,10 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
               ? (lossSnap
                    ? <>Loss density — W/m³ (simulation run, cycle-averaged)</>
                    : <>Loss density — W/m³ (single frame, analytic)</>)
+              : mode === 'Demag'
+              ? (lossSnap
+                   ? <>Demagnetisation — % of Br remaining (simulation run, worst over period)</>
+                   : <>Demagnetisation — % of Br remaining (single frame, full-Br check)</>)
               : mode === 'Jeddy'
                 ? <>Current density J — coupled eddy solve (proximity)</>
                 : <>Magnetic potential A<sub>z</sub> — real scikit-fem solve</>}
@@ -769,7 +780,7 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
                                + ((payload as any).from_transient_relaxed
                                     ? ' (≠ panel)' : ''))
                             : 'computed on demand'}`
-                       + `${(isEddy || isLoss) ? ` · @ ${eddyCurrent.toFixed(0)} A` : ''}`
+                       + `${(isEddy || isLoss || isDemagV) ? ` · @ ${eddyCurrent.toFixed(0)} A` : ''}`
                        + ' · ⓘ')
                 : (isEddy
                      ? (eddySolving

@@ -385,9 +385,12 @@ const FamilyCatalog: React.FC<{
                             {canWrite && (
                               <Tooltip title="Delete duty">
                                 <span>
+                                  {/* Deliberate distance from ▶ — load and DELETE
+                                      must not be a one-pixel slip apart. */}
                                   <IconButton size="small" disabled={!!busy}
                                     onClick={() => deleteDuty(die.name, c.name, d.name)}
-                                    sx={{ fontSize: 12, p: 0.2, color: 'var(--text-4)' }}>✕</IconButton>
+                                    sx={{ fontSize: 12, p: 0.2, ml: 2.5,
+                                          color: 'var(--text-4)' }}>✕</IconButton>
                                 </span>
                               </Tooltip>
                             )}

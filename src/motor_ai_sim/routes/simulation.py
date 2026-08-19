@@ -3622,7 +3622,9 @@ def _build_transient_summary(
             _pm, _q0 = noload_psi_pm(
                 _geo_sum, dict(_gc().get("winding", {}) or {}), _pp_sum,
                 0, float(sbres.get("daxis_deg", 0.0)),
-                geo_override=geo_override)
+                geo_override=geo_override,
+                # ψ_PM at the RUN's own connection (n_series scales it).
+                connection=(str(sbres.get("connection")) or None))
             if abs(_pm) > 1e-9 and abs(_q0) > 0.05 * abs(_pm):
                 _dq_note = ("no-load ψq is %.1f%% of ψ_PM — frame suspect, "
                             "Ld/Lq withheld" % (100 * abs(_q0 / _pm)))

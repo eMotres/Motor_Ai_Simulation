@@ -199,7 +199,7 @@ _DAXIS_TLS = threading.local()
 _DAXIS_LOCK = threading.RLock()
 
 def noload_psi_pm(geo, wind, pole_pairs, n_sectors, daxis_deg,
-                 geo_override=None, progress_cb=None):
+                 geo_override=None, progress_cb=None, connection=None):
     """Magnet flux linkage ψ_PM [Wb, phase] — the d-axis flux at I = 0.
 
     One cheap no-load transient (6 frames on the calibration mesh), parked into
@@ -214,10 +214,17 @@ def noload_psi_pm(geo, wind, pole_pairs, n_sectors, daxis_deg,
     """
     import math as _m, json as _j, os as _os
     _fp = _daxis_geo_fingerprint(geo)
-    # ψ_PM is a property of the geometry and the winding layout (I = 0, so the
-    # connection cannot matter — parallel paths divide a current there is none
-    # of).  Keyed accordingly: fingerprint + layers.
-    key = "psipm_%s_L%s" % (_fp, int((wind or {}).get("layers", 1) or 1))
+    # ψ_PM DOES depend on the connection — not through the current (there is
+    # none) but through n_series: the phase flux linkage is the SUM of the
+    # series coil groups, so 4S links four times what 4P links.  The first
+    # version of this key argued "I = 0, the connection cannot matter" and
+    # cached one number for all connections; a 4S run would then have divided
+    # its 4S-scaled ψd against a 4P ψ_PM and shipped a silently wrong Ld.
+    # (Caught by the user asking "а Winding Connection ты учёл?" — reviewed,
+    # measured, fixed before it ever produced a number.)
+    _conn_pm = str(connection or (wind or {}).get("connection") or "")
+    key = "psipm_%s_L%s_C%s" % (_fp, int((wind or {}).get("layers", 1) or 1),
+                                _conn_pm or "cfg")
     _dp = _daxis_disk_path()
     if _dp and _os.path.exists(_dp):
         try:
@@ -237,7 +244,9 @@ def noload_psi_pm(geo, wind, pole_pairs, n_sectors, daxis_deg,
         gap_layers=2.0, n_sectors=_cal_ns if _cal_ns >= 2 else -1,
         coil_temp_c=120.0, rotor_eddy=False, iron_template=True,
         structured_gap=True, geo_mesh=True, geo_override=geo_override,
-        element_order=2, daxis_deg=float(daxis_deg), progress_cb=progress_cb)
+        element_order=2, daxis_deg=float(daxis_deg), progress_cb=progress_cb,
+        # The same connection the LOADED run used — psi scales with n_series.
+        **({} if not _conn_pm else {"connection": _conn_pm}))
     if not cal.get("picard_converged", False):
         raise RuntimeError("no-load psi_PM solve did not converge — ψ_PM off an "
                            "unconverged field is not a measurement")

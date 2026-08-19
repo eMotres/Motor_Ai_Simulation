@@ -58,11 +58,16 @@ const FamilyCatalog: React.FC<{
   const [dies, setDies] = useState<Die[]>([]);
   const [busy, setBusy] = useState<string | null>(null);   // what is being applied/created
   const [msg,  setMsg]  = useState<string | null>(null);   // last outcome (ok or error)
+  // Clients browse and LOAD; editing the family catalog is the vendor's job.
+  // The backend enforces this on every mutating endpoint — this flag only
+  // decides whether the editing controls are drawn at all.
+  const [canWrite, setCanWrite] = useState(false);
 
   const load = async () => {
     try {
       const t = await (await fetch(`${API}/api/family/tree`)).json();
       setDies(t.dies || []);
+      setCanWrite(t.can_write === true);
     } catch (e) { setMsg(`catalog load failed: ${e}`); }
   };
   useEffect(() => { load(); }, []);
@@ -279,29 +284,35 @@ const FamilyCatalog: React.FC<{
             <Typography sx={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>
               {die.locked ? '🔒 ' : ''}{die.name}
             </Typography>
-            <Tooltip title="Rename die">
-              <span>
-                <IconButton size="small" disabled={!!busy}
-                  onClick={() => renameDie(die.name)}
-                  sx={{ fontSize: 11, p: 0.2, color: 'var(--text-4)' }}>✎</IconButton>
-              </span>
-            </Tooltip>
+            {canWrite && (
+              <Tooltip title="Rename die">
+                <span>
+                  <IconButton size="small" disabled={!!busy}
+                    onClick={() => renameDie(die.name)}
+                    sx={{ fontSize: 11, p: 0.2, color: 'var(--text-4)' }}>✎</IconButton>
+                </span>
+              </Tooltip>
+            )}
             <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>
               {die.configs.length} configuration{die.configs.length === 1 ? '' : 's'}
             </Typography>
             <Box sx={{ flex: 1 }} />
-            <Button size="small" variant="text" disabled={!!busy}
-              onClick={() => createCfg(die.name)}
-              sx={{ textTransform: 'none', fontSize: 11, minWidth: 0 }}>
-              ＋ configuration
-            </Button>
-            <Tooltip title="Delete die (configurations must be deleted first)">
-              <span>
-                <IconButton size="small" disabled={!!busy}
-                  onClick={() => deleteDie(die.name)}
-                  sx={{ color: 'var(--text-4)', fontSize: 13, p: 0.4 }}>🗑</IconButton>
-              </span>
-            </Tooltip>
+            {canWrite && (
+              <Button size="small" variant="text" disabled={!!busy}
+                onClick={() => createCfg(die.name)}
+                sx={{ textTransform: 'none', fontSize: 11, minWidth: 0 }}>
+                ＋ configuration
+              </Button>
+            )}
+            {canWrite && (
+              <Tooltip title="Delete die (configurations must be deleted first)">
+                <span>
+                  <IconButton size="small" disabled={!!busy}
+                    onClick={() => deleteDie(die.name)}
+                    sx={{ color: 'var(--text-4)', fontSize: 13, p: 0.4 }}>🗑</IconButton>
+                </span>
+              </Tooltip>
+            )}
           </Box>
 
           {die.configs.map(c => (
@@ -311,13 +322,15 @@ const FamilyCatalog: React.FC<{
                                   minWidth: 84 }}>
                   {c.name}
                 </Typography>
-                <Tooltip title="Rename configuration">
-                  <span>
-                    <IconButton size="small" disabled={!!busy}
-                      onClick={() => renameCfg(die.name, c.name)}
-                      sx={{ fontSize: 11, p: 0.2, color: 'var(--text-4)' }}>✎</IconButton>
-                  </span>
-                </Tooltip>
+                {canWrite && (
+                  <Tooltip title="Rename configuration">
+                    <span>
+                      <IconButton size="small" disabled={!!busy}
+                        onClick={() => renameCfg(die.name, c.name)}
+                        sx={{ fontSize: 11, p: 0.2, color: 'var(--text-4)' }}>✎</IconButton>
+                    </span>
+                  </Tooltip>
+                )}
                 <Chip size="small" label={c.role}
                   sx={{ height: 18, fontSize: 10, color: roleColor(c.role),
                         bgcolor: 'transparent', border: `1px solid ${roleColor(c.role)}55` }} />
@@ -329,22 +342,26 @@ const FamilyCatalog: React.FC<{
                   {c.magnet ? ` · ${c.magnet}` : ''}
                 </Typography>
                 <Box sx={{ flex: 1 }} />
-                <Tooltip title="Save the CURRENT Simulation point as a new duty here">
-                  <span>
-                    <Button size="small" variant="text" disabled={!!busy}
-                      onClick={() => createDuty(die.name, c.name)}
-                      sx={{ textTransform: 'none', fontSize: 11, minWidth: 0, px: 0.5 }}>
-                      ＋ duty
-                    </Button>
-                  </span>
-                </Tooltip>
-                <Tooltip title="Delete this configuration and its duties">
-                  <span>
-                    <IconButton size="small" disabled={!!busy}
-                      onClick={() => deleteCfg(die.name, c.name)}
-                      sx={{ color: 'var(--text-4)', fontSize: 12, p: 0.3 }}>🗑</IconButton>
-                  </span>
-                </Tooltip>
+                {canWrite && (
+                  <Tooltip title="Save the CURRENT Simulation point as a new duty here">
+                    <span>
+                      <Button size="small" variant="text" disabled={!!busy}
+                        onClick={() => createDuty(die.name, c.name)}
+                        sx={{ textTransform: 'none', fontSize: 11, minWidth: 0, px: 0.5 }}>
+                        ＋ duty
+                      </Button>
+                    </span>
+                  </Tooltip>
+                )}
+                {canWrite && (
+                  <Tooltip title="Delete this configuration and its duties">
+                    <span>
+                      <IconButton size="small" disabled={!!busy}
+                        onClick={() => deleteCfg(die.name, c.name)}
+                        sx={{ color: 'var(--text-4)', fontSize: 12, p: 0.3 }}>🗑</IconButton>
+                    </span>
+                  </Tooltip>
+                )}
               </Box>
               {c.duties.length > 0 && (
                 <Box component="table" sx={{
@@ -401,20 +418,24 @@ const FamilyCatalog: React.FC<{
                                 </IconButton>
                               </span>
                             </Tooltip>
-                            <Tooltip title="Record the LAST finished run here (must be at this duty's point)">
-                              <span>
-                                <IconButton size="small" disabled={!!busy}
-                                  onClick={() => recordResult(die.name, c.name, d)}
-                                  sx={{ fontSize: 12, p: 0.2, color: 'var(--text-3)' }}>📥</IconButton>
-                              </span>
-                            </Tooltip>
-                            <Tooltip title="Delete duty">
-                              <span>
-                                <IconButton size="small" disabled={!!busy}
-                                  onClick={() => deleteDuty(die.name, c.name, d.name)}
-                                  sx={{ fontSize: 12, p: 0.2, color: 'var(--text-4)' }}>✕</IconButton>
-                              </span>
-                            </Tooltip>
+                            {canWrite && (
+                              <Tooltip title="Record the LAST finished run here (must be at this duty's point)">
+                                <span>
+                                  <IconButton size="small" disabled={!!busy}
+                                    onClick={() => recordResult(die.name, c.name, d)}
+                                    sx={{ fontSize: 12, p: 0.2, color: 'var(--text-3)' }}>📥</IconButton>
+                                </span>
+                              </Tooltip>
+                            )}
+                            {canWrite && (
+                              <Tooltip title="Delete duty">
+                                <span>
+                                  <IconButton size="small" disabled={!!busy}
+                                    onClick={() => deleteDuty(die.name, c.name, d.name)}
+                                    sx={{ fontSize: 12, p: 0.2, color: 'var(--text-4)' }}>✕</IconButton>
+                                </span>
+                              </Tooltip>
+                            )}
                           </td>
                         </tr>
                       );
@@ -444,10 +465,12 @@ const FamilyCatalog: React.FC<{
         </Typography>
         <Box sx={{ flex: 1 }} />
         {busy && <CircularProgress size={14} />}
-        <Button size="small" variant="outlined" onClick={createDie}
-          sx={{ textTransform: 'none', fontSize: 11 }}>
-          ＋ die from current geometry
-        </Button>
+        {canWrite && (
+          <Button size="small" variant="outlined" onClick={createDie}
+            sx={{ textTransform: 'none', fontSize: 11 }}>
+            ＋ die from current geometry
+          </Button>
+        )}
       </Box>
       {body}
     </Paper>

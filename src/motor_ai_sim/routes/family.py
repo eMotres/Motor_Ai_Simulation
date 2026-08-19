@@ -26,9 +26,10 @@ from pathlib import Path
 from typing import Optional
 
 import yaml
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
 
+from motor_ai_sim.auth import caller_identity, require_admin
 from motor_ai_sim.config import DEFAULT_CONFIG_PATH, get_config
 
 log = logging.getLogger(__name__)
@@ -162,10 +163,14 @@ class DutyCreate(BaseModel):
 # ── tree ─────────────────────────────────────────────────────────────────────
 
 @router.get("/tree")
-def tree():
+def tree(authorization: str = Header(default=None)):
+    # Clients read the catalog and LOAD duties; changing it is the vendor's
+    # job.  can_write tells the frontend whether to draw the editing controls —
+    # the mutating endpoints enforce the same rule server-side regardless.
+    _who = caller_identity(authorization)
     out = []
     if not _DIES_DIR.is_dir():
-        return {"dies": out}
+        return {"dies": out, "can_write": bool(_who["is_admin"])}
     for dd in sorted(_DIES_DIR.iterdir()):
         if not dd.is_dir() or not (dd / "die.yaml").is_file():
             continue
@@ -206,13 +211,13 @@ def tree():
             "thumb_svg": die.get("thumb_svg"),
             "configs": cfgs,
         })
-    return {"dies": out}
+    return {"dies": out, "can_write": bool(_who["is_admin"])}
 
 
 # ── die ──────────────────────────────────────────────────────────────────────
 
 @router.post("/die")
-def create_die(req: DieCreate):
+def create_die(req: DieCreate, _admin: dict = Depends(require_admin)):
     name = _check_name(req.name, "die")
     if _die_file(name).exists():
         raise HTTPException(409, detail=f"die '{name}' already exists — delete it "
@@ -249,7 +254,7 @@ class DieRename(BaseModel):
 
 
 @router.patch("/die/{die}")
-def rename_die(die: str, req: DieRename):
+def rename_die(die: str, req: DieRename, _admin: dict = Depends(require_admin)):
     """Rename a die: the folder moves, die.yaml and every configuration's
     back-reference are updated."""
     die = _check_name(die, "die")
@@ -277,7 +282,7 @@ def rename_die(die: str, req: DieRename):
 
 
 @router.delete("/die/{die}")
-def delete_die(die: str, force: bool = False):
+def delete_die(die: str, force: bool = False, _admin: dict = Depends(require_admin)):
     die = _check_name(die, "die")
     dd = _die_dir(die)
     if not (dd / "die.yaml").is_file():
@@ -301,7 +306,7 @@ def delete_die(die: str, force: bool = False):
 # ── configuration ────────────────────────────────────────────────────────────
 
 @router.post("/config")
-def create_config(req: ConfigCreate):
+def create_config(req: ConfigCreate, _admin: dict = Depends(require_admin)):
     die = _check_name(req.die, "die")
     name = _check_name(req.name, "configuration")
     if not _die_file(die).is_file():
@@ -345,7 +350,7 @@ class ConfigRename(BaseModel):
 
 
 @router.patch("/config/{die}/{cfg}")
-def rename_config(die: str, cfg: str, req: ConfigRename):
+def rename_config(die: str, cfg: str, req: ConfigRename, _admin: dict = Depends(require_admin)):
     """Rename a configuration (its file moves with it; duties ride along)."""
     die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
     new = _check_name(req.name, "configuration")
@@ -369,7 +374,7 @@ def rename_config(die: str, cfg: str, req: ConfigRename):
 
 
 @router.delete("/config/{die}/{cfg}")
-def delete_config(die: str, cfg: str):
+def delete_config(die: str, cfg: str, _admin: dict = Depends(require_admin)):
     die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
     p = _cfg_file(die, cfg)
     if not p.is_file():
@@ -384,7 +389,7 @@ def delete_config(die: str, cfg: str):
 # ── duty ─────────────────────────────────────────────────────────────────────
 
 @router.post("/duty")
-def upsert_duty(req: DutyCreate):
+def upsert_duty(req: DutyCreate, _admin: dict = Depends(require_admin)):
     die = _check_name(req.die, "die")
     cfg = _check_name(req.config, "configuration")
     dname = _check_name(req.duty.name, "duty")
@@ -433,7 +438,7 @@ def upsert_duty(req: DutyCreate):
 
 
 @router.post("/duty_result")
-def record_duty_result(req: DutyResult):
+def record_duty_result(req: DutyResult, _admin: dict = Depends(require_admin)):
     """Attach a finished run's numbers to a duty.  The frontend verifies the
     run WAS at this duty's operating point before calling; this endpoint only
     validates shape and stores."""
@@ -465,7 +470,7 @@ def record_duty_result(req: DutyResult):
 
 
 @router.delete("/duty/{die}/{cfg}/{duty}")
-def delete_duty(die: str, cfg: str, duty: str):
+def delete_duty(die: str, cfg: str, duty: str, _admin: dict = Depends(require_admin)):
     die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
     p = _cfg_file(die, cfg)
     c = _load_yaml(p, "configuration")

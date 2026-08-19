@@ -1075,17 +1075,21 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
             const hhmm = (s: number) => (s >= 90
               ? `${Math.floor(s / 60)} min ${Math.round(s % 60)} s`
               : `${Math.round(s)} s`);
+            // ONE short neutral line (the amber multi-line breakdown read as a
+            // warning — user asked for it gone); the full frame budget lives
+            // in the tooltip.
+            const detail = `${steps} reported`
+              + (vSettle ? ` + ${vSettle} voltage settling` : '')
+              + (dmSettle ? ` + ${dmSettle} demag settling` : '')
+              + (eddyWarm ? ` + ${eddyWarm} eddy warm-up (adaptive)` : '')
+              + (refFrames ? ` + ${refFrames} ΔP_harm reference` : '')
+              + (rate > 0 ? ` · at the last run's ${rate.toFixed(1)} s/frame` : '');
             return (
-              <Typography sx={{ fontSize: 9.5, lineHeight: 1.35, mb: 0.75,
-                color: framesSolved > steps ? '#b45309' : 'var(--text-3)' }}>
-                Solves <b>{framesSolved}</b> FEM frames: {steps} reported
-                {vSettle  ? ` + ${vSettle} voltage settling` : ''}
-                {dmSettle ? ` + ${dmSettle} demag settling` : ''}
-                {eddyWarm ? ` + ${eddyWarm} eddy warm-up (adaptive)` : ''}
-                {refFrames ? ` + ${refFrames} ΔP_harm reference` : ''}
-                {rate > 0
-                  ? ` · ≈ ${hhmm(est)} at the last run's ${rate.toFixed(1)} s/frame`
-                  : ' · no timed run yet — the strip at the top shows s/pt live'}
+              <Typography sx={{ fontSize: 10, mb: 0.75, color: 'var(--text-4)' }}>
+                {rate > 0 ? `≈ ${hhmm(est)} · ` : ''}{framesSolved} frames
+                <Tooltip title={detail} placement="top">
+                  <span style={{ marginLeft: 4, cursor: 'help' }}>ⓘ</span>
+                </Tooltip>
               </Typography>
             );
           })()}

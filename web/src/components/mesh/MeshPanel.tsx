@@ -24,7 +24,6 @@ const MESH_COMPONENTS: { key: string; label: string }[] = [
   { key: 'outer',  label: 'Outer air' },
 ];
 import SaveIcon from '@mui/icons-material/Save';
-import RefreshIcon from '@mui/icons-material/Refresh';
 import FemMeshViewer3D from './FemMeshViewer3D';
 import FemMeshViewer2D from './FemMeshViewer2D';
 import { syncActiveMotor } from '../common/motorSettings';
@@ -599,20 +598,20 @@ const MeshPanel: React.FC = () => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [poleCopy]);
 
-  // Auto-rebuild when a mesh-density slider changes, debounced ~450 ms after the
-  // last move.  Previously Max/Min size, normal-deviation, gap-layers and the
-  // outer-air ring only re-meshed on the Rebuild button, so dragging them looked
-  // like it "did nothing" (the reported bug).  poleCopy/symmetry already
-  // auto-rebuild — this makes the continuous sliders consistent.  The debounce
-  // coalesces a drag into ONE build after the user lets go.  First run skipped
-  // (mount already builds).
+  // Auto-rebuild on EVERY mesh-affecting setting, debounced ~450 ms after the
+  // last change.  Sliders coalesce a drag into one build; the pipeline
+  // toggles (geo mesh / iron template / structured gap) and the per-part
+  // element sizes used to re-mesh only on the "Rebuild mesh" button, which
+  // made a silently stale preview — the button is gone, this effect is the
+  // whole contract now.  First run skipped (mount already builds).
   const densityFirstRun = useRef(true);
   useEffect(() => {
     if (densityFirstRun.current) { densityFirstRun.current = false; return; }
     const id = setTimeout(() => fetchFemMesh(), 450);
     return () => clearTimeout(id);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [meshSizeMm, minSizeMm, normalDev, gapLayers, outerAirFactor]);
+  }, [meshSizeMm, minSizeMm, normalDev, gapLayers, outerAirFactor,
+      ironTemplate, geoMesh, structuredGap, componentMeshJson]);
 
   // Persist the Mesh-tab settings to config.yaml — ONLY on the explicit
   // "Rebuild mesh" click (rebuildMesh below), not on every slider move. This
@@ -951,15 +950,17 @@ const MeshPanel: React.FC = () => {
               </Tooltip>
             </Box>
 
-            <Button
-              variant="outlined" fullWidth
-              startIcon={femLoading ? <CircularProgress size={14} color="inherit"/> : <RefreshIcon/>}
-              onClick={rebuildMesh}
-              disabled={femLoading}
-              sx={{ py: 0.8, fontSize: 11, color: '#3b82f6', borderColor: 'var(--line-accent)' }}
-            >
-              {femLoading ? 'Building…' : 'Rebuild mesh'}
-            </Button>
+            {/* The "Rebuild mesh" button is gone: every setting above
+                auto-rebuilds (debounced) and auto-persists — a build
+                indicator is all that remains of it. */}
+            {femLoading && (
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 0.5 }}>
+                <CircularProgress size={14} />
+                <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>
+                  Rebuilding mesh…
+                </Typography>
+              </Box>
+            )}
 
             {femError && <Alert severity="error" sx={{ fontSize: 11 }}>{femError}</Alert>}
 

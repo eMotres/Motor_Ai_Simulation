@@ -22,6 +22,17 @@ export interface TransientSummary {
   // Absent on runs saved before it was stamped — unknown, never assumed.
   connection?:         string;
   n_parallel?:         number;
+  // Terminal parameters (persisted with the summary like everything else).
+  // R includes the end-winding; L are APPARENT (chord) inductances at THIS
+  // operating point — saturated, not small-signal.  Absent on runs from
+  // before the dq stamp; dq_note says why a value was withheld.
+  R_phase_ohm?:         number | null;
+  R_line_line_ohm?:     number | null;
+  Ld_mH?:               number | null;
+  Lq_mH?:               number | null;
+  psi_pm_Wb?:           number | null;
+  saliency_Lq_over_Ld?: number | null;
+  dq_note?:             string;
   T_em_avg_Nm:         number;
   T_ripple_pct:        number;
   T_ripple_raw_pct?:   number;
@@ -472,6 +483,32 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, deltaVsApp
         <Cell label="KV (line)" value={fmt(s.KV_rpm_per_V_line, 1)} unit="rpm/V"
           tooltip="rpm / V_LINE PEAK — the max/max convention, the same peak shown in the cell beside it (and the one an Ansys induced-voltage table reports). Loaded voltage: at field-weakening γ it differs from the no-load back-EMF KV."/>
       </Box>
+
+      {/* ── Terminal parameters: R with end-winding, dq inductances ────────
+           Shown only when the run carries them (old stored runs simply lack
+           the row); a withheld L explains itself via dq_note in the tooltip. */}
+      {(s.R_phase_ohm != null || s.Ld_mH != null || s.Lq_mH != null) && (
+      <Box sx={{ display: 'grid', gap: 0.75, mt: 0.75,
+        gridTemplateColumns: 'repeat(auto-fit, minmax(118px, 1fr))',
+        opacity: stale ? 0.55 : 1 }}>
+        <Cell label="R phase" value={s.R_phase_ohm != null ? fmt(s.R_phase_ohm * 1000, 2) : '—'} unit="mΩ"
+          tooltip={'Phase resistance at the coil temperature of this solve, END-WINDING INCLUDED: R = P_cu/(3·I²) with P_cu = ρ_Cu(T)·J²·V_cu·k_end. The same R the copper-loss cell is billed from.'}/>
+        <Cell label="R line-line" value={s.R_line_line_ohm != null ? fmt(s.R_line_line_ohm * 1000, 2) : '—'} unit="mΩ"
+          tooltip={'2 × R_phase — the terminal-to-terminal resistance of the isolated-neutral star this machine is driven as (the voltage circuit is line-to-line for the same reason). What an ohmmeter across two leads reads.'}/>
+        <Cell label="Ld" value={s.Ld_mH != null ? fmt(s.Ld_mH, 3) : '—'} unit="mH"
+          accent="blue"
+          tooltip={'d-axis APPARENT inductance at THIS operating point: Ld = (ψd − ψ_PM)/i_d, with ψ_PM from a cached no-load solve. Saturated (chord) value, not small-signal.'
+            + (s.dq_note ? ' — ' + s.dq_note : '')}/>
+        <Cell label="Lq" value={s.Lq_mH != null ? fmt(s.Lq_mH, 3) : '—'} unit="mH"
+          accent="blue"
+          tooltip={'q-axis APPARENT inductance: Lq = ψq/i_q. Under load the q-axis saturates, so Lq here can sit below Ld even on a near-surface-magnet rotor.'
+            + (s.dq_note ? ' — ' + s.dq_note : '')}/>
+        <Cell label="ψ_PM" value={s.psi_pm_Wb != null ? fmt(s.psi_pm_Wb * 1000, 2) : '—'} unit="mWb"
+          tooltip={'Magnet flux linkage (phase, peak) measured at I = 0 — one cheap no-load solve, cached per geometry. The PM term of ψd = ψ_PM + Ld·i_d.'}/>
+        <Cell label="Lq/Ld" value={s.saliency_Lq_over_Ld != null ? fmt(s.saliency_Lq_over_Ld, 2) : '—'}
+          tooltip={'Saliency at this load point. The dq frame behind all four cells is self-checked every run: T = 1.5·p·(ψd·iq − ψq·id) must reproduce the energy-method torque, or the inductances are withheld rather than shown wrong.'}/>
+      </Box>
+      )}
 
       {/* ── Mass component breakdown ───────────────────────────────────── */}
       <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mt: 0.5 }}>

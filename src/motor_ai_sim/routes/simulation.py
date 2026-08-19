@@ -3594,6 +3594,50 @@ def _build_transient_summary(
     _a_cond_mm2 = float(_geo_cfg.get("wire_width", 0.0)) * float(_geo_cfg.get("wire_height", 0.0))
     _j_coil = (float(I_phase_rms) / _npar / _a_cond_mm2) if _a_cond_mm2 > 1e-9 else 0.0
 
+    # ── R and L-dq of this operating point ───────────────────────────────────
+    # R_phase comes out of the solve and ALREADY includes the end-winding
+    # (copper_loss_W: ρ_Cu(T)·J²·V_cu·k_end → R = P/(3I²)).  Line-to-line is
+    # quoted for the isolated-neutral star this machine is driven as (the
+    # voltage circuit is line-to-line for exactly that reason): R_LL = 2·R_ph.
+    _R_ph = float(sbres.get("R_phase_ohm", 0.0) or 0.0)
+    # Ld/Lq: ψd = ψ_PM + Ld·id and ψq = Lq·iq, with ψ_PM measured at I=0 (one
+    # cached no-load solve per geometry).  Refused rather than guessed when the
+    # frame cannot be trusted: the dq torque identity must reproduce the energy
+    # torque, and ψq at no load must be small next to ψ_PM.
+    _Ld_mH = _Lq_mH = _psi_pm = None
+    _dq_note = ""
+    try:
+        _psid = sbres.get("psi_d_Wb"); _psiq = sbres.get("psi_q_Wb")
+        _idm = sbres.get("i_d_A"); _iqm = sbres.get("i_q_A")
+        _chk = sbres.get("dq_torque_check_pct")
+        if None in (_psid, _psiq, _idm, _iqm):
+            _dq_note = "run predates the dq stamp — re-run to compute Ld/Lq"
+        elif _chk is None or _chk > 5.0:
+            _dq_note = ("dq frame failed its torque self-check (%.1f%% vs the "
+                        "energy torque) — Ld/Lq withheld" % (_chk or -1))
+        else:
+            from motor_ai_sim.simulation.fem_solver_2d import noload_psi_pm
+            _geo_sum = dict(_geo_cfg)
+            _pp_sum = int(_geo_sum.get("num_poles", 0)) // 2
+            _pm, _q0 = noload_psi_pm(
+                _geo_sum, dict(_gc().get("winding", {}) or {}), _pp_sum,
+                0, float(sbres.get("daxis_deg", 0.0)),
+                geo_override=geo_override)
+            if abs(_pm) > 1e-9 and abs(_q0) > 0.05 * abs(_pm):
+                _dq_note = ("no-load ψq is %.1f%% of ψ_PM — frame suspect, "
+                            "Ld/Lq withheld" % (100 * abs(_q0 / _pm)))
+            else:
+                _psi_pm = float(_pm)
+                if abs(float(_iqm)) > 1e-3:
+                    _Lq_mH = 1e3 * float(_psiq) / float(_iqm)
+                if abs(float(_idm)) > 1e-3:
+                    _Ld_mH = 1e3 * (float(_psid) - _psi_pm) / float(_idm)
+                else:
+                    _dq_note = ("i_d ≈ 0 at γ = %.1f° — Ld needs d-axis "
+                                "current; set γ ≠ 0 and re-run" % float(gamma_deg))
+    except Exception as _el:   # noqa: BLE001
+        _dq_note = f"{type(_el).__name__}: {_el}"
+
     return {
         "rpm": _rpm,
         "I_phase_rms_A": round(float(I_phase_rms), 2),
@@ -3604,6 +3648,18 @@ def _build_transient_summary(
         # connection and nothing moved" became unanswerable.
         "connection": _conn,
         "n_parallel": _npar,
+        # Terminal parameters, persisted with every run (they ride the summary
+        # into sim.lastSummary, .last_transient.json, Compare and the motor
+        # autosave — one write path, no separate store to rot).
+        "R_phase_ohm": (round(_R_ph, 6) if _R_ph else None),
+        "R_line_line_ohm": (round(2.0 * _R_ph, 6) if _R_ph else None),
+        "Ld_mH": (None if _Ld_mH is None else round(_Ld_mH, 4)),
+        "Lq_mH": (None if _Lq_mH is None else round(_Lq_mH, 4)),
+        "psi_pm_Wb": (None if _psi_pm is None else round(_psi_pm, 6)),
+        "saliency_Lq_over_Ld": (round(_Lq_mH / _Ld_mH, 3)
+                                if _Ld_mH not in (None, 0) and _Lq_mH is not None
+                                else None),
+        "dq_note": _dq_note,
         "T_em_avg_Nm": round(_Tavg, 3),
         "T_ripple_pct": round(float(sbres.get("T_ripple_pct", 0.0)), 1),
         "T_ripple_raw_pct": round(float(sbres.get("T_ripple_raw_pct", 0.0)), 1),

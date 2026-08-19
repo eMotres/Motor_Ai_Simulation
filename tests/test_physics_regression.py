@@ -605,3 +605,29 @@ def regenerate_baseline() -> None:
 
 if __name__ == "__main__":
     regenerate_baseline()
+
+
+class TestDqStampSelfChecks:
+    """The dq quantities ship with their own proof.
+
+    The transform angle (rotor·p + DAXIS − 90) encodes two conventions — the
+    calibration's '+90 puts γ=0 on q' and the Park constant — and a slip in
+    either produces plausible-looking wrong inductances.  So the stamp carries
+    the dq torque identity evaluated against the energy-method mean, and the
+    identity holding to a fraction of a percent (measured 0.0 % on the 200 mm
+    24s/28p at 912 N·m) is the frame's licence to exist.
+    """
+
+    def test_dq_identity_matches_the_energy_torque(self, baseline):
+        from motor_ai_sim.simulation.fem_solver_2d import fem_transient_sliding_band
+        d = fem_transient_sliding_band(
+            geo_override=dict(GEO_30MM), rpm=RPM, connection=CONNECTION,
+            daxis_deg=60.0,   # any fixed frame works: the identity is per-frame
+            **dict(COMMON, element_order=2, demag=False,
+                   I_phase_rms=60.0, gamma_deg=10.0))
+        chk = d.get("dq_torque_check_pct")
+        assert chk is not None, d.get("dq_error")
+        assert chk < 2.0, ("dq torque identity off by %.2f%% — the transform "
+                           "frame does not match the excitation" % chk)
+        assert abs(d["i_q_A"]) > abs(d["i_d_A"]) > 1e-3, (
+            "gamma=10 deg must give a dominant q current with a real d component")

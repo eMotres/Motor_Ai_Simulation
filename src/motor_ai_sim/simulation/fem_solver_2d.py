@@ -198,6 +198,76 @@ _DAXIS_CACHE: Dict[tuple, float] = {}
 _DAXIS_TLS = threading.local()
 _DAXIS_LOCK = threading.RLock()
 
+def noload_psi_pm(geo, wind, pole_pairs, n_sectors, daxis_deg,
+                 geo_override=None, progress_cb=None):
+    """Magnet flux linkage ψ_PM [Wb, phase] — the d-axis flux at I = 0.
+
+    One cheap no-load transient (6 frames on the calibration mesh), parked into
+    the same d-q frame the loaded solve uses, cached per geometry next to the
+    d-axis angle: ψ_PM is what separates Ld from the PM contribution in
+    ψd = ψ_PM + Ld·id, and without it a single load point cannot yield Ld.
+
+    Returns (psi_pm_Wb, psi_q0_Wb).  ψq at no load is a FRAME CHECK, not a
+    result — magnet flux lives entirely on d, so a ψq0 that is not small next
+    to ψ_PM means the transform angle is wrong, and the caller must refuse to
+    turn it into an inductance.
+    """
+    import math as _m, json as _j, os as _os
+    _fp = _daxis_geo_fingerprint(geo)
+    # ψ_PM is a property of the geometry and the winding layout (I = 0, so the
+    # connection cannot matter — parallel paths divide a current there is none
+    # of).  Keyed accordingly: fingerprint + layers.
+    key = "psipm_%s_L%s" % (_fp, int((wind or {}).get("layers", 1) or 1))
+    _dp = _daxis_disk_path()
+    if _dp and _os.path.exists(_dp):
+        try:
+            with open(_dp) as _f:
+                _v = _j.load(_f).get(key)
+            if isinstance(_v, (list, tuple)) and len(_v) == 2:
+                return float(_v[0]), float(_v[1])
+        except Exception:
+            pass
+    _cal_ns = _m.gcd(int((geo or {}).get("num_slots") or 1),
+                     int((geo or {}).get("num_poles") or 1)) or 1
+    _cal_D = float((geo or {}).get("stator_diameter") or 0.0) or 40.0
+    _cal_mesh = round(min(2.0, max(0.5, 1.4 * _cal_D / 150.0)), 2)
+    cal = em_transient_eval(
+        n_steps_per_period=6, n_periods=1.0, gamma_deg=0.0, I_phase_rms=0.0,
+        mesh_size_mm=_cal_mesh, min_size_mm=0.3, outer_air_factor=1.2,
+        gap_layers=2.0, n_sectors=_cal_ns if _cal_ns >= 2 else -1,
+        coil_temp_c=120.0, rotor_eddy=False, iron_template=True,
+        structured_gap=True, geo_mesh=True, geo_override=geo_override,
+        element_order=2, daxis_deg=float(daxis_deg), progress_cb=progress_cb)
+    if not cal.get("picard_converged", False):
+        raise RuntimeError("no-load psi_PM solve did not converge — ψ_PM off an "
+                           "unconverged field is not a measurement")
+    from motor_ai_sim.simulation.drive import park as _park
+    ang = cal.get("rotor_angle_deg") or []
+    pa, pb, pc = cal.get("psi_A_Wb"), cal.get("psi_B_Wb"), cal.get("psi_C_Wb")
+    ds, qs = [], []
+    for k, a in enumerate(ang):
+        th = _m.radians(a * float(pole_pairs) + float(daxis_deg) - 90.0)
+        d, q = _park(pa[k], pb[k], pc[k], th)
+        ds.append(d); qs.append(q)
+    import numpy as _np
+    out = (float(_np.mean(ds)), float(_np.mean(qs)))
+    if _dp:
+        try:
+            _disk = {}
+            if _os.path.exists(_dp):
+                try:
+                    with open(_dp) as _f:
+                        _disk = _j.load(_f) or {}
+                except Exception:
+                    _disk = {}
+            _disk[key] = [out[0], out[1]]
+            with open(_dp, "w") as _f:
+                _j.dump(_disk, _f)
+        except Exception:
+            pass
+    return out
+
+
 def _daxis_disk_path():
     """Shared on-disk DAXIS cache so sweep subprocesses (fresh interpreters, empty
     in-memory cache) don't each re-run the calibration → per-design timeout."""
@@ -4467,6 +4537,45 @@ def fem_transient_sliding_band(
         log.warning("P2 demag: %d/%d magnet elems de-rated, min Br_factor %.3f",
                     int(np.sum(_br_glob < 0.999)), int(_mag_idx.size),
                     float(_br_glob.min()))
+    # ── dq QUANTITIES of this operating point ────────────────────────────────
+    # Mean flux linkages and currents in the rotor (d-q) frame, from the same
+    # series the circuit already carries.  The transform angle is the d-axis
+    # frame: the calibration defines DAXIS so that γ=0 is the Q-axis, i.e. the
+    # d-axis itself sits 90° el behind the γ=0 current — hence the −90 here.
+    # PHASE quantities at the terminals: the I_* series are per-branch, and the
+    # phase current is branch × n_parallel (parallel branches share the flux).
+    #
+    # The FRAME IS PROVEN, NOT TRUSTED: the dq torque identity
+    #   T = 1.5·p·(ψd·iq − ψq·id)
+    # is evaluated against the energy-method mean torque and shipped as
+    # dq_torque_check_pct.  A sign or convention slip here does not produce a
+    # subtly wrong inductance — it produces a check that reads 200 %.
+    _dq = {}
+    try:
+        import math as _mdq
+        _thser = [_mdq.radians(a * pole_pairs + daxis_eff - 90.0) for a in _ang]
+        from motor_ai_sim.simulation.drive import park as _park
+        _np_ph = float(max(1, int(n_parallel)))
+        _ds, _qs, _ids, _iqs = [], [], [], []
+        for _k in range(len(_ang)):
+            _pd, _pq = _park(_psiA[_k], _psiB[_k], _psiC[_k], _thser[_k])
+            _idv, _iqv = _park(_IA[_k] * _np_ph, _IB[_k] * _np_ph,
+                               _IC[_k] * _np_ph, _thser[_k])
+            _ds.append(_pd); _qs.append(_pq); _ids.append(_idv); _iqs.append(_iqv)
+        _psid = float(np.mean(_ds)); _psiq = float(np.mean(_qs))
+        _idm = float(np.mean(_ids)); _iqm = float(np.mean(_iqs))
+        _Tdq = 1.5 * float(pole_pairs) * (_psid * _iqm - _psiq * _idm)
+        _chk = (100.0 * abs(_Tdq - float(Tavg)) / abs(float(Tavg))
+                if abs(float(Tavg)) > 1e-9 else None)
+        _dq = {
+            "psi_d_Wb": round(_psid, 6), "psi_q_Wb": round(_psiq, 6),
+            "i_d_A": round(_idm, 2), "i_q_A": round(_iqm, 2),
+            "T_dq_Nm": round(_Tdq, 3),
+            "dq_torque_check_pct": (None if _chk is None else round(_chk, 2)),
+        }
+    except Exception as _edq:   # noqa: BLE001
+        _dq = {"dq_error": f"{type(_edq).__name__}: {_edq}"}
+
     return {
         "method": "sliding_band_p2", "element_order": 2,
         # WHICH ELECTRICAL FRAME THIS RUN WAS SOLVED IN.  gamma is measured
@@ -4567,6 +4676,7 @@ def fem_transient_sliding_band(
         "P_elec_in_W": P_elec_in2,               # ⟨Σ v·i⟩ (0 at no-load)
         "R_phase_ohm": R_phase, "n_slip_nodes": int(Nring),
         "n_parallel": int(n_parallel),
+        **_dq,
         # The LABEL the paths came from, carried with them.  n_parallel alone
         # cannot be read back to a connection (2S-2P and 1S-2P both say 2), and
         # the card that shows these numbers has to name the winding they belong

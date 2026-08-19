@@ -124,6 +124,15 @@ const FamilyCatalog: React.FC<{
     if (!window.confirm(`Delete die '${die}'? Its configurations must be deleted first.`)) return;
     mutate(`die '${die}' deleted`, () => del(`/api/family/die/${encodeURIComponent(die)}`));
   };
+  const renameDie = (die: string) => {
+    const name = window.prompt(`New name for die '${die}':`, die);
+    if (!name || name === die) return;
+    mutate(`die renamed to '${name}'`, () =>
+      fetch(`${API}/api/family/die/${encodeURIComponent(die)}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      }));
+  };
   const deleteCfg = (die: string, cfg: string) => {
     if (!window.confirm(`Delete configuration '${die}/${cfg}' and all its duties?`)) return;
     mutate(`configuration '${cfg}' deleted`, () =>
@@ -267,6 +276,13 @@ const FamilyCatalog: React.FC<{
             <Typography sx={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>
               {die.locked ? '🔒 ' : ''}{die.name}
             </Typography>
+            <Tooltip title="Rename die">
+              <span>
+                <IconButton size="small" disabled={!!busy}
+                  onClick={() => renameDie(die.name)}
+                  sx={{ fontSize: 11, p: 0.2, color: 'var(--text-4)' }}>✎</IconButton>
+              </span>
+            </Tooltip>
             <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>
               {die.configs.length} configuration{die.configs.length === 1 ? '' : 's'}
             </Typography>

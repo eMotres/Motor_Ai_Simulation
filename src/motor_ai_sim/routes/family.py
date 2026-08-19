@@ -244,6 +244,38 @@ def create_die(req: DieCreate):
     return {"ok": True, "die": name}
 
 
+class DieRename(BaseModel):
+    name: str
+
+
+@router.patch("/die/{die}")
+def rename_die(die: str, req: DieRename):
+    """Rename a die: the folder moves, die.yaml and every configuration's
+    back-reference are updated."""
+    die = _check_name(die, "die")
+    new = _check_name(req.name, "die")
+    src = _die_dir(die)
+    if not (src / "die.yaml").is_file():
+        raise HTTPException(404, detail=f"die '{die}' not found")
+    if new == die:
+        return {"ok": True, "die": die}
+    dst = _die_dir(new)
+    if dst.exists():
+        raise HTTPException(409, detail=f"die '{new}' already exists")
+    src.rename(dst)
+    d = _load_yaml(dst / "die.yaml", "die")
+    d["name"] = new
+    _save_yaml(dst / "die.yaml", d)
+    for cf in dst.glob("*.yaml"):
+        if cf.name == "die.yaml":
+            continue
+        c = _load_yaml(cf, "configuration")
+        c["die"] = new
+        _save_yaml(cf, c)
+    log.info("family: die '%s' renamed to '%s'", die, new)
+    return {"ok": True, "die": new}
+
+
 @router.delete("/die/{die}")
 def delete_die(die: str, force: bool = False):
     die = _check_name(die, "die")

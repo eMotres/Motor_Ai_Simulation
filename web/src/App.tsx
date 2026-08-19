@@ -290,7 +290,7 @@ function App() {
             {/* Viewer controls live WITH the viewer they drive (moved out of
                 the AppBar — user request): grid, axes, render mode, STL
                 build, cache rebuild. */}
-            <Box sx={{ position: 'absolute', top: 8, right: 8, zIndex: 12,
+            <Box sx={{ position: 'absolute', top: 48, right: 8, zIndex: 12,
                        display: 'flex', alignItems: 'center', gap: 0.5,
                        bgcolor: 'background.paper', border: '1px solid',
                        borderColor: 'divider', borderRadius: 1, px: 0.5, py: 0.25 }}>

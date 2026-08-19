@@ -2800,7 +2800,16 @@ def fem_transient_sliding_band(
     # discard those frames.  Every reported number then comes from the second
     # pass, on a magnet that has stopped moving.
     _dmskip = 0
-    if demag and _mag_idx.size and _v_nspp > 1 and n_total > 1:
+    # WITH the coupled eddy solve, the demag settling MERGES into the eddy
+    # warm-up instead of prepending its own period.  Both are settlings that
+    # converge within about one electrical period (user's call, 2026-08-19:
+    # one period suffices for both), the demag ratchet already runs on every
+    # warm-up frame, and the warm-up's quiet test is extended below to refuse
+    # the handoff while the Br map still moved — so the reported window starts
+    # on a magnet AND an eddy field that have both stopped changing.  Measured
+    # before the merge (12 steps): eddy+demag ×6.96 of plain; the second
+    # settling period was pure duplication.
+    if demag and _mag_idx.size and _v_nspp > 1 and n_total > 1 and not eddy:
         _dmskip = _v_nspp
         n_periods = float(n_periods) + 1.0
         n_total += _dmskip
@@ -3398,6 +3407,7 @@ def fem_transient_sliding_band(
         _eddy_probe = max(0, int(_ew_env)); _eddy_cap = 0
     _warm_solid: List[float] = []   # solid σE² per frame of the CURRENT march
     _n_warm = 0                     # warm-up frames actually solved (all marches)
+    _dm_moved_in_warm = False       # Br ratcheted during the current warm-up window
     _warm_resid = None              # remaining transient at the handoff [rel]
     _warm_tau_s = None              # fitted settling time constant [s], if clean
     _warm_extended = False          # the probe was not enough → cap march ran
@@ -3785,7 +3795,10 @@ def fem_transient_sliding_band(
                 _ar_d = _dxq_d.sum(axis=1)
                 _bxe_d = (_bxq_d * _dxq_d).sum(axis=1) / np.maximum(_ar_d, 1e-30)
                 _bye_d = (_byq_d * _dxq_d).sum(axis=1) / np.maximum(_ar_d, 1e-30)
-                if _dmst.update(_bxe_d[nst:], _bye_d[nst:]) and _dm_pass < 11:
+                _dm_hit = _dmst.update(_bxe_d[nst:], _bye_d[nst:])
+                if _dm_hit and not _warm_done:
+                    _dm_moved_in_warm = True     # the quiet test must see this
+                if _dm_hit and _dm_pass < 11:
                     _mx_all[nst:] = _Mx_glob * _br_glob
                     _my_all[nst:] = _My_glob * _br_glob
                     f_mag2 = asm(_msrc, b2, mx=b2_0.interpolate(_mx_all),
@@ -3868,7 +3881,8 @@ def fem_transient_sliding_band(
                 if (k == -1) if _warm_extended else (k >= 0):
                     _warm_resid, _warm_tau_s = _eddy_settle_resid(
                         _warm_solid, int(n_steps_per_period), dt)
-                    _quiet = _warm_resid <= _EDDY_SETTLE_TOL
+                    _quiet = (_warm_resid <= _EDDY_SETTLE_TOL
+                              and not (demag and _dm_moved_in_warm))
                     log.info("P2 eddy warm-up: %d frame(s) solved, remaining "
                              "start-up transient %.3g %% of the settled solid "
                              "loss (tol %.1f %%)%s", _n_warm,
@@ -3889,24 +3903,39 @@ def fem_transient_sliding_band(
                         _n_warm += 1
                         _fseq[_fi:_fi] = list(range(-_eddy_cap, 0)) + [0]
                         _warm_solid = []
+                        _dm_moved_in_warm = False   # a fresh window judges fresh
                         _Aed_prev = A2.copy()
                         log.info("P2 eddy warm-up: not settled — extending by "
                                  "one electrical period (%d frames)", _eddy_cap)
                         continue
                     _warm_done = True
                     if not _quiet:
-                        # Loud: the reported window still contains start-up
-                        # decay, so the solid-loss cycle means below — and the
-                        # efficiency built on them — are over-read by about
-                        # this much.  Nothing left to spend: the cap is a whole
-                        # electrical period.
-                        log.warning(
-                            "P2 eddy warm-up: STILL NOT SETTLED after %d "
-                            "frame(s) — %.3g %% of the solid loss at the "
-                            "handoff is decaying start-up transient (tol "
-                            "%.1f %%).  P_mag / P_shaft and the efficiency are "
-                            "over-read by roughly that much.", _n_warm,
-                            100.0 * _warm_resid, 100.0 * _EDDY_SETTLE_TOL)
+                        # NAME THE UNSETTLED PARTY.  The quiet test now watches
+                        # two settlings, and blaming the eddy transient for a
+                        # Br ratchet that simply finished its first pass over
+                        # the rotor positions (expected: the ratchet MUST visit
+                        # every position once) produced a warning that read
+                        # "0.8 % over a 2 % tolerance".
+                        if _warm_resid > _EDDY_SETTLE_TOL:
+                            log.warning(
+                                "P2 eddy warm-up: STILL NOT SETTLED after %d "
+                                "frame(s) — %.3g %% of the solid loss at the "
+                                "handoff is decaying start-up transient (tol "
+                                "%.1f %%).  P_mag / P_shaft and the efficiency "
+                                "are over-read by roughly that much.", _n_warm,
+                                100.0 * _warm_resid, 100.0 * _EDDY_SETTLE_TOL)
+                        else:
+                            # The eddy side IS quiet; only the demag ratchet
+                            # moved inside the warm-up window.  Correctness does
+                            # not depend on it — a residual trip inside the
+                            # reported window re-solves that frame — so this is
+                            # an economy note, not an alarm.
+                            log.info(
+                                "P2 warm-up handoff: eddy settled (%.3g %% <= "
+                                "%.1f %%); the demag ratchet completed during "
+                                "the warm-up march, reported window starts on "
+                                "the settled magnet.", 100.0 * _warm_resid,
+                                100.0 * _EDDY_SETTLE_TOL)
             # ── the SAME integrand, kept per element (Loss map) ───────────
             # E = −∂A/∂t + U_b at this element's quadrature points; σE²
             # integrated over the element and divided by its area is the

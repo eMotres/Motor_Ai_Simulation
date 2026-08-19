@@ -46,12 +46,13 @@ interface ParamValueFieldProps {
   min?: number;
   max?: number;
   dirty: boolean;
+  disabled?: boolean;              // locked by the active die/configuration
   onCommit: (v: number) => void;   // live local commit (no API call)
   onEnter: () => void;             // Recalculate
 }
 
 const ParamValueField: React.FC<ParamValueFieldProps> = ({
-  value, type, step, min, max, dirty, onCommit, onEnter,
+  value, type, step, min, max, dirty, disabled, onCommit, onEnter,
 }) => {
   const prec = type === 'int' ? 0
     : step && step < 0.1 ? 3
@@ -78,6 +79,7 @@ const ParamValueField: React.FC<ParamValueFieldProps> = ({
     <TextField
       size="small"
       value={draft}
+      disabled={!!disabled}
       onChange={(e) => {
         const s = e.target.value;
         setDraft(s);                                        // show exactly what is typed
@@ -115,8 +117,43 @@ const ParamValueField: React.FC<ParamValueFieldProps> = ({
   );
 };
 
+const FAMILY_API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
+
 const ParameterVariationTable: React.FC = () => {
   const [dialogOpen, setDialogOpen] = useState(false);
+
+  // Locks of the ACTIVE die/configuration: with the die locked only the
+  // free keys (stack length, wire height, turns) stay editable; with the
+  // configuration locked too the whole geometry is read-only.  The backend
+  // enforces this on PUT (423) — greying the fields makes it VISIBLE.
+  const [famLocks, setFamLocks] = useState<{
+    dieLocked: boolean; cfgLocked: boolean; freeKeys: Set<string>;
+    die?: string; config?: string;
+  } | null>(null);
+  useEffect(() => {
+    const load = () => fetch(`${FAMILY_API}/api/family/context`)
+      .then(r => r.json())
+      .then(c => setFamLocks(c?.active ? {
+        dieLocked: c.die_locked === true, cfgLocked: c.config_locked === true,
+        freeKeys: new Set<string>(c.free_keys || []),
+        die: c.die, config: c.config,
+      } : null))
+      .catch(() => setFamLocks(null));
+    load();
+    window.addEventListener('family-changed', load);
+    window.addEventListener('sim-design-applied', load);
+    return () => {
+      window.removeEventListener('family-changed', load);
+      window.removeEventListener('sim-design-applied', load);
+    };
+  }, []);
+  const paramLocked = (name: string): string | null => {
+    if (!famLocks) return null;
+    const free = famLocks.freeKeys.has(name);
+    if (free && famLocks.cfgLocked) return `configuration '${famLocks.config}'`;
+    if (!free && famLocks.dieLocked) return `die '${famLocks.die}'`;
+    return null;
+  };
 
   const {
     parameterSchema,
@@ -307,14 +344,16 @@ const ParameterVariationTable: React.FC = () => {
           {group.params.map(param => {
             const variation = sweepConfig.variations[param.name];
             const isActive  = variation?.mode !== 'fixed' && variation?.mode !== undefined;
-            const dirty     = dirtyKeys.has(param.name);
-            const localVal  = localValues[param.name];
+            const lockedBy  = paramLocked(param.name);
+            const dirty     = !lockedBy && dirtyKeys.has(param.name);
+            const localVal  = lockedBy ? undefined : localValues[param.name];
             const displayVal = localVal !== undefined
               ? localVal
               : (geometry[param.name] ?? 0);
             // Whitelist gate: only optimizable params may be ADDED to the sweep.
             // An already-active param always keeps its remove (✕) control.
-            const canSweep = isActive || param.optimizable !== false;
+            // A LOCKED param cannot be added either — it cannot move.
+            const canSweep = isActive || (param.optimizable !== false && !lockedBy);
 
             return (
               <Box
@@ -352,7 +391,13 @@ const ParameterVariationTable: React.FC = () => {
               >
                 {/* Parameter name (grid col 1 = 1fr) */}
                 <Box sx={{ minWidth: 0 }}>
-                  <Typography variant="body2" noWrap sx={{ lineHeight: 1.4 }}>
+                  <Typography variant="body2" noWrap
+                    sx={{ lineHeight: 1.4, opacity: lockedBy ? 0.55 : 1 }}>
+                    {lockedBy && (
+                      <Tooltip title={`Locked by ${lockedBy} — unlock it in the Motors catalog to edit`}>
+                        <span style={{ marginRight: 4, cursor: 'help', fontSize: 11 }}>🔒</span>
+                      </Tooltip>
+                    )}
                     {param.label}
                     {param.unit && (
                       <Typography
@@ -373,6 +418,7 @@ const ParameterVariationTable: React.FC = () => {
                   min={param.min}
                   max={param.max}
                   dirty={dirty}
+                  disabled={!!lockedBy}
                   onCommit={(v) => commitValue(param.name, v)}
                   onEnter={handleRecalculate}
                 />

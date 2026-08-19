@@ -37,10 +37,8 @@ router = APIRouter(prefix="/api/family", tags=["family"])
 
 _DIES_DIR = Path(DEFAULT_CONFIG_PATH).parent / "dies"
 
-# The keys a CONFIGURATION may change on a stamped die.  Everything else in
-# the geometry block belongs to the tooling and is locked the day the die is
-# cut: stack length is just how many laminations you drop in, and the wire
-# stack (dims / count / split / insulation) is wound, not stamped.
+# The keys a CONFIGURATION snapshots on top of a die — everything the stamp
+# does not fix: stack length and the whole wire stack.
 FREE_GEO_KEYS = (
     "motor_length",
     "wire_width", "wire_height",
@@ -48,6 +46,12 @@ FREE_GEO_KEYS = (
     "num_wires_per_slot", "wire_split",
     "insulation_thickness",
 )
+
+# What stays EDITABLE while the die is locked — the user's definition, and
+# deliberately narrower than FREE_GEO_KEYS: stack length, wire height, turn
+# count.  Everything else (wire width, spacings, split, insulation) is part
+# of the qualified build and changes only on an unlocked machine.
+EDITABLE_UNDER_DIE_LOCK = ("motor_length", "wire_height", "num_wires_per_slot")
 
 # Display names double as file/dir names, so the charset is "safe on every
 # filesystem": letters, digits, space and light punctuation.  Real product
@@ -554,6 +558,9 @@ def context(authorization: str = Header(default=None)):
         "die_locked": bool(d.get("locked", True)),
         "config_locked": bool(c.get("locked", False)),
         "can_write": bool(who["is_admin"]),
+        # The keys a die-lock leaves editable — ONE source of truth for the
+        # Geometry tab's read-only greying (must match the PUT guard).
+        "free_keys": list(EDITABLE_UNDER_DIE_LOCK),
         "duty_point": (None if point is None else {
             "current_arms": point.get("current_arms"), "rpm": point.get("rpm"),
             "gamma_deg": point.get("gamma_deg"), "mode": point.get("mode", "motor"),
@@ -625,7 +632,7 @@ def geometry_lock_check(update: dict) -> Optional[dict]:
     ov = c.get("geometry_overrides") or {}
     bad = []
     for k, v in update.items():
-        free = k in FREE_GEO_KEYS
+        free = k in EDITABLE_UNDER_DIE_LOCK
         if free:
             if not cfg_locked:
                 continue                  # die-lock alone leaves free keys open

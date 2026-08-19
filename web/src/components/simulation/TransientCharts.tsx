@@ -375,6 +375,8 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
       // (0 = auto-estimate from geometry) for the copper the 2-D field misses.
       coil_temp_c:        readSimSetting('coilTemp',   120.0),
       end_winding_factor: readSimSetting('endWinding',   0.0),
+      // Operating mode — generator shifts the drive 180 deg el server-side.
+      mode: readSimSetting<string>('opMode', 'motor'),
       // D-AXIS: sent only when PINNED.  Blank means "measure it", and the
       // backend's own resolver decides that from the shared config — sending
       // a 0 for "blank" would pin the reference to zero degrees instead.

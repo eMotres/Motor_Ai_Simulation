@@ -22,6 +22,9 @@ export interface TransientSummary {
   // Absent on runs saved before it was stamped — unknown, never assumed.
   connection?:         string;
   n_parallel?:         number;
+  // Which way the power flowed — decided by the backend from the shaft-power
+  // sign, so a hand-typed generator angle is labelled too.
+  op_mode?:            'motor' | 'generator' | string;
   // Terminal parameters (persisted with the summary like everything else).
   // R includes the end-winding; L are APPARENT (chord) inductances at THIS
   // operating point — saturated, not small-signal.  Absent on runs from
@@ -341,6 +344,9 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, deltaVsApp
           {/* The winding these numbers were solved with — same line as the rest
               of the operating point, because it moves them just as much. */}
           {!!ranC && ` · ${ranC}`}
+          {s.op_mode === 'generator' && (
+            <span style={{ color: '#fbbf24', fontWeight: 700 }}> · GENERATOR</span>
+          )}
           {stale && (
             <Tooltip title={`Computed at I = ${s.I_phase_rms_A} A, γ = ${s.gamma_deg}° — the panel is now set to `
               + `${Number.isFinite(liveI as number) ? `I = ${fmt(liveI as number, 2)} A` : ''}`

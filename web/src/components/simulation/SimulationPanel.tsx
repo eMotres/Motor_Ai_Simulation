@@ -246,6 +246,10 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // the machine's own response, incl. the parasitic harmonics a distorted
   // back-EMF forces through the winding + their real extra losses).
   const [drive,   setDrive]   = usePersisted<'current' | 'voltage'>('drive', 'current');
+  // Operating mode.  Generator = the SAME gamma, current shifted 180 deg el —
+  // torque brakes, mechanical power flows in, the card's efficiency flips to
+  // P_electrical_out / P_mechanical_in (the backend decides by power-flow sign).
+  const [opMode,  setOpMode]  = usePersisted<'motor' | 'generator'>('opMode', 'motor');
   const [vPeak,   setVPeak]   = usePersisted('vPeak',  30.0);  // phase-voltage amplitude [V]
   const [vDelta,  setVDelta]  = usePersisted('vDelta',  0.0);  // voltage angle δ [°el], same frame as γ
 
@@ -420,6 +424,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
     end_winding_factor: endWinding, connection,
     demag, eddy: eddyCoupled, rotor_eddy: fieldLosses, torque_filter: torqueFilter,
     drive, v_phase_peak: vPeak, v_delta_deg: vDelta,
+    mode: opMode,
   });
 
   // Persist the operating point to config.yaml on ANY change (debounced), not
@@ -437,7 +442,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
     }, 700);
     return () => clearTimeout(id);
   }, [current, frequency, rpm, phaseOffset, demag, eddyCoupled, fieldLosses,
-      coilTemp, steps, endWinding, connection, drive, vPeak, vDelta]);
+      coilTemp, steps, endWinding, connection, drive, opMode, vPeak, vDelta]);
 
   // Auto-save EVERY simulation change into the active motor ("my copy").
   // syncActiveMotor is internally debounced, so firing on each change is fine.
@@ -770,6 +775,21 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
             {/* Drive mode: imposed sinusoidal current (design work) vs imposed
                 sinusoidal voltage (FOC-drive verification — currents become the
                 machine's own response incl. back-EMF-harmonic parasitics). */}
+            <Box sx={{ display: 'flex', gap: 0.5 }}>
+              {(['motor', 'generator'] as const).map(m => (
+                <Button key={m} size="small" fullWidth disabled={isRunning}
+                  variant={opMode === m ? 'contained' : 'outlined'}
+                  color={m === 'generator' ? 'warning' : 'primary'}
+                  onClick={() => setOpMode(m)}
+                  sx={{ fontSize: '0.7rem', textTransform: 'none', py: 0.3 }}>
+                  {m === 'motor' ? 'Motor' : 'Generator'}
+                </Button>
+              ))}
+              <HelpTip title={'Generator mode drives the SAME gamma shifted 180 deg el: the current '
+                + 'vector opposes the EMF, torque is braking (negative), mechanical power flows in and '
+                + 'the efficiency becomes P_electrical_out / P_mechanical_in. Everything else — current, '
+                + 'speed, winding, d-axis — stays exactly as set here.'} />
+            </Box>
             <Box sx={{ display: 'flex', gap: 0.5 }}>
               {(['current', 'voltage'] as const).map(m => (
                 <Button key={m} size="small" fullWidth disabled={isRunning}

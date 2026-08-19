@@ -259,6 +259,9 @@ class SimConfigPatch(BaseModel):
     # angle nobody can see, so it lives in the config the panel shows and is
     # stamped into every result as `daxis_source`.
     daxis_deg:          Optional[Union[float, str]] = None
+    # Operating mode: "motor" | "generator" — the generator drives the same
+    # panel gamma shifted 180 deg el (current opposes the EMF).
+    mode:               Optional[str]   = None
 
 
 class JobStatus(BaseModel):
@@ -2638,6 +2641,12 @@ def get_fem_transient(
                                           #   sees I_coil = I_phase / n_parallel, so a stored
                                           #   machine evaluated without its own value is driven
                                           #   at n_parallel x its intended coil MMF (F3).
+    mode:        Optional[str] = None,    # ← "motor" (default) | "generator".  Omitted =
+                                          #   the Simulation tab's simulation.mode.  A
+                                          #   generator run drives the SAME gamma the panel
+                                          #   shows, shifted 180 deg el — the current vector
+                                          #   opposes the EMF, torque brakes, mechanical
+                                          #   power flows in.  Unknown value -> 422.
     daxis_deg:   Optional[float] = None,  # ← D-AXIS REFERENCE, GIVEN.  Omitted = the
                                           #   Simulation tab's simulation.daxis_deg if it
                                           #   holds one, else MEASURED (a 24-frame no-load
@@ -2742,6 +2751,24 @@ def get_fem_transient(
             _pc_route(connection)
         except ValueError as _ce:
             raise HTTPException(status_code=400, detail=str(_ce))
+    # Resolve the operating mode (argument > shared config > motor) and fold it
+    # into the load angle EARLY, so every consumer downstream — the cache key,
+    # the solver, the dq stamp — sees the one effective gamma this run solves.
+    _mode_raw = mode
+    if _mode_raw is None:
+        try:
+            from motor_ai_sim.config import get_config as _gc_m
+            _mode_raw = ((_gc_m().get("simulation") or {}).get("mode"))
+        except Exception:
+            _mode_raw = None
+    _mode_eff = str(_mode_raw or "motor").strip().lower()
+    if _mode_eff not in ("motor", "generator"):
+        raise HTTPException(status_code=422, detail=(
+            "simulation mode must be 'motor' or 'generator'; got %r" % (_mode_raw,)))
+    _gamma_panel = float(gamma_deg)          # what the panel shows and compares
+    if _mode_eff == "generator":
+        gamma_deg = float(gamma_deg) + 180.0
+
     if n_parallel is not None and int(n_parallel) < 1:
         raise HTTPException(status_code=400,
                             detail=f"n_parallel must be >= 1; got {n_parallel!r}")
@@ -3243,8 +3270,12 @@ def get_fem_transient(
         # legacy remesh path AND the kernel/solver.em_transient path all use the
         # SAME formula and every run returns a populated `summary`.
         try:
+            # The summary carries the PANEL's gamma (16, not 196): the card's
+            # staleness check compares against the panel input, and the mode
+            # chip says which way the 180 went; the solver result keeps the
+            # effective angle in gamma_effective_deg.
             _sbres["summary"] = _build_transient_summary(
-                _sbres, I_phase_rms=I_phase_rms, gamma_deg=gamma_deg,
+                _sbres, I_phase_rms=I_phase_rms, gamma_deg=_gamma_panel,
                 coil_temp_c=coil_temp_c, geo_override=_geo_ov)
         except Exception as _se:
             # A summary-build failure MUST be visible (not a silently frozen
@@ -3554,7 +3585,21 @@ def _build_transient_summary(
     # terminal power stays below as an energy-balance diagnostic.
     _Pelec_solved = float(sbres.get("P_elec_in_W", 0.0) or 0.0)
     _Pelec = _Pmech + _ploss
-    _eff = (_Pmech / _Pelec) if (_Pmech > 0 and _Pelec > 1.0) else 0.0
+    # WHICH WAY THE POWER FLOWS decides the efficiency formula — the sign of
+    # the shaft power, not a UI flag, so a hand-typed generator angle gets the
+    # generator arithmetic too.  Motor: eta = P_shaft_out / (P_shaft + losses).
+    # Generator: mechanical power comes IN (P_mech < 0), the electrical output
+    # is what remains after the losses, eta = (P_in - losses) / P_in.
+    if _Pmech > 0:
+        _eff = (_Pmech / _Pelec) if _Pelec > 1.0 else 0.0
+        _op_mode = "motor"
+    elif _Pmech < 0:
+        _P_in = -_Pmech
+        _eff = ((_P_in - _ploss) / _P_in) if _P_in > max(_ploss, 1.0) else 0.0
+        _op_mode = "generator"
+    else:
+        _eff = 0.0
+        _op_mode = "motor"
 
     # Voltage waveform quality (CIANO THD spec): V₁ + phase/line-to-line THD +
     # torque constant — first-class metrics on EVERY run so the optimizer can
@@ -3650,6 +3695,7 @@ def _build_transient_summary(
         # connection and nothing moved" became unanswerable.
         "connection": _conn,
         "n_parallel": _npar,
+        "op_mode": _op_mode,
         # Terminal parameters, persisted with every run (they ride the summary
         # into sim.lastSummary, .last_transient.json, Compare and the motor
         # autosave — one write path, no separate store to rot).

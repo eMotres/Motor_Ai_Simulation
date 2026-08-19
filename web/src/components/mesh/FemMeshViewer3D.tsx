@@ -33,7 +33,7 @@ const DOMAIN_RGB: Record<number, [number, number, number]> = {
   5:  [0.22, 0.27, 0.32],   // rotor (darker steel gray)
   6:  [0.71, 0.71, 0.75],   // shaft
   7:  [0.45, 0.85, 0.80],   // motion band (slip surface) — teal, distinct from air gap
-  8:  [0.22, 0.40, 0.55],   // outer air ring — deep ocean blue
+  8:  [0.55, 0.65, 0.78],   // outer air — SAME as air: one substance, one colour
   44: [0.94, 0.27, 0.27],   // magnet S
 };
 
@@ -48,7 +48,7 @@ const DOMAIN_STROKE: Record<number, number> = {
   5:  0x0b1220,
   6:  0x475569,
   7:  0x0d9488,
-  8:  0x1e3a8a,
+  8:  0x1e293b,             // same stroke as air — one substance, one look
   44: 0x991b1b,
 };
 

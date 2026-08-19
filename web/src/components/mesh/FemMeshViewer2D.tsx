@@ -17,7 +17,7 @@ const RGB: Record<number, string> = {
   5:  'rgb(56,69,82)',      // rotor steel
   6:  'rgb(181,181,191)',   // shaft
   7:  'rgb(115,217,204)',   // motion band
-  8:  'rgb(56,102,140)',    // outer air ring
+  8:  'rgb(140,166,199)',   // outer air — SAME as air: one substance, one colour
   44: 'rgb(240,69,69)',     // magnet S
 };
 const colorOf = (d: number) => RGB[d] ?? 'rgb(100,116,139)';

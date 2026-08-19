@@ -216,8 +216,7 @@ const FamilyCatalog: React.FC = () => {
               {die.locked ? '🔒 ' : ''}{die.name}
             </Typography>
             <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>
-              {die.slots}s/{die.poles}p · D{die.stator_diameter} ·
-              {' '}{die.configs.length} configuration{die.configs.length === 1 ? '' : 's'}
+              {die.configs.length} configuration{die.configs.length === 1 ? '' : 's'}
             </Typography>
             <Box sx={{ flex: 1 }} />
             <Button size="small" variant="text" disabled={!!busy}

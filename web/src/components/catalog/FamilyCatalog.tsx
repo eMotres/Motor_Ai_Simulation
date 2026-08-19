@@ -17,10 +17,14 @@ import MotorThumbnail from './MotorThumbnail';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
+interface DutyResult {
+  efficiency_pct?: number; ripple_pct?: number; v_ll_peak_v?: number;
+  loss_w?: number; mass_kg?: number; recorded_at?: string;
+}
 interface Duty {
   name: string; mode: string; current_arms: number; rpm: number;
   gamma_deg: number; torque_nm?: number | null; power_kw?: number | null;
-  note: string;
+  note: string; result?: DutyResult | null;
 }
 interface Cfg {
   name: string; role: string; stack_mm: number | null;
@@ -33,14 +37,8 @@ interface Die {
   thumb_svg?: string | null; configs: Cfg[];
 }
 
-/** "peak · 145 kW · 387 Nm · 3800 rpm · 294 A" — the card IS the spec line. */
-const dutyLabel = (d: Duty) => [
-  d.name,
-  d.power_kw != null ? `${d.power_kw} kW` : null,
-  d.torque_nm != null ? `${d.torque_nm} Nm` : null,
-  `${d.rpm} rpm`,
-  `${d.current_arms} A`,
-].filter(Boolean).join(' · ');
+const fmt = (v: number | null | undefined, digits = 1) =>
+  v == null || !Number.isFinite(Number(v)) ? '—' : Number(v).toFixed(digits).replace(/\.0+$/, '');
 
 const readLS = (k: string, d: any) => {
   try { const v = localStorage.getItem('sim.' + k); return v == null ? d : JSON.parse(v); }
@@ -120,6 +118,36 @@ const FamilyCatalog: React.FC = () => {
     if (!window.confirm(`Delete duty '${duty}' from ${die}/${cfg}?`)) return;
     mutate(`duty '${duty}' deleted`, () =>
       del(`/api/family/duty/${encodeURIComponent(die)}/${encodeURIComponent(cfg)}/${encodeURIComponent(duty)}`));
+  };
+
+  // Record the LAST finished Simulation run's numbers onto a duty — but only
+  // when that run actually was this duty's operating point.  Recording a run
+  // from a different point would be a quietly wrong passport.
+  const recordResult = (die: string, cfg: string, d: Duty) => {
+    const s = readLS('lastSummary', null);
+    if (!s || !Number.isFinite(Number(s.I_phase_rms_A))) {
+      setMsg('✗ no finished Simulation run to record — apply the duty, Run, then record');
+      return;
+    }
+    const iOk = Math.abs(Number(s.I_phase_rms_A) - d.current_arms)
+                <= Math.max(0.5, 0.002 * d.current_arms);
+    const rOk = Math.abs(Number(s.rpm) - d.rpm) <= 1;
+    const mOk = (s.op_mode ?? 'motor') === d.mode;
+    if (!iOk || !rOk || !mOk) {
+      setMsg(`✗ last run is ${s.I_phase_rms_A} A @ ${s.rpm} rpm (${s.op_mode ?? 'motor'}) `
+           + `— not '${d.name}' (${d.current_arms} A @ ${d.rpm} rpm ${d.mode}); `
+           + 'apply the duty, Run, then record');
+      return;
+    }
+    mutate(`result recorded on '${d.name}'`, () => post('/api/family/duty_result', {
+      die, config: cfg, duty: d.name, result: {
+        efficiency_pct: Number(s.efficiency) * 100,
+        ripple_pct: s.T_ripple_pct,
+        v_ll_peak_v: s.V_line_peak_V,
+        loss_w: s.P_loss_total_W,
+        mass_kg: s.mass_total_kg,
+      },
+    }));
   };
 
   // ── apply a duty: geometry + winding + operating point, existing endpoints ─
@@ -234,52 +262,112 @@ const FamilyCatalog: React.FC = () => {
           </Box>
 
           {die.configs.map(c => (
-            <Box key={c.name} sx={{ display: 'flex', alignItems: 'center', gap: 0.8,
-              flexWrap: 'wrap', pl: 1, py: 0.3,
-              borderTop: '1px solid var(--panel)' }}>
-              <Typography sx={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-2)',
-                                minWidth: 84 }}>
-                {c.name}
-              </Typography>
-              <Chip size="small" label={c.role}
-                sx={{ height: 18, fontSize: 10, color: roleColor(c.role),
-                      bgcolor: 'transparent', border: `1px solid ${roleColor(c.role)}55` }} />
-              <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>
-                {c.stack_mm} mm · wire {c.wire_height_mm}×{c.wire_width_mm} mm
-                {' '}· {c.turns} turns · {c.connection}
-              </Typography>
-              <Box sx={{ flex: 1 }} />
-              {c.duties.map(d => (
-                <Tooltip key={d.name} placement="top"
-                  title={`${d.mode} · ${d.current_arms} Arms @ ${d.rpm} rpm · γ=${d.gamma_deg}°`
-                         + (d.note ? ` — ${d.note}` : '')
-                         + ' · click = load into Simulation'}>
-                  <Chip size="small" clickable
-                    label={busy === `${c.name} / ${d.name}` ? '…' : dutyLabel(d)}
-                    onClick={() => applyDuty(die.name, c.name, d.name)}
-                    onDelete={() => deleteDuty(die.name, c.name, d.name)}
-                    sx={{ height: 22, fontSize: 11,
-                          bgcolor: 'var(--panel)', color: 'var(--text-1)',
-                          border: `1px solid ${roleColor(d.mode)}55`,
-                          '& .MuiChip-deleteIcon': { fontSize: 14 } }} />
+            <Box key={c.name} sx={{ pl: 1, py: 0.3, borderTop: '1px solid var(--panel)' }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, flexWrap: 'wrap' }}>
+                <Typography sx={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-2)',
+                                  minWidth: 84 }}>
+                  {c.name}
+                </Typography>
+                <Chip size="small" label={c.role}
+                  sx={{ height: 18, fontSize: 10, color: roleColor(c.role),
+                        bgcolor: 'transparent', border: `1px solid ${roleColor(c.role)}55` }} />
+                <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>
+                  {c.stack_mm} mm · wire {c.wire_height_mm}×{c.wire_width_mm} mm
+                  {' '}· {c.turns} turns · {c.connection}
+                </Typography>
+                <Box sx={{ flex: 1 }} />
+                <Tooltip title="Save the CURRENT Simulation point as a new duty here">
+                  <span>
+                    <Button size="small" variant="text" disabled={!!busy}
+                      onClick={() => createDuty(die.name, c.name)}
+                      sx={{ textTransform: 'none', fontSize: 11, minWidth: 0, px: 0.5 }}>
+                      ＋ duty
+                    </Button>
+                  </span>
                 </Tooltip>
-              ))}
-              <Tooltip title="Save the CURRENT Simulation point as a new duty here">
-                <span>
-                  <Button size="small" variant="text" disabled={!!busy}
-                    onClick={() => createDuty(die.name, c.name)}
-                    sx={{ textTransform: 'none', fontSize: 11, minWidth: 0, px: 0.5 }}>
-                    ＋ duty
-                  </Button>
-                </span>
-              </Tooltip>
-              <Tooltip title="Delete this configuration and its duties">
-                <span>
-                  <IconButton size="small" disabled={!!busy}
-                    onClick={() => deleteCfg(die.name, c.name)}
-                    sx={{ color: 'var(--text-4)', fontSize: 12, p: 0.3 }}>🗑</IconButton>
-                </span>
-              </Tooltip>
+                <Tooltip title="Delete this configuration and its duties">
+                  <span>
+                    <IconButton size="small" disabled={!!busy}
+                      onClick={() => deleteCfg(die.name, c.name)}
+                      sx={{ color: 'var(--text-4)', fontSize: 12, p: 0.3 }}>🗑</IconButton>
+                  </span>
+                </Tooltip>
+              </Box>
+              {c.duties.length > 0 && (
+                <Box component="table" sx={{
+                  width: '100%', mt: 0.4, mb: 0.4, borderCollapse: 'collapse',
+                  '& th': { fontSize: 10, fontWeight: 600, color: 'var(--text-4)',
+                            textAlign: 'right', p: '2px 6px', whiteSpace: 'nowrap' },
+                  '& td': { fontSize: 11.5, color: 'var(--text-2)', textAlign: 'right',
+                            p: '2px 6px', whiteSpace: 'nowrap',
+                            fontVariantNumeric: 'tabular-nums',
+                            borderTop: '1px solid var(--panel)' },
+                  '& th:first-of-type, & td:first-of-type': { textAlign: 'left' },
+                }}>
+                  <thead>
+                    <tr>
+                      <th>duty</th><th>kW</th><th>Nm</th><th>rpm</th><th>A</th>
+                      <th>γ°</th><th>η %</th><th>ripple %</th><th>V L-L</th>
+                      <th>loss W</th><th>kg</th><th style={{ textAlign: 'center' }} />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {c.duties.map(d => {
+                      const r = d.result || {};
+                      const applying = busy === `${c.name} / ${d.name}`;
+                      return (
+                        <tr key={d.name}>
+                          <td>
+                            <Tooltip placement="top-start"
+                              title={`${d.mode}${d.note ? ` — ${d.note}` : ''}`
+                                     + (r.recorded_at ? ` · recorded ${r.recorded_at}` : '')}>
+                              <span style={{ color: roleColor(d.mode), fontWeight: 600,
+                                             cursor: 'help' }}>
+                                {d.name}
+                              </span>
+                            </Tooltip>
+                          </td>
+                          <td>{fmt(d.power_kw)}</td>
+                          <td>{fmt(d.torque_nm)}</td>
+                          <td>{fmt(d.rpm, 0)}</td>
+                          <td>{fmt(d.current_arms)}</td>
+                          <td>{fmt(d.gamma_deg)}</td>
+                          <td>{fmt(r.efficiency_pct, 2)}</td>
+                          <td>{fmt(r.ripple_pct)}</td>
+                          <td>{fmt(r.v_ll_peak_v, 0)}</td>
+                          <td>{fmt(r.loss_w, 0)}</td>
+                          <td>{fmt(r.mass_kg, 2)}</td>
+                          <td style={{ textAlign: 'center' }}>
+                            <Tooltip title="Load into Simulation">
+                              <span>
+                                <IconButton size="small" disabled={!!busy}
+                                  onClick={() => applyDuty(die.name, c.name, d.name)}
+                                  sx={{ fontSize: 12, p: 0.2, color: '#34d399' }}>
+                                  {applying ? '…' : '▶'}
+                                </IconButton>
+                              </span>
+                            </Tooltip>
+                            <Tooltip title="Record the LAST finished run here (must be at this duty's point)">
+                              <span>
+                                <IconButton size="small" disabled={!!busy}
+                                  onClick={() => recordResult(die.name, c.name, d)}
+                                  sx={{ fontSize: 12, p: 0.2, color: 'var(--text-3)' }}>📥</IconButton>
+                              </span>
+                            </Tooltip>
+                            <Tooltip title="Delete duty">
+                              <span>
+                                <IconButton size="small" disabled={!!busy}
+                                  onClick={() => deleteDuty(die.name, c.name, d.name)}
+                                  sx={{ fontSize: 12, p: 0.2, color: 'var(--text-4)' }}>✕</IconButton>
+                              </span>
+                            </Tooltip>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </Box>
+              )}
             </Box>
           ))}
         </Box>

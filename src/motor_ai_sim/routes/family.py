@@ -132,6 +132,18 @@ class DieCreate(BaseModel):
     name: str
 
 
+# Computed numbers a RUN produced at this duty's operating point — never
+# invented, only recorded off a finished Simulation run.
+_RESULT_KEYS = ("efficiency_pct", "ripple_pct", "v_ll_peak_v", "loss_w", "mass_kg")
+
+
+class DutyResult(BaseModel):
+    die: str
+    config: str
+    duty: str
+    result: dict
+
+
 class ConfigCreate(BaseModel):
     die: str
     name: str
@@ -176,7 +188,7 @@ def tree():
                      "current_arms": d.get("current_arms"), "rpm": d.get("rpm"),
                      "gamma_deg": d.get("gamma_deg"),
                      "torque_nm": d.get("torque_nm"), "power_kw": d.get("power_kw"),
-                     "note": d.get("note", "")}
+                     "note": d.get("note", ""), "result": d.get("result")}
                     for d in (c.get("duties") or [])
                 ],
             })
@@ -336,11 +348,48 @@ def upsert_duty(req: DutyCreate):
         entry["torque_nm"] = round(float(d.torque_nm), 2)
     if d.power_kw is not None:
         entry["power_kw"] = round(float(d.power_kw), 2)
+    # An upsert of the operating point KEEPS a previously recorded result —
+    # results die only with the duty (or when overwritten by a new record).
+    prev = next((x for x in (c.get("duties") or []) if x.get("name") == dname), None)
+    if prev and prev.get("result"):
+        entry["result"] = prev["result"]
     duties.append(entry)
     c["duties"] = duties
     _save_yaml(p, c)
     log.info("family: duty '%s/%s/%s' saved (%s, %.1f Arms @ %.0f rpm, γ=%.2f°)",
              die, cfg, dname, d.mode, d.current_arms, d.rpm, d.gamma_deg)
+    return {"ok": True}
+
+
+@router.post("/duty_result")
+def record_duty_result(req: DutyResult):
+    """Attach a finished run's numbers to a duty.  The frontend verifies the
+    run WAS at this duty's operating point before calling; this endpoint only
+    validates shape and stores."""
+    die = _check_name(req.die, "die")
+    cfg = _check_name(req.config, "configuration")
+    p = _cfg_file(die, cfg)
+    c = _load_yaml(p, "configuration")
+    found = next((x for x in (c.get("duties") or [])
+                  if x.get("name") == req.duty), None)
+    if found is None:
+        raise HTTPException(404, detail=f"duty '{req.duty}' not found in {die}/{cfg}")
+    res = {}
+    for k in _RESULT_KEYS:
+        v = req.result.get(k)
+        if v is None:
+            continue
+        try:
+            res[k] = round(float(v), 3)
+        except (TypeError, ValueError):
+            raise HTTPException(422, detail=f"result field '{k}' is not a number: {v!r}")
+    if not res:
+        raise HTTPException(422, detail=(
+            "empty result — expected at least one of: " + ", ".join(_RESULT_KEYS)))
+    res["recorded_at"] = datetime.now().isoformat(timespec="seconds")
+    found["result"] = res
+    _save_yaml(p, c)
+    log.info("family: result recorded on '%s/%s/%s': %s", die, cfg, req.duty, res)
     return {"ok": True}
 
 

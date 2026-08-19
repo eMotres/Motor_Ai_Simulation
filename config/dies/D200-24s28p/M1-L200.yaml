@@ -27,6 +27,13 @@ duties:
   note: ANSYS-validated point
   torque_nm: 850.0
   power_kw: 75.7
+  result:
+    efficiency_pct: 85.06
+    ripple_pct: 7.098
+    v_ll_peak_v: 263.8
+    loss_w: 13314.9
+    mass_kg: 27.722
+    recorded_at: '2026-08-19T18:32:27'
 - name: cruise
   mode: motor
   current_arms: 46.0

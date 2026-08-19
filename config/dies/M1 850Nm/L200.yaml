@@ -1,0 +1,29 @@
+name: L200
+die: M1 850Nm
+role: motor
+created: '2026-08-19T18:52:00'
+geometry_overrides:
+  motor_length: 200
+  wire_width: 7
+  wire_height: 0.9
+  wire_spacing_x: 0.1
+  wire_spacing_y: 0.13
+  num_wires_per_slot: 14
+  wire_split: 1
+  insulation_thickness: 0.2
+winding: {}
+duties:
+- name: rated
+  mode: motor
+  current_arms: 46.0
+  rpm: 1400.0
+  gamma_deg: 10.0
+  note: migrated from the motor catalog
+  torque_nm: 851.35
+  power_kw: 124.81
+  result:
+    efficiency_pct: 85.1
+    ripple_pct: 7.1
+    v_ll_peak_v: 263.8
+    mass_kg: 27.72
+    recorded_at: '2026-08-19T18:52:00'

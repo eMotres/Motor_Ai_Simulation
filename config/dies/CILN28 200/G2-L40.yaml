@@ -1,5 +1,5 @@
 name: G2-L40
-die: D200-24s28p
+die: CILN28 200
 role: generator
 created: '2026-08-19T18:07:03'
 geometry_overrides:

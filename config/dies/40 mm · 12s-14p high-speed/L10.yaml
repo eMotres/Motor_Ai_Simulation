@@ -1,0 +1,21 @@
+name: L10
+die: 40 mm · 12s-14p high-speed
+role: motor
+created: '2026-08-19T18:52:00'
+geometry_overrides:
+  motor_length: 10
+  wire_width: 2
+  wire_height: 0.5
+  wire_spacing_x: 0.1
+  wire_spacing_y: 0.1
+  num_wires_per_slot: 6
+  wire_split: 1
+  insulation_thickness: 0.05
+winding: {}
+duties:
+- name: rated
+  mode: motor
+  current_arms: 44.0
+  rpm: 15000.0
+  gamma_deg: 10.0
+  note: migrated from the motor catalog

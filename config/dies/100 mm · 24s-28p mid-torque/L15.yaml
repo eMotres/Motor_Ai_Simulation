@@ -1,0 +1,28 @@
+name: L15
+die: 100 mm · 24s-28p mid-torque
+role: motor
+created: '2026-08-19T18:52:00'
+geometry_overrides:
+  motor_length: 15
+  wire_width: 3.2
+  wire_height: 0.65
+  wire_spacing_x: 0.1
+  wire_spacing_y: 0.13
+  num_wires_per_slot: 10.0
+  wire_split: 1
+  insulation_thickness: 0.2
+winding: {}
+duties:
+- name: rated
+  mode: motor
+  current_arms: 46.0
+  rpm: 3800.0
+  gamma_deg: 12.0
+  note: migrated from the motor catalog
+  torque_nm: 6.0
+  power_kw: 2.39
+  result:
+    efficiency_pct: 93.1
+    ripple_pct: 0
+    mass_kg: 0.75
+    recorded_at: '2026-08-19T18:52:00'

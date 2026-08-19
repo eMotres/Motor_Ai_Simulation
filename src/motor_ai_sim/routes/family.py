@@ -48,16 +48,19 @@ FREE_GEO_KEYS = (
     "insulation_thickness",
 )
 
-_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-]{0,63}$")
+# Display names double as file/dir names, so the charset is "safe on every
+# filesystem": letters, digits, space and light punctuation.  Real product
+# names have spaces ("CILN28 200", "CIANO14 30_10").
+_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.,()#+°·\- ]{0,63}$")
 
 
 def _check_name(name: str, what: str) -> str:
     n = (name or "").strip()
-    if not _NAME_RE.match(n):
+    if not _NAME_RE.match(n) or n != n.strip():
         raise HTTPException(422, detail=(
             f"{what} name '{name}' is not usable as a file name — use letters, "
-            "digits, '-', '_' or '.', up to 64 characters, starting with a "
-            "letter or digit"))
+            "digits, spaces or '-_.,()#+', up to 64 characters, starting with "
+            "a letter or digit"))
     return n
 
 

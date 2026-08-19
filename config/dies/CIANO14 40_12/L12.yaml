@@ -1,0 +1,29 @@
+name: L12
+die: CIANO14 40_12
+role: motor
+created: '2026-08-19T18:52:00'
+geometry_overrides:
+  motor_length: 12
+  wire_width: 2.5
+  wire_height: 0.6
+  wire_spacing_x: 0.1
+  wire_spacing_y: 0.1
+  num_wires_per_slot: 7
+  wire_split: 1
+  insulation_thickness: 0.06
+winding: {}
+duties:
+- name: rated
+  mode: motor
+  current_arms: 43.841
+  rpm: 13000.0
+  gamma_deg: 10.0
+  note: migrated from the motor catalog
+  torque_nm: 0.6
+  power_kw: 0.81
+  result:
+    efficiency_pct: 94.0
+    ripple_pct: 6.1
+    v_ll_peak_v: 16.9
+    mass_kg: 0.09
+    recorded_at: '2026-08-19T18:52:00'

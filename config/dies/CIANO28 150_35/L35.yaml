@@ -1,0 +1,29 @@
+name: L35
+die: CIANO28 150_35
+role: motor
+created: '2026-08-19T18:52:00'
+geometry_overrides:
+  motor_length: 35
+  wire_width: 5
+  wire_height: 0.6
+  wire_spacing_x: 0.1
+  wire_spacing_y: 0.13
+  num_wires_per_slot: 14
+  wire_split: 1
+  insulation_thickness: 0.15
+winding: {}
+duties:
+- name: rated
+  mode: motor
+  current_arms: 91.924
+  rpm: 4000.0
+  gamma_deg: 16.0
+  note: migrated from the motor catalog
+  torque_nm: 31.21
+  power_kw: 13.07
+  result:
+    efficiency_pct: 96.3
+    ripple_pct: 12.1
+    v_ll_peak_v: 120.3
+    mass_kg: 3.05
+    recorded_at: '2026-08-19T18:52:00'

@@ -288,7 +288,8 @@ const FamilyCatalog: React.FC<{
                         bgcolor: 'transparent', border: `1px solid ${roleColor(c.role)}55` }} />
                 <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>
                   {c.stack_mm} mm · wire {c.wire_height_mm}×{c.wire_width_mm} mm
-                  {' '}· {c.turns} turns · {c.connection}
+                  {' '}· {c.turns} turns
+                  {c.connection ? ` · ${c.connection}` : ''}
                   {c.steel ? ` · ${c.steel}` : ''}
                   {c.magnet ? ` · ${c.magnet}` : ''}
                 </Typography>

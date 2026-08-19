@@ -1,5 +1,5 @@
 name: M1-L200
-die: D200-24s28p
+die: CILN28 200
 role: motor
 created: '2026-08-19T18:07:02'
 geometry_overrides:

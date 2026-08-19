@@ -1,0 +1,29 @@
+name: L10
+die: CIANO14 30_10
+role: motor
+created: '2026-08-19T18:52:00'
+geometry_overrides:
+  motor_length: 10
+  wire_width: 2
+  wire_height: 0.5
+  wire_spacing_x: 0.1
+  wire_spacing_y: 0.1
+  num_wires_per_slot: 6
+  wire_split: 1
+  insulation_thickness: 0.05
+winding: {}
+duties:
+- name: rated
+  mode: motor
+  current_arms: 32.0
+  rpm: 15000.0
+  gamma_deg: 6.0
+  note: migrated from the motor catalog
+  torque_nm: 0.24
+  power_kw: 0.38
+  result:
+    efficiency_pct: 91.9
+    ripple_pct: 7.3
+    v_ll_peak_v: 10.5
+    mass_kg: 0.05
+    recorded_at: '2026-08-19T18:52:00'

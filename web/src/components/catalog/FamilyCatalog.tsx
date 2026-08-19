@@ -129,6 +129,15 @@ const FamilyCatalog: React.FC<{
     mutate(`configuration '${cfg}' deleted`, () =>
       del(`/api/family/config/${encodeURIComponent(die)}/${encodeURIComponent(cfg)}`));
   };
+  const renameCfg = (die: string, cfg: string) => {
+    const name = window.prompt(`New name for configuration '${cfg}':`, cfg);
+    if (!name || name === cfg) return;
+    mutate(`configuration renamed to '${name}'`, () =>
+      fetch(`${API}/api/family/config/${encodeURIComponent(die)}/${encodeURIComponent(cfg)}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      }));
+  };
   const deleteDuty = (die: string, cfg: string, duty: string) => {
     if (!window.confirm(`Delete duty '${duty}' from ${die}/${cfg}?`)) return;
     mutate(`duty '${duty}' deleted`, () =>
@@ -283,6 +292,13 @@ const FamilyCatalog: React.FC<{
                                   minWidth: 84 }}>
                   {c.name}
                 </Typography>
+                <Tooltip title="Rename configuration">
+                  <span>
+                    <IconButton size="small" disabled={!!busy}
+                      onClick={() => renameCfg(die.name, c.name)}
+                      sx={{ fontSize: 11, p: 0.2, color: 'var(--text-4)' }}>✎</IconButton>
+                  </span>
+                </Tooltip>
                 <Chip size="small" label={c.role}
                   sx={{ height: 18, fontSize: 10, color: roleColor(c.role),
                         bgcolor: 'transparent', border: `1px solid ${roleColor(c.role)}55` }} />

@@ -308,6 +308,34 @@ def create_config(req: ConfigCreate):
     return {"ok": True, "die": die, "config": name}
 
 
+class ConfigRename(BaseModel):
+    name: str
+
+
+@router.patch("/config/{die}/{cfg}")
+def rename_config(die: str, cfg: str, req: ConfigRename):
+    """Rename a configuration (its file moves with it; duties ride along)."""
+    die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
+    new = _check_name(req.name, "configuration")
+    if new == "die":
+        raise HTTPException(422, detail="'die' is reserved")
+    src = _cfg_file(die, cfg)
+    if not src.is_file():
+        raise HTTPException(404, detail=f"configuration '{die}/{cfg}' not found")
+    if new == cfg:
+        return {"ok": True, "config": cfg}
+    dst = _cfg_file(die, new)
+    if dst.exists():
+        raise HTTPException(409, detail=f"configuration '{new}' already exists "
+                                        f"under die '{die}'")
+    c = _load_yaml(src, "configuration")
+    c["name"] = new
+    _save_yaml(dst, c)
+    src.unlink()
+    log.info("family: configuration '%s/%s' renamed to '%s'", die, cfg, new)
+    return {"ok": True, "config": new}
+
+
 @router.delete("/config/{die}/{cfg}")
 def delete_config(die: str, cfg: str):
     die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")

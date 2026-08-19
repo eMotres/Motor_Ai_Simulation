@@ -81,13 +81,28 @@ const RangeField: React.FC<{ label: string; value: number; onChange: (v: number)
 
 const SweepVarCard: React.FC<SweepVarCardProps> = ({ paramName, label, unit, optimize }) => {
   const { sweepConfig, updateVariation, geometry, parameterSchema } = useMotorStore();
+  // Phase current: the user works in PEAK amps, the backend (and every stored
+  // range) speaks RMS — so the card offers the unit as a CHOICE and converts at
+  // the edge.  Stored values stay Arms: one source of truth, and a range typed
+  // in peak survives switching the unit back without drift.
+  const isCur = paramName === 'current_a';
+  const [iUnit, setIUnitState] = useState<'arms' | 'peak'>(() => {
+    try { return localStorage.getItem('sweep.iUnit') === 'peak' ? 'peak' : 'arms'; }
+    catch { return 'arms'; }
+  });
+  const setIUnit = (u: 'arms' | 'peak') => {
+    setIUnitState(u);
+    try { localStorage.setItem('sweep.iUnit', u); } catch { /* quota */ }
+  };
+  const kU = isCur && iUnit === 'peak' ? Math.SQRT2 : 1;   // display = stored × kU
+  const unitShown = isCur ? (iUnit === 'peak' ? 'A peak' : 'Arms') : unit;
   const v = sweepConfig.variations[paramName];
   if (!v || v.mode === 'fixed') return null;
   // Current value, shown as a reference: geometry vars from the Geometry tab,
   // operating-point vars (γ, current) from Simulation.
-  const cur = paramName === 'gamma_deg'  ? Number(readSim('gamma', 0))
+  const cur = (paramName === 'gamma_deg'  ? Number(readSim('gamma', 0))
             : paramName === 'current_a'  ? Number(readSim('current', 85))
-            : Number((geometry as Record<string, any>)[paramName] ?? NaN);
+            : Number((geometry as Record<string, any>)[paramName] ?? NaN)) * kU;
   const src = (paramName === 'gamma_deg' || paramName === 'current_a') ? 'Simulation' : 'Geometry';
   // Tidy figures: round to 0.1 (whole numbers for integer params like turns /
   // slot count) so the card shows 4.7 / 14.0 … 23.4 instead of 4.68 / 14.02.
@@ -104,19 +119,32 @@ const SweepVarCard: React.FC<SweepVarCardProps> = ({ paramName, label, unit, opt
         <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
           <Typography variant="body2" sx={{ fontWeight: 600, flex: 1 }}>
             {label}
-            {unit && (
+            {unitShown && (
               <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 0.5 }}>
-                ({unit})
+                ({unitShown})
               </Typography>
             )}
           </Typography>
+          {isCur && (
+            <Box sx={{ display: 'flex', gap: 0.25, mr: 0.5 }}>
+              {(['arms', 'peak'] as const).map(u => (
+                <Button key={u} size="small" onClick={() => setIUnit(u)}
+                  variant={iUnit === u ? 'contained' : 'outlined'}
+                  sx={{ fontSize: 9, py: 0, px: 0.75, minWidth: 0, textTransform: 'none' }}>
+                  {u === 'arms' ? 'RMS' : 'peak'}
+                </Button>
+              ))}
+            </Box>
+          )}
           <IconButton size="small" onClick={() => updateVariation(paramName, { mode: 'fixed' })} sx={{ p: 0.25 }}>
             <CloseIcon sx={{ fontSize: 14 }} />
           </IconButton>
         </Box>
 
         {!optimize && Number.isFinite(cur) && (() => {
-          const outLo = cur < Number(v.min), outHi = cur > Number(v.max);
+          // cur is in DISPLAY units; the stored range is Arms — compare like
+          // with like, or a peak value reads "above max" against an RMS bound.
+          const outLo = cur < Number(v.min) * kU, outHi = cur > Number(v.max) * kU;
           const out = outLo || outHi;
           // Show the FAITHFUL value (not snapped to 0.1) — a small fractional
           // param like magnet_fill = 0.467 must not display as "0.5" and look like
@@ -125,7 +153,7 @@ const SweepVarCard: React.FC<SweepVarCardProps> = ({ paramName, label, unit, opt
             : cur.toFixed(3).replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
           return (
             <Typography variant="caption" sx={{ color: out ? '#fbbf24' : 'text.disabled', mb: 0.75, display: 'block' }}>
-              now: {shown}{unit ? ` ${unit}` : ''} (from {src})
+              now: {shown}{unitShown ? ` ${unitShown}` : ''} (from {src})
               {out && ` — ${outLo ? 'below min' : 'above max'}, widen the range to include it`}
             </Typography>
           );
@@ -136,22 +164,22 @@ const SweepVarCard: React.FC<SweepVarCardProps> = ({ paramName, label, unit, opt
           // value — more intuitive than absolute min/max (that's the Sweep view).
           <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap', rowGap: 0.5 }}>
             <Typography variant="caption" sx={{ fontWeight: 700, color: 'var(--text-0)', flexShrink: 0 }}>
-              {fmt(anchor)}{unit ? ` ${unit}` : ''}
+              {fmt(anchor)}{unitShown ? ` ${unitShown}` : ''}
             </Typography>
             <RangeField label="± change" value={half}
               onChange={d => {
                 const a = Math.abs(d);
-                updateVariation(paramName, { min: snap(anchor - a), max: snap(anchor + a) });
+                updateVariation(paramName, { min: snap(anchor - a) / kU, max: snap(anchor + a) / kU });
               }} />
             <Typography variant="caption" sx={{ color: 'text.secondary', whiteSpace: 'nowrap', flexShrink: 0 }}>
-              → {fmt(anchor - half)} … {fmt(anchor + half)}{unit ? ` ${unit}` : ''}
+              → {fmt(anchor - half)} … {fmt(anchor + half)}{unitShown ? ` ${unitShown}` : ''}
             </Typography>
           </Box>
         ) : (
           <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap', rowGap: 0.5 }}>
-            <RangeField label="min"  value={Number(v.min)}  onChange={n => updateVariation(paramName, { min: n })} />
-            <RangeField label="max"  value={Number(v.max)}  onChange={n => updateVariation(paramName, { max: n })} />
-            <RangeField label="step" value={Number(v.step)} onChange={n => updateVariation(paramName, { step: n })} />
+            <RangeField label="min"  value={snap(Number(v.min) * kU)}  onChange={n => updateVariation(paramName, { min: n / kU })} />
+            <RangeField label="max"  value={snap(Number(v.max) * kU)}  onChange={n => updateVariation(paramName, { max: n / kU })} />
+            <RangeField label="step" value={snap(Number(v.step) * kU)} onChange={n => updateVariation(paramName, { step: n / kU })} />
           </Box>
         )}
       </CardContent>

@@ -3600,6 +3600,16 @@ def _build_transient_summary(
     else:
         _eff = 0.0
         _op_mode = "motor"
+    # GENERATOR NUMBERS ARE QUOTED POSITIVE (user rule, 2026-08-19): the sign
+    # only says which way the shaft turns against the current, and a negative
+    # T_avg would poison every quantity built on it — torque density, Kt,
+    # power/mass, and the optimizer's perpendicular metric all assume a
+    # magnitude.  The GENERATOR chip on the card carries the direction; the
+    # raw T(t) series in the result keeps its true (negative) sign for anyone
+    # reading the waveform.
+    if _op_mode == "generator":
+        _Tavg = abs(_Tavg)
+        _Pmech = abs(_Pmech)
 
     # Voltage waveform quality (CIANO THD spec): V₁ + phase/line-to-line THD +
     # torque constant — first-class metrics on EVERY run so the optimizer can
@@ -3709,10 +3719,10 @@ def _build_transient_summary(
                                 else None),
         "dq_note": _dq_note,
         "T_em_avg_Nm": round(_Tavg, 3),
-        "T_ripple_pct": round(float(sbres.get("T_ripple_pct", 0.0)), 1),
-        "T_ripple_raw_pct": round(float(sbres.get("T_ripple_raw_pct", 0.0)), 1),
-        "T_ripple_filt_pct": round(float(sbres.get("T_ripple_filt_pct",
-                                                   sbres.get("T_ripple_pct", 0.0))), 1),
+        "T_ripple_pct": round(abs(float(sbres.get("T_ripple_pct", 0.0))), 1),
+        "T_ripple_raw_pct": round(abs(float(sbres.get("T_ripple_raw_pct", 0.0))), 1),
+        "T_ripple_filt_pct": round(abs(float(sbres.get("T_ripple_filt_pct",
+                                                   sbres.get("T_ripple_pct", 0.0)))), 1),
         # Mesh-noise floor: RMS of the forbidden (non-6·k) torque orders, % of
         # mean torque — how much numerical noise the 6·k gate removed.
         "T_noise_floor_pct": round(float(sbres.get("T_noise_floor_pct", 0.0)), 2),

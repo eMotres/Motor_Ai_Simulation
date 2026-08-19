@@ -296,14 +296,17 @@ const FamilyCatalog: React.FC<{
             )}
             {canWrite && (
               <Tooltip title={die.locked
-                ? 'Unlock die — stamped geometry becomes editable'
-                : 'Lock die — stamped geometry becomes read-only (stack/wire/turns stay editable)'}>
+                ? 'Die is LOCKED — stamped geometry is read-only. Click to unlock.'
+                : 'Die is unlocked — the whole geometry is editable. Click to lock.'}>
                 <span>
+                  {/* The glyph shows the CURRENT STATE (🔒 = locked), never the
+                      action — an action-glyph read as state locked the user's
+                      mental model backwards. */}
                   <IconButton size="small" disabled={!!busy}
                     onClick={() => toggleDieLock(die)}
                     sx={{ fontSize: 11, p: 0.2,
                           color: die.locked ? '#fbbf24' : 'var(--text-4)' }}>
-                    {die.locked ? '🔓' : '🔒'}
+                    {die.locked ? '🔒' : '🔓'}
                   </IconButton>
                 </span>
               </Tooltip>
@@ -354,14 +357,14 @@ const FamilyCatalog: React.FC<{
                 )}
                 {canWrite && (
                   <Tooltip title={c.locked
-                    ? 'Unlock configuration — stack/wire/turns become editable'
-                    : 'Lock configuration — with a locked die the geometry becomes fully read-only'}>
+                    ? 'Configuration is LOCKED — with the locked die the geometry is fully read-only. Click to unlock.'
+                    : 'Configuration is unlocked — stack length, wire height and turns are editable. Click to lock.'}>
                     <span>
                       <IconButton size="small" disabled={!!busy}
                         onClick={() => toggleCfgLock(die.name, c)}
                         sx={{ fontSize: 11, p: 0.2,
                               color: c.locked ? '#fbbf24' : 'var(--text-4)' }}>
-                        {c.locked ? '🔓' : '🔒'}
+                        {c.locked ? '🔒' : '🔓'}
                       </IconButton>
                     </span>
                   </Tooltip>

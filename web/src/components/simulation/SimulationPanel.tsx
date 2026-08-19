@@ -158,6 +158,24 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   }, []);
   useEffect(() => { loadWinding(); }, [loadWinding]);
 
+  // D-AXIS PIN: adopt the backend's value into an EMPTY field on load, and
+  // write it ONLY from an explicit edit (see the field's onChange).  It used to
+  // ride the ambient auto-sync like every other setting, and that erased it:
+  // the sync fires on mount, an idle tab's field is empty, empty meant "clear
+  // the pin" — so simply OPENING the app in a second browser un-pinned the
+  // d-axis the user had just set (observed twice, config daxis_deg -> null
+  // with nobody touching the panel).  A pin that any bystander tab can silently
+  // remove is not a pin.
+  useEffect(() => {
+    fetch(`${API}/api/config`).then(r => r.json()).then(d => {
+      const v = d?.simulation?.daxis_deg;
+      if (v != null && String(v).trim() !== '') {
+        setDaxisDeg(prev => (prev.trim() === '' ? String(v) : prev));
+      }
+    }).catch(() => {});
+  }, []);  // eslint-disable-line react-hooks/exhaustive-deps
+
+
   // A REFUSED winding change used to be swallowed here (`.catch(() => {})`):
   // the button lit up, the backend kept the old connection, and every number
   // afterwards belonged to a winding the panel was no longer showing — "I
@@ -249,6 +267,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // nothing is solved to find it.  Stored as a STRING so 'empty' is a
   // state the user can type — 0 is a legal angle and cannot mean 'auto'.
   const [daxisDeg,      setDaxisDeg]      = usePersisted<string>('daxisDeg', '');
+  const daxisPatchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Last geometry-derived k_end we seeded the cell with — shown in the tooltip.
   const [endWindingGeo, setEndWindingGeo] = usePersisted('endWindingGeo', 0.0);
   // k_end = (π·(wire_w/2 + tooth_w/2) + L_stack)/L_stack, so it moves with every tooth/wire /
@@ -399,7 +418,6 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
     max_current: current, frequency, rpm, phase_offset_deg: phaseOffset,
     coil_temp_c: coilTemp, steps_per_period: steps,
     end_winding_factor: endWinding, connection,
-    daxis_deg: daxisDeg.trim() === '' ? '' : Number(daxisDeg),
     demag, eddy: eddyCoupled, rotor_eddy: fieldLosses, torque_filter: torqueFilter,
     drive, v_phase_peak: vPeak, v_delta_deg: vDelta,
   });
@@ -419,7 +437,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
     }, 700);
     return () => clearTimeout(id);
   }, [current, frequency, rpm, phaseOffset, demag, eddyCoupled, fieldLosses,
-      coilTemp, steps, endWinding, connection, daxisDeg, drive, vPeak, vDelta]);
+      coilTemp, steps, endWinding, connection, drive, vPeak, vDelta]);
 
   // Auto-save EVERY simulation change into the active motor ("my copy").
   // syncActiveMotor is internally debounced, so firing on each change is fine.
@@ -877,7 +895,22 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               type="text" size="small" fullWidth
               value={daxisDeg}
               placeholder={lastDaxis != null ? `${lastDaxis.toFixed(4)} (measured)` : 'auto'}
-              onChange={e => setDaxisDeg(e.target.value)}
+              onChange={e => {
+                const v = e.target.value;
+                setDaxisDeg(v);
+                // EXPLICIT write, debounced: a number pins, an emptied field
+                // clears — but only a hand that typed here does either.
+                if (daxisPatchTimer.current) clearTimeout(daxisPatchTimer.current);
+                daxisPatchTimer.current = setTimeout(() => {
+                  const t = v.trim();
+                  const body = (t === '' || !Number.isFinite(Number(t)))
+                    ? { daxis_deg: '' } : { daxis_deg: Number(t) };
+                  fetch(`${API}/api/simulation/config`, {
+                    method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                  }).catch(() => {});
+                }, 600);
+              }}
               InputProps={{ endAdornment: <HelpTip title={
                 'The zero γ is measured FROM. γ is the angle from the q-axis, so the solver has to know'
                 + ' where the q-axis sits in this cross-section — it finds it by holding the current still,'

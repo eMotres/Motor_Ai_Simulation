@@ -260,7 +260,39 @@ const FamilyCatalog: React.FC<{
                   mode: p.sim.mode, connection: p.sim.connection } }));
       window.dispatchEvent(new CustomEvent('sim-design-applied'));
       window.dispatchEvent(new CustomEvent('family-changed'));
-      setMsg(`✓ applied ${label} — press Run in Simulation`);
+      // The duty's SAVED results go straight onto the Simulation dashboard —
+      // recorded numbers, no re-run, no field views (user request).  A fresh
+      // Run supersedes them, same as a Sweep-applied point.
+      const dd = p.duty || {};
+      const rr = dd.result || {};
+      if (rr.efficiency_pct != null || dd.torque_nm != null) {
+        const rpm = Number(p.sim.rpm) || 0;
+        const omega = 2 * Math.PI * rpm / 60;
+        const T = Number(dd.torque_nm) || 0;
+        const Pmech = dd.power_kw != null ? Number(dd.power_kw) * 1000 : T * omega;
+        const mass = Number(rr.mass_kg) || 0;
+        const Vlpk = Number(rr.v_ll_peak_v) || 0;
+        const ploss = Number(rr.loss_w) || 0;
+        const summary: any = {
+          rpm, I_phase_rms_A: Number(p.sim.current_a) || 0,
+          gamma_deg: Number(p.sim.gamma_deg) || 0,
+          connection: p.sim.connection, op_mode: p.sim.mode,
+          T_em_avg_Nm: T, T_ripple_pct: Number(rr.ripple_pct) || 0,
+          P_mech_W: Pmech,
+          V_line_peak_V: Vlpk, V_line_rms_V: Vlpk / Math.SQRT2,
+          KV_rpm_per_V_line: Vlpk > 0 ? rpm / (Vlpk / Math.SQRT2) : 0,
+          P_loss_total_W: ploss,
+          efficiency: rr.efficiency_pct != null ? Number(rr.efficiency_pct) / 100 : 0,
+          mass_total_kg: mass, mass_components: [],
+          torque_per_mass_Nm_kg: mass > 0 && T > 0 ? T / mass : 0,
+          power_per_mass_W_kg: mass > 0 ? Pmech / mass : 0,
+          loss_density_W_kg: mass > 0 ? ploss / mass : 0,
+        };
+        window.dispatchEvent(new CustomEvent('sim-apply-summary', { detail: { summary } }));
+        setMsg(`✓ applied ${label} — saved results are on the dashboard; Run to recompute`);
+      } else {
+        setMsg(`✓ applied ${label} — no saved results yet; press Run in Simulation`);
+      }
       // Straight to the machine the user just loaded (user request).
       setActiveTab('geometry');
     } catch (e: any) { setMsg(`✗ apply ${label}: ${e?.message ?? e}`); }

@@ -14,6 +14,10 @@ import {
 } from '@mui/material';
 import { useMotorStore, useUIStore } from '../../stores/motorStore';
 import MotorThumbnail from './MotorThumbnail';
+import {
+  TextPromptDialog, ConfirmDialog,
+  type TextPromptState, type ConfirmState,
+} from '../common/PromptDialogs';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
@@ -85,6 +89,12 @@ const FamilyCatalog: React.FC<{
   const [active, setActive] = useState<{ die?: string; config?: string;
                                          duty?: string | null } | null>(null);
 
+  // MUI dialogs instead of window.prompt/confirm — Chrome suppresses the
+  // native ones after "prevent additional dialogs" and the buttons look dead
+  // (user hit it on the battery editor).
+  const [askText, setAskText] = useState<TextPromptState | null>(null);
+  const [askConfirm, setAskConfirm] = useState<ConfirmState | null>(null);
+
   const load = async () => {
     try {
       const t = await (await fetch(`${API}/api/family/tree`)).json();
@@ -129,54 +139,62 @@ const FamilyCatalog: React.FC<{
   const del = (path: string) => fetch(`${API}${path}`, { method: 'DELETE' });
 
   // ── create/delete ─────────────────────────────────────────────────────────
-  const createDie = () => {
-    const name = window.prompt('New die name (snapshot of the CURRENT geometry):');
-    if (!name) return;
-    mutate(`die '${name}' created`, () => post('/api/family/die', { name }));
-  };
-  const createCfg = (die: string) => {
-    const name = window.prompt(
-      `New configuration under ${die} (snapshot of the CURRENT stack/wire/winding):`);
-    if (!name) return;
-    const role = readLS('opMode', 'motor') === 'generator' ? 'generator' : 'motor';
-    mutate(`configuration '${name}' created`, () =>
-      post('/api/family/config', { die, name, role }));
-  };
-  const createDuty = (die: string, cfg: string) => {
-    const name = window.prompt(
-      `New duty under ${die}/${cfg} (captures the CURRENT Simulation point — current, rpm, γ, mode):`);
-    if (!name) return;
-    const mode = readLS('opMode', 'motor') === 'generator' ? 'generator' : 'motor';
-    mutate(`duty '${name}' saved from Simulation`, () =>
-      post('/api/family/duty', { die, config: cfg, duty: { name, mode, from_current: true } }));
-  };
-  const deleteDie = (die: string) => {
-    if (!window.confirm(`Delete die '${die}'? Its configurations must be deleted first.`)) return;
-    mutate(`die '${die}' deleted`, () => del(`/api/family/die/${encodeURIComponent(die)}`));
-  };
-  const renameDie = (die: string) => {
-    const name = window.prompt(`New name for die '${die}':`, die);
-    if (!name || name === die) return;
-    mutate(`die renamed to '${name}'`, () =>
+  const createDie = () => setAskText({
+    title: 'New die from the current geometry',
+    label: 'Die name',
+    onSubmit: (name) => mutate(`die '${name}' created`,
+      () => post('/api/family/die', { name })),
+  });
+  const createCfg = (die: string) => setAskText({
+    title: `New configuration under ${die}`,
+    label: 'Configuration name',
+    hint: 'Snapshots the CURRENT stack / wire / winding / materials',
+    onSubmit: (name) => {
+      const role = readLS('opMode', 'motor') === 'generator' ? 'generator' : 'motor';
+      mutate(`configuration '${name}' created`, () =>
+        post('/api/family/config', { die, name, role }));
+    },
+  });
+  const createDuty = (die: string, cfg: string) => setAskText({
+    title: `New duty under ${die} / ${cfg}`,
+    label: 'Duty name',
+    hint: 'Captures the CURRENT Simulation point — current, rpm, γ, mode',
+    onSubmit: (name) => {
+      const mode = readLS('opMode', 'motor') === 'generator' ? 'generator' : 'motor';
+      mutate(`duty '${name}' saved from Simulation`, () =>
+        post('/api/family/duty', { die, config: cfg, duty: { name, mode, from_current: true } }));
+    },
+  });
+  const deleteDie = (die: string) => setAskConfirm({
+    title: `Delete die '${die}'?`,
+    body: 'Its configurations must be deleted first — the backend refuses otherwise.',
+    onConfirm: () => mutate(`die '${die}' deleted`,
+      () => del(`/api/family/die/${encodeURIComponent(die)}`)),
+  });
+  const renameDie = (die: string) => setAskText({
+    title: `Rename die '${die}'`,
+    label: 'New name', initial: die,
+    onSubmit: (name) => { if (name !== die) mutate(`die renamed to '${name}'`, () =>
       fetch(`${API}/api/family/die/${encodeURIComponent(die)}`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name }),
-      }));
-  };
-  const deleteCfg = (die: string, cfg: string) => {
-    if (!window.confirm(`Delete configuration '${die}/${cfg}' and all its duties?`)) return;
-    mutate(`configuration '${cfg}' deleted`, () =>
-      del(`/api/family/config/${encodeURIComponent(die)}/${encodeURIComponent(cfg)}`));
-  };
-  const renameCfg = (die: string, cfg: string) => {
-    const name = window.prompt(`New name for configuration '${cfg}':`, cfg);
-    if (!name || name === cfg) return;
-    mutate(`configuration renamed to '${name}'`, () =>
+      })); },
+  });
+  const deleteCfg = (die: string, cfg: string) => setAskConfirm({
+    title: `Delete configuration '${die} / ${cfg}'?`,
+    body: 'All its duties and recorded results go with it. This cannot be undone.',
+    onConfirm: () => mutate(`configuration '${cfg}' deleted`, () =>
+      del(`/api/family/config/${encodeURIComponent(die)}/${encodeURIComponent(cfg)}`)),
+  });
+  const renameCfg = (die: string, cfg: string) => setAskText({
+    title: `Rename configuration '${cfg}'`,
+    label: 'New name', initial: cfg,
+    onSubmit: (name) => { if (name !== cfg) mutate(`configuration renamed to '${name}'`, () =>
       fetch(`${API}/api/family/config/${encodeURIComponent(die)}/${encodeURIComponent(cfg)}`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name }),
-      }));
-  };
+      })); },
+  });
   const toggleDieLock = (d: Die) => {
     mutate(`die '${d.name}' ${d.locked ? 'unlocked' : 'locked'}`, () =>
       fetch(`${API}/api/family/die/${encodeURIComponent(d.name)}/lock`, {
@@ -191,27 +209,34 @@ const FamilyCatalog: React.FC<{
         body: JSON.stringify({ locked: !c.locked }),
       }));
   };
-  const editBattery = (dieName: string, c: Cfg) => {
-    const cur = c.battery ? `${c.battery.cells ?? ''}, ${c.battery.v_min}, ${c.battery.v_max}`
-                          : '200, 640, 860';
-    const raw = window.prompt(
-      `Battery for '${c.name}' — cells, V min (discharged), V max (charged):`, cur);
-    if (!raw) return;
-    const parts = raw.split(/[,;\s]+/).filter(Boolean).map(Number);
-    if (parts.length < 3 || parts.some(n => !Number.isFinite(n))) {
-      setMsg('✗ expected three numbers: cells, V min, V max'); return;
-    }
-    mutate(`battery set on '${c.name}'`, () =>
-      fetch(`${API}/api/family/config/${encodeURIComponent(dieName)}/${encodeURIComponent(c.name)}/battery`, {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cells: Math.round(parts[0]), v_min: parts[1], v_max: parts[2] }),
-      }));
-  };
-  const deleteDuty = (die: string, cfg: string, duty: string) => {
-    if (!window.confirm(`Delete duty '${duty}' from ${die}/${cfg}?`)) return;
-    mutate(`duty '${duty}' deleted`, () =>
-      del(`/api/family/duty/${encodeURIComponent(die)}/${encodeURIComponent(cfg)}/${encodeURIComponent(duty)}`));
-  };
+  const editBattery = (dieName: string, c: Cfg) => setAskText({
+    title: `Battery for '${c.name}'`,
+    label: 'cells, V min (discharged), V max (charged)',
+    initial: c.battery ? `${c.battery.cells ?? ''}, ${c.battery.v_min}, ${c.battery.v_max}`
+                       : '200, 640, 860',
+    hint: 'Pack totals, e.g. "200, 640, 860". Per-cell voltages (<10 V) are multiplied by the cell count automatically.',
+    onSubmit: (raw) => {
+      const parts = raw.split(/[,;\s]+/).filter(Boolean).map(Number);
+      if (parts.length < 3 || parts.some(n => !Number.isFinite(n))) {
+        setMsg('\u2717 expected three numbers: cells, V min, V max'); return;
+      }
+      const cells = Math.round(parts[0]);
+      // Per-cell convenience: "200, 3.2, 4.3" means 3.2/4.3 V per cell.
+      const vmin = parts[1] < 10 ? parts[1] * cells : parts[1];
+      const vmax = parts[2] < 10 ? parts[2] * cells : parts[2];
+      mutate(`battery set on '${c.name}'`, () =>
+        fetch(`${API}/api/family/config/${encodeURIComponent(dieName)}/${encodeURIComponent(c.name)}/battery`, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cells, v_min: vmin, v_max: vmax }),
+        }));
+    },
+  });
+  const deleteDuty = (die: string, cfg: string, duty: string) => setAskConfirm({
+    title: `Delete duty '${duty}' from ${die} / ${cfg}?`,
+    body: 'Its saved operating point and recorded results go with it.',
+    onConfirm: () => mutate(`duty '${duty}' deleted`, () =>
+      del(`/api/family/duty/${encodeURIComponent(die)}/${encodeURIComponent(cfg)}/${encodeURIComponent(duty)}`)),
+  });
 
   // ── apply a duty: geometry + winding + materials + operating point, all
   //    through the EXISTING endpoints (this panel owns no write-path of its
@@ -607,8 +632,15 @@ const FamilyCatalog: React.FC<{
     </>
   );
 
+  const dialogs = (
+    <>
+      <TextPromptDialog state={askText} onClose={() => setAskText(null)} />
+      <ConfirmDialog state={askConfirm} onClose={() => setAskConfirm(null)} />
+    </>
+  );
+
   if (embedded) {
-    return <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>{body}</Box>;
+    return <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>{body}{dialogs}</Box>;
   }
   return (
     <Paper sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)',
@@ -630,6 +662,7 @@ const FamilyCatalog: React.FC<{
         )}
       </Box>
       {body}
+      {dialogs}
     </Paper>
   );
 };

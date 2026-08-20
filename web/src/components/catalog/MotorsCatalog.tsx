@@ -16,6 +16,7 @@ import { Box, Typography, Button } from '@mui/material';
 import MyDesigns from './MyDesigns';
 import FamilyCatalog from './FamilyCatalog';
 import HelpTip from '../common/HelpTip';
+import { TextPromptDialog, type TextPromptState } from '../common/PromptDialogs';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
@@ -38,20 +39,23 @@ const MotorsCatalog: React.FC = () => {
 
   // Page-level "+ die": freeze the CURRENT geometry as a new stamped die.
   const [dieMsg, setDieMsg] = useState<string | null>(null);
-  const createDie = async () => {
-    const name = window.prompt('New die name (snapshot of the CURRENT geometry):');
-    if (!name) return;
-    setDieMsg(null);
-    try {
-      const r = await fetch(`${API}/api/family/die`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name }),
-      });
-      if (!r.ok) { setDieMsg(`✗ ${(await r.json()).detail ?? `HTTP ${r.status}`}`); return; }
-      setDieMsg(`✓ die '${name}' created`);
-      window.dispatchEvent(new CustomEvent('family-changed'));
-    } catch (e) { setDieMsg(`✗ ${e}`); }
-  };
+  const [askDie, setAskDie] = useState<TextPromptState | null>(null);
+  const createDie = () => setAskDie({
+    title: 'New die from the current geometry',
+    label: 'Die name',
+    onSubmit: async (name) => {
+      setDieMsg(null);
+      try {
+        const r = await fetch(`${API}/api/family/die`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name }),
+        });
+        if (!r.ok) { setDieMsg(`\u2717 ${(await r.json()).detail ?? `HTTP ${r.status}`}`); return; }
+        setDieMsg(`\u2713 die '${name}' created`);
+        window.dispatchEvent(new CustomEvent('family-changed'));
+      } catch (e) { setDieMsg(`\u2717 ${e}`); }
+    },
+  });
 
   return (
     <Box>
@@ -67,11 +71,12 @@ const MotorsCatalog: React.FC = () => {
           <Typography sx={{ fontSize: 11,
             color: dieMsg.startsWith('✗') ? '#fca5a5' : '#34d399' }}>{dieMsg}</Typography>
         )}
-        <Button size="small" variant="outlined" onClick={() => void createDie()}
+        <Button size="small" variant="outlined" onClick={createDie}
           sx={{ textTransform: 'none', fontSize: 11 }}>
           ＋ die from current geometry
         </Button>
       </Box>
+      <TextPromptDialog state={askDie} onClose={() => setAskDie(null)} />
 
       {diams.length === 0 && (
         <Typography sx={{ fontSize: 11, color: 'var(--text-4)' }}>

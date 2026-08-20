@@ -99,25 +99,27 @@ const orderIdx  = (k: string) => { const i = Object.keys(PARAM_META).indexOf(k);
 const RESULT_COLS: { key: string; label: string; unit?: string; d?: number;
                      scale?: number; better?: 'hi' | 'lo';
                      derive?: (r: Record<string, any>) => number }[] = [
+  // Column ORDER is the user's reading order for a design row:
+  // T, P, n, η, ripple, then the drive side (V peak, I peak, I rms, J).
   { key: 'T_em_avg_Nm',          label: 'Torque',      unit: 'N·m',    d: 3, better: 'hi' },
   { key: 'P_mech_W',             label: 'Power',       unit: 'kW',     d: 2, scale: 1e-3, better: 'hi',
     derive: r => Number(r.T_em_avg_Nm) * 2 * Math.PI * Number(r.rpm) / 60 },
   { key: 'rpm',                  label: 'Speed',       unit: 'rpm',    d: 0 },
   { key: 'efficiency',           label: 'Efficiency',  unit: '%',      d: 2, scale: 100, better: 'hi' },
+  { key: 'T_ripple_pct',         label: 'Ripple',      unit: '%',      d: 2, better: 'lo' },
+  { key: 'V_line_peak_V',        label: 'V_line peak', unit: 'V',      d: 1 },
+  { key: 'I_phase_peak_A',       label: 'I phase',     unit: 'A peak', d: 1,
+    derive: r => Number(r.I_phase_rms_A) * Math.SQRT2 },
+  { key: 'I_phase_rms_A',        label: 'I phase',     unit: 'A rms',  d: 1 },
+  { key: 'J_coil_A_per_mm2',     label: 'J coil',      unit: 'A/mm²',  d: 1, better: 'lo' },
   { key: 'torque_per_mass_Nm_kg',label: 'TD',          unit: 'N·m/kg', d: 2, better: 'hi' },
   { key: 'power_per_mass_W_kg',  label: 'PD',          unit: 'kW/kg',  d: 2, scale: 1e-3, better: 'hi',
     derive: r => Number(r.T_em_avg_Nm) * 2 * Math.PI * Number(r.rpm) / 60 / Number(r.mass_total_kg) },
-  { key: 'T_ripple_pct',         label: 'Ripple',      unit: '%',      d: 2, better: 'lo' },
   // Mass (total = EM-active + shaft) is what TD/PD above divide by; EM-active
   // drops the shaft and is the basis an Ansys active-mass expression quotes.
   { key: 'mass_total_kg',        label: 'Mass',        unit: 'kg',     d: 3, better: 'lo' },
   { key: 'mass_active_kg',       label: 'EM-active',   unit: 'kg',     d: 3, better: 'lo' },
-  { key: 'J_coil_A_per_mm2',     label: 'J coil',      unit: 'A/mm²',  d: 1, better: 'lo' },
   { key: 'P_loss_total_W',       label: 'Loss total',  unit: 'W',      d: 1, better: 'lo' },
-  // Drive-side trio, kept together right after the loss total: the bus voltage a
-  // design demands, the current it was solved at, and its speed constant.
-  { key: 'V_line_peak_V',        label: 'V_line peak', unit: 'V',      d: 1 },
-  { key: 'I_phase_rms_A',        label: 'I phase',     unit: 'A rms',  d: 1 },
   { key: 'KV_rpm_per_V_line',    label: 'KV (line)',   unit: 'rpm/V',  d: 1 },
   // …then the loss breakdown behind its total.
   { key: 'P_core_W',             label: 'Fe loss',     unit: 'W',      d: 1, better: 'lo' },

@@ -398,19 +398,22 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
           I = Ttar * Number(ls.I_phase_rms_A) / Math.abs(Number(ls.T_em_avg_Nm));
         }
       } catch { /* seed stays */ }
-      // Already on target?  If the LAST finished run sits within the probe
-      // tolerance of this very target (same γ / speed / machine settings are
-      // the user's responsibility — the run is theirs), skip the probes and
-      // go straight to the full re-run at its current.
+      // NEAR the last run's torque?  Within ±2 % the T(I) curve is straight
+      // to <0.1 %, so a LINEAR Kt correction replaces the probes entirely:
+      // I_new = I_last · T_target/T_last — the elementary by-hand step, done
+      // automatically.  A flat "reuse the current" shortcut ate a +0.4 %
+      // target edit and returned identical numbers (user report).
       try {
         const raw = localStorage.getItem('sim.lastSummary');
         const ls = raw ? JSON.parse(raw) : null;
         const Tl = ls ? Math.abs(Number(ls.T_em_avg_Nm)) : NaN;
-        if (Number.isFinite(Tl) && Math.abs(Tl - Ttar) / Ttar < 0.005
-            && Number(ls.I_phase_rms_A) > 0) {
-          const If = Number(ls.I_phase_rms_A);
+        const Il = ls ? Number(ls.I_phase_rms_A) : NaN;
+        if (Number.isFinite(Tl) && Tl > 0 && Il > 0
+            && Math.abs(Tl - Ttar) / Ttar < 0.02) {
+          const If = Il * (Ttar / Tl);
           setCurrent(+If.toFixed(2));
-          setFitMsg(`already on target (${Tl.toFixed(1)} Nm) — full run @ ${If.toFixed(1)} A, no probes`);
+          setFitMsg(`last run ${Tl.toFixed(1)} Nm is within 2 % — linear Kt step `
+            + `${Il.toFixed(1)} → ${If.toFixed(1)} A, no probes; full run`);
           setFitBusy(false);
           setTimeout(() => launchRun(true), 0);
           return;

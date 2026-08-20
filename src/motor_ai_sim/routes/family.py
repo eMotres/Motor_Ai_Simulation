@@ -200,6 +200,7 @@ def tree(authorization: str = Header(default=None)):
                 "steel": (c.get("materials") or {}).get("stator_core"),
                 "duties": [
                     {"name": d.get("name"), "mode": d.get("mode", "motor"),
+                     "saved_at": d.get("saved_at"),
                      "current_arms": d.get("current_arms"), "rpm": d.get("rpm"),
                      "gamma_deg": d.get("gamma_deg"),
                      "torque_nm": d.get("torque_nm"), "power_kw": d.get("power_kw"),
@@ -422,6 +423,7 @@ def upsert_duty(req: DutyCreate, _admin: dict = Depends(require_admin)):
     duties = [x for x in (c.get("duties") or []) if x.get("name") != dname]
     prev = next((x for x in (c.get("duties") or []) if x.get("name") == dname), None)
     entry = {"name": dname, "mode": d.mode,
+             "saved_at": datetime.now().isoformat(timespec="seconds"),
              "current_arms": round(float(d.current_arms), 3),
              "rpm": round(float(d.rpm), 1),
              "gamma_deg": round(float(d.gamma_deg), 3),

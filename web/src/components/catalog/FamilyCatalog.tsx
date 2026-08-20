@@ -22,7 +22,8 @@ interface DutyResult {
   loss_w?: number; mass_kg?: number; recorded_at?: string;
 }
 interface Duty {
-  name: string; mode: string; current_arms: number; rpm: number;
+  name: string; mode: string; saved_at?: string | null;
+  current_arms: number; rpm: number;
   gamma_deg: number; torque_nm?: number | null; power_kw?: number | null;
   note: string; result?: DutyResult | null;
 }
@@ -38,6 +39,17 @@ interface Die {
   slots: number; poles: number; stator_diameter: number;
   thumb_svg?: string | null; configs: Cfg[];
 }
+
+/** "21:24" today, "19.08 21:24" otherwise — the exact stamp lives in the tooltip. */
+const fmtWhen = (iso?: string | null) => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(+d)) return '';
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mi = String(d.getMinutes()).padStart(2, '0');
+  if (d.toDateString() === new Date().toDateString()) return `${hh}:${mi}`;
+  return `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')} ${hh}:${mi}`;
+};
 
 const fmt = (v: number | null | undefined, digits = 1) =>
   v == null || !Number.isFinite(Number(v)) ? '—' : Number(v).toFixed(digits).replace(/\.0+$/, '');
@@ -432,10 +444,17 @@ const FamilyCatalog: React.FC<{
                           <td>
                             <Tooltip placement="top-start"
                               title={`${d.mode}${d.note ? ` — ${d.note}` : ''}`
+                                     + (d.saved_at ? ` · saved ${d.saved_at}` : '')
                                      + (r.recorded_at ? ` · recorded ${r.recorded_at}` : '')}>
                               <span style={{ color: roleColor(d.mode), fontWeight: 600,
                                              cursor: 'help' }}>
                                 {d.name}
+                                {d.saved_at && (
+                                  <span style={{ color: 'var(--text-4)', fontWeight: 400,
+                                                 fontSize: 10, marginLeft: 6 }}>
+                                    {fmtWhen(d.saved_at)}
+                                  </span>
+                                )}
                               </span>
                             </Tooltip>
                           </td>

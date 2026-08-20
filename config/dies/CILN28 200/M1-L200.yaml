@@ -34,29 +34,39 @@ duties:
     loss_w: 13314.9
     mass_kg: 27.722
     recorded_at: '2026-08-19T18:32:27'
-- name: cruise
-  mode: motor
-  current_arms: 46.0
-  rpm: 1400.0
-  gamma_deg: 10.0
-  note: sheet target; gamma not optimized yet
-  torque_nm: 116.0
-  power_kw: 17.0
+  saved_at: '2026-08-19T18:32:27'
 - name: top-speed
   mode: motor
-  current_arms: 103.945
+  current_arms: 105.359
   rpm: 2600.0
-  gamma_deg: 10.0
+  gamma_deg: 14.0
   note: sheet target 275.5 Nm / 75 kW; current tuned by user 2026-08-19
-  torque_nm: 275.46
-  power_kw: 75.0
+  torque_nm: 275.89
+  power_kw: 75.12
   result:
-    efficiency_pct: 97.23
-    ripple_pct: 6.637
-    v_ll_peak_v: 597.6
-    loss_w: 2133.5
+    efficiency_pct: 97.25
+    ripple_pct: 7.358
+    v_ll_peak_v: 585.3
+    loss_w: 2125.2
     mass_kg: 27.722
-    recorded_at: '2026-08-19T20:21:37'
+    recorded_at: '2026-08-19T21:35:39'
+  saved_at: '2026-08-19T21:35:39'
+- name: cruise
+  mode: motor
+  current_arms: 44.053
+  rpm: 1400.0
+  gamma_deg: 14.0
+  note: sheet target; gamma not optimized yet
+  torque_nm: 115.94
+  power_kw: 17.0
+  result:
+    efficiency_pct: 96.65
+    ripple_pct: 18.403
+    v_ll_peak_v: 317.4
+    loss_w: 588.7
+    mass_kg: 27.722
+    recorded_at: '2026-08-20T06:28:44'
+  saved_at: '2026-08-20T06:28:44'
 materials:
   magnet: F52SH_120C
   stator_core: B15AHV950M

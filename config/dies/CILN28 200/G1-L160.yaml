@@ -27,6 +27,7 @@ duties:
   note: gamma not optimized yet
   torque_nm: 387.0
   power_kw: 145.0
+  saved_at: '2026-08-19T18:07:03'
 - name: optimal
   mode: generator
   current_arms: 275.0
@@ -35,6 +36,7 @@ duties:
   note: gamma not optimized yet
   torque_nm: 363.0
   power_kw: 95.0
+  saved_at: '2026-08-19T18:07:03'
 materials:
   magnet: F52SH_120C
   stator_core: B15AHV950M

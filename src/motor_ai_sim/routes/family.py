@@ -122,6 +122,23 @@ def _sim_of(c: dict) -> dict:
     return dict(c.get("simulation") or {})
 
 
+def _build_sig(die_doc: dict, cfg_doc: dict) -> str:
+    """Fingerprint of the BUILD a result was computed on: the die's stamped
+    geometry + the configuration's free-key overrides + winding + materials.
+    Duty RESULTS carry the sig they were recorded under; a mismatch against
+    the configuration's current sig marks them 'computed on an older build'."""
+    import hashlib
+    import json as _json
+    src = {
+        "geo": die_doc.get("geometry") or {},
+        "ov": cfg_doc.get("geometry_overrides") or {},
+        "winding": cfg_doc.get("winding") or {},
+        "materials": cfg_doc.get("materials") or {},
+    }
+    return hashlib.sha1(
+        _json.dumps(src, sort_keys=True, default=str).encode()).hexdigest()[:12]
+
+
 # ── models ───────────────────────────────────────────────────────────────────
 
 class DutySpec(BaseModel):
@@ -198,6 +215,7 @@ def tree(authorization: str = Header(default=None)):
                 "connection": w.get("connection"),
                 "magnet": (c.get("materials") or {}).get("magnet"),
                 "steel": (c.get("materials") or {}).get("stator_core"),
+                "build_sig": _build_sig(die, c),
                 "duties": [
                     {"name": d.get("name"), "mode": d.get("mode", "motor"),
                      "saved_at": d.get("saved_at"),
@@ -405,13 +423,27 @@ def upsert_duty(req: DutyCreate, _admin: dict = Depends(require_admin)):
     if d.mode not in ("motor", "generator"):
         raise HTTPException(422, detail="duty mode must be 'motor' or 'generator'")
     if d.from_current:
-        sim = _sim_of(_live_cfg())
+        live = _live_cfg()
+        sim = _sim_of(live)
         if d.current_arms is None:
             d.current_arms = sim.get("current_a", sim.get("max_current"))
         if d.rpm is None:
             d.rpm = sim.get("rpm")
         if d.gamma_deg is None:
             d.gamma_deg = sim.get("gamma_deg", sim.get("phase_offset_deg"))
+        # Saving from the live machine RE-SNAPSHOTS the build into the
+        # configuration: the free geometry keys, winding and materials become
+        # what is actually on screen.  Sibling duties recorded on the old
+        # build then carry a mismatched build_sig — the catalog shows them
+        # as 'computed on an older build' instead of quietly lying.
+        geo = _plain(live.get("geometry")) or {}
+        c["geometry_overrides"] = {k: geo.get(k) for k in FREE_GEO_KEYS
+                                   if geo.get(k) is not None}
+        c["winding"] = _plain(live.get("winding")) or {}
+        mat = _plain(live.get("materials")) or {}
+        c["materials"] = {k: mat.get(k)
+                          for k in ("magnet", "stator_core", "rotor_core")
+                          if mat.get(k)}
     missing = [k for k in ("current_arms", "rpm", "gamma_deg")
                if getattr(d, k) is None]
     if missing:
@@ -475,6 +507,10 @@ def record_duty_result(req: DutyResult, _admin: dict = Depends(require_admin)):
         raise HTTPException(422, detail=(
             "empty result — expected at least one of: " + ", ".join(_RESULT_KEYS)))
     res["recorded_at"] = datetime.now().isoformat(timespec="seconds")
+    try:
+        res["build_sig"] = _build_sig(_load_yaml(_die_file(die), "die"), c)
+    except HTTPException:
+        pass
     found["result"] = res
     _save_yaml(p, c)
     log.info("family: result recorded on '%s/%s/%s': %s", die, cfg, req.duty, res)

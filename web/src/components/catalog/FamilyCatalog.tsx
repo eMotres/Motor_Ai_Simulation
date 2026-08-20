@@ -20,6 +20,7 @@ const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 interface DutyResult {
   efficiency_pct?: number; ripple_pct?: number; v_ll_peak_v?: number;
   loss_w?: number; mass_kg?: number; recorded_at?: string;
+  build_sig?: string;
 }
 interface Duty {
   name: string; mode: string; saved_at?: string | null;
@@ -28,7 +29,8 @@ interface Duty {
   note: string; result?: DutyResult | null;
 }
 interface Cfg {
-  name: string; role: string; locked?: boolean; stack_mm: number | null;
+  name: string; role: string; locked?: boolean; build_sig?: string;
+  stack_mm: number | null;
   wire_height_mm: number | null; wire_width_mm: number | null;
   turns: number | null; connection: string | null;
   magnet?: string | null; steel?: string | null;
@@ -435,6 +437,11 @@ const FamilyCatalog: React.FC<{
                   <tbody>
                     {c.duties.map(d => {
                       const r = d.result || {};
+                      // Result recorded on an OLDER build (the configuration's
+                      // geometry/winding/materials changed since) — show it,
+                      // but say loudly that it needs a re-run.
+                      const staleRes = !!(r.build_sig && c.build_sig
+                                          && r.build_sig !== c.build_sig);
                       const applying = busy === `${c.name} / ${d.name}`;
                       const isActive = active?.die === die.name
                         && active?.config === c.name && active?.duty === d.name;
@@ -445,10 +452,11 @@ const FamilyCatalog: React.FC<{
                             <Tooltip placement="top-start"
                               title={`${d.mode}${d.note ? ` — ${d.note}` : ''}`
                                      + (d.saved_at ? ` · saved ${d.saved_at}` : '')
-                                     + (r.recorded_at ? ` · recorded ${r.recorded_at}` : '')}>
+                                     + (r.recorded_at ? ` · recorded ${r.recorded_at}` : '')
+                                     + (staleRes ? ' · ⚠ results computed on an OLDER build — load (▶), Run, then Save' : '')}>
                               <span style={{ color: roleColor(d.mode), fontWeight: 600,
                                              cursor: 'help' }}>
-                                {d.name}
+                                {staleRes ? '⚠ ' : ''}{d.name}
                                 {d.saved_at && (
                                   <span style={{ color: 'var(--text-4)', fontWeight: 400,
                                                  fontSize: 10, marginLeft: 6 }}>
@@ -462,11 +470,11 @@ const FamilyCatalog: React.FC<{
                           <td>{fmt(d.torque_nm)}</td>
                           <td>{fmt(d.rpm, 0)}</td>
                           <td>{fmt(d.current_arms)}</td>
-                          <td>{fmt(r.v_ll_peak_v, 0)}</td>
-                          <td>{fmt(r.efficiency_pct, 2)}</td>
-                          <td>{fmt(r.ripple_pct)}</td>
-                          <td>{fmt(r.loss_w, 0)}</td>
-                          <td>{fmt(r.mass_kg, 2)}</td>
+                          <td style={staleRes ? { color: '#fbbf24' } : undefined}>{fmt(r.v_ll_peak_v, 0)}</td>
+                          <td style={staleRes ? { color: '#fbbf24' } : undefined}>{fmt(r.efficiency_pct, 2)}</td>
+                          <td style={staleRes ? { color: '#fbbf24' } : undefined}>{fmt(r.ripple_pct)}</td>
+                          <td style={staleRes ? { color: '#fbbf24' } : undefined}>{fmt(r.loss_w, 0)}</td>
+                          <td style={staleRes ? { color: '#fbbf24' } : undefined}>{fmt(r.mass_kg, 2)}</td>
                           <td>{fmt(d.gamma_deg)}</td>
                           <td style={{ textAlign: 'center' }}>
                             <Tooltip title="Load into Simulation">

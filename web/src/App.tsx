@@ -379,9 +379,12 @@ function App() {
     // tab to pro users would only offer buttons that 403.
     { id: 'sweep', label: 'Optimization', order: 60, panelId: 'optimization', gate: 'admin', showViewer: false,
       render: () => <SweepConfigPanel /> },
-    { id: 'comparePoints', label: 'Compare', order: 65, gate: 'fullUI', showViewer: false,
+    // Compare writes the SHARED saved-sims store and Cost studies run on the
+    // shared config (kernel/study carries no per-user geometry yet) — both are
+    // the owner's tools until they learn to work on the client-side copy.
+    { id: 'comparePoints', label: 'Compare', order: 65, gate: 'admin', showViewer: false,
       render: () => <ComparePanel /> },
-    { id: 'cost', label: 'Cost', order: 70, panelId: 'cost', gate: 'fullUI', showViewer: false,
+    { id: 'cost', label: 'Cost', order: 70, panelId: 'cost', gate: 'admin', showViewer: false,
       render: () => <CostPanel /> },
     { id: 'compare', label: 'Configure', order: 75, gate: 'signedIn', showViewer: false,
       render: () => <CompareTab /> },

@@ -541,11 +541,13 @@ const SweepConfigPanel: React.FC = () => {
                     InputProps={{ endAdornment: <InputAdornment position="end">RPM</InputAdornment> }}
                     sx={{ flex: 1 }}
                   />
-                  <TextField
-                    label="Load angle γ" size="small" type="number" value={opGamma} disabled
-                    InputProps={{ endAdornment: <InputAdornment position="end">°</InputAdornment> }}
-                    sx={{ flex: 1 }}
-                  />
+                  <Tooltip title="γ counts from the q-axis, near zero in BOTH modes — Generator adds its 180° internally (never sweep around 180).">
+                    <TextField
+                      label="Load angle γ" size="small" type="number" value={opGamma} disabled
+                      InputProps={{ endAdornment: <InputAdornment position="end">°</InputAdornment> }}
+                      sx={{ flex: 1 }}
+                    />
+                  </Tooltip>
                 </Box>
                 <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                   <Typography variant="caption" color="text.disabled">

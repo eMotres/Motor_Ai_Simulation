@@ -776,7 +776,18 @@ const SweepStudyPanel: React.FC = () => {
                 ? 'ran out of time — the eval budget was reached before the solve finished. '
                   + 'These settings (steps/period, demag, coupled eddy, mesh size) cost far more '
                   + 'per point than a plain sweep; lower them or expect long runs.'
-                : `couldn’t be built${buildFails.reason ? ` (${buildFails.reason})` : ' (invalid geometry)'} — skipped.`}
+                : /non-physical/i.test(buildFails.reason)
+                  // The geometry built and solved fine — the RESULT was rejected
+                  // (η = 0, absurd Nm/kg …). Blaming the build sent the user
+                  // hunting a geometry problem when the operating point was the
+                  // culprit (seen live: a generator sweep at γ≈0, i.e. the
+                  // zero-torque angle — every point honestly measured η = 0).
+                  ? `solved but the result was rejected (${buildFails.reason}) — `
+                    + 'skipped. The geometry is fine; check the operating point '
+                    + '(γ near the zero-torque angle, current far off the machine) '
+                    + 'or the mode (γ counts from the q-axis in BOTH modes — '
+                    + 'generator adds its 180° internally).'
+                  : `couldn’t be built${buildFails.reason ? ` (${buildFails.reason})` : ' (invalid geometry)'} — skipped.`}
               {buildFails.culprits.length
                 ? ` Always fails at: ${buildFails.culprits.join('; ')} — narrow that range.`
                 : ''}

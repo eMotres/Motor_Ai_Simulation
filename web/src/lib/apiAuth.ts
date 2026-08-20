@@ -36,6 +36,18 @@ export function setMatGetter(fn: (() => string | null) | null): void {
   matGetter = fn;
 }
 
+// POST /api/kernel/run is NOT matched by the interceptor's COMPUTE_RE (it
+// rewrites URLs, not JSON bodies), so callers that go through the kernel must
+// put the SAME overrides into the payload themselves — otherwise the run
+// solves the shared config while the field views beside it show the user's
+// copy (two different machines on one screen).
+export function currentGeoJson(): string | null {
+  try { return geoGetter ? geoGetter() : null; } catch { return null; }
+}
+export function currentMatJson(): string | null {
+  try { return matGetter ? matGetter() : null; } catch { return null; }
+}
+
 // Endpoints whose result depends on the cross-section geometry. Covers the
 // geometry meshes, ALL analytical + FEM physics endpoints (physics, physics/
 // field2d|torque_sweep|sweep|fem_*|thermal_field2d — each accepts ?geo=), and

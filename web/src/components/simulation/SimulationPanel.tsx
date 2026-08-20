@@ -16,6 +16,7 @@ import {
 import ShowChartIcon from '@mui/icons-material/ShowChart';
 import { useMotorStore } from '../../stores/motorStore';
 import { windingConnections } from '../../lib/referencePassports';
+import { currentGeoJson, currentMatJson } from '../../lib/apiAuth';
 import PlayArrowIcon    from '@mui/icons-material/PlayArrow';
 import StopIcon         from '@mui/icons-material/Stop';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
@@ -420,6 +421,10 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
         ...(String(daxisDeg ?? '').trim() !== '' && Number.isFinite(Number(daxisDeg))
           ? { daxis_deg: Number(daxisDeg) } : {}),
         ...(connection ? { connection } : {}),
+        // kernel POST bypasses the ?geo=/?mat= interceptor — the probes must
+        // solve the caller's OWN machine, not the shared config.
+        ...(() => { const g = currentGeoJson(); return g ? { geo: g } : {}; })(),
+        ...(() => { const m = currentMatJson(); return m ? { mat: m } : {}; })(),
       };
       const r = await fetch(`${API}/api/kernel/run`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1086,7 +1091,9 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               onChange={e => setPhaseOffset(+e.target.value)}
               inputProps={{ step: 5, min: -90, max: 90 }}
               InputProps={{ endAdornment: <HelpTip title={`I direction = 90° + γ elec from d-axis.  ` +
-                          `γ=0 → q-axis (max torque),  γ=±90 → d-axis (field weakening)`} /> }}
+                          `γ=0 → q-axis (max torque),  γ=±90 → d-axis (field weakening).  ` +
+                          `SAME near-zero range in BOTH modes — Generator adds its 180° internally, ` +
+                          `never type it into γ.`} /> }}
               disabled={isRunning}
             />
 

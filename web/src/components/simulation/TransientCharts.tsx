@@ -19,6 +19,7 @@ const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 import type { TransientSummary } from './SummaryTable';
 import { useMotorStore } from '../../stores/motorStore';
 import { geoSignature } from '../common/geoSig';
+import { currentGeoJson, currentMatJson } from '../../lib/apiAuth';
 import HelpTip from '../common/HelpTip';
 
 interface TransientPayload {
@@ -408,6 +409,11 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
       n_frames:           steps,
       run_id:             String(runNonce),
       fresh,
+      // The kernel POST bypasses the fetch interceptor's ?geo=/?mat= — the
+      // caller's own geometry and materials must ride the payload, or the
+      // Run solves the SHARED config while the field views show the copy.
+      ...(() => { const g = currentGeoJson(); return g ? { geo: g } : {}; })(),
+      ...(() => { const m = currentMatJson(); return m ? { mat: m } : {}; })(),
     };
     // Helper: fetch with auto-retry against transient connection drops.
     // The uvicorn supervisor sometimes respawns the worker mid-request when

@@ -2725,6 +2725,13 @@ def get_fem_transient(
     harm_ref:            bool  = True,    # ← voltage drive: ALSO run a current-drive reference at
                                           #   the extracted fundamental (I₁, γ₁) → ΔP_harm = the
                                           #   watt cost of the parasitic harmonic currents
+    mat:            Optional[str] = None, # ← per-request material override (multi-user).  The GET
+                                          #   route gets this via the router dependency (?mat=);
+                                          #   POST /api/kernel/run maps its payload onto THIS
+                                          #   signature, which the dependency never sees — without
+                                          #   the parameter a user-copied motor solved with the
+                                          #   SHARED config's materials and reported the numbers
+                                          #   as the user's own.
 ):
     """Transient FEM analysis — runs N solves per electrical period and
     returns time-resolved T(t), losses(t) and V_phase(t).
@@ -2740,6 +2747,23 @@ def get_fem_transient(
     through one electrical period.
     """
     import numpy as _np
+
+    # Per-request materials via the KERNEL path: same parse/validate/set as
+    # the router dependency does for ?mat= — per-task context, so the kernel
+    # call (which runs inside this request's task) resolves the caller's own
+    # materials and nothing leaks across requests.
+    if mat is not None:
+        from motor_ai_sim.material_context import set_request_materials
+        _mov = _parse_mat_override(mat)
+        if _mov and _mov.get("assignment"):
+            from motor_ai_sim.materials import (validate_assignment as _va2,
+                                                UnknownMaterialError as _ume2)
+            try:
+                _va2(_mov["assignment"],
+                     known_extra=set(_mov.get("materials") or ()))
+            except _ume2 as _me2:
+                raise HTTPException(status_code=400, detail=str(_me2))
+        set_request_materials(_mov)
 
     # Winding connection: validate BEFORE anything else touches it.  An
     # unreadable label is a request error (400 naming the label and the forms

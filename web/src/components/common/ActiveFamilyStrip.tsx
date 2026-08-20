@@ -7,6 +7,7 @@
  */
 import React, { useEffect, useState } from 'react';
 import { Box, Typography, Button, Tooltip, CircularProgress } from '@mui/material';
+import { useMotorStore } from '../../stores/motorStore';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
@@ -15,6 +16,8 @@ interface Ctx {
   die_locked?: boolean; config_locked?: boolean; can_write?: boolean;
   duty_point?: { current_arms: number; rpm: number; gamma_deg: number;
                  mode: string } | null;
+  build?: { stack_mm?: number | null; wire_height_mm?: number | null;
+            turns?: number | null } | null;
 }
 
 const readLS = (k: string, d: any) => {
@@ -24,6 +27,7 @@ const readLS = (k: string, d: any) => {
 
 const ActiveFamilyStrip: React.FC = () => {
   const [ctx, setCtx] = useState<Ctx | null>(null);
+  const liveGeometry = useMotorStore(s => s.geometry) as Record<string, unknown>;
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   // ticks so the drift marker re-evaluates while the user types in the panel
@@ -125,12 +129,53 @@ const ActiveFamilyStrip: React.FC = () => {
           {lockGlyph}
         </Typography>
       </Tooltip>
-      <Typography sx={{ fontSize: 12, color: 'var(--text-2)',
-                        fontVariantNumeric: 'tabular-nums' }}>
-        <b style={{ color: 'var(--text-1)' }}>{ctx.die}</b>
-        {' / '}<b style={{ color: 'var(--text-1)' }}>{ctx.config}</b>
-        {ctx.duty ? <>{' / '}<b style={{ color: '#60a5fa' }}>{ctx.duty}</b></> : null}
-      </Typography>
+      {(() => {
+        // EFFECTIVE config name from the LIVE geometry: change the stack in
+        // Geometry and the strip reads M1-L220 (amber = unsaved) at once —
+        // the catalog keeps the saved name until Save (user rule).
+        const liveL = Number(liveGeometry?.motor_length);
+        const savedL = Number(ctx.build?.stack_mm);
+        const liveTurns = Number(liveGeometry?.num_wires_per_slot);
+        const savedTurns = Number(ctx.build?.turns);
+        const liveWh = Number(liveGeometry?.wire_height);
+        const savedWh = Number(ctx.build?.wire_height_mm);
+        const lDrift = Number.isFinite(liveL) && Number.isFinite(savedL)
+          && Math.abs(liveL - savedL) > 1e-6;
+        const otherDrift = (Number.isFinite(liveTurns) && Number.isFinite(savedTurns)
+            && Math.abs(liveTurns - savedTurns) > 1e-6)
+          || (Number.isFinite(liveWh) && Number.isFinite(savedWh)
+            && Math.abs(liveWh - savedWh) > 1e-6);
+        let cfgLabel = ctx.config ?? '';
+        if (lDrift) {
+          const lTxt = `L${Number(liveL.toFixed(1))}`;
+          cfgLabel = /-L\d+(\.\d+)?/.test(cfgLabel)
+            ? cfgLabel.replace(/-L\d+(\.\d+)?/, `-${lTxt}`)
+            : `${cfgLabel} (${lTxt})`;
+        }
+        const drifted2 = lDrift || otherDrift;
+        const tip = drifted2
+          ? `Live build differs from the saved configuration:`
+            + (lDrift ? ` stack ${savedL} → ${liveL} mm;` : '')
+            + (Number.isFinite(liveTurns) && Number.isFinite(savedTurns) && liveTurns !== savedTurns
+               ? ` turns ${savedTurns} → ${liveTurns};` : '')
+            + (Number.isFinite(liveWh) && Number.isFinite(savedWh) && Math.abs(liveWh - savedWh) > 1e-6
+               ? ` wire h ${savedWh} → ${liveWh} mm;` : '')
+            + ' Save to duty re-snapshots the build (siblings will flag stale).'
+          : '';
+        const cfgEl = (
+          <b style={{ color: drifted2 ? '#fbbf24' : 'var(--text-1)' }}>{cfgLabel}</b>
+        );
+        return (
+          <Typography sx={{ fontSize: 12, color: 'var(--text-2)',
+                            fontVariantNumeric: 'tabular-nums' }}>
+            <b style={{ color: 'var(--text-1)' }}>{ctx.die}</b>
+            {' / '}{drifted2
+              ? <Tooltip title={tip}><span style={{ cursor: 'help' }}>{cfgEl}</span></Tooltip>
+              : cfgEl}
+            {ctx.duty ? <>{' / '}<b style={{ color: '#60a5fa' }}>{ctx.duty}</b></> : null}
+          </Typography>
+        );
+      })()}
       {p && (
         <Tooltip title={drifted
           ? `The panel is OFF this duty's stored point (${p.current_arms} A @ ${p.rpm} rpm, γ=${p.gamma_deg}°, ${p.mode}) — Save to duty writes the panel's point into it`

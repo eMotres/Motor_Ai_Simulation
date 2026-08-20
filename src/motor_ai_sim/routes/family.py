@@ -606,6 +606,13 @@ def context(authorization: str = Header(default=None)):
             "current_arms": point.get("current_arms"), "rpm": point.get("rpm"),
             "gamma_deg": point.get("gamma_deg"), "mode": point.get("mode", "motor"),
         }),
+        # The SAVED build — the strip compares the live geometry against it
+        # and shows the effective name (M1-L220, amber) while unsaved.
+        "build": {
+            "stack_mm": (c.get("geometry_overrides") or {}).get("motor_length"),
+            "wire_height_mm": (c.get("geometry_overrides") or {}).get("wire_height"),
+            "turns": (c.get("geometry_overrides") or {}).get("num_wires_per_slot"),
+        },
     }
 
 

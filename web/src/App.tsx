@@ -371,9 +371,13 @@ function App() {
     // cut planes), so it does NOT take the AppBar's viewer cluster — those
     // controls drive MotorScene, and wiring them to a second canvas would make
     // the grid/axes toggles lie about which scene they act on.
-    { id: 'static3d', label: '3D', order: 55, gate: 'fullUI', showViewer: false,
+    // 3D static solves are the owner's passport tool (admin-only server-side).
+    { id: 'static3d', label: '3D', order: 55, gate: 'admin', showViewer: false,
       render: () => <Static3DPanel /> },
-    { id: 'sweep', label: 'Optimization', order: 60, panelId: 'optimization', gate: 'fullUI', showViewer: false,
+    // The optimizer/sweep burns the whole machine on the shared config —
+    // server-side it is admin-only since the deploy hardening, so showing the
+    // tab to pro users would only offer buttons that 403.
+    { id: 'sweep', label: 'Optimization', order: 60, panelId: 'optimization', gate: 'admin', showViewer: false,
       render: () => <SweepConfigPanel /> },
     { id: 'comparePoints', label: 'Compare', order: 65, gate: 'fullUI', showViewer: false,
       render: () => <ComparePanel /> },

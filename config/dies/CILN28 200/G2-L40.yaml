@@ -41,3 +41,7 @@ materials:
   magnet: F52SH_120C
   stator_core: B15AHV950M
   rotor_core: B15AHV950M
+battery:
+  cells: 200
+  v_min: 640.0
+  v_max: 860.0

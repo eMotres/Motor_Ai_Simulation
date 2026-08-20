@@ -30,8 +30,10 @@ interface Duty {
   gamma_deg: number; torque_nm?: number | null; power_kw?: number | null;
   note: string; result?: DutyResult | null;
 }
+interface Battery { cells?: number | null; v_min: number; v_max: number; }
 interface Cfg {
   name: string; role: string; locked?: boolean; build_sig?: string;
+  battery?: Battery | null;
   stack_mm: number | null;
   wire_height_mm: number | null; wire_width_mm: number | null;
   turns: number | null; connection: string | null;
@@ -187,6 +189,22 @@ const FamilyCatalog: React.FC<{
       fetch(`${API}/api/family/config/${encodeURIComponent(dieName)}/${encodeURIComponent(c.name)}/lock`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ locked: !c.locked }),
+      }));
+  };
+  const editBattery = (dieName: string, c: Cfg) => {
+    const cur = c.battery ? `${c.battery.cells ?? ''}, ${c.battery.v_min}, ${c.battery.v_max}`
+                          : '200, 640, 860';
+    const raw = window.prompt(
+      `Battery for '${c.name}' — cells, V min (discharged), V max (charged):`, cur);
+    if (!raw) return;
+    const parts = raw.split(/[,;\s]+/).filter(Boolean).map(Number);
+    if (parts.length < 3 || parts.some(n => !Number.isFinite(n))) {
+      setMsg('✗ expected three numbers: cells, V min, V max'); return;
+    }
+    mutate(`battery set on '${c.name}'`, () =>
+      fetch(`${API}/api/family/config/${encodeURIComponent(dieName)}/${encodeURIComponent(c.name)}/battery`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cells: Math.round(parts[0]), v_min: parts[1], v_max: parts[2] }),
       }));
   };
   const deleteDuty = (die: string, cfg: string, duty: string) => {
@@ -434,6 +452,24 @@ const FamilyCatalog: React.FC<{
                   {c.steel ? ` · ${c.steel}` : ''}
                   {c.magnet ? ` · ${c.magnet}` : ''}
                 </Typography>
+                {c.battery && (
+                  <Tooltip title={`Supply: ${c.battery.cells ?? '?'} cells, `
+                    + `${c.battery.v_min}–${c.battery.v_max} V pack`
+                    + (c.battery.cells ? ` (${(c.battery.v_min / c.battery.cells).toFixed(2)}–${(c.battery.v_max / c.battery.cells).toFixed(2)} V/cell)` : '')
+                    + '. Duty V L-L cells are judged against this range.'}>
+                    <Typography component="span"
+                      sx={{ fontSize: 11, color: 'var(--text-3)', cursor: canWrite ? 'pointer' : 'help' }}
+                      onClick={canWrite ? () => editBattery(die.name, c) : undefined}>
+                      🔋 {c.battery.cells ?? '?'}s · {fmt(c.battery.v_min, 0)}–{fmt(c.battery.v_max, 0)} V
+                    </Typography>
+                  </Tooltip>
+                )}
+                {!c.battery && canWrite && (
+                  <Tooltip title="Set the supply battery — duties will be judged against its voltage range">
+                    <Typography component="span" sx={{ fontSize: 11, color: 'var(--text-4)', cursor: 'pointer' }}
+                      onClick={() => editBattery(die.name, c)}>🔋 —</Typography>
+                  </Tooltip>
+                )}
                 <Box sx={{ flex: 1 }} />
                 {canWrite && (
                   <Tooltip title="Save the CURRENT Simulation point as a new duty here">
@@ -511,7 +547,25 @@ const FamilyCatalog: React.FC<{
                           <td>{fmt(d.torque_nm)}</td>
                           <td>{fmt(d.rpm, 0)}</td>
                           <td>{fmt(d.current_arms)}</td>
-                          <td style={staleRes ? { color: '#fbbf24' } : undefined}>{fmt(r.v_ll_peak_v, 0)}</td>
+                          {(() => {
+                            const v = Number(r.v_ll_peak_v);
+                            const b = c.battery;
+                            let col: string | undefined;
+                            let tip = '';
+                            if (b && Number.isFinite(v) && v > 0) {
+                              if (v <= b.v_min) { col = '#34d399'; tip = `needs ≥${v.toFixed(0)} V DC — fits the whole ${b.v_min}–${b.v_max} V range, margin ${(100 * (b.v_min / v - 1)).toFixed(0)}% at empty`; }
+                              else if (v <= b.v_max) { col = '#fbbf24'; tip = `needs ≥${v.toFixed(0)} V DC — fits only above ${(100 * v / b.v_max).toFixed(0)}% of the charged pack (${b.v_min}–${b.v_max} V)`; }
+                              else { col = '#f87171'; tip = `needs ≥${v.toFixed(0)} V DC — DOES NOT fit the ${b.v_min}–${b.v_max} V pack`; }
+                            }
+                            if (staleRes) col = '#fbbf24';
+                            return (
+                              <td style={col ? { color: col } : undefined}>
+                                {tip ? (
+                                  <Tooltip title={tip}><span style={{ cursor: 'help' }}>{fmt(r.v_ll_peak_v, 0)}</span></Tooltip>
+                                ) : fmt(r.v_ll_peak_v, 0)}
+                              </td>
+                            );
+                          })()}
                           <td style={staleRes ? { color: '#fbbf24' } : undefined}>{fmt(r.efficiency_pct, 2)}</td>
                           <td style={staleRes ? { color: '#fbbf24' } : undefined}>{fmt(r.ripple_pct)}</td>
                           <td style={staleRes ? { color: '#fbbf24' } : undefined}>{fmt(r.loss_w, 0)}</td>

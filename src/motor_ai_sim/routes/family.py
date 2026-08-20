@@ -218,6 +218,7 @@ def tree(authorization: str = Header(default=None)):
                 "magnet": (c.get("materials") or {}).get("magnet"),
                 "steel": (c.get("materials") or {}).get("stator_core"),
                 "build_sig": _build_sig(die, c),
+                "battery": c.get("battery"),
                 "duties": [
                     {"name": d.get("name"), "mode": d.get("mode", "motor"),
                      "saved_at": d.get("saved_at"),
@@ -632,6 +633,31 @@ def lock_config(die: str, cfg: str, req: LockPatch,
     log.info("family: configuration '%s/%s' %s", die, cfg,
              "locked" if req.locked else "UNLOCKED")
     return {"ok": True, "locked": bool(req.locked)}
+
+
+class BatteryPatch(BaseModel):
+    cells: Optional[int] = None      # series cell count (informative)
+    v_min: float                     # pack voltage, discharged [V]
+    v_max: float                     # pack voltage, fully charged [V]
+
+
+@router.patch("/config/{die}/{cfg}/battery")
+def set_battery(die: str, cfg: str, req: BatteryPatch,
+                _admin: dict = Depends(require_admin)):
+    """The supply the configuration is built to run from.  Duties are then
+    judged against it: the inverter needs V_DC >= the duty's line peak."""
+    die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
+    if not (req.v_max >= req.v_min > 0):
+        raise HTTPException(422, detail=(
+            f"battery range is nonsense: v_min={req.v_min}, v_max={req.v_max} — "
+            "need 0 < v_min <= v_max"))
+    c = _load_yaml(_cfg_file(die, cfg), "configuration")
+    c["battery"] = {"cells": (int(req.cells) if req.cells else None),
+                    "v_min": round(float(req.v_min), 1),
+                    "v_max": round(float(req.v_max), 1)}
+    _save_yaml(_cfg_file(die, cfg), c)
+    log.info("family: battery on '%s/%s': %s", die, cfg, c["battery"])
+    return {"ok": True, "battery": c["battery"]}
 
 
 def _num_eq(a, b) -> bool:

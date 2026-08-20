@@ -494,9 +494,13 @@ const ComparePanel: React.FC = () => {
       fontWeight: 600, ...(sticky ? { position: 'sticky', left, bgcolor: 'var(--panel-2)', zIndex: 1 } : {}) }}>
       {editId === s.id ? (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25 }}>
+          {/* Family-context names are long ("CILN28 200 / M1-L200 / top-speed
+              · 08/20, 07:26") — a 150 px box cut them off and renaming FELT
+              broken (user report).  Wide field, whole name visible. */}
           <TextField value={editName} onChange={e => setEditName(e.target.value)} size="small" autoFocus
             onKeyDown={e => { if (e.key === 'Enter') commitRename(); if (e.key === 'Escape') setEditId(null); }}
-            inputProps={{ style: { fontSize: 12, padding: '2px 6px' } }} sx={{ width: 150 }} />
+            inputProps={{ style: { fontSize: 12, padding: '2px 6px' } }}
+            sx={{ width: 'min(380px, 60vw)' }} />
           <IconButton size="small" onClick={commitRename} sx={{ color: '#4ade80', p: 0.25 }}><CheckIcon sx={{ fontSize: 15 }} /></IconButton>
           <IconButton size="small" onClick={() => setEditId(null)} sx={{ color: 'var(--text-3)', p: 0.25 }}><CloseIcon sx={{ fontSize: 15 }} /></IconButton>
         </Box>

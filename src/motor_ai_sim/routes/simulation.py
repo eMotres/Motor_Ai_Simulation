@@ -3706,6 +3706,11 @@ def _build_transient_summary(
         "connection": _conn,
         "n_parallel": _npar,
         "op_mode": _op_mode,
+        # op_mode above is DERIVED from the power-flow sign — honest physics,
+        # but useless for "is this run the panel's point?" checks: near a
+        # zero-crossing (or an unconventional γ) a generator-mode request can
+        # measure motoring power.  This is the mode the request ASKED for.
+        "op_mode_requested": _mode_eff,
         # Terminal parameters, persisted with every run (they ride the summary
         # into sim.lastSummary, .last_transient.json, Compare and the motor
         # autosave — one write path, no separate store to rot).

@@ -100,9 +100,19 @@ const ActiveFamilyStrip: React.FC = () => {
       // must not outlive a real run at the new point), and its results are
       // recorded right after.
       const s = readLS('lastSummary', null);
+      // Match the run by its INPUTS (current, speed, γ, the REQUESTED mode).
+      // s.op_mode is derived from the power-flow sign — a generator-mode run
+      // near a zero-crossing reads "motor" there, and comparing it against
+      // the panel toggle silently refused to record honest results (seen
+      // live: γ=197° generator point saved twice with no results).  γ is
+      // compared too — same I and rpm at a different angle is a different
+      // point.  Older summaries lack op_mode_requested: the γ+I+rpm match is
+      // then decisive.
       const runMatches = !!(s
         && near(Number(s.I_phase_rms_A), cur, Math.max(0.5, 0.002 * cur))
-        && near(Number(s.rpm), rpm, 1) && (s.op_mode ?? 'motor') === mode);
+        && near(Number(s.rpm), rpm, 1)
+        && near(Number(s.gamma_deg), gam, 0.05)
+        && (s.op_mode_requested == null || s.op_mode_requested === mode));
       const dutyBody: any = { name: ctx.duty, mode, from_current: true };
       if (runMatches) {
         dutyBody.torque_nm = Math.abs(Number(s.T_em_avg_Nm)) || undefined;

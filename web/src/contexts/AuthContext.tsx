@@ -12,6 +12,15 @@ import LoginDialog from '../components/auth/LoginDialog';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 
+// Install the fetch interceptor at MODULE LOAD, not in an effect: React runs
+// child effects BEFORE the provider's, so a panel's first fetch fired from its
+// own mount effect would go out WITHOUT the Bearer header and 401 on gated
+// endpoints (seen live: the field view hit "your_tier: anon" while signed in
+// as admin).  The token getter reads localStorage synchronously — no state to
+// wait for.
+installFetchAuth();
+setTokenGetter(async () => getStoredToken());
+
 /** Minimal signed-in user shape (Firebase's User replaced). uid === email. */
 export interface AuthUser {
   uid: string;
@@ -72,8 +81,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   useEffect(() => {
-    installFetchAuth();
-    setTokenGetter(async () => getStoredToken());
     void loadRole();
   }, [loadRole]);
 

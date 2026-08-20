@@ -250,6 +250,12 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // CURRENT is fitted by cheap FEM probes + secant before the real run.
   // Solver-side this is still current drive — the backend never sees it.
   const [targetKind,  setTargetKind]  = usePersisted<'off' | 'nm' | 'kw'>('targetKind', 'off');
+  // Voltage drive is hidden from the menu — a persisted 'voltage' selection
+  // would strand the panel in an invisible mode.
+  useEffect(() => {
+    if (drive === 'voltage') setDrive('current');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [targetValue, setTargetValue] = usePersisted<number>('targetValue', 850);
   const [fitBusy, setFitBusy] = useState(false);
   const [fitMsg,  setFitMsg]  = useState<string | null>(null);
@@ -956,7 +962,10 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 + 'speed, winding, d-axis — stays exactly as set here.'} />
             </Box>
             <Box sx={{ display: 'flex', gap: 0.5 }}>
-              {(['current', 'voltage'] as const).map(m => (
+              {/* Voltage drive is HIDDEN from the menu, not deleted (user
+                  request) — everything behind it stays; restore by putting
+                  'voltage' back in this list. */}
+              {(['current'] as const).map(m => (
                 <Button key={m} size="small" fullWidth disabled={isRunning || fitBusy}
                   variant={drive === m && targetKind === 'off' ? 'contained' : 'outlined'}
                   onClick={() => { setDrive(m); setTargetKind('off'); }}

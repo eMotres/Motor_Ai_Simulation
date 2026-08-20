@@ -98,11 +98,17 @@ const ActiveFamilyStrip: React.FC = () => {
         body: JSON.stringify({ die: ctx.die, config: ctx.config, duty: dutyBody }),
       });
       if (!r.ok) throw new Error((await r.json()).detail ?? `HTTP ${r.status}`);
-      let extra = '';
+      // The save may have AUTO-RENAMED the configuration (M1-L200 -> M1-L220
+      // when the stack changed) — the result recording must follow the NEW
+      // name, or it 404s and the fresh run's numbers are silently lost
+      // (measured: exactly that happened on the first renamed save).
+      const rj = await r.json().catch(() => ({} as any));
+      const cfgName = (rj && rj.config) ? String(rj.config) : (ctx.config as string);
+      let extra = rj && rj.renamed_to ? ` · renamed to ${rj.renamed_to}` : '';
       if (runMatches) {
         const rr = await fetch(`${API}/api/family/duty_result`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ die: ctx.die, config: ctx.config, duty: ctx.duty,
+          body: JSON.stringify({ die: ctx.die, config: cfgName, duty: ctx.duty,
             result: { efficiency_pct: Number(s.efficiency) * 100,
                       ripple_pct: s.T_ripple_pct, v_ll_peak_v: s.V_line_peak_V,
                       loss_w: s.P_loss_total_W, mass_kg: s.mass_total_kg,
@@ -110,9 +116,9 @@ const ActiveFamilyStrip: React.FC = () => {
                       p_solid_w: s.P_solid_W, v_phase_peak_v: s.V_phase_peak_V,
                       j_coil_a_mm2: s.J_coil_A_per_mm2 } }),
         });
-        extra = rr.ok ? ' + run results' : '';
+        extra += rr.ok ? ' + run results' : ' (result recording failed)';
       } else {
-        extra = ' (no matching run to record — Run, then save again)';
+        extra += ' (no matching run to record — Run, then save again)';
       }
       setMsg(`✓ saved to ${ctx.duty}${extra}`);
       window.dispatchEvent(new CustomEvent('family-changed'));

@@ -1,5 +1,6 @@
-# Backend runtime deps for the FEM API (Cloud Run image).
-# No torch / hydra / PINN — those were removed with Modulus.
+# Backend runtime deps for the FEM API (self-hosted deploy).
+# ONLY what the working app needs: no torch / hydra / PINN (removed with
+# Modulus), no Firebase (auth is self-hosted since 2026-08-20).
 fastapi==0.129.0
 uvicorn[standard]==0.41.0
 pydantic==2.12.5
@@ -14,12 +15,9 @@ cadquery-ocp==7.8.1.1.post1
 matplotlib==3.10.8
 pyyaml==6.0.3
 trimesh==4.11.2
-# Firebase ID-token verification (tier gating). [crypto] pulls cryptography.
+# Auth: our HS256 session tokens + Google Identity Services ID-token
+# verification (JWKS, RS256). [crypto] pulls cryptography.
 pyjwt[crypto]==2.10.1
-# Admin SDK: user-management + stats for /api/admin/* (lists Firebase Auth users,
-# reads Firestore design counts). Uses Application Default Credentials on Cloud
-# Run; absent locally -> admin endpoints serve flagged mock data.
-firebase-admin>=6.5,<7
 # Anthropic SDK: in-app AI support assistant (/api/support/chat). Reads
 # ANTHROPIC_API_KEY from env (server-side only); absent -> endpoint serves a
 # flagged mock reply. Set ANTHROPIC_SUPPORT_MODEL to override the model.
@@ -30,3 +28,7 @@ mapbox-earcut>=1.0  # 2D polygon triangulation (cadquery_geometry.get_2d_mesh_da
 meshio>=5.3  # skfem.io mesh IO (fem_solver_2d.build_mesh_from_polygons) — without it the FEM mesh build + simulation transient 500
 scikit-learn>=1.5  # surrogate model + DOE importance (surrogate.py: RandomForestRegressor, permutation_importance)
 pillow>=10  # PIL.Image domain rasterization for 2D field-map classification (routes/simulation.py)
+# MKL PARDISO sparse solver — the FEM transient is several times faster than
+# the SuperLU fallback. Pulls Intel MKL (~200 MB); worth it on any solve node.
+pypardiso>=0.4
+psutil>=5.9  # worker pinning / CPU accounting (optimization pool, static3d)

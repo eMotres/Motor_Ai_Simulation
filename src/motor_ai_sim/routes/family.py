@@ -159,7 +159,9 @@ class DieCreate(BaseModel):
 
 # Computed numbers a RUN produced at this duty's operating point — never
 # invented, only recorded off a finished Simulation run.
-_RESULT_KEYS = ("efficiency_pct", "ripple_pct", "v_ll_peak_v", "loss_w", "mass_kg")
+_RESULT_KEYS = ("efficiency_pct", "ripple_pct", "v_ll_peak_v", "loss_w", "mass_kg",
+                "p_core_w", "p_stranded_w", "p_solid_w",
+                "v_phase_peak_v", "j_coil_a_mm2")
 
 
 class DutyResult(BaseModel):

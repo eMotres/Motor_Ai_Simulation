@@ -16,7 +16,7 @@ const AddToCompareButton: React.FC = () => {
   const add = async () => {
     setBusy(true); setMsg(null);
     try {
-      await addCurrentPointToCompare(defaultPointName());
+      await addCurrentPointToCompare(await defaultPointName());
       setMsg('✓ added to Compare');
     } catch (e: any) {
       setMsg('✗ ' + String(e?.message ?? e));

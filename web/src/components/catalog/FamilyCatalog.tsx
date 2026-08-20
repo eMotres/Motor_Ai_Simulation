@@ -20,6 +20,8 @@ const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 interface DutyResult {
   efficiency_pct?: number; ripple_pct?: number; v_ll_peak_v?: number;
   loss_w?: number; mass_kg?: number; recorded_at?: string;
+  p_core_w?: number; p_stranded_w?: number; p_solid_w?: number;
+  v_phase_peak_v?: number; j_coil_a_mm2?: number;
   build_sig?: string;
 }
 interface Duty {
@@ -282,6 +284,13 @@ const FamilyCatalog: React.FC<{
           V_line_peak_V: Vlpk, V_line_rms_V: Vlpk / Math.SQRT2,
           KV_rpm_per_V_line: Vlpk > 0 ? rpm / (Vlpk / Math.SQRT2) : 0,
           P_loss_total_W: ploss,
+          P_core_W: rr.p_core_w ?? undefined,
+          P_stranded_W: rr.p_stranded_w ?? undefined,
+          P_solid_W: rr.p_solid_w ?? undefined,
+          V_phase_peak_V: rr.v_phase_peak_v ?? undefined,
+          V_phase_rms_V: rr.v_phase_peak_v != null
+            ? Number(rr.v_phase_peak_v) / Math.SQRT2 : undefined,
+          J_coil_A_per_mm2: rr.j_coil_a_mm2 ?? undefined,
           efficiency: rr.efficiency_pct != null ? Number(rr.efficiency_pct) / 100 : 0,
           mass_total_kg: mass, mass_components: [],
           torque_per_mass_Nm_kg: mass > 0 && T > 0 ? T / mass : 0,

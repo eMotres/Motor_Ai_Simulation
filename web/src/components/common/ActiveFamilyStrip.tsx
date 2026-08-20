@@ -101,7 +101,10 @@ const ActiveFamilyStrip: React.FC = () => {
           body: JSON.stringify({ die: ctx.die, config: ctx.config, duty: ctx.duty,
             result: { efficiency_pct: Number(s.efficiency) * 100,
                       ripple_pct: s.T_ripple_pct, v_ll_peak_v: s.V_line_peak_V,
-                      loss_w: s.P_loss_total_W, mass_kg: s.mass_total_kg } }),
+                      loss_w: s.P_loss_total_W, mass_kg: s.mass_total_kg,
+                      p_core_w: s.P_core_W, p_stranded_w: s.P_stranded_W,
+                      p_solid_w: s.P_solid_W, v_phase_peak_v: s.V_phase_peak_V,
+                      j_coil_a_mm2: s.J_coil_A_per_mm2 } }),
         });
         extra = rr.ok ? ' + run results' : '';
       } else {

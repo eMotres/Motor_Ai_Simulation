@@ -91,9 +91,18 @@ export function hasSummaryToSave(): boolean {
 /** Default label: the MOTOR's name and when it was saved — nothing else (user
  *  request, 2026-08-04).  The current and gamma are columns of the row already,
  *  so repeating them in the name only crowded it.  Renameable in Compare. */
-export function defaultPointName(): string {
+export async function defaultPointName(): Promise<string> {
   const when = new Date().toLocaleString(undefined,
     { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+  // The loaded die / configuration / duty IS the design's identity (user
+  // rule): "CILN28 200 / M1-L200 / top-speed · 20.08 09:41".
+  try {
+    const c = await (await fetch(`${API}/api/family/context`)).json();
+    if (c?.active && c.die && c.config) {
+      const duty = c.duty ? ` / ${c.duty}` : '';
+      return `${c.die} / ${c.config}${duty} · ${when}`;
+    }
+  } catch { /* no family context — fall back to the active motor's name */ }
   let motor = '';
   try {
     const raw = localStorage.getItem('motor.active');

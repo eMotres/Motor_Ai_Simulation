@@ -340,6 +340,45 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   const [freshRun,     setFreshRun]     = useState(false);
   const [cancelledRun, setCancelledRun] = useState(false);
   const [askResume,    setAskResume]    = useState(false);
+  // ── Target T/P: the FULL run self-corrects once ──────────────────────────
+  // Probe frames and full frames disagree by up to ~3 % when demag is on
+  // (the ratchet samples different worst-case fields at 12 vs 40 steps —
+  // measured: probes converged at 847 Nm, the full run gave 874).  The full
+  // run is its own frame, so ONE linear Kt step on its own numbers lands
+  // ±0.2 %.  Fires on every finished fresh run while target mode is active;
+  // guarded to a single correction per attempt.
+  const fitCorrRef = useRef(0);
+  useEffect(() => {
+    const onCost = () => {
+      if (drive !== 'current' || targetKind === 'off') return;
+      try {
+        const ls = JSON.parse(localStorage.getItem('sim.lastSummary') || 'null');
+        const Tl = Math.abs(Number(ls?.T_em_avg_Nm));
+        const Il = Number(ls?.I_phase_rms_A);
+        if (!(Tl > 0) || !(Il > 0)) return;
+        const err = (Tl - targetValue) / targetValue;
+        if (Math.abs(err) <= 0.01) {
+          fitCorrRef.current = 0;
+          setFitMsg(`on target: ${Tl.toFixed(1)} Nm (${err >= 0 ? '+' : ''}${(100 * err).toFixed(2)} %)`);
+          return;
+        }
+        if (fitCorrRef.current >= 1) {
+          fitCorrRef.current = 0;
+          setFitMsg(`✗ still ${(100 * err).toFixed(1)} % off after one correction — check γ / speed / settings`);
+          return;
+        }
+        fitCorrRef.current += 1;
+        const If = Il * (targetValue / Tl);
+        setCurrent(+If.toFixed(2));
+        setFitMsg(`full run ${Tl.toFixed(1)} Nm (${err >= 0 ? '+' : ''}${(100 * err).toFixed(1)} %) — correcting to ${If.toFixed(1)} A, re-running`);
+        setTimeout(() => launchRun(true), 400);
+      } catch { /* no summary — nothing to correct against */ }
+    };
+    window.addEventListener('sim:solve-cost', onCost);
+    return () => window.removeEventListener('sim:solve-cost', onCost);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [drive, targetKind, targetValue]);
+
   // ── Target T/P: fit the current with cheap probes, then run for real ─────
   const fitAndRun = async () => {
     setCancelledRun(false); setAskResume(false);

@@ -316,7 +316,27 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
     # many.  The solver's energy-balanced numbers stay below as diagnostics.
     _pe = float(d.get("P_elec_in_W", 0.0) or 0.0)
     _pm = float(d.get("P_mech_avg_W", 0.0) or 0.0)
-    eff = (pmech / (pmech + ploss)) if (pmech > 0 and (pmech + ploss) > 0) else 0.0
+    # WHICH WAY THE POWER FLOWS decides the efficiency formula — the sign of
+    # the shaft power, exactly as the Simulation card does (routes/simulation
+    # _build_transient_summary).  This used to be the motor formula ONLY, so
+    # every GENERATOR operating point (pmech < 0) scored eff = 0 and was
+    # rejected as "non-physical" — a generator sweep could never return a
+    # single point (caught live 2026-08-20: 10/10 rejected at honest
+    # operating points).  Generator numbers are then QUOTED POSITIVE, same
+    # user rule as the card: torque density, Nm/kg and the optimizer's
+    # metrics are built on magnitudes; the mode says which way it turns.
+    if pmech > 0:
+        eff = (pmech / (pmech + ploss)) if (pmech + ploss) > 0 else 0.0
+        op_mode = "motor"
+    elif pmech < 0:
+        _p_in = -pmech
+        eff = ((_p_in - ploss) / _p_in) if _p_in > max(ploss, 1.0) else 0.0
+        op_mode = "generator"
+        Tavg = abs(Tavg)
+        pmech = abs(pmech)
+    else:
+        eff = 0.0
+        op_mode = "motor"
     mass = float(_masses(build_params(geo), geo)["total"])
     # Voltage waveform quality — SAME helper as the Simulation summary, so the
     # optimizer's THD is byte-identical to the Simulation tab's.
@@ -358,6 +378,7 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
     kv_line = (rpm / v_line_peak) if v_line_peak > 1.0 else 0.0
     return {
         "T_em_Nm": round(Tavg, 3), "efficiency": round(eff, 5),
+        "op_mode": op_mode,     # derived from the power-flow sign (see above)
         "torque_per_mass_Nm_kg": round(Tavg / mass, 4) if mass > 0 else 0.0,
         "T_ripple_pct": round(float(d["T_ripple_pct"]), 2),
         "P_loss_total_W": round(ploss, 1), "P_cu_W": round(cu, 1),

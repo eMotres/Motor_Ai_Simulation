@@ -3300,7 +3300,8 @@ def get_fem_transient(
             # effective angle in gamma_effective_deg.
             _sbres["summary"] = _build_transient_summary(
                 _sbres, I_phase_rms=I_phase_rms, gamma_deg=_gamma_panel,
-                coil_temp_c=coil_temp_c, geo_override=_geo_ov)
+                coil_temp_c=coil_temp_c, geo_override=_geo_ov,
+                mode_requested=_mode_eff)
         except Exception as _se:
             # A summary-build failure MUST be visible (not a silently frozen
             # card set): log it AND attach an error marker so the frontend can
@@ -3509,6 +3510,9 @@ def _build_transient_summary(
     gamma_deg: float,
     coil_temp_c: float,
     geo_override: Optional[dict] = None,
+    mode_requested: Optional[str] = None,   # the mode the REQUEST asked for
+                                            # (motor/generator) — op_mode below
+                                            # is derived from the power sign
 ) -> dict:
     """Build the Simulation summary block (masses, loss split, KV, efficiency,
     specific torque/power) from a finished transient result dict.
@@ -3734,7 +3738,7 @@ def _build_transient_summary(
         # but useless for "is this run the panel's point?" checks: near a
         # zero-crossing (or an unconventional γ) a generator-mode request can
         # measure motoring power.  This is the mode the request ASKED for.
-        "op_mode_requested": _mode_eff,
+        "op_mode_requested": mode_requested,
         # Terminal parameters, persisted with every run (they ride the summary
         # into sim.lastSummary, .last_transient.json, Compare and the motor
         # autosave — one write path, no separate store to rot).

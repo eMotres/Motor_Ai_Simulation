@@ -246,6 +246,13 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // the machine's own response, incl. the parasitic harmonics a distorted
   // back-EMF forces through the winding + their real extra losses).
   const [drive,   setDrive]   = usePersisted<'current' | 'voltage'>('drive', 'current');
+  // Target mode: the duty is given as torque (Nm) or power (kW) and the
+  // CURRENT is fitted by cheap FEM probes + secant before the real run.
+  // Solver-side this is still current drive — the backend never sees it.
+  const [targetKind,  setTargetKind]  = usePersisted<'off' | 'nm' | 'kw'>('targetKind', 'off');
+  const [targetValue, setTargetValue] = usePersisted<number>('targetValue', 850);
+  const [fitBusy, setFitBusy] = useState(false);
+  const [fitMsg,  setFitMsg]  = useState<string | null>(null);
   // Operating mode.  Generator = the SAME gamma, current shifted 180 deg el —
   // torque brakes, mechanical power flows in, the card's efficiency flips to
   // P_electrical_out / P_mechanical_in (the backend decides by power-flow sign).
@@ -333,6 +340,94 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   const [freshRun,     setFreshRun]     = useState(false);
   const [cancelledRun, setCancelledRun] = useState(false);
   const [askResume,    setAskResume]    = useState(false);
+  // ── Target T/P: fit the current with cheap probes, then run for real ─────
+  const fitAndRun = async () => {
+    setCancelledRun(false); setAskResume(false);
+    const Ttar = targetValue;      // torque is the canon; kW is a linked view
+    if (!(Ttar > 0)) { setFitMsg('✗ target must be > 0'); return; }
+    setFitBusy(true); setFitMsg(null);
+    const readMesh = <T,>(k: string, d: T): T => {
+      try { const v = localStorage.getItem(`mesh.${k}`); return v == null ? d : JSON.parse(v); }
+      catch { return d; }
+    };
+    const probe = async (Ii: number): Promise<number> => {
+      const payload: Record<string, unknown> = {
+        n_steps_per_period: 12, n_periods: 1,
+        gamma_deg: phaseOffset, I_phase_rms: Ii,
+        drive: 'current', v_phase_peak: 0, v_delta_deg: 0,
+        // Cheap probes drop the eddy solve (its torque effect is ~0.1 %) but
+        // MUST keep demag as the panel has it: on this machine the ratchet
+        // takes 3.7 % of the torque at 400 A (measured — a demag-free fit
+        // landed 818 Nm against a 850 Nm target).
+        eddy: false, demag, rotor_eddy: false, torque_filter: false,
+        mesh_size_mm: readMesh('meshSize', 4.0), min_size_mm: readMesh('minSize', 0.3),
+        outer_air_factor: readMesh('outerAir', 1.3), gap_layers: readMesh('gapLayers', 2),
+        n_sectors: readMesh('nSectors', 1), stator_fillet_mm: 0,
+        sliding_band: true, element_order: 2,
+        iron_template: readMesh('ironTemplate', true), geo_mesh: readMesh('geoMesh', true),
+        structured_gap: readMesh('structuredGap', false) || readMesh('ironTemplate', true),
+        airgap_macro: readMesh('harmonicGap', false),
+        pole_copy: readMesh('poleCopy', false),
+        coil_temp_c: coilTemp, end_winding_factor: endWinding,
+        // motor frame on purpose: γ+180 (generator) flips T's sign exactly in
+        // current drive, so |T| is mode-independent and the probes stay cheap
+        mode: 'motor',
+        ...(String(daxisDeg ?? '').trim() !== '' && Number.isFinite(Number(daxisDeg))
+          ? { daxis_deg: Number(daxisDeg) } : {}),
+        ...(connection ? { connection } : {}),
+      };
+      const r = await fetch(`${API}/api/kernel/run`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ capability: 'solver.em_transient', payload }),
+      });
+      if (!r.ok) throw new Error(`probe HTTP ${r.status}`);
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || 'probe failed');
+      if (j.result && j.result.ok === false) throw new Error(String(j.result.error || 'probe refused'));
+      const T = Math.abs(Number(j.result?.raw?.T_avg_Nm));
+      if (!Number.isFinite(T) || T <= 0) throw new Error('probe returned no torque');
+      return T;
+    };
+    try {
+      // Seed from the last run's measured Kt when there is one.
+      let I = current > 0 ? current : 100;
+      try {
+        const raw = localStorage.getItem('sim.lastSummary');
+        const ls = raw ? JSON.parse(raw) : null;
+        if (ls && Math.abs(Number(ls.T_em_avg_Nm)) > 0 && Number(ls.I_phase_rms_A) > 0) {
+          I = Ttar * Number(ls.I_phase_rms_A) / Math.abs(Number(ls.T_em_avg_Nm));
+        }
+      } catch { /* seed stays */ }
+      let prev: { I: number; T: number } | null = null;
+      for (let k = 0; k < 4; k++) {
+        setFitMsg(`fitting: probe ${k + 1} @ ${I.toFixed(1)} A…`);
+        const T = await probe(I);
+        const err = (T - Ttar) / Ttar;
+        setFitMsg(`probe ${k + 1}: ${T.toFixed(1)} Nm @ ${I.toFixed(1)} A (${err >= 0 ? '+' : ''}${(100 * err).toFixed(1)} %)`);
+        if (Math.abs(err) < 0.005) { prev = { I, T }; break; }
+        let In: number;
+        if (prev && Math.abs(T - prev.T) > 1e-9) {
+          // true secant through the last two probes — handles saturation
+          In = I + (Ttar - T) * (I - prev.I) / (T - prev.T);
+        } else {
+          In = I * (Ttar / T);           // first step: Kt through the origin
+        }
+        prev = { I, T };
+        if (!(In > 0) || In > 3000) throw new Error('the fit diverged — check γ / winding');
+        I = In;
+      }
+      setCurrent(+I.toFixed(2));
+      setFitMsg(`fitted ${I.toFixed(1)} A → full run`);
+      // launchRun PATCHes the shared config with the panel state, which now
+      // carries the fitted current.
+      setTimeout(() => launchRun(true), 0);
+    } catch (e: any) {
+      setFitMsg(`✗ ${e?.message ?? e}`);
+    } finally {
+      setFitBusy(false);
+    }
+  };
+
   const launchRun = (fresh: boolean) => {
     setFreshRun(fresh);
     setCancelledRun(false);
@@ -802,13 +897,19 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
             </Box>
             <Box sx={{ display: 'flex', gap: 0.5 }}>
               {(['current', 'voltage'] as const).map(m => (
-                <Button key={m} size="small" fullWidth disabled={isRunning}
-                  variant={drive === m ? 'contained' : 'outlined'}
-                  onClick={() => setDrive(m)}
+                <Button key={m} size="small" fullWidth disabled={isRunning || fitBusy}
+                  variant={drive === m && targetKind === 'off' ? 'contained' : 'outlined'}
+                  onClick={() => { setDrive(m); setTargetKind('off'); }}
                   sx={{ fontSize: '0.7rem', textTransform: 'none', py: 0.3 }}>
                   {m === 'current' ? 'Current drive' : 'Voltage drive'}
                 </Button>
               ))}
+              <Button size="small" fullWidth disabled={isRunning || fitBusy}
+                variant={targetKind !== 'off' ? 'contained' : 'outlined'}
+                onClick={() => { setDrive('current'); setTargetKind(k => (k === 'off' ? 'nm' : k)); }}
+                sx={{ fontSize: '0.7rem', textTransform: 'none', py: 0.3 }}>
+                Target T / P
+              </Button>
               <HelpTip title={'Current drive: imposed sinusoidal phase currents (design work). ' +
                 'Voltage drive: imposed sinusoidal LINE voltages (floating neutral, as a real ' +
                 'wye FOC inverter) — the currents are the machine’s own response, including the ' +
@@ -818,7 +919,33 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 'losses excluded on both sides of the comparison). Near no-load (V ≈ back-EMF) ' +
                 'the current is extremely sensitive to V — like the real machine open-loop.'} />
             </Box>
-            {drive === 'current' ? (
+            {drive === 'current' && targetKind !== 'off' ? (
+            /* TARGET drive: torque ⇄ power are mutually locked (P = T·ω), the
+               same pattern as I rms ⇄ peak — edit either, the other follows.
+               Torque is the stored canon; the current is fitted at Run. */
+            <Box sx={{ display: 'flex', gap: 1 }}>
+              <TextField label="Target torque (Nm)" type="number" size="small" fullWidth
+                value={Number(targetValue.toFixed(2))}
+                onChange={e => setTargetValue(+e.target.value)}
+                inputProps={{ step: 10, min: 0 }} disabled={isRunning || fitBusy}
+                InputProps={{ endAdornment: <HelpTip title={
+                  'The current is FITTED to hit this torque: 2-3 cheap FEM probes '
+                  + '(12 steps, demag as set, no eddy, ~40-80 s each) walk a secant '
+                  + 'through the saturation curve, then the full run fires at the '
+                  + 'fitted current. γ stays as set — find the optimal angle with a '
+                  + 'sweep, as usual.'} /> }} />
+              <TextField label="Target power (kW)" type="number" size="small" fullWidth
+                value={Number((targetValue * (2 * Math.PI * rpm / 60) / 1000).toFixed(2))}
+                onChange={e => {
+                  const w = 2 * Math.PI * rpm / 60;
+                  if (w > 1e-9) setTargetValue((+e.target.value * 1000) / w);
+                }}
+                inputProps={{ step: 1, min: 0 }} disabled={isRunning || fitBusy}
+                InputProps={{ endAdornment: <HelpTip title={
+                  'P = T·ω at the set speed — editing this recomputes the torque '
+                  + 'target; the fit always converges on torque.'} /> }} />
+            </Box>
+            ) : drive === 'current' ? (
             /* RMS ↔ peak are mutually locked (peak = rms·√2), same pattern as
                Speed ↔ Frequency below: edit either, the other recomputes.
                The SOLVER input stays the RMS value — peak is a pure UI view. */
@@ -1112,7 +1239,12 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
             <Button
               fullWidth
               variant="contained"
-              onClick={() => { if (cancelledRun) setAskResume(true); else launchRun(true); }}
+              disabled={fitBusy}
+              onClick={() => {
+                if (cancelledRun) { setAskResume(true); return; }
+                if (drive === 'current' && targetKind !== 'off') { void fitAndRun(); return; }
+                launchRun(true);
+              }}
               startIcon={<PlayArrowIcon />}
               sx={{
                 py: 1.2, fontWeight: 700, fontSize: 13, letterSpacing: 0.5,
@@ -1121,8 +1253,17 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 boxShadow: '0 2px 12px rgba(37,99,235,0.4)',
               }}
             >
-              {runNonce === 0 ? 'Run Simulation' : 'Re-run Simulation'}
+              {fitBusy ? 'Fitting current…'
+                : drive === 'current' && targetKind !== 'off'
+                  ? `Fit ${Number(targetValue.toFixed(1))} Nm & Run`
+                  : runNonce === 0 ? 'Run Simulation' : 'Re-run Simulation'}
             </Button>
+          )}
+          {fitMsg && (
+            <Typography sx={{ fontSize: 10.5, textAlign: 'center', mt: 0.5,
+              color: fitMsg.startsWith('✗') ? '#fca5a5' : '#38bdf8' }}>
+              {fitMsg}
+            </Typography>
           )}
           <Typography sx={{ fontSize: 10, color: 'var(--text-4)', textAlign: 'center', mt: 0.75 }}>
             {simBusy

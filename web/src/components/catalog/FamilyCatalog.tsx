@@ -18,6 +18,7 @@ import {
   TextPromptDialog, ConfirmDialog,
   type TextPromptState, type ConfirmState,
 } from '../common/PromptDialogs';
+import BatteryDialog, { type BatteryValue } from './BatteryDialog';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
@@ -34,7 +35,11 @@ interface Duty {
   gamma_deg: number; torque_nm?: number | null; power_kw?: number | null;
   note: string; result?: DutyResult | null;
 }
-interface Battery { cells?: number | null; v_min: number; v_max: number; }
+interface Battery {
+  chemistry?: string | null; cells?: number | null;
+  v_cell_min?: number; v_cell_nom?: number | null; v_cell_max?: number;
+  v_min: number; v_max: number; v_nom?: number | null;
+}
 interface Cfg {
   name: string; role: string; locked?: boolean; build_sig?: string;
   battery?: Battery | null;
@@ -94,6 +99,7 @@ const FamilyCatalog: React.FC<{
   // (user hit it on the battery editor).
   const [askText, setAskText] = useState<TextPromptState | null>(null);
   const [askConfirm, setAskConfirm] = useState<ConfirmState | null>(null);
+  const [batteryFor, setBatteryFor] = useState<{ die: string; cfg: Cfg } | null>(null);
 
   const load = async () => {
     try {
@@ -209,28 +215,8 @@ const FamilyCatalog: React.FC<{
         body: JSON.stringify({ locked: !c.locked }),
       }));
   };
-  const editBattery = (dieName: string, c: Cfg) => setAskText({
-    title: `Battery for '${c.name}'`,
-    label: 'cells, V min (discharged), V max (charged)',
-    initial: c.battery ? `${c.battery.cells ?? ''}, ${c.battery.v_min}, ${c.battery.v_max}`
-                       : '200, 640, 860',
-    hint: 'Pack totals, e.g. "200, 640, 860". Per-cell voltages (<10 V) are multiplied by the cell count automatically.',
-    onSubmit: (raw) => {
-      const parts = raw.split(/[,;\s]+/).filter(Boolean).map(Number);
-      if (parts.length < 3 || parts.some(n => !Number.isFinite(n))) {
-        setMsg('\u2717 expected three numbers: cells, V min, V max'); return;
-      }
-      const cells = Math.round(parts[0]);
-      // Per-cell convenience: "200, 3.2, 4.3" means 3.2/4.3 V per cell.
-      const vmin = parts[1] < 10 ? parts[1] * cells : parts[1];
-      const vmax = parts[2] < 10 ? parts[2] * cells : parts[2];
-      mutate(`battery set on '${c.name}'`, () =>
-        fetch(`${API}/api/family/config/${encodeURIComponent(dieName)}/${encodeURIComponent(c.name)}/battery`, {
-          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ cells, v_min: vmin, v_max: vmax }),
-        }));
-    },
-  });
+  const editBattery = (dieName: string, c: Cfg) =>
+    setBatteryFor({ die: dieName, cfg: c });
   const deleteDuty = (die: string, cfg: string, duty: string) => setAskConfirm({
     title: `Delete duty '${duty}' from ${die} / ${cfg}?`,
     body: 'Its saved operating point and recorded results go with it.',
@@ -485,7 +471,7 @@ const FamilyCatalog: React.FC<{
                     <Typography component="span"
                       sx={{ fontSize: 11, color: 'var(--text-3)', cursor: canWrite ? 'pointer' : 'help' }}
                       onClick={canWrite ? () => editBattery(die.name, c) : undefined}>
-                      🔋 {c.battery.cells ?? '?'}s · {fmt(c.battery.v_min, 0)}–{fmt(c.battery.v_max, 0)} V
+                      🔋 {c.battery.chemistry ? `${c.battery.chemistry} ` : ''}{c.battery.cells ?? '?'}s · {fmt(c.battery.v_min, 0)}–{fmt(c.battery.v_max, 0)} V
                     </Typography>
                   </Tooltip>
                 )}
@@ -636,6 +622,19 @@ const FamilyCatalog: React.FC<{
     <>
       <TextPromptDialog state={askText} onClose={() => setAskText(null)} />
       <ConfirmDialog state={askConfirm} onClose={() => setAskConfirm(null)} />
+      <BatteryDialog open={!!batteryFor}
+        configName={batteryFor?.cfg.name ?? ''}
+        initial={(batteryFor?.cfg.battery ?? null) as BatteryValue | null}
+        onClose={() => setBatteryFor(null)}
+        onSave={(v) => {
+          const t = batteryFor; setBatteryFor(null);
+          if (!t) return;
+          mutate(`battery set on '${t.cfg.name}'`, () =>
+            fetch(`${API}/api/family/config/${encodeURIComponent(t.die)}/${encodeURIComponent(t.cfg.name)}/battery`, {
+              method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(v),
+            }));
+        }} />
     </>
   );
 

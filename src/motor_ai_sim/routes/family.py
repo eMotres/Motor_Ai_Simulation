@@ -636,25 +636,45 @@ def lock_config(die: str, cfg: str, req: LockPatch,
 
 
 class BatteryPatch(BaseModel):
-    cells: Optional[int] = None      # series cell count (informative)
-    v_min: float                     # pack voltage, discharged [V]
-    v_max: float                     # pack voltage, fully charged [V]
+    chemistry: Optional[str] = None  # "NMC" | "LiFePO4" | free text
+    cells: int                       # series cell count
+    v_cell_min: float                # per-cell, discharged [V]
+    v_cell_nom: Optional[float] = None
+    v_cell_max: float                # per-cell, fully charged [V]
 
 
 @router.patch("/config/{die}/{cfg}/battery")
 def set_battery(die: str, cfg: str, req: BatteryPatch,
                 _admin: dict = Depends(require_admin)):
-    """The supply the configuration is built to run from.  Duties are then
-    judged against it: the inverter needs V_DC >= the duty's line peak."""
+    """The supply the configuration is built to run from — given per CELL
+    (chemistry, series count, min/nom/max cell voltage); pack totals are
+    derived and stored alongside.  Duties are judged against the pack: the
+    inverter needs V_DC >= the duty's line peak."""
     die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
-    if not (req.v_max >= req.v_min > 0):
+    if not (req.cells >= 1):
+        raise HTTPException(422, detail=f"cell count must be >= 1, got {req.cells}")
+    if not (req.v_cell_max >= req.v_cell_min > 0):
         raise HTTPException(422, detail=(
-            f"battery range is nonsense: v_min={req.v_min}, v_max={req.v_max} — "
-            "need 0 < v_min <= v_max"))
+            f"cell voltage range is nonsense: min={req.v_cell_min}, "
+            f"max={req.v_cell_max} — need 0 < min <= max"))
+    nom = req.v_cell_nom if req.v_cell_nom is not None else None
+    if nom is not None and not (req.v_cell_min <= nom <= req.v_cell_max):
+        raise HTTPException(422, detail=(
+            f"nominal cell voltage {nom} is outside [{req.v_cell_min}, "
+            f"{req.v_cell_max}]"))
     c = _load_yaml(_cfg_file(die, cfg), "configuration")
-    c["battery"] = {"cells": (int(req.cells) if req.cells else None),
-                    "v_min": round(float(req.v_min), 1),
-                    "v_max": round(float(req.v_max), 1)}
+    n = int(req.cells)
+    c["battery"] = {
+        "chemistry": (req.chemistry or "").strip() or None,
+        "cells": n,
+        "v_cell_min": round(float(req.v_cell_min), 3),
+        "v_cell_nom": (round(float(nom), 3) if nom is not None else None),
+        "v_cell_max": round(float(req.v_cell_max), 3),
+        # pack totals — what the duty voltage check reads
+        "v_min": round(n * float(req.v_cell_min), 1),
+        "v_nom": (round(n * float(nom), 1) if nom is not None else None),
+        "v_max": round(n * float(req.v_cell_max), 1),
+    }
     _save_yaml(_cfg_file(die, cfg), c)
     log.info("family: battery on '%s/%s': %s", die, cfg, c["battery"])
     return {"ok": True, "battery": c["battery"]}

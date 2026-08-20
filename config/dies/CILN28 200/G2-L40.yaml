@@ -42,6 +42,11 @@ materials:
   stator_core: B15AHV950M
   rotor_core: B15AHV950M
 battery:
+  chemistry: NMC
   cells: 200
+  v_cell_min: 3.2
+  v_cell_nom: 3.75
+  v_cell_max: 4.3
   v_min: 640.0
+  v_nom: 750.0
   v_max: 860.0

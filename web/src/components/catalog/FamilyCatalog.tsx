@@ -222,6 +222,14 @@ const FamilyCatalog: React.FC<{
         body: JSON.stringify({ name }),
       })); },
   });
+  const duplicateCfg = (die: string, cfg: string) => setAskText({
+    title: `Duplicate '${cfg}' under ${die}`,
+    label: 'Name of the copy', initial: `${cfg} copy`,
+    hint: 'Copies the build, winding, materials, battery and EVERY duty (with results)',
+    onSubmit: (name) => mutate(`configuration '${cfg}' duplicated as '${name}'`,
+      () => post(`/api/family/config/${encodeURIComponent(die)}/${encodeURIComponent(cfg)}/duplicate`,
+                 { name })),
+  });
   const deleteCfg = (die: string, cfg: string) => setAskConfirm({
     title: `Delete configuration '${die} / ${cfg}'?`,
     body: 'All its duties and recorded results go with it. This cannot be undone.',
@@ -509,6 +517,15 @@ const FamilyCatalog: React.FC<{
                               color: c.locked ? '#fbbf24' : 'var(--text-4)' }}>
                         {c.locked ? '🔒' : '🔓'}
                       </IconButton>
+                    </span>
+                  </Tooltip>
+                )}
+                {canWrite && (
+                  <Tooltip title="Duplicate — copy this configuration with ALL its duties (a starting point for a variant)">
+                    <span>
+                      <IconButton size="small" disabled={!!busy}
+                        onClick={() => duplicateCfg(die.name, c.name)}
+                        sx={{ fontSize: 11, p: 0.2, color: 'var(--text-4)' }}>⧉</IconButton>
                     </span>
                   </Tooltip>
                 )}

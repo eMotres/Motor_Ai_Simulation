@@ -400,6 +400,39 @@ def rename_config(die: str, cfg: str, req: ConfigRename, _admin: dict = Depends(
     return {"ok": True, "config": new}
 
 
+class ConfigDuplicate(BaseModel):
+    name: str                       # the copy's name
+
+
+@router.post("/config/{die}/{cfg}/duplicate")
+def duplicate_config(die: str, cfg: str, req: ConfigDuplicate,
+                     _admin: dict = Depends(require_admin)):
+    """Copy a configuration under the SAME die — build, winding, materials,
+    battery and every duty (with its recorded results) ride along.  The copy
+    is a starting point for a variant: edit its stack/wire/turns and re-save
+    its duties; build_sig staleness flags the duties until they are re-run
+    on the copy's own build (they carry the ORIGINAL's signature)."""
+    die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
+    new = _check_name(req.name, "configuration")
+    if new == "die":
+        raise HTTPException(422, detail="'die' is reserved")
+    src = _cfg_file(die, cfg)
+    if not src.is_file():
+        raise HTTPException(404, detail=f"configuration '{die}/{cfg}' not found")
+    dst = _cfg_file(die, new)
+    if dst.exists():
+        raise HTTPException(409, detail=f"configuration '{new}' already exists "
+                                        f"under die '{die}'")
+    c = _load_yaml(src, "configuration")
+    c["name"] = new
+    c["created"] = datetime.now().isoformat(timespec="seconds")
+    _save_yaml(dst, c)
+    log.info("family: configuration '%s/%s' duplicated as '%s' (%d duty(ies))",
+             die, cfg, new, len(c.get("duties") or []))
+    return {"ok": True, "config": new,
+            "duties": [d.get("name") for d in (c.get("duties") or [])]}
+
+
 @router.delete("/config/{die}/{cfg}")
 def delete_config(die: str, cfg: str, _admin: dict = Depends(require_admin)):
     die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")

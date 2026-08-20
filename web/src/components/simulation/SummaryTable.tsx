@@ -122,7 +122,6 @@ interface Props {
   fromSweep?: boolean;   // numbers reused from an applied Sweep design (no re-run)
   // Set once a Run has produced its OWN numbers for a design that was applied
   // from Sweep/Compare: how far this solve landed from the point's numbers.
-  deltaVsApplied?: { dT: number | null; dEff: number | null } | null;
   // Currently-set operating point (the Simulation inputs). If the shown summary was
   // computed at a DIFFERENT current / γ (e.g. the user changed it after the run, and
   // the Optimize tab already uses the new point), flag the result as stale so the
@@ -228,7 +227,7 @@ const Cell: React.FC<{
   return tooltip ? <Tooltip title={tooltip} placement="top">{cell}</Tooltip> : cell;
 };
 
-const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, deltaVsApplied, liveOp }) => {
+const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) => {
   // Hook FIRST — the empty-state early-return below must not sit between the
   // component entry and a hook call.
   const geometry = useMotorStore(s => s.geometry);
@@ -388,16 +387,9 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, deltaVsApp
               <span style={{ marginLeft: 6, color: '#fbbf24', cursor: 'help' }}>← applied point</span>
             </Tooltip>
           )}
-          {!fromSweep && deltaVsApplied && (deltaVsApplied.dT != null || deltaVsApplied.dEff != null) && (
-            <Tooltip title="This run's own numbers against the point that was applied. They should agree; a large gap means the run and the point were not the same machine or not the same settings — which is worth investigating, not overwriting." placement="top">
-              <span style={{ marginLeft: 6,
-                             color: Math.abs(deltaVsApplied.dT ?? 0) > 2 ? '#f87171' : 'var(--text-3)',
-                             cursor: 'help' }}>
-                vs applied point: {deltaVsApplied.dT != null ? `T ${deltaVsApplied.dT >= 0 ? '+' : ''}${deltaVsApplied.dT.toFixed(1)} %` : ''}
-                {deltaVsApplied.dEff != null ? ` · η ${deltaVsApplied.dEff >= 0 ? '+' : ''}${deltaVsApplied.dEff.toFixed(2)} pp` : ''}
-              </span>
-            </Tooltip>
-          )}
+          {/* "vs applied point" delta chip removed (user request 2026-08-20):
+              too small to read in the header line and its η delta was
+              routinely nonsense when the applied point carried no results. */}
         </Typography>
       </Box>
 

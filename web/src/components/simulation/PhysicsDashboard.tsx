@@ -104,21 +104,9 @@ const PhysicsDashboard: React.FC<Props> = ({ gamma_deg, I_phase_rms, connection 
     if (runPending && transientSummary) { setAppliedSummary(null); setRunPending(false); }
   }, [runPending, transientSummary]);
   const shownSummary = appliedSummary ?? transientSummary;
-  // A solve that lands on different numbers than the applied point is a FINDING,
-  // not a screen update: on 2026-08-07 an auto-recompute replaced a swept 27.33
-  // N·m with 12.65 and nothing said the two disagreed.  Report the gap.
-  const deltaVsApplied = React.useMemo(() => {
-    const a = appliedRef.current, t = transientSummary;
-    if (!a || !t || appliedSummary) return null;
-    const rel = (x?: number, y?: number) =>
-      (Number.isFinite(x as number) && Number.isFinite(y as number) && (y as number) !== 0)
-        ? 100 * ((x as number) - (y as number)) / (y as number) : null;
-    const dT = rel(t.T_em_avg_Nm, a.T_em_avg_Nm);
-    const dEff = (Number.isFinite(t.efficiency as number) && Number.isFinite(a.efficiency as number))
-      ? 100 * ((t.efficiency as number) - (a.efficiency as number)) : null;
-    if (dT == null && dEff == null) return null;
-    return { dT, dEff };
-  }, [transientSummary, appliedSummary]);
+  // "vs applied point" delta chip removed (user request 2026-08-20): the
+  // header line had no room for it and the η delta was routinely nonsense
+  // when the applied point carried no recorded results.
   // Forward the shown summary to the parent (for the Save-simulation snapshot) and
   // persist it, so "Save as new motor" stamps the card with the numbers the user
   // actually SEES here — not a stale .last_transient on disk.
@@ -147,7 +135,6 @@ const PhysicsDashboard: React.FC<Props> = ({ gamma_deg, I_phase_rms, connection 
       {/* ── Top-of-tab summary card — populated by TransientCharts, or by a
            design applied from the Sweep tab (numbers reused, no re-run) ── */}
       <SummaryTable summary={shownSummary} fromSweep={!!appliedSummary}
-        deltaVsApplied={deltaVsApplied}
         liveOp={{ current: I_phase_rms, gamma: gamma_deg, connection }}/>
 
       {/* ── Field viewer / animation — one widget covers both the static

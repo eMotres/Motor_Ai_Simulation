@@ -173,9 +173,45 @@ const FamilyCatalog: React.FC<{
   });
   const deleteDie = (die: string) => setAskConfirm({
     title: `Delete die '${die}'?`,
-    body: 'Its configurations must be deleted first — the backend refuses otherwise.',
-    onConfirm: () => mutate(`die '${die}' deleted`,
-      () => del(`/api/family/die/${encodeURIComponent(die)}`)),
+    body: 'An empty die is removed at once; a die that still has configurations asks once more.',
+    onConfirm: () => {
+      void (async () => {
+        setBusy(`delete ${die}`); setMsg(null);
+        try {
+          const r = await del(`/api/family/die/${encodeURIComponent(die)}`);
+          if (r.ok) {
+            setMsg(`✓ die '${die}' deleted`);
+            window.dispatchEvent(new CustomEvent('family-changed'));
+            return;
+          }
+          if (r.status !== 409) {
+            let detail = `HTTP ${r.status}`;
+            try { detail = (await r.json()).detail ?? detail; } catch { /* keep */ }
+            setMsg(`✗ ${detail}`);
+            return;
+          }
+          // 409 = the die still has configurations. Name them and ask ONCE
+          // more — then delete the whole subtree with force. (It used to stop
+          // here with a message the user could miss: "стираю а она не
+          // стирается", live 2026-08-20.)
+          let detail = '';
+          try { detail = String((await r.json()).detail ?? ''); } catch { /* keep */ }
+          setBusy(null);
+          setAskConfirm({
+            title: `Delete '${die}' WITH its configurations?`,
+            body: (detail || 'The die still has configurations.')
+              + ' They and their duties are removed permanently.',
+            onConfirm: () => mutate(`die '${die}' deleted with its configurations`,
+              () => del(`/api/family/die/${encodeURIComponent(die)}?force=true`)),
+          });
+          return;
+        } catch (e) {
+          setMsg(`✗ ${e}`);
+        } finally {
+          setBusy(null);
+        }
+      })();
+    },
   });
   const renameDie = (die: string) => setAskText({
     title: `Rename die '${die}'`,

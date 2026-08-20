@@ -371,6 +371,13 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
       iron_template:      readMeshSetting('ironTemplate', true),
       // Geometry-driven CDT mesh (Mesh-tab "Geometry-driven mesh" toggle, default ON).
       geo_mesh:           readMeshSetting('geoMesh', true),
+      // SPEED — sent explicitly whenever the panel has one, so an ordinary
+      // user's rpm applies to THEIR solve without touching the shared config
+      // (omitted → the backend falls back to the shared simulation.rpm).
+      ...(() => {
+        const v = Number(readSimSetting('rpm', NaN));
+        return Number.isFinite(v) && v > 0 ? { rpm: v } : {};
+      })(),
       // Copper-loss physics: coil temperature → ρ_Cu(T); end-winding factor
       // (0 = auto-estimate from geometry) for the copper the 2-D field misses.
       coil_temp_c:        readSimSetting('coilTemp',   120.0),

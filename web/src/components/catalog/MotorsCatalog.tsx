@@ -22,12 +22,16 @@ const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 const MotorsCatalog: React.FC = () => {
   // Ø sections come from the dies themselves.
   const [diams, setDiams] = useState<number[]>([]);
+  const [canWrite, setCanWrite] = useState(false);
   const load = () =>
     fetch(`${API}/api/family/tree`).then(r => r.json())
-      .then(t => setDiams(Array.from(new Set(
-        ((t.dies || []) as { stator_diameter: number }[])
-          .map(d => Number(d.stator_diameter)).filter(Number.isFinite),
-      )).sort((a, b) => a - b)))
+      .then(t => {
+        setCanWrite(t.can_write === true);
+        setDiams(Array.from(new Set(
+          ((t.dies || []) as { stator_diameter: number }[])
+            .map(d => Number(d.stator_diameter)).filter(Number.isFinite),
+        )).sort((a, b) => a - b));
+      })
       .catch(() => setDiams([]));
   useEffect(() => {
     load();
@@ -68,10 +72,12 @@ const MotorsCatalog: React.FC = () => {
           <Typography sx={{ fontSize: 11,
             color: dieMsg.startsWith('✗') ? '#fca5a5' : '#34d399' }}>{dieMsg}</Typography>
         )}
-        <Button size="small" variant="outlined" onClick={createDie}
-          sx={{ textTransform: 'none', fontSize: 11 }}>
-          ＋ die from current geometry
-        </Button>
+        {canWrite && (
+          <Button size="small" variant="outlined" onClick={createDie}
+            sx={{ textTransform: 'none', fontSize: 11 }}>
+            ＋ die from current geometry
+          </Button>
+        )}
       </Box>
       <TextPromptDialog state={askDie} onClose={() => setAskDie(null)} />
 

@@ -592,9 +592,11 @@ class Activate(BaseModel):
 
 
 @router.post("/activate")
-def activate(req: Activate):
-    """Mark die/config/duty as the machine now loaded in the editor.  Open to
-    every caller — it is part of LOADING, not of editing the catalog."""
+def activate(req: Activate, _admin: dict = Depends(require_admin)):
+    """Mark die/config/duty as the machine now loaded in the editor.  Admin
+    only since multi-user deploy: this stamps the SHARED .family_context.json
+    (the owner's live editor state).  An ordinary user's ▶ loads the duty as
+    a CLIENT-SIDE copy and never calls this."""
     die = _check_name(req.die, "die")
     cfg = _check_name(req.config, "configuration")
     d = _load_yaml(_die_file(die), "die")

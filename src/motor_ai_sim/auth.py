@@ -63,20 +63,56 @@ ADMIN_API_TOKEN = os.environ.get("ADMIN_API_TOKEN", "").strip()
 _TIER_RANK = {"anon": -1, "free": 0, "pro": 1, "team": 2, "admin": 3}
 
 # (HTTP method, exact path) -> minimum tier required to call it.
-# Everything not listed here is open to all (free + anonymous).
+# Everything not listed here (and not matched by _GATED_PREFIX below) is open.
 _GATED: dict[tuple[str, str], str] = {
     ("GET",  "/api/simulation/physics/fem_transient"): "pro",
     ("GET",  "/api/simulation/physics/fem_field2d"): "pro",
     ("GET",  "/api/simulation/mesh/build2d"): "pro",
     ("GET",  "/api/simulation/mesh/build2d_sliding_band"): "pro",
-    ("POST", "/api/optimization/run"): "pro",
-    ("POST", "/api/optimization/refine"): "pro",
-    ("POST", "/api/optimization/scan"): "pro",
-    ("POST", "/api/pipeline/generate"): "pro",
     # AI support assistant calls the paid Anthropic API — require a signed-in
     # account (>= free) so an anonymous visitor can't run up the bill.
     ("POST", "/api/support/chat"): "free",
 }
+
+# (HTTP method, path PREFIX) -> minimum tier.  Checked when the exact table
+# above has no entry; FIRST matching prefix wins (order the list from the
+# most to the least specific).  This is the deployment write-protection:
+# ordinary users work on a CLIENT-SIDE copy of a motor (their geometry and
+# materials travel per-request as ?geo= / ?mat= overrides), so every route
+# that mutates the SHARED server config/stores is the owner's alone.  Routes
+# family.py / presets.py / admin.py / auth_local.py protect themselves with
+# require_admin already — entries here are the belt for the rest.
+_GATED_PREFIX: list[tuple[str, str, str]] = [
+    # heavy compute a signed-up engineering user may run on their own copy
+    ("POST",   "/api/kernel/run", "pro"),
+    ("POST",   "/api/kernel/study", "pro"),
+    ("POST",   "/api/simulation/physics/fem_transient/cancel", "pro"),
+    # shared-config / shared-store mutations → owner only
+    ("PUT",    "/api/geometry", "admin"),
+    ("POST",   "/api/geometry/parameter", "admin"),
+    ("DELETE", "/api/geometry/parameter", "admin"),
+    ("POST",   "/api/geometry/reset", "admin"),
+    ("PATCH",  "/api/materials", "admin"),
+    ("POST",   "/api/materials/global", "admin"),
+    ("DELETE", "/api/materials/global", "admin"),
+    ("PATCH",  "/api/mesh/config", "admin"),
+    ("PATCH",  "/api/simulation/config", "admin"),
+    ("PUT",    "/api/sweep/config", "admin"),
+    ("POST",   "/api/simulation/run", "admin"),
+    ("POST",   "/api/catalog", "admin"),
+    ("DELETE", "/api/catalog", "admin"),
+    ("POST",   "/api/presets", "admin"),
+    ("PATCH",  "/api/presets", "admin"),
+    ("DELETE", "/api/presets", "admin"),
+    ("POST",   "/api/sims/saved", "admin"),
+    ("PATCH",  "/api/sims/saved", "admin"),
+    ("DELETE", "/api/sims/saved", "admin"),
+    # the optimizer burns the whole machine on the shared config — owner's tool
+    ("POST",   "/api/optimization", "admin"),
+    ("DELETE", "/api/optimization", "admin"),
+    ("POST",   "/api/pipeline", "admin"),
+    ("POST",   "/api/static3d", "admin"),
+]
 
 _certs: dict = {}
 _certs_exp: float = 0.0
@@ -246,6 +282,11 @@ class TierGateMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         if AUTH_ENFORCE and request.method != "OPTIONS":
             need = _GATED.get((request.method, request.url.path))
+            if need is None:
+                for _m, _pfx, _tier in _GATED_PREFIX:
+                    if request.method == _m and request.url.path.startswith(_pfx):
+                        need = _tier
+                        break
             if need is not None:
                 user = resolve_user(request.headers.get("authorization"))
                 tier = user["tier"] if user else "anon"

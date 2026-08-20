@@ -34,7 +34,22 @@ const ActiveFamilyStrip: React.FC = () => {
   const [, setTick] = useState(0);
 
   const load = () => fetch(`${API}/api/family/context`)
-    .then(r => r.json()).then(setCtx).catch(() => setCtx(null));
+    .then(r => r.json()).then((j: Ctx) => {
+      // Ordinary user (no write rights): the server context is the OWNER's
+      // machine, not this client's.  When the user has ▶-copied a duty, the
+      // strip names THEIR copy from local context instead.
+      if (!j?.can_write) {
+        try {
+          const loc = JSON.parse(localStorage.getItem('family.localContext') || 'null');
+          if (loc?.die && loc?.config) {
+            setCtx({ active: true, die: loc.die, config: loc.config,
+                     duty: loc.duty ?? null, can_write: false });
+            return;
+          }
+        } catch { /* fall through to the server context */ }
+      }
+      setCtx(j);
+    }).catch(() => setCtx(null));
   useEffect(() => {
     load();
     const onChange = () => { void load(); };

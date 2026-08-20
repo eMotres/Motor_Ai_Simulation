@@ -6,7 +6,7 @@ import React, { createContext, useCallback, useContext, useEffect, useState } fr
 import { installFetchAuth, setTokenGetter } from '../lib/apiAuth';
 import {
   clearSession, getStoredToken, getStoredUser, loadGis, storeSession,
-  GOOGLE_CLIENT_ID, type SessionUser,
+  setSessionRole, GOOGLE_CLIENT_ID, type SessionUser,
 } from '../lib/localAuth';
 import LoginDialog from '../components/auth/LoginDialog';
 
@@ -66,6 +66,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       const j = await fetch(`${API}/api/me`).then((r) => r.json());
       setTier(j.tier ?? 'anon'); setIsAdmin(Boolean(j.isAdmin)); setEnforced(Boolean(j.enforced));
+      setSessionRole({ isAdmin: Boolean(j.isAdmin), enforced: Boolean(j.enforced) });
       if (getStoredToken() && !j.email) { clearSession(); setUser(null); }
     } catch { setTier('anon'); setIsAdmin(false); setEnforced(false); }
   }, []);

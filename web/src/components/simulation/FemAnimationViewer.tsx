@@ -158,6 +158,12 @@ const FemAnimationViewer: React.FC<Props> = ({
       const _conn = JSON.parse(localStorage.getItem('sim.connection') ?? '""');
       if (_conn) params.connection = String(_conn);
     } catch { /* config fallback */ }
+    // SPEED — same rule as TransientCharts: the panel's rpm rides in the
+    // request (per-user copy), omitted → shared config fallback.
+    try {
+      const _rpm = Number(JSON.parse(localStorage.getItem('sim.rpm') ?? 'null'));
+      if (Number.isFinite(_rpm) && _rpm > 0) params.rpm = String(_rpm);
+    } catch { /* config fallback */ }
     // Auto-retry against transient backend hiccups (uvicorn supervisor
     // sometimes respawns the worker mid-request during a heavy FEM solve).
     const attempt = async (i = 0): Promise<void> => {

@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { syncActiveMotor } from '../components/common/motorSettings';
 import { setGeoGetter } from '../lib/apiAuth';
+import { canWriteServer } from '../lib/localAuth';
 import { autoSaveAppliedDesign } from '../lib/appliedAutoSave';
 import type { AppliedSaveResult, ApplyMode } from '../lib/appliedAutoSave';
 import { geoSignature, setGeoSigGetter } from '../components/common/geoSig';
@@ -396,6 +397,23 @@ export const useMotorStore = create<MotorState>()(
       },
       
       updateGeometryViaApi: async (params) => {
+        // Ordinary user on an enforced backend: the shared config is the
+        // owner's — edits land on THIS CLIENT'S COPY only.  Every compute
+        // request already carries the copy (?geo= via the fetch interceptor),
+        // so the solves, meshes and viewers all follow it; deep validation
+        // happens at compute time server-side.
+        if (!canWriteServer()) {
+          set((s) => ({
+            geometry: { ...(s.geometry as Record<string, unknown>), ...params } as MotorGeometryParams,
+            geometryParamErrors: null,
+            isLoading: false,
+            isGeometryUpdating: true,
+            error: null,
+          }));
+          // same acknowledgement pulse the server path gives the viewers
+          setTimeout(() => set({ isGeometryUpdating: false }), 400);
+          return;
+        }
         set({ isLoading: true, isGeometryUpdating: true, error: null });
         try {
           const response = await fetch(`${API_BASE_URL}/api/geometry`, {

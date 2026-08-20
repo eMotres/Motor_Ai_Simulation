@@ -1,18 +1,15 @@
 /**
  * Hook: motor material assignments (region → material).
  *
- * The DEFAULT comes from the shared config (GET /api/materials). A signed-in
- * user's own choices are stored PER-USER in Firestore (users/{uid}/workspace/
- * assignments) and merged over the default, so one user's assignment never
- * mutates the shared config (multi-user). assign() writes per-user when signed
- * in; anonymous / local-dev falls back to the shared PATCH (back-compat, for
- * editing the default design). The per-request compute override
- * (MaterialOverrideSync) sends this merged assignment so the FEM solve is
- * per-user (Stage 2b).
+ * The DEFAULT comes from the shared config (GET /api/materials).  On an
+ * enforced backend an ordinary user's choices are a CLIENT-SIDE overlay
+ * (localStorage `mat.assign.local`) merged over that default — one user's
+ * assignment never mutates the shared config.  The per-request compute
+ * override (MaterialOverrideSync) sends the merged assignment as ?mat=, so
+ * the FEM solve is per-user.  The owner (admin / local dev) edits the shared
+ * default directly via PATCH, exactly as before.
  */
 import { useState, useEffect, useCallback } from 'react';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
-import { db } from '../../lib/firebase';
 import { useAuth } from '../../contexts/AuthContext';
 
 export interface MotorAssignments {
@@ -27,10 +24,17 @@ export interface MotorAssignments {
 }
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8000') + '/api/materials';
+const LOCAL_KEY = 'mat.assign.local';
+
+function readLocalOverlay(): Partial<MotorAssignments> {
+  try { return JSON.parse(localStorage.getItem(LOCAL_KEY) || '{}'); }
+  catch { return {}; }
+}
 
 export function useMotorAssignments() {
-  const { user } = useAuth();
-  const uid = user?.uid ?? null;
+  const { isAdmin, enforced } = useAuth();
+  // Ordinary user on an enforced backend → assignments live client-side.
+  const localMode = enforced && !isAdmin;
 
   const [assignments, setAssignments] = useState<MotorAssignments | null>(null);
   const [loading, setLoading]         = useState(true);
@@ -41,20 +45,23 @@ export function useMotorAssignments() {
     setLoading(true);
     fetch(API, { cache: 'no-store' })
       .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
-      .then(async (shared) => {
+      .then((shared) => {
         let merged = shared as MotorAssignments;
-        if (db && uid) {                       // overlay the user's own assignments
-          try {
-            const snap = await getDoc(doc(db, 'users', uid, 'workspace', 'assignments'));
-            if (snap.exists()) merged = { ...merged, ...(snap.data() as Partial<MotorAssignments>) };
-          } catch { /* fall back to the shared default */ }
-        }
+        if (localMode) merged = { ...merged, ...readLocalOverlay() };
         setAssignments(merged); setLoading(false);
       })
       .catch(e => { setError(String(e)); setLoading(false); });
-  }, [uid]);
+  }, [localMode]);
 
   useEffect(() => { refresh(); }, [refresh]);
+
+  // The duty-apply flow writes the overlay directly (catalog ▶ as a user);
+  // pick the change up without a remount.
+  useEffect(() => {
+    const on = () => refresh();
+    window.addEventListener('mat-assign-local-changed', on);
+    return () => window.removeEventListener('mat-assign-local-changed', on);
+  }, [refresh]);
 
   const assign = useCallback((part: string, material: string) => {
     setSaving(true);
@@ -62,12 +69,13 @@ export function useMotorAssignments() {
     setAssignments(prev => ({ ...(prev ?? {} as MotorAssignments), [part]: material }));   // optimistic
     (async () => {
       try {
-        if (db && uid) {
-          // per-user — never touches the shared config (multi-user isolation)
-          await setDoc(doc(db, 'users', uid, 'workspace', 'assignments'),
-                       { [part]: material }, { merge: true });
+        if (localMode) {
+          // client-side copy — never touches the shared config
+          const cur = readLocalOverlay();
+          (cur as Record<string, string>)[part] = material;
+          try { localStorage.setItem(LOCAL_KEY, JSON.stringify(cur)); } catch { /* quota */ }
         } else {
-          // anonymous / local dev: edit the shared default (back-compat)
+          // the owner edits the shared default design
           const r = await fetch(API, {
             method: 'PATCH', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ part, material }),
@@ -88,7 +96,7 @@ export function useMotorAssignments() {
         } catch { /* SSR/no-window */ }
       } catch (e) { setError(String(e)); setSaving(false); }
     })();
-  }, [uid]);
+  }, [localMode]);
 
   return { assignments, loading, saving, error, assign, refresh };
 }

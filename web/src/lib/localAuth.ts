@@ -24,6 +24,22 @@ export function getStoredToken(): string | null {
   try { return localStorage.getItem(TOKEN_KEY); } catch { return null; }
 }
 
+// ── Session role (set by AuthContext from /api/me) ──────────────────────────
+// Modules outside React (the motor store, duty apply) ask this to decide
+// between "edit the shared server config" (owner) and "work on a client-side
+// copy" (ordinary user on an enforced backend).
+let _role = { isAdmin: false, enforced: false };
+
+export function setSessionRole(role: { isAdmin: boolean; enforced: boolean }): void {
+  _role = { ...role };
+}
+
+/** True when this session may write the SHARED server config: the backend is
+ *  unenforced (local dev) or the account is admin. */
+export function canWriteServer(): boolean {
+  return !_role.enforced || _role.isAdmin;
+}
+
 export function getStoredUser(): SessionUser | null {
   try {
     const raw = localStorage.getItem(USER_KEY);

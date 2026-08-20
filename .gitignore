@@ -115,3 +115,6 @@ config/.static3d_cache/
 # auth secrets (self-hosted user store + JWT signing key)
 config/users.json
 config/.auth_secret
+
+# cross-run eddy warm cache (solver speedup, regenerated constantly)
+config/.warm_cache.npz

@@ -400,6 +400,43 @@ def rename_config(die: str, cfg: str, req: ConfigRename, _admin: dict = Depends(
     return {"ok": True, "config": new}
 
 
+class DieDuplicate(BaseModel):
+    name: str                       # the copy's name
+
+
+@router.post("/die/{die}/duplicate")
+def duplicate_die(die: str, req: DieDuplicate,
+                  _admin: dict = Depends(require_admin)):
+    """Copy a WHOLE die: the stamped geometry plus every configuration with
+    its duties and recorded results.  The copy starts UNLOCKED (it is a new
+    stamp-to-be, free to edit), everything else rides along verbatim."""
+    die = _check_name(die, "die")
+    new = _check_name(req.name, "die")
+    src_dir = _die_dir(die)
+    if not (src_dir / "die.yaml").is_file():
+        raise HTTPException(404, detail=f"die '{die}' not found")
+    dst_dir = _die_dir(new)
+    if (dst_dir / "die.yaml").exists():
+        raise HTTPException(409, detail=f"die '{new}' already exists")
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    d = _load_yaml(src_dir / "die.yaml", "die")
+    d["name"] = new
+    d["locked"] = False
+    d["created"] = datetime.now().isoformat(timespec="seconds")
+    _save_yaml(dst_dir / "die.yaml", d)
+    cfgs = []
+    for p in sorted(src_dir.glob("*.yaml")):
+        if p.name == "die.yaml":
+            continue
+        c = _load_yaml(p, "configuration")
+        c["die"] = new
+        _save_yaml(dst_dir / p.name, c)
+        cfgs.append(p.stem)
+    log.info("family: die '%s' duplicated as '%s' (%d configuration(s))",
+             die, new, len(cfgs))
+    return {"ok": True, "die": new, "configs": cfgs}
+
+
 class ConfigDuplicate(BaseModel):
     name: str                       # the copy's name
 

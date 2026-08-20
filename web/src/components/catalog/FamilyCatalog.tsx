@@ -222,6 +222,13 @@ const FamilyCatalog: React.FC<{
         body: JSON.stringify({ name }),
       })); },
   });
+  const duplicateDie = (die: string) => setAskText({
+    title: `Duplicate die '${die}'`,
+    label: 'Name of the copy', initial: `${die} copy`,
+    hint: 'Copies the stamped geometry + EVERY configuration with its duties and results; the copy starts unlocked',
+    onSubmit: (name) => mutate(`die '${die}' duplicated as '${name}'`,
+      () => post(`/api/family/die/${encodeURIComponent(die)}/duplicate`, { name })),
+  });
   const duplicateCfg = (die: string, cfg: string) => setAskText({
     title: `Duplicate '${cfg}' under ${die}`,
     label: 'Name of the copy', initial: `${cfg} copy`,
@@ -465,6 +472,18 @@ const FamilyCatalog: React.FC<{
             <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>
               {die.configs.length} configuration{die.configs.length === 1 ? '' : 's'}
             </Typography>
+            {canWrite && (
+              <Tooltip title="Duplicate the WHOLE die — stamped geometry + every configuration with its duties and results. The copy starts unlocked.">
+                <span>
+                  <Button size="small" disabled={!!busy}
+                    onClick={() => duplicateDie(die.name)}
+                    sx={{ fontSize: 11, py: 0, px: 0.6, minWidth: 0,
+                          textTransform: 'none', color: '#60a5fa' }}>
+                    ⧉ duplicate
+                  </Button>
+                </span>
+              </Tooltip>
+            )}
             <Box sx={{ flex: 1 }} />
             {canWrite && (
               <Button size="small" variant="text" disabled={!!busy}

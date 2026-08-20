@@ -440,6 +440,7 @@ def upsert_duty(req: DutyCreate, _admin: dict = Depends(require_admin)):
         # build then carry a mismatched build_sig — the catalog shows them
         # as 'computed on an older build' instead of quietly lying.
         geo = _plain(live.get("geometry")) or {}
+        _old_L = (c.get("geometry_overrides") or {}).get("motor_length")
         c["geometry_overrides"] = {k: geo.get(k) for k in FREE_GEO_KEYS
                                    if geo.get(k) is not None}
         c["winding"] = _plain(live.get("winding")) or {}
@@ -478,10 +479,44 @@ def upsert_duty(req: DutyCreate, _admin: dict = Depends(require_admin)):
         entry["result"] = prev["result"]
     duties.append(entry)
     c["duties"] = duties
-    _save_yaml(p, c)
+    # AUTO-RENAME on a build change: when the configuration name carries the
+    # stack ("M1-L200") and the re-snapshot changed it, the name follows —
+    # the catalog shows what the build IS (user rule).  Only when the name's
+    # -L number matched the OLD stack (the name was in sync); a free-form
+    # name is never touched.
+    renamed_to = None
+    if d.from_current:
+        _new_L = (c.get("geometry_overrides") or {}).get("motor_length")
+        try:
+            _mL = re.search(r"-L(\d+(?:\.\d+)?)", cfg)
+            if (_mL is not None and _new_L is not None and _old_L is not None
+                    and float(_mL.group(1)) == float(_old_L)
+                    and float(_new_L) != float(_old_L)):
+                _fmtL = ("%g" % float(_new_L))
+                _cand = cfg[:_mL.start()] + "-L" + _fmtL + cfg[_mL.end():]
+                _cand = _check_name(_cand, "configuration")
+                if not _cfg_file(die, _cand).exists():
+                    renamed_to = _cand
+        except HTTPException:
+            renamed_to = None
+    if renamed_to:
+        c["name"] = renamed_to
+        _save_yaml(_cfg_file(die, renamed_to), c)
+        p.unlink()
+        # keep the active context pointing at the renamed configuration
+        ctx = _read_ctx() or {}
+        if ctx.get("die") == die and ctx.get("config") == cfg:
+            import json as _json
+            ctx["config"] = renamed_to
+            _CTX_FILE.write_text(_json.dumps(ctx), encoding="utf-8")
+        log.info("family: configuration '%s/%s' auto-renamed to '%s' (stack %s -> %s)",
+                 die, cfg, renamed_to, _old_L, _new_L)
+    else:
+        _save_yaml(p, c)
     log.info("family: duty '%s/%s/%s' saved (%s, %.1f Arms @ %.0f rpm, γ=%.2f°)",
-             die, cfg, dname, d.mode, d.current_arms, d.rpm, d.gamma_deg)
-    return {"ok": True}
+             die, renamed_to or cfg, dname, d.mode, d.current_arms, d.rpm, d.gamma_deg)
+    return {"ok": True, "config": renamed_to or cfg,
+            **({"renamed_to": renamed_to} if renamed_to else {})}
 
 
 @router.post("/duty_result")

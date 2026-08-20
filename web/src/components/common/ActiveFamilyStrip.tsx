@@ -165,22 +165,13 @@ const ActiveFamilyStrip: React.FC = () => {
         const cfgEl = (
           <b style={{ color: drifted2 ? '#fbbf24' : 'var(--text-1)' }}>{cfgLabel}</b>
         );
-        // The DIE label follows the live stack too (user request) — but ONLY
-        // when its trailing number equals the saved stack (for M1-L200 the
-        // die's "200" and the stack coincide).  When they differ the trailing
-        // number is the stamped diameter (G1-L160 under CILN28 200) and
-        // substituting it would lie.
-        let dieLabel = ctx.die ?? '';
-        if (lDrift) {
-          const mTail = /^(.*\s)(\d+(?:\.\d+)?)$/.exec(dieLabel);
-          if (mTail && Number(mTail[2]) === savedL) {
-            dieLabel = `${mTail[1]}${Number(liveL.toFixed(1))}`;
-          }
-        }
+        // The DIE name never tracks the stack — it names the stamped
+        // lamination and does not depend on the lamination LENGTH (user
+        // rule); only the configuration part follows the live build.
         return (
           <Typography sx={{ fontSize: 12, color: 'var(--text-2)',
                             fontVariantNumeric: 'tabular-nums' }}>
-            <b style={{ color: dieLabel !== (ctx.die ?? '') ? '#fbbf24' : 'var(--text-1)' }}>{dieLabel}</b>
+            <b style={{ color: 'var(--text-1)' }}>{ctx.die}</b>
             {' / '}{drifted2
               ? <Tooltip title={tip}><span style={{ cursor: 'help' }}>{cfgEl}</span></Tooltip>
               : cfgEl}

@@ -398,6 +398,24 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
           I = Ttar * Number(ls.I_phase_rms_A) / Math.abs(Number(ls.T_em_avg_Nm));
         }
       } catch { /* seed stays */ }
+      // Already on target?  If the LAST finished run sits within the probe
+      // tolerance of this very target (same γ / speed / machine settings are
+      // the user's responsibility — the run is theirs), skip the probes and
+      // go straight to the full re-run at its current.
+      try {
+        const raw = localStorage.getItem('sim.lastSummary');
+        const ls = raw ? JSON.parse(raw) : null;
+        const Tl = ls ? Math.abs(Number(ls.T_em_avg_Nm)) : NaN;
+        if (Number.isFinite(Tl) && Math.abs(Tl - Ttar) / Ttar < 0.005
+            && Number(ls.I_phase_rms_A) > 0) {
+          const If = Number(ls.I_phase_rms_A);
+          setCurrent(+If.toFixed(2));
+          setFitMsg(`already on target (${Tl.toFixed(1)} Nm) — full run @ ${If.toFixed(1)} A, no probes`);
+          setFitBusy(false);
+          setTimeout(() => launchRun(true), 0);
+          return;
+        }
+      } catch { /* fall through to the probes */ }
       let prev: { I: number; T: number } | null = null;
       for (let k = 0; k < 4; k++) {
         setFitMsg(`fitting: probe ${k + 1} @ ${I.toFixed(1)} A…`);

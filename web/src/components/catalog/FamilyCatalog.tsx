@@ -523,9 +523,12 @@ const FamilyCatalog: React.FC<{
                 {canWrite && (
                   <Tooltip title="Duplicate — copy this configuration with ALL its duties (a starting point for a variant)">
                     <span>
-                      <IconButton size="small" disabled={!!busy}
+                      <Button size="small" disabled={!!busy}
                         onClick={() => duplicateCfg(die.name, c.name)}
-                        sx={{ fontSize: 11, p: 0.2, color: 'var(--text-4)' }}>⧉</IconButton>
+                        sx={{ fontSize: 11, py: 0, px: 0.6, minWidth: 0,
+                              textTransform: 'none', color: '#60a5fa' }}>
+                        ⧉ duplicate
+                      </Button>
                     </span>
                   </Tooltip>
                 )}

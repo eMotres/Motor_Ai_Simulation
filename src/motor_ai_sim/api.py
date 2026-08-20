@@ -42,6 +42,7 @@ from motor_ai_sim.routes.presets import router as presets_router
 from motor_ai_sim.routes.catalog import router as catalog_router
 from motor_ai_sim.routes.saved_sims import router as saved_sims_router
 from motor_ai_sim.routes.family import router as family_router
+from motor_ai_sim.routes.auth_local import router as auth_local_router
 from motor_ai_sim.routes.sweep_config import router as sweep_config_router
 from motor_ai_sim.routes.account import router as account_router
 from motor_ai_sim.routes.admin import router as admin_router
@@ -68,9 +69,8 @@ _ALLOWED_ORIGINS = [
     "http://127.0.0.1:5173",
     "http://127.0.0.1:5174",
     "http://127.0.0.1:3000",
-    # Firebase Hosting (production frontend)
-    "https://aerostator-core-simulation.web.app",
-    "https://aerostator-core-simulation.firebaseapp.com",
+    # Production origins come from the ALLOWED_ORIGINS env (comma-separated),
+    # e.g. "https://emotres.com" — set per deployment, nothing hardcoded.
 ] + [o.strip() for o in _os.environ.get("ALLOWED_ORIGINS", "").split(",") if o.strip()]
 
 # Tier gate FIRST (inner), CORS LAST (outer) so 401/403 from the gate still
@@ -108,6 +108,7 @@ app.include_router(presets_router)
 app.include_router(catalog_router)
 app.include_router(saved_sims_router)
 app.include_router(family_router)
+app.include_router(auth_local_router)
 app.include_router(sweep_config_router)
 app.include_router(account_router)
 app.include_router(admin_router)

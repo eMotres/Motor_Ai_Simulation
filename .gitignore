@@ -111,3 +111,7 @@ config/.daxis_cache.json
 # (machine fingerprint, fidelity, solve kind).  Megabytes each, and every one
 # of them is reproducible from `POST /api/static3d/solve`.
 config/.static3d_cache/
+
+# auth secrets (self-hosted user store + JWT signing key)
+config/users.json
+config/.auth_secret

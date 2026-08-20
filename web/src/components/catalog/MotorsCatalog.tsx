@@ -13,7 +13,6 @@
  */
 import React, { useEffect, useState } from 'react';
 import { Box, Typography, Button } from '@mui/material';
-import MyDesigns from './MyDesigns';
 import FamilyCatalog from './FamilyCatalog';
 import HelpTip from '../common/HelpTip';
 import { TextPromptDialog, type TextPromptState } from '../common/PromptDialogs';
@@ -59,8 +58,6 @@ const MotorsCatalog: React.FC = () => {
 
   return (
     <Box>
-      <MyDesigns />
-
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mb: 1.5 }}>
         <Typography sx={{ fontSize: 14, fontWeight: 700, color: 'var(--text-1)' }}>
           Catalog

@@ -21,6 +21,11 @@ import { useAuth } from '../../contexts/AuthContext';
 import {
   askAssistant, submitTicket, listMyTickets, type ChatMsg, type Ticket, type TicketType,
 } from '../../lib/support';
+import { db } from '../../lib/firebase';
+
+// Tickets live in Firestore; with Firebase unconfigured (project deleted
+// 2026-08-20) only the AI "Ask" tab is functional.
+const ticketsAvailable = Boolean(db);
 
 const STATUS_COLOR: Record<string, string> = {
   open: '#60a5fa', in_progress: '#fbbf24', resolved: '#4ade80', closed: 'var(--text-3)',
@@ -126,8 +131,8 @@ const SupportWidget: React.FC = () => {
       <Tabs value={tab} onChange={(_, v) => setTab(v)} variant="fullWidth"
         sx={{ minHeight: 36, borderBottom: '1px solid var(--line-soft)', '& .MuiTab-root': { minHeight: 36, fontSize: 12, textTransform: 'none' } }}>
         <Tab label="Ask" value="ask" />
-        <Tab label="Report" value="report" />
-        {user && <Tab label="My tickets" value="tickets" />}
+        {ticketsAvailable && <Tab label="Report" value="report" />}
+        {ticketsAvailable && user && <Tab label="My tickets" value="tickets" />}
       </Tabs>
 
       {/* ASK */}

@@ -1,15 +1,12 @@
 import React from 'react';
-import { Button, Avatar, Box, Tooltip, CircularProgress } from '@mui/material';
+import { Button, Avatar, Box, Tooltip } from '@mui/material';
 import LoginIcon from '@mui/icons-material/Login';
 import LogoutIcon from '@mui/icons-material/Logout';
 import { useAuth } from '../../contexts/AuthContext';
 
-/** Header login/logout control. Renders nothing until Firebase Auth is configured. */
+/** Header login/logout control (self-hosted auth — see contexts/AuthContext). */
 const AuthButton: React.FC = () => {
-  const { user, loading, enabled, signIn, logout } = useAuth();
-
-  if (!enabled) return null;
-  if (loading) return <CircularProgress size={18} sx={{ color: 'var(--text-2)' }} />;
+  const { user, tier, signIn, logout } = useAuth();
 
   if (!user) {
     return (
@@ -24,7 +21,7 @@ const AuthButton: React.FC = () => {
 
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-      <Tooltip title={user.email || ''} arrow>
+      <Tooltip title={`${user.email} · ${tier}`} arrow>
         <Avatar src={user.photoURL || undefined}
           sx={{ width: 26, height: 26, fontSize: '0.8rem', bgcolor: 'var(--line-accent)' }}>
           {(user.displayName || user.email || '?')[0]?.toUpperCase()}

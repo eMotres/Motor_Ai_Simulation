@@ -1,17 +1,29 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
-import { onAuthStateChanged, signInWithPopup, signOut, type User } from 'firebase/auth';
-import { auth, googleProvider, firebaseEnabled } from '../lib/firebase';
+// Auth context — self-hosted sessions (Google Identity Services or
+// email/password → our HS256 token, lib/localAuth.ts). Firebase is gone.
+// Roles are ALWAYS resolved server-side via /api/me; nothing client-side is
+// trusted for authorization.
+import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { installFetchAuth, setTokenGetter } from '../lib/apiAuth';
 import {
-  loadActiveWorkspace, applyActiveWorkspace,
-  startActiveWorkspaceSync, stopActiveWorkspaceSync,
-} from '../lib/activeWorkspace';
+  clearSession, getStoredToken, getStoredUser, loadGis, storeSession,
+  GOOGLE_CLIENT_ID, type SessionUser,
+} from '../lib/localAuth';
+import LoginDialog from '../components/auth/LoginDialog';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 
+/** Minimal signed-in user shape (Firebase's User replaced). uid === email. */
+export interface AuthUser {
+  uid: string;
+  email: string;
+  displayName: string;
+  photoURL?: string;
+}
+
 export interface AuthState {
-  user: User | null;
+  user: AuthUser | null;
   loading: boolean;
+  /** Auth system availability — always true now (self-hosted). */
   enabled: boolean;
   /** Plan tier resolved from the backend (anon/free/pro/team/admin). */
   tier: string;
@@ -19,77 +31,76 @@ export interface AuthState {
   isAdmin: boolean;
   /** True when the backend enforces auth (production). When false, role restrictions are off. */
   enforced: boolean;
+  /** Opens the sign-in dialog (Google button + email/password). */
   signIn: () => Promise<void>;
   logout: () => Promise<void>;
-  /** Firebase ID token for authenticating backend calls (null if signed out). */
+  /** Our backend token (null if signed out). */
   getToken: () => Promise<string | null>;
 }
 
 const AuthCtx = createContext<AuthState>({
-  user: null, loading: false, enabled: false, tier: 'anon', isAdmin: false, enforced: false,
+  user: null, loading: false, enabled: true, tier: 'anon', isAdmin: false, enforced: false,
   signIn: async () => {}, logout: async () => {}, getToken: async () => null,
 });
 
 export const useAuth = () => useContext(AuthCtx);
 
+function toAuthUser(u: SessionUser | null): AuthUser | null {
+  if (!u || !u.email) return null;
+  return { uid: u.email, email: u.email, displayName: u.name || u.email, photoURL: u.picture };
+}
+
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState<boolean>(firebaseEnabled);
-  // Role is resolved server-side (the token + ADMIN_EMAILS), so we ask the
-  // backend via /api/me rather than trusting anything client-side.
+  const [user, setUser] = useState<AuthUser | null>(() => toAuthUser(getStoredUser()));
+  // The session restores synchronously from localStorage — nothing to wait for.
+  const loading = false;
   const [tier, setTier] = useState<string>('anon');
   const [isAdmin, setIsAdmin] = useState<boolean>(false);
   const [enforced, setEnforced] = useState<boolean>(false);
+  const [loginOpen, setLoginOpen] = useState<boolean>(false);
 
-  // Install the fetch interceptor once, and keep it pointed at the live token.
-  useEffect(() => {
-    installFetchAuth();
-    // Await the initial auth restore before deciding there's no token — otherwise
-    // a fetch fired on mount (e.g. the Simulation auto-run after an F5) races
-    // ahead of Firebase rehydrating the user and goes out anonymous → 401.
-    setTokenGetter(async () => {
-      if (!auth) return null;
-      try { await auth.authStateReady(); } catch { /* older SDK: fall through */ }
-      return auth.currentUser ? auth.currentUser.getIdToken() : null;
-    });
-    // Ask the backend who we are (the fetch interceptor attaches the token).
-    const loadRole = async () => {
-      try {
-        const j = await fetch(`${API}/api/me`).then((r) => r.json());
-        setTier(j.tier ?? 'anon'); setIsAdmin(Boolean(j.isAdmin)); setEnforced(Boolean(j.enforced));
-      } catch { setTier('anon'); setIsAdmin(false); setEnforced(false); }
-    };
-    if (!firebaseEnabled || !auth) { setLoading(false); void loadRole(); return; }
-    return onAuthStateChanged(auth, (u) => {
-      setUser(u); setLoading(false); void loadRole();
-      // P3 (multi-user): resume the signed-in user's OWN active design from
-      // Firestore, then auto-save edits. Signed out → stop syncing (anonymous
-      // visitors stay local-only on the shared sandbox). See docs/MULTI_USER_PLAN.md.
-      if (u) {
-        void (async () => {
-          try {
-            const ws = await loadActiveWorkspace(u.uid);
-            if (ws) await applyActiveWorkspace(ws);
-          } catch { /* non-fatal — local store stays the source of truth */ }
-          startActiveWorkspaceSync(u.uid);
-        })();
-      } else {
-        stopActiveWorkspaceSync();
-      }
-    });
+  // Ask the backend who we are (the fetch interceptor attaches the token).
+  // Also our expiry check: a stored token the backend no longer accepts
+  // (expired / user disabled / secret rotated) comes back email:null → sign out.
+  const loadRole = useCallback(async () => {
+    try {
+      const j = await fetch(`${API}/api/me`).then((r) => r.json());
+      setTier(j.tier ?? 'anon'); setIsAdmin(Boolean(j.isAdmin)); setEnforced(Boolean(j.enforced));
+      if (getStoredToken() && !j.email) { clearSession(); setUser(null); }
+    } catch { setTier('anon'); setIsAdmin(false); setEnforced(false); }
   }, []);
 
-  const signIn = async () => {
-    if (firebaseEnabled && auth && googleProvider) await signInWithPopup(auth, googleProvider);
-  };
-  const logout = async () => {
-    if (firebaseEnabled && auth) await signOut(auth);
-  };
-  const getToken = async () => (user ? user.getIdToken() : null);
+  useEffect(() => {
+    installFetchAuth();
+    setTokenGetter(async () => getStoredToken());
+    void loadRole();
+  }, [loadRole]);
+
+  const onSignedIn = useCallback((token: string, u: SessionUser) => {
+    storeSession(token, u);
+    setUser(toAuthUser(u));
+    setLoginOpen(false);
+    void loadRole();
+  }, [loadRole]);
+
+  const signIn = useCallback(async () => { setLoginOpen(true); }, []);
+
+  const logout = useCallback(async () => {
+    clearSession();
+    setUser(null);
+    if (GOOGLE_CLIENT_ID) {
+      // Stop Google from silently re-selecting this account next time.
+      try { (await loadGis()).disableAutoSelect(); } catch { /* not loaded — fine */ }
+    }
+    void loadRole();
+  }, [loadRole]);
+
+  const getToken = useCallback(async () => getStoredToken(), []);
 
   return (
-    <AuthCtx.Provider value={{ user, loading, enabled: firebaseEnabled, tier, isAdmin, enforced, signIn, logout, getToken }}>
+    <AuthCtx.Provider value={{ user, loading, enabled: true, tier, isAdmin, enforced, signIn, logout, getToken }}>
       {children}
+      <LoginDialog open={loginOpen} onClose={() => setLoginOpen(false)} onSignedIn={onSignedIn} />
     </AuthCtx.Provider>
   );
 };

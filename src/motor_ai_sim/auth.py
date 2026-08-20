@@ -136,20 +136,105 @@ def _tier_for(claims: dict) -> str:
     return "free"
 
 
+# ── Google Identity Services (direct, post-Firebase) ────────────────────────
+# The Firebase project is gone (deleted 2026-08-20); Google sign-in now runs
+# through GIS: the frontend gets a Google ID token (RS256, iss accounts.google.com,
+# aud = our OAuth client id) and we verify it against Google's JWKS.  Identity
+# comes from Google; the TIER comes from OUR user registry (users.json) with
+# ADMIN_EMAILS on top — rights stay under our control.
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
+_GOOGLE_JWKS_URL = "https://www.googleapis.com/oauth2/v3/certs"
+_gjwks: dict = {}
+_gjwks_exp: float = 0.0
+
+
+def _google_keys(force: bool = False) -> dict:
+    global _gjwks, _gjwks_exp
+    with _lock:
+        if not force and _gjwks and time.time() < _gjwks_exp:
+            return _gjwks
+        with urllib.request.urlopen(_GOOGLE_JWKS_URL, timeout=5) as resp:
+            raw = json.loads(resp.read().decode("utf-8"))
+        _gjwks = {k["kid"]: jwt.algorithms.RSAAlgorithm.from_jwk(json.dumps(k))
+                  for k in raw.get("keys", [])}
+        _gjwks_exp = time.time() + 3600
+        return _gjwks
+
+
+def _verify_google_token(token: str) -> Optional[dict]:
+    if not (_HAS_JWT and GOOGLE_CLIENT_ID):
+        return None
+    try:
+        kid = jwt.get_unverified_header(token).get("kid")
+        key = _google_keys().get(kid) or _google_keys(force=True).get(kid)
+        if key is None:
+            return None
+        return jwt.decode(token, key=key, algorithms=["RS256"],
+                          audience=GOOGLE_CLIENT_ID,
+                          issuer=["https://accounts.google.com",
+                                  "accounts.google.com"],
+                          options={"require": ["exp", "iat", "sub"]})
+    except Exception:
+        return None
+
+
+def _registry_tier(email: str, fallback: str = "free") -> str:
+    """OUR user registry decides the tier; ADMIN_EMAILS overrides upward.
+    Auto-provisions a record on first sight so the admin panel can manage
+    every account that ever signed in.  A disabled record resolves to None
+    upstream (checked here via a sentinel)."""
+    if email and email in _ADMIN_EMAILS:
+        return "admin"
+    try:
+        from motor_ai_sim import users as _users
+        u = _users.get_user(email)
+        if u is None and email:
+            try:
+                import secrets as _sec
+                _users.create_user(email, _sec.token_hex(16), tier=fallback)
+            except Exception:
+                pass
+            return fallback
+        if u is not None:
+            if u.get("disabled"):
+                return "__disabled__"
+            return u.get("tier", fallback)
+    except Exception:
+        pass
+    return fallback
+
+
 def resolve_user(authorization: Optional[str]) -> Optional[dict]:
-    """Parse a `Bearer <idToken>` header → {uid,email,tier}, or None if absent/invalid."""
+    """Parse a `Bearer <token>` header → {uid,email,tier}, or None.
+
+    Accepts, in order: our own local HS256 token (password accounts /
+    service use), then a Google ID token (GIS sign-in).  The legacy Firebase
+    path is gone with its project."""
     if not authorization or not authorization.lower().startswith("bearer "):
         return None
     token = authorization.split(" ", 1)[1].strip()
+    # 1) local account token
     try:
-        claims = verify_id_token(token)
+        from motor_ai_sim import users as _users
+        u = _users.resolve_local_token(token)
     except Exception:
-        return None
-    return {
-        "uid": claims.get("user_id") or claims.get("sub"),
-        "email": (claims.get("email") or "").lower(),
-        "tier": _tier_for(claims),
-    }
+        u = None
+    if u is not None:
+        tier = _registry_tier(u["email"], fallback=u.get("tier", "free"))
+        if tier == "__disabled__":
+            return None
+        return {"uid": u["uid"], "email": u["email"], "tier": tier}
+    # 2) Google ID token
+    claims = _verify_google_token(token)
+    if claims is not None:
+        email = (claims.get("email") or "").strip().lower()
+        if claims.get("email_verified") is False:
+            return None
+        tier = _registry_tier(email)
+        if tier == "__disabled__":
+            return None
+        return {"uid": claims.get("sub"), "email": email, "tier": tier}
+    return None
 
 
 class TierGateMiddleware(BaseHTTPMiddleware):

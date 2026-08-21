@@ -69,16 +69,33 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [loginOpen, setLoginOpen] = useState<boolean>(false);
 
   // Ask the backend who we are (the fetch interceptor attaches the token).
-  // Also our expiry check: a stored token the backend no longer accepts
-  // (expired / user disabled / secret rotated) comes back email:null → sign out.
+  // Also our expiry check: a token the backend SAW and refused (expired / user
+  // disabled / secret rotated) signs the session out — see the flags below.
+  const loadRoleRef = React.useRef<(() => Promise<void>) | null>(null);
   const loadRole = useCallback(async () => {
     try {
       const j = await fetch(`${API}/api/me`).then((r) => r.json());
       setTier(j.tier ?? 'anon'); setIsAdmin(Boolean(j.isAdmin)); setEnforced(Boolean(j.enforced));
       setSessionRole({ isAdmin: Boolean(j.isAdmin), enforced: Boolean(j.enforced) });
-      if (getStoredToken() && !j.email) { clearSession(); setUser(null); }
+      // Drop the stored session ONLY when the server says it SAW our token and
+      // refused it (expired / revoked / account gone).  An answer that is
+      // merely anonymous means the request went out without the header — a
+      // client-side race, not an expiry — and wiping the session there is what
+      // made the login "keep expiring" (2026-08-21).  Older backends send
+      // neither flag: fall back to the old test so nothing regresses.
+      const stored = getStoredToken();
+      const rejected = j.tokenRejected === true
+        || (j.tokenRejected === undefined && j.tokenPresented === undefined && stored && !j.email);
+      if (stored && rejected) { clearSession(); setUser(null); }
+      else if (stored && !j.email) {
+        // eslint-disable-next-line no-console
+        console.warn('[auth] /api/me answered anonymous but our token was not '
+          + 'presented — keeping the session; retrying role resolution.');
+        setTimeout(() => { void loadRoleRef.current?.(); }, 1500);
+      }
     } catch { setTier('anon'); setIsAdmin(false); setEnforced(false); }
   }, []);
+  loadRoleRef.current = loadRole;
 
   useEffect(() => {
     void loadRole();

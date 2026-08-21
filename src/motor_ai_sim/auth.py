@@ -347,14 +347,28 @@ def _is_admin_caller(authorization: Optional[str]) -> tuple[bool, Optional[dict]
 
 
 def account_info(authorization: Optional[str]) -> dict:
-    """Resolve who's calling -> {uid,email,tier,isAdmin,enforced} for /api/me."""
+    """Resolve who's calling -> {uid,email,tier,isAdmin,enforced} for /api/me.
+
+    Also reports WHY the caller is anonymous, which the frontend needs to tell
+    two very different situations apart:
+      * tokenPresented=False — no credentials reached us.  The browser may well
+        still hold a perfectly good session (a request that raced the fetch
+        interceptor, a hot-reloaded module, a proxy that dropped the header).
+        Dropping the stored session here logs the user out for nothing — that
+        is exactly how "сессия постоянно протухает" happened (2026-08-21).
+      * tokenRejected=True — a token WAS presented and did not verify (expired,
+        secret rotated, account disabled/deleted).  Only this is a real logout.
+    """
     is_admin, user = _is_admin_caller(authorization)
+    presented = isinstance(authorization, str) and bool(authorization.strip())
     return {
         "uid": user["uid"] if user else ("local-dev" if is_admin else None),
         "email": user["email"] if user else None,
         "tier": "admin" if is_admin else (user["tier"] if user else "anon"),
         "isAdmin": is_admin,
         "enforced": AUTH_ENFORCE,
+        "tokenPresented": presented,
+        "tokenRejected": bool(presented and user is None),
     }
 
 

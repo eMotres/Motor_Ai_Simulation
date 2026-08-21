@@ -1057,6 +1057,12 @@ export const useMotorStore = create<MotorState>()(
         // server wins on load; if the server has none yet but THIS browser has a
         // config, seed the server so it then shows everywhere.
         try {
+          // An anonymous/non-writer session must neither ADOPT the server copy
+          // (it is the owner's, possibly stale for this browser) nor try to
+          // mirror to it (403). Its sweep setup lives in localStorage alone —
+          // this is exactly how "my ranges reverted after a reload" happened
+          // while signed out (live 2026-08-21).
+          if (!canWriteServer()) return;
           const r = await fetch(`${API_BASE_URL}/api/sweep/config`);
           if (!r.ok) return;
           const { config } = await r.json();
@@ -1121,6 +1127,7 @@ useMotorStore.subscribe((state) => {
   // (e.g. right after the schema populates every param as 'fixed'), and saving
   // it would wipe another browser's real selections off the server.
   if (_sweepSelected(state.sweepConfig.variations) === 0) return;
+  if (!canWriteServer()) return;   // non-writers keep sweep setup local-only
   clearTimeout(_sweepSaveTimer);
   _sweepSaveTimer = setTimeout(() => {
     fetch(`${API_BASE_URL}/api/sweep/config`, {

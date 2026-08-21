@@ -791,6 +791,17 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
             for oi, op in enumerate(operating_points):
                 tasks.append((gi, oi, ov, float(op.get("current_a", 85.0)),
                               float(op.get("gamma_deg", 0.0))))
+        # ORDER: all points at the LOWEST current first, then the next current,
+        # … (user rule 2026-08-21: the low-current family maps the whole
+        # picture early, and a couple of high-current points at the end are
+        # enough to complete it — so an early Stop still leaves a usable
+        # result).  Within one current group, γ then geometry order.  The same
+        # grouping also maximises the eddy warm-cache hit rate: the queue
+        # neighbour almost always shares the operating point, so its seed
+        # passes the same-angle settle test and the extra warm-up period is
+        # skipped.
+        tasks.sort(key=lambda t: (t[3],
+                                  float(t[2].get("gamma_deg", t[4])), t[0]))
         with _scan_lock:
             if not _scan_owns(run_id):
                 return                      # superseded before we even started

@@ -19,11 +19,14 @@ from __future__ import annotations
 
 import hmac
 import json
+import logging
 import os
 import threading
 import time
 import urllib.request
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 from fastapi import Header, HTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -204,13 +207,29 @@ def _verify_google_token(token: str) -> Optional[dict]:
         kid = jwt.get_unverified_header(token).get("kid")
         key = _google_keys().get(kid) or _google_keys(force=True).get(kid)
         if key is None:
+            logger.warning("google verify: unknown kid %r (JWKS has %d keys)",
+                           kid, len(_gjwks))
             return None
         return jwt.decode(token, key=key, algorithms=["RS256"],
                           audience=GOOGLE_CLIENT_ID,
                           issuer=["https://accounts.google.com",
                                   "accounts.google.com"],
+                          # ±60 s: a rebooted workstation's clock is routinely
+                          # a few seconds off; GIS tokens carry nbf/iat.
+                          leeway=60,
                           options={"require": ["exp", "iat", "sub"]})
-    except Exception:
+    except Exception as e:
+        # The REASON must reach the log — "was not accepted" alone sent us
+        # blind when live sign-ins started failing (2026-08-21).  For an
+        # audience mismatch, SAY both audiences: it is the classic split
+        # between the frontend's baked-in client id and the backend env.
+        try:
+            _aud = jwt.decode(token, options={"verify_signature": False}).get("aud")
+        except Exception:
+            _aud = "<unreadable>"
+        logger.warning("google verify failed: %s: %s | token aud=%r vs "
+                       "GOOGLE_CLIENT_ID=%r", type(e).__name__, e, _aud,
+                       GOOGLE_CLIENT_ID[:20] + "...")
         return None
 
 

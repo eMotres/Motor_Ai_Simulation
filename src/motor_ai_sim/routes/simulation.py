@@ -68,19 +68,38 @@ router = APIRouter(
 # ── In-memory job store (replace with Redis/DB for production) ────────────────
 _jobs: Dict[str, Dict] = {}
 
+# Passport generation solves the LIVE machine's geometry (zero-touch — as an
+# override), which made its sweep points indistinguishable from the user's own
+# runs: a background loss-grid point (1.5·I0 @ 6000 rpm) persisted as the last
+# transient and REPLACED the card in the user's browser (measured live
+# 2026-08-25: "мощность упала, момент вырос, я ничего не трогал").  Solves
+# made under this flag never persist and never touch the field-snapshot store.
+from contextvars import ContextVar as _CtxVar
+_BACKGROUND_RUN: "_CtxVar[bool]" = _CtxVar("background_run", default=False)
+
 # ── Module-level geometry cache (built once per server start) ─────────────────
 _motor_geom_cache: Dict = {}
 _motor_geom_ghash: list = [None]   # hash of the geometry the cache was built for
 
 _VALID_MESH_COMPONENTS = ("stator", "rotor", "magnet", "coil", "shaft",
-                          "airgap", "outer")
+                          "airgap", "outer",
+                          # NOT a mm size — the "Wire cell" FACTOR (½h/1h/2h,
+                          # h = wire height).  It rides this same block so the
+                          # duty save/restore, the per-die settings memory and
+                          # every cache key carry it with no extra plumbing.
+                          "coil_rel")
 
 
 def _parse_component_mesh(s: str) -> dict:
     """Parse the per-component mesh-size JSON ({comp: size_mm}) coming from the
     UI into a clean {comp: float} dict.  Unknown keys / non-positive sizes are
     dropped so a stray value can never corrupt the gmsh size field.  Returns {}
-    for an empty / malformed string (→ global size everywhere)."""
+    for an empty / malformed string (→ global size everywhere).
+
+    "coil_rel" is the one dimensionless entry: it is snapped to the nearest of
+    0.5 / 1 / 2 rather than dropped or rejected, so a hand-written or older
+    client cannot fail a whole simulation over a mesh cosmetic (see
+    geo_mesh.snap_coil_rel for why snapping, not 400, is the right answer)."""
     if not s:
         return {}
     import json
@@ -94,6 +113,12 @@ def _parse_component_mesh(s: str) -> dict:
     for k, v in raw.items():
         kk = str(k).lower()
         if kk not in _VALID_MESH_COMPONENTS:
+            continue
+        if kk == "coil_rel":
+            from motor_ai_sim.simulation.geo_mesh import snap_coil_rel
+            fr = snap_coil_rel(v)
+            if fr > 0.0:
+                out[kk] = fr
             continue
         try:
             fv = float(v)

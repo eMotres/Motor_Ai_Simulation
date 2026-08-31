@@ -967,6 +967,15 @@ def _check_part_mesh_supported(user_cm: dict, use_geo: bool) -> None:
     that applies it — it is NEVER silently ignored."""
     if not user_cm:
         return
+    # "coil_rel" (the Wire-cell factor) is a property of the geo mesher's
+    # structured winding patch and has no meaning anywhere else — gmsh and the
+    # tensor template have no wire grid to re-pitch.  It must therefore NOT be
+    # counted as an unhonourable per-part size below: doing so would push a
+    # ½h/2h request off the template path entirely, changing the WHOLE mesh over
+    # a copper cosmetic.  On the geo path it IS honoured (see GEO_PART_KEYS).
+    user_cm = {k: v for k, v in user_cm.items() if k != "coil_rel"}
+    if not user_cm:
+        return
     if not use_geo:
         raise ValueError(
             "tensor-template iron has one global density and cannot honour "

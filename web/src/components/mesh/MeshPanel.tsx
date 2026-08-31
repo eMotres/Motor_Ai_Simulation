@@ -23,6 +23,16 @@ const MESH_COMPONENTS: { key: string; label: string }[] = [
   { key: 'shaft',  label: 'Shaft' },
   { key: 'outer',  label: 'Outer air' },
 ];
+// "Wire cell" — the copper cell size as a FACTOR of the wire height h, carried
+// in the SAME componentMesh block (so duty save/restore and the per-die
+// settings memory pick it up for free).  1h is the backend default and is
+// stored as "no key", keeping the canonical mesh byte-identical.
+const WIRE_CELL_KEY = 'coil_rel';
+const WIRE_CELL_OPTIONS: { v: number; label: string }[] = [
+  { v: 0.5, label: '½h' },
+  { v: 1,   label: '1h' },
+  { v: 2,   label: '2h' },
+];
 import SaveIcon from '@mui/icons-material/Save';
 import FemMeshViewer3D from './FemMeshViewer3D';
 import FemMeshViewer2D from './FemMeshViewer2D';
@@ -409,6 +419,16 @@ const MeshPanel: React.FC = () => {
     });
   };
   const resetCompSizes = () => { setComponentMesh({}); setCompDraft({}); };
+  // Wire cell (½h / 1h / 2h).  A FACTOR of each wire's own height, so it stays
+  // meaningful after a wire_height edit — unlike the mm "Windings" size, which
+  // wins over it when set (same precedence in the backend mesher).
+  const wireCell = (componentMesh[WIRE_CELL_KEY] as number | undefined) ?? 1;
+  const setWireCell = (v: number) => setComponentMesh(prev => {
+    const next = { ...prev };
+    if (v === 1) delete next[WIRE_CELL_KEY];   // 1h == the canonical default
+    else next[WIRE_CELL_KEY] = v;
+    return next;
+  });
   // Only positive sizes reach the backend; "{}" means global everywhere.
   const componentMeshJson = JSON.stringify(
     Object.fromEntries(Object.entries(componentMesh).filter(([, v]) => v > 0)));
@@ -873,7 +893,7 @@ const MeshPanel: React.FC = () => {
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
                 <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>
                   Per-part element size (mm)
-                  <Tooltip title="Target triangle size INSIDE each motor part. Empty = use the global Max size for that part. Set a finer/coarser value per part to study how mesh density changes the simulated torque/losses (mesh-convergence). Applies to both the mesh preview and the Simulation solve." placement="right">
+                  <Tooltip title="Target triangle size INSIDE each motor part. Empty = use the global Max size for that part. Set a finer/coarser value per part to study how mesh density changes the simulated torque/losses (mesh-convergence). Applies to both the mesh preview and the Simulation solve. A Windings size here overrides the Wire cell factor below." placement="right">
                     <span style={{ color: 'var(--text-4)', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
                   </Tooltip>
                 </Typography>
@@ -901,6 +921,27 @@ const MeshPanel: React.FC = () => {
                     />
                   </Box>
                 ))}
+              </Box>
+              {/* Wire cell — copper cell size relative to the wire height */}
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.75 }}>
+                <Typography sx={{ fontSize: 11, color: 'var(--text-1)', flex: 1 }}>
+                  Wire cell
+                  <Tooltip placement="right" title="Copper cell size as a multiple of the wire height h. A factor, not mm, so it stays ½h/1h/2h after a wire-height edit. A Windings size in mm overrides it.">
+                    <span style={{ color: 'var(--text-4)', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
+                  </Tooltip>
+                </Typography>
+                <ToggleButtonGroup
+                  value={wireCell} exclusive size="small"
+                  onChange={(_, v) => v != null && setWireCell(v as number)}
+                  sx={{ '& .MuiToggleButton-root': { py: 0.15, px: 1, fontSize: 11,
+                    lineHeight: 1.4, color: 'var(--text-3)', borderColor: 'var(--panel)',
+                    textTransform: 'none',
+                    '&.Mui-selected': { color: 'var(--text-0)', bgcolor: 'var(--line-accent)',
+                      borderColor: '#3b82f6' } } }}>
+                  {WIRE_CELL_OPTIONS.map(o => (
+                    <ToggleButton key={o.v} value={o.v}>{o.label}</ToggleButton>
+                  ))}
+                </ToggleButtonGroup>
               </Box>
             </Box>
 

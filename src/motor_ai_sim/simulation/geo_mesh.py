@@ -79,9 +79,50 @@ _DEFAULT_N_SLIP = 1008
 # `pq20AaS6000Y`, and 1647 tris without the Y).  Same for "airgap" — the gap is
 # owned by the structured belt / harmonic macro, not by this CDT.  Both are
 # routed to the gmsh mesher instead, which does honour them.
-GEO_PART_KEYS = frozenset(("stator", "rotor", "magnet", "coil", "outer", "air"))
-# solid-part keys that map onto a CDT region seed (air is handled by air_mm)
+# "coil_rel" is NOT a size — see COIL_REL_KEY below.  It travels in the same
+# component_mesh dict (one persisted UI block, one cache key) and is listed here
+# so _check_part_mesh_supported does not route the build to gmsh over it.
+GEO_PART_KEYS = frozenset(("stator", "rotor", "magnet", "coil", "outer", "air",
+                           "coil_rel"))
+# solid-part keys that map onto a CDT region seed (air is handled by air_mm).
+# coil_rel is deliberately absent: _part_areas turns these into mm^2 targets and
+# a FACTOR must never be squared into an area.
 GEO_REGION_KEYS = ("stator", "rotor", "magnet", "coil")
+
+# ── "Wire cell" — the copper cell size as a FACTOR of the wire's own height ──
+# UI: ½h / 1h / 2h, h = the wire's short side.  A factor, not a mm size, because
+# the mm value is tied to the wire it was chosen for: a 0.6 mm request saved
+# against a 0.6 mm wire silently becomes a 2h cell after the user halves
+# wire_height, whereas `coil_rel` re-reads h at build time and stays ½h/1h/2h.
+#
+# Only the three UI values carry meaning, so anything else is SNAPPED to the
+# nearest of them rather than rejected: the key is a discretisation preference,
+# not physics (copper cell size 0.2-0.6 mm moves torque by <0.01 %), and a duty
+# file written by an older/hand-edited client must still open instead of 400ing
+# a whole simulation over a mesh cosmetic.  An explicit `coil` size in mm WINS —
+# a user who typed an absolute size asked for that size.
+COIL_REL_KEY = "coil_rel"
+COIL_REL_CHOICES = (0.5, 1.0, 2.0)
+
+
+def snap_coil_rel(v) -> float:
+    """The requested wire-cell factor snapped to the nearest allowed choice, or
+    0.0 when it is absent / unparseable / non-positive (→ the 1h default path,
+    which is bit-identical to no key at all)."""
+    try:
+        fv = float(v)
+    except (TypeError, ValueError):
+        return 0.0
+    if not (fv > 0.0) or not math.isfinite(fv):
+        return 0.0
+    return min(COIL_REL_CHOICES, key=lambda c: abs(math.log(fv / c)))
+
+
+def _coil_rel_of(part_mesh_mm: Optional[Dict]) -> float:
+    """The wire-cell factor carried alongside the per-part element SIZES."""
+    if not part_mesh_mm:
+        return 0.0
+    return snap_coil_rel((part_mesh_mm or {}).get(COIL_REL_KEY))
 
 
 # ── optimizer mesh budget (process-scoped, OFF by default) ───────────────────
@@ -240,7 +281,12 @@ def _seeds(air: List, solid: List) -> List:
 def _part_areas(part_mesh_mm: Optional[Dict]) -> Dict[str, float]:
     """{part: target cell area mm^2} for the per-part element sizes actually
     requested.  Parts absent here keep the global/air size, so an empty request
-    reproduces the previous mesh bit-for-bit."""
+    reproduces the previous mesh bit-for-bit.
+
+    Only GEO_REGION_KEYS are converted — COIL_REL_KEY shares the dict but is a
+    dimensionless factor, so it is filtered out here and read separately by
+    _coil_rel_of().  (Squaring 2.0 into a 1.73 mm^2 coil target would silently
+    request a mm size nobody asked for.)"""
     out: Dict[str, float] = {}
     for k, v in (part_mesh_mm or {}).items():
         kk = str(k).lower()
@@ -284,6 +330,641 @@ def _densify(coords, max_edge: float) -> np.ndarray:
             out.append(a + (b - a) * (k / n))
         out.append(b)
     return np.asarray(out, float)
+
+
+# ── structured (template) mesh in the copper ─────────────────────────────────
+# The winding is N COPIES OF ONE RECTANGLE (7 x 0.6 mm strands, 0.13 mm apart).
+# Fed to the CDT as bare outlines they were filled independently, so nominally
+# identical wires got different, ragged triangulations (CILN28: coil edge p10
+# 0.29 / median 0.42 / p90 0.59 mm) — the per-wire eddy solve then sees N
+# slightly different discrete conductors where the machine has N identical ones.
+# So: mesh ONE wire like a template and stamp it into all of them — boundary
+# densified at pitch s + a regular interior lattice at pitch s, both built in
+# the wire's own frame, so a rotated slot gets the same stamp.  Default pitch is
+# the WIRE HEIGHT (the short side): square-ish cells one wire high, the coarsest
+# grid that still resolves the strand.  SB_NO_WIRE_GRID=1 restores the old fill.
+#
+# THREE TIERS (SB_NO_WIRE_GRID=1 → off; SB_WIRE_PATCH=0 → the lattice HINT above;
+# default → the structured PATCH below).
+#
+# The lattice hint alone does NOT deliver square cells: it only *offers* Triangle
+# the nodes.  Triangle then bisects the long-side segments anyway, because the
+# 0.13 mm inter-wire air slivers cannot meet the global q20 bound — a sliver
+# triangle spanning a 0.6 mm step has min angle atan(0.13/0.6) ≈ 12°, so quality
+# refinement plus segment encroachment split the template back to h/2 x h.
+# Coarser anisotropic requests are simply refused (2.0 mm produced MORE tris).
+#
+# So the winding stack is built OUTRIGHT — no Triangle inside it: one structured
+# quad grid per slot covering the wires AND the slivers between them, with the
+# sliver rows sharing the wire faces' node columns (conformity by construction).
+# The grid's outer rectangle is handed to Triangle as input segments plus a hole
+# marker, so the surrounding CDT conforms to it; the patch is then stitched in by
+# node identity.  Thin sliver cells (aspect ≈ 4.6) are accepted: they are air,
+# P2, and the structured air-gap belt already lives with controlled-aspect cells.
+_WIRE_GRID = os.environ.get("SB_NO_WIRE_GRID", "0").lower() in ("0", "false", "")
+_WIRE_PATCH = os.environ.get("SB_WIRE_PATCH", "1").lower() not in ("0", "false")
+# Boundary conformity — measured, not assumed.  Two ways the surrounding CDT can
+# stay conforming to the patch:
+#   (a) GRADE the patch's outer faces to f·(clearance to the nearest geometry) so
+#       the ~0.1-0.25 mm slot air outside meets q20 on its own and no patch
+#       segment is encroached (a segment of length L is encroached by a point d
+#       away when L > 2d, so f < 2);
+#   (b) let Triangle split what it wants and ABSORB every split by fanning the
+#       patch triangle behind it (_stitch_patches) — conforming by construction,
+#       whatever Triangle decides.
+# (b) is the default (f = 0), measured on both machines:
+#   * the tiled slot-pair cell (the normal path) triangulates with -Y, which
+#     already forbids Steiner points on input segments — it splits NOTHING, so
+#     grading can only add triangles;
+#   * the whole-ring CDT fallback (SB_GEO_TILE=0) asked for 14 splits over 504
+#     wires on CILN28 and 233 over 84 on CIANO14 (0.11 mm to the tooth) — no
+#     cascade, because the 0.13 mm slivers that used to drive it now live INSIDE
+#     the patch;
+#   * grading instead is worse on BOTH counts — CILN28 whole ring 49 501 →
+#     53 409 tris with copper AR_max 4.3 → 5.3, CIANO14 10 750 → 11 612 tris with
+#     copper AR_max 8.3 → 17.8 (f = 1.0: 14 066 tris, AR_max 38.6) — because a
+#     transition fan lands on EVERY wire and destroys the h x h square it was
+#     meant to protect.
+# SB_WIRE_PATCH_BND_F>0 re-enables (a) as a study knob.
+try:
+    _WIRE_PATCH_BND_F = float(os.environ.get("SB_WIRE_PATCH_BND_F", "0"))
+except ValueError:
+    _WIRE_PATCH_BND_F = 0.0
+
+
+class _PatchError(RuntimeError):
+    """The structured winding patch could not be stitched into the CDT.
+
+    Raised only from the stitch step (after Triangle already carved the patch
+    holes), where dropping a patch would leave a real hole in the mesh.  The
+    stator mesher catches it and rebuilds the WHOLE half without patches, so a
+    build never fails because of the patch."""
+
+
+def _wire_template(poly, s_req: float = 0.0, rel: float = 0.0):
+    """(boundary ring, free interior points, target cell area) for ONE wire, or
+    None when the polygon is not a rectangle (a wedge-clipped wire) — those keep
+    the plain CDT fill.
+
+    The target area is HALF a lattice cell plus 10 %: the stamped quad splits
+    into two triangles of exactly that half-cell, so anything tighter would make
+    Triangle refine straight through the template it was handed."""
+    if poly is None or getattr(poly, "is_empty", True) or poly.geom_type != "Polygon":
+        return None
+    if poly.interiors:                        # a wire with a hole is not a strand
+        return None
+    try:
+        mrr = poly.minimum_rotated_rectangle
+    except Exception:
+        return None
+    if mrr is None or mrr.geom_type != "Polygon":
+        return None
+    c = np.asarray(mrr.exterior.coords, float)[:4]
+    if len(c) < 4:
+        return None
+    a_vec, b_vec = c[1] - c[0], c[3] - c[0]
+    La, Lb = float(np.hypot(*a_vec)), float(np.hypot(*b_vec))
+    if min(La, Lb) < 1e-4 or mrr.area <= 0.0:
+        return None
+    if poly.area < 0.98 * mrr.area:           # clipped/oblique → not a rectangle
+        return None
+    # default: the wire HEIGHT; `rel` scales it (½h / 1h / 2h), an explicit mm
+    # request wins over both.  Best effort only on this tier — Triangle's quality
+    # bound still bisects a >h cell here (that is exactly why the patch exists).
+    _h = min(La, Lb)
+    s = float(s_req) if s_req > 0 else (_h * rel if rel > 0 else _h)
+    s = max(s, 1e-3)
+    _eps = 1.0 + 1e-9                         # a side exactly s stays ONE step
+    na = max(1, int(math.ceil(La / (s * _eps))))
+    nb = max(1, int(math.ceil(Lb / (s * _eps))))
+    da, db = La / na, Lb / nb
+    ua, ub = a_vec / La, b_vec / Lb
+    # the boundary is the REAL outline (corners exact), subdivided by the same
+    # rule, so its nodes land on the lattice for a true rectangle
+    ring = _densify(np.asarray(poly.exterior.coords, float), s * _eps)
+    if na < 2 or nb < 2:
+        pts = np.zeros((0, 2), float)         # one cell thick: boundary is all
+    else:
+        i, j = np.meshgrid(np.arange(1, na), np.arange(1, nb), indexing="ij")
+        pts = (c[0] + np.outer(i.ravel() * da, ua) + np.outer(j.ravel() * db, ub))
+        # the lattice is laid out on the ORIENTED BOX, which the outline is only
+        # allowed to match to 2 % — drop anything the real wire does not contain
+        # (a free vertex in the inter-wire air would seed a sliver there)
+        from shapely import contains_xy
+        pts = pts[np.asarray(contains_xy(poly, pts[:, 0], pts[:, 1]), bool)]
+    return ring, pts, 0.55 * da * db
+
+
+# ── structured winding PATCH (built outright, stitched into the CDT) ─────────
+def _rect_axes(poly):
+    """Orthonormal frame of a RECTANGULAR wire: dict(u, v, u0, u1, v0, v1) with
+    u the long-side direction (canonically signed) and v = u rotated +90° (so
+    (u, v) is right-handed and a +i,+j quad is CCW).  None when the polygon is
+    not a rectangle — a wedge-clipped wire, a hole, an oblique offcut.
+
+    The patch TILES the polygon exactly, so the rectangle test is 0.1 % here,
+    ten times tighter than the 2 % the lattice hint tolerates."""
+    if poly is None or getattr(poly, "is_empty", True) or poly.geom_type != "Polygon":
+        return None
+    if poly.interiors:
+        return None
+    try:
+        mrr = poly.minimum_rotated_rectangle
+    except Exception:
+        return None
+    if mrr is None or mrr.geom_type != "Polygon":
+        return None
+    c = np.asarray(mrr.exterior.coords, float)[:4]
+    if len(c) < 4:
+        return None
+    a, b = c[1] - c[0], c[3] - c[0]
+    La, Lb = float(np.hypot(*a)), float(np.hypot(*b))
+    if min(La, Lb) < 1e-4 or mrr.area <= 0.0:
+        return None
+    if poly.area < 0.999 * mrr.area:
+        return None
+    e = (a / La) if La >= Lb else (b / Lb)
+    if e[0] < -1e-12 or (abs(e[0]) <= 1e-12 and e[1] < 0.0):
+        e = -e                                    # canonical sense
+    u = e
+    v = np.array([-u[1], u[0]])
+    q = np.asarray(poly.exterior.coords, float)[:-1]
+    pu, pv = q @ u, q @ v
+    return dict(u=u, v=v, u0=float(pu.min()), u1=float(pu.max()),
+                v0=float(pv.min()), v1=float(pv.max()))
+
+
+def _flip_axes(r):
+    """The same rectangle read with the roles of the two axes swapped (aligned
+    along v, stacked along u), still right-handed: u' = v, v' = -u."""
+    return dict(u=r["v"], v=-r["u"], u0=r["v0"], u1=r["v1"],
+                v0=-r["u1"], v1=-r["u0"])
+
+
+def _stack_key(r, snap: float = 1e-3):
+    """Wires of one stack are translates along v: same u direction, same extent
+    along u.  That pair is the grouping key."""
+    return (round(float(r["u"][0]), 6), round(float(r["u"][1]), 6),
+            round(r["u0"] / snap), round(r["u1"] / snap))
+
+
+def _wire_stacks(rects: Dict[int, Dict], gap_max: float):
+    """[[(wire index, frame), ...], ...] — aligned, non-overlapping stacks sorted
+    along v.  A run is broken wherever the air gap exceeds `gap_max`, so the
+    patch never swallows a wide pocket of slot air."""
+    groups: Dict[Tuple, List] = {}
+    for i, r in rects.items():
+        groups.setdefault(_stack_key(r), []).append((i, r))
+    singles = [m for g in groups.values() if len(g) < 2 for m in g]
+    runs = [g for g in groups.values() if len(g) >= 2]
+    if singles:                                   # try the other orientation
+        g2: Dict[Tuple, List] = {}
+        for i, r in singles:
+            rf = _flip_axes(r)
+            g2.setdefault(_stack_key(rf), []).append((i, rf))
+        runs += list(g2.values())
+    out = []
+    for g in runs:
+        g.sort(key=lambda m: m[1]["v0"])
+        cur = [g[0]]
+        for i, r in g[1:]:
+            prev = cur[-1][1]
+            gap = r["v0"] - prev["v1"]
+            if gap < -1e-6 or gap > gap_max:      # overlap / wide pocket → break
+                out.append(cur); cur = [(i, r)]
+            else:
+                cur.append((i, r))
+        out.append(cur)
+    return out
+
+
+def _stack_patch(members, s: float, bnd_pitch: float = 0.0):
+    """Structured mesh of ONE winding stack (wires + the slivers between them).
+
+    Returns dict(V, T, ring, hole, rect, wires, n_u, du, rows) or None.
+    `V` are mm node coords snapped to the 1 µm grid (so the boundary polyline
+    handed to the PSLG is bit-identical to what _snap_ring would produce),
+    `ring` the CCW outer-boundary node ids, `rows` the per-row wire index
+    (None = an air sliver row).
+
+    Columns and rows are BOTH at pitch ≈ s: every copper row is exactly one
+    wire height / an integer division of it, and the column count is the nearest
+    integer division of the wire width — so a copper cell is s x s to within the
+    width's remainder, and a wire's cell count is identical for every wire.
+
+    A band is always split into at least ONE row (`max(1, ...)`), so the VERTICAL
+    pitch can never exceed the band's own height whatever s is asked for: s = 2h
+    gives one row of 2h-long x h-high cells, not a cell straddling two wires."""
+    from shapely.geometry import Polygon
+    u = np.asarray(members[0][1]["u"], float)
+    v = np.asarray(members[0][1]["v"], float)
+    u0 = min(r["u0"] for _, r in members)
+    u1 = max(r["u1"] for _, r in members)
+    U = u1 - u0
+    if U <= 1e-6:
+        return None
+    n_u = max(1, int(round(U / max(s, 1e-6))))
+    du = U / n_u
+    ulines = u0 + du * np.arange(n_u + 1)
+
+    bands = []                                     # (v_lo, v_hi, wire | None)
+    prev = None
+    for i, r in members:
+        if prev is not None and r["v0"] - prev > 1e-6:
+            bands.append((prev, r["v0"], None))
+        bands.append((r["v0"], r["v1"], i))
+        prev = r["v1"]
+    vlines = [bands[0][0]]
+    rows: List[Optional[int]] = []
+    for lo, hi, i in bands:
+        t = hi - lo
+        n = max(1, int(round(t / max(s, 1e-6))))
+        for j in range(1, n + 1):
+            vlines.append(lo + t * (j / n))
+            rows.append(i)
+    vlines = np.asarray(vlines, float)
+    R = len(rows)
+    if R < 1:
+        return None
+
+    nu1, nv1 = n_u + 1, R + 1
+    Vp = (ulines[:, None, None] * u[None, None, :]
+          + vlines[None, :, None] * v[None, None, :]).reshape(-1, 2)
+    Vp = np.round(Vp / _SNAP) * _SNAP
+
+    def nid(i, j):
+        return i * nv1 + j
+
+    tri = []
+    for i in range(n_u):
+        for j in range(R):
+            a, b = nid(i, j), nid(i + 1, j)
+            c, d = nid(i + 1, j + 1), nid(i, j + 1)
+            if (i + j) % 2 == 0:                  # alternate the diagonal
+                tri.append((a, b, c)); tri.append((a, c, d))
+            else:
+                tri.append((a, b, d)); tri.append((b, c, d))
+    Tp = np.asarray(tri, np.int64)
+    ring = ([nid(i, 0) for i in range(nu1)]
+            + [nid(n_u, j) for j in range(1, nv1)]
+            + [nid(i, R) for i in range(n_u - 1, -1, -1)]
+            + [nid(0, j) for j in range(R - 1, 0, -1)])
+    if bnd_pitch > 0.0:
+        Vp, Tp, ring = _patch_insert_bnd(Vp, Tp, ring, bnd_pitch)
+    corners = np.array([ulines[0] * u + vlines[0] * v,
+                        ulines[-1] * u + vlines[0] * v,
+                        ulines[-1] * u + vlines[-1] * v,
+                        ulines[0] * u + vlines[-1] * v])
+    return dict(V=Vp, T=Tp, ring=np.asarray(ring, np.int64),
+                hole=corners.mean(axis=0), rect=Polygon(corners),
+                wires=[i for i, _ in members], n_u=n_u, du=du,
+                rows=rows, u=u, v=v)
+
+
+def _patch_fan(V, T, ring, inserts):
+    """Insert extra nodes into the patch's outer boundary and FAN the single
+    triangle behind each split edge, so the patch stays a valid triangulation
+    with the new nodes on its boundary.
+
+    `inserts` maps a ring-edge index k (edge ring[k] → ring[k+1]) to an ordered
+    array of new point coordinates.  The incidence map is kept up to date as
+    triangles are replaced, so a corner triangle carrying TWO boundary edges is
+    fanned twice, correctly.  Returns (V, T, ring)."""
+    pts: List[np.ndarray] = [np.asarray(x, float) for x in np.asarray(V, float)]
+    tris: List[Optional[Tuple[int, int, int]]] = [
+        (int(a), int(b), int(c)) for a, b, c in np.asarray(T, np.int64)]
+    emap: Dict[Tuple[int, int], List[int]] = {}
+
+    def _key(x, y):
+        return (min(x, y), max(x, y))
+
+    def _reg(ti):
+        a, b, c = tris[ti]
+        for x, y in ((a, b), (b, c), (a, c)):
+            emap.setdefault(_key(x, y), []).append(ti)
+
+    for ti in range(len(tris)):
+        _reg(ti)
+
+    M = len(ring)
+    new_ring: List[int] = []
+    changed = False
+    for k in range(M):
+        p, q = int(ring[k]), int(ring[(k + 1) % M])
+        new_ring.append(p)
+        ins = inserts.get(k)
+        if ins is None or not len(ins):
+            continue
+        owners = [t for t in emap.get(_key(p, q), []) if tris[t] is not None]
+        if len(owners) != 1:
+            raise _PatchError(
+                "patch boundary edge has {} incident triangles".format(len(owners)))
+        t = owners[0]
+        a, b, c = tris[t]
+        rest = {a, b, c} - {p, q}
+        if len(rest) != 1:
+            raise _PatchError("degenerate patch boundary triangle")
+        o = rest.pop()
+        ids = []
+        for xy in ins:
+            pts.append(np.asarray(xy, float))
+            ids.append(len(pts) - 1)
+        for x, y in ((a, b), (b, c), (a, c)):        # retire the fanned triangle
+            emap[_key(x, y)].remove(t)
+        tris[t] = None
+        chain = [p] + ids + [q]
+        for x, y in zip(chain[:-1], chain[1:]):
+            tris.append((x, y, o))
+            _reg(len(tris) - 1)
+        new_ring.extend(ids)
+        changed = True
+    if not changed:
+        return np.asarray(V, float), np.asarray(T, np.int64), list(ring)
+    V2 = np.asarray(pts, float)
+    T2 = np.asarray([t for t in tris if t is not None], np.int64)
+    p0, p1, p2 = V2[T2[:, 0]], V2[T2[:, 1]], V2[T2[:, 2]]
+    neg = ((p1[:, 0] - p0[:, 0]) * (p2[:, 1] - p0[:, 1])
+           - (p2[:, 0] - p0[:, 0]) * (p1[:, 1] - p0[:, 1])) < 0.0
+    if neg.any():                                    # keep every triangle CCW
+        T2[neg] = T2[neg][:, [0, 2, 1]]
+    return V2, T2, new_ring
+
+
+def _patch_insert_bnd(V, T, ring, pitch: float):
+    """Grade the patch's OUTER faces to `pitch` (interior grid untouched)."""
+    V = np.asarray(V, float)
+    M = len(ring)
+    inserts = {}
+    for k in range(M):
+        A, B = V[ring[k]], V[ring[(k + 1) % M]]
+        L = float(np.hypot(*(B - A)))
+        n = int(math.ceil(L / max(pitch, 1e-6) - 1e-9))
+        if n > 1:
+            # snapped like every other patch node: _snap_ring rounds the ring
+            # handed to the PSLG to 1 µm, and a boundary node that moves by half
+            # a micron there stops being the SAME node at stitch time.
+            q = A + np.outer(np.arange(1, n) / n, B - A)
+            inserts[k] = np.round(q / _SNAP) * _SNAP
+    if not inserts:
+        return V, np.asarray(T, np.int64), list(ring)
+    V2, T2, r2 = _patch_fan(V, T, ring, inserts)
+    return V2, T2, r2
+
+
+def _stitch_patches(V, T, patches, tol: float = 6e-3):
+    """Merge the structured patches into the CDT output by node identity.
+
+    Triangle received each patch's boundary polyline as input segments and its
+    centre as a hole marker, so the CDT stops exactly on the patch boundary and
+    every patch boundary node is already a CDT node.  Any node Triangle
+    ADDITIONALLY placed on a patch segment (quality/encroachment split) is
+    absorbed by fanning the patch triangle behind it, so conformity holds
+    whatever Triangle decided.  Returns (V, T, stats)."""
+    from scipy.spatial import cKDTree
+    if not patches:
+        return V, T, {"n_patch": 0, "n_split": 0, "n_tri": 0}
+    V = np.asarray(V, float)
+    T = np.asarray(T, np.int64)
+    kd = cKDTree(V)
+    Vout = [V]
+    Tout = [T]
+    off = len(V)
+    n_split = 0
+    n_tri = 0
+    for p in patches:
+        Vp = np.asarray(p["V"], float)
+        Tp = np.asarray(p["T"], np.int64)
+        ring = [int(i) for i in p["ring"]]
+        M = len(ring)
+        inserts = {}
+        for k in range(M):
+            A, B = Vp[ring[k]], Vp[ring[(k + 1) % M]]
+            AB = B - A
+            L = float(np.hypot(*AB))
+            if L <= 1e-9:
+                continue
+            hits = []
+            for ci in kd.query_ball_point(0.5 * (A + B), 0.5 * L + tol):
+                w = V[ci] - A
+                if float(w @ w) <= tol * tol:            # this IS ring[k]
+                    continue
+                wb = V[ci] - B
+                if float(wb @ wb) <= tol * tol:          # this IS ring[k+1]
+                    continue
+                t = float(w @ AB) / (L * L)
+                if t <= 1e-6 or t >= 1.0 - 1e-6:
+                    continue
+                if abs(float(AB[0] * w[1] - AB[1] * w[0])) / L <= tol:
+                    hits.append((t, V[ci]))
+            if hits:
+                hits.sort(key=lambda h: h[0])
+                inserts[k] = np.array([h[1] for h in hits])
+        if inserts:
+            n_split += int(sum(len(x) for x in inserts.values()))
+            Vp, Tp, ring = _patch_fan(Vp, Tp, ring, inserts)
+        d, j = kd.query(Vp[np.asarray(ring, np.int64)])
+        if float(np.max(d)) > tol:
+            raise _PatchError(
+                "patch boundary node {:.4g} mm from any CDT node".format(
+                    float(np.max(d))))
+        if len(set(j.tolist())) != len(j):
+            raise _PatchError("two patch boundary nodes welded onto one CDT node")
+        gid = np.full(len(Vp), -1, np.int64)
+        gid[np.asarray(ring, np.int64)] = j
+        free = np.where(gid < 0)[0]
+        gid[free] = off + np.arange(len(free))
+        off += len(free)
+        Vout.append(Vp[free])
+        Tout.append(gid[Tp])
+        n_tri += len(Tp)
+    return (np.vstack(Vout), np.vstack(Tout),
+            {"n_patch": len(patches), "n_split": n_split, "n_tri": n_tri})
+
+
+def _coil_pslg(coils, a_coil_req: Optional[float], area: float,
+               patch: bool = True, iron=None, rays=(), coil_rel: float = 0.0):
+    """(boundary rings, free interior points, region seeds, patches) for the
+    winding — the one place both stator meshers get their conductors from, so
+    the full ring and the slot cell build the identical structure.
+
+    A slot whose wires form a clean aligned stack of rectangles becomes ONE
+    structured patch (rings carry only its outer rectangle, no interior points,
+    no per-wire region seed); anything else — a wedge-clipped wire, a
+    non-rectangle, a stack that is not cleanly aligned, a stack too close to a
+    sector cut ray — falls back to the lattice-hint template, and that in turn
+    falls back to the plain CDT fill.
+
+    `coil_rel` (½ / 1 / 2, 0 = absent) scales the default pitch by the wire's OWN
+    height; an explicit `a_coil_req` (from the mm "Windings" size) wins over it.
+    coil_rel == 1 reproduces the no-key mesh exactly — including the stack
+    GROUPING, which keeps using the geometric wire height for its gap_max so a
+    ½h/2h request re-cuts cells without re-grouping wires."""
+    s_req = math.sqrt(float(a_coil_req) / 0.4330) if a_coil_req else 0.0
+    a_def = float(a_coil_req) if a_coil_req else float(area)
+    rings: List[np.ndarray] = []
+    pts: List[np.ndarray] = []
+    seeds: List[List[float]] = []
+    patches: List[Dict] = []
+    done = set()
+
+    if _WIRE_GRID and patch and _WIRE_PATCH and coils:
+        rects = {}
+        for i, w in enumerate(coils):
+            fr = _rect_axes(w)
+            if fr is not None:
+                rects[i] = fr
+        # default pitch = the wire HEIGHT (true squares); an explicit per-part
+        # coil size wins and gives squares of the requested size.
+        def _h(rs):
+            return float(np.median([min(r["u1"] - r["u0"], r["v1"] - r["v0"])
+                                    for r in rs])) if len(rs) else 0.0
+
+        # gap_max is a GEOMETRIC break rule (how wide a pocket may be bridged),
+        # so it reads the wire height, NOT the requested cell pitch — otherwise
+        # ½h/2h would silently regroup the wires instead of just re-cutting them.
+        s_glob = s_req if s_req > 0 else _h(list(rects.values()))
+        cand = []
+        for mem in _wire_stacks(rects, gap_max=1.5 * max(s_glob, 1e-6)):
+            _hm = _h([r for _, r in mem])
+            s = s_req if s_req > 0 else (_hm * coil_rel if coil_rel > 0 else _hm)
+            try:
+                p = _stack_patch(mem, s, bnd_pitch=_patch_bnd_pitch(mem, s, iron))
+            except _PatchError:
+                p = None
+            if p is None or not _patch_clear_of_rays(p, rays):
+                continue
+            cand.append(p)
+        patches = _patch_keep_disjoint(cand, coils, iron)
+        for p in patches:
+            done.update(p["wires"])
+
+    n_tpl = 0
+    for i, w in enumerate(coils):
+        if i in done:
+            continue
+        tpl = _wire_template(w, s_req, coil_rel) if _WIRE_GRID else None
+        if tpl is None:
+            rings.append(np.asarray(w.exterior.coords, float))
+            seeds.append([w.centroid.x, w.centroid.y, 2, a_def])
+            continue
+        ring, ipts, a_cell = tpl
+        rings.append(ring)
+        if len(ipts):
+            pts.append(ipts)
+        seeds.append([w.centroid.x, w.centroid.y, 2, a_cell])
+        n_tpl += 1
+    for p in patches:                       # the patch outline IS the PSLG input
+        rings.append(np.vstack([p["V"][p["ring"]], p["V"][p["ring"][:1]]]))
+    if coils:
+        log.info("coil mesh: %d patches covering %d/%d wires (%d tris), "
+                 "%d lattice-stamped, %d plain CDT",
+                 len(patches), len(done), len(coils),
+                 sum(len(p["T"]) for p in patches), n_tpl,
+                 len(coils) - len(done) - n_tpl)
+    P = np.vstack(pts) if pts else np.zeros((0, 2), float)
+    return rings, P, seeds, patches
+
+
+def _patch_keep_disjoint(cands, coils, iron):
+    """Drop any patch whose rectangle would SWALLOW geometry it does not own.
+
+    The stack is bridged across the air gaps between its wires, so a wire the
+    wedge clipped (rejected as a non-rectangle, hence not a member) sitting
+    BETWEEN two intact wires would end up inside the patch rectangle — its
+    outline would then be a segment loop inside Triangle's hole, leaving a
+    filled island overlapping the patch.  Same for iron poking into the stack's
+    bounding box, and for two patches that overlap.  Any of those → that stack
+    keeps the lattice/CDT path."""
+    if not cands:
+        return []
+    keep: List[Dict] = []
+    try:
+        from shapely import STRtree
+        tree = STRtree(coils) if coils else None
+    except Exception:
+        tree = None
+    for p in cands:
+        rect = p["rect"]
+        own = set(p["wires"])
+        bad = False
+        if iron is not None:
+            try:
+                bad = rect.intersection(iron).area > 1e-9
+            except Exception:
+                bad = True
+        if not bad and tree is not None:
+            for j in np.atleast_1d(tree.query(rect)).tolist():
+                if int(j) in own:
+                    continue
+                if rect.intersection(coils[int(j)]).area > 1e-9:
+                    bad = True
+                    break
+        if not bad:
+            for q in keep:
+                if rect.intersection(q["rect"]).area > 1e-9:
+                    bad = True
+                    break
+        if bad:
+            log.info("winding patch: stack of %d wires overlaps foreign "
+                     "geometry — lattice path for it", len(own))
+            continue
+        keep.append(p)
+    return keep
+
+
+def _patch_bnd_pitch(members, s: float, iron) -> float:
+    """Grading pitch for the patch's outer faces (0 = none).
+
+    The slot air between the stack and the tooth flank is only ~0.1–0.25 mm
+    thick.  A patch boundary segment of length L is ENCROACHED by a point d
+    away when L > 2d, and Triangle answers encroachment by splitting the
+    segment — which the stitch would then have to fan.  Subdividing the outer
+    faces at 1.5·d up front keeps the split count at zero and, unlike letting
+    Triangle decide, makes the transition IDENTICAL for every slot."""
+    if _WIRE_PATCH_BND_F <= 0.0 or iron is None:
+        return 0.0
+    try:
+        from shapely.geometry import Polygon
+        u = np.asarray(members[0][1]["u"], float)
+        v = np.asarray(members[0][1]["v"], float)
+        u0 = min(r["u0"] for _, r in members); u1 = max(r["u1"] for _, r in members)
+        v0 = min(r["v0"] for _, r in members); v1 = max(r["v1"] for _, r in members)
+        rect = Polygon([u0 * u + v0 * v, u1 * u + v0 * v,
+                        u1 * u + v1 * v, u0 * u + v1 * v])
+        d = float(rect.exterior.distance(iron))
+    except Exception:
+        return 0.0
+    if not (d > 1e-6):
+        return 0.0
+    return min(float(s), _WIRE_PATCH_BND_F * d)
+
+
+def _patch_clear_of_rays(p, rays) -> bool:
+    """A patch must stay clear of the sector cut rays: _symmetrize_cuts snaps
+    every node within 3e-3 rad of a ray onto the shared radius chain, which
+    would drag a patch boundary node off the patch."""
+    if not len(rays):
+        return True
+    xy = np.asarray(p["V"][p["ring"]], float)
+    ang = np.arctan2(xy[:, 1], xy[:, 0])
+    for th in rays:
+        d = np.abs(np.arctan2(np.sin(ang - th), np.cos(ang - th)))
+        if float(d.min()) < 6e-3:
+            return False
+    return True
+
+
+def _add_free_points(V: np.ndarray, P: np.ndarray,
+                     merge_tol: float = 0.006) -> np.ndarray:
+    """Append PSLG-free vertices (the wire lattices).  Triangle keeps every input
+    vertex, so these become mesh nodes as-is; points landing on an existing node
+    are dropped — a duplicate vertex would leave an unreferenced row."""
+    P = np.asarray(P, float)
+    if not len(P):
+        return V
+    from scipy.spatial import cKDTree
+    keep = cKDTree(V).query(P, distance_upper_bound=merge_tol)[0] > merge_tol
+    return np.vstack([V, P[keep]]) if keep.any() else V
 
 
 def _grid_circle(r: float, n: int) -> np.ndarray:
@@ -446,7 +1127,7 @@ def _repair_slivers(V, T, n_fixed: int, n_iter: int = 20,
 
 def _triangulate(V, S, area: float, quality: int = _Q, hole: bool = True,
                  regions=None, hole_pts=None, no_bnd_steiner: bool = False,
-                 rotor_bridge: bool = False):
+                 rotor_bridge: bool = False, extra_holes=None):
     """CDT of the region.  `hole=True` puts a marker at the origin so the inner
     disk is emptied (stator half: the bore opens onto the rotor space);
     `hole=False` meshes solid to the centre (rotor half: the shaft is a real
@@ -465,6 +1146,11 @@ def _triangulate(V, S, area: float, quality: int = _Q, hole: bool = True,
         A["holes"] = np.asarray(hole_pts, float)
     elif hole:
         A["holes"] = np.array([[0.0, 0.0]])
+    if extra_holes is not None and len(extra_holes):
+        # the structured winding patches: Triangle must stop ON their boundary
+        # segments and leave the interior to the patch mesh
+        _eh = np.asarray(extra_holes, float).reshape(-1, 2)
+        A["holes"] = (np.vstack([A["holes"], _eh]) if "holes" in A else _eh)
     # -Y (no_bnd_steiner): forbid Steiner points ON the input boundary/segments.
     # Sector meshes seed the two radial cuts with an IDENTICAL node set; without
     # -Y, Triangle re-splits each cut independently → they diverge → broken
@@ -752,7 +1438,24 @@ def _collapse_slivers(V, T, keep_r=(), area_tol=1e-10, r_guard=0.05):
 def _mesh_stator_half(polys: Dict, r_bore: float, r_out_iron: float,
                       r_outer: float, n_slip: int, area: float, air_mm: float,
                       quality: int, r2_band: float = 0.0,
-                      part_area: Optional[Dict] = None):
+                      part_area: Optional[Dict] = None, coil_rel: float = 0.0):
+    """Stator half — structured winding patches first, plain lattice on retry."""
+    try:
+        return _stator_half_impl(polys, r_bore, r_out_iron, r_outer, n_slip,
+                                 area, air_mm, quality, r2_band, part_area,
+                                 patch=True, coil_rel=coil_rel)
+    except _PatchError as e:
+        log.warning("winding patch not stitchable (%s) — lattice fallback", e)
+        return _stator_half_impl(polys, r_bore, r_out_iron, r_outer, n_slip,
+                                 area, air_mm, quality, r2_band, part_area,
+                                 patch=False, coil_rel=coil_rel)
+
+
+def _stator_half_impl(polys: Dict, r_bore: float, r_out_iron: float,
+                      r_outer: float, n_slip: int, area: float, air_mm: float,
+                      quality: int, r2_band: float = 0.0,
+                      part_area: Optional[Dict] = None, patch: bool = True,
+                      coil_rel: float = 0.0):
     """(V mm, T) for the stator annulus [r_bore, r_outer].
 
     The winding is meshed as the REAL CadQuery conductors — the actual
@@ -768,9 +1471,11 @@ def _mesh_stator_half(polys: Dict, r_bore: float, r_out_iron: float,
     from shapely.geometry import LineString, Polygon
     _pa = part_area or {}
     a_iron = float(_pa.get("stator", area))                # per-part override
-    a_coil = float(_pa.get("coil", area))
     iron = _resample(polys["stator"], r_bore, n_slip)      # bore → slip grid
     coils = [w for w in (polys.get("coils") or []) if w is not None and not w.is_empty]
+    _c_rings, _c_pts, _c_seeds, _c_patch = _coil_pslg(
+        coils, _pa.get("coil"), area, patch=patch, iron=iron,
+        coil_rel=coil_rel)
 
     lines = []
 
@@ -785,8 +1490,8 @@ def _mesh_stator_half(polys: Dict, r_bore: float, r_out_iron: float,
         add(gg.exterior.coords)
         for hole in gg.interiors:
             add(hole.coords)
-    for w in coils:                                        # REAL conductors
-        add(w.exterior.coords)
+    for r in _c_rings:                                     # REAL conductors
+        add(r)
     air_area = max(area, 0.4330 * air_mm * air_mm)          # coarse air cell
     add(_grid_circle(r_bore, n_slip))                       # bore (slip grid)
     if 0.0 < r2_band < r_bore - 1e-6:
@@ -795,19 +1500,28 @@ def _mesh_stator_half(polys: Dict, r_bore: float, r_out_iron: float,
     # air size — otherwise a fine outer ring caps how coarse the air can get.
     add(_grid_circle(r_outer, max(48, int(2 * math.pi * r_outer / max(1.0, air_mm)))))
     V, S = _build_pslg(lines)
+    V = _add_free_points(V, _c_pts)                          # wire lattices
 
     # region seeds: iron + each conductor fine; each air pocket coarse
     ann = Polygon(_grid_circle(r_outer, 360)[:-1]).difference(
           Polygon(_grid_circle(r_bore, n_slip)[:-1]))
+    # the patch rectangles are holes for the CDT, so the air pockets must be
+    # taken AROUND them — else a pocket's representative point lands inside a
+    # patch and the real remaining slot air is left unseeded (no area cap).
+    _emb = coils + [p["rect"] for p in _c_patch]
     _air_reg = [[*a.representative_point().coords[0], 3, air_area]
-                for a in _air_parts(ann, iron, coils)]
+                for a in _air_parts(ann, iron, _emb)]
     if 0.0 < r2_band < r_bore - 1e-6:
         # gap-air annulus [R2, bore] — FINE (it carries the gap field)
         _air_reg += [[0.5 * (r2_band + r_bore), 0.0, 4, area]]
     reg = _seeds(_air_reg,
-                 [[*iron.representative_point().coords[0], 1, a_iron]]
-                 + [[w.centroid.x, w.centroid.y, 2, a_coil] for w in coils])
-    V, T = _triangulate(V, S, area, quality, regions=reg)
+                 [[*iron.representative_point().coords[0], 1, a_iron]] + _c_seeds)
+    V, T = _triangulate(V, S, area, quality, regions=reg,
+                        extra_holes=[p["hole"] for p in _c_patch])
+    V, T, _st = _stitch_patches(V, T, _c_patch)
+    if _c_patch:
+        log.info("winding patch: %d stitched, %d Triangle segment splits fanned",
+                 _st["n_patch"], _st["n_split"])
     return V, T
 
 
@@ -1083,7 +1797,24 @@ def _symmetrize_cuts(V, S, span, tol_r=0.06):
 
 def _mesh_stator_sector(polys, r_bore, r_out_iron, r_outer, n_slip, span,
                         area, air_mm, quality, r2_band: float = 0.0,
-                        cell: bool = False, part_area: Optional[Dict] = None):
+                        cell: bool = False, part_area: Optional[Dict] = None,
+                        coil_rel: float = 0.0):
+    """Stator wedge — structured winding patches first, plain lattice on retry."""
+    try:
+        return _stator_sector_impl(polys, r_bore, r_out_iron, r_outer, n_slip,
+                                   span, area, air_mm, quality, r2_band, cell,
+                                   part_area, patch=True, coil_rel=coil_rel)
+    except _PatchError as e:
+        log.warning("winding patch not stitchable (%s) — lattice fallback", e)
+        return _stator_sector_impl(polys, r_bore, r_out_iron, r_outer, n_slip,
+                                   span, area, air_mm, quality, r2_band, cell,
+                                   part_area, patch=False, coil_rel=coil_rel)
+
+
+def _stator_sector_impl(polys, r_bore, r_out_iron, r_outer, n_slip, span,
+                        area, air_mm, quality, r2_band: float = 0.0,
+                        cell: bool = False, part_area: Optional[Dict] = None,
+                        patch: bool = True, coil_rel: float = 0.0):
     """(V mm, T) for a stator WEDGE [0, span] × [r_bore, r_outer].
     r2_band < r_bore extends the wedge inward with the gap-air annulus ending
     on the uniform moving-band ring R2 (harmonic-macro boundary).
@@ -1096,13 +1827,15 @@ def _mesh_stator_sector(polys, r_bore, r_out_iron, r_outer, n_slip, span,
     air_area = max(area, 0.4330 * air_mm * air_mm)
     _pa = part_area or {}
     a_iron = float(_pa.get("stator", area))                # per-part override
-    a_coil = float(_pa.get("coil", area))
     _rin = r2_band if 0.0 < r2_band < r_bore - 1e-6 else r_bore
     W = _wedge(-1e-3, span + 1e-3, _rin - 3.0, r_outer + 3.0)
     iron = _resample(polys["stator"], r_bore, n_slip).intersection(W)
     coils = [c.intersection(W) for c in (polys.get("coils") or [])
              if c is not None and not c.is_empty and c.intersects(W)]
     coils = [c for c in coils if c.geom_type == "Polygon" and c.area > 1e-6]
+    _c_rings, _c_pts, _c_seeds, _c_patch = _coil_pslg(
+        coils, _pa.get("coil"), area, patch=patch, iron=iron,
+        rays=(0.0, float(span)), coil_rel=coil_rel)
     # iron portion of the cut seeded FINE (0.5·iron_edge): -Y freezes the seam,
     # so its radial density is fixed here — a fine flux-carrying seam sharpens the
     # anti-periodic weld (coarse seam left a ~6 pp ripple residual vs full ring).
@@ -1126,8 +1859,8 @@ def _mesh_stator_sector(polys, r_bore, r_out_iron, r_outer, n_slip, span,
         add(gg.exterior.coords)
         for h in gg.interiors:
             add(h.coords)
-    for c in coils:
-        add(c.exterior.coords)
+    for r in _c_rings:
+        add(r)
     add(_grid_arc(r_bore, n_slip, span))
     if 0.0 < r2_band < r_bore - 1e-6:
         add(_grid_arc(r2_band, n_slip, span))           # moving-band R2
@@ -1139,20 +1872,28 @@ def _mesh_stator_sector(polys, r_bore, r_out_iron, r_outer, n_slip, span,
     add(_cut_pts(0.0, rk)); add(_cut_pts(span, rk))     # identical {r_k}
     V, S = _build_pslg(lines)
     V, S = _symmetrize_cuts(V, S, span)                 # clone-identical seam
+    # wire lattices carry NO segments, so the cut symmetrisation above never
+    # sees them and -Y still freezes exactly the real boundary
+    V = _add_free_points(V, _c_pts)
 
     ann = W.intersection(Polygon(_grid_circle(r_outer, 360)[:-1]).difference(
                          Polygon(_grid_circle(r_bore, n_slip)[:-1])))
+    _emb = coils + [p["rect"] for p in _c_patch]     # see _mesh_stator_half
     _air_reg = [[*a.representative_point().coords[0], 3, air_area]
-                for a in _air_parts(ann, iron, coils)]
+                for a in _air_parts(ann, iron, _emb)]
     if 0.0 < r2_band < r_bore - 1e-6:
         _rm = 0.5 * (r2_band + r_bore)
         _air_reg += [[_rm * math.cos(span / 2), _rm * math.sin(span / 2), 4, area]]
     reg = _seeds(_air_reg,
-                 [[*iron.representative_point().coords[0], 1, a_iron]]
-                 + [[c.centroid.x, c.centroid.y, 2, a_coil] for c in coils])
+                 [[*iron.representative_point().coords[0], 1, a_iron]] + _c_seeds)
     hp = [[(_rin - 1.5) * math.cos(span / 2), (_rin - 1.5) * math.sin(span / 2)]]
     V, T = _triangulate(V, S, area, quality, regions=reg, hole_pts=hp,
-                        no_bnd_steiner=True)
+                        no_bnd_steiner=True,
+                        extra_holes=[p["hole"] for p in _c_patch])
+    V, T, _st = _stitch_patches(V, T, _c_patch)
+    if _c_patch:
+        log.info("winding patch: %d stitched, %d Triangle segment splits fanned",
+                 _st["n_patch"], _st["n_split"])
     return V, T
 
 
@@ -1411,6 +2152,15 @@ def geo_mesh_halves(p: Dict, polys: Dict, outer_air_factor: float = 1.2,
         log.info("geo per-part element size: %s (global %.3f mm)",
                  ", ".join(f"{k}={math.sqrt(v / 0.4330):.3f}mm"
                            for k, v in sorted(part_area.items())), iron_edge)
+    # "Wire cell" factor — travels in the same dict but is NOT a size, so it is
+    # read out separately and handed to the stator meshers only (the winding is
+    # the only thing it touches).
+    coil_rel = _coil_rel_of(part_mesh_mm)
+    if coil_rel and "coil" in part_area:
+        log.info("wire cell: coil_rel=%.3g ignored — explicit coil size wins",
+                 coil_rel)
+    elif coil_rel:
+        log.info("wire cell: coil_rel=%.3g (x the wire height)", coil_rel)
 
     _ns = max(1, int(n_sectors))
 
@@ -1456,7 +2206,8 @@ def geo_mesh_halves(p: Dict, polys: Dict, outer_air_factor: float = 1.2,
             Vc, Tc = _mesh_stator_sector(polys, r_bore, r_out_iron, r_outer,
                                          n_slip, _span_s, area, air_mm, _Q,
                                          r2_band=r2_band, cell=True,
-                                         part_area=part_area)
+                                         part_area=part_area,
+                                         coil_rel=coil_rel)
             Vs, Ts = _tile_cells(Vc, Tc, _span_s, _n_pairs // _ns)
             Vcr, Tcr = _mesh_rotor_sector(polys, r_od, r_sh, n_slip, _span_r,
                                           area, air_mm, _Q, r1_band=r1_band,
@@ -1479,14 +2230,16 @@ def geo_mesh_halves(p: Dict, polys: Dict, outer_air_factor: float = 1.2,
             span = 2.0 * math.pi / _ns
             Vs, Ts = _mesh_stator_sector(polys, r_bore, r_out_iron, r_outer,
                                          n_slip, span, area, air_mm, _Q,
-                                         r2_band=r2_band, part_area=part_area)
+                                         r2_band=r2_band, part_area=part_area,
+                                         coil_rel=coil_rel)
             Vr, Tr = _mesh_rotor_sector(polys, r_od, r_sh, n_slip, span,
                                         area, air_mm, _Q, r1_band=r1_band,
                                         part_area=part_area)
         else:                                          # full ring
             Vs, Ts = _mesh_stator_half(polys, r_bore, r_out_iron,
                                        r_outer, n_slip, area, air_mm, _Q,
-                                       r2_band=r2_band, part_area=part_area)
+                                       r2_band=r2_band, part_area=part_area,
+                                       coil_rel=coil_rel)
             Vr, Tr = _mesh_rotor_half(polys, r_od, r_sh, n_slip, area, air_mm, _Q,
                                       r1_band=r1_band, part_area=part_area)
     # Armed budget, second gate: the per-cell Steiner cap bounds each Triangle

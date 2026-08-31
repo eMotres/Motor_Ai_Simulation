@@ -19,10 +19,17 @@ const MESH_COMPONENTS: { key: string; label: string }[] = [
   { key: 'stator', label: 'Stator iron' },
   { key: 'rotor',  label: 'Rotor iron' },
   { key: 'magnet', label: 'Magnets' },
-  { key: 'coil',   label: 'Windings' },
-  { key: 'shaft',  label: 'Shaft' },
   { key: 'outer',  label: 'Outer air' },
 ];
+// Dropped from the grid, scrubbed from stored state on mount:
+//  - 'coil' (Windings, mm): superseded by the Wire cell factor below — a stale
+//    stored mm value would silently pin the copper with no field showing it;
+//  - 'shaft': the geo path cannot honour it (-Y cut chains make the area
+//    constraint unsatisfiable), so the request silently swapped the WHOLE
+//    build onto the gmsh mesher — losing the template iron and the wire patch
+//    over one innocuous field (measured: coil 3024 -> 1008 tris).  The API
+//    still accepts both keys for diagnostics.
+const DROPPED_MESH_KEYS = ['coil', 'shaft'];
 // "Wire cell" — the copper cell size as a FACTOR of the wire height h, carried
 // in the SAME componentMesh block (so duty save/restore and the per-die
 // settings memory pick it up for free).  1h is the backend default and is
@@ -419,9 +426,23 @@ const MeshPanel: React.FC = () => {
     });
   };
   const resetCompSizes = () => { setComponentMesh({}); setCompDraft({}); };
+  // A stored 'coil'/'shaft' value would keep steering solves with no field
+  // left to show it (the solve paths read mesh.componentMesh directly) — scrub
+  // them from the stored block on mount and whenever a duty restore writes the
+  // block back (duties saved before the removal still carry them).
+  useEffect(() => {
+    const scrub = () => setComponentMesh(prev => {
+      if (!DROPPED_MESH_KEYS.some(k => k in prev)) return prev;
+      const next = { ...prev };
+      for (const k of DROPPED_MESH_KEYS) delete next[k];
+      return next;
+    });
+    scrub();
+    window.addEventListener('sim-settings-restored', scrub);
+    return () => window.removeEventListener('sim-settings-restored', scrub);
+  }, [setComponentMesh]);
   // Wire cell (½h / 1h / 2h).  A FACTOR of each wire's own height, so it stays
-  // meaningful after a wire_height edit — unlike the mm "Windings" size, which
-  // wins over it when set (same precedence in the backend mesher).
+  // meaningful after a wire_height edit.
   const wireCell = (componentMesh[WIRE_CELL_KEY] as number | undefined) ?? 1;
   const setWireCell = (v: number) => setComponentMesh(prev => {
     const next = { ...prev };
@@ -926,7 +947,7 @@ const MeshPanel: React.FC = () => {
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.75 }}>
                 <Typography sx={{ fontSize: 11, color: 'var(--text-1)', flex: 1 }}>
                   Wire cell
-                  <Tooltip placement="right" title="Copper cell size as a multiple of the wire height h. A factor, not mm, so it stays ½h/1h/2h after a wire-height edit. A Windings size in mm overrides it.">
+                  <Tooltip placement="right" title="Copper cell size as a multiple of the wire height h. A factor, not mm, so it stays ½h/1h/2h after a wire-height edit.">
                     <span style={{ color: 'var(--text-4)', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
                   </Tooltip>
                 </Typography>

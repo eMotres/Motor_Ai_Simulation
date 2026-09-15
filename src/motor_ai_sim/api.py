@@ -108,6 +108,7 @@ from motor_ai_sim.routes.admin import router as admin_router
 from motor_ai_sim.routes.support import router as support_router
 from motor_ai_sim.routes.modules import router as modules_router
 from motor_ai_sim.routes.kernel import router as kernel_router
+from motor_ai_sim.routes.jobs_api import router as jobs_router
 from motor_ai_sim.services.geometry_service import get_current_geometry, params_to_dict
 from motor_ai_sim import materials as mat_lib
 from motor_ai_sim.materials import UnknownMaterialError
@@ -212,6 +213,9 @@ app.include_router(admin_router)
 app.include_router(support_router)
 app.include_router(modules_router)
 app.include_router(kernel_router)
+# Stage 4: the queue's own surface — what is running, queued and finished FOR
+# THIS CALLER, and the one owner-checked cancel every Stop button delegates to.
+app.include_router(jobs_router)
 
 
 # (There is no FEM worker pool to warm any more.  It existed to hide the

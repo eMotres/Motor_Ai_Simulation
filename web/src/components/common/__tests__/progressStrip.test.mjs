@@ -101,3 +101,31 @@ test('no kind and no labels is the Simulation tab, unchanged', () => {
   const l = formatProgressLine({ step: 1, total: 3 }, 'points', undefined);
   assert.equal(l.prefix, 'Computing');
 });
+
+/* ── the queue line (backend Stage 4) ────────────────────────────────────── */
+/* Same rule as above: a verbatim copy of the shipped helper, so changing
+ * `progressLine.ts` forces someone to justify the change here too. */
+
+function formatQueueLine(p) {
+  if (!p.queued) return null;
+  const n = Number(p.position) || 0;
+  return n > 0 ? `Queued · position ${n}` : 'Queued';
+}
+
+test('a run that is not queued prints no queue line', () => {
+  assert.equal(formatQueueLine({ running: true, step: 3, total: 9 }), null);
+  assert.equal(formatQueueLine({}), null);
+});
+
+test('a queued run names its place', () => {
+  assert.equal(formatQueueLine({ queued: true, position: 3 }),
+    'Queued · position 3');
+});
+
+test('queued with no position still says it is queued', () => {
+  // The backend omits `position` for a job it has a record of but no place for
+  // (one already admitted between the poll and the answer).  "Queued" alone is
+  // still the truth; "position 0" would not be.
+  assert.equal(formatQueueLine({ queued: true }), 'Queued');
+  assert.equal(formatQueueLine({ queued: true, position: 0 }), 'Queued');
+});

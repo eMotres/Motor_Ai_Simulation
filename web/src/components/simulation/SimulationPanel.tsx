@@ -2685,7 +2685,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
           <CommonProgressStrip endpoint="/api/coupled/progress" unit="steps"
             kindLabels={{ coupled: 'Coupled EM ↔ thermal' }} />
         )}
-        <SolveProgressStrip />
+        <SolveProgressStrip runId={runNonce ? String(runNonce) : undefined} />
 
         {/* Header + Physics overview card removed by user request.
             • The "2D Magnetostatics / Governing equation / Rotor

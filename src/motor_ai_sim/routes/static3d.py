@@ -41,6 +41,8 @@ import numpy as np
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
+from motor_ai_sim import jobs as _JOBS
+from motor_ai_sim import progress as _PROG
 from motor_ai_sim import workspace as _WSP
 from motor_ai_sim.simulation.static3d import viewer as V
 
@@ -457,16 +459,56 @@ def _ensure_mesh_entry(section, fp: str, fname: str, fid: dict) -> dict:
 
 # ---- the background solve -------------------------------------------------
 
-_solve_state: Dict[str, Any] = {
-    "running": False, "phase": "idle", "progress": 0.0, "started": None,
-    "elapsed_s": 0.0, "error": None, "cancel": False, "stem": None,
-    "fidelity": None, "nonlinear": None, "quote_s": None, "message": None,
-}
+# Migration Stage 4: ONE SLOT PER RUN, not one for the whole server.  This was
+# the single worst of the route singletons — the 409 below refused a second
+# account's solve because SOMEBODY ELSE was solving, the progress endpoint
+# reported that stranger's phase, and the cancel flag stopped their run.  The
+# NAME and all ten call sites are unchanged; ``RunStateMap`` resolves to the
+# state of the run this call is inside.
+def _solve_state_seed() -> Dict[str, Any]:
+    return {
+        "running": False, "phase": "idle", "progress": 0.0, "started": None,
+        "elapsed_s": 0.0, "error": None, "cancel": False, "stem": None,
+        "fidelity": None, "nonlinear": None, "quote_s": None, "message": None,
+        "run_id": "",
+    }
+
+
+_solve_state = _PROG.RunStateMap("static3d", _solve_state_seed)
 _solve_lock = threading.RLock()
+
+#: The run id of the solve THIS WORKSPACE has in flight, so the no-argument
+#: progress poll and the 409 keep meaning what they meant.  One entry, per
+#: workspace (Stage 3's ``ws_map``), because one 3-D solve per account is the
+#: rule this router has always enforced — it just used to enforce it globally.
+_solve_current = _WSP.ws_map("static3d.current", 4)
+
+
+def _current_run_id() -> str:
+    try:
+        return str(_solve_current.get("run_id") or "")
+    except Exception:                                   # noqa: BLE001
+        return ""
+
+
+def _solve_state_now() -> Dict[str, Any]:
+    """The state the NO-ARGUMENT endpoints mean.
+
+    This workspace's solve in flight; failing that, the router's DEFAULT slot —
+    which is exactly the object the module global used to be, so a caller (or a
+    test) that writes into ``_solve_state`` directly still writes the thing the
+    409 and the progress poll read.
+    """
+    rid = _current_run_id()
+    if rid:
+        st = _solve_state.for_run(rid)
+        if st is not None:
+            return st
+    return _solve_state.target
 
 
 def _solve_worker(preset: str, mat_mode: str, fname: str, nonlinear: bool,
-                  stem: str) -> None:
+                  stem: str, run_id: str = "") -> None:
     t_start = time.perf_counter()
     try:
         section, fp, materials, mode, geo = _get_section(preset, mat_mode)
@@ -944,22 +986,38 @@ def solve(req: SolveRequest):
     stem = _stem(fp, req.fidelity, kind)
     quote = V.COST_S.get((req.fidelity, not req.nonlinear))
     basis = V.COST_BASIS.get((req.fidelity, not req.nonlinear))
+    # Migration Stage 4: the 409 is now per WORKSPACE (it asks about the solve
+    # THIS account has in flight), the state is per RUN, and the worker takes a
+    # queue slot rather than starting whatever else the machine is doing.
+    run_id = _JOBS.new_run_id("static3d")
     with _solve_lock:
-        if _solve_state["running"]:
+        live = _solve_state_now()
+        if live is not None and live.get("running"):
             raise HTTPException(status_code=409,
                                 detail="a 3D solve is already running")
-        _solve_state.update(running=True, phase="queued", progress=0.0,
-                            started=time.time(), elapsed_s=0.0, error=None,
-                            cancel=False, stem=stem, fidelity=req.fidelity,
-                            nonlinear=bool(req.nonlinear), quote_s=quote,
-                            message=None)
-    threading.Thread(target=_solve_worker,
-                     args=(req.preset, req.materials, req.fidelity,
-                           bool(req.nonlinear), stem),
-                     daemon=True, name="static3d-solve").start()
-    log.info("static3d: started %s solve at %s fidelity (quote %ss)",
-             kind, req.fidelity, quote)
-    return {"started": True, "stem": stem, "fingerprint": fp,
+        with _PROG.use_run(run_id, route="static3d",
+                           owner=_JOBS.current_owner()):
+            _solve_state.update(running=True, phase="queued", progress=0.0,
+                                started=time.time(), elapsed_s=0.0, error=None,
+                                cancel=False, stem=stem, fidelity=req.fidelity,
+                                nonlinear=bool(req.nonlinear), quote_s=quote,
+                                message=None, run_id=run_id)
+        _solve_current["run_id"] = run_id
+
+    def _run() -> None:
+        # ``admit`` BLOCKS this thread until the queue has a slot — which is the
+        # whole point: a 3-D solve is minutes of gmsh and pardiso, and starting
+        # one beside four others is how every one of them gets slower.  The
+        # state stays "queued" while it waits, which is what the panel shows.
+        with _JOBS.admit("static3d.solve", priority=_JOBS.Priority.DUTY,
+                         run_id=run_id):
+            _solve_worker(req.preset, req.materials, req.fidelity,
+                          bool(req.nonlinear), stem, run_id)
+
+    _WSP.bind_thread(_run, daemon=True, name="static3d-solve").start()
+    log.info("static3d: started %s solve at %s fidelity (quote %ss), run %s",
+             kind, req.fidelity, quote, run_id)
+    return {"started": True, "run_id": run_id, "stem": stem, "fingerprint": fp,
             "fidelity": req.fidelity, "nonlinear": bool(req.nonlinear),
             "quote_s": quote, "quote_basis": basis,
             "knobs": {k: fid[k] for k in
@@ -968,16 +1026,35 @@ def solve(req: SolveRequest):
 
 
 @router.get("/solve/progress")
-def solve_progress():
+def solve_progress(run_id: str = ""):
+    """This run's 3-D solve state — ``?run_id=``, or this workspace's current one.
+
+    The no-argument form is the compatibility promise (Stage 4): it answers the
+    solve THIS account has in flight, which on a single-user server is the same
+    object the module global used to be.
+    """
+    rid = str(run_id or "")
     with _solve_lock:
-        s = dict(_solve_state)
+        s = _solve_state.for_run(rid) if rid else _solve_state_now()
+        s = dict(s) if s is not None else _solve_state_seed()
     if s.get("running") and s.get("started"):
         s["elapsed_s"] = round(time.time() - float(s["started"]), 1)
     return s
 
 
 @router.post("/solve/cancel")
-def solve_cancel():
+def solve_cancel(run_id: str = ""):
+    """Stop a 3-D solve.  Owner-checked (Stage 4): 403 for somebody else's run."""
+    rid = str(run_id or "") or _current_run_id()
+    if not rid:
+        return {"cancelled": False, "run_id": ""}
+    try:
+        _JOBS.cancel_run(rid)
+    except _JOBS.NotOwner:
+        raise HTTPException(status_code=403,
+                            detail="that run belongs to another account")
     with _solve_lock:
-        _solve_state["cancel"] = True
-    return {"cancelled": True}
+        st = _solve_state.for_run(rid)
+        if st is not None:
+            st["cancel"] = True
+    return {"cancelled": True, "run_id": rid}

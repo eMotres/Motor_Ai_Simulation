@@ -21,7 +21,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Box, CircularProgress } from '@mui/material';
 
-import { formatProgressLine } from './progressLine';
+import { formatProgressLine, formatQueueLine } from './progressLine';
 import type { ProgressInfo } from './progressLine';
 import { whenVisible } from '../../lib/pageVisible';
 
@@ -39,10 +39,17 @@ export interface SolveProgressStripProps {
   label?: (p: ProgressInfo) => string;
   /** Simulation only: guess the PWM composition when the backend omits it. */
   pwmFallback?: boolean;
+  /** The run this strip is about (backend Stage 4).  Sent as `?run_id=`, so the
+   *  bar follows THIS run rather than "whatever this router is doing" — which
+   *  with several accounts on one server is somebody else's solve.  Omitted, the
+   *  poll keeps its old no-argument form and the backend answers the caller's
+   *  newest run in that router: that fall-back is why the tabs that have no run
+   *  id yet need no change at all. */
+  runId?: string;
 }
 
 const SolveProgressStrip: React.FC<SolveProgressStripProps> = ({
-  endpoint, unit = 'points', kindLabels, label, pwmFallback = false,
+  endpoint, unit = 'points', kindLabels, label, pwmFallback = false, runId,
 }) => {
   const [p, setP] = useState<ProgressInfo | null>(null);
   // Local ticking clock between polls so "elapsed" advances smoothly.
@@ -57,7 +64,10 @@ const SolveProgressStrip: React.FC<SolveProgressStripProps> = ({
       await whenVisible();              // a hidden tab polls nothing (lib/pageVisible)
       if (!alive) return;
       try {
-        const r = await fetch(`${API}${endpoint}`);
+        const url = runId
+          ? `${API}${endpoint}${endpoint.includes('?') ? '&' : '?'}run_id=${encodeURIComponent(runId)}`
+          : `${API}${endpoint}`;
+        const r = await fetch(url);
         if (r.ok) {
           const j: ProgressInfo = await r.json();
           // Same object while nothing changed → no re-render of the strip's
@@ -65,22 +75,47 @@ const SolveProgressStrip: React.FC<SolveProgressStripProps> = ({
           if (alive) setP(prev => (prev
             && prev.running === j.running && prev.step === j.step
             && prev.total === j.total && prev.phase === j.phase
-            && prev.elapsed_s === j.elapsed_s && prev.eta_s === j.eta_s)
+            && prev.elapsed_s === j.elapsed_s && prev.eta_s === j.eta_s
+            && prev.queued === j.queued && prev.position === j.position)
             ? prev : j);
         }
       } catch { /* polling errors are not user-facing */ }
-      if (alive) timer = window.setTimeout(tick, (p?.running ? 350 : 1500));
+      // A QUEUED run polls at the running rate: its position is the only thing
+      // moving, and it is what the user is waiting to see move.
+      if (alive) timer = window.setTimeout(tick,
+        (p?.running || p?.queued ? 350 : 1500));
     };
     tick();
     return () => { alive = false; window.clearTimeout(timer); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [p?.running, endpoint]);
+  }, [p?.running, p?.queued, endpoint, runId]);
 
   useEffect(() => {           // 200 ms repaint while running, for the clock
     if (!p?.running) return;
     const t = window.setInterval(() => force(x => x + 1), 200);
     return () => window.clearInterval(t);
   }, [p?.running]);
+
+  // WAITING FOR A SLOT.  Not running, but very much not nothing: on a shared
+  // server the gap between pressing Run and the first frame is the queue, and a
+  // strip that renders nothing there is the "hung server" this component
+  // exists to prevent.  One short line and a tooltip — the standing UI rule.
+  const queueLine = formatQueueLine(p ?? {});
+  if (!p?.running && queueLine) {
+    return (
+      <Box title="waiting for a solver slot on this server"
+        sx={{ position: 'sticky', top: 0, zIndex: 20,
+        display: 'flex', alignItems: 'center', gap: 0.8,
+        px: 1.25, py: 0.75, mb: 1,
+        bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)',
+        borderRadius: 1, fontFamily: 'monospace', fontSize: 12,
+        color: 'var(--text-3)' }}>
+        <CircularProgress size={11} thickness={6}
+          sx={{ color: 'var(--text-4)', verticalAlign: 'middle' }} />
+        <span>{queueLine}</span>
+      </Box>
+    );
+  }
 
   if (!p?.running) { seenStart.current = 0; return null; }
 

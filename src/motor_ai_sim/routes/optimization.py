@@ -26,6 +26,7 @@ from typing import List, Optional, Dict, Any, Tuple
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from motor_ai_sim import jobs as _JOBS
 from motor_ai_sim import workspace as _WSP
 from motor_ai_sim.config import get_config
 from motor_ai_sim.optimization import run_pareto_search
@@ -899,16 +900,61 @@ def _nonphysical_result(res: Any) -> Optional[str]:
 # the 10 of the new one, and the new sweep ran at half speed for nothing.
 # Every eval registers its process here under the run kind that started it, so
 # that kind's cancel can kill exactly its own workers and nobody else's.
+# Migration Stage 4: the key is (WORKSPACE, kind), not the kind alone.  It was
+# a process-global map and the kind is the string "scan" or "descent" — so on a
+# multi-user server B pressing Stop on their own sweep killed A's ten eval
+# subprocesses too, an hour of A's work each, silently.  ``_eval_owner`` is the
+# only thing that changes; the registration and the kill are otherwise as they
+# were.
 _LIVE_EVAL_PROCS: Dict[int, Any] = {}          # pid → (Popen, owner)
 _live_eval_lock = threading.Lock()
+
+
+def _eval_owner(kind: str) -> str:
+    """``"<ws_id>:scan"`` — the campaign a running eval subprocess belongs to."""
+    try:
+        return "%s:%s" % (_WSP.workspace().id, str(kind or ""))
+    except Exception:                                   # noqa: BLE001
+        return str(kind or "")
+
+
+def _cancel_campaign(kind: str, run_id: str, state) -> str:
+    """Owner-checked cancel for a campaign, by run id (Stage 4).
+
+    ``run_id`` omitted = the campaign THIS workspace has in flight, which is
+    what the Stop button has always meant.  Given, it must be the caller's own
+    run or the caller must be an admin — otherwise 403, because with several
+    accounts a stray id in a cancel is somebody else's afternoon.
+    """
+    rid = str(run_id or "")
+    if not rid:
+        try:
+            rid = str(state.get("run_id") or "")
+        except Exception:                               # noqa: BLE001
+            rid = ""
+    if not rid:
+        return ""
+    try:
+        _JOBS.cancel_run(rid)
+    except _JOBS.NotOwner:
+        raise HTTPException(status_code=403,
+                            detail="that run belongs to another account")
+    except Exception as exc:                            # noqa: BLE001
+        log.debug("%s cancel: queue said %s", kind, exc)
+    return rid
 
 
 def _kill_live_evals(owner: str) -> int:
     """Terminate every registered eval subprocess started by `owner`.  Returns
     the count.  The eval that owned the process sees no @@RESULT@@ and reports
-    a failed eval, which its (already cancelled) harvest loop ignores."""
+    a failed eval, which its (already cancelled) harvest loop ignores.
+
+    ``owner`` is a KIND ("scan" / "descent"); it is resolved against the calling
+    workspace here, so a cancel can only ever reach that account's own workers.
+    """
+    want = _eval_owner(owner) if ":" not in str(owner) else str(owner)
     with _live_eval_lock:
-        victims = [(pid, p) for pid, (p, o) in _LIVE_EVAL_PROCS.items() if o == owner]
+        victims = [(pid, p) for pid, (p, o) in _LIVE_EVAL_PROCS.items() if o == want]
     n = 0
     for pid, p in victims:
         try:
@@ -1054,7 +1100,7 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, env=_eval_env_for(threads))
         with _live_eval_lock:
-            _LIVE_EVAL_PROCS[_p.pid] = (_p, owner)
+            _LIVE_EVAL_PROCS[_p.pid] = (_p, _eval_owner(owner))
         try:
             try:
                 _out, _err = _p.communicate(input=spec, timeout=_cap)
@@ -1259,7 +1305,10 @@ def refine_designs(req: RefineRequest):
                               "results": [], "run_id": req.run_id, "error": None,
                               "cancel": False})
     steps = max(8, min(int(req.steps_per_period), 180))
-    t = threading.Thread(target=_WSP.bind(_refine_worker),   # Stage 3: carry the workspace
+    t = threading.Thread(target=_WSP.bind(_JOBS.as_job(          # Stage 4: queue slot
+                             "optimizer.refine",
+                             priority=_JOBS.Priority.CAMPAIGN,
+                             run_id=req.run_id)(_refine_worker)),
                          args=(designs, steps, float(req.coil_temp_c), req.run_id),
                          daemon=True)
     t.start()
@@ -1273,10 +1322,12 @@ def refine_progress():
 
 
 @router.post("/refine/cancel")
-def refine_cancel():
+def refine_cancel(run_id: str = ""):
+    """Stop the refinement.  Owner-checked by run id since Stage 4."""
     with _refine_lock:
         _refine_state["cancel"] = True
-    return {"cancelled": True}
+    return {"cancelled": True,
+            "run_id": _cancel_campaign("refine", run_id, _refine_state)}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1903,7 +1954,9 @@ def scan_designs(req: ScanRequest):
     # Stage 3: the worker runs in a fresh thread, whose context is empty — bind
     # it to THIS caller's workspace so the campaign it drives, the evals it
     # spawns and the stores it writes are all that caller's.
-    _new_scan_thread = threading.Thread(target=_WSP.bind(_scan_worker),
+    _new_scan_thread = threading.Thread(target=_WSP.bind(_JOBS.as_job(
+                         "optimizer.scan", priority=_JOBS.Priority.CAMPAIGN,
+                         run_id=req.run_id)(_scan_worker)),
                      args=(variables, ops, steps, float(req.coil_temp_c),
                            float(req.ripple_max_pct), max_geom, int(req.seed), req.run_id,
                            mesh_size, min_size, req.pole_copy, bool(req.torque_filter),
@@ -1947,7 +2000,7 @@ def scan_progress():
 
 
 @router.post("/scan/cancel")
-def scan_cancel():
+def scan_cancel(run_id: str = ""):
     # Set the cancel flag (the worker's 1 s poll loop sees it and stops within
     # ~1 s).  Belt-and-suspenders: if the worker thread is already dead but the
     # flag is stale, clear "running" here too so the next Run isn't blocked.
@@ -1960,7 +2013,8 @@ def scan_cancel():
     # workers finish an hour of work nobody will read while the next sweep
     # shares the cores with them".  Only this sweep's own processes.
     killed = _kill_live_evals("scan")
-    return {"cancelled": True, "killed_workers": killed}
+    return {"cancelled": True, "killed_workers": killed,
+            "run_id": _cancel_campaign("scan", run_id, _scan_state)}
 
 
 class SeedCacheRequest(BaseModel):
@@ -2119,7 +2173,9 @@ def doe_start(req: DoeRequest):
                 _doe_state["error"] = str(e)
                 _doe_state["running"] = False
 
-    threading.Thread(target=_WSP.bind(_worker), daemon=True).start()   # Stage 3
+    threading.Thread(target=_WSP.bind(_JOBS.as_job(          # Stage 3 + Stage 4
+        "optimizer.doe", priority=_JOBS.Priority.CAMPAIGN)(_worker)),
+        daemon=True).start()
     return {"started": True, "n": int(req.n)}
 
 
@@ -3754,7 +3810,9 @@ def descent_start(req: DescentRequest):
                                    "mesh_size_mm": mesh_size, "min_size_mm": min_size},
                                "run_id": req.run_id, "error": None, "cancel": False})
     threading.Thread(
-        target=_WSP.bind(worker),                # Stage 3: carry the workspace
+        target=_WSP.bind(_JOBS.as_job(           # Stage 3 + Stage 4: workspace + slot
+            "optimizer.descent", priority=_JOBS.Priority.CAMPAIGN,
+            run_id=req.run_id)(worker)),
         args=(var_specs, op, float(req.ripple_max_pct), float(req.w_eff),
               float(req.w_td), float(req.penalty_lambda), steps,
               float(req.coil_temp_c), mesh_size, min_size, max_iters, req.run_id,
@@ -3850,14 +3908,15 @@ def descent_progress():
 
 
 @router.post("/descent/cancel")
-def descent_cancel():
+def descent_cancel(run_id: str = ""):
     with _descent_lock:
         _descent_state["cancel"] = True
     # Stop means stop — same rule as the sweep: the evals already running
     # (MTPA sweep, a generation in flight) are killed, not left to finish an
     # hour of work nobody will read beside the next run's workers.
     killed = _kill_live_evals("descent")
-    return {"cancelled": True, "killed_workers": killed}
+    return {"cancelled": True, "killed_workers": killed,
+            "run_id": _cancel_campaign("descent", run_id, _descent_state)}
 
 
 @router.get("/surrogate")

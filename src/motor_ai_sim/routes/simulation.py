@@ -24,6 +24,8 @@ from pydantic import BaseModel, Field
 
 # Field-view solves: dedupe concurrent twins, cap how many run at once, and
 # say out loud what is running (see motor_ai_sim/field_jobs.py).
+from motor_ai_sim import jobs as _JOBS
+from motor_ai_sim import progress as _PROG
 from motor_ai_sim import workspace as _WSP
 from motor_ai_sim.field_jobs import field_busy, run_field_job
 
@@ -3938,7 +3940,23 @@ def clear_cache_endpoint():
 # the run it wants stopped; the parallel solve loop (and any duplicate
 # request waiting on the lock) checks whether ITS run-id was cancelled and
 # bails.  Keying by id means cancelling one run never aborts the next one.
-_fem_transient_cancelled_run: Dict[str, Optional[str]] = {"id": None}
+# Migration Stage 4: a MAP keyed by run id, in ``motor_ai_sim.jobs``, not the
+# one-slot dict this used to be.  One slot meant the LAST cancel won: with two
+# accounts solving, B pressing Stop cleared the id A's march was checking, and
+# A's Stop then did nothing.  ``jobs.cancel_run`` also carries the ownership
+# check — the caller must own the run, or be an admin.
+def _cancel_transient(run_id: str) -> None:
+    """Mark a transient cancelled WITHOUT an ownership check.
+
+    For the internal callers only (the coupled loop forwarding its own cancel
+    into the EM run it is driving).  The HTTP endpoints go through
+    ``jobs.cancel_run``, which refuses a run the caller does not own.
+    """
+    if run_id:
+        _JOBS.cancel_run(run_id, requester="", is_admin=True)
+
+
+_JOBS.register_cancel_hook("transient", _cancel_transient)
 
 
 class _RunCancelled(BaseException):
@@ -3956,29 +3974,29 @@ class _RunCancelled(BaseException):
 # Shared progress state for the currently-running transient.  Polled by
 # the frontend via /physics/fem_transient/progress so the user sees
 # "Frame X / N — Ys elapsed — ETA Zs" instead of a spinning "Running…".
-_fem_transient_progress: Dict[str, Dict] = {
-    "current": {
-        "running":   False,
-        "step":      0,
-        "total":     0,
-        "elapsed_s": 0.0,
-        "eta_s":     0.0,
-        "ts_start":  0.0,
-        "phase":     "idle",
-        # Backend-authored breakdown of `total` (see _sb_progress).  Empty
-        # until a solve reports one; the strip falls back to its own arithmetic.
-        "composition": "",
-    }
-}
+# Migration Stage 4: ONE OF THESE PER RUN, not one for the server.  The NAME,
+# the ``["current"]`` key and all twelve write sites below are unchanged —
+# ``TransientProgressMap`` hands back the dict belonging to the run this call is
+# inside, and the router's per-workspace default dict (which is exactly what
+# this global used to be) when there is none.  So a single-user server with
+# nothing queued behaves bit for bit as it did, and a second account's Run no
+# longer zeroes the bar the first one is watching.
+_fem_transient_progress = _PROG.TransientProgressMap("transient")
 
 
 @router.get("/physics/fem_transient/progress")
-async def get_fem_transient_progress():
+async def get_fem_transient_progress(run_id: str = ""):
     """Lightweight progress endpoint — frontend polls this every ~500 ms
     while a transient solve is in flight.  Returns step counter, elapsed
-    wall-time and an ETA estimated from the average seconds-per-step so
-    far."""
-    p = _fem_transient_progress.get("current", {})
+    wall-time and an ETA estimated from the average seconds-per-step so far.
+
+    ``?run_id=`` (Stage 4) answers THAT run.  With no argument it answers the
+    caller's newest transient — which on a single-user server is the same dict
+    it always was, so today's strip keeps working with no change.  While a run
+    is WAITING for a queue slot the payload also carries ``queued`` and
+    ``position``; it carries neither at any other time.
+    """
+    p, _rid = _PROG.transient_dict("transient", run_id)
     if p.get("running") and p.get("ts_start", 0) > 0:
         import time as _t
         elapsed  = _t.time() - p["ts_start"]
@@ -3989,30 +4007,30 @@ async def get_fem_transient_progress():
         # is a wild single-sample extrapolation that climbs with elapsed.
         # Report ETA-unknown (0) instead of a misleading runaway estimate.
         if raw_step <= 0:
-            return {
+            return _PROG._with_queue({
                 **p,
                 "elapsed_s":  round(elapsed, 1),
                 "eta_s":      0.0,
                 "per_step_s": 0.0,
                 "frac":       0.0,
                 "field_busy": field_busy(),
-            }
+            }, _rid)
         per_step = elapsed / raw_step
         eta = per_step * max(0, total - raw_step)
-        return {
+        return _PROG._with_queue({
             **p,
             "elapsed_s": round(elapsed, 1),
             "eta_s":     round(eta, 1),
             "per_step_s": round(per_step, 2),
             "frac":      round(raw_step / total, 3),
             "field_busy": field_busy(),
-        }
+        }, _rid)
     # Field solves ride along on the poll the panel already makes.  They are
     # NOT part of this transient's progress — they are the OTHER thing the
     # server may be busy with, and the strip could not see them at all (the
     # 2026-09-03 incident: ~17 cores of field solves, "nothing running" on
     # screen).  Same object as GET /physics/field_busy.
-    return {**p, "field_busy": field_busy()}
+    return _PROG._with_queue({**p, "field_busy": field_busy()}, _rid)
 
 
 @router.get("/physics/field_busy")
@@ -4037,9 +4055,18 @@ async def cancel_fem_transient(run_id: str = ""):
     # Cancel a SPECIFIC run only.  A new Run uses a fresh run_id (the
     # incrementing runNonce) so it never matches a previously-cancelled
     # id — no risk of a stale cancel killing the next solve.
-    if run_id:
-        _fem_transient_cancelled_run["id"] = run_id
-    return {"cancelled": bool(run_id), "run_id": run_id}
+    #
+    # Migration Stage 4: the caller must OWN the run, or be an admin (403
+    # otherwise).  With one account that is a tautology; with several it is the
+    # difference between a Stop button and a denial of service.
+    if not run_id:
+        return {"cancelled": False, "run_id": ""}
+    try:
+        out = _JOBS.cancel_run(run_id)
+    except _JOBS.NotOwner:
+        raise HTTPException(status_code=403,
+                            detail="that run belongs to another account")
+    return {"cancelled": bool(out.get("cancelled")), "run_id": run_id}
 
 
 def _mark_equivalent_star(sbres: Dict, *, v_bus_real: float,
@@ -4138,6 +4165,19 @@ def _mark_equivalent_star(sbres: Dict, *, v_bus_real: float,
 
 
 @router.get("/physics/fem_transient")
+# Migration Stage 4: the ADMISSION point for the heaviest thing this server
+# does.  One line, and it serves both modes (blocking by default; 202 with
+# QUEUE_ASYNC=1) because the decorator has the whole body as a callable.
+#
+# ``skip`` keeps the two CHEAP paths out of the queue, and that is not an
+# optimisation: ``ledger_probe`` and ``restore`` both answer off the disk in
+# milliseconds, and the panel asks them WHILE a solve of its own is running —
+# queued behind it, with one job per user, they would block on the very run
+# they are asking about.
+@_JOBS.queued("transient", priority=_JOBS.Priority.INTERACTIVE,
+              skip=lambda kw: bool(kw.get("ledger_probe") or kw.get("restore")),
+              body_keys=("current_a", "rpm", "steps", "n_periods", "gamma_deg",
+                         "drive", "n_sectors", "demag", "rotor_eddy"))
 def get_fem_transient(
     n_steps_per_period:  int   = 60,   # FEM solves per electrical period
     n_periods:           float = 1.0,  # how many electrical periods to sim
@@ -5010,7 +5050,7 @@ def get_fem_transient(
             # Cooperative cancel: this callback is the one hook that fires at
             # the top of EVERY frame (settling, warm-up and demag pre-pass
             # included), so it is where the Stop button takes effect.
-            if run_id and _fem_transient_cancelled_run["id"] == run_id:
+            if run_id and _JOBS.is_cancelled(run_id):
                 raise _RunCancelled(run_id)
             _cur = _fem_transient_progress["current"]
             _cur["step"] = int(_done)

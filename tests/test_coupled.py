@@ -56,6 +56,8 @@ import tempfile
 
 import pytest
 
+from motor_ai_sim import jobs as _JOBS
+
 # The 30 mm 12s/14p spoke machine every physics fixture in this repo is pinned
 # on (tests/test_thermal_routes.GEO_30MM), passed as a per-request override.
 from tests.test_thermal_routes import GEO_30MM
@@ -173,7 +175,7 @@ def sandbox():
     monkeypatch.setattr(cp, "_last_store_path", lambda: str(tmp / ".last_coupled.json"))
     monkeypatch.setattr(cp, "_LAST", {}, raising=True)
     monkeypatch.setattr(cp, "_LAST_LOADED", True, raising=True)
-    cp._cancelled_run["id"] = None
+    _JOBS.clear_cancelled()
 
     yield tmp
 
@@ -183,7 +185,7 @@ def sandbox():
     sim._transient_field_snap.update(saved_snap)
     sim._last_transient_ref.update(saved_ref)
     th._LOSS_MAPS.clear()
-    cp._cancelled_run["id"] = None
+    _JOBS.clear_cancelled()
     monkeypatch.undo()
 
 
@@ -427,33 +429,37 @@ def test_an_impossible_cooling_spec_is_refused_before_the_first_run(client):
 
 @pytest.fixture
 def fresh_cancel_registry():
-    """Both cancel registries emptied around a test, so a stopped run-id cannot
-    leak into the next one — the very failure keying them by id prevents."""
-    from motor_ai_sim.routes import coupled as cp
-    from motor_ai_sim.routes.simulation import _fem_transient_cancelled_run
+    """The cancel registry emptied around a test, so a stopped run-id cannot
+    leak into the next one — the very failure keying them by id prevents.
 
-    was = (cp._cancelled_run.get("id"), _fem_transient_cancelled_run.get("id"))
-    cp._cancelled_run["id"] = None
+    ONE registry since migration Stage 4 (``motor_ai_sim.jobs``), where there
+    used to be two one-slot dicts that had to be set in step: this module's,
+    checked between phases, and the transient's, read by the frame march.  A
+    single map keyed by run id is what makes "cancel THIS run" true for both
+    halves at once — and what stops a second account's Stop from clearing the
+    id the first one's march is checking.
+    """
+    _JOBS.clear_cancelled()
     yield
-    cp._cancelled_run["id"], _fem_transient_cancelled_run["id"] = was
+    _JOBS.clear_cancelled()
 
 
 def test_cancel_stops_the_loop_between_phases_and_says_499(
         client, fresh_cancel_registry):
     """A cancel that lands before the loop's first phase must cost NO solve.
 
-    Keyed by run-id exactly as the transient's Stop is, and it sets BOTH
-    registries: this one, checked between phases, and the transient's, which is
-    what the frame march inside a running EM solve reads.  Setting only the first
-    would make Stop wait out a six-minute transient.
+    Keyed by run-id exactly as the transient's Stop is, and since Stage 4 there
+    is ONE registry for both: the loop's between-phase check and the frame march
+    inside a running EM solve read the same map, so a cancel cannot be honoured
+    by one half and missed by the other (setting only the loop's used to make
+    Stop wait out a six-minute transient).
     """
-    from motor_ai_sim.routes import coupled as cp
-    from motor_ai_sim.routes.simulation import _fem_transient_cancelled_run
-
     r = client.post("/api/coupled/cancel", params={"run_id": "cx-1"})
     assert r.status_code == 200 and r.json()["cancelled"] is True
-    assert cp._cancelled_run["id"] == "cx-1"
-    assert _fem_transient_cancelled_run["id"] == "cx-1"
+    # ONE registry, and it answers for both halves: the loop's between-phase
+    # check and the frame march inside a running EM solve read the same map.
+    assert _JOBS.is_cancelled("cx-1")
+    assert not _JOBS.is_cancelled("cx-2")
 
     body = {**EM_BODY, "thermal_settings": COOLING, "max_iter": 2,
             "run_id": "cx-1"}
@@ -695,7 +701,12 @@ def test_last_answers_with_the_loop_but_not_with_its_payloads(client, loop):
     res = out["result"]
     assert res["coupling"]["iterations"] == 2
     assert "transient" not in res and "thermal" not in res
-    assert res["run_id"] == ""
+    # Migration Stage 4: a run that arrives WITHOUT an id is given one by the
+    # server, and the answer carries it — otherwise a client that sent none has
+    # no way to poll its own progress or stop its own run.  This fixture's body
+    # sends none, so what is pinned here is that the id exists and is this
+    # router's (it used to be the empty string the body carried).
+    assert res["run_id"] and res["run_id"].startswith("coupled-"), res["run_id"]
     assert "stale_geometry" in out
 
 

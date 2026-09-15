@@ -91,7 +91,9 @@ from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
 
 from motor_ai_sim import run_recording as _rr
 from motor_ai_sim import workspace as _WSP
-from motor_ai_sim.progress import ProgressTracker
+from motor_ai_sim import jobs as _JOBS
+from motor_ai_sim.progress import poll as _progress_poll
+from motor_ai_sim.progress import route_progress as _route_progress
 
 log = logging.getLogger(__name__)
 
@@ -164,20 +166,26 @@ _RUNAWAY_FALLBACK_C = 400.0
 # (``simulation._fem_transient_progress`` and ``thermal._progress``), so the two
 # existing strips still show what their own solver is doing frame by frame; this
 # one answers the question neither of them can — which iteration of how many.
-_progress = ProgressTracker()
+# Migration Stage 4: one tracker per RUN.  The name and every call site are
+# unchanged; ``RouteProgress`` resolves to this run's tracker, or to this
+# router's per-workspace default when the call is not inside a job.
+_progress = _route_progress("coupled")
 
 #: Cooperative cancel, keyed by run-id exactly as the transient's is: the Stop
 #: button knows which run it means, and cancelling one loop must never kill the
 #: next.  Set by ``POST /cancel``; read between phases and forwarded into the EM
 #: solve's own registry so a cancel that arrives mid-transient is honoured by the
 #: frame march instead of waiting for it to finish.
-_cancelled_run: Dict[str, Optional[str]] = {"id": None}
+#:
+#: Migration Stage 4: it is no longer a one-slot dict but the process-wide
+#: run-id registry in ``motor_ai_sim.jobs`` — a MAP, so a second account's
+#: cancel cannot stop this loop, with the ownership check at the endpoint.
 
 _LOCK = threading.Lock()
 
 
 @router.get("/progress")
-def progress() -> Dict[str, Any]:
+def progress(run_id: str = "") -> Dict[str, Any]:
     """Which iteration of how many, and which half of it is running.
 
     Same payload as the transient's and the thermal router's progress endpoints
@@ -188,25 +196,37 @@ def progress() -> Dict[str, Any]:
     routes: the SOLVE is gated, its counter is a status read, and a bar that
     401s over a running solve is the one moment the user most needs to see
     something.
+
+    ``?run_id=`` answers THAT loop (Stage 4); with no argument, the caller's
+    newest — which is what today's strip polls.
     """
-    return {**_progress.snapshot(), "kind": _progress.kind}
+    return _progress_poll("coupled", run_id)
 
 
 @router.post("/cancel")
 def cancel(run_id: str = "") -> Dict[str, Any]:
     """Ask the loop with this run-id to stop.
 
-    TWO registries are set, and both are needed: this module's, which is checked
-    between phases, and the transient's, which is what the frame march inside the
-    running EM solve checks.  Setting only the first would leave a cancel waiting
-    for a six-minute transient to finish; setting only the second would kill one
-    EM run and let the loop start the next.
+    ONE registry now, and it is the process-wide one in ``motor_ai_sim.jobs``:
+    the loop checks it between phases and the frame march inside the running EM
+    solve checks the same map, so a cancel that arrives mid-transient is honoured
+    by the march instead of waiting six minutes for it to finish.  (It used to be
+    two one-slot dicts that had to be set in step; forgetting either was a Stop
+    button that did nothing, or one that killed one EM run and let the loop start
+    the next.)
+
+    Migration Stage 4: the caller must OWN the run — or be an admin.  ``403``
+    otherwise, because with several accounts a cancel is the one status write
+    that can destroy somebody else's afternoon.
     """
-    if run_id:
-        _cancelled_run["id"] = run_id
-        from motor_ai_sim.routes.simulation import _fem_transient_cancelled_run
-        _fem_transient_cancelled_run["id"] = run_id
-    return {"cancelled": bool(run_id), "run_id": run_id}
+    if not run_id:
+        return {"cancelled": False, "run_id": ""}
+    try:
+        out = _JOBS.cancel_run(run_id)
+    except _JOBS.NotOwner:
+        raise HTTPException(status_code=403,
+                            detail="that run belongs to another account")
+    return {"cancelled": bool(out.get("cancelled")), "run_id": run_id}
 
 
 class _LoopCancelled(BaseException):
@@ -220,7 +240,7 @@ class _LoopCancelled(BaseException):
 
 
 def _check_cancelled(run_id: str) -> None:
-    if run_id and _cancelled_run.get("id") == run_id:
+    if run_id and _JOBS.is_cancelled(run_id):
         raise _LoopCancelled()
 
 
@@ -1844,6 +1864,8 @@ def _record_wanted(body: Dict[str, Any]) -> bool:
 
 
 @router.post("/run")
+@_JOBS.queued("coupled.run", priority=_JOBS.Priority.DUTY,
+              run_id_from=_JOBS.body_run_id("coupled"))
 def run(body: Dict[str, Any] = Body(default_factory=dict),
         authorization: Optional[str] = Header(default=None)) -> Dict[str, Any]:
     """``POST /api/coupled/run`` — the loop, with one extra body key.
@@ -1902,9 +1924,13 @@ def _run(body: Dict[str, Any],
     """
     t0 = time.time()
     run_id = str(body.get("run_id") or "")
-    # A cancel that arrived before this run started belongs to the PREVIOUS one.
-    if _cancelled_run.get("id") == run_id:
-        _cancelled_run["id"] = None
+    # A cancel that arrived BEFORE this run started is honoured, not discarded:
+    # the id is a fresh nonce per Run (the panel's ``runNonce``), so a pending
+    # cancel carrying it can only be about this very run — the user pressed Stop
+    # while the request was in flight or waiting for a queue slot.  It used to
+    # be cleared here, which made that cancel a no-op for the LOOP and left it
+    # to the transient's own registry to stop the run one full EM solve later.
+    # Migration Stage 4 reaches the same 499 without solving anything.
 
     from motor_ai_sim import mech_losses as _ml
     from motor_ai_sim.material_context import set_request_materials

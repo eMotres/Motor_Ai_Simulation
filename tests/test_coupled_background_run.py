@@ -270,7 +270,8 @@ def faked_halves(monkeypatch):
     monkeypatch.setattr(cp, "_attach_coupling", lambda em, block: False,
                         raising=True)
     monkeypatch.setattr(cp, "_preflight", lambda body, **k: None, raising=True)
-    cp._cancelled_run["id"] = None
+    from motor_ai_sim import jobs as _JOBS
+    _JOBS.clear_cancelled()      # Stage 4: one run-id map, not a one-slot dict
     return calls
 
 

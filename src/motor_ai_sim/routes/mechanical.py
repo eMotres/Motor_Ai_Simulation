@@ -21,7 +21,9 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from motor_ai_sim import workspace as _WSP
-from motor_ai_sim.progress import ProgressTracker
+from motor_ai_sim import jobs as _JOBS
+from motor_ai_sim.progress import poll as _progress_poll
+from motor_ai_sim.progress import route_progress as _route_progress
 
 log = logging.getLogger(__name__)
 
@@ -65,11 +67,16 @@ router = APIRouter(prefix="/api/mechanical", tags=["mechanical"],
 # a time (the panel's buttons are mutually exclusive while a solve is in
 # flight), and a single object is what a poll endpoint can read without knowing
 # which button was pressed.  `kind` is what says which one it was.
-_progress = ProgressTracker()
+#
+# Migration Stage 4: the NAME is unchanged; what it resolves to is now the
+# tracker of the RUN this call is inside (``progress.RouteProgress``), falling
+# back to this router's per-workspace default — which is exactly the object this
+# global used to be, so a single-user server sees no change at all.
+_progress = _route_progress("mechanical")
 
 
 @router.get("/progress")
-def progress():
+def progress(run_id: str = ""):
     """What this router is solving right now — polled at ~500 ms by the panel.
 
     The payload is byte-for-byte the transient endpoint's shape (see
@@ -81,8 +88,11 @@ def progress():
     transient's progress route strikes — the SOLVE is gated, and its progress
     counter is a status read with no physics in it.  Gating the poll would make
     a bar that 401s over a solve the user is already paying for.
+
+    ``?run_id=`` answers THAT run (Stage 4); with no argument it answers the
+    caller's newest run in this router, which is what today's strip polls.
     """
-    return {**_progress.snapshot(), "kind": _progress.kind}
+    return _progress_poll("mechanical", run_id)
 
 
 # ---------------------------------------------------------------------------
@@ -496,6 +506,7 @@ def _cache_key(geo_ov, assign, rpm, osf, interf, mesh_mm, order, contacts,
 # ---------------------------------------------------------------------------
 
 @router.get("/rotor_stress")
+@_JOBS.queued("mechanical.rotor_stress", priority=_JOBS.Priority.INTERACTIVE)
 def rotor_stress(
     rpm: Optional[float] = Query(default=None,
                                  description="rated speed; default = simulation.rpm"),
@@ -1228,6 +1239,7 @@ def run_critical_speeds_at(**route_params) -> Dict[str, Any]:
 # line (``/critical_speeds``).  Neither runs on its own — both are a button.
 
 @router.get("/modes")
+@_JOBS.queued("mechanical.modes", priority=_JOBS.Priority.INTERACTIVE)
 def modes(
     body: str = Query(default="rotor", description="rotor | stator"),
     n: int = Query(default=12, ge=1, le=40, description="elastic modes wanted"),
@@ -1349,6 +1361,7 @@ def modes(
 
 
 @router.get("/critical_speeds")
+@_JOBS.queued("mechanical.critical_speeds", priority=_JOBS.Priority.INTERACTIVE)
 def critical_speeds(
     bearing_span_mm: float = Query(default=250.0, gt=0.0, le=5000.0),
     stack_length_mm: float = Query(default=0.0, ge=0.0, le=5000.0,

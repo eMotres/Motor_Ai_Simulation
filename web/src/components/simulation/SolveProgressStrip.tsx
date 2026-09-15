@@ -12,9 +12,14 @@ import React from 'react';
 
 import Strip from '../common/SolveProgressStrip';
 
-const SolveProgressStrip: React.FC = () => (
+/** `runId` is the panel's `runNonce` — the SAME token the Run and the Stop
+ *  button already send as `run_id` (TransientCharts, FemAnimationViewer).
+ *  Passing it here makes the bar follow this run rather than "whatever the
+ *  server's transient route is doing", which with several accounts is somebody
+ *  else's solve.  Omitted, the poll keeps its old no-argument form. */
+const SolveProgressStrip: React.FC<{ runId?: string }> = ({ runId }) => (
   <Strip endpoint="/api/simulation/physics/fem_transient/progress"
-    unit="points" pwmFallback />
+    unit="points" pwmFallback runId={runId} />
 );
 
 export default SolveProgressStrip;

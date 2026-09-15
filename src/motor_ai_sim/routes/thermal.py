@@ -81,7 +81,9 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
 
 from motor_ai_sim import workspace as _WSP
-from motor_ai_sim.progress import ProgressTracker
+from motor_ai_sim import jobs as _JOBS
+from motor_ai_sim.progress import poll as _progress_poll
+from motor_ai_sim.progress import route_progress as _route_progress
 
 log = logging.getLogger(__name__)
 
@@ -124,11 +126,16 @@ router = APIRouter(prefix="/api/thermal", tags=["thermal"],
 # /coupled is up to twelve of them — minutes during which the tab said nothing
 # at all.  One tracker per router, polled by `GET /api/thermal/progress`, in the
 # transient strip's exact shape (see `motor_ai_sim.progress`).
-_progress = ProgressTracker()
+#
+# Migration Stage 4: one tracker per RUN, not one per router.  The NAME is
+# unchanged and so is every call site — `RouteProgress` resolves to the tracker
+# of the run this call is inside, and to this router's per-workspace default
+# tracker (which is what this module global used to be) when there is none.
+_progress = _route_progress("thermal")
 
 
 @router.get("/progress")
-def progress():
+def progress(run_id: str = ""):
     """What this router is solving right now — polled at ~500 ms by the panel.
 
     Same payload as the Simulation transient's progress endpoint plus ``kind``
@@ -140,8 +147,12 @@ def progress():
 
     Deliberately NOT gated (see ``auth._GATED``), mirroring the transient's own
     progress route: the SOLVE is gated, its counter is a status read.
+
+    ``?run_id=`` answers THAT run (Stage 4).  With no argument it answers the
+    caller's newest run in this router — which on a single-user server is the
+    same object it always was, so today's strip keeps working unchanged.
     """
-    return {**_progress.snapshot(), "kind": _progress.kind}
+    return _progress_poll("thermal", run_id)
 
 
 # ---------------------------------------------------------------------------
@@ -5119,6 +5130,7 @@ def solve_coupled(
 # ---------------------------------------------------------------------------
 
 @router.get("/field")
+@_JOBS.queued("thermal.field", priority=_JOBS.Priority.FIELD)
 def field(
     cooling_mode:       str = Query(default="manual",
                                     description="OUTER stator surface: manual "
@@ -5410,6 +5422,7 @@ def _note_verify_em_ignored(out: Dict[str, Any], verify_em: bool) -> Dict[str, A
 
 
 @router.get("/coupled")
+@_JOBS.queued("thermal.coupled", priority=_JOBS.Priority.DUTY)
 def coupled(
     max_iter:           int = Query(default=12, ge=1, le=40,
                                     description="winding-temperature passes.  The "
@@ -5969,6 +5982,8 @@ def _dc_cycle_block(trace, *, decimated: Dict[str, Any],
 
 
 @router.post("/duty_cycle")
+@_JOBS.queued("thermal.duty_cycle", priority=_JOBS.Priority.DUTY,
+              run_id_from=_JOBS.body_run_id("duty"))
 def duty_cycle(body: Dict[str, Any] = Body(default_factory=dict),
                authorization: Optional[str] = Header(default=None)
                ) -> Dict[str, Any]:

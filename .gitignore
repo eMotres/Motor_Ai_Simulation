@@ -123,6 +123,12 @@ config/.sessions.json
 # cross-run eddy warm cache (solver speedup, regenerated constantly)
 config/.warm_cache.npz
 
+# runtime: the job queue's own records — what this workspace had running and
+# queued, so a restart can say so instead of showing an empty panel (migration
+# Stage 4, motor_ai_sim/jobs.py).  Sixty rows of a dozen scalars, rewritten on
+# every state change; state, not configuration.
+config/.jobs.json
+
 # runtime: the results ledger — one gzipped file per finished run, keyed by the
 # exact solve parameters, so coming back to an operating point loads it instead
 # of re-solving (2026-09-05).  Reproducible work, not configuration.

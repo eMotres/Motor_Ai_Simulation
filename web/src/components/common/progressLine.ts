@@ -28,6 +28,12 @@ export interface ProgressInfo {
   /** Which solve is running ("rotor_stress" | "modes" | "field" | …), so a tab
    *  with several Solve buttons can name the one the bar belongs to. */
   kind?: string;
+  /** Backend Stage 4: this run is WAITING for a worker slot, not solving.  The
+   *  key is present only while that is true — an idle or running bar carries
+   *  neither, which is what keeps the payload's key set invariant. */
+  queued?: boolean;
+  /** 1 = next.  Present with `queued`. */
+  position?: number;
 }
 
 export interface ProgressLine {
@@ -63,4 +69,23 @@ export function formatProgressLine(
     : Math.min(100, byStep);
   const named = p.kind ? kindLabels?.[p.kind] : undefined;
   return { prefix: named ? `${named} ·` : 'Computing', step, total, unit, pct };
+}
+
+
+/**
+ * The one line a QUEUED run prints instead of a bar.
+ *
+ * With several accounts on one server a solve can be admitted a minute after it
+ * was asked for (`motor_ai_sim.jobs`: N workers, one running job per user,
+ * priority by interactivity).  A spinner over that reads as a hung server —
+ * exactly the failure the progress strip was built to end — so the wait is
+ * NAMED and its place in the queue is printed.  `null` when the run is not
+ * queued, so the caller renders its normal bar.
+ */
+export function formatQueueLine(
+  p: Pick<ProgressInfo, 'queued' | 'position'> & Partial<ProgressInfo>,
+): string | null {
+  if (!p.queued) return null;
+  const n = Number(p.position) || 0;
+  return n > 0 ? `Queued · position ${n}` : 'Queued';
 }

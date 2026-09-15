@@ -291,7 +291,10 @@ const DutyCycleEditor: React.FC = () => {
    *  is refused. */
   const issue = useMemo((): string | null => {
     if (!ctx) return 'no duty is loaded — press ▶ on one in the catalogue';
-    if (calibIssue.level === 'refuse') return calibIssue.text;
+    // SHORT here: the whole sentence hangs in the ⚠ beside the picker, and the
+    // standing rule is one line plus a tooltip (user: no text walls).
+    if (calibIssue.level === 'refuse')
+      return 'the calibration duty is an impulse point — fit at the rated duty';
     if (form.kind === 'S2' && !(Number(form.tOn) > 0))
       return 'S2 needs a run time: how long the pull lasts, in seconds';
     if (form.kind === 'S3') {

@@ -583,13 +583,134 @@ export function fmtW(w: number | null | undefined): string {
  * the solver reported it, because on a small machine in still air radiation
  * carries more than convection and the single number hides it.
  */
-export function sinkLabel(sink: HeatSink): string {
-  if (!sink.active) return `${sink.short} — none`;
+export function sinkLabel(sink: HeatSink, setting?: string | null): string {
+  const set = setting ? ` ${setting}` : '';
+  if (!sink.active) return `${sink.short}${set || ' — none'}`;
   const pct = sink.pct === null ? '' : ` · ${Math.round(sink.pct)} %`;
   const parts = sink.detail.length === 2
     ? ` (${sink.detail.map((p) => p.W.toFixed(sink.detail.some((q) => Math.abs(q.W) < 1) ? 2 : 1)).join(' + ')})`
     : '';
-  return `${sink.short} ${fmtW(sink.W)}${parts}${pct}`;
+  return `${sink.short}${set ? `${set} ·` : ''} ${fmtW(sink.W)}${parts}${pct}`;
+}
+
+/* ── 4. the SETTINGS side: what each surface is set TO ───────────────────── */
+
+/**
+ * The cooling fields this view can read and write — the thermalStore's own
+ * names and its own string-typed values, so the panel's fields and the model's
+ * popovers are literally the same state and cannot drift apart.
+ *
+ * Strings, not numbers, because that is what a text field holds: `''` is "not
+ * typed" and must not become `Number('') === 0` (a 0 °C ambient nobody asked
+ * for).  `mountT` blank means the ambient, which is the panel's own rule.
+ */
+export interface CoolingSettings {
+  coolMode: string; ambientT: string; airSpeed: string; hConv: string;
+  fluid?: string; tIn: string; flowLpm: string;
+  boreMode: string; boreAirSpeed: string; boreTIn: string; boreFlowLpm: string;
+  shaftExtMm: string; shaftExtSides: string;
+  frame: string; openAirSpeed: string;
+  emissivity: string; mountG: string; mountT: string;
+  endFaces: string; endFaceSides: string;
+}
+
+/** Which popover a surface opens.  `null` = this path is not set anywhere —
+ *  it is a consequence of the others, so clicking it offers nothing. */
+export type SinkEditor = 'housing' | 'mount' | 'end_faces' | 'bore'
+  | 'shaft_ends' | 'frame';
+
+export function editorFor(id: SinkId): SinkEditor | null {
+  switch (id) {
+    case 'housing': return 'housing';
+    case 'mount': return 'mount';
+    case 'end_face_winding': case 'end_face_stator':
+    case 'end_face_rotor': case 'end_face_magnet': return 'end_faces';
+    case 'bore': return 'bore';
+    case 'shaft_ends': return 'shaft_ends';
+    case 'end_windings': case 'slot_channels': return 'frame';
+    default: return null;
+  }
+}
+
+const nz = (s: string, def: string): string => (s ?? '').trim() || def;
+
+/**
+ * What this surface is SET to, in the fewest characters that still say it —
+ * "2 W/K @ 40 °C", "ε 0.9 @ 40 °C", "2 ends", "still air", "20 mm × 2".
+ *
+ * It goes in front of the watts on the billboard, so one line answers both
+ * questions a cooling design asks of a surface: what did I tell it to be, and
+ * what did that buy.  `off` is a setting and is printed as one — a surface with
+ * no label at all would read as a surface nobody had decided about.
+ */
+export function settingLabel(id: SinkId, s: CoolingSettings | null | undefined): string | null {
+  if (!s) return null;
+  const amb = nz(s.ambientT, '—');
+  switch (editorFor(id)) {
+    case 'housing':
+      if (s.coolMode === 'robotics') return `ε ${nz(s.emissivity, '0.9')} @ ${amb} °C`;
+      if (s.coolMode === 'air') return `${nz(s.airSpeed, '0')} m/s @ ${amb} °C`;
+      if (s.coolMode === 'liquid') return `${nz(s.flowLpm, '8')} L/min @ ${nz(s.tIn, amb)} °C`;
+      if (s.coolMode === 'manual') return `h ${nz(s.hConv, '—')} W/m²K`;
+      return 'no cooling';
+    case 'mount': {
+      const g = Number(s.mountG);
+      if (!(g > 0)) return 'off';
+      // blank mount °C means the ambient — the panel's rule, said out loud
+      return `${s.mountG} W/K @ ${nz(s.mountT, amb)} °C`;
+    }
+    case 'end_faces':
+      if (s.coolMode !== 'robotics' || s.endFaces === 'none') return 'closed';
+      return `${nz(s.endFaceSides, '2')} end${nz(s.endFaceSides, '2') === '1' ? '' : 's'} open`;
+    case 'bore':
+      if (s.boreMode === 'none') return 'closed';
+      if (s.boreMode === 'still') return 'still air';
+      if (s.boreMode === 'air') return `${nz(s.boreAirSpeed, '0')} m/s`;
+      if (s.boreMode === 'liquid') return `${nz(s.boreFlowLpm, '0')} L/min`;
+      return null;
+    case 'shaft_ends': {
+      const mm = Number(s.shaftExtMm);
+      if (!(mm > 0)) return 'off';
+      return `${s.shaftExtMm} mm × ${nz(s.shaftExtSides, '2')}`;
+    }
+    case 'frame':
+      return s.frame === 'open' ? `open, ${nz(s.openAirSpeed, '0')} m/s` : 'housed';
+    default:
+      return null;
+  }
+}
+
+/**
+ * A cooling block built from the SETTINGS alone, for a machine nothing has been
+ * solved for yet.
+ *
+ * Every watt is 0 and every share is therefore absent — this is not a result
+ * and must never be mistaken for one — but the modes are the real ones, so the
+ * picture shows which surfaces are open and lets them be set before the first
+ * Solve rather than after it.  `heat_budget` is deliberately absent: a budget
+ * with no numbers in it is what a reader would quote.
+ */
+export function coolingFromSettings(s: CoolingSettings): Dict {
+  const robot = s.coolMode === 'robotics';
+  const ef = robot && s.endFaces !== 'none' ? 'still' : 'off';
+  const sides = ef === 'still' ? (Number(s.endFaceSides) === 1 ? 1 : 2) : 0;
+  const face = { mode: ef, heat_removed_W: 0 };
+  return {
+    outer: { mode: s.coolMode, heat_removed_W: 0 },
+    inner: { mode: s.boreMode, heat_removed_W: 0 },
+    mount: { mode: Number(s.mountG) > 0 ? 'conduction' : 'off', heat_removed_W: 0 },
+    end_faces: {
+      mode: ef, sides, heat_removed_W: 0,
+      winding: face, stator: face, rotor: face, magnet: face,
+    },
+    shaft_ends: {
+      mode: Number(s.shaftExtMm) > 0 ? 'still' : 'off', heat_removed_W: 0,
+      length_each_side_mm: Number(s.shaftExtMm) || 0,
+      sides: Number(s.shaftExtSides) === 1 ? 1 : 2,
+    },
+    end_windings: { mode: s.frame === 'open' ? 'air' : 'housed', heat_removed_W: 0 },
+    slot_channels: { mode: s.frame === 'open' ? 'air' : 'housed', heat_removed_W: 0 },
+  };
 }
 
 /** The one-line hover behind the billboard: the film or the conductance, the

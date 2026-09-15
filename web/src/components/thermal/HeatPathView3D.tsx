@@ -15,10 +15,21 @@
  * blocked (WDAC) exactly as it does on one whose is not.
  *
  * Each cooled surface is tinted by its SHARE of the removed heat and carries an
- * arrow whose length follows the same number, plus one label: "mount 48.5 W ·
- * 86 %".  A path that is off is drawn grey and says so by name — "nothing
- * sticks out of this housing" is an answer about the machine, and a blank
- * surface would read as a measurement of zero.
+ * arrow whose length follows the same number, plus one label: "mount 2 W/K @
+ * 40 °C · 48.5 W · 86 %" — what the surface is SET to, and what that bought.  A
+ * path that is off is drawn grey and says so by name — "nothing sticks out of
+ * this housing" is an answer about the machine, and a blank surface would read
+ * as a measurement of zero.
+ *
+ * …AND IT IS WHERE THE VALUES ARE SET (user, 2026-09-15: *"дай возможность
+ * задавать значения прямо в нём — так намного удобнее, и определи его в это
+ * окно, где всё и задаётся"*).  Clicking a surface opens a small popover
+ * anchored to it with exactly the fields that surface owns — ε and the room on
+ * the housing, W/K and the mount temperature on the flange, open/closed and how
+ * many ends on the end faces, the mode in the bore, millimetres on the shaft
+ * stubs — and every one of them writes the SAME `thermalStore` field the
+ * panel's own text box writes.  There is one state, so the panel and the model
+ * cannot disagree, and neither of them solves: `Solve` stays the one button.
  *
  * DEMAND-MODE RENDERING, like every other canvas in this app: `frameloop
  * ="demand"` plus `guardCanvas` (which redraws after a WebGL context restore —
@@ -30,7 +41,7 @@
  * Units are millimetres, the cross-section is in XY and the stack runs along
  * +Z — the same convention as the 3-D tab.
  */
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
 import { Html, OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
@@ -40,9 +51,12 @@ import { guardCanvas } from '../viewer3d/webglGuard';
 import { PART_COLORS } from '../../lib/partColors';
 import { TIP_PROPS } from './HelpTip';
 import {
-  buildHeatPathModel, fmtW, sinkColour, sinkLabel, sinkTooltip,
+  buildHeatPathModel, coolingFromSettings, editorFor, fmtW, settingLabel,
+  sinkColour, sinkLabel, sinkTooltip,
 } from './heatPaths';
-import type { HeatPathModel, HeatSink, MachineEnvelope } from './heatPaths';
+import type {
+  CoolingSettings, HeatPathModel, HeatSink, MachineEnvelope, SinkEditor, SinkId,
+} from './heatPaths';
 
 const lbl = { fontSize: 11, color: 'var(--text-3)' } as const;
 
@@ -150,20 +164,21 @@ interface Overlay {
 const EPS = 0.35;   // mm — lift a tint off the solid it sits on, so it shows
 
 function overlaysOf(model: HeatPathModel, thetaStart: number,
-                    thetaLength: number): Overlay[] {
+                    thetaLength: number, fanIds: SinkId[] = []): Overlay[] {
   const g = model.geometry;
   const half = (g.stack_length_mm ?? 0) / 2;
   const out: Overlay[] = [];
-  // EACH SINK GETS ITS OWN AZIMUTH for the arrow and the label, fanned across
-  // the drawn sector.  The tint still covers the whole surface — it is the
-  // surface that is cooled — but six billboards anchored on the same meridian
-  // land on top of each other and the picture becomes unreadable, which is the
-  // one thing this view exists to avoid.
-  const shown = model.sinks.filter((s) => s.active);
+  // EACH LABELLED SINK GETS ITS OWN AZIMUTH for the arrow and the label, fanned
+  // across the drawn sector.  The tint still covers the whole surface — it is
+  // the surface that is cooled — but six billboards anchored on the same
+  // meridian land on top of each other and the picture becomes unreadable,
+  // which is the one thing this view exists to avoid.  `fanIds` is the list the
+  // caller will actually label, so a machine with NOTHING solved (every sink at
+  // 0 W) fans its settings rather than stacking them all on one meridian.
   const angleOf = (id: string): number => {
-    const i = shown.findIndex((s) => s.id === id);
-    if (i < 0 || shown.length === 0) return thetaStart + thetaLength / 2;
-    return thetaStart + thetaLength * (i + 0.5) / shown.length;
+    const i = fanIds.indexOf(id as SinkId);
+    if (i < 0 || fanIds.length === 0) return thetaStart + thetaLength / 2;
+    return thetaStart + thetaLength * (i + 0.5) / fanIds.length;
   };
   for (const s of model.sinks) {
     const p = s.placement;
@@ -284,8 +299,169 @@ const Arrow: React.FC<{ at: THREE.Vector3; dir: THREE.Vector3; len: number;
   );
 };
 
-const Scene: React.FC<{ model: HeatPathModel; cut: boolean; labels: boolean }> =
-({ model, cut, labels }) => {
+/* ── the popovers: the same fields the panel has, on the surface they set ─── */
+
+const FIELD: React.CSSProperties = {
+  background: '#0c1118', color: '#e6edf5', border: '1px solid #33435a',
+  borderRadius: 3, fontSize: 11, fontFamily: 'monospace', padding: '2px 4px',
+  width: 70,
+};
+const CAP: React.CSSProperties = { fontSize: 10, color: '#9fb0c4' };
+
+const Num: React.FC<{ cap: string; value: string; hint: string; width?: number;
+                      step?: number; onChange: (v: string) => void }> =
+({ cap, value, hint, width, step, onChange }) => (
+  <label title={hint} style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'help' }}>
+    <span style={CAP}>{cap}</span>
+    <input type="number" value={value} step={step ?? 'any'}
+           onChange={(e) => onChange(e.target.value)}
+           style={{ ...FIELD, width: width ?? FIELD.width }} />
+  </label>
+);
+
+const Sel: React.FC<{ cap: string; value: string; hint: string;
+                      opts: [string, string][]; onChange: (v: string) => void }> =
+({ cap, value, hint, opts, onChange }) => (
+  <label title={hint} style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'help' }}>
+    <span style={CAP}>{cap}</span>
+    <select value={value} onChange={(e) => onChange(e.target.value)}
+            style={{ ...FIELD, width: 'auto' }}>
+      {opts.map(([v, t]) => <option key={v} value={v}>{t}</option>)}
+    </select>
+  </label>
+);
+
+/**
+ * What one surface owns, as the panel owns it.
+ *
+ * EVERY field here writes a `thermalStore` key through the same `set` the
+ * panel's own text box calls — there is no second copy of the state, so a value
+ * typed on the model is on the panel before the popover closes and vice versa.
+ * And nothing here solves: a cooling edit has never re-run the map in this tab,
+ * and making the 3-D the one place that did would be the silent state mutation
+ * this project forbids.
+ */
+const SinkEditorCard: React.FC<{
+  editor: SinkEditor; sink: HeatSink; s: CoolingSettings;
+  onChange: (k: keyof CoolingSettings, v: string) => void; onClose: () => void;
+}> = ({ editor, sink, s, onChange, onClose }) => {
+  const rows: React.ReactNode[] = [];
+  if (editor === 'housing') {
+    if (s.coolMode === 'robotics') {
+      rows.push(<Num key="e" cap="ε" value={s.emissivity} step={0.05} width={58}
+                     hint="Total hemispherical emissivity of the housing, 0…1. On a small machine in still air RADIATION carries more than convection, so this decides over half of what the housing loses. 0.9 is anodised / painted / oxidised metal; 0.2 bare machined aluminium; 0.05 polished."
+                     onChange={(v) => onChange('emissivity', v)} />);
+    } else if (s.coolMode === 'air') {
+      rows.push(<Num key="v" cap="m/s" value={s.airSpeed} width={58}
+                     hint="Blow speed over the housing, m/s. Still air is not zero cooling — it is natural convection, about 7 W/m²K."
+                     onChange={(v) => onChange('airSpeed', v)} />);
+    } else if (s.coolMode === 'liquid') {
+      rows.push(<Num key="q" cap="L/min" value={s.flowLpm} width={58}
+                     hint="Coolant flow through the jacket, litres per minute."
+                     onChange={(v) => onChange('flowLpm', v)} />);
+      rows.push(<Num key="ti" cap="in °C" value={s.tIn} width={58}
+                     hint="Coolant inlet temperature, °C."
+                     onChange={(v) => onChange('tIn', v)} />);
+    } else if (s.coolMode === 'manual') {
+      rows.push(<Num key="h" cap="h" value={s.hConv} width={68}
+                     hint="The film coefficient you are imposing on the housing, W/m²K."
+                     onChange={(v) => onChange('hConv', v)} />);
+    }
+    if (s.coolMode !== 'liquid') {
+      rows.push(<Num key="a" cap={s.coolMode === 'robotics' ? 'room °C' : 'air °C'}
+                     value={s.ambientT} width={58}
+                     hint="The temperature this surface works against — the ROOM in the robotics mode. It is also the sink the end faces, the bore and the mount fall back to."
+                     onChange={(v) => onChange('ambientT', v)} />);
+    }
+  } else if (editor === 'mount') {
+    rows.push(<Num key="g" cap="W/K" value={s.mountG} width={62}
+                   hint="The bolted flange's contact conductance to the arm, W/K — the path a joint in still air actually loses its heat through. 0 means bolted to nothing. The shipped 2 W/K is an ASSUMPTION until this joint is measured."
+                   onChange={(v) => onChange('mountG', v)} />);
+    rows.push(<Num key="t" cap="mount °C" value={s.mountT} width={62}
+                   hint="The temperature the mount is HELD at, °C. BLANK means the ambient above — leave it blank unless the arm is at a temperature of its own."
+                   onChange={(v) => onChange('mountT', v)} />);
+  } else if (editor === 'end_faces') {
+    rows.push(<Sel key="m" cap="ends" value={s.endFaces === 'none' ? 'none' : 'still'}
+                   hint="Whether the machine's AXIAL faces are exposed. 'Open' puts the end turns, the core end annuli and the magnet ends in the room — on a Ø85 joint the end turns alone are a larger area than the whole housing cylinder. 'Closed' is a machine with end plates."
+                   opts={[['still', 'open'], ['none', 'closed']]}
+                   onChange={(v) => onChange('endFaces', v)} />);
+    if (s.endFaces !== 'none') {
+      rows.push(<Sel key="n" cap="sides" value={String(Number(s.endFaceSides) === 1 ? 1 : 2)}
+                     hint="How many ends are open — 1 when the machine is bolted flat on one face, 2 when both ends see the room."
+                     opts={[['2', '2'], ['1', '1']]}
+                     onChange={(v) => onChange('endFaceSides', v)} />);
+    }
+  } else if (editor === 'bore') {
+    rows.push(<Sel key="m" cap="bore" value={s.boreMode}
+                   hint="The rotor's inner diameter. Cooling it is the only path that reaches the magnets WITHOUT crossing the air gap. 'Closed' is adiabatic — all the rotor heat crosses the gap."
+                   opts={[['none', 'closed'], ['still', 'still air'], ['air', 'air'], ['liquid', 'liquid']]}
+                   onChange={(v) => onChange('boreMode', v)} />);
+    if (s.boreMode === 'air') {
+      rows.push(<Num key="v" cap="m/s" value={s.boreAirSpeed} width={58}
+                     hint="Air speed through the bore, m/s, at the ambient above — it is the same air."
+                     onChange={(v) => onChange('boreAirSpeed', v)} />);
+    }
+    if (s.boreMode === 'liquid') {
+      rows.push(<Num key="q" cap="L/min" value={s.boreFlowLpm} width={58}
+                     hint="Bore pump, litres per minute — required and greater than zero."
+                     onChange={(v) => onChange('boreFlowLpm', v)} />);
+    }
+  } else if (editor === 'shaft_ends') {
+    rows.push(<Num key="l" cap="mm/side" value={s.shaftExtMm} width={62}
+                   hint="How much shaft sticks out of the housing on EACH side, in mm — 0 turns this path off. Modelled as a FIN, not a wetted area: past about 2.5 decay lengths another millimetre removes nothing."
+                   onChange={(v) => onChange('shaftExtMm', v)} />);
+    rows.push(<Sel key="n" cap="sides" value={String(Number(s.shaftExtSides) === 1 ? 1 : 2)}
+                   hint="How many shaft ends come out of the housing — the same fin, once or twice."
+                   opts={[['2', '2'], ['1', '1']]}
+                   onChange={(v) => onChange('shaftExtSides', v)} />);
+  } else if (editor === 'frame') {
+    rows.push(<Sel key="f" cap="frame" value={s.frame}
+                   hint="How the machine is BUILT — which decides whether its end turns and slot air are cooled at all. Housed: they are inside a closed housing and there is no extra path. Open: the end turns and the axial channels sit in the airflow."
+                   opts={[['housed', 'housed'], ['open', 'open']]}
+                   onChange={(v) => onChange('frame', v)} />);
+    if (s.frame === 'open') {
+      rows.push(<Num key="v" cap="m/s" value={s.openAirSpeed} width={58}
+                     hint="Air over the end turns and through the slot channels, m/s. 0 means the same air that is blowing on the housing."
+                     onChange={(v) => onChange('openAirSpeed', v)} />);
+    }
+  }
+  return (
+    <div style={{
+      background: 'rgba(12,17,24,0.96)', border: `1px solid ${sinkColour(sink)}`,
+      borderRadius: 5, padding: '5px 7px', display: 'flex', flexDirection: 'column',
+      gap: 4, boxShadow: '0 6px 18px rgba(0,0,0,0.55)', minWidth: 130,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ fontSize: 10.5, color: '#e6edf5', fontWeight: 600 }}>
+          {sink.short}
+        </span>
+        <span style={{ flex: 1 }} />
+        <button type="button" onClick={onClose} title="Close (Esc)"
+                style={{ background: 'none', border: 'none', color: '#9fb0c4',
+                         cursor: 'pointer', fontSize: 12, lineHeight: 1, padding: 0 }}>
+          ×
+        </button>
+      </div>
+      {rows}
+      <div style={{ ...CAP, maxWidth: 210 }} title={sinkTooltip(sink)}>
+        {sinkLabel(sink)} — nothing solves until you press Solve
+      </div>
+    </div>
+  );
+};
+
+interface SceneProps {
+  model: HeatPathModel; cut: boolean; labels: boolean;
+  settings: CoolingSettings | null;
+  selected: SinkId | null;
+  hovered: SinkId | null;
+  onSelect: (id: SinkId | null) => void;
+  onHover: (id: SinkId | null) => void;
+  onChange: (k: keyof CoolingSettings, v: string) => void;
+}
+
+const Scene: React.FC<SceneProps> =
+({ model, cut, labels, settings, selected, hovered, onSelect, onHover, onChange }) => {
   const g = model.geometry;
   const thetaStart = cut ? Math.PI * 0.25 : 0;
   const thetaLength = cut ? Math.PI * 1.5 : Math.PI * 2;
@@ -293,9 +469,30 @@ const Scene: React.FC<{ model: HeatPathModel; cut: boolean; labels: boolean }> =
   const partGeos = useMemo(
     () => parts.map((p) => ringSolid(p.rIn, p.rOut, p.len, thetaStart, thetaLength)),
     [parts, thetaStart, thetaLength]);
+  /* WHICH SINKS GET A BILLBOARD.  Everything that carries watts, plus — when
+     the settings are in hand — one per SETTING for the paths that carry none:
+     four end-face labels all saying "closed" is four times the clutter for one
+     switch, and the switch is what the user came here for.  The list is also
+     what the azimuths are fanned across, so the labels never stack. */
+  const labelIds = useMemo<SinkId[]>(() => {
+    const out: SinkId[] = [];
+    const seenEditor = new Set<string>();
+    for (const s of model.sinks) {
+      if (s.active) { out.push(s.id); seenEditor.add(String(editorFor(s.id))); }
+    }
+    if (settings) {
+      for (const s of model.sinks) {
+        const ed = editorFor(s.id);
+        if (!ed || s.active || seenEditor.has(ed)) continue;
+        seenEditor.add(ed);
+        out.push(s.id);
+      }
+    }
+    return out;
+  }, [model, settings]);
   const overlays = useMemo(
-    () => overlaysOf(model, thetaStart, thetaLength),
-    [model, thetaStart, thetaLength]);
+    () => overlaysOf(model, thetaStart, thetaLength, labelIds),
+    [model, thetaStart, thetaLength, labelIds]);
 
   useEffect(() => () => {
     partGeos.forEach((x) => x.dispose());
@@ -324,43 +521,92 @@ const Scene: React.FC<{ model: HeatPathModel; cut: boolean; labels: boolean }> =
             transparent={p.opacity < 1} opacity={p.opacity} />
         </mesh>
       ))}
-      {overlays.map((o, i) => (
-        <mesh key={`${o.sink.id}-${i}`} geometry={o.geo}>
-          <meshBasicMaterial
-            color={sinkColour(o.sink)} transparent
-            opacity={o.sink.active ? 0.55 + 0.35 * o.sink.intensity : 0.22}
-            side={THREE.DoubleSide} depthWrite={false} />
-        </mesh>
+      {/* THE COOLED SURFACES — tinted, and each of them a control.  The
+          pointer events stop propagating so a click lands on the surface it
+          was aimed at and not on the one behind it. */}
+      {overlays.map((o, i) => {
+        const on = o.sink.id === selected;
+        const hot = o.sink.id === hovered;
+        const editable = editorFor(o.sink.id) !== null && !!settings;
+        return (
+          <mesh key={`${o.sink.id}-${i}`} geometry={o.geo}
+                onPointerOver={editable ? (e) => { e.stopPropagation(); onHover(o.sink.id); } : undefined}
+                onPointerOut={editable ? () => onHover(null) : undefined}
+                onClick={editable ? (e) => {
+                  e.stopPropagation();
+                  onSelect(on ? null : o.sink.id);
+                } : undefined}>
+            <meshBasicMaterial
+              color={sinkColour(o.sink)} transparent
+              opacity={(o.sink.active ? 0.55 + 0.35 * o.sink.intensity : 0.22)
+                       + (on ? 0.3 : hot ? 0.18 : 0)}
+              side={THREE.DoubleSide} depthWrite={false} />
+          </mesh>
+        );
+      })}
+      {/* The SELECTED surface, outlined: a tint alone is ambiguous on a
+          surface that is already saturated (the mount at 86 %). */}
+      {overlays.filter((o) => o.sink.id === selected).map((o, i) => (
+        <lineSegments key={`s-${o.sink.id}-${i}`}>
+          <edgesGeometry args={[o.geo]} />
+          <lineBasicMaterial color="#ffffff" transparent opacity={0.9} />
+        </lineSegments>
       ))}
       {overlays.filter((o) => o.sink.active).map((o, i) => (
         <Arrow key={`a-${o.sink.id}-${i}`} at={o.at} dir={o.dir}
                len={arrowLen(o.sink)} colour={sinkColour(o.sink)} />
       ))}
-      {labels && overlays.filter((o) => o.sink.active)
+      {labels && overlays
         // ONE label per sink, on its first surface: two identical billboards on
         // the two ends of the machine say nothing the one does not.
+        .filter((o) => labelIds.includes(o.sink.id))
         .filter((o, i, all) => all.findIndex((x) => x.sink.id === o.sink.id) === i)
         .map((o, i) => (
           <Html key={`l-${o.sink.id}`} zIndexRange={[20, 0]} center
                 position={o.at.clone().addScaledVector(
-                  o.dir.clone().normalize(), arrowLen(o.sink) * 1.35)}>
-            <div title={sinkTooltip(o.sink)}
+                  o.dir.clone().normalize(), arrowLen(o.sink) * 1.6)}>
+            <div title={`${sinkTooltip(o.sink)} Click the surface to set it.`}
+                 onClick={() => onSelect(o.sink.id === selected ? null : o.sink.id)}
+                 onMouseEnter={() => onHover(o.sink.id)}
+                 onMouseLeave={() => onHover(null)}
                  style={{
                    fontFamily: 'monospace', fontSize: 10.5, whiteSpace: 'nowrap',
-                   padding: '1px 5px', borderRadius: 3, cursor: 'help',
-                   background: 'rgba(15,20,28,0.82)', color: '#e6edf5',
+                   padding: '1px 5px', borderRadius: 3,
+                   cursor: settings ? 'pointer' : 'help',
+                   background: 'rgba(15,20,28,0.82)',
+                   color: o.sink.active ? '#e6edf5' : '#9fb0c4',
                    border: `1px solid ${sinkColour(o.sink)}`,
+                   outline: o.sink.id === selected ? '1px solid #ffffff' : 'none',
                    // Fanning the anchors by azimuth separates most of them; two
                    // paths that leave the SAME end at neighbouring angles still
                    // project within a line of each other, so the billboards are
                    // staggered in screen space as well.  Purely cosmetic: the
                    // arrow, not the label, says where the surface is.
-                   transform: `translateY(${(i % 3) * 15 - 15}px)`,
+                   transform: `translateY(${(i % 4) * 19 - 28}px)`,
                  }}>
-              {sinkLabel(o.sink)}
+              {sinkLabel(o.sink, settingLabel(o.sink.id, settings))}
             </div>
           </Html>
         ))}
+      {/* THE POPOVER — one at a time, anchored to its own surface.  One at a
+          time is not a simplification: two cards on neighbouring end faces
+          overlap each other and the machine, and a control you cannot read is
+          worse than one more click. */}
+      {selected && settings && (() => {
+        const o = overlays.find((x) => x.sink.id === selected);
+        const editor = editorFor(selected);
+        if (!o || !editor) return null;
+        return (
+          <Html key={`p-${selected}`} zIndexRange={[60, 40]} center
+                position={o.at.clone().addScaledVector(
+                  o.dir.clone().normalize(), arrowLen(o.sink) * 1.6)}>
+            <div style={{ transform: 'translateY(26px)' }}>
+              <SinkEditorCard editor={editor} sink={o.sink} s={settings}
+                              onChange={onChange} onClose={() => onSelect(null)} />
+            </div>
+          </Html>
+        );
+      })()}
       <OrbitControls makeDefault enablePan enableDamping={false} target={[0, 0, 0]} />
       {/* The camera is r3f's OWN, aimed here — not a `<PerspectiveCamera
           makeDefault>`.  A drei camera swaps the default one after the first
@@ -371,7 +617,9 @@ const Scene: React.FC<{ model: HeatPathModel; cut: boolean; labels: boolean }> =
           calling `invalidate` is one code path, and it works on the first
           mount as well as on a machine that changes size. */}
       <Fit radiusMm={R} />
-      <Invalidator dep={`${model.schema_version}:${model.totals.removed_W}:${cut}:${labels}`} />
+      <Invalidator dep={`${model.schema_version}:${model.totals.removed_W}:${cut}:${labels}`
+                        + `:${selected ?? ''}:${hovered ?? ''}`
+                        + `:${settings ? JSON.stringify(settings) : ''}`} />
     </>
   );
 };
@@ -379,40 +627,78 @@ const Scene: React.FC<{ model: HeatPathModel; cut: boolean; labels: boolean }> =
 /* ── the panel ───────────────────────────────────────────────────────────── */
 
 export interface HeatPathView3DProps {
-  /** the thermal result — `/api/thermal/field`'s payload, or a stored record */
+  /** the thermal result — `/api/thermal/field`'s payload, or a stored record.
+   *  `null` is legal: the machine is then drawn from the SETTINGS alone, with
+   *  no watts, so the surfaces can be set before the first Solve. */
   res: unknown;
   /** the live geometry, as the API serves it (`motorStore.geometry`) */
   geometry: Record<string, unknown> | null | undefined;
   /** 'result is for a previous geometry' — shown, never hidden */
   staleNote?: string | null;
+  /** the panel's OWN cooling fields (`thermalStore`).  Omitted = read-only. */
+  settings?: CoolingSettings | null;
+  /** writes one of them — the panel passes `thermalStore.set` straight in, so
+   *  a value set on the model and a value typed in the panel are one edit. */
+  onChange?: (k: keyof CoolingSettings, v: string) => void;
 }
 
-const HeatPathView3D: React.FC<HeatPathView3DProps> = ({ res, geometry, staleNote }) => {
+const HeatPathView3D: React.FC<HeatPathView3DProps> = ({
+  res, geometry, staleNote, settings, onChange,
+}) => {
   const [cut, setCut] = useState(true);
   const [labels, setLabels] = useState(true);
+  const [selected, setSelected] = useState<SinkId | null>(null);
+  const [hovered, setHovered] = useState<SinkId | null>(null);
   const wrap = useRef<HTMLDivElement>(null);
 
-  const model = useMemo(
-    () => buildHeatPathModel(res as Record<string, unknown> | null, geometry ?? null),
-    [res, geometry]);
+  const editable = !!settings && !!onChange;
+  const set = useCallback((k: keyof CoolingSettings, v: string) => {
+    onChange?.(k, v);
+  }, [onChange]);
+
+  // ESC closes the popover — the same key that closes every other transient
+  // thing in this app.  Click-outside is `onPointerMissed` on the canvas.
+  useEffect(() => {
+    if (!selected) return undefined;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setSelected(null); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selected]);
+
+  const model = useMemo(() => {
+    const direct = buildHeatPathModel(res as Record<string, unknown> | null,
+                                      geometry ?? null);
+    if (direct.ok || !settings) return direct;
+    // NOTHING SOLVED YET — draw the machine from the settings, with no watts.
+    // This is not a result and never reads as one: every share is absent and
+    // every label is the SETTING, which is exactly what there is to look at
+    // before the first Solve.
+    return buildHeatPathModel({ cooling: coolingFromSettings(settings) },
+                              geometry ?? null);
+  }, [res, geometry, settings]);
 
   if (!model.ok) return null;
   const drawable = model.geometry.known;
   const t = model.totals;
   const active = model.sinks.filter((s) => s.active);
+  const solved = active.length > 0 && Math.abs(t.removed_W) > 1e-9;
 
   return (
-    <Paper sx={{ p: 1.25, bgcolor: 'var(--panel)' }}>
+    <Paper variant="outlined"
+           sx={{ p: 1, mt: 1, bgcolor: 'var(--panel-2, #0e1319)',
+                 borderColor: 'var(--text-4)' }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap', mb: 0.75 }}>
         <Typography sx={{ ...lbl, color: 'var(--text-2)', fontWeight: 600 }}>
           Heat paths
         </Typography>
         {/* One short line, the rest in the tooltip — the project's rule. */}
-        <Tooltip {...TIP_PROPS} title={`Every watt that left the model, on the surface it left through. The colour and the arrow follow the share of the BIGGEST path (here ${active[0]?.short ?? '—'}), not of the total — on a joint whose mount takes 86 % a share scale would make every other path invisible. Shares are of what LEFT, so they add to 100 % whatever the closure error is; the residual is the line on the right. Off paths are grey and named: "nothing sticks out of this housing" is an answer about the machine, not a missing number.`}>
+        <Tooltip {...TIP_PROPS} title={`${editable ? 'Click a surface to set what it is — ε and the room on the housing, W/K and its temperature on the mount, open/closed on the end faces, the mode in the bore, millimetres on the shaft ends. Every field writes the same setting as the boxes above, and nothing here solves: press Solve when you are done. ' : ''}${solved ? `Each surface also carries what LEFT through it on the last solve. The colour and the arrow follow the share of the BIGGEST path (here ${active[0]?.short ?? '—'}), not of the total — on a joint whose mount takes 86 % a share scale would make every other path invisible. Shares are of what left, so they add to 100 % whatever the closure error is; the residual is on the line above. ` : 'Nothing has been solved for this machine yet, so there are no watts on it — the labels are the settings. '}Off paths are grey and named: "nothing sticks out of this housing" is an answer about the machine, not a missing number.`}>
           <Typography sx={{ ...lbl, cursor: 'help', fontFamily: 'monospace',
                             borderBottom: '1px dotted var(--text-4)' }}>
-            in {fmtW(t.generated_W)} · out {fmtW(t.removed_W)} · residual {fmtW(t.residual_W)}
-            {t.residual_pct !== null ? ` (${t.residual_pct} %)` : ''}
+            {solved
+              ? <>in {fmtW(t.generated_W)} · out {fmtW(t.removed_W)} · residual {fmtW(t.residual_W)}
+                {t.residual_pct !== null ? ` (${t.residual_pct} %)` : ''}</>
+              : <>not solved yet — labels show the settings{editable ? '; click a surface to set it' : ''}</>}
           </Typography>
         </Tooltip>
         <Box sx={{ flex: 1 }} />
@@ -439,32 +725,49 @@ const HeatPathView3D: React.FC<HeatPathView3DProps> = ({ res, geometry, staleNot
           no geometry loaded — the watts are in the legend below
         </Typography>
       ) : (
-        <Box ref={wrap} sx={{ height: 420, position: 'relative',
-                              bgcolor: 'var(--panel-2, #0e1319)', borderRadius: 1 }}>
+        <Box ref={wrap} sx={{ height: 430, position: 'relative', borderRadius: 1,
+                              bgcolor: 'var(--panel, #141a22)',
+                              cursor: hovered ? 'pointer' : 'default' }}>
           <Canvas frameloop="demand" dpr={[1, 2]}
-                  onCreated={guardCanvas('thermal heat-path view')}>
-            <Scene model={model} cut={cut} labels={labels} />
+                  onCreated={guardCanvas('thermal heat-path view')}
+                  onPointerMissed={() => setSelected(null)}>
+            <Scene model={model} cut={cut} labels={labels}
+                   settings={editable ? settings ?? null : null}
+                   selected={selected} hovered={hovered}
+                   onSelect={setSelected} onHover={setHovered} onChange={set} />
           </Canvas>
         </Box>
       )}
 
-      {/* ── the legend: every path, off ones included ─────────────────────── */}
+      {/* ── the legend: every path, off ones included.  A row is the same
+             control as its surface, for a path the section has turned away. */}
       <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: '2px 14px', mt: 0.75 }}>
-        {model.sinks.map((s) => (
-          <Tooltip key={s.id} {...TIP_PROPS} title={sinkTooltip(s)}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, cursor: 'help' }}>
-              <Box sx={{ width: 9, height: 9, borderRadius: '2px',
-                         bgcolor: sinkColour(s), opacity: s.active ? 1 : 0.5 }} />
-              <Typography sx={{ ...lbl, fontFamily: 'monospace',
-                                opacity: s.active ? 1 : 0.55 }}>
-                {sinkLabel(s)}
-              </Typography>
-            </Box>
-          </Tooltip>
-        ))}
+        {model.sinks.map((s) => {
+          const canEdit = editable && editorFor(s.id) !== null;
+          return (
+            <Tooltip key={s.id} {...TIP_PROPS}
+                     title={`${sinkTooltip(s)}${canEdit ? ' Click to set it.' : ''}`}>
+              <Box onClick={canEdit ? () => setSelected(s.id === selected ? null : s.id) : undefined}
+                   onMouseEnter={canEdit ? () => setHovered(s.id) : undefined}
+                   onMouseLeave={canEdit ? () => setHovered(null) : undefined}
+                   sx={{ display: 'flex', alignItems: 'center', gap: 0.5,
+                         cursor: canEdit ? 'pointer' : 'help',
+                         textDecoration: s.id === selected ? 'underline' : 'none' }}>
+                <Box sx={{ width: 9, height: 9, borderRadius: '2px',
+                           bgcolor: sinkColour(s), opacity: s.active ? 1 : 0.5 }} />
+                <Typography sx={{ ...lbl, fontFamily: 'monospace',
+                                  opacity: s.active ? 1 : 0.55 }}>
+                  {sinkLabel(s, settingLabel(s.id, editable ? settings : null))}
+                </Typography>
+              </Box>
+            </Tooltip>
+          );
+        })}
       </Box>
       <Typography sx={{ ...lbl, mt: 0.5, fontFamily: 'monospace' }}>
-        stator side {t.stator_side_pct ?? '—'} % · rotor side {t.rotor_side_pct ?? '—'} %
+        {solved
+          ? `stator side ${t.stator_side_pct ?? '—'} % · rotor side ${t.rotor_side_pct ?? '—'} %`
+          : 'no watts yet — Solve'}
         {model.geometry.end_winding_overhang_mm
           ? ` · end turns ${model.geometry.end_winding_overhang_mm} mm proud each side (k_end ${model.geometry.k_end})`
           : ''}

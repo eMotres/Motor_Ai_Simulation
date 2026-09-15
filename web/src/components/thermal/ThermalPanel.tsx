@@ -1117,6 +1117,27 @@ const ThermalPanel: React.FC = () => {
           )}
         </Box>
 
+        {/* ── the same cooling, ON THE MACHINE ───────────────────────────
+            User 2026-09-15: "лучше нарисовать 3D модель с катушками (end
+            windings) и на ней прямо показывать, куда и сколько тепла может
+            отводиться … дай возможность задавать значения прямо в нём — так
+            намного удобнее, и определи его в это окно, где всё и задаётся".
+            So it lives HERE, under the fields it duplicates, and not in a
+            section of its own further down: it is an alternative way to set
+            the same `thermalStore` values — one state, two faces — plus what
+            the last solve got out of each surface.  It never solves.  All the
+            logic is in HeatPathView3D / heatPaths; this is the mount. */}
+        <HeatPathView3D
+          res={res} geometry={liveGeometry} staleNote={staleNote}
+          settings={{
+            coolMode, ambientT, airSpeed, fluid, tIn, hConv, flowLpm,
+            boreMode, boreAirSpeed, boreTIn, boreFlowLpm,
+            shaftExtMm, shaftExtSides, frame, openAirSpeed,
+            emissivity, mountG, mountT, endFaces, endFaceSides,
+          }}
+          onChange={(k, v) => setField(k as Parameters<typeof setField>[0],
+                                       v as never)} />
+
         <Typography sx={{ ...lbl, mt: 0.75, display: 'block' }}>
           Solids only, steady state; the gap and the slot are effective conductivities; cooling acts on the outer surface, on the bore when set{Number(shaftExtMm) > 0 ? ', and down the exposed shaft ends' : ''}{frame === 'open' ? ', plus the end turns and the slot channels in the wash' : ''}.
           <Tooltip {...TIP_PROPS} title="Steady-state conduction (∇·k∇T + q = 0) over the solid cross-section. The air gap is not meshed — it is represented by an effective conductivity COMPUTED from the gap width and the rotor speed (turbulent Taylor–Couette: the rotating film carries far more than still air), and the in-slot bundle by a second one that stands for copper, enamel, impregnation and the liner together. The heat source is the electromagnetic loss density of the operating point set on the Electromagnetic tab, per material. The outlets are the two convection films you set above: one on the outer stator surface, one in the rotor bore — each an h against its own sink temperature, and for a liquid loop that sink follows from the coolant you pump through it. A third outlet appears when you give the shaft an exposed length: the stubs outside the housing, as a fin in ambient air, which is the ONE axial path modelled — the rotor's end faces and the end windings spin inside the closed housing and have nowhere else to send their heat. Steady state means no thermal mass and no duty cycle — this is the temperature after the machine has been at this point long enough to stop changing, which is the worst case for a continuous rating and optimistic for a short burst.">
@@ -1329,17 +1350,6 @@ const ThermalPanel: React.FC = () => {
               showFlux={showFlux} onShowFlux={(v) => setField('showFlux', v)}
               staleNote={staleNote} />
           </Paper>
-
-          {/* ── …and WHERE the heat left, on the machine itself ────────────
-              User 2026-09-15: "лучше нарисовать 3D модель с катушками (end
-              windings) и на ней прямо показывать, куда и сколько тепла может
-              отводиться".  The map above says how hot each part got; this says
-              which surface the watts left through, which is the question a
-              cooling design is actually changed on — and on a robot joint the
-              answer (89 % through four bolts) is a picture, not a row.  Built
-              from the payload this tab already has: no fetch, no mesh, no
-              STL. */}
-          <HeatPathView3D res={res} geometry={liveGeometry} staleNote={staleNote} />
         </>
       )}
 

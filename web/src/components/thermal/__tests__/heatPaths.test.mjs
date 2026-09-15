@@ -69,13 +69,65 @@ function fmtW(w) {
   return `${w.toFixed(2)} W`;
 }
 
-function sinkLabel(sink) {
-  if (!sink.active) return `${sink.short} — none`;
+function sinkLabel(sink, setting) {
+  const set = setting ? ` ${setting}` : '';
+  if (!sink.active) return `${sink.short}${set || ' — none'}`;
   const pct = sink.pct === null ? '' : ` · ${Math.round(sink.pct)} %`;
   const parts = sink.detail.length === 2
     ? ` (${sink.detail.map((p) => p.W.toFixed(sink.detail.some((q) => Math.abs(q.W) < 1) ? 2 : 1)).join(' + ')})`
     : '';
-  return `${sink.short} ${fmtW(sink.W)}${parts}${pct}`;
+  return `${sink.short}${set ? `${set} ·` : ''} ${fmtW(sink.W)}${parts}${pct}`;
+}
+
+function editorFor(id) {
+  switch (id) {
+    case 'housing': return 'housing';
+    case 'mount': return 'mount';
+    case 'end_face_winding': case 'end_face_stator':
+    case 'end_face_rotor': case 'end_face_magnet': return 'end_faces';
+    case 'bore': return 'bore';
+    case 'shaft_ends': return 'shaft_ends';
+    case 'end_windings': case 'slot_channels': return 'frame';
+    default: return null;
+  }
+}
+
+const nz = (s, def) => (s ?? '').trim() || def;
+
+function settingLabel(id, s) {
+  if (!s) return null;
+  const amb = nz(s.ambientT, '—');
+  switch (editorFor(id)) {
+    case 'housing':
+      if (s.coolMode === 'robotics') return `ε ${nz(s.emissivity, '0.9')} @ ${amb} °C`;
+      if (s.coolMode === 'air') return `${nz(s.airSpeed, '0')} m/s @ ${amb} °C`;
+      if (s.coolMode === 'liquid') return `${nz(s.flowLpm, '8')} L/min @ ${nz(s.tIn, amb)} °C`;
+      if (s.coolMode === 'manual') return `h ${nz(s.hConv, '—')} W/m²K`;
+      return 'no cooling';
+    case 'mount': {
+      const g = Number(s.mountG);
+      if (!(g > 0)) return 'off';
+      return `${s.mountG} W/K @ ${nz(s.mountT, amb)} °C`;
+    }
+    case 'end_faces':
+      if (s.coolMode !== 'robotics' || s.endFaces === 'none') return 'closed';
+      return `${nz(s.endFaceSides, '2')} end${nz(s.endFaceSides, '2') === '1' ? '' : 's'} open`;
+    case 'bore':
+      if (s.boreMode === 'none') return 'closed';
+      if (s.boreMode === 'still') return 'still air';
+      if (s.boreMode === 'air') return `${nz(s.boreAirSpeed, '0')} m/s`;
+      if (s.boreMode === 'liquid') return `${nz(s.boreFlowLpm, '0')} L/min`;
+      return null;
+    case 'shaft_ends': {
+      const mm = Number(s.shaftExtMm);
+      if (!(mm > 0)) return 'off';
+      return `${s.shaftExtMm} mm × ${nz(s.shaftExtSides, '2')}`;
+    }
+    case 'frame':
+      return s.frame === 'open' ? `open, ${nz(s.openAirSpeed, '0')} m/s` : 'housed';
+    default:
+      return null;
+  }
 }
 
 function sinkTooltip(sink) {
@@ -251,6 +303,97 @@ test('sinkTooltip: an OFF path explains itself instead of showing an empty row',
   const t = sinkTooltip(SHAFT_ENDS_OFF);
   assert.ok(t.includes('no such path'), t);
   assert.ok(t.includes('mode: off'), t);
+});
+
+/* ── the SETTING half of the billboard ───────────────────────────────────── */
+
+/** The Ø85 joint's own cooling fields, as thermalStore holds them (strings). */
+const L13_SETTINGS = {
+  coolMode: 'robotics', ambientT: '40', airSpeed: '0', hConv: '',
+  tIn: '', flowLpm: '8',
+  boreMode: 'still', boreAirSpeed: '0', boreTIn: '', boreFlowLpm: '',
+  shaftExtMm: '0', shaftExtSides: '2',
+  frame: 'housed', openAirSpeed: '0',
+  emissivity: '0.9', mountG: '2', mountT: '', endFaces: 'still', endFaceSides: '2',
+};
+
+test('settingLabel: the mount says its conductance AND its sink temperature', () => {
+  // mount_W = G · (T_stator − T_mount): both halves of it have to be on the
+  // label, or the number below cannot be checked against anything.
+  assert.equal(settingLabel('mount', L13_SETTINGS), '2 W/K @ 40 °C');
+});
+
+test('settingLabel: a BLANK mount temperature reads as the ambient, not as 0', () => {
+  // The panel's own rule — blank means "the room" — said out loud on the model.
+  // Number('') === 0 would put a 0 °C sink on a machine in a 40 °C room.
+  assert.equal(settingLabel('mount', { ...L13_SETTINGS, mountT: '' }), '2 W/K @ 40 °C');
+  assert.equal(settingLabel('mount', { ...L13_SETTINGS, mountT: '25' }), '2 W/K @ 25 °C');
+});
+
+test('settingLabel: a mount bolted to nothing says off, not 0 W/K', () => {
+  assert.equal(settingLabel('mount', { ...L13_SETTINGS, mountG: '0' }), 'off');
+  assert.equal(settingLabel('mount', { ...L13_SETTINGS, mountG: '' }), 'off');
+});
+
+test('settingLabel: the housing follows the cooling MODE', () => {
+  assert.equal(settingLabel('housing', L13_SETTINGS), 'ε 0.9 @ 40 °C');
+  assert.equal(settingLabel('housing', { ...L13_SETTINGS, coolMode: 'air', airSpeed: '12' }),
+               '12 m/s @ 40 °C');
+  assert.equal(settingLabel('housing', { ...L13_SETTINGS, coolMode: 'liquid', flowLpm: '10', tIn: '60' }),
+               '10 L/min @ 60 °C');
+  assert.equal(settingLabel('housing', { ...L13_SETTINGS, coolMode: 'none' }), 'no cooling');
+});
+
+test('settingLabel: end faces, bore and shaft ends', () => {
+  assert.equal(settingLabel('end_face_winding', L13_SETTINGS), '2 ends open');
+  assert.equal(settingLabel('end_face_stator', { ...L13_SETTINGS, endFaceSides: '1' }),
+               '1 end open');
+  assert.equal(settingLabel('end_face_rotor', { ...L13_SETTINGS, endFaces: 'none' }), 'closed');
+  // …and a machine that is not in the robotics mode has no end-face path at all
+  assert.equal(settingLabel('end_face_magnet', { ...L13_SETTINGS, coolMode: 'liquid' }), 'closed');
+  assert.equal(settingLabel('bore', L13_SETTINGS), 'still air');
+  assert.equal(settingLabel('bore', { ...L13_SETTINGS, boreMode: 'none' }), 'closed');
+  assert.equal(settingLabel('bore', { ...L13_SETTINGS, boreMode: 'air', boreAirSpeed: '30' }),
+               '30 m/s');
+  assert.equal(settingLabel('shaft_ends', L13_SETTINGS), 'off');
+  assert.equal(settingLabel('shaft_ends', { ...L13_SETTINGS, shaftExtMm: '20' }), '20 mm × 2');
+});
+
+test('settingLabel: no settings in hand is null, not a guess', () => {
+  for (const id of ['mount', 'housing', 'bore', 'shaft_ends', 'end_face_winding']) {
+    assert.equal(settingLabel(id, null), null);
+  }
+});
+
+test('editorFor: every drawn path opens the popover that owns its fields', () => {
+  assert.equal(editorFor('housing'), 'housing');
+  assert.equal(editorFor('mount'), 'mount');
+  assert.equal(editorFor('bore'), 'bore');
+  assert.equal(editorFor('shaft_ends'), 'shaft_ends');
+  assert.equal(editorFor('end_windings'), 'frame');
+  assert.equal(editorFor('slot_channels'), 'frame');
+  // all four axial faces are ONE setting — they are switched on together
+  for (const id of ['end_face_winding', 'end_face_stator', 'end_face_rotor',
+                    'end_face_magnet']) {
+    assert.equal(editorFor(id), 'end_faces');
+  }
+  assert.equal(editorFor('nonesuch'), null);
+});
+
+test('sinkLabel with a setting: what it is set to AND what that bought', () => {
+  // the shape the user asked for on 2026-09-15
+  assert.equal(sinkLabel(MOUNT, settingLabel('mount', L13_SETTINGS)),
+               'mount 2 W/K @ 40 °C · 48.5 W · 86 %');
+  assert.equal(sinkLabel(HOUSING, settingLabel('housing', L13_SETTINGS)),
+               'housing ε 0.9 @ 40 °C · 1.11 W (0.45 + 0.67) · 2 %');
+});
+
+test('sinkLabel: an OFF path with a setting names the setting, not "none"', () => {
+  // "shaft ends off" is a switch the user can flip here; "shaft ends — none"
+  // is what it says when there are no settings to flip.
+  assert.equal(sinkLabel(SHAFT_ENDS_OFF, settingLabel('shaft_ends', L13_SETTINGS)),
+               'shaft ends off');
+  assert.equal(sinkLabel(SHAFT_ENDS_OFF, null), 'shaft ends — none');
 });
 
 test('sinkTooltip never leaves a dangling separator', () => {

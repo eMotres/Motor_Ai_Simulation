@@ -68,13 +68,30 @@ SHARED_FILES = ("materials_library.yaml", "bearings_library.yaml",
 IDENTITY_FILES = ("users.json", ".auth_secret", ".sessions.json")
 
 #: The owner's own state.  Single files; ``.bak-*`` siblings ride along.
+#:
+#: The second block was added in the Stage 5 rehearsal (2026-09-15): all eight
+#: resolve through ``workspace.root()`` in the running code — the optimizer's
+#: cross-run accumulator and campaign slots (``optimization/surrogate._dataset_path``,
+#: ``optimization/doe._dataset_path``, ``routes/optimization._descent_store_path``,
+#: ``_scan_store_path``, ``_rate_path``), the Ld/Lq bench
+#: (``routes/simulation`` ``.bench_ldq.json``), the thermal loss maps
+#: (``routes/thermal._loss_maps_path``) and the 3D end-effect passports
+#: (``routes/catalog``/``routes/simulation`` ``end_effect_passports.json``) —
+#: so on the server they are looked for INSIDE the workspace and were silently
+#: left on the old box.  ``.opt_dataset.jsonl`` is 4 MB of accumulated FEM
+#: evaluations that the surrogate trains on: losing it is losing the learning,
+#: not a cache.
 WORKSPACE_FILES = ("motor_config.yaml", ".family_context.json",
                    ".duty_results.json", "motor_presets.json",
                    "motor_catalog.json", "saved_simulations.json",
                    "sweep_config.json",
                    ".last_transient.json", ".last_thermal.pkl",
                    ".last_mechanical.pkl", ".last_coupled.json",
-                   ".last_transient_field.pkl")
+                   ".last_transient_field.pkl",
+                   ".opt_dataset.jsonl", ".doe_dataset.jsonl",
+                   ".last_descent.json", ".last_scan.json",
+                   ".eval_rate.json", ".bench_ldq.json",
+                   ".thermal_loss_maps.pkl", "end_effect_passports.json")
 
 #: Whole directories that are the owner's.  ``.run_ledger`` is a cache but a
 #: WARM one — its keys already carry the geometry fingerprint and the material
@@ -196,8 +213,8 @@ def _bak_siblings(src: Path) -> List[Path]:
 def build_plan(cfg: Path, target: Path, owner: str,
                split_panel: bool = True) -> Tuple[Plan, dict]:
     plan = Plan()
-    stats = {"dies": 0, "configs": 0, "run_files": 0, "field_files": 0,
-             "workspaces": []}
+    stats = {"dies": 0, "configs": 0, "catalog_baks": 0, "run_files": 0,
+             "field_files": 0, "workspaces": []}
     shared = target / "shared"
     identity = target / "identity"
     published = target / "published"
@@ -211,10 +228,35 @@ def build_plan(cfg: Path, target: Path, owner: str,
     # ── shared: the libraries ────────────────────────────────────────────────
     for name in SHARED_FILES:
         plan.copy(cfg / name, shared / name)
+        for b in _bak_siblings(cfg / name):
+            plan.copy(b, shared / b.name)
     # The template preset set.  The owner's own copy goes to their workspace as
     # well (below): the shared one is the SEED a brand-new account opens, and
     # curating it down to a subset is an editorial act, not a migration.
     plan.copy(cfg / "motor_presets.json", shared / "motor_presets.json")
+
+    # ── the STARTER MACHINE ──────────────────────────────────────────────────
+    # Found by the Stage 5 rehearsal (2026-09-15): without these two files every
+    # account but the owner gets `500 Config file not found` on `/api/config`.
+    #
+    #   shared/motor_config.yaml    `workspace.ensure_layout` seeds a brand-new
+    #                               workspace from here and falls back to the
+    #                               process config; with neither present it
+    #                               logs nothing and seeds nothing, so the first
+    #                               request of every invited account 500s.
+    #   identity/motor_config.yaml  `MOTOR_AI_SIM_CONFIG` NAMES this file (it is
+    #                               pointed at identity/ so users.json, the
+    #                               secret and the sessions resolve there —
+    #                               deploy/README, "the identity trap").  It is
+    #                               also the PROCESS workspace, which is what an
+    #                               anonymous visitor and the boot-time viewer
+    #                               warm-up read.
+    #
+    # Both are the owner's live machine, which is the only working machine this
+    # box has; curating a neutral starter is an editorial act for later, and a
+    # machine that solves beats a 500 in the meantime.
+    plan.copy(cfg / "motor_config.yaml", shared / "motor_config.yaml")
+    plan.copy(cfg / "motor_config.yaml", identity / "motor_config.yaml")
 
     # ── shared: the die catalog, YAML only ───────────────────────────────────
     dies = cfg / "dies"
@@ -235,6 +277,18 @@ def build_plan(cfg: Path, target: Path, owner: str,
                 plan.copy(f, shared / "dies" / dd.name / f.name)
                 if f.name != "die.yaml":
                     stats["configs"] += 1
+            # ``L155 motor.yaml.bak-note-123335`` and its kind: the same bargain
+            # as ``_bak_siblings`` below, for the catalog rather than for the
+            # live machine.  Globbed at the DIE level and not per yaml, because
+            # the ones that matter most are ORPHANS — ``L180 motor.yaml`` is
+            # gone from ``CIANO10 200 opt`` and its two ``.bak-`` files are the
+            # only copies of that configuration left.  ``.bak-…`` does not end
+            # in ``.yaml``, so every ``glob("*.yaml")`` in ``routes/family``
+            # still lists exactly the configurations it listed before.
+            for b in sorted(dd.glob("*.yaml.bak*")):
+                if b.is_file():
+                    plan.copy(b, shared / "dies" / dd.name / b.name)
+                    stats["catalog_baks"] += 1
             # ── the owner's overlay: everything a SOLVE produced ─────────────
             runs = dd / RESULT_DIR
             if runs.is_dir():
@@ -247,8 +301,24 @@ def build_plan(cfg: Path, target: Path, owner: str,
                             stats["run_files"] += 1
 
     # ── identity ─────────────────────────────────────────────────────────────
+    # A RE-RUN MUST NOT WIPE THE REGISTRY.  Every other file here comes from the
+    # old box and re-importing it is the whole point; ``users.json`` and
+    # ``.sessions.json`` are the exception, because accounts are created by the
+    # APP after the import.  The Stage 5 rehearsal re-ran ``--apply`` over a
+    # tree that had two invited accounts in it and both were silently gone (the
+    # log said ``token REJECTED (unknown_user)``); on the server that is every
+    # customer signed out and their grants lost, from a command whose docstring
+    # promises idempotence.  So an identity file that already exists and DIFFERS
+    # is kept, loudly.  ``.auth_secret`` is never overwritten either: the copy
+    # in the tree is the one every live session was signed with.
     for name in IDENTITY_FILES:
-        plan.copy(cfg / name, identity / name)
+        src_f, dst_f = cfg / name, identity / name
+        if dst_f.is_file() and src_f.is_file() and sha256(dst_f) != sha256(src_f):
+            plan.notes.append(
+                f"identity/{name} already exists and differs — KEPT (the tree's "
+                f"copy is the live one; delete it by hand to re-import)")
+            continue
+        plan.copy(src_f, dst_f)
 
     # ── the owner's workspace ────────────────────────────────────────────────
     for name in WORKSPACE_FILES:
@@ -434,7 +504,8 @@ def main(argv=None) -> int:
         report["notes"] = plan.notes
         print(f"{'APPLY' if a.apply else 'DRY RUN'}: {len(plan.ops)} operation(s), "
               f"{plan.bytes / 1e6:.1f} MB")
-        print(f"  dies {stats['dies']}, configurations {stats['configs']}, "
+        print(f"  dies {stats['dies']}, configurations {stats['configs']} "
+              f"(+{stats['catalog_baks']} .bak), "
               f"run sidecars {stats['run_files']}, field files {stats['field_files']}")
         for w in stats["workspaces"]:
             print(f"  workspace {w['id']}  {w['email']}"

@@ -1151,19 +1151,23 @@ _LAST = _WSP.ws_map("thermal.last", _LAST_MAX)
 #: a process-wide flag would mean the SECOND account to ask never restores its
 #: own ``.last_thermal.pkl`` and opens the Thermal tab blank.  Kept readable
 #: and writable as a module name (``__getattr__`` below); a test that assigns
-#: it wins for the rest of the process, which is what those tests want.
+#: it wins for the rest of the process, which is what those tests want — in the
+#: PROCESS workspace only (``workspace.module_override_applies``), because a
+#: module attribute cannot be un-created and an unscoped override would turn
+#: the flag back into the process-wide one this stage removed.
 _SLOT_LAST_LOADED = "thermal.last_loaded"
 _UNSET = object()
 
 
 def _last_loaded() -> bool:
     ov = globals().get("_LAST_LOADED", _UNSET)
-    return bool(ov) if ov is not _UNSET else bool(
-        _WSP.state().flag(_SLOT_LAST_LOADED, False))
+    if ov is not _UNSET and _WSP.module_override_applies():
+        return bool(ov)
+    return bool(_WSP.state().flag(_SLOT_LAST_LOADED, False))
 
 
 def _set_last_loaded(value: bool) -> None:
-    if "_LAST_LOADED" in globals():
+    if "_LAST_LOADED" in globals() and _WSP.module_override_applies():
         globals()["_LAST_LOADED"] = value
     else:
         _WSP.state().set_flag(_SLOT_LAST_LOADED, value)
@@ -1667,12 +1671,13 @@ _SLOT_LOSS_MAPS_LOADED = "thermal.loss_maps_loaded"
 
 def _loss_maps_loaded() -> bool:
     ov = globals().get("_LOSS_MAPS_LOADED", _UNSET)
-    return bool(ov) if ov is not _UNSET else bool(
-        _WSP.state().flag(_SLOT_LOSS_MAPS_LOADED, False))
+    if ov is not _UNSET and _WSP.module_override_applies():
+        return bool(ov)
+    return bool(_WSP.state().flag(_SLOT_LOSS_MAPS_LOADED, False))
 
 
 def _set_loss_maps_loaded(value: bool) -> None:
-    if "_LOSS_MAPS_LOADED" in globals():
+    if "_LOSS_MAPS_LOADED" in globals() and _WSP.module_override_applies():
         globals()["_LOSS_MAPS_LOADED"] = value
     else:
         _WSP.state().set_flag(_SLOT_LOSS_MAPS_LOADED, value)

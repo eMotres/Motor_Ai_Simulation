@@ -16,8 +16,12 @@ from motor_ai_sim.geometry.motor_geometry import MotorGeometryParams
 # (cap: one geometry per workspace) rather than in a keyed store.  The NAME
 # survives as a module attribute — `tests/test_geometry_validation.py` and
 # `tests/test_route_input_validation.py` reset it by assignment — and an
-# assignment from outside wins over the workspace slot for the rest of the
-# process, which is exactly the process-global behaviour those tests expect.
+# assignment from outside wins over the workspace slot, which is exactly the
+# process-global behaviour those tests expect.  It wins IN THE PROCESS
+# WORKSPACE ONLY (`workspace.module_override_applies`): a module attribute
+# cannot be un-created, so an unscoped override would let the first test that
+# assigns this name pin every account on the server to one geometry for the
+# rest of the process — the very singleton this stage removes.
 _SLOT_GEOM = "geometry_service.current_geometry"
 _SLOT_MESH = "geometry_service.mesh_cache"
 
@@ -30,13 +34,13 @@ _UNSET = object()
 
 def _geom_get() -> Optional[MotorGeometryParams]:
     ov = globals().get("_current_geometry", _UNSET)
-    if ov is not _UNSET:
+    if ov is not _UNSET and _WS.module_override_applies():
         return ov
     return _WS.state().flag(_SLOT_GEOM)
 
 
 def _geom_set(value: Optional[MotorGeometryParams]) -> None:
-    if "_current_geometry" in globals():
+    if "_current_geometry" in globals() and _WS.module_override_applies():
         globals()["_current_geometry"] = value
     else:
         _WS.state().set_flag(_SLOT_GEOM, value)

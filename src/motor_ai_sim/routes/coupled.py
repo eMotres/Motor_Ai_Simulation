@@ -264,12 +264,13 @@ _UNSET = object()
 
 def _last_loaded() -> bool:
     ov = globals().get("_LAST_LOADED", _UNSET)
-    return bool(ov) if ov is not _UNSET else bool(
-        _WSP.state().flag(_SLOT_LAST_LOADED, False))
+    if ov is not _UNSET and _WSP.module_override_applies():
+        return bool(ov)
+    return bool(_WSP.state().flag(_SLOT_LAST_LOADED, False))
 
 
 def _set_last_loaded(value: bool) -> None:
-    if "_LAST_LOADED" in globals():
+    if "_LAST_LOADED" in globals() and _WSP.module_override_applies():
         globals()["_LAST_LOADED"] = value
     else:
         _WSP.state().set_flag(_SLOT_LAST_LOADED, value)

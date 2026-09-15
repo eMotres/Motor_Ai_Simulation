@@ -1121,6 +1121,31 @@ def state() -> WorkspaceState:
     return workspace().state
 
 
+def module_override_applies() -> bool:
+    """May a module-level assignment stand in for this workspace's flag?
+
+    The scalar flags this stage relocated (``thermal._LAST_LOADED``,
+    ``geometry_service._current_geometry`` and their kin) keep working as plain
+    module NAMES, because two dozen tests assign them and the accessors honour a
+    real module attribute once one exists.  The catch is that a module attribute
+    cannot be un-created: ``monkeypatch.setattr(th, "_LAST_LOADED", True)``
+    leaves the name in the module dict after ``undo`` (it re-*sets* the old
+    value rather than deleting it), so from the first such patch onwards the
+    accessor would read ONE process-wide value — which is precisely the
+    single-user global this stage exists to remove, silently reinstated.
+
+    So the escape hatch is scoped to the workspace it was always about: the
+    PROCESS one.  With no ``WORKSPACES_ROOT`` that is the only workspace there
+    is, so every test that assigns the name sees exactly the pre-stage
+    behaviour; inside a real per-account workspace the flag is the workspace's
+    own and a stranger's leftover module attribute cannot reach it.
+    """
+    try:
+        return workspace().is_process
+    except Exception:                                   # noqa: BLE001
+        return True
+
+
 class StateMapping(MutableMapping):
     """The module-level name of a per-workspace :class:`BoundedStore`."""
 

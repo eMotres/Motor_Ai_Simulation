@@ -327,7 +327,15 @@ def _persist_last() -> None:
     """Write the whole store out, off-thread and atomically."""
     import threading
 
-    snapshot = {k: v for k, v in _LAST.items()}
+    # Taken under the store's OWN lock (``workspace.BoundedStore.snapshot``).
+    # A plain ``{k: v for k, v in _LAST.items()}`` walks the live OrderedDict,
+    # and a concurrent solve — or this store's own cap-eviction — resizing it
+    # mid-walk raised "dictionary changed size during iteration", which this
+    # function caught, logged and swallowed: the pickle was never written and
+    # the tab came back blank after a restart.  A plain dict (what two dozen
+    # tests monkeypatch in) has no ``snapshot``; ``dict()`` is the same copy.
+    _snap = getattr(_LAST, "snapshot", None)
+    snapshot = _snap() if callable(_snap) else dict(_LAST)
 
     def _write():
         try:
@@ -382,7 +390,21 @@ def _remember_last(kind: str, result: Dict[str, Any], params: Dict[str, Any],
     try:
         _load_last()          # never let a lazy load overwrite what we just stored
         _LAST[kind] = {
-            "result": result,
+            # A PRIVATE shallow copy, and this is the whole bug of 2026-09-15.
+            # Every cache-hit branch above publishes its answer here and THEN
+            # edits it — ``out["cached"] = True``, ``out.pop("field", None)``
+            # (the modal route, the critical-speed route) — while
+            # ``_persist_last`` below is already pickling that very dict on a
+            # background thread.  ``pickle`` walks a dict it is handed, so the
+            # request thread resizing it out from under the writer raised
+            #     RuntimeError: dictionary changed size during iteration
+            # which ``_persist_last`` caught, logged at WARNING and swallowed:
+            # the pickle was never written and the tab came back blank after a
+            # restart.  The copy is ~20 keys wide (the big payloads are shared,
+            # and nothing mutates those in place), and it also makes the store
+            # keep what line 1321 already says it should — the ANSWER, not the
+            # ``cached`` flag of the request that happened to re-serve it.
+            "result": dict(result) if isinstance(result, dict) else result,
             # The request that produced it, so re-entering the tab restores the
             # INPUT fields too and a Solve press reproduces the picture.
             "params": dict(params),

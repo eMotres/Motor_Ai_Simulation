@@ -1188,7 +1188,13 @@ def _persist_last() -> None:
     """Write the whole store out, off-thread and atomically."""
     import threading
 
-    snapshot = {k: v for k, v in _LAST.items()}
+    # Under the store's OWN lock — see ``workspace.BoundedStore.snapshot`` and
+    # the note in ``routes.mechanical._persist_last``: iterating the live store
+    # while another solve writes it raised "dictionary changed size during
+    # iteration" and the pickle was silently skipped.  A plain dict (the tests'
+    # monkeypatch) has no ``snapshot``; ``dict()`` is the same shallow copy.
+    _snap = getattr(_LAST, "snapshot", None)
+    snapshot = _snap() if callable(_snap) else dict(_LAST)
 
     def _write():
         try:
@@ -1254,7 +1260,13 @@ def _remember_last(kind: str, result: Dict[str, Any], params: Dict[str, Any],
     try:
         _load_last()          # never let a lazy load overwrite what we just stored
         _LAST[kind] = {
-            "result": result,
+            # A PRIVATE shallow copy — same reason as
+            # ``routes.mechanical._remember_last``: ``_persist_last`` pickles
+            # this entry on a background thread, and a caller that goes on
+            # editing the dict it just handed over (the cache-hit branches do)
+            # resizes it mid-pickle: "dictionary changed size during iteration",
+            # caught, logged, and the pickle silently not written.
+            "result": dict(result) if isinstance(result, dict) else result,
             # The request that produced it, so re-entering the tab restores the
             # INPUT fields too and a Solve press reproduces the picture.
             "params": dict(params),

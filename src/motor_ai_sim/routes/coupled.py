@@ -327,10 +327,17 @@ def _remember_last(out: Dict[str, Any], *, alt_carrier: bool = False) -> None:
     _LAST.clear()
     _LAST.update(out)
     try:
+        # What goes to disk is the STORE, snapshotted under its own lock
+        # (``workspace.BoundedStore.snapshot``), not the caller's ``out``: a
+        # second coupled run updating ``_LAST`` while this one serialised it is
+        # the same race that lost the mechanical pickle ("dictionary changed
+        # size during iteration").  Same content, taken coherently.
+        _snap = getattr(_LAST, "snapshot", None)
+        payload = _snap() if callable(_snap) else dict(_LAST)
         p = _last_store_path()
         tmp = f"{p}.tmp{os.getpid()}"
         with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump(out, fh, ensure_ascii=False)
+            json.dump(payload, fh, ensure_ascii=False)
         os.replace(tmp, p)
     except Exception as exc:  # noqa: BLE001 — a store is a convenience
         log.warning("could not persist the last coupled run: %s", exc)
@@ -367,7 +374,11 @@ def last(geo: Optional[str] = Query(default=None)) -> Dict[str, Any]:
                 "live_geometry_fingerprint": live}
     fp = _LAST.get("geometry_fingerprint")
     stale = None if (not fp or not live or live == "nofp") else bool(fp != live)
-    return {"has_result": True, "result": dict(_LAST),
+    _snap = getattr(_LAST, "snapshot", None)
+    return {"has_result": True,
+            # Under the store's lock: a coupled run finishing while this GET
+            # copies the store must not turn the read into a 500.
+            "result": (_snap() if callable(_snap) else dict(_LAST)),
             "live_geometry_fingerprint": live, "stale_geometry": stale}
 
 

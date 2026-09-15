@@ -162,7 +162,7 @@ class BoundedStore(MutableMapping):
     record serialised straight to JSON, which every reader addresses by name.
     """
 
-    __slots__ = ("_d", "_ws", "_name", "cap", "lru_on_read", "evicted")
+    __slots__ = ("_d", "_ws", "_name", "cap", "lru_on_read", "evicted", "_lock")
 
     def __init__(self, ws_id: str, name: str, cap: int,
                  lru_on_read: bool = False) -> None:
@@ -172,6 +172,13 @@ class BoundedStore(MutableMapping):
         self.cap = int(cap)
         self.lru_on_read = bool(lru_on_read)
         self.evicted = 0
+        # Every structural touch of ``_d`` happens under this.  See
+        # :meth:`snapshot` for why a store that looked single-threaded is not.
+        # RLock, so ``__setitem__`` may call ``_trim`` and ``copy`` may call
+        # ``snapshot`` without a second thought.  It is NOT part of the mapping
+        # contract and nothing outside this class takes it; lock order is
+        # always WorkspaceState.lock -> this, never the reverse.
+        self._lock = threading.RLock()
 
     # ── the namespaced key ───────────────────────────────────────────────────
     def _k(self, key):
@@ -187,32 +194,63 @@ class BoundedStore(MutableMapping):
 
     def raw_keys(self) -> list:
         """The keys AS STORED: ``(ws_id, key)``.  The audit's window."""
-        return list(self._d.keys())
+        with self._lock:
+            return list(self._d.keys())
+
+    def snapshot(self) -> dict:
+        """A shallow, PLAIN-KEY copy taken under the lock.
+
+        What this is for (2026-09-15).  The three ``_LAST`` route stores are
+        written by whichever thread just finished a solve and read by the
+        persist path that writes ``config/.last_*.pkl`` — and the persist path
+        built its payload with ``{k: v for k, v in store.items()}``, which walks
+        the LIVE ``OrderedDict``: ``__iter__`` below materialises its key list
+        out of ``self._d.keys()``.  A concurrent ``__setitem__`` (a second
+        solve, or this store's own cap-eviction inside ``_trim``) resized the
+        dict mid-walk and the comprehension raised
+
+            RuntimeError: dictionary changed size during iteration
+
+        which the persist path caught, logged at WARNING and swallowed — so the
+        pickle was silently not written and the tab came back blank after a
+        restart.  Taking the copy here, with the writers holding the same lock,
+        is the fix; the shallow values are the very objects the store holds, and
+        the caller only ever pickles or JSON-dumps them.
+        """
+        with self._lock:
+            return {k[1]: v for k, v in self._d.items()}
 
     # ── Mapping ──────────────────────────────────────────────────────────────
     def __getitem__(self, key):
         rk = self._k(key)
-        v = self._d[rk]
-        if self.lru_on_read:
-            self._d.move_to_end(rk)
-        return v
+        with self._lock:
+            v = self._d[rk]
+            if self.lru_on_read:
+                self._d.move_to_end(rk)
+            return v
 
     def __setitem__(self, key, value) -> None:
         rk = self._k(key)
-        self._d[rk] = value
-        self._d.move_to_end(rk)
-        self._trim()
+        with self._lock:
+            self._d[rk] = value
+            self._d.move_to_end(rk)
+            self._trim()
 
     def __delitem__(self, key) -> None:
-        del self._d[self._k(key)]
+        with self._lock:
+            del self._d[self._k(key)]
 
     def __iter__(self):
         # A SNAPSHOT, on purpose: ``items()`` reads through ``__getitem__``,
-        # which may reorder, and several callers delete while iterating.
-        return iter([k[1] for k in self._d.keys()])
+        # which may reorder, and several callers delete while iterating.  Built
+        # under the lock, because materialising it is itself an iteration of a
+        # dict another thread may be resizing.
+        with self._lock:
+            return iter([k[1] for k in self._d.keys()])
 
     def __reversed__(self):
-        return iter([k[1] for k in reversed(self._d.keys())])
+        with self._lock:
+            return iter([k[1] for k in reversed(self._d.keys())])
 
     def __len__(self) -> int:
         return len(self._d)
@@ -226,19 +264,23 @@ class BoundedStore(MutableMapping):
 
     # ── the OrderedDict surface the call sites already use ───────────────────
     def move_to_end(self, key, last: bool = True) -> None:
-        self._d.move_to_end(self._k(key), last=last)
+        with self._lock:
+            self._d.move_to_end(self._k(key), last=last)
 
     def popitem(self, last: bool = True):
-        rk, v = self._d.popitem(last=last)
+        with self._lock:
+            rk, v = self._d.popitem(last=last)
         return (rk[1], v)
 
     def clear(self) -> None:
-        self._d.clear()
+        with self._lock:
+            self._d.clear()
 
     def copy(self) -> dict:
-        return {k[1]: v for k, v in self._d.items()}
+        return self.snapshot()
 
     def _trim(self) -> None:
+        # Called with ``_lock`` held.
         while 0 < self.cap < len(self._d):
             self._d.popitem(last=False)
             self.evicted += 1
@@ -1213,6 +1255,10 @@ class StateMapping(MutableMapping):
 
     def copy(self) -> dict:
         return self.target.copy()
+
+    def snapshot(self) -> dict:
+        """:meth:`BoundedStore.snapshot` — the persist paths' entry point."""
+        return self.target.snapshot()
 
     def raw_keys(self) -> list:
         return self.target.raw_keys()

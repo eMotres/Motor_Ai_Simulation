@@ -454,7 +454,11 @@ def test_d_a_writer_that_raises_does_not_fail_the_caller(solved, active,
     # a finished solve calls, and it must return normally with the store broken.
     from motor_ai_sim.routes import thermal as th
     th._remember_last("field", solved["thermal"], {"rpm": FAST["rpm"]}, "fp-x")
-    assert th._LAST["field"]["result"] is solved["thermal"]
+    # Since 69db6d1 the store keeps a PRIVATE shallow copy (the caller may go on
+    # editing its dict while _persist_last pickles it on a background thread),
+    # so the contract is equal content, NOT the caller's object.
+    assert th._LAST["field"]["result"] == solved["thermal"]
+    assert th._LAST["field"]["result"] is not solved["thermal"]
 
     # the previous good file is still there — a failed write replaced nothing
     monkeypatch.undo()

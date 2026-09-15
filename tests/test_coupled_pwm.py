@@ -339,6 +339,22 @@ def test_the_second_correction_is_an_exact_secant():
     assert out["v_phase_peak_V"] == pytest.approx(580.0 + (444.83 - 480.0) * 0.5)
 
 
+def test_two_passes_at_the_same_fundamental_still_produce_a_correction():
+    """The secant needs two different VOLTAGES, not merely two passes.
+
+    2026-09-15, CIANO10 200 opt / L155 'rated 1x9 mm': pass 1 landed inside the
+    band so nothing was nudged, pass 2 therefore ran at the SAME V₁ — and the
+    secant through (V, I₁) and (V, I₂) has zero run, which collapsed to "leave it
+    where it is" and was reported as "next V1: None".  With one usable direction
+    only the damped proportional step is the answer.
+    """
+    pts = []
+    assert _reg(571.0, 444.83 * 1.002, pts) is None       # in band: not nudged
+    out = _reg(571.0, 430.0, pts)                         # …so pass 2 ran at 571
+    assert out is not None, "a zero-run secant used to report no correction"
+    assert out["v_phase_peak_V"] > 571.0, "3 % LOW asks for more fundamental"
+
+
 def test_a_current_already_inside_the_band_is_left_alone():
     pts = []
     assert _reg(571.0, 444.83 * 1.005, pts) is None       # 0.5 % < 1 %
@@ -400,6 +416,97 @@ def test_a_bad_target_is_refused_by_name(loop):
                     "inverter": {"target_I_phase_rms_A": bad}})
         assert e.value.detail["error_code"] == "bad_inverter"
     assert seen["em"] == []
+
+
+# ---------------------------------------------------------------------------
+# …and the POINT is part of convergence, not a number beside it
+# ---------------------------------------------------------------------------
+# 2026-09-15, CIANO10 200 opt / L155 'rated 1x9 mm' at max_iter 3: pass 1 landed
+# at 325.06 A (+0.17 %, in band, nothing nudged), pass 2 drifted to 314.25 A
+# (-3.16 %) as the winding heated — and the loop STOPPED there, because the three
+# temperature residuals were inside tol (coil 117.6 -> 116.0, magnet 133.0 ->
+# 132.3, bearing 122.9 -> 122.4).  The regulator never got the pass it needed and
+# the record said `on_point: false`.  Temperatures settling is NECESSARY; on a
+# voltage-fed loop it is not sufficient.
+
+def _drifting_em(seen, *, seed=572.1396, first=325.5, drift=314.7, aimed=325.4):
+    """The measured shape: pass 1 inside the band, pass 2 drifting off it at the
+    same fundamental, and any pass at a RE-AIMED fundamental back on the point."""
+    def _f(**kw):
+        seen["em"].append(dict(kw))
+        d = _fake_em()
+        v = float(kw["v_phase_peak"])
+        if abs(v - seed) > 1e-6:
+            d["I_phase_rms_solved_A"] = aimed
+        else:
+            d["I_phase_rms_solved_A"] = first if len(seen["em"]) == 1 else drift
+        return d
+    return _f
+
+
+def test_settled_temperatures_off_point_earn_another_pass(loop, monkeypatch):
+    cp, seen = loop
+    import motor_ai_sim.routes.simulation as sim
+    monkeypatch.setattr(sim, "get_fem_transient", _drifting_em(seen),
+                        raising=True)
+    c = cp.run({**BODY, "drive": "pwm", "max_iter": 3,
+                "inverter": {"target_I_phase_rms_A": 325.0}})["coupling"]
+    h = c["history"]
+    assert len(h) == 3, "a loop that settled off point is not finished"
+    # pass 2: the temperatures have stopped moving…
+    assert h[1]["T_coil_in"] == h[1]["T_coil_out"]
+    assert h[1]["T_magnet_in"] == h[1]["T_magnet_out"]
+    # …and the current has drifted 3 % off the duty's
+    assert h[1]["point_error_pct"] == pytest.approx(-3.169, abs=0.01)
+    # pass 1 was inside the band, so it was NOT nudged — which is exactly the
+    # case whose secant has no run
+    assert "v_phase_peak_next_V" not in h[0]
+    assert h[1]["v_phase_peak_V"] == pytest.approx(h[0]["v_phase_peak_V"])
+    assert h[1]["v_phase_peak_next_V"] > h[1]["v_phase_peak_V"]
+    # …and the third pass really ran at the re-aimed fundamental, and landed
+    assert h[2]["v_phase_peak_V"] == pytest.approx(h[1]["v_phase_peak_next_V"])
+    assert seen["em"][2]["v_phase_peak"] == pytest.approx(h[2]["v_phase_peak_V"])
+    assert abs(h[2]["point_error_pct"]) <= 1.0
+    assert c["converged"] is True and "warning_code" not in c
+    assert c["inverter"]["on_point"] is True
+
+
+def test_a_point_that_never_arrives_keeps_the_last_pass_and_says_so(loop):
+    """Out of budget with the point still off: the last pass IS a solved state
+    and is kept — temperatures, map and record all belong to it — but the run
+    says so with its own code, like every other 'stopped early' here."""
+    cp, seen = loop
+    c = cp.run({**BODY, "drive": "pwm", "max_iter": 2,
+                "inverter": {"target_I_phase_rms_A": 430.1 / 1.03}})["coupling"]
+    assert len(c["history"]) == 2 and len(seen["em"]) == 2
+    assert c["converged"] is False
+    assert c["warning_code"] == "point_not_converged"
+    assert "+3.00" in c["warning"] and "max_iter" in c["warning"]
+    assert c["coil_temp_c"] == pytest.approx(95.0), "the last pass is kept"
+    inv = c["inverter"]
+    assert inv["on_point"] is False
+    # THE RECORD separates what the last pass RAN at from what the regulator
+    # would have aimed at next — computed on the final pass too.
+    assert inv["v_phase_peak_V"] == pytest.approx(
+        c["history"][-1]["v_phase_peak_V"])
+    assert inv["v_phase_peak_next_V"] == pytest.approx(
+        c["history"][-1]["v_phase_peak_next_V"])
+    assert inv["v_phase_peak_next_V"] != inv["v_phase_peak_V"]
+
+
+def test_a_current_fed_loop_converges_on_temperatures_alone_as_before(loop):
+    """Sine/current drive is UNTOUCHED: the current is imposed there, so the
+    point error is 0 by construction and the temperatures decide alone.  Same
+    for a PWM run with the fundamental pinned instead of a target."""
+    cp, _ = loop
+    c = cp.run({**BODY, "max_iter": 3})["coupling"]
+    assert c["drive"] == "sine"
+    assert c["converged"] is True and len(c["history"]) == 2
+    assert "warning_code" not in c and c["warning"] is None
+    assert all("point_error_pct" not in r for r in c["history"])
+    pinned = cp.run({**BODY, "drive": "pwm", "max_iter": 3})["coupling"]
+    assert pinned["converged"] is True and len(pinned["history"]) == 2
+    assert "warning_code" not in pinned
 
 
 # ---------------------------------------------------------------------------

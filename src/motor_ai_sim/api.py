@@ -132,7 +132,17 @@ _ALLOWED_ORIGINS = [
     # e.g. "https://emotres.com" — set per deployment, nothing hardcoded.
 ] + [o.strip() for o in _os.environ.get("ALLOWED_ORIGINS", "").split(",") if o.strip()]
 
-# Tier gate FIRST (inner), CORS LAST (outer) so 401/403 from the gate still
+# WHOSE machine is this request about?  (migration Stage 1)
+#
+# Added FIRST, so it ends up INNERMOST: every handler that actually runs has its
+# workspace resolved, and the tier gate's own 401/403 — which never reach a
+# handler — cost nothing.  With ``WORKSPACES_ROOT`` unset (this workstation) the
+# middleware does not even read the headers and every call resolves to the
+# process config, exactly as before.
+from motor_ai_sim.workspace import install_workspace_resolver
+install_workspace_resolver(app)
+
+# Tier gate NEXT (inner), CORS LAST (outer) so 401/403 from the gate still
 # carry CORS headers — otherwise the browser shows a CORS error, not the 403.
 from motor_ai_sim.auth import install_tier_gate
 install_tier_gate(app)
@@ -257,7 +267,23 @@ _ASSIGNABLE_PARTS = {'stator_core', 'slot', 'rotor_core', 'magnet', 'shaft',
 # this is byte-identical to the old constant and the live API is unchanged.  It
 # stays a module ATTRIBUTE because tests monkeypatch it by name
 # (tests/test_family_activate_mesh_sync.py).
-_CONFIG_PATH = Path(str(_DEFAULT_CONFIG_PATH))
+#
+# 2026-09-15, migration Stage 1: resolved PER CALL against the caller's
+# workspace, so on a multi-user server these four writers edit the machine of
+# whoever asked.  The name survives — a monkeypatched value in the module dict
+# wins over the resolver, and ``__getattr__`` answers a plain read.
+def _config_path() -> Path:
+    _ov = globals().get("_CONFIG_PATH")
+    if _ov is not None:
+        return Path(str(_ov))
+    from motor_ai_sim.config import config_path as _resolve_cfg_path
+    return Path(str(_resolve_cfg_path()))
+
+
+def __getattr__(name):
+    if name == "_CONFIG_PATH":
+        return _config_path()
+    raise AttributeError(name)
 
 
 class MaterialAssignment(BaseModel):
@@ -347,11 +373,11 @@ def update_material(assignment: MaterialAssignment):
             detail=f"Unknown part '{assignment.part}'. Valid: {sorted(_ASSIGNABLE_PARTS)}"
         )
     try:
-        content = _CONFIG_PATH.read_text(encoding="utf-8")
+        content = _config_path().read_text(encoding="utf-8")
         new_content, replaced = _set_material_in_yaml(content, assignment.part, assignment.material)
         if not replaced:
             raise ValueError(f"Key '{assignment.part}' not found under materials: in config")
-        _CONFIG_PATH.write_text(new_content, encoding="utf-8")
+        _config_path().write_text(new_content, encoding="utf-8")
         clear_config_cache()
         # A different steel / magnet is a DIFFERENT MACHINE: the field, the
         # losses and the torque all move.  The physics caches are keyed on a
@@ -461,8 +487,8 @@ def update_part_state(assignment: PartStateAssignment):
             status_code=400,
             detail=f"Unknown state '{assignment.state}'. Valid: {list(STATES)}")
     try:
-        content = _CONFIG_PATH.read_text(encoding="utf-8")
-        _CONFIG_PATH.write_text(
+        content = _config_path().read_text(encoding="utf-8")
+        _config_path().write_text(
             _set_part_state_in_yaml(content, assignment.part, assignment.state),
             encoding="utf-8")
         clear_config_cache()
@@ -922,7 +948,7 @@ def update_winding_config(patch: WindingConfigPatch):
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
 
-    content = _CONFIG_PATH.read_text(encoding="utf-8")
+    content = _config_path().read_text(encoding="utf-8")
     lines   = content.splitlines(keepends=True)
     in_winding = False
     in_sim     = False
@@ -967,7 +993,7 @@ def update_winding_config(patch: WindingConfigPatch):
             detail=f"Keys not found in winding: block: {missing}"
         )
 
-    _CONFIG_PATH.write_text(''.join(result), encoding="utf-8")
+    _config_path().write_text(''.join(result), encoding="utf-8")
     clear_config_cache()
     # A winding change (connection / layers / layout) alters the field & torque,
     # so flush the simulation caches (mesh / field / transient) like a geometry edit.
@@ -1025,7 +1051,7 @@ def update_mesh_config(patch: MeshConfigPatch):
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
     try:
-        config = _yaml.safe_load(_CONFIG_PATH.read_text(encoding="utf-8")) or {}
+        config = _yaml.safe_load(_config_path().read_text(encoding="utf-8")) or {}
         # GUARD: write_text is not atomic (truncate-then-write), so a concurrent
         # reader can catch the file mid-write and parse an EMPTY config.  Writing
         # that back would nuke geometry/simulation/winding (data loss).  Never
@@ -1035,12 +1061,12 @@ def update_mesh_config(patch: MeshConfigPatch):
                 detail="config read incomplete (concurrent write) — mesh not saved, retry")
         config.setdefault("mesh", {}).update(updates)
         # Atomic write: temp file + os.replace, so readers never see a partial.
-        _tmp = _CONFIG_PATH.with_suffix(".yaml.tmp")
+        _tmp = _config_path().with_suffix(".yaml.tmp")
         _tmp.write_text(
             _yaml.dump(config, allow_unicode=True, default_flow_style=False, sort_keys=False),
             encoding="utf-8",
         )
-        _os.replace(_tmp, _CONFIG_PATH)
+        _os.replace(_tmp, _config_path())
         clear_config_cache()
     except HTTPException:
         raise

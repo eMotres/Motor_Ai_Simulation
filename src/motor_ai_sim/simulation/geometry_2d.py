@@ -71,10 +71,14 @@ def _cfg_path() -> Path:
     Resolved per call now, so the env var is the complete lever it is documented
     to be.  With no env var set this is byte-identical to the old constant: the
     live API and every ordinary run read exactly the file they always did.
+
+    Stage 1 of the multi-user migration routes it through
+    ``config.config_path()`` rather than ``DEFAULT_CONFIG_PATH`` directly, so a
+    per-request workspace moves it too.  With no workspace set: the same file.
     """
     try:
-        from motor_ai_sim.config import DEFAULT_CONFIG_PATH
-        return Path(str(DEFAULT_CONFIG_PATH))
+        from motor_ai_sim.config import config_path as _resolve_cfg_path
+        return Path(str(_resolve_cfg_path()))
     except Exception:                       # noqa: BLE001 — never fail a solve
         return Path(__file__).parent.parent.parent.parent / "config" / "motor_config.yaml"
 

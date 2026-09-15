@@ -109,8 +109,10 @@ def _config_dir() -> Path:
     ``duty_results._config_dir`` derives it, so the test sandbox's redirect
     (``MOTOR_AI_SIM_CONFIG``) carries this store with it."""
     try:
-        from motor_ai_sim.config import DEFAULT_CONFIG_PATH
-        return Path(str(DEFAULT_CONFIG_PATH)).parent
+        # Stage 1: the caller's WORKSPACE, which with none set is
+        # ``Path(DEFAULT_CONFIG_PATH).parent`` — the old expression exactly.
+        from motor_ai_sim.workspace import root as _ws_root
+        return Path(str(_ws_root()))
     except Exception:                                       # noqa: BLE001
         return Path(__file__).resolve().parents[2] / "config"
 

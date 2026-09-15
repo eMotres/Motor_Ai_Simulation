@@ -100,8 +100,10 @@ def _config_dir() -> Path:
     never write beside the user's real machine.
     """
     try:
-        from motor_ai_sim.config import DEFAULT_CONFIG_PATH
-        return Path(str(DEFAULT_CONFIG_PATH)).parent
+        # Stage 1: the caller's WORKSPACE, which with none set is
+        # ``Path(DEFAULT_CONFIG_PATH).parent`` — the old expression exactly.
+        from motor_ai_sim.workspace import root as _ws_root
+        return Path(str(_ws_root()))
     except Exception:                                       # noqa: BLE001
         return Path(__file__).resolve().parents[2] / "config"
 

@@ -28,19 +28,33 @@ _ROOT = Path(__file__).parent.parent.parent.parent
 # pinned to the repo's own config/, and `_save_all` WRITES it — a redirected
 # process overwrote the sweep the user has set up on the machine they have open.
 # With no env var set this is byte-identical to `_ROOT / "config" / …`.
-try:
-    from motor_ai_sim.config import DEFAULT_CONFIG_PATH as _DEFAULT_CONFIG_PATH
-    _STORE = Path(str(_DEFAULT_CONFIG_PATH)).parent / "sweep_config.json"
-except Exception:                       # noqa: BLE001 — never break the import
-    _STORE = _ROOT / "config" / "sweep_config.json"
+#
+# Migration Stage 1: resolved PER CALL against the caller's workspace — with
+# none set, the same folder and the same file.  The NAME survives for the
+# completeness test.
+def _store() -> Path:
+    _ov = globals().get("_STORE")
+    if _ov is not None:
+        return Path(str(_ov))
+    try:
+        from motor_ai_sim.workspace import root as _ws_root
+        return _ws_root() / "sweep_config.json"
+    except Exception:                   # noqa: BLE001 — never break a save
+        return _ROOT / "config" / "sweep_config.json"
+
+
+def __getattr__(name):
+    if name == "_STORE":
+        return _store()
+    raise AttributeError(name)
 _LOCK = threading.Lock()
 
 
 def _load_all() -> Dict[str, dict]:
-    if not _STORE.exists():
+    if not _store().exists():
         return {}
     try:
-        data = json.loads(_STORE.read_text(encoding="utf-8"))
+        data = json.loads(_store().read_text(encoding="utf-8"))
         return data if isinstance(data, dict) else {}
     except Exception:
         return {}
@@ -48,8 +62,8 @@ def _load_all() -> Dict[str, dict]:
 
 def _save_all(store: Dict[str, dict]) -> None:
     try:
-        _STORE.parent.mkdir(parents=True, exist_ok=True)
-        _STORE.write_text(json.dumps(store, indent=2, ensure_ascii=False),
+        _store().parent.mkdir(parents=True, exist_ok=True)
+        _store().write_text(json.dumps(store, indent=2, ensure_ascii=False),
                           encoding="utf-8")
     except Exception:
         pass  # best-effort; never crash the API over a config write

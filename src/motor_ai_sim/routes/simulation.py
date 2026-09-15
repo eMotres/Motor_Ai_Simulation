@@ -463,8 +463,8 @@ def update_sim_config(patch: SimConfigPatch):
     # what the redirect exists to make impossible (config.py, 2026-08-06).  With
     # no env var set this is byte-identical to the old constant.
     try:
-        from motor_ai_sim.config import DEFAULT_CONFIG_PATH as _dcp
-        cfg_path = Path(str(_dcp))
+        from motor_ai_sim.config import config_path as _resolve_cfg_path
+        cfg_path = Path(str(_resolve_cfg_path()))
     except Exception:                       # noqa: BLE001 — never fail the PATCH
         cfg_path = Path(__file__).parent.parent.parent.parent / "config" / "motor_config.yaml"
     content = cfg_path.read_text(encoding="utf-8")
@@ -2821,8 +2821,8 @@ import os as _os_t
 
 def _transient_store_path() -> str:
     try:
-        from motor_ai_sim.config import DEFAULT_CONFIG_PATH as _cp
-        _base = _os_t.path.dirname(str(_cp))
+        from motor_ai_sim.workspace import root as _ws_root
+        _base = str(_ws_root())
     except Exception:
         _base = _os_t.path.join(_os_t.path.dirname(__file__), "..", "..", "..", "config")
     return _os_t.path.abspath(_os_t.path.join(_base, ".last_transient.json"))
@@ -2885,14 +2885,15 @@ def _append_run_journal(result: Dict) -> None:
     try:
         import time as _tj
         from pathlib import Path as _P
-        from motor_ai_sim.config import get_config as _gc, DEFAULT_CONFIG_PATH as _DCP
+        from motor_ai_sim.config import get_config as _gc
+        from motor_ai_sim.workspace import root as _ws_root
         s = result.get("summary") or {}
         cfg = _gc()
         geo = dict(cfg.get("geometry") or {})
         mats = dict(cfg.get("materials") or {})
         ctx = {}
         try:
-            ctx = _json.loads((_P(_DCP).parent / ".family_context.json").read_text(encoding="utf-8"))
+            ctx = _json.loads((_ws_root() / ".family_context.json").read_text(encoding="utf-8"))
         except Exception:   # noqa: BLE001
             ctx = {}
         def _num(v):
@@ -2929,6 +2930,10 @@ def _append_run_journal(result: Dict) -> None:
             "n_frames_solved": result.get("n_frames_solved"),
             "wall_s": _num(result.get("wall_s") or result.get("elapsed_s")),
         }
+        # The run journal stays PROCESS-global (it sits in the deployment's
+        # `logs/`, not in any workspace): it is the optimizer's learning record
+        # for this installation, not one user's store.
+        from motor_ai_sim.config import DEFAULT_CONFIG_PATH as _DCP
         p = _P(_DCP).parent.parent / "logs" / "run_journal.jsonl"
         p.parent.mkdir(parents=True, exist_ok=True)
         with open(p, "a", encoding="utf-8") as fh:
@@ -5430,9 +5435,8 @@ _BENCH_I_PROBE_ARMS = 2.0
 
 
 def _bench_cache_path():
-    from pathlib import Path
-    from motor_ai_sim.config import DEFAULT_CONFIG_PATH
-    return Path(DEFAULT_CONFIG_PATH).parent / ".bench_ldq.json"
+    from motor_ai_sim.workspace import root as _ws_root
+    return _ws_root() / ".bench_ldq.json"
 
 
 def _bench_key(fp: str, conn: str, i_probe: float = _BENCH_I_PROBE_ARMS) -> str:
@@ -6019,9 +6023,8 @@ def _end3d_lookup(geo_fp: Optional[str], geo: Optional[dict] = None,
         return None
     try:
         import json as _json
-        from pathlib import Path
-        from motor_ai_sim.config import DEFAULT_CONFIG_PATH
-        _p = Path(DEFAULT_CONFIG_PATH).parent / "end_effect_passports.json"
+        from motor_ai_sim.workspace import root as _ws_root
+        _p = _ws_root() / "end_effect_passports.json"
         store = _json.loads(_p.read_text(encoding="utf-8")) or {}
         rec = store.get(str(geo_fp))
         if isinstance(rec, dict):

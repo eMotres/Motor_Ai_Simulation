@@ -22,14 +22,27 @@ from typing import Optional
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
-from motor_ai_sim.config import DEFAULT_CONFIG_PATH
+from motor_ai_sim.workspace import root as _ws_root_m
 from motor_ai_sim.json_store import mutate_json, read_json
 
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/my_motors", tags=["my-motors"])
 
-_STORE = str(Path(DEFAULT_CONFIG_PATH).parent / "user_motors.json")
+# Per WORKSPACE since Stage 1; the rows inside are ALREADY owner-keyed
+# (routes/my_motors._ident), which is the model the rest of the stores are
+# moving towards.  A str, not a Path, because json_store takes str keys.
+def _store() -> str:
+    _ov = globals().get("_STORE")
+    if _ov is not None:
+        return str(_ov)
+    return str(_ws_root_m() / "user_motors.json")
+
+
+def __getattr__(name):
+    if name == "_STORE":
+        return _store()
+    raise AttributeError(name)
 
 
 def _ident(authorization: Optional[str]) -> dict:
@@ -42,7 +55,7 @@ def _ident(authorization: Optional[str]) -> dict:
 
 
 def _load() -> dict:
-    return read_json(_STORE, {}) or {}
+    return read_json(_store(), {}) or {}
 
 
 class DuplicateReq(BaseModel):
@@ -121,7 +134,7 @@ def duplicate_to_my_space(req: DuplicateReq,
     }
     def _m(d: dict) -> None:
         d.setdefault(ident["id"], {})[mid] = entry
-    mutate_json(_STORE, _m, {})
+    mutate_json(_store(), _m, {})
     log.info("my-motors: '%s' duplicated '%s/%s' as '%s' (%s)",
              ident["id"], req.die, req.config, name, mid)
     return {"status": "ok", "motor": _summary_of(entry)}
@@ -145,7 +158,7 @@ def rename_my_motor(motor_id: str, req: RenameReq,
     _require_own(_load(), ident, motor_id)
     def _m(d: dict) -> None:
         d[ident["id"]][motor_id]["name"] = name
-    mutate_json(_STORE, _m, {})
+    mutate_json(_store(), _m, {})
     return {"status": "ok", "motor": motor_id, "name": name}
 
 
@@ -157,7 +170,7 @@ def share_my_motor(motor_id: str, unshare: bool = False,
     _require_own(_load(), ident, motor_id)
     def _m(d: dict) -> None:
         d[ident["id"]][motor_id]["shared"] = not unshare
-    mutate_json(_STORE, _m, {})
+    mutate_json(_store(), _m, {})
     return {"status": "ok", "motor": motor_id, "shared": not unshare}
 
 
@@ -168,5 +181,5 @@ def delete_my_motor(motor_id: str,
     _require_own(_load(), ident, motor_id)
     def _m(d: dict) -> None:
         d[ident["id"]].pop(motor_id, None)
-    mutate_json(_STORE, _m, {})
+    mutate_json(_store(), _m, {})
     return {"status": "ok", "deleted": motor_id}

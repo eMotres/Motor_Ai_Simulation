@@ -14,7 +14,6 @@ from fastapi import APIRouter, Header, HTTPException
 import logging
 
 from motor_ai_sim.auth import caller_identity as _caller_identity
-from motor_ai_sim.config import DEFAULT_CONFIG_PATH as _DEFAULT_CONFIG_PATH
 from motor_ai_sim.json_store import mutate_json as _mutate_json, read_json as _read_json
 
 log = logging.getLogger(__name__)
@@ -27,11 +26,26 @@ router = APIRouter(prefix="/api/catalog", tags=["catalog"])
 # hardcoded ``Path(__file__)…/config`` here, and `_mutate` WRITES it — so a
 # redirected process upserted cards into the user's real catalog while family.py,
 # one module over, wrote the sandbox copy.  With no env var set: unchanged.
-_CATALOG_PATH = Path(str(_DEFAULT_CONFIG_PATH)).parent / "motor_catalog.json"
+#
+# Migration Stage 1: resolved PER CALL against the caller's workspace (with none
+# set: the same expression, the same file).  The NAME survives — several tests
+# monkeypatch it, and a value in the module dict wins over the resolver.
+def _catalog_path() -> Path:
+    _ov = globals().get("_CATALOG_PATH")
+    if _ov is not None:
+        return Path(str(_ov))
+    from motor_ai_sim.workspace import root as _ws_root
+    return _ws_root() / "motor_catalog.json"
+
+
+def __getattr__(name):
+    if name == "_CATALOG_PATH":
+        return _catalog_path()
+    raise AttributeError(name)
 
 
 def _load() -> dict:
-    return _read_json(_CATALOG_PATH, {"tiers": [], "diameters_mm": [], "motors": []})
+    return _read_json(_catalog_path(), {"tiers": [], "diameters_mm": [], "motors": []})
 
 
 def _mutate(fn: Callable[[dict], None]) -> dict:
@@ -43,7 +57,7 @@ def _mutate(fn: Callable[[dict], None]) -> dict:
     open for seconds to minutes.  `mutate_json` keys its lock by path, so both
     modules serialise on the same lock without knowing about each other.
     """
-    return _mutate_json(_CATALOG_PATH, fn,
+    return _mutate_json(_catalog_path(), fn,
                         default={"tiers": [], "diameters_mm": [], "motors": []})
 
 
@@ -295,8 +309,8 @@ def _family_doc_of_motor(motor: dict,
         return None
     try:
         import yaml as _yaml
-        from motor_ai_sim.config import DEFAULT_CONFIG_PATH as _DCP
-        dies = Path(_DCP).parent / "dies"
+        from motor_ai_sim.workspace import root as _ws_root
+        dies = _ws_root() / "dies"
         by_die: dict = {}
         for f in dies.glob("*/*.yaml"):
             if f.name == "die.yaml":
@@ -342,8 +356,8 @@ def _role_of_motor(motor: dict) -> Optional[str]:
         return None
     try:
         import yaml as _yaml
-        from motor_ai_sim.config import DEFAULT_CONFIG_PATH as _DCP
-        dies = Path(_DCP).parent / "dies"
+        from motor_ai_sim.workspace import root as _ws_root
+        dies = _ws_root() / "dies"
         for f in dies.glob("*/*.yaml"):
             if f.name == "die.yaml":
                 continue
@@ -533,8 +547,8 @@ def generate_motor_passport(motor_id: str, coarse: bool = False,
             }
             import json as _j
             from pathlib import Path as _P
-            from motor_ai_sim.config import DEFAULT_CONFIG_PATH as _DCP
-            _pp = _P(_DCP).parent / "end_effect_passports.json"
+            from motor_ai_sim.workspace import root as _ws_root
+            _pp = _ws_root() / "end_effect_passports.json"
             _all = _j.loads(_pp.read_text(encoding="utf-8")) if _pp.exists() else {}
             _all[_fp] = _e3
             _pp.write_text(_j.dumps(_all, ensure_ascii=False, indent=1),

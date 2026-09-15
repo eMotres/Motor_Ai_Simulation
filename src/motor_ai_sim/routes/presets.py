@@ -23,7 +23,6 @@ from motor_ai_sim.auth import (
     caller_identity as _caller_identity,
     require_admin as _require_admin,
 )
-from motor_ai_sim.config import DEFAULT_CONFIG_PATH as _DEFAULT_CONFIG_PATH
 from motor_ai_sim.json_store import (
     mutate_json as _mutate_json,
     read_json as _read_json,
@@ -37,15 +36,55 @@ _ROOT = Path(__file__).parent.parent.parent.parent
 # MOTOR_AI_SIM_PRESETS / MOTOR_AI_SIM_CONFIG redirect the two stores that decide
 # WHICH machine is loaded, so a test run cannot overwrite the user's motors —
 # see motor_ai_sim/config.py for what happened when it could.
-_PRESETS_PATH = Path(_env).expanduser().resolve() if (_env := _os.environ.get(
-    "MOTOR_AI_SIM_PRESETS", "").strip()) else _ROOT / "config" / "motor_presets.json"
-_CONFIG_PATH = _DEFAULT_CONFIG_PATH
+#
+# Migration Stage 1: all three are resolved PER CALL against the caller's
+# workspace.  ``MOTOR_AI_SIM_PRESETS`` still wins outright where it is set (the
+# suite sets it), and with nothing set ``workspace.root()`` is the very folder
+# these constants named — so this machine reads and writes the same three files
+# it always did.  The NAMES survive: five test modules monkeypatch them, and a
+# value in the module dict wins over the resolver.
+_PRESETS_ENV = (Path(_env).expanduser().resolve()
+                if (_env := _os.environ.get("MOTOR_AI_SIM_PRESETS", "").strip())
+                else None)
+
+
+def _presets_path() -> Path:
+    _ov = globals().get("_PRESETS_PATH")
+    if _ov is not None:
+        return Path(str(_ov))
+    if _PRESETS_ENV is not None:
+        return _PRESETS_ENV
+    from motor_ai_sim.workspace import root as _ws_root
+    return _ws_root() / "motor_presets.json"
+
+
+def _config_path() -> Path:
+    _ov = globals().get("_CONFIG_PATH")
+    if _ov is not None:
+        return Path(str(_ov))
+    from motor_ai_sim.config import config_path as _resolve_cfg_path
+    return Path(str(_resolve_cfg_path()))
+
+
 # The catalog goes WHERE THE CONFIG GOES (2026-09-15).  It was pinned to the
-# repo's own config/ while `_CONFIG_PATH` right above it followed the redirect,
+# repo's own config/ while `_config_path()` right above it followed the redirect,
 # so a redirected process saved its preset into the sandbox and upserted the
 # card into the user's real catalog — half the save on each machine.  family.py
 # already derives it this way.  With no env var set: unchanged.
-_CATALOG_PATH = Path(str(_DEFAULT_CONFIG_PATH)).parent / "motor_catalog.json"
+def _catalog_path() -> Path:
+    _ov = globals().get("_CATALOG_PATH")
+    if _ov is not None:
+        return Path(str(_ov))
+    from motor_ai_sim.workspace import root as _ws_root
+    return _ws_root() / "motor_catalog.json"
+
+
+def __getattr__(name):
+    _r = {"_PRESETS_PATH": _presets_path, "_CONFIG_PATH": _config_path,
+          "_CATALOG_PATH": _catalog_path}.get(name)
+    if _r is None:
+        raise AttributeError(name)
+    return _r()
 
 
 def _now_utc_iso() -> str:
@@ -181,7 +220,7 @@ def _last_transient_summary():
         # so pinned to the repo's own config/ the two disagreed under a redirect
         # and a sandboxed save stamped its card with the torque of the machine
         # the USER has open.  With no env var set: the same file as before.
-        p = Path(str(_CONFIG_PATH)).parent / ".last_transient.json"
+        p = Path(str(_config_path())).parent / ".last_transient.json"
         if not p.exists():
             return None
         blob = json.loads(p.read_text(encoding="utf-8"))
@@ -309,9 +348,9 @@ def _upsert_catalog_entry(preset_id: str, preset: dict, gen_thumb: bool = True) 
     card's row is replaced; every other row comes from the file as it stands at
     the moment of writing.
     """
-    if _CATALOG_PATH.exists():
+    if _catalog_path().exists():
         try:
-            cat = json.loads(_CATALOG_PATH.read_text(encoding="utf-8"))
+            cat = json.loads(_catalog_path().read_text(encoding="utf-8"))
         except Exception:
             # A catalog that does not parse must not be REPLACED by a fresh one
             # holding this single card — that turns an unreadable file into a
@@ -381,13 +420,13 @@ def _upsert_catalog_entry(preset_id: str, preset: dict, gen_thumb: bool = True) 
             d["diameters_mm"] = sorted(set([*d["diameters_mm"], dia]))
         d["motors"] = [m for m in d["motors"] if m.get("id") != cid] + [entry]
     try:
-        _mutate_json(_CATALOG_PATH, _m, default={})
+        _mutate_json(_catalog_path(), _m, default={})
     except Exception:
         log.warning("catalog card for '%s' was not written", preset_id, exc_info=True)
 
 
 def _load_presets() -> dict:
-    return _read_json(_PRESETS_PATH, {}) or {}
+    return _read_json(_presets_path(), {}) or {}
 
 
 # ── Ownership: who may WRITE a motor ────────────────────────────────────────
@@ -478,7 +517,7 @@ def _backfill_owners() -> None:
     together so a card can never claim a different owner than its motor.
     """
     try:
-        presets = _read_json(_PRESETS_PATH, {}) or {}
+        presets = _read_json(_presets_path(), {}) or {}
         if any(_needs_backfill(p) for p in presets.values() if isinstance(p, dict)):
             def _mp(d: dict) -> None:
                 for pid, p in list(d.items()):
@@ -490,11 +529,11 @@ def _backfill_owners() -> None:
                     p["owner"] = _owner_of(p)
                     p["template"] = tpl
                     d[pid] = p
-            _mutate_json(_PRESETS_PATH, _mp, default={})
+            _mutate_json(_presets_path(), _mp, default={})
     except Exception:  # noqa: BLE001
         log.warning("preset ownership back-fill failed", exc_info=True)
     try:
-        cat = _read_json(_CATALOG_PATH, {}) or {}
+        cat = _read_json(_catalog_path(), {}) or {}
         cards = cat.get("motors") or []
         if any(isinstance(m, dict)
                and str(m.get("owner") or "").strip() in ("", _LEGACY_USER_OWNER)
@@ -503,7 +542,7 @@ def _backfill_owners() -> None:
                 for m in d.get("motors", []):
                     if isinstance(m, dict):
                         m["owner"] = _owner_of(m)
-            _mutate_json(_CATALOG_PATH, _mc, default={})
+            _mutate_json(_catalog_path(), _mc, default={})
     except Exception:  # noqa: BLE001
         log.warning("catalog ownership back-fill failed", exc_info=True)
 
@@ -532,7 +571,7 @@ def _put_preset(pid: str, preset: dict) -> dict:
     # both fail-open, neither can block the save.  See motor_ai_sim/audit.py.
     try:
         from motor_ai_sim import audit as _audit_mod
-        _audit_mod.snapshot_presets(_PRESETS_PATH, note=pid)
+        _audit_mod.snapshot_presets(_presets_path(), note=pid)
     except Exception:  # noqa: BLE001
         _audit_mod = None
 
@@ -544,7 +583,7 @@ def _put_preset(pid: str, preset: dict) -> dict:
                 preset.get("geometry"),
                 note="new entry" if pid not in d else "overwrite")
         d[pid] = preset
-    _mutate_json(_PRESETS_PATH, _m, default={})
+    _mutate_json(_presets_path(), _m, default={})
     return preset
 
 
@@ -552,7 +591,7 @@ def _drop_preset(pid: str) -> None:
     """Remove ONE motor, preserving every other entry as it stands on disk now."""
     try:
         from motor_ai_sim import audit as _audit_mod
-        _audit_mod.snapshot_presets(_PRESETS_PATH, note=f"del_{pid}")
+        _audit_mod.snapshot_presets(_presets_path(), note=f"del_{pid}")
     except Exception:  # noqa: BLE001
         _audit_mod = None
 
@@ -563,7 +602,7 @@ def _drop_preset(pid: str) -> None:
                 (d.get(pid) or {}).get("geometry") if isinstance(d.get(pid), dict) else None,
                 None, note="delete")
         d.pop(pid, None)
-    _mutate_json(_PRESETS_PATH, _m, default={})
+    _mutate_json(_presets_path(), _m, default={})
 
 
 def _fmt_num(v) -> str:
@@ -691,7 +730,7 @@ def apply_preset(preset_id: str,
     mesh = p.get("mesh", {}) or {}
 
     try:
-        config = yaml.safe_load(_CONFIG_PATH.read_text(encoding="utf-8"))
+        config = yaml.safe_load(_config_path().read_text(encoding="utf-8"))
         geo_sec = config.setdefault("geometry", {})
         for k, v in geometry.items():
             geo_sec[k] = v
@@ -719,12 +758,12 @@ def apply_preset(preset_id: str,
         # Atomic write (temp + replace) so a concurrent reader never catches the
         # config file mid-truncate and parses it empty (which would nuke it).
         import os as _os
-        _tmp = _CONFIG_PATH.with_suffix(".yaml.tmp")
+        _tmp = _config_path().with_suffix(".yaml.tmp")
         _tmp.write_text(
             yaml.dump(config, allow_unicode=True, default_flow_style=False, sort_keys=False),
             encoding="utf-8",
         )
-        _os.replace(_tmp, _CONFIG_PATH)
+        _os.replace(_tmp, _config_path())
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"failed to write config: {e}")
 
@@ -1190,7 +1229,7 @@ def save_motor_settings(preset_id: str, patch: SettingsPatch,
         p["saved_at"] = _now_utc_iso()
         d[preset_id] = p
         saved = p
-    _mutate_json(_PRESETS_PATH, _m, default={})
+    _mutate_json(_presets_path(), _m, default={})
     if not saved:
         raise HTTPException(status_code=404, detail=f"motor '{preset_id}' not found")
     # keep the Motors-tab card in sync for user motors; only rebuild the
@@ -1278,7 +1317,7 @@ def rename_preset(preset_id: str, req: RenamePresetRequest,
         p["updated_at"] = _dt.datetime.now().isoformat(timespec="seconds")
         p["saved_at"] = _now_utc_iso()      # a rename IS a write to this motor
         renamed = p
-    _mutate_json(_PRESETS_PATH, _m, default={})
+    _mutate_json(_presets_path(), _m, default={})
     if not renamed:
         raise HTTPException(status_code=404, detail=f"preset '{preset_id}' not found")
     # Refresh the Motors-tab card in place; keep its thumbnail (no CadQuery run).
@@ -1309,7 +1348,7 @@ def set_preset_lock(preset_id: str, req: LockRequest,
         p = d.get(preset_id)
         if p:
             p["locked"] = locked
-    _mutate_json(_PRESETS_PATH, _m, default={})
+    _mutate_json(_presets_path(), _m, default={})
 
     # Mirror the flag onto the card so the padlock shows in the Motors tab.
     try:
@@ -1317,7 +1356,7 @@ def set_preset_lock(preset_id: str, req: LockRequest,
             for m in d.get("motors", []):
                 if m.get("preset") == preset_id or m.get("id") == f"cat_{preset_id}":
                     m["locked"] = locked
-        _mutate_json(_CATALOG_PATH, _mc, default={})
+        _mutate_json(_catalog_path(), _mc, default={})
     except Exception:  # noqa: BLE001
         log.warning("lock flag for '%s' was not mirrored onto its card",
                     preset_id, exc_info=True)
@@ -1346,7 +1385,7 @@ def delete_preset(preset_id: str,
             _before = len(d.get("motors", []))
             d["motors"] = [m for m in d.get("motors", []) if m.get("id") != _cid]
             _removed_card = len(d["motors"]) != _before
-        _mutate_json(_CATALOG_PATH, _m, default={})
+        _mutate_json(_catalog_path(), _m, default={})
     except Exception as _e:
         log.warning("preset '%s' deleted but its catalog card was not (%s)",
                     preset_id, _e)

@@ -55,11 +55,25 @@ _PASSPORT_PATH = _ROOT / "config" / "end_effect_3d.json"
 # (`_cache_paths` / `mkdir` at solve time), and pinned to the repo's own config/
 # a redirected process dropped its sandbox machine's .npz beside — and named the
 # same as — the user's own staged passports.  No env var set: unchanged.
-try:
-    from motor_ai_sim.config import DEFAULT_CONFIG_PATH as _DEFAULT_CONFIG_PATH
-    _CACHE_DIR = Path(str(_DEFAULT_CONFIG_PATH)).parent / ".static3d_cache"
-except Exception:                       # noqa: BLE001 — never break the import
-    _CACHE_DIR = _ROOT / "config" / ".static3d_cache"
+#
+# Migration Stage 1: resolved PER CALL against the caller's workspace.  With
+# none set, the same folder.  The NAME survives — tests/test_static3d_viewer.py
+# monkeypatches it five times, and a value in the module dict wins here.
+def _cache_dir() -> Path:
+    _ov = globals().get("_CACHE_DIR")
+    if _ov is not None:
+        return Path(str(_ov))
+    try:
+        from motor_ai_sim.workspace import root as _ws_root
+        return _ws_root() / ".static3d_cache"
+    except Exception:                   # noqa: BLE001 — never break a solve
+        return _ROOT / "config" / ".static3d_cache"
+
+
+def __getattr__(name):
+    if name == "_CACHE_DIR":
+        return _cache_dir()
+    raise AttributeError(name)
 
 DEFAULT_PRESET = "live"
 
@@ -245,7 +259,7 @@ def _stem(fp: str, fidelity: str, kind: str) -> str:
 
 
 def _paths(stem: str) -> Tuple[Path, Path]:
-    return _CACHE_DIR / f"{stem}.npz", _CACHE_DIR / f"{stem}.json"
+    return _cache_dir() / f"{stem}.npz", _cache_dir() / f"{stem}.json"
 
 
 class _CachedMesh:
@@ -291,7 +305,7 @@ class _CachedTM:
 
 
 def _write_entry(stem: str, meta: dict, arrays: Dict[str, np.ndarray]) -> None:
-    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    _cache_dir().mkdir(parents=True, exist_ok=True)
     npz, js = _paths(stem)
     tmp = str(npz) + ".tmp.npz"
     np.savez_compressed(tmp, **arrays)
@@ -342,10 +356,10 @@ def _tm_from_entry(entry: dict) -> _CachedTM:
 
 
 def _list_entries() -> List[dict]:
-    if not _CACHE_DIR.exists():
+    if not _cache_dir().exists():
         return []
     out = []
-    for js in sorted(_CACHE_DIR.glob("*.json")):
+    for js in sorted(_cache_dir().glob("*.json")):
         try:
             with open(js, encoding="utf-8") as fh:
                 m = json.load(fh)
@@ -894,7 +908,7 @@ def solves():
     """Everything this tab has on disk, and how big it is."""
     e = _list_entries()
     return {"entries": e,
-            "cache_dir": str(_CACHE_DIR),
+            "cache_dir": str(_cache_dir()),
             "total_bytes": int(sum(x["bytes"] for x in e))}
 
 

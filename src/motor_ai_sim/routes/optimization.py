@@ -59,8 +59,10 @@ def _config_dir_o() -> str:
     open.  With no env var set this is byte-identical to the old expression.
     """
     try:
-        from motor_ai_sim.config import DEFAULT_CONFIG_PATH as _cp
-        return os.path.dirname(str(_cp))
+        # Stage 1: the caller's WORKSPACE, which with none set is
+        # ``Path(DEFAULT_CONFIG_PATH).parent`` — the old expression exactly.
+        from motor_ai_sim.workspace import root as _ws_root
+        return str(_ws_root())
     except Exception:                   # noqa: BLE001
         return os.path.join(os.path.dirname(__file__), "..", "..", "..", "config")
 
@@ -570,10 +572,44 @@ _load_eval_rate()
 # run.  At one thread the order is fixed and an eval is bit-identical to itself —
 # which is what lets the screening descent treat its finite differences as exact
 # and skip paying for replicate evaluations (docs/SCREENING_DESCENT.md).
-_EVAL_ENV = dict(os.environ)
-_EVAL_ENV.update({k: "1" for k in (
-    "MKL_NUM_THREADS", "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS",
-    "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS")})
+# Built PER CALL by `_eval_env_for` — see `_base_eval_env` — and NOT captured at
+# import.  It was a module constant snapshotted from `os.environ` the moment
+# this file was first imported, which is wrong twice over: an env change after
+# start-up never reached an eval, and (migration Stage 1) the subprocess
+# inherited whatever `MOTOR_AI_SIM_CONFIG` the SERVER started with, so on a
+# multi-user box every subprocess eval would have solved the OWNER'S machine
+# while the caller waited for an answer about their own.
+_EVAL_THREAD_KEYS = ("MKL_NUM_THREADS", "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS",
+                     "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS")
+
+
+def _base_eval_env() -> Dict[str, str]:
+    """The eval subprocess's environment, fresh, with the caller's WORKSPACE in it.
+
+    ``refine_proc`` is a bare interpreter: no request, no ContextVar, nothing but
+    what this dict says.  ``MOTOR_AI_SIM_CONFIG`` is the only channel it has, and
+    ``config.config_path()`` is exactly the file the caller's workspace resolves
+    to — so the subprocess reads the same machine the request is about.
+    """
+    env = dict(os.environ)
+    env.update({k: "1" for k in _EVAL_THREAD_KEYS})
+    try:
+        from motor_ai_sim.config import config_path as _resolve_cfg_path
+        env["MOTOR_AI_SIM_CONFIG"] = str(_resolve_cfg_path())
+    except Exception:                   # noqa: BLE001 — never fail an eval here
+        pass
+    env["SB_SEED_FROM_PREVIOUS"] = "1"
+    return env
+
+
+def __getattr__(name):
+    """``_EVAL_ENV`` survives as a NAME — tests/test_warm_seed.py reads it to
+    pin ``SB_SEED_FROM_PREVIOUS`` — but it is now a fresh dict per read."""
+    if name == "_EVAL_ENV":
+        return _base_eval_env()
+    raise AttributeError(name)
+
+
 # ── EACH POINT CONTINUES THE PREVIOUS ONE ────────────────────────────────────
 # User, 2026-09-06: "мы же уже договаривались, что проход демагнитизации
 # делается для каждого sweep только один раз; изменения геометрии небольшие, и
@@ -588,7 +624,7 @@ _EVAL_ENV.update({k: "1" for k in (
 # reproducibility behaviour bit for bit.  It only widens which cached state a
 # run may CONTINUE; the settle test at the eddy handoff still decides whether
 # the seed was usable, so a bad seed costs a warm-up period, never an answer.
-_EVAL_ENV["SB_SEED_FROM_PREVIOUS"] = "1"
+# (Set in `_base_eval_env` above, on every env this module builds.)
 
 
 def _eval_env_for(threads: Optional[int]) -> Dict[str, str]:
@@ -602,9 +638,9 @@ def _eval_env_for(threads: Optional[int]) -> Dict[str, str]:
     costs nobody a core; its numbers can move in the last ulp between runs,
     which is what the seed's settle test tolerates anyway.  Descent and DOE
     evals never pass ``threads`` and stay bit-identical."""
+    env = _base_eval_env()
     if not threads or int(threads) <= 1:
-        return _EVAL_ENV
-    env = dict(_EVAL_ENV)
+        return env
     env.update({k: str(int(threads)) for k in (
         "MKL_NUM_THREADS", "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS",
         "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS")})
@@ -2042,8 +2078,8 @@ import os as _os_o
 
 def _descent_store_path() -> str:
     try:
-        from motor_ai_sim.config import DEFAULT_CONFIG_PATH as _cp
-        _base = _os_o.path.dirname(str(_cp))
+        from motor_ai_sim.workspace import root as _ws_root
+        _base = str(_ws_root())
     except Exception:
         _base = _os_o.path.join(_os_o.path.dirname(__file__), "..", "..", "..", "config")
     return _os_o.path.abspath(_os_o.path.join(_base, ".last_descent.json"))

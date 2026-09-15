@@ -34,11 +34,27 @@ _AUDIT_PATH = _ROOT / "logs" / "geometry_audit.jsonl"
 # the user's real `.presets_history/` and evicted their genuine backups past
 # `_KEEP` — the recovery copies that exist precisely for the 2026-08-06 accident.
 # With no env var set this is byte-identical to `_ROOT / "config" / …`.
-try:
-    from motor_ai_sim.config import DEFAULT_CONFIG_PATH as _DEFAULT_CONFIG_PATH
-    _HISTORY_DIR = Path(str(_DEFAULT_CONFIG_PATH)).parent / ".presets_history"
-except Exception:                       # noqa: BLE001 — never break the import
-    _HISTORY_DIR = _ROOT / "config" / ".presets_history"
+#
+# Migration Stage 1: resolved PER CALL against the caller's workspace.  A
+# monkeypatched ``_HISTORY_DIR`` in the module dict still wins; a plain read of
+# the name goes through ``__getattr__`` below.
+def _history_dir() -> Path:
+    _ov = globals().get("_HISTORY_DIR")
+    if _ov is not None:
+        return Path(str(_ov))
+    try:
+        from motor_ai_sim.workspace import root as _ws_root
+        return _ws_root() / ".presets_history"
+    except Exception:                   # noqa: BLE001 — never break a snapshot
+        return _ROOT / "config" / ".presets_history"
+
+
+def __getattr__(name):
+    if name == "_HISTORY_DIR":
+        return _history_dir()
+    raise AttributeError(name)
+
+
 _KEEP = 40
 
 # The fields that say WHICH MACHINE this is.  A change in any of them is a
@@ -97,11 +113,11 @@ def snapshot_presets(path: Path, note: str = "") -> None:
     try:
         if not Path(path).exists():
             return
-        _HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+        _history_dir().mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
         tag = "".join(c if c.isalnum() or c in "-_" else "_" for c in note)[:40]
-        shutil.copy2(path, _HISTORY_DIR / f"presets_{stamp}{('_' + tag) if tag else ''}.json")
-        keep = sorted(_HISTORY_DIR.glob("presets_*.json"))[:-_KEEP]
+        shutil.copy2(path, _history_dir() / f"presets_{stamp}{('_' + tag) if tag else ''}.json")
+        keep = sorted(_history_dir().glob("presets_*.json"))[:-_KEEP]
         for old in keep:
             try:
                 old.unlink()

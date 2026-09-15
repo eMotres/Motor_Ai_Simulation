@@ -36,8 +36,10 @@ _MAX_BYTES = 64 * 1024
 
 def _store_path() -> str:
     try:
-        from motor_ai_sim.config import DEFAULT_CONFIG_PATH as _cp
-        base = os.path.dirname(str(_cp))
+        # Stage 1: the caller's WORKSPACE, which with none set is
+        # ``Path(DEFAULT_CONFIG_PATH).parent`` — the old expression exactly.
+        from motor_ai_sim.workspace import root as _ws_root
+        base = str(_ws_root())
     except Exception:  # noqa: BLE001
         base = os.path.join(os.path.dirname(__file__), "..", "..", "..", "config")
     return os.path.abspath(os.path.join(base, ".panel_settings.json"))

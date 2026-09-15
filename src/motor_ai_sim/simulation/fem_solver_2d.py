@@ -336,8 +336,8 @@ def _daxis_disk_path():
     in-memory cache) don't each re-run the calibration → per-design timeout."""
     try:
         import os
-        from motor_ai_sim.config import DEFAULT_CONFIG_PATH as _cp
-        return os.path.join(os.path.dirname(str(_cp)), ".daxis_cache.json")
+        from motor_ai_sim.workspace import root as _ws_root
+        return os.path.join(str(_ws_root()), ".daxis_cache.json")
     except Exception:
         return None
 
@@ -2243,9 +2243,11 @@ def _warm_cache_disabled() -> bool:
 
 
 def _warm_cache_path():
-    from motor_ai_sim.config import DEFAULT_CONFIG_PATH as _dcp
-    from pathlib import Path as _P
-    return _P(_dcp).parent / ".warm_cache.npz"
+    # Per WORKSPACE (Stage 1).  Cross-user seeding would seed the WRONG MACHINE:
+    # the seed is a field state, and a field state from someone else's geometry
+    # is not a warm start, it is a wrong answer with a head start.
+    from motor_ai_sim.workspace import root as _ws_root
+    return _ws_root() / ".warm_cache.npz"
 
 
 # ── SWEEP MODE: seed the next point from the previous one ───────────────────

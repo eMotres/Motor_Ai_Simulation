@@ -32,11 +32,25 @@ _ROOT = Path(__file__).parent.parent.parent.parent
 # pinned to the repo's own config/, and `_save_all` WRITES it: a redirected
 # process appended its sandbox runs to the user's real saved-simulation library.
 # With no env var set this is byte-identical to `_ROOT / "config" / …`.
-try:
-    from motor_ai_sim.config import DEFAULT_CONFIG_PATH as _DEFAULT_CONFIG_PATH
-    _STORE = Path(str(_DEFAULT_CONFIG_PATH)).parent / "saved_simulations.json"
-except Exception:                       # noqa: BLE001 — never break the import
-    _STORE = _ROOT / "config" / "saved_simulations.json"
+#
+# Migration Stage 1: resolved PER CALL against the caller's workspace.  With
+# none set that is the same folder and the same file.  The NAME survives for the
+# completeness test and for tests/test_saved_sims_nested.py, which patches it.
+def _store() -> Path:
+    _ov = globals().get("_STORE")
+    if _ov is not None:
+        return Path(str(_ov))
+    try:
+        from motor_ai_sim.workspace import root as _ws_root
+        return _ws_root() / "saved_simulations.json"
+    except Exception:                   # noqa: BLE001 — never break a save
+        return _ROOT / "config" / "saved_simulations.json"
+
+
+def __getattr__(name):
+    if name == "_STORE":
+        return _store()
+    raise AttributeError(name)
 # Serialise read-modify-write so two near-simultaneous saves can't clobber each
 # other (single-worker uvicorn handles requests on a threadpool).
 _LOCK = threading.Lock()
@@ -44,10 +58,10 @@ _LOCK = threading.Lock()
 
 def _load_all() -> Dict[str, list]:
     """Full store {bucket: [sims]}.  Migrates a legacy flat list → {'local': …}."""
-    if not _STORE.exists():
+    if not _store().exists():
         return {}
     try:
-        data = json.loads(_STORE.read_text(encoding="utf-8"))
+        data = json.loads(_store().read_text(encoding="utf-8"))
         if isinstance(data, list):           # legacy single-list format
             return {"local": data}
         return data if isinstance(data, dict) else {}
@@ -62,7 +76,7 @@ def _save_all(store: Dict[str, list]) -> None:
     inside that window reads an empty library and the next save persists it."""
     try:
         from motor_ai_sim.json_store import atomic_write_json
-        atomic_write_json(_STORE, store)
+        atomic_write_json(_store(), store)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"failed to write store: {e}")
 

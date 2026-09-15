@@ -202,7 +202,11 @@ class MotorGeometryParams:
             MotorGeometryParams instance with values from config
         """
         if config_path is None:
-            config_path = DEFAULT_CONFIG_PATH
+            # Per CALL through the workspace resolver (migration Stage 1), not
+            # the import-time constant: with no workspace set this IS
+            # ``DEFAULT_CONFIG_PATH``, so the single-user path is unchanged.
+            from motor_ai_sim.config import config_path as _resolve_cfg_path
+            config_path = _resolve_cfg_path()
         else:
             config_path = Path(config_path)
         

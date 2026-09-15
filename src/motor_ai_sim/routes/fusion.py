@@ -50,20 +50,37 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import Response
 
 from motor_ai_sim.auth import require_admin
-from motor_ai_sim.config import get_config, DEFAULT_CONFIG_PATH
+from motor_ai_sim.config import get_config
+from motor_ai_sim.workspace import shared_root as _ws_shared
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/fusion", tags=["fusion"])
 
-_MAP_FILE = Path(DEFAULT_CONFIG_PATH).parent / "fusion_param_map.yaml"
+# A SHARED read-only library (§2.1 of the migration plan), so it resolves
+# through ``workspace.shared_root()`` rather than the per-user root.  With
+# ``SHARED_ROOT`` unset that is the process config directory — the folder this
+# constant has always named.
+def _map_file() -> Path:
+    _ov = globals().get("_MAP_FILE")
+    if _ov is not None:
+        return Path(str(_ov))
+    return _ws_shared() / "fusion_param_map.yaml"
+
+
+def __getattr__(name):
+    if name == "_MAP_FILE":
+        return _map_file()
+    raise AttributeError(name)
+
+
 _NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def _name_map() -> Dict[str, str]:
     """our geometry key -> Fusion user-parameter name (identity when unmapped)."""
     try:
-        if _MAP_FILE.is_file():
-            d = yaml.safe_load(_MAP_FILE.read_text(encoding="utf-8")) or {}
+        if _map_file().is_file():
+            d = yaml.safe_load(_map_file().read_text(encoding="utf-8")) or {}
             m = d.get("map") if isinstance(d.get("map"), dict) else d
             return {str(k): str(v) for k, v in (m or {}).items()
                     if v and _NAME_RE.match(str(v))}
@@ -141,7 +158,7 @@ def export_params_csv():
 
 @router.get("/params.json")
 def export_params_json():
-    return {"machine": _stem(), "map_file": str(_MAP_FILE),
+    return {"machine": _stem(), "map_file": str(_map_file()),
             "parameters": [{"name": f, "key": k, "value": v, "unit": u, "comment": d}
                            for f, k, v, u, d in _rows()]}
 

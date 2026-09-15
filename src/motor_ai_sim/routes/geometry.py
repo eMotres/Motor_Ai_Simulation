@@ -11,7 +11,8 @@ import yaml
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
 
-from motor_ai_sim.config import get_config, clear_config_cache, DEFAULT_CONFIG_PATH
+from motor_ai_sim.config import get_config, clear_config_cache, config_path as _resolve_cfg_path
+from motor_ai_sim.workspace import root as _ws_root_g
 from motor_ai_sim.routes._validation import (
     DERIVED_GEOMETRY_NAMES,
     MAX_POINTCLOUD_POINTS,
@@ -169,7 +170,7 @@ def update_geometry(update: GeometryUpdateModel, request: Request = None):
         params = update_current_geometry(**update.model_dump())
 
         # Persist changes to YAML so they survive server restarts
-        config_path = Path(DEFAULT_CONFIG_PATH)
+        config_path = Path(str(_resolve_cfg_path()))
         with open(config_path, "r", encoding="utf-8") as f:
             config = yaml.safe_load(f)
         geometry_section = config.setdefault("geometry", {})
@@ -423,7 +424,7 @@ def add_parameter(req: AddParameterRequest):
         raise reject("invalid parameter definition", bad)
 
     try:
-        config_path = Path(DEFAULT_CONFIG_PATH)
+        config_path = Path(str(_resolve_cfg_path()))
         with open(config_path, "r", encoding="utf-8") as f:
             config = yaml.safe_load(f)
 
@@ -487,7 +488,7 @@ def delete_parameter(name: str):
             f"directly). Change its value instead.",
             protected=True)])
     try:
-        config_path = Path(DEFAULT_CONFIG_PATH)
+        config_path = Path(str(_resolve_cfg_path()))
         with open(config_path, "r", encoding="utf-8") as f:
             config = yaml.safe_load(f)
 
@@ -610,7 +611,23 @@ _mesh_extruded_cache: dict  = {"hash": None, "data": None, "build_time_s": None}
 # newest on disk costs ~10 MB and makes "back to the previous value" and
 # "after a restart" instant.  Keyed by the SAME params+part-state hash the
 # memory slot uses, so the two can never disagree about what a payload is.
-_MESH_DISK_DIR = Path(DEFAULT_CONFIG_PATH).parent / ".mesh_cache"
+# Per WORKSPACE since Stage 1 — a cached viewer mesh is a picture of ONE
+# machine, so it must never be served across users.  With no workspace set
+# this is the folder it always was.  The name survives for the completeness
+# test; a monkeypatched value in the module dict wins.
+def _mesh_disk_dir() -> Path:
+    _ov = globals().get("_MESH_DISK_DIR")
+    if _ov is not None:
+        return Path(str(_ov))
+    return _ws_root_g() / ".mesh_cache"
+
+
+def __getattr__(name):
+    if name == "_MESH_DISK_DIR":
+        return _mesh_disk_dir()
+    raise AttributeError(name)
+
+
 _MESH_DISK_KEEP = 40
 
 
@@ -618,7 +635,7 @@ def _mesh_disk_get(kind: str, params_hash: str):
     """Cached payload for (kind, hash) from disk, or None.  Never raises."""
     try:
         import gzip, json as _json
-        p = _MESH_DISK_DIR / f"{kind}.{params_hash}.json.gz"
+        p = _mesh_disk_dir() / f"{kind}.{params_hash}.json.gz"
         if not p.is_file():
             return None
         with gzip.open(p, "rt", encoding="utf-8") as fh:
@@ -631,13 +648,13 @@ def _mesh_disk_put(kind: str, params_hash: str, data) -> None:
     """Store a payload on disk and trim the kind to the newest entries."""
     try:
         import gzip, json as _json, os as _os
-        _MESH_DISK_DIR.mkdir(parents=True, exist_ok=True)
-        p = _MESH_DISK_DIR / f"{kind}.{params_hash}.json.gz"
+        _mesh_disk_dir().mkdir(parents=True, exist_ok=True)
+        p = _mesh_disk_dir() / f"{kind}.{params_hash}.json.gz"
         tmp = p.with_suffix(".tmp")
         with gzip.open(tmp, "wt", encoding="utf-8", compresslevel=5) as fh:
             _json.dump(data, fh)
         _os.replace(tmp, p)
-        old = sorted(_MESH_DISK_DIR.glob(f"{kind}.*.json.gz"),
+        old = sorted(_mesh_disk_dir().glob(f"{kind}.*.json.gz"),
                      key=lambda q: q.stat().st_mtime)
         for q in old[:-_MESH_DISK_KEEP]:
             q.unlink(missing_ok=True)

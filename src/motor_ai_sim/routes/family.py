@@ -30,14 +30,25 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Response
 from pydantic import BaseModel
 
 from motor_ai_sim.auth import caller_identity, require_admin
-from motor_ai_sim.config import DEFAULT_CONFIG_PATH, get_config
+from motor_ai_sim.config import get_config
+from motor_ai_sim.workspace import root as _ws_root_f
 from motor_ai_sim.motor_access import (MODE_ANONYMOUS, MODE_GRANTED,
                                        catalog_access, may_see_die)
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/family", tags=["family"])
 
-_DIES_DIR = Path(DEFAULT_CONFIG_PATH).parent / "dies"
+# Migration Stage 1: the die catalog lives in the caller's WORKSPACE, resolved
+# per call.  With no workspace set that is ``Path(DEFAULT_CONFIG_PATH).parent /
+# "dies"`` — the old expression exactly.  (Stage 2 splits this into a shared
+# read-only template layer plus a per-user results overlay.)  The NAME survives:
+# eight test modules monkeypatch it, and a value in the module dict wins.
+def _dies_dir() -> Path:
+    _ov = globals().get("_DIES_DIR")
+    if _ov is not None:
+        return Path(str(_ov))
+    from motor_ai_sim.workspace import root as _ws_root
+    return _ws_root() / "dies"
 
 # The keys a CONFIGURATION snapshots on top of a die — everything the stamp
 # does not fix: stack length and the whole wire stack.
@@ -160,7 +171,7 @@ def _check_name(name: str, what: str) -> str:
 
 
 def _die_dir(die: str) -> Path:
-    return _DIES_DIR / die
+    return _dies_dir() / die
 
 
 def _die_file(die: str) -> Path:
@@ -189,9 +200,9 @@ def catalog_dies() -> list[dict]:
     """Every die on disk with its configuration and duty counts — the admin
     motor picker's source (unfiltered; the route behind it is admin-only)."""
     out: list[dict] = []
-    if not _DIES_DIR.is_dir():
+    if not _dies_dir().is_dir():
         return out
-    for dd in sorted(_DIES_DIR.iterdir()):
+    for dd in sorted(_dies_dir().iterdir()):
         if not dd.is_dir() or not (dd / "die.yaml").is_file():
             continue
         try:
@@ -221,9 +232,9 @@ def catalog_dies() -> list[dict]:
 
 def die_names() -> set[str]:
     """The die names a grant may legally reference."""
-    if not _DIES_DIR.is_dir():
+    if not _dies_dir().is_dir():
         return set()
-    return {dd.name for dd in _DIES_DIR.iterdir()
+    return {dd.name for dd in _dies_dir().iterdir()
             if dd.is_dir() and (dd / "die.yaml").is_file()}
 
 
@@ -256,7 +267,7 @@ def _save_yaml(p: Path, d: dict) -> None:
             old = p.read_bytes()
             if old != tmp.read_bytes():
                 from datetime import datetime as _dt
-                hdir = _DIES_DIR / ".history" / p.parent.name
+                hdir = _dies_dir() / ".history" / p.parent.name
                 hdir.mkdir(parents=True, exist_ok=True)
                 stamp = _dt.now().strftime("%Y%m%d-%H%M%S")
                 (hdir / f"{p.stem}.{stamp}.yaml").write_bytes(old)
@@ -1029,14 +1040,14 @@ def _tree_signature(with_catalog: bool) -> tuple:
     valid for.  ~30 stats, well under a millisecond."""
     sig = []
     try:
-        for dd in sorted(_DIES_DIR.iterdir()):
+        for dd in sorted(_dies_dir().iterdir()):
             if not dd.is_dir():
                 continue
             for f in sorted(dd.glob("*.yaml")):
                 st = f.stat()
                 sig.append((dd.name, f.name, st.st_mtime_ns, st.st_size))
         if with_catalog:
-            p = Path(DEFAULT_CONFIG_PATH).parent / "motor_catalog.json"
+            p = _ws_root_f() / "motor_catalog.json"
             if p.is_file():
                 st = p.stat()
                 sig.append(("motor_catalog.json", "", st.st_mtime_ns, st.st_size))
@@ -1062,7 +1073,7 @@ def tree(response: Response, authorization: str = Header(default=None)):
     response.headers["Cache-Control"] = "no-store"
     response.headers["Vary"] = "Authorization"
     out = []
-    if not _DIES_DIR.is_dir():
+    if not _dies_dir().is_dir():
         return {"dies": out, "can_write": _can_write}
     # ── Public exhibit: WORKING configurations only (user 2026-08-25) ────────
     # A motor an ANONYMOUS visitor cannot open in Configure (no FEM passport
@@ -1074,8 +1085,7 @@ def tree(response: Response, authorization: str = Header(default=None)):
     if _client_filter:
         try:
             import json as _pj
-            from motor_ai_sim.config import DEFAULT_CONFIG_PATH as _dcp
-            _cat = _pj.loads((Path(_dcp).parent / "motor_catalog.json")
+            _cat = _pj.loads((_ws_root_f() / "motor_catalog.json")
                              .read_text(encoding="utf-8"))
             for _m in _cat.get("motors", []):
                 _g = ((_m.get("passport") or {}).get("geo")) or {}
@@ -1118,7 +1128,7 @@ def tree(response: Response, authorization: str = Header(default=None)):
             res["note"] = "no motors granted yet — ask the vendor"
         return res
 
-    for dd in sorted(_DIES_DIR.iterdir()):
+    for dd in sorted(_dies_dir().iterdir()):
         if not dd.is_dir() or not (dd / "die.yaml").is_file():
             continue
         # A signed-in non-admin sees its granted dies and nothing else — with
@@ -1285,7 +1295,7 @@ def rename_die(die: str, req: DieRename, _admin: dict = Depends(require_admin)):
     if ctx.get("die") == die:
         import json as _json
         ctx["die"] = new
-        _CTX_FILE.write_text(_json.dumps(ctx), encoding="utf-8")
+        _ctx_file().write_text(_json.dumps(ctx), encoding="utf-8")
     log.info("family: die '%s' renamed to '%s'", die, new)
     return {"ok": True, "die": new}
 
@@ -1436,7 +1446,7 @@ def rename_config(die: str, cfg: str, req: ConfigRename, _admin: dict = Depends(
     if ctx.get("die") == die and ctx.get("config") == cfg:
         import json as _json
         ctx["config"] = new
-        _CTX_FILE.write_text(_json.dumps(ctx), encoding="utf-8")
+        _ctx_file().write_text(_json.dumps(ctx), encoding="utf-8")
     log.info("family: configuration '%s/%s' renamed to '%s'", die, cfg, new)
     return {"ok": True, "config": new}
 
@@ -1856,7 +1866,7 @@ def upsert_duty(req: DutyCreate, _admin: dict = Depends(require_admin)):
             if ctx.get("die") == die and ctx.get("config") == _oldn:
                 import json as _json
                 ctx["config"] = cfg
-                _CTX_FILE.write_text(_json.dumps(ctx), encoding="utf-8")
+                _ctx_file().write_text(_json.dumps(ctx), encoding="utf-8")
             log.info("family: configuration '%s/%s' renamed to '%s' — the "
                      "L-number follows the defined stack", die, _oldn, cfg)
             log.info("family: duty '%s/%s/%s' saved (%s, %.1f Arms @ %.0f rpm, γ=%.2f°)",
@@ -2144,7 +2154,7 @@ def rename_duty(die: str, cfg: str, duty: str, req: DutyDuplicate,
             and ctx.get("duty") == duty):
         import json as _json
         ctx["duty"] = new
-        _CTX_FILE.write_text(_json.dumps(ctx), encoding="utf-8")
+        _ctx_file().write_text(_json.dumps(ctx), encoding="utf-8")
     log.info("family: duty '%s/%s/%s' renamed to '%s'", die, cfg, duty, new)
     return {"ok": True, "duty": new}
 
@@ -2195,13 +2205,28 @@ def delete_duty(die: str, cfg: str, duty: str, _admin: dict = Depends(require_ad
 # WHICH die/configuration the live machine currently is — written when a duty
 # is loaded, read by the geometry route to enforce the locks.  A sidecar file,
 # not motor_config.yaml, so this layer still never rewrites the live config.
-_CTX_FILE = Path(DEFAULT_CONFIG_PATH).parent / ".family_context.json"
+# Per WORKSPACE since Stage 1 (with none set: the folder it always was).  The
+# name stays readable for the completeness test and for the two modules that
+# monkeypatch it.
+def _ctx_file() -> Path:
+    _ov = globals().get("_CTX_FILE")
+    if _ov is not None:
+        return Path(str(_ov))
+    from motor_ai_sim.workspace import root as _ws_root
+    return _ws_root() / ".family_context.json"
+
+
+def __getattr__(name):
+    _r = {"_DIES_DIR": _dies_dir, "_CTX_FILE": _ctx_file}.get(name)
+    if _r is None:
+        raise AttributeError(name)
+    return _r()
 
 
 def _read_ctx() -> Optional[dict]:
     try:
         import json
-        d = json.loads(_CTX_FILE.read_text(encoding="utf-8"))
+        d = json.loads(_ctx_file().read_text(encoding="utf-8"))
         return d if isinstance(d, dict) and d.get("die") else None
     except Exception:
         return None
@@ -2215,7 +2240,7 @@ def release_context(reason: str) -> Optional[str]:
     released and why.  Returns the die that was active, or None."""
     ctx = _read_ctx() or {}
     import json as _json
-    _CTX_FILE.write_text(_json.dumps({
+    _ctx_file().write_text(_json.dumps({
         "die": None, "config": None, "duty": None,
         "released_from": ctx.get("die"),
         "reason": reason,
@@ -2348,10 +2373,10 @@ def activate(req: Activate, _admin: dict = Depends(require_admin)):
     d = _load_yaml(_die_file(die), "die")
     c = _load_yaml(_cfg_file(die, cfg), "configuration")
     import json
-    _CTX_FILE.write_text(json.dumps({"die": die, "config": cfg,
-                                     "duty": req.duty,
-                                     "at": datetime.now().isoformat(timespec="seconds")}),
-                         encoding="utf-8")
+    _ctx_file().write_text(
+        json.dumps({"die": die, "config": cfg, "duty": req.duty,
+                    "at": datetime.now().isoformat(timespec="seconds")}),
+        encoding="utf-8")
     # The duty's MESH fidelity block goes to the server's `mesh:` config too
     # (2026-09-09).  A browser adopts that block ONCE at boot
     # (web/src/lib/meshConfigSync.ts) — so a duty loaded through the API or
@@ -2457,7 +2482,7 @@ def context(response: Response, authorization: str = Header(default=None)):
         _rel = {}
         try:
             import json as _json
-            _raw = _json.loads(_CTX_FILE.read_text(encoding="utf-8"))
+            _raw = _json.loads(_ctx_file().read_text(encoding="utf-8"))
             if isinstance(_raw, dict) and _raw.get("released_from"):
                 _rel = {"released_from": _raw.get("released_from"),
                         "reason": _raw.get("reason"), "at": _raw.get("at")}
@@ -2951,7 +2976,7 @@ def datasheet(die: str, cfg: str, authorization: str = Header(default=None)):
     passport = None
     try:
         import json
-        cat_path = Path(DEFAULT_CONFIG_PATH).parent / "motor_catalog.json"
+        cat_path = _ws_root_f() / "motor_catalog.json"
         cards = json.loads(cat_path.read_text(encoding="utf-8")).get("motors", [])
         want = f"{die} {cfg}".casefold()
         hit = next((m for m in cards
@@ -3167,7 +3192,7 @@ def payload(die: str, cfg: str, duty: Optional[str] = None,
 # a result stamped on a different build shows the mismatch like any stale row.
 
 def _hist_dir(die: str) -> Path:
-    return _DIES_DIR / ".history" / die
+    return _dies_dir() / ".history" / die
 
 
 def _hist_stem(die: str, cfg: Optional[str]) -> str:

@@ -12,6 +12,11 @@ export const GOOGLE_CLIENT_ID =
 
 const TOKEN_KEY = 'mas.auth.token';
 const USER_KEY = 'mas.auth.user';
+/** Forensic breadcrumb: WHY the last session was cleared, and by what answer.
+ *  Written on every clear so the next bug report can say more than "it logged
+ *  me out again" (the daily sign-outs of Aug–Sep 2026 had no client evidence
+ *  at all). */
+const LAST_LOGOUT_KEY = 'auth.lastLogout';
 
 export interface SessionUser {
   email: string;
@@ -54,11 +59,94 @@ export function storeSession(token: string, user: SessionUser): void {
   } catch { /* private mode — session just won't survive a reload */ }
 }
 
-export function clearSession(): void {
+/** Swap in a renewed token, keeping the stored user (sliding renewal). */
+export function updateToken(token: string): void {
+  try { localStorage.setItem(TOKEN_KEY, token); } catch { /* ignore */ }
+}
+
+/** Clear the session AND leave a note saying why. `reason` is the server's
+ *  authError (expired / revoked / bad_signature / …) or a client-side cause. */
+export function clearSession(reason = 'unknown', meResponse?: unknown): void {
+  try {
+    const note = {
+      ts: new Date().toISOString(),
+      reason,
+      sid: getSessionSid(),
+      tokenExp: getTokenExpiry(),
+      meResponse: meResponse ?? null,
+      userAgent: navigator.userAgent,
+    };
+    // eslint-disable-next-line no-console
+    console.warn('[auth] session cleared —', reason, note);
+    localStorage.setItem(LAST_LOGOUT_KEY, JSON.stringify(note));
+  } catch { /* ignore */ }
   try {
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(USER_KEY);
   } catch { /* ignore */ }
+}
+
+/** The note left by the last clearSession, for the bug report. */
+export function lastLogout(): Record<string, unknown> | null {
+  try {
+    const raw = localStorage.getItem(LAST_LOGOUT_KEY);
+    return raw ? (JSON.parse(raw) as Record<string, unknown>) : null;
+  } catch { return null; }
+}
+
+/** POST /api/auth/logout — revokes the session server-side before we forget
+ *  the token. Best effort: a failure must never block signing out locally. */
+export async function serverLogout(): Promise<void> {
+  const token = getStoredToken();
+  if (!token) return;
+  try {
+    await fetch(`${API}/api/auth/logout`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  } catch { /* offline / backend down — the local clear still happens */ }
+}
+
+/** This session's server-side id, read from our own token (display only). */
+export function getSessionSid(): string | null {
+  const t = getStoredToken();
+  if (!t) return null;
+  const sid = decodeJwtPayload(t).sid;
+  return typeof sid === 'string' && sid ? sid : null;
+}
+
+/** `exp` of the stored token in ms, or null. Display + diagnostics only. */
+export function getTokenExpiry(): number | null {
+  const t = getStoredToken();
+  if (!t) return null;
+  const exp = decodeJwtPayload(t).exp;
+  return typeof exp === 'number' ? exp * 1000 : null;
+}
+
+export interface SessionRow {
+  sid: string; email: string; created: number; lastSeen: number; expires: number;
+  userAgent: string; ip: string; loginMethod: string; revoked: boolean;
+}
+
+/** My own sessions (GET /api/auth/sessions). */
+export async function listMySessions(): Promise<{ current: string | null; sessions: SessionRow[] }> {
+  const token = getStoredToken();
+  const r = await fetch(`${API}/api/auth/sessions`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+  });
+  if (!r.ok) throw new Error(`sessions HTTP ${r.status}`);
+  const j = await r.json() as { current: string | null; sessions: SessionRow[] };
+  return { current: j.current ?? null, sessions: j.sessions ?? [] };
+}
+
+/** Revoke one of my sessions. */
+export async function revokeMySession(sid: string): Promise<void> {
+  const token = getStoredToken();
+  const r = await fetch(`${API}/api/auth/sessions/${encodeURIComponent(sid)}/revoke`, {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+  });
+  if (!r.ok) throw new Error(`revoke HTTP ${r.status}`);
 }
 
 async function post(path: string, body: unknown): Promise<{ token: string; user: SessionUser }> {

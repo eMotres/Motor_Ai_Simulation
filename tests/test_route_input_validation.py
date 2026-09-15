@@ -206,11 +206,15 @@ class TestGeoOverride:
             assert r.status_code == 422, f"{route}: {r.status_code}"
             assert "geo" in _fields(r)
 
-    def test_the_simulation_routes_reject_it_too(self, client):
-        r = client.get("/api/simulation/physics/thermal_field2d",
-                       params={"geo": "{broken"})
-        assert r.status_code == 422, r.text[:300]
-        assert "geo" in _fields(r)
+    def test_the_thermal_routes_reject_it_too(self, client):
+        # The thermal solve moved to its own router on 2026-09-07
+        # (/api/simulation/physics/thermal_field2d -> /api/thermal/field); the
+        # refusal is the same one, from the same shared parser.
+        for route in ("/api/thermal/field", "/api/thermal/mesh",
+                      "/api/thermal/last"):
+            r = client.get(route, params={"geo": "{broken"})
+            assert r.status_code == 422, f"{route}: {r.text[:300]}"
+            assert "geo" in _fields(r), route
 
 
 class TestMatOverride:

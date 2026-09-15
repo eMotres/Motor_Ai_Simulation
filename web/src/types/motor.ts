@@ -157,6 +157,12 @@ export interface SweepConfig {
   vBusV?: number;
   /** PWM scheme → usable peak-phase factor: svpwm=1/√3, sine=1/2, sixstep=2/π. */
   modulation?: 'svpwm' | 'sine' | 'sixstep';
+  /** Wall-clock stamp (ms) of the last edit the USER made to this config, in
+   *  whichever browser made it.  The server keeps the body as-is, so the stamp
+   *  travels with it and the newest copy wins on load — a stale profile can no
+   *  longer push its old geometry study over a γ/current study made elsewhere
+   *  (2026-09-08: "после перезагрузки он сбросился на Rotor Housing Thickness"). */
+  updatedAt?: number;
 }
 
 // ── Design optimization (Pareto search) ───────────────────────────────────────

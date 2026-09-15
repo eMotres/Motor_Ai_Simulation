@@ -134,6 +134,19 @@ def stator_unit_frame(p: Dict) -> Dict:
     wire_dx = float(p["wire_spacing_x"]);     wire_dy  = float(p["wire_spacing_y"])
     wire_h  = float(p["wire_height"]);        n_wires  = int(p["num_wires_per_slot"])
     slot_h  = float(p["slot_height"])
+    # STRIPS PER WIRE ROW — the template has to lay the same column cadquery_geometry
+    # does (N strips of wire_width, 2·wire_spacing_x apart) or the structured
+    # thermal mesh carries 1/N of the copper the CAD drew, and the loss map that
+    # is normalised on it lands on a machine with one strip per row.
+    from motor_ai_sim.winding import (wire_split_from_geo as _ws_geo,
+                                      strip_gap_mm as _strip_gap,
+                                      winding_footprint_mm as _fp)
+    try:
+        n_split   = _ws_geo(p)
+        strip_gap = _strip_gap(p)
+        wire_col  = _fp(p)
+    except (ValueError, TypeError):        # unusable knob → one solid wire
+        n_split, strip_gap, wire_col = 1, 0.0, wire_w
     num_slots = int(p["num_slots"]); half_slots = num_slots // 2
     unit_deg = 360.0 / half_slots                      # 30° for 24 slots
 
@@ -145,8 +158,8 @@ def stator_unit_frame(p: Dict) -> Dict:
     # vertical walls (local x, mirrored for the left half)
     x_tooth = tooth_w / 2.0                            # wound-tooth wall
     x_coil0 = x_tooth + ins_w + wire_dx / 2.0          # coil column left (right_x)
-    x_coil1 = x_coil0 + wire_w                         # coil column right
-    x_cut   = (tooth_w / 2.0 + ins_w * 2.0 + wire_w + wire_dx * 2.0 + tooth2_w)
+    x_coil1 = x_coil0 + wire_col                       # coil column right
+    x_cut   = (tooth_w / 2.0 + ins_w * 2.0 + wire_col + wire_dx * 2.0 + tooth2_w)
     half_ang = math.radians(unit_deg / 2.0)
     # slot-opening ledge (fill_r2 circle centre) — same algebra as the cutter
     fill_r2 = ((inner_r + cut_w) * math.sin(half_ang) - x_cut) / (1.0 - math.sin(half_ang))
@@ -167,6 +180,10 @@ def stator_unit_frame(p: Dict) -> Dict:
         "wire_w": wire_w, "wire_h": wire_h, "wire_dx": wire_dx, "wire_dy": wire_dy,
         "ins_w": ins_w, "n_wires": (0 if wire_h <= 1e-3 else n_wires),
         "core_h": core_h, "cut_w": cut_w,
+        # the split: how many strips per row, the enamel gap between them, and
+        # the column they span (== wire_w at n_split = 1)
+        "n_split": int(n_split), "strip_gap": float(strip_gap),
+        "wire_col": float(wire_col),
     }
 
 
@@ -206,10 +223,17 @@ def stator_half_mesh(p: Dict, density: float = 1.0):
     ins, nw = f["ins_w"], f["n_wires"]
     y_sb = f["y_slot_bottom"]
     y_wt, y_wb = f["y_wire_top"], f["y_wire_bot"]
-    slot_w = ww + 2.0 * ins + wdx
+    # The wire COLUMN (N strips + their gaps), not one strip — same number
+    # cadquery_geometry cuts the pocket with.  n_split = 1 → wcol == ww.
+    n_split, sgap, wcol = f["n_split"], f["strip_gap"], f["wire_col"]
+    slot_w = wcol + 2.0 * ins + wdx
     xs2 = xt + slot_w
     xc0 = xt + ins + wdx / 2.0
-    xc1 = xc0 + ww
+    xc1 = xc0 + wcol
+    # x span of every STRIP in a row, left to right — the copper intervals
+    # inside [xc0, xc1]; the (N−1) gaps between them are enamel.
+    strips = [(xc0 + i * (ww + sgap), xc0 + i * (ww + sgap) + ww)
+              for i in range(max(1, n_split))]
     x_env0, x_env1 = xt + ins, xs2 - ins
     # HALF the slot-pair unit — 360/(num_slots/2)/2, NOT a constant.  The
     # frame (and cadquery_geometry's slot cutter) derive every wall from this
@@ -248,7 +272,10 @@ def stator_half_mesh(p: Dict, density: float = 1.0):
         return math.sqrt(max(R_o * R_o - x * x, 0.0))
 
     # ── column grid (x anchors + fill) ─────────────────────────────────────
-    anchors = [0.0, xt, x_env0, xc0, xc1, x_env1, xs2, x_cut]
+    # every strip edge is an anchor, or a split's enamel gap would be straddled
+    # by a cell and half the copper would be tagged as coating
+    anchors = sorted(set([0.0, xt, x_env0, xc0, xc1, x_env1, xs2, x_cut]
+                         + [v for pair in strips for v in pair]))
     xs = [0.0]
     for a, b in zip(anchors[:-1], anchors[1:]):
         k = n_of((b - a) * 1.2, 1)
@@ -375,8 +402,12 @@ def stator_half_mesh(p: Dict, density: float = 1.0):
                     tg = TAG_LINER                  # liner side strips
                 elif xm <= xc0 or xm >= xc1:
                     tg = TAG_ENAMEL                 # enamel margins
+                elif not any(a - 1e-9 <= xm <= b + 1e-9 for a, b in strips):
+                    # between two strips of the SAME turn: that gap is the
+                    # wire's own coating (2·wire_spacing_x of it), never slot air
+                    tg = TAG_ENAMEL
                 else:
-                    # wire stack: inside a wire level?
+                    # inside a strip column: is it inside a wire level too?
                     tg = TAG_ENAMEL
                     yy = y_wb
                     for k in range(nw):
@@ -1200,6 +1231,16 @@ def rotor_unit_blocks(p: Dict, density: float = 1.0) -> List[Tuple]:
     rectangular vent (air) of half-angle fu·hole/2 on the axis; inter-pole
     iron is the hourglass between neighbouring magnet walls.  The magnet
     corner fillet (magnet_fill_radius) and rotor_fill_r are deferred (v2).
+
+    The magnet TOP is the constant-radius row r_top of grid A, i.e. an arc on
+    the circle — which is what CadQuery now builds too (user 2026-09-06: "давай
+    по умолчанию сделаем только arc и уберём прямую вообще").  Until that day
+    the CAD top was the straight chord between the two corners and this row sat
+    a sagitta ABOVE it (0.615 mm on the Ø200), so `_snap_to_contours` and
+    `_despike_tag` had to drag the whole top row down onto the chord on every
+    build.  The two now agree by construction and the snap has nothing to pull
+    there — the same reason the magnet BOTTOM is explicitly flattened below,
+    only in the other direction.
     """
     R_o = float(p["rotor_outer_radius"]); R_i = float(p["rotor_inner_radius"])
     house = float(p["rotor_house_height"]); pole = 360.0 / int(p["num_poles"])

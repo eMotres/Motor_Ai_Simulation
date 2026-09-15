@@ -23,7 +23,7 @@ const SIM_MAP: [string, string][] = [
   ['current', 'max_current'], ['frequency', 'frequency'], ['rpm', 'rpm'],
   ['gamma', 'phase_offset_deg'], ['stepsPP', 'steps_per_period'],
   ['coilTemp', 'coil_temp_c'], ['endWinding', 'end_winding_factor'],
-  ['demag', 'demag'], ['connection', 'connection'],
+  ['demag', 'demag'], ['connection', 'connection'], ['starDelta', 'star_delta'],
 ];
 
 function lsGet(ns: string, key: string): unknown {

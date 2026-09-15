@@ -9,6 +9,7 @@ express (a magnet pushed through the shaft).
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -42,6 +43,14 @@ GEO_30MM = {
     "air_gap": 0.2, "tooth_width": 2.6, "tooth2_width": 1.4, "cut_width": 1.5,
     "insulation_thickness": 0.05, "wire_width": 2, "wire_height": 0.5,
     "wire_spacing_x": 0.1, "wire_spacing_y": 0.1, "num_wires_per_slot": 6,
+    # wire_parallel is pinned for the reason test_physics_regression
+    # spells out (F2): the fixture is pushed through the REAL PUT, which
+    # merges it over the working config — so an unpinned key is the
+    # user's, not the fixture's.  With the live config at 3 and this
+    # design at 7 wires/slot the divisibility rule refused the save and
+    # three tests here went red with nothing wrong in the code.  None of
+    # these designs is a multi-in-hand winding; 1 is what they are.
+    "wire_parallel": 1,
     "wire_split": 1, "slot_hs": 0.267, "magnet_height": 4.5,
     "rotor_house_height": 0.8, "shaft_height": 2, "magnet_fill_down": 0.9,
     "magnet_fill_up": 0.3, "magnet_fill_radius": 0.1, "magnet_up_gap": 0.1,
@@ -51,13 +60,14 @@ GEO_30MM = {
 }
 
 # The 37 mm 24s/28p design the user had loaded when this was written: the two
-# coil sides in each slot interpenetrate, and copper sits inside the slot liner.
+# coil sides in each slot interpenetrate, and copper sits inside the insulation.
 GEO_37MM_BAD = {
     "stator_diameter": 37.0, "slot_height": 6, "core_thickness": 1.9,
     "num_seg": 4, "num_slots_per_segment": 6, "num_poles_per_segment": 7,
     "air_gap": 0.2, "tooth_width": 3.1, "tooth2_width": 1.7, "cut_width": 1,
     "insulation_thickness": 0.06, "wire_width": 2.2, "wire_height": 0.6,
     "wire_spacing_x": 0.1, "wire_spacing_y": 0.1, "num_wires_per_slot": 7,
+    "wire_parallel": 1,
     "wire_split": 1, "slot_hs": 0.267, "magnet_height": 5.8,
     "rotor_house_height": 1, "shaft_height": 2, "magnet_fill_down": 0.85,
     "magnet_fill_up": 0.4, "magnet_fill_radius": 0.5, "magnet_up_gap": 0.2,
@@ -76,6 +86,7 @@ GEO_40MM_CLIPPED = {
     "air_gap": 0.25, "tooth_width": 3.0, "tooth2_width": 1.8, "cut_width": 1.0,
     "insulation_thickness": 0.2, "wire_width": 2.5, "wire_height": 0.6,
     "wire_spacing_x": 0.1, "wire_spacing_y": 0.13, "num_wires_per_slot": 8,
+    "wire_parallel": 1,
     "wire_split": 1, "slot_hs": 0.267, "magnet_height": 5.0,
     "rotor_house_height": 1.0, "shaft_height": 2.0, "magnet_fill_down": 0.9,
     "magnet_fill_up": 0.8, "magnet_fill_radius": 1.0, "magnet_up_gap": 0.7,
@@ -118,7 +129,7 @@ class TestOverlapsAreCaught:
         assert not res.ok
         # The two coil sides of each slot share copper.
         assert "coil_overlaps_coil" in _error_codes(res)
-        # …and the copper sits inside the slot liner.
+        # …and the copper sits inside the insulation.
         assert "coil_overlaps_liner" in _error_codes(res)
         # Every reported violation names both parts, an area and a place.
         for v in res.errors:
@@ -300,7 +311,19 @@ class TestSyntheticDefects:
 class TestParameterSanity:
     def test_clean_geometry_has_no_field_errors(self):
         assert validate_parameter_values(dict(GEO_30MM)) == []
+        # GEO_37MM_BAD is field-clean and fails at the POLYGON level (its two
+        # coil sides share copper): 2.2 mm of wire behind 1.7 mm of tooth2 puts
+        # the slot wall at 5.77 mm on a machine whose 24-slot pitch leaves
+        # 3.00 mm.  That over-wide UNSPLIT wire stays a reportable violation on
+        # a saved design (TestApiWiring: "a mid-edit design must still save"),
+        # not a refused PUT — the parameter-level refusal is reserved for a
+        # SPLIT that does not fit, where the strips and their gaps are the thing
+        # the user just added and the honest fix (narrow the wire) is named.
         assert validate_parameter_values(dict(GEO_37MM_BAD)) == []
+        bad = validate_parameter_values(dict(GEO_37MM_BAD, wire_split=2))
+        assert [b["field"] for b in bad] == ["wire_split"]
+        assert "does not fit across the slot" in bad[0]["message"]
+        assert "set wire_width to" in bad[0]["message"].lower()
 
     @pytest.mark.parametrize("patch,field", [
         ({"wire_width": -1.0}, "wire_width"),
@@ -341,12 +364,18 @@ class TestApiWiring:
     """The two ends of the contract: PUT /api/geometry never blocks a save but
     reports what is wrong, and a SOLVE refuses with 422 and the same list."""
 
-    _CONFIG = _ROOT / "config" / "motor_config.yaml"
+    # The config these tests actually write: conftest.py redirects the loader to
+    # a sandbox copy, so this must follow it.  Naming the real file here made the
+    # fixture rewrite the user's live machine (with identical bytes, but a fresh
+    # mtime) on every case, while the file the PUT really changed was left dirty
+    # for the next test.
+    _CONFIG = Path(os.environ.get("MOTOR_AI_SIM_CONFIG")
+                   or (_ROOT / "config" / "motor_config.yaml"))
 
     @pytest.fixture(autouse=True)
     def _preserve_config(self):
-        """These tests write the REAL config the user's active design lives in.
-        Put it back byte-for-byte, whatever happens."""
+        """These tests write the config the API has loaded.  Put it back
+        byte-for-byte, whatever happens."""
         backup = self._CONFIG.read_bytes() if self._CONFIG.exists() else None
         try:
             yield
@@ -482,10 +511,22 @@ class TestWeldToleranceIsTheJudgingTolerance:
         geo = dict(GEO_150MM_CIANO28, slot_height=13.4, rotor_hole=0.95,
                    magnet_height=12.0, magnet_fill_up=0.22)
 
+        # Since 2026-09-06 the rotor side is welded by `_weld_group_geoms`, not
+        # by `_sanitize_polys_dict`, so "no sanitize" has to stub BOTH — the
+        # group call is where the rotor, the magnets and the air band cut out of
+        # them are cleaned.
+        def _no_group(items, scale_mm, node_map=None, derive=None):
+            solids = [g for _l, g in items]
+            derived = [g for _l, g in derive(solids)] if derive is not None else []
+            return solids, derived, {}
+
         def _overlap(sanitize: bool) -> float:
             orig = cg._sanitize_polys_dict
+            orig_group = cg._weld_group_geoms
             if not sanitize:
-                cg._sanitize_polys_dict = lambda polys, scale_mm: polys
+                cg._sanitize_polys_dict = \
+                    lambda polys, scale_mm, node_map=None, done=(): polys
+                cg._weld_group_geoms = _no_group
             try:
                 m = cg.CadQueryMotor()
                 m.set_parameters(dict(geo))
@@ -494,9 +535,13 @@ class TestWeldToleranceIsTheJudgingTolerance:
                 return float(mag.intersection(p["in_band"]).area)
             finally:
                 cg._sanitize_polys_dict = orig
+                cg._weld_group_geoms = orig_group
 
         assert _overlap(sanitize=False) == pytest.approx(0.0, abs=1e-9)
-        assert _overlap(sanitize=True) < 0.1          # the weld, and only the weld
+        # ...and now it is zero AFTER the weld too, because the weld is taken
+        # once for the whole rotor side instead of per domain.  This used to be
+        # `< 0.1` — the slack the per-domain weld needed.
+        assert _overlap(sanitize=True) == pytest.approx(0.0, abs=1e-9)
 
     def test_tolerance_follows_the_machine_size(self):
         from motor_ai_sim.geometry_validation import weld_tol_mm

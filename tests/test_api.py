@@ -34,6 +34,30 @@ def _preserve_working_config():
     finally:
         if backup is not None:
             _CONFIG.write_bytes(backup)
+        # Restoring the FILE is not restoring the MACHINE: the geometry service
+        # keeps the last PUT/reset in memory (`_current_geometry`, never
+        # re-read unless asked), and the thermal router caches meshes and
+        # fields under the live fingerprint.  Left alone, the next module's
+        # /api/thermal/mesh served the geometry this module reset to while its
+        # own `?geo=` solve described the sandbox machine — two tests in
+        # tests/test_thermal_routes.py failed only when run after this file
+        # (2026-09-08).  Put the in-memory state back where the file is.
+        try:
+            from motor_ai_sim.config import clear_config_cache
+            clear_config_cache()
+        except Exception:                                     # noqa: BLE001
+            pass
+        try:
+            from motor_ai_sim.services import geometry_service as _gs
+            _gs.invalidate_mesh_cache()
+            _gs.get_current_geometry(reload=True)
+        except Exception:                                     # noqa: BLE001
+            pass
+        try:
+            from motor_ai_sim.routes import thermal as _th
+            _th.clear_thermal_caches("test_api teardown")
+        except Exception:                                     # noqa: BLE001
+            pass
 
 
 def _config_geometry() -> dict:
@@ -124,12 +148,21 @@ class TestGeometryEndpoints:
         assert data["stator_outer_radius"] == pytest.approx(target / 2.0)
 
     def test_update_geometry_multiple_params(self):
-        target = float(_config_geometry()["stator_diameter"]) - 5.0
-        r = client.put("/api/geometry", json={"stator_diameter": target, "num_seg": 4})
-        assert r.status_code == 200
+        # Two parameters at once, both of them edits the machine can take.  The
+        # old second parameter was ``num_seg: 4`` — on the Ø200 that is 24 slots
+        # whose cutters overlap (the slot wall lands 15 mm past the tooth pitch),
+        # a machine the validator now refuses by name; the edit only ever passed
+        # because the derived slot count was still the old one when the rule
+        # ran, and it then broke every later test in this class (2026-09-08).
+        g0 = _config_geometry()
+        target = float(g0["stator_diameter"]) - 5.0
+        length = float(g0["motor_length"]) + 5.0
+        r = client.put("/api/geometry",
+                       json={"stator_diameter": target, "motor_length": length})
+        assert r.status_code == 200, r.text
         data = r.json()
         assert data["stator_diameter"] == pytest.approx(target)
-        assert data["num_seg"] == 4
+        assert data["motor_length"] == pytest.approx(length)
 
     def test_update_geometry_partial_preserves_others(self):
         baseline = client.get("/api/geometry").json()

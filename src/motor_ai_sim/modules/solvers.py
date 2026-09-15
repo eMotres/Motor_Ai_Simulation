@@ -2,9 +2,9 @@
 
 Each consumes a meshed motor + an operating point and returns a ResultIR. They are
 thin seams over the proven route functions (get_fem_field2d / get_fem_transient /
-get_thermal_field2d); lazy imports + kwarg-filtered delegation keep the registry
-cheap and tolerant of signature drift. Mechanical is a roadmap stub (registered in
-bootstrap) — no structural solver exists yet.
+routes.thermal.solve_thermal_field); lazy imports + kwarg-filtered delegation keep
+the registry cheap and tolerant of signature drift. Mechanical is a roadmap stub
+(registered in bootstrap) — no structural solver exists yet.
 
 Agent brief (per solver): own ONE physics. Input = mesh + Excitation; output =
 contracts.ResultIR(physics=...). Never mesh or build geometry. Return
@@ -19,11 +19,41 @@ from ..contracts.adapters import result_ir_from_transient, stamp
 from .base import ModuleManifest, UIContribution
 
 
+def _capability_error(exc: Exception) -> str:
+    """One line an engineer can act on, out of whatever the route raised.
+
+    The thermal capabilities call route functions, and a route function refuses
+    with an ``HTTPException`` whose ``detail`` is this project's structured 422
+    ({error, invalid_parameters, error_code}).  ``str()`` on that gives
+    ``"422: {'error': ...}"`` — a dict repr in a ResultIR error string, which is
+    how a perfectly clear message ("no Electromagnetic run of this machine at
+    I = 480.8 A ... run it on the Electromagnetic tab first") reaches a study log
+    as punctuation.  So the detail's own ``error`` line is surfaced verbatim, with
+    the machine-readable ``error_code`` in front of it where there is one.
+    """
+    detail = getattr(exc, "detail", None)
+    if isinstance(detail, dict):
+        msg = str(detail.get("error") or detail.get("message") or detail)
+        code = detail.get("error_code")
+        return f"{code}: {msg}" if code else msg
+    if isinstance(detail, str) and detail:
+        return detail
+    return f"{type(exc).__name__}: {exc}"
+
+
 def _call_filtered(fn, payload: Optional[Dict[str, Any]]):
-    """Call fn with only the payload keys it actually accepts (robust to drift)."""
+    """Call fn with only the payload keys it actually accepts (robust to drift).
+
+    Underscore-prefixed parameters are NEVER taken from a payload: they are a
+    function's private plumbing (e.g. ``routes.thermal.solve_thermal_field``'s
+    ``_em_map`` — a whole pre-computed loss field the coupled loop hands
+    forward), and a study blackboard that happened to carry the name would be
+    injecting solver internals from data.
+    """
     import inspect
     params = inspect.signature(fn).parameters
-    kwargs = {k: v for k, v in (payload or {}).items() if k in params}
+    kwargs = {k: v for k, v in (payload or {}).items()
+              if k in params and not k.startswith("_")}
     return fn(**kwargs)
 
 
@@ -36,7 +66,7 @@ class EmStaticSolver:
             contracts_version=CONTRACTS_VERSION, depends_on=["mesh"],
             inputs=["MeshIR", "Excitation"], outputs=["ResultIR"],
             summary="Magnetostatic field solve (A_z, |B|) at one rotor angle -> ResultIR",
-            ui=UIContribution(panel_id="simulation", title="Simulation",
+            ui=UIContribution(panel_id="simulation", title="Electromagnetic",
                               frontend_module="components/simulation/SimulationPanel", order=50))
 
     def run(self, payload: Optional[Dict[str, Any]] = None) -> ResultIR:
@@ -88,7 +118,7 @@ class EmTransientSolver:
             contracts_version=CONTRACTS_VERSION, depends_on=["mesh"],
             inputs=["MeshIR", "Excitation"], outputs=["ResultIR", "MachineState"],
             summary="Sliding-band transient over one electrical period -> torque/losses/V ResultIR",
-            ui=UIContribution(panel_id="simulation", title="Simulation",
+            ui=UIContribution(panel_id="simulation", title="Electromagnetic",
                               frontend_module="components/simulation/SimulationPanel", order=50))
 
     def run(self, payload: Optional[Dict[str, Any]] = None) -> ResultIR:
@@ -110,18 +140,32 @@ class ThermalSolver:
             contracts_version=CONTRACTS_VERSION, depends_on=["solver.em_transient"],
             inputs=["MeshIR", "ResultIR"], outputs=["ResultIR"],
             summary="Steady 2D heat conduction from EM losses -> temperature-map ResultIR (T_max)",
-            ui=UIContribution(panel_id="simulation", title="Simulation",
+            ui=UIContribution(panel_id="simulation", title="Electromagnetic",
                               frontend_module="components/simulation/SimulationPanel", order=50))
 
     def run(self, payload: Optional[Dict[str, Any]] = None) -> ResultIR:
+        """Conduction only — this capability NEVER solves electromagnetics.
+
+        Since 2026-09-07 the loss map comes from an Electromagnetic run
+        (``solver.em_transient`` / the Electromagnetic tab), and a study that has
+        not run one gets ``ResultIR.failed`` carrying the route's own sentence —
+        which names the operating point to run — instead of a six-minute solve
+        started inside a temperature step.  That is the point of ``depends_on``
+        above being ``solver.em_transient``: it is now a real dependency, not a
+        recommendation.
+        """
         try:
-            from motor_ai_sim.routes.simulation import get_thermal_field2d
-            res = _call_filtered(get_thermal_field2d, payload) or {}
+            # The thermal solve moved to routes.thermal on 2026-09-07; this
+            # capability calls the SHARED function the /api/thermal/field route
+            # calls, so a module study and the Thermal tab can never disagree
+            # about what "the temperature map" is.
+            from motor_ai_sim.routes.thermal import solve_thermal_field
+            res = _call_filtered(solve_thermal_field, payload) or {}
             return ResultIR(physics="thermal",
                             scalars=ScalarResults(t_max_C=res.get("T_max")),
                             provenance=stamp(self.NAME, version=self.VERSION))
         except Exception as e:  # noqa: BLE001
-            return ResultIR.failed("thermal", f"{type(e).__name__}: {e}",
+            return ResultIR.failed("thermal", _capability_error(e),
                                    provenance=stamp(self.NAME, version=self.VERSION))
 
 
@@ -137,6 +181,20 @@ class EmThermalCoupled:
     module adds the temperature FEEDBACK loop, so the result is the self-consistent
     operating point instead of an assumed fixed coil temperature. The same pattern
     extends to mechanical (temps -> thermal expansion -> stress -> ...).
+
+    Since 2026-09-07 the loop itself is NOT written here: it is
+    ``routes.thermal.solve_coupled``, which ``GET /api/thermal/coupled`` also
+    calls.  Two copies of a fixed point drift — one gains a runaway guard or an
+    under-relaxation tweak and the other does not — and then a module study and
+    the Thermal tab report two different equilibrium temperatures for one motor.
+    This class is now the ResultIR adapter around that one function.
+
+    "EM ↔ thermal" no longer means this capability SOLVES the EM side (same day,
+    same user decision): the loss map is taken from an Electromagnetic run and
+    only the copper is moved between passes.  With no matching run the capability
+    fails with the route's own message naming the run to make — a study degrades
+    with an instruction, rather than quietly starting the very solver the two
+    tabs were separated to keep apart.
     """
 
     NAME, CAPABILITY, VERSION = "solver-em-thermal", "solver.em_thermal", "0.1.0"
@@ -147,39 +205,41 @@ class EmThermalCoupled:
             contracts_version=CONTRACTS_VERSION, depends_on=["solver.thermal"],
             inputs=["MeshIR", "Excitation"], outputs=["ResultIR"],
             summary="Coupled EM<->thermal: iterate loss<->temperature to the equilibrium operating point",
-            ui=UIContribution(panel_id="simulation", title="Simulation",
+            ui=UIContribution(panel_id="simulation", title="Electromagnetic",
                               frontend_module="components/simulation/SimulationPanel", order=50, as_tab=False))
 
     def run(self, payload: Optional[Dict[str, Any]] = None) -> ResultIR:
         try:
-            from motor_ai_sim.routes.simulation import get_thermal_field2d
+            from motor_ai_sim.routes.thermal import (COUPLED_TOL_C,
+                                                     solve_coupled,
+                                                     solve_thermal_field)
             p = dict(payload or {})
-            # Initial copper temp guess: explicit coil_temp_c, else ambient.
-            T = float(p.get("coil_temp_c", p.get("ambient_temp", 25.0)) or 25.0)
-            relax = float(p.get("relax", 0.6))         # under-relaxation for stability
-            tol = float(p.get("tol_C", 0.5))           # convergence on copper temp [°C]
-            max_iter = max(1, int(p.get("max_iter", 6)))
-            hist = []
-            th: Dict[str, Any] = {}
-            converged = False
-            RUNAWAY_C = 400.0   # past any feasible motor → no stable equilibrium
-            for _ in range(max_iter):
-                th = _call_filtered(get_thermal_field2d, {**p, "coil_temp_c": T}) or {}
-                winding = (th.get("components") or {}).get("winding") or {}
-                T_cu = winding.get("avg")
-                if T_cu is None:
-                    break
-                T_cu = float(T_cu)
-                hist.append(round(T_cu, 1))
-                if T_cu > RUNAWAY_C:
-                    T = T_cu
-                    break                                   # diverging — thermal runaway
-                if abs(T_cu - T) < tol:
-                    T = T_cu
-                    converged = True
-                    break
-                T = relax * T_cu + (1.0 - relax) * T        # temperature signal fed BACK to EM
-            runaway = (not converged) and bool(hist) and hist[-1] > RUNAWAY_C
+            # Only the keys the field solve actually takes travel into the loop
+            # (the payload is a whole study's blackboard); the loop's own knobs
+            # are read off the payload here, with the route's defaults.  The
+            # underscore-prefixed ones are the loop's OWN plumbing (the map it
+            # carries between passes) and are never taken from a blackboard.
+            import inspect
+            _accepts = [k for k in inspect.signature(solve_thermal_field).parameters
+                        if not k.startswith("_")]
+            out = solve_coupled(
+                # Defaults track the /coupled route's, so a module study and the
+                # Thermal tab converge to the same temperature: since 2026-09-07
+                # the loss map is solved once and the passes are seconds, so the
+                # loop runs to 0.5 K instead of 2 K.
+                max_iter=max(1, int(p.get("max_iter", 12))),
+                tol_c=float(p.get("tol_C", COUPLED_TOL_C)),
+                relax=float(p.get("relax", 0.6)),
+                # `verify_em` is deliberately NOT forwarded: the loop no longer
+                # has the parameter, because the audit it named was an
+                # electromagnetic solve.  A blackboard that still carries the key
+                # is ignored here rather than crashing a study on a TypeError.
+                **{k: v for k, v in p.items() if k in _accepts})
+            th: Dict[str, Any] = out.get("field") or {}
+            hist = out.get("coil_temp_history_C") or []
+            T = float(out.get("coil_temp_converged_C") or 0.0)
+            converged = bool(out.get("converged"))
+            runaway = bool(out.get("runaway"))
             prov = stamp(self.NAME, version=self.VERSION)
             prov.notes["coupling"] = "em<->thermal (loss<->temperature fixed point)"
             prov.notes["coil_temp_history_C"] = ",".join(str(h) for h in hist)
@@ -199,8 +259,13 @@ class EmThermalCoupled:
                      "components": th.get("components"), "T_max": th.get("T_max"), "T_min": th.get("T_min"),
                      "P_cu_W": th.get("P_cu_W"), "P_fe_W": th.get("P_fe_W"),
                      "P_loss_total_W": th.get("P_loss_total_W"),
-                     "cooling": th.get("cooling")},
+                     "cooling": th.get("cooling"),
+                     # Where the one loss map came from and how the copper was
+                     # moved off it — a study that cannot say which run its
+                     # losses belong to is not reproducible.
+                     "loss_source": out.get("loss_source"),
+                     "copper_scaling": out.get("copper_scaling")},
                 provenance=prov)
         except Exception as e:  # noqa: BLE001
-            return ResultIR.failed("em_thermal", f"{type(e).__name__}: {e}",
+            return ResultIR.failed("em_thermal", _capability_error(e),
                                    provenance=stamp(self.NAME, version=self.VERSION))

@@ -9,7 +9,7 @@
  */
 import React, { useEffect, useRef } from 'react';
 import { Box, Typography } from '@mui/material';
-import { scaleMotor, maxCurrent, type Passport, type Knobs } from '../../lib/motorScaling';
+import { scaleMotor, maxCurrent, turnsFactor, type Passport, type Knobs } from '../../lib/motorScaling';
 
 const SQRT3 = Math.sqrt(3);
 const RPM_MAX = 8000;
@@ -59,7 +59,7 @@ const EfficiencyMap: React.FC<{ p: Passport; knobs: Knobs; packMax: number }> = 
 
     const iMax = maxCurrent(p, knobs);
     // T = base·(I/I0)  ⇒  I = I0·T/base  (base = torque at I0 for this winding/length)
-    const fN = p.N0 ? knobs.N / p.N0 : 1, fL = p.L0_mm ? knobs.L_mm / p.L0_mm : 1;
+    const fN = turnsFactor(p, knobs), fL = p.L0_mm ? knobs.L_mm / p.L0_mm : 1;
     const fConn = p.nP0 && knobs.nP ? p.nP0 / knobs.nP : 1;
     const base = p.T0_Nm * fN * fL * fConn;
     const Tmax = scaleMotor(p, { ...knobs, I_A: iMax }).T_Nm || 1;

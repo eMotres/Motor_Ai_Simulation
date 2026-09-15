@@ -48,6 +48,38 @@ SIGMA_AIR   = 0.0
 # ─────────────────────────────────────────────────────────────────────────────
 # 1.  Parameter dataclass
 # ─────────────────────────────────────────────────────────────────────────────
+def _cfg_path() -> Path:
+    """The motor config this module must read — ``MOTOR_AI_SIM_CONFIG`` included.
+
+    2026-09-15.  This was a module-level constant pinned to the repo's own
+    ``config/motor_config.yaml``, and `params_from_config` took it as a DEFAULT
+    ARGUMENT — bound once, at import.  So every transient solved without an
+    explicit ``geo_override`` built its `MotorDomainParams` from the file on
+    that hardcoded path, whatever ``motor_ai_sim.config.DEFAULT_CONFIG_PATH``
+    said.
+
+    That is the one leak in a redirect the rest of the project honours
+    everywhere, and it is the redirect whose whole stated purpose is that "a
+    test must never be able to reach the machine the user has loaded"
+    (config.py, after the 2026-08-06 incident).  It cost a 93-minute Ø200 run:
+    the CAD, the mesh and the winding came from the redirected config (12 slots
+    / 10 poles) while `p.num_poles` came from the user's live L13 (28), so
+    `f_elec = rpm * p.num_poles // 2 / 60` was 2.8x the machine's real
+    fundamental, every PWM settle window and period-mean DC anchor was sized on
+    it, and the run died at the DC gate with -175 A left in phase A.
+
+    Resolved per call now, so the env var is the complete lever it is documented
+    to be.  With no env var set this is byte-identical to the old constant: the
+    live API and every ordinary run read exactly the file they always did.
+    """
+    try:
+        from motor_ai_sim.config import DEFAULT_CONFIG_PATH
+        return Path(str(DEFAULT_CONFIG_PATH))
+    except Exception:                       # noqa: BLE001 — never fail a solve
+        return Path(__file__).parent.parent.parent.parent / "config" / "motor_config.yaml"
+
+
+#: Kept as a NAME for readability; every reader goes through `_cfg_path()`.
 _CFG_PATH = Path(__file__).parent.parent.parent.parent / "config" / "motor_config.yaml"
 
 
@@ -160,7 +192,7 @@ def merge_geo_override(base: dict, override) -> dict:
     return g
 
 
-def params_from_config(cfg_path: Path = _CFG_PATH, geo_override=None) -> MotorDomainParams:
+def params_from_config(cfg_path: Path = None, geo_override=None) -> MotorDomainParams:
     """Load MotorDomainParams from motor_config.yaml.
 
     geo_override (multi-user): a partial/full geometry dict that takes precedence
@@ -169,6 +201,9 @@ def params_from_config(cfg_path: Path = _CFG_PATH, geo_override=None) -> MotorDo
     """
     import yaml
 
+    # `None` (the default) is resolved HERE, per call — not bound at import.
+    # See `_cfg_path`.
+    cfg_path = Path(cfg_path) if cfg_path is not None else _cfg_path()
     with cfg_path.open() as f:
         cfg = yaml.safe_load(f)
 
@@ -189,8 +224,13 @@ def params_from_config(cfg_path: Path = _CFG_PATH, geo_override=None) -> MotorDo
     num_slots = int(g.get("num_slots") or int(round(g["num_seg"])) * int(round(g["num_slots_per_segment"])))
     num_poles = int(g.get("num_poles") or int(round(g["num_seg"])) * int(round(g["num_poles_per_segment"])))
 
+    # The wire COLUMN, not one strip: wire_split = N lays N strips of
+    # wire_width side by side with 2·wire_spacing_x between them, and the slot
+    # the CAD cuts grows with them (cadquery_geometry._strip_span).  Identical
+    # to wire_width at N = 1.
+    from motor_ai_sim.winding import winding_footprint_mm as _fp
     slot_width_m = (
-        g["wire_width"] + 2 * g["wire_spacing_x"] + 2 * g["insulation_thickness"]
+        _fp(g) + 2 * g["wire_spacing_x"] + 2 * g["insulation_thickness"]
     ) * mm
 
     return MotorDomainParams(
@@ -407,7 +447,7 @@ class MotorDomains2D:
         self._build()
 
     @classmethod
-    def from_config(cls, cfg_path: Path = _CFG_PATH) -> "MotorDomains2D":
+    def from_config(cls, cfg_path: Path = None) -> "MotorDomains2D":
         return cls(params_from_config(cfg_path))
 
     # ── build ─────────────────────────────────────────────────────────────────

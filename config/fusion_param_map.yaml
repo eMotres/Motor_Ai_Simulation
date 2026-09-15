@@ -1,0 +1,48 @@
+# Fusion 360 user-parameter names for the geometry keys of motor_ai_sim.
+#
+# Left = our geometry key (never change), right = the name of the user
+# parameter in YOUR Fusion model.  The default is identity — the same name on
+# both sides — which is what /api/fusion/params.csv exports and what Parameter
+# I/O creates in Fusion when the parameter does not exist yet.
+#
+# If your model already has its own names (e.g. MagnetH, Lstack), write them
+# on the right: the export then uses them and the import reads them back.
+# Rows you delete fall back to identity.  Fusion names: letters, digits,
+# underscore, not starting with a digit.
+#
+# Read on every request — no restart after an edit.
+map:
+  stator_diameter: stator_diameter
+  motor_length: motor_length
+  air_gap: air_gap
+  sleeve_thickness: sleeve_thickness
+  core_thickness: core_thickness
+  slot_height: slot_height
+  slot_hs: slot_hs
+  tooth_width: tooth_width
+  tooth2_width: tooth2_width
+  cut_width: cut_width
+  stator_fillet_r: stator_fillet_r
+  stator_fillet_r1: stator_fillet_r1
+  insulation_thickness: insulation_thickness
+  wire_width: wire_width
+  wire_height: wire_height
+  wire_spacing_x: wire_spacing_x
+  wire_spacing_y: wire_spacing_y
+  num_wires_per_slot: num_wires_per_slot
+  wire_parallel: wire_parallel
+  wire_split: wire_split
+  num_seg: num_seg
+  num_slots_per_segment: num_slots_per_segment
+  num_poles_per_segment: num_poles_per_segment
+  magnet_height: magnet_height
+  magnet_fill_up: magnet_fill_up
+  magnet_fill_down: magnet_fill_down
+  magnet_fill_radius: magnet_fill_radius
+  magnet_up_gap: magnet_up_gap
+  magnet_down_height: magnet_down_height
+  magnet_lamination: magnet_lamination
+  rotor_house_height: rotor_house_height
+  rotor_hole: rotor_hole
+  rotor_fill_r: rotor_fill_r
+  shaft_height: shaft_height

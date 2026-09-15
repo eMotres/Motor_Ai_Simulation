@@ -24,7 +24,15 @@ from motor_ai_sim.auth import resolve_user
 router = APIRouter(prefix="/api/sweep", tags=["sweep-config"])
 
 _ROOT = Path(__file__).parent.parent.parent.parent
-_STORE = _ROOT / "config" / "sweep_config.json"
+# Beside the config THIS PROCESS is pointed at (``MOTOR_AI_SIM_CONFIG``).  It was
+# pinned to the repo's own config/, and `_save_all` WRITES it — a redirected
+# process overwrote the sweep the user has set up on the machine they have open.
+# With no env var set this is byte-identical to `_ROOT / "config" / …`.
+try:
+    from motor_ai_sim.config import DEFAULT_CONFIG_PATH as _DEFAULT_CONFIG_PATH
+    _STORE = Path(str(_DEFAULT_CONFIG_PATH)).parent / "sweep_config.json"
+except Exception:                       # noqa: BLE001 — never break the import
+    _STORE = _ROOT / "config" / "sweep_config.json"
 _LOCK = threading.Lock()
 
 

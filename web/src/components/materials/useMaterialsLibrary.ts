@@ -29,7 +29,30 @@ export interface MaterialMeta {
   _docId?: string;          // Firestore doc id for a 'mine' material
 }
 
-export interface SteelData extends MaterialMeta {
+/** The MECHANICAL half of a card — Young's modulus, Poisson, the strengths and
+ *  the expansion coefficients.  The library has carried these since the rotor
+ *  stress solver was written (2026-09-05) and the API returns them; the detail
+ *  card printed only the thermal and electrical half, so the numbers that size
+ *  a retaining band were invisible in the app that computes with them (user
+ *  2026-09-09: "где, кстати, механические свойства материалов?").
+ *
+ *  Orthotropic parts (a hoop-wound CFRP band) carry axis 1 = the fibre/hoop
+ *  direction and axis 2 = across it. */
+export interface MechanicalProps {
+  youngs_modulus_gpa?: number | null;
+  youngs_modulus_transverse_gpa?: number | null;
+  shear_modulus_gpa?: number | null;
+  poisson_ratio?: number | null;
+  tensile_strength_mpa?: number | null;
+  compressive_strength_mpa?: number | null;
+  yield_strength_mpa?: number | null;
+  cte_ppm_k_1?: number | null;
+  cte_ppm_k_2?: number | null;
+  cte_ppm_k?: number | null;
+  max_service_temp_c?: number | null;
+}
+
+export interface SteelData extends MaterialMeta, MechanicalProps {
   description: string;
   form: string;
   sigma: number;
@@ -44,7 +67,7 @@ export interface SteelData extends MaterialMeta {
   core_loss_curves?: Record<string, [number, number][]>;
 }
 
-export interface MagnetData extends MaterialMeta {
+export interface MagnetData extends MaterialMeta, MechanicalProps {
   description: string;
   Br: number;
   Hc: number;
@@ -55,7 +78,7 @@ export interface MagnetData extends MaterialMeta {
   bh_curve: [number, number][];
 }
 
-export interface ConductorData extends MaterialMeta {
+export interface ConductorData extends MaterialMeta, MechanicalProps {
   description: string;
   sigma: number;
   resistivity: number;
@@ -67,7 +90,7 @@ export interface ConductorData extends MaterialMeta {
   wire_height_mm: number | null;
 }
 
-export interface InsulatorData extends MaterialMeta {
+export interface InsulatorData extends MaterialMeta, MechanicalProps {
   description: string;
   sigma: number;
   density: number;
@@ -139,7 +162,7 @@ export function useMaterialsLibrary() {
   // built-in + global (from the backend, already merged + tagged there)
   const reloadBase = useCallback(() => {
     setLoading(true);
-    fetch((import.meta.env.VITE_API_URL ?? 'http://localhost:8000') + '/api/materials/library', { cache: 'no-store' })
+    fetch((import.meta.env.VITE_API_URL ?? 'http://localhost:8001') + '/api/materials/library', { cache: 'no-store' })
       .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
       .then(data => { setBase(data); setLoading(false); })
       .catch(e => { setError(String(e)); setLoading(false); });

@@ -1,14 +1,20 @@
 /**
  * ConfiguratorThermal — analytical thermal estimate for the Configure tab.
  *
- * Uses the SAME cooling inputs as Simulation (the shared CoolingControls panel,
- * persisted to localStorage `sim.cool.*`), but computes steady-state temperatures
- * ANALYTICALLY (lumped resistances in lib/thermalEstimate) from the configurator's
- * scaled losses — no FEM. Updates instantly as you tune knobs or cooling.
+ * Uses the shared CoolingControls panel (persisted to localStorage `sim.cool.*`),
+ * but computes steady-state temperatures ANALYTICALLY (lumped resistances in
+ * lib/thermalEstimate) from the configurator's scaled losses — no FEM. Updates
+ * instantly as you tune knobs or cooling.
+ *
+ * 2026-09-07: the widget and its two correlations moved from
+ * `simulation/CoolingControls` to the thermal module with the rest of the
+ * thermal code.  The localStorage keys are unchanged, so every saved cooling
+ * system survived the move.
  */
 import React, { useEffect, useReducer } from 'react';
 import { Box, Paper, Typography } from '@mui/material';
-import CoolingControls, { getCoolingPayload, airH, liqH } from '../simulation/CoolingControls';
+import CoolingControls from '../thermal/CoolingControls';
+import { airH, getCoolingPayload, liqH } from '../thermal/api';
 import { estimateThermal, type ThermalGeom, type ThermalLosses } from '../../lib/thermalEstimate';
 import HelpTip from '../common/HelpTip';
 
@@ -43,10 +49,10 @@ const ConfiguratorThermal: React.FC<{ geom: ThermalGeom; losses: ThermalLosses }
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', mb: 0.5 }}>
         <Typography sx={{ fontSize: 14, fontWeight: 700, color: 'var(--text-0)' }}>Thermal — analytical estimate</Typography>
         <Typography sx={{ fontSize: 10.5, color: 'var(--text-3)', fontFamily: 'monospace' }}>lumped · no FEM · instant</Typography>
-        <HelpTip title="Steady-state lumped estimate: all loss leaves the outer surface by convection (h·A); winding & magnet hot-spots add conduction rise. A fast approximation — for an accurate temperature map, run the FEM thermal solve in Simulation." />
+        <HelpTip title="Steady-state lumped estimate: all loss leaves the outer surface by convection (h·A); winding & magnet hot-spots add conduction rise. A fast approximation — for an accurate temperature map, run the FEM solve on the Thermal tab." />
       </Box>
 
-      {/* same cooling inputs as Simulation (shared) */}
+      {/* the shared cooling inputs (localStorage `sim.cool.*`) */}
       <CoolingControls diameterMm={geom.statorOD_mm} />
 
       <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(112px, 1fr))', gap: 1, mt: 1.5 }}>

@@ -10,8 +10,16 @@ from a password account below; RIGHTS always come from our registry
 - PATCH /api/auth/users/{email} — admin: tier / disabled / name / new password
 - DELETE /api/auth/users/{email} — admin: remove an account
 - POST /api/auth/password     — self-service password change (signed in)
+- GET  /api/auth/sessions     — the caller's own sessions
+- POST /api/auth/sessions/{sid}/revoke — sign one of them out
+- POST /api/auth/logout       — revoke the session this request is using
 
 Login is rate-limited in-memory: 5 failures per email-or-IP → 60 s lockout.
+
+Every sign-in now creates a SERVER-SIDE session (sessions.py) whose sid rides
+in the token, and appends a line to logs/auth_events.jsonl.  Before that, a
+sign-in left one INFO line and nothing else: there was no way to answer "why
+was I signed out" or "which browser is that".
 """
 from __future__ import annotations
 
@@ -23,11 +31,30 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel
 
+from motor_ai_sim import sessions as S
 from motor_ai_sim import users as U
-from motor_ai_sim.auth import require_admin, resolve_user
+from motor_ai_sim.auth import require_admin, resolve_user, resolve_user_detail
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+
+
+def _who(request: Optional[Request]) -> tuple[str, str]:
+    """(ip, user agent) — both go into the session record and the event log."""
+    ip = request.client.host if request and request.client else "?"
+    ua = request.headers.get("user-agent", "") if request else ""
+    return ip, ua
+
+
+def _start_session(email: str, *, method: str, request: Optional[Request]) -> str:
+    """Record the session, return the signed token that names it."""
+    ip, ua = _who(request)
+    sid = S.create(email, expires=time.time() + U._TOKEN_TTL_S,
+                   login_method=method, ip=ip, user_agent=ua)
+    token = U.issue_token(email, sid=sid)
+    S.record_event("login", email=email, sid=sid, reason=method, ip=ip,
+                   user_agent=ua, path="/api/auth/" + method)
+    return token
 
 _FAILS: dict[str, list[float]] = {}
 _FLOCK = threading.Lock()
@@ -64,7 +91,7 @@ def login(req: LoginReq, request: Request):
         _note_fail(key)
         # One message for wrong password AND unknown user — no user enumeration.
         raise HTTPException(401, detail="wrong email or password")
-    token = U.issue_token(req.email)
+    token = _start_session(req.email, method="password", request=request)
     log.info("auth: password login ok for %s from %s", req.email.strip().lower(), ip)
     return {"token": token, "user": U.public_user(req.email)}
 
@@ -92,7 +119,7 @@ def google_login(req: GoogleReq, request: Request):
     tier = _registry_tier(email)
     if tier == "__disabled__":
         raise HTTPException(403, detail="this account is disabled")
-    token = U.issue_token(email)
+    token = _start_session(email, method="google", request=request)
     ip = (request.client.host if request and request.client else "?")
     log.info("auth: Google login ok for %s (tier %s) from %s", email, tier, ip)
     return {"token": token,
@@ -173,3 +200,64 @@ def change_password(req: SelfPassword,
     except ValueError as e:
         raise HTTPException(422, detail=str(e))
     return {"ok": True}
+
+
+# ── sessions (own) ───────────────────────────────────────────────────────────
+
+@router.get("/sessions")
+def my_sessions(request: Request, authorization: str = Header(default=None)):
+    """Every sign-in of the calling account: when, from where, with what.
+
+    This is the list that makes an invisible cause visible — a session that
+    only ever appears once and never comes back is a browser profile whose
+    storage does not survive (a preview pane, a private window), not an expiry.
+    """
+    det = resolve_user_detail(authorization)
+    me = det["user"]
+    if me is None or not me.get("email"):
+        raise HTTPException(401, detail="sign in first")
+    rows = [S.public(r) for r in S.list_for(me["email"])]
+    return {"email": me["email"], "current": det["sid"] or None,
+            "count": len(rows), "sessions": rows}
+
+
+@router.post("/sessions/{sid}/revoke")
+def revoke_my_session(sid: str, request: Request,
+                      authorization: str = Header(default=None)):
+    """Sign one of MY sessions out.  Someone else's sid is a 404, not a 403 —
+    an account must not be able to probe for other people's session ids."""
+    det = resolve_user_detail(authorization)
+    me = det["user"]
+    if me is None or not me.get("email"):
+        raise HTTPException(401, detail="sign in first")
+    try:
+        rec = S.get(sid)
+    except S.StoreUnavailable as e:
+        raise HTTPException(503, detail=f"session store is busy: {e}")
+    if not isinstance(rec, dict) or (rec.get("email") or "") != me["email"]:
+        raise HTTPException(404, detail="no such session")
+    S.revoke(sid)
+    ip, ua = _who(request)
+    S.record_event("revoke", email=me["email"], sid=sid, reason="self",
+                   ip=ip, user_agent=ua, path="/api/auth/sessions/revoke")
+    log.info("auth: session %s revoked by its owner %s", sid, me["email"])
+    return {"ok": True, "sid": sid}
+
+
+@router.post("/logout")
+def logout(request: Request, authorization: str = Header(default=None)):
+    """Revoke the session this request is authenticated with.
+
+    Called by the frontend BEFORE it clears localStorage, so a token copied out
+    of a browser stops working the moment the user signs out — and so the event
+    log records a deliberate logout instead of a session that simply stops
+    being seen."""
+    det = resolve_user_detail(authorization)
+    ip, ua = _who(request)
+    sid = det["sid"]
+    email = det["email"] or ((det["user"] or {}).get("email") or "")
+    if sid:
+        S.revoke(sid)
+    S.record_event("logout", email=email, sid=sid, reason=det["reason"],
+                   ip=ip, user_agent=ua, path="/api/auth/logout")
+    return {"ok": True, "sid": sid or None}

@@ -41,7 +41,7 @@ export interface ThermalEstimate {
 // Effective lumped conductivities [W/m·K] (account for composites/anisotropy):
 const K_IRON = 25;    // laminated steel, in-plane / radial
 const K_SLOT = 1.4;   // impregnated copper bundle, cross-slot effective
-const K_INS  = 0.2;   // slot liner (Nomex / polyimide)
+const K_INS  = 0.2;   // insulation (Nomex / polyimide)
 const K_GAP  = 0.06;  // air gap, rotation-enhanced effective conductivity
 
 const mm = (x: number) => Math.max(0, x || 0) / 1000;

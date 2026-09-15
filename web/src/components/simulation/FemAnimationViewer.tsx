@@ -149,6 +149,12 @@ const FemAnimationViewer: React.FC<Props> = ({
       n_frames:           String(n_frames),
       run_id:             String(runNonce),
       fresh:              String(fresh),
+      // The results ledger (2026-09-05) can answer a repeated run from disk —
+      // but it stores the summary and the series, never the per-frame FIELDS,
+      // because those are megabytes per keyframe and no chart reads them.  This
+      // panel is the one caller that needs exactly those, so it opts out: a
+      // ledger hit here would come back with no `frames` at all.
+      ledger:             'false',
     };
     // WINDING — same rule as TransientCharts: the SELECTED connection rides in
     // the request, so this panel can never render a solve of a different

@@ -115,11 +115,19 @@ def derived_geometry(g: Dict[str, Any]) -> Dict[str, float]:
                 if mh is not None and rh is not None:
                     out["rotor_inner_radius"] = r_ro - mh - rh
 
-    # Tangential slot width = the WIRE PITCH the slot has to accept.
+    # Tangential slot width = the WIRE PITCH the slot has to accept.  With
+    # wire_split = N a turn is N strips of wire_width laid side by side with
+    # 2·wire_spacing_x between them, so the column the slot has to accept is
+    # N·wire_width + (N−1)·2·wire_spacing_x — the same `wire_col_w`
+    # cadquery_geometry cuts the pocket with.
     ww, wsx, ins = (_num("wire_width"), _num("wire_spacing_x"),
                     _num("insulation_thickness"))
     if ww is not None and wsx is not None and ins is not None:
-        out["slot_width"] = ww + 2.0 * wsx + 2.0 * ins
+        from motor_ai_sim.winding import STRIP_GAP_FACTOR as _GF
+        _nsp = _num("wire_split")
+        _nsp = max(1, int(round(_nsp))) if _nsp else 1
+        _col = ww if _nsp <= 1 else _nsp * ww + (_nsp - 1) * _GF * wsx
+        out["slot_width"] = _col + 2.0 * wsx + 2.0 * ins
 
     # Angles / pitches from the RESOLVED counts (see the contract above).
     n_slots = _num("num_slots")
@@ -224,9 +232,18 @@ class MotorGeometryParams:
             config = OmegaConf.load(config_path)
             # Resolve any interpolations
             OmegaConf.resolve(config)
-            # Convert to dict for dynamic access
-            geometry_config = OmegaConf.to_container(config.get('geometry', {}), resolve=True)
-            derived_config = OmegaConf.to_container(config.get('derived_params', {}), resolve=True)
+            # Convert to dict for dynamic access.  OmegaConf.to_container
+            # REJECTS a plain dict, so the `.get(..., {})` fallback (a real
+            # Python {}) cannot be handed to it — a config file with no
+            # `derived_params` block used to crash here (regression caught by
+            # test_load_from_yaml).  Pull the sub-config with OmegaConf's own
+            # accessor and default to an empty DictConfig.
+            _geo_cfg = config.get('geometry')
+            _der_cfg = config.get('derived_params')
+            geometry_config = (OmegaConf.to_container(_geo_cfg, resolve=True)
+                               if _geo_cfg is not None else {})
+            derived_config = (OmegaConf.to_container(_der_cfg, resolve=True)
+                              if _der_cfg is not None else {})
         else:
             # Fallback to standard yaml
             import yaml

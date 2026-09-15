@@ -27,7 +27,7 @@ import {
   defaultMeshSettings,
 } from '../types/motor';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
+const API_BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
 // Restore the eval parameters a descent run used into the Simulation tab's sources,
 // so re-running the Simulation on an applied design REPRODUCES it (the optimizer eval
@@ -168,6 +168,13 @@ interface MotorState {
   /** Field-level rejections from a PUT that came back 422 (negative dimension,
    *  a bore radius that works out negative, …).  Nothing was saved. */
   geometryParamErrors: GeometryParamError[] | null;
+  /** Edits typed while the backend was unreachable (PUT died on the network —
+   *  NOT a 422/423 refusal, those never queue).  Applied to the local copy so
+   *  the form and viewers show what was typed, and replayed by
+   *  fetchGeometryFromApi's reconnect barrier BEFORE the server copy is
+   *  adopted.  Without this queue the 5 s retry loop's first successful GET
+   *  silently reverted the typed value to the server's stale geometry. */
+  pendingGeometryEdits: Record<string, number | string> | null;
   fetchGeometryValidation: () => Promise<void>;
 
   // Actions
@@ -253,6 +260,12 @@ let _sweepSaveTimer: ReturnType<typeof setTimeout> | undefined;
 const _sweepSelected = (vars?: Record<string, { mode?: string }>) =>
   vars ? Object.values(vars).filter((v) => v && v.mode && v.mode !== 'fixed').length : 0;
 
+// Guards the offline-edit replay in fetchGeometryFromApi: the retry loop fires
+// every 5 s, and a re-PUT slower than that would otherwise be raced by a second
+// fetch that adopts the server's stale copy mid-replay.  While a replay is in
+// flight every other fetch returns without touching geometry.
+let _pendingReplayInFlight = false;
+
 export const useMotorStore = create<MotorState>()(
   persist(
     (set, get) => ({
@@ -275,6 +288,7 @@ export const useMotorStore = create<MotorState>()(
       validationData: null,
       geometryValidation: null,
       geometryParamErrors: null,
+      pendingGeometryEdits: null,
       geometryMismatch: false,
 
       // Sweep config initial state — two operating points ~10 % apart in
@@ -351,6 +365,34 @@ export const useMotorStore = create<MotorState>()(
       
       // API Actions
       fetchGeometryFromApi: async () => {
+        // RECONNECT BARRIER: edits queued while the backend was down (see
+        // updateGeometryViaApi's catch) must reach the server BEFORE its copy
+        // is adopted, or the first successful GET after an outage reverts the
+        // typed values.  Every caller funnels through here (boot probe, 5 s
+        // retry loop in App.tsx, GeometryForm's reconnect effect), so this is
+        // the single choke point.  Outcomes of the re-PUT:
+        //   still down  → connectedToApi stays false, queue kept, no adoption;
+        //   accepted    → PUT response already delivered the merged geometry
+        //                 and cleared the queue — skip the redundant GET;
+        //   422/423     → refusal path cleared the queue and filled
+        //                 geometryParamErrors (the user sees WHY the value is
+        //                 gone) — fall through and adopt the server's truth.
+        const pending = get().pendingGeometryEdits;
+        if (pending && Object.keys(pending).length > 0 && canWriteServer()) {
+          if (_pendingReplayInFlight) return;   // a replay is racing this fetch — never adopt over it
+          _pendingReplayInFlight = true;
+          try {
+            await get().updateGeometryViaApi(pending);
+          } finally {
+            _pendingReplayInFlight = false;
+          }
+          if (!get().connectedToApi) return;            // backend still down — retry later
+          if (get().pendingGeometryEdits === null && !get().geometryParamErrors) return; // accepted
+        } else if (pending && !canWriteServer()) {
+          // Signed out mid-outage: this client can no longer PUT — its copy is
+          // local-only by design (?geo= carries it), so the queue is moot.
+          set({ pendingGeometryEdits: null });
+        }
         set({ isLoading: true, error: null });
         try {
           const response = await fetch(`${API_BASE_URL}/api/geometry`);
@@ -439,6 +481,9 @@ export const useMotorStore = create<MotorState>()(
                 field: '', value: null, kind: 'field',
                 message: 'The value was rejected by the server and not saved.',
               }],
+              // A refusal also answers a replayed offline queue: the server
+              // said WHY, the list above shows it — nothing left to sync.
+              pendingGeometryEdits: null,
             });
             return;
           }
@@ -456,6 +501,7 @@ export const useMotorStore = create<MotorState>()(
               geometryParamErrors: bad.length ? bad : [{
                 field: '(geometry)', reason: String(det?.hint ?? 'locked'),
               } as GeometryParamError],
+              pendingGeometryEdits: null,   // same as 422 — refusal resolves the queue
             });
             return;
           }
@@ -464,9 +510,32 @@ export const useMotorStore = create<MotorState>()(
           }
           const data = await response.json();
           const viewMode = get().viewMode;
+          // A knob the backend had to pull back to its feasibility bound (a
+          // winding that will not fit the slot, …) comes back under
+          // `constraints_applied`.  Nothing read it, so typing wire_height 0.6
+          // into a 6.6 mm slot with 10 conductors silently stored 0.52 and the
+          // field just showed a different number than the one that was typed.
+          // Surface it in the same list the user already watches for input
+          // problems — the value WAS refused, they need to see why.
+          const clamped = (data?.constraints_applied ?? []) as Array<{
+            target?: string; clamped_to?: number; label?: string; why?: string;
+          }>;
+          // Keys this PUT carried are on the server now — drop exactly those
+          // from the offline queue (a replay sends the whole queue, so this
+          // empties it; an ordinary edit racing a non-empty queue must not
+          // discard the still-unsent keys).
+          const remaining = { ...(get().pendingGeometryEdits ?? {}) };
+          for (const k of Object.keys(params)) delete remaining[k];
           set({
             geometry: data as MotorGeometryParams,
-            geometryParamErrors: null,
+            pendingGeometryEdits: Object.keys(remaining).length ? remaining : null,
+            geometryParamErrors: clamped.length
+              ? clamped.map(c => ({
+                  field: String(c.target ?? '(geometry)'),
+                  reason: `does not fit — stored as ${c.clamped_to}`
+                    + (c.label ? ` (${c.label})` : ''),
+                })) as GeometryParamError[]
+              : null,
             // The PUT already ran the region check on the saved cross-section,
             // so the red list updates without a second round-trip.
             geometryValidation: (data?.geometry_validation ?? null) as GeometryValidation | null,
@@ -482,12 +551,28 @@ export const useMotorStore = create<MotorState>()(
           }
           syncActiveMotor();   // auto-save the geometry edit into "my" motor
         } catch (error) {
+          // NETWORK death only — a 422/423 refusal returned above and never
+          // lands here.  The edit is kept twice: applied to the local copy so
+          // the form and every ?geo=-carrying solve show what was typed, AND
+          // queued in pendingGeometryEdits for fetchGeometryFromApi's
+          // reconnect barrier to re-PUT before the server copy is adopted.
+          // Before the queue existed the first GET after an outage silently
+          // reverted the typed value and no PUT ever carried it to the server.
           console.error('Failed to update geometry via API:', error);
+          const pending = {
+            ...(get().pendingGeometryEdits ?? {}),
+            ...(params as Record<string, number | string>),
+          };
+          const n = Object.keys(pending).length;
           set({
             isLoading: false,
             isGeometryUpdating: false,
-            error: error instanceof Error ? error.message : 'Failed to update geometry',
+            error: `${n} geometry edit${n === 1 ? '' : 's'} pending — will sync when the backend returns`,
             connectedToApi: false,
+            pendingGeometryEdits: pending,
+            // A red 422 list from BEFORE the outage names values that are no
+            // longer on screen — stale next to the fresh local apply below.
+            geometryParamErrors: null,
           });
           get().updateGeometry(params);
         }
@@ -513,20 +598,28 @@ export const useMotorStore = create<MotorState>()(
             throw new Error(`HTTP error! status: ${response.status}`);
           }
           const data = await response.json();
-          set({ 
-            geometry: data as MotorGeometryParams, 
+          set({
+            geometry: data as MotorGeometryParams,
             isLoading: false,
             connectedToApi: true,
+            // Everything queued or flagged before the reset referred to the
+            // pre-reset geometry — a reset resolves it all.
+            pendingGeometryEdits: null,
+            geometryParamErrors: null,
           });
         } catch (error) {
           console.error('Failed to reset geometry via API:', error);
-          set({ 
-            isLoading: false, 
-            error: error instanceof Error ? error.message : 'Failed to reset geometry',
+          // OFFLINE: no resetToDefaults() fallback — the frontend's compiled
+          // defaults need not match the backend's reset target
+          // (motor_config.yaml), so a local "reset" showed a geometry the
+          // server never held and the next reconnect snapped it to something
+          // else again.  Leave the geometry untouched and say why the button
+          // did nothing.
+          set({
+            isLoading: false,
+            error: 'Reset needs the backend — it restores the server-side defaults. Nothing was changed.',
             connectedToApi: false,
           });
-          // Fallback to local reset
-          get().resetToDefaults();
         }
       },
       
@@ -1069,7 +1162,52 @@ export const useMotorStore = create<MotorState>()(
           const local = get().sweepConfig;
           const srvVars = config?.variations && typeof config.variations === 'object'
             ? config.variations : null;
-          if (srvVars && _sweepSelected(srvVars) > 0 && _sweepSelected(local.variations) === 0) {
+          // NEWEST COPY WINS when both sides carry an edit stamp (2026-09-08).
+          // The selection-kind heuristic below cannot tell "this browser's old
+          // geometry study" from "the study the user made ten minutes ago in
+          // another browser": a Chrome profile still holding rotor_house_height
+          // won on reload and PUSHED it over the γ × current sweep the user had
+          // just configured and run elsewhere.  With stamps the question is
+          // simply which edit is more recent; the heuristic stays as the
+          // fallback for copies written before the stamp existed.
+          const srvAt = Number(config?.updatedAt) || 0;
+          const locAt = Number(local.updatedAt) || 0;
+          if (srvVars && (srvAt || locAt) && srvAt !== locAt) {
+            if (srvAt > locAt) {
+              const ops = Array.isArray(config.operatingPoints) && config.operatingPoints.length === 2
+                ? config.operatingPoints : local.operatingPoints;
+              _sweepHydrating = true;
+              set({ sweepConfig: {
+                ...local,
+                variations: srvVars,
+                operatingPoints: ops as [OperatingPoint, OperatingPoint],
+                rippleThreshold: typeof config.rippleThreshold === 'number'
+                  ? config.rippleThreshold : local.rippleThreshold,
+                ratedTorqueNm: typeof config.ratedTorqueNm === 'number' ? config.ratedTorqueNm : local.ratedTorqueNm,
+                vBusV: typeof config.vBusV === 'number' ? config.vBusV : local.vBusV,
+                modulation: config.modulation ?? local.modulation,
+                updatedAt: srvAt,
+              } });
+              _sweepHydrating = false;
+            } else if (_sweepSelected(local.variations) > 0) {
+              // This browser's copy is the newer one → it becomes the server's.
+              fetch(`${API_BASE_URL}/api/sweep/config`, {
+                method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(local),
+              }).catch(() => {});
+            }
+            return;
+          }
+          // "No selection yet" must not count the two OPERATING-POINT cards the
+          // panel seeds by default (γ, phase current): a reset browser profile
+          // had exactly those, "won" against the server copy and PUSHED it,
+          // wiping the four geometry variables of the user's last sweep off
+          // the server (2026-09-04: "после сбоя остаются только угол и ток").
+          // Geometry variables are the selection that matters here.
+          const _geoSel = (vs: Record<string, any> | null) => !vs ? 0
+            : Object.entries(vs).filter(([k, v]) => v?.mode !== 'fixed'
+                && k !== 'gamma_deg' && k !== 'current_a').length;
+          if (srvVars && _geoSel(srvVars) > 0 && _geoSel(local.variations) === 0) {
             // Adopt the server's config ONLY when THIS browser has no selection yet
             // (fresh load).  If this browser already has variables, they win (handled
             // below) — so a reload never clobbers your selections with a server copy
@@ -1089,9 +1227,12 @@ export const useMotorStore = create<MotorState>()(
               modulation: config.modulation ?? local.modulation,
             } });
             _sweepHydrating = false;
-          } else if (_sweepSelected(local.variations) > 0) {
-            // THIS browser has selections → they win on reload; push them to the
-            // server so they sync out (covers server-empty AND server-stale).
+          } else if (_geoSel(local.variations) > 0
+                     || (_sweepSelected(local.variations) > 0 && _sweepSelected(srvVars) === 0)) {
+            // THIS browser has GEOMETRY selections → they win on reload; push
+            // them to the server so they sync out (covers server-empty AND
+            // server-stale).  Default op-point cards alone never overwrite a
+            // server copy that has anything.
             fetch(`${API_BASE_URL}/api/sweep/config`, {
               method: 'PUT', headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(local),
@@ -1109,6 +1250,9 @@ export const useMotorStore = create<MotorState>()(
         meshSettings: state.meshSettings,
         sweepConfig: state.sweepConfig,
         lastOptSnapshot: state.lastOptSnapshot,
+        // Offline-typed edits must survive a reload during the outage — the
+        // boot fetch runs the same reconnect barrier and replays them.
+        pendingGeometryEdits: state.pendingGeometryEdits,
       }),
     }
   )
@@ -1119,14 +1263,24 @@ export const useMotorStore = create<MotorState>()(
 // not just the one that holds localStorage.  Hydrate is suppressed via the flag
 // so a server-driven load isn't echoed straight back.
 let _prevSweepConfig = useMotorStore.getState().sweepConfig;
+let _sweepStamping = false;
 useMotorStore.subscribe((state) => {
   if (state.sweepConfig === _prevSweepConfig) return;
   _prevSweepConfig = state.sweepConfig;
-  if (_sweepHydrating) return;
+  if (_sweepHydrating || _sweepStamping) return;
   // Never persist an all-'fixed' config — that's a fresh/just-loaded browser
   // (e.g. right after the schema populates every param as 'fixed'), and saving
   // it would wipe another browser's real selections off the server.
   if (_sweepSelected(state.sweepConfig.variations) === 0) return;
+  // A genuine local edit: stamp it, so the copy that reaches the server (and
+  // this browser's own persisted copy) says WHEN the user last touched it.
+  _sweepStamping = true;
+  try {
+    useMotorStore.setState({ sweepConfig: { ...state.sweepConfig, updatedAt: Date.now() } });
+  } finally {
+    _sweepStamping = false;
+  }
+  _prevSweepConfig = useMotorStore.getState().sweepConfig;
   if (!canWriteServer()) return;   // non-writers keep sweep setup local-only
   clearTimeout(_sweepSaveTimer);
   _sweepSaveTimer = setTimeout(() => {
@@ -1138,8 +1292,47 @@ useMotorStore.subscribe((state) => {
   }, 600);
 });
 
+// Keep every open tab and every browser on the NEWEST sweep copy (user
+// 2026-09-08: "надо исправить этот косяк, он постоянно возникает").  Two
+// leaks remained after the edit stamp above:
+//   1. a second TAB of the same browser keeps its own in-memory store — the
+//      persist middleware writes localStorage but never reads it back — so an
+//      edit made there would be stamped "now" and pushed over the study made in
+//      the first tab.  The `storage` event is fired in every OTHER tab when the
+//      persisted key changes: adopt the newer copy the moment it lands.
+//   2. a window that was idle while the study was made elsewhere (another
+//      browser, the in-app pane) still holds the copy it booted with: re-read
+//      the server when it regains focus, and the load rule (newest wins) does
+//      the rest.
+const _adoptSweepCopy = (cfg: SweepConfig) => {
+  _sweepHydrating = true;
+  try {
+    useMotorStore.setState({ sweepConfig: cfg });
+    _prevSweepConfig = useMotorStore.getState().sweepConfig;
+  } finally {
+    _sweepHydrating = false;
+  }
+};
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (e: StorageEvent) => {
+    if (e.key !== 'motor-config-storage' || !e.newValue) return;
+    try {
+      const cfg = JSON.parse(e.newValue)?.state?.sweepConfig as SweepConfig | undefined;
+      const mine = useMotorStore.getState().sweepConfig;
+      if (cfg && (Number(cfg.updatedAt) || 0) > (Number(mine.updatedAt) || 0)) _adoptSweepCopy(cfg);
+    } catch { /* a foreign or malformed write — ignore */ }
+  });
+  let _sweepFocusAt = 0;
+  window.addEventListener('focus', () => {
+    const now = Date.now();
+    if (now - _sweepFocusAt < 2000) return;      // a burst of focus events is one check
+    _sweepFocusAt = now;
+    void useMotorStore.getState().loadServerSweepConfig();
+  });
+}
+
 // Component visibility keys
-export type CompKey = 'stator' | 'rotor' | 'magnets' | 'coils' | 'shaft' | 'in_band' | 'out_band' | 'wire_insulation' | 'slot_insulation';
+export type CompKey = 'stator' | 'rotor' | 'magnets' | 'coils' | 'shaft' | 'sleeve' | 'in_band' | 'out_band' | 'wire_insulation' | 'slot_insulation';
 
 // UI State
 interface UIState {
@@ -1263,7 +1456,7 @@ export const useUIStore = create<UIState>()(
       // thin insulation layers are analysis overlays, not physical parts — and the bands are
       // drawn as big translucent disks that cover the whole stator+coils. Default them OFF so
       // the motor renders cleanly; they stay individually toggleable in the component tree.
-      componentVisibility: { stator: true, rotor: true, magnets: true, coils: true, shaft: true, in_band: false, out_band: false, wire_insulation: false, slot_insulation: false },
+      componentVisibility: { stator: true, rotor: true, magnets: true, coils: true, shaft: true, sleeve: true, in_band: false, out_band: false, wire_insulation: false, slot_insulation: false },
       coilVisibility: {},
       magnetVisibility: {},
 
@@ -1298,14 +1491,14 @@ export const useUIStore = create<UIState>()(
 
       isolateComponent: (key) =>
         set({
-          componentVisibility: { stator: false, rotor: false, magnets: false, coils: false, shaft: false, in_band: false, out_band: false, wire_insulation: false, slot_insulation: false, [key]: true },
+          componentVisibility: { stator: false, rotor: false, magnets: false, coils: false, shaft: false, sleeve: false, in_band: false, out_band: false, wire_insulation: false, slot_insulation: false, [key]: true },
           coilVisibility: {},
           magnetVisibility: {},
         }),
 
       showAllComponents: () =>
         set({
-          componentVisibility: { stator: true, rotor: true, magnets: true, coils: true, shaft: true, in_band: true, out_band: true, wire_insulation: true, slot_insulation: true },
+          componentVisibility: { stator: true, rotor: true, magnets: true, coils: true, shaft: true, sleeve: true, in_band: true, out_band: true, wire_insulation: true, slot_insulation: true },
           coilVisibility: {},
           magnetVisibility: {},
         }),
@@ -1320,6 +1513,14 @@ export const useUIStore = create<UIState>()(
         if (version < 1 && persisted?.componentVisibility) {
           persisted.componentVisibility.in_band = false;
           persisted.componentVisibility.out_band = false;
+        }
+        // A key added AFTER a browser persisted this slice comes back
+        // `undefined`, which reads as "hidden" — so a machine that grew a
+        // retaining sleeve would draw everything but the sleeve, silently, for
+        // every existing user.  Default it visible like every other real part.
+        if (persisted?.componentVisibility
+            && persisted.componentVisibility.sleeve === undefined) {
+          persisted.componentVisibility.sleeve = true;
         }
         return persisted;
       },

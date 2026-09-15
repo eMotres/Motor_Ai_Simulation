@@ -9,6 +9,7 @@
  */
 import React, { useEffect, useMemo, useRef } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
+import { guardCanvas } from '../viewer3d/webglGuard';
 import { OrbitControls, OrthographicCamera, Grid } from '@react-three/drei';
 import { ViewcubeNavigation, CameraSync } from '../viewer3d/MotorScene';
 import * as THREE from 'three';
@@ -233,7 +234,7 @@ const FitView: React.FC<{
   payload: FemMeshPayload | null;
   controlsRef: React.MutableRefObject<any>;
 }> = ({ payload, controlsRef }) => {
-  const { camera, size, gl } = useThree();
+  const { camera, size, gl, invalidate } = useThree();
   const lastPayload = useRef<FemMeshPayload | null>(null);
 
   useEffect(() => {
@@ -264,8 +265,8 @@ const FitView: React.FC<{
       controlsRef.current.update();
     }
     lastPayload.current = payload;
-    gl.render(camera as any, camera as any);   // trigger a redraw
-  }, [payload, size.width, size.height, camera, gl, controlsRef]);
+    invalidate();                              // demand mode: draw the fitted view
+  }, [payload, size.width, size.height, camera, gl, controlsRef, invalidate]);
 
   return null;
 };
@@ -296,6 +297,7 @@ const FemMeshViewer3D: React.FC<ViewerProps> = ({
     <div style={{ position: 'relative', width: '100%', height: '100%' }}>
     <Canvas
       style={{ width: '100%', height: '100%', display: 'block', background: 'var(--panel-2)' }}
+      frameloop="demand" onCreated={guardCanvas('mesh viewer')}
       resize={{ debounce: 0 }}>
       <ResizeFix/>
       <OrthographicCamera makeDefault position={[0, 0, 300]} near={0.1} far={5000}/>

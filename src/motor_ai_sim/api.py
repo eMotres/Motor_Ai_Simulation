@@ -25,6 +25,51 @@ if not logging.getLogger().handlers:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logging.getLogger("skfem").setLevel(logging.WARNING)
 
+# ── Persistent rotating log ──────────────────────────────────────────────────
+# logs/api.log, rotated at midnight, 3 days kept — enough for a post-mortem
+# and never grows unbounded.  Born of a real failure (2026-08-23): a demag
+# view produced a physically impossible map, the process that solved it was
+# already restarted, and logs/api.log held six lines from a long-dead run —
+# the defect could not be reconstructed.  The handler is attached to the ROOT
+# logger so every module's INFO/WARNING lands in the file (uvicorn's own
+# loggers propagate there too); the console keeps whatever basicConfig set up.
+# Attached ONCE per process and only in the SERVER process — refine_proc eval
+# subprocesses import modules directly (never this file), so there is no
+# multi-process contention on the rotation.
+def _attach_file_log() -> None:
+    import os as _os
+    import sys as _sys
+    from logging.handlers import TimedRotatingFileHandler
+    # NOT under pytest: the suite imports this module too, and a second
+    # process appending to (and rotating!) the same file garbles the very
+    # post-mortem record this exists for.
+    if "pytest" in _sys.modules or _os.environ.get("MOTOR_AI_NO_FILE_LOG"):
+        return
+    _dir = _os.path.join(_os.path.dirname(_os.path.dirname(
+        _os.path.dirname(_os.path.abspath(__file__)))), "logs")
+    try:
+        _os.makedirs(_dir, exist_ok=True)
+        _fh = TimedRotatingFileHandler(
+            _os.path.join(_dir, "api.log"), when="midnight", backupCount=3,
+            encoding="utf-8", delay=True)
+        _fh.setFormatter(logging.Formatter(
+            "%(asctime)s %(levelname)s %(name)s: %(message)s"))
+        _fh.setLevel(logging.INFO)
+        _root = logging.getLogger()
+        if not any(isinstance(h, TimedRotatingFileHandler) for h in _root.handlers):
+            _root.addHandler(_fh)
+        # uvicorn keeps its access/error loggers non-propagating with its own
+        # console handlers; the post-mortem needs the REQUEST lines in the file
+        # (yesterday's forensic question was literally "what did the demag view
+        # get called with") — so let them propagate to the root file handler.
+        for _ln in ("uvicorn.access", "uvicorn.error"):
+            logging.getLogger(_ln).propagate = True
+    except Exception as _e:   # noqa: BLE001 — a log-file problem must not kill the API
+        logging.getLogger(__name__).warning("file log unavailable: %s", _e)
+
+
+_attach_file_log()
+
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -32,16 +77,30 @@ from typing import Optional
 
 from pydantic import BaseModel
 
-from motor_ai_sim.config import get_config, get_material_assignments, clear_config_cache
+from motor_ai_sim.config import (get_config, get_material_assignments,
+                                 clear_config_cache,
+                                 DEFAULT_CONFIG_PATH as _DEFAULT_CONFIG_PATH)
 from motor_ai_sim.routes.geometry import router as geometry_router
 from motor_ai_sim.routes.pipeline import router as pipeline_router
 from motor_ai_sim.routes.simulation import router as simulation_router
 from motor_ai_sim.routes.static3d import router as static3d_router
+from motor_ai_sim.routes.mechanical import router as mechanical_router
+from motor_ai_sim.routes.panel_settings import router as panel_settings_router
+from motor_ai_sim.routes.thermal import router as thermal_router
+from motor_ai_sim.routes.coupled import router as coupled_router
+from motor_ai_sim.routes.bearings import router as bearings_router
 from motor_ai_sim.routes.optimization import router as optimization_router
 from motor_ai_sim.routes.presets import router as presets_router
 from motor_ai_sim.routes.catalog import router as catalog_router
 from motor_ai_sim.routes.saved_sims import router as saved_sims_router
+from motor_ai_sim.routes.freecad import router as freecad_router
+from motor_ai_sim.routes.fusion import router as fusion_router
 from motor_ai_sim.routes.family import router as family_router
+# The PDF report export — same /api/family prefix and the same die gate as the
+# datasheet route it sits beside, in its own module because it reads four other
+# routers' last-result stores (see routes/report.py).
+from motor_ai_sim.routes.report import router as report_router
+from motor_ai_sim.routes.my_motors import router as my_motors_router
 from motor_ai_sim.routes.auth_local import router as auth_local_router
 from motor_ai_sim.routes.sweep_config import router as sweep_config_router
 from motor_ai_sim.routes.account import router as account_router
@@ -84,6 +143,10 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # Download routes speak through response headers; CORS hides everything but
+    # the six simple ones, so the browser saw neither the filename nor which
+    # FreeCAD bundle kind it got (App Control fallback, 2026-09-14).
+    expose_headers=["Content-Disposition", "X-Bundle-Kind", "X-Bundle-Reason"],
 )
 
 
@@ -100,14 +163,38 @@ async def _unknown_material_handler(request, exc: UnknownMaterialError):
 
 
 app.include_router(geometry_router)
+app.include_router(fusion_router)
 app.include_router(pipeline_router)
 app.include_router(simulation_router)
 app.include_router(static3d_router)
+app.include_router(mechanical_router)
+# /api/panel_settings — the server-side memory of every tab's input fields (the
+# same bargain the Simulation tab has with the config): see routes/panel_settings.
+app.include_router(panel_settings_router)
+# /api/thermal — split out of the simulation router on 2026-09-07 so the Thermal
+# tab has the same contract the Mechanical one has (last result, mesh preview,
+# timings).  Registered next to it deliberately: they are siblings.
+app.include_router(thermal_router)
+# /api/coupled — the EM<->thermal ORCHESTRATOR (2026-09-08, user: "не надо всё
+# смешивать, нужен оркестратор").  A THIRD router above the two solvers, not a
+# route inside either: it calls get_fem_transient and solve_thermal_field through
+# their own public entry points and iterates the winding / magnet temperatures to
+# the fixed point.  Neither solver learns about the other, and with the
+# Electromagnetic tab's toggle off nothing here is reachable at all.
+app.include_router(coupled_router)
+# /api/bearings — the catalogue, and the MECHANICAL half of the loss picture
+# (SKF frictional moment + rotor windage).  Analytics only: it never solves a
+# field and never writes; the machine's own bearing assignment is written by
+# PATCH /api/family/config/{die}/{cfg}/bearings, next to its battery.
+app.include_router(bearings_router)
 app.include_router(optimization_router)
 app.include_router(presets_router)
 app.include_router(catalog_router)
 app.include_router(saved_sims_router)
+app.include_router(freecad_router)
 app.include_router(family_router)
+app.include_router(report_router)
+app.include_router(my_motors_router)
 app.include_router(auth_local_router)
 app.include_router(sweep_config_router)
 app.include_router(account_router)
@@ -152,8 +239,25 @@ def health_check():
 
 
 _ASSIGNABLE_PARTS = {'stator_core', 'slot', 'rotor_core', 'magnet', 'shaft',
-                     'slot_insulation', 'wire_insulation'}
-_CONFIG_PATH = Path(__file__).parent.parent.parent / "config" / "motor_config.yaml"
+                     'slot_insulation', 'wire_insulation',
+                     # carbon-fibre retaining ring; only exists when
+                     # sleeve_thickness > 0, see GET /api/materials
+                     'sleeve'}
+# The config THIS PROCESS is pointed at — ``MOTOR_AI_SIM_CONFIG`` included.
+#
+# 2026-09-15.  This was a hardcoded ``Path(__file__)…/config/motor_config.yaml``,
+# bound at import and immune to the redirect, and four handlers WRITE through it:
+# PATCH /api/materials, PATCH /api/parts, PATCH /api/winding and
+# PATCH /api/mesh/config.  A redirected process (a test, an in-process sandboxed
+# run) therefore reassigned the steel, restated a part, rewired the winding or
+# re-meshed THE MACHINE THE USER HAS LOADED — the one thing the redirect exists
+# to make impossible (config.py, after the 2026-08-06 incident).
+#
+# ``DEFAULT_CONFIG_PATH`` already resolves the env var, so with no env var set
+# this is byte-identical to the old constant and the live API is unchanged.  It
+# stays a module ATTRIBUTE because tests monkeypatch it by name
+# (tests/test_family_activate_mesh_sync.py).
+_CONFIG_PATH = Path(str(_DEFAULT_CONFIG_PATH))
 
 
 class MaterialAssignment(BaseModel):
@@ -164,24 +268,60 @@ class MaterialAssignment(BaseModel):
 @app.get("/api/materials")
 def get_materials():
     try:
-        return get_material_assignments()
+        out = dict(get_material_assignments() or {})
+        # A part introduced after every machine in the field was saved has no
+        # entry in any `materials:` block, so the Materials tab would show it as
+        # unassigned and the solver would run on a bare density constant.  Fill
+        # the code default in — but ONLY when the part actually EXISTS on this
+        # machine (sleeve_thickness > 0).  Adding it unconditionally would put a
+        # new key into the ?mat= payload of every request, moving the physics
+        # fingerprint of every machine and marking stored duty results as
+        # "computed on an older build" for a part that is not there.
+        try:
+            from motor_ai_sim.materials import DEFAULT_PART_MATERIAL
+            from motor_ai_sim.config import get_geometry_params
+            _geo = get_geometry_params().to_dict()
+            if float(_geo.get("sleeve_thickness", 0.0) or 0.0) > 0.0:
+                out.setdefault("sleeve", DEFAULT_PART_MATERIAL["sleeve"])
+        except Exception:      # noqa: BLE001 — a default is a convenience
+            pass
+        return out
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 def _set_material_in_yaml(content: str, part: str, material: str):
-    """Replace `part: <value>` only inside the `materials:` top-level block.
-    Returns (new_content, replaced_bool).
+    """Set `part: <material>` inside the `materials:` top-level block.
+
+    Replaces the key when it is there and APPENDS it when it is not.  Appending
+    is not a convenience: a part introduced after this config was written (the
+    retaining sleeve) exists in the code and in the geometry but in no
+    `materials:` block anywhere, so a replace-only writer would refuse every
+    assignment to it — the Materials tab would offer the row and the save would
+    500.  Same reason the geometry writer honours SCHEMA_FALLBACK.
+
+    Returns (new_content, wrote_bool).
     """
     lines = content.splitlines(keepends=True)
     in_materials = False
     replaced = False
     result = []
+    blk_start = None            # index in `result` of the `materials:` line
+    blk_end = None              # index in `result` just past the block's last entry
+    indent = "  "
     for line in lines:
         if re.match(r'^materials\s*:', line):
             in_materials = True
+            blk_start = len(result)
         elif in_materials and re.match(r'^\S', line):
             in_materials = False  # exited the block
+            blk_end = len(result)
+
+        if in_materials and blk_start is not None and len(result) > blk_start:
+            m_i = re.match(r'^(\s+)\S', line)
+            if m_i:
+                indent = m_i.group(1)
+                blk_end = len(result) + 1
 
         if in_materials and not replaced:
             m = re.match(rf'^(\s+{re.escape(part)}\s*:\s*)(.*)$', line)
@@ -190,7 +330,12 @@ def _set_material_in_yaml(content: str, part: str, material: str):
                 replaced = True
 
         result.append(line)
-    return ''.join(result), replaced
+
+    if replaced or blk_start is None:
+        return ''.join(result), replaced
+    at = blk_end if blk_end is not None else len(result)
+    result.insert(at, f"{indent}{part}: {material}\n")
+    return ''.join(result), True
 
 
 @app.patch("/api/materials")
@@ -208,6 +353,17 @@ def update_material(assignment: MaterialAssignment):
             raise ValueError(f"Key '{assignment.part}' not found under materials: in config")
         _CONFIG_PATH.write_text(new_content, encoding="utf-8")
         clear_config_cache()
+        # A different steel / magnet is a DIFFERENT MACHINE: the field, the
+        # losses and the torque all move.  The physics caches are keyed on a
+        # fingerprint that covers this, but an entry solved with the old
+        # assignment left sitting beside the new one is exactly what the
+        # relaxed snapshot lookup will serve (incident 2026-09-03: G2-L40
+        # reported "+3.8 %" off the previous steel).  Drop them here.
+        try:
+            from motor_ai_sim.routes.simulation import clear_simulation_caches
+            clear_simulation_caches(reason="material assignment changed")
+        except Exception:
+            pass
         return {"status": "ok", "assignments": get_material_assignments(reload=True)}
     except HTTPException:
         raise
@@ -215,7 +371,141 @@ def update_material(assignment: MaterialAssignment):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── Per-part accounting state (included / reference / excluded) ───────────
+# Rides the SAME config file and the SAME per-request channel as the material
+# assignment above; see motor_ai_sim.part_states for why.
+
+
+from motor_ai_sim.part_states import config_part_states as _config_part_states
+
+
+class PartStateAssignment(BaseModel):
+    part: str
+    state: str
+
+
+@app.get("/api/parts")
+def get_part_states_endpoint():
+    """``{part: 'reference'|'excluded'}`` — only the parts that are NOT plain
+    ``included``.  ``{}`` on an ordinary machine."""
+    try:
+        from motor_ai_sim.part_states import config_part_states
+        return config_part_states()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _set_part_state_in_yaml(content: str, part: str, state: str) -> str:
+    """Rewrite the top-level ``parts:`` block with ``part`` set to ``state``.
+
+    The block is created when it does not exist and REMOVED when the change
+    leaves every part included — so a default machine's config file is
+    byte-identical to one written before this feature, and a diff of the file
+    shows the accounting decision rather than an empty scaffold.
+    """
+    import re as _re
+    lines = content.splitlines(keepends=True)
+    start = end = None
+    current: dict = {}
+    for i, line in enumerate(lines):
+        if start is None:
+            if _re.match(r'^parts\s*:', line):
+                start = i
+            continue
+        if _re.match(r'^\S', line):            # first non-indented line ends it
+            end = i
+            break
+        m = _re.match(r'^\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(\S+)\s*$', line)
+        if m:
+            current[m.group(1)] = m.group(2).strip('"\'')
+    if start is not None and end is None:
+        end = len(lines)
+
+    from motor_ai_sim.part_states import normalize_states, INCLUDED
+    current = normalize_states(current)
+    if state == INCLUDED:
+        current.pop(part, None)
+    else:
+        current[part] = state
+    current = {k: v for k, v in current.items() if v != INCLUDED}
+
+    block = ("parts:\n" + "".join(f"  {k}: {current[k]}\n"
+                                  for k in sorted(current))) if current else ""
+    if start is None:
+        if not block:
+            return content                     # nothing to add, nothing to do
+        sep = "" if content.endswith("\n") or not content else "\n"
+        return content + sep + block
+    return "".join(lines[:start]) + block + "".join(lines[end:])
+
+
+@app.patch("/api/parts")
+def update_part_state(assignment: PartStateAssignment):
+    """Set a part's accounting state, saved to motor_config.yaml.
+
+    ``included`` — ours: in the field, the mass, the inertia, the datasheet.
+    ``reference`` — the customer's part sitting in our field (a frameless
+    motor's shaft): solved with its assigned material, its losses honestly
+    reported, and out of every mass, inertia and per-mass density.
+    ``excluded`` — solved as air, weighs nothing, drawn nowhere.
+    """
+    from motor_ai_sim.part_states import (STATEFUL_PARTS, STATES,
+                                          MAGNETICALLY_ACTIVE_PARTS, EXCLUDED)
+    if assignment.part not in STATEFUL_PARTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown part '{assignment.part}'. "
+                   f"Valid: {sorted(STATEFUL_PARTS)}")
+    if assignment.state not in STATES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown state '{assignment.state}'. Valid: {list(STATES)}")
+    try:
+        content = _CONFIG_PATH.read_text(encoding="utf-8")
+        _CONFIG_PATH.write_text(
+            _set_part_state_in_yaml(content, assignment.part, assignment.state),
+            encoding="utf-8")
+        clear_config_cache()
+        # A part turned to air (or handed back to the customer) changes the
+        # magnetic circuit AND every mass — the same "different machine" as a
+        # geometry edit, so the field / transient / snapshot stores go with it.
+        try:
+            from motor_ai_sim.routes.simulation import clear_simulation_caches
+            clear_simulation_caches(
+                reason=f"part state changed ({assignment.part} -> {assignment.state})")
+        except Exception:
+            pass
+        from motor_ai_sim.part_states import config_part_states
+        out = {"status": "ok", "parts": config_part_states()}
+        # The solver refuses nothing (the user asked for "любую деталь"), but
+        # removing a magnetically active part is an experiment, not a
+        # packaging choice — say so instead of letting a plausible-looking
+        # torque out of the door.
+        if (assignment.state == EXCLUDED
+                and assignment.part in MAGNETICALLY_ACTIVE_PARTS):
+            out["warning"] = (
+                f"'{assignment.part}' is magnetically active — solving it as "
+                "air removes it from the magnetic circuit. Torque, EMF and "
+                "losses below describe that machine, not the real one.")
+        return out
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ── Materials library (EM simulation database) ────────────────────────────
+
+#: The mechanical keys the rotor-stress solver sizes parts with — E along and
+#: across the fibres, the shear modulus, Poisson, the three strengths, the
+#: isotropic or orthotropic thermal expansion, and the matrix's service ceiling.
+_MECH_KEYS = (
+    "youngs_modulus_gpa", "youngs_modulus_transverse_gpa",
+    "shear_modulus_gpa", "poisson_ratio",
+    "tensile_strength_mpa", "compressive_strength_mpa", "yield_strength_mpa",
+    "cte_ppm_k", "cte_ppm_k_1", "cte_ppm_k_2", "max_service_temp_c",
+)
+
 
 @app.get("/api/materials/library")
 def get_materials_library():
@@ -254,6 +544,13 @@ def get_materials_library():
                 "density": m.density,
                 "energy_product_kj_m3": m.energy_product_kj_m3,
                 "bh_curve": m.bh_curve,
+                # The card's reference temperature and its two reversible
+                # coefficients (2026-09-08): a client that builds a ?mat=
+                # override from THIS payload must carry them, or a solve at
+                # another magnet temperature has nothing to scale from.
+                "temperature_c": getattr(m, "temperature_c", None),
+                "alpha_br_pct_per_k": getattr(m, "alpha_br_pct_per_k", None),
+                "beta_hcj_pct_per_k": getattr(m, "beta_hcj_pct_per_k", None),
             }
 
         # Conductors
@@ -271,7 +568,7 @@ def get_materials_library():
                 "wire_height_mm": m.wire_height_mm,
             }
 
-        # Insulators (slot liner / wire enamel) — thermal + cost, EM-inert
+        # Insulators (insulation / wire enamel) — thermal + cost, EM-inert
         result["insulator"] = {}
         for name, m in mat_lib.all_insulators().items():
             result["insulator"][name] = {
@@ -296,6 +593,34 @@ def get_materials_library():
                 "prandtl": m.prandtl,
                 "sigma": m.sigma,
             }
+
+        # ── MECHANICAL, straight off the raw records ──────────────────
+        #
+        # User 2026-09-10: *"так и не вижу механических свойств материалов в
+        # каталоге"* — and they were right twice over: the card only rendered
+        # them for insulators, and this endpoint never sent them at all.
+        #
+        # Merged from the RAW library rather than from the parsed dataclasses:
+        # only some of those carry the mechanical keys and none carries the
+        # thermal expansion, while the raw record always has whatever the yaml
+        # was written with.  Same source the rotor-stress solver reads
+        # (`mechanical.rotor_stress._raw_material`), so the catalogue cannot
+        # show one number while the solve uses another.  Absent keys stay
+        # absent — a card with no mechanical data grows no empty rows.
+        try:
+            from motor_ai_sim import materials as _mats
+            _raw_lib = _mats._load()   # noqa: SLF001 - the intended loader
+            for _cat, _cards in result.items():
+                _raw_cat = _raw_lib.get(_cat) or {}
+                for _name, _card in _cards.items():
+                    _raw = _raw_cat.get(_name) or {}
+                    for _k in _MECH_KEYS:
+                        _v = _raw.get(_k)
+                        if _v is not None:
+                            _card[_k] = _v
+        except Exception as _e_mech:      # noqa: BLE001 - never break the list
+            logging.getLogger(__name__).debug(
+                "materials library: mechanical keys skipped (%s)", _e_mech)
 
         # Merge the admin-managed GLOBAL layer (Firestore) over the built-in
         # library; each entry is tagged _source/_editable. Empty merge locally.
@@ -427,6 +752,9 @@ def get_full_config(geo: Optional[str] = None):
         return {
             "geometry": geo_dict,
             "materials": get_material_assignments(),
+            # {} on an ordinary machine; names the parts that are the
+            # customer's (`reference`) or absent (`excluded`).
+            "parts": _config_part_states(),
             "mesh": {
                 "n_radial": mesh_cfg.get("n_radial", 10),
                 "n_angular": mesh_cfg.get("n_angular", 64),
@@ -507,7 +835,19 @@ def get_winding_config():
     geo        = cfg.get("geometry", {})
     n_wires    = geo.get("num_wires_per_slot", 14)
     I_coil     = I_phase / n_parallel
-    amp_turns  = n_wires * I_coil
+    # Ampere-turns per slot are TURNS × coil current, and k wires wound in hand
+    # make one turn out of k of the slot's conductors: the slot carries the same
+    # copper and the same total conductor current, but n_wires/k times it.
+    from motor_ai_sim.winding import (turns_per_coil as _tpc,
+                                      wire_parallel_from_geo as _wp_geo,
+                                      n_parallel_effective as _npe)
+    try:
+        wire_parallel = _wp_geo(geo)
+        turns_coil = _tpc(geo)
+        npar_eff = _npe(n_parallel, geo)
+    except ValueError as _wpe:
+        raise HTTPException(status_code=422, detail=str(_wpe))
+    amp_turns  = turns_coil * I_coil
     num_slots, lay = _current_winding_layout()
     # compact layout string (UPPER=+, lower=−) for the editor field
     layout_str = "|".join(p if d > 0 else p.lower() for p, d in lay)
@@ -520,6 +860,11 @@ def get_winding_config():
         "I_phase_Arms":       I_phase,
         "I_coil_Arms":        round(I_coil, 2),
         "amp_turns_per_slot": round(amp_turns, 1),
+        # Strands in hand and the SERIES turns they leave (geometry, not a
+        # connection — it lives in geometry.wire_parallel).
+        "wire_parallel":      int(wire_parallel),
+        "turns_per_coil":     int(turns_coil),
+        "n_parallel_eff":     int(npar_eff),
         "layers":             int(w.get("layers", 1)),
         "num_slots":          num_slots,
         "layout":             layout_str,
@@ -629,7 +974,7 @@ def update_winding_config(patch: WindingConfigPatch):
     if {"connection", "layers", "layout"} & set(updates):
         try:
             from motor_ai_sim.routes.simulation import clear_simulation_caches
-            clear_simulation_caches()
+            clear_simulation_caches(reason="winding changed")
         except Exception:
             pass
     return {"status": "ok", "updated": {k: v.strip('"') for k, v in updates.items()}}

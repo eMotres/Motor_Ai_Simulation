@@ -41,7 +41,8 @@ MANUFACTURER_STEELS = {
                        p10_400_max=9.50, p10_400_typ=9.00,
                        b5000_min=1.64, b5000_typ=1.66),
     # Baosteel B10AHV900M, 0.10 mm NGO — "Product info 2025"
-    "B10AHV900M": dict(density=7600.0, k_f=0.92, n_freqs=12,
+    # k_f 0.90 = the user's measured stack (2026-09-05), not the 92 % datasheet minimum
+    "B10AHV900M": dict(density=7600.0, k_f=0.90, n_freqs=12,
                        p10_400_max=9.00, p10_400_typ=8.50,
                        b5000_min=1.64, b5000_typ=1.66),
     # Shougang 20RSW175 (VHs), 0.20 mm NGO

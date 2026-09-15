@@ -17,7 +17,10 @@ import AddIcon          from '@mui/icons-material/Add';
 import PlayArrowIcon    from '@mui/icons-material/PlayArrow';
 import CircularProgress from '@mui/material/CircularProgress';
 import { useMotorStore } from '../../stores/motorStore';
+import { pageVisible } from '../../lib/pageVisible';
 import AddParameterDialog from '../parameters/AddParameterDialog';
+import FreeCADRoundTrip from '../common/FreeCADRoundTrip';
+import Fusion360RoundTrip from '../common/Fusion360RoundTrip';
 import SectionLabel from '../common/SectionLabel';
 
 const numFieldSx = {
@@ -145,7 +148,7 @@ const ParameterVariationTable: React.FC = () => {
     // Locks can be toggled from ANOTHER tab (the Motors catalog) or another
     // browser window entirely — a light poll keeps the greying honest even
     // when no event reaches this window.
-    const id = setInterval(load, 10_000);
+    const id = setInterval(() => { if (pageVisible()) load(); }, 10_000);
     return () => {
       window.removeEventListener('family-changed', load);
       window.removeEventListener('sim-design-applied', load);
@@ -305,6 +308,13 @@ const ParameterVariationTable: React.FC = () => {
         </Tooltip>
       </Box>
 
+      {/* FreeCAD round-trip: .FCStd with solids + parameter spreadsheet out,
+          edited parameters back in through the normal geometry PUT guards. */}
+      <Box sx={{ px: 0.5 }}>
+        <FreeCADRoundTrip />
+        <Fusion360RoundTrip />
+      </Box>
+
       {/* ── RECALCULATE button ── */}
       <Box sx={{ px: 0.5, mb: 1.5 }}>
         <Button
@@ -395,6 +405,11 @@ const ParameterVariationTable: React.FC = () => {
                 }}
               >
                 {/* Parameter name (grid col 1 = 1fr) */}
+                {/* The schema's own one-line description rides on the LABEL as a
+                    hover tooltip.  It was served by /api/geometry/schema and
+                    rendered nowhere, so a knob whose meaning is not obvious from
+                    four words (wire_split, wire_parallel, tooth2_width) had
+                    no explanation anywhere in the product. */}
                 <Box sx={{ minWidth: 0 }}>
                   <Typography variant="body2" noWrap
                     sx={{ lineHeight: 1.4, opacity: lockedBy ? 0.55 : 1 }}>
@@ -403,7 +418,11 @@ const ParameterVariationTable: React.FC = () => {
                         <span style={{ marginRight: 4, cursor: 'help', fontSize: 11 }}>🔒</span>
                       </Tooltip>
                     )}
-                    {param.label}
+                    {param.description
+                      ? <Tooltip title={param.description}>
+                          <span style={{ cursor: 'help' }}>{param.label}</span>
+                        </Tooltip>
+                      : param.label}
                     {param.unit && (
                       <Typography
                         component="span" variant="caption"

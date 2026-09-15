@@ -207,10 +207,14 @@ def test_drawn_triangles_are_element_sized_not_machine_sized(
     keep = V.cut_mask(tm.mesh, cut.get("cut_z_mm"), cut.get("cut_theta_deg"))
     tri, owner, opp = V.surface_faces(tm.mesh, reg, keep=keep, air_id=air)
     src = V._edge_stats(p_mm.T, tri.T)
-    # a fixture sanity bound, not the test: the coarse rung's faces run ~0.5 mm
-    # uncut and ~1.2 mm on a cut (a cut exposes whole interior tets), never the
-    # 9.5 mm the broken payload drew.
-    assert 0.1 < src["median"] < 2.0 and src["max"] < 8.0, src
+    # a fixture sanity bound, not the test: the coarse rung's faces are ELEMENT
+    # sized — a cut exposes whole interior tets, so their edges run at the rung's
+    # own solid target `h_solid`, never the 9.5 mm the broken payload drew.
+    # Tied to h_solid rather than a magic number so a retuned rung (coarse went
+    # h_solid 1.2 → 2.0, documented in viewer.FIDELITY) cannot stale this bound;
+    # the machine-sized bug (~20 mm) is still an order of magnitude out.
+    _h = float(V.FIDELITY["coarse"]["h_solid"])
+    assert 0.1 < src["median"] <= 1.25 * _h and src["max"] <= 2.0 * _h, (src, _h)
 
     assert out["regions"]
     for r in out["regions"]:
@@ -233,9 +237,13 @@ def test_a_field_payload_draws_the_same_sane_surface(tagged_mesh, section):
     fake = np.arange(ne, dtype=float)
     out = V.surface_payload(tagged_mesh, section, values_el=fake,
                             cut_z_mm=3.0, max_tris=10 ** 6)
+    # Element-sized, tied to the rung's own h_solid (see the sibling test): a cut
+    # exposes interior faces at ~h_solid, so med ≲ h_solid and the extreme edge
+    # ≲ a couple of them — never the machine's 20 mm.
+    _h = float(V.FIDELITY["coarse"]["h_solid"])
     for r in out["regions"]:
         lo, med, hi = _tri_edges(r["positions"], r["indices"])
-        assert hi < 6.0 and med < 1.5 and lo > 0.0, (r["name"], lo, med, hi)
+        assert hi <= 3.0 * _h and med <= 1.25 * _h and lo > 0.0, (r["name"], lo, med, hi, _h)
         assert len(r["values"]) == r["tri_count"]
 
 

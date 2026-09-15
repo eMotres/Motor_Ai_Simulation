@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { whenVisible } from '../../lib/pageVisible';
 import {
   Box, Button, Card, CardContent, Chip, CircularProgress, Divider,
   LinearProgress, Table, TableBody, TableCell, TableHead, TableRow, TextField,
@@ -29,7 +30,7 @@ import { appliedSaveLine } from '../../lib/appliedAutoSave';
  *
  * The full manual optimizer is not gone — it lives under "Advanced" below.
  */
-const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
+const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
 const fmt = (v: unknown, d = 2) =>
   (typeof v === 'number' && Number.isFinite(v) ? v.toFixed(d) : '—');
@@ -178,6 +179,8 @@ const AutoOptimizePanel: React.FC = () => {
     let alive = true;
     let timer: ReturnType<typeof setTimeout>;
     const tick = async () => {
+      if (!alive) return;
+      await whenVisible();              // a hidden tab polls nothing (lib/pageVisible)
       if (!alive) return;
       await loadLastDescent();
       if (!alive) return;

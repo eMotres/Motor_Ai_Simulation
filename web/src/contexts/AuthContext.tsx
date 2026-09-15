@@ -3,10 +3,12 @@
 // Roles are ALWAYS resolved server-side via /api/me; nothing client-side is
 // trusted for authorization.
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
+import Snackbar from '@mui/material/Snackbar';
+import Alert from '@mui/material/Alert';
 import { installFetchAuth, setTokenGetter } from '../lib/apiAuth';
 import {
   clearSession, getStoredToken, getStoredUser, loadGis, storeSession,
-  setSessionRole, GOOGLE_CLIENT_ID, type SessionUser,
+  setSessionRole, serverLogout, updateToken, GOOGLE_CLIENT_ID, type SessionUser,
 } from '../lib/localAuth';
 import LoginDialog from '../components/auth/LoginDialog';
 
@@ -67,6 +69,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [isAdmin, setIsAdmin] = useState<boolean>(false);
   const [enforced, setEnforced] = useState<boolean>(false);
   const [loginOpen, setLoginOpen] = useState<boolean>(false);
+  // One short amber line when the backend could not READ its own auth store —
+  // the session is kept and retried, so the user needs to know only that the
+  // pause is ours and temporary.
+  const [storeBusy, setStoreBusy] = useState(false);
 
   // Ask the backend who we are (the fetch interceptor attaches the token).
   // Also our expiry check: a token the backend SAW and refused (expired / user
@@ -75,8 +81,36 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const loadRole = useCallback(async () => {
     try {
       const j = await fetch(`${API}/api/me`).then((r) => r.json());
+      // The backend could not READ users.json / .sessions.json / .auth_secret
+      // (a Windows file lock during the atomic replace, an antivirus hold).
+      // It never verified our token, so it cannot have rejected it: KEEP the
+      // session and come back in 5 s.  Treating this as an expiry is how a
+      // valid session could be wiped by a 40 ms file lock.
+      if (j.authError === 'store_unavailable') {
+        setStoreBusy(true);
+        setTimeout(() => { void loadRoleRef.current?.(); }, 5000);
+        return;
+      }
+      setStoreBusy(false);
+      // A PROVISIONAL answer — anonymous, but our token was never presented
+      // (the mount-time race described below) — must not be applied: doing so
+      // set tier=anon / enforced=true for the ~1.5 s until the retry, the
+      // App's tab guard saw fullUI=false in that window and threw the user
+      // off Simulation / Sweep / Geometry onto Compare on EVERY full reload
+      // (user 2026-09-13: "почему вкладка отлипает?").  Keep the last known
+      // role and let the retry below settle it.
+      const _stored0 = getStoredToken();
+      const _provisional = _stored0 && !j.email && j.tokenRejected !== true
+        && j.tokenPresented !== true;
+      if (_provisional) {
+        setTimeout(() => { void loadRoleRef.current?.(); }, 1500);
+        return;
+      }
       setTier(j.tier ?? 'anon'); setIsAdmin(Boolean(j.isAdmin)); setEnforced(Boolean(j.enforced));
       setSessionRole({ isAdmin: Boolean(j.isAdmin), enforced: Boolean(j.enforced) });
+      // Sliding renewal: inside the last 7 days the backend hands back a fresh
+      // 30-day token for the SAME session. Swap it in silently.
+      if (typeof j.renewedToken === 'string' && j.renewedToken) updateToken(j.renewedToken);
       // Drop the stored session ONLY when the server says it SAW our token and
       // refused it (expired / revoked / account gone).  An answer that is
       // merely anonymous means the request went out without the header — a
@@ -86,7 +120,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const stored = getStoredToken();
       const rejected = j.tokenRejected === true
         || (j.tokenRejected === undefined && j.tokenPresented === undefined && stored && !j.email);
-      if (stored && rejected) { clearSession(); setUser(null); }
+      if (stored && rejected) { clearSession(String(j.authError ?? 'rejected'), j); setUser(null); }
       else if (stored && !j.email) {
         // eslint-disable-next-line no-console
         console.warn('[auth] /api/me answered anonymous but our token was not '
@@ -111,7 +145,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const signIn = useCallback(async () => { setLoginOpen(true); }, []);
 
   const logout = useCallback(async () => {
-    clearSession();
+    // Revoke server-side FIRST, while we still hold the token: a copy of it
+    // must stop working the moment the user signs out.
+    await serverLogout();
+    clearSession('user_signed_out');
     setUser(null);
     if (GOOGLE_CLIENT_ID) {
       // Stop Google from silently re-selecting this account next time.
@@ -126,6 +163,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     <AuthCtx.Provider value={{ user, loading, enabled: true, tier, isAdmin, enforced, signIn, logout, getToken }}>
       {children}
       <LoginDialog open={loginOpen} onClose={() => setLoginOpen(false)} onSignedIn={onSignedIn} />
+      <Snackbar open={storeBusy} anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}>
+        <Alert severity="warning" variant="outlined" sx={{ fontSize: 12, py: 0.25 }}>
+          Auth store busy — retrying, your session is kept.
+        </Alert>
+      </Snackbar>
     </AuthCtx.Provider>
   );
 };

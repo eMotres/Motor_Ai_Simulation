@@ -35,6 +35,22 @@ const DROPPED_MESH_KEYS = ['coil', 'shaft'];
 // settings memory pick it up for free).  1h is the backend default and is
 // stored as "no key", keeping the canonical mesh byte-identical.
 const WIRE_CELL_KEY = 'coil_rel';
+// THE DIE'S MEMORY FOLLOWS THE SCREEN.  It used to be written only on leaving
+// a die or saving a duty, so a duty (re)load in between put the OLDER memory
+// back over the user's live edits — the wire cell went 2h → 1h by itself
+// (user 2026-09-08: "кто опять поменял это, у меня было всегда 2h").  Every
+// mesh.* write now refreshes the active die's memory, debounced.
+import { rememberDieSettings } from '../../lib/dieSettings';
+import { activeDuty } from '../../lib/dutySettings';
+let _rememberTimer: ReturnType<typeof setTimeout> | null = null;
+function rememberActiveDieSoon(): void {
+  if (_rememberTimer) clearTimeout(_rememberTimer);
+  _rememberTimer = setTimeout(() => {
+    _rememberTimer = null;
+    try { const a = activeDuty(); if (a?.die) rememberDieSettings(a.die); }
+    catch { /* memory is a convenience, never a blocker */ }
+  }, 800);
+}
 const WIRE_CELL_OPTIONS: { v: number; label: string }[] = [
   { v: 0.5, label: '½h' },
   { v: 1,   label: '1h' },
@@ -45,6 +61,10 @@ import FemMeshViewer3D from './FemMeshViewer3D';
 import FemMeshViewer2D from './FemMeshViewer2D';
 import { syncActiveMotor } from '../common/motorSettings';
 import HelpTip from '../common/HelpTip';
+import {
+  adoptMeshConfig, configRetryDelayMs, decideMeshSave, MESH_CONFIG_KEYS,
+  type MeshConfigKey, type MeshSettings,
+} from './meshSaveContract';
 
 // WebGL is unavailable in some embedded / sandboxed browser panels
 // ("GL_VENDOR = Disabled, Sandboxed = yes") → the 3-D (WebGL) viewer renders
@@ -58,7 +78,7 @@ const WEBGL_OK = (() => {
 })();
 import Viewcube from '../viewer3d/Viewcube';
 
-const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
+const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
 // ── FEM mesh types ────────────────────────────────────────────────────────────
 interface FemMesh {
@@ -88,7 +108,7 @@ const DOMAIN_RGBA: Record<number, [number, number, number, number]> = {
   8:  [80,  90,  110, 200],   // outer air — SAME colour as air: it is the same
                               // substance, and two blues implied two materials
                               // (user request)
-  9:  [63,  174, 90,  240],   // slot liner     green   (Nomex/ceramic)
+  9:  [63,  174, 90,  240],   // insulation     green   (Nomex/ceramic)
   10: [217, 138, 58,  240],   // wire enamel    orange  (polyimide)
   44: [239, 68,  68,  240],   // magnet S       red
 };
@@ -96,7 +116,7 @@ const DOMAIN_NAMES: Record<number, string> = {
   0: 'Air',     1: 'Stator',  2: 'Winding',  3: 'Air gap',
   4: 'Magnet N', 5: 'Rotor',  6: 'Shaft',
   7: 'Band',    8: 'Outer air',
-  9: 'Slot liner', 10: 'Wire enamel',
+  9: 'Insulation', 10: 'Wire enamel',
   44: 'Magnet S',
 };
 
@@ -331,9 +351,35 @@ const MeshPanel: React.FC = () => {
 
   // ── FEM mesh state ─────────────────────────────────────────────────────────
   const [view] = useState<'fem' | 'pinn'>('fem');   // always the real FEM mesh; no view toggle
+
+  // ── Load/save contract (user, 2026-09-07) ────────────────────────────────
+  // "захожу в Mesh и опять не сохранено то, что было до этого — там точно
+  //  стояло 1/2; почему параметры опять не сохраняются?"
+  // Sequence: 09:0x config.yaml mesh.n_sectors: 2 → 09:06:45 the API restarts
+  // while the app is open → 09:2x GET /api/mesh/config answers n_sectors 1 /
+  // outer_air_factor 1.3, i.e. this panel's CONSTANT defaults → 09:25:41 the
+  // user re-sets 1/2 by hand.  The browser pane had lost its localStorage, so
+  // the panel painted constants and a save path that was not gated on the
+  // config load wrote them to the server.
+  // The contract now, in three lines:
+  //   1. the SERVER config is the single source of truth; localStorage is only
+  //      a cache for instant paint and is overwritten by every successful load;
+  //   2. nothing is saved (and no mesh is built) until that load succeeds —
+  //      failures retry with backoff, saves stay blocked meanwhile;
+  //   3. a PATCH carries ONLY the settings the user changed in this session
+  //      (per-setting dirty flags) — a constant default can never reach the
+  //      server again.
+  const [cfgLoaded,  setCfgLoaded]  = useState(false);   // GET /api/mesh/config answered
+  const [dirty, setDirty] = useState<ReadonlySet<MeshConfigKey>>(() => new Set());
+  const markDirty = useCallback((k: MeshConfigKey) => {
+    setDirty(prev => (prev.has(k) ? prev : new Set(prev).add(k)));
+  }, []);
+
   // ── Persisted mesh settings (survive tab switches) ──────────────────────
-  // Hook: each setting reads its initial value from localStorage and writes
-  // back on every change.  Default symmetry is Full (full disk) per user request.
+  // Hook: each setting reads its initial value from localStorage — a per-browser
+  // CACHE for instant paint only, never an authority: the mount load below
+  // overwrites it with the server's value.  Default symmetry is Full (full disk)
+  // per user request.
   const usePersisted = <T,>(key: string, def: T) => {
     const [v, setV] = useState<T>(() => {
       try {
@@ -343,7 +389,20 @@ const MeshPanel: React.FC = () => {
     });
     useEffect(() => {
       try { localStorage.setItem(`mesh.${key}`, JSON.stringify(v)); } catch {}
+      rememberActiveDieSoon();
     }, [key, v]);
+    // Re-read after a duty load restores saved mesh settings (same contract
+    // as SimulationPanel's twin — see 'sim-settings-restored' there).
+    useEffect(() => {
+      const onRestore = () => {
+        try {
+          const raw = localStorage.getItem(`mesh.${key}`);
+          if (raw != null) setV(JSON.parse(raw) as T);
+        } catch { /* keep current */ }
+      };
+      window.addEventListener('sim-settings-restored', onRestore);
+      return () => window.removeEventListener('sim-settings-restored', onRestore);
+    }, [key]);
     return [v, setV] as const;
   };
 
@@ -401,6 +460,44 @@ const MeshPanel: React.FC = () => {
   useEffect(() => {
     if (ironTemplate && !structuredGap) setStructuredGap(true);
   }, [ironTemplate, structuredGap, setStructuredGap]);
+  // Applying a descent design restores ITS eval params: restoreDescentEvalParams
+  // (motorStore) writes mesh.nSectors/gapLayers/meshSize/minSize/poleCopy straight
+  // to localStorage — but this panel seeded its state ONCE at mount, so it kept
+  // DISPLAYING the pre-apply values while every solve already read the new ones
+  // (until a reload).  Adopt the event's values live, same pattern as the
+  // SimulationPanel listener.  Setters are the usePersisted ones, so state and
+  // localStorage stay one value (re-writing the same value is a no-op).
+  // Applying a design is a USER action (they pressed Apply), so the adopted
+  // values are marked dirty and do get persisted — unlike the mount adoption
+  // from the server, which must never trigger a save (2026-09-07 incident).
+  useEffect(() => {
+    const onEval = (e: Event) => {
+      const p = (e as CustomEvent).detail || {};
+      if (typeof p.n_sectors    === 'number') { setNSectors(p.n_sectors);       markDirty('n_sectors'); }
+      if (typeof p.gap_layers   === 'number') { setGapLayers(p.gap_layers);     markDirty('gap_layers'); }
+      if (typeof p.mesh_size_mm === 'number') { setMeshSizeMm(p.mesh_size_mm);  markDirty('mesh_size_mm'); }
+      if (typeof p.min_size_mm  === 'number') { setMinSizeMm(p.min_size_mm);    markDirty('min_size_mm'); }
+      if (typeof p.pole_copy    === 'boolean') setPoleCopy(p.pole_copy);   // localStorage-only setting
+    };
+    window.addEventListener('descent-eval-params', onEval as EventListener);
+    return () => window.removeEventListener('descent-eval-params', onEval as EventListener);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // Loading a motor / duty / stored run writes that snapshot's mesh.* keys and
+  // fires 'sim-settings-restored'; the usePersisted hooks above adopt them.
+  // That is a USER action (they pressed ▶), and the sweep/optimizer read the
+  // mesh block from config.yaml, so the restored values must reach it — mark
+  // the config-owned settings dirty.  Restored values are real saved settings,
+  // never the constant defaults this gate exists to stop.
+  useEffect(() => {
+    const onRestore = () => setDirty(prev => {
+      const next = new Set(prev);
+      for (const k of MESH_CONFIG_KEYS) next.add(k);
+      return next;
+    });
+    window.addEventListener('sim-settings-restored', onRestore);
+    return () => window.removeEventListener('sim-settings-restored', onRestore);
+  }, []);
   // ── Per-component mesh size (study mesh-density effect on results) ─────────
   // {comp: target element size mm}. Empty/0 → use the global size for that part.
   // Persisted under 'mesh.componentMesh' so the Simulation tab's solve reads the
@@ -550,63 +647,103 @@ const MeshPanel: React.FC = () => {
   const meshStep = _floor ? Math.max(0.05, +((meshMax - meshMin) / 18).toFixed(2)) : 0.5;
   // Snap a persisted value sitting above the floor down onto it, so the Chip and
   // the transient solve use the size that is ACTUALLY meshed (not a dead 8 mm).
+  // NOT marked dirty: this is the mesher clamping the user's value, not the user
+  // changing it — machine-driven corrections must never write to the server
+  // (2026-09-07 incident).  The clamp still applies to every build.
   useEffect(() => {
     if (_floor && meshSizeMm > _floor + 1e-6) setMeshSizeMm(+_floor.toFixed(2));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [_floor]);
 
-  // Gate: don't persist mesh settings back to config until the mount config-load
-  // has populated state — otherwise a slow/interrupted load would let the
-  // debounced save write STALE localStorage into config (a clobber).
-  const meshReady = useRef(false);
-  // Load current config + geometry on mount
+  // ── Load the server config on mount — with retry, and NO fallback ─────────
+  // The server config is the single source of truth.  Until it answers:
+  //   • the settings are shown in a loading state and cannot be edited,
+  //   • no PATCH can fire (decideMeshSave refuses on serverLoaded === false),
+  //   • no mesh is built — the old `.catch(() => fetchFemMesh())` built the
+  //     preview from CONSTANT defaults while the config was unknown, which is
+  //     how a 1/2 machine came up as "Full" on 2026-09-07.
+  // A restarting API (09:06:45 that day) is retried at 1, 2, 4, 8, 16, 32, 60 s.
   useEffect(() => {
-    fetch(`${API}/api/mesh/config`)
-      .then(r => r.json())
-      .then(d => {
-        setCfg(d);
-        // Load the PERSISTED FEM mesh settings (config.yaml) → these win over the
-        // per-browser localStorage so the sliders are identical in every session.
-        if (typeof d.mesh_size_mm     === 'number') setMeshSizeMm(d.mesh_size_mm);
-        if (typeof d.min_size_mm      === 'number') setMinSizeMm(d.min_size_mm);
-        if (typeof d.outer_air_factor === 'number') setOuterAirFactor(d.outer_air_factor);
-        // gap_layers changed meaning (now per-side, 1-3): clamp legacy values.
-        if (typeof d.gap_layers       === 'number') setGapLayers(Math.min(3, Math.max(1, Math.round(d.gap_layers))));
-        if (typeof d.normal_deviation === 'number') setNormalDev(d.normal_deviation);
-        if (typeof d.n_sectors        === 'number') setNSectors(d.n_sectors);
-        meshReady.current = true;     // saves allowed only AFTER config is loaded
-        // Build the initial mesh with the JUST-LOADED config values (not the stale
-        // defaults) so the displayed mesh matches the Symmetry toggle on first open.
-        fetchFemMesh({
-          mesh_size_mm:     typeof d.mesh_size_mm     === 'number' ? d.mesh_size_mm : undefined,
-          min_size_mm:      typeof d.min_size_mm      === 'number' ? d.min_size_mm : undefined,
-          normal_deviation: typeof d.normal_deviation === 'number' ? d.normal_deviation : undefined,
-          outer_air_factor: typeof d.outer_air_factor === 'number' ? d.outer_air_factor : undefined,
-          gap_layers:       typeof d.gap_layers       === 'number' ? Math.min(3, Math.max(1, Math.round(d.gap_layers))) : undefined,
-          n_sectors:        typeof d.n_sectors        === 'number' ? d.n_sectors : undefined,
+    let alive = true;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let attempt = 0;
+    const load = () => {
+      fetch(`${API}/api/mesh/config`)
+        .then(async r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+        .then(d => {
+          if (!alive) return;
+          setCfg(d);
+          // The PERSISTED FEM mesh settings (config.yaml) WIN over the
+          // per-browser localStorage cache — the sliders are then identical in
+          // every session and every browser.  A difference here just means the
+          // cache is stale; the server wins silently (dev-only log).
+          const srv = adoptMeshConfig(d);
+          if (import.meta.env.DEV) {
+            const cache: MeshSettings = {
+              mesh_size_mm: meshSizeMm, min_size_mm: minSizeMm,
+              outer_air_factor: outerAirFactor, gap_layers: gapLayers,
+              n_sectors: nSectors,
+            };
+            const diff = Object.entries(srv)
+              .filter(([k, v]) => cache[k as MeshConfigKey] !== v)
+              .map(([k, v]) => `${k}: ${cache[k as MeshConfigKey]} → ${v}`);
+            if (diff.length) console.info('[mesh] server config wins over the local cache —', diff.join(', '));
+          }
+          if (srv.mesh_size_mm     !== undefined) setMeshSizeMm(srv.mesh_size_mm);
+          if (srv.min_size_mm      !== undefined) setMinSizeMm(srv.min_size_mm);
+          if (srv.outer_air_factor !== undefined) setOuterAirFactor(srv.outer_air_factor);
+          if (srv.gap_layers       !== undefined) setGapLayers(srv.gap_layers);
+          // normal_deviation is FIXED at the solver's 8° (see const above) — the
+          // setter is gone, and calling it here threw a ReferenceError that aborted
+          // this handler mid-way (n_sectors never adopted, the gate never set,
+          // initial mesh built by the .catch instead).
+          if (srv.n_sectors        !== undefined) setNSectors(srv.n_sectors);
+          setCfgLoaded(true);   // editing + saving unlocked ONLY here
+          // Build the initial mesh with the JUST-LOADED config values (not the stale
+          // defaults) so the displayed mesh matches the Symmetry toggle on first open.
+          fetchFemMesh({
+            mesh_size_mm:     srv.mesh_size_mm,
+            min_size_mm:      srv.min_size_mm,
+            normal_deviation: typeof d.normal_deviation === 'number' ? d.normal_deviation : undefined,
+            outer_air_factor: srv.outer_air_factor,
+            gap_layers:       srv.gap_layers,
+            n_sectors:        srv.n_sectors,
+          });
+        })
+        .catch(() => {
+          if (!alive) return;
+          timer = setTimeout(load, configRetryDelayMs(attempt));
+          attempt += 1;
         });
-      })
-      .catch(() => { fetchFemMesh(); });   // config load failed → build with current defaults
+    };
+    load();
 
     fetch(`${API}/api/geometry/summary`)
       .then(r => r.json())
-      .then(d => setGeo(d))
+      .then(d => { if (alive) setGeo(d); })
       .catch(() => {});
+    return () => { alive = false; if (timer) clearTimeout(timer); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── One-click symmetry switch (PERSISTENT) ──────────────────────────────
-  // When the Full / 1/2 / 1/4 toggle changes, rebuild AND persist to the
-  // backend config (config.yaml) via rebuildMesh → saveMeshConfig.  This makes
-  // the symmetry choice permanent across reloads/sessions, and — because the
-  // Simulation field view and the charts all read the same `mesh.nSectors`
-  // setting — they automatically use the SAME symmetry as the mesh.
+  // ── One-click symmetry switch ───────────────────────────────────────────
+  // The Full / 1/2 / 1/4 toggle rebuilds the preview immediately.  Persisting is
+  // NOT done here any more: this effect fires for every source of an nSectors
+  // change — including the mount adoption and the validity snap below — and it
+  // called saveMeshConfig() UNGATED by the config load.  Under React StrictMode
+  // the mount effects run twice with the refs preserved, so the second pass took
+  // the `symFirstRun.current === false` branch and PATCHed whatever the panel
+  // held at that instant: with an empty localStorage, the constant defaults
+  // (n_sectors 1, outer_air 1.3) — exactly what the server answered at 09:2x on
+  // 2026-09-07 after the 09:06:45 API restart.  The toggle's own onChange now
+  // marks the setting dirty and the debounced saver below writes it.
   const symFirstRun = useRef(true);
   useEffect(() => {
+    if (!cfgLoaded) return;            // never build from constants
     if (symFirstRun.current) { symFirstRun.current = false; return; }
-    rebuildMesh();
+    fetchFemMesh();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nSectors]);
+  }, [cfgLoaded, nSectors]);
 
   // ── Valid symmetry sectors for THIS motor ───────────────────────────────
   // A sector model is only valid for divisors of GCD(slots, poles): each wedge
@@ -618,7 +755,9 @@ const MeshPanel: React.FC = () => {
   const symPoles = geo?.num_poles ?? 28;
   const symGcd = Math.max(1, _gcd(Math.round(symSlots), Math.round(symPoles)));
   const validSectors = [1, 2, 3, 4, 6, 8, 12].filter(s => symGcd % s === 0);
-  // If the persisted nSectors is invalid for this motor, snap to Full (always valid).
+  // If the loaded nSectors is invalid for this motor, snap to Full (always valid).
+  // NOT marked dirty — a machine-driven correction, so it changes the preview but
+  // never writes to config (2026-09-07: automatic writes are what lost the 1/2).
   useEffect(() => {
     if (geo && !validSectors.includes(nSectors)) {
       setNSectors(validSectors[0]);   // = 1 (Full) — validSectors always includes 1
@@ -634,10 +773,11 @@ const MeshPanel: React.FC = () => {
   // fetches too), so we just re-fetch the Mesh-tab mesh here.
   const poleCopyFirstRun = useRef(true);
   useEffect(() => {
+    if (!cfgLoaded) return;            // never build from constants
     if (poleCopyFirstRun.current) { poleCopyFirstRun.current = false; return; }
     fetchFemMesh();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [poleCopy]);
+  }, [cfgLoaded, poleCopy]);
 
   // Auto-rebuild on EVERY mesh-affecting setting, debounced ~450 ms after the
   // last change.  Sliders coalesce a drag into one build; the pipeline
@@ -647,41 +787,60 @@ const MeshPanel: React.FC = () => {
   // whole contract now.  First run skipped (mount already builds).
   const densityFirstRun = useRef(true);
   useEffect(() => {
+    if (!cfgLoaded) return;            // config unknown → never build from constants
     if (densityFirstRun.current) { densityFirstRun.current = false; return; }
     const id = setTimeout(() => fetchFemMesh(), 450);
     return () => clearTimeout(id);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [meshSizeMm, minSizeMm, normalDev, gapLayers, outerAirFactor,
+  }, [cfgLoaded, meshSizeMm, minSizeMm, normalDev, gapLayers, outerAirFactor,
       ironTemplate, geoMesh, structuredGap, componentMeshJson]);
 
-  // Persist the Mesh-tab settings to config.yaml — ONLY on the explicit
-  // "Rebuild mesh" click (rebuildMesh below), not on every slider move. This
-  // makes them permanent + reused in all later sessions.
-  const saveMeshConfig = useCallback(() => {
+  // ── Persist to config.yaml — user changes only ───────────────────────────
+  // The body carries ONLY the settings the user moved in this session (dirty
+  // flags).  Everything else is omitted, so the server keeps the value this
+  // browser adopted from it — a value the panel never learned (empty
+  // localStorage + an API restart, 2026-09-07) can no longer be overwritten
+  // with a constant default.  normal_deviation is a const here, never a user
+  // setting, so it is not sent at all any more.
+  const patchMeshConfig = useCallback((patch: Partial<MeshSettings>) => {
+    if (Object.keys(patch).length === 0) return;
     fetch(`${API}/api/mesh/config`, {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        mesh_size_mm: meshSizeMm, min_size_mm: minSizeMm,
-        outer_air_factor: outerAirFactor, gap_layers: gapLayers,
-        normal_deviation: normalDev, n_sectors: nSectors,
-      }),
+      body: JSON.stringify(patch),
     }).catch(() => {});
-  }, [meshSizeMm, minSizeMm, outerAirFactor, gapLayers, normalDev, nSectors]);
+  }, []);
 
-  // "Rebuild mesh" button → persist the settings, then rebuild.
-  const rebuildMesh = useCallback(() => {
-    saveMeshConfig();
-    fetchFemMesh();
-  }, [saveMeshConfig, fetchFemMesh]);
-
-  // Persist mesh settings to config.yaml on ANY change (debounced), not just on
-  // the explicit Rebuild click — config wins on mount, so it MUST stay current
-  // or a change made without pressing Rebuild would be lost on reload.
+  // Debounced save of the user's edits.  Two gates, both required: the config
+  // must have loaded, and the user must have changed something in this session.
+  // No mount/adoption effect can reach this — that is the whole point.
+  const pendingSave = useRef<Partial<MeshSettings> | null>(null);
   useEffect(() => {
-    if (!meshReady.current) return;   // skip until the mount config-load populated state
-    const id = setTimeout(() => { saveMeshConfig(); syncActiveMotor(); }, 700);
+    if (!cfgLoaded || dirty.size === 0) return;
+    const decision = decideMeshSave({
+      mesh_size_mm: meshSizeMm, min_size_mm: minSizeMm,
+      outer_air_factor: outerAirFactor, gap_layers: gapLayers, n_sectors: nSectors,
+    }, dirty, cfgLoaded);
+    if (!decision.save) {
+      if (import.meta.env.DEV) console.info('[mesh] save skipped —', decision.reason);
+      return;
+    }
+    pendingSave.current = decision.patch;
+    const id = setTimeout(() => {
+      pendingSave.current = null;
+      patchMeshConfig(decision.patch);
+      syncActiveMotor();
+    }, 700);
     return () => clearTimeout(id);
-  }, [saveMeshConfig]);
+  }, [patchMeshConfig, cfgLoaded, dirty,
+      meshSizeMm, minSizeMm, outerAirFactor, gapLayers, nSectors]);
+
+  // The Mesh tab is NOT keepMounted (App.tsx): leaving it unmounts the panel and
+  // clears the 700 ms debounce above.  Flush whatever was still pending, or an
+  // edit made just before switching tabs is silently dropped — the same "why are
+  // my parameters not saved again?" the user reported on 2026-09-07.
+  useEffect(() => () => {
+    if (pendingSave.current) { patchMeshConfig(pendingSave.current); pendingSave.current = null; }
+  }, [patchMeshConfig]);
 
   const totalPoints = useMemo(() => {
     const pts = estimatePoints(cfg);
@@ -721,6 +880,22 @@ const MeshPanel: React.FC = () => {
 
         {view === 'fem' && (
           <>
+            {/* One short line + tooltip (UI rule).  Shown while the server
+                config is unknown: the settings are dimmed and locked, nothing
+                is saved and no mesh is built — the state that used to silently
+                fall back to constants (2026-09-07). */}
+            {!cfgLoaded && (
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+                <CircularProgress size={12} sx={{ color: '#3b82f6' }}/>
+                <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>
+                  Mesh settings: waiting for the API
+                </Typography>
+                <HelpTip title="These settings live in the server config (motor_config.yaml), which is the single source of truth. The panel shows and saves them only after the API answers — retrying automatically — so a restarting API can never leave factory defaults written over your saved values." />
+              </Box>
+            )}
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2,
+              opacity: cfgLoaded ? 1 : 0.45,
+              pointerEvents: cfgLoaded ? 'auto' : 'none' }}>
             {/* mesh_size_mm */}
             <Box>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
@@ -735,7 +910,10 @@ const MeshPanel: React.FC = () => {
               </Box>
               <Slider
                 value={Math.min(meshSizeMm, meshMax)} min={meshMin} max={meshMax} step={meshStep}
-                onChange={(_, v) => setMeshSizeMm(v as number)}
+                disabled={!cfgLoaded}
+                // A user move is the ONLY thing that may be written back to the
+                // server config (2026-09-07 rule) — hence the dirty flag here.
+                onChange={(_, v) => { setMeshSizeMm(v as number); markDirty('mesh_size_mm'); }}
                 sx={{ color: '#3b82f6' }}
               />
             </Box>
@@ -760,8 +938,8 @@ const MeshPanel: React.FC = () => {
                   sx={{ fontSize: 11, height: 20, bgcolor: 'var(--panel)', color: 'var(--text-2)' }}/>
               </Box>
               <Slider
-                value={minSizeMm} min={0.1} max={2.0} step={0.05} disabled={geoMesh}
-                onChange={(_, v) => setMinSizeMm(v as number)}
+                value={minSizeMm} min={0.1} max={2.0} step={0.05} disabled={geoMesh || !cfgLoaded}
+                onChange={(_, v) => { setMinSizeMm(v as number); markDirty('min_size_mm'); }}
                 sx={{ color: '#3b82f6' }}
               />
             </Box>
@@ -818,8 +996,8 @@ const MeshPanel: React.FC = () => {
                     color: outerAirFactor > 1.001 ? '#93c5fd' : 'var(--text-2)' }}/>
               </Box>
               <Slider
-                value={outerAirFactor} min={1.0} max={2.0} step={0.05}
-                onChange={(_, v) => setOuterAirFactor(v as number)}
+                value={outerAirFactor} min={1.0} max={2.0} step={0.05} disabled={!cfgLoaded}
+                onChange={(_, v) => { setOuterAirFactor(v as number); markDirty('outer_air_factor'); }}
                 sx={{ color: '#3b82f6' }}
               />
             </Box>
@@ -863,8 +1041,8 @@ const MeshPanel: React.FC = () => {
                   sx={{ fontSize: 11, height: 20, bgcolor: 'var(--line-accent)', color: '#93c5fd' }}/>
               </Box>
               <Slider
-                value={gapLayers} min={1} max={6} step={1}
-                marks onChange={(_, v) => setGapLayers(v as number)}
+                value={gapLayers} min={1} max={6} step={1} disabled={!cfgLoaded}
+                marks onChange={(_, v) => { setGapLayers(v as number); markDirty('gap_layers'); }}
                 sx={{ color: '#06b6d4' }}
               />
             </Box>
@@ -975,8 +1153,18 @@ const MeshPanel: React.FC = () => {
               </Box>
               <Tooltip placement="right" title={`Split the motor into N equal wedges (${symSlots} slots / ${symPoles} poles, GCD ${symGcd} → ${validSectors.map(s => s === 1 ? 'Full' : '1/' + s).join(', ')}). ${nSectors > 1 ? `Now: ${symSlots / nSectors} slots + ${symPoles / nSectors} poles per sector, ${(symPoles / nSectors) % 2 === 1 ? 'anti-periodic' : 'periodic'} BC on the radial cuts.` : 'Full 360° — stitched from clean half-sectors (no cuts, no double mesh).'} Saved & used by Simulation + charts.`}>
                 <ToggleButtonGroup
-                  value={nSectors} exclusive size="small" fullWidth
-                  onChange={(_, v) => v != null && setNSectors(v as number)}
+                  value={nSectors} exclusive size="small" fullWidth disabled={!cfgLoaded}
+                  // The one-click symmetry switch — a user action, so it is dirty
+                  // and persisted IMMEDIATELY (this is the setting that was lost
+                  // on 2026-09-07: "там точно стояло 1/2").  Waiting for the
+                  // 700 ms debounce would lose it again if the user leaves the
+                  // tab straight after clicking — the panel unmounts.
+                  onChange={(_, v) => {
+                    if (v == null) return;
+                    setNSectors(v as number);
+                    markDirty('n_sectors');
+                    if (cfgLoaded) patchMeshConfig({ n_sectors: v as number });
+                  }}
                   sx={{ width: '100%',
                     '& .MuiToggleButton-root': { flex: 1, py: 0.3,
                       fontSize: 11, color: 'var(--text-3)', borderColor: 'var(--panel)',
@@ -1045,6 +1233,7 @@ const MeshPanel: React.FC = () => {
             )}
 
             <Divider sx={{ borderColor: 'var(--panel)' }}/>
+            </Box>
           </>
         )}
 
@@ -1154,7 +1343,9 @@ const MeshPanel: React.FC = () => {
           variant="contained" color="primary" fullWidth
           startIcon={saving ? <CircularProgress size={14} color="inherit"/> : <SaveIcon/>}
           onClick={handleSave}
-          disabled={saving}
+          // Same rule as the FEM settings: never PATCH a config the panel has
+          // not read (this body echoes the loaded block, 2026-09-07 incident).
+          disabled={saving || !cfgLoaded}
           sx={{ py: 1.1, fontWeight: 700, letterSpacing: 1 }}
         >
           {saving ? 'SAVING…' : saved ? 'SAVED ✓' : 'SAVE TO CONFIG'}

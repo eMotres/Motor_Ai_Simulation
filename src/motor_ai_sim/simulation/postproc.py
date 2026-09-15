@@ -51,7 +51,9 @@ def voltage_harmonics(d: Dict[str, Any], h_max: int = 25) -> Dict[str, Any]:
         out["THD_pct"] = round(100.0 * float(np.sqrt(np.sum(hi ** 2))) / v1, 2)
         nt = hi[orders % 3 != 0]
         out["THD_LL_pct"] = round(100.0 * float(np.sqrt(np.sum(nt ** 2))) / v1, 2)
-        out["V1_LL_V"] = round(math.sqrt(3.0) * v1, 2)   # exact for the fundamental
+        out["V1_LL_V"] = round(
+            (1.0 if str(d.get("star_delta") or "star").lower().startswith("d")
+             else math.sqrt(3.0)) * v1, 2)   # exact for the fundamental
     ll = _line_harmonics(d, h_max)
     if ll:
         v1ll = ll[0]
@@ -79,6 +81,16 @@ def _line_harmonics(d: Dict[str, Any], h_max: int) -> list:
         vs.append(np.nan_to_num(np.asarray(v, dtype=float),
                                 nan=0.0, posinf=0.0, neginf=0.0))
     va_, vb_, vc_ = vs
+    # LINE per the terminal connection.  Star: the difference of two windings.
+    # Delta: the winding IS the line, minus its zero-sequence part — the
+    # triplen EMF drives the circulating current round the closed loop and the
+    # three terminal voltages, summing to zero identically, cannot carry it.
+    if str(d.get("star_delta") or "star").lower().startswith("d"):
+        v0_ = (va_ + vb_ + vc_) / 3.0
+        va_, vb_, vc_ = va_ - v0_, vb_ - v0_, vc_ - v0_
+        dd = {"n_periods": d.get("n_periods", 1.0),
+              "V_A": va_.tolist(), "V_B": vb_.tolist(), "V_C": vc_.tolist()}
+        return _phase_harmonics(dd, ("V_A", "V_B", "V_C"), h_max)
     dd = {"n_periods": d.get("n_periods", 1.0),
           "LL_ab": (va_ - vb_).tolist(), "LL_bc": (vb_ - vc_).tolist(),
           "LL_ca": (vc_ - va_).tolist()}
@@ -114,6 +126,106 @@ def _phase_harmonics(d: Dict[str, Any], keys, h_max: int) -> list:
     return amps
 
 
+def _drive_frame_phasor(d: Dict[str, Any], keys) -> "complex":
+    """Positive-sequence fundamental phasor of an abc series, in the frame the
+    EXCITATION SOURCES are written in.
+
+    Both sources in ``simulation/drive.py`` write the same thing:
+
+        x_A(θ) = X̂·cos(θ_mech·p + angle + daxis) ,  B/C shifted ∓120°
+
+    so projecting the three phases onto e^{-j(θ_mech·p + shift)} and averaging
+    gives a phasor whose magnitude is X̂ and whose argument is
+    ``angle + daxis``.  Subtracting the run's own d-axis therefore recovers the
+    ARGUMENT THE SOURCE TAKES — γ for a current, δ for a voltage — which is the
+    whole point: it is what makes the two directions round-trip.
+
+    THE D-AXIS IS THE RUN'S OWN.  This used to read the module constant
+    ``DAXIS_SHIFT_DEG`` (108°), which the solver itself documents as "wrong for
+    EVERY topology": the real offset is auto-calibrated per machine and is 60°
+    on both 12s/14p and 24s/28p and 120° on 24s/20p.  Every angle this function
+    produced was therefore ~48° out on the two commonest topologies — including
+    the γ₁ that the ΔP_harm reference run is solved at, so that comparison was
+    run at a load angle nobody asked for.  The constant survives only as the
+    fallback for a result dict too old to carry ``daxis_deg``.
+    """
+    ang = d.get("rotor_angle_deg") or []
+    N = len(ang)
+    if N < 8:
+        return 0j
+    rpm = float(d.get("rpm", 0.0) or 0.0)
+    f_e = float(d.get("f_elec_Hz", 0.0) or 0.0)
+    if rpm <= 0.0 or f_e <= 0.0:
+        return 0j
+    pp = max(1, int(round(f_e * 60.0 / rpm)))
+    th = np.radians(np.asarray(ang, dtype=float) * pp)
+    S = 0.0 + 0.0j
+    used = 0
+    for key, off in zip(keys, (0.0, -2.0 * np.pi / 3.0, 2.0 * np.pi / 3.0)):
+        v = d.get(key)
+        if not (isinstance(v, (list, tuple)) and len(v) == N):
+            continue
+        v = np.nan_to_num(np.asarray(v, dtype=float),
+                          nan=0.0, posinf=0.0, neginf=0.0)
+        S += (2.0 / N) * complex(v @ np.exp(-1j * (th + off)))
+        used += 1
+    return S / max(used, 1)
+
+
+def _daxis_of(d: Dict[str, Any]) -> float:
+    from motor_ai_sim.simulation.fem_solver_2d import DAXIS_SHIFT_DEG
+    v = d.get("daxis_deg")
+    try:
+        return float(v) if v is not None else float(DAXIS_SHIFT_DEG)
+    except (TypeError, ValueError):
+        return float(DAXIS_SHIFT_DEG)
+
+
+def _wrap180(a: float) -> float:
+    a = a % 360.0
+    return a - 360.0 if a > 180.0 else a
+
+
+def fundamental_voltage(d: Dict[str, Any]) -> Dict[str, Any]:
+    """The SEED for an imposed-voltage run, extracted from a finished one.
+
+    Returns ``(V1_seed_peak_V, V1_seed_delta_deg)`` — the fundamental phasor of
+    the SOLVED terminal phase voltage V = R·i + dψ/dt, expressed in exactly the
+    ``(v_phase_peak, v_delta_deg)`` coordinates that ``drive="voltage"`` and
+    ``drive="pwm_voltage"`` consume.  Feeding the two numbers back verbatim
+    re-runs the same operating point with the voltage as the input instead of
+    the answer.
+
+    This is the mirror of :func:`fundamental_current`, which goes the other way
+    (a voltage run's fundamental current, for the ΔP_harm reference).  The two
+    share one frame helper so they cannot drift apart — the round trip is only
+    a round trip if both directions agree about where zero is.
+
+    IT IS A SEED, NOT AN IDENTITY.  The machine is nonlinear: driving this
+    voltage lands on a slightly different current than the run it came from,
+    because Ld/Lq at the new operating point are not the Ld/Lq that produced
+    it, and near-zero R makes the current solution stiff in V.  MEASURED on
+    ciano14_40_new at its rated point (40.659 A rms, γ = 10°, 13 000 rpm, 240
+    steps, eddy on) — current-drive run → seed → sinusoid voltage run:
+
+        T_avg   0.59010 → 0.58906 N·m   −0.18 %
+        I₁      40.659  → 40.594  A rms −0.16 %
+        γ₁      10.00   → 9.89    °el   −0.11° absolute
+        P_cu    62.4    → 62.3    W     −0.16 %
+
+    The extraction itself is idempotent: the voltage run reports back
+    (10.1126 V, 18.870°) against the (10.1122 V, 18.867°) it was handed.
+    """
+    out = {"V1_seed_peak_V": 0.0, "V1_seed_delta_deg": 0.0}
+    S = _drive_frame_phasor(d, ("V_A", "V_B", "V_C"))
+    if S == 0j:
+        return out
+    out["V1_seed_peak_V"] = round(abs(S), 4)
+    out["V1_seed_delta_deg"] = round(
+        _wrap180(math.degrees(np.angle(S)) - _daxis_of(d)), 3)
+    return out
+
+
 def fundamental_current(d: Dict[str, Any]) -> Dict[str, Any]:
     """Extract the fundamental current PHASOR of a finished transient dict in
     the solver's own (I_phase_rms, γ) coordinates — i.e. the current-drive
@@ -130,35 +242,13 @@ def fundamental_current(d: Dict[str, Any]) -> Dict[str, Any]:
       Î (stored I_A series) is the BRANCH amplitude = I_phase_rms·√2/n_parallel.
     """
     out = {"I1_phase_rms_A": 0.0, "gamma1_deg": 0.0}
-    ia = d.get("I_A") or []
-    ang = d.get("rotor_angle_deg") or []
-    N = len(ia)
-    if N < 8 or len(ang) != N:
+    S = _drive_frame_phasor(d, ("I_A", "I_B", "I_C"))
+    if S == 0j:
         return out
-    rpm = float(d.get("rpm", 0.0) or 0.0)
-    f_e = float(d.get("f_elec_Hz", 0.0) or 0.0)
-    if rpm <= 0.0 or f_e <= 0.0:
-        return out
-    pp = max(1, int(round(f_e * 60.0 / rpm)))
-    from motor_ai_sim.simulation.fem_solver_2d import DAXIS_SHIFT_DEG  # lazy: heavy module, already loaded in-process
-    th = np.radians(np.asarray(ang, dtype=float) * pp)
-    S = 0.0 + 0.0j
-    for key, off in (("I_A", 0.0), ("I_B", -2.0 * np.pi / 3.0),
-                     ("I_C", 2.0 * np.pi / 3.0)):
-        v = d.get(key)
-        if not (isinstance(v, (list, tuple)) and len(v) == N):
-            continue
-        v = np.nan_to_num(np.asarray(v, dtype=float),
-                          nan=0.0, posinf=0.0, neginf=0.0)
-        S += (2.0 / N) * complex(v @ np.exp(-1j * (th + off)))
-    S /= 3.0
-    i1_branch_pk = abs(S)
     npar = max(1, int(d.get("n_parallel", 1) or 1))
-    g1 = (math.degrees(np.angle(S)) - DAXIS_SHIFT_DEG) % 360.0
-    if g1 > 180.0:
-        g1 -= 360.0
-    out["I1_phase_rms_A"] = round(i1_branch_pk * npar / math.sqrt(2.0), 3)
-    out["gamma1_deg"] = round(g1, 2)
+    out["I1_phase_rms_A"] = round(abs(S) * npar / math.sqrt(2.0), 3)
+    out["gamma1_deg"] = round(
+        _wrap180(math.degrees(np.angle(S)) - _daxis_of(d)), 2)
     return out
 
 

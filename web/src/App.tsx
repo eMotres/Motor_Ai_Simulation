@@ -50,8 +50,12 @@ import { useMaterialsLibrary } from './components/materials/useMaterialsLibrary'
 import type { SelectedMaterial, MaterialCategory } from './components/materials/useMaterialsLibrary';
 import { saveGlobal, blankMaterial, type Cat } from './lib/materialsActions';
 import { useMotorStore, useUIStore } from './stores/motorStore';
+import { installDiag } from './lib/diag';
 import SimulationPanel from './components/simulation/SimulationPanel';
 import Static3DPanel from './components/static3d/Static3DPanel';
+import MechanicalPanel from './components/mechanical/MechanicalPanel';
+import ThermalPanel from './components/thermal/ThermalPanel';
+import { syncMeshConfigFromServer } from './lib/meshConfigSync';
 import CompareTab from './components/compare/CompareTab';
 import ComparePanel from './components/compare/ComparePanel';
 import MeshPanel from './components/mesh/MeshPanel';
@@ -89,6 +93,9 @@ const GeometryBuildTimer: React.FC = () => {
   const startRef = useRef<number | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const hideRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // (The server mesh-block sync used to live here — see App() below for why
+  // it moved: this timer mounts only with the Geometry tab.)
 
   useEffect(() => {
     if (isGeometryUpdating) {
@@ -139,6 +146,13 @@ const GeometryBuildTimer: React.FC = () => {
 function App() {
   const [themeMode, setThemeMode] = useState<AppMode>(() => loadThemeMode());
   useEffect(() => { saveThemeMode(themeMode); }, [themeMode]);
+  // Adopt the server's mesh block into the browser's mesh.* keys once per
+  // boot — see lib/meshConfigSync for the full-ring sweep this prevents.
+  // HERE, at the root: it used to sit in GeometryBuildTimer, which mounts
+  // only with the Geometry tab, so a browser that opened on Thermal or
+  // Electromagnetic never synced at all — the user's F5 kept "4 sectors"
+  // from the Ø200 on a 12/14 machine (2026-09-09, "нажимаю, но то же самое").
+  useEffect(() => { void syncMeshConfigFromServer(); }, []);
   const appTheme = useMemo(() => buildAppTheme(themeMode), [themeMode]);
   const { activeTab, setActiveTab, showGrid, showAxes, toggleGrid, toggleAxes } = useUIStore();
   const { user, isAdmin, tier, enforced } = useAuth();
@@ -235,6 +249,10 @@ function App() {
   // stack) left the app stuck in "Local Mode" until a manual reload — a
   // one-shot connectivity check is a silent-failure trap. While disconnected,
   // retry every 5 s; the effect re-arms whenever connectivity flips.
+  // Edits typed during the outage are safe from this loop: fetchGeometryFromApi
+  // itself carries the reconnect barrier (motorStore) that re-PUTs
+  // pendingGeometryEdits BEFORE adopting the server's geometry — the first
+  // successful tick syncs the queue instead of clobbering it.
   useEffect(() => {
     if (connectedToApi) return;
     const t = setInterval(() => {
@@ -243,6 +261,10 @@ function App() {
     }, 5000);
     return () => clearInterval(t);
   }, [connectedToApi, fetchGeometryFromApi, fetchSchemaFromApi]);
+
+  // The in-page flight recorder (lib/diag): heap once a minute, main-thread
+  // stalls, WebGL context loss — read with `__diag()` after a freeze.
+  useEffect(() => { installDiag(); }, []);
 
   // There's always a working motor ("my copy"): a brand-new user with none gets
   // one created from the current state, so every later edit has somewhere to
@@ -264,7 +286,13 @@ function App() {
     if (activeTab === 'admin' && !isAdmin) { setActiveTab('motors'); return; }
     // Anonymous visitors get the catalog only — Configure + FEM require sign-in.
     if (!signedIn && activeTab !== 'motors') { setActiveTab('motors'); return; }
-    if (!fullUI && activeTab !== 'motors' && activeTab !== 'compare') setActiveTab('compare');
+    // The DEFAULT client set (user's spec 2026-08-24): Motors, Configure,
+    // Compare, Materials.  The old two-tab whitelist here silently bounced
+    // every Materials/Compare click back to Configure ("эти два меню не
+    // работают", 2026-08-25) — the gate list on the tabs and this redirect
+    // must name the same set.
+    const clientTabs = ['motors', 'compare', 'materials'];
+    if (!fullUI && !clientTabs.includes(activeTab)) setActiveTab('compare');
   }, [activeTab, isAdmin, fullUI, signedIn, setActiveTab]);
 
   // ── Tab registry — the bar AND the content are GENERATED from this list.
@@ -354,7 +382,7 @@ function App() {
           <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
             <Box sx={{ height: '50%', overflow: 'hidden', position: 'relative',
               borderBottom: '1px solid', borderColor: 'divider', bgcolor: 'var(--panel-2)' }}>
-              <MotorScene />
+              <MotorScene force3d />
             </Box>
             <Box sx={{ flex: 1, overflow: 'hidden', bgcolor: 'var(--panel-2)' }}>
               <MaterialDetailView library={matLibrary} selected={selectedMaterial}
@@ -365,7 +393,7 @@ function App() {
       ) },
     { id: 'mesh', label: 'Mesh', order: 40, panelId: 'mesh', gate: 'fullUI', showViewer: true,
       render: () => <MeshPanel /> },
-    { id: 'simulation', label: 'Simulation', order: 50, panelId: 'simulation', gate: 'fullUI', showViewer: true, keepMounted: true,
+    { id: 'simulation', label: 'Electromagnetic', order: 50, panelId: 'simulation', gate: 'fullUI', showViewer: true, keepMounted: true,
       render: () => <SimulationPanel active={activeTab === 'simulation'} /> },
     // The 3D end-effect model gets its own scene (its own camera fit, its own
     // cut planes), so it does NOT take the AppBar's viewer cluster — those
@@ -374,6 +402,19 @@ function App() {
     // 3D static solves are the owner's passport tool (admin-only server-side).
     { id: 'static3d', label: '3D', order: 55, gate: 'admin', showViewer: false,
       render: () => <Static3DPanel /> },
+    // Rotor centrifugal stress / retaining-sleeve sizing.  Like the 3D tab it
+    // draws its own picture (the deformed rotor cross-section), so it does not
+    // take the AppBar's viewer cluster — those controls drive MotorScene.
+    { id: 'mechanical', label: 'Mechanical', order: 57, gate: 'admin', showViewer: false,
+      render: () => <MechanicalPanel /> },
+    // The steady-state temperature map and the coupled EM↔thermal loop.  Split
+    // out of the Simulation tab's field viewer on 2026-09-07: a conduction
+    // solve has its own mesh, its own boundary conditions and its own minute of
+    // CPU, and it drew its own picture inside an electromagnetic output menu.
+    // Like Mechanical it does NOT take the AppBar's viewer cluster — those
+    // controls drive MotorScene.
+    { id: 'thermal', label: 'Thermal', order: 58, gate: 'admin', showViewer: false,
+      render: () => <ThermalPanel /> },
     // The optimizer/sweep burns the whole machine on the shared config —
     // server-side it is admin-only since the deploy hardening, so showing the
     // tab to pro users would only offer buttons that 403.
@@ -382,7 +423,10 @@ function App() {
     // Compare writes the SHARED saved-sims store and Cost studies run on the
     // shared config (kernel/study carries no per-user geometry yet) — both are
     // the owner's tools until they learn to work on the client-side copy.
-    { id: 'comparePoints', label: 'Compare', order: 65, gate: 'admin', showViewer: false,
+    // Compare is the ENGINEER'S tab again (user 2026-08-25: the client
+    // compares saved configurations inside Configure instead — one place,
+    // no second menu).
+    { id: 'comparePoints', label: 'Compare', order: 65, gate: 'fullUI', showViewer: false,
       render: () => <ComparePanel /> },
     { id: 'cost', label: 'Cost', order: 70, panelId: 'cost', gate: 'admin', showViewer: false,
       render: () => <CostPanel /> },
@@ -395,7 +439,10 @@ function App() {
     .map((t) => ({
       ...t,
       label: (t.panelId && panels[t.panelId]?.title) || t.label,
-      order: (t.panelId && panels[t.panelId]?.order) ?? t.order,
+      // Ternary, not `&&`: the falsy branch of `t.panelId && …` keeps the string
+      // type in the union, so `order` became string|number and the numeric sort
+      // below failed to type-check (TS2362/2363).
+      order: (t.panelId ? panels[t.panelId]?.order : undefined) ?? t.order,
     }))
     .filter((t) => t.gate === 'always' || (t.gate === 'signedIn' && signedIn) || (t.gate === 'fullUI' && fullUI) || (t.gate === 'admin' && isAdmin))
     .sort((a, b) => a.order - b.order);
@@ -456,7 +503,11 @@ function App() {
           >
             {tabs.map((t) => (
               <Tab key={t.id} label={t.label} value={t.id}
-                sx={{ minHeight: 40, fontSize: '0.8rem',
+                /* Sentence case and tight padding: "ELECTROMAGNETIC" in caps
+                   did not fit a full-width tab and was clipped to "ECTROMAGNE"
+                   (user 2026-09-08). */
+                sx={{ minHeight: 40, fontSize: '0.8rem', textTransform: 'none',
+                  px: 0.75, minWidth: 0, letterSpacing: 0,
                   ...(t.id === 'motors' ? { fontWeight: 700 } : {}),
                   ...(t.id === 'admin' ? { fontWeight: 700, color: '#fbbf24' } : {}) }} />
             ))}

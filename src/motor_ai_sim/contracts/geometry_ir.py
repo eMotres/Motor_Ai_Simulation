@@ -23,10 +23,12 @@ class RegionRole(str, Enum):
     MAGNET = "magnet"
     COIL = "coil"
     SHAFT = "shaft"
+    SLEEVE = "sleeve"          # carbon-fibre retaining ring on the rotor OD,
+                               # inside the air gap; turns WITH the rotor
     AIR_GAP = "air_gap"        # inner air disk that rotates with the rotor (in-band)
     AIR_OUTER = "air_outer"    # outer air to the far-field BC (stationary, out-band)
     BAND = "band"              # sliding / motion band inside the air gap
-    SLOT_INSULATION = "slot_insulation"  # slot liner (Nomex/ceramic): thermal + cost
+    SLOT_INSULATION = "slot_insulation"  # insulation (Nomex/ceramic): thermal + cost
     WIRE_INSULATION = "wire_insulation"  # wire enamel (polyimide): thermal only (cost bundled in wire)
 
 

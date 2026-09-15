@@ -62,7 +62,8 @@ class P2Drive:
 
     def __init__(self, *, p2, psi, f_mag, Pa, Pb, R_phase, v_phase_peak,
                  n_dof: int, pic_tol: float, dt: float, log,
-                 ed_con=None, G=None, Msig=None, Msd=None, Sdt=None) -> None:
+                 ed_con=None, G=None, Msig=None, Msd=None, Sdt=None,
+                 paths=None) -> None:
         self.p2 = p2
         self.psi = psi
         self.f_mag = f_mag
@@ -80,8 +81,60 @@ class P2Drive:
         self.Sdt = Sdt
         self.S_raw = None
         self.ed_ca = self.ed_cb = None
+        self.pT = self.pQ = self.p_rep = self.p_mask = None
         if ed_con is not None:
             self._init_eddy_currents(ed_con)
+            if paths:
+                self._init_strand_paths(ed_con, paths)
+
+    # ═══════════════════════════════════════════════════════════════════
+    #  SERIES STRAND PATHS — the soldered-ends winding
+    # ═══════════════════════════════════════════════════════════════════
+    # Without this, every conductor body carries a KNOWN current: its share of
+    # the phase current, imposed row by row.  That is a perfectly transposed
+    # winding, and no current can circulate between the strands because none
+    # of them is free to differ.
+    #
+    # A real k-in-hand coil is joined only at its two ends.  So the unknown is
+    # not a per-body current but a per-PATH one: strand j of coil g carries the
+    # same i_(g,j) through every turn, and the k paths of a coil hold a common
+    # terminal voltage W_g while their currents sum to the coil current.  Write
+    # T[b, p] = ±1 for "body b lies on path p, traversed this way" and
+    # Q[p, g] = 1 for "path p belongs to coil g", and the bordered system
+    # becomes, with the SAME field and constraint blocks it already had:
+    #
+    #   [ K+Msig/dt   −G      0       0   ] [A]   [ f_mag + (Msig/dt)·A_prev ]
+    #   [   −Gᵀ      S·dt   −dt·T     0   ] [U]   [      −Gᵀ·A_prev          ]
+    #   [    0      −dt·Tᵀ    0     dt·Q  ] [i] = [           0              ]
+    #   [    0        0     dt·Qᵀ     0   ] [W]   [        dt·I_coil         ]
+    #
+    # Row 2 is the old constraint row with its right-hand side turned into an
+    # unknown (dt·T·i instead of dt·I_b).  Row 3 says every path of a coil
+    # drops the same voltage — Σ_b ±U_b is the path's volts per metre, and U is
+    # per unit length, which is why no stack length appears.  Row 4 is
+    # Kirchhoff at the solder joint.  The matrix stays SYMMETRIC, which is why
+    # rows 3 and 4 carry the dt scaling: it makes block (2,3) = −dt·T the
+    # transpose of block (3,2), and the factorisation keeps the same character
+    # it has on the transposed winding.
+    #
+    # The bound this closes: per-strand rows forbid circulation (lower bound),
+    # merging a turn's strands into one row lets every turn circulate on its
+    # own (upper bound).  The truth is one current per strand per COIL, and
+    # that is exactly what the i unknowns are.
+    def _init_strand_paths(self, ed_con, paths):
+        from scipy.sparse import coo_matrix as _coo
+        _pl = paths["paths"]; _pg = paths["group"]
+        nb, npth, ng = len(ed_con), len(_pl), int(paths["n_group"])
+        _r, _c, _v = [], [], []
+        for _p, _mem in enumerate(_pl):
+            for _b, _sg in _mem:
+                _r.append(int(_b)); _c.append(_p); _v.append(float(_sg))
+        self.pT = _coo((_v, (_r, _c)), shape=(nb, npth)).tocsr()
+        self.pQ = _coo((np.ones(npth), (np.arange(npth), np.asarray(_pg, int))),
+                       shape=(npth, ng)).tocsr()
+        self.p_rep = np.asarray(paths["rep"], int)
+        _m = np.zeros(nb, bool); _m[np.asarray(_r, int)] = True
+        self.p_mask = _m
 
     # Line-to-line Crank–Nicolson circuit residual + its 2×2 Jacobian —
     # simulation/drive.py.  R_phase is the only run-dependent term, so it is
@@ -91,6 +144,14 @@ class P2Drive:
                                    self.R_phase)
 
     def circ_M(self, qa, qb, dtk):
+        # The LAST dpsi/di columns any solve on this object used.  They are the
+        # differential inductance at THIS frame's saturation state and step —
+        # with the eddy reaction in them on the coupled path — which is what a
+        # correction to psi_prev meets one step later.  The period-mean DC
+        # anchor reads them; the phasor initialiser's columns are the fallback
+        # and over-state the gain (1.8x, measured on the 30 mm fixture).
+        # B5 / PWM study 2026-09-13.
+        self.last_qa, self.last_qb = qa, qb
         return circuit_jacobian_ll(qa, qb, dtk, self.R_phase)
 
     def v_newton(self, Pro, free, A_start, i_start, Vt, dtk, iv_prev,
@@ -248,13 +309,49 @@ class P2Drive:
     # solves by Newton and code parked in the Picard fallback never runs.
     def eddy_solve(self, Pro, free, A_start, U_start, I_vec, Aprev, nu_fix,
                     maxit):
-        """Bordered (A, U) Newton.  Returns (ok, A, U, rrel, nit)."""
+        """Bordered (A, U) Newton.  Returns (ok, A, U, rrel, nit).
+
+        With series strand paths bound (``strand_bonding="series"``) the system
+        is the augmented (A, U, i, W) one described at ``_init_strand_paths``:
+        the bodies on a path no longer carry an imposed current, they carry
+        their path's unknown one.
+        """
         Ae = A_start.copy(); Ue = U_start.copy()
-        cr = self.dt * np.asarray(I_vec, float) - np.asarray(self.G.T @ Aprev).ravel()
+        _Iv = np.asarray(I_vec, float)
+        cr = self.dt * _Iv - np.asarray(self.G.T @ Aprev).ravel()
+        _sp = self.pT is not None
+        if _sp:
+            # A path body's current is an UNKNOWN: strip the imposed term from
+            # its constraint row and leave only the flux history.  Every other
+            # body (magnets, shaft, any conductor outside a coil) keeps the row
+            # it always had.
+            cr = np.where(self.p_mask,
+                          -np.asarray(self.G.T @ Aprev).ravel(), cr)
+            _npth = self.pT.shape[1]; _ngr = self.pQ.shape[1]
+            _dtT = (self.pT * self.dt).tocsr()
+            _dtQ = (self.pQ * self.dt).tocsr()
+            # coil current = Σ of its paths' TRANSPOSED currents: the same
+            # ampere-turns the per-strand rows imposed, redistributed instead
+            # of removed.  (Kirchhoff at the joint cannot change the total.)
+            _Ig = np.asarray(self.pQ.T @ _Iv[self.p_rep]).ravel()
+            _ip = _Iv[self.p_rep].copy()          # transposed start for i
+            _Wg = np.zeros(_ngr)
         rhs_e = self.f_mag + self.Msd @ Aprev
         _rf0 = np.asarray(Pro.T @ rhs_e).ravel()[free]
         _bn = max(float(np.linalg.norm(_rf0)), 1e-30)
-        _cn = max(float(np.linalg.norm(cr)), 1e-30)
+        # The constraint residual is judged RELATIVE to the size of the
+        # constraint equation, not to `cr` alone: at I = 0 on a cold frame
+        # cr = dt·0 − Gᵀ·0 is exactly zero, so a machine-zero residual divided
+        # by 1e-30 read as rrel ≈ 1e15 and the no-load run was refused twice
+        # (user 2026-09-05: "запускаю с 0 A и не могу получить результата").
+        # The magnet flux linked by the eddy bodies (GᵀA) is the natural scale
+        # of the equation when the drive term vanishes; it is folded in per
+        # iterate below, so the criterion means the same thing at 0 A and at
+        # 600 A.
+        _cn = max(float(np.linalg.norm(cr)),
+                  float(np.linalg.norm(self.dt * _Iv)),
+                  float(np.linalg.norm(np.asarray(self.G.T @ A_start).ravel())),
+                  1e-30)
         Bf = (Pro.T @ self.G).tocsr()[free, :]
         nit = 0; rrel = 1.0
         # ── SB_FAST_LA per-FRAME precompute ──────────────────────────────
@@ -269,16 +366,28 @@ class P2Drive:
             _PfT = _Pf.T.tocsr()
             _Msd_ff = (_PfT @ (self.Msd @ _Pf)).tocsr()
 
-        def _res_e(Av, Uv, Km):
+        def _res_e(Av, Uv, Km, iv=None, Wv=None):
             if _SB_FAST_LA:
                 _t = Km @ Av + self.Msd @ Av - self.G @ Uv - rhs_e
                 rf = np.asarray(_Pt @ _t).ravel()[free]
             else:
                 rf = np.asarray(Pro.T @ ((Km + self.Msd) @ Av - self.G @ Uv
                                          - rhs_e)).ravel()[free]
-            rc = self.Sdt * Uv - np.asarray(self.G.T @ Av).ravel() - cr
-            return rf, rc, max(float(np.linalg.norm(rf)) / _bn,
-                               float(np.linalg.norm(rc)) / _cn)
+            _GtA = np.asarray(self.G.T @ Av).ravel()
+            rc = self.Sdt * Uv - _GtA - cr
+            # scale of the constraint equation at THIS iterate (see _cn)
+            _cden = max(_cn, float(np.linalg.norm(_GtA)),
+                        float(np.linalg.norm(self.Sdt * Uv)))
+            if not _sp:
+                return rf, rc, max(float(np.linalg.norm(rf)) / _bn,
+                                   float(np.linalg.norm(rc)) / _cden)
+            rc = rc - np.asarray(_dtT @ iv).ravel()
+            rp = (-np.asarray(_dtT.T @ Uv).ravel()
+                  + np.asarray(_dtQ @ Wv).ravel())
+            rg = np.asarray(_dtQ.T @ iv).ravel() - self.dt * _Ig
+            return rf, np.concatenate([rc, rp, rg]), max(
+                float(np.linalg.norm(rf)) / _bn,
+                float(np.linalg.norm(np.concatenate([rc, rp, rg]))) / _cden)
 
         # DC seed for the conductor voltages: at ∂A/∂t = 0 the constraint
         # gives U_b = I_b/S_b, which is the bulk of the answer (the eddy
@@ -295,8 +404,33 @@ class P2Drive:
                 Km = self.p2.asmK(nu_fix); info = None
             else:
                 Km, info = self.p2.Kpw(Ae)
-            rf, rc, rrel = _res_e(Ae, Ue, Km)
+            rf, rc, rrel = _res_e(Ae, Ue, Km, (_ip if _sp else None),
+                                  (_Wg if _sp else None))
             if rrel < 1e-7:
+                if _sp:
+                    self.path_currents = _ip.copy()
+                    # INVARIANT, checked every frame rather than argued: the
+                    # solder joint cannot create or destroy current, so the
+                    # paths of a coil must still sum to the ampere-turns the
+                    # transposed rows imposed.  If this ever drifts, the field
+                    # is being driven by a winding the caller did not ask for.
+                    _err = np.asarray(self.pQ.T @ _ip).ravel() - _Ig
+                    _sc = max(float(np.max(np.abs(_Ig))), 1e-30)
+                    if float(np.max(np.abs(_err))) > 1e-8 * _sc:
+                        raise RuntimeError(
+                            "series strand paths: coil current not conserved "
+                            "(max %.3e A against %.3e A imposed) — Kirchhoff "
+                            "at the solder joint is a ROW of this system, so a "
+                            "violation means the incidence map is wrong"
+                            % (float(np.max(np.abs(_err))), _sc))
+                    # the circulating part: how far each path sits from the
+                    # equal split its coil would have if it were transposed.
+                    _kg = np.asarray(self.pQ.sum(axis=0)).ravel()
+                    _eq = np.asarray(
+                        self.pQ @ (np.asarray(self.pQ.T @ _ip).ravel()
+                                   / np.maximum(_kg, 1.0))).ravel()
+                    self.path_circ = float(np.max(np.abs(_ip - _eq)))
+                    self.path_share = _ip.copy()
                 return True, Ae, Ue, rrel, nit
             J = Km
             if info is not None:
@@ -307,15 +441,28 @@ class P2Drive:
                 Jff = ((_PfT @ (J @ _Pf)) + _Msd_ff).tocsr()
             else:
                 Jff = (Pro.T @ (J + self.Msd) @ Pro).tocsr()[free][:, free]
-            Mb = _bmat([[Jff, -Bf], [-Bf.T, _diags(self.Sdt)]]).tocsc()
+            if _sp:
+                Mb = _bmat([[Jff,   -Bf,               None,     None],
+                            [-Bf.T, _diags(self.Sdt),  -_dtT,    None],
+                            [None,  -_dtT.T,           None,     _dtQ],
+                            [None,  None,              _dtQ.T,   None]]).tocsc()
+            else:
+                Mb = _bmat([[Jff, -Bf], [-Bf.T, _diags(self.Sdt)]]).tocsc()
             try:
                 sol = self.p2.solve_ff(Mb, -np.concatenate([rf, rc]))
             except Exception as _je:
                 self.log.info("P2 eddy bordered solve failed (%s)", _je)
                 return False, Ae, Ue, rrel, nit
-            dA = self.p2.pad2(Pro, free, sol[:free.size]); dU = sol[free.size:]
+            dA = self.p2.pad2(Pro, free, sol[:free.size])
+            _nU = self.Sdt.size
+            dU = sol[free.size:free.size + _nU]
+            if _sp:
+                _di = sol[free.size + _nU:free.size + _nU + _npth]
+                _dW = sol[free.size + _nU + _npth:]
             if nu_fix is not None:        # linear system: the step is exact
                 Ae = Ae + dA; Ue = Ue + dU
+                if _sp:
+                    _ip = _ip + _di; _Wg = _Wg + _dW
                 continue
             # Backtracking line-search on the FIELD residual — the same test
             # the magnetostatic Newton uses, and the only one that means
@@ -329,8 +476,14 @@ class P2Drive:
             lam = 1.0; acc = False
             for _ls in range(8):
                 At = Ae + lam * dA; Ut = Ue + lam * dU
-                if float(np.linalg.norm(_res_e(At, Ut, self.p2.Kpw(At)[0])[0])) < _f0:
-                    Ae = At; Ue = Ut; acc = True; break
+                _it_ = (_ip + lam * _di) if _sp else None
+                _Wt_ = (_Wg + lam * _dW) if _sp else None
+                if float(np.linalg.norm(_res_e(At, Ut, self.p2.Kpw(At)[0],
+                                               _it_, _Wt_)[0])) < _f0:
+                    Ae = At; Ue = Ut; acc = True
+                    if _sp:
+                        _ip = _it_; _Wg = _Wt_
+                    break
                 lam *= 0.5
             if not acc:
                 return False, Ae, Ue, rrel, nit
@@ -405,6 +558,13 @@ class P2Drive:
         """Bordered (A, U, i_A, i_B) Newton: coupled σ·∂A/∂t eddy solve WITH
         the line-to-line voltage circuit.  Returns
         (ok, A, U, iA, iB, rrel, nit, rc_circ)."""
+        if self.pT is not None:
+            raise RuntimeError(
+                "strand_bonding='series' is implemented on the current-drive "
+                "eddy Newton only: the path currents and the terminal currents "
+                "would have to be solved as one circuit, and silently dropping "
+                "the strand paths would report a transposed winding as a "
+                "soldered one")
         Ae = A_start.copy(); Ue = U_start.copy()
         iA = float(i_start[0]); iB = float(i_start[1])
         Msd_k = (self.Msig * (1.0 / dtk)).tocsr()   # backward Euler on Δt_k

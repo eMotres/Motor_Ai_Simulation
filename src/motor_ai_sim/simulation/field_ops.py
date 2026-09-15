@@ -357,6 +357,14 @@ def band_limit_torque(T_series, n_steps_per_period, n_periods):
         return (100.0 * (float(arr.max()) - float(arr.min())) / abs(avg)
                 if abs(avg) > 1e-9 else 0.0)
     raw_rip = _pp(x)
+    # The 6·k comb assumes the window spans a WHOLE number of electrical
+    # periods — on a fractional window (n_periods=1.5) the rounded comb lands
+    # on orders 8, 16, … and the REAL 6·k ripple is discarded into the "noise"
+    # figure.  A fractional window cannot be comb-filtered honestly, so return
+    # the raw series unfiltered (the headline raw ripple is unaffected either
+    # way).
+    if abs(float(n_periods) - round(float(n_periods))) > 1e-6:
+        return x.tolist(), raw_rip, raw_rip, 0.0
     nper = max(1, int(round(n_periods)))
     step = 6 * nper                                  # electrical order 6 → bin 6·nper
     if n < 2 * step:                                 # too few frames to resolve order 6
@@ -542,26 +550,55 @@ def copper_loss_W(p, geo_cfg, I_phase_rms, n_parallel,
     — gate (c) of docs/SOLVER_TRIALS_2026-07-30.md.  On a machine whose CAD
     delivers the nominal section the two paths give the identical number.
 
-    The conductor COUNT stays num_slots·num_wires_per_slot — the turns the
-    winding is excited with — so the measured area is shared out over the same
-    conductors the field sees, and P = N²·ρ·L·k_end·I_coil²/A_cu.
+    The conductor COUNT is num_slots·num_wires_per_slot·wire_split — every
+    STRIP the field sees — so the measured area is shared out over exactly those
+    conductors, and P = ρ·L·k_end·I_strand²·n_cond/A_strip.
+
+    ``wire_split`` = S lays S strips of ``wire_width`` side by side per wire
+    row.  Both the conductor count and the copper (and therefore
+    ``copper_area_m2``) grow by S; a strip's own section is unchanged.  Those
+    strips are SERIES turns, so ``n_parallel`` — which the CALLER passes as
+    ``winding.n_parallel_effective`` — does NOT move: I_strand is the full
+    branch current and P rises by S, S times the copper at the same J.  Against
+    the unsplit bar of S·wire_width that is R_phase ×S² (the bar's own section
+    was S times bigger), which is what splitting the bar is for.
     """
     mm = 1e-3
-    n_wires = float(geo_cfg.get("num_wires_per_slot", 14))
+    from motor_ai_sim.winding import wire_split_from_geo as _ws_geo
+    n_split = float(_ws_geo(geo_cfg))
+    # CONDUCTORS per slot = wire rows × strips per row.  Both the section the
+    # measured copper is shared over and the active volume are built on it.
+    n_wires = float(geo_cfg.get("num_wires_per_slot", 14)) * n_split
     wire_area = (float(geo_cfg.get("wire_width", 5.0)) * mm
                  * float(geo_cfg.get("wire_height", 0.6)) * mm)
     n_cond = float(p.num_slots) * n_wires        # conductors in the cross-section
     if copper_area_m2 and float(copper_area_m2) > 0.0 and n_cond > 0.0:
         wire_area = float(copper_area_m2) / n_cond    # MEASURED strand section
     n_par = max(float(n_parallel), 1.0)
-    if wire_area <= 0 or I_phase_rms <= 0:
+    if wire_area <= 0:
         return 0.0, 1.0, 0.0
+    # I = 0 is a MACHINE, not a nothing.  P is genuinely zero there, but k_end
+    # and R_phase are properties of the copper and do not depend on what is
+    # flowing through it (R = P/3I² cancels the current exactly) — so they are
+    # computed on a 1 A probe and returned as themselves.
+    #
+    # This used to return (0, 1, 0) for the whole triple, and the zero R was
+    # load-bearing in the worst way: an imposed-VOLTAGE run is launched with
+    # I_phase_rms = 0 (the current is the answer, not the input), so its
+    # line-to-line circuit — V = R·i + dψ/dt — integrated a machine with NO
+    # phase resistance.  Measured on the 40 mm at 10.1 V pk: T_avg +3.4 %,
+    # i_d −7.1 → +12.0 A, and the settling never converged (mean phase current
+    # −2.2 A against 0.001 A with the real R).  Nothing on screen said the
+    # winding had lost its resistance.
+    _probe = float(I_phase_rms) if float(I_phase_rms) > 0.0 else 1.0
     V_cu_slot = p.num_slots * wire_area * n_wires * float(p.stack_length)
     k_end = (float(end_winding_factor) if end_winding_factor and end_winding_factor > 0
              else end_winding_factor_geom(p, geo_cfg))
     rho = RHO_CU_20 * (1.0 + ALPHA_CU * (float(coil_temp_c) - 20.0))
-    I_coil = float(I_phase_rms) / n_par                 # branch current
+    I_coil = _probe / n_par                             # branch current
     J = I_coil / wire_area                              # conductor current density
     P = rho * J * J * V_cu_slot * k_end
-    R_phase_eff = P / (3.0 * float(I_phase_rms) ** 2)
+    R_phase_eff = P / (3.0 * _probe ** 2)
+    if float(I_phase_rms) <= 0.0:
+        P = 0.0                                         # no current, no watts
     return float(P), float(k_end), float(R_phase_eff)

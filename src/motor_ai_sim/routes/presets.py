@@ -40,7 +40,12 @@ _ROOT = Path(__file__).parent.parent.parent.parent
 _PRESETS_PATH = Path(_env).expanduser().resolve() if (_env := _os.environ.get(
     "MOTOR_AI_SIM_PRESETS", "").strip()) else _ROOT / "config" / "motor_presets.json"
 _CONFIG_PATH = _DEFAULT_CONFIG_PATH
-_CATALOG_PATH = _ROOT / "config" / "motor_catalog.json"
+# The catalog goes WHERE THE CONFIG GOES (2026-09-15).  It was pinned to the
+# repo's own config/ while `_CONFIG_PATH` right above it followed the redirect,
+# so a redirected process saved its preset into the sandbox and upserted the
+# card into the user's real catalog — half the save on each machine.  family.py
+# already derives it this way.  With no env var set: unchanged.
+_CATALOG_PATH = Path(str(_DEFAULT_CONFIG_PATH)).parent / "motor_catalog.json"
 
 
 def _now_utc_iso() -> str:
@@ -64,6 +69,18 @@ def _thumb_path_d(geom, c: float, s: float) -> str:
     for g in geoms:
         if g.is_empty:
             continue
+        # WIND THE RINGS so a hole is a hole in BOTH renderers.  The SVG carries
+        # `fill-rule="evenodd"` and does not care, but the report draws this
+        # same path with matplotlib, which fills by the NONZERO rule — and with
+        # both rings wound the same way the retaining band came out as a solid
+        # disc over the magnets (2026-09-10).  `orient` makes the exterior
+        # counter-clockwise and every interior clockwise, which both rules read
+        # as a hole.
+        try:
+            from shapely.geometry.polygon import orient as _orient
+            g = _orient(g, 1.0)
+        except Exception:                                   # noqa: BLE001
+            pass
         for ring in [g.exterior, *g.interiors]:
             pts = list(ring.coords)
             if len(pts) < 3:
@@ -71,6 +88,20 @@ def _thumb_path_d(geom, c: float, s: float) -> str:
             d = " L ".join(f"{c + x * s:.2f} {c - y * s:.2f}" for x, y in pts)
             parts.append("M " + d + " Z")
     return " ".join(parts)
+
+
+#: WHAT THIS DRAWING LOOKS LIKE, as a number.
+#:
+#: The die stores its `thumb_svg` and only regenerates it when the geometry is
+#: synced from a live save — so a change to THIS function reached no existing
+#: machine, and the report went on printing a cross-section with no band and the
+#: old palette long after both were fixed (user 2026-09-10, twice: "почему ты на
+#: первом рисунке не нарисовал sleeve", then "опять Machine без бандажа и цвета
+#: не те").  Bumping this makes every reader able to tell a stale drawing from a
+#: current one and redraw it; see `report.thumb_svg_for`.
+#:
+#: 1 = the original palette, no band.  2 = app colours + the retaining band.
+THUMB_SVG_VERSION = 2
 
 
 def _gen_thumb_svg(geo: dict):
@@ -81,14 +112,23 @@ def _gen_thumb_svg(geo: dict):
     try:
         from motor_ai_sim.cadquery_geometry import CadQueryMotor
         C, VIEW, MARGIN = 60.0, 120.0, 4.0
-        COL = dict(stator="#26344a", rotor="#314158", shaft="#4a5a73",
-                   coil="#c6822f", magN="#e0556a", magS="#5b8def", edge="#46597a")
+        # THE APP'S OWN PART COLOURS (user 2026-09-10: "возьми все цвета с нашей
+        # геометрии").  Copied from `web/src/lib/partColors.ts`, which every
+        # surface that shows a part already reads — the 3-D and 2-D viewers, the
+        # component tree swatches, the material chips.  A thumbnail in its own
+        # palette made the same magnet a different colour in the document and on
+        # the screen.
+        COL = dict(stator="#42526b", rotor="#394860", shaft="#2b3648",
+                   sleeve="#1f2937", coil="#e0821a",
+                   magN="#e02718", magS="#2e86ff", edge="#46597a")
         m = CadQueryMotor()
         m.set_parameters(geo)
         P = m.get_2d_polygons()
         R = float(m.parameters["stator_outer_radius"])
         s = (VIEW / 2 - MARGIN) / R
-        out = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {VIEW:.0f} {VIEW:.0f}">']
+        out = [f'<svg xmlns="http://www.w3.org/2000/svg" '
+               f'data-thumb-v="{THUMB_SVG_VERSION}" '
+               f'viewBox="0 0 {VIEW:.0f} {VIEW:.0f}">']
         out.append(f'<path d="{_thumb_path_d(P["stator"], C, s)}" fill="{COL["stator"]}" '
                    f'fill-rule="evenodd" stroke="{COL["edge"]}" stroke-width="0.7"/>')
         out.append(f'<path d="{_thumb_path_d(P["rotor"], C, s)}" fill="{COL["rotor"]}" fill-rule="evenodd"/>')
@@ -96,6 +136,15 @@ def _gen_thumb_svg(geo: dict):
             out.append(f'<path d="{_thumb_path_d(c, C, s)}" fill="{COL["coil"]}"/>')
         for poly, pol in P.get("magnets", []):
             out.append(f'<path d="{_thumb_path_d(poly, C, s)}" fill="{COL["magN"] if pol > 0 else COL["magS"]}"/>')
+        # …AND THE BAND.  It was simply missing: the drawing showed a rotor with
+        # nothing holding the magnets on, which is not the machine (user
+        # 2026-09-10, "почему ты на первом рисунке не нарисовал sleeve").  Drawn
+        # AFTER the magnets because it sits on top of them, and only when the
+        # section has one — a sleeveless rotor grows no ring.
+        _sl = P.get("sleeve")
+        if _sl is not None:
+            out.append(f'<path d="{_thumb_path_d(_sl, C, s)}" '
+                       f'fill="{COL["sleeve"]}" fill-rule="evenodd"/>')
         out.append(f'<path d="{_thumb_path_d(P["shaft"], C, s)}" fill="{COL["shaft"]}"/>')
         out.append("</svg>")
         return "".join(out)
@@ -104,7 +153,8 @@ def _gen_thumb_svg(geo: dict):
 
 
 def _mat_name(mid) -> str:
-    """Short display name for a material id (Arnold_N52UH_150C -> N52UH 150C)."""
+    """Short display name for a material id (N52UH_150C -> N52UH 150C; a maker
+    prefix such as the retired Arnold_ is dropped too)."""
     s = str(mid or "").strip()
     for pref in ("Arnold_", "JFE_", "Hitachi_", "Vacuumschmelze_", "VAC_"):
         if s.startswith(pref):
@@ -126,7 +176,12 @@ def _last_transient_summary():
     prove anything) means the caller falls back to the deterministic recompute
     instead."""
     try:
-        p = _ROOT / "config" / ".last_transient.json"
+        # Beside the config this process is pointed at — the WRITER of this file
+        # (routes/simulation._last_transient_path) already resolves it that way,
+        # so pinned to the repo's own config/ the two disagreed under a redirect
+        # and a sandboxed save stamped its card with the torque of the machine
+        # the USER has open.  With no env var set: the same file as before.
+        p = Path(str(_CONFIG_PATH)).parent / ".last_transient.json"
         if not p.exists():
             return None
         blob = json.loads(p.read_text(encoding="utf-8"))
@@ -673,6 +728,18 @@ def apply_preset(preset_id: str,
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"failed to write config: {e}")
 
+    # A preset (or a classic-catalog motor, which loads through here) is a
+    # whole machine from OUTSIDE the family catalog: the active die/config/duty
+    # no longer describes what is on screen.  Release the context so the header
+    # strip stops naming the previous die and the die sync has nothing to
+    # write into (the 2026-09-01 22:33 clobber class).  ▶ in Motors makes a
+    # die active again.  Best-effort: a context hiccup must not fail the load.
+    try:
+        from motor_ai_sim.routes.family import release_context as _release_ctx
+        _release_ctx(f"preset load: {preset_id}")
+    except Exception as _re:   # noqa: BLE001
+        log.warning("preset apply: could not release the family context: %s", _re)
+
     # Flush caches + reset in-memory geometry so every tab re-solves on the new motor.
     try:
         from motor_ai_sim.config import clear_config_cache
@@ -693,7 +760,7 @@ def apply_preset(preset_id: str,
         pass
     try:
         from motor_ai_sim.routes.simulation import clear_simulation_caches
-        clear_simulation_caches()
+        clear_simulation_caches(reason="preset applied")
     except Exception:
         pass
     try:

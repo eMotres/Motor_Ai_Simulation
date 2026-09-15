@@ -152,13 +152,29 @@ class MagnetostaticsSolver2D:
         r_slot_mid = gp.r_stator_in + (gp.r_stator_out - gp.r_stator_in) * 0.5
         # Always use I_phase_rms from YAML (ground truth)
         I_phase_rms = s.get("max_current", 85.0)   # Arms, phase
+        # STRANDS IN HAND (geometry.wire_parallel): k wires wound together make
+        # one turn, so the coil has n_wires/k SERIES turns of k strands each.
+        # compute_copper_losses builds R_coil from the turn count and R_phase
+        # from n_parallel, so handing it turns/k and paths×k gives R ∝ 1/k² and
+        # I_coil = I_phase/(paths·k) = the current in ONE strand — both correct.
+        # STRIPS PER ROW (geometry.wire_split): a wire row is N strips of
+        # wire_width side by side, wired as N consecutive SERIES turns.  So the
+        # ×N rides in `turns_per_coil` (R ×N²) and NOT in
+        # `n_parallel_effective` — putting it in both would move the resistance
+        # twice, putting it only in the paths would build the parallel machine
+        # the user rejected.
+        from motor_ai_sim.winding import (turns_per_coil as _tpc,
+                                          wire_parallel_from_geo as _wp_geo,
+                                          n_parallel_effective as _npar_eff,
+                                          strip_width_mm as _strip_w)
+        _wp = _wp_geo(g)
         return {
             "I_phase_rms":       I_phase_rms,
             "n_coils_per_phase": w.get("n_coils_per_phase", 4),
-            "n_parallel":        w.get("n_parallel", 2),
+            "n_parallel":        _npar_eff(w.get("n_parallel", 2) or 2, g),
             "n_series":          w.get("n_series", 2),
-            "n_wires_per_slot":  int(g.get("num_wires_per_slot", 14)),
-            "wire_width_m":      g.get("wire_width",  5.0) * mm,
+            "n_wires_per_slot":  int(_tpc(g) or g.get("num_wires_per_slot", 14)),
+            "wire_width_m":      _strip_w(g) * mm,
             "wire_height_m":     g.get("wire_height", 0.6) * mm,
             "motor_length_m":    gp.stack_length,
             "r_slot_mid_m":      r_slot_mid,

@@ -230,11 +230,24 @@ def _recut_rotor_pockets(polys: dict, tol_mm2: float = POCKET_SLIVER_MM2
     if removed <= 1e-12:
         return polys, 0.0
     if removed > tol_mm2 or removed > 1e-3 * rotor.area:
-        raise ValueError(
-            f"magnets and rotor iron overlap by {removed:.4f} mm^2 "
-            f"({100*removed/rotor.area:.3f} % of the rotor) — that is a real "
-            "overlap, not a CAD discretisation sliver; the cross-section is "
-            "not buildable")
+        # Width test before declaring the design unbuildable: the pocket and
+        # the magnet share the SAME fillet arc, but the rotor passes through
+        # the coincident-point weld (tol ~0.04 mm) and its copy of the arc
+        # shifts by microns — the two polylines then interleave in a hairline
+        # band that can SUM past the area tolerance while being micrometres
+        # wide (measured live 2026-08-24: 28 bands × 0.44 mm × ~4 µm =
+        # 0.048 mm² on a perfectly buildable rotor).  Erode by half the weld
+        # tolerance: a hairline vanishes, a real lens of magnet-in-iron
+        # survives and still raises.
+        _erode_mm = 0.02
+        _core = rotor.intersection(unary_union(mags)).buffer(-_erode_mm)
+        if not _core.is_empty:
+            raise ValueError(
+                f"magnets and rotor iron overlap by {removed:.4f} mm^2 "
+                f"({100*removed/rotor.area:.3f} % of the rotor), and "
+                f"{_core.area + 3.1416*_erode_mm**2:.4f} mm^2 of it is wider "
+                f"than {2*_erode_mm} mm — that is a real overlap, not a CAD "
+                "discretisation sliver; the cross-section is not buildable")
     out = dict(polys)
     out["rotor"] = cut
     return out, removed

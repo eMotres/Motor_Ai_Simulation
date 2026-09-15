@@ -21,7 +21,8 @@ import numpy as np
 
 from motor_ai_sim.simulation.sb_domains import (
     DOM_AIR, DOM_AIRGAP, DOM_BAND, DOM_COIL, DOM_COIL_BASE, DOM_MAG_BASE,
-    DOM_MAG_N, DOM_MAG_S, DOM_OUTER, DOM_ROTOR, DOM_SHAFT, DOM_STATOR,
+    DOM_MAG_N, DOM_MAG_S, DOM_OUTER, DOM_ROTOR, DOM_SHAFT, DOM_SLEEVE,
+    DOM_STATOR,
     _GMSH_LOCK, _N_SLIP, _SB_BAND_DELTA_FRAC, _SB_BELT, _SB_GEO_MESH,
     _SB_GEO_SECTOR, _SB_IRON_RESAMPLE, _SB_IRON_TEMPLATE, _SB_POLE_COPY_ROTOR,
     _SB_POLE_COPY_STATOR, _SB_ROT_PERIODICITY, _SB_STRUCTURED_GAP,
@@ -207,6 +208,11 @@ def _simplify_polys(polys: dict, tol_mm: float = 0.005,
             rotor_solids = []
             if out.get("rotor") is not None: rotor_solids.append(out["rotor"])
             if out.get("shaft") is not None: rotor_solids.append(out["shaft"])
+            # The retaining sleeve turns WITH the rotor and, once fitted, is the
+            # OUTERMOST rotating surface — so it belongs in this union, or
+            # _r_ro_est below reads the rotor OD and the gap rings get built
+            # straight through the ring.  Absent on a machine without one.
+            if out.get("sleeve") is not None: rotor_solids.append(out["sleeve"])
             rotor_solids += [m for m, _p in out["magnets"] if m is not None]
             # Build the mid_r slip circle from ONE explicit equally-spaced point
             # ring shared by BOTH in_band (exterior) and out_band (hole), so the
@@ -251,13 +257,19 @@ def _simplify_polys(polys: dict, tol_mm: float = 0.005,
             if (_SB_IRON_RESAMPLE or _belt_mode) and _gap_est > 0.05:
                 # (forced in belt mode: the belt welds by node IDENTITY, so the
                 # iron boundary must sit exactly on the slip grid)
-                if out.get("rotor") is not None:
-                    out["rotor"] = _resample_ring_arcs(out["rotor"], _r_ro_est, _N)
+                # _r_ro_est is the outermost ROTATING radius, i.e. the SLEEVE
+                # OD when a sleeve is fitted — so it is the sleeve's gap arc
+                # that has to land on the slip grid then, not the rotor's (which
+                # has become an internal seam carrying no belt node).
+                _gap_face = "sleeve" if out.get("sleeve") is not None else "rotor"
+                if out.get(_gap_face) is not None:
+                    out[_gap_face] = _resample_ring_arcs(out[_gap_face], _r_ro_est, _N)
                 if out.get("stator") is not None:
                     out["stator"] = _resample_ring_arcs(out["stator"], _r_si_est, _N)
                 rotor_solids = []
                 if out.get("rotor") is not None: rotor_solids.append(out["rotor"])
                 if out.get("shaft") is not None: rotor_solids.append(out["shaft"])
+                if out.get("sleeve") is not None: rotor_solids.append(out["sleeve"])
                 rotor_solids += [m for m, _p in out["magnets"] if m is not None]
             _delta = min(max(_SB_BAND_DELTA_FRAC * _gap_est, 0.04), 0.4) if _gap_est > 0.05 else 0.0
             # STRUCTURED gap: per-request param OR the global env flag.
@@ -558,7 +570,7 @@ def _add_background_air(polys: dict, outer_air_factor: float = 1.0) -> dict:
     inner_disk = _Pt(0.0, 0.0).buffer(r_max + 1e-4, resolution=256)
 
     materials: list = []
-    for k in ("stator", "rotor", "shaft", "air_gap", "airgap_band"):
+    for k in ("stator", "rotor", "sleeve", "shaft", "air_gap", "airgap_band"):
         g = polys.get(k)
         if g is not None and not g.is_empty:
             materials.append(g)
@@ -719,7 +731,7 @@ def _clip_polys_to_sector(polys: dict, n_sectors: int) -> dict:
             return g
 
     out = dict(polys)
-    for k in ("stator", "rotor", "shaft", "air_gap", "airgap_band",
+    for k in ("stator", "rotor", "sleeve", "shaft", "air_gap", "airgap_band",
               "air_background", "air_outer"):
         if polys.get(k) is not None:
             out[k] = _clip(polys[k])
@@ -770,7 +782,7 @@ def _split_polys_for_sliding_band(polys: dict) -> Tuple[dict, dict]:
     NO background-air or motion-band post-processing is needed.
     """
     STATOR_KEYS = ("stator", "coils", "out_band")
-    ROTOR_KEYS  = ("shaft", "rotor", "magnets", "in_band")
+    ROTOR_KEYS  = ("shaft", "rotor", "sleeve", "magnets", "in_band")
 
     polys_s: dict = {}
     polys_r: dict = {}
@@ -1042,6 +1054,67 @@ def _retag_shaft_bore_as_air(mesh, tags, polys_half):
     return tags
 
 
+# ── Build provenance ─────────────────────────────────────────────────────────
+# Every fallback in the build below is deliberate (a hiccup degrades the study
+# instead of breaking it) — but it used to be SILENT beyond a log line: the
+# result dict never said which build actually ran, the eval cache filed the
+# result under the REQUESTED flags, and the optimizer compared candidates whose
+# ripple noise floors differ by percentage points on build path alone (with a
+# 5 % ripple gate, a candidate can pass or fail on the mesh path).  So the
+# builder now records what happened; the solver copies the record into the
+# result, refine_proc fails an eval whose structured gap silently degraded, and
+# the eval cache refuses to store fallback-built results.
+# Thread-local: the builder and the reader run on the same thread (the solver
+# calls the build then reads the trace), while two concurrent API requests each
+# get their own record.
+_BUILD_TRACE = threading.local()
+
+
+def _trace_reset() -> None:
+    _BUILD_TRACE.events = []
+    _BUILD_TRACE.notes = []
+    _BUILD_TRACE.structured_gap_effective = False
+
+
+def _trace_event(msg: str) -> None:
+    """A FALLBACK: the build did not get the path it asked for (template →
+    gmsh, pole copy → standard, structured → free gap).  The optimizer rejects
+    an eval that carries one, because a fallback-built candidate is not
+    comparable with cleanly built ones."""
+    try:
+        _BUILD_TRACE.events.append(str(msg))
+    except AttributeError:      # build path entered without a reset — self-heal
+        _BUILD_TRACE.events = [str(msg)]
+
+
+def _trace_note(msg: str) -> None:
+    """A DESIGN DECISION, not a fallback: the build path this machine always
+    takes, decided from the geometry alone (e.g. a retaining sleeve routes to
+    the geometry-driven mesher).  Deterministic for every candidate of the
+    same machine, so it stays reportable but never rejects an eval — filing
+    it as an event made a sweep on a sleeved machine reject 100 % of its
+    designs ("8 of 8 designs couldn't be built (mesh build degraded (iron
+    template skipped))", 2026-09-04)."""
+    try:
+        _BUILD_TRACE.notes.append(str(msg))
+    except AttributeError:
+        _BUILD_TRACE.notes = [str(msg)]
+
+
+def _trace_gap_built() -> None:
+    # setattr, not attribute access: build_mesh_from_polygons is also called
+    # outside the sliding-band path (no _trace_reset ran on this thread).
+    setattr(_BUILD_TRACE, "structured_gap_effective", True)
+
+
+def build_trace() -> Dict[str, object]:
+    """The last build's provenance ON THIS THREAD — read right after the build."""
+    return {"events": list(getattr(_BUILD_TRACE, "events", [])),
+            "notes": list(getattr(_BUILD_TRACE, "notes", [])),
+            "structured_gap_effective":
+                bool(getattr(_BUILD_TRACE, "structured_gap_effective", False))}
+
+
 def _build_sliding_band_meshes(
         polys: dict,
         rotor_angle_deg: float,
@@ -1076,6 +1149,7 @@ def _build_sliding_band_meshes(
     mesh_* are skfem MeshTri objects, tags_* are per-cell domain ids,
     classify_* are the helper returned by build_mesh_from_polygons.
     """
+    _trace_reset()
     polys_s, polys_r = _split_polys_for_sliding_band(polys)
 
     # What the USER actually asked for, captured BEFORE the auto-fill below —
@@ -1188,6 +1262,25 @@ def _build_sliding_band_meshes(
 
     _use_tpl = _SB_IRON_TEMPLATE if iron_template is None else bool(iron_template)
     _use_geo = _SB_GEO_MESH if geo_mesh is None else bool(geo_mesh)
+    # ── THE TENSOR TEMPLATE CANNOT BUILD A RETAINING SLEEVE ─────────────────
+    # iron_template.py assembles an IDEALISED cross-section from the radii —
+    # yoke, magnet bars, bridge band, gap — and then re-classifies iron/air
+    # against the real polygons.  It has no block for a ring in the air gap and
+    # no tag to give it, so a sleeved machine came out with the ring meshed as
+    # plain gap air: the field was right (carbon fibre is mu_r = 1, so the ring
+    # IS the air it displaces) and the sleeve's eddy loss was reported as a
+    # clean 0.0000 W — a zero that means "not modelled", presented as a
+    # measurement.  The geometry-driven mesher triangulates the actual polygons
+    # and DOES carry the ring, so a sleeve routes there.
+    if _use_tpl and (polys.get("sleeve") is not None
+                     and not getattr(polys["sleeve"], "is_empty", True)):
+        log.info("retaining sleeve present — the tensor iron template has no "
+                 "region for a ring in the air gap, so this build uses the "
+                 "geometry-driven mesher (which conforms to it)")
+        # A note, not an event: every build of THIS machine takes this path,
+        # so candidates stay comparable and the optimizer must not reject them.
+        _trace_note("retaining sleeve: geometry-driven mesh instead of the iron template")
+        _use_geo = True
     if full_ring:
         # TRUE 360°: each half stitched from two clean 180° builds (direct
         # closed-360 OCC double-meshes → dead field).  No sector cuts exist
@@ -1276,6 +1369,7 @@ def _build_sliding_band_meshes(
                     # gmsh fallback would re-pay the same pathological build.
                     raise
                 log.warning("iron template failed (%s) — gmsh build", _te)
+                _trace_event("iron template failed -> gmsh build: %s" % _te)
                 mesh_s = tags_s = classify_s = None
                 mesh_r = tags_r = classify_r = None
         if mesh_s is None and _pc_stator and _slot_period and _slot_period > 0:
@@ -1314,8 +1408,10 @@ def _build_sliding_band_meshes(
             # coupled analytically between the R1/R2 rings, nothing to weld.
             if _bs and "r1" not in _bs:
                 mesh_s, tags_s = _weld_belt_into_half(mesh_s, tags_s, _bs, "stator", 1)
+                _trace_gap_built()
             if _br and "r1" not in _br:
                 mesh_r, tags_r = _weld_belt_into_half(mesh_r, tags_r, _br, "rotor", 1)
+                _trace_gap_built()
         # Label-only: the hollow shaft's bore is DOM_AIR, not DOM_AIRGAP.  The
         # bore is centred on the origin, so this is rotation-invariant and may
         # sit either side of the rigid rotation below.
@@ -1394,6 +1490,7 @@ def _build_sliding_band_meshes(
                 # about the geometry, not this particular build path.
                 raise
             log.warning("iron template wedge failed (%s) — gmsh build", _te)
+            _trace_event("iron template wedge failed -> gmsh build: %s" % _te)
             mesh_s = tags_s = classify_s = None
             mesh_r = tags_r = classify_r = None
     if mesh_s is None and (_pc_stator and _slot_period and _slot_period > 0):
@@ -1404,6 +1501,7 @@ def _build_sliding_band_meshes(
                     polys_s_for_mesh, _slot_period, _ncs, _common_kw, "stator")
             except Exception as _se:
                 log.warning("stator slot-copy failed (%s) — standard sector build", _se)
+                _trace_event("stator slot-copy failed -> standard sector build: %s" % _se)
                 mesh_s = None
     if mesh_s is None:
         mesh_s, tags_s, classify_s = build_mesh_from_polygons(
@@ -1426,6 +1524,7 @@ def _build_sliding_band_meshes(
                     polys_r_for_mesh, _pole_period, _ncp, _common_kw, "rotor")
             except Exception as _re:
                 log.warning("rotor pole-copy failed (%s) — standard sector build", _re)
+                _trace_event("rotor pole-copy failed -> standard sector build: %s" % _re)
                 mesh_r = None
     if mesh_r is None:
         mesh_r, tags_r, classify_r = build_mesh_from_polygons(
@@ -1441,8 +1540,10 @@ def _build_sliding_band_meshes(
         # moving-band spec (r1/r2) → analytic gap, no belt cells to weld
         if _bs and "r1" not in _bs:
             mesh_s, tags_s = _weld_belt_into_half(mesh_s, tags_s, _bs, "stator", n_sectors)
+            _trace_gap_built()
         if _br and "r1" not in _br:
             mesh_r, tags_r = _weld_belt_into_half(mesh_r, tags_r, _br, "rotor", n_sectors)
+            _trace_gap_built()
 
     # Label-only: the hollow shaft's bore is DOM_AIR, not DOM_AIRGAP (see
     # _retag_shaft_bore_as_air).  Rotation-invariant — the bore is centred.
@@ -2712,6 +2813,11 @@ def build_mesh_from_polygons(polys: dict,
             domain_surfaces.append((surf, DOM_ROTOR))
         for surf in _shapely_to_occ(polys.get("shaft")):
             domain_surfaces.append((surf, DOM_SHAFT))
+        # Retaining sleeve: a ring on the rotor OD.  in_band was built to stop at
+        # the SLEEVE OD (see _simplify_polys), so this surface owns that annulus
+        # exclusively and the gap cells start outside it.
+        for surf in _shapely_to_occ(polys.get("sleeve")):
+            domain_surfaces.append((surf, DOM_SLEEVE))
         # air_gap = inner air (pockets etc.); on the ROTOR half it reaches r_ro.
         for surf in _gap_edge_occ(polys.get("air_gap"),
                                   _sg_arc_half == "rotor"):
@@ -2778,8 +2884,10 @@ def build_mesh_from_polygons(polys: dict,
                          _sg_spec.get("half", "?"), len(_sg_cells), len(_sg_filler),
                          _sg_rlo, _sg_rhi, int(_sg_spec["K"]), _sg_M, _sg_eps,
                          n_sectors)
+                _trace_gap_built()
             except Exception as _sge:
                 log.warning("structured gap cell build failed (%s) — free gap", _sge)
+                _trace_event("structured gap cell build failed -> FREE gap: %s" % _sge)
                 _sg_cells = []
 
         occ.synchronize()
@@ -2924,6 +3032,14 @@ def build_mesh_from_polygons(polys: dict,
             return r_shaft_in, r_shaft_out, r_rotor_out, r_stator_in, r_stator_out
 
         r_shaft_in, r_shaft_out, r_rotor_out, r_stator_in, r_stator_out = _bounds_radial()
+        # Retaining sleeve OD (== r_rotor_out when there is no sleeve, so the
+        # radial classifier below has an empty band and behaves exactly as it
+        # always did).
+        r_sleeve_out = r_rotor_out
+        if polys.get("sleeve") is not None:
+            _sl_ext = _all_ext_r(polys["sleeve"])
+            if _sl_ext:
+                r_sleeve_out = max(_sl_ext)
         log.info("FEM radial bounds (mm): shaft_in=%.2f shaft_out=%.2f rotor_out=%.2f stator_in=%.2f stator_out=%.2f",
                  r_shaft_in, r_shaft_out, r_rotor_out, r_stator_in, r_stator_out)
 
@@ -2953,6 +3069,8 @@ def build_mesh_from_polygons(polys: dict,
                 return DOM_SHAFT
             if r < r_rotor_out:
                 return DOM_ROTOR
+            if r < r_sleeve_out:
+                return DOM_SLEEVE
             if r < r_stator_in:
                 return DOM_AIRGAP
             if r <= r_stator_out + 0.1:
@@ -2968,6 +3086,7 @@ def build_mesh_from_polygons(polys: dict,
         specificity = {
             DOM_COIL:    9,
             # DOM_MAG_BASE..DOM_MAG_BASE+N_MAG handled separately below
+            DOM_SLEEVE:  8,   # a real solid inside the gap — beats the air tags
             DOM_BAND:    7,
             DOM_AIRGAP:  6,
             DOM_SHAFT:   5,
@@ -3124,7 +3243,8 @@ def build_mesh_from_polygons(polys: dict,
                     if _d >= DOM_MAG_BASE:
                         return "magnet"
                     return {DOM_STATOR: "stator", DOM_ROTOR: "rotor",
-                            DOM_SHAFT: "shaft", DOM_AIRGAP: "airgap",
+                            DOM_SHAFT: "shaft", DOM_SLEEVE: "sleeve",
+                            DOM_AIRGAP: "airgap",
                             DOM_BAND: "airgap", DOM_AIR: "outer",
                             DOM_OUTER: "outer"}.get(int(_d))
                 _surf_by_comp: Dict[str, List[int]] = defaultdict(list)
@@ -3744,7 +3864,8 @@ def _stitch_full_half(polys_half: dict, default_dom: int,
     for i, cp in enumerate(polys_half.get("coils", []) or []):
         if cp is not None and not cp.is_empty:
             clf.append((cp, DOM_COIL_BASE + i))
-    for k, dm in (("shaft", DOM_SHAFT), ("rotor", DOM_ROTOR),
+    for k, dm in (("shaft", DOM_SHAFT), ("sleeve", DOM_SLEEVE),
+                  ("rotor", DOM_ROTOR),
                   ("stator", DOM_STATOR)):
         gg = polys_half.get(k)
         if gg is not None and not gg.is_empty:

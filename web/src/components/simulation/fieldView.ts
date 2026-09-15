@@ -32,16 +32,31 @@
  */
 import * as THREE from 'three';
 import type { FemPayload } from './fem-types';
+// TYPE-ONLY (the common module imports `bandColor` / `classOf` from here at
+// runtime, so a value import back would be a cycle).
+import type { FieldOutput, FieldOverlay } from '../common/fieldOutput';
 
 // ── domain tags (backend simulation/geo_mesh.py) ──────────────────────────
 export const DOM = {
   AIR: 0, STATOR: 1, COIL: 2, MAG_N: 4, ROTOR: 5, SHAFT: 6, OUTER: 8,
   MAG_S: 44, MAG_BASE: 100, COIL_BASE: 200,
+  // The thermal solve's own air vocabulary (backend routes/thermal.py
+  // `THERMAL_EXTRA_DOMAINS`).  Added 2026-09-07, when the air the conduction
+  // solve conducts through stopped being dropped and became five named domains.
+  SLEEVE: 11,
+  SLOT_LINER: 61, WIRE_ENAMEL: 62, SLOT_FILL: 63, GAP_AIR: 64, POCKET_AIR: 65,
 } as const;
 
 /** Material class for the smoothing split.  The SHAFT is its own class, not
  *  "air-like": under the coupled eddy solve it carries a real solved loss, and
- *  lumping it with the air smeared that loss into the bore. */
+ *  lumping it with the air smeared that loss into the bore.
+ *
+ *  Each thermal air domain is its own class for the same reason: they sit
+ *  directly against each other (liner on tooth, enamel on copper, fill on
+ *  both) and their conductivities differ by more than an order of magnitude, so
+ *  a shared class would average a 0.14 W/m·K liner's heat flux together with
+ *  the 0.25 W/m·K fill beside it and smear away the one boundary the picture
+ *  exists to show. */
 export function classOf(d: number): number {
   if (d === DOM.COIL || d >= DOM.COIL_BASE) return 4;
   if (d === DOM.MAG_N || d === DOM.MAG_S
@@ -49,9 +64,107 @@ export function classOf(d: number): number {
   if (d === DOM.STATOR) return 1;
   if (d === DOM.ROTOR) return 2;
   if (d === DOM.SHAFT) return 5;
+  if (d === DOM.SLEEVE) return 6;
+  if (d === DOM.SLOT_LINER) return 7;
+  if (d === DOM.WIRE_ENAMEL) return 8;
+  if (d === DOM.SLOT_FILL) return 9;
+  if (d === DOM.GAP_AIR) return 10;
+  if (d === DOM.POCKET_AIR) return 11;
   return 0;                                   // air / gap / band
 }
-const N_CLASS = 8;
+// One more than the highest class above.  It is only a KEY STRIDE into a sparse
+// Map (`iv * N_CLASS + cls`), so growing it costs nothing but must never shrink
+// below the classes `classOf` can return, or two parts would share a key.
+const N_CLASS = 12;
+
+/** Name of the material class a domain tag belongs to — what the max/min marker
+ *  says the peak is IN (user 2026-09-06: the marker has to name the part, or
+ *  "5408 MPa somewhere on the rotor" is not an engineering answer).
+ *
+ *  This is the FALLBACK vocabulary: a payload that carries `part_names` (the
+ *  thermal one does) is labelled from that instead.  The thermal entries are
+ *  here so a cached payload from before `part_names` reached /field still names
+ *  its liner rather than calling it air. */
+const CLASS_NAME: Record<number, string> = {
+  0: 'air', 1: 'stator iron', 2: 'rotor iron', 3: 'magnet', 4: 'copper',
+  5: 'shaft', 6: 'sleeve', 7: 'insulation', 8: 'wire enamel', 9: 'wire coating',
+  10: 'air gap', 11: 'pocket air',
+};
+export function emClassName(domain: number): string | undefined {
+  return CLASS_NAME[classOf(domain)];
+}
+
+/**
+ * Domain outlines straight from a mesh: the boundary of every material class
+ * (stator, rotor, magnets, coils, shaft), chained into closed loops in the
+ * same shape the backend's CadQuery outlines use — so a payload assembled
+ * on the client (the run's demag map read off the stored transient) draws
+ * the motor around the coloured magnets instead of magnets floating in
+ * nothing (user 2026-09-05: "а почему мотора не видно?").
+ */
+export function outlinesFromMesh(
+  vertices: [number, number][],
+  triangles: [number, number, number][],
+  domain_per_tri: number[],
+  nSectors = 1,
+): { domain: number; loops: [number, number][][] }[] {
+  // A sector mesh ends on two radial cut lines (angles 0 and 2π/N); the
+  // edges lying ON them are mesh boundary, not material boundary, and would
+  // draw as spokes across the tiled ring.  Recognise a vertex on a cut by its
+  // angle; an edge with both ends on a cut and only one triangle is dropped.
+  const sect = nSectors > 1 ? 2 * Math.PI / nSectors : 0;
+  const onCut = (vi: number) => {
+    if (!sect) return false;
+    const [x, y] = vertices[vi];
+    const r = Math.hypot(x, y);
+    if (r < 1e-9) return true;
+    const a = ((Math.atan2(y, x) % sect) + sect) % sect;
+    return Math.min(a, sect - a) * r < 1e-6;      // within 1 nm of the cut line
+  };
+  // edge → the classes of the triangles on its two sides
+  const sides = new Map<number, number[]>();
+  const nv = vertices.length;
+  const ek = (a: number, b: number) => (a < b ? a * nv + b : b * nv + a);
+  for (let ti = 0; ti < triangles.length; ti++) {
+    const c = classOf(domain_per_tri[ti]);
+    const [a, b, d] = triangles[ti];
+    for (const [p, q] of [[a, b], [b, d], [d, a]] as [number, number][]) {
+      const k = ek(p, q);
+      const s = sides.get(k);
+      if (s) s.push(c); else sides.set(k, [c]);
+    }
+  }
+  // per class: the edges where that class meets something else
+  const perClass = new Map<number, Map<number, number[]>>();   // cls → vertex → nbrs
+  sides.forEach((cs, k) => {
+    const a = Math.floor(k / nv), b = k - a * nv;
+    const c0 = cs[0], c1 = cs.length > 1 ? cs[1] : -1;
+    if (c0 === c1) return;
+    if (cs.length === 1 && onCut(a) && onCut(b)) return;   // sector cut, not an outline
+    for (const c of [c0, c1]) {
+      if (c <= 0) continue;                       // air / gap / band: no outline
+      let adj = perClass.get(c);
+      if (!adj) { adj = new Map(); perClass.set(c, adj); }
+      (adj.get(a) ?? adj.set(a, []).get(a)!).push(b);
+      (adj.get(b) ?? adj.set(b, []).get(b)!).push(a);
+    }
+  });
+  // One two-point "loop" per boundary edge.  NOT chained into polylines: the
+  // renderer closes every loop with a segment from its last vertex back to
+  // its first, so a chain that is open (the stator and rotor boundaries are,
+  // once the sector-cut edges are dropped) drew a chord straight across the
+  // machine (user 2026-09-05: "какие-то чёрточки внутри").  A two-point loop
+  // closes onto itself — the edge is drawn twice, nothing else is drawn.
+  const out: { domain: number; loops: [number, number][][] }[] = [];
+  perClass.forEach((adj, cls) => {
+    const loops: [number, number][][] = [];
+    adj.forEach((nbrs, a) => {
+      for (const b of nbrs) if (a < b) loops.push([vertices[a], vertices[b]]);
+    });
+    out.push({ domain: cls, loops });
+  });
+  return out;
+}
 
 // ── colour ────────────────────────────────────────────────────────────────
 /** Classic Ansys rainbow (blue → cyan → green → yellow → red). */
@@ -122,7 +235,7 @@ export const BAND_FRAG = `
 `;
 
 // ── scale ─────────────────────────────────────────────────────────────────
-export type Mapping = 'linear' | 'log' | 'rank';
+export type Mapping = 'linear' | 'log' | 'rank' | 'edges';
 
 export interface FieldScale {
   vmin: number;
@@ -130,6 +243,8 @@ export interface FieldScale {
   unit: string;
   bands: number;
   mapping: Mapping;
+  /** 'edges' mapping: the bands+1 fixed band edges, ascending, display units. */
+  edges?: number[];
   /** Display-unit value at band edge k (0…bands) — what the legend prints. */
   edge: (k: number) => number;
   fmt: (v: number) => string;
@@ -137,12 +252,38 @@ export interface FieldScale {
   note: string;
 }
 
+/** Per drawn triangle: centroid in DISPLAY mm and the value in DISPLAY units.
+ *  Feeds the value-at-cursor readout the shared viewer prints in its header —
+ *  the picture can be read as numbers, not only as colours (user 2026-09-06). */
+export interface FieldProbeData {
+  cx: Float32Array;
+  cy: Float32Array;
+  val: Float32Array;
+  /** RAW class tag per drawn triangle (an EM domain id, a mechanical part id).
+   *  Not the dense remap: the HOST owns the names, and it names its own tags.
+   *  User 2026-09-06: "подсвечивать точки максимальных деформаций, напряжений и
+   *  полей" — a peak that does not say WHICH part it is in is half an answer. */
+  cls?: Int32Array;
+}
+
 export interface FieldView {
   geometry: THREE.BufferGeometry | null;
   scale: FieldScale | null;
+  /** hover readout source — same triangles the geometry drew */
+  probe?: FieldProbeData | null;
+  /** raw display-unit value per drawn VERTEX, before normalisation.  The shared
+   *  viewer's Part selector re-colours one part against its OWN range, and the
+   *  normalised attribute is percentile-clipped so it cannot be inverted back
+   *  to a value — see common/fieldOutput.FieldOutput.vertexValues (2026-09-06). */
+  vertexValues?: Float32Array | null;
+  /** TRUE extremes of what is drawn, in display units.  Not the colour range:
+   *  `scale.vmin/vmax` are percentile-clipped on purpose, and a header that
+   *  printed those as "max" would under-report every singular corner. */
+  vMin?: number | null;
+  vMax?: number | null;
 }
 
-const pctl = (arr: ArrayLike<number>, p: number): number => {
+export const pctl = (arr: ArrayLike<number>, p: number): number => {
   if (!arr.length) return 0;
   const a = Float64Array.from(arr as any).sort();
   const i = Math.max(0, Math.min(a.length - 1,
@@ -150,9 +291,18 @@ const pctl = (arr: ArrayLike<number>, p: number): number => {
   return a[i];
 };
 
-const fmt2 = (v: number) => v.toFixed(2);
-const fmt0 = (v: number) => v.toFixed(0);
-const fmtSI = (v: number) => {
+export const fmt2 = (v: number) => v.toFixed(2);
+export const fmt0 = (v: number) => v.toFixed(0);
+/** Significant-figure-ish formatter: 2 decimals under 10, 1 under 100, none
+ *  above.  Lived as a private `fmtMPa` inside the mechanical adapter until
+ *  2026-09-06 — the user asked that the stress/strain views be drawn "так же
+ *  как B — единый стиль везде", and two copies of the number formatter is
+ *  exactly how two views start printing the same value differently. */
+export const fmtAuto = (v: number): string => {
+  const a = Math.abs(v);
+  return a >= 100 ? v.toFixed(0) : a >= 10 ? v.toFixed(1) : v.toFixed(2);
+};
+export const fmtSI = (v: number) => {
   const a = Math.abs(v);
   return a >= 1e9 ? `${(v / 1e9).toFixed(1)}G`
        : a >= 1e6 ? `${(v / 1e6).toFixed(1)}M`
@@ -160,21 +310,37 @@ const fmtSI = (v: number) => {
        : v.toFixed(a < 10 ? 1 : 0);
 };
 
-function linScale(vmin: number, vmax: number, unit: string, note: string,
-                  fmt = fmt2, bands = N_BANDS): FieldScale {
+/** The FLOOR of a colour scale: the field's own minimum, not zero.
+ *
+ *  User 2026-09-07: "почему шкала от нуля — нужно везде от минимума строить".
+ *  A bar that starts at 0 for a field that lives between 1.5 and 8 spends a
+ *  fifth of the palette on values nobody has; starting at the minimum gives the
+ *  whole palette to the range that exists.  Non-finite values are skipped; an
+ *  empty field floors at 0. */
+export function floorOf(values: ArrayLike<number>): number {
+  let m = Infinity;
+  for (let i = 0; i < values.length; i++) {
+    const v = values[i];
+    if (Number.isFinite(v) && v < m) m = v;
+  }
+  return Number.isFinite(m) ? m : 0;
+}
+
+export function linScale(vmin: number, vmax: number, unit: string, note: string,
+                         fmt = fmt2, bands = N_BANDS): FieldScale {
   const span = (vmax - vmin) || 1e-12;
   return { vmin, vmax, unit, bands, mapping: 'linear', fmt, note,
            edge: (k) => vmin + span * (k / bands) };
 }
-function logScale(vmin: number, vmax: number, unit: string, note: string,
-                  fmt = fmtSI, bands = N_BANDS): FieldScale {
+export function logScale(vmin: number, vmax: number, unit: string, note: string,
+                         fmt = fmtSI, bands = N_BANDS): FieldScale {
   const a = Math.log10(Math.max(vmin, 1e-30));
   const b = Math.log10(Math.max(vmax, vmin * 10));
   return { vmin, vmax, unit, bands, mapping: 'log', fmt, note,
            edge: (k) => Math.pow(10, a + (b - a) * (k / bands)) };
 }
-function rankScale(sorted: Float64Array, unit: string, note: string,
-                   fmt = fmt0, bands = N_BANDS): FieldScale {
+export function rankScale(sorted: Float64Array, unit: string, note: string,
+                          fmt = fmt0, bands = N_BANDS): FieldScale {
   const q = (f: number) => sorted.length
     ? sorted[Math.min(sorted.length - 1, Math.round(f * (sorted.length - 1)))]
     : 0;
@@ -182,8 +348,31 @@ function rankScale(sorted: Float64Array, unit: string, note: string,
            edge: (k) => q(k / bands) };
 }
 
+/** Fixed, hand-placed band edges — for a quantity whose MEANING lives in a
+ *  narrow part of its range (Br retention: everything that matters happens
+ *  between 90 and 100 %).  Each band is one entry of `edges`, whatever its
+ *  width, so a 1 %-wide band near the top gets the same colour step as a
+ *  50 %-wide band at the bottom. */
+export function edgesScale(edges: number[], unit: string, note: string,
+                           fmt = fmt2): FieldScale {
+  const bands = edges.length - 1;
+  return { vmin: edges[0], vmax: edges[bands], unit, bands, mapping: 'edges',
+           edges, fmt, note, edge: (k) => edges[Math.max(0, Math.min(bands, k))] };
+}
+
 /** value → 0..1 for the LUT, under this scale. */
-function normaliser(sc: FieldScale, sorted?: Float64Array): (v: number) => number {
+export function normaliser(sc: FieldScale, sorted?: Float64Array): (v: number) => number {
+  if (sc.mapping === 'edges' && sc.edges && sc.edges.length > 1) {
+    const e = sc.edges, n = e.length - 1;
+    return (v) => {
+      if (v <= e[0]) return 0;
+      if (v >= e[n]) return 1;
+      let k = 0;
+      while (k < n - 1 && v >= e[k + 1]) k++;
+      const w = Math.max(e[k + 1] - e[k], 1e-12);
+      return Math.max(0, Math.min(1, (k + (v - e[k]) / w) / n));
+    };
+  }
   if (sc.mapping === 'log') {
     const a = Math.log10(Math.max(sc.vmin, 1e-30));
     const b = Math.log10(Math.max(sc.vmax, sc.vmin * 10));
@@ -244,7 +433,6 @@ export function demagRange(dc: number[] | undefined,
 
 export interface ViewOpts {
   logLoss?: boolean;
-  eqTemp?: boolean;
   /** Loss view: colour each material against its OWN range (reading aid). */
   perMaterialLoss?: boolean;
 }
@@ -255,26 +443,9 @@ function sourceFor(payload: FemPayload, mode: string, o: ViewOpts): Source | nul
   const nTri = tris.length;
   const interior = (_ti: number, d: number) => d !== DOM.OUTER;
 
-  if (mode === 'Temp') {
-    // The thermal payload carries its OWN sub-mesh (outer air and the gap are
-    // already gone), so every triangle is drawn.  A motor under steady cooling
-    // is a tight hot plateau, so the default mapping is rank-EQUALISED: colour
-    // by each node's rank among all nodes, which spends the whole palette on
-    // the distribution that exists rather than on the empty span above it.
-    const Tn = payload.temperature_per_node ?? [];
-    if (!Tn.length) return null;
-    const sorted = Float64Array.from(Tn).sort();
-    const note = o.eqTemp
-      ? 'temperature, rank-equalised — band edges are the temperature quantiles'
-      : 'temperature, linear scale';
-    return {
-      node: (vi) => Tn[vi] ?? sorted[0],
-      include: () => true,
-      scale: o.eqTemp ? rankScale(sorted, '°C', note)
-                      : linScale(sorted[0], sorted[sorted.length - 1], '°C', note, fmt0),
-      sorted,
-    };
-  }
+  /* The 'Temp' source moved to `thermal/fieldAdapters` on 2026-09-07 with the
+     rest of the thermal solve: a temperature map is not an electromagnetic
+     output, and this file's payload (`FemPayload`) is the EM one. */
 
   if (mode === 'Az') {
     // LINEAR, symmetric about zero: A_z varies linearly across a uniformly
@@ -415,7 +586,7 @@ function sourceFor(payload: FemPayload, mode: string, o: ViewOpts): Source | nul
       elem: (ti) => (ti < ld.length ? ld[ti] : 0),
       include: drawn,
       scale: o.logLoss ? logScale(vmin, vmax, 'W/m³', note)
-                       : linScale(0, vmax, 'W/m³', note, fmtSI),
+                       : linScale(Math.min(vmin, vmax * 0.999), vmax, 'W/m³', note, fmtSI),
     };
   }
 
@@ -438,7 +609,24 @@ function sourceFor(payload: FemPayload, mode: string, o: ViewOpts): Source | nul
       if (!inJ(ti, dom[ti])) continue;
       if (ti < jz.length) s.push(Math.abs(jz[ti]));
     }
-    const vmax = Math.max(pctl(s, 99), 1e-12);
+    // THE FIELD'S OWN MAX, not its 99th percentile (2026-09-10).
+    //
+    // The clip was hiding the picture rather than taming it.  On the live O200
+    // the ordinary DC current density is 52.8 MA/m2 peak (671.75 A rms over 4
+    // parallel 0.5x9 mm strands) while p99 of the drawn field came out at
+    // 46.6 MA/m2 — BELOW it.  Every conductor therefore sat past the end of the
+    // scale and every slot painted as one saturated block, which is the one
+    // thing a current-density map must never do; and the header, which reads the
+    // drawn field honestly, printed a max of 158.5 MA/m2 that could not be found
+    // anywhere on the bar.  Two numbers for one field again — the same complaint
+    // the stress views were fixed for ("везде и в Ansys и в Fusion полное
+    // соответствие").
+    //
+    // Unclipped, the DC level lands around a third of the scale and the
+    // proximity crowding reads as what it is: brighter copper near the field,
+    // not a solid rectangle.  The bar's top IS the number in the header.
+    let vmax = 1e-12;
+    for (const v of s) if (v > vmax) vmax = v;
     return {
       elem: (ti) => (ti < jz.length ? jz[ti] : 0),
       include: inJ,
@@ -453,12 +641,33 @@ function sourceFor(payload: FemPayload, mode: string, o: ViewOpts): Source | nul
   if (mode === 'Demag') {
     const dc = (payload as any).demag_coef_per_tri as number[] | undefined;
     const [lo, hi] = demagRange(dc, dom, nTri);
+    // FIXED bands, dense near 100 % (user 2026-09-04: the card said 94.4 %
+    // retained while the map looked intact — a linear worst→best scale put
+    // 90.5…99.3 % into ONE dark-red band, so a uniform 5 % loss was
+    // invisible).  1 % steps at the top, where a real de-rating lives; the
+    // bottom band swallows the destroyed corners.  Falls back to the
+    // auto-range only when the whole magnet sits below 90 % — there the
+    // fixed top bands would all be empty.
+    const DEMAG_EDGES = [0, 50, 70, 80, 85, 90, 93, 95, 97, 98, 99, 100];
+    const fixed = hi * 100 >= 90;
+    // The band EDGES stay fixed (comparable between runs), but the bar starts
+    // at the band the field's minimum falls in: a magnet that kept 98–100 %
+    // does not need the 0…97 % bands drawn (user 2026-09-09: "почему шкала
+    // от 0?").  At least the top two bands are always shown.
+    const loPct = lo * 100;
+    const firstIdx = Math.max(0, Math.min(DEMAG_EDGES.length - 3,
+      DEMAG_EDGES.findIndex((e) => e > loPct) - 1));
+    const edges = DEMAG_EDGES.slice(firstIdx);
     return {
       elem: (ti) => (dc ? Math.max(0, Math.min(1, dc[ti])) : 1) * 100,
       include: (_ti, d) => classOf(d) === 3,
-      scale: linScale(lo * 100, hi * 100, '% Br',
-                      'irreversible demagnetisation — % of Br remaining',
-                      (v) => v.toFixed(1)),
+      scale: fixed
+        ? edgesScale(edges, '% Br',
+                     `irreversible demagnetisation — % of Br remaining (fixed 1 % bands near 100 %; bar starts at the ${edges[0]} % band, where this magnet's minimum lies)`,
+                     (v) => v.toFixed(0))
+        : linScale(lo * 100, hi * 100, '% Br',
+                   'irreversible demagnetisation — % of Br remaining (auto range: the whole magnet is below 90 %)',
+                   (v) => v.toFixed(1)),
     };
   }
 
@@ -475,7 +684,7 @@ function sourceFor(payload: FemPayload, mode: string, o: ViewOpts): Source | nul
   return {
     elem: (ti) => Bm[ti] * 1e3,
     include: interior,
-    scale: linScale(0, vmax * 1e3, 'mT', 'flux density |B|', fmt0),
+    scale: linScale(Math.min(floorOf(bs), vmax * 0.999) * 1e3, vmax * 1e3, 'mT', 'flux density |B|', fmt0),
   };
 }
 
@@ -536,19 +745,217 @@ export function buildFieldView(payload: FemPayload | null, mode: string,
 
   const positions = new Float32Array(kept.length * 9);
   const vals = new Float32Array(kept.length * 3);
-  let p = 0, q = 0;
+  // The SAME column before normalisation, filled in this very pass: the shared
+  // viewer's Part menu (user 2026-09-06 — "видеть только её деформации и
+  // стрессы") re-normalises one part against its own range, and a second walk
+  // of a 100k-triangle mesh per part switch is what would make it feel slow.
+  const raw = new Float32Array(kept.length * 3);
+  // Hover readout: one centroid + one DISPLAY-unit value per drawn triangle,
+  // filled in the same pass that builds the geometry so a 100k-triangle mesh
+  // is walked once, not twice (user 2026-09-06 asked for one shared viewer;
+  // a second full pass per output switch is what would make it feel slow).
+  const pcx = new Float32Array(kept.length);
+  const pcy = new Float32Array(kept.length);
+  const pv  = new Float32Array(kept.length);
+  // Raw domain tag per drawn triangle: the max/min marker names the part it
+  // landed in, and `emClassName` turns the tag into that name.
+  const pcl = new Int32Array(kept.length);
+  let vMin = Infinity, vMax = -Infinity;
+  let p = 0, q = 0, t = 0;
   for (const ti of kept) {
     const cls = classOf(dom[ti]);
+    let sx = 0, sy = 0, sv = 0;
     for (const iv of triangles[ti]) {
       positions[p++] = vertices[iv][0] * S;
       positions[p++] = vertices[iv][1] * S;
       positions[p++] = 0;
       const v = nodal ? (nodal.get(iv * N_CLASS + cls) ?? 0) : src.node!(iv);
+      raw[q] = v;
       vals[q++] = norm(v);
+      sx += vertices[iv][0] * S; sy += vertices[iv][1] * S; sv += v;
     }
+    const av = sv / 3;
+    pcx[t] = sx / 3; pcy[t] = sy / 3; pv[t] = av; pcl[t] = dom[ti];
+    if (av < vMin) vMin = av;
+    if (av > vMax) vMax = av;
+    t++;
   }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(positions, 3));
   g.setAttribute('aVal', new THREE.BufferAttribute(vals, 1));
-  return { geometry: g, scale: src.scale };
+  return {
+    geometry: g, scale: src.scale,
+    probe: { cx: pcx, cy: pcy, val: pv, cls: pcl },
+    vertexValues: raw,
+    vMin: Number.isFinite(vMin) ? vMin : null,
+    vMax: Number.isFinite(vMax) ? vMax : null,
+  };
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * The EM / thermal adapter for the shared viewer
+ *
+ * User 2026-09-06: "нужно сделать одну картинку и меню для переключения выводов
+ * графиков; интерфейс должен быть единым для всех графиков — электромагнитных,
+ * механических и термо".  Everything below turns a FemPayload into the ONE
+ * `FieldOutput` shape `common/FieldViewer` renders — the same shape the
+ * Mechanical and Modal adapters produce, so the three tabs cannot drift into
+ * three viewers again.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * Iso-A_z contour segments via per-triangle linear interpolation
+ * (marching-segments on tris).  For each iso level L, find triangles where
+ * A_min ≤ L ≤ A_max, locate the two edges L crosses and emit one segment.
+ * Lived in FemFieldChart until 2026-09-06; it is field GEOMETRY, so it belongs
+ * with the rest of the view construction and not in a host component.
+ */
+export function buildIsoLines(
+  vertices: [number, number][],
+  triangles: [number, number, number][],
+  domain_per_tri: number[],
+  A_z_per_node: number[],
+  A_min: number,
+  A_max: number,
+  nLevels: number,
+  S: number,        // metres → mm
+  z: number,        // depth for visibility
+): Float32Array {
+  const DOM_OUTER = 8;
+  // LINEAR distribution of iso-levels — required so the lines have UNIFORM
+  // spacing inside each magnet (where A_z varies linearly with the local
+  // coordinate of constant ∇A_z = constant B).  Log-spaced levels would cluster
+  // lines around A=0, making them look "denser at the middle of the magnet".
+  const range = Math.max(A_max - A_min, 1e-12);
+  const pos: number[] = [];
+  for (let k = 1; k < nLevels; k++) {
+    const t  = k / nLevels;
+    const L  = A_min + t * range;
+    for (let ti = 0; ti < triangles.length; ti++) {
+      if (domain_per_tri[ti] === DOM_OUTER) continue;
+      const [a, b1, c] = triangles[ti];
+      const Aa = A_z_per_node[a];
+      const Ab = A_z_per_node[b1];
+      const Ac = A_z_per_node[c];
+      const lo = Math.min(Aa, Ab, Ac);
+      const hi = Math.max(Aa, Ab, Ac);
+      if (L < lo || L > hi) continue;
+      const ix: [number, number][] = [];
+      const ed: number[][] = [[a, b1], [b1, c], [c, a]];
+      for (let e = 0; e < 3; e++) {
+        const i0 = ed[e][0], i1 = ed[e][1];
+        const f0 = A_z_per_node[i0] - L;
+        const f1 = A_z_per_node[i1] - L;
+        if (f0 * f1 > 0 || (f0 === 0 && f1 === 0)) continue;
+        const denom = (f0 - f1);
+        const u = denom === 0 ? 0.5 : f0 / denom;
+        const x = vertices[i0][0] + u * (vertices[i1][0] - vertices[i0][0]);
+        const y = vertices[i0][1] + u * (vertices[i1][1] - vertices[i0][1]);
+        ix.push([x, y]);
+        if (ix.length === 2) break;
+      }
+      if (ix.length === 2) {
+        pos.push(ix[0][0] * S, ix[0][1] * S, z,
+                 ix[1][0] * S, ix[1][1] * S, z);
+      }
+    }
+  }
+  return new Float32Array(pos);
+}
+
+/* `buildFluxArrows` moved to `thermal/fieldAdapters` on 2026-09-07: heat flux is
+   the thermal solve's output, and it is drawn over the thermal solve's own
+   sub-mesh, which this file's `FemPayload` is not. */
+
+/** The menu entries the Simulation / animation hosts pick from.  A host passes
+ *  only the ones it has (or could have) data for — J⟳ / Loss need their own
+ *  multi-frame solve and are hidden inside the animation viewer, Demag only
+ *  exists when demag modelling is on. */
+export const EM_MENU: {
+  id: string; menuLabel: string; label: string;
+  group: 'Electromagnetic'; unit: string; tip: string;
+}[] = [
+  { id: 'Az',    menuLabel: 'A_z',   label: 'Magnetic potential A_z',
+    group: 'Electromagnetic', unit: 'mWb/m',
+    tip: '2-D magnetostatic vector potential at the current rotor angle — the band edges ARE the flux lines.' },
+  { id: 'Bmag',  menuLabel: '|B|',   label: 'Flux density |B|',
+    group: 'Electromagnetic', unit: 'mT',
+    tip: 'Magnitude of the flux density per element, smoothed within each material class.' },
+  { id: 'J',     menuLabel: 'J',     label: 'Source current density J',
+    group: 'Electromagnetic', unit: 'A/m²',
+    tip: 'Applied source current density in the windings — uniform over each slot by construction.' },
+  { id: 'Jeddy', menuLabel: 'J⟳',    label: 'Eddy current density J⟳',
+    group: 'Electromagnetic', unit: 'A/m²',
+    tip: 'Coupled eddy-current density σ(−∂A/∂t+U) — the proximity crowding the uniform "J" view cannot show. Instant when the last Simulation run solved this operating point with the coupled eddy solve on; otherwise it runs a 10-frame transient here (~25 s) and says so.' },
+  { id: 'Loss',  menuLabel: 'Loss',  label: 'Loss density',
+    group: 'Electromagnetic', unit: 'W/m³',
+    tip: 'Ansys-style loss-density map. Uses the last Simulation run\'s own cycle-averaged map when it matches this operating point; otherwise the single-frame analytic estimate. The header says which one you are looking at.' },
+  { id: 'Demag', menuLabel: 'Demag', label: 'Demagnetisation',
+    group: 'Electromagnetic', unit: '% Br',
+    tip: 'Irreversible demagnetisation — per cent of Br remaining. The honest map is the run\'s worst field over the full electrical period.' },
+];
+
+/**
+ * ONE electromagnetic output for the shared viewer.  `payload` null (or a mode the
+ * payload cannot answer) yields a menu-only stub: the viewer shows the host's
+ * placeholder and the entry is still selectable, which is how "field not solved
+ * — press Re-solve" keeps working per output.
+ */
+export function emOutputs(
+  payload: FemPayload | null,
+  mode: string,
+  opts: ViewOpts = {},
+): FieldOutput {
+  const meta = EM_MENU.find(m => m.id === mode) ?? EM_MENU[0];
+  const base: FieldOutput = {
+    id: meta.id, menuLabel: meta.menuLabel, label: meta.label,
+    group: meta.group, unit: meta.unit, tip: meta.tip,
+    scale: null, geometry: null,
+  };
+  if (!payload || !payload.vertices || !payload.triangles) return base;
+
+  const view = buildFieldView(payload, mode, opts);
+  const S = 1000;                                            // metres → mm
+
+  // Class boundaries on top of the fill.  The backend sends metres, the shared
+  // viewer works in mm like every other output.
+  const outlines: [number, number][][] = [];
+  for (const entry of payload.outlines ?? []) {
+    for (const loop of entry.loops) {
+      if (loop.length < 2) continue;
+      outlines.push(loop.map(([x, y]) => [x * S, y * S] as [number, number]));
+    }
+  }
+
+  const overlays: FieldOverlay[] = [];
+  // A_z gets a SECOND, denser set of iso-lines (2× the bands) on top of the
+  // shader's band edges: for the vector potential the iso-lines are the flux
+  // lines and they are the point of the picture, not a decoration on it.
+  if (mode === 'Az' && view.scale) {
+    const iso = buildIsoLines(
+      payload.vertices, payload.triangles, payload.domain_per_tri as number[],
+      payload.A_z_per_node, view.scale.vmin * 1e-3, view.scale.vmax * 1e-3,
+      N_BANDS * 2, S, 1.0);
+    if (iso.length) overlays.push({ key: 'iso', positions: iso, color: 0x0b1220, opacity: 0.85 });
+  }
+  const [xmin, xmax, ymin, ymax] = payload.extent;
+  return {
+    ...base,
+    scale: view.scale,
+    geometry: view.geometry,
+    probe: view.probe ?? null,
+    // What the viewer's Part menu re-colours one part from (2026-09-06).
+    vertexValues: view.vertexValues ?? undefined,
+    // Names the material the max/min marker landed in.  Same job the mechanical
+    // adapter's `part_names` lookup does — one contract, two vocabularies.
+    classLabel: emClassName,
+    vMin: view.vMin ?? null,
+    vMax: view.vMax ?? null,
+    outlines,
+    outlineColor: 0x0f172a,
+    outlineOpacity: 0.55,
+    overlays,
+    extent: [xmin * S, xmax * S, ymin * S, ymax * S],
+    note: view.scale?.note,
+  };
 }

@@ -78,6 +78,27 @@ def _masses(G):
     return compute_masses(p, geo, materials=MATS)
 
 
+@pytest.fixture(scope="module", autouse=True)
+def _all_parts_included():
+    """Pin every part to `included` for the whole module.
+
+    The user's LIVE config may carry accounting states (`parts: {shaft:
+    reference}` — the frameless 85 since 2026-09-01), which drop parts from
+    the accounted masses and turned nine of these pins red overnight.  Those
+    states are properties of the machine on screen, not of these frozen
+    fixtures; the request override outranks the config BY DESIGN (an explicit
+    `included` survives normalisation for exactly this), so the suite pins it
+    the same way the physics suite pins its steel — config-independent.
+    Module-scoped and autouse so it is set before m150/m40 are built.
+    """
+    from motor_ai_sim.material_context import set_request_materials
+    from motor_ai_sim.part_states import STATEFUL_PARTS
+    set_request_materials({"assignment": {}, "materials": {},
+                           "parts": {p: "included" for p in STATEFUL_PARTS}})
+    yield
+    set_request_materials(None)
+
+
 @pytest.fixture(scope="module")
 def m150():
     return _masses(G150)
@@ -90,14 +111,32 @@ def m40():
 
 # ── per-component pins ───────────────────────────────────────────────────────
 
+# PINS MOVED 2026-09-06 — the magnet top is built on the circle, not on the
+# chord between its two top corners ("давай по умолчанию сделаем только arc и
+# уберём прямую вообще").  Every spoke magnet gains the circular segment
+# r²/2·(θ − sin θ) and the rotor loses the sliver of that crescent that was iron
+# — so the magnet mass goes up, the rotor mass down, and their sum up (the
+# magnet is the denser material).  Nothing else in these fixtures moved:
+#
+#   150 mm   rotor  0.53826   -> 0.536741   (-0.28 %)   2199.5 -> 2193.3 mm²
+#            mag    0.7225    -> 0.725752   (+0.45 %)   2752.3 -> 2764.8 mm²
+#            active 2.98430   -> 2.986049   (+0.06 %)
+#            total  3.05127   -> 3.053019   (+0.06 %)
+#   40 mm    rotor  0.0144743 -> 0.0144683  (-0.04 %)    172.5 ->  172.4 mm²
+#            mag    0.017486  -> 0.0175712  (+0.49 %)    194.3 ->  195.2 mm²
+#            active 0.0877226 -> 0.0878015  (+0.09 %)
+#            total  0.0892696 -> 0.0893486  (+0.09 %)
+#
+# stator / cu / shaft are untouched, which is the check that the change stayed
+# on the rotor side.
 @pytest.mark.parametrize("part,kg", [
-    ("stator", 1.20755),  # 4934.4 mm² CAD section × 35 mm × k_f 0.92 × 7600
-    ("rotor",  0.53826),  # 2199.5 mm² — the holder AND the ribs between magnets
-    ("cu",     0.5160),   # 1008 mm² measured copper × 35 mm × k_end 1.6373 × 8933
-    ("mag",    0.7225),   # 2752.3 mm² of CAD magnet polygons (28 × 98.3 mm²)
-    ("shaft",  0.0670),   # hollow 3 mm tube, 708.7 mm² — not a solid disc
-    ("active", 2.98430),  # iron + copper + magnets: the ANSYS basis
-    ("total",  3.05127),  # active + shaft: the torque-per-mass divisor
+    ("stator", 1.20755),   # 4934.4 mm² CAD section × 35 mm × k_f 0.92 × 7600
+    ("rotor",  0.536741),  # 2193.3 mm² — the holder AND the ribs between magnets
+    ("cu",     0.5160),    # 1008 mm² measured copper × 35 mm × k_end 1.6373 × 8933
+    ("mag",    0.725752),  # 2764.8 mm² of CAD magnet polygons (28 × 98.7 mm²)
+    ("shaft",  0.0670),    # hollow 3 mm tube, 708.7 mm² — not a solid disc
+    ("active", 2.986049),  # iron + copper + magnets: the ANSYS basis
+    ("total",  3.053019),  # active + shaft: the torque-per-mass divisor
 ])
 def test_150mm_component_masses(m150, part, kg):
     assert m150[part] == pytest.approx(kg, abs=5e-4)
@@ -105,12 +144,12 @@ def test_150mm_component_masses(m150, part, kg):
 
 @pytest.mark.parametrize("part,kg", [
     ("stator", 0.0323544),
-    ("rotor",  0.0144743),
+    ("rotor",  0.0144683),
     ("cu",     0.023406),
-    ("mag",    0.017486),
+    ("mag",    0.0175712),
     ("shaft",  0.001547),
-    ("active", 0.0877226),
-    ("total",  0.0892696),
+    ("active", 0.0878015),
+    ("total",  0.0893486),
 ])
 def test_40mm_component_masses(m40, part, kg):
     assert m40[part] == pytest.approx(kg, abs=5e-6)
@@ -302,7 +341,7 @@ def test_the_priced_shaft_is_the_material_the_config_assigns(G):
 def test_the_cost_module_no_longer_carries_a_density_table():
     """A private density table is a second mass model waiting to drift.  The
     insulator densities stay — they come from the materials LIBRARY by name, and
-    no EM mass model carries a slot liner."""
+    no EM mass model carries a insulation."""
     import inspect
     from motor_ai_sim.modules import cost as _cost
     assert not hasattr(_cost, "_DENSITY")
@@ -328,7 +367,7 @@ def test_the_slot_liner_is_still_measured_on_the_geometry(G):
     got, _ = _cost_masses(G)
     liners = {k: v for k, v in got.items()
               if k not in ("steel", "copper", "magnet", "shaft")}
-    assert liners, "the slot liner disappeared with the density table"
+    assert liners, "the insulation disappeared with the density table"
     assert all(v > 0.0 for v in liners.values())
 
 
@@ -347,3 +386,47 @@ def test_an_explicit_stack_length_reaches_the_mass_model():
     # doubling the stack is LESS than doubling the copper.  That the two differ
     # at all is the end-winding factor being alive in the price.
     assert a["copper"] * 1.5 < b["copper"] < a["copper"] * 2.0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Rotor inertia (masses.rotor_inertia_kg_m2)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_polar_moment_matches_the_closed_forms():
+    """The Green's-theorem ∬r²dA must land on the analytic values — a disc, an
+    annulus, and an OFFSET disc (parallel-axis term): the three shapes that
+    together exercise every term of the formula."""
+    from shapely.geometry import Point
+    from motor_ai_sim.masses import _poly_polar_m4
+    R = 1000.0  # mm → the function returns m⁴
+    disc = Point(0, 0).buffer(R, quad_segs=256)
+    assert _poly_polar_m4(disc) == pytest.approx(math.pi / 2, rel=1e-3)
+    ring = disc.difference(Point(0, 0).buffer(R / 2, quad_segs=256))
+    assert _poly_polar_m4(ring) == pytest.approx(math.pi / 2 * (1 - 0.5 ** 4), rel=1e-3)
+    off = Point(800.0, 0).buffer(200.0, quad_segs=256)
+    exp = math.pi * 0.2 ** 2 * 0.8 ** 2 + math.pi / 2 * 0.2 ** 4
+    assert _poly_polar_m4(off) == pytest.approx(exp, rel=1e-3)
+
+
+def test_rotor_inertia_is_physical_for_the_150():
+    """J on the 150 mm reference: positive, CAD-sourced, and the radius of
+    gyration must land INSIDE the rotor's radial span — the one bound no
+    correct inertia of a hollow rotor can break (an early sanity check read
+    r_gyr > r_outer only because the check itself summed the wrong mass keys;
+    this pins the honest comparison)."""
+    from motor_ai_sim.masses import rotor_inertia_kg_m2
+    p = params_from_config(geo_override=G150)
+    J = rotor_inertia_kg_m2(p, dict(G150))
+    assert J["source"] == "CAD polygons"
+    assert J["total"] > 0.0
+    m = compute_masses(p, dict(G150))
+    m_rot = m["rotor"] + m["mag"] + m["shaft"]
+    r_gyr = math.sqrt(J["total"] / m_rot)
+    assert p.r_rotor_in * 0.9 < r_gyr < p.r_rotor_out, (
+        f"radius of gyration {r_gyr*1e3:.1f} mm outside the rotor span "
+        f"[{p.r_rotor_in*1e3:.1f}, {p.r_rotor_out*1e3:.1f}] mm")
+    # the lamination fill factor must be IN the iron term: billing the iron
+    # solid would raise it by exactly 1/k_f
+    assert m["k_f_rotor"] < 1.0
+    solid_iron = J["rotor_iron"] / m["k_f_rotor"]
+    assert solid_iron > J["rotor_iron"]

@@ -65,7 +65,8 @@ class SkfemMesh2D:
             min_size_mm=float(min_size_mm), geo_cfg=geo, n_sectors=int(n_sectors))
         tag_names = {fs.DOM_AIR: "air", fs.DOM_STATOR: "stator", fs.DOM_COIL: "coil",
                      fs.DOM_AIRGAP: "air_gap", fs.DOM_MAG_N: "magnet_n", fs.DOM_ROTOR: "rotor",
-                     fs.DOM_SHAFT: "shaft", fs.DOM_BAND: "band", fs.DOM_OUTER: "air_outer",
+                     fs.DOM_SHAFT: "shaft", fs.DOM_SLEEVE: "sleeve",
+                     fs.DOM_BAND: "band", fs.DOM_OUTER: "air_outer",
                      fs.DOM_MAG_S: "magnet_s"}
         prov = stamp(self.NAME, version=self.VERSION, elapsed_s=time.time() - t0)
         prov.notes["geometry_source"] = source

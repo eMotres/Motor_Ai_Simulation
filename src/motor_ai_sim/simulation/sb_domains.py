@@ -127,6 +127,16 @@ DOM_ROTOR   = 5
 DOM_SHAFT   = 6
 DOM_BAND    = 7   # motion / slip band inside the air gap (transient solver)
 DOM_OUTER   = 8   # outer air ring (far-field boundary, beyond stator OD)
+# 9 and 10 are NOT free: simulation/iron_template.py allocates them locally as
+# DOM_LINER / DOM_ENAMEL (the insulation and the wire enamel, stator half).
+# They are not re-exported here because nothing outside that builder consumes
+# them — but they ARE emitted into a tag array this module's consumers read, so
+# a new id must skip them.  (Caught the hard way: DOM_SLEEVE was briefly 9 and
+# a insulation would have been handed the sleeve's conductivity.)
+DOM_SLEEVE  = 11  # carbon-fibre retaining ring on the rotor OD (rotates with
+                  # the rotor; mu_r = 1 so it is magnetically air, but it has a
+                  # small sigma and therefore its own solved eddy loss).  Absent
+                  # from the tag array on every machine with sleeve_thickness=0.
 DOM_MAG_S   = 44  # S pole (generic, used for visualisation tag)
 
 # Per-magnet domain IDs are allocated in [DOM_MAG_BASE, DOM_MAG_BASE + N_MAG).

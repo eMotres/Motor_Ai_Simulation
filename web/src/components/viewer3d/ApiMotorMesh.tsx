@@ -2,8 +2,51 @@ import React, { useMemo, useEffect, useState, useRef } from 'react';
 import { PART_COLORS } from '../../lib/partColors';
 import * as THREE from 'three';
 import { useMotorStore, useUIStore, useBuildTimingStore } from '../../stores/motorStore';
+import { usePartStates } from '../materials/usePartStates';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
+// ─── Per-part accounting: an EXCLUDED part is INVISIBLE ──────────────────────
+// "он должен быть невидимым" — no ghost outline, no selectable body, nothing.
+// The backend already drops an excluded part's mesh from /api/geometry/mesh*
+// (routes/geometry._drop_excluded_meshes), which alone makes it undrawable.
+// This is the second gate, and the one that covers the CLIENT-MODE user whose
+// states live in a browser overlay and never reach that route: strip the keys
+// out of the geometry map, so every `geometries.<key> && …` guard below is
+// false and every `Object.entries(geometries).filter(...)` finds nothing.
+
+/** mesh-data key → the part whose state governs it (null = not governed). */
+function partOfMeshKey(key: string): string | null {
+  if (key === 'stator_core') return 'stator_core';
+  if (key === 'rotor_core')  return 'rotor_core';
+  if (key === 'shaft')       return 'shaft';
+  if (key === 'sleeve')      return 'sleeve';
+  if (key.startsWith('magnet_')) return 'magnet';
+  if (key.startsWith('coil_'))   return 'slot';
+  return null;
+}
+
+/** The set of part keys the user has EXCLUDED (empty on a normal machine). */
+function useExcludedParts(): Set<string> {
+  const { states } = usePartStates();
+  return useMemo(() => new Set(
+    Object.entries(states || {})
+      .filter(([, v]) => v === 'excluded')
+      .map(([k]) => k)), [states]);
+}
+
+/** Drop every mesh belonging to an excluded part. */
+function withoutExcluded<T>(m: Record<string, T> | null,
+                            excluded: Set<string>): Record<string, T> | null {
+  if (!m || excluded.size === 0) return m;
+  const out: Record<string, T> = {};
+  for (const [k, v] of Object.entries(m)) {
+    const part = partOfMeshKey(k);
+    if (part && excluded.has(part)) continue;
+    out[k] = v;
+  }
+  return out;
+}
+
+const API_BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
 interface ComponentMeshData {
   vertices: number[] | number[][];
@@ -120,10 +163,13 @@ export const ApiStatorMesh: React.FC<{ materialProps?: MaterialProps; visible?: 
   const { envIntensity } = useUIStore();
   const meshData = useMotorMesh();
 
+  const excluded = useExcludedParts();
+
   const geo = useMemo(() => {
-    if (meshData?.stator_core) return buildGeometry(meshData.stator_core);
+    if (meshData?.stator_core && !excluded.has('stator_core'))
+      return buildGeometry(meshData.stator_core);
     return null;
-  }, [meshData]);
+  }, [meshData, excluded]);
 
   if (!geo) return null;
 
@@ -143,10 +189,13 @@ export const ApiRotorMesh: React.FC<{ materialProps?: MaterialProps; visible?: b
   const { envIntensity } = useUIStore();
   const meshData = useMotorMesh();
 
+  const excluded = useExcludedParts();
+
   const geo = useMemo(() => {
-    if (meshData?.rotor_core) return buildGeometry(meshData.rotor_core);
+    if (meshData?.rotor_core && !excluded.has('rotor_core'))
+      return buildGeometry(meshData.rotor_core);
     return null;
-  }, [meshData]);
+  }, [meshData, excluded]);
 
   if (!geo) return null;
 
@@ -166,10 +215,13 @@ export const ApiShaftMesh: React.FC<{ visible?: boolean }> = ({ visible = true }
   const { envIntensity } = useUIStore();
   const meshData = useMotorMesh();
 
+  const excluded = useExcludedParts();
+
   const geo = useMemo(() => {
-    if (meshData?.shaft) return buildGeometry(meshData.shaft);
+    if (meshData?.shaft && !excluded.has('shaft'))
+      return buildGeometry(meshData.shaft);
     return null;
-  }, [meshData]);
+  }, [meshData, excluded]);
 
   if (!geo) return null;
 
@@ -188,8 +240,10 @@ export const ApiMagnetsMesh: React.FC<{ visible?: boolean }> = ({ visible = true
   const { magnetVisibility } = useUIStore();
   const meshData = useMotorMesh();
 
+  const excluded = useExcludedParts();
+
   const magnetEntries = useMemo(() => {
-    if (!meshData) return null;
+    if (!meshData || excluded.has('magnet')) return null;
     const keys = Object.keys(meshData)
       .filter(k => k.startsWith('magnet_'))
       .sort((a, b) => parseInt(a.split('_')[1]) - parseInt(b.split('_')[1]));
@@ -199,7 +253,7 @@ export const ApiMagnetsMesh: React.FC<{ visible?: boolean }> = ({ visible = true
       poleIndex: i,
       direction: i % 2 === 0 ? 'outward' : 'inward',
     }));
-  }, [meshData]);
+  }, [meshData, excluded]);
 
   if (!magnetEntries) return null;
 
@@ -227,8 +281,10 @@ export const ApiCoilsMesh: React.FC<{ materialProps?: MaterialProps; visible?: b
 
   const phaseColors = [...PART_COLORS.copperPhases];
 
+  const excluded = useExcludedParts();
+
   const coilEntries = useMemo(() => {
-    if (!meshData) return [];
+    if (!meshData || excluded.has('slot')) return [];
     const keys = Object.keys(meshData)
       .filter(k => k.startsWith('coil_'))
       .sort((a, b) => parseInt(a.split('_')[1]) - parseInt(b.split('_')[1]));
@@ -237,7 +293,7 @@ export const ApiCoilsMesh: React.FC<{ materialProps?: MaterialProps; visible?: b
       slotIndex: i,
       phase: i % 3,
     }));
-  }, [meshData]);
+  }, [meshData, excluded]);
 
   return (
     <group visible={visible}>
@@ -304,16 +360,20 @@ export function useMotorMeshExtruded() {
 export const ApiMotorExtruded: React.FC = () => {
   const { componentVisibility, magnetVisibility, coilVisibility, metalness, roughness, envIntensity, selectedPart, setSelectedPart } = useUIStore();
   const meshData = useMotorMeshExtruded();
+  const excluded = useExcludedParts();
 
   const geometries = useMemo(() => {
-    if (!meshData) return null;
+    // Excluded parts are stripped BEFORE any geometry is built, so nothing
+    // downstream can render, outline or hit-test them.
+    const src = withoutExcluded(meshData, excluded);
+    if (!src) return null;
     const out: Record<string, THREE.BufferGeometry> = {};
-    for (const [key, data] of Object.entries(meshData)) {
+    for (const [key, data] of Object.entries(src)) {
       if (!(data as any).vertices) continue;
       out[key] = buildGeometry(data);
     }
     return out;
-  }, [meshData]);
+  }, [meshData, excluded]);
 
   if (!geometries) return null;
 
@@ -328,6 +388,14 @@ export const ApiMotorExtruded: React.FC = () => {
         <mesh geometry={geometries.shaft} onClick={click('shaft')}>
           <meshStandardMaterial color={PART_COLORS.shaft} metalness={metalness} roughness={roughness} envMapIntensity={envIntensity * 1.5} side={THREE.DoubleSide}
             emissive={emissive('shaft', '#64748b')} emissiveIntensity={emissiveIntensity('shaft')} />
+        </mesh>
+      )}
+      {/* Carbon-fibre retaining sleeve — only in the payload when the machine
+          has one (and never when it is EXCLUDED: the server drops the key). */}
+      {geometries.sleeve && componentVisibility.sleeve && (
+        <mesh geometry={geometries.sleeve} onClick={click('sleeve')}>
+          <meshStandardMaterial color={PART_COLORS.sleeve} metalness={0.15} roughness={0.55} envMapIntensity={envIntensity} side={THREE.DoubleSide}
+            emissive={emissive('sleeve', '#a78bfa')} emissiveIntensity={emissiveIntensity('sleeve')} />
         </mesh>
       )}
       {geometries.rotor_core && componentVisibility.rotor && (
@@ -368,7 +436,7 @@ export const ApiMotorExtruded: React.FC = () => {
           );
         })
       }
-      {/* Slot liner (Nomex/ceramic) — green, between coils and iron */}
+      {/* Insulation (Nomex/ceramic) — green, between coils and iron */}
       {geometries.slot_insulation && componentVisibility.slot_insulation && (
         <mesh geometry={geometries.slot_insulation} onClick={click('slot_insulation')}>
           <meshStandardMaterial toneMapped={false} color={PART_COLORS.slotLiner} metalness={0} roughness={0.9} envMapIntensity={0}
@@ -448,15 +516,19 @@ const getCoilColor2d   = (index: number) => PART_COLORS.copperPhases[index % 3];
 export const ApiMotor2dFlat: React.FC = () => {
   const { componentVisibility, magnetVisibility, coilVisibility, selectedPart, setSelectedPart } = useUIStore();
   const meshData = useMotorMesh2d();
+  const excluded = useExcludedParts();
 
   const geometries = useMemo(() => {
-    if (!meshData) return null;
+    // Same gate as the 3D view: the cross-section must not show a part the
+    // machine does not have either.
+    const src = withoutExcluded(meshData, excluded);
+    if (!src) return null;
     const out: Record<string, THREE.BufferGeometry> = {};
-    for (const [key, data] of Object.entries(meshData)) {
+    for (const [key, data] of Object.entries(src)) {
       out[key] = buildGeometry(data);
     }
     return out;
-  }, [meshData]);
+  }, [meshData, excluded]);
 
   if (!geometries) return null;
 
@@ -476,6 +548,12 @@ export const ApiMotor2dFlat: React.FC = () => {
 
   return (
     <group>
+      {/* retaining sleeve */}
+      {geometries.sleeve && componentVisibility.sleeve && (
+        <mesh geometry={geometries.sleeve} onClick={click('sleeve')}>
+          <meshBasicMaterial toneMapped={false} color={colFor('sleeve', PART_COLORS.sleeve)} side={THREE.DoubleSide} />
+        </mesh>
+      )}
       {/* shaft */}
       {geometries.shaft && componentVisibility.shaft && (
         <mesh geometry={geometries.shaft} onClick={click('shaft')}>
@@ -525,7 +603,7 @@ export const ApiMotor2dFlat: React.FC = () => {
         })
       }
 
-      {/* slot liner (green) + wire enamel (orange) */}
+      {/* insulation (green) + wire enamel (orange) */}
       {geometries.slot_insulation && componentVisibility.slot_insulation && (
         <mesh geometry={geometries.slot_insulation} onClick={click('slot_insulation')}>
           <meshBasicMaterial toneMapped={false} color={colFor('slot_insulation', PART_COLORS.slotLiner)} side={THREE.DoubleSide} />

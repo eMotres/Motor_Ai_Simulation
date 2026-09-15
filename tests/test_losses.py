@@ -226,13 +226,28 @@ class TestProximityLoss:
             out.append(avg)
         assert out[1] / out[0] == pytest.approx(4.0, rel=1e-9)
 
-    def test_wire_split_cuts_the_width_term(self):
-        """N transposed strips across the width -> that loss term falls as N^2."""
+    def test_the_conductor_is_one_strip_not_the_column(self):
+        """``copper_ac_dims`` measures the DRAWN conductor, and since 2026-09-08
+        that is one strip of ``wire_width`` — ``wire_split`` lays N of them side
+        by side, it does not subdivide the width.
+
+        So the width term falls when THE WIRE IS NARROWER (the user types
+        ``wire_width 0.5, wire_split 4`` to split a 2 mm bar four ways), and
+        ``wire_split`` on its own moves nothing here.  It used to divide
+        ``wire_width`` — the electrical-only split, which assumed a
+        transposition the mesh never carried.
+        """
         from motor_ai_sim.simulation.losses import copper_ac_dims
         geo1 = {"wire_width": 2.0, "wire_height": 0.5, "wire_split": 1}
-        geo4 = dict(geo1, wire_split=4)
-        _, d1, _ = copper_ac_dims(geo1, 120.0, 50.0, 1.724e-8, 0.00393, 4e-7 * math.pi)
-        _, d4, _ = copper_ac_dims(geo4, 120.0, 50.0, 1.724e-8, 0.00393, 4e-7 * math.pi)
+        # the same bar declared as 4 strips: the SPLIT alone changes nothing…
+        geo_n = dict(geo1, wire_split=4)
+        # …the narrower strip is what cuts the width-direction loop
+        geo4 = dict(geo1, wire_width=0.5, wire_split=4)
+        args = (120.0, 50.0, 1.724e-8, 0.00393, 4e-7 * math.pi)
+        _, d1, _ = copper_ac_dims(geo1, *args)
+        _, dn, _ = copper_ac_dims(geo_n, *args)
+        _, d4, _ = copper_ac_dims(geo4, *args)
+        assert dn == pytest.approx(d1, rel=1e-12)
         assert d4 == pytest.approx(d1 / 4.0, rel=1e-9)
 
     def test_skin_depth_caps_the_dimension(self):
@@ -357,24 +372,30 @@ class TestMagnetAxialSegmentation:
         k, rep = magnet_segmentation({"magnet_lamination": 5}, [], 35e-3)
         assert k == 1.0 and rep["n_bodies"] == 0
 
-    def test_the_solved_copper_ac_declares_what_it_ignores(self):
-        """wire_split has no CAD geometry, so the coupled solve cannot see it.
-        The docstring of the function that DOES divide by it has to say which
-        path is which, or the next reader assumes both do."""
+    def test_the_modelled_and_the_solved_copper_ac_describe_the_same_strip(self):
+        """Since 2026-09-08 the split is DRAWN, so both copper-AC paths measure
+        the same conductor and the docstring has to say so — the next reader
+        must not re-derive the retired "the mesh carries the whole bar"."""
         from motor_ai_sim.simulation import losses
         doc = losses.copper_ac_dims.__doc__ or ""
-        assert "wire_split" in doc and "SOLID" in doc
+        assert "STRIP" in doc and "wire_split" in doc
+        assert "cu_ac_solved_ignores_wire_split" in doc and "gone" in doc
 
 
 class TestLossHonestyReachesTheCard:
     """A caveat only the solver knows is a caveat nobody reads.
 
-    Both of these are things the reported watts DO NOT model — the solved copper
-    AC cannot see ``wire_split``, and the magnet eddy loss is corrected for axial
-    slicing by a MODEL, not a solve.  Neither can be fixed by changing a number,
-    so the contract is that the summary carries the flag and the tile's HelpTip
-    says it out loud.  These tests pin the whole chain: the route puts the field
-    in the payload, the card's type accepts it, and the tooltip text exists.
+    The magnet eddy loss is corrected for axial slicing by a MODEL, not a solve,
+    and that cannot be fixed by changing a number — so the contract is that the
+    summary carries the fact and the tile's HelpTip says it out loud.  These
+    tests pin the whole chain: the route puts the field in the payload, the
+    card's type accepts it, and the tooltip text exists.
+
+    ``cu_ac_solved_ignores_wire_split`` used to be the other half of this class.
+    It was the honest report of a solve handed the whole bar while the loss
+    model described strips; the strips are real polygons now, the flag is
+    permanently false, and what the tests below pin is that it STAYS false and
+    that the tooltip explains the drawn split instead of warning about it.
     """
 
     @staticmethod
@@ -384,31 +405,41 @@ class TestLossHonestyReachesTheCard:
                 / "components" / "simulation" / "SummaryTable.tsx"
                 ).read_text(encoding="utf-8")
 
-    def test_the_route_flags_a_split_wire_under_the_coupled_solve(self):
+    def test_the_route_still_carries_the_splits_own_numbers(self):
         import inspect
         from motor_ai_sim.routes import simulation as _sim
         src = inspect.getsource(_sim._build_transient_summary)
         assert '"cu_ac_solved_ignores_wire_split"' in src
         assert '"wire_split"' in src
+        # the wiring flag is GONE (2026-09-08): a row's strips are always
+        # series turns, and the card must not offer a second reading
+        assert '"wire_split_series"' not in src
         assert '"magnet_segmentation"' in src
 
-    def test_the_flag_only_fires_when_both_conditions_hold(self):
-        """wire_split alone is fine (the modelled proximity path divides by it);
-        the coupled solve alone is fine.  Only the PAIR is an over-read."""
+    def test_the_flag_is_permanently_false_now_that_the_strips_are_drawn(self):
+        """The mesher gets the strips, each with its own imposed net current, so
+        there is nothing left for the solve to ignore.  The field stays in the
+        payload — stored summaries carry it and the card reads it — but it must
+        never be set again."""
         import inspect
         from motor_ai_sim.routes import simulation as _sim
         src = inspect.getsource(_sim._build_transient_summary)
         i = src.index('"cu_ac_solved_ignores_wire_split"')
-        block = src[i:i + 400]
-        assert 'eddy_coupled' in block and 'wire_split' in block and '> 1' in block
+        assert src[i:i + 120].split("\n")[0].endswith("False,")
 
-    def test_the_stranded_tile_says_the_solved_value_assumes_unsplit_bars(self):
+    def test_the_stranded_tile_explains_the_drawn_split(self):
+        """No warning: a description.  N strips of wire_width, drawn and solved,
+        wired in SERIES — the two things that decide what the AC share means.
+        ("PARALLEL" was the other half of this assertion until the user removed
+        that wiring on 2026-09-08; the tile must not offer it any more.)"""
         src = self._summary_src()
-        assert "cu_ac_solved_ignores_wire_split" in src, \
-            "the Stranded (copper) tooltip must be gated on the flag"
-        i = src.index("cu_ac_solved_ignores_wire_split", src.index("Stranded (copper)"))
-        tip = src[i:i + 900]
-        assert "UNSPLIT" in tip and "wire_split" in tip and "OVER-read" in tip
+        i = src.index("wire_split", src.index("Stranded (copper)"))
+        tip = src[i:i + 1600]
+        assert "wire_split" in tip and "separate conductors" in tip
+        assert "SERIES" in tip and "PARALLEL" not in tip
+        # the old warning survives ONLY as a note on a stored run that predates
+        # the drawn split — never as the description of a fresh one
+        assert "PREDATES" in tip and "OVER-read" in tip
 
     def test_the_solid_tile_says_the_segmentation_is_a_model(self):
         src = self._summary_src()

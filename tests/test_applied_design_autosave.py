@@ -296,9 +296,12 @@ def _src(rel: str) -> str:
 
 def _body(text: str, start: str) -> str:
     """The source from `start` up to the next top-level handler in that file —
-    enough to tell whether THIS handler calls the archive."""
+    enough to tell whether THIS handler calls the archive.  8000 chars, not
+    4000: applyPoint grew (2026-08-22 it started preferring the point's own
+    solved V/KV fields, with the reasoning in comments) and the archive call
+    slid past the old window while still being very much inside the handler."""
     i = text.index(start)
-    return text[i:i + 4000]
+    return text[i:i + 8000]
 
 
 def test_the_optimizers_apply_paths_call_the_archive():

@@ -37,6 +37,8 @@ import numpy as np
 
 # DOM_* tags — must match iron_template / fem_solver_2d.
 DOM_AIR, DOM_STATOR, DOM_ROTOR, DOM_SHAFT, DOM_OUTER = 0, 1, 5, 6, 8
+DOM_SLEEVE = 11       # carbon-fibre retaining ring on the rotor OD
+                      # (9/10 are iron_template's insulation / wire enamel)
 DOM_MAG_BASE, DOM_COIL_BASE = 100, 200
 
 _SNAP = 1e-3          # snap coords to 1 um (kills sub-um CAD slivers)
@@ -1047,7 +1049,55 @@ def _build_pslg(lines, merge_tol: float = 0.006) -> Tuple[np.ndarray, np.ndarray
             if len(S):
                 S = np.array(sorted({(min(int(a), int(b)), max(int(a), int(b)))
                                      for a, b in S}), np.int64)
+    if len(V) > 2 and len(S):
+        S = _split_at_t_junctions(V, S, merge_tol)
     return V, S
+
+
+def _split_at_t_junctions(V: np.ndarray, S: np.ndarray, tol: float) -> np.ndarray:
+    """Split every segment at any vertex that lies within `tol` of its INTERIOR.
+
+    WHY (mesh view 2026-09-07, "обрати внимание на углы магнитов"): the magnet's
+    walls are delimited by the iron chain alone (`_air_facing_runs`), so the
+    magnet's air-facing run STARTS at a vertex sitting in the middle of the
+    iron's straight pocket-wall segment.  shapely's noding only splits a segment
+    at a point that is on it in exact arithmetic; a vertex 1e-10 mm off (the
+    fillet's tangent point, computed separately from the wall) is left dangling
+    inside the segment, and Triangle then answers with a fan of micro-elements
+    (391 triangles down to 1e-7 mm² per corner on the Ø200 at 4 mm mesh).
+    Splitting the segment at that vertex gives one conforming chain; nothing
+    moves (the vertex keeps its coordinates, the split changes the outline by
+    less than `tol` = 6 µm)."""
+    from scipy.spatial import cKDTree
+    A = V[S[:, 0]]; B = V[S[:, 1]]; D = B - A
+    L = np.hypot(D[:, 0], D[:, 1])
+    tree = cKDTree(V)
+    mids = 0.5 * (A + B)
+    out: List[Tuple[int, int]] = []
+    changed = False
+    for si in range(len(S)):
+        a, b = int(S[si, 0]), int(S[si, 1])
+        l = float(L[si])
+        if l <= tol:
+            out.append((a, b)); continue
+        cand = tree.query_ball_point(mids[si], 0.5 * l + tol)
+        cand = [c for c in cand if c != a and c != b]
+        if not cand:
+            out.append((a, b)); continue
+        c = np.asarray(cand, int)
+        rel = V[c] - A[si]
+        t = (rel @ D[si]) / (l * l)
+        perp = np.abs(D[si, 0] * rel[:, 1] - D[si, 1] * rel[:, 0]) / l
+        hit = c[(t > tol / l) & (t < 1.0 - tol / l) & (perp < tol)]
+        if not len(hit):
+            out.append((a, b)); continue
+        order = hit[np.argsort(((V[hit] - A[si]) @ D[si]))]
+        chain = [a] + [int(h) for h in order] + [b]
+        out.extend(zip(chain[:-1], chain[1:]))
+        changed = True
+    if not changed:
+        return S
+    return np.array(sorted({(min(p, q), max(p, q)) for p, q in out if p != q}), np.int64)
 
 
 def _repair_slivers(V, T, n_fixed: int, n_iter: int = 20,
@@ -1125,6 +1175,114 @@ def _repair_slivers(V, T, n_fixed: int, n_iter: int = 20,
     return V, T
 
 
+def _min_input_angle_deg(V, S) -> float:
+    """Smallest angle between two input segments sharing a vertex, in degrees
+    (180 when no vertex has two segments).  Vectorised over the segment list:
+    for each vertex the incident segment directions are compared pairwise —
+    vertices have at most a handful of segments, so this is O(nS)."""
+    try:
+        V = np.asarray(V, float)
+        S = np.asarray(S, np.int64).reshape(-1, 2)
+        if len(S) < 2:
+            return 180.0
+        inc: dict = {}
+        for a, b in S:
+            inc.setdefault(int(a), []).append(int(b))
+            inc.setdefault(int(b), []).append(int(a))
+        best = 180.0
+        for v, nb in inc.items():
+            if len(nb) < 2:
+                continue
+            d = V[nb] - V[v]
+            n = np.linalg.norm(d, axis=1)
+            ok = n > 1e-12
+            if ok.sum() < 2:
+                continue
+            u = d[ok] / n[ok, None]
+            c = np.clip(u @ u.T, -1.0, 1.0)
+            iu = np.triu_indices(len(u), 1)
+            ang = np.degrees(np.arccos(c[iu]))
+            if ang.size and ang.min() < best:
+                best = float(ang.min())
+        return best
+    except Exception:  # noqa: BLE001 — a guard must never be the failure
+        return 180.0
+
+
+def _blunt_cusps(V, S, min_deg: float = 3.0, max_drop: int = 12):
+    """Remove input cusps by dropping the arc vertex next to each tangent point.
+
+    A fillet arc tangent to a straight wall (the rotor_hole = 1 pocket: magnet
+    corner fillet against the straight iron face, 2026-09-06) meets it at the
+    arc's first chord angle — 0.5–1° on a finely discretised 2.5 mm fillet.
+    Triangle's quality refinement chases such a cusp until it corrupts memory
+    (0xC0000005, no traceback).  Dropping the first arc vertex moves the arc
+    by less than that chord's sagitta (≤ 0.05 mm here) and opens the angle to
+    the next chord's; repeat until the angle clears `min_deg`.  Only a vertex
+    with exactly two incident segments (an interior chain point) is ever
+    dropped, so region topology cannot change.  Returns (V, S, n_dropped)."""
+    # IMPLEMENTATION NOTE: the first version DROPPED arc vertices.  The fillet
+    # sliver is a closed lens (wall chord on one side, the arc on the other,
+    # cusps at BOTH ends), so dropping its arc points collapsed the lens onto
+    # the chord — a duplicated segment and a zero-area region (measured on the
+    # Ø200: 6 drops → 0.000°).  Vertices are now MOVED, never removed: the arc
+    # vertex next to the cusp is rotated about the tangent point, away from the
+    # wall, until the angle clears `min_deg`.  On a 0.2 mm first chord that is
+    # a ≤ 12 µm displacement — below the builder's weld tolerance — and no
+    # segment, region or vertex count changes.
+    # Measured on that Ø200 input (tri_input_03, 313 vertices): NUDGING the
+    # arc vertex to 3.5–10° still segfaults or exhausts Triangle's precision —
+    # the wedge stays microns thin at its tip; DROPPING the arc vertices next
+    # to the cusp (never past the lens's last chord, so the lens can never
+    # collapse onto its wall chord) meshes cleanly at 12 422 triangles even
+    # though the lens's far tip keeps its 0.57°.  So: drop, with a collapse
+    # guard.  Each drop moves the magnet boundary by less than that chord's
+    # sagitta (≤ 0.05 mm on a 2.5 mm fillet).
+    V = np.asarray(V, float).copy()
+    S = np.asarray(S, np.int64).reshape(-1, 2).copy()
+    dropped = 0
+    for _ in range(max_drop):
+        inc: dict = {}
+        for si, (a, b) in enumerate(S):
+            inc.setdefault(int(a), []).append((si, int(b)))
+            inc.setdefault(int(b), []).append((si, int(a)))
+        worst = (min_deg, None)
+        for v, nb in inc.items():
+            if len(nb) < 2:
+                continue
+            for i in range(len(nb)):
+                for j in range(i + 1, len(nb)):
+                    u = V[nb[i][1]] - V[v]
+                    w = V[nb[j][1]] - V[v]
+                    nu, nw = np.linalg.norm(u), np.linalg.norm(w)
+                    if nu < 1e-12 or nw < 1e-12:
+                        continue
+                    ang = math.degrees(math.acos(max(-1.0, min(1.0, float(u @ w) / (nu * nw)))))
+                    if ang < worst[0]:
+                        worst = (ang, (v, nb[i], nb[j]))
+        if worst[1] is None:
+            break
+        v, (si_a, a), (si_b, b) = worst[1]
+        # drop the CLOSER endpoint that is an interior chain point (degree 2):
+        # the arc's first vertex; the wall's far vertex is a real corner
+        cands = [(np.linalg.norm(V[x] - V[v]), x, si) for si, x in ((si_a, a), (si_b, b))
+                 if len(inc.get(x, [])) == 2]
+        if not cands:
+            break
+        _, x, si_vx = min(cands)
+        (si_other, c) = [t for t in inc[x] if t[0] != si_vx][0]
+        if c in (a, b, v):
+            break            # the next chord IS the lens's other edge: collapse
+        keep = np.ones(len(S), bool)
+        keep[si_vx] = False
+        keep[si_other] = False
+        S = np.vstack([S[keep], [[v, c]]])
+        V = np.delete(V, x, axis=0)
+        S = np.where(S > x, S - 1, S)
+        dropped += 1
+    return V, S, dropped
+
+
 def _triangulate(V, S, area: float, quality: int = _Q, hole: bool = True,
                  regions=None, hole_pts=None, no_bnd_steiner: bool = False,
                  rotor_bridge: bool = False, extra_holes=None):
@@ -1156,6 +1314,38 @@ def _triangulate(V, S, area: float, quality: int = _Q, hole: bool = True,
     # -Y, Triangle re-splits each cut independently → they diverge → broken
     # anti-periodic weld.  Interior points are still inserted to meet area/quality.
     _Y = "Y" if no_bnd_steiner else ""
+    # CUSP GUARD (2026-09-06).  A magnet corner fillet is TANGENT to the straight
+    # pocket wall (rotor_hole = 1 build), so the pocket-air sliver between them
+    # is a cusp: two input segments meeting at ~0°.  Triangle's quality
+    # refinement with boundary splitting allowed (plain -Y or none) can chase
+    # that cusp until it corrupts its own memory — the Ø200 sweep point
+    # air_gap 2.6 / magnet_height 24 died with an ACCESS VIOLATION (0xC0000005,
+    # no Python traceback) inside `triangulate("pq20AaS6000Y")` on a PSLG whose
+    # smallest input angle was 0.575°; the same input under -YY (no Steiner
+    # point on ANY segment) meshes in 938 triangles.  Detect the cusp from the
+    # input itself and switch to -YY only then, so every other machine keeps
+    # the mesh it had.  Threshold 3°: Triangle's own manual warns below ~5°,
+    # and real fillet-to-wall tangencies read 0–1°.
+    _cusp_deg = _min_input_angle_deg(V, S)
+    if _cusp_deg < 3.0:
+        # First choice: blunt the cusp (sub-tolerance change of the arc, no
+        # region change) so the mesh keeps its boundary Steiner points — -YY
+        # would leave the 24 mm magnet sides unsplit and the bordered Newton
+        # then fails on the slivers (measured: 22 its, rrel 9e-2).
+        V, S, _nd = _blunt_cusps(V, S, 6.0)
+        A["vertices"] = V
+        A["segments"] = S
+        _cusp2 = _min_input_angle_deg(V, S)
+        # The lens's far tip may keep its cusp (the collapse guard stops
+        # there); measured, Triangle meshes that fine once the near tip is
+        # blunted.  -YY (no Steiner point on any segment) is kept as the last
+        # resort for an input where NOTHING could be dropped — it leaves the
+        # magnet sides unsplit and the bordered Newton then struggles.
+        log.info("triangulate: %.2f deg input cusp — dropped %d arc vertex(es) "
+                 "→ %.2f deg%s", _cusp_deg, _nd, _cusp2,
+                 "" if _nd else "; nothing droppable, refining with -YY")
+        if not _nd:
+            _Y = "YY"
     if regions is not None and len(regions):
         A["regions"] = np.asarray(regions, float)
         _tail = "Aa"                          # per-region areas from column 4
@@ -1549,16 +1739,54 @@ def _shaft_bore_r(polys: Dict, r_shaft: float) -> float:
     return r_in if 1e-6 < r_in < r_shaft - 1e-3 else 0.0
 
 
+def _sleeve_radii(polys: Dict) -> Tuple[float, float]:
+    """(ID, OD) of the retaining ring in mm, or (0.0, 0.0) when there is none.
+
+    Read off the POLYGON, not off a parameter: the mesh has to conform to the
+    ring the CAD actually built, and `sleeve_r_mm` is only a convenience the
+    builder happens to carry (a clipped sector's polys drop it).
+    """
+    g = polys.get("sleeve")
+    if g is None or getattr(g, "is_empty", True):
+        return 0.0, 0.0
+    # NOT _radius_span: that reads EXTERIORS only, and the sleeve is an ANNULUS
+    # whose inner radius lives on the HOLE ring — so it would answer
+    # (r_out, r_out), the ring would look degenerate, and the region would be
+    # silently dropped from the mesh (which is exactly what happened first
+    # time: the solve ran, the field was right, and the sleeve loss came back
+    # as a clean 0.0000 W).
+    r_lo, r_hi = math.inf, 0.0
+    for gg in getattr(g, "geoms", [g]):
+        if getattr(gg, "area", 0.0) < 1e-9:
+            continue
+        for ring in [gg.exterior] + list(gg.interiors):
+            xy = np.asarray(ring.coords)
+            if not len(xy):
+                continue
+            rr = np.hypot(xy[:, 0], xy[:, 1])
+            r_lo = min(r_lo, float(rr.min()))
+            r_hi = max(r_hi, float(rr.max()))
+    if not (r_hi > r_lo > 0.0):
+        return 0.0, 0.0
+    return float(r_lo), float(r_hi)
+
+
 def _mesh_rotor_half(polys: Dict, r_od: float, r_shaft: float,
                      n_slip: int, area: float, air_mm: float, quality: int,
-                     r1_band: float = 0.0, part_area: Optional[Dict] = None):
+                     r1_band: float = 0.0, part_area: Optional[Dict] = None,
+                     r_sleeve_in: float = 0.0):
     """(V mm, T) for the rotor disk [0, r_od].  Steel and magnets mesh at
     `area`; the solid shaft core (r < r_shaft) and the flux-barrier air pockets
     get the coarse air size — the rotor centre carries little flux.
 
     r1_band > r_od extends the half with the gap-air annulus [r_od, r1_band]
     ending on the UNIFORM slip-grid ring R1 — the moving-band/harmonic-macro
-    boundary (the macro couples R1↔R2 analytically, no node-merge belt)."""
+    boundary (the macro couples R1↔R2 analytically, no node-merge belt).
+
+    ``r_sleeve_in`` > 0 says a retaining ring occupies [r_sleeve_in, r_od]: the
+    IRON then ends at r_sleeve_in and r_od is the sleeve OD (the belt circle).
+    0 = no sleeve, and every expression below collapses to the one that was
+    there before."""
     from shapely.geometry import LineString, MultiPolygon, Polygon
     air_area = max(area, 0.4330 * air_mm * air_mm)              # coarse air cell
     _pa = part_area or {}
@@ -1571,7 +1799,10 @@ def _mesh_rotor_half(polys: Dict, r_od: float, r_shaft: float,
              if getattr(g, "area", 0.0) > 1e-6]                 # drop degenerate
     steel = MultiPolygon(parts) if len(parts) > 1 else parts[0]
     steel = _defeature_iron(steel)            # trim knife-edge slivers (pre-grid)
-    iron = _resample(steel, r_od, n_slip)                       # OD → slip grid
+    # With a sleeve fitted, the iron's OD is the sleeve's ID; r_od is the
+    # sleeve OD and stays the belt circle.
+    r_iron_od = float(r_sleeve_in) if r_sleeve_in > 0.0 else float(r_od)
+    iron = _resample(steel, r_iron_od, n_slip)                  # OD → slip grid
     # shaft seam is internal (not a belt boundary) → discretise at the air size
     n_sh = max(48, int(2 * math.pi * r_shaft / max(0.35, air_mm)))
     iron = _resample(iron, r_shaft, n_sh)                       # shaft → own grid
@@ -1586,6 +1817,7 @@ def _mesh_rotor_half(polys: Dict, r_od: float, r_shaft: float,
         a_tube = max(1e-3, min(air_area, 0.4330 * (0.5 * t_tube) ** 2))
         n_bore = max(48, int(2 * math.pi * r_bore / max(0.35, 0.5 * t_tube)))
     mags = [mg for mg, _pol in (polys.get("magnets") or [])]
+    mags = [_resample(mg, r_iron_od, n_slip) for mg in mags]   # top on the OD → slip grid (see sector)
     mags = [_weld_outline(mg, iron, 0.01) for mg in mags]  # см. sector (zipper)
 
     lines = []
@@ -1604,6 +1836,8 @@ def _mesh_rotor_half(polys: Dict, r_od: float, r_shaft: float,
     for mg in mags:
         for run in _air_facing_runs(mg, iron):
             add(run)             # shared walls come from the iron chain
+    if r_iron_od < r_od - 1e-9:
+        add(_grid_circle(r_iron_od, n_slip))                    # rotor|sleeve seam
     add(_grid_circle(r_od, n_slip))                             # gap ring
     if r1_band > r_od + 1e-6:
         add(_grid_circle(r1_band, n_slip))                      # moving-band R1
@@ -1617,10 +1851,18 @@ def _mesh_rotor_half(polys: Dict, r_od: float, r_shaft: float,
     _air_reg = [[_core_r, 0.0, 7, air_area]]                   # inside the tube
     if r_bore > 0.0:                                           # the tube wall
         _air_reg += [[0.5 * (r_bore + r_shaft), 0.0, 10, a_tube]]
-    ann = Polygon(_grid_circle(r_od, n_slip)[:-1]).difference(
+    ann = Polygon(_grid_circle(r_iron_od, n_slip)[:-1]).difference(
           Polygon(_grid_circle(r_shaft, n_sh)[:-1]))
     _air_reg += [[*a.representative_point().coords[0], 8, air_area]
                  for a in _air_parts(ann, steel, mags)]
+    if r_iron_od < r_od - 1e-9:
+        # The sleeve annulus [r_iron_od, r_od].  Sized like the hollow shaft
+        # TUBE, not like the gap air: the ring is where the sleeve's own eddy
+        # loss is integrated, so it needs ~2 elements across its thickness —
+        # and no finer, because a 0.4 mm ring at the gap cell size costs more
+        # triangles than the rotor iron it sits on.
+        _a_sl = max(1e-3, min(area, 0.4330 * (0.5 * (r_od - r_iron_od)) ** 2))
+        _air_reg += [[0.5 * (r_iron_od + r_od), 0.0, 11, _a_sl]]
     if r1_band > r_od + 1e-6:
         # gap-air annulus [r_od, R1] — FINE (it carries the gap field)
         _air_reg += [[0.5 * (r_od + r1_band), 0.0, 9, area]]
@@ -1899,7 +2141,8 @@ def _stator_sector_impl(polys, r_bore, r_out_iron, r_outer, n_slip, span,
 
 def _mesh_rotor_sector(polys, r_od, r_shaft, n_slip, span, area, air_mm, quality,
                        r1_band: float = 0.0, cell_copies: int = 0,
-                       part_area: Optional[Dict] = None):
+                       part_area: Optional[Dict] = None,
+                       r_sleeve_in: float = 0.0):
     """(V mm, T) for a rotor WEDGE [0, span] × [0, r_od] (shaft solid to centre).
     r1_band > r_od extends the wedge with the gap-air annulus ending on the
     uniform moving-band ring R1 (harmonic-macro boundary).
@@ -1934,7 +2177,9 @@ def _mesh_rotor_sector(polys, r_od, r_shaft, n_slip, span, area, air_mm, quality
         n_bore = max(48, int(2 * math.pi * r_bore / max(0.35, 0.5 * t_tube)))
         if cell_copies > 0:
             n_bore = int(math.ceil(n_bore / cell_copies)) * cell_copies
-    iron = _resample(steel, r_od, n_slip)
+    # With a sleeve, the iron ends at the ring's ID and r_od is the ring's OD.
+    r_iron_od = float(r_sleeve_in) if r_sleeve_in > 0.0 else float(r_od)
+    iron = _resample(steel, r_iron_od, n_slip)
     iron = _resample(iron, r_shaft, n_sh)
     _rout = r1_band if r1_band > r_od + 1e-6 else r_od
     W = _wedge(-1e-3, span + 1e-3, 0.0, _rout + 3.0)
@@ -1942,6 +2187,18 @@ def _mesh_rotor_sector(polys, r_od, r_shaft, n_slip, span, area, air_mm, quality
     mags = [g.intersection(W) for g, _pol in (polys.get("magnets") or [])
             if g.intersects(W)]
     mags = [g for g in mags if g.geom_type == "Polygon" and g.area > 1e-6]
+    # A magnet whose top sits ON the iron OD (magnet_up_gap = 0, the magnet
+    # seats on the retaining sleeve — user 2026-09-06) shares that circle with
+    # the rotor|sleeve seam, which is drawn on the slip grid (n_slip nodes,
+    # 0.36°) while the magnet top is the CAD 256-gon (1.41°).  Two polylines of
+    # the same circle with different node sets node into 0.03°-spaced vertex
+    # clusters and hairline slivers: on the Ø200 at air_gap 2.6 that was a
+    # 0.575° cusp Triangle died on (0xC0000005) or filled with 1 675 triangles
+    # of area < 1e-6 mm² (bordered Newton rrel = 1.0 after one iteration).
+    # Resampling the magnet tops onto the SAME grid as the iron makes the seam
+    # one conforming chain; magnets below the OD have no run on that radius
+    # and come back unchanged.
+    mags = [_resample(g, r_iron_od, n_slip) for g in mags]
     # SNAP the magnet outlines onto the iron chain (10 um): CadQuery discretises
     # the shared pocket boundary INDEPENDENTLY for the iron and the magnet, so
     # with a corner fillet the two arc polylines land 2-4 um apart — a
@@ -1950,7 +2207,9 @@ def _mesh_rotor_sector(polys, r_od, r_shaft, n_slip, span, area, air_mm, quality
     # whole arc.  Snapping makes the magnet follow the iron chain exactly, so
     # the noding merges them into ONE conforming chain.
     mags = [_weld_outline(g, iron, 0.01) for g in mags]
-    _rk_segs = [(r_shaft, r_od, 0.5 * iron_edge)]            # fine flux-carrying seam
+    _rk_segs = [(r_shaft, r_iron_od, 0.5 * iron_edge)]       # fine flux-carrying seam
+    if r_iron_od < r_od - 1e-9:                              # the sleeve ring
+        _rk_segs.append((r_iron_od, r_od, max(r_od - r_iron_od, 1e-3)))
     if r1_band > r_od + 1e-6:
         _rk_segs.append((r_od, r1_band, max(r1_band - r_od, 1e-3)))
     rk = _graded_radii(_rk_segs)
@@ -1977,6 +2236,8 @@ def _mesh_rotor_sector(polys, r_od, r_shaft, n_slip, span, area, air_mm, quality
     for g in mags:
         for run in _air_facing_runs(g, iron):
             add(run)             # shared pocket walls come from the IRON chain
+    if r_iron_od < r_od - 1e-9:
+        add(_grid_arc(r_iron_od, n_slip, span))         # rotor|sleeve seam
     add(_grid_arc(r_od, n_slip, span))
     if r1_band > r_od + 1e-6:
         add(_grid_arc(r1_band, n_slip, span))           # moving-band R1
@@ -1997,10 +2258,15 @@ def _mesh_rotor_sector(polys, r_od, r_shaft, n_slip, span, area, air_mm, quality
         _rt = 0.5 * (r_bore + r_shaft)
         _air_reg += [[_rt * math.cos(span / 2), _rt * math.sin(span / 2),
                       10, a_tube]]
-    ann = W.intersection(Polygon(_grid_circle(r_od, n_slip)[:-1]).difference(
+    ann = W.intersection(Polygon(_grid_circle(r_iron_od, n_slip)[:-1]).difference(
                          Polygon(_grid_circle(r_shaft, n_sh)[:-1])))
     _air_reg += [[*a.representative_point().coords[0], 8, air_area]
                  for a in _air_parts(ann, steel, mags)]
+    if r_iron_od < r_od - 1e-9:                         # the sleeve annulus
+        _rs = 0.5 * (r_iron_od + r_od)
+        _a_sl = max(1e-3, min(area, 0.4330 * (0.5 * (r_od - r_iron_od)) ** 2))
+        _air_reg += [[_rs * math.cos(span / 2), _rs * math.sin(span / 2),
+                      11, _a_sl]]
     if r1_band > r_od + 1e-6:
         _rm = 0.5 * (r_od + r1_band)
         _air_reg += [[_rm * math.cos(span / 2), _rm * math.sin(span / 2), 9, area]]
@@ -2061,6 +2327,13 @@ def _tag_rotor(V, T, polys, r_shaft):
     _r_bore = _shaft_bore_r(polys, r_shaft)
     if _r_bore > 0.0:
         tags[_rr < _r_bore - 1e-6] = DOM_AIR
+    # Retaining sleeve: a clean annulus, so a radial test is exact and cheaper
+    # than a point-in-polygon over the whole half.  Nothing else lives between
+    # the rotor OD and the sleeve OD, and both radii come from the ring the CAD
+    # actually built.
+    r_sl_in, r_sl_out = _sleeve_radii(polys)
+    if r_sl_out > r_sl_in > 0.0:
+        tags[(_rr > r_sl_in + 1e-6) & (_rr < r_sl_out - 1e-6)] = DOM_SLEEVE
     mags = polys.get("magnets") or []
     if mags:
         in_mag = np.zeros(len(T), bool)
@@ -2124,6 +2397,10 @@ def geo_mesh_halves(p: Dict, polys: Dict, outer_air_factor: float = 1.2,
     r_od = float(r_ro) or float(p.get("rotor_outer_radius") or 0.0)
     r_out_iron = _radius_span(polys["stator"])[1]           # yoke OD (exterior)
     r_sh = float(p.get("rotor_inner_radius") or _radius_span(polys["rotor"])[0])
+    # Retaining ring: [r_sleeve_in, r_od].  (0.0, 0.0) — and therefore
+    # r_sleeve_in = 0.0 — on every machine without one, which makes every
+    # rotor-mesher call below byte-identical to what it was.
+    r_sleeve_in, _r_sleeve_out = _sleeve_radii(polys)
     r_outer = r_out_iron * float(outer_air_factor)
     # Cell area (mm²).  mesh_edge_mm is the UI "Max element size": honour it as
     # the actual TRIANGLE EDGE (area = 0.433·L² for an equilateral), so the
@@ -2212,7 +2489,8 @@ def geo_mesh_halves(p: Dict, polys: Dict, outer_air_factor: float = 1.2,
             Vcr, Tcr = _mesh_rotor_sector(polys, r_od, r_sh, n_slip, _span_r,
                                           area, air_mm, _Q, r1_band=r1_band,
                                           cell_copies=_n_poles,
-                                          part_area=part_area)
+                                          part_area=part_area,
+                                          r_sleeve_in=r_sleeve_in)
             Vr, Tr = _tile_cells(Vcr, Tcr, _span_r, _n_poles // _ns)
             log.info("geo tile: stator %d x pair-cell(%dtri) = %dtri, rotor "
                      "%d x cell(%dtri) = %dtri (1/%d)", _n_pairs // _ns,
@@ -2234,14 +2512,16 @@ def geo_mesh_halves(p: Dict, polys: Dict, outer_air_factor: float = 1.2,
                                          coil_rel=coil_rel)
             Vr, Tr = _mesh_rotor_sector(polys, r_od, r_sh, n_slip, span,
                                         area, air_mm, _Q, r1_band=r1_band,
-                                        part_area=part_area)
+                                        part_area=part_area,
+                                        r_sleeve_in=r_sleeve_in)
         else:                                          # full ring
             Vs, Ts = _mesh_stator_half(polys, r_bore, r_out_iron,
                                        r_outer, n_slip, area, air_mm, _Q,
                                        r2_band=r2_band, part_area=part_area,
                                        coil_rel=coil_rel)
             Vr, Tr = _mesh_rotor_half(polys, r_od, r_sh, n_slip, area, air_mm, _Q,
-                                      r1_band=r1_band, part_area=part_area)
+                                      r1_band=r1_band, part_area=part_area,
+                                      r_sleeve_in=r_sleeve_in)
     # Armed budget, second gate: the per-cell Steiner cap bounds each Triangle
     # RUN, but tiling multiplies a cell by its copy count and the two halves
     # add — the number the FEM will actually assemble is checked here, before
@@ -2274,9 +2554,8 @@ def geo_mesh_halves(p: Dict, polys: Dict, outer_air_factor: float = 1.2,
     # the belt welds BY node identity.
     Vs, Ts = _collapse_slivers(Vs, Ts, keep_r=(r_bore,))
     _r_bore = _shaft_bore_r(polys, r_sh)
-    Vr, Tr = _collapse_slivers(Vr, Tr,
-                               keep_r=((r_od, r_sh, _r_bore) if _r_bore > 0.0
-                                       else (r_od, r_sh)))
+    _keep_r = [r_od, r_sh] + ([_r_bore] if _r_bore > 0.0 else [])         + ([r_sleeve_in] if r_sleeve_in > 0.0 else [])
+    Vr, Tr = _collapse_slivers(Vr, Tr, keep_r=tuple(_keep_r))
     Vs, Ts = _prune(Vs, Ts)
     Vr, Tr = _prune(Vr, Tr)
 

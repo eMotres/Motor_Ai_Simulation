@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { whenVisible } from '../../lib/pageVisible';
 import {
   Box, Typography, Button, TextField, Tooltip, Divider, Chip,
   CircularProgress, LinearProgress, Table, TableBody, TableCell, TableHead, TableRow,
@@ -85,6 +86,7 @@ const Group: React.FC<{ label: string; children: React.ReactNode }> = ({ label, 
 const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }) => {
   const {
     sweepConfig, connectedToApi, parameterSchema, materials,
+    updateRippleThreshold,
     descentRunning, descentState, descentError,
     baselineLine, baselineBusy, baselineError, computeBaselineLine,
     runDescent, cancelDescent, applyDescentBest, applyDescentPoint, loadLastDescent,
@@ -235,6 +237,8 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
     let alive = true;
     let timer: ReturnType<typeof setTimeout>;
     const tick = async () => {
+      if (!alive) return;
+      await whenVisible();              // a hidden tab polls nothing (lib/pageVisible)
       if (!alive) return;
       if (!localRun.current) await loadLastDescent();
       if (!alive) return;
@@ -581,6 +585,19 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
               InputLabelProps={{ sx: { fontSize: 10 } }}
               sx={rippleLam > 0 ? { '& .MuiOutlinedInput-notchedOutline': { borderColor: '#f59e0b' } } : undefined} />
           </Tooltip>
+          {/* The limit itself lives HERE, next to its λ — its old home (the
+              right-sidebar "Torque Ripple" card) was removed on the user's
+              call (2026-08-22), same as the Operating Point echo card.  Same
+              show-when-armed pattern as the THD pair below. */}
+          {rippleLam > 0 && (
+            <Tooltip title="Ripple limit [%] the penalty enforces — cost += λ·max(0, ripple% − limit%)/100." placement="top">
+              <TextField label="ripple ≤ %" type="number" size="small"
+                value={+((sweepConfig.rippleThreshold ?? 0) * 100).toFixed(2)}
+                onChange={e => updateRippleThreshold(Math.max(0, (+e.target.value || 0)) / 100)}
+                inputProps={{ min: 0, step: 0.5, style: { fontSize: 11, padding: '3px 6px', width: 44 } }}
+                InputLabelProps={{ sx: { fontSize: 10 } }} />
+            </Tooltip>
+          )}
           <Tooltip title={`Voltage-quality gate for sinusoidal FOC drives: line-to-line THD of the phase voltage (non-triplen harmonics 5/7/11/13… — triplens cancel in wye and are excluded). λ > 0 adds cost += λ·max(0, THD_LL% − limit%)/100, steering the optimizer toward a sinusoidal back-EMF: ~25 = soft, 100 = hard wall. 0 = report only. CIANO-S target: THD_LL < 5%.`} placement="top">
             <TextField label="THD λ" type="number" size="small" value={thdLam}
               onChange={e => updThdLam(+e.target.value)}

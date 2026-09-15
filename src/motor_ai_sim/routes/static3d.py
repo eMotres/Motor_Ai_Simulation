@@ -50,9 +50,18 @@ router = APIRouter(prefix="/api/static3d", tags=["static3d"])
 _ROOT = Path(__file__).resolve().parents[3]
 _PRESETS_PATH = _ROOT / "config" / "motor_presets.json"
 _PASSPORT_PATH = _ROOT / "config" / "end_effect_3d.json"
-_CACHE_DIR = _ROOT / "config" / ".static3d_cache"
+# The staged-3D cache goes beside the config THIS PROCESS is pointed at
+# (``MOTOR_AI_SIM_CONFIG``): it is the only one of the three that is WRITTEN
+# (`_cache_paths` / `mkdir` at solve time), and pinned to the repo's own config/
+# a redirected process dropped its sandbox machine's .npz beside — and named the
+# same as — the user's own staged passports.  No env var set: unchanged.
+try:
+    from motor_ai_sim.config import DEFAULT_CONFIG_PATH as _DEFAULT_CONFIG_PATH
+    _CACHE_DIR = Path(str(_DEFAULT_CONFIG_PATH)).parent / ".static3d_cache"
+except Exception:                       # noqa: BLE001 — never break the import
+    _CACHE_DIR = _ROOT / "config" / ".static3d_cache"
 
-DEFAULT_PRESET = "my_40mm_last"
+DEFAULT_PRESET = "live"
 
 #: The materials the Stage A / Stage B passport was measured with.  The live
 #: ``config/motor_config.yaml`` has been reassigned since (F52SH), and a field
@@ -79,6 +88,14 @@ def _load_presets() -> dict:
 
 
 def _preset_geometry(name: str) -> dict:
+    if name == "live":
+        # The machine on screen, not a pinned snapshot: the ACTIVE config's
+        # geometry, read fresh on every request.  The fingerprint hashes this
+        # dict, so editing the live machine correctly marks previous 3D
+        # meshes/fields as belonging to a different machine instead of
+        # silently redrawing the old one.
+        from motor_ai_sim.config import get_geometry_params
+        return dict(get_geometry_params().to_dict())
     p = _load_presets().get(name)
     if not isinstance(p, dict) or not isinstance(p.get("geometry"), dict):
         raise HTTPException(
@@ -99,6 +116,17 @@ def _machine_fingerprint(geo: dict, materials: Dict[str, str]) -> str:
     happened to be on screen.
     """
     payload = {"geo": dict(geo or {}), "mat": dict(sorted((materials or {}).items()))}
+    # An EXCLUDED part is solved as air, so it is a different machine — it must
+    # not share a fingerprint (nor a cached Stage-A k_flux) with the one that
+    # still has the part.  Absent (every part included) the key is untouched,
+    # so every already-issued fingerprint stays valid.
+    try:
+        from motor_ai_sim.part_states import resolve as _rs
+        _ps = _rs()
+        if _ps:
+            payload["parts"] = dict(sorted(_ps.items()))
+    except Exception:      # noqa: BLE001
+        pass
     return hashlib.md5(
         json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()[:16]
 
@@ -137,7 +165,13 @@ class _Pinned:
         from motor_ai_sim.material_context import (get_request_materials,
                                                    set_request_materials)
         self._prev = get_request_materials()
-        set_request_materials({"assignment": self.assignment, "materials": {}})
+        # Pin the MATERIALS, carry the per-part ACCOUNTING states through.  They
+        # ride the same payload, and dropping them here would silently put an
+        # excluded part back into the 3D solve — the Stage-A k_flux would then
+        # describe a different machine than the 2D run it corrects.
+        _keep = (self._prev or {}).get("parts")
+        set_request_materials({"assignment": self.assignment, "materials": {},
+                               **({"parts": _keep} if _keep else {})})
         return self
 
     def __exit__(self, *exc):

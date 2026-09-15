@@ -18,6 +18,7 @@
  */
 import React, { useEffect, useMemo, useRef } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
+import { guardCanvas } from '../viewer3d/webglGuard';
 import { OrbitControls, OrthographicCamera, Grid } from '@react-three/drei';
 import * as THREE from 'three';
 import { ViewcubeNavigation, CameraSync } from '../viewer3d/MotorScene';
@@ -413,7 +414,7 @@ const Vectors: React.FC<{
 const FitView: React.FC<{ radiusMm: number; controlsRef: React.MutableRefObject<any> }> = ({
   radiusMm, controlsRef,
 }) => {
-  const { camera, size } = useThree();
+  const { camera, size, invalidate } = useThree();
   useEffect(() => {
     if (size.width === 0 || !(camera as any).isOrthographicCamera) return;
     const cam = camera as THREE.OrthographicCamera;
@@ -427,7 +428,8 @@ const FitView: React.FC<{ radiusMm: number; controlsRef: React.MutableRefObject<
       controlsRef.current.target.set(0, 0, 0);
       controlsRef.current.update();
     }
-  }, [radiusMm, size.width, size.height, camera, controlsRef]);
+    invalidate();                              // demand mode: draw the fitted view
+  }, [radiusMm, size.width, size.height, camera, controlsRef, invalidate]);
   return null;
 };
 
@@ -530,6 +532,7 @@ const Static3DScene: React.FC<SceneProps> = ({
     <div style={{ position: 'relative', width: '100%', height: '100%' }}>
       <Canvas
         style={{ width: '100%', height: '100%', display: 'block', background: 'var(--panel-2)' }}
+        frameloop="demand" onCreated={guardCanvas('3D static viewer')}
         resize={{ debounce: 0 }}>
         <ResizeFix />
         <OrthographicCamera makeDefault position={[0, 0, 250]} near={0.1} far={5000} />

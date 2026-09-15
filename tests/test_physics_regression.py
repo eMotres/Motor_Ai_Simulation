@@ -9,9 +9,9 @@ retired P1 path survived so long is that nothing was watching the numbers.
 Design notes, in case a case starts failing for the wrong reason:
 
 * **Config-independent.** Geometry goes in through ``geo_override``, the magnet
-  through the per-request material override, and the SPEED through ``RPM`` below,
-  so editing ``config/motor_config.yaml`` (which the user does constantly) cannot
-  turn a red test into a code problem. Mutating the cached config to carry the
+  AND the steel through the per-request material override, and the SPEED through
+  ``RPM`` below, so editing ``config/motor_config.yaml`` (which the user does
+  constantly) cannot turn a red test into a code problem. Mutating the cached config to carry the
   geometry or the magnet was tried and is NOT equivalent: the cache follows the
   file now, so a live API server autosaving mid-run reloaded it and dropped the
   override — the suite passed alone and failed in a batch.
@@ -61,6 +61,30 @@ import pytest
 from motor_ai_sim.material_context import set_request_materials
 from motor_ai_sim.simulation.fem_solver_2d import fem_transient_sliding_band
 
+
+@pytest.fixture(autouse=True)
+def _cold_eddy_warm_cache():
+    """Every case starts COLD.
+
+    The coupled-eddy solve warm-starts from the previous solve's settled state
+    (`_SB_WARM_CACHE` in memory + `.warm_cache.npz` beside the config), and
+    settles only to its tolerance — so a case run after a neighbouring case
+    lands within the tolerance of, but not bit-identical to, the same case run
+    alone.  Measured 2026-09-05: `p2_eddy` alone reproduced its pin exactly;
+    after the other cases it read P_cu_ac_solve_W +0.52 %, and the
+    start-up-transient test found no transient to remove because its "cold"
+    leg was warm.  The pins are cold-start numbers; make every case one.
+    Sandbox only: `_warm_cache_path` follows MOTOR_AI_SIM_CONFIG."""
+    from motor_ai_sim.simulation import fem_solver_2d as _F
+    _F._SB_WARM_CACHE.clear()
+    try:
+        _p = _F._warm_cache_path()
+        if _p.exists():
+            _p.unlink()
+    except Exception:   # noqa: BLE001 — a missing file is the goal
+        pass
+    yield
+
 BASELINE = Path(__file__).with_name("physics_baseline.json")
 UPDATE = os.environ.get("UPDATE_PHYSICS_BASELINE") == "1"
 
@@ -91,12 +115,29 @@ GEO_30MM: Dict[str, float] = {
     "air_gap": 0.2, "tooth_width": 2.6, "tooth2_width": 1.4, "cut_width": 1.5,
     "insulation_thickness": 0.05, "wire_width": 2.0, "wire_height": 0.5,
     "wire_spacing_x": 0.1, "wire_spacing_y": 0.1, "num_wires_per_slot": 6,
+    # wire_parallel was the ONE key SOLVER_REQUIRED_PARAMS lists that this dict
+    # did not pin, so `merge_geo_override` kept the WORKING CONFIG's value — the
+    # F2 leak again, in the file whose docstring tells its story. It bit on
+    # 2026-09-03: the user's live config moved to `wire_parallel: 3` and every
+    # case went red at once with nothing wrong in the code (k strands in hand =
+    # turns/k, EMF/k, R/k², so measured on p2_load T 0.4076 -> 0.1439 (÷2.8),
+    # V_peak 7.86 -> 1.89, P_cu 110.5 -> 13.7 (÷8.1 ≈ ÷k²)). 1 is the value
+    # every pin was generated at, so writing it here changes no number — it only
+    # cuts the dependence, exactly as pinning the steel did.
+    "wire_parallel": 1,
     "wire_split": 1, "slot_hs": 0.267, "magnet_height": 4.5,
     "rotor_house_height": 0.8, "shaft_height": 2.0, "magnet_fill_down": 0.9,
     "magnet_fill_up": 0.3, "magnet_fill_radius": 0.1, "magnet_up_gap": 0.1,
     "rotor_hole": 0.7, "magnet_down_height": 1.4, "magnet_lamination": 0,
     "stator_fillet_r": 1.2, "stator_fillet_r1": 0.0, "rotor_fill_r": 0.2,
     "motor_length": 10.0,
+    # Pinned explicitly (2026-09-06): this fixture has NO retaining sleeve.  The
+    # live machine carries a 1 mm sleeve and a bare `fem_transient_sliding_band`
+    # call (script-mode regeneration, ad-hoc probes) merges the live geometry
+    # under the override — a 1 mm sleeve in a 0.2 mm gap kills the structured
+    # belt and the slip ring.  conftest zeroes it for pytest; this pins it for
+    # everything else.
+    "sleeve_thickness": 0.0,
 }
 
 COMMON = dict(
@@ -105,6 +146,20 @@ COMMON = dict(
     geo_mesh=True, coil_temp_c=120.0, rotor_eddy=False,
 )
 
+# 2026-09-06 — pins regenerated: the magnet top is now built on the circle
+# r = rotor_or − magnet_up_gap instead of on the chord between its two top
+# corners (user: "давай по умолчанию сделаем только arc и уберём прямую
+# вообще").  Every spoke magnet gains the circular segment (+1.20 % magnet
+# section on the Ø200; tests/test_masses.py carries the mass table), so T, the
+# EMF and the losses moved by ~1 %.  The before→after table is in
+# tests/physics_baseline.before_arc.diff.txt next to the pins.
+#
+# Regenerating OUTSIDE pytest (script mode) needs `sleeve_thickness` pinned in
+# GEO_30MM: without conftest's sandbox the fixture used to inherit the live
+# machine's 1 mm sleeve into its 0.2 mm air gap, the structured-gap belt had no
+# room, the gmsh fallback left the rotor half with no slip-ring nodes and ψ_A
+# came back flat (−5.8e-9) — which was misread once as "the solver cannot mesh
+# anything".  It was the live config leaking into the fixture.
 CASES = {
     # The default basis: energy-consistent mean torque, mesh-convergent ripple.
     "p2_load": dict(COMMON, element_order=2, demag=False,
@@ -167,6 +222,46 @@ CASES = {
     # so the magnet conductivity is inside the coupled system while its
     # remanence is being de-rated -- the two mechanisms that must not shadow
     # each other.
+    #
+    # PINS MOVED 2026-09-05 — ratchet frozen during the eddy start-up transient;
+    # pre-pass on the settled state.  The irreversible Br ratchet used to run on
+    # every warm-up frame at θ<0, i.e. on the σ·∂A/∂t START-UP transient, whose
+    # ∂A/∂t is whatever the eddy history was seeded with — so two identical runs
+    # of the user's Ø200 12s/10p disagreed by +3.1 % in torque and 7.9 pp in Br
+    # (his report, 2026-09-05; reproduced here as 236.45 vs 244.66 N·m, Br kept
+    # 90.53 vs 98.42 %).  The ratchet is now FROZEN through the warm-up and a
+    # dedicated demag PRE-PASS (one whole electrical period, discarded, ratchet
+    # on) runs after the eddy handoff — the same two-stage scheme the
+    # magnetostatic path has always had (`_dmskip`).  Only THIS case moved (it
+    # is the only eddy+demag one); every other case is bit-identical by
+    # construction, since `_dm_ratchet` is True for the whole run whenever the
+    # solve is not coupled-eddy-with-demag on current drive:
+    #
+    #   T_avg_Nm            0.398474 ->   0.393847  (-1.16 %)
+    #   T_avg_maxwell_Nm      0.3926 ->     0.3899  (-0.69 %)
+    #   T_ripple_pct         1.28944 ->   0.711415  (-44.83 %)
+    #   V_peak               7.91001 ->    7.72666  (-2.32 %)
+    #   P_cu_W               110.339 ->    110.280  (-0.05 %)
+    #   P_cu_ac_solve_W        3.113 ->      3.054  (-1.90 %)
+    #   P_cu_total_solve_W    65.346 ->     65.287  (-0.09 %)
+    #   P_fe_W               4.77903 ->    4.70557  (-1.54 %)
+    #   P_mag_honest_W         1.587 ->      1.536  (-3.21 %)
+    #   P_mag_solve_W          1.426 ->      1.414  (-0.84 %)
+    #   P_shaft_honest_W       0.565 ->      0.568  (+0.53 %)
+    #   P_shaft_solve_W        0.016 ->      0.017  (within its ATOL floor)
+    #   demag_br_mean       0.852559 ->   0.834450  (-2.12 %)
+    #   demag_br_min        0.140564 ->   0.133983  (-4.68 %)
+    #
+    # DIRECTION, and why it is the opposite of the 200 mm machine's: this 30 mm
+    # case has a 2-frame warm-up, so freezing removes almost no spurious
+    # de-rating — what dominates here is the pre-pass, a whole extra period in
+    # which the ratchet visits every rotor position BEFORE the window opens.  So
+    # the reported magnet is weaker (br_mean -2.1 %) and the torque lower, while
+    # the window itself is finally clean: T_ripple halves, because the old
+    # number was largely the magnet still dying THROUGH the reported period —
+    # exactly the decay `_dmskip` was invented to remove on the magnetostatic
+    # path.  On the 200 mm the 45-frame warm-up was the whole story and the fix
+    # moves the other way (Br 90.5 -> 98.5 %, torque +3.5 %).
     "p2_demag_eddy": dict(COMMON, element_order=2, demag=True, eddy=True,
                           rotor_eddy=True, I_phase_rms=60.0, gamma_deg=0.0),
     # The two hardest features TOGETHER: the coupled sigma*dA/dt solve, whose
@@ -179,15 +274,75 @@ CASES = {
     # imposed 60 A rms sinusoid and the suite says so. The paired diagnostics are
     # what make it airtight: v_circuit_resid_max_V is ~0 only if the circuit was
     # actually solved on the converged field, and P_cu_ac_solve_W is nonzero only
-    # if the eddy reaction was actually in it. rotor_eddy is off because the
-    # voltage drive drops it (see the warning in the solver), so this pins the
-    # copper constraint set specifically.
+    # if the eddy reaction was actually in it. rotor_eddy is off (COMMON) so
+    # this case pins the COPPER constraint set specifically. It used to be off
+    # because the solver force-dropped it on every imposed-voltage run; that
+    # drop is gone (the conducting rotor is solved inside the same bordered
+    # Newton now, SB_VDRIVE_ROTOR_EDDY=0 restores the old behaviour), so the
+    # magnet/shaft constraint rows under voltage drive are NOT pinned by
+    # anything here — a rotor_eddy=True twin of this case is the gap.
     "p2_voltage_eddy": dict(COMMON, element_order=2, demag=False, eddy=True,
                             I_phase_rms=60.0, gamma_deg=0.0, drive="voltage",
                             v_phase_peak=7.0, v_delta_deg=10.0),
+    # The rotor_eddy=True twin the comment above calls the gap.  Guards the
+    # COMBINED bordered Newton: with an IMPOSED VOLTAGE, the magnet/shaft
+    # sigma*dA/dt bodies (per-magnet integral-J=0 constraint rows and the
+    # cut-half U=0 exemptions) must stay inside the same (A, U, i_A, i_B)
+    # system as the phase currents — the configuration the solver force-
+    # dropped for months (`if _vdrive and rotor_eddy: rotor_eddy = False`),
+    # silently zeroing P_solid on every voltage/PWM card and flattering their
+    # efficiency.  P_mag_solve_W / P_shaft_solve_W are pinned NON-ZERO here:
+    # a zero in P_mag_solve_W means the force-drop came back (or the
+    # SB_VDRIVE_ROTOR_EDDY=0 escape hatch leaked into a default).
+    "p2_voltage_eddy_rotor": dict(COMMON, element_order=2, demag=False,
+                                  eddy=True, rotor_eddy=True,
+                                  I_phase_rms=60.0, gamma_deg=0.0,
+                                  drive="voltage",
+                                  v_phase_peak=7.0, v_delta_deg=10.0),
 }
 
 MAGNET = "F45SH_120C"
+# The steel is pinned through the SAME override since 2026-09-01. It used to be
+# the last material this suite read from the user's live config, and it bit the
+# same way rpm did (F2): the config's steel moved from B15AHV950M to 20RSW175
+# and all seven cases went red with nothing wrong in the code — P_fe by the
+# difference between two measured P(B,f) surfaces, T/V by the B-H change.
+# B15AHV950M is the steel the pins were generated under, so pinning it here
+# changes no number; it only cuts the dependence. Both cores get it — a split
+# assignment would put two loss surfaces into one machine for no reason.
+STEEL = "B15AHV950M"
+
+# One override for every solve in this file. The loss model reads the SAME
+# merged assignment as the B-H side since the 2026-09-01 fix in
+# fem_transient_sliding_band (it used to read the shared config only — the F6
+# failure mode: the user's steel in the field, somebody else's loss surface in
+# P_fe, measured +90 % on these very cases).
+OVERRIDE = {"assignment": {"magnet": MAGNET,
+                           "stator_core": STEEL, "rotor_core": STEEL,
+                           # The SHAFT too (2026-09-08): it was the one
+                           # conducting part still read off the sandbox copy of
+                           # the user's config.  When the live machine's shaft
+                           # became a solid magnetic steel (Steel_42CrMo4_QT,
+                           # μr ~1000) every pin moved with it — the honest
+                           # frequency-domain shaft loss 0.566 → 0.24 W on
+                           # p2_eddy, and the ~1 % ripple / THD drifts of the
+                           # no-load and voltage cases, all from the shaft's
+                           # permeability in the field.  Measured: pinned back
+                           # to the aluminium the pins were generated at, the
+                           # same code reproduces 0.566 W with the d-axis
+                           # identical (60.0263°).  The explicit value outranks
+                           # the config by design, like the steel and the magnet.
+                           "shaft": "Aluminium_6061"},
+            "materials": {},
+            # Per-part accounting states (2026-09-01) ride the same channel
+            # and the LIVE config carries the user's (frameless shaft =
+            # reference today).  reference leaves the field untouched, but a
+            # future `excluded` in the config would silently move every pin —
+            # so the parts are pinned to `included` exactly like the steel:
+            # the explicit value outranks the config by design.
+            "parts": {"stator_core": "included", "rotor_core": "included",
+                      "magnet": "included", "slot": "included",
+                      "shaft": "included"}}
 
 # The speed every pin was generated at, and the 30 mm machine's OWN stored
 # operating speed (config/motor_presets.json `my_motor`: 32 A, 15000 rpm).
@@ -269,12 +424,13 @@ def _metrics(d: Dict[str, Any]) -> Dict[str, float]:
 
 
 def _run(case: str) -> Dict[str, float]:
-    # Force the magnet through the per-request override, NOT by mutating the
-    # cached config. The cache now follows the file, so anything touching
-    # motor_config.yaml mid-run — a live API server, an editor — reloads it and
-    # silently drops an in-process mutation. That made this suite pass alone and
-    # fail in a batch, which is worse than failing outright.
-    set_request_materials({"assignment": {"magnet": MAGNET}, "materials": {}})
+    # Force the magnet AND the steel through the per-request override, NOT by
+    # mutating the cached config. The cache now follows the file, so anything
+    # touching motor_config.yaml mid-run — a live API server, an editor —
+    # reloads it and silently drops an in-process mutation. That made this
+    # suite pass alone and fail in a batch, which is worse than failing
+    # outright.
+    set_request_materials(OVERRIDE)
     # Speed and the winding connection are ARGUMENTS now (F2/F3). They used to
     # have to go through the cached config because the solver read
     # simulation.rpm and the winding block itself; the explicit parameters make
@@ -409,7 +565,7 @@ def test_case_matches_baseline(case: str, baseline: Dict[str, Dict[str, float]])
 def _eddy_run(**over: Any) -> Dict[str, Any]:
     """One coupled-eddy transient on the 30 mm machine (raw solver dict)."""
     kw = dict(CASES["p2_eddy"]); kw.update(over)
-    set_request_materials({"assignment": {"magnet": MAGNET}, "materials": {}})
+    set_request_materials(OVERRIDE)
     try:
         return fem_transient_sliding_band(geo_override=dict(GEO_30MM), rpm=RPM,
                                           connection=CONNECTION, **kw)
@@ -538,7 +694,7 @@ def test_axial_slices_cut_the_magnet_eddy_loss_by_the_modelled_factor(
         pytest.skip("needs the solid p2_eddy baseline as its reference")
     geo = dict(GEO_30MM); geo["magnet_lamination"] = 5.0
     kw = dict(CASES["p2_eddy"])
-    set_request_materials({"assignment": {"magnet": MAGNET}, "materials": {}})
+    set_request_materials(OVERRIDE)
     try:
         d = fem_transient_sliding_band(geo_override=geo, rpm=RPM,
                                        connection=CONNECTION, **kw)

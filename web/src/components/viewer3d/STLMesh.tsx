@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
+import { useThree } from '@react-three/fiber';
 import { useUIStore } from '../../stores/motorStore';
 import { PART_COLORS } from '../../lib/partColors';
 
@@ -46,7 +47,8 @@ export function STLMesh({
   const { metalness, roughness, envIntensity } = useUIStore();
   const meshRef = useRef<THREE.Mesh>(null);
   const edgesRef = useRef<THREE.LineSegments>(null);
-  
+  const invalidate = useThree(s => s.invalidate);
+
   // Get base color from material type
   const baseColor = materialType ? getMaterialColor(materialType) : color;
   const isMatte = !!(materialType
@@ -87,8 +89,11 @@ export function STLMesh({
       edgesRef.current.geometry.dispose();
       edgesRef.current.geometry = edgeGeometry;
     }
+    // The geometry was swapped behind React's back — in demand-mode
+    // rendering nobody else asks for the frame that shows it.
+    invalidate();
 
-  }, [vertices, faces, showEdges]);
+  }, [vertices, faces, showEdges, invalidate]);
 
   return (
     <group position={position} rotation={rotation} scale={scale}>

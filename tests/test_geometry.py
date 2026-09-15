@@ -12,13 +12,26 @@ from motor_ai_sim.geometry import (
 )
 
 
-class TestMotorGeometryParams:
-    """Tests for MotorGeometryParams dataclass."""
+# A representative primary-parameter geometry — the SHAPE the class takes now.
+# MotorGeometryParams stopped carrying hardcoded field defaults when it became a
+# dynamic dict loader (all values come from motor_config.yaml); every primary a
+# test needs is supplied explicitly here instead of relying on a class default
+# that no longer exists.
+GEO_200MM = {
+    "stator_diameter": 200.0, "slot_height": 16.0, "core_thickness": 3.8,
+    "num_seg": 6, "num_slots_per_segment": 6, "num_poles_per_segment": 7,
+    "air_gap": 0.65, "magnet_height": 13.8, "rotor_house_height": 1.2,
+    "stator_width": 30.0,
+}
 
-    def test_default_params(self):
-        """Test default parameter values."""
-        params = MotorGeometryParams()
-        
+
+class TestMotorGeometryParams:
+    """Tests for MotorGeometryParams (dynamic dict loader)."""
+
+    def test_primary_params_round_trip(self):
+        """Every primary in the geometry dict becomes an attribute verbatim."""
+        params = MotorGeometryParams(dict(GEO_200MM))
+
         # Check primary parameters (all in mm)
         assert params.stator_diameter == 200.0  # mm
         assert params.slot_height == 16.0  # mm
@@ -33,8 +46,8 @@ class TestMotorGeometryParams:
 
     def test_derived_params(self):
         """Test derived parameters are computed correctly."""
-        params = MotorGeometryParams()
-        
+        params = MotorGeometryParams(dict(GEO_200MM))
+
         # Stator radii
         assert params.stator_outer_radius == params.stator_diameter / 2  # 100 mm
         expected_inner = params.stator_outer_radius - params.core_thickness - params.slot_height
@@ -62,35 +75,38 @@ class TestMotorGeometryParams:
         assert abs(params.rotor_inner_radius - expected_rotor_inner) < 1e-10
 
     def test_invalid_params(self):
-        """Test that invalid parameters raise errors."""
+        """Test that invalid parameters raise errors (validation in _validate)."""
         # Negative air gap (rotor larger than stator bore)
         with pytest.raises(ValueError):
-            MotorGeometryParams(
-                stator_diameter=50.0,
-                slot_height=5.0,
-                core_thickness=5.0,
-                air_gap=-5.0,  # Negative
-            )
-        
+            MotorGeometryParams({
+                **GEO_200MM,
+                "stator_diameter": 50.0,
+                "slot_height": 5.0,
+                "core_thickness": 5.0,
+                "air_gap": -5.0,  # Negative
+            })
+
         # Invalid pole count (too few)
         with pytest.raises(ValueError):
-            MotorGeometryParams(
-                num_seg=1,
-                num_slots_per_segment=6,
-                num_poles_per_segment=1,  # Only 1 pole
-            )
+            MotorGeometryParams({
+                **GEO_200MM,
+                "num_seg": 1,
+                "num_slots_per_segment": 6,
+                "num_poles_per_segment": 1,  # 1 pole/seg → num_poles 1 < 2
+            })
 
     def test_custom_params(self):
         """Test custom parameter values."""
-        params = MotorGeometryParams(
-            stator_diameter=100.0,
-            slot_height=10.0,
-            core_thickness=5.0,
-            num_seg=4,
-            num_slots_per_segment=8,
-            num_poles_per_segment=6,
-        )
-        
+        params = MotorGeometryParams({
+            **GEO_200MM,
+            "stator_diameter": 100.0,
+            "slot_height": 10.0,
+            "core_thickness": 5.0,
+            "num_seg": 4,
+            "num_slots_per_segment": 8,
+            "num_poles_per_segment": 6,
+        })
+
         assert params.stator_diameter == 100.0
         assert params.stator_outer_radius == 50.0
         assert params.num_slots == 32
@@ -298,6 +314,12 @@ class TestDerivedFieldsFollowTheOverride:
         "stator_diameter": 30.0, "core_thickness": 1.5, "slot_height": 4.3,
         "air_gap": 0.2, "magnet_height": 4.5, "rotor_house_height": 0.8,
         "wire_width": 2.0, "wire_spacing_x": 0.1, "insulation_thickness": 0.05,
+        # `slot_width` is derived from the wire COLUMN since 2026-09-08, and the
+        # column is wire_split strips wide.  `CadQueryMotor.set_parameters` fills
+        # an unlisted key from the LOADED config, so without this pin the 2.3 mm
+        # below became whatever the user's live machine had split its wire into
+        # — the F2 leak, through a key this fixture had never heard of.
+        "wire_split": 1,
         "num_seg": 2, "num_slots_per_segment": 6, "num_poles_per_segment": 7,
     }
 

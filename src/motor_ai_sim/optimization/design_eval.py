@@ -142,7 +142,8 @@ _ANCHOR_GEO: Dict[str, float] = {
     "air_gap": 0.2, "tooth_width": 2.6, "tooth2_width": 1.4, "cut_width": 1.5,
     "insulation_thickness": 0.05, "wire_width": 2.0, "wire_height": 0.5,
     "wire_spacing_x": 0.1, "wire_spacing_y": 0.1, "num_wires_per_slot": 6,
-    "wire_split": 1, "slot_hs": 0.267, "magnet_height": 4.5,
+    "wire_split": 1,
+    "wire_parallel": 1, "slot_hs": 0.267, "magnet_height": 4.5,
     "rotor_house_height": 0.8, "shaft_height": 2.0, "magnet_fill_down": 0.9,
     "magnet_fill_up": 0.3, "magnet_fill_radius": 0.1, "magnet_up_gap": 0.1,
     "rotor_hole": 0.7, "magnet_down_height": 1.4, "magnet_lamination": 0,
@@ -266,7 +267,10 @@ def build_params(geo: Dict[str, Any]) -> _P:
     r_sh = r_ri - geo["shaft_height"] * mm
     num_slots = int(geo.get("num_slots") or round(geo["num_seg"] * geo["num_slots_per_segment"]))
     num_poles = int(geo.get("num_poles") or round(geo["num_seg"] * geo["num_poles_per_segment"]))
-    slot_width_m = (geo["wire_width"] + 2 * geo["wire_spacing_x"]
+    # the wire COLUMN (wire_split's strips + their gaps), same as
+    # geometry_2d.params_from_config; == wire_width at wire_split = 1
+    from motor_ai_sim.winding import winding_footprint_mm as _fp_geo
+    slot_width_m = (_fp_geo(geo) + 2 * geo["wire_spacing_x"]
                     + 2 * geo["insulation_thickness"]) * mm
     return _P(
         r_stator_out=r_so, r_stator_in=r_si, r_rotor_out=r_ro, r_rotor_in=r_ri,
@@ -502,7 +506,7 @@ def _copper_loss(p: _P, geo: Dict[str, Any], I_phase_rms: float,
 
 
 def _masses(p: _P, geo: Dict[str, Any], magnet: Optional[str] = None,
-            steel: Optional[str] = None) -> Dict[str, Any]:
+            steel: Optional[str] = None, k_end: float = 0.0) -> Dict[str, Any]:
     """Component masses — delegates to the SINGLE SOURCE
     ``motor_ai_sim.masses.compute_masses`` (CAD sections × stack × lamination k_f ×
     the assigned material's density), so the sweep / all three optimizers use the
@@ -514,7 +518,9 @@ def _masses(p: _P, geo: Dict[str, Any], magnet: Optional[str] = None,
     from motor_ai_sim.masses import compute_masses
     mats = {k: v for k, v in (("magnet", magnet), ("stator_core", steel),
                               ("rotor_core", steel)) if v}
-    return compute_masses(p, geo, materials=mats or None)
+    # ``k_end`` (0 = auto) — pass the SAME end-winding factor the caller's
+    # loss/R path used, so a Simulation-tab pin bills the copper mass too.
+    return compute_masses(p, geo, k_end=k_end, materials=mats or None)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -540,10 +546,15 @@ def _raw_physics(geo: Dict[str, Any], wind: Dict[str, Any], sim: Dict[str, Any],
 
     pole_pairs = max(p.num_poles // 2, 1)
     n_series = float(wind.get("n_series", 2))
-    n_parallel = float(wind.get("n_parallel", 2))
+    # STRANDS IN HAND multiply the parallel paths (winding.n_parallel_effective):
+    # the slot keeps every physical wire, but only n_wires/k of them are in
+    # series, so psi and T fall by k and P_cu by k².  Same rule the FEM uses.
+    from motor_ai_sim.winding import (n_parallel_effective as _npar_eff,
+                                      turns_per_coil as _tpc)
+    n_parallel = float(_npar_eff(int(wind.get("n_parallel", 2) or 2), geo))
     single_layer = int(wind.get("layers", 1) or 1) <= 1
     k_w = _winding_factor(p.num_slots, p.num_poles, single_layer)
-    n_wires = float(geo.get("num_wires_per_slot", 14))
+    n_wires = float(_tpc(geo) or geo.get("num_wires_per_slot", 14))  # SERIES turns
     I_rms = float(current_a)
     freq = rpm / 60.0 * pole_pairs
     omega_mech = 2 * math.pi * rpm / 60.0

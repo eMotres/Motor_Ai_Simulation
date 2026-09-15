@@ -11,7 +11,7 @@ Usage
 >>> steel.sigma, steel.stacking_factor
 (2000000.0, 0.9)
 >>> steel.bh_curve   # list of [H, B] pairs
->>> magnet = get_material('magnet', 'Arnold_N52UH_100C')
+>>> magnet = get_material('magnet', 'N52UH_100C')
 >>> magnet.Br, magnet.mu_rec
 (1.30, 1.052)
 """
@@ -19,14 +19,19 @@ Usage
 from __future__ import annotations
 
 import logging
+import math
 import time
-from dataclasses import dataclass, field, fields as dataclass_fields
+from dataclasses import dataclass, field, fields as dataclass_fields, replace
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple, Literal
 
 import yaml
 
 _log = logging.getLogger(__name__)
+
+#: Vacuum permeability — the same constant simulation/field_ops.py uses, spelled
+#: the same way, so a curve converted here and read back there round-trips.
+MU0 = 4e-7 * math.pi
 
 # ---------------------------------------------------------------------------
 # Path
@@ -115,6 +120,13 @@ class SteelMaterial:
     bh_curve: List[BHPoint] = field(default_factory=list)
     core_loss_curves: Dict[str, CoreLossCurve] = field(default_factory=dict)
 
+    # ── MECHANICAL (added 2026-09-05 for the rotor centrifugal solve) ───────
+    # Optional so an older record still parses; the structural solver raises a
+    # 422 naming the missing key rather than inventing one.
+    youngs_modulus_gpa: Optional[float] = None      # GPa
+    poisson_ratio: Optional[float] = None           # -
+    yield_strength_mpa: Optional[float] = None      # MPa (0.2 % proof, or TRS for SMC)
+
     @property
     def mu_r_initial(self) -> float:
         """Approximate initial relative permeability from first BH point."""
@@ -151,9 +163,28 @@ class SteelMaterial:
         return self.core_loss_w_per_m3(f_hz, b_peak_t)
 
 
+class MagnetTemperatureError(ValueError):
+    """A magnet temperature was asked for that the card cannot answer.
+
+    Raised where the REQUEST is made, not where a property is read: a card with
+    no reference temperature or no temperature coefficients cannot be moved off
+    its quoted point, and quietly returning the unscaled card would answer a
+    different question than the one asked — the same silent-fallback failure
+    ``UnknownMaterialError`` exists to prevent (F6).
+    """
+
+
 @dataclass
 class MagnetMaterial:
-    """Permanent magnet material."""
+    """Permanent magnet material.
+
+    Every card is a MEASUREMENT AT ONE TEMPERATURE — ``temperature_c`` — and
+    ``at_temperature`` moves it to another one through the two reversible
+    coefficients below.  See the magnet section header of
+    ``config/materials_library.yaml`` for the model and for why the values
+    stored there are referenced to each card's own temperature rather than to
+    the datasheet's 20 °C.
+    """
     name: str
     description: str = ""
     Br: float = 0.0        # Remanence [T]
@@ -166,10 +197,204 @@ class MagnetMaterial:
 
     bh_curve: List[BHPoint] = field(default_factory=list)
 
+    # ── TEMPERATURE (added 2026-09-08, phase 1 of the EM-thermal coupling) ──
+    # ``temperature_c`` is the card's REFERENCE temperature T_ref (it used to be
+    # pure metadata — the solver did not correct magnets at all).  The two
+    # coefficients are %/K, referenced to T_ref, and are what ``at_temperature``
+    # needs; a card carrying none can still be used AS QUOTED, it just cannot be
+    # asked for another temperature.
+    temperature_c: Optional[float] = None      # °C, T_ref of this card
+    alpha_br_pct_per_k: Optional[float] = None  # %/K, dBr/dT   (negative: NdFeB)
+    beta_hcj_pct_per_k: Optional[float] = None  # %/K, dHcj/dT  (negative: NdFeB,
+                                                #      POSITIVE for Fe16N2)
+
+    # ── MECHANICAL (added 2026-09-05 for the rotor centrifugal solve) ───────
+    # A sintered magnet is brittle: it is checked in TENSION, not against a
+    # yield, and it is ~12x stronger in compression.
+    youngs_modulus_gpa: Optional[float] = None       # GPa
+    poisson_ratio: Optional[float] = None            # -
+    tensile_strength_mpa: Optional[float] = None     # MPa
+    compressive_strength_mpa: Optional[float] = None  # MPa
+
     @property
     def energy_product_kj_m3(self) -> float:
         """Maximum energy product BHmax ≈ Br·Hc/4  [kJ/m³]."""
         return self.Br * self.Hc / 4 / 1000
+
+    @property
+    def h_knee(self) -> Optional[float]:
+        """The demagnetisation knee field [A/m] the SOLVER reads off this card.
+
+        Exactly ``fem_solver_2d``'s and ``simulation/demag.py``'s rule — one
+        definition, so a report, a test and the solve cannot each pick a
+        different point of the same curve.  ``None`` when the card has no
+        2nd-quadrant curve (the linear-model magnets).
+        """
+        bh = self.bh_curve
+        if not bh or len(bh) < 2:
+            return None
+        return float(bh[1][0] if bh[0][1] <= 0 else bh[0][0])
+
+    # ------------------------------------------------------------------
+    # Temperature
+    # ------------------------------------------------------------------
+    def at_temperature(self, temp_c: Optional[float]) -> "MagnetMaterial":
+        """This card's properties at ``temp_c`` — a SCALED COPY, never in place.
+
+        The model (documented in full in the YAML's magnet section header):
+
+            dT        = temp_c - temperature_c
+            Br(T)     = Br     * (1 + alpha*dT)
+            H_knee(T) = H_knee * (1 + beta *dT)
+
+        and the 2nd-quadrant curve is carried across through the INTRINSIC
+        curve, because that is the one the two coefficients actually describe:
+        for each point J = B - mu0*H, then J -> J*(1 + alpha*dT),
+        H -> H*(1 + beta*dT), B' = J' + mu0*H'.  Scaling B directly instead
+        would slide the knee and the remanence by the same factor, which is the
+        one thing every datasheet says does not happen.
+
+        ``mu_rec`` is NOT scaled — the recoil permeability of sintered NdFeB is
+        temperature-independent to within a percent over any service range.
+        ``Hc`` follows the card's own identity Hc = Br/(mu0*mu_rec) where the
+        card obeys it (every NdFeB card here does, to 0.03 %); a card that does
+        not — the Fe16N2 records, whose Hc is read off the curve's B = 0
+        crossing — has its Hc scaled with Br instead, so the number keeps
+        meaning what it meant.
+
+        ``temp_c=None`` returns an identical copy (the no-temperature-requested
+        path: today's numbers, bit for bit).  dT = 0 does too — short-circuited
+        rather than run through the algebra, so a round-trip through
+        J = B - mu0*H cannot move the last bit of a curve point.
+
+        Raises ``MagnetTemperatureError`` when a temperature is asked for and
+        the card cannot answer it.
+        """
+        if temp_c is None:
+            return replace(self)
+        t = float(temp_c)
+        if not math.isfinite(t):
+            raise MagnetTemperatureError(
+                f"magnet {self.name!r}: magnet_temp_c must be a finite "
+                f"temperature in °C; got {temp_c!r}")
+        if self.temperature_c is None:
+            raise MagnetTemperatureError(
+                f"magnet {self.name!r} carries no `temperature_c`, so there is "
+                f"no reference temperature to correct from — it cannot be "
+                f"evaluated at {t:g} °C. Add `temperature_c` (the temperature "
+                f"the card's Br and B-H curve were measured at) to the card.")
+        dT = t - float(self.temperature_c)
+        if dT == 0.0:
+            return replace(self)
+        if self.alpha_br_pct_per_k is None or self.beta_hcj_pct_per_k is None:
+            raise MagnetTemperatureError(
+                f"magnet {self.name!r} is quoted at "
+                f"{float(self.temperature_c):g} °C and was asked for {t:g} °C, "
+                f"but it carries no temperature coefficients "
+                f"(`alpha_br_pct_per_k`, `beta_hcj_pct_per_k`). Add them to "
+                f"the card, or run this magnet at its own temperature.")
+        a_fac = 1.0 + float(self.alpha_br_pct_per_k) / 100.0 * dT
+        b_fac = 1.0 + float(self.beta_hcj_pct_per_k) / 100.0 * dT
+        if a_fac <= 0.0 or b_fac <= 0.0:
+            raise MagnetTemperatureError(
+                f"magnet {self.name!r}: {t:g} °C is {dT:+.0f} K from the card's "
+                f"{float(self.temperature_c):g} °C reference, which the linear "
+                f"model takes past Br = 0 or Hcj = 0 (Br x{a_fac:.3f}, "
+                f"Hcj x{b_fac:.3f}). The material is above its Curie / total-"
+                f"loss point in this model — refuse rather than return a "
+                f"negative magnet.")
+
+        Br_new = float(self.Br) * a_fac
+        # Hc: keep whatever the card's own number MEANS.  The NdFeB cards define
+        # it as Br/(mu0*mu_rec) — the linear model's normal coercivity, which is
+        # what the FEM magnet source is built from — and the identity has to
+        # survive the temperature change.  The Fe16N2 cards do NOT: their Hc is
+        # read off the curve's B = 0 crossing and is a third of that, so
+        # recomputing it from the identity would triple a number that means
+        # something else.  Deciding by what the card ACTUALLY holds (rather than
+        # by its mu_rec band) also keeps the mapping continuous at dT -> 0.
+        mu_rec = float(self.mu_rec) if float(self.mu_rec) > 0 else 1.0
+        Hc_ident = float(self.Br) / (MU0 * mu_rec)
+        if self.Hc and abs(Hc_ident - float(self.Hc)) <= 0.01 * abs(float(self.Hc)):
+            Hc_new = Br_new / (MU0 * mu_rec)          # the linear model's identity
+        else:
+            Hc_new = float(self.Hc) * a_fac           # …else it scales with Br
+
+        return replace(
+            self,
+            Br=Br_new,
+            Hc=Hc_new,
+            bh_curve=_scale_demag_curve(self.bh_curve, a_fac, b_fac),
+            temperature_c=t,
+            # The coefficients are referenced to T_ref, so the copy's own pair
+            # must be re-referenced to ITS temperature or a second call would
+            # apply the wrong slope.  (Same algebra as the YAML header's
+            # coeff(T_ref) = coeff(20)/(1 + coeff(20)*(T_ref - 20)).)
+            alpha_br_pct_per_k=float(self.alpha_br_pct_per_k) / a_fac,
+            beta_hcj_pct_per_k=float(self.beta_hcj_pct_per_k) / b_fac,
+        )
+
+
+#: How close to zero a curve's point[1] must sit for the card to count as
+#: following the "point[0] below zero, point[1] IS the B = 0 crossing"
+#: convention.  The cards that follow it write 0.0000 exactly (N45EH, F45SH,
+#: F52SH); the ones that do not are nowhere near (N52UH's point[1] is at
+#: B = -0.62 T, Fe16N2's at +1.0 T), so the classification is never a close call.
+_B_ZERO_TOL = 0.02      # T
+
+
+def _scale_demag_curve(bh_curve, a_fac: float, b_fac: float) -> List[BHPoint]:
+    """The 2nd-quadrant curve at another temperature.
+
+    Each point goes across through the INTRINSIC curve — J = B - mu0*H, J
+    scaled by the Br factor, H by the Hcj factor, B' = J' + mu0*H' — which is
+    the transform the two datasheet coefficients actually describe.
+
+    The point ORDER is untouched (most negative H first).  What does need care
+    is the convention some cards follow: point[0] below B = 0 and point[1]
+    exactly AT the B = 0 crossing, which is the point ``fem_solver_2d`` and
+    ``simulation/demag.py`` both read as the demagnetisation knee
+    (``bh_curve[1][0]``).  The transform does not preserve that crossing — J and
+    H move by different factors, so a point that sat at B = 0 does not stay
+    there — so for a card that followed the convention the crossing is
+    RE-DERIVED by interpolation on the scaled curve and re-inserted at index 1,
+    and any scaled point that ends up on the far (still-negative) side of it is
+    dropped.  Inserting the crossing is lossless for the demag rule: the
+    interpolated point lies exactly on the piecewise-linear intrinsic curve
+    (J = B - mu0*H is affine in both B and H), so the load-line construction
+    sees the same curve it saw before, only with the knee readable again.
+
+    A card that never followed the convention (N52UH, Fe16N2) is left as the
+    plain scaled curve, and its knee scales by exactly ``b_fac`` — which is what
+    makes the library's own N52UH 100/150 pair reproduce each other exactly.
+    """
+    pts = [(float(h), float(b)) for (h, b) in (bh_curve or [])]
+    if len(pts) < 2:
+        return list(pts)
+    out: List[BHPoint] = []
+    for h, b in pts:
+        j = b - MU0 * h
+        h2 = h * b_fac
+        out.append((h2, j * a_fac + MU0 * h2))
+
+    follows = pts[0][1] <= 0.0 and abs(pts[1][1]) <= _B_ZERO_TOL
+    if not follows:
+        return out
+
+    h_x = None
+    for i in range(len(out) - 1):
+        b0, b1 = out[i][1], out[i + 1][1]
+        if b0 <= 0.0 < b1:
+            h0, h1 = out[i][0], out[i + 1][0]
+            h_x = h0 + (0.0 - b0) / (b1 - b0) * (h1 - h0)
+            break
+    if h_x is None:
+        # No sign change left on the scaled curve (an extrapolation far enough
+        # that the whole 2nd quadrant sits on one side of B = 0).  Nothing to
+        # re-derive; hand back the scaled points rather than invent a knee.
+        return out
+    kept = [p for p in out[1:] if p[0] > h_x]
+    return [out[0], (h_x, 0.0)] + kept
 
 
 @dataclass
@@ -185,6 +410,11 @@ class ConductorMaterial:
     wire_width_mm: Optional[float] = None         # for rectangular wire
     wire_height_mm: Optional[float] = None
 
+    # ── MECHANICAL (added 2026-09-05) — a shaft tube is a conductor here ────
+    youngs_modulus_gpa: Optional[float] = None    # GPa
+    poisson_ratio: Optional[float] = None         # -
+    yield_strength_mpa: Optional[float] = None    # MPa (0.2 % proof)
+
     @property
     def resistivity(self) -> float:
         """Electrical resistivity [Ω·m]."""
@@ -193,18 +423,38 @@ class ConductorMaterial:
 
 @dataclass
 class InsulatorMaterial:
-    """Electrical insulator / dielectric (slot liner, wire enamel).
+    """Electrical insulator / dielectric / non-magnetic STRUCTURAL part.
 
-    EM-inert (sigma≈0, mu_r≈1 → acts like air in the magnetic solve); matters for
-    the thermal model (heat path copper→iron) and for mass/cost.
+    EM-inert in the sense that matters (mu_r ≈ 1 → acts like air in the magnetic
+    solve); matters for the thermal model (heat path copper→iron) and for
+    mass/cost.  ``sigma`` is usually 0 (a insulation) but is NOT assumed to be:
+    a carbon-fibre retaining sleeve conducts a little, and that little is a
+    solved eddy loss the machine has to dissipate.
+
+    The last three fields are MECHANICAL and exist for the rotor sleeve's burst
+    check (hoop stress at speed against the material's strength).  They are
+    optional: a insulation has no reason to carry them and a card that has none
+    simply shows no stress row.
     """
     name: str
     description: str = ""
     sigma: float = 0.0                              # S/m  (≈0, dielectric)
     density: float = 1400.0                         # kg/m³
-    thermal_conductivity: Optional[float] = None    # W/(m·K)
+    thermal_conductivity: Optional[float] = None    # W/(m·K)  through-thickness
+    thermal_conductivity_axial: Optional[float] = None  # W/(m·K)  in-plane
     specific_heat: Optional[float] = None           # J/(kg·K)
     mu_r: float = 1.0                               # relative permeability (~1)
+    tensile_strength_mpa: Optional[float] = None    # MPa, along the fibres
+    youngs_modulus_gpa: Optional[float] = None      # GPa, along the fibres
+    max_service_temp_c: Optional[float] = None      # °C, matrix limit
+    # ── ORTHOTROPY (added 2026-09-05 for the rotor centrifugal solve) ───────
+    # A hoop-wound UD sleeve is stiff ALONG the fibres (youngs_modulus_gpa = E1,
+    # the hoop direction) and an order of magnitude softer across them.  Without
+    # these two the solve would treat the sleeve as isotropic at E1 and
+    # under-read both the rotor's radial growth and the magnet clamp.
+    youngs_modulus_transverse_gpa: Optional[float] = None  # GPa, E2 (radial)
+    shear_modulus_gpa: Optional[float] = None       # GPa, G12
+    poisson_ratio: Optional[float] = None           # -, nu12
 
 
 @dataclass
@@ -265,6 +515,9 @@ def _parse_steel(name: str, raw: dict) -> SteelMaterial:
         core_loss_curve_unit=raw.get("core_loss_curve_unit", "w_per_kg"),
         bh_curve=bh,
         core_loss_curves=cls_curves,
+        youngs_modulus_gpa=raw.get("youngs_modulus_gpa"),
+        poisson_ratio=raw.get("poisson_ratio"),
+        yield_strength_mpa=raw.get("yield_strength_mpa"),
     )
 
 
@@ -281,6 +534,16 @@ def _parse_magnet(name: str, raw: dict) -> MagnetMaterial:
         thermal_conductivity=raw.get("thermal_conductivity"),
         specific_heat=raw.get("specific_heat"),
         bh_curve=bh,
+        temperature_c=(float(raw["temperature_c"])
+                       if raw.get("temperature_c") is not None else None),
+        alpha_br_pct_per_k=(float(raw["alpha_br_pct_per_k"])
+                            if raw.get("alpha_br_pct_per_k") is not None else None),
+        beta_hcj_pct_per_k=(float(raw["beta_hcj_pct_per_k"])
+                            if raw.get("beta_hcj_pct_per_k") is not None else None),
+        youngs_modulus_gpa=raw.get("youngs_modulus_gpa"),
+        poisson_ratio=raw.get("poisson_ratio"),
+        tensile_strength_mpa=raw.get("tensile_strength_mpa"),
+        compressive_strength_mpa=raw.get("compressive_strength_mpa"),
     )
 
 
@@ -295,6 +558,9 @@ def _parse_conductor(name: str, raw: dict) -> ConductorMaterial:
         thermal_alpha=raw.get("thermal_alpha"),
         wire_width_mm=raw.get("wire_width_mm"),
         wire_height_mm=raw.get("wire_height_mm"),
+        youngs_modulus_gpa=raw.get("youngs_modulus_gpa"),
+        poisson_ratio=raw.get("poisson_ratio"),
+        yield_strength_mpa=raw.get("yield_strength_mpa"),
     )
 
 
@@ -305,8 +571,15 @@ def _parse_insulator(name: str, raw: dict) -> InsulatorMaterial:
         sigma=float(raw.get("sigma") or 0.0),
         density=float(raw.get("density") or 1400),
         thermal_conductivity=raw.get("thermal_conductivity"),
+        thermal_conductivity_axial=raw.get("thermal_conductivity_axial"),
         specific_heat=raw.get("specific_heat"),
         mu_r=float(raw.get("permeability", 1.0) or 1.0),
+        tensile_strength_mpa=raw.get("tensile_strength_mpa"),
+        youngs_modulus_gpa=raw.get("youngs_modulus_gpa"),
+        max_service_temp_c=raw.get("max_service_temp_c"),
+        youngs_modulus_transverse_gpa=raw.get("youngs_modulus_transverse_gpa"),
+        shear_modulus_gpa=raw.get("shear_modulus_gpa"),
+        poisson_ratio=raw.get("poisson_ratio"),
     )
 
 
@@ -410,6 +683,24 @@ def material_from_dict(category: Category, name: str, d: dict):
     return cls(name=name, **kwargs)
 
 
+#: Library keys that were RENAMED — old spelling → current key.  Every lookup
+#: goes through ``get_material`` (so ``resolve_assigned`` / ``validate_assignment``
+#: too), and it accepts the old name: an assignment stored before the rename —
+#: a duty's materials map in a browser, a saved run's ``?mat=`` payload, a
+#: snapshot key — keeps resolving to the same card instead of failing as an
+#: unknown material.  2026-09-08: the user asked for ONE naming rule for magnets
+#: (``<grade>_<T>C``, no maker prefix), so the Arnold cards lost theirs.
+MATERIAL_ALIASES: Dict[str, str] = {
+    "Arnold_N52UH_150C": "N52UH_150C",
+    "Arnold_N52UH_100C": "N52UH_100C",
+}
+
+
+def canonical_material_name(name: str) -> str:
+    """The current library key for ``name`` — itself when it was never renamed."""
+    return MATERIAL_ALIASES.get(str(name), str(name))
+
+
 def get_material(
     category: Category,
     name: str,
@@ -432,6 +723,7 @@ def get_material(
     0.9
     """
     lib = _load()
+    name = canonical_material_name(name)
     cat_data = lib.get(category)
     if cat_data is None:
         raise KeyError(f"Unknown category '{category}'. Valid: steel, magnet, conductor")
@@ -479,12 +771,32 @@ PART_CATEGORIES: Dict[str, tuple] = {
     "shaft":           ("conductor", "steel"),
     "slot_insulation": ("insulator",),
     "wire_insulation": ("insulator",),
+    # Carbon-fibre retaining ring on the rotor OD.  `insulator` is this
+    # library's category for the non-magnetic structural parts (mu_r 1, mass +
+    # heat + a small solved eddy loss) — see InsulatorMaterial.
+    "sleeve":          ("insulator",),
     "air_gap":         ("coolant",),
     "in_band":         ("coolant",),
     "out_band":        ("coolant",),
 }
 
 _ALL_CATEGORIES = ("steel", "magnet", "conductor", "insulator", "coolant")
+
+#: Parts whose material has a default IN CODE.
+#:
+#: Every machine in the field was saved before the sleeve existed, so no
+#: ``materials:`` block names one — and a part with no assignment falls back to
+#: a bare density constant, which is exactly the "a number appeared from
+#: nowhere" failure this project refuses.  The default names a real library
+#: entry instead, so the density, the conductivity that produces the sleeve's
+#: eddy loss and the tensile strength the burst check quotes all come from one
+#: record the user can open and edit.
+#:
+#: It is applied ONLY where a sleeve actually exists (thickness > 0): a machine
+#: without one must keep the byte-identical assignment map it has always had,
+#: or every fingerprint that hashes the materials would move and mark stored
+#: duty results as computed on an older build.
+DEFAULT_PART_MATERIAL: Dict[str, str] = {"sleeve": "T800_UD_60"}
 
 
 def resolve_assigned(part: str, name: str):
@@ -541,6 +853,15 @@ def get_steel(name: str) -> SteelMaterial:
 def get_magnet(name: str) -> MagnetMaterial:
     """Shorthand for ``get_material('magnet', name)``."""
     return get_material("magnet", name)  # type: ignore[return-value]
+
+
+def magnet_at(name: str, temp_c: Optional[float]) -> MagnetMaterial:
+    """The magnet card ``name`` evaluated at ``temp_c`` °C.
+
+    ``temp_c=None`` is the card exactly as the library states it — the path
+    every existing caller is on, and the one that must stay bit-identical.
+    """
+    return get_magnet(name).at_temperature(temp_c)
 
 
 def get_conductor(name: str) -> ConductorMaterial:

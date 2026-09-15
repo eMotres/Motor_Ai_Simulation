@@ -643,31 +643,31 @@ def copper_ac_dims(geo: dict, coil_temp_c: float, f_elec_hz: float,
 
     Returns ``(sigma, d_radial, d_tangential)`` in SI.
 
-    Two caps, whichever bites first:
-      * ``wire_split`` — the wide flat bar is wound as N insulated, transposed
-        strips across its WIDTH, so the width-direction loops see w/N and that
-        loss term falls as N^2. Assumes ideal transposition (no circulating
-        current between strips).
-      * two skin depths — beyond that the field does not reach the middle of the
-        conductor and a larger dimension buys no extra loss.
+    The conductor is ONE STRIP: ``wire_width × wire_height``.  ``wire_split``
+    does NOT divide ``wire_width`` any more — since 2026-09-08 the split is
+    geometry, N strips of ``wire_width`` laid side by side with
+    2·``wire_spacing_x`` of enamel between them, and the user narrows the wire
+    himself when he splits a bar.  A machine that used to be one 9 mm bar is
+    now ``wire_width = 4.5, wire_split = 2``, and the width-direction proximity
+    term falls as (9/4.5)² = 4 because THE WIRE IS NARROWER, not because a
+    transposition was assumed.
 
-    ONLY THE MODELLED PATH SEES ``wire_split``.  These dimensions feed
-    ``proximity_loss_series``, i.e. the copper AC term reported when the coupled
-    σ·∂A/∂t solve did NOT run.  When it DID run, the reported Cu AC is the
-    solved ∫σE² of the conductor polygons the mesher was given — and the mesher
-    is given the whole bar, because ``wire_split`` is an electrical subdivision
-    (insulated, transposed strips) with no CAD geometry behind it.  So the
-    solved value models SOLID drawn conductors and is an OVER-read by up to
-    ``wire_split²`` on the width-direction term.  That is not fixed by changing
-    the number here — it needs the strips in the mesh — so it is REPORTED
-    instead: ``routes/simulation`` flags it on the summary and the Stranded
-    (copper) tile's tooltip says so.
+    The one cap left is two skin depths — beyond that the field does not reach
+    the middle of the conductor and a larger dimension buys no extra loss.
+
+    BOTH copper-AC paths now see the same strip.  These dimensions feed
+    ``proximity_loss_series``, i.e. the term reported when the coupled σ·∂A/∂t
+    solve did NOT run.  When it DID run, the reported Cu AC is the solved ∫σE²
+    of the conductor polygons the mesher was given — and the mesher is now given
+    the STRIPS, one meshed body each, each with its own imposed net current.  So
+    the solved value models the drawn strip, and the old
+    ``cu_ac_solved_ignores_wire_split`` over-read (the solve was handed the
+    whole bar while this function modelled strips) is gone.
     """
     rho = rho_cu_20 * (1.0 + alpha_cu * (float(coil_temp_c) - 20.0))
     omega = 2.0 * math.pi * max(1e-6, float(f_elec_hz))
     delta = math.sqrt(2.0 * rho / (omega * mu0))
-    n_split = max(1, int(round(float(geo.get("wire_split", 1) or 1))))
-    d_r = min(float(geo.get("wire_width", 5.0)) * 1e-3 / n_split, 2.0 * delta)
+    d_r = min(float(geo.get("wire_width", 5.0)) * 1e-3, 2.0 * delta)
     d_t = min(float(geo.get("wire_height", 0.8)) * 1e-3, 2.0 * delta)
     return 1.0 / rho, d_r, d_t
 

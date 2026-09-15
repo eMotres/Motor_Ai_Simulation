@@ -15,6 +15,7 @@ tests use a temp file.
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 
@@ -141,6 +142,66 @@ def test_atomic_write_leaves_no_partial_document(tmp_path):
     assert not list(tmp_path.glob("*.tmp")), "temp file left behind"
 
 
+def test_atomic_write_retries_a_locked_replace(tmp_path, monkeypatch):
+    """Windows fails the rename while ANY reader holds the destination open.
+
+    Measured 2026-09-03: two ``motor_catalog.json.tmp -> motor_catalog.json``
+    PermissionErrors on the live API, and both writes were simply lost.  The
+    replace is retried; a lock that clears within the budget must be invisible
+    to the caller.
+    """
+    from motor_ai_sim import json_store as js
+
+    p = tmp_path / "store.json"
+    p.write_text(json.dumps({"x": 0}), encoding="utf-8")
+    monkeypatch.setattr(js, "_REPLACE_BACKOFF_S", 0.0)
+    monkeypatch.setattr(js, "_REPLACE_BACKOFF_MAX_S", 0.0)
+
+    real_replace = os.replace
+    state = {"left": 4}
+
+    def flaky(src, dst):
+        if state["left"] > 0:
+            state["left"] -= 1
+            raise PermissionError(32, "being used by another process")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(js.os, "replace", flaky)
+    js.atomic_write_json(p, {"x": 7, "y": "kept"})
+
+    assert state["left"] == 0, "the retries did not happen"
+    assert js.read_json(p, None) == {"x": 7, "y": "kept"}
+    assert not list(tmp_path.glob("*.tmp")), "temp file left behind"
+
+
+def test_atomic_write_falls_back_in_place_rather_than_losing_the_document(
+        tmp_path, monkeypatch, caplog):
+    """A replace that NEVER succeeds must not end in a silently dropped write."""
+    import logging
+
+    from motor_ai_sim import json_store as js
+
+    p = tmp_path / "store.json"
+    p.write_text(json.dumps({"x": 0}), encoding="utf-8")
+    monkeypatch.setattr(js, "_REPLACE_BACKOFF_S", 0.0)
+    monkeypatch.setattr(js, "_REPLACE_BACKOFF_MAX_S", 0.0)
+
+    tries = {"n": 0}
+
+    def always_locked(src, dst):
+        tries["n"] += 1
+        raise PermissionError(32, "being used by another process")
+
+    monkeypatch.setattr(js.os, "replace", always_locked)
+    with caplog.at_level(logging.WARNING, logger="motor_ai_sim.json_store"):
+        js.atomic_write_json(p, {"x": 42})
+
+    assert tries["n"] == js._REPLACE_TRIES, "the whole retry budget was not used"
+    assert js.read_json(p, None) == {"x": 42}, "the document was LOST"
+    assert any(str(p) in r.getMessage() for r in caplog.records), (
+        "the in-place fallback was not logged with the file it touched")
+
+
 def test_preset_settings_save_does_not_clobber_a_concurrent_write(tmp_path,
                                                                   monkeypatch):
     """End-to-end on the AUTOSAVE path — the one that fires on every edit.
@@ -214,7 +275,12 @@ def test_card_metrics_refuse_a_run_from_another_machine(tmp_path, monkeypatch):
     (cfg_dir / ".last_transient.json").write_text(json.dumps(
         {"result": {"T_avg_Nm": 9.99, "geo_fingerprint": "machine_A_fp"}}),
         encoding="utf-8")
-    monkeypatch.setattr(pr, "_ROOT", tmp_path)
+    # The run file sits beside the CONFIG this process is pointed at, not beside
+    # the repo root: the writer (routes/simulation) resolves it from
+    # ``DEFAULT_CONFIG_PATH``, and since 2026-09-15 so does this reader — pinned
+    # to ``_ROOT`` it read the last run of whatever machine the OTHER process had
+    # solved, and stamped a saved card with that torque.
+    monkeypatch.setattr(pr, "_CONFIG_PATH", cfg_dir / "motor_config.yaml")
 
     monkeypatch.setattr(sim, "_geometry_fingerprint", lambda *a, **k: "machine_B_fp")
     assert pr._last_transient_summary() is None, \

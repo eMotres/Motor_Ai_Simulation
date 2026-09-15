@@ -31,12 +31,24 @@ import json
 import logging
 import os
 import threading
+import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, TypeVar
 
 log = logging.getLogger(__name__)
 
 T = TypeVar("T")
+
+# ``os.replace`` retry budget.  On Windows a rename fails with PermissionError
+# while ANY other handle is open on the destination — and these stores are read
+# on request paths, so a concurrent reader (or an editor, or the virus scanner)
+# is normal, not exceptional.  Measured 2026-09-03: two
+# ``motor_catalog.json.tmp -> motor_catalog.json`` PermissionErrors, and BOTH
+# writes were simply lost.  10 tries with exponential backoff ≈ 1.9 s, which is
+# far longer than a reader holds the file.
+_REPLACE_TRIES = 10
+_REPLACE_BACKOFF_S = 0.05
+_REPLACE_BACKOFF_MAX_S = 0.25
 
 # path -> lock.  Guarded by _LOCKS_GUARD so two threads racing to create the
 # lock for the same file cannot end up with one lock each (which would lock
@@ -73,13 +85,53 @@ def read_json(path: Path, default: Any = None) -> Any:
 
 
 def atomic_write_json(path: Path, data: Any, *, indent: int = 2) -> None:
-    """Write via temp file + replace, so a reader never sees a partial document."""
+    """Write via temp file + replace, so a reader never sees a partial document.
+
+    The replace is RETRIED, and if it still cannot happen the document is
+    written in place instead.  A lost write is the worst outcome available
+    here: the caller has already merged its change into the latest document
+    (see ``mutate_json``) and believes it is saved, so a silently dropped
+    ``os.replace`` erases an edit AND reports success.  A torn read, which the
+    in-place fallback risks for a reader that is mid-parse, is recoverable —
+    ``read_json`` treats an unparsable file as empty and the next write fixes
+    it — and it happens under ``lock_for(path)``, so no other writer in THIS
+    process can be interleaved with it.  The fallback is logged as a WARNING
+    naming the file, because "your catalog was written the unsafe way" is
+    something the owner has to be able to find afterwards.
+    """
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
+    text = json.dumps(data, indent=indent, ensure_ascii=False)
     tmp = p.with_suffix(p.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, indent=indent, ensure_ascii=False),
-                   encoding="utf-8")
-    os.replace(tmp, p)
+    tmp.write_text(text, encoding="utf-8")
+    last: Optional[BaseException] = None
+    delay = _REPLACE_BACKOFF_S
+    for attempt in range(1, _REPLACE_TRIES + 1):
+        try:
+            os.replace(tmp, p)
+            if attempt > 1:
+                log.info("%s: os.replace succeeded on attempt %d "
+                         "(the file was locked by another reader)",
+                         p.name, attempt)
+            return
+        except PermissionError as e:      # Windows: destination handle open
+            last = e
+            if attempt < _REPLACE_TRIES:
+                time.sleep(delay)
+                delay = min(_REPLACE_BACKOFF_MAX_S, delay * 2)
+    # Still locked after the whole budget: write in place rather than lose the
+    # document.  Under the store lock, so this process cannot be racing itself.
+    with lock_for(p):
+        p.write_text(text, encoding="utf-8")
+    log.warning("%s: os.replace stayed locked after %d tries (%s) — wrote the "
+                "document IN PLACE under the store lock instead of losing it; "
+                "a reader parsing the file at that instant may have seen it "
+                "truncated and will recover on the next read",
+                p, _REPLACE_TRIES, last)
+    try:
+        tmp.unlink()
+    except OSError:
+        pass
 
 
 def mutate_json(path: Path, mutator: Callable[[Any], Optional[Any]], *,

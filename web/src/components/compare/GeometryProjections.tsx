@@ -99,7 +99,7 @@ const CrossSectionReal: React.FC<{ geoStr: string }> = ({ geoStr }) => {
 
   return (
     <Box sx={{ position: 'relative', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <canvas ref={canvasRef} width={720} height={720} style={{ height: '100%', width: 'auto', aspectRatio: '1 / 1', display: 'block', opacity: state === 'loading' ? 0.4 : 1, transition: 'opacity .15s' }} />
+      <canvas ref={canvasRef} width={720} height={720} style={{ height: '100%', width: 'auto', maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', aspectRatio: '1 / 1', display: 'block', opacity: state === 'loading' ? 0.4 : 1, transition: 'opacity .15s' }} />
       {state === 'loading' && <CircularProgress size={20} sx={{ color: '#3b82f6', position: 'absolute', top: '50%', left: '50%', mt: '-10px', ml: '-10px' }} />}
       {state === 'error' && <Typography sx={{ fontSize: 11, color: '#f87171', position: 'absolute', top: '46%', left: 0, right: 0 }}>geometry preview needs the backend</Typography>}
     </Box>
@@ -152,7 +152,8 @@ const SideView: React.FC<{ OD_mm: number; L_mm: number }> = ({ OD_mm, L_mm }) =>
   }, [OD_mm, L_mm, W, stackW, stackH, OD]);
 
   return <canvas ref={canvasRef} width={W} height={H}
-    style={{ height: '100%', width: 'auto', aspectRatio: `${W} / ${H}`, display: 'block' }} />;
+    style={{ height: '100%', width: 'auto', maxWidth: '100%', maxHeight: '100%',
+             objectFit: 'contain', aspectRatio: `${W} / ${H}`, display: 'block' }} />;
 };
 
 const GeometryProjections: React.FC<{ ref0: ReferenceMotor; knobs: Knobs }> = ({ ref0, knobs }) => {
@@ -185,15 +186,20 @@ const GeometryProjections: React.FC<{ ref0: ReferenceMotor; knobs: Knobs }> = ({
   const numPoles  = gnum('num_poles') ?? ref0.geo.numPoles;
 
   return (
-    <Box sx={{ display: 'flex', gap: 2, alignItems: 'stretch', justifyContent: 'center', height: 'min(88vh, 820px)' }}>
-      <Box sx={{ ...PANEL, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+    // Compact, left-aligned (user 2026-08-25: "подвинем влево и сделаем
+    // покомпактнее — батарея справа"): the parent row places the battery
+    // beside this block, so it must not claim the full viewport height.
+    <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'stretch', justifyContent: 'flex-start', height: 'min(46vh, 420px)' }}>
+      {/* overflow hidden + contained canvases: the images must never bleed
+          into the neighbouring panel (user: "чтобы не пересекались"). */}
+      <Box sx={{ ...PANEL, display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden' }}>
         <Typography sx={LABEL}>Cross-section (XY) — real geometry</Typography>
         <Typography sx={SUB}>{knobs.N} turns/slot · {knobs.wireH_mm.toFixed(1)} mm wire · {numSlots} slots / {numPoles} poles</Typography>
         <Box sx={{ flex: 1, minHeight: 0, mt: 0.5 }}>
           <CrossSectionReal geoStr={geoStr} />
         </Box>
       </Box>
-      <Box sx={{ ...PANEL, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+      <Box sx={{ ...PANEL, display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden' }}>
         <Typography sx={LABEL}>Side view — stack length</Typography>
         <Typography sx={SUB}>L = {L_mm.toFixed(0)} mm · Ø{OD_mm.toFixed(0)} mm</Typography>
         <Box sx={{ flex: 1, minHeight: 0, mt: 0.5, display: 'flex', justifyContent: 'center' }}>

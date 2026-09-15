@@ -15,14 +15,14 @@ import {
 import {
   ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts';
-import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import { useMotorStore } from '../../stores/motorStore';
 import SectionLabel from '../common/SectionLabel';
 import HelpTip from '../common/HelpTip';
 import { autoSaveAppliedDesign, appliedSaveLine } from '../../lib/appliedAutoSave';
+import { copyTsv, downloadCsv, downloadXlsx, stampName } from '../../lib/xlsxExport';
 import type { AppliedSaveResult } from '../../lib/appliedAutoSave';
 
-const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
+const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
 function useLS<T>(key: string, def: T): [T, (v: T) => void] {
   const [v, setV] = useState<T>(() => {
@@ -44,6 +44,35 @@ const readLS = (key: string, def: number): number => {
 const readBool = (key: string, def: boolean): boolean => {
   try { return JSON.parse(localStorage.getItem(key) ?? String(def)) === true; } catch { return def; }
 };
+// The Simulation summary shows torque, power and voltages rescaled by the
+// machine's 3-D end-effect factor k_flux while its "3D" button is on
+// (SummaryTable.tsx, default on).  This panel showed the raw 2-D T·ω, so the
+// two tabs disagreed by exactly k: the user scaled the current off the sweep
+// to land on 500 kW and Simulation answered 487.46 = 500 × 0.9724
+// (2026-09-08).  Same switch, same k, read from the last Simulation summary of
+// the machine; null = show 2-D (switch off, or no passport yet).
+const readApply3dK = (): number | null => {
+  try {
+    if (localStorage.getItem('sim.apply3d') === '0') return null;
+    const s = JSON.parse(localStorage.getItem('sim.lastSummary') || 'null');
+    const k = Number(s?.end3d?.k_flux);
+    return Number.isFinite(k) && k > 0 && k <= 1.2 ? k : null;
+  } catch { return null; }
+};
+// What the 3-D factor does to one design's numbers — the SAME rule as the
+// Simulation summary: flux-proportional quantities × k, losses kept 2-D,
+// η recomputed from the corrected shaft power.
+const scale3d = (k: number | null, T2: number, P2_kW: number, Vpk2: number,
+                 Vl2: number, KV2: number, td2: number, pd2: number,
+                 eff2: number, ploss_W: number) => {
+  if (k == null) return { T: T2, P: P2_kW, Vpk: Vpk2, Vl: Vl2, KV: KV2, td: td2, pd: pd2, eff: eff2 };
+  const P = P2_kW * k;
+  return {
+    T: T2 * k, P, Vpk: Vpk2 * k, Vl: Vl2 * k, KV: KV2 > 0 ? KV2 / k : KV2,
+    td: td2 * k, pd: pd2 * k,
+    eff: (P > 0 && ploss_W > 0) ? 100 * (P * 1000) / (P * 1000 + ploss_W) : eff2,
+  };
+};
 
 const GCOL = ['#22c55e', '#3b82f6', '#a855f7', '#f59e0b', '#ef4444', '#14b8a6', '#ec4899', '#eab308', '#60a5fa', '#f97316'];
 const OP_VARS = new Set(['current_a', 'gamma_deg']);
@@ -61,27 +90,57 @@ const SweepTable: React.FC<{ points: any[]; rpm: number; vdcFactor?: number; sel
   ({ points, rpm, vdcFactor, selectedPk, onPick }) => {
   const vdcF = vdcFactor || (1 / Math.sqrt(3));   // V_dc = V_peak / mod_factor (SVPWM → ×√3)
   const omega = 2 * Math.PI * (rpm || 4000) / 60;
+  const k3d = readApply3dK();
   const rows = useMemo(() => (points || [])
     .filter(p => p && p.feasible && p.T_em_Nm != null)
     .map(p => {
-      const P = (Number(p.T_em_Nm) || 0) * omega / 1000;          // kW
+      // P: the point's OWN solved P_mech_W (T·ω at the rpm the sweep actually ran
+      // at) — the T·ω fallback uses the CURRENT sim.rpm, which drifts if the user
+      // changed rpm after the sweep, so it only covers pre-P_mech_W stored results.
+      const P2 = p.P_mech_W != null ? Number(p.P_mech_W) / 1000
+                                    : (Number(p.T_em_Nm) || 0) * omega / 1000;   // kW, 2-D
       const mass = Number(p.mass_total_kg) || 0;
-      const td = Number(p.torque_per_mass_Nm_kg) || 0;
+      const td2 = Number(p.torque_per_mass_Nm_kg) || 0;
       const I = Number(p.current_a) || 0, g = Number(p.gamma_deg) || 0;
-      const eff = (Number(p.efficiency) || 0) * 100;
+      const eff2 = (Number(p.efficiency) || 0) * 100;
+      const ploss = Number(p.P_loss_total_W) || 0;
+      const pd2 = p.power_per_mass_W_kg != null ? Number(p.power_per_mass_W_kg) / 1000
+                                               : (mass > 0 ? P2 / mass : 0);
+      // 3-D view (same k and rule as the Simulation summary), 2-D kept under raw2d
+      // so applyPoint pushes the solver's own numbers and lets the summary scale them.
+      const s3 = scale3d(k3d, Number(p.T_em_Nm) || 0, P2, Number(p.V_peak) || 0,
+                         Number(p.V_line_peak_V) || 0, Number(p.KV_rpm_per_V_line) || 0,
+                         td2, pd2, eff2, ploss);
+      const { T, P, eff, Vpk, td, pd } = s3;
       return {
         ov: p.overrides || {}, overrides: p.overrides || {}, I, g, x: td, y: eff,
-        T: Number(p.T_em_Nm) || 0, P, eff, Vpk: Number(p.V_peak) || 0,
+        T, P, eff, Vpk,
+        // Solved terminal numbers carried through UNDER THE BACKEND NAMES so
+        // applyPoint can push them verbatim instead of re-synthesizing them from
+        // sinusoid identities (which over-read V_line peak — triplens cancel).
+        V_line_peak_V: s3.Vl, KV_rpm_per_V_line: s3.KV,
+        P_mech_W: P * 1000, power_per_mass_W_kg: pd * 1000,
+        raw2d: { T: Number(p.T_em_Nm) || 0, P_mech_W: p.P_mech_W, Vpk: Number(p.V_peak) || 0,
+                 V_line_peak_V: p.V_line_peak_V, KV_rpm_per_V_line: p.KV_rpm_per_V_line,
+                 td: td2, power_per_mass_W_kg: p.power_per_mass_W_kg, eff: eff2 },
+        k3d,
+        rpm: p.rpm,   // absent today (refine result omits it) — kept for when it lands
         ripple: Number(p.T_ripple_pct) || 0, mass, td,
-        pd: mass > 0 ? P / mass : 0, ploss: Number(p.P_loss_total_W) || 0, core: Number(p.P_fe_W) || 0,
+        pd,
+        ploss, core: Number(p.P_fe_W) || 0,
         stranded: Number(p.P_cu_W) || 0,
         strandedDc: Number(p.P_cu_dc_W) || 0, strandedAc: Number(p.P_cu_ac_W) || 0,
         solid: (Number(p.P_mag_W) || 0) + (Number(p.P_shaft_W) || 0),
+        // Eddy-settle verdict (2026-09-07).  `undefined` = the point predates
+        // the flag and says nothing; a point that DID say so and said False
+        // has start-up values in `solid`, `ploss` and `eff` — see EDDY_NOTE.
+        settled: typeof p.eddy_settled === 'boolean' ? p.eddy_settled : undefined,
+        settleResid: p.eddy_settle_residual == null ? null : Number(p.eddy_settle_residual),
         // Stable unique key = (geometry, operating-point) — SAME in the chart, so
         // clicking a point highlights its row and vice-versa (no float-round drift).
         pk: `g${p.geom_id ?? 0}_o${p.op_index ?? 0}`,
       };
-    }), [points, omega]);
+    }), [points, omega, k3d]);
 
   const cols = useMemo<SweepTableCol[]>(() => {
     const varied = (vals: any[]) => new Set(vals.map(v => Math.round(Number(v) * 1e4) / 1e4)).size > 1;
@@ -105,11 +164,22 @@ const SweepTable: React.FC<{ points: any[]; rpm: number; vdcFactor?: number; sel
       { id: 'cuAc', label: 'Cu AC (W)', get: r => r.strandedAc, fmt: v => v.toFixed(1) },
       { id: 'solid', label: 'solid (W)', get: r => r.solid, fmt: v => v.toFixed(1) },
     );
+    // ── DID THE EDDY TRANSIENT SETTLE? (user's sweep, 2026-09-07) ─────────
+    // Only when the points actually SAY — an older stored result carries no
+    // verdict, and printing ✓ for silence would be a claim nobody made.
+    // Sortable like everything else: settled sorts as −1 so one click groups
+    // every flagged design together, ahead of the biggest residual.
+    if (rows.some(r => r.settled !== undefined))
+      c.push({ id: 'eddy', label: 'eddy', get: r => (
+        r.settled === undefined ? -2 : r.settled ? -1
+          : (r.settleResid == null ? 1e4 : r.settleResid * 100)),
+        fmt: v => (v === -2 ? '·' : v < 0 ? '✓' : v >= 1e4 ? '✗' : `✗ ${v.toFixed(1)}%`) });
     return c;
   }, [rows, vdcF]);
 
   const [sortId, setSortId] = useState('ripple');
   const [dir, setDir] = useState<1 | -1>(1);
+  const [copied, setCopied] = useState<string | null>(null);
   const sorted = useMemo(() => {
     const col = cols.find(c => c.id === sortId) || cols[cols.length - 1];
     return col ? [...rows].sort((a, b) => (col.get(a) - col.get(b)) * dir) : rows;
@@ -118,10 +188,29 @@ const SweepTable: React.FC<{ points: any[]; rpm: number; vdcFactor?: number; sel
 
   if (!rows.length) return null;
   const th: React.CSSProperties = { position: 'sticky', top: 0, cursor: 'pointer', padding: '4px 7px', textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid var(--line)', userSelect: 'none' };
+  // Export (user 2026-09-03): the table as shown — same columns, current sort,
+  // FULL-precision numbers (the on-screen rounding is display only).
+  const exportHeader = cols.map(c => c.label);
+  const exportRows = () => sorted.map(r => cols.map(c => { const v = c.get(r); return Number.isFinite(v) ? v : null; }));
+  const exportName = () => stampName(`sweep_${rows.length}pts`);
+  const doCopy = async () => {
+    const ok = await copyTsv(exportHeader, exportRows());
+    setCopied(ok ? 'copied — paste into a Google Sheet (Ctrl+V)' : 'clipboard blocked — use Excel/CSV');
+    setTimeout(() => setCopied(null), 4000);
+  };
+  const xBtn: React.CSSProperties = { fontSize: 10, padding: '0 6px', border: '1px solid var(--line)', borderRadius: 3, cursor: 'pointer', color: 'var(--text-2)', background: 'transparent', marginLeft: 4 };
   return (
     <Box sx={{ mt: 1.5 }}>
-      <Typography sx={{ fontSize: 11, color: 'var(--text-2)', mb: 0.5 }}>
-        All swept designs ({rows.length}) — <span style={{ color: '#93c5fd' }}>variables</span> + outputs · click a column to sort
+      <Typography component="div" sx={{ fontSize: 11, color: 'var(--text-2)', mb: 0.5, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 0.5 }}>
+        <span>All swept designs ({rows.length}) — <span style={{ color: '#93c5fd' }}>variables</span> + outputs · click a column to sort</span>
+        <span style={{ flex: 1 }} />
+        <button type="button" style={xBtn} title="Download as .xlsx — numbers as numbers, header row frozen; opens in Excel and imports into Google Sheets (File → Import)"
+          onClick={() => downloadXlsx(exportName(), exportHeader, exportRows(), 'Sweep')}>⭳ Excel</button>
+        <button type="button" style={xBtn} title="Download as UTF-8 CSV (comma, dot decimal)"
+          onClick={() => downloadCsv(exportName(), exportHeader, exportRows())}>⭳ CSV</button>
+        <button type="button" style={xBtn} title="Copy the table to the clipboard as tab-separated text — open a Google Sheet, click A1, paste"
+          onClick={() => void doCopy()}>⎘ Google Sheets</button>
+        {copied && <span style={{ fontSize: 10, color: copied.startsWith('copied') ? '#34d399' : '#fbbf24' }}>{copied}</span>}
       </Typography>
       <Box sx={{ overflowX: 'auto', border: '1px solid var(--line-soft)', borderRadius: 1 }}>
         <table style={{ borderCollapse: 'collapse', fontSize: 10.5, width: '100%', fontFamily: 'var(--font-mono, monospace)' }}>
@@ -168,6 +257,10 @@ const SweepTooltip: React.FC<any> = ({ active, payload }) => {
       {ovKeys.length > 0 && (
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 10, rowGap: 1,
           marginTop: 3, paddingTop: 3, borderTop: '1px solid var(--line-soft)', fontSize: 10 }}>
+          {/* The value shown IS the one the FEM solved: a design outside a
+              closed-form bound (a winding that will not fit the slot) is
+              rejected before the eval, never pulled back to the bound and
+              solved under the requested label. */}
           {ovKeys.map(k => (
             <span key={k} style={{ color: 'var(--text-3)', whiteSpace: 'nowrap' }}>
               {k} = <b style={{ color: 'var(--text-1)' }}>{_fmtVar(ov[k])}</b>
@@ -178,6 +271,14 @@ const SweepTooltip: React.FC<any> = ({ active, payload }) => {
       <div style={{ color: '#a855f7', marginTop: 3 }}>η = {d.y.toFixed(2)} %</div>
       <div style={{ color: '#3b82f6' }}>{d.x.toFixed(2)} N·m/kg</div>
       <div style={{ color: 'var(--text-2)' }}>T = {d.T?.toFixed?.(1)} N·m · ripple {d.ripple?.toFixed?.(1)} %</div>
+      {/* The hollow marker, named (2026-09-07). */}
+      {d.settled === false && (
+        <div style={{ color: '#fbbf24', marginTop: 2 }}>
+          ⚠ eddy transient not settled{d.settleResid != null
+            ? ` (${(Number(d.settleResid) * 100).toFixed(1)} % left)` : ''} — η and the
+          magnet/shaft loss here are start-up values
+        </div>
+      )}
     </Box>
   );
 };
@@ -186,6 +287,7 @@ const SweepStudyPanel: React.FC = () => {
   const { sweepConfig, updateGeometryViaApi } = useMotorStore();
   const steps = readLS('sim.stepsPP', 24);   // single source: Simulation "Steps per electrical period"
   const [connectBy, setConnectBy] = useLS<'current_a' | 'gamma_deg'>('connectBy', 'current_a');
+  const [withBaseline, setWithBaseline] = useLS<boolean>('withBaseline', false);
   const [selected, setSelected] = useState<any>(null);   // hand-picked best point
   const [applyMsg, setApplyMsg] = useState<string | null>(null);
   // Where the applied point was ARCHIVED (its own motor) — or why it was not.
@@ -217,7 +319,20 @@ const SweepStudyPanel: React.FC = () => {
   const adoptProgress = (st: any) => {
     const now = Date.now() / 1000;
     const lv = liveRef.current;
-    if (!lv.t0) { lv.t0 = Number(st.ts_start) || now; lv.lastDone = st.done ?? 0; lv.lastDoneT = now; }
+    if (!lv.t0) {
+      // Re-entering the tab mid-run (user 2026-09-06: "вышел из sweep, зашёл
+      // обратно и опять индикатор начал с начала — уже не первый раз"): the
+      // in-flight points did NOT start now.  Anchor the current-point clock to
+      // when they really started — the run start for the first batch, the
+      // backend's measured cadence for later ones — so the bar and the ETA
+      // continue instead of restarting from zero on every mount.
+      const t0 = Number(st.ts_start) || now;
+      const done = st.done ?? 0;
+      const w = Math.max(1, Number(st.workers) || 1);
+      const per = Number(st.s_per_eval) || 0;
+      const batchStart = done > 0 && per > 0 ? t0 + Math.floor(done / w) * per : t0;
+      lv.t0 = t0; lv.lastDone = done; lv.lastDoneT = Math.min(now, Math.max(t0, batchStart));
+    }
     if ((st.done ?? 0) !== lv.lastDone) { lv.lastDone = st.done ?? 0; lv.lastDoneT = now; }
     setProgress({ done: st.done ?? 0, total: st.total ?? 1, cached: st.cached ?? 0,
                   ts_start: st.ts_start, workers: st.workers, s_per_eval: st.s_per_eval });
@@ -255,6 +370,29 @@ const SweepStudyPanel: React.FC = () => {
   // Every result now names its run; anything else is not an answer to us.
   const runIdRef = useRef<string>('');
 
+  /** Does a stored result belong to the machine that is loaded RIGHT NOW?
+   *
+   *  User 2026-09-10: "опять косяк, я запускал sweep одних параметров, а в
+   *  результате получил старый sweep от другого мотора".  `.last_scan.json` is
+   *  reloaded into the backend's scan state on every restart, and this panel
+   *  adopted it on mount as its chart — variable cards and all — with nothing
+   *  saying it was computed on a different motor.  The result now carries the
+   *  fingerprint of the machine it was solved on (the SAME one the eval cache
+   *  is keyed by), and `machine_now` says what is loaded; a mismatch is a
+   *  foreign chart and is not shown.
+   *
+   *  Unstamped (a result from before this existed) is treated as foreign: a
+   *  chart nobody can attribute is worth less than an empty one. */
+  const sameMachine = (res: any, now: any): boolean => {
+    const a = res?.machine?.fingerprint;
+    const b = now?.fingerprint;
+    return !!a && !!b && String(a) === String(b);
+  };
+  const machineLabel = (m: any): string => {
+    const parts = [m?.die, m?.config, m?.duty].filter(Boolean);
+    return parts.length ? parts.join(' / ') : 'another machine';
+  };
+
   // shared poll loop — used by both run() and the resume-on-mount effect.
   const poll = async (myRunId?: string) => {
     const want = myRunId ?? runIdRef.current;
@@ -270,7 +408,14 @@ const SweepStudyPanel: React.FC = () => {
       if (st.error && mine) { setErr(st.error); break; }
       const res = st.result;
       const resMine = res && (!want || String(res.run_id ?? '') === want);
-      if (resMine && Array.isArray(res.points)) { saveResult(res); break; }
+      if (resMine && Array.isArray(res.points)) {
+        if (!sameMachine(res, st.machine_now)) {
+          setErr(`the result on the backend was computed on ${machineLabel(res.machine)}`
+               + ' — not this machine, so it is not shown.');
+          break;
+        }
+        saveResult(res); break;
+      }
       // Not running, and what is on the server is somebody else's run (or the
       // one restored from disk).  Do NOT display it — wait for ours to appear.
       if (++waitedForStart > 20) {
@@ -281,12 +426,73 @@ const SweepStudyPanel: React.FC = () => {
     }
   };
 
+  // The VARIABLE CARDS of the last sweep come back with its result (user
+  // 2026-09-04: after a crash the chart and the table were restored, but the
+  // cards showed only the default γ / current — the four geometry variables of
+  // the run were gone, and the next "Run sweep" would have swept nothing).
+  // Only when no geometry variable is selected: a set the user has already
+  // built here is never overwritten.  Ranges = the run's min/max/step;
+  // γ and current follow the run's operating points.
+  const [restoredNote, setRestoredNote] = useState<string | null>(null);
+  const restoreVarsFromResult = (res: any) => {
+    try {
+      const vars = Array.isArray(res?.variables) ? res.variables : [];
+      if (!vars.length) return;
+      const cur = useMotorStore.getState().sweepConfig.variations as Record<string, any>;
+      // Restore unless the store already carries EXACTLY the run's variable set
+      // (then its ranges may be the user's edits and are kept).  The old rule —
+      // "skip when ANY geometry variable is active" — let a freshly created
+      // store's default variable (Cut Width 3…6 from the schema defaults) block
+      // the restore of the real run (user 2026-09-07: "опять параметры
+      // переменных оптимизации не восстановились после загрузки").
+      const activeGeo = new Set(Object.entries(cur)
+        .filter(([k, v]: any) => v?.mode !== 'fixed' && !OP_VARS.has(k)).map(([k]) => k));
+      const runGeo = new Set(vars.map((v: any) => v?.name).filter((k: any) => k && !OP_VARS.has(k)));
+      const sameSet = activeGeo.size === runGeo.size && [...activeGeo].every((k) => runGeo.has(k));
+      if (sameSet) return;
+      const next: Record<string, any> = { ...cur };
+      // a default variable the run never named must not survive next to the run's
+      for (const k of activeGeo) if (!runGeo.has(k)) next[k] = { ...next[k], mode: 'fixed' };
+      let n = 0;
+      for (const v of vars) {
+        if (!v?.name || OP_VARS.has(v.name)) continue;
+        const prev = next[v.name] || {};
+        const lo = Number(v.min), hi = Number(v.max);
+        if (!Number.isFinite(lo) || !Number.isFinite(hi)) continue;
+        const step = Number(v.step) > 0 ? Number(v.step)
+          : (Number(prev.step) > 0 ? Number(prev.step) : Math.max((hi - lo) / 4, 1e-3));
+        next[v.name] = { ...prev, mode: 'optimize', min: lo, max: hi, step };
+        n++;
+      }
+      const ops = Array.isArray(res?.operating_points) ? res.operating_points : [];
+      for (const [key, field] of [['gamma_deg', 'gamma_deg'], ['current_a', 'current_a']] as const) {
+        const vals: number[] = ops.map((o: any) => Number(o?.[field])).filter((x: number) => Number.isFinite(x));
+        if (!vals.length) continue;
+        const lo = Math.min(...vals), hi = Math.max(...vals);
+        const uniq: number[] = [...new Set(vals.map((x: number) => Math.round(x * 1e4) / 1e4))].sort((a: number, b: number) => a - b);
+        const prev = next[key] || {};
+        const step = uniq.length > 1 ? Math.round((uniq[1] - uniq[0]) * 1e4) / 1e4
+          : (Number(prev.step) > 0 ? Number(prev.step) : 1);
+        next[key] = { ...prev, mode: hi > lo ? 'optimize' : 'fixed', min: lo, max: hi, step };
+      }
+      if (n > 0) {
+        useMotorStore.getState().setVariations(next);
+        setRestoredNote(`${n} sweep variable${n > 1 ? 's' : ''} restored from the last run`);
+      }
+    } catch { /* a restore is a convenience, never a blocker */ }
+  };
+
   // On mount (page reload): resume a running scan live, or restore the LAST
   // completed sweep so the chart survives a reload (the backend keeps it in
   // memory + persisted to .last_scan.json, loaded on startup).
   useEffect(() => {
     // 1) instant: restore the last chart from localStorage (survives ANY reload).
-    try { const c = localStorage.getItem('sweepStudy.lastResult'); if (c) setResult(JSON.parse(c)); } catch { /* ignore */ }
+    // (the backend's `machine_now` arrives in step 2 and re-checks this — a
+    //  cached chart from another motor is dropped there.)
+    try {
+      const c = localStorage.getItem('sweepStudy.lastResult');
+      if (c) { const r = JSON.parse(c); setResult(r); restoreVarsFromResult(r); }
+    } catch { /* ignore */ }
     // 2) reconcile with the backend: resume a running scan live, or adopt its
     //    persisted result (.last_scan.json, loaded on startup).
     (async () => {
@@ -301,9 +507,18 @@ const SweepStudyPanel: React.FC = () => {
           adoptProgress(st);
           await poll(runIdRef.current); setRunning(false);
         } else if (st.result && Array.isArray(st.result.points)) {
-          // History, not the answer to anything this session asked for.
-          runIdRef.current = String(st.result.run_id ?? '');
-          saveResult(st.result);
+          // History, not the answer to anything this session asked for — and
+          // only ever THIS machine's history (see `sameMachine`).
+          if (sameMachine(st.result, st.machine_now)) {
+            runIdRef.current = String(st.result.run_id ?? '');
+            saveResult(st.result);
+            restoreVarsFromResult(st.result);
+          } else {
+            setResult(null);
+            try { localStorage.removeItem('sweepStudy.lastResult'); } catch { /* ignore */ }
+            setErr(`the stored sweep was computed on ${machineLabel(st.result.machine)}`
+                 + ' — not this machine, so it is not shown. Run the sweep to get one.');
+          }
         }
       } catch { /* ignore */ }
     })();
@@ -329,6 +544,9 @@ const SweepStudyPanel: React.FC = () => {
         body: JSON.stringify({
           variables: scanVars, operating_points: ops, steps_per_period: steps,
           ripple_max_pct: 100, max_geometries: Math.max(1, nGeom),
+          // the un-varied current motor as an extra reference point — one more
+          // full eval, off by default (user 2026-09-04: always stopped at 22/23)
+          with_baseline: withBaseline,
           mesh_size_mm: readLS('mesh.meshSize', 4), min_size_mm: readLS('mesh.minSize', 0.3),
           pole_copy: readBool('mesh.poleCopy', false), torque_filter: readBool('sim.torqueFilter', false),
           n_sectors: Math.max(1, Math.round(readLS('mesh.nSectors', 1))),   // single source: Mesh tab (same as Simulation)
@@ -374,10 +592,12 @@ const SweepStudyPanel: React.FC = () => {
   };
 
   // Group feasible points and join them along the chosen variable (current or γ).
+  const k3dChart = readApply3dK();
   const series = useMemo(() => {
     const pts: any[] = result?.points || [];
     const byCurrent = connectBy !== 'gamma_deg';   // connect along current (group per γ) or along γ (group per current)
     const groups = new Map<string, { label: string; rows: any[] }>();
+    const omegaNow = 2 * Math.PI * readLS('sim.rpm', 4000) / 60;
     for (const p of pts) {
       if (!p.feasible || p.torque_per_mass_Nm_kg == null) continue;
       const gam = typeof p.gamma_deg === 'number' ? p.gamma_deg : (sentOps[p.op_index]?.gamma_deg ?? 0);
@@ -385,15 +605,42 @@ const SweepStudyPanel: React.FC = () => {
       const gi = p.geom_id ?? 0;
       const key = byCurrent ? `${gi}|g${gam}` : `${gi}|i${cur}`;
       const label = byCurrent ? `γ=${gam}°${gi ? ` g${gi}` : ''}` : `I=${cur}A${gi ? ` g${gi}` : ''}`;
-      const row = { x: p.torque_per_mass_Nm_kg, y: (p.efficiency ?? 0) * 100,
-                    I: cur, g: gam, gi, ripple: p.T_ripple_pct, T: p.T_em_Nm,
+      // 3-D view of the point (same k and rule as the table and the Simulation
+      // summary); the solver's 2-D numbers stay under raw2d for applyPoint.
+      const P2 = p.P_mech_W != null ? Number(p.P_mech_W) / 1000
+                                    : (Number(p.T_em_Nm) || 0) * omegaNow / 1000;
+      const massN = Number(p.mass_total_kg) || 0;
+      const pd2 = p.power_per_mass_W_kg != null ? Number(p.power_per_mass_W_kg) / 1000
+                                               : (massN > 0 ? P2 / massN : 0);
+      const s3 = scale3d(k3dChart, Number(p.T_em_Nm) || 0, P2, Number(p.V_peak) || 0,
+                         Number(p.V_line_peak_V) || 0, Number(p.KV_rpm_per_V_line) || 0,
+                         Number(p.torque_per_mass_Nm_kg) || 0, pd2,
+                         (p.efficiency ?? 0) * 100, Number(p.P_loss_total_W) || 0);
+      const row = { x: s3.td, y: s3.eff,
+                    I: cur, g: gam, gi, ripple: p.T_ripple_pct, T: s3.T,
                     overrides: p.overrides || {}, _c: byCurrent ? cur : gam,
                     // Full per-design metrics so applying this point shows the
                     // sweep's already-computed numbers in Simulation — no re-run.
-                    eff: (p.efficiency ?? 0) * 100, mass: p.mass_total_kg,
-                    td: p.torque_per_mass_Nm_kg, Vpk: p.V_peak,
+                    // Terminal values ride under their backend names so applyPoint
+                    // pushes the SOLVED line peak / KV / P_mech, not sinusoid guesses.
+                    eff: s3.eff, mass: p.mass_total_kg,
+                    td: s3.td, Vpk: s3.Vpk,
+                    V_line_peak_V: s3.Vl, KV_rpm_per_V_line: s3.KV,
+                    P_mech_W: s3.P * 1000, power_per_mass_W_kg: s3.pd * 1000,
+                    raw2d: { T: p.T_em_Nm, P_mech_W: p.P_mech_W, Vpk: p.V_peak,
+                             V_line_peak_V: p.V_line_peak_V, KV_rpm_per_V_line: p.KV_rpm_per_V_line,
+                             td: p.torque_per_mass_Nm_kg, power_per_mass_W_kg: p.power_per_mass_W_kg,
+                             eff: (p.efficiency ?? 0) * 100 },
+                    k3d: k3dChart,
+                    rpm: p.rpm,   // absent today (refine result omits it) — future-proof
                     ploss: p.P_loss_total_W, core: p.P_fe_W,
                     stranded: p.P_cu_W, solid: (p.P_mag_W ?? 0) + (p.P_shaft_W ?? 0),
+                    // Eddy-settle verdict — the marker is drawn HOLLOW when the
+                    // point's own solve says its σ·∂A/∂t transient was still
+                    // running (2026-09-07), because η on the Y axis and the loss
+                    // it comes from are then start-up values.
+                    settled: typeof p.eddy_settled === 'boolean' ? p.eddy_settled : undefined,
+                    settleResid: p.eddy_settle_residual ?? null,
                     // SAME stable key as the table row (geometry, operating-point)
                     // so point↔row selection cross-highlights reliably.
                     pk: `g${gi}_o${p.op_index ?? 0}` };
@@ -402,7 +649,7 @@ const SweepStudyPanel: React.FC = () => {
     }
     return [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0]))
       .map(([key, g]) => ({ key, label: g.label, rows: g.rows.sort((a, b) => a._c - b._c) }));
-  }, [result, sentOps, connectBy]);
+  }, [result, sentOps, connectBy, k3dChart]);
 
   // A stale zoom window survives into the NEXT result set and shows a sliver
   // of the new data ("а где график?" — the curves ran off the clipped view).
@@ -438,6 +685,25 @@ const SweepStudyPanel: React.FC = () => {
     });
     const reason = String(failed[0]?.error || '').split(':')[0].trim();
     return { n: failed.length, total: pts.length, culprits, reason };
+  }, [result]);
+
+  // ── UNSETTLED EDDY TRANSIENT (user's 90-point sweep, 2026-09-07) ─────────
+  // Every point of that sweep spent 57 warm-up frames and nothing in the result
+  // said whether they were ENOUGH.  They were not on the designs whose shaft
+  // tube sits closest to the field (a shorter magnet pushes rotor_inner_radius
+  // outward): shaft eddy loss read 504 W at gap 2.6 mm, 3558 W at 3.1 mm and
+  // 6652 W at 1.6 mm with the magnet fixed at 24 mm — start-up transients, not
+  // physics, and they drove η and P_loss on this very chart.  They were read as
+  // demagnetisation.  So: counted, flagged, and drawn hollow.
+  const unsettled = useMemo(() => {
+    const pts: any[] = result?.points || [];
+    const bad = pts.filter(p => p && p.feasible && p.eddy_settled === false);
+    if (!bad.length) return null;
+    const rs = bad.map(p => Number(p.eddy_settle_residual)).filter(v => Number.isFinite(v));
+    const said = pts.filter(p => p && p.feasible && typeof p.eddy_settled === 'boolean').length;
+    return { n: bad.length, total: said || pts.length,
+             worst: rs.length ? Math.max(...rs) * 100 : null,
+             capped: bad.filter(p => p.eddy_capped).length };
   }, [result]);
 
   // Data extent (with a little padding) — the un-zoomed view + the basis for
@@ -553,22 +819,42 @@ const SweepStudyPanel: React.FC = () => {
       // exact numbers into the Simulation summary so it shows them immediately,
       // without a re-run (the user picks on these very numbers).
       try {
-        const rpm = readLS('sim.rpm', 4000);
+        // Scan points don't stamp their rpm yet (the refine result omits it), so
+        // the CURRENT sim.rpm stands in — correct unless the user changed rpm
+        // after launching the sweep.  `p.rpm` wins the moment the backend adds it.
+        const rpm = Number(p.rpm) || readLS('sim.rpm', 4000);
         const omega = 2 * Math.PI * rpm / 60;
-        const T = Number(p.T) || 0, mass = Number(p.mass) || 0;
-        const Vpk = Number(p.Vpk) || 0, Vrms = Vpk / Math.SQRT2;
-        const Vlpk = Vpk * Math.sqrt(3), Vlrms = Vlpk / Math.SQRT2;
-        const Pmech = T * omega, ploss = Number(p.ploss) || 0;
+        // The SOLVER's 2-D numbers (raw2d) go into the summary; the Simulation
+        // summary applies the machine's 3-D factor itself when its button is on,
+        // so the pushed row lands on screen with exactly the numbers the sweep
+        // table showed — carried once, never twice.
+        const r2 = p.raw2d || p;
+        const T = Number(r2.T) || 0, mass = Number(p.mass) || 0;
+        const Vpk = Number(r2.Vpk) || 0;
+        // SOLVED terminal values first, synthesis only as fallback.  Vpk·√3
+        // over-reads the line-line peak: the triplen harmonics of the phase
+        // waveform cancel line-to-line, so the measured max|Va−Vb| the backend
+        // reports is LESS than √3× the phase peak.  The /√2 rms values are
+        // sinusoid approximations (the refine result carries peaks only).
+        const Vlpk = Number(r2.V_line_peak_V) || Vpk * Math.sqrt(3);
+        const Vrms = Vpk / Math.SQRT2, Vlrms = Vlpk / Math.SQRT2;
+        const Pmech = Number(r2.P_mech_W) || T * omega;
+        const ploss = Number(p.ploss) || 0;
         const summary = {
+          ...(p.k3d != null ? { end3d: { k_flux: p.k3d, source: 'machine passport, carried from the sweep view' } } : {}),
           rpm, I_phase_rms_A: Number(p.I) || 0, gamma_deg: Number(p.g) || 0,
           T_em_avg_Nm: T, T_ripple_pct: Number(p.ripple) || 0, P_mech_W: Pmech,
           V_phase_peak_V: Vpk, V_phase_rms_V: Vrms, V_line_peak_V: Vlpk, V_line_rms_V: Vlrms,
-          KV_rpm_per_V_phase: Vrms > 0 ? rpm / Vrms : 0, KV_rpm_per_V_line: Vlrms > 0 ? rpm / Vlrms : 0,
+          // KV = rpm / V_PEAK — the max/max convention the Simulation tile and the
+          // user's Ansys table use (see refine_proc / simulation.py, 2026-08-04);
+          // dividing by rms read ~√2 high and contradicted a by-hand check.
+          KV_rpm_per_V_phase: Vpk > 1 ? rpm / Vpk : 0,
+          KV_rpm_per_V_line: Number(r2.KV_rpm_per_V_line) || (Vlpk > 1 ? rpm / Vlpk : 0),
           P_loss_total_W: ploss, P_core_W: Number(p.core) || 0,
           P_stranded_W: Number(p.stranded) || 0, P_solid_W: Number(p.solid) || 0,
-          efficiency: (Number(p.eff) || 0) / 100, mass_total_kg: mass, mass_components: [],
-          torque_per_mass_Nm_kg: Number(p.td) || (mass > 0 ? T / mass : 0),
-          power_per_mass_W_kg: mass > 0 ? Pmech / mass : 0,
+          efficiency: (Number(r2.eff) || 0) / 100, mass_total_kg: mass, mass_components: [],
+          torque_per_mass_Nm_kg: Number(r2.td) || (mass > 0 ? T / mass : 0),
+          power_per_mass_W_kg: Number(r2.power_per_mass_W_kg) || (mass > 0 ? Pmech / mass : 0),
           loss_density_W_kg: mass > 0 ? ploss / mass : 0,
         };
         window.dispatchEvent(new CustomEvent('sim-apply-summary', { detail: { summary } }));
@@ -605,13 +891,24 @@ const SweepStudyPanel: React.FC = () => {
     } catch (e: any) { setApplyMsg('✗ apply FAILED (' + String(e?.message ?? e) + ') — nothing was changed; try again'); }
   };
 
-  const VarLine: React.FC<{ on: boolean; label: string; v: any; fixedVal: number }> = ({ on, label, v, fixedVal }) => (
-    <Typography sx={{ fontSize: 11, color: on ? 'var(--text-1)' : 'var(--text-4)', mb: 0.2 }}>
-      • <strong>{label}</strong>: {on
-        ? <>{v.min} … {v.max} step {v.step} <span style={{ color: 'var(--text-3)' }}>({buildGrid(Number(v.min), Number(v.max), Number(v.step)).length} pts)</span></>
-        : <>{fixedVal} <span style={{ color: 'var(--text-4)' }}>(fixed — add it to the variables above to sweep)</span></>}
-    </Typography>
-  );
+  // kU converts STORED values (Arms for current) into the DISPLAY unit — the
+  // range card above speaks peak by default, and this summary line used to
+  // print the raw stored Arms next to it (a 30…35 peak range read as
+  // "21.213203435596423 … 24.74873…"), which looked like a different sweep.
+  const VarLine: React.FC<{ on: boolean; label: string; v: any; fixedVal: number;
+                            kU?: number; unit?: string }> =
+      ({ on, label, v, fixedVal, kU = 1, unit = '' }) => {
+    const f = (x: any) => Number((Number(x) * kU).toFixed(3));
+    return (
+      <Typography sx={{ fontSize: 11, color: on ? 'var(--text-1)' : 'var(--text-4)', mb: 0.2 }}>
+        • <strong>{label}</strong>: {on
+          ? <>{f(v.min)} … {f(v.max)} step {f(v.step)}{unit} <span style={{ color: 'var(--text-3)' }}>({buildGrid(Number(v.min), Number(v.max), Number(v.step)).length} pts)</span></>
+          : <>{f(fixedVal)}{unit} <span style={{ color: 'var(--text-4)' }}>(fixed — add it to the variables above to sweep)</span></>}
+      </Typography>
+    );
+  };
+  // same unit choice the range card persists ('arms' only when explicitly picked)
+  const iPeak = (() => { try { return localStorage.getItem('sweep.iUnit') !== 'arms'; } catch { return true; } })();
 
   return (
     <Box sx={{ mt: 2 }}>
@@ -621,7 +918,8 @@ const SweepStudyPanel: React.FC = () => {
       </Box>
 
       <Box sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1, p: 1, mb: 1.25 }}>
-        <VarLine on={!!cV} label="Phase current" v={cV} fixedVal={readLS('sim.current', 85)} />
+        <VarLine on={!!cV} label="Phase current" v={cV} fixedVal={readLS('sim.current', 85)}
+                 kU={iPeak ? Math.SQRT2 : 1} unit={iPeak ? ' A peak' : ' Arms'} />
         <VarLine on={!!gV} label="Load angle γ" v={gV} fixedVal={readLS('sim.gamma', 0)} />
         {geomVars.map(([name, v]) => (
           <Typography key={name} sx={{ fontSize: 11, color: 'var(--text-1)', mb: 0.2 }}>
@@ -643,6 +941,30 @@ const SweepStudyPanel: React.FC = () => {
         </FormControl>
         <Typography sx={{ fontSize: 11, color: nPts > 40 ? '#fca5a5' : 'var(--text-3)', flex: 1 }}>
           <strong>{nPts}</strong> pt{nPts === 1 ? '' : 's'}{nPts > 40 ? ' — large, slow' : ''}
+          {/* SAY which step count the sweep will solve at.  It is read from the
+              Electromagnetic tab's key at Run time, and that key can be rewritten
+              behind the tab's back (an optimizer Apply pins the run's 48 steps into
+              it; a second window does not see it).  2026-09-07: the tab said 36,
+              the sweep ran 48 — cold, 3× longer — and nothing on screen said so. */}
+          <span title={`Steps per electrical period, taken from the Electromagnetic tab (sim.stepsPP). A sweep at a different step count than the last Electromagnetic run cannot reuse its warm state: every point solves cold (demag pre-pass + eddy warm-up, ~3x longer). Change it on the Electromagnetic tab.`}
+            style={{ marginLeft: 8, color: 'var(--text-3)', cursor: 'help' }}>
+            · {steps} steps/period
+          </span>
+          {/* The 3-D end-effect view, same switch and factor as the Simulation
+              summary ("3D" button) — so a current scaled off this chart lands on
+              the same shaft power over there (2026-09-08: 500 → 487.46 kW). */}
+          {k3dChart != null && (
+            <span title={`Torque, power, voltages and the densities are multiplied by the machine's 3-D end-effect factor k_flux = ${k3dChart.toFixed(4)}, exactly as the Simulation summary does while its "3D" button is on (losses stay 2-D, η is recomputed). Switch the button off in Simulation to see the raw 2-D solver numbers here too.`}
+              style={{ marginLeft: 8, color: 'var(--text-3)', cursor: 'help' }}>
+              · 3D ×{k3dChart.toFixed(3)}
+            </span>
+          )}
+          {' '}
+          <label title="Also solve the current motor un-varied at operating point 0 as a reference point on the chart — one more full FEM eval, run last. Off: the sweep ends with its grid."
+            style={{ cursor: 'pointer', color: 'var(--text-3)', whiteSpace: 'nowrap' }}>
+            <input type="checkbox" checked={withBaseline} onChange={e => setWithBaseline(e.target.checked)}
+              style={{ verticalAlign: 'middle', marginLeft: 6 }} /> baseline point
+          </label>
         </Typography>
       </Box>
 
@@ -662,6 +984,12 @@ const SweepStudyPanel: React.FC = () => {
             sx={{ textTransform: 'none', fontSize: 11, color: 'var(--text-2)', minWidth: 0 }}>
             Clear result
           </Button>
+        )}
+        {restoredNote && !running && (
+          <Typography component="span" sx={{ fontSize: 11, color: '#34d399' }}
+            title="The variable cards above were re-added from the last sweep's own record (min / max / step and its γ / current points) because none were selected after the reload.">
+            {restoredNote}
+          </Typography>
         )}
         {running && (() => {
           // All clocks below tick every second from CLIENT time — a sweep point
@@ -793,6 +1121,29 @@ const SweepStudyPanel: React.FC = () => {
                 : ''}
             </Typography>
           )}
+          {/* ONE LINE + tooltip (project rule: no text walls).  Hollow markers
+              on the chart, ✗ in the table's `eddy` column, the number here. */}
+          {unsettled && (
+            <Typography sx={{ fontSize: 11, color: '#fbbf24', mb: 0.5, lineHeight: 1.4,
+                              display: 'flex', alignItems: 'center', gap: 0.5 }}>
+              <span>
+                ⚠ {unsettled.n} point{unsettled.n === 1 ? '' : 's'} did not settle the eddy
+                transient (shaft/magnet eddy losses and efficiency of those points are
+                start-up values){unsettled.worst != null
+                  ? ` — worst residual ${unsettled.worst.toFixed(1)} %` : ''} — shown hollow.
+              </span>
+              <HelpTip title={`The coupled σ·∂A/∂t solve marches discarded frames at θ<0 until `
+                + `the solid-conductor loss stops decaying (tolerance 2 % of the settled level, `
+                + `Aitken-extrapolated over 6th-harmonic ripple blocks). `
+                + `${unsettled.capped} of these ${unsettled.n} ended at the hard cap — one whole `
+                + `electrical period, the longest single extension the march is allowed — with `
+                + `the transient still running, so their magnet/shaft eddy watts, P_loss and η `
+                + `are over-read by roughly the residual — that is where the decaying current `
+                + `sits; mass is untouched, torque and ripple only through the field it perturbs. `
+                + `Fewer of them: raise steps/period, or re-run the neighbourhood so each point `
+                + `starts from a closer settled state.`} />
+            </Typography>
+          )}
           <Box ref={chartBoxRef} onDoubleClick={() => setZoom(null)} sx={{ height: 340 }}>
             <ResponsiveContainer width="100%" height="100%">
               <ScatterChart margin={{ top: 8, right: 24, left: 8, bottom: 24 }}>
@@ -821,8 +1172,23 @@ const SweepStudyPanel: React.FC = () => {
                     lineJointType="monotoneX" isAnimationActive={false} cursor="pointer"
                     shape={(p: any) => {
                       const sel = selected && p.payload?.pk === (selected as any).pk;
-                      return <circle cx={p.cx} cy={p.cy} r={sel ? 5.5 : 3.5} fill={sel ? '#fbbf24' : GCOL[i % GCOL.length]}
-                        stroke={sel ? '#fff' : 'none'} strokeWidth={sel ? 1.5 : 0} />;
+                      // HOLLOW = the point's eddy transient never settled
+                      // (2026-09-07): its η — the Y axis — is a start-up value.
+                      // Selection still wins on colour, so a picked unsettled
+                      // point is an amber ring, not a filled dot.
+                      const bad = p.payload?.settled === false;
+                      const col = sel ? '#fbbf24' : GCOL[i % GCOL.length];
+                      // `fill="none"` would make the ring click-through: SVG
+                      // hit-tests painted area only, so a hollow point could
+                      // be picked by landing on its 1.4 px stroke and nowhere
+                      // else ("полые точки не могу выделить", 2026-09-07).  A
+                      // transparent fill is still painted, so the whole disc
+                      // takes the click.
+                      return <circle cx={p.cx} cy={p.cy} r={sel ? 5.5 : 3.5}
+                        fill={bad ? 'transparent' : col}
+                        pointerEvents="all"
+                        stroke={bad ? col : (sel ? '#fff' : 'none')}
+                        strokeWidth={bad ? 1.4 : (sel ? 1.5 : 0)} />;
                     }}
                     onClick={(d: any) => { setSelected(d?.payload ?? d); setApplyMsg(null); }} />
                 ))}
@@ -840,10 +1206,12 @@ const SweepStudyPanel: React.FC = () => {
                   : '(base — no swept variables)'}
               </Typography>
               <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mt: 0.5 }}>
-                <Button size="small" variant="outlined" color="success" startIcon={<PlayArrowIcon />}
-                  onClick={() => applyPoint(selected)}>
-                  Apply picked point to geometry
-                </Button>
+                <span title="WRITES this point's swept values into the live geometry (and archives an applied_sweep preset). It does not run anything. The sweep stays on screen: its own variables are not part of the machine fingerprint.">
+                  <Button size="small" variant="outlined" color="success"
+                    onClick={() => applyPoint(selected)}>
+                    ⤵ Apply to geometry
+                  </Button>
+                </span>
                 {applyMsg && <Typography sx={{ fontSize: 11,
                   color: applyMsg.startsWith('✓') ? '#4ade80' : applyMsg.startsWith('✗') ? '#fca5a5' : 'var(--text-3)' }}>
                   {applyMsg}</Typography>}

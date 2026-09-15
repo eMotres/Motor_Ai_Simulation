@@ -6,8 +6,9 @@
  * Simulation tab.  Plots T(t), P_cu/P_fe/P_total(t) and V_A/B/C(t).
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { whenVisible } from '../../lib/pageVisible';
 import {
-  Box, Paper, Typography, Tooltip, CircularProgress,
+  Box, Paper, Typography, Tooltip, CircularProgress, TextField,
 } from '@mui/material';
 import {
   ResponsiveContainer, LineChart, Line, XAxis, YAxis,
@@ -19,7 +20,17 @@ const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 import type { TransientSummary } from './SummaryTable';
 import { useMotorStore } from '../../stores/motorStore';
 import { geoSignature } from '../common/geoSig';
-import { currentGeoJson, currentMatJson } from '../../lib/apiAuth';
+import { assignmentSignature } from '../../lib/dutyMaterials';
+// THE REQUEST BODY of an Electromagnetic run — shared with the Thermal tab,
+// which builds the same one when it has to make the run its own solve was
+// missing.  See lib/emRunPayload.
+import { buildEmRunPayload } from '../../lib/emRunPayload';
+// The EM<->thermal orchestrator.  It changes exactly ONE thing about a Run:
+// where the request goes.  See ./coupledApi.
+import {
+  adoptConvergedTemperatures, cancelCoupled, couplingAdopted, couplingStamp,
+  coupledEnabled, runCoupled, type CouplingBlock,
+} from './coupledApi';
 import HelpTip from '../common/HelpTip';
 
 interface TransientPayload {
@@ -27,6 +38,11 @@ interface TransientPayload {
   // Lets us flag the shown result stale when the live geometry changes (the
   // backend transient cache key omits geometry, so it can't detect this).
   _geoSig?: string;
+  // Frontend-only stamp: the MATERIAL ASSIGNMENT this run was computed with
+  // (lib/dutyMaterials.assignmentSignature), machine + active-duty overrides
+  // together — the same string the request carried.  Undefined = unknown (a run
+  // from before the stamp, or a restored one), which never flags staleness.
+  _matSig?: string;
   // The BACKEND's own verdict, returned by the restore path: it stamps every
   // solve with a fingerprint of the machine (`geo_fingerprint`) and compares it
   // against the live one when handing the saved run back.  true = the saved run
@@ -90,15 +106,70 @@ interface TransientPayload {
   // ISO timestamp of the solve (backend stamp) — shown in the header so a
   // stale view is recognisable at a glance.
   computed_at?: string;
+  // LOADED, not solved: a stored result whose parameters are byte-identical to
+  // this request was found in the backend's results ledger (user, 2026-09-05:
+  // he came back to 667.4 A after trying another current and had to re-solve a
+  // run that already existed).  Always labelled on the card — a Run that did
+  // not solve must never look like one that did — with a Recompute beside it.
+  ledger_hit?: boolean;
+  ledger_computed_at?: string;
   // Set (instead of `summary`) when the backend solved the waveforms but the
   // summary-block build threw — lets the UI surface the error rather than freeze
   // the cards on the previous run's numbers.
   summary_error?: string;
-  // Voltage drive (drive="voltage"): applied V, circuit diagnostics + the
-  // matched-fundamental current-drive reference → ΔP_harm.
-  drive?: 'current' | 'voltage';
+  // Imposed-VOLTAGE sources (drive="voltage" | "pwm_voltage"): applied V,
+  // circuit diagnostics + the matched-fundamental current-drive reference →
+  // ΔP_harm.  `pwm` / `bldc` / `custom_current` carry each source's own
+  // description of what it actually applied.
+  drive?: 'current' | 'voltage' | 'pwm_voltage' | 'custom_current' | 'bldc_current';
   v_phase_peak_V?: number | null;
   v_delta_deg?: number | null;
+  pwm?: {
+    v_bus_V: number; modulation_index: number; reference_delta_deg: number;
+    v1_applied_V: number; v1_applied_delta_deg: number;
+    f_switch_requested_Hz: number; f_switch_eff_Hz: number;
+    carriers_per_period: number; steps_per_switching_period: number;
+    modulator: string;
+    // The real pulse train as EDGES (two per carrier), for the carrier-
+    // resolution chart.  Analytic, tiny (~1-4 kB), persists with the result.
+    wave_A?: {
+      t_s: number[]; v: number[]; duty: number[]; n_edges: number;
+      v_bus_V: number; carriers_per_period: number; f_elec_Hz: number;
+      t_end_s: number; v1_peak_V: number; v1_phase_deg: number; note: string;
+    } | null;
+    // LINE voltage V_AB — three-level, full bus swing.  What the chart draws.
+    wave_AB?: {
+      t_s: number[]; v: number[]; duty_A: number[]; duty_B: number[];
+      n_edges: number; v_bus_V: number; carriers_per_period: number;
+      f_elec_Hz: number; t_end_s: number; levels_V: number[];
+      v1_ll_peak_V: number; v1_ll_phase_deg: number; v1_phase_peak_V: number;
+      note: string;
+    } | null;
+    // ── DC-LINK SIDE ─────────────────────────────────────────────────
+    // Σ_phase s_phase(t)·i_phase(t), one MEAN per solve step, off the same
+    // comparator the circuit integrated.  Positive = out of the pack
+    // (motoring); negative = into it (charging).  This is the boost-mode
+    // oscillogram, and it is on the same time grid as the torque and the
+    // phase currents so the ripple lines up edge for edge.
+    dc_link?: {
+      I_dc_A: number[]; I_dc_mean_A: number; I_dc_rms_A: number;
+      I_dc_ripple_pp_A: number; note: string;
+    } | null;
+  } | null;
+  bldc?: {
+    i_block_A: number; I_phase_rms_A: number; I1_phase_rms_A: number;
+    gamma1_deg: number; commutation_ramp_deg: number; note: string;
+  } | null;
+  custom_current?: {
+    n_samples: number; I_phase_rms_A: number; I1_phase_rms_A: number;
+    gamma1_deg: number;
+  } | null;
+  // What the source APPLIED, one value per solved step (A/B/C present only for
+  // the imposed-VOLTAGE sources; the imposed-current ones are already I_A/…).
+  excitation?: {
+    kind: string; series: 'V' | 'I'; quantity: string;
+    A?: number[]; B?: number[]; C?: number[];
+  } | null;
   v_dc_residual_A?: number | null;
   dP_harm_W?: number | null;
   harm_ref?: {
@@ -148,33 +219,52 @@ interface Props {
   // A design was just applied from the Sweep tab (summary numbers reused) — the
   // shown waveforms are still the PREVIOUS design's, so flag them stale.
   appliedFromSweep?: boolean;
-  // Drive mode: imposed sinusoidal current (default) or imposed sinusoidal
-  // voltage (FOC verification — currents are the machine's own response).
-  drive?: 'current' | 'voltage';
-  vPeak?: number;   // voltage drive: phase-voltage amplitude [V, peak]
-  vDelta?: number;  // voltage drive: voltage angle δ [°el] in the γ frame
+  // EXCITATION SOURCE: imposed sinusoidal current (default), imposed
+  // sinusoidal voltage (FOC verification — currents are the machine's own
+  // response), a PWM inverter's chopped voltage, a 120° block, or an arbitrary
+  // sampled current waveform.
+  drive?: 'current' | 'voltage' | 'pwm_voltage' | 'custom_current' | 'bldc_current';
+  vPeak?: number;   // voltage drives: FUNDAMENTAL phase-voltage amplitude [V, peak]
+  vDelta?: number;  // voltage drives: voltage angle δ [°el] in the γ frame
+  vBus?: number;    // pwm_voltage: DC link [V]
+  fSwitch?: number; // pwm_voltage: carrier [Hz]
+  iBlock?: number;  // bldc_current: flat-top block amplitude [A terminal]
+  waveform?: string;// custom_current: JSON [[θe_deg, i_A], …] over one period
+  // ── GENERATOR → BATTERY (boost mode) ─────────────────────────────────
+  // The pack on the DC link, as the plain payload the backend takes.  Sent
+  // ONLY on an imposed-voltage run of a machine that has a battery; a request
+  // without it is byte-identical to what this component has always sent.
+  battery?: {
+    v_oc?: number | null; v_nom?: number | null;
+    v_min?: number | null; v_max?: number | null;
+    cells?: number | null; n_parallel?: number | null;
+    r_int_mohm?: number | null; capacity_ah?: number | null;
+    i_charge_max_a?: number | null; chemistry?: string | null;
+  } | null;
+  // Iterate V_bus = V_oc + I_charge·R_pack around the solve (each pass is a
+  // full transient) instead of assuming an infinitely stiff supply.
+  busCouple?: boolean;
+  // One-shot: search (V₁, δ) for the maximum charge power at this rpm, then
+  // confirm the winner at the requested resolution.  Consumed by the parent
+  // after the run so the button does not latch.
+  chargeMax?: boolean;
 }
 
-function readMeshSetting<T>(key: string, def: T): T {
-  try {
-    const raw = localStorage.getItem(`mesh.${key}`);
-    return raw == null ? def : (JSON.parse(raw) as T);
-  } catch { return def; }
-}
-
-function readSimSetting<T>(key: string, def: T): T {
-  try {
-    const raw = localStorage.getItem(`sim.${key}`);
-    return raw == null ? def : (JSON.parse(raw) as T);
-  } catch { return def; }
-}
+/* `readMeshSetting` / `readSimSetting` lived here until 2026-09-08 and read the
+   panel settings into the request literal.  Both moved into `lib/emRunPayload`
+   with the literal itself — one place builds the body now. */
 
 const AXIS = { fontSize: 10, fill: 'var(--text-2)' };
+// recharts types its formatter callbacks over the ValueType/NameType unions
+// (which include undefined), so a `(v: number)` signature does not satisfy
+// them and every `<RcTooltip {...TOOLTIP}/>` in this file was a type error.
+// The bodies already coerce with Number(), so widening the parameter is the
+// honest signature rather than a cast at nine call sites.
 const TOOLTIP = {
   contentStyle: { background: 'var(--app-bg)', border: '1px solid var(--line-soft)',
     fontSize: 11, color: 'var(--text-1)' },
-  labelFormatter: (v: number) => `t = ${Number(v).toFixed(3)} ms`,
-  formatter: (v: number) => Number(v).toFixed(3),
+  labelFormatter: (v: unknown) => `t = ${Number(v).toFixed(3)} ms`,
+  formatter: (v: unknown) => Number(v).toFixed(3),
 };
 const GRID = { stroke: 'var(--panel)', strokeDasharray: '2 4' };
 
@@ -198,9 +288,34 @@ interface ProgressInfo {
 // the whole FEM solve on every mount; now we load the cached result and only
 // compute when the user actually presses Run (runNonce increments post-mount).
 const LAST_KEY = 'sim.lastTransient';
+// The per-element MAPS, and nothing else, are what makes this payload big:
+// measured on the live Ø200 run of 2026-09-13 (config/.last_transient.json),
+// 1 125 354 chars of which demag_field + demag_coef_per_tri are 1 091 571 —
+// 97 %.  The waveforms every chart and every stored duty run reads are ~33 kB.
+const HEAVY_KEYS = ['frames', 'field', 'demag_field', 'demag_coef_per_tri'];
 function persistLastTransient(d: TransientPayload) {
-  try { localStorage.setItem(LAST_KEY, JSON.stringify(d)); }
-  catch { /* quota — drop silently, recompute path still works */ }
+  try { localStorage.setItem(LAST_KEY, JSON.stringify(d)); return; }
+  catch { /* no room for the maps — fall through */ }
+  // A SILENT drop left `sim.lastTransient` holding the PREVIOUS run, and
+  // "Save to duty" (ActiveFamilyStrip) refuses to file waveforms it cannot
+  // prove belong to the summary it is saving — so the duty kept its numbers
+  // and lost its torque / current / voltage charts (user 2026-09-13, twice).
+  // Keeping the run WITHOUT its maps costs only the demag view (FemFieldChart
+  // re-solves it); keeping a foreign run costs the report.
+  try {
+    const lean: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(d)) if (!HEAVY_KEYS.includes(k)) lean[k] = v;
+    localStorage.setItem(LAST_KEY, JSON.stringify(lean));
+    console.warn('[sim] last transient stored WITHOUT its per-element maps '
+      + '(localStorage full) — the demagnetisation view will re-solve');
+  } catch {
+    // Still no room: REMOVE the stale run rather than leave another run's
+    // waveforms behind this run's numbers.  The save then takes the run from
+    // the backend (which keeps its own copy) instead of from here.
+    try { localStorage.removeItem(LAST_KEY); } catch { /* nothing left to do */ }
+    console.warn('[sim] last transient could NOT be stored (localStorage full) '
+      + '— Save to duty will fetch the run from the backend');
+  }
 }
 function loadLastTransient(): TransientPayload | null {
   try { const s = localStorage.getItem(LAST_KEY); return s ? JSON.parse(s) : null; }
@@ -208,7 +323,7 @@ function loadLastTransient(): TransientPayload | null {
 }
 
 // (live recompute progress strip: elapsed + points, driven by busy + /progress)
-const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onSummary, runNonce = 0, onBusyChange, steps = 12, fresh = false, fieldLosses = true, demag = false, torqueFilter = false, appliedFromSweep = false, drive = 'current', vPeak = 0, vDelta = 0, eddyCoupled = true }) => {
+const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onSummary, runNonce = 0, onBusyChange, steps = 12, fresh = false, fieldLosses = true, demag = false, torqueFilter = false, appliedFromSweep = false, drive = 'current', vPeak = 0, vDelta = 0, vBus = 0, fSwitch = 0, iBlock = 0, waveform = '', eddyCoupled = true, battery = null, busCouple = false, chargeMax = false }) => {
   // `steps` (n_steps_per_period) is controlled from the left panel and
   // matches the animation viewer's n_frames so both hit the same backend
   // cache key (one solve, not two).
@@ -249,11 +364,27 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
     let timer = 0;
     const tick = async () => {
       if (!alive) return;
+      await whenVisible();              // a hidden tab polls nothing (lib/pageVisible)
+      if (!alive) return;
       try {
         const r = await fetch(`${API}/api/simulation/physics/fem_transient/progress`);
         if (r.ok) {
           const p: ProgressInfo = await r.json();
-          if (alive) { setProgress(p); misses = p.running ? 0 : Math.min(misses + 1, 99); }
+          if (alive) {
+            // Keep the previous object when nothing the strip shows has
+            // changed: an idle backend answers the same `running: false`
+            // record every 1.5 s, and a fresh object each time re-rendered
+            // this whole panel — ten recharts plots, collapsed or not — for
+            // as long as the tab was open (2026-09-13: ~80 000 "width(0)"
+            // chart warnings in one afternoon's console, one per idle
+            // re-render of a hidden chart).  Same identity → React bails out.
+            setProgress(prev => (prev
+              && prev.running === p.running && prev.step === p.step
+              && prev.total === p.total && prev.phase === p.phase
+              && prev.elapsed_s === p.elapsed_s && prev.eta_s === p.eta_s)
+              ? prev : p);
+            misses = p.running ? 0 : Math.min(misses + 1, 99);
+          }
         }
       } catch {/* ignore polling errors */}
       if (alive) timer = window.setTimeout(tick, misses > 3 ? 1500 : 350);
@@ -293,6 +424,11 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
       abortRef.current?.abort();
       fetch(`${API}/api/simulation/physics/fem_transient/cancel?run_id=${runNonce}`,
         { method: 'POST' }).catch(() => {});
+      // …and the LOOP, when one is running: aborting this fetch stops the
+      // browser waiting, not the six transients the orchestrator still intends
+      // to solve.  Its cancel is keyed by the same run-id and sets the
+      // transient's registry too, so the frame march in flight stops as well.
+      cancelCoupled(runNonce);
       setBusy(false);
       setError('Cancelled.');
     };
@@ -300,151 +436,80 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
     return () => window.removeEventListener('sim:stop', onStop);
   }, [runNonce]);
 
-  const run = (restoreOnly = false) => {
+  // `freshOnce` = the card's "Recompute" link: force ONE solve past the results
+  // ledger without turning the panel's "Start fresh" state on (that one belongs
+  // to the Stop/Continue dialog and would then stick to every later Run).
+  const run = (restoreOnly = false, freshOnce = false) => {
     setBusy(true); setError(null);
     const ctrl = new AbortController();
     abortRef.current = ctrl;
-    // Typed inputs — ONE source for both transports.  The direct GET goes through
-    // FastAPI (which coerces query strings to the typed signature); the kernel
-    // POST calls get_fem_transient DIRECTLY, so the JSON types must be REAL here
-    // (a string "false" would read truthy → e.g. a spurious restore).  Build typed
-    // values, then stringify only when assembling the GET query string.
-    const p: Record<string, unknown> = {
-      // restore=true → on open, return the LAST saved transient (stale-flagged if
-      // params differ) instead of recomputing.  Only the Run button omits it.
-      restore:            restoreOnly,
-      n_steps_per_period: steps,
-      n_periods:          1,
-      gamma_deg, I_phase_rms,
-      // Drive mode: "voltage" imposes sinusoidal phase voltages — the currents
-      // become the machine's own response (incl. back-EMF-harmonic parasitics)
-      // and the backend also runs a matched-fundamental current-drive reference
-      // (harm_ref) so ΔP_harm = the watt cost of those harmonic currents.
-      drive,
-      v_phase_peak:       drive === 'voltage' ? vPeak  : 0,
-      v_delta_deg:        drive === 'voltage' ? vDelta : 0,
-      harm_ref:           drive === 'voltage',
-      mesh_size_mm:       readMeshSetting('meshSize',    4.0),
-      min_size_mm:        readMeshSetting('minSize',     0.3),
-      outer_air_factor:   readMeshSetting('outerAir',    1.3),
-      motion_band:        readMeshSetting('motionBand',  true),
-      band_thickness_mm:  readMeshSetting('bandThickness', 0.4),
-      gap_layers:         readMeshSetting('gapLayers',   2),
-      n_sectors:          readMeshSetting('nSectors',    1),
-      stator_fillet_mm:   0,   // native geometry — extra smoothing removed
-      // ALWAYS use the sliding band for the transient torque/back-EMF — meshes
-      // ONCE and rotates the rotor through a moving band (clean, physical T(t)),
-      // vs remesh-per-frame which injects huge numerical ripple.  Decoupled from
-      // the Mesh-tab toggle (that now only controls mesh VISUALISATION).
-      sliding_band:       true,
-      // Field-based magnet/shaft eddy losses (σ·∂A/∂t solve) vs the slab estimate.
-      rotor_eddy:         fieldLosses,
-      // Coupled σ·∂A/∂t eddy-current solve (Simulation-tab checkbox).  ON: the
-      // induced currents are solved WITH the field (copper loss is the solved
-      // 2-D value, not a post-process) and the run's field snapshot carries the
-      // real eddy J⟳, so the J⟳ / Loss views render it instead of running a
-      // second transient.  OFF: magnetostatic run, and those views solve on
-      // demand exactly as before.  Never forced on here — it costs solve time
-      // and it changes which copper-loss number the run reports.
-      eddy:               eddyCoupled,
-      // Keep the last frame's field server-side for the J⟳ / Loss views.  Not
-      // an extra solve — it is the frame this run just finished.
-      field_snapshot:     true,
-      // Per-element irreversible demagnetisation: de-rates Br → torque/EMF + %-map.
-      demag,
-      // Band-limit T(t) to the physical 6·k orders (UI toggle, default ON).
-      torque_filter:      torqueFilter,
-      // Bit-identical pole/slot mesh (Mesh-tab "Periodic" toggle).
-      pole_copy:          readMeshSetting('poleCopy', false),
-      // ANSYS-style concentric-ring air-gap mesh (Mesh-tab "Air-gap mesh" toggle).
-      // template halves need the belt → force structured gap when template on
-      structured_gap:     readMeshSetting('structuredGap', false) || readMeshSetting('ironTemplate', true),
-      // Harmonic gap coupling (Mesh-tab "Harmonic gap"): step-independent RAW ripple.
-      airgap_macro:       readMeshSetting('harmonicGap', false),
-      // P2 is the calculation basis (Mesh-tab toggle, default ON): quadratic
-      // elements → B linear per element → smooth Arkkio torque, no P1 staircase,
-      // and the forbidden-order noise floor converges to 0 with mesh refinement.
-      // Irreversible demagnetisation, the voltage drive and the coupled eddy
-      // solve all run on P2. P1 is deleted, so this is a constant now — sending
-      // anything else raises in the solver rather than silently downgrading.
-      element_order:      2,
-      // Deterministic template iron mesh (Mesh-tab "Template iron" toggle).
-      iron_template:      readMeshSetting('ironTemplate', true),
-      // Geometry-driven CDT mesh (Mesh-tab "Geometry-driven mesh" toggle, default ON).
-      geo_mesh:           readMeshSetting('geoMesh', true),
-      // SPEED — sent explicitly whenever the panel has one, so an ordinary
-      // user's rpm applies to THEIR solve without touching the shared config
-      // (omitted → the backend falls back to the shared simulation.rpm).
-      ...(() => {
-        const v = Number(readSimSetting('rpm', NaN));
-        return Number.isFinite(v) && v > 0 ? { rpm: v } : {};
-      })(),
-      // Copper-loss physics: coil temperature → ρ_Cu(T); end-winding factor
-      // (0 = auto-estimate from geometry) for the copper the 2-D field misses.
-      coil_temp_c:        readSimSetting('coilTemp',   120.0),
-      end_winding_factor: readSimSetting('endWinding',   0.0),
-      // Operating mode — generator shifts the drive 180 deg el server-side.
-      mode: readSimSetting<string>('opMode', 'motor'),
-      // D-AXIS: sent only when PINNED.  Blank means "measure it", and the
-      // backend's own resolver decides that from the shared config — sending
-      // a 0 for "blank" would pin the reference to zero degrees instead.
-      ...(() => {
-        const _d = String(readSimSetting<string>('daxisDeg', '') ?? '').trim();
-        return _d === '' || !Number.isFinite(Number(_d))
-          ? {} : { daxis_deg: Number(_d) };
-      })(),
-      // WINDING — send the SELECTED connection explicitly.  The selector
-      // buttons write the shared config through a debounced sync, and the
-      // auto-run raced it: the run computed with the OLD winding while the UI
-      // labelled it with the new one (measured live: a 4S run and a 2S-2P run
-      // both returned 32.11 Nm).  With the label in the request the backend
-      // resolves n_parallel from exactly what the selector shows.
-      ...(readSimSetting<string>('connection', '')
-        ? { connection: readSimSetting<string>('connection', '') } : {}),
-      // Per-part mesh size from the Mesh tab (same localStorage key).
-      component_mesh:     JSON.stringify(readMeshSetting<Record<string, number>>('componentMesh', {})),
-      // SAME include_frames/n_frames as the FemAnimationViewer so both panels hit
-      // the exact same backend cache key (one solve, not two).  Frames ignored here.
-      include_frames:     true,
-      n_frames:           steps,
-      run_id:             String(runNonce),
-      fresh,
-      // The kernel POST bypasses the fetch interceptor's ?geo=/?mat= — the
-      // caller's own geometry and materials must ride the payload, or the
-      // Run solves the SHARED config while the field views show the copy.
-      ...(() => { const g = currentGeoJson(); return g ? { geo: g } : {}; })(),
-      ...(() => { const m = currentMatJson(); return m ? { mat: m } : {}; })(),
-    };
+    // THE REQUEST BODY — built in `lib/emRunPayload`, not here.  It lived in
+    // this function as a 130-line literal until 2026-09-08, when the Thermal tab
+    // was given the right to make the missing Electromagnetic run for itself
+    // (through the orchestrator): two places building "the same" payload is two
+    // places for the run that gets MADE to stop being the run that gets LOOKED
+    // FOR.  Everything it reads from `mesh.*` / `sim.*` it reads exactly as this
+    // function did, so the body is unchanged.
+    const p: Record<string, unknown> = buildEmRunPayload({
+      restore: restoreOnly,
+      steps, gamma_deg, I_phase_rms,
+      drive, vPeak, vDelta, vBus, fSwitch, iBlock, waveform,
+      battery, busCouple, chargeMax,
+      fieldLosses, eddyCoupled, demag, torqueFilter,
+      fresh: fresh || freshOnce,
+      run_id: String(runNonce),
+    });
     // Helper: fetch with auto-retry against transient connection drops.
     // The uvicorn supervisor sometimes respawns the worker mid-request when
     // a heavy FEM solve crashes the LLVM JIT; without a retry the user sees
     // a permanent "Failed to fetch" until they click Re-run manually.
+    // THE COUPLED TOGGLE, and the only thing it changes: where this request
+    // goes.  Never on a RESTORE — that path must not solve anything at all, and
+    // a mount is not a Run.
+    const useCoupled = !restoreOnly && coupledEnabled();
     const attempt = async (i = 0): Promise<void> => {
       try {
-        // ALWAYS through the modular kernel (POST /api/kernel/run, capability
-        // solver.em_transient). The kernel -> get_fem_transient -> em_transient_eval
-        // (the same solver), so results are identical to the old direct route.
-        // result.raw is the transient payload (frames are dropped by the IR —
-        // ignored here; the animation viewer fetches frames directly). Progress /
-        // cancel / cache / restore are shared global backend state.
-        const r = await fetch(`${API}/api/kernel/run`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ capability: 'solver.em_transient', payload: p }),
-          signal: ctrl.signal });
-        if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
-        const j = await r.json();
-        if (!j.ok) throw new Error(j.error || 'kernel solve failed');
-        // TWO envelopes, and only the outer one was checked.  A refused solve —
-        // a 422 from the buildability gate, a solver exception — comes back as
-        // HTTP 200 with j.ok TRUE and the failure inside j.result.ok/.error.
-        // The panel then read `raw` (null), fell through to the "no waveform"
-        // branch or simply left the old numbers on screen: pressing Run looked
-        // like nothing happened at all.  The reason has to reach the user.
-        if (j.result && j.result.ok === false) {
-          throw new Error(String(j.result.error || 'solve refused').replace(/^HTTPException: \d+: /, ''));
+        let d: TransientPayload & { restored?: boolean; stale?: boolean };
+        if (useCoupled) {
+          // POST /api/coupled/run — the SAME payload, iterated: EM run ->
+          // thermal solve -> winding / magnet averages -> back into the EM run's
+          // temperatures, until both settle.  What comes back carries the LAST
+          // electromagnetic run's own payload, so everything below this branch
+          // treats it exactly as it treats a plain Run: same charts, same
+          // summary (which now also carries the `coupling` block), same
+          // localStorage copy, same "field snapshot moved" event.
+          const res = await runCoupled(p, ctrl.signal);
+          d = (res.transient || {}) as typeof d;
+          // The two temperatures this run SOLVED for go back into the fields
+          // they came from — leaving them showing the guess the loop started
+          // from would leave an input on screen that the run did not use.
+          adoptConvergedTemperatures(
+            res.coupling, couplingStamp(res.coupling, d.computed_at));
+        } else {
+          // ALWAYS through the modular kernel (POST /api/kernel/run, capability
+          // solver.em_transient). The kernel -> get_fem_transient -> em_transient_eval
+          // (the same solver), so results are identical to the old direct route.
+          // result.raw is the transient payload (frames are dropped by the IR —
+          // ignored here; the animation viewer fetches frames directly). Progress /
+          // cancel / cache / restore are shared global backend state.
+          const r = await fetch(`${API}/api/kernel/run`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ capability: 'solver.em_transient', payload: p }),
+            signal: ctrl.signal });
+          if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
+          const j = await r.json();
+          if (!j.ok) throw new Error(j.error || 'kernel solve failed');
+          // TWO envelopes, and only the outer one was checked.  A refused solve —
+          // a 422 from the buildability gate, a solver exception — comes back as
+          // HTTP 200 with j.ok TRUE and the failure inside j.result.ok/.error.
+          // The panel then read `raw` (null), fell through to the "no waveform"
+          // branch or simply left the old numbers on screen: pressing Run looked
+          // like nothing happened at all.  The reason has to reach the user.
+          if (j.result && j.result.ok === false) {
+            throw new Error(String(j.result.error || 'solve refused').replace(/^HTTPException: \d+: /, ''));
+          }
+          d = (j.result && j.result.raw) || {};
         }
-        const d: TransientPayload & { restored?: boolean; stale?: boolean } =
-          (j.result && j.result.raw) || {};
         // restore=true with nothing ever saved → backend returns {restored:false}.
         // Leave the panel empty (the "press Run" prompt) — do NOT recompute, NOT
         // an error.  This is the ONLY legitimate empty payload.
@@ -464,10 +529,19 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
           setError(`Summary unavailable: ${d.summary_error}`);
           return;
         }
-        // Stamp a FRESH run with the geometry it was computed for, so a later
-        // geometry change (e.g. applying a Sweep design) flags it stale.  A
-        // RESTORED result keeps whatever stamp it was saved with.
-        const stamped: TransientPayload = restoreOnly ? d : { ...d, _geoSig: geoSig };
+        // Stamp a FRESH run with the geometry AND the material assignment it
+        // was computed for, so a later change (applying a Sweep design; picking
+        // another steel, another magnet temperature, another insulation —
+        // whether on the machine or on the active duty) flags it stale.  The
+        // material stamp is taken from the request that was actually sent
+        // (`p.mat`), not re-read afterwards, so it describes THIS solve.  It
+        // covers the parts that have no mass row of their own (the liner, the
+        // enamel), which name-matching on the mass rows cannot see.  A RESTORED
+        // result keeps whatever stamp it was saved with.
+        const stamped: TransientPayload = restoreOnly ? d : {
+          ...d, _geoSig: geoSig,
+          _matSig: assignmentSignature((p as { mat?: string }).mat) || undefined,
+        };
         setStale(!!d.stale);
         if (restoreOnly && d.stale_geometry === true) {
           // Loud in the console too: a restored run from another machine is the
@@ -479,11 +553,24 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
         setData(stamped); setBusy(false);
         setError(null);
         persistLastTransient(stamped);      // remember it (+ stamp) across reloads
+        // A RESTORED coupled run must leave the temperature FIELDS describing
+        // what the card shows (2026-09-09) — the live path above adopts them,
+        // a reload never went through it.  Once per answer: `couplingStamp`.
+        if (restoreOnly) {
+          const cpl = (stamped.summary as { coupling?: CouplingBlock } | undefined)?.coupling;
+          if (cpl && Number.isFinite(Number(cpl.coil_temp_c))) {
+            const st = couplingStamp(cpl, stamped.computed_at);
+            if (!couplingAdopted(st)) adoptConvergedTemperatures(cpl, st);
+          }
+        }
         // ── What this run COST, measured, for the Run panel's estimate ──────
         // Only from a FRESH solve: a restored/cached result reports the wall
         // time of the run it was saved from, and reusing that as "seconds per
         // frame" would quote the user a rate no solve on this machine produced.
-        if (!restoreOnly && (d.n_frames_solved ?? 0) > 0 && (d.solve_wall_s ?? 0) > 0) {
+        // …and a LEDGER hit is exactly that case: it carries the wall time of
+        // the run it was stored from, and no solve happened just now.
+        if (!restoreOnly && !d.ledger_hit
+            && (d.n_frames_solved ?? 0) > 0 && (d.solve_wall_s ?? 0) > 0) {
           const cost = { frames: d.n_frames_solved as number,
                          wall_s: d.solve_wall_s as number,
                          // Warm-up is ADAPTIVE (settle-until-quiet), so the
@@ -545,7 +632,62 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
       mountedRef.current = true;
       handledNonceRef.current = runNonce;      // remember the mount nonce — never recompute it
       const last = loadLastTransient();
-      if (last) { setData(last); return; }   // localStorage copy → show it, no compute
+      if (last) {
+        setData(last);                       // localStorage copy → show it, no compute
+        // …but the SUMMARY may be stale in SHAPE: the backend rebuilds stored
+        // summaries when the code gains new derived cells (Km, inertia, demag,
+        // saturation — summary_shape_v), and the local copy freezes whatever
+        // shape existed when the run was made.  Ask the backend's restore path
+        // (no compute, milliseconds) and adopt ITS summary when it is newer —
+        // waveforms, _geoSig and stale flags stay local.  Without this, new
+        // summary cells only ever appeared after a full re-run ("не вижу его
+        // после Rotor inertia", 2026-08-23).
+        (async () => {
+          try {
+            const q = new URLSearchParams({ restore: 'true' });
+            const r = await fetch(`${API}/api/simulation/physics/fem_transient?${q}`);
+            if (!r.ok) return;
+            const d = await r.json();
+            const vLocal = Number(last.summary?.summary_shape_v ?? 1);
+            const vBack = Number(d?.summary?.summary_shape_v ?? 1);
+            // Adopt ONLY when the backend is describing THE SAME solve (its
+            // rebuilt summary can then be richer: newer shape, or a Stage-A
+            // passport measured after the run).  Without the same-run guard a
+            // server that regressed to an OLDER persisted run (measured live:
+            // a restart lost the in-memory last) overwrote a newer local
+            // run's summary — the user's γ=2 Ld vanished under a γ=0 card.
+            const sameRun = !!d?.computed_at && d.computed_at === (last as any)?.computed_at;
+            const richer = sameRun
+              && (vBack > vLocal
+                  || (vBack === vLocal && d?.summary?.end3d != null
+                      && last.summary?.end3d == null));
+            // Backend holds a NEWER run than this browser copy (solved in
+            // another tab, or the response was lost to a mid-run reload):
+            // adopt it WHOLE — waveforms and summary together, never a
+            // frankenstein of one run's charts under another run's cards.
+            const backNewer = !!d?.computed_at && !!(last as any)?.computed_at
+              && !sameRun && String(d.computed_at) > String((last as any).computed_at)
+              && !!d?.time_s?.length && !!d?.summary;
+            if (backNewer) {
+              setData(prev => (prev === last || prev == null) ? d : prev);
+              // …and REMEMBER it: the local copy is what "Save to duty" files
+              // as the duty's waveforms (ActiveFamilyStrip's same-run check
+              // reads sim.lastTransient).  Adopting a newer backend run on
+              // screen without persisting it left the old run in localStorage,
+              // the save found no matching waveforms, and the backend kept the
+              // duty's previous sidecar under today's summary (2026-09-13: a
+              // 2-day-old STAR run's line voltages printed in the report of
+              // today's delta duty).
+              persistLastTransient(d);
+            } else if (d?.summary && richer) {
+              setData(prev => (prev === last || prev == null)
+                ? { ...last, summary: d.summary } : prev);
+              persistLastTransient({ ...last, summary: d.summary });
+            }
+          } catch { /* offline — the local copy stands */ }
+        })();
+        return;
+      }
       run(true);   // none locally → ask the backend for its persisted last (restore=true, no compute)
       return;
     }
@@ -573,6 +715,36 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
   // tab that is mid-solve keeps its own run (busyRef guard).
   const busyRef = useRef(false);
   useEffect(() => { busyRef.current = busy; }, [busy]);
+
+  // A backend "DIFFERENT MACHINE" verdict on a RESTORED run is re-asked, never
+  // frozen.  2026-09-13: a page reload landed in a ~5-minute window after an
+  // API restart in which the server's live fingerprint transiently differed;
+  // the restore came back `stale_geometry: true`, the dashboard dimmed to 35 %
+  // and STAYED so for a quarter of an hour although the very next lookup would
+  // have said "same machine" ("если каплинг завершился, почему у меня экран
+  // замыленный?").  The verdict is a function of the geometry the client sends
+  // and of the server's state at that instant — both move — so while it says
+  // "different", ask again: 3 s, 15 s, 60 s, then every 2 min; at once when
+  // the loaded geometry changes.  A restore is a lookup (milliseconds, no
+  // solve), and a legitimately foreign run just keeps its banner.
+  const staleRecheckRef = useRef<{ n: number; sig: string }>({ n: 0, sig: '' });
+  useEffect(() => {
+    const restored = !!data && (data as { restored?: boolean }).restored === true;
+    if (!restored || data?.stale_geometry !== true) {
+      staleRecheckRef.current = { n: 0, sig: geoSig };
+      return;
+    }
+    if (staleRecheckRef.current.sig !== geoSig) staleRecheckRef.current = { n: 0, sig: geoSig };
+    const n = staleRecheckRef.current.n;
+    const delay = [3000, 15000, 60000][n] ?? 120000;
+    const t = setTimeout(() => {
+      if (busyRef.current) return;              // a solve in flight owns the panel
+      staleRecheckRef.current = { n: n + 1, sig: geoSig };
+      run(true);
+    }, delay);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, geoSig]);
   useEffect(() => {
     const onStorage = (e: StorageEvent) => {
       if (e.key !== LAST_KEY || !e.newValue || busyRef.current) return;
@@ -583,6 +755,23 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
     };
     window.addEventListener('storage', onStorage);
     return () => window.removeEventListener('storage', onStorage);
+  }, []);
+
+  // SAME-TAB restore: a duty's STORED RUN was selected (▶ in the catalog, or
+  // the run selector switching sine → PWM).  The `storage` event above fires
+  // only in OTHER tabs, so without this the charts kept the previous run while
+  // the summary card had already switched — the exact frankenstein the restore
+  // path everywhere else is careful to avoid.  Nothing is solved: the payload
+  // is a run that finished minutes or days ago (lib/dutyRuns.ts).
+  useEffect(() => {
+    const onRestored = (e: Event) => {
+      if (busyRef.current) return;            // a solve in flight owns the panel
+      const d = (e as CustomEvent).detail?.payload as TransientPayload | undefined;
+      if (!d?.time_s?.length) return;
+      setData(d); setStale(false); setError(null);
+    };
+    window.addEventListener('sim-transient-restored', onRestored as EventListener);
+    return () => window.removeEventListener('sim-transient-restored', onRestored as EventListener);
   }, []);
 
   // Build chart-friendly row arrays
@@ -621,8 +810,257 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
                ? data.V_B[i] - data.V_C[i] : 0,
       V_CA:  (Number.isFinite(data.V_C[i]) && Number.isFinite(data.V_A[i]))
                ? data.V_C[i] - data.V_A[i] : 0,
+      // What the SOURCE applied at this step — the inverter's pole voltage
+      // under PWM, the commanded current for the imposed-current sources
+      // (where the solver ships no arrays because the current IS the applied
+      // quantity).  Same index as everything else in the row, so the ripple in
+      // the torque line above sits under the switching edge that caused it.
+      exc_A: data.excitation?.A?.[i] ?? data.I_A[i],
+      exc_B: data.excitation?.B?.[i] ?? data.I_B[i],
+      exc_C: data.excitation?.C?.[i] ?? data.I_C[i],
     }));
   }, [data, Tshown]);
+
+  // The excitation chart's labelling — and whether it earns a chart at all.
+  // The two IDEAL sinusoids do not: their applied waveform is already the
+  // current chart (current drive) or the voltage chart (voltage drive), and a
+  // third copy of a sine is not information.
+  const exc = React.useMemo(() => {
+    const k = data?.drive;
+    if (k === 'pwm_voltage') {
+      const p = data?.pwm;
+      return {
+        title: 'Applied inverter pole voltages (what the circuit integrated)',
+        sub: p ? `  ·  ${(p.f_switch_eff_Hz / 1000).toFixed(1)} kHz carrier · `
+                 + `${p.steps_per_switching_period.toFixed(1)} steps/switching period` : '',
+        unit: 'V', prefix: 'V_', stepped: true,
+        help: 'The pole voltage each leg applied, averaged EXACTLY over each solve step — '
+          + 'that is the volt-seconds the line-to-line circuit integrated, so the ripple it '
+          + 'causes in the current and torque charts above lines up with these edges by '
+          + 'construction. It is not the carrier-resolution waveform: drawing pulses the run '
+          + 'never solved would be a picture of a different simulation. The common mode (large '
+          + 'on two-level PWM) falls on the floating neutral and drives no current.',
+      };
+    }
+    if (k === 'bldc_current' || k === 'custom_current') {
+      return {
+        title: k === 'bldc_current'
+          ? 'Commanded block current (what the source imposed)'
+          : 'Commanded waveform current (what the source imposed)',
+        sub: k === 'bldc_current' && data?.bldc
+          ? `  ·  ${data.bldc.i_block_A.toFixed(1)} A flat top · `
+            + `${data.bldc.commutation_ramp_deg.toFixed(1)}°el commutation ramp` : '',
+        unit: 'I [A per branch]', prefix: 'I_', stepped: false,
+        help: k === 'bldc_current'
+          ? 'The 120° block as the solver sampled it, one value per solve step. Each '
+            + 'commutation is ramped over exactly one time step — an ideal block has infinite '
+            + 'di/dt, which is not a source a time-marched solve can accept — so a finer run '
+            + 'gives a sharper edge rather than a different machine. The three phases sum to '
+            + 'zero throughout, ramps included.'
+          : 'The imposed waveform as the solver sampled it, one value per solve step: the '
+            + 'linear interpolation of the pasted samples at the angles actually solved. If '
+            + 'this looks coarser than what you pasted, the run has fewer steps than your '
+            + 'waveform has detail.',
+      };
+    }
+    return null;
+  }, [data]);
+
+  // ── carrier-resolution pulse train, expanded for drawing ──────────────
+  // The payload is EDGES; a step line needs a point at every edge, and the
+  // dashed fundamental needs points between them.  So: the union of the edge
+  // instants and a uniform grid, each row carrying the step value in force at
+  // that instant and the fundamental evaluated there.  The expansion is
+  // client-side and disposable — nothing dense is ever persisted.
+  const waveA = React.useMemo(() => {
+    const w = data?.pwm?.wave_AB;
+    if (!w || !w.t_s?.length) return null;
+    const times = new Set<number>(w.t_s);
+    const GRID = 720;
+    for (let i = 0; i <= GRID; i++) times.add((w.t_end_s * i) / GRID);
+    const xs = Array.from(times).sort((a, b) => a - b);
+    let j = -1;
+    const rows = xs.map(t => {
+      while (j + 1 < w.t_s.length && w.t_s[j + 1] <= t + 1e-15) j += 1;
+      const ang = (360 * w.f_elec_Hz * t + w.v1_ll_phase_deg) * Math.PI / 180;
+      return {
+        t_ms: t * 1e3,
+        v_pwm: j >= 0 ? w.v[j] : 0,
+        v1: w.v1_ll_peak_V * Math.cos(ang),
+      };
+    });
+    return { rows, w };
+  }, [data]);
+
+  // ── DC-link current, per solve step ───────────────────────────────────
+  // Straight from the payload: one value per solved step, already on the same
+  // grid as `rows`, so it is zipped onto the run's own time axis rather than
+  // resampled.  The mean line is drawn beside it because the mean IS the
+  // charge current — the ripple around it is what the pack's capacitor sees.
+  const dcRows = React.useMemo(() => {
+    const d = data?.pwm?.dc_link;
+    const ts = data?.time_s;
+    if (!d?.I_dc_A?.length || !ts?.length) return null;
+    const n = Math.min(d.I_dc_A.length, ts.length);
+    const t0 = ts[0] ?? 0;
+    const out = [];
+    for (let i = 0; i < n; i++) {
+      out.push({ t_ms: (ts[i] - t0) * 1e3, i_dc: d.I_dc_A[i],
+                 i_mean: d.I_dc_mean_A });
+    }
+    return { rows: out, d };
+  }, [data]);
+
+  // ── DC-link VOLTAGE, boost mode (user 2026-09-02) ─────────────────────
+  // The pack is the bus: v_dc(t) = V_oc − R_pack·i_dc(t) with the run's own
+  // V_oc and R_pack (summary.battery_charge), on the same per-step grid as
+  // i_dc.  i_dc > 0 draws from the pack (terminal sags), < 0 charges it
+  // (terminal rises) — the mean of this curve IS the V_bus the charging card
+  // reports.  An optional bus capacitor C_dc (a property of the inverter, not
+  // of the machine — typed here, remembered per browser) filters the ripple:
+  // R·C·dv/dt + (v − V_oc) = −R·i_dc(t), solved exactly step by step (i_dc is
+  // a per-step mean) and closed to its periodic steady state.  The mean does
+  // not move with C; only the ripple does.
+  // Empty field = the TYPICAL capacitor for this bus and power (user
+  // 2026-09-02): film-cap rules of thumb per voltage class — ≈4 µF/kW for the
+  // 800 V SiC class, ≈10 µF/kW at 400 V, ≈60 µF/kW electrolytic below 100 V
+  // (ESC) — floored at 50 µF and snapped to the 1-2-5 series.  Type 0 for the
+  // bare pack, any other number for a known inverter.
+  const [cdcUF, setCdcUF] = useState<string>(() => {
+    try { return localStorage.getItem('sim.dcLinkCapUF') ?? ''; } catch { return ''; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem('sim.dcLinkCapUF', cdcUF); } catch { /* ignore */ }
+  }, [cdcUF]);
+  // Cable + pack inductance between the pack and the bus capacitor (user
+  // 2026-09-02: "the ripple only shifted" — with zero inductance a 25 mΩ pack
+  // is stiffer than any capacitor, which is the unrealisable case).  Empty =
+  // typical 2 µH (≈1 µH per metre of twisted DC harness plus busbar/pack
+  // inductance); 0 = ideal, pack directly on the capacitor.
+  const [lcUH, setLcUH] = useState<string>(() => {
+    try { return localStorage.getItem('sim.dcLinkCableUH') ?? ''; } catch { return ''; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem('sim.dcLinkCableUH', lcUH); } catch { /* ignore */ }
+  }, [lcUH]);
+  const TYPICAL_L_UH = 2;
+  // Excitation chart: one phase at a time to read the pole voltage against the
+  // winding's own phase voltage (user 2026-09-02), or all three.
+  const [excOnlyA, setExcOnlyA] = useState<boolean>(() => {
+    try { return localStorage.getItem('sim.excOnlyA') === '1'; } catch { return false; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem('sim.excOnlyA', excOnlyA ? '1' : '0'); } catch { /* ignore */ }
+  }, [excOnlyA]);
+  const typicalCdcUF = (vBusV: number, pKW: number): number => {
+    const perKW = vBusV >= 550 ? 4 : vBusV >= 200 ? 10 : 60;
+    const raw = Math.max(50, perKW * Math.max(pKW, 1));
+    const dec = Math.pow(10, Math.floor(Math.log10(raw)));
+    const m = raw / dec;
+    const snap = m < 1.5 ? 1 : m < 3.5 ? 2 : m < 7.5 ? 5 : 10;
+    return snap * dec;
+  };
+  const vdcRows = React.useMemo(() => {
+    const d = data?.pwm?.dc_link;
+    const ts = data?.time_s;
+    const bc = data?.summary?.battery_charge;
+    if (!d?.I_dc_A?.length || !ts?.length || !bc || !(bc.V_oc_V > 0)) return null;
+    const R = bc.R_pack_ohm > 0 ? bc.R_pack_ohm : 0;
+    const Voc = bc.V_oc_V;
+    const n = Math.min(d.I_dc_A.length, ts.length);
+    const t0 = ts[0] ?? 0;
+    const dt = n > 1 ? (ts[n - 1] - ts[0]) / (n - 1) : 0;
+    const pKW = Math.max(Math.abs(bc.P_mech_in_W ?? 0), Math.abs(bc.P_charge_W ?? 0)) / 1000;
+    const typUF = typicalCdcUF(bc.V_bus_V > 0 ? bc.V_bus_V : Voc, pKW);
+    const typical = cdcUF.trim() === '';
+    const cUF = typical ? typUF : Math.max(0, Number(cdcUF) || 0);
+    const C = cUF > 0 ? cUF * 1e-6 : 0;
+    const lTypical = lcUH.trim() === '';
+    const lUH = lTypical ? TYPICAL_L_UH : Math.max(0, Number(lcUH) || 0);
+    const L = lUH * 1e-6;
+    // Bus node with the pack behind R (+L) and the capacitor across it; the
+    // bridge draws i_dc (a per-step MEAN, held constant inside each step).
+    //   L·di_L/dt = V_oc − R·i_L − v ,   C·dv/dt = i_L − i_dc
+    // (L = 0 collapses to  R·C·dv/dt + v − V_oc = −R·i_dc).  Linear with
+    // periodic forcing, so the steady state is closed exactly: x(T) = M·x(0) + c
+    // from unit-vector passes, then (I − M)·x0 = c.
+    let vSeries: number[] | null = null;
+    let iBat: number[] | null = null;
+    if (C > 0 && R > 0 && dt > 0) {
+      if (L > 0) {
+        const T0 = 2 * Math.PI * Math.sqrt(L * C);
+        const nsub = Math.min(400, Math.max(4, Math.ceil(dt / (0.02 * T0))));
+        const h = dt / nsub;
+        const f = (iL: number, v: number, idc: number): [number, number] =>
+          [(Voc - R * iL - v) / L, (iL - idc) / C];
+        const pass = (iL0: number, v0: number) => {
+          let iL = iL0, v = v0;
+          const vs: number[] = [], is: number[] = [];
+          for (let i = 0; i < n; i++) {
+            const idc = d.I_dc_A[i];
+            vs.push(v); is.push(iL);
+            for (let s = 0; s < nsub; s++) {
+              const k1 = f(iL, v, idc);
+              const k2 = f(iL + 0.5 * h * k1[0], v + 0.5 * h * k1[1], idc);
+              const k3 = f(iL + 0.5 * h * k2[0], v + 0.5 * h * k2[1], idc);
+              const k4 = f(iL + h * k3[0], v + h * k3[1], idc);
+              iL += (h / 6) * (k1[0] + 2 * k2[0] + 2 * k3[0] + k4[0]);
+              v += (h / 6) * (k1[1] + 2 * k2[1] + 2 * k3[1] + k4[1]);
+            }
+          }
+          return { vs, is, iT: iL, vT: v };
+        };
+        const p0 = pass(0, 0), p1 = pass(1, 0), p2 = pass(0, 1);
+        // M = [[m11, m12],[m21, m22]] on (iL, v); c = (p0.iT, p0.vT)
+        const m11 = p1.iT - p0.iT, m21 = p1.vT - p0.vT;
+        const m12 = p2.iT - p0.iT, m22 = p2.vT - p0.vT;
+        const a11 = 1 - m11, a12 = -m12, a21 = -m21, a22 = 1 - m22;
+        const det = a11 * a22 - a12 * a21;
+        if (Math.abs(det) > 1e-14) {
+          const iL0 = (p0.iT * a22 - a12 * p0.vT) / det;
+          const v0 = (a11 * p0.vT - a21 * p0.iT) / det;
+          const ps = pass(iL0, v0);
+          vSeries = ps.vs; iBat = ps.is;
+        }
+      } else {
+        const a1 = Math.exp(-dt / (R * C));
+        const pass = (v0: number) => {
+          let v = v0; const arr: number[] = [];
+          for (let i = 0; i < n; i++) {
+            const vInf = Voc - R * d.I_dc_A[i];
+            arr.push(v);
+            v = vInf + (v - vInf) * a1;
+          }
+          return { arr, vT: v };
+        };
+        const p0 = pass(0), p1 = pass(1);
+        const a = p1.vT - p0.vT, b = p0.vT;
+        const v0 = Math.abs(1 - a) > 1e-12 ? b / (1 - a) : Voc;
+        vSeries = pass(v0).arr;
+        iBat = vSeries.map((v) => (Voc - v) / R);
+      }
+    }
+    const rows = [];
+    let vMin = Infinity, vMax = -Infinity, vSum = 0;
+    let cMin = Infinity, cMax = -Infinity, cSum = 0;
+    let bMin = Infinity, bMax = -Infinity;
+    let dMin = Infinity, dMax = -Infinity;
+    for (let i = 0; i < n; i++) {
+      const v = Voc - R * d.I_dc_A[i];
+      vMin = Math.min(vMin, v); vMax = Math.max(vMax, v); vSum += v;
+      dMin = Math.min(dMin, d.I_dc_A[i]); dMax = Math.max(dMax, d.I_dc_A[i]);
+      const row: Record<string, number> = { t_ms: (ts[i] - t0) * 1e3, v_dc: v, v_oc: Voc };
+      if (vSeries) { row.v_cap = vSeries[i]; cMin = Math.min(cMin, vSeries[i]); cMax = Math.max(cMax, vSeries[i]); cSum += vSeries[i]; }
+      if (iBat) { bMin = Math.min(bMin, iBat[i]); bMax = Math.max(bMax, iBat[i]); }
+      rows.push(row);
+    }
+    const f0 = (C > 0 && L > 0) ? 1 / (2 * Math.PI * Math.sqrt(L * C)) : null;
+    const q = (C > 0 && L > 0 && R > 0) ? Math.sqrt(L / C) / R : null;
+    return { rows, Voc, R, mean: vSum / n, pp: vMax - vMin,
+             ppCap: vSeries ? cMax - cMin : null, meanCap: vSeries ? cSum / n : null,
+             ppBat: iBat ? bMax - bMin : null, ppDc: dMax - dMin,
+             C, cUF, typUF, typical, pKW, lUH, lTypical, f0, q };
+  }, [data, cdcUF, lcUH]);
 
   // Ripple % computed from the DISPLAYED curve (pk-pk / |T_avg|), so it
   // recomputes the instant the 6·k filter is toggled and always matches the
@@ -652,7 +1090,18 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
     // stamp of the run itself (restored runs keep theirs; a run from before the
     // stamp existed carries none and is reported as unknown downstream).
     onSummary({ ...data.summary, T_ripple_pct: ripplePct,
+                // WHICH RUN these numbers are (user 2026-09-13).  The summary
+                // and the waveforms live under two different localStorage keys,
+                // written by two different components, and "Save to duty" could
+                // only ask whether they DESCRIBE the same point — a coincidence
+                // test that says nothing when one of the two is stale at the
+                // same point.  `computed_at` is the run's identity; carrying it
+                // on the summary turns that test into an identity check.
+                _runAt: (data as { computed_at?: string }).computed_at ?? undefined,
                 _geoSig: data._geoSig ?? undefined,
+                // …and which MATERIALS, for the same reason: the summary card
+                // dims itself when the assignment moved under a finished run.
+                _matSig: data._matSig ?? undefined,
                 _geoStaleBackend: data.stale_geometry === true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, torqueFilter, ripplePct]);
@@ -828,13 +1277,47 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
               </Typography>
             );
           })()}
+          {/* LOADED, NOT SOLVED.  One line, never a paragraph: the backend found
+              a stored run whose parameters are identical to this one and handed
+              it back instead of re-solving (user, 2026-09-05).  Saying so is the
+              whole condition on which that is allowed — plus a way out of it. */}
+          {data?.ledger_hit && !busy && (
+            <Typography sx={{ fontSize: 10, color: '#34d399', mt: 0.25 }}>
+              result from{' '}
+              {new Date(data.ledger_computed_at || data.computed_at || '')
+                .toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              {' '}— identical parameters{' · '}
+              <Box component="span" role="button" tabIndex={0}
+                onClick={() => { setStale(false); run(false, true); }}
+                onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { setStale(false); run(false, true); } }}
+                sx={{ color: '#60a5fa', cursor: 'pointer', fontWeight: 700,
+                  textDecoration: 'underline' }}>
+                Recompute
+              </Box>
+              <HelpTip title="Nothing was solved: a run with exactly these inputs — geometry, materials, current, γ, rpm, mesh and drive — is already stored, so it was loaded. Recompute solves it again and replaces the stored one." />
+            </Typography>
+          )}
           {/* Voltage-drive result strip: what was applied + what the machine
               answered with (harmonic currents = the FOC controller's real
               disturbance) + the watt cost vs a clean sinusoidal current. */}
-          {data?.drive === 'voltage' && (
+          {(data?.drive === 'voltage' || data?.drive === 'pwm_voltage') && (
             <Typography sx={{ fontSize: 10, color: 'var(--text-2)', mt: 0.25 }}>
-              <span style={{ color: '#a78bfa', fontWeight: 700 }}>voltage drive</span>
+              <span style={{ color: '#a78bfa', fontWeight: 700 }}>
+                {data.drive === 'pwm_voltage' ? 'PWM inverter' : 'voltage drive'}</span>
               {' '}V = {Number(data.v_phase_peak_V ?? 0).toFixed(1)} V @ δ {Number(data.v_delta_deg ?? 0).toFixed(1)}°
+              {data.pwm && <> · {Number(data.pwm.v_bus_V).toFixed(0)} V bus · f_sw{' '}
+                <b>{(data.pwm.f_switch_eff_Hz / 1000).toFixed(1)} kHz</b>{' '}
+                (m {data.pwm.modulation_index.toFixed(2)},{' '}
+                <b style={{ color: data.pwm.steps_per_switching_period >= 10 ? '#34d399' : '#fbbf24' }}>
+                  {data.pwm.steps_per_switching_period.toFixed(1)} steps/switch</b>)
+                <HelpTip title={`${data.pwm.modulator}. The carrier is snapped to `
+                  + `${data.pwm.carriers_per_period} whole periods per electrical period `
+                  + `(requested ${(data.pwm.f_switch_requested_Hz / 1000).toFixed(2)} kHz), so the `
+                  + `reported electrical period repeats. Applied fundamental `
+                  + `${data.pwm.v1_applied_V.toFixed(2)} V @ ${data.pwm.v1_applied_delta_deg.toFixed(1)}° `
+                  + `from a reference at ${data.pwm.reference_delta_deg.toFixed(1)}° — the `
+                  + `modulator's sampled-reference delay and gain, compensated. Below ~10 steps per `
+                  + `switching period the ripple is averaged out and the losses read LOW.`} /></>}
               {data.summary?.THD_I_pct != null &&
                 <> · THD_I = <b style={{ color: (data.summary.THD_I_pct <= 5 ? '#34d399' : data.summary.THD_I_pct <= 15 ? '#fbbf24' : '#f87171') }}>
                   {data.summary.THD_I_pct.toFixed(1)} %</b></>}
@@ -845,7 +1328,34 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
                   {(data.dP_harm_W as number) >= 0 ? '+' : ''}{Number(data.dP_harm_W).toFixed(1)} W</b>
                   <HelpTip title={'Extra loss caused by the parasitic harmonic currents: this voltage-drive run minus a current-drive reference at the SAME fundamental current (I₁, γ₁). Positive = the distorted back-EMF costs real watts under a sinusoidal FOC supply.'} /></>}
               {data.v_dc_residual_A != null &&
-                <> · DC resid {Number(data.v_dc_residual_A).toFixed(2)} A</>}
+                <> · DC resid <b style={{ color: (data.summary?.pwm_dc_unconverged ? '#f87171' : '#34d399') }}>
+                  {Number(data.v_dc_residual_A).toFixed(2)} A</b>
+                  <HelpTip title={'Mean phase current over the reported electrical period, worst phase. '
+                    + 'Zero on a settled orbit. Above ' + (data.summary?.pwm_dc_tol_A ?? 0.5) + ' A the reported '
+                    + 'TORQUE RIPPLE and current ripple ARE this offset, not the machine (the loss terms barely move).'} /></>}
+            </Typography>
+          )}
+          {/* Imposed-current sources that are NOT the sinusoid: say what
+              current actually went in, because "I rms" on the panel is not it. */}
+          {data?.drive === 'bldc_current' && data.bldc && (
+            <Typography sx={{ fontSize: 10, color: 'var(--text-2)', mt: 0.25 }}>
+              <span style={{ color: '#a78bfa', fontWeight: 700 }}>BLDC 120° block</span>
+              {' '}I = {data.bldc.i_block_A.toFixed(1)} A flat top ·{' '}
+              {data.bldc.I_phase_rms_A.toFixed(1)} A rms · I₁ ={' '}
+              {data.bldc.I1_phase_rms_A.toFixed(1)} A rms
+              <HelpTip title={`${data.bldc.note}. The flat top is the controller's current `
+                + `limit; the rms (I·√(2/3)) is what heats the winding and the fundamental `
+                + `(I·2√3/π) is what makes the mean torque — compare against a sinusoidal run `
+                + `at the same rms, not at the same peak.`} />
+            </Typography>
+          )}
+          {data?.drive === 'custom_current' && data.custom_current && (
+            <Typography sx={{ fontSize: 10, color: 'var(--text-2)', mt: 0.25 }}>
+              <span style={{ color: '#a78bfa', fontWeight: 700 }}>imposed waveform</span>
+              {' '}{data.custom_current.n_samples} pts ·{' '}
+              {data.custom_current.I_phase_rms_A.toFixed(1)} A rms · I₁ ={' '}
+              {data.custom_current.I1_phase_rms_A.toFixed(1)} A rms @ γ₁{' '}
+              {data.custom_current.gamma1_deg.toFixed(1)}°
             </Typography>
           )}
         </Box>
@@ -907,7 +1417,7 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
                 <Line type="monotone" dataKey="T_em" stroke="#34d399"
                   strokeWidth={1.25}
                   dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
-                    r={3} fill={d.stroke} stroke="none"/>}
+                    r={1.5} fill={d.stroke} stroke="none"/>}
                   activeDot={{ r: 2 }}
                   isAnimationActive={false}/>
               </LineChart>
@@ -968,7 +1478,7 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
                 <Line type="monotone" dataKey="P_cu" stroke="#fbbf24"
                   name="P_Cu (DC+AC)" strokeWidth={1.25}
                   dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
-                    r={3} fill={d.stroke} stroke="none"/>}
+                    r={1.5} fill={d.stroke} stroke="none"/>}
                   activeDot={{ r: 2 }}
                   isAnimationActive={false}/>
                 {/* Flat DC-only copper reference: the vertical gap to P_Cu (DC+AC)
@@ -980,25 +1490,25 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
                 <Line type="monotone" dataKey="P_fe" stroke="#f87171"
                   name="P_Fe" strokeWidth={1.25}
                   dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
-                    r={3} fill={d.stroke} stroke="none"/>}
+                    r={1.5} fill={d.stroke} stroke="none"/>}
                   activeDot={{ r: 2 }}
                   isAnimationActive={false}/>
                 <Line type="monotone" dataKey="P_mag" stroke="#a78bfa"
                   name="P_Mag" strokeWidth={1.25}
                   dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
-                    r={3} fill={d.stroke} stroke="none"/>}
+                    r={1.5} fill={d.stroke} stroke="none"/>}
                   activeDot={{ r: 2 }}
                   isAnimationActive={false}/>
                 <Line type="monotone" dataKey="P_shaft" stroke="#4ade80"
                   name="P_shaft (Al)" strokeWidth={1.25} strokeDasharray="4 2"
                   dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
-                    r={3} fill={d.stroke} stroke="none"/>}
+                    r={1.5} fill={d.stroke} stroke="none"/>}
                   activeDot={{ r: 2 }}
                   isAnimationActive={false}/>
                 <Line type="monotone" dataKey="P_tot" stroke="var(--text-1)"
                   name="P_total" strokeWidth={1.25}
                   dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
-                    r={3} fill={d.stroke} stroke="none"/>}
+                    r={1.5} fill={d.stroke} stroke="none"/>}
                   activeDot={{ r: 2 }}
                   isAnimationActive={false}/>
               </LineChart>
@@ -1026,19 +1536,19 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
                 <Line type="monotone" dataKey="I_A" stroke="#ef4444"
                   name="I_A" strokeWidth={1.25}
                   dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
-                    r={3} fill={d.stroke} stroke="none"/>}
+                    r={1.5} fill={d.stroke} stroke="none"/>}
                   activeDot={{ r: 2 }}
                   isAnimationActive={false}/>
                 <Line type="monotone" dataKey="I_B" stroke="#10b981"
                   name="I_B" strokeWidth={1.25}
                   dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
-                    r={3} fill={d.stroke} stroke="none"/>}
+                    r={1.5} fill={d.stroke} stroke="none"/>}
                   activeDot={{ r: 2 }}
                   isAnimationActive={false}/>
                 <Line type="monotone" dataKey="I_C" stroke="#60a5fa"
                   name="I_C" strokeWidth={1.25}
                   dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
-                    r={3} fill={d.stroke} stroke="none"/>}
+                    r={1.5} fill={d.stroke} stroke="none"/>}
                   activeDot={{ r: 2 }}
                   isAnimationActive={false}/>
               </LineChart>
@@ -1049,7 +1559,10 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
           <Box sx={{ height: 220 }}>
             <Typography sx={{ fontSize: 11, fontWeight: 700, color: 'var(--text-2)' }}>
               Phase voltages V_A / V_B / V_C  (V_peak ≈ {data.V_peak.toFixed(1)} V)
-              <span style={{ color: 'var(--text-4)', fontWeight: 400 }}>  ·  {rows.length} points</span>
+              <span style={{ color: 'var(--text-4)', fontWeight: 400 }}>  ·  {rows.length} points{
+                (data.drive === 'pwm_voltage')
+                  ? ' · per-step mean — the real terminal voltage is rectangular pulses swinging the full bus; each point is the exact volt-second average of one solve step (what the winding integrated)'
+                  : ''}</span>
             </Typography>
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={rows} margin={{ top: 8, right: 10, left: 0, bottom: 16 }}>
@@ -1066,19 +1579,19 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
                 <Line type="monotone" dataKey="V_A" stroke="#ef4444"
                   name="V_A" strokeWidth={1.25}
                   dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
-                    r={3} fill={d.stroke} stroke="none"/>}
+                    r={1.5} fill={d.stroke} stroke="none"/>}
                   activeDot={{ r: 2 }}
                   isAnimationActive={false}/>
                 <Line type="monotone" dataKey="V_B" stroke="#10b981"
                   name="V_B" strokeWidth={1.25}
                   dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
-                    r={3} fill={d.stroke} stroke="none"/>}
+                    r={1.5} fill={d.stroke} stroke="none"/>}
                   activeDot={{ r: 2 }}
                   isAnimationActive={false}/>
                 <Line type="monotone" dataKey="V_C" stroke="#60a5fa"
                   name="V_C" strokeWidth={1.25}
                   dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
-                    r={3} fill={d.stroke} stroke="none"/>}
+                    r={1.5} fill={d.stroke} stroke="none"/>}
                   activeDot={{ r: 2 }}
                   isAnimationActive={false}/>
               </LineChart>
@@ -1151,19 +1664,19 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
                 <Line type="monotone" dataKey="V_AB" stroke="#a78bfa"
                   name="V_AB" strokeWidth={1.25}
                   dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
-                    r={3} fill={d.stroke} stroke="none"/>}
+                    r={1.5} fill={d.stroke} stroke="none"/>}
                   activeDot={{ r: 2 }}
                   isAnimationActive={false}/>
                 <Line type="monotone" dataKey="V_BC" stroke="#f472b6"
                   name="V_BC" strokeWidth={1.25}
                   dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
-                    r={3} fill={d.stroke} stroke="none"/>}
+                    r={1.5} fill={d.stroke} stroke="none"/>}
                   activeDot={{ r: 2 }}
                   isAnimationActive={false}/>
                 <Line type="monotone" dataKey="V_CA" stroke="#fbbf24"
                   name="V_CA" strokeWidth={1.25}
                   dot={(d: any) => <circle key={d.index} cx={d.cx} cy={d.cy}
-                    r={3} fill={d.stroke} stroke="none"/>}
+                    r={1.5} fill={d.stroke} stroke="none"/>}
                   activeDot={{ r: 2 }}
                   isAnimationActive={false}/>
               </LineChart>
@@ -1206,6 +1719,270 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
                   ))}
                 </Bar>
               </BarChart>
+            </ResponsiveContainer>
+          </Box>
+          )}
+
+          {/* ── EXCITATION: what the source actually applied ──────────────
+              Last, and on the SAME t axis as everything above, so switching
+              edges line up with the ripple they cause in the torque and
+              current charts.  Sampled AT the solve steps — that is what the
+              circuit integrated; the carrier-resolution waveform would be a
+              picture of something this run did not solve.  Only for the
+              sources where it is not already on screen: the two sinusoids need
+              no such chart, and for the imposed-current sources the applied
+              waveform IS the current chart above. */}
+          {exc && (
+          <Box sx={{ height: 230 }}>
+            <Typography component="div" sx={{ fontSize: 11, fontWeight: 700, color: 'var(--text-2)',
+              display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 0.5 }}>
+              <span>{exc.title}</span>
+              <span style={{ color: 'var(--text-4)', fontWeight: 400 }}>
+                {'  ·  '}{rows.length} points{exc.sub}
+              </span>
+              <Tooltip title={exc.help + (excOnlyA && exc.stepped
+                ? ' Phase A only: the stepped line is the POLE voltage (bridge output vs the bus mid-point, '
+                  + 'a per-step mean of ±V_bus/2); the dashed line is the same phase\'s PHASE voltage vs the '
+                  + 'winding neutral. Their difference is the common mode, which the floating neutral absorbs.'
+                : '')} placement="top">
+                <span style={{ color: 'var(--text-4)', marginLeft: 2, fontSize: 11, cursor: 'help' }}>ⓘ</span>
+              </Tooltip>
+              <span style={{ marginLeft: 6, display: 'inline-flex', gap: 2 }}>
+                {([['A', true], ['ABC', false]] as const).map(([lbl, only]) => (
+                  <span key={lbl} onClick={() => setExcOnlyA(only)}
+                    title={only ? 'Phase A only, with its phase-to-neutral voltage' : 'All three phases'}
+                    style={{ cursor: 'pointer', padding: '0 6px', borderRadius: 3, fontSize: 10,
+                      border: '1px solid var(--line)',
+                      background: excOnlyA === only ? 'var(--panel-3)' : 'transparent',
+                      color: excOnlyA === only ? 'var(--text-1)' : 'var(--text-4)' }}>{lbl}</span>
+                ))}
+              </span>
+            </Typography>
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={rows} margin={{ top: 8, right: 10, left: 0, bottom: 16 }}>
+                <CartesianGrid {...GRID}/>
+                <XAxis dataKey="t_ms" tick={AXIS} tickFormatter={fmtMs}
+                  label={{ value: 't [ms]', position: 'insideBottom',
+                    offset: -4, style: { fontSize: 10, fill: 'var(--text-4)' } }}/>
+                <YAxis tick={AXIS}
+                  label={{ value: exc.unit, angle: -90,
+                    position: 'insideLeft', offset: 12,
+                    style: { fontSize: 10, fill: 'var(--text-4)' } }}/>
+                <RcTooltip {...TOOLTIP}/>
+                <Legend wrapperStyle={{ fontSize: 10 }}/>
+                {(excOnlyA ? (['A'] as const) : (['A', 'B', 'C'] as const)).map((ph) => (
+                  // stepBEFORE, not after: the frame loop integrates
+                  // [theta_prev, theta_k] and stores that mean at index k, so
+                  // the value belongs to the step ENDING at this timestamp.
+                  // (Measured: aligning it forward instead disagrees with the
+                  // pulse train by 23 V, the full bus swing — see the wave_A
+                  // self-check.)
+                  <Line key={ph} type={exc.stepped ? 'stepBefore' : 'monotone'}
+                    dataKey={`exc_${ph}`} stroke={{ A: '#ef4444', B: '#10b981', C: '#60a5fa' }[ph]}
+                    name={`${exc.prefix}${ph}${excOnlyA && exc.stepped ? ' pole (vs bus mid-point)' : ''}`}
+                    strokeWidth={1.25} dot={false}
+                    activeDot={{ r: 2 }} isAnimationActive={false}/>
+                ))}
+                {excOnlyA && exc.stepped && (
+                  <Line type="stepBefore" dataKey="V_A" stroke="#fbbf24"
+                    name="V_A phase (vs winding neutral)" strokeWidth={1.25}
+                    strokeDasharray="5 4" dot={false} activeDot={{ r: 2 }}
+                    isAnimationActive={false}/>
+                )}
+              </LineChart>
+            </ResponsiveContainer>
+          </Box>
+          )}
+
+          {/* ── LINE VOLTAGE AT CARRIER RESOLUTION — the scope view ─────
+              The excitation chart above plots what the SOLVE integrated (one
+              mean per step).  This one plots what the CONTROLLER put across
+              the motor: V_AB, three-level, the full bus.  Pole voltages are
+              referenced to the DC-link mid-point — a construction, not a
+              terminal — so the phase-to-mid-point view understates the swing
+              by 2x and shows two levels where the machine sees three.
+              Reconstructed analytically from the modulator, and it IS the same
+              pulse train: integrating these edges over each solve step
+              reproduces the line-to-line volt-second means the circuit used to
+              1.4e-12 V (3e-12 worst case over the studied carriers). */}
+          {waveA && (
+          <Box sx={{ height: 250 }}>
+            <Typography sx={{ fontSize: 11, fontWeight: 700, color: 'var(--text-2)' }}>
+              Line voltage V_AB — carrier resolution
+              <span style={{ color: 'var(--text-4)', fontWeight: 400 }}>
+                {'  ·  '}±{waveA.w.v_bus_V.toFixed(1)} V bus ·{' '}
+                {waveA.w.carriers_per_period} carriers/period ·{' '}
+                {waveA.w.n_edges} edges · duty A{' '}
+                {(100 * Math.min(...waveA.w.duty_A)).toFixed(0)}–
+                {(100 * Math.max(...waveA.w.duty_A)).toFixed(0)} %, B{' '}
+                {(100 * Math.min(...waveA.w.duty_B)).toFixed(0)}–
+                {(100 * Math.max(...waveA.w.duty_B)).toFixed(0)} %
+              </span>
+              <Tooltip placement="top" title={
+                'The voltage the inverter puts ACROSS two motor terminals: pole_A − pole_B, '
+                + 'three-level (0, ±V_bus), because the two legs switch at different instants '
+                + 'inside the same carrier period. Reconstructed analytically from the modulator '
+                + '— the exact pulse train whose per-step volt-second means the solve integrated '
+                + '(verified to 1.4e-12 V), NOT a solver output sampled coarser. The dashed sine '
+                + 'is the applied LINE fundamental: with v_A = V₁cos(x) and v_B = V₁cos(x−120°), '
+                + 'cosX−cosY = −2·sin((X+Y)/2)·sin((X−Y)/2) gives v_AB = √3·V₁·cos(x+30°) — so '
+                + '√3 in amplitude and +30°el in phase, both measured back off these edges '
+                + '(ratio 1.73205, delta +30.04°). Sent as switching EDGES (~4 per carrier, '
+                + '1–7 kB) and expanded here for drawing.'}>
+                <span style={{ color: 'var(--text-4)', marginLeft: 6, fontSize: 11, cursor: 'help' }}>ⓘ</span>
+              </Tooltip>
+            </Typography>
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={waveA.rows} margin={{ top: 8, right: 10, left: 0, bottom: 16 }}>
+                <CartesianGrid {...GRID}/>
+                <XAxis dataKey="t_ms" tick={AXIS} tickFormatter={fmtMs} type="number"
+                  domain={['dataMin', 'dataMax']}
+                  label={{ value: 't [ms]', position: 'insideBottom',
+                    offset: -4, style: { fontSize: 10, fill: 'var(--text-4)' } }}/>
+                <YAxis tick={AXIS}
+                  label={{ value: 'V_AB [V]', angle: -90,
+                    position: 'insideLeft', offset: 12,
+                    style: { fontSize: 10, fill: 'var(--text-4)' } }}/>
+                <RcTooltip {...TOOLTIP}/>
+                <Legend wrapperStyle={{ fontSize: 10 }}/>
+                <Line type="stepAfter" dataKey="v_pwm" stroke="#22d3ee"
+                  name="V_AB (line)" strokeWidth={1.1} dot={false}
+                  activeDot={false} isAnimationActive={false}/>
+                <Line type="monotone" dataKey="v1" stroke="#fbbf24"
+                  name="applied line fundamental" strokeWidth={1.4}
+                  strokeDasharray="5 4" dot={false} activeDot={false}
+                  isAnimationActive={false}/>
+              </LineChart>
+            </ResponsiveContainer>
+          </Box>
+          )}
+
+          {/* ── DC-link current — the boost-mode oscillogram ─────────────
+              Not a second view of the phase currents: it is what the BUS
+              carries, Σ_phase s_phase·i_phase, and its MEAN is the charge
+              current.  Drawn under the carrier chart because the two are the
+              same bridge seen from its two sides. */}
+          {dcRows && (
+          <Box sx={{ height: 230 }}>
+            <Typography sx={{ fontSize: 11, fontWeight: 700, color: 'var(--text-2)' }}>
+              DC-link current i_dc(t) — battery side of the bridge
+              <span style={{ color: 'var(--text-4)', fontWeight: 400 }}>
+                {'  ·  '}mean {dcRows.d.I_dc_mean_A.toFixed(2)} A
+                {'  ·  '}rms {dcRows.d.I_dc_rms_A.toFixed(2)} A
+                {'  ·  '}ripple {dcRows.d.I_dc_ripple_pp_A.toFixed(2)} A p-p
+                {'  ·  '}
+                {dcRows.d.I_dc_mean_A < 0 ? 'INTO the pack' : 'OUT of the pack'}
+              </span>
+              <Tooltip placement="top" title={
+                'i_dc = Σ_phase s_phase(t)·i_phase(t), one mean per solved step, integrated exactly across '
+                + "the modulator's own switching edges inside each step (the phase current taken linear between "
+                + 'solved steps). POSITIVE draws from the pack, NEGATIVE charges it. With pole voltages ±V_bus/2 '
+                + 'and a floating neutral, V_bus·i_dc equals Σ v_pole·i identically, so this is the terminal '
+                + 'power the run already solved, read on the other side of the switches — not a converter model '
+                + 'bolted on afterwards. Ideal bridge: no dead time, no device drops, no bus ripple. '
+                + dcRows.d.note}>
+                <span style={{ color: 'var(--text-4)', marginLeft: 6, fontSize: 11, cursor: 'help' }}>ⓘ</span>
+              </Tooltip>
+            </Typography>
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={dcRows.rows} margin={{ top: 8, right: 10, left: 0, bottom: 16 }}>
+                <CartesianGrid {...GRID}/>
+                <XAxis dataKey="t_ms" tick={AXIS} tickFormatter={fmtMs}
+                  label={{ value: 't [ms]', position: 'insideBottom',
+                    offset: -4, style: { fontSize: 10, fill: 'var(--text-4)' } }}/>
+                <YAxis tick={AXIS}
+                  label={{ value: 'i_dc [A]', angle: -90,
+                    position: 'insideLeft', offset: 12,
+                    style: { fontSize: 10, fill: 'var(--text-4)' } }}/>
+                <RcTooltip {...TOOLTIP}/>
+                <Legend wrapperStyle={{ fontSize: 10 }}/>
+                <Line type="monotone" dataKey="i_dc" stroke="#f59e0b"
+                  name="i_dc (per step)" strokeWidth={1.25} dot={false}
+                  activeDot={{ r: 2 }} isAnimationActive={false}/>
+                <Line type="monotone" dataKey="i_mean" stroke="#38bdf8"
+                  name="mean = charge current" strokeWidth={1.4}
+                  strokeDasharray="5 4" dot={false} activeDot={false}
+                  isAnimationActive={false}/>
+              </LineChart>
+            </ResponsiveContainer>
+          </Box>
+          )}
+
+          {/* ── DC-link voltage — boost mode: the pack terminal under i_dc ── */}
+          {vdcRows && (
+          <Box sx={{ height: 250 }}>
+            <Typography component="div" sx={{ fontSize: 11, fontWeight: 700, color: 'var(--text-2)',
+              display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 0.5 }}>
+              <span>DC-link voltage v_dc(t) — pack terminal, V_oc − R_pack·i_dc</span>
+              <span style={{ color: 'var(--text-4)', fontWeight: 400 }}>
+                {'  ·  '}V_oc {vdcRows.Voc.toFixed(1)} V
+                {'  ·  '}R_pack {(vdcRows.R * 1e3).toFixed(1)} mΩ
+                {'  ·  '}mean {vdcRows.mean.toFixed(2)} V
+                {'  ·  '}ripple {vdcRows.pp.toFixed(2)} V p-p
+                {vdcRows.ppCap != null
+                  ? `  ·  bus with C_dc ${vdcRows.cUF} µF${vdcRows.lUH > 0 ? ` + L ${vdcRows.lUH} µH` : ''}: ${vdcRows.ppCap.toFixed(3)} V p-p`
+                    + (vdcRows.ppBat != null ? `  ·  pack current ${vdcRows.ppDc.toFixed(1)} → ${vdcRows.ppBat.toFixed(2)} A p-p` : '')
+                    + (vdcRows.f0 != null ? `  ·  f₀ ${(vdcRows.f0 / 1e3).toFixed(1)} kHz` : '')
+                  : '  ·  bare pack'}
+                {vdcRows.typical && vdcRows.ppCap != null ? ` (typical for ${vdcRows.Voc.toFixed(0)} V · ${vdcRows.pKW.toFixed(0)} kW)` : ''}
+              </span>
+              <Tooltip placement="top" title={
+                'v_dc = V_oc − R_pack·i_dc(t): the pack terminal seen by the bridge, per solved step, with the '
+                + "run's own V_oc and R_pack (NS·r_cell/NP). Charging current raises the terminal, so the mean of "
+                + 'this curve is the V_bus the charging card reports. No state-of-charge model: V_oc is the pack '
+                + 'nominal. The second curve is the BUS with the inverter capacitor C_dc across it and the pack '
+                + 'behind R_pack and the cable inductance L: L·di/dt = V_oc − R·i − v, C·dv/dt = i − i_dc, closed '
+                + 'exactly to its periodic steady state. With L the switching ripple has to flow through the '
+                + 'capacitor (the cable blocks it from the pack), so the bus ripple is ≈ ΔQ/C_dc — halve it by '
+                + 'doubling C_dc — and the pack current is smoothed; with L = 0 a 25 mΩ pack is stiffer than any '
+                + `capacitor and the ripple only shifts in phase. Resonance f₀ = 1/(2π√LC)${vdcRows.f0 != null ? ` = ${(vdcRows.f0 / 1e3).toFixed(1)} kHz, Q = ${vdcRows.q?.toFixed(1)}` : ''}; `
+                + 'keep it away from 6·f_e and from the carrier. Means do not move with C or L, only ripple. '
+                + 'Empty C_dc = typical film capacitor for this class: ≈4 µF/kW at 800 V (SiC), ≈10 µF/kW at 400 V, '
+                + `≈60 µF/kW electrolytic below 100 V, floor 50 µF, 1-2-5 series → ${vdcRows.typUF} µF here; `
+                + `empty L = ${TYPICAL_L_UH} µH (≈1 µH per metre of twisted DC harness + busbar). Type 0 for the bare pack. `
+                + 'i_dc is a per-step mean: a coarse pass (few steps per carrier) under-resolves the switching ripple. '
+                + 'Ideal bridge: no dead time, no device drops.'}>
+                <span style={{ color: 'var(--text-4)', marginLeft: 2, fontSize: 11, cursor: 'help' }}>ⓘ</span>
+              </Tooltip>
+              <TextField size="small" label="C_dc (µF)" type="number" value={cdcUF}
+                placeholder={String(vdcRows.typUF)}
+                onChange={(e) => setCdcUF(e.target.value)}
+                inputProps={{ min: 0, step: 10, style: { fontSize: 11, padding: '2px 6px', width: 64 } }}
+                InputLabelProps={{ sx: { fontSize: 10 } }}
+                sx={{ ml: 1, '& .MuiOutlinedInput-notchedOutline': { borderColor: 'var(--line)' } }}/>
+              <TextField size="small" label="L cable (µH)" type="number" value={lcUH}
+                placeholder={String(TYPICAL_L_UH)}
+                onChange={(e) => setLcUH(e.target.value)}
+                inputProps={{ min: 0, step: 0.5, style: { fontSize: 11, padding: '2px 6px', width: 56 } }}
+                InputLabelProps={{ sx: { fontSize: 10 } }}
+                sx={{ ml: 0.5, '& .MuiOutlinedInput-notchedOutline': { borderColor: 'var(--line)' } }}/>
+            </Typography>
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={vdcRows.rows} margin={{ top: 8, right: 10, left: 0, bottom: 16 }}>
+                <CartesianGrid {...GRID}/>
+                <XAxis dataKey="t_ms" tick={AXIS} tickFormatter={fmtMs}
+                  label={{ value: 't [ms]', position: 'insideBottom',
+                    offset: -4, style: { fontSize: 10, fill: 'var(--text-4)' } }}/>
+                <YAxis tick={AXIS} domain={['auto', 'auto']}
+                  tickFormatter={(v: number) => v.toFixed(2)}
+                  label={{ value: 'v_dc [V]', angle: -90,
+                    position: 'insideLeft', offset: 12,
+                    style: { fontSize: 10, fill: 'var(--text-4)' } }}/>
+                <RcTooltip {...TOOLTIP} formatter={((v: unknown) => `${Number(v).toFixed(3)} V`) as any}/>
+                <Legend wrapperStyle={{ fontSize: 10 }}/>
+                <Line type="monotone" dataKey="v_dc" stroke="#a78bfa"
+                  name="v_dc (bare pack)" strokeWidth={1.25} dot={false}
+                  activeDot={{ r: 2 }} isAnimationActive={false}/>
+                {vdcRows.ppCap != null && (
+                  <Line type="monotone" dataKey="v_cap" stroke="#34d399"
+                    name={`bus: C_dc ${vdcRows.cUF} µF${vdcRows.lUH > 0 ? ` + L ${vdcRows.lUH} µH` : ''}${vdcRows.typical ? ' (typical)' : ''}`} strokeWidth={1.4} dot={false}
+                    activeDot={{ r: 2 }} isAnimationActive={false}/>
+                )}
+                <Line type="monotone" dataKey="v_oc" stroke="#38bdf8"
+                  name="V_oc (open circuit)" strokeWidth={1.2}
+                  strokeDasharray="5 4" dot={false} activeDot={false}
+                  isAnimationActive={false}/>
+              </LineChart>
             </ResponsiveContainer>
           </Box>
           )}

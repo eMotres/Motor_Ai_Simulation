@@ -22,6 +22,10 @@ from typing import Dict, Optional, Union
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Depends, Query
 from pydantic import BaseModel, Field
 
+# Field-view solves: dedupe concurrent twins, cap how many run at once, and
+# say out loud what is running (see motor_ai_sim/field_jobs.py).
+from motor_ai_sim.field_jobs import field_busy, run_field_job
+
 log = logging.getLogger(__name__)
 
 
@@ -270,13 +274,31 @@ class SimConfigPatch(BaseModel):
     eddy:               Optional[bool]  = None   # coupled sigma*dA/dt solve (solved copper loss)
     rotor_eddy:         Optional[bool]  = None   # field-based magnet/shaft eddy (vs slab estimate)
     torque_filter:      Optional[bool]  = None   # band-limit T(t) to the 6k orders
-    drive:              Optional[str]   = None   # "current" | "voltage"
+    drive:              Optional[str]   = None   # "current" | "voltage" | "pwm_voltage"
+                                                 #  | "custom_current"
     v_phase_peak:       Optional[float] = None   # voltage drive: phase amplitude [V peak]
     v_delta_deg:        Optional[float] = None   # voltage drive: angle [deg el]
+    v_bus:              Optional[float] = None   # pwm_voltage: DC link [V]
+    f_switch:           Optional[float] = None   # pwm_voltage: carrier [Hz]
+    i_block:            Optional[float] = None   # bldc_current: flat-top block [A]
+    # NOT the custom waveform: it is up to 20k samples and belongs to the run
+    # that used it, not to the shared operating point every off-tab consumer
+    # (sweep / optimizer / descent) reads.
     coil_temp_c:        Optional[float] = None   # copper temperature -> rho_Cu(T)
     steps_per_period:   Optional[int]   = None   # transient frames per electrical period
     end_winding_factor: Optional[float] = None   # k_end (0 = auto from geometry)
     connection:         Optional[str]   = None   # winding: "4S" | "2S-2P" | "4P"
+    # TERMINAL connection of the three phases — orthogonal to `connection`,
+    # which groups a phase's own coils.  Delta puts the full line voltage on
+    # each winding (so sqrt(3) more turns fit the same bus) and closes a loop
+    # the winding's zero-sequence triplen EMF can drive current round.
+    star_delta:         Optional[str]   = None   # "star" (default) | "delta"
+    # How the k wires IN HAND are joined.  "transposed" is the perfectly
+    # transposed winding (the assumption this solver made silently until
+    # 2026-09-11), "series" the real coil soldered at its two ends, "parallel"
+    # the upper bound with every half-turn joined.  Only meaningful with the
+    # coupled eddy solve and more than one wire in hand.
+    strand_bonding:     Optional[str]   = None   # "transposed" | "series" | "parallel"
     # D-AXIS REFERENCE, electrical degrees.  A number PINS it and nothing is
     # solved to find it (the 24-frame no-load calibration is skipped entirely);
     # "" or "auto" clears the pin and the measurement runs again.  Both are
@@ -433,12 +455,33 @@ def update_sim_config(patch: SimConfigPatch):
     from pathlib import Path
     from motor_ai_sim.config import clear_config_cache
 
-    cfg_path = Path(__file__).parent.parent.parent.parent / "config" / "motor_config.yaml"
+    # Resolved PER CALL from ``DEFAULT_CONFIG_PATH`` (which honours
+    # ``MOTOR_AI_SIM_CONFIG``) — the same fix ``simulation/geometry_2d.py`` got
+    # on 2026-09-15.  This was a hardcoded ``Path(__file__)…/config`` and it is a
+    # WRITER: a redirected process (a test, a sandboxed in-process run) patched
+    # the operating point of the machine the USER has loaded, which is exactly
+    # what the redirect exists to make impossible (config.py, 2026-08-06).  With
+    # no env var set this is byte-identical to the old constant.
+    try:
+        from motor_ai_sim.config import DEFAULT_CONFIG_PATH as _dcp
+        cfg_path = Path(str(_dcp))
+    except Exception:                       # noqa: BLE001 — never fail the PATCH
+        cfg_path = Path(__file__).parent.parent.parent.parent / "config" / "motor_config.yaml"
     content = cfg_path.read_text(encoding="utf-8")
 
     updates = {k: v for k, v in patch.model_dump().items() if v is not None}
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
+    # What the block says NOW — so the cache flush below can tell a real
+    # change from a re-save of the same values.  User 2026-09-07 ("опять то же
+    # самое… сколько можно повторять?"): a panel re-saved unchanged settings
+    # right after a run finished, this handler flushed every cache including
+    # the fresh field snapshot, and the field view said "not solved".
+    try:
+        from motor_ai_sim.config import get_config as _get_cfg
+        _before_sim = dict((_get_cfg() or {}).get("simulation") or {})
+    except Exception:  # noqa: BLE001
+        _before_sim = {}
 
     # The load angle lives under two names — phase_offset_deg (UI, presets) and
     # gamma_deg (solver, optimizer) — and the same for the current. Writing only
@@ -450,16 +493,81 @@ def update_sim_config(patch: SimConfigPatch):
         elif _b in updates and _a not in updates:
             updates[_a] = updates[_b]
 
+    # `connection` is read by every solve from the WINDING block
+    # (`_effective_winding` → winding.connection / winding.n_parallel), not from
+    # the `simulation:` entry, which is a display mirror nothing consumes.
+    # Patching only the mirror changed nothing physical: the panel showed the
+    # new label while the FEM kept solving the old paths.  Write the winding
+    # block too — the label plus the counts parse_connection derives from it
+    # ("2S-2P" → n_parallel=2, n_series=2) so the block stays internally
+    # consistent.  The mirror is still written for backward compat.  ""/"auto"
+    # keeps the winding block untouched (there is no "measured" connection to
+    # fall back to); an unreadable label is a 422, never a silent 1-path solve.
+    wind_updates: dict = {}
+    # star / delta goes to the winding block for the same reason the label
+    # does: every solve resolves it from there, and the duty save copies the
+    # whole block into the configuration.
+    _sd_req = updates.get("star_delta")
+    if isinstance(_sd_req, str) and _sd_req.strip():
+        wind_updates["star_delta"] = ("delta" if _sd_req.strip().lower()
+                                      .startswith("d") else "star")
+    _conn_req = updates.get("connection")
+    if isinstance(_conn_req, str) and _conn_req.strip().lower() not in ("", "auto"):
+        from motor_ai_sim.winding import parse_connection as _parse_conn
+        try:
+            _n_par, _n_ser = _parse_conn(_conn_req)
+        except ValueError as _e:
+            raise HTTPException(status_code=422, detail=str(_e))
+        wind_updates.update({"connection": _conn_req.strip(),
+                             "n_parallel": _n_par, "n_series": _n_ser})
+
     lines = content.splitlines(keepends=True)
     in_sim = False
+    in_wind = False
     result = []
     replaced = set()
+    wind_replaced = set()
+    appended = set()
+
+    def _yaml_scalar(val) -> str:
+        if isinstance(val, str) and val.strip().lower() in ("", "auto"):
+            return "null"
+        if isinstance(val, bool):
+            return "true" if val else "false"
+        return str(val)
+
+    def _flush_sim_missing():
+        # Model-known keys the yaml has never carried yet are APPENDED at the
+        # end of the simulation block instead of refused.  The refusal made the
+        # first machine ever to use a new drive parameter unable to save ANY
+        # setting: v_bus/f_switch/i_block were in the pydantic model but not in
+        # the file, so the whole PATCH 422'd and Run died before starting
+        # (measured live 2026-08-31).  The model is the whitelist; a key it
+        # accepts is a key the file may gain.
+        for _k, _v in updates.items():
+            if _k not in replaced and _k not in appended:
+                result.append(f"  {_k}: {_yaml_scalar(_v)}\n")
+                appended.add(_k)
+
+    def _flush_wind_missing():
+        # Keys the winding block did not carry are appended at its end, so an
+        # older config without n_series/n_parallel still comes out consistent.
+        for _k in ("connection", "n_parallel", "n_series", "star_delta"):
+            if _k in wind_updates and _k not in wind_replaced:
+                result.append(f"  {_k}: {wind_updates[_k]}\n")
+                wind_replaced.add(_k)
 
     for line in lines:
         if re.match(r'^simulation\s*:', line):
             in_sim = True
         elif in_sim and re.match(r'^\S', line):
             in_sim = False
+            _flush_sim_missing()
+        if re.match(r'^winding\s*:', line):
+            in_wind = True
+        elif in_wind and re.match(r'^\S', line):
+            in_wind = False
+            _flush_wind_missing()
 
         if in_sim:
             for key, val in updates.items():
@@ -474,14 +582,34 @@ def update_sim_config(patch: SimConfigPatch):
                     line = m.group(1) + _out + '\n'
                     replaced.add(key)
                     break
+        elif in_wind and wind_updates:
+            for key, val in wind_updates.items():
+                m = re.match(rf'^(\s+{re.escape(key)}\s*:\s*)(.*)$', line)
+                if m:
+                    line = m.group(1) + str(val) + '\n'
+                    wind_replaced.add(key)
+                    break
 
         result.append(line)
+    if in_sim:
+        _flush_sim_missing()                # simulation: was the file's last block
+    if in_wind:
+        _flush_wind_missing()               # winding: was the file's last block
+    if set(wind_updates) - wind_replaced:
+        # No winding: block at all — append one (newline-terminate the last
+        # line first, or the header would glue onto it).
+        if result and not result[-1].endswith("\n"):
+            result[-1] += "\n"
+        result.append("winding:\n")
+        _flush_wind_missing()
 
-    missing = set(updates) - replaced
+    missing = set(updates) - replaced - appended
     if missing:
+        # only possible when the file has NO simulation: block at all — that is
+        # a broken config, not a bad request
         raise HTTPException(
             status_code=422,
-            detail=f"Keys not found in simulation: block: {missing}"
+            detail=f"motor_config.yaml has no simulation: block to carry {sorted(missing)}"
         )
 
     # Atomic write (temp + replace) — write_text truncate-then-write leaves a
@@ -511,12 +639,33 @@ def update_sim_config(patch: SimConfigPatch):
     # rather than trusting each consumer's own key — the optimizer's eval cache
     # is keyed by `_config_fingerprint`, which hashes this block, so it
     # invalidates itself in the same instant.
-    try:
-        clear_simulation_caches()
-    except Exception:  # noqa: BLE001
-        log.warning("simulation caches were not flushed after a config patch",
-                    exc_info=True)
-    return {"status": "ok", "updated": updates}
+    # …but ONLY when a value actually changed.  A panel that re-saves the same
+    # numbers (mount adoption, a debounced write of an unchanged slider) must
+    # not throw away the field the user just waited ten minutes for.
+    def _same(a, b) -> bool:
+        try:
+            if isinstance(a, (int, float)) and not isinstance(a, bool) \
+                    and isinstance(b, (int, float)) and not isinstance(b, bool):
+                return abs(float(a) - float(b)) <= 1e-9 * max(1.0, abs(float(a)))
+            if isinstance(a, str) and isinstance(b, str):
+                return a.strip() == b.strip()
+            if a is None and isinstance(b, str) and b.strip().lower() in ("", "auto"):
+                return True
+            return a == b
+        except Exception:  # noqa: BLE001
+            return False
+    _changed = sorted(k for k, v in updates.items() if not _same(_before_sim.get(k), v))
+    if _changed:
+        try:
+            clear_simulation_caches(reason="simulation config patched (%s)"
+                                    % ", ".join(_changed[:8]))
+        except Exception:  # noqa: BLE001
+            log.warning("simulation caches were not flushed after a config patch",
+                        exc_info=True)
+    else:
+        log.info("simulation config re-saved with no change (%s) — caches kept",
+                 ", ".join(sorted(updates)[:8]))
+    return {"status": "ok", "updated": updates, "changed": _changed}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1133,6 +1282,18 @@ def _mat_ov_for_key(mat_ov) -> object:
         for _k, _v in _assign.items():
             if str(_cfg_assign.get(_k) or "") != str(_v or ""):
                 return _mat_ov_tuple(mat_ov)
+        # Per-part accounting states ride this same payload, and an `excluded`
+        # part is solved as AIR — a different machine.  Normalising it away
+        # (the default `return None` below) would hand a run with the shaft
+        # removed the snapshot of the run that still had it, which is exactly
+        # the class of silent mix-up `_mat_ov_for_key` exists to prevent.
+        from motor_ai_sim.part_states import (normalize_states as _nps,
+                                              config_part_states as _cps,
+                                              INCLUDED as _INC)
+        _cfg_parts = _cps()
+        for _k, _v in _nps(mat_ov.get("parts")).items():
+            if str(_cfg_parts.get(_k) or _INC) != str(_v):
+                return _mat_ov_tuple(mat_ov)
         # Props only matter for a material that is actually ASSIGNED — the
         # frontend ships the whole "non-builtin in use" set, and an unused entry
         # never reaches the solve.
@@ -1153,6 +1314,22 @@ def _mat_ov_for_key(mat_ov) -> object:
         return _mat_ov_tuple(mat_ov)
 
 
+#: Parts whose MATERIAL never enters the electromagnetic solve: the insulation
+#: and the wire enamel are insulators the field does not see (their THICKNESS
+#: is geometry, which the fingerprint keeps), and the air regions are air by
+#: construction.  Swapping the liner card (Nomex → Al2O3, 2026-09-07) changes
+#: the thermal answer only, so it must not invalidate the EM snapshot the
+#: Thermal tab replays — nor the EM caches.
+_EM_INERT_PARTS = ("slot_insulation", "wire_insulation", "air_gap", "in_band", "out_band")
+
+
+def _em_materials(m):
+    """The materials assignment minus the EM-inert parts (see _EM_INERT_PARTS)."""
+    if not isinstance(m, dict):
+        return m
+    return {k: v for k, v in m.items() if k not in _EM_INERT_PARTS}
+
+
 def _config_physics_fingerprint(*, with_request_materials: bool) -> str:
     """md5 of the shared config the SOLVE depends on but the URL doesn't carry.
 
@@ -1168,7 +1345,13 @@ def _config_physics_fingerprint(*, with_request_materials: bool) -> str:
         from motor_ai_sim.material_context import get_request_materials as _grm
         _cfg = _gc() or {}
         _d = {"g": _cfg.get("geometry"), "w": _cfg.get("winding"),
-              "m": _cfg.get("materials"), "mag": _cfg.get("magnet")}
+              "m": _em_materials(_cfg.get("materials")), "mag": _cfg.get("magnet"),
+              # Per-part accounting state: `excluded` changes the FIELD (the
+              # part is solved as air), so two states of the same machine must
+              # never share a cache entry.  `reference` changes only the
+              # accounting, but it changes the summary, which is cached with
+              # the solve — so it belongs in the same hash.
+              "parts": _cfg.get("parts")}
         # The LIVE geometry object as well as the raw `geometry:` block.  They
         # are not the same thing: the YAML keeps whatever derived radii/pitches
         # were last written to it and only num_poles/num_slots/angle_* get
@@ -1185,7 +1368,14 @@ def _config_physics_fingerprint(*, with_request_materials: bool) -> str:
         except Exception:
             _d["glive"] = None
         if with_request_materials:
-            _d["req_mat"] = _grm()
+            # NORMALISED, not verbatim: an override that names exactly the
+            # config's own materials and states is the same machine as no
+            # override at all, and the two used to hash differently.  Measured
+            # 2026-09-04: the field view's after-reload cache probe went out
+            # before the page had its `mat=` ready, so it could never find the
+            # picture the same page had solved with `mat=` nine minutes earlier.
+            # `_mat_ov_for_key` keeps a genuinely different override distinct.
+            _d["req_mat"] = _mat_ov_for_key(_grm())
         return _hl.md5(_jl.dumps(_d, sort_keys=True,
                                  default=str).encode()).hexdigest()[:16]
     except Exception:
@@ -1219,7 +1409,33 @@ def _geometry_fingerprint(geo_override: Optional[dict] = None) -> str:
         except Exception:
             _d["glive"] = None
         if geo_override:
-            _d["ov"] = dict(sorted(geo_override.items()))
+            # Resolve the override into the machine it PRODUCES instead of
+            # hashing the raw dict: a kernel run sends the on-screen machine
+            # as an explicit `geo` payload, and the raw-dict hash gave the
+            # SAME motor a different fingerprint than the no-override path —
+            # so its Stage-A passport (keyed by the no-override print) was
+            # never found (measured live: end3d null on every kernel run).
+            # ov==live resolves to glive → identical hash to no-override,
+            # keeping every already-issued fingerprint key valid; a genuine
+            # candidate eval resolves to a different machine → different hash.
+            try:
+                from motor_ai_sim.simulation.geometry_2d import (
+                    merge_geo_override as _mgo)
+                if _d["glive"] is None:
+                    raise ValueError("no live geometry to resolve against")
+                _merged = _mgo(dict(_d["glive"]), dict(geo_override))
+                # Dict equality, NOT serialized-text equality: the client
+                # sends 13 where the live object holds 13.0 — Python calls
+                # them equal, json.dumps does not, and the hash is of the
+                # text (measured live: the same machine fingerprinted
+                # aa4dd7… via override vs 147609… without).  When the
+                # resolved machine IS the live one, hash the live dict
+                # itself so the print is bit-identical to the no-override
+                # path.
+                if _merged != _d["glive"]:
+                    _d["glive"] = _merged
+            except Exception:
+                _d["ov"] = dict(sorted(geo_override.items()))
         return _hl.md5(_jl.dumps(_d, sort_keys=True,
                                  default=str).encode()).hexdigest()[:16]
     except Exception:
@@ -1271,6 +1487,59 @@ def _effective_winding(n_parallel=None, connection=None) -> tuple:
     return int(max(1, int(npar or 1))), (str(conn) if conn else "")
 
 
+def _effective_bonding(v: Optional[str] = None) -> Optional[str]:
+    """"transposed" | "series" | "parallel", or None to let the GEOMETRY decide.
+
+    There is no default here on purpose.  How the wires in hand are joined
+    follows from how many there are, and `wire_parallel` lives in the geometry
+    — so an unset value is passed through as None and the solver derives it
+    (k > 1 ⇒ soldered at the ends).  Naming one here would put the answer in
+    two places and let them disagree.
+
+    An explicit value still wins: the transposed and per-turn-parallel bounds
+    have to stay askable, they are what make the middle number mean something.
+    """
+    _v = str(v if v is not None else "").strip().lower()
+    if not _v:
+        from motor_ai_sim.config import get_config as _gc
+        try:
+            _v = str(((_gc().get("simulation", {}) or {})
+                      .get("strand_bonding") or "")).strip().lower()
+        except Exception:
+            _v = ""
+    if _v.startswith(("ser", "sold")):
+        return "series"
+    if _v.startswith("par"):
+        return "parallel"
+    if _v.startswith("tr"):
+        return "transposed"
+    return None
+
+
+def _effective_star_delta(v: Optional[str] = None) -> str:
+    """"star" | "delta" — the argument if given, else the saved operating point.
+
+    Mirrors `_effective_rpm` / `_effective_winding`: an explicit argument wins,
+    the shared config answers otherwise, and anything unreadable is STAR — the
+    connection every one of this solver's numbers meant before the choice
+    existed, so a config written by an older build keeps its meaning.
+    """
+    _v = str(v if v is not None else "").strip().lower()
+    if not _v:
+        from motor_ai_sim.config import get_config as _gc
+        try:
+            _c = _gc()
+            # The WINDING block is the home (it is a property of the winding,
+            # saved with the machine like `connection`); the simulation:
+            # mirror is read for configs written before it moved.
+            _v = str(((_c.get("winding", {}) or {}).get("star_delta")
+                      or (_c.get("simulation", {}) or {}).get("star_delta")
+                      or "")).strip().lower()
+        except Exception:
+            _v = ""
+    return "delta" if _v.startswith("d") else "star"
+
+
 def _effective_daxis(daxis_deg=None):
     """The d-axis reference a solve will ACTUALLY use, or None for "measure it".
 
@@ -1313,7 +1582,8 @@ def _field_snap_key_fields(*, gamma_deg, I_phase_rms, mesh_size_mm, min_size_mm,
                            n_steps_per_period, n_periods, eddy, rotor_eddy,
                            demag, drive, element_order, cfg_fingerprint, geo_ov,
                            mat_ov, rotor_angle0_deg=0.0, rpm=None,
-                           n_parallel=None, connection=None) -> "OrderedDict":
+                           n_parallel=None, connection=None,
+                           excitation="", magnet_temp_c=None) -> "OrderedDict":
     """The snapshot key as NAMED fields, in key order.
 
     Named because the key is the thing that decides "is this the run the user
@@ -1321,7 +1591,7 @@ def _field_snap_key_fields(*, gamma_deg, I_phase_rms, mesh_size_mm, min_size_mm,
     disagreed — a bare 26-tuple diff is unreadable, and the two bugs found here
     (geo, materials) both hid behind exactly that unreadability.
     """
-    return OrderedDict((
+    _kf = OrderedDict((
         ("kind", "tfield"),
         ("gamma_deg", round(float(gamma_deg), 1)),
         ("I_phase_rms", round(float(I_phase_rms), 2)),
@@ -1356,6 +1626,13 @@ def _field_snap_key_fields(*, gamma_deg, I_phase_rms, mesh_size_mm, min_size_mm,
         ("rotor_eddy", int(bool(rotor_eddy))),
         ("demag", int(bool(demag))),
         ("drive", str(drive or "current")),
+        # The source's own parameters, as ONE opaque string: the DC bus and the
+        # carrier for the PWM inverter, the waveform hash for an imposed
+        # current.  Empty on the two sinusoidal drives, so their keys are
+        # byte-identical to what they were before this field existed and no
+        # stored snapshot is orphaned.  Without it, a 4 kHz and a 48 kHz run
+        # would hand each other's field to the J⟳ / Loss views.
+        ("excitation", str(excitation or "")),
         ("element_order", int(element_order)),
         ("cfg_fingerprint", str(cfg_fingerprint)),
         ("geo_ov", _geo_ov_for_key(geo_ov)),
@@ -1373,6 +1650,17 @@ def _field_snap_key_fields(*, gamma_deg, I_phase_rms, mesh_size_mm, min_size_mm,
         # explicit and config-default spellings of the same machine collide.
         ("winding", _effective_winding(n_parallel, connection)),
     ))
+    # MAGNET TEMPERATURE.  The card's Br and its whole demagnetisation curve
+    # move with it, so a snapshot solved with a 163 °C magnet is a different
+    # field — and a different loss map — from the same request at 150 °C.
+    # APPENDED ONLY WHEN ASKED FOR, the same way the battery block is: with no
+    # magnet temperature the key is byte-identical to the one this function has
+    # always built, so every snapshot already on disk — the one the field views
+    # look up after a restart — still matches instead of being orphaned by a
+    # field that carries no information for it.
+    if magnet_temp_c is not None:
+        _kf["magnet_temp_c"] = round(float(magnet_temp_c), 2)
+    return _kf
 
 
 def _field_snap_key(**kw) -> tuple:
@@ -1458,6 +1746,14 @@ def _latest_run_snapshot(probe: "OrderedDict"):
     Returns ``(entry, diffs)`` or ``(None, [])``.
     """
     try:
+        # An EMPTY store is not proof that nothing was solved: a benign cache
+        # flush (a settings re-save, a material tooltip PATCH) drops the memory
+        # copy while the last run still sits on disk.  Reload it and let the
+        # same-machine checks below decide — a snapshot of another motor is
+        # still refused exactly as before (user 2026-09-07: "field not solved
+        # for this machine" one minute after the run finished).
+        if not _transient_field_snap:
+            _load_last_transient_field_snapshot()
         _names = list(probe.keys())
         _pv = list(probe.values())
         for _key in reversed(list(_transient_field_snap.keys())):
@@ -1502,7 +1798,16 @@ def _store_transient_field_snapshot(key: tuple, field: Dict, sbres: Dict,
                 "P_cu_total_solve_W", "P_cu_W", "P_fe_W", "P_mag_eddy_W",
                 "T_avg_Nm", "rpm", "P_elec_in_W", "f_elec_Hz",
                 "P_cu_ac_solve_W", "V_peak", "demag_coef_per_tri",
-                "demag_report")},
+                "demag_report",
+                # The end-winding factor this run was BILLED at (2026-09-09).
+                # Not a display number: the open-frame thermal model puts the end
+                # turns in the airflow and their LENGTH is (k_end − 1)·L/2 per
+                # side, so it has to be the run's own k_end — auto-estimated or
+                # typed on the Electromagnetic tab — and not a second estimate
+                # made in the thermal route.  Absent from every snapshot written
+                # before this line, which is why the thermal side falls back to
+                # the same geometry estimator the solver uses for 0 = auto.
+                "end_winding_factor")},
             "meta": {
                 "eddy": bool(eddy),
                 "n_steps_per_period": int(n_steps_per_period),
@@ -1520,8 +1825,52 @@ def _store_transient_field_snapshot(key: tuple, field: Dict, sbres: Dict,
         _transient_field_snap.move_to_end(key)
         while len(_transient_field_snap) > _TRANSIENT_SNAP_MAX:
             _transient_field_snap.popitem(last=False)
+        # PERSIST the newest snapshot beside .last_transient.json, so a backend
+        # restart (or a machine reboot — 2026-09-05) does not leave every field
+        # view blank until the user re-solves what the run already solved.
+        # Pickle: the entry holds numpy arrays; written off-thread, atomically.
+        import threading as _thr
+        _entry_copy = _transient_field_snap[key]
+        def _persist():
+            try:
+                import pickle as _pk
+                p = _transient_field_store_path()
+                with open(p + ".tmp", "wb") as fh:
+                    _pk.dump({"key": list(key), "entry": _entry_copy}, fh,
+                             protocol=_pk.HIGHEST_PROTOCOL)
+                _os_t.replace(p + ".tmp", p)
+            except Exception as _pe:      # noqa: BLE001
+                log.warning("could not persist transient field snapshot: %s", _pe)
+        _thr.Thread(target=_persist, daemon=True).start()
     except Exception as _e:      # never let a viewer convenience break a solve
         log.warning("could not store transient field snapshot: %s", _e)
+
+
+def _transient_field_store_path() -> str:
+    return _transient_store_path().replace(".last_transient.json",
+                                           ".last_transient_field.pkl")
+
+
+def _load_last_transient_field_snapshot() -> None:
+    """Repopulate the snapshot store from disk at startup (see the persist
+    above).  Served only through the same-machine checks every lookup applies,
+    so a snapshot of yesterday's motor never paints today's."""
+    try:
+        import pickle as _pk
+        p = _transient_field_store_path()
+        if not _os_t.path.exists(p):
+            return
+        with open(p, "rb") as fh:
+            blob = _pk.load(fh)
+        def _retuple(x):
+            return tuple(_retuple(i) for i in x) if isinstance(x, list) else x
+        _key = _retuple(blob["key"])
+        _transient_field_snap[_key] = blob["entry"]
+        _transient_field_snap.move_to_end(_key)
+        log.info("restored the last run's field snapshot from %s (computed %s)",
+                 p, (blob["entry"].get("meta") or {}).get("computed_at"))
+    except Exception as _e:      # noqa: BLE001
+        log.warning("could not restore the transient field snapshot: %s", _e)
 
 
 class _HaveSolverLossMap(Exception):
@@ -1557,7 +1906,7 @@ def _unmodelled_loss_classes(tags, loss_dens, declared=()) -> list:
     import numpy as _np
     from motor_ai_sim.simulation.sb_domains import (
         DOM_AIR, DOM_AIRGAP, DOM_BAND, DOM_COIL, DOM_COIL_BASE, DOM_MAG_BASE,
-        DOM_MAG_N, DOM_MAG_S, DOM_ROTOR, DOM_SHAFT, DOM_STATOR)
+        DOM_MAG_N, DOM_MAG_S, DOM_ROTOR, DOM_SHAFT, DOM_SLEEVE, DOM_STATOR)
     t = _np.asarray(tags, int)
     d = _np.asarray(loss_dens, float)
     out = [str(x) for x in (declared or [])]
@@ -1569,7 +1918,8 @@ def _unmodelled_loss_classes(tags, loss_dens, declared=()) -> list:
             ("iron",    (t == DOM_STATOR) | (t == DOM_ROTOR)),
             ("magnets", _mag),
             ("copper",  (t >= DOM_COIL_BASE) | (t == DOM_COIL)),
-            ("shaft",   t == DOM_SHAFT)):
+            ("shaft",   t == DOM_SHAFT),
+            ("sleeve",  t == DOM_SLEEVE)):
         if name in out:
             continue
         if mask.any() and not _np.any(d[mask] != 0.0):
@@ -1589,8 +1939,209 @@ def _unmodelled_loss_classes(tags, loss_dens, declared=()) -> list:
     return out
 
 
+def _field2d_cache_key(
+    *,
+    rotor_angle_deg:     float = 0.0,
+    gamma_deg:           float = 0.0,
+    mesh_size_mm:        float = 4.0,
+    min_size_mm:         float = 0.3,
+    outer_air_factor:    float = 1.3,
+    n_sectors:           int   = 4,
+    stator_fillet_mm:    float = 0.0,
+    I_phase_rms:         Optional[float] = None,
+    component_mesh:      str   = "",
+    demag:               bool  = False,
+    pole_copy:           bool  = False,
+    iron_template:       bool  = True,
+    geo_mesh:            bool  = True,
+    structured_gap:      bool  = True,
+    airgap_macro:        bool  = False,
+    gap_layers:          float = 2.0,
+    geo:                 Optional[str] = None,
+    n_steps_per_period:  int   = 0,
+    n_periods:           float = 1.0,
+    eddy:                bool  = False,
+    rotor_eddy:          bool  = False,
+    coil_temp_c:         float = 120.0,
+    magnet_temp_c: Optional[float] = None,
+    use_transient_snapshot: bool = True,
+    latest_run_field:    bool  = True,
+    snap_drive:          str   = "current",
+    snap_excitation:     str   = "",
+    **_ignored,
+) -> tuple:
+    """THE cache key of a field-view request — one definition, two readers.
+
+    `get_fem_field2d` (the queue in front) needs it BEFORE the solve body runs,
+    to recognise a concurrent twin; `_fem_field2d_impl` needs it to read and
+    fill `_fem_field_cache`.  Two copies of a 25-field key would drift on the
+    first parameter anyone adds — and a key that drifts is a cache that serves
+    one machine's picture for another, which is the bug class this file has
+    already paid for twice (see `_geo_ov_for_key`).
+
+    Accepts the whole request kwargs dict (`**_ignored` swallows the parameters
+    the key does not depend on, e.g. `snapshot_only`, which selects HOW the
+    payload is obtained, not WHAT is computed).
+    """
+    _comp_mesh = _parse_component_mesh(component_mesh)
+    _geo_ov = _parse_geo_override(geo)
+    # The same P2 coercion the solve body applies (and logs) — the key must
+    # describe what will actually be solved, not what was asked for.
+    if airgap_macro or not structured_gap:
+        structured_gap = True
+        airgap_macro = False
+    _cfp_f = _config_physics_fingerprint(with_request_materials=True)
+    key = (
+        "sbfield", round(rotor_angle_deg * 2) / 2, round(gamma_deg, 1),
+        round(mesh_size_mm, 2), round(min_size_mm, 2), round(outer_air_factor, 2),
+        int(n_sectors), round(stator_fillet_mm, 2),
+        round(I_phase_rms, 2) if I_phase_rms is not None else None,
+        int(bool(demag)), int(bool(pole_copy)), int(bool(iron_template)),
+        tuple(sorted(_comp_mesh.items())),
+        int(bool(geo_mesh)), int(bool(structured_gap)), int(bool(airgap_macro)),
+        round(float(gap_layers), 1), _cfp_f,
+        int(n_steps_per_period), round(float(n_periods), 2),
+        int(bool(eddy)), int(bool(rotor_eddy)), round(float(coil_temp_c), 1),
+        # A payload built from the simulation run's snapshot and one solved here
+        # are labelled differently, so they are different cache entries — asking
+        # for a fresh solve must not replay a snapshot-sourced picture.
+        int(bool(use_transient_snapshot)),
+        # Same reason, one step further: a caller that DEMANDS an exact key match
+        # and one that accepts the last run of this machine can get different
+        # payloads with different labels, so they cannot share an entry.  Caught
+        # by its own acceptance test — the exact-only probe was being handed the
+        # relaxed payload the previous call had just cached.
+        int(bool(latest_run_field)),
+    )
+    if _geo_ov:   # distinct cache entry per overridden geometry (no-geo key unchanged)
+        key = key + (tuple(sorted(_geo_ov.items())),)
+    # Magnet temperature: appended ONLY when asked for, so a request without one
+    # keeps the byte-identical key it has always had.  It must be in the key at
+    # all because `**_ignored` would otherwise swallow it and hand a 163 °C view
+    # the picture solved with the card's own 150 °C magnet — a weaker field
+    # served as if it were the one requested.
+    if magnet_temp_c is not None:
+        key = key + (round(float(magnet_temp_c), 2),)
+    # WHICH EXCITATION's snapshot this request is looking for.  Appended ONLY
+    # when it is not the sinusoidal current drive every caller before the PWM
+    # coupled loop asked for, so every key already in the cache is byte-identical
+    # to the one it has always had.  It must be in the key at all because two
+    # requests that differ only here are looking at DIFFERENT runs of the same
+    # machine — a 24 kHz PWM map and the sine map at the same point.
+    if str(snap_drive or "current") != "current" or str(snap_excitation or ""):
+        key = key + (str(snap_drive or "current"), str(snap_excitation or ""))
+    return key
+
+
+def _field2d_job_kind(n_steps_per_period: int, demag: bool, eddy: bool) -> str:
+    """Short human label for the busy list ("24-frame eddy map")."""
+    n = int(n_steps_per_period or 0)
+    if n > 1:
+        return "%d-frame %s map" % (n, "eddy" if eddy else "loss")
+    return "8-frame demag probe" if demag else "single-frame field"
+
+
 @router.get("/physics/fem_field2d")
 def get_fem_field2d(
+    rotor_angle_deg:     float = 0.0,
+    gamma_deg:           float = 0.0,
+    mesh_size_mm:        float = 4.0,
+    min_size_mm:         float = 0.3,
+    outer_air_factor:    float = 1.3,
+    motion_band:         bool  = True,
+    band_thickness_mm:   float = 0.4,
+    n_sectors:           int   = 4,
+    stator_fillet_mm:    float = 0.0,
+    I_phase_rms:         Optional[float] = None,
+    component_mesh:      str   = "",
+    demag:               bool  = False,
+    pole_copy:           bool  = False,
+    iron_template:       bool  = True,
+    geo_mesh:            bool  = True,
+    structured_gap:      bool  = True,
+    airgap_macro:        bool  = False,
+    gap_layers:          float = 2.0,
+    geo:                 Optional[str] = None,
+    n_steps_per_period:  int   = 0,
+    n_periods:           float = 1.0,
+    eddy:                bool  = False,
+    rotor_eddy:          bool  = False,
+    coil_temp_c:         float = 120.0,
+    magnet_temp_c: Optional[float] = None,
+    use_transient_snapshot: bool = True,
+    snapshot_only:       bool  = False,
+    latest_run_field:    bool  = True,
+    # WHICH EXCITATION's snapshot to look for (2026-09-14, the PWM coupled
+    # loop).  The snapshot key carries the drive and the source's own parameters
+    # (`_field_snap_key_fields`), and this view has always probed for the
+    # sinusoidal CURRENT run because that is the only kind anything asked it
+    # for.  A PWM coupled iteration needs the loss map of the run it just made,
+    # which lives under drive='pwm_voltage' and excitation='<v_bus>/<f_switch>';
+    # without these two the exact key can never hit and the only way in would be
+    # the RELAXED same-machine fallback, i.e. "some run of this motor" — which
+    # is exactly the wrong map to build a temperature field from.
+    snap_drive:          str   = "current",
+    snap_excitation:     str   = "",
+    progress_cb=None,
+):
+    """The field view — QUEUED.  Parameters are documented on the body below
+    (`_fem_field2d_impl`), which is the function this one calls.
+
+    `progress_cb` (2026-09-07) is a pure PASS-THROUGH to the solver's per-frame
+    callback — the shared contract in `motor_ai_sim.progress`, i.e.
+    `(done, total, phase, composition)`.  It exists for the thermal router,
+    whose /field is a full multi-frame EM solve followed by a conduction solve:
+    without it the Thermal tab's progress bar had nothing to say for the 90 % of
+    the wait that IS this call.  It is deliberately NOT part of `_p` below, so
+    it can never reach the cache key — two requests that differ only in who is
+    watching are the same solve.
+
+    Everything here is about WHEN the solve runs, never about what it computes:
+
+    * a cache hit answers straight away (as it always did);
+    * a `snapshot_only` PROBE goes straight through — it never solves, so it
+      must never wait behind something that does (the Loss / J⟳ views probe on
+      every open, and a probe that blocked for six minutes would be worse than
+      the disease);
+    * anything else goes through the field-solve queue: a concurrent request
+      with the SAME cache key waits for the one already solving instead of
+      starting a second identical solve, and at most `SB_FIELD_MAX_CONCURRENT`
+      (default 2) solves run at once, the rest FIFO.
+
+    Measured 2026-09-03: 14 automatic field solves on one machine, two of them
+    byte-identical and simultaneous, ~17 cores busy with nothing on screen
+    saying so.  The frontend no longer starts these by itself, and this is the
+    other half — the server refusing to run the same solve twice.
+    """
+    _p = dict(
+        rotor_angle_deg=rotor_angle_deg, gamma_deg=gamma_deg,
+        mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm,
+        outer_air_factor=outer_air_factor, motion_band=motion_band,
+        band_thickness_mm=band_thickness_mm, n_sectors=n_sectors,
+        stator_fillet_mm=stator_fillet_mm, I_phase_rms=I_phase_rms,
+        component_mesh=component_mesh, demag=demag, pole_copy=pole_copy,
+        iron_template=iron_template, geo_mesh=geo_mesh,
+        structured_gap=structured_gap, airgap_macro=airgap_macro,
+        gap_layers=gap_layers, geo=geo,
+        n_steps_per_period=n_steps_per_period, n_periods=n_periods,
+        eddy=eddy, rotor_eddy=rotor_eddy, coil_temp_c=coil_temp_c,
+        magnet_temp_c=magnet_temp_c,
+        use_transient_snapshot=use_transient_snapshot,
+        snapshot_only=snapshot_only, latest_run_field=latest_run_field,
+        snap_drive=snap_drive, snap_excitation=snap_excitation,
+    )
+    key = _field2d_cache_key(**_p)
+    _hit = _fem_field_cache.get(key)
+    if _hit is not None:
+        return _hit
+    if snapshot_only:
+        return _fem_field2d_impl(**_p, _key=key, _progress_cb=progress_cb)
+    return run_field_job(
+        key, _field2d_job_kind(n_steps_per_period, demag, eddy),
+        lambda: _fem_field2d_impl(**_p, _key=key, _progress_cb=progress_cb))
+
+
+def _fem_field2d_impl(
     rotor_angle_deg:     float = 0.0,
     gamma_deg:           float = 0.0,
     mesh_size_mm:        float = 4.0,
@@ -1625,6 +2176,11 @@ def get_fem_field2d(
     eddy:                bool  = False,   # coupled σ·∂A/∂t solve → the real eddy J⟳
     rotor_eddy:          bool  = False,   # magnet/shaft eddy losses in the loss map
     coil_temp_c:         float = 120.0,
+    magnet_temp_c: Optional[float] = None,  # MAGNET temperature [°C]; None = the assigned
+                                          # card exactly as the library quotes it.  It is in
+                                          # the snapshot key too, so a view at one magnet
+                                          # temperature is never answered with the field
+                                          # solved at another.
     use_transient_snapshot: bool = True,  # serve the multi-frame views from the LAST
                                           # simulation run's own field snapshot when its
                                           # key matches (see _field_snap_key).  Set false
@@ -1649,6 +2205,19 @@ def get_fem_field2d(
                                           # (geometry / materials / element order) — a
                                           # different motor falls through to a solve.
                                           # Pass false to demand an exact match.
+    snap_drive:          str   = "current",  # WHICH excitation's snapshot to probe for
+    snap_excitation:     str   = "",          # …and that source's own key string
+                                          # ("<v_bus>/<f_switch>" for PWM).  See the
+                                          # note on `get_fem_field2d`.
+    *,
+    _key:                tuple,           # THE cache key, built by the queue in
+                                          # front of this body (see
+                                          # `_field2d_cache_key`) so both agree
+                                          # on what "the same request" means.
+    _progress_cb=None,                    # per-frame progress, passed straight
+                                          # to the solver.  Never in the cache
+                                          # key: who is watching is not part of
+                                          # what is solved.
 ):
     """Field view computed by the SLIDING-BAND TRANSIENT solver (P2) — the SAME
     solver that produces the transient torque/losses, so the field picture is
@@ -1678,35 +2247,12 @@ def get_fem_field2d(
                  "same way, so the picture matches the numbers)")
         structured_gap = True
         airgap_macro = False
-    # Fingerprint what the SOLVE depends on but the URL doesn't carry: the shared
-    # config (geometry / winding / material assignment) and this request's per-user
-    # material override.  Without it the field view kept serving a picture built
-    # from a different design — a changed magnet or a config-side geometry edit
-    # left the cached image in place.
-    _cfp_f = _config_physics_fingerprint(with_request_materials=True)
-    key = (
-        "sbfield", round(rotor_angle_deg * 2) / 2, round(gamma_deg, 1),
-        round(mesh_size_mm, 2), round(min_size_mm, 2), round(outer_air_factor, 2),
-        int(n_sectors), round(stator_fillet_mm, 2),
-        round(I_phase_rms, 2) if I_phase_rms is not None else None,
-        int(bool(demag)), int(bool(pole_copy)), int(bool(iron_template)), tuple(sorted(_comp_mesh.items())),
-        int(bool(geo_mesh)), int(bool(structured_gap)), int(bool(airgap_macro)),
-        round(float(gap_layers), 1), _cfp_f,
-        int(n_steps_per_period), round(float(n_periods), 2),
-        int(bool(eddy)), int(bool(rotor_eddy)), round(float(coil_temp_c), 1),
-        # A payload built from the simulation run's snapshot and one solved here
-        # are labelled differently, so they are different cache entries — asking
-        # for a fresh solve must not replay a snapshot-sourced picture.
-        int(bool(use_transient_snapshot)),
-        # Same reason, one step further: a caller that DEMANDS an exact key match
-        # and one that accepts the last run of this machine can get different
-        # payloads with different labels, so they cannot share an entry.  Caught
-        # by its own acceptance test — the exact-only probe was being handed the
-        # relaxed payload the previous call had just cached.
-        int(bool(latest_run_field)),
-    )
-    if _geo_ov:   # distinct cache entry per overridden geometry (no-geo key unchanged)
-        key = key + (tuple(sorted(_geo_ov.items())),)
+    # THE cache key — fingerprinting what the SOLVE depends on but the URL does
+    # not carry (the shared config's geometry / winding / material assignment
+    # and this request's per-user material override).  Built by
+    # `_field2d_cache_key` and handed in by the queue in front of this body, so
+    # "the same request" means one thing to the cache and to the dedupe.
+    key = _key
     if key in _fem_field_cache:
         return _fem_field_cache[key]
 
@@ -1787,7 +2333,7 @@ def get_fem_field2d(
     # no B(t) history) and never comes from here.
     _snap = None
     _relaxed_diffs: list = []
-    if _sweep and use_transient_snapshot:
+    if use_transient_snapshot:
         _probe_fields = _field_snap_key_fields(
             gamma_deg=gamma_deg, I_phase_rms=I_phase_rms,
             mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm,
@@ -1798,14 +2344,45 @@ def get_fem_field2d(
             structured_gap=structured_gap, airgap_macro=airgap_macro,
             n_steps_per_period=_nsteps, n_periods=float(n_periods),
             eddy=eddy, rotor_eddy=rotor_eddy, demag=demag,
-            drive="current", element_order=2,
+            magnet_temp_c=magnet_temp_c,
+            drive=str(snap_drive or "current"),
+            excitation=str(snap_excitation or ""),
+            element_order=2,
             cfg_fingerprint=_config_physics_fingerprint(
                 with_request_materials=False),
             geo_ov=_geo_ov, mat_ov=_get_request_materials_safe(),
             rotor_angle0_deg=float(rotor_angle_deg))
-        _snap = _transient_field_snap.get(tuple(_probe_fields.values()))
-        if _snap is None:
-            _log_snap_key_miss(_probe_fields)
+        # The exact key only means something for a multi-frame view (the
+        # single-angle views pin the rotor; the run's frame is at its end
+        # angle) — so only the sweep views look it up.
+        if _sweep:
+            # AN EMPTY STORE IS NOT PROOF NOTHING WAS SOLVED (2026-09-15).  The
+            # snapshot store is in memory and the newest entry is mirrored to
+            # disk; after a backend restart the memory copy is empty until
+            # something loads it.  `routes.thermal._snapshot_loss_entry` has
+            # applied this rule since it was written — this view did not, so a
+            # Loss / J⟳ request (and the coupled PWM loop's own exact-key probe)
+            # missed a snapshot that was sitting on disk the whole time.
+            if not _transient_field_snap:
+                _load_last_transient_field_snapshot()
+            _snap = _transient_field_snap.get(tuple(_probe_fields.values()))
+            if _snap is None:
+                _log_snap_key_miss(_probe_fields)
+        elif snapshot_only and latest_run_field:
+            # A single-angle PROBE — a page reload, a tab switch, a backend
+            # restart with the persisted snapshot reloaded.  Nothing is
+            # solved behind a probe, so the choice is "the run's final frame,
+            # labelled" or a blank view saying "press Re-solve"; the user's
+            # verdict on the blank view (2026-09-05: "ну почему ты это до сих
+            # пор не исправил?") settles it.  Same-machine check inside.
+            _snap, _relaxed_diffs = _latest_run_snapshot(_probe_fields)
+            if _snap is not None:
+                _relaxed_diffs = list(_relaxed_diffs) + [
+                    "single-angle view: showing the run's FINAL frame "
+                    "(rotor at the run's end angle, not at %.1f deg)"
+                    % float(rotor_angle_deg)]
+                log.info("fem_field2d: single-angle probe served the last "
+                         "run's final frame (no solve)")
         # RELAXED fallback, only when the caller asked for it: the last run of
         # the SAME machine, with every difference reported.  This exists because
         # the exact key has 27 fields that two independent request paths must
@@ -1858,6 +2435,7 @@ def get_fem_field2d(
                 n_sectors=_ns_eff,
                 stator_fillet_mm=float(stator_fillet_mm),
                 coil_temp_c=float(coil_temp_c),
+                magnet_temp_c=(None if magnet_temp_c is None else float(magnet_temp_c)),
                 eddy=bool(eddy), rotor_eddy=bool(rotor_eddy), demag=bool(demag),
                 return_field=True, field_first=not _sweep,
                 rotor_angle0_deg=float(rotor_angle_deg),
@@ -1869,7 +2447,8 @@ def get_fem_field2d(
                 gap_layers=float(gap_layers),
                 component_mesh_mm=_comp_mesh,
                 geo_override=_geo_ov,
-                element_order=2)
+                element_order=2,
+                progress_cb=_progress_cb)
         except Exception as e:
             log.exception("SB field solve failed")
             raise HTTPException(status_code=500, detail=f"FEM solve failed: {e}")
@@ -2066,9 +2645,27 @@ def get_fem_field2d(
         def _mean(kk):
             s = d.get(kk) or [0.0]
             return float(_np.mean(_np.asarray(s, float))) if len(s) else 0.0
-        # Copper: the coupled solve reports the SOLVED total; without it the
-        # transient's own DC+AC series is the honest number.
-        Pcu = (float(d.get("P_cu_total_solve_W", 0.0)) if eddy else _mean("P_cu_W"))
+        # COPPER: the series, always — coupled solve or not (fixed 2026-09-10).
+        #
+        # `P_cu_total_solve_W` is the coupled solve's own ∫σE² and it is a 2-D
+        # integral: it is the loss of the ACTIVE LENGTH and nothing else, because
+        # a 2-D slice has no end windings in it.  `P_cu_W` is the series the
+        # solver builds for exactly this purpose — the end-winding-corrected DC
+        # plus that same coupled AC increment (`fem_solver_2d`, "COPPER SPLIT")
+        # — so it is the whole winding.
+        #
+        # Taking the 2-D integral here dropped k_end from every number this
+        # payload feeds, and this payload is what the THERMAL solve reads.  On
+        # the live Ø200 that was 2,900.4 W into the thermal model against
+        # 3,443.1 W the machine actually makes: 542.7 W — 18.7 % of the copper,
+        # 9 % of all losses — never entered the temperature field, and the
+        # efficiency computed below was flattered by the same watts.  The user's
+        # position on where that heat goes is the physical one: the end turns
+        # are cooled through the stator, so they belong in the 2-D thermal.
+        #
+        # `P_cu_total_solve_W` is still returned, untouched, as the cross-check
+        # it was meant to be — two independent routes to the active-length watts.
+        Pcu = _mean("P_cu_W")
         Pfe = _mean("P_fe_W"); Pmag = _mean("P_mag_eddy_W")
         Tavg = float(d.get("T_avg_Nm", 0.0)); rpm = float(d.get("rpm", 0.0))
         ploss = Pcu + Pfe + Pmag
@@ -2086,9 +2683,36 @@ def get_fem_field2d(
             "T_em_Nm": round(Tavg, 3),
             "P_cu_W": round(Pcu, 1), "P_fe_W": round(Pfe, 1),
             "P_mag_eddy_W": round(Pmag, 1), "P_loss_total_W": round(ploss, 1),
+            # UNROUNDED companions (2026-09-07).  The four above are display
+            # numbers and 0.1 W is the right resolution to print them at — but
+            # the thermal solve builds its copper heat density from `P_cu_W`,
+            # i.e. one solver reads another's rounded output.  On a small
+            # machine that is not a rounding, it is the whole signal: the 30 mm
+            # fixture makes 2.6 W of copper, so an 18 K change of winding
+            # temperature (2.6 % of ρ_Cu) moved P_cu by less than half a
+            # quantum and the coupled EM↔thermal loop could not see its own
+            # feedback at all.  Additive on purpose — every existing reader of
+            # the rounded keys keeps the number it has always had.
+            "P_cu_exact_W": float(Pcu), "P_fe_exact_W": float(Pfe),
+            "P_mag_eddy_exact_W": float(Pmag),
+            "P_loss_total_exact_W": float(ploss),
             "P_mech_W": round(Pmech, 1), "efficiency": round(eff, 4),
             "P_cu_ac_solve_W": round(float(d.get("P_cu_ac_solve_W", 0.0)), 1),
+            # Un-rounded, for the same reason as the four above — and this one
+            # in particular, because the AC (proximity/skin) share is what
+            # decides HOW copper loss moves with winding temperature: the DC
+            # term goes as ρ(T), the solved eddy term as σ(T) = 1/ρ(T), so the
+            # two partly cancel.  A consumer that cannot see the split can only
+            # scale the total the wrong way.
+            "P_cu_ac_exact_W": float(d.get("P_cu_ac_solve_W", 0.0) or 0.0),
             "V_peak": round(float(d.get("V_peak", 0.0)), 1),
+            # The end-winding factor the run was billed at — the copper loss
+            # above already contains it.  Carried so a consumer that needs the
+            # end turns THEMSELVES (the open-frame thermal model: their length is
+            # (k_end − 1)·L/2 per side) uses the run's own number instead of
+            # estimating a second one.  0.0 on a snapshot written before it was
+            # stored, which the reader treats as "not recorded".
+            "end_winding_factor": float(d.get("end_winding_factor", 0.0) or 0.0),
         })
     # Demag %-map + per-magnet knee report (only when demag modelling is on).
     _dc = d.get("demag_coef_per_tri")
@@ -2102,383 +2726,84 @@ def get_fem_field2d(
     return result
 
 
-_thermal_field_cache: Dict[tuple, Dict] = {}
-
-
-def _thermal_k(category: str, name, default: float) -> float:
-    """Thermal conductivity [W/m·K] of a named material, or a category default."""
-    if not name:
-        return default
-    try:
-        from motor_ai_sim.materials import get_material
-        v = getattr(get_material(category, name), "thermal_conductivity", None)
-        return float(v) if v else default
-    except Exception:
-        return default
-
-
-def _thermal_k_any(name, default: float) -> float:
-    """Thermal conductivity of a material whose category is unknown (e.g. shaft)."""
-    if not name:
-        return default
-    from motor_ai_sim.materials import get_material
-    for cat in ("conductor", "steel", "magnet"):
-        try:
-            v = getattr(get_material(cat, name), "thermal_conductivity", None)
-            if v:
-                return float(v)
-        except Exception:
-            pass
-    return default
-
-
-# ── Cooling-system models — the whole outer stator surface (housing) is cooled ──
-# Fluid properties (rho kg/m3, cp J/kgK, k W/mK, nu m2/s, Pr) come from the
-# materials library (config/materials_library.yaml → `coolant:`), so every fluid
-# used in the model is also a catalogued material.  The table below is only a
-# safety fallback if the library is missing an entry.
-_COOLANT_FALLBACK = {
-    "water":            (1000.0, 4186.0, 0.60, 1.0e-6, 7.0),
-    "water_glycol_50":  (1070.0, 3300.0, 0.40, 3.0e-6, 25.0),
-    "oil":              (860.0,  2000.0, 0.14, 4.0e-5, 280.0),
-    "ethylene_glycol":  (1110.0, 2400.0, 0.25, 1.5e-5, 150.0),
-    "air":              (1.16,   1007.0, 0.0263, 1.56e-5, 0.707),   # ~300 K
-}
-
-
-def _coolant_props(name: str):
-    """(rho, cp, k, nu, Pr) for a coolant — read FROM the materials library so the
-    catalogue is the single source of truth; falls back to the built-in table so
-    the thermal model never breaks on a missing/renamed entry."""
-    try:
-        from motor_ai_sim import materials as _mat
-        return _mat.get_coolant(name).props_tuple
-    except Exception:
-        return _COOLANT_FALLBACK.get(name, _COOLANT_FALLBACK["water"])
-
-
-def _cooling_bc(*, mode: str, t_ambient_c: float, air_speed_mps: float,
-                fluid: str, fluid_temp_in_c: float, flow_lpm: float,
-                p_loss_w: float, r_housing_m: float, length_m: float,
-                h_manual: float, fluid_temp_out_c: float = 0.0):
-    """Convert a cooling-system spec into the housing Robin BC (h, T_sink) plus
-    reportable extras.  Cooling acts on the full outer stator surface (area A).
-
-      • manual : use the supplied h_manual + ambient (legacy behaviour).
-      • air    : forced convection over the housing as a cylinder in cross-flow
-                 (Churchill-Bernstein) from the air speed, natural-convection floor.
-                 'Heat we can blow off' = h·A·ΔT (= the losses at equilibrium).
-      • liquid : coolant carries the losses → T_out = T_in + P/(ṁ·cp); the BC sink
-                 is the MEAN coolant temp; h is a flow-scaled water-jacket estimate.
-    """
-    import math
-    A = 2.0 * math.pi * max(r_housing_m, 1e-4) * max(length_m, 1e-3)   # housing area [m²]
-
-    if mode == "liquid":
-        rho, cp, kf, nu, Pr = _coolant_props(fluid)
-        # INVERTED liquid model: the user sets the inlet AND target outlet temps.
-        # The flow rate needed to carry the losses with that ΔT is DERIVED from the
-        # energy balance (ṁ = P/(cp·ΔT)), and the housing (outer contour) is HELD at
-        # the OUTLET coolant temp — the hottest the jacket reaches, a conservative
-        # reference.  Bigger chosen ΔT → less flow required.
-        t_in  = float(fluid_temp_in_c)
-        t_out = max(float(fluid_temp_out_c), t_in + 0.1)         # outlet must exceed inlet
-        dT    = t_out - t_in
-        m_dot = (p_loss_w / (cp * dT)) if dT > 1e-6 else 0.0     # required mass flow [kg/s]
-        flow_lpm_req = (m_dot / max(rho, 1e-6)) * 60000.0        # → L/min  (DERIVED, reported)
-        t_sink = t_out                                           # outer contour = outlet temp
-        h = max(2.0e4, p_loss_w / (A * 0.05))                    # pin housing to t_out (film drop ≤0.05°C)
-        extras = {
-            "mode": "liquid", "fluid": fluid, "flow_lpm": round(flow_lpm_req, 2),
-            "fluid_temp_in_c": round(t_in, 1), "fluid_temp_out_c": round(t_out, 1),
-            "fluid_dT_c": round(dT, 1), "m_dot_kg_s": round(m_dot, 4),
-            "housing_area_m2": round(A, 4), "heat_removed_W": round(p_loss_w, 1),
-            "flow_auto": True,
-        }
-        return h, t_sink, extras
-
-    if mode == "air":
-        rho, cp, ka, nu, Pr = _coolant_props("air")
-        D = 2.0 * max(r_housing_m, 1e-4)
-        v = max(air_speed_mps, 0.0)
-        Re = v * D / nu if v > 0.0 else 0.0
-        h_forced = 0.0
-        if Re > 1.0:
-            Nu = (0.3 + (0.62 * Re ** 0.5 * Pr ** (1 / 3))
-                  / (1 + (0.4 / Pr) ** (2 / 3)) ** 0.25
-                  * (1 + (Re / 282000.0) ** (5 / 8)) ** (4 / 5))
-            h_forced = Nu * ka / D
-        h_nat = 7.0                       # still-air natural-convection floor
-        h = max(h_forced, h_nat)
-        extras = {
-            "mode": "air", "air_temp_c": round(t_ambient_c, 1),
-            "air_speed_mps": round(v, 2), "Re": round(Re, 0), "h_conv": round(h, 1),
-            "regime": "forced" if h_forced > h_nat else "natural",
-            "housing_area_m2": round(A, 4), "heat_removed_W": round(p_loss_w, 1),
-            "cooling_capacity_W_per_K": round(h * A, 2),
-        }
-        return h, t_ambient_c, extras
-
-    # manual (legacy): caller-supplied h + ambient
-    return h_manual, t_ambient_c, {"mode": "manual", "h_conv": round(h_manual, 1),
-                                   "housing_area_m2": round(A, 4)}
-
-
-@router.get("/physics/thermal_field2d")
-def get_thermal_field2d(
-    ambient_temp:       float = 25.0,    # coolant / ambient [°C]
-    h_conv:             float = 50.0,    # housing convection coeff [W/m²·K] (manual mode)
-    slot_k:             float = 0.0,     # slot transverse k [W/m·K]; 0 = auto from winding (Cu fill + enamel)
-    gap_k:              float = 0.0,     # air-gap k [W/m·K]; 0 = auto (Taylor-enhanced from rpm)
-    rpm:                float = 0.0,     # rotor speed [rpm] (from Simulation) → gap Taylor number
-    gamma_deg:          float = 0.0,
-    I_phase_rms:        float = 120.0,
-    n_steps_per_period: int   = 12,
-    n_periods:          float = 2.0,
-    mesh_size_mm:       float = 3.0,
-    min_size_mm:        float = 0.3,
-    outer_air_factor:   float = 1.3,
-    n_sectors:          int   = 4,
-    coil_temp_c:        float = 120.0,
-    component_mesh:     str   = "",
-    geo:                Optional[str] = None,
-    cooling_mode:       str   = "manual",   # "manual" | "air" | "liquid"
-    air_speed_mps:      float = 0.0,        # air: airflow speed over the housing
-    fluid:              str   = "water",    # liquid: coolant name (materials lib `coolant:`)
-    fluid_temp_in_c:    float = 25.0,       # liquid: inlet temperature
-    fluid_temp_out_c:   float = 0.0,        # liquid: target OUTLET temp (housing held here; flow derived)
-    flow_lpm:           float = 0.0,        # liquid: volumetric flow [L/min] (legacy; now derived from ΔT)
-):
-    """Steady-state 2-D thermal map. Runs the EM eddy solve for the loss field
-    (cached), then solves −∇·(k∇T)=q on the same mesh with convection at the
-    housing.  Returns the temperature field, heat flux, and per-component T_max."""
-    import numpy as _np
-    _geo_ov = _parse_geo_override(geo)
-
-    # Auto-refine the COIL mesh for the thermal solve.  A slot meshed ~1 element
-    # across thermally shorts the windings to the iron (every coil node sits on
-    # the slot wall, shared with k≈25 steel) → no interior node can heat up and the
-    # winding hotspot collapses, regardless of the (correct) homogenised slot_k.
-    # Target ~4 elements across the slot width so the winding gradient resolves.
-    try:
-        from motor_ai_sim.config import get_config as _get_cfg
-        from motor_ai_sim.simulation.geometry_2d import merge_geo_override as _merge_geo
-        # merge_geo_override, not a dict-update: slot_width is DERIVED and the
-        # override carries primaries only, so the update sized the thermal coil
-        # mesh from whatever design the shared config held.
-        _g0 = _merge_geo(dict(_get_cfg().get("geometry", {})), _geo_ov)
-        _slot_w = float(_g0.get("slot_width", 3.0) or 3.0)
-        _cm0 = _parse_component_mesh(component_mesh)
-        if "coil" not in _cm0:
-            import json as _json
-            _cm0["coil"] = round(max(0.4, min(_slot_w / 4.0, float(mesh_size_mm))), 3)
-            component_mesh = _json.dumps(_cm0)
-    except Exception:
-        pass
-
-    key = ("thermal", round(ambient_temp, 1), round(h_conv, 1), round(slot_k, 3),
-           round(gap_k, 3), round(rpm, 1), round(gamma_deg, 1), round(I_phase_rms, 1),
-           int(n_steps_per_period), round(n_periods, 2), round(mesh_size_mm, 2),
-           round(min_size_mm, 2), round(outer_air_factor, 2), int(n_sectors),
-           round(coil_temp_c, 1), component_mesh,
-           cooling_mode, round(air_speed_mps, 2), fluid,
-           round(fluid_temp_in_c, 1), round(fluid_temp_out_c, 1), round(flow_lpm, 2))
-    if _geo_ov:
-        key = key + (tuple(sorted(_geo_ov.items())),)
-    if key in _thermal_field_cache:
-        return _thermal_field_cache[key]
-
-    # 1. EM losses on the mesh (reuses the field cache → cheap on repeat).
-    # Same endpoint as every other field view, so the thermal map is solved on
-    # the SAME mesh the user is looking at — it used to come from the separate
-    # eddy endpoint, whose mesh defaults differed.
-    em = get_fem_field2d(
-        gamma_deg=gamma_deg, I_phase_rms=I_phase_rms,
-        n_steps_per_period=n_steps_per_period, n_periods=n_periods,
-        eddy=True, rotor_eddy=True,
-        mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm,
-        outer_air_factor=outer_air_factor, n_sectors=n_sectors,
-        coil_temp_c=coil_temp_c, component_mesh=component_mesh, geo=geo)
-    verts = _np.asarray(em["vertices"], float)         # (n,2) metres
-    tris = _np.asarray(em["triangles"], int)            # (m,3)
-    tags = _np.asarray(em["domain_per_tri"], int)       # collapsed palette tags
-    loss_dens = _np.asarray(em.get("loss_density_per_tri") or [], float)
-    if loss_dens.size != tris.shape[0]:
-        loss_dens = _np.zeros(tris.shape[0])
-    Pcu = float(em.get("P_cu_W", 0.0))
-
-    # 2. geometry: housing radius + copper volume (for the copper heat density)
-    from motor_ai_sim.config import get_config
-    cfg = get_config()
-    # merge_geo_override, not a dict-update: the winding thermal model below
-    # reads the DERIVED slot_width (copper fill, bulk transverse k), which the
-    # override does not carry — a plain update left the config's value in place.
-    from motor_ai_sim.simulation.geometry_2d import merge_geo_override as _merge_geo
-    g = _merge_geo(dict(cfg.get("geometry", {})), _geo_ov)
-    R_house = float(g.get("stator_diameter", 200.0)) / 2.0 * 1e-3
-    stator_inner_m = R_house - float(g.get("core_thickness", 5.0)) * 1e-3 \
-        - float(g.get("slot_height", 18.0)) * 1e-3
-    rotor_outer_m = stator_inner_m - float(g.get("air_gap", 0.6)) * 1e-3
-
-    # Air-gap effective conductivity — ROTATION-ENHANCED (Taylor–Couette).  At rest
-    # the gap is still-air conduction (~0.03 W/m·K); as the rotor spins, Taylor
-    # vortices stir the gap air and raise the effective cross-gap k.  We size it from
-    # the gap Taylor number with the Becker–Kaye Nusselt correlation, using the rotor
-    # speed from the Simulation tab.  Bigger radius / wider gap / higher rpm → more
-    # enhancement.  Pass gap_k>0 to override with a fixed value.
-    if float(gap_k) > 0.0:
-        gap_k_eff = float(gap_k); gap_Ta = None; gap_Nu = 1.0
-    else:
-        _r_m   = max((rotor_outer_m + stator_inner_m) / 2.0, 1e-4)   # mean gap radius [m]
-        _delta = max(stator_inner_m - rotor_outer_m, 1e-5)           # radial gap thickness [m]
-        _omega = abs(float(rpm)) * 2.0 * _np.pi / 60.0               # rotor angular speed [rad/s]
-        _k_air  = 0.030                                              # air k at ~75 °C gap temp [W/m·K]
-        _nu_air = 2.0e-5                                             # air kinematic viscosity ~75 °C [m²/s]
-        gap_Ta = (_omega ** 2) * _r_m * (_delta ** 3) / (_nu_air ** 2)
-        if gap_Ta < 1700.0:
-            gap_Nu = 1.0                                             # sub-critical → pure conduction
-        elif gap_Ta <= 1.0e4:
-            gap_Nu = 0.128 * gap_Ta ** 0.367                         # Becker–Kaye, transitional
-        else:
-            gap_Nu = 0.409 * gap_Ta ** 0.241                         # Becker–Kaye, turbulent
-        gap_k_eff = max(gap_Nu * _k_air, _k_air)                     # ≥ still-air conduction
-
-    L = float(g.get("motor_length", 30.0)) * 1e-3
-    num_slots = int(g.get("num_slots") or round(float(g.get("num_seg", 1)) * float(g.get("num_slots_per_segment", 6))))
-    V_cu = (num_slots * float(g.get("num_wires_per_slot", 12))
-            * float(g.get("wire_width", 5.0)) * 1e-3
-            * float(g.get("wire_height", 0.8)) * 1e-3 * L)
-    q_cu = (Pcu / V_cu) if V_cu > 1e-12 else 0.0
-
-    # 3. materials → conductivities
-    mats = cfg.get("materials", {})
-    k_steel = _thermal_k("steel", mats.get("stator_core"), 25.0)
-    k_mag = _thermal_k("magnet", mats.get("magnet"), 8.0)
-    k_shaft = _thermal_k_any(mats.get("shaft"), 150.0)
-
-    # Slot insulation as a SERIES thermal resistance on the copper→iron path.
-    # The liner (insulation_thickness, Nomex/ceramic) and wire enamel are sub-mesh
-    # thin (0.05–0.15 mm < 0.3 mm mesh), so we LUMP them into the coil-region
-    # effective conductivity rather than meshing thin strips:
-    #     k_eff = h_slot / (h_slot/k_winding + t_liner/k_liner)   (series, ≤ k_winding)
-    # k_winding = the slot_k param (Cu + enamel + air, transverse).  Effect:
-    # Nomex (k≈0.14) → strong barrier → HOTTER windings;  AlN ceramic (k≈170) →
-    # negligible barrier → k_eff≈k_winding (cooler).  The real liner trade-off.
-    k_liner = _thermal_k("insulator", mats.get("slot_insulation"), 0.14)
-    t_liner = float(g.get("insulation_thickness", 0.2))    # mm  (liner thickness)
-    h_slot  = float(g.get("slot_height", 14.0))            # mm  (winding radial extent)
-    # Winding bulk transverse k FROM THE ACTUAL WIRE STACK — a volume-weighted
-    # SERIES ("layered") mean, not a hardcoded guess and not a copper-inclusion
-    # (Maxwell) estimate, which the high copper fraction inflates to ~0.4.  Heat
-    # leaving the slot crosses, IN SERIES, the stacked conductors (k≈400 → negligible
-    # R) and the inter-wire gaps; those gaps are air-dominated (thin enamel build /
-    # imperfect impregnation), and air (k≈0.026) sets the resistance.  For this
-    # 8-wire winding the series mean is ≈0.18 W/m·K — the realistic transverse value.
-    # A high constant slot_k thermally SHORTS the windings to the iron → no hotspot
-    # (the old bug).  Pass slot_k>0 to override with a manual value.
-    k_cu_w   = _thermal_k_any(mats.get("winding") or mats.get("conductor"), 400.0)
-    k_enamel = _thermal_k("insulator", mats.get("wire_insulation"), 0.12)
-    k_gap    = 0.026                                       # still air in the inter-wire gaps
-    _sw = float(g.get("slot_width", 3.0)); _nw = float(g.get("num_wires_per_slot", 8))
-    _ww = float(g.get("wire_width", 2.5)); _wh = float(g.get("wire_height", 0.5))
-    _sy = float(g.get("wire_spacing_y", 0.1))              # mm, inter-wire gap (air-filled)
-    f_cu = min(max((_nw * _ww * _wh) / max(_sw * h_slot, 1e-6), 0.0), 0.92)   # copper fill (reported)
-    _d_cu  = _nw * _wh                                      # total copper thickness across the stack
-    _d_gap = max(_nw - 1.0, 0.0) * _sy                      # total inter-wire gap thickness
-    _R_ser = _d_cu / max(k_cu_w, 1e-6) + _d_gap / max(k_gap, 1e-6)   # series resistance (copper + gaps)
-    slot_k_auto = (_d_cu + _d_gap) / max(_R_ser, 1e-9)      # winding bulk transverse k (≈0.18)
-    slot_k_used = float(slot_k) if float(slot_k) > 0.0 else slot_k_auto   # >0 = manual override
-    slot_k_eff = h_slot / (
-        h_slot / max(slot_k_used, 1e-6) + t_liner / max(float(k_liner), 1e-6))   # + liner in series
-
-    # 4. per-element k + q from the collapsed domain tags
-    (DOM_AIR, DOM_STATOR, DOM_COIL, DOM_AIRGAP, DOM_MAG_N, DOM_ROTOR,
-     DOM_SHAFT, DOM_BAND, DOM_OUTER, DOM_MAG_S) = 0, 1, 2, 3, 4, 5, 6, 7, 8, 44
-    k_elem = _np.full(tris.shape[0], gap_k_eff)         # default = air / gap (Taylor-enhanced)
-    q_elem = loss_dens.copy()
-    is_steel = (tags == DOM_STATOR) | (tags == DOM_ROTOR)
-    is_mag = (tags == DOM_MAG_N) | (tags == DOM_MAG_S)
-    is_coil = (tags == DOM_COIL)
-    k_elem[is_steel] = k_steel
-    k_elem[is_mag] = k_mag
-    k_elem[tags == DOM_SHAFT] = k_shaft
-    k_elem[is_coil] = slot_k_eff                        # winding + slot-liner series resistance
-    q_elem[is_coil] = q_cu                              # copper loss density (overwrites eddy part)
-
-    # 5. cooling system → housing Robin BC (h, sink temp).  The whole outer stator
-    # surface is cooled.  Air: h from air speed (cylinder cross-flow); liquid: outlet
-    # temp from the energy balance + mean-coolant sink.  manual: caller's h + ambient.
-    P_loss_total = float(em.get("P_loss_total_W") or 0.0)
-    h_eff, t_sink, cooling = _cooling_bc(
-        mode=cooling_mode, t_ambient_c=ambient_temp, air_speed_mps=air_speed_mps,
-        fluid=fluid, fluid_temp_in_c=fluid_temp_in_c, fluid_temp_out_c=fluid_temp_out_c,
-        flow_lpm=flow_lpm,
-        p_loss_w=P_loss_total, r_housing_m=R_house, length_m=L, h_manual=h_conv)
-
-    # 6. steady thermal solve — drop ALL air (outer + gap + slip band); the rotor
-    # is reconnected to the stator by an explicit gap conductance bridge.
-    from motor_ai_sim.simulation.thermal_solver_2d import solve_steady_thermal
-    th = solve_steady_thermal(
-        verts.T, tris.T, tags, k_elem, q_elem,
-        drop_tags=[DOM_OUTER, DOM_AIRGAP, DOM_BAND, DOM_AIR],
-        r_housing_m=R_house, rotor_outer_m=rotor_outer_m, stator_inner_m=stator_inner_m,
-        gap_k=float(gap_k_eff), h_conv=float(h_eff), t_ambient=float(t_sink))
-
-    # 6. per-component temperatures
-    Tn = _np.asarray(th["T_node"]); ts = _np.asarray(th["triangles"], int)
-    tg = _np.asarray(th["cell_tags"], int)
-
-    def _comp(mask):
-        if not mask.any():
-            return None
-        nodes = _np.unique(ts[mask])
-        return {"max": round(float(Tn[nodes].max()), 1), "avg": round(float(Tn[nodes].mean()), 1)}
-
-    result = {
-        "ok": True,
-        "n_vertices": len(th["vertices"]), "n_triangles": len(th["triangles"]),
-        "vertices": th["vertices"], "triangles": th["triangles"],
-        "domain_per_tri": th["cell_tags"],
-        "temperature_per_node": th["T_node"],            # °C
-        "heat_flux_per_tri": th["flux_elem"],            # W/m² (vector)
-        "flux_mag_per_tri": th["flux_mag_elem"],
-        "T_min": round(float(th["T_min"]), 1), "T_max": round(float(th["T_max"]), 1),
-        "n_bridge_links": th.get("n_bridge_links"), "n_nonfinite": th.get("n_nonfinite"),
-        "n_housing_facets": th.get("n_housing_facets"),
-        "ambient_temp": float(ambient_temp), "h_conv": round(float(h_eff), 1),
-        "t_sink_c": round(float(t_sink), 1), "cooling": cooling,
-        "slot_k": round(float(slot_k_used), 3),            # winding bulk transverse k (auto unless slot_k>0 override)
-        "slot_k_auto": round(float(slot_k_auto), 3),       # series-stack value (Cu + air gaps)
-        "slot_fill": round(float(f_cu), 3),                # copper fill fraction in the slot
-        "k_enamel": round(float(k_enamel), 3),             # wire-insulation (enamel) conductivity
-        "gap_k": round(float(gap_k_eff), 3),               # air-gap k used (Taylor-enhanced unless gap_k>0 override)
-        "gap_k_taylor": round(float(gap_k_eff), 3),        # rotation-enhanced gap conductivity
-        "gap_Ta": (round(float(gap_Ta), 0) if gap_Ta is not None else None),  # gap Taylor number
-        "gap_Nu": round(float(gap_Nu), 2),                 # Nusselt enhancement (k_eff/k_air)
-        "rpm": float(rpm),
-        "slot_k_eff": round(float(slot_k_eff), 3),         # winding + liner series k
-        "k_liner": round(float(k_liner), 3),               # slot-liner material conductivity
-        "liner_material": mats.get("slot_insulation"),
-        "k_steel": round(k_steel, 1), "k_magnet": round(k_mag, 1), "k_shaft": round(k_shaft, 1),
-        "components": {
-            "winding": _comp(tg == DOM_COIL),
-            "magnet": _comp((tg == DOM_MAG_N) | (tg == DOM_MAG_S)),
-            "stator": _comp(tg == DOM_STATOR),
-            "rotor": _comp(tg == DOM_ROTOR),
-        },
-        "P_cu_W": round(Pcu, 1), "P_fe_W": em.get("P_fe_W"),
-        "P_mag_eddy_W": em.get("P_mag_eddy_W"), "P_loss_total_W": em.get("P_loss_total_W"),
-        "outlines": em.get("outlines"), "extent": em.get("extent"),
-    }
-    _thermal_field_cache[key] = result
-    return result
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # 7d. FEM Transient — N steps per electrical period
 # ─────────────────────────────────────────────────────────────────────────────
 
 _fem_transient_cache: Dict[tuple, Dict] = {}
+
+# ── A Run ALWAYS solves ──────────────────────────────────────────────────────
+# `_fem_transient_cache` used to be consulted by the Run path itself, so a
+# second press of Run with the same inputs returned the FIRST run's object —
+# same torque, same ripple, same `computed_at` — without touching the solver.
+# For an engineer that is not a cache hit, it is a Run that silently did
+# nothing (user, 2026-09-04: "у нас с ними постоянно жуткие проблемы, их нужно
+# очищать при каждом расчёте и обновлять").  The dict survives only as an
+# OPT-IN memo for the iterative loops that re-enter this route many times
+# inside ONE request (the bus-coupling fixed point and the charge-max compass
+# search: they revisit the same operating point by construction and each
+# revisit is a full FEM solve).  Nothing that a human pressed Run for may read
+# it — see `_memo_allowed`.
+_TRANSIENT_MEMO: "_CtxVar[bool]" = _CtxVar("transient_memo", default=False)
+
+
+def _memo_allowed() -> bool:
+    """May THIS solve be served from `_fem_transient_cache`?
+
+    Only an internal, machine-driven re-entry may: an outer loop that has
+    explicitly opted in (`_TRANSIENT_MEMO`), or a background solve
+    (`_BACKGROUND_RUN` — a passport sweep point, a search probe), which by
+    definition is not a run the user asked for.  Every user-initiated path —
+    GET /physics/fem_transient, POST /api/kernel/run, the animation viewer —
+    leaves both false and therefore always reaches the solver.
+    """
+    return bool(_TRANSIENT_MEMO.get() or _BACKGROUND_RUN.get())
+
+
+# What the last cache refresh / clear was, for GET /api/simulation/caches.
+_cache_state: Dict[str, Optional[str]] = {"last_refreshed_by": None,
+                                          "last_cleared_reason": None}
+
+
+def _refresh_caches_for_run(sb_key: tuple, result: Dict,
+                            snap_key: Optional[tuple] = None) -> None:
+    """REPLACE the physics caches with this run's own state.
+
+    Called from exactly one place — where a finished live-machine run is
+    finalised, next to `_save_last_transient` — so no route can forget it.
+    After it returns:
+
+      * `_fem_field_cache`   is empty (every field picture in it was drawn for
+        an earlier run; the fresh run's own last-frame snapshot serves the
+        J⟳ / Loss views without a solve anyway);
+      * `_transient_field_snap` holds exactly ONE entry — this run's snapshot
+        when the run kept one, otherwise the newest surviving entry, so a
+        Run that did not ask for a snapshot (the animation viewer's second
+        request) cannot blank the store the previous Run just filled;
+      * `_fem_transient_cache` holds exactly this result.
+
+    Coexistence, not staleness, was the bug: the stores are keyed correctly,
+    but an older entry sitting beside the new one is a picture of a machine the
+    user has moved on from and gets served by any near-miss lookup.
+    """
+    try:
+        _fem_field_cache.clear()
+        _keep = snap_key if (snap_key is not None
+                             and snap_key in _transient_field_snap) else None
+        if _keep is None and _transient_field_snap:
+            _keep = next(reversed(_transient_field_snap))
+        for _k in [_k for _k in _transient_field_snap if _k != _keep]:
+            _transient_field_snap.pop(_k, None)
+        _fem_transient_cache.clear()
+        _fem_transient_cache[sb_key] = result
+        _cache_state["last_refreshed_by"] = result.get("computed_at")
+        log.info("physics caches refreshed by run %s: field-cache %d, "
+                 "snapshots %d", result.get("computed_at"),
+                 len(_fem_field_cache), len(_transient_field_snap))
+    except Exception as _e:   # noqa: BLE001 — housekeeping must never kill a run
+        log.warning("cache refresh after the run failed: %s", _e)
+
+
 # The single most-recent transient (key + result), kept so the web UI can RESTORE
 # the last simulation on open (?restore=true) — showing it stale-flagged instead
 # of recomputing when the requested params don't match.  Updated on every save
@@ -2509,8 +2834,29 @@ def _json_default(o):
         return o.item()
     return float(o)
 
-def _save_last_transient(sb_key: tuple, result: Dict) -> None:
+def _save_last_transient(sb_key: tuple, result: Dict, *,
+                         journal: bool = True) -> None:
+    """Persist THIS result as "the last simulation" (the ?restore=true store).
+
+    `journal=False` for a result that was LOADED from the results ledger rather
+    than solved (2026-09-05): the restore store must follow what is on screen —
+    otherwise a reload finds a newer solve on disk than the loaded run and the
+    panel silently adopts it (the mount probe's `backNewer` branch), i.e. the
+    numbers change under the user without a word.  The run JOURNAL, though, is a
+    record of solves the user actually made; a load is not one, and writing it
+    there would teach the heuristics that the same design was tried twice.
+    """
     try:
+        # NEVER persist or re-serve the per-frame field data.  `frames` is the
+        # animation payload — one full mesh + A_z per frame — and it belongs to
+        # the request that asked for it, once.  Left in, a 464-step run wrote a
+        # 790 MB .last_transient.json, the post-processing serialisation choked
+        # the event loop for minutes (the whole API read as hung), and every
+        # later RESTORE shipped 725 MB of JSON that no browser could parse —
+        # the user's card silently fell back to a stale localStorage summary
+        # and showed the previous run's numbers (measured live 2026-09-01:
+        # "обновил страницу, так 0 и стоит" over a solved P_solid = 5.1 W).
+        result = {k: v for k, v in result.items() if k != "frames"}
         tmp = _transient_store_path() + ".tmp"
         with open(tmp, "w", encoding="utf-8") as fh:
             _json.dump({"key": list(sb_key), "result": result}, fh,
@@ -2518,8 +2864,77 @@ def _save_last_transient(sb_key: tuple, result: Dict) -> None:
         _os_t.replace(tmp, _transient_store_path())   # atomic
         _last_transient_ref["key"] = tuple(sb_key)
         _last_transient_ref["result"] = result
+        if journal:
+            _append_run_journal(result)
     except Exception as _e:
         log.warning("could not persist last transient: %s", _e)
+
+
+def _append_run_journal(result: Dict) -> None:
+    """One line per finished LIVE-machine run: logs/run_journal.jsonl.
+
+    The user optimises machines by hand — a geometry edit, a run, a look at
+    the numbers, the next edit — and asked (2026-09-04) that this be WATCHED
+    and learned from, because the automatic optimizer does not find what the
+    hand finds.  The transient store keeps only the last run; the geometry
+    audit keeps only the edits.  This journal keeps the pairing: what the
+    machine WAS (every geometry key), what it was run AT, what came out.
+    Append-only, ~2 kB per run, never read by the app itself — a passive
+    record for the orchestrator's summaries (scratchpad/journal_summary.py).
+    """
+    try:
+        import time as _tj
+        from pathlib import Path as _P
+        from motor_ai_sim.config import get_config as _gc, DEFAULT_CONFIG_PATH as _DCP
+        s = result.get("summary") or {}
+        cfg = _gc()
+        geo = dict(cfg.get("geometry") or {})
+        mats = dict(cfg.get("materials") or {})
+        ctx = {}
+        try:
+            ctx = _json.loads((_P(_DCP).parent / ".family_context.json").read_text(encoding="utf-8"))
+        except Exception:   # noqa: BLE001
+            ctx = {}
+        def _num(v):
+            try:
+                return round(float(v), 6)
+            except Exception:   # noqa: BLE001
+                return None
+        _mkeys = ("T_em_avg_Nm", "P_mech_W", "efficiency", "T_ripple_pct", "P_loss_total_W",
+                  "P_stranded_W", "P_core_W", "P_solid_W", "mass_total_kg",
+                  "torque_per_mass_Nm_kg", "power_per_mass_W_kg", "J_coil_A_per_mm2",
+                  "V_line_peak_V", "V_phase_peak_V", "KV_rpm_per_V_line",
+                  "KV_noload_rpm_per_V_line", "Kt_Nm_per_Arms", "Ld_mH", "Lq_mH",
+                  "psi_pm_Wb", "B_gap_mean_T",
+                  "THD_pct", "THD_I_pct", "slot_fill_pct", "R_phase_ohm",
+                  "I_phase_rms_A", "I_phase_rms_solved_A", "rpm", "gamma_deg",
+                  "n_steps_per_period", "turns_per_coil", "wire_parallel",
+                  "wire_split", "n_parallel")
+        line = {
+            "ts": _tj.strftime("%Y-%m-%dT%H:%M:%S"),
+            "computed_at": result.get("computed_at"),
+            "geo_fingerprint": result.get("geo_fingerprint"),
+            "context": {k: ctx.get(k) for k in ("die", "config", "duty")},
+            "geometry": {k: (_num(v) if isinstance(v, (int, float)) else v)
+                         for k, v in geo.items() if not isinstance(v, (dict, list))},
+            "materials": {k: mats.get(k) for k in ("magnet", "stator_core", "rotor_core", "sleeve")
+                          if mats.get(k)},
+            "op": {"drive": result.get("drive"), "mode": s.get("op_mode"),
+                   "connection": s.get("connection"), "coil_temp_C": s.get("coil_temp_C"),
+                   "daxis_deg": _num(result.get("daxis_deg")),
+                   "daxis_source": result.get("daxis_source"),
+                   "demag": result.get("demag"), "eddy": result.get("eddy_coupled")},
+            "metrics": {k: _num(s.get(k)) for k in _mkeys if s.get(k) is not None},
+            "end3d_k": _num((s.get("end3d") or {}).get("k_flux")) if isinstance(s.get("end3d"), dict) else None,
+            "n_frames_solved": result.get("n_frames_solved"),
+            "wall_s": _num(result.get("wall_s") or result.get("elapsed_s")),
+        }
+        p = _P(_DCP).parent.parent / "logs" / "run_journal.jsonl"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with open(p, "a", encoding="utf-8") as fh:
+            fh.write(_json.dumps(line, ensure_ascii=False, default=_json_default) + "\n")
+    except Exception as _e:   # noqa: BLE001 — a journal must never touch a run
+        log.debug("run journal skipped: %s", _e)
 
 def _load_last_transient_into_cache() -> None:
     try:
@@ -2540,6 +2955,270 @@ def _load_last_transient_into_cache() -> None:
 
 
 _load_last_transient_into_cache()   # repopulate the cache at import (startup)
+_load_last_transient_field_snapshot()   # …and the run's field for the views
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  RESULTS LEDGER — "have I already computed exactly this?"
+# ═════════════════════════════════════════════════════════════════════════════
+# User, 2026-09-05: «Не надо Recent runs — нужно просто сканировать результаты:
+# не совпадают ли они с уже проведёнными, хотя бы пока по этим параметрам.»
+# He had set 667.4 A peak in the morning, computed, changed the current,
+# computed again, came back to 667.4 A with everything else untouched — and had
+# to sit through a solve whose answer was already on this disk.
+#
+# This does NOT reopen the staleness hole the 2026-09-04 rework closed ("a Run
+# ALWAYS solves", `_memo_allowed`).  The two rules meet on three conditions,
+# all of them required:
+#   * EXACT key.  A ledger hit is `_sb_key == stored key` — the very tuple the
+#     solve is cached under, geometry+materials fingerprint and all.  Nothing
+#     looser: no "close enough", no per-field tolerance.
+#   * LABELLED.  The result carries `ledger_hit` / `ledger_computed_at` and the
+#     card says "result from 19:28 — identical parameters", so the engineer is
+#     never told a solve happened when none did — which was the whole complaint
+#     behind the in-memory memo.
+#   * ONE CLICK OUT.  `fresh=true` (the card's "Recompute") always solves and
+#     replaces the entry.
+#
+# On disk, not in memory, because "this morning's run" must survive the API
+# restart that stands between morning and afternoon.
+_LEDGER_DIRNAME = ".run_ledger"
+#: Newest N kept per geometry fingerprint.  40 ≈ a full day of hand
+#: optimisation at one machine (the journal shows 20-40 runs on a working day),
+#: so "the current I had this morning" is always still there while a machine
+#: the user left behind two weeks ago cannot hold the disk hostage.
+_LEDGER_KEEP_PER_GEO = 40
+#: Total cap.  A stripped transient is ~40-200 kB gzipped (the per-step series;
+#: frames never enter), so 200 MB is thousands of runs — the cap exists to bound
+#: a pathological 464-step PWM series, not to ration ordinary work.
+_LEDGER_MAX_BYTES = 200 * 1024 * 1024
+
+
+def _ledger_dir():
+    """`config/.run_ledger/` — beside `.last_transient.json`, so a test sandbox
+    (MOTOR_AI_SIM_CONFIG) gets its own ledger for free."""
+    from pathlib import Path as _P
+    return _P(_transient_store_path()).parent / _LEDGER_DIRNAME
+
+
+def _ledger_key_hash(sb_key: tuple) -> str:
+    """Filename for a key.  md5 of the key's JSON rendering — the same
+    `default=str` rendering the key is persisted with, so a value that only
+    `str()` can express (a numpy scalar sneaking in) hashes stably instead of
+    raising."""
+    import hashlib as _hl
+    return _hl.md5(_json.dumps(_retuple_to_list(sb_key), sort_keys=False,
+                               default=str).encode()).hexdigest()
+
+
+def _retuple_to_list(x):
+    """tuples → lists, recursively (JSON has no tuple)."""
+    if isinstance(x, (tuple, list)):
+        return [_retuple_to_list(i) for i in x]
+    return x
+
+
+def _retuple_from_list(x):
+    """The inverse, for comparing a loaded key against a live one."""
+    if isinstance(x, list):
+        return tuple(_retuple_from_list(i) for i in x)
+    return x
+
+
+def _ledger_mat_signature() -> str:
+    """Which MATERIALS the run was solved with, in words.
+
+    `_config_physics_fingerprint` already folds materials into the key, so this
+    changes no decision — it is here so that a human (or a support session)
+    reading a ledger file can see *what* the entry describes without replaying
+    a 16-character hash.  Same reason the mass rows name the solved steel.
+    """
+    try:
+        from motor_ai_sim.config import get_material_assignments as _gma
+        _assign = dict(_gma() or {})
+    except Exception:       # noqa: BLE001
+        _assign = {}
+    try:
+        _ov = (_get_request_materials_safe() or {}).get("assignment") or {}
+        _assign.update({str(k): str(v) for k, v in _ov.items()})
+    except Exception:       # noqa: BLE001
+        pass
+    return ";".join("%s=%s" % (k, _assign[k]) for k in sorted(_assign))
+
+
+def _ledger_path_for(sb_key: tuple, geo_fp: Optional[str]):
+    """`<geometry fingerprint>-<key hash>.json.gz`.
+
+    The machine's print is in the FILENAME so the ring buffer can group and trim
+    by geometry without opening (and gunzipping) every entry it owns — that
+    housekeeping runs after every single solve.
+    """
+    return _ledger_dir() / ("%s-%s.json.gz"
+                            % (str(geo_fp or "nogeo"), _ledger_key_hash(sb_key)))
+
+
+def _ledger_lookup(sb_key: tuple) -> Optional[Dict]:
+    """The stored result for EXACTLY this key, or None.
+
+    The key is re-checked against the file's own copy after loading: a hash
+    collision, or a key whose JSON rendering changed under a code edit, must
+    read as "no result", never as somebody else's numbers.
+    """
+    import gzip as _gz
+    try:
+        _d = _ledger_dir()
+        if not _d.exists():
+            return None
+        # By hash, whatever machine prefix it was written under — the key check
+        # below is the authority, the prefix is only there for the trim.
+        for p in sorted(_d.glob("*-%s.json.gz" % _ledger_key_hash(sb_key))):
+            with _gz.open(p, "rt", encoding="utf-8") as fh:
+                blob = _json.load(fh)
+            if _retuple_from_list(blob.get("key")) == tuple(sb_key):
+                return blob
+            log.warning("run ledger: %s holds a DIFFERENT key than the one "
+                        "asked for — ignoring it (never serving a near miss)",
+                        p.name)
+        return None
+    except Exception as _e:     # noqa: BLE001 — a broken ledger must never
+        log.warning("run ledger read failed (%s) — solving instead", _e)
+        return None
+
+
+def _ledger_write(sb_key: tuple, result: Dict, key_fields: "OrderedDict") -> None:
+    """Record a finished LIVE-machine run so an identical request can load it.
+
+    Called from the ONE place a run is finalised (next to `_save_last_transient`
+    and `_refresh_caches_for_run`), so no route can forget it and a candidate
+    eval / background probe — which is not the motor on screen — can never
+    write one.
+
+    `frames` is stripped exactly as the persist path strips it: the per-frame
+    animation payload belongs to the request that asked for it (a 464-step run
+    once wrote 790 MB), and a ledger hit is served to the charts, which never
+    read frames.
+    """
+    import gzip as _gz
+    try:
+        _d = _ledger_dir()
+        _d.mkdir(parents=True, exist_ok=True)
+        stripped = {k: v for k, v in result.items() if k != "frames"}
+        blob = {
+            "key": _retuple_to_list(sb_key),
+            # NAMED, because "why did it not match?" is the only question this
+            # file ever gets asked, and a bare 40-tuple diff is unreadable —
+            # the same lesson as `_field_snap_key_fields`.
+            "key_fields": {k: _retuple_to_list(v)
+                           for k, v in key_fields.items()},
+            "computed_at": result.get("computed_at"),
+            "geo_fingerprint": result.get("geo_fingerprint"),
+            "mat_signature": _ledger_mat_signature(),
+            "result": stripped,
+        }
+        p = _ledger_path_for(sb_key, result.get("geo_fingerprint"))
+        tmp = p.with_suffix(".tmp")
+        with _gz.open(tmp, "wt", encoding="utf-8") as fh:
+            _json.dump(blob, fh, default=_json_default)
+        _os_t.replace(tmp, p)       # atomic: a half-written entry is never read
+        _ledger_trim()
+    except Exception as _e:     # noqa: BLE001 — bookkeeping never kills a run
+        log.warning("could not record the run in the ledger: %s", _e)
+
+
+def _ledger_entries() -> list:
+    """Every entry as {file, key_fields, computed_at, geo_fingerprint,
+    mat_signature, bytes}, newest first.  Metadata only — the results
+    themselves are megabytes and nobody wants them on a status line."""
+    import gzip as _gz
+    out = []
+    try:
+        _d = _ledger_dir()
+        if not _d.exists():
+            return out
+        for p in _d.glob("*.json.gz"):
+            try:
+                with _gz.open(p, "rt", encoding="utf-8") as fh:
+                    blob = _json.load(fh)
+                out.append({
+                    "file": p.name,
+                    "key_fields": blob.get("key_fields"),
+                    "computed_at": blob.get("computed_at"),
+                    "geo_fingerprint": blob.get("geo_fingerprint"),
+                    "mat_signature": blob.get("mat_signature"),
+                    "bytes": p.stat().st_size,
+                    "mtime": p.stat().st_mtime,
+                })
+            except Exception:   # noqa: BLE001 — one unreadable file is not a 500
+                continue
+    except Exception as _e:     # noqa: BLE001
+        log.warning("run ledger listing failed: %s", _e)
+    out.sort(key=lambda e: (e.get("computed_at") or "", e.get("mtime") or 0),
+             reverse=True)
+    return out
+
+
+def _ledger_trim() -> None:
+    """Ring buffer: keep the newest `_LEDGER_KEEP_PER_GEO` per geometry, and
+    keep the whole store under `_LEDGER_MAX_BYTES`.
+
+    Per GEOMETRY, not globally: the point of the ledger is that today's machine
+    keeps today's operating points, and a global ring would let one afternoon of
+    PWM sweeps on machine B evict every point of machine A the user is about to
+    go back to.
+    """
+    try:
+        _d = _ledger_dir()
+        if not _d.exists():
+            return
+        # Filenames and stat() only — this runs after EVERY solve, and opening
+        # (gunzipping, parsing) a few hundred stored results to decide which
+        # ones to keep is work the user would pay for on every run.
+        files = []
+        for p in _d.glob("*-*.json.gz"):
+            try:
+                st = p.stat()
+            except Exception:   # noqa: BLE001
+                continue
+            files.append((p, p.name.split("-", 1)[0], st.st_mtime, st.st_size))
+        files.sort(key=lambda f: f[2], reverse=True)     # newest first
+        _seen: Dict[str, int] = {}
+        doomed, kept = [], []
+        for f in files:
+            _seen[f[1]] = _seen.get(f[1], 0) + 1
+            (doomed if _seen[f[1]] > _LEDGER_KEEP_PER_GEO else kept).append(f)
+        _total = sum(f[3] for f in kept)
+        while kept and _total > _LEDGER_MAX_BYTES:
+            _old = kept.pop()                  # oldest of what survived
+            _total -= _old[3]
+            doomed.append(_old)
+        for f in doomed:
+            try:
+                f[0].unlink()
+            except Exception:   # noqa: BLE001
+                pass
+        if doomed:
+            log.info("run ledger: trimmed %d entr%s", len(doomed),
+                     "y" if len(doomed) == 1 else "ies")
+    except Exception as _e:     # noqa: BLE001
+        log.warning("run ledger trim failed: %s", _e)
+
+
+def _ledger_clear() -> int:
+    """Delete every entry; returns how many went."""
+    n = 0
+    try:
+        _d = _ledger_dir()
+        if not _d.exists():
+            return 0
+        for p in _d.glob("*.json.gz"):
+            try:
+                p.unlink()
+                n += 1
+            except Exception:   # noqa: BLE001
+                pass
+    except Exception as _e:     # noqa: BLE001
+        log.warning("run ledger clear failed: %s", _e)
+    return n
 
 
 # Serializes transient computes so concurrent identical requests (the
@@ -2549,7 +3228,474 @@ import threading as _threading
 _fem_transient_lock = _threading.Lock()
 
 
-def clear_simulation_caches() -> None:
+# ═════════════════════════════════════════════════════════════════════════════
+#  GENERATOR → BATTERY: the DC side of the same bridge
+# ═════════════════════════════════════════════════════════════════════════════
+_BATTERY_FIELDS = ("v_oc", "v_nom", "v_min", "v_max", "cells", "n_parallel",
+                   "r_int_mohm", "capacity_ah", "i_charge_max_a", "chemistry")
+
+
+def _parse_battery_payload(raw: Optional[str]) -> Optional[dict]:
+    """Parse the `battery` request payload into a plain dict, or None.
+
+    MALFORMED IS A 422, not None — the same rule `geo=` and `mat=` learned the
+    hard way: returning None on a bad payload meant the run silently fell back
+    to "no battery" and the card quietly lost its charging block while every
+    other number stayed plausible.
+    """
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return None
+    if isinstance(raw, dict):
+        data = raw
+    else:
+        import json as _js
+        try:
+            data = _js.loads(raw)
+        except Exception as _be:
+            raise HTTPException(status_code=422, detail=(
+                "`battery` is not valid JSON (%s).  Expected an object like "
+                '{"v_oc": 44.4, "cells": 12, "r_int_mohm": 12, '
+                '"capacity_ah": 10}.' % (_be,)))
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=422, detail=(
+            "`battery` must be a JSON object; got %s." % type(data).__name__))
+    out: dict = {}
+    for k, v in data.items():
+        if k not in _BATTERY_FIELDS:
+            continue                      # tolerate the yaml's extra keys
+        if k == "chemistry":
+            out[k] = (str(v).strip() or None) if v is not None else None
+            continue
+        if v is None:
+            continue
+        try:
+            fv = float(v)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail=(
+                "battery.%s must be a number; got %r." % (k, v)))
+        if not (fv == fv and abs(fv) != float("inf")):
+            raise HTTPException(status_code=422, detail=(
+                "battery.%s is %r — NaN/inf is not a battery." % (k, v)))
+        if k in ("cells", "n_parallel"):
+            if fv < 1:
+                raise HTTPException(status_code=422, detail=(
+                    "battery.%s must be >= 1; got %r." % (k, v)))
+            out[k] = int(round(fv))
+        else:
+            if fv < 0:
+                raise HTTPException(status_code=422, detail=(
+                    "battery.%s must be >= 0; got %r." % (k, v)))
+            out[k] = fv
+    return out or None
+
+
+def _battery_charge_block(sbres: dict, *, op_mode: str, p_mech_w: float,
+                          p_loss_w: float) -> Optional[dict]:
+    """The CHARGING card: what actually reaches the pack, and the two
+    independent ways of measuring it side by side.
+
+    Present only when the run had a battery AND drove the machine from an
+    imposed voltage (a current-drive run has no bridge and no bus), so no
+    existing case grows a key.
+
+    TWO NUMBERS FOR THE SAME WATTS, and the gap between them is the point:
+
+    * ``P_charge_circuit_W`` — V_bus·⟨i_dc⟩ off the modulator's own switch
+      states.  Exact for the circuit that was solved, and by the pole-voltage
+      identity it equals that circuit's terminal power.
+    * ``P_charge_W`` — the ENERGY BALANCE: mechanical power in, minus every
+      loss the card reports.  This is the honest headline, because the 2-D
+      circuit does NOT carry the iron loss or the end-winding copper (both are
+      post-processed and never flow through its terminals — the same argument
+      the efficiency formula above is built on).
+
+    So the circuit number sits HIGH of the balance number by roughly
+    (P_fe + end-winding copper), and ``balance_gap_W`` says by how much.  A gap
+    that is not close to those watts means something else is wrong, which is
+    exactly what a self-check is for.
+
+    IDEAL BRIDGE.  Dead time, device conduction/switching loss and DC-link
+    ripple are all absent; every one of them subtracts, so a real charger
+    delivers less than either number here, never more.
+    """
+    bi = sbres.get("battery_input")
+    if not isinstance(bi, dict):
+        return None
+    drive = str(sbres.get("drive") or "")
+    if drive not in ("voltage", "pwm_voltage"):
+        return None
+    v_oc = float(bi.get("v_oc_V") or 0.0)
+    r_pack = float(bi.get("R_pack_ohm") or 0.0)
+    cap = float(bi.get("capacity_ah") or 0.0)
+    i_max = bi.get("i_charge_max_A")
+    pwm = sbres.get("pwm") or {}
+    dcl = (pwm.get("dc_link") or {}) if isinstance(pwm, dict) else {}
+    v_bus = float(pwm.get("v_bus_V") or 0.0) if isinstance(pwm, dict) else 0.0
+    if v_bus <= 0.0:
+        v_bus = float(sbres.get("v_bus_applied_V") or 0.0) or v_oc
+
+    # Mechanical power INTO the machine (generator) — the card quotes torque
+    # and speed as magnitudes, so take the magnitude and let op_mode say which
+    # way it flows.  A motoring run gets a charging block too, reporting a
+    # NEGATIVE charge power: that is the honest reading of "this operating
+    # point empties the pack", and hiding it would be the substitution.
+    p_mech_in = abs(float(p_mech_w)) if op_mode == "generator" else -abs(float(p_mech_w))
+    p_balance = p_mech_in - float(p_loss_w)
+
+    out: dict = {
+        "V_oc_V": round(v_oc, 3),
+        "R_pack_ohm": round(r_pack, 6),
+        "V_bus_V": round(v_bus, 3),
+        "V_bus_rise_V": round(v_bus - v_oc, 3),
+        "capacity_ah": (round(cap, 3) if cap > 0 else None),
+        "i_charge_max_A": i_max,
+        "cells_series": bi.get("cells_series"),
+        "cells_parallel": bi.get("cells_parallel"),
+        "chemistry": bi.get("chemistry"),
+        "r_int_mohm_per_cell": bi.get("r_int_mohm_per_cell"),
+        # WHICH of these numbers nobody measured.  Rides to the card so a
+        # placeholder is never printed as a measurement.
+        "placeholders": bi.get("sources") or {},
+        "P_charge_W": round(p_balance, 1),
+        "P_mech_in_W": round(p_mech_in, 1),
+        "P_loss_machine_W": round(float(p_loss_w), 1),
+        "bridge_model": ("ideal two-level bridge — no dead time, no device "
+                         "conduction or switching loss, no DC-link ripple; a "
+                         "real charger delivers less, never more"),
+    }
+    # ── the switched (circuit) measurement, when there were switches ──────
+    if dcl.get("I_dc_mean_A") is not None and v_bus > 0.0:
+        i_dc = float(dcl["I_dc_mean_A"])          # + = out of the pack
+        out["I_dc_mean_A"] = round(i_dc, 4)
+        out["I_dc_rms_A"] = dcl.get("I_dc_rms_A")
+        out["I_dc_ripple_pp_A"] = dcl.get("I_dc_ripple_pp_A")
+        out["I_charge_circuit_A"] = round(-i_dc, 4)
+        out["P_charge_circuit_W"] = round(-i_dc * v_bus, 1)
+        out["balance_gap_W"] = round(out["P_charge_circuit_W"] - p_balance, 1)
+        _den = max(abs(out["P_charge_circuit_W"]), abs(p_balance), 1e-9)
+        out["balance_gap_pct"] = round(100.0 * out["balance_gap_W"] / _den, 2)
+        out["balance_gap_note"] = (
+            "the switched number is the 2-D circuit's own terminal power, so "
+            "the gap is the loss terms that never pass through those terminals "
+            "— the post-processed iron loss, the solved magnet/shaft eddy "
+            "(both paid out of the shaft, not the bus) — plus the difference "
+            "between T·omega and the solver's energy-balanced P_mech.  "
+            "MEASURED on the 85 mm 13 mm-stack at its peak duty (4 kHz, 7.1 "
+            "steps/carrier): 25.3 W of 418 W = 5.7 %, against P_core 3.0 W + "
+            "P_solid 14.0 W and a 17.1 W T·omega-vs-balance difference.  A gap "
+            "much larger than those terms is the model telling you something "
+            "else is wrong.")
+        out["method"] = "switch states (Σ s_phase·i_phase) + energy balance"
+    else:
+        out["method"] = (
+            "energy balance only — a sinusoidal voltage drive has no switch "
+            "states, so there is no DC-link waveform to integrate; the charge "
+            "power assumes a LOSSLESS converter")
+    # Headline current: from the balance, because that is the honest power.
+    i_charge = (p_balance / v_bus) if v_bus > 1e-9 else 0.0
+    out["I_charge_A"] = round(i_charge, 3)
+    if cap > 1e-9:
+        out["C_rate"] = round(abs(i_charge) / cap, 3)
+    if i_max not in (None, 0):
+        out["i_charge_headroom_A"] = round(float(i_max) - i_charge, 3)
+        out["over_i_charge_max"] = bool(i_charge > float(i_max))
+    # η_charge — the chain the user asked for: shaft in → pack in.  Defined
+    # only when the shaft is actually driving the machine; a machine that is
+    # NOT generating has no charge efficiency, and 0/negative is the answer.
+    if p_mech_in > 1.0:
+        out["eta_charge"] = round(max(0.0, p_balance) / p_mech_in, 4)
+        out["charging"] = bool(p_balance > 0.0)
+        if p_balance <= 0.0:
+            out["verdict"] = (
+                "NOT charging at this point: the machine's own losses (%.0f W) "
+                "exceed the shaft power (%.0f W), so the bridge draws from the "
+                "pack instead of filling it"
+                % (float(p_loss_w), p_mech_in))
+    else:
+        out["eta_charge"] = None
+        out["charging"] = False
+        out["verdict"] = ("not generating — the shaft is taking power, not "
+                          "giving it; this point discharges the pack")
+    # Pack-side ohmic loss: NOT a machine loss, kept out of the motor's
+    # efficiency and reported on its own so the two are never conflated.
+    out["P_pack_r_loss_W"] = round(i_charge * i_charge * r_pack, 2)
+    return out
+
+
+def _charge_read(res: dict) -> dict:
+    """The charging block of a finished run, or {}."""
+    s = res.get("summary")
+    return (s.get("battery_charge") or {}) if isinstance(s, dict) else {}
+
+
+def _charge_attach(res: dict, key: str, block) -> dict:
+    """Copy-on-write the extra block onto the charging card.
+
+    A COPY, always: the result being decorated is the object sitting in
+    ``_fem_transient_cache``, and mutating it in place would write this
+    request's outer-loop trace into every later cache hit for the same physics.
+    """
+    out = dict(res)
+    s = dict(out.get("summary") or {})
+    bc = dict(s.get("battery_charge") or {})
+    bc[key] = block
+    s["battery_charge"] = bc
+    out["summary"] = s
+    return out
+
+
+def _charge_outer_loops(route_kwargs: dict, *, batt, mode_eff: str,
+                        bus_couple: bool, charge_max: bool, bus_iters: int,
+                        bus_tol_pct: float, charge_max_steps: int,
+                        charge_max_evals: int) -> dict:
+    """The two loops whose body is one whole transient.
+
+    ``_charge_outer_loops`` sits ABOVE the solve lock and the cache on purpose:
+    every iteration re-enters :func:`get_fem_transient` as an ordinary request,
+    so it takes the same validation, the same cache entry and the same summary
+    a hand-typed run would — and a repeated iterate costs nothing.  Nothing here
+    knows any physics; it only chooses the next request.
+    """
+    def _solve(**over) -> dict:
+        kw = dict(route_kwargs)
+        kw.update(over)
+        kw["bus_couple"] = False
+        kw["charge_max"] = False
+        # READER (indirect) of `_fem_transient_cache`: this is the one caller
+        # that genuinely needs the memo.  The bus fixed point and the compass
+        # search revisit the SAME (V_bus, V1, delta) point by construction, and
+        # each revisit would otherwise be a full transient.  Opting in here (and
+        # nowhere else) keeps the loops cheap while the user's Run still solves.
+        _tok = _TRANSIENT_MEMO.set(True)
+        try:
+            return get_fem_transient(**kw)
+        finally:
+            _TRANSIENT_MEMO.reset(_tok)
+
+    def _probe(**over) -> dict:
+        """A solve the USER did not ask for — a coarse search point at an
+        operating point nobody chose.
+
+        Runs under ``_BACKGROUND_RUN``, which is the standing rule for exactly
+        this: a background solve must never persist as the user's last
+        transient nor claim the field-snapshot store, even though it solves the
+        very same machine (incident 2026-08-25 — a loss-grid point replaced the
+        card mid-session).  It also drops the animation frames and the harmonic
+        reference run, neither of which anything in a search ever reads and
+        both of which cost real time and memory per eval.
+
+        The BUS-COUPLING iterations deliberately do NOT go through here: they
+        are the same operating point at successive bus voltages, the last of
+        them IS the answer, and letting them persist in order leaves the live
+        state exactly where a hand-run sequence would have left it.
+        """
+        tok = _BACKGROUND_RUN.set(True)
+        try:
+            return _solve(include_frames=False, field_snapshot=False,
+                          harm_ref=False, **over)
+        finally:
+            _BACKGROUND_RUN.reset(tok)
+
+    _tol = max(1e-4, float(bus_tol_pct)) / 100.0
+
+    # ── LOOP 1: the bus the battery actually presents ────────────────────
+    # V_bus = V_oc + I_charge·R_pack.  Charging RAISES the terminal it charges
+    # into, which lowers the modulation index at a fixed applied fundamental,
+    # which changes the current, which changes the terminal — so it is a fixed
+    # point, not a formula.  Each pass is a full transient; on a 12S pack with
+    # ~10 mΩ of internal resistance it converges in two or three.
+    def _coupled(**over):
+        if not bus_couple:
+            return _solve(**over), None
+        v_bus = float(batt.v_oc)
+        trace = []
+        res = None
+        conv = False
+        for it in range(max(1, int(bus_iters))):
+            res = _solve(v_bus=round(v_bus, 4), **over)
+            bc = _charge_read(res)
+            i_ch = float(bc.get("I_charge_A") or 0.0)
+            v_next = batt.bus_under_charge(i_ch)
+            trace.append({"iteration": it + 1, "V_bus_V": round(v_bus, 4),
+                          "I_charge_A": round(i_ch, 4),
+                          "V_bus_next_V": round(v_next, 4),
+                          "delta_V": round(v_next - v_bus, 5)})
+            if abs(v_next - v_bus) <= _tol * max(abs(v_bus), 1e-9):
+                conv = True
+                break
+            v_bus = v_next
+        block = {
+            "enabled": True,
+            "converged": conv,
+            "iterations": len(trace),
+            "max_iterations": int(bus_iters),
+            "tol_pct": float(bus_tol_pct),
+            "V_oc_V": round(float(batt.v_oc), 4),
+            "R_pack_ohm": round(batt.r_pack_ohm, 6),
+            "trace": trace,
+            "note": ("fixed point V_bus = V_oc + I_charge·R_pack around the "
+                     "whole transient; each iteration is a full solve.  NOT "
+                     "converged means the reported bus is the last iterate, "
+                     "not the answer — the trace says by how much it was still "
+                     "moving."),
+        }
+        return res, block
+
+    # ── LOOP 2: "вся мощность в зарядку" ─────────────────────────────────
+    if not charge_max:
+        res, bus_block = _coupled()
+        return _charge_attach(res, "bus_coupling", bus_block) if bus_block else res
+
+    v1_0 = float(route_kwargs.get("v_phase_peak") or 0.0)
+    dl_0 = float(route_kwargs.get("v_delta_deg") or 0.0)
+    if not (v1_0 > 0.0):
+        raise HTTPException(status_code=422, detail=(
+            "charge_max is a LOCAL search and needs a starting point: send "
+            "v_phase_peak / v_delta_deg from a sine-current generator run's "
+            "V1_seed (Simulation → run the duty on the current drive, then "
+            "'apply').  Searching from nothing would report whichever local "
+            "maximum the first guess happened to sit in."))
+    i_lim = float(route_kwargs.get("I_phase_rms") or 0.0)
+    i_ch_max = float(batt.i_charge_max_a or 0.0)
+
+    # Coarse resolution for the search passes.  4 steps per carrier is the
+    # solver's own floor for a PWM run; below it the exact-volt-second means
+    # average the pulses away and the ripple (hence the copper loss, hence the
+    # charge power) reads low.  The winner is re-solved at the requested
+    # resolution before anything is reported.
+    _steps_fine = int(route_kwargs.get("n_steps_per_period") or 40)
+    _steps_coarse = int(charge_max_steps or 0)
+    if _steps_coarse <= 0:
+        try:
+            _rpm_e = _effective_rpm(route_kwargs.get("rpm"))
+            _g = _parse_geo_override(route_kwargs.get("geo")) or {}
+            from motor_ai_sim.config import get_config as _gc_s
+            _pp = int((_g.get("num_poles")
+                       or (_gc_s().get("geometry") or {}).get("num_poles") or 2)) // 2
+            _fe = float(_rpm_e) * _pp / 60.0
+            _nc = max(1, int(round(float(route_kwargs.get("f_switch") or 0.0)
+                                   / max(_fe, 1e-9))))
+            _steps_coarse = max(24, 4 * _nc)
+        except Exception:                       # noqa: BLE001
+            _steps_coarse = max(24, _steps_fine // 4)
+    _steps_coarse = min(_steps_coarse, _steps_fine)
+
+    log.info("charge_max: seed V1=%.3f V pk, delta=%.2f deg; coarse %d "
+             "steps/period, <=%d evals; limits I_phase<=%.3g A, "
+             "I_charge<=%.3g A", v1_0, dl_0, _steps_coarse, charge_max_evals,
+             i_lim or float("inf"), i_ch_max or float("inf"))
+
+    evals: list = []
+    cache: dict = {}
+
+    def _score(v1: float, dl: float):
+        """(objective, record).  Feasible → the charge power itself; infeasible
+        → a large negative ordered by HOW infeasible, so the search can walk
+        back into the feasible set instead of falling off a cliff."""
+        k = (round(v1, 4), round(dl, 3))
+        if k in cache:
+            return cache[k]
+        try:
+            r = _probe(v_phase_peak=k[0], v_delta_deg=k[1],
+                       n_steps_per_period=_steps_coarse, v_bus=round(
+                           float(batt.v_oc), 4) if bus_couple else
+                       route_kwargs.get("v_bus"))
+        except HTTPException as _he:
+            # An impossible inverter (m > 1.15) is a real boundary of the
+            # search space, not an error — score it as maximally infeasible and
+            # keep going.
+            rec = {"V1_peak_V": k[0], "delta_deg": k[1], "feasible": False,
+                   "refused": str(getattr(_he, "detail", _he))[:200]}
+            evals.append(rec)
+            cache[k] = (-1e18, rec)
+            return cache[k]
+        bc = _charge_read(r)
+        p = float(bc.get("P_charge_W") or 0.0)
+        i_ph = r.get("I_phase_rms_solved_A")
+        i_ph = float(i_ph) if i_ph is not None else 0.0
+        i_ch = float(bc.get("I_charge_A") or 0.0)
+        viol = 0.0
+        if i_lim > 1e-9 and i_ph > i_lim:
+            viol += i_ph / i_lim - 1.0
+        if i_ch_max > 1e-9 and i_ch > i_ch_max:
+            viol += i_ch / i_ch_max - 1.0
+        rec = {"V1_peak_V": k[0], "delta_deg": k[1],
+               "P_charge_W": round(p, 1),
+               "I_phase_rms_A": round(i_ph, 3),
+               "I_charge_A": round(i_ch, 3),
+               "feasible": viol <= 0.0,
+               "violation": round(viol, 5)}
+        evals.append(rec)
+        cache[k] = ((p if viol <= 0.0 else -1e12 * (1.0 + viol)), rec)
+        return cache[k]
+
+    # Compass (pattern) search on (V1, delta).  Derivative-free, two variables,
+    # a predictable eval count and no step it cannot explain — the objective is
+    # a FEM solve, so a method that needs gradients or many probes per move is
+    # the wrong shape here.
+    best_v1, best_dl = v1_0, dl_0
+    h_v, h_d = max(0.05 * v1_0, 0.05), 10.0
+    best_f, best_rec = _score(best_v1, best_dl)
+    while len(evals) < max(2, int(charge_max_evals)):
+        moved = False
+        for dv, dd in ((h_v, 0.0), (-h_v, 0.0), (0.0, h_d), (0.0, -h_d)):
+            if len(evals) >= max(2, int(charge_max_evals)):
+                break
+            cand_v = max(1e-3, best_v1 + dv)
+            cand_d = best_dl + dd
+            f, rec = _score(cand_v, cand_d)
+            if f > best_f:
+                best_f, best_rec = f, rec
+                best_v1, best_dl = cand_v, cand_d
+                moved = True
+                break
+        if not moved:
+            if h_v <= 0.005 * max(v1_0, 1e-9) and h_d <= 0.5:
+                break                       # step is below what the seed knows
+            h_v *= 0.5
+            h_d *= 0.5
+
+    # ── FINE CONFIRM ─────────────────────────────────────────────────────
+    # The winner re-solved at the REQUESTED resolution (and, when asked, with
+    # the battery-coupled bus).  A search result quoted at its own coarse
+    # resolution is a number the run never actually produced.
+    res, bus_block = _coupled(v_phase_peak=round(best_v1, 4),
+                              v_delta_deg=round(best_dl, 3))
+    if bus_block:
+        res = _charge_attach(res, "bus_coupling", bus_block)
+    fine = _charge_read(res)
+    search = {
+        "objective": "maximum charge power P_charge_W at this rpm",
+        "seed": {"V1_peak_V": round(v1_0, 4), "delta_deg": round(dl_0, 3)},
+        "best": {"V1_peak_V": round(best_v1, 4), "delta_deg": round(best_dl, 3)},
+        "constraints": {
+            "I_phase_rms_max_A": (round(i_lim, 3) if i_lim > 0 else None),
+            "i_charge_max_A": (round(i_ch_max, 3) if i_ch_max > 0 else None),
+        },
+        "coarse_steps_per_period": int(_steps_coarse),
+        "fine_steps_per_period": int(_steps_fine),
+        "n_coarse_solves": len(evals),
+        "evals": evals,
+        "P_charge_coarse_W": (best_rec or {}).get("P_charge_W"),
+        "P_charge_fine_W": fine.get("P_charge_W"),
+        "coarse_to_fine_shift_W": (
+            None if (fine.get("P_charge_W") is None
+                     or (best_rec or {}).get("P_charge_W") is None)
+            else round(float(fine["P_charge_W"])
+                       - float(best_rec["P_charge_W"]), 1)),
+        "method": ("compass search on (V₁, δ) with a shrinking step, seeded "
+                   "from the V₁ of a sine-current run at this operating point; "
+                   "infeasible points (over the current limit, or past the "
+                   "modulation limit) are scored by how infeasible so the "
+                   "search walks back rather than falling off"),
+        "caveat": ("a LOCAL maximum from a seeded local search — it is the "
+                   "best point found near the seed, not a proof that no better "
+                   "one exists elsewhere"),
+    }
+    return _charge_attach(res, "charge_search", search)
+
+
+def clear_simulation_caches(reason: str = "") -> None:
     """Drop every cached 2-D polygon / mesh / field / transient result.
 
     Called whenever the motor GEOMETRY changes (PUT /api/geometry) so the
@@ -2567,6 +3713,18 @@ def clear_simulation_caches() -> None:
     live stack: after a PUT the no-`geo=` field view returns a different outline
     and element count.  Flushing here is still worth doing (it frees the memory
     and makes the first request after a save cheap to reason about).
+
+    It is ALSO the answer to "this is a different machine now" for the two
+    changes that are not geometry but change the physics just as completely:
+    a MATERIAL assignment (PATCH /api/materials) and a PART STATE
+    (PATCH /api/parts — a part solved as air weighs nothing and carries no
+    flux).  Both used to leave the field snapshot and the transient sitting
+    there for the relaxed lookup to serve.
+
+    Idempotent and cheap: six `dict.clear()` calls plus the two sibling
+    routers', safe to call on every write, safe to call twice.  `reason` is
+    remembered for GET /api/simulation/caches so a surprising empty store can be
+    explained.
     """
     for _c in (_motor_geom_cache, _fem_mesh_cache, _fem_mesh_sb_cache,
                _fem_field_cache, _fem_transient_cache, _transient_field_snap):
@@ -2574,12 +3732,99 @@ def clear_simulation_caches() -> None:
             _c.clear()
         except Exception:
             pass
+    # The rotor STRUCTURAL result is keyed on the same cross-section and the
+    # same material assignment, so it goes stale for exactly the reasons these
+    # do — a sleeve sized on the previous machine is a wrong sleeve.  Lazy
+    # import: routes.mechanical imports from here.
+    try:
+        from motor_ai_sim.routes.mechanical import clear_mechanical_caches
+        clear_mechanical_caches(reason)
+    except Exception:
+        pass
+    # The TEMPERATURE map is keyed on the same cross-section and the same
+    # material assignment (the conductivities come straight off it), so it goes
+    # stale for exactly the same reasons — a map drawn on the previous
+    # cross-section is a wrong temperature.  It used to be `_thermal_field_cache`
+    # in this module; since 2026-09-07 it lives in routes.thermal, cleared here
+    # by the same call.  Lazy import: routes.thermal imports from here.
+    try:
+        from motor_ai_sim.routes.thermal import clear_thermal_caches
+        clear_thermal_caches(reason)
+    except Exception:
+        pass
+    _cache_state["last_cleared_reason"] = reason or "unspecified"
+    _cache_state["last_refreshed_by"] = None
+
+
+def _cache_stats() -> Dict:
+    """What is actually IN the physics caches right now.
+
+    Counts only — an entry holds whole per-node arrays and nobody wants them on
+    a status line.  The snapshot store additionally names each entry's
+    `computed_at`, because "which run is the J⟳ view about to draw?" is the one
+    question this store gets asked.
+    """
+    _snaps = []
+    try:
+        for _e in _transient_field_snap.values():
+            _snaps.append((_e.get("meta") or {}).get("computed_at"))
+    except Exception:       # noqa: BLE001
+        pass
+    _opt = None
+    try:    # lazy: the optimizer module pulls in the whole scan machinery
+        from motor_ai_sim.routes.optimization import _EVAL_CACHE as _ec
+        _opt = len(_ec)
+    except Exception:       # noqa: BLE001 — unavailable is null, never a 500
+        _opt = None
+    return {
+        "field_cache": len(_fem_field_cache),
+        "transient_cache": len(_fem_transient_cache),
+        "snapshots": len(_transient_field_snap),
+        "snapshot_computed_at": _snaps,
+        "optimization_eval_cache": _opt,
+        "last_refreshed_by": _cache_state.get("last_refreshed_by"),
+        "last_cleared_reason": _cache_state.get("last_cleared_reason"),
+    }
+
+
+@router.get("/caches")
+def get_cache_stats():
+    """Physics-cache state: how many entries each store holds and which run
+    last refreshed them.  Read-only; gated to the owner tier by the same
+    `_GATED` table that gates the solve endpoints (motor_ai_sim/auth.py)."""
+    return _cache_stats()
+
+
+@router.post("/caches/clear")
+def clear_cache_endpoint():
+    """Empty the field / transient / snapshot stores by hand.
+
+    MEMORY ONLY.  The disk stores — `.last_transient.json` (restore), the
+    optimizer's `.scan_cache.jsonl`, `.daxis_cache.json` — are deliberately
+    untouched: they are records of work done, not stale physics, and throwing
+    them away costs hours of solving.
+    """
+    clear_simulation_caches(reason="manual clear (POST /caches/clear)")
+    return _cache_stats()
 
 # Cooperative cancel keyed by run-id.  The "Stop" button POSTs the id of
 # the run it wants stopped; the parallel solve loop (and any duplicate
 # request waiting on the lock) checks whether ITS run-id was cancelled and
 # bails.  Keying by id means cancelling one run never aborts the next one.
 _fem_transient_cancelled_run: Dict[str, Optional[str]] = {"id": None}
+
+
+class _RunCancelled(BaseException):
+    # BaseException on purpose: the march wraps every progress_cb call in
+    # `except Exception: pass` (a broken callback must not kill a solve), and
+    # a cancel raised from that callback was swallowed right there (measured:
+    # the test run completed 360/360 with the cancel id set from frame 8).
+    # Like KeyboardInterrupt, a cancellation is a REQUEST, not an error.
+    """Raised out of the per-frame progress callback when the Stop button's
+    run-id matches this solve.  The registry used to be WRITE-ONLY — the
+    endpoint recorded the id and no code ever read it, so Stop was a no-op
+    and a 5984-frame PWM run could only be killed with the process
+    (measured live 2026-08-31)."""
 
 # Shared progress state for the currently-running transient.  Polled by
 # the frontend via /physics/fem_transient/progress so the user sees
@@ -2593,6 +3838,9 @@ _fem_transient_progress: Dict[str, Dict] = {
         "eta_s":     0.0,
         "ts_start":  0.0,
         "phase":     "idle",
+        # Backend-authored breakdown of `total` (see _sb_progress).  Empty
+        # until a solve reports one; the strip falls back to its own arithmetic.
+        "composition": "",
     }
 }
 
@@ -2620,6 +3868,7 @@ async def get_fem_transient_progress():
                 "eta_s":      0.0,
                 "per_step_s": 0.0,
                 "frac":       0.0,
+                "field_busy": field_busy(),
             }
         per_step = elapsed / raw_step
         eta = per_step * max(0, total - raw_step)
@@ -2629,8 +3878,27 @@ async def get_fem_transient_progress():
             "eta_s":     round(eta, 1),
             "per_step_s": round(per_step, 2),
             "frac":      round(raw_step / total, 3),
+            "field_busy": field_busy(),
         }
-    return p
+    # Field solves ride along on the poll the panel already makes.  They are
+    # NOT part of this transient's progress — they are the OTHER thing the
+    # server may be busy with, and the strip could not see them at all (the
+    # 2026-09-03 incident: ~17 cores of field solves, "nothing running" on
+    # screen).  Same object as GET /physics/field_busy.
+    return {**p, "field_busy": field_busy()}
+
+
+@router.get("/physics/field_busy")
+async def get_field_busy():
+    """What the FIELD-view solver is doing: `{solving, queued, limit, items}`.
+
+    `items` is one entry per solve in flight or waiting —
+    `{key_short, kind, state, since_s, waiters}` — so the panel can say "server
+    busy: 2 field solves (1 queued)" and name them in a tooltip.  Cheap enough
+    to poll; the same object is attached to the transient-progress response so
+    a panel that already polls that gets it for free.
+    """
+    return field_busy()
 
 
 @router.post("/physics/fem_transient/cancel")
@@ -2645,6 +3913,101 @@ async def cancel_fem_transient(run_id: str = ""):
     if run_id:
         _fem_transient_cancelled_run["id"] = run_id
     return {"cancelled": bool(run_id), "run_id": run_id}
+
+
+def _mark_equivalent_star(sbres: Dict, *, v_bus_real: float,
+                          v_bus_model: float, drive: str) -> None:
+    """NAME the delta-on-the-star-circuit substitution in the result.
+
+    A delta machine under an imposed-voltage source is solved on the star
+    circuit at √3 × the real DC link (see the star-equivalent block in
+    ``get_fem_transient``).  Everything the SOLVER reports is already in the
+    right terms — the winding is the winding, and the terminal mapping is the
+    connection's own — but the inverter block describes the MODEL bridge, whose
+    bus nobody can buy.  So the block says which bus is which, and the two
+    quantities that live on the bus are put back on the real one:
+
+    * ``v_bus_V`` becomes the REAL link (``v_bus_model_V`` keeps the model's),
+      so every consumer that multiplies bus × DC current — the charging card
+      above all — still gets the terminal power the circuit solved;
+    * ``dc_link`` is scaled by √3.  EXACT for the mean (V·⟨i_dc⟩ is that same
+      terminal power on either side of the change of variable); the rms and the
+      peak-to-peak are the MODEL bridge's ripple carried across, which is what
+      the PWM study quoted, and the note says so rather than letting them pass
+      as the real bridge's own.
+
+    The pole / line edge waveforms are left alone and are labelled as the model
+    bridge's: they are drawn on the model bus, and the star-delta rotation means
+    they are not the real bridge's waveform in time either (the harmonic
+    MAGNITUDES are — see ``pwm.star_equivalent_bus``).  Everything the run
+    concludes about losses rides on those magnitudes; nothing rides on a peak.
+
+    IDEMPOTENT: a result already marked is left exactly as it is, so no path can
+    scale the DC-link series by √3 twice.
+    """
+    if isinstance(sbres.get("delta_equivalent_star"), dict):
+        return
+    _k = math.sqrt(3.0)
+    _mapping = ("  Terminals mapped back by the connection: I_line = "
+                "√3·I_branch, V_LL = V_branch less its zero sequence, plus the "
+                "delta's own circulating triplen loss.")
+    if float(v_bus_model) > 0.0:
+        note = (
+            "delta solved on the star equivalent: the isolated-neutral star "
+            "circuit on a model bus of √3·V_dc = %.1f V, whose branch voltage "
+            "has the SAME HARMONIC MAGNITUDES as the real bridge's line-to-line "
+            "voltage — so the fundamental, the ripple rms and every loss are "
+            "the real machine's (exact per order when the carrier count divides "
+            "by 3, aggregate ripple within 0.4 %% otherwise; PWM study "
+            "2026-09-13 §0.3).  The per-harmonic PHASES carry the star-delta "
+            "rotation, so the solved voltage is not the bridge's waveform in "
+            "time: V_line_peak_solved_V is the model branch's peak, up to "
+            "⅔·√3·V_dc = 1.155·V_dc = %.0f V, where a two-level bridge's line "
+            "voltage peaks at V_dc = %.1f V.  Quote the rms, not the peak."
+            % (v_bus_model, 2.0 / 3.0 * v_bus_model, v_bus_real)) + _mapping
+    else:
+        # The SINUSOIDAL voltage drive has no bridge and no bus: a balanced
+        # sinusoid carries no common mode, so the star model's branch voltage IS
+        # v_phase_peak, which is the delta winding's own (= line) voltage.  The
+        # equivalence is exact with nothing to scale.
+        note = ("delta solved on the isolated-neutral star circuit: with a "
+                "balanced sinusoid there is no common mode, so the model's "
+                "branch voltage IS the requested v_phase_peak — the delta "
+                "winding's own voltage, which is the line voltage.  Exact, "
+                "nothing scaled." + _mapping)
+    sbres["delta_equivalent_star"] = {
+        "applied": True,
+        "drive": str(drive),
+        "star_delta": "delta",
+        "circuit": "isolated-neutral star (drive.circuit_residual_ll)",
+        "v_bus_real_V": round(float(v_bus_real), 3),
+        "v_bus_model_V": round(float(v_bus_model), 3),
+        "bus_scale": round(_k, 6),
+        "note": note,
+    }
+    pwm = sbres.get("pwm")
+    if not isinstance(pwm, dict):
+        return
+    pwm["equivalent_star"] = True
+    pwm["v_bus_real_V"] = round(float(v_bus_real), 3)
+    pwm["v_bus_model_V"] = round(float(v_bus_model), 3)
+    pwm["v_bus_V"] = float(v_bus_real)
+    pwm["equivalent_star_note"] = note
+    dcl = pwm.get("dc_link")
+    if isinstance(dcl, dict) and dcl.get("I_dc_mean_A") is not None:
+        dcl["I_dc_model_mean_A"] = dcl["I_dc_mean_A"]
+        for _k2 in ("I_dc_mean_A", "I_dc_rms_A", "I_dc_ripple_pp_A"):
+            if dcl.get(_k2) is not None:
+                dcl[_k2] = round(float(dcl[_k2]) * _k, 4)
+        if isinstance(dcl.get("I_dc_A"), list):
+            dcl["I_dc_A"] = [round(float(v) * _k, 4) for v in dcl["I_dc_A"]]
+        dcl["bus_scale"] = round(_k, 6)
+        dcl["note"] = (str(dcl.get("note") or "") + "  DELTA via the star "
+                       "equivalent: these are the model bridge's currents ×√3 "
+                       "onto the real %.1f V link — the MEAN is exact (V·⟨i_dc⟩ "
+                       "is the same terminal power on either bus), the rms and "
+                       "the peak-to-peak carry the model bridge's ripple."
+                       % float(v_bus_real))
 
 
 @router.get("/physics/fem_transient")
@@ -2677,6 +4040,19 @@ def get_fem_transient(
                                           #   holds one, else MEASURED (a 24-frame no-load
                                           #   solve, ~39 s, cached per geometry).  Given, it
                                           #   is used as is and nothing is solved for it.
+    strand_bonding: Optional[str] = None, # ← how the wires IN HAND are joined:
+                                          #   "transposed" (default) | "series" (the
+                                          #   real soldered-ends coil) | "parallel"
+                                          #   (upper bound).  Eddy runs only — without
+                                          #   the coupled solve there are no strand
+                                          #   currents to redistribute.
+    star_delta:  Optional[str] = None,    # ← TERMINAL connection: "star" (default)
+                                          #   or "delta".  Changes no ampere-turn and
+                                          #   therefore no torque: what it changes is the
+                                          #   terminal mapping (delta trades sqrt(3) of
+                                          #   current for sqrt(3) of voltage) and the
+                                          #   zero-sequence loop, which in delta carries a
+                                          #   real circulating current the star cannot.
     connection:  Optional[str] = None,    # ← WINDING CONNECTION label ("4S" / "2S-2P" / "4P").
                                           #   Supplies n_parallel when that is absent and enters
                                           #   the d-axis topology key.  Unreadable label -> 400.
@@ -2692,6 +4068,20 @@ def get_fem_transient(
     n_frames:            int   = 12,      # ← #frames sampled for the animation
     run_id:              str   = "",      # ← Stop-button cancellation token
     fresh:               bool  = False,   # ← "Start fresh" recomputes instead of serving the cache
+    ledger:              bool  = True,    # ← may a STORED result with exactly this key answer the
+                                          #   request instead of solving?  (user, 2026-09-05:
+                                          #   "просто сканировать результаты: не совпадают ли они с
+                                          #   уже проведёнными").  ON for the charts, which read the
+                                          #   summary and the series; the field-animation viewer
+                                          #   sends false because it needs the per-frame fields,
+                                          #   which the ledger deliberately never stores.
+    ledger_probe:        bool  = False,   # ← ask only: return {match, computed_at} for this exact
+                                          #   request and solve NOTHING.  Exists so
+                                          #   GET .../fem_transient/ledger_match can reuse THIS
+                                          #   function's key construction instead of rebuilding it
+                                          #   (a second copy of a 40-field key is a second copy that
+                                          #   drifts, and a drifted probe would promise a stored
+                                          #   result that the Run then does not find).
     sliding_band:        bool  = True,    # ← accepted for URL compat and IGNORED: there is
                                           #   only the mesh-once sliding band now.  The
                                           #   remesh-per-frame alternative it used to select
@@ -2700,6 +4090,16 @@ def get_fem_transient(
                                           #   omitted this flag silently got a different
                                           #   operating point than one that sent it.
     coil_temp_c:         float = 120.0,   # ← copper temperature → ρ_Cu(T)
+    magnet_temp_c: Optional[float] = None,  # ← MAGNET temperature [°C].  None (every
+                                          #   caller today) = the assigned magnet card is
+                                          #   used exactly as the library quotes it, so
+                                          #   every key, fingerprint and number below is
+                                          #   byte-identical to what it has always been.
+                                          #   A number corrects the card to it — Br, the
+                                          #   coercivity and the whole demag curve, knee
+                                          #   included (materials.at_temperature).  This
+                                          #   is what phase 2's EM↔thermal loop will
+                                          #   iterate on; today it is the manual knob.
     end_winding_factor:  float = 0.0,     # ← 0 = auto-estimate from geometry
     component_mesh:      str   = "",      # ← JSON {comp: size_mm} per-part mesh size
     eddy:                bool  = False,   # ← coupled σ·∂A/∂t eddy-current solve (P2, 11e1469):
@@ -2741,15 +4141,69 @@ def get_fem_transient(
                                           #   harmonic-macro air-gap band.  Anything but 2 raises.
     restore:             bool  = False,   # ← on open: return the LAST saved transient (stale if params differ) instead of recomputing
     geo:                 Optional[str] = None,  # ← per-request geometry override (multi-user); absent = global config
-    drive:               str   = "current",  # ← "current" (imposed sinusoidal I) | "voltage"
-                                             #   (imposed sinusoidal V — the currents are the
-                                             #   machine's own response, incl. back-EMF-harmonic
-                                             #   parasitics; the FOC-drive verification mode)
-    v_phase_peak:        float = 0.0,     # ← voltage drive: phase-voltage amplitude [V, peak]
+    drive:               str   = "current",  # ← EXCITATION SOURCE:
+                                             #   "current"        imposed sinusoidal phase current
+                                             #   "voltage"        imposed sinusoidal phase voltage —
+                                             #                    the currents are the machine's own
+                                             #                    response, incl. back-EMF-harmonic
+                                             #                    parasitics (FOC verification mode)
+                                             #   "pwm_voltage"    the same circuit driven by an ideal
+                                             #                    two-level inverter's chopped pole
+                                             #                    voltages → the real switching-
+                                             #                    frequency current ripple and what
+                                             #                    it costs in torque ripple / copper
+                                             #                    / core loss (simulation/pwm.py)
+                                             #   "custom_current" imposed ARBITRARY periodic phase
+                                             #                    current from a sampled waveform
+    v_phase_peak:        float = 0.0,     # ← voltage drive: phase-voltage amplitude [V, peak].
+                                          #   Under pwm_voltage this is the FUNDAMENTAL the inverter
+                                          #   must APPLY (m = 2·v_phase_peak/v_bus); the modulator's
+                                          #   sampled-reference delay/gain is compensated for it.
     v_delta_deg:         float = 0.0,     # ← voltage drive: voltage angle [°el] in the γ frame
+    v_bus:               float = 0.0,     # ← pwm_voltage: DC link voltage [V] (pole = ±v_bus/2).
+                                          #   Deliberately a PLAIN NUMBER, not a path into the
+                                          #   family config: the solver must not know where a
+                                          #   machine's battery is stored.  The UI prefills it from
+                                          #   the loaded machine's battery v_nom when there is one.
+    f_switch:            float = 0.0,     # ← pwm_voltage: carrier frequency [Hz].  SNAPPED to a
+                                          #   whole number of carriers per electrical period
+                                          #   (synchronous PWM — the reported period must repeat);
+                                          #   the effective value comes back in the result.
+    waveform:            Optional[str] = None,  # ← custom_current: JSON array of [θ_e_deg, i_A]
+                                          #   samples of the phase-A TERMINAL current over ONE
+                                          #   electrical period (B/C = the same shape shifted
+                                          #   ∓120°el), linearly interpolated, ≤20k points
+    i_block:             float = 0.0,     # ← bldc_current: FLAT-TOP terminal current of the 120°
+                                          #   block [A].  Not an rms: a 120° block of amplitude I
+                                          #   has rms I·√(2/3), so the copper-loss-matched
+                                          #   equivalent of a sinusoidal I_rms is I_rms·√(3/2).
     harm_ref:            bool  = True,    # ← voltage drive: ALSO run a current-drive reference at
                                           #   the extracted fundamental (I₁, γ₁) → ΔP_harm = the
                                           #   watt cost of the parasitic harmonic currents
+    battery:      Optional[str] = None,   # ← THE PACK ON THE DC LINK, as a plain JSON payload:
+                                          #   {v_oc, cells, n_parallel, r_int_mohm, capacity_ah,
+                                          #   i_charge_max_a, chemistry}.  A PAYLOAD, never a path
+                                          #   into the family config — same rule as v_bus: the
+                                          #   solver must not know where a machine's battery is
+                                          #   stored.  Present ⇒ the summary carries the charging
+                                          #   block (I_charge, P_charge, C-rate, η_charge).
+    bus_couple:          bool  = False,   # ← BATTERY-COUPLED BUS.  Off (the default, and every run
+                                          #   ever made before this) = a stiff ideal supply at
+                                          #   v_bus.  On = fixed point V_bus ← V_oc + I_charge·R_pack
+                                          #   around the whole solve, because charging RAISES the
+                                          #   terminal it is charging into and that moves the
+                                          #   modulation index.  Needs `battery`; PWM/voltage only.
+    bus_iters:           int   = 4,       # ← cap on those outer iterations (each is a full transient)
+    bus_tol_pct:         float = 0.1,     # ← convergence: |ΔV_bus| below this % of V_bus
+    charge_max:          bool  = False,   # ← "ВСЯ МОЩНОСТЬ В ЗАРЯДКУ": search (V₁, δ) for the
+                                          #   maximum charge power at THIS rpm, subject to
+                                          #   |I_phase| ≤ I_phase_rms and I_charge ≤ i_charge_max.
+                                          #   Seeded from v_phase_peak/v_delta_deg (the two-pass
+                                          #   V₁ seed), coarse search then one fine confirm.
+    charge_max_steps:    int   = 0,       # ← steps/period for the SEARCH passes (0 = auto: enough
+                                          #   for 4 per carrier).  The confirm runs at the
+                                          #   requested n_steps_per_period.
+    charge_max_evals:    int   = 10,      # ← cap on coarse solves in the search
     mat:            Optional[str] = None, # ← per-request material override (multi-user).  The GET
                                           #   route gets this via the router dependency (?mat=);
                                           #   POST /api/kernel/run maps its payload onto THIS
@@ -2772,6 +4226,17 @@ def get_fem_transient(
     through one electrical period.
     """
     import numpy as _np
+
+    # EVERY argument, exactly as handed in, captured BEFORE anything below
+    # mutates one (gamma_deg picks up the generator's 180°, n_sectors picks up
+    # the symmetry).  The battery-coupled bus and the max-charge search are
+    # OUTER loops over this same route — each iteration is a whole transient —
+    # and they re-enter it by name so every inner solve gets the identical
+    # validation, cache key and post-processing a hand-made request would.
+    # First statement of the body on purpose: a capture taken any later would
+    # forward a half-resolved request.
+    _route_kwargs = dict(locals())
+    _route_kwargs.pop("_np", None)
 
     # Per-request materials via the KERNEL path: same parse/validate/set as
     # the router dependency does for ?mat= — per-task context, so the kernel
@@ -2821,6 +4286,181 @@ def get_fem_transient(
     if n_parallel is not None and int(n_parallel) < 1:
         raise HTTPException(status_code=400,
                             detail=f"n_parallel must be >= 1; got {n_parallel!r}")
+
+    # ── EXCITATION SOURCE — validate BEFORE anything is meshed or solved ──
+    # Everything checkable without the machine's d-axis is checked here so an
+    # impossible inverter (m > 1.15) or an unusable waveform comes back as a 422
+    # in milliseconds, naming the number to change, instead of after a mesh
+    # build.  What needs the solved frame — the carrier snap, the modulator
+    # delay/gain compensation — is checked in the solver and surfaces through
+    # the ExcitationError handler around the solve below.
+    from motor_ai_sim.simulation.pwm import (
+        ExcitationError as _ExcErr, parse_waveform as _parse_wf,
+        MAX_MODULATION_INDEX as _MAX_M,
+        star_equivalent_bus as _sq_bus, modulation_index as _mod_idx)
+    _drive = str(drive or "current").strip().lower()
+    _DRIVES = ("current", "voltage", "pwm_voltage", "custom_current",
+               "bldc_current")
+    # ── DELTA ON AN IMPOSED-VOLTAGE SOURCE — the EXACT star equivalent ────
+    # The voltage circuit (drive.circuit_residual_ll) is the isolated-neutral
+    # STAR one: it integrates DIFFERENCES of the applied phase voltages, so a
+    # branch of that model sees pole-minus-common-mode.  A DELTA branch sees the
+    # inverter's LINE-TO-LINE waveform.  This route used to REFUSE the pair
+    # outright — which left every delta machine (L155, L180, the whole Ø200
+    # line) with no PWM answer at all.
+    #
+    # It is not a missing circuit, it is a change of variable: for a balanced
+    # set of three legs the two waveforms are the SAME function when the model's
+    # bus is √3 × the real DC link and the branch is asked for V₁ of the delta
+    # winding (= the line voltage the panel/user gives).  The fundamental matches
+    # always; the ripple matches exactly at a carrier count divisible by 3 and
+    # within 0.4 % rms otherwise — MEASURED, not argued (user 2026-09-14 / PWM
+    # study §0.3, tests/test_pwm_delta_star_equivalent.py).  The
+    # terminals are then mapped back by the connection's own rules, which the
+    # solver already owns (I_line = √3·I_branch, V_LL = V_branch minus its zero
+    # sequence, the circulating triplen loss) — the same block the current-drive
+    # delta path goes through, so the summary keys keep their meaning.
+    #
+    # The substitution is NAMED in the result (`delta_equivalent_star`,
+    # `pwm.equivalent_star`, `pwm.v_bus_real_V` / `v_bus_model_V`), never hidden:
+    # a model bus of 1299.7 V that nobody can buy must not look like a number
+    # somebody measured.
+    _sd_eff = _effective_star_delta(star_delta)
+    _eq_star = (_drive in ("voltage", "pwm_voltage") and _sd_eff == "delta")
+    # The bus the SOURCE chops.  Star: v_bus, byte for byte.  The REQUEST keeps
+    # the real link everywhere else (cache key, snapshot key, the reported
+    # v_bus_real_V) — what is scaled is only what the star circuit is handed.
+    _v_bus_model = _sq_bus(float(v_bus), _sd_eff) if _eq_star else float(v_bus)
+    if _drive not in _DRIVES:
+        raise HTTPException(status_code=422, detail=(
+            "unknown excitation source %r — expected one of %s"
+            % (drive, ", ".join(_DRIVES))))
+    _wf_pts = None
+    if _drive == "custom_current":
+        try:
+            _wf_pts = _parse_wf(waveform)
+        except _ExcErr as _we:
+            raise HTTPException(status_code=422, detail=str(_we))
+    elif waveform:
+        raise HTTPException(status_code=422, detail=(
+            "a waveform was sent with drive=%r; the sampled waveform is only "
+            "used by drive='custom_current'.  Either switch the source or drop "
+            "the waveform — silently ignoring it would hide a wrong request."
+            % (drive,)))
+    if _drive == "pwm_voltage":
+        if not (float(v_bus) > 0.0):
+            raise HTTPException(status_code=422, detail=(
+                "drive='pwm_voltage' needs a DC bus voltage; got v_bus=%r.  "
+                "Use the machine's battery v_nom, or type one." % (v_bus,)))
+        if not (float(f_switch) > 0.0):
+            raise HTTPException(status_code=422, detail=(
+                "drive='pwm_voltage' needs a switching frequency; got "
+                "f_switch=%r Hz." % (f_switch,)))
+        if not (float(v_phase_peak) > 0.0):
+            raise HTTPException(status_code=422, detail=(
+                "drive='pwm_voltage' needs the fundamental phase-voltage "
+                "amplitude v_phase_peak [V peak]; got %r.  Run a current-drive "
+                "simulation first and use its V₁." % (v_phase_peak,)))
+        # ── MODULATION INDEX, on the PER-PHASE fundamental ────────────────
+        # m = 2·V_phase/V_dc, and the modulator's V_phase is a POLE voltage
+        # referred to the DC mid-point — the star-equivalent per-phase quantity.
+        # In DELTA the drive is asked for the BRANCH voltage, which IS the line
+        # voltage, so feeding it here straight was a gate √3 too large: it
+        # refused this machine's peak duty at m = 1.53 where the real bridge
+        # sits at 0.88 (user 2026-09-14 / PWM study §0.2).  `modulation_index`
+        # divides by √3 in delta — equivalently, it is the branch V₁ against the
+        # √3-scaled model bus, which is exactly what the source will chop.  The
+        # 1.15 ceiling (sine-triangle WITH zero-sequence injection) is unchanged.
+        _m_req = _mod_idx(float(v_phase_peak), float(v_bus),
+                          star_delta=_sd_eff)
+        if _m_req > _MAX_M:
+            raise HTTPException(status_code=422, detail=(
+                "modulation index m = 2·V_phase/V_bus = %.3f exceeds the "
+                "%.2f linear-modulation limit (%s on the REAL %.1f V DC link)."
+                "  Overmodulation (pulse dropping / six-step) is out of scope: "
+                "raise V_bus above %.0f V, or lower %s below %.1f V."
+                % (_m_req, _MAX_M,
+                   ("%.1f V peak per phase — the %.1f V delta branch (= line) "
+                    "fundamental over √3" % (float(v_phase_peak) / math.sqrt(3.0),
+                                             float(v_phase_peak)))
+                   if _eq_star else ("%.1f V peak" % float(v_phase_peak)),
+                   float(v_bus),
+                   math.ceil(float(v_bus) * _m_req / _MAX_M),
+                   ("the branch V₁" if _eq_star else "V_phase_peak"),
+                   0.5 * _MAX_M * _v_bus_model)))
+    elif float(v_bus) or float(f_switch):
+        raise HTTPException(status_code=422, detail=(
+            "v_bus / f_switch were sent with drive=%r; they only mean "
+            "something for drive='pwm_voltage'." % (drive,)))
+    if _drive == "bldc_current":
+        if not (float(i_block) > 0.0):
+            raise HTTPException(status_code=422, detail=(
+                "drive='bldc_current' needs the flat-top block amplitude "
+                "i_block [A]; got %r.  It is NOT an rms — a 120° block of "
+                "amplitude I carries I·√(2/3) rms, so the copper-matched "
+                "equivalent of a sinusoidal %.4g A rms run is %.4g A."
+                % (i_block, float(I_phase_rms),
+                   float(I_phase_rms) * math.sqrt(1.5))))
+    elif float(i_block):
+        raise HTTPException(status_code=422, detail=(
+            "i_block was sent with drive=%r; it only means something for "
+            "drive='bldc_current'." % (drive,)))
+    # Content hash of the imposed waveform for the transient cache key — the
+    # samples themselves are physics, and a 20k-point list is not a dict key.
+    _wf_key = ""
+    if _wf_pts is not None:
+        import hashlib as _hl_wf
+        _wf_key = _hl_wf.sha1(
+            (";".join("%.6g,%.6g" % (a, b) for a, b in _wf_pts))
+            .encode("utf-8")).hexdigest()[:16]
+
+    # ── THE PACK ON THE DC LINK ──────────────────────────────────────────
+    # Parsed here, before anything is meshed, so a malformed battery is a 422
+    # in milliseconds naming the field — and so `_batt` is available both to
+    # the outer loops below and to the summary stash further down.
+    _batt_raw = _parse_battery_payload(battery)
+    _batt = None
+    if _batt_raw is not None:
+        from motor_ai_sim.simulation.battery import pack_from_config as _pfc_b
+        _batt = _pfc_b(_batt_raw, v_oc=_batt_raw.get("v_oc"))
+        if _batt is None:
+            raise HTTPException(status_code=422, detail=(
+                "the battery payload carries no usable open-circuit voltage: "
+                "send v_oc, or v_nom, or both v_min and v_max.  Got %r"
+                % (_batt_raw,)))
+
+    # ── OUTER LOOPS: battery-coupled bus, and the max-charge search ──────
+    # Both are loops whose body is ONE transient, so they run HERE — above the
+    # solve lock (a nested acquire would deadlock) and above the cache, so each
+    # inner solve is an ordinary fully-cached request that a user could have
+    # typed by hand.  Everything they need is `_route_kwargs`.
+    if bus_couple or charge_max:
+        # A ledger PROBE must never start one of these loops: each iteration is
+        # a whole transient, and the key the loop finally solves at is not the
+        # key of the request that asked.  "No stored match" is the honest answer.
+        if ledger_probe:
+            return {"match": False, "computed_at": None,
+                    "reason": "bus_couple / charge_max searches are not "
+                              "recorded under the requested key"}
+        if _drive not in ("pwm_voltage", "voltage"):
+            raise HTTPException(status_code=422, detail=(
+                "bus_couple / charge_max describe a machine feeding a battery "
+                "THROUGH the bridge; they only mean something on an imposed-"
+                "voltage source (drive='pwm_voltage' or 'voltage'), not on "
+                "drive=%r." % (drive,)))
+        if _batt is None:
+            raise HTTPException(status_code=422, detail=(
+                "bus_couple / charge_max need the pack: send `battery` "
+                "(v_oc/v_nom, cells, r_int_mohm, capacity_ah).  Without an "
+                "internal resistance there is nothing to iterate and without a "
+                "capacity there is no C-rate — guessing either would be a "
+                "number nobody measured presented as one somebody did."))
+        return _charge_outer_loops(
+            _route_kwargs, batt=_batt, mode_eff=_mode_eff,
+            bus_couple=bool(bus_couple), charge_max=bool(charge_max),
+            bus_iters=int(bus_iters), bus_tol_pct=float(bus_tol_pct),
+            charge_max_steps=int(charge_max_steps),
+            charge_max_evals=int(charge_max_evals))
 
     # Mesh once, rotate the rotor by re-pairing the slip ring → smooth T(t),
     # clean V(t), and one mesh for every frame including the animation's.
@@ -2874,38 +4514,98 @@ def get_fem_transient(
     # previous material's cached solve — same torque, same losses, no hint
     # anything was stale.
     _cfp = _config_physics_fingerprint(with_request_materials=True)
-    _sb_key = ("sb", int(n_steps_per_period), round(n_periods, 2),
-               round(gamma_deg, 1), round(I_phase_rms, 1),
-               round(mesh_size_mm, 2), round(min_size_mm, 2),
-               round(outer_air_factor, 2), int(n_sectors),
-               round(stator_fillet_mm, 2),
-               round(coil_temp_c, 1), round(end_winding_factor, 3),
-               int(bool(rotor_eddy)), round(gap_layers, 1),
-               int(bool(demag)), int(bool(torque_filter)),
-               int(bool(pole_copy)), int(bool(iron_template)), int(bool(hi_fidelity)), int(bool(structured_gap)),
-               int(bool(airgap_macro)), int(bool(geo_mesh)),
-               tuple(sorted(_comp_mesh.items())),
-               str(drive or "current"), round(float(v_phase_peak), 2),
-               round(float(v_delta_deg), 1), int(bool(harm_ref)),
-               int(element_order), _cfp,
-               # Speed: resolved (explicit argument or the config's), so an
-               # rpm change invalidates the entry — the config's speed used to
-               # be in NO key at all.
-               round(_effective_rpm(rpm), 3),
-               _effective_winding(n_parallel, connection),
-               # The d-axis reference: a run pinned to a given angle and a run
-               # that measured its own are different operating points whenever
-               # the two numbers differ, so they may not share a cache entry.
-               _effective_daxis(daxis_deg),
-               int(n_frames) if include_frames else 0,
-               # The coupled eddy solve is DIFFERENT physics (solved copper loss,
-               # reaction currents in the magnets/shaft) — it must not share a
-               # cache entry with the magnetostatic run.  field_snapshot is NOT
-               # in the key: it changes nothing about the numbers, only whether
-               # the last frame's field is kept for the viewer.
-               int(bool(eddy)))
+    # NAMED FIELDS, in key order.  The tuple below is byte-identical to the one
+    # this route has always built (same values, same order); the names exist
+    # because the key now also lands on disk in the results ledger, where the
+    # only question ever asked of it is "which field disagreed?" — the same
+    # lesson `_field_snap_key_fields` learned twice.
+    _sb_key_fields = OrderedDict((
+        ("kind", "sb"),
+        ("n_steps_per_period", int(n_steps_per_period)),
+        ("n_periods", round(n_periods, 2)),
+        ("gamma_deg", round(gamma_deg, 1)),
+        ("I_phase_rms", round(I_phase_rms, 1)),
+        ("mesh_size_mm", round(mesh_size_mm, 2)),
+        ("min_size_mm", round(min_size_mm, 2)),
+        ("outer_air_factor", round(outer_air_factor, 2)),
+        ("n_sectors", int(n_sectors)),
+        ("stator_fillet_mm", round(stator_fillet_mm, 2)),
+        ("coil_temp_c", round(coil_temp_c, 1)),
+        ("end_winding_factor", round(end_winding_factor, 3)),
+        ("rotor_eddy", int(bool(rotor_eddy))),
+        ("gap_layers", round(gap_layers, 1)),
+        ("demag", int(bool(demag))),
+        ("torque_filter", int(bool(torque_filter))),
+        ("pole_copy", int(bool(pole_copy))),
+        ("iron_template", int(bool(iron_template))),
+        ("hi_fidelity", int(bool(hi_fidelity))),
+        ("structured_gap", int(bool(structured_gap))),
+        ("airgap_macro", int(bool(airgap_macro))),
+        ("geo_mesh", int(bool(geo_mesh))),
+        ("comp_mesh", tuple(sorted(_comp_mesh.items()))),
+        ("drive", _drive),
+        ("v_phase_peak", round(float(v_phase_peak), 2)),
+        ("v_delta_deg", round(float(v_delta_deg), 1)),
+        ("harm_ref", int(bool(harm_ref))),
+        # PWM inverter: the bus and the carrier are PHYSICS.  Two runs
+        # that differ only in f_switch are two different machines-under-
+        # drive and must never share an entry — without these in the key,
+        # changing the switching frequency and pressing Run replayed the
+        # previous solve, which is precisely the failure the whole study
+        # would be built on.  The waveform is keyed by content hash for
+        # the same reason (and by hash, not by value, because 20k samples
+        # have no business sitting in a dict key).
+        ("v_bus", round(float(v_bus), 3)),
+        ("f_switch", round(float(f_switch), 3)),
+        ("waveform", _wf_key),
+        ("i_block", round(float(i_block), 3)),
+        ("element_order", int(element_order)),
+        ("cfg_fingerprint", _cfp),
+        # Speed: resolved (explicit argument or the config's), so an
+        # rpm change invalidates the entry — the config's speed used to
+        # be in NO key at all.
+        ("rpm", round(_effective_rpm(rpm), 3)),
+        ("winding", _effective_winding(n_parallel, connection)),
+        # Star and delta are two different machines at the terminals, and in
+        # delta the copper total carries a circulating loss star does not have.
+        # Sharing one cache entry would replay the other connection's numbers.
+        ("star_delta", _effective_star_delta(star_delta)),
+        # Transposed / soldered / per-turn-parallel are three different
+        # windings and they differ by kilowatts of copper — never one entry.
+        ("strand_bonding", _effective_bonding(strand_bonding) or "auto"),
+        # The d-axis reference: a run pinned to a given angle and a run
+        # that measured its own are different operating points whenever
+        # the two numbers differ, so they may not share a cache entry.
+        ("daxis_deg", _effective_daxis(daxis_deg)),
+        ("n_frames", int(n_frames) if include_frames else 0),
+        # The coupled eddy solve is DIFFERENT physics (solved copper loss,
+        # reaction currents in the magnets/shaft) — it must not share a
+        # cache entry with the magnetostatic run.  field_snapshot is NOT
+        # in the key: it changes nothing about the numbers, only whether
+        # the last frame's field is kept for the viewer.
+        ("eddy", int(bool(eddy))),
+    ))
+    # The pack does not change the FIELD, but it changes the summary's charging
+    # block (R_pack sets the bus rise, the capacity sets the C-rate), and the
+    # summary rides the cache entry.  Without this, editing r_int and pressing
+    # Run replayed the previous pack's charging card — the same staleness the
+    # material override was added to the key to kill.  Absent battery ⇒ the key
+    # is byte-identical to what it has always been.
+    # MAGNET TEMPERATURE — appended only when asked for, so a run with no magnet
+    # temperature keeps the byte-identical cache key it has always had (same
+    # rule as the battery block below).  When it IS asked for, it is physics:
+    # the magnet's Br and its demag knee both move, so this run must never be
+    # answered from the entry solved at the card's own temperature.
+    if magnet_temp_c is not None:
+        _sb_key_fields["magnet_temp_c"] = round(float(magnet_temp_c), 2)
+    if _batt is not None:
+        _sb_key_fields["battery"] = ("batt", round(_batt.v_oc, 4),
+                                     round(_batt.r_pack_ohm, 7),
+                                     round(_batt.capacity_pack_ah, 4),
+                                     round(float(_batt.i_charge_max_a), 4))
     if _geo_ov:   # distinct cache entry per overridden geometry (no-geo key unchanged)
-        _sb_key = _sb_key + (tuple(sorted(_geo_ov.items())),)
+        _sb_key_fields["geo_ov"] = tuple(sorted(_geo_ov.items()))
+    _sb_key = tuple(_sb_key_fields.values())
     # Key of the field snapshot this run's last frame belongs under — built ONCE
     # here and used both to store it after the solve and to tell a cache hit
     # whether that snapshot is still in memory.
@@ -2920,7 +4620,13 @@ def get_fem_transient(
         structured_gap=structured_gap, airgap_macro=airgap_macro,
         n_steps_per_period=n_steps_per_period, n_periods=n_periods,
         eddy=eddy, rotor_eddy=rotor_eddy, demag=demag,
-        drive=str(drive or "current"), element_order=element_order,
+        drive=_drive, element_order=element_order,
+        magnet_temp_c=magnet_temp_c,
+        excitation=("%g/%g" % (float(v_bus), float(f_switch))
+                    if _drive == "pwm_voltage"
+                    else (_wf_key if _drive == "custom_current"
+                          else ("%g" % float(i_block)
+                                if _drive == "bldc_current" else ""))),
         # The snapshot key must be spelling-independent: this route is reached
         # through POST /api/kernel/run (no `mat=`, no `geo=` — the interceptor
         # does not match that URL) while the field view that looks the snapshot
@@ -2941,6 +4647,7 @@ def get_fem_transient(
         memory now, and the J⟳ / Loss views act on this flag.  Report the LIVE
         answer instead of a remembered one."""
         _have = _fsnap_key in _transient_field_snap
+        res = _refresh_summary_shape(res)
         if res.get("field_snapshot") == _have:
             return res
         out = dict(res)
@@ -2948,7 +4655,13 @@ def get_fem_transient(
         out["field_snapshot_eddy"] = bool(eddy) and _have
         return out
 
-    if not fresh and _sb_key in _fem_transient_cache:
+    # READER #1 of `_fem_transient_cache` — the Run path.  Gated on
+    # `_memo_allowed()`: a user-initiated Run (GET here, POST /api/kernel/run,
+    # the animation viewer) never reads it and therefore always solves.  Only an
+    # internal re-entry — the bus-coupling / charge-max outer loops, a background
+    # passport probe — may be served the memo, because those revisit the very
+    # same operating point dozens of times inside one request.
+    if not fresh and _memo_allowed() and _sb_key in _fem_transient_cache:
         return _with_live_snapshot_flag(_fem_transient_cache[_sb_key])
     # RESTORE path (page open / tab switch): NEVER recompute.  Hand back the
     # last saved transient — flagged stale if its params differ from those
@@ -2957,7 +4670,11 @@ def get_fem_transient(
     if restore:
         _ref_res = _last_transient_ref.get("result")
         if _ref_res is not None:
-            _out = dict(_ref_res)
+            _out = dict(_refresh_summary_shape(_ref_res))
+            # belt AND braces with _save_last_transient's strip: a restore must
+            # never ship per-frame fields — a 725 MB response is one no browser
+            # survives, and the panel then silently shows a stale summary
+            _out.pop("frames", None)
             _out["restored"] = True
             _out["stale"] = (_last_transient_ref.get("key") != _sb_key)
             # WHY it is stale, not just THAT it is.  The restored run carries the
@@ -2980,6 +4697,36 @@ def get_fem_transient(
                     "restore: the saved transient was solved on a DIFFERENT "
                     "machine (geo %s -> %s) — returning it flagged stale, not "
                     "as the current result", _saved_geo_fp, _live_geo_fp)
+                # WHICH keys moved — the two prints alone cost an hour of
+                # guessing on 2026-09-13 (a verdict flipped for ~5 min after a
+                # restart and froze a dimmed dashboard on the user's screen).
+                # The run kept the client machine it was solved with
+                # (`_summary_args.geo_override`); hold it against the client
+                # machine of THIS request and against the live service object.
+                try:
+                    _ran_ov = ((_out.get("_summary_args") or {}).get("geo_override")
+                               or {})
+                    _now_ov = dict(_geo_ov or {})
+                    from motor_ai_sim.services.geometry_service import (
+                        get_current_geometry as _gcg_dbg)
+                    _live_d = _gcg_dbg().to_dict()
+                    def _kdiff(a, b):
+                        return sorted(k for k in set(a) | set(b)
+                                      if a.get(k) != b.get(k))[:12]
+                    log.warning(
+                        "restore stale-geometry detail: override present=%s "
+                        "(%d keys; run had %d) | run-vs-request override diff=%s "
+                        "| run-override-vs-live diff=%s | request-override-vs-live "
+                        "diff=%s", bool(_geo_ov), len(_now_ov), len(_ran_ov),
+                        [(k, _ran_ov.get(k), _now_ov.get(k))
+                         for k in _kdiff(_ran_ov, _now_ov)] if _ran_ov and _now_ov
+                        else "n/a",
+                        [(k, _ran_ov.get(k), _live_d.get(k))
+                         for k in _kdiff(_ran_ov, _live_d)] if _ran_ov else "n/a",
+                        [(k, _now_ov.get(k), _live_d.get(k))
+                         for k in _kdiff(_now_ov, _live_d)] if _now_ov else "n/a")
+                except Exception:      # noqa: BLE001 — a diagnostic must never break a restore
+                    log.debug("restore stale-geometry detail unavailable", exc_info=True)
             # The persisted result remembers that ITS run kept a field snapshot;
             # that snapshot lives in memory only, and a stale restore is not even
             # the same run.  Report what is actually available now.
@@ -2988,6 +4735,62 @@ def get_fem_transient(
             _out["field_snapshot_eddy"] = bool(_out["field_snapshot"] and eddy)
             return _out
         return {"restored": False, "stale": False}
+
+    # ── RESULTS LEDGER — "this exact run already exists on disk" ─────────────
+    # User, 2026-09-05: he set 667.4 A peak in the morning, ran, changed the
+    # current, ran, came back to 667.4 A with nothing else touched — and had to
+    # re-solve a run whose answer was already stored.  «Не надо Recent runs —
+    # нужно просто сканировать результаты: не совпадают ли они с уже
+    # проведёнными».
+    #
+    # This is NOT the in-memory memo coming back (`_memo_allowed` — a Run still
+    # never reads that).  The difference is what makes it honest:
+    #   * the match is the EXACT `_sb_key`, geometry+material fingerprint and
+    #     all, read back from the file and re-compared field by field;
+    #   * the answer is LABELLED `ledger_hit` and the card says so;
+    #   * `fresh=true` — the card's "Recompute" — always solves.
+    # Only a user Run may be served: `_memo_allowed()` is true exactly for the
+    # internal re-entries (bus-coupling / charge-max loops) and background
+    # probes, which have their own memo and their own rules.
+    if ledger and not fresh and not _memo_allowed():
+        _led = _ledger_lookup(_sb_key)
+        if ledger_probe:
+            return {"match": _led is not None,
+                    "computed_at": (_led or {}).get("computed_at")}
+        if _led is not None:
+            _out = dict(_refresh_summary_shape(_led.get("result") or {}))
+            _out.pop("frames", None)     # never stored; never implied
+            _out["ledger_hit"] = True
+            _out["ledger_computed_at"] = _led.get("computed_at")
+            # NOT `restored`: that word means "the last transient, shown while
+            # you decide whether to run", and the UI escalates a stale restore
+            # to a red banner.  This is a full match on today's inputs.
+            _out["restored"] = False
+            _out["stale"] = False
+            # The field views work off the in-memory snapshot store, which this
+            # path deliberately does not touch (a load is not a solve, and
+            # wiping the store would cost the user the pictures of the run that
+            # IS in it).  Report what is actually there for this key.
+            _out["field_snapshot"] = _fsnap_key in _transient_field_snap
+            _out["field_snapshot_eddy"] = bool(eddy) and _out["field_snapshot"]
+            # The RESTORE store follows the screen.  Without this, a reload
+            # finds a NEWER solve on disk (the run the user made in between)
+            # than the one they just loaded, and the panel's mount probe adopts
+            # it whole — the numbers would change under the user with no word
+            # said, which is the exact failure this whole area keeps fighting.
+            # The run JOURNAL is skipped — see `_save_last_transient`.
+            _save_last_transient(_sb_key, _out, journal=False)
+            log.info("run ledger HIT (%s) — identical parameters, loaded "
+                     "instead of solved", _led.get("computed_at"))
+            return _out
+    elif ledger_probe:
+        # A probe on a request that would never consult the ledger anyway says
+        # WHY, instead of implying "nothing stored".
+        return {"match": False, "computed_at": None,
+                "reason": ("fresh=true forces a solve" if fresh else
+                           "ledger=false — this caller needs a fresh solve"
+                           if not ledger else
+                           "internal re-entry — the ledger is for user runs")}
 
     # ── GEOMETRY GATE — refuse to solve a cross-section that cannot exist ────
     # geometry_constraints.clamp guards ONE scalar knob at a time; it cannot see
@@ -3038,7 +4841,12 @@ def get_fem_transient(
     try:
         # Re-check under the lock: a twin that finished while we waited has
         # already populated the cache → return its result, don't re-solve.
-        if not fresh and _sb_key in _fem_transient_cache:
+        # READER #2 — the same memo, re-checked under the lock for a twin that
+        # finished while we waited.  Same gate: a user Run solves even if an
+        # identical one just finished (that is the whole point of pressing Run);
+        # the concurrent-duplicate storm it used to absorb is handled by the lock
+        # itself and, for the field views, by field_jobs' dedupe queue.
+        if not fresh and _memo_allowed() and _sb_key in _fem_transient_cache:
             return _with_live_snapshot_flag(_fem_transient_cache[_sb_key])
         # Sliding band for EVERY symmetry (mesh once, slide the rotor).
         # Full (n_sectors=1) has no clean 360° slip mesh here, so it computes
@@ -3055,17 +4863,38 @@ def get_fem_transient(
         # with the solver's true (snapped) frame count.
         _est_total = max(1, int(round(float(n_steps_per_period) * float(n_periods))))
         if demag:
-            _est_total *= 2     # demag adds a pre-pass sweep over the period
+            # demag adds a pre-pass sweep over the period — on BOTH paths since
+            # 2026-09-05: magnetostatic runs prepend it as `_dmskip` frames,
+            # coupled-eddy runs splice it at θ<0 right after the eddy handoff
+            # (the Br ratchet may not see the σ·∂A/∂t start-up transient — the
+            # user's "second run always differs from the first").  The eddy
+            # warm-up frames on top of it are a moving target by construction,
+            # so the solver's own progress callback corrects this estimate at
+            # the first frame; ×2 is the right pre-run guess for both.
+            _est_total *= 2
         _fem_transient_progress["current"] = {
             "running": True, "step": 0, "total": _est_total,
             "elapsed_s": 0.0, "eta_s": 0.0, "ts_start": _t.time(),
             "phase": ("fem-solve (sliding-band, demag)" if demag
                       else "fem-solve (sliding-band)"),
+            "composition": "",
         }
-        def _sb_progress(_done, _total, _phase=None):
+        def _sb_progress(_done, _total, _phase=None, _composition=None):
+            # Cooperative cancel: this callback is the one hook that fires at
+            # the top of EVERY frame (settling, warm-up and demag pre-pass
+            # included), so it is where the Stop button takes effect.
+            if run_id and _fem_transient_cancelled_run["id"] == run_id:
+                raise _RunCancelled(run_id)
             _cur = _fem_transient_progress["current"]
             _cur["step"] = int(_done)
             _cur["total"] = int(_total)
+            # HOW that total is made up, in the SOLVER's own words.  The strip
+            # used to derive this client-side from "total = 3 x steps/period",
+            # which the PWM mixed-resolution schedule (coarse sinusoid settle +
+            # fine pre-roll + fine reported window) makes false — and only the
+            # code that built the schedule can describe it.
+            if _composition:
+                _cur["composition"] = str(_composition)
             # The solver names the stage it is in (the eddy warm-up counts its
             # own frames against its own, moving, total).  None = back to the
             # reported window, so the label returns to the solve's own.
@@ -3079,17 +4908,31 @@ def get_fem_transient(
             # the solver.em_transient module via em_transient_eval, so they can
             # never diverge.  'Full' (n_sectors<=1) solves the full ring (matches
             # the Mesh tab); 1/4 1/2 solve the sector (1/4 is the UI default).
+            # THE CURRENT SETPOINT IS THE TERMINAL (line) CURRENT — the three
+            # leads between the machine and the inverter, in both connections
+            # (user 2026-09-12: "эти параметры задаются для 3 проводов, которые
+            # идут с мотора на инвертор").  The solver drives the WINDING, and
+            # in delta a winding carries the line current over sqrt(3): that
+            # division happens HERE, once, so the field sees the ampere-turns
+            # the inverter actually produces.  Star: winding = line, no-op.
+            _I_wind = float(I_phase_rms) / (
+                math.sqrt(3.0) if _effective_star_delta(star_delta) == "delta"
+                else 1.0)
             _sbres = em_transient_eval(
                 n_steps_per_period=int(n_steps_per_period), n_periods=float(n_periods),
-                gamma_deg=float(gamma_deg), I_phase_rms=float(I_phase_rms),
+                gamma_deg=float(gamma_deg), I_phase_rms=_I_wind,
                 rpm=(None if rpm is None else float(rpm)),
                 n_parallel=(None if n_parallel is None else int(n_parallel)),
                 connection=(None if connection is None else str(connection)),
+                star_delta=_effective_star_delta(star_delta),
+                strand_bonding=_effective_bonding(strand_bonding),
                 daxis_deg=_effective_daxis(daxis_deg),
                 mesh_size_mm=float(mesh_size_mm), min_size_mm=float(min_size_mm),
                 outer_air_factor=float(outer_air_factor), gap_layers=float(gap_layers),
                 n_sectors=int(n_sectors), stator_fillet_mm=float(stator_fillet_mm),
-                coil_temp_c=float(coil_temp_c), end_winding_factor=float(end_winding_factor),
+                coil_temp_c=float(coil_temp_c),
+                magnet_temp_c=(None if magnet_temp_c is None else float(magnet_temp_c)),
+                end_winding_factor=float(end_winding_factor),
                 rotor_eddy=bool(rotor_eddy), demag=bool(demag),
                 torque_filter=bool(torque_filter), pole_copy=bool(pole_copy),
                 iron_template=bool(iron_template), geo_mesh=bool(geo_mesh),
@@ -3097,9 +4940,15 @@ def get_fem_transient(
                 progress_cb=_sb_progress, hi_fidelity=bool(hi_fidelity),
                 structured_gap=bool(structured_gap),
                 airgap_macro=bool(airgap_macro),
-                drive=str(drive or "current"),
+                drive=_drive,
                 v_phase_peak=float(v_phase_peak),
                 v_delta_deg=float(v_delta_deg),
+                # THE MODEL BUS, not the request's.  Star: identical.  Delta:
+                # √3 × the real DC link, which is what makes the star circuit's
+                # branch voltage the real bridge's LINE voltage harmonic for
+                # harmonic (see the star-equivalent block above).
+                v_bus=float(_v_bus_model), f_switch=float(f_switch),
+                waveform=_wf_pts, i_block=float(i_block),
                 element_order=int(element_order),
                 return_frames=int(n_frames) if include_frames else 0,
                 # Coupled σ·∂A/∂t solve — only when the caller asked for it.
@@ -3111,7 +4960,11 @@ def get_fem_transient(
             # extracted fundamental (I₁, γ₁), so the comparison runs at a
             # MATCHED fundamental current — the loss difference is then
             # purely the parasitic harmonic currents' watt cost.
-            if str(drive or "").lower().startswith("v") and harm_ref:
+            # Also for the PWM source, where the reference is even more to the
+            # point: ΔP_harm is then exactly the watt cost of the SWITCHING
+            # ripple, measured against an ideal sinusoid at the same fundamental
+            # current the inverter actually produced.
+            if _drive in ("voltage", "pwm_voltage") and harm_ref:
                 try:
                     from motor_ai_sim.simulation.postproc import fundamental_current
                     _fc = fundamental_current(_sbres)
@@ -3131,6 +4984,13 @@ def get_fem_transient(
                                         else int(n_parallel)),
                             connection=(None if connection is None
                                         else str(connection)),
+                            # Same d-axis reference as the main run.  γ₁ is
+                            # measured against that axis, so with a pinned
+                            # d-axis an unpinned reference re-measured its own
+                            # zero and solved a SHIFTED current angle —
+                            # ΔP_harm/T_ref then compared mismatched operating
+                            # points.
+                            daxis_deg=_effective_daxis(daxis_deg),
                             mesh_size_mm=float(mesh_size_mm),
                             min_size_mm=float(min_size_mm),
                             outer_air_factor=float(outer_air_factor),
@@ -3138,11 +4998,39 @@ def get_fem_transient(
                             n_sectors=int(n_sectors),
                             stator_fillet_mm=float(stator_fillet_mm),
                             coil_temp_c=float(coil_temp_c),
+                            # Same magnet, at the same temperature: the
+                            # reference's only allowed difference is the drive.
+                            magnet_temp_c=(None if magnet_temp_c is None
+                                           else float(magnet_temp_c)),
                             end_winding_factor=float(end_winding_factor),
-                            # eddy is unsupported (and force-dropped) in the
-                            # voltage solve — the reference must match its
-                            # physics or ΔP_harm absorbs the whole P_mag.
-                            rotor_eddy=False, demag=bool(demag),
+                            # ROTOR eddy: the reference must carry whatever the
+                            # voltage run carried.  It used to be force-dropped
+                            # on BOTH, because the solver dropped it on every
+                            # imposed-voltage run; now that the conducting rotor
+                            # is solved inside the (A, U, i) Newton, the
+                            # reference runs it too — otherwise ΔP_harm would
+                            # EXCLUDE the magnet-loss harmonic cost, which under
+                            # PWM is exactly the term the comparison is for
+                            # (HF air-gap harmonics raise the magnet loss above
+                            # the sinusoid's).  The two flip together, including
+                            # when SB_VDRIVE_ROTOR_EDDY=0 puts the drop back:
+                            # the solver reports what it actually solved in
+                            # rotor_eddy_solved, so the reference mirrors the
+                            # RUN, not the request.
+                            #
+                            # The COUPLED eddy solve is a different matter and
+                            # this line used to drop it as well, on a comment
+                            # ("eddy is unsupported in the voltage solve") that
+                            # stopped being true when the bordered (A, U, i)
+                            # Newton landed: an eddy voltage run was compared
+                            # against a MAGNETOSTATIC current reference, so
+                            # ΔP_harm silently contained the entire solved AC
+                            # copper loss instead of the harmonic cost alone.
+                            # The reference's only allowed difference from the
+                            # run it is measuring is the DRIVE.
+                            eddy=bool(eddy),
+                            rotor_eddy=bool(_sbres.get("rotor_eddy_solved")),
+                            demag=bool(demag),
                             torque_filter=bool(torque_filter),
                             pole_copy=bool(pole_copy),
                             iron_template=bool(iron_template),
@@ -3175,6 +5063,28 @@ def get_fem_transient(
                         _sbres["dP_harm_W"] = round(_pl_v - _pl_r, 1)
                 except Exception:
                     log.exception("harm_ref reference run failed (non-fatal)")
+            # The substitution is stated in the payload, beside the numbers it
+            # produced — never left for a reader to infer from a bus voltage
+            # that is √3 too big (user 2026-09-14 / PWM study §2.2 B1).
+            if _eq_star:
+                _mark_equivalent_star(_sbres, v_bus_real=float(v_bus),
+                                      v_bus_model=float(_v_bus_model),
+                                      drive=_drive)
+        except _RunCancelled:
+            _fem_transient_progress["current"] = {
+                "running": False, "step": 0, "total": 0, "elapsed_s": 0.0,
+                "eta_s": 0.0, "ts_start": 0.0, "phase": "cancelled"}
+            log.info("fem_transient run %s cancelled by the Stop button", run_id)
+            raise HTTPException(status_code=499, detail="simulation stopped")
+        except _ExcErr as _ee:
+            # An excitation the caller described but that cannot be built — a
+            # carrier too slow to synthesise the requested fundamental, a
+            # delay/gain compensation that would need overmodulation.  That is a
+            # REQUEST error, not a 500: it comes back as a 422 naming the number
+            # to change, exactly like the pre-solve checks at the top of this
+            # route.  (Those catch everything checkable without the machine's
+            # d-axis; these need the solved frame.)
+            raise HTTPException(status_code=422, detail=str(_ee))
         finally:
             # NOT done yet — what follows (animation keyframes, CAD masses, the
             # summary block, the disk save) is seconds to tens of seconds on a
@@ -3297,7 +5207,20 @@ def get_fem_transient(
         # Storing those would evict the user's own run from a 3-deep store while
         # nobody ever looks at them.
         _fld_snap = _sbres.pop("field", None)
-        if _geo_ov:
+        # "Is this the motor on screen?" is a question about the MACHINE, not
+        # about how the request spelled it: every UI run arrives through the
+        # kernel WITH an explicit geo payload of the on-screen machine, and
+        # the raw `if _geo_ov` test read that as a candidate eval — so user
+        # runs lost their field snapshot AND (below) were never persisted as
+        # the last transient (measured live: a restart restored a run from
+        # hours earlier).  The resolved fingerprint answers it properly.
+        # …and a BACKGROUND solve is never "the motor on screen" even when it
+        # solves the very same geometry (passport sweeps — see _BACKGROUND_RUN).
+        _is_live_machine = ((not _geo_ov or
+                             _sbres.get("geo_fingerprint")
+                             == _geometry_fingerprint(None))
+                            and not _BACKGROUND_RUN.get())
+        if not _is_live_machine:
             _fld_snap = None
         if _fld_snap is not None:
             _store_transient_field_snapshot(
@@ -3311,6 +5234,44 @@ def get_fem_transient(
             log.info("transient: kept last-frame field snapshot for the field "
                      "views (eddy=%s, %d steps/period) — J⟳/Loss will render "
                      "without re-solving", bool(eddy), int(n_steps_per_period))
+            # ── …and once more, PER DUTY (2026-09-09) ────────────────────────
+            # The store above holds a handful of snapshots for ONE machine and
+            # the next run evicts them, so a report of a configuration with
+            # several duties could draw one duty's |B| and loss maps and had to
+            # say so in the caption.  The user asked for all of the solved
+            # fields to be kept — *"давай сделаем сохранение всех полей
+            # моделирования, как электромагнитных, так и тепловых и
+            # механических"* — so this run's mesh, |B|, loss density and demag
+            # coefficient are filed under the duty the catalog context names
+            # (~0.31 MB compressed on the 200 mm machine).  Only here: this is
+            # the one place a live-machine run's field is persisted at all, and
+            # a candidate eval / background solve never gets this far.
+            try:
+                from motor_ai_sim import duty_fields as _df
+                _df.save_active(
+                    "em", _transient_field_snap.get(_fsnap_key),
+                    geometry_fingerprint=_sbres.get("geo_fingerprint"),
+                    computed_at=_sbres.get("computed_at"))
+            except Exception:      # noqa: BLE001 — never fails a run
+                log.debug("transient: per-duty field not stored", exc_info=True)
+        # Bench Ld/Lq ride with every live-machine run (user: "во время
+        # расчёта посчитай индуктивность" — no separate button).  Once per
+        # machine+connection: a cache hit costs a file read, a miss costs
+        # ~45 s of three quick solves appended to this run.  Candidate evals
+        # skip it — an optimizer must not pay 45 s per candidate.
+        if _is_live_machine:
+            try:
+                from motor_ai_sim.config import get_config as _gcb
+                _bconn = str(_sbres.get("connection")
+                             or (_gcb().get("winding") or {}).get("connection")
+                             or "")
+                if _bench_read(_sbres.get("geo_fingerprint"), _bconn) is None:
+                    log.info("bench Ld/Lq: not cached for this machine — "
+                             "measuring (3 quick solves)…")
+                    _bench_compute(_geo_ov, _bconn)
+            except Exception:
+                log.exception("bench Ld/Lq probe failed — the summary will "
+                              "carry none (run itself unaffected)")
         # Say it in the payload too: the Simulation tab can tell the user the
         # J⟳ / Loss views are ready, and WHY they are (or are not).
         _sbres["field_snapshot"] = bool(_fld_snap is not None)
@@ -3318,28 +5279,67 @@ def get_fem_transient(
         # SHARED helper (_build_transient_summary) so the direct route, the
         # legacy remesh path AND the kernel/solver.em_transient path all use the
         # SAME formula and every run returns a populated `summary`.
+        # The pack rides WITH the result, so a cache hit / a restore / a
+        # summary-shape rebuild all reconstruct the charging card from the same
+        # numbers the run was solved against instead of from whatever the panel
+        # holds now.  Absent battery ⇒ the key is absent and every existing
+        # consumer sees the payload it has always seen.
+        if _batt is not None:
+            _sbres["battery_input"] = _batt.as_dict()
         try:
             # The summary carries the PANEL's gamma (16, not 196): the card's
             # staleness check compares against the panel input, and the mode
             # chip says which way the 180 went; the solver result keeps the
             # effective angle in gamma_effective_deg.
             _sbres["summary"] = _build_transient_summary(
-                _sbres, I_phase_rms=I_phase_rms, gamma_deg=_gamma_panel,
+                _sbres, I_phase_rms=_I_wind, gamma_deg=_gamma_panel,
                 coil_temp_c=coil_temp_c, geo_override=_geo_ov,
                 mode_requested=_mode_eff)
+            # The exact build args, stashed WITH the cached result: a cache hit
+            # re-serves the summary as stored, so a summary-shape change (a new
+            # derived quantity like Km or the rotor inertia) never reached any
+            # cached point — the card just silently lacked the new cells.  With
+            # the args recorded, the hit path can rebuild the summary with the
+            # CURRENT code (see _refresh_summary_shape).
+            _sbres["_summary_args"] = {
+                "I_phase_rms": _I_wind,
+                "gamma_deg": float(_gamma_panel),
+                "coil_temp_c": float(coil_temp_c),
+                "geo_override": _geo_ov,
+                "mode_requested": _mode_eff}
         except Exception as _se:
             # A summary-build failure MUST be visible (not a silently frozen
             # card set): log it AND attach an error marker so the frontend can
             # surface it instead of keeping stale numbers.
             log.exception("SB summary build failed")
             _sbres["summary_error"] = f"{type(_se).__name__}: {_se}"
+        # WRITER of `_fem_transient_cache` (kept: `_refresh_caches_for_run`
+        # reduces the dict to this one entry a line below, and the opt-in memo
+        # readers above need it there; a candidate eval that never refreshes
+        # still gets its own memo entry for the optimizer's inner loops).
         _fem_transient_cache[_sb_key] = _sbres
         # Persist for "restore last simulation" on reload — but ONLY the user's
         # MAIN motor. Per-candidate evals (optimizer / kernel runs with a geo
         # override) must never clobber the saved simulation, and parallel
         # optimizer subprocesses must not race on the shared store file.
-        if not _geo_ov:
+        if _is_live_machine:
+            # THE one place the physics caches are refreshed.  Same condition as
+            # the persist below on purpose: a candidate eval / a background
+            # passport point is not the motor on screen, and letting it wipe the
+            # user's field snapshot mid-optimization is the eviction bug this
+            # store was already guarded against.
+            _refresh_caches_for_run(
+                _sb_key, _sbres,
+                snap_key=(_fsnap_key if _fld_snap is not None else None))
             _save_last_transient(_sb_key, _sbres)   # survive a back-end restart
+            # …and record it in the results ledger, so coming BACK to this
+            # operating point later today loads it instead of re-solving (user,
+            # 2026-09-05).  Same `_is_live_machine` gate as the two above, for
+            # the same reason: a candidate eval / a background passport point is
+            # not the motor on screen and must not fill the user's ledger.
+            # `fresh=true` lands here too — that is the "Recompute" replacing
+            # the stored entry with the run the user just forced.
+            _ledger_write(_sb_key, _sbres, _sb_key_fields)
         return _sbres
     except HTTPException:
         raise
@@ -3353,6 +5353,312 @@ def get_fem_transient(
         # path must not leave the progress endpoint reporting a live solve.
         _fem_transient_progress["current"]["running"] = False
         _fem_transient_lock.release()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 7a-ter.  The results ledger — endpoints
+# ─────────────────────────────────────────────────────────────────────────────
+
+def get_fem_transient_ledger_match(**kwargs):
+    """Is there a STORED result for exactly this request?  → {match, computed_at}
+
+    Cheap: it builds the key, hashes it and stats one file — no mesh, no solve.
+    (The one thing it can be slow for is a machine whose d-axis has never been
+    measured; the key holds `None` there — "measure it" — so even that costs
+    nothing here, the measurement happens inside a real solve.)
+
+    The signature is COPIED from `get_fem_transient` below, deliberately: this
+    endpoint must build the byte-identical key from the byte-identical query
+    parsing, or it would promise a stored result the Run then fails to find —
+    a lie in exactly the direction the user does not tolerate.  `restore` and
+    `ledger_probe` are removed because this route pins them.
+    """
+    kwargs.pop("restore", None)
+    kwargs.pop("ledger_probe", None)
+    return get_fem_transient(restore=False, ledger_probe=True, **kwargs)
+
+
+import inspect as _inspect_lm      # noqa: E402 — used immediately below
+_lm_sig = _inspect_lm.signature(get_fem_transient)
+get_fem_transient_ledger_match.__signature__ = _lm_sig.replace(
+    parameters=[_p for _n, _p in _lm_sig.parameters.items()
+                if _n not in ("restore", "ledger_probe")])
+router.add_api_route("/physics/fem_transient/ledger_match",
+                     get_fem_transient_ledger_match, methods=["GET"])
+
+
+@router.get("/ledger")
+def get_run_ledger():
+    """What the results ledger holds for the LIVE machine's config directory.
+
+    Metadata only — key fields, when it was computed, how big it is.  Read-only
+    and owner-gated by the same `_GATED` table as GET /api/simulation/caches:
+    it describes the SHARED machine's stored work.
+    """
+    _es = _ledger_entries()
+    return {
+        "dir": str(_ledger_dir()),
+        "count": len(_es),
+        "bytes": sum(int(e.get("bytes") or 0) for e in _es),
+        "keep_per_geometry": _LEDGER_KEEP_PER_GEO,
+        "max_bytes": _LEDGER_MAX_BYTES,
+        "entries": _es,
+    }
+
+
+@router.delete("/ledger")
+def delete_run_ledger():
+    """Throw the whole ledger away.
+
+    Unlike the physics caches this is a record of WORK DONE, not stale physics,
+    so nothing clears it automatically — a stored entry can only be served on an
+    exact key match, and a key that no longer describes the machine simply never
+    matches again.  This exists for the case the user wants the disk back.
+    """
+    n = _ledger_clear()
+    log.info("run ledger cleared by request: %d entries deleted", n)
+    return {"deleted": n}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 7a-bis.  Bench-style Ld/Lq probe — the LCR-meter measurement, simulated
+# ─────────────────────────────────────────────────────────────────────────────
+
+#: One probe current for everyone: the cache key includes it, and a per-user
+#: knob would just fragment the cache for a value nobody tunes on a bench.
+_BENCH_I_PROBE_ARMS = 2.0
+
+
+def _bench_cache_path():
+    from pathlib import Path
+    from motor_ai_sim.config import DEFAULT_CONFIG_PATH
+    return Path(DEFAULT_CONFIG_PATH).parent / ".bench_ldq.json"
+
+
+def _bench_key(fp: str, conn: str, i_probe: float = _BENCH_I_PROBE_ARMS) -> str:
+    return "%s_C%s_I%.2f" % (fp, conn or "cfg", float(i_probe))
+
+
+def _bench_read(fp: Optional[str], conn: Optional[str],
+                i_probe: float = _BENCH_I_PROBE_ARMS) -> Optional[dict]:
+    """Cache-only lookup — the summary builder calls this on EVERY build
+    (including restore rebuilds), so it must never start a solve."""
+    if not fp:
+        return None
+    try:
+        if not conn:
+            from motor_ai_sim.config import get_config as _gc0
+            conn = (_gc0().get("winding") or {}).get("connection") or ""
+        import json as _j
+        return (_j.loads(_bench_cache_path().read_text(encoding="utf-8"))
+                .get(_bench_key(fp, str(conn or ""), i_probe))) or None
+    except Exception:
+        return None
+
+
+def _bench_compute(geo_ov: Optional[dict], conn: str,
+                   i_probe: float = _BENCH_I_PROBE_ARMS) -> dict:
+    """The three-solve bench measurement (q-probe, d-probe, cached ψ_PM).
+    Raises on any frame/convergence doubt; writes the cache on success."""
+    import json as _j, math as _m, time as _t2
+    from motor_ai_sim.config import get_config as _gc
+    from motor_ai_sim.simulation.fem_solver_2d import (em_transient_eval,
+                                                       noload_psi_pm)
+    _fp = _geometry_fingerprint(geo_ov)
+    # The MACHINE BEING PROBED, not whatever is loaded: with an override in
+    # hand the pole count, symmetry and mesh scale must come from IT, or a
+    # catalog motor is probed with the live machine's sector count and mesh
+    # (zero-touch passport generation hits exactly this path).
+    _geo_cfg = dict(geo_ov) if geo_ov else dict(_gc().get("geometry") or {})
+    _wind = dict(_gc().get("winding") or {})
+    _pp = int(_geo_cfg.get("num_poles", 0)) // 2
+    if _pp <= 0:
+        raise HTTPException(422, detail="machine has no poles configured")
+    # Same cheap-calibration knobs as the ψ_PM solve (noload_psi_pm), so all
+    # three solves share one mesh and one d-axis frame.
+    _cal_ns = _m.gcd(int(_geo_cfg.get("num_slots") or 1),
+                     int(_geo_cfg.get("num_poles") or 1)) or 1
+    _cal_D = float(_geo_cfg.get("stator_diameter") or 0.0) or 40.0
+    _cal_mesh = round(min(2.0, max(0.5, 1.4 * _cal_D / 150.0)), 2)
+    _knobs = dict(n_steps_per_period=6, n_periods=1.0,
+                  mesh_size_mm=_cal_mesh, min_size_mm=0.3,
+                  outer_air_factor=1.2, gap_layers=2.0,
+                  n_sectors=_cal_ns if _cal_ns >= 2 else -1,
+                  coil_temp_c=120.0, rotor_eddy=False, iron_template=True,
+                  structured_gap=True, geo_mesh=True, element_order=2,
+                  geo_override=geo_ov,
+                  **({} if not conn else {"connection": conn}))
+    _t0 = _t2.time()
+    # q-probe (γ = 0 → current on q).  daxis auto-calibrates (cached per
+    # machine) and its angle is reused verbatim by the other two solves.
+    _rq = em_transient_eval(gamma_deg=0.0, I_phase_rms=float(i_probe),
+                            daxis_deg=None, **_knobs)
+    _dax = float(_rq.get("daxis_deg") or 0.0)
+    # d-probe (γ = 90 → current on d).
+    _rd = em_transient_eval(gamma_deg=90.0, I_phase_rms=float(i_probe),
+                            daxis_deg=_dax, **_knobs)
+    _pm, _q0 = noload_psi_pm(_geo_cfg, _wind, _pp, 0, _dax,
+                             geo_override=geo_ov,
+                             connection=(conn or None))
+    if abs(_pm) > 1e-9 and abs(_q0) > 0.05 * abs(_pm):
+        raise HTTPException(500, detail=(
+            "no-load ψq is %.1f%% of ψ_PM — the dq frame is suspect, refusing "
+            "to report bench inductances off it" % (100 * abs(_q0 / _pm))))
+    _ipk = float(i_probe) * _m.sqrt(2.0)
+    _iq = float(_rq.get("i_q_A") or 0.0)
+    _idp = float(_rd.get("i_d_A") or 0.0)
+    if abs(_iq) < 0.5 * _ipk or abs(_idp) < 0.5 * _ipk:
+        raise HTTPException(500, detail=(
+            "probe current did not land on its axis (i_q %.2f A, i_d %.2f A "
+            "for a %.2f A-peak probe) — frame error, not a measurement"
+            % (_iq, _idp, _ipk)))
+    _Lq = 1e3 * (float(_rq.get("psi_q_Wb") or 0.0) - float(_q0)) / _iq
+    _Ld = 1e3 * (float(_rd.get("psi_d_Wb") or 0.0) - float(_pm)) / _idp
+    out = {
+        "Ld_mH": round(_Ld, 4), "Lq_mH": round(_Lq, 4),
+        "Lq_over_Ld": (round(_Lq / _Ld, 3) if abs(_Ld) > 1e-9 else None),
+        "psi_pm_mWb": round(1e3 * float(_pm), 3),
+        "I_probe_arms": float(i_probe),
+        "daxis_deg": round(_dax, 3),
+        "connection": conn or None,
+        "geo_fingerprint": _fp,
+        "method": ("small-signal probe at the I=0 iron state — bench/LCR "
+                   "equivalent; loaded (chord) values differ under "
+                   "saturation"),
+        "solve_time_s": round(_t2.time() - _t0, 1),
+        "cached": False,
+    }
+    try:
+        _cpath = _bench_cache_path()
+        _all = {}
+        try:
+            _all = _j.loads(_cpath.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+        _all[_bench_key(_fp, conn, i_probe)] = {
+            k: v for k, v in out.items() if k != "cached"}
+        _cpath.write_text(_j.dumps(_all, indent=1, ensure_ascii=False),
+                          encoding="utf-8")
+    except Exception:
+        log.exception("bench_ldq: cache write failed (result still returned)")
+    return out
+
+
+@router.get("/pwm_waveform")
+def get_pwm_waveform(
+    v_bus:        float = Query(..., description="DC link voltage [V]"),
+    f_switch:     float = Query(..., description="carrier frequency [Hz]"),
+    I_phase_rms:  float = Query(..., description="terminal phase current setpoint [A rms]"),
+    gamma_deg:    float = 0.0,      # current angle, q-axis = 0 (panel convention)
+    rpm:          Optional[float] = None,   # None = the shared config's speed
+    R_phase_ohm:  Optional[float] = None,   # None = bench/last-run value
+    Ld_mH:        Optional[float] = None,   # None = bench measurement
+    Lq_mH:        Optional[float] = None,
+    psi_pm_mWb:   Optional[float] = None,
+    emf_waveform: Optional[str] = None,     # [[theta_e_deg, e_A_V], ...] at THIS rpm
+    n_samples:    int  = 0,                 # 0 = 32 per carrier (>= 360)
+    connection:   Optional[str] = None,
+    geo:          Optional[str] = None,
+    poles:        Optional[int] = None,     # None = the loaded machine's pole count
+):
+    """Synthesise the phase current a PWM inverter forces through this machine —
+    pure Python, about a second, no FEM.
+
+    This is the "PWM calculator": it integrates the synchronous-frame circuit
+    equations with the inverter's instantaneous (chopped) phase voltages, and
+    returns the resulting phase-A current sampled over one electrical period,
+    in exactly the shape ``drive="custom_current"`` takes.  So the cheap route —
+    synthesise the ripple in a constant-L model, impose it on the FEM — is
+    available WITHOUT an external tool, which is the route the published
+    PWM-excitation studies use and the one this solver has to be comparable
+    with.
+
+    R, Ld, Lq and ψ_PM default to the machine's own measured values (the same
+    small-signal bench probe ``/physics/bench_ldq`` serves), so the calculator
+    describes THIS motor rather than a textbook one.  It is still a CONSTANT-L
+    model: for the honest answer — saturation, the real back-EMF shape, the eddy
+    reaction, all in the loop — run ``drive="pwm_voltage"`` instead.
+
+    See ``simulation/pwm.synthesize_pwm_current`` for the model, the regulator
+    and what each returned number means.
+    """
+    from motor_ai_sim.config import get_config as _gc_p
+    from motor_ai_sim.simulation.pwm import (
+        synthesize_pwm_current as _synth, ExcitationError as _ExcErr2,
+        parse_waveform as _pwf)
+    _geo_ov = _parse_geo_override(geo)
+    _cfg = _gc_p()
+    _geo = {**dict(_cfg.get("geometry") or {}), **(_geo_ov or {})}
+    _poles = int(poles or _geo.get("num_poles") or 0)
+    if _poles < 2:
+        raise HTTPException(422, detail=(
+            "cannot tell the pole count of the loaded machine (num_poles=%r) "
+            "— pass ?poles=" % (_geo.get("num_poles"),)))
+    _rpm = _effective_rpm(rpm)
+    # Ld/Lq/ψ_PM: the machine's own measurement unless the caller pins them.
+    # Missing ones are FILLED from the bench probe rather than guessed — a
+    # synthesis run on default inductances would produce a plausible-looking
+    # ripple belonging to no motor at all.
+    _need_bench = (Ld_mH is None or Lq_mH is None or psi_pm_mWb is None)
+    _bench = None
+    if _need_bench:
+        _conn = str(connection or (_cfg.get("winding", {}) or {})
+                    .get("connection") or "")
+        _bench = (_bench_read(_geometry_fingerprint(_geo_ov), _conn)
+                  or _bench_compute(_geo_ov, _conn))
+    _ld = float(Ld_mH if Ld_mH is not None else _bench["Ld_mH"]) * 1e-3
+    _lq = float(Lq_mH if Lq_mH is not None else _bench["Lq_mH"]) * 1e-3
+    _pm = float(psi_pm_mWb if psi_pm_mWb is not None
+                else _bench["psi_pm_mWb"]) * 1e-3
+    # R_phase: the caller's, else the last transient's solved value, else the
+    # cheap geometric one.  Never zero silently — R sets the ripple's damping.
+    _r = R_phase_ohm
+    if _r is None:
+        _last = (_last_transient_ref.get("result") or {})
+        _r = _last.get("R_phase_ohm")
+    if _r is None:
+        raise HTTPException(422, detail=(
+            "no phase resistance available: pass ?R_phase_ohm=, or run one "
+            "transient first (its solved R_phase is then reused)."))
+    try:
+        _emf = _pwf(emf_waveform, what="emf_waveform") if emf_waveform else None
+        out = _synth(
+            r_phase=float(_r), ld_h=_ld, lq_h=_lq, psi_pm_wb=_pm,
+            pole_pairs=_poles // 2, rpm=float(_rpm), v_bus=float(v_bus),
+            f_switch_hz=float(f_switch), i_phase_rms=float(I_phase_rms),
+            gamma_deg=float(gamma_deg), emf_waveform=_emf,
+            n_samples=int(n_samples))
+    except _ExcErr2 as _pe:
+        raise HTTPException(422, detail=str(_pe))
+    out["machine"] = {
+        "rpm": float(_rpm), "poles": int(_poles),
+        "R_phase_ohm": round(float(_r), 6),
+        "Ld_mH": round(_ld * 1e3, 4), "Lq_mH": round(_lq * 1e3, 4),
+        "psi_pm_mWb": round(_pm * 1e3, 4),
+        "source": ("bench probe" if _need_bench else "caller"),
+    }
+    return out
+
+
+@router.get("/physics/bench_ldq")
+def get_bench_ldq(
+    connection: Optional[str] = None,
+    geo:        Optional[str] = None,
+    fresh:      bool = False,
+):
+    """Small-signal Ld/Lq the way they are measured on the bench (see
+    `_bench_compute`).  The Simulation card gets these automatically with
+    every run on the live machine; this endpoint serves API users and lets
+    `fresh=true` force a re-measure."""
+    from motor_ai_sim.config import get_config as _gc
+    _geo_ov = _parse_geo_override(geo)
+    _conn = str(connection or (_gc().get("winding", {}) or {})
+                .get("connection") or "")
+    if not fresh:
+        _hit = _bench_read(_geometry_fingerprint(_geo_ov), _conn)
+        if _hit:
+            return {**_hit, "cached": True}
+    return _bench_compute(_geo_ov, _conn)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -3469,6 +5775,66 @@ def get_harm_screening(
 # ─────────────────────────────────────────────────────────────────────────────
 # Component mass calculator
 # ─────────────────────────────────────────────────────────────────────────────
+def _sleeve_hoop(geo_cfg: dict, rpm: float) -> Optional[dict]:
+    """Hoop stress in the retaining sleeve at this run's speed, or None.
+
+    THIN-RING, OWN MASS ONLY:  sigma_hoop = rho * omega^2 * r_mean^2.
+
+    What it deliberately does NOT include is the magnet pressure the sleeve is
+    fitted to retain — the whole reason a retaining ring exists.  On a surface-PM
+    rotor that term dominates, and computing it needs the magnet mass the ring
+    carries, the interference fit and the temperature; none of that is modelled
+    here.  So this number is a LOWER BOUND on the real hoop stress, it is
+    labelled as one, and it GATES NOTHING: a run is never refused on it.  What
+    it is good for is the obvious answer — a ring already past its own strength
+    carrying nothing but itself is finished before the magnets are added.
+
+    Returns {sigma_hoop_MPa, strength_MPa, utilisation_pct, r_mean_mm, rpm,
+    material, density} or None when there is no sleeve / no speed / no strength
+    figure on the material.
+    """
+    try:
+        t_mm = float(geo_cfg.get("sleeve_thickness", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return None
+    if t_mm <= 0.0:
+        return None
+    try:
+        from motor_ai_sim.masses import part_material
+        from motor_ai_sim.geometry.motor_geometry import derived_geometry
+        r_ro = derived_geometry(dict(geo_cfg)).get("rotor_outer_radius")
+        if not r_ro or float(r_ro) <= 0.0:
+            return None
+        rho, _kf, name = part_material("sleeve")
+        r_mean_m = (float(r_ro) + 0.5 * t_mm) * 1e-3
+        omega = 2.0 * math.pi * float(rpm) / 60.0
+        sigma_pa = float(rho) * omega * omega * r_mean_m * r_mean_m
+        strength = None
+        for _cat in ("insulator", "conductor", "steel"):
+            try:
+                from motor_ai_sim.materials import get_material as _gm
+                strength = getattr(_gm(_cat, name), "tensile_strength_mpa", None)
+                break
+            except Exception:      # noqa: BLE001 — wrong category, keep looking
+                continue
+        out = {
+            "sigma_hoop_MPa": round(sigma_pa * 1e-6, 3),
+            "r_mean_mm": round(r_mean_m * 1e3, 3),
+            "rpm": round(float(rpm), 1),
+            "material": name or "",
+            "density_kg_m3": round(float(rho), 1),
+            "thickness_mm": round(t_mm, 4),
+        }
+        if strength:
+            out["strength_MPa"] = float(strength)
+            out["utilisation_pct"] = round(
+                100.0 * sigma_pa * 1e-6 / float(strength), 2)
+        return out
+    except Exception as _e:      # noqa: BLE001 — a stress figure must never
+        log.warning("sleeve hoop stress unavailable: %s", _e)
+        return None               # sink a summary
+
+
 def _compute_masses(p, geo_cfg: dict, k_end: float = 0.0) -> dict:
     """Calculate mass of each motor component.
 
@@ -3485,37 +5851,88 @@ def _compute_masses(p, geo_cfg: dict, k_end: float = 0.0) -> dict:
     """
     # SINGLE SOURCE: motor_ai_sim.masses.compute_masses — identical mass to the sweep
     # and all three optimizers (CAD sections × stack × k_f × assigned density).
-    from motor_ai_sim.masses import compute_masses
+    from motor_ai_sim.masses import compute_masses, rotor_inertia_kg_m2
     m = compute_masses(p, geo_cfg, k_end=k_end)
     m_total = m["total"]
+    _MASS_KEY = {"stator_core": "stator", "rotor_core": "rotor",
+                 "magnet": "mag", "slot": "cu", "shaft": "shaft",
+                 "sleeve": "sleeve"}
     _mat = m["MAT"]
     _rho = m["RHO"]
     _lam = ", lamination k_f={:.3f}"
+    try:
+        _J = rotor_inertia_kg_m2(p, geo_cfg)
+        _rotor_J = {"J_kg_m2": float(_J["total"]),
+                    "J_kg_cm2": round(float(_J["total"]) * 1e4, 3),
+                    "rotor_iron": float(_J["rotor_iron"]),
+                    "magnet": float(_J["magnet"]), "shaft": float(_J["shaft"]),
+                    "sleeve": float(_J.get("sleeve", 0.0) or 0.0),
+                    # A reference/excluded part contributes 0 above; what it
+                    # WOULD have contributed is kept so the drop is explainable.
+                    "J_modelled": _J.get("J_modelled"),
+                    "part_states": _J.get("states") or {},
+                    "source": _J["source"]}
+    except Exception as _je:   # noqa: BLE001 — inertia must never sink the summary
+        log.warning("rotor inertia computation failed: %s", _je)
+        _rotor_J = None
+    # Per-part accounting state (included / reference / excluded).  A REFERENCE
+    # part keeps its row — the card and the datasheet must SAY that a shaft is
+    # customer-supplied rather than let it vanish and leave the reader to
+    # wonder — carrying mass 0 (it is not ours) plus the mass it was modelled
+    # at.  An EXCLUDED part is not there at all, so its row is dropped.
+    _state = m.get("STATE") or {}
+    _phys = m.get("PHYS") or {}
+    from motor_ai_sim.part_states import state_note as _snote, REFERENCE as _REF
+
+    def _row(part: str, name: str, material: str, rho: float, vol_m3: float,
+             mass_kg: float, note: str) -> Optional[dict]:
+        st = _state.get(part)
+        if st and st != _REF:                       # excluded → no row at all
+            return None
+        d = {"name": name, "material": material, "density_kg_m3": rho,
+             "volume_cm3": round(vol_m3 * 1e6, 1),
+             "mass_kg": round(mass_kg, 3), "note": note}
+        if st == _REF:
+            d["state"] = _REF
+            d["counted"] = False
+            d["mass_modelled_kg"] = round(float(_phys.get(_MASS_KEY[part], 0.0)), 3)
+            d["name"] = f"{name} — customer-supplied"
+            d["note"] = (_snote(part, _mat.get(part) or material, st)
+                         + f" ({d['mass_modelled_kg']:.3f} kg modelled); " + note)
+        return d
+
     return {
-        "components": [
-            {"name": f"Stator core ({_mat['stator_core'] or 'steel'})", "material": "electrical steel",
-             "density_kg_m3": _rho["steel"],
-             "volume_cm3": round(m["V_stator"]*1e6, 1), "mass_kg": round(m["stator"], 3),
-             "note": f"CAD section {m['A_stator']*1e6:.0f} mm² × stack"
-                     + _lam.format(m["k_f_stator"])},
-            {"name": "Copper windings (Cu)",    "material": _mat["slot"] or "copper",
-             "density_kg_m3": _rho["cu"],
-             "volume_cm3": round(m["V_cu"]*1e6, 1), "mass_kg": round(m["cu"], 3),
-             "note": f"measured copper section {m['A_cu']*1e6:.0f} mm² × stack × k_end {m['k_end']:.3f}"},
-            {"name": f"Magnets ({_mat['magnet'] or 'PM'})",  "material": "NdFeB",
-             "density_kg_m3": _rho["mag"],
-             "volume_cm3": round(m["V_mag"]*1e6, 1), "mass_kg": round(m["mag"], 3),
-             "note": f"CAD magnet polygons {m['A_mag']*1e6:.0f} mm² × stack"},
-            {"name": f"Rotor back-iron ({_mat['rotor_core'] or 'steel'})", "material": "electrical steel",
-             "density_kg_m3": _rho["steel_rotor"],
-             "volume_cm3": round(m["V_rotor"]*1e6, 1), "mass_kg": round(m["rotor"], 3),
-             "note": f"CAD section {m['A_rotor']*1e6:.0f} mm² × stack"
-                     + _lam.format(m["k_f_rotor"])},
-            {"name": f"Shaft ({_mat['shaft'] or 'shaft'})",  "material": "shaft",
-             "density_kg_m3": _rho["al"],
-             "volume_cm3": round(m["V_shaft"]*1e6, 1), "mass_kg": round(m["shaft"], 3),
-             "note": f"hollow shaft tube {m['A_shaft']*1e6:.0f} mm² × stack — NOT in active mass"},
-        ],
+        "components": [c for c in (
+            _row("stator_core", f"Stator core ({_mat['stator_core'] or 'steel'})",
+                 "electrical steel", _rho["steel"], m["V_stator"], m["stator"],
+                 f"CAD section {m['A_stator']*1e6:.0f} mm² × stack"
+                 + _lam.format(m["k_f_stator"])),
+            _row("slot", "Copper windings (Cu)", _mat["slot"] or "copper",
+                 _rho["cu"], m["V_cu"], m["cu"],
+                 f"measured copper section {m['A_cu']*1e6:.0f} mm² × stack × k_end {m['k_end']:.3f}"),
+            _row("magnet", f"Magnets ({_mat['magnet'] or 'PM'})", "NdFeB",
+                 _rho["mag"], m["V_mag"], m["mag"],
+                 f"CAD magnet polygons {m['A_mag']*1e6:.0f} mm² × stack"),
+            _row("rotor_core", f"Rotor back-iron ({_mat['rotor_core'] or 'steel'})",
+                 "electrical steel", _rho["steel_rotor"], m["V_rotor"], m["rotor"],
+                 f"CAD section {m['A_rotor']*1e6:.0f} mm² × stack"
+                 + _lam.format(m["k_f_rotor"])),
+            _row("shaft", f"Shaft ({_mat['shaft'] or 'shaft'})", "shaft",
+                 _rho["al"], m["V_shaft"], m["shaft"],
+                 f"hollow shaft tube {m['A_shaft']*1e6:.0f} mm² × stack — NOT in active mass"),
+            # The retaining sleeve exists only when it has a section: a row of
+            # 0.000 kg on the 99 % of machines that carry no ring would be
+            # noise, and worse, it would imply a part that is not there.
+            (_row("sleeve", f"Sleeve ({_mat.get('sleeve') or 'CFRP'})",
+                  "carbon fibre", _rho.get("sleeve", 0.0), m.get("V_sleeve", 0.0),
+                  m.get("sleeve", 0.0),
+                  f"retaining ring {m.get('A_sleeve', 0.0)*1e6:.1f} mm² × stack "
+                  f"— NOT in active mass")
+             if float(m.get("A_sleeve", 0.0) or 0.0) > 0.0 else None),
+        ) if c is not None],
+        # The accounting states this mass was computed under, so a restored
+        # summary can still say WHY its total is what it is.
+        "part_states": {k: v for k, v in _state.items()},
         # ACTIVE = the EM-active mass (iron + copper + magnets), the basis ANSYS
         # quotes; TOTAL = active + shaft, the historical divisor of torque-per-mass
         # (unchanged, so stored Compare points keep their meaning).
@@ -3523,8 +5940,340 @@ def _compute_masses(p, geo_cfg: dict, k_end: float = 0.0) -> dict:
         "mass_total_kg": round(m_total, 3),
         "total_active_kg": round(m_total, 3),   # legacy name = TOTAL, kept for old readers
         "area_source": m["area_source"],
+        # Rotor moment of inertia about the shaft axis — ∬r²dA over the SAME
+        # CAD polygons the mass uses (rotor iron billed at its lamination k_f,
+        # magnets and shaft solid), × stack × density.  SI in the payload;
+        # the UI shows kg·cm² (the unit drive-sizing sheets speak).
+        "rotor_inertia": _rotor_J,
         "note": "Active section only (no housing/frame/bearings). Typical frame adds 30-50% mass.",
         "estimated_total_with_frame_kg": round(m_total * 1.4, 2),
+    }
+
+
+# Bump when the summary gains a derived quantity: cached/restored results carry
+# their summary AS STORED, so without this stamp a new cell (Km, rotor inertia)
+# never appeared on any cached point — the card silently lacked it until the
+# user happened to re-solve.
+# v3 (2026-08-23): + demag coefficient (volume-weighted Br kept / loss %).
+# v4 (2026-08-23): demag coefficient is ENERGY-based (BH ∝ Br², user's spec)
+#                  + effective grade.
+# v5 (2026-08-23): + saturation torque droop (vs the unsaturated 1.5·p·ψ_PM·iq).
+# v6 (2026-08-24): + 3D end-effect correction (Stage A k_flux per machine).
+# v7 (2026-08-24): + bench Ld/Lq (small-signal probe at I≈0, cached per
+#                  machine+connection — computed automatically on live-machine
+#                  runs, cache-read here).
+# v8 (2026-08-24): + no-load KV from ψ_PM (KV_noload_rpm_per_V_line) — zero
+#                  extra solves, the loaded run's cached I=0 probe.
+# v9 (2026-08-24): chord Ld withheld when cross-saturation dominates it
+#                  (checked against the run's own saturation droop) — restored
+#                  summaries rebuild so contaminated chord values drop out.
+# v10 (2026-08-26): + phase copper cross-section (A_phase_mm2).
+# v11 (2026-08-30): + wire coating factor, MEASURED on the CAD polygons (copper
+#                  over the winding window the teeth leave) — the number that
+#                  says whether this winding can actually be wound.
+# v12 (2026-09-01): + per-part accounting states (included / reference /
+#                  excluded).  A stored summary from before this stamp has no
+#                  `part_states` and its mass rows carry no `state`, so a
+#                  frameless build's "customer-supplied shaft" label would
+#                  never appear on a restored card without the rebuild.
+# v13 (2026-09-01): saturation reference includes the BENCH reluctance term
+#                  (1.5·p·(Ld−Lq)·i_d·i_q) and droop_pct is floored at 0, so
+#                  the Saturation koef can never read above 100 % — a stored
+#                  summary from v12 could show 101.6 % at γ ≠ 0 on a salient
+#                  rotor (PM-only reference), which the rebuild corrects.
+# v14 (2026-09-01): + battery_charge + I_phase_rms_solved_A.
+# v15 (2026-09-04): the HEAT SPLIT — P_loss_stator_W / P_loss_rotor_W and the
+#                  core loss per half (P_core_stator_W / P_core_rotor_W).  A
+#                  stored summary from v14 has neither, and the two cells are
+#                  what a cooling design is sized on, so it is worth a rebuild.
+# v16 (2026-09-08): the MECHANICAL half of the loss picture, server-side —
+#                  P_bearings_W / P_windage_W / P_mech_extra_W, the bearing
+#                  temperature and where it came from, P_loss_total_incl_mech_W,
+#                  P_shaft_net_W and efficiency_shaft.  Until now those four
+#                  cells were computed in the BROWSER from /api/bearings/losses
+#                  and the stored run knew nothing about them, so the datasheet,
+#                  the report, Compare and the coupled loop all read a machine
+#                  whose largest sub-3000-rpm loss was missing.  Worth a rebuild:
+#                  the numbers are arithmetic over the run's own rpm and mass
+#                  rows plus the machine's bearing cards, so a stored result can
+#                  be given them honestly without re-solving anything.
+_SUMMARY_SHAPE_V = 17   # v17: mean |B| in the air gap (2026-09-10)
+# NOT bumped for the eddy-settle verdict (2026-09-07): a solver payload from
+# before that date cannot say whether its warm-up settled, so rebuilding an old
+# summary would stamp a default "settled: true" into it — a claim nobody
+# measured.  Absent stays absent, and the card stays silent about those runs;
+# every result solved since carries the verdict from its own solve.
+
+
+def _end3d_lookup(geo_fp: Optional[str], geo: Optional[dict] = None,
+                  exact: bool = False) -> Optional[dict]:
+    """The Stage A end-effect passport for THIS machine, or None.
+
+    config/end_effect_passports.json is keyed by the same `_geometry_fingerprint`
+    the stale-machine banner uses, so a passport can never be served for a
+    different motor than the one on screen.  A 2-D transient overestimates the
+    flux of a short stack (the field spills axially past the laminations); the
+    3-D static Stage A measures the factor once per machine — 0.952 on the
+    40 mm, 0.927 on the 85 mm (stack 13 mm on Ø85 spills hard)."""
+    if not geo_fp:
+        return None
+    try:
+        import json as _json
+        from pathlib import Path
+        from motor_ai_sim.config import DEFAULT_CONFIG_PATH
+        _p = Path(DEFAULT_CONFIG_PATH).parent / "end_effect_passports.json"
+        store = _json.loads(_p.read_text(encoding="utf-8")) or {}
+        rec = store.get(str(geo_fp))
+        if isinstance(rec, dict):
+            return dict(rec)
+        if exact:
+            return None
+        # No passport for THIS geometry.  User 2026-09-03: the coefficient must
+        # not vanish the moment a slot or a magnet is edited — keep the last
+        # one measured on the SAME machine (slots/poles/OD) and say it needs a
+        # Stage A re-run.  The catalog's passport builder asks for exact=True
+        # so an inherited value never suppresses a real measurement there.
+        desc = _machine_desc(geo)
+        if not desc:
+            return None
+        cands = [(k, v) for k, v in store.items()
+                 if isinstance(v, dict) and v.get("machine") == desc
+                 and v.get("k_flux") is not None]
+        if not cands:
+            return None
+        _when = lambda v: str(v.get("adopted_utc") or v.get("generated_utc") or "")  # noqa: E731
+        k, v = max(cands, key=lambda kv: _when(kv[1]))
+        return {**v, "inherited": True, "inherited_from": k,
+                "inherited_note": (
+                    f"coefficient of an EARLIER geometry of this machine "
+                    f"({desc}, passport {_when(v)[:10] or 'undated'}) — the "
+                    f"current geometry has no Stage A passport yet; recompute "
+                    f"to confirm or replace it")}
+    except Exception:   # noqa: BLE001 — no passport is a normal state
+        return None
+
+
+def _machine_desc(geo: Optional[dict] = None) -> Optional[str]:
+    """`24s/28p OD 85` — the machine in the words the passports are stamped
+    with (static3d.viewer.machine_summary → routes/catalog), from the live
+    config geometry with an optional per-request override on top."""
+    try:
+        from motor_ai_sim.config import get_config as _gc
+        g = dict((_gc().get("geometry") or {}))
+        if geo:
+            g.update({kk: vv for kk, vv in dict(geo).items() if vv is not None})
+        ns = int(g.get("num_seg") or 0)
+        sl = int(g.get("num_slots_per_segment") or 0)
+        pl = int(g.get("num_poles_per_segment") or 0)
+        od = float(g.get("stator_diameter") or 0)
+        if not (ns and sl and pl and od):
+            return None
+        return f"{ns * sl}s/{ns * pl}p OD {od:g}"
+    except Exception:   # noqa: BLE001
+        return None
+
+
+def _demag_with_grade(dsum):
+    """Attach the nominal/effective GRADE to the demag aggregate.
+
+    The number in a NdFeB grade name (N52, F45SH) is (BH)max in MGOe, and the
+    kept-energy fraction is exactly (BH)'/(BH) — so nominal × kept is the grade
+    the magnet has effectively become.  Parsed from the ASSIGNED magnet name;
+    a name without digits just skips the grade line."""
+    if not isinstance(dsum, dict):
+        return dsum
+    out = dict(dsum)
+    try:
+        import re as _re
+        from motor_ai_sim.config import get_config as _gc
+        name = str((_gc().get("materials") or {}).get("magnet") or "")
+        m = _re.search(r"(\d+)", name)
+        if m and out.get("bh_kept_vol_pct") is not None:
+            g0 = float(m.group(1))
+            out["grade_nominal"] = g0
+            out["grade_effective"] = round(
+                g0 * float(out["bh_kept_vol_pct"]) / 100.0, 1)
+            out["magnet_name"] = name
+    except Exception:   # noqa: BLE001 — the grade line is garnish, never fatal
+        pass
+    # The same integral in JOULES: E = (BH)max·V of the whole magnet system,
+    # lost fraction = 1 − ⟨k²⟩.  (BH)max = Br²/(4·μ0·μ_rec) of the ASSIGNED
+    # grade at its record temperature; V from the mass model's own CAD magnet
+    # section — the integral the % was taken over, so the two cannot disagree.
+    try:
+        import math as _m2
+        from motor_ai_sim.config import get_config as _gc2
+        from motor_ai_sim.materials import get_material as _gm
+        from motor_ai_sim.optimization.design_eval import build_params as _bp
+        from motor_ai_sim.masses import cad_areas_m2 as _ca
+        name = str((_gc2().get("materials") or {}).get("magnet") or "")
+        mat = _gm("magnet", name)
+        geo = dict(_gc2().get("geometry") or {})
+        A = _ca(geo)
+        if mat is not None and A and out.get("bh_kept_vol_pct") is not None:
+            V = float(A["magnet"]) * float(_bp(geo).stack_length)
+            bh_max = float(mat.Br) ** 2 / (4.0 * 4e-7 * _m2.pi
+                                           * float(getattr(mat, "mu_rec", 1.05)))
+            e_tot = bh_max * V
+            out["energy_total_J"] = round(e_tot, 2)
+            out["energy_lost_J"] = round(
+                e_tot * (1.0 - float(out["bh_kept_vol_pct"]) / 100.0), 3)
+    except Exception:   # noqa: BLE001 — garnish, never fatal
+        pass
+    return out
+
+
+def _refresh_summary_shape(res: dict) -> dict:
+    """Rebuild a cached result's summary when its SHAPE predates the code.
+
+    Only possible for results that recorded their summary build args (stashed
+    since the same commit that introduced the stamp); older entries are served
+    as-is and refresh naturally on the next real solve.  Purely derived-number
+    work — the solver payload is untouched, so this is milliseconds (the mass
+    sections and the inertia polar moments are memoised by geometry)."""
+    try:
+        s = res.get("summary") or {}
+        _cur = int(s.get("summary_shape_v", 1) or 1) >= _SUMMARY_SHAPE_V
+        # Same shape is NOT always fresh: a Stage-A passport can be measured
+        # AFTER the run was solved — the stored summary then carries
+        # end3d=null at the current version, and without this clause the new
+        # correction would never reach any existing result.
+        _passport_arrived = (s.get("end3d") is None
+                             and _end3d_lookup(res.get("geo_fingerprint"))
+                             is not None)
+        if _cur and not _passport_arrived:
+            return res
+        args = res.get("_summary_args")
+        if not isinstance(args, dict):
+            return res                    # pre-stash entry — cannot rebuild honestly
+        out = dict(res)
+        out["summary"] = _build_transient_summary(
+            out, I_phase_rms=float(args["I_phase_rms"]),
+            gamma_deg=float(args["gamma_deg"]),
+            coil_temp_c=float(args["coil_temp_c"]),
+            geo_override=args.get("geo_override"),
+            mode_requested=args.get("mode_requested"))
+        return out
+    except Exception as _e:   # noqa: BLE001 — a refresh failure must not eat the hit
+        log.warning("summary shape refresh failed: %s", _e)
+        return res
+
+
+def _mech_loss_fields(sbres: dict, *, geo_override: Optional[dict],
+                      rpm: float, p_mech_w: float, p_loss_w: float,
+                      efficiency: float, op_mode: str,
+                      mass_components: Optional[list] = None) -> dict:
+    """The MECHANICAL half of this run's loss picture, or ``{}``.
+
+    User, 2026-09-08: *"все потери должны передаваться в электромагнитный
+    расчёт"*.  Until today the bearing friction and the rotor windage were
+    computed in the BROWSER, from ``/api/bearings/losses``, and pasted into four
+    cells of the summary table; the run that was stored — the thing the
+    datasheet, the report, Compare and the coupled loop read — carried none of
+    them.  On the measured 150 mm free run those two were 43–170 W out of
+    83–319 W, the largest single term below 3000 rpm, so every stored efficiency
+    was optimistic by an amount nobody could see in the payload.
+
+    Now they ride WITH the run.  The physics is unchanged and still ANALYTIC (the
+    SKF frictional-moment model plus Couette/disc windage — see
+    ``motor_ai_sim.bearings``); what changed is that one implementation
+    (``mech_losses``) answers for the route, this summary, the thermal solve and
+    the orchestrator instead of four callers each doing their own arithmetic.
+
+    THREE GATES, and all three are the point:
+
+      * a machine that names NO BEARINGS gets ``{}`` — the fields are ABSENT, not
+        zero.  An unknown mechanical loss printed as 0 W is an efficiency nobody
+        measured (the house rule the ``/losses`` route already follows);
+      * a BACKGROUND solve (``_BACKGROUND_RUN`` — a passport sweep point, a
+        search probe) gets ``{}``: an optimizer candidate is not a machine
+        anybody has chosen bearings for, and paying a die read plus a CAD mass
+        measurement per candidate is exactly the cost those gates exist to avoid;
+      * a CANDIDATE geometry (a per-request override that is not the machine on
+        screen) gets ``{}`` for the same reason — its fingerprint says it is not
+        the motor whose die file the bearings are written in.
+
+    ``efficiency_shaft`` is DERIVED from ``efficiency`` rather than recomputed
+    from a loss sum, so the two can never disagree — identical arithmetic to
+    ``datasheet``, ``report`` and the summary table's own cell:
+
+        motor      eta_shaft = eta · (1 − P_extra/P_mech)
+        generator  eta_shaft = eta / (1 + P_extra/P_mech)
+
+    which is ``P_shaft_net / (P_shaft_net + every loss)`` in both directions —
+    the mechanical losses sit BETWEEN the rotor and the coupling, so motoring
+    they come off the output and generating they go onto the input.
+    """
+    try:
+        if _BACKGROUND_RUN.get():
+            return {}
+        # "Is this the motor on screen?" — the same resolved-fingerprint test
+        # `get_fem_transient` uses for the field snapshot and the persisted last
+        # run, so the three can never disagree about which runs are the user's.
+        if geo_override:
+            fp = sbres.get("geo_fingerprint") or _geometry_fingerprint(geo_override)
+            if fp != _geometry_fingerprint(None):
+                return {}
+        from motor_ai_sim import mech_losses as _ml
+
+        assignment, _die, _cfg = _ml.machine_bearings()
+        from motor_ai_sim import bearings as _brg
+        if not _brg.has_bearings(assignment):
+            return {}
+        # The ROTATING mass THIS summary is being billed at — the very mass rows
+        # the card shows, not a fresh CAD measurement, so the bearing load and
+        # the torque density beside it come from the same kilograms.  `None`
+        # falls through to the CAD inside `machine_mech_losses`.
+        mass = _ml.rotor_mass_from_summary(
+            {"mass_components": list(mass_components or ())})
+        mech = _ml.machine_mech_losses(
+            rpm=float(rpm), assignment=assignment, die=_die, config=_cfg,
+            geo_override=geo_override, rotor_mass_kg_=mass,
+            geometry_fingerprint=sbres.get("geo_fingerprint"),
+            resolve_machine=False)
+    except Exception as exc:  # noqa: BLE001 — a bearing card must not sink a run
+        log.warning("summary: the mechanical loss block could not be built (%s)",
+                    exc)
+        return {}
+    if not mech:
+        return {}
+
+    p_brg = float(mech.get("P_bearings_W") or 0.0)
+    p_wind = float(mech.get("P_windage_W") or 0.0)
+    p_extra = float(mech.get("P_mech_extra_W") or 0.0)
+    p_mech = abs(float(p_mech_w or 0.0))
+    gen = str(op_mode) == "generator"
+    x = (p_extra / p_mech) if p_mech > 0.0 else None
+    if x is None:
+        eta_shaft = None
+        p_shaft_net = None
+    elif gen:
+        # Quoted POSITIVE like every other generator number on this card: the
+        # shaft has to SUPPLY the rotor's mechanical power plus the friction that
+        # never reaches it, so the coupling sees more than the rotor does.
+        p_shaft_net = p_mech + p_extra
+        eta_shaft = float(efficiency) / (1.0 + x)
+    else:
+        p_shaft_net = p_mech - p_extra
+        eta_shaft = float(efficiency) * max(0.0, 1.0 - x)
+    return {
+        "P_bearings_W": round(p_brg, 2),
+        "P_windage_W": round(p_wind, 3),
+        "P_mech_extra_W": round(p_extra, 2),
+        "bearing_temp_c": mech.get("bearing_temp_c"),
+        "bearing_temp_source": mech.get("bearing_temp_source"),
+        "bearing_temp_note": mech.get("bearing_temp_note"),
+        # What a calorimeter around the ASSEMBLED machine would read: the solved
+        # electromagnetic loss plus the two analytic mechanical terms.
+        "P_loss_total_incl_mech_W": round(float(p_loss_w) + p_extra, 1),
+        "P_shaft_net_W": (None if p_shaft_net is None
+                          else round(float(p_shaft_net), 1)),
+        "P_shaft_convention": ("rotor power PLUS the mechanical losses — what the "
+                               "coupling must supply" if gen else
+                               "rotor power MINUS the mechanical losses — what "
+                               "leaves at the coupling"),
+        "efficiency_shaft": (None if eta_shaft is None else round(eta_shaft, 4)),
+        "mech_losses": _ml.summary_block(mech),
     }
 
 
@@ -3597,6 +6346,45 @@ def _build_transient_summary(
     _Pfe = _mean("P_fe_W")
     _Pmag = _mean("P_mag_eddy_W")
     _Pshaft = _mean("P_shaft_eddy_W")   # solid-shaft eddy (bulk conductor)
+    # Carbon-fibre retaining sleeve — 0.0 on every machine without one, and on
+    # a stored result that predates the feature (`_mean` of a missing key).
+    _Psleeve = _mean("P_sleeve_eddy_W")
+    # DC (I²R) copper alone for the motor constant below: Km's definition uses
+    # the OHMIC loss — the price of torque — not the frequency-dependent AC
+    # add-on, so Km stays a property of the winding, not of the speed.
+    _Pcu_dc = float(sbres.get("P_cu_dc_W", 0.0) or 0.0) or _Pcu
+
+    # ── HEAT TO REMOVE, PER SIDE (user 2026-09-04) ───────────────────────
+    # Two numbers a cooling engineer can act on: what the STATOR has to shed
+    # and what the ROTOR has to shed.  Nothing is invented and nothing is
+    # dropped — every watt in `_ploss` below is attributed to the body it is
+    # dissipated in:
+    #   stator = stator iron + ALL copper (I²R incl. end-winding + AC/prox)
+    #   rotor  = rotor iron + magnet eddy + shaft eddy + sleeve eddy
+    # The iron split is the solver's OWN per-half Bertotti/surface breakdown
+    # (`P_fe_terms`), renormalised onto the reported core loss so the two
+    # halves add up to the Core tile exactly (the terms are rounded to 3
+    # decimals and the reported series is clipped at 0).
+    _fe_terms = sbres.get("P_fe_terms") or {}
+
+    def _half_fe(_h: str) -> float:
+        _t = _fe_terms.get(_h) or {}
+        return (float(_t.get("hysteresis_W", 0.0) or 0.0)
+                + float(_t.get("eddy_W", 0.0) or 0.0)
+                + float(_t.get("excess_W", 0.0) or 0.0))
+    _fe_halves = _half_fe("stator") + _half_fe("rotor")
+    # A stored run from before the per-half breakdown existed cannot be split
+    # honestly.  The whole core loss then goes to the STATOR — where all but a
+    # few percent of it physically is on a surface-PM machine — and the flag
+    # says the split was assumed, so the card and the datasheet can say so
+    # instead of quoting a number nobody measured.
+    _fe_split_known = bool(_fe_terms) and _fe_halves > 0.0
+    _Pfe_s = (_Pfe * _half_fe("stator") / _fe_halves) if _fe_split_known else _Pfe
+    # stator = stator iron + ALL copper.  The rotor side is (_Pfe − _Pfe_s) +
+    # _Pmag + _Pshaft + _Psleeve, but it is REPORTED as the complement of this
+    # one against the reported total, so the two cells can never round apart
+    # from the Total-loss tile they are billed against.
+    _P_stator = _Pcu + _Pfe_s
 
     # Voltage figures from the ACTUAL waveforms.  The old shortcuts
     # (rms = pk/√2, line = √3·phase) hold only for a pure balanced sinusoid:
@@ -3607,9 +6395,15 @@ def _build_transient_summary(
     # battery/inverter sizing.  Fall back to the shortcuts only when the
     # per-frame series are missing (old stored runs).
     import numpy as _np_v
+    # TERMINAL CONNECTION of this run — every line / terminal quantity in
+    # this summary is mapped by it, once, here (see the STAR / DELTA block in
+    # fem_solver_2d for the physics).  The solver's own numbers are WINDING
+    # quantities in both connections.
+    _is_delta = str(sbres.get("star_delta") or "star").lower().startswith("d")
+    _sq3 = _math.sqrt(3.0)
     _Vpk = float(sbres.get("V_peak", 0.0))
     _Vrms = _Vpk / _math.sqrt(2)
-    _Vlpk = _Vpk * _math.sqrt(3)
+    _Vlpk = _Vpk * (1.0 if _is_delta else _sq3)
     _Vlrms = _Vlpk / _math.sqrt(2)
     _vs = [sbres.get(k) for k in ("V_A", "V_B", "V_C")]
     if all(isinstance(v, (list, tuple)) and len(v) == len(_vs[0]) and len(v) >= 4
@@ -3620,14 +6414,24 @@ def _build_transient_summary(
         _Vpk = float(max(_np_v.max(_np_v.abs(p)) for p in (_va, _vb, _vc)))
         _Vrms = float(_np_v.mean([_np_v.sqrt(_np_v.mean(p ** 2))
                                   for p in (_va, _vb, _vc)]))
-        _lls = (_va - _vb, _vb - _vc, _vc - _va)
+        # LINE-TO-LINE, per the terminal connection.  Star: the difference of
+        # two phase voltages.  Delta: the winding IS the line, minus its
+        # zero-sequence part — the triplen EMF drives the circulating current
+        # round the closed loop and never reaches the terminals (user
+        # 2026-09-12: "в дельте линейные должны быть равны фазным").  Both
+        # are what the DC bus has to cover; sqrt(3)x a phase peak is neither.
+        if _is_delta:
+            _v0 = (_va + _vb + _vc) / 3.0
+            _lls = (_va - _v0, _vb - _v0, _vc - _v0)
+        else:
+            _lls = (_va - _vb, _vb - _vc, _vc - _va)
         _Vlpk = float(max(_np_v.max(_np_v.abs(p)) for p in _lls))
         _Vlrms = float(_np_v.mean([_np_v.sqrt(_np_v.mean(p ** 2))
                                    for p in _lls]))
 
     # Total INCLUDES shaft eddy so the breakdown sums to the same loss the solver's
     # energy-balanced P_mech subtracts (else the card's Mech-power ≠ Σ losses).
-    _ploss = _Pcu + _Pfe + _Pmag + _Pshaft
+    _ploss = _Pcu + _Pfe + _Pmag + _Pshaft + _Psleeve
     # Efficiency = shaft out / (shaft out + EVERY loss the card reports).  The
     # solved-circuit P_elec_in_W is NOT the denominator: the 2-D circuit only
     # carries the losses that live in the field solve (active-length copper +
@@ -3673,10 +6477,20 @@ def _build_transient_summary(
     # distorted back-EMF forces through the winding.
     from motor_ai_sim.simulation.postproc import current_harmonics as _iharm
     _ih = _iharm(sbres)
+    # The mirror of harm_ref's voltage→current extraction: current→voltage, so
+    # a run done on the current drive hands the imposed-voltage sources the
+    # fundamental that reproduces it.  See postproc.fundamental_voltage.
+    from motor_ai_sim.simulation.postproc import (
+        fundamental_voltage as _vseed_fn)
+    _vseed = _vseed_fn(sbres)
     # Voltage drive: the requested I_phase_rms is 0 — use the run's own
     # fundamental current for Kt so the card stays meaningful in both modes.
+    # (Both imposed-VOLTAGE sources — the sinusoid and the PWM inverter — reach
+    # here with I_phase_rms = 0; custom_current carries its own waveform, whose
+    # fundamental is also not I_phase_rms, so it takes the same route.)
     _kt_I = float(I_phase_rms or 0.0)
-    if _kt_I <= 1e-9 and str(sbres.get("drive", "")).startswith("v"):
+    if _kt_I <= 1e-9 and str(sbres.get("drive", "")) in (
+            "voltage", "pwm_voltage", "custom_current", "bldc_current"):
         try:
             from motor_ai_sim.simulation.postproc import fundamental_current
             _kt_I = float(fundamental_current(sbres)["I1_phase_rms_A"])
@@ -3696,11 +6510,55 @@ def _build_transient_summary(
     # config's value quoted a J_coil the machine never saw.
     _wind = _gc().get("winding", {})
     _npar = max(1, int(sbres.get("n_parallel") or _wind.get("n_parallel", 1) or 1))
+    # STRANDS IN HAND multiply the paths for every current-splitting purpose:
+    # k wires in hand means each physical wire carries I_coil/k, so J and the
+    # phase's conductor section are built on n_parallel x wire_parallel
+    # (winding.n_parallel_effective).  `wire_split` is NOT in it: a row's strips
+    # are series TURNS, each carrying the whole branch current.  The run reports
+    # its own (it may have solved a per-request geometry override the shared
+    # config knows nothing about); the config is the fallback.
+    try:
+        from motor_ai_sim.winding import (wire_parallel_from_geo as _wp_geo,
+                                          wire_split_from_geo as _ws_geo,
+                                          n_parallel_effective as _npe,
+                                          turns_per_coil as _tpc)
+        _wpar = int(sbres.get("wire_parallel") or _wp_geo(_geo_cfg))
+        _turns = int(sbres.get("turns_per_coil") or _tpc(_geo_cfg))
+        _wsplit = int(sbres.get("wire_split") or _ws_geo(_geo_cfg))
+        _npar_eff_cfg = int(_npe(_npar, _geo_cfg))
+    except Exception:       # noqa: BLE001 — a summary is never worth a 500
+        _wpar, _turns = 1, int(float(_geo_cfg.get("num_wires_per_slot", 0) or 0))
+        _wsplit, _npar_eff_cfg = 1, _npar
+    _npar_eff = max(1, int(sbres.get("n_parallel_eff") or _npar_eff_cfg))
     # …and the label those paths belong to, so the card can name the winding it
     # is reporting (empty when the run carried no consistent label).
     _conn = str(sbres.get("connection") or "")
-    _a_cond_mm2 = float(_geo_cfg.get("wire_width", 0.0)) * float(_geo_cfg.get("wire_height", 0.0))
-    _j_coil = (float(I_phase_rms) / _npar / _a_cond_mm2) if _a_cond_mm2 > 1e-9 else 0.0
+    # The conductor J is measured on is the DRAWN one — one STRIP, which is
+    # wire_width × wire_height whether or not there is a split (wire_split lays
+    # N of them side by side, it does not subdivide the width).  `_npar_eff`
+    # below does NOT carry the split: the strips are series turns and each one
+    # carries the branch current whole, so J is the same as the unsplit row's.
+    try:
+        from motor_ai_sim.winding import strip_width_mm as _strip_w
+        _a_cond_mm2 = _strip_w(_geo_cfg) * float(_geo_cfg.get("wire_height", 0.0))
+    except Exception:       # noqa: BLE001 — a summary is never worth a 500
+        _a_cond_mm2 = (float(_geo_cfg.get("wire_width", 0.0))
+                       * float(_geo_cfg.get("wire_height", 0.0)))
+    # _kt_I, not the raw requested I_phase_rms: in voltage drive the request
+    # carries I=0 while real current flows, and dividing the request quoted
+    # J = 0 A/mm² on the card next to a non-zero copper loss.  _kt_I is the
+    # run's measured fundamental in that mode and the requested current
+    # otherwise — the same effective current Kt is built on.
+    _j_coil = (_kt_I / _npar_eff / _a_cond_mm2) if _a_cond_mm2 > 1e-9 else 0.0
+    # Wire coating, measured on the same polygons the mesher sees (cached per
+    # geometry, so this costs nothing on a repeat run).  Never fatal: a machine
+    # whose CAD will not build still gets its summary, just without the cell.
+    try:
+        from motor_ai_sim.masses import slot_fill_from_cad
+        _slot_fill = slot_fill_from_cad(dict(_geo_cfg))
+    except Exception as _sfe:   # noqa: BLE001
+        log.warning("wire coating measurement failed: %s", _sfe)
+        _slot_fill = None
 
     # ── R and L-dq of this operating point ───────────────────────────────────
     # R_phase comes out of the solve and ALREADY includes the end-winding
@@ -3713,6 +6571,7 @@ def _build_transient_summary(
     # frame cannot be trusted: the dq torque identity must reproduce the energy
     # torque, and ψq at no load must be small next to ψ_PM.
     _Ld_mH = _Lq_mH = _psi_pm = None
+    _sat_droop = None          # set below only when ψ_PM and i_q both resolved
     _dq_note = ""
     try:
         _psid = sbres.get("psi_d_Wb"); _psiq = sbres.get("psi_q_Wb")
@@ -3740,17 +6599,105 @@ def _build_transient_summary(
                 _psi_pm = float(_pm)
                 if abs(float(_iqm)) > 1e-3:
                     _Lq_mH = 1e3 * float(_psiq) / float(_iqm)
-                if abs(float(_idm)) > 1e-3:
+                # Ld divides (ψd − ψ_PM_noload) by i_d — but under load the
+                # iron's cross-saturation shifts ψd by ~1-2 % of ψ_PM even at
+                # i_d = 0, and that shift lands in the numerator.  A small
+                # i_d cannot outweigh it (measured live: γ = 2° on a machine
+                # with Lq/Ld ~ 1 read Ld = 0.169 mH vs Lq 0.040 — the whole
+                # excess was Δψ_saturation/i_d).  Report Ld only when i_d
+                # carries at least 10 % of the current (γ ≳ 6°); below that
+                # the number would be cross-saturation, not inductance.
+                _i_pk = (float(_idm) ** 2 + float(_iqm) ** 2) ** 0.5
+                if abs(float(_idm)) >= max(1e-3, 0.10 * _i_pk):
                     _Ld_mH = 1e3 * (float(_psid) - _psi_pm) / float(_idm)
                 else:
-                    _dq_note = ("i_d ≈ 0 at γ = %.1f° — Ld needs d-axis "
-                                "current; set γ ≠ 0 and re-run" % float(gamma_deg))
+                    _dq_note = (
+                        "i_d is only %.1f%% of the current at γ = %.1f° — "
+                        "(ψd − ψ_PM)/i_d would be dominated by cross-"
+                        "saturation of the loaded iron, not by inductance; "
+                        "set γ ≥ ~6° and re-run to measure Ld honestly"
+                        % (100.0 * abs(float(_idm)) / max(_i_pk, 1e-9),
+                           float(gamma_deg)))
     except Exception as _el:   # noqa: BLE001
         _dq_note = f"{type(_el).__name__}: {_el}"
 
+    # ── Saturation torque droop (needs the ψ_PM the block above resolved) ────
+    try:
+        _iq_s = sbres.get("i_q_A")
+        _id_s = sbres.get("i_d_A")
+        if _psi_pm is not None and _iq_s is not None and abs(float(_iq_s)) > 1e-3:
+            _pp_s = int(dict(_geo_cfg).get("num_poles", 0)) // 2
+            _T_lin = 1.5 * _pp_s * _psi_pm * float(_iq_s)
+            # The linear REFERENCE includes the reluctance term off the BENCH
+            # (small-signal, I≈0, unsaturated) Ld/Lq whenever the machine has
+            # them: at γ ≠ 0 on a salient rotor the measured torque carries
+            # 1.5·p·(Ld−Lq)·i_d·i_q, and a PM-only reference put that term in
+            # the numerator alone — the koef read 101.6 % on the 85 mm at
+            # γ = 2° (user 2026-09-01: "не может быть больше 100%").  With the
+            # bench reluctance inside, the ratio measures IRON SATURATION
+            # alone; a saturated machine sits below its unsaturated linear
+            # twin by construction, and the clamp below covers the fallback
+            # when no bench Ld/Lq exist for this machine yet.
+            _T_rel = None
+            try:
+                _b = (_bench_read(sbres.get("geo_fingerprint"),
+                                  sbres.get("connection")) or {})
+                if _b.get("Ld_mH") and _b.get("Lq_mH") and _id_s is not None:
+                    _T_rel = (1.5 * _pp_s
+                              * (float(_b["Ld_mH"]) - float(_b["Lq_mH"])) * 1e-3
+                              * float(_id_s) * float(_iq_s))
+                    _T_lin += _T_rel
+            except Exception:   # noqa: BLE001 — no bench, PM-only reference
+                _T_rel = None
+            if abs(_T_lin) > 1e-6 and _Tavg > 0:
+                _sat_droop = {
+                    "T_linear_Nm": round(abs(_T_lin), 3),
+                    "droop_pct": round(max(0.0, 100.0 * (1.0 - _Tavg / abs(_T_lin))), 2),
+                }
+                if _T_rel is not None:
+                    _sat_droop["T_reluctance_Nm"] = round(_T_rel, 4)
+    except Exception:   # noqa: BLE001 — a droop failure must not sink the summary
+        _sat_droop = None
+
+    # ── Cross-saturation dominance check on the chord Ld ─────────────────────
+    # The i_d-fraction gate above is not enough under DEEP saturation: at
+    # γ = 8°, 89 A the run's own droop said ψ_PM sags 10.1 % under load, and
+    # (droop·ψ_PM)/i_d accounted for the chord Ld reading 0.116 mH against a
+    # bench 0.041 (excess ×i_d = 1.32 mWb = exactly the 10 % sag — measured
+    # live).  When the sag term dominates the numerator, the "inductance" is
+    # mostly iron state, not flux-per-amp — withhold it; the card then shows
+    # the bench value, which IS the machine constant.
+    try:
+        if _Ld_mH is not None and _sat_droop is not None and _psi_pm:
+            _sag = abs(float(_sat_droop["droop_pct"])) / 100.0 * abs(_psi_pm)
+            _numer = abs(float(sbres.get("psi_d_Wb")) - _psi_pm)
+            if _numer > 1e-12 and _sag > 0.4 * _numer:
+                _dq_note = (
+                    "loaded iron sags ψ_PM by %.1f%% — ~%.0f%% of the chord-Ld "
+                    "numerator is cross-saturation, not flux-per-amp; chord Ld "
+                    "withheld (bench Ld is the machine constant)"
+                    % (float(_sat_droop["droop_pct"]),
+                       min(100.0, 100.0 * _sag / _numer)))
+                _Ld_mH = None
+    except Exception:   # noqa: BLE001
+        pass
+
     return {
         "rpm": _rpm,
-        "I_phase_rms_A": round(float(I_phase_rms), 2),
+        # I_phase_rms_A is the TERMINAL current — the setpoint the panel holds,
+        # the three leads to the inverter — in BOTH connections.  It has to be:
+        # every staleness check in the app compares this field with the panel
+        # field, and the catalog rows, Compare and the datasheet all read it as
+        # "the current this point was set to".  (The builder's `I_phase_rms`
+        # argument is the WINDING current the field was driven with; in delta
+        # they differ by sqrt(3), and a summary carrying the winding value here
+        # left the card permanently "stale" — user 2026-09-12: "экран так и
+        # остаётся замыленным".)
+        "I_phase_rms_A": round(float(I_phase_rms) * (_sq3 if _is_delta else 1.0), 2),
+        "I_terminal_rms_A": round(float(I_phase_rms) * (_sq3 if _is_delta else 1.0), 2),
+        # WINDING current — what the field saw, what J coil and Kt per winding
+        # amp are billed on.  Equals the terminal current in star.
+        "I_winding_rms_A": round(float(I_phase_rms), 2),
         "gamma_deg": round(float(gamma_deg), 2),
         # The winding these numbers belong to.  Torque, voltage and R_phase all
         # move with the connection, so a card that does not name it cannot be
@@ -3758,17 +6705,49 @@ def _build_transient_summary(
         # connection and nothing moved" became unanswerable.
         "connection": _conn,
         "n_parallel": _npar,
+        # STRANDS IN HAND, STRIPS PER ROW, and what they make the coil.  The
+        # slot holds num_wires_per_slot wire ROWS of wire_split strips each, a
+        # row's strips being consecutive SERIES turns; turns_per_coil =
+        # (rows / wire_parallel) × wire_split is what the EMF, Kt and R were
+        # solved on, and n_parallel_eff (paths × wire_parallel — the split
+        # divides no current) is the divider both the coil current and the flux
+        # linkage carry.  Both are on the card because the split moves KV,
+        # R_phase and the voltage as well as the slot width, and the numbers are
+        # where the user checks it landed.
+        "wire_parallel": int(_wpar),
+        "turns_per_coil": int(_turns),
+        "n_parallel_eff": int(_npar_eff),
         "op_mode": _op_mode,
         # op_mode above is DERIVED from the power-flow sign — honest physics,
         # but useless for "is this run the panel's point?" checks: near a
         # zero-crossing (or an unconventional γ) a generator-mode request can
         # measure motoring power.  This is the mode the request ASKED for.
         "op_mode_requested": mode_requested,
+        # WHICH EXCITATION SOURCE produced these numbers.  The summary is what
+        # outlives the run (sim.lastSummary, .last_transient.json, Compare, the
+        # motor autosave), and the V₁ seed below only means "the voltage that
+        # reproduces this point" when the point was solved with the CURRENT as
+        # the input — on a voltage/PWM run it is just the voltage that was
+        # applied.  Nothing downstream can tell those apart without this field.
+        "drive": str(sbres.get("drive") or "current"),
         # Terminal parameters, persisted with every run (they ride the summary
         # into sim.lastSummary, .last_transient.json, Compare and the motor
         # autosave — one write path, no separate store to rot).
         "R_phase_ohm": (round(_R_ph, 6) if _R_ph else None),
-        "R_line_line_ohm": (round(2.0 * _R_ph, 6) if _R_ph else None),
+        # Terminal-to-terminal: two windings in series (star) or one winding
+        # in parallel with the other two in series (delta) — what an ohmmeter
+        # across two leads reads.
+        "R_line_line_ohm": (round((2.0 / 3.0 if _is_delta else 2.0) * _R_ph, 6)
+                            if _R_ph else None),
+        # STAR-EQUIVALENT per-phase values: the R and L a datasheet quotes
+        # "per phase" for a delta machine are those of the equivalent star,
+        # one third of the winding's own.  Identical to the winding in star.
+        "R_phase_eq_star_ohm": (round(_R_ph / (3.0 if _is_delta else 1.0), 6)
+                                if _R_ph else None),
+        "Ld_eq_star_mH": (None if _Ld_mH is None
+                          else round(_Ld_mH / (3.0 if _is_delta else 1.0), 4)),
+        "Lq_eq_star_mH": (None if _Lq_mH is None
+                          else round(_Lq_mH / (3.0 if _is_delta else 1.0), 4)),
         "Ld_mH": (None if _Ld_mH is None else round(_Ld_mH, 4)),
         "Lq_mH": (None if _Lq_mH is None else round(_Lq_mH, 4)),
         "psi_pm_Wb": (None if _psi_pm is None else round(_psi_pm, 6)),
@@ -3789,6 +6768,31 @@ def _build_transient_summary(
         "V_phase_rms_V": round(_Vrms, 1),
         "V_line_peak_V": round(_Vlpk, 1),
         "V_line_rms_V": round(_Vlrms, 1),
+        # TERMINAL CONNECTION.  The line numbers above are the star mapping
+        # (sqrt(3)x phase); these are the solver's own, taken off the solved
+        # waveforms for the connection actually selected — in delta the winding
+        # IS the line, and neither connection puts the zero-sequence triplen on
+        # the terminals, so this is the number the DC bus has to cover.
+        "star_delta": str(sbres.get("star_delta") or "star"),
+        # …and, on a voltage/PWM delta run, WHICH CIRCUIT solved it: the star
+        # equivalent on a √3-scaled bus (user 2026-09-14 / PWM study B1).  Keyed
+        # only when it applies, so a star run and a current-drive delta run keep
+        # the summary they have always had, byte for byte.
+        **({"delta_equivalent_star": sbres["delta_equivalent_star"]}
+           if isinstance(sbres.get("delta_equivalent_star"), dict) else {}),
+        "strand_bonding": str(sbres.get("strand_bonding") or "transposed"),
+        "V_line_peak_solved_V": (
+            None if sbres.get("V_line_peak_solved_V") is None
+            else round(float(sbres["V_line_peak_solved_V"]), 1)),
+        "V_line_rms_solved_V": (
+            None if sbres.get("V_line_rms_solved_V") is None
+            else round(float(sbres["V_line_rms_solved_V"]), 1)),
+        "I_line_rms_A": (None if sbres.get("I_line_rms_A") is None
+                         else round(float(sbres["I_line_rms_A"]), 1)),
+        "L0_mH": sbres.get("L0_mH"),
+        "P_cu_circulating_W": round(float(sbres.get("P_cu_circulating_W")
+                                          or 0.0), 1),
+        "circulating_harmonics": list(sbres.get("circulating_harmonics") or []),
         # KV = rpm / V_peak — the user's (and their Ansys table's) convention:
         # max(rpm)/max(voltage), i.e. the PEAK of the waveform shown right next
         # to this tile, not the fundamental rms (which read ~sqrt(2) higher and
@@ -3797,34 +6801,131 @@ def _build_transient_summary(
         # back-EMF KV; a true no-load KV needs an I=0 run (harm_screening E1).
         "KV_rpm_per_V_phase": (round(_rpm / _Vpk, 2) if _Vpk > 1 else 0.0),
         "KV_rpm_per_V_line": (round(_rpm / _Vlpk, 2) if _Vlpk > 1 else 0.0),
+        # NO-LOAD KV from the LOADED run, zero extra solves (user's ask): the
+        # back-EMF fundamental is ω_e·ψ_PM with the ψ_PM this summary already
+        # measured (cached I=0 probe), so E_line_peak = √3·ω_e·ψ_PM and
+        # KV_nl = rpm/E_line_peak — what a spun-by-hand bench reads, free of
+        # the IR/IL drop and the load's saturation that sit inside the loaded
+        # KV above.  Fundamental only: back-EMF harmonics are excluded.
+        "KV_noload_rpm_per_V_line": (lambda _fe: (
+            round(_rpm / ((1.0 if _is_delta else _sq3)
+                          * 2.0 * math.pi * _fe * _psi_pm), 2)
+            if _psi_pm and _fe and _fe > 0 and _rpm > 0 else None))(
+                float(sbres.get("f_elec_Hz", 0.0) or 0.0)),
         "V1_LL_V":        _vh.get("V1_LL_V", 0.0),
         "V1_phase_V":     _vh["V1_phase_V"],
         "THD_pct":        _vh["THD_pct"],
         "THD_LL_pct":     _vh["THD_LL_pct"],
         "I1_A":           _ih["I1_A"],
         "THD_I_pct":      _ih["THD_I_pct"],
-        "Kt_Nm_per_Arms": _kt,
+        # ── SEED FOR AN IMPOSED-VOLTAGE RUN ──────────────────────────────
+        # The fundamental of the SOLVED terminal voltage, in exactly the
+        # (v_phase_peak, v_delta_deg) coordinates drive="voltage" and
+        # drive="pwm_voltage" take.  This is the two-pass workflow the user
+        # works in: fix the operating point on the CURRENT drive (where the
+        # torque is the thing you dial in), read these two numbers, then run
+        # the inverter at the fundamental that reproduces that current — a PWM
+        # run driven at a guessed V is a run at a load angle nobody chose.
+        # Reported on every drive: on a voltage/PWM run it comes back as the
+        # amplitude and angle that were applied, which is a free self-check.
+        **_vseed,
+        "Kt_Nm_per_Arms": _kt,          # per WINDING (phase) amp, both connections
+        # Per LINE amp — what the inverter's current rating is set against.
+        # Same number in star; √3 smaller in delta.
+        "Kt_Nm_per_A_line": round(_kt / (_sq3 if _is_delta else 1.0), 4),
         "J_coil_A_per_mm2": round(_j_coil, 1),   # I_rms/parallel over one strand's copper section
+        # Copper cross-section the PHASE current flows through: one strand ×
+        # the parallel paths.  J_phase = I_phase / A_phase equals J_coil by
+        # construction, so the two cells cross-check each other.
+        "A_phase_mm2": round(_a_cond_mm2 * max(1.0, float(_npar_eff)), 3),
+        # Wire coating: measured conductor area over the winding window the teeth
+        # leave — geometry, not a wound-in assumption.  None when the CAD cannot
+        # build the cross-section.
+        **((lambda _sf: ({} if not _sf else {
+            "slot_fill_pct": round(100.0 * _sf["fill"], 1),
+            "A_slot_mm2": round(_sf["A_slot_mm2"], 1),
+            "A_copper_slotted_mm2": round(_sf["A_cu_mm2"], 1),
+        }))(_slot_fill)),
         "P_loss_total_W": round(_ploss, 1),
+        # Mean |B| over the AIR-GAP clearance, averaged over the period — the
+        # number a machine is sized on before anything else, and the one the
+        # summary never carried (user 2026-09-10: "для электромагнитного
+        # анализа надо ещё рассчитывать среднее поле в зазоре и писать это
+        # число в таблицу").  Area-weighted over the elements between the
+        # outermost rotating metal and the stator bore, so it is a mean of the
+        # field and not of the mesh.  Absent (None) on a result solved before
+        # the feature, which is what keeps a stale card from printing a zero.
+        **({"B_gap_mean_T": round(_mean("B_gap_mean_T"), 4)}
+           if sbres.get("B_gap_mean_T") else {}),
         "P_core_W":     round(_Pfe, 1),            # laminated iron
         # Which Bertotti TERM the core loss is, stator vs rotor.  "The core loss
         # reads low" is only answerable by the split, and the card had no way to
         # show it.  {stator|rotor: hysteresis_W, eddy_W, excess_W, k_f}.
         "P_core_terms": sbres.get("P_fe_terms") or {},
+        # The core loss, per half — the two numbers the heat split below is
+        # built on, reported in their own right because "which side is the iron
+        # loss in" is a cooling question the Core tile could not answer.
+        "P_core_stator_W": round(_Pfe_s, 1),
+        "P_core_rotor_W":  round(_Pfe - _Pfe_s, 1),
+        # ── HEAT TO REMOVE, PER SIDE ─────────────────────────────────────
+        # stator = stator iron + all copper; rotor = rotor iron + magnet +
+        # shaft + sleeve eddy.  They sum to P_loss_total_W BY CONSTRUCTION
+        # (the rotor cell is the complement of the stator cell at the same
+        # 0.1 W resolution), so the card can never show a split that leaks
+        # watts.  False on `P_loss_split_measured` = this run carries no
+        # per-half iron breakdown and the whole core loss was put on the
+        # stator; the tooltips say so.
+        "P_loss_stator_W": round(_P_stator, 1),
+        "P_loss_rotor_W":  round(round(_ploss, 1) - round(_P_stator, 1), 1),
+        "P_loss_split_measured": bool(_fe_split_known),
         "P_stranded_W": round(_Pcu, 1),            # copper
-        # ── copper-AC honesty: wire_split is NOT in the solved value ─────
-        # ``wire_split`` subdivides the bar into insulated, transposed strips.
-        # It is an ELECTRICAL subdivision with no CAD geometry behind it, so
-        # the mesher gets the whole bar and the coupled σ·∂A/∂t solve reports
-        # the AC loss of a SOLID drawn conductor — up to wire_split² too much on
-        # the width-direction term.  (The modelled proximity path does divide by
-        # it, simulation/losses.copper_ac_dims.)  Flagged rather than silently
-        # corrected: correcting it needs the strips in the mesh.
-        "wire_split": int(float(_geo_cfg.get("wire_split", 1) or 1)),
-        "cu_ac_solved_ignores_wire_split":
-            bool(sbres.get("eddy_coupled")
-                 and float(_geo_cfg.get("wire_split", 1) or 1) > 1),
-        "P_solid_W":    round(_Pmag + _Pshaft, 1), # magnet + shaft eddy
+        # ── copper AC and the split ──────────────────────────────────────
+        # ``wire_split`` = N lays N strips of wire_width side by side per wire
+        # row, 2·wire_spacing_x apart.  Since 2026-09-08 those strips are REAL
+        # GEOMETRY: the CAD draws them, the mesher gets them as N separate
+        # conductors and the coupled σ·∂A/∂t solve imposes each one's own net
+        # current — so the solved copper AC is the honest loss of the narrow
+        # strips, not of the wide bar they replaced.
+        #
+        # The flag stays in the payload (the card reads it, and every stored
+        # summary carries it) but it is now always False: there is nothing left
+        # for the solve to ignore.  It used to fire whenever the coupled solve
+        # ran on a split machine, back when the split was electrical-only —
+        # strips of wire_width/N with no CAD behind them, assumed ideally
+        # transposed — and the mesher was handed the whole bar.  That reading is
+        # retired.
+        "wire_split": int(_wsplit),
+        "cu_ac_solved_ignores_wire_split": False,
+        "P_solid_W":    round(_Pmag + _Pshaft + _Psleeve, 1),  # magnet + shaft + sleeve eddy
+        # The two big solid conductors on their own (user 2026-09-07: "добавь
+        # потери в валу"): the shaft eddy loss is the rotor's largest single
+        # heat source on a sleeved machine, and a card that only showed their
+        # sum could not say so.
+        "P_mag_W":      round(_Pmag, 1),
+        "P_shaft_W":    round(_Pshaft, 1),
+        # Broken out because a CFRP ring is milliwatts next to the magnets: at
+        # 0.1 W resolution it would vanish into P_solid_W and the card would say
+        # nothing about a part the user can see in the 3-D view.  Absent (None)
+        # when the machine has no sleeve, so no card grows an empty row.
+        "P_sleeve_W":   (round(_Psleeve, 4) if _Psleeve else None),
+        # "P_solid_W above is a zero that means NOT SOLVED, not no loss."
+        # Imposed-voltage runs used to be exactly that: the solver force-dropped
+        # the conducting rotor on every one of them, and the missing watts
+        # flattered the efficiency (measured live 2026-08-31, a PWM run read a
+        # HIGHER efficiency than its sinusoid reference purely because ~4 W of
+        # magnet loss fell off the books).  They are solved now — the (A, U, i)
+        # bordered Newton carries the magnet/shaft σ·∂A/∂t under the imposed
+        # voltage — so the flag follows what the solver ACTUALLY SOLVED
+        # (rotor_eddy_solved) instead of the drive name.  It therefore still
+        # fires for a caller who asked for rotor_eddy=False, and for the
+        # SB_VDRIVE_ROTOR_EDDY=0 escape hatch.  The SummaryTable keys off its
+        # presence and needs no change when it is absent.
+        # A stale/restored result predates rotor_eddy_solved; the drive test is
+        # kept in front so such a payload reads exactly as it did before rather
+        # than claiming a solved run was never solved.
+        "solid_loss_not_solved": bool(
+            str(sbres.get("drive") or "current") in ("voltage", "pwm_voltage")
+            and not sbres.get("rotor_eddy_solved")),
         # AXIAL magnet segmentation (`magnet_lamination`): the factor the 2-D
         # magnet eddy loss was multiplied by, and the loop width it was derived
         # from.  {} on a run that predates it; factor 1.0 on a solid magnet.
@@ -3834,7 +6935,38 @@ def _build_transient_summary(
         # It belongs beside P_solid_W because that is the number an un-settled
         # window corrupts first (measured 262 W against a settled 68 W on the
         # 150 mm), so the card that shows it can say what it cost to be honest.
+        # Since 2026-09-05 this count also carries the demag PRE-PASS (one more
+        # discarded electrical period on an eddy+demag run, where the Br ratchet
+        # is finally allowed to look at a settled field); `demag_prepass_frames`
+        # says how many of the frames were that, so the tooltip can name it.
         "eddy_warmup_frames": int(sbres.get("eddy_warmup_frames") or 0),
+        "demag_prepass_frames": int(sbres.get("demag_prepass_frames") or 0),
+        # …and whether that warm-up actually WORKED (user, 2026-09-07).  The
+        # frame count alone was read as proof of a settled window; it is not —
+        # the march can end at its one-shot cap with the transient still
+        # running, which is what the 90-point sweep of that day did on all 90
+        # points (57 frames each) while its shaft eddy loss swung 504 → 3558 →
+        # 6652 W between neighbouring air gaps.  When eddy_settled is False the
+        # Solid tile beside this says so, because that tile is the number the
+        # unsettled window corrupts first.
+        # None, not True, when the solve did not say: a payload from before
+        # 2026-09-07 (or a restored old result) has no verdict to report, and
+        # inventing "settled" for it would be the very claim this change ends.
+        # The card treats null exactly as it treated the missing key.
+        "eddy_settled": (None if sbres.get("eddy_settled") is None
+                         else bool(sbres["eddy_settled"])),
+        "eddy_capped": (None if sbres.get("eddy_capped") is None
+                        else bool(sbres["eddy_capped"])),
+        "eddy_settle_residual": sbres.get("eddy_settle_residual"),
+        "eddy_settle_tol": sbres.get("eddy_settle_tol"),
+        # Did this run CONTINUE a previous one's state instead of solving it?
+        # Both are False on every interactive Run by construction — the flag
+        # that allows it (SB_SEED_FROM_PREVIOUS) is set only in the optimizer's
+        # eval environment (user 2026-09-06, "каждый следующий расчёт берётся
+        # из предыдущего", which is a rule about sweeps).  Carried anyway, so a
+        # saved simulation states it rather than leaving it to be assumed.
+        "warm_seeded": bool(sbres.get("warm_seeded", False)),
+        "demag_seeded": bool(sbres.get("demag_seeded", False)),
         "efficiency":   round(_eff, 4),
         # Energy-balance diagnostics: the solved terminal power and the solver's
         # balanced mech power.  P_elec_in_solved − P_mech_balance = the losses
@@ -3847,6 +6979,18 @@ def _build_transient_summary(
         # convergence test; if one did not, these numbers are an average over
         # a field that was never converged, and the card says so instead of
         # leaving it in a log line nobody reads.
+        # ── imposed-voltage / PWM settling honesty (B5, PWM study 2026-09-13)
+        # The DC left in the phase currents of the REPORTED electrical period,
+        # worst phase.  It is 0 A on a converged orbit, and when it is not, it
+        # IS the reported torque ripple and current ripple: the L155 peak duty
+        # came back with 55 % ripple against the machine's own 0.9 % while
+        # carrying 43 A of DC on a 433 A fundamental.  None on an imposed-
+        # current run (no circuit state to settle) and on any payload from
+        # before this existed.
+        "pwm_dc_residual_A": sbres.get("v_dc_residual_A"),
+        "pwm_dc_residual_phase": sbres.get("v_dc_residual_phase"),
+        "pwm_dc_tol_A": sbres.get("v_dc_residual_tol_A"),
+        "pwm_dc_unconverged": sbres.get("v_dc_unconverged"),
         "nonlinear_converged": bool(sbres.get("picard_converged", True)),
         "nonlinear_resid_max": float(sbres.get("picard_resid_max", 0.0) or 0.0),
         "nonlinear_tol": float(sbres.get("picard_tol", 0.0) or 0.0),
@@ -3868,7 +7012,90 @@ def _build_transient_summary(
         "mass_active_kg": round(_m_active, 3),
         "mass_area_source": _masses.get("area_source", ""),
         "mass_components": _masses["components"],
+        # Per-part accounting (included / reference / excluded).  Empty on a
+        # default machine, so a card built before this feature reads the same.
+        "part_states": _masses.get("part_states") or {},
+        # Rotor moment of inertia about the shaft axis (∬r²dA on the mass's own
+        # CAD polygons; rotor iron at its lamination k_f) — drive sizing needs
+        # it next to the torque, not in a separate tool.
+        "rotor_inertia": _masses.get("rotor_inertia"),
+        # Retaining-sleeve burst check — None on a machine without a sleeve, so
+        # no existing card grows a row.  Reported, never gating: see
+        # _sleeve_hoop for what it leaves out (the magnet pressure).
+        "sleeve_hoop": _sleeve_hoop(_geo_cfg, _rpm),
+        # Demagnetisation coefficient — present only when the run modelled
+        # irreversible demag.  Headline = bh_loss_pct, the volume-weighted
+        # ENERGY-product deficit ((BH)max ∝ Br², user's criterion): it speaks
+        # grade language — kept-energy × the nominal grade number (N52 = 52
+        # MGOe) is the grade the magnet has effectively become.  The Br-based
+        # flux/torque bound rides along for the drive view.
+        "demag": _demag_with_grade(sbres.get("demag_summary")),
+        # 3D end-effect correction — Stage A k_flux for THIS machine (by
+        # geometry fingerprint), with the 2D numbers it corrects: a 13 mm stack
+        # on Ø85 spills 7.3 % of its flux past the laminations, and the 2D
+        # solve cannot see it.
+        "end3d": (lambda _r: (None if not _r else {
+            **_r,
+            "T_corrected_Nm": round(_Tavg * float(_r["k_flux"]), 3),
+            "V_line_peak_corrected_V": (
+                round(_Vlpk * float(_r["k_flux"]), 2) if _Vlpk else None),
+        }))(_end3d_lookup(sbres.get("geo_fingerprint"))),
+        # Bench Ld/Lq — the LCR-meter measurement, simulated: small-signal
+        # values at the I≈0 iron state, per machine + connection.  Cache READ
+        # only (this builder also runs on restore rebuilds); the live-machine
+        # solve path fills the cache right before building this summary.
+        "bench_ldq": _bench_read(sbres.get("geo_fingerprint"),
+                                 sbres.get("connection")),
+        # Torque lost to SATURATION — the demag cell's sibling (user's point:
+        # torque falls to saturation too, and the two must not be conflated).
+        # Zero extra solves: the unsaturated PM torque is 1.5·p·ψ_PM·i_q with
+        # the ALREADY-measured no-load ψ_PM (cached per geometry) and the run's
+        # own dq current; the actual torque sits below it by exactly the
+        # saturation sag of ψd (the reluctance term can push it the other way —
+        # a negative droop is real, not an error).  Present only when the dq
+        # frame passed its self-check (ψ_PM/iq exist).
+        "saturation": _sat_droop,
+        # Motor constant Km = T / √P_cu_DC [N·m/√W] — torque per square root of
+        # the ohmic loss paid for it.  Operating-point-independent as long as
+        # the iron is not saturating (T ∝ I, P ∝ I²), which is why robotics
+        # sizes actuators on it; Km/m (the specific motor constant) is the
+        # figure of merit that survives scaling.  Computed at the SOLVED coil
+        # temperature — R grows ~39 %/100 °C, so a datasheet Km at 25 °C reads
+        # higher than the same machine hot.  No-load (P_cu→0) has no Km: null.
+        "Km_Nm_sqrtW": (round(_Tavg / _math.sqrt(_Pcu_dc), 4)
+                        if _Pcu_dc > 1e-9 and _Tavg > 0 else None),
+        "Km_per_mass_Nm_sqrtW_kg": (
+            round(_Tavg / _math.sqrt(_Pcu_dc) / max(_m_tot, 1e-6), 4)
+            if _Pcu_dc > 1e-9 and _Tavg > 0 else None),
+        # Shape version — bumped when a NEW derived quantity is added to this
+        # summary, so a cache/restore hit knows its stored summary is missing
+        # cells and rebuilds it with the current code (_refresh_summary_shape).
+        # v2: rotor_inertia + Km/Km-per-mass (2026-08-22).
+        "summary_shape_v": _SUMMARY_SHAPE_V,
         "torque_per_mass_Nm_kg": round(_Tavg / max(_m_tot, 1e-6), 3),
         "power_per_mass_W_kg":   round(_Pmech / max(_m_tot, 1e-6), 1),
         "loss_density_W_kg":     round(_ploss / max(_m_tot, 1e-6), 1),
+        # rms terminal phase current where the current was the ANSWER (imposed
+        # voltage / PWM / imposed waveform).  ABSENT on a current-drive run,
+        # where the request already says it — a key that appears only where it
+        # means something cannot contradict I_phase_rms_A.
+        **({} if sbres.get("I_phase_rms_solved_A") is None else {
+            "I_phase_rms_solved_A": round(
+                float(sbres["I_phase_rms_solved_A"]), 3)}),
+        # ── GENERATOR → BATTERY ──────────────────────────────────────────
+        # Presence-gated twice over: only a run that carried a `battery`
+        # payload AND drove the machine from an imposed voltage gets this key,
+        # so every stored case, every regression pin and every current-drive
+        # run reads exactly as it did before.
+        **((lambda _b: ({} if not _b else {"battery_charge": _b}))(
+            _battery_charge_block(sbres, op_mode=_op_mode, p_mech_w=_Pmech,
+                                  p_loss_w=_ploss))),
+        # ── THE MECHANICAL HALF (2026-09-08) ─────────────────────────────
+        # Bearings and windage, on the RUN instead of in the browser.  Absent
+        # — not zero — on a machine that names no bearings, on a background
+        # solve and on a candidate geometry; see `_mech_loss_fields`.
+        **_mech_loss_fields(
+            sbres, geo_override=geo_override, rpm=_rpm, p_mech_w=_Pmech,
+            p_loss_w=_ploss, efficiency=_eff, op_mode=_op_mode,
+            mass_components=_masses.get("components")),
     }

@@ -33,7 +33,10 @@ import type {
 
 type Panel = 'geometry' | 'mesh' | 'fields';
 
-const PRESET = 'my_40mm_last';
+// 'live' = the machine currently loaded in the app (backend snapshots the
+// active config per request); a preset name from motor_presets.json pins a
+// specific frozen design instead.
+const PRESET = 'live';
 const FIDELITIES = ['coarse', 'medium', 'passport'] as const;
 
 const lbl = { fontSize: 11, color: 'var(--text-3)', whiteSpace: 'nowrap' } as const;

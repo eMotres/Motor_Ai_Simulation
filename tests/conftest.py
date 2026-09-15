@@ -17,6 +17,7 @@ this happens here and not in a fixture.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import tempfile
 from pathlib import Path
@@ -27,6 +28,61 @@ _REAL_PRESETS = _ROOT / "config" / "motor_presets.json"
 
 _SANDBOX = Path(tempfile.mkdtemp(prefix="motor_ai_sim_tests_"))
 
+
+def _zero_the_sleeve(path: Path) -> None:
+    """Sandbox only: force ``geometry.sleeve_thickness`` to 0.
+
+    Fixtures across the suite pin their machine field by field but do NOT list
+    every geometry key; ``CadQueryMotor._map_api_to_cadquery`` fills the gaps
+    from the LOADED config, so an unpinned key is silently the user's.  That is
+    the F2 leak the physics-regression docstring tells at length — and on
+    2026-09-04 it bit through a key no fixture had ever heard of: the live
+    machine grew ``sleeve_thickness: 1`` (in a 1.6 mm gap, legal there), and
+    every fixture running a 0.2 / 0.65 mm air gap inherited a retaining ring
+    thicker than its own gap.  ~19 tests went red at once — geometry validation
+    refusing designs that are fine, and the d-axis calibration finding no psi
+    maximum in a machine whose rotor reaches the stator.
+
+    Pinning the key in each fixture would fix today's break and buy nothing:
+    the NEXT geometry key the product grows would leak exactly the same way.
+    Zeroing it once, here, makes "no sleeve" the sandbox default for the whole
+    suite, so a fixture that wants a ring has to ASK for one — tests/test_sleeve.py
+    passes ``sleeve_thickness=`` explicitly on every sleeved case (and asserts
+    that omitting it builds no ring), which is exactly that opt-in.
+
+    WIRE_PARALLEL, the same leak one key over (2026-09-09).  The live machine
+    grew ``wire_parallel: 4`` beside ``num_wires_per_slot: 24``, which is a legal
+    winding — four strands in hand, six turns.  Every fixture that pins its turn
+    count but not its strand count then inherited the 4: the 30 mm fixture winds
+    6 wires per slot, 6 is not divisible by 4, and ``wire_parallel_from_geo``
+    refuses by design ("1.5 turns per coil is not a winding").  The whole thermal
+    suite, the report suite and everything downstream of ``store_em_run`` errored
+    out before solving anything.  ``tests/test_physics_regression.py`` pinned the
+    key in ITS OWN dict after the same thing happened on 2026-09-03; pinning it
+    fixture by fixture fixes today's break and buys nothing, so — exactly like
+    the sleeve above — "one wire in hand" becomes the sandbox default and a
+    fixture that wants strands in hand asks for them (tests/test_wire_parallel.py
+    passes ``wire_parallel=`` on every case, and asserts that ``GEO_30MM`` alone
+    reads as 1).
+
+    Line-level on purpose: a yaml round-trip would rewrite the sandbox copy and
+    throw away the comments and ordering that some tests read the file for.
+    """
+    try:
+        txt = path.read_text(encoding="utf-8")
+    except Exception:
+        return
+    # Only a scalar `<key>: <number>` — never the geometry_schema block, where
+    # the same names introduce nested min/max mappings.
+    n_tot = 0
+    for key, value in (("sleeve_thickness", "0"), ("wire_parallel", "1")):
+        txt, n = re.subn(r"(?m)^(\s*%s:[ \t]*)[-+0-9.eE]+[ \t]*$" % key,
+                         r"\g<1>" + value, txt, count=1)
+        n_tot += n
+    if n_tot:
+        path.write_text(txt, encoding="utf-8")
+
+
 for _env, _real, _name in (("MOTOR_AI_SIM_CONFIG", _REAL_CONFIG, "motor_config.yaml"),
                            ("MOTOR_AI_SIM_PRESETS", _REAL_PRESETS, "motor_presets.json")):
     if os.environ.get(_env):
@@ -34,6 +90,8 @@ for _env, _real, _name in (("MOTOR_AI_SIM_CONFIG", _REAL_CONFIG, "motor_config.y
     _copy = _SANDBOX / _name
     if _real.exists():
         shutil.copy2(_real, _copy)
+        if _env == "MOTOR_AI_SIM_CONFIG":
+            _zero_the_sleeve(_copy)
     os.environ[_env] = str(_copy)
 
 import pytest                                             # noqa: E402

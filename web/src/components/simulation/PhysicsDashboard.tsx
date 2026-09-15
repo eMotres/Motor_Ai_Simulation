@@ -20,6 +20,9 @@ import FemFieldChart       from './FemFieldChart';
 import FemAnimationViewer  from './FemAnimationViewer';
 import TransientCharts     from './TransientCharts';
 import SummaryTable        from './SummaryTable';
+import StoredRunSelector   from './StoredRunSelector';
+import { useMotorStore }   from '../../stores/motorStore';
+import { geoSignature }    from '../common/geoSig';
 import type { TransientSummary } from './SummaryTable';
 import type { FemPayload } from './fem-types';
 
@@ -52,17 +55,34 @@ interface Props {
   eddyCoupled?:   boolean;
   // Band-limit T(t) to the physical 6·k orders (default ON; off = raw torque).
   torqueFilter?:  boolean;
-  // Transient drive mode: imposed sinusoidal current vs imposed sinusoidal
-  // voltage (FOC verification).  Threaded to TransientCharts only — the
-  // static/animation views stay current-driven (illustrative).
-  drive?:         'current' | 'voltage';
+  // Transient EXCITATION SOURCE — sinusoidal current, sinusoidal voltage (FOC
+  // verification), PWM inverter, 120° block, or an imposed waveform.  Threaded
+  // to TransientCharts only: the static / animation views stay current-driven
+  // (illustrative).
+  drive?:         'current' | 'voltage' | 'pwm_voltage' | 'custom_current'
+                  | 'bldc_current';
   vPeak?:         number;
   vDelta?:        number;
+  vBus?:          number;   // pwm_voltage: DC link [V]
+  fSwitch?:       number;   // pwm_voltage: carrier [Hz]
+  iBlock?:        number;   // bldc_current: flat-top block amplitude [A]
+  waveform?:      string;   // custom_current: JSON [[θe_deg, i_A], …]
+  // ── GENERATOR → BATTERY ─────────────────────────────────────────────
+  // The pack on the DC link and the two loops that use it.  Threaded to
+  // TransientCharts only, like every other drive-side field: the static and
+  // animation views stay current-driven and have no bridge.
+  battery?:       Record<string, unknown> | null;
+  busCouple?:     boolean;
+  chargeMax?:     boolean;
+  /** The panel's speed — the third coordinate of the operating point the
+   *  summary card checks itself against (2026-09-13: a card of the 22 900
+   *  rpm peak sat unflagged under a panel set to 20 900). */
+  rpm?:           number;
 }
 
 
 // ── main component ────────────────────────────────────────────────────────────
-const PhysicsDashboard: React.FC<Props> = ({ gamma_deg, I_phase_rms, connection = '', runNonce = 0, onBusyChange, steps = 12, fresh = false, onSummary, fieldLosses = true, demag = false, torqueFilter = false, eddyCoupled = true, drive = 'current', vPeak = 0, vDelta = 0 }) => {
+const PhysicsDashboard: React.FC<Props> = ({ gamma_deg, I_phase_rms, connection = '', runNonce = 0, onBusyChange, steps = 12, fresh = false, onSummary, fieldLosses = true, demag = false, torqueFilter = false, eddyCoupled = true, drive = 'current', vPeak = 0, vDelta = 0, vBus = 0, fSwitch = 0, iBlock = 0, waveform = '', battery = null, busCouple = false, chargeMax = false, rpm }) => {
   // Latest FEM solve payload — kept around so future siblings can reuse it.
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [_femPayload, setFemPayload] = React.useState<FemPayload | null>(null);
@@ -104,6 +124,23 @@ const PhysicsDashboard: React.FC<Props> = ({ gamma_deg, I_phase_rms, connection 
     if (runPending && transientSummary) { setAppliedSummary(null); setRunPending(false); }
   }, [runPending, transientSummary]);
   const shownSummary = appliedSummary ?? transientSummary;
+  // ── MACHINE IDENTITY of the shown numbers ──────────────────────────────
+  // The summary card is the LAST thing the user reads, and it kept presenting
+  // the previous machine's physics as current after another motor was loaded
+  // (user 2026-08-31: "при загрузке нового мотора остались данные со старого
+  // — этот косяк давным давно не исправляется").  The charts already carry
+  // two witnesses on every summary (_geoSig — this client's stamp of the run,
+  // _geoStaleBackend — the server's own fingerprint verdict on the restored
+  // last transient); the card just never looked at them.  An applied duty
+  // summary belongs to the machine that was just applied, so only the
+  // transient path is checked.
+  const liveGeometry = useMotorStore(st => st.geometry);
+  const liveGeoSig = React.useMemo(
+    () => geoSignature(liveGeometry as Record<string, unknown>), [liveGeometry]);
+  const summaryStale = !appliedSummary && !!transientSummary && (
+    ((transientSummary as any)._geoSig != null
+      && (transientSummary as any)._geoSig !== liveGeoSig)
+    || (transientSummary as any)._geoStaleBackend === true);
   // "vs applied point" delta chip removed (user request 2026-08-20): the
   // header line had no room for it and the η delta was routinely nonsense
   // when the applied point carried no recorded results.
@@ -129,13 +166,26 @@ const PhysicsDashboard: React.FC<Props> = ({ gamma_deg, I_phase_rms, connection 
             above a /physics fetch whose analytic MMF / B_r / loss estimates were
             all rendered into display:none Papers. */}
         <Chip label="real FEM" size="small" sx={{ fontSize: 10, bgcolor: 'var(--ok-bg)', color: '#4ade80' }}/>
+        {/* Which of this duty's SAVED runs is on screen (sine / PWM / BLDC).
+            Renders nothing until the loaded duty has more than one. */}
+        <StoredRunSelector />
         <Box sx={{ flex: 1 }}/>
       </Box>
 
       {/* ── Top-of-tab summary card — populated by TransientCharts, or by a
            design applied from the Sweep tab (numbers reused, no re-run) ── */}
-      <SummaryTable summary={shownSummary} fromSweep={!!appliedSummary}
-        liveOp={{ current: I_phase_rms, gamma: gamma_deg, connection }}/>
+      {summaryStale && (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5,
+          px: 1.25, py: 0.75, borderRadius: 1, bgcolor: 'rgba(239,68,68,0.10)',
+          border: '1px solid #b91c1c', color: '#f87171', fontSize: 12,
+          fontWeight: 700, alignSelf: 'flex-start' }}>
+          ⚠ STALE — DIFFERENT MACHINE · Run Simulation
+        </Box>
+      )}
+      <Box sx={summaryStale ? { opacity: 0.35, pointerEvents: 'none' } : undefined}>
+        <SummaryTable summary={shownSummary} fromSweep={!!appliedSummary}
+          liveOp={{ current: I_phase_rms, gamma: gamma_deg, connection, rpm }}/>
+      </Box>
 
       {/* ── Field viewer / animation — one widget covers both the static
             initial snapshot (frame[0] at rotor_angle = 0) AND the full
@@ -154,6 +204,8 @@ const PhysicsDashboard: React.FC<Props> = ({ gamma_deg, I_phase_rms, connection 
       <TransientCharts gamma_deg={gamma_deg} I_phase_rms={I_phase_rms} fieldLosses={fieldLosses}
         demag={demag} torqueFilter={torqueFilter} eddyCoupled={eddyCoupled}
         drive={drive} vPeak={vPeak} vDelta={vDelta}
+        vBus={vBus} fSwitch={fSwitch} iBlock={iBlock} waveform={waveform}
+        battery={battery as never} busCouple={busCouple} chargeMax={chargeMax}
         steps={steps} runNonce={runNonce} fresh={fresh} onBusyChange={onBusyChange}
         appliedFromSweep={!!appliedSummary}
         onSummary={setTransientSummary}/>

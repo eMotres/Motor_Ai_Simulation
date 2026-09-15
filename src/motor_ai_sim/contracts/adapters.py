@@ -55,6 +55,9 @@ def geometry_ir_from_polys(
     add("stator", RegionRole.STATOR, mats.get("stator"))
     add("rotor", RegionRole.ROTOR, mats.get("rotor"))
     add("shaft", RegionRole.SHAFT, mats.get("shaft"))
+    # None on every machine without a retaining ring, and `add` iterates the
+    # pieces of a missing polygon zero times — so nothing is emitted there.
+    add("sleeve", RegionRole.SLEEVE, mats.get("sleeve"))
     add("in_band", RegionRole.AIR_GAP, None)
     add("out_band", RegionRole.AIR_OUTER, None)
 
@@ -73,7 +76,7 @@ def geometry_ir_from_polys(
             rid = f"coil_{i}" if j == 0 else f"coil_{i}_{j}"
             regions.append(Region(id=rid, role=RegionRole.COIL, exterior=ext, holes=holes))
 
-    # slot liner + wire enamel: lists of Polygon (EM-inert; thermal/cost domains)
+    # insulation + wire enamel: lists of Polygon (EM-inert; thermal/cost domains)
     for key, role in (("slot_insulation", RegionRole.SLOT_INSULATION),
                       ("wire_insulation", RegionRole.WIRE_INSULATION)):
         for i, ip in enumerate(polys.get(key, []) or []):
@@ -114,6 +117,8 @@ def polys_from_geometry_ir(gir: Any) -> Dict[str, Any]:
             out["rotor"] = poly(r)
         elif role == "shaft":
             out["shaft"] = poly(r)
+        elif role == "sleeve":
+            out["sleeve"] = poly(r)
         elif role == "air_gap":
             out["in_band"] = poly(r)
         elif role == "air_outer":

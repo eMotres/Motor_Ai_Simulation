@@ -21,7 +21,7 @@ import re
 import threading
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -48,16 +48,77 @@ _scan_lock = threading.Lock()
 _scan_thread: Optional["threading.Thread"] = None   # the live worker (liveness guard)
 
 
+def _config_dir_o() -> str:
+    """The config folder THIS PROCESS is pointed at — ``MOTOR_AI_SIM_CONFIG``
+    included.  Resolved per call, exactly as ``_descent_store_path`` below and
+    ``routes/panel_settings._store_path`` already do it.
+
+    2026-09-15: the four sweep/eval stores under here were pinned to the repo's
+    own config/ and all four are WRITTEN, so a redirected process overwrote the
+    chart, the eval cache and the eval-rate history of the machine the user has
+    open.  With no env var set this is byte-identical to the old expression.
+    """
+    try:
+        from motor_ai_sim.config import DEFAULT_CONFIG_PATH as _cp
+        return os.path.dirname(str(_cp))
+    except Exception:                   # noqa: BLE001
+        return os.path.join(os.path.dirname(__file__), "..", "..", "..", "config")
+
+
 def _scan_store_path() -> str:
-    return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "config", ".last_scan.json"))
+    return os.path.abspath(os.path.join(_config_dir_o(), ".last_scan.json"))
+
+
+def _machine_stamp(exclude_geo_keys=()) -> Dict[str, Any]:
+    """WHICH MACHINE a sweep belongs to.
+
+    User 2026-09-10: *"опять косяк, я запускал sweep одних параметров, а в
+    результате получил старый sweep от другого мотора"* — and the panel was
+    showing exactly that: `.last_scan.json` is reloaded into the scan state
+    every time the backend starts, and a restored chart looked like an answer.
+    A sweep is only meaningful for the machine it was computed on, so it now
+    carries that machine's identity and the client can refuse a foreign one.
+
+    The fingerprint is the SAME one the eval cache is keyed by, so "the cache
+    would miss" and "the chart is foreign" can never disagree.
+    """
+    stamp: Dict[str, Any] = {"fingerprint": _config_fingerprint(exclude_geo_keys),
+                             "swept": sorted(str(k) for k in (exclude_geo_keys or ()))}
+    try:
+        ctx_path = os.path.abspath(os.path.join(_config_dir_o(),
+                                                ".family_context.json"))
+        if os.path.exists(ctx_path):
+            with open(ctx_path, encoding="utf-8") as fh:
+                ctx = json.load(fh) or {}
+            for k in ("die", "config", "duty"):
+                v = ctx.get(k)
+                if v:
+                    stamp[k] = str(v)
+    except Exception:  # noqa: BLE001 - a label must never break a sweep
+        pass
+    return stamp
+
+
+def _swept_geo_keys(result: Optional[Dict[str, Any]]) -> tuple:
+    """Geometry names a sweep result varied — the ones its stamp blanks."""
+    if not isinstance(result, dict):
+        return ()
+    out = []
+    for v in (result.get("variables") or []):
+        n = str((v or {}).get("name") or "") if isinstance(v, dict) else str(v or "")
+        if n and n not in ("current_a", "rpm", "gamma_deg"):
+            out.append(n)
+    return tuple(out)
 
 
 def _save_last_scan(result: Dict[str, Any]) -> None:
     """Persist the last completed sweep so its chart survives a reload / restart."""
     try:
+        payload = dict(result)
+        payload.setdefault("machine", _machine_stamp(_swept_geo_keys(result)))
         tmp = _scan_store_path() + ".tmp"
         with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump(result, fh, default=float)
+            json.dump(payload, fh, default=float)
         os.replace(tmp, _scan_store_path())
     except Exception as _e:  # noqa: BLE001
         log.warning("could not persist last scan: %s", _e)
@@ -97,20 +158,61 @@ _eval_cache_lock = threading.Lock()
 
 
 def _eval_cache_path() -> str:
-    return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "config", ".scan_cache.jsonl"))
+    return os.path.abspath(os.path.join(_config_dir_o(), ".scan_cache.jsonl"))
 
 
-def _config_fingerprint() -> str:
+def _config_fingerprint(exclude_geo_keys=()) -> str:
     """Hash the physics config a FEM eval depends on (geometry baseline, winding,
     materials, magnet, rpm) so a Geometry / Materials / speed edit invalidates the
     cache — but an operating-point change (current/γ, passed per-eval) does not."""
     try:
         cfg = get_config()
-        sim = {k: v for k, v in (cfg.get("simulation") or {}).items()
-               if k not in ("max_current", "phase_offset_deg", "current_a", "gamma_deg", "gamma")}
-        phys = {"geometry": cfg.get("geometry"), "winding": cfg.get("winding"),
+        # SEMANTIC, not raw.  The winding and simulation blocks used to be hashed
+        # as they sit in the yaml, so ANY bookkeeping change — a new key written
+        # by the panel, a value mirrored into a second block, a default made
+        # explicit — re-fingerprinted the machine, the finished sweep on screen
+        # was refused as "another motor's" and its points became cache misses
+        # (user 2026-09-12: "пропал куда-то весь мой sweep", after
+        # winding.star_delta appeared beside the simulation mirror).  What a
+        # solve actually READS from these two blocks when the caller does not
+        # pass it is a short list — the _effective_* resolvers in
+        # routes/simulation.py are the authority — and only that list, resolved
+        # to what the solve would use, is hashed.  Everything else in the blocks
+        # (lastSolveCost, coupledAdopted, target kind, drive amplitudes the
+        # sweep never uses, mirrors) is invisible here by construction.
+        # ADD A KEY HERE when a new config field starts feeding the solve.
+        from motor_ai_sim.routes.simulation import (
+            _effective_rpm, _effective_winding, _effective_star_delta,
+            _effective_bonding, _effective_daxis)
+        _npar, _conn = _effective_winding(None, None)
+        _dax = _effective_daxis(None)
+        sim_res = {
+            "rpm": round(float(_effective_rpm(None)), 3),
+            "mode": str((cfg.get("simulation") or {}).get("mode") or "motor").strip().lower(),
+            "daxis_deg": (None if _dax is None else round(float(_dax), 4)),
+            "star_delta": _effective_star_delta(None),
+            "strand_bonding": _effective_bonding(None) or "auto",
+        }
+        wind_res = {"connection": str(_conn or ""), "n_parallel": int(_npar or 1)}
+        # SWEPT KEYS ARE NOT THE MACHINE.  A sweep over magnet_height sets
+        # magnet_height on every point; the base value in the config is not
+        # part of anything the sweep measured.  With it in the hash, "sweep
+        # it, pick the best, type it in" re-fingerprinted the machine and
+        # hid the very chart the value came from (user 2026-09-12 17:56).
+        # The stamp, the machine-now check and the eval cache key all pass
+        # the swept names here, so a point's key depends on ITS override
+        # value and not on whatever base happens to be in the file.
+        _geo_fp = dict(cfg.get("geometry") or {})
+        for _k in (exclude_geo_keys or ()):
+            _geo_fp.pop(str(_k), None)
+        phys = {"geometry": _geo_fp, "winding": wind_res,
                 "materials": cfg.get("materials"), "magnet": cfg.get("magnet"),
-                "rotor": cfg.get("rotor"), "stator": cfg.get("stator"), "sim": sim}
+                "rotor": cfg.get("rotor"), "stator": cfg.get("stator"), "sim": sim_res,
+                # refine_proc feeds mesh.outer_air_factor and mesh.component_mesh
+                # into every solve — without this block a Mesh-tab edit (e.g. a
+                # per-component size) left .scan_cache.jsonl valid and re-sweeps
+                # served stale-mesh results instantly and silently.
+                "mesh": cfg.get("mesh")}
         return hashlib.md5(json.dumps(phys, sort_keys=True, default=str).encode()).hexdigest()[:16]
     except Exception:  # noqa: BLE001
         return "nofp"
@@ -129,6 +231,22 @@ def _effective_demag(demag: Optional[bool]) -> bool:
         return False
 
 
+def _override_is_noop(key: str, value: Any) -> bool:
+    """True when `key: value` equals the live geometry's own value for that
+    parameter (within 1e-9 relative), i.e. the override does not change the
+    machine.  Non-numeric or unknown keys are never no-ops.  Read per call —
+    the fingerprint in the same key already tracks a mid-run config edit."""
+    try:
+        from motor_ai_sim.config import get_config
+        base = (get_config().get("geometry") or {}).get(key)
+        if base is None:
+            return False
+        b, v = float(base), float(value)
+        return abs(v - b) <= 1e-9 * max(1.0, abs(b))
+    except Exception:  # noqa: BLE001 — a key must never fail on a config hiccup
+        return False
+
+
 def _eval_cache_key(overrides: Dict[str, float], current_a: float, steps: int,
                     coil_temp_c: float, n_periods: float, gamma_deg: float,
                     mesh_size_mm: float, min_size_mm: float, n_sectors: int,
@@ -137,9 +255,39 @@ def _eval_cache_key(overrides: Dict[str, float], current_a: float, steps: int,
                     rotor_eddy: bool = False, hi_fidelity: bool = False,
                     structured_gap: bool = False, airgap_macro: bool = False,
                     iron_template: bool = True, geo_mesh: bool = True,
-                    element_order: int = 2, demag: Optional[bool] = None) -> str:
+                    element_order: int = 2, demag: Optional[bool] = None,
+                    pins: Optional[Dict[str, Any]] = None) -> str:
     payload = {
-        "ov": {k: round(float(v), 6) for k, v in sorted(overrides.items())},
+        # Key-format version.  Bumped when the MEANING of a component changes:
+        # v2 = end_winding_factor is now honored by refine_proc (it used to be
+        # zeroed, so every pre-v2 entry stored auto-k_end physics under whatever
+        # ew the caller sent) and the fingerprint gained the mesh block.  The
+        # bump orphans every pre-existing .scan_cache.jsonl entry at once —
+        # cheaper than auditing which of them are poisoned.
+        # v3 (2026-09-12): the SOLVER's default physics changed under an
+        # unchanged config — a coil wound with k wires in hand is now solved as
+        # the soldered-ends winding (kilowatts of copper on the Ø200), and a
+        # delta machine's winding is driven at I_line/√3.  Every pre-v3 entry
+        # for a multi-strand or delta machine carries the transposed / star
+        # answer under a key that still matches its config, so the version is
+        # the only honest way to retire them all.
+        "v": 3,
+        # Physics the CALLER pinned for the whole run (rpm / connection / demag
+        # / eddy from a descent plan).  A pinned run solves the pinned values no
+        # matter what the live config says, so the key must carry them — without
+        # this, a mid-run Simulation-tab edit changed the fingerprint while the
+        # solve kept the pinned physics, and the entry was stored as if computed
+        # with the NEW settings.
+        "pins": {k: pins[k] for k in sorted(pins)} if pins else None,
+        # EFFECTIVE overrides only: an override equal to the live geometry's
+        # own value changes nothing about the machine, so it must not change
+        # the key either.  User 2026-09-06: "добавил ещё один параметр (толщину
+        # перемычки) — почему он не вывел предыдущие измерения на график?" —
+        # the new sweep named rotor_house_height at its base value on a third
+        # of its points, and that extra name alone made every key miss the
+        # previous sweep's entries for the same machines.
+        "ov": {k: round(float(v), 6) for k, v in sorted(overrides.items())
+               if not _override_is_noop(k, v)},
         "I": round(float(current_a), 4), "steps": int(steps),
         "ct": round(float(coil_temp_c), 2), "np": round(float(n_periods), 5),
         "g": round(float(gamma_deg), 4), "ms": round(float(mesh_size_mm), 4),
@@ -154,6 +302,22 @@ def _eval_cache_key(overrides: Dict[str, float], current_a: float, steps: int,
         # eval will fall back to the config, so the KEY has to resolve the same
         # way — otherwise a demag run is served full-strength cached points.
         "dm": bool(_effective_demag(demag)),
+        # ── SEEDED vs COLD is deliberately NOT in this key ─────────────────
+        # (user 2026-09-06, the "once per sweep" rule).  MEASURED on the
+        # sandbox 30 mm 12s14p eddy+demag case at 60 A / 12 steps, a cold run
+        # against one seeded from that run's own published state:
+        #   T_avg   0.393847 -> 0.392254 N·m   (-0.40 %)
+        #   Br kept   97.889 ->   97.829 %     (-0.06 pp)
+        #   discarded frames 15 (12 pre-pass) -> 3 (0), 204 s -> 49 s
+        # i.e. inside the 0.5 % the physics-regression suite calls "the same
+        # answer", and in the physically right direction: the seeded point
+        # continues a magnet the parent already ratcheted, which is what a
+        # sweep IS.  Keying on it would also be self-defeating — the seed state
+        # changes at every point, so no two evals would ever share a key and
+        # the scan cache would stop existing.  What makes this honest instead
+        # of hidden is that every stored result CARRIES `demag_seeded`,
+        # `warm_seeded` and `demag_seed_from` (fem_solver_2d), so a cached
+        # point says for itself whose state it continued.
     }
     return hashlib.md5(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
 
@@ -171,6 +335,13 @@ def _eval_healthy(out: Dict[str, Any]) -> bool:
     try:
         r = out.get("res") if isinstance(out.get("res"), dict) else out
         if r.get("nonlinear_converged") is False:
+            return False
+        # A mesh-build fallback (template → gmsh, structured gap → free gap)
+        # produces numbers whose ripple floor is NOT comparable with a cleanly
+        # built run — refine_proc rejects such evals outright, so a fresh one
+        # cannot reach here; the check guards CACHE lines written before that
+        # gate and any path that stores the stamp instead of raising.
+        if r.get("mesh_build_events"):
             return False
         t = r.get("T_em_Nm")
         return isinstance(t, (int, float)) and math.isfinite(float(t))
@@ -213,7 +384,14 @@ def _load_eval_cache() -> None:
 _RES_KEYS = ("T_em_Nm", "efficiency", "torque_per_mass_Nm_kg", "T_ripple_pct",
              "P_loss_total_W", "P_cu_W", "P_cu_dc_W", "P_cu_ac_W", "P_fe_W",
              "P_mag_W", "P_shaft_W", "mass_total_kg", "V_peak",
-             "V1_phase_V", "THD_pct", "THD_LL_pct", "Kt_Nm_per_Arms")
+             "V1_phase_V", "THD_pct", "THD_LL_pct", "Kt_Nm_per_Arms",
+             # The eddy-settle verdict rides WITH the numbers it qualifies
+             # (user, 2026-09-07).  This tuple is what a stored sweep is
+             # reduced to when it re-seeds the eval cache; dropping the
+             # verdict here would hand the panel a point that silently reads
+             # as settled while its P_mag / P_shaft / η are start-up values.
+             "eddy_settled", "eddy_capped", "eddy_settle_residual",
+             "eddy_settle_tol")
 
 
 def _store_eval(key: str, res: Dict[str, Any]) -> None:
@@ -256,14 +434,19 @@ _SCAN_WORKERS = _scan_worker_count()   # e.g. 10 on a 12-physical-core box
 # quote).  Persisted next to the config so the estimate survives a restart, and
 # the sample count travels with it — a quote from 3 evals is labelled as such.
 _EVAL_SECS: List[float] = []
+# …and the same window for SEEDED evals kept apart (user 2026-09-06).  A point
+# that continues the previous one's eddy field and Br map skips the warm-up
+# march and the whole demag pre-pass period, so it is a different price — on the
+# sandbox eddy+demag case 49 s against 204 s.  Pooling the two would quote a
+# sweep's second-through-Nth points at a cost only its FIRST point pays.
+_EVAL_SECS_SEEDED: List[float] = []
 _eval_secs_lock = threading.Lock()
 _EVAL_SECS_MAX = 200          # rolling window
 _EVAL_RATE_FLUSH_EVERY = 10   # persist at most every N evals
 
 
 def _eval_rate_path() -> str:
-    return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..",
-                                        "config", ".eval_rate.json"))
+    return os.path.abspath(os.path.join(_config_dir_o(), ".eval_rate.json"))
 
 
 def _load_eval_rate() -> None:
@@ -273,8 +456,13 @@ def _load_eval_rate() -> None:
             with open(p, encoding="utf-8") as fh:
                 blob = json.load(fh)
             secs = [float(x) for x in (blob.get("samples") or []) if float(x) > 0]
+            # `samples_seeded` is absent in a file written before 2026-09-06 —
+            # those samples stay in the combined pool, which is what they are.
+            sec_s = [float(x) for x in (blob.get("samples_seeded") or [])
+                     if float(x) > 0]
             with _eval_secs_lock:
                 _EVAL_SECS.extend(secs[-_EVAL_SECS_MAX:])
+                _EVAL_SECS_SEEDED.extend(sec_s[-_EVAL_SECS_MAX:])
     except Exception as _e:  # noqa: BLE001
         log.debug("no persisted eval rate: %s", _e)
 
@@ -283,16 +471,23 @@ def _save_eval_rate() -> None:
     try:
         with _eval_secs_lock:
             samples = list(_EVAL_SECS)
+            samples_s = list(_EVAL_SECS_SEEDED)
         tmp = _eval_rate_path() + ".tmp"
         with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump({"samples": samples[-_EVAL_SECS_MAX:]}, fh)
+            json.dump({"samples": samples[-_EVAL_SECS_MAX:],
+                       "samples_seeded": samples_s[-_EVAL_SECS_MAX:]}, fh)
         os.replace(tmp, _eval_rate_path())
     except Exception as _e:  # noqa: BLE001
         log.debug("could not persist eval rate: %s", _e)
 
 
-def _record_eval_seconds(dt: float) -> None:
-    """Time ONE subprocess eval.  Best-effort; never breaks an eval."""
+def _record_eval_seconds(dt: float, seeded: bool = False) -> None:
+    """Time ONE subprocess eval.  Best-effort; never breaks an eval.
+
+    ``seeded`` = this eval continued a previous point's eddy + Br state, so it
+    solved neither the warm-up march nor the demag pre-pass.  Its seconds go
+    into their own window as well, because a quote built from a pool of both
+    prices is a quote of neither."""
     try:
         if not (math.isfinite(dt) and dt > 0):
             return
@@ -300,6 +495,10 @@ def _record_eval_seconds(dt: float) -> None:
             _EVAL_SECS.append(float(dt))
             if len(_EVAL_SECS) > _EVAL_SECS_MAX:
                 del _EVAL_SECS[:-_EVAL_SECS_MAX]
+            if seeded:
+                _EVAL_SECS_SEEDED.append(float(dt))
+                if len(_EVAL_SECS_SEEDED) > _EVAL_SECS_MAX:
+                    del _EVAL_SECS_SEEDED[:-_EVAL_SECS_MAX]
             n = len(_EVAL_SECS)
         if n % _EVAL_RATE_FLUSH_EVERY == 0:
             _save_eval_rate()
@@ -313,13 +512,31 @@ def _record_eval_seconds(dt: float) -> None:
 _EVAL_S_PER_FRAME_DEFAULT = 2.4
 
 
-def measured_eval_seconds(steps_per_period: int = 36) -> Dict[str, Any]:
+def measured_eval_seconds(steps_per_period: int = 36,
+                          seeded: Optional[bool] = None) -> Dict[str, Any]:
     """Median measured seconds per FEM eval + how many samples back it.
 
     Returns ``{"s_per_eval", "n_samples", "source"}``.  source='measured' when
     this machine has timed evals, 'estimate' when the frame-count fallback is
     used — the caller SHOWS which, because a quote nobody measured is a guess
-    and must not be printed as a measurement."""
+    and must not be printed as a measurement.
+
+    ``seeded=True`` asks for the price of a point that CONTINUES the previous
+    one's eddy + Br state — the price all but the first point of a sweep pays
+    since 2026-09-06 — and falls back to the combined window until this machine
+    has actually timed one, so a fresh install still quotes something measured
+    rather than nothing.  source says 'measured-seeded' when the seeded window
+    answered.
+    """
+    if seeded:
+        with _eval_secs_lock:
+            s_seeded = sorted(_EVAL_SECS_SEEDED)
+        if s_seeded:
+            mid = len(s_seeded) // 2
+            med = (s_seeded[mid] if len(s_seeded) % 2
+                   else 0.5 * (s_seeded[mid - 1] + s_seeded[mid]))
+            return {"s_per_eval": round(float(med), 2),
+                    "n_samples": len(s_seeded), "source": "measured-seeded"}
     with _eval_secs_lock:
         samples = sorted(_EVAL_SECS)
     if samples:
@@ -357,6 +574,167 @@ _EVAL_ENV = dict(os.environ)
 _EVAL_ENV.update({k: "1" for k in (
     "MKL_NUM_THREADS", "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS",
     "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS")})
+# ── EACH POINT CONTINUES THE PREVIOUS ONE ────────────────────────────────────
+# User, 2026-09-06: "мы же уже договаривались, что проход демагнитизации
+# делается для каждого sweep только один раз; изменения геометрии небольшие, и
+# каждый следующий расчёт берётся из предыдущего."  Sweep points had regressed
+# from 700-800 s to 1100-1700 s because every subprocess eval started COLD — a
+# full eddy warm-up march from zero plus, with demag on, a whole extra
+# electrical period of demag pre-pass.
+#
+# This flag is read by the solver (`fem_solver_2d._seed_from_previous`) and set
+# HERE and nowhere else, so it applies to sweep / optimizer / descent evals and
+# NOT to the interactive Simulation run, which keeps the 2026-09-05
+# reproducibility behaviour bit for bit.  It only widens which cached state a
+# run may CONTINUE; the settle test at the eddy handoff still decides whether
+# the seed was usable, so a bad seed costs a warm-up period, never an answer.
+_EVAL_ENV["SB_SEED_FROM_PREVIOUS"] = "1"
+
+
+def _eval_env_for(threads: Optional[int]) -> Dict[str, str]:
+    """The eval subprocess environment: pinned to ONE thread (bit-identical
+    evals, see above) unless the caller asks for more.
+
+    The only caller that does is the sweep's SOLO seed point (2026-09-08, user:
+    "что так долго считалась первая точка?" — 29 min alone on one core out of
+    24 while nine workers sat idle).  That point runs by itself precisely so
+    the others can continue its state, so letting it use several BLAS threads
+    costs nobody a core; its numbers can move in the last ulp between runs,
+    which is what the seed's settle test tolerates anyway.  Descent and DOE
+    evals never pass ``threads`` and stay bit-identical."""
+    if not threads or int(threads) <= 1:
+        return _EVAL_ENV
+    env = dict(_EVAL_ENV)
+    env.update({k: str(int(threads)) for k in (
+        "MKL_NUM_THREADS", "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS")})
+    return env
+
+
+def _solo_seed_threads() -> int:
+    """How many threads the sweep's solo first point may use: a third of the
+    machine, capped at 8 — the rest stays free for the user's own solve."""
+    return max(1, min(8, (os.cpu_count() or 8) // 3))
+
+
+_warm_seed_memo: Dict[str, Any] = {}      # (mtime_ns, size) -> identity
+_warm_seed_memo_lock = threading.Lock()
+
+
+def _warm_seed_state() -> Optional[Dict[str, Any]]:
+    """The IDENTITY of the state the next eval subprocess would find, or None.
+
+    Read through the solver's own reader so there is one definition of the file
+    format, and only the disk mirror: the consumer is an eval SUBPROCESS, which
+    starts with an empty in-memory slot and reads config/.warm_cache.npz — this
+    process's memory would answer for a reader that does not exist.
+
+    MEMOISED on (mtime, size), and that is not an optimisation.  On Windows an
+    open read handle blocks the atomic replace an eval subprocess publishes
+    with (WinError 5), so asking this question once per eval — from ten worker
+    threads — would race the very writes it is asking about.  One read per
+    published state, and the solver retries its replace on top of that.
+    Best-effort: never raises into a coordinator."""
+    try:
+        from motor_ai_sim.simulation import fem_solver_2d as _F
+        p = _F._warm_cache_path()
+        st = p.stat()
+        tag = (int(st.st_mtime_ns), int(st.st_size))
+    except Exception:  # noqa: BLE001 — no file is a legitimate answer
+        return None
+    with _warm_seed_memo_lock:
+        if _warm_seed_memo.get("tag") == tag:
+            return _warm_seed_memo.get("val")
+    try:
+        val = _F._warm_cache_meta()
+    except Exception:  # noqa: BLE001
+        return None
+    with _warm_seed_memo_lock:
+        _warm_seed_memo["tag"] = tag
+        _warm_seed_memo["val"] = val
+    return val
+
+
+def _seed_usable_for(steps: int, coil_temp_c: float, rpm: Optional[float],
+                     n_periods: float = 1.0,
+                     need_br: bool = False,
+                     n_sectors: Optional[int] = None) -> Tuple[bool, str]:
+    """Would a queued eval find a state it can continue?  ``(ok, why_not)``.
+
+    Deliberately checks only the terms this layer can KNOW without building a
+    machine — steps/period, n_periods, coil temperature, speed, and (when the
+    run is a demag one) whether a Br map is there at all.  The winding and the
+    magnet scale are resolved inside the eval, so a mismatch there shows up as
+    a refused seed in the subprocess and simply makes that point a cold one.
+    """
+    wc = _warm_seed_state()
+    if wc is None:
+        return False, "no warm cache on this machine yet"
+    m = wc.get("meta") or {}
+    # `nspp_req` — the steps/period the parent run ASKED for.  The solver snaps
+    # the count up to a divisor of the slip-node ring before it solves, and only
+    # a built machine knows that number, so comparing this layer's request
+    # against the SNAPPED one said "no usable seed" on every eval of a sweep
+    # that was seeding perfectly (36 asked vs 54 published, measured).
+    if int(wc.get("nspp_req", m.get("nspp", -1))) != int(steps):
+        return False, "cached state was asked for %s steps/period, this run %d" % (
+            wc.get("nspp_req", m.get("nspp")), int(steps))
+    if abs(float(m.get("npd", -1)) - float(n_periods)) > 1e-9:
+        return False, "cached state spans %s period(s), this run %g" % (
+            m.get("npd"), float(n_periods))
+    # Same gate the solver applies (fem_solver_2d._warm_seed_accept): a state
+    # solved on another symmetry is refused in the subprocess, so pricing it
+    # as seeded here is exactly the "10 of 10 timeout" of 2026-09-07.
+    if n_sectors is not None and int(wc.get("nsect") or 0) > 0:
+        _ns_run = 1 if int(n_sectors) <= 1 else int(n_sectors)
+        if int(wc["nsect"]) != _ns_run:
+            return False, "cached state was solved on %d sector(s), this run %d" % (
+                int(wc["nsect"]), _ns_run)
+    if abs(float(m.get("temp", -1e9)) - round(float(coil_temp_c), 1)) > 0.05:
+        return False, "cached state is at %s C coil, this run %.1f C" % (
+            m.get("temp"), float(coil_temp_c))
+    if rpm:
+        if abs(float(wc.get("rpm", 0.0)) - float(rpm)) > 0.05 * abs(float(rpm)):
+            return False, "cached state is %.6g rpm, this run %.6g" % (
+                float(wc.get("rpm", 0.0)), float(rpm))
+    if need_br and not wc.get("has_br"):
+        return False, "cached state carries no Br ratchet map"
+    return True, ""
+
+
+def serial_first_decision(n_tasks: int, n_workers: int, demag: bool,
+                          rotor_eddy: bool, seed_ok: bool) -> Tuple[bool, str]:
+    """Should the FIRST queued point be solved ALONE before the fan-out?
+
+    The rule (user 2026-09-06, "проход демагнитизации делается для каждого
+    sweep только один раз"): the expensive one-off — the eddy warm-up march
+    AND the demag pre-pass period — is paid ONCE, by the first point, whose
+    published state every later point then continues.  Fanning out immediately
+    with no seed makes all N workers pay it in parallel instead.
+
+    Four cases, and the arithmetic behind the second one:
+      * a usable seed already exists  -> fan out, nothing to pay for
+      * no seed, tasks <= workers     -> fan out.  A serial first point would
+        ADD its own runtime in front of a batch that was going to run in ONE
+        parallel wave anyway, i.e. it lengthens the sweep instead of shortening
+        it — the saving only exists when later WAVES can reuse the seed.
+      * no seed, tasks > workers      -> solve the first point alone, then fan
+        out; every remaining wave starts warm.
+      * demag/eddy off                -> fan out.  There is no warm-up march
+        and no pre-pass to amortise, so this is a rule about nothing.
+    """
+    if not (demag and rotor_eddy):
+        return False, ("no coupled-eddy demag in this run — no warm-up or "
+                       "pre-pass to amortise")
+    if seed_ok:
+        return False, "a usable seed already exists — every point starts warm"
+    if int(n_tasks) <= int(n_workers):
+        return False, ("%d task(s) fit in one parallel wave of %d worker(s) — "
+                       "a serial first point would only make the sweep longer"
+                       % (int(n_tasks), int(n_workers)))
+    return True, ("%d task(s) over %d worker(s) and no usable seed — solving "
+                  "the first point alone so the rest continue its eddy + Br "
+                  "state" % (int(n_tasks), int(n_workers)))
 
 
 def _nonphysical_result(res: Any) -> Optional[str]:
@@ -369,10 +747,16 @@ def _nonphysical_result(res: Any) -> Optional[str]:
     headroom before calling a number impossible."""
     if not isinstance(res, dict):
         return "result payload is not a dict"
+    # efficiency == 0.0 is IMPOSSIBLE for a motor doing work (broken
+    # postprocess) but LEGITIMATE for a generator whose input does not cover
+    # its losses (refine_proc reports exactly 0.0 there) — a weak-but-solvable
+    # generator candidate must rank BAD, not be vetoed as broken.
+    _gen = str(res.get("op_mode", "")) == "generator"
     checks = (
         ("T_em_Nm",               lambda v: abs(v) < 1e4),
         ("mass_total_kg",         lambda v: 0.0 < v < 1e4),
-        ("efficiency",            lambda v: 0.0 < v <= 1.0),
+        ("efficiency",            (lambda v: 0.0 <= v <= 1.0) if _gen
+                                  else (lambda v: 0.0 < v <= 1.0)),
         ("torque_per_mass_Nm_kg", lambda v: abs(v) < 5e3),
         ("T_ripple_pct",          lambda v: 0.0 <= v < 1e4),
         ("P_loss_total_W",        lambda v: 0.0 <= v < 1e7),
@@ -392,6 +776,37 @@ def _nonphysical_result(res: Any) -> Optional[str]:
     return None
 
 
+# ── Live eval subprocesses, by owner ─────────────────────────────────────────
+# Stop used to set a flag the harvest loop polls between evals, and the evals
+# already running just "finish in the background and are ignored" — up to an
+# hour each, one core each.  Measured 2026-09-04 on the user's Ø200 machine:
+# Stop + Run left 10 orphaned workers of the cancelled sweep computing beside
+# the 10 of the new one, and the new sweep ran at half speed for nothing.
+# Every eval registers its process here under the run kind that started it, so
+# that kind's cancel can kill exactly its own workers and nobody else's.
+_LIVE_EVAL_PROCS: Dict[int, Any] = {}          # pid → (Popen, owner)
+_live_eval_lock = threading.Lock()
+
+
+def _kill_live_evals(owner: str) -> int:
+    """Terminate every registered eval subprocess started by `owner`.  Returns
+    the count.  The eval that owned the process sees no @@RESULT@@ and reports
+    a failed eval, which its (already cancelled) harvest loop ignores."""
+    with _live_eval_lock:
+        victims = [(pid, p) for pid, (p, o) in _LIVE_EVAL_PROCS.items() if o == owner]
+    n = 0
+    for pid, p in victims:
+        try:
+            if p.poll() is None:
+                p.kill()
+                n += 1
+        except Exception:   # noqa: BLE001 — already gone
+            pass
+    if n:
+        log.info("%s cancel: killed %d running eval subprocess(es)", owner, n)
+    return n
+
+
 def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
                      coil_temp_c: float, n_periods: float = 1.0,
                      gamma_deg: float = 0.0, mesh_size_mm: float = 4.0,
@@ -405,7 +820,10 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
                      rpm: Optional[float] = None,
                      n_parallel: Optional[int] = None,
                      connection: Optional[str] = None,
-                     demag: Optional[bool] = None) -> Dict[str, Any]:
+                     demag: Optional[bool] = None,
+                     magnet_temp_c: Optional[float] = None,
+                     owner: str = "",
+                     threads: Optional[int] = None) -> Dict[str, Any]:
     """Evaluate ONE (geometry, current, γ) with the real sliding-band transient
     in an isolated subprocess (FEM/LLVM crash → failed design, not a dead API).
     Rebuilds the CadQuery geometry + gmsh mesh for the candidate in-memory.
@@ -431,6 +849,12 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
                        # back to the active config's simulation.demag, exactly
                        # as before.  Passed, the caller's flag wins.
                        **({} if demag is None else {"demag": bool(demag)}),
+                       # MAGNET TEMPERATURE: same rule — omitted (None) = the
+                       # candidate is solved with the assigned magnet card
+                       # exactly as the library quotes it, which is what every
+                       # study so far did, so an omitted argument moves nothing.
+                       **({} if magnet_temp_c is None
+                          else {"magnet_temp_c": float(magnet_temp_c)}),
                        # SPEED: omitted (None) = the candidate subprocess reads
                        # the active config, exactly as before.  Passed, it pins
                        # the eval's speed so the solver's f_elec cannot drift
@@ -452,8 +876,17 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
         # hangs — 8 of 12 in one generation, which starved CMA-ES into a false
         # flat-fitness stop.  Pathological meshes no longer need the cap anyway:
         # the mesh triangle budget kills them in seconds.
+        # Note the ORDER: the seeded/cold question is asked before the median,
+        # because the median it should compare against is the median of evals
+        # of the SAME price (see measured_eval_seconds).
+        _seeded, _seed_why = (
+            _seed_usable_for(int(steps), float(coil_temp_c), rpm,
+                             float(n_periods), need_br=bool(demag),
+                             n_sectors=int(n_sectors))
+            if rotor_eddy else (False, "not a coupled-eddy eval"))
         try:
-            _med = float(measured_eval_seconds().get("s_per_eval") or 0.0)
+            _med = float(measured_eval_seconds(int(steps), seeded=_seeded)
+                         .get("s_per_eval") or 0.0)
         except Exception:  # noqa: BLE001
             _med = 0.0
         # …and a floor that KNOWS WHAT THIS EVAL COSTS.  The measured median is
@@ -467,10 +900,27 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
         # why.  Estimate the frames this eval will actually solve, price them at
         # the measured per-frame rate (or a conservative 2 s), and let the
         # concurrency stretch that.
+        # SEEDED vs COLD (user 2026-09-06).  Every optimizer eval now runs with
+        # SB_SEED_FROM_PREVIOUS=1, so a point that finds a usable state in
+        # config/.warm_cache.npz solves neither the long warm-up march (the
+        # settle probe passes at the first try: 2-3 frames instead of the ~43
+        # measured cold) nor the demag pre-pass period (the parent point
+        # already paid it — one re-solved frame at the handoff instead of a
+        # whole electrical period).  Quoting the cold cost for a seeded eval
+        # inflated the hang cap by ~2x on a demag sweep; quoting the seeded
+        # cost for a cold one would cut the cap under the real runtime, so the
+        # question is asked per eval and answered from the cache that exists.
         _frames = float(steps) * float(n_periods)
+        # The HANG CAP is priced at the COLD cost even for a seeded eval
+        # (2026-09-07): the seed the coordinator sees on disk can still be
+        # refused inside the subprocess (a foreign mesh, a failed seeded Newton
+        # -> cold retry), and an eval that then honestly marches the cold path
+        # must not be killed for it.  The cap guards against hangs, not against
+        # solving; the seeded price stays what the UI quotes as the estimate.
         if demag:
             _frames += float(steps)          # full-period settling pre-pass
-        _frames += 43.0 if rotor_eddy else 0.0   # eddy warm-up, measured
+        if rotor_eddy:
+            _frames += 43.0                  # eddy warm-up, measured cold
         _per_frame = float(_EVAL_S_PER_FRAME_DEFAULT)
         # Contention, not worker count: each eval is pinned to one thread and the
         # POOL provides the parallelism, so ten workers do not make one eval ten
@@ -479,11 +929,32 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
         _contention = min(4.0, max(1.0, float(_scan_worker_count()) / 2.5))
         _expect = _frames * _per_frame * _contention
         _cap = min(3600.0, max(300.0, 4.0 * _med, 3.0 * _expect))
-        proc = subprocess.run(
+        # Popen rather than subprocess.run, so the process can be REGISTERED
+        # (and killed by its owner's Stop — see _kill_live_evals).  Same
+        # semantics otherwise: stdin fed, both streams captured, the hang cap
+        # kills and reports "timeout" exactly as run(timeout=) did.
+        from types import SimpleNamespace as _NS
+        _p = subprocess.Popen(
             [sys.executable, "-m", "motor_ai_sim.optimization.refine_proc"],
-            input=spec, capture_output=True, text=True, timeout=_cap,
-            env=_EVAL_ENV)
-        _record_eval_seconds(_t_eval.monotonic() - _t0_eval)
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, env=_eval_env_for(threads))
+        with _live_eval_lock:
+            _LIVE_EVAL_PROCS[_p.pid] = (_p, owner)
+        try:
+            try:
+                _out, _err = _p.communicate(input=spec, timeout=_cap)
+            except subprocess.TimeoutExpired:
+                _p.kill()
+                _p.communicate()
+                raise
+        finally:
+            with _live_eval_lock:
+                _LIVE_EVAL_PROCS.pop(_p.pid, None)
+        proc = _NS(stdout=_out, stderr=_err, returncode=_p.returncode)
+        # `_seeded` is what the cache said BEFORE this eval started, which is
+        # what the eval then found — the two cannot disagree by more than a
+        # concurrent publish, and a mis-filed sample is one sample in a median.
+        _record_eval_seconds(_t_eval.monotonic() - _t0_eval, seeded=_seeded)
         out = proc.stdout or ""
         m = out.rfind("@@RESULT@@")
         if m >= 0:
@@ -512,8 +983,17 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
             if _log:
                 _log_eval(overrides, current_a, gamma_deg, _res)   # accumulate surrogate dataset
             return _res
-        tail = (proc.stderr or "").strip().splitlines()[-1:] or ["subprocess crashed"]
-        return {"ok": False, "error": tail[0][:160]}
+        # No @@RESULT@@: say HOW the worker ended.  The last stderr line used
+        # to be reported alone, and on 2026-09-06 that was a geometry-sanitiser
+        # WARNING ("merged 2 coincident points…") standing in for a worker
+        # that died with exit code %d — a native crash prints no traceback.
+        _lines = [ln for ln in (proc.stderr or "").strip().splitlines()
+                  if ln.strip() and "geometry sanitize" not in ln
+                  and not ln.startswith("core loss")]
+        _last = (_lines[-1] if _lines else "no stderr")[:160]
+        _rc = getattr(proc, "returncode", None)
+        return {"ok": False,
+                "error": f"worker exited with code {_rc} without a result: {_last}"}
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": "timeout"}
     except Exception as e:  # noqa: BLE001
@@ -582,7 +1062,10 @@ def list_optimizable_variables():
     out = []
     # numeric geometry params (skip integer topology that breaks slot/pole count)
     skip = {"num_seg", "num_slots_per_segment", "num_poles_per_segment",
-            "num_wires_per_slot"}
+            # …and wire_parallel: it is not a range, it is a DIVISOR of
+            # num_wires_per_slot (a continuous sweep of it builds fractional
+            # turns), so it is a build choice, never an optimizer variable.
+            "num_wires_per_slot", "wire_parallel"}
     for name, meta in schema.items():
         if name in skip or name not in geo:
             continue
@@ -710,6 +1193,10 @@ class ScanRequest(BaseModel):
     geo_mesh: bool = True                   # geometry-driven CDT mesh — SINGLE SOURCE: Mesh tab (same build as Simulation)
     element_order: int = 2                  # 2 = P2 — the only basis: energy-consistent mean torque + mesh-convergent ripple.  P1 is deleted; any other value raises.
     demag: bool = False                     # per-element irreversible demagnetisation — SINGLE SOURCE: Simulation (de-rates Br → torque/EMF; doubles the frames per point)
+    # The BASELINE point (the current motor, un-varied, at operating point 0)
+    # is an extra full FEM eval that used to run unconditionally and LAST —
+    # the user stopped every sweep at "22/23" to skip it (2026-09-04).  Opt-in.
+    with_baseline: bool = False
     seed: int = 12345
     run_id: str = ""
 
@@ -748,10 +1235,66 @@ def _enumerate_geometries(variables: List[Dict[str, Any]], max_geom: int,
     return combos
 
 
+def _geometry_reject(ov: Dict[str, float]) -> Optional[str]:
+    """Engineer-readable reason this grid geometry must NOT be solved, or None.
+
+    A SWEEP is an explicit list of values the user asked for.  Silently pulling
+    one back to its feasibility bound and solving that instead answers a
+    question nobody asked: a wire_height grid of 0.4/0.5/0.6 on a 6.6 mm slot
+    with 10 conductors used to return three points of which the third was solved
+    at 0.52 mm — a duplicate wearing a value the machine never had.  So a point
+    outside an analytic bound is REJECTED here, before any FEM time is spent, and
+    comes back feasible=False carrying the arithmetic; the panel's build-failure
+    box already surfaces those and names the offending values.
+
+    Two screens, cheapest first, and they are the SAME two ``_auto_prefence``
+    runs for the optimizer — a point must not be judged differently depending on
+    which algorithm asked for it:
+      1. closed-form bounds (pure arithmetic, microseconds);
+      2. the real region check on the built polygons — overlapping domains, a
+         magnet crossing the air gap, a collapsed contour.  It costs ~1 s of
+         polygon building per GEOMETRY (memoised by the caller, once per geom_id
+         regardless of how many operating points ride on it) and saves a full
+         FEM eval per operating point, which is minutes.
+
+    HONESTY, same rule as the optimizer's pre-fence: a false "invalid" silently
+    deletes a reachable design and is far worse than a wasted eval, so anything
+    this cannot decide — an exception while building the polygons — is NOT a
+    reject; the subprocess then gives the real verdict.
+    """
+    try:
+        from motor_ai_sim.config import get_config
+        from motor_ai_sim.geometry_constraints import violation_message as _vmsg
+        geo = {**dict(get_config().get("geometry", {})),
+               **{k: v for k, v in ov.items() if k != "gamma_deg"}}
+        why = _vmsg(geo)
+        if why:
+            return why
+    except Exception:                      # cannot decide → not a reject
+        return None
+    try:
+        from motor_ai_sim.geometry_validation import validate_geometry as _vgeo
+        res = _vgeo(geo)
+        return None if res.ok else res.summary()
+    except Exception as _e:                # noqa: BLE001 — cannot decide
+        log.debug("sweep gate could not build a candidate's polygons (%s) — "
+                  "deferring to the eval subprocess", _e)
+        return None
+
+
 def _point_from_eval(out: Dict[str, Any], ov: Dict[str, float], I: float,
                      gi: int, oi: int, ripple_max: float) -> Dict[str, Any]:
+    # ``ov`` IS what was solved: an infeasible candidate is rejected upstream
+    # (_geometry_reject / _auto_prefence) and refine_proc.run_one raises rather
+    # than substituting a clamped one, so the label and the machine agree.
     if out.get("ok"):
         r = out["res"]
+        # `{**r}` carries the whole refine_proc payload, so the eddy-settle
+        # verdict (eddy_settled / eddy_capped / eddy_settle_residual, added
+        # 2026-09-07) reaches the panel with no per-field plumbing.  An
+        # unsettled point stays feasible and eligible on purpose — it IS a
+        # point, just one whose P_mag / P_shaft / η are start-up values, and
+        # the panel flags it rather than the coordinator vetoing it.
         return {**r, "overrides": ov, "current_a": I, "geom_id": gi,
                 "op_index": oi, "fem": True, "feasible": True,
                 "eligible": bool(r.get("T_ripple_pct", 1e9) <= ripple_max)}
@@ -780,17 +1323,25 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                  pole_copy=None, torque_filter=False, n_sectors=1, gap_layers=3.0,
                  end_winding=0.0, rotor_eddy=False, hi_fidelity=False,
                  structured_gap=False, airgap_macro=False, iron_template=True,
-                 geo_mesh=True, element_order=2, demag=False) -> None:
+                 geo_mesh=True, element_order=2, demag=False,
+                 with_baseline=False) -> None:
     import numpy as np  # noqa: F401
     from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
     from motor_ai_sim.optimization.optimizer import _pareto_front
     try:
         geos = _enumerate_geometries(variables, int(max_geom), n_opt=4, seed=seed)
-        tasks = []  # (geom_id, op_index, overrides, current, op_gamma)
+        tasks = []  # (geom_id, op_index, overrides, current, op_gamma, op_rpm)
         for gi, ov in enumerate(geos):
             for oi, op in enumerate(operating_points):
+                # rpm rides on the task: the request accepted a per-operating-
+                # point rpm, echoed it into the result — and never passed it to
+                # a single eval, so every point solved at the config speed while
+                # labeled with the requested one.  None = "the config's speed",
+                # so an omitted rpm changes nothing.
+                _rpm = op.get("rpm")
                 tasks.append((gi, oi, ov, float(op.get("current_a", 85.0)),
-                              float(op.get("gamma_deg", 0.0))))
+                              float(op.get("gamma_deg", 0.0)),
+                              float(_rpm) if _rpm else None))
         # ORDER: all points at the LOWEST current first, then the next current,
         # … (user rule 2026-08-21: the low-current family maps the whole
         # picture early, and a couple of high-current points at the end are
@@ -805,7 +1356,7 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
         with _scan_lock:
             if not _scan_owns(run_id):
                 return                      # superseded before we even started
-            _scan_state.update(total=len(tasks) + 1, done=0)
+            _scan_state.update(total=len(tasks) + (1 if with_baseline else 0), done=0)
         points: List[Any] = [None] * len(tasks)
 
         # Sweep a FULL electrical period: the iron/magnet eddy losses are
@@ -813,25 +1364,45 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
         # content (a 1/6-period window inflated them ~2-5× → wrong efficiency).
         # ``steps`` frames/period — 18 gives 3 samples per 6·k ripple cycle.
         _NPER = 1.0
-        _cfg_fp = _config_fingerprint()   # constant for this scan → one fingerprint for every point
 
-        def _cache_key(geo_ov, I, g):
+        def _cache_key(geo_ov, I, g, rpm=None):
+            # Fingerprint PER CALL, not once for the scan: each eval subprocess
+            # reads the config fresh, so a mid-sweep config edit changes the
+            # remaining points' physics — computing the fingerprint once stored
+            # those points under the PRE-edit fingerprint, and a later sweep on
+            # the old config got cache hits carrying new-config physics.  The
+            # hash is microseconds against a multi-minute FEM eval.
+            _cfg_fp = _config_fingerprint(tuple(geo_ov.keys()))
             return _eval_cache_key(geo_ov, I, steps, coil_temp_c, _NPER, g,
                                  mesh_size_mm, min_size_mm, n_sectors, pole_copy, torque_filter, _cfg_fp,
                                  gap_layers, end_winding, rotor_eddy, hi_fidelity, structured_gap, airgap_macro,
                                  iron_template=iron_template, geo_mesh=geo_mesh,
-                                 element_order=element_order, demag=demag)
+                                 element_order=element_order, demag=demag,
+                                 pins=({"rpm": float(rpm)} if rpm else None))
 
-        def _mk_point(out, ov, I, gi, oi, g):
+        def _mk_point(out, ov, I, gi, oi, g, rpm=None):
             pt = _point_from_eval(out, ov, I, gi, oi, ripple_max)
             pt["gamma_deg"] = g    # stamp γ so the chart can group/connect without the request
+            # Stamp the SOLVED speed too: the frontend re-derives P = T·ω from
+            # its live sim.rpm when the point carries none, which is wrong the
+            # moment the user changes speed after the sweep.
+            try:
+                pt["rpm"] = float(rpm) if rpm else float(
+                    get_config().get("simulation", {}).get("rpm", 0.0) or 0.0)
+            except Exception:   # noqa: BLE001
+                pass
             return pt
+
+        # Threads for the eval subprocess: None (= one, bit-identical) for the
+        # fanned-out points; the SOLO seed point below sets it while it runs
+        # alone (see _eval_env_for).
+        _solo_ctx = {"threads": None}
 
         def _do(i_t):
             # COMPUTE path — only cache MISSES reach here (hits are pre-filled
             # before the pool starts, see below).  γ as a swept variable
             # overrides the operating-point γ; it is NOT a geometry key.
-            i, (gi, oi, ov, I, opg) = i_t
+            i, (gi, oi, ov, I, opg, oprpm) = i_t
             g = float(ov.get("gamma_deg", opg))
             geo_ov = {k: v for k, v in ov.items() if k != "gamma_deg"}
             out = _subprocess_eval(geo_ov, I, steps, coil_temp_c,
@@ -843,39 +1414,106 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                                    hi_fidelity=hi_fidelity, structured_gap=structured_gap,
                                    airgap_macro=airgap_macro,
                                    iron_template=iron_template, geo_mesh=geo_mesh,
-                                   element_order=element_order, demag=demag)
+                                   element_order=element_order, demag=demag,
+                                   rpm=oprpm, owner="scan",
+                                   threads=_solo_ctx["threads"])
             if out and out.get("ok"):
-                _store_eval(_cache_key(geo_ov, I, g), out)   # cache successful evals only
-            return i, _mk_point(out, ov, I, gi, oi, g)
+                _store_eval(_cache_key(geo_ov, I, g, oprpm), out)   # cache successful evals only
+            return i, _mk_point(out, ov, I, gi, oi, g, oprpm)
 
         # PREFILL: instantly plot every point already in the cache (from prior
         # sweeps — survives a backend restart via .scan_cache.jsonl) with NO FEM
         # re-run, then compute ONLY the misses.  This is what makes a re-run's
         # already-computed points appear on the chart immediately (0 s) instead
         # of trickling through the worker, and shrinks the work to the new points.
+        # GEOMETRY GATE (before the cache, before any FEM): a grid point that
+        # breaks a closed-form feasibility bound — a winding that cannot fit the
+        # slot being the one that bites — is REJECTED, not clamped-and-solved.
+        # One check per geometry, memoised by geom_id; pure arithmetic.
+        _rej: Dict[int, Optional[str]] = {}
         misses = []
+        n_rejected = 0
         for i, t in enumerate(tasks):
-            gi, oi, ov, I, opg = t
+            gi, oi, ov, I, opg, oprpm = t
             g = float(ov.get("gamma_deg", opg))
             geo_ov = {k: v for k, v in ov.items() if k != "gamma_deg"}
-            out = _EVAL_CACHE.get(_cache_key(geo_ov, I, g))
+            if gi not in _rej:
+                _rej[gi] = _geometry_reject(ov)
+            if _rej[gi]:
+                points[i] = {"overrides": ov, "current_a": I, "geom_id": gi,
+                             "op_index": oi, "gamma_deg": g, "fem": False,
+                             "feasible": False, "eligible": False,
+                             "geometry_rejected": True, "error": _rej[gi]}
+                n_rejected += 1
+                continue
+            out = _EVAL_CACHE.get(_cache_key(geo_ov, I, g, oprpm))
             if out is not None:
-                points[i] = _mk_point(out, ov, I, gi, oi, g)
+                points[i] = _mk_point(out, ov, I, gi, oi, g, oprpm)
             else:
                 misses.append((i, t))
-        n_cached = sum(1 for p in points if p is not None)
+        if n_rejected:
+            log.info("sweep: %d of %d points rejected before solving — %s",
+                     n_rejected, len(tasks),
+                     next(m for m in _rej.values() if m))
+        n_cached = sum(1 for p in points if p is not None) - n_rejected
         with _scan_lock:
             if _scan_owns(run_id):
                 _scan_state["cached"] = n_cached
-                _scan_state["done"] = n_cached
+                _scan_state["rejected"] = n_rejected
+                # A rejected point IS done — nothing will ever be computed for
+                # it — so it counts towards progress, or the bar stalls short of
+                # total for the whole run.
+                _scan_state["done"] = n_cached + n_rejected
                 _scan_state["points"] = [p for p in points if p is not None]   # instant plot
 
-        # Manual executor so a Stop can cancel the not-yet-started tasks (the
-        # ~5 already-running subprocesses just finish in the background); the
-        # partial results computed so far are kept and shown.
+        # Manual executor so a Stop can cancel the not-yet-started tasks; the
+        # already-running subprocesses are killed by scan_cancel through the
+        # live-eval registry (owner "scan"); the partial results computed so
+        # far are kept and shown.
+        # ── ONCE PER SWEEP, THEN FAN OUT (user 2026-09-06) ────────────────
+        # The eddy warm-up march and the demag pre-pass are a one-off that the
+        # queue's FIRST point can pay for everybody: it publishes its settled
+        # eddy field and its Br map, and every later point continues them
+        # (SB_SEED_FROM_PREVIOUS in _EVAL_ENV).  Fanning out cold makes all
+        # _SCAN_WORKERS pay it at once instead.  The decision — and the four
+        # cases it distinguishes — is `serial_first_decision`; the reason is
+        # logged either way, because "why is the first point alone" is exactly
+        # the question a watched sweep raises.
+        done = n_cached + n_rejected
+        _sf_rpm = next((t[5] for _i, t in misses if t[5]), None)
+        _seed_ok, _seed_why = _seed_usable_for(
+            int(steps), float(coil_temp_c), _sf_rpm, _NPER,
+            need_br=bool(demag))
+        _serial_first, _sf_why = serial_first_decision(
+            len(misses), _SCAN_WORKERS, bool(demag), bool(rotor_eddy),
+            _seed_ok)
+        log.info("sweep seeding: %s — %s%s",
+                 "FIRST POINT SOLO, then fan out" if _serial_first
+                 else "fan out immediately", _sf_why,
+                 "" if _seed_ok else " (%s)" % _seed_why)
+        if _serial_first and misses and not _scan_state["cancel"]:
+            # The solo point has the machine to itself: give it several BLAS
+            # threads (2026-09-08: 29 min on one core while 9 workers idled).
+            _solo_ctx["threads"] = _solo_seed_threads()
+            log.info("sweep seeding: the solo first point runs with %d threads",
+                     _solo_ctx["threads"])
+            try:
+                i0, pt0 = _do(misses[0])
+                points[i0] = pt0
+                done += 1
+            except Exception as _e_sf:   # noqa: BLE001 — a dead first point
+                log.warning("sweep: the solo first point failed (%s); the "
+                            "rest fan out cold", _e_sf)
+            finally:
+                _solo_ctx["threads"] = None      # the fan-out stays one-thread
+            misses = misses[1:]
+            with _scan_lock:
+                if _scan_owns(run_id):
+                    _scan_state["done"] = done
+                    _scan_state["points"] = [p for p in points if p is not None]
+
         ex = ThreadPoolExecutor(max_workers=_SCAN_WORKERS)
         futs = [ex.submit(_do, it) for it in misses]
-        done = n_cached
         try:
             # Poll with a 1 s timeout instead of blocking on as_completed(): a Stop
             # must take effect within ~1 s EVEN IF the in-flight subprocess evals
@@ -925,19 +1563,25 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                                 key=lambda i: points[i]["torque_per_mass_Nm_kg"])
 
         # baseline = current motor at operating point 0 (real FEM) — skipped on
-        # a Stop so the partial result shows immediately.
-        if _scan_state["cancel"]:
+        # a Stop so the partial result shows immediately, and skipped unless the
+        # request asked for it (with_baseline; a cached eval is still attached).
+        _bck0 = _cache_key({}, float(operating_points[0].get("current_a", 85.0)),
+                           float(operating_points[0].get("gamma_deg", 0.0)))
+        if _scan_state["cancel"] or (not with_baseline and _EVAL_CACHE.get(_bck0) is None):
             baseline = {"feasible": False, "fem": True, "overrides": {}}
         else:
             _bI = float(operating_points[0].get("current_a", 85.0))
-            _bck = _eval_cache_key({}, _bI, steps, coil_temp_c, _NPER, 0.0,
-                                   mesh_size_mm, min_size_mm, n_sectors, pole_copy, torque_filter, _cfg_fp,
-                                   gap_layers, end_winding, rotor_eddy, hi_fidelity, structured_gap, airgap_macro,
-                                 iron_template=iron_template, geo_mesh=geo_mesh,
-                                 element_order=element_order, demag=demag)
+            # The baseline anchors the chart as "the current motor at operating
+            # point 0" — so it must run AT operating point 0, γ included.  It
+            # used to hardcode γ=0 while every grid point ran the op's γ: with
+            # op γ = 12° the anchor was a different operating point than the
+            # family it anchors, labeled as the same one.
+            _bG = float(operating_points[0].get("gamma_deg", 0.0))
+            _bck = _cache_key({}, _bI, _bG)
             base_out = _EVAL_CACHE.get(_bck)
             if base_out is None:
                 base_out = _subprocess_eval({}, _bI, steps, coil_temp_c, n_periods=_NPER,
+                                            gamma_deg=_bG,
                                             mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm,
                                             pole_copy=pole_copy, torque_filter=torque_filter,
                                             n_sectors=n_sectors, gap_layers=gap_layers,
@@ -951,7 +1595,7 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
             baseline = _point_from_eval(base_out, {}, _bI, -1, 0, ripple_max)
         with _scan_lock:
             if _scan_owns(run_id):
-                _scan_state["done"] = len(tasks) + 1
+                _scan_state["done"] = len(tasks) + (1 if with_baseline else 0)
 
         n_built = sum(1 for p in points if p.get("feasible"))
         result = {
@@ -959,7 +1603,11 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
             "baseline": baseline, "n_total_points": len(points),
             "n_built": n_built, "n_failed": len(points) - n_built,
             "n_eligible_points": len(elig), "n_geometries": len(geos),
-            "variables": [{"name": v["name"], "min": float(v["min"]), "max": float(v["max"])}
+            # min/max/STEP of every swept variable — the frontend restores the
+            # sweep's variable cards from this after a reload (user 2026-09-04:
+            # after a crash everything came back except the swept variables).
+            "variables": [{"name": v["name"], "min": float(v["min"]), "max": float(v["max"]),
+                           "step": float(v.get("step") or 0.0)}
                           for v in variables if v.get("name") not in ("current_a", "rpm")],
             "operating_points": operating_points, "ripple_max_pct": float(ripple_max),
             "objective": "pareto_torque_density_vs_efficiency_FEM",
@@ -974,12 +1622,26 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
             "run_id": str(run_id or ""),
             # solver params for this scan → lets the cache be re-seeded from this
             # result later with the exact same key inputs (see /scan/seed_cache).
+            # The list must be COMPLETE: seed_cache once rebuilt keys from just
+            # five of these plus defaults for the rest, so a sweep run with
+            # rotor_eddy/demag/n_sectors set was re-filed under the default-
+            # physics key — and the next default sweep served its numbers as if
+            # computed without those settings.  The run-time fingerprint is
+            # stored too: seeding after a config edit must not stamp old-config
+            # results as current.
             "scan_params": {"coil_temp_c": float(coil_temp_c), "mesh_size_mm": float(mesh_size_mm),
                             "min_size_mm": float(min_size_mm), "pole_copy": pole_copy,
-                            "torque_filter": bool(torque_filter)},
+                            "torque_filter": bool(torque_filter),
+                            "n_sectors": int(n_sectors), "gap_layers": float(gap_layers),
+                            "end_winding": float(end_winding), "rotor_eddy": bool(rotor_eddy),
+                            "hi_fidelity": bool(hi_fidelity), "structured_gap": bool(structured_gap),
+                            "airgap_macro": bool(airgap_macro), "iron_template": bool(iron_template),
+                            "geo_mesh": bool(geo_mesh), "element_order": int(element_order),
+                            "demag": bool(demag), "cfg_fp": _config_fingerprint()},
         }
         with _scan_lock:
             if _scan_owns(run_id):
+                result.setdefault("machine", _machine_stamp(_swept_geo_keys(result)))
                 _scan_state["result"] = result
         _save_last_scan(result)   # persist so it survives reload / restart
     except Exception as e:  # noqa: BLE001
@@ -1108,7 +1770,13 @@ def scan_designs(req: ScanRequest):
         import time as _t_scan
         _rate0 = {}
         try:
-            _rate0 = measured_eval_seconds(int(steps))
+            # A coupled-eddy sweep pays the cold price ONCE — its first point
+            # publishes the state every later point continues (user
+            # 2026-09-06) — so the per-point rate this panel renders is the
+            # SEEDED one.  `measured_eval_seconds` falls back to the combined
+            # window until this machine has timed a seeded eval, and its
+            # `source` says which window answered.
+            _rate0 = measured_eval_seconds(int(steps), seeded=bool(rotor_eddy))
         except Exception:
             pass
         _scan_state.update({"running": True, "done": 0, "total": 0, "result": None,
@@ -1123,7 +1791,7 @@ def scan_designs(req: ScanRequest):
                            mesh_size, min_size, req.pole_copy, bool(req.torque_filter),
                            n_sectors, gap_layers, end_winding, rotor_eddy, hi_fidelity,
                            structured_gap, airgap_macro, iron_template, geo_mesh,
-                           element_order, demag),
+                           element_order, demag, bool(req.with_baseline)),
                      daemon=True)
     _scan_thread.start()
     return {"started": True, "steps_per_period": steps, "max_geometries": max_geom,
@@ -1146,7 +1814,17 @@ def _json_sane(obj):
 @router.get("/scan/progress")
 def scan_progress():
     with _scan_lock:
-        return _json_sane(dict(_scan_state))
+        out = dict(_scan_state)
+    # The machine as it is RIGHT NOW, beside whatever result is being carried.
+    # The client compares it with the result's own stamp and refuses a chart
+    # that belongs to another motor (2026-09-10) — a restored `.last_scan.json`
+    # after a backend restart is the case that made this necessary.
+    # Blank the SAME keys the carried result's stamp blanked, so a base
+    # value typed in from the sweep itself does not make it "another motor".
+    _res = out.get("result") if isinstance(out.get("result"), dict) else None
+    _sw = tuple(((_res or {}).get("machine") or {}).get("swept") or ()) or _swept_geo_keys(_res)
+    out["machine_now"] = _machine_stamp(_sw)
+    return _json_sane(out)
 
 
 @router.post("/scan/cancel")
@@ -1158,7 +1836,11 @@ def scan_cancel():
         _scan_state["cancel"] = True
         if _scan_thread is None or not _scan_thread.is_alive():
             _scan_state["running"] = False
-    return {"cancelled": True}
+    # …and the evals already running: Stop means stop, not "let the ten
+    # workers finish an hour of work nobody will read while the next sweep
+    # shares the cores with them".  Only this sweep's own processes.
+    killed = _kill_live_evals("scan")
+    return {"cancelled": True, "killed_workers": killed}
 
 
 class SeedCacheRequest(BaseModel):
@@ -1184,12 +1866,32 @@ def seed_cache(req: SeedCacheRequest):
         return {"seeded": 0, "error": "no completed sweep to seed from"}
     steps = int(result.get("steps_per_period", 60))
     sp = result.get("scan_params") or {}
+    # Seeding rebuilds the key the ORIGINAL scan stored under, so it needs the
+    # scan's COMPLETE solver settings.  It used to reconstruct the key from just
+    # five of them plus defaults for the rest — a sweep run with rotor_eddy /
+    # demag / n_sectors set was re-filed under the default-physics key, and the
+    # next default-settings sweep served its numbers as if computed without
+    # those settings.  Results that predate the full record cannot be re-keyed
+    # honestly, so they are simply not seeded (they cost one re-solve; a
+    # poisoned cache costs a wrong answer).
+    _FULL = ("n_sectors", "gap_layers", "end_winding", "rotor_eddy", "hi_fidelity",
+             "structured_gap", "airgap_macro", "iron_template", "geo_mesh",
+             "element_order", "demag", "cfg_fp")
+    if not all(k in sp for k in _FULL):
+        return {"seeded": 0, "cache_size": len(_EVAL_CACHE),
+                "error": "the stored sweep predates the full scan_params record "
+                         "— its exact solver settings are unknown, so seeding "
+                         "it would file the points under the wrong key. Re-run "
+                         "the sweep once; new results seed fine."}
     coil = float(sp.get("coil_temp_c", req.coil_temp_c))
     mesh = float(sp.get("mesh_size_mm", req.mesh_size_mm))
     mn = float(sp.get("min_size_mm", req.min_size_mm))
     pc = sp.get("pole_copy", req.pole_copy)
     tf = bool(sp.get("torque_filter", req.torque_filter))
-    fp = _config_fingerprint()
+    # The fingerprint RECORDED AT SCAN TIME — never the current one: seeding
+    # after a config edit must not stamp old-config results as current (they
+    # will simply miss, which is the honest outcome).
+    fp = str(sp["cfg_fp"])
     seeded = 0
     for p in result["points"]:
         if not p.get("feasible") or p.get("current_a") is None or p.get("gamma_deg") is None:
@@ -1197,7 +1899,18 @@ def seed_cache(req: SeedCacheRequest):
         geo_ov = {k: v for k, v in (p.get("overrides") or {}).items() if k != "gamma_deg"}
         res = {k: p[k] for k in _RES_KEYS if k in p}
         key = _eval_cache_key(geo_ov, float(p["current_a"]), steps, coil, 1.0,
-                              float(p["gamma_deg"]), mesh, mn, -1, pc, tf, fp)
+                              float(p["gamma_deg"]), mesh, mn,
+                              int(sp["n_sectors"]), pc, tf, fp,
+                              gap_layers=float(sp["gap_layers"]),
+                              end_winding_factor=float(sp["end_winding"]),
+                              rotor_eddy=bool(sp["rotor_eddy"]),
+                              hi_fidelity=bool(sp["hi_fidelity"]),
+                              structured_gap=bool(sp["structured_gap"]),
+                              airgap_macro=bool(sp["airgap_macro"]),
+                              iron_template=bool(sp["iron_template"]),
+                              geo_mesh=bool(sp["geo_mesh"]),
+                              element_order=int(sp["element_order"]),
+                              demag=bool(sp["demag"]))
         before = len(_EVAL_CACHE)
         _store_eval(key, {"ok": True, "res": res})
         seeded += int(len(_EVAL_CACHE) > before)
@@ -1845,6 +2558,20 @@ def _make_bline(base_m: Dict[str, Any], bump_m: Dict[str, Any],
     eff_b = float(bump_m.get("efficiency", 0.0) or 0.0)
     w_td  = eff_a - eff_b          # efficiency given up per +current
     w_eff = td_b - td_a            # torque-density gained per +current
+    # SIGN GUARD.  The construction assumes +current trades efficiency FOR
+    # torque density (w_td > 0, w_eff > 0).  Below the copper-loss crossover a
+    # lightly loaded baseline can IMPROVE efficiency at +10 % current → w_td < 0
+    # → maximising F then actively rewards LOWER torque density while chasing
+    # efficiency, and the run reports normally.  A machine whose bump gains
+    # both is simply operated below its natural point — the honest weight is
+    # "flat in that axis", not a negative one.
+    if w_td < 0.0 or w_eff < 0.0:
+        log.warning("baseline line: +%.0f%% current moved (td, eff) by (%+.4g, "
+                    "%+.4g) — the '+current trades eff for td' assumption does "
+                    "not hold at this operating point; clamping the negative "
+                    "weight to 0 so the objective cannot invert",
+                    float(bump_pct), td_b - td_a, eff_b - eff_a)
+        w_td, w_eff = max(0.0, w_td), max(0.0, w_eff)
     norm  = ((w_td * w_td + w_eff * w_eff) ** 0.5) or 1.0
     return {"td_a": td_a, "eff_a": eff_a, "td_b": td_b, "eff_b": eff_b,
             "w_td": w_td, "w_eff": w_eff, "norm": norm,
@@ -1990,10 +2717,17 @@ def _recenter_specs(specs, best_x):
 
 
 def _mtpa_gamma_sweep(geom, ref_I, steps, coil_temp, mesh_size, min_size, n_sectors,
-                      lo=-50.0, hi=0.0, step=5.0, element_order=2):
+                      lo=-50.0, hi=50.0, step=10.0, element_order=2):
     """Find the load angle γ that MAXIMISES torque (MTPA) for ONE geometry at a
     reference current — a coarse PARALLEL sweep + parabolic refine.  Run once
-    before the geometry search so the whole optimization uses the best phase."""
+    before the geometry search so the whole optimization uses the best phase.
+
+    SYMMETRIC by default.  The sweep used to stop at γ = 0 ([-50, 0], step 5):
+    right for the 40 mm machine whose MTPA sat negative, but on the Ø200
+    12s/10p (user's hand-found γ ≈ +16°) the peak landed ON the edge and the
+    whole run was pinned to γ = 0.0 (perp_free_200_20260904, 2026-09-04).
+    Same 11 evals, one parallel wave: [-50, 50] at 10° plus the parabolic
+    refine resolves the peak to ~1° on a cosine-shaped T(γ)."""
     from concurrent.futures import ThreadPoolExecutor
     cand = [round(lo + i * step, 1) for i in range(int(round((hi - lo) / step)) + 1)]
 
@@ -2001,7 +2735,7 @@ def _mtpa_gamma_sweep(geom, ref_I, steps, coil_temp, mesh_size, min_size, n_sect
         o = _subprocess_eval(geom, ref_I, steps, coil_temp, n_periods=1.0,
                              gamma_deg=float(gc), mesh_size_mm=mesh_size,
                              min_size_mm=min_size, n_sectors=n_sectors,
-                             element_order=element_order)
+                             element_order=element_order, owner="descent")
         return (float(gc), float(o["res"].get("T_em_Nm", 0.0) or 0.0)) if o.get("ok") else None
 
     with ThreadPoolExecutor(max_workers=_SCAN_WORKERS) as ex:
@@ -2011,6 +2745,12 @@ def _mtpa_gamma_sweep(geom, ref_I, steps, coil_temp, mesh_size, min_size, n_sect
     pts.sort(key=lambda p: p[0])
     bi = max(range(len(pts)), key=lambda i: pts[i][1])
     gb = pts[bi][0]
+    if bi == 0 or bi == len(pts) - 1:
+        # An edge peak is a sweep that was too narrow, not an answer — say so,
+        # because every candidate of the run inherits this γ.
+        log.warning("MTPA sweep: torque peak sits at the sweep EDGE γ = %.1f° "
+                    "(range %.0f..%.0f) — widen the sweep; the run will use it as is",
+                    gb, lo, hi)
     if 0 < bi < len(pts) - 1:                       # parabolic refine around the peak
         (_, y0), (_, y1), (_, y2) = pts[bi - 1], pts[bi], pts[bi + 1]
         denom = (y0 - 2.0 * y1 + y2)
@@ -2070,7 +2810,14 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                                  gap_layers=gap_layers, structured_gap=structured_gap,
                                  airgap_macro=airgap_macro,
                                  iron_template=iron_template, geo_mesh=geo_mesh,
-                                 element_order=element_order)
+                                 element_order=element_order,
+                                 # The run's own operating point, pinned for the
+                                 # whole search: without it every eval solved at
+                                 # the LIVE config's speed, so the result was
+                                 # labeled with the request's rpm but solved at
+                                 # whatever the Simulation tab said at eval time.
+                                 rpm=(float(op.get("rpm")) if op.get("rpm") else None),
+                                 owner="descent")
             if o.get("ok") and isinstance(o.get("res"), dict):
                 o["res"]["current_a"] = float(cur)   # record solved current in best
             if isinstance(o, dict):
@@ -2093,7 +2840,11 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                 if abs(T1 - target_torque) <= _torque_tol * target_torque:
                     warm[0] = probe                  # this current works → next warm-start
                     return o1                        # already in band → skip 2nd solve
-                I2 = min(400.0, max(2.0, probe * target_torque / T1))
+                # Cap RELATIVE to the probe, not at a fixed 400 A: the Ø200
+                # machine runs its 500 kW point at 445 A, and a fixed cap
+                # silently clamped every rescale below the operating point
+                # (2026-09-05).  3× the probe is still a sane hang guard.
+                I2 = min(3.0 * probe, max(2.0, probe * target_torque / T1))
                 warm[0] = I2                          # warm-start the next probe
                 return _eval_at(xx, I2)
             return _eval_at(xx, I)
@@ -2126,19 +2877,29 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
         # ── Baseline (current-only) line: a 2nd FEM sim of THIS geometry at
         #    I·(1+bump) gives point B; A–B sets the perpendicular-distance weights. ──
         if str(objective) == "baseline_line":
-            try:
-                bb = _eval_at(x, I * (1.0 + max(0.0, float(current_bump_pct)) / 100.0))
-                n_evals += 1
-                if bb.get("ok"):
-                    base["_bline"] = _make_bline(base, bb["res"], current_bump_pct)
-                    # Point B is a fully paid-for eval with metrics; it belongs in
-                    # the cloud like any other (it used to be the ONE design every
-                    # run measured and never showed).
-                    _pub_pt(all_pts, bb, "baseline_bump")
-                    with _descent_lock:
-                        _descent_state["baseline_line"] = dict(base["_bline"])
-            except Exception:   # noqa: BLE001
-                pass
+            # If point B cannot be measured there is NO baseline line, and
+            # _descent_cost silently falls back to the legacy product objective
+            # — the whole run then optimizes a different criterion than the one
+            # requested (the standing rule is baseline_line only).  The auto and
+            # screen workers abort loudly on exactly this; the descent workers
+            # predate that fix and used to swallow it.
+            bb = _eval_at(x, I * (1.0 + max(0.0, float(current_bump_pct)) / 100.0))
+            n_evals += 1
+            if not bb.get("ok"):
+                with _descent_lock:
+                    _descent_state.update(error="baseline bump eval (point B) "
+                                          "failed: %s — cannot build the "
+                                          "baseline line, refusing to fall back "
+                                          "to a different objective"
+                                          % bb.get("error"))
+                return
+            base["_bline"] = _make_bline(base, bb["res"], current_bump_pct)
+            # Point B is a fully paid-for eval with metrics; it belongs in
+            # the cloud like any other (it used to be the ONE design every
+            # run measured and never showed).
+            _pub_pt(all_pts, bb, "baseline_bump")
+            with _descent_lock:
+                _descent_state["baseline_line"] = dict(base["_bline"])
         cost0, F0 = _descent_cost(base, base, ripple_max, w_eff, w_td, lam, v_peak_limit)
         best = {"x": dict(x), "metrics": base, "cost": cost0, "F": F0}   # descent iterate
         # best_seen = the GLOBALLY lowest-cost design over ALL evaluations (not just
@@ -2217,6 +2978,16 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                 return False
             best["cost"], best["F"] = _descent_cost(
                 best["metrics"], base, ripple_max, w_eff, w_td, lam, v_peak_limit)
+            # best_seen must be re-scored under the escalated λ too — it is what
+            # the final result and ⭐/Apply report, and _consider compares fresh
+            # candidates (scored at the NEW λ) against its cost.  Left at the
+            # old-λ cost, a gate-breaching incumbent found cheap under λ=0.5
+            # could never be displaced by a feasible design that beats it under
+            # the ramped λ.  The CMA and screen workers already do this; the
+            # gradient path was the one left out.
+            best_seen["cost"], best_seen["F"] = _descent_cost(
+                best_seen["metrics"], base, ripple_max, w_eff, w_td, lam,
+                v_peak_limit)
             with _descent_lock:
                 _descent_state.setdefault("range_events", []).append(dict(ev))
                 _descent_state["best"] = _best_state()
@@ -2424,7 +3195,11 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                                  gap_layers=gap_layers, structured_gap=structured_gap,
                                  airgap_macro=airgap_macro,
                                  iron_template=iron_template, geo_mesh=geo_mesh,
-                                 element_order=element_order)
+                                 element_order=element_order,
+                                 # Pin the run's own speed — same reason as the
+                                 # gradient worker above.
+                                 rpm=(float(op.get("rpm")) if op.get("rpm") else None),
+                                 owner="descent")
             # Stamp the SOLVED current onto the result so the best records the
             # operating point it was found at (target-torque solves for it) →
             # saving the design can persist current+γ for a reproducible sim.
@@ -2449,7 +3224,11 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                 if abs(T1 - target_torque) <= _torque_tol * target_torque:
                     warm[0] = probe
                     return o1
-                I2 = min(400.0, max(2.0, probe * target_torque / T1))
+                # Cap RELATIVE to the probe, not at a fixed 400 A: the Ø200
+                # machine runs its 500 kW point at 445 A, and a fixed cap
+                # silently clamped every rescale below the operating point
+                # (2026-09-05).  3× the probe is still a sane hang guard.
+                I2 = min(3.0 * probe, max(2.0, probe * target_torque / T1))
                 warm[0] = I2
                 return _eval_at(d, I2)
             return _eval_at(d, I)
@@ -2532,17 +3311,26 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                 #    at I·(1+bump) → point B; A–B fixes the perpendicular-distance
                 #    weights for the whole search (kept across box-walking rounds). ──
                 if str(objective) == "baseline_line":
-                    try:
-                        bb = _eval_at(to_geom(x0n),
-                                      I * (1.0 + max(0.0, float(current_bump_pct)) / 100.0))
-                        n_evals += 1
-                        if bb.get("ok"):
-                            base["_bline"] = _make_bline(base, bb["res"], current_bump_pct)
-                            _bb_pub = bb          # published below, next to point A
-                            with _descent_lock:
-                                _descent_state["baseline_line"] = dict(base["_bline"])
-                    except Exception:   # noqa: BLE001
-                        pass
+                    # Same contract as the gradient worker above: no point B →
+                    # no baseline line → _descent_cost would silently run the
+                    # legacy product objective for the whole run.  Abort loudly
+                    # instead (mirrors the auto/screen workers).
+                    bb = _eval_at(to_geom(x0n),
+                                  I * (1.0 + max(0.0, float(current_bump_pct)) / 100.0))
+                    n_evals += 1
+                    if not bb.get("ok"):
+                        with _descent_lock:
+                            _descent_state.update(
+                                error="baseline bump eval (point B) failed: %s "
+                                      "— cannot build the baseline line, "
+                                      "refusing to fall back to a different "
+                                      "objective" % bb.get("error"),
+                                running=False)
+                        return
+                    base["_bline"] = _make_bline(base, bb["res"], current_bump_pct)
+                    _bb_pub = bb          # published below, next to point A
+                    with _descent_lock:
+                        _descent_state["baseline_line"] = dict(base["_bline"])
                 cost0, F0 = _descent_cost(base, base, ripple_max, w_eff, w_td, lam, v_peak_limit)
                 best = {"x": to_geom(x0n), "metrics": base, "cost": cost0, "F": F0}
                 history.append(_hrow(0, base, cost0, F0, best["x"]))
@@ -2599,7 +3387,17 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                             if c < best["cost"] - 1e-9:
                                 best = {"x": to_geom(sols[i]), "metrics": out["res"], "cost": c, "F": Fv}
                         else:
-                            cost_by_i[i] = 1e6        # failed eval → repelled
+                            # GRADED fence, not a constant: a flat 1e6 makes an
+                            # all-failed generation perfectly flat and CMA-ES
+                            # reads flat fitness as convergence (tolfun) — the
+                            # run dies "successfully" with the baseline as its
+                            # answer.  Same fix the auto worker got; the slope
+                            # is the normalized distance from the start point
+                            # (the one design proven buildable), so a fenced
+                            # generation still points back toward feasibility.
+                            _dn = float(np.linalg.norm(np.asarray(sols[i], float)
+                                                       - np.asarray(x0n, float)))
+                            cost_by_i[i] = 1e6 * (1.0 + _dn)
                         # Publish per-EVAL so the objective-space chart fills in real time.
                         with _descent_lock:
                             _descent_state["n_evals"] = n_evals
@@ -2920,7 +3718,11 @@ def descent_progress():
 def descent_cancel():
     with _descent_lock:
         _descent_state["cancel"] = True
-    return {"cancelled": True}
+    # Stop means stop — same rule as the sweep: the evals already running
+    # (MTPA sweep, a generation in flight) are killed, not left to finish an
+    # hour of work nobody will read beside the next run's workers.
+    killed = _kill_live_evals("descent")
+    return {"cancelled": True, "killed_workers": killed}
 
 
 @router.get("/surrogate")
@@ -3176,10 +3978,18 @@ def _auto_prefence(overrides: Dict[str, float]) -> Optional[str]:
     try:
         cfg = get_config()
         geo = {**dict(cfg.get("geometry", {})), **dict(overrides)}
-        # 1:1 with refine_proc.run_one — clamp first (the eval scores the CLAMPED
-        # cross-section, so the fence must judge the clamped one too).
-        from motor_ai_sim.geometry_constraints import clamp as _clamp_geo
-        geo, _applied = _clamp_geo(geo)
+        # 1:1 with refine_proc.run_one — a candidate outside a closed-form bound
+        # is REJECTED, not pulled back to the bound.  Clamping made the search
+        # score a DIFFERENT machine from the one the vector names: every draw
+        # above the limit collapsed onto the same bound geometry, so CMA-ES saw
+        # a flat plateau it cannot learn from and the winner's reported knob was
+        # a value the design never had.  A reject costs nothing — the caller
+        # resamples, and a neighbourhood that stays unbuildable gets the graded
+        # fence without spending an eval.
+        from motor_ai_sim.geometry_constraints import violation_message as _vmsg
+        _why = _vmsg(geo)
+        if _why:
+            return _why
         from motor_ai_sim.optimization.refine_proc import _coil_fit
         n_fit, n_req = _coil_fit(geo)
         if n_fit < n_req:
@@ -3748,7 +4558,12 @@ def _auto_assemble(max_ripple_pct: float, budget_evals: int = 0,
             "current geometry — the whitelist and the loaded motor disagree."))
 
     n_vars = len(variables)
-    rate = measured_eval_seconds(steps_pp)
+    # Same rule as the sweep's: with the coupled eddy solve on, only the first
+    # eval of a descent pays the warm-up + demag pre-pass, so the budget is
+    # quoted at the SEEDED price (user 2026-09-06).  Falls back to the combined
+    # window until this machine has timed one; `rate["source"]` says which.
+    rate = measured_eval_seconds(steps_pp,
+                                 seeded=bool(ev.get("rotor_eddy", False)))
     _asked = int(budget_evals or 0)
 
     if md == "screen":
@@ -4143,6 +4958,44 @@ def _auto_worker(plan: Dict[str, Any], run_id: str, bucket: str,
             counts["resampled"] += gen_resampled
             counts["prefenced"] += (gen_invalid - gen_resampled)
 
+            # ── ONCE PER RUN, THEN FAN OUT (user 2026-09-06) ──────────────
+            # Same rule as the sweep's: with coupled eddy + demag and NO usable
+            # seed, the first generation's first candidate solves alone and
+            # pays the warm-up march + the demag pre-pass for everybody, then
+            # the rest of the generation (and every later one) continues its
+            # state.  Only ever on the FIRST generation — after that a seed
+            # exists by construction, and `serial_first_decision` says so.
+            _todo = [i for i in range(len(sols)) if i not in cost_by_i]
+            _seed_ok, _seed_why = _seed_usable_for(
+                int(ev["steps_per_period"]), float(ev["coil_temp_c"]), rpm,
+                1.0, need_br=bool(ev.get("demag", False)))
+            _serial_first, _sf_why = serial_first_decision(
+                len(_todo), _SCAN_WORKERS, bool(ev.get("demag", False)),
+                bool(ev["rotor_eddy"]), _seed_ok)
+            log.info("AUTO gen %d seeding: %s — %s%s", it + 1,
+                     "FIRST CANDIDATE SOLO, then fan out" if _serial_first
+                     else "fan out immediately", _sf_why,
+                     "" if _seed_ok else " (%s)" % _seed_why)
+            if _serial_first and _todo:
+                _i0 = _todo[0]
+                _out0 = _eval_at(to_geom(sols[_i0]), I)
+                n_evals += 1
+                if _out0 and _out0.get("ok"):
+                    _c0, _F0 = _descent_cost(_out0["res"], base, ripple_max,
+                                             1.0, 1.0, 1.0, 1e9)
+                    cost_by_i[_i0] = _c0
+                    _pub_pt(all_pts, _out0, "cmaes", F=_F0)
+                    if _c0 < best["cost"] - 1e-9:
+                        best = {"x": to_geom(sols[_i0]),
+                                "metrics": _out0["res"], "cost": _c0, "F": _F0}
+                else:
+                    cost_by_i[_i0] = _fence_cost(sols[_i0])
+                with _descent_lock:
+                    _descent_state["n_evals"] = n_evals
+                    _descent_state["points"] = list(all_pts)
+                    _descent_state["best"] = _bstate()
+                    _descent_state["current"] = _msum(best["metrics"])
+
             with ThreadPoolExecutor(max_workers=_SCAN_WORKERS) as pool:
                 futs = {pool.submit(_eval_at, to_geom(s), I): i
                         for i, s in enumerate(sols) if i not in cost_by_i}
@@ -4363,7 +5216,15 @@ def _screen_worker(plan: Dict[str, Any], run_id: str, bucket: str,
             float(ev["end_winding_factor"]), bool(ev["rotor_eddy"]), False,
             bool(ev["structured_gap"]), bool(ev["airgap_macro"]),
             bool(ev["iron_template"]), bool(ev["geo_mesh"]),
-            int(ev["element_order"]))
+            int(ev["element_order"]),
+            # The eval below PINS these from the plan while the fingerprint
+            # tracks the LIVE config — without them in the key, a mid-run
+            # Simulation-tab edit stored pinned-physics results under the
+            # new-config fingerprint (and a later run at the new settings
+            # cache-hit old-rpm physics).
+            demag=bool(ev.get("demag", False)),
+            pins={"rpm": float(rpm) if rpm is not None else None,
+                  "connection": str(conn) if conn else None})
 
     def _eval_at(d: Dict[str, float], cur: float) -> Dict[str, Any]:
         """One FEM eval, through the persistent cache.  A cache HIT is not

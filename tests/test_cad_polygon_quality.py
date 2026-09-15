@@ -30,7 +30,7 @@ rule is NOT the criterion:
 2. **No degenerate ring** — every ring has >= 3 distinct points and an area
    above (1e-4 mm)^2, and no domain lost a body.
 3. **Arc quality, measured against the LOCAL discretisation.**  A ring median is
-   the wrong yardstick: the stator slot liner is a legitimate 0.15 mm x 7.81 mm
+   the wrong yardstick: the stator insulation is a legitimate 0.15 mm x 7.81 mm
    band, so its shortest edge is 1.9 % of its own median and always will be —
    the geometry demands it.  Likewise the 40 mm bore ring legitimately carries a
    0.15 mm fillet (0.044 mm chords) next to a 12.1 mm bore (0.297 mm chords).

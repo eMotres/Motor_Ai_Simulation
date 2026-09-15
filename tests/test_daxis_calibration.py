@@ -410,7 +410,14 @@ class TestTheDAxisCanBePinned:
 
         monkeypatch.setattr(F, "_Excitation", _Exc)
         try:
-            F.fem_transient_sliding_band(daxis_deg=45.5, n_steps_per_period=4)
+            # n_sectors=1 (full ring) on purpose: this case runs on whatever
+            # machine the config holds, and the default n_sectors=4 is legal
+            # only while gcd(slots, poles) is a multiple of 4.  The live config
+            # moved to 12s/10p (gcd 2) and the solver — rightly — raised before
+            # the excitation was ever built, so the test read `daxis_deg: None`
+            # off an empty dict and blamed the pin.  1 divides every machine.
+            F.fem_transient_sliding_band(daxis_deg=45.5, n_steps_per_period=4,
+                                         n_sectors=1)
         except _Stop:
             pass
         except Exception as e:               # any other failure is a real one
@@ -424,7 +431,11 @@ class TestTheDAxisCanBePinned:
         from motor_ai_sim.simulation import fem_solver_2d as F
         for bad in (float("nan"), float("inf"), "sixty"):
             with pytest.raises((ValueError, TypeError)):
-                F.fem_transient_sliding_band(daxis_deg=bad, n_steps_per_period=4)
+                # n_sectors=1 for the reason above — and here it also keeps the
+                # case honest: a ValueError raised by the SECTOR check would
+                # satisfy `pytest.raises` while the pin went unexamined.
+                F.fem_transient_sliding_band(daxis_deg=bad, n_steps_per_period=4,
+                                             n_sectors=1)
 
     def test_the_route_reads_the_pin_from_the_simulation_tab(self, monkeypatch):
         """Standing rule: the value comes from Simulation.  Blank = measure."""
@@ -444,3 +455,25 @@ class TestTheDAxisCanBePinned:
         monkeypatch.setattr("motor_ai_sim.config.get_config", _cfg({"daxis_deg": "sixty"}))
         with pytest.raises(HTTPException):                      # never a guess
             S._effective_daxis(None)
+
+
+def test_the_daxis_key_ignores_dimensions_that_cannot_move_the_axis():
+    """θ* is a symmetry property of the MAGNETIC cross-section.  The stack
+    length, the shaft wall, the carbon sleeve, the liner and the wire sizes do
+    not enter it — keying on them re-ran the 24-frame no-load calibration after
+    the user merely thickened the shaft wall (2026-09-07).  Anything that shapes
+    iron, magnets, slots or the magnetic gap still re-calibrates."""
+    base = {"num_poles": 10, "num_slots": 12, "magnet_height": 30.0, "air_gap": 3.1,
+            "tooth_width": 23.3, "shaft_height": 3.0, "motor_length": 180.0,
+            "sleeve_thickness": 2.5, "insulation_thickness": 0.25,
+            "num_wires_per_slot": 27, "wire_width": 9.0}
+    fp = F._daxis_geo_fingerprint(base)
+    for k, v in (("shaft_height", 5.0), ("motor_length", 200.0), ("sleeve_thickness", 1.0),
+                 ("insulation_thickness", 0.1), ("num_wires_per_slot", 30), ("wire_width", 8.0)):
+        assert F._daxis_geo_fingerprint(dict(base, **{k: v})) == fp, k
+    for k, v in (("magnet_height", 29.0), ("air_gap", 3.0), ("tooth_width", 22.0), ("num_slots", 24)):
+        assert F._daxis_geo_fingerprint(dict(base, **{k: v})) != fp, k
+    # the cache key carries the same fingerprint
+    p = SimpleNamespace(num_poles=10)
+    w = {"layers": 1, "connection": "2P"}
+    assert F._daxis_topology_key(p, base, w) == F._daxis_topology_key(p, dict(base, shaft_height=6.0), w)

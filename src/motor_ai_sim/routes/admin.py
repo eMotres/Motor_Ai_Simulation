@@ -228,6 +228,114 @@ def set_disabled(uid: str, body: dict = Body(default={}), _admin: dict = Depends
     return {"ok": True, "source": "firebase", "uid": uid, "disabled": disabled}
 
 
+# ── Per-user motor access ─────────────────────────────────────────────────────
+# WHICH catalog motors an account may open is registry data (users.json
+# `motors: {all, dies}`), read by motor_access on every catalog request.  These
+# three routes are the admin UI's side of it; nothing else writes grants.
+
+
+@router.get("/motors")
+def list_motors(_admin: dict = Depends(require_admin)):
+    """Every die in the shared catalog — the grant picker's list."""
+    from motor_ai_sim.routes.family import catalog_dies
+    dies = catalog_dies()
+    return {"count": len(dies), "dies": dies}
+
+
+@router.get("/users/{email}/motors")
+def get_user_motors(email: str, _admin: dict = Depends(require_admin)):
+    """This account's grants: `{"all": bool, "dies": [names]}`."""
+    from motor_ai_sim import users as U
+    if U.get_user(email) is None:
+        raise HTTPException(status_code=404, detail=f"user '{email}' not found")
+    return {"email": email.strip().lower(), "motors": U.get_motor_grants(email)}
+
+
+@router.put("/users/{email}/motors")
+def set_user_motors(email: str, body: dict = Body(default={}),
+                    _admin: dict = Depends(require_admin)):
+    """Replace this account's grants.  `all: true` means the whole catalog
+    (present and future); otherwise `dies` is the exact list.
+
+    Unknown die names are REFUSED and named — a grant silently dropped because
+    a die was renamed is a user who still sees nothing and no way to find out
+    why."""
+    from motor_ai_sim import users as U
+    from motor_ai_sim.routes.family import die_names
+    if U.get_user(email) is None:
+        raise HTTPException(status_code=404, detail=f"user '{email}' not found")
+    body = body or {}
+    all_motors = bool(body.get("all"))
+    raw = body.get("dies")
+    if raw is None:
+        raw = []
+    if not isinstance(raw, (list, tuple)):
+        raise HTTPException(status_code=422,
+                            detail="'dies' must be a list of die names")
+    dies = [str(d).strip() for d in raw if str(d).strip()]
+    known = die_names()
+    unknown = sorted({d for d in dies if d not in known})
+    if unknown:
+        raise HTTPException(status_code=422, detail=(
+            "unknown die(s): " + ", ".join(f"'{d}'" for d in unknown)
+            + " — the catalog has " + (", ".join(f"'{d}'" for d in sorted(known))
+                                       if known else "no dies")))
+    grants = U.set_motor_grants(email, all_motors=all_motors, dies=dies)
+    return {"ok": True, "email": email.strip().lower(), "motors": grants}
+
+
+# ── Sessions + auth events ────────────────────────────────────────────────────
+# The forensic side of sign-in.  A session record says WHICH browser holds a
+# live token (user agent, ip, first and last seen); the event log says what the
+# server decided about every token it was shown, with the reason.  Together they
+# answer the question that had no answer before 2026-09-03: was the user signed
+# out because something rejected their token, or because that browser profile
+# never kept it in the first place?
+
+
+@router.get("/sessions")
+def admin_sessions(email: Optional[str] = None,
+                   _admin: dict = Depends(require_admin)):
+    """Every session on the deployment, newest first; `?email=` narrows it."""
+    from motor_ai_sim import sessions as S
+    rows = [S.public(r) for r in S.list_all(email)]
+    return {"count": len(rows), "sessions": rows}
+
+
+@router.post("/sessions/{sid}/revoke")
+def admin_revoke_session(sid: str, _admin: dict = Depends(require_admin)):
+    """Kill one session immediately — its token stops verifying on the next
+    request (reason `revoked`), no waiting for the 30-day expiry."""
+    from motor_ai_sim import sessions as S
+    rec = S.revoke(sid)
+    if rec is None:
+        raise HTTPException(status_code=404, detail=f"no session '{sid}'")
+    S.record_event("revoke", email=rec.get("email", ""), sid=sid,
+                   reason="admin", path="/api/admin/sessions/revoke")
+    return {"ok": True, "session": S.public(rec)}
+
+
+@router.post("/users/{email}/revoke_all")
+def admin_revoke_all(email: str, _admin: dict = Depends(require_admin)):
+    """Sign an account out of everywhere (password reset, lost laptop)."""
+    from motor_ai_sim import sessions as S
+    n = S.revoke_all(email)
+    S.record_event("revoke", email=email, reason="admin_all",
+                   path="/api/admin/users/revoke_all", count=n)
+    return {"ok": True, "email": email.strip().lower(), "revoked": n}
+
+
+@router.get("/auth_events")
+def admin_auth_events(limit: int = 200, email: Optional[str] = None,
+                      _admin: dict = Depends(require_admin_or_token)):
+    """The tail of logs/auth_events.jsonl — login / logout / renew / reject /
+    store_unavailable / revoke, newest first, each with its reason."""
+    from motor_ai_sim import sessions as S
+    limit = max(1, min(int(limit or 200), 2000))
+    ev = S.read_events(limit=limit, email=email or "")
+    return {"count": len(ev), "events": ev}
+
+
 # ── Tickets (support: bugs / feature requests / questions) ────────────────────
 _VALID_TICKET_STATUS = ("open", "in_progress", "resolved", "closed")
 

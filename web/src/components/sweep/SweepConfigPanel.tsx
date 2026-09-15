@@ -5,8 +5,6 @@ import {
   Button,
   IconButton,
   TextField,
-  InputAdornment,
-  Divider,
   Card,
   CardContent,
   Tooltip,
@@ -23,7 +21,6 @@ import {
 import ShowChartIcon from '@mui/icons-material/ShowChart';
 import CloseIcon     from '@mui/icons-material/Close';
 import TuneIcon      from '@mui/icons-material/Tune';
-import RefreshIcon   from '@mui/icons-material/Refresh';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { useMotorStore } from '../../stores/motorStore';
 import AutoOptimizePanel from './AutoOptimizePanel';
@@ -79,16 +76,53 @@ const RangeField: React.FC<{ label: string; value: number; onChange: (v: number)
     );
   };
 
+// ── Feasibility bound for one knob ───────────────────────────────────────────
+// Some knobs have a closed-form limit that depends on the OTHER knobs — the
+// winding must fit the slot, so wire_height ≤ (slot_height − 2·insulation) /
+// num_wires_per_slot − wire_spacing_y.  A sweep whose range runs past that
+// limit used to look fine and quietly return duplicates (the backend clamped
+// and solved the bound instead); those points are now rejected outright, so the
+// range has to say so BEFORE the run is started.
+// The bound comes from the backend (motor_ai_sim.geometry_constraints) — never
+// recomputed here, or the two drift apart.  One request per geometry revision,
+// shared by every card.
+const API_G = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
+let _feasCache: { key: string; data: Record<string, any> } | null = null;
+
+const useFeasBound = (paramName: string, geometry: any) => {
+  const key = JSON.stringify(geometry ?? {});
+  const [b, setB] = useState<any>(null);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      if (_feasCache?.key !== key) {
+        try {
+          const r = await fetch(`${API_G}/api/geometry/constraints`).then(x => x.json());
+          _feasCache = { key, data: (r?.bounds as Record<string, any>) || {} };
+        } catch { _feasCache = { key, data: {} }; }
+      }
+      if (alive) setB(_feasCache?.data?.[paramName] ?? null);
+    })();
+    return () => { alive = false; };
+  }, [key, paramName]);
+  return b;
+};
+
 const SweepVarCard: React.FC<SweepVarCardProps> = ({ paramName, label, unit, optimize }) => {
   const { sweepConfig, updateVariation, geometry, parameterSchema } = useMotorStore();
+  const feas = useFeasBound(paramName, geometry);
   // Phase current: the user works in PEAK amps, the backend (and every stored
   // range) speaks RMS — so the card offers the unit as a CHOICE and converts at
   // the edge.  Stored values stay Arms: one source of truth, and a range typed
   // in peak survives switching the unit back without drift.
   const isCur = paramName === 'current_a';
+  // PEAK is the default (user's standing choice, 2026-08-22): the inverter and
+  // the ANSYS side both speak amplitude, so the card opens in peak and only an
+  // explicit RMS pick (persisted) switches it back.  Stored range values remain
+  // Arms either way — only the DISPLAY unit changes.
   const [iUnit, setIUnitState] = useState<'arms' | 'peak'>(() => {
-    try { return localStorage.getItem('sweep.iUnit') === 'peak' ? 'peak' : 'arms'; }
-    catch { return 'arms'; }
+    try { return localStorage.getItem('sweep.iUnit') === 'arms' ? 'arms' : 'peak'; }
+    catch { return 'peak'; }
   });
   const setIUnit = (u: 'arms' | 'peak') => {
     setIUnitState(u);
@@ -107,8 +141,11 @@ const SweepVarCard: React.FC<SweepVarCardProps> = ({ paramName, label, unit, opt
   // Tidy figures: round to 0.1 (whole numbers for integer params like turns /
   // slot count) so the card shows 4.7 / 14.0 … 23.4 instead of 4.68 / 14.02.
   const isInt = parameterSchema.find(p => p.name === paramName)?.type === 'int';
-  const snap = (x: number) => (isInt ? Math.round(x) : Math.round(x * 10) / 10);
-  const fmt  = (x: number) => (isInt ? String(Math.round(x)) : snap(x).toFixed(1));
+  // 3 decimals, not 1: fraction parameters (magnet fill 0…1) need 0.45-style
+  // values — the old 0.1 grid silently rounded them to 0.5 the moment they
+  // were typed (live 2026-08-21: "Magnet Fill Up не могу задать 0.45").
+  const snap = (x: number) => (isInt ? Math.round(x) : Math.round(x * 1000) / 1000);
+  const fmt  = (x: number) => (isInt ? String(Math.round(x)) : String(snap(x)));
   // Optimize view anchors the ± window on the CURRENT value.
   const anchor = Number.isFinite(cur) ? cur : (Number(v.min) + Number(v.max)) / 2;
   const half   = snap(Math.max(0, (Number(v.max) - Number(v.min)) / 2));
@@ -159,6 +196,20 @@ const SweepVarCard: React.FC<SweepVarCardProps> = ({ paramName, label, unit, opt
           );
         })()}
 
+        {/* Range running past a closed-form feasibility limit: those points are
+            REJECTED before any FEM time is spent, so say it here rather than
+            letting the run come back with a build-failure box. */}
+        {feas?.kind === 'max' && Number.isFinite(Number(v?.max))
+          && Number(v.max) > Number(feas.bound) + 1e-9 && (
+          <Typography variant="caption"
+            sx={{ color: '#f59e0b', mb: 0.75, display: 'block', lineHeight: 1.35 }}>
+            max {Number(v.max)} is past the fit limit {Number(feas.bound).toFixed(3)}
+            {unitShown ? ` ${unitShown}` : ''} — points above it are rejected, not solved.
+            <br />
+            <span style={{ opacity: 0.75 }}>{feas.label}</span>
+          </Typography>
+        )}
+
         {optimize ? (
           // Optimize: vary the variable by ± a change window around its CURRENT
           // value — more intuitive than absolute min/max (that's the Sweep view).
@@ -197,7 +248,6 @@ const SweepConfigPanel: React.FC = () => {
     updateVariation,
     setVariations,
     updateOperatingPoint,
-    updateRippleThreshold,
     initVariationsFromSchema,
   } = useMotorStore();
 
@@ -226,9 +276,6 @@ const SweepConfigPanel: React.FC = () => {
     return () => window.removeEventListener('storage', onStorage);
   }, [syncOpFromSim]);
 
-  const opRpm     = sweepConfig.operatingPoints[0]?.rpm ?? 3950;
-  const opGamma   = sweepConfig.operatingPoints[0]?.gamma_deg ?? 0;
-  const opCurrent = sweepConfig.operatingPoints[0]?.current_a ?? Number(readSim('current', 85));
 
   const schemaMap = Object.fromEntries(parameterSchema.map(p => [p.name, p]));
   const sweepEntries = Object.entries(sweepConfig.variations).filter(([, v]) => v.mode !== 'fixed');
@@ -514,66 +561,12 @@ const SweepConfigPanel: React.FC = () => {
           )}
         </Box>
 
-        <Divider orientation="vertical" flexItem />
-
-        {/* Right: operating point + ripple (narrow — frees width for 2-col variables) */}
-        <Box sx={{ flexShrink: 0, width: 280 }}>
-
-          <SectionLabel sx={{ mb: 0.5 }}>Operating Point</SectionLabel>
-          <Card variant="outlined" sx={{ mb: 2.5, mt: 0.5, bgcolor: 'var(--line-soft)' }}>
-            <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
-              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25 }}>
-                <TextField
-                  label="Current"
-                  size="small"
-                  type="number"
-                  value={opCurrent}
-                  disabled
-                  InputProps={{ endAdornment: (
-                    <InputAdornment position="end" sx={{ gap: 0.5 }}>
-                      A<HelpTip title="Phase current (RMS) — taken from the Simulation tab. The optimizer runs at THIS fixed current and varies only the selected geometry variables." />
-                    </InputAdornment>
-                  ) }}
-                />
-                <Box sx={{ display: 'flex', gap: 1 }}>
-                  <TextField
-                    label="Speed" size="small" type="number" value={opRpm} disabled
-                    InputProps={{ endAdornment: <InputAdornment position="end">RPM</InputAdornment> }}
-                    sx={{ flex: 1 }}
-                  />
-                  <Tooltip title="γ counts from the q-axis, near zero in BOTH modes — Generator adds its 180° internally (never sweep around 180).">
-                    <TextField
-                      label="Load angle γ" size="small" type="number" value={opGamma} disabled
-                      InputProps={{ endAdornment: <InputAdornment position="end">°</InputAdornment> }}
-                      sx={{ flex: 1 }}
-                    />
-                  </Tooltip>
-                </Box>
-                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <Typography variant="caption" color="text.disabled">
-                    Current, speed &amp; γ — all from the Simulation tab
-                  </Typography>
-                  <Tooltip title="Re-read Speed & γ from the Simulation tab" placement="top">
-                    <Button size="small" onClick={syncOpFromSim} startIcon={<RefreshIcon sx={{ fontSize: 14 }} />}
-                      sx={{ fontSize: 10, py: 0, textTransform: 'none', minWidth: 0 }}>
-                      Sync
-                    </Button>
-                  </Tooltip>
-                </Box>
-              </Box>
-            </CardContent>
-          </Card>
-
-          <SectionLabel sx={{ mb: 0.5 }}>Torque Ripple</SectionLabel>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <TextField label="limit ≤ %" size="small" type="number"
-              value={+((sweepConfig.rippleThreshold ?? 0) * 100).toFixed(2)}
-              onChange={e => updateRippleThreshold(Math.max(0, (+e.target.value || 0)) / 100)}
-              inputProps={{ min: 0, step: 0.5, style: { fontSize: 12, width: 64 } }}
-              InputLabelProps={{ sx: { fontSize: 11 } }} />
-            <HelpTip title="Ripple limit for the optimizer. Enforced in the cost only when 'ripple λ' > 0 in the optimizer toolbar below (cost += λ·max(0, ripple% − limit%)/100). With λ = 0 the limit is inactive — trim points visually with the 'ripple ≤ X%' slider under the results chart." />
-          </Box>
-        </Box>
+        {/* The right sidebar is gone entirely (user's call, 2026-08-22):
+            the "Operating Point" card only ECHOED Simulation-tab values
+            (syncOpFromSim still runs on mount + storage events, so the
+            optimizer keeps running at exactly that operating point), and the
+            "Torque Ripple" limit moved into the DescentPanel toolbar next to
+            its own λ — the pair that actually enforces it. */}
        </Box>
        )}
 

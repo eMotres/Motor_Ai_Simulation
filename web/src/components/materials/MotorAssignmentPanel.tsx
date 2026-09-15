@@ -1,4 +1,5 @@
 import React, { useMemo } from 'react';
+import { useMotorStore } from '../../stores/motorStore';
 import { Box, Typography, Divider, Chip, CircularProgress, Tooltip } from '@mui/material';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import AddCircleOutlineIcon  from '@mui/icons-material/AddCircleOutline';
@@ -22,10 +23,20 @@ const PARTS: MotorPart[] = [
   { key: 'rotor_core',  label: 'Rotor Core',   allowedCategory: 'steel',     fallbackFill: 'var(--panel-2)', accentFill: '#60a5fa' },
   { key: 'magnet',      label: 'Magnets',       allowedCategory: 'magnet',    fallbackFill: '#7f1d1d', accentFill: '#f87171' },
   { key: 'slot',        label: 'Windings',      allowedCategory: 'conductor', fallbackFill: '#78350f', accentFill: '#fbbf24' },
-  { key: 'slot_insulation', label: 'Slot Liner',  allowedCategory: 'insulator', fallbackFill: '#3f3f46', accentFill: '#a78bfa' },
+  { key: 'slot_insulation', label: 'Insulation',  allowedCategory: 'insulator', fallbackFill: '#3f3f46', accentFill: '#a78bfa' },
   { key: 'wire_insulation', label: 'Wire Enamel', allowedCategory: 'insulator', fallbackFill: '#3f3f46', accentFill: '#a78bfa' },
   { key: 'shaft',       label: 'Shaft',         allowedCategory: null,        fallbackFill: 'var(--panel)', accentFill: 'var(--text-3)' },
 ];
+
+// The retaining sleeve is not in PARTS above because it is not always THERE:
+// it exists only on a machine whose geometry carries sleeve_thickness > 0, and
+// offering a material row for a part that does not exist would invite an
+// assignment that changes nothing.  Appended by the panel when the live
+// geometry says the ring is real.
+const SLEEVE_PART: MotorPart = {
+  key: 'sleeve', label: 'Retaining Sleeve', allowedCategory: 'insulator',
+  fallbackFill: '#1f2937', accentFill: '#a78bfa',
+};
 
 // ─── SVG helper ──────────────────────────────────────────────────────────────
 
@@ -312,6 +323,16 @@ const MotorAssignmentPanel: React.FC<Props> = ({
   library, selected, assignments, loadingAssignments, saving, onAssign,
 }) => {
   const [hovered, setHovered] = React.useState<string | null>(null);
+  // One short line, one condition: the ring is listed when the geometry has one.
+  const sleeveT = Number(useMotorStore(st => st.geometry?.sleeve_thickness) ?? 0);
+  // …or when the backend already lists the part: GET /api/materials adds
+  // `sleeve` only for a machine whose geometry has one, so its presence is the
+  // same fact from the other side and does not depend on this tab's copy of
+  // the geometry being fresh (user 2026-09-04: "не вижу sleeve в дереве
+  // материалов, но на геометрии он появился").
+  const sleeveAssigned = !!(assignments as any)?.sleeve;
+  const parts = useMemo(
+    () => ((sleeveT > 0 || sleeveAssigned) ? [...PARTS, SLEEVE_PART] : PARTS), [sleeveT, sleeveAssigned]);
 
   if (loadingAssignments || !assignments) {
     return (
@@ -373,7 +394,7 @@ const MotorAssignmentPanel: React.FC<Props> = ({
         </Typography>
 
         <Box sx={{ mt: 0.5 }}>
-          {PARTS.map((part, i) => (
+          {parts.map((part, i) => (
             <React.Fragment key={part.key}>
               {i > 0 && <Divider sx={{ borderColor: 'var(--panel)', mx: 1.5 }} />}
               <PartRow

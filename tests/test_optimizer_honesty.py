@@ -211,7 +211,15 @@ def test_surrogate_reproduces_its_anchor():
     asserted: scripts/_surrogate_uncertainty.py."""
     from motor_ai_sim.optimization import design_eval as de
 
-    set_request_materials({"assignment": {"magnet": de._ANCHOR_MAGNET},
+    # Pin the anchor's STEEL too, not just the magnet: the calibration forces
+    # both (_anchor_pins), while evaluate_design resolves the request/config
+    # context — with only the magnet pinned, this test silently depended on the
+    # LIVE config's steel matching the anchor's, and the day the machine was
+    # reassigned to 20RSW175 (2026-08-22) P_fe came back double for a reason
+    # that had nothing to do with the surrogate.
+    set_request_materials({"assignment": {"magnet": de._ANCHOR_MAGNET,
+                                          "stator_core": de._ANCHOR_STEEL,
+                                          "rotor_core": de._ANCHOR_STEEL},
                            "materials": {}})
     try:
         m = de.evaluate_design(dict(de._ANCHOR_GEO), dict(de._ANCHOR_WIND), {},
@@ -228,10 +236,15 @@ def test_surrogate_reproduces_its_anchor():
     assert m.T_ripple_pct == pytest.approx(pins["T_ripple_pct"], rel=1e-4)
     # Copper is NOT calibrated — it shares the solver's formula — so its
     # agreement with the pin is an independent check that the shared physics
-    # still lines up.  91.14 W pinned vs ~87.7 W here: 3.8 %, end-winding model.
-    # (Both now size the conductor on the CAD polygons, so this gap is the
-    # end-winding model alone — it is no longer partly a copper-area mismatch.)
-    assert m.P_cu_W == pytest.approx(91.135, rel=0.05)
+    # still lines up.  The pin moved once, and the move is the k_end fix, not a
+    # drift: 91.135 W was recorded 2026-07-29 with the pre-fix end-winding
+    # factor (k_end = 1.4641 for this anchor); the 2026-08-04 fix — the
+    # end-turn half-loop includes the wire, validated against ANSYS on this
+    # very machine (auto 1.733 vs 1.76) — evaluates the anchor at
+    # k_end = 1.7226, and P_cu is linear in k_end:
+    # 91.135 × 1.7226/1.4641 = 107.23 W.  Anything OUTSIDE the tolerance
+    # around that is a real physics change, exactly what this line is for.
+    assert m.P_cu_W == pytest.approx(107.23, rel=0.05)
 
 
 def test_surrogate_reads_topology_and_materials_from_the_design():
@@ -245,7 +258,15 @@ def test_surrogate_reads_topology_and_materials_from_the_design():
     assert de._winding_factor(12, 10, True) == pytest.approx(0.966, abs=1e-3)
     assert abs(de._winding_factor(12, 14, True) - 0.933) > 0.02
 
-    set_request_materials({"assignment": {"magnet": de._ANCHOR_MAGNET},
+    # Pin the anchor's STEEL too, not just the magnet: the calibration forces
+    # both (_anchor_pins), while evaluate_design resolves the request/config
+    # context — with only the magnet pinned, this test silently depended on the
+    # LIVE config's steel matching the anchor's, and the day the machine was
+    # reassigned to 20RSW175 (2026-08-22) P_fe came back double for a reason
+    # that had nothing to do with the surrogate.
+    set_request_materials({"assignment": {"magnet": de._ANCHOR_MAGNET,
+                                          "stator_core": de._ANCHOR_STEEL,
+                                          "rotor_core": de._ANCHOR_STEEL},
                            "materials": {}})
     try:
         Br, mu_rec, sigma, src = de._magnet_props()

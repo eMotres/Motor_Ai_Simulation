@@ -11,6 +11,7 @@ import {
   Box, Typography, Paper, Chip, Button, CircularProgress, Select, MenuItem,
   Table, TableBody, TableCell, TableHead, TableRow, Tooltip,
   Dialog, DialogTitle, DialogContent, DialogActions, TextField,
+  Checkbox, FormControlLabel, Switch,
 } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import BlockIcon from '@mui/icons-material/Block';
@@ -23,6 +24,7 @@ import {
   Tooltip as RcTooltip,
 } from 'recharts';
 import SupportSettings, { type SupportCfg } from './SupportSettings';
+import SessionsSection from './SessionsSection';
 import ModulesPanel from './ModulesPanel';
 import PassportManager from './PassportManager';
 import { ConfirmDialog, type ConfirmState } from '../common/PromptDialogs';
@@ -34,8 +36,16 @@ const TIER_COLOR: Record<string, string> = {
   anon: 'var(--text-4)', free: 'var(--text-3)', pro: '#3b82f6', team: '#a855f7', admin: '#fbbf24',
 };
 
+/** Which catalog motors an account may open — registry data, not a tier. */
+interface MotorGrants { all: boolean; dies: string[] }
 interface RegistryUser {
   email: string; tier: string; name: string; disabled: boolean; created?: string | null;
+  motors?: MotorGrants;
+}
+interface CatalogDie {
+  name: string; stator_diameter: number | null;
+  slots?: number | null; poles?: number | null;
+  configs: number; duties: number;
 }
 interface AdminTicket {
   id: string; uid: string | null; type: string; title: string; description: string;
@@ -150,6 +160,135 @@ const ResetPasswordDialog: React.FC<{
   );
 };
 
+// ── Motor access ────────────────────────────────────────────────────────────
+// A new account is granted NOTHING and sees an empty catalog; the vendor picks
+// its motors here. "All motors" also covers dies added later.
+
+const MotorsDialog: React.FC<{
+  user: RegistryUser | null; onClose: () => void;
+  onSaved: (email: string, motors: MotorGrants) => void;
+}> = ({ user, onClose, onSaved }) => {
+  const [dies, setDies] = useState<CatalogDie[] | null>(null);
+  const [all, setAll] = useState(false);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!user) return;
+    setErr(null);
+    setAll(user.motors?.all === true);
+    setPicked(new Set(user.motors?.dies ?? []));
+    setDies(null);
+    fetch(`${API}/api/admin/motors`, { cache: 'no-store' })
+      .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+      .then((j) => setDies(j.dies ?? []))
+      .catch((e) => { setDies([]); setErr(String(e)); });
+  }, [user]);
+
+  // Grouped by stator diameter — the same hierarchy the Motors tab shows.
+  const groups = useMemo(() => {
+    const m = new Map<string, CatalogDie[]>();
+    for (const d of dies ?? []) {
+      const k = d.stator_diameter == null ? '—' : String(d.stator_diameter);
+      m.set(k, [...(m.get(k) ?? []), d]);
+    }
+    return [...m.entries()].sort((a, b) => Number(a[0]) - Number(b[0]));
+  }, [dies]);
+
+  const toggle = (name: string) => setPicked((s) => {
+    const n = new Set(s);
+    if (n.has(name)) n.delete(name); else n.add(name);
+    return n;
+  });
+
+  const save = async () => {
+    if (!user || busy) return;
+    setBusy(true); setErr(null);
+    try {
+      const r = await fetch(`${API}/api/admin/users/${encodeURIComponent(user.email)}/motors`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ all, dies: [...picked] }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { setErr(j.detail ?? `HTTP ${r.status}`); return; }
+      onSaved(user.email, j.motors as MotorGrants);
+      onClose();
+    } catch (e) { setErr(String(e)); } finally { setBusy(false); }
+  };
+
+  return (
+    <Dialog open={!!user} onClose={onClose} maxWidth="sm" fullWidth>
+      <DialogTitle sx={{ fontSize: '1rem' }}>
+        Motors — {user?.email}
+        <Typography sx={{ fontSize: 11, color: 'var(--text-4)' }}>
+          The catalog this account sees. Nothing granted = empty catalog.
+        </Typography>
+      </DialogTitle>
+      <DialogContent sx={{ pt: '8px !important' }}>
+        <FormControlLabel
+          control={<Switch size="small" checked={all} onChange={(e) => setAll(e.target.checked)} />}
+          label={<Typography sx={{ fontSize: 13 }}>All motors <span style={{ color: 'var(--text-4)' }}>(including ones added later)</span></Typography>}
+        />
+        {dies === null && (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 2, color: 'var(--text-3)' }}>
+            <CircularProgress size={16} /> <Typography sx={{ fontSize: 12 }}>Loading catalog…</Typography>
+          </Box>
+        )}
+        {dies !== null && groups.map(([dia, list]) => (
+          <Box key={dia} sx={{ mt: 1.5, opacity: all ? 0.45 : 1 }}>
+            <Typography sx={{ ...LABEL, color: '#60a5fa' }}>Ø {dia} mm</Typography>
+            {list.map((d) => (
+              <FormControlLabel key={d.name} sx={{ display: 'flex', ml: 0 }}
+                control={<Checkbox size="small" disabled={all} checked={all || picked.has(d.name)}
+                  onChange={() => toggle(d.name)} sx={{ py: 0.25 }} />}
+                label={
+                  <Typography sx={{ fontSize: 12.5, color: 'var(--text-1)' }}>
+                    {d.name}
+                    <span style={{ color: 'var(--text-4)' }}>
+                      {'  '}· {d.configs} config{d.configs === 1 ? '' : 's'}
+                    </span>
+                  </Typography>
+                } />
+            ))}
+          </Box>
+        ))}
+        {dies !== null && dies.length === 0 && (
+          <Typography sx={{ fontSize: 12, color: 'var(--text-4)', py: 2 }}>
+            The catalog has no dies yet.
+          </Typography>
+        )}
+        {err && <Typography variant="caption" color="error" sx={{ display: 'block', mt: 1 }}>{err}</Typography>}
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose} sx={{ textTransform: 'none' }}>Cancel</Button>
+        <Button variant="contained" disabled={busy} onClick={() => void save()}
+          sx={{ textTransform: 'none' }}>Save</Button>
+      </DialogActions>
+    </Dialog>
+  );
+};
+
+const MotorsCell: React.FC<{ user: RegistryUser; onOpen: () => void }> = ({ user, onOpen }) => {
+  const g = user.motors;
+  const isAll = g?.all === true;
+  const n = g?.dies?.length ?? 0;
+  const label = isAll ? 'all' : n > 0 ? String(n) : '—';
+  const tip = isAll ? 'Every motor in the catalog, present and future'
+    : n > 0 ? `${g!.dies.join(', ')} — click to change`
+      : 'No motors granted — this account sees an empty catalog';
+  return (
+    <Tooltip title={tip} arrow>
+      <Chip label={label} size="small" clickable onClick={onOpen}
+        sx={{
+          height: 20, minWidth: 34, fontSize: 11, fontWeight: 700,
+          bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)',
+          color: isAll ? '#4ade80' : n > 0 ? 'var(--text-0)' : 'var(--text-4)',
+        }} />
+    </Tooltip>
+  );
+};
+
 // ── Panel ───────────────────────────────────────────────────────────────────
 
 const AdminPanel: React.FC = () => {
@@ -162,6 +301,7 @@ const AdminPanel: React.FC = () => {
   const [supportCfg, setSupportCfg] = useState<SupportCfg | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [resetFor, setResetFor] = useState<string | null>(null);
+  const [motorsFor, setMotorsFor] = useState<RegistryUser | null>(null);
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
 
   const load = useCallback(async () => {
@@ -338,6 +478,11 @@ const AdminPanel: React.FC = () => {
                 <TableRow>
                   <TableCell>User</TableCell>
                   <TableCell>Plan</TableCell>
+                  <TableCell align="center">
+                    <Tooltip title="Which catalog motors this account can open. A new account is granted none." arrow>
+                      <span>Motors</span>
+                    </Tooltip>
+                  </TableCell>
                   <TableCell>Created</TableCell>
                   <TableCell align="center">Status</TableCell>
                   <TableCell align="right">Actions</TableCell>
@@ -366,6 +511,15 @@ const AdminPanel: React.FC = () => {
                           <MenuItem key={t} value={t} sx={{ fontSize: 12, color: TIER_COLOR[t] }}>{t}</MenuItem>
                         ))}
                       </Select>
+                    </TableCell>
+                    <TableCell align="center">
+                      {u.tier === 'admin'
+                        ? (
+                          <Tooltip title="Admins see the whole catalog — grants do not apply" arrow>
+                            <Typography sx={{ fontSize: 11, color: 'var(--text-4)' }}>all</Typography>
+                          </Tooltip>
+                        )
+                        : <MotorsCell user={u} onOpen={() => setMotorsFor(u)} />}
                     </TableCell>
                     <TableCell sx={{ color: 'var(--text-2)' }}>{fmtCreated(u.created)}</TableCell>
                     <TableCell align="center">
@@ -405,7 +559,7 @@ const AdminPanel: React.FC = () => {
                 ))}
                 {users.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={5} sx={{ color: 'var(--text-4)', textAlign: 'center', py: 3 }}>
+                    <TableCell colSpan={6} sx={{ color: 'var(--text-4)', textAlign: 'center', py: 3 }}>
                       No accounts yet — Google sign-ins appear here automatically; password accounts via “Add account”.
                     </TableCell>
                   </TableRow>
@@ -413,6 +567,9 @@ const AdminPanel: React.FC = () => {
               </TableBody>
             </Table>
           </Paper>
+
+          {/* sessions + auth events */}
+          <SessionsSection />
 
           {/* support tickets */}
           <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1, mt: 3, mb: 1 }}>
@@ -488,6 +645,12 @@ const AdminPanel: React.FC = () => {
         onCreated={() => { setNotice('account created'); void load(); }} />
       <ResetPasswordDialog email={resetFor} onClose={() => setResetFor(null)}
         onDone={(m) => setNotice(m)} />
+      <MotorsDialog user={motorsFor} onClose={() => setMotorsFor(null)}
+        onSaved={(email, motors) => {
+          // Reflect the saved grants in the table without a reload.
+          setUsers((us) => us.map((u) => (u.email === email ? { ...u, motors } : u)));
+          setNotice(`motors updated for ${email}`);
+        }} />
       <ConfirmDialog state={confirm} onClose={() => setConfirm(null)} />
     </Box>
   );

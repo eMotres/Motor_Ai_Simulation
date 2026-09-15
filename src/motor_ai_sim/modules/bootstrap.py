@@ -28,7 +28,10 @@ def _mechanical_stub() -> StubModule:
         contracts_version=CONTRACTS_VERSION, depends_on=["mesh"],
         inputs=["MeshIR"], outputs=["ResultIR"],
         summary="ROADMAP: structural stress + modal on the same mesh -> ResultIR(stress_max_MPa)",
-        ui=UIContribution(panel_id="simulation", title="Simulation", order=50, as_tab=False)))
+        # "Electromagnetic", not "Simulation" (user 2026-09-07): the tab is the
+        # electromagnetic solver; thermal and mechanical are their own tabs and
+        # never run it — a name that says so keeps the three apart in the mind too.
+        ui=UIContribution(panel_id="simulation", title="Electromagnetic", order=50, as_tab=False)))
 
 
 def default_registry() -> ModuleRegistry:

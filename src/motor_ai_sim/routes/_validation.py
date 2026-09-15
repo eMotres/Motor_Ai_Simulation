@@ -91,7 +91,8 @@ SOLVER_REQUIRED_PARAMS: frozenset = frozenset({
     "num_slots", "num_poles",
     # winding / slot
     "wire_width", "wire_height", "wire_spacing_x", "wire_spacing_y",
-    "wire_split", "insulation_thickness", "num_wires_per_slot",
+    "wire_split", "wire_parallel",
+    "insulation_thickness", "num_wires_per_slot",
     # stator cross-section
     "tooth_width", "tooth2_width", "cut_width", "slot_hs",
     "stator_fillet_r", "stator_fillet_r1",
@@ -208,6 +209,26 @@ def parse_geo_override(geo: Optional[str], *, field: str = "geo") -> Optional[di
     if bad:
         raise reject(f"malformed {field}= override — your geometry was "
                      f"not applied", bad)
+    # The DERIVED counts follow the override's own primaries.  An override that
+    # says `num_seg × num_slots_per_segment` but not `num_slots` was merged over
+    # the loaded machine's dict, whose `num_slots` is authoritative for the
+    # builder — so a 30 mm 2×6-slot request solved on top of a loaded 24-slot
+    # machine came out as a 24-slot 30 mm cross-section, "not buildable"
+    # (2026-09-08, every coupled test the moment G2-L40 was the live machine).
+    # Same leak family as the sweep config and the catalog payload: nothing
+    # of the previous machine may survive what the request itself determines.
+    seg = clean.get("num_seg")
+    if seg is not None and not isinstance(seg, bool):
+        try:
+            _seg = int(round(float(seg)))
+            sps = clean.get("num_slots_per_segment")
+            pps = clean.get("num_poles_per_segment")
+            if sps is not None and "num_slots" not in clean:
+                clean["num_slots"] = _seg * int(round(float(sps)))
+            if pps is not None and "num_poles" not in clean:
+                clean["num_poles"] = _seg * int(round(float(pps)))
+        except (TypeError, ValueError):
+            pass
     return clean
 
 
@@ -224,12 +245,12 @@ def parse_mat_override(mat: Optional[str], *, field: str = "mat") -> Optional[di
         return None
     if not ov:
         return None
-    if "assignment" not in ov and "materials" not in ov:
+    if not ({"assignment", "materials", "parts"} & set(ov)):
         raise reject(
             f"malformed {field}= override — your materials were not applied",
             [param_error(field, sorted(str(k) for k in ov), "unknown_field",
-                         f"{field}= must carry 'assignment' and/or 'materials'; "
-                         f"got {sorted(str(k) for k in ov)}.")])
+                         f"{field}= must carry 'assignment', 'materials' and/or "
+                         f"'parts'; got {sorted(str(k) for k in ov)}.")])
     bad: List[Dict[str, Any]] = []
     out: Dict[str, Any] = {}
     a, m = ov.get("assignment"), ov.get("materials")
@@ -257,6 +278,31 @@ def parse_mat_override(mat: Optional[str], *, field: str = "mat") -> Optional[di
             raise reject(f"malformed {field}= override — your materials were "
                          f"not applied", bad)
         out["materials"] = {str(k): v for k, v in m.items()}
+    # ── Per-part accounting state ────────────────────────────────────────────
+    # Rides this same payload so every cache key and fingerprint that hashes
+    # the material context separates the three states for free.  A typo'd part
+    # or state is a 422 here, not a silent `included`: reading "exclude" as
+    # "included" would answer a different question with a plausible number —
+    # the one failure mode this solver is built to refuse.
+    pr = ov.get("parts")
+    if pr is not None:
+        if not isinstance(pr, dict):
+            raise reject(
+                f"malformed {field}= override — your materials were not applied",
+                [param_error("parts", _clip(repr(pr)), "wrong_type",
+                             f"{field}=.parts must be an object "
+                             f"{{part: 'included'|'reference'|'excluded'}}, "
+                             f"got {type(pr).__name__}.")])
+        from motor_ai_sim.part_states import (normalize_states,
+                                              UnknownPartStateError)
+        try:
+            ps = normalize_states(pr, strict=True)
+        except UnknownPartStateError as e:
+            raise reject(
+                f"malformed {field}= override — your materials were not applied",
+                [param_error("parts", _clip(repr(pr)), "unknown_value", str(e))])
+        if ps:
+            out["parts"] = ps
     return out or None
 
 
@@ -269,6 +315,86 @@ def _clip(s: Any, n: int = 200) -> str:
 # PUT /api/geometry : unknown keys and the schema's own min/max
 # ─────────────────────────────────────────────────────────────────────────────
 
+#: Schema entries the SERVER owns, for knobs that were introduced after a
+#: machine's ``geometry_schema`` was written.  The yaml wins whenever it carries
+#: the key; this only fills a hole.  It exists because ``geometry_schema`` is
+#: per-config data — every die/configuration switch rewrites motor_config.yaml —
+#: so a knob added in code would otherwise appear on new machines and vanish on
+#: every one saved before it, with the Geometry tab simply not showing it.
+SCHEMA_FALLBACK: Dict[str, dict] = {
+    "wire_parallel": {
+        "label": "Wire parallel", "unit": "strands", "type": "int",
+        "min": 1, "max": 80, "step": 1, "group": "winding",
+        "description": (
+            "wires wound in hand per turn: k strands → turns/k, EMF/k, R/k². "
+            "The slot keeps the same num_wires_per_slot physical wires (same "
+            "copper, same fill, same CAD) — k of them are simply wound "
+            "together as one turn, so the coil has num_wires_per_slot/k series "
+            "turns. Must divide num_wires_per_slot exactly. 1 = one wire in "
+            "hand."),
+    },
+    "sleeve_thickness": {
+        "label": "Sleeve thickness", "unit": "mm", "type": "float",
+        "min": 0.0, "max": 20.0, "step": 0.05, "group": "rotor",
+        "description": (
+            "carbon-fibre retaining ring on the rotor OD, inside the air gap; "
+            "0 = none; must be thinner than the air gap"),
+    },
+}
+
+#: Descriptions the SERVER owns outright, overriding whatever the config says.
+#:
+#: ``geometry_schema`` is per-config DATA: every die and every saved machine
+#: carries its own copy, written when that machine was saved.  A knob whose
+#: MEANING later changes in code therefore keeps explaining the retired one, on
+#: every machine, forever — and the Geometry tab's tooltip is where the user
+#: reads what a knob does.  ``wire_split`` is exactly that case: until
+#: 2026-09-08 it meant "transposed insulated strips of wire_width/N with no CAD
+#: behind them"; it now means N drawn strips of wire_width laid side by side and
+#: wired in series, and the stored text would send the user to halve nothing.
+#:
+#: LABELS, units and bounds are NOT overridden — only the sentence that explains
+#: the knob, and only for knobs whose semantics moved under the stored text.
+SCHEMA_DESCRIPTION_OVERRIDE: Dict[str, str] = {
+    "wire_split": (
+        "N strips per wire row, side by side across the slot, 2 x "
+        "wire_spacing_x apart, wired in SERIES: each strip is a turn, so the "
+        "coil has N x the turns of the same rows unsplit (psi and back-EMF xN, "
+        "KV /N, R_phase and Ld/Lq xN^2, every strip at the full branch "
+        "current). wire_width is ONE STRIP: the N strips are drawn, meshed and "
+        "solved as separate conductors, so the slot grows to N*wire_width + "
+        "(N-1)*2*wire_spacing_x. Split a 9 mm bar by setting wire_width 4.5 "
+        "and wire_split 2. Narrower conductors cut the width-direction "
+        "eddy/proximity copper loss (~N^2, still capped at 2 skin depths). "
+        "1 = one solid bar."),
+}
+
+#: Geometry keys that USED to exist and no longer do.  A die, preset or catalog
+#: entry written while one of them was live still carries it, and re-saving that
+#: machine would otherwise 422 on a field the user cannot even see.  They are
+#: accepted and dropped: not written to the YAML (the writer only touches keys
+#: already in the geometry section), not read by anything.
+#:
+#: magnet_top ("flat" | "arc") lived for a few hours on 2026-09-06 before the
+#: user removed the flat top entirely — "давай по умолчанию сделаем только arc
+#: и уберём прямую вообще".  The magnet top is now always the arc on
+#: r = rotor_or − magnet_up_gap.
+# `shaft_diameter` (2026-09-07): never read by any builder, solver, mass or
+# cost function — the shaft is rotor_inner_radius / shaft_height; the field only
+# confused the user ("что означает это?").  Dropped from the form; old dies and
+# presets still carry the key and must still load.
+# `wire_split_series` (0/1) lived for a few hours on 2026-09-08: it chose
+# whether a wire_split row's strips were parallel strands or series turns.  The
+# user removed the parallel reading the same day ("wire_split_series можно
+# убрать — нам всегда будет нужно только последовательное подключение этих двух
+# катушек; при параллельном подключении возникнут компенсационные токи между
+# ними"), so the strips are ALWAYS series turns and the flag has no meaning.
+# Accepted and dropped, like the two above — a die or sweep config saved inside
+# that window must not 422 on a field the user can no longer see.
+RETIRED_GEOMETRY_KEYS: frozenset = frozenset({"magnet_top", "shaft_diameter",
+                                              "wire_split_series"})
+
+
 def geometry_schema_meta() -> Dict[str, dict]:
     """The ``geometry_schema`` block the frontend clamps from
     (GET /api/geometry/schema serves exactly this).
@@ -276,15 +402,23 @@ def geometry_schema_meta() -> Dict[str, dict]:
     Normalised to PLAIN dicts: the config layer hands back OmegaConf
     ``DictConfig`` nodes, which are Mappings but fail ``isinstance(x, dict)`` —
     the check silently skipped every parameter until this was noticed.
+
+    ``SCHEMA_FALLBACK`` fills in the knobs the loaded config predates; anything
+    the yaml names wins — EXCEPT the descriptions in
+    ``SCHEMA_DESCRIPTION_OVERRIDE``, which the server owns because the stored
+    text explains a semantic the code has since replaced.
     """
     from motor_ai_sim.config import get_config
     raw = (get_config() or {}).get("geometry_schema", {}) or {}
-    out: Dict[str, dict] = {}
+    out: Dict[str, dict] = {k: dict(v) for k, v in SCHEMA_FALLBACK.items()}
     for name, meta in dict(raw).items():
         try:
             out[str(name)] = {str(k): v for k, v in dict(meta).items()}
         except (TypeError, ValueError):
             continue
+    for name, text in SCHEMA_DESCRIPTION_OVERRIDE.items():
+        if name in out:
+            out[name]["description"] = text
     return out
 
 
@@ -294,7 +428,7 @@ def known_geometry_keys() -> set:
     and whatever the live in-memory geometry carries."""
     from motor_ai_sim.config import get_config
     cfg = get_config() or {}
-    keys = set(cfg.get("geometry_schema", {}) or {})
+    keys = set(cfg.get("geometry_schema", {}) or {}) | set(SCHEMA_FALLBACK)
     keys |= set(cfg.get("geometry", {}) or {})
     keys |= set(DERIVED_GEOMETRY_NAMES)
     try:
@@ -317,7 +451,7 @@ def check_unknown_geometry_keys(submitted: Dict[str, Any]) -> List[Dict[str, Any
     known = known_geometry_keys()
     bad: List[Dict[str, Any]] = []
     for name, value in submitted.items():
-        if name in known:
+        if name in known or name in RETIRED_GEOMETRY_KEYS:
             continue
         match = difflib.get_close_matches(name, sorted(known), n=1, cutoff=0.6)
         hint = f" — did you mean '{match[0]}'?" if match else \

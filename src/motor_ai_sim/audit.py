@@ -28,7 +28,17 @@ from typing import Any, Mapping, Optional
 
 _ROOT = Path(__file__).resolve().parents[2]
 _AUDIT_PATH = _ROOT / "logs" / "geometry_audit.jsonl"
-_HISTORY_DIR = _ROOT / "config" / ".presets_history"
+# The presets backups go BESIDE THE STORE THEY BACK UP — i.e. beside the config
+# this process is pointed at (``MOTOR_AI_SIM_CONFIG``).  Pinned to the repo's own
+# config/, `snapshot_presets` dropped a redirected process's sandbox presets into
+# the user's real `.presets_history/` and evicted their genuine backups past
+# `_KEEP` — the recovery copies that exist precisely for the 2026-08-06 accident.
+# With no env var set this is byte-identical to `_ROOT / "config" / …`.
+try:
+    from motor_ai_sim.config import DEFAULT_CONFIG_PATH as _DEFAULT_CONFIG_PATH
+    _HISTORY_DIR = Path(str(_DEFAULT_CONFIG_PATH)).parent / ".presets_history"
+except Exception:                       # noqa: BLE001 — never break the import
+    _HISTORY_DIR = _ROOT / "config" / ".presets_history"
 _KEEP = 40
 
 # The fields that say WHICH MACHINE this is.  A change in any of them is a

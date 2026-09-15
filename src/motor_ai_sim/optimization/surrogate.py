@@ -39,9 +39,20 @@ TARGETS: Dict[str, Tuple[str, str]] = {
 
 
 def dataset_path() -> str:
-    """Default location of the per-eval dataset (shared with the backend)."""
-    here = os.path.dirname(__file__)
-    return os.path.abspath(os.path.join(here, "..", "..", "..", "config", ".opt_dataset.jsonl"))
+    """Default location of the per-eval dataset (shared with the backend).
+
+    Beside the config THIS PROCESS is pointed at — ``MOTOR_AI_SIM_CONFIG``
+    included, resolved per call, which is how the backend's own
+    ``routes/optimization._dataset_path`` has always located the same file.  It
+    was pinned to the repo's own config/ here, so the two disagreed under a
+    redirect and this side read (and a writer would have written) the user's.
+    """
+    try:
+        from motor_ai_sim.config import DEFAULT_CONFIG_PATH as _cp
+        base = os.path.dirname(str(_cp))
+    except Exception:                   # noqa: BLE001
+        base = os.path.join(os.path.dirname(__file__), "..", "..", "..", "config")
+    return os.path.abspath(os.path.join(base, ".opt_dataset.jsonl"))
 
 
 def load_dataset(path: Optional[str] = None) -> List[Dict[str, Any]]:

@@ -36,6 +36,17 @@ export function setMatGetter(fn: (() => string | null) | null): void {
   matGetter = fn;
 }
 
+/** True once the override is RESOLVABLE — assignments and library loaded, so
+ *  a physics request made now carries the same `mat=` a request made later
+ *  would.  A request fired before this point goes out WITHOUT the override and
+ *  lands on a different backend cache key than the solve it is looking for
+ *  (measured 2026-09-04: the field view's after-reload probe missed the
+ *  picture the same page had solved nine minutes earlier).  MaterialOverrideSync
+ *  fires `mat-override-ready` on the window when this flips true. */
+export function matOverrideReady(): boolean {
+  try { return !!matGetter && matGetter() !== null; } catch { return false; }
+}
+
 // POST /api/kernel/run is NOT matched by the interceptor's COMPUTE_RE (it
 // rewrites URLs, not JSON bodies), so callers that go through the kernel must
 // put the SAME overrides into the payload themselves — otherwise the run

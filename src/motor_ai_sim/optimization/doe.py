@@ -30,8 +30,16 @@ import numpy as np
 
 
 def doe_path() -> str:
-    here = os.path.dirname(__file__)
-    return os.path.abspath(os.path.join(here, "..", "..", "..", "config", ".doe_dataset.jsonl"))
+    """Beside the config THIS PROCESS is pointed at — ``MOTOR_AI_SIM_CONFIG``
+    included, resolved per call.  It was pinned to the repo's own config/ and
+    this file is APPENDED to, so a redirected process mixed its sandbox machine's
+    DOE rows into the dataset the user's optimizer learns from."""
+    try:
+        from motor_ai_sim.config import DEFAULT_CONFIG_PATH as _cp
+        base = os.path.dirname(str(_cp))
+    except Exception:                   # noqa: BLE001
+        base = os.path.join(os.path.dirname(__file__), "..", "..", "..", "config")
+    return os.path.abspath(os.path.join(base, ".doe_dataset.jsonl"))
 
 
 def sample_bounds(band: float) -> Dict[str, Any]:
@@ -60,8 +68,13 @@ def sample_bounds(band: float) -> Dict[str, Any]:
 def run_doe(n: int = 60, current_a: float = 150.0, band: float = 0.35, n_sectors: int = -1,
             steps: int = 18, gamma_deg: float = 0.0, coil_temp_c: float = 120.0,
             mesh_size_mm: float = 4.0, min_size_mm: float = 0.3, workers: int = 10,
-            pole_copy=None, torque_filter: bool = True,
+            pole_copy=None, torque_filter: bool = False,
             log=print) -> List[Dict[str, Any]]:
+    # torque_filter defaults False to MATCH the sweep and the descent: they gate
+    # and rank on the RAW ripple, so a DOE that measured importances on the
+    # band-limited ripple was scoring a different quantity than the optimizer
+    # it feeds — the "same point" carried two ripple numbers depending on which
+    # tool asked.
     from scipy.stats.qmc import LatinHypercube
     from motor_ai_sim.routes.optimization import _subprocess_eval
 

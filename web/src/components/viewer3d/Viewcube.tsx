@@ -1,6 +1,7 @@
 import React, { useRef, useState, useCallback, useEffect } from 'react';
-import { Canvas, useFrame } from '@react-three/fiber';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
+import { guardCanvas } from './webglGuard';
 
 interface ViewDir {
   name: string;
@@ -82,6 +83,7 @@ const CubeScene: React.FC = () => {
   const groupRef = useRef<THREE.Group>(null);
   const targetQ  = useRef(new THREE.Quaternion());
   const [hovered, setHovered] = useState<string | null>(null);
+  const invalidate = useThree(s => s.invalidate);
 
   useEffect(() => {
     const onCam = (e: Event) => {
@@ -89,13 +91,20 @@ const CubeScene: React.FC = () => {
       if (!q) return;
       const yFlip = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
       targetQ.current.copy(q).multiply(yFlip).invert();
+      invalidate();                      // demand mode: start following
     };
     window.addEventListener('mainCameraChange', onCam);
     return () => window.removeEventListener('mainCameraChange', onCam);
-  }, []);
+  }, [invalidate]);
 
+  // Demand-mode rendering: keep asking for frames only while the cube is
+  // still turning toward the main camera; at rest it draws nothing.
   useFrame(() => {
-    groupRef.current?.quaternion.slerp(targetQ.current, 0.12);
+    const g = groupRef.current;
+    if (!g) return;
+    if (g.quaternion.angleTo(targetQ.current) < 1e-3) return;
+    g.quaternion.slerp(targetQ.current, 0.12);
+    invalidate();
   });
 
   const navigate = useCallback((position: [number, number, number], name: string) => {
@@ -230,6 +239,8 @@ const Viewcube: React.FC<{ size?: number }> = ({ size = 100 }) => {
       <div style={{ width: size, height: size }}>
         <Canvas
           orthographic
+          frameloop="demand"
+          onCreated={guardCanvas('viewcube')}
           camera={{ position: [0, 0, 200], zoom: 1.05, near: 0.1, far: 1000 }}
           style={{
             background: 'var(--overlay)',

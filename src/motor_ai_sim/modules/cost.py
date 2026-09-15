@@ -26,7 +26,7 @@ optimizer objective use — in three ways that all point the same direction:
 
 So the table is gone and the four structural buckets come from
 ``masses.compute_masses``.  What stays here is the part cost is genuinely about:
-the SLOT LINER, which is a purchased insulator with its own price per material
+the INSULATION, which is a purchased insulator with its own price per material
 name and no place in an EM mass model.
 """
 from __future__ import annotations
@@ -39,7 +39,7 @@ from .base import ModuleManifest, UIContribution
 
 # Rough default unit prices (USD/kg). Overridable via payload["prices"].
 _DEFAULT_PRICES = {"copper": 9.0, "magnet": 80.0, "steel": 3.0, "shaft": 2.0}
-# Insulator prices keyed by MATERIAL NAME (USD/kg) — slot liner cost depends
+# Insulator prices keyed by MATERIAL NAME (USD/kg) — insulation cost depends
 # strongly on the chosen material (Nomex vs AlN), so price per material, not per
 # generic bucket.  Overridable via payload["prices"].  NOTE: wire enamel
 # (polyimide) is NOT priced here — it comes pre-applied on the magnet wire, so its
@@ -57,7 +57,7 @@ _BUCKET = {
 # this is only the naming seam between its components and the price list.
 _MASS_BUCKET = {"stator": "steel", "rotor": "steel", "cu": "copper",
                 "mag": "magnet", "shaft": "shaft"}
-# Insulation roles that get a COST line: only the slot liner (Nomex/ceramic) is a
+# Insulation roles that get a COST line: only the insulation (Nomex/ceramic) is a
 # separate purchased material.  Wire enamel (wire_insulation/polyimide) is bundled
 # into the wire → thermal-only, NOT costed.  Maps role -> default material name.
 _COSTED_INSULATION = {"slot_insulation": "Nomex"}
@@ -107,7 +107,7 @@ def masses_from_geometry_ir(gir: Any, *, length_mm: Optional[float] = None) -> D
 
       * the four STRUCTURAL buckets come from ``masses.compute_masses`` through
         this GeometryIR's own ``parameters`` (see ``structural_masses``);
-      * the SLOT LINER is measured on this GeometryIR's regions, because it is a
+      * the INSULATION is measured on this GeometryIR's regions, because it is a
         purchased insulator that no EM mass model carries — priced by MATERIAL
         NAME (Nomex vs AlN is 5x), with the density from the materials library.
 
@@ -149,7 +149,7 @@ class BasicCost:
             contracts_version=CONTRACTS_VERSION, depends_on=["geometry.2d"],
             inputs=["GeometryIR"], outputs=["CostIR"],
             summary=("Active-material mass (masses.compute_masses) x unit price "
-                     "(+ slot liner, + labor) -> CostIR"),
+                     "(+ insulation, + labor) -> CostIR"),
             ui=UIContribution(panel_id="cost", title="Cost",
                               frontend_module="components/cost/CostPanel", order=70, as_tab=True))
 

@@ -9,7 +9,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Box, Typography, TextField, Button, LinearProgress, Divider } from '@mui/material';
 import HelpTip from '../common/HelpTip';
 
-const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
+const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
 function useLS<T>(key: string, def: T): [T, (v: T) => void] {
   const [v, setV] = useState<T>(() => {

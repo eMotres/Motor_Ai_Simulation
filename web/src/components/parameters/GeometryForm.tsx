@@ -222,8 +222,22 @@ const GeometryForm: React.FC = () => {
     updateGeometry,
     geometryValidation,
     geometryParamErrors,
+    pendingGeometryEdits,
     fetchGeometryValidation,
   } = useMotorStore();
+
+
+  // Edits typed while the backend was unreachable, queued for replay on
+  // reconnect (motorStore.pendingGeometryEdits).  Shown in EVERY render branch
+  // below — during the outage the form itself is replaced by the error /
+  // not-connected alerts, and that is exactly when the user needs to see the
+  // queue exists.
+  const pendingCount = pendingGeometryEdits ? Object.keys(pendingGeometryEdits).length : 0;
+  const pendingBanner = pendingCount > 0 ? (
+    <Alert severity="warning">
+      {pendingCount} geometry {pendingCount === 1 ? 'edit' : 'edits'} pending — will sync when the backend returns
+    </Alert>
+  ) : null;
 
   // Debounce timer ref
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -302,18 +316,24 @@ const GeometryForm: React.FC = () => {
   // Show error state
   if (error) {
     return (
-      <Alert severity="error" sx={{ m: 2 }}>
-        {error}
-      </Alert>
+      <Box sx={{ m: 2, display: 'flex', flexDirection: 'column', gap: 1 }}>
+        {pendingBanner}
+        <Alert severity="error">
+          {error}
+        </Alert>
+      </Box>
     );
   }
-  
+
   // Show message if not connected to API
   if (!connectedToApi) {
     return (
-      <Alert severity="warning" sx={{ m: 2 }}>
-        Not connected to API. Start the Python server to edit geometry parameters.
-      </Alert>
+      <Box sx={{ m: 2, display: 'flex', flexDirection: 'column', gap: 1 }}>
+        {pendingBanner}
+        <Alert severity="warning">
+          Not connected to API. Start the Python server to edit geometry parameters.
+        </Alert>
+      </Box>
     );
   }
   
@@ -325,6 +345,7 @@ const GeometryForm: React.FC = () => {
   
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+      {pendingBanner}
       <GeometryParamErrors errs={geometryParamErrors} />
       <GeometryIssues v={geometryValidation} />
 
@@ -334,8 +355,8 @@ const GeometryForm: React.FC = () => {
           {parameterSchema.length} parameters loaded
         </Typography>
         <Tooltip title="Reload schema from API (after editing motor_config.yaml)">
-          <IconButton 
-            size="small" 
+          <IconButton
+            size="small"
             onClick={handleReloadSchema}
             disabled={isReloading || !connectedToApi}
             color="primary"
@@ -344,6 +365,10 @@ const GeometryForm: React.FC = () => {
           </IconButton>
         </Tooltip>
       </Box>
+
+      {/* FreeCAD round-trip lives in common/FreeCADRoundTrip, mounted by
+          ParameterVariationTable — the component the Geometry tab ACTUALLY
+          renders; this form turned out to be dead code (2026-08-23). */}
       
       {groupedParams.map((group, groupIndex) => (
         <React.Fragment key={group.id}>

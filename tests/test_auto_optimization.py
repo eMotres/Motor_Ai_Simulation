@@ -791,17 +791,29 @@ class TestGeometryPreFence:
         monkeypatch.setattr(GV, "validate_geometry", _boom)
         assert O._auto_prefence({}) is None
 
-    def test_the_screen_judges_the_clamped_cross_section(self):
-        # refine_proc clamps the winding knobs and scores the CLAMPED geometry,
-        # so a candidate that is only invalid BEFORE clamping is not a reject.
+    def test_out_of_bound_candidates_are_rejected_not_clamped(self):
+        # POLICY REVERSAL (2026-08-22, user's call): a candidate outside a
+        # closed-form bound used to be CLAMPED to the bound and solved — which
+        # collapsed every draw above the limit onto one geometry (a flat
+        # plateau CMA-ES cannot learn from) and labeled the result with a value
+        # the machine never had.  It is now REJECTED, with the arithmetic in
+        # the message; refine_proc raises on the same condition, so the fence
+        # and the eval agree.  A candidate AT the bound still passes.
         cfg = O.get_config()
         geo = dict(cfg.get("geometry", {}))
-        from motor_ai_sim.geometry_constraints import clamp
-        over = {"wire_height": float(geo["slot_height"])}   # absurd, but clampable
-        clamped, applied = clamp({**geo, **over})
-        assert applied, "this fixture must actually trigger the clamp"
-        assert O._auto_prefence(over) == O._auto_prefence(
-            {"wire_height": clamped["wire_height"]})
+        from motor_ai_sim.geometry_constraints import violation_message
+        over = {"wire_height": float(geo["slot_height"])}   # absurd: wire = whole slot
+        why = O._auto_prefence(over)
+        assert why is not None and "wire_height" in why, (
+            "an over-bound wire_height must be rejected by the pre-fence, got %r"
+            % (why,))
+        # the fence must agree with the shared message every rejection path uses
+        assert why == violation_message({**geo, **over})
+        # …and the SAME knob at its exact bound is not a reject (no off-by-one
+        # at the boundary: the sweep's own grid frequently lands there).
+        from motor_ai_sim.geometry_constraints import bounds
+        b = bounds(geo).get("wire_height")
+        assert b and O._auto_prefence({"wire_height": float(b["bound"])}) is None
 
 
 class TestResamplingUsesTheDocumentedPycmaPath:

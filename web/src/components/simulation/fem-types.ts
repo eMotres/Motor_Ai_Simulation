@@ -62,22 +62,13 @@ export interface FemPayload {
   P_cu_ac_solve_W?:      number;
   V_peak?:               number;
 
-  // ── Thermal solve (Temp view) ───────────────────────────────────────────
-  // The thermal payload carries its OWN solid sub-mesh in vertices/triangles/
-  // domain_per_tri (outer air + gap dropped), plus nodal temperature and flux.
-  temperature_per_node?: number[];             // °C
-  heat_flux_per_tri?:    [number, number][];   // W/m² vector per element
-  flux_mag_per_tri?:     number[];             // |q| W/m²
-  T_min?:                number;
-  T_max?:                number;
-  components?: {
-    winding?: { max: number; avg: number } | null;
-    magnet?:  { max: number; avg: number } | null;
-    stator?:  { max: number; avg: number } | null;
-    rotor?:   { max: number; avg: number } | null;
-  };
-  ambient_temp?: number; h_conv?: number;
-  k_steel?: number; k_magnet?: number; k_shaft?: number;
+  // The thermal half of this interface (temperature_per_node, heat_flux_per_tri,
+  // the component maxima, the cooling boundary and the conductivities) moved to
+  // `thermal/types.ThermalPayload` on 2026-09-07.  One interface describing both
+  // an electromagnetic field and a temperature map — with every thermal field
+  // optional so the EM half kept compiling — is how the Simulation tab ended up
+  // hosting a conduction solve it never asked for: the type said the two were
+  // the same thing.
 
   poles_per_sector?: number;
   anti_periodic?:    boolean;
@@ -100,11 +91,14 @@ export interface FemPayload {
 /**
  * Expand a SECTOR solve (n_sectors > 1) into the FULL RING for display: rotate a
  * copy of the sector mesh + fields to each of the N sector positions.  Scalar
- * fields (|B|, loss density, demag, temperature) are replicated as-is; the SIGNED
- * potential A_z and current J_z flip sign on odd copies when the sector is
- * anti-periodic (an odd number of poles per sector), which reproduces the true
- * full-ring solution.  Heat-flux is a real vector → rotated, no sign flip.
- * n_sectors ≤ 1 (already the full disk) is returned unchanged.
+ * fields (|B|, loss density, demag) are replicated as-is; the SIGNED potential
+ * A_z and current J_z flip sign on odd copies when the sector is anti-periodic
+ * (an odd number of poles per sector), which reproduces the true full-ring
+ * solution.  n_sectors ≤ 1 (already the full disk) is returned unchanged.
+ *
+ * The thermal payload has its own tiler in `thermal/types` — a scalar with no
+ * anti-periodic sign and a heat-flux VECTOR that has to be rotated rather than
+ * copied.
  */
 export function tileFullRing(p: FemPayload): FemPayload {
   const N = (p.n_sectors as number) | 0;
@@ -121,9 +115,6 @@ export function tileFullRing(p: FemPayload): FemPayload {
   const Jz   = mk(p.J_z_per_tri);
   const loss = mk(p.loss_density_per_tri);
   const dem  = mk(p.demag_coef_per_tri);
-  const fmag = mk(p.flux_mag_per_tri);
-  const temp = mk(p.temperature_per_node);
-  const hflux = mk(p.heat_flux_per_tri);
   const outlines: FemPayload['outlines'] = [];
 
   let xmin = Infinity, xmax = -Infinity, ymin = Infinity, ymax = -Infinity;
@@ -146,9 +137,6 @@ export function tileFullRing(p: FemPayload): FemPayload {
     if (Jz)   for (const v of p.J_z_per_tri!)   Jz.push(v * sgn);
     if (loss) for (const v of p.loss_density_per_tri!) loss.push(v);
     if (dem)  for (const v of p.demag_coef_per_tri!)   dem.push(v);
-    if (fmag) for (const v of p.flux_mag_per_tri!)     fmag.push(v);
-    if (temp) for (const v of p.temperature_per_node!) temp.push(v);
-    if (hflux) for (const q of p.heat_flux_per_tri!) hflux.push([q[0] * ca - q[1] * sa, q[0] * sa + q[1] * ca]);
     for (const o of (p.outlines || []))
       outlines.push({ domain: o.domain,
         loops: o.loops.map(lp => lp.map(([x, y]) => [x * ca - y * sa, x * sa + y * ca] as [number, number])) });
@@ -162,9 +150,6 @@ export function tileFullRing(p: FemPayload): FemPayload {
     J_z_per_tri: Jz ?? p.J_z_per_tri,
     loss_density_per_tri: loss ?? p.loss_density_per_tri,
     demag_coef_per_tri: dem ?? p.demag_coef_per_tri,
-    flux_mag_per_tri: fmag ?? p.flux_mag_per_tri,
-    temperature_per_node: temp ?? p.temperature_per_node,
-    heat_flux_per_tri: hflux ?? p.heat_flux_per_tri,
     outlines,
     extent: [xmin, xmax, ymin, ymax],
     A_z_min: Number.isFinite(azmin) ? azmin : p.A_z_min,

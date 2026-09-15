@@ -70,6 +70,70 @@ _TIER_RANK = {"anon": -1, "free": 0, "pro": 1, "team": 2, "admin": 3}
 _GATED: dict[tuple[str, str], str] = {
     ("GET",  "/api/simulation/physics/fem_transient"): "pro",
     ("GET",  "/api/simulation/physics/fem_field2d"): "pro",
+    # Physics-cache diagnostics: what the server is holding in memory for the
+    # SHARED machine.  Owner-only, like every other shared-store view/mutation.
+    ("GET",  "/api/simulation/caches"): "admin",
+    # The results ledger: what stored runs exist for the SHARED machine, and
+    # throwing them away.  Same class as the cache view above — owner-only.
+    ("GET",  "/api/simulation/ledger"): "admin",
+    ("DELETE", "/api/simulation/ledger"): "admin",
+    # "Have you already computed exactly this?" — a hash lookup, no solve, but
+    # it answers a question only a paying engineering user gets to ask, so it
+    # rides the same tier as the run it is a pre-flight for.
+    ("GET",  "/api/simulation/physics/fem_transient/ledger_match"): "pro",
+    # Rotor structural solve — same class of compute as the field solves above
+    # (a gmsh mesh + an FE solve per call), so the same tier.
+    ("GET",  "/api/mechanical/rotor_stress"): "pro",
+    ("GET",  "/api/mechanical/materials"): "pro",
+    # Modal analysis, added 2026-09-05 ("нам нужно сделать ещё модальный анализ,
+    # чтобы понять все частоты — это очень важно для 20000 rpm").  /modes is a
+    # gmsh mesh + a sparse eigensolve and /critical_speeds is a Campbell sweep
+    # of dense eigenvalue problems: the same class of compute as the solves
+    # above, so the same tier.
+    ("GET",  "/api/mechanical/modes"): "pro",
+    ("GET",  "/api/mechanical/critical_speeds"): "pro",
+    # Added 2026-09-06 with "если есть [расчёты] — подгружается последний
+    # расчёт": /last hands back a structural result that was already paid for
+    # and /mesh runs the same gmsh pass the solve does, so both ride the tier of
+    # the solves they serve rather than being open because they are cheaper.
+    ("GET",  "/api/mechanical/last"): "pro",
+    ("GET",  "/api/mechanical/mesh"): "pro",
+    # Thermal, split out of the simulation router on 2026-09-07 and gated
+    # IDENTICALLY to mechanical above, because it is the same bargain: /field is
+    # a full EM transient plus a conduction solve, /coupled is up to twelve of
+    # them, /mesh runs the same gmsh pass the solve does, and /last hands back a
+    # result that was already paid for.  The route it replaces
+    # (/api/simulation/physics/thermal_field2d) was never listed here — an
+    # oversight, not a decision: it was always heavier than /physics/fem_field2d,
+    # which IS gated, since it CALLS it.
+    ("GET",  "/api/thermal/field"): "pro",
+    ("GET",  "/api/thermal/coupled"): "pro",
+    ("GET",  "/api/thermal/last"): "pro",
+    ("GET",  "/api/thermal/mesh"): "pro",
+    # The DUTY CYCLE (2026-09-14): one conduction solve plus a transient
+    # integration over up to 200 cycles, and /duty_cycle/last hands back a
+    # result that was already paid for — the same bargain the four above make.
+    ("POST", "/api/thermal/duty_cycle"): "pro",
+    ("GET",  "/api/thermal/duty_cycle/last"): "pro",
+    # The EM<->thermal orchestrator (2026-09-08).  /run is up to six FULL
+    # electromagnetic transients plus a conduction solve each — the heaviest
+    # single request in this backend — so it rides the same tier as the two
+    # solves it drives.  /cancel and /last follow the pattern their transient and
+    # thermal equivalents set: the Stop button is gated with the run it stops,
+    # and /last hands back a result that was already paid for.
+    ("POST", "/api/coupled/run"): "pro",
+    ("POST", "/api/coupled/cancel"): "pro",
+    ("GET",  "/api/coupled/last"): "pro",
+    # NOT listed, and that is the decision, not an oversight (2026-09-07):
+    #   GET /api/mechanical/progress
+    #   GET /api/thermal/progress
+    #   GET /api/coupled/progress
+    # They mirror GET /api/simulation/physics/fem_transient/progress, which has
+    # been open since it was written.  A progress endpoint carries no physics —
+    # a step counter, an elapsed time and a phase name — and it is polled twice
+    # a second for the whole of a solve the user is ALREADY paying the gated
+    # tier for.  Gating them would mean a progress bar that 401s over a running
+    # solve, i.e. the one moment the user most needs to see something.
     ("GET",  "/api/simulation/mesh/build2d"): "pro",
     ("GET",  "/api/simulation/mesh/build2d_sliding_band"): "pro",
     # AI support assistant calls the paid Anthropic API — require a signed-in
@@ -86,6 +150,10 @@ _GATED: dict[tuple[str, str], str] = {
 # family.py / presets.py / admin.py / auth_local.py protect themselves with
 # require_admin already — entries here are the belt for the rest.
 _GATED_PREFIX: list[tuple[str, str, str]] = [
+    # a tab's remembered input fields — per signed-in user, the same tier as
+    # the solves whose inputs they are
+    ("GET",    "/api/panel_settings", "pro"),
+    ("PUT",    "/api/panel_settings", "pro"),
     # heavy compute a signed-up engineering user may run on their own copy
     ("POST",   "/api/kernel/run", "pro"),
     ("POST",   "/api/kernel/study", "pro"),
@@ -102,11 +170,15 @@ _GATED_PREFIX: list[tuple[str, str, str]] = [
     ("PATCH",  "/api/simulation/config", "admin"),
     ("PUT",    "/api/sweep/config", "admin"),
     ("POST",   "/api/simulation/run", "admin"),
+    ("POST",   "/api/simulation/caches/clear", "admin"),
     ("POST",   "/api/catalog", "admin"),
     ("DELETE", "/api/catalog", "admin"),
     ("POST",   "/api/presets", "admin"),
     ("PATCH",  "/api/presets", "admin"),
     ("DELETE", "/api/presets", "admin"),
+    # Saved-sims = the ENGINEER'S Compare tab (clients compare saved
+    # configurations inside Configure instead — user's call 2026-08-25, which
+    # also reverted the brief "free" opening of these writes).
     ("POST",   "/api/sims/saved", "admin"),
     ("PATCH",  "/api/sims/saved", "admin"),
     ("DELETE", "/api/sims/saved", "admin"),
@@ -237,12 +309,26 @@ def _registry_tier(email: str, fallback: str = "free") -> str:
     """OUR user registry decides the tier; ADMIN_EMAILS overrides upward.
     Auto-provisions a record on first sight so the admin panel can manage
     every account that ever signed in.  A disabled record resolves to None
-    upstream (checked here via a sentinel)."""
+    upstream (checked here via a sentinel).
+
+    A registry that momentarily cannot be READ must not silently demote anyone:
+    it would answer "no such user" and hand back the fallback tier, so an admin
+    mid-edit would start getting 403s from the gated routes for the duration of
+    a file lock.  On a read failure we keep the tier the caller already proved
+    (the `fallback`, which for a verified token is its own claim) and provision
+    nothing."""
     if email and email in _ADMIN_EMAILS:
         return "admin"
     try:
         from motor_ai_sim import users as _users
-        u = _users.get_user(email)
+        try:
+            store = _users._load()
+        except Exception as e:
+            logger.error("auth: registry unreadable while resolving the tier of "
+                         "%r (%s: %s) — keeping %r, provisioning nothing",
+                         email, type(e).__name__, e, fallback)
+            return fallback
+        u = store.get((email or "").strip().lower())
         if u is None and email:
             try:
                 import secrets as _sec
@@ -259,37 +345,141 @@ def _registry_tier(email: str, fallback: str = "free") -> str:
     return fallback
 
 
+# ── verification with a REASON ───────────────────────────────────────────────
+# Until 2026-09-03 this whole path answered `None` and logged nothing, so
+# "expired", "account disabled" and "users.json was locked for 40 ms" were
+# indistinguishable from the outside — and the frontend signed the user out for
+# all three.  Every answer now carries a reason code (users.REASONS plus
+# 'no_token' and 'google_rejected'), every rejection reaches the log, and
+# `store_unavailable` is explicitly NOT a rejection.
+
+#: Rejections repeat on every request of a broken session; log/record one per
+#: (reason, sid|email) per minute instead of one per request.
+_REJECT_QUIET_S = 60.0
+_reject_seen: dict[tuple, float] = {}
+
+
+def _should_report(key: tuple) -> bool:
+    now = time.time()
+    with _lock:
+        if now - _reject_seen.get(key, 0.0) < _REJECT_QUIET_S:
+            return False
+        _reject_seen[key] = now
+        if len(_reject_seen) > 2000:                       # pragma: no cover
+            for k, t in list(_reject_seen.items()):
+                if now - t > 10 * _REJECT_QUIET_S:
+                    _reject_seen.pop(k, None)
+        return True
+
+
+def resolve_user_detail(authorization: Optional[str], *, renew: bool = False,
+                        ip: str = "", user_agent: str = "",
+                        path: str = "") -> dict:
+    """Full verification result for a `Bearer <token>` header.
+
+    ``{"user": {uid,email,tier}|None, "reason": str, "sid": str, "email": str,
+       "presented": bool, "renewedToken": str|None}``
+
+    `reason` is 'ok' on success, 'no_token' when no credentials arrived, and
+    otherwise one of ``users.REASONS`` / 'google_rejected'.  ONLY a reason that
+    blames the token itself may sign a user out; 'store_unavailable' means our
+    own filesystem hiccuped and the client must keep its session.
+    """
+    from motor_ai_sim import sessions as _sessions
+    from motor_ai_sim import users as _users
+
+    def _out(user, reason, sid="", email="", renewed=None, presented=True):
+        return {"user": user, "reason": reason, "sid": sid, "email": email,
+                "presented": presented, "renewedToken": renewed}
+
+    if not isinstance(authorization, str) or not authorization.strip():
+        return _out(None, "no_token", presented=False)
+    if not authorization.lower().startswith("bearer "):
+        return _out(None, "malformed")
+    token = authorization.split(" ", 1)[1].strip()
+    if not token:
+        return _out(None, "malformed")
+
+    # 1) our own account token
+    try:
+        res = _users.verify_token(token, renew=renew)
+    except Exception as e:                                  # pragma: no cover
+        logger.error("auth: token verification crashed (%s: %s) — reporting "
+                     "store_unavailable, NOT signing the session out",
+                     type(e).__name__, e)
+        _sessions.record_event("store_unavailable", reason=type(e).__name__,
+                               ip=ip, user_agent=user_agent, path=path)
+        return _out(None, "store_unavailable")
+
+    if res.reason == "store_unavailable":
+        if _should_report(("store_unavailable", res.sid or res.email)):
+            logger.error("auth: STORE UNAVAILABLE while verifying a token "
+                         "(email=%r sid=%r ip=%s ua=%r path=%s) — the session "
+                         "is kept, the client will retry",
+                         res.email, res.sid, ip, user_agent[:80], path)
+            _sessions.record_event("store_unavailable", email=res.email,
+                                   sid=res.sid, reason="store_unavailable",
+                                   ip=ip, user_agent=user_agent, path=path)
+        return _out(None, "store_unavailable", sid=res.sid, email=res.email)
+
+    if res.ok and res.user is not None:
+        tier = _registry_tier(res.user["email"], fallback=res.user.get("tier", "free"))
+        if tier == "__disabled__":
+            _report_reject("disabled", res.email, res.sid, ip, user_agent, path)
+            return _out(None, "disabled", sid=res.sid, email=res.email)
+        _sessions.touch(res.sid, ip=ip, user_agent=user_agent)
+        if res.renewed_token:
+            _sessions.record_event("renew", email=res.email, sid=res.sid,
+                                   reason="sliding", ip=ip,
+                                   user_agent=user_agent, path=path)
+        return _out({"uid": res.user["uid"], "email": res.user["email"],
+                     "tier": tier}, "ok", sid=res.sid, email=res.email,
+                    renewed=res.renewed_token)
+
+    # A token that is definitively OURS and definitively bad — do not waste a
+    # Google round trip on it, and say so.
+    if res.reason in ("expired", "revoked", "disabled", "unknown_user"):
+        _report_reject(res.reason, res.email, res.sid, ip, user_agent, path)
+        return _out(None, res.reason, sid=res.sid, email=res.email)
+
+    # 2) a raw Google ID token (RS256 — our HS256 decode called it malformed)
+    claims = _verify_google_token(token)
+    if claims is not None:
+        email = (claims.get("email") or "").strip().lower()
+        if claims.get("email_verified") is False:
+            _report_reject("google_unverified_email", email, "", ip, user_agent, path)
+            return _out(None, "google_rejected", email=email)
+        tier = _registry_tier(email)
+        if tier == "__disabled__":
+            _report_reject("disabled", email, "", ip, user_agent, path)
+            return _out(None, "disabled", email=email)
+        return _out({"uid": claims.get("sub"), "email": email, "tier": tier},
+                    "ok", email=email)
+
+    _report_reject(res.reason, res.email, res.sid, ip, user_agent, path)
+    return _out(None, res.reason, sid=res.sid, email=res.email)
+
+
+def _report_reject(reason: str, email: str, sid: str, ip: str,
+                   user_agent: str, path: str) -> None:
+    from motor_ai_sim import sessions as _sessions
+    if not _should_report((reason, sid or email)):
+        return
+    logger.warning("auth: token REJECTED (%s) email=%r sid=%r ip=%s ua=%r path=%s",
+                   reason, email or "?", sid or "-", ip or "?",
+                   (user_agent or "")[:80], path or "-")
+    _sessions.record_event("reject", email=email, sid=sid, reason=reason,
+                           ip=ip, user_agent=user_agent, path=path)
+
+
 def resolve_user(authorization: Optional[str]) -> Optional[dict]:
     """Parse a `Bearer <token>` header → {uid,email,tier}, or None.
 
     Accepts, in order: our own local HS256 token (password accounts /
     service use), then a Google ID token (GIS sign-in).  The legacy Firebase
-    path is gone with its project."""
-    if not authorization or not authorization.lower().startswith("bearer "):
-        return None
-    token = authorization.split(" ", 1)[1].strip()
-    # 1) local account token
-    try:
-        from motor_ai_sim import users as _users
-        u = _users.resolve_local_token(token)
-    except Exception:
-        u = None
-    if u is not None:
-        tier = _registry_tier(u["email"], fallback=u.get("tier", "free"))
-        if tier == "__disabled__":
-            return None
-        return {"uid": u["uid"], "email": u["email"], "tier": tier}
-    # 2) Google ID token
-    claims = _verify_google_token(token)
-    if claims is not None:
-        email = (claims.get("email") or "").strip().lower()
-        if claims.get("email_verified") is False:
-            return None
-        tier = _registry_tier(email)
-        if tier == "__disabled__":
-            return None
-        return {"uid": claims.get("sub"), "email": email, "tier": tier}
-    return None
+    path is gone with its project.  `resolve_user_detail` is the same call
+    with the reason attached — prefer it wherever the reason matters."""
+    return resolve_user_detail(authorization)["user"]
 
 
 class TierGateMiddleware(BaseHTTPMiddleware):
@@ -346,30 +536,57 @@ def _is_admin_caller(authorization: Optional[str]) -> tuple[bool, Optional[dict]
     return (user is not None and user.get("tier") == "admin"), user
 
 
-def account_info(authorization: Optional[str]) -> dict:
+def account_info(authorization: Optional[str], *, ip: str = "",
+                 user_agent: str = "") -> dict:
     """Resolve who's calling -> {uid,email,tier,isAdmin,enforced} for /api/me.
 
     Also reports WHY the caller is anonymous, which the frontend needs to tell
-    two very different situations apart:
+    three very different situations apart:
       * tokenPresented=False — no credentials reached us.  The browser may well
         still hold a perfectly good session (a request that raced the fetch
         interceptor, a hot-reloaded module, a proxy that dropped the header).
         Dropping the stored session here logs the user out for nothing — that
         is exactly how "сессия постоянно протухает" happened (2026-08-21).
-      * tokenRejected=True — a token WAS presented and did not verify (expired,
-        secret rotated, account disabled/deleted).  Only this is a real logout.
+      * authError='store_unavailable' — a token was presented and we could not
+        CHECK it, because users.json / .sessions.json / .auth_secret was
+        momentarily unreadable (a Windows file lock during the atomic replace,
+        an antivirus hold).  Not the user's fault and NOT a logout: the client
+        keeps the session and retries.  This is the case that used to masquerade
+        as an expiry and is the prime suspect for the daily sign-outs.
+      * tokenRejected=True — a token WAS presented and genuinely did not verify
+        (expired, revoked, signature, account disabled/deleted).  `authError`
+        names which.  Only this is a real logout.
+
+    A valid token inside its last 7 days comes back with `renewedToken`: the
+    same session, a fresh 30-day expiry, swapped into storage by the client.
     """
-    is_admin, user = _is_admin_caller(authorization)
-    presented = isinstance(authorization, str) and bool(authorization.strip())
-    return {
+    det = resolve_user_detail(authorization, renew=True, ip=ip,
+                              user_agent=user_agent, path="/api/me")
+    user = det["user"]
+    reason = det["reason"]
+    if not AUTH_ENFORCE and not _ADMIN_EMAILS:
+        is_admin = True
+    else:
+        is_admin = user is not None and user.get("tier") == "admin"
+    presented = bool(det["presented"])
+    # store_unavailable is OUR failure, never the client's — it must not read
+    # as a rejected token, or the browser wipes a valid session over a 40 ms
+    # file lock.
+    rejected = presented and user is None and reason != "store_unavailable"
+    out = {
         "uid": user["uid"] if user else ("local-dev" if is_admin else None),
         "email": user["email"] if user else None,
         "tier": "admin" if is_admin else (user["tier"] if user else "anon"),
         "isAdmin": is_admin,
         "enforced": AUTH_ENFORCE,
         "tokenPresented": presented,
-        "tokenRejected": bool(presented and user is None),
+        "tokenRejected": bool(rejected),
+        "authError": None if reason in ("ok", "no_token") else reason,
+        "sid": det["sid"] or None,
     }
+    if det.get("renewedToken"):
+        out["renewedToken"] = det["renewedToken"]
+    return out
 
 
 # The owner string stamped on entries created by an admin (including the

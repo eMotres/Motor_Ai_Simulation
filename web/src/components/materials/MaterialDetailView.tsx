@@ -12,6 +12,7 @@ import {
 import type {
   MaterialsLibrary, SelectedMaterial, MaterialCategory,
   SteelData, MagnetData, ConductorData, InsulatorData, CoolantData,
+  MechanicalProps,
 } from './useMaterialsLibrary';
 import { useAuth } from '../../contexts/AuthContext';
 import {
@@ -260,6 +261,7 @@ const SteelDetail: React.FC<{ name: string; data: SteelData }> = ({ name, data }
         />
       </Section>
     )}
+    <MechanicalSection d={data} />
   </Box>
 );
 
@@ -290,6 +292,7 @@ const MagnetDetail: React.FC<{ name: string; data: MagnetData }> = ({ name, data
         />
       </Section>
     )}
+    <MechanicalSection d={data} />
   </Box>
 );
 
@@ -321,8 +324,61 @@ const ConductorDetail: React.FC<{ name: string; data: ConductorData }> = ({ name
         {data.wire_height_mm != null && <Row label="Wire height" value={String(data.wire_height_mm)} unit="mm" />}
       </Section>
     )}
+    <MechanicalSection d={data} />
   </Box>
 );
+
+
+// ─── Mechanical properties, for every card that carries them ─────────────────
+// User 2026-09-09: "где, кстати, механические свойства материалов?" — the
+// rotor-stress solver has been sizing bands and judging magnets on these
+// numbers since 2026-09-05, and the card that describes the material did not
+// show one of them.  Rendered only when the card actually carries some, so a
+// coolant does not grow an empty box.
+const MechanicalSection: React.FC<{ d: MechanicalProps }> = ({ d }) => {
+  const has = [d.youngs_modulus_gpa, d.youngs_modulus_transverse_gpa,
+    d.shear_modulus_gpa, d.poisson_ratio, d.tensile_strength_mpa,
+    d.compressive_strength_mpa, d.yield_strength_mpa, d.cte_ppm_k_1,
+    d.cte_ppm_k_2, d.cte_ppm_k, d.max_service_temp_c]
+    .some((v) => v != null);
+  if (!has) return null;
+  const ortho = d.youngs_modulus_transverse_gpa != null;
+  return (
+    <Section title="Mechanical Properties" accentColor="#c2705e">
+      {d.youngs_modulus_gpa != null && (
+        <Row label={ortho ? "Young's modulus E₁ (fibre / hoop)" : "Young's modulus E"}
+          value={String(d.youngs_modulus_gpa)} unit="GPa" highlight />
+      )}
+      {d.youngs_modulus_transverse_gpa != null && (
+        <Row label="Young's modulus E₂ (across)" value={String(d.youngs_modulus_transverse_gpa)} unit="GPa" />
+      )}
+      {d.shear_modulus_gpa != null && (
+        <Row label="Shear modulus G₁₂" value={String(d.shear_modulus_gpa)} unit="GPa" />
+      )}
+      {d.poisson_ratio != null && <Row label="Poisson ratio ν" value={String(d.poisson_ratio)} />}
+      {d.tensile_strength_mpa != null && (
+        <Row label="Tensile strength" value={String(d.tensile_strength_mpa)} unit="MPa" highlight />
+      )}
+      {d.yield_strength_mpa != null && (
+        <Row label="Yield strength" value={String(d.yield_strength_mpa)} unit="MPa" highlight />
+      )}
+      {d.compressive_strength_mpa != null && (
+        <Row label="Compressive strength" value={String(d.compressive_strength_mpa)} unit="MPa" />
+      )}
+      {d.cte_ppm_k != null && <Row label="Thermal expansion α" value={String(d.cte_ppm_k)} unit="ppm/K" />}
+      {d.cte_ppm_k_1 != null && (
+        <Row label={ortho || d.cte_ppm_k_2 != null ? "Thermal expansion α₁ (along axis 1)" : "Thermal expansion α"}
+          value={String(d.cte_ppm_k_1)} unit="ppm/K" />
+      )}
+      {d.cte_ppm_k_2 != null && (
+        <Row label="Thermal expansion α₂ (across)" value={String(d.cte_ppm_k_2)} unit="ppm/K" />
+      )}
+      {d.max_service_temp_c != null && (
+        <Row label="Max service temperature" value={String(d.max_service_temp_c)} unit="°C" />
+      )}
+    </Section>
+  );
+};
 
 // ─── Insulator detail ─────────────────────────────────────────────────────────
 const InsulatorDetail: React.FC<{ name: string; data: InsulatorData }> = ({ data }) => (
@@ -334,6 +390,7 @@ const InsulatorDetail: React.FC<{ name: string; data: InsulatorData }> = ({ data
       <Row label="Conductivity σ"       value={data.sigma > 0 ? `${(data.sigma / 1e6).toFixed(3)}` : '≈ 0 (dielectric)'} unit={data.sigma > 0 ? 'MS/m' : ''} />
       <Row label="Rel. permeability μr" value={data.mu_r.toFixed(2)} />
     </Section>
+    <MechanicalSection d={data} />
   </Box>
 );
 
@@ -372,15 +429,32 @@ const CAT_LABEL: Record<string, string> = {
 
 // ─── Editable scalar fields per category ──────────────────────────────────────
 type FieldDef = { key: string; label: string; unit?: string; type?: 'number' | 'text' };
+//
+// EVERY scalar the card carries, not a chosen few (user 2026-09-10: "добавь
+// все свойства в редактирование").  What is deliberately NOT here: the B-H and
+// core-loss CURVES, which are tables and need their own editor, and the two
+// derived values (resistivity, energy product), which `recomputeDerived` keeps
+// in step so a hand-typed one could only ever disagree.
+//
+// The MECHANICAL block is the reason this list was reopened: the rotor-stress
+// solver sizes bands, judges magnets and checks the iron on these numbers, and
+// a user who has a real datasheet from a winder or a steel mill had no way to
+// put it in.  A field absent from a card stays absent — see `handleSave`.
 const EDITABLE_FIELDS: Record<MaterialCategory, FieldDef[]> = {
   steel: [
     { key: 'description', label: 'Description', type: 'text' },
+    { key: 'form', label: 'Form', type: 'text' },
     { key: 'density', label: 'Density', unit: 'kg/m³' },
     { key: 'sigma', label: 'Conductivity σ', unit: 'S/m' },
     { key: 'stacking_factor', label: 'Stacking factor' },
+    { key: 'thickness_mm', label: 'Lamination thickness', unit: 'mm' },
     { key: 'core_loss_kh', label: 'k_h', unit: 'W/(m³·Hz·T²)' },
     { key: 'core_loss_kc', label: 'k_c', unit: 'W/(m³·Hz²·T²)' },
     { key: 'core_loss_ke', label: 'k_e', unit: 'W/(m³·Hz^1.5·T^1.5)' },
+    { key: 'youngs_modulus_gpa', label: "Young's modulus E", unit: 'GPa' },
+    { key: 'poisson_ratio', label: "Poisson's ratio ν" },
+    { key: 'yield_strength_mpa', label: 'Yield strength', unit: 'MPa' },
+    { key: 'cte_ppm_k', label: 'Thermal expansion α', unit: 'ppm/K' },
   ],
   magnet: [
     { key: 'description', label: 'Description', type: 'text' },
@@ -389,6 +463,15 @@ const EDITABLE_FIELDS: Record<MaterialCategory, FieldDef[]> = {
     { key: 'mu_rec', label: 'Recoil μ_rec' },
     { key: 'sigma', label: 'Conductivity σ', unit: 'S/m' },
     { key: 'density', label: 'Density', unit: 'kg/m³' },
+    { key: 'temperature_c', label: 'Card temperature', unit: '°C' },
+    { key: 'alpha_br_pct_per_k', label: 'Br coefficient α', unit: '%/K' },
+    { key: 'beta_hcj_pct_per_k', label: 'Hcj coefficient β', unit: '%/K' },
+    { key: 'youngs_modulus_gpa', label: "Young's modulus E", unit: 'GPa' },
+    { key: 'poisson_ratio', label: "Poisson's ratio ν" },
+    { key: 'tensile_strength_mpa', label: 'Tensile strength', unit: 'MPa' },
+    { key: 'compressive_strength_mpa', label: 'Compressive strength', unit: 'MPa' },
+    { key: 'cte_ppm_k_1', label: 'Thermal expansion α₁ (along)', unit: 'ppm/K' },
+    { key: 'cte_ppm_k_2', label: 'Thermal expansion α₂ (across)', unit: 'ppm/K' },
   ],
   conductor: [
     { key: 'description', label: 'Description', type: 'text' },
@@ -397,6 +480,12 @@ const EDITABLE_FIELDS: Record<MaterialCategory, FieldDef[]> = {
     { key: 'thermal_conductivity', label: 'Thermal conductivity', unit: 'W/(m·K)' },
     { key: 'specific_heat', label: 'Specific heat', unit: 'J/(kg·K)' },
     { key: 'thermal_alpha', label: 'Temp. coeff. α', unit: '1/K' },
+    { key: 'wire_width_mm', label: 'Wire width', unit: 'mm' },
+    { key: 'wire_height_mm', label: 'Wire height', unit: 'mm' },
+    { key: 'youngs_modulus_gpa', label: "Young's modulus E", unit: 'GPa' },
+    { key: 'poisson_ratio', label: "Poisson's ratio ν" },
+    { key: 'yield_strength_mpa', label: 'Yield strength', unit: 'MPa' },
+    { key: 'cte_ppm_k', label: 'Thermal expansion α', unit: 'ppm/K' },
   ],
   insulator: [
     { key: 'description', label: 'Description', type: 'text' },
@@ -405,6 +494,16 @@ const EDITABLE_FIELDS: Record<MaterialCategory, FieldDef[]> = {
     { key: 'density', label: 'Density', unit: 'kg/m³' },
     { key: 'sigma', label: 'Conductivity σ', unit: 'S/m' },
     { key: 'mu_r', label: 'Rel. permeability μr' },
+    // …and the orthotropic block a hoop-wound band lives on.
+    { key: 'youngs_modulus_gpa', label: "Young's modulus E₁ (along fibres)", unit: 'GPa' },
+    { key: 'youngs_modulus_transverse_gpa', label: "Young's modulus E₂ (across)", unit: 'GPa' },
+    { key: 'shear_modulus_gpa', label: 'Shear modulus G₁₂', unit: 'GPa' },
+    { key: 'poisson_ratio', label: "Poisson's ratio ν" },
+    { key: 'tensile_strength_mpa', label: 'Tensile strength (fibre direction)', unit: 'MPa' },
+    { key: 'compressive_strength_mpa', label: 'Compressive strength (across fibres)', unit: 'MPa' },
+    { key: 'cte_ppm_k_1', label: 'Thermal expansion α₁ (along)', unit: 'ppm/K' },
+    { key: 'cte_ppm_k_2', label: 'Thermal expansion α₂ (across)', unit: 'ppm/K' },
+    { key: 'max_service_temp_c', label: 'Max service temperature', unit: '°C' },
   ],
   coolant: [
     { key: 'description', label: 'Description', type: 'text' },
@@ -414,6 +513,7 @@ const EDITABLE_FIELDS: Record<MaterialCategory, FieldDef[]> = {
     { key: 'thermal_conductivity', label: 'Thermal conductivity k', unit: 'W/(m·K)' },
     { key: 'kinematic_viscosity', label: 'Kinematic viscosity ν', unit: 'm²/s' },
     { key: 'prandtl', label: 'Prandtl Pr' },
+    { key: 'sigma', label: 'Conductivity σ', unit: 'S/m' },
   ],
 };
 
@@ -494,6 +594,10 @@ const MaterialDetailView: React.FC<Props> = ({ library, selected, onChanged, onS
       const coerced: Record<string, any> = { ...stripMeta(data) };
       fields.forEach(f => {
         const v = form[f.key];
+        // A field this card never carried, left blank, is not an edit: writing
+        // an explicit null would stamp "no value" over a record that simply
+        // does not have that property (a steel has no transverse modulus).
+        if ((v === '' || v == null) && data[f.key] == null) return;
         coerced[f.key] = f.type === 'text' ? (v ?? '') : (v === '' || v == null ? null : Number(v));
       });
       const next = recomputeDerived(category, coerced);

@@ -34,8 +34,12 @@ const PART_CFG: Partial<Record<CompKey, PartCfg>> = {
   shaft:    { assignKey: 'shaft',       label: 'Shaft',                 color: PART_COLORS.shaft },
   in_band:  { assignKey: 'air_gap',     label: 'In Band (rotating)',    color: PART_COLORS.inBand },
   out_band: { assignKey: 'air_gap',     label: 'Out Band (static)',     color: PART_COLORS.outBand },
-  slot_insulation: { assignKey: 'slot_insulation', label: 'Slot Liner',  color: PART_COLORS.slotLiner },
+  slot_insulation: { assignKey: 'slot_insulation', label: 'Insulation',  color: PART_COLORS.slotLiner },
   wire_insulation: { assignKey: 'wire_insulation', label: 'Wire Enamel', color: PART_COLORS.enamel },
+  // Only selectable when the machine has one (the mesh carries a `sleeve`
+  // part exactly then), so no guard is needed here (user 2026-09-04: "сделай
+  // всё стандартно как для других частей мотора").
+  sleeve:   { assignKey: 'sleeve',      label: 'Retaining Sleeve',      color: PART_COLORS.sleeve },
 };
 
 // All categories in display order

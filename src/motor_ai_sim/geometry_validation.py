@@ -34,6 +34,8 @@ import math
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from motor_ai_sim.winding import STRIP_GAP_FACTOR as _GAP_F
+
 # ── tolerances ───────────────────────────────────────────────────────────────
 # Neighbouring domains legitimately SHARE boundaries (magnet face against its
 # rotor pocket, coil against its liner).  Meshed vertices land on those shared
@@ -259,12 +261,13 @@ def _name_coil(i: int, poly) -> str:
 
 
 def _name_liner(i: int, poly) -> str:
-    return "Slot liner {} (θ={:.1f}°)".format(i + 1, _theta_deg(poly))
+    return "Insulation {} (θ={:.1f}°)".format(i + 1, _theta_deg(poly))
 
 
 _ROTOR = "the rotor core"
 _STATOR = "the stator core"
 _SHAFT = "the shaft"
+_SLEEVE = "the retaining sleeve"
 _AIR_IN = "the rotor-side air region (pockets + inner half of the air gap)"
 _AIR_OUT = "the stator-side air region (slot openings + outer half of the air gap)"
 
@@ -308,6 +311,12 @@ _CAUSES: Dict[str, List[str]] = {
     "winding_does_not_fit": [
         "num_wires_per_slot", "wire_height", "wire_spacing_y", "slot_height",
         "insulation_thickness"],
+    # The TANGENTIAL twin of winding_does_not_fit: the wire column (copper plus
+    # the wire_split gaps) is wider than the tooth pitch leaves room for.
+    "winding_split_does_not_fit": [
+        "wire_split", "wire_width", "wire_spacing_x", "tooth_width",
+        "tooth2_width", "insulation_thickness", "cut_width",
+        "num_slots_per_segment", "num_seg"],
     "winding_clipped_by_slot": [
         "wire_width", "wire_height", "slot_hs", "num_wires_per_slot",
         "slot_height", "wire_spacing_y", "insulation_thickness"],
@@ -315,7 +324,9 @@ _CAUSES: Dict[str, List[str]] = {
         "wire_width", "wire_spacing_x", "tooth_width", "tooth2_width",
         "num_slots_per_segment", "num_seg"],
     "rotor_crosses_air_gap": [
-        "air_gap", "magnet_up_gap", "rotor_fill_r"],
+        "air_gap", "magnet_up_gap", "rotor_fill_r", "sleeve_thickness"],
+    "sleeve_fills_air_gap": ["sleeve_thickness", "air_gap"],
+    "sleeve_overlaps_stator": ["sleeve_thickness", "air_gap"],
     "stator_crosses_air_gap": [
         "air_gap", "slot_height", "core_thickness", "stator_diameter"],
     "air_gap_not_positive": [
@@ -374,6 +385,165 @@ def _overlap_violation(code: str, name_a: str, name_b: str, inter,
         likely_params=_CAUSES.get(code, []))
 
 
+def sleeve_gap_error(geo: Dict[str, Any]) -> Optional[Tuple[str, str, str]]:
+    """``(field, code, message)`` when the retaining sleeve does not fit the air
+    gap, else ``None``.
+
+    ONE wording, shared by the three places that refuse a sleeve — the Geometry
+    tab's PUT (``validate_parameter_values``), the polygon validator that gates
+    every solve (``validate_polygons``) and the Geometry tab's red line under
+    the field (which renders whichever of the two reaches it).  A design
+    rejected in three places must not be explained three different ways.
+
+    Two rules, reported in the order an engineer hits them:
+
+      A. ``sleeve_thickness < air_gap``, strictly.  A ring as thick as the gap
+         reaches through it and rubs on the stator bore; a thicker one is not a
+         machine at all.
+      B. what is LEFT, ``air_gap − sleeve_thickness``, is the real mechanical
+         gap, and the transient solver's sliding band has to be meshed inside
+         it — see geometry_constraints.MIN_MECH_GAP_MM for where the number
+         comes from.
+
+    B implies A, but they are separate messages on purpose: "your ring is
+    thicker than your gap" and "your ring leaves the solver nowhere to put the
+    band" are different mistakes with different fixes.
+    """
+    from motor_ai_sim.geometry_constraints import MIN_MECH_GAP_MM
+    t = _num(geo.get("sleeve_thickness"))
+    gap = _num(geo.get("air_gap"))
+    if t is None or gap is None or t <= 0.0 or gap <= 0.0:
+        return None                       # no sleeve, or the gap is already an
+                                          # error some other rule owns
+    t_max = max(0.0, gap - MIN_MECH_GAP_MM)
+    if t >= gap:
+        return ("sleeve_thickness", "sleeve_fills_air_gap",
+                "sleeve_thickness ({:g} mm) is not thinner than air_gap "
+                "({:g} mm): the retaining sleeve sits ON the rotor OD, INSIDE "
+                "the air gap, so it would reach across the whole gap and rub "
+                "on the stator bore. The sleeve must leave at least {:g} mm of "
+                "mechanical clearance for the rotor to turn and for the "
+                "sliding band to be meshed, so sleeve_thickness must be "
+                "{:.3f} mm or less here — or open air_gap to more than "
+                "{:.3f} mm.".format(t, gap, MIN_MECH_GAP_MM, t_max,
+                                    t + MIN_MECH_GAP_MM))
+    if (gap - t) < MIN_MECH_GAP_MM:
+        return ("sleeve_thickness", "sleeve_fills_air_gap",
+                "sleeve_thickness ({:g} mm) leaves only {:.3f} mm of mechanical "
+                "gap between the sleeve OD and the stator bore (air_gap "
+                "{:g} mm). The transient solver's sliding band needs at least "
+                "{:g} mm there, so sleeve_thickness must be {:.3f} mm or less "
+                "here — or open air_gap to at least {:.3f} mm."
+                .format(t, gap - t, gap, MIN_MECH_GAP_MM, t_max,
+                        t + MIN_MECH_GAP_MM))
+    return None
+
+
+def slot_cut_limits(geo: Dict[str, Any]) -> Optional[Tuple[float, float, int]]:
+    """``(cut_x, cut_x_max, wire_split)`` [mm] for this geometry, or ``None``.
+
+    ``cut_x`` is where ``cadquery_geometry`` puts the slot's OUTER wall —
+    ``tooth_width/2 + 2·insulation + wire_column + 2·wire_spacing_x +
+    tooth2_width``, with ``wire_column = wire_split·wire_width +
+    (wire_split−1)·2·wire_spacing_x`` — and
+    ``cut_x_max = (stator_inner_radius + cut_width)·
+    sin(slot_angle/2)`` is where the half-sector wedge is at the slot-bottom
+    radius.  The builder's slot-mouth fillet is
+    ``(cut_x_max − cut_x)/(1 − sin(slot_angle/2))``, so ``cut_x ≥ cut_x_max``
+    is the point at which two neighbouring cutters meet and the tooth between
+    them stops existing.
+
+    ONE arithmetic, used by the parameter validator (which refuses the edit) and
+    available to anything else that needs to ask "how much room is left across
+    the slot".  ``None`` when a key it needs is missing or unusable — a partial
+    edit is judged by the rules that CAN see their inputs.
+    """
+    # The PRIMARY inputs first: ``num_slots`` is derived from them, and on a
+    # PUT that changes ``num_seg`` the dict still carries the OLD product when
+    # this runs — judged on it, a 12 -> 24 slot edit was accepted and only the
+    # NEXT edit of anything else was refused (tests/test_api.py, 2026-09-08).
+    seg, sps = _num(geo.get("num_seg")), _num(geo.get("num_slots_per_segment"))
+    ns = (seg * sps) if (seg and sps and seg > 0 and sps > 0) else None
+    if not ns or ns <= 0:
+        ns = _num(geo.get("num_slots"))
+    od, ct, sh = (_num(geo.get("stator_diameter")), _num(geo.get("core_thickness")),
+                  _num(geo.get("slot_height")))
+    tw, t2w = _num(geo.get("tooth_width")), _num(geo.get("tooth2_width"))
+    ww, dx = _num(geo.get("wire_width")), _num(geo.get("wire_spacing_x"))
+    ins, cw = (_num(geo.get("insulation_thickness")), _num(geo.get("cut_width")))
+    if None in (ns, od, ct, sh, tw, t2w, ww, dx, ins, cw) or ns < 2:
+        return None
+    inner_r = od / 2.0 - ct - sh
+    if inner_r <= 0.0:
+        return None                       # a bore rule already owns this
+    n_split = int(round(_num(geo.get("wire_split")) or 1))
+    n_split = n_split if n_split >= 1 else 1
+    # SAME arithmetic as cadquery_geometry._strip_span — N strips of wire_width
+    # with STRIP_GAP_FACTOR·wire_spacing_x between them.
+    column = ww if n_split <= 1 else n_split * ww + (n_split - 1) * _GAP_F * dx
+    cut_x = tw / 2.0 + 2.0 * ins + column + 2.0 * dx + t2w
+    half_slots = max(1, int(round(ns)) // 2)
+    cut_x_max = (inner_r + cw) * math.sin(math.radians(360.0 / half_slots / 2.0))
+    return float(cut_x), float(cut_x_max), n_split
+
+
+def split_width_error(geo: Dict[str, Any]) -> Optional[Tuple[str, str, float]]:
+    """``(field, message, bound)`` when the winding no longer fits ACROSS the
+    slot, else ``None``.
+
+    The tangential counterpart of the radial ``winding_does_not_fit``.  Fires on
+    ``wire_split`` when there is a split — its extra strips and their (N−1) gaps
+    of 2·wire_spacing_x are what just widened the column, and the fix is a
+    smaller N — and on ``wire_width`` otherwise.  The ``bound`` is the largest
+    value that field may take with everything else held: an integer strip count,
+    or a width in mm.
+    """
+    lim = slot_cut_limits(geo)
+    if lim is None:
+        return None
+    cut_x, cut_x_max, n_split = lim
+    if cut_x < cut_x_max - 1e-9:
+        return None
+    dx = _num(geo.get("wire_spacing_x")) or 0.0
+    ww = _num(geo.get("wire_width")) or 0.0
+    gap = _GAP_F * dx
+    over = cut_x - cut_x_max
+    if n_split >= 2 and (ww + gap) > 0.0:
+        # Each strip removed gives back one strip width AND one gap, so the
+        # largest N that still fits is N − over/(wire_width + gap).  n_max may
+        # be 1 — "no split at all".
+        n_max = max(1, int(math.floor(n_split - over / (ww + gap) - 1e-9)))
+        # The wire_width that WOULD fit at this N — named first, because
+        # splitting a bar in two means halving the wire (user 2026-09-08: "сделай
+        # ширину провода 4,5 мм"), and "use wire_split = 1" is the fix that
+        # undoes what the user just asked for.
+        w_fit = max(0.0, ww - over / n_split)
+        return ("wire_split",
+                "wire_split = {:d} does not fit across the slot: {:d} strips of "
+                "wire_width = {:g} mm need {:d} insulation gap(s) of "
+                "2 x wire_spacing_x = {:g} mm between them, so the wire column "
+                "is {:g} mm wide and the slot wall lands at {:.4f} mm — past "
+                "the {:.4f} mm the tooth pitch leaves for it, by {:.4f} mm. The "
+                "slot would cut into its neighbour and the tooth between them "
+                "would be gone. Splitting a wire means NARROWING it: set "
+                "wire_width to {:.4f} mm or less to keep {:d} strips (halving a "
+                "bar is the usual intent). Otherwise use wire_split = {:d} or "
+                "less here, or make room: a smaller tooth2_width or more slot "
+                "pitch."
+                .format(n_split, n_split, ww, n_split - 1, gap,
+                        n_split * ww + (n_split - 1) * gap,
+                        cut_x, cut_x_max, over, w_fit, n_split, n_max),
+                float(n_max))
+    w_max = max(0.0, ww - over / max(1, n_split))
+    return ("wire_width",
+            "wire_width = {:g} mm does not fit across the slot: the slot wall "
+            "lands at {:.4f} mm and the tooth pitch leaves only {:.4f} mm — "
+            "{:.4f} mm too far, so the slot would cut into its neighbour. "
+            "wire_width must be {:.4f} mm or less here."
+            .format(ww, cut_x, cut_x_max, over, w_max),
+            float(w_max))
+
+
 def weld_tol_mm(params: Optional[Dict[str, Any]] = None,
                 polys: Optional[Dict[str, Any]] = None) -> float:
     """The tolerance the polygons were BUILT to — machine diameter / _WELD_DIV.
@@ -422,6 +592,9 @@ def validate_polygons(polys: Dict[str, Any],
     stator = polys.get("stator")
     rotor = polys.get("rotor")
     shaft = polys.get("shaft")
+    # None on every machine without a retaining ring, which is all of them but
+    # the Ø200 — so every union below is unchanged there.
+    sleeve = polys.get("sleeve")
     magnets = [mp for mp, _pol in (polys.get("magnets") or [])]
     coils = list(polys.get("coils") or [])
     liners = list(polys.get("slot_insulation") or [])
@@ -528,6 +701,46 @@ def validate_polygons(polys: Dict[str, Any],
                         n_fit, n_req, n_req - n_fit),
             measured_mm=None, likely_params=_CAUSES["winding_does_not_fit"]))
 
+    # ── 1a. the wire COLUMN across the slot (wire_split's gaps) ──────────────
+    # Same measurement the builder made when it cut the slot, carried out in the
+    # polys dict so the two cannot drift.  ERROR, not a warning: past this bound
+    # the slot cutter meets its neighbour, the mouth fillet radius goes negative
+    # and the stator polygon is no longer a lamination.
+    checks.append("winding_split_fit")
+    _cut_x = float(polys.get("slot_cut_x_mm") or 0.0)
+    _cut_x_max = float(polys.get("slot_cut_x_max_mm") or 0.0)
+    _n_split = int(polys.get("wire_split") or 1)
+    if _cut_x > 0.0 and _cut_x_max > 0.0 and _cut_x >= _cut_x_max - 1e-9:
+        _column = float(polys.get("wire_column_mm") or 0.0)
+        _strip = float(polys.get("strip_width_mm") or 0.0)
+        _what = ("{:d} strips of {:g} mm plus {:d} gap(s) of 2 x wire_spacing_x"
+                 .format(_n_split, _strip, _n_split - 1)
+                 if _n_split > 1 else "one wire")
+        _causes = list(_CAUSES["winding_split_does_not_fit"])
+        if _n_split <= 1:
+            _causes = [c for c in _causes if c != "wire_split"]
+        col.add(Violation(
+            code="winding_split_does_not_fit", severity=_SEV_ERROR,
+            part_a="The winding", part_b="the slot",
+            message="{}the wire column is {:.4f} mm wide ({}), which puts the "
+                    "slot wall at {:.4f} mm — {:.4f} mm past the {:.4f} mm the "
+                    "tooth pitch leaves for it. The slot cuts into its "
+                    "neighbour and the tooth between them is gone, so the "
+                    "stator is no longer a lamination.{}"
+                    .format("wire_split = {:d}: ".format(_n_split)
+                            if _n_split > 1 else "",
+                            _column, _what, _cut_x,
+                            _cut_x - _cut_x_max, _cut_x_max,
+                            # Splitting a wire means NARROWING it, so the fix
+                            # that keeps the split is named first and by number.
+                            (" Set wire_width to {:.4f} mm or less to keep {:d} "
+                             "strips.".format(
+                                 max(0.0, _strip
+                                     - (_cut_x - _cut_x_max) / _n_split),
+                                 _n_split)
+                             if _n_split > 1 and _strip > 0.0 else "")),
+            measured_mm=float(_cut_x - _cut_x_max), likely_params=_causes))
+
     # ── 1b. conductor cross-section actually delivered ───────────────────────
     # ``winding_does_not_fit`` only catches a stack that would CROSS THE BORE —
     # i.e. turns dropped whole.  Two other ways to lose copper leave the turn
@@ -556,7 +769,15 @@ def validate_polygons(polys: Dict[str, Any],
     # depends on, which a capped list of 6 out of 96 pairs cannot show.
     checks.append("winding_copper_area")
     coil_union = _u(coils)
-    _w_w = _num(p.get("wire_width"))
+    # NOMINAL section per CONDUCTOR.  With wire_split = N a conductor is one
+    # STRIP, and a strip IS wire_width × wire_height — the split does not
+    # subdivide the width, it adds N of them per wire row.  So the per-polygon
+    # nominal is unchanged and the TOTAL (a_nom_1 × len(coils)) grows by N,
+    # which is the whole point of the new rule: N times the copper in a slot
+    # that grew to hold it.  Taking the strip width off the POLYS (the builder's
+    # own number) rather than off `p` keeps the two from disagreeing when a
+    # caller hands in a params dict that predates the split.
+    _w_w = _num(polys.get("strip_width_mm")) or _num(p.get("wire_width"))
     _w_h = _num(p.get("wire_height"))
     if coils and _w_w and _w_h and _w_w > 0.0 and _w_h > 0.0:
         a_nom_1 = _w_w * _w_h
@@ -630,11 +851,15 @@ def validate_polygons(polys: Dict[str, Any],
           "The rotor bore is smaller than the shaft it is mounted on.")
     _pair("rotor_overlaps_stator", _ROTOR.capitalize(), rotor, _STATOR, stator,
           "The rotor and the stator interfere — the air gap is closed.")
+    _pair("sleeve_overlaps_stator", _SLEEVE.capitalize(), sleeve, _STATOR,
+          stator,
+          "The carbon-fibre retaining ring reaches across the air gap into the "
+          "stator: sleeve_thickness has eaten the whole gap.")
 
     _pair("coil_overlaps_stator", "The winding", coil_union, _STATOR, stator,
           "Copper and stator lamination share space; the current density the "
           "solver applies there is applied to iron.")
-    _pair("coil_overlaps_liner", "The winding", coil_union, "the slot liner",
+    _pair("coil_overlaps_liner", "The winding", coil_union, "the insulation",
           _u(liners),
           "Copper and slot insulation share space — the liner is supposed to "
           "sit BETWEEN the conductors and the iron, not inside them.")
@@ -669,7 +894,7 @@ def validate_polygons(polys: Dict[str, Any],
     _pair("magnet_in_rotor_air", "The magnets", mag_union, _AIR_IN, in_band,
           "A magnet sticks into the rotor air pocket that was cut for it.")
     _pair("rotor_crosses_air_gap", "The rotor assembly",
-          _u([rotor, shaft] + magnets), _AIR_OUT, out_band,
+          _u([rotor, shaft, sleeve] + magnets), _AIR_OUT, out_band,
           "A rotating part crosses the mid-gap slip surface into the stationary "
           "air region; the sliding band would shear it every step.")
     _pair("coil_in_stator_air", "The winding", coil_union, _AIR_OUT, out_band,
@@ -738,7 +963,11 @@ def validate_polygons(polys: Dict[str, Any],
 
     # ── 5. air gap: rotor OD must stay clear of the stator bore ──────────────
     checks.append("air_gap_clearance")
-    rot_solids = _u([rotor, shaft] + magnets)
+    # The sleeve is a ROTATING surface, and after it is fitted it is the
+    # outermost one — so it, not the rotor OD, is what the stator bore has to
+    # clear.  Leaving it out would report the magnetic gap as the mechanical
+    # one and pass a machine that cannot turn.
+    rot_solids = _u([rotor, shaft, sleeve] + magnets)
     stat_solids = _u([stator] + coils)
     if rot_solids is not None and stat_solids is not None:
         r_rot_max = _radii(rot_solids)[1]
@@ -770,7 +999,16 @@ def validate_polygons(polys: Dict[str, Any],
                 # the nominal bore, and torque scales hard with the real gap —
                 # so when the two disagree, say so instead of letting the user
                 # believe the value they typed.
+                # A retaining sleeve is DESIGNED to eat part of the gap, so the
+                # number to compare against is the MECHANICAL gap the parameters
+                # promise (air_gap − sleeve_thickness) — otherwise every sleeved
+                # machine would carry a permanent "your gap is not what you
+                # typed" warning that is simply the sleeve.
+                _t_sl = _num(p.get("sleeve_thickness")) or 0.0
+                _t_sl = _t_sl if _t_sl > 0.0 else 0.0
                 nominal = _num(p.get("air_gap"))
+                if nominal is not None:
+                    nominal = nominal - _t_sl
                 if nominal and nominal > 0.0:
                     slack = max(0.02, 0.10 * nominal)
                     if abs(clearance - nominal) > slack:
@@ -781,18 +1019,45 @@ def validate_polygons(polys: Dict[str, Any],
                             part_b="the air_gap parameter",
                             message="The smallest rotor-to-stator clearance in "
                                     "the built cross-section is {:.3f} mm, but "
-                                    "air_gap is set to {:.3f} mm. The solver "
+                                    "air_gap is set to {:.3f} mm{}. The solver "
                                     "uses the built geometry, so torque and "
                                     "flux follow the {:.3f} mm gap."
-                                    .format(clearance, nominal, clearance),
+                                    .format(clearance, nominal,
+                                            (" (air_gap {:g} mm minus the "
+                                             "{:g} mm sleeve)".format(
+                                                 _num(p.get("air_gap")) or 0.0,
+                                                 _t_sl)) if _t_sl else "",
+                                            clearance),
                             measured_mm=clearance, limit_mm=nominal,
                             likely_params=["air_gap", "cut_width", "slot_hs",
-                                           "stator_fillet_r1", "tooth_width"]))
+                                           "stator_fillet_r1", "tooth_width"]
+                                          + (["sleeve_thickness"] if _t_sl
+                                             else [])))
             min_gap = clearance
         else:
             min_gap = None
     else:
         min_gap = None
+
+    # ── 5b. the retaining sleeve has to leave a mechanical gap ───────────────
+    # A SCALAR rule in a polygon validator, deliberately: this is the gate every
+    # solve passes through (routes/simulation refuses on `not result.ok`), and a
+    # sleeve that fills its gap must never reach a mesher.  The polygon checks
+    # above catch the gross case — a ring thicker than the gap intersects the
+    # stator — but not the one that matters more: a ring that leaves 0.05 mm,
+    # which is geometrically disjoint and still has nowhere to put the sliding
+    # band.  Same sentence the Geometry tab's PUT refuses with.
+    checks.append("sleeve_fits_air_gap")
+    _sl_err = sleeve_gap_error(p)
+    if _sl_err is not None:
+        _fld, _code, _msg = _sl_err
+        col.add(Violation(
+            code=_code, severity=_SEV_ERROR,
+            part_a="The retaining sleeve", part_b="the air gap",
+            message=_msg,
+            measured_mm=_num(p.get("sleeve_thickness")),
+            limit_mm=_num(p.get("air_gap")),
+            likely_params=_CAUSES.get(_code, ["sleeve_thickness", "air_gap"])))
 
     # ── 6. iron connectivity (warning — solvable, but rarely intended) ───────
     checks.append("iron_connectivity")
@@ -870,11 +1135,20 @@ _NON_NEGATIVE_MM = (
     "insulation_thickness", "wire_spacing_x", "wire_spacing_y",
     "magnet_up_gap", "stator_fillet_r", "stator_fillet_r1", "rotor_fill_r",
     "magnet_fill_radius", "magnet_lamination", "magnet_lamination_tan",
+    # 0 = no retaining sleeve, which is the default and every machine but one.
+    "sleeve_thickness",
 )
 _POSITIVE_INT = (
     "num_seg", "num_slots_per_segment", "num_poles_per_segment",
-    "num_wires_per_slot", "wire_split",
+    "num_wires_per_slot", "wire_split", "wire_parallel",
 )
+#: Geometry keys that are FLAGS, not dimensions — none today.  Kept as the
+#: named hook the numeric loop below already skips on: `isinstance(True, int)`
+#: is True in Python, so a bool-valued knob would otherwise fall through the
+#: numeric rules as a length of 1 mm.  ``wire_split_series`` was the only entry
+#: and it lived for a few hours on 2026-09-08 (the strips of a wire_split row
+#: are always SERIES turns now).
+_BOOLEAN_KEYS: tuple = ()
 _FRACTION_0_1 = (
     "magnet_fill_down", "magnet_fill_up", "rotor_hole", "slot_hs",
 )
@@ -921,6 +1195,8 @@ def validate_parameter_values(geo: Dict[str, Any]) -> List[Dict[str, Any]]:
             continue
         if isinstance(v, str):
             continue                      # string params (material names, …)
+        if k in _BOOLEAN_KEYS:
+            continue                      # a flag, not a dimension (none today)
         f = _num(v)
         if f is None:
             _err(k, v, "{} is not a finite number.".format(k))
@@ -948,8 +1224,65 @@ def validate_parameter_values(geo: Dict[str, Any]) -> List[Dict[str, Any]]:
             _err(k, geo[k], "{} is a fraction of the pole pitch and must be in "
                             "(0, 1] (got {:g}).".format(k, f), min=0.0, max=1.0)
 
-    # ── derived radii must survive the arithmetic ────────────────────────────
+    # Every geometry knob is a NUMBER again.  `magnet_top: flat | arc` was the
+    # one word-valued one, and it lived for a few hours on 2026-09-06 before the
+    # user removed the flat top entirely ("уберём прямую вообще"); a stale key
+    # from that window falls through the isinstance(v, str) skip above, which is
+    # what "ignore it silently" means here.
+
+    # ── the strands in hand must divide the wires in the slot ────────────────
+    # DERIVED, not a field rule: it is the PAIR that is broken, and either half
+    # is a legitimate thing to have just typed.  Rounding it would silently
+    # build a different machine — 7 wires wound 2-in-hand is 3.5 turns per coil,
+    # and 3.5 turns is not a winding.
     _kind["k"] = "derived"
+    _wp = _num(geo.get("wire_parallel"))
+    _nw = _num(geo.get("num_wires_per_slot"))
+    if _wp is not None and _nw is not None and _wp >= 1 and _nw >= 1:
+        _wpi, _nwi = int(round(_wp)), int(round(_nw))
+        if _wpi >= 2 and _nwi % _wpi:
+            _err("wire_parallel", geo.get("wire_parallel"),
+                 "wire_parallel = {:d} does not divide num_wires_per_slot = "
+                 "{:d}: {:d} wires wound {:d}-in-hand is {:g} turns per coil, "
+                 "which is not a winding. Use a wire_parallel that divides "
+                 "{:d}, or make num_wires_per_slot a multiple of {:d}."
+                 .format(_wpi, _nwi, _nwi, _wpi, _nwi / _wpi, _nwi, _wpi))
+
+    # ── the split strips + their gaps have to fit ACROSS the slot ────────────
+    # DERIVED, and the tangential twin of `winding_does_not_fit` (which is the
+    # RADIAL stack).  wire_split = N lays N strips of wire_width side by side
+    # with 2·wire_spacing_x of enamel between them, so the wire COLUMN — and
+    # with it the slot the CAD cuts for it — is N·wire_width +
+    # (N−1)·2·wire_spacing_x.  The slot's outer wall has to stay inside the
+    # half-sector wedge at the slot-bottom radius, or the neighbouring slot's
+    # cutter meets it and the tooth between them is gone (cadquery_geometry's
+    # fill_r2 turns negative and the stator polygon stops describing a machine).
+    # Named on wire_split when there IS a split: its gaps are the only thing the
+    # user just added, and the honest fix is a smaller N or a wider tooth pitch.
+    # REFUSED only when there IS a split.  An unsplit wire that is wider than
+    # the pitch is the pre-existing, reportable case: the CAD still builds it,
+    # `coil_overlaps_coil` / `winding_split_does_not_fit` say so on the saved
+    # design, and the SOLVE is what refuses — the contract tests/
+    # test_geometry_validation.py::TestApiWiring pins ("a mid-edit design must
+    # still save").  Refusing it here as well only ever passed those tests
+    # because `slot_cut_limits` used to read the STALE derived slot count.
+    _split_fit = split_width_error(geo)
+    if _split_fit is not None and _split_fit[0] == "wire_split":
+        _fld, _msg, _bound = _split_fit
+        _err(_fld, geo.get(_fld), _msg, max=_bound)
+
+    # ── the retaining sleeve has to fit inside the air gap ───────────────────
+    # DERIVED: it is the PAIR (sleeve_thickness, air_gap) that is broken, and
+    # either half is a legitimate thing to have just typed — so the rule applies
+    # whichever one this request touched.
+    _sl = sleeve_gap_error(geo)
+    if _sl is not None:
+        _fld, _code, _msg = _sl
+        _gap_now = _num(geo.get("air_gap")) or 0.0
+        from motor_ai_sim.geometry_constraints import MIN_MECH_GAP_MM as _MG
+        _err(_fld, geo.get(_fld), _msg, min=0.0, max=max(0.0, _gap_now - _MG))
+
+    # ── derived radii must survive the arithmetic ────────────────────────────
     od = _num(geo.get("stator_diameter"))
     core = _num(geo.get("core_thickness"))
     slot = _num(geo.get("slot_height"))

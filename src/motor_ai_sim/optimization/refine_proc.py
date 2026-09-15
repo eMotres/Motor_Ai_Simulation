@@ -9,10 +9,61 @@ config / Simulation state is never touched.
 """
 from __future__ import annotations
 
+import logging
 import math
+import os
 from typing import Dict, Any
 
+log = logging.getLogger(__name__)
+
 _KERNEL = None
+
+
+def _excitation_args(sim: Dict[str, Any]) -> Dict[str, Any]:
+    """The EXCITATION SOURCE a candidate is evaluated on, from the shared config.
+
+    Each source's extra parameters travel ONLY with that source: the transient
+    route refuses a ``v_bus`` that arrives with a current drive rather than
+    ignore it (a parameter quietly dropped is how a run answers a different
+    question than the one on screen), so sending them unconditionally would 422
+    every ordinary candidate.
+
+    ``custom_current`` cannot be reproduced here at all — its waveform is up to
+    20 000 samples and deliberately does NOT live in the shared config, which
+    every off-tab consumer reads — so the candidate falls back to the sinusoidal
+    current drive and says so, rather than inventing a waveform or failing the
+    whole study.
+    """
+    d = str(sim.get("drive", "current") or "current")
+    if d == "custom_current":
+        log.warning("optimizer: the Simulation tab's excitation is an imposed "
+                    "custom waveform, which is not in the shared config — "
+                    "candidates are evaluated on the SINUSOIDAL current drive")
+        return {"drive": "current"}
+    if d == "pwm_voltage":
+        # A PWM candidate needs ≥4 solve steps per carrier (the route refuses
+        # less — the ripple would sit at its Nyquist edge and average out),
+        # i.e. hundreds of steps per period plus a settle prefix, against the
+        # optimizer's tens.  Measured 2026-09-02 on CILN28/G2-L40: 40 steps
+        # over 26 carriers → every candidate 422'd and the study produced
+        # nothing.  So the candidates are scored on the SINUSOIDAL current
+        # drive at the same operating point, and the log says so; the PWM
+        # deltas belong to the Configure passport (passport_pwm) and to the
+        # Simulation tab, not to a geometry search.  OPT_ALLOW_PWM=1 keeps the
+        # old behaviour for a deliberately long study.
+        if (os.environ.get("OPT_ALLOW_PWM") or "").strip() == "1":
+            return {"drive": d,
+                    "v_bus": float(sim.get("v_bus", 0.0) or 0.0),
+                    "f_switch": float(sim.get("f_switch", 0.0) or 0.0)}
+        log.warning("optimizer: the Simulation tab's excitation is the PWM "
+                    "inverter (f_switch %s Hz), which cannot be resolved at the "
+                    "optimizer's step count — candidates are evaluated on the "
+                    "SINUSOIDAL current drive at the same operating point "
+                    "(OPT_ALLOW_PWM=1 overrides)", sim.get("f_switch"))
+        return {"drive": "current"}
+    if d == "bldc_current":
+        return {"drive": d, "i_block": float(sim.get("i_block", 0.0) or 0.0)}
+    return {"drive": d}
 
 # ── mesh budget for ONE candidate eval (triangles) ───────────────────────────
 # The optimizer samples the whitelist without a range box, so a candidate can be
@@ -79,7 +130,8 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
             element_order: int = 2, rpm: float | None = None,
             n_parallel: int | None = None,
             connection: str | None = None,
-            demag: bool | None = None) -> Dict[str, Any]:
+            demag: bool | None = None,
+            magnet_temp_c: float | None = None) -> Dict[str, Any]:
     """Run the sliding-band transient for one candidate and return mean
     performance metrics (torque, efficiency, ripple, losses, mass).
 
@@ -94,15 +146,20 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
     cfg = get_config()
     geo = {**dict(cfg.get("geometry", {})), **overrides}
 
-    # Enforce geometry feasibility (winding fits the slot, …) by CLAMPING the
-    # violating knobs — so the optimizer always evaluates a VALID cross-section
-    # (no coils overflowing the air gap).  Both the mass calc (build_params(geo))
-    # and the FEM build (geo_override) use the same clamped values.
-    from motor_ai_sim.geometry_constraints import clamp as _clamp_geo
-    geo, _applied = _clamp_geo(geo)
-    overrides = dict(overrides)
-    for _a in _applied:
-        overrides[_a["target"]] = geo[_a["target"]]
+    # Geometry feasibility (winding fits the slot, …).  This used to CLAMP the
+    # violating knob and solve the bound instead — which meant the caller got a
+    # result for a machine it never asked for: a sweep of wire_height
+    # 0.4/0.5/0.6 on a 6.6 mm slot with 10 conductors returned three points of
+    # which the third was solved at 0.52 mm, and an optimizer draw above the
+    # limit collapsed onto that same bound geometry, flattening the landscape
+    # CMA-ES ranks on.  A design outside a closed-form bound is now REJECTED,
+    # with the arithmetic in the message; the callers (sweep grid gate,
+    # optimizer pre-fence) screen for this first, so reaching here means
+    # something slipped past them and must not be quietly substituted.
+    from motor_ai_sim.geometry_constraints import violation_message as _vmsg
+    _why = _vmsg(geo)
+    if _why:
+        raise ValueError(_why)
 
     # Final safety: if the winding STILL can't fit even after clamping (e.g. an
     # absurd turn count at minimum wire height), the design is truly infeasible.
@@ -126,14 +183,19 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
     if not _vres.ok:
         raise ValueError(_vres.summary())
 
-    # A parameter SWEEP / optimization explores GEOMETRY, and k_end is a FUNCTION of the
-    # geometry (tooth_width, slot_width, …).  Pinning ONE k_end across changing geometry
-    # would freeze the end-winding copper loss — yet a wider tooth has a longer end-turn
-    # and MUST cost more DC I²R copper.  So always recompute k_end PER-POINT from each
-    # candidate's geometry (auto), ignoring any single pinned value the Simulation tab
-    # sent.  This keeps the copper LOSS and the copper MASS (mass uses auto k_end via
-    # _masses below) on the SAME per-point k_end — consistent and tooth-dependent.
-    end_winding_factor = 0.0
+    # k_end policy.  Default (0 = auto): recompute PER-POINT from each candidate's
+    # geometry — a wider tooth has a longer end-turn and must cost more DC I²R
+    # copper, so freezing one value across a geometry exploration would be wrong.
+    # But an EXPLICIT pin from the Simulation tab is the engineer's statement
+    # about their actual machine's end-winding (often measured), and the standing
+    # rule is that every physics setting comes from the Simulation tab.  This
+    # line used to zero the pin unconditionally, which meant (a) an optimizer
+    # result could not be reproduced by pressing Run in Simulation with the pin
+    # set, and (b) the optimizer's copper MASS (auto k_end) disagreed with the
+    # panel's (pinned k_end) — the measured +2.9 % total-mass discrepancy at
+    # pin 1.664 vs auto ≈ 1.72 on the 24s/28p.  The pin now flows through to the
+    # solver AND the mass below, so loss, R and mass share one k_end either way.
+    end_winding_factor = max(0.0, float(end_winding_factor or 0.0))
     # SPEED — one number for this eval, used BOTH for our own omega and by the
     # solver.  It used to be read here for omega while the solver read the same
     # global key for itself; correct only as long as nothing moved the config
@@ -202,6 +264,13 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         "mesh_size_mm": float(mesh_size_mm),
         "min_size_mm": float(min_size_mm), "n_sectors": int(_ns),
         "coil_temp_c": float(coil_temp_c), "gap_layers": float(gap_layers),
+        # MAGNET TEMPERATURE.  Omitted (None) = the assigned card exactly as the
+        # library quotes it — what every study so far solved, so an omitted
+        # argument changes no candidate's numbers.  Sent, every candidate is
+        # ranked with its magnet at the SAME temperature, which is the only way
+        # a comparison against a hot machine's torque means anything.
+        **({} if magnet_temp_c is None
+           else {"magnet_temp_c": float(magnet_temp_c)}),
         "end_winding_factor": float(end_winding_factor), "rotor_eddy": bool(rotor_eddy),
         "pole_copy": pole_copy, "torque_filter": bool(torque_filter),
         "hi_fidelity": bool(hi_fidelity),   # 2× slip nodes + finer mesh + gap layers → smoother raw torque
@@ -228,7 +297,17 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         # them from the config, which is where the Simulation tab now persists
         # every one of its switches.
         "eddy": bool(_sim.get("eddy", False)),
-        "drive": str(_sim.get("drive", "current") or "current"),
+        # EXCITATION SOURCE, with its own parameters.  Each source's extras are
+        # sent ONLY with that source: the route refuses a v_bus that arrives
+        # with a current drive rather than ignore it, so passing them
+        # unconditionally would 422 every ordinary candidate.
+        #
+        # custom_current cannot be reproduced here AT ALL — its waveform is up
+        # to 20k samples and deliberately does not live in the shared config
+        # (see routes/simulation.SimConfigPatch) — so a candidate falls back to
+        # the sinusoidal current drive and SAYS SO in the log, rather than
+        # inventing a waveform or failing the whole study.
+        **_excitation_args(_sim),
         "v_phase_peak": float(_sim.get("v_phase_peak", 0.0) or 0.0),
         "v_delta_deg": float(_sim.get("v_delta_deg", 0.0) or 0.0),
         "demag": bool(_demag),   # per-element irreversible demag (doubles the frames)
@@ -280,6 +359,28 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
                 _bad, int(d.get("n_steps", 0) or 0),
                 float(d.get("picard_resid_max") or 0.0),
                 float(d.get("picard_tol") or 0.0)))
+
+    # ── mesh-build honesty ───────────────────────────────────────────────────
+    # The mesher degrades gracefully on a build hiccup (template → gmsh, slot /
+    # pole copy → standard build, structured gap → FREE gap) — right for an
+    # interactive Simulation run, wrong inside a search: the build path moves
+    # the raw ripple noise floor by percentage points, so two candidates built
+    # differently are not comparable, and with a 5 % ripple gate one can pass
+    # or fail on mesh path alone.  The solver now reports what actually built;
+    # an eval whose structured gap silently became a free gap (P2 ripple lives
+    # in that belt) or that fell through ANY build fallback is rejected like an
+    # unconverged frame — dropped, never ranked.
+    _bevents = list(d.get("mesh_build_events") or [])
+    if _sg and ("structured_gap_effective" in d) \
+            and not bool(d.get("structured_gap_effective")):
+        raise RuntimeError(
+            "structured gap requested but the build fell back to a FREE gap "
+            "(%s) — the P2 ripple is not comparable with cleanly built "
+            "candidates; eval rejected" % ("; ".join(_bevents) or "no detail"))
+    if _bevents:
+        raise RuntimeError(
+            "mesh build degraded (%s) — this candidate's discretization "
+            "differs from the others'; eval rejected" % "; ".join(_bevents))
 
     # The four fields every scored metric below is built from.  Checking them
     # together, by name, means a payload that is short of one says so in words
@@ -337,7 +438,11 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
     else:
         eff = 0.0
         op_mode = "motor"
-    mass = float(_masses(build_params(geo), geo)["total"])
+    # Same k_end as the loss/R path above — a pinned end-winding factor must
+    # bill the copper mass too, exactly as the Simulation summary does (it
+    # passes the solver's k_end_used into compute_masses).
+    mass = float(_masses(build_params(geo), geo,
+                         k_end=end_winding_factor)["total"])
     # Voltage waveform quality — SAME helper as the Simulation summary, so the
     # optimizer's THD is byte-identical to the Simulation tab's.
     from motor_ai_sim.simulation.postproc import voltage_harmonics
@@ -356,8 +461,18 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         _npar = max(1, _pc(connection)[0])
     else:
         _npar = max(1, int((cfg.get("winding", {}) or {}).get("n_parallel", 1) or 1))
+    # …times the STRANDS IN HAND: each physical wire carries I_coil / k, so the
+    # thermal-loading J the summary quotes divides by n_parallel × wire_parallel
+    # (the same effective count the solve was run at).
+    from motor_ai_sim.winding import wire_parallel_from_geo as _wp_geo
+    _npar = _npar * _wp_geo(geo)
     _a_cond_mm2 = float(geo.get("wire_width", 0.0)) * float(geo.get("wire_height", 0.0))
-    j_coil = (float(current_a) / _npar / _a_cond_mm2) if _a_cond_mm2 > 1e-9 else 0.0
+    # TERMINAL CONNECTION of the solve (the route stamps it).  `current_a` is the
+    # TERMINAL current the point was asked for; the winding carried it over
+    # sqrt(3) in delta, and that is the current J coil is billed on.
+    _delta = str(d.get("star_delta") or "star").lower().startswith("d")
+    _i_wind = float(current_a) / (math.sqrt(3.0) if _delta else 1.0)
+    j_coil = (_i_wind / _npar / _a_cond_mm2) if _a_cond_mm2 > 1e-9 else 0.0
     # Peak LINE voltage — the DC-bus sizing number.  Taken from the actual
     # line-to-line waveforms like the Simulation summary does, falling back to the
     # sqrt(3)*V_phase_peak identity only when the phase waveforms aren't returned.
@@ -366,9 +481,16 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
             and len({len(v) for v in _vs}) == 1:
         _va, _vb, _vc = (np.nan_to_num(np.asarray(v, float), nan=0.0, posinf=0.0, neginf=0.0)
                          for v in _vs)
-        v_line_peak = float(max(np.max(np.abs(p)) for p in (_va - _vb, _vb - _vc, _vc - _va)))
+        if _delta:
+            # the winding IS the line, minus its zero-sequence part (the
+            # triplen drives the circulating current and never reaches the
+            # terminals) — same rule as the Simulation summary
+            _v0 = (_va + _vb + _vc) / 3.0
+            v_line_peak = float(max(np.max(np.abs(p)) for p in (_va - _v0, _vb - _v0, _vc - _v0)))
+        else:
+            v_line_peak = float(max(np.max(np.abs(p)) for p in (_va - _vb, _vb - _vc, _vc - _va)))
     else:
-        v_line_peak = float(d["V_peak"]) * math.sqrt(3)
+        v_line_peak = float(d["V_peak"]) * (1.0 if _delta else math.sqrt(3))
     # KV = rpm / V_line_peak — the max/max convention the Simulation tile and the
     # user's Ansys table use (bef2ed2, 2026-08-04).  It divided by the
     # FUNDAMENTAL line-to-line rms, which reads ~sqrt(2) higher and contradicted
@@ -406,7 +528,11 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         "loss_density_W_kg": round(ploss / mass, 1) if mass > 0 else 0.0,
         "mass_total_kg": round(mass, 3), "V_peak": round(float(d["V_peak"]), 1),
         "V_line_peak_V": round(v_line_peak, 1),
-        "I_phase_rms_A": round(float(current_a), 2),
+        "I_phase_rms_A": round(float(current_a), 2),     # TERMINAL, as set
+        "I_winding_rms_A": round(_i_wind, 2),
+        "star_delta": ("delta" if _delta else "star"),
+        "strand_bonding": str(d.get("strand_bonding") or "transposed"),
+        "P_cu_circulating_W": round(float(d.get("P_cu_circulating_W") or 0.0), 1),
         "V1_phase_V": vh["V1_phase_V"], "THD_pct": vh["THD_pct"],
         "THD_LL_pct": vh["THD_LL_pct"], "V1_LL_V": vh.get("V1_LL_V", 0.0),
         "Kt_Nm_per_Arms": (round(Tavg / float(current_a), 4)
@@ -418,6 +544,34 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         "nonlinear_converged": True,
         "nonlinear_resid_max": float(d.get("picard_resid_max") or 0.0),
         "nonlinear_tol": float(d.get("picard_tol") or 0.0),
+        # ── WHOSE STATE THIS POINT CONTINUED (user 2026-09-06) ─────────────
+        # Under SB_SEED_FROM_PREVIOUS (sweeps/optimizer only) a point starts
+        # from the previous point's settled eddy field and its Br ratchet map
+        # instead of re-solving the warm-up march and a whole demag pre-pass
+        # period — "проход демагнитизации делается для каждого sweep только
+        # один раз".  The scan cache deliberately does NOT key on it (see
+        # `_eval_cache_key`), so these three fields are how a stored point says
+        # for itself what it was: which parent, and how many frames it skipped.
+        "warm_seeded": bool(d.get("warm_seeded", False)),
+        "demag_seeded": bool(d.get("demag_seeded", False)),
+        "demag_seed_from": d.get("demag_seed_from"),
+        "eddy_warmup_frames": int(d.get("eddy_warmup_frames") or 0),
+        "demag_prepass_frames": int(d.get("demag_prepass_frames") or 0),
+        # ── DID THE EDDY TRANSIENT ACTUALLY SETTLE? (user, 2026-09-07) ─────
+        # The frame count above only said what the warm-up COST.  In the
+        # 90-point sweep of 2026-09-07 all 90 points read 57 frames — every
+        # probe failed and every march ran to its one-shot cap — and the
+        # points whose shaft tube sits closest to the field reported shaft
+        # eddy losses of 504 / 3558 / 6652 W at neighbouring air gaps (magnet
+        # 24 mm, gap 2.6 / 3.1 / 1.6 mm), which then drove η and P_loss on the
+        # chart and were read as demagnetisation.  They were start-up values.
+        # The point carries the verdict so the panel can flag it: an unsettled
+        # point is still a point (it is NOT non-physical, `_nonphysical_result`
+        # must not veto it), but a FLAGGED one.
+        "eddy_settled": bool(d.get("eddy_settled", True)),
+        "eddy_capped": bool(d.get("eddy_capped", False)),
+        "eddy_settle_residual": d.get("eddy_settle_residual"),
+        "eddy_settle_tol": d.get("eddy_settle_tol"),
     }
 
 
@@ -446,7 +600,8 @@ if __name__ == "__main__":
                       rpm=spec.get("rpm"),
                       n_parallel=spec.get("n_parallel"),
                       connection=spec.get("connection"),
-                      demag=spec.get("demag"))
+                      demag=spec.get("demag"),
+                      magnet_temp_c=spec.get("magnet_temp_c"))
         sys.stdout.write("@@RESULT@@" + json.dumps({"ok": True, "res": res}))
     except Exception as e:  # noqa: BLE001
         sys.stdout.write("@@RESULT@@" + json.dumps({"ok": False, "error": str(e)}))

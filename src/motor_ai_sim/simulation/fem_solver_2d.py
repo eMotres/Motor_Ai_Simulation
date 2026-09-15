@@ -2221,7 +2221,13 @@ def _vdrive_copper_loss(p, geo, IA, IB, IC, n_parallel, coil_temp_c,
 # alone would never survive an iteration — the cache is therefore mirrored to
 # config/.warm_cache.npz (atomic tmp+replace; concurrent scan workers race
 # benignly, last writer wins, every reader gets a complete file).
-_SB_WARM_CACHE: dict = {}
+# Migration Stage 3: the in-memory half is per WORKSPACE, like the .npz mirror
+# it shadows (per workspace since Stage 1).  A seed is a FIELD STATE: served
+# across workspaces it is not a warm start, it is another machine's answer with
+# a head start, and the settle test would have to catch every one of them.  One
+# named slot ("last"); the cap is a safety valve.
+from motor_ai_sim import workspace as _WSW
+_SB_WARM_CACHE = _WSW.ws_map("fem_solver_2d.warm_cache", 4)
 
 # A solve that must NOT read or publish the cross-run warm seed, decided per
 # CALL rather than per process.  WHY (2026-09-07, "10 of 10 designs ran out of

@@ -823,7 +823,10 @@ def apply_preset(preset_id: str,
         pass
     try:
         import motor_ai_sim.services.geometry_service as gs
-        gs._current_geometry = None
+        # Stage 3: the geometry singleton is per workspace.  Assigning the
+        # module NAME would create a real attribute and pin every workspace to
+        # one geometry for the rest of the process; this drops the caller's.
+        gs._geom_set(None)
         gs.invalidate_mesh_cache()
     except Exception:
         pass

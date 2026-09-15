@@ -28,6 +28,7 @@ from typing import Any, Dict
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import Response
 
+from motor_ai_sim import workspace as _WSP
 from motor_ai_sim.auth import require_admin
 from motor_ai_sim.config import get_config
 
@@ -74,8 +75,15 @@ def _params_rows(geo: Dict[str, Any]):
 # each took a worker thread of the SHARED anyio pool for those seconds, and the
 # pool has 40 tokens for the whole API.  Single-flight + memo turns N×3 s into
 # 3 s: the first caller builds, the rest wait on this lock and get the bytes.
-_BUNDLE_LOCK = threading.Lock()
-_BUNDLE_CACHE: Dict[str, Any] = {"key": None, "blob": None, "headers": None}
+# Migration Stage 3: per WORKSPACE.  The single-flight memo is keyed on the
+# geometry, so a shared slot was only ever right for one machine at a time: two
+# accounts downloading at once would take turns evicting each other's bundle,
+# and the loser paid the rebuild the memo exists to avoid.  One slot each; the
+# lock is per workspace too, so A's 3 s build no longer blocks B's download.
+_BUNDLE_LOCK = _WSP.ws_lock("freecad.bundle_lock")
+_BUNDLE_CACHE = _WSP.ws_map("freecad.bundle_cache", 8,
+                            seed=lambda: {"key": None, "blob": None,
+                                          "headers": None})
 
 
 def _bundle_key(geo: Dict[str, Any], label: str, kind: str) -> str:

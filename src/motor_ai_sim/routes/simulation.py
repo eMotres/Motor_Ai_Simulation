@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 
 # Field-view solves: dedupe concurrent twins, cap how many run at once, and
 # say out loud what is running (see motor_ai_sim/field_jobs.py).
+from motor_ai_sim import workspace as _WSP
 from motor_ai_sim.field_jobs import field_busy, run_field_job
 
 log = logging.getLogger(__name__)
@@ -81,9 +82,22 @@ _jobs: Dict[str, Dict] = {}
 from contextvars import ContextVar as _CtxVar
 _BACKGROUND_RUN: "_CtxVar[bool]" = _CtxVar("background_run", default=False)
 
-# ── Module-level geometry cache (built once per server start) ─────────────────
-_motor_geom_cache: Dict = {}
-_motor_geom_ghash: list = [None]   # hash of the geometry the cache was built for
+# ── Per-workspace geometry cache (migration Stage 3) ─────────────────────────
+# Was "built once per server start", which on a multi-user box means built once
+# for whoever ran first and then handed to everyone: the polygons of ONE
+# machine answering every caller's frame request.  One cache per workspace now,
+# each keyed by rotor angle and dropped whole when that workspace's geometry
+# hash moves — the same invalidation, one machine narrower.
+#
+# CAP: 512 rotor angles.  A transient asks for one polygon set per frame and
+# the longest runs in the repo are 464 steps, so the cap is above a full run
+# and far below "unbounded"; the hash check below still empties it on an edit.
+_MOTOR_GEOM_CACHE_MAX = 512
+_motor_geom_cache = _WSP.ws_map("simulation.motor_geom", _MOTOR_GEOM_CACHE_MAX,
+                                lru_on_read=True)
+#: hash of the geometry the cache was built for — one slot, per workspace
+_motor_geom_ghash = _WSP.ws_list("simulation.motor_geom_ghash",
+                                 seed=lambda: [None])
 
 _VALID_MESH_COMPONENTS = ("stator", "rotor", "magnet", "coil", "shaft",
                           "airgap", "outer",
@@ -672,7 +686,12 @@ def update_sim_config(patch: SimConfigPatch):
 # 7b.  FEM mesh builder — returns triangle mesh for visualisation only
 # ─────────────────────────────────────────────────────────────────────────────
 
-_fem_mesh_cache: Dict[tuple, Dict] = {}
+#: Stage 3: per workspace, bounded.  A mesh payload is one full triangulation;
+#: eight of them is a few tens of MB and covers the mesh-size slider's whole
+#: range for one machine, which is what this cache is for.
+_FEM_MESH_CACHE_MAX = 8
+_fem_mesh_cache = _WSP.ws_map("simulation.fem_mesh", _FEM_MESH_CACHE_MAX,
+                              lru_on_read=True)
 
 
 @router.get("/mesh/build2d")
@@ -929,7 +948,11 @@ async def build_fem_mesh_2d(
 # 7b'.  Sliding-band TWO-mesh view  (feature/sliding-band-fem branch)
 # ─────────────────────────────────────────────────────────────────────────────
 
-_fem_mesh_sb_cache: Dict[tuple, Dict] = {}
+#: Stage 3: per workspace, bounded — the two-mesh sliding-band sibling of
+#: ``_fem_mesh_cache``, same size class, same cap.
+_FEM_MESH_SB_CACHE_MAX = 8
+_fem_mesh_sb_cache = _WSP.ws_map("simulation.fem_mesh_sb",
+                                 _FEM_MESH_SB_CACHE_MAX, lru_on_read=True)
 
 
 @router.get("/mesh/build2d_sliding_band")
@@ -1160,7 +1183,13 @@ async def build_fem_mesh_2d_sliding_band(
 # 7c. Real FEM solve (scikit-fem) — returns A_z + mesh + torque + losses
 # ─────────────────────────────────────────────────────────────────────────────
 
-_fem_field_cache: Dict[tuple, Dict] = {}
+#: Stage 3: per workspace, bounded.  A field entry carries A_z per node and B
+#: per element for one frame; eight is the field viewer's working set (the
+#: quantity toggles and the ± frame steps around one run) and the Run path
+#: empties it wholesale anyway (``_refresh_caches_for_run``).
+_FEM_FIELD_CACHE_MAX = 8
+_fem_field_cache = _WSP.ws_map("simulation.fem_field", _FEM_FIELD_CACHE_MAX,
+                               lru_on_read=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1181,8 +1210,16 @@ _fem_field_cache: Dict[tuple, Dict] = {}
 # Memory-only and deliberately small (the last few runs): each entry holds full
 # per-node / per-element arrays.  A back-end restart empties it, so the first
 # J⟳ view after a restart computes on demand and SAYS so.
-_transient_field_snap: "OrderedDict[tuple, Dict]" = OrderedDict()
 _TRANSIENT_SNAP_MAX = 3
+#: Stage 3: per workspace.  The cap IS ``_TRANSIENT_SNAP_MAX`` — the number the
+#: store site already trims to — so the bound and the trim cannot disagree.
+#: ``lru_on_read`` stays off: ``next(reversed(...))`` here means "the newest
+#: run", and a lookup must not make an older snapshot look newest.
+#: WARMED from ``.last_transient_field.pkl`` on first touch, so a workspace that
+#: has not been asked for anything since the restart still opens its field view.
+_transient_field_snap = _WSP.ws_map(
+    "simulation.transient_field_snap", _TRANSIENT_SNAP_MAX,
+    warm=lambda _s: _warm_transient_field_snap(_s))
 
 
 def _geo_ov_for_key(geo_ov) -> object:
@@ -1841,7 +1878,9 @@ def _store_transient_field_snapshot(key: tuple, field: Dict, sbres: Dict,
                 _os_t.replace(p + ".tmp", p)
             except Exception as _pe:      # noqa: BLE001
                 log.warning("could not persist transient field snapshot: %s", _pe)
-        _thr.Thread(target=_persist, daemon=True).start()
+        # Stage 3: the path is resolved inside the thread, and a fresh thread
+        # has an empty context — carry this call's workspace across.
+        _thr.Thread(target=_WSP.bind(_persist), daemon=True).start()
     except Exception as _e:      # never let a viewer convenience break a solve
         log.warning("could not store transient field snapshot: %s", _e)
 
@@ -1851,24 +1890,56 @@ def _transient_field_store_path() -> str:
                                            ".last_transient_field.pkl")
 
 
+def _read_transient_field_blob():
+    """``(key, entry)`` off ``.last_transient_field.pkl``, or ``None``.
+
+    Split out of the loader below (Stage 3) so a per-workspace store can be
+    WARMED by writing straight into the container it was handed, without going
+    back through the module-level proxy that is in the middle of creating it.
+    """
+    import pickle as _pk
+    p = _transient_field_store_path()
+    if not _os_t.path.exists(p):
+        return None
+    with open(p, "rb") as fh:
+        blob = _pk.load(fh)
+    def _retuple(x):
+        return tuple(_retuple(i) for i in x) if isinstance(x, list) else x
+    return _retuple(blob["key"]), blob["entry"]
+
+
+def _warm_transient_field_snap(store) -> None:
+    """First touch of a workspace's snapshot store: fill it from that
+    workspace's own pickle.  Quiet — the loader below does the logging."""
+    try:
+        got = _read_transient_field_blob()
+    except Exception as _e:      # noqa: BLE001
+        log.debug("snapshot warm skipped: %s", _e)
+        return
+    if got is not None:
+        store[got[0]] = got[1]
+
+
 def _load_last_transient_field_snapshot() -> None:
     """Repopulate the snapshot store from disk at startup (see the persist
     above).  Served only through the same-machine checks every lookup applies,
-    so a snapshot of yesterday's motor never paints today's."""
+    so a snapshot of yesterday's motor never paints today's.
+
+    Still called by hand wherever the store was emptied and the view would
+    otherwise be blank (``clear_simulation_caches`` is followed by exactly that
+    question), so it deliberately has no "already loaded" guard: a re-read after
+    a clear is the whole point.
+    """
     try:
-        import pickle as _pk
-        p = _transient_field_store_path()
-        if not _os_t.path.exists(p):
+        got = _read_transient_field_blob()
+        if got is None:
             return
-        with open(p, "rb") as fh:
-            blob = _pk.load(fh)
-        def _retuple(x):
-            return tuple(_retuple(i) for i in x) if isinstance(x, list) else x
-        _key = _retuple(blob["key"])
-        _transient_field_snap[_key] = blob["entry"]
+        _key, _entry = got
+        _transient_field_snap[_key] = _entry
         _transient_field_snap.move_to_end(_key)
         log.info("restored the last run's field snapshot from %s (computed %s)",
-                 p, (blob["entry"].get("meta") or {}).get("computed_at"))
+                 _transient_field_store_path(),
+                 (_entry.get("meta") or {}).get("computed_at"))
     except Exception as _e:      # noqa: BLE001
         log.warning("could not restore the transient field snapshot: %s", _e)
 
@@ -2730,7 +2801,14 @@ def _fem_field2d_impl(
 # 7d. FEM Transient — N steps per electrical period
 # ─────────────────────────────────────────────────────────────────────────────
 
-_fem_transient_cache: Dict[tuple, Dict] = {}
+#: Stage 3: per workspace, bounded, WARMED from ``.last_transient.json``.
+#: CAP 4: the Run path keeps exactly one entry (``_refresh_caches_for_run``
+#: clears and re-seeds it), so four is head-room for the restore plus a couple
+#: of re-runs, and a whole transient result is the largest object in here.
+_FEM_TRANSIENT_CACHE_MAX = 4
+_fem_transient_cache = _WSP.ws_map(
+    "simulation.fem_transient", _FEM_TRANSIENT_CACHE_MAX,
+    warm=lambda _s: _warm_fem_transient(_s))
 
 # ── A Run ALWAYS solves ──────────────────────────────────────────────────────
 # `_fem_transient_cache` used to be consulted by the Run path itself, so a
@@ -2761,8 +2839,11 @@ def _memo_allowed() -> bool:
 
 
 # What the last cache refresh / clear was, for GET /api/simulation/caches.
-_cache_state: Dict[str, Optional[str]] = {"last_refreshed_by": None,
-                                          "last_cleared_reason": None}
+# Stage 3: per workspace — it describes THIS caller's caches, and answering
+# "cleared: geometry PUT" about somebody else's edit would be a lie.
+_cache_state = _WSP.ws_map(
+    "simulation.cache_state", 8,
+    seed=lambda: {"last_refreshed_by": None, "last_cleared_reason": None})
 
 
 def _refresh_caches_for_run(sb_key: tuple, result: Dict,
@@ -2808,7 +2889,13 @@ def _refresh_caches_for_run(sb_key: tuple, result: Dict,
 # the last simulation on open (?restore=true) — showing it stale-flagged instead
 # of recomputing when the requested params don't match.  Updated on every save
 # and repopulated from disk at startup.
-_last_transient_ref: Dict = {"key": None, "result": None}
+#: Stage 3: per workspace.  Two named slots, not a cache — the cap is a safety
+#: valve.  Seeded so ``_last_transient_ref["key"]`` never raises, and warmed
+#: from that workspace's own ``.last_transient.json``.
+_last_transient_ref = _WSP.ws_map(
+    "simulation.last_transient_ref", 8,
+    seed=lambda: {"key": None, "result": None},
+    warm=lambda _s: _warm_last_transient_ref(_s))
 
 # ── Persist the last sliding-band transient to disk ──────────────────────────
 # So a re-run with the SAME params after a back-end restart is instant instead
@@ -2941,20 +3028,55 @@ def _append_run_journal(result: Dict) -> None:
     except Exception as _e:   # noqa: BLE001 — a journal must never touch a run
         log.debug("run journal skipped: %s", _e)
 
+def _read_last_transient_blob():
+    """``(key, result)`` off ``.last_transient.json``, or ``None``.
+
+    Split out for the same reason as ``_read_transient_field_blob``: a
+    per-workspace store is warmed by writing into the container directly.
+    """
+    p = _transient_store_path()
+    if not _os_t.path.exists(p):
+        return None
+    with open(p, encoding="utf-8") as fh:
+        blob = _json.load(fh)
+    def _retuple(x):    # JSON turns tuples into lists — restore for hashing
+        return tuple(_retuple(i) for i in x) if isinstance(x, list) else x
+    return _retuple(blob["key"]), blob["result"]
+
+
+def _warm_fem_transient(store) -> None:
+    """First touch of a workspace's transient cache: seed it with that
+    workspace's own last run."""
+    try:
+        got = _read_last_transient_blob()
+    except Exception as _e:      # noqa: BLE001
+        log.debug("transient warm skipped: %s", _e)
+        return
+    if got is not None:
+        store[got[0]] = got[1]
+
+
+def _warm_last_transient_ref(store) -> None:
+    """…and the ``?restore=true`` reference that points at it."""
+    try:
+        got = _read_last_transient_blob()
+    except Exception as _e:      # noqa: BLE001
+        log.debug("transient ref warm skipped: %s", _e)
+        return
+    if got is not None:
+        store["key"], store["result"] = got[0], got[1]
+
+
 def _load_last_transient_into_cache() -> None:
     try:
-        p = _transient_store_path()
-        if not _os_t.path.exists(p):
+        got = _read_last_transient_blob()
+        if got is None:
             return
-        with open(p, encoding="utf-8") as fh:
-            blob = _json.load(fh)
-        def _retuple(x):    # JSON turns tuples into lists — restore for hashing
-            return tuple(_retuple(i) for i in x) if isinstance(x, list) else x
-        _key = _retuple(blob["key"])
-        _fem_transient_cache[_key] = blob["result"]
+        _key, _res = got
+        _fem_transient_cache[_key] = _res
         _last_transient_ref["key"] = _key
-        _last_transient_ref["result"] = blob["result"]
-        log.info("restored last transient from %s", p)
+        _last_transient_ref["result"] = _res
+        log.info("restored last transient from %s", _transient_store_path())
     except Exception as _e:
         log.warning("could not restore last transient: %s", _e)
 

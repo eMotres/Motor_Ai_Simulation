@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
 
 from motor_ai_sim.config import get_config, clear_config_cache, config_path as _resolve_cfg_path
+from motor_ai_sim import workspace as _WSG
 from motor_ai_sim.workspace import root as _ws_root_g
 from motor_ai_sim.routes._validation import (
     DERIVED_GEOMETRY_NAMES,
@@ -458,9 +459,11 @@ def add_parameter(req: AddParameterRequest):
 
         # Reload everything
         clear_config_cache()
-        from motor_ai_sim.services.geometry_service import _current_geometry
         import motor_ai_sim.services.geometry_service as gs
-        gs._current_geometry = None
+        # Stage 3: drop THIS caller's geometry singleton.  A plain
+        # ``gs._current_geometry = None`` would create a real module attribute
+        # and pin every workspace to one geometry for the rest of the process.
+        gs._geom_set(None)
 
         return {"success": True, "name": name}
     except Exception as e:
@@ -508,7 +511,7 @@ def delete_parameter(name: str):
 
         clear_config_cache()
         import motor_ai_sim.services.geometry_service as gs
-        gs._current_geometry = None
+        gs._geom_set(None)              # Stage 3: this caller's singleton only
 
         return {"success": True, "name": name}
     except HTTPException:
@@ -599,9 +602,17 @@ def get_geometry_schema():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-_mesh_cache: dict           = {"hash": None, "data": None, "build_time_s": None}
-_mesh2d_cache: dict         = {"hash": None, "data": None, "build_time_s": None}
-_mesh_extruded_cache: dict  = {"hash": None, "data": None, "build_time_s": None}
+# Migration Stage 3: per WORKSPACE.  Three one-geometry slots; the payload is a
+# ~1.2 MB viewer mesh and the slot is overwritten on every build, so the cap is
+# a safety valve over the three fixed keys each holds.
+def _mesh_slot():
+    return {"hash": None, "data": None, "build_time_s": None}
+
+
+_mesh_cache = _WSG.ws_map("geometry.mesh_slot", 8, seed=_mesh_slot)
+_mesh2d_cache = _WSG.ws_map("geometry.mesh2d_slot", 8, seed=_mesh_slot)
+_mesh_extruded_cache = _WSG.ws_map("geometry.mesh_extruded_slot", 8,
+                                   seed=_mesh_slot)
 
 # ── DISK LAYER under the memory slots ────────────────────────────────────
 # The 3-D viewer mesh is a 10-16 s OCC build and the slot above holds ONE

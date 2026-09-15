@@ -90,6 +90,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
 
 from motor_ai_sim import run_recording as _rr
+from motor_ai_sim import workspace as _WSP
 from motor_ai_sim.progress import ProgressTracker
 
 log = logging.getLogger(__name__)
@@ -231,8 +232,35 @@ def _check_cancelled(run_id: str) -> None:
 # per iteration — no meshes, no per-node arrays — so it does not need the pickle
 # the other two use.
 
-_LAST: Dict[str, Any] = {}
-_LAST_LOADED = False
+#: Migration Stage 3: per WORKSPACE.  Unlike the other two ``_LAST`` stores
+#: this one is FLAT — the coupled answer's own keys, a few dozen of them — so
+#: the cap is set far above any answer's key count and exists only so a store
+#: that somehow kept growing could not take the server down with it.
+_LAST_MAX = 512
+_LAST = _WSP.ws_map("coupled.last", _LAST_MAX)
+_SLOT_LAST_LOADED = "coupled.last_loaded"
+_UNSET = object()
+
+
+def _last_loaded() -> bool:
+    ov = globals().get("_LAST_LOADED", _UNSET)
+    return bool(ov) if ov is not _UNSET else bool(
+        _WSP.state().flag(_SLOT_LAST_LOADED, False))
+
+
+def _set_last_loaded(value: bool) -> None:
+    if "_LAST_LOADED" in globals():
+        globals()["_LAST_LOADED"] = value
+    else:
+        _WSP.state().set_flag(_SLOT_LAST_LOADED, value)
+
+
+def __getattr__(name):
+    """``_LAST_LOADED`` survives as a NAME — per workspace, overridable by a
+    plain assignment for the tests that already do that."""
+    if name == "_LAST_LOADED":
+        return bool(_WSP.state().flag(_SLOT_LAST_LOADED, False))
+    raise AttributeError(name)
 
 
 def _last_store_path() -> str:
@@ -247,10 +275,9 @@ def _last_store_path() -> str:
 
 
 def _load_last() -> None:
-    global _LAST_LOADED
-    if _LAST_LOADED:
+    if _last_loaded():
         return
-    _LAST_LOADED = True
+    _set_last_loaded(True)
     try:
         with open(_last_store_path(), encoding="utf-8") as fh:
             d = json.load(fh)
@@ -275,8 +302,7 @@ def _remember_last(out: Dict[str, Any], *, alt_carrier: bool = False) -> None:
         log.info("coupled: run solved for another duty (record: false) — "
                  "not remembered as this machine's last coupled result")
         return
-    global _LAST_LOADED
-    _LAST_LOADED = True
+    _set_last_loaded(True)
     _LAST.clear()
     _LAST.update(out)
     try:
@@ -840,7 +866,15 @@ def _regulate_v1(inv: Dict[str, Any], i_solved: Optional[float],
     pts.append((v_now, i_now))
     if abs(i_now - target) / target <= float(inv.get("i_tol_pct", 1.0)) / 100.0:
         return None                       # already there — do not nudge it off
-    if len(pts) >= 2 and abs(pts[-1][1] - pts[-2][1]) > 1e-9:
+    # THE SECANT NEEDS TWO DIFFERENT FUNDAMENTALS, not just two passes.  When
+    # pass 1 landed inside the band nothing was nudged, so pass 2 ran at the SAME
+    # V₁ — and a secant through (V, I₁) and (V, I₂) has zero run, which reduced
+    # to `v_new = v_now` and was reported as "next V1 None" (CIANO10 200 opt /
+    # L155 'rated 1x9 mm', 2026-09-15: pass 1 at +0.17 %, pass 2 drifting to
+    # −3.16 % as the winding heated, and no correction to show for it).  With one
+    # usable direction only, fall back to the damped proportional step.
+    if (len(pts) >= 2 and abs(pts[-1][1] - pts[-2][1]) > 1e-9
+            and abs(pts[-1][0] - pts[-2][0]) > 1e-9):
         (va, ia), (vb, ib) = pts[-2], pts[-1]
         v_new = vb + (target - ib) * (vb - va) / (ib - ia)
     else:
@@ -855,6 +889,40 @@ def _regulate_v1(inv: Dict[str, Any], i_solved: Optional[float],
     out = dict(inv)
     out["v_phase_peak_V"] = float(v_new)
     return out
+
+
+def _point_error_pct(inv: Optional[Dict[str, Any]],
+                     i_solved: Optional[float]) -> Optional[float]:
+    """Signed per-cent miss of a voltage-fed pass against the duty's current.
+
+    ``None`` when there is nothing to judge — a sine loop (no inverter), a run
+    with the fundamental pinned instead of a target, or a pass that reported no
+    current.  Positive means the machine drew MORE than the duty asks for.  One
+    definition, shared by the convergence test and the record, so the loop can
+    never stop on a point the record then calls off.
+    """
+    if not inv:
+        return None
+    target = inv.get("target_I_phase_rms_A")
+    if not target or i_solved is None:
+        return None
+    try:
+        target = float(target)
+        i_now = float(i_solved)
+    except (TypeError, ValueError):
+        return None
+    if not (target > 0.0 and math.isfinite(i_now)):
+        return None
+    return 100.0 * (i_now - target) / target
+
+
+def _point_tol_pct(inv: Optional[Dict[str, Any]]) -> float:
+    """The band ``point_error_pct`` is judged against [%] — the same
+    ``inverter.i_tol_pct`` the regulator stops nudging inside."""
+    try:
+        return float((inv or {}).get("i_tol_pct") or 1.0)
+    except (TypeError, ValueError):
+        return 1.0
 
 
 #: THE DC BAND a PWM coupled run may still be BILLED on, as a fraction of the
@@ -1136,6 +1204,27 @@ def _pwm_loss_map(body: Dict[str, Any], em: Dict[str, Any],
     }
 
 
+def _record_inverter(inv: Dict[str, Any],
+                     v1_ran: Optional[float]) -> Dict[str, Any]:
+    """The inverter as the RECORD must describe it: ``v_phase_peak_V`` is the
+    fundamental the last electromagnetic run was actually solved at, and the
+    regulator's next aim — computed on every pass, the final one included —
+    rides beside it as ``v_phase_peak_next_V`` instead of silently replacing it.
+
+    Without this the live regulator state leaked into the record: a loop that
+    stopped off point reported the voltage it was ABOUT to try next next to the
+    current it drew at the previous one, which is two passes in one row.
+    """
+    if v1_ran is None:
+        return inv
+    out = dict(inv)
+    out["v_phase_peak_V"] = float(v1_ran)
+    aim = float(inv.get("v_phase_peak_V") or v1_ran)
+    if abs(aim - float(v1_ran)) > 1e-9:
+        out["v_phase_peak_next_V"] = round(aim, 4)
+    return out
+
+
 def _inverter_record(em: Dict[str, Any], inv: Dict[str, Any],
                      *, ripple_quotable: bool = True) -> Dict[str, Any]:
     """The ``inverter`` block a record carries: what was ASKED of the bridge and
@@ -1160,6 +1249,11 @@ def _inverter_record(em: Dict[str, Any], inv: Dict[str, Any],
         "schedule": inv["schedule"],
         "v_dc_V": float(inv["v_dc_V"]),
         "v_phase_peak_V": float(inv["v_phase_peak_V"]),
+        # WHAT THE REGULATOR WOULD HAVE AIMED AT NEXT — written on the final pass
+        # too, so a run that stopped off point says where it was heading instead
+        # of leaving the reader to re-derive it (absent when the last pass landed
+        # inside the band, which is what "nothing left to correct" looks like).
+        "v_phase_peak_next_V": inv.get("v_phase_peak_next_V"),
         "v_delta_deg": float(inv["v_delta_deg"]),
         "m": pwm.get("modulation_index"),
         # The star-equivalent substitution, NAMED (never hidden — a model bus
@@ -1194,16 +1288,17 @@ def _inverter_record(em: Dict[str, Any], inv: Dict[str, Any],
     tgt = inv.get("target_I_phase_rms_A")
     if tgt:
         out["target_I_phase_rms_A"] = float(tgt)
-        out["i_tol_pct"] = float(inv.get("i_tol_pct") or 1.0)
+        out["i_tol_pct"] = _point_tol_pct(inv)
         out["v_phase_peak_seed_V"] = float(inv.get("v_phase_peak_seed_V")
                                            or inv["v_phase_peak_V"])
-        try:
-            _i = float(out.get("I_phase_rms_solved_A"))
-            out["point_error_pct"] = round(100.0 * (_i - float(tgt)) / float(tgt), 3)
+        # ONE definition of the miss, shared with the convergence test — a record
+        # that could call a pass off point while the loop called it converged is
+        # exactly the bug this rule exists to stop.
+        _err = _point_error_pct(inv, out.get("I_phase_rms_solved_A"))
+        if _err is not None:
+            out["point_error_pct"] = round(_err, 3)
             out["on_point"] = bool(abs(out["point_error_pct"])
                                    <= out["i_tol_pct"])
-        except (TypeError, ValueError):
-            pass
     return {k: v for k, v in out.items() if v is not None}
 
 
@@ -1939,6 +2034,14 @@ def _run(body: Dict[str, Any],
     t_brg: Optional[float] = None
     brg_where = ""
     v1_pts: List[tuple] = []         # (v_phase_peak, I_solved) — the regulator's
+    # THE OPERATING POINT, on a voltage-fed loop: how far the LAST pass's current
+    # sat from the duty's, and whether that is outside `inverter.i_tol_pct`.
+    # `None`/False on a sine loop and on a PWM run with no target — there the
+    # current is imposed and the point error is 0 by construction, so neither the
+    # convergence test nor the warning below can fire.
+    point_err: Optional[float] = None
+    point_off = False
+    v1_ran: Optional[float] = None   # the fundamental the last pass really ran at
     ripple_quotable = True           # …until a pass comes back carrying DC
     dc_notes: List[str] = []
     refusal: Optional[str] = None    # a later pass's EM refusal, verbatim
@@ -2138,6 +2241,17 @@ def _run(body: Dict[str, Any],
                     "T_ripple_pct": summary.get("T_ripple_pct"),
                     "pwm_dc_residual_A": summary.get("pwm_dc_residual_A"),
                 })
+                v1_ran = float(inverter["v_phase_peak_V"])
+                # WHERE THIS PASS LANDED, against the duty's own current.  The
+                # convergence test below reads THIS and not the temperatures
+                # alone: a voltage-fed loop whose copper has stopped moving is
+                # not finished if the machine is drawing 3 % off the point it is
+                # billed at.
+                point_err = _point_error_pct(inverter, _i_solved)
+                point_off = (point_err is not None
+                             and abs(point_err) > _point_tol_pct(inverter))
+                if point_err is not None:
+                    history[-1]["point_error_pct"] = round(point_err, 3)
                 # …and RE-AIM at the duty's current for the next pass.  Applied
                 # here, between the map and the next electromagnetic run, so it
                 # costs nothing: the loop was going to solve again anyway.
@@ -2188,8 +2302,18 @@ def _run(body: Dict[str, Any],
             # the shaft at 149 °C — 1 478 W of friction where the settled
             # answer is about 1 000 W).  A machine with no bearings has no
             # d_brg and is judged on the copper and the magnets as before.
+            # …and on a VOLTAGE-fed loop the OPERATING POINT is the fourth
+            # (2026-09-15, CIANO10 200 opt / L155 'rated 1x9 mm'): pass 1 landed
+            # at +0.17 %, pass 2 drifted to −3.16 % as the winding heated, and
+            # the loop stopped there because the three temperature residuals were
+            # inside tol — so the regulator never got the pass it needed and the
+            # record said `on_point: false`.  Temperatures settling is necessary,
+            # not sufficient: a machine 3 % off the current it is billed at is a
+            # different machine.  Sine/current drive is untouched — `point_off`
+            # is False there, the current being imposed rather than answered.
             if (abs(d_coil) < tol and abs(d_mag) < tol
-                    and (d_brg is None or abs(d_brg) < BEARING_TOL_K)):
+                    and (d_brg is None or abs(d_brg) < BEARING_TOL_K)
+                    and not point_off):
                 converged = True
                 break
             if it >= max_iter:
@@ -2220,6 +2344,28 @@ def _run(body: Dict[str, Any],
             t_coil = float(t_coil) + damping_eff * d_coil
             if t_mag is not None and t_mag_out is not None:
                 t_mag = float(t_mag) + damping_eff * d_mag
+        # THE BUDGET RAN OUT WITH THE POINT STILL OFF.  The last pass is a solved
+        # state and is KEPT — the temperatures, the map and the mechanics all
+        # belong to it — but it is not the duty's operating point, and a reader
+        # must not have to divide two numbers in the record to find that out.
+        # Said as a warning with its own code, like every other "stopped early"
+        # here.  Never over a refusal or a runaway: those stopped the loop for a
+        # harder reason and own the message.
+        if point_off and refusal is None and not runaway:
+            refusal_code = "point_not_converged"
+            refusal = ("the temperatures settled but the operating point did "
+                       "not: after %d electromagnetic run(s) the machine draws "
+                       "%+.2f %% off the %.2f A this duty is billed at "
+                       "(tolerance ±%g %%)%s — raise max_iter, or widen "
+                       "inverter.i_tol_pct if that miss is acceptable"
+                       % (len(history), float(point_err or 0.0),
+                          float((inverter or {}).get("target_I_phase_rms_A") or 0.0),
+                          _point_tol_pct(inverter),
+                          ("" if v1_ran is None
+                           or abs(float(inverter["v_phase_peak_V"]) - v1_ran) < 1e-9
+                           else "; the next pass would have been aimed at "
+                                "%.3f V" % float(inverter["v_phase_peak_V"]))))
+            log.warning("coupled: %s", refusal)
         # THE THIRD TAB at the same temperatures (phase 3): the rotor stress is
         # solved once, at the per-part averages of the last thermal map, while
         # this loop still owns the lock — a second coupled run must not start
@@ -2322,7 +2468,7 @@ def _run(body: Dict[str, Any],
         # inverter existed, and that is a sinusoid; a record that says "pwm"
         # carries the `inverter` block beside it and nothing has to be inferred.
         "drive": ("pwm" if inverter is not None else "sine"),
-        **({"inverter": _inverter_record(em, inverter,
+        **({"inverter": _inverter_record(em, _record_inverter(inverter, v1_ran),
                                          ripple_quotable=ripple_quotable)}
            if inverter is not None else {}),
         # THE LAST RUN's electromagnetic numbers, in the block itself.  Not a

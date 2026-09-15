@@ -80,6 +80,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
 
+from motor_ai_sim import workspace as _WSP
 from motor_ai_sim.progress import ProgressTracker
 
 log = logging.getLogger(__name__)
@@ -948,12 +949,21 @@ def _snap_n_sectors(n_sectors: int, geo_ov) -> int:
 # cross-section and its material k's, and a stale cross-section is a wrong
 # temperature.
 
-_FIELD_CACHE: "OrderedDict[tuple, Dict[str, Any]]" = OrderedDict()
+# Migration Stage 3: one set of these PER WORKSPACE, not per process.  The caps
+# below are per workspace and unchanged from the single-user ones — the store
+# they name is now the caller's, and `workspace.MAX_WORKSPACES` bounds how many
+# of them a server may hold at once.  `lru_on_read=True`: these are pure
+# hit/miss caches, nothing reads their order back, so recency is the right
+# thing to evict by.
 _FIELD_CACHE_MAX = 8
-_COUPLED_CACHE: "OrderedDict[tuple, Dict[str, Any]]" = OrderedDict()
 _COUPLED_CACHE_MAX = 4
-_MESH_CACHE: "OrderedDict[tuple, Dict[str, Any]]" = OrderedDict()
 _MESH_CACHE_MAX = 4
+_FIELD_CACHE = _WSP.ws_map("thermal.field_cache", _FIELD_CACHE_MAX,
+                           lru_on_read=True)
+_COUPLED_CACHE = _WSP.ws_map("thermal.coupled_cache", _COUPLED_CACHE_MAX,
+                             lru_on_read=True)
+_MESH_CACHE = _WSP.ws_map("thermal.mesh_cache", _MESH_CACHE_MAX,
+                          lru_on_read=True)
 
 
 def _cache_put(store: "OrderedDict", key: tuple, value, cap: int) -> None:
@@ -1122,8 +1132,30 @@ _LAST_KINDS = ("field", "coupled")
 _PERSIST_KINDS = _LAST_KINDS + ("duty_cycle",)
 _HEAVY_KEYS = ("temperature_per_node", "heat_flux_per_tri", "flux_mag_per_tri",
                "grad_T_mag_per_tri")
-_LAST: Dict[str, Dict[str, Any]] = {}
-_LAST_LOADED = False
+#: Migration Stage 3: per WORKSPACE.  Three kinds are persisted, so the cap is
+#: a safety valve an order of magnitude above what the store can hold.
+_LAST_MAX = 16
+_LAST = _WSP.ws_map("thermal.last", _LAST_MAX)
+#: "Have I read my pickle yet" — per workspace, because the pickle is too:
+#: a process-wide flag would mean the SECOND account to ask never restores its
+#: own ``.last_thermal.pkl`` and opens the Thermal tab blank.  Kept readable
+#: and writable as a module name (``__getattr__`` below); a test that assigns
+#: it wins for the rest of the process, which is what those tests want.
+_SLOT_LAST_LOADED = "thermal.last_loaded"
+_UNSET = object()
+
+
+def _last_loaded() -> bool:
+    ov = globals().get("_LAST_LOADED", _UNSET)
+    return bool(ov) if ov is not _UNSET else bool(
+        _WSP.state().flag(_SLOT_LAST_LOADED, False))
+
+
+def _set_last_loaded(value: bool) -> None:
+    if "_LAST_LOADED" in globals():
+        globals()["_LAST_LOADED"] = value
+    else:
+        _WSP.state().set_flag(_SLOT_LAST_LOADED, value)
 
 
 def _last_store_path() -> str:
@@ -1153,14 +1185,16 @@ def _persist_last() -> None:
         except Exception as exc:  # noqa: BLE001 - a viewer convenience never breaks a solve
             log.warning("could not persist the last thermal result: %s", exc)
 
-    threading.Thread(target=_write, daemon=True).start()
+    # Stage 3: `_last_store_path()` is resolved INSIDE the thread, and a fresh
+    # thread has an empty context — it would write the caller's answer into the
+    # process workspace.  `workspace.bind` carries this call's workspace across.
+    threading.Thread(target=_WSP.bind(_write), daemon=True).start()
 
 
 def _load_last() -> None:
-    global _LAST_LOADED
-    if _LAST_LOADED:
+    if _last_loaded():
         return
-    _LAST_LOADED = True
+    _set_last_loaded(True)
     try:
         import pickle as pk
         p = _last_store_path()
@@ -1612,9 +1646,41 @@ def _snapshot_loss_entry(probe):
 # solve reads), and mirrored to a dot-file beside the config so it survives a
 # restart.  It is thermal-owned: nothing else reads or writes it (solver
 # isolation, same day).
-_LOSS_MAPS = OrderedDict()
 _LOSS_MAPS_CAP = 4
-_LOSS_MAPS_LOADED = False
+#: Stage 3: per WORKSPACE, and the mirror file is already per workspace.  The
+#: store trims itself to `_LOSS_MAPS_CAP` at the write site; the bound below is
+#: the same number, so the two can never disagree.
+_LOSS_MAPS = _WSP.ws_map("thermal.loss_maps", _LOSS_MAPS_CAP)
+_SLOT_LOSS_MAPS_LOADED = "thermal.loss_maps_loaded"
+
+
+def _loss_maps_loaded() -> bool:
+    ov = globals().get("_LOSS_MAPS_LOADED", _UNSET)
+    return bool(ov) if ov is not _UNSET else bool(
+        _WSP.state().flag(_SLOT_LOSS_MAPS_LOADED, False))
+
+
+def _set_loss_maps_loaded(value: bool) -> None:
+    if "_LOSS_MAPS_LOADED" in globals():
+        globals()["_LOSS_MAPS_LOADED"] = value
+    else:
+        _WSP.state().set_flag(_SLOT_LOSS_MAPS_LOADED, value)
+
+
+def __getattr__(name):
+    """The two restore flags survive as NAMES, per workspace.
+
+    Six test modules do ``monkeypatch.setattr(th, "_LOSS_MAPS_LOADED", True)``
+    to keep a solve away from the disk store; ``raising=True`` needs the name to
+    resolve, and the accessors above honour a real module attribute once one
+    exists, so the patch takes effect and ``undo`` leaves the module behaving
+    exactly as it did before this stage.
+    """
+    if name == "_LAST_LOADED":
+        return bool(_WSP.state().flag(_SLOT_LAST_LOADED, False))
+    if name == "_LOSS_MAPS_LOADED":
+        return bool(_WSP.state().flag(_SLOT_LOSS_MAPS_LOADED, False))
+    raise AttributeError(name)
 _LOSS_MAP_KEEP_ARRAYS = ("vertices", "triangles", "domain_per_tri",
                          "loss_density_per_tri", "outlines", "extent")
 
@@ -1708,10 +1774,9 @@ def _slim_em(em):
 
 
 def _loss_maps_load() -> None:
-    global _LOSS_MAPS_LOADED
-    if _LOSS_MAPS_LOADED:
+    if _loss_maps_loaded():
         return
-    _LOSS_MAPS_LOADED = True
+    _set_loss_maps_loaded(True)
     try:
         import pickle as pk
         with open(_loss_maps_path(), "rb") as fh:
@@ -1740,7 +1805,8 @@ def _loss_maps_persist() -> None:
         except Exception as exc:  # noqa: BLE001
             log.warning("thermal: could not persist the loss maps: %s", exc)
 
-    threading.Thread(target=_write, daemon=True).start()
+    # Stage 3: the path is resolved inside the thread — carry the workspace.
+    threading.Thread(target=_WSP.bind(_write), daemon=True).start()
 
 
 def _loss_maps_get(identity):
@@ -2337,8 +2403,9 @@ def _domain_wetted_perimeter(verts, tris, tags, mask) -> "tuple[float, float]":
 # that the coupled loop would otherwise pay twelve times over.  Keyed on the
 # geometry fingerprint, which is what `clear_thermal_caches` already invalidates
 # everything else on.
-_POLY_CACHE: "OrderedDict[str, Any]" = OrderedDict()
 _POLY_CACHE_MAX = 4
+_POLY_CACHE = _WSP.ws_map("thermal.poly_cache", _POLY_CACHE_MAX,
+                          lru_on_read=True)
 
 
 def _thermal_polys(geo: Optional[str], fp: Optional[str]):
@@ -5928,11 +5995,27 @@ def duty_cycle(body: Dict[str, Any] = Body(default_factory=dict),
                                default and the magnets are simply not judged)
         samples_per_segment, ed_curve_step_pct, ed_search
                                the integration's own resolution
+        ed_cycle_lengths_s     the periods the ED-vs-cycle-length curve is
+                               solved at; omitted (or null) = the module's own
+                               [10, 30, 60, 120, 300] s, and an explicit [] is
+                               "no curve, just this period"
+
+    THE TOOL FINDS THE REGIME (user 2026-09-15).  ``duty_cycle.ed_pct`` is
+    OPTIONAL on an S3: state none and the allowable duty ratio is FOUND, the
+    cycle that comes back is the one AT that ratio (``spec.ed_given: false``,
+    ``limits.ed_found: true``), and ``limits`` also carries the same answer over
+    a span of cycle lengths (``ed_vs_cycle``), every node's temperature at that
+    point (``at_allowable``) and the length of one pull from three start states
+    (``s2_time_to_limit_s`` from the start temperature, ``s2_from_rated_s`` from
+    the calibration map, ``s2_from_cycle_mean_s`` out of the settled cycle).  A
+    block that STATES an ed_pct is graded exactly as before, with the allowable
+    ratio reported beside it.
 
     ANSWER: the record of B.3 — ``spec``, ``network`` (conductances, capacities
     and the calibration point they were fitted at), ``cycle`` (the periodic state
     and its decimated series), ``split`` (where the heat went, time-averaged),
-    ``limits`` (the S2 time to the class and the allowable ED) and ``point`` —
+    ``limits`` (the S2 times, the allowable ED and the regime it describes) and
+    ``point`` —
     plus this router's four: ``elapsed_s``, ``solve_time_s``, ``cached`` (the
     calibration map was reused rather than re-solved) and
     ``geometry_fingerprint``.
@@ -5942,8 +6025,9 @@ def duty_cycle(body: Dict[str, Any] = Body(default_factory=dict),
     ``duty_cycle_missing``, ``no_thermal_boundary``, ``no_electromagnetic_run``,
     ``no_steady_thermal_map``, ``duty_cycle_locked_rotor``,
     ``duty_cycle_mixed_speed``, ``duty_cycle_no_periodic_state``,
-    ``duty_cycle_no_capacity`` and the plain validation names a malformed block
-    earns (``duty_cycle_bad_kind``, ``duty_cycle_bad_ed``, …).
+    ``duty_cycle_no_capacity``, ``duty_cycle_no_allowable_ed`` (the search found
+    no feasible duty ratio at all) and the plain validation names a malformed
+    block earns (``duty_cycle_bad_kind``, ``duty_cycle_bad_ed``, …).
     """
     from motor_ai_sim.thermal_capacities import (CapacityError, NODES,
                                                  capacities_j_per_k,

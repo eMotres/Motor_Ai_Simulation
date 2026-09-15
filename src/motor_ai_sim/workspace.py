@@ -53,11 +53,14 @@ NTFS alike, and it does not put an e-mail address in a directory name.
 """
 from __future__ import annotations
 
+import functools
 import hashlib
 import logging
 import os
 import shutil
 import threading
+from collections import OrderedDict
+from collections.abc import MutableMapping, MutableSequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -76,6 +79,11 @@ __all__ = [
     "source_die_dir", "caller", "use_caller",
     "split_published_label", "write_layer", "use_write_layer",
     "LAYER_WORKSPACE", "LAYER_PUBLISHED", "LAYER_SHARED",
+    # Stage 3 — the in-memory stores
+    "BoundedStore", "StateMapping", "StateList", "StateLock",
+    "state", "ws_map", "ws_list", "ws_lock", "bind", "bind_thread",
+    "MAX_WORKSPACES", "registry_size", "registry_ids", "evict_workspace",
+    "evict_all_workspaces", "audit_cache_keys",
 ]
 
 log = logging.getLogger(__name__)
@@ -109,20 +117,246 @@ PROCESS_WS_ID = "process"
 #  The objects
 # ─────────────────────────────────────────────────────────────────────────────
 
+#: Returned by a slot lookup that found nothing.  A module-level sentinel and
+#: not ``None``, because ``None`` is a legitimate stored value.
+_MISS = object()
+
+#: How many workspaces may hold LIVE MEMORY at once.  The registry is an LRU:
+#: the 33rd distinct account to make a request evicts the least-recently-used
+#: one's caches (its DISK stores are untouched — they reload on its next call).
+#: 32 × the per-workspace caps below is the server's in-memory ceiling; it is a
+#: bound, not a target, because a workspace that solved nothing holds nothing.
+MAX_WORKSPACES = 32
+
+
+class BoundedStore(MutableMapping):
+    """A bounded, insertion-ordered mapping whose REAL keys carry the workspace.
+
+    Two properties, both load-bearing, and one deliberate non-property:
+
+    * **Bounded.**  Every store this replaces was an unbounded ``dict`` or an
+      ``OrderedDict`` trimmed by hand at one call site.  A field payload holds a
+      value per node and a vector per triangle; a server that is being swept
+      grows without bound otherwise.  ``cap`` is the number of ENTRIES, evicted
+      oldest-first.  ``cap <= 0`` means unbounded (never used here).
+    * **Namespaced.**  The key actually stored is ``(ws_id, key)``.  The mapping
+      presents the plain key everywhere — ``store[k]``, ``k in store``,
+      ``dict(store)`` and ``==`` behave exactly as the dict they replace — while
+      :meth:`raw_keys` shows the namespaced ones.  Isolation does not DEPEND on
+      that prefix (each workspace owns its own instance), so the prefix is the
+      *audit*: ``tests/test_workspace_state.py`` walks every live store and
+      refuses a key that does not start with the workspace it was produced
+      under.  A cache that leaked across workspaces would have to lie twice.
+
+    * **Not LRU on read by default.**  Several call sites read the ORDER back —
+      ``next(reversed(_transient_field_snap))`` means "the newest run", and
+      ``list(values())[-1]`` means the same thing.  Touching on read would
+      reorder those under a mere lookup, so ``lru_on_read`` is opt-in and set
+      only on the pure hit/miss caches, where recency IS the right eviction
+      order and nothing reads the order back.
+
+    One semantic difference from the ``dict`` it replaces, stated out loud:
+    re-assigning an EXISTING key moves it to the end, because eviction must
+    not throw away the entry just written.  Nothing reads insertion order of a
+    key it then rewrites; the only visible effect is the field order of a
+    record serialised straight to JSON, which every reader addresses by name.
+    """
+
+    __slots__ = ("_d", "_ws", "_name", "cap", "lru_on_read", "evicted")
+
+    def __init__(self, ws_id: str, name: str, cap: int,
+                 lru_on_read: bool = False) -> None:
+        self._d: "OrderedDict[tuple, Any]" = OrderedDict()
+        self._ws = str(ws_id)
+        self._name = str(name)
+        self.cap = int(cap)
+        self.lru_on_read = bool(lru_on_read)
+        self.evicted = 0
+
+    # ── the namespaced key ───────────────────────────────────────────────────
+    def _k(self, key):
+        return (self._ws, key)
+
+    @property
+    def workspace_id(self) -> str:
+        return self._ws
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    def raw_keys(self) -> list:
+        """The keys AS STORED: ``(ws_id, key)``.  The audit's window."""
+        return list(self._d.keys())
+
+    # ── Mapping ──────────────────────────────────────────────────────────────
+    def __getitem__(self, key):
+        rk = self._k(key)
+        v = self._d[rk]
+        if self.lru_on_read:
+            self._d.move_to_end(rk)
+        return v
+
+    def __setitem__(self, key, value) -> None:
+        rk = self._k(key)
+        self._d[rk] = value
+        self._d.move_to_end(rk)
+        self._trim()
+
+    def __delitem__(self, key) -> None:
+        del self._d[self._k(key)]
+
+    def __iter__(self):
+        # A SNAPSHOT, on purpose: ``items()`` reads through ``__getitem__``,
+        # which may reorder, and several callers delete while iterating.
+        return iter([k[1] for k in self._d.keys()])
+
+    def __reversed__(self):
+        return iter([k[1] for k in reversed(self._d.keys())])
+
+    def __len__(self) -> int:
+        return len(self._d)
+
+    def __contains__(self, key) -> bool:
+        return self._k(key) in self._d
+
+    def __repr__(self) -> str:                                  # pragma: no cover
+        return (f"<BoundedStore {self._name} ws={self._ws} "
+                f"{len(self._d)}/{self.cap}>")
+
+    # ── the OrderedDict surface the call sites already use ───────────────────
+    def move_to_end(self, key, last: bool = True) -> None:
+        self._d.move_to_end(self._k(key), last=last)
+
+    def popitem(self, last: bool = True):
+        rk, v = self._d.popitem(last=last)
+        return (rk[1], v)
+
+    def clear(self) -> None:
+        self._d.clear()
+
+    def copy(self) -> dict:
+        return {k[1]: v for k, v in self._d.items()}
+
+    def _trim(self) -> None:
+        while 0 < self.cap < len(self._d):
+            self._d.popitem(last=False)
+            self.evicted += 1
+
+
+class _BoundedList(list):
+    """A plain list that remembers which workspace it belongs to.
+
+    ``_ENTRY_ORDER`` and ``_motor_geom_ghash`` are lists, and both are trimmed
+    by their own call site; this only gives the audit something to name.
+    """
+
+    __slots__ = ("_ws", "_name")
+
+    def __init__(self, ws_id: str, name: str, seed=()) -> None:
+        super().__init__(seed)
+        self._ws = str(ws_id)
+        self._name = str(name)
+
+
 @dataclass
 class WorkspaceState:
     """The per-workspace IN-MEMORY stores.
 
-    A placeholder in Stage 1 and deliberately so: Stage 3 moves the geometry
-    singleton, the four ``_fem_*`` caches, the three ``_LAST`` slots, the
-    transient ref, the field snapshots and the static-3D caches in here, keyed
-    per workspace instead of per process.  Stage 1 only has to make sure every
-    workspace already OWNS one, so Stage 3 is a move and not a redesign.
+    Stage 1 created it empty so Stage 3 would be a move and not a redesign.
+    Stage 3 fills it: the geometry singleton, the four ``_fem_*`` caches, the
+    three ``_LAST`` slots, the transient ref, the field snapshots, the thermal /
+    mechanical / static-3D / family / freecad caches and the optimizer's
+    campaign slots all live here now, one set per workspace.
+
+    Nothing in here is addressed by name from outside: the modules keep their
+    old module-level NAMES (:class:`StateMapping` proxies) and reach this object
+    per call.  ``slots`` is therefore an implementation detail with one public
+    promise — :meth:`evict` drops all of it, and drops nothing on disk.
     """
 
-    #: Free-form slots until Stage 3 gives them names.  Guarded by ``lock``.
+    #: name -> the store.  Guarded by ``lock``.
     slots: Dict[str, Any] = field(default_factory=dict)
     lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
+    #: The workspace this state belongs to; stamped into every store key.
+    ws_id: str = PROCESS_WS_ID
+    #: Small scalars that used to be module globals — the ``*_LOADED`` "have I
+    #: read my pickle yet" flags.  Separate from ``slots`` only so ``evict``
+    #: can reset them and the next call re-reads the disk store.
+    flags: Dict[str, Any] = field(default_factory=dict)
+
+    # ── stores ───────────────────────────────────────────────────────────────
+    def store(self, name: str, factory: Callable[[str], Any],
+              warm: Optional[Callable[[Any], None]] = None) -> Any:
+        """The named store, created on first touch.
+
+        ``warm`` runs ONCE, right after creation, with the store already parked
+        in ``slots`` — so a warmer that repopulates the store from disk by
+        writing through the module's own proxy (which is the honest way to
+        write it) re-enters here and finds the container instead of recursing.
+        The lock is an ``RLock`` for the same reason.
+        """
+        with self.lock:
+            obj = self.slots.get(name, _MISS)
+            if obj is not _MISS:
+                return obj
+            obj = factory(self.ws_id)
+            self.slots[name] = obj
+            if warm is not None:
+                try:
+                    warm(obj)
+                except Exception as exc:            # noqa: BLE001
+                    log.warning("workspace %s: could not warm %s: %s",
+                                self.ws_id, name, exc)
+            return obj
+
+    def peek(self, name: str, default=None):
+        """The named store IF it exists — never creates one.  For the audit."""
+        with self.lock:
+            obj = self.slots.get(name, _MISS)
+            return default if obj is _MISS else obj
+
+    # ── flags ────────────────────────────────────────────────────────────────
+    def flag(self, name: str, default=None):
+        with self.lock:
+            return self.flags.get(name, default)
+
+    def set_flag(self, name: str, value) -> None:
+        with self.lock:
+            self.flags[name] = value
+
+    # ── memory ───────────────────────────────────────────────────────────────
+    def evict(self) -> int:
+        """Drop every in-memory store.  Touches NOTHING on disk.
+
+        What an evicted workspace loses is time, never data: the ``.last_*``
+        stores, the ledger and the warm cache are files, and the next request
+        from that account reloads them lazily exactly as a fresh process does.
+        Returns the number of slots dropped, for the log line and the test.
+        """
+        with self.lock:
+            n = len(self.slots)
+            for obj in list(self.slots.values()):
+                try:
+                    obj.clear()
+                except Exception:                   # noqa: BLE001
+                    pass
+            self.slots.clear()
+            self.flags.clear()
+            return n
+
+    def audit(self) -> Dict[str, list]:
+        """``{slot name: [raw keys]}`` for every mapping store.
+
+        The reflective test's window: every raw key must be a 2-tuple whose
+        first element is this state's ``ws_id``.
+        """
+        with self.lock:
+            out: Dict[str, list] = {}
+            for name, obj in self.slots.items():
+                if isinstance(obj, BoundedStore):
+                    out[name] = obj.raw_keys()
+            return out
 
 
 @dataclass
@@ -150,6 +384,8 @@ class Workspace:
         self.shared_root = Path(self.shared_root)
         self.config_file = (Path(self.config_file) if self.config_file is not None
                             else self.root / "motor_config.yaml")
+        # Stage 3: every store this workspace creates stamps its keys with this.
+        self.state.ws_id = self.id
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -300,8 +536,63 @@ def workspace_id(email: str) -> str:
     return hashlib.sha1(ident.encode("utf-8")).hexdigest()[:16]
 
 
-_REG: Dict[tuple, Workspace] = {}
+#: The live workspaces, most-recently-used LAST.  Bounded by
+#: :data:`MAX_WORKSPACES`: an LRU, because a server that has served a thousand
+#: accounts must not be holding a thousand geometry singletons.  Eviction drops
+#: MEMORY only (:meth:`WorkspaceState.evict`) — see there.
+_REG: "OrderedDict[tuple, Workspace]" = OrderedDict()
 _REG_LOCK = threading.Lock()
+
+
+def _reg_touch_locked(key: tuple) -> None:
+    """Mark a workspace used, and evict the oldest beyond the cap.
+
+    Called with ``_REG_LOCK`` held.  The eviction is done OUTSIDE that lock's
+    critical work — ``state.evict()`` takes the workspace's own ``RLock`` and a
+    long-running solve may be holding it — so the entry is dropped from the
+    registry first and cleared afterwards.
+    """
+    _REG.move_to_end(key)
+    dead = []
+    while len(_REG) > MAX_WORKSPACES:
+        _k, _ws = _REG.popitem(last=False)
+        dead.append(_ws)
+    for _ws in dead:
+        try:
+            n = _ws.state.evict()
+            log.info("workspace %s evicted from memory (%d stores); its disk "
+                     "stores are untouched", _ws.id, n)
+        except Exception as exc:                    # noqa: BLE001
+            log.warning("workspace %s eviction failed: %s", _ws.id, exc)
+
+
+def registry_size() -> int:
+    """How many workspaces currently hold memory (the process one excluded)."""
+    with _REG_LOCK:
+        return len(_REG)
+
+
+def registry_ids() -> list:
+    """The live workspace ids, least-recently-used first."""
+    with _REG_LOCK:
+        return [w.id for w in _REG.values()]
+
+
+def evict_workspace(ws: "Workspace") -> int:
+    """Drop one workspace's memory by hand (admin, tests, a shutdown hook)."""
+    return ws.state.evict()
+
+
+def evict_all_workspaces() -> int:
+    """Drop every registered workspace's memory.  The process one is kept."""
+    with _REG_LOCK:
+        live = list(_REG.values())
+    return sum(w.state.evict() for w in live)
+
+
+def audit_cache_keys(ws: "Workspace") -> Dict[str, list]:
+    """``{store name: [raw keys]}`` for one workspace — the reflective test."""
+    return ws.state.audit()
 
 
 def workspace_for_identity(email: Optional[str]) -> Workspace:
@@ -318,9 +609,6 @@ def workspace_for_identity(email: Optional[str]) -> Workspace:
 
     wsid = workspace_id(ident)
     key = (str(base), wsid)
-    ws = _REG.get(key)
-    if ws is not None:
-        return ws
     with _REG_LOCK:
         ws = _REG.get(key)
         if ws is None:
@@ -333,6 +621,9 @@ def workspace_for_identity(email: Optional[str]) -> Workspace:
             _new = True
         else:
             _new = False
+        # Stage 3: LRU order + the registry cap.  Cheap (an OrderedDict move)
+        # and done on EVERY resolution, so "recently used" means what it says.
+        _reg_touch_locked(key)
     if _new:
         ensure_layout(ws)
     return ws
@@ -795,3 +1086,235 @@ def module_attrs(**resolvers: Callable[[], Any]):
         return resolve()
 
     return __getattr__
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Stage 3 — the module-level NAMES of the per-workspace stores
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# WHY A PROXY AND NOT A ``__getattr__``
+# ------------------------------------
+# ``module_attrs`` above is right for a PATH: it is read from outside, by name,
+# and never from inside the module.  The in-memory stores are the opposite —
+# ``routes/simulation.py`` alone touches ``_transient_field_snap`` at 20 sites,
+# by plain global name, and a global name lookup does NOT consult a module
+# ``__getattr__``.  Renaming 200 such sites to accessor calls is the churn this
+# stage cannot afford in the three largest files in the repo.
+#
+# So the module keeps a real attribute — a PROXY — and every operation on it
+# resolves ``workspace().state`` first.  Three things fall out of that:
+#
+#   * every existing call site is byte-identical, inside the module and out;
+#   * ``monkeypatch.setattr(mod, "_LAST", {})`` still works, and works BETTER
+#     than a ``__getattr__`` would: it replaces the proxy with a plain dict in
+#     the module dict, the module's own code reads that dict, and ``undo``
+#     puts the proxy back.  Two dozen tests do exactly this;
+#   * ``from x import _EVAL_CACHE as _ec`` binds the proxy, so even a
+#     from-import keeps following the caller's workspace.
+#
+# The proxies are created at import and are stateless; the state they point at
+# is created lazily, per workspace, on first touch.
+
+
+def state() -> WorkspaceState:
+    """The in-memory stores of the workspace THIS call is about."""
+    return workspace().state
+
+
+class StateMapping(MutableMapping):
+    """The module-level name of a per-workspace :class:`BoundedStore`."""
+
+    __slots__ = ("_name", "_cap", "_lru_on_read", "_seed", "_warm")
+
+    def __init__(self, name: str, cap: int, *, lru_on_read: bool = False,
+                 seed: Optional[Callable[[], dict]] = None,
+                 warm: Optional[Callable[[Any], None]] = None) -> None:
+        self._name = str(name)
+        self._cap = int(cap)
+        self._lru_on_read = bool(lru_on_read)
+        self._seed = seed
+        self._warm = warm
+
+    # ── resolution ───────────────────────────────────────────────────────────
+    def _factory(self, ws_id: str) -> BoundedStore:
+        st = BoundedStore(ws_id, self._name, self._cap,
+                          lru_on_read=self._lru_on_read)
+        if self._seed is not None:
+            for k, v in (self._seed() or {}).items():
+                st[k] = v
+        return st
+
+    @property
+    def target(self) -> BoundedStore:
+        return state().store(self._name, self._factory, self._warm)
+
+    @property
+    def store_name(self) -> str:
+        return self._name
+
+    # ── Mapping, forwarded ───────────────────────────────────────────────────
+    def __getitem__(self, key):
+        return self.target[key]
+
+    def __setitem__(self, key, value) -> None:
+        self.target[key] = value
+
+    def __delitem__(self, key) -> None:
+        del self.target[key]
+
+    def __iter__(self):
+        return iter(self.target)
+
+    def __reversed__(self):
+        return reversed(self.target)
+
+    def __len__(self) -> int:
+        return len(self.target)
+
+    def __contains__(self, key) -> bool:
+        return key in self.target
+
+    def __repr__(self) -> str:                                  # pragma: no cover
+        return f"<StateMapping {self._name} -> {self.target!r}>"
+
+    def move_to_end(self, key, last: bool = True) -> None:
+        self.target.move_to_end(key, last=last)
+
+    def popitem(self, last: bool = True):
+        return self.target.popitem(last=last)
+
+    def clear(self) -> None:
+        self.target.clear()
+
+    def copy(self) -> dict:
+        return self.target.copy()
+
+    def raw_keys(self) -> list:
+        return self.target.raw_keys()
+
+
+class StateList(MutableSequence):
+    """The module-level name of a per-workspace list (``_ENTRY_ORDER``)."""
+
+    __slots__ = ("_name", "_seed")
+
+    def __init__(self, name: str, *, seed: Optional[Callable[[], list]] = None) -> None:
+        self._name = str(name)
+        self._seed = seed
+
+    def _factory(self, ws_id: str) -> _BoundedList:
+        return _BoundedList(ws_id, self._name,
+                            (self._seed() or []) if self._seed else ())
+
+    @property
+    def target(self) -> _BoundedList:
+        return state().store(self._name, self._factory)
+
+    def __getitem__(self, i):
+        return self.target[i]
+
+    def __setitem__(self, i, v) -> None:
+        self.target[i] = v
+
+    def __delitem__(self, i) -> None:
+        del self.target[i]
+
+    def __len__(self) -> int:
+        return len(self.target)
+
+    def insert(self, i, v) -> None:
+        self.target.insert(i, v)
+
+    def clear(self) -> None:
+        self.target.clear()
+
+    def __repr__(self) -> str:                                  # pragma: no cover
+        return f"<StateList {self._name} -> {list(self.target)!r}>"
+
+
+class StateLock:
+    """The module-level name of a per-workspace ``RLock``.
+
+    Where a module had ONE lock guarding ONE store, the store is now per
+    workspace and so is the lock: A's campaign must not queue behind B's.  It
+    is an ``RLock`` and the originals were plain ``Lock``s — strictly more
+    permissive, so no call site that worked can stop working.
+
+    ``__enter__`` and ``__exit__`` both resolve through :func:`state`, and the
+    workspace cannot change inside one ``with`` block: the ContextVar is set
+    once per request (or once per bound thread) and never mid-call.
+    """
+
+    __slots__ = ("_name",)
+
+    def __init__(self, name: str) -> None:
+        self._name = str(name)
+
+    @property
+    def target(self) -> "threading.RLock":
+        return state().store(self._name, lambda _ws: threading.RLock())
+
+    def acquire(self, *a, **kw):
+        return self.target.acquire(*a, **kw)
+
+    def release(self) -> None:
+        self.target.release()
+
+    def __enter__(self):
+        return self.target.__enter__()
+
+    def __exit__(self, *exc):
+        return self.target.__exit__(*exc)
+
+    def __repr__(self) -> str:                                  # pragma: no cover
+        return f"<StateLock {self._name}>"
+
+
+def ws_lock(name: str) -> StateLock:
+    """Declare a per-workspace lock under a module-level name."""
+    return StateLock(name)
+
+
+def ws_map(name: str, cap: int, *, lru_on_read: bool = False,
+           seed: Optional[Callable[[], dict]] = None,
+           warm: Optional[Callable[[Any], None]] = None) -> StateMapping:
+    """Declare a per-workspace bounded store under a module-level name."""
+    return StateMapping(name, cap, lru_on_read=lru_on_read, seed=seed, warm=warm)
+
+
+def ws_list(name: str, *, seed: Optional[Callable[[], list]] = None) -> StateList:
+    """Declare a per-workspace list under a module-level name."""
+    return StateList(name, seed=seed)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Carrying the workspace into a thread
+# ─────────────────────────────────────────────────────────────────────────────
+
+def bind(fn: Callable) -> Callable:
+    """Wrap ``fn`` so it runs in the workspace of the call that wrapped it.
+
+    A ``ContextVar`` is per-thread: a ``threading.Thread`` starts with an EMPTY
+    context, so a persist thread or a campaign worker spawned from a request
+    would resolve to the process workspace and write one user's answer into the
+    owner's folder.  Starlette's threadpool copies the context; ``Thread`` does
+    not, and this is the difference.
+
+    With ``WORKSPACES_ROOT`` unset both ends are the process workspace and this
+    is a no-op wrapper.
+    """
+    ws = _WS.get()
+    who = _CALLER.get()
+    layer = _WRITE_LAYER.get()
+
+    @functools.wraps(fn)
+    def _bound(*args, **kwargs):
+        with use_workspace(ws), use_caller(who), use_write_layer(layer):
+            return fn(*args, **kwargs)
+
+    return _bound
+
+
+def bind_thread(target: Callable, **kwargs) -> threading.Thread:
+    """``threading.Thread`` with :func:`bind` already applied to its target."""
+    return threading.Thread(target=bind(target), **kwargs)

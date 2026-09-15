@@ -1289,7 +1289,18 @@ class DutyCreate(BaseModel):
 #: parse per request (measured 2026-09-13), and the Motors tab asked for the
 #: tree once per Ø section at once, so the tab "loaded" for the sum of them.
 #: A changed grant is a different key; a changed file is a different signature.
-_TREE_CACHE: Dict[tuple, tuple] = {}
+#:
+#: Stage 2 put the workspace id INTO the key (`_key` below) and Stage 3 moves
+#: the store itself into that workspace: the id stays in the key as the audit
+#: (``tests/test_workspace_state.py`` walks every live store and refuses a key
+#: that does not start with the workspace it was produced under), and the
+#: container is now per workspace and BOUNDED — it was an unbounded dict, and
+#: its key carries an access mode plus the grant list, so a server with many
+#: accounts grew one parsed catalog per distinct grant set, forever.
+#: CAP 8: one entry per (access mode × client filter) a single account can
+#: produce, which is four, doubled for head-room.
+_TREE_CACHE_MAX = 8
+_TREE_CACHE = _WS.ws_map("family.tree_cache", _TREE_CACHE_MAX, lru_on_read=True)
 
 
 def _tree_signature(with_catalog: bool) -> tuple:

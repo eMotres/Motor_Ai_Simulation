@@ -2,48 +2,80 @@ from typing import Dict, Optional, Tuple
 
 import numpy as np
 
+from motor_ai_sim import workspace as _WS
 from motor_ai_sim.config import get_config, get_geometry_params, clear_config_cache
 from motor_ai_sim.geometry.motor_geometry import MotorGeometryParams
 
-_current_geometry: Optional[MotorGeometryParams] = None
+# ── The geometry singleton, per WORKSPACE (migration Stage 3) ───────────────
+# `_current_geometry` was THE single-user object: one machine's cross-section,
+# held for the whole process, answering every caller.  With two accounts on one
+# server it is the shortest possible path from "A edits a slot" to "B's next
+# solve is about A's motor".
+#
+# It is not a cache and has no key, so it lives in the workspace's flag slots
+# (cap: one geometry per workspace) rather than in a keyed store.  The NAME
+# survives as a module attribute — `tests/test_geometry_validation.py` and
+# `tests/test_route_input_validation.py` reset it by assignment — and an
+# assignment from outside wins over the workspace slot for the rest of the
+# process, which is exactly the process-global behaviour those tests expect.
+_SLOT_GEOM = "geometry_service.current_geometry"
+_SLOT_MESH = "geometry_service.mesh_cache"
 
-# ── Mesh cache ──────────────────────────────────────────────────────────────
-# Stores the last built mesh data keyed by parameter hash.
-# Invalidated automatically when geometry parameters change.
-_mesh_cache: Optional[Tuple[str, Dict]] = None   # (param_hash, mesh_data)
+#: One mesh per workspace, keyed by the geometry hash it was built for — the
+#: single slot this replaces, bounded and now workspace-stamped.
+_MESH_CACHE_MAX = 1
+
+_UNSET = object()
+
+
+def _geom_get() -> Optional[MotorGeometryParams]:
+    ov = globals().get("_current_geometry", _UNSET)
+    if ov is not _UNSET:
+        return ov
+    return _WS.state().flag(_SLOT_GEOM)
+
+
+def _geom_set(value: Optional[MotorGeometryParams]) -> None:
+    if "_current_geometry" in globals():
+        globals()["_current_geometry"] = value
+    else:
+        _WS.state().set_flag(_SLOT_GEOM, value)
+
+
+#: Per-workspace mesh store.  Not a module constant: a plain name here would be
+#: the very global this stage removes.
+_mesh_store = _WS.ws_map(_SLOT_MESH, _MESH_CACHE_MAX)
 
 
 def get_cached_mesh() -> Optional[Dict]:
     """Return the cached mesh if params haven't changed, else None."""
-    global _mesh_cache
-    if _mesh_cache is None:
-        return None
-    cached_hash, mesh_data = _mesh_cache
-    current_hash = _geometry_hash()
-    if cached_hash == current_hash:
-        return mesh_data
-    _mesh_cache = None
-    return None
+    h = _geometry_hash()
+    hit = _mesh_store.get(h)
+    if hit is None:
+        # A changed hash is a changed machine: drop what is there rather than
+        # keep paying memory for a cross-section nobody will ask for again.
+        _mesh_store.clear()
+    return hit
 
 
 def store_mesh_cache(mesh_data: Dict) -> None:
     """Store mesh_data in the cache tagged with the current parameter hash."""
-    global _mesh_cache
-    _mesh_cache = (_geometry_hash(), mesh_data)
+    _mesh_store.clear()
+    _mesh_store[_geometry_hash()] = mesh_data
 
 
 def invalidate_mesh_cache() -> None:
     """Call this after any geometry parameter update."""
-    global _mesh_cache
-    _mesh_cache = None
+    _mesh_store.clear()
 
 
 def _geometry_hash() -> str:
     import json, hashlib
-    if _current_geometry is None:
+    geom = _geom_get()
+    if geom is None:
         return ""
     return hashlib.sha256(
-        json.dumps(_current_geometry.to_dict(), sort_keys=True).encode()
+        json.dumps(geom.to_dict(), sort_keys=True).encode()
     ).hexdigest()[:16]
 
 _DERIVED_PARAMS = frozenset([
@@ -55,14 +87,14 @@ _DERIVED_PARAMS = frozenset([
 
 
 def get_current_geometry(reload: bool = False) -> MotorGeometryParams:
-    global _current_geometry
-    if _current_geometry is None or reload:
-        _current_geometry = get_geometry_params(reload=reload)
-    return _current_geometry
+    current = _geom_get()
+    if current is None or reload:
+        current = get_geometry_params(reload=reload)
+        _geom_set(current)
+    return current
 
 
 def update_current_geometry(**kwargs) -> MotorGeometryParams:
-    global _current_geometry
     current = get_current_geometry()
 
     update_dict = current.to_dict()
@@ -74,17 +106,37 @@ def update_current_geometry(**kwargs) -> MotorGeometryParams:
         k: v for k, v in update_dict.items()
         if not k.startswith('_') and k not in _DERIVED_PARAMS
     }
-    _current_geometry = MotorGeometryParams(geometry_config, {})
+    new = MotorGeometryParams(geometry_config, {})
+    _geom_set(new)
     invalidate_mesh_cache()
-    return _current_geometry
+    return new
 
 
 def reset_geometry() -> MotorGeometryParams:
-    global _current_geometry
     clear_config_cache()
-    _current_geometry = get_geometry_params(reload=True)
+    new = get_geometry_params(reload=True)
+    _geom_set(new)
     invalidate_mesh_cache()
-    return _current_geometry
+    return new
+
+
+def __getattr__(name):
+    """``_current_geometry`` / ``_mesh_cache`` survive as NAMES.
+
+    Both are per-workspace now; read from outside they answer for the caller's
+    workspace, in the shapes they always had — ``None`` or the geometry, and
+    ``None`` or ``(param_hash, mesh_data)``.  Assigning to either from outside
+    creates a real module attribute, which shadows this for the rest of the
+    process: that is the process-global behaviour the two tests that reset
+    ``_current_geometry`` by assignment are relying on.
+    """
+    if name == "_current_geometry":
+        return _WS.state().flag(_SLOT_GEOM)
+    if name == "_mesh_cache":
+        for k, v in _mesh_store.items():
+            return (k, v)
+        return None
+    raise AttributeError(name)
 
 
 def params_to_dict(params: MotorGeometryParams) -> Dict:

@@ -41,6 +41,7 @@ import numpy as np
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
+from motor_ai_sim import workspace as _WSP
 from motor_ai_sim.simulation.static3d import viewer as V
 
 log = logging.getLogger(__name__)
@@ -85,11 +86,21 @@ DEFAULT_PRESET = "live"
 STAGE_A_MATERIALS = {"stator_core": "B15AHV950M", "rotor_core": "B15AHV950M",
                      "magnet": "F45SH_120C", "shaft": "Aluminium_6061"}
 
-_LOCK = threading.RLock()
-_SECTION_CACHE: Dict[tuple, Any] = {}
-_ENTRY_CACHE: Dict[str, dict] = {}       # cache-file stem -> loaded arrays
-_ENTRY_ORDER: List[str] = []
+# Migration Stage 3: per WORKSPACE.  The staged-3D cache DIRECTORY has been per
+# workspace since Stage 1; these are the loaded copies of what is in it, and
+# leaving them process-wide would have one account's `.npz` answering another's
+# ``GET /field`` from memory while the two directories stayed properly apart.
+#
+# `_MAX_LOADED` is unchanged and still the number the eviction below trims to —
+# a staged entry is a whole 3D field — and it is now also the store's own cap,
+# so the two cannot disagree.
 _MAX_LOADED = 3
+_SECTION_CACHE_MAX = 4          # the trim at the section cache's own call site
+_LOCK = _WSP.ws_lock("static3d.lock")
+_SECTION_CACHE = _WSP.ws_map("static3d.section_cache", _SECTION_CACHE_MAX)
+#: cache-file stem -> loaded arrays
+_ENTRY_CACHE = _WSP.ws_map("static3d.entry_cache", _MAX_LOADED)
+_ENTRY_ORDER = _WSP.ws_list("static3d.entry_order")
 
 
 # --------------------------------------------------------------------------

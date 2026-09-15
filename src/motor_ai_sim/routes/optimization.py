@@ -26,6 +26,7 @@ from typing import List, Optional, Dict, Any, Tuple
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from motor_ai_sim import workspace as _WSP
 from motor_ai_sim.config import get_config
 from motor_ai_sim.optimization import run_pareto_search
 from motor_ai_sim.optimization import pareto as _pareto
@@ -34,18 +35,58 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/optimization", tags=["optimization"])
 
 # ── FEM background state ──────────────────────────────────────────────────────
-_refine_state: Dict[str, Any] = {
-    "running": False, "done": 0, "total": 0, "results": [],
-    "run_id": "", "error": None, "cancel": False,
-}
-_refine_lock = threading.Lock()
+# Migration Stage 3: ONE CAMPAIGN PER WORKSPACE, not one per server.  These four
+# slots (refine / scan / DOE / descent) were the single most user-visible piece
+# of shared state after the config file itself: a second account pressing Run
+# got "a scan is already running" about somebody else's sweep, and its progress
+# bar, its chart and its Stop button all addressed that stranger's run.  The
+# state ownership moves here; the ADMISSION (one running job per user, a queue
+# in front of the workers) is Stage 4 and deliberately not attempted here.
+#
+# Each is a small record with a fixed key set — seeded with exactly the literal
+# it used to be initialised with — so the caps below are safety valves, not
+# working limits, and nothing is ever evicted from them in practice.
+#: A campaign record grows keys as a run progresses (`range_events`,
+#: `boundary`, `grad`, `points`, `auto`, `result`, …) — around thirty at the
+#: end of an auto run.  256 is an order of magnitude clear of that, because
+#: what a cap costs here is not memory, it is a silently dropped key.
+_CAMPAIGN_SLOT_MAX = 256
 
-_scan_state: Dict[str, Any] = {
-    "running": False, "done": 0, "total": 0, "result": None,
-    "run_id": "", "error": None, "cancel": False, "cached": 0,
-}
-_scan_lock = threading.Lock()
-_scan_thread: Optional["threading.Thread"] = None   # the live worker (liveness guard)
+_refine_state = _WSP.ws_map("optimization.refine_state", _CAMPAIGN_SLOT_MAX,
+                            seed=lambda: {
+                                "running": False, "done": 0, "total": 0,
+                                "results": [], "run_id": "", "error": None,
+                                "cancel": False,
+                            })
+_refine_lock = _WSP.ws_lock("optimization.refine_lock")
+
+_scan_state = _WSP.ws_map("optimization.scan_state", _CAMPAIGN_SLOT_MAX,
+                          seed=lambda: {
+                              "running": False, "done": 0, "total": 0,
+                              "result": None, "run_id": "", "error": None,
+                              "cancel": False, "cached": 0,
+                          },
+                          warm=lambda _s: _warm_scan_state())
+_scan_lock = _WSP.ws_lock("optimization.scan_lock")
+
+#: The live scan worker (a liveness guard, not state) — per workspace, because
+#: "is a scan running" is a question about ONE account's campaign.
+_SLOT_SCAN_THREAD = "optimization.scan_thread"
+_UNSET_O = object()
+
+
+def _scan_thread_get() -> Optional["threading.Thread"]:
+    ov = globals().get("_scan_thread", _UNSET_O)
+    if ov is not _UNSET_O:
+        return ov
+    return _WSP.state().flag(_SLOT_SCAN_THREAD)
+
+
+def _scan_thread_set(th: Optional["threading.Thread"]) -> None:
+    if "_scan_thread" in globals():
+        globals()["_scan_thread"] = th
+    else:
+        _WSP.state().set_flag(_SLOT_SCAN_THREAD, th)
 
 
 def _config_dir_o() -> str:
@@ -126,7 +167,17 @@ def _save_last_scan(result: Dict[str, Any]) -> None:
         log.warning("could not persist last scan: %s", _e)
 
 
+def _warm_scan_state() -> None:
+    """First touch of a workspace's scan slot: restore that workspace's own
+    last sweep.  Guarded by a per-workspace flag so the import-time call below
+    and this warm cannot both read the file."""
+    if _WSP.state().flag("optimization.scan_restored"):
+        return
+    _load_last_scan()
+
+
 def _load_last_scan() -> None:
+    _WSP.state().set_flag("optimization.scan_restored", True)
     try:
         p = _scan_store_path()
         if os.path.exists(p):
@@ -155,8 +206,19 @@ _load_last_scan()   # repopulate the last sweep at startup (survives backend res
 # evaluates the genuinely new ones.  The config fingerprint deliberately EXCLUDES
 # the operating-point fields (max_current / phase_offset) — the scan passes
 # current & γ explicitly, so applying a design must NOT invalidate the cache.
-_EVAL_CACHE: Dict[str, Dict[str, Any]] = {}
-_eval_cache_lock = threading.Lock()
+#: Stage 3: per WORKSPACE, and it has to be — the key is a hash of one
+#: machine's physics, so two accounts' caches sharing a dict is two machines'
+#: answers in one namespace waiting for a collision.  The mirror
+#: (``.scan_cache.jsonl``) has been per workspace since Stage 1.
+#:
+#: CAP 50 000 entries.  Each is a flat dict of ~25 scalars (~1 kB), so the
+#: bound is ~50 MB per workspace; the live cache on this workstation holds
+#: 5 651 after months of sweeping, so the cap is an order of magnitude above
+#: real use and exists only so a runaway campaign cannot exhaust the box.
+_EVAL_CACHE_MAX = 50_000
+_EVAL_CACHE = _WSP.ws_map("optimization.eval_cache", _EVAL_CACHE_MAX,
+                          warm=lambda _s: _warm_eval_cache())
+_eval_cache_lock = _WSP.ws_lock("optimization.eval_cache_lock")
 
 
 def _eval_cache_path() -> str:
@@ -351,7 +413,15 @@ def _eval_healthy(out: Dict[str, Any]) -> bool:
         return False
 
 
+def _warm_eval_cache() -> None:
+    """First touch of a workspace's eval cache: read its own jsonl mirror."""
+    if _WSP.state().flag("optimization.eval_cache_loaded"):
+        return
+    _load_eval_cache()
+
+
 def _load_eval_cache() -> None:
+    _WSP.state().set_flag("optimization.eval_cache_loaded", True)
     try:
         p = _eval_cache_path()
         if os.path.exists(p):
@@ -604,9 +674,15 @@ def _base_eval_env() -> Dict[str, str]:
 
 def __getattr__(name):
     """``_EVAL_ENV`` survives as a NAME — tests/test_warm_seed.py reads it to
-    pin ``SB_SEED_FROM_PREVIOUS`` — but it is now a fresh dict per read."""
+    pin ``SB_SEED_FROM_PREVIOUS`` — but it is now a fresh dict per read.
+
+    ``_scan_thread`` likewise: per workspace since Stage 3, readable by name,
+    and a plain assignment from outside shadows the slot for the rest of the
+    process (the accessors above honour it), which is the old behaviour."""
     if name == "_EVAL_ENV":
         return _base_eval_env()
+    if name == "_scan_thread":
+        return _WSP.state().flag(_SLOT_SCAN_THREAD)
     raise AttributeError(name)
 
 
@@ -653,8 +729,11 @@ def _solo_seed_threads() -> int:
     return max(1, min(8, (os.cpu_count() or 8) // 3))
 
 
-_warm_seed_memo: Dict[str, Any] = {}      # (mtime_ns, size) -> identity
-_warm_seed_memo_lock = threading.Lock()
+#: (mtime_ns, size) -> identity.  Stage 3: per workspace — the file it memoises
+#: (``.warm_cache.npz``) is per workspace, so a shared memo would answer one
+#: account's question with another's stat().  Two slots ("tag", "val"); cap 8.
+_warm_seed_memo = _WSP.ws_map("optimization.warm_seed_memo", 8)
+_warm_seed_memo_lock = _WSP.ws_lock("optimization.warm_seed_memo_lock")
 
 
 def _warm_seed_state() -> Optional[Dict[str, Any]]:
@@ -1180,7 +1259,7 @@ def refine_designs(req: RefineRequest):
                               "results": [], "run_id": req.run_id, "error": None,
                               "cancel": False})
     steps = max(8, min(int(req.steps_per_period), 180))
-    t = threading.Thread(target=_refine_worker,
+    t = threading.Thread(target=_WSP.bind(_refine_worker),   # Stage 3: carry the workspace
                          args=(designs, steps, float(req.coil_temp_c), req.run_id),
                          daemon=True)
     t.start()
@@ -1696,7 +1775,6 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
 @router.post("/scan")
 def scan_designs(req: ScanRequest):
     """Start a background FEM scan — every point is a real transient."""
-    global _scan_thread
     # Start guard (done OUTSIDE the param lock so the wait can't deadlock the
     # worker's finally, which needs _scan_lock to clear "running"):
     #  • genuinely running scan, no Stop pending → 409;
@@ -1709,7 +1787,8 @@ def scan_designs(req: ScanRequest):
     while True:
         with _scan_lock:
             _running = _scan_state["running"]
-            _alive = _scan_thread is not None and _scan_thread.is_alive()
+            _live = _scan_thread_get()
+            _alive = _live is not None and _live.is_alive()
             _cancelling = bool(_scan_state.get("cancel"))
             if not _running or not _alive:
                 _scan_state["running"] = False          # clear stale / dead worker
@@ -1821,7 +1900,10 @@ def scan_designs(req: ScanRequest):
                             "ts_start": _t_scan.time(),
                             "workers": int(_scan_worker_count()),
                             "s_per_eval": float(_rate0.get("s_per_eval", 0.0) or 0.0)})
-    _scan_thread = threading.Thread(target=_scan_worker,
+    # Stage 3: the worker runs in a fresh thread, whose context is empty — bind
+    # it to THIS caller's workspace so the campaign it drives, the evals it
+    # spawns and the stores it writes are all that caller's.
+    _new_scan_thread = threading.Thread(target=_WSP.bind(_scan_worker),
                      args=(variables, ops, steps, float(req.coil_temp_c),
                            float(req.ripple_max_pct), max_geom, int(req.seed), req.run_id,
                            mesh_size, min_size, req.pole_copy, bool(req.torque_filter),
@@ -1829,7 +1911,8 @@ def scan_designs(req: ScanRequest):
                            structured_gap, airgap_macro, iron_template, geo_mesh,
                            element_order, demag, bool(req.with_baseline)),
                      daemon=True)
-    _scan_thread.start()
+    _scan_thread_set(_new_scan_thread)
+    _new_scan_thread.start()
     return {"started": True, "steps_per_period": steps, "max_geometries": max_geom,
             "mesh_size_mm": mesh_size, "min_size_mm": min_size}
 
@@ -1870,7 +1953,8 @@ def scan_cancel():
     # flag is stale, clear "running" here too so the next Run isn't blocked.
     with _scan_lock:
         _scan_state["cancel"] = True
-        if _scan_thread is None or not _scan_thread.is_alive():
+        _live = _scan_thread_get()
+        if _live is None or not _live.is_alive():
             _scan_state["running"] = False
     # …and the evals already running: Stop means stop, not "let the ten
     # workers finish an hour of work nobody will read while the next sweep
@@ -1982,9 +2066,11 @@ def clear_cache():
 # move ripple / torque / efficiency).  Wraps motor_ai_sim.optimization.doe (was
 # CLI-only) in a background job so the UI can launch it + show the importance.
 # ─────────────────────────────────────────────────────────────────────────────
-_doe_lock = threading.Lock()
-_doe_state: Dict[str, Any] = {"running": False, "done": 0, "total": 0,
-                              "importance": None, "error": None, "n_ok": 0}
+_doe_lock = _WSP.ws_lock("optimization.doe_lock")
+_doe_state = _WSP.ws_map("optimization.doe_state", _CAMPAIGN_SLOT_MAX,
+                         seed=lambda: {"running": False, "done": 0, "total": 0,
+                                       "importance": None, "error": None,
+                                       "n_ok": 0})
 
 
 class DoeRequest(BaseModel):
@@ -2033,7 +2119,7 @@ def doe_start(req: DoeRequest):
                 _doe_state["error"] = str(e)
                 _doe_state["running"] = False
 
-    threading.Thread(target=_worker, daemon=True).start()
+    threading.Thread(target=_WSP.bind(_worker), daemon=True).start()   # Stage 3
     return {"started": True, "n": int(req.n)}
 
 
@@ -2059,13 +2145,16 @@ def doe_progress():
 # operating point is repelled.  Every evaluation is a real sliding-band FEM
 # transient in an isolated subprocess.
 # ─────────────────────────────────────────────────────────────────────────────
-_descent_state: Dict[str, Any] = {
-    "running": False, "iter": 0, "max_iters": 0, "n_evals": 0,
-    "best": None, "current": None, "history": [], "baseline": None,
-    "baseline_line": None,
-    "phase": "", "run_id": "", "error": None, "cancel": False,
-}
-_descent_lock = threading.Lock()
+_descent_state = _WSP.ws_map(
+    "optimization.descent_state", _CAMPAIGN_SLOT_MAX,
+    seed=lambda: {
+        "running": False, "iter": 0, "max_iters": 0, "n_evals": 0,
+        "best": None, "current": None, "history": [], "baseline": None,
+        "baseline_line": None,
+        "phase": "", "run_id": "", "error": None, "cancel": False,
+    },
+    warm=lambda _s: _warm_descent_state())
+_descent_lock = _WSP.ws_lock("optimization.descent_lock")
 
 # ── Persist the last optimization (descent / CMA-ES) to disk ─────────────────
 # So the objective-space plot + best design SURVIVE a page reload or a back-end
@@ -2263,7 +2352,15 @@ def _backfill_point_metrics(points: List[Dict[str, Any]]) -> int:
     return fixed
 
 
+def _warm_descent_state() -> None:
+    """First touch of a workspace's descent slot: restore its own checkpoint."""
+    if _WSP.state().flag("optimization.descent_restored"):
+        return
+    _load_descent_state()
+
+
 def _load_descent_state() -> None:
+    _WSP.state().set_flag("optimization.descent_restored", True)
     try:
         p = _descent_store_path()
         if not _os_o.path.exists(p):
@@ -2282,13 +2379,15 @@ def _load_descent_state() -> None:
 
 _load_descent_state()   # repopulate at import (startup)
 
-# mtime of the checkpoint the in-memory state was last taken from
-_descent_disk_mtime = [0.0]
+# mtime of the checkpoint the in-memory state was last taken from (per workspace)
+_descent_disk_mtime = _WSP.ws_list("optimization.descent_disk_mtime",
+                                   seed=lambda: [0.0])
 # True while the in-memory `running` flag was ADOPTED from the checkpoint file
 # (a run hosted outside this process) rather than owned by a worker thread in
 # this process.  An adopted flag must expire with the file — see
 # _refresh_descent_state_from_disk.
-_descent_external = [False]
+_descent_external = _WSP.ws_list("optimization.descent_external",
+                                 seed=lambda: [False])
 
 
 def _refresh_descent_state_from_disk() -> None:
@@ -3655,7 +3754,7 @@ def descent_start(req: DescentRequest):
                                    "mesh_size_mm": mesh_size, "min_size_mm": min_size},
                                "run_id": req.run_id, "error": None, "cancel": False})
     threading.Thread(
-        target=worker,
+        target=_WSP.bind(worker),                # Stage 3: carry the workspace
         args=(var_specs, op, float(req.ripple_max_pct), float(req.w_eff),
               float(req.w_td), float(req.penalty_lambda), steps,
               float(req.coil_temp_c), mesh_size, min_size, max_iters, req.run_id,
@@ -5952,7 +6051,8 @@ def auto_start(req: AutoOptRequest, request: Request):
             "run_id": req.run_id, "error": None, "cancel": False})
 
     worker = _screen_worker if plan["mode"] == "screen" else _auto_worker
-    threading.Thread(target=worker, args=(plan, req.run_id, bucket, name),
+    threading.Thread(target=_WSP.bind(worker),    # Stage 3: carry the workspace
+                     args=(plan, req.run_id, bucket, name),
                      daemon=True).start()
     return {"started": True, "run_id": req.run_id, "plan": plan, "point_name": name}
 

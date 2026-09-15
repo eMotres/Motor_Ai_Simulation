@@ -20,6 +20,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from motor_ai_sim import workspace as _WSP
 from motor_ai_sim.progress import ProgressTracker
 
 log = logging.getLogger(__name__)
@@ -272,8 +273,32 @@ def clear_mechanical_caches(reason: str = "") -> int:
 # importing this module never touches the disk.
 
 _LAST_KINDS = ("rotor_stress", "modes", "critical_speeds")
-_LAST: Dict[str, Dict[str, Any]] = {}
-_LAST_LOADED = False
+#: Migration Stage 3: per WORKSPACE.  Three kinds; the cap is a safety valve.
+_LAST_MAX = 16
+_LAST = _WSP.ws_map("mechanical.last", _LAST_MAX)
+_SLOT_LAST_LOADED = "mechanical.last_loaded"
+_UNSET = object()
+
+
+def _last_loaded() -> bool:
+    ov = globals().get("_LAST_LOADED", _UNSET)
+    return bool(ov) if ov is not _UNSET else bool(
+        _WSP.state().flag(_SLOT_LAST_LOADED, False))
+
+
+def _set_last_loaded(value: bool) -> None:
+    if "_LAST_LOADED" in globals():
+        globals()["_LAST_LOADED"] = value
+    else:
+        _WSP.state().set_flag(_SLOT_LAST_LOADED, value)
+
+
+def __getattr__(name):
+    """``_LAST_LOADED`` survives as a NAME — per workspace, and overridable by
+    a plain assignment for the tests that already do that."""
+    if name == "_LAST_LOADED":
+        return bool(_WSP.state().flag(_SLOT_LAST_LOADED, False))
+    raise AttributeError(name)
 
 
 def _last_store_path() -> str:
@@ -303,14 +328,14 @@ def _persist_last() -> None:
         except Exception as exc:  # noqa: BLE001 - a viewer convenience never breaks a solve
             log.warning("could not persist the last mechanical result: %s", exc)
 
-    threading.Thread(target=_write, daemon=True).start()
+    # Stage 3: the path is resolved inside the thread — carry the workspace.
+    threading.Thread(target=_WSP.bind(_write), daemon=True).start()
 
 
 def _load_last() -> None:
-    global _LAST_LOADED
-    if _LAST_LOADED:
+    if _last_loaded():
         return
-    _LAST_LOADED = True
+    _set_last_loaded(True)
     try:
         import pickle as pk
         p = _last_store_path()
@@ -399,8 +424,9 @@ def _live_fingerprint(geo_ov) -> Optional[str]:
 
 # The geometry-only mesh, so the tab can draw the rotor before anything is
 # solved.  Small (one mesh, no fields), keyed exactly like the solve caches.
-_MESH_CACHE: "OrderedDict[tuple, Dict[str, Any]]" = OrderedDict()
 _MESH_CACHE_MAX = 4
+_MESH_CACHE = _WSP.ws_map("mechanical.mesh_cache", _MESH_CACHE_MAX,
+                          lru_on_read=True)
 
 
 def _num_poles(motor) -> Optional[int]:

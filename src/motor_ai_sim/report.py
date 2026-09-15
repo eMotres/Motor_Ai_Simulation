@@ -5853,8 +5853,21 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
             ctx["magnet_limit_note"] = ((mag_note + "; " if mag_note else "")
                                         + ctx["temp_basis"])
         lim = dc.get("limits") or {}
-        ctx["ed_requested_pct"] = _numf(lim.get("ed_requested_pct"))
+        _dsp = dc.get("spec") or {}
+        # A RATIO THE TOOL FOUND IS NOT A RATIO SOMEBODY ASKED FOR (2026-09-15).
+        # `ed_found` says which this record is; with it true nothing was
+        # requested, so there is nothing for the ED rule to fail against and
+        # the allowable travels as a finding instead (see `duty_warnings`).
+        _req = _numf(lim.get("ed_requested_pct"))
+        if (_req is None and lim.get("ed_found") is not True
+                and _dsp.get("ed_given") is not False):
+            _req = _numf(_dsp.get("ed_pct"))
+        if lim.get("ed_found") is True:
+            _req = None
+        ctx["ed_requested_pct"] = _req
         ctx["ed_allowable_pct"] = _numf(lim.get("ed_allowable_pct"))
+        ctx["ed_found"] = lim.get("ed_found")
+        ctx["ed_cycle_s"] = _numf(lim.get("ed_cycle_s"))
         ctx["ed_limiting_part"] = (lim.get("ed_limiting_part")
                                    or lim.get("limiting_part"))
         # THE CYCLE WAS JUDGED AGAINST ITS OWN LIMIT, which is the one the
@@ -10881,47 +10894,149 @@ def _dc_part_limit(lim: Dict[str, Any], part: str) -> Optional[float]:
     return v
 
 
-def duty_cycle_regime_text(rec: Dict[str, Any]) -> str:
-    """The allowable regime in one sentence — ``""`` when nothing is known.
+def _dc_at_allowable_words(lim: Dict[str, Any]) -> str:
+    """``limits.at_allowable`` in one cell — the hot spot, its mean, and the
+    nodes, in the order a reader asks for them."""
+    at = (lim or {}).get("at_allowable")
+    if not isinstance(at, dict) or not at:
+        return ""
+    bits: List[str] = []
+    for k, label in (("winding_hot_peak_c", "winding hot spot"),
+                     ("winding_hot_mean_c", "winding mean"),
+                     ("magnet_peak_c", "magnets")):
+        if _numf(at.get(k)) is not None:
+            bits.append("%s %s" % (label, _fmt(at.get(k), 1, "°C")))
+    pk = at.get("peak_c") if isinstance(at.get("peak_c"), dict) else {}
+    for node in ("winding", "stator", "rotor", "magnet"):
+        if node == "magnet" and _numf(at.get("magnet_peak_c")) is not None:
+            continue
+        if _numf(pk.get(node)) is not None:
+            bits.append("%s %s" % (node, _fmt(pk.get(node), 1, "°C")))
+    return " · ".join(bits)
 
-    ``"Allowable regime: S3 at 60 s cycle — ED 21.6 % (limit: winding 200 °C);
-    one pull S2: 26.6 s from cold, 20 s from the rated state"``
+
+def duty_cycle_ed_vs_cycle(rec: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """``limits.ed_vs_cycle`` as a list of dicts, sorted by cycle length.
+
+    The solver writes ``{cycle_s, ed_allowable_pct, t_on_s, limiting_part,
+    winding_hot_peak_c, magnet_peak_c, note}``; a bare ``[cycle_s, ed_pct]``
+    pair is accepted too, so nothing in the chart or the sentence depends on
+    which shape a record was written in.
+    """
+    out: List[Dict[str, Any]] = []
+    for p in ((rec or {}).get("limits") or {}).get("ed_vs_cycle") or []:
+        if isinstance(p, dict):
+            c, e = _numf(p.get("cycle_s")), _numf(p.get("ed_allowable_pct"))
+            d = dict(p)
+        elif isinstance(p, (list, tuple)) and len(p) >= 2:
+            c, e = _numf(p[0]), _numf(p[1])
+            d = {"cycle_s": c, "ed_allowable_pct": e}
+        else:
+            continue
+        if c is None or e is None or c <= 0.0:
+            continue
+        d["cycle_s"], d["ed_allowable_pct"] = float(c), float(e)
+        out.append(d)
+    out.sort(key=lambda d: d["cycle_s"])
+    return out
+
+
+def _dc_t_on(rec: Dict[str, Any], ed: Optional[float],
+             cyc: Optional[float]) -> Optional[float]:
+    """The ON-time behind an ED ratio: the solver's own ``t_on_s`` for that
+    cycle length, or the product when the record carries only the two."""
+    if cyc is None:
+        return None
+    for p in duty_cycle_ed_vs_cycle(rec):
+        # …and only for the ratio that row IS: the stored t_on belongs to the
+        # allowable ED, and printing it beside a requested one would be a
+        # third number that is neither.
+        if (abs(p["cycle_s"] - float(cyc)) <= 1e-6 * max(1.0, float(cyc))
+                and ed is not None
+                and abs(p["ed_allowable_pct"] - float(ed)) <= 0.05
+                and _numf(p.get("t_on_s")) is not None):
+            return _numf(p.get("t_on_s"))
+    return (float(ed) / 100.0 * float(cyc)) if ed is not None else None
+
+
+def duty_cycle_regime_text(rec: Dict[str, Any]) -> str:
+    """The regime this machine may be run at, in one sentence — ``""`` when
+    the record says nothing that could fill one.
+
+    ``"Allowable regime: S3, 60 s cycle — ED 21.6 % (12.9 s on), limited by
+    the winding at 200 °C; one pull S2: 26.6 s from cold, 20.7 s from the
+    rated state; magnets 111 °C at that point."``
+
+    ``limits.ed_found`` is the gate: true means the tool SEARCHED for the ratio
+    and this is the allowable one, false means the ED was handed to it and the
+    ratio is the requested one — two different claims, and printing the second
+    under the first word would be the one sentence this report may not print.
+    Every clause is read field by field, so a record written before any of
+    these fields existed prints the part it can support and nothing else.
     """
     lim = (rec or {}).get("limits") or {}
     spec = (rec or {}).get("spec") or {}
-    ed = _numf(lim.get("ed_allowable_pct"))
-    part = str(lim.get("limiting_part") or lim.get("ed_limiting_part") or "")
-    head = duty_cycle_kind(rec)
-    if _numf(spec.get("cycle_s")) is not None:
-        head += " at %s cycle" % _fmt(spec.get("cycle_s"), 1, "s")
-    # …AND THE SINGLE PULL BESIDE THE REPEATED ONE.  An S2 answer is a
-    # different question from an S3 one — how long may I hold it ONCE — and it
-    # depends on where the machine starts, so each start is named.
-    s2 = [(lim.get("s2_time_to_limit_s"), "from cold"),
+    # ── which ratio is this, and what may it be called ────────────────────
+    found = lim.get("ed_found")
+    if found is None and spec.get("found") is not None:
+        found = bool(spec.get("found"))
+    ed_all = _numf(lim.get("ed_allowable_pct"))
+    ed_req = _numf(lim.get("ed_requested_pct"))
+    if ed_req is None and spec.get("ed_given") is not False:
+        ed_req = _numf(spec.get("ed_pct"))
+    ed = ed_all if found is not False else (ed_req if ed_req is not None
+                                            else ed_all)
+    cyc = _numf(lim.get("ed_cycle_s")) or _numf(spec.get("cycle_s"))
+    part = str(lim.get("ed_limiting_part") or lim.get("limiting_part") or "")
+    # ── the single pull beside the repeated one ───────────────────────────
+    # An S2 answer is a different question from an S3 one — how long may I
+    # hold it ONCE — and it depends on where the machine starts, so each
+    # start is named rather than all of them being called "cold".
+    _t0 = _numf(spec.get("t_start_c"))
+    s2 = [(lim.get("s2_time_to_limit_s"),
+           "from cold" if _t0 is None or _t0 <= 40.0
+           else "from %s" % _fmt(_t0, 0, "°C")),
           (lim.get("s2_from_rated_s"), "from the rated state"),
           (lim.get("s2_from_cycle_mean_s"), "from the cycle mean")]
     s2w = ["%s %s" % (_fmt(v, 1, "s"), w) for v, w in s2
            if _numf(v) is not None]
+    head = duty_cycle_kind(rec)
+    if cyc is not None:
+        head += ", %s cycle" % _fmt(cyc, 1, "s")
     bits: List[str] = []
     if ed is not None:
         _ed = "ED %s" % _fmt(ed, 1, "%")
+        _on = _dc_t_on(rec, ed, cyc)
+        if _on is not None:
+            _ed += " (%s on)" % _fmt(_on, 1, "s")
         _pl = _dc_part_limit(lim, part) if part else None
         if part and _pl is not None:
-            _ed += " (limit: %s %s)" % (part, _fmt(_pl, 0, "°C"))
+            _ed += ", limited by the %s at %s" % (part, _fmt(_pl, 0, "°C"))
         elif part:
-            _ed += " (limit: %s)" % part
+            _ed += ", limited by the %s" % part
         bits.append("%s — %s" % (head, _ed))
+        if found is False and ed_all is not None and abs(ed_all - ed) > 0.05:
+            bits.append("allowable ED %s" % _fmt(ed_all, 1, "%"))
     elif s2w and head.strip():
-        # A class with no allowable ED still names the regime the single pull
+        # A class with no ED at all still names the regime the single pull
         # belongs to; a class with neither says nothing at all.
         bits.append(head)
     if s2w:
         bits.append("one pull S2: " + ", ".join(s2w))
+    # …and what the magnets reach there, because the winding limit is the one
+    # the ED was solved on and the magnets are the part nobody can re-wind.
+    _at = lim.get("at_allowable") if isinstance(lim.get("at_allowable"),
+                                                dict) else {}
+    _mag = _numf(_at.get("magnet_peak_c"))
+    if _mag is None:
+        _mag = _numf((_at.get("peak_c") or {}).get("magnet")
+                     if isinstance(_at.get("peak_c"), dict) else None)
+    if _mag is not None and bits:
+        bits.append("magnets %s at that point" % _fmt(_mag, 0, "°C"))
     if not bits:
         return ""
-    lead = ("Allowable regime" if spec.get("found") is not False
-            else "No allowable regime was found; the closest")
-    return "%s: %s" % (lead, "; ".join(bits))
+    lead = "Allowable regime" if found is not False else "Requested regime"
+    return "%s: %s." % (lead, "; ".join(bits))
 
 
 def duty_cycle_profile_text(rec: Dict[str, Any]) -> str:
@@ -10991,27 +11106,35 @@ def duty_cycle_rows(col: Dict[str, Any],
     R("Winding limit", _fmt(lim.get("winding_limit_c"), 0, "°C"),
       str(lim.get("winding_limit_note") or "the insulation class"))
     R("S2 time to the limit", _fmt(lim.get("s2_time_to_limit_s"), 1, "s"),
-      "from cold: how long this point may be held ONCE before %s reaches its "
-      "limit" % str(lim.get("s2_limiting_part") or "the hottest part"))
+      str(lim.get("s2_note") or
+          ("from %s: how long this point may be held ONCE before %s reaches "
+           "its limit"
+           % (_fmt(spec.get("t_start_c"), 0, "°C")
+              if _numf(spec.get("t_start_c")) is not None else "cold",
+              str(lim.get("s2_limiting_part") or "the hottest part")))))
     # …FROM A MACHINE THAT IS ALREADY WARM (2026-09-15).  A robot arm is never
     # cold when the peak is asked for: it has been running its rated point, or
     # its own cycle, and the single pull it has left is shorter than the
     # brochure number by exactly that head start.
     R("…from the rated state", _fmt(lim.get("s2_from_rated_s"), 1, "s"),
-      "the same single pull, started from the steady state of the rest duty")
+      str(lim.get("s2_from_rated_note") or
+          ("the same single pull, started from the steady state of the rest "
+           "duty" + ("" if _numf(lim.get("s2_from_rated_start_c")) is None
+                     else " (%s)"
+                     % _fmt(lim.get("s2_from_rated_start_c"), 1, "°C")))))
     R("…from the cycle mean", _fmt(lim.get("s2_from_cycle_mean_s"), 1, "s"),
-      "…and started from the mean temperature of the settled cycle")
-    R("ED requested / allowable",
-      _pair(lim.get("ed_requested_pct"), lim.get("ed_allowable_pct"), 1) + " %",
-      "the on-time share asked for, against the one at which %s sits exactly "
-      "on its limit" % str(lim.get("ed_limiting_part")
-                           or lim.get("limiting_part") or "the hottest part"))
-    _at = lim.get("at_allowable") if isinstance(lim.get("at_allowable"),
-                                                dict) else {}
-    R("At the allowable ED",
-      " · ".join("%s %s" % (str(k).replace("_c", "").replace("_", " "),
-                            _fmt(v, 1, "°C"))
-                 for k, v in _at.items() if _numf(v) is not None),
+      str(lim.get("s2_from_cycle_mean_note")
+          or "…and started from the mean temperature of the settled cycle"))
+    R("ED allowable / requested",
+      _pair(lim.get("ed_allowable_pct"), lim.get("ed_requested_pct"), 1) + " %",
+      str(lim.get("ed_note") or
+          ("the share at which %s sits exactly on its limit, against the one "
+           "asked for" % str(lim.get("ed_limiting_part")
+                             or lim.get("limiting_part")
+                             or "the hottest part")))
+      + ("" if _numf(lim.get("ed_cycle_s")) is None
+         else "; on a %s cycle" % _fmt(lim.get("ed_cycle_s"), 1, "s")))
+    R("At the allowable ED", _dc_at_allowable_words(lim),
       "what the parts reach when the cycle runs at the allowable ED rather "
       "than the requested one")
     R("Heat out, stator side / rotor side",
@@ -11243,23 +11366,19 @@ def _dc_ed_cycle_png(rec: Dict[str, Any], width_cm: float = 22.0,
     drawing a curve between them would claim points nobody computed.
     """
     lim = (rec or {}).get("limits") or {}
-    pts = [(float(_numf(p[0])), float(_numf(p[1])))
-           for p in (lim.get("ed_vs_cycle") or [])
-           if isinstance(p, (list, tuple)) and len(p) >= 2
-           and _numf(p[0]) is not None and _numf(p[1]) is not None
-           and (_numf(p[0]) or 0.0) > 0.0]
+    pts = duty_cycle_ed_vs_cycle(rec)
     if len(pts) < 2:
         return None
     try:
         import numpy as np
-        pts.sort()
-        x = np.asarray([p[0] for p in pts], float)
-        y = np.asarray([p[1] for p in pts], float)
+        x = np.asarray([p["cycle_s"] for p in pts], float)
+        y = np.asarray([p["ed_allowable_pct"] for p in pts], float)
         fig, ax = _fig(width_cm, px, aspect=_chart_aspect(0.34, width_cm))
         ax.step(x, y, where="post", color="#1E7A3C", lw=1.6, zorder=3)
         ax.plot(x, y, "o", color="#1E7A3C", ms=3.2, zorder=4)
         ax.set_xscale("log")
-        _cs = _numf(((rec or {}).get("spec") or {}).get("cycle_s"))
+        _cs = (_numf(lim.get("ed_cycle_s"))
+               or _numf(((rec or {}).get("spec") or {}).get("cycle_s")))
         _ed = _numf(lim.get("ed_allowable_pct"))
         if _cs and _cs > 0.0:
             ax.axvline(_cs, color="#B7791F", lw=1.0, ls="--", zorder=2)

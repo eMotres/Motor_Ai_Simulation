@@ -5016,7 +5016,7 @@ class TestDutyCycleSection:
         assert rows["Winding hot spot, peak / mean"] == "217.1 / 166.8 °C"
         assert rows["Magnet, peak / mean"] == "143.8 / 127.7 °C"
         assert rows["S2 time to the limit"] == "35.6 s"
-        assert rows["ED requested / allowable"] == "25 / 21.7 %"
+        assert rows["ED allowable / requested"] == "21.7 / 25 %"
         assert rows["Heat out, stator side / rotor side"] == "209.2 / 6.9 W"
         assert rows["…as a share"] == "96.8 / 3.2 %"
         assert rows["Settled"] == "yes, after 6 cycles"
@@ -5195,25 +5195,50 @@ class TestDutyCycleSection:
     # written before any of these fields existed prints the part it can
     # support and nothing else.
 
-    #: The same cycle once the backend fills in what it found.
+    #: The same cycle once the backend fills in what it FOUND: `ed_found` is
+    #: the gate, `ed_vs_cycle` is a list of dicts, and `at_allowable` carries
+    #: the temperatures at the allowable point rather than at the requested one
+    #: (backend schema of 2026-09-15).
     FOUND = {
-        "limiting_part": "winding",
+        "ed_found": True,
+        "ed_allowable_pct": 21.6,
+        "ed_cycle_s": 60.0,
+        "ed_limiting_part": "winding",
         "limits_c": {"winding": 200.0},
-        "s2_from_rated_s": 20.0,
-        "s2_from_cycle_mean_s": 18.2,
-        "at_allowable": {"winding_hot_peak_c": 200.0, "magnet_peak_c": 141.2},
-        "ed_vs_cycle": [[10.0, 31.2], [30.0, 25.0], [60.0, 21.7],
-                        [120.0, 18.9], [600.0, 15.1]],
+        "s2_time_to_limit_s": 26.6,
+        "s2_note": "winding reaches 200 °C after 26.6 s from 30 °C",
+        "s2_from_rated_s": 20.7,
+        "s2_from_rated_start_c": 72.5,
+        "s2_from_rated_note": "started from the rated point's steady state",
+        "at_allowable": {"winding_hot_peak_c": 200.0,
+                         "winding_hot_mean_c": 150.2,
+                         "magnet_peak_c": 111.0,
+                         "peak_c": {"winding": 198.8, "stator": 140.1,
+                                    "rotor": 111.0, "magnet": 111.0},
+                         "mean_c": {"winding": 149.0}},
+        "ed_vs_cycle": [
+            {"cycle_s": 10.0, "ed_allowable_pct": 31.2, "t_on_s": 3.1,
+             "limiting_part": "winding", "winding_hot_peak_c": 200.0},
+            {"cycle_s": 30.0, "ed_allowable_pct": 25.0, "t_on_s": 7.5,
+             "limiting_part": "winding"},
+            {"cycle_s": 60.0, "ed_allowable_pct": 21.6, "t_on_s": 12.9,
+             "limiting_part": "winding", "magnet_peak_c": 111.0},
+            {"cycle_s": 120.0, "ed_allowable_pct": 18.9, "t_on_s": 22.7,
+             "limiting_part": "winding"},
+            {"cycle_s": 600.0, "ed_allowable_pct": 15.1, "t_on_s": 90.6,
+             "limiting_part": "winding"},
+        ],
     }
 
     def _found(self):
         import copy
 
         rec = copy.deepcopy(self.REC)
-        rec["spec"] = dict(rec["spec"], found=True)
-        rec["spec"].pop("ed_pct", None)
+        # the solver was asked to FIND the ratio: nothing was requested, and
+        # the ED the cycle was integrated at is the one it found
+        rec["spec"] = dict(rec["spec"], ed_given=False, ed_pct=21.6,
+                           t_start_c=30.0)
         rec["limits"] = dict(rec["limits"], **self.FOUND)
-        rec["limits"]["s2_time_to_limit_s"] = 26.6
         rec["limits"].pop("ed_requested_pct", None)
         return rec
 
@@ -5221,39 +5246,54 @@ class TestDutyCycleSection:
         from motor_ai_sim import report as R
 
         assert R.duty_cycle_regime_text(self._found()) == (
-            "Allowable regime: S3 at 60 s cycle — ED 21.7 % "
-            "(limit: winding 200 °C); one pull S2: 26.6 s from cold, "
-            "20 s from the rated state, 18.2 s from the cycle mean")
+            "Allowable regime: S3, 60 s cycle — ED 21.6 % (12.9 s on), "
+            "limited by the winding at 200 °C; one pull S2: 26.6 s from cold, "
+            "20.7 s from the rated state; magnets 111 °C at that point.")
 
     def test_an_old_record_still_gets_the_line_it_can_support(self):
         from motor_ai_sim import report as R
 
-        # TODAY'S record: no limiting_part, no s2_from_*, no found flag.
+        # TODAY'S record: no ed_found, no ed_cycle_s, no s2_from_*, no
+        # at_allowable — the on-time is the product of the two it does carry.
         assert R.duty_cycle_regime_text(self.REC) == (
-            "Allowable regime: S3 at 60 s cycle — ED 21.7 % "
-            "(limit: winding 200 °C); one pull S2: 35.6 s from cold")
+            "Allowable regime: S3, 60 s cycle — ED 21.7 % (13 s on), "
+            "limited by the winding at 200 °C; one pull S2: 35.6 s from cold.")
         # …and a record with nothing to say says nothing at all
         assert R.duty_cycle_regime_text({"spec": {}, "limits": {}}) == ""
         assert R.duty_cycle_regime_text({}) == ""
 
-    def test_a_regime_that_was_not_found_is_not_called_allowable(self):
+    def test_a_requested_ratio_is_not_called_allowable(self):
+        """`ed_found: false` means the ED was HANDED to the solver: the
+        sentence prints the ratio that was integrated, under its own word, and
+        names the allowable one beside it."""
         from motor_ai_sim import report as R
 
         rec = self._found()
-        rec["spec"] = dict(rec["spec"], found=False)
-        assert R.duty_cycle_regime_text(rec).startswith(
-            "No allowable regime was found; the closest: S3")
+        rec["spec"] = dict(rec["spec"], ed_given=True, ed_pct=25.0)
+        rec["limits"] = dict(rec["limits"], ed_found=False,
+                             ed_requested_pct=25.0)
+        txt = R.duty_cycle_regime_text(rec)
+        assert txt.startswith("Requested regime: S3, 60 s cycle — ED 25 % "
+                              "(15 s on), limited by the winding at 200 °C; "
+                              "allowable ED 21.6 %;")
+        # the 12.9 s on-time belongs to the ALLOWABLE ratio, not to this one
+        assert "12.9 s on" not in txt
 
     def test_the_new_limits_reach_the_table(self):
         from motor_ai_sim import report as R
 
         col = dict(self._col(), res={"duty_cycle": self._found()})
         rows = {r[0]: r[1] for r in R.duty_cycle_rows(col)}
+        what = {r[0]: r[2] for r in R.duty_cycle_rows(col)}
         assert rows["S2 time to the limit"] == "26.6 s"
-        assert rows["…from the rated state"] == "20 s"
-        assert rows["…from the cycle mean"] == "18.2 s"
+        assert what["S2 time to the limit"] == self.FOUND["s2_note"]
+        assert rows["…from the rated state"] == "20.7 s"
+        assert rows["ED allowable / requested"] == "21.6 / — %"
+        assert "on a 60 s cycle" in what["ED allowable / requested"]
         assert rows["At the allowable ED"] == (
-            "winding hot peak 200 °C · magnet peak 141.2 °C")
+            "winding hot spot 200 °C · winding mean 150.2 °C · "
+            "magnets 111 °C · winding 198.8 °C · stator 140.1 °C · "
+            "rotor 111 °C")
         # …and none of those rows exist on a record that carries none of them
         old = {r[0] for r in R.duty_cycle_rows(self._col())}
         assert "…from the rated state" not in old
@@ -5262,8 +5302,18 @@ class TestDutyCycleSection:
     def test_the_ed_against_the_cycle_length_is_a_fourth_figure(self):
         from motor_ai_sim import report as R
 
-        figs = R.duty_cycle_figures(self._found(), 200.0, 180.0,
-                                    torques=self.TORQUES)
+        rec = self._found()
+        # the list of dicts the backend writes, read back as such
+        pts = R.duty_cycle_ed_vs_cycle(rec)
+        assert [p["cycle_s"] for p in pts] == [10.0, 30.0, 60.0, 120.0, 600.0]
+        assert pts[2]["t_on_s"] == 12.9
+        # …and a bare [cycle, ed] pair is accepted too
+        pair = {"limits": {"ed_vs_cycle": [[60.0, 21.6], [10.0, 31.2]]}}
+        assert R.duty_cycle_ed_vs_cycle(pair) == [
+            {"cycle_s": 10.0, "ed_allowable_pct": 31.2},
+            {"cycle_s": 60.0, "ed_allowable_pct": 21.6}]
+
+        figs = R.duty_cycle_figures(rec, 200.0, 180.0, torques=self.TORQUES)
         assert len(figs) == 4
         blob, caption = figs[3]
         assert blob and blob[:4] == b"\x89PNG"
@@ -5274,8 +5324,10 @@ class TestDutyCycleSection:
         src = inspect.getsource(R._dc_ed_cycle_png)
         assert 'set_xscale("log")' in src and 'where="post"' in src
         # two points are a step; one is not a curve
-        one = dict(self._found())
-        one["limits"] = dict(one["limits"], ed_vs_cycle=[[60.0, 21.7]])
+        one = dict(rec)
+        one["limits"] = dict(one["limits"],
+                             ed_vs_cycle=[{"cycle_s": 60.0,
+                                           "ed_allowable_pct": 21.6}])
         assert R._dc_ed_cycle_png(one) is None
 
     def test_the_ed_rule_prints_the_allowable_when_nothing_was_requested(self):
@@ -5287,10 +5339,11 @@ class TestDutyCycleSection:
             max_speed_rpm=1000.0, mag_lim=180.0, mag_note="the UH class",
             ins_lim=200.0, ins_note="class H", cold_k=1.1, cold_note="cold")
         assert ctx["ed_requested_pct"] is None
-        assert ctx["s2_from_rated_s"] == 20.0
+        assert ctx["ed_found"] is True and ctx["ed_cycle_s"] == 60.0
+        assert ctx["s2_from_rated_s"] == 20.7
         w = {x["rule"]: x for x in R.duty_warnings(ctx)}["duty_cycle_ed"]
         assert w["kind"] == "info" and w["level"] == "info"
-        assert w["value"] == 21.7 and w["limit"] is None
+        assert w["value"] == 21.6 and w["limit"] is None
         assert "no ED was requested" in w["note"]
 
 
